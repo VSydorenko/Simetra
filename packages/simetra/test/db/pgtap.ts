@@ -65,10 +65,13 @@ const FORBIDDEN =
 
 // Під роллю запиту набір не змінює роль сам: сесія раннера — суперкористувач,
 // і `set role`/`set session authorization` у наборі пройшли б, а повернення
-// до ролі запиту перед кінцем сховало б це від звірки `current_user`.
-// `set_config('role', …)` статично не видно (рядок), його ловить та звірка
+// до ролі запиту перед кінцем сховало б це від звірки `current_user`. Ім'я
+// параметра в лапках (`set "role"`, `set "session_authorization"`) сканер
+// лишає словом, тож воно теж ловиться. Статично не видно `set_config('role',
+// …)` (рядок) і перемикання в тілі dollar-quote (`do $$ … $$`): ловить лише
+// звірка `current_user`, і лише перемикання, що дожило до кінця набору
 const ROLE_SWITCH =
-  /^(re)?set\s+((local|session)\s+)?(role|session\s+authorization)\b/i
+  /^(re)?set\s+((local|session)\s+)?(role|session\s+authorization|session_authorization)\b/i
 
 /**
  * Throws when a statement of the suite controls the transaction or is
@@ -214,9 +217,20 @@ function statements(sql: string): string[] {
     // `E'` на початку токена — E-рядок: лексер бере довший збіг, ніж
     // ідентифікатор `E`
     const eString = !prevIdent && /^[Ee]'/.test(rest)
-    if (eString || sql[i] === "'" || sql[i] === '"') {
+    if (eString || sql[i] === "'") {
       i = eString ? skipQuoted(i + 1, true) : skipQuoted(i, false)
       out += " "
+      prevIdent = false
+      continue
+    }
+    // Ідентифікатор у лапках лишає слово: `set "role" to …` Postgres
+    // приймає, і без імені перемикання ролі сховалося б. Символи поза словом
+    // (`;`, пробіл) — `_`, тож поділу на оператори ім'я не змінює
+    if (sql[i] === '"') {
+      const end = skipQuoted(i, false)
+      const name = sql.slice(i + 1, end - 1).replace(/[^A-Za-z0-9_]/g, "_")
+      out += atomic > 0 ? " " : ` ${name} `
+      i = end
       prevIdent = false
       continue
     }
@@ -275,10 +289,10 @@ export interface SuiteClient {
 }
 
 /**
- * Runs suite `sql` on `client` in a transaction it rolls back. With `role`:
- * `pgtap` first (the request role cannot create it), the claims as
- * `SESSION_CLAIMS_SETTING`, `SET LOCAL ROLE`, the suite, then a check that
- * the suite ended as `role`.
+ * Runs suite `sql` on `client` in a transaction it rolls back. With `role`
+ * or `claims` (a tagged template copy): `pgtap` first (the request role
+ * cannot create it), the claims as `SESSION_CLAIMS_SETTING`, `SET LOCAL
+ * ROLE`, the suite, then a check that the suite ended as `role`.
  */
 export async function runSuite(
   client: SuiteClient,
@@ -292,7 +306,9 @@ export async function runSuite(
     // `rollback`, що проскочив повз `checkSuite`, його скидає
     const marker = randomUUID()
     await client.query("select set_config($1, $2, true)", [MARKER, marker])
-    if (opts.role !== undefined)
+    // Роль запиту `pgtap` не створить, а в копії шаблону його немає: раннер
+    // ставить його в кожній тегованій копії, з роллю чи лише з claims
+    if (opts.role !== undefined || opts.claims !== undefined)
       await client.query("create extension if not exists pgtap")
     if (opts.claims !== undefined)
       await client.query("select set_config($1, $2, true)", [
@@ -351,9 +367,33 @@ export async function runPgTap(
     return onClient(url, (client) => runSuite(client, sql))
   // Перевірка до створення бази: відхилений набір не коштує копії шаблону
   checkSuite(sql, { role: opts.role !== undefined })
-  const name = testDatabaseName("pgtap")
   const admin = new pg.Client({ connectionString: url })
   await admin.connect()
+  return inTemplateCopy(admin, testDatabaseName("pgtap"), (name) => {
+    const target = new URL(url)
+    target.pathname = `/${name}`
+    return onClient(target.toString(), (client) => runSuite(client, sql, opts))
+  })
+}
+
+/** The part of the superuser client that makes and drops the copy. */
+export interface AdminClient {
+  query(text: string): Promise<unknown>
+  end(): Promise<void>
+}
+
+/**
+ * Runs `fn` against a copy `name` of `simetra_template` that `admin` (the
+ * stack superuser, connected) creates and drops, then ends `admin`. A failed
+ * drop does not hide the error of `fn`: the guard then names the leftover
+ * copy.
+ */
+export async function inTemplateCopy<T>(
+  admin: AdminClient,
+  name: string,
+  fn: (name: string) => Promise<T>
+): Promise<T> {
+  let outcome: { value: T } | { error: unknown }
   try {
     // Копію створює й видаляє суперкористувач: до шаблону з
     // `datallowconn = false` раннер не під'єднується, а `TEMPLATE` його
@@ -361,19 +401,26 @@ export async function runPgTap(
     await admin.query(
       `CREATE DATABASE ${quoteIdent(name)} TEMPLATE simetra_template`
     )
-    const target = new URL(url)
-    target.pathname = `/${name}`
-    return await onClient(target.toString(), (client) =>
-      runSuite(client, sql, opts)
-    )
-  } finally {
+    outcome = { value: await fn(name) }
+  } catch (error) {
+    outcome = { error }
+  }
+  let dropError: { error: unknown } | undefined
+  try {
     // `FORCE` — на випадок бекенда клієнта набору, що ще не завершився після
     // обірваного з'єднання: копія — лише цього раннера
     await admin.query(
       `DROP DATABASE IF EXISTS ${quoteIdent(name)} WITH (FORCE)`
     )
+  } catch (error) {
+    dropError = { error }
+  } finally {
     await admin.end()
   }
+  // Помилка набору важливіша за збій `DROP`: лишену копію назве guard прогону
+  if ("error" in outcome) throw outcome.error
+  if (dropError !== undefined) throw dropError.error
+  return outcome.value
 }
 
 async function onClient<T>(

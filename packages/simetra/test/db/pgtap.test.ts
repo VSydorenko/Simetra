@@ -2,9 +2,11 @@ import { PROVIDER_API_ROLES, SESSION_CLAIMS_SETTING } from "simetra/model"
 import { describe, expect, it } from "vitest"
 import {
   checkSuite,
+  inTemplateCopy,
   parseTap,
   runSuite,
   suiteOptions,
+  type AdminClient,
   type SuiteClient,
   type TapResult,
 } from "./pgtap"
@@ -149,6 +151,13 @@ describe("checkSuite under a request role", () => {
       "SET LOCAL SESSION AUTHORIZATION DEFAULT;",
     ],
     ["reset session authorization", "reset session authorization;"],
+    ["set a quoted role", 'set "role" to postgres;'],
+    ["set local a quoted role", 'set local "role" = postgres;'],
+    [
+      "set a quoted session_authorization",
+      'set "session_authorization" to postgres;',
+    ],
+    ["set session_authorization", "set session_authorization = postgres;"],
   ])("rejects %s", (_, sql) => {
     expect(() => checkSuite(sql, { role: true })).toThrow(/role switch/)
   })
@@ -259,6 +268,22 @@ describe("runSuite", () => {
     ])
   })
 
+  it("with claims only: pgtap, the claims, the suite, no role", async () => {
+    const client = fakeClient("postgres")
+    await runSuite(client, suite, { claims: { sub: "s" } })
+    expect(
+      client.sql.map((s) => s.replace(/"[0-9a-f-]{36}"/, '"<marker>"'))
+    ).toEqual([
+      "BEGIN",
+      'select set_config($1, $2, true) ["simetra.pgtap_runner","<marker>"]',
+      "create extension if not exists pgtap",
+      `select set_config($1, $2, true) ${JSON.stringify([SESSION_CLAIMS_SETTING, JSON.stringify({ sub: "s" })])}`,
+      suite,
+      'select current_setting($1, true) as value, current_user::text as role ["simetra.pgtap_runner"]',
+      "ROLLBACK",
+    ])
+  })
+
   it("without options: only the marker and the suite", async () => {
     const client = fakeClient("postgres")
     await runSuite(client, suite)
@@ -287,5 +312,54 @@ describe("runSuite", () => {
       runSuite(client, "reset role;", { role: "simetra_user", claims: {} })
     ).rejects.toThrow(/role switch/)
     expect(client.sql).toEqual([])
+  })
+})
+
+/** Підставний суперкористувач: записує оператори; `failDrop` — збій `DROP`. */
+function fakeAdmin(failDrop: boolean): AdminClient & {
+  sql: string[]
+  ended: boolean
+} {
+  const admin = {
+    sql: [] as string[],
+    ended: false,
+    query: async (text: string) => {
+      admin.sql.push(text)
+      if (failDrop && text.startsWith("DROP")) throw new Error("drop failed")
+    },
+    end: async () => {
+      admin.ended = true
+    },
+  }
+  return admin
+}
+
+describe("inTemplateCopy", () => {
+  it("creates the copy, runs fn, drops the copy and ends the admin", async () => {
+    const admin = fakeAdmin(false)
+    await expect(inTemplateCopy(admin, "c", async () => 1)).resolves.toBe(1)
+    expect(admin.sql).toEqual([
+      "CREATE DATABASE c TEMPLATE simetra_template",
+      "DROP DATABASE IF EXISTS c WITH (FORCE)",
+    ])
+    expect(admin.ended).toBe(true)
+  })
+
+  it("a failed drop keeps the error of fn and still ends the admin", async () => {
+    const admin = fakeAdmin(true)
+    await expect(
+      inTemplateCopy(admin, "c", async () => {
+        throw new Error("suite failed")
+      })
+    ).rejects.toThrow("suite failed")
+    expect(admin.ended).toBe(true)
+  })
+
+  it("a failed drop after a passing fn rejects and still ends the admin", async () => {
+    const admin = fakeAdmin(true)
+    await expect(inTemplateCopy(admin, "c", async () => 1)).rejects.toThrow(
+      "drop failed"
+    )
+    expect(admin.ended).toBe(true)
   })
 })
