@@ -23,7 +23,12 @@ import {
   writeRoles,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
-import { type Refusal, commandAs } from "./connection"
+import {
+  type Refusal,
+  commandAs,
+  restoreOwnerRole,
+  setLocalSetting,
+} from "./connection"
 import {
   type Assignment,
   type Seed,
@@ -777,7 +782,7 @@ describe("command writes", () => {
         "UPDATE public.task SET region_id = $1 WHERE id = $2 RETURNING region_id",
         [key("r2"), key("T2")]
       )
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
       const after = await client.query<{ region_id: string }>(
         "SELECT region_id FROM public.task WHERE id = $1",
         [key("T2")]
@@ -796,9 +801,7 @@ describe("command writes", () => {
       await client.query(
         `SET LOCAL ROLE ${PROVIDER_API_ROLES.supabase.service}`
       )
-      await client.query("SELECT set_config($1, 'not json', true)", [
-        COMMAND_SETTING,
-      ])
+      await setLocalSetting(client, COMMAND_SETTING, "not json")
       try {
         await client.query(
           "UPDATE public.task SET region_id = $1 WHERE id = $2",

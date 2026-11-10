@@ -30,6 +30,7 @@ import {
   commandAs,
   testSuperuserUrl,
   withRollback,
+  setLocalSetting,
 } from "./connection"
 import {
   type Seed,
@@ -469,13 +470,12 @@ describe("runtime login role", () => {
       await client.query("SET CONSTRAINTS ALL DEFERRED")
 
       await client.query(`SET SESSION AUTHORIZATION ${RUNTIME}`)
-      await client.query("SELECT set_config($1, $2, true)", [
+      await setLocalSetting(
+        client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify({ sub: admin, role: "authenticated" }),
-      ])
-      await client.query("SELECT set_config($1, 'on', true)", [
-        RIGHTS_MAINTENANCE_SETTING,
-      ])
+        JSON.stringify({ sub: admin, role: "authenticated" })
+      )
+      await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
       await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
       const assignment = randomUUID()
       const context: CommandContext = {
@@ -483,10 +483,7 @@ describe("runtime login role", () => {
         object: "org_role_assignments",
         root: assignment,
       }
-      await client.query("SELECT set_config($1, $2, true)", [
-        COMMAND_SETTING,
-        JSON.stringify(context),
-      ])
+      await setLocalSetting(client, COMMAND_SETTING, JSON.stringify(context))
       let failure: unknown
       try {
         await client.query(

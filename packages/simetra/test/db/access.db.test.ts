@@ -21,7 +21,12 @@ import {
   systemCatalog,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
-import { queryAs, withRollback, type ApiRole } from "./connection"
+import {
+  queryAs,
+  withRollback,
+  type ApiRole,
+  setLocalSetting,
+} from "./connection"
 
 /**
  * Доступ до таблиць виду на справжньому Postgres (платформна спека §6.7,
@@ -230,16 +235,12 @@ async function tenant(
     `INSERT INTO ${schema}.org_member (id, org_id, user_id) VALUES (gen_random_uuid(), $1, $2) RETURNING id`,
     [org, user]
   ))!
-  await client.query("SELECT set_config($1, 'on', true)", [
-    RIGHTS_MAINTENANCE_SETTING,
-  ])
+  await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
   await client.query(
     `INSERT INTO ${schema}.org_role_assignments (id, org_id, subject, archetype) VALUES (gen_random_uuid(), $1, $2, $3)`,
     [org, member, ORG_READER_ID]
   )
-  await client.query("SELECT set_config($1, 'off', true)", [
-    RIGHTS_MAINTENANCE_SETTING,
-  ])
+  await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "off")
   const item = (await one(
     `INSERT INTO ${schema}.item (id, org_id) VALUES (gen_random_uuid(), $1) RETURNING id`,
     [org]

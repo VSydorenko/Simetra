@@ -14,6 +14,8 @@ import {
   TICKET_WRITER_ID,
   insertOrphan,
   planNodes,
+  restoreOwnerRole,
+  setLocalSetting,
 } from "../../../simetra/test/support"
 import { committed } from "./support/db"
 
@@ -97,10 +99,11 @@ describe("rights administration commands over a planned and applied target", () 
     client.on("notice", onNotice)
     /** Читання `X` актором у поточній транзакції; скани таблиць знімка. */
     const readAs = async () => {
-      await client.query("SELECT set_config($1, $2, true)", [
+      await setLocalSetting(
+        client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify(home.people.reader!.session),
-      ])
+        JSON.stringify(home.people.reader!.session)
+      )
       for (const setting of [
         "auto_explain.log_min_duration = 0",
         "auto_explain.log_nested_statements = on",
@@ -122,7 +125,7 @@ describe("rights administration commands over a planned and applied target", () 
       const xid = await client.query<{ xid: string | null }>(
         "SELECT txid_current_if_assigned()::text AS xid"
       )
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
       const stats = await client.query<{ relname: string; scans: string }>(
         `SELECT relname, (COALESCE(seq_scan, 0) + COALESCE(idx_scan, 0))::text AS scans
            FROM pg_stat_xact_user_tables

@@ -15,15 +15,24 @@ import {
 } from "node:fs"
 import { join } from "node:path"
 import pg from "pg"
+import { PROVIDER_OWNER_ROLES } from "simetra/model"
 import {
   enterRun,
+  GUARD_APPLICATION_NAME,
   newRunTag,
   runTagOf,
   SHADOW_PREFIX,
   shadowAgeMinutes,
   testDatabaseUrl,
+  testSuperuserUrl,
 } from "./connection"
-import { nodeExec, runBuckets, runContainers } from "./external"
+import {
+  type Exec,
+  type Fetch,
+  nodeExec,
+  runBuckets,
+  runContainers,
+} from "./external"
 import { installInterruptCleanup } from "./interrupt"
 import {
   enterProvider,
@@ -31,7 +40,13 @@ import {
   TEST_STACKS,
   type TestProvider,
 } from "./profile"
-import { assertStack, stopRunBackends } from "./sweep"
+import {
+  assertStack,
+  type ClientFactory,
+  openAdmin,
+  stackDatabases,
+  stopRunBackends,
+} from "./sweep"
 
 // Межа — з запасом над найдовшим повним прогоном (designer); чекати довше
 // означає завислий прогін, і про нього краще дізнатися, ніж чекати безкінечно
@@ -91,12 +106,9 @@ async function setup(p: TestProvider): Promise<() => Promise<void>> {
     process.stderr.write(
       `DB run ${runTag} on ${p} stack${tree !== undefined ? ` at ${tree.summary}` : ""}\n`
     )
-    // Знімок і звірка чужого стека під своїм замком не тримали б «один
-    // прогін за раз» ні для одного з двох
-    await assertStack(p)
     // Тег уже є, але воркерів ще нема: об'єктів цього прогону в знімку бути
     // не може, тож звіт називає лише чужі лишки
-    const before = await snapshot(p)
+    const before = await startChecks(p)
     const leftovers = leftoverReport(before, p)
     if (leftovers.length > 0) process.stderr.write(`${leftovers.join("\n")}\n`)
     return async () => {
@@ -236,35 +248,114 @@ function treeState(): { summary: string } | undefined {
   }
 }
 
-// Перелік контейнерів і бакетів, що впав, валить прогін: порожній замість
-// нього сховав би витік
-async function snapshot(p: TestProvider): Promise<Snapshot> {
-  const containers = (await runContainers(p, nodeExec)).map((c) => c.name)
-  const buckets = (
-    await runBuckets(TEST_STACKS[p], fetch, LIST_TIMEOUT_MS)
-  ).map((b) => b.name)
-  const client = new pg.Client({ connectionString: testDatabaseUrl() })
+/** Залежності перевірок сторожа, які юніт-тест підставляє. */
+export interface GuardDeps {
+  client?: ClientFactory
+  exec?: Exec
+  fetch?: Fetch
+}
+
+/**
+ * Перевірки старту прогону під замком і знімок «до»: стек профілю, роль
+ * адреси тестів, потім знімок. Знімок і звірка чужого стека під своїм
+ * замком не тримали б «один прогін за раз» ні для одного з двох, а знімок
+ * адреси з іншою роллю — тієї моделі з'єднання, яку перевіряють тести.
+ */
+export async function startChecks(
+  p: TestProvider,
+  deps: GuardDeps = {}
+): Promise<Snapshot> {
+  await assertStack(p, deps)
+  await assertTestRole(p, deps)
+  return snapshot(p, deps)
+}
+
+/**
+ * Адреса тестів стартує роллю власника профілю без `rolsuper` (спека профілю
+ * §10.3, запобіжник 3): так модель з'єднання перевіряє кожен прогін, зокрема
+ * scoped і з перевизначеною адресою. З'єднання — без прелюдії: перевіряється
+ * саме стартова роль.
+ */
+export async function assertTestRole(
+  p: TestProvider,
+  deps: GuardDeps = {}
+): Promise<void> {
+  const owner = PROVIDER_OWNER_ROLES[p]
+  const make = deps.client ?? ((config) => new pg.Client(config))
+  const client = make({
+    connectionString: testDatabaseUrl(),
+    application_name: GUARD_APPLICATION_NAME,
+  })
   await client.connect()
+  let row: { role: string; superuser: boolean } | undefined
   try {
-    const names = async (sql: string): Promise<string[]> =>
-      (await client.query<{ name: string }>(sql)).rows.map((row) => row.name)
-    return {
-      databases: await names(
-        "select datname as name from pg_database order by 1"
-      ),
-      roles: await names("select rolname as name from pg_roles order by 1"),
-      // Тимчасові схеми сесій Postgres створює сам і не прибирає — це не слід тесту
-      schemas: await names(
-        "select nspname as name from pg_namespace where nspname !~ '^pg_(toast_)?temp_[0-9]+$' order by 1"
-      ),
-      extensions: await names(
-        "select extname as name from pg_extension order by 1"
-      ),
-      containers,
-      buckets,
-    }
+    row = (
+      await client.query<{ role: string; superuser: boolean }>(
+        "select current_user as role, rolsuper as superuser from pg_catalog.pg_roles where rolname = current_user"
+      )
+    ).rows[0]
   } finally {
     await client.end()
+  }
+  if (row?.role !== owner || row.superuser)
+    throw new Error(
+      `test database URL does not run as ${owner} (SIMETRA_TEST_DATABASE_URL?): it starts as ${row?.role ?? "an unknown role"}${row?.superuser === true ? ", a superuser" : ""}`
+    )
+}
+
+// Перелік контейнерів і бакетів, що впав, валить прогін: порожній замість
+// нього сховав би витік. Каталоги кластера (бази, ролі) — з бази `postgres`,
+// схеми й розширення — з бази тестів: їх лишає тест там, де працює
+async function snapshot(
+  p: TestProvider,
+  deps: GuardDeps = {}
+): Promise<Snapshot> {
+  const containers = (await runContainers(p, deps.exec ?? nodeExec)).map(
+    (c) => c.name
+  )
+  const buckets = (
+    await runBuckets(TEST_STACKS[p], deps.fetch ?? fetch, LIST_TIMEOUT_MS)
+  ).map((b) => b.name)
+  const databases = stackDatabases(p)
+  const tests = databases[databases.length - 1]!
+  const cluster = await openAdmin(testSuperuserUrl(), "postgres", deps)
+  try {
+    const local =
+      tests === "postgres"
+        ? cluster
+        : await openAdmin(testSuperuserUrl(), tests, deps)
+    try {
+      const names = async (
+        client: typeof cluster,
+        sql: string
+      ): Promise<string[]> =>
+        (await client.query<{ name: string }>(sql)).rows.map((row) => row.name)
+      return {
+        databases: await names(
+          cluster,
+          "select datname as name from pg_catalog.pg_database order by 1"
+        ),
+        roles: await names(
+          cluster,
+          "select rolname as name from pg_catalog.pg_roles order by 1"
+        ),
+        // Тимчасові схеми сесій Postgres створює сам і не прибирає — це не слід тесту
+        schemas: await names(
+          local,
+          "select nspname as name from pg_catalog.pg_namespace where nspname !~ '^pg_(toast_)?temp_[0-9]+$' order by 1"
+        ),
+        extensions: await names(
+          local,
+          "select extname as name from pg_catalog.pg_extension order by 1"
+        ),
+        containers,
+        buckets,
+      }
+    } finally {
+      if (local !== cluster) await local.end()
+    }
+  } finally {
+    await cluster.end()
   }
 }
 
@@ -374,9 +465,19 @@ export function leakMessage(
         `  DROP DATABASE "${name}" WITH (FORCE);`,
       ]
     // Роль, яку створив тест, видаляє лише суперкористувач стека
-    // (testSuperuserUrl): на стеку Supabase у postgres немає ADMIN на неї
-    if (kind === "roles")
-      return [`  DROP ROLE "${name}";  -- as ${TEST_STACKS[p].superuserName}`]
+    // (testSuperuserUrl): на стеку Supabase у postgres немає ADMIN на неї.
+    // `DROP OWNED BY` діє в поточній базі — тож у кожній базі стека
+    if (kind === "roles") {
+      const [main, ...rest] = stackDatabases(p)
+      const su = TEST_STACKS[p].superuserName
+      return [
+        ...rest.map(
+          (database) =>
+            `  DROP OWNED BY "${name}";  -- as ${su}, in database ${database}`
+        ),
+        `  DROP OWNED BY "${name}"; DROP ROLE "${name}";  -- as ${su}, in database ${main!}`,
+      ]
+    }
     if (kind === "schemas") return [`  DROP SCHEMA "${name}";`]
     if (kind === "containers") return [`  docker rm -f -v ${name}`]
     // Порожнити бакет прибиральник ще не вміє (Р5): це робить людина

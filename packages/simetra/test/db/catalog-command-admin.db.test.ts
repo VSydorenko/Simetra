@@ -45,6 +45,8 @@ import {
   testDatabaseUrl,
   type CommandStep,
   type Refusal,
+  restoreOwnerRole,
+  setLocalSetting,
 } from "./connection"
 import {
   deploy,
@@ -226,17 +228,15 @@ describe("catalog command core on rights system catalogs and Users", () => {
     const client = tx.client()
     await client.query("SAVEPOINT admin_core")
     try {
-      await client.query("SELECT set_config($1, $2, true)", [
+      await setLocalSetting(
+        client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify({ sub: key(user), role: "authenticated" }),
-      ])
-      await client.query("SELECT set_config($1, $2, true)", [
-        COMMAND_SETTING,
-        JSON.stringify(context),
-      ])
+        JSON.stringify({ sub: key(user), role: "authenticated" })
+      )
+      await setLocalSetting(client, COMMAND_SETTING, JSON.stringify(context))
       await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
       const { rows } = await client.query<{ r: string }>(sql, params)
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
       await client.query("SET CONSTRAINTS ALL IMMEDIATE")
       return {
         result: JSON.parse(rows[0]!.r) as Record<string, unknown>,
@@ -948,10 +948,11 @@ describe("catalog command core on rights system catalogs and Users", () => {
               {
                 check: async (client) => {
                   const taken = await headers(client)
-                  await client.query("SELECT set_config($1, $2, true)", [
+                  await setLocalSetting(
+                    client,
                     SESSION_CLAIMS_SETTING,
-                    JSON.stringify(claimsOf("root")),
-                  ])
+                    JSON.stringify(claimsOf("root"))
+                  )
                   return {
                     taken,
                     facts: await factCounts(client),
@@ -998,10 +999,11 @@ describe("catalog command core on rights system catalogs and Users", () => {
         ),
         {
           check: async (client) => {
-            await client.query("SELECT set_config($1, $2, true)", [
+            await setLocalSetting(
+              client,
               SESSION_CLAIMS_SETTING,
-              JSON.stringify(claimsOf("root")),
-            ])
+              JSON.stringify(claimsOf("root"))
+            )
             return factCounts(client)
           },
         },

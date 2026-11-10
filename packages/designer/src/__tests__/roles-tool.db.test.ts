@@ -13,6 +13,7 @@ import {
   testDatabaseUrl,
   testRoleName,
   withRollback,
+  restoreOwnerRole,
 } from "../../../simetra/test/support"
 
 /**
@@ -97,7 +98,7 @@ describe("roles", () => {
           },
         ],
       })
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
       expect(
         (
           await client.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [

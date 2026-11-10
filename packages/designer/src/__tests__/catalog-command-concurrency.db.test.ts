@@ -23,6 +23,7 @@ import {
   ticketMoveToHandler,
   withSql,
   writeRoles,
+  setLocalSetting,
 } from "../../../simetra/test/support"
 import {
   committed,
@@ -98,14 +99,16 @@ async function openCommand(
   isolation = "READ COMMITTED"
 ): Promise<void> {
   await client.query(`BEGIN ISOLATION LEVEL ${isolation}`)
-  await client.query("SELECT set_config($1, $2, true)", [
+  await setLocalSetting(
+    client,
     SESSION_CLAIMS_SETTING,
-    JSON.stringify({ sub: actor.user, role: "authenticated" }),
-  ])
-  await client.query("SELECT set_config($1, $2, true)", [
+    JSON.stringify({ sub: actor.user, role: "authenticated" })
+  )
+  await setLocalSetting(
+    client,
     COMMAND_SETTING,
-    JSON.stringify({ action: "update", object: TICKET_TABLE, root }),
-  ])
+    JSON.stringify({ action: "update", object: TICKET_TABLE, root })
+  )
   await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
 }
 

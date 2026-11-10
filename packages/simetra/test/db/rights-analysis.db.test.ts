@@ -31,7 +31,13 @@ import {
   writeRoles,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
-import { commandSteps, queryAs, type CommandStep } from "./connection"
+import {
+  commandSteps,
+  queryAs,
+  type CommandStep,
+  restoreOwnerRole,
+  setLocalSetting,
+} from "./connection"
 import {
   type Assignment,
   type Delta,
@@ -356,17 +362,19 @@ describe("rights analysis", () => {
     const client = tx.client()
     await client.query("SAVEPOINT analysis_command")
     try {
-      await client.query("SELECT set_config($1, $2, true)", [
+      await setLocalSetting(
+        client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify(claims(user)),
-      ])
-      await client.query("SELECT set_config($1, $2, true)", [
+        JSON.stringify(claims(user))
+      )
+      await setLocalSetting(
+        client,
         COMMAND_SETTING,
-        JSON.stringify({ action: "administerRights", object, root }),
-      ])
+        JSON.stringify({ action: "administerRights", object, root })
+      )
       await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
       await client.query(statement)
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
       await client.query("SET CONSTRAINTS ALL IMMEDIATE")
       return await then()
     } finally {

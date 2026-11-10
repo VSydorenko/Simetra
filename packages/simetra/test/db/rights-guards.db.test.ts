@@ -37,6 +37,7 @@ import {
   testSuperuserUrl,
   withRollback,
   type Refusal,
+  setLocalSetting,
 } from "./connection"
 import {
   assignmentRow,
@@ -131,9 +132,7 @@ describe("rights administration guards", () => {
     await client.query("SAVEPOINT owner_probe")
     try {
       if (maintenance)
-        await client.query("SELECT set_config($1, 'on', true)", [
-          RIGHTS_MAINTENANCE_SETTING,
-        ])
+        await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
       const result: pg.QueryResult | pg.QueryResult[] = await client.query(
         sql(statement)
       )
@@ -154,10 +153,11 @@ describe("rights administration guards", () => {
   }
   /** Контекст команди для наступних операторів кроку. */
   const context = (client: pg.Client, [action, object, root]: string[]) =>
-    client.query("SELECT set_config($1, $2, true)", [
+    setLocalSetting(
+      client,
       COMMAND_SETTING,
-      JSON.stringify({ action, object, root: idOf(root!) }),
-    ])
+      JSON.stringify({ action, object, root: idOf(root!) })
+    )
   /**
    * Кроки однієї команди. `asOwner` лишає власника таблиць: RLS його не
    * обмежує, а тригери прав і ефектів судять оператор так само — для
@@ -172,10 +172,11 @@ describe("rights administration guards", () => {
     const client = tx.client()
     await client.query("SAVEPOINT guard_command")
     try {
-      await client.query("SELECT set_config($1, $2, true)", [
+      await setLocalSetting(
+        client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify(claims(user)),
-      ])
+        JSON.stringify(claims(user))
+      )
       await context(client, first)
       if (!asOwner)
         await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
@@ -744,9 +745,7 @@ describe("rights administration guards", () => {
     const client = tx.client()
     await client.query("SAVEPOINT maintenance_journal")
     try {
-      await client.query("SELECT set_config($1, 'on', true)", [
-        RIGHTS_MAINTENANCE_SETTING,
-      ])
+      await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
       const id = randomUUID()
       await client.query(sql(assignSql(id, TASK_VIEWER_ID)))
       await client.query("SET CONSTRAINTS ALL IMMEDIATE")
@@ -822,9 +821,7 @@ describe("rights administration guards", () => {
     const client = tx.client()
     await client.query("SAVEPOINT scope_move")
     try {
-      await client.query("SELECT set_config($1, 'on', true)", [
-        RIGHTS_MAINTENANCE_SETTING,
-      ])
+      await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
       await client.query(sql(swap))
       const { rows } = await client.query<{ key: string }>(
         "SELECT key::text FROM simetra.rights_tx_pending WHERE xid = txid_current() AND kind = 'holders'"
@@ -907,10 +904,11 @@ describe("rights administration guards", () => {
         admin("org_role_assignments", id),
         async (client) => {
           await client.query(sql(assignSql(id, TASK_VIEWER_ID)))
-          await client.query("SELECT set_config($1, $2, true)", [
+          await setLocalSetting(
+            client,
             SESSION_CLAIMS_SETTING,
-            JSON.stringify(claims("target")),
-          ])
+            JSON.stringify(claims("target"))
+          )
           await client.query("SET CONSTRAINTS ALL IMMEDIATE")
         }
       ),
@@ -991,10 +989,11 @@ describe("rights administration guards", () => {
       await client.query("SAVEPOINT key_command")
       try {
         await client.query(sql(rows.join(";\n")))
-        await client.query("SELECT set_config($1, $2, true)", [
+        await setLocalSetting(
+          client,
           SESSION_CLAIMS_SETTING,
-          JSON.stringify(claims("root")),
-        ])
+          JSON.stringify(claims("root"))
+        )
         await context(client, ["update", "task", K3])
         await expect(client.query(sql(statement))).rejects.toMatchObject(
           KEY_REFUSAL
@@ -1340,20 +1339,14 @@ describe("rights administration guards", () => {
           // Оператор обслуговування — поза командою: з контекстом його судив
           // би тригер ефектів як некореневий запис команди
           await client.query("RESET ROLE")
-          await client.query("SELECT set_config($1, '', true)", [
-            COMMAND_SETTING,
-          ])
-          await client.query("SELECT set_config($1, 'on', true)", [
-            RIGHTS_MAINTENANCE_SETTING,
-          ])
+          await setLocalSetting(client, COMMAND_SETTING, "")
+          await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
           await client.query(
             sql(
               'UPDATE public.org_roles SET "order" = 9 WHERE id = {unusedCustom}'
             )
           )
-          await client.query("SELECT set_config($1, 'off', true)", [
-            RIGHTS_MAINTENANCE_SETTING,
-          ])
+          await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "off")
           await client.query("SET CONSTRAINTS ALL IMMEDIATE")
           const { rows } = await client.query<{ n: number }>(PENDING_ROWS)
           expect(rows[0]?.n).toBe(0)

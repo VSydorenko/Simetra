@@ -29,7 +29,12 @@ import {
 import { fullAccessHolderRows } from "../../src/compiler/rights/guard-units"
 import { LIVE, liveInputs } from "../../src/compiler/rights/functions"
 import { signUp } from "./auth"
-import { commandSteps, type CommandStep, type Refusal } from "./connection"
+import {
+  commandSteps,
+  type CommandStep,
+  type Refusal,
+  setLocalSetting,
+} from "./connection"
 import {
   assignmentRow,
   deploy,
@@ -111,10 +116,11 @@ const grantStep = (
 /** Зміна claims посеред транзакції: інший актор тих самих операторів. */
 const switchActor = (sub: string): CommandStep => ({
   check: (client) =>
-    client.query("SELECT set_config($1, $2, true)", [
+    setLocalSetting(
+      client,
       SESSION_CLAIMS_SETTING,
-      JSON.stringify({ sub, role: "authenticated" }),
-    ]),
+      JSON.stringify({ sub, role: "authenticated" })
+    ),
 })
 
 /**
@@ -127,10 +133,7 @@ const dynamicStep = (
   params: () => unknown[]
 ): CommandStep => ({
   check: async (client) => {
-    await client.query("SELECT set_config($1, $2, true)", [
-      COMMAND_SETTING,
-      JSON.stringify(ctx()),
-    ])
+    await setLocalSetting(client, COMMAND_SETTING, JSON.stringify(ctx()))
     await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
     return (await client.query(sql, params())).rowCount
   },
@@ -503,9 +506,7 @@ describe("tenant creation: self-service with a required member attribute and the
           ? [
               {
                 check: (client: pg.Client) =>
-                  client.query("SELECT set_config($1, 'on', true)", [
-                    RIGHTS_MAINTENANCE_SETTING,
-                  ]),
+                  setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on"),
               },
             ]
           : []),

@@ -1,7 +1,16 @@
 import { readFileSync } from "node:fs"
+import {
+  PROVIDER_OWNER_ROLES,
+  RIGHTS_MAINTENANCE_SETTING,
+  SESSION_CLAIMS_SETTING,
+} from "simetra/model"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
+  asSessionLogin,
+  asStackSuperuser,
+  expectClientRole,
   isRunTag,
+  loginUrl,
   newRunTag,
   RUN_TAG_ENV,
   runObjectPatterns,
@@ -14,8 +23,13 @@ import {
   testDatabaseName,
   testDatabaseUrl,
   testPoolerUrl,
+  rollbackChecked,
+  setLocalSetting,
+  type SwitchClient,
+  testOwnerLoginUrl,
   testRoleName,
   testSuperuserUrl,
+  withSessionOptions,
 } from "./connection"
 import { PROVIDER_ENV, TEST_STACKS } from "./profile"
 
@@ -213,5 +227,232 @@ describe("stack addresses by profile", () => {
     expect(testDatabaseUrl()).toBe("postgresql://a@h/db")
     expect(testSuperuserUrl()).toBe("postgresql://b@h/db")
     expect(testPoolerUrl()).toBe("postgresql://c@h/db")
+  })
+})
+
+/**
+ * Підставний клієнт: записує оператори з параметрами й відповідає рядками
+ * `answer`; стан транзакції — `tx`.
+ */
+function fakeClient(
+  answer: (sql: string) => Record<string, unknown>[] = () => [],
+  tx: () => string | null = () => "T"
+): SwitchClient & { sql: string[] } {
+  const sql: string[] = []
+  return {
+    sql,
+    getTransactionStatus: tx,
+    query: async <R>(text: string, params?: unknown[]) => {
+      sql.push(
+        params === undefined ? text : `${text} ${JSON.stringify(params)}`
+      )
+      return { rows: answer(text) as R[] }
+    },
+  }
+}
+
+describe("login and session options of a URL", () => {
+  const tests = TEST_STACKS.postgres.databaseUrl
+
+  it("loginUrl drops the options parameter and sets the login", () => {
+    const url = new URL(loginUrl(tests, "simetra_auth", "p@ss"))
+    expect(url.searchParams.has("options")).toBe(false)
+    expect(url.username).toBe("simetra_auth")
+    expect(decodeURIComponent(url.password)).toBe("p@ss")
+    expect(url.pathname).toBe("/simetra")
+  })
+
+  it("withSessionOptions keeps -c role= and appends the extra settings", () => {
+    const url = new URL(withSessionOptions(tests, "-c bytea_output=escape"))
+    expect(url.searchParams.getAll("options")).toEqual([
+      `-c role=${PROVIDER_OWNER_ROLES.postgres} -c bytea_output=escape`,
+    ])
+    const plain = new URL(
+      withSessionOptions("postgresql://u@h/db", "-c jit=off")
+    )
+    expect(plain.searchParams.getAll("options")).toEqual(["-c jit=off"])
+  })
+
+  // У pg-connection-string перемагає останній параметр, і роль губиться
+  it("withSessionOptions refuses a URL with two options parameters", () => {
+    expect(() =>
+      withSessionOptions(`${tests}&options=-c%20jit%3Doff`, "-c x=y")
+    ).toThrow(/several options/)
+  })
+})
+
+describe("testOwnerLoginUrl", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it("postgres: a direct login of the owner, without options", () => {
+    vi.stubEnv(PROVIDER_ENV, "postgres")
+    vi.stubEnv("SIMETRA_TEST_DATABASE_URL", "")
+    delete process.env.SIMETRA_TEST_DATABASE_URL
+    const url = new URL(testOwnerLoginUrl())
+    expect(url.username).toBe(PROVIDER_OWNER_ROLES.postgres)
+    expect(url.password).not.toBe("")
+    expect(url.searchParams.has("options")).toBe(false)
+    expect(url.pathname).toBe("/simetra")
+  })
+
+  it("supabase: the owner is the login, so it is the test URL itself", () => {
+    vi.stubEnv(PROVIDER_ENV, "supabase")
+    expect(testOwnerLoginUrl()).toBe(testDatabaseUrl())
+  })
+})
+
+describe("role switch helpers", () => {
+  const roles = (sql: string): Record<string, unknown>[] =>
+    sql.startsWith("SELECT session_user")
+      ? [{ session: "postgres", role: "simetra_command", path: "public" }]
+      : sql.startsWith("SELECT current_user")
+        ? [{ role: "simetra_command", path: '"$user", public' }]
+        : []
+
+  it("asStackSuperuser restores the previous role and search_path before RELEASE", async () => {
+    const client = fakeClient(roles)
+    expect(await asStackSuperuser(client, async () => 7)).toBe(7)
+    expect(client.sql).toEqual([
+      "SAVEPOINT stack_superuser",
+      "SELECT current_user AS role, current_setting('search_path') AS path",
+      "SET LOCAL ROLE NONE",
+      "SET LOCAL search_path = pg_catalog, pg_temp",
+      `SELECT set_config('role', $1, true), set_config('search_path', $2, true) ["simetra_command","\\"$user\\", public"]`,
+      "RELEASE SAVEPOINT stack_superuser",
+    ])
+  })
+
+  it("asStackSuperuser rolls the savepoint back and rethrows on failure", async () => {
+    const client = fakeClient(roles)
+    await expect(
+      asStackSuperuser(client, () => Promise.reject(new Error("boom")))
+    ).rejects.toThrow("boom")
+    expect(client.sql.slice(-1)).toEqual([
+      "ROLLBACK TO SAVEPOINT stack_superuser",
+    ])
+  })
+
+  it("the helpers refuse to run outside a transaction", async () => {
+    const client = fakeClient(roles, () => "I")
+    await expect(asStackSuperuser(client, async () => 1)).rejects.toThrow(
+      /only inside a transaction/
+    )
+    await expect(
+      asSessionLogin(client, "simetra_owner", async () => 1)
+    ).rejects.toThrow(/only inside a transaction/)
+    expect(client.sql).toEqual([])
+  })
+
+  // Відновлюється попередня роль (тут — команд), а не роль власника: інакше
+  // решта транзакції йшла б від власника з BYPASSRLS
+  it.each<[string, () => Promise<number>]>([
+    ["success", async (): Promise<number> => 1],
+    ["failure", (): Promise<number> => Promise.reject(new Error("boom"))],
+  ])(
+    "asSessionLogin restores the previous session_user, current_user and search_path on %s",
+    async (_path, fn) => {
+      const client = fakeClient(roles)
+      await asSessionLogin(client, "simetra_owner", fn).catch(() => undefined)
+      const restore = [
+        "SET LOCAL SESSION AUTHORIZATION postgres",
+        "SET LOCAL ROLE simetra_command",
+        `SELECT set_config('search_path', $1, true) ["public"]`,
+      ]
+      expect(client.sql).toEqual([
+        "SAVEPOINT session_login",
+        "SELECT session_user AS session, current_user AS role, current_setting('search_path') AS path",
+        "SET LOCAL SESSION AUTHORIZATION simetra_owner",
+        ...(_path === "success"
+          ? [...restore, "RELEASE SAVEPOINT session_login"]
+          : ["ROLLBACK TO SAVEPOINT session_login", ...restore]),
+      ])
+    }
+  )
+
+  it("setLocalSetting sets a named platform setting for the transaction", async () => {
+    const client = fakeClient()
+    await setLocalSetting(client, SESSION_CLAIMS_SETTING, "{}")
+    await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
+    expect(client.sql).toEqual([
+      `SELECT set_config($1, $2, true) ["${SESSION_CLAIMS_SETTING}","{}"]`,
+      `SELECT set_config($1, $2, true) ["${RIGHTS_MAINTENANCE_SETTING}","on"]`,
+    ])
+  })
+})
+
+describe("role drift checks", () => {
+  const owner = { role: "simetra_owner", superuser: false }
+
+  // Підставний клієнт перевірок `withRollback`: `superuser` — чи поточна роль
+  // до відкату суперкористувач, `after` — роль після відкату
+  const rollbackClient = (o: {
+    superuser?: boolean | "aborted"
+    after?: string
+  }) =>
+    fakeClient((sql) => {
+      if (sql.startsWith("SELECT NOT rolsuper")) {
+        if (o.superuser === "aborted")
+          throw new Error("current transaction is aborted")
+        return [{ ok: o.superuser !== true }]
+      }
+      if (sql.startsWith("SELECT current_user"))
+        return [{ role: o.after ?? "simetra_owner" }]
+      return []
+    })
+
+  it("a legal request or command role until the end of the transaction passes", async () => {
+    const client = rollbackClient({ superuser: false })
+    expect(await rollbackChecked(client, owner)).toBeNull()
+    expect(client.sql).toContain("ROLLBACK")
+  })
+
+  it("a superuser before ROLLBACK is a drift", async () => {
+    expect(
+      await rollbackChecked(rollbackClient({ superuser: true }), owner)
+    ).toMatch(/ends as a superuser/)
+  })
+
+  it("a role other than the start one after ROLLBACK is a drift", async () => {
+    expect(
+      await rollbackChecked(rollbackClient({ after: "postgres" }), owner)
+    ).toMatch(/after ROLLBACK the client runs as postgres/)
+  })
+
+  // Помилка перевірки в перерваній транзакції не підміняє першопричину
+  it("swallows the check error of an aborted transaction", async () => {
+    expect(
+      await rollbackChecked(rollbackClient({ superuser: "aborted" }), owner)
+    ).toBeNull()
+  })
+
+  it("a client started as a superuser is not checked before ROLLBACK", async () => {
+    const client = rollbackClient({ superuser: true, after: "postgres" })
+    expect(
+      await rollbackChecked(client, { role: "postgres", superuser: true })
+    ).toBeNull()
+    expect(client.sql.some((sql) => sql.startsWith("SELECT NOT"))).toBe(false)
+  })
+
+  it("a helper client left as another role outside a transaction fails the check", async () => {
+    const left = fakeClient(
+      () => [{ role: "postgres" }],
+      () => "I"
+    )
+    await expect(expectClientRole(left, "simetra_owner")).rejects.toThrow(
+      /left as postgres outside a transaction/
+    )
+  })
+
+  it("a helper client inside a transaction is skipped", async () => {
+    const busy = fakeClient(
+      () => [{ role: "simetra_command" }],
+      () => "T"
+    )
+    await expect(expectClientRole(busy, "simetra_owner")).resolves.toBe(
+      undefined
+    )
+    expect(busy.sql).toEqual([])
   })
 })

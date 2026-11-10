@@ -26,8 +26,12 @@ describe(`pgTAP suites of the ${provider} stack`, () => {
     it.skip("none here: `supabase test db` checks the Supabase base state", () => {})
 
   it.each(suites)("%s", async (file) => {
+    // Базовий стан — у базі `postgres` (кластерні факти й
+    // `simetra.environment` стоять там), а не в базі тестів профілю
+    const url = new URL(testSuperuserUrl())
+    url.pathname = "/postgres"
     const result = await runPgTap(
-      testSuperuserUrl(),
+      url.toString(),
       readFileSync(join(dir, file), "utf8")
     )
 

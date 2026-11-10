@@ -22,7 +22,7 @@ import {
 import { SNAPSHOT_TABLES } from "../../src/compiler/rights/actor-snapshot"
 import { RIGHTS_FUNCTIONS } from "../../src/compiler/rights/functions"
 import { signUp } from "./auth"
-import { asRole, queryAs } from "./connection"
+import { asRole, queryAs, setLocalSetting } from "./connection"
 import {
   type PlanNode,
   functionScans,
@@ -276,9 +276,7 @@ async function seed(client: pg.Client): Promise<Gate> {
      SELECT gen_random_uuid(), o.id, $1 FROM public.organization o WHERE o.id <> $2 ORDER BY o.id LIMIT $3`,
     [full, org, FULL_ACCESS_SCOPES]
   )
-  await client.query("SELECT set_config($1, 'on', true)", [
-    RIGHTS_MAINTENANCE_SETTING,
-  ])
+  await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
   await client.query(
     `INSERT INTO public.org_role_assignments (id, org_id, subject, archetype, deletion_mark)
      SELECT gen_random_uuid(), m.org_id, m.id, $2, false FROM public.org_member m WHERE m.user_id = $1`,
@@ -332,9 +330,7 @@ async function seed(client: pg.Client): Promise<Gate> {
            WHERE NOT EXISTS (SELECT 1 FROM public.org_member m WHERE m.user_id = x.id)) u
      JOIN (SELECT id, row_number() OVER (ORDER BY id) AS n FROM public.global_roles) r USING (n)`
   )
-  await client.query("SELECT set_config($1, 'off', true)", [
-    RIGHTS_MAINTENANCE_SETTING,
-  ])
+  await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "off")
   // Власник `fullAccess` має й глобальну кастомну роль з обома гілками
   // дельт, `allow` і `deny`, обидві на `announcement`: `task` скоуплений і
   // поза глобальним доменом (спека прав §7). Тіла функцій прав від його імені
@@ -597,14 +593,16 @@ describe("rights plan gate", () => {
     await client.query("SAVEPOINT auto_explain")
     try {
       if (before !== undefined) {
-        await client.query("SELECT set_config($1, $2, true)", [
+        await setLocalSetting(
+          client,
           SESSION_CLAIMS_SETTING,
-          JSON.stringify({ sub: user, role: "authenticated" }),
-        ])
-        await client.query("SELECT set_config($1, $2, true)", [
+          JSON.stringify({ sub: user, role: "authenticated" })
+        )
+        await setLocalSetting(
+          client,
           COMMAND_SETTING,
-          JSON.stringify(before.context),
-        ])
+          JSON.stringify(before.context)
+        )
         await client.query(before.sql)
         const { rows: taken } = await client.query<{
           fact: string
@@ -979,14 +977,12 @@ describe("rights plan gate", () => {
         "client_min_messages = log",
       ])
         await client.query(`SET LOCAL ${setting}`)
-      await client.query("SELECT set_config($1, $2, true)", [
+      await setLocalSetting(
+        client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify({ sub: user, role: "authenticated" }),
-      ])
-      await client.query("SELECT set_config($1, $2, true)", [
-        COMMAND_SETTING,
-        JSON.stringify(context),
-      ])
+        JSON.stringify({ sub: user, role: "authenticated" })
+      )
+      await setLocalSetting(client, COMMAND_SETTING, JSON.stringify(context))
       await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
       const { rowCount } = await client.query(sql)
       expect(rowCount, "the command changes one row").toBe(1)

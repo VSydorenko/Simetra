@@ -65,6 +65,8 @@ export default defineConfig({
           exclude: ["**/node_modules/**", "**/dist/**"],
           fileParallelism: false,
           globalSetup: ["./test/db/stack-guard.postgres.ts"],
+          // Дрейф ролі між тестами файлу (спека профілю §10.3, запобіжник 3)
+          setupFiles: ["./test/db/db-setup.ts"],
         },
       },
       {

@@ -9,7 +9,7 @@ import {
   project,
 } from "../../src/compiler/__tests__/helpers"
 import { RAISE_SYNCHRONOUS_COMMIT_SQL } from "../../src/schema/apply/settings"
-import { withRollback } from "./connection"
+import { withRollback, restoreOwnerRole } from "./connection"
 
 /**
  * Механіка рядка на справжньому Postgres (спека промоції §9.2): `version` і
@@ -205,7 +205,7 @@ describe("row mechanics in Postgres", () => {
         expect(await failureCode(client, `SELECT nextval('${SEQUENCE}')`)).toBe(
           "42501"
         )
-        await client.query("RESET ROLE")
+        await restoreOwnerRole(client)
         // USAGE — nextval/currval, SELECT — currval, UPDATE — setval
         for (const privilege of ["USAGE", "SELECT", "UPDATE"]) {
           const { rows: has } = await client.query<{ has: boolean }>(

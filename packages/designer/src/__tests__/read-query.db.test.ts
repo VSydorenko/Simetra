@@ -31,6 +31,7 @@ import {
   GAUGE_TABLE,
   policyDomain,
   readQueryLayer,
+  setLocalSetting,
 } from "../../../simetra/test/support"
 import {
   beforeStatement,
@@ -161,10 +162,11 @@ describe("server read of the second form over the engine target", () => {
     await client.connect()
     try {
       await client.query("BEGIN")
-      await client.query("SELECT set_config($1, $2, true)", [
+      await setLocalSetting(
+        client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify(session),
-      ])
+        JSON.stringify(session)
+      )
       await client.query(`SET LOCAL ROLE ${REQUEST_ROLE}`)
       const { rows } = await client.query<R>(sql, params)
       await client.query("COMMIT")

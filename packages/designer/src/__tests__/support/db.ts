@@ -16,6 +16,8 @@ import {
   testPoolerUrl,
   testRoleName,
   testSuperuserUrl,
+  setLocalSetting,
+  trackPool,
 } from "../../../../simetra/test/support"
 
 /**
@@ -201,15 +203,17 @@ export function throughPoolerAs(loginUrl: string): string {
 /**
  * A pool of `loginUrl` through the pooler, or `null` when the caller does not
  * ask for it. Only the Supabase-bound halves of a test ask: a stack without a
- * pooler never resolves `testPoolerUrl()` for the other half.
+ * pooler never resolves `testPoolerUrl()` for the other half. The pool is
+ * checked for a role left on its clients (`trackPool`).
  */
 export function poolerPoolOf(
   loginUrl: string,
   viaPooler: boolean
 ): pg.Pool | null {
-  return viaPooler
-    ? new pg.Pool({ connectionString: throughPoolerAs(loginUrl) })
-    : null
+  if (!viaPooler) return null
+  const pool = new pg.Pool({ connectionString: throughPoolerAs(loginUrl) })
+  trackPool(pool)
+  return pool
 }
 
 /** The pooler pool of an environment built with it; a test bug otherwise. */
@@ -311,14 +315,10 @@ export function seedUnderMaintenance(
   steps: () => Promise<void>
 ): Promise<void> {
   return committed(owner, async () => {
-    await owner.query("SELECT set_config($1, 'on', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
+    await setLocalSetting(owner, RIGHTS_MAINTENANCE_SETTING, "on")
     await steps()
     await owner.query("SET CONSTRAINTS ALL IMMEDIATE")
-    await owner.query("SELECT set_config($1, 'off', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
+    await setLocalSetting(owner, RIGHTS_MAINTENANCE_SETTING, "off")
   })
 }
 

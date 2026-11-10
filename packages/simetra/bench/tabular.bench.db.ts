@@ -27,6 +27,7 @@ import {
   testDatabaseUrl,
   testRoleName,
   testSuperuserUrl,
+  setLocalSetting,
 } from "../test/db/connection"
 
 /**
@@ -215,9 +216,7 @@ describe("tabular section limit", () => {
     const project = randomUUID()
     const user = randomUUID()
     await owner.query("BEGIN")
-    await owner.query("SELECT set_config($1, 'on', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
+    await setLocalSetting(owner, RIGHTS_MAINTENANCE_SETTING, "on")
     await owner.query("INSERT INTO auth.users (id, email) VALUES ($1, $2)", [
       user,
       `${user}@example.test`,
@@ -236,9 +235,7 @@ describe("tabular section limit", () => {
       [project, org]
     )
     await owner.query("SET CONSTRAINTS ALL IMMEDIATE")
-    await owner.query("SELECT set_config($1, 'off', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
+    await setLocalSetting(owner, RIGHTS_MAINTENANCE_SETTING, "off")
     await owner.query("COMMIT")
     await owner.query(
       `INSERT INTO simetra.marker (format, snapshot_hash, snapshot, scope, catalog, engine_name, engine_version, fingerprint, fingerprint_version, platform_version, plan_hash)

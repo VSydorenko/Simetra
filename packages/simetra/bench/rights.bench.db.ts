@@ -30,7 +30,7 @@ import { SNAPSHOT_TABLES } from "../src/compiler/rights/actor-snapshot"
 import { RIGHTS_FUNCTIONS } from "../src/compiler/rights/functions"
 import { rootCreatorFunctionName } from "../src/compiler/rights/root-creator-units"
 import { signUp } from "../test/db/auth"
-import { asRole, testDatabaseUrl } from "../test/db/connection"
+import { asRole, testDatabaseUrl, setLocalSetting } from "../test/db/connection"
 import {
   assignmentRow,
   deploy,
@@ -174,13 +174,9 @@ async function maintenance(
   client: pg.Client,
   fn: () => Promise<unknown>
 ): Promise<void> {
-  await client.query("SELECT set_config($1, 'on', true)", [
-    RIGHTS_MAINTENANCE_SETTING,
-  ])
+  await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
   await fn()
-  await client.query("SELECT set_config($1, 'off', true)", [
-    RIGHTS_MAINTENANCE_SETTING,
-  ])
+  await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "off")
 }
 
 /** Обсяг у точці збереження: засів одного обсягу не тягнеться в наступний. */
@@ -569,10 +565,11 @@ async function snapshotFill(
   for (let i = 0; i < 2 * RUNS - 1; i++) {
     await client.query("SAVEPOINT fill")
     try {
-      await client.query("SELECT set_config($1, $2, true)", [
+      await setLocalSetting(
+        client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify({ sub: user, role: "authenticated" }),
-      ])
+        JSON.stringify({ sub: user, role: "authenticated" })
+      )
       const run = new Map<string, number>()
       for (const filler of fillers) {
         let n = 0
@@ -1095,10 +1092,11 @@ describe("rights limits benchmark", () => {
         const command = async (commands: number): Promise<number> => {
           await client.query("SAVEPOINT command")
           try {
-            await client.query("SELECT set_config($1, $2, true)", [
+            await setLocalSetting(
+              client,
               SESSION_CLAIMS_SETTING,
-              JSON.stringify({ sub: admin, role: "authenticated" }),
-            ])
+              JSON.stringify({ sub: admin, role: "authenticated" })
+            )
             await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
             const time = await elapsed(async () => {
               await client.query(block(true, commands))
@@ -1209,10 +1207,11 @@ describe("rights limits benchmark", () => {
         await client.query(
           `ANALYZE public.${ORG}, public.${MEMBER}, public.${ASSIGNMENTS}, public.${REGION}, public.member_region, public.${BENCH_ZONE_TABLE}, public.${BENCH_TEAM_SEAT_TABLE}`
         )
-        await client.query("SELECT set_config($1, $2, true)", [
+        await setLocalSetting(
+          client,
           SESSION_CLAIMS_SETTING,
-          JSON.stringify({ sub: user, role: "authenticated" }),
-        ])
+          JSON.stringify({ sub: user, role: "authenticated" })
+        )
         const calls: FactCall[] = [
           { fact: "rights_mine", from: "simetra.rights_mine()" },
           { fact: "rights_my_scopes", from: "simetra.rights_my_scopes()" },
@@ -1336,10 +1335,11 @@ describe("rights limits benchmark", () => {
         // джерело всіх чотирьох фактів — знімає їх і на нулі рядків.
         await client.query("SAVEPOINT snapshot")
         try {
-          await client.query("SELECT set_config($1, $2, true)", [
+          await setLocalSetting(
+            client,
             COMMAND_SETTING,
-            JSON.stringify({ action: "update", object: "users", root: user }),
-          ])
+            JSON.stringify({ action: "update", object: "users", root: user })
+          )
           await client.query("UPDATE public.users SET id = id WHERE false")
           expect(
             await snapshotFacts(client),
@@ -1382,18 +1382,20 @@ describe("rights limits benchmark", () => {
         ): Promise<number> => {
           await client.query("SAVEPOINT first_write")
           try {
-            await client.query("SELECT set_config($1, $2, true)", [
+            await setLocalSetting(
+              client,
               SESSION_CLAIMS_SETTING,
-              JSON.stringify({ sub: user, role: "authenticated" }),
-            ])
-            await client.query("SELECT set_config($1, $2, true)", [
+              JSON.stringify({ sub: user, role: "authenticated" })
+            )
+            await setLocalSetting(
+              client,
               COMMAND_SETTING,
               JSON.stringify({
                 action: "update",
                 object: target.table,
                 root: target.id,
-              }),
-            ])
+              })
+            )
             await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
             let written = 0
             const time = await elapsed(async () => {
@@ -1423,10 +1425,11 @@ describe("rights limits benchmark", () => {
           }
         }
         const claims = (user: string) =>
-          client.query("SELECT set_config($1, $2, true)", [
+          setLocalSetting(
+            client,
             SESSION_CLAIMS_SETTING,
-            JSON.stringify({ sub: user, role: "authenticated" }),
-          ])
+            JSON.stringify({ sub: user, role: "authenticated" })
+          )
 
         // Р3-9 (в), розвилка (2): Σ операторів заповнення знімка з розбивкою
         // за таблицями фактів (`snapshotFill`).
@@ -1460,14 +1463,15 @@ describe("rights limits benchmark", () => {
           try {
             await claims(largest.user)
             if (snapshot) {
-              await client.query("SELECT set_config($1, $2, true)", [
+              await setLocalSetting(
+                client,
                 COMMAND_SETTING,
                 JSON.stringify({
                   action: "update",
                   object: container.table,
                   root: container.id,
-                }),
-              ])
+                })
+              )
               await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
               await client.query(
                 `UPDATE public.${container.table} SET description = 'bench' WHERE id = $1`,
@@ -1573,14 +1577,15 @@ describe("rights limits benchmark", () => {
           await client.query("SAVEPOINT probe")
           try {
             await claims(largest.user)
-            await client.query("SELECT set_config($1, $2, true)", [
+            await setLocalSetting(
+              client,
               COMMAND_SETTING,
               JSON.stringify({
                 action: "update",
                 object: container.table,
                 root: container.id,
-              }),
-            ])
+              })
+            )
             await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
             const write = await elapsed(() =>
               client.query(
@@ -1674,15 +1679,17 @@ describe("rights limits benchmark", () => {
           await commandRole(client)
           const actors = await benchActors(client)
           const claims = (user: string) =>
-            client.query("SELECT set_config($1, $2, true)", [
+            setLocalSetting(
+              client,
               SESSION_CLAIMS_SETTING,
-              JSON.stringify({ sub: user, role: "authenticated" }),
-            ])
+              JSON.stringify({ sub: user, role: "authenticated" })
+            )
           const context = (action: string, object: string, root: string) =>
-            client.query("SELECT set_config($1, $2, true)", [
+            setLocalSetting(
+              client,
               COMMAND_SETTING,
-              JSON.stringify({ action, object, root }),
-            ])
+              JSON.stringify({ action, object, root })
+            )
           const limit = (median: number, max: number, label: string) =>
             `limit ${label}: ${median <= max ? "within" : "EXCEEDED"}`
           /** Сирий `INSERT` кореня під `create` (маркер ставить тригер ефектів). */

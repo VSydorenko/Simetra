@@ -3,6 +3,7 @@ import { quoteIdent } from "simetra/model"
 import type { PostgresClusterSet } from "simetra/schema"
 
 import {
+  loginUrl,
   runObjectPatterns,
   runTag,
   testDatabaseName,
@@ -66,9 +67,7 @@ function loginRoleNames(set: PostgresClusterSet): string[] {
  * суперкористувача стека, пароль — `TEST_LOGIN_PASSWORD`.
  */
 export function roleUrl(set: PostgresClusterSet, role: string): string {
-  const url = new URL(testSuperuserUrl())
-  url.username = role
-  url.password = TEST_LOGIN_PASSWORD
+  const url = new URL(loginUrl(testSuperuserUrl(), role, TEST_LOGIN_PASSWORD))
   url.pathname = `/${set.database}`
   return url.toString()
 }

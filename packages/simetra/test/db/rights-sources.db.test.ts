@@ -35,6 +35,7 @@ import {
   queryAs,
   rollbackDatabase,
   testRoleName,
+  restoreOwnerRole,
 } from "./connection"
 import {
   type Seed,
@@ -492,7 +493,7 @@ describe("adopted sources", () => {
         unknownKeys: [{ source: "globalGrants", keys: [], more: 0 }],
         ...noRights,
       })
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
 
       // Не власник, але з `BYPASSRLS`: RLS таблиці його не зупиняє
       await client.query(`CREATE ROLE ${bypass} NOLOGIN BYPASSRLS`)
@@ -506,7 +507,7 @@ describe("adopted sources", () => {
           unknownKeys: [],
           ...noRights,
         })
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
 
       // Власник, успадкований через членство (`pg_has_role`), обходить RLS
       await client.query(`CREATE ROLE ${owner} NOLOGIN NOBYPASSRLS`)
@@ -526,7 +527,7 @@ describe("adopted sources", () => {
           unknownKeys: [],
           ...noRights,
         })
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
 
       // Без `SELECT` на таблиці без RLS — відмова; без `USAGE` на схемі —
       // теж відмова (рядок є), а не відсутність і не `42501`

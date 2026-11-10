@@ -1,12 +1,32 @@
 import { existsSync } from "node:fs"
 import { basename, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { describe, expect, it } from "vitest"
+import { PROVIDER_OWNER_ROLES } from "simetra/model"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import designerConfig from "../../../designer/vitest.config"
 import simetraConfig from "../../vitest.config"
-import { TEST_STACKS, type TestProvider } from "./profile"
-import { diff, leakMessage, leftoverReport, lockPath } from "./stack-guard"
-import { dropRunDatabase, manualSweepSql, stackMismatch } from "./sweep"
+import type { Exec, Fetch } from "./external"
+import {
+  PROVIDER_ENV,
+  SUPERUSER_PRELUDE,
+  TEST_STACKS,
+  type TestProvider,
+} from "./profile"
+import {
+  diff,
+  leakMessage,
+  leftoverReport,
+  lockPath,
+  startChecks,
+} from "./stack-guard"
+import {
+  type ClientFactory,
+  dropRunDatabase,
+  manualSweepSql,
+  stackMismatch,
+  stopRunBackends,
+  sweepRun,
+} from "./sweep"
 
 const PROVIDERS: TestProvider[] = ["supabase", "postgres"]
 
@@ -33,10 +53,24 @@ describe("leakMessage", () => {
         p
       )
       expect(message).toContain(
-        `  DROP ROLE "simetra_probe_abc123";  -- as ${TEST_STACKS[p].superuserName}`
+        `  DROP OWNED BY "simetra_probe_abc123"; DROP ROLE "simetra_probe_abc123";  -- as ${TEST_STACKS[p].superuserName}, in database postgres`
       )
     }
   )
+
+  // `DROP OWNED BY` діє в поточній базі: на `postgres` тести працюють у `simetra`
+  it("postgres: names DROP OWNED BY in the test database too", () => {
+    const message = leakMessage(
+      [{ kind: "roles", name: "simetra_probe_abc123", change: "added" }],
+      "postgres"
+    )
+    expect(message).toContain(
+      `  DROP OWNED BY "simetra_probe_abc123";  -- as postgres, in database simetra`
+    )
+    expect(message.indexOf("in database simetra")).toBeLessThan(
+      message.indexOf("in database postgres")
+    )
+  })
 })
 
 describe("external resources", () => {
@@ -129,9 +163,175 @@ describe("dropping a tagged database", () => {
 
 describe("manualSweepSql", () => {
   it.each(PROVIDERS)("runs as the %s superuser", (p) => {
-    expect(manualSweepSql("abc123", p).split("\n")[0]).toBe(
-      `-- as ${TEST_STACKS[p].superuserName}, connected to database postgres; run the generated statements`
+    expect(manualSweepSql("abc123", p).split("\n")[0]).toMatch(
+      new RegExp(`^-- as ${TEST_STACKS[p].superuserName}; `)
     )
+  })
+
+  it("supabase: one block, in database postgres", () => {
+    expect(
+      manualSweepSql("abc123", "supabase")
+        .split("\n")
+        .filter((line) => line.startsWith("-- in database"))
+    ).toEqual(["-- in database postgres:"])
+  })
+
+  it("postgres: DROP OWNED BY in database simetra, then the rest in postgres", () => {
+    const lines = manualSweepSql("abc123", "postgres").split("\n")
+    expect(lines.filter((line) => line.startsWith("-- in database"))).toEqual([
+      "-- in database simetra:",
+      "-- in database postgres:",
+    ])
+    expect(lines[2]).toContain("SELECT format('DROP OWNED BY %I;', rolname)")
+  })
+})
+
+/**
+ * Підставні з'єднання сторожа: кожне записує базу, оператори й відповідає
+ * за `answer`. Порядок записів — порядок операторів у всіх з'єднаннях.
+ */
+function fakeConnections(answer: (sql: string) => Record<string, unknown>[]) {
+  const log: { database: string; sql: string }[] = []
+  const factory: ClientFactory = (config) => {
+    const url = new URL(String(config.connectionString))
+    const database = decodeURIComponent(url.pathname.slice(1))
+    return {
+      connect: async () => {
+        log.push({ database, sql: `connect ${url.username}${url.search}` })
+      },
+      query: async <R>(sql: string) => {
+        log.push({ database, sql })
+        return { rows: answer(sql) as R[] }
+      },
+      end: async () => undefined,
+      escapeIdentifier: (name: string) => `"${name}"`,
+    }
+  }
+  return { log, factory }
+}
+
+const noDocker: Exec = async () => ""
+const noBuckets: Fetch = async () => new Response("[]")
+
+describe("guard connections on the postgres stack", () => {
+  beforeEach(() => {
+    vi.stubEnv(PROVIDER_ENV, "postgres")
+    for (const name of [
+      "SIMETRA_TEST_DATABASE_URL",
+      "SIMETRA_TEST_SUPERUSER_URL",
+    ]) {
+      vi.stubEnv(name, "")
+      delete process.env[name]
+    }
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  const stackAnswer =
+    (role: { role: string; superuser: boolean }) =>
+    (sql: string): Record<string, unknown>[] => {
+      if (sql.includes("'supabase_admin'")) return [{ present: false }]
+      if (sql.startsWith("select current_user as role")) return [role]
+      return []
+    }
+  const owner = { role: PROVIDER_OWNER_ROLES.postgres, superuser: false }
+
+  // Кожне адмінське з'єднання — у базі `postgres` і з прелюдією до першого
+  // запиту; лише перевірка ролі адреси тестів іде без прелюдії: вона й
+  // перевіряє стартову роль
+  it("assertStack and the snapshot run in database postgres after the prelude", async () => {
+    const { log, factory } = fakeConnections(stackAnswer(owner))
+    await startChecks("postgres", {
+      client: factory,
+      exec: noDocker,
+      fetch: noBuckets,
+    })
+    const connects = log.filter((entry) => entry.sql.startsWith("connect"))
+    expect(connects.map((c) => `${c.database} ${c.sql}`)).toEqual([
+      "postgres connect postgres?options=-c%20role%3Dsimetra_owner",
+      "postgres connect postgres",
+      "simetra connect postgres?options=-c%20role%3Dsimetra_owner",
+      "postgres connect postgres",
+      "simetra connect postgres",
+    ])
+    log.forEach((entry, i) => {
+      if (!entry.sql.startsWith("connect")) return
+      const next = log.slice(i + 1, i + 3).map((e) => e.sql)
+      if (entry.sql.includes("options") && entry.database === "simetra")
+        expect(next[0]).toMatch(/^select current_user as role/)
+      else expect(next).toEqual([...SUPERUSER_PRELUDE])
+    })
+    const queries = log.filter(
+      (e) => !e.sql.startsWith("connect") && !SUPERUSER_PRELUDE.includes(e.sql)
+    )
+    for (const { sql } of queries) expect(sql).toMatch(/pg_catalog\.pg_/)
+    // Схеми й розширення — з бази тестів, де їх лишає тест
+    expect(
+      queries
+        .filter((e) => /pg_namespace|pg_extension/.test(e.sql))
+        .map((e) => e.database)
+    ).toEqual(["simetra", "simetra"])
+  })
+
+  it.each([
+    { role: "postgres", superuser: true },
+    { role: "simetra_user", superuser: false },
+    { role: PROVIDER_OWNER_ROLES.postgres, superuser: true },
+  ])(
+    "refuses a test URL that runs as $role (superuser $superuser) before the snapshot",
+    async (role) => {
+      const { log, factory } = fakeConnections(stackAnswer(role))
+      await expect(
+        startChecks("postgres", {
+          client: factory,
+          exec: noDocker,
+          fetch: noBuckets,
+        })
+      ).rejects.toThrow(
+        `test database URL does not run as ${PROVIDER_OWNER_ROLES.postgres} (SIMETRA_TEST_DATABASE_URL?)`
+      )
+      expect(log.some((e) => e.sql.includes("pg_database"))).toBe(false)
+    }
+  )
+
+  it("stopRunBackends runs in database postgres after the prelude", async () => {
+    const { log, factory } = fakeConnections(() => [])
+    await stopRunBackends("abc123", { client: factory })
+    expect(log.map((e) => `${e.database} ${e.sql}`).slice(0, 4)).toEqual([
+      "postgres connect postgres",
+      ...SUPERUSER_PRELUDE.map((sql) => `postgres ${sql}`),
+      expect.stringMatching(
+        /^postgres select pid from pg_catalog\.pg_stat_activity/
+      ),
+    ])
+  })
+
+  it("the sweep drops what a run role owns in database simetra and in postgres", async () => {
+    let roleListed = false
+    const { log, factory } = fakeConnections((sql) => {
+      if (sql.includes("'supabase_admin'")) return [{ present: false }]
+      if (sql.includes("from pg_catalog.pg_roles where rolname ~")) {
+        if (roleListed) return []
+        roleListed = true
+        return [{ name: "simetra_probe_abc123" }]
+      }
+      return []
+    })
+    const result = await sweepRun("abc123", {
+      client: factory,
+      exec: noDocker,
+      fetch: noBuckets,
+    })
+    expect(result.dropped).toContain("simetra_probe_abc123")
+    expect(
+      log
+        .filter((e) => e.sql.startsWith("DROP OWNED BY"))
+        .map((e) => `${e.database} ${e.sql}`)
+    ).toEqual([
+      'simetra DROP OWNED BY "simetra_probe_abc123"',
+      'postgres DROP OWNED BY "simetra_probe_abc123"; DROP ROLE "simetra_probe_abc123"',
+    ])
   })
 })
 

@@ -1,4 +1,9 @@
-import { afterAll, vi } from "vitest"
+import { afterAll, afterEach, onTestFinished, TestRunner, vi } from "vitest"
+import {
+  expectFileConnectionRoles,
+  expectFileEndRoles,
+  useTestHooks,
+} from "../../../../simetra/test/db/connection"
 import { expectNoLeftoverShadows } from "./shadows"
 
 /**
@@ -68,3 +73,14 @@ vi.mock(
 // Після кожного файлу, а не після кожного тесту: у файлі з конкурентними
 // тестами живі тіні сусідніх тестів дали б `afterEach` хибну тривогу
 afterAll(expectNoLeftoverShadows)
+
+// Дрейф ролі (спека профілю §10.3, запобіжник 3): клієнтів, відкритих
+// хелпером у тесті, перевіряє `onTestFinished` хелпера; тут — відкриті поза
+// тестом, після кожного послідовного тесту, а пули й нове з'єднання з адреси
+// тестів — наприкінці файлу
+useTestHooks({
+  current: () => TestRunner.getCurrentTest(),
+  onFinished: (check) => onTestFinished(check),
+})
+afterEach(({ task }) => expectFileConnectionRoles(task))
+afterAll(expectFileEndRoles)

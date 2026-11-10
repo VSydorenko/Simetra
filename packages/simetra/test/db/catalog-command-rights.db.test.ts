@@ -16,7 +16,7 @@ import {
   policyDomain,
   writeRoles,
 } from "../../src/compiler/__tests__/fixtures/rights"
-import { type Refusal, commandAs } from "./connection"
+import { type Refusal, commandAs, setLocalSetting } from "./connection"
 import {
   deploy,
   COMMAND_CORE_MEMBERS,
@@ -426,14 +426,16 @@ describe("catalog command core: rights check ≡ RLS", () => {
     await client.query("SAVEPOINT snapshot_taken")
     try {
       if (snapshot) {
-        await client.query("SELECT set_config($1, $2, true)", [
+        await setLocalSetting(
+          client,
           SESSION_CLAIMS_SETTING,
-          JSON.stringify(claims(point.user)),
-        ])
-        await client.query("SELECT set_config($1, $2, true)", [
+          JSON.stringify(claims(point.user))
+        )
+        await setLocalSetting(
+          client,
           COMMAND_SETTING,
-          JSON.stringify(contextOf("update", "users", key(point.user))),
-        ])
+          JSON.stringify(contextOf("update", "users", key(point.user)))
+        )
         await client.query(
           "UPDATE public.users SET version = version WHERE false"
         )
@@ -442,7 +444,7 @@ describe("catalog command core: rights check ≡ RLS", () => {
         )
         expect(rows).toEqual([{ n: 1 }])
         // Засів у режимі обслуговування — без контексту команди
-        await client.query("SELECT set_config($1, '', true)", [COMMAND_SETTING])
+        await setLocalSetting(client, COMMAND_SETTING, "")
       }
       const tenant = TENANT_OF_USER.get(point.user)!
       await insert(client, "org_role_assignments", {

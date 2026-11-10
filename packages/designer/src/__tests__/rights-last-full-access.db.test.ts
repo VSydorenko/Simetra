@@ -9,6 +9,7 @@ import {
   adminRoles,
   policyDomain,
   writeRoles,
+  setLocalSetting,
 } from "../../../simetra/test/support"
 import { inTarget, waitForLock } from "./support/db"
 
@@ -41,9 +42,7 @@ async function seedCarrier(client: pg.Client): Promise<Carrier> {
   const assignments = [randomUUID(), randomUUID()]
   await client.query("BEGIN")
   try {
-    await client.query("SELECT set_config($1, 'on', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
+    await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on")
     await client.query("INSERT INTO public.organization (id) VALUES ($1)", [
       org,
     ])
@@ -72,9 +71,7 @@ async function seedCarrier(client: pg.Client): Promise<Carrier> {
       [targetMember, targetOrg, targetUser]
     )
     await client.query("SET CONSTRAINTS ALL IMMEDIATE")
-    await client.query("SELECT set_config($1, 'off', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
+    await setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "off")
     await client.query("COMMIT")
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined)
@@ -110,12 +107,8 @@ describe("concurrent last fullAccess carrier", () => {
             try {
               await first.query(`BEGIN ISOLATION LEVEL ${isolation}`)
               await second.query(`BEGIN ISOLATION LEVEL ${isolation}`)
-              await first.query("SELECT set_config($1, 'on', true)", [
-                RIGHTS_MAINTENANCE_SETTING,
-              ])
-              await second.query("SELECT set_config($1, 'on', true)", [
-                RIGHTS_MAINTENANCE_SETTING,
-              ])
+              await setLocalSetting(first, RIGHTS_MAINTENANCE_SETTING, "on")
+              await setLocalSetting(second, RIGHTS_MAINTENANCE_SETTING, "on")
               const { rows } = await second.query<{ pid: number }>(
                 "SELECT pg_backend_pid() AS pid"
               )
@@ -166,12 +159,8 @@ describe("concurrent last fullAccess carrier", () => {
           try {
             await first.query("BEGIN")
             await second.query("BEGIN")
-            await first.query("SELECT set_config($1, 'on', true)", [
-              RIGHTS_MAINTENANCE_SETTING,
-            ])
-            await second.query("SELECT set_config($1, 'on', true)", [
-              RIGHTS_MAINTENANCE_SETTING,
-            ])
+            await setLocalSetting(first, RIGHTS_MAINTENANCE_SETTING, "on")
+            await setLocalSetting(second, RIGHTS_MAINTENANCE_SETTING, "on")
             await first.query(
               "UPDATE public.org_role_assignments SET org_id = $1, subject = $2 WHERE id = $3",
               [carrier.targetOrg, carrier.targetMember, carrier.first]
