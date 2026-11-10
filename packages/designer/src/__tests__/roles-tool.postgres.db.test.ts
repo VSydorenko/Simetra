@@ -393,8 +393,21 @@ describe("roles: the postgres profile cluster", () => {
       undefined,
       `alter database ${id(set.template)} allow_connections true`
     )
+    // Перерваний запуск міг лишити шаблон з типовим CONNECT для PUBLIC
+    await sql(
+      undefined,
+      `grant connect, temporary on database ${id(set.template)} to public`
+    )
     const outcome = await mustEnsure(set)
     expect(outcome.created).toEqual([])
+    expect(
+      await sql(
+        undefined,
+        `select count(*)::int as n from pg_database d, aclexplode(d.datacl) a
+         where d.datname = $1 and a.grantee = 0`,
+        [set.template]
+      )
+    ).toEqual([{ n: 0 }])
     expect(
       await sql(
         undefined,

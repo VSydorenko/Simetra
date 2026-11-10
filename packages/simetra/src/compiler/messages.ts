@@ -4778,8 +4778,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Роль підключення не є суперкористувачем у ${p.database}: профіль postgres готує кластер лише від суперкористувача, що входить під власним іменем`,
     hint: {
-      en: "Nothing was created. Run `simetra roles` with the superuser DSN of the server (the same variable as for the other commands). A role that is not a superuser, or a session whose current role differs from the login role, is refused because half of the roles without BYPASSRLS would silently change how rights work.",
-      uk: "Нічого не створено. Запустіть `simetra roles` з DSN суперкористувача сервера (та сама змінна, що й для інших команд). Роль без SUPERUSER чи сесію, у якої поточна роль відрізняється від ролі входу, відхилено: половина ролей без BYPASSRLS мовчки змінила б поведінку прав.",
+      en: "This step was refused before it ran; roles or the database created earlier stay. Run `simetra roles` with the superuser DSN of the server (the same variable as for the other commands). A role that is not a superuser, or a session whose current role differs from the login role, is refused because half of the roles without BYPASSRLS would silently change how rights work.",
+      uk: "Цей крок відхилено до його виконання; створені раніше ролі чи база лишаються. Запустіть `simetra roles` з DSN суперкористувача сервера (та сама змінна, що й для інших команд). Роль без SUPERUSER чи сесію, у якої поточна роль відрізняється від ролі входу, відхилено: половина ролей без BYPASSRLS мовчки змінила б поведінку прав.",
     },
   },
   "roles.unsafe-schema": {
@@ -4788,8 +4788,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Схема ${p.schema} у ${p.database} небезпечна для сесії суперкористувача (${p.reason}): її власник чи вміст можуть виконати код з правами суперкористувача`,
     hint: {
-      en: "Nothing was changed. The database owner can create objects there, so `simetra roles` refuses instead of installing an extension or running a grant next to them. Make the schema extensions belong to a superuser with no CREATE for anyone else and no objects of other owners, keep plpgsql_check in the schema extensions, make better_auth belong to the auth login role, take CREATE on the database and on public away from the auth login role, drop its objects outside better_auth, and remove any search_path of that role for this database other than better_auth. Then run the command again.",
-      uk: "Нічого не змінено. Власник бази може створювати там об'єкти, тож `simetra roles` відмовляє, а не ставить розширення чи видає гранти поруч із ними. Зробіть власником схеми extensions суперкористувача без CREATE для інших і без об'єктів чужих власників, тримайте plpgsql_check у схемі extensions, зробіть власником better_auth роль входу auth, заберіть у неї CREATE на базу й на public, видаліть її об'єкти поза better_auth і приберіть її search_path для цієї бази, окрім better_auth. Потім повторіть команду.",
+      en: "This step was refused before it ran; roles or the database created earlier stay. The database owner can create objects there, so `simetra roles` refuses instead of installing an extension or running a grant next to them. Make the schema extensions belong to a superuser with no CREATE for anyone else and no objects of other owners, keep plpgsql_check in the schema extensions, make better_auth belong to the auth login role, take CREATE on the database and on public away from the auth login role, drop its objects outside better_auth, and remove any search_path of that role for this database other than better_auth. Then run the command again.",
+      uk: "Цей крок відхилено до його виконання; створені раніше ролі чи база лишаються. Власник бази може створювати там об'єкти, тож `simetra roles` відмовляє, а не ставить розширення чи видає гранти поруч із ними. Зробіть власником схеми extensions суперкористувача без CREATE для інших і без об'єктів чужих власників, тримайте plpgsql_check у схемі extensions, зробіть власником better_auth роль входу auth, заберіть у неї CREATE на базу й на public, видаліть її об'єкти поза better_auth і приберіть її search_path для цієї бази, окрім better_auth. Потім повторіть команду.",
     },
   },
   "roles.unsafe-template": {

@@ -835,15 +835,16 @@ async function writePhase(
         `CREATE DATABASE ${q(set.template)} TEMPLATE ${q("template0")}`
       )
       created.push(set.template)
-      // Відкликання одразу: до позначки шаблон не має бути відкритий для PUBLIC
-      await write(dbs, conns.maintenance, (tx) =>
-        tx
-          .query(
-            `REVOKE CONNECT, TEMPORARY ON DATABASE ${q(set.template)} FROM PUBLIC`
-          )
-          .then(() => undefined)
-      )
     } else present.push(set.template)
+    // Відкликання і для шаблону з перерваного запуску (ідемпотентно): до
+    // позначки шаблон не має бути відкритий для PUBLIC
+    await write(dbs, conns.maintenance, (tx) =>
+      tx
+        .query(
+          `REVOKE CONNECT, TEMPORARY ON DATABASE ${q(set.template)} FROM PUBLIC`
+        )
+        .then(() => undefined)
+    )
     await write(dbs, conns.template, (tx) =>
       prepareExtensions(tx, set, set.template, snapshot.templateFacts)
     )
