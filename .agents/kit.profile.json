@@ -27,7 +27,15 @@
         "timeout": 2400
       },
       "db-supabase": {
-        "command": ["pnpm", "exec", "vitest", "run", "--project", "db-supabase", "--passWithNoTests"],
+        "command": [
+          "pnpm",
+          "exec",
+          "vitest",
+          "run",
+          "--project",
+          "db-supabase",
+          "--passWithNoTests"
+        ],
         "reporter": "vitest-json",
         "packages": ["simetra", "designer"],
         "lock": "{tmpdir}/simetra-db-stack.lock",
@@ -63,7 +71,18 @@
         ".claude/**/*.md"
       ],
       "exclude": ["docs/research/**", "docs/superpowers/**"],
-      "roots": ["packages", "docs", "scripts", ".agents", ".claude", ".github", "supabase", "docker", "examples", "legacy"],
+      "roots": [
+        "packages",
+        "docs",
+        "scripts",
+        ".agents",
+        ".claude",
+        ".github",
+        "supabase",
+        "docker",
+        "examples",
+        "legacy"
+      ],
       "external": ["MEMORY.md", "SKILL.md", "CLAUDE.local.md"]
     }
   },
