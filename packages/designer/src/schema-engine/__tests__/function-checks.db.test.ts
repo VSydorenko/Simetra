@@ -1,6 +1,12 @@
 import pg from "pg"
 import { describe, expect, it } from "vitest"
-import { executePlan } from "simetra/schema"
+import { executePlan, PROVIDER_LOCKS, readProviderLocks } from "simetra/schema"
+import {
+  loginUrl,
+  testProvider,
+  testRoleName,
+  testSuperuserUrl,
+} from "../../../../simetra/test/support"
 import {
   apply,
   checkFailed,
@@ -12,6 +18,7 @@ import {
   options,
   planFor,
   platformFunctionNames,
+  reader,
   PREAMBLE,
   RENAME_A,
   run,
@@ -21,7 +28,7 @@ import {
   TABLE_T,
   useFunctionChecks,
 } from "./function-checks.support"
-import { query } from "../../__tests__/support/db"
+import { asSuperuser, dropRoles, query } from "../../__tests__/support/db"
 
 /**
  * Ревалідація тіл функцій раннером на справжній базі (спека промоції
@@ -320,6 +327,67 @@ describe("plpgsql_check", () => {
       { plpgsqlCheck: "unavailable" },
       async (outcome) => expect(outcome).toMatchObject({ status: "committed" })
     )
+  })
+
+  it("fails when plpgsql_check cannot be taken on the target", async () => {
+    // Розширення стоїть у схемі `extensions` шаблону. Застосовує роль без
+    // `USAGE` на цю схему, а план «встановлене» обіцяв перевірку; BYPASSRLS —
+    // щоб застосування пройшло гейт власника (`plan.owner-not-bypassrls`) і
+    // дійшло до перевірки. Варіант із тимчасовим встановленням — у
+    // `function-checks.supabase.db.test.ts`
+    const NOUSAGE = testRoleName("fncheck_nousage")
+    await query(
+      testSuperuserUrl(),
+      `create role ${NOUSAGE} login bypassrls password 'x'`
+    )
+    try {
+      await inTarget(
+        `${TABLE_T};
+         grant usage, create on schema app to ${NOUSAGE};
+         grant usage on schema simetra to ${NOUSAGE};
+         grant select on all tables in schema simetra to ${NOUSAGE}`,
+        async (url) => {
+          const as = new URL(loginUrl(url, NOUSAGE, "x")).toString()
+          const planAs = async () =>
+            planFor(url, [NEUTRAL], {
+              plpgsqlCheck: "installed",
+              role: NOUSAGE,
+              providerLocks: await reader.transaction(
+                { url: as },
+                "rollback",
+                (tx) =>
+                  readProviderLocks(tx, NOUSAGE, PROVIDER_LOCKS[testProvider()])
+              ),
+            })
+          expect(
+            await executePlan(apply, { url: as }, await planAs(), options)
+          ).toMatchObject({
+            status: "failed",
+            diagnostics: [
+              {
+                code: "apply.plpgsql-check-unavailable",
+                params: { sqlstate: "42501" },
+              },
+            ],
+          })
+          expect(
+            await query(url, "select to_regclass('app.n') is null as absent")
+          ).toEqual([{ absent: true }])
+          // Контроль: з тим самим планом, але з `USAGE` на схему розширення
+          // роль застосовує, тож причина відмови саме в `USAGE`
+          await query(
+            asSuperuser(url),
+            `grant usage on schema extensions to ${NOUSAGE};
+             grant insert, update, delete on all tables in schema simetra to ${NOUSAGE}`
+          )
+          expect(
+            await executePlan(apply, { url: as }, await planAs(), options)
+          ).toMatchObject({ status: "committed", diagnostics: [] })
+        }
+      )
+    } finally {
+      await dropRoles(NOUSAGE)
+    }
   })
 
   it("checks a trigger function with each table it fires on", async () => {

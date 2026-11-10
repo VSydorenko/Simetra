@@ -170,6 +170,19 @@ describe("ApplyDatabase (pg)", () => {
             asSuperuser(url),
             `select pg_terminate_backend(${String(pid)})`
           )
+          // `pg_terminate_backend` лише сигналить: бекенд виходить асинхронно.
+          // Доки він живий, `DROP DATABASE … WITH (FORCE)` тіні, яку двигун
+          // робить після тесту, може наштовхнутися на нього під навантаженням
+          // (збій прибирання двигун ковтає, тінь лишається сиротою). Тож
+          // чекаємо, поки бекенда справді нема
+          for (let waited = 0; waited < 10_000; waited += 25) {
+            const [alive] = await query<{ alive: boolean }>(
+              asSuperuser(url),
+              `select exists (select 1 from pg_stat_activity where pid = ${String(pid)}) as alive`
+            )
+            if (alive?.alive !== true) break
+            await new Promise((resolve) => setTimeout(resolve, 25))
+          }
           await tx.query("select 1")
         })
         .catch((e: unknown) => e)

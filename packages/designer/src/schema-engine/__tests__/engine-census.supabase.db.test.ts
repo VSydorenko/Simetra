@@ -8,8 +8,9 @@ import { readCensus } from "../census-read"
 /**
  * Перепис на стеку Supabase: членство таблиці застосунку в публікації
  * `supabase_realtime` — частина пресета провайдера, якої на чистому Postgres
- * немає, тож решта корпусу переписів іде в `engine-census.db.test.ts` з
- * власною публікацією.
+ * немає. Решта корпусу переписів — `engine-census.db.test.ts`, свідомо без
+ * власної публікації, тож клас `publicationRel` на стеку postgres не
+ * перевіряється.
  */
 
 const engine = createPgDeltaEngine()
