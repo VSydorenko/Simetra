@@ -27,6 +27,7 @@ import {
 import { applyDiagnostic } from "./diagnostic"
 import { differencePaths } from "./drift"
 import { environmentMismatch, readGlobalDefaultPrivileges } from "./environment"
+import { checkOwnerAttributes } from "./owner-gate"
 import {
   blindWarning,
   CheckNameTaken,
@@ -708,6 +709,10 @@ async function runAttempt(
     const unsupported = await serverVersionRefusal(tx)
     if (unsupported !== undefined)
       throw new AttemptStop("refused", [unsupported])
+    // Р10: власник без BYPASSRLS після плану (ALTER ROLE між планом і
+    // застосуванням) — відмова до першого кроку, у ledger нічого
+    const ownerGate = await checkOwnerAttributes(tx)
+    if (ownerGate !== undefined) throw new AttemptStop("refused", [ownerGate])
   }
 
   // 1a. План побудовано для своєї ролі: від неї залежать замки (право на

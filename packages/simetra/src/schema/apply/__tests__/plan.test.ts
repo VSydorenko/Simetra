@@ -167,6 +167,31 @@ describe("buildPlan", () => {
     }
   )
 
+  it.each([
+    ["a role without BYPASSRLS", { bypassrls: false, superuser: false }],
+    ["a missing role row (fail-closed)", "none" as const],
+  ])(
+    "refuses %s before any state read or platform-role check",
+    async (_name, owner) => {
+      const model = (await compile(policyDomain(adminRoles()))).model!
+      const target = await fakeTarget(model, {
+        notCopies: [],
+        owner,
+      })
+      const outcome = await buildPlan(
+        fakeEngine([]),
+        { reader: target.reader, scratch: emptyScratch },
+        model,
+        { target: { url: "postgres://target" } },
+        []
+      )
+      expect(outcome).toMatchObject({
+        status: "refused",
+        diagnostics: [{ code: "plan.owner-not-bypassrls" }],
+      })
+    }
+  )
+
   it("hands the engine the hashed effects function of a long table and no truncated one", async () => {
     // До хешу ім'я функції ефектів довгої таблиці було іменем її
     // тригера (обрізане алгоритмом Postgres). Сам перехід — DROP старої й
@@ -343,18 +368,20 @@ describe("buildPlan", () => {
             query: async <R extends Record<string, unknown>>(sql: string) =>
               (sql.includes("server_version_num")
                 ? [{ num: 170004, version: "17.4", major: 17 }]
-                : sql.includes("pg_auth_members") &&
-                    db.url !== urls[server as "target" | "shadow"]
-                  ? [
-                      {
-                        name: PLATFORM_ROLES.command,
-                        attributes: {},
-                        memberOf: [],
-                        members: [],
-                        requestPath: [],
-                      },
-                    ]
-                  : []) as unknown as R[],
+                : sql.includes("AS bypassrls")
+                  ? [{ bypassrls: true, superuser: false }]
+                  : sql.includes("pg_auth_members") &&
+                      db.url !== urls[server as "target" | "shadow"]
+                    ? [
+                        {
+                          name: PLATFORM_ROLES.command,
+                          attributes: {},
+                          memberOf: [],
+                          members: [],
+                          requestPath: [],
+                        },
+                      ]
+                    : []) as unknown as R[],
             extract: () => Promise.reject(new Error("no extract expected")),
           }),
       }
@@ -686,6 +713,8 @@ async function fakeTarget(
   model: CompiledModel,
   o: {
     notCopies: readonly string[]
+    /** Атрибути ролі сесії для гейта власника; за замовчуванням є BYPASSRLS. */
+    owner?: { bypassrls: boolean; superuser: boolean } | "none"
     /**
      * Таблиці прийнятих джерел прав: доступ ролі застосування й ключ ролі,
      * якого не оголошує жодна роль, у кожному джерелі призначень.
@@ -744,6 +773,10 @@ async function fakeTarget(
       return [{ major: 17, encoding: "UTF8", collate: "C", ctype: "C" }]
     if (sql.includes("server_version_num"))
       return [{ num: 170004, version: "17.4" }]
+    if (sql.includes("AS bypassrls"))
+      return o.owner === "none"
+        ? []
+        : [o.owner ?? { bypassrls: true, superuser: false }]
     if (sql.includes("AS marker, to_regclass"))
       return [{ marker: true, ledger: true }]
     if (sql.includes("to_jsonb(m)")) return [{ row: JSON.stringify(marker) }]

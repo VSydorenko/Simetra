@@ -56,9 +56,13 @@ export function sequenceRevokes(
   const target = `${quoteIdent(sequence.schema)}.${quoteIdent(sequence.name)}`
   return [
     `REVOKE ALL ON SEQUENCE ${target} FROM PUBLIC;`,
-    ...Object.values(PROVIDER_API_ROLES[provider]).map(
-      (role) => `REVOKE ALL ON SEQUENCE ${target} FROM ${quoteIdent(role)};`
-    ),
+    // Роль API без значення (`null`, сервісної ролі профілю `postgres` немає)
+    // відкликати нічого: `FROM null` не складає одиницю SQL
+    ...Object.values(PROVIDER_API_ROLES[provider])
+      .filter((role): role is string => typeof role === "string")
+      .map(
+        (role) => `REVOKE ALL ON SEQUENCE ${target} FROM ${quoteIdent(role)};`
+      ),
   ]
 }
 

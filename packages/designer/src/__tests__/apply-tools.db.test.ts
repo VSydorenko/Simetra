@@ -824,6 +824,27 @@ describe("apply", { concurrent: false }, () => {
     })
   })
 
+  it("apply --rehearse refuses a role without BYPASSRLS before building the shadow", async () => {
+    await inTarget(EMPTY, async (url) => {
+      const dir = await projectWith({ [PARTY]: party() })
+      const data = await planned(dir, url)
+      // `current_user` стає роллю без BYPASSRLS через параметр з'єднання, без
+      // пароля й нового логіна: роль `OWNER` створено без цього атрибута
+      const limited = new URL(url)
+      limited.searchParams.set("options", `-c role=${OWNER}`)
+      const shadowCallsBefore = lose.shadowScopes.length
+      const r = await call(
+        "apply",
+        { plan: data.file, planHash: data.planHash, rehearse: true },
+        options(dir, limited.toString())
+      )
+      expect(errors(r)).toEqual(["plan.owner-not-bypassrls"])
+      // Р10: відмова до тіні
+      expect(lose.shadowScopes.length).toBe(shadowCallsBefore)
+      expect(await markerExists(url)).toBe(false)
+    })
+  })
+
   it("apply --rehearse refuses with the shadow diagnostics and runs nothing", async () => {
     await inTarget(EMPTY, async (url) => {
       const dir = await projectWith({ [PARTY]: party() })

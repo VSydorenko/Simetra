@@ -85,6 +85,7 @@ import {
   type ProviderLockSet,
   type TableLock,
 } from "./locks"
+import { checkOwnerAttributes } from "./owner-gate"
 import { checkPlatformRoles } from "./platform-roles"
 import { ApplyConnectionLost, ApplyDbError, type ApplyDatabase } from "./port"
 import {
@@ -443,6 +444,11 @@ export async function buildPlan(
     async (tx) => {
       const unsupported = await serverVersionRefusal(tx)
       if (unsupported !== undefined) return { ok: false as const, unsupported }
+      // Р10: роль без BYPASSRLS читала б стан крізь захист рядків — відмова
+      // до будь-якого читання стану й до платформних ролей
+      const ownerGate = await checkOwnerAttributes(tx)
+      if (ownerGate !== undefined)
+        return { ok: false as const, unsupported: ownerGate }
       return {
         ok: true as const,
         state: await readApplyState(tx),

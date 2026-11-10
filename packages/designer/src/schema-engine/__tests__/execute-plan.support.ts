@@ -120,7 +120,7 @@ export function useExecutePlanSetup(): void {
     await query(
       testSuperuserUrl(),
       `create role ${OWNER} nologin; grant ${OWNER} to postgres;
-       create role ${LOCKER} login password '${LOCKER_PASSWORD}';`
+       create role ${LOCKER} login bypassrls password '${LOCKER_PASSWORD}';`
     )
   })
   afterAll(() => dropRoles(OWNER, LOCKER))

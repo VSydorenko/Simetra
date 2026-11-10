@@ -228,6 +228,8 @@ interface Script {
   fail?: (label: string, attempt: number) => Error | undefined
   /** Версія сервера цілі; типово Postgres 17. */
   serverVersion?: { num: number; version: string }
+  /** Attributes of the connected role; `"none"` — no row. */
+  owner?: { bypassrls: boolean; superuser: boolean } | "none"
   /** Факти сервера цілі; типово `SERVER`. */
   server?: Record<string, unknown>
   /** `apply_id` останнього рядка ledger цілі; типово ledger порожній. */
@@ -354,6 +356,7 @@ function labelOf(sql: string): string | undefined {
   if (sql.includes("set_config('statement_timeout', $1"))
     return "lookup-timeouts"
   if (sql.includes("set_config('lock_timeout'")) return "timeouts"
+  if (sql.includes("AS bypassrls")) return "owner-gate"
   if (sql.includes("current_user")) return "role"
   if (sql.includes("FROM pg_catalog.pg_locks")) return "held-locks"
   if (sql.includes("c.oid::text AS oid")) return "existing"
@@ -456,13 +459,17 @@ function fakeDb(script: Script = {}) {
           const identity: Record<string, unknown>[] | undefined =
             label === "server-version"
               ? [script.serverVersion ?? { num: 170006, version: "17.6" }]
-              : label === "server"
-                ? [{ ...SERVER, ...script.server }]
-                : label === "ledger-head"
-                  ? script.ledgerHead === undefined
-                    ? []
-                    : [{ head: script.ledgerHead }]
-                  : undefined
+              : label === "owner-gate"
+                ? script.owner === "none"
+                  ? []
+                  : [script.owner ?? { bypassrls: true, superuser: false }]
+                : label === "server"
+                  ? [{ ...SERVER, ...script.server }]
+                  : label === "ledger-head"
+                    ? script.ledgerHead === undefined
+                      ? []
+                      : [{ head: script.ledgerHead }]
+                    : undefined
           if (identity !== undefined) return identity as R[]
           if (label === "foreign-keys")
             return (script.foreignKeys ?? []).map((fk) => ({
@@ -613,6 +620,8 @@ describe("executePlan", () => {
       // Версія сервера — одразу після замка застосування: жодна раніша фаза
       // не впаде сирою помилкою версійно залежного читання
       "server-version",
+      // Р10: власник без BYPASSRLS — відмова до будь-якого кроку
+      "owner-gate",
       "role",
       "timeouts",
       "state",
@@ -727,6 +736,38 @@ describe("executePlan", () => {
     expect(log.filter((l) => l === "BEGIN")).toHaveLength(1)
   })
 
+  it.each([
+    [
+      "a role with neither BYPASSRLS nor superuser",
+      { bypassrls: false, superuser: false },
+    ],
+    ["a missing role row (fail-closed)", "none" as const],
+  ])(
+    "refuses %s right after the version check, before any step",
+    async (_n, owner) => {
+      const { db, log } = fakeDb({ owner })
+      const outcome = await executePlan(db, target, plan, options)
+      expect(outcome).toMatchObject({
+        status: "refused",
+        diagnostics: [{ code: "plan.owner-not-bypassrls" }],
+      })
+      expect(log).toEqual([
+        "BEGIN",
+        "try-lock",
+        "server-version",
+        "owner-gate",
+        "ROLLBACK",
+      ])
+    }
+  )
+
+  it("lets a superuser without BYPASSRLS through", async () => {
+    const { db } = fakeDb({ owner: { bypassrls: false, superuser: true } })
+    expect(await executePlan(db, target, plan, options)).toMatchObject({
+      status: "committed",
+    })
+  })
+
   it("refuses a role other than the plan's right after the advisory lock", async () => {
     const { db, log } = fakeDb({ role: "someone_else" })
     const outcome = await executePlan(db, target, plan, {
@@ -747,6 +788,7 @@ describe("executePlan", () => {
       "BEGIN",
       "try-lock",
       "server-version",
+      "owner-gate",
       "role",
       "ROLLBACK",
     ])

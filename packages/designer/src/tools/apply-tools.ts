@@ -15,6 +15,7 @@ import {
 import {
   buildPlan,
   checkPermissions,
+  checkOwnerAttributes,
   checkPlatformRoles,
   desiredForApply,
   executePlan,
@@ -586,6 +587,11 @@ export const applyTool = defineTool({
         // з'єднанні, тож бажану тінь будують до відкриття транзакції цілі
         // (спека промоції §7.2): під замками плану її не будують
         const desired = await desiredForApply(model)
+        // Р10: роль без BYPASSRLS — відмова до платформних ролей і до створення тіні
+        const ownerGate = await (
+          await applyDatabase({ readOnly: true })
+        ).transaction(db.target, "rollback", checkOwnerAttributes)
+        if (ownerGate !== undefined) return { rolesRefused: [ownerGate] }
         // Платформні ролі — до тіні, як у плані (спека designer §3.2)
         const roles = await checkPlatformRoles(
           await applyDatabase({ readOnly: true }),

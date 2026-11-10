@@ -28,6 +28,7 @@ export {
   type MarkerRecord,
 } from "./state"
 export { readServerFacts, type ServerFacts } from "./server"
+export { checkOwnerAttributes, ownerRefusal } from "./owner-gate"
 export { PLATFORM_VERSION } from "./version"
 export { tableKey } from "./table-key"
 export {

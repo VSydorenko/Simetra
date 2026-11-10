@@ -316,6 +316,7 @@ export const COMPILER_RULES = [
   "plan.owner-mismatch",
   "plan.platform-role-missing",
   "plan.platform-role-shape",
+  "plan.owner-not-bypassrls",
   "plan.shadow-base-unsupported",
   "plan.type-guard-unsupported",
   "plan.type-change-dependent",

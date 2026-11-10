@@ -4353,6 +4353,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Нічого не сплановано й не створено. `simetra roles` наявну роль не змінює: виправте її вручну — `ALTER ROLE <роль> NO<атрибут>` для атрибута, `REVOKE <роль> FROM <член>` (або відкличте роль, у яку вона входить) для членства чи `GRANT <батько> TO <роль входу> WITH INHERIT FALSE, SET TRUE` для відсутнього чи хибного членства ролі входу — і повторіть команду.",
     },
   },
+  "plan.owner-not-bypassrls": {
+    en: () =>
+      "The connected role has neither BYPASSRLS nor superuser: it would see only the rows row-level security allows, so the plan, the apply and the rehearsal cannot be trusted",
+    uk: () =>
+      "Підключена роль не має ні BYPASSRLS, ні прав суперкористувача: вона бачила б лише рядки, які дозволяє захист на рівні рядків, тож плану, застосуванню й репетиції не можна довіряти",
+    hint: {
+      en: "Nothing was planned or written. As a superuser run ALTER ROLE <role> BYPASSRLS, or connect as a role that has it.",
+      uk: "Нічого не сплановано й не записано. Від суперкористувача виконайте ALTER ROLE <роль> BYPASSRLS або підключіться роллю, що його має.",
+    },
+  },
   "plan.shadow-base-unsupported": {
     en: () =>
       "A separate shadow server is not supported with the postgres profile: shadows are built from the template database of the target cluster",

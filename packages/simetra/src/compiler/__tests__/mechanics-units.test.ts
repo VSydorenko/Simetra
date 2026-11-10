@@ -196,13 +196,16 @@ describe("buildMechanicsUnits", () => {
       expect(revokes[0]).toBe(
         "REVOKE ALL ON SEQUENCE simetra.row_version FROM PUBLIC;"
       )
+      // Профіль без ролі за призначенням (`null`) нічого не відкликає
+      expect(revokes.some((sql) => /\bFROM null;/.test(sql))).toBe(false)
       for (const role of Object.values(PROVIDER_API_ROLES[provider]))
-        expect(revokes).toContain(
-          `REVOKE ALL ON SEQUENCE simetra.row_version FROM "${role}";`.replace(
-            `"${role}"`,
-            /^[a-z_]+$/.test(role) ? role : `"${role}"`
+        if (typeof role === "string")
+          expect(revokes).toContain(
+            `REVOKE ALL ON SEQUENCE simetra.row_version FROM "${role}";`.replace(
+              `"${role}"`,
+              /^[a-z_]+$/.test(role) ? role : `"${role}"`
+            )
           )
-        )
     }
   )
 
