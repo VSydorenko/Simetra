@@ -4629,6 +4629,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "План не записано. Перейменуйте чи зніміть наявний тригер; підписці можна й дати інший physicalName.",
     },
   },
+  "plan.row-version-first": {
+    en: (p) =>
+      `The plan writes data into table(s) ${p.tables} that already have row mechanics, but the database has no sequence simetra.row_version yet; the data steps would run before the engine steps that create it`,
+    uk: (p) =>
+      `План пише дані в таблиці ${p.tables}, що вже мають механіку рядка, але в базі ще немає послідовності simetra.row_version; кроки даних пішли б до кроків двигуна, які її створюють`,
+    hint: {
+      en: "No plan was written. Apply the platform update (the sequence) first, then plan the promotion again.",
+      uk: "План не записано. Спершу застосуйте оновлення платформи (послідовність), потім сплануйте промоцію знову.",
+    },
+  },
   "plan.rights-source-access": {
     en: (p) =>
       `The applying role cannot read every row of the adopted rights source table(s) ${p.tables}: it lacks USAGE on the schema or SELECT on the table, or row level security is enabled and the role neither owns the table nor has BYPASSRLS`,

@@ -431,9 +431,10 @@ describe("data tools over a real database", () => {
         expectedVersion: version,
         values: { reading: 1 },
       } satisfies Operation
-      expect(resultOf(await command([update])).changes[0]?.version).toBe(
-        version + 1
-      )
+      // Версія з послідовності: лише «більша за попередню», не `+1`
+      expect(
+        resultOf(await command([update])).changes[0]?.version as number
+      ).toBeGreaterThan(version)
       expect(errorOf(await command([update]))).toMatchObject({
         code: "command.conflict",
         reason: "version",
@@ -594,7 +595,8 @@ describe("data tools over a real database", () => {
         { [ENV]: env.login }
       )
       expect(cli.exitCode, cli.stderr + cli.stdout).toBe(0)
-      expect(await versionOf(GAUGE_TABLE, env.mine)).toBe(before + 1)
+      // Версія з послідовності: лише «більша за попередню», не `+1`
+      expect(await versionOf(GAUGE_TABLE, env.mine)).toBeGreaterThan(before)
     })
 
     it("a model change between calls is command.model-mismatch until it is undone", async () => {

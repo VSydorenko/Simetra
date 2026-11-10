@@ -53,6 +53,7 @@ import {
   type CommandReference,
 } from "./contracts"
 import { memberCheckFunction } from "./member-check"
+import { ROW_VERSION_SETTING } from "../mechanics-units"
 
 const q = quoteIdent
 const relation = (t: { schema: string; name: string }) =>
@@ -1341,7 +1342,7 @@ export function coreFunction(
  * кореня) → `INSERT` без `RETURNING` (до гранту політика читання нового рядка
  * не пропускає) → функція гранту → читання кореня й рядка членства під
  * командою. Невидимий після гранту рядок (модель оператора) — лише ключ і
- * версія `1`: вставка дає версію 1.
+ * версія, яку тригер механіки видав вставці.
  */
 function createRootFunction(
   contract: CatalogCommandContract,
@@ -1352,18 +1353,23 @@ function createRootFunction(
 ): string {
   const { table, key } = contract
   const root = `v_in.${q(key)}`
+  // Версію вставленого рядка тригер механіки лишає в налаштуванні транзакції
+  // на таблицю (`currval` зсувають `AFTER INSERT` тригери інших таблиць).
+  const insertedVersion = (target: CatalogCommandContract, into: string) =>
+    `${into} := current_setting(${sqlLiteral(ROW_VERSION_SETTING)} || '${relation(target.table)}'::regclass::oid::text, true);`
   // Рядок під командою (RLS читання): видимий — повний, як результат `save`.
   const visible = (
     target: CatalogCommandContract,
     row: string,
     id: string,
-    into: string
+    into: string,
+    version: string
   ) => [
     `SELECT * INTO ${row} FROM ${relation(target.table)} r WHERE r.${q(target.key)} = ${id};`,
     "IF FOUND THEN",
     `  ${into} := ${rowJson(target.table, row)};`,
     "ELSE",
-    `  ${into} := jsonb_build_object(${sqlLiteral(target.key)}, ${id}, ${sqlLiteral(target.versionColumn)}, '1'::text);`,
+    `  ${into} := jsonb_build_object(${sqlLiteral(target.key)}, ${id}, ${sqlLiteral(target.versionColumn)}, ${version});`,
     "END IF;",
   ]
   const statements = [
@@ -1400,15 +1406,23 @@ function createRootFunction(
       references: referenceChecks(contract.references, newRow(parts), invalid),
       returning: false,
     }),
+    insertedVersion(contract, "v_root_version"),
     ...(creator === undefined
       ? []
       : [
           `PERFORM ${relation(creator.facts.fn)}(${root}, p_member_id, p_member);`,
+          insertedVersion(creator.member, "v_member_version"),
         ]),
-    ...visible(contract, "v_row", root, "v_result"),
+    ...visible(contract, "v_row", root, "v_result", "v_root_version"),
     ...(creator === undefined
       ? ["v_member := NULL;"]
-      : visible(creator.member, "v_member_row", "p_member_id", "v_member")),
+      : visible(
+          creator.member,
+          "v_member_row",
+          "p_member_id",
+          "v_member",
+          "v_member_version"
+        )),
     "RETURN jsonb_build_object('root', v_result, 'member', v_member)::text;",
   ]
   return coreFunction(
@@ -1424,6 +1438,8 @@ function createRootFunction(
       "v_constraint text;",
       "v_result jsonb;",
       "v_member jsonb;",
+      "v_root_version text;",
+      "v_member_version text;",
     ],
     statements
   )

@@ -84,6 +84,7 @@ import { readInvalidObjects } from "./validity"
 import {
   CARRIER_STEP_SETTINGS,
   DATA_SETTINGS,
+  RAISE_SYNCHRONOUS_COMMIT_SQL,
   revalidationSettings,
   withLocalSettings,
 } from "./settings"
@@ -246,7 +247,13 @@ export const APPLY_ADVISORY_LOCK = "1397312837, 1"
  * кроки копій носіїв — після двигуна, що створює колонки-копії, і до
  * середовища.
  */
-const ORIGIN_ORDER = ["intent", "engine", "carriers", "environment"] as const
+const ORIGIN_ORDER = [
+  "intent",
+  "engine",
+  "carriers",
+  "versions",
+  "environment",
+] as const
 
 /**
  * `LOCK TABLE` на таблиці, що зникла (`42P01`) чи змінила вид (`42809`) після
@@ -958,6 +965,15 @@ async function runAttempt(
     phase("carriers")
     await runCarrierSteps(tx, carriers, parse, (id) => phase("carriers", id))
   }
+  // 11б. Блок `versions` (засів послідовності версій, епоха) — лише для
+  // непорожнього блоку. Ці кроки пишуть версію з вимкненими тригерами, тож
+  // `touch` синхронного коміту не ставить: умова в одному місці
+  const versions = block("versions")
+  if (versions.length > 0) {
+    phase("versions")
+    await tx.query(RAISE_SYNCHRONOUS_COMMIT_SQL)
+    await runVersionSteps(tx, versions, parse, (id) => phase("versions", id))
+  }
   // 12. Кроки середовища (спека промоції §7.2) — під налаштуваннями
   // транзакції
   phase("environment")
@@ -1564,6 +1580,65 @@ export async function runCarrierSteps(
   await withLocalSettings(tx, CARRIER_STEP_SETTINGS, () =>
     runSteps(tx, steps, parse, onStep)
   )
+}
+
+/**
+ * Блок `versions`: кроки підвищення версії пишуть `version` з вимкненими
+ * тригерами таблиці (інакше `touch` зсунув би й `updated_at`). Живі тригери
+ * звіряються з планом до вимкнення, як у `writeData`; вмикаються після всього
+ * блоку й після `SET CONSTRAINTS`, бо `ENABLE TRIGGER` з відкладеними подіями
+ * падає `55006`. Збій на будь-якому кроці відкочує всю транзакцію разом із
+ * `DISABLE`, тож окремо вмикати тригери на шляху помилки не треба.
+ */
+async function runVersionSteps(
+  tx: ApplyTransaction,
+  steps: readonly PlanStep[],
+  parse: SqlParser,
+  statement: (id: string) => void
+): Promise<void> {
+  const disabled: {
+    step: PlanStep
+    target: Pick<DataTable, "after" | "triggers">
+  }[] = []
+  for (const step of steps) {
+    const table = step.lockedTables[0]
+    if (step.triggers !== undefined && table !== undefined) {
+      const target = {
+        after: { schema: table.schema, table: table.name, key: "" },
+        triggers: step.triggers,
+      }
+      const live = await readUserTriggers(tx, target.after)
+      if (canonicalize(live) !== canonicalize(step.triggers))
+        throw stop("refused", "apply.target-changed", { sections: "triggers" })
+      for (const sql of triggerSql(target, false))
+        await versionTriggerQuery(tx, step, sql)
+      disabled.push({ step, target })
+    }
+    await runSteps(tx, [step], parse, statement)
+  }
+  if (disabled.length === 0) return
+  await constraintsNow(tx, "data")
+  for (const { step, target } of disabled)
+    for (const sql of triggerSql(target, true))
+      await versionTriggerQuery(tx, step, sql)
+}
+
+/** `ALTER TABLE … TRIGGER` кроку підвищення: збій — як збій самого кроку. */
+async function versionTriggerQuery(
+  tx: ApplyTransaction,
+  step: PlanStep,
+  sql: string
+): Promise<void> {
+  try {
+    await tx.query(sql)
+  } catch (error) {
+    if (!(error instanceof ApplyDbError) || retryable(error)) throw error
+    throw stop("failed", "apply.step-failed", {
+      step: step.id,
+      sqlstate: error.sqlstate ?? "unknown",
+      error: error.message,
+    })
+  }
 }
 
 /** Кроки блоку по черзі, кожен після своїх сторожів. */

@@ -117,9 +117,9 @@ describe("compareWithDesired", () => {
     expect(result.empty).toBe(true)
   })
 
-  it("a model without the users catalog leaves simetra outside the boundary", async () => {
-    // Прийнята таблиця, а не довідник: механіка рядка Catalog лежить у
-    // `simetra` і ввела б схему в межу без шару (simetra out-of-scope.test.ts).
+  it("a model without the users catalog still has simetra in the boundary", async () => {
+    // Прийнята таблиця, а не довідник: шару користувачів немає, але
+    // послідовність версій рядків видається завжди й лежить у `simetra`
     const compiled = await compile(
       metaFiles({
         "project.meta.json": project(),
@@ -129,7 +129,7 @@ describe("compareWithDesired", () => {
     expect(compiled.diagnostics).toEqual([])
     const { scope, diagnostics } = await engineScope(compiled.model!)
     expect(diagnostics).toEqual([])
-    expect(scope.schemas).not.toContain("simetra")
+    expect(scope.schemas).toContain("simetra")
   })
 
   it("an empty comparison is empty only without differences", async () => {
@@ -158,8 +158,15 @@ describe("compareWithDesired", () => {
       })
     )
     const model = compiled.model!
-    const { scope, diagnostics } = await engineScope(model)
+    const { scope: modelScope, diagnostics } = await engineScope(model)
     expect(diagnostics.map((d) => d.code)).toEqual(["engine.out-of-scope"])
+    // Цілі стеку платформної послідовності не дають, а звірка тут не про неї:
+    // межа лишає тільки `app`, щоб єдиною підставою для «не рівно» була
+    // таблиця в `auth`
+    const scope = {
+      ...modelScope,
+      schemas: modelScope.schemas.filter((schema) => schema !== "simetra"),
+    }
     const result = await compareWithDesired(
       engine,
       { target: stack },

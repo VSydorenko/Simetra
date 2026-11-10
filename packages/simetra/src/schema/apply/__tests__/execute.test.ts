@@ -26,6 +26,7 @@ import {
   type RehearsalReport,
   SUPABASE_LOCKS,
 } from "simetra/schema"
+import { RAISE_SYNCHRONOUS_COMMIT_SQL } from "../settings"
 import {
   localize,
   promotionRecordHash,
@@ -1350,6 +1351,101 @@ describe("executePlan", () => {
     expect(seen.ledger).toEqual([SESSION])
   })
 
+  describe("versions block", () => {
+    const engineSteps = plan.steps.map((s, i) => ({ ...s, id: `s${i + 1}` }))
+    const n = engineSteps.length + 1
+    const seed = step(`s${n}`, "DO $seed$ SELECT 1 $seed$", {
+      origin: "versions",
+      class: "validationScan",
+      lockClass: "share",
+    })
+    const environment = step(`s${n + 1}`, "GRANT SELECT ON app.n TO anon", {
+      origin: "environment",
+    })
+    const SYNC = RAISE_SYNCHRONOUS_COMMIT_SQL
+
+    // Версії пишуться з вимкненими тригерами, тож `touch` синхронного
+    // коміту не ставить: його ставить раннер, і лише за непорожнього блоку
+    it("runs the block after the engine and before the environment with synchronous commit on", async () => {
+      const fake = clocked()
+      const outcome = await executePlan(
+        fake.db,
+        target,
+        { ...plan, steps: [...engineSteps, seed, environment] },
+        { ...withMode("rehearse"), clock: fake.clock }
+      )
+      if (outcome.status !== "rolledBack")
+        throw new Error(
+          `not rolled back: ${JSON.stringify(outcome).slice(0, 500)}`
+        )
+      const at = (sql: string) => fake.log.indexOf(sql)
+      expect(at(SYNC)).toBeGreaterThan(at(engineSteps.at(-1)!.sql))
+      expect(at(SYNC)).toBeLessThan(at(seed.sql))
+      expect(at(seed.sql)).toBeLessThan(at(environment.sql))
+      expect(
+        outcome.evidence.durations.steps.some((s) => s.id === seed.id)
+      ).toBe(true)
+    })
+
+    describe("bump step triggers", () => {
+      const bump = step(`s${n}`, "UPDATE app.n SET version = 1", {
+        origin: "versions",
+        class: "dataStep",
+        lockClass: "shareRowExclusive",
+        lockedTables: [{ schema: "app", name: "n" }],
+        triggers: [{ name: "tg", enabled: "O" }],
+      })
+      const run = (script: Parameters<typeof clocked>[0]) => {
+        const fake = clocked(script)
+        return executePlan(
+          fake.db,
+          target,
+          { ...plan, steps: [...engineSteps, bump, environment] },
+          { ...withMode("rehearse"), clock: fake.clock }
+        ).then((outcome) => ({ outcome, log: fake.log }))
+      }
+
+      it("checks the live triggers, disables them for the step and enables them after the block", async () => {
+        const { outcome, log } = await run({
+          triggers: [{ name: "tg", enabled: "O" }],
+        })
+        expect(outcome.status).toBe("rolledBack")
+        const at = (sql: string) => log.indexOf(sql)
+        const off = at("ALTER TABLE app.n DISABLE TRIGGER tg")
+        const on = at("ALTER TABLE app.n ENABLE TRIGGER tg")
+        expect(off).toBeGreaterThan(at("triggers"))
+        expect(at(bump.sql)).toBeGreaterThan(off)
+        expect(on).toBeGreaterThan(at(bump.sql))
+        expect(on).toBeLessThan(at(environment.sql))
+      })
+
+      it("refuses a mismatch of the live triggers before disabling anything", async () => {
+        const { outcome, log } = await run({ triggers: [] })
+        expect(outcome).toMatchObject({ status: "refused" })
+        expect(JSON.stringify(outcome)).toContain("apply.target-changed")
+        expect(log).not.toContain("ALTER TABLE app.n DISABLE TRIGGER tg")
+        expect(log).not.toContain(bump.sql)
+      })
+    })
+
+    // Підвищення умовне (лише з off і local): текст оператора тримає це
+    it("raises synchronous commit only from off and local", () => {
+      expect(SYNC).toContain("IN ('off', 'local')")
+      expect(SYNC).not.toContain("remote_apply")
+    })
+
+    it("does not touch synchronous commit without a versions block", async () => {
+      const fake = clocked()
+      await executePlan(
+        fake.db,
+        target,
+        { ...plan, steps: [...engineSteps, environment] },
+        { ...withMode("rehearse"), clock: fake.clock }
+      )
+      expect(fake.log).not.toContain(SYNC)
+    })
+  })
+
   describe("carrier steps", () => {
     const intent = step("s1", "ALTER TABLE app.t RENAME TO t2", {
       origin: "intent",
@@ -2288,6 +2384,14 @@ describe("executePlan", () => {
       "whose environment step precedes a carrier copy step",
       ["environment", "carriers"] as const,
     ],
+    [
+      "whose versions step precedes a carrier copy step",
+      ["versions", "carriers"] as const,
+    ],
+    [
+      "whose environment step precedes a versions step",
+      ["environment", "versions"] as const,
+    ],
   ])("refuses a plan %s before BEGIN", async (_, origins) => {
     const { db, log } = fakeDb()
     const run = executePlan(
@@ -2302,7 +2406,7 @@ describe("executePlan", () => {
       options
     )
     await expect(run).rejects.toThrow(
-      "plan steps are out of origin order: intent, engine, carriers, environment"
+      "plan steps are out of origin order: intent, engine, carriers, versions, environment"
     )
     expect(log).toEqual([])
   })

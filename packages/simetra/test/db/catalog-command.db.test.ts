@@ -729,8 +729,12 @@ describe("catalog command core", () => {
     expect(result).toMatchObject({
       id: key("K1"),
       description: "changed",
-      version: String(BigInt(before) + 1n),
+      version: expect.stringMatching(/^\d+$/),
     })
+    // Версія з послідовності: лише «більша за попередню», не `+1`
+    expect(BigInt((result as { version: string }).version)).toBeGreaterThan(
+      BigInt(before)
+    )
   })
 
   // Колонку ключа (`code` під `UNIQUE (org_id, code)`) ядро називає в `SET`

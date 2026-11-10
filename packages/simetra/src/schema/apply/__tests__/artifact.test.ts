@@ -400,7 +400,7 @@ describe("plan artifact", () => {
     expect(parsed.diagnostic.message).toMatch(
       /plan format 1 is not supported.*rebuild the plan/i
     )
-    expect(PLAN_FORMAT).toBe(6)
+    expect(PLAN_FORMAT).toBe(7)
   })
 
   it("asks to rebuild a plan of the second format", async () => {
@@ -469,6 +469,43 @@ describe("plan artifact", () => {
         params: { found: 5, supported: PLAN_FORMAT },
       },
     })
+  })
+
+  it("asks to rebuild a plan of the sixth format", async () => {
+    // Шостий формат не знав блоку `versions`: його читач не виконав би
+    const artifact = await stampPlan(draft())
+    const old: Record<string, unknown> = { ...artifact, format: 6 }
+    expect(parsePlan(JSON.stringify(old))).toMatchObject({
+      ok: false,
+      reason: "format",
+      diagnostic: {
+        code: "apply.plan-format",
+        params: { found: 6, supported: PLAN_FORMAT },
+      },
+    })
+  })
+
+  it("round-trips a versions step", async () => {
+    const base = draft()
+    const artifact = await stampPlan({
+      ...base,
+      steps: [
+        ...base.steps,
+        {
+          ...base.steps[0]!,
+          id: "s2",
+          origin: "versions",
+          sql: "INSERT INTO simetra.version_epoch DEFAULT VALUES ON CONFLICT (singleton) DO UPDATE SET epoch = gen_random_uuid()",
+          class: "catalogOnly",
+          lockClass: "none",
+          lockedTables: [],
+        },
+      ],
+    })
+    const parsed = parsePlan(serializePlan(artifact))
+    if (!parsed.ok) throw new Error(parsed.message)
+    expect(parsed.artifact).toEqual(artifact)
+    expect(parsed.artifact.steps.at(-1)!.origin).toBe("versions")
   })
 
   it("round-trips a carrier copy data step", async () => {
