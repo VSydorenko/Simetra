@@ -62,16 +62,6 @@ const EXCEPTIONS: Exception[] = [
     reason:
       "it.skip names on the supabase stack that `supabase test db` checks its base state: the runner has no suite there",
   },
-  {
-    file: "packages/simetra/test/db/row-version.db.test.ts",
-    hits: [
-      "skipIf on the profile: it.skipIf(role === undefined)",
-      "skipIf on the profile: it.skipIf(role === undefined)",
-    ],
-    reason:
-      "skipIf of a reader role the provider has no: the cases move by profile",
-    task: 8,
-  },
 ]
 
 interface Hit {

@@ -8,7 +8,8 @@ import {
   metaFiles,
   project,
 } from "../../src/compiler/__tests__/helpers"
-import { testRoleName, withRollback } from "./connection"
+import { asStackSuperuser, testRoleName, withRollback } from "./connection"
+import { testProvider } from "./profile"
 
 /**
  * Епоха версій бази й скидання після відновлення даних (спека П4-B §4.1).
@@ -19,13 +20,11 @@ import { testRoleName, withRollback } from "./connection"
 const SEQUENCE = "simetra.row_version"
 const EPOCH = "SELECT simetra.row_version_epoch() AS epoch"
 const RESET = "SELECT simetra.reset_row_version_epoch()"
-const provider = "supabase"
-const api = PROVIDER_API_ROLES[provider]
 
 async function deploy(client: pg.Client): Promise<void> {
   const result = await compile(
     metaFiles({
-      "project.meta.json": project(),
+      "project.meta.json": project({ database: { provider: testProvider() } }),
       "catalogs/Item/Item.meta.json": catalog("Item"),
     })
   )
@@ -63,12 +62,12 @@ async function insertItems(client: pg.Client, count: number): Promise<void> {
 /** Код відмови Postgres у точці збереження: транзакція тесту лишається живою. */
 async function failureCode(
   client: pg.Client,
-  role: string,
+  switchRole: () => Promise<unknown>,
   sql: string
 ): Promise<string | undefined> {
   await client.query("SAVEPOINT probe")
   try {
-    await client.query(`SET LOCAL ROLE ${role}`)
+    await switchRole()
     await client.query(sql)
     return undefined
   } catch (error) {
@@ -78,15 +77,22 @@ async function failureCode(
   }
 }
 
-/** `SET ROLE` доступний лише тій, чия роль входу є учасником цільової. */
-const letSetRole = (client: pg.Client, role: string) =>
-  client.query(`GRANT ${role} TO CURRENT_USER WITH SET TRUE`)
+type Reader = "command" | "user" | "anonymous"
 
-const READERS: readonly [string, string | undefined][] = [
-  ["the command role", PLATFORM_ROLES.command],
-  ["the API user role", api.user],
-  ["the API anonymous role", api.anonymous],
+// Обидві ролі API є в кожного профілю: кейс не пропускається ні на якому стеку
+const READERS: readonly [string, Reader][] = [
+  ["the command role", "command"],
+  ["the API user role", "user"],
+  ["the API anonymous role", "anonymous"],
 ]
+
+/** Роль читача до кінця транзакції: роль команд чи роль API профілю прогону. */
+const setReader = (client: pg.Client, reader: Reader) =>
+  client.query(
+    reader === "command"
+      ? `SET LOCAL ROLE ${PLATFORM_ROLES.command}`
+      : `SET LOCAL ROLE ${PROVIDER_API_ROLES[testProvider()][reader]}`
+  )
 
 describe("epoch of row versions in Postgres", () => {
   it("is NULL until the epoch row is written", async () => {
@@ -118,15 +124,13 @@ describe("epoch of row versions in Postgres", () => {
     })
   })
 
-  // Роль, якої в провайдера немає, не має чого читати: кейс пропускається
-  for (const [label, role] of READERS)
-    it.skipIf(role === undefined)(`${label} can read it`, async () => {
+  for (const [label, reader] of READERS)
+    it(`${label} can read it`, async () => {
       await withRollback(async (client) => {
         await deploy(client)
         await client.query("INSERT INTO simetra.version_epoch DEFAULT VALUES")
         const expected = await epochOf(client)
-        await letSetRole(client, role!)
-        await client.query(`SET LOCAL ROLE ${role}`)
+        await setReader(client, reader)
         expect(await epochOf(client)).toBe(expected)
       })
     })
@@ -135,11 +139,19 @@ describe("epoch of row versions in Postgres", () => {
     await withRollback(async (client) => {
       await deploy(client)
       const role = testRoleName("noepoch")
-      await client.query(`CREATE ROLE ${role}`)
-      // USAGE на схему дано, щоб 42501 виходив з ACL функції, а не схеми
-      await client.query(`GRANT USAGE ON SCHEMA simetra TO ${role}`)
-      await letSetRole(client, role)
-      expect(await failureCode(client, role, EPOCH)).toBe("42501")
+      // Роль створює суперкористувач стека: власник профілю ролей не створює
+      await asStackSuperuser(client, async () => {
+        await client.query(`CREATE ROLE ${role}`)
+        // USAGE на схему дано, щоб 42501 виходив з ACL функції, а не схеми
+        await client.query(`GRANT USAGE ON SCHEMA simetra TO ${role}`)
+      })
+      expect(
+        await failureCode(
+          client,
+          () => client.query(`SET LOCAL ROLE ${role}`),
+          EPOCH
+        )
+      ).toBe("42501")
       // Роль створено в транзакції тесту: відкат прибирає її на будь-якому шляху
     })
   })
@@ -248,12 +260,13 @@ describe("reset_row_version_epoch in Postgres", () => {
     })
   })
 
-  for (const [label, role] of READERS)
-    it.skipIf(role === undefined)(`${label} cannot run it: 42501`, async () => {
+  for (const [label, reader] of READERS)
+    it(`${label} cannot run it: 42501`, async () => {
       await withRollback(async (client) => {
         await deploy(client)
-        await letSetRole(client, role!)
-        expect(await failureCode(client, role!, RESET)).toBe("42501")
+        expect(
+          await failureCode(client, () => setReader(client, reader), RESET)
+        ).toBe("42501")
       })
     })
 })

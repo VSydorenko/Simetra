@@ -10,11 +10,12 @@ import {
 } from "../../src/compiler/__tests__/helpers"
 import { RAISE_SYNCHRONOUS_COMMIT_SQL } from "../../src/schema/apply/settings"
 import { withRollback, restoreOwnerRole } from "./connection"
+import { testProvider } from "./profile"
 
 /**
  * Механіка рядка на справжньому Postgres (спека промоції §9.2): `version` і
  * `updated_at` тримає тригер, а не клієнт; версію видає послідовність
- * `simetra.row_version`, права на яку не має жодна роль. Під `postgres`: гранти таблиць
+ * `simetra.row_version`, права на яку не має жодна роль. Під власником: гранти таблиць
  * виду закривають DML ролям API, а механіці роль байдужа —
  * тригер спрацьовує в будь-якій ролі, що пише.
  */
@@ -22,7 +23,7 @@ import { withRollback, restoreOwnerRole } from "./connection"
 async function deploy(client: pg.Client): Promise<void> {
   const result = await compile(
     metaFiles({
-      "project.meta.json": project(),
+      "project.meta.json": project({ database: { provider: testProvider() } }),
       "catalogs/Item/Item.meta.json": catalog("Item"),
     })
   )
@@ -168,13 +169,17 @@ describe("row mechanics in Postgres", () => {
   })
 
   const WRITERS = [
-    ["the command role", PLATFORM_ROLES.command],
-    ["the API user role", PROVIDER_API_ROLES.supabase.user],
+    ["the command role", "command"],
+    ["the API user role", "user"],
   ] as const
 
   it.each(WRITERS)(
     "%s writes through the trigger without any right on the sequence",
-    async (_label, role) => {
+    async (_label, writer) => {
+      const role =
+        writer === "command"
+          ? PLATFORM_ROLES.command
+          : PROVIDER_API_ROLES[testProvider()].user
       await withRollback(async (client) => {
         await deploy(client)
         // Права на таблицю дає вид; тут перевіряється лише послідовність, тож
@@ -189,8 +194,12 @@ describe("row mechanics in Postgres", () => {
         // USAGE на схему дано, щоб 42501 нижче виходив з ACL послідовності,
         // а не з відсутності права на схему `simetra`.
         await client.query(`GRANT USAGE ON SCHEMA simetra TO ${role}`)
-        await client.query(`GRANT ${role} TO CURRENT_USER WITH SET TRUE`)
-        await client.query(`SET LOCAL ROLE ${role}`)
+        // Ціль перемикання — роль платформи чи роль API профілю прогону
+        await client.query(
+          writer === "command"
+            ? `SET LOCAL ROLE ${PLATFORM_ROLES.command}`
+            : `SET LOCAL ROLE ${PROVIDER_API_ROLES[testProvider()].user}`
+        )
         const { rows } = await client.query<{ id: string; version: string }>(
           "INSERT INTO public.item (id, description) VALUES (gen_random_uuid(), 'a') RETURNING id, version"
         )

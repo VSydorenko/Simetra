@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto"
 import pg from "pg"
 import type { CompiledModel } from "simetra/compiler"
-import { PROVIDER_OWNER_ROLES, RIGHTS_MAINTENANCE_SETTING } from "simetra/model"
+import {
+  COMMAND_SETTING,
+  PROVIDER_OWNER_ROLES,
+  RIGHTS_MAINTENANCE_SETTING,
+} from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import {
   COMMENT_TABLE,
@@ -26,6 +30,7 @@ import {
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
 import {
+  type CommandStep,
   asSessionLogin,
   claimsFor,
   queryAs,
@@ -138,6 +143,38 @@ export async function inMaintenance<T>(
  * черги рядок не судиться на COMMIT — як і запис, зроблений до зміни коду.
  * Вимкнути тригери може лише власник таблиць — сесія розгортання.
  */
+/**
+ * Крок власника сценарію `commandSteps` від входу власника, а не лише його
+ * ролі: режим обслуговування, який сценарій вмикає своїм кроком, гард прав
+ * бачить лише при `session_user = current_user`, а на адресі тестів профілю
+ * `postgres` `session_user` — суперкористувач (Р16). Контекст команди
+ * ставиться, як у кроку з `context`, і діє далі; результат — `{ rows,
+ * rowCount }`, як у кроку SQL. `SET CONSTRAINTS` у такому кроці — помилка
+ * тесту: режим обмежень із відпущеної точки збереження входу пережив би
+ * відкат сценарію.
+ */
+export function asOwnerLogin(step: CommandStep): CommandStep {
+  if ("check" in step)
+    throw new Error("asOwnerLogin: a check step already runs as the owner")
+  if (/\bset\s+constraints\b/i.test(step.sql))
+    throw new Error(
+      "asOwnerLogin: SET CONSTRAINTS in a released savepoint survives the rollback of the scenario"
+    )
+  return {
+    check: (client) =>
+      asSessionLogin(client, PROVIDER_OWNER_ROLES[testProvider()], async () => {
+        if (step.context !== undefined)
+          await setLocalSetting(
+            client,
+            COMMAND_SETTING,
+            JSON.stringify(step.context)
+          )
+        const { rows, rowCount } = await client.query(step.sql, step.params)
+        return { rows, rowCount }
+      }),
+  }
+}
+
 export async function insertOrphan(
   client: pg.Client,
   table: string,

@@ -30,8 +30,10 @@ import {
   assignmentRow,
   describeTransaction,
   insert,
+  profileLayer,
   seedCommandCore,
 } from "./rights-seed"
+import { testProvider } from "./profile"
 
 /**
  * Ядро довідника `<t>_save` / `<t>_mark_deletion` на справжньому Postgres
@@ -97,7 +99,8 @@ describe("catalog command core", () => {
           writeRoles(),
           adminRoles(),
           commandCoreLayer(),
-          ticketNoticeHandler().layer
+          ticketNoticeHandler().layer,
+          profileLayer()
         ),
         ticketNoticeHandler()
       )
@@ -105,11 +108,7 @@ describe("catalog command core", () => {
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
     await deploy(client, result.model!)
-    // Лише згенеровані гранти: членство з `SET` потрібне `SET LOCAL ROLE`
-    // у `commandAs`, повного DML-гранту таблиць немає.
-    await client.query(
-      `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
-    )
+    // Лише згенеровані гранти: повного DML-гранту таблиць немає.
     ids = await seedCommandCore(client)
     // Довідник без ТЧ, який дає змінювати роль домену: `OrgMember` під
     // `MemberEditor` (`adminRoles`). Засів ядра його не дає — сітка прав
@@ -886,18 +885,18 @@ describe("catalog command core: unscoped Note", () => {
 
   beforeAll(async () => {
     const result = await compileRights(
-      singleTenantRights({
-        ...authorCarrier(),
-        ...authorCarrier("long"),
-        ...noteOwnCreator(),
-      })
+      singleTenantRights(
+        {
+          ...authorCarrier(),
+          ...authorCarrier("long"),
+          ...noteOwnCreator(),
+        },
+        testProvider()
+      )
     )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
     await deploy(client, result.model!)
-    await client.query(
-      `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
-    )
     // W — `NoteWriter`; C — `NoteOwnCreator`, сам собі наставник, без
     // права на «Користувачів».
     ids = {}

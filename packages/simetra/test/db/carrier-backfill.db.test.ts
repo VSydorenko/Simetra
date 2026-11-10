@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest"
 import { loadSqlParser } from "simetra/compiler"
 import type { PlanStep } from "simetra/schema"
 import { runCarrierSteps } from "../../src/schema/apply/execute"
-import { rollbackDatabase, testRoleName, withRollback } from "./connection"
+import {
+  asStackSuperuser,
+  rollbackDatabase,
+  testRoleName,
+  withRollback,
+} from "./connection"
 
 /**
  * Фаза кроків копій носіїв (спека промоції §7.2) іде під `row_security = off`.
@@ -37,19 +42,21 @@ describe("carrier steps in Postgres", () => {
       guards: [],
     }
     await withRollback(async (client) => {
-      // Творець ролі може перемкнутися на неї лише з `set` (Postgres 16+)
-      await client.query("SET LOCAL createrole_self_grant = 'set, inherit'")
-      await client.query(`CREATE ROLE ${role} NOLOGIN NOBYPASSRLS`)
-      // Новий власник мусить мати `CREATE` у схемі таблиці
-      await client.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${role}`)
       await client.query(
         `CREATE TABLE public.${table} (id integer, copy integer)`
       )
       await client.query(`INSERT INTO public.${table} VALUES (1, NULL)`)
-      await client.query(`ALTER TABLE public.${table} OWNER TO ${role}`)
       await client.query(
         `ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY`
       )
+      // Роль власник профілю не створює; перемкнутися на неї дає вхід
+      // суперкористувача адреси тестів
+      await asStackSuperuser(client, async () => {
+        await client.query(`CREATE ROLE ${role} NOLOGIN NOBYPASSRLS`)
+        // Новий власник мусить мати `CREATE` у схемі таблиці
+        await client.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${role}`)
+        await client.query(`ALTER TABLE public.${table} OWNER TO ${role}`)
+      })
       await client.query(`SET LOCAL ROLE ${role}`)
       const run = () =>
         rollbackDatabase(client).transaction({ url: "" }, "rollback", (tx) =>

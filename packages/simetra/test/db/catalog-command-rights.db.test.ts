@@ -16,7 +16,12 @@ import {
   policyDomain,
   writeRoles,
 } from "../../src/compiler/__tests__/fixtures/rights"
-import { type Refusal, commandAs, setLocalSetting } from "./connection"
+import {
+  type Refusal,
+  claimsFor,
+  commandAs,
+  setLocalSetting,
+} from "./connection"
 import {
   deploy,
   COMMAND_CORE_MEMBERS,
@@ -24,6 +29,7 @@ import {
   assignmentRow,
   describeTransaction,
   insert,
+  profileLayer,
   seedCommandCore,
 } from "./rights-seed"
 
@@ -195,18 +201,15 @@ describe("catalog command core: rights check ≡ RLS", () => {
 
   beforeAll(async () => {
     const result = await compileRights(
-      policyDomain(writeRoles(), commandCoreLayer())
+      policyDomain(writeRoles(), commandCoreLayer(), profileLayer())
     )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
     await deploy(client, result.model!)
-    // Повний DML ролі команд і членство з `SET` — лише в цій
-    // транзакції; базова лінія RLS не впирається в колонкові гранти.
+    // Повний DML ролі команд — лише в цій транзакції; базова лінія RLS не
+    // впирається в колонкові гранти.
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PLATFORM_ROLES.command}`
-    )
-    await client.query(
-      `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
     )
     ids = await seedCommandCore(client)
     keyOf = new Map(Object.entries(ids).map(([k, v]) => [v, k]))
@@ -238,7 +241,7 @@ describe("catalog command core: rights check ≡ RLS", () => {
     if (id === undefined) throw new Error(`unknown seed key ${name}`)
     return id
   }
-  const claims = (user: string) => ({ sub: key(user), role: "authenticated" })
+  const claims = (user: string) => claimsFor("user", key(user))
   const tenantOfValue = new Map(VALUE_KEYS.map(([k, , t]) => [k, t]))
 
   /** Колонки рядка, як їх бачить власник: RLS не ховає. */

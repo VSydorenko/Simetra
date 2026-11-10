@@ -201,16 +201,6 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
     reason: "SET LOCAL ROLE authenticated and a role returned by a helper",
     task: 12,
   },
-  {
-    file: "packages/simetra/test/db/mechanics.db.test.ts",
-    reason: "SET LOCAL ROLE of a table row parameter",
-    task: 8,
-  },
-  {
-    file: "packages/simetra/test/db/row-version.db.test.ts",
-    reason: "SET LOCAL ROLE of a table row parameter",
-    task: 8,
-  },
 ]
 
 // Літерал ролі `postgres` у SQL файлів `db`: ім'я — дані профілю

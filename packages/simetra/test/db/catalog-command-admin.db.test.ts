@@ -41,6 +41,7 @@ import {
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
 import {
+  claimsFor,
   commandSteps,
   testDatabaseUrl,
   type CommandStep,
@@ -52,12 +53,15 @@ import {
   deploy,
   type Assignment,
   type Seed,
+  asOwnerLogin,
   assignmentRow,
   describeTransaction,
   insert,
   orgDeltaRow,
+  profileLayer,
   seedAdministration,
 } from "./rights-seed"
+import { testProvider } from "./profile"
 
 /**
  * Ядро системних довідників прав і «Користувачів».
@@ -180,17 +184,14 @@ describe("catalog command core on rights system catalogs and Users", () => {
         adminRoles(),
         rightsAdminReadingMembers(),
         blindRightsAdmin(),
-        nickname()
+        nickname(),
+        profileLayer()
       )
     )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
     await deploy(client, result.model!)
-    // Лише згенеровані гранти: членство з `SET` потрібне `SET LOCAL ROLE`,
-    // повного DML-гранту таблиць немає.
-    await client.query(
-      `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
-    )
+    // Лише згенеровані гранти: повного DML-гранту таблиць немає.
     ids = await seedAdministration(client)
     await seedSnapshot(client)
     // Відкладені ключі засіву перевіряються зараз: кейси починають з порожньої черги
@@ -231,7 +232,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
       await setLocalSetting(
         client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify({ sub: key(user), role: "authenticated" })
+        JSON.stringify(claimsFor("user", key(user)))
       )
       await setLocalSetting(client, COMMAND_SETTING, JSON.stringify(context))
       await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
@@ -509,10 +510,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
   // функцій за заголовком xid і відкат точок збереження. Кожен запис з
   // контекстом — у точці збереження `commandSteps`: знімок живе до кінця
   // транзакції опису, і лишений знімок зламав би наступні кейси.
-  const claimsOf = (user: string) => ({
-    sub: key(user),
-    role: "authenticated",
-  })
+  const claimsOf = (user: string) => claimsFor("user", key(user))
   const steps = (
     user: string,
     list: readonly CommandStep[],
@@ -1047,15 +1045,15 @@ describe("catalog command core on rights system catalogs and Users", () => {
         typedRoles,
         { sql: "ROLLBACK TO SAVEPOINT retake", asOwner: true },
         { check: headers },
-        // Призначення в режимі обслуговування: знімка не бере
+        // Призначення в режимі обслуговування: знімка не бере. Режим гард
+        // бачить лише від входу власника
         {
           sql: `SELECT set_config('${RIGHTS_MAINTENANCE_SETTING}', 'on', true)`,
           asOwner: true,
         },
-        {
+        asOwnerLogin({
           sql: `INSERT INTO public.${ASSIGNMENTS} (id, org_id, subject, archetype) VALUES ('${role}', '${key("A")}', '${key("other@A")}', '${TASK_VIEWER_ID}')`,
-          asOwner: true,
-        },
+        }),
         {
           sql: `SELECT set_config('${RIGHTS_MAINTENANCE_SETTING}', 'off', true)`,
           asOwner: true,
@@ -1211,16 +1209,19 @@ describe("catalog command core on rights system catalogs and Users", () => {
 
     it("takes no snapshot in maintenance mode", async () => {
       const id = randomUUID()
+      // Режим гард бачить лише від входу власника: кроки власника — з нього
       const outcome = await steps("root", [
         {
           sql: `SELECT set_config('${RIGHTS_MAINTENANCE_SETTING}', 'on', true)`,
           asOwner: true,
         },
-        takeAll(),
-        ownerStep(
-          [admin, ASSIGNMENTS, id],
-          `INSERT INTO public.${ASSIGNMENTS} (id, org_id, subject, archetype) VALUES ($1, $2, $3, $4)`,
-          [id, key("A"), key("other@A"), TASK_VIEWER_ID]
+        asOwnerLogin(takeAll()),
+        asOwnerLogin(
+          ownerStep(
+            [admin, ASSIGNMENTS, id],
+            `INSERT INTO public.${ASSIGNMENTS} (id, org_id, subject, archetype) VALUES ($1, $2, $3, $4)`,
+            [id, key("A"), key("other@A"), TASK_VIEWER_ID]
+          )
         ),
         { check: headers },
       ])
@@ -1237,8 +1238,11 @@ describe("catalog command core on rights system catalogs and Users", () => {
         "simetra.rights_dimension_values_live(uuid)",
         "simetra.rights_scope_set_live(uuid)",
       ]
+      // Ролі API профілю прогону; сервісної на `postgres` немає
       const roles = [
-        ...Object.values(PROVIDER_API_ROLES.supabase),
+        ...Object.values(PROVIDER_API_ROLES[testProvider()]).filter(
+          (r): r is string => r !== null
+        ),
         PLATFORM_ROLES.command,
       ]
       const { rows } = await tx
@@ -1903,13 +1907,7 @@ describe("actor snapshot over adopted sources", () => {
     user: string,
     list: readonly CommandStep[],
     options?: { immediate?: boolean }
-  ) =>
-    commandSteps(
-      tx.client(),
-      { sub: key(user), role: "authenticated" },
-      list,
-      options
-    )
+  ) => commandSteps(tx.client(), claimsFor("user", key(user)), list, options)
   const ownerStep = (
     [action, object, root]: [string, string, string],
     sql: string,
@@ -1931,13 +1929,10 @@ describe("actor snapshot over adopted sources", () => {
   })
 
   beforeAll(async () => {
-    const result = await compileRights(adoptedSnapshotDomain())
+    const result = await compileRights(adoptedSnapshotDomain(profileLayer()))
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
     const client = await tx.open()
     await deploy(client, result.model!)
-    await client.query(
-      `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
-    )
     const row = async (
       name: string,
       table: string,

@@ -2902,44 +2902,50 @@ export const ADOPTED_SNAPSHOT = {
  * відкриває скоуп, права в якому актор уже має (`CommentEditor`: у
  * документів ядра команд немає, тож запис доводиться на довіднику). Колонка
  * скоупу `Membership` — без `NOT NULL`, як буває в прийнятій таблиці: рядок
- * без скоупу членства не дає ні наживо, ні в знімку.
+ * без скоупу членства не дає ні наживо, ні в знімку. `layers` — поверх
+ * домену (DB-тест дає ними профіль стека).
  */
-export function adoptedSnapshotDomain(): Map<string, string> {
-  const files = adoptedSourcesDomain(adoptedCrossKind(), activeGrants(), {
-    [MEMBERSHIP_FILE]: adoptedMembershipTable({
-      columns: adoptedMembershipTable().columns.map((c) =>
-        c.name === "orgId" ? nullable(6102, "orgId", "org_id", "UUID") : c
+export function adoptedSnapshotDomain(...layers: Layer[]): Map<string, string> {
+  const files = adoptedSourcesDomain(
+    adoptedCrossKind(),
+    activeGrants(),
+    {
+      [MEMBERSHIP_FILE]: adoptedMembershipTable({
+        columns: adoptedMembershipTable().columns.map((c) =>
+          c.name === "orgId" ? nullable(6102, "orgId", "org_id", "UUID") : c
+        ),
+      }),
+      [SNAPSHOT_ORG_GUEST_FILE]: catalog(
+        uuid(6889),
+        "OrgGuest",
+        SNAPSHOT_ORG_GUEST_TABLE,
+        {
+          scope: "none",
+          attributes: [
+            refAttribute(6890, "user", "user_id", ref("Catalog", "Users")),
+            { id: uuid(6891), name: "org", physicalName: "org", type: "UUID" },
+          ],
+        }
       ),
-    }),
-    [SNAPSHOT_ORG_GUEST_FILE]: catalog(
-      uuid(6889),
-      "OrgGuest",
-      SNAPSHOT_ORG_GUEST_TABLE,
-      {
-        scope: "none",
-        attributes: [
-          refAttribute(6890, "user", "user_id", ref("Catalog", "Users")),
-          { id: uuid(6891), name: "org", physicalName: "org", type: "UUID" },
-        ],
-      }
-    ),
-    [ROLE_FILE("CommentEditor")]: role(
-      ADOPTED_SNAPSHOT.commentEditorId,
-      "CommentEditor",
-      { scopeKind: "org" },
-      {
-        grants: [
-          // `create` — межа тенанта ядра стоїть лише на створенні (`scope_insert`)
-          grant(
-            objects(["Catalog", "TaskComment"]),
-            ["create", "read", "update"],
-            "any"
-          ),
-        ],
-      }
-    ),
-    ...without(ROLE_FILE("Everyone")),
-  })
+      [ROLE_FILE("CommentEditor")]: role(
+        ADOPTED_SNAPSHOT.commentEditorId,
+        "CommentEditor",
+        { scopeKind: "org" },
+        {
+          grants: [
+            // `create` — межа тенанта ядра стоїть лише на створенні (`scope_insert`)
+            grant(
+              objects(["Catalog", "TaskComment"]),
+              ["create", "read", "update"],
+              "any"
+            ),
+          ],
+        }
+      ),
+      ...without(ROLE_FILE("Everyone")),
+    },
+    ...layers
+  )
   files.set(
     SCOPE_FUNCTIONS_FILE,
     `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT m.org_id FROM public.membership m WHERE m.user_id = (SELECT simetra.current_user_id()) AND m.is_active IS TRUE AND m.org_id IN (SELECT g.org FROM public.${SNAPSHOT_ORG_GUEST_TABLE} g WHERE g.user_id = (SELECT simetra.current_user_id())) $$;`

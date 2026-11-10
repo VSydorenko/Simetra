@@ -16,6 +16,25 @@ export const ON_POSTGRES: string[] = [
   "test/db/rights-write.db.test.ts",
   "test/db/row-rule.db.test.ts",
   "test/db/command-grants.db.test.ts",
+  // Каталог і команди (задача 8)
+  "test/db/catalog-command.db.test.ts",
+  "test/db/catalog-command-admin.db.test.ts",
+  "test/db/catalog-command-rights.db.test.ts",
+  "test/db/catalog-functions.db.test.ts",
+  "test/db/command-port.db.test.ts",
+  "test/db/applied-snapshot-hash.db.test.ts",
+  "test/db/tenant-creation.db.test.ts",
+  "test/db/snake-case.db.test.ts",
+  "test/db/unique-within.db.test.ts",
+  "test/db/value-checks.db.test.ts",
+  "test/db/builtin-functions.db.test.ts",
+  "test/db/mechanics.db.test.ts",
+  "test/db/carrier-backfill.db.test.ts",
+  "test/db/promote-rewrite.db.test.ts",
+  "test/db/row-version.db.test.ts",
+  "test/db/filter-equivalence.db.test.ts",
+  // План keyset-сторінки не залежить від провайдера: лише postgres (Р19)
+  "test/db/list-order-plan.db.test.ts",
 ]
 
 // Шлях guard і прибиральника переривання покритий на обох стеках: на

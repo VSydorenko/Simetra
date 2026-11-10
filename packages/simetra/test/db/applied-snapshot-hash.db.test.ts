@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type pg from "pg"
 import { compile, type CompiledModel } from "simetra/compiler"
-import { PLATFORM_ROLES } from "simetra/model"
 import { renderApplyState, renderDesiredState } from "simetra/schema"
 import {
   catalog,
@@ -9,6 +8,7 @@ import {
   project,
 } from "../../src/compiler/__tests__/helpers"
 import { commandAs, queryAs, withRollback, claimsFor } from "./connection"
+import { testProvider } from "./profile"
 
 /**
  * Звірка хешу знімка рантаймом (рішення Р-A3-12, Р-A3-16): роль команд
@@ -36,7 +36,10 @@ const MODELS: [string, Record<string, unknown>][] = [
 
 async function model(files: Record<string, unknown>): Promise<CompiledModel> {
   const result = await compile(
-    metaFiles({ "project.meta.json": project(), ...files })
+    metaFiles({
+      "project.meta.json": project({ database: { provider: testProvider() } }),
+      ...files,
+    })
   )
   expect(result.diagnostics).toEqual([])
   return result.model!
@@ -44,10 +47,6 @@ async function model(files: Record<string, unknown>): Promise<CompiledModel> {
 
 async function deploy(client: pg.Client, m: CompiledModel): Promise<void> {
   await client.query(`${renderDesiredState(m).sql}\n\n${renderApplyState(m)}`)
-  // Членство з `SET` — як у рантайму, що перемикається `SET LOCAL ROLE`
-  await client.query(
-    `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
-  )
 }
 
 const HASH = "snapshot-hash-a"

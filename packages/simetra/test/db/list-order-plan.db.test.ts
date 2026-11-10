@@ -31,6 +31,7 @@ import {
   deploy,
   describeTransaction,
   insert,
+  profileLayer,
 } from "./rights-seed"
 
 /**
@@ -264,7 +265,7 @@ describe("list order plans under RLS", () => {
 
   beforeAll(async () => {
     const result = await compileRights(
-      policyDomain(adminRoles(), listingLayer())
+      policyDomain(adminRoles(), listingLayer(), profileLayer())
     )
     expect(result.diagnostics).toEqual([])
     catalog = buildRuntimeCatalog(result.model!)
@@ -279,9 +280,6 @@ describe("list order plans under RLS", () => {
     await deploy(client, result.model!)
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PLATFORM_ROLES.command}`
-    )
-    await client.query(
-      `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
     )
 
     // Читач — учасник першого скоупу; другий скоуп повний, але читачу чужий.
