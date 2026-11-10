@@ -243,7 +243,7 @@ Attribute properties (an element of `attributes`):
 Object properties:
 
 - `indexes` on a Catalog, a Document and their tabular sections: a list of
-  composite indexes, each `{ "attributes": [name | { "name": …, "order": "desc" }] }`.
+  composite indexes, each `{ "attributes": [name | { "name": …, "order": "desc" }] }`; like `indexed`, a list-order index: `references/list-order-indexes.md`.
 - `publicRead`: `"authenticated"` or `"anon"` on kinds with row-level security.
 - Project file: `storageBuckets`, a list of `{ "bucket": …, "scopeKind": … }`.
 

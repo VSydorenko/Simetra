@@ -63,6 +63,14 @@ function index(name: string, columns: string[]): CatalogIndex {
   }
 }
 
+function shaped(
+  name: string,
+  columns: string[],
+  extra: Partial<CatalogIndex> = {}
+): CatalogIndex {
+  return { ...index(name, columns), ...extra }
+}
+
 function catalog(
   doc: Pick<CatalogTable, "constraints" | "indexes"> & {
     comment?: string
@@ -92,12 +100,13 @@ const CARRIERS = new Map([
 
 function violations(
   accepted: CatalogShape,
-  compiled: CatalogShape
+  compiled: CatalogShape,
+  carriers: ReadonlyMap<string, string> = CARRIERS
 ): { diff: CatalogDiff; violations: string[] } {
   const diff = diffCatalogs(accepted, compiled, ["doc"])
   return {
     diff,
-    violations: scopeReplacementViolations(diff, accepted, compiled, CARRIERS),
+    violations: scopeReplacementViolations(diff, accepted, compiled, carriers),
   }
 }
 
@@ -186,5 +195,112 @@ describe("scopeReplacementViolations", () => {
     expect(result.violations).toEqual([
       "drop index doc.doc_ref_b_idx: replacement doc_org_id_ref_idx already used",
     ])
+  })
+
+  describe("row key last in a search index", () => {
+    const old = () => shaped("doc_org_id_a_idx", ["org_id", "a"])
+    it.each<{
+      name: string
+      accepted: CatalogIndex
+      compiled: CatalogIndex
+      ok: boolean
+    }>([
+      {
+        name: "key appended last to a plain index",
+        accepted: old(),
+        compiled: shaped("doc_org_id_a_id_idx", ["org_id", "a", "id"]),
+        ok: true,
+      },
+      {
+        name: "key not last",
+        accepted: old(),
+        compiled: shaped("doc_org_id_id_a_idx", ["org_id", "id", "a"]),
+        ok: false,
+      },
+      {
+        name: "accepted index is unique",
+        accepted: shaped("doc_org_id_a_idx", ["org_id", "a"], { unique: true }),
+        compiled: shaped("doc_org_id_a_id_idx", ["org_id", "a", "id"]),
+        ok: false,
+      },
+      {
+        name: "a different extra column",
+        accepted: old(),
+        compiled: shaped("doc_org_id_a_b_idx", ["org_id", "a", "b"]),
+        ok: false,
+      },
+      {
+        name: "accepted index has a predicate",
+        accepted: shaped("doc_org_id_a_idx", ["org_id", "a"], {
+          where: "a > 0",
+        }),
+        compiled: shaped("doc_org_id_a_id_idx", ["org_id", "a", "id"]),
+        ok: false,
+      },
+      {
+        name: "accepted index has an expression",
+        accepted: shaped("doc_org_id_a_idx", ["org_id", "a"], {
+          keys: [{ column: "org_id" }, { expression: "lower(a)" }],
+        }),
+        compiled: shaped("doc_org_id_a_id_idx", ["org_id", "a", "id"]),
+        ok: false,
+      },
+      {
+        name: "compiled index has a predicate",
+        accepted: old(),
+        compiled: shaped("doc_org_id_a_id_idx", ["org_id", "a", "id"], {
+          where: "a > 0",
+        }),
+        ok: false,
+      },
+    ])("$name", ({ accepted, compiled, ok }) => {
+      const result = violations(
+        catalog({ constraints: [], indexes: [accepted] }),
+        catalog({ constraints: [], indexes: [compiled] })
+      )
+      expect(result.violations.length === 0).toBe(ok)
+    })
+
+    // Скоуплена таблиця: носій, ключ і обидва разом — заміна, інакше — ні.
+    it.each([
+      { name: "carrier only", compiled: ["org_id", "ref"], ok: true },
+      { name: "key only", compiled: ["ref", "id"], ok: true },
+      { name: "carrier and key", compiled: ["org_id", "ref", "id"], ok: true },
+      {
+        name: "key before carrier",
+        compiled: ["ref", "org_id", "id"],
+        ok: false,
+      },
+      {
+        name: "key in the middle",
+        compiled: ["org_id", "id", "ref"],
+        ok: false,
+      },
+    ])("scoped: $name", ({ compiled, ok }) => {
+      const result = violations(
+        catalog({ constraints: [], indexes: [shaped("doc_ref_idx", ["ref"])] }),
+        catalog({
+          constraints: [],
+          indexes: [shaped("doc_new_idx", compiled)],
+        })
+      )
+      expect(result.violations.length === 0).toBe(ok)
+    })
+
+    // Нескоупльована таблиця носія не має, але ключ останнім їй дозволений.
+    it.each([
+      { name: "no carrier: key last", compiled: ["a", "id"], ok: true },
+      { name: "no carrier: key not last", compiled: ["id", "a"], ok: false },
+    ])("$name", ({ compiled, ok }) => {
+      const result = violations(
+        catalog({ constraints: [], indexes: [shaped("doc_a_idx", ["a"])] }),
+        catalog({
+          constraints: [],
+          indexes: [shaped("doc_new_idx", compiled)],
+        }),
+        new Map()
+      )
+      expect(result.violations.length === 0).toBe(ok)
+    })
   })
 })

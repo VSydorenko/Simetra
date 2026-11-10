@@ -163,6 +163,10 @@ interface Field {
   format?: string
   primaryKey: boolean
   indexed: boolean
+  /** Колонка — ключ рядка таблиці (не одинак і не скоуп-колонка). */
+  rowKey?: boolean
+  /** Стандартне посилання виду (власник, батько, автор): його індекс структурний. */
+  standardRef?: boolean
   unique: boolean
   /** Унікальність без регістру: індекс по `lower(колонка)`, а не UNIQUE. */
   uniqueIgnoreCase?: boolean
@@ -214,6 +218,11 @@ interface PendingTable {
     column: string
     generation: NonNullable<PhysicalColumn["identity"]>["generation"]
   }[]
+  /**
+   * Колонка ключа рядка, якщо вона одинока в PK: лише така таблиця читається
+   * списком за ключем, і лише їй пошуковий індекс дописує ключ останнім.
+   */
+  rowKey?: string
   primaryKey?: Omit<NonNullable<PhysicalTable["primaryKey"]>, "name"> & {
     name?: string
   }
@@ -333,10 +342,20 @@ interface DerivedIndexKey {
   column: string
   order?: "desc"
 }
-type DerivedIndex = DerivedIndexKey[]
 
-/** Індекс з усіх колонок за зростанням — вид похідних індексів без порядку. */
-function ascending(columns: readonly string[]): DerivedIndex {
+/**
+ * Похідний індекс разом із призначенням: навіщо він потрібен, а не лише які
+ * колонки покриває. `search` — пошук і списки за реквізитом, `foreignKey` —
+ * індекс під перевірку FK, `copy` — копія колонки носія, `structural` — два
+ * індекси руху регістра (підсумки й обороти йдуть як `search`/`foreignKey`).
+ */
+interface DerivedIndex {
+  purpose: "search" | "foreignKey" | "copy" | "structural"
+  keys: DerivedIndexKey[]
+}
+
+/** Ключі з усіх колонок за зростанням — вид похідних індексів без порядку. */
+function ascending(columns: readonly string[]): DerivedIndexKey[] {
   return columns.map((column) => ({ column }))
 }
 
@@ -825,7 +844,7 @@ class SnapshotBuilder {
     scope: TableScope | undefined
   ): void {
     for (const index of declared) {
-      const keys: DerivedIndex = index.attributes.flatMap((part) => {
+      const keys: DerivedIndexKey[] = index.attributes.flatMap((part) => {
         const [name, order] =
           typeof part === "string" ? [part, undefined] : [part.name, part.order]
         return (columnsOf.get(named.get(name)!) ?? []).map((column) => ({
@@ -834,11 +853,13 @@ class SnapshotBuilder {
         }))
       })
       const lead = indexWithin(scope).indexWithin
-      table.derivedIndexes.push(
-        lead === undefined || keys[0]?.column === lead
-          ? keys
-          : [{ column: lead }, ...keys]
-      )
+      table.derivedIndexes.push({
+        purpose: "search",
+        keys:
+          lead === undefined || keys[0]?.column === lead
+            ? keys
+            : [{ column: lead }, ...keys],
+      })
     }
   }
 
@@ -879,10 +900,14 @@ class SnapshotBuilder {
       table.uniques.push({ columns: recordKey, nullsNotDistinct: true })
     }
     if (keys.movementIndexes && period.length > 0) {
-      table.derivedIndexes.push(
-        ascending([...carrier, ...dimensions, ...period, ...recorder])
-      )
-      table.derivedIndexes.push(ascending([...carrier, ...period]))
+      table.derivedIndexes.push({
+        purpose: "structural",
+        keys: ascending([...carrier, ...dimensions, ...period, ...recorder]),
+      })
+      table.derivedIndexes.push({
+        purpose: "structural",
+        keys: ascending([...carrier, ...period]),
+      })
     }
   }
 
@@ -1180,9 +1205,10 @@ class SnapshotBuilder {
     // Скоуп таблиці — її колонка значення скоупу; у ТЧ кореня — `parent_id`.
     // Основна таблиця кореня розбиття не має: її рядки й є значеннями скоупу.
     const lead = scope?.partitioned === true ? scope.carrier : undefined
-    table.derivedIndexes.push(
-      ascending(lead === undefined ? [copy.name] : [lead, copy.name])
-    )
+    table.derivedIndexes.push({
+      purpose: "copy",
+      keys: ascending(lead === undefined ? [copy.name] : [lead, copy.name]),
+    })
   }
 
   // --- Таблиці видів ------------------------------------------------------
@@ -1291,6 +1317,10 @@ class SnapshotBuilder {
         : {}),
       ...(column.check !== undefined ? { check: column.check } : {}),
       primaryKey: column.primaryKey === true,
+      ...(column.primaryKey === true && column.singleton !== true
+        ? { rowKey: true }
+        : {}),
+      ...(column.ref !== undefined ? { standardRef: true } : {}),
       // Індекс стандартного посилання — похідний індекс його FK на повний
       // набір колонок: у скоупленій таблиці `(scope, parent_id)` замість
       // `parent_id`. `indexed` посилання задовольняє індекс його FK (addField).
@@ -2379,6 +2409,7 @@ function addField(table: PendingTable, field: Field): string[] {
   }
 
   if (field.primaryKey) table.primaryKey = { columns: names }
+  if (field.primaryKey && field.rowKey === true) table.rowKey = names[0]
   if (field.unique) {
     // Ключ: носій скоупу, колонки власника чи батька, колонка поля.
     const lead = [
@@ -2445,10 +2476,18 @@ function addField(table: PendingTable, field: Field): string[] {
     })
     // FK сам індексу не має, а перевірка при DELETE/UPDATE ключа цілі шукає
     // рядки рівно за колонками FK — тож індекс саме на них, у порядку FK.
-    table.derivedIndexes.push(ascending(columns))
+    // `indexed` посилання вже задоволено цим індексом: він же й пошуковий.
+    table.derivedIndexes.push({
+      purpose: field.indexed ? "search" : "foreignKey",
+      keys: ascending(columns),
+    })
   } else if (field.indexed) {
-    // Пошуковий індекс; `indexed` посилання вже задоволено індексом його FK.
-    table.derivedIndexes.push(ascending(withinScope(names, field.indexWithin)))
+    // Поліморфне стандартне посилання (пара власника) індексується для
+    // перевірки посилань, а не для списку, тож ключа не отримує.
+    table.derivedIndexes.push({
+      purpose: field.standardRef === true ? "foreignKey" : "search",
+      keys: ascending(withinScope(names, field.indexWithin)),
+    })
   }
   return names
 }
@@ -2466,21 +2505,40 @@ function materializeIndexes(table: PendingTable): void {
     ...(table.primaryKey !== undefined ? [table.primaryKey.columns] : []),
     ...table.uniques.map((unique) => unique.columns),
   ].map(ascending)
-  const { derivedIndexes: candidates } = table
-  candidates.forEach((index, i) => {
+  // Ключ рядка останнім дає keyset-сторінку без сортування; лише там, де PK
+  // — саме він (одинак підсумків чи скоуп-колонка в PK не ключ рядка).
+  const rowKey =
+    table.rowKey !== undefined &&
+    table.primaryKey?.columns.length === 1 &&
+    table.primaryKey.columns[0] === table.rowKey
+      ? table.rowKey
+      : undefined
+  const candidates = table.derivedIndexes.map((candidate) => ({
+    ...candidate,
+    full:
+      candidate.purpose === "search" &&
+      rowKey !== undefined &&
+      !candidate.keys.some(({ column }) => column === rowKey)
+        ? [...candidate.keys, { column: rowKey }]
+        : candidate.keys,
+  }))
+  candidates.forEach(({ purpose, keys: base, full }, i) => {
+    // Пошуковий кандидат, чиї колонки без ключа вже префікс PK чи UNIQUE,
+    // зайвий: той ключ дає порядок сам.
     const covered =
-      keys.some((key) => startsWith(key, index)) ||
+      (purpose === "search" && keys.some((key) => startsWith(key, base))) ||
+      keys.some((key) => startsWith(key, full)) ||
       candidates.some(
         (other, j) =>
           j !== i &&
-          startsWith(other, index) &&
-          (other.length > index.length || j < i)
+          startsWith(other.full, full) &&
+          (other.full.length > full.length || j < i)
       )
     if (covered) return
     table.indexes.push({
       unique: false,
       method: "btree",
-      keys: index.map(({ column, order }) => ({
+      keys: full.map(({ column, order }) => ({
         column,
         ...(order !== undefined ? { order } : {}),
       })),
@@ -2498,7 +2556,7 @@ function withinScope(columns: string[], scope: string | undefined): string[] {
 }
 
 /** Префікс збігається і колонкою, і порядком: `b DESC` не те саме, що `b`. */
-function startsWith(key: DerivedIndex, prefix: DerivedIndex) {
+function startsWith(key: DerivedIndexKey[], prefix: DerivedIndexKey[]) {
   return (
     prefix.length <= key.length &&
     prefix.every(

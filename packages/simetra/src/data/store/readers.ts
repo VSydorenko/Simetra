@@ -1,7 +1,11 @@
-import { CommandFailure, type CatalogEntrySection } from "simetra/model"
+import {
+  CommandFailure,
+  keysetFilter,
+  type CatalogEntrySection,
+} from "simetra/model"
 import { DataError } from "../errors"
-import { keysetAfter } from "./filter"
 import type { Form, ObjectState } from "./forms"
+import { nullableOf } from "./filter"
 import { includeKeys, readIncluded, type Included } from "./include"
 import { visibleRow, type PutResult } from "./object-store"
 import type { OwnerScope } from "./section-store"
@@ -242,7 +246,16 @@ export async function fetchFull(
     const where =
       last === undefined
         ? undefined
-        : keysetAfter(orderBy, last, o.entry.keyName)
+        : keysetFilter(
+            orderBy,
+            {
+              values: last,
+              key: last[o.entry.keyName] as string,
+              direction: "after",
+            },
+            o.entry.keyName,
+            nullableOf(o.info)
+          )
     const page = await source.read({
       object: o.ref,
       ...(orderBy.length === 0 ? {} : { orderBy }),

@@ -1,3 +1,11 @@
+import {
+  CommandFailure,
+  FILTER_DEPTH_MAX,
+  FILTER_NODES_MAX,
+  keysetNodesMax,
+  type Filter,
+  type OrderBy,
+} from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { DataError } from "../../errors"
 import { coreInternals } from "../core"
@@ -895,5 +903,56 @@ describe("fix round 1", () => {
     expect(log).toContainEqual(
       expect.objectContaining({ kind: "listener-failed" })
     )
+  })
+})
+
+describe("window-open filter budget with the worst keyset (spec P4-B 6.4)", () => {
+  // Спадний порядок: найгірша умова — `before` з не-NULL курсором, 11 вузлів,
+  // а зразок курсора з напрямом «після» давав лише 7.
+  const orderBy: OrderBy = [{ attribute: "title", direction: "desc" }]
+
+  /** Фільтр глибини `depth` рівно з `count` вузлів: `not`-ланцюг над `or` листків. */
+  const where = (count: number, depth: number): Filter => {
+    let inner: Filter = {
+      or: Array.from({ length: count - depth + 1 }, () => ({
+        attribute: "title",
+        op: "isNull" as const,
+      })),
+    }
+    for (let level = 0; level < depth - 2; level++) inner = { not: inner }
+    return inner
+  }
+
+  const open = (filter: Filter) => {
+    const { core } = setup()
+    core.view({ kind: "full", object: TASK, where: filter, orderBy })
+  }
+  const refusal = (fn: () => void) => {
+    try {
+      fn()
+    } catch (error) {
+      if (error instanceof CommandFailure) return error.error
+      throw error
+    }
+    return undefined
+  }
+
+  it("opens a where that leaves room for the worst keyset and refuses one node more", () => {
+    const room = FILTER_NODES_MAX - keysetNodesMax(orderBy) - 1
+    expect(keysetNodesMax(orderBy)).toBe(11)
+    expect(
+      refusal(() => open(where(room, FILTER_DEPTH_MAX - 1)))
+    ).toBeUndefined()
+    expect(refusal(() => open(where(room + 1, FILTER_DEPTH_MAX - 1)))).toEqual({
+      code: "command.invalid",
+      path: "where",
+    })
+  })
+
+  it("refuses a where of the depth limit once the keyset is added", () => {
+    expect(refusal(() => open(where(10, FILTER_DEPTH_MAX)))).toEqual({
+      code: "command.invalid",
+      path: "where",
+    })
   })
 })

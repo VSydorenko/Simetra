@@ -601,63 +601,16 @@ export function compareRows(
   }
 }
 
-// ---------------------------------------------------------------- keyset
-
-interface SortPart {
-  readonly attribute: string
-  readonly direction: "asc" | "desc"
-  readonly nullsFirst: boolean
-}
-
-/** Строго після `v` у порядку частини; `undefined` — після нього нічого. */
-function after(part: SortPart, v: unknown): Filter | undefined {
-  const { attribute } = part
-  if (isNullish(v)) {
-    // NULL на початку — після нього всі непорожні; NULL у кінці — нічого.
-    return part.nullsFirst ? { not: { attribute, op: "isNull" } } : undefined
-  }
-  const cmp: Filter = {
-    attribute,
-    op: part.direction === "asc" ? "gt" : "lt",
-    value: v,
-  }
-  // Непорожнє значення при NULL у кінці: усі NULL ідуть після нього.
-  return part.nullsFirst ? cmp : { or: [cmp, { attribute, op: "isNull" }] }
-}
-
-const equalTo = (attribute: string, v: unknown): Filter =>
-  isNullish(v) ? { attribute, op: "isNull" } : { attribute, op: "eq", value: v }
-
 /**
- * The keyset condition «after the row `last`» in the order of `orderBy`
- * (P4-B spec §4.1): the full sort tuple with the key last (ascending when
- * `orderBy` has no key, as the builder appends it), `isNull` branches where
- * `nulls` places NULL.
+ * Whether a field of the catalog entry may hold NULL: a column without NOT NULL
+ * does. Reads the column fact `notNull`, not `required` ("required on insert":
+ * a NOT NULL column with a DEFAULT is not required, yet holds no NULL). The
+ * keyset condition takes `isNull` branches only for nullable fields (P4-B
+ * spec §6.4).
  */
-export function keysetAfter(
-  orderBy: OrderBy,
-  last: Values,
-  keyName: string
-): Filter {
-  const parts: SortPart[] = orderBy.map((p) => ({
-    attribute: p.attribute,
-    direction: p.direction,
-    nullsFirst:
-      (p.nulls ?? (p.direction === "asc" ? "last" : "first")) === "first",
-  }))
-  if (parts[parts.length - 1]?.attribute !== keyName) {
-    parts.push({ attribute: keyName, direction: "asc", nullsFirst: false })
+export function nullableOf(info: FieldInfo): (name: string) => boolean {
+  return (name) => {
+    const attribute = info.get(name)?.attribute
+    return attribute !== undefined && attribute.notNull !== true
   }
-  if (isNullish(last[keyName])) throw new TypeError("keyset row has no key")
-  const branches: Filter[] = []
-  parts.forEach((part, i) => {
-    const strict = after(part, last[part.attribute])
-    if (strict === undefined) return
-    const equal = parts
-      .slice(0, i)
-      .map((prev) => equalTo(prev.attribute, last[prev.attribute]))
-    branches.push(equal.length === 0 ? strict : { and: [...equal, strict] })
-  })
-  // Ключ ніколи не NULL, тож гілка ключа є завжди.
-  return branches.length === 1 ? branches[0]! : { or: branches }
 }

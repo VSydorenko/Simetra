@@ -795,8 +795,14 @@ describe("stage 3: numbering uniqueness in scope", () => {
 describe("stage 3: scope indexes", () => {
   it("scoped catalog with codeUnique has no separate code or scope index", async () => {
     const physical = await compileScoped({ [CP]: counterparty() })
-    // `org_id` покриває UNIQUE (org_id, id), `(org_id, code)` — UNIQUE (org_id, code).
-    expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([])
+    // `org_id` покриває UNIQUE (org_id, id), `(org_id, code)` — UNIQUE (org_id, code);
+    // найменування лишається єдиним пошуковим індексом.
+    expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
+      {
+        name: "counterparty_org_id_description_id_idx",
+        keys: ["org_id", "description", "id"],
+      },
+    ])
   })
 
   it("scoped catalog without codeUnique indexes code within the scope", async () => {
@@ -804,7 +810,14 @@ describe("stage 3: scope indexes", () => {
       [CP]: counterparty({ codeUnique: false }),
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
-      { name: "counterparty_org_id_code_idx", keys: ["org_id", "code"] },
+      {
+        name: "counterparty_org_id_code_id_idx",
+        keys: ["org_id", "code", "id"],
+      },
+      {
+        name: "counterparty_org_id_description_id_idx",
+        keys: ["org_id", "description", "id"],
+      },
     ])
   })
 
@@ -815,7 +828,10 @@ describe("stage 3: scope indexes", () => {
       }),
     })
     expect(indexesOf(tableOf(physical, "invoice"))).toEqual([
-      { name: "invoice_org_id_date_idx", keys: ["org_id", "date"] },
+      {
+        name: "invoice_org_id_date_id_idx",
+        keys: ["org_id", "date", "id"],
+      },
     ])
   })
 
@@ -829,10 +845,18 @@ describe("stage 3: scope indexes", () => {
       }),
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
-      { name: "counterparty_org_id_rank_idx", keys: ["org_id", "rank"] },
+      {
+        name: "counterparty_org_id_description_id_idx",
+        keys: ["org_id", "description", "id"],
+      },
+      {
+        name: "counterparty_org_id_rank_id_idx",
+        keys: ["org_id", "rank", "id"],
+      },
     ])
     expect(indexesOf(tableOf(physical, "currency"))).toEqual([
-      { name: "currency_rank_idx", keys: ["rank"] },
+      { name: "currency_description_id_idx", keys: ["description", "id"] },
+      { name: "currency_rank_id_idx", keys: ["rank", "id"] },
     ])
   })
 
@@ -852,8 +876,12 @@ describe("stage 3: scope indexes", () => {
     })
     expect(indexesOf(tableOf(physical, "contract"))).toEqual([
       {
-        name: "contract_org_id_counterparty_id_idx",
-        keys: ["org_id", "counterparty_id"],
+        name: "contract_org_id_counterparty_id_id_idx",
+        keys: ["org_id", "counterparty_id", "id"],
+      },
+      {
+        name: "contract_org_id_description_id_idx",
+        keys: ["org_id", "description", "id"],
       },
     ])
   })
@@ -875,7 +903,14 @@ describe("stage 3: scope indexes", () => {
       }),
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
-      { name: "counterparty_currency_id_idx", keys: ["currency_id"] },
+      {
+        name: "counterparty_currency_id_id_idx",
+        keys: ["currency_id", "id"],
+      },
+      {
+        name: "counterparty_org_id_description_id_idx",
+        keys: ["org_id", "description", "id"],
+      },
     ])
   })
 
@@ -893,6 +928,10 @@ describe("stage 3: scope indexes", () => {
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
       { name: "counterparty_draft_id_idx", keys: ["draft_id"] },
+      {
+        name: "counterparty_org_id_description_id_idx",
+        keys: ["org_id", "description", "id"],
+      },
     ])
   })
 
@@ -924,6 +963,10 @@ describe("stage 3: scope indexes", () => {
       [CP]: counterparty({ hierarchyType: "ItemsOnly" }),
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
+      {
+        name: "counterparty_org_id_description_id_idx",
+        keys: ["org_id", "description", "id"],
+      },
       {
         name: "counterparty_org_id_parent_id_idx",
         keys: ["org_id", "parent_id"],
@@ -968,7 +1011,7 @@ describe("stage 3: scope indexes", () => {
     ])
   })
 
-  it("root and its tabular section rows keep single-column indexes", async () => {
+  it("root and its tabular section rows lead with their own columns", async () => {
     const physical = await compileScoped({
       [ORG]: organization({
         codeUnique: false,
@@ -983,11 +1026,12 @@ describe("stage 3: scope indexes", () => {
       }),
     })
     expect(indexesOf(tableOf(physical, "organization"))).toEqual([
-      { name: "organization_code_idx", keys: ["code"] },
+      { name: "organization_code_id_idx", keys: ["code", "id"] },
+      { name: "organization_description_id_idx", keys: ["description", "id"] },
     ])
     expect(indexesOf(tableOf(physical, "organization_notes"))).toEqual([
       { name: "organization_notes_parent_id_idx", keys: ["parent_id"] },
-      { name: "organization_notes_rank_idx", keys: ["rank"] },
+      { name: "organization_notes_rank_id_idx", keys: ["rank", "id"] },
     ])
   })
 
@@ -1009,6 +1053,7 @@ describe("stage 3: scope indexes", () => {
     // Глобальний код покриває його власний UNIQUE (code).
     expect(indexesOf(tableOf(physical, "rate"))).toEqual([
       { name: "rate_currency_id_idx", keys: ["currency_id"] },
+      { name: "rate_description_id_idx", keys: ["description", "id"] },
     ])
   })
 })
@@ -1126,6 +1171,10 @@ describe("stage 3: scoped owner", () => {
       }),
     ])
     expect(indexesOf(table)).toEqual([
+      {
+        name: "contract_org_id_description_id_idx",
+        keys: ["org_id", "description", "id"],
+      },
       { name: "contract_org_id_owner_id_idx", keys: ["org_id", "owner_id"] },
     ])
   })
