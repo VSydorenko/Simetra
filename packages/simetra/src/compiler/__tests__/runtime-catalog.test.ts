@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
   applyChanges,
+  buildClientCatalog,
   buildRuntimeCatalog,
   canonicalSnapshot,
   kernelHashOf,
@@ -11,6 +12,7 @@ import {
   objectColumns,
   runtimeCatalogSchema,
   standardElementId,
+  type ClientCatalog,
   type RuntimeCatalog,
   type RuntimeObject,
 } from "simetra/model"
@@ -803,6 +805,64 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
       "0935df409fd150504c33b1a082d056c77976c245c0e9930c92cb90c723168341"
+    )
+  })
+})
+
+/**
+ * Позначка `copy` (план B1c Р4): копія носія прав змінюється без версії
+ * рядка, тож частковий маркер `known` мусить нести її поточною.
+ */
+describe("buildRuntimeCatalog: copy", () => {
+  const sectionAttributes = (catalog: RuntimeCatalog | ClientCatalog) =>
+    catalog.objects.flatMap((o) =>
+      o.tabularSections.flatMap((s) =>
+        s.attributes.map((a) => [`${o.name}.${s.name}.${a.name}`, a] as const)
+      )
+    )
+  const headerAttributes = (catalog: RuntimeCatalog | ClientCatalog) =>
+    catalog.objects.flatMap((o) =>
+      o.attributes.map((a) => [`${o.name}.${a.name}`, a] as const)
+    )
+  const copies = (catalog: RuntimeCatalog | ClientCatalog) =>
+    [...headerAttributes(catalog), ...sectionAttributes(catalog)]
+      .filter(([, a]) => a.copy === true)
+      .map(([name]) => name)
+      .sort()
+  const expected = [
+    "TaskComment.attachments.task_id_assignee_id",
+    "TaskComment.task_id_assignee_id",
+    "Ticket.checklist.assignee_id",
+    "Ticket.checklist.project_id",
+    "Ticket.checklist.region_id",
+  ]
+
+  it("a header and a tabular section copy carry copy: true in the runtime and client catalogs", () => {
+    expect(copies(catalog)).toEqual(expected)
+    expect(copies(buildClientCatalog(catalog))).toEqual(expected)
+  })
+
+  it("an ordinary attribute has no copy field", () => {
+    const client = buildClientCatalog(catalog)
+    const ordinary = [catalog, client]
+      .flatMap((c) => [...headerAttributes(c), ...sectionAttributes(c)])
+      .filter(([name]) => !expected.includes(name))
+    expect(ordinary.length).toBeGreaterThan(0)
+    for (const [name, attribute] of ordinary) {
+      expect(attribute, name).not.toHaveProperty("copy")
+    }
+  })
+
+  it("changes neither kernelHash nor snapshotHash", async () => {
+    expect(canonicalSnapshot(model)).not.toHaveProperty("copyColumns")
+    expect(await modelHash({ ...model, copyColumns: new Map() })).toBe(
+      model.hash
+    )
+    const bare = buildRuntimeCatalog({ ...model, copyColumns: new Map() })
+    expect(copies(bare)).toEqual([])
+    expect(bare.snapshotHash).toBe(catalog.snapshotHash)
+    expect(bare.objects.map((o) => [o.name, o.kernelHash])).toEqual(
+      catalog.objects.map((o) => [o.name, o.kernelHash])
     )
   })
 })

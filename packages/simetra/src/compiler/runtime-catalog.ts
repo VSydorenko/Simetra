@@ -273,6 +273,7 @@ function attributes(
   },
   facts: Facts
 ): RuntimeAttribute[] {
+  const copies = facts.model.copyColumns.get(`${table.schema}.${table.name}`)
   return fields.map((field): RuntimeAttribute => {
     // У пари значення несе колонка `_id`; `_type` — дискримінатор цілі.
     const column = must(
@@ -345,6 +346,9 @@ function attributes(
       insert,
       update,
       ...(field.generated ? { generated: true as const } : {}),
+      ...(field.columns.some((c) => copies?.has(c) === true)
+        ? { copy: true as const }
+        : {}),
       ...(enumValues === undefined ? {} : { enumValues }),
       ...(field.columns.length === 2
         ? { pair: pairOf(field.columns[0], keys.references, facts) }

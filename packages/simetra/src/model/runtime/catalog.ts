@@ -57,6 +57,11 @@ export const catalogEntryAttributeSchema = z.strictObject({
   insert: z.boolean(),
   update: z.boolean(),
   generated: z.literal(true).optional(),
+  /**
+   * Значення змінюється без підвищення версії рядка: копія носія прав чи
+   * генерована з неї колонка. Частковий маркер `known` несе його поточним.
+   */
+  copy: z.literal(true).optional(),
   /** Значення `Ref` на перерахування: логічне ім'я й мітка бази. */
   enumValues: z
     .array(z.strictObject({ name: z.string(), label: z.string() }))
