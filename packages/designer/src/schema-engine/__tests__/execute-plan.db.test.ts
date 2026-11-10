@@ -2819,15 +2819,11 @@ describe.concurrent("executePlan", () => {
       // оператор репетиції — замір великої таблиці, і саме він, а не сума
       // фази, входить у формулу тайм-ауту застосування
       const record: PromotionRecord = { ...RECORD, typeChanges: [] }
-      // Таблиця «велика» відносно читання відбитка: на стеку postgres JIT
-      // додає до запиту відбитка сотні мілісекунд, і замір меншої таблиці не
-      // був би найдовшим оператором
-      const ROWS = 4_000_000
       const setup = `${BASE};
         create table app.pt (id int primary key, c text, x bigint);
         alter table app.pt set (autovacuum_enabled = false);
         insert into app.pt
-          select g, md5(g::text), g from generate_series(1, ${ROWS}) g;`
+          select g, md5(g::text), g from generate_series(1, 500000) g;`
       await inTarget(setup, async (url) => {
         const newToOld = new Map([
           [tableKey("app", "pu"), tableKey("app", "pt")],
@@ -2874,7 +2870,7 @@ describe.concurrent("executePlan", () => {
           )
         const { evidence } = outcome
         expect(evidence.rows).toEqual([
-          { schema: "app", table: "pt", rows: ROWS },
+          { schema: "app", table: "pt", rows: 500000 },
         ])
         expect(evidence.preservation).toEqual(evidence.rows)
         // Найдовший — за сирим виміром: округлення звіту могло б зрівняти

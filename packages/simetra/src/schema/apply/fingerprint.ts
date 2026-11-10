@@ -120,6 +120,10 @@ export async function inCatalogPath(
   // `pg_temp` явно останнім: неявно він перший для імен відношень і типів, і
   // тимчасова таблиця сесії могла б затінити `pg_class`
   await tx.query("SET LOCAL search_path = pg_catalog, pg_temp")
+  // JIT-компіляція каталожного запиту коштує сотні мілісекунд на кожному
+  // застосуванні, а читання коротке; `SET LOCAL` скасовує `ROLLBACK TO` нижче,
+  // тож налаштування сесії й стека не змінюються
+  await tx.query("SET LOCAL jit = off")
   const rows = await tx.query(sql, params)
   await tx.query("ROLLBACK TO SAVEPOINT simetra_fingerprint")
   await tx.query("RELEASE SAVEPOINT simetra_fingerprint")
