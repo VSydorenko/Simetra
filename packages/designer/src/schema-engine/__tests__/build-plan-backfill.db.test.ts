@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest"
+import { readBackfillCounts } from "simetra/schema"
 import { uuid } from "../../../../simetra/test/support"
 import { query } from "../../__tests__/support/db"
 import {
   compiled,
+  COPIER,
+  COPIER_PASSWORD,
+  dbs,
   EMPTY,
   establish,
   inTarget,
@@ -48,9 +52,10 @@ describe.concurrent("buildPlan backfill", () => {
     })
   })
 
-  it("counts every row of a table whose policy hides them", async () => {
-    // Р5: підрахунок під `row_security = off` — роль бачить усі рядки або
-    // дає гучне `42501`, а не неправдивий нуль
+  it("plans a count under FORCE ROW LEVEL SECURITY for a role that bypasses it", async () => {
+    // Роль плану цього стеку має BYPASSRLS, тож політика її не обмежує: тест
+    // доводить лише, що FORCE RLS не ламає конвеєр. Р5 (`row_security =
+    // off`) доводить наступний тест роллю без обходу
     const before = await compiled({ [NOTES]: notes() })
     const after = await compiled({ [NOTES]: notes(REQUIRED) })
     await inTarget(EMPTY, async (url) => {
@@ -67,6 +72,46 @@ describe.concurrent("buildPlan backfill", () => {
       expect(params(outcome, "plan.not-null-violation")).toEqual([
         { table: "app.notes", column: "note", rows: 2 },
       ])
+    })
+  })
+
+  it("refuses a count that row security would cut, with its SQLSTATE", async () => {
+    // Р5, І3: роль без BYPASSRLS, що не власник таблиці, під
+    // `row_security = off` бачить усі рядки або дає гучне `42501` — не
+    // неправдивий нуль від політики, що ховає всі рядки
+    const before = await compiled({ [NOTES]: notes() })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await query(
+        url,
+        `${rows(null, null, "a")}
+         alter table app.notes enable row level security;
+         alter table app.notes force row level security;
+         create policy notes_none on app.notes using (false);
+         grant usage on schema app to ${COPIER};
+         grant select on app.notes to ${COPIER};`
+      )
+      const login = new URL(url)
+      login.username = COPIER
+      login.password = COPIER_PASSWORD
+      const result = await dbs.reader.transaction(
+        { url: login.toString() },
+        "rollback",
+        (tx) =>
+          readBackfillCounts(tx, [
+            {
+              table: { schema: "app", name: "notes" },
+              column: "note",
+              count: "nulls",
+            },
+          ])
+      )
+      expect(result).toMatchObject({
+        refusal: {
+          code: "plan.backfill-count-failed",
+          params: { table: "app.notes", column: "note", sqlstate: "42501" },
+        },
+      })
     })
   })
 
