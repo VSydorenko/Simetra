@@ -1,5 +1,5 @@
 import { keyId, pairId } from "./epoch"
-import { differentEpochs } from "./object-store"
+import { differentEpochs, type RowEntry } from "./object-store"
 import type { ObjectStore } from "./object-store"
 import type { Scope, Session } from "./session"
 import type { Key, ObjectName, SectionLine } from "./types"
@@ -11,8 +11,24 @@ export type OwnerScope = string | null | "unknown"
 export interface SectionEntry {
   readonly lines: readonly SectionLine[]
   readonly ownerVersion: number
+  /** The epoch `ownerVersion` was read in; `null` — the database has none. */
+  readonly versionEpoch: string | null
   readonly complete: boolean
   readonly scope: OwnerScope
+}
+
+/**
+ * Lines read below the header version, or in another version epoch than the
+ * header (versions of different epochs are not ordered).
+ */
+export function sectionLinesStale(
+  lines: SectionEntry,
+  header: RowEntry
+): boolean {
+  return (
+    differentEpochs(lines.versionEpoch, header.versionEpoch) ||
+    lines.ownerVersion < header.version
+  )
 }
 
 /** Tabular section lines by (owner, section) (P4-B spec §6.1, §6.2 rule 3). */
@@ -137,6 +153,7 @@ export function createSectionStore(options: {
       sections.set(section, {
         lines,
         ownerVersion,
+        versionEpoch,
         complete: source === "owner-section",
         scope: ownerScope,
       })

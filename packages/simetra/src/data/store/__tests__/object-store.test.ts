@@ -131,6 +131,16 @@ describe("ObjectStore.put epochs (B1c Р5)", () => {
     expect(e?.lazyEpochs.get("notes")).toBe(EA)
   })
 
+  it("a null-epoch restore of a removed slot keeps its epoch, so a lower version of a new epoch still replaces", () => {
+    const h = harness()
+    put(h, inEpoch(row(K1, 5), EA))
+    remove(h, K1)
+    put(h, inEpoch(row(K1, 6), null), h.now())
+    expect(h.store.get(K1)?.versionEpoch).toBe(EA)
+    expect(put(h, inEpoch(row(K1, 1), EB))).toBe("written")
+    expect(h.store.get(K1)).toMatchObject({ version: 1, versionEpoch: EB })
+  })
+
   it("a remove then a lower version of a new epoch is not marked stale", () => {
     const h = harness()
     put(h, inEpoch(row(K1, 5), EA))

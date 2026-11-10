@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { SectionLine } from "../types"
+import { sectionLinesStale } from "../section-store"
 import { harness, K1, K2, K3, row, S, T, type Harness } from "./store-support"
 
 const U = "00000000-0000-4000-8000-0000000000b3"
@@ -37,6 +38,36 @@ const putLines = (
 const EA = "a".repeat(64)
 const EB = "b".repeat(64)
 
+describe("sectionLinesStale (B1c Р5)", () => {
+  it("lines of another epoch than the header are stale although ownerVersion is not lower", () => {
+    const h = harness()
+    putLines(h, K1, 5, { versionEpoch: EA })
+    h.write((s) =>
+      h.store.put(s, { ...row(K1, 1), versionEpoch: EB }, h.now(), false)
+    )
+    const lines = h.sections.get(K1, "lines")!
+    expect(sectionLinesStale(lines, h.store.get(K1)!)).toBe(true)
+  })
+
+  it("lines of the header epoch, or a null epoch, compare by version", () => {
+    const h = harness()
+    putLines(h, K1, 5, { versionEpoch: EA })
+    h.write((s) =>
+      h.store.put(s, { ...row(K1, 1), versionEpoch: EA }, h.now(), false)
+    )
+    expect(
+      sectionLinesStale(h.sections.get(K1, "lines")!, h.store.get(K1)!)
+    ).toBe(false)
+    putLines(h, K1, 5, { versionEpoch: null })
+    h.write((s) =>
+      h.store.put(s, { ...row(K1, 9), versionEpoch: null }, h.now(), false)
+    )
+    expect(
+      sectionLinesStale(h.sections.get(K1, "lines")!, h.store.get(K1)!)
+    ).toBe(true)
+  })
+})
+
 describe("SectionStore.put epochs (B1c Р5)", () => {
   it("accepts a lower ownerVersion of a new epoch", () => {
     const h = harness()
@@ -62,6 +93,7 @@ describe("SectionStore.put", () => {
     expect(h.sections.get(K1, "lines")).toEqual({
       lines: LINES,
       ownerVersion: 1,
+      versionEpoch: null,
       complete: true,
       scope: S,
     })

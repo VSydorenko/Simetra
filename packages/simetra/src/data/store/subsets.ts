@@ -7,6 +7,7 @@ import { DataError } from "../errors"
 import { formOf, type Form, type ObjectState } from "./forms"
 import { refsOf } from "./include"
 import { lazyFieldStale } from "./object-store"
+import { sectionLinesStale } from "./section-store"
 import { diffOwn, readForm, type ReaderTarget, type StoreOps } from "./readers"
 import type { Session } from "./session"
 import {
@@ -262,7 +263,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     )
       return false
     const lines = s.form.object.sections.get(spec.owner, spec.section)
-    return lines === undefined || lines.ownerVersion < e.version
+    return lines === undefined || sectionLinesStale(lines, e)
   }
 
   /**

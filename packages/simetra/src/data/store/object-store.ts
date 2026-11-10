@@ -337,7 +337,8 @@ export function createObjectStore(options: {
         }
         if (e.removed.divergent) restored++
         delete e.removed
-        e.row = row
+        // Репліка без епохи не стирає епохи слота (Р6).
+        e.row = { ...row, versionEpoch: row.versionEpoch ?? e.versionEpoch }
       } else {
         const merged =
           mergeVersioned(e.row, row) ??
