@@ -165,6 +165,7 @@ export {
 } from "./execute"
 export {
   clusterRoleViolation,
+  ENGINE_SESSION_TIMEOUTS,
   ensurePostgresCluster,
   explicitConnectDatabases,
   extensionsSchemaViolation,

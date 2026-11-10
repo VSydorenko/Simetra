@@ -17,6 +17,7 @@ import {
   testRoleName,
   testSuperuserUrl,
 } from "../../../simetra/test/support"
+import { CLUSTER_TRANSACTION_PRELUDE } from "../../../simetra/src/schema/apply/postgres-cluster"
 import { createApplyDatabase } from "../schema-engine"
 
 /**
@@ -757,5 +758,45 @@ describe("roles: the postgres profile cluster", () => {
       await c.query(`set role ${id(user!)}`)
       expect((await c.query("select * from public.readable")).rows).toEqual([])
     })
+  })
+
+  it("lifts the session timeouts inside the prelude transaction only", async () => {
+    const { set } = scenario("idle")
+    await mustEnsure(set)
+    // Ліміт простою на рівні бази, як у кластері з налаштованим таймаутом
+    await sql(
+      undefined,
+      `alter database ${id(set.database)} set idle_in_transaction_session_timeout = '5min'`
+    )
+    await sql(
+      undefined,
+      `alter database ${id(set.database)} set transaction_timeout = '5min'`
+    )
+    const client = new pg.Client({
+      connectionString: withDatabaseName(testSuperuserUrl(), set.database),
+    })
+    await client.connect()
+    try {
+      const read = async (guc: string) =>
+        (
+          await client.query<{ v: string }>("select current_setting($1) as v", [
+            guc,
+          ])
+        ).rows[0]!.v
+      const GUCS = [
+        "idle_in_transaction_session_timeout",
+        "transaction_timeout",
+      ]
+      for (const guc of GUCS) expect(await read(guc)).toBe("5min")
+      for (const outcome of ["COMMIT", "ROLLBACK"]) {
+        await client.query("BEGIN")
+        for (const text of CLUSTER_TRANSACTION_PRELUDE) await client.query(text)
+        for (const guc of GUCS) expect(await read(guc)).toBe("0")
+        await client.query(outcome)
+        for (const guc of GUCS) expect(await read(guc)).toBe("5min")
+      }
+    } finally {
+      await client.end()
+    }
   })
 })

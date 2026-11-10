@@ -2,10 +2,23 @@ import pg from "pg"
 import {
   ApplyConnectionLost,
   ApplyDbError,
+  ENGINE_SESSION_TIMEOUTS,
   type ApplyDatabase,
   type ApplyTransaction,
 } from "simetra/schema"
 import { extractOnTransactionClient } from "./pg-delta/adapter"
+
+/**
+ * Прелюдія оператора `statement` (окреме з'єднання без транзакції, тому `SET`,
+ * а не `SET LOCAL`). Таймаути беруться з `ENGINE_SESSION_TIMEOUTS`, тим самим
+ * переліком, що й прелюдія транзакції кластера.
+ */
+export const STATEMENT_PRELUDE: readonly string[] = [
+  "SET ROLE NONE",
+  "SET search_path = pg_catalog, pg_temp",
+  "SET default_transaction_read_only = off",
+  ...ENGINE_SESSION_TIMEOUTS.map((guc) => `SET ${guc} = 0`),
+]
 
 /**
  * Збій транспорту без SQLSTATE, який кидає сам драйвер `pg`: сокет закрито,
@@ -151,18 +164,12 @@ export function createApplyDatabase(o: { readOnly: boolean }): ApplyDatabase {
         throw new Error("statement is not allowed on a read-only port")
       // Окремий клієнт без `BEGIN`: `CREATE DATABASE` не живе в транзакції.
       // Прелюдія знімає сесійні налаштування, які цільова база чи роль
-      // могли б підмінити (читання, таймаут, шлях пошуку, роль)
+      // могли б підмінити (читання, таймаути, шлях пошуку, роль)
       const client = new pg.Client({ connectionString: db.url })
       client.on("error", () => {})
       await client.connect()
       try {
-        for (const prelude of [
-          "SET ROLE NONE",
-          "SET search_path = pg_catalog, pg_temp",
-          "SET default_transaction_read_only = off",
-          "SET statement_timeout = 0",
-        ])
-          await client.query(prelude)
+        for (const prelude of STATEMENT_PRELUDE) await client.query(prelude)
         await client.query(sql)
       } catch (error) {
         throw normalize(error)

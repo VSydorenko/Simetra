@@ -23,6 +23,10 @@ import {
 } from "simetra/schema"
 import { PROVIDER_SHADOW_TEMPLATES } from "../../engine/provider/presets"
 import { CLUSTER_ADVISORY_LOCK } from "../execute"
+import {
+  CLUSTER_TRANSACTION_PRELUDE,
+  ENGINE_SESSION_TIMEOUTS,
+} from "../postgres-cluster"
 
 type Attributes = PlatformRoleRow["attributes"]
 
@@ -411,13 +415,23 @@ describe("ensurePostgresCluster", () => {
       end: "rollback",
     })
     // Прелюдія — перші оператори транзакції, до будь-якого читання
-    expect(calls[0]!.sql.slice(0, 4)).toEqual([
-      "SET LOCAL ROLE NONE",
-      "SET LOCAL search_path = pg_catalog, pg_temp",
-      "SET LOCAL statement_timeout = 0",
-      "SET LOCAL lock_timeout = 0",
-    ])
+    expect(calls[0]!.sql.slice(0, CLUSTER_TRANSACTION_PRELUDE.length)).toEqual(
+      CLUSTER_TRANSACTION_PRELUDE
+    )
     expect(calls[0]!.sql.join("\n")).not.toContain("advisory")
+  })
+
+  it("resets every engine session timeout inside the transaction only", () => {
+    expect(ENGINE_SESSION_TIMEOUTS).toEqual([
+      "statement_timeout",
+      "lock_timeout",
+      "idle_in_transaction_session_timeout",
+      "transaction_timeout",
+    ])
+    for (const guc of ENGINE_SESSION_TIMEOUTS)
+      expect(CLUSTER_TRANSACTION_PRELUDE).toContain(`SET LOCAL ${guc} = 0`)
+    for (const sql of CLUSTER_TRANSACTION_PRELUDE)
+      expect(sql.startsWith("SET LOCAL ")).toBe(true)
   })
 
   it("holds the cluster lock in the reading transaction before any read", async () => {

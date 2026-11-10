@@ -277,17 +277,37 @@ const AUTH_SCHEMA = "better_auth"
 const CHECK_EXTENSION = "plpgsql_check"
 
 /**
+ * The session timeouts that every transaction or session of the schema engine
+ * resets to 0 (off) before its own work: the target database or role may set
+ * any of them, and a limit would kill the cluster lock holder or a long DDL
+ * halfway. Both preludes (`CLUSTER_TRANSACTION_PRELUDE` here and the
+ * `statement` prelude of the designer `ApplyDatabase`) are built from this one
+ * list, so a new timeout is added in one place. `transaction_timeout` needs
+ * PostgreSQL 17, the minimum of the postgres profile. The runtime counterpart
+ * is `COMMAND_CLAIMS_TEXT` in `packages/simetra/src/server/transaction.ts`,
+ * which sets the same four GUCs to a command budget instead of 0.
+ */
+export const ENGINE_SESSION_TIMEOUTS: readonly string[] = [
+  "statement_timeout",
+  "lock_timeout",
+  "idle_in_transaction_session_timeout",
+  "transaction_timeout",
+]
+
+/**
  * Прелюдія кожної транзакції `roles`: сесію, роль і шлях пошуку, які база чи
  * роль могли підмінити (`ALTER DATABASE … SET role`, `search_path`), повертають
  * у відомий стан до першого запиту, що кличе функцію чи оператор. Власник
  * бази рівний базі (спека профілю §3.4): без цього підкладена в `public`
- * функція виконалась би від суперкористувача.
+ * функція виконалась би від суперкористувача. `idle_in_transaction_session_timeout`
+ * скинуто, бо зовнішня службова транзакція тримає `CLUSTER_ADVISORY_LOCK` і
+ * простоює, поки фаза запису йде на інших зʼєднаннях: кластерний ліміт простою
+ * вбив би її й зняв замок посеред запису. `SET LOCAL` не виходить за транзакцію.
  */
 export const CLUSTER_TRANSACTION_PRELUDE: readonly string[] = [
   "SET LOCAL ROLE NONE",
   "SET LOCAL search_path = pg_catalog, pg_temp",
-  "SET LOCAL statement_timeout = 0",
-  "SET LOCAL lock_timeout = 0",
+  ...ENGINE_SESSION_TIMEOUTS.map((guc) => `SET LOCAL ${guc} = 0`),
 ]
 
 /** Відмова, яку знайшла фаза запису: транзакцію відкочують, фазу зупиняють. */
