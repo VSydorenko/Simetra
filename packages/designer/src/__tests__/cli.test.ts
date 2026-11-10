@@ -930,7 +930,7 @@ describe("cli adapter", TOOL_PIPELINE, () => {
       }
       const { stdout } = renderResult(
         tool("apply"),
-        { ok: true, changes: [], diagnostics: [], data },
+        { ok: true, written: false, changes: [], diagnostics: [], data },
         { dir: "metadata", locale: "en", format: "text" }
       )
       expect(stdout.split("\n").slice(0, 2)).toEqual([
