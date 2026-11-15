@@ -25,7 +25,9 @@ import {
 } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  assertServerVersion,
   betterAuthCommand,
+  imageTagVersion,
   passwordMatches,
   POSTGRES_LOCK_FILE,
   POSTGRES_LOCK_PATH,
@@ -144,6 +146,33 @@ describe("images of the postgres stack", () => {
       expect(image).toMatch(/^[^:@\s]+:[^:@\s]+@sha256:[0-9a-f]{64}$/)
       expect(image).not.toMatch(/:latest@/)
     }
+  })
+})
+
+describe("the postgres image version", () => {
+  const dockerfile = read("Dockerfile")
+  const fromTag = /^FROM\s+postgres:(\d+\.\d+)-/m.exec(dockerfile)?.[1]
+
+  it("the tag of the stack image is the version of the base image", () => {
+    expect(fromTag).toBeDefined()
+    expect(imageTagVersion()).toBe(fromTag)
+  })
+
+  it("every apt package is installed with an explicit version", () => {
+    const run = /^RUN apt-get[\s\S]*?(?=^\S|(?![\s\S]))/m.exec(dockerfile)![0]
+    const packages = [
+      ...run.matchAll(/^\s+(postgresql-\S+?)(?:=(\S+))?\s*\\?$/gm),
+    ]
+    expect(packages.map((m) => m[1])).toEqual([
+      "postgresql-17-pgtap",
+      "postgresql-17-plpgsql-check",
+    ])
+    for (const [, name, version] of packages)
+      expect(version, name).toMatch(/^\d[\w.+~-]*$/)
+  })
+
+  it("does not install the server package: it comes from the base image", () => {
+    expect(dockerfile).not.toMatch(/^\s+postgresql-17(=|\s|\\|$)/m)
   })
 })
 
@@ -744,6 +773,8 @@ function fakeStack(
       Record<(typeof SERVICES)[number], Record<string, string | undefined>>
     >
     verifiers?: Record<string, string>
+    /** Що вертає `current_setting('server_version')`; типово версія з тегу. */
+    serverVersion?: string
     fail?: (call: Call) => boolean
     /** Справжній дочірній замість підставного для виклику, що підходить. */
     real?: (call: Call) => ChildProcess | undefined
@@ -796,6 +827,8 @@ function fakeStack(
           }[args[api + 1]!]
         ),
       }
+    if (call.input.includes("server_version"))
+      return { stdout: `${o.serverVersion ?? imageTagVersion()}\n` }
     if (call.input.includes("pg_authid"))
       return {
         stdout: Object.entries(o.verifiers ?? {})
@@ -984,6 +1017,36 @@ describe("startPostgres", () => {
     }
   )
 
+  it("accepts a server whose version is the tag of the image", async () => {
+    await start(fakeStack({ serverVersion: `${imageTagVersion()} (Debian)` }))
+  })
+
+  it.each(["17.11", "", "17.120"])(
+    "refuses a server reporting %j instead of the tag version, before any change",
+    async (reported) => {
+      const stack = fakeStack({ serverVersion: reported })
+      await expect(start(stack)).rejects.toMatchObject({
+        code: STACK_REFUSAL.serverVersion,
+        message: expect.stringContaining(imageTagVersion()),
+      })
+      expect(stack.calls.some((c) => c.command === process.execPath)).toBe(
+        false
+      )
+      expect(stack.psqls().some((c) => c.input.includes("pg_authid"))).toBe(
+        false
+      )
+    }
+  )
+
+  it("assertServerVersion compares the first token only", () => {
+    expect(() =>
+      assertServerVersion("17.12 (Debian 17.12-1.pgdg13+1)\n", "17.12")
+    ).not.toThrow()
+    expect(() => assertServerVersion("17.12", "17.11")).toThrow(
+      /server_version is 17\.12/
+    )
+  })
+
   it("files-hash postgres prints the hash the script builds with and compares", () => {
     const result = spawnSync(
       process.execPath,
@@ -1040,16 +1103,19 @@ describe("startPostgres", () => {
             ? "roles"
             : c.command === process.execPath
               ? "better-auth"
-              : c.input.includes("pg_terminate_backend")
-                ? "terminate"
-                : c.input.includes("ALTER ROLE")
-                  ? "passwords"
-                  : c.input.includes("pg_authid")
-                    ? "verifiers"
-                    : "psql"
+              : c.input.includes("server_version")
+                ? "server-version"
+                : c.input.includes("pg_terminate_backend")
+                  ? "terminate"
+                  : c.input.includes("ALTER ROLE")
+                    ? "passwords"
+                    : c.input.includes("pg_authid")
+                      ? "verifiers"
+                      : "psql"
       )
     expect(steps).toEqual([
       "up",
+      "server-version",
       "psql",
       "roles",
       "verifiers",

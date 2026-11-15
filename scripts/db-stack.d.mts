@@ -76,4 +76,11 @@ export function startPostgres(options?: {
 export const STACK_REFUSAL: {
   readonly unlabelled: string
   readonly differs: string
+  readonly serverVersion: string
 }
+
+/** Server version named by the tag of the stack image in `compose.yaml`. */
+export function imageTagVersion(): string
+
+/** Throws a `STACK_REFUSAL.serverVersion` error when the reported version differs. */
+export function assertServerVersion(reported: string, expected: string): void

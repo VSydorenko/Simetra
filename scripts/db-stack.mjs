@@ -399,6 +399,41 @@ export const STACK_REFUSAL = {
   unlabelled: "STACK_UNLABELLED",
   /** A container is missing, or its label differs from this branch. */
   differs: "STACK_DIFFERS",
+  /** `server_version` of the running server differs from the image tag. */
+  serverVersion: "STACK_SERVER_VERSION",
+}
+
+/**
+ * Версія сервера з тегу власного образу стека в `compose.yaml`
+ * (`simetra-pg/postgres:<версія>`): тег і сервер мають збігатися.
+ *
+ * @returns {string}
+ */
+export function imageTagVersion() {
+  const compose = readFileSync(
+    join(PROFILES.postgres.dir, "compose.yaml"),
+    "utf8"
+  )
+  const tag = /^\s*image:\s*simetra-pg\/postgres:(\S+)\s*$/m.exec(compose)
+  if (tag === null)
+    throw new Error("compose.yaml names no simetra-pg/postgres image tag")
+  return tag[1]
+}
+
+/**
+ * Сервер, що запущений, має бути тією версією, яку називає тег образу: збірка
+ * з пакетами без версій колись підтягнула новіший сервер під старий тег.
+ *
+ * @param {string} reported вивід `current_setting('server_version')`
+ * @param {string} expected
+ */
+export function assertServerVersion(reported, expected) {
+  const actual = reported.trim().split(/\s+/)[0]
+  if (actual !== expected)
+    throw refusal(
+      STACK_REFUSAL.serverVersion,
+      `server_version is ${actual === "" ? "empty" : actual}, but the image tag says ${expected}; rebuild the stack from the files of this branch (the owner's call: node scripts/db-stack.mjs stop postgres, then pnpm db:pg:start)`
+    )
 }
 
 /** @param {string} code @param {string} message */
@@ -750,6 +785,10 @@ async function startPostgresSteps(ctx, noBuild) {
       /** @type {string} */ input,
       /** @type {string[]} */ ...extra
     ) => compose(ctx, profile, psqlArgs(...extra), { input, capture: true })
+    assertServerVersion(
+      await psql("SELECT current_setting('server_version');\n", "-A", "-t"),
+      imageTagVersion()
+    )
     await psql(readFileSync(join(profile.dir, "dev-environment.sql"), "utf8"))
     const secrets = readEnvFile(
       "login-secrets.env",

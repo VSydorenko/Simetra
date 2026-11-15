@@ -14,7 +14,7 @@ services:
       context: .
       args:
         SIMETRA_STACK_FILES_HASH: ${SIMETRA_STACK_FILES_HASH:-}
-    image: simetra-pg/postgres:17.11
+    image: simetra-pg/postgres:17.12
     environment:
       POSTGRES_PASSWORD: postgres
     ports:

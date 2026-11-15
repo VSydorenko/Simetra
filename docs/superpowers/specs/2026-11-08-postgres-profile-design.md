@@ -904,7 +904,7 @@ FileStore = {
 
 | Сервіс | Образ | Порт на хості | Профіль |
 | --- | --- | --- | --- |
-| Postgres 17 | образ репо: `postgres:17` + pgTAP + `plpgsql_check` з PGDG, точний тег і digest | 54422 | `postgres` |
+| Postgres 17 | образ репо: `postgres:17` + pgTAP + `plpgsql_check` з PGDG, точний тег і digest; пакети розширень з точними версіями, а `db:pg:start` після старту звіряє `server_version` з версією з тегу образу й відмовляє (`STACK_SERVER_VERSION`) при розбіжності | 54422 | `postgres` |
 | Centrifugo | `centrifugo/centrifugo` v6, точний тег | 8100 у `simetra-pg`, 8101 у `simetra-sb` | обидва, окремий інстанс на стек |
 | Garage | `dxflrs/garage`, точний тег | 3900 (S3), 3903 (admin) | `postgres` |
 | Supabase | Supabase CLI (пін у `package.json`) | 54322, 54329 | `supabase` |
