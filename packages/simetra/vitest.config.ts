@@ -60,8 +60,9 @@ export default defineConfig({
       {
         extends: true,
         test: {
-          // Бенчмарк меж прав (спека прав §5.4): той самий стек і сторож, що й `db`, але
-          // поза `test:db` і CI — прогін хвилинний, а результат — заміри машини
+          // Бенчмарк меж прав (спека прав §5.4): стек Supabase і його сторож, як у
+          // `db-supabase`, але поза `test:db` і CI — прогін хвилинний, а результат —
+          // заміри машини
           name: "bench",
           include: ["bench/**/*.bench.db.ts"],
           exclude: ["**/node_modules/**", "**/dist/**"],
