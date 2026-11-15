@@ -11,3 +11,7 @@ legacy/
 packages/simetra/schemas/
 # Канонічну форму файлів метаданих дає форматер T0 (formatMetaFile), а не Prettier
 examples/**/metadata/**
+# Вихід agent-kit (git-ignored): звіти й журнали пишуть скрипти, не люди
+.agents/codex-audit/
+.agents/out/
+.agents/sdd/
