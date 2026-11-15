@@ -117,7 +117,7 @@ local profile next to it.
 | tests, PR, docs, Codex | scripts `run-tests`, `pr-gate`, `doc`, `codex-audit` |
 
 The project has no agents or commands of its own. A gap in the kit goes to agent-kit
-through the `agent-kit:retro` skill, not into a project copy.
+through `/agent-kit:retro`, which the owner runs, not into a project copy.
 
 ## Slash commands
 

@@ -210,7 +210,7 @@ pnpm --filter <pkg> test <pattern>        # vitest filter
 pnpm --filter <pkg> typecheck
 pnpm --filter <pkg> lint
 
-pnpm format:check && pnpm lint && pnpm typecheck && pnpm test   # before a PR
+pnpm format:check && pnpm lint && pnpm typecheck && pnpm test   # CI runs these on every push of the draft PR; locally only targeted run-tests … --changed
 pnpm format:fix                           # fixes what format:check reports
 
 doc anchors && doc lint                   # dead paths, § pointers, corpus form (agent-kit)
