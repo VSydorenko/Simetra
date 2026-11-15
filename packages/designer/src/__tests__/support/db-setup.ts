@@ -4,7 +4,7 @@ import {
   expectFileEndRoles,
   useTestHooks,
 } from "../../../../simetra/test/db/connection"
-import { expectNoLeftoverShadows } from "./shadows"
+import { expectNoLeftoverShadows, reportDropRetries } from "./shadows"
 
 /**
  * setupFile DB-проєкту designer: тіні двигуна несуть тег прогону, а їхні
@@ -86,6 +86,8 @@ vi.mock(
 // Після кожного файлу, а не після кожного тесту: у файлі з конкурентними
 // тестами живі тіні сусідніх тестів дали б `afterEach` хибну тривогу
 afterAll(expectNoLeftoverShadows)
+// Повтор, що вдався, тіні не лишає: рядок про нього — єдиний слід гонки
+afterAll(reportDropRetries)
 
 // Дрейф ролі (спека профілю §10.3, запобіжник 3): клієнтів, відкритих
 // хелпером у тесті, перевіряє `onTestFinished` хелпера; тут — відкриті поза

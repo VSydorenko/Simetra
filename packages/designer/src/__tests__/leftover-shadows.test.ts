@@ -3,6 +3,7 @@ import {
   expectNoLeftoverShadows,
   recordDropFailures,
   recordProvision,
+  reportDropRetries,
   retryDropOnSuperuserBackend,
   shadowDropRetries,
 } from "./support/shadows"
@@ -98,5 +99,18 @@ describe("leftover shadow accounting", () => {
     await expect(expectNoLeftoverShadows()).rejects.toThrow(
       "pgdelta_shadow_r3 (engine drop failed: SQLSTATE 42501; drop retried 3 time(s))"
     )
+  })
+
+  it("names every retried drop of the file on stderr", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      reportDropRetries()
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0]![0]).toContain(
+        "Shadow drops retried after 42501: pgdelta_shadow_r1 (retry 1), pgdelta_shadow_r1 (retry 2), pgdelta_shadow_r3 (retry 1)"
+      )
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

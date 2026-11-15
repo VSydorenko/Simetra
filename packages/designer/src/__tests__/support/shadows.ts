@@ -131,6 +131,20 @@ export function shadowDropRetries(): readonly DropRetry[] {
 }
 
 /**
+ * Names, on stderr, every shadow drop of this test file that needed a retry.
+ * A retried drop that succeeded leaves nothing behind, so without this line
+ * the race it went through would stay unseen.
+ */
+export function reportDropRetries(): void {
+  if (dropRetries.length === 0) return
+  console.warn(
+    `Shadow drops retried after 42501: ${dropRetries
+      .map((r) => `${r.shadow} (retry ${r.attempt})`)
+      .join(", ")}`
+  )
+}
+
+/**
  * Wraps the `cleanup` of a template shadow so that a drop refused with
  * `42501` is repeated, at most `DROP_RETRIES` times, each retry recorded
  * under the shadow's name. A backend of this run that is ending has already
