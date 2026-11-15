@@ -30,7 +30,7 @@ import {
   testRoleFor,
 } from "../../../../simetra/test/support"
 import { inTarget } from "../../__tests__/support/db"
-import { readCensus } from "../census-read"
+import { readCensus, readUnmodeledProperties } from "../census-read"
 import { COVERED_CLASSES, factKindOf } from "../pg-delta/census-facts"
 import { scopeProfile } from "../pg-delta/policy"
 
@@ -260,6 +260,71 @@ describe("class census inside the managed boundary", () => {
         ),
       ])
     )
+  })
+
+  it("the internal pg_attver key is not a column option", async () => {
+    // PostgreSQL 17.12+ пише внутрішню версію атрибута `pg_attver` в
+    // `attoptions` кожної колонки, створеної чи зміненої DDL (CVE-2026-6460);
+    // старіший сервер лишає NULL — тож твердження тримаються на обох, а на
+    // 17.12+ голі колонки несуть лише цей ключ
+    const shadowSql = `
+      create schema app;
+      create table app.doc (id int primary key, a int, b int);
+      alter table app.doc add column c int;
+      alter table app.doc alter column b set (n_distinct = 5);
+    `
+    await inShadow(shadowSql, scope, async (shadow) => {
+      const extracted = await engine.extract(shadow, scope)
+      const { properties, options } = await withPool(shadow, async (pool) => ({
+        properties: await readUnmodeledProperties(pool, scope),
+        options: (
+          await pool.query<{ attname: string; attoptions: string[] | null }>(
+            `select attname, attoptions from pg_attribute
+              where attrelid = 'app.doc'::regclass and attnum > 0 order by attnum`
+          )
+        ).rows,
+      }))
+      // Поза справжньою опцією колонки `b` — нічого, крім `pg_attver`
+      const internalOnly = (o: string[] | null) => {
+        const rest = (o ?? []).filter((x) => x !== "n_distinct=5")
+        return rest.every((x) => /^pg_attver=\d+$/.test(x)) && rest.length <= 1
+      }
+      expect(
+        options.map((r) => [r.attname, internalOnly(r.attoptions)])
+      ).toEqual(["id", "a", "b", "c"].map((name) => [name, true]))
+      expect(options.find((r) => r.attname === "b")!.attoptions).toContain(
+        "n_distinct=5"
+      )
+      // Справжня опція поряд із `pg_attver` рахується, голі колонки — ні
+      expect(properties).toEqual([{ property: "column options", count: 1 }])
+      expect(
+        extracted.diagnostics
+          .filter((d) => d.code === "engine.unmodeled-property")
+          .map((d) => d.message)
+      ).toEqual([expect.stringMatching(/^1 object\(s\) .* column options,/)])
+    })
+  })
+
+  it("the engine plans nothing between two loads of the same SQL", async () => {
+    // Дві бази одного SQL мають різні значення `pg_attver` (17.12+): двигун,
+    // що читав би `attoptions`, спланував би `ALTER COLUMN … SET (…)`
+    const sql = `
+      create schema app;
+      create table app.doc (id int primary key, a int, b int);
+      alter table app.doc add column c int;
+    `
+    const plan = await inTarget(sql, scope, async (target) => {
+      const outcome = await engine.withDesiredShadow(
+        { target: { url: target } },
+        sql,
+        scope,
+        async (_shadow, plan) => plan
+      )
+      expect(outcome.status).toBe("loaded")
+      return outcome.status === "loaded" ? outcome.value : undefined
+    })
+    expect(plan?.actions).toEqual([])
+    expect(plan?.empty).toBe(true)
   })
 
   it("shell type is counted as its own class", async () => {

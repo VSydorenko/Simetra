@@ -150,7 +150,10 @@ export async function readCensus(
  * бажаному стану. Типові значення — ті, що Postgres ставить сам: `attstorage`
  * типу колонки, порожній `attcompression`, `attstattarget` NULL (до PG17 —
  * `-1`), без `attoptions`, метод доступу heap, без `CLUSTER ON`. `$1` —
- * керовані схеми.
+ * керовані схеми. Ключ `pg_attver` в `attoptions` — внутрішня версія
+ * атрибута, яку PostgreSQL 17.12+ сам пише кожній колонці після DDL
+ * (CVE-2026-6460): користувач її не задає, тож опцією колонки вона не є;
+ * відкидається лише цей зарезервований ключ, справжня опція поряд рахується.
  */
 const UNMODELED_PROPERTIES_SQL = `
 with rel as (
@@ -166,7 +169,8 @@ with rel as (
   select 'column storage' from col where attstorage <> typstorage
   union all select 'column compression' from col where attcompression <> ''
   union all select 'column statistics target' from col where coalesce(attstattarget, -1) <> -1
-  union all select 'column options' from col where attoptions is not null
+  union all select 'column options' from col
+  where exists (select 1 from unnest(attoptions) o where split_part(o, '=', 1) <> 'pg_attver')
   union all select 'table access method' from rel
   where relkind in ('r', 'p', 'm') and relam <> 0
     and relam <> (select oid from pg_am where amname = 'heap')
