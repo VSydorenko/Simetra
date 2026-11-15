@@ -39,6 +39,7 @@ describe("the better_auth check of the stack guard on database simetra", () => {
           object: string
           grantee: string
           privilege: string
+          grantable: string
         }>(IDENTITY_SQL.grants, ["better_auth"])
       ).rows.filter((g) => g.grantee === PROVIDER_OWNER_ROLES.postgres)
       expect(grants).toEqual([
@@ -46,16 +47,19 @@ describe("the better_auth check of the stack guard on database simetra", () => {
           object: "relation user",
           grantee: PROVIDER_OWNER_ROLES.postgres,
           privilege: "REFERENCES",
+          grantable: "false",
         },
         {
           object: "relation user",
           grantee: PROVIDER_OWNER_ROLES.postgres,
           privilege: "TRIGGER",
+          grantable: "false",
         },
         {
           object: "schema better_auth",
           grantee: PROVIDER_OWNER_ROLES.postgres,
           privilege: "USAGE",
+          grantable: "false",
         },
       ])
       const triggers = (
