@@ -9,13 +9,15 @@
 # версії зник би з нього після першого ж оновлення. Архів `apt-archive`
 # зберігає всі збірки: його джерело додано поряд, і пін лишається доступним.
 # Архів віддається лише по HTTPS, а базовий образ не має кореневих
-# сертифікатів, тож `ca-certificates` ставиться першим кроком із власним пінем.
+# сертифікатів, тож `ca-certificates` ставиться першим кроком без піна: пакет
+# не впливає на версію сервера чи розширень, а його пін живе лише в
+# trixie-security і зникає з індексу після наступного оновлення безпеки.
 # Відновлення: якщо apt не знаходить версію (ні в основному джерелі, ні в
 # архіві), оновіть піни пакетів і дайджест базового образу разом.
 FROM postgres:17.12-trixie@sha256:0d938e975177bef9f1f61f3f9dbcf2e0aa0a139568f66d3415ed8892eb97f6ac
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates=20250419+deb13u1 \
+  && apt-get install -y --no-install-recommends ca-certificates \
   && echo "deb [signed-by=/usr/local/share/keyrings/postgres.gpg.asc] https://apt-archive.postgresql.org/pub/repos/apt trixie-pgdg-archive main" \
     > /etc/apt/sources.list.d/pgdg-archive.list \
   && apt-get update \

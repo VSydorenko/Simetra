@@ -178,8 +178,18 @@ describe("the postgres image version", () => {
       "postgresql-17-pgtap",
       "postgresql-17-plpgsql-check",
     ])
-    for (const [name, version] of packages)
+    // Єдиний виняток, іменований: `ca-certificates` лише дає довіру TLS під час
+    // збірки й не впливає на версію сервера чи розширень. Його пін живе тільки
+    // в trixie-security і зникає з індексу після наступного оновлення безпеки,
+    // що зламало б збірку. Решта пакетів мають версію
+    const UNPINNED = "ca-certificates"
+    for (const [name, version] of packages) {
+      if (name === UNPINNED) {
+        expect(version, name).toBeUndefined()
+        continue
+      }
       expect(version, name).toMatch(/^\d[\w.+~-]*$/)
+    }
   })
 
   it("does not install the server package: it comes from the base image", () => {
