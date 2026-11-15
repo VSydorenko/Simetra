@@ -46,7 +46,11 @@ specs. Claude Code specifics live in `CLAUDE.md`.
    is not acceptable.
 3. **BRD** (`docs/BRD.md`) — vision and domain model: **what** and **for whom**.
    No technical mechanisms there; it points to the spec.
-4. **ROADMAP** (`docs/ROADMAP.md`) — the one place for status of milestones.
+4. **ROADMAP** (`docs/ROADMAP.md`) — the milestones: each one's result, the
+   criterion of what can be shown when it closes, the order and a link to its
+   GitHub milestone. Status lives only in GitHub — milestones, issues and
+   sub-issues, with parts of the system as labels (skill `agent-kit:track`);
+   no document carries status.
 5. `docs/research/` — background for past decisions, not rules. The index and
    the rules for adding new research are in `docs/research/README.md`.
 
@@ -323,7 +327,7 @@ bodies still follow the rules.
 3. **One fact — one doc.** Everything else links to it; duplicates diverge.
 4. **Docs describe state; git holds history.** No phase narrative, PR numbers
    or "updated on" footers. A past incident stays only as a rule for the
-   future. ROADMAP is the one place for status.
+   future. Status lives only in GitHub; the ROADMAP lists milestones without it.
 5. **Anchors without line numbers or SHAs.** Point to a file, not
    `file.ts:171`. A code example only when the rule is unclear without it — a
    short shape with placeholders plus `Reference: <path>`. After writing an
@@ -364,7 +368,8 @@ harness-specific file (`CLAUDE.md` for Claude Code).
 - **Platform spec** and sub-specs — `docs/superpowers/specs/`. Read the section
   relevant to your task, not everything.
 - **Plans** — alongside specs under `docs/superpowers/`.
-- **BRD** and **ROADMAP** — `docs/`.
+- **BRD** and **ROADMAP** — `docs/`; the glossary — `docs/GLOSSARY.md`; ADRs —
+  `docs/adr/`; current status — `track status` (GitHub).
 - **Review criteria** per lens — `.agents/review-criteria.md`.
 - **Skills** — `.agents/skills/<name>/SKILL.md`. Load the matching one **before**
   implementing, not after.
