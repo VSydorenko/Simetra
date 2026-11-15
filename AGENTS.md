@@ -67,7 +67,9 @@ specs), records the decision with its spec impact, and reports it to the
 owner afterwards in plain words; technical questions are not passed on to
 the owner. Executors, plan authors and reviewers send forks and deviations
 to the architect instead of the owner; they never approve their own
-deviations. Always the owner's: commit and push requests, external actions
+deviations. Always the owner's: commits and pushes outside the process (block
+branches are pushed through `pr-gate` when the architect's brief says so;
+never force, never `main`), external actions
 (upstream issues, anything published), dropping stack objects other sessions
 created, edits to `AGENTS.md` and `CLAUDE.md`, milestone boundaries and the
 tier table, and product choices — what to build and for whom.
@@ -285,7 +287,10 @@ pnpm db:pg:stop
   commits or PRs — they are authored by the owner. The one exception is the
   author's own DCO `Signed-off-by`, added by `git commit -s` under the author's
   git identity; an agent never adds it on its own or signs off for the owner.
-- Commit or push **only when the owner asks**.
+- Commit only for a plan task, a block close, or when the owner asks. Push a
+  block branch only through `pr-gate open --draft` when the architect's brief
+  says so; never force, never `main` or the base. The architect merges with
+  `pr-gate land` after green CI.
 - A fix branch in the middle of a session starts from the **current** working
   branch, not from `main` — the working branch may hold unpushed commits.
 - Don't rewrite history (rebase, amend, reset, force-push) on a shared branch

@@ -57,10 +57,14 @@
   exception is the author's own DCO `Signed-off-by`, added by `git commit -s`
   under the author's git identity; an agent never adds it on its own or signs
   off for the owner.
-- **Commit or push only when the owner explicitly asks.** The owner handing a
-  plan to `agent-kit:execute`, or asking to close a merged block
-  (`agent-kit:close-block`), counts as the request to commit that work; push
-  and PRs still need an explicit ask, and go through `pr-gate`.
+- **Commits and pushes follow the process.** The owner handing a plan to
+  `agent-kit:execute`, or asking to close a merged block
+  (`agent-kit:close-block`), counts as the request to commit that work. A block
+  branch is pushed by its session through `pr-gate open --draft` when the
+  architect's brief says so (its `Push:` line), with a draft PR from the first
+  push; the owner is not asked. Never force-push, never push `main` or the
+  base. The architect merges with `pr-gate land` after green CI. Any other push
+  or PR needs an explicit owner ask.
   Fix branches start from the current working branch, not `main` (`AGENTS.md`).
 - **A discussion (`agent-kit:discuss`) asks only high-level,
   direction-setting questions** via `AskUserQuestion`; secondary details are
