@@ -57,5 +57,20 @@
       "Bash(pr-gate open:*)",
       "Bash(pr-gate ready:*)"
     ]
+  },
+  "skillOverrides": {
+    "ai-seo": "off",
+    "copywriting": "off",
+    "copy-editing": "off",
+    "cro": "off",
+    "seo-audit": "off",
+    "schema": "off",
+    "signup": "off",
+    "marketing-psychology": "off",
+    "product-marketing": "off",
+    "upstash-cli": "off",
+    "upstash-redis-js": "off",
+    "mastra": "off",
+    "tiptap": "off"
   }
 }
