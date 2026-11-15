@@ -46,7 +46,11 @@ specs. Claude Code specifics live in `CLAUDE.md`.
    is not acceptable.
 3. **BRD** (`docs/BRD.md`) — vision and domain model: **what** and **for whom**.
    No technical mechanisms there; it points to the spec.
-4. **ROADMAP** (`docs/ROADMAP.md`) — the one place for status of milestones.
+4. **ROADMAP** (`docs/ROADMAP.md`) — the milestones: each one's result, the
+   criterion of what can be shown when it closes, the order and a link to its
+   GitHub milestone. Status lives only in GitHub — milestones, issues and
+   sub-issues, with parts of the system as labels (skill `agent-kit:track`);
+   no document carries status.
 5. `docs/research/` — background for past decisions, not rules. The index and
    the rules for adding new research are in `docs/research/README.md`.
 
@@ -67,7 +71,9 @@ specs), records the decision with its spec impact, and reports it to the
 owner afterwards in plain words; technical questions are not passed on to
 the owner. Executors, plan authors and reviewers send forks and deviations
 to the architect instead of the owner; they never approve their own
-deviations. Always the owner's: commit and push requests, external actions
+deviations. Always the owner's: commits and pushes outside the process (block
+branches are pushed through `pr-gate` when the architect's brief says so;
+never force, never `main`), external actions
 (upstream issues, anything published), dropping stack objects other sessions
 created, edits to `AGENTS.md` and `CLAUDE.md`, milestone boundaries and the
 tier table, and product choices — what to build and for whom.
@@ -194,7 +200,7 @@ These hold for T0 and for every tier that reads metadata:
 With agent-kit, use its scripts; they read `.agents/kit.profile.json`: tests —
 `run-tests` (`unit` by default; the `db` level runs on the postgres stack and
 `db-supabase` on the Supabase stack; each waits for its stack's lock), PR — `pr-gate`, a spec or plan section —
-`doc section <file> §N`, Codex — `codex-audit`. The commands below are what
+`doc <file> §N`, Codex — `codex-audit`. The commands below are what
 they run, and the way to work without the kit.
 
 ```bash
@@ -204,7 +210,7 @@ pnpm --filter <pkg> test <pattern>        # vitest filter
 pnpm --filter <pkg> typecheck
 pnpm --filter <pkg> lint
 
-pnpm format:check && pnpm lint && pnpm typecheck && pnpm test   # before a PR
+pnpm format:check && pnpm lint && pnpm typecheck && pnpm test   # CI runs these on every push of the draft PR; locally only targeted run-tests … --changed
 pnpm format:fix                           # fixes what format:check reports
 
 doc anchors && doc lint                   # dead paths, § pointers, corpus form (agent-kit)
@@ -285,7 +291,10 @@ pnpm db:signals:stop
   commits or PRs — they are authored by the owner. The one exception is the
   author's own DCO `Signed-off-by`, added by `git commit -s` under the author's
   git identity; an agent never adds it on its own or signs off for the owner.
-- Commit or push **only when the owner asks**.
+- Commit only for a plan task, a block close, or when the owner asks. Push a
+  block branch only through `pr-gate open --draft` when the architect's brief
+  says so; never force, never `main` or the base. The architect merges with
+  `pr-gate land` after green CI.
 - A fix branch in the middle of a session starts from the **current** working
   branch, not from `main` — the working branch may hold unpushed commits.
 - Don't rewrite history (rebase, amend, reset, force-push) on a shared branch
@@ -318,7 +327,7 @@ bodies still follow the rules.
 3. **One fact — one doc.** Everything else links to it; duplicates diverge.
 4. **Docs describe state; git holds history.** No phase narrative, PR numbers
    or "updated on" footers. A past incident stays only as a rule for the
-   future. ROADMAP is the one place for status.
+   future. Status lives only in GitHub; the ROADMAP lists milestones without it.
 5. **Anchors without line numbers or SHAs.** Point to a file, not
    `file.ts:171`. A code example only when the rule is unclear without it — a
    short shape with placeholders plus `Reference: <path>`. After writing an
@@ -359,7 +368,8 @@ harness-specific file (`CLAUDE.md` for Claude Code).
 - **Platform spec** and sub-specs — `docs/superpowers/specs/`. Read the section
   relevant to your task, not everything.
 - **Plans** — alongside specs under `docs/superpowers/`.
-- **BRD** and **ROADMAP** — `docs/`.
+- **BRD** and **ROADMAP** — `docs/`; the glossary — `docs/GLOSSARY.md`; ADRs —
+  `docs/adr/`; current status — `track status` (GitHub).
 - **Review criteria** per lens — `.agents/review-criteria.md`.
 - **Skills** — `.agents/skills/<name>/SKILL.md`. Load the matching one **before**
   implementing, not after.

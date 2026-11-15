@@ -18,9 +18,10 @@ it.
 yet, and minor versions break.
 The platform is built according to the
 [platform design spec](docs/superpowers/specs/2026-09-24-simetra-platform-design.md);
-progress is tracked in the [roadmap](docs/ROADMAP.md).
+the milestones are in the [roadmap](docs/ROADMAP.md), their status in
+[GitHub milestones](https://github.com/VSydorenko/Simetra/milestones).
 
-What exists today: the metamodel and the compiler (milestone P2), rendering of
+What exists today: the metamodel and the compiler (subproject P2), rendering of
 the desired database state, a schema-engine port with a first adapter, and the
 developer toolset `@simetrajs/designer` — command line and MCP server over one
 catalog of tools. The rest of the platform (data runtime, screens, studio,
@@ -126,7 +127,8 @@ pnpm build:packages && pnpm test:packaging   # the packed tarballs in a scratch 
   in `docs/superpowers/specs/`.
 - [docs/architecture](docs/architecture/README.md) — a map of the repository as
   it is now: packages, the path from metadata to the database, the toolset.
-- [docs/ROADMAP.md](docs/ROADMAP.md) — milestones and their status.
+- [docs/ROADMAP.md](docs/ROADMAP.md) — milestones: what each delivers and when
+  it closes; status — [GitHub milestones](https://github.com/VSydorenko/Simetra/milestones).
 - [docs/research/README.md](docs/research/README.md) — the research behind
   past decisions: 1C metadata model, analogues, schema engine, tooling,
   licensing, stack.

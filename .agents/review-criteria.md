@@ -1,6 +1,6 @@
 # Simetra review criteria — per lens
 
-The project criteria file for the agent-kit `code-review` skill (profile field
+The project criteria file for the agent-kit `landed-review` skill (profile field
 `review.criteria`). The procedure — scale, lenses, verification, report — is
 the skill's; this file holds only what is specific to Simetra.
 

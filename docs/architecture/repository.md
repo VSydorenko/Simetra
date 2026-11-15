@@ -4,7 +4,7 @@
 
 Перелік — `pnpm -r ls --depth -1` або `packages/*/package.json`.
 
-### `simetra` — рантайм і ядро (`packages/simetra`)
+### `simetra` — флагманський пакет: ядро й рантайм команд (`packages/simetra`)
 
 Флагманський пакет, який застосунок споживача ставить як залежність. Код
 розкладено за ярусами, імпорт іде лише вниз (платформна спека §3.1):
@@ -20,7 +20,7 @@
 Межі ярусів і фреймворку тримає `packages/simetra/eslint.tier-zones.js` з
 негативним тестом `packages/simetra/test/tier-boundary.test.ts`. Там само
 правило: продакшн-вихідники `simetra` не імпортують `pg` і
-pg-delta — двигун схеми не входить у рантайм застосунку
+pg-delta — двигун схеми не входить у застосунок
 ([спека designer](../superpowers/specs/2026-10-02-simetra-designer-design.md),
 Д5).
 
