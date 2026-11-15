@@ -44,7 +44,9 @@ vi.mock("@supabase/pg-delta", async (importOriginal) => {
  * `provisionTemplateShadow`, яку `vi.mock` pg-delta не бачить. Обгортка
  * додає тег прогону, записує ім'я в той самий облік, а невдалий `DROP` її
  * прибирання — під іменем тіні; перед `DROP` прибирання чекає, доки бекенди
- * прогону підуть із тіні (`awaitRunBackends`); решта — без змін.
+ * прогону підуть із тіні (`awaitRunBackends`), а `DROP`, відхилений з
+ * `42501`, повторює до трьох разів і записує кожен повтор
+ * (`retryDropOnSuperuserBackend`); решта — без змін.
  */
 vi.mock(
   "../../schema-engine/pg-delta/template-shadow",
@@ -53,8 +55,12 @@ vi.mock(
       await importOriginal<
         typeof import("../../schema-engine/pg-delta/template-shadow")
       >()
-    const { awaitRunBackends, recordDropFailures, recordProvision } =
-      await import("./shadows")
+    const {
+      awaitRunBackends,
+      recordDropFailures,
+      recordProvision,
+      retryDropOnSuperuserBackend,
+    } = await import("./shadows")
     const { shadowSuffix } = await import("../../../../simetra/test/support")
     return {
       ...actual,
@@ -70,6 +76,7 @@ vi.mock(
               uniqueSuffix: opts?.uniqueSuffix ?? shadowSuffix(),
             })
             .then(awaitRunBackends)
+            .then((shadow) => retryDropOnSuperuserBackend(shadow))
             .then(recordDropFailures)
         ),
     }

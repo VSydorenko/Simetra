@@ -114,6 +114,55 @@ export function awaitRunBackends<
   }
 }
 
+/** Max retries of a template-shadow drop refused with `42501`. */
+const DROP_RETRIES = 3
+
+/** A repeated drop of a template shadow: its name and the retry number from 1. */
+export interface DropRetry {
+  shadow: string
+  attempt: number
+}
+
+const dropRetries: DropRetry[] = []
+
+/** Retries of shadow drops in this test file, in order. */
+export function shadowDropRetries(): readonly DropRetry[] {
+  return [...dropRetries]
+}
+
+/**
+ * Wraps the `cleanup` of a template shadow so that a drop refused with
+ * `42501` is repeated, at most `DROP_RETRIES` times, each retry recorded
+ * under the shadow's name. A backend of this run that is ending has already
+ * left `pg_stat_activity` (`awaitRunBackends` no longer sees it) but is
+ * still in the process array, where `DROP … WITH (FORCE)` by the owner may
+ * not end a superuser's backend. Any other failure, and `42501` after the
+ * last retry, is returned as is. Called only by the `provisionTemplateShadow`
+ * wrapper in `db-setup.ts`.
+ */
+export function retryDropOnSuperuserBackend<
+  T extends {
+    cleanup(): Promise<{ shadow: string; sqlstate?: string } | undefined>
+  },
+>(shadow: T, pauseMs = 100): T {
+  return {
+    ...shadow,
+    cleanup: async () => {
+      let failure = await shadow.cleanup()
+      for (
+        let attempt = 1;
+        attempt <= DROP_RETRIES && failure?.sqlstate === "42501";
+        attempt++
+      ) {
+        dropRetries.push({ shadow: failure.shadow, attempt })
+        await new Promise((resolve) => setTimeout(resolve, pauseMs))
+        failure = await shadow.cleanup()
+      }
+      return failure
+    },
+  }
+}
+
 /** Невдалі `DROP` тіней цього файлу: ім'я → SQLSTATE (або його відсутність). */
 const dropFailures = new Map<string, string>()
 
@@ -203,7 +252,12 @@ export async function expectNoLeftoverShadows(): Promise<void> {
   // без `DROP` (виняток до прибирання) або `DROP` іншого шляху змовчав
   const named = leftovers.map((name) => {
     const cause = dropFailures.get(name)
-    return cause === undefined ? name : `${name} (engine drop failed: ${cause})`
+    const retries = dropRetries.filter((r) => r.shadow === name).length
+    const notes = [
+      ...(cause === undefined ? [] : [`engine drop failed: ${cause}`]),
+      ...(retries === 0 ? [] : [`drop retried ${retries} time(s)`]),
+    ]
+    return notes.length === 0 ? name : `${name} (${notes.join("; ")})`
   })
   const message = `Shadow databases this test file left behind: ${named.join(", ")}`
   if (failures.length > 0)
