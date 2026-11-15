@@ -21,4 +21,5 @@
 temp/
 .agents/
 .claude/
+.claude/worktrees/
 .superpowers/
