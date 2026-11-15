@@ -104,5 +104,8 @@
       ".agents/skills/*/SKILL.md",
       "packages/*/README.md"
     ]
+  },
+  "kit": {
+    "version": "0.3.0"
   }
 }
