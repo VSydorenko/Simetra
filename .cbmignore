@@ -23,3 +23,5 @@ temp/
 .claude/
 .claude/worktrees/
 .superpowers/
+# agent-kit: task and scratch worktrees inside the repo
+.worktrees/

@@ -53,7 +53,9 @@
       "Bash(session-board:*)",
       "Bash(track status:*)",
       "Bash(kit-scan:*)",
-      "Bash(kit-check:*)"
+      "Bash(kit-check:*)",
+      "Bash(pr-gate open:*)",
+      "Bash(pr-gate ready:*)"
     ]
   }
 }

@@ -45,3 +45,6 @@ __pycache__/
 .agents/out/
 .agents/kit.profile.local.json
 .agents/sdd/
+# agent-kit
+.worktrees/
+.agents/private/
