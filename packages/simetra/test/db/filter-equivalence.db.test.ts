@@ -31,6 +31,7 @@ import {
 } from "../../src/data/store/filter"
 import { executeRead, prepareRead } from "../../src/server/read"
 import { withRollback } from "./connection"
+import { testProvider } from "./profile"
 
 /*
  * Еквівалентність обчислювача фільтра T4 будівнику T3 (спека П4-B інв. 16,
@@ -42,7 +43,7 @@ import { withRollback } from "./connection"
 const catalog = runtimeCatalogSchema.parse({
   format: 1,
   snapshotHash: "filter-equivalence",
-  provider: "supabase",
+  provider: testProvider(),
   objects: [filterObject],
 })
 const object = { kind: filterObject.kind, name: filterObject.name }

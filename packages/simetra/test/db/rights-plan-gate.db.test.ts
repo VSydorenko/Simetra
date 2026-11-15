@@ -4,7 +4,6 @@ import type pg from "pg"
 import {
   COMMAND_SETTING,
   PLATFORM_ROLES,
-  RIGHTS_MAINTENANCE_SETTING,
   SESSION_CLAIMS_SETTING,
 } from "simetra/model"
 import {
@@ -22,7 +21,13 @@ import {
 import { SNAPSHOT_TABLES } from "../../src/compiler/rights/actor-snapshot"
 import { RIGHTS_FUNCTIONS } from "../../src/compiler/rights/functions"
 import { signUp } from "./auth"
-import { asRole, queryAs } from "./connection"
+import {
+  asRole,
+  asStackSuperuser,
+  queryAs,
+  setLocalSetting,
+  claimsFor,
+} from "./connection"
 import {
   type PlanNode,
   functionScans,
@@ -35,8 +40,10 @@ import {
   deploy,
   describeTransaction,
   globalDeltaRow,
+  inMaintenance,
   insert,
   orgDeltaRow,
+  profileLayer,
 } from "./rights-seed"
 
 /**
@@ -276,65 +283,61 @@ async function seed(client: pg.Client): Promise<Gate> {
      SELECT gen_random_uuid(), o.id, $1 FROM public.organization o WHERE o.id <> $2 ORDER BY o.id LIMIT $3`,
     [full, org, FULL_ACCESS_SCOPES]
   )
-  await client.query("SELECT set_config($1, 'on', true)", [
-    RIGHTS_MAINTENANCE_SETTING,
-  ])
-  await client.query(
-    `INSERT INTO public.org_role_assignments (id, org_id, subject, archetype, deletion_mark)
+  await inMaintenance(client, async () => {
+    await client.query(
+      `INSERT INTO public.org_role_assignments (id, org_id, subject, archetype, deletion_mark)
      SELECT gen_random_uuid(), m.org_id, m.id, $2, false FROM public.org_member m WHERE m.user_id = $1`,
-    [full, ORG_ADMIN_ID]
-  )
-  // Обсяг довідника прав: запрошені учасники без користувача, по
-  // призначенню на кожного, і кастомна роль з дельтою в кожному тенанті, крім
-  // тенанта гейта — його форма задана вище.
-  await client.query(
-    `INSERT INTO public.org_member (id, org_id)
+      [full, ORG_ADMIN_ID]
+    )
+    // Обсяг довідника прав: запрошені учасники без користувача, по
+    // призначенню на кожного, і кастомна роль з дельтою в кожному тенанті, крім
+    // тенанта гейта — його форма задана вище.
+    await client.query(
+      `INSERT INTO public.org_member (id, org_id)
      SELECT gen_random_uuid(), o.id FROM public.organization o CROSS JOIN generate_series(1, $2)
      WHERE o.id <> $1 ORDER BY o.id`,
-    [org, ASSIGNMENTS_PER_TENANT]
-  )
-  await client.query(
-    `INSERT INTO public.org_role_assignments (id, org_id, subject, archetype, deletion_mark)
+      [org, ASSIGNMENTS_PER_TENANT]
+    )
+    await client.query(
+      `INSERT INTO public.org_role_assignments (id, org_id, subject, archetype, deletion_mark)
      SELECT gen_random_uuid(), m.org_id, m.id, $2, false FROM public.org_member m
      WHERE m.user_id IS NULL AND m.org_id <> $1 ORDER BY m.org_id`,
-    [org, ORG_MEMBER_ROLE_ID]
-  )
-  await client.query(
-    `INSERT INTO public.org_roles (id, org_id, archetype)
+      [org, ORG_MEMBER_ROLE_ID]
+    )
+    await client.query(
+      `INSERT INTO public.org_roles (id, org_id, archetype)
      SELECT gen_random_uuid(), o.id, $2 FROM public.organization o WHERE o.id <> $1 ORDER BY o.id`,
-    [org, ORG_MEMBER_ROLE_ID]
-  )
-  await client.query(
-    `INSERT INTO public.org_roles_delta (id, org_id, parent_id, line_number, object, action, extent, effect)
+      [org, ORG_MEMBER_ROLE_ID]
+    )
+    await client.query(
+      `INSERT INTO public.org_roles_delta (id, org_id, parent_id, line_number, object, action, extent, effect)
      SELECT gen_random_uuid(), r.org_id, r.id, 1, $2, 'read', 'any', 'deny' FROM public.org_roles r
      WHERE r.org_id <> $1 ORDER BY r.org_id`,
-    [org, TASK]
-  )
-  // Глобальний довідник: користувачі без членства (лише ключ у
-  // «Користувачах») раніше за їхні призначення; дельта — з глобального домену
-  // архетипу, інакше COMMIT відмовить `delta-domain` (спека прав §7).
-  await client.query(
-    `INSERT INTO public.users (id) SELECT gen_random_uuid() FROM generate_series(1, $1)`,
-    [GLOBAL_ROLES]
-  )
-  await client.query(
-    `INSERT INTO public.global_roles (id, archetype) SELECT gen_random_uuid(), $2 FROM generate_series(1, $1)`,
-    [GLOBAL_ROLES, SUPPORT_ID]
-  )
-  await client.query(
-    `INSERT INTO public.global_roles_delta (id, parent_id, line_number, object, action, extent, effect)
+      [org, TASK]
+    )
+    // Глобальний довідник: користувачі без членства (лише ключ у
+    // «Користувачах») раніше за їхні призначення; дельта — з глобального домену
+    // архетипу, інакше COMMIT відмовить `delta-domain` (спека прав §7).
+    await client.query(
+      `INSERT INTO public.users (id) SELECT gen_random_uuid() FROM generate_series(1, $1)`,
+      [GLOBAL_ROLES]
+    )
+    await client.query(
+      `INSERT INTO public.global_roles (id, archetype) SELECT gen_random_uuid(), $2 FROM generate_series(1, $1)`,
+      [GLOBAL_ROLES, SUPPORT_ID]
+    )
+    await client.query(
+      `INSERT INTO public.global_roles_delta (id, parent_id, line_number, object, action, extent, effect)
      SELECT gen_random_uuid(), r.id, 1, 'announcement', 'create', 'any', 'allow' FROM public.global_roles r`
-  )
-  await client.query(
-    `INSERT INTO public.global_role_assignments (id, subject, custom_role, deletion_mark)
+    )
+    await client.query(
+      `INSERT INTO public.global_role_assignments (id, subject, custom_role, deletion_mark)
      SELECT gen_random_uuid(), u.id, r.id, false
      FROM (SELECT id, row_number() OVER (ORDER BY id) AS n FROM public.users x
            WHERE NOT EXISTS (SELECT 1 FROM public.org_member m WHERE m.user_id = x.id)) u
      JOIN (SELECT id, row_number() OVER (ORDER BY id) AS n FROM public.global_roles) r USING (n)`
-  )
-  await client.query("SELECT set_config($1, 'off', true)", [
-    RIGHTS_MAINTENANCE_SETTING,
-  ])
+    )
+  })
   // Власник `fullAccess` має й глобальну кастомну роль з обома гілками
   // дельт, `allow` і `deny`, обидві на `announcement`: `task` скоуплений і
   // поза глобальним доменом (спека прав §7). Тіла функцій прав від його імені
@@ -464,20 +467,47 @@ const CASES: [string, Form][] = [
   [HOURS, "count"],
 ]
 
+/**
+ * `auto_explain` до кінця транзакції чи точки збереження, з вкладеними
+ * операторами. Параметри `auto_explain.*` — рівня суперкористувача (на стеку
+ * Supabase їх відкриває supautils), тож їх ставить `asStackSuperuser`:
+ * `SET LOCAL` у його точці збереження діє й після неї. Стек без
+ * `auto_explain` у `shared_preload_libraries` (профіль `postgres`) прийняв би
+ * параметри як заглушки, і планів не було б, тож бібліотеку тоді вантажить у
+ * сесію той самий суперкористувач — до кінця з'єднання опису. LOAD
+ * auto_explain живе на з'єднанні опису до afterAll; без параметрів
+ * (log_min_duration = -1) він нічого не робить для пізніших кейсів.
+ */
+async function explainNested(client: pg.Client): Promise<void> {
+  await asStackSuperuser(client, async () => {
+    const { rows } = await client.query<{ loaded: boolean }>(
+      "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_settings WHERE name = 'auto_explain.log_min_duration') AS loaded"
+    )
+    if (!rows[0]!.loaded) await client.query("LOAD 'auto_explain'")
+    for (const setting of [
+      "auto_explain.log_min_duration = 0",
+      "auto_explain.log_nested_statements = on",
+      "auto_explain.log_analyze = on",
+      "auto_explain.log_format = 'json'",
+      "client_min_messages = log",
+    ])
+      await client.query(`SET LOCAL ${setting}`)
+  })
+}
+
 describe("rights plan gate", () => {
   const tx = describeTransaction()
   let gate: Gate
 
   beforeAll(async () => {
-    const result = await compileRights(policyDomain(adminRoles()))
+    const result = await compileRights(
+      policyDomain(adminRoles(), profileLayer())
+    )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
     await deploy(client, result.model!)
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PLATFORM_ROLES.command}`
-    )
-    await client.query(
-      `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
     )
     const started = Date.now()
     gate = await seed(client)
@@ -526,8 +556,8 @@ describe("rights plan gate", () => {
   const explain = async (user: string, sql: string): Promise<unknown> => {
     const result = await queryAs<{ "QUERY PLAN": unknown }>(
       tx.client(),
-      "authenticated",
-      { sub: user, role: "authenticated" },
+      "user",
+      claimsFor("user", user),
       `EXPLAIN (ANALYZE, FORMAT JSON) ${sql}`
     )
     if (!("rows" in result)) throw new Error(`EXPLAIN failed: ${result.code}`)
@@ -560,9 +590,10 @@ describe("rights plan gate", () => {
   /**
    * Плани операторів справжнього виклику `sql` від імені `user`, з
    * вкладеними: функція прав `SECURITY DEFINER` не інлайниться, тож зовнішній
-   * план показує лише `Function Scan`. Плани дає `auto_explain` (бібліотека в
-   * `shared_preload_libraries` стеку, параметри `auto_explain.*` дозволені
-   * ролі стеку через supautils): кожен оператор, і вкладений оператор тіла
+   * план показує лише `Function Scan`. Плани дає `auto_explain`: бібліотеку
+   * (`LOAD` — лише коли її немає в `shared_preload_libraries`) і параметри
+   * `auto_explain.*` ставить `explainNested` від суперкористувача стека;
+   * кожен оператор, і вкладений оператор тіла
    * функції теж, приходить повідомленням `LOG`. `user = null` — виклик від
    * власника (функції, які кличуть лише запобіжники). `before` — оператор
    * від власника з claims `user` і контекстом команди до підписки на
@@ -597,14 +628,16 @@ describe("rights plan gate", () => {
     await client.query("SAVEPOINT auto_explain")
     try {
       if (before !== undefined) {
-        await client.query("SELECT set_config($1, $2, true)", [
+        await setLocalSetting(
+          client,
           SESSION_CLAIMS_SETTING,
-          JSON.stringify({ sub: user, role: "authenticated" }),
-        ])
-        await client.query("SELECT set_config($1, $2, true)", [
+          JSON.stringify(claimsFor("user", user))
+        )
+        await setLocalSetting(
+          client,
           COMMAND_SETTING,
-          JSON.stringify(before.context),
-        ])
+          JSON.stringify(before.context)
+        )
         await client.query(before.sql)
         const { rows: taken } = await client.query<{
           fact: string
@@ -615,19 +648,8 @@ describe("rights plan gate", () => {
         headers = taken
       }
       client.on("notice", onNotice)
-      for (const setting of [
-        "auto_explain.log_min_duration = 0",
-        "auto_explain.log_nested_statements = on",
-        "auto_explain.log_analyze = on",
-        "auto_explain.log_format = 'json'",
-        "client_min_messages = log",
-      ])
-        await client.query(`SET LOCAL ${setting}`)
-      if (user !== null)
-        await asRole(client, "authenticated", {
-          sub: user,
-          role: "authenticated",
-        })
+      await explainNested(client)
+      if (user !== null) await asRole(client, "user", claimsFor("user", user))
       const { rows } = await client.query(sql, params)
       return { plans, rows, headers }
     } finally {
@@ -971,22 +993,13 @@ describe("rights plan gate", () => {
     }
     await client.query("SAVEPOINT commit_plans")
     try {
-      for (const setting of [
-        "auto_explain.log_min_duration = 0",
-        "auto_explain.log_nested_statements = on",
-        "auto_explain.log_analyze = on",
-        "auto_explain.log_format = 'json'",
-        "client_min_messages = log",
-      ])
-        await client.query(`SET LOCAL ${setting}`)
-      await client.query("SELECT set_config($1, $2, true)", [
+      await explainNested(client)
+      await setLocalSetting(
+        client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify({ sub: user, role: "authenticated" }),
-      ])
-      await client.query("SELECT set_config($1, $2, true)", [
-        COMMAND_SETTING,
-        JSON.stringify(context),
-      ])
+        JSON.stringify(claimsFor("user", user))
+      )
+      await setLocalSetting(client, COMMAND_SETTING, JSON.stringify(context))
       await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
       const { rowCount } = await client.query(sql)
       expect(rowCount, "the command changes one row").toBe(1)

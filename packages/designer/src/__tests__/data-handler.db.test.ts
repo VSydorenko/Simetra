@@ -15,19 +15,24 @@ import {
   type RuntimeCatalog,
   type SessionClaims,
 } from "simetra/model"
-import { desiredForApply } from "simetra/schema"
 import {
   createCommandRuntime,
   createDataHandler,
   fromPgPool,
   readRoleOf,
 } from "simetra/server"
-import { policyDomain, runtimeValuesLayer } from "../../../simetra/test/support"
+import {
+  claimsFor,
+  policyDomain,
+  profileLayer,
+  runtimeValuesLayer,
+  testProvider,
+} from "../../../simetra/test/support"
 import {
   heldResource,
-  inTarget,
   seedMarker,
   seedRuntimeActor,
+  withModelTarget,
   withRuntimeLogin,
 } from "./support/db"
 
@@ -40,7 +45,7 @@ import {
  */
 
 const GAUGE: MetadataRef = { kind: "Catalog", name: "Gauge" }
-const REQUEST_ROLE = readRoleOf("supabase")!
+const REQUEST_ROLE = readRoleOf(testProvider())!
 
 interface Env {
   catalog: RuntimeCatalog
@@ -53,11 +58,12 @@ interface Env {
 /** Тінь з бажаним станом застосування, засів і роль входу команд і запиту. */
 const heldEnv = () =>
   heldResource<Env>(async (use) => {
-    const result = await compile(policyDomain(runtimeValuesLayer()))
+    const result = await compile(
+      policyDomain(runtimeValuesLayer(), profileLayer())
+    )
     expect(result.diagnostics).toEqual([])
     const model: CompiledModel = result.model!
-    const desired = await desiredForApply(model)
-    await inTarget(desired.sql, desired.scope, async (url) => {
+    await withModelTarget(model, async (url) => {
       const owner = new pg.Client({ connectionString: url })
       await owner.connect()
       try {
@@ -74,7 +80,7 @@ const heldEnv = () =>
                 owner,
                 pool,
                 org: actor.org,
-                session: { sub: actor.user, role: REQUEST_ROLE },
+                session: { ...claimsFor("user", actor.user), sub: actor.user },
               })
             } finally {
               await pool.end()

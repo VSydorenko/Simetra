@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest"
 import type pg from "pg"
 import { compile, type CompiledModel } from "simetra/compiler"
-import type { PhysicalTable } from "simetra/model"
+import {
+  PROVIDER_IDENTITY_SOURCES,
+  quoteIdent,
+  type PhysicalTable,
+} from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import { readCatalog } from "../../../test/db/catalog"
 import { expectCatalogMatchesSnapshot } from "../../../test/db/compare"
 import { withRollback } from "../../../test/db/connection"
+import { testProvider } from "../../../test/db/profile"
 import {
   accumulationRegisters,
   customTables,
@@ -65,10 +70,10 @@ async function insertOrganization(client: pg.Client): Promise<string> {
   return rows[0]!.id
 }
 
-describe("deploy the desired state to Postgres", () => {
+describe("deploy the desired state to the stack database", () => {
   for (const [name, fixture] of FIXTURES) {
     it(name, async () => {
-      const model = await compiled(fixture())
+      const model = await compiled(fixture(testProvider()))
       await withRollback(async (client) => {
         const schemas = await deploy(client, model)
         const catalog = await readCatalog(client, schemas)
@@ -89,8 +94,22 @@ describe("deploy the desired state to Postgres", () => {
     })
   }
 
+  it("a foreign key to the identity table deploys without a test-local grant", async () => {
+    const model = await compiled(customTables(testProvider()))
+    const { schema, name } = PROVIDER_IDENTITY_SOURCES[testProvider()].table
+    await withRollback(async (client) => {
+      await deploy(client, model)
+      const { rows } = await client.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM pg_catalog.pg_constraint
+          WHERE contype = 'f' AND confrelid = $1::regclass`,
+        [`${quoteIdent(schema)}.${quoteIdent(name)}`]
+      )
+      expect(Number(rows[0]?.n)).toBeGreaterThan(0)
+    })
+  })
+
   it("the comparison notices a snapshot that differs from the catalog", async () => {
-    const model = await compiled(customTables())
+    const model = await compiled(customTables(testProvider()))
     await withRollback(async (client) => {
       const catalog = await readCatalog(client, await deploy(client, model))
       const audit = model.physical.tables.find((t) => t.name === "audit")!
@@ -150,7 +169,7 @@ describe("deploy the desired state to Postgres", () => {
   })
 
   it("the comparison notices enum values in another order", async () => {
-    const model = await compiled(enumerations())
+    const model = await compiled(enumerations(testProvider()))
     await withRollback(async (client) => {
       const catalog = await readCatalog(client, await deploy(client, model))
       expect(model.physical.enumTypes).not.toEqual([])
@@ -166,7 +185,7 @@ describe("deploy the desired state to Postgres", () => {
   })
 
   it("nulls not distinct rejects a second row with null dimension", async () => {
-    const model = await compiled(accumulationRegisters())
+    const model = await compiled(accumulationRegisters(testProvider()))
     await withRollback(async (client) => {
       await deploy(client, model)
       const org = await insertOrganization(client)
@@ -185,7 +204,7 @@ describe("deploy the desired state to Postgres", () => {
   })
 
   it("number_period is generated in the project time zone", async () => {
-    const model = await compiled(saleDocument())
+    const model = await compiled(saleDocument(testProvider()))
     await withRollback(async (client) => {
       await deploy(client, model)
       const org = await insertOrganization(client)
@@ -201,7 +220,7 @@ describe("deploy the desired state to Postgres", () => {
   })
 
   it("movement wrapper returns rows", async () => {
-    const model = await compiled(movementQuery())
+    const model = await compiled(movementQuery(testProvider()))
     await withRollback(async (client) => {
       await deploy(client, model)
       // Текст `timestamptz` залежить від поясу сесії — фіксуємо його.

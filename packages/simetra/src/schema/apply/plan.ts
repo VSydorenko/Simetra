@@ -17,6 +17,7 @@ import {
   type CatalogModel,
 } from "simetra/model"
 import {
+  copiesShadowFromTemplate,
   PROVIDER_EXPECTED_BLIND_FUNCTIONS,
   PROVIDER_INSTALLABLE_EXTENSIONS,
   PROVIDER_LOCKS,
@@ -559,7 +560,10 @@ export async function buildPlan(
   // Профіль `postgres` будує тіні з шаблону кластера цілі й окремого сервера
   // тіней не знає (Р9): відмова до платформних ролей і до будь-якого звернення
   // до бази
-  if (desired.scope.provider === "postgres" && o.shadowBase !== undefined)
+  if (
+    copiesShadowFromTemplate(desired.scope.provider) &&
+    o.shadowBase !== undefined
+  )
     return refused([applyDiagnostic("plan.shadow-base-unsupported", "error")])
   // Факти сервера й голова ledger — тією самою транзакцією READ ONLY, що й
   // стан: доказ копії репетиції (спека промоції §8) звіряє з ними базу
@@ -2074,7 +2078,8 @@ const ownersDiagnostic = (
  * Передперевірка власників межі на цілі — до будь-якого витягу. Двигун не
  * будує витягу цілі, де роль сесії не є членом ролі-власника об'єкта
  * (відмова «capability»), тож і план, і звірка (`diff`) питають це наперед і
- * відмовляють з порадою, а не падають. Межа — та, що читає двигун
+ * відмовляють з порадою, а не падають. Членство рахується з успадкуванням
+ * (`readOwners`): член без нього об'єкт не змінить і не зніме. Межа — та, що читає двигун
  * (`readOwners`). `owners` — повний перепис цілі для подальшого порівняння.
  */
 export async function checkOwnerMembership(
@@ -2093,7 +2098,7 @@ export async function checkOwnerMembership(
     .filter((owner) => !owner.member)
     .map(
       (owner) =>
-        `${owner.object} (owner ${owner.owner}, not a role ${owners.session} is a member of)`
+        `${owner.object} (owner ${owner.owner}, whose privileges ${owners.session} does not have)`
     )
   return strangers.length > 0
     ? { owners, refusal: ownersDiagnostic(code, strangers) }

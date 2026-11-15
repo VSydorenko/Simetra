@@ -10,8 +10,13 @@ import {
 } from "simetra/schema"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import { extractOnTransactionClient } from "../pg-delta/adapter"
-import { catalog, metaFiles, project } from "../../../../simetra/test/support"
-import { inTarget, query } from "../../__tests__/support/db"
+import {
+  catalog,
+  metaFiles,
+  project,
+  testProvider,
+} from "../../../../simetra/test/support"
+import { asSuperuser, inTarget, query } from "../../__tests__/support/db"
 
 /**
  * Витяг двигуна в транзакції застосування (спека промоції §7.2):
@@ -44,7 +49,10 @@ let desired: ApplyDesired
 beforeAll(async () => {
   const compiled = await compile(
     metaFiles({
-      "project.meta.json": project({ defaultSchema: "app" }),
+      "project.meta.json": project({
+        defaultSchema: "app",
+        database: { provider: testProvider() },
+      }),
       "catalogs/Party/Party.meta.json": catalog("Party"),
     })
   )
@@ -195,7 +203,9 @@ describe("ApplyTransaction.extract", () => {
           const [row] = await tx.query<{ pid: number }>(
             "SELECT pg_catalog.pg_backend_pid() AS pid"
           )
-          const killer = new pg.Client({ connectionString: url })
+          // Спостерігач і вбивця — суперкористувач: на стеку postgres тест входить
+          // роллю власника, яка не бачить стану й не обриває бекенд іншої сесії
+          const killer = new pg.Client({ connectionString: asSuperuser(url) })
           await killer.connect()
           try {
             const extracting = tx.extract(desired.scope)
@@ -280,6 +290,9 @@ const ENGINE_BATCH = [
   "SET LOCAL search_path TO 'pg_catalog'",
   "SELECT current_setting('server_version') AS version, current_setting('server_version_num')::int AS num",
 ]
+// Профіль Supabase має обробник (`pg_cron`), який читає ще й після витягу;
+// власний профіль postgres — `handlers: []`, тож читань на одне менше
+const AFTER_READS = testProvider() === "supabase" ? 7 : 6
 const TRACE: string[] = [
   // `resolveProfile` до витягу
   ...READ,
@@ -289,5 +302,5 @@ const TRACE: string[] = [
   `COMMIT → ${CLOSE}`,
   // Читання профілю двигуна й адаптера після витягу (роль, коментарі
   // розширень, волатильність, перепис)
-  ...Array.from({ length: 7 }, () => READ).flat(),
+  ...Array.from({ length: AFTER_READS }, () => READ).flat(),
 ]

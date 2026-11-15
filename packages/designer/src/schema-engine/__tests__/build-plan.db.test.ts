@@ -14,6 +14,7 @@ import {
   acceptDebt,
   attribute,
   customTable,
+  testProvider,
   uuid,
 } from "../../../../simetra/test/support"
 import { asSuperuser, query } from "../../__tests__/support/db"
@@ -27,12 +28,15 @@ import {
   errors,
   establish,
   inTarget,
+  ANON,
+  NOINHERIT_OWNER,
   OWNER,
   party,
   PARTY,
   plan,
   planned,
   readerWithoutPlpgsqlCheck,
+  SESSION_OWNER,
   stepMatching,
   STRANGER,
   targetScope,
@@ -79,12 +83,15 @@ describe.concurrent("buildPlan", () => {
     })
   })
 
-  it("carries the plpgsql_check mode of the target", async () => {
-    // Розширення на стеку доступне, а supautils дає ролі його поставити
+  it("carries the installed plpgsql_check mode of the target", async () => {
+    // Ціль стека postgres народжується з шаблону, де розширення вже стоїть;
+    // режим «transient» (поставити на час плану) профіль не має — перелік
+    // розширень, які роль застосування може поставити, порожній. Той самий
+    // кейс для Supabase — у `build-plan.supabase.db.test.ts`
     const model = await compiled({ [PARTY]: party() })
     await inTarget(EMPTY, async (url) => {
       const outcome = await plan(url, model)
-      expect(planned(outcome).plpgsqlCheck).toBe("transient")
+      expect(planned(outcome).plpgsqlCheck).toBe("installed")
       expect(codes(outcome)).not.toContain("plan.plpgsql-check-unavailable")
     })
   })
@@ -267,10 +274,10 @@ describe.concurrent("buildPlan", () => {
       // за нею, і `OWNER TO` на них Postgres відхиляє
       expect(mismatch?.params).toEqual({
         count: 1,
-        objects: `relation app.party (owner ${OWNER}, expected postgres)`,
+        objects: `relation app.party (owner ${OWNER}, expected ${SESSION_OWNER})`,
       })
       // Власника повернуто вручну — дрейфу більше немає
-      await query(url, "alter table app.party owner to postgres")
+      await query(url, `alter table app.party owner to ${SESSION_OWNER}`)
       expect((await plan(url, model)).status).toBe("unchanged")
     })
   })
@@ -292,7 +299,7 @@ describe.concurrent("buildPlan", () => {
             ?.params
         ).toEqual({
           count: 1,
-          objects: `relation app.party (owner ${OWNER}, expected postgres)`,
+          objects: `relation app.party (owner ${OWNER}, expected ${SESSION_OWNER})`,
         })
       }
     )
@@ -317,7 +324,31 @@ describe.concurrent("buildPlan", () => {
           ?.params
       ).toEqual({
         count: 1,
-        objects: `relation app.stray (owner ${STRANGER}, not a role postgres is a member of)`,
+        objects: `relation app.stray (owner ${STRANGER}, whose privileges ${SESSION_OWNER} does not have)`,
+      })
+    })
+  })
+
+  it("refuses to drop an object of a role the session is a member of without inheritance", async () => {
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, model)
+      // Членство без успадкування не дає прав власника: `DROP` упав би на
+      // застосуванні з «must be owner», тож план відмовляє наперед
+      await query(
+        asSuperuser(url),
+        `create table app.stray (id int);
+         alter table app.stray owner to ${NOINHERIT_OWNER};`
+      )
+      const outcome = await plan(url, model)
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.owner-mismatch"])
+      expect(
+        outcome.diagnostics.find((d) => d.code === "plan.owner-mismatch")
+          ?.params
+      ).toEqual({
+        count: 1,
+        objects: `relation app.stray (owner ${NOINHERIT_OWNER}, whose privileges ${SESSION_OWNER} does not have)`,
       })
     })
   })
@@ -544,7 +575,7 @@ describe.concurrent("buildPlan", () => {
       await query(
         url,
         `update simetra.marker set engine_version = 'other';
-         grant select on app.party to anon;`
+         grant select on app.party to ${ANON};`
       )
       const artifact = planned(await plan(url, model))
       expect(artifact.drift?.sections).toContain("acl")
@@ -692,7 +723,7 @@ describe.concurrent("buildPlan", () => {
             name: "Adopted",
             defaultSchema: "app",
             attributeCase: "camelCase",
-            databaseProvider: "supabase",
+            databaseProvider: testProvider(),
           },
           existing: new Map(),
           newId: () => randomUUID(),
@@ -718,8 +749,8 @@ describe.concurrent("buildPlan", () => {
     const model = await compiled({ [PARTY]: party() })
     await inTarget(
       `create schema app;
-       alter default privileges for role postgres in schema app
-         grant all on tables to postgres, anon;
+       alter default privileges for role ${SESSION_OWNER} in schema app
+         grant all on tables to ${SESSION_OWNER}, ${ANON};
        create table app.party (id uuid primary key);`,
       async (url) => {
         const outcome = await plan(url, model)

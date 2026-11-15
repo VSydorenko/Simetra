@@ -5,6 +5,7 @@ import {
   type EngineScope,
 } from "simetra/schema"
 import { createApplyDatabase } from ".."
+import { testProvider } from "../../../../simetra/test/support"
 import { inTarget } from "../../__tests__/support/db"
 
 /**
@@ -13,7 +14,7 @@ import { inTarget } from "../../__tests__/support/db"
  * іде за нею. Ціль кожного тесту — окрема база від `withDesiredShadow`.
  */
 
-const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+const scope: EngineScope = { schemas: ["app"], provider: testProvider() }
 const reader = createApplyDatabase({ readOnly: true })
 
 /**

@@ -9,7 +9,7 @@ import {
   project,
   uuid,
 } from "../../src/compiler/__tests__/helpers"
-import { testSuperuserUrl, withRollback } from "./connection"
+import { testSuperuserUrl, withRollback, restoreOwnerRole } from "./connection"
 
 /**
  * Тригери підписок на справжньому Postgres (спека промоції §9.3): подія
@@ -182,7 +182,7 @@ describe("event subscription triggers in Postgres", () => {
     await withRollback(async (client) => {
       await client.query(`SET LOCAL ROLE ${APP_ROLE}`)
       await deploy(client)
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
       const log = journal(client)
       const owner = await client.query<{ owner: string }>(
         "SELECT pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE oid = 'public.on_user()'::regprocedure"
@@ -193,7 +193,7 @@ describe("event subscription triggers in Postgres", () => {
         "INSERT INTO auth.users (id, email) VALUES (gen_random_uuid(), $1)",
         [`${uuid(7299)}@example.test`]
       )
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
       expect(log.entries()).toEqual(["user:INSERT"])
     }, testSuperuserUrl())
   })

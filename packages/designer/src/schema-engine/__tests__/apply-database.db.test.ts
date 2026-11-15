@@ -1,3 +1,4 @@
+import pg from "pg"
 import { describe, expect, it } from "vitest"
 import {
   ApplyConnectionLost,
@@ -5,7 +6,13 @@ import {
   type EngineScope,
 } from "simetra/schema"
 import { createApplyDatabase } from ".."
-import { inTarget, query } from "../../__tests__/support/db"
+import {
+  asSuperuser,
+  inTarget,
+  query,
+  waitForBackendExit,
+} from "../../__tests__/support/db"
+import { testProvider } from "../../../../simetra/test/support"
 
 /**
  * Порт виконання застосування. Ціль кожного тесту —
@@ -13,7 +20,7 @@ import { inTarget, query } from "../../__tests__/support/db"
  */
 
 const APP = "create schema app;"
-const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+const scope: EngineScope = { schemas: ["app"], provider: testProvider() }
 
 const tableExists = async (url: string): Promise<boolean> =>
   (await query(url, "select to_regclass('app.x') as t"))[0]?.["t"] !== null
@@ -163,7 +170,26 @@ describe("ApplyDatabase (pg)", () => {
           const pid = (
             await tx.query<{ pid: number }>("select pg_backend_pid() as pid")
           )[0]?.pid
-          await query(url, `select pg_terminate_backend(${String(pid)})`)
+          // Від суперкористувача: на стеку postgres тест входить роллю власника, а
+          // обрив бекенда іншої сесії дозволений лише її ролі чи суперкористувачу
+          await query(
+            asSuperuser(url),
+            `select pg_terminate_backend(${String(pid)})`
+          )
+          // `pg_terminate_backend` лише сигналить: бекенд виходить асинхронно.
+          // Доки він живий, `DROP DATABASE … WITH (FORCE)` тіні, яку двигун
+          // робить після тесту, може наштовхнутися на нього під навантаженням
+          // (збій прибирання двигун ковтає, тінь лишається сиротою). Тож
+          // чекаємо, поки бекенда справді нема
+          const observer = new pg.Client({
+            connectionString: asSuperuser(url),
+          })
+          await observer.connect()
+          try {
+            await waitForBackendExit(observer, pid!)
+          } finally {
+            await observer.end()
+          }
           await tx.query("select 1")
         })
         .catch((e: unknown) => e)

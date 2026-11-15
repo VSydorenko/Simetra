@@ -18,7 +18,7 @@ import {
   secondScopeKind,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
-import { queryAs } from "./connection"
+import { queryAs, claimsFor } from "./connection"
 import { planNodes, subPlans } from "./explain-plan"
 import {
   type Assignment,
@@ -30,6 +30,7 @@ import {
   outcome,
   set,
   deploy,
+  profileLayer,
 } from "./rights-seed"
 
 /**
@@ -51,12 +52,18 @@ const TASK = objects(["Document", "Task"])
  */
 async function policyModel(): Promise<CompiledModel> {
   const result = await compileRights(
-    policyDomain(secondScopeKind(), {
-      [ROLE_FILE("ProjectLead")]: { grants: [grant(TASK, ["read"], "any")] },
-      [ROLE_FILE("Support")]: {
-        grants: [grant(objects(["Document", "Announcement"]), ["read"], "any")],
+    policyDomain(
+      secondScopeKind(),
+      {
+        [ROLE_FILE("ProjectLead")]: { grants: [grant(TASK, ["read"], "any")] },
+        [ROLE_FILE("Support")]: {
+          grants: [
+            grant(objects(["Document", "Announcement"]), ["read"], "any"),
+          ],
+        },
       },
-    })
+      profileLayer()
+    )
   )
   expect(result.diagnostics).toEqual([])
   return result.model!
@@ -324,8 +331,8 @@ describe("policies", () => {
     return outcome(
       await queryAs<{ v: unknown }>(
         tx.client(),
-        "authenticated",
-        { sub, role: "authenticated" },
+        "user",
+        claimsFor("user", sub),
         sql
       )
     )
@@ -363,8 +370,8 @@ describe("policies", () => {
   ])("plan of %s evaluates rights once per query", async (table) => {
     const result = await queryAs<{ "QUERY PLAN": unknown }>(
       tx.client(),
-      "authenticated",
-      { sub: key("m1"), role: "authenticated" },
+      "user",
+      claimsFor("user", key("m1")),
       `EXPLAIN (FORMAT JSON) SELECT * FROM public.${table}`
     )
     if (!("rows" in result)) throw new Error(`EXPLAIN failed: ${result.code}`)

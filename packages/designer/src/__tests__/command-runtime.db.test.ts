@@ -16,7 +16,7 @@ import {
   type CommandRuntime,
   type CommandRuntimeOptions,
 } from "simetra/server"
-import { GAUGE_TABLE } from "../../../simetra/test/support"
+import { GAUGE_TABLE, setLocalSetting } from "../../../simetra/test/support"
 import { seedMarker } from "./support/db"
 
 import {
@@ -390,10 +390,11 @@ describe("command runtime over the engine target", () => {
     let filtered: string[]
     try {
       await client.query("BEGIN")
-      await client.query("SELECT set_config($1, $2, true)", [
+      await setLocalSetting(
+        client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify(env.me.session),
-      ])
+        JSON.stringify(env.me.session)
+      )
       await client.query(`SET LOCAL ROLE ${REQUEST_ROLE}`)
       const ids = async (condition: string) =>
         (

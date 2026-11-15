@@ -3,7 +3,11 @@ import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import { engineScope, renderDesiredState } from "simetra/schema"
-import { CHECKLIST_TABLE, policyDomain } from "../../../simetra/test/support"
+import {
+  CHECKLIST_TABLE,
+  policyDomain,
+  profileLayer,
+} from "../../../simetra/test/support"
 import { heldResource, inTarget } from "./support/db"
 
 /**
@@ -34,7 +38,7 @@ const errorCode = (pending: Promise<unknown>) =>
  */
 const heldTarget = () =>
   heldResource<string>(async (use) => {
-    const result = await compile(policyDomain())
+    const result = await compile(policyDomain(profileLayer()))
     expect(result.diagnostics).toEqual([])
     const model = result.model!
     await inTarget(

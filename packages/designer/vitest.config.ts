@@ -34,7 +34,6 @@ export default defineConfig({
             "**/node_modules/**",
             "**/dist/**",
             "**/*.supabase.db.test.ts",
-            "**/*.postgres.db.test.ts",
           ],
           // Усі тести б'ють в одну базу стеку
           fileParallelism: false,
@@ -43,9 +42,9 @@ export default defineConfig({
           // не швидші за 4, а більше одночасних тестів лише розтягує кожен
           // ближче до тайм-ауту
           maxConcurrency: 4,
-          // Стек один на машину: один прогін за раз і стек після прогону такий
-          // самий, як до нього
-          globalSetup: ["../simetra/test/db/stack-guard.supabase.ts"],
+          // Стек postgres один на машину: один прогін за раз і стек після
+          // прогону такий самий, як до нього
+          globalSetup: ["../simetra/test/db/stack-guard.postgres.ts"],
           // Тег прогону в іменах тіней двигуна й облік їхніх провізій
           setupFiles: ["./src/__tests__/support/db-setup.ts"],
           // Тінь двигуна — це створення й наповнення окремої бази: на раннері CI
@@ -58,8 +57,8 @@ export default defineConfig({
         extends: true,
         test: {
           // Кейси, яким потрібен саме стек Supabase (схеми `auth`, `storage`,
-          // `realtime`, ролі провайдера, пулер, пресет): лишаються на ньому й
-          // тоді, коли проєкт `db` перейде на стек postgres. Налаштування — ті
+          // `realtime`, ролі провайдера, пулер, пресет): лишаються на ньому, а
+          // проєкт `db` іде на стек postgres. Налаштування — ті
           // самі, що в `db`, і з тих самих причин
           name: "db-supabase",
           include: ["**/*.supabase.db.test.ts"],
@@ -67,21 +66,6 @@ export default defineConfig({
           fileParallelism: false,
           maxConcurrency: 4,
           globalSetup: ["../simetra/test/db/stack-guard.supabase.ts"],
-          setupFiles: ["./src/__tests__/support/db-setup.ts"],
-          testTimeout: 60_000,
-        },
-      },
-      {
-        extends: true,
-        test: {
-          // Тести, прив'язані до стека postgres. Налаштування — ті самі, що в
-          // `db`, і з тих самих причин; сторож — свій, бо стек інший
-          name: "db-pg",
-          include: ["**/*.postgres.db.test.ts"],
-          exclude: ["**/node_modules/**", "**/dist/**"],
-          fileParallelism: false,
-          maxConcurrency: 4,
-          globalSetup: ["../simetra/test/db/stack-guard.postgres.ts"],
           setupFiles: ["./src/__tests__/support/db-setup.ts"],
           testTimeout: 60_000,
         },

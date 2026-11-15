@@ -1,7 +1,6 @@
 import {
   ShadowProvisionError,
   withDatabaseName,
-  type CoLocatedShadow,
   type ProvisionCoLocatedShadowOptions,
 } from "@supabase/pg-delta"
 import pg from "pg"
@@ -10,6 +9,24 @@ import { ShadowTemplateMissingError } from "../errors"
 
 /** Префікс імені тіні двигуна: той самий, що в `provisionCoLocatedShadow`, — за ним прибиральник упізнає тіні. */
 const SHADOW_PREFIX = "pgdelta_shadow_"
+
+/** `DROP` тіні, що не вдався: ім'я тіні й SQLSTATE, коли сервер його дав. */
+export interface ShadowDropFailure {
+  shadow: string
+  sqlstate?: string
+}
+
+/**
+ * A provisioned shadow. Unlike pg-delta's `CoLocatedShadow`, `cleanup`
+ * reports a failed drop instead of swallowing it; it still never throws.
+ */
+export interface ProvisionedShadow {
+  url: string
+  name: string
+  cleanup(): Promise<ShadowDropFailure | undefined>
+}
+
+const SQLSTATE = /^[0-9A-Z]{5}$/
 
 function pool(url: string): pg.Pool {
   const p = new pg.Pool({ connectionString: url, max: 2 })
@@ -21,7 +38,7 @@ function pool(url: string): pg.Pool {
 /**
  * Creates a throwaway shadow database on the cluster of `baseUrl` as a copy of
  * the sealed template database `template`, and returns its URL plus a cleanup
- * that drops it. Throws `ShadowProvisionError` when the connecting role lacks
+ * that drops it and returns the failure when the drop fails. Throws `ShadowProvisionError` when the connecting role lacks
  * CREATEDB and `ShadowTemplateMissingError` when the template is absent or not
  * sealed by a superuser.
  */
@@ -29,7 +46,7 @@ export async function provisionTemplateShadow(
   baseUrl: string,
   template: string,
   opts: ProvisionCoLocatedShadowOptions = {}
-): Promise<CoLocatedShadow> {
+): Promise<ProvisionedShadow> {
   const suffix =
     opts.uniqueSuffix ??
     `${Date.now().toString(36)}_${Math.floor(Math.random() * 1e9).toString(36)}`
@@ -65,14 +82,21 @@ export async function provisionTemplateShadow(
     url: withDatabaseName(baseUrl, name),
     name,
     cleanup: async () => {
-      if (opts.keep === true) return
+      if (opts.keep === true) return undefined
       const m = pool(baseUrl)
       try {
         await m.query(
           `DROP DATABASE IF EXISTS ${quoteIdent(name)} WITH (FORCE)`
         )
-      } catch {
-        // Прибирання не маскує результат викликача
+        return undefined
+      } catch (error) {
+        // Прибирання не маскує результат викликача, але й не мовчить:
+        // прибиральника тіней немає, тож тінь, яку не вдалося видалити,
+        // лишилась би на кластері непоміченою
+        const code = (error as { code?: unknown }).code
+        return typeof code === "string" && SQLSTATE.test(code)
+          ? { shadow: name, sqlstate: code }
+          : { shadow: name }
       } finally {
         await m.end()
       }

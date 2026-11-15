@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   type Exec,
   type Fetch,
+  nodeExec,
   removeRunResources,
   runBuckets,
   runContainers,
@@ -189,6 +190,16 @@ describe("lister failure fails the run", () => {
   it("throws when docker fails", async () => {
     const exec: Exec = () => Promise.reject(new Error("docker: not found"))
     await expect(runContainers("postgres", exec)).rejects.toThrow(/docker/)
+  })
+
+  // Завислий демон docker: справжній процес, що не виходить, — межу тримає
+  // `nodeExec`, а не тест
+  it("throws before the deadline when docker exec hangs", async () => {
+    const hung: Exec = (_file, _args, opts) =>
+      nodeExec(process.execPath, ["-e", "setInterval(() => {}, 1000)"], opts)
+    const started = Date.now()
+    await expect(runContainers("postgres", hung, 300)).rejects.toThrow()
+    expect(Date.now() - started).toBeLessThan(2_000)
   })
 
   it("throws when the Garage admin API answers 500", async () => {

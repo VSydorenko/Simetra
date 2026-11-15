@@ -122,6 +122,20 @@ describe.concurrent("buildPlan", () => {
       ])
     })
 
+    it("refuses through TRUNCATE granted to the service role", async () => {
+      // Сервісної ролі профіль postgres не має (Р5): той самий гейт шляху
+      // запису для ролі користувача — кейс «refuses through TRUNCATE»
+      // у `build-plan-promotion.db.test.ts`
+      const outcome = await planPromotion(await promoted(), {
+        drift: `GRANT TRUNCATE ON ${OLD} TO service_role`,
+      })
+      expect(outcome.status).toBe("refused")
+      expect(errors(outcome)).toEqual(["plan.write-path"])
+      expect(params(outcome, "plan.write-path")[0]?.detail).toContain(
+        "grant TRUNCATE to service_role on app.counterparties"
+      )
+    })
+
     describe("service role (promotion spec §8)", () => {
       // Вид сервісній ролі нічого не дає: її доступ промоція забирає й
       // показує окремо. Права запису зупиняє раніше гейт шляху запису

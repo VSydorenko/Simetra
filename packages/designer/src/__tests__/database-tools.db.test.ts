@@ -1,23 +1,15 @@
 import { existsSync } from "node:fs"
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  symlink,
-  writeFile,
-} from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { dirname, join, resolve } from "node:path"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { dirname, join } from "node:path"
 import { Client } from "@modelcontextprotocol/client"
 import { InMemoryTransport } from "@modelcontextprotocol/server"
 import pg from "pg"
 import { compile, type CompiledModel } from "simetra/compiler"
+import { PROVIDER_IDENTITY_SOURCES, PROVIDER_OWNER_ROLES } from "simetra/model"
 import {
   desiredForApply,
   renderApplyState,
   renderDesiredState,
-  type EngineScope,
 } from "simetra/schema"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { runTool, type CliArgs } from "../cli/command"
@@ -29,21 +21,32 @@ import { readOnlyTransactionPool } from "../schema-engine/read-only"
 import type { DiffData } from "../tools/database-tools"
 import { toolByName } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
-import type { InvokeOptions, ToolResult } from "../tools/types"
 import {
   catalog,
   metaFiles,
   project as projectFile,
   testDatabaseUrl,
+  testProvider,
   testRoleName,
   testSuperuserUrl,
+  loginUrl,
+  withSessionOptions,
 } from "../../../simetra/test/support"
+import { asSuperuser, dropRoles, query } from "./support/db"
 import {
-  asSuperuser,
-  dropRoles,
-  inTarget as loadTarget,
-  query,
-} from "./support/db"
+  call,
+  ENV,
+  errors,
+  freshProject,
+  inTarget,
+  introspected,
+  introspectInput,
+  onCleanup,
+  options,
+  scopeOf,
+  SHOP,
+  useDatabaseToolsCleanup,
+} from "./database-tools.support"
 import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
 
 /**
@@ -54,67 +57,15 @@ import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
 
 const engine = createPgDeltaEngine()
 const stack = { url: testDatabaseUrl() }
-const SIMETRA = resolve(__dirname, "../../../simetra")
-const ENV = "SIMETRA_DATABASE_URL"
 
 useTmpProjects()
 
-const disposers: (() => Promise<void>)[] = []
+useDatabaseToolsCleanup()
+
 const clients: Client[] = []
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((c) => c.close()))
-  await Promise.all(disposers.splice(0).map((d) => d()))
 })
-
-/** Корінь проєкту з `node_modules/simetra`; тека метаданих ще не існує. */
-async function freshProject(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "simetra-db-tools-"))
-  await mkdir(join(root, "node_modules"))
-  await symlink(SIMETRA, join(root, "node_modules", "simetra"), "dir")
-  disposers.push(() => rm(root, { recursive: true }))
-  return join(root, "metadata")
-}
-
-const scopeOf = (schemas: string[]): EngineScope => ({
-  schemas,
-  provider: "supabase",
-})
-
-/**
- * Розгортає `sql` у тимчасову базу поруч зі стеком; її прибирає порт.
- * Спільний `inTarget`, де межу задає перелік схем.
- */
-const inTarget = (
-  sql: string,
-  schemas: string[],
-  fn: (url: string) => Promise<void>
-): Promise<void> => loadTarget(sql, scopeOf(schemas), fn)
-
-const options = (
-  dir: string,
-  env: NodeJS.ProcessEnv,
-  shadow?: string
-): InvokeOptions => ({
-  dir,
-  readOnly: false,
-  allowDatabaseWrite: false,
-  dryRun: false,
-  confirmed: false,
-  channel: "cli",
-  database: databaseResource(env, {
-    url: ENV,
-    ...(shadow === undefined ? {} : { shadow }),
-  }),
-})
-
-const call = (
-  name: "introspect" | "diff",
-  input: unknown,
-  o: InvokeOptions
-): Promise<ToolResult> => invoke(toolByName(name)!, input, o)
-
-const errors = (r: ToolResult) =>
-  r.diagnostics.filter((d) => d.severity === "error")
 
 async function connectMcp(
   dir: string,
@@ -136,38 +87,6 @@ async function connectMcp(
 
 /** Роль поза членством ролі сесії: її об'єкт двигун не прочитає. */
 const STRANGER = testRoleName("db_tools_stranger")
-
-const SHOP = `
-  CREATE SCHEMA app;
-  CREATE TYPE app.order_status AS ENUM ('new', 'paid');
-  CREATE TABLE app.customer (id uuid PRIMARY KEY, name text NOT NULL);
-  CREATE TABLE app.orders (
-    id uuid PRIMARY KEY,
-    customer_id uuid NOT NULL REFERENCES app.customer (id),
-    status app.order_status NOT NULL,
-    total numeric(12, 2)
-  );
-  CREATE INDEX orders_customer_idx ON app.orders (customer_id);
-`
-
-const introspectInput = {
-  schemas: ["app"],
-  project: { name: "Shop", attributeCase: "snake_case" },
-}
-
-/** Ціль SHOP і тека, вже прочитана з неї. */
-async function introspected(
-  fn: (dir: string, env: NodeJS.ProcessEnv, url: string) => Promise<void>
-): Promise<void> {
-  await inTarget(SHOP, ["app"], async (url) => {
-    const dir = await freshProject()
-    const env = { [ENV]: url }
-    const r = await call("introspect", introspectInput, options(dir, env))
-    expect(errors(r)).toEqual([])
-    expect(r.written).toBe(true)
-    await fn(dir, env, url)
-  })
-}
 
 describe("introspect", () => {
   it("introspect writes metadata that compiles", async () => {
@@ -316,7 +235,7 @@ describe("diff", () => {
     await introspected(async (dir, env, url) => {
       await query(testSuperuserUrl(), `CREATE ROLE ${STRANGER} NOLOGIN;`)
       // Роль кластерна: знімається після бази цілі, яку прибирає порт
-      disposers.push(() => dropRoles(STRANGER))
+      onCleanup(() => dropRoles(STRANGER))
       await query(
         asSuperuser(url),
         `CREATE TABLE app.stray (id int);
@@ -332,7 +251,7 @@ describe("diff", () => {
       expect(r.exitCode).toBe(1)
       expect(r.stdout).toContain("engine.owner-not-member")
       expect(r.stdout).toContain(
-        `relation app.stray (owner ${STRANGER}, not a role postgres is a member of)`
+        `relation app.stray (owner ${STRANGER}, whose privileges ${PROVIDER_OWNER_ROLES[testProvider()]} does not have)`
       )
       expect(r.stdout).toContain("ALTER … OWNER TO <role>")
       expect(`${r.stdout}${r.stderr}`).not.toMatch(/\n\s+at /)
@@ -463,7 +382,9 @@ const diffData = async (
 async function usersProject(): Promise<{ dir: string; model: CompiledModel }> {
   const dir = await freshProject()
   const files = metaFiles({
-    "project.meta.json": projectFile(),
+    "project.meta.json": projectFile({
+      database: { provider: testProvider() },
+    }),
     "catalogs/Users/Users.meta.json": catalog("Users", {
       role: "users",
       scope: "none",
@@ -647,31 +568,12 @@ describe("sessions", () => {
         ).toBe(true)
     })
   })
-
-  it("a shadow on another server of the same major version is accepted", async () => {
-    // Другий сервер тієї самої версії локально — той самий стек під іншою
-    // змінною: шлях `--shadow-url-env` проходить повністю
-    await introspected(async (dir, env) => {
-      const r = await call(
-        "diff",
-        {},
-        options(dir, { ...env, SHADOW_URL: stack.url }, "SHADOW_URL")
-      )
-      expect(errors(r)).toEqual([])
-      expect((r.data as DiffData).empty).toBe(true)
-    })
-  })
 })
 
 describe("credentials never leak", () => {
   const USER = "leaky_user_q7x"
   const PASSWORD = "Wr0ng-pa55-Kx81"
-  const badPassword = (() => {
-    const u = new URL(stack.url)
-    u.username = USER
-    u.password = PASSWORD
-    return u.toString()
-  })()
+  const badPassword = loginUrl(stack.url, USER, PASSWORD)
   const unreachable = `postgresql://${USER}:${PASSWORD}@127.0.0.1:1/app_db`
   const secrets = [USER, PASSWORD, badPassword, unreachable]
   const leaks = (text: string) => secrets.filter((s) => text.includes(s))
@@ -802,7 +704,7 @@ describe("pools", () => {
       // Відмова до бази: схема провайдера не читається
       const failed = await call(
         "introspect",
-        { schemas: ["auth"] },
+        { schemas: [PROVIDER_IDENTITY_SOURCES[testProvider()].table.schema] },
         options(dir, env)
       )
       expect(failed.refusal).toBeDefined()
@@ -823,10 +725,11 @@ describe("pools", () => {
       expect(await settled(url)).toBe(0)
       // Підключення вдається, а запити двигуна падають за таймаутом
       // (57014): збій роботи з базою, а не відмова підключення
-      const slow = new URL(url)
-      slow.searchParams.set("options", "-c statement_timeout=1")
+      // Дописати до `options`, а не перезаписати: стартова роль адреси
+      // лишається, і рушій з CLI не йдуть суперкористувачем
+      const slow = withSessionOptions(url, "-c statement_timeout=1")
       for (const tool of ["introspect", "diff"] as const) {
-        const r = await call(tool, {}, options(dir, { [ENV]: slow.toString() }))
+        const r = await call(tool, {}, options(dir, { [ENV]: slow }))
         expect(r.refusal, tool).toBeUndefined()
         expect(r.ok, tool).toBe(false)
         expect(

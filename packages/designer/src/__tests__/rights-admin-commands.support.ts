@@ -45,18 +45,21 @@ import {
   TICKET_WRITER_ID,
   acceptDebt,
   adminRoles,
+  claimsFor,
   commandCoreLayer,
   memberCreator,
   policyDomain,
+  profileLayer,
   rightsAdminReadingMembers,
   signUp,
+  testProvider,
 } from "../../../simetra/test/support"
 import {
   heldResource,
-  inTarget,
   recordingDatabase,
   seedUnderMaintenance,
   poolerPoolOf,
+  withIdentityTarget,
   withRuntimeLogin,
   type RecordedStatement,
 } from "./support/db"
@@ -69,7 +72,7 @@ import {
 
 export const SIMETRA = resolve(__dirname, "../../../simetra")
 export const ENV = "SIMETRA_DATABASE_URL"
-export const REQUEST_ROLE = readRoleOf("supabase")!
+export const REQUEST_ROLE = readRoleOf(testProvider())!
 
 export const ROLES: MetadataRef = { kind: "Catalog", name: "OrgRoles" }
 export const ASSIGNMENTS: MetadataRef = {
@@ -109,8 +112,8 @@ export interface Org {
 }
 
 export const sessionOf = (user: string): SessionClaims => ({
+  ...claimsFor("user", user),
   sub: user,
-  role: REQUEST_ROLE,
 })
 
 /** Корінь проєкту з `node_modules/simetra` і текою метаданих моделі файлу. */
@@ -124,7 +127,8 @@ export async function writeProject(): Promise<string> {
       adminRoles(),
       commandCoreLayer(),
       rightsAdminReadingMembers(),
-      memberCreator()
+      memberCreator(),
+      profileLayer()
     )
   )
   for (const [path, content] of files) {
@@ -211,7 +215,7 @@ export async function addPeople(
 
 /**
  * Ціль, розгорнута `plan` + `apply`, і її власник; тримається, доки `close`
- * не відпустить колбек `inTarget`.
+ * не відпустить колбек цілі (`withIdentityTarget`).
  */
 export const heldEnv = () =>
   heldResource<Env>(async (use) => {
@@ -220,26 +224,22 @@ export const heldEnv = () =>
       const compiled = await compile(await readMetadataDir(dir))
       expect(compiled.diagnostics).toEqual([])
       const model = compiled.model!
-      await inTarget(
-        "select 1;",
-        { schemas: ["public"], provider: "supabase" },
-        async (url) => {
-          await deploy(dir, url)
-          const owner = new pg.Client({ connectionString: url })
-          await owner.connect()
-          try {
-            await use({
-              dir,
-              url,
-              model,
-              catalog: buildRuntimeCatalog(model),
-              owner,
-            })
-          } finally {
-            await owner.end()
-          }
+      await withIdentityTarget(async (url) => {
+        await deploy(dir, url)
+        const owner = new pg.Client({ connectionString: url })
+        await owner.connect()
+        try {
+          await use({
+            dir,
+            url,
+            model,
+            catalog: buildRuntimeCatalog(model),
+            owner,
+          })
+        } finally {
+          await owner.end()
         }
-      )
+      })
     } finally {
       await rm(dirname(dir), { recursive: true, force: true })
     }
@@ -258,8 +258,11 @@ export const heldLogin = (url: () => string, viaPooler = false) =>
       [PLATFORM_ROLES.command, REQUEST_ROLE],
       async (login) => {
         const direct = new pg.Pool({ connectionString: login })
-        const pooled = poolerPoolOf(login, viaPooler)
+        let pooled: pg.Pool | null = null
         try {
+          // Пул пулера — у `try`: якщо він кине, прямий пул однаково
+          // закриється
+          pooled = poolerPoolOf(login, viaPooler)
           await use({ direct, pooled })
         } finally {
           await direct.end()

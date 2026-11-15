@@ -8,7 +8,6 @@ import {
 } from "simetra/compiler"
 import {
   PLATFORM_ROLES,
-  PROVIDER_API_ROLES,
   catalogIndex,
   readPartToWire,
   type KnownVersions,
@@ -18,7 +17,6 @@ import {
   type RuntimeCatalog,
   type SessionClaims,
 } from "simetra/model"
-import { desiredForApply } from "simetra/schema"
 import {
   createCommandRuntime,
   createDataHandler,
@@ -31,30 +29,36 @@ import {
   GAUGE_TABLE,
   GAUGE_WRITER_ID,
   ORG_ADMIN_ID,
+  claimsFor,
   policyDomain,
+  profileLayer,
   readQueryLayer,
+  testProvider,
+  testRoleFor,
 } from "../../../simetra/test/support"
 import {
   beforeStatement,
   committed,
   heldResource,
-  inTarget,
   seedMarker,
   seedRuntimeActor,
+  withModelTarget,
   withRuntimeLogin,
 } from "./support/db"
 
 /**
- * Пакет читань з `known` (спека П4-B §4.1–§4.2) над тінню рушія. Видимість
- * рядків (RLS), знімок `REPEATABLE READ`, епоху бази й триггер копій носіїв
- * виконує Postgres — порт-фейк unit-тестів T3 цього не доводить. Читання — під
- * справжньою роллю входу, як і в `read-query.db.test.ts`.
+ * Пакет читань з `known` (спека П4-B §4.1–§4.2) над ціллю з моделлю
+ * (`withModelTarget`). Видимість рядків (RLS), знімок `REPEATABLE READ`,
+ * епоху бази й триггер копій носіїв виконує Postgres — порт-фейк unit-тестів
+ * T3 цього не доводить. Читання — під справжньою роллю входу, як і в
+ * `read-query.db.test.ts`.
  */
 
 const GAUGE: MetadataRef = { kind: "Catalog", name: "Gauge" }
 const COMMENT: MetadataRef = { kind: "Catalog", name: "TaskComment" }
-const REQUEST_ROLE = readRoleOf("supabase")!
-const ANONYMOUS_ROLE = PROVIDER_API_ROLES.supabase.anonymous
+const REQUEST_ROLE = readRoleOf(testProvider())!
+// Анонімна роль є в кожному профілі, що його бере прогін
+const ANONYMOUS_ROLE = testRoleFor("anonymous")!
 const HEX64 = /^[0-9a-f]{64}$/
 // Інша епоха: 64 hex, якої база не видає.
 const OTHER_EPOCH = "b".repeat(64)
@@ -69,7 +73,6 @@ interface Env {
   owner: pg.Client
   pool: pg.Pool
   login: string
-  anonymous: boolean
   me: Actor
   other: Actor
   /** Читач усього скоупу (адміністратор організації): бачить коментарі. */
@@ -78,39 +81,29 @@ interface Env {
 
 const heldEnv = () =>
   heldResource<Env>(async (use) => {
-    const result = await compile(policyDomain(readQueryLayer()))
+    const result = await compile(policyDomain(readQueryLayer(), profileLayer()))
     expect(result.diagnostics).toEqual([])
     const model: CompiledModel = result.model!
-    const desired = await desiredForApply(model)
-    await inTarget(desired.sql, desired.scope, async (url) => {
+    await withModelTarget(model, async (url) => {
       const owner = new pg.Client({ connectionString: url })
       await owner.connect()
       try {
         await seedMarker(owner, model.hash)
-        // Рядок епохи пише крок `versions` застосування, якого тінь не проходить.
+        // Рядок епохи пише крок `versions` застосування, якого тінь рушія
+        // (ціль профілю, що дає ідентичність) не проходить.
         await owner.query(
           "INSERT INTO simetra.version_epoch DEFAULT VALUES ON CONFLICT (singleton) DO NOTHING"
         )
         const actor = async (archetypes?: string[]): Promise<Actor> => {
           const { org, user } = await seedRuntimeActor(owner, archetypes)
-          return { org, session: { sub: user, role: REQUEST_ROLE } }
+          return { org, session: { ...claimsFor("user", user), sub: user } }
         }
         const me = await actor()
         const other = await actor()
         const admin = await actor([GAUGE_WRITER_ID, ORG_ADMIN_ID])
-        const anonymous =
-          (
-            await owner.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [
-              ANONYMOUS_ROLE,
-            ])
-          ).rowCount === 1
         await withRuntimeLogin(
           url,
-          [
-            PLATFORM_ROLES.command,
-            REQUEST_ROLE,
-            ...(anonymous ? [ANONYMOUS_ROLE] : []),
-          ],
+          [PLATFORM_ROLES.command, REQUEST_ROLE, ANONYMOUS_ROLE],
           async (login) => {
             const pool = new pg.Pool({ connectionString: login })
             try {
@@ -119,7 +112,6 @@ const heldEnv = () =>
                 owner,
                 pool,
                 login,
-                anonymous,
                 me,
                 other,
                 admin,
@@ -212,22 +204,30 @@ describe("read batch with known over the engine target", () => {
       limit: 1,
     })
     expect(epoch).toMatch(HEX64)
-    const roles = [REQUEST_ROLE, ...(env.anonymous ? [ANONYMOUS_ROLE] : [])]
-    for (const role of roles) {
+    /** Епоха, яку читає роль, на яку перемикає `setRole`. */
+    const epochAfter = async (setRole: string) => {
       const client = new pg.Client({ connectionString: env.login })
       await client.connect()
       try {
         await client.query("BEGIN")
-        await client.query(`SET LOCAL ROLE ${role}`)
+        await client.query(setRole)
         const { rows } = await client.query<{ epoch: string }>(
           "SELECT simetra.row_version_epoch() AS epoch"
         )
         await client.query("COMMIT")
-        expect(rows[0]!.epoch, role).toBe(epoch)
+        return rows[0]!.epoch
       } finally {
         await client.end()
       }
     }
+    expect(
+      await epochAfter(`SET LOCAL ROLE ${REQUEST_ROLE}`),
+      REQUEST_ROLE
+    ).toBe(epoch)
+    expect(
+      await epochAfter(`SET LOCAL ROLE ${ANONYMOUS_ROLE}`),
+      ANONYMOUS_ROLE
+    ).toBe(epoch)
   })
 
   it("answers a marker only for an equal version and epoch, and hides rows RLS hides", async () => {

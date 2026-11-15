@@ -1,13 +1,18 @@
-import { resolveProfile } from "@supabase/pg-delta"
+import {
+  buildFactBase,
+  encodeId,
+  plan as enginePlan,
+  resolveProfile,
+  type Delta,
+  type StableId,
+} from "@supabase/pg-delta"
 import { resolveView } from "@supabase/pg-delta/policy"
 import pg from "pg"
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
-  LOGIN_ROLE_REQUEST_PURPOSES,
-  PLATFORM_LOGIN_ROLES,
   PLATFORM_ROLES,
-  PROVIDER_API_ROLES,
+  PROVIDER_OWNER_ROLES,
   PROVIDER_SCHEMAS,
 } from "simetra/model"
 import {
@@ -18,9 +23,14 @@ import {
   type Extracted,
 } from "simetra/schema"
 import { createPgDeltaEngine } from ".."
-import { testSuperuserUrl, FIXTURES } from "../../../../simetra/test/support"
+import {
+  FIXTURES,
+  superuserClient,
+  testProvider,
+  testRoleFor,
+} from "../../../../simetra/test/support"
 import { inTarget } from "../../__tests__/support/db"
-import { readCensus } from "../census-read"
+import { readCensus, readUnmodeledProperties } from "../census-read"
 import { COVERED_CLASSES, factKindOf } from "../pg-delta/census-facts"
 import { scopeProfile } from "../pg-delta/policy"
 
@@ -31,7 +41,10 @@ import { scopeProfile } from "../pg-delta/policy"
  */
 
 const engine = createPgDeltaEngine()
-const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+const scope: EngineScope = { schemas: ["app"], provider: testProvider() }
+// Ролі профілю в SQL корпусу: власник, що створює типові привілеї, і анонімна роль API
+const OWNER = PROVIDER_OWNER_ROLES[testProvider()]
+const ANON = testRoleFor("anonymous")
 
 async function withPool<T>(
   db: DbConnection,
@@ -83,6 +96,10 @@ function errorsOf(extracted: Extracted, code: string) {
 }
 
 /**
+ * Членство таблиці в публікації `supabase_realtime` — частина пресета Supabase;
+ * публікація застосунку була б ще одним видом факту, якого перепис не рахує, тож
+ * цей клас покриває `engine-census.supabase.db.test.ts`.
+ *
  * Об'єкти класів поза моделлю двигуна (casts, text search, statistics —
  * `unmodeled_kind` двигуна; conversion — без жодного сигналу двигуна) поряд
  * із класами, які він моделює.
@@ -119,8 +136,7 @@ create constraint trigger doc_check after insert on app.doc
 create policy doc_read on app.doc for select using (true);
 create rule doc_log as on update to app.doc do also select 1;
 create collation app.ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false);
-alter publication supabase_realtime add table app.doc;
-alter default privileges for role postgres in schema app grant select on tables to anon;
+alter default privileges for role ${OWNER} in schema app grant select on tables to ${ANON};
 create extension citext with schema extensions;
 create function app.pair_text(app.pair) returns text language sql
   as $$ select ($1).a::text $$;
@@ -246,11 +262,92 @@ describe("class census inside the managed boundary", () => {
     )
   })
 
+  it("the internal pg_attver key is not a column option", async () => {
+    // PostgreSQL 17.12+ пише внутрішню версію атрибута `pg_attver` в
+    // `attoptions` кожної колонки, створеної чи зміненої DDL (CVE-2026-6460);
+    // старіший сервер лишає NULL — тож твердження тримаються на обох, а на
+    // 17.12+ голі колонки несуть лише цей ключ
+    const shadowSql = `
+      create schema app;
+      create table app.doc (id int primary key, a int, b int);
+      alter table app.doc add column c int;
+      alter table app.doc alter column b set (n_distinct = 5);
+    `
+    await inShadow(shadowSql, scope, async (shadow) => {
+      const extracted = await engine.extract(shadow, scope)
+      const { properties, options, version } = await withPool(
+        shadow,
+        async (pool) => ({
+          version: Number(
+            (
+              await pool.query<{ v: string }>(
+                "select current_setting('server_version_num') as v"
+              )
+            ).rows[0]!.v
+          ),
+          properties: await readUnmodeledProperties(pool, scope),
+          options: (
+            await pool.query<{ attname: string; attoptions: string[] | null }>(
+              `select attname, attoptions from pg_attribute
+              where attrelid = 'app.doc'::regclass and attnum > 0 order by attnum`
+            )
+          ).rows,
+        })
+      )
+      // З 17.12 кожна колонка несе `pg_attver`: без цього `internalOnly`
+      // пройшов би й на відсутньому ключі, тож ключ вимагаємо явно
+      if (version >= 170012)
+        for (const row of options.filter((r) => r.attname !== "b"))
+          expect(row.attoptions).toEqual([
+            expect.stringMatching(/^pg_attver=\d+$/),
+          ])
+      // Поза справжньою опцією колонки `b` — нічого, крім `pg_attver`
+      const internalOnly = (o: string[] | null) => {
+        const rest = (o ?? []).filter((x) => x !== "n_distinct=5")
+        return rest.every((x) => /^pg_attver=\d+$/.test(x)) && rest.length <= 1
+      }
+      expect(
+        options.map((r) => [r.attname, internalOnly(r.attoptions)])
+      ).toEqual(["id", "a", "b", "c"].map((name) => [name, true]))
+      expect(options.find((r) => r.attname === "b")!.attoptions).toContain(
+        "n_distinct=5"
+      )
+      // Справжня опція поряд із `pg_attver` рахується, голі колонки — ні
+      expect(properties).toEqual([{ property: "column options", count: 1 }])
+      expect(
+        extracted.diagnostics
+          .filter((d) => d.code === "engine.unmodeled-property")
+          .map((d) => d.message)
+      ).toEqual([expect.stringMatching(/^1 object\(s\) .* column options,/)])
+    })
+  })
+
+  it("the engine plans nothing between two loads of the same SQL", async () => {
+    // Дві бази одного SQL мають різні значення `pg_attver` (17.12+): двигун,
+    // що читав би `attoptions`, спланував би `ALTER COLUMN … SET (…)`
+    const sql = `
+      create schema app;
+      create table app.doc (id int primary key, a int, b int);
+      alter table app.doc add column c int;
+    `
+    const plan = await inTarget(sql, scope, async (target) => {
+      const outcome = await engine.withDesiredShadow(
+        { target: { url: target } },
+        sql,
+        scope,
+        async (_shadow, plan) => plan
+      )
+      expect(outcome.status).toBe("loaded")
+      return outcome.status === "loaded" ? outcome.value : undefined
+    })
+    expect(plan?.actions).toEqual([])
+    expect(plan?.empty).toBe(true)
+  })
+
   it("shell type is counted as its own class", async () => {
     // Shell-тип створює лише суперкористувач: тінь під роллю застосунку його не
     // завантажить, тож перепис перевіряється в транзакції стеку з відкатом
-    const client = new pg.Client({ connectionString: testSuperuserUrl() })
-    await client.connect()
+    const client = await superuserClient()
     try {
       await client.query("begin")
       await client.query("create schema census_shell")
@@ -258,7 +355,7 @@ describe("class census inside the managed boundary", () => {
       expect(
         await readCensus(client, {
           schemas: ["census_shell"],
-          provider: "supabase",
+          provider: testProvider(),
         })
       ).toEqual([{ class: "type.shell", count: 1 }])
     } finally {
@@ -317,6 +414,13 @@ const SATELLITE_KINDS: readonly [string, string][] = [
   ["securityLabel", "a label on a counted object"],
 ]
 
+/** Про що дельта плану: факт додавання чи вилучення, або ідентичність зміни. */
+function deltaSubject(delta: Delta): StableId {
+  if (delta.verb === "add" || delta.verb === "remove") return delta.fact.id
+  if (delta.verb === "set") return delta.id
+  return delta.edge.from
+}
+
 /** Межа фікстури — її схеми без схем провайдера. */
 async function fixtureCase(
   files: Map<string, string>
@@ -324,7 +428,7 @@ async function fixtureCase(
   const result = await compile(files)
   expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   const model = result.model!
-  const provider = new Set(PROVIDER_SCHEMAS.supabase)
+  const provider = new Set(PROVIDER_SCHEMAS[testProvider()])
   const schemas = [
     ...new Set([
       ...model.physical.tables.map((t) => t.schema),
@@ -332,7 +436,7 @@ async function fixtureCase(
       ...model.sqlUnits.map((u) => u.schema),
     ]),
   ].filter((s) => s !== "" && !provider.has(s))
-  return [renderDesiredState(model).sql, { schemas, provider: "supabase" }]
+  return [renderDesiredState(model).sql, { schemas, provider: testProvider() }]
 }
 
 /** Керовані факти виду двигуна в тіні, перепис і extract порту тієї ж тіні. */
@@ -342,7 +446,7 @@ async function engineKindsAndCensus(
 ): Promise<{
   kinds: Set<string>
   roles: Set<string>
-  memberships: { role: string; member: string }[]
+  cluster: string[]
   census: CensusCount[]
   extracted: Extracted
 }> {
@@ -363,15 +467,20 @@ async function engineKindsAndCensus(
       const roles = new Set(
         managed.flatMap((f) => (f.id.kind === "role" ? [f.id.name] : []))
       )
-      const memberships = managed.flatMap((f) =>
-        f.id.kind === "membership"
-          ? [{ role: f.id.role, member: f.id.member }]
-          : []
-      )
+      // Ролі й членства продукт порівнює лише в межі бази (scope `database`,
+      // як у опціях плану адаптера): план «тінь → порожньо» з тими самими
+      // опціями видалив би кожну роль, яку бачить порівнюваний вид
+      const cluster = enginePlan(factBase, buildFactBase([], []), {
+        ...options,
+        scope: "database",
+      })
+        .deltas.map(deltaSubject)
+        .filter((id) => id.kind === "role" || id.kind === "membership")
+        .map(encodeId)
       return {
         kinds,
         roles,
-        memberships,
+        cluster,
         census: await readCensus(pool, shadowScope),
       }
     })),
@@ -387,7 +496,7 @@ describe("covered classes match the pinned engine", () => {
     ...FIXTURES.map(
       ([name, fixture]): [string, () => Promise<[string, EngineScope]>] => [
         name,
-        () => fixtureCase(fixture()),
+        () => fixtureCase(fixture(testProvider())),
       ]
     ),
     ["objects of every creatable class", async () => [BROAD_SQL, scope]],
@@ -396,42 +505,14 @@ describe("covered classes match the pinned engine", () => {
   for (const [name, load] of corpus) {
     it(name, async () => {
       const [desiredSql, shadowScope] = await load()
-      const { kinds, roles, memberships, census, extracted } =
+      const { kinds, roles, cluster, census, extracted } =
         await engineKindsAndCensus(desiredSql, shadowScope)
-      // Роль — інфраструктура кластера (§6.9): факт двигуна з'являється, лише
-      // коли грант називає платформну роль поза пресетом провайдера. Будь-яка
-      // інша роль означала б, що бажаний стан створює роль сам, а ролі
-      // створює лише `simetra roles`. Роль входу рантайму кластерна так само
-      const platformRoles = new Set<string>([
-        ...Object.values(PLATFORM_ROLES),
-        ...Object.values(PLATFORM_LOGIN_ROLES),
-      ])
-      for (const role of roles)
-        expect(
-          platformRoles.has(role),
-          `engine role fact ${role} is not a platform role a grant names`
-        ).toBe(true)
-      // Членство ролей платформи в ролях запиту провайдера — теж
-      // інфраструктура кластера: бажаний стан бази його не несе
-      const clusterRoles = new Set<string>([
-        ...platformRoles,
-        ...Object.entries(LOGIN_ROLE_REQUEST_PURPOSES).flatMap(
-          ([provider, purposes]) =>
-            purposes.map(
-              (p) =>
-                PROVIDER_API_ROLES[provider as keyof typeof PROVIDER_API_ROLES][
-                  p
-                ]
-            )
-        ),
-      ])
-      for (const { role, member } of memberships)
-        expect(
-          clusterRoles.has(role) && clusterRoles.has(member),
-          `engine membership fact ${member} -> ${role} is not between platform and request roles`
-        ).toBe(true)
-      // Без факту ролі перевірка вище порожня: бажаний стан кожної фікстури
-      // грантує роль команд (гранти схеми `simetra`, спека прав §5.1)
+      // Роль і членство — інфраструктура кластера (§6.9): ролі створює лише
+      // `simetra roles`, і вид, який порівнює продукт, жодної ролі чи
+      // членства не несе — ні платформних, ні провайдера, ні суперкористувача
+      expect(cluster).toEqual([])
+      // Без ролі в сирому виді перевірка вище порожня: бажаний стан кожної
+      // фікстури грантує роль команд (гранти схеми `simetra`, спека прав §5.1)
       if (desiredSql !== BROAD_SQL)
         expect([...roles]).toContain(PLATFORM_ROLES.command)
       // Кожен інший вид факту, що трапився, перепис рахує як покритий клас

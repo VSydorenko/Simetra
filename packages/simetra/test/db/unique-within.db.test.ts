@@ -11,6 +11,7 @@ import {
 import { readCatalog } from "./catalog"
 import { expectCatalogMatchesSnapshot } from "./compare"
 import { withRollback } from "./connection"
+import { testProvider } from "./profile"
 
 /**
  * Унікальність реквізиту «в межах батька/власника» і без регістру на справжньому
@@ -24,7 +25,7 @@ const slug = (extra: Record<string, unknown>) =>
 async function deploy(client: pg.Client) {
   const result = await compile(
     metaFiles({
-      "project.meta.json": project(),
+      "project.meta.json": project({ database: { provider: testProvider() } }),
       "catalogs/Folder/Folder.meta.json": catalog("Folder", {
         hierarchyType: "ItemsOnly",
         attributes: [slug({ uniqueWithin: "parent" })],

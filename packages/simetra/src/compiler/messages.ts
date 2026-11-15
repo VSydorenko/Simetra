@@ -3573,6 +3573,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Виправте SQL-оператор, названий у повідомленні; тінь — свіжа база, засіяна базовим станом провайдера.",
     },
   },
+  "engine.shadow-drop-failed": {
+    en: (p) =>
+      `The shadow database ${p.shadow} could not be dropped${p.sqlstate === undefined ? "" : ` (SQLSTATE ${p.sqlstate})`}; it is left on the cluster.`,
+    uk: (p) =>
+      `Тіньову базу ${p.shadow} не вдалося видалити${p.sqlstate === undefined ? "" : ` (SQLSTATE ${p.sqlstate})`}; вона лишилась на кластері.`,
+    hint: {
+      en: "The run's result stands; drop the named database as a role that may drop it (for example a superuser).",
+      uk: "Результат запуску чинний; видаліть названу базу від ролі, якій це дозволено (наприклад, суперкористувача).",
+    },
+  },
   "engine.desired-rejected": {
     en: (p) => `Desired state was rejected: ${p.detail}`,
     uk: (p) => `Бажаний стан відхилено: ${p.detail}`,
@@ -4383,8 +4393,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Об'єктів, якими володіє не роль, що застосовує, тож план не може ними керувати: ${p.count}: ${p.objects}`,
     hint: {
-      en: `No plan was written. Managed objects belong to the role that applies: another owner can bypass row level security, and an object the plan drops or alters needs an owner the applying role is a member of. ${OWNER_RECIPE.en}, and plan again.`,
-      uk: `План не записано. Керовані об'єкти належать ролі, що застосовує: інший власник може обходити захист рядків, а об'єкт, який план знімає чи змінює, потребує власника, членом якого є роль застосування. ${OWNER_RECIPE.uk} й сплануйте знову.`,
+      en: `No plan was written. Managed objects belong to the role that applies: another owner can bypass row level security, and an object the plan drops or alters needs an owner whose privileges the applying role has (membership WITH INHERIT TRUE). ${OWNER_RECIPE.en}, and plan again.`,
+      uk: `План не записано. Керовані об'єкти належать ролі, що застосовує: інший власник може обходити захист рядків, а об'єкт, який план знімає чи змінює, потребує власника, чиї привілеї має роль застосування (членство WITH INHERIT TRUE). ${OWNER_RECIPE.uk} й сплануйте знову.`,
     },
   },
   "plan.platform-role-missing": {
@@ -4982,6 +4992,22 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Nothing was changed. The owner creates the application schemas through CREATE on the database, so another owner would break the plan. As a superuser run `ALTER DATABASE … OWNER TO <owner>` after checking what the current owner changed, or point the command at a database that `simetra roles` creates.",
       uk: "Нічого не змінено. Власник створює схеми застосунку правом CREATE на базу, тож інший власник зламав би план. Від суперкористувача виконайте `ALTER DATABASE … OWNER TO <власник>`, перевіривши, що встиг змінити поточний власник, або вкажіть базу, яку створює `simetra roles`.",
+    },
+  },
+  "roles.database-locale": {
+    en: (p) =>
+      `The database ${p.database} has the collation ${p.actual}, not ${p.expected}: the client filter compares text with the ${p.expected} collation, so rows would sort differently in the database and in the client`,
+    uk: (p) =>
+      `База ${p.database} має колляцію ${p.actual}, а не ${p.expected}: фільтр на клієнті порівнює текст колляцією ${p.expected}, тож рядки сортувалися б у базі й на клієнті по-різному`,
+    hint: {
+      en: (p) =>
+        p.kind === "template"
+          ? "Nothing was changed. The collation of a database cannot be altered, and `simetra roles` never drops a database. As a superuser drop the template (`ALTER DATABASE … IS_TEMPLATE false`, then `DROP DATABASE … WITH (FORCE)`) and run `simetra roles` again: it recreates the template from template0 with the expected collation."
+          : "Nothing was changed. The collation of a database cannot be altered, and `simetra roles` never drops a database. As a superuser dump the database (`pg_dump`), drop it, run `simetra roles` again (it creates the database from template0 with the expected collation), then restore the dump into it.",
+      uk: (p) =>
+        p.kind === "template"
+          ? "Нічого не змінено. Колляцію бази не змінити, а `simetra roles` ніколи не видаляє базу. Від суперкористувача видаліть шаблон (`ALTER DATABASE … IS_TEMPLATE false`, потім `DROP DATABASE … WITH (FORCE)`) і запустіть `simetra roles` знову: він створить шаблон із template0 з потрібною колляцією."
+          : "Нічого не змінено. Колляцію бази не змінити, а `simetra roles` ніколи не видаляє базу. Від суперкористувача зніміть дамп бази (`pg_dump`), видаліть її, запустіть `simetra roles` знову (він створить базу з template0 з потрібною колляцією), потім відновіть у неї дамп.",
     },
   },
   "roles.shared-cluster": {

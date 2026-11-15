@@ -7,6 +7,7 @@ import {
 } from "simetra/schema"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import { inTarget, query } from "../../__tests__/support/db"
+import { testProvider } from "../../../../simetra/test/support"
 
 /**
  * SQL ключів канонічних імен (спека промоції §5) на справжній базі: копія
@@ -17,7 +18,7 @@ import { inTarget, query } from "../../__tests__/support/db"
  */
 
 const engine = createPgDeltaEngine()
-const scope: EngineScope = { schemas: ["app"], provider: "supabase" }
+const scope: EngineScope = { schemas: ["app"], provider: testProvider() }
 const reader = createApplyDatabase({ readOnly: true })
 const writer = createApplyDatabase({ readOnly: false })
 

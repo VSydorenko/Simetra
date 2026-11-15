@@ -11,6 +11,7 @@ import {
 import { readCatalog } from "./catalog"
 import { expectCatalogMatchesSnapshot } from "./compare"
 import { withRollback } from "./connection"
+import { testProvider } from "./profile"
 
 /**
  * Межі числа й формат рядка на справжньому Postgres: головне — що вирази, які
@@ -21,7 +22,7 @@ import { withRollback } from "./connection"
 async function deploy(client: pg.Client) {
   const result = await compile(
     metaFiles({
-      "project.meta.json": project(),
+      "project.meta.json": project({ database: { provider: testProvider() } }),
       "catalogs/Item/Item.meta.json": catalog("Item", {
         attributes: [
           attribute("sku", {

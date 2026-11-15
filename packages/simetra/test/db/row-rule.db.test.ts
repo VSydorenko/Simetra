@@ -11,6 +11,7 @@ import {
 import { readCatalog } from "./catalog"
 import { expectCatalogMatchesSnapshot } from "./compare"
 import { withRollback } from "./connection"
+import { testProvider } from "./profile"
 
 /**
  * Правило рядка модуля виду на справжньому Postgres: канонічний текст
@@ -20,7 +21,7 @@ import { withRollback } from "./connection"
  */
 
 const ROW_RULE_FILES = {
-  "project.meta.json": project(),
+  "project.meta.json": project({ database: { provider: testProvider() } }),
   "catalogs/Party/Party.meta.json": catalog("Party", {
     attributes: [
       attribute("person", { type: "String", length: 20 }),

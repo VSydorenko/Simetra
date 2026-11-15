@@ -11,7 +11,7 @@ import {
   type PlatformRoleSet,
 } from "simetra/schema"
 import { z } from "zod"
-import { withDatabase } from "../io/database"
+import { failureDiagnostics, withDatabase } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
 import { fromEngine, required } from "./database-tools"
 import { defineTool, type DatabaseContext } from "./types"
@@ -175,7 +175,7 @@ export const rolesTool = defineTool({
       runRoles(createApplyDatabase({ readOnly: false }), db, set)
     )
     if (!ran.ok)
-      return { ok: false, changes: [], diagnostics: [ran.diagnostic] }
+      return { ok: false, changes: [], diagnostics: failureDiagnostics(ran) }
     const data: RolesData = { roles: ran.value.roles, skipped: set.skipped }
     return {
       ok: ran.value.diagnostics.length === 0,

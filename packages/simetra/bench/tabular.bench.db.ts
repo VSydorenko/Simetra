@@ -27,6 +27,8 @@ import {
   testDatabaseUrl,
   testRoleName,
   testSuperuserUrl,
+  setLocalSetting,
+  loginUrl,
 } from "../test/db/connection"
 
 /**
@@ -137,10 +139,9 @@ describe("tabular section limit", () => {
   let owner: pg.Client | undefined
   let pool: pg.Pool | undefined
 
-  const urlOf = (override: (url: URL) => void) => {
+  const urlOf = () => {
     const url = new URL(testDatabaseUrl())
     url.pathname = `/${database}`
-    override(url)
     return url.toString()
   }
 
@@ -205,7 +206,7 @@ describe("tabular section limit", () => {
     } finally {
       await base.end()
     }
-    owner = new pg.Client({ connectionString: urlOf(() => undefined) })
+    owner = new pg.Client({ connectionString: urlOf() })
     await owner.connect()
     await owner.query(desired.sql)
 
@@ -215,9 +216,7 @@ describe("tabular section limit", () => {
     const project = randomUUID()
     const user = randomUUID()
     await owner.query("BEGIN")
-    await owner.query("SELECT set_config($1, 'on', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
+    await setLocalSetting(owner, RIGHTS_MAINTENANCE_SETTING, "on")
     await owner.query("INSERT INTO auth.users (id, email) VALUES ($1, $2)", [
       user,
       `${user}@example.test`,
@@ -236,9 +235,7 @@ describe("tabular section limit", () => {
       [project, org]
     )
     await owner.query("SET CONSTRAINTS ALL IMMEDIATE")
-    await owner.query("SELECT set_config($1, 'off', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
+    await setLocalSetting(owner, RIGHTS_MAINTENANCE_SETTING, "off")
     await owner.query("COMMIT")
     await owner.query(
       `INSERT INTO simetra.marker (format, snapshot_hash, snapshot, scope, catalog, engine_name, engine_version, fingerprint, fingerprint_version, platform_version, plan_hash)
@@ -257,10 +254,7 @@ describe("tabular section limit", () => {
         `grant ${quoted(role)} to ${quoted(login)} with inherit false, set true`
       )
     pool = new pg.Pool({
-      connectionString: urlOf((url) => {
-        url.username = login
-        url.password = password
-      }),
+      connectionString: loginUrl(urlOf(), login, password),
       max: 2,
     })
     const runtime = await createCommandRuntime({

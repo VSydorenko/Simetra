@@ -54,11 +54,12 @@ describe("database simetra of the postgres stack", () => {
     })
   })
 
-  it("gives the owner USAGE on better_auth and TRIGGER, but not INSERT or SELECT, on the user table", async () => {
+  it("gives the owner USAGE on better_auth and TRIGGER and REFERENCES, but not INSERT or SELECT, on the user table", async () => {
     await inDatabase(DATABASE, async (client) => {
       const { rows } = await client.query<Record<string, boolean>>(
         `select has_schema_privilege($1, 'better_auth', 'USAGE') as usage,
                 has_table_privilege($1, 'better_auth."user"', 'TRIGGER') as trigger,
+                has_table_privilege($1, 'better_auth."user"', 'REFERENCES') as refs,
                 has_table_privilege($1, 'better_auth."user"', 'INSERT') as insert,
                 has_table_privilege($1, 'better_auth."user"', 'SELECT') as select`,
         [owner]
@@ -66,6 +67,7 @@ describe("database simetra of the postgres stack", () => {
       expect(rows[0]).toEqual({
         usage: true,
         trigger: true,
+        refs: true,
         insert: false,
         select: false,
       })

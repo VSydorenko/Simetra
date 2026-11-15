@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest"
 import type pg from "pg"
 import { compile, type CompiledModel } from "simetra/compiler"
+import { quoteIdent } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import { readCatalog } from "../../../test/db/catalog"
 import { expectCatalogMatchesSnapshot } from "../../../test/db/compare"
-import { queryAs, withRollback } from "../../../test/db/connection"
+import { signUp } from "../../../test/db/auth"
+import {
+  claimsFor,
+  queryAs,
+  testRoleFor,
+  withRollback,
+} from "../../../test/db/connection"
+import { testProvider } from "../../../test/db/profile"
 import { readReferenceDomain } from "../../compiler/__tests__/fixtures/reference-domain"
 import { expectClean } from "../../compiler/__tests__/helpers"
 
@@ -15,8 +23,23 @@ import { expectClean } from "../../compiler/__tests__/helpers"
  * проведення П3. Кожен збій тут — дефект компілятора чи рендера, а не домену.
  */
 
+/**
+ * Референсний домен лежить на диску з провайдером `supabase`; DB-тест
+ * розгортає його на стеку прогону, тож профіль підставляється в проєкт тут,
+ * а не в самій фікстурі (її читають і юніт-тести).
+ */
+function referenceDomain(): Map<string, string> {
+  const files = readReferenceDomain()
+  const project = JSON.parse(files.get("project.meta.json")!) as {
+    database: { provider: string }
+  }
+  project.database.provider = testProvider()
+  files.set("project.meta.json", JSON.stringify(project))
+  return files
+}
+
 async function compiled(): Promise<CompiledModel> {
-  const result = await compile(readReferenceDomain())
+  const result = await compile(referenceDomain())
   expectClean(result, { allow: ["rights.scope-kind-unread"] })
   return result.model!
 }
@@ -74,12 +97,7 @@ describe("reference domain in Postgres", () => {
       // Обліковий запис провайдера: провізія платформного шару створює рядок
       // «Користувачів» з тим самим id. Другий користувач із власною
       // організацією — інакше функція, що віддає всі скоупи, теж пройшла б.
-      const account = () =>
-        insert(
-          client,
-          "INSERT INTO auth.users (id) VALUES (gen_random_uuid())",
-          []
-        )
+      const account = () => signUp(client)
       const organization = (description: string) =>
         insert(
           client,
@@ -102,31 +120,33 @@ describe("reference domain in Postgres", () => {
       // claims запиту: контракт скоупу, на який спиратимуться RLS-політики П3.
       // Гранти схем застосунку ролям API — П3 (платформна спека §6.7); тут
       // лише `USAGE`, без якого роль запиту не дістане до функцій схеми.
-      await client.query("GRANT USAGE ON SCHEMA app TO authenticated")
+      await client.query(
+        `GRANT USAGE ON SCHEMA app TO ${quoteIdent(testRoleFor("user")!)}`
+      )
       const scopes = async (claims: Record<string, unknown>) => ({
         orgs: await queryAs(
           client,
-          "authenticated",
+          "user",
           claims,
           "SELECT id FROM app.org_member_member_scopes() AS id"
         ),
         users: await queryAs(
           client,
-          "authenticated",
+          "user",
           claims,
           "SELECT id FROM app.accessible_user_ids() AS id"
         ),
       })
-      expect(await scopes({ sub: user, role: "authenticated" })).toEqual({
+      expect(await scopes(claimsFor("user", user))).toEqual({
         orgs: { rows: [{ id: org }] },
         users: { rows: [{ id: user }] },
       })
-      expect(await scopes({ sub: other, role: "authenticated" })).toEqual({
+      expect(await scopes(claimsFor("user", other))).toEqual({
         orgs: { rows: [{ id: otherOrg }] },
         users: { rows: [{ id: other }] },
       })
       // Без `sub` користувача немає — і скоупів теж
-      expect(await scopes({ role: "authenticated" })).toEqual({
+      expect(await scopes(claimsFor("user"))).toEqual({
         orgs: { rows: [] },
         users: { rows: [] },
       })

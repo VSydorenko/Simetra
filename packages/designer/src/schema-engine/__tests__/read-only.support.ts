@@ -3,7 +3,12 @@ import { compile } from "simetra/compiler"
 import { desiredForApply, type ApplyDesired } from "simetra/schema"
 import { beforeAll, expect } from "vitest"
 import { readOnlyQuery } from "../read-only"
-import { catalog, metaFiles, project } from "../../../../simetra/test/support"
+import {
+  catalog,
+  metaFiles,
+  project,
+  testProvider,
+} from "../../../../simetra/test/support"
 import { inTarget as loadTarget, query } from "../../__tests__/support/db"
 
 /**
@@ -22,7 +27,10 @@ export function useApplyDesired(): void {
   beforeAll(async () => {
     const compiled = await compile(
       metaFiles({
-        "project.meta.json": project({ defaultSchema: "app" }),
+        "project.meta.json": project({
+          defaultSchema: "app",
+          database: { provider: testProvider() },
+        }),
         "catalogs/Party/Party.meta.json": catalog("Party"),
       })
     )

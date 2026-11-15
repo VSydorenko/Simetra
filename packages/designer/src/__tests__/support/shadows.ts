@@ -1,5 +1,10 @@
 import pg from "pg"
-import { testDatabaseUrl } from "../../../../simetra/test/support"
+import {
+  runApplicationName,
+  runTag,
+  superuserClient,
+  testDatabaseUrl,
+} from "../../../../simetra/test/support"
 
 /**
  * Облік тіней, які двигун створив у цьому тестовому файлі. «Наша» тінь —
@@ -44,6 +49,161 @@ export function recordProvision<T extends { name: string }>(
   inFlight.add(settled)
   void settled.then(() => inFlight.delete(settled))
   return recorded
+}
+
+/** How long the drop of a template shadow waits for the backends of this run. */
+const RUN_BACKENDS_TIMEOUT_MS = 10_000
+
+/**
+ * Waits until no backend with the `application_name` of this run is
+ * connected to `database`, observed by the stack superuser from another
+ * database; throws with the pids and names of the backends left after
+ * `timeoutMs`.
+ */
+export async function waitForRunBackendsGone(
+  database: string,
+  timeoutMs = RUN_BACKENDS_TIMEOUT_MS
+): Promise<void> {
+  const name = runApplicationName(runTag())
+  const observer = await superuserClient()
+  try {
+    // Межа — за годинником, а не за числом спроб: запит спостерігача теж
+    // забирає час
+    const deadline = Date.now() + timeoutMs
+    let left: { pid: number; application_name: string }[] = []
+    for (;;) {
+      left = (
+        await observer.query<{ pid: number; application_name: string }>(
+          "SELECT pid, application_name FROM pg_catalog.pg_stat_activity WHERE datname = $1 AND application_name = $2",
+          [database, name]
+        )
+      ).rows
+      if (left.length === 0) return
+      if (Date.now() >= deadline) break
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    throw new Error(
+      `backends of this run are still connected to ${database} after ${timeoutMs} ms: ${left
+        .map((b) => `${b.pid} (${b.application_name})`)
+        .join(", ")}`
+    )
+  } finally {
+    await observer.end()
+  }
+}
+
+/**
+ * Wraps the `cleanup` of a template shadow so that the drop waits until the
+ * backends of this run have left the shadow (`waitForRunBackendsGone`).
+ * A closed `pg` client returns before its backend leaves the server, and the
+ * engine drops the shadow `WITH (FORCE)` as the owner of the profile: the
+ * tests log in as the stack superuser, and the owner may not end a
+ * superuser's backend (`42501`). A backend still there after the wait is a
+ * client left open, named in the error. Called only by the
+ * `provisionTemplateShadow` wrapper in `db-setup.ts`.
+ */
+export function awaitRunBackends<
+  T extends { name: string; cleanup(): Promise<unknown> },
+>(shadow: T): T {
+  return {
+    ...shadow,
+    cleanup: async () => {
+      await waitForRunBackendsGone(shadow.name)
+      return shadow.cleanup()
+    },
+  }
+}
+
+/** Max retries of a template-shadow drop refused with `42501`. */
+const DROP_RETRIES = 3
+
+/** A repeated drop of a template shadow: its name and the retry number from 1. */
+export interface DropRetry {
+  shadow: string
+  attempt: number
+}
+
+const dropRetries: DropRetry[] = []
+
+/** Retries of shadow drops in this test file, in order. */
+export function shadowDropRetries(): readonly DropRetry[] {
+  return [...dropRetries]
+}
+
+/**
+ * Names, on stderr, every shadow drop of this test file that needed a retry.
+ * A retried drop that succeeded leaves nothing behind, so without this line
+ * the race it went through would stay unseen.
+ */
+export function reportDropRetries(): void {
+  if (dropRetries.length === 0) return
+  console.warn(
+    `Shadow drops retried after 42501: ${dropRetries
+      .map((r) => `${r.shadow} (retry ${r.attempt})`)
+      .join(", ")}`
+  )
+}
+
+/**
+ * Wraps the `cleanup` of a template shadow so that a drop refused with
+ * `42501` is repeated, at most `DROP_RETRIES` times, each retry recorded
+ * under the shadow's name. A backend of this run that is ending has already
+ * left `pg_stat_activity` (`awaitRunBackends` no longer sees it) but is
+ * still in the process array, where `DROP … WITH (FORCE)` by the owner may
+ * not end a superuser's backend. Any other failure, and `42501` after the
+ * last retry, is returned as is. Called only by the `provisionTemplateShadow`
+ * wrapper in `db-setup.ts`.
+ */
+export function retryDropOnSuperuserBackend<
+  T extends {
+    cleanup(): Promise<{ shadow: string; sqlstate?: string } | undefined>
+  },
+>(shadow: T, pauseMs = 100): T {
+  return {
+    ...shadow,
+    cleanup: async () => {
+      let failure = await shadow.cleanup()
+      for (
+        let attempt = 1;
+        attempt <= DROP_RETRIES && failure?.sqlstate === "42501";
+        attempt++
+      ) {
+        dropRetries.push({ shadow: failure.shadow, attempt })
+        await new Promise((resolve) => setTimeout(resolve, pauseMs))
+        failure = await shadow.cleanup()
+      }
+      return failure
+    },
+  }
+}
+
+/** Невдалі `DROP` тіней цього файлу: ім'я → SQLSTATE (або його відсутність). */
+const dropFailures = new Map<string, string>()
+
+/**
+ * Wraps the `cleanup` of a template shadow so that a failed drop is recorded
+ * under the shadow's name; the leftover check then names its cause. Called
+ * only by the `provisionTemplateShadow` wrapper in `db-setup.ts`.
+ */
+export function recordDropFailures<
+  T extends {
+    cleanup(): Promise<{ shadow: string; sqlstate?: string } | undefined>
+  },
+>(shadow: T): T {
+  return {
+    ...shadow,
+    cleanup: async () => {
+      const failure = await shadow.cleanup()
+      if (failure !== undefined)
+        dropFailures.set(
+          failure.shadow,
+          failure.sqlstate === undefined
+            ? "no SQLSTATE"
+            : `SQLSTATE ${failure.sqlstate}`
+        )
+      return failure
+    },
+  }
 }
 
 /** Names of every shadow provisioned in this test file, in order. */
@@ -102,7 +262,18 @@ export async function expectNoLeftoverShadows(): Promise<void> {
       failures.push(error)
     }
   }
-  const message = `Shadow databases this test file left behind: ${leftovers.join(", ")}`
+  // Причина, якщо прибирання двигуна її повідомило: інакше тінь лишилась
+  // без `DROP` (виняток до прибирання) або `DROP` іншого шляху змовчав
+  const named = leftovers.map((name) => {
+    const cause = dropFailures.get(name)
+    const retries = dropRetries.filter((r) => r.shadow === name).length
+    const notes = [
+      ...(cause === undefined ? [] : [`engine drop failed: ${cause}`]),
+      ...(retries === 0 ? [] : [`drop retried ${retries} time(s)`]),
+    ]
+    return notes.length === 0 ? name : `${name} (${notes.join("; ")})`
+  })
+  const message = `Shadow databases this test file left behind: ${named.join(", ")}`
   if (failures.length > 0)
     throw new AggregateError(
       failures,

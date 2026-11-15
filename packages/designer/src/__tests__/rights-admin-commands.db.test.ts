@@ -12,8 +12,11 @@ import {
   TASK_VIEWER_ID,
   TICKET_TABLE,
   TICKET_WRITER_ID,
+  asStackSuperuser,
   insertOrphan,
   planNodes,
+  restoreOwnerRole,
+  setLocalSetting,
 } from "../../../simetra/test/support"
 import { committed } from "./support/db"
 
@@ -97,18 +100,31 @@ describe("rights administration commands over a planned and applied target", () 
     client.on("notice", onNotice)
     /** Читання `X` актором у поточній транзакції; скани таблиць знімка. */
     const readAs = async () => {
-      await client.query("SELECT set_config($1, $2, true)", [
+      await setLocalSetting(
+        client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify(home.people.reader!.session),
-      ])
-      for (const setting of [
-        "auto_explain.log_min_duration = 0",
-        "auto_explain.log_nested_statements = on",
-        "auto_explain.log_analyze = on",
-        "auto_explain.log_format = 'json'",
-        "client_min_messages = log",
-      ])
-        await client.query(`SET LOCAL ${setting}`)
+        JSON.stringify(home.people.reader!.session)
+      )
+      // Параметри `auto_explain.*` — рівня суперкористувача (на Supabase їх
+      // відкриває supautils), тож їх ставить `asStackSuperuser`: `SET LOCAL`
+      // у його точці збереження діє й після неї. Стек без `auto_explain` у
+      // `shared_preload_libraries` (профіль `postgres`) прийняв би параметри
+      // заглушками без планів, тож бібліотеку тоді вантажить у сесію той самий
+      // суперкористувач; без параметрів вона нічого не робить
+      await asStackSuperuser(client, async () => {
+        const { rows } = await client.query<{ loaded: boolean }>(
+          "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_settings WHERE name = 'auto_explain.log_min_duration') AS loaded"
+        )
+        if (!rows[0]!.loaded) await client.query("LOAD 'auto_explain'")
+        for (const setting of [
+          "auto_explain.log_min_duration = 0",
+          "auto_explain.log_nested_statements = on",
+          "auto_explain.log_analyze = on",
+          "auto_explain.log_format = 'json'",
+          "client_min_messages = log",
+        ])
+          await client.query(`SET LOCAL ${setting}`)
+      })
       plans.length = 0
       await client.query(`SET LOCAL ROLE ${REQUEST_ROLE}`)
       const read = await client.query(
@@ -122,7 +138,7 @@ describe("rights administration commands over a planned and applied target", () 
       const xid = await client.query<{ xid: string | null }>(
         "SELECT txid_current_if_assigned()::text AS xid"
       )
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
       const stats = await client.query<{ relname: string; scans: string }>(
         `SELECT relname, (COALESCE(seq_scan, 0) + COALESCE(idx_scan, 0))::text AS scans
            FROM pg_stat_xact_user_tables

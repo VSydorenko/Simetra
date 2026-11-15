@@ -1,5 +1,9 @@
 import { defineConfig } from "vitest/config"
 
+// Шлях guard і прибиральника переривання покритий на обох стеках: на
+// postgres — проєктом `db` (за маскою), на Supabase — проєктом `db-supabase`
+const INTERRUPT = "test/db/interrupt.db.test.ts"
+
 export default defineConfig({
   test: {
     globals: true,
@@ -21,6 +25,8 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          // Типовий DB-проєкт — стек профілю postgres: базовий стан, переривання
+          // й усі DB-тести, крім прив'язаних до Supabase
           name: "db",
           include: ["**/*.db.test.ts"],
           // Тести, прив'язані до Supabase, — окремий проєкт `db-supabase`
@@ -28,23 +34,24 @@ export default defineConfig({
             "**/node_modules/**",
             "**/dist/**",
             "**/*.supabase.db.test.ts",
-            "**/*.postgres.db.test.ts",
           ],
           // Усі тести б'ють в одну базу стеку
           fileParallelism: false,
           // Стек один на машину: один прогін за раз і стек після прогону такий
           // самий, як до нього
-          globalSetup: ["./test/db/stack-guard.supabase.ts"],
+          globalSetup: ["./test/db/stack-guard.postgres.ts"],
+          // Дрейф ролі між тестами файлу (спека профілю §10.3, запобіжник 3)
+          setupFiles: ["./test/db/db-setup.ts"],
         },
       },
       {
         extends: true,
         test: {
           // Кейси, яким потрібен саме стек Supabase (схеми `auth`, `storage`,
-          // `realtime`, ролі провайдера, пулер, пресет): лишаються на ньому й
-          // тоді, коли проєкт `db` перейде на стек postgres
+          // `realtime`, ролі провайдера, пулер, пресет): лишаються на ньому,
+          // а проєкт `db` іде на стек postgres
           name: "db-supabase",
-          include: ["**/*.supabase.db.test.ts"],
+          include: ["**/*.supabase.db.test.ts", INTERRUPT],
           exclude: ["**/node_modules/**", "**/dist/**"],
           fileParallelism: false,
           globalSetup: ["./test/db/stack-guard.supabase.ts"],
@@ -53,25 +60,9 @@ export default defineConfig({
       {
         extends: true,
         test: {
-          // Стек профілю postgres: базовий стан, переривання й тести, прив'язані
-          // до цього стека (`*.postgres.db.test.ts`); решта DB-тестів іде на
-          // Supabase до перемикання типового профілю
-          name: "db-pg",
-          include: [
-            "test/db/pgtap.db.test.ts",
-            "test/db/interrupt.db.test.ts",
-            "**/*.postgres.db.test.ts",
-          ],
-          exclude: ["**/node_modules/**", "**/dist/**"],
-          fileParallelism: false,
-          globalSetup: ["./test/db/stack-guard.postgres.ts"],
-        },
-      },
-      {
-        extends: true,
-        test: {
-          // Бенчмарк меж прав (спека прав §5.4): той самий стек і сторож, що й `db`, але
-          // поза `test:db` і CI — прогін хвилинний, а результат — заміри машини
+          // Бенчмарк меж прав (спека прав §5.4): стек Supabase і його сторож, як у
+          // `db-supabase`, але поза `test:db` і CI — прогін хвилинний, а результат —
+          // заміри машини
           name: "bench",
           include: ["bench/**/*.bench.db.ts"],
           exclude: ["**/node_modules/**", "**/dist/**"],

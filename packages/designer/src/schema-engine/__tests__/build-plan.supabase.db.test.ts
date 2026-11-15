@@ -4,6 +4,7 @@ import { project } from "../../../../simetra/test/support"
 import { asSuperuser, query } from "../../__tests__/support/db"
 import {
   BLIND_SETUP,
+  codes,
   compiled,
   EMPTY,
   errors,
@@ -11,6 +12,7 @@ import {
   party,
   PARTY,
   plan,
+  planned,
   SERVICE_ROLE,
   useBuildPlanRoles,
 } from "./build-plan.support"
@@ -57,6 +59,16 @@ describe.concurrent("buildPlan", () => {
     })
   })
 
+  it("carries the plpgsql_check mode of the target", async () => {
+    // Розширення на стеку доступне, а supautils дає ролі його поставити
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      const outcome = await plan(url, model)
+      expect(planned(outcome).plpgsqlCheck).toBe("transient")
+      expect(codes(outcome)).not.toContain("plan.plpgsql-check-unavailable")
+    })
+  })
+
   it("checks owners only where the engine reads, not inside extensions", async () => {
     // Межа з `public` і розширенням у ній: на провайдері розширення й усі
     // його члени належать службовій ролі, членом якої роль сесії не є.
@@ -92,7 +104,7 @@ describe.concurrent("buildPlan", () => {
           ?.params
       ).toEqual({
         count: 1,
-        objects: `relation public.stray (owner ${SERVICE_ROLE}, not a role postgres is a member of)`,
+        objects: `relation public.stray (owner ${SERVICE_ROLE}, whose privileges postgres does not have)`,
       })
     })
   })

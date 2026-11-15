@@ -31,7 +31,7 @@ import {
   type SchemaEngine,
 } from "simetra/schema"
 import { z } from "zod"
-import { withDatabase } from "../io/database"
+import { failureDiagnostics, withDatabase } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
 import { schemaPathResolver } from "../io/schema-path"
 import { UsageError } from "../io/usage-error"
@@ -199,7 +199,7 @@ export const introspectTool = defineTool({
       engine.extract(db.target, scope)
     )
     if (!read.ok)
-      return { ok: false, changes: [], diagnostics: [read.diagnostic] }
+      return { ok: false, changes: [], diagnostics: failureDiagnostics(read) }
     const extracted = read.value
     const extractDiagnostics = extracted.diagnostics.map(fromEngine)
     // Невиражене в extract (EXCLUDE, чужий власник) — уже втрата: генератор
@@ -519,7 +519,7 @@ export const diffTool = defineTool({
       return {
         ok: false,
         changes: [],
-        diagnostics: [...compiled.diagnostics, compared.diagnostic],
+        diagnostics: [...compiled.diagnostics, ...failureDiagnostics(compared)],
       }
     if (compared.value.refusal !== undefined)
       return {

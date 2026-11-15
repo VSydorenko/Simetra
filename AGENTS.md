@@ -198,8 +198,8 @@ These hold for T0 and for every tier that reads metadata:
 ## Commands and gates
 
 With agent-kit, use its scripts; they read `.agents/kit.profile.json`: tests —
-`run-tests` (`unit` by default; the `db`, `db-supabase` and `db-pg` levels wait
-for the stack lock), PR — `pr-gate`, a spec or plan section —
+`run-tests` (`unit` by default; the `db` level runs on the postgres stack and
+`db-supabase` on the Supabase stack; each waits for its stack's lock), PR — `pr-gate`, a spec or plan section —
 `doc <file> §N`, Codex — `codex-audit`. The commands below are what
 they run, and the way to work without the kit.
 
@@ -217,16 +217,16 @@ doc anchors && doc lint                   # dead paths, § pointers, corpus form
 pnpm metadata:check                       # simetra compile --all via packages/designer/bin; pre-commit runs it with --staged
 pnpm build:packages && pnpm test:packaging # build the npm packages, then test the packed tarballs in a scratch consumer project
 
-pnpm db:start                             # local Supabase stack (needs Docker)
-pnpm test:db                              # provider base-state pgTAP tests + Vitest DB tests (*.db.test.ts) of simetra and @simetrajs/designer against the local stack
+pnpm db:pg:start                          # local postgres-profile stack: Postgres 17, Centrifugo, Garage (needs Docker)
+pnpm test:db:pg                           # the default DB suite: base-state pgTAP and DB tests of simetra and @simetrajs/designer on the postgres stack
+pnpm db:pg:stop
+
+pnpm db:start                             # local Supabase stack (needs Docker) — supabase-profile regression only
+pnpm test:db                              # provider base-state pgTAP + *.supabase.db.test.ts against the Supabase stack
 pnpm db:stop
 
 pnpm db:signals:start                     # Centrifugo beside the Supabase stack (needs Docker)
 pnpm db:signals:stop
-
-pnpm db:pg:start                          # local postgres-profile stack: Postgres 17, Centrifugo, Garage (needs Docker)
-pnpm test:db:pg                           # postgres-stack base state (pgTAP through the Vitest runner) and interrupt cleanup
-pnpm db:pg:stop
 ```
 
 - 🔴 **No `--` before a vitest pattern** with `pnpm --filter`: the pattern is
@@ -266,11 +266,11 @@ pnpm db:pg:stop
 - Generated SQL is verified through the generator's own tests and fixtures,
   never by applying it to a live database from an agent.
 - CI (`.github/workflows/ci.yml`) runs the same four gates plus
-  `pnpm metadata:check`, a `db` matrix (each shard starts its own stack: provider
-  pgTAP with `simetra`, then `@simetrajs/designer` split by `vitest --shard`), its `supabase-bound` rows
-  (`*.supabase.db.test.ts`), and a `db-postgres` job (the postgres stack and
-  `pnpm test:db:pg`),
-  and a `packaging` job (`pnpm build:packages && pnpm test:packaging`). It does
+  `pnpm metadata:check`, a `db` matrix on the postgres stack (each shard starts
+  its own stack: base-state pgTAP through the Vitest runner with `simetra`, then
+  `@simetrajs/designer` split by `vitest --shard`), a `db-supabase` job
+  (provider pgTAP and `*.supabase.db.test.ts` on the Supabase stack), and a
+  `packaging` job (`pnpm build:packages && pnpm test:packaging`). It does
   not run the anchor check — run it yourself whenever you edit docs or skills,
   or rename or move a file. Releases and npm publishing —
   `docs/architecture/release.md`.

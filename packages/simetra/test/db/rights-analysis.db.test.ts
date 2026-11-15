@@ -31,7 +31,14 @@ import {
   writeRoles,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
-import { commandSteps, queryAs, type CommandStep } from "./connection"
+import {
+  commandSteps,
+  queryAs,
+  type CommandStep,
+  restoreOwnerRole,
+  setLocalSetting,
+  claimsFor,
+} from "./connection"
 import {
   type Assignment,
   type Delta,
@@ -41,12 +48,14 @@ import {
   describeTransaction,
   insert,
   orgDeltaRow,
+  profileLayer,
 } from "./rights-seed"
+import { testProvider } from "./profile"
 
 /**
  * Функції аналізу прав (спека прав §5.1) на живих
- * призначеннях, дельтах і рядках: що вони повернуть під роллю
- * `authenticated` і чи пояснення видимості збігається з тим, що пропускає
+ * призначеннях, дельтах і рядках: що вони повернуть під роллю запиту
+ * користувача і чи пояснення видимості збігається з тим, що пропускає
  * RLS, — вирішує Postgres; компілятор бачить лише текст. Одне розгортання на
  * опис; кейси, що пишуть, відкочують свою точку збереження.
  */
@@ -250,7 +259,8 @@ describe("rights analysis", () => {
         writeRoles(),
         adminRoles(),
         secondScopeKind(),
-        analysisRoles()
+        analysisRoles(),
+        profileLayer()
       )
     )
     expect(result.diagnostics).toEqual([])
@@ -260,9 +270,6 @@ describe("rights analysis", () => {
     // як у `rights-guards`: інакше тригер прав відмовить.
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PLATFORM_ROLES.command}`
-    )
-    await client.query(
-      `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
     )
     ids = await seed(client)
     await client.query("SET CONSTRAINTS ALL IMMEDIATE")
@@ -277,9 +284,9 @@ describe("rights analysis", () => {
     if (id === undefined) throw new Error(`unknown seed key ${name}`)
     return id
   }
-  const claims = (user: string) => ({ sub: key(user), role: "authenticated" })
+  const claims = (user: string) => claimsFor("user", key(user))
 
-  /** Рядки запиту під `authenticated` від імені `user`. */
+  /** Рядки запиту під роллю запиту користувача від імені `user`. */
   const as = async <T extends pg.QueryResultRow>(
     user: string,
     sql: string,
@@ -287,7 +294,7 @@ describe("rights analysis", () => {
   ): Promise<T[]> => {
     const result = await queryAs<T>(
       tx.client(),
-      "authenticated",
+      "user",
       claims(user),
       sql,
       params
@@ -356,17 +363,19 @@ describe("rights analysis", () => {
     const client = tx.client()
     await client.query("SAVEPOINT analysis_command")
     try {
-      await client.query("SELECT set_config($1, $2, true)", [
+      await setLocalSetting(
+        client,
         SESSION_CLAIMS_SETTING,
-        JSON.stringify(claims(user)),
-      ])
-      await client.query("SELECT set_config($1, $2, true)", [
+        JSON.stringify(claims(user))
+      )
+      await setLocalSetting(
+        client,
         COMMAND_SETTING,
-        JSON.stringify({ action: "administerRights", object, root }),
-      ])
+        JSON.stringify({ action: "administerRights", object, root })
+      )
       await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
       await client.query(statement)
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
       await client.query("SET CONSTRAINTS ALL IMMEDIATE")
       return await then()
     } finally {
@@ -384,7 +393,7 @@ describe("rights analysis", () => {
     )
   }
 
-  /** Які з рядків `rows` таблиці `table` бачить `user` під `authenticated`. */
+  /** Які з рядків `rows` таблиці `table` бачить `user` під роллю запиту. */
   const seenBy = async (user: string, table: string, rows: readonly string[]) =>
     new Set(
       (
@@ -399,7 +408,7 @@ describe("rights analysis", () => {
   /**
    * Еквівалентність пояснення й RLS: для кожного `u` і рядка
    * `rows`, який бачить `caller`, правило видимості над
-   * `rights_explain(…, u)` ⇔ рядок видно `u` під `authenticated`; рядок, якого
+   * `rights_explain(…, u)` ⇔ рядок видно `u` під роллю запиту; рядок, якого
    * `caller` не бачить, пояснення не має (спека прав §5.1). Повертає кількість
    * непорожніх пояснень.
    */
@@ -798,16 +807,19 @@ describe("rights analysis of an unscoped container", () => {
 
   beforeAll(async () => {
     const result = await compileRights(
-      singleTenantRights({
-        [ROLE_FILE("GlobalAdmin")]: role(
-          GLOBAL_ADMIN_ID,
-          "GlobalAdmin",
-          "global",
-          {
-            fullAccess: true,
-          }
-        ),
-      })
+      singleTenantRights(
+        {
+          [ROLE_FILE("GlobalAdmin")]: role(
+            GLOBAL_ADMIN_ID,
+            "GlobalAdmin",
+            "global",
+            {
+              fullAccess: true,
+            }
+          ),
+        },
+        testProvider()
+      )
     )
     expect(result.diagnostics).toEqual([])
     const client = await tx.open()
@@ -835,8 +847,8 @@ describe("rights analysis of an unscoped container", () => {
   const as = async (sql: string, params: unknown[]) => {
     const result = await queryAs<pg.QueryResultRow>(
       tx.client(),
-      "authenticated",
-      { sub: ids.g, role: "authenticated" },
+      "user",
+      claimsFor("user", ids.g),
       sql,
       params
     )

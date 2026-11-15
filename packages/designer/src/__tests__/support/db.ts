@@ -1,21 +1,44 @@
 import { randomBytes, randomUUID } from "node:crypto"
+import { withDatabaseName } from "@supabase/pg-delta"
 import pg from "pg"
+import { canonicalSnapshot, type CompiledModel } from "simetra/compiler"
 import {
   CommandFailure,
+  PROVIDER_IDENTITY_SOURCES,
+  PROVIDER_OWNER_ROLES,
+  quoteIdent,
   RIGHTS_MAINTENANCE_SETTING,
   type CommandError,
 } from "simetra/model"
-import type { EngineScope, SchemaEngine } from "simetra/schema"
-import type { CommandDatabase } from "simetra/server"
-import { createPgDeltaEngine } from "../../schema-engine"
 import {
+  buildPlan,
+  desiredForApply,
+  executePlan,
+  PROVIDER_SHADOW_TEMPLATES,
+  type EngineScope,
+  type SchemaEngine,
+} from "simetra/schema"
+import type { CommandDatabase } from "simetra/server"
+import { createApplyDatabase, createPgDeltaEngine } from "../../schema-engine"
+import {
+  asSessionLogin,
+  authLoginRole,
+  devSecret,
   GAUGE_WRITER_ID,
+  LOGIN_SECRETS_FILE,
+  loginUrl,
+  prepareStackIdentity,
   signUp,
+  superuserClient,
   testDatabaseName,
   testDatabaseUrl,
+  testOwnerLoginUrl,
   testPoolerUrl,
+  testProvider,
   testRoleName,
   testSuperuserUrl,
+  setLocalSetting,
+  trackPool,
 } from "../../../../simetra/test/support"
 
 /**
@@ -40,6 +63,29 @@ export async function query<R extends pg.QueryResultRow>(
     await client.end()
   }
 }
+
+/**
+ * One statement as the stack superuser (`superuserClient`: the prelude, and
+ * a role left on the client fails the test), in database `database` when
+ * given. Every name in `sql` is qualified: the prelude's `search_path` is
+ * `pg_catalog, pg_temp`.
+ */
+async function asStack<R extends pg.QueryResultRow>(
+  sql: string,
+  params?: unknown[],
+  database?: string
+): Promise<R[]> {
+  const client = await superuserClient(database)
+  try {
+    return (await client.query<R>(sql, params)).rows
+  } finally {
+    await client.end()
+  }
+}
+
+/** The database name of `url`. */
+const databaseOf = (url: string): string =>
+  decodeURIComponent(new URL(url).pathname.slice(1))
 
 /** The same database as `url`, with the stack superuser's credentials. */
 export function asSuperuser(url: string): string {
@@ -72,9 +118,10 @@ export async function inTarget<T>(
 }
 
 /**
- * Runs `fn` on a run-tagged copy database, `CREATE DATABASE … OWNER postgres
- * <clause>` (for example `template <name>`), created and dropped by the
- * superuser. `fn` gets the copy's URL for the default test role and its name.
+ * Runs `fn` on a run-tagged copy database, `CREATE DATABASE … OWNER <owner of
+ * the profile> <clause>` (for example `template <name>`), created and dropped
+ * by the superuser. `fn` gets the copy's URL for the default test role and its
+ * name.
  */
 export async function withCopy<T>(
   clause: string,
@@ -83,9 +130,8 @@ export async function withCopy<T>(
   const name = testDatabaseName("copy")
   // Створення — до `try`: якщо воно впаде, `finally` не видалятиме бази,
   // якої цей виклик не створив
-  await query(
-    testSuperuserUrl(),
-    `create database "${name}" owner postgres ${clause}`
+  await asStack(
+    `create database "${name}" owner ${quoteIdent(PROVIDER_OWNER_ROLES[testProvider()])} ${clause}`
   )
   try {
     const url = new URL(testDatabaseUrl())
@@ -93,20 +139,117 @@ export async function withCopy<T>(
     return await fn(url.toString(), name)
   } finally {
     // Прибирання й на шляху падіння: інакше копію зловить сторож стеку
-    await query(
-      testSuperuserUrl(),
-      `drop database if exists "${name}" with (force)`
-    )
+    await asStack(`drop database if exists "${name}" with (force)`)
   }
 }
+
+/**
+ * Runs `fn` on a bare target: a run-tagged database from the shadow template
+ * of the profile (`withCopy`), the way a real target starts — without the seed
+ * of assumed schemas that the engine puts only into its shadows (the stub of
+ * `better_auth."user"`). A target that needs the identity (`withTargetIdentity`,
+ * `signUp`, `seedRuntimeActor`) starts here, not from `inTarget`. A profile
+ * without a shadow template has no such target.
+ */
+export async function withTemplateTarget<T>(
+  fn: (url: string, name: string) => Promise<T>
+): Promise<T> {
+  const template = PROVIDER_SHADOW_TEMPLATES[testProvider()]
+  if (template === null)
+    throw new Error(`Profile "${testProvider()}" has no shadow template`)
+  return withCopy(`template ${quoteIdent(template)}`, fn)
+}
+
+/**
+ * Runs `fn` against a target that holds `model` and can take an identity
+ * (`signUp`, `seedRuntimeActor`): on `postgres` a bare target gets the Better
+ * Auth identity, then the plan and the apply of `model` as the owner login
+ * (Р17 order); on a profile whose provider gives the identity, the target is
+ * the engine shadow of the desired state. `model` must be compiled for the
+ * profile of the run (`profileLayer`).
+ */
+export async function withModelTarget<T>(
+  model: CompiledModel,
+  fn: (url: string) => Promise<T>
+): Promise<T> {
+  if (testProvider() !== "postgres") {
+    const desired = await desiredForApply(model)
+    return inTarget(desired.sql, desired.scope, fn)
+  }
+  return withTemplateTarget(async (url) => {
+    await withTargetIdentity(url)
+    const target = {
+      url: withDatabaseName(testOwnerLoginUrl(), databaseOf(url)),
+    }
+    const outcome = await buildPlan(
+      defaultEngine,
+      {
+        reader: createApplyDatabase({ readOnly: true }),
+        scratch: createApplyDatabase({ readOnly: false }),
+      },
+      model,
+      { target },
+      []
+    )
+    if (outcome.status !== "planned")
+      throw new Error(
+        `${outcome.status}: ${outcome.diagnostics
+          .filter((d) => d.severity === "error")
+          .map((d) => `${d.code} ${d.message}`)
+          .join("; ")}`
+      )
+    const artifact = outcome.artifact
+    const applied = await executePlan(
+      createApplyDatabase({ readOnly: false }),
+      target,
+      artifact,
+      {
+        mode: "apply",
+        planHash: artifact.planHash,
+        allow: artifact.requiredPermissions,
+        snapshot: canonicalSnapshot(model),
+      }
+    )
+    if (applied.status !== "committed")
+      throw new Error(`the model did not apply: ${applied.status}`)
+    return fn(url)
+  })
+}
+
+/**
+ * Runs `fn` on an empty target that can take an identity before anything is
+ * applied to it — for a test that deploys the model itself (`plan` and
+ * `apply` tools): on `postgres` a bare target with the Better Auth identity
+ * (Р17 order); on a profile whose provider gives the identity, the engine
+ * shadow of an empty `public` state.
+ */
+export async function withIdentityTarget<T>(
+  fn: (url: string) => Promise<T>
+): Promise<T> {
+  if (testProvider() !== "postgres")
+    return inTarget(
+      "select 1;",
+      { schemas: ["public"], provider: testProvider() },
+      fn
+    )
+  return withTemplateTarget(async (url) => {
+    await withTargetIdentity(url)
+    return fn(url)
+  })
+}
+
+/**
+ * The URL of the database of `url` for the owner login of the profile
+ * (`testOwnerLoginUrl()`): the migrator whose `session_user` is the owner of
+ * the rights functions, as the rights guard requires (Р16).
+ */
+export const ownerLoginOf = (url: string): string =>
+  withDatabaseName(testOwnerLoginUrl(), databaseOf(url))
 
 /** Drops the given roles, if they exist, as the stack superuser. */
 export async function dropRoles(...names: string[]): Promise<void> {
   for (const name of names)
-    await query(
-      testSuperuserUrl(),
-      `drop role if exists "${name.replaceAll('"', '""')}"`
-    )
+    await asStack(`drop role if exists "${name.replaceAll('"', '""')}"`)
 }
 
 /**
@@ -128,13 +271,33 @@ export async function waitForLock(
   throw new Error(`backend ${pid} never waited on a lock`)
 }
 
+/**
+ * Waits until backend `pid` is gone from `pg_stat_activity`, observed from
+ * another session; throws when it is still there after the wait.
+ */
+export async function waitForBackendExit(
+  observer: pg.Client,
+  pid: number
+): Promise<void> {
+  for (let waited = 0; waited < 10_000; waited += 25) {
+    const { rows } = await observer.query(
+      "SELECT 1 FROM pg_stat_activity WHERE pid = $1",
+      [pid]
+    )
+    if (rows.length === 0) return
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error(`backend ${pid} did not exit`)
+}
+
 const quoted = (name: string) => `"${name.replaceAll('"', '""')}"`
 
 /**
  * Runs `fn` with a run-tagged login role that has a password and the given
  * memberships `WITH INHERIT FALSE, SET TRUE` — the shape of the runtime login
  * role (`simetra_runtime`): it reaches a role only by `SET LOCAL ROLE`. `fn`
- * gets the URL of the database `url` as that role. The role and its backends
+ * gets the URL of the database `url` as that role (`CONNECT` on it is granted:
+ * a stack database may not give it to `PUBLIC`). The role and its backends
  * are removed on every path; `label` is the readable part of the name, and a
  * random tail makes every call's role name unique.
  * `attributes` gives the role a fact the runtime login must not have
@@ -154,28 +317,29 @@ export async function withRuntimeLogin<T>(
   const password = randomBytes(12).toString("hex")
   const bypass = attributes.bypassRls === true ? " bypassrls" : ""
   // Створення — до `try`: невдале створення не видаляє чужої ролі з тим ім'ям
-  await query(
-    testSuperuserUrl(),
+  await asStack(
     `create role ${quoted(name)} login noinherit${bypass} password '${password}'`
   )
+  const database = quoted(databaseOf(url))
   try {
+    await asStack(`grant connect on database ${database} to ${quoted(name)}`)
     for (const role of memberOf)
-      await query(
-        testSuperuserUrl(),
+      await asStack(
         `grant ${quoted(role)} to ${quoted(name)} with inherit false, set true`
       )
-    const login = new URL(url)
-    login.username = name
-    login.password = password
-    return await fn(login.toString())
+    return await fn(loginUrl(url, name, password))
   } finally {
     // Пулер тримає серверні з'єднання ролі й після тесту: без завершення
     // бекендів тінь не видалилася б, а роль лишила б сесії сторожу
-    await query(
-      testSuperuserUrl(),
+    await asStack(
       "select pg_terminate_backend(pid) from pg_stat_activity where usename = $1",
       [name]
     )
+    // Грант на базу тримав би роль від `DROP ROLE`; бази вже може не бути —
+    // тоді й гранту немає
+    await asStack(
+      `revoke connect on database ${database} from ${quoted(name)}`
+    ).catch(() => undefined)
     await dropRoles(name)
   }
 }
@@ -201,15 +365,17 @@ export function throughPoolerAs(loginUrl: string): string {
 /**
  * A pool of `loginUrl` through the pooler, or `null` when the caller does not
  * ask for it. Only the Supabase-bound halves of a test ask: a stack without a
- * pooler never resolves `testPoolerUrl()` for the other half.
+ * pooler never resolves `testPoolerUrl()` for the other half. The pool is
+ * checked for a role left on its clients (`trackPool`).
  */
 export function poolerPoolOf(
   loginUrl: string,
   viaPooler: boolean
 ): pg.Pool | null {
-  return viaPooler
-    ? new pg.Pool({ connectionString: throughPoolerAs(loginUrl) })
-    : null
+  if (!viaPooler) return null
+  const pool = new pg.Pool({ connectionString: throughPoolerAs(loginUrl) })
+  trackPool(pool)
+  return pool
 }
 
 /** The pooler pool of an environment built with it; a test bug otherwise. */
@@ -242,11 +408,66 @@ export async function seedMarker(
  * Окремого прибирання немає: налаштування зникає разом із тінню.
  */
 export async function markDevelopmentDatabase(url: string): Promise<void> {
-  const name = decodeURIComponent(new URL(url).pathname.slice(1))
-  await query(
-    asSuperuser(url),
-    `alter database ${quoted(name)} set simetra.environment = 'development'`
+  await asStack(
+    `alter database ${quoted(databaseOf(url))} set simetra.environment = 'development'`
   )
+}
+
+/**
+ * Ідентичність Better Auth тегованої цілі `url` (рішення Р17 плану ПГ-2b):
+ * ціль дістає той самий стан, що й база тестів після `db:pg:start`, —
+ * `CONNECT` і схему `better_auth` ролі входу сервісу, справжню міграцію від
+ * неї та тимчасові гранти власнику (`prepareStackIdentity`). Кличеться до
+ * першого плану чи застосування, що посилається на ідентичність: таблиця,
+ * яку pg-delta створила б заглушкою від ролі рушія, — помилка налаштування
+ * тесту, і хелпер її не перевласнює. На `supabase` ідентичність дає
+ * провайдер — нічого не робить.
+ */
+export async function withTargetIdentity(url: string): Promise<void> {
+  if (testProvider() !== "postgres") return
+  const auth = authLoginRole()
+  const database = databaseOf(url)
+  const { schema, name } = PROVIDER_IDENTITY_SOURCES.postgres.table
+  const client = await superuserClient(database)
+  try {
+    const { rows } = await client.query<{
+      schema: string | null
+      table: string | null
+    }>(
+      `SELECT (SELECT pg_catalog.pg_get_userbyid(nspowner) FROM pg_catalog.pg_namespace WHERE nspname = $1) AS schema,
+              (SELECT pg_catalog.pg_get_userbyid(c.relowner) FROM pg_catalog.pg_class c
+                 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = $1 AND c.relname = $2) AS table`,
+      [schema, name]
+    )
+    const facts = rows[0]!
+    if (facts.table !== null && facts.table !== auth)
+      throw new Error(
+        `${quoteIdent(schema)}.${quoteIdent(name)} of ${database} is owned by ${facts.table}, not ${auth}`
+      )
+    if (facts.schema !== null && facts.schema !== auth)
+      throw new Error(
+        `schema ${schema} of ${database} is owned by ${facts.schema}, not ${auth}`
+      )
+    await client.query(
+      `GRANT CONNECT ON DATABASE ${quoted(database)} TO ${quoteIdent(auth)}`
+    )
+    await client.query(
+      `CREATE SCHEMA IF NOT EXISTS ${quoteIdent(schema)} AUTHORIZATION ${quoteIdent(auth)}`
+    )
+  } finally {
+    await client.end()
+  }
+  await prepareStackIdentity({
+    superuserUrl: asSuperuser(url),
+    authUrl: loginUrl(
+      url,
+      auth,
+      devSecret("SIMETRA_AUTH_DEV_PASSWORD", LOGIN_SECRETS_FILE)
+    ),
+    auth,
+    owner: PROVIDER_OWNER_ROLES.postgres,
+  })
 }
 
 /** Актор рантайму: організація, користувач, від якого діє сесія, і його учасник. */
@@ -304,22 +525,22 @@ export async function committed(
  * Закомічений засів власником під режимом обслуговування прав: рядки
  * довідників прав інакше відхилив би запобіжник `rights-context`. Відкладені
  * запобіжники судяться ще в режимі — `SET CONSTRAINTS ALL IMMEDIATE` до
- * вимкнення, а не на `COMMIT` уже без нього.
+ * вимкнення, а не на `COMMIT` уже без нього. Увесь засів — від входу
+ * власника (`asSessionLogin`): гард режиму вимагає `session_user =
+ * current_user`, а на адресі тестів `postgres` сесія — суперкористувач.
  */
 export function seedUnderMaintenance(
   owner: pg.Client,
   steps: () => Promise<void>
 ): Promise<void> {
-  return committed(owner, async () => {
-    await owner.query("SELECT set_config($1, 'on', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
-    await steps()
-    await owner.query("SET CONSTRAINTS ALL IMMEDIATE")
-    await owner.query("SELECT set_config($1, 'off', true)", [
-      RIGHTS_MAINTENANCE_SETTING,
-    ])
-  })
+  return committed(owner, () =>
+    asSessionLogin(owner, PROVIDER_OWNER_ROLES[testProvider()], async () => {
+      await setLocalSetting(owner, RIGHTS_MAINTENANCE_SETTING, "on")
+      await steps()
+      await owner.query("SET CONSTRAINTS ALL IMMEDIATE")
+      await setLocalSetting(owner, RIGHTS_MAINTENANCE_SETTING, "off")
+    })
+  )
 }
 
 /** Оператор, який рантайм надіслав порту; `failed` — відповідь бази помилкою. */

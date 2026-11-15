@@ -1,5 +1,6 @@
 import pg from "pg"
 import { describe, expect, it } from "vitest"
+import { PROVIDER_API_ROLES } from "simetra/model"
 import { applyChanges, promoteObject } from "simetra/compiler"
 import {
   COUNTERPARTY_SQL,
@@ -8,7 +9,8 @@ import {
   promotionProject,
 } from "../../src/compiler/__tests__/fixtures/promotion"
 import { acceptDebt, uuid } from "../../src/compiler/__tests__/helpers"
-import { testSuperuserUrl, withRollback } from "./connection"
+import { asStackSuperuser, withRollback } from "./connection"
+import { testProvider } from "./profile"
 
 /**
  * Переписані промоцією тіла функцій проти живого Postgres: на схемі після
@@ -44,7 +46,7 @@ async function checkErrors(
   relid: string
 ): Promise<string[]> {
   const { rows } = await db.query<{ message: string }>(
-    `SELECT message FROM plpgsql_check_function_tb($1::regprocedure, $2::regclass)
+    `SELECT message FROM extensions.plpgsql_check_function_tb($1::regprocedure, $2::regclass)
      WHERE level = 'error'`,
     [fn, relid]
   )
@@ -64,9 +66,17 @@ async function failure(db: pg.Client, sql: string): Promise<string> {
   }
 }
 
+// Модуль фікстури дає політику й грант ролі запиту Supabase `authenticated`;
+// предмет тесту — тіла функцій, тож на стеку ціль — роль запиту профілю
+const forProfile = (text: string) =>
+  text.replaceAll(
+    /\bTO authenticated\b/g,
+    `TO ${PROVIDER_API_ROLES[testProvider()].user}`
+  )
+
 // Файл функції створює її; на базі, де вона вже є, П3 її замінює
 const replacing = (text: string) =>
-  text.replaceAll(/CREATE FUNCTION/g, "CREATE OR REPLACE FUNCTION")
+  forProfile(text).replaceAll(/CREATE FUNCTION/g, "CREATE OR REPLACE FUNCTION")
 
 async function promoted() {
   const files = await acceptDebt(promotionProject())
@@ -106,18 +116,24 @@ describe("promote: rewritten function bodies on the renamed schema", () => {
       `function:${TOUCH}`,
     ])
 
-    // `CREATE EXTENSION plpgsql_check` роль застосунку не виконає.
+    // Схема й функції — від власника, як у застосування. `plpgsql_check` у
+    // схемі `extensions` стек `postgres` ставить сам; де її немає, власник
+    // розширення не створить — лише суперкористувач.
     await withRollback(async (db) => {
       // 1. Прийнята схема: таблиця, вихідні функції, тригер — з файлів фікстури
       await db.query(ADOPTED_TABLE)
-      await db.query(before.get(COUNTERPARTY_SQL)!)
-      await db.query(before.get(SHARED_SQL)!)
+      await db.query(forProfile(before.get(COUNTERPARTY_SQL)!))
+      await db.query(forProfile(before.get(SHARED_SQL)!))
       await db.query(
         "INSERT INTO app.counterparties (id, name, inn) VALUES (gen_random_uuid(), 'Acme', 'X1')"
       )
 
       // 2.
-      await db.query("CREATE EXTENSION plpgsql_check")
+      await asStackSuperuser(db, () =>
+        db.query(
+          "CREATE EXTENSION IF NOT EXISTS plpgsql_check SCHEMA extensions"
+        )
+      )
 
       // 3. Перейменування з запису: колонки називають нову таблицю
       for (const t of record.tables) {
@@ -162,6 +178,6 @@ describe("promote: rewritten function bodies on the renamed schema", () => {
          RETURNING description`
       )
       expect(inserted.rows).toEqual([{ description: "Globex" }])
-    }, testSuperuserUrl())
+    })
   })
 })

@@ -10,13 +10,14 @@ import {
   writeRoles,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { snakeCaseTwin } from "../../src/compiler/__tests__/fixtures/snake-case"
-import { commandAs } from "./connection"
+import { claimsFor, commandAs } from "./connection"
 import {
   deploy,
   assignmentRow,
   closureRights,
   describeTransaction,
   insert,
+  profileLayer,
   seedAdministration,
   type Seed,
 } from "./rights-seed"
@@ -31,7 +32,7 @@ import {
 describe("snake_case project with rights catalogs", () => {
   const tx = describeTransaction()
   let ids: Seed = {}
-  const claims = (user: string) => ({ sub: ids[user], role: "authenticated" })
+  const claims = (user: string) => claimsFor("user", ids[user])
   const command = (
     user: string,
     context: { action: string; object: string; root: string },
@@ -43,7 +44,7 @@ describe("snake_case project with rights catalogs", () => {
 
   beforeAll(async () => {
     const result = await compileRights(
-      snakeCaseTwin(policyDomain(writeRoles(), adminRoles()))
+      snakeCaseTwin(policyDomain(writeRoles(), adminRoles(), profileLayer()))
     )
     expect(result.diagnostics).toEqual([])
     expect(result.model!.project.naming.attributeCase).toBe("snake_case")
@@ -53,9 +54,6 @@ describe("snake_case project with rights catalogs", () => {
     // предмет тут — політики й тригери прав над прямим записом.
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PLATFORM_ROLES.command}`
-    )
-    await client.query(
-      `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
     )
     ids = await seedAdministration(client)
     // Учасник з роллю запису задач і задача, яку він змінює.

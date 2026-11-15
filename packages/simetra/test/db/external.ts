@@ -79,13 +79,15 @@ export async function createRunBucket(
 /**
  * Every container of profile `p` that carries a run label, with its tag. A
  * container without a tag value is not a run's and is skipped. Throws when
- * docker fails: an empty list then would hide a leak.
+ * docker fails or does not answer within `timeoutMs`: an empty list then
+ * would hide a leak.
  */
 export function runContainers(
   p: TestProvider,
-  exec: Exec
+  exec: Exec,
+  timeoutMs: number = CALL_TIMEOUT_MS
 ): Promise<{ name: string; tag: string }[]> {
-  return listContainers(p, exec, CALL_TIMEOUT_MS)
+  return listContainers(p, exec, timeoutMs)
 }
 
 async function listContainers(

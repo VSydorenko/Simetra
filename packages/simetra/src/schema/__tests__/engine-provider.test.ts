@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { PROVIDER_SCHEMAS } from "simetra/model"
 import {
+  copiesShadowFromTemplate,
   PROVIDER_BASE_EXTENSIONS,
   PROVIDER_EVENT_TRIGGERS,
   PROVIDER_EXPECTED_BLIND_FUNCTIONS,
@@ -64,7 +65,11 @@ describe("postgres preset of T2", () => {
 
   it("surface is the Better Auth user table, triggers only", () => {
     expect(PROVIDER_SURFACES.postgres).toEqual([
-      { schema: "better_auth", table: "user", classes: ["trigger"] },
+      {
+        schema: "better_auth",
+        table: "user",
+        classes: ["trigger", "references"],
+      },
     ])
   })
 
@@ -80,5 +85,10 @@ describe("postgres preset of T2", () => {
       supabase: null,
       postgres: "simetra_template",
     })
+  })
+
+  it("copiesShadowFromTemplate follows the template registry", () => {
+    expect(copiesShadowFromTemplate("supabase")).toBe(false)
+    expect(copiesShadowFromTemplate("postgres")).toBe(true)
   })
 })

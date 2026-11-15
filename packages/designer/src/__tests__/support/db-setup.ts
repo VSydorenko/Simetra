@@ -1,5 +1,10 @@
-import { afterAll, vi } from "vitest"
-import { expectNoLeftoverShadows } from "./shadows"
+import { afterAll, afterEach, onTestFinished, TestRunner, vi } from "vitest"
+import {
+  expectFileConnectionRoles,
+  expectFileEndRoles,
+  useTestHooks,
+} from "../../../../simetra/test/db/connection"
+import { expectNoLeftoverShadows, reportDropRetries } from "./shadows"
 
 /**
  * setupFile DB-проєкту designer: тіні двигуна несуть тег прогону, а їхні
@@ -37,7 +42,14 @@ vi.mock("@supabase/pg-delta", async (importOriginal) => {
 /**
  * Те саме для тіні з шаблону (профіль `postgres`): двигун створює її власною
  * `provisionTemplateShadow`, яку `vi.mock` pg-delta не бачить. Обгортка
- * додає тег прогону й записує ім'я в той самий облік; решта — без змін.
+ * додає тег прогону, записує ім'я в той самий облік, а невдалий `DROP` її
+ * прибирання — під іменем тіні; перед `DROP` прибирання чекає, доки бекенди
+ * прогону підуть із тіні (`awaitRunBackends`), а `DROP`, відхилений з
+ * `42501`, повторює до трьох разів і записує кожен повтор
+ * (`retryDropOnSuperuserBackend`); решта — без змін. Саму прив'язку цього
+ * ланцюжка тест не охоплює: поведінку кожної ланки тримає
+ * `leftover-shadows.test.ts`, а проводку в `provisionTemplateShadow` — лише
+ * прогін двадцяти запусків без осиротілих тіней.
  */
 vi.mock(
   "../../schema-engine/pg-delta/template-shadow",
@@ -46,7 +58,12 @@ vi.mock(
       await importOriginal<
         typeof import("../../schema-engine/pg-delta/template-shadow")
       >()
-    const { recordProvision } = await import("./shadows")
+    const {
+      awaitRunBackends,
+      recordDropFailures,
+      recordProvision,
+      retryDropOnSuperuserBackend,
+    } = await import("./shadows")
     const { shadowSuffix } = await import("../../../../simetra/test/support")
     return {
       ...actual,
@@ -56,10 +73,14 @@ vi.mock(
         opts?: Parameters<typeof actual.provisionTemplateShadow>[2]
       ) =>
         recordProvision(
-          actual.provisionTemplateShadow(baseUrl, template, {
-            ...opts,
-            uniqueSuffix: opts?.uniqueSuffix ?? shadowSuffix(),
-          })
+          actual
+            .provisionTemplateShadow(baseUrl, template, {
+              ...opts,
+              uniqueSuffix: opts?.uniqueSuffix ?? shadowSuffix(),
+            })
+            .then(awaitRunBackends)
+            .then((shadow) => retryDropOnSuperuserBackend(shadow))
+            .then(recordDropFailures)
         ),
     }
   }
@@ -68,3 +89,16 @@ vi.mock(
 // Після кожного файлу, а не після кожного тесту: у файлі з конкурентними
 // тестами живі тіні сусідніх тестів дали б `afterEach` хибну тривогу
 afterAll(expectNoLeftoverShadows)
+// Повтор, що вдався, тіні не лишає: рядок про нього — єдиний слід гонки
+afterAll(reportDropRetries)
+
+// Дрейф ролі (спека профілю §10.3, запобіжник 3): клієнтів, відкритих
+// хелпером у тесті, перевіряє `onTestFinished` хелпера; тут — відкриті поза
+// тестом, після кожного послідовного тесту, а пули й нове з'єднання з адреси
+// тестів — наприкінці файлу
+useTestHooks({
+  current: () => TestRunner.getCurrentTest(),
+  onFinished: (check) => onTestFinished(check),
+})
+afterEach(({ task }) => expectFileConnectionRoles(task))
+afterAll(expectFileEndRoles)

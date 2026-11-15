@@ -30,6 +30,21 @@ describe("readFingerprint", () => {
     })
   })
 
+  // Провайдер міток на стеку — `pgsodium` у `shared_preload_libraries`; на
+  // чистому Postgres мітки безпеки немає чим поставити
+  it("section per mutation: security label", async () => {
+    await inTarget(FIXTURE, async (url) => {
+      expect(
+        await changedBy(url, () =>
+          query(
+            url,
+            "security label for pgsodium on column app.t.name is 'ENCRYPT WITH KEY ID 00000000-0000-0000-0000-000000000000'"
+          )
+        )
+      ).toEqual(["comments"])
+    })
+  })
+
   it("sees provider surface policies", async () => {
     await inTarget(FIXTURE, async (url) => {
       expect(

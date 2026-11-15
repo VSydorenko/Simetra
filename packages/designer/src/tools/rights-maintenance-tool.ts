@@ -5,7 +5,7 @@ import {
   type RightsMaintenanceDone,
 } from "simetra/schema"
 import { z } from "zod"
-import { withDatabase } from "../io/database"
+import { failureDiagnostics, withDatabase } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
 import { fromEngine, required } from "./database-tools"
 import { defineTool } from "./types"
@@ -74,7 +74,7 @@ export const rightsMaintenanceTool = defineTool({
         )
     )
     if (!ran.ok)
-      return { ok: false, changes: [], diagnostics: [ran.diagnostic] }
+      return { ok: false, changes: [], diagnostics: failureDiagnostics(ran) }
     if (!ran.value.ok)
       return {
         ok: false,

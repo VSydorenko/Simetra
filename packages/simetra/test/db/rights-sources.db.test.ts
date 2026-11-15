@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type pg from "pg"
 import type { CompiledModel } from "simetra/compiler"
+import type { ApiRolePurpose } from "simetra/model"
 import { renderApplyState } from "simetra/schema"
 import {
   ADOPTED_LEAD_KEY,
@@ -31,10 +32,12 @@ import {
   mineEquivalence,
 } from "./closure-oracle"
 import {
-  type ApiRole,
+  asStackSuperuser,
   queryAs,
   rollbackDatabase,
   testRoleName,
+  restoreOwnerRole,
+  claimsFor,
 } from "./connection"
 import {
   type Seed,
@@ -44,6 +47,7 @@ import {
   outcome,
   set,
   deploy,
+  profileLayer,
 } from "./rights-seed"
 
 /**
@@ -67,7 +71,7 @@ async function sourcesModel(
 }
 
 /** Від чийого імені запит: ключ засіву (`sub`) чи власні роль і claims. */
-type Who = string | { role: ApiRole; claims: Record<string, unknown> }
+type Who = string | { role: ApiRolePurpose; claims: Record<string, unknown> }
 
 /** Перевірка: хто, запит з одним значенням `v` і очікування (масив — множина). */
 type Check = [who: Who, sql: string, expected: unknown]
@@ -102,7 +106,7 @@ async function runChecks(
   for (const [who, sql, expected] of checks(id)) {
     const [role, claims] =
       typeof who === "string"
-        ? (["authenticated", { sub: id(who), role: "authenticated" }] as const)
+        ? (["user", claimsFor("user", id(who))] as const)
         : [who.role, who.claims]
     const result = await queryAs<{ v: unknown }>(client, role, claims, sql)
     const want = Array.isArray(expected) ? [...expected].sort() : expected
@@ -326,7 +330,7 @@ describe("adopted sources", () => {
 
   beforeAll(async () => {
     model = await sourcesModel(
-      adoptedSourcesDomain(adoptedCrossKind(), activeGrants())
+      adoptedSourcesDomain(adoptedCrossKind(), activeGrants(), profileLayer())
     )
     const client = await tx.open()
     await deploy(client, model)
@@ -472,10 +476,14 @@ describe("adopted sources", () => {
     const schema = testRoleName("source_schema")
     await client.query("SAVEPOINT plan_facts")
     try {
-      // Творець ролі може перемкнутися на неї лише з `set` (Postgres 16+)
+      // Творець ролі може перемкнутися на неї лише з `set` (Postgres 16+);
+      // ролі й членства власник профілю не створить — їх дає
+      // суперкористувач стека, а все інше лишається за власником
       await client.query("SET LOCAL createrole_self_grant = 'set, inherit'")
-      await client.query(`CREATE ROLE ${role} NOLOGIN NOBYPASSRLS`)
-      await client.query(`GRANT USAGE ON SCHEMA public TO ${role}`)
+      await asStackSuperuser(client, async () => {
+        await client.query(`CREATE ROLE ${role} NOLOGIN NOBYPASSRLS`)
+        await client.query(`GRANT USAGE ON SCHEMA public TO ${role}`)
+      })
       await client.query(
         `GRANT SELECT ON public.membership, public.role_grant, public.global_grant TO ${role}`
       )
@@ -492,11 +500,13 @@ describe("adopted sources", () => {
         unknownKeys: [{ source: "globalGrants", keys: [], more: 0 }],
         ...noRights,
       })
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
 
       // Не власник, але з `BYPASSRLS`: RLS таблиці його не зупиняє
-      await client.query(`CREATE ROLE ${bypass} NOLOGIN BYPASSRLS`)
-      await client.query(`GRANT USAGE ON SCHEMA public TO ${bypass}`)
+      await asStackSuperuser(client, async () => {
+        await client.query(`CREATE ROLE ${bypass} NOLOGIN BYPASSRLS`)
+        await client.query(`GRANT USAGE ON SCHEMA public TO ${bypass}`)
+      })
       await client.query(`GRANT SELECT ON public.role_grant TO ${bypass}`)
       await client.query(`SET LOCAL ROLE ${bypass}`)
       expect
@@ -506,18 +516,20 @@ describe("adopted sources", () => {
           unknownKeys: [],
           ...noRights,
         })
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
 
       // Власник, успадкований через членство (`pg_has_role`), обходить RLS
-      await client.query(`CREATE ROLE ${owner} NOLOGIN NOBYPASSRLS`)
-      await client.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${owner}`)
       await client.query(`CREATE TABLE public.${ownedTable} (id integer)`)
-      await client.query(`ALTER TABLE public.${ownedTable} OWNER TO ${owner}`)
       await client.query(
         `ALTER TABLE public.${ownedTable} ENABLE ROW LEVEL SECURITY`
       )
-      await client.query(`CREATE ROLE ${heir} NOLOGIN NOBYPASSRLS`)
-      await client.query(`GRANT ${owner} TO ${heir}`)
+      await asStackSuperuser(client, async () => {
+        await client.query(`CREATE ROLE ${owner} NOLOGIN NOBYPASSRLS`)
+        await client.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${owner}`)
+        await client.query(`ALTER TABLE public.${ownedTable} OWNER TO ${owner}`)
+        await client.query(`CREATE ROLE ${heir} NOLOGIN NOBYPASSRLS`)
+        await client.query(`GRANT ${owner} TO ${heir}`)
+      })
       await client.query(`SET LOCAL ROLE ${heir}`)
       expect
         .soft(await ownersOf(["public", ownedTable]), "inherited owner")
@@ -526,12 +538,14 @@ describe("adopted sources", () => {
           unknownKeys: [],
           ...noRights,
         })
-      await client.query("RESET ROLE")
+      await restoreOwnerRole(client)
 
       // Без `SELECT` на таблиці без RLS — відмова; без `USAGE` на схемі —
       // теж відмова (рядок є), а не відсутність і не `42501`
-      await client.query(`CREATE ROLE ${blind} NOLOGIN NOBYPASSRLS`)
-      await client.query(`GRANT USAGE ON SCHEMA public TO ${blind}`)
+      await asStackSuperuser(client, async () => {
+        await client.query(`CREATE ROLE ${blind} NOLOGIN NOBYPASSRLS`)
+        await client.query(`GRANT USAGE ON SCHEMA public TO ${blind}`)
+      })
       await client.query(`CREATE SCHEMA ${schema}`)
       await client.query(`CREATE TABLE ${schema}.t (id integer)`)
       await client.query(`GRANT SELECT ON ${schema}.t TO ${blind}`)
@@ -629,8 +643,8 @@ async function seedWithoutUsers(client: pg.Client): Promise<Seed> {
 const CURRENT_USER = value("simetra.current_user_id()")
 /** `sub` не uuid: без regex приведення кинуло б `22P02` на кожному запиті. */
 const NOT_A_UUID: Who = {
-  role: "authenticated",
-  claims: { sub: "not-a-uuid", role: "authenticated" },
+  role: "user",
+  claims: claimsFor("user", "not-a-uuid"),
 }
 
 const WITHOUT_USERS_CASES: Case[] = [
@@ -642,7 +656,11 @@ const WITHOUT_USERS_CASES: Case[] = [
       [NOT_A_UUID, CURRENT_USER, null],
       [NOT_A_UUID, TASKS, []],
       [NOT_A_UUID, MINE, []],
-      [{ role: "anon", claims: { role: "anon" } }, CURRENT_USER, null],
+      [
+        { role: "anonymous", claims: claimsFor("anonymous") },
+        CURRENT_USER,
+        null,
+      ],
     ],
   ],
   [
@@ -677,7 +695,7 @@ describe("without users", () => {
 
   beforeAll(async () => {
     model = await sourcesModel(
-      adoptedSourcesDomain(withoutUsers(), polymorphicGrants())
+      adoptedSourcesDomain(withoutUsers(), polymorphicGrants(), profileLayer())
     )
     const client = await tx.open()
     await deploy(client, model)

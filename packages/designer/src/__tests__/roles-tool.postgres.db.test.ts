@@ -127,7 +127,8 @@ async function clusterState(set: PostgresClusterSet, extra: string[] = []) {
     databases: await sql(
       undefined,
       `select d.datname, o.rolname as owner, d.datistemplate, d.datallowconn,
-              d.datacl::text as datacl
+              d.datacl::text as datacl, d.datlocprovider, d.datlocale,
+              d.datcollate
          from pg_database d join pg_roles o on o.oid = d.datdba
         where d.datname = any($1) order by 1`,
       [[set.database, set.template, ...extra]]
@@ -362,6 +363,21 @@ describe("roles: the postgres profile cluster", () => {
         `select 1 from pg_namespace where nspname = 'better_auth'`
       )
     ).toEqual([])
+
+    // Колляція ICU en-US у цілі й шаблоні, і копія шаблону її успадковує:
+    // так створюються тіні й теговані бази (спека П4-B §4.2)
+    expect(
+      await sql(
+        undefined,
+        `select datname, datlocprovider as provider, datlocale as locale
+           from pg_database where datname = any($1) order by 1`,
+        [[set.database, set.template, copy]]
+      )
+    ).toEqual(
+      [set.database, set.template, copy]
+        .sort()
+        .map((datname) => ({ datname, provider: "i", locale: "en-US" }))
+    )
   })
 
   it("is idempotent, also after the template is sealed and after auth owns a table with a TOAST relation", async () => {
@@ -446,7 +462,12 @@ describe("roles: the postgres profile cluster", () => {
 
   it("refuses an existing database of another owner before it creates any role", async () => {
     const { set } = scenario("dbowner")
-    await sql(undefined, `create database ${id(set.database)}`)
+    // Колляція профілю: відмова має бути саме за власником
+    await sql(
+      undefined,
+      `create database ${id(set.database)} template template0
+         locale_provider icu icu_locale 'en-US'`
+    )
     const before = await clusterState(set)
     const result = await ensure(set)
     expect(result.ok ? [] : result.error).toMatchObject([
@@ -455,6 +476,59 @@ describe("roles: the postgres profile cluster", () => {
     expect(await clusterState(set)).toEqual(before)
     // Ролей ще немає: відмова фази читання нічого не створила
     expect(before.roles).toEqual([])
+  })
+
+  describe("a database with another collation", () => {
+    // Колляцію наявної бази не змінити, а перестворення втратило б дані:
+    // `roles` відмовляє й лишає базу як є
+    it("refuses a target database with the libc collation and leaves it as is", async () => {
+      const { set } = scenario("dblibc")
+      await mustEnsure(set)
+      await sql(undefined, `drop database ${id(set.database)} with (force)`)
+      await sql(
+        undefined,
+        `create database ${id(set.database)} owner ${id(set.owner)}
+           template template0 locale_provider libc`
+      )
+      await expectRefusal(set, [
+        {
+          code: "roles.database-locale",
+          params: { database: set.database, kind: "database" },
+        },
+      ])
+      expect(
+        await sql(
+          undefined,
+          `select datlocprovider as provider from pg_database where datname = $1`,
+          [set.database]
+        )
+      ).toEqual([{ provider: "c" }])
+    })
+
+    it("refuses a sealed template with the libc collation and leaves it as is", async () => {
+      const { set } = scenario("tpllibc")
+      await mustEnsure(set)
+      await sql(
+        undefined,
+        `alter database ${id(set.template)} is_template false`
+      )
+      await sql(undefined, `drop database ${id(set.template)}`)
+      await sql(
+        undefined,
+        `create database ${id(set.template)} template template0
+           locale_provider libc`
+      )
+      await sql(
+        undefined,
+        `alter database ${id(set.template)} with is_template true allow_connections false`
+      )
+      await expectRefusal(set, [
+        {
+          code: "roles.database-locale",
+          params: { database: set.template, kind: "template" },
+        },
+      ])
+    })
   })
 
   it("refuses an explicit CONNECT of a Simetra login role to another database", async () => {

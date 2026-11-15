@@ -6,6 +6,7 @@ import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
 import { PROVIDER_OWNER_ROLES, quoteIdent } from "simetra/model"
+import { STACK_LOCK_ENV } from "../../../../scripts/db-stack.mjs"
 import {
   CLUSTER_TRANSACTION_PRELUDE,
   postgresClusterSet,
@@ -79,7 +80,9 @@ export async function prepareStackIdentity(o: {
     if (rows[0]?.schema === true)
       await client.query(`REVOKE USAGE ON SCHEMA better_auth FROM ${owner}`)
     if (rows[0]?.tbl === true)
-      await client.query(`REVOKE TRIGGER ON better_auth."user" FROM ${owner}`)
+      await client.query(
+        `REVOKE TRIGGER, REFERENCES ON better_auth."user" FROM ${owner}`
+      )
   })
   await (o.migrate ?? migrateBetterAuth)(o.authUrl)
   await superuserTransaction(o.superuserUrl, async (client) => {
@@ -92,7 +95,11 @@ export async function prepareStackIdentity(o: {
         'better_auth."user" must be a table owned by the auth role; no grants were given'
       )
     await client.query(`GRANT USAGE ON SCHEMA better_auth TO ${owner}`)
-    await client.query(`GRANT TRIGGER ON better_auth."user" TO ${owner}`)
+    // `REFERENCES` — для зовнішнього ключа моделі на таблицю ідентичності,
+    // як у `auth.users` на supabase
+    await client.query(
+      `GRANT TRIGGER, REFERENCES ON better_auth."user" TO ${owner}`
+    )
   })
 }
 
@@ -116,6 +123,14 @@ function invokedAsCommand(): boolean {
 }
 
 if (invokedAsCommand()) {
+  // Міграція й гранти — під замком стека, як і решта `db:pg:start`: запуск
+  // повз скрипт ішов би посеред чужого DB-прогону
+  if (!process.env[STACK_LOCK_ENV]) {
+    console.error(
+      `better-auth-cli: ${STACK_LOCK_ENV} is not set; run it through pnpm db:pg:start, which holds the stack lock`
+    )
+    process.exit(1)
+  }
   prepareStackIdentity({
     superuserUrl: requiredEnv(SUPERUSER_URL_ENV),
     authUrl: requiredEnv(AUTH_URL_ENV),

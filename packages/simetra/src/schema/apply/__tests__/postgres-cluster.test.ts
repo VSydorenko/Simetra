@@ -4,24 +4,31 @@ import {
   PROVIDER_LOGIN_ROLES,
   PROVIDER_OWNER_ROLES,
   PROVIDER_SCHEMAS,
+  quoteIdent,
 } from "simetra/model"
+import {
+  ensurePostgresCluster,
+  platformRoleSet,
+  postgresClusterSet,
+  type ApplyDatabase,
+  type PlatformRoleRow,
+  type PostgresClusterSet,
+} from "simetra/schema"
 import {
   authSchemaViolation,
   clusterRoleViolation,
-  ensurePostgresCluster,
+  databaseLocaleViolation,
   explicitConnectDatabases,
   extensionsSchemaViolation,
-  platformRoleSet,
-  postgresClusterSet,
   templateState,
-  type ApplyDatabase,
   type AuthSchemaFacts,
   type ExtensionsSchemaFacts,
-  type PlatformRoleRow,
-  type PostgresClusterSet,
   type TemplateRow,
-} from "simetra/schema"
-import { PROVIDER_SHADOW_TEMPLATES } from "../../engine/provider/presets"
+} from "../postgres-cluster"
+import {
+  PROVIDER_DATABASE_LOCALES,
+  PROVIDER_SHADOW_TEMPLATES,
+} from "../../engine/provider/presets"
 import { CLUSTER_ADVISORY_LOCK } from "../execute"
 import {
   CLUSTER_TRANSACTION_PRELUDE,
@@ -352,7 +359,10 @@ describe("templateState", () => {
  * Порт-пастка: відповідає на запити за шматком SQL і записує все, що йшло.
  * Адреса з'єднання тут — його назва.
  */
-function trapPort(answers: (sql: string) => Record<string, unknown>[]) {
+function trapPort(
+  answers: (sql: string) => Record<string, unknown>[],
+  version = { num: 170000, version: "17.0" }
+) {
   const calls: {
     kind: "transaction" | "statement"
     db: string
@@ -371,7 +381,7 @@ function trapPort(answers: (sql: string) => Record<string, unknown>[]) {
       return fn({
         query: (async (sql: string) => {
           call.sql.push(sql)
-          return answers(sql)
+          return sql.includes("server_version_num") ? [version] : answers(sql)
         }) as never,
         extract: () => Promise.reject(new Error("no extract")),
       })
@@ -398,7 +408,104 @@ const allRoleNames = [
   ...set.roles.login.map((l) => l.name),
 ]
 
+const icu = { localeProvider: "icu", locale: "en-US", icuRules: null }
+
+describe("databaseLocaleViolation", () => {
+  it.each([
+    ["ICU en-US", { ...icu }, undefined],
+    [
+      "libc of the same language",
+      { ...icu, localeProvider: "libc", locale: "en_US.utf8" },
+      "libc en_US.utf8",
+    ],
+    ["ICU of another locale", { ...icu, locale: "uk-UA" }, "icu uk-UA"],
+    [
+      "the builtin provider",
+      { ...icu, localeProvider: "builtin", locale: "C.UTF-8" },
+      "builtin C.UTF-8",
+    ],
+    [
+      "ICU en-US with custom rules",
+      { ...icu, icuRules: "&a < b" },
+      "icu en-US with ICU rules",
+    ],
+  ] as const)("%s", (_title, found, expected) => {
+    expect(databaseLocaleViolation(found)).toBe(expected)
+  })
+})
+
+/** Рядок `pg_database`, на який відповідає порт-пастка. */
+const databaseRow = (
+  name: string,
+  over: Record<string, unknown> = {}
+): Record<string, unknown> => ({
+  name,
+  owner: "postgres",
+  ownerSuper: true,
+  isTemplate: false,
+  allowConnections: true,
+  ...icu,
+  ...over,
+})
+
 describe("ensurePostgresCluster", () => {
+  it("creates the target database and the template from template0 with the ICU locale of the profile", async () => {
+    const { dbs, calls } = trapPort((sql) =>
+      sql.includes("session_user") ? [{ ok: true, database: "x" }] : []
+    )
+    const result = await ensurePostgresCluster(dbs, conns, set)
+    expect(result).toMatchObject({ ok: true })
+    const { provider, locale } = PROVIDER_DATABASE_LOCALES.postgres
+    const q = quoteIdent
+    const options = `TEMPLATE ${q("template0")} LOCALE_PROVIDER ${provider} ICU_LOCALE '${locale}'`
+    expect(
+      calls
+        .filter((c) => c.kind === "statement")
+        .flatMap((c) => c.sql)
+        .filter((s) => s.startsWith("CREATE DATABASE"))
+    ).toEqual([
+      `CREATE DATABASE ${q(set.database)} OWNER ${q(set.owner)} ${options}`,
+      `CREATE DATABASE ${q(set.template)} ${options}`,
+    ])
+  })
+
+  it.each([
+    ["the target database", "database"],
+    ["the template", "template"],
+  ] as const)(
+    "refuses %s with another collation before it writes anything",
+    async (_title, kind) => {
+      const name = kind === "database" ? set.database : set.template
+      const { dbs, calls } = trapPort((sql) => {
+        if (sql.includes("session_user")) return [{ ok: true, database: "x" }]
+        if (sql.includes("FROM pg_catalog.pg_database d JOIN"))
+          return [
+            databaseRow(name, {
+              localeProvider: "libc",
+              locale: "en_US.utf8",
+              ...(kind === "database"
+                ? { owner: set.owner, ownerSuper: false }
+                : { isTemplate: true, allowConnections: false }),
+            }),
+          ]
+        return []
+      })
+      const result = await ensurePostgresCluster(dbs, conns, set)
+      expect(result).toMatchObject({
+        ok: false,
+        error: [
+          {
+            code: "roles.database-locale",
+            params: { database: name, kind, actual: "libc en_US.utf8" },
+          },
+        ],
+      })
+      // Жодного запису: лише транзакції з відкатом, жодного оператора
+      expect(calls.filter((c) => c.kind === "statement")).toEqual([])
+      expect(calls.filter((c) => c.end === "commit")).toEqual([])
+    }
+  )
+
   it("refuses a session that is not a superuser before it takes the lock or writes", async () => {
     const { dbs, calls } = trapPort((sql) =>
       sql.includes("session_user") ? [{ ok: false, database: "postgres" }] : []
@@ -432,6 +539,22 @@ describe("ensurePostgresCluster", () => {
       expect(CLUSTER_TRANSACTION_PRELUDE).toContain(`SET LOCAL ${guc} = 0`)
     for (const sql of CLUSTER_TRANSACTION_PRELUDE)
       expect(sql.startsWith("SET LOCAL ")).toBe(true)
+  })
+
+  it("refuses a server older than the platform minimum before it reads the databases", async () => {
+    const { dbs, calls } = trapPort(
+      (sql) =>
+        sql.includes("session_user") ? [{ ok: true, database: "x" }] : [],
+      { num: 160004, version: "16.4" }
+    )
+    const result = await ensurePostgresCluster(dbs, conns, set)
+    expect(result).toMatchObject({
+      ok: false,
+      error: [{ code: "apply.server-unsupported" }],
+    })
+    expect(calls.filter((c) => c.kind === "statement")).toEqual([])
+    expect(calls.filter((c) => c.end === "commit")).toEqual([])
+    expect(calls.flatMap((c) => c.sql).join("\n")).not.toContain("datlocale")
   })
 
   it("holds the cluster lock in the reading transaction before any read", async () => {
@@ -493,6 +616,7 @@ describe("ensurePostgresCluster", () => {
             ownerSuper: false,
             isTemplate: false,
             allowConnections: true,
+            ...icu,
           },
           {
             name: set.template,
@@ -500,6 +624,7 @@ describe("ensurePostgresCluster", () => {
             ownerSuper: true,
             isTemplate: true,
             allowConnections: false,
+            ...icu,
           },
         ]
       if (sql.includes("aclexplode(d.datacl)")) return []

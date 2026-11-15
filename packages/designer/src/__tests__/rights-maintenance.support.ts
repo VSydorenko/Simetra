@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path"
 import pg from "pg"
 import { expect } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
-import { desiredForApply, type RightsMaintenanceRequest } from "simetra/schema"
+import type { RightsMaintenanceRequest } from "simetra/schema"
 import { databaseResource } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
 import { invoke } from "../tools/invoke"
@@ -18,8 +18,17 @@ import {
   adminRoles,
   memberScopedReferences,
   policyDomain,
+  profileLayer,
+  signUp,
 } from "../../../simetra/test/support"
-import { heldResource, inTarget, query, seedMarker } from "./support/db"
+import {
+  committed,
+  heldResource,
+  ownerLoginOf,
+  query,
+  seedMarker,
+  withModelTarget,
+} from "./support/db"
 
 /**
  * Спільна підготовка тестів інструмента обслуговування прав над справжньою
@@ -33,7 +42,14 @@ export const ORG = "org"
 
 export interface Env {
   dir: string
+  /** Ціль від адреси тестів: засів, читання й реєстрація користувачів. */
   url: string
+  /**
+   * Та сама ціль від входу мігратора (`ownerLoginOf`): режим обслуговування
+   * вимагає `session_user` власника функцій прав, а на адресі тестів
+   * `postgres` сесія — суперкористувач (Р16).
+   */
+  migrator: string
   model: CompiledModel
 }
 
@@ -44,7 +60,7 @@ export async function writeProject(): Promise<string> {
   await symlink(SIMETRA, join(root, "node_modules", "simetra"), "dir")
   const dir = join(root, "metadata")
   const files = await acceptDebt(
-    policyDomain(adminRoles(), memberScopedReferences())
+    policyDomain(adminRoles(), memberScopedReferences(), profileLayer())
   )
   for (const [path, content] of files) {
     await mkdir(dirname(join(dir, path)), { recursive: true })
@@ -54,9 +70,9 @@ export async function writeProject(): Promise<string> {
 }
 
 /**
- * Ціль з бажаним станом застосування й marker з хешем моделі теки: інструмент
+ * Ціль з моделлю (`withModelTarget`) і marker з хешем моделі теки: інструмент
  * компілює ту саму теку, тож звірка хешу проходить. Тримається, доки `close`
- * не відпустить колбек `inTarget`. З'єднань до цілі не тримає: копія
+ * не відпустить колбек цілі. З'єднань до цілі не тримає: копія
  * `TEMPLATE` вимагає цілі без сесій.
  */
 export const heldEnv = () =>
@@ -66,10 +82,9 @@ export const heldEnv = () =>
       const compiled = await compile(await readMetadataDir(dir))
       expect(compiled.diagnostics).toEqual([])
       const model = compiled.model!
-      const desired = await desiredForApply(model)
-      await inTarget(desired.sql, desired.scope, async (url) => {
+      await withModelTarget(model, async (url) => {
         await asOwner(url, (owner) => seedMarker(owner, model.hash))
-        await use({ dir, url, model })
+        await use({ dir, url, migrator: ownerLoginOf(url), model })
       })
     } finally {
       await rm(dirname(dir), { recursive: true, force: true })
@@ -89,6 +104,20 @@ export async function asOwner<T>(
     await owner.end()
   }
 }
+
+/**
+ * `n` нових користувачів бази `url`. Реєстрація закомічена: її читає
+ * інструмент з іншої сесії, а `signUp` профілю `postgres` перемикає роль
+ * лише в транзакції.
+ */
+export const signUps = (url: string, n: number): Promise<string[]> =>
+  asOwner(url, async (owner) => {
+    const ids: string[] = []
+    await committed(owner, async () => {
+      for (let i = 0; i < n; i++) ids.push(await signUp(owner))
+    })
+    return ids
+  })
 
 /** Інструмент так, як його запускає людина з `--yes`. */
 export const maintain = (

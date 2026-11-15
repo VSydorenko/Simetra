@@ -2,7 +2,8 @@
  * Пресет профілю `postgres` — чистий Postgres без образу провайдера (спека
  * профілів провайдера, §4.2): дзеркало `supabase.ts`, але майже порожнє.
  * Провайдер тут — лише схема Better Auth, тож межа керування бачить в чужих
- * схемах тригери провізії на `better_auth."user"` і більше нічого.
+ * схемах тригери провізії на `better_auth."user"` і зовнішні ключі застосунку на неї
+ * (клас `references`).
  */
 
 import type { ProviderLocks, ProviderSurface } from "./supabase"
@@ -12,7 +13,7 @@ import type { ProviderLocks, ProviderSurface } from "./supabase"
  * (спека профілю §4.2). Політик у схемі провайдера немає.
  */
 export const POSTGRES_SURFACES: readonly ProviderSurface[] = [
-  { schema: "better_auth", table: "user", classes: ["trigger"] },
+  { schema: "better_auth", table: "user", classes: ["trigger", "references"] },
 ]
 
 /** `simetra_auth` не має типових привілеїв у схемах межі: системних ролей немає. */

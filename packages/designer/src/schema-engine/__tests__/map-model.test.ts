@@ -1,7 +1,11 @@
 import { buildFactBase, encodeId, type StableId } from "@supabase/pg-delta"
 import { beforeAll, describe, expect, it } from "vitest"
 import { loadSqlParser, type SqlParser } from "simetra/compiler"
-import type { DatabaseProvider, FunctionVolatility } from "simetra/model"
+import {
+  PROVIDER_OWNER_ROLES,
+  type DatabaseProvider,
+  type FunctionVolatility,
+} from "simetra/model"
 import { mapModel } from "../pg-delta/map-model"
 
 let parse: SqlParser
@@ -89,4 +93,49 @@ describe("provider preset of the public schema grants", () => {
       "REVOKE USAGE ON SCHEMA public FROM PUBLIC",
     ])
   })
+})
+
+describe("the owner edge to the session role", () => {
+  const table: StableId = { kind: "table", schema: "app", name: "doc" }
+  // Ребро `owner` у виді двигуна — як його лишає проєкція: на postgres
+  // типового власника немає, тож ребро до ролі сесії доходить до мапера
+  const ownerIssues = (provider: DatabaseProvider, owner: string) => {
+    const role: StableId = { kind: "role", name: owner }
+    const view = buildFactBase(
+      [
+        { id: schema, payload: {} },
+        { id: table, parent: schema, payload: {} },
+        { id: role, payload: {} },
+      ],
+      [{ from: table, to: role, kind: "owner" }]
+    )
+    return mapModel(view, {
+      provider,
+      produced: new Map(),
+      parse,
+      defaults: { owner: PROVIDER_OWNER_ROLES[provider], entries: [] },
+      extensionComments: new Map(),
+      volatility: new Map(),
+    }).issues.filter((i) => i.property === "owner")
+  }
+
+  it.each(["postgres", "supabase"] as const)(
+    "%s: an object owned by the session role raises no issue",
+    (provider) => {
+      expect(ownerIssues(provider, PROVIDER_OWNER_ROLES[provider])).toEqual([])
+    }
+  )
+
+  it.each(["postgres", "supabase"] as const)(
+    "%s: an owner other than the session role is unrepresentable by name",
+    (provider) => {
+      expect(ownerIssues(provider, "app_admin")).toEqual([
+        {
+          object: table,
+          property: "owner",
+          detail: "owner role:app_admin is not the default owner",
+        },
+      ])
+    }
+  )
 })

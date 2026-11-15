@@ -21,6 +21,7 @@ import {
   type RehearsalProof,
   type SchemaEngine,
 } from "simetra/schema"
+import { PROVIDER_OWNER_ROLES } from "simetra/model"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import {
   acceptDebt,
@@ -34,6 +35,8 @@ import {
   promotionProject,
   project,
   testDatabaseUrl,
+  testProvider,
+  testRoleFor,
   testRoleName,
   testSuperuserUrl,
   uuid,
@@ -62,13 +65,31 @@ export const dbs = {
 export const writer = createApplyDatabase({ readOnly: false })
 export const targetScope: EngineScope = {
   schemas: ["app"],
-  provider: "supabase",
+  provider: testProvider(),
 }
+
+function requiredRole(purpose: "user" | "anonymous"): string {
+  const role = testRoleFor(purpose)
+  if (role === null)
+    throw new Error(`no ${purpose} role in the ${testProvider()} profile`)
+  return role
+}
+
+/** Роль плану: власник профілю, від якого сесія застосування. */
+export const SESSION_OWNER = PROVIDER_OWNER_ROLES[testProvider()]
+/** Ролі API профілю — гранти й політики тестів ідуть їм. */
+export const USER = requiredRole("user")
+export const ANON = requiredRole("anonymous")
 
 /** Роль, якій за спиною платформи передають таблицю цілі. */
 export const OWNER = testRoleName("build_plan_owner")
 /** Роль, членом якої роль сесії не є: об'єкт такого власника план не зніме. */
 export const STRANGER = testRoleName("build_plan_stranger")
+/**
+ * Роль, членом якої роль сесії є без успадкування (`INHERIT FALSE`): `ALTER`
+ * і `DROP` її об'єктів вимагають привілеїв ролі, а не лише членства.
+ */
+export const NOINHERIT_OWNER = testRoleName("build_plan_noinherit")
 
 /** Роль-група, членом якої є роль API: її привілеї роль API успадковує. */
 export const WRITERS = testRoleName("build_plan_writers")
@@ -89,13 +110,14 @@ export function useBuildPlanRoles(): void {
   beforeAll(() =>
     query(
       testSuperuserUrl(),
-      `create role ${OWNER} nologin; grant ${OWNER} to postgres;
+      `create role ${OWNER} nologin; grant ${OWNER} to ${SESSION_OWNER} with inherit true;
        create role ${STRANGER} nologin;
-       create role ${WRITERS} nologin; grant ${WRITERS} to authenticated;
+       create role ${NOINHERIT_OWNER} nologin; grant ${NOINHERIT_OWNER} to ${SESSION_OWNER} with inherit false;
+       create role ${WRITERS} nologin; grant ${WRITERS} to ${USER};
        create role ${COPIER} login password '${COPIER_PASSWORD}';`
     )
   )
-  afterAll(() => dropRoles(OWNER, STRANGER, WRITERS, COPIER))
+  afterAll(() => dropRoles(OWNER, STRANGER, NOINHERIT_OWNER, WRITERS, COPIER))
 }
 
 /**
@@ -117,7 +139,10 @@ export async function compiled(
   const result = await compile(
     await acceptDebt(
       metaFiles({
-        "project.meta.json": project({ defaultSchema: "app" }),
+        "project.meta.json": project({
+          defaultSchema: "app",
+          database: { provider: testProvider() },
+        }),
         ...entries,
       })
     )
@@ -309,6 +334,7 @@ export function contactsProject(): Map<string, string> {
     module: false,
     contacts: true,
     invoice: false,
+    provider: testProvider(),
   })
   const party = JSON.parse(files.get(COUNTERPARTY_FILE)!) as Json
   ;(party.columns as Json[])[2]!.comment = "Taxpayer number"
@@ -328,7 +354,11 @@ export function contactsProject(): Map<string, string> {
 /** Мапінг без кроку `fill` і з ТЧ `contacts`. */
 export function contactsMapping(): PromoteInput {
   const mapping = structuredClone(
-    counterpartyMapping({ module: false, fill: false })
+    counterpartyMapping({
+      module: false,
+      fill: false,
+      provider: testProvider(),
+    })
   )
   mapping.tabularSections = [
     {

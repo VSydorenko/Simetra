@@ -18,6 +18,7 @@ import {
 import { type Exec, type Fetch, nodeExec, removeRunResources } from "./external"
 import {
   PROVIDER_ENV,
+  SUPERUSER_PRELUDE,
   TEST_STACKS,
   testProvider,
   type TestProvider,
@@ -45,31 +46,24 @@ const BACKEND_POLL_MS = 100
  */
 export async function stopRunBackends(
   tag: string,
-  o: { graceMs?: number; signal?: AbortSignal } = {}
+  o: { graceMs?: number; signal?: AbortSignal; client?: ClientFactory } = {}
 ): Promise<{ stopped: number; left: number[] }> {
   checkTag(tag)
-  const client = sweepClient(
-    {
-      connectionString: testSuperuserUrl(),
-      connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-      // Явне ім'я важить більше за `PGAPPNAME` прогону, успадкований
-      // прибиральником, — і `pid <> pg_backend_pid()` нижче лише страховка
-      application_name: GUARD_APPLICATION_NAME,
-    },
-    o.signal
-  )
-  await client.connect()
+  const client = await openAdmin(testSuperuserUrl(), "postgres", o)
   try {
     // Точний збіг імені: шаблон міг би зачепити бекенди іншого прогону
     const running = async (): Promise<number[]> =>
       (
         await client.query<{ pid: number }>(
-          "select pid from pg_stat_activity where application_name = $1 and pid <> pg_backend_pid()",
+          "select pid from pg_catalog.pg_stat_activity where application_name = $1 and pid <> pg_catalog.pg_backend_pid()",
           [runApplicationName(tag)]
         )
       ).rows.map((row) => row.pid)
     const signal = (fn: string, pids: number[]): Promise<unknown> =>
-      client.query(`select ${fn}(pid) from unnest($1::int[]) as pid`, [pids])
+      client.query(
+        `select pg_catalog.${fn}(pid) from pg_catalog.unnest($1::int[]) as pid`,
+        [pids]
+      )
     const waitGone = async (ms: number): Promise<number[]> => {
       const deadline = Date.now() + ms
       for (;;) {
@@ -108,7 +102,12 @@ export async function stopRunBackends(
  */
 export async function sweepRun(
   tag: string,
-  o: { deadlineMs?: number; exec?: Exec; fetch?: Fetch } = {}
+  o: {
+    deadlineMs?: number
+    exec?: Exec
+    fetch?: Fetch
+    client?: ClientFactory
+  } = {}
 ): Promise<{ dropped: string[]; left: string[]; cleanup: string[] }> {
   checkTag(tag)
   const p = testProvider()
@@ -135,7 +134,7 @@ export async function sweepRun(
   let external: Awaited<ReturnType<typeof removeRunResources>>
   try {
     db = await Promise.race([
-      sweepDatabase(tag, p, dbDeadline, phase.signal),
+      sweepDatabase(tag, p, dbDeadline, phase.signal, o.client),
       timedOut,
     ])
   } catch (error) {
@@ -168,33 +167,30 @@ async function sweepDatabase(
   tag: string,
   p: TestProvider,
   deadline: number,
-  signal: AbortSignal
+  signal: AbortSignal,
+  make?: ClientFactory
 ): Promise<{ dropped: string[]; left: string[] }> {
+  const o = { signal, client: make }
   // Адреса, перевизначена на чужий стек, дала б прибиральнику видаляти там
   // об'єкти, поки прогін того стека тримає свій замок
-  await assertStack(p, signal)
+  await assertStack(p, o)
   // Воркери вже вбиті, але сервер доводить їхні запити до кінця й без
   // клієнта: важкий запит вантажив би стек наступному прогону після
   // звільнення замка
-  const stuck = (await stopRunBackends(tag, { signal })).left.map(
+  const stuck = (await stopRunBackends(tag, o)).left.map(
     (pid) => `backend ${pid} (did not stop)`
   )
   const { databases, roles } = runObjectPatterns(tag)
   const creating = runObjectStatementPattern(tag)
-  // Ролі видаляє лише суперкористувач стека; `DROP OWNED BY` діє в поточній
-  // базі, а тести працюють у `postgres`
-  const url = new URL(testSuperuserUrl())
-  url.pathname = "/postgres"
-  const client = sweepClient(
-    {
-      connectionString: url.href,
-      connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-      application_name: GUARD_APPLICATION_NAME,
-    },
-    signal
-  )
-  await client.connect()
+  // Ролі видаляє лише суперкористувач стека, а `DROP OWNED BY` діє лише в
+  // поточній базі: об'єкти й гранти ролі прогону лишаються і в `postgres`, і
+  // в базі тестів (на `postgres` — `simetra`)
+  const [main, ...rest] = stackDatabases(p)
+  const client = await openAdmin(testSuperuserUrl(), main!, o)
+  const others: GuardClient[] = []
   try {
+    for (const database of rest)
+      others.push(await openAdmin(testSuperuserUrl(), database, o))
     const dropped: string[] = []
     for (;;) {
       signal.throwIfAborted()
@@ -206,7 +202,7 @@ async function sweepDatabase(
       // читаннями, видно хоча б в одному з них
       const inFlight = (
         await client.query<{ pid: number; query: string }>(
-          "select pid, query from pg_stat_activity where pid <> pg_backend_pid() and state = 'active' and query ~* $1",
+          "select pid, query from pg_catalog.pg_stat_activity where pid <> pg_catalog.pg_backend_pid() and state = 'active' and query ~* $1",
           [creating.source]
         )
       ).rows
@@ -214,7 +210,7 @@ async function sweepDatabase(
       // ознаку не знято
       const foundDatabases = (
         await client.query<{ name: string; template: boolean }>(
-          "select datname as name, datistemplate as template from pg_database where datname ~ $1 order by 1",
+          "select datname as name, datistemplate as template from pg_catalog.pg_database where datname ~ $1 order by 1",
           [databases.source]
         )
       ).rows
@@ -222,7 +218,7 @@ async function sweepDatabase(
         databases: foundDatabases.map((row) => row.name),
         roles: await names(
           client,
-          "select rolname as name from pg_roles where rolname ~ $1 order by 1",
+          "select rolname as name from pg_catalog.pg_roles where rolname ~ $1 order by 1",
           roles.source
         ),
       }
@@ -236,12 +232,16 @@ async function sweepDatabase(
       if (all.length === 0) return { dropped, left: stuck }
       if (Date.now() > deadline) return { dropped, left: [...stuck, ...all] }
       for (const { pid } of inFlight)
-        await tryQuery(client, "SELECT pg_terminate_backend($1)", [pid])
+        await tryQuery(client, "SELECT pg_catalog.pg_terminate_backend($1)", [
+          pid,
+        ])
       const id = (name: string): string => client.escapeIdentifier(name)
       // Бази спершу: роль, що володіє базою, не видалиться
       for (const { name, template } of foundDatabases)
         if (await tryDrop(client, name, template)) dropped.push(name)
-      for (const name of found.roles)
+      for (const name of found.roles) {
+        for (const other of others)
+          await tryQuery(other, `DROP OWNED BY ${id(name)}`)
         if (
           await tryQuery(
             client,
@@ -249,12 +249,29 @@ async function sweepDatabase(
           )
         )
           dropped.push(name)
+      }
       // Повторний прохід ловить те, що встигло з'явитися між запитами
       await new Promise((resolve) => setTimeout(resolve, PASS_PAUSE_MS))
     }
   } finally {
+    for (const other of others) await other.end()
     await client.end()
   }
+}
+
+/**
+ * Бази стека, де можуть лишитися об'єкти чи гранти ролі прогону: `postgres`
+ * (кластерні факти, набір базового стану) і база тестів, коли вона інша.
+ * Перша — та, з якої видаляються бази й ролі.
+ */
+export function stackDatabases(p: TestProvider): string[] {
+  // Перевизначена адреса стосується лише профілю прогону
+  const url =
+    p === testProvider() ? testDatabaseUrl() : TEST_STACKS[p].databaseUrl
+  const tests = decodeURIComponent(new URL(url).pathname.slice(1))
+  return tests === "postgres" || tests === ""
+    ? ["postgres"]
+    : ["postgres", tests]
 }
 
 /**
@@ -294,24 +311,18 @@ export function stackMismatch(
  */
 export async function assertStack(
   p: TestProvider,
-  signal?: AbortSignal
+  o: { signal?: AbortSignal; client?: ClientFactory } = {}
 ): Promise<void> {
   for (const url of [testDatabaseUrl(), testSuperuserUrl()]) {
-    const client = sweepClient(
-      {
-        connectionString: url,
-        connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-        application_name: GUARD_APPLICATION_NAME,
-      },
-      signal
-    )
-    await client.connect()
+    // База `postgres` є на кожному стеку; база тестів — ні, поки стек не
+    // піднято командою свого профілю
+    const client = await openAdmin(url, "postgres", o)
     let supabaseAdmin: boolean
     try {
       supabaseAdmin =
         (
           await client.query<{ present: boolean }>(
-            "select exists (select from pg_roles where rolname = 'supabase_admin') as present"
+            "select exists (select from pg_catalog.pg_roles where rolname = 'supabase_admin') as present"
           )
         ).rows[0]?.present === true
     } finally {
@@ -326,16 +337,69 @@ export async function assertStack(
   }
 }
 
-// SQL ручного прибирання за тегом — на випадок, коли стек недосяжний
+// SQL ручного прибирання за тегом — на випадок, коли стек недосяжний.
+// `DROP OWNED BY` діє лише в поточній базі, тож блок на кожну базу стека
 export function manualSweepSql(tag: string, p: TestProvider): string {
   checkTag(tag)
   const { databases, roles } = runObjectPatterns(tag)
+  const [main, ...rest] = stackDatabases(p)
   return [
-    `-- as ${TEST_STACKS[p].superuserName}, connected to database postgres; run the generated statements`,
+    `-- as ${TEST_STACKS[p].superuserName}; run the generated statements of each block connected to the database it names (DROP OWNED BY acts in the current database only)`,
+    ...rest.flatMap((database) => [
+      `-- in database ${database}:`,
+      `SELECT format('DROP OWNED BY %I;', rolname) FROM pg_roles WHERE rolname ~ '${roles.source}';`,
+    ]),
+    `-- in database ${main!}:`,
     // `IS_TEMPLATE false` безпечний і для звичайної бази, а шаблон без нього не видалиться
     `SELECT format('ALTER DATABASE %I WITH IS_TEMPLATE false; DROP DATABASE %I WITH (FORCE);', datname, datname) FROM pg_database WHERE datname ~ '${databases.source}';`,
     `SELECT format('DROP OWNED BY %I; DROP ROLE %I;', rolname, rolname) FROM pg_roles WHERE rolname ~ '${roles.source}';`,
   ].join("\n")
+}
+
+/** Мінімальний клієнт адмінських з'єднань сторожа: тест дає підставний. */
+export interface GuardClient {
+  connect(): Promise<unknown>
+  query<R extends pg.QueryResultRow>(
+    sql: string,
+    params?: unknown[]
+  ): Promise<{ rows: R[] }>
+  end(): Promise<unknown>
+  escapeIdentifier(name: string): string
+}
+
+export type ClientFactory = (config: pg.ClientConfig) => GuardClient
+
+/**
+ * Адмінське з'єднання сторожа й прибиральника з базою `database` сервера
+ * адреси `url`, з прелюдією суперкористувача: на адресі тестів стартова роль
+ * `-c role=` інакше дала б каталоги очима власника.
+ */
+export async function openAdmin(
+  url: string,
+  database: string,
+  o: { signal?: AbortSignal; client?: ClientFactory } = {}
+): Promise<GuardClient> {
+  const target = new URL(url)
+  target.pathname = `/${encodeURIComponent(database)}`
+  const client = sweepClient(
+    {
+      connectionString: target.toString(),
+      connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+      // Явне ім'я важить більше за `PGAPPNAME` прогону, успадкований
+      // прибиральником, — і `pid <> pg_backend_pid()` у запитах лише страховка
+      application_name: GUARD_APPLICATION_NAME,
+    },
+    o.signal,
+    o.client
+  )
+  await client.connect()
+  try {
+    for (const statement of SUPERUSER_PRELUDE) await client.query(statement)
+  } catch (error) {
+    await client.end()
+    throw error
+  }
+  return client
 }
 
 // На сигнал `end()` рве сокет клієнта з активним запитом (node-postgres 8):
@@ -343,10 +407,11 @@ export function manualSweepSql(tag: string, p: TestProvider): string {
 // прибиральника не тримає нічого відкритим
 function sweepClient(
   config: pg.ClientConfig,
-  signal: AbortSignal | undefined
-): pg.Client {
+  signal: AbortSignal | undefined,
+  make: ClientFactory = (c) => new pg.Client(c)
+): GuardClient {
   signal?.throwIfAborted()
-  const client = new pg.Client(config)
+  const client = make(config)
   signal?.addEventListener("abort", () => void client.end().catch(() => {}), {
     once: true,
   })
@@ -359,7 +424,7 @@ function checkTag(tag: string): void {
 }
 
 async function names(
-  client: pg.Client,
+  client: GuardClient,
   sql: string,
   pattern: string
 ): Promise<string[]> {
@@ -369,7 +434,7 @@ async function names(
 }
 
 async function tryQuery(
-  client: pg.Client,
+  client: GuardClient,
   sql: string,
   params: unknown[] = []
 ): Promise<boolean> {
@@ -383,7 +448,7 @@ async function tryQuery(
 }
 
 async function tryDrop(
-  client: pg.Client,
+  client: GuardClient,
   name: string,
   template: boolean
 ): Promise<boolean> {

@@ -13,11 +13,11 @@ import {
   MEMBER_REGIONS,
   MEMBER_TITLE,
   ORG_ADMIN_ID,
-  signUp,
   testSuperuserUrl,
 } from "../../../simetra/test/support"
 import {
   heldResource,
+  ownerLoginOf,
   query,
   seedUnderMaintenance,
   withCopy,
@@ -36,6 +36,7 @@ import {
   maintain,
   ORG,
   refusalOf,
+  signUps,
 } from "./rights-maintenance.support"
 
 /**
@@ -85,10 +86,13 @@ describe("rights-maintenance tool over a real database", () => {
     return rows.map((r) => r.actor).sort()
   }
 
-  /** Копія цілі: глобальний сценарій пише те, чого не зняти. */
-  const inCopy = <T>(fn: (url: string) => Promise<T>) =>
+  /**
+   * Копія цілі: глобальний сценарій пише те, чого не зняти. `fn` бере адресу
+   * копії й ту саму копію від входу мігратора.
+   */
+  const inCopy = <T>(fn: (url: string, migrator: string) => Promise<T>) =>
     withCopy(`template "${new URL(env.url).pathname.slice(1)}"`, (url) =>
-      fn(url)
+      fn(url, ownerLoginOf(url))
     )
 
   const unique = <T>(values: T[]) => {
@@ -97,11 +101,8 @@ describe("rights-maintenance tool over a real database", () => {
   }
 
   it("first global: busy under the apply lock, then done, then not-first from the CLI", async () => {
-    await inCopy(async (url) => {
-      const [user, other] = await asOwner(url, async (owner) => [
-        await signUp(owner),
-        await signUp(owner),
-      ])
+    await inCopy(async (url, migrator) => {
+      const [user, other] = await signUps(url, 2)
       const first: RightsMaintenanceRequest = {
         action: "firstGlobalAssignment",
         user,
@@ -114,7 +115,7 @@ describe("rights-maintenance tool over a real database", () => {
           `SELECT pg_advisory_xact_lock(${APPLY_ADVISORY_LOCK})`
         )
         try {
-          expect(refusalOf(await maintain(env.dir, url, first)).code).toBe(
+          expect(refusalOf(await maintain(env.dir, migrator, first)).code).toBe(
             "maintenance.busy"
           )
         } finally {
@@ -124,7 +125,7 @@ describe("rights-maintenance tool over a real database", () => {
       expect(await globalAssignments(url)).toBe(0)
 
       // Замок звільнено: мігратор записує перше призначення
-      const done = doneOf(await maintain(env.dir, url, first))
+      const done = doneOf(await maintain(env.dir, migrator, first))
       expect(
         await query(
           url,
@@ -146,7 +147,7 @@ describe("rights-maintenance tool over a real database", () => {
         },
         () => Promise.resolve(""),
         process.cwd(),
-        { [ENV]: url }
+        { [ENV]: migrator }
       )
       expect(again.exitCode, again.stderr + again.stdout).toBe(1)
       expect(
@@ -157,26 +158,27 @@ describe("rights-maintenance tool over a real database", () => {
   })
 
   it("restore: holder-exists, then not-effective for an invalid user, then a valid user becomes the holder", async () => {
-    await inCopy(async (url) => {
-      const [holder, invalid, user] = await asOwner(url, async (owner) => {
-        const ids = [
-          await signUp(owner),
-          await signUp(owner),
-          await signUp(owner),
-        ]
-        await seedUnderMaintenance(owner, async () => {
+    await inCopy(async (url, migrator) => {
+      const [holder, invalid, user] = (await signUps(url, 3)) as [
+        string,
+        string,
+        string,
+      ]
+      await asOwner(url, (owner) =>
+        seedUnderMaintenance(owner, async () => {
           await owner.query(
             "INSERT INTO public.global_role_assignments (id, subject, archetype) VALUES ($1, $2, $3)",
-            [randomUUID(), ids[0], GLOBAL_ADMIN_ID]
+            [randomUUID(), holder, GLOBAL_ADMIN_ID]
           )
         })
-        return ids as [string, string, string]
-      })
+      )
       const restore = (who: string): RightsMaintenanceRequest => ({
         action: "restoreGlobalFullAccess",
         user: who,
       })
-      expect(refusalOf(await maintain(env.dir, url, restore(user)))).toEqual({
+      expect(
+        refusalOf(await maintain(env.dir, migrator, restore(user)))
+      ).toEqual({
         code: "maintenance.holder-exists",
         params: { level: "global" },
       })
@@ -188,12 +190,15 @@ describe("rights-maintenance tool over a real database", () => {
         [[holder, invalid]]
       )
       expect(await holders(url, "global")).toEqual([])
-      expect(refusalOf(await maintain(env.dir, url, restore(invalid)))).toEqual(
-        { code: "maintenance.not-effective", params: { user: invalid } }
-      )
+      expect(
+        refusalOf(await maintain(env.dir, migrator, restore(invalid)))
+      ).toEqual({
+        code: "maintenance.not-effective",
+        params: { user: invalid },
+      })
       expect(await globalAssignments(url)).toBe(1)
 
-      doneOf(await maintain(env.dir, url, restore(user)))
+      doneOf(await maintain(env.dir, migrator, restore(user)))
       expect(await holders(url, "global")).toEqual([user])
     })
   })
@@ -224,12 +229,7 @@ describe("rights-maintenance tool over a real database", () => {
       return { org, members: ids }
     })
 
-  const users = (n: number) =>
-    asOwner(env.url, async (owner) => {
-      const ids: string[] = []
-      for (let i = 0; i < n; i++) ids.push(await signUp(owner))
-      return ids
-    })
+  const users = (n: number) => signUps(env.url, n)
 
   const tenant = (
     scope: string,
@@ -261,7 +261,7 @@ describe("rights-maintenance tool over a real database", () => {
 
     // Обов'язковий реквізит застосунку без значення відхиляє база (`23502`)
     expect(
-      refusalOf(await maintain(env.dir, env.url, tenant(org, user!)))
+      refusalOf(await maintain(env.dir, env.migrator, tenant(org, user!)))
     ).toEqual({
       code: "maintenance.member-required",
       params: { attribute: MEMBER_TITLE },
@@ -271,7 +271,7 @@ describe("rights-maintenance tool over a real database", () => {
     const done = doneOf(
       await maintain(
         env.dir,
-        env.url,
+        env.migrator,
         tenant(org, user!, { [MEMBER_TITLE]: "Owner" })
       )
     )
@@ -288,7 +288,7 @@ describe("rights-maintenance tool over a real database", () => {
     ])
 
     expect(
-      refusalOf(await maintain(env.dir, env.url, tenant(org, user!)))
+      refusalOf(await maintain(env.dir, env.migrator, tenant(org, user!)))
     ).toEqual({
       code: "maintenance.holder-exists",
       params: { level: `scope:${ORG}` },
@@ -314,7 +314,7 @@ describe("rights-maintenance tool over a real database", () => {
       refusalOf(
         await maintain(
           env.dir,
-          env.url,
+          env.migrator,
           tenant(org, user!, { [MEMBER_TITLE]: "Ignored" })
         )
       )
@@ -324,7 +324,9 @@ describe("rights-maintenance tool over a real database", () => {
     })
     expect(await orgRows(org)).toEqual({ members: 2, assignments: 1 })
 
-    const done = doneOf(await maintain(env.dir, env.url, tenant(org, user!)))
+    const done = doneOf(
+      await maintain(env.dir, env.migrator, tenant(org, user!))
+    )
     expect(done.member).toBe(member)
     expect(await orgRows(org)).toEqual({ members: 2, assignments: 2 })
     expect(await holders(env.url, "scope", org)).toEqual([user])
@@ -364,7 +366,7 @@ describe("rights-maintenance tool over a real database", () => {
       refusalOf(
         await maintain(
           env.dir,
-          env.url,
+          env.migrator,
           tenant(org, user!, { [MEMBER_TITLE]: "Owner", [attribute]: value })
         )
       )
@@ -382,7 +384,7 @@ describe("rights-maintenance tool over a real database", () => {
     const done = doneOf(
       await maintain(
         env.dir,
-        env.url,
+        env.migrator,
         tenant(org, user!, {
           [MEMBER_TITLE]: "Owner",
           [MEMBER_REGIONS]: [region],
@@ -407,7 +409,7 @@ describe("rights-maintenance tool over a real database", () => {
       refusalOf(
         await maintain(
           env.dir,
-          env.url,
+          env.migrator,
           tenant(scope, user!, { [MEMBER_TITLE]: "Owner" })
         )
       )

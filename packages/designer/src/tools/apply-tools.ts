@@ -17,6 +17,7 @@ import {
   checkPermissions,
   checkOwnerAttributes,
   checkPlatformRoles,
+  copiesShadowFromTemplate,
   desiredForApply,
   executePlan,
   FINGERPRINT_VERSION,
@@ -47,7 +48,7 @@ import {
   type TableLock,
 } from "simetra/schema"
 import { z } from "zod"
-import { withDatabase } from "../io/database"
+import { failureDiagnostics, withDatabase } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
 import { fromEngine, hasErrors, loadEngine, required } from "./database-tools"
@@ -132,7 +133,11 @@ export interface UnchangedPlanData {
 
 /** Результат колбека `withDatabase`: застосування або відмова бажаної тіні. */
 type ApplyRun =
-  | { outcome: ExecuteOutcome }
+  | {
+      outcome: ExecuteOutcome
+      /** Діагностики бажаної тіні репетиції (зокрема невидалена тінь). */
+      shadow?: EngineDiagnostic[]
+    }
   | { shadowFailed: EngineDiagnostic[] }
   | { rolesRefused: EngineDiagnostic[] }
   | { unsupported: Diagnostic }
@@ -345,7 +350,10 @@ export const planTool = defineTool({
       )
     )
     if (!built.ok)
-      return refusedWith([...compiled.diagnostics, built.diagnostic])
+      return refusedWith([
+        ...compiled.diagnostics,
+        ...failureDiagnostics(built),
+      ])
     const outcome = built.value
     const diagnostics = [
       ...compiled.diagnostics,
@@ -582,7 +590,7 @@ export const applyTool = defineTool({
         // Профіль `postgres` не має окремого сервера тіней (Р9): відмова до
         // будь-якого звернення до бази, і для застосування, і для репетиції
         if (
-          artifact.scope.provider === "postgres" &&
+          copiesShadowFromTemplate(artifact.scope.provider) &&
           db.shadowBase !== undefined
         )
           return {
@@ -632,10 +640,11 @@ export const applyTool = defineTool({
             mode: "rehearse",
             rehearsal: { engine, desired: shadow.value.catalog },
           }),
+          shadow: shadow.diagnostics,
         }
       }
     )
-    if (!executed.ok) return refusedWith([executed.diagnostic])
+    if (!executed.ok) return refusedWith(failureDiagnostics(executed))
     if ("shadowFailed" in executed.value)
       return refusedWith(executed.value.shadowFailed.map(fromEngine))
     if ("unsupported" in executed.value)
@@ -643,7 +652,12 @@ export const applyTool = defineTool({
     if ("rolesRefused" in executed.value)
       return refusedWith(executed.value.rolesRefused.map(fromEngine))
     const outcome = executed.value.outcome
-    const diagnostics = outcome.diagnostics.map(fromEngine)
+    // Діагностики тіні — у результаті, як у плані: невидалена тінь
+    // (`engine.shadow-drop-failed`) не губиться між тінню й виконанням
+    const diagnostics = [
+      ...(executed.value.shadow ?? []),
+      ...outcome.diagnostics,
+    ].map(fromEngine)
     const ok = !hasErrors(diagnostics)
     switch (outcome.status) {
       case "committed":

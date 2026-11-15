@@ -23,7 +23,7 @@
         "command": ["pnpm", "exec", "vitest", "run", "--project", "db"],
         "reporter": "vitest-json",
         "packages": ["simetra", "designer"],
-        "lock": "{tmpdir}/simetra-db-stack.lock",
+        "lock": "/tmp/simetra-db-stack-postgres.lock",
         "lockWait": 2700,
         "timeout": 2400,
         "ci": true
@@ -40,16 +40,7 @@
         ],
         "reporter": "vitest-json",
         "packages": ["simetra", "designer"],
-        "lock": "{tmpdir}/simetra-db-stack.lock",
-        "lockWait": 2700,
-        "timeout": 1800,
-        "ci": true
-      },
-      "db-pg": {
-        "command": ["pnpm", "exec", "vitest", "run", "--project", "db-pg"],
-        "reporter": "vitest-json",
-        "packages": ["simetra"],
-        "lock": "{tmpdir}/simetra-db-stack-postgres.lock",
+        "lock": "/tmp/simetra-db-stack.lock",
         "lockWait": 2700,
         "timeout": 1800,
         "ci": true

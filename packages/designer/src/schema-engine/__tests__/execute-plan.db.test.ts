@@ -71,6 +71,7 @@ import {
   options,
   OWNER,
   PLAN_HASH,
+  PLAN_ROLE,
   planFor,
   read,
   sessionLeftover,
@@ -2258,7 +2259,7 @@ describe.concurrent("executePlan", () => {
         // якої цей прогін не створив
         await query(
           testSuperuserUrl(),
-          `create role ${COPY_OWNER} nologin; grant ${COPY_OWNER} to postgres;`
+          `create role ${COPY_OWNER} nologin; grant ${COPY_OWNER} to ${PLAN_ROLE} with inherit true;`
         )
         try {
           await inTarget(BASE, (url) =>
@@ -2503,8 +2504,10 @@ describe.concurrent("executePlan", () => {
           })
           let waiting: { query: string; mode: string } | undefined
           await until("the apply to wait on the partition", async () => {
+            // Сесія очікувача — суперкористувач стека, а ролі власника
+            // `pg_stat_activity` чужого backend не показує
             ;[waiting] = await query<{ query: string; mode: string }>(
-              url,
+              asSuperuser(url),
               `select a.query, l.mode from pg_locks l
                join pg_stat_activity a on a.pid = l.pid
               where l.relation = 'app.pt_1'::regclass and not l.granted
@@ -2574,8 +2577,10 @@ describe.concurrent("executePlan", () => {
           })
           let waiting: { query: string; mode: string } | undefined
           await until("the apply to wait on the FK target", async () => {
+            // Сесія очікувача — суперкористувач стека, а ролі власника
+            // `pg_stat_activity` чужого backend не показує
             ;[waiting] = await query<{ query: string; mode: string }>(
-              url,
+              asSuperuser(url),
               `select a.query, l.mode from pg_locks l
                join pg_stat_activity a on a.pid = l.pid
               where l.relation = 'app.p'::regclass and not l.granted

@@ -713,6 +713,9 @@ otherwise:
   it as a superuser and run `roles` again.
 - `roles.database-owner` — the database belongs to another role than
   `simetra_owner`; fix the owner by hand or use a database `roles` creates.
+- `roles.database-locale` — the database or `simetra_template` has another
+  collation than ICU `en-US`; `roles` never drops a database: dump, drop and
+  restore it by hand around a new `roles` run (the template is only dropped).
 - `roles.shared-cluster` — a Simetra login role has an explicit `CONNECT` on
   other databases; one cluster serves one application.
 - `plan.owner-not-bypassrls` — the role of `plan`, `apply` or `rehearse` has

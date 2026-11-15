@@ -6,6 +6,7 @@ import {
   type CompileResult,
   type PromoteInput,
 } from "simetra/compiler"
+import type { DatabaseProvider } from "simetra/model"
 import { SCOPE_FUNCTIONS_FILE, acceptDebt, metaFiles, uuid } from "../helpers"
 
 /**
@@ -108,11 +109,13 @@ export const ORG_SCOPE_KIND = {
   setFunction: "membership",
 }
 
-function defaults(): Record<string, Record<string, unknown>> {
+function defaults(
+  provider: DatabaseProvider
+): Record<string, Record<string, unknown>> {
   return {
     "project.meta.json": {
       name: "RightsApp",
-      database: { provider: "supabase" },
+      database: { provider },
       scopeKinds: [ORG_SCOPE_KIND],
     },
     [ORGANIZATION_FILE]: catalog(uuid(6002), "Organization", "organization"),
@@ -537,15 +540,17 @@ export function globalGrantsSource(overrides: Record<string, unknown> = {}) {
  * `Project`, задача з прив'язкою до нього, контейнерна роль `ProjectLead` з
  * `read@any` на задачі й глобальні системні довідники — контейнерні
  * призначення без виду скоупу лежать у глобальному довіднику (спека прав §4.6).
- * Перевизначення зливається з файлом за шляхом, як у `rightsFiles`.
+ * Перевизначення зливається з файлом за шляхом, як у `rightsFiles`;
+ * `provider` — як у `rightsFiles`.
  */
 export function singleTenantRights(
-  overrides: Record<string, Record<string, unknown>> = {}
+  overrides: Record<string, Record<string, unknown>> = {},
+  provider: DatabaseProvider = "supabase"
 ): Map<string, string> {
   const files: Record<string, Record<string, unknown>> = {
     "project.meta.json": {
       name: "SingleTenantRights",
-      database: { provider: "supabase" },
+      database: { provider },
     },
     [USERS_FILE]: catalog(uuid(6003), "Users", "users", {
       role: "users",
@@ -1929,12 +1934,14 @@ export const deny = (
 /**
  * Файли проєкту прав. Перевизначення зливається з типовим файлом за шляхом
  * на верхньому рівні ключів: тест додає поле прав, не повторюючи решти файлу.
- * Шлях без типового файлу додає новий файл.
+ * Шлях без типового файлу додає новий файл. `provider` — профіль бази
+ * проєкту: DB-тест передає профіль прогону, unit-тести лишаються на типовому.
  */
 export function rightsFiles(
-  overrides: Record<string, Record<string, unknown>> = {}
+  overrides: Record<string, Record<string, unknown>> = {},
+  provider: DatabaseProvider = "supabase"
 ): Map<string, string> {
-  const files = defaults()
+  const files = defaults(provider)
   for (const [path, fields] of Object.entries(overrides)) {
     files[path] = { ...files[path], ...fields }
   }
@@ -2895,44 +2902,50 @@ export const ADOPTED_SNAPSHOT = {
  * відкриває скоуп, права в якому актор уже має (`CommentEditor`: у
  * документів ядра команд немає, тож запис доводиться на довіднику). Колонка
  * скоупу `Membership` — без `NOT NULL`, як буває в прийнятій таблиці: рядок
- * без скоупу членства не дає ні наживо, ні в знімку.
+ * без скоупу членства не дає ні наживо, ні в знімку. `layers` — поверх
+ * домену (DB-тест дає ними профіль стека).
  */
-export function adoptedSnapshotDomain(): Map<string, string> {
-  const files = adoptedSourcesDomain(adoptedCrossKind(), activeGrants(), {
-    [MEMBERSHIP_FILE]: adoptedMembershipTable({
-      columns: adoptedMembershipTable().columns.map((c) =>
-        c.name === "orgId" ? nullable(6102, "orgId", "org_id", "UUID") : c
+export function adoptedSnapshotDomain(...layers: Layer[]): Map<string, string> {
+  const files = adoptedSourcesDomain(
+    adoptedCrossKind(),
+    activeGrants(),
+    {
+      [MEMBERSHIP_FILE]: adoptedMembershipTable({
+        columns: adoptedMembershipTable().columns.map((c) =>
+          c.name === "orgId" ? nullable(6102, "orgId", "org_id", "UUID") : c
+        ),
+      }),
+      [SNAPSHOT_ORG_GUEST_FILE]: catalog(
+        uuid(6889),
+        "OrgGuest",
+        SNAPSHOT_ORG_GUEST_TABLE,
+        {
+          scope: "none",
+          attributes: [
+            refAttribute(6890, "user", "user_id", ref("Catalog", "Users")),
+            { id: uuid(6891), name: "org", physicalName: "org", type: "UUID" },
+          ],
+        }
       ),
-    }),
-    [SNAPSHOT_ORG_GUEST_FILE]: catalog(
-      uuid(6889),
-      "OrgGuest",
-      SNAPSHOT_ORG_GUEST_TABLE,
-      {
-        scope: "none",
-        attributes: [
-          refAttribute(6890, "user", "user_id", ref("Catalog", "Users")),
-          { id: uuid(6891), name: "org", physicalName: "org", type: "UUID" },
-        ],
-      }
-    ),
-    [ROLE_FILE("CommentEditor")]: role(
-      ADOPTED_SNAPSHOT.commentEditorId,
-      "CommentEditor",
-      { scopeKind: "org" },
-      {
-        grants: [
-          // `create` — межа тенанта ядра стоїть лише на створенні (`scope_insert`)
-          grant(
-            objects(["Catalog", "TaskComment"]),
-            ["create", "read", "update"],
-            "any"
-          ),
-        ],
-      }
-    ),
-    ...without(ROLE_FILE("Everyone")),
-  })
+      [ROLE_FILE("CommentEditor")]: role(
+        ADOPTED_SNAPSHOT.commentEditorId,
+        "CommentEditor",
+        { scopeKind: "org" },
+        {
+          grants: [
+            // `create` — межа тенанта ядра стоїть лише на створенні (`scope_insert`)
+            grant(
+              objects(["Catalog", "TaskComment"]),
+              ["create", "read", "update"],
+              "any"
+            ),
+          ],
+        }
+      ),
+      ...without(ROLE_FILE("Everyone")),
+    },
+    ...layers
+  )
   files.set(
     SCOPE_FUNCTIONS_FILE,
     `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT m.org_id FROM public.membership m WHERE m.user_id = (SELECT simetra.current_user_id()) AND m.is_active IS TRUE AND m.org_id IN (SELECT g.org FROM public.${SNAPSHOT_ORG_GUEST_TABLE} g WHERE g.user_id = (SELECT simetra.current_user_id())) $$;`

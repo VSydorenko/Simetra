@@ -39,7 +39,7 @@ pnpm build:packages && pnpm test:packaging
    окремим комітом `chore(release): vX.Y.Z`. Версія платформи входить у стан
    застосування й артефакт плану: `apply` відмовляє файлу плану, зробленому
    іншою версією, тож незастосовані плани після релізу будуються заново.
-2. Перед комітом — гейти з `AGENTS.md` § "Commands and gates", `pnpm test:db`
+2. Перед комітом — гейти з `AGENTS.md` § "Commands and gates", `pnpm test:db:pg` і `pnpm test:db`
    і гейт пакування.
 3. Merge у `main`. Воркфлоу `.github/workflows/publish-packages.yml` збирає
    пакети, проганяє гейт пакування, публікує версії, яких ще немає в реєстрі

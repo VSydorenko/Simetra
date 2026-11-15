@@ -1,6 +1,6 @@
 import { parseId, type StableId } from "@supabase/pg-delta"
 import { type EngineAction, type EngineScope } from "simetra/schema"
-import { PROVIDER_SCHEMAS } from "simetra/model"
+import { PROVIDER_SCHEMAS, type DatabaseProvider } from "simetra/model"
 
 /** Схема ідентичності: власна або цілі сателіта; без схеми — `undefined`. */
 function schemaOf(id: StableId): string | undefined {
@@ -30,7 +30,7 @@ export function boundaryViolations(
   scope: EngineScope
 ): string[] {
   const managed = new Set(scope.schemas)
-  const provider = new Set(PROVIDER_SCHEMAS.supabase)
+  const provider = new Set(PROVIDER_SCHEMAS[scope.provider])
   const out: string[] = []
   for (const action of actions) {
     const own = [...action.produces, ...action.destroys]
@@ -61,8 +61,14 @@ export function boundaryViolations(
   return out
 }
 
-/** Межа порту: керовані схеми й провайдер стеку тестів. */
-export const scopeOf = (...schemas: string[]): EngineScope => ({
-  schemas,
-  provider: "supabase",
+/**
+ * Межа порту: керовані схеми й провайдер; DB-тест передає профіль прогону,
+ * без нього — `supabase`.
+ */
+export const scopeOf = (
+  schemas: string | readonly string[] = [],
+  provider: DatabaseProvider = "supabase"
+): EngineScope => ({
+  schemas: typeof schemas === "string" ? [schemas] : schemas,
+  provider,
 })

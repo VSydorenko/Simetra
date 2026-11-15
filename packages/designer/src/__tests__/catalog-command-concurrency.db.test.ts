@@ -12,23 +12,26 @@ import {
   PLATFORM_ROLES,
   SESSION_CLAIMS_SETTING,
 } from "simetra/model"
-import { engineScope, renderDesiredState } from "simetra/schema"
 import {
   TICKET_CHECKLIST_TABLE,
   TICKET_TABLE,
   TICKET_TARGETS_READER_ID,
   TICKET_WRITER_ID,
+  claimsFor,
   commandCoreLayer,
   policyDomain,
+  profileLayer,
+  superuserClient,
   ticketMoveToHandler,
   withSql,
   writeRoles,
+  setLocalSetting,
 } from "../../../simetra/test/support"
 import {
   committed,
-  inTarget,
   seedRuntimeActor,
   waitForLock,
+  withModelTarget,
   type RuntimeActor,
 } from "./support/db"
 
@@ -37,8 +40,9 @@ import {
  * Замок рядка, advisory-замок ієрархії й знімок `READ COMMITTED` вирішує
  * Postgres, і лише між двома з'єднаннями над закоміченими даними: точка
  * збереження однієї транзакції (`commandAs`) відкотила б і замок. Тому ціль
- * — тінь рушія з бажаним SQL (стан провайдера є), засів закомічений, кожна
- * команда — власна транзакція сесії, як її виконає `runCommand`.
+ * — модель, застосована до цілі з ідентичністю (`withModelTarget`), засів
+ * закомічений, кожна команда — власна транзакція сесії, як її виконає
+ * `runCommand`.
  */
 
 const LINES = TICKET_CHECKLIST_TABLE
@@ -98,14 +102,16 @@ async function openCommand(
   isolation = "READ COMMITTED"
 ): Promise<void> {
   await client.query(`BEGIN ISOLATION LEVEL ${isolation}`)
-  await client.query("SELECT set_config($1, $2, true)", [
+  await setLocalSetting(
+    client,
     SESSION_CLAIMS_SETTING,
-    JSON.stringify({ sub: actor.user, role: "authenticated" }),
-  ])
-  await client.query("SELECT set_config($1, $2, true)", [
+    JSON.stringify(claimsFor("user", actor.user))
+  )
+  await setLocalSetting(
+    client,
     COMMAND_SETTING,
-    JSON.stringify({ action: "update", object: TICKET_TABLE, root }),
-  ])
+    JSON.stringify({ action: "update", object: TICKET_TABLE, root })
+  )
   await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
 }
 
@@ -147,13 +153,27 @@ async function attempt(
 }
 
 /**
+ * Спостерігач замків — суперкористувач стека: подію очікування бекенда
+ * `pg_stat_activity` показує лише ролям з правами його входу, а сесії адреси
+ * тестів на `postgres` входять суперкористувачем, тож власник бачив би `NULL`
+ * і замка не дочекався б.
+ */
+async function withObserver<T>(fn: (observer: pg.Client) => Promise<T>) {
+  const observer = await superuserClient()
+  try {
+    return await fn(observer)
+  } finally {
+    await observer.end()
+  }
+}
+
+/**
  * Дві команди двома сесіями: перша виконує крок і тримає транзакцію, друга
  * стає в чергу на замок (`waitForLock`), перша комітить. Результат — помилка
  * другої (чи `undefined`).
  */
 async function race(
   url: string,
-  observer: pg.Client,
   actor: Actor,
   first: { root: string; sql: string; params: unknown[] },
   second: { root: string; sql: string; params: unknown[] }
@@ -173,7 +193,7 @@ async function race(
         await two.query("COMMIT")
       })()
     )
-    await waitForLock(observer, rows[0]!.pid)
+    await withObserver((observer) => waitForLock(observer, rows[0]!.pid))
     await one.query("COMMIT")
     return await pending
   } finally {
@@ -185,8 +205,9 @@ async function race(
 }
 
 /**
- * Ціль з бажаним SQL моделі, власник із закоміченим членством у ролі команд,
- * засіяний актор і сесія-спостерігач для кейсів.
+ * Ціль з моделлю (`withModelTarget`), засіяний актор і сесія для одиночних
+ * команд кейсів. Роль команд сесії беруть за `session_user` адреси тестів,
+ * тож членства власника в ній не треба (Р1).
  */
 async function withCommandTarget(
   model: CompiledModel,
@@ -197,38 +218,23 @@ async function withCommandTarget(
     probe: pg.Client
   ) => Promise<void>
 ): Promise<void> {
-  await inTarget(
-    renderDesiredState(model).sql,
-    (await engineScope(model)).scope,
-    async (url) => {
-      const owner = await session(url)
-      // Членство в ролі команд — закомічене: сесії команд окремі. Сторож
-      // стека бачить лише імена ролей, тож `REVOKE` — обов'язково в `finally`
-      await owner.query(
-        `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
-      )
+  await withModelTarget(model, async (url) => {
+    const owner = await session(url)
+    try {
+      const actor = await seedRuntimeActor(owner, [
+        TICKET_WRITER_ID,
+        TICKET_TARGETS_READER_ID,
+      ])
+      const probe = await session(url)
       try {
-        const actor = await seedRuntimeActor(owner, [
-          TICKET_WRITER_ID,
-          TICKET_TARGETS_READER_ID,
-        ])
-        const probe = await session(url)
-        try {
-          await body(url, owner, actor, probe)
-        } finally {
-          await probe.end()
-        }
+        await body(url, owner, actor, probe)
       } finally {
-        try {
-          await owner.query(
-            `REVOKE ${PLATFORM_ROLES.command} FROM CURRENT_USER`
-          )
-        } finally {
-          await owner.end()
-        }
+        await probe.end()
       }
+    } finally {
+      await owner.end()
     }
-  )
+  })
 }
 
 async function compiled(
@@ -273,7 +279,12 @@ describe("catalog command core: concurrency and hierarchy", () => {
     const model = await compiled(
       compile(
         withSql(
-          policyDomain(writeRoles(), commandCoreLayer(), handler.layer),
+          policyDomain(
+            writeRoles(),
+            commandCoreLayer(),
+            handler.layer,
+            profileLayer()
+          ),
           handler
         )
       )
@@ -303,7 +314,7 @@ describe("catalog command core: concurrency and hierarchy", () => {
             version
           ),
         })
-        expect(await race(url, probe, actor, edit(), edit())).toMatchObject({
+        expect(await race(url, actor, edit(), edit())).toMatchObject({
           code: "P0001",
           message: "command.conflict",
           detail: "version",
@@ -364,7 +375,7 @@ describe("catalog command core: concurrency and hierarchy", () => {
           params: [row, parent],
         })
         expect(
-          await race(url, probe, actor, move(t.A!, t.B!), move(t.B!, t.A!))
+          await race(url, actor, move(t.A!, t.B!), move(t.B!, t.A!))
         ).toMatchObject(INVALID_PARENT)
       }
 
@@ -383,13 +394,7 @@ describe("catalog command core: concurrency and hierarchy", () => {
           ),
         })
         expect(
-          await race(
-            url,
-            probe,
-            actor,
-            await move(t.A!, t.B!),
-            await move(t.B!, t.A!)
-          )
+          await race(url, actor, await move(t.A!, t.B!), await move(t.B!, t.A!))
         ).toMatchObject(INVALID_PARENT)
       }
 
@@ -488,9 +493,9 @@ describe("catalog command core: concurrency and hierarchy", () => {
   // advisory-замок ієрархії першими й серіалізувалися б і під `FOR UPDATE`
   it("does not deadlock on mutually new references", async () => {
     const model = await compiled(
-      compile(policyDomain(writeRoles(), commandCoreLayer()))
+      compile(policyDomain(writeRoles(), commandCoreLayer(), profileLayer()))
     )
-    await withCommandTarget(model, async (url, owner, actor, probe) => {
+    await withCommandTarget(model, async (url, owner, actor) => {
       const t = await seedTickets(owner, actor, [
         ["X", null],
         ["P", null],
@@ -526,7 +531,9 @@ describe("catalog command core: concurrency and hierarchy", () => {
         )
         // Мутація «FOR UPDATE»: сесія 2 чекає на X, тримаючи P; правильне
         // ядро — сесія 2 вже завершила крок і тримає P.
-        await settledOrWaiting(probe, rows[0]!.pid, second)
+        await withObserver((observer) =>
+          settledOrWaiting(observer, rows[0]!.pid, second)
+        )
         const firstRef = await failureOf(
           one.query(saveSql, saveParams({ id: t.X, parent_id: t.P }, version))
         )

@@ -10,7 +10,12 @@ import {
   type PlanOutcome,
   type SchemaEngine,
 } from "simetra/schema"
-import { attribute, customTable, uuid } from "../../../../simetra/test/support"
+import {
+  attribute,
+  customTable,
+  uuid,
+  loginUrl,
+} from "../../../../simetra/test/support"
 import { asSuperuser, query } from "../../__tests__/support/db"
 import {
   codes,
@@ -23,11 +28,13 @@ import {
   errors,
   establish,
   inTarget,
+  ANON,
   party,
   PARTY,
   plan,
   planned,
   rehearsalOf,
+  SESSION_OWNER,
   stepMatching,
   STRANGER,
   NOTES,
@@ -82,8 +89,8 @@ describe.concurrent("buildPlan", () => {
       await inTarget(EMPTY, async (url) => {
         await query(
           url,
-          `alter default privileges for role postgres grant select on tables to anon with grant option;
-           alter default privileges for role postgres revoke all on functions from public`
+          `alter default privileges for role ${SESSION_OWNER} grant select on tables to ${ANON} with grant option;
+           alter default privileges for role ${SESSION_OWNER} revoke all on functions from public`
         )
         const { engine: over, clones } = counting()
         const outcome = await plan(url, model, over)
@@ -91,13 +98,13 @@ describe.concurrent("buildPlan", () => {
         expect(artifact.environment.defaultPrivileges).toEqual([
           {
             objtype: "f",
-            grantee: "postgres",
+            grantee: SESSION_OWNER,
             privilege: "EXECUTE",
             grantable: false,
           },
           {
             objtype: "r",
-            grantee: "anon",
+            grantee: ANON,
             privilege: "SELECT",
             grantable: true,
           },
@@ -112,7 +119,7 @@ describe.concurrent("buildPlan", () => {
             "UPDATE",
           ].map((privilege) => ({
             objtype: "r",
-            grantee: "postgres",
+            grantee: SESSION_OWNER,
             privilege,
             grantable: false,
           })),
@@ -129,7 +136,7 @@ describe.concurrent("buildPlan", () => {
           new Set(["catalogOnly"])
         )
         expect(environment.map((s) => s.sql)).toContain(
-          'REVOKE ALL ON TABLE "simetra"."marker" FROM "anon"'
+          `REVOKE ALL ON TABLE "simetra"."marker" FROM "${ANON}"`
         )
         expect(artifact.requiredPermissions).toEqual([])
         expect(codes(outcome)).not.toContain("apply.lock-footprint-exceeded")
@@ -146,7 +153,7 @@ describe.concurrent("buildPlan", () => {
           engine.withTargetClone(o, target, scope, async (clone) => {
             await query(
               clone.url,
-              "alter default privileges for role postgres grant usage on types to anon"
+              `alter default privileges for role ${SESSION_OWNER} grant usage on types to ${ANON}`
             )
             return fn(clone)
           }),
@@ -154,7 +161,7 @@ describe.concurrent("buildPlan", () => {
       await inTarget(EMPTY, async (url) => {
         await query(
           url,
-          "alter default privileges for role postgres revoke all on functions from public"
+          `alter default privileges for role ${SESSION_OWNER} revoke all on functions from public`
         )
         const outcome = await plan(url, model, polluted)
         expect(outcome.status).toBe("refused")
@@ -184,10 +191,7 @@ describe.concurrent("buildPlan", () => {
             clone.url,
             `grant create on database "${database}" to ${COPIER}`
           )
-          const as = new URL(clone.url)
-          as.username = COPIER
-          as.password = COPIER_PASSWORD
-          const url = as.toString()
+          const url = loginUrl(clone.url, COPIER, COPIER_PASSWORD)
           if (setup !== undefined) await query(url, setup)
           return fn({ url })
         }),
@@ -206,16 +210,16 @@ describe.concurrent("buildPlan", () => {
       await inTarget(EMPTY, async (url) => {
         await query(
           url,
-          "alter default privileges for role postgres grant select on tables to anon"
+          `alter default privileges for role ${SESSION_OWNER} grant select on tables to ${ANON}`
         )
         const outcome = await plan(url, model, otherCopyRole())
         expect(outcome.status).toBe("refused")
         expect(errors(outcome)).toEqual(["engine.clone-failed"])
         expect(cloneFailure(outcome)).toContain(
-          `the target's environment cannot be reproduced by another role: objects on the copy are created by ${COPIER}, on the target by postgres`
+          `the target's environment cannot be reproduced by another role: objects on the copy are created by ${COPIER}, on the target by ${SESSION_OWNER}`
         )
         expect(cloneFailure(outcome)).toContain(
-          "the target has them for postgres"
+          `the target has them for ${SESSION_OWNER}`
         )
       })
     })
@@ -243,7 +247,7 @@ describe.concurrent("buildPlan", () => {
           url,
           model,
           otherCopyRole(
-            `alter default privileges for role ${COPIER} grant select on tables to anon`
+            `alter default privileges for role ${COPIER} grant select on tables to ${ANON}`
           )
         )
         expect(errors(outcome)).toEqual(["engine.clone-failed"])
@@ -276,7 +280,7 @@ describe.concurrent("buildPlan", () => {
       await inTarget(EMPTY, async (url) => {
         await query(
           url,
-          "alter default privileges for role postgres revoke all on functions from public"
+          `alter default privileges for role ${SESSION_OWNER} revoke all on functions from public`
         )
         const outcome = await plan(url, model, warns)
         planned(outcome)
@@ -294,7 +298,7 @@ describe.concurrent("buildPlan", () => {
           engine.withTargetClone(o, target, scope, async (clone) => {
             await query(
               clone.url,
-              "alter default privileges for role postgres grant select on tables to anon"
+              `alter default privileges for role ${SESSION_OWNER} grant select on tables to ${ANON}`
             )
             return fn(clone)
           }),

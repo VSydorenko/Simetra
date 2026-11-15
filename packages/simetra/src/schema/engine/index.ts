@@ -46,6 +46,7 @@ export {
   type ProviderSurface,
 } from "./provider/supabase"
 export {
+  copiesShadowFromTemplate,
   PROVIDER_BASE_EXTENSIONS,
   PROVIDER_EVENT_TRIGGERS,
   PROVIDER_EXPECTED_BLIND_FUNCTIONS,

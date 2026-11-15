@@ -100,12 +100,13 @@ export const SUPABASE_ROLES: readonly string[] = [
 
 /**
  * Таблиці схем провайдера, на яких одиниці застосунку належать застосунку
- * (§6.9): `table` — glob імені таблиці, `classes` — класи одиниць.
+ * (§6.9): `table` — glob імені таблиці, `classes` — класи одиниць (політика, тригер, а також
+ * `references` — зовнішні ключі застосунку на таблицю провайдера).
  */
 export interface ProviderSurface {
   schema: string
   table: string
-  classes: readonly ("policy" | "trigger")[]
+  classes: readonly ("policy" | "trigger" | "references")[]
 }
 
 /**

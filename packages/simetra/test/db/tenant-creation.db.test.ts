@@ -29,13 +29,21 @@ import {
 import { fullAccessHolderRows } from "../../src/compiler/rights/guard-units"
 import { LIVE, liveInputs } from "../../src/compiler/rights/functions"
 import { signUp } from "./auth"
-import { commandSteps, type CommandStep, type Refusal } from "./connection"
 import {
+  claimsFor,
+  commandSteps,
+  type CommandStep,
+  type Refusal,
+  setLocalSetting,
+} from "./connection"
+import {
+  asOwnerLogin,
   assignmentRow,
   deploy,
   describeTransaction,
   insert,
   orgDeltaRow,
+  profileLayer,
   type Seed,
 } from "./rights-seed"
 
@@ -111,10 +119,11 @@ const grantStep = (
 /** Зміна claims посеред транзакції: інший актор тих самих операторів. */
 const switchActor = (sub: string): CommandStep => ({
   check: (client) =>
-    client.query("SELECT set_config($1, $2, true)", [
+    setLocalSetting(
+      client,
       SESSION_CLAIMS_SETTING,
-      JSON.stringify({ sub, role: "authenticated" }),
-    ]),
+      JSON.stringify(claimsFor("user", sub))
+    ),
 })
 
 /**
@@ -127,10 +136,7 @@ const dynamicStep = (
   params: () => unknown[]
 ): CommandStep => ({
   check: async (client) => {
-    await client.query("SELECT set_config($1, $2, true)", [
-      COMMAND_SETTING,
-      JSON.stringify(ctx()),
-    ])
+    await setLocalSetting(client, COMMAND_SETTING, JSON.stringify(ctx()))
     await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
     return (await client.query(sql, params())).rowCount
   },
@@ -180,7 +186,7 @@ function scenario(files: () => Map<string, string>) {
     if (id === undefined) throw new Error(`unknown seed key ${name}`)
     return id
   }
-  const claims = (user: string) => ({ sub: key(user), role: "authenticated" })
+  const claims = (user: string) => claimsFor("user", key(user))
   const steps = (
     user: string,
     list: readonly CommandStep[],
@@ -192,9 +198,6 @@ function scenario(files: () => Map<string, string>) {
     compiled = result.model!
     const client = await tx.open()
     await deploy(client, compiled)
-    await client.query(
-      `GRANT ${PLATFORM_ROLES.command} TO CURRENT_USER WITH SET TRUE`
-    )
     await seed(client)
     // Відкладені перевірки засіву — зараз: кейси починають з порожньої черги
     await client.query("SET CONSTRAINTS ALL IMMEDIATE")
@@ -240,7 +243,8 @@ describe("tenant creation: self-service with a required member attribute and the
   const s = scenario(() =>
     policyDomain(
       tenantSelfService({ requiredMember: true, memberRegions: true }),
-      tenantOperator()
+      tenantOperator(),
+      profileLayer()
     )
   )
   const { key, ids, steps } = s
@@ -495,7 +499,8 @@ describe("tenant creation: self-service with a required member attribute and the
     ],
     [
       // Сесія власника функцій прав у режимі обслуговування: тригер ефектів
-      // ставить маркер і тут, а тригер знімка знімка не бере
+      // ставить маркер і тут, а тригер знімка знімка не бере. Режим гард
+      // бачить лише від входу власника — кроки власника йдуть з нього
       "(5) snapshot headers missing",
       "creator",
       (root, member, broken) => [
@@ -503,16 +508,14 @@ describe("tenant creation: self-service with a required member attribute and the
           ? [
               {
                 check: (client: pg.Client) =>
-                  client.query("SELECT set_config($1, 'on', true)", [
-                    RIGHTS_MAINTENANCE_SETTING,
-                  ]),
+                  setLocalSetting(client, RIGHTS_MAINTENANCE_SETTING, "on"),
               },
             ]
           : []),
-        rawRootStep(root, true),
+        asOwnerLogin(rawRootStep(root, true)),
         // Маркер стоїть і в режимі обслуговування: відмова — не з (2)
         precondition(MARKERS, (n) => n === 1),
-        grantStep(root, member, MEMBER_VALUES, true),
+        asOwnerLogin(grantStep(root, member, MEMBER_VALUES, true)),
       ],
     ],
     [
@@ -817,7 +820,9 @@ describe("tenant creation: invisible root version with an AFTER INSERT trigger w
   // після такої вставки вже не версія кореня, а налаштування на таблицю — так.
   // Підписка тут не підходить: прикладний SQL не пише таблиць видів
   // (`sql.kind-table-verbatim`).
-  const s = scenario(() => policyDomain(tenantSelfService(), tenantOperator()))
+  const s = scenario(() =>
+    policyDomain(tenantSelfService(), tenantOperator(), profileLayer())
+  )
   const { key, ids, steps } = s
 
   beforeAll(
@@ -878,7 +883,8 @@ describe("tenant creation: invisible member version", () => {
   const s = scenario(() =>
     policyDomain(
       tenantSelfService({ fullAccess: false, memberRead: false }),
-      tenantOperator()
+      tenantOperator(),
+      profileLayer()
     )
   )
   const { ids, steps } = s
@@ -928,7 +934,8 @@ describe("tenant creation: global founder without everyUser create", () => {
   const s = scenario(() =>
     policyDomain(
       tenantSelfService({ fullAccess: false, founder: false }),
-      tenantOperator()
+      tenantOperator(),
+      profileLayer()
     )
   )
   const { key, ids, steps } = s

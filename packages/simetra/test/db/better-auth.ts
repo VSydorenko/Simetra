@@ -2,6 +2,7 @@ import { getMigrations } from "better-auth/db/migration"
 import { anonymous } from "better-auth/plugins"
 import { PostgresDialect } from "kysely"
 import pg from "pg"
+import { withSessionOptions } from "./connection"
 
 /**
  * Creates the Better Auth tables in schema `better_auth` of the database at
@@ -16,8 +17,7 @@ export async function migrateBetterAuth(url: string): Promise<void> {
   // Опція з'єднання, а не лише налаштування ролі: вона працює й тоді, коли
   // роль входу не та, що налаштована (друга лінія захисту — `ALTER ROLE … SET`)
   const pool = new pg.Pool({
-    connectionString: url,
-    options: "-c search_path=better_auth",
+    connectionString: withSessionOptions(url, "-c search_path=better_auth"),
     max: 1,
   })
   try {

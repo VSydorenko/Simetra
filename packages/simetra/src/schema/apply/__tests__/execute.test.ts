@@ -397,6 +397,7 @@ function labelOf(sql: string): string | undefined {
   // Решта операторів відбитка й стану — частини вже позначених кроків
   if (
     sql.includes("search_path") ||
+    sql.includes("jit = off") ||
     sql.includes("simetra_fingerprint") ||
     sql.includes("encode(sha256") ||
     sql.includes("to_regclass")
