@@ -194,7 +194,7 @@ These hold for T0 and for every tier that reads metadata:
 With agent-kit, use its scripts; they read `.agents/kit.profile.json`: tests —
 `run-tests` (`unit` by default; the `db`, `db-supabase` and `db-pg` levels wait
 for the stack lock), PR — `pr-gate`, a spec or plan section —
-`doc section <file> §N`, Codex — `codex-audit`. The commands below are what
+`doc <file> §N`, Codex — `codex-audit`. The commands below are what
 they run, and the way to work without the kit.
 
 ```bash

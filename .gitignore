@@ -44,3 +44,4 @@ __pycache__/
 # agent-kit
 .agents/out/
 .agents/kit.profile.local.json
+.agents/sdd/

@@ -29,7 +29,7 @@
   model from its frontmatter in agent-kit: `researcher` and `code-reviewer` are
   Sonnet, `code-review-verifier` is Opus. Raise `code-reviewer` to Opus in the
   Agent call for the `data-layer` lens and for any lens on SQL, locks or rights
-  (skill `agent-kit:code-review`).
+  (skill `agent-kit:landed-review`).
 - **Code research.** One entry point, `orient` (agent-kit): `orient <Symbol>`
   for "where does it live, who calls it" over the `codebase-memory-mcp` graph,
   `orient --map "<topic>"` for docs, `orient --plan <file>` for plan anchors.
@@ -105,15 +105,15 @@ local profile next to it.
 | --- | --- |
 | discussion, open questions | skills `discuss`, `research` |
 | spec, glossary, ADR | skill `spec` |
-| plan, plan audit | skills `plan`, `plan-audit` |
+| plan, plan audit | skill `plan` |
 | execution | skill `execute` (script `sdd`) |
-| review of landed work | skill `code-review`; agents `code-reviewer`, `code-review-verifier`; project criteria — `.agents/review-criteria.md` |
+| review of landed work | skill `landed-review`; agents `code-reviewer`, `code-review-verifier`; project criteria — `.agents/review-criteria.md` |
 | closing a merged block: live debt, finished plans, references, narration | skill `close-block` |
 | status, milestones, bugs, ideas | skill `track` (GitHub) |
 | tests, PR, docs, Codex | scripts `run-tests`, `pr-gate`, `doc`, `codex-audit` |
 
 The project has no agents or commands of its own. A gap in the kit goes to agent-kit
-through the `agent-kit:kit-contribute` skill, not into a project copy.
+through the `agent-kit:retro` skill, not into a project copy.
 
 ## Slash commands
 
