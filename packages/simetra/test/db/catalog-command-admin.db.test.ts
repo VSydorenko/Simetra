@@ -606,6 +606,15 @@ describe("catalog command core on rights system catalogs and Users", () => {
     ] as const
   }
   const rowCount = (step: unknown) => (step as { rowCount: number }).rowCount
+  /** Запити одного клієнта йдуть по черзі: `Promise.all` черговий би їх на pg (DeprecationWarning). */
+  const sequentially = async <T, R>(
+    items: readonly T[],
+    run: (item: T) => Promise<R>
+  ): Promise<R[]> => {
+    const out: R[] = []
+    for (const item of items) out.push(await run(item))
+    return out
+  }
   /** Множини запитів `a` і `b`: розмір `a` і розмір симетричної різниці. */
   const compare = async (client: pg.Client, a: string, b: string) =>
     (
@@ -736,8 +745,8 @@ describe("catalog command core on rights system catalogs and Users", () => {
         async () => {
           const pairs = {
             check: async (client: pg.Client) =>
-              Promise.all(
-                FACT_PAIRS.map(([pub, live]) => compare(client, pub, live))
+              sequentially(FACT_PAIRS, ([pub, live]) =>
+                compare(client, pub, live)
               ),
           }
           const table = (name: keyof typeof SNAPSHOT_TABLES, columns: string) =>
@@ -748,28 +757,24 @@ describe("catalog command core on rights system catalogs and Users", () => {
             {
               check: async (client) => ({
                 headers: await headers(client),
-                tables: await Promise.all([
-                  compare(
-                    client,
-                    table("scopes", "scope_kind_id, scope, member, catalog"),
-                    "SELECT scope_kind_id, scope, member, catalog FROM simetra.rights_my_scopes_live() WHERE scope IS NOT NULL AND member IS NOT NULL"
-                  ),
-                  compare(
-                    client,
-                    table("values", "dimension_id, value"),
-                    liveValues
-                  ),
-                  compare(
-                    client,
-                    table("scopeSets", "scope_kind_id, scope"),
-                    `SELECT '${S.teamKindId}'::uuid, v FROM simetra.rights_scope_set_live('${S.teamKindId}'::uuid) v`
-                  ),
-                  compare(
-                    client,
-                    "SELECT * FROM simetra.rights_mine()",
-                    "SELECT * FROM simetra.rights_mine_live()"
-                  ),
-                ]),
+                tables: await sequentially(
+                  [
+                    [
+                      table("scopes", "scope_kind_id, scope, member, catalog"),
+                      "SELECT scope_kind_id, scope, member, catalog FROM simetra.rights_my_scopes_live() WHERE scope IS NOT NULL AND member IS NOT NULL",
+                    ],
+                    [table("values", "dimension_id, value"), liveValues],
+                    [
+                      table("scopeSets", "scope_kind_id, scope"),
+                      `SELECT '${S.teamKindId}'::uuid, v FROM simetra.rights_scope_set_live('${S.teamKindId}'::uuid) v`,
+                    ],
+                    [
+                      "SELECT * FROM simetra.rights_mine()",
+                      "SELECT * FROM simetra.rights_mine_live()",
+                    ],
+                  ] as const,
+                  ([pub, live]) => compare(client, pub, live)
+                ),
                 inputs: (
                   await client.query<Record<string, number>>(
                     `SELECT ${(
@@ -891,8 +896,8 @@ describe("catalog command core on rights system catalogs and Users", () => {
                     "SELECT txid_current_if_assigned() IS NOT NULL AS assigned"
                   )
                 ).rows[0]!.assigned,
-                pairs: await Promise.all(
-                  FACT_PAIRS.map(([pub, live]) => compare(client, pub, live))
+                pairs: await sequentially(FACT_PAIRS, ([pub, live]) =>
+                  compare(client, pub, live)
                 ),
               }),
             },
@@ -956,11 +961,9 @@ describe("catalog command core on rights system catalogs and Users", () => {
                     facts: await factCounts(client),
                     // Наживо в `root` кожен факт є: порожнеча — від знімка
                     live: (
-                      await Promise.all(
-                        FACT_PAIRS.map(([, live]) =>
-                          client.query<{ n: number }>(
-                            `SELECT count(*)::int AS n FROM (${live}) x`
-                          )
+                      await sequentially(FACT_PAIRS, ([, live]) =>
+                        client.query<{ n: number }>(
+                          `SELECT count(*)::int AS n FROM (${live}) x`
                         )
                       )
                     ).map((r) => r.rows[0]!.n),
@@ -1053,6 +1056,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
         },
         asOwnerLogin({
           sql: `INSERT INTO public.${ASSIGNMENTS} (id, org_id, subject, archetype) VALUES ('${role}', '${key("A")}', '${key("other@A")}', '${TASK_VIEWER_ID}')`,
+          asOwner: true,
         }),
         {
           sql: `SELECT set_config('${RIGHTS_MAINTENANCE_SETTING}', 'off', true)`,

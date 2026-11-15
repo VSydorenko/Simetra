@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { PLATFORM_ROLES, PROVIDER_API_ROLES } from "simetra/model"
 import { testProvider } from "../../../simetra/test/support"
-import { withRuntimeLogin } from "./support/db"
+import { query, withRuntimeLogin } from "./support/db"
 import {
   dataToolsHelpers,
   heldEnv,
@@ -36,6 +36,18 @@ describe("data tools guard without a service role", () => {
       async (login) => {
         expect(violations(await factsAs(login))).toEqual([])
         expect((await factsAs(login)).service).toBe(false)
+        // Константа профілю — лише декларація; відсутність перевіряється на
+        // стеку: жодна роль, якої сесія входу досягає, не обходить RLS
+        // (суперкористувач стека не досяжний без членства)
+        expect(
+          await query(
+            login,
+            `SELECT rolname FROM pg_roles
+              WHERE rolbypassrls AND pg_has_role(current_user, oid, 'MEMBER')
+              ORDER BY rolname`,
+            []
+          )
+        ).toEqual([])
       },
       "data_no_service"
     )

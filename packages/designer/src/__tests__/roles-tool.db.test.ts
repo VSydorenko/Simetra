@@ -483,7 +483,10 @@ describe("roles: the login role", () => {
       const { request } = await requestPath(client)
       const x = testRoleName("x")
       await asStack(client, `CREATE ROLE ${x} NOLOGIN`)
-      // Сесія входить як роль запиту, а з неї — `SET ROLE` на посередника.
+      // На Supabase сесія — не суперкористувач: вона входить як роль запиту, а
+      // з неї — `SET ROLE` на посередника, тож ланцюг потрібен. На postgres
+      // сесія — суперкористувач, і цей грант там не обов'язковий, але
+      // нешкідливий: ланцюг лишається спільним для обох профілів.
       await asStack(
         client,
         `GRANT ${request} TO ${SESSION_OWNER} WITH SET TRUE`

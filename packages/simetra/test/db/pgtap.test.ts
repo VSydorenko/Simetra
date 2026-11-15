@@ -158,6 +158,7 @@ describe("checkSuite under a request role", () => {
       'set "session_authorization" to postgres;',
     ],
     ["set session_authorization", "set session_authorization = postgres;"],
+    ["set a U& quoted role", 'set U&"role" to postgres;'],
   ])("rejects %s", (_, sql) => {
     expect(() => checkSuite(sql, { role: true })).toThrow(/role switch/)
   })

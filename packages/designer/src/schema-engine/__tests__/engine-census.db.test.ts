@@ -275,15 +275,32 @@ describe("class census inside the managed boundary", () => {
     `
     await inShadow(shadowSql, scope, async (shadow) => {
       const extracted = await engine.extract(shadow, scope)
-      const { properties, options } = await withPool(shadow, async (pool) => ({
-        properties: await readUnmodeledProperties(pool, scope),
-        options: (
-          await pool.query<{ attname: string; attoptions: string[] | null }>(
-            `select attname, attoptions from pg_attribute
+      const { properties, options, version } = await withPool(
+        shadow,
+        async (pool) => ({
+          version: Number(
+            (
+              await pool.query<{ v: string }>(
+                "select current_setting('server_version_num') as v"
+              )
+            ).rows[0]!.v
+          ),
+          properties: await readUnmodeledProperties(pool, scope),
+          options: (
+            await pool.query<{ attname: string; attoptions: string[] | null }>(
+              `select attname, attoptions from pg_attribute
               where attrelid = 'app.doc'::regclass and attnum > 0 order by attnum`
-          )
-        ).rows,
-      }))
+            )
+          ).rows,
+        })
+      )
+      // З 17.12 кожна колонка несе `pg_attver`: без цього `internalOnly`
+      // пройшов би й на відсутньому ключі, тож ключ вимагаємо явно
+      if (version >= 170012)
+        for (const row of options.filter((r) => r.attname !== "b"))
+          expect(row.attoptions).toEqual([
+            expect.stringMatching(/^pg_attver=\d+$/),
+          ])
       // Поза справжньою опцією колонки `b` — нічого, крім `pg_attver`
       const internalOnly = (o: string[] | null) => {
         const rest = (o ?? []).filter((x) => x !== "n_distinct=5")

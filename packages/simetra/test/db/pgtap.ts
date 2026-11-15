@@ -67,11 +67,12 @@ const FORBIDDEN =
 // і `set role`/`set session authorization` у наборі пройшли б, а повернення
 // до ролі запиту перед кінцем сховало б це від звірки `current_user`. Ім'я
 // параметра в лапках (`set "role"`, `set "session_authorization"`) сканер
-// лишає словом, тож воно теж ловиться. Статично не видно `set_config('role',
-// …)` (рядок) і перемикання в тілі dollar-quote (`do $$ … $$`): ловить лише
+// лишає словом, тож воно теж ловиться, як і `U&"role"` без екранування.
+// Статично не видно `set_config('role', …)` (рядок), ім'я `U&"…"` з Unicode-екрануванням (`U&"\0072ole"`) і
+// перемикання в тілі dollar-quote (`do $$ … $$`): ловить лише
 // звірка `current_user`, і лише перемикання, що дожило до кінця набору
 const ROLE_SWITCH =
-  /^(re)?set\s+((local|session)\s+)?(role|session\s+authorization|session_authorization)\b/i
+  /^(re)?set\s+((local|session)\s+)?(u&\s*)?(role|session\s+authorization|session_authorization)\b/i
 
 /**
  * Throws when a statement of the suite controls the transaction or is

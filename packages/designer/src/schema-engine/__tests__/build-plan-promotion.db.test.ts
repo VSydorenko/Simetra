@@ -758,7 +758,7 @@ describe.concurrent("buildPlan", () => {
       })
 
       it("refuses an adopted read policy for anon that the kind does not replace", async () => {
-        // `гість читав таблицю грантом з ADP і політикою; вид без `publicRead`
+        // Гість читав таблицю грантом з ADP і політикою; вид без `publicRead`
         // гостю нічого не дає — відмова називає політику
         const p = await withModule(
           `CREATE POLICY counterparties_anon ON ${OLD} FOR SELECT TO ${ANON} USING (true);\n`,

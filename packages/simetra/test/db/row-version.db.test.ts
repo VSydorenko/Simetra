@@ -86,6 +86,11 @@ const READERS: readonly [string, Reader][] = [
   ["the API anonymous role", "anonymous"],
 ]
 
+const readerRole = (reader: Reader) =>
+  reader === "command"
+    ? PLATFORM_ROLES.command
+    : PROVIDER_API_ROLES[testProvider()][reader]
+
 /** Роль читача до кінця транзакції: роль команд чи роль API профілю прогону. */
 const setReader = (client: pg.Client, reader: Reader) =>
   client.query(
@@ -264,6 +269,13 @@ describe("reset_row_version_epoch in Postgres", () => {
     it(`${label} cannot run it: 42501`, async () => {
       await withRollback(async (client) => {
         await deploy(client)
+        // Тіло функції — SECURITY INVOKER, тож 42501 сам по собі міг би
+        // прийти й від таблиці; відсутній `EXECUTE` — власна причина відмови
+        const { rows } = await client.query<{ granted: boolean }>(
+          "SELECT has_function_privilege($1, 'simetra.reset_row_version_epoch()', 'EXECUTE') AS granted",
+          [readerRole(reader)]
+        )
+        expect(rows[0]!.granted).toBe(false)
         expect(
           await failureCode(client, () => setReader(client, reader), RESET)
         ).toBe("42501")

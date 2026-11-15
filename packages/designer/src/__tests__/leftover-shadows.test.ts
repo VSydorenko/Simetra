@@ -101,14 +101,19 @@ describe("leftover shadow accounting", () => {
     )
   })
 
-  it("names every retried drop of the file on stderr", () => {
+  it("names every retried drop of the file on stderr", async () => {
+    // Власна повторена спроба: кейс не залежить від стану модуля після інших
+    const refused = { shadow: "pgdelta_shadow_r4", sqlstate: "42501" }
+    const s = scripted([refused, undefined])
+    await retryDropOnSuperuserBackend(s.shadow, 0).cleanup()
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     try {
       reportDropRetries()
       expect(warn).toHaveBeenCalledTimes(1)
       expect(warn.mock.calls[0]![0]).toContain(
-        "Shadow drops retried after 42501: pgdelta_shadow_r1 (retry 1), pgdelta_shadow_r1 (retry 2), pgdelta_shadow_r3 (retry 1)"
+        "Shadow drops retried after 42501"
       )
+      expect(warn.mock.calls[0]![0]).toContain("pgdelta_shadow_r4 (retry 1)")
     } finally {
       warn.mockRestore()
     }

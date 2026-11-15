@@ -136,14 +136,6 @@ export async function inMaintenance<T>(
 }
 
 /**
- * Сирота — рядок прав, який перевірка запису вже не пропустила б: так у базі
- * лишається дельта після зміни коду, що звузила домен. Тригери прав
- * вимикаються лише навколо вставки й лише в засіві тестової транзакції:
- * відкат повертає їх, а FK — системні тригери — діють і далі. Без журналу й
- * черги рядок не судиться на COMMIT — як і запис, зроблений до зміни коду.
- * Вимкнути тригери може лише власник таблиць — сесія розгортання.
- */
-/**
  * Крок власника сценарію `commandSteps` від входу власника, а не лише його
  * ролі: режим обслуговування, який сценарій вмикає своїм кроком, гард прав
  * бачить лише при `session_user = current_user`, а на адресі тестів профілю
@@ -156,6 +148,8 @@ export async function inMaintenance<T>(
 export function asOwnerLogin(step: CommandStep): CommandStep {
   if ("check" in step)
     throw new Error("asOwnerLogin: a check step already runs as the owner")
+  if (step.asOwner !== true)
+    throw new Error("asOwnerLogin: the step must be marked `asOwner: true`")
   if (/\bset\s+constraints\b/i.test(step.sql))
     throw new Error(
       "asOwnerLogin: SET CONSTRAINTS in a released savepoint survives the rollback of the scenario"
@@ -175,6 +169,14 @@ export function asOwnerLogin(step: CommandStep): CommandStep {
   }
 }
 
+/**
+ * Сирота — рядок прав, який перевірка запису вже не пропустила б: так у базі
+ * лишається дельта після зміни коду, що звузила домен. Тригери прав
+ * вимикаються лише навколо вставки й лише в засіві тестової транзакції:
+ * відкат повертає їх, а FK — системні тригери — діють і далі. Без журналу й
+ * черги рядок не судиться на COMMIT — як і запис, зроблений до зміни коду.
+ * Вимкнути тригери може лише власник таблиць — сесія розгортання.
+ */
 export async function insertOrphan(
   client: pg.Client,
   table: string,

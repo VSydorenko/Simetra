@@ -46,7 +46,10 @@ vi.mock("@supabase/pg-delta", async (importOriginal) => {
  * прибирання — під іменем тіні; перед `DROP` прибирання чекає, доки бекенди
  * прогону підуть із тіні (`awaitRunBackends`), а `DROP`, відхилений з
  * `42501`, повторює до трьох разів і записує кожен повтор
- * (`retryDropOnSuperuserBackend`); решта — без змін.
+ * (`retryDropOnSuperuserBackend`); решта — без змін. Саму прив'язку цього
+ * ланцюжка тест не охоплює: поведінку кожної ланки тримає
+ * `leftover-shadows.test.ts`, а проводку в `provisionTemplateShadow` — лише
+ * прогін двадцяти запусків без осиротілих тіней.
  */
 vi.mock(
   "../../schema-engine/pg-delta/template-shadow",

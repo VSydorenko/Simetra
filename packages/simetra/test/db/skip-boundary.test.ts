@@ -210,17 +210,28 @@ function hitsOf(file: string, text: string): Hit[] {
     }
     // Пропуск контекстом кейсу, хоч би якою була умова: умову в `if` чи
     // аргументі статично не простежити до кінця, а кейс, що себе пропускає,
-    // живе у файлі з суфіксом провайдера
-    if (ts.isCallExpression(node)) {
-      const callee = node.expression
-      if (
-        (ts.isPropertyAccessExpression(callee) &&
-          CONTEXT_SKIPS.has(callee.name.text) &&
-          runnerOf(callee.expression) === undefined) ||
-        (ts.isIdentifier(callee) && CONTEXT_SKIPS.has(callee.text))
-      )
-        hit(node, "context skip")
-    }
+    // живе у файлі з суфіксом провайдера. Ловиться саме звернення до `skip`/
+    // `todo` контексту (виклик, `const s = ctx.skip`, `ctx["skip"]`,
+    // `{ skip: s }`), а не лише виклик. Названа межа: псевдонім уже
+    // деструктурованого `{ skip }` (`const s = skip`) не відстежується
+    if (
+      (ts.isPropertyAccessExpression(node) &&
+        CONTEXT_SKIPS.has(node.name.text) &&
+        runnerOf(node.expression) === undefined) ||
+      (ts.isElementAccessExpression(node) &&
+        ts.isStringLiteralLike(node.argumentExpression) &&
+        CONTEXT_SKIPS.has(node.argumentExpression.text) &&
+        runnerOf(node.expression) === undefined) ||
+      (ts.isBindingElement(node) &&
+        node.propertyName !== undefined &&
+        (ts.isIdentifier(node.propertyName) ||
+          ts.isStringLiteralLike(node.propertyName)) &&
+        CONTEXT_SKIPS.has(node.propertyName.text)) ||
+      (ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        CONTEXT_SKIPS.has(node.expression.text))
+    )
+      hit(node, "context skip")
     // Порівняння ролі профілю з `null`: за ним кейс тихо виходить
     if (
       ts.isBinaryExpression(node) &&
@@ -331,6 +342,12 @@ describe("the skip checker", () => {
       `it("x", async ({ skip }) => { if (PROVIDER_API_ROLES[p].service === null) skip() })`,
     ],
     ["as todo", `test("x", (context) => context.todo())`],
+    [
+      "through an alias of the member",
+      `it("x", (ctx) => { const s = ctx.skip; s() })`,
+    ],
+    ["through an element access", `it("x", (ctx) => { ctx["skip"]() })`],
+    ["through a renamed destructuring", `it("x", ({ skip: s }) => s())`],
   ])("rejects a context skip %s", (_, code) => {
     expect(sample(code)).toEqual(["context skip"])
   })
