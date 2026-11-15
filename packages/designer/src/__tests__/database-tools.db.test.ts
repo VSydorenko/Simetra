@@ -251,7 +251,7 @@ describe("diff", () => {
       expect(r.exitCode).toBe(1)
       expect(r.stdout).toContain("engine.owner-not-member")
       expect(r.stdout).toContain(
-        `relation app.stray (owner ${STRANGER}, not a role ${PROVIDER_OWNER_ROLES[testProvider()]} is a member of)`
+        `relation app.stray (owner ${STRANGER}, whose privileges ${PROVIDER_OWNER_ROLES[testProvider()]} does not have)`
       )
       expect(r.stdout).toContain("ALTER … OWNER TO <role>")
       expect(`${r.stdout}${r.stderr}`).not.toMatch(/\n\s+at /)

@@ -104,7 +104,7 @@ describe.concurrent("buildPlan", () => {
           ?.params
       ).toEqual({
         count: 1,
-        objects: `relation public.stray (owner ${SERVICE_ROLE}, not a role postgres is a member of)`,
+        objects: `relation public.stray (owner ${SERVICE_ROLE}, whose privileges postgres does not have)`,
       })
     })
   })

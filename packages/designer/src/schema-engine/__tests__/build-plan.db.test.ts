@@ -324,7 +324,7 @@ describe.concurrent("buildPlan", () => {
           ?.params
       ).toEqual({
         count: 1,
-        objects: `relation app.stray (owner ${STRANGER}, not a role ${SESSION_OWNER} is a member of)`,
+        objects: `relation app.stray (owner ${STRANGER}, whose privileges ${SESSION_OWNER} does not have)`,
       })
     })
   })
@@ -348,7 +348,7 @@ describe.concurrent("buildPlan", () => {
           ?.params
       ).toEqual({
         count: 1,
-        objects: `relation app.stray (owner ${NOINHERIT_OWNER}, not a role ${SESSION_OWNER} is a member of)`,
+        objects: `relation app.stray (owner ${NOINHERIT_OWNER}, whose privileges ${SESSION_OWNER} does not have)`,
       })
     })
   })

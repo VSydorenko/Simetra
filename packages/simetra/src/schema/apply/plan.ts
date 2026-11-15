@@ -2098,7 +2098,7 @@ export async function checkOwnerMembership(
     .filter((owner) => !owner.member)
     .map(
       (owner) =>
-        `${owner.object} (owner ${owner.owner}, not a role ${owners.session} is a member of)`
+        `${owner.object} (owner ${owner.owner}, whose privileges ${owners.session} does not have)`
     )
   return strangers.length > 0
     ? { owners, refusal: ownersDiagnostic(code, strangers) }

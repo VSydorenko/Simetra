@@ -4393,8 +4393,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Об'єктів, якими володіє не роль, що застосовує, тож план не може ними керувати: ${p.count}: ${p.objects}`,
     hint: {
-      en: `No plan was written. Managed objects belong to the role that applies: another owner can bypass row level security, and an object the plan drops or alters needs an owner the applying role is a member of. ${OWNER_RECIPE.en}, and plan again.`,
-      uk: `План не записано. Керовані об'єкти належать ролі, що застосовує: інший власник може обходити захист рядків, а об'єкт, який план знімає чи змінює, потребує власника, членом якого є роль застосування. ${OWNER_RECIPE.uk} й сплануйте знову.`,
+      en: `No plan was written. Managed objects belong to the role that applies: another owner can bypass row level security, and an object the plan drops or alters needs an owner whose privileges the applying role has (membership WITH INHERIT TRUE). ${OWNER_RECIPE.en}, and plan again.`,
+      uk: `План не записано. Керовані об'єкти належать ролі, що застосовує: інший власник може обходити захист рядків, а об'єкт, який план знімає чи змінює, потребує власника, чиї привілеї має роль застосування (членство WITH INHERIT TRUE). ${OWNER_RECIPE.uk} й сплануйте знову.`,
     },
   },
   "plan.platform-role-missing": {
