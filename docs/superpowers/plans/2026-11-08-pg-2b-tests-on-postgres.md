@@ -867,7 +867,7 @@ Guard і прибиральник (Р2, Р15 (а)) змінюються в ць�
     й `node scripts/db-stack.mjs stop postgres --volumes || true` між ними
     (коментар повторів — з наявного job-а); `timeout-minutes` — як у
     наявного `db`; образ Postgres — `docker/build-push-action` з
-    `load: true`, `tags: simetra-pg/postgres:17.11`, `cache-from: type=gha`,
+    `load: true`, `tags: simetra-pg/postgres:17.12`, `cache-from: type=gha`,
     `cache-to: type=gha,mode=max` і
     `build-args: SIMETRA_STACK_FILES_HASH=<вивід node scripts/db-stack.mjs files-hash postgres>`
     (крок перед збіркою пише його в `$GITHUB_OUTPUT`; без нього мітка

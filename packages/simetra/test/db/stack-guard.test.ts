@@ -10,12 +10,8 @@ import { basename, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { PROVIDER_EVENT_SOURCES, PROVIDER_OWNER_ROLES } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import designerConfig, {
-  ON_POSTGRES as DESIGNER_ON_POSTGRES,
-} from "../../../designer/vitest.config"
-import simetraConfig, {
-  ON_POSTGRES as SIMETRA_ON_POSTGRES,
-} from "../../vitest.config"
+import designerConfig from "../../../designer/vitest.config"
+import simetraConfig from "../../vitest.config"
 import type { Exec, Fetch } from "./external"
 import {
   PROVIDER_ENV,
@@ -733,21 +729,28 @@ describe("vitest configs", () => {
     }
   )
 
+  // Проєкт `db` — стек postgres, `db-supabase` — Supabase, `bench` лишається
+  // на Supabase (Р13); решта проєктів із сторожем — помилка конфігу
   it.each([
-    ["simetra", SIMETRA_ON_POSTGRES],
-    ["designer", DESIGNER_ON_POSTGRES],
-  ] as const)(
-    "%s: db excludes every ON_POSTGRES file and db-pg includes it",
-    (pkg, moved) => {
-      const { dir } = project(`${pkg}/db`)
-      for (const pattern of moved) {
-        const files = globSync(pattern, { cwd: dir })
-        expect(files.length, pattern).toBeGreaterThan(0)
-        for (const file of files) {
-          expect(project(`${pkg}/db`).files).not.toContain(file)
-          expect(project(`${pkg}/db-pg`).files).toContain(file)
-        }
-      }
+    ["simetra/db", "postgres"],
+    ["simetra/db-supabase", "supabase"],
+    ["simetra/bench", "supabase"],
+    ["designer/db", "postgres"],
+    ["designer/db-supabase", "supabase"],
+  ] as const)("DB project %s runs on the %s stack", (name, stack) => {
+    expect(project(name).stack).toBe(stack)
+  })
+
+  // Файл ішов би двічі за `test:db` і `test:db:supabase`, якби обидва проєкти
+  // його брали; єдиний виняток — шлях переривання (нижче)
+  it.each(["simetra", "designer"])(
+    "%s: db and db-supabase share no file except interrupt",
+    (pkg) => {
+      const supabase = new Set(project(`${pkg}/db-supabase`).files)
+      const shared = project(`${pkg}/db`).files.filter((f) => supabase.has(f))
+      expect(shared).toEqual(
+        pkg === "simetra" ? ["test/db/interrupt.db.test.ts"] : []
+      )
     }
   )
 
@@ -759,7 +762,7 @@ describe("vitest configs", () => {
         .filter((p) => p.stack === stack && p.files.includes(interrupt))
         .map((p) => p.name)
     expect(on("supabase")).toEqual(["simetra/db-supabase"])
-    expect(on("postgres")).toEqual(["simetra/db-pg"])
+    expect(on("postgres")).toEqual(["simetra/db"])
   })
 
   // Проєкт без stack-guard ішов би на стек без замка й без звірки
@@ -774,11 +777,9 @@ describe("vitest configs", () => {
       new Set([
         "simetra/db",
         "simetra/db-supabase",
-        "simetra/db-pg",
         "simetra/bench",
         "designer/db",
         "designer/db-supabase",
-        "designer/db-pg",
       ])
     )
   })

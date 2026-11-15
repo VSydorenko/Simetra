@@ -109,10 +109,10 @@ export const SUPERUSER_PRELUDE: readonly string[] = [
   "SET search_path = pg_catalog, pg_temp",
 ]
 
-/** Профіль прогону; без змінної — `supabase` (типовий у ПГ-1). */
+/** Профіль прогону; без змінної — `postgres` (типовий після перемикання проєкту `db`). */
 export function testProvider(): TestProvider {
   const value = process.env[PROVIDER_ENV]
-  if (value === undefined || value === "") return "supabase"
+  if (value === undefined || value === "") return "postgres"
   if (value === "postgres" || value === "supabase") return value
   throw new Error(
     `${PROVIDER_ENV}="${value}" is not a profile: use "postgres" or "supabase"`

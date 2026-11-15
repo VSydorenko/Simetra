@@ -1,62 +1,5 @@
 import { defineConfig } from "vitest/config"
 
-// DB-файли, уже перенесені на стек postgres (план ПГ-2b, Р6): `db-pg` їх
-// бере, а `db`, ще на Supabase, виключає тим самим комітом — кейс під час
-// переносу не губиться й не задвоюється
-export const ON_POSTGRES: string[] = [
-  // Корпус рушія (задача 10)
-  "src/schema-engine/__tests__/promotion-equivalence.db.test.ts",
-  "src/schema-engine/__tests__/fingerprint-coverage.db.test.ts",
-  "src/schema-engine/__tests__/engine-scope.db.test.ts",
-  "src/schema-engine/__tests__/engine-apply-port.db.test.ts",
-  "src/schema-engine/__tests__/savepoint-extract.db.test.ts",
-  "src/schema-engine/__tests__/read-only.db.test.ts",
-  "src/schema-engine/__tests__/function-checks.db.test.ts",
-  "src/schema-engine/__tests__/fingerprint.db.test.ts",
-  "src/schema-engine/__tests__/apply-database.db.test.ts",
-  "src/schema-engine/__tests__/engine-desired-corpus.db.test.ts",
-  "src/schema-engine/__tests__/engine-desired.db.test.ts",
-  "src/schema-engine/__tests__/apply-state.db.test.ts",
-  "src/schema-engine/__tests__/engine-census.db.test.ts",
-  "src/schema-engine/__tests__/engine-extract.db.test.ts",
-  "src/schema-engine/__tests__/round-trip.db.test.ts",
-  // План і застосування (задача 11)
-  "src/schema-engine/__tests__/build-plan.db.test.ts",
-  "src/schema-engine/__tests__/build-plan-provider.db.test.ts",
-  "src/schema-engine/__tests__/build-plan-promotion.db.test.ts",
-  "src/schema-engine/__tests__/build-plan-promotion-data.db.test.ts",
-  "src/schema-engine/__tests__/build-plan-backfill.db.test.ts",
-  "src/schema-engine/__tests__/execute-plan.db.test.ts",
-  "src/schema-engine/__tests__/carrier-backfill.db.test.ts",
-  "src/schema-engine/__tests__/carrier-backfill-not-null.db.test.ts",
-  "src/schema-engine/__tests__/promotion-access.db.test.ts",
-  "src/schema-engine/__tests__/apply-backfill.db.test.ts",
-  "src/schema-engine/__tests__/list-order-index-apply.db.test.ts",
-  // Інструменти й життєвий цикл (задача 12)
-  "src/__tests__/apply-lifecycle.db.test.ts",
-  "src/__tests__/apply-tools.db.test.ts",
-  "src/__tests__/database-tools.db.test.ts",
-  "src/__tests__/data-handler.db.test.ts",
-  "src/__tests__/wide-text-columns.db.test.ts",
-  "src/__tests__/read-query.db.test.ts",
-  "src/__tests__/data-tools.db.test.ts",
-  "src/__tests__/roles-tool.db.test.ts",
-  "src/__tests__/support/shadows.db.test.ts",
-  "src/__tests__/promotion-lifecycle.db.test.ts",
-  "src/__tests__/promotion-commit.db.test.ts",
-  // Рантайм і адміністрування прав (задача 13)
-  "src/__tests__/command-runtime.db.test.ts",
-  "src/__tests__/command-time.db.test.ts",
-  "src/__tests__/catalog-command-concurrency.db.test.ts",
-  "src/__tests__/tenant-creation.db.test.ts",
-  "src/__tests__/rights-admin-commands.db.test.ts",
-  "src/__tests__/rights-last-full-access.db.test.ts",
-  "src/__tests__/rights-maintenance.db.test.ts",
-  "src/__tests__/carrier-locks.db.test.ts",
-  "src/__tests__/read-batch.db.test.ts",
-  "src/__tests__/row-version.db.test.ts",
-]
-
 export default defineConfig({
   test: {
     globals: true,
@@ -91,8 +34,6 @@ export default defineConfig({
             "**/node_modules/**",
             "**/dist/**",
             "**/*.supabase.db.test.ts",
-            "**/*.postgres.db.test.ts",
-            ...ON_POSTGRES,
           ],
           // Усі тести б'ють в одну базу стеку
           fileParallelism: false,
@@ -101,9 +42,9 @@ export default defineConfig({
           // не швидші за 4, а більше одночасних тестів лише розтягує кожен
           // ближче до тайм-ауту
           maxConcurrency: 4,
-          // Стек один на машину: один прогін за раз і стек після прогону такий
-          // самий, як до нього
-          globalSetup: ["../simetra/test/db/stack-guard.supabase.ts"],
+          // Стек postgres один на машину: один прогін за раз і стек після
+          // прогону такий самий, як до нього
+          globalSetup: ["../simetra/test/db/stack-guard.postgres.ts"],
           // Тег прогону в іменах тіней двигуна й облік їхніх провізій
           setupFiles: ["./src/__tests__/support/db-setup.ts"],
           // Тінь двигуна — це створення й наповнення окремої бази: на раннері CI
@@ -116,8 +57,8 @@ export default defineConfig({
         extends: true,
         test: {
           // Кейси, яким потрібен саме стек Supabase (схеми `auth`, `storage`,
-          // `realtime`, ролі провайдера, пулер, пресет): лишаються на ньому й
-          // тоді, коли проєкт `db` перейде на стек postgres. Налаштування — ті
+          // `realtime`, ролі провайдера, пулер, пресет): лишаються на ньому, а
+          // проєкт `db` іде на стек postgres. Налаштування — ті
           // самі, що в `db`, і з тих самих причин
           name: "db-supabase",
           include: ["**/*.supabase.db.test.ts"],
@@ -125,21 +66,6 @@ export default defineConfig({
           fileParallelism: false,
           maxConcurrency: 4,
           globalSetup: ["../simetra/test/db/stack-guard.supabase.ts"],
-          setupFiles: ["./src/__tests__/support/db-setup.ts"],
-          testTimeout: 60_000,
-        },
-      },
-      {
-        extends: true,
-        test: {
-          // Тести, прив'язані до стека postgres. Налаштування — ті самі, що в
-          // `db`, і з тих самих причин; сторож — свій, бо стек інший
-          name: "db-pg",
-          include: ["**/*.postgres.db.test.ts", ...ON_POSTGRES],
-          exclude: ["**/node_modules/**", "**/dist/**"],
-          fileParallelism: false,
-          maxConcurrency: 4,
-          globalSetup: ["../simetra/test/db/stack-guard.postgres.ts"],
           setupFiles: ["./src/__tests__/support/db-setup.ts"],
           testTimeout: 60_000,
         },

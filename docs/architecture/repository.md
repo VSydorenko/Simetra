@@ -54,9 +54,11 @@ dev-залежність. Устрій — [designer.md](designer.md).
   `packages/designer/eslint.zones.js`);
 - `pnpm test` — юніт-тести обох пакетів, разом із тестом прикладів скіла
   споживача;
-- `pnpm test:db` — тести проти локального стека Supabase: рендер і розгортання
-  (`simetra`), адаптер двигуна схеми й звірка на корпусі (`@simetrajs/designer`);
-- `pnpm test:db:pg` — тести на стеку профілю `postgres` (`docker/postgres-stack/`);
+- `pnpm test:db:pg` — DB-тести обох пакетів на стеку профілю `postgres`
+  (`docker/postgres-stack/`): рендер і розгортання (`simetra`), адаптер двигуна
+  схеми й звірка на корпусі (`@simetrajs/designer`);
+- `pnpm test:db` — лише тести, прив'язані до локального стека Supabase
+  (`*.supabase.db.test.ts`), і набір базового стану провайдера;
 - `pnpm metadata:check` — `simetra compile --all` над кожною текою метаданих
   репо; pre-commit запускає його з `--staged` (компілюється вміст індексу Git),
   CI — без нього;

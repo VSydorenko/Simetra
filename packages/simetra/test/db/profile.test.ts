@@ -22,10 +22,10 @@ afterEach(() => {
 })
 
 describe("testProvider", () => {
-  it("defaults to supabase when the variable is not set", () => {
+  it("defaults to postgres when the variable is not set", () => {
     vi.stubEnv(PROVIDER_ENV, "")
     delete process.env[PROVIDER_ENV]
-    expect(testProvider()).toBe("supabase")
+    expect(testProvider()).toBe("postgres")
   })
 
   it("reads the profile from the variable", () => {
@@ -44,8 +44,8 @@ describe("enterProvider", () => {
   it("refuses a second, different profile in the same process", () => {
     vi.stubEnv(PROVIDER_ENV, "")
     delete process.env[PROVIDER_ENV]
-    enterProvider("supabase")
-    expect(() => enterProvider("postgres")).toThrow(PROVIDER_ENV)
+    enterProvider("postgres")
+    expect(() => enterProvider("supabase")).toThrow(PROVIDER_ENV)
   })
 
   it("accepts the same profile twice", () => {

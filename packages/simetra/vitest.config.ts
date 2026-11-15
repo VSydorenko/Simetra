@@ -1,50 +1,7 @@
 import { defineConfig } from "vitest/config"
 
-// DB-файли, уже перенесені на стек postgres (план ПГ-2b, Р6): `db-pg` їх
-// бере, а `db`, ще на Supabase, виключає тим самим комітом — кейс під час
-// переносу не губиться й не задвоюється
-export const ON_POSTGRES: string[] = [
-  // Права (задача 7)
-  "test/db/access.db.test.ts",
-  "test/db/membership.db.test.ts",
-  "test/db/rights-analysis.db.test.ts",
-  "test/db/rights-functions.db.test.ts",
-  "test/db/rights-guards.db.test.ts",
-  "test/db/rights-plan-gate.db.test.ts",
-  "test/db/rights-policies.db.test.ts",
-  "test/db/rights-sources.db.test.ts",
-  "test/db/rights-write.db.test.ts",
-  "test/db/row-rule.db.test.ts",
-  "test/db/command-grants.db.test.ts",
-  // Каталог і команди (задача 8)
-  "test/db/catalog-command.db.test.ts",
-  "test/db/catalog-command-admin.db.test.ts",
-  "test/db/catalog-command-rights.db.test.ts",
-  "test/db/catalog-functions.db.test.ts",
-  "test/db/command-port.db.test.ts",
-  "test/db/applied-snapshot-hash.db.test.ts",
-  "test/db/tenant-creation.db.test.ts",
-  "test/db/snake-case.db.test.ts",
-  "test/db/unique-within.db.test.ts",
-  "test/db/value-checks.db.test.ts",
-  "test/db/builtin-functions.db.test.ts",
-  "test/db/mechanics.db.test.ts",
-  "test/db/carrier-backfill.db.test.ts",
-  "test/db/promote-rewrite.db.test.ts",
-  "test/db/row-version.db.test.ts",
-  "test/db/filter-equivalence.db.test.ts",
-  // Схема й стек (задача 9)
-  "src/schema/__tests__/deploy.db.test.ts",
-  "src/schema/__tests__/paper-test.db.test.ts",
-  "src/schema/__tests__/reference-domain.db.test.ts",
-  "test/db/stack.db.test.ts",
-  // План keyset-сторінки не залежить від провайдера: лише postgres (Р19)
-  "test/db/list-order-plan.db.test.ts",
-]
-
 // Шлях guard і прибиральника переривання покритий на обох стеках: на
-// Supabase — проєктом `db-supabase`, тож `db` його не бере, інакше файл ішов
-// би двічі за `test:db`
+// postgres — проєктом `db` (за маскою), на Supabase — проєктом `db-supabase`
 const INTERRUPT = "test/db/interrupt.db.test.ts"
 
 export default defineConfig({
@@ -68,6 +25,8 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          // Типовий DB-проєкт — стек профілю postgres: базовий стан, переривання
+          // й усі DB-тести, крім прив'язаних до Supabase
           name: "db",
           include: ["**/*.db.test.ts"],
           // Тести, прив'язані до Supabase, — окремий проєкт `db-supabase`
@@ -75,48 +34,27 @@ export default defineConfig({
             "**/node_modules/**",
             "**/dist/**",
             "**/*.supabase.db.test.ts",
-            "**/*.postgres.db.test.ts",
-            INTERRUPT,
-            ...ON_POSTGRES,
           ],
           // Усі тести б'ють в одну базу стеку
           fileParallelism: false,
           // Стек один на машину: один прогін за раз і стек після прогону такий
           // самий, як до нього
-          globalSetup: ["./test/db/stack-guard.supabase.ts"],
+          globalSetup: ["./test/db/stack-guard.postgres.ts"],
+          // Дрейф ролі між тестами файлу (спека профілю §10.3, запобіжник 3)
+          setupFiles: ["./test/db/db-setup.ts"],
         },
       },
       {
         extends: true,
         test: {
           // Кейси, яким потрібен саме стек Supabase (схеми `auth`, `storage`,
-          // `realtime`, ролі провайдера, пулер, пресет): лишаються на ньому й
-          // тоді, коли проєкт `db` перейде на стек postgres
+          // `realtime`, ролі провайдера, пулер, пресет): лишаються на ньому,
+          // а проєкт `db` іде на стек postgres
           name: "db-supabase",
           include: ["**/*.supabase.db.test.ts", INTERRUPT],
           exclude: ["**/node_modules/**", "**/dist/**"],
           fileParallelism: false,
           globalSetup: ["./test/db/stack-guard.supabase.ts"],
-        },
-      },
-      {
-        extends: true,
-        test: {
-          // Стек профілю postgres: базовий стан, переривання й тести, прив'язані
-          // до цього стека (`*.postgres.db.test.ts`); решта DB-тестів іде на
-          // Supabase до перемикання типового профілю
-          name: "db-pg",
-          include: [
-            "test/db/pgtap.db.test.ts",
-            INTERRUPT,
-            "**/*.postgres.db.test.ts",
-            ...ON_POSTGRES,
-          ],
-          exclude: ["**/node_modules/**", "**/dist/**"],
-          fileParallelism: false,
-          globalSetup: ["./test/db/stack-guard.postgres.ts"],
-          // Дрейф ролі між тестами файлу (спека профілю §10.3, запобіжник 3)
-          setupFiles: ["./test/db/db-setup.ts"],
         },
       },
       {

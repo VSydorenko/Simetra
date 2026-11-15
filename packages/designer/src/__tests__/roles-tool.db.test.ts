@@ -471,9 +471,10 @@ describe("roles: the login role", () => {
   // Факт експлуатованості цього ланцюга: посередник із CREATEROLE, звичайний член
   // керівника, у PG16+ — адміністратор ролі команд (`is_admin_of_role` іде
   // всіма членствами). Postgres стека дозволяє `ALTER ROLE` ролі команд;
-  // `GRANT` проходить ту саму перевірку, але падає внутрішньою помилкою
-  // «no possible grantors» (XX000): грантора шукають лише ланцюгом INHERIT.
-  // Опора на цю помилку — не захист, тож шлях відхиляє гейт.
+  // `GRANT` проходить ту саму перевірку, але на PG 17.12 відхиляється звичайною
+  // помилкою прав 42501 (ранні мінорні версії падали внутрішньою XX000
+  // «no possible grantors»): грантора шукають лише ланцюгом INHERIT.
+  // Відмова сервера — не захист, на який спирається платформа: шлях відхиляє гейт.
   it("a CREATEROLE member of the manager administers the command role", async () => {
     await withRollback(async (client) => {
       await asExecutor(client)
@@ -502,7 +503,7 @@ describe("roles: the login role", () => {
       expect({
         alter: await attempt(`ALTER ROLE ${command} CONNECTION LIMIT 1`),
         grant: await attempt(`GRANT ${command} TO ${x}`),
-      }).toEqual({ alter: "allowed", grant: "XX000" })
+      }).toEqual({ alter: "allowed", grant: "42501" })
     })
   })
 
