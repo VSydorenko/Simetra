@@ -102,12 +102,12 @@ pnpm test               # unit tests
 pnpm metadata:check     # compile every metadata directory in the repo
 ```
 
-Database tests run on two local stacks (Docker): the Supabase stack and the
-postgres-profile stack (Postgres 17, Centrifugo, Garage):
+Database tests run on the postgres-profile stack; the Supabase stack keeps the
+supabase-profile regression suites.
 
 ```bash
-pnpm db:start && pnpm test:db && pnpm db:stop          # Supabase stack
-pnpm db:pg:start && pnpm test:db:pg && pnpm db:pg:stop # postgres stack
+pnpm db:pg:start && pnpm test:db:pg && pnpm db:pg:stop # DB tests (default)
+pnpm db:start && pnpm test:db && pnpm db:stop          # supabase-profile regression
 ```
 
 Before opening a pull request, run the same gates as CI:

@@ -38,11 +38,25 @@ touch it (§ 6).
 | provider base state | pgTAP |
 
 **A DB test needs a reason the unit level cannot give** — state it in the test
-name or a one-line comment. The full `pnpm test:db` run is a shared, serialized
+name or a one-line comment. A full DB run is a shared, serialized
 resource (one run at a time per stack); every DB case is paid by every
 later run of every session. Prefer one DB case that walks a scenario over
 several that each rebuild the same database. Name stack objects only through
 the run-tag helpers (`AGENTS.md` § "Commands and gates").
+Provider split (spec `docs/superpowers/specs/2026-11-08-postgres-profile-design.md`
+§10.5): a case whose intent carries over to both profiles goes to
+`*.postgres.db.test.ts` or the default `*.db.test.ts` and takes provider data
+from the profile helpers; a provider-only variant goes to
+`*.supabase.db.test.ts`. No expected value branches on the provider inside one
+file.
+Connection model (same spec, §10.3): tests connect through the stack
+superuser with the session role set to the owner. Leave the owner role only
+through the helpers (`restoreOwnerRole`, `asSessionLogin`, `asStackSuperuser`
+in `packages/simetra/test/db/connection.ts`), and use the superuser only as an
+observer or for setup the owner cannot do (`CREATE ROLE`, `CREATE EXTENSION`);
+name each such use in the report. Never `GRANT … TO CURRENT_USER`. A test role
+granted to the owner needs `WITH INHERIT TRUE`, because `simetra_owner` is
+`NOINHERIT`. A case that needs a service role goes to `db-supabase`.
 Seed users only through provisioning or `signUp` (`packages/simetra/test/db/auth.ts`):
 a bare row in the users catalog has no identity, so `current_user_id()` returns
 `NULL` and every command fails with a misleading `no-right`.
