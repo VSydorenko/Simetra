@@ -18,6 +18,7 @@ import pg from "pg"
 import {
   PROVIDER_EVENT_SOURCES,
   PROVIDER_IDENTITY_SOURCES,
+  PROVIDER_LOGIN_ROLES,
   PROVIDER_OWNER_ROLES,
 } from "simetra/model"
 import {
@@ -355,14 +356,14 @@ export async function endChecks(
   const identity = await identityFingerprint(p, deps)
   if (identity !== before.identity)
     problems.push(
-      `The run changed better_auth of database ${testsDatabase(p)} (fingerprint ${before.identity ?? "none"} → ${identity ?? "none"}): a test granted, altered or created something there outside a rollback. Restore it by hand; the start check of the next run names what differs from the db:pg:start state.`
+      `The run changed better_auth of database ${testsDatabase(p)} (fingerprint ${before.identity ?? "none"} → ${identity ?? "none"}): a test granted, altered or created something there outside a rollback. Restore it by hand; the start check of the next run names only owners, grants, default privileges, trigger state and column names that differ from the db:pg:start state, not other changes the fingerprint covers (column types, role settings).`
     )
   if (problems.length > 0) throw new Error(problems.join("\n"))
 }
 
 // Роль, якій `db:pg:start` віддає схему ідентичності (міграція Better Auth
-// іде від неї, як у проді)
-const IDENTITY_ROLE = "simetra_auth"
+// іде від неї, як у проді): перший логін профілю
+const identityRoleOf = (p: TestProvider): string => PROVIDER_LOGIN_ROLES[p][0]!
 
 /**
  * Запити звірки `better_auth` бази тестів; `$1` — схема ідентичності, `$2` —
@@ -375,7 +376,7 @@ export const IDENTITY_SQL = {
   owners:
     "select 'schema ' || n.nspname as object, pg_catalog.pg_get_userbyid(n.nspowner)::text as owner from pg_catalog.pg_namespace n where n.nspname = $1 union all select 'relation ' || c.relname, pg_catalog.pg_get_userbyid(c.relowner)::text from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 order by 1",
   grants:
-    "select o.object, case a.grantee when 0 then 'PUBLIC' else pg_catalog.pg_get_userbyid(a.grantee)::text end as grantee, a.privilege_type::text as privilege from (select 'schema ' || n.nspname as object, n.nspacl as acl from pg_catalog.pg_namespace n where n.nspname = $1 union all select 'relation ' || c.relname, c.relacl from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid = c.relnamespace where n.nspname = $1) o cross join lateral pg_catalog.aclexplode(o.acl) a order by 1, 2, 3",
+    "select o.object, case a.grantee when 0 then 'PUBLIC' else pg_catalog.pg_get_userbyid(a.grantee)::text end as grantee, a.privilege_type::text as privilege, a.is_grantable::text as grantable from (select 'schema ' || n.nspname as object, n.nspacl as acl from pg_catalog.pg_namespace n where n.nspname = $1 union all select 'relation ' || c.relname, c.relacl from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid = c.relnamespace where n.nspname = $1) o cross join lateral pg_catalog.aclexplode(o.acl) a order by 1, 2, 3",
   defaultAcl:
     "select d.defaclobjtype::text as type, pg_catalog.pg_get_userbyid(d.defaclrole)::text as role from pg_catalog.pg_default_acl d join pg_catalog.pg_namespace n on n.oid = d.defaclnamespace where n.nspname = $1 order by 1, 2",
   triggers:
@@ -388,8 +389,8 @@ export const IDENTITY_SQL = {
   coalesce((select pg_catalog.pg_get_userbyid(n.nspowner)::text || ' ' || coalesce(n.nspacl::text, '') from pg_catalog.pg_namespace n where n.nspname = $1), ''),
   coalesce((select pg_catalog.string_agg(c.relname || ' ' || pg_catalog.pg_get_userbyid(c.relowner)::text || ' ' || coalesce(c.relacl::text, ''), ',' order by c.relname) from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid = c.relnamespace where n.nspname = $1), ''),
   coalesce((select pg_catalog.string_agg(c.relname || ' ' || t.tgname || ' ' || t.tgenabled::text, ',' order by c.relname, t.tgname) from pg_catalog.pg_trigger t join pg_catalog.pg_class c on c.oid = t.tgrelid join pg_catalog.pg_namespace n on n.oid = c.relnamespace where n.nspname = $1), ''),
-  coalesce((select pg_catalog.string_agg(d.defaclobjtype::text || ' ' || pg_catalog.pg_get_userbyid(d.defaclrole)::text || ' ' || d.defaclacl::text, ',' order by 1) from pg_catalog.pg_default_acl d join pg_catalog.pg_namespace n on n.oid = d.defaclnamespace where n.nspname = $1), ''),
-  coalesce((select pg_catalog.string_agg(s.setdatabase::text || ' ' || s.setconfig::text, ',' order by 1) from pg_catalog.pg_db_role_setting s join pg_catalog.pg_roles r on r.oid = s.setrole where r.rolname = $2), '')
+  coalesce((select pg_catalog.string_agg(d.defaclobjtype::text || ' ' || pg_catalog.pg_get_userbyid(d.defaclrole)::text || ' ' || d.defaclacl::text, ',' order by d.defaclobjtype, d.defaclrole) from pg_catalog.pg_default_acl d join pg_catalog.pg_namespace n on n.oid = d.defaclnamespace where n.nspname = $1), ''),
+  coalesce((select pg_catalog.string_agg(s.setdatabase::text || ' ' || s.setconfig::text, ',' order by s.setdatabase) from pg_catalog.pg_db_role_setting s join pg_catalog.pg_roles r on r.oid = s.setrole where r.rolname = $2), '')
 )) as fingerprint`,
 } as const
 
@@ -447,13 +448,18 @@ export async function assertIdentityState(
         defaultAcl: await rows(IDENTITY_SQL.defaultAcl),
         triggers: await rows(IDENTITY_SQL.triggers, params),
       },
-      { schema: table.schema, table: table.name, owner }
+      {
+        schema: table.schema,
+        table: table.name,
+        owner,
+        identityRole: identityRoleOf(p),
+      }
     )
     if (differences.length > 0)
       throw new Error(
         `better_auth of database ${database} is not in the db:pg:start state (${differences.join("; ")}): restore it by hand or rebuild the stack (stopping the stack is the owner's call)`
       )
-    return await fingerprintIn(client, table)
+    return await fingerprintIn(client, table, identityRoleOf(p))
   } finally {
     await client.end()
   }
@@ -496,7 +502,7 @@ export function identityStateDifferences(
     defaultAcl: Record<string, string>[]
     triggers: Record<string, string>[]
   },
-  o: { schema: string; table: string; owner: string }
+  o: { schema: string; table: string; owner: string; identityRole: string }
 ): string[] {
   const allowed = new Set([
     `schema ${o.schema} ${o.owner} USAGE`,
@@ -505,22 +511,34 @@ export function identityStateDifferences(
   ])
   return [
     ...facts.owners
-      .filter((r) => r.owner !== IDENTITY_ROLE)
+      .filter((r) => r.owner !== o.identityRole)
       .map((r) => `${r.object} is owned by ${r.owner}`),
     ...facts.grants
       .filter(
         (g) =>
-          g.grantee !== IDENTITY_ROLE &&
+          g.grantee !== o.identityRole &&
           !allowed.has(`${g.object} ${g.grantee} ${g.privilege}`)
       )
       .map((g) => `${g.object} grants ${g.privilege} to ${g.grantee}`),
+    // Дозволений грант з правом передачі розширив би коло отримувачів
+    ...facts.grants
+      .filter((g) => g.grantee !== o.identityRole && g.grantable === "true")
+      .map(
+        (g) =>
+          `${g.object} grants ${g.privilege} to ${g.grantee} WITH GRANT OPTION`
+      ),
     ...facts.defaultAcl.map(
       (d) =>
         `default privileges of ${d.role} for type ${d.type} in schema ${o.schema}`
     ),
     ...facts.triggers
-      .filter((t) => t.enabled === "D")
-      .map((t) => `trigger ${t.name} on ${o.table} is disabled`),
+      // `D` — вимкнений, `R` — спрацьовує лише в репліці: в обох тригер
+      // провізії не діє в сесії тестів
+      .filter((t) => t.enabled === "D" || t.enabled === "R")
+      .map(
+        (t) =>
+          `trigger ${t.name} on ${o.table} is ${t.enabled === "D" ? "disabled" : "enabled only for replica sessions"}`
+      ),
   ]
 }
 
@@ -536,7 +554,7 @@ export async function identityFingerprint(
   if (table === undefined) return undefined
   const client = await openAdmin(testSuperuserUrl(), testsDatabase(p), deps)
   try {
-    return await fingerprintIn(client, table)
+    return await fingerprintIn(client, table, identityRoleOf(p))
   } finally {
     await client.end()
   }
@@ -544,12 +562,13 @@ export async function identityFingerprint(
 
 async function fingerprintIn(
   client: GuardClient,
-  table: { schema: string }
+  table: { schema: string },
+  identityRole: string
 ): Promise<string> {
   const row = (
     await client.query<{ fingerprint: string }>(IDENTITY_SQL.fingerprint, [
       table.schema,
-      IDENTITY_ROLE,
+      identityRole,
     ])
   ).rows[0]
   if (row === undefined) throw new Error("better_auth fingerprint: no row")

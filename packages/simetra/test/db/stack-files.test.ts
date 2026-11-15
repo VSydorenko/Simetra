@@ -159,15 +159,26 @@ describe("the postgres image version", () => {
   })
 
   it("every apt package is installed with an explicit version", () => {
-    const run = /^RUN apt-get[\s\S]*?(?=^\S|(?![\s\S]))/m.exec(dockerfile)![0]
-    const packages = [
-      ...run.matchAll(/^\s+(postgresql-\S+?)(?:=(\S+))?\s*\\?$/gm),
-    ]
-    expect(packages.map((m) => m[1])).toEqual([
+    // Усі токени кожного `apt-get install`, не лише `postgresql-*`: прапорці
+    // (`-y`, `--no-…`) пропускаються, решта — пакети
+    const installs = dockerfile
+      .replace(/\\\n/g, " ")
+      .split(/&&|\|\||;|\n/)
+      .map((part) => /apt-get install\s(.*)$/.exec(part.trim())?.[1])
+      .filter((args): args is string => args !== undefined)
+    expect(installs.length).toBeGreaterThan(0)
+    const packages = installs.flatMap((args) =>
+      args
+        .split(/\s+/)
+        .filter((token) => token !== "" && !token.startsWith("-"))
+        .map((token) => token.split("=") as [string, string?])
+    )
+    expect(packages.map(([name]) => name)).toEqual([
+      "ca-certificates",
       "postgresql-17-pgtap",
       "postgresql-17-plpgsql-check",
     ])
-    for (const [, name, version] of packages)
+    for (const [name, version] of packages)
       expect(version, name).toMatch(/^\d[\w.+~-]*$/)
   })
 
@@ -412,7 +423,12 @@ describe("stack-files hash wiring of the postgres stack", () => {
 
   // Мітку має кожен сервіс: образ postgres — зі збірки, решта — з compose
   it("every service of compose.yaml is covered", () => {
-    const services = [...read("compose.yaml").matchAll(/^ {2}(\w+):$/gm)].map(
+    // Лише секція `services:`: ключі `volumes:` теж мають відступ у два пробіли
+    const section = /^services:\n((?: {2}.*\n|\n)*)/m.exec(
+      read("compose.yaml")
+    )?.[1]
+    expect(section, "compose.yaml has no services: section").toBeDefined()
+    const services = [...section!.matchAll(/^ {2}([\w-]+):$/gm)].map(
       (m) => m[1]
     )
     expect(services.sort()).toEqual(["centrifugo", "garage", "postgres"])
@@ -686,6 +702,40 @@ describe("runChild when the group cannot be signalled", () => {
       expect(kill).toHaveBeenCalledWith(-4242, "SIGKILL")
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("cannot signal process group 4242 (EPERM)")
+      )
+    } finally {
+      kill.mockRestore()
+      warn.mockRestore()
+    }
+  })
+})
+
+describe("runChild when the group survives SIGKILL", () => {
+  // Зомбі чи процес у D-стані SIGKILL не бере: очікування порожньої групи
+  // має межу, а не тримає замок стека без кінця
+  it("warns and settles after the limit instead of waiting forever", async () => {
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true)
+    const warn = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true)
+    try {
+      const signals = new EventEmitter()
+      const child = new EventEmitter() as ChildProcess
+      Object.assign(child, { pid: 4243 })
+      const done = runChild(
+        "x",
+        [],
+        { signals, killAfterMs: 20, groupGoneAfterKillMs: 100 },
+        () => child
+      )
+      signals.emit("SIGTERM", "SIGTERM")
+      child.emit("close", 0, null)
+      const started = Date.now()
+      expect(await done).toBe(0)
+      expect(Date.now() - started).toBeGreaterThanOrEqual(100)
+      expect(kill).toHaveBeenCalledWith(-4243, "SIGKILL")
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("process group 4243 survived SIGKILL")
       )
     } finally {
       kill.mockRestore()

@@ -235,7 +235,12 @@ const USER_COLUMNS = PROVIDER_EVENT_SOURCES.postgres.find(
 interface IdentityState {
   columns: string[]
   owners: { object: string; owner: string }[]
-  grants: { object: string; grantee: string; privilege: string }[]
+  grants: {
+    object: string
+    grantee: string
+    privilege: string
+    grantable?: string
+  }[]
   defaultAcl: { type: string; role: string }[]
   triggers: { name: string; enabled: string }[]
 }
@@ -537,6 +542,22 @@ describe("the better_auth check at the start of a run on the postgres stack", ()
       'a disabled trigger on better_auth."user"',
       (s) => s.triggers.push({ name: "simetra_provision_user", enabled: "D" }),
       /trigger simetra_provision_user on user is disabled/,
+    ],
+    [
+      'a replica-only trigger on better_auth."user"',
+      (s) => s.triggers.push({ name: "simetra_provision_user", enabled: "R" }),
+      /trigger simetra_provision_user on user is enabled only for replica sessions/,
+    ],
+    [
+      "an allowed grant of the owner with the grant option",
+      (s) =>
+        s.grants.push({
+          object: "relation user",
+          grantee: OWNER,
+          privilege: "TRIGGER",
+          grantable: "true",
+        }),
+      /relation user grants TRIGGER to simetra_owner WITH GRANT OPTION/,
     ],
   ])("refuses %s before the snapshot", async (_label, change, detail) => {
     const state = identityState()

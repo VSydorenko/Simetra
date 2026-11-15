@@ -62,6 +62,9 @@ const START_APP_NAME = "simetra_db_start"
 // Дочірній, що не завершився за цей час після пересланого сигналу, і вся його
 // група дістають SIGKILL: замок не має висіти без кінця
 const KILL_AFTER_MS = 30_000
+// Скільки чекати порожню групу після SIGKILL: процес у D-стані чи зомбі не
+// помирає від нього, і безмежне очікування тримало б замок стека вічно
+const GROUP_GONE_AFTER_KILL_MS = 10_000
 /** @type {readonly NodeJS.Signals[]} */
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"]
 
@@ -154,6 +157,7 @@ function removeLockFile(path) {
  * @property {(chunk: string) => void} [onStdout] stdout у трубу замість термінала
  * @property {SignalSource} [signals] джерело сигналів скрипту; типово `process`
  * @property {number} [killAfterMs]
+ * @property {number} [groupGoneAfterKillMs]
  */
 
 // EPERM на групі дочірнього — у ній процес, якому скрипт не може слати
@@ -197,7 +201,9 @@ function groupAlive(pid) {
  * forwarded to the child's group once; a group still alive `killAfterMs` later
  * gets SIGKILL. The promise settles only after the child exits and, once a
  * signal was forwarded, after its whole group is gone, so a caller under the
- * stack lock keeps the lock until then.
+ * stack lock keeps the lock until then; a group that survives SIGKILL for
+ * `groupGoneAfterKillMs` (a zombie or an uninterruptible process) is reported
+ * and no longer waited for.
  *
  * @param {string} command
  * @param {readonly string[]} args
@@ -208,6 +214,7 @@ function groupAlive(pid) {
 export function runChild(command, args, opts = {}, spawnFn = spawn) {
   const signals = opts.signals ?? process
   const killAfterMs = opts.killAfterMs ?? KILL_AFTER_MS
+  const goneAfterKillMs = opts.groupGoneAfterKillMs ?? GROUP_GONE_AFTER_KILL_MS
   return new Promise((resolve, reject) => {
     // Своя група: Ctrl-C термінала дістається лише скрипту, а він пересилає
     // сигнал усій групі — і `docker compose`, і його нащадкам, — не лише pid
@@ -226,11 +233,16 @@ export function runChild(command, args, opts = {}, spawnFn = spawn) {
     let forwarded = false
     /** @type {NodeJS.Timeout | undefined} */
     let killTimer
+    /** @type {number | undefined} */
+    let killedAt
     const onSignal = (/** @type {NodeJS.Signals} */ signal) => {
       if (forwarded) return
       forwarded = true
       killGroup(child.pid, signal)
-      killTimer = setTimeout(() => killGroup(child.pid, "SIGKILL"), killAfterMs)
+      killTimer = setTimeout(() => {
+        killedAt = Date.now()
+        killGroup(child.pid, "SIGKILL")
+      }, killAfterMs)
     }
     for (const s of FORWARDED_SIGNALS) signals.on(s, onSignal)
     const settle = () => {
@@ -248,7 +260,13 @@ export function runChild(command, args, opts = {}, spawnFn = spawn) {
       // прямий дочірній: замок тримаємо, доки група не порожня, і межа SIGKILL
       // лишається зведеною до того
       const finish = () => {
-        if (forwarded && groupAlive(child.pid)) setTimeout(finish, 50)
+        const stuck =
+          killedAt !== undefined && Date.now() - killedAt >= goneAfterKillMs
+        if (stuck && groupAlive(child.pid))
+          process.stderr.write(
+            `db-stack: process group ${child.pid} survived SIGKILL for ${goneAfterKillMs} ms; not waiting for it\n`
+          )
+        if (forwarded && !stuck && groupAlive(child.pid)) setTimeout(finish, 50)
         else {
           settle()
           resolve(result)

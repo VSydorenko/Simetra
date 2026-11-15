@@ -47,6 +47,7 @@ export function runChild(
     onStdout?: (chunk: string) => void
     signals?: SignalSource
     killAfterMs?: number
+    groupGoneAfterKillMs?: number
   },
   spawnFn?: SpawnFn
 ): Promise<number>
