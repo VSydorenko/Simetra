@@ -265,8 +265,8 @@ export type ExecuteOutcome =
  * Транзакційний, тож сесійного стану на цілі не лишається (спека промоції §7.2).
  * Спроба бере його без очікування: зайнятий замок — відмова, не черга. Пошук
  * після обриву з'єднання чекає на нього: так він не обганяє `COMMIT`.
- * Експортовано, бо той самий ключ бере інструмент обслуговування прав
- * (Р-A4-19): звірка хешу без TOCTOU і жодних двох запусків разом.
+ * Експортовано, бо той самий ключ бере інструмент обслуговування прав:
+ * звірка хешу без TOCTOU і жодних двох запусків разом.
  */
 export const APPLY_ADVISORY_LOCK = "1397312837, 1"
 
@@ -764,7 +764,7 @@ async function runAttempt(
     const unsupported = await serverVersionRefusal(tx)
     if (unsupported !== undefined)
       throw new AttemptStop("refused", [unsupported])
-    // Р10: власник без BYPASSRLS після плану (ALTER ROLE між планом і
+    // Власник без BYPASSRLS після плану (ALTER ROLE між планом і
     // застосуванням) — відмова до першого кроку, у ledger нічого
     const ownerGate = await checkOwnerAttributes(tx)
     if (ownerGate !== undefined) throw new AttemptStop("refused", [ownerGate])

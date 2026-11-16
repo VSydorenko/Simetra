@@ -5,7 +5,7 @@ import type { ReadQuery, ReadResultOf } from "./read"
 /**
  * The input of a phase a `beforeWrite` hook may change. Без `id` і `mark`:
  * хук не перенаправляє операцію на інший рядок, а позначку бачить у
- * `ctx.mark` (Р-A3-18).
+ * `ctx.mark`.
  */
 export interface Draft<E> {
   values?: Partial<E>

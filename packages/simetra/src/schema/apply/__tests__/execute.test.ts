@@ -641,7 +641,7 @@ describe("executePlan", () => {
       // Версія сервера — одразу після замка застосування: жодна раніша фаза
       // не впаде сирою помилкою версійно залежного читання
       "server-version",
-      // Р10: власник без BYPASSRLS — відмова до будь-якого кроку
+      // Власник без BYPASSRLS — відмова до будь-якого кроку
       "owner-gate",
       "role",
       "timeouts",
@@ -1561,7 +1561,7 @@ describe("executePlan", () => {
     const PREAMBLE = { search_path: "pg_catalog", check_function_bodies: "on" }
     const filled = (log: string[]) => log.find((l) => l.startsWith("backfill "))
 
-    // Р1, Р4, Р11: заповнення — між кроками двигуна в порядку плану, поза
+    // Заповнення — між кроками двигуна в порядку плану, поза
     // преамбулою й лише з `row_security = off`; показаний тригер
     // користувача вимкнено на час `UPDATE`, а ввімкнено в прочитаному
     // режимі після `SET CONSTRAINTS` під налаштуваннями транзакції
@@ -1603,7 +1603,7 @@ describe("executePlan", () => {
       expect(seen[setNotNull.sql]).toEqual([PREAMBLE])
       expect(seen[update]).toEqual([{ ...SESSION, row_security: "off" }])
       // Визначення тригерів — під шляхом витягу двигуна, а відкладене —
-      // під налаштуваннями транзакції, не Р11
+      // під налаштуваннями транзакції, а не кроку заповнення
       expect(seen["live-triggers"]).toEqual([
         { ...SESSION, search_path: "pg_catalog" },
       ])
@@ -1634,7 +1634,7 @@ describe("executePlan", () => {
       expect(log.at(-1)).toBe("ROLLBACK")
     })
 
-    // Р3а: згода власника — на показаний обсяг
+    // Згода власника — на показаний обсяг
     it("refuses more rows than the plan showed on a step with permission", async () => {
       const allowed = { ...options, allow: ["s2"] }
       const more = fakeDb({ liveTriggers: [AUDIT], filled: 3 })
@@ -1769,7 +1769,7 @@ describe("executePlan", () => {
       ).toBe("engine")
     })
 
-    // Р7: `NULL`, що з'явилися після плану, — керована відмова до кроку
+    // `NULL`, що з'явилися після плану, — керована відмова до кроку
     describe("the check before SET NOT NULL without a fill", () => {
       const checked: ExecutablePlan = {
         ...plan,

@@ -21,6 +21,18 @@ touch it (§ 6).
 - A guard against data loss or a security hole (rights, promotion, apply,
   generated SQL) gets a test that a **mutation of the guard** turns red — one
   per guard, not one per syntactic variant of the same input.
+- Run a mutation only on a committed tree and undo it with a reverse patch.
+  Never `git stash` (the stash is shared by every worktree) and never
+  `git checkout -- <file>` on a file with uncommitted work.
+- The oracle is a literal, not the constant the mutation changes. A mutation
+  that stays green may be equivalent: first check whether the form can tell
+  the behaviours apart.
+- A test of a lint rule on a virtual fixture outside `allowDefaultProject`
+  gets a `Parsing error` with `ruleId: null`, so both the "refused" and the
+  "allowed" (`toEqual([])`) cases pass falsely. The helper fails on `fatal`
+  or `ruleId === null`.
+- Time-dependent code is tested with fake `performance` / `setTimeout`; real
+  timers flake under load.
 - Do not test a temporary state of the process ("rejects a field until it has
   a consumer"): when the state ends the test is deleted, and until then it
   proves nothing about the product.
@@ -57,6 +69,9 @@ observer or for setup the owner cannot do (`CREATE ROLE`, `CREATE EXTENSION`);
 name each such use in the report. Never `GRANT … TO CURRENT_USER`. A test role
 granted to the owner needs `WITH INHERIT TRUE`, because `simetra_owner` is
 `NOINHERIT`. A case that needs a service role goes to `db-supabase`.
+A login role a test creates gets a unique name: a pooler caches the secret by
+role name, so a role re-created with the same name and a new password fails
+with `28P01`, and a retry does not help.
 Seed users only through provisioning or `signUp` (`packages/simetra/test/db/auth.ts`):
 a bare row in the users catalog has no identity, so `current_user_id()` returns
 `NULL` and every command fails with a misleading `no-right`.
@@ -102,6 +117,8 @@ passes an isolation audit; then it opts into `describe.concurrent`, capped by
   itself is the contract (a CLI output format).
 - Assert outcomes (the plan, the compiled contract, the rows the role sees), not
   the internal calls that produce them.
+- Compare structures with structural equality, not the shape of a projection:
+  a shape check stays green under mutations.
 - For generated SQL, compare parsed trees or whole statements;
   `toContain` on a fragment proves presence, not the statement.
 

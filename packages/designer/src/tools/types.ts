@@ -146,7 +146,7 @@ export interface Tool<I extends z.ZodType = z.ZodType, D = unknown> {
   destructive: boolean
   /**
    * Лише командний рядок: інший канал отримує відмову `cli-only`, а новий
-   * канал не успадковує доступ до інструмента (Р-A4-7).
+   * канал не успадковує доступ до інструмента.
    */
   cliOnly?: true
   run(ctx: ToolContext, input: z.infer<I>): Promise<RunOutcome<D>>

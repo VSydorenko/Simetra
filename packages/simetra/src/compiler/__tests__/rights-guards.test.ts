@@ -203,7 +203,7 @@ const image = (operation: Operation, column: string) =>
       ? `o.${column}`
       : `coalesce(n.${column}, o.${column})`
 
-/** Причина журналу вставки призначення (Р-A6-5) — оракул тесту. */
+/** Причина журналу вставки призначення — оракул тесту. */
 const rootCreatorReason = (relation: string) =>
   `CASE WHEN v_maintenance THEN 'maintenance' WHEN EXISTS (SELECT 1 FROM simetra.rights_tx_typed t WHERE t.xid = txid_current() AND t.provenance = 'root-creator' AND t.assignment = r.row_id) AND NOT EXISTS (SELECT 1 FROM simetra.rights_journal j WHERE j.xid = txid_current() AND j.relation = '${relation}' AND j.row_id = r.row_id) THEN 'root-creator' ELSE 'command' END`
 
@@ -331,7 +331,7 @@ describe("rights guard statement triggers", () => {
             "parent" in config ? image(operation, config.parent) : "NULL::uuid"
           )
         )
-        // Р-A6-5: лише перший образ вставки призначення, яке функція гранту
+        // Лише перший образ вставки призначення, яке функція гранту
         // записала входом знімка з походженням `root-creator`, має причину
         // творця; зміна й видалення — уже дії творця командою.
         expect(values.reason, at).toEqual(
@@ -738,7 +738,7 @@ const covered = (storage: string) => {
 }
 
 describe("rights guard transaction check", () => {
-  // Р3-5, Р3-6: тригер знімка — на кожному джерелі фактів, і тіло знімає
+  // Тригер знімка — на кожному джерелі фактів, і тіло знімає
   // лише факти своєї таблиці. Мапа — рукописна для домену політик.
   it("puts a snapshot trigger with its facts on every source", () => {
     const expected: Record<string, readonly string[]> = {
@@ -824,7 +824,7 @@ describe("rights guard transaction check", () => {
     expect(other).toBeLessThan(missing)
   })
 
-  // Р3-5: оператор, що бере знімок, читає живі факти, рівні знімку, лише
+  // Оператор, що бере знімок, читає живі факти, рівні знімку, лише
   // коли заголовок факту стоїть після його рядків.
   it("writes the header of a fact after its rows", () => {
     const body = bodyShape(fnOf(domain, "users", "simetra_rights_snapshot").sql)
@@ -867,8 +867,8 @@ describe("rights guard transaction check", () => {
     )
   })
 
-  // Р3-7: прибирання — у read committed, окремим оператором на кожну з дев'яти
-  // таблиць (Р3-15), замок і видалення разом, і до перших рядків знімка.
+  // Прибирання — у read committed, окремим оператором на кожну з дев'яти
+  // таблиць, замок і видалення разом, і до перших рядків знімка.
   it("cleans finished snapshots only in read committed", () => {
     const body = bodyShape(
       fnOf(domain, "org_roles", "simetra_rights_snapshot").sql
@@ -1019,7 +1019,7 @@ describe("rights guard transaction check", () => {
       // записів; рядок без запису в журналі — живий. Рядки ключа й дельти
       // ролі звужуються до `to_jsonb`: гілка журналу — за ключем
       // рядка, а для дельти, що шукається за власником, — уся транзакція.
-      // Перший образ вставки творця — `NULL` (Р-A6-5): рядок призначення
+      // Перший образ вставки творця — `NULL`: рядок призначення
       // функції гранту не стає «наявним на початку».
       const journal = `simetra.rights_journal j WHERE j.xid = v_pending.xid AND j.reason IN ('command', 'root-creator') AND j.relation = 'public.${config.table}'`
       const select = (sql: string) =>
@@ -1180,7 +1180,7 @@ describe("rights guard transaction check", () => {
     ).toEqual(["rights_mine_live"])
   })
 
-  // Р3-4, Р3-8, Р3-15: знімок рахує входи живими генераторами, «після» на
+  // Знімок рахує входи живими генераторами, «після» на
   // COMMIT — живі права: публічна функція після появи гілок повернула б сам
   // знімок.
   it("computes the snapshot and the actor check from live variants", () => {
@@ -1218,7 +1218,7 @@ describe("rights guard transaction check", () => {
     expect(requiresOf(check)).not.toContain("function:simetra.rights_mine()")
   })
 
-  // Р3-15: факт `rights` — входи `rights_mine` тими самими генераторами з
+  // Факт `rights` — входи `rights_mine` тими самими генераторами з
   // живим користувачем; контейнери й дельти — лише ті, на які посилаються
   // призначення актора, бо інших `rights_mine` не читає. Дельти — за
   // кастомною роллю, без `scope_key`: вікно `deny` живої гілки його не
@@ -1263,7 +1263,7 @@ describe("rights guard transaction check", () => {
     }
   })
 
-  // Р3-15: права початку рахуються раз на транзакцію — першою перевіркою
+  // Права початку рахуються раз на транзакцію — першою перевіркою
   // черги, що їх читає; порожні права теж кешуються рядком-маркером.
   it("caches the start rights on the first commit check", () => {
     const body = bodyShape(unit(domain, CHECK).sql)
@@ -1823,7 +1823,7 @@ describe("rights guards of root creation", () => {
 
   const MARKER_CHECK = "function:simetra.rights_tx_root_marker_check()"
 
-  // Р-A6-7: корінь, маркер якого функція гранту не спожила до COMMIT, —
+  // Корінь, маркер якого функція гранту не спожила до COMMIT, —
   // відмова; подія несе вставлений рядок, тож рядок перечитується за ключем.
   it("refuses at commit a root marker nobody consumed", () => {
     expect(
@@ -1897,7 +1897,7 @@ describe("rights guards of root creation", () => {
     }
   })
 
-  // Р-A6-7, Р-A6-23: маркер ставить вставка кореневого рядка під `create` на
+  // Маркер ставить вставка кореневого рядка під `create` на
   // виді з `rootCreator`; вид оператора творця не має — маркера теж.
   it("marks an inserted root of a kind with a root creator", () => {
     const effects = (table: string) =>

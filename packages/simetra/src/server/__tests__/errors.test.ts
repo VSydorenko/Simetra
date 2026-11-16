@@ -21,7 +21,7 @@ import type { DatabaseError } from "../port"
 import { orgMember, organization, rootCatalog, sample } from "./fixtures"
 
 // Обмеження каталогу — лише те, що читає мапінг; решта об'єкта — `sample`.
-// CHECK тут немає: його колонку дає лише компілятор (Р-A3-21), тож мапінг
+// CHECK тут немає: його колонку дає лише компілятор, тож мапінг
 // `23514` перевіряється на скомпільованому каталозі нижче.
 const object: RuntimeObject = runtimeObjectSchema.parse({
   ...sample,
@@ -474,7 +474,7 @@ describe("mapDatabaseError", () => {
     })
   })
 
-  // Текст бази може нести дані рядка (Р-A3-8): жодне поле його не повторює.
+  // Текст бази може нести дані рядка: жодне поле його не повторює.
   const leak = "Failing row contains (secret-value). Key (code)=(secret-value)"
   it.each([
     ["23502", { table: "sample", column: "code_col" }],
@@ -506,8 +506,8 @@ describe("mapDatabaseError", () => {
 })
 
 /**
- * `23514` на каталозі з `buildRuntimeCatalog`: колонку CHECK дає компілятор
- * (Р-A3-21), тож тест не тримає форми, якої компілятор не будує.
+ * `23514` на каталозі з `buildRuntimeCatalog`: колонку CHECK дає компілятор,
+ * тож тест не тримає форми, якої компілятор не будує.
  */
 describe("mapDatabaseError on a compiled CHECK", () => {
   let compiled: RuntimeCatalog

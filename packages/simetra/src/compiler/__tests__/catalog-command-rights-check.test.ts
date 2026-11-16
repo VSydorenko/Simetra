@@ -193,7 +193,7 @@ describe("rightsCheck", () => {
 
 describe("rightsCheck of the scope root create", () => {
   // Ядро створення кореня судить право тією самою булевою формою, що й
-  // політика `INSERT` кореня (спека прав §5.2, Р-A6-11), лише над `v_new`.
+  // політика `INSERT` кореня (спека прав §5.2), лише над `v_new`.
   let model: CompiledModel
   beforeAll(async () => {
     model = await compiled(compileRights(rootCreationDomain()))

@@ -36,7 +36,7 @@ import {
 } from "./rights-seed"
 
 /**
- * План keyset-сторінки під RLS (спека П4-B §6.4, рішення плану B1d Р2, Р8):
+ * План keyset-сторінки під RLS (спека П4-B §6.4, §6.7):
  * чи читає кожен оголошений порядок списку сторінку зі свого індексу, не
  * сортуючи видиму множину і не читаючи рядків до курсора, — вирішує
  * планувальник Postgres на засіві з реальною статистикою, а політики RLS
@@ -82,7 +82,7 @@ const integer = (
 })
 
 /**
- * Довідник скоупу `org` з усіма видами індексу порядку (Р2): `indexed`,
+ * Довідник скоупу `org` з усіма видами індексу порядку: `indexed`,
  * `unique`, складений з `desc`, `indexed` `Ref`; `description` — стандартний.
  */
 function listingLayer(): Layer {
@@ -137,12 +137,12 @@ interface Case {
   readBudget?: number
   /**
    * Межу `Index Cond` і бюджет читання не судити, лише записати числа
-   * («Виміри» плану): відоме обмеження Р8(2) для nullable-колонок.
+   * («Виміри» плану): відоме обмеження для nullable-колонок.
    */
   record?: true
 }
 
-/** Порядки таблиці з Task 5 плану B1d. */
+/** Порядки таблиці. */
 const CASES: Case[] = [
   {
     name: "a",
@@ -185,7 +185,7 @@ const CASES: Case[] = [
     orderBy: [{ attribute: "description", direction: "asc" }],
     index: "org_id, description, id",
     sort: "none",
-    // Стандартне найменування — NOT NULL DEFAULT '' (Р9): keyset без гілки
+    // Стандартне найменування — NOT NULL DEFAULT '': keyset без гілки
     // NULL, межа — діапазон індексу, критерій як у `a` (значення унікальні).
     bound: "description",
     group: 1,
@@ -402,7 +402,7 @@ describe("list order plans under RLS", () => {
 
   /**
    * `known` клієнта, що тримає рядки сторінки `page` порядку `order` і
-   * перечитує їх умовно (Р42): ключі й версії цих рядків в епосі {@link EPOCH}.
+   * перечитує їх умовно (Р42 платформної спеки): ключі й версії цих рядків в епосі {@link EPOCH}.
    */
   const knownOf = async (
     order: OrderBy,
@@ -577,7 +577,7 @@ describe("list order plans under RLS", () => {
     }
   )
 
-  // Умовне читання (P4-B план B1c, Р42): `LEFT JOIN unnest(known)` лише
+  // Умовне читання (Р42 платформної спеки): `LEFT JOIN unnest(known)` лише
   // замінює проєкцію відібраного рядка, тож план сторінки судять ті самі
   // правила — індекс порядку, без Seq Scan, без Sort видимої множини.
   it.each(CASES.flatMap((c) => PAGES.map((page) => ({ c, page }))))(

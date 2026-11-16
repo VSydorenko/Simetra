@@ -74,7 +74,7 @@ export interface RowEntry {
    * `seen` (the eviction horizon, §6.2 rule 1) is set, the values are hidden.
    */
   stale: {
-    /** `versionEpoch` — the version epoch `v` belongs to (Р5). */
+    /** `versionEpoch` — the version epoch `v` belongs to. */
     minVersion?: { v: number; epoch: number; versionEpoch: string | null }
     /**
      * Channel → mark epoch. Per channel: a row that moved keeps the mark of
@@ -85,7 +85,7 @@ export interface RowEntry {
     seen?: { epoch: number }
     /**
      * The version epoch switched and no answer proved the row since (P4-B
-     * plan B1c, Р8, Р13): only an answer of the current epoch whose read
+     * spec §6.2): only an answer of the current epoch whose read
      * started after the switch clears it.
      */
     epoch?: true
@@ -215,7 +215,7 @@ export function createObjectStore(options: {
     hidden = 0
   })
 
-  // Перемикання епохи (Р5, Р8): рядки без епохи читались до нього, тож
+  // Перемикання епохи: рядки без епохи читались до нього, тож
   // належать покинутій; позначки мінімальної версії старої епохи скидаються,
   // а кожен рядок — `stale`, доки його не підтвердить читання нової.
   session.onSwitch((previous) => {
@@ -239,12 +239,12 @@ export function createObjectStore(options: {
   })
 
   // Епоха, яку тримає новий слот: до перемикання — епоха пам'яті версій; після
-  // — покинута, бо `null`-відповідь не доводить, що рядок з поточної (Р5).
+  // — покинута, бо `null`-відповідь не доводить, що рядок з поточної.
   const freshHeld = (id: string) =>
     versions.previous() ?? epochs.seen(id)?.versionEpoch ?? null
 
   // Позначка `epoch` після запису: підтвердження знімає, інше після
-  // перемикання ставить (Р13).
+  // перемикання ставить.
   function markEpoch(e: RowEntry, row: ServerRow, readEpoch: number) {
     if (versions.proves(row.versionEpoch, readEpoch)) delete e.stale.epoch
     else if (versions.previous() !== null) e.stale.epoch = true
@@ -267,7 +267,7 @@ export function createObjectStore(options: {
 
   function clearMarks(e: RowEntry, readEpoch: number) {
     const { minVersion, seen } = e.stale
-    // Позначка іншої епохи версій не порівнюється з версією рядка (Р5).
+    // Позначка іншої епохи версій не порівнюється з версією рядка.
     if (
       minVersion !== undefined &&
       (differentEpochs(minVersion.versionEpoch, e.versionEpoch) ||
@@ -291,7 +291,7 @@ export function createObjectStore(options: {
   ): PutResult {
     const id = keyId(object, row.key)
     const memory = epochs.seen(id)
-    // Пам'ять іншої непорожньої епохи відповіді не стосується (Р5); `null`
+    // Пам'ять іншої непорожньої епохи відповіді не стосується; `null`
     // порівнюється з пам'яттю будь-якої епохи.
     const known =
       memory === undefined ||
@@ -363,7 +363,7 @@ export function createObjectStore(options: {
       if (e === undefined)
         return insert(row, incomingScope ?? null, readEpoch, lazyRead)
       // Після перемикання `null`-відповідь не впорядкована з рядком поточної
-      // епохи (Р5): не заміняє його, а ключ стає `stale`. Перечитування —
+      // епохи: не заміняє його, а ключ стає `stale`. Перечитування —
       // одне на позначку: репліка знову відповіла б `null`.
       if (
         row.versionEpoch == null &&
@@ -409,7 +409,7 @@ export function createObjectStore(options: {
         }
         if (e.removed.divergent) restored++
         delete e.removed
-        // Репліка без епохи не стирає епохи слота (Р6).
+        // Репліка без епохи не стирає епохи слота.
         e.row = {
           ...row,
           versionEpoch: effectiveEpoch(row.versionEpoch, e.versionEpoch),
@@ -506,7 +506,7 @@ export function createObjectStore(options: {
         const e = rows.get(key)
         if (e === undefined || e.version >= minVersion) continue
         const v = Math.max(e.stale.minVersion?.v ?? minVersion, minVersion)
-        // Версія сигналу — версія поточної епохи (Р13).
+        // Версія сигналу — версія поточної епохи.
         e.stale.minVersion = {
           v,
           epoch: epochs.next(),
@@ -553,7 +553,7 @@ export function createObjectStore(options: {
       // Пам'ятна версія не менша за очікувану: інакше stale-вставка після
       // повернення ключа втратила б свою мінімальну версію. Пам'ять — лише
       // поточної епохи: версія покинутої не впорядкована з відповідями нової,
-      // а пам'ять поточної вона б витіснила (Р5).
+      // а пам'ять поточної вона б витіснила.
       const min = e.stale.minVersion
       if (!differentEpochs(e.versionEpoch, versions.current()))
         epochs.remember(

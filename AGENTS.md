@@ -234,7 +234,9 @@ pnpm db:signals:stop
   proves nothing.
 - Each local stack is started only through its `pnpm db:*` commands (pinned
   images and CLI), never through a global `supabase` or `docker compose`
-  without the project name.
+  without the project name. Start the `postgres` stack from the main checkout:
+  its bind mounts point into the checkout that started it, so removing a
+  worktree that started the stack breaks it.
 - Each local stack (`postgres`, `supabase`) is one per profile per machine and
   shared by every session and agent on it. The `globalSetup` of each DB project
   (`stack-guard.<provider>.ts` over the guard module

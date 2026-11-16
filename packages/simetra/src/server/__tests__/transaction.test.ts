@@ -781,7 +781,7 @@ describe("scope root creation", () => {
     expect(db.calls).toEqual([])
   })
 
-  // Р-A6-20: id генерує `run`, не спроба; повтор бере ті самі.
+  // Id генерує `run`, не спроба; повтор бере ті самі.
   it.each(["40001", "40P01"])(
     "a %s retry reuses the root and member ids",
     async (code) => {

@@ -16,7 +16,7 @@ export type ObjectOperation = (typeof OBJECT_OPERATIONS)[number]
 /**
  * The object-module event an operation raises; `undefined` — none. Подію
  * визначає операція, а не дія контексту: на довідниках прав дія —
- * `administerRights` і для запису, і для видалення (Р-A3-2).
+ * `administerRights` і для запису, і для видалення.
  */
 export const OPERATION_EVENTS: Readonly<
   Record<ObjectOperation, "write" | undefined>

@@ -9,13 +9,12 @@
 >
 > **Залежності.** B3-2 і B3-3 — у `main` до старту. Частина A — після B1c,
 > B3-2, B3-3, B3-4, B3-6, B5a і ПГ-3 (`sessionKind`). Частина B — ще й після ПГ-4/B2 частин B і C. Якорі на
-> незмерджене позначено «після X». На `main` зараз немає ядра T4
-> (`createCore`, `CoreSession`), частин пакета `read`, функцій сигналу й
-> `SignalTokens`: їх дають плани [B3-2](2026-11-08-p4-b3-2-core.md),
+> незмерджене позначено «після X». Ядро T4
+> (`packages/simetra/src/data/store/`) і пакет читань — у `main`; функцій сигналу й
+> `SignalTokens` ще немає: їх дають плани
 > [B3-3](2026-11-08-p4-b3-3-window-public-api.md),
 > [B3-4/B3-5](2026-11-08-p4-b3-4-b3-5-write-receipts.md),
-> [B3-6](2026-11-08-p4-b3-6-oracle-host-ssr.md),
-> [B1c](2026-11-08-p4-b1c-conditional-batched-reads.md), B5a,
+> [B3-6](2026-11-08-p4-b3-6-oracle-host-ssr.md), B5a,
 > [ПГ-3](2026-11-08-pg-3-identity-better-auth.md) і
 > [ПГ-4/B2](2026-11-08-pg-4-b2-signal-transport.md).
 > **Межа з B6** (рішення архітекторки). Функції сигналів прав, підписка на

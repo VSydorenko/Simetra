@@ -28,8 +28,8 @@
 [платформна спека](../specs/2026-09-24-simetra-platform-design.md) Р37, Р38;
 [звіт спайку ядра](../specs/2026-11-08-t4-core-spike-report.md) §2, §4a, §5,
 §8, §9; плани [B3-3](2026-11-08-p4-b3-3-window-public-api.md) (гачок
-`pinned`, слабкі власники, лінивий `count`) і
-[B1c](2026-11-08-p4-b1c-conditional-batched-reads.md).
+`pinned`, слабкі власники, лінивий `count`) і код
+`packages/simetra/src/data/store/writer.ts` (`w.apply`; спека П4-B §6.2, §8.4).
 
 **Шляхи.** Відносні шляхи `store/…`, `runtime/…`, `adapter.ts`, `errors.ts`, `index.ts` у B3-4 — від `packages/simetra/src/data/`; шляхи T3 у B3-5 — від `packages/simetra/src/server/`, а `envelope.ts`, `limits.ts` — від `packages/simetra/src/model/runtime/`.
 

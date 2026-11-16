@@ -326,7 +326,7 @@ describe("guard connections on the postgres stack", () => {
       "postgres connect postgres?options=-c%20role%3Dsimetra_owner",
       "postgres connect postgres",
       "simetra connect postgres?options=-c%20role%3Dsimetra_owner",
-      // Звірка `better_auth` (Р3) — у базі тестів, до знімка
+      // Звірка `better_auth` — у базі тестів, до знімка
       "simetra connect postgres",
       "postgres connect postgres",
       "simetra connect postgres",
@@ -751,7 +751,7 @@ describe("vitest configs", () => {
   )
 
   // Проєкт `db` — стек postgres, `db-supabase` — Supabase, `bench` лишається
-  // на Supabase (Р13); решта проєктів із сторожем — помилка конфігу
+  // на Supabase; решта проєктів із сторожем — помилка конфігу
   it.each([
     ["simetra/db", "postgres"],
     ["simetra/db-supabase", "supabase"],

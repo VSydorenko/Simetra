@@ -22,9 +22,9 @@ import {
 /**
  * Раннер виконує кроки заповнення `NULL` перед `NOT NULL` на справжній базі
  * (платформна спека §6.6; спека промоції §7.2): лише `NULL` отримують
- * default, кроки — однією транзакцією, тригери за Р4а, `SET CONSTRAINTS`
- * після `UPDATE`, згода на обсяг (Р3а) і перевірка `NULL` перед
- * `SET NOT NULL` без заповнення (Р7). Підрахунок на плані — у
+ * default, кроки — однією транзакцією, тригери за правилом (платформні ввімкнені, користувача вимкнені), `SET CONSTRAINTS`
+ * після `UPDATE`, згода на обсяг і перевірка `NULL` перед
+ * `SET NOT NULL` без заповнення. Підрахунок на плані — у
  * `build-plan-backfill.db.test.ts`.
  */
 
@@ -150,7 +150,7 @@ describe.concurrent("apply backfill", () => {
   }
 
   it("fills only the NULL values of an adopted table under its permission, with the shown triggers off", async () => {
-    // І1, І10, І14, Р8: дані споживача — під дозволом за id кроку; порожній
+    // Дані споживача — під дозволом за id кроку; порожній
     // рядок — наявне значення; показаний тригер вимкнено на час `UPDATE`
     // і ввімкнено після
     const before = await compiled({ [NOTES]: notes(), ...AUDIT_SQL })
@@ -169,7 +169,7 @@ describe.concurrent("apply backfill", () => {
       })
       expect(artifact.requiredPermissions).toContain(fill.id)
 
-      // І14: тригер, якого план не показав, мовчки не вимикається
+      // Тригер, якого план не показав, мовчки не вимикається
       const hidden: PlanArtifact = {
         ...artifact,
         steps: artifact.steps.map((s) =>
@@ -192,7 +192,7 @@ describe.concurrent("apply backfill", () => {
           },
         ],
       })
-      // І10: без дозволу на крок — відмова до будь-якого запису
+      // Без дозволу на крок — відмова до будь-якого запису
       expect(
         await apply(
           url,
@@ -232,7 +232,7 @@ describe.concurrent("apply backfill", () => {
   })
 
   it("fills a kind table without a permission and keeps its platform triggers on", async () => {
-    // І10, І7, доповнення п. 2(б) і 6: таблиця виду з default у формі
+    // Таблиця виду з default у формі
     // компілятора дозволу не просить; тригер механіки — платформний за
     // визначенням (функція кваліфікована схемою), тож не показаний і
     // підвищує версію заповненого рядка, а тригер підписки — тригер
@@ -278,8 +278,8 @@ describe.concurrent("apply backfill", () => {
         { id: empty, note: "n/a" },
         { id: kept, note: "x" },
       ])
-      // Блок `versions` підвищує всі рядки таблиці заповнення (Р4 після
-      // рішення архітекторки): клієнт перечитає зайвий рядок, а не пропустить
+      // Блок `versions` підвищує всі рядки таблиці заповнення (за рішенням
+      // архітекторки): клієнт перечитає зайвий рядок, а не пропустить
       const now = await versions()
       expect(BigInt(now[empty]!)).toBeGreaterThan(BigInt(was[empty]!))
       expect(BigInt(now[kept]!)).toBeGreaterThan(BigInt(was[kept]!))
@@ -358,7 +358,7 @@ describe.concurrent("apply backfill", () => {
   })
 
   it("rolls the fill back with a later step that finds NULL values written after the plan", async () => {
-    // І2, І6, Р7: `NULL` у `tag` з'явилися після плану — керована відмова
+    // `NULL` у `tag` з'явилися після плану — керована відмова
     // перед її `SET NOT NULL`, і разом з нею відкочено заповнення `note`
     const two = (note: Json, code: Json) => {
       const t = notes(note) as unknown as { columns: Json[] }
@@ -424,8 +424,8 @@ describe.concurrent("apply backfill", () => {
     // pg-delta замінює зміну виразу генерованої колонки парою DROP + ADD …
     // NOT NULL одним оператором, без окремого SET NOT NULL, тож поля
     // `notNull` немає, і `NULL` з виразу дає сирий 23502 на кроці. Це той
-    // самий випадок боргу, що й ADD COLUMN … NOT NULL без default (Р7
-    // покриває лише SET NOT NULL); тест фіксує форму, щоб її зміна в
+    // самий випадок боргу, що й ADD COLUMN … NOT NULL без default (перевірка
+    // перед кроком покриває лише SET NOT NULL); тест фіксує форму, щоб її зміна в
     // pg-delta не пройшла непоміченою
     const gen = (expression: string, over: Json = {}) => {
       const t = notes() as unknown as { columns: Json[] }
@@ -478,7 +478,7 @@ describe.concurrent("apply backfill", () => {
   })
 
   it("fills a NULL composite value and keeps a row whose fields are all NULL", async () => {
-    // І1: `ROW(NULL, NULL) IS NULL` істинне, але для `attnotnull` це не
+    // `ROW(NULL, NULL) IS NULL` істинне, але для `attnotnull` це не
     // `NULL` — значення споживача, яке заповнення не перезаписує, а план
     // не рахує
     // Композитний тип — рядковий тип прийнятої таблиці: `.sql` не несе
@@ -531,7 +531,7 @@ describe.concurrent("apply backfill", () => {
   })
 
   it("refuses more NULL values than the permission covered and rolls back", async () => {
-    // І11, Р3а: згода власника — на обсяг, який показав план
+    // Згода власника — на обсяг, який показав план
     const before = await compiled({ [NOTES]: notes() })
     const after = await compiled({ [NOTES]: notes(FILLED) })
     await inTarget(EMPTY, async (url) => {
@@ -560,7 +560,7 @@ describe.concurrent("apply backfill", () => {
   })
 
   it("fills a column under a deferred foreign key", async () => {
-    // І12: подія відкладеного FK заповненої колонки спрацьовує до
+    // Подія відкладеного FK заповненої колонки спрацьовує до
     // увімкнення тригерів і наступного `SET NOT NULL`, інакше `55006`
     const PARENTS = "custom-tables/Parents/Parents.meta.json"
     const parent = uuid(9300)
@@ -635,7 +635,7 @@ describe.concurrent("apply backfill", () => {
   })
 
   it("runs the deferred triggers of the fill under the transaction settings", async () => {
-    // І17, Р4: default пише в таблицю з відкладеним тригером споживача;
+    // Default пише в таблицю з відкладеним тригером споживача;
     // той спрацьовує на `SET CONSTRAINTS` уже після повернення
     // налаштувань транзакції, а не під `row_security = off`
     const sql = {
@@ -677,7 +677,7 @@ CREATE CONSTRAINT TRIGGER fills_rls AFTER INSERT ON app.fills DEFERRABLE INITIAL
   })
 
   it("refuses a platform trigger disabled before the fill", async () => {
-    // І16: вимкнений тригер механіки (прийнятий дрейф) пропустив би підвищення
+    // Вимкнений тригер механіки (прийнятий дрейф) пропустив би підвищення
     // версії заповненого рядка, а в режимі `D` його ніхто не ввімкне
     const before = await compiled({ [PARTY]: party() })
     const after = await compiled({
@@ -708,7 +708,7 @@ CREATE CONSTRAINT TRIGGER fills_rls AFTER INSERT ON app.fills DEFERRABLE INITIAL
   })
 
   it("refuses one constant default for several NULL values of a unique column", async () => {
-    // І18: однакове значення дало б `23505` на кроці
+    // Однакове значення дало б `23505` на кроці
     const unique = (type: Json) => ({
       ...(notes(type) as unknown as Json),
       uniques: [{ name: "notes_note_key", columns: ["note"] }],
@@ -733,7 +733,7 @@ CREATE CONSTRAINT TRIGGER fills_rls AFTER INSERT ON app.fills DEFERRABLE INITIAL
   })
 
   it("refuses the fill of a table with descendants with the promotion code", async () => {
-    // І15, Р13: тригери нащадка перелік таблиці не бачить
+    // Тригери нащадка перелік таблиці не бачить
     const before = await compiled({ [NOTES]: notes() })
     const after = await compiled({ [NOTES]: notes(FILLED) })
     await inTarget(EMPTY, async (url) => {

@@ -925,7 +925,7 @@ describe("apply", { concurrent: false }, () => {
         options(dir, limited)
       )
       expect(errors(r)).toEqual(["plan.owner-not-bypassrls"])
-      // Р10: відмова до тіні
+      // Роль без BYPASSRLS: відмова до тіні
       expect(lose.shadowScopes.length).toBe(shadowCallsBefore)
       expect(await markerExists(url)).toBe(false)
     })

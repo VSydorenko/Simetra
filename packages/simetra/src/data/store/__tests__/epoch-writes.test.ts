@@ -50,7 +50,7 @@ const switchToB = (h: Harness) => {
   h.write(() => h.session.acceptEpoch(EB, h.now()))
 }
 
-// Кожен шлях запису епохи в стан сховища (P4-B план B1c, Р5, Р6): відповідь
+// Кожен шлях запису епохи в стан сховища (спека П4-B §6.2): відповідь
 // з `null` після епохи A лишає A, тож наступна відповідь епохи B з меншою
 // версією або заміняє запис (рядок, `ownerVersions`), або робить старі дані
 // `stale` (рядки ТЧ, ліниве поле). Стерта A дала б порівняння версій різних
@@ -198,7 +198,7 @@ const PATHS: { path: string; check: () => void }[] = [
     },
   },
   {
-    // Рядок без епохи до перемикання належить покинутій (Р5, Р6).
+    // Рядок без епохи до перемикання належить покинутій.
     path: "switch: row",
     check: () => {
       const h = harness()
@@ -263,7 +263,7 @@ const PATHS: { path: string; check: () => void }[] = [
   },
 ]
 
-describe("epoch writes into store state (B1c Р5, Р6)", () => {
+describe("epoch writes into store state", () => {
   it.each(PATHS)(
     "$path: a null answer after EA keeps EA; EB with a lower version then wins",
     ({ check }) => check()

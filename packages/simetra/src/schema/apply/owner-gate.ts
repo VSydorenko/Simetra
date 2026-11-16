@@ -9,7 +9,7 @@ export interface OwnerAttributes {
 }
 
 /**
- * Pure decision of the owner gate (decision Р10): the role that plans or
+ * Pure decision of the owner gate: the role that plans or
  * applies must bypass row-level security, or be a superuser. A missing row is
  * a refusal, never a pass (fail-closed). One function for plan, apply and
  * rehearsal, so the three entry points cannot disagree.

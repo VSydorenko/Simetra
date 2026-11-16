@@ -9,7 +9,7 @@ import { PROVIDER_UNMANAGED_EXTENSIONS, type EngineScope } from "simetra/schema"
 import { PROVIDER_SCHEMAS } from "simetra/model"
 
 /**
- * Базова політика провайдера `postgres` (рішення Р1 плану ПГ-2a): власна, не
+ * Базова політика провайдера `postgres` (спека профілю postgres §4.2): власна, не
  * похідна від Supabase. `better_auth` припущена (її створює міграція Better
  * Auth), але керованим лишається лише тригер застосунку на `better_auth.user`;
  * `extensions` — жорстке виключення. Виключена, але припущена схема стає

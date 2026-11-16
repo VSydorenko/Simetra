@@ -208,7 +208,7 @@ export function readRoleOf(
   return purposes[provider].includes("user") ? roles[provider].user : undefined
 }
 
-/** Ключ модуля — `"<kind>.<name>"` об'єкта каталогу (Р-A3-17). */
+/** Ключ модуля — `"<kind>.<name>"` об'єкта каталогу. */
 function checkModules(
   catalog: RuntimeCatalog,
   modules: Readonly<Record<string, ObjectModule<object>>>
@@ -233,7 +233,7 @@ const BEGIN_READ_ONLY = "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY"
 // рівні помилок серіалізації не дає (Рд41).
 const BEGIN_READ = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
 // Окремим оператором під роллю читання: `EXECUTE` функції перевіряється на
-// старті виконавця, а в операторі налаштування роль ще — роль входу (Р1).
+// старті виконавця, а в операторі налаштування роль ще — роль входу.
 const EPOCH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(ROW_VERSION_EPOCH_FUNCTION_NAME)}() AS epoch`
 const MEMBER = "SELECT pg_has_role(session_user, $1, 'SET') AS member"
 const APPLIED_HASH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}() AS hash`
@@ -253,7 +253,7 @@ const maxTabularLinesSchema = z.int().min(1).max(TABULAR_LINES_MAX).optional()
 const budgetSchema = z.int().min(1000).optional()
 
 /**
- * Створення рантайму — одна транзакція `READ ONLY` (Р-A3-12): членство в
+ * Створення рантайму — одна транзакція `READ ONLY`: членство в
  * ролі запиту, роль команд, хеш застосованого знімка.
  */
 async function inspect(
@@ -392,7 +392,7 @@ export async function createCommandRuntime(
     catalog,
     run: (session, input, options) =>
       runCommand(state, session, input, options?.fullTabularArrays === true),
-    // Одиночне читання — пакет з однієї частини (Р3): та сама транзакційна
+    // Одиночне читання — пакет з однієї частини: та сама транзакційна
     // дисципліна; відмова частини — відмова читання.
     read: async <Q extends ReadQuery>(session: SessionClaims, query: Q) => {
       const { items } = await readParts(
@@ -478,7 +478,7 @@ async function readParts(
   options: ReadPartsOptions | undefined
 ): Promise<ReadPartsResult> {
   // До будь-якого I/O: друге з'єднання в хуку чекало б на замок своєї ж
-  // команди (Р-A3-11).
+  // команди.
   rejectNested()
   const claims = claimsOf(session)
   // Межу частин тримає й конверт, але викликач у процесі його не проходить.
@@ -488,7 +488,7 @@ async function readParts(
       reason: LIMIT_REASONS.batchTooLarge,
     })
   }
-  // Перевірка частин — до `BEGIN` (Р11): хибна частина відмовляє лише собі
+  // Перевірка частин — до `BEGIN`: хибна частина відмовляє лише собі
   // й не займає з'єднання.
   const items: ReadPartOutcome[] = new Array(parts.length)
   const planned: { index: number; object: RuntimeObject; plan: ReadPlan }[] = []
@@ -558,7 +558,7 @@ async function readParts(
       )
     )
     // Епоху бази знає лише транзакція: проєкцію з `known` будівник рендерить
-    // після цього оператора (Р11).
+    // після цього оператора.
     epoch = epochOf((await send({ text: EPOCH, params: [] })).rows)
   } catch (error) {
     // Жодна частина не виконана: збій прелюдії — помилка кожної.
