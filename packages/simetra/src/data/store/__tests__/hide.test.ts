@@ -358,4 +358,30 @@ describe("Writer.hide", () => {
     await settle()
     expect(lineView.getSnapshot().section?.lines).toHaveLength(1)
   })
+  it("a lone section view without a header in the store: lines are dropped and re-read", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const lineView = core.view(section(1))
+    watch(lineView)
+    await settle()
+    expect(lineView.getSnapshot().section?.lines).toHaveLength(1)
+    // Читання ТЧ пише рядки зі скоупом «невідомий», а шапки в сховищі немає.
+    expect(coreInternals(core).objects.get(TASK)!.rows.get(key(1))).toBe(
+      undefined
+    )
+    fake.hold = () => true
+    const before = fake.log.length
+    write(core, (w) => w.hide(TASK, [key(1)]))
+    expect(lineView.getSnapshot().section?.lines).toEqual([])
+    expect(
+      coreInternals(core).objects.get(TASK)!.sections.get(key(1), "lines")
+    ).toBeUndefined()
+    await settle()
+    expect(fake.log.length).toBeGreaterThan(before)
+    fake.hold = undefined
+    fake.deliverAll()
+    await settle()
+    expect(lineView.getSnapshot().section?.lines).toHaveLength(1)
+  })
 })

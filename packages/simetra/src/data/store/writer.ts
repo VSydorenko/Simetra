@@ -270,9 +270,12 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       // для кожного ключа, їх дочитує перечитування.
       for (const key of keys) ops.clearOwner(scope, o, key)
       for (const key of hidden) rowViews.touch(o.name, key)
-      if (hidden.length === 0) return
+      // Усі ключі, не лише з записом: змонтований вигляд `section` тримає
+      // рядки ТЧ без шапки в сховищі, і після `clearOwner` його дочитує лише
+      // перечитування.
+      if (keys.length === 0) return
       const pending = ctx.hiddenKeys.get(o.name) ?? new Set<Key>()
-      for (const key of hidden) pending.add(key)
+      for (const key of keys) pending.add(key)
       ctx.hiddenKeys.set(o.name, pending)
     },
 
@@ -586,9 +589,12 @@ export async function revalidateHolders(
     if (!s.alive || s.purged || !s.loaded) continue
     if (s.form.spec.kind === "section" && s.listeners.size === 0) continue
     const included = s.included.get(object)
+    const spec = s.form.spec
     const holds =
       (s.form.object.name === object &&
-        [...keys].some((k) => s.owned.has(k))) ||
+        [...keys].some(
+          (k) => s.owned.has(k) || (spec.kind === "section" && spec.owner === k)
+        )) ||
       (included !== undefined && [...keys].some((k) => included.has(k)))
     if (!holds) continue
     const group = groups.get(s.form.object) ?? []
