@@ -451,11 +451,13 @@ export const constraintNames = (t: CatalogTable): string[] => [
 /**
  * Чи об'єкт належить останньому застосованому стану (`applied`, каталог
  * marker цілі): лише такий об'єкт платформа створила сама. Індекс — за
- * схемою й іменем, обмеження — за таблицею й іменем (обмеження домену — за
- * доменом), тригер і політика — за
- * ідентичністю одиниці, функція, процедура й в'юха — за класом, схемою й
- * іменем (перевантаження з тим самим іменем вважається своїм). Правила
- * платформа не створює, тож воно своїм не буває.
+ * схемою й іменем; обмеження — за таблицею й іменем (обмеження домену — за
+ * доменом); default — за колонкою таблиці, що має default; тригер і
+ * політика — за ідентичністю одиниці; тип — серед перерахувань; решта видів
+ * одиниць (функція, процедура, агрегат, в'юха, домен) — за класом, схемою й
+ * іменем (перевантаження з тим самим іменем вважається своїм). Виду, якого
+ * модель каталогу не несе (правило, колляція, складений тип, стороння
+ * таблиця), платформа не створює, тож він своїм не буває.
  */
 function inApplied(ref: EngineObjectRef, applied: CatalogModel): boolean {
   switch (ref.kind) {
@@ -486,9 +488,22 @@ function inApplied(ref: EngineObjectRef, applied: CatalogModel): boolean {
           u.class === ref.kind &&
           u.identity === `${ref.kind}:${ref.schema}.${ref.table}.${ref.name}`
       )
+    case "default":
+      return applied.tables.some(
+        (t) =>
+          t.schema === ref.schema &&
+          t.name === ref.table &&
+          t.columns.some((c) => c.name === ref.name && c.default !== undefined)
+      )
+    case "type":
+      return applied.enumTypes.some(
+        (e) => e.schema === ref.schema && e.name === ref.name
+      )
     case "function":
     case "procedure":
+    case "aggregate":
     case "view":
+    case "domain":
       return applied.units.some(
         (u) =>
           u.class === ref.kind && u.schema === ref.schema && u.name === ref.name
@@ -500,9 +515,9 @@ function inApplied(ref: EngineObjectRef, applied: CatalogModel): boolean {
 
 /**
  * Id кроків двигуна, що знімають чужий об'єкт без даних (платформна спека
- * §6.6): обмеження, індекс, політику, тригер, правило, функцію, процедуру
- * чи в'юху, якої немає в останньому застосованому стані (`applied`;
- * першого застосування — жодного). Такий об'єкт створила не платформа,
+ * §6.6): будь-якого виду поза видами з даними (`DATA_KINDS`), якого немає в
+ * останньому застосованому стані (`applied`; першого застосування —
+ * жодного). Такий об'єкт створила не платформа,
  * тож його зняття потребує дозволу, хоч би його й створював знову
  * пізніший крок під тим самим ім'ям: виняток «заміна» для нього не діє.
  * `original` повертає посилання до імен `applied` (перейменування наміру
@@ -521,7 +536,7 @@ export function foreignDrops(
     if (
       action.destroyed.some(
         (ref) =>
-          REPLACEABLE_KINDS.has(ref.kind) &&
+          !DATA_KINDS.has(ref.kind) &&
           (applied === undefined || !inApplied(original(ref), applied))
       )
     )
