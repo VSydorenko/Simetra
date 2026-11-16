@@ -48,6 +48,8 @@ export type DefectFlag =
   | "hide-lifted-by-older-read"
   /** A tabular section subset does not go stale on a `hide` of its owner. */
   | "section-ignores-hide"
+  /** The re-check deferred by a load in flight is queued only with listeners. */
+  | "recheck-needs-listeners"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

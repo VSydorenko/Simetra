@@ -104,6 +104,8 @@ export interface Subset extends ReaderTarget {
   /** The session epoch at the start of the last card or section read. */
   readStart: number | undefined
   checkQueued: boolean
+  /** The queued check comes from a hold without a listener (`preload`). */
+  checkHeld: boolean
   /** A re-read check found a load in flight: check again when it ends. */
   recheck: boolean
   /**
@@ -293,10 +295,18 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         load(s)
       }
       // Шапка змінилась під час польоту: перевірка, відкладена до кінця
-      // читання, не губиться (захист ревізією — від повторів).
+      // читання, не губиться (захист ревізією — від повторів). Її ставив і
+      // `preload` без слухачів (`hide` власника в польоті першого
+      // завантаження ТЧ), тож слухачі тут не умова: інакше ТЧ лишається
+      // порожньою й `ready` до монтування.
       if (s.recheck) {
         s.recheck = false
-        if (s.alive && !isClosed() && s.listeners.size > 0) queueCheck(s)
+        if (
+          s.alive &&
+          !isClosed() &&
+          (s.listeners.size > 0 || !ctx.defects.has("recheck-needs-listeners"))
+        )
+          queueCheck(s, true)
       }
     })
   }
@@ -664,6 +674,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       readStart: undefined,
       sectionRead: undefined,
       checkQueued: false,
+      checkHeld: false,
       recheck: false,
       purged: false,
       visible: undefined,
@@ -767,13 +778,16 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     return s.form.include.some((step) => (rows.get(step.target)?.size ?? 0) > 0)
   }
 
-  function queueCheck(s: Subset) {
+  function queueCheck(s: Subset, held = false) {
+    if (held) s.checkHeld = true
     if (s.checkQueued || headerKey(s) === undefined) return
     s.checkQueued = true
     // Не з середини сповіщення: дочитування — власний `commit`.
     queueMicrotask(() => {
       s.checkQueued = false
-      if (!isClosed()) check(s)
+      const heldCheck = s.checkHeld
+      s.checkHeld = false
+      if (!isClosed()) check(s, heldCheck)
     })
   }
 
