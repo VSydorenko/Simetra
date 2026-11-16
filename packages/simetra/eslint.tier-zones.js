@@ -25,7 +25,7 @@ const FRAMEWORK_MESSAGE =
   "Framework boundary: T5 ui imports only React, T4 contracts and the navigation adapter interface (platform spec §3.1)."
 
 const SERVER_MESSAGE =
-  "Tier zone: src/data and src/ui must not import simetra/server; they depend on T4 contracts and T0 metadata only (P4 A3 decision A3-10)."
+  "Tier zone: src/data and src/ui must not import simetra/server; they depend on T4 contracts and T0 metadata only (P4 spec Рт15)."
 
 // Ярусний regex бачить лише `..` на початку шляху, тож `./a/../../server`
 // обходив би його. Нормалізований шлях — без `..` після звичайного сегмента.
@@ -205,7 +205,7 @@ export const purityConfigs = [
               regex:
                 "^(?!\\./(?!(?:.*/)?\\.\\.(?:/|$))|zod(?:/|$)|simetra/model(?:/|$)|node:async_hooks$)",
               message:
-                "T3 purity: src/server imports only ./…, simetra/model, zod and node:async_hooks (P4 A3 decision A3-10).",
+                "T3 purity: src/server imports only ./…, simetra/model, zod and node:async_hooks (P4 spec Рт17).",
             },
           ],
         },
