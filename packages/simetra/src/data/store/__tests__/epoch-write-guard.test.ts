@@ -466,7 +466,7 @@ describe("epoch write guard self-test", () => {
   })
 })
 
-describe("epoch writes in src/data/store (B1c Р5, Р6)", () => {
+describe("epoch writes in src/data/store", () => {
   // Один шлях запису: `null`-відповідь (репліка) не стирає відомої епохи,
   // а нова непорожня її заміняє. Прямий запис поза `effectiveEpoch` уже
   // тричі давав порівняння версій різних епох.

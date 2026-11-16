@@ -83,7 +83,7 @@ export const PROVIDER_SHADOW_TEMPLATES: Readonly<
 
 /**
  * Профіль із шаблоном тіні копіює тінь із шаблону кластера цілі й окремого
- * сервера тіней не знає (Р9). Єдине місце цього факту для плану, адаптера й
+ * сервера тіней не знає. Єдине місце цього факту для плану, адаптера й
  * інструмента застосування.
  */
 export function copiesShadowFromTemplate(provider: DatabaseProvider): boolean {

@@ -180,7 +180,7 @@ describe("rights administration commands over a planned and applied target", () 
     }
   })
 
-  // Пакет очистки складається лише з переліку плану (Р-A4-3): плану не
+  // Пакет очистки складається лише з переліку плану: плану не
   // змінено, тож він `unchanged`, а перелік — дані цілі, які читає лише план.
   describe("rights orphans", () => {
     const plan = async (): Promise<RightsOrphans> => {
@@ -330,7 +330,7 @@ describe("rights administration commands over a planned and applied target", () 
           )
           const roles = new Map(orphans.deltas.map((d) => [d.role, d]))
           const rt = await runtimeOf(pools())
-          // Порядок Р-A4-3: зняти призначення → позначити ролі → дельти
+          // Порядок очистки: зняти призначення → позначити ролі → дельти
           await rt.run(org.people.admin!.session, [
             ...orphans.assignments.map((a): Operation => ({
               action: "delete",

@@ -1,4 +1,4 @@
-// Крок `db:pg:start` до ПГ-3 (рішення Р13): міграція Better Auth у базі
+// Крок `db:pg:start` до ПГ-3: міграція Better Auth у базі
 // `simetra` від ролі `auth` і тимчасові гранти власнику на її схему. Запуск:
 // `node --import tsx packages/simetra/test/db/better-auth-cli.ts`, DSN — лише
 // зі змінних середовища (argv видно в `ps`).

@@ -309,7 +309,7 @@ export const assignPhase = (id: string) => [
 export const ORGANIZATION = { kind: "Catalog" as const, name: "Organization" }
 export const ORG_MEMBER = { kind: "Catalog" as const, name: "OrgMember" }
 export const BRANCH = { kind: "Catalog" as const, name: "Branch" }
-/** Id кореня й рядка членства, які генерує T3 (Р-A6-20). */
+/** Id кореня й рядка членства, які генерує T3. */
 export const ROOT = "55555555-5555-4555-8555-555555555555"
 export const MEMBER_ROW = "66666666-6666-4666-8666-666666666666"
 export const CREATE_ROOT = "$1::jsonb, $2::jsonb, $3::uuid"
@@ -324,7 +324,7 @@ export const generatedIds = (...ids: string[]) => {
   return spy
 }
 
-/** Результат ядра кореня (Р-A6-10): обидва рядки видимі творцю. */
+/** Результат ядра кореня: обидва рядки видимі творцю. */
 export const rootResult = (
   root: Record<string, unknown> = { id: ROOT, version: 1, code: "A" },
   member: Record<string, unknown> | null = {

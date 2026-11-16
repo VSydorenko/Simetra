@@ -284,7 +284,7 @@ function transitionSql(
       ? `SELECT ${scopeKind} AS scope_kind_id, ${oldScope} AS scope FROM old_rows o UNION SELECT ${scopeKind}, ${newScope} FROM new_rows n`
       : `SELECT ${scopeKind} AS scope_kind_id, ${scope} AS scope FROM ${source}`
   const relation = journalRelation(config.table)
-  // Причина творця кореня (Р-A6-5) — лише першому образу вставки призначення,
+  // Причина творця кореня — лише першому образу вставки призначення,
   // яке функція гранту записала входом знімка з походженням: зміна й
   // видалення того самого рядка — уже дії творця командою.
   const creator =
@@ -331,7 +331,7 @@ function truncateBody(table: PhysicalTable): string {
 const HEADER = ref(SNAPSHOT_TABLES.header)
 
 /**
- * Рядки факту `rights` знімка (Р3-15): входи `rights_mine` тими самими
+ * Рядки факту `rights` знімка: входи `rights_mine` тими самими
  * генераторами, що й живий варіант, з живим користувачем — фільтри
  * прийнятих джерел діють на заповненні самі. Контейнери й дельти — лише ті,
  * на які посилаються призначення актора: інших `rights_mine` не читає
@@ -375,7 +375,7 @@ function rightsFactRows(
 }
 
 /**
- * Права актора на початок транзакції `xid` (Р3-15): `mineBody` над входами
+ * Права актора на початок транзакції `xid`: `mineBody` над входами
  * знімка, повний; користувач — актор заголовка факту `rights`, тож рядки
  * «кожного користувача» — його, хоч би хто виконував перевірку.
  */
@@ -390,7 +390,7 @@ export function startRights(xid: string): string {
 }
 
 /**
- * Кеш прав початку на COMMIT (Р3-15): перша перевірка черги транзакції, що
+ * Кеш прав початку на COMMIT: перша перевірка черги транзакції, що
  * його читає, рахує права початку раз — замість повної оцінки в кожній
  * перевірці. Рядки носіїв — `full_access`; маркер без рівня пишеться
  * завжди, щоб порожні права теж були «закешовані». Кеш — рядки транзакції,
@@ -410,7 +410,7 @@ function startCache(xid: string): string[] {
 }
 
 /**
- * Рядки факту — вихід його живого варіанта (Р3-5): знімок успадковує фільтри
+ * Рядки факту — вихід його живого варіанта: знімок успадковує фільтри
  * живих функцій (активність і умови рядків прийнятих джерел, дієвість
  * носіїв), тож гілка знімка повторно не фільтрує. Рядка скоупу з `NULL` у
  * `scope` чи `member` жива гілка `rights_my_scopes` не дає (рядок прийнятого
@@ -504,7 +504,7 @@ function snapshotBody(
     `  v_actor := ${currentUser};`,
     `  IF EXISTS (SELECT 1 FROM ${HEADER} WHERE xid = txid_current() AND actor IS DISTINCT FROM v_actor) THEN ${refusal(COMMAND_CORE_ERRORS.forbidden.rightsContext)} END IF;`,
     `  IF NOT EXISTS (SELECT 1 FROM (VALUES ${missing}) f(fact) WHERE NOT EXISTS (SELECT 1 FROM ${HEADER} h WHERE h.xid = txid_current() AND h.fact = f.fact)) THEN RETURN NULL; END IF;`,
-    // Рядки завершених транзакцій прибирає наступний знімок (Р3-7): чужі
+    // Рядки завершених транзакцій прибирає наступний знімок: чужі
     // видимі рядки — лише закомічені, а замок рядка й видалення — один
     // оператор, тож прибиральники не чекають один одного. В інших рівнях
     // ізоляції видно не всі закомічені рядки — прибирання пропускається.
@@ -620,7 +620,7 @@ function stateRows(
     return `SELECT to_jsonb(l) AS doc FROM ${name} l WHERE ${live}`
   const key = column(table, KEY, style)
   const journal = [
-    // Перший образ вставки творця — `NULL` (Р-A6-5): призначення функції
+    // Перший образ вставки творця — `NULL`: призначення функції
     // гранту не стає «наявним на початку».
     `${ref(platform("rights_journal"))} j WHERE j.xid = v_pending.xid AND j.reason IN ('command', ${sqlLiteral(ROOT_CREATOR_REASON)})`,
     `AND j.relation = ${sqlLiteral(journalRelation(table))}`,
@@ -973,7 +973,7 @@ function checkBody(
     ),
     actorCheck(contracts),
     `  DELETE FROM ${ref(platform("rights_tx_pending"))} p WHERE p.xid = v_pending.xid AND p.kind = v_pending.kind AND p.scope_kind_id = v_pending.scope_kind_id AND p.key = v_pending.key;`,
-    // Знімок не прибирається (Р3-7): пройдена `SET CONSTRAINTS ALL
+    // Знімок не прибирається: пройдена `SET CONSTRAINTS ALL
     // IMMEDIATE` інакше відкрила б зміни, яких ⊆ не судить (виміри,
     // членство без призначень), до COMMIT.
     "  RETURN NULL;",
@@ -982,7 +982,7 @@ function checkBody(
 }
 
 /**
- * Маркер кореня на COMMIT (Р-A6-7): функція гранту споживає маркер, тож
+ * Маркер кореня на COMMIT: функція гранту споживає маркер, тож
  * рядок, що лежить, — корінь виду з `rootCreator` без творця (вставка повз
  * ядро кореня). Подія несе вставлений рядок, а споживання його видаляє, тож
  * рядок перечитується за ключем, як у `rights_tx_check`.
@@ -1212,7 +1212,7 @@ export function buildRightsGuardUnits(
       table.origin.objectId
     )
   }
-  // Тригер знімка — на кожному джерелі фактів (Р3-5, Р3-6): функція на
+  // Тригер знімка — на кожному джерелі фактів: функція на
   // таблицю, бо джерела живлять різні факти.
   for (const { table, facts } of sources.sources) {
     const name = tableName(table)

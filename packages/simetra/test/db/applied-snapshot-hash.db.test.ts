@@ -11,7 +11,7 @@ import { commandAs, queryAs, withRollback, claimsFor } from "./connection"
 import { testProvider } from "./profile"
 
 /**
- * Звірка хешу знімка рантаймом (рішення Р-A3-12, Р-A3-16): роль команд
+ * Звірка хешу знімка рантаймом: роль команд
  * читає хеш лише через `simetra.applied_snapshot_hash()`. Чи дає грант
  * `EXECUTE` і чи читає `SECURITY DEFINER` marker без гранту таблиці, вирішує
  * Postgres — текст рендеру цього не доводить. Обидві форми безпеки схеми:

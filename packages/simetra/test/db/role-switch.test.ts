@@ -65,8 +65,6 @@ const ALLOWED_TARGET =
 interface Exception {
   file: string
   reason: string
-  /** Задача плану ПГ-2b, що прибирає тимчасовий виняток. */
-  task?: number
   /** Лише в тілах цих функцій файла; без поля — у всьому файлі. */
   within?: string[]
 }

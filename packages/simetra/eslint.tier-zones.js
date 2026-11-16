@@ -25,7 +25,7 @@ const FRAMEWORK_MESSAGE =
   "Framework boundary: T5 ui imports only React, T4 contracts and the navigation adapter interface (platform spec §3.1)."
 
 const SERVER_MESSAGE =
-  "Tier zone: src/data and src/ui must not import simetra/server; they depend on T4 contracts and T0 metadata only (P4 A3 decision A3-10)."
+  "Tier zone: src/data and src/ui must not import simetra/server; they depend on T4 contracts and T0 metadata only (P4 spec Рт15)."
 
 // Ярусний regex бачить лише `..` на початку шляху, тож `./a/../../server`
 // обходив би його. Нормалізований шлях — без `..` після звичайного сегмента.
@@ -100,7 +100,7 @@ const DB_ENGINE_PATTERN = {
     "Runtime boundary: simetra production sources import neither pg nor @supabase/pg-delta; the schema engine and database readers live in @simetrajs/designer (designer plan, decision 4).",
 }
 
-// Better Auth і kysely — лише тестова залежність `simetra` (рішення Р2): міграція
+// Better Auth і kysely — лише тестова залежність `simetra`: міграція
 // схеми `better_auth` потрібна DB-тестам, а не споживачеві пакета.
 const TEST_ONLY_AUTH_PATTERN = {
   regex: "^(?:better-auth|kysely)(?:/|$)",
@@ -188,7 +188,8 @@ export const purityConfigs = [
   {
     // Відносний `../model` вбудував би в dist/server другу копію T0, а
     // `pg`/`node:fs` зробили б рантайм залежним від I/O: порт бази приходить
-    // ззовні (A3-10). Дозволено `./…`, simetra/model, zod, node:async_hooks.
+    // ззовні (спека П4 Рт15, Рт17). Дозволено `./…`, simetra/model, zod,
+    // node:async_hooks.
     files: PURITY_FILES("server"),
     ignores: PURITY_IGNORES,
     rules: {
@@ -204,7 +205,7 @@ export const purityConfigs = [
               regex:
                 "^(?!\\./(?!(?:.*/)?\\.\\.(?:/|$))|zod(?:/|$)|simetra/model(?:/|$)|node:async_hooks$)",
               message:
-                "T3 purity: src/server imports only ./…, simetra/model, zod and node:async_hooks (P4 A3 decision A3-10).",
+                "T3 purity: src/server imports only ./…, simetra/model, zod and node:async_hooks (P4 spec Рт17).",
             },
           ],
         },

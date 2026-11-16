@@ -47,7 +47,7 @@ export interface Env {
   /**
    * Та сама ціль від входу мігратора (`ownerLoginOf`): режим обслуговування
    * вимагає `session_user` власника функцій прав, а на адресі тестів
-   * `postgres` сесія — суперкористувач (Р16).
+   * `postgres` сесія — суперкористувач.
    */
   migrator: string
   model: CompiledModel

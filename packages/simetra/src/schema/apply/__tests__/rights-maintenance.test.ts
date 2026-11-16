@@ -32,7 +32,7 @@ import { uuid } from "../../../compiler/__tests__/helpers"
  * Ядро інструмента обслуговування прав на порт-фейку: відмови до запису й
  * властивості послідовності (замок, хеш, `row_security`, режим `LOCAL`, один
  * оператор без CTE, значення лише в параметрах). Що база приймає SQL і
- * судить запобіжниками — DB-тести designer (Задача 9).
+ * судить запобіжниками — DB-тести designer.
  */
 
 let parse: SqlParser
@@ -581,7 +581,7 @@ describe("runRightsMaintenance: refusals inside the transaction", () => {
   )
 
   // Посилання `member` перевіряє та сама згенерована функція, що й ядро
-  // кореня (Р-A6-12): окремим оператором від власника з `row_security = off`.
+  // кореня: окремим оператором від власника з `row_security = off`.
   const isCheck = (s: Sent) => s.sql.includes("_simetra_member_check")
 
   it("checks the new member row by the generated function before the mode", async () => {

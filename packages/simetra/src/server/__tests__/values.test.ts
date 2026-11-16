@@ -344,7 +344,9 @@ describe("encodeItem", () => {
     })
   })
 
-  it("does not check required attributes (Р-A3-20)", () => {
+  // `required` не перевіряється до транзакції: `beforeWrite` може дописати
+  // код чи номер, а незаповнений `NOT NULL` відкидає база (`23502`).
+  it("does not check required attributes", () => {
     const required = {
       ...sample,
       attributes: [{ ...attributeOf("code"), required: true }],
@@ -425,7 +427,7 @@ describe("encodeItem", () => {
     ).toEqual({ item: { id: ID, note_col: "😀", payload_col: ["😀"] } })
   })
 
-  // Р-A3-8: реквізити каталогу — за його порядком, і поза грантом, і з
+  // Реквізити каталогу — за його порядком, і поза грантом, і з
   // невірним значенням; невідомі ключі — після них, за порядком входу.
   it.each([
     ["two invalid values", create(), { count: 1.5, code: "abcd" }, "code"],

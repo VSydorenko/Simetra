@@ -176,7 +176,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
   }
 
   beforeAll(async () => {
-    // Модель знімка актора (план Права-3): кожна форма джерела фактів —
+    // Модель знімка актора: кожна форма джерела фактів —
     // контейнер, регістр зв'язку, дослівні функції виміру й множини виду.
     const result = await compileRights(
       actorSnapshotDomain(
@@ -504,7 +504,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
     })
   })
 
-  // Знімок актора (план Права-3, спека прав §5.1, §7): факти актора — на
+  // Знімок актора (спека прав §5.1, §7): факти актора — на
   // початок транзакції. DB, бо що бачать RLS і ядро після першої зміни
   // джерела, вирішує Postgres: тригер `BEFORE … FOR EACH STATEMENT`, гілки
   // функцій за заголовком xid і відкат точок збереження. Кожен запис з
@@ -716,7 +716,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
 
   describe("actor snapshot", () => {
     it("keeps the effects of earlier steps visible to later steps", async () => {
-      // Перший тест помічника `commandSteps` (план Права-3, Задача 1): запис
+      // Помічник `commandSteps`: запис
       // кроку бачать наступні кроки тієї самої точки збереження.
       const outcome = await steps("root", [
         ownerStep(
@@ -918,7 +918,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
       )
     })
 
-    // Джерело одного факту закріплює транзакцію за актором (Р3-3): чужий
+    // Джерело одного факту закріплює транзакцію за актором: чужий
     // актор не отримує й тих фактів, яких ще не знято.
     it.each([
       [
@@ -1077,7 +1077,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
     })
 
     it("keeps the snapshot after a passed immediate check", async () => {
-      // Р3-7: пройдена `SET CONSTRAINTS ALL IMMEDIATE` знімка не прибирає —
+      // Пройдена `SET CONSTRAINTS ALL IMMEDIATE` знімка не прибирає —
       // зміна виміру (⊆ її не судить) не діє до COMMIT.
       await given(
         (client) =>
@@ -1180,7 +1180,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
     })
 
     it("keeps exempt sources out of reach of the command role", async () => {
-      // DB-доказ, що згенерований SQL ролі команд винятків Р3-6 не
+      // DB-доказ, що згенерований SQL ролі команд таблиць-винятків не
       // відкриває: таблиці знімка, `identities` і `CustomTable` моделі.
       const exempt = [
         ...Object.values(SNAPSHOT_TABLES).map((t) => `simetra.${t.name}`),
@@ -1749,7 +1749,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
   })
 
   describe("rights of a pair", () => {
-    // Р3-16: фікстура з розрізняльними рядками — `deny`, що знімає
+    // Фікстура з розрізняльними рядками — `deny`, що знімає
     // утримуваний рядок дії (`closureCustom`: `deny task read any` над
     // `TaskViewer`), `deny` на дію з `req(update)` (там само) і дія з
     // `req(update)`, яку дає лише дельта `allow` (`read any` над архетипом
@@ -1893,7 +1893,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
   })
 })
 
-// Знімок актора над прийнятими джерелами (план Права-3, Задача 6): друге
+// Знімок актора над прийнятими джерелами: друге
 // мале розгортання, бо спільна модель файлу має роль кожного користувача й
 // довідник членства `org`, а тут членство `org` — прийнята таблиця з
 // активністю, межа тенанта — дослівна функція, і в актора без призначень
@@ -2036,7 +2036,7 @@ describe("actor snapshot over adopted sources", () => {
   })
 
   describe("the database judges a command by the rights at the start of its transaction", () => {
-    // Межа тенанта `org` — дослівна функція множини (Р3-11): рядок таблиці
+    // Межа тенанта `org` — дослівна функція множини: рядок таблиці
     // виду `OrgGuest`, який вона читає, відкриває скоуп лише наживо.
     it("hides X in a verbatim scope set → read X → revert", async () => {
       const id = randomUUID()
@@ -2153,7 +2153,7 @@ describe("actor snapshot over adopted sources", () => {
   })
 
   it("keeps an inactive adopted member out of the snapshot", async () => {
-    // Знімок успадковує умову активності прийнятих джерел (Р3-5): учасник
+    // Знімок успадковує умову активності прийнятих джерел: учасник
     // `idle@A` неактивний, а `idleOffGrantB` — неактивне призначення
     // активного `idle@B`; активні рядки того самого джерела — контроль.
     const outcome = await steps("idle", [
@@ -2268,7 +2268,7 @@ describe("actor snapshot over adopted sources", () => {
   )
 
   it("matches the full rights for every pair over adopted sources with conditions", async () => {
-    // Контракт пари (Р3-16) над рядками прийнятих джерел з умовою
+    // Контракт пари над рядками прийнятих джерел з умовою
     // активності: фільтр пари діє після `typed`, куди входять ці рядки.
     const outcome = await steps("idle", [
       { check: pairContract },
@@ -2293,7 +2293,7 @@ describe("actor snapshot over adopted sources", () => {
   }, 60_000)
 
   it("keeps exempt adopted sources out of reach of the command role", async () => {
-    // Прийняті джерела членства й призначень — винятки Р3-6 (тригерів
+    // Прийняті джерела членства й призначень — винятки (тригерів
     // платформа на них не ставить): запису ролі команд згенерований SQL не
     // відкриває. Контроль — таблиця виду-джерела `OrgGuest`.
     const privileges = async (table: string) =>
@@ -2325,7 +2325,7 @@ describe("actor snapshot over adopted sources", () => {
 })
 
 /**
- * Контракт прав пари (Р3-16) для кожної пари `(дія, об'єкт)` домену, а не
+ * Контракт прав пари для кожної пари `(дія, об'єкт)` домену, а не
  * вибірки: `rights_mine(a, o)` — рядки повного `rights_mine()` з
  * `object = o AND action ∈ {a} ∪ req*(a)`, а кожна функція множин — той
  * самий фільтр над повним `rights_mine()`. Кожна функція кличеться раз на
