@@ -80,9 +80,10 @@ const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"]
  *
  * @param {string} path
  * @param {() => Promise<void>} fn
+ * @param {string} [name] profile name for the refusal message
  * @returns {Promise<void>}
  */
-export async function withStackLock(path, fn) {
+export async function withStackLock(path, fn, name = "postgres") {
   for (;;) {
     try {
       const fd = openSync(path, "wx")
@@ -99,7 +100,7 @@ export async function withStackLock(path, fn) {
     const holder = readHolder(path)
     if (holder !== undefined && isAlive(holder.pid))
       throw new Error(
-        `postgres stack is in use by PID ${holder.pid} (${holder.cwd}, since ${holder.since}). Lock file: ${path}`
+        `${name} stack is in use by PID ${holder.pid} (${holder.cwd}, since ${holder.since}). Lock file: ${path}`
       )
     // Убитий процес лишає файл замка без власника — його можна забрати, як і guard
     removeLockFile(path)
@@ -994,7 +995,11 @@ async function main(argv) {
   if (command === "roles" && profile === "supabase" && flags.length === 0) {
     const { ctx, release } = commandContext(spawn, process)
     try {
-      await withStackLock(SUPABASE_LOCK_PATH, () => rolesSupabase(ctx))
+      await withStackLock(
+        SUPABASE_LOCK_PATH,
+        () => rolesSupabase(ctx),
+        "supabase"
+      )
     } finally {
       release()
     }

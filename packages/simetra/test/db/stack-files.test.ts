@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { PassThrough } from "node:stream"
 import { fileURLToPath } from "node:url"
 import {
@@ -36,6 +36,7 @@ import {
   scramKeys,
   STACK_LOCK_ENV,
   STACK_REFUSAL,
+  SUPABASE_LOCK_PATH,
   stackFilesHash,
   startPostgres,
   withStackLock,
@@ -333,34 +334,94 @@ describe("Simetra identity of the postgres stack", () => {
 
 // `pnpm db:roles` повторно виконує файл на наявному стеку: кожне членство мусить
 // бути або в блоці створення своєї ролі, або під власною перевіркою
+/**
+ * GRANT-и roles.sql, що стоять не під своєю перевіркою. Судить за межами
+ * операторів, а не за блоком цілком: голий GRANT поряд із захищеним DO або
+ * GRANT у DO поза його IF інакше пройшли б. Дозволені лише GRANT усередині
+ * `IF NOT EXISTS (…) THEN … END IF;`, де умова — створення тієї ж ролі чи
+ * перевірка `pg_auth_members`.
+ */
+function unguardedGrants(sql: string): string[] {
+  const code = sql
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("--"))
+    .join("\n")
+  const grant = /\bGRANT\b[^;]*\bTO\b[^;]*;/gi
+  const bad: string[] = []
+  const flag = (text: string): void => {
+    bad.push(...(text.match(grant) ?? []))
+  }
+  const doBlock = /\bDO\s+\$\$([\s\S]*?)\$\$\s*;/g
+  const guarded = /IF NOT EXISTS\s*\(([\s\S]*?)\)\s*THEN([\s\S]*?)END IF\s*;/g
+  flag(code.replace(doBlock, ""))
+  for (const [, body] of code.matchAll(doBlock)) {
+    flag(body!.replace(guarded, ""))
+    for (const [, cond, inner] of body!.matchAll(guarded)) {
+      const role = /pg_roles\s+WHERE\s+rolname\s*=\s*'(\w+)'/.exec(cond!)?.[1]
+      const createsOwnRole =
+        role !== undefined && new RegExp(`CREATE ROLE ${role}\\b`).test(inner!)
+      if (!createsOwnRole && !/pg_auth_members/.test(cond!)) flag(inner!)
+    }
+  }
+  return bad
+}
+
+// `pnpm db:roles` повторно виконує файл на наявному стеку: кожне членство мусить
+// бути або в блоці створення своєї ролі, або під власною перевіркою
 describe("supabase/roles.sql is additive and idempotent", () => {
   const sql = readFileSync(
     fileURLToPath(new URL("../../../../supabase/roles.sql", import.meta.url)),
     "utf8"
   )
-  const code = sql
-    .split("\n")
-    .filter((line) => !line.trimStart().startsWith("--"))
-    .join("\n")
-  const blocks = code.split(/(?<=\$\$;)\s*/)
 
   it("never alters or drops a role", () => {
-    expect(code).not.toMatch(/\b(ALTER|DROP)\s+(ROLE|USER|OWNED)\b/i)
+    expect(sql.replace(/^\s*--.*$/gm, "")).not.toMatch(
+      /\b(ALTER|DROP)\s+(ROLE|USER|OWNED)\b/i
+    )
   })
 
   it("guards every GRANT … TO by role creation or a pg_auth_members check", () => {
-    const grants = blocks.filter((b) => /\bGRANT\b[^;]*\bTO\b/i.test(b))
-    expect(grants.length).toBeGreaterThan(0)
-    for (const block of grants) {
-      const createsOwnRole =
-        /IF NOT EXISTS \(SELECT FROM pg_catalog\.pg_roles WHERE rolname = '(\w+)'\)[\s\S]*CREATE ROLE \1\b[\s\S]*GRANT[^;]*\bTO \1\b/.test(
-          block
-        )
-      const checksMembership = /IF NOT EXISTS \([^)]*pg_auth_members/.test(
-        block
-      )
-      expect(createsOwnRole || checksMembership, block).toBe(true)
-    }
+    expect(sql).toMatch(/\bGRANT\b/)
+    expect(unguardedGrants(sql)).toEqual([])
+  })
+
+  it("accepts a membership under its own pg_auth_members check", () => {
+    expect(
+      unguardedGrants(`DO $$ BEGIN
+        IF NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members WHERE true) THEN
+          GRANT anon TO r;
+        END IF; END $$;`)
+    ).toEqual([])
+  })
+
+  it("rejects a bare GRANT before a guarded DO block", () => {
+    expect(
+      unguardedGrants(`GRANT x TO y;
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'r') THEN
+            CREATE ROLE r; GRANT z TO r;
+          END IF; END $$;`)
+    ).toEqual(["GRANT x TO y;"])
+  })
+
+  it("rejects a GRANT inside a DO block but outside its IF", () => {
+    expect(
+      unguardedGrants(`DO $$ BEGIN
+          IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'r') THEN
+            CREATE ROLE r;
+          END IF;
+          GRANT x TO y;
+        END $$;`)
+    ).toEqual(["GRANT x TO y;"])
+  })
+
+  it("rejects a GRANT under a creation check that creates another role", () => {
+    expect(
+      unguardedGrants(`DO $$ BEGIN
+          IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'r') THEN
+            CREATE ROLE q; GRANT x TO y;
+          END IF; END $$;`)
+    ).toEqual(["GRANT x TO y;"])
   })
 })
 
@@ -369,6 +430,7 @@ describe("withStackLock", () => {
   // би стек посеред прогону
   it("the script locks the same file as the guard of the postgres stack", () => {
     expect(POSTGRES_LOCK_FILE).toBe(TEST_STACKS.postgres.lockFile)
+    expect(basename(SUPABASE_LOCK_PATH)).toBe(TEST_STACKS.supabase.lockFile)
   })
 
   let dir: string
