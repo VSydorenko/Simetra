@@ -51,6 +51,7 @@ import {
   planBackfills,
   triggerReplacements,
   readBackfillCounts,
+  readBackfillCheckRefusals,
   withNotNullChecks,
   withShownTriggers,
   type BackfillInput,
@@ -382,9 +383,15 @@ async function backfillActions(p: {
     rows: (t) => rows.get(key(t)) ?? Number.NaN,
     excluded: (t) => excluded.has(key(t)),
   })
-  return planned.refusals.length > 0
-    ? { ok: false, diagnostics: planned.refusals }
-    : { ok: true, actions: planned.actions }
+  if (planned.refusals.length > 0)
+    return { ok: false, diagnostics: planned.refusals }
+  if (planned.probes.length > 0) {
+    const checks = await p.reader.transaction(p.target, "rollback", (tx) =>
+      readBackfillCheckRefusals(tx, planned.probes, p.names)
+    )
+    if (checks.length > 0) return { ok: false, diagnostics: checks }
+  }
+  return { ok: true, actions: planned.actions }
 }
 
 /**
@@ -408,7 +415,7 @@ async function backfillChecks(p: {
   | { ok: true; steps: PlanStep[] }
   | { ok: false; diagnostics: EngineDiagnostic[] }
 > {
-  const steps = withNotNullChecks(p.steps, p.parse)
+  const steps = withNotNullChecks(p.steps, p.parse, p.desired)
   const tables = backfillWriteTables(steps).map((t) => {
     const table = { schema: t.before.schema, name: t.before.table }
     const live = p.names.table(table)

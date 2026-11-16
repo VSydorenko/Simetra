@@ -50,10 +50,11 @@ import { STEP_CLASSES, type PermissionItem, type PlanStep } from "./steps"
  * переліку сліпих — кроки копій носіїв (`origin: "carriers"`) та блок `versions`
  * (засів послідовності версій і епоха), кроки заповнення перед `NOT NULL`
  * (`origin: "backfill"`) з кількістю `NULL` на плані й показаними тригерами
- * та колонки `notNull` кроків `SET NOT NULL` без заповнення: раннер
- * старішого формату не знав би їхніх блоків.
+ * та колонки `notNull` кроків, що роблять колонку `NOT NULL` без заповнення,
+ * з тим, що рахує сторож (`count`): раннер старішого формату не знав би
+ * їхніх блоків.
  */
-export const PLAN_FORMAT = 8
+export const PLAN_FORMAT = 9
 
 /**
  * Таблиця одиниці, чиї дані план зберігає (спека промоції §7.2): імена до й
@@ -392,10 +393,19 @@ const stepSchema = z.strictObject({
     .optional(),
   notNull: z
     .array(
-      z.strictObject({
-        table: z.strictObject({ schema: z.string(), name: z.string() }),
-        column: z.string(),
-      })
+      z.discriminatedUnion("count", [
+        z.strictObject({
+          table: z.strictObject({ schema: z.string(), name: z.string() }),
+          column: z.string(),
+          count: z.enum(["nulls", "rows"]),
+        }),
+        z.strictObject({
+          table: z.strictObject({ schema: z.string(), name: z.string() }),
+          column: z.string(),
+          count: z.literal("expression"),
+          expression: z.string(),
+        }),
+      ])
     )
     .optional(),
 })

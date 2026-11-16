@@ -70,8 +70,17 @@ export interface RowEntry {
   /** `divergent` — the remove came from a read older than the last write (П15). */
   removed?: { epoch: number; divergent: boolean }
   /**
-   * Three `stale` marks, each cleared by its own rule (spec §6.1). While
-   * `seen` (the eviction horizon, §6.2 rule 1) is set, the values are hidden.
+   * The epoch of the last `hide` of the key while this entry lives (plan
+   * B3-3, Р11). Unlike `stale.hidden`, no read lifts it, and unlike the
+   * `Epochs` mark it is not evicted: the owner's sections read before it
+   * stay stale (`sectionStale`), and a horizon mark is never taken for it.
+   */
+  hiddenAt?: number
+  /**
+   * Four `stale` marks, each cleared by its own rule (spec §6.1). While
+   * `hidden` is set, the values are hidden: by the eviction horizon (§6.2
+   * rule 1) or by `hideKeys` (rights, plan B3-3, Р11). Only a read that
+   * started after the mark clears it; a write-back does not.
    */
   stale: {
     /** `versionEpoch` — the version epoch `v` belongs to. */
@@ -82,7 +91,7 @@ export interface RowEntry {
      * the new channel never drops a gap of the old one.
      */
     disconnect?: Map<string, number>
-    seen?: { epoch: number }
+    hidden?: { epoch: number }
     /**
      * The version epoch switched and no answer proved the row since (P4-B
      * spec §6.2): only an answer of the current epoch whose read
@@ -106,12 +115,12 @@ export function lazyFieldStale(e: RowEntry, field: string): boolean {
 
 /**
  * The values a reader may show: `undefined` for a removed slot and for a row
- * hidden by the eviction horizon (`stale.seen`). Every reader of the store —
+ * hidden by a mark (`stale.hidden`: the horizon or `hideKeys`). Every reader of the store —
  * `RowView`, the local filter and comparator, `include` refs — goes through
  * it; reading `row.values` directly would show hidden values.
  */
 export function visibleRow(e: RowEntry): Values | undefined {
-  if (e.removed !== undefined || e.stale.seen !== undefined) return undefined
+  if (e.removed !== undefined || e.stale.hidden !== undefined) return undefined
   return e.row?.values
 }
 
@@ -153,6 +162,16 @@ export interface ObjectStore {
   own(scope: Scope, key: Key): void
   /** At zero owners: the version goes to memory; a removed slot is also buried. */
   disown(scope: Scope, key: Key): void
+  /**
+   * Hides the values of the keys until a read that starts after this call
+   * (plan B3-3, Р11): a fresh epoch even over an existing mark (a read that
+   * started between the two would otherwise lift the newer one), and a
+   * `Epochs.hiddenSince` mark for every key, entry or not — the entry may go
+   * away (`disown`) before the old read arrives. Keys with an entry go to the
+   * tail re-read; no `horizon-hidden` is logged. Returns the keys that have an
+   * entry.
+   */
+  hideKeys(scope: Scope, keys: readonly Key[]): Key[]
   get(key: Key): RowEntry | undefined
   /** The number of entries, removed slots included. */
   readonly size: number
@@ -266,7 +285,7 @@ export function createObjectStore(options: {
   }
 
   function clearMarks(e: RowEntry, readEpoch: number) {
-    const { minVersion, seen } = e.stale
+    const { minVersion, hidden: mark } = e.stale
     // Позначка іншої епохи версій не порівнюється з версією рядка.
     if (
       minVersion !== undefined &&
@@ -274,11 +293,16 @@ export function createObjectStore(options: {
         (e.version >= minVersion.v && readEpoch >= minVersion.epoch))
     )
       delete e.stale.minVersion
-    if (seen !== undefined && readEpoch >= seen.epoch) delete e.stale.seen
+    if (
+      mark !== undefined &&
+      (readEpoch >= mark.epoch || defects.has("hide-lifted-by-older-read"))
+    )
+      delete e.stale.hidden
   }
 
-  function hide(e: RowEntry, key: Key) {
-    e.stale.seen = { epoch: epochs.next() }
+  // Горизонт, а не `hideKeys`: рахується в метриці `horizon-hidden`.
+  function hideByHorizon(e: RowEntry, key: Key) {
+    e.stale.hidden = { epoch: epochs.next() }
     hidden++
     tail.add(key)
   }
@@ -325,9 +349,18 @@ export function createObjectStore(options: {
     const horizon =
       epochs.evictedSince(id, readEpoch) ||
       epochs.evictedSince(pairId(object, scopeId), readEpoch)
-    if (horizon) hide(e, row.key)
+    if (horizon) hideByHorizon(e, row.key)
+    // `hide` ключа новіший за читання: запис сховища міг зникнути після нього
+    // (`disown`), але права не повертаються з читання, що почалось раніше.
+    const rights = epochs.hiddenSince(id, readEpoch)
+    if (rights && !horizon) {
+      e.stale.hidden = { epoch: epochs.next() }
+      tail.add(row.key)
+    }
+    // Епоха самої позначки `Epochs` тут невідома: новіша за неї — з запасом.
+    if (rights) e.hiddenAt = epochs.now()
     rows.set(row.key, e)
-    if (!lower && !horizon) return "written"
+    if (!lower && !horizon && !rights) return "written"
     tail.add(row.key)
     return "stale-inserted"
   }
@@ -356,7 +389,7 @@ export function createObjectStore(options: {
         // його збережені значення вже не підтверджені, а цей рядок писати не
         // можна. Ховаємо значення, як горизонт (§6.2, правило 1), і
         // перечитуємо: доступ втрачено — `removed`, інакше — нові значення.
-        if (e.stale.seen === undefined) hide(e, row.key)
+        if (e.stale.hidden === undefined) hideByHorizon(e, row.key)
         else tail.add(row.key)
         return "stale-inserted"
       }
@@ -438,7 +471,7 @@ export function createObjectStore(options: {
       clearMarks(e, readEpoch)
       markEpoch(e, row, readEpoch)
       if (!moved) return result
-      hide(e, row.key)
+      hideByHorizon(e, row.key)
       return "stale-inserted"
     },
 
@@ -567,6 +600,21 @@ export function createObjectStore(options: {
       if (e.removed !== undefined) bury(id)
       rows.delete(key)
       tail.delete(key)
+    },
+
+    hideKeys(scope, keys) {
+      scope.assert()
+      const hiddenKeys: Key[] = []
+      for (const key of keys) {
+        const at = epochs.hide(keyId(object, key))
+        const e = rows.get(key)
+        if (e === undefined) continue
+        e.stale.hidden = { epoch: at }
+        e.hiddenAt = at
+        tail.add(key)
+        hiddenKeys.push(key)
+      }
+      return hiddenKeys
     },
 
     get: (key) => rows.get(key),

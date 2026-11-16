@@ -4,6 +4,8 @@ import {
   type CommandError,
 } from "simetra/model"
 import { DataError } from "../errors"
+import type { Defects } from "./defects"
+import { keyId } from "./epoch"
 import { formOf, type Form, type ObjectState } from "./forms"
 import { refsOf } from "./include"
 import { lazyFieldStale } from "./object-store"
@@ -53,6 +55,8 @@ export interface RegistryContext {
   dirtySections(): ReadonlyMap<ObjectName, ReadonlySet<Key>>
   /** The purged snapshot once the core closes. */
   closedSnapshot(): ViewSnapshot | undefined
+  /** Deliberate defects of the model test's self-check. */
+  readonly defects: Defects
 }
 
 type Timer = ReturnType<typeof setTimeout>
@@ -84,6 +88,8 @@ export interface Subset extends ReaderTarget {
   refViews: Map<Key, RowView>
   /** The header revision at the start of the last card or section read. */
   readRevision: number | undefined
+  /** The session epoch at the start of the last card or section read. */
+  readStart: number | undefined
   checkQueued: boolean
   /** A re-read check found a load in flight: check again when it ends. */
   recheck: boolean
@@ -188,8 +194,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     // покоління й політ не змінюються, тож це й далі дія, що його почала.
     const attempt = (): Promise<void> => {
       const readEpoch = session.epochs.now()
-      if (header !== undefined)
+      if (header !== undefined) {
         s.readRevision = rowViews.revision(s.form.object.name, header)
+        s.readStart = readEpoch
+      }
       let discarded = false
       return readForm(ctx, s, readEpoch, token).then(
         (apply) => {
@@ -285,25 +293,54 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     const e = o.rows.get(key)
     if (e === undefined || e.removed !== undefined || e.row === undefined)
       return false
-    if (e.stale.seen !== undefined) return false
+    if (e.stale.hidden !== undefined) return false
     const values = e.row.values
     return o.lazyFields.some(
       (f) => !Object.hasOwn(values, f) || lazyFieldStale(e, f)
     )
   }
 
-  /** Mounted section: no lines yet or an `ownerVersion` below the header version. */
+  /**
+   * The owner was hidden by `hide` after `epoch`: `hiddenAt` of its header,
+   * or the mark of the key, which outlives the entry. A horizon mark is not
+   * one: the tail re-read of the header resolves it, and the section follows
+   * the header revision (Р36).
+   */
+  function hiddenAfter(o: ObjectState, owner: Key, epoch: number): boolean {
+    return (
+      (o.rows.get(owner)?.hiddenAt ?? -1) > epoch ||
+      session.epochs.hiddenSince(keyId(o.name, owner), epoch)
+    )
+  }
+
+  /**
+   * A held section is stale (plan B3-3, Р11; the single decision point for
+   * mount, `preload` and the check after a `commit`): its owner was hidden
+   * after the last accepted section read, there is neither a header nor
+   * lines in the store, or the lines are older than the header.
+   */
   function sectionStale(s: Subset): boolean {
     const spec = s.form.spec
     if (spec.kind !== "section") return false
-    const e = s.form.object.rows.get(spec.owner)
+    const o = s.form.object
+    const e = o.rows.get(spec.owner)
+    // Власник `removed` рядків не показує, і читання ТЧ їх не поверне (§6.2,
+    // правило 5): перечитувати нічого.
+    if (e?.removed !== undefined) return false
+    // `hide` прибрав рядки ТЧ (`clearOwner`), а вентиль сховища відкидає
+    // рядки з читання, старшого за позначку: значення повертає лише нове
+    // читання ТЧ — хоч власника тримає вигляд без шапки в сховищі, хоч
+    // перше завантаження було в польоті під час `hide`.
     if (
-      e === undefined ||
-      e.removed !== undefined ||
-      e.stale.seen !== undefined
+      !ctx.defects.has("section-ignores-hide") &&
+      hiddenAfter(o, spec.owner, s.sectionRead ?? -1)
     )
-      return false
-    const lines = s.form.object.sections.get(spec.owner, spec.section)
+      return true
+    const lines = o.sections.get(spec.owner, spec.section)
+    // Без шапки й без рядків стан ТЧ невідомий: позначку `hide` могло
+    // витіснити (`tombstonesMax`), а рядки прибрано.
+    if (e === undefined) return lines === undefined
+    if (e.stale.hidden !== undefined) return false
     return (
       lines === undefined ||
       lines.staleEpoch === true ||
@@ -312,12 +349,31 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   }
 
   /**
+   * A `hide` of the section's owner (or an evicted mark that might have
+   * been one) came after the start of its last read: the read cannot have
+   * seen it, so the re-read is not a repeat of a discarded answer.
+   */
+  function hiddenSinceRead(s: Subset): boolean {
+    const spec = s.form.spec
+    if (spec.kind !== "section") return false
+    const o = s.form.object
+    const start = s.readStart ?? -1
+    return (
+      hiddenAfter(o, spec.owner, start) ||
+      session.epochs.evictedSince(keyId(o.name, spec.owner), start)
+    )
+  }
+
+  /**
    * Дочитування змонтованого вигляду (§6.2, правило 2): лише коли шапка
    * змінилась після останнього читання — відкинута відповідь не крутить
-   * повторів.
+   * повторів. ТЧ-підмножину перечитує й `hide` власника, новіший за
+   * останнє читання: шапки без запису ревізія не бачить. `held` — перевірка
+   * з `preload`, без слухача.
    */
-  function check(s: Subset) {
-    if (!s.alive || s.listeners.size === 0 || s.purged) return
+  function check(s: Subset, held = false) {
+    if (!s.alive || s.purged) return
+    if (!held && s.listeners.size === 0) return
     if (s.flight !== undefined) {
       s.recheck = true
       return
@@ -326,14 +382,23 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     if (header === undefined) return
     const stale = s.form.spec.kind === "card" ? cardStale(s) : sectionStale(s)
     if (!stale) return
-    if (rowViews.revision(s.form.object.name, header) === s.readRevision) return
+    if (
+      rowViews.revision(s.form.object.name, header) === s.readRevision &&
+      !hiddenSinceRead(s)
+    )
+      return
     load(s)
   }
 
-  /** The first hold starts the subset; a card with a stored row shows it without a read. */
+  /**
+   * The first hold starts the subset; a card with a stored row shows it
+   * without a read. A held subset is checked on mount, and a section on
+   * `preload` too: a stale section (`sectionStale`) is re-read once observed.
+   */
   function start(s: Subset, mounted: boolean) {
     if (s.gen > 0 || s.settled) {
       if (mounted) check(s)
+      else if (s.form.spec.kind === "section") check(s, true)
       return
     }
     const spec = s.form.spec
@@ -459,6 +524,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       snapshot: form.spec.kind === "card" ? undefined : LOADING,
       refViews: new Map(),
       readRevision: undefined,
+      readStart: undefined,
+      sectionRead: undefined,
       checkQueued: false,
       recheck: false,
       purged: false,
@@ -489,7 +556,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       // другому випадку вони лишаються в сховищі, а вирішує хвіст (Р36).
       const hidden =
         header?.state === "removed" ||
-        o.rows.get(spec.owner)?.stale.seen !== undefined
+        o.rows.get(spec.owner)?.stale.hidden !== undefined
       section = {
         ownerVersion: hidden ? undefined : entry?.ownerVersion,
         complete: hidden ? false : (entry?.complete ?? false),

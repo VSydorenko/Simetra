@@ -309,14 +309,14 @@ describe("ObjectStore.put", () => {
   it("a key without a tombstone from a read older than the horizon is stale-inserted with hidden values", () => {
     const { h, early } = evictedK1()
     expect(put(h, row(K1, 1), early)).toBe("stale-inserted")
-    expect(h.store.get(K1)?.stale.seen).toBeDefined()
+    expect(h.store.get(K1)?.stale.hidden).toBeDefined()
     expect(h.store.drainTail()).toEqual([K1])
   })
 
   it("the same key from a read younger than the horizon is written", () => {
     const { h } = evictedK1()
     expect(put(h, row(K1, 1))).toBe("written")
-    expect(h.store.get(K1)?.stale.seen).toBeUndefined()
+    expect(h.store.get(K1)?.stale.hidden).toBeUndefined()
   })
 
   it("an evicted tombstone with version memory kept: the same version read before the delete is stale-inserted hidden, not synced", () => {
@@ -329,7 +329,7 @@ describe("ObjectStore.put", () => {
     purgeKeys(h, [K2]) // витісняє надгробок K1
     expect(h.session.epochs.seen(keyId(OBJECT, K1))).toBeDefined()
     expect(put(h, row(K1, 1), early)).toBe("stale-inserted")
-    expect(h.store.get(K1)?.stale.seen).toBeDefined()
+    expect(h.store.get(K1)?.stale.hidden).toBeDefined()
   })
 
   it("an evicted pair tombstone: a row of that scope not in the store from an older read is stale-inserted hidden", () => {
@@ -338,14 +338,14 @@ describe("ObjectStore.put", () => {
     purgeScope(h, S)
     purgeScope(h, T) // витісняє надгробок пари S
     expect(put(h, row(K1, 1, { org: S }), early)).toBe("stale-inserted")
-    expect(h.store.get(K1)?.stale.seen).toBeDefined()
+    expect(h.store.get(K1)?.stale.hidden).toBeDefined()
   })
 
   it("a later read clears the horizon mark", () => {
     const { h, early } = evictedK1()
     put(h, row(K1, 1), early)
     expect(put(h, row(K1, 1))).toBe("written")
-    expect(h.store.get(K1)?.stale.seen).toBeUndefined()
+    expect(h.store.get(K1)?.stale.hidden).toBeUndefined()
   })
 
   it("logs horizon-hidden once per commit with a count", () => {
@@ -559,7 +559,7 @@ describe("ObjectStore scope change under the horizon (I1)", () => {
     h.log.length = 0
     expect(put(h, row(K1, 2, { org: S }), early)).toBe("stale-inserted")
     const e = h.store.get(K1)
-    expect(e?.stale.seen).toBeDefined()
+    expect(e?.stale.hidden).toBeDefined()
     expect(e && visibleRow(e)).toBeUndefined()
     expect(h.store.drainTail()).toEqual([K1])
     expect(h.log).toEqual([
@@ -603,7 +603,7 @@ describe("ObjectStore scope change under the horizon (I1)", () => {
     purgeScope(h, S)
     purgeScope(h, U)
     expect(put(h, row(K1, 2, { org: S }), early)).toBe("stale-inserted")
-    expect(h.store.get(K1)?.stale.seen).toBeDefined()
+    expect(h.store.get(K1)?.stale.hidden).toBeDefined()
   })
 
   it("the same scope under a raised horizon stays written (no mass stale)", () => {
@@ -614,7 +614,7 @@ describe("ObjectStore scope change under the horizon (I1)", () => {
     purgeKeys(h, [K2])
     purgeKeys(h, [K3]) // один кошик: горизонт піднято для всіх
     expect(put(h, row(K1, 2, { org: T }), early)).toBe("written")
-    expect(h.store.get(K1)?.stale.seen).toBeUndefined()
+    expect(h.store.get(K1)?.stale.hidden).toBeUndefined()
   })
 })
 
@@ -793,7 +793,7 @@ describe("ObjectStore stale marks", () => {
     const { h: h2, early } = evictedK1()
     before = h2.now()
     put(h2, row(K1, 1), early)
-    expect(h2.store.get(K1)?.stale.seen?.epoch).toBeGreaterThan(before)
+    expect(h2.store.get(K1)?.stale.hidden?.epoch).toBeGreaterThan(before)
   })
 })
 

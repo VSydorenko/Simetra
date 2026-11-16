@@ -126,6 +126,13 @@ type Step =
   | { t: "access"; which: number }
   | { t: "purgeKey"; org: boolean; k: number }
   | { t: "purgeScope"; org: boolean; scope: number }
+  | { t: "hide"; org: boolean; k: number }
+  | {
+      t: "hideSection"
+      state: "mounted" | "held" | "flight"
+      then: "none" | "sub" | "preload"
+      evict: boolean
+    }
   | { t: "revalidate"; org: boolean; visibleOnly: boolean }
   | { t: "markStale"; k: number; plus: number }
   | { t: "disconnect"; channel: number; clear: boolean }
@@ -139,7 +146,8 @@ const k = fc.nat(KEYS.length - 1)
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 
 /**
- * Ваги (бриф, крок 1): сума 229 (перемикання епохи — 6); `purge` (16 + 14), відсутній рядок і
+ * Ваги (бриф, крок 1): сума 235 (перемикання епохи — 6; `hide` над
+ * ТЧ-підмножиною — 6); `purge` (16 + 14), відсутній рядок і
  * застаріла репліка — по 30, тобто по ~13,5 % кроків (частина кроків
  * `answer` порожня, бо в польоті нічого нема, тож серед дійових кроків
  * частка вища, близько 15 %). Самотест тримає насіння, яке знаходить
@@ -216,6 +224,26 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
       t: one("purgeScope"),
       org: fc.boolean(),
       scope: fc.nat(1),
+    }),
+  },
+  // `hide` (права, план B3-3, Р11): значення ключа ховаються до читання,
+  // що почалось після нього; перечитування видів-власників іде саме.
+  {
+    weight: 10,
+    arbitrary: fc.record({ t: one("hide"), org: fc.boolean(), k }),
+  },
+  // `hide` власника ТЧ (K1) над ТЧ-підмножиною в заданому стані: змонтована,
+  // утримувана без слухачів (`preload`, відписка до звільнення) чи з першим
+  // завантаженням у польоті; далі — спостереження (монтування, `preload`) чи
+  // нічого. `evict` — позначку `hide` K1 витісняють позначки інших ключів
+  // (`tombstonesMax`). Випадкові кроки рідко складають ці стани самі.
+  {
+    weight: 6,
+    arbitrary: fc.record({
+      t: one("hideSection"),
+      state: fc.constantFrom("mounted", "held", "flight"),
+      then: fc.constantFrom("none", "sub", "preload"),
+      evict: fc.boolean(),
     }),
   },
   {
@@ -376,6 +404,12 @@ async function runModel(
     if (objectOf(TASK).sections.get(K1, "lines") === undefined)
       sectionBarrier.set(K1, stepStart)
   }
+  // Ключ, який сховав `hide`: значення — лише з читання, що почалось після
+  // нього (план B3-3, Р11), а рядки ТЧ власника — лише з читання ТЧ.
+  const hideBarrier = new Map<string, number>()
+  // Вигляд ТЧ (SPECS[4]) утримано `preload` цього кроку: спостереження, як
+  // і слухач, вимагає перечитування після `hide` власника.
+  let preloadedSection = false
   // Ключ, що став `removed`: значення — лише з читання після позначки (П15).
   const removedBarrier = new Map<string, number>()
   // Мить (довжина журналу запитів), коли свіжа відповідь «рядка немає»
@@ -459,6 +493,25 @@ async function runModel(
     }
   }
 
+  /** `preload` вигляду; відмова — лише за межею без вільного утримання (П16). */
+  const preload = (v: number, short: boolean, label: string) => {
+    let promise: Promise<void> | undefined
+    try {
+      promise = core.preload(SPECS[v]!, short ? { ttlMs: 500 } : undefined)
+    } catch (error) {
+      if (!(error instanceof DataError) || error.code !== "data.views-limit")
+        throw error
+      const held = [...internals.registry.subsets()]
+      if (
+        held.length < LIMITS.viewsMax ||
+        held.some((x) => x.listeners.size === 0)
+      )
+        fail(label, "preload refused with a spare hold")
+    }
+    promise?.catch((error: unknown) => errors.push(error))
+    if (promise !== undefined && v === 4) preloadedSection = true
+  }
+
   /** Склад видимих списків і покоління їхніх завантажень. */
   const lists = () =>
     SPECS.map((spec, v) => {
@@ -489,8 +542,13 @@ async function runModel(
       fail(label, `${at}: version ${max} → ${row.version} as ${row.state}`)
     maxVersion.set(versionKey(object, row.key), Math.max(max, row.version))
     const fields = Object.keys(row.values)
-    // Схований горизонтом рядок значень не показує.
+    // Схований рядок значень не показує.
+    if (row.hidden === true && fields.length > 0)
+      fail(label, `${at}: hidden with values`)
     if (fields.length === 0) return
+    const hidden = hideBarrier.get(id(object, row.key))
+    if (hidden !== undefined && !deliveredSince(object, row.key, hidden))
+      fail(label, `${at}: shown after hide without a later read`)
     // Показаний рядок (і ціль `refs`) прибраного `purge` ключа — лише з
     // читання, що почалось після нього (П12).
     const purged = purgeBarrier.get(id(object, row.key))
@@ -576,6 +634,14 @@ async function runModel(
       const purged = sectionBarrier.get(owner)
       if (purged !== undefined && !readSince(purged))
         fail(label, `${where}: lines shown after purge`)
+      // `hide` прибирає рядки ТЧ власника: їх повертає лише читання ТЧ після нього.
+      const hidden = hideBarrier.get(id(TASK, owner))
+      if (
+        hidden !== undefined &&
+        !readSince(hidden) &&
+        snap.section.lines.length > 0
+      )
+        fail(label, `${where}: lines shown after hide without a later read`)
       // Після `removed` рядки повертає читання після позначки — ТЧ чи шапки,
       // що зняла `removed`.
       const removed = removedBarrier.get(id(TASK, owner))
@@ -624,6 +690,8 @@ async function runModel(
       fail(label, `seen ${sizes.seen} > ${LIMITS.seenMax}`)
     if (sizes.tombstones > LIMITS.tombstonesMax)
       fail(label, `tombstones ${sizes.tombstones} > ${LIMITS.tombstonesMax}`)
+    if (sizes.hidden > LIMITS.tombstonesMax)
+      fail(label, `hidden marks ${sizes.hidden} > ${LIMITS.tombstonesMax}`)
     // Останнє поховання пари — по одному на об'єкт.
     if (sizes.pairBurials > 2)
       fail(label, `pair burials ${sizes.pairBurials} > 2 objects`)
@@ -645,7 +713,7 @@ async function runModel(
         if (
           e.version < top &&
           (e.stale.minVersion?.v ?? -1) < top &&
-          e.stale.seen === undefined &&
+          e.stale.hidden === undefined &&
           !unordered
         )
           fail(label, `${at}: stored version ${top} → ${e.version}`)
@@ -698,6 +766,9 @@ async function runModel(
         wasRemoved.delete(id(name, k))
         const values = visibleRow(e)
         if (values !== undefined) {
+          const hidden = hideBarrier.get(id(name, k))
+          if (hidden !== undefined && !deliveredSince(name, k, hidden))
+            fail(label, `${at}: values after hide without a later read`)
           const barrier = removedBarrier.get(id(name, k))
           if (barrier !== undefined && !deliveredSince(name, k, barrier))
             fail(label, `${at}: values after removed without a later read`)
@@ -720,6 +791,46 @@ async function runModel(
     handles.forEach((handle, v) => {
       checkSnapshot(label, v, handle.getSnapshot())
     })
+    checkSectionReread(label)
+  }
+
+  /**
+   * ТЧ-підмножина, яку спостерігають (слухач чи `preload` кроку) після
+   * `hide` власника, перечитана (план B3-3, Р11, рішення архітекторки до
+   * задачі 0): є читання ТЧ власника, надіслане після `hide`, або
+   * завантаження вигляду в польоті — після нього перевірка повториться.
+   * Стан підмножини на мить `hide` будь-який: змонтована, утримувана без
+   * слухачів, перше завантаження в польоті, шапка в сховищі чи ні.
+   */
+  const checkSectionReread = (label: string) => {
+    const spec = SPECS[4]!
+    if (spec.kind !== "section") return
+    if (subs[4] === undefined && !preloadedSection) return
+    const barrier = hideBarrier.get(id(TASK, spec.owner))
+    if (barrier === undefined) return
+    const s = internals.registry.find(spec)
+    if (s === undefined || s.purged || s.flight !== undefined) return
+    // Сесія після межі відкинутих відповідей не читає (Р12); власник
+    // `removed` рядків не показує, і читання ТЧ їх не поверне.
+    if (inspect.versionEpochs().unavailable) return
+    const header = objectOf(TASK).rows.get(spec.owner)
+    if (header?.removed !== undefined) return
+    // Шапку сховано горизонтом, а не `hide` (`hiddenAt` немає): позначку
+    // `hide` ключа витіснило до вставки шапки, і ядро не відрізнить її від
+    // горизонту — ТЧ іде за перечитуванням шапки хвостом (Р36). Безпеку
+    // (рядки ТЧ лише з читання після `hide`) перевіряє `checkSnapshot`.
+    if (header?.stale.hidden !== undefined && header.hiddenAt === undefined)
+      return
+    const reread = fake.log
+      .slice(barrier)
+      .some(
+        (r) =>
+          r.query !== undefined &&
+          "tabularSection" in r.query &&
+          "owner" in r.query &&
+          r.query.owner === spec.owner
+      )
+    if (!reread) fail(label, `section of ${spec.owner} not re-read after hide`)
   }
 
   /** `purge` прибирає ключі зі складу списків, а картка й ТЧ ключа — `purged`. */
@@ -870,6 +981,7 @@ async function runModel(
     logAt = log.length
     restoredInStep.clear()
     const before = lists()
+    preloadedSection = false
     let userViews = new Set<number>()
     let purgeStep = false
     let purgedScope: { object: ObjectName; scope: string } | undefined
@@ -927,30 +1039,10 @@ async function runModel(
           late.push(fake.take((r) => r === read))
         break
       }
-      case "preload": {
+      case "preload":
         userViews = new Set([s.v])
-        let promise: Promise<void> | undefined
-        try {
-          promise = core.preload(
-            SPECS[s.v]!,
-            s.short ? { ttlMs: 500 } : undefined
-          )
-        } catch (error) {
-          if (
-            !(error instanceof DataError) ||
-            error.code !== "data.views-limit"
-          )
-            throw error
-          const held = [...internals.registry.subsets()]
-          if (
-            held.length < LIMITS.viewsMax ||
-            held.some((x) => x.listeners.size === 0)
-          )
-            fail(label, "preload refused with a spare hold")
-        }
-        promise?.catch((error: unknown) => errors.push(error))
+        preload(s.v, s.short, label)
         break
-      }
       case "refresh":
         userViews = new Set([s.v])
         if (s.showNew) handles[s.v]!.showNew()
@@ -1098,6 +1190,57 @@ async function runModel(
         if (object === TASK) barrierSections(stepStart)
         break
       }
+      case "hide": {
+        const object = s.org ? ORG : TASK
+        const target = s.org ? ORG_KEYS[s.k % 2]! : KEYS[s.k]!
+        commit((w) => w.hide(object, [target]))
+        if (closed !== undefined) break
+        hideBarrier.set(id(object, target), stepStart)
+        break
+      }
+      case "hideSection": {
+        if (closed !== undefined) break
+        const section = SPECS[4]!
+        userViews = new Set([4])
+        if (s.state === "mounted") subscribe(4, label)
+        else if (s.state === "held") {
+          // Утримувана без слухачів і завантажена: відписка до звільнення
+          // чи `preload` з відповіддю на його читання.
+          if (subs[4] !== undefined) {
+            subs[4]()
+            subs[4] = undefined
+          } else {
+            preload(4, false, label)
+            preloadedSection = false
+            await flush()
+            for (const read of fake.pending.filter(
+              (r) => fake.log.indexOf(r.log) >= stepStart
+            )) {
+              fake.take((r) => r === read).answer()
+              record(read)
+            }
+          }
+        } else {
+          // Завантаження в польоті під час `hide`: нове утримання чи `refresh`.
+          const held = internals.registry.find(section)
+          if (held === undefined) preload(4, false, label)
+          else if (held.flight === undefined) handles[4]!.refresh()
+          preloadedSection = false
+        }
+        await flush()
+        // Бар'єр — після читань, які крок надіслав до `hide`.
+        const barrier = fake.log.length
+        const hidden = s.evict ? [K1, K2, K3, K4] : [K1]
+        for (const k of hidden) {
+          commit((w) => w.hide(TASK, [k]))
+          hideBarrier.set(id(TASK, k), barrier)
+        }
+        if (closed !== undefined) break
+        await flush()
+        if (s.then === "sub") subscribe(4, label)
+        else if (s.then === "preload") preload(4, false, label)
+        break
+      }
       case "revalidate":
         core
           .revalidate(s.org ? ORG : TASK, { visibleOnly: s.visibleOnly })
@@ -1166,6 +1309,7 @@ async function runModel(
   // Пізні відповіді на все, що лишилось у польоті: повільні читання й
   // кожне друге з решти — застарілою реплікою (стан на мить запиту) після
   // всіх звільнень і витіснень прогону, інші — станом зараз.
+  preloadedSection = false
   for (let i = 0; late.length > 0 || fake.pending.length > 0; i++) {
     if (i > 500) fail("drain", "reads never end")
     const stepStart = fake.log.length
@@ -1394,6 +1538,8 @@ const DEFECTS: readonly DefectFlag[] = [
   "absent-row-ignored",
   "unbounded-seen",
   "system-reread-via-load",
+  "hide-lifted-by-older-read",
+  "section-ignores-hide",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -1408,6 +1554,8 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "absent-row-ignored": /^converge/,
   "unbounded-seen": /seen \d+ > \d+/,
   "system-reread-via-load": /composition/,
+  "hide-lifted-by-older-read": /after hide without a later read/,
+  "section-ignores-hide": /not re-read after hide/,
 }
 
 describe("core model self-check", () => {

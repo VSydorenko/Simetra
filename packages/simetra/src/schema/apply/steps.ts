@@ -86,7 +86,36 @@ export interface PlanStep {
    * рахує перед кроком і зупиняється відмовою, а не сирим `23502`. Імена —
    * імена кроку.
    */
-  notNull?: { table: { schema: string; name: string }; column: string }[]
+  notNull?: NotNullCheck[]
+}
+
+/**
+ * Що рахує план і сторож перед кроком, який робить колонку `NOT NULL`
+ * (платформна спека §6.6): `nulls` — рядки з `NULL` у колонці
+ * `SET NOT NULL`; `rows` — усі рядки таблиці `ADD COLUMN … NOT NULL` без
+ * значення; `expression` — рядки, де вираз генерованої колонки, доданої
+ * як `NOT NULL`, дає `NULL`.
+ */
+export type NotNullCount =
+  { count: "nulls" | "rows" } | { count: "expression"; expression: string }
+
+/** Колонка кроку з тим, що порушить її `NOT NULL`. */
+export type NotNullCheck = {
+  table: { schema: string; name: string }
+  column: string
+} & NotNullCount
+
+/**
+ * Умова `WHERE` рядків, які порушать `NOT NULL` (`undefined` — кожен рядок).
+ * Вираз генерованої колонки посилається лише на колонки свого рядка, тож
+ * його можна обчислити над таблицею до кроку. `column` — уже в лапках.
+ */
+export function notNullViolation(
+  c: NotNullCount,
+  column: string
+): string | undefined {
+  if (c.count === "expression") return nullDatum(`(${c.expression})`)
+  return c.count === "nulls" ? nullDatum(column) : undefined
 }
 
 /**
@@ -463,7 +492,8 @@ export function intentStep(
 
 /**
  * Колонка, яку дія робить `NOT NULL`. `filled` — `ADD COLUMN` сам дає
- * значення наявним рядкам (default, identity чи generated).
+ * значення наявним рядкам (default, identity чи generated); `generated` —
+ * значення дає вираз генерованої колонки, і він може бути `NULL`.
  */
 export interface NotNullColumn {
   schema?: string
@@ -471,6 +501,7 @@ export interface NotNullColumn {
   column: string
   via: "setNotNull" | "addColumn"
   filled: boolean
+  generated: boolean
 }
 
 const hasConstraint = (
@@ -482,6 +513,7 @@ const hasConstraint = (
   )
 
 const NOT_NULL: ReadonlySet<string> = new Set(["CONSTR_NOTNULL"])
+const GENERATED: ReadonlySet<string> = new Set(["CONSTR_GENERATED"])
 const FILLING: ReadonlySet<string> = new Set([
   "CONSTR_DEFAULT",
   "CONSTR_IDENTITY",
@@ -503,7 +535,15 @@ export function notNullColumns(stmts: readonly Node[]): NotNullColumn[] {
       if (!("AlterTableCmd" in node)) return []
       const { subtype, name, def } = node.AlterTableCmd
       if (subtype === "AT_SetNotNull" && name !== undefined)
-        return [{ ...at, column: name, via: "setNotNull", filled: false }]
+        return [
+          {
+            ...at,
+            column: name,
+            via: "setNotNull",
+            filled: false,
+            generated: false,
+          },
+        ]
       if (
         subtype === "AT_AddColumn" &&
         def !== undefined &&
@@ -521,6 +561,7 @@ export function notNullColumns(stmts: readonly Node[]): NotNullColumn[] {
               def.ColumnDef.raw_default !== undefined ||
               def.ColumnDef.identity !== undefined ||
               hasConstraint(def.ColumnDef.constraints, FILLING),
+            generated: hasConstraint(def.ColumnDef.constraints, GENERATED),
           },
         ]
       return []
