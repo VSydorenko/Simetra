@@ -235,9 +235,9 @@ describe("buildPlan", () => {
     })
     expect(queries.at(-1)).toContain('AS "triggers"')
     // Гейт власника — раніше: роль без BYPASSRLS не дійшла б і до фактів
-    expect(queries.findIndex((q) => q.includes("AS bypassrls"))).toBeLessThan(
-      queries.length - 1
-    )
+    const ownerGate = queries.findIndex((q) => q.includes("AS bypassrls"))
+    expect(ownerGate).toBeGreaterThanOrEqual(0)
+    expect(ownerGate).toBeLessThan(queries.length - 1)
   })
 
   it("reads no identity facts for a model without provision triggers", async () => {
