@@ -226,7 +226,11 @@ describe.concurrent("buildPlan backfill", () => {
       expect(artifact.steps.filter((s) => s.origin === "backfill")).toEqual([])
       const [setNotNull] = stepMatching(artifact, /SET NOT NULL/)
       expect(setNotNull?.notNull).toEqual([
-        { table: { schema: "app", name: "notes" }, column: "note" },
+        {
+          table: { schema: "app", name: "notes" },
+          column: "note",
+          count: "nulls",
+        },
       ])
     })
   })
