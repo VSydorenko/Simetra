@@ -387,7 +387,11 @@ describe.concurrent("apply backfill", () => {
         s.notNull?.some((c) => c.column === "tag")
       )
       expect(check?.notNull).toEqual([
-        { table: { schema: "app", name: "notes" }, column: "tag" },
+        {
+          table: { schema: "app", name: "notes" },
+          column: "tag",
+          count: "nulls",
+        },
       ])
       // Заповнення справді йде раніше за кроком, що впаде: інакше відкат
       // нижче нічого б не доводив
@@ -419,14 +423,61 @@ describe.concurrent("apply backfill", () => {
     })
   })
 
-  it("pins the shape of a recreated column that becomes NOT NULL", async () => {
-    // Доповнення п. 3: колонку, яку план знімає й додає знову, план не рахує.
-    // pg-delta замінює зміну виразу генерованої колонки парою DROP + ADD …
-    // NOT NULL одним оператором, без окремого SET NOT NULL, тож поля
-    // `notNull` немає, і `NULL` з виразу дає сирий 23502 на кроці. Це той
-    // самий випадок боргу, що й ADD COLUMN … NOT NULL без default (перевірка
-    // перед кроком покриває лише SET NOT NULL); тест фіксує форму, щоб її зміна в
-    // pg-delta не пройшла непоміченою
+  // #159 (1): таблиця порожня на плані, рядок з'явився до застосування
+  it("refuses rows that appeared after the plan before ADD COLUMN … NOT NULL", async () => {
+    const extra = (code: Json | undefined) => {
+      const t = notes() as unknown as { columns: Json[] }
+      if (code !== undefined)
+        t.columns.push({
+          id: uuid(9207),
+          name: "extra",
+          physicalName: "extra",
+          ...code,
+        })
+      return t
+    }
+    const before = await compiled({ [NOTES]: extra(undefined) })
+    const after = await compiled({ [NOTES]: extra(REQUIRED) })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      const artifact = planned(await plan(url, after))
+      const [add] = artifact.steps.filter((s) =>
+        s.notNull?.some((c) => c.column === "extra")
+      )
+      expect(add?.notNull).toEqual([
+        {
+          table: { schema: "app", name: "notes" },
+          column: "extra",
+          count: "rows",
+        },
+      ])
+      await query(url, rows("a"))
+      const ledger = await ledgerRows(url)
+      expect(await apply(url, artifact, after)).toMatchObject({
+        status: "failed",
+        diagnostics: [
+          {
+            code: "apply.not-null-violation",
+            params: {
+              step: add!.id,
+              table: "app.notes",
+              column: "extra",
+              rows: 1,
+              detail: "rows",
+            },
+          },
+        ],
+      })
+      expect(await notesOf(url)).toEqual(["a"])
+      expect(await ledgerRows(url)).toBe(ledger)
+    })
+  })
+
+  describe("a generated column recreated as NOT NULL", () => {
+    // #159 (2): pg-delta замінює зміну виразу генерованої колонки парою
+    // DROP + ADD … NOT NULL одним оператором, без окремого SET NOT NULL;
+    // вираз, що дає NULL, план рахує на наявних рядках, а сторож — на тих,
+    // що з'явилися після плану
     const gen = (expression: string, over: Json = {}) => {
       const t = notes() as unknown as { columns: Json[] }
       t.columns.push({
@@ -439,40 +490,110 @@ describe.concurrent("apply backfill", () => {
       })
       return t
     }
-    const before = await compiled({ [NOTES]: gen("upper(note)") })
-    const after = await compiled({
-      [NOTES]: gen("lower(note)", { notNull: true }),
+    const models = async () => ({
+      before: await compiled({ [NOTES]: gen("upper(note)") }),
+      after: await compiled({
+        [NOTES]: gen("lower(note)", { notNull: true }),
+      }),
     })
-    await inTarget(EMPTY, async (url) => {
-      await establish(url, before)
-      await query(url, rows(null, "a"))
-      const artifact = planned(await plan(url, after))
-      expect(
-        artifact.steps.map((s) => ({
-          origin: s.origin,
-          sql: s.sql,
-          notNull: s.notNull,
-        }))
-      ).toEqual([
-        {
-          origin: "engine",
-          sql: 'ALTER TABLE "app"."notes" DROP COLUMN "g"',
-          notNull: undefined,
-        },
-        {
-          origin: "engine",
-          sql: 'ALTER TABLE "app"."notes" ADD COLUMN "g" text GENERATED ALWAYS AS (lower((note)::text)) STORED NOT NULL',
-          notNull: undefined,
-        },
-      ])
-      expect(await apply(url, artifact, after)).toMatchObject({
-        status: "failed",
-        diagnostics: [
+
+    it("refuses the plan when the expression gives NULL for a row", async () => {
+      const { before, after } = await models()
+      await inTarget(EMPTY, async (url) => {
+        await establish(url, before)
+        await query(url, rows(null, "a"))
+        const outcome = await plan(url, after)
+        expect(outcome.status).toBe("refused")
+        expect(params(outcome, "plan.not-null-violation")).toEqual([
           {
-            code: "apply.step-failed",
-            params: { step: artifact.steps[1]!.id, sqlstate: "23502" },
+            table: "app.notes",
+            column: "g",
+            rows: 1,
+            detail: "generated",
           },
-        ],
+        ])
+      })
+    })
+
+    it("applies a generated column over a column the same plan adds", async () => {
+      // Вираз читає `qty`, якої на цілі ще немає: план не рахує його, а
+      // сторож не стоїть там, де колонку додає той самий крок
+      const withQty = () => {
+        const t = notes() as unknown as { columns: Json[] }
+        t.columns.push(
+          {
+            id: uuid(9208),
+            name: "qty",
+            physicalName: "qty",
+            type: "Integer",
+            notNull: true,
+            default: "0",
+          },
+          {
+            id: uuid(9209),
+            name: "q2",
+            physicalName: "q2",
+            type: "Integer",
+            notNull: true,
+            generated: { expression: "(qty * 2)" },
+          }
+        )
+        return t
+      }
+      const before = await compiled({ [NOTES]: notes() })
+      const after = await compiled({ [NOTES]: withQty() })
+      await inTarget(EMPTY, async (url) => {
+        await establish(url, before)
+        await query(url, rows("a"))
+        const artifact = planned(await plan(url, after))
+        expect(await apply(url, artifact, after)).toMatchObject({
+          status: "committed",
+        })
+        expect(
+          await query<{ q2: number }>(url, "select q2 from app.notes")
+        ).toEqual([{ q2: 0 }])
+      })
+    })
+
+    it("refuses rows that appeared after the plan before the step", async () => {
+      const { before, after } = await models()
+      await inTarget(EMPTY, async (url) => {
+        await establish(url, before)
+        await query(url, rows("a"))
+        const artifact = planned(await plan(url, after))
+        const [add] = artifact.steps.filter((s) =>
+          s.notNull?.some((c) => c.column === "g")
+        )
+        expect(add?.sql).toBe(
+          'ALTER TABLE "app"."notes" ADD COLUMN "g" text GENERATED ALWAYS AS (lower((note)::text)) STORED NOT NULL'
+        )
+        expect(add?.notNull).toEqual([
+          {
+            table: { schema: "app", name: "notes" },
+            column: "g",
+            count: "expression",
+            expression: expect.stringContaining("lower"),
+          },
+        ])
+        await query(url, rows(null))
+        const ledger = await ledgerRows(url)
+        expect(await apply(url, artifact, after)).toMatchObject({
+          status: "failed",
+          diagnostics: [
+            {
+              code: "apply.not-null-violation",
+              params: {
+                step: add!.id,
+                table: "app.notes",
+                column: "g",
+                rows: 1,
+                detail: "expression",
+              },
+            },
+          ],
+        })
+        expect(await notesOf(url)).toEqual([null, "a"])
+        expect(await ledgerRows(url)).toBe(ledger)
       })
     })
   })
