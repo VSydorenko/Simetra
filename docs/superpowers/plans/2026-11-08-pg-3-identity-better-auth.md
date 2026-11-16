@@ -196,8 +196,11 @@ devDependency з ПГ-2a).
   `simetra_owner` у базі `simetra` (рішення ПГ-2b). Міграцію Better Auth
   крок лишає, а гранти замінює повторним `simetra roles` після неї. Звірка
   guard стану схеми `better_auth` з порадою «`pnpm db:pg:start`» не
-  змінюється. Інші місця ручних грантів знайди так:
-  `grep -rn "GRANT TRIGGER\|GRANT USAGE ON SCHEMA better_auth" packages/*/src packages/*/test scripts`.
+  змінюється. Тимчасові гранти ставить `prepareStackIdentity`
+  (`packages/simetra/test/db/better-auth-cli.ts`); її кличуть `db-stack.mjs`,
+  `plan.postgres.db.test.ts` і `better-auth-cli.postgres.db.test.ts`. Інші місця
+  ручних грантів знайди так:
+  `grep -rn "GRANT TRIGGER\|GRANT USAGE ON SCHEMA better_auth\|prepareStackIdentity" packages/*/src packages/*/test scripts`.
 - Modify (після ПГ-2): тести ПГ-2a, що ставлять гранти `better_auth` руками
   від суперкористувача — `packages/designer/src/schema-engine/__tests__/plan.postgres.db.test.ts`,
   `template-shadow.postgres.db.test.ts` та інші за grep кроку 4. Ручні
@@ -219,11 +222,11 @@ devDependency з ПГ-2a).
   - фаза читання `ensurePostgresCluster` на з'єднанні цілі читає (лише коли
     схема вже є в `pg_namespace`; інакше обидва гранти — `created` у фазі
     запису, а таблиці немає) `has_schema_privilege(owner, schema, 'USAGE')`, `pg_catalog.to_regclass(<qualified>)`
-    і (коли таблиця є) `has_table_privilege(owner, <qualified>, 'TRIGGER')`;
+    і (коли таблиця є) `has_table_privilege(owner, <qualified>, 'TRIGGER')` та `'REFERENCES'` (Р11);
   - фаза запису, після створення схеми `better_auth`:
     - `GRANT USAGE ON SCHEMA <schema> TO <owner>` — `created`, якщо гранту
       не було, інакше `present`;
-    - таблиця є → `GRANT TRIGGER ON <qualified> TO <owner>`, звіт так само;
+    - таблиця є → `GRANT TRIGGER, REFERENCES ON <qualified> TO <owner>` (Р11), звіт так само;
     - таблиці немає → `skipped` дістає `"<schema>.<name>:TRIGGER"`. Це не
       відмова;
     - жодного `ALTER DEFAULT PRIVILEGES` і жодного гранту на інші таблиці
@@ -615,7 +618,7 @@ devDependency з ПГ-2a).
     `session_user` там — суперкористувач. Кожен кейс гейта відкриває
     **окремий пул на DSN своєї ролі входу** (`roleUrl`, ПГ-2a), а не
     спільний пул тестів:
-    - DSN стекового `simetra_owner` (пароль з `dev-secrets.env`, ПГ-2b) —
+    - DSN стекового `simetra_owner` (пароль `SIMETRA_OWNER_DEV_PASSWORD` з `docker/postgres-stack/login-secrets.env`) —
       `owner`;
     - тегований власник цілі теста (власник схеми `simetra`, ім'я не
       `simetra_owner`) — `owner`, за фактом `nspowner`;
@@ -693,6 +696,9 @@ API немає:
   регістрі (§4.4);
 - рядок пресету: колонки `PROVIDER_EVENT_SOURCES.postgres` є в таблиці
   міграції.
+- issue #126: ті самі claims Better Auth через справжній `runCommand` і
+  читання рантайму `createCommandRuntime` на `postgres` дають той самий
+  `current_user_id()` (id «Користувачів»), що й на `supabase`.
 
 - [ ] **Step 1:** написати кейси. Вони мають бути червоні лише там, де бракує
   коду задач 1–5; решта — доказ ПГ-2a. Кожен червоний кейс назви у звіті з
@@ -740,8 +746,8 @@ API немає:
   `TRIGGER` лише на таблицю ідентичності. До міграції — названий пропуск.
   Тимчасових грантів у тест-інфрі немає.
 - План від `simetra_owner` ставить тригери провізії на `better_auth."user"`.
-  Без таблиці чи гранту — `plan.identity-table-missing`. Крок зняття чи
-  заміни тригера — `plan.identity-trigger-locked`. На `supabase` план тих
+  Без таблиці чи гранту — `plan.identity-table-missing`. Крок зняття
+  тригера — `plan.identity-trigger-locked`; заміна `CREATE OR REPLACE` проходить. На `supabase` план тих
   самих моделей проходить.
 - Анонімна сесія (`true` чи `"true"`) читає лише `publicRead: anon` в обох
   профілях.
