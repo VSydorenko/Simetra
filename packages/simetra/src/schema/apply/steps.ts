@@ -460,18 +460,22 @@ function inApplied(ref: EngineObjectRef, applied: CatalogModel): boolean {
 }
 
 /**
- * Id кроків двигуна, для яких виняток «заміна» не діє (платформна спека
- * §6.6): крок знімає об'єкт, якого немає в останньому застосованому стані
- * (`applied`; першого застосування — жодного). Такий об'єкт створила не
- * платформа, тож його перевизначення під тим самим ім'ям — видалення
- * чужого й створення свого, і воно потребує дозволу, як видалення чужого
- * об'єкта з іншим ім'ям. Рахується з дій до `classifySteps`, бо результат —
- * його вхід. `offset` — кількість кроків перед діями двигуна.
+ * Id кроків двигуна, що знімають чужий об'єкт без даних (платформна спека
+ * §6.6): обмеження, індекс, політику, тригер, правило, функцію, процедуру
+ * чи в'юху, якої немає в останньому застосованому стані (`applied`;
+ * першого застосування — жодного). Такий об'єкт створила не платформа,
+ * тож його зняття потребує дозволу, хоч би його й створював знову
+ * пізніший крок під тим самим ім'ям: виняток «заміна» для нього не діє.
+ * `original` повертає посилання до імен `applied` (перейменування наміру
+ * промоції); без нього імена дій — імена `applied`. Рахується з дій до
+ * `classifySteps`, бо результат — його вхід. `offset` — кількість кроків
+ * перед діями двигуна.
  */
-export function foreignReplacements(
+export function foreignDrops(
   actions: readonly Pick<EngineAction, "destroyed">[],
   applied: CatalogModel | undefined,
-  offset: number
+  offset: number,
+  original: (ref: EngineObjectRef) => EngineObjectRef = (ref) => ref
 ): Set<string> {
   const out = new Set<string>()
   actions.forEach((action, i) => {
@@ -479,7 +483,7 @@ export function foreignReplacements(
       action.destroyed.some(
         (ref) =>
           REPLACEABLE_KINDS.has(ref.kind) &&
-          (applied === undefined || !inApplied(ref, applied))
+          (applied === undefined || !inApplied(original(ref), applied))
       )
     )
       out.add(stepId(offset + i))
@@ -659,7 +663,7 @@ export function classifySteps(
   target: CatalogModel,
   parse: SqlParser,
   offset = 0,
-  o: { noReplacement?: ReadonlySet<string> } = {}
+  o: { noReplacement?: ReadonlySet<string>; foreign?: ReadonlySet<string> } = {}
 ): PlanStep[] {
   const facts: Facts = {
     indexes: target.tables.flatMap((t) =>
@@ -689,11 +693,17 @@ export function classifySteps(
         backfill: action.backfill,
       }
     const base = baseClass(action, parsed(id, action.sql, parse), facts)
-    // Виняток не перекриває втрату даних: `destructive` сюди не доходить
-    const cls =
-      base === "relaxation" &&
-      o.noReplacement?.has(id) !== true &&
-      isReplacement(action, actions.slice(index + 1))
+    // Виняток не перекриває втрату даних: `destructive` сюди не доходить.
+    // Зняття чужого об'єкта — щонайменше послаблення з дозволом, а виняток
+    // «заміна» для нього не діє
+    const foreign = o.foreign?.has(id) === true
+    const cls: StepClass = foreign
+      ? base === "destructive"
+        ? base
+        : "relaxation"
+      : base === "relaxation" &&
+          o.noReplacement?.has(id) !== true &&
+          isReplacement(action, actions.slice(index + 1))
         ? "catalogOnly"
         : base
     return {

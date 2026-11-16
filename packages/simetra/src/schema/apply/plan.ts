@@ -24,6 +24,7 @@ import {
   type DbConnection,
   type EngineAction,
   type EngineDiagnostic,
+  type EngineObjectRef,
   type EnginePlan,
   type EngineScope,
   type Extracted,
@@ -159,7 +160,7 @@ import {
 } from "./state"
 import {
   classifySteps,
-  foreignReplacements,
+  foreignDrops,
   lintSteps,
   requiredPermissions,
   stepId,
@@ -820,14 +821,14 @@ export async function buildPlan(
     names: SAME_NAMES,
   })
   if (!filled.ok) return refused([...diagnostics, ...filled.diagnostics])
-  // Виняток «заміна» — лише для об'єктів останнього застосованого стану:
-  // однойменний чужий об'єкт без дозволу не замінюється (§6.6)
+  // Зняття об'єкта, якого немає в останньому застосованому стані, — з
+  // дозволом, і однойменна заміна теж (§6.6)
   const classified = classifySteps(
     filled.actions,
     live.extracted.model,
     parse,
     0,
-    { noReplacement: foreignReplacements(filled.actions, applied, 0) }
+    { foreign: foreignDrops(filled.actions, applied, 0) }
   )
   // Зміна типу, якій сторожа не побудувати, — відмова, а не крок без
   // перевірки: інакше дозвіл на `destructive` знову означав би «обріж мовчки»
@@ -1710,6 +1711,26 @@ async function runOnClone(
  * сторожі, залежні й приведення змін типу питають саме її — там уже нові
  * імена й старі типи. Опції плану — від живої цілі: план застосовують до неї.
  */
+/**
+ * Посилання дії двигуна (нові імена наміру промоції) в іменах цілі до
+ * наміру: таблиця — за `tablesNewToOld`, об'єкт, відведений вбік, — за
+ * `tempNames`. Індекс адресується без таблиці, тож його ім'я лишається.
+ */
+function beforeIntent(
+  intent: RenameIntent,
+  ref: EngineObjectRef
+): EngineObjectRef {
+  if (ref.table === undefined) return ref
+  const old = intent.tablesNewToOld.get(tableKey(ref.schema, ref.table))
+  return {
+    ...ref,
+    table: old === undefined ? ref.table : (JSON.parse(old) as string[])[1]!,
+    name:
+      intent.tempNames.get(JSON.stringify([ref.schema, ref.table, ref.name])) ??
+      ref.name,
+  }
+}
+
 async function analyseOnClone(p: {
   engine: SchemaEngine
   scratch: ApplyDatabase
@@ -1807,10 +1828,16 @@ async function analyseOnClone(p: {
       p.newTables.map((t) => tableKey(t.schema, t.name))
     )
     const engineSteps = classifySteps(actions, extracted.model, parse, offset, {
-      noReplacement: new Set([
-        ...adoptedReplacements(actions, extracted.model, unitTables, offset),
-        ...foreignReplacements(actions, p.applied, offset),
-      ]),
+      noReplacement: adoptedReplacements(
+        actions,
+        extracted.model,
+        unitTables,
+        offset
+      ),
+      // Дії — у нових іменах наміру, marker — у старих
+      foreign: foreignDrops(actions, p.applied, offset, (ref) =>
+        beforeIntent(p.intent, ref)
+      ),
     })
     const steps = [...renames, ...names, ...engineSteps]
     const guarded = guardedChanges(engineSteps, extracted.model, parse)

@@ -4,7 +4,7 @@ import type { CatalogModel, CatalogTable } from "simetra/model"
 import {
   checkPermissions,
   classifySteps,
-  foreignReplacements,
+  foreignDrops,
   lintSteps,
   requiredPermissions,
   type DriftReport,
@@ -504,8 +504,8 @@ describe("classifySteps", () => {
   })
 })
 
-// #156: виняток «заміна» — лише для об'єктів останнього застосованого стану
-describe("foreignReplacements", () => {
+// #156: зняття об'єкта поза останнім застосованим станом — з дозволом
+describe("foreignDrops", () => {
   const ref = (kind: string, name: string, table?: string) => ({
     kind,
     schema: "app",
@@ -548,7 +548,7 @@ describe("foreignReplacements", () => {
     ["a trigger", ref("trigger", "tr", "t")],
     ["a function", ref("function", "f")],
   ])("keeps the exception for %s of the last applied state", (_n, own) => {
-    expect(foreignReplacements([drop(own)], applied, 0)).toEqual(new Set())
+    expect(foreignDrops([drop(own)], applied, 0)).toEqual(new Set())
   })
 
   it.each([
@@ -562,19 +562,51 @@ describe("foreignReplacements", () => {
     ["a rule", ref("rule", "r", "t")],
   ])("drops the exception for %s outside it", (_n, foreign) => {
     // Наскрізна нумерація: дія двигуна після двох кроків наміру — `s3`
-    expect(foreignReplacements([drop(), drop(foreign)], applied, 1)).toEqual(
+    expect(foreignDrops([drop(), drop(foreign)], applied, 1)).toEqual(
       new Set(["s3"])
     )
   })
 
+  it("maps a reference to the names of the applied state", () => {
+    // Намір промоції перейменував таблицю: marker знає її під старим ім'ям
+    const renamed = ref("constraint", "t_c_check", "t_new")
+    const back = (r: ReturnType<typeof ref>) => ({ ...r, table: "t" })
+    expect(foreignDrops([drop(renamed)], applied, 0)).toEqual(new Set(["s1"]))
+    expect(foreignDrops([drop(renamed)], applied, 0, back)).toEqual(new Set())
+  })
+
+  it("classifies a foreign drop as a relaxation, recreated or not", () => {
+    // Неунікальний індекс сам по собі нічого не послаблює, але чужий — з
+    // дозволом; виняток «заміна» для чужого не діє
+    const dropIndex = action("DROP INDEX app.other_idx", {
+      verb: "drop",
+      destroys: ["index:app.other_idx"],
+      destroyed: [ref("index", "other_idx")],
+    })
+    const createIndex = action("CREATE INDEX other_idx ON app.t (x)", {
+      verb: "create",
+      produces: ["index:app.other_idx"],
+    })
+    const foreign = foreignDrops([dropIndex, createIndex], applied, 0)
+    expect(
+      classifySteps([dropIndex, createIndex], UNIQUE, parse, 0, {
+        foreign,
+      }).map((s) => s.class)
+    ).toEqual(["relaxation", "catalogOnly"])
+    // Без позначки той самий крок — `catalogOnly`
+    expect(
+      classifySteps([dropIndex, createIndex], UNIQUE, parse).map((s) => s.class)
+    ).toEqual(["catalogOnly", "catalogOnly"])
+  })
+
   it("drops the exception for every object on the first apply", () => {
-    expect(
-      foreignReplacements([drop(ref("index", "t_c_idx"))], undefined, 0)
-    ).toEqual(new Set(["s1"]))
+    expect(foreignDrops([drop(ref("index", "t_c_idx"))], undefined, 0)).toEqual(
+      new Set(["s1"])
+    )
     // Стовпець — не об'єкт заміни: його клас дає втрата даних
-    expect(
-      foreignReplacements([drop(ref("column", "c", "t"))], undefined, 0)
-    ).toEqual(new Set())
+    expect(foreignDrops([drop(ref("column", "c", "t"))], undefined, 0)).toEqual(
+      new Set()
+    )
   })
 })
 
