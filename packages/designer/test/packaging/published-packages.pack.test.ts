@@ -227,8 +227,9 @@ async function packedSources(
 
 /** Голі специфікатори статичних і динамічних імпортів модуля ES. */
 function bareSpecifiers(source: string): string[] {
+  // `from` у лапках — значення рядка (`kind: "from"`), а не оператор імпорту
   const found = [
-    ...source.matchAll(/\bfrom\s*["']([^"']+)["']/g),
+    ...source.matchAll(/(?<!["'])\bfrom\s*["']([^"']+)["']/g),
     ...source.matchAll(/\bimport\s*\(?\s*["']([^"']+)["']/g),
   ].map((m) => m[1])
   return [...new Set(found.filter((s) => !s.startsWith(".")))].sort()
