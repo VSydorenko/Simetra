@@ -125,11 +125,20 @@ describe.concurrent("buildPlan: foreign objects", () => {
   })
 
   it("asks permission to drop a foreign domain", async () => {
-    // Вид поза вісімкою заміни: правило — для кожного виду без даних
+    // Вид поза вісімкою заміни: правило — для кожного виду без даних.
+    // Домен без обмежень: інакше крок зняв би й обмеження, яке ловить і
+    // правило заміни
+    const model = await compiled({ [NOTES]: notes() })
+    await inTarget(`${FOREIGN_NOTES}\ncreate domain app.d as text;`, (url) =>
+      expectPermitted(url, model, /DROP DOMAIN/)
+    )
+  })
+
+  it("asks permission to drop a foreign aggregate", async () => {
     const model = await compiled({ [NOTES]: notes() })
     await inTarget(
-      `${FOREIGN_NOTES}\ncreate domain app.d as text check (value <> '');`,
-      (url) => expectPermitted(url, model, /DROP DOMAIN/)
+      `${FOREIGN_NOTES}\ncreate aggregate app.total(integer) (sfunc = int4pl, stype = integer);`,
+      (url) => expectPermitted(url, model, /DROP AGGREGATE/)
     )
   })
 
