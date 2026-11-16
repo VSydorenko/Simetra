@@ -226,6 +226,41 @@ describe.concurrent("buildPlan backfill", () => {
     })
   })
 
+  // Проба, якої база не обчислює: `nextval` у транзакції лише для читання
+  // дає 25006. Вона відмови не дає, і наступне обмеження пробується після
+  // відкату до точки збереження, а не в перерваній транзакції
+  it("plans the fill when a CHECK probe cannot be evaluated", async () => {
+    const counted = (n: Json) => {
+      const t = notes() as unknown as { columns: Json[]; checks: Json[] }
+      t.columns.push({
+        id: uuid(9210),
+        name: "n",
+        physicalName: "n",
+        type: "Integer",
+        ...n,
+      })
+      t.checks = [
+        { name: "notes_a_check", expression: "n > 0" },
+        { name: "notes_b_check", expression: "n < 1000000" },
+      ]
+      return t
+    }
+    const SEQ = { "sql/app/n_seq.sql": "CREATE SEQUENCE app.n_seq;" }
+    const before = await compiled({ [NOTES]: counted({}), ...SEQ })
+    const after = await compiled({
+      [NOTES]: counted({ notNull: true, default: "nextval('app.n_seq')" }),
+      ...SEQ,
+    })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await query(url, rows(null, "a"))
+      const artifact = planned(await plan(url, after))
+      expect(
+        artifact.steps.filter((s) => s.origin === "backfill")
+      ).toHaveLength(1)
+    })
+  })
+
   it("refuses the backfill of a table with an UPDATE rule with the promotion code", async () => {
     // Р13: передумови запису спільні з кроками даних промоції — правило
     // писало б поза згодою, і лічильник заповнення нічого не довів би
