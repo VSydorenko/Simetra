@@ -21,7 +21,7 @@ import {
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 
 /**
- * Гейт `plan.owner-not-bypassrls` (Р10) на живому кластері профілю
+ * Гейт `plan.owner-not-bypassrls` на живому кластері профілю
  * `postgres`. DB-рівень, бо атрибути ролі (`rolbypassrls`) і їх зміну між
  * планом і застосуванням бачить лише сервер.
  */

@@ -30,7 +30,7 @@ export interface HookPhase {
   runNested(operation: unknown): Promise<Record<string, unknown>>
 }
 
-// Одне сховище на модуль для всіх екземплярів рантайму (Р-A3-11): хук, що
+// Одне сховище на модуль для всіх екземплярів рантайму (спека П4 §6.5): хук, що
 // викликає `run` іншого екземпляра, інакше взяв би друге з'єднання й чекав
 // би на замок своєї ж транзакції. Лише `run` і `exit` — без `enterWith`.
 const frames = new AsyncLocalStorage<Frame>()
@@ -50,7 +50,7 @@ export function outsideCommand<T>(work: () => T): T {
 /**
  * `run` чи `read` будь-якого рантайму в асинхронному контексті активної
  * команди — `command.nested` (спека П4 §6.5). Відмова закриває чергу тієї
- * команди: перехопивши її, хук не продовжить команду (Р-A3-15).
+ * команди: перехопивши її, хук не продовжить команду.
  */
 // `Frame` несе спробу, у якій виклик запланували: продовження спроби 1, що
 // спрацювало під час повтору, закриває вже завершену спробу 1. Сам виклик
@@ -104,7 +104,7 @@ export async function callHook<T>(
 function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
   const { object, op } = phase
   // Метод `ctx` діє, лише поки виконується його хук, і лише в асинхронному
-  // контексті своєї спроби (Р-A3-15): збережений `ctx` інакше виконав би
+  // контексті своєї спроби: збережений `ctx` інакше виконав би
   // запит у чужій транзакції з чужими claims.
   const valid = () => scope.live && frames.getStore()?.tx === tx
   const misuse = () => {
@@ -113,8 +113,8 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
       error: new Error("hook context used outside its hook"),
     })
     const failure = new CommandFailure(INTERNAL)
-    // Відмова закриває чергу команди, у чиєму контексті стався виклик
-    // (Р-A3-15): перехопивши її, хук не закомітить команду без цієї дії.
+    // Відмова закриває чергу команди, у чиєму контексті стався виклик,
+    // перехопивши її, хук не закомітить команду без цієї дії.
     // Після завершення команди — лише журнал.
     const frame = frames.getStore()
     if (frame?.command.active === true) {
@@ -169,7 +169,7 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
         if (depth > tx.state.maxDepth) tx.abort({ code: "command.depth" })
         // Глибина не обмежує ширини: хук у циклі інакше тримав би транзакцію
         // й замки на будь-якій кількості фаз. Лічаться лише фази `ctx.run`:
-        // межа вхідного пакета — окремий вхідний контракт (B1b-2).
+        // межа вхідного пакета — окремий вхідний контракт (`BATCH_MAX` конверта, спека П4-B §4.5).
         if (++tx.nestedPhases > BATCH_MAX) {
           tx.abort({ code: "command.depth", reason: "phases" })
         }

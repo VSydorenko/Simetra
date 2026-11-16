@@ -108,7 +108,7 @@ describe("checkRequestOrigin: inProcess", () => {
       },
       false,
     ],
-    // Окремого запиту `version` більше немає (B1c): старий тип — відмова.
+    // Окремого запиту `version` більше немає: старий тип — відмова.
     ["version", wrap("version"), true],
     ["run", wrap("run"), true],
     ["receipt", wrap("receipt"), true],

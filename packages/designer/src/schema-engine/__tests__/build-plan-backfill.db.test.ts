@@ -60,8 +60,8 @@ describe.concurrent("buildPlan backfill", () => {
 
   it("plans a count under FORCE ROW LEVEL SECURITY for a role that bypasses it", async () => {
     // Роль плану цього стеку має BYPASSRLS, тож політика її не обмежує: тест
-    // доводить лише, що FORCE RLS не ламає конвеєр. Р5 (`row_security =
-    // off`) доводить наступний тест роллю без обходу
+    // доводить лише, що FORCE RLS не ламає конвеєр. Підрахунок під `row_security =
+    // off` доводить наступний тест роллю без обходу
     const before = await compiled({ [NOTES]: notes() })
     const after = await compiled({ [NOTES]: notes(REQUIRED) })
     await inTarget(EMPTY, async (url) => {
@@ -82,7 +82,7 @@ describe.concurrent("buildPlan backfill", () => {
   })
 
   it("refuses a count that row security would cut, with its SQLSTATE", async () => {
-    // Р5, І3: роль без BYPASSRLS, що не власник таблиці, під
+    // Роль без BYPASSRLS, що не власник таблиці, під
     // `row_security = off` бачить усі рядки або дає гучне `42501` — не
     // неправдивий нуль від політики, що ховає всі рядки
     const before = await compiled({ [NOTES]: notes() })
@@ -120,10 +120,10 @@ describe.concurrent("buildPlan backfill", () => {
   })
 
   it("never fills only the rows that row security shows", async () => {
-    // І3: крок заповнення під роллю без BYPASSRLS на таблиці з FORCE RLS,
+    // Крок заповнення під роллю без BYPASSRLS на таблиці з FORCE RLS,
     // де політика показує лише один із двох `NULL`, дає гучне `42501`, а не
     // тихо оновлює видиму частину. Раннер запускає крок роллю з обходом
-    // (гейт власника Р10), тож доказ — на тих самих частинах кроку:
+    // (гейт власника), тож доказ — на тих самих частинах кроку:
     // `BACKFILL_SETTINGS` навколо SQL `backfillAction`
     const before = await compiled({ [NOTES]: notes() })
     const [shown, hidden] = [uuid(9440), uuid(9441)]
@@ -189,7 +189,7 @@ describe.concurrent("buildPlan backfill", () => {
   })
 
   it("refuses the backfill of a table with an UPDATE rule with the promotion code", async () => {
-    // Р13: передумови запису спільні з кроками даних промоції — правило
+    // Передумови запису спільні з кроками даних промоції — правило
     // писало б поза згодою, і лічильник заповнення нічого не довів би
     const before = await compiled({ [NOTES]: notes() })
     const after = await compiled({
@@ -216,7 +216,7 @@ describe.concurrent("buildPlan backfill", () => {
   })
 
   it("marks SET NOT NULL without NULL values for the check before the step", async () => {
-    // Р7: `NULL`, що з'являться після плану, раннер рахує перед кроком
+    // `NULL`, що з'являться після плану, раннер рахує перед кроком
     const before = await compiled({ [NOTES]: notes() })
     const after = await compiled({ [NOTES]: notes(REQUIRED) })
     await inTarget(EMPTY, async (url) => {

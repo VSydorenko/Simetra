@@ -18,7 +18,7 @@ const present = <K extends string, V>(
   value === undefined ? {} : ({ [key]: value } as Record<K, V>)
 
 // Поля перелічено явно, а не відкинуто серверні: нове поле запису рантайму
-// не потрапляє до клієнта, доки його не названо тут (рішення В7 B1b-1).
+// не потрапляє до клієнта, доки його не названо тут (спека П4-B §4.0).
 const attributeOf = (a: RuntimeAttribute): CatalogEntryAttribute => ({
   name: a.name,
   column: a.column,

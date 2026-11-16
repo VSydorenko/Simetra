@@ -95,7 +95,7 @@ issue закрили.
 ### Під наглядом
 
 - Помітна частка часу плану — CPU двигуна на повних витягах каталогу
-  (кандидат — борг П3-2b §3).
+  (кандидат — [#185](https://github.com/VSydorenko/Simetra/issues/185)).
 
 ## `libpg-query` і `@libpg-query/parser` — парсер SQL
 
@@ -106,7 +106,7 @@ issue закрили.
 `parsePlPgSQL` (`packages/simetra/src/compiler/sql/plpgsql.ts`), якого
 `libpg-query` 17 не має; з мажором 18 обидва API — в одному пакеті. Мажор 18 —
 граматика Postgres 18: оновлюється разом із мажором сервера, а не окремо
-(борг — `docs/superpowers/plans/2026-10-30-archive-residual-debt.md`).
+(перехід — [#164](https://github.com/VSydorenko/Simetra/issues/164)).
 ⚠️ Звірити розбіжність версії з картою перевикористання
 (`docs/research/stack/reuse-map-2026-09.md`).
 

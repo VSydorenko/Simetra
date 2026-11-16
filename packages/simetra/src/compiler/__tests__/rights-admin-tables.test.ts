@@ -241,7 +241,7 @@ describe("rights administration storage", () => {
     ])
   })
 
-  // Р3-15: факт `rights` — входи `rights_mine`, а не її вихід, і кеш прав
+  // Факт `rights` — входи `rights_mine`, а не її вихід, і кеш прав
   // початку на COMMIT у формі колишнього рядка прав.
   it("adds the input tables of the rights fact", async () => {
     const result = await compileRights(withRoles())
@@ -275,7 +275,7 @@ describe("rights administration storage", () => {
           ["archetype", "uuid"],
           ["level", "text"],
           ["level_id", "uuid"],
-          // Походження рядка функції гранту (Р-A6-5) — лише в DDL.
+          // Походження рядка функції гранту — лише в DDL.
           ["provenance", "text"],
           ["assignment", "uuid"],
         ]),
@@ -367,7 +367,7 @@ describe("rights administration storage", () => {
     })
   })
 
-  // Р-A6-5: походження й рядок призначення пише лише функція гранту; знімок,
+  // Походження й рядок призначення пише лише функція гранту; знімок,
   // його читання й живі входи `rights_mine` колонок не бачать — інакше рядок
   // функції відрізнявся б від живого рядка входу того самого призначення.
   it("snapshot inputs do not see provenance", async () => {
@@ -410,7 +410,7 @@ describe("rights administration storage", () => {
     ).not.toContain("provenance")
   })
 
-  // Р-A6-7, Р-A6-23: маркер кореня — ключ транзакції, виду й кореня з
+  // Маркер кореня — ключ транзакції, виду й кореня з
   // актором вставки; закритий, як решта таблиць схеми платформи.
   it("adds the root marker table without grants", async () => {
     const result = await compileRights(withRoles())

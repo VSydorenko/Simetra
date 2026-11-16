@@ -1,6 +1,6 @@
-// Крок `db:pg:start` (рішення Р13 ПГ-2b, Р7 ПГ-3): міграція Better Auth у
-// базі `simetra` від ролі `auth`. Гранти власнику на таблицю ідентичності дає
-// повторний `simetra roles` після неї. Запуск:
+// Крок `db:pg:start`: міграція Better Auth у базі `simetra` від ролі `auth`.
+// Гранти власнику на таблицю ідентичності дає повторний `simetra roles` після
+// неї. Запуск:
 // `node --import tsx packages/simetra/test/db/better-auth-cli.ts`, DSN — лише
 // зі змінних середовища (argv видно в `ps`).
 import { realpathSync } from "node:fs"

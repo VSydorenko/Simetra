@@ -394,7 +394,7 @@ describe("data tools over a real database", () => {
       expect(mcp.refusal?.reason).toBe("data-write-disabled")
       expect(await versionOf(GAUGE_TABLE, env.mine)).toBe(before)
 
-      // Запис у CLI вирішує людина, що запускає команду (Р-A5-10)
+      // Запис у CLI вирішує людина, що запускає команду
       const cli = await runTool(
         dataCommandTool,
         {

@@ -134,7 +134,7 @@ const tableOf = (branch: Select) =>
 /**
  * Вираз рядка пояснення для викликача: `p_user` → поточний користувач,
  * права `granted` → `caller_granted`, варіанти `_of` → функції множини
- * політики, які читає RLS (Р3-8): зі знімком актора вони судять знімком.
+ * політики, які читає RLS: зі знімком актора вони судять знімком.
  * Множина членства виду — `_member_scopes` виду з контракту. Підстановка — на
  * дереві.
  */
@@ -663,7 +663,7 @@ describe("rights_explain", () => {
 })
 
 describe("rights_explain with an actor snapshot", () => {
-  // Р3-8: пояснення ≡ RLS викликача — його права й множини читають ті самі
+  // Пояснення ≡ RLS викликача — його права й множини читають ті самі
   // функції, що політики, тож у транзакції зі знімком — знімок.
   it("judges caller visibility by snapshot-aware functions", async () => {
     const result = await compile(snapshotSourcesDomain())

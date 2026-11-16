@@ -306,7 +306,7 @@ export function createCoreSource(
 /**
  * A view of `source` that records the epoch of every answered part, in the
  * order of arrival: a read applies only after the session accepted every
- * epoch it carries (P4-B plan B1c, Р7) — a key absent from an answer has no
+ * epoch it carries (P4-B spec §6.2) — a key absent from an answer has no
  * row to carry it.
  */
 export function tracked(source: CoreSource): {

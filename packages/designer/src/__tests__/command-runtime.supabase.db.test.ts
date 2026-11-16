@@ -108,7 +108,7 @@ describe("command runtime over the engine target", () => {
       const state = await nextOnBackend(pool, pids[0]!)
       expect(state.user).toBe(new URL(env.login).username)
       // Раз поставлений у сесії GUC лишається визначеним: після `COMMIT` це
-      // `''`, а не `NULL` (звіт Задачі 0).
+      // `''`, а не `NULL`.
       expect([null, ""]).toContain(state.claims)
       expect(state.currentUserId).toBeNull()
     } finally {

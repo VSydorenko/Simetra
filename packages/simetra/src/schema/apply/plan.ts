@@ -728,7 +728,7 @@ export async function buildPlan(
   // вручну, а не дозволом
   const desired = await desiredForApply(model)
   // Профіль `postgres` будує тіні з шаблону кластера цілі й окремого сервера
-  // тіней не знає (Р9): відмова до платформних ролей і до будь-якого звернення
+  // тіней не знає: відмова до платформних ролей і до будь-якого звернення
   // до бази
   if (
     copiesShadowFromTemplate(desired.scope.provider) &&
@@ -747,7 +747,7 @@ export async function buildPlan(
     async (tx) => {
       const unsupported = await serverVersionRefusal(tx)
       if (unsupported !== undefined) return { ok: false as const, unsupported }
-      // Р10: роль без BYPASSRLS читала б стан крізь захист рядків — відмова
+      // Роль без BYPASSRLS читала б стан крізь захист рядків — відмова
       // до будь-якого читання стану й до платформних ролей
       const ownerGate = await checkOwnerAttributes(tx)
       if (ownerGate !== undefined)
@@ -1328,7 +1328,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   if ("refusal" in data)
     return refused(dedupe([...diagnostics, ...data.refusal]))
   // Кроки даних (фаза 10) йдуть до кроків двигуна: на таблиці з живою
-  // механікою без послідовності версій тригер упав би (Р11)
+  // механікою без послідовності версій тригер упав би
   const noSequence = rowVersionFirstTables(
     live.extracted.model,
     data.tables.map((t) => ({ schema: t.before.schema, name: t.before.table }))
@@ -1376,7 +1376,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
 
   // Заповнення `NULL` (платформна спека §6.6): дії двигуна названо в
   // іменах копії після наміру, а ціль ще в старих — підрахунок і факти
-  // перекладають імена назад (Р5). Таблиці одиниці й колонки кроків даних —
+  // перекладають імена назад. Таблиці одиниці й колонки кроків даних —
   // у нових іменах, як і дії
   const columnsOld = columnsNewToOld(intent.columns)
   const names: TargetNames = {
@@ -1970,7 +1970,7 @@ async function analyseOnClone(p: {
     const unparsable = unparsableSteps(enginePlan.actions, parse, offset)
     if (unparsable.length > 0)
       return { ok: false, diagnostics: [...diagnostics, ...unparsable] }
-    // Заповнення — до класифікації (Р10): id, сторожі, `noReplacement` і
+    // Заповнення — до класифікації: id, сторожі, `noReplacement` і
     // позиційний виняток «заміна» рахуються від остаточного списку
     const filled = await p.backfills(enginePlan.actions, extracted.model)
     if (!filled.ok)

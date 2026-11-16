@@ -94,7 +94,7 @@ describe("actor snapshot sources", () => {
       [`public.${SNAPSHOT_USER_BADGE_TABLE}`]: "declared",
       "simetra.identities": "identities",
       // Дослівна функція виміру кличе публічну функцію членства, а та зі
-      // знімком читає мої скоупи транзакції (Р3-6: таблиці знімка — виняток).
+      // знімком читає мої скоупи транзакції (таблиці знімка — виняток).
       "simetra.rights_tx_header": "snapshot",
       "simetra.rights_tx_scopes": "snapshot",
     })
@@ -133,7 +133,7 @@ describe("actor snapshot sources", () => {
     }
   })
 
-  // Р-A6-7: маркер кореня пише тригер ефектів кореня, а факти його не
+  // Маркер кореня пише тригер ефектів кореня, а факти його не
   // читають — ні джерелом, ні невідомим відношенням він не стає.
   it("does not take the root marker for a snapshot source", async () => {
     const result = await compileRights(rootCreationDomain())
@@ -302,7 +302,7 @@ describe("actor snapshot sources", () => {
         fake(
           `CREATE FUNCTION simetra.rights_mine_live() RETURNS SETOF uuid ${shell} AS $$ SELECT NULL::uuid WHERE false $$`
         ),
-        // Мої скоупи читають і входи `rights_mine` (Р3-15), тож невідоме
+        // Мої скоупи читають і входи `rights_mine`, тож невідоме
         // відношення в них — невідоме для обох фактів.
         fake(
           `CREATE FUNCTION simetra.rights_my_scopes_live() RETURNS SETOF uuid ${shell} AS $$ SELECT j.row_id FROM simetra.rights_journal j $$`
@@ -368,7 +368,7 @@ describe("actor snapshot sources", () => {
 })
 
 /**
- * Р3-13: SQL застосунку не відкриває ролі команд чи `PUBLIC` запису в
+ * SQL застосунку не відкриває ролі команд чи `PUBLIC` запису в
  * таблицю-виняток знімка. База — прийняті джерела без жодного гранту;
  * виняток — прийняте членство `public.membership`.
  */

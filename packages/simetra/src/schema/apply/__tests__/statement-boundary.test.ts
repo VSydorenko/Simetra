@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest"
 
 const APPLY_DIR = join(import.meta.dirname, "..")
 
-// Оператор поза транзакцією існує лише для підготовки кластера (рішення Р12):
+// Оператор поза транзакцією існує лише для підготовки кластера:
 // план і застосування ходять тільки через `transaction`. Гард ловить виклик
 // `.statement(` у виробничих файлах T2 `apply`, крім файлу підготовки кластера
 describe("ApplyDatabase.statement boundary", () => {

@@ -164,8 +164,8 @@ export async function withTemplateTarget<T>(
 /**
  * Runs `fn` against a target that holds `model` and can take an identity
  * (`signUp`, `seedRuntimeActor`): on `postgres` a bare target gets the Better
- * Auth identity, then the plan and the apply of `model` as the owner login
- * (Р17 order); on a profile whose provider gives the identity, the target is
+ * Auth identity, then the plan and the apply of `model` as the owner login;
+ * on a profile whose provider gives the identity, the target is
  * the engine shadow of the desired state. `model` must be compiled for the
  * profile of the run (`profileLayer`).
  */
@@ -220,8 +220,8 @@ export async function withModelTarget<T>(
 /**
  * Runs `fn` on an empty target that can take an identity before anything is
  * applied to it — for a test that deploys the model itself (`plan` and
- * `apply` tools): on `postgres` a bare target with the Better Auth identity
- * (Р17 order); on a profile whose provider gives the identity, the engine
+ * `apply` tools): on `postgres` a bare target with the Better Auth identity;
+ * on a profile whose provider gives the identity, the engine
  * shadow of an empty `public` state.
  */
 export async function withIdentityTarget<T>(
@@ -242,7 +242,7 @@ export async function withIdentityTarget<T>(
 /**
  * The URL of the database of `url` for the owner login of the profile
  * (`testOwnerLoginUrl()`): the migrator whose `session_user` is the owner of
- * the rights functions, as the rights guard requires (Р16).
+ * the rights functions, as the rights guard requires.
  */
 export const ownerLoginOf = (url: string): string =>
   withDatabaseName(testOwnerLoginUrl(), databaseOf(url))
@@ -415,7 +415,7 @@ export async function markDevelopmentDatabase(url: string): Promise<void> {
 }
 
 /**
- * Ідентичність Better Auth тегованої цілі `url` (рішення Р17 плану ПГ-2b):
+ * Ідентичність Better Auth тегованої цілі `url`:
  * ціль дістає той самий стан, що й база тестів після `db:pg:start`, —
  * `CONNECT` і схему `better_auth` ролі входу сервісу, справжню міграцію від
  * неї та гранти власнику тим самим SQL, що й `roles` (`identityGrantSql`):

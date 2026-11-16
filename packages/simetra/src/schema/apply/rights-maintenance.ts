@@ -126,7 +126,7 @@ const ALLOWED_DETAILS = new Map<string, readonly string[]>([
 const LOCK = `SELECT pg_try_advisory_xact_lock(${APPLY_ADVISORY_LOCK}) AS locked`
 const APPLIED_HASH = `SELECT ${q(PLATFORM_SCHEMA)}.${q(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}() AS hash`
 // Читання стану не повинне тихо бачити нуль рядків під RLS, яку вхід не
-// обходить: з `row_security = off` це гучне `42501` (Р-A4-5).
+// обходить: з `row_security = off` це гучне `42501`.
 const ROW_SECURITY_OFF = "SELECT set_config('row_security', 'off', true)"
 const MAINTENANCE_ON = "SELECT set_config($1, 'on', true)"
 const NEW_ID = "SELECT gen_random_uuid() AS id"
@@ -205,7 +205,7 @@ function membershipOf(
 }
 
 /**
- * Крок 1 (Р-A4-9, Р-A4-11): роль, рівень, довідники й `member` — без
+ * Крок 1: роль, рівень, довідники й `member` — без
  * звернення до бази. Відмова членства «немає каталогу» тут не стоїть: вона
  * лише на гілці вставки нового учасника, після читання стану.
  */
@@ -299,7 +299,7 @@ function prepare(
     const object = membership.object
     const nameOf = (physical: string) =>
       object.attributes.find((a) => a.column === physical)?.name
-    // Ключ, скоуп і користувача задає інструмент (Р-A4-11)
+    // Ключ, скоуп і користувача задає інструмент
     const forced = [
       object.keyName,
       nameOf(membership.scope),
@@ -335,7 +335,7 @@ const found = async (
   params: readonly unknown[] = []
 ): Promise<boolean> => (await tx.query(sql, params)).length > 0
 
-/** Кроки 2–10: одна транзакція запису (порядок — план П4-A4, Задача 7). */
+/** Кроки 2–10: одна транзакція запису (інструмент — спека П4 §6.12). */
 async function maintain(
   tx: ApplyTransaction,
   model: CompiledModel,
@@ -435,7 +435,7 @@ async function maintain(
       )
       if (existing !== undefined) {
         // Наявному учаснику нові значення рядка не застосовуються: мовчки
-        // відкинутий `member` приховав би помилку виклику (Р-A4-18)
+        // відкинутий `member` приховав би помилку виклику
         if (scope.memberGiven)
           throw new Refusal(
             refusal("maintenance.invalid-member", { path: "member" })
@@ -513,7 +513,7 @@ async function maintain(
 }
 
 /**
- * Посилання нового рядка членства (Р-A6-12): та сама згенерована функція
+ * Посилання нового рядка членства: та сама згенерована функція
  * перевірки, що кличе ядро кореня, окремим оператором. Від власника з
  * `row_security = off` вона судить «ціль існує й у тому самому скоупі», а не
  * видимість; повертає колонку першого порушення.
@@ -538,7 +538,7 @@ async function checkMember(
   throw new Refusal(refusal("maintenance.invalid-member", { path }))
 }
 
-/** Відмова бази, яку інструмент називає сам (Р-A4-5, Р-A4-11). */
+/** Відмова бази, яку інструмент називає сам. */
 function databaseRefusal(
   error: ApplyDbError,
   p: Prepared

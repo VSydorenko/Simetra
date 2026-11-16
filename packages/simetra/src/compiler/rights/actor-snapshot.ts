@@ -25,8 +25,8 @@ const platform = (name: string): QualifiedName => ({
 })
 
 /**
- * Таблиці знімка (спека прав §7): заголовки фактів, входи факту `rights`
- * (Р3-15), кеш прав початку на COMMIT і рядки решти фактів.
+ * Таблиці знімка (спека прав §7): заголовки фактів, входи факту `rights`,
+ * кеш прав початку на COMMIT і рядки решти фактів.
  */
 export const SNAPSHOT_TABLES = {
   header: platform("rights_tx_header"),
@@ -64,7 +64,7 @@ export function inputColumns(input: keyof MineInputs, alias?: string): string {
 }
 
 /**
- * Входи `rights_mine` зі знімка транзакції `xid` (Р3-15): та сама форма, що
+ * Входи `rights_mine` зі знімка транзакції `xid`: та сама форма, що
  * в живих генераторів, тож `mineBody` над ними — те саме тіло.
  */
 export function snapshotInputs(xid: string): MineInputs {
@@ -93,12 +93,12 @@ function header(fact: SnapshotFact, extra = ""): string {
   return `EXISTS (SELECT 1 FROM ${qualified(SNAPSHOT_TABLES.header)} h WHERE h.xid = txid_current_if_assigned() AND h.fact = ${sqlLiteral(fact)}${extra})`
 }
 
-/** Чи факт цієї транзакції вже знято (Р3-3). */
+/** Чи факт цієї транзакції вже знято. */
 export function snapshotPresent(fact: SnapshotFact): string {
   return guarded(header(fact))
 }
 
-/** Чи факт цієї транзакції знято для поточного користувача (Р3-3). */
+/** Чи факт цієї транзакції знято для поточного користувача. */
 export function snapshotOwned(fact: SnapshotFact): string {
   return guarded(
     header(fact, ` AND h.actor IS NOT DISTINCT FROM ${CURRENT_USER}`)
@@ -106,7 +106,7 @@ export function snapshotOwned(fact: SnapshotFact): string {
 }
 
 /**
- * Чи транзакцію закріплено за іншим актором (Р3-3): будь-який знятий факт
+ * Чи транзакцію закріплено за іншим актором: будь-який знятий факт
  * з іншим актором — і живих фактів він не отримує навіть тих, яких ще не
  * знято (fail-closed).
  */
@@ -117,7 +117,7 @@ export function snapshotForeign(): string {
 }
 
 /**
- * Тіло диспетчера публічної функції факту (Р3-3, Р3-15): гілка знімка — коли
+ * Тіло диспетчера публічної функції факту: гілка знімка — коли
  * факт цієї транзакції знято для поточного користувача; жива гілка — коли
  * факту ще немає й транзакцію не закріплено за іншим актором. Інакше —
  * порожньо (fail-closed). Гілки — згенеровані запити тієї самої форми
@@ -143,7 +143,7 @@ export function snapshotDispatcher(
   return [
     "#variable_conflict use_column",
     "BEGIN",
-    // Умови — у дужках: `THEN` усередині `CASE` охорони Р3-3 інакше
+    // Умови — у дужках: `THEN` усередині `CASE` охорони факту інакше
     // закінчив би умову `IF` plpgsql.
     `  IF (${snapshotOwned(fact)}) THEN`,
     branch(snapshot),

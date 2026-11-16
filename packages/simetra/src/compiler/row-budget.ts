@@ -17,7 +17,7 @@ export type BudgetColumn =
   CatalogEntryAttribute | { column: string; system: "key" | "integerText" }
 
 /*
- * Верхні межі значень форми передачі в байтах `jsonBytes` (Р7): лапки рядка
+ * Верхні межі значень форми передачі в байтах `jsonBytes`: лапки рядка
  * враховано. Сталі, а не вимір прикладу: правило обіцяє межу для будь-якого
  * значення, яке `encodeRow` пропускає на дріт.
  */

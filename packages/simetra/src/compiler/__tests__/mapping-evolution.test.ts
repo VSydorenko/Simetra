@@ -202,7 +202,7 @@ describe("mapping between catalogs A and A′", () => {
     expect(mapped).toEqual({ ok: true, value: op(issue, newNames) })
     expect(operationToWire(server, op(issue, newNames))).toEqual(wire)
     // Стара вкладка нової колонки не називає: значення `memo` в наявних
-    // рядках зберігає сервер (B1b-2), а мапінг не дописує його порожнім.
+    // рядках зберігає сервер, а мапінг не дописує його порожнім.
     const memoColumn = attributeOf(sectionOf(issue, section.to), added).column
     const wireLines = (
       wire.value as { tabularSections: Record<string, LogicalRow[]> }

@@ -234,7 +234,7 @@ const unquoted = (value: string): string =>
   value.replaceAll('"', "").replaceAll(" ", "")
 
 /**
- * Причина, з якої роль `auth` не обмежена схемою `better_auth` (рішення Р8):
+ * Причина, з якої роль `auth` не обмежена схемою `better_auth`:
  * чужий власник схеми, `CREATE` на базу чи `public`, відношення поза схемою
  * або інший `search_path` ролі для цієї бази.
  */
@@ -964,8 +964,8 @@ async function writePhase(
       for (const sql of r.create) await tx.query(sql)
       created.push(r.name)
     }
-    // Налаштування ролі `auth` — другий шар після опції з'єднання пулу
-    // (рішення Р8); ідемпотентне, тож і для наявної ролі
+    // Налаштування ролі `auth` — другий шар після опції з'єднання пулу;
+    // ідемпотентне, тож і для наявної ролі
     await tx.query(
       `ALTER ROLE ${q(set.auth)} SET search_path = ${q(AUTH_SCHEMA)}`
     )
@@ -1064,7 +1064,7 @@ async function writePhase(
   return { created, present, skipped }
 }
 
-/** З'єднання підготовки кластера (рішення Р5): службова база, ціль, шаблон. */
+/** З'єднання підготовки кластера: службова база, ціль, шаблон. */
 export interface ClusterConnections {
   maintenance: DbConnection
   target: DbConnection

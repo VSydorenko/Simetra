@@ -17,13 +17,13 @@ export interface Epochs {
   /**
    * Records a version with epoch `next()`: the max with the known one in the
    * same version epoch; a known version of another non-empty version epoch
-   * is replaced (P4-B plan B1c, Р5).
+   * is replaced (P4-B spec §6.2).
    */
   remember(id: string, version: number, versionEpoch: string | null): void
   seen(id: string): Seen | undefined
   /**
    * Gives memory entries without a version epoch the epoch `previous` that a
-   * switch left (Р5, Р6): a `null` answer compared with it before the switch,
+   * switch left: a `null` answer compared with it before the switch,
    * so after it the entry belongs to the old epoch, not to the new one.
    */
   adopt(previous: string): void
@@ -57,7 +57,7 @@ export interface Seen {
 
 /**
  * Two version epochs that cannot be ordered: both non-empty and different
- * (P4-B plan B1c, Р5, Р6). `null` or absent — a replica or a database without
+ * (P4-B spec §6.2). `null` or absent — a replica or a database without
  * an epoch — compares with any epoch by version as usual.
  */
 export function differentEpochs(
@@ -68,7 +68,7 @@ export function differentEpochs(
 }
 
 /**
- * The epoch a write keeps in store state (P4-B plan B1c, Р5, Р6): the incoming
+ * The epoch a write keeps in store state (P4-B spec §6.2): the incoming
  * one, and for a `null` answer (a replica, a database without an epoch) the
  * epoch already held. Every write of an epoch into the store goes through it
  * (guarded by `__tests__/epoch-write-guard.test.ts`).

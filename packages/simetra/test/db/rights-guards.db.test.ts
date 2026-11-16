@@ -408,7 +408,7 @@ describe("rights administration guards", () => {
       delete ids.gRightsOnly
     }
   })
-  // Р3-15: права початку на COMMIT рахуються з входів знімка, а не з живих
+  // Права початку на COMMIT рахуються з входів знімка, а не з живих
   // таблиць: актор, що зняв власну роль після призначення, покриває
   // призначення правами, з якими почав транзакцію.
   it("computes the commit cache from the snapshot inputs", async () => {
@@ -586,8 +586,8 @@ describe("rights administration guards", () => {
             )
             await client.query("SET CONSTRAINTS ALL IMMEDIATE")
             // Права `other` — живим варіантом аналізу за параметром
-            // користувача: транзакцію закріплено за `root` першим знімком
-            // (Р3-3), і claims `other` у ній дали б порожні факти.
+            // користувача: транзакцію закріплено за `root` першим знімком,
+            // і claims `other` у ній дали б порожні факти.
             const mine = await client.query<{ v: string[] }>(
               "SELECT coalesce(array_agg(DISTINCT m.action || '|' || m.extent), '{}') AS v FROM simetra.rights_detail_of($1) m WHERE m.object = 'task'",
               [key("other")]

@@ -16,7 +16,7 @@ const id = z.string().regex(UUID_TEXT, "expected a UUID")
 const role = z.string().min(1)
 
 /**
- * Вхід — JSON, одна дія на запуск (Р-A4-8): `strictObject` не пропускає поля
+ * Вхід — JSON, одна дія на запуск: `strictObject` не пропускає поля
  * іншої дії, тож помилка написання не перетвориться на тиху іншу дію.
  */
 const input = z.discriminatedUnion("action", [
@@ -43,7 +43,7 @@ const input = z.discriminatedUnion("action", [
 /**
  * Аварійний вхід у права поза командами (спека П4 §6.12): режим
  * обслуговування бази діє лише для входу мігратора, тож інструмент — лише
- * командний рядок і лише з `--yes`; агент через MCP його не бачить (Р-A4-7).
+ * командний рядок і лише з `--yes`; агент через MCP його не бачить.
  */
 export const rightsMaintenanceTool = defineTool({
   name: "rights-maintenance",

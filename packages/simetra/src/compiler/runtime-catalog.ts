@@ -447,7 +447,7 @@ function constraints(table: PhysicalTable, facts: Facts): RuntimeConstraint[] {
         kind: "unique" as const,
         columns: i.keys.flatMap((k) => ("column" in k ? [k.column] : [])),
       })),
-    // Колонка — з компілятора за призначеним іменем (Р-A3-21); CHECK над
+    // Колонка — з компілятора за призначеним іменем; CHECK над
     // кількома колонками (правило рядка) реквізиту не називає.
     ...table.checks.map((c) => {
       const column = facts.checkColumns.get(checkKey(table, c.name))

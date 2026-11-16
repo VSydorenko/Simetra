@@ -334,7 +334,7 @@ describe("simetra/data", () => {
   })
 })
 
-// Better Auth і kysely — тестова залежність `simetra` (рішення Р2): жоден
+// Better Auth і kysely — тестова залежність `simetra`: жоден
 // тарбол не оголошує їх і жоден файл `dist` не імпортує
 describe("test-only auth dependencies", () => {
   const BANNED = /^(?:better-auth|kysely)(?:\/|$)/
