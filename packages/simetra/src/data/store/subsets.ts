@@ -318,7 +318,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     const frontier = s.window.frontier[direction]
     if (frontier !== undefined) return { cursor: frontier }
     const keys = keysOfPages(s.window.pages)
-    // Окне без рядків, що не дійшло до кінця (фільтр нічого не знайшов у
+    // Вікно без рядків, що не дійшло до кінця (фільтр нічого не знайшов у
     // першому читанні, чи сторінки спорожнив purge), іде далі від початку
     // порядку: сторінка читає серверний фільтр.
     // Лише завершене й не перезапущене читання: до першого завантаження
