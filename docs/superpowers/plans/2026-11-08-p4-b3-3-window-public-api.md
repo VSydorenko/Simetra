@@ -145,7 +145,9 @@ PR і своє «готово». Перевірки — `run-tests unit --change
 
 ### a1 — форма `window`, ланцюжок, яруси (PR 2, після задачі 0)
 
-**Задача 1. Форма й ланцюжок.** `store/window.ts` (новий), `types.ts`,
+#### Задача 1 — Форма й ланцюжок
+
+`store/window.ts` (новий), `types.ts`,
 `snapshot.ts` (`shareSnapshot` порівнює нові поля), `forms.ts`, `filter.ts`
 (межа з видимого значення через `keysetFilter` з `direction: "before"`),
 `subsets.ts`, `readers.ts` (Р1), `runtime/runtime.ts` (`residency`).
@@ -155,7 +157,9 @@ PR і своє «готово». Перевірки — `run-tests unit --change
 `command.invalid` без запиту, `full` понад межу — `window` з `truncated`.
 `run-tests unit --filter window` і `--filter full`.
 
-**Задача 2. Яруси й слабкий власник.** `object-store.ts` (`weakOwners`,
+#### Задача 2 — Яруси й слабкий власник
+
+`object-store.ts` (`weakOwners`,
 `ownWeak`, `disownWeak`, `promote`, `weakOnlyBytes`), `core.ts` (`violations`,
 `owners`, `sweep` з урахуванням слабких; хвіст і сигнал латають лише сильно
 утримані), `window.ts` (яруси, таймер вивантаження, `ghostBytes`, `pinned`),
@@ -168,7 +172,8 @@ window`.
 
 ### a2 — ланцюжки, перечитування, права на знімках (PR 3, після a1)
 
-**Задача 3. Новий ланцюжок, `refresh`, `showNew`, системне перечитування.**
+#### Задача 3 — Новий ланцюжок, `refresh`, `showNew`, системне перечитування
+
 `window.ts` (Р9), `readers.ts` і `subsets.ts` (`full` записує курсор межі
 кожної сторінки на завантаженні й `revalidate`; `fetchFull` лишається
 послідовним першим читанням), `writer.ts` (`revalidate` вікна й `full` — keyset кожної
@@ -180,7 +185,8 @@ window`.
 системне перечитування не змінює складу, новий ключ — `hasNewRows`.
 `run-tests unit --filter window` і `--filter writer`.
 
-**Задача 4. `remove`, `purge`, `hide` для слабко утриманих рядків.**
+#### Задача 4 — `remove`, `purge`, `hide` для слабко утриманих рядків
+
 `writer.ts` (`forget` чистить і слабкі множини), `window.ts` (слот ключа без
 рядка показує причину без значень). Готово: видалений іншим виглядом,
 похований чи прибраний ключ знімка — слот без значень на поверненні; `purge`
@@ -191,6 +197,8 @@ window`.
 таймери після `dispose()` нічого не пишуть. `run-tests unit --filter window`.
 
 ### a3 — модельний тест і пам'ять вікна (PR 4, після a2)
+
+#### Задача 4.1 — Модельний тест і пам'ять вікна
 
 **Файли:** `__tests__/model.test.ts` (кроки `loadAfter`, `loadBefore`,
 `setVisibleRange`, плин часу, `goTo`, `refresh`, `showNew`, `remove`, `purge`
@@ -213,7 +221,9 @@ window`.
 
 ### b1 — збирач, лічильник, `known` і маркер (PR 5, після a3)
 
-**Задача 5. Збирач і лінивий `count`.** `store/batcher.ts` (новий),
+#### Задача 5 — Збирач і лінивий `count`
+
+`store/batcher.ts` (новий),
 `source.ts` (Р4: `CorePart`, `CountQuery`, варіант `count` у `CoreReadItem`,
 група транспорту для `count`), `core.ts` (збирач як `ctx.source`; синхронне
 `close()` на початку закриття рантайму, до відкладеного `core.close()`),
@@ -225,7 +235,9 @@ window`.
 запит транспорту; `dispose()` у `commit` з пакетом у черзі — нуль запитів до
 адаптера. `run-tests unit --filter batcher` і `--filter source`.
 
-**Задача 6. `known` і маркер.** `source.ts` (`known` у частинах `keys`,
+#### Задача 6 — `known` і маркер
+
+`source.ts` (`known` у частинах `keys`,
 `card` без ТЧ, сторінок вікна й `full`; перевірку «маркер без `known` —
 `command.internal`» лишити для частин без `known`), `object-store.ts`
 (`applyMarker`), `readers.ts`, `window.ts`, `writer.ts`. Правило `knownFor`:
@@ -239,7 +251,9 @@ window`.
 
 ### b2 — `known` з `include` на сервері, `include` тим самим запитом, бюджети (PR 6, після b1)
 
-**Задача 7. T0/T3: `known` з `include`.** `model/runtime/read.ts`
+#### Задача 7 — T0/T3: `known` з `include`
+
+`model/runtime/read.ts`
 (`knownFormAllowed` пропускає `include`), `model/runtime/envelope.ts` (текст
 відмови), `model/runtime/mapping.ts` і `server/decode.ts` (колонки посилань у
 частковому маркері), `server/read.ts` (усі місця, що спираються на
@@ -251,14 +265,18 @@ window`.
 лишається, маркер з колонками посилань. `run-tests unit --filter read`,
 `--filter envelope`, `run-tests db --filter read-batch`.
 
-**Задача 8. T4: `include` тим самим запитом.** `store/include.ts`,
+#### Задача 8 — T4: `include` тим самим запитом
+
+`store/include.ts`,
 `readers.ts`: перша сторінка й картка просять `include` частиною; рядки
 `included` — перший результат підмножини `keys` цілі тим самим `commit`;
 наступні сторінки дочитують відсутні цілі частиною наступного пакета.
 Готово: `include.test.ts` — відкриття списку з `include` — один запит, власник
 цілей — вигляд, цілі зникають з виглядом. `run-tests unit --filter include`.
 
-**Задача 9. Бюджети.** `data/testing/counting-transport.ts`,
+#### Задача 9 — Бюджети
+
+`data/testing/counting-transport.ts`,
 `data/testing/index.ts`, dev-`exports` `./data/testing` у `package.json` (Р5),
 `__tests__/budgets.test.ts`. Готово за §12: відкриття списку з `include` і
 `count` — 1 запит, відповідь ≤ 1,1 × корисних + 2 КіБ; нова сторінка — ≤ 1;
