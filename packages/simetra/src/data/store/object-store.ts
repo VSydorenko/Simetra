@@ -70,6 +70,13 @@ export interface RowEntry {
   /** `divergent` — the remove came from a read older than the last write (П15). */
   removed?: { epoch: number; divergent: boolean }
   /**
+   * The epoch of the last `hide` of the key while this entry lives (plan
+   * B3-3, Р11). Unlike `stale.hidden`, no read lifts it, and unlike the
+   * `Epochs` mark it is not evicted: the owner's sections read before it
+   * stay stale (`sectionStale`), and a horizon mark is never taken for it.
+   */
+  hiddenAt?: number
+  /**
    * Four `stale` marks, each cleared by its own rule (spec §6.1). While
    * `hidden` is set, the values are hidden: by the eviction horizon (§6.2
    * rule 1) or by `hideKeys` (rights, plan B3-3, Р11). Only a read that
@@ -350,6 +357,8 @@ export function createObjectStore(options: {
       e.stale.hidden = { epoch: epochs.next() }
       tail.add(row.key)
     }
+    // Епоха самої позначки `Epochs` тут невідома: новіша за неї — з запасом.
+    if (rights) e.hiddenAt = epochs.now()
     rows.set(row.key, e)
     if (!lower && !horizon && !rights) return "written"
     tail.add(row.key)
@@ -601,6 +610,7 @@ export function createObjectStore(options: {
         const e = rows.get(key)
         if (e === undefined) continue
         e.stale.hidden = { epoch: at }
+        e.hiddenAt = at
         tail.add(key)
         hiddenKeys.push(key)
       }

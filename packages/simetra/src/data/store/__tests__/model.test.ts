@@ -127,6 +127,12 @@ type Step =
   | { t: "purgeKey"; org: boolean; k: number }
   | { t: "purgeScope"; org: boolean; scope: number }
   | { t: "hide"; org: boolean; k: number }
+  | {
+      t: "hideSection"
+      state: "mounted" | "held" | "flight"
+      then: "none" | "sub" | "preload"
+      evict: boolean
+    }
   | { t: "revalidate"; org: boolean; visibleOnly: boolean }
   | { t: "markStale"; k: number; plus: number }
   | { t: "disconnect"; channel: number; clear: boolean }
@@ -140,7 +146,8 @@ const k = fc.nat(KEYS.length - 1)
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 
 /**
- * Ваги (бриф, крок 1): сума 229 (перемикання епохи — 6, план B1c); `purge` (16 + 14), відсутній рядок і
+ * Ваги (бриф, крок 1): сума 235 (перемикання епохи — 6, план B1c;
+ * `hide` над ТЧ-підмножиною — 6, план B3-3); `purge` (16 + 14), відсутній рядок і
  * застаріла репліка — по 30, тобто по ~13,5 % кроків (частина кроків
  * `answer` порожня, бо в польоті нічого нема, тож серед дійових кроків
  * частка вища, близько 15 %). Самотест тримає насіння, яке знаходить
@@ -224,6 +231,20 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
   {
     weight: 10,
     arbitrary: fc.record({ t: one("hide"), org: fc.boolean(), k }),
+  },
+  // `hide` власника ТЧ (K1) над ТЧ-підмножиною в заданому стані: змонтована,
+  // утримувана без слухачів (`preload`, відписка до звільнення) чи з першим
+  // завантаженням у польоті; далі — спостереження (монтування, `preload`) чи
+  // нічого. `evict` — позначку `hide` K1 витісняють позначки інших ключів
+  // (`tombstonesMax`). Випадкові кроки рідко складають ці стани самі.
+  {
+    weight: 6,
+    arbitrary: fc.record({
+      t: one("hideSection"),
+      state: fc.constantFrom("mounted", "held", "flight"),
+      then: fc.constantFrom("none", "sub", "preload"),
+      evict: fc.boolean(),
+    }),
   },
   {
     weight: 10,
@@ -470,6 +491,25 @@ async function runModel(
       if (known || held.length < LIMITS.viewsMax || spare)
         fail(label, `views-limit with ${held.length} held, spare ${spare}`)
     }
+  }
+
+  /** `preload` вигляду; відмова — лише за межею без вільного утримання (П16). */
+  const preload = (v: number, short: boolean, label: string) => {
+    let promise: Promise<void> | undefined
+    try {
+      promise = core.preload(SPECS[v]!, short ? { ttlMs: 500 } : undefined)
+    } catch (error) {
+      if (!(error instanceof DataError) || error.code !== "data.views-limit")
+        throw error
+      const held = [...internals.registry.subsets()]
+      if (
+        held.length < LIMITS.viewsMax ||
+        held.some((x) => x.listeners.size === 0)
+      )
+        fail(label, "preload refused with a spare hold")
+    }
+    promise?.catch((error: unknown) => errors.push(error))
+    if (promise !== undefined && v === 4) preloadedSection = true
   }
 
   /** Склад видимих списків і покоління їхніх завантажень. */
@@ -773,7 +813,14 @@ async function runModel(
     // Сесія після межі відкинутих відповідей не читає (Р12); власник
     // `removed` рядків не показує, і читання ТЧ їх не поверне.
     if (inspect.versionEpochs().unavailable) return
-    if (objectOf(TASK).rows.get(spec.owner)?.removed !== undefined) return
+    const header = objectOf(TASK).rows.get(spec.owner)
+    if (header?.removed !== undefined) return
+    // Шапку сховано горизонтом, а не `hide` (`hiddenAt` немає): позначку
+    // `hide` ключа витіснило до вставки шапки, і ядро не відрізнить її від
+    // горизонту — ТЧ іде за перечитуванням шапки хвостом (Р36). Безпеку
+    // (рядки ТЧ лише з читання після `hide`) перевіряє `checkSnapshot`.
+    if (header?.stale.hidden !== undefined && header.hiddenAt === undefined)
+      return
     const reread = fake.log
       .slice(barrier)
       .some(
@@ -992,31 +1039,10 @@ async function runModel(
           late.push(fake.take((r) => r === read))
         break
       }
-      case "preload": {
+      case "preload":
         userViews = new Set([s.v])
-        let promise: Promise<void> | undefined
-        try {
-          promise = core.preload(
-            SPECS[s.v]!,
-            s.short ? { ttlMs: 500 } : undefined
-          )
-        } catch (error) {
-          if (
-            !(error instanceof DataError) ||
-            error.code !== "data.views-limit"
-          )
-            throw error
-          const held = [...internals.registry.subsets()]
-          if (
-            held.length < LIMITS.viewsMax ||
-            held.some((x) => x.listeners.size === 0)
-          )
-            fail(label, "preload refused with a spare hold")
-        }
-        promise?.catch((error: unknown) => errors.push(error))
-        if (promise !== undefined && s.v === 4) preloadedSection = true
+        preload(s.v, s.short, label)
         break
-      }
       case "refresh":
         userViews = new Set([s.v])
         if (s.showNew) handles[s.v]!.showNew()
@@ -1170,6 +1196,49 @@ async function runModel(
         commit((w) => w.hide(object, [target]))
         if (closed !== undefined) break
         hideBarrier.set(id(object, target), stepStart)
+        break
+      }
+      case "hideSection": {
+        if (closed !== undefined) break
+        const section = SPECS[4]!
+        userViews = new Set([4])
+        if (s.state === "mounted") subscribe(4, label)
+        else if (s.state === "held") {
+          // Утримувана без слухачів і завантажена: відписка до звільнення
+          // чи `preload` з відповіддю на його читання.
+          if (subs[4] !== undefined) {
+            subs[4]()
+            subs[4] = undefined
+          } else {
+            preload(4, false, label)
+            preloadedSection = false
+            await flush()
+            for (const read of fake.pending.filter(
+              (r) => fake.log.indexOf(r.log) >= stepStart
+            )) {
+              fake.take((r) => r === read).answer()
+              record(read)
+            }
+          }
+        } else {
+          // Завантаження в польоті під час `hide`: нове утримання чи `refresh`.
+          const held = internals.registry.find(section)
+          if (held === undefined) preload(4, false, label)
+          else if (held.flight === undefined) handles[4]!.refresh()
+          preloadedSection = false
+        }
+        await flush()
+        // Бар'єр — після читань, які крок надіслав до `hide`.
+        const barrier = fake.log.length
+        const hidden = s.evict ? [K1, K2, K3, K4] : [K1]
+        for (const k of hidden) {
+          commit((w) => w.hide(TASK, [k]))
+          hideBarrier.set(id(TASK, k), barrier)
+        }
+        if (closed !== undefined) break
+        await flush()
+        if (s.then === "sub") subscribe(4, label)
+        else if (s.then === "preload") preload(4, false, label)
         break
       }
       case "revalidate":

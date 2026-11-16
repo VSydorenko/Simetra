@@ -301,13 +301,16 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   }
 
   /**
-   * The owner was hidden by `hide` after `epoch`: the mark of the key
-   * outlives its store entry. The horizon mark of a header (`stale.hidden`
-   * without `hide`) is not one: the tail re-read of the header resolves it,
-   * and the section follows the header revision (Р36).
+   * The owner was hidden by `hide` after `epoch`: `hiddenAt` of its header,
+   * or the mark of the key, which outlives the entry. A horizon mark is not
+   * one: the tail re-read of the header resolves it, and the section follows
+   * the header revision (Р36).
    */
   function hiddenAfter(o: ObjectState, owner: Key, epoch: number): boolean {
-    return session.epochs.hiddenSince(keyId(o.name, owner), epoch)
+    return (
+      (o.rows.get(owner)?.hiddenAt ?? -1) > epoch ||
+      session.epochs.hiddenSince(keyId(o.name, owner), epoch)
+    )
   }
 
   /**
