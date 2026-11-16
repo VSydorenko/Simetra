@@ -131,10 +131,21 @@ function notNullSites(p: BackfillInput): Site[] {
         if (p.promotion?.dataColumns.has(key) === true) continue
         count = { count: "nulls" }
       } else if (at.generated) {
-        count = {
-          count: "expression",
-          expression: generatedOf(p.desired, table, at.column),
-        }
+        const expression = generatedOf(p.desired, table, at.column)
+        // Вираз над колонкою, якої на цілі ще немає (її додає той самий план),
+        // план не обчислить: таку колонку рахує лише сторож перед кроком,
+        // коли попередні кроки вже виконано
+        const reads = expressionColumns(expression, p.parse)
+        if (
+          reads === undefined ||
+          reads.some(
+            (c) =>
+              !table.columns.some((t) => t.name === c) ||
+              created.columns.has(columnKey(table.schema, table.name, c))
+          )
+        )
+          continue
+        count = { count: "expression", expression }
       } else if (at.filled) continue
       else count = { count: "rows" }
       seen.add(key)
@@ -188,6 +199,24 @@ function alterOf(
   if (relation.schemaname !== undefined && relation.schemaname !== table.schema)
     return undefined
   return cmds ?? []
+}
+
+/** Імена колонок, які додають оператори `ALTER TABLE … ADD COLUMN`. */
+function addedColumns(stmts: readonly Node[]): string[] {
+  return stmts.flatMap((stmt) =>
+    "AlterTableStmt" in stmt
+      ? (stmt.AlterTableStmt.cmds ?? []).flatMap((node) => {
+          if (!("AlterTableCmd" in node)) return []
+          const { subtype, def } = node.AlterTableCmd
+          return subtype === "AT_AddColumn" &&
+            def !== undefined &&
+            "ColumnDef" in def &&
+            def.ColumnDef.colname !== undefined
+            ? [def.ColumnDef.colname]
+            : []
+        })
+      : []
+  )
 }
 
 /** Підкоманди `ALTER TABLE` дії над колонкою. */
@@ -367,6 +396,18 @@ function columnRefs(node: unknown, out: string[] = []): string[] {
     for (const v of Object.values(node)) columnRefs(v, out)
   }
   return out
+}
+
+/**
+ * Колонки, які читає вираз (`undefined` — не розбирається): з дерева
+ * розбору, а не з тексту.
+ */
+function expressionColumns(
+  expression: string,
+  parse: SqlParser
+): string[] | undefined {
+  const result = parse(`SELECT ${expression}`)
+  return result.ok ? columnRefs(result.statements) : undefined
 }
 
 /**
@@ -1138,25 +1179,28 @@ export function withNotNullChecks(
     const filled: Fill[] = []
     for (let i = index - 1; i >= 0 && steps[i]!.backfill !== undefined; i--)
       filled.push(steps[i]!.backfill!)
-    const columns = notNullColumns(result.statements.map((s) => s.stmt))
+    const stmts = result.statements.map((s) => s.stmt)
+    // Колонки, які додає сам крок: до кроку їх ще немає, тож вираз над ними
+    // сторож не обчислить, а крок однаково дасть їм значення
+    const added = new Set(addedColumns(stmts))
+    const columns = notNullColumns(stmts)
       .filter((c) => c.via === "setNotNull" || c.generated || !c.filled)
-      .map((c): NotNullCheck => {
+      .map((c): NotNullCheck | undefined => {
         const schema =
           c.schema ?? step.lockedTables.find((t) => t.name === c.table)?.schema
         if (schema === undefined)
           throw new Error(`plan step ${step.id}: no schema for ${c.table}`)
         const table = { schema, name: c.table }
-        const count: NotNullCount =
-          c.via === "setNotNull"
-            ? { count: "nulls" }
-            : c.generated
-              ? {
-                  count: "expression",
-                  expression: generatedOf(desired, table, c.column),
-                }
-              : { count: "rows" }
-        return { table, column: c.column, ...count }
+        if (c.via === "setNotNull")
+          return { table, column: c.column, count: "nulls" }
+        if (!c.generated) return { table, column: c.column, count: "rows" }
+        const expression = generatedOf(desired, table, c.column)
+        const reads = expressionColumns(expression, parse)
+        if (reads === undefined || reads.some((r) => added.has(r)))
+          return undefined
+        return { table, column: c.column, count: "expression", expression }
       })
+      .filter((c): c is NotNullCheck => c !== undefined)
       .filter(
         (c) =>
           !filled.some(

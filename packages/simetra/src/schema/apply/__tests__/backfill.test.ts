@@ -594,6 +594,30 @@ describe("planBackfills", () => {
         ...input({ actions: [addGenerated], desired: generated }),
         rows: () => 0,
       }).refusals
+    ).toEqual([]) // Вираз над колонкою, яку додає той самий план: на цілі її ще немає,
+    // тож план не рахує, а лишає сторожеві перед кроком
+    const withQty = model(
+      table([
+        column("id"),
+        column("note"),
+        column("code"),
+        column("qty", { notNull: true, default: "0" }),
+        column("g", { notNull: true, generated: { expression: "(qty * 2)" } }),
+      ])
+    )
+    const addQty = action(
+      'ALTER TABLE "app"."items" ADD COLUMN "qty" integer NOT NULL DEFAULT 0',
+      {
+        produced: [
+          { kind: "column", schema: "app", table: "items", name: "qty" },
+        ],
+      }
+    )
+    const addG = action(
+      'ALTER TABLE "app"."items" ADD COLUMN "g" integer GENERATED ALWAYS AS ((qty * 2)) STORED NOT NULL'
+    )
+    expect(
+      backfillTargets(input({ actions: [addQty, addG], desired: withQty }))
     ).toEqual([])
   })
 
@@ -1419,5 +1443,30 @@ describe("withNotNullChecks", () => {
       // Default дає значення кожному рядку: перевіряти нічого
       undefined,
     ])
+  })
+
+  it("leaves no expression check when the step adds the column the expression reads", () => {
+    // До кроку колонки `qty` ще немає: сторож її не обчислить
+    const desired = model(
+      table([
+        column("id"),
+        column("qty", { notNull: true, default: "0" }),
+        column("g", { notNull: true, generated: { expression: "(qty * 2)" } }),
+      ])
+    )
+    const steps = withNotNullChecks(
+      classifySteps(
+        [
+          action(
+            'ALTER TABLE "app"."items" ADD COLUMN "qty" integer NOT NULL DEFAULT 0, ADD COLUMN "g" integer GENERATED ALWAYS AS ((qty * 2)) STORED NOT NULL'
+          ),
+        ],
+        SOURCE,
+        parse
+      ),
+      parse,
+      desired
+    )
+    expect(steps.map((s) => s.notNull)).toEqual([undefined])
   })
 })

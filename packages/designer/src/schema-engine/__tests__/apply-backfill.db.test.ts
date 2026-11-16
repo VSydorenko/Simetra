@@ -515,6 +515,46 @@ describe.concurrent("apply backfill", () => {
       })
     })
 
+    it("applies a generated column over a column the same plan adds", async () => {
+      // Вираз читає `qty`, якої на цілі ще немає: план не рахує його, а
+      // сторож не стоїть там, де колонку додає той самий крок
+      const withQty = () => {
+        const t = notes() as unknown as { columns: Json[] }
+        t.columns.push(
+          {
+            id: uuid(9208),
+            name: "qty",
+            physicalName: "qty",
+            type: "Integer",
+            notNull: true,
+            default: "0",
+          },
+          {
+            id: uuid(9209),
+            name: "q2",
+            physicalName: "q2",
+            type: "Integer",
+            notNull: true,
+            generated: { expression: "(qty * 2)" },
+          }
+        )
+        return t
+      }
+      const before = await compiled({ [NOTES]: notes() })
+      const after = await compiled({ [NOTES]: withQty() })
+      await inTarget(EMPTY, async (url) => {
+        await establish(url, before)
+        await query(url, rows("a"))
+        const artifact = planned(await plan(url, after))
+        expect(await apply(url, artifact, after)).toMatchObject({
+          status: "committed",
+        })
+        expect(
+          await query<{ q2: number }>(url, "select q2 from app.notes")
+        ).toEqual([{ q2: 0 }])
+      })
+    })
+
     it("refuses rows that appeared after the plan before the step", async () => {
       const { before, after } = await models()
       await inTarget(EMPTY, async (url) => {
