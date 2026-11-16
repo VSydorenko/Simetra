@@ -50,6 +50,15 @@ export interface WindowState {
   readonly atStart: boolean
   /** The last page generation given out. */
   readonly generation: number
+  /**
+   * The server position a direction has read up to, set only when a read
+   * brought nothing the window did not already hold: the next read of that
+   * direction continues from it instead of repeating the same request.
+   */
+  readonly frontier: {
+    readonly after?: WindowCursor
+    readonly before?: WindowCursor
+  }
 }
 
 /** The window before its first page. */
@@ -59,6 +68,7 @@ export const EMPTY_WINDOW: WindowState = {
   target: "start",
   atStart: true,
   generation: 0,
+  frontier: {},
 }
 
 /** The window without `dropped` keys (a purge); a page left empty goes. */
@@ -139,7 +149,7 @@ export interface FetchedPage {
 export async function fetchPage(
   source: CoreSource,
   form: Form,
-  request: { direction: "after" | "before"; cursor?: WindowCursor },
+  request: { direction: "after" | "before"; cursor?: WindowCursor | undefined },
   token: GenerationToken
 ): Promise<FetchedPage | undefined> {
   const o = form.object

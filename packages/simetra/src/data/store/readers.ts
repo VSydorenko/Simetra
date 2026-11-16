@@ -481,7 +481,22 @@ function writePage(
     : page.position === "append"
       ? [...prev.pages, ...added]
       : [...added, ...prev.pages]
+  // Прочитане, що нічого не додало (усі рядки вже у вікні), зсуває курсор
+  // напрямку на серверну позицію, інакше наступне читання повторило б запит.
+  const direction = page.position === "prepend" ? "before" : "after"
+  const orderBy = (form.spec as Extract<ViewSpec, { kind: "full" | "window" }>)
+    .orderBy
+  const edge = direction === "after" ? page.rows.at(-1) : page.rows[0]
+  const frontier = replace
+    ? {}
+    : keys.length === 0 && edge !== undefined
+      ? {
+          ...prev.frontier,
+          [direction]: cursorOf(orderBy ?? [], o.entry.keyName, edge.values),
+        }
+      : { ...prev.frontier, [direction]: undefined }
   s.window = {
+    frontier,
     pages,
     chain: replace ? prev.chain + 1 : prev.chain,
     target: replace ? "start" : prev.target,
@@ -555,7 +570,7 @@ export async function readWindowMore(
   readEpoch: number,
   token: GenerationToken,
   direction: "after" | "before",
-  cursor: WindowCursor
+  cursor: WindowCursor | undefined
 ): Promise<Write> {
   const { form } = s
   const fetched = await fetchPage(
@@ -575,12 +590,16 @@ export async function readWindowMore(
       included,
       position: direction === "after" ? "append" : "prepend",
       lower: (first) =>
-        direction === "after" || first === undefined
-          ? { kind: "after", cursor }
-          : {
-              kind: "from",
-              cursor: cursorOf(spec.orderBy ?? [], keyName, first.values),
-            },
+        first === undefined
+          ? { kind: "start" }
+          : direction === "after"
+            ? cursor === undefined
+              ? { kind: "start" }
+              : { kind: "after", cursor }
+            : {
+                kind: "from",
+                cursor: cursorOf(spec.orderBy ?? [], keyName, first.values),
+              },
       end: fetched.end,
       readEpoch,
     })

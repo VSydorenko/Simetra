@@ -310,19 +310,28 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   function edgeCursor(
     s: Subset,
     direction: "after" | "before"
-  ): WindowCursor | undefined {
+  ): { cursor: WindowCursor | undefined } | undefined {
     if (s.window === undefined) return undefined
     const o = s.form.object
     const spec = s.form.spec
     if (spec.kind !== "full" && spec.kind !== "window") return undefined
+    const frontier = s.window.frontier[direction]
+    if (frontier !== undefined) return { cursor: frontier }
     const keys = keysOfPages(s.window.pages)
+    // Окне без рядків, що не дійшло до кінця (фільтр нічого не знайшов у
+    // першому читанні, чи сторінки спорожнив purge), іде далі від початку
+    // порядку: сторінка читає серверний фільтр.
+    if (keys.length === 0)
+      return direction === "after" ? { cursor: undefined } : undefined
     if (direction === "after") keys.reverse()
     for (const key of keys) {
       const e = o.rows.get(key)
       const values =
         e === undefined || e.removed !== undefined ? undefined : visibleRow(e)
       if (values !== undefined)
-        return cursorOf(spec.orderBy ?? [], o.entry.keyName, values)
+        return {
+          cursor: cursorOf(spec.orderBy ?? [], o.entry.keyName, values),
+        }
     }
     return undefined
   }
@@ -338,8 +347,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     if (w === undefined || !s.alive || isClosed() || s.purged) return
     if (direction === "after" ? s.atEnd : w.atStart) return
     if (s.paging.has(direction)) return
-    const cursor = edgeCursor(s, direction)
-    if (cursor === undefined) return
+    const edge = edgeCursor(s, direction)
+    if (edge === undefined) return
+    const { cursor } = edge
     s.paging.add(direction)
     const chain = w.chain
     const token = session.childToken(() => s.alive && s.window?.chain === chain)

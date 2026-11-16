@@ -323,6 +323,37 @@ describe("window", () => {
     expect(inspect.violations()).toEqual([])
   })
 
+  it("moves on when a fetched page adds nothing the window did not hold", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 250)
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    handle.loadAfter()
+    await settle()
+    // Рядки 101-200 вікно вже тримає, а останньою сторінкою лишається перша.
+    const s = subsetOf(core)
+    const w = s.window!
+    s.window = { ...w, pages: [w.pages[0]!] }
+    s.layout = [...w.pages[0]!.keys]
+    s.layoutSet = new Set(keysIn(handle.getSnapshot()))
+    const before = pageReads(fake).length
+    handle.loadAfter()
+    await settle()
+    expect(pageReads(fake)).toHaveLength(before + 1)
+    handle.loadAfter()
+    await settle()
+    const reads = pageReads(fake).slice(before)
+    expect(reads).toHaveLength(2)
+    expect(JSON.stringify(reads[1]!.query)).not.toBe(
+      JSON.stringify(reads[0]!.query)
+    )
+    expect(keysIn(handle.getSnapshot())).toEqual([
+      ...range(1, WINDOW_PAGE),
+      ...range(201, 250),
+    ])
+  })
+
   it("reads backwards with the mirrored order of a sorted window", async () => {
     const { core, fake } = setup()
     for (let n = 1; n <= 30; n++)
@@ -522,6 +553,31 @@ describe("a full over its limit", () => {
     const read = fake.log[before]!.query as ReadQuery & { where?: unknown }
     // Продовження читає фільтр на сервері: `full` відфільтровував локально.
     expect(JSON.stringify(read.where)).toContain('"title"')
+    expect(inspect.violations()).toEqual([])
+  })
+
+  it("reaches matching rows when the filter matches none of the first fullLimit rows", async () => {
+    const { core, fake, inspect } = setup({ limits: { fullLimit: 120 } })
+    for (let n = 1; n <= 250; n++)
+      fake.insert(TASK, taskValues(n, { title: "x" }))
+    for (let n = 251; n <= 300; n++)
+      fake.insert(TASK, taskValues(n, { title: "y" }))
+    const handle = core.view({
+      kind: "full",
+      object: TASK,
+      where: { attribute: "title", op: "eq", value: "y" },
+    })
+    watch(handle)
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({
+      strategy: "window",
+      truncated: true,
+      atEnd: false,
+    })
+    expect(handle.getSnapshot().rows).toHaveLength(0)
+    handle.loadAfter()
+    await settle()
+    expect(keysIn(handle.getSnapshot())).toEqual(range(251, 300))
     expect(inspect.violations()).toEqual([])
   })
 
