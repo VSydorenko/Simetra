@@ -284,8 +284,11 @@ export type { RightsOrphans } from "./rights-sources"
 export {
   buildPlan,
   checkOwnerMembership,
+  hasIdentityTriggers,
+  identityTableRefusal,
   numberingNotGenerated,
   providerTriggerConflicts,
+  type IdentityTableFacts,
   type OwnerRefusalCode,
   type PlanDatabases,
   type PlanOutcome,

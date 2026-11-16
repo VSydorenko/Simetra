@@ -12,7 +12,11 @@ import {
   platformFunctionSignatures,
   type PromotionRecord,
 } from "simetra/compiler"
-import { PLATFORM_ROLES, type CatalogModel } from "simetra/model"
+import {
+  PLATFORM_ROLES,
+  PROVIDER_IDENTITY_SOURCES,
+  type CatalogModel,
+} from "simetra/model"
 import {
   APPLY_STATE_FORMAT,
   FINGERPRINT_SECTIONS,
@@ -55,6 +59,7 @@ import {
 } from "../../../compiler/__tests__/fixtures/promotion"
 import { uuid } from "../../../compiler/__tests__/helpers"
 import { applyDiagnostic } from "../diagnostic"
+import type { IdentityTableFacts } from "../plan"
 
 /**
  * Конвеєр плану на фейковому порті — лише те, що не потребує справжньої
@@ -196,6 +201,73 @@ describe("buildPlan", () => {
       expect(queries.filter((q) => q.includes("AS bypassrls"))).toHaveLength(1)
     }
   )
+
+  // Гейт таблиці ідентичності (Р5 ПГ-3) — у тій самій читальній транзакції,
+  // що й гейт власника: відмова до стану, платформних ролей і будь-якої тіні
+  it("refuses a plan without the identity table before any state read or platform-role check", async () => {
+    const model = (await compile(policyDomain(adminRoles()))).model!
+    const queries: string[] = []
+    const target = await fakeTarget(model, {
+      notCopies: [],
+      queries,
+      identity: { usage: true, exists: false, trigger: false, triggers: [] },
+    })
+    const outcome = await buildPlan(
+      fakeEngine([]),
+      { reader: target.reader, scratch: emptyScratch },
+      model,
+      { target: { url: "postgres://target" } },
+      []
+    )
+    expect(outcome).toEqual({
+      status: "refused",
+      diagnostics: [
+        expect.objectContaining({
+          code: "plan.identity-table-missing",
+          params: {
+            table: expect.stringContaining(
+              PROVIDER_IDENTITY_SOURCES.supabase.table.name
+            ),
+            reason: "table",
+          },
+        }),
+      ],
+    })
+    expect(queries.at(-1)).toContain('AS "triggers"')
+    // Гейт власника — раніше: роль без BYPASSRLS не дійшла б і до фактів
+    expect(queries.findIndex((q) => q.includes("AS bypassrls"))).toBeLessThan(
+      queries.length - 1
+    )
+  })
+
+  it("reads no identity facts for a model without provision triggers", async () => {
+    const compiled = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Items/Items.meta.json": catalog("Items"),
+      })
+    )
+    expectClean(compiled)
+    const model = compiled.model!
+    const queries: string[] = []
+    const target = await fakeTarget(model, {
+      notCopies: [],
+      queries,
+      // Відмова, якби факти прочитали: тест бачить і запит, і її відсутність
+      identity: { usage: false, exists: false, trigger: false, triggers: [] },
+    })
+    const outcome = await buildPlan(
+      shadowFailing(),
+      { reader: target.reader, scratch: emptyScratch },
+      model,
+      { target: { url: "postgres://target" } },
+      []
+    )
+    expect(outcome.diagnostics.map((d) => d.code)).not.toContain(
+      "plan.identity-table-missing"
+    )
+    expect(queries.some((q) => q.includes('AS "triggers"'))).toBe(false)
+  })
 
   it("hands the engine the hashed effects function of a long table and no truncated one", async () => {
     // До хешу ім'я функції ефектів довгої таблиці було іменем її
@@ -722,6 +794,8 @@ async function fakeTarget(
     owner?: { bypassrls: boolean; superuser: boolean } | "none"
     /** Усі запити, які бачить фейк, — у порядку надходження. */
     queries?: string[]
+    /** Факти таблиці ідентичності; за замовчуванням повні (гейт проходить). */
+    identity?: IdentityTableFacts
     /**
      * Таблиці прийнятих джерел прав: доступ ролі застосування й ключ ролі,
      * якого не оголошує жодна роль, у кожному джерелі призначень.
@@ -785,6 +859,15 @@ async function fakeTarget(
       return o.owner === "none"
         ? []
         : [o.owner ?? { bypassrls: true, superuser: false }]
+    if (sql.includes('AS "triggers"'))
+      return [
+        o.identity ?? {
+          usage: true,
+          exists: true,
+          trigger: true,
+          triggers: [],
+        },
+      ]
     if (sql.includes("AS marker, to_regclass"))
       return [{ marker: true, ledger: true }]
     if (sql.includes("to_jsonb(m)")) return [{ row: JSON.stringify(marker) }]

@@ -34,6 +34,25 @@ function hintOf<K extends string>(
 }
 
 /**
+ * Поради відмови таблиці ідентичності (ПГ-3, Р5) за причиною: таблиці немає —
+ * її створює міграція провайдера, а гранти на неї дає повторний `roles`;
+ * немає `USAGE` чи `TRIGGER` — гранти дає `roles` від суперкористувача.
+ */
+const IDENTITY_TABLE_HINTS: Record<
+  "table" | "privilege",
+  { en: string; uk: string }
+> = {
+  table: {
+    en: "Nothing was planned or written. Run the Better Auth migration as the provider login role, then `simetra roles` again, and plan again.",
+    uk: "Нічого не сплановано й не записано. Запустіть міграцію Better Auth від ролі входу провайдера, потім знову `simetra roles`, і сплануйте знову.",
+  },
+  privilege: {
+    en: "Nothing was planned or written. Run `simetra roles` again as superuser, and plan again.",
+    uk: "Нічого не сплановано й не записано. Запустіть `simetra roles` знову від суперкористувача й сплануйте знову.",
+  },
+}
+
+/**
  * Поради цілі FK прийнятої таблиці (спека прав §4.7) за причиною: ціль-вид
  * називає ключ (`key`), ціль `CustomTable` — колонки.
  */
@@ -4435,6 +4454,20 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Nothing was planned or created. Run the command without the shadow server variable.",
       uk: "Нічого не сплановано й не створено. Запустіть команду без змінної сервера тіней.",
+    },
+  },
+  "plan.identity-table-missing": {
+    en: (p) =>
+      p.reason === "privilege"
+        ? `The connected role cannot place the provision triggers on the identity table ${p.table}: it needs USAGE on its schema and TRIGGER on the table`
+        : `The identity table ${p.table} does not exist, so the provision triggers of the model have no table to be placed on`,
+    uk: (p) =>
+      p.reason === "privilege"
+        ? `Підключена роль не може поставити тригери провізії на таблицю ідентичності ${p.table}: їй потрібні USAGE на схему й TRIGGER на таблицю`
+        : `Таблиці ідентичності ${p.table} немає, тож тригерам провізії моделі ніде стати`,
+    hint: {
+      en: (p) => hintOf(IDENTITY_TABLE_HINTS, p, "table").en,
+      uk: (p) => hintOf(IDENTITY_TABLE_HINTS, p, "table").uk,
     },
   },
   "plan.type-guard-unsupported": {

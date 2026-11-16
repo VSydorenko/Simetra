@@ -322,6 +322,7 @@ export const COMPILER_RULES = [
   "plan.platform-role-shape",
   "plan.owner-not-bypassrls",
   "plan.shadow-base-unsupported",
+  "plan.identity-table-missing",
   "plan.type-guard-unsupported",
   "plan.type-change-dependent",
   "plan.promotion-record-missing",

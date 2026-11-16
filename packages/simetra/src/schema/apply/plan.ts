@@ -13,6 +13,7 @@ import {
 import {
   diffCatalogModels,
   PROVIDER_API_ROLES,
+  PROVIDER_IDENTITY_SOURCES,
   quoteIdent,
   type CatalogModel,
 } from "simetra/model"
@@ -101,7 +102,12 @@ import {
 } from "./locks"
 import { checkOwnerAttributes } from "./owner-gate"
 import { checkPlatformRoles } from "./platform-roles"
-import { ApplyConnectionLost, ApplyDbError, type ApplyDatabase } from "./port"
+import {
+  ApplyConnectionLost,
+  ApplyDbError,
+  type ApplyDatabase,
+  type ApplyTransaction,
+} from "./port"
 import {
   accessChanges,
   adoptedReplacements,
@@ -492,6 +498,100 @@ export function providerTriggerConflicts(p: {
 }
 
 /**
+ * Whether the desired state places provision triggers on the identity table
+ * `table`: a platform-layer trigger unit on it. Only then does the plan need
+ * the table and the `TRIGGER` grant on it (decision Р5 of plan ПГ-3).
+ */
+export function hasIdentityTriggers(
+  units: readonly SqlUnit[],
+  table: { schema: string; name: string }
+): boolean {
+  const prefix = `trigger:${table.schema}.${table.name}.`
+  return units.some(
+    (u) =>
+      u.class === "trigger" &&
+      u.generator === "platformLayer" &&
+      u.identity.startsWith(prefix)
+  )
+}
+
+/**
+ * Facts of the identity table for the connected role. Without the schema
+ * both `usage` and `exists` are `false`. `triggers` names the existing
+ * non-internal triggers of the table, for the plan report.
+ */
+export interface IdentityTableFacts {
+  usage: boolean
+  exists: boolean
+  trigger: boolean
+  triggers: string[]
+}
+
+/**
+ * Refusal of a plan whose provision triggers cannot be placed (decision Р5
+ * of plan ПГ-3), in both profiles. A missing table (or schema) comes first:
+ * the provider migration creates it, and only then can grants on it exist.
+ * `table` is the display name of the identity table.
+ */
+export function identityTableRefusal(
+  facts: IdentityTableFacts,
+  table: string
+): EngineDiagnostic | undefined {
+  if (!facts.exists)
+    return applyDiagnostic("plan.identity-table-missing", "error", {
+      table,
+      reason: "table",
+    })
+  return facts.usage && facts.trigger
+    ? undefined
+    : applyDiagnostic("plan.identity-table-missing", "error", {
+        table,
+        reason: "privilege",
+      })
+}
+
+/**
+ * Факти таблиці ідентичності одним запитом лише до каталогу. Схема й таблиця
+ * шукаються за іменами в `pg_namespace`/`pg_class`, а привілеї — за oid:
+ * `has_schema_privilege` за іменем відсутньої схеми кидає `3F000`, а
+ * `to_regclass` без `USAGE` на схему — `42501`, і кожна така помилка
+ * зламала б усю читальну транзакцію плану замість відмови. Функції за oid
+ * на відсутньому об'єкті дають `NULL`, тож `COALESCE` робить його `false`.
+ * Каталог читається без `USAGE`, тож `exists` правдивий і без нього.
+ */
+async function readIdentityTableFacts(
+  tx: ApplyTransaction,
+  table: { schema: string; name: string }
+): Promise<IdentityTableFacts> {
+  const [row] = await tx.query<{
+    usage: boolean
+    exists: boolean
+    trigger: boolean
+    triggers: string[]
+  }>(
+    [
+      "SELECT COALESCE(pg_catalog.has_schema_privilege(current_user, n.oid, 'USAGE'), false) AS \"usage\",",
+      '  c.oid IS NOT NULL AS "exists",',
+      "  COALESCE(pg_catalog.has_table_privilege(current_user, c.oid, 'TRIGGER'), false) AS \"trigger\",",
+      "  COALESCE((SELECT pg_catalog.array_agg(t.tgname::text ORDER BY t.tgname)",
+      "    FROM pg_catalog.pg_trigger t WHERE t.tgrelid = c.oid AND NOT t.tgisinternal),",
+      "    '{}'::text[]) AS \"triggers\"",
+      "FROM (SELECT $1::text AS nspname, $2::text AS relname) k",
+      "LEFT JOIN pg_catalog.pg_namespace n ON n.nspname = k.nspname",
+      "LEFT JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = k.relname",
+    ].join("\n"),
+    [table.schema, table.name]
+  )
+  if (row === undefined) throw new Error("identity table facts returned no row")
+  return {
+    usage: row.usage,
+    exists: row.exists,
+    trigger: row.trigger,
+    triggers: row.triggers,
+  }
+}
+
+/**
  * Нумерація першим записом, якої платформа ще не генерує (спека промоції
  * §9.2): лічильників немає, тож номер лишиться порожнім. Попередження —
  * лише там, де таблиця з'являється вперше чи переходить у вид промоцією:
@@ -570,6 +670,7 @@ export async function buildPlan(
   // того самого моменту, що й ланцюжок. Сервер, старіший за мінімум
   // платформи, — відмова до версійно залежних читань (`readServerFacts` на
   // Postgres 16 упав би сирим `42703`)
+  const identityTable = PROVIDER_IDENTITY_SOURCES[desired.scope.provider].table
   const read = await dbs.reader.transaction(
     o.target,
     "rollback",
@@ -581,6 +682,17 @@ export async function buildPlan(
       const ownerGate = await checkOwnerAttributes(tx)
       if (ownerGate !== undefined)
         return { ok: false as const, unsupported: ownerGate }
+      // Р5 ПГ-3: тригерам провізії потрібні таблиця ідентичності й `TRIGGER`
+      // на неї — відмова з порадою до будь-якого кроку, а не сира помилка
+      // тіні чи застосування. Лише коли бажаний стан ці тригери має
+      if (hasIdentityTriggers(model.sqlUnits, identityTable)) {
+        const identityGate = identityTableRefusal(
+          await readIdentityTableFacts(tx, identityTable),
+          `${quoteIdent(identityTable.schema)}.${quoteIdent(identityTable.name)}`
+        )
+        if (identityGate !== undefined)
+          return { ok: false as const, unsupported: identityGate }
+      }
       return {
         ok: true as const,
         state: await readApplyState(tx),

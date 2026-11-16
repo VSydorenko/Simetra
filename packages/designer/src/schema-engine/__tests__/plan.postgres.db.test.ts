@@ -1,6 +1,7 @@
 import { withDatabaseName } from "@supabase/pg-delta"
 import pg from "pg"
 import { canonicalSnapshot, compile } from "simetra/compiler"
+import { quoteIdent } from "simetra/model"
 import {
   buildPlan,
   ensurePostgresCluster,
@@ -174,5 +175,103 @@ describe("plan and apply on the postgres profile", () => {
       expect(clone.value.mode).toBe("installed")
       expect(clone.value.users).toBe(0)
     }
+  })
+})
+
+describe("identity table gate on the postgres profile", () => {
+  // Свій набір: ціль без міграції Better Auth і з відкликаними грантами,
+  // а набір сценарію вище мусить лишитися повним
+  const gate: PostgresClusterSet = taggedClusterSet("idgate")
+  const gateDb = (): string => withDatabaseName(superuserUrl, gate.database)
+  const identity = `${quoteIdent(gate.identity.schema)}.${quoteIdent(gate.identity.name)}`
+  const gateRoles = async () => {
+    const result = await ensurePostgresCluster(
+      writer,
+      {
+        maintenance: { url: withDatabaseName(superuserUrl, "postgres") },
+        target: { url: gateDb() },
+        template: { url: withDatabaseName(superuserUrl, gate.template) },
+      },
+      gate
+    )
+    if (!result.ok)
+      throw new Error(`roles refused: ${result.error.map((d) => d.code)}`)
+  }
+
+  beforeAll(async () => {
+    await gateRoles()
+    await setTestPasswords(gate)
+  })
+
+  afterAll(() => dropTaggedCluster(gate))
+
+  const refusalOf = async (model: Awaited<ReturnType<typeof modelOf>>) => {
+    const outcome = await buildPlan(
+      engine,
+      dbs,
+      model,
+      {
+        target: { url: roleUrl(gate, gate.owner) },
+        shadowTemplate: gate.template,
+      },
+      []
+    )
+    // Жодного кроку: відмова без артефакту, і ціль не отримала ні стану, ні
+    // ledger
+    await admin(gateDb(), async (c) => {
+      const found = await c.query<{ found: string | null }>(
+        "select to_regclass('simetra.marker')::text as found"
+      )
+      expect(found.rows[0]?.found).toBeNull()
+    })
+    return outcome
+  }
+
+  const refused = (reason: "table" | "privilege") => ({
+    status: "refused",
+    diagnostics: [
+      expect.objectContaining({
+        code: "plan.identity-table-missing",
+        severity: "error",
+        params: { table: identity, reason },
+      }),
+    ],
+  })
+
+  // Один сценарій: кожен стан цілі будується з попереднього (схема без
+  // таблиці, без схеми, таблиця без TRIGGER, без USAGE)
+  it("refuses a plan without the identity table or its grants, before any step", async () => {
+    const model = await modelOf()
+
+    // Ціль без міграції Better Auth: схема є, таблиці немає
+    expect(await refusalOf(model)).toEqual(refused("table"))
+
+    // Без схеми: `has_schema_privilege` за іменем кинув би 3F000
+    await admin(gateDb(), (c) =>
+      c.query(`drop schema ${quoteIdent(gate.identity.schema)}`)
+    )
+    expect(await refusalOf(model)).toEqual(refused("table"))
+
+    // Схему вертає `roles`, таблицю — міграція, гранти на неї — повторний
+    // `roles` (Р7)
+    await gateRoles()
+    await migrateBetterAuth(roleUrl(gate, gate.auth))
+    await gateRoles()
+
+    // Таблиця є, `TRIGGER` відкликано
+    await admin(gateDb(), (c) =>
+      c.query(`revoke trigger on ${identity} from ${quoteIdent(gate.owner)}`)
+    )
+    expect(await refusalOf(model)).toEqual(refused("privilege"))
+
+    // `TRIGGER` повернуто, `USAGE` на схему відкликано: `to_regclass` тут
+    // кинув би 42501, а не дав відмову
+    await gateRoles()
+    await admin(gateDb(), (c) =>
+      c.query(
+        `revoke usage on schema ${quoteIdent(gate.identity.schema)} from ${quoteIdent(gate.owner)}`
+      )
+    )
+    expect(await refusalOf(model)).toEqual(refused("privilege"))
   })
 })
