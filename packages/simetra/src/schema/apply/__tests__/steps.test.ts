@@ -4,6 +4,7 @@ import type { CatalogModel, CatalogTable } from "simetra/model"
 import {
   checkPermissions,
   classifySteps,
+  foreignReplacements,
   lintSteps,
   requiredPermissions,
   type DriftReport,
@@ -501,7 +502,83 @@ describe("classifySteps", () => {
       })[0]?.class
     ).toBe("catalogOnly")
   })
+})
 
+// #156: виняток «заміна» — лише для об'єктів останнього застосованого стану
+describe("foreignReplacements", () => {
+  const ref = (kind: string, name: string, table?: string) => ({
+    kind,
+    schema: "app",
+    ...(table === undefined ? {} : { table }),
+    name,
+  })
+  const drop = (...refs: ReturnType<typeof ref>[]) => ({ destroyed: refs })
+  const applied: CatalogModel = {
+    tables: [
+      {
+        ...UNIQUE.tables[0]!,
+        indexes: [
+          { name: "t_c_idx", unique: false, keys: [{ column: "c" }] },
+        ] as CatalogTable["indexes"],
+        checks: [{ name: "t_c_check", expression: "c <> ''" }],
+      },
+    ],
+    enumTypes: [],
+    units: [
+      {
+        class: "trigger",
+        identity: "trigger:app.t.tr",
+        schema: "app",
+        name: "tr",
+        sql: "",
+      },
+      {
+        class: "function",
+        identity: "function:app.f()",
+        schema: "app",
+        name: "f",
+        sql: "",
+      },
+    ],
+  }
+
+  it.each([
+    ["an index", ref("index", "t_c_idx")],
+    ["a constraint", ref("constraint", "t_c_check", "t")],
+    ["a trigger", ref("trigger", "tr", "t")],
+    ["a function", ref("function", "f")],
+  ])("keeps the exception for %s of the last applied state", (_n, own) => {
+    expect(foreignReplacements([drop(own)], applied, 0)).toEqual(new Set())
+  })
+
+  it.each([
+    ["an index", ref("index", "other_idx")],
+    ["a constraint of another table", ref("constraint", "t_c_check", "u")],
+    [
+      "a trigger with the same name on another table",
+      ref("trigger", "tr", "u"),
+    ],
+    ["a policy", ref("policy", "p", "t")],
+    ["a rule", ref("rule", "r", "t")],
+  ])("drops the exception for %s outside it", (_n, foreign) => {
+    // Наскрізна нумерація: дія двигуна після двох кроків наміру — `s3`
+    expect(foreignReplacements([drop(), drop(foreign)], applied, 1)).toEqual(
+      new Set(["s3"])
+    )
+  })
+
+  it("drops the exception for every object on the first apply", () => {
+    expect(
+      foreignReplacements([drop(ref("index", "t_c_idx"))], undefined, 0)
+    ).toEqual(new Set(["s1"]))
+    // Стовпець — не об'єкт заміни: його клас дає втрата даних
+    expect(
+      foreignReplacements([drop(ref("column", "c", "t"))], undefined, 0)
+    ).toEqual(new Set())
+  })
+})
+
+describe("classifySteps types", () => {
   it.each(TYPE_CASES)("type change %s", (_name, change, cls) => {
     const step = action(`ALTER TABLE app.t ${change}`, { rewriteRisk: true })
     expect(classifySteps([step], UNIQUE, parse).map((s) => s.class)).toEqual([

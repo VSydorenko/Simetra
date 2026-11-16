@@ -227,6 +227,7 @@ export {
   classifySteps,
   comparePermissionItems,
   DRIFT_PERMISSION,
+  foreignReplacements,
   intentStep,
   lintSteps,
   notNullColumns,

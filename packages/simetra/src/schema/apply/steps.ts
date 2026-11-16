@@ -411,6 +411,82 @@ function isReplacement(
   )
 }
 
+/** Імена обмежень таблиці моделі каталогу: ключ, унікальні, `CHECK`, FK. */
+export const constraintNames = (t: CatalogTable): string[] => [
+  ...(t.primaryKey === undefined ? [] : [t.primaryKey.name]),
+  ...t.uniques.map((u) => u.name),
+  ...t.checks.map((c) => c.name),
+  ...t.foreignKeys.map((f) => f.name),
+]
+
+/**
+ * Чи об'єкт належить останньому застосованому стану (`applied`, каталог
+ * marker цілі): лише такий об'єкт платформа створила сама. Індекс — за
+ * схемою й іменем, обмеження — за таблицею й іменем, тригер і політика — за
+ * ідентичністю одиниці, функція, процедура й в'юха — за класом, схемою й
+ * іменем (перевантаження з тим самим іменем вважається своїм). Правила
+ * платформа не створює, тож воно своїм не буває.
+ */
+function inApplied(ref: EngineObjectRef, applied: CatalogModel): boolean {
+  switch (ref.kind) {
+    case "index":
+      return applied.tables.some(
+        (t) =>
+          t.schema === ref.schema && t.indexes.some((i) => i.name === ref.name)
+      )
+    case "constraint": {
+      const table = applied.tables.find(
+        (t) => t.schema === ref.schema && t.name === ref.table
+      )
+      return table !== undefined && constraintNames(table).includes(ref.name)
+    }
+    case "trigger":
+    case "policy":
+      return applied.units.some(
+        (u) =>
+          u.class === ref.kind &&
+          u.identity === `${ref.kind}:${ref.schema}.${ref.table}.${ref.name}`
+      )
+    case "function":
+    case "procedure":
+    case "view":
+      return applied.units.some(
+        (u) =>
+          u.class === ref.kind && u.schema === ref.schema && u.name === ref.name
+      )
+    default:
+      return false
+  }
+}
+
+/**
+ * Id кроків двигуна, для яких виняток «заміна» не діє (платформна спека
+ * §6.6): крок знімає об'єкт, якого немає в останньому застосованому стані
+ * (`applied`; першого застосування — жодного). Такий об'єкт створила не
+ * платформа, тож його перевизначення під тим самим ім'ям — видалення
+ * чужого й створення свого, і воно потребує дозволу, як видалення чужого
+ * об'єкта з іншим ім'ям. Рахується з дій до `classifySteps`, бо результат —
+ * його вхід. `offset` — кількість кроків перед діями двигуна.
+ */
+export function foreignReplacements(
+  actions: readonly Pick<EngineAction, "destroyed">[],
+  applied: CatalogModel | undefined,
+  offset: number
+): Set<string> {
+  const out = new Set<string>()
+  actions.forEach((action, i) => {
+    if (
+      action.destroyed.some(
+        (ref) =>
+          REPLACEABLE_KINDS.has(ref.kind) &&
+          (applied === undefined || !inApplied(ref, applied))
+      )
+    )
+      out.add(stepId(offset + i))
+  })
+  return out
+}
+
 /**
  * Тип колонки з моделі: рядок `format_type()` розбирає той самий парсер, що
  * й оператор, тож обидва боки зводяться до одного дерева типу.

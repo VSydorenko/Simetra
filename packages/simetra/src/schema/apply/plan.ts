@@ -159,6 +159,7 @@ import {
 } from "./state"
 import {
   classifySteps,
+  foreignReplacements,
   lintSteps,
   requiredPermissions,
   stepId,
@@ -650,10 +651,12 @@ export async function buildPlan(
   // поза межею застосунку), а крок двигуна замінив би його мовчки (спека
   // промоції §9.2)
   const live = await witness(o.target, scope)
+  // Останній застосований стан: що з об'єктів цілі створила платформа
+  const applied = state.status === "applied" ? state.marker.catalog : undefined
   const taken = providerTriggerConflicts({
     desired: model.sqlUnits,
     live: live.extracted.model,
-    applied: state.status === "applied" ? state.marker.catalog : undefined,
+    applied,
     appSchemas: scope.schemas,
     parse,
   })
@@ -721,6 +724,7 @@ export async function buildPlan(
       rightsOrphans,
       promotion: transition,
       epochExists: state.status === "applied" && state.rowVersionEpoch,
+      applied,
       file: input.file,
       diagnostics: dedupe([
         ...verdict.diagnostics,
@@ -816,7 +820,15 @@ export async function buildPlan(
     names: SAME_NAMES,
   })
   if (!filled.ok) return refused([...diagnostics, ...filled.diagnostics])
-  const classified = classifySteps(filled.actions, live.extracted.model, parse)
+  // Виняток «заміна» — лише для об'єктів останнього застосованого стану:
+  // однойменний чужий об'єкт без дозволу не замінюється (§6.6)
+  const classified = classifySteps(
+    filled.actions,
+    live.extracted.model,
+    parse,
+    0,
+    { noReplacement: foreignReplacements(filled.actions, applied, 0) }
+  )
   // Зміна типу, якій сторожа не побудувати, — відмова, а не крок без
   // перевірки: інакше дозвіл на `destructive` знову означав би «обріж мовчки»
   const guarded = guardedChanges(classified, live.extracted.model, parse)
@@ -1021,6 +1033,8 @@ interface PromotionContext {
   promotion: Extract<TransitionVerdict, { status: "promotion" }>
   /** Чи є рядок епохи версій цілі: без нього епоху пише крок `versions`. */
   epochExists: boolean
+  /** Каталог marker цілі: виняток «заміна» — лише для його об'єктів. */
+  applied: CatalogModel | undefined
   /** Файл запису в `plans/`: його називають відмови виявлення. */
   file: string
   /** Діагностики гейта, переходу й бажаного стану. */
@@ -1250,6 +1264,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
         data: data.tables,
         origin,
         parse,
+        applied: c.applied,
         backfills,
       })
   )
@@ -1711,6 +1726,8 @@ async function analyseOnClone(p: {
   data: readonly PlannedDataTable[]
   origin: DataOrigin
   parse: SqlParser
+  /** Каталог marker цілі: виняток «заміна» — лише для його об'єктів. */
+  applied: CatalogModel | undefined
   /**
    * Заповнення `NULL` перед `NOT NULL` за діями двигуна й моделлю копії
    * після наміру — вихідним станом дій (`backfillActions`).
@@ -1790,12 +1807,10 @@ async function analyseOnClone(p: {
       p.newTables.map((t) => tableKey(t.schema, t.name))
     )
     const engineSteps = classifySteps(actions, extracted.model, parse, offset, {
-      noReplacement: adoptedReplacements(
-        actions,
-        extracted.model,
-        unitTables,
-        offset
-      ),
+      noReplacement: new Set([
+        ...adoptedReplacements(actions, extracted.model, unitTables, offset),
+        ...foreignReplacements(actions, p.applied, offset),
+      ]),
     })
     const steps = [...renames, ...names, ...engineSteps]
     const guarded = guardedChanges(engineSteps, extracted.model, parse)
