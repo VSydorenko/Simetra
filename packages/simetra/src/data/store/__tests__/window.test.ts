@@ -354,6 +354,36 @@ describe("window", () => {
     ])
   })
 
+  it("reads nothing more on loadAfter during the first load", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 250)
+    fake.hold = (read) => isPage(read)
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    handle.loadAfter()
+    await settle()
+    expect(fake.pending).toHaveLength(1)
+    expect(pageReads(fake)).toHaveLength(1)
+  })
+
+  it("reads nothing on loadAfter after a first load that failed", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 250)
+    fake.hold = (read) => isPage(read)
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    fake.take().fail("command.unavailable")
+    await settle()
+    expect(handle.getSnapshot().status).toBe("error")
+    const before = pageReads(fake).length
+    handle.loadAfter()
+    await settle()
+    expect(pageReads(fake)).toHaveLength(before)
+    expect(fake.pending).toHaveLength(0)
+  })
+
   it("reads backwards with the mirrored order of a sorted window", async () => {
     const { core, fake } = setup()
     for (let n = 1; n <= 30; n++)

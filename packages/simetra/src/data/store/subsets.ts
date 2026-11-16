@@ -321,8 +321,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     // Окне без рядків, що не дійшло до кінця (фільтр нічого не знайшов у
     // першому читанні, чи сторінки спорожнив purge), іде далі від початку
     // порядку: сторінка читає серверний фільтр.
+    // Лише завершене й не перезапущене читання: до першого завантаження
+    // (чи після його відмови) це було б другим читанням того самого.
     if (keys.length === 0)
-      return direction === "after" ? { cursor: undefined } : undefined
+      return direction === "after" && s.loaded && s.flight === undefined
+        ? { cursor: undefined }
+        : undefined
     if (direction === "after") keys.reverse()
     for (const key of keys) {
       const e = o.rows.get(key)
