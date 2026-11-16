@@ -34,7 +34,7 @@ export const mcpArgs = {
       "Environment variable with a connection string to another server of the same PostgreSQL major version for the shadow database",
   },
   // Без типового значення: доступ до даних від імені користувача — явне
-  // рішення людини, а не тиха змінна середовища (Р-A5-11)
+  // рішення людини, а не тиха змінна середовища
   "data-url-env": {
     type: "string",
     description:

@@ -15,7 +15,7 @@ import {
 import { createApplyDatabase } from "../schema-engine"
 
 /**
- * `prepareStackIdentity` (Р13) на тегованому кластері. DB-рівень, бо гранти,
+ * `prepareStackIdentity` на тегованому кластері. DB-рівень, бо гранти,
  * їх відкликання й власника відношень вирішує Postgres, а міграція Better Auth
  * потребує справжньої схеми під роллю без CREATE на базу. Тест лежить у
  * designer: двигун, що готує кластер, — адаптер цього пакета, а `simetra` його

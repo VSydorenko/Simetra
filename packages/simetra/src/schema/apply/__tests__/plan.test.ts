@@ -312,7 +312,7 @@ describe("buildPlan", () => {
   })
 
   it("refuses a separate shadow server on the postgres profile before any database access", async () => {
-    // Р9: тіні профілю будують із шаблону кластера цілі. Відмова — до
+    // Тіні профілю будують із шаблону кластера цілі. Відмова — до
     // платформних ролей, тож підставний порт не отримує жодного запиту
     const compiled = await compile(
       metaFiles({
@@ -559,7 +559,7 @@ describe("buildPlan", () => {
   )
 })
 
-describe("buildPlan: row version first (Р11)", () => {
+describe("buildPlan: row version first", () => {
   const PARTS = { module: false, contacts: false, invoice: false }
 
   /** Промоція з кроками даних на `app.counterparties`; ціль — її стан «до». */

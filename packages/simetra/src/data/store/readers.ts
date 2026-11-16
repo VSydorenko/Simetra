@@ -37,7 +37,7 @@ import type {
 
 /**
  * Store writes of the core: each keeps the row views and the dirty sections
- * in step with the store, so every write path (views, tail, Task 8 writer)
+ * in step with the store, so every write path (views, tail, the writer)
  * goes through them.
  */
 export interface StoreOps {
@@ -105,7 +105,7 @@ export type Write = (scope: Scope) => void
 
 /**
  * Applies a read result inside one `commit`; `false` — the session discarded
- * an epoch of the answer (P4-B plan B1c, Р7, Р12) and nothing was written.
+ * an epoch of the answer (P4-B spec §6.2) and nothing was written.
  */
 export type Apply = (scope: Scope) => boolean
 

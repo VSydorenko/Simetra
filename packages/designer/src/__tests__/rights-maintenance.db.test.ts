@@ -344,7 +344,7 @@ describe("rights-maintenance tool over a real database", () => {
     })
 
   // Масив і пара не мають FK зі скоупом: «ціль існує в тому самому скоупі»
-  // судить лише згенерована перевірка рядка членства (Р-A6-12) — до першого
+  // судить лише згенерована перевірка рядка членства — до першого
   // запису, тож відмова нічого не лишає.
   it.each<[string, "missing" | "foreign", string]>([
     ["an array Ref to a missing row", "missing", MEMBER_REGIONS],

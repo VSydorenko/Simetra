@@ -238,7 +238,7 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   ролей, членство й налаштування; `plan(…)` відповідно
 - Modify (після ПГ-2): набір базового стану стека `postgres` — ті самі
   перевірки; dev-пароль `simetra_signals` у `docker/postgres-stack/dev-secrets.env`
-  і в кроці паролів `pnpm db:pg:start` (Р2 плану ПГ-2b)
+  і в кроці паролів `pnpm db:pg:start`
 - Test: `packages/simetra/src/schema/apply/__tests__/platform-roles.test.ts`,
   `packages/designer/src/__tests__/roles-tool.test.ts`,
   `roles-tool.postgres.db.test.ts`, `roles-tool.supabase.db.test.ts` (або

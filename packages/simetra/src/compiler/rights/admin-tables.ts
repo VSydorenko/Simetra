@@ -13,7 +13,7 @@ import type { ParsedObject } from "../stages/files"
 import type { MineInputs } from "./functions"
 
 /**
- * Колонки входів `rights_mine` — виходи вхідних CTE `mineBody` (Р3-15): одне
+ * Колонки входів `rights_mine` — виходи вхідних CTE `mineBody`: одне
  * місце для таблиць знімка, їхнього заповнення й читання гілкою знімка.
  */
 export const INPUT_COLUMNS = {
@@ -47,13 +47,13 @@ export const INPUT_COLUMNS = {
   ],
 } as const satisfies Record<keyof MineInputs, readonly [string, string][]>
 
-/** Таблиця маркера кореня (спека П4 §6.13, Р-A6-7). */
+/** Таблиця маркера кореня (спека П4 §6.13). */
 export const ROOT_MARKER_TABLE = {
   schema: PLATFORM_SCHEMA,
   name: "rights_tx_root_marker",
 } as const satisfies QualifiedName
 
-/** Походження рядка входу й причина журналу функції гранту (Р-A6-5). */
+/** Походження рядка входу й причина журналу функції гранту. */
 export const ROOT_CREATOR_REASON = "root-creator"
 
 /**
@@ -192,10 +192,10 @@ export function rightsAdminTables(
       ],
       ["xid", "fact"]
     ),
-    // Входи факту `rights` (Р3-15) — рядки вхідних CTE `rights_mine`, а не її
+    // Входи факту `rights` — рядки вхідних CTE `rights_mine`, а не її
     // вихід: вихід множить скоупи на проєкцію ролі, а входи ∝ призначенням і
     // дельтам актора. Індекси — ключі з'єднань `held` і гілки `allow`.
-    // `provenance` і `assignment` — лише в DDL, не в `INPUT_COLUMNS` (Р-A6-5):
+    // `provenance` і `assignment` — лише в DDL, не в `INPUT_COLUMNS`:
     // їх пише функція гранту творцю кореня, а знімок і читання входів їх не
     // бачать. Частковий індекс — для `EXISTS` причини журналу призначень: без
     // нього кожен рядок журналу перебирав би всі рядки `typed` актора.
@@ -239,7 +239,7 @@ export function rightsAdminTables(
       undefined,
       [asc("xid")]
     ),
-    // Кеш прав початку на COMMIT (Р3-15): одна повна оцінка над входами на
+    // Кеш прав початку на COMMIT: одна повна оцінка над входами на
     // транзакцію, а не на кожну перевірку черги. Рядок-маркер без рівня
     // відрізняє «закешовано порожні права» від «ще не рахували». Індекс —
     // ключі покриття ескалації за рівнем (`escalationSql`); окремий індекс
@@ -317,7 +317,7 @@ export function rightsAdminTables(
     // Маркер кореня (спека П4 §6.13): вставку кореня виду з `rootCreator`
     // мусить спожити функція гранту в тій самій транзакції, інакше відкладена
     // перевірка відмовляє — корінь без творця не з'являється (fail-closed).
-    // Актор — той, чиє право `create` судила вставка (Р-A6-23).
+    // Актор — той, чиє право `create` судила вставка.
     table(
       ROOT_MARKER_TABLE.name,
       "rightsTxRootMarker",

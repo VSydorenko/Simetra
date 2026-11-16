@@ -331,7 +331,7 @@ describe("command runtime over the engine target", () => {
   })
 
   // Межу `nonNegative` тримає лише CHECK бази: `23514` з іменем обмеження
-  // стає реквізитом за колонкою CHECK каталогу (Р-A3-21, спека П4 §6.10).
+  // стає реквізитом за колонкою CHECK каталогу (спека П4 §6.10).
   it("a value outside nonNegative is command.constraint check on the attribute", async () => {
     const rt = await runtime(fromPgPool(env.direct))
     const id = randomUUID()

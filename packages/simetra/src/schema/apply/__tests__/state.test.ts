@@ -90,7 +90,7 @@ describe("renderApplyState", () => {
   it("leaves schema grants to the platform layer when it is present", async () => {
     const m = await withUsers()
     const lines = renderApplyState(m).split("\n")
-    // Рішення Р-A3-16: стан дає лише гранти своєї функції, а схему — шар
+    // Стан дає лише гранти своєї функції, а схему — шар
     expect(lines.filter((l) => /^(GRANT|REVOKE)\b/.test(l))).toEqual(
       stateGrants
     )
@@ -139,7 +139,7 @@ describe("renderApplyState", () => {
   })
 
   it("grants nothing on the state tables", async () => {
-    // Рішення Р-A3-16: поза гранти схеми — лише EXECUTE функцій стану
+    // Поза гранти схеми — лише EXECUTE функцій стану
     for (const [m, schema] of [
       [await withoutUsers(), platformSchemaGrants("supabase")],
       [await withUsers(), []],

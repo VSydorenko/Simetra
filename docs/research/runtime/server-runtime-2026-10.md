@@ -69,7 +69,7 @@ Workers не живуть: це окремі сервіси. Vercel Cron на Ho
 | --- | --- | --- |
 | `packages/simetra/src/schema/engine/desired.ts`, `packages/designer/src/schema-engine/pg-delta/policy.ts` | рушій схеми бере списки Supabase напряму, а не за профілем | детальна спека профілю |
 | `ProviderApiRoles` | вимагає роль `service`, що обходить RLS | детальна спека профілю |
-| `maintenanceSql` (`packages/simetra/src/compiler/rights/guard-units.ts`) | заборонний список логінів | [борг прав](../../superpowers/plans/2026-10-26-rights-residual-debt.md) §1 |
+| `maintenanceSql` (`packages/simetra/src/compiler/rights/guard-units.ts`) | заборонний список логінів | [#179](https://github.com/VSydorenko/Simetra/issues/179) |
 | ролі запиту | провайдер створює їх сам; у `postgres` їх створює платформа | детальна спека профілю |
 | `simetra.identities.provider` | значення провайдера в даних — зміна профілю вимагає переприв'язки ідентичностей | спайк переїзду |
 

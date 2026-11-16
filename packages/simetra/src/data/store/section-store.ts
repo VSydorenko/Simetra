@@ -23,7 +23,7 @@ export interface SectionEntry {
   readonly scope: OwnerScope
   /**
    * After a version epoch switch a `null` answer was not ordered with these
-   * lines of the current epoch (P4-B plan B1c, Р5, Р13): they are `stale`
+   * lines of the current epoch (P4-B spec §6.2): they are `stale`
    * until the next written answer replaces the entry.
    */
   readonly staleEpoch?: true
@@ -87,7 +87,7 @@ export function createSectionStore(options: {
   const owners = new Map<Key, Map<string, SectionEntry>>()
   // Найбільша бачена `ownerVersion` власника; живе, доки живі його ТЧ:
   // після clearOwner і purge стару відповідь відкидають removed і надгробки.
-  // Версії різних непорожніх епох не впорядковані (Р5): запис несе епоху,
+  // Версії різних непорожніх епох не впорядковані: запис несе епоху,
   // з якою його прочитано.
   const ownerVersions = new Map<
     Key,
@@ -99,7 +99,7 @@ export function createSectionStore(options: {
     ownerVersions.clear()
   })
 
-  // Перемикання епохи (Р5): записи без епохи читались до нього, тож належать
+  // Перемикання епохи: записи без епохи читались до нього, тож належать
   // покинутій — відповідь нової їх заміняє, а `null` порівнюється як завжди.
   session.onSwitch((previous) => {
     for (const sections of owners.values()) {
@@ -192,15 +192,15 @@ export function createSectionStore(options: {
       if (stale(owner, ownerVersion, versionEpoch, readEpoch, ownerScope))
         return "rejected"
       const seen = ownerVersions.get(owner)
-      // `null` останньої баченої епохи не змінює (Р6): тримана — запис
+      // `null` останньої баченої епохи не змінює: тримана — запис
       // власника, без нього — епоха шапки в сховищі, а після перемикання
-      // без обох — покинута, бо `null` не доводить поточної (Р5).
+      // без обох — покинута, бо `null` не доводить поточної.
       const held =
         seen?.versionEpoch ??
         rows.get(owner)?.versionEpoch ??
         versions.previous()
       // Після перемикання `null`-відповідь не впорядкована з даними поточної
-      // епохи (Р5): рядки ТЧ не пишуться, а наявні стають `stale` і
+      // епохи: рядки ТЧ не пишуться, а наявні стають `stale` і
       // перечитуються — як рядок шапки. Перечитування — одне на позначку:
       // репліка знову відповіла б `null`.
       if (

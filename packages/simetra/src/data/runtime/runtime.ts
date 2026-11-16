@@ -195,7 +195,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
   const send = async (request: RuntimeRequest): Promise<unknown> => {
     if (closedWith !== undefined) throw new CommandFailure(closedWith)
     const body: DataRequest = { subject, request }
-    // Та сама міра й той самий код, що в host-а (§4.5, Р2): межу хоста
+    // Та сама міра й той самий код, що в host-а (§4.5): межу хоста
     // ловить лише чужий клієнт.
     if (jsonBytes(body) > PAYLOAD_MAX_BYTES) {
       throw new CommandFailure({

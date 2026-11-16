@@ -68,7 +68,7 @@ describe("TEST_STACKS", () => {
     }
   )
 
-  // Р2: база тестів `simetra`, а стартовий параметр — роль власника на
+  // База тестів `simetra`, а стартовий параметр — роль власника на
   // кожному новому з'єднанні з адреси тестів
   it("postgres: tests run in database simetra as the owner, the superuser without options", () => {
     const tests = new URL(TEST_STACKS.postgres.databaseUrl)

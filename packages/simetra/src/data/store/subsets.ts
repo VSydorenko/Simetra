@@ -125,7 +125,7 @@ const ACCESS_CHANGED = purgedSnapshot("access-changed")
 
 /**
  * The error of a view once the session discarded too many answers in a row
- * (P4-B plan B1c, Р12): the database keeps answering from an epoch the
+ * (P4-B spec §6.2): the database keeps answering from an epoch the
  * session left; only a new session reads again.
  */
 export const EPOCH_UNAVAILABLE: CommandError = Object.freeze({
@@ -190,7 +190,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       token,
       what
     )
-    // Відкинута відповідь (Р12) — те саме завантаження з паузою, що зростає:
+    // Відкинута відповідь — те саме завантаження з паузою, що зростає:
     // покоління й політ не змінюються, тож це й далі дія, що його почала.
     const attempt = (): Promise<void> => {
       const readEpoch = session.epochs.now()

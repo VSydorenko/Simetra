@@ -73,7 +73,7 @@ const inEpoch = (r: ReturnType<typeof row>, versionEpoch: string | null) => ({
   versionEpoch,
 })
 
-describe("mergeVersioned epochs (B1c Р5, Р6)", () => {
+describe("mergeVersioned epochs", () => {
   it("a row of another non-empty epoch replaces a higher version", () => {
     const merged = mergeVersioned(
       inEpoch(row(K1, 5), EA),
@@ -103,7 +103,7 @@ describe("mergeVersioned epochs (B1c Р5, Р6)", () => {
   })
 })
 
-describe("ObjectStore.put epochs (B1c Р5)", () => {
+describe("ObjectStore.put epochs", () => {
   it("replaces the entry with a lower version of a new epoch", () => {
     const h = harness()
     put(h, inEpoch(row(K1, 5), EA))

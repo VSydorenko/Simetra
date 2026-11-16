@@ -20,7 +20,7 @@ import {
 describe("catalog entries", () => {
   const entry = runtimeObject()
   const [section] = entry.tabularSections
-  // id ТЧ — її ідентичність у формі передачі (рішення В4, В12): ім'я ТЧ
+  // id ТЧ — її ідентичність у формі передачі: ім'я ТЧ
   // змінне; стандартна ТЧ має синтетичний id елемента.
   it.each([
     ["a runtime entry", runtimeObjectSchema, entry, true],

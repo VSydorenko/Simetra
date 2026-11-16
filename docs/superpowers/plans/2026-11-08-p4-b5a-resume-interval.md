@@ -31,7 +31,7 @@ B3-4. Події однієї мікрозадачі збирає збирач B
 `version`, `requestVersion()`, таблиця «подія → `version`»),
 [B3-6](2026-11-08-p4-b3-6-oracle-host-ssr.md) (тестовий хост, звірка після
 гідратації, Task 11),
-[B1c](2026-11-08-p4-b1c-conditional-batched-reads.md) (пакет читань,
+спека П4-B §4.1, §4.5, §6.2 і `packages/simetra/src/data/store/source.ts` (пакет читань,
 обмежувач на рівні запиту, `READ_BATCH_MAX`, `known`).
 
 **Залежності:** після B1c, B3-3, B3-4 і B3-6 (пакет між об'єктами формує

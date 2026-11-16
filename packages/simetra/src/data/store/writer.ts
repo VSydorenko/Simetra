@@ -215,7 +215,7 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
     apply(object, answer, readEpoch, versionEpoch) {
       scope.assert()
       const o = ctx.objectOf(object)
-      // Один шлюз на відповідь (Р7, Р12): і «рядка немає» без жодного рядка
+      // Один шлюз на відповідь: і «рядка немає» без жодного рядка
       // проходить його, а відкинута відповідь не пише нічого й каже про це.
       // Шлюз бачить і епохи рядків: рядок пишеться з власною епохою, коли
       // параметр `null`, тож рядок покинутої епохи відкидає всю відповідь.
@@ -664,7 +664,7 @@ async function revalidateViews(
           }
           try {
             if (!result.apply(scope)) {
-              // Відкинута відповідь (Р12): перечитування з паузою, а після
+              // Відкинута відповідь: перечитування з паузою, а після
               // межі відкинутих поспіль — `command.unavailable`.
               if (session.versions.unavailable()) {
                 s.status = "error"

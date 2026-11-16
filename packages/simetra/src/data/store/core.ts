@@ -120,7 +120,7 @@ export interface CoreInspection {
   }
   /** Deliberate defects of the model test's self-check; empty by default. */
   readonly defects: Set<DefectFlag>
-  /** The version epoch state of the session (P4-B plan B1c). */
+  /** The version epoch state of the session (P4-B spec §6.2). */
   versionEpochs(): {
     current: string | null
     previous: string | null
@@ -319,7 +319,7 @@ export function createCore(options: {
       )
       if (result === "written") touchSection(o, owner)
       // Позначені рядки ТЧ перечитує змонтований вигляд: перевірка вигляду
-      // читає наново, коли ревізія шапки змінилась (Р13).
+      // читає наново, коли ревізія шапки змінилась.
       if (result === "stale") {
         touchSection(o, owner)
         if (o.rows.get(owner) !== undefined) rowViews.touch(o.name, owner)
@@ -385,7 +385,7 @@ export function createCore(options: {
         (rows) => {
           session.commit(
             (scope) => {
-              // Відкинута відповідь (Р7, Р12) не пише нічого; без автоповтору
+              // Відкинута відповідь не пише нічого; без автоповтору
               // (§6.3) ключі перечитує вигляд.
               if (session.acceptEpochs(read.epochs, readEpoch) === "discard")
                 return
@@ -493,7 +493,7 @@ export function createCore(options: {
   const purges = new Map<ObjectName, number>()
   const hiddenKeys = new Map<ObjectName, Set<Key>>()
 
-  // Перемикання епохи (Р8): кожен рядок уже `stale` (сховища позначили), а
+  // Перемикання епохи: кожен рядок уже `stale` (сховища позначили), а
   // видимі вигляди перечитуються з розкидом — рестарт primary перемикає
   // всіх клієнтів одночасно, і миттєве перечитування було б шквалом.
   const switchTimers = new Map<ObjectName, ReturnType<typeof setTimeout>>()

@@ -116,7 +116,7 @@ export function buildEffectsUnits(
       (entry) => entry.objectId === table.origin.objectId
     )
     const users = contracts.users?.objectId === table.origin.objectId
-    // Маркер кореня (Р-A6-7) — лише основній таблиці кореня виду, що має
+    // Маркер кореня — лише основній таблиці кореня виду, що має
     // творця: вид оператора створює корінь без гранту.
     const markerKind = section
       ? undefined
@@ -401,7 +401,7 @@ function mainBody(
         ? updateChecks(action, table, compared)
         : []),
       // Вставка кореня під `create` ставить маркер, який мусить спожити
-      // функція гранту творцю в цій транзакції (спека П4 §6.13, Р-A6-23).
+      // функція гранту творцю в цій транзакції (спека П4 §6.13).
       ...(markerKind !== undefined && action.action === "create"
         ? [
             "IF TG_OP = 'INSERT' THEN",

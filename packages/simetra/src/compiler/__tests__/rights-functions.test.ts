@@ -774,7 +774,7 @@ describe("rights functions", () => {
     }
   })
 
-  // Р3-15: живий варіант і знімок факту `rights` рахують входи тими самими
+  // Живий варіант і знімок факту `rights` рахують входи тими самими
   // генераторами — друга реалізація призначень чи дельт неможлива.
   it("renders rights_mine_live with live inputs", () => {
     for (const compiledModel of [model, adopted]) {
@@ -911,7 +911,7 @@ const CURRENT = "(SELECT simetra.current_user_id())"
 
 describe("root create is explicit only", () => {
   // Розгортання (`fullAccess`, `grantAll`, `withAction`) `create` кореня не дає
-  // (спека прав Рх7, Р-A6-1); домен рівня `global`/`everyUser` пару містить —
+  // (спека прав Рх7); домен рівня `global`/`everyUser` пару містить —
   // дельта глобальної кастомної ролі може її дати, ⊆ стримує.
   let model: CompiledModel
   beforeAll(async () => {
@@ -1084,7 +1084,7 @@ describe("rights functions over adopted sources", () => {
     // (спека прав §4.6), тож рядок джерела типізує рівень джерела — стала генератора.
     const columns =
       "x.storage, x.storage_id, x.scope, x.container, x.custom_role, x.archetype, x.scope_kind_id, r.level, r.level_id"
-    // Свої CTE `typed` (`my_scopes`, `assignments` — Р3-15) судять інші кейси.
+    // Свої CTE `typed` (`my_scopes`, `assignments`) судять інші кейси.
     const { withClause, ...typed } = (
       cteQuery(model, "typed") as { SelectStmt: { withClause?: unknown } }
     ).SelectStmt
@@ -1863,7 +1863,7 @@ describe("rights analysis functions", () => {
   })
 
   it("a level covered only by an adopted source has no analysis gate", async () => {
-    // Відоме обмеження Р2d2: глобальні призначення дає лише прийняте
+    // Відоме обмеження: глобальні призначення дає лише прийняте
     // джерело, довідника призначень глобального рівня немає — гейт лише
     // `org`. Власники глобальних призначень — з рядків джерела.
     const adopted = await compiled(adoptedSourcesDomain())
@@ -1997,7 +1997,7 @@ const MINE_PAIR = "function:simetra.rights_mine(text,text)"
 const XID = "txid_current_if_assigned()"
 
 /**
- * Диспетчер факту `fact` (Р3-3, Р3-15): `plpgsql STABLE SECURITY DEFINER`,
+ * Диспетчер факту `fact`: `plpgsql STABLE SECURITY DEFINER`,
  * порожній `search_path`, `IF` гілки знімка — `RETURN QUERY snapshot`,
  * `ELSIF` живої — `RETURN QUERY live`, інакше порожньо.
  */
@@ -2055,7 +2055,7 @@ describe("rights functions with an actor snapshot", () => {
     expect(plain.contracts.rightsCatalogs).toEqual([])
   })
 
-  // Р3-3 дослівно: охорона `CASE` без xid, заголовок факту цього xid і для
+  // Дослівно: охорона `CASE` без xid, заголовок факту цього xid і для
   // власника — поточний користувач.
   it("renders snapshotPresent and snapshotOwned literally", () => {
     const head = `EXISTS (SELECT 1 FROM simetra.rights_tx_header h WHERE h.xid = txid_current_if_assigned() AND h.fact = 'rights'`
@@ -2076,7 +2076,7 @@ describe("rights functions with an actor snapshot", () => {
     )
   })
 
-  // Р3-15: обидві гілки — згенерований `mineBody`, без ручного SQL; план
+  // Обидві гілки — згенерований `mineBody`, без ручного SQL; план
   // кожного `RETURN QUERY` кешується, мертву гілку не планує ніхто.
   it("dispatches rights_mine between two generated branches", () => {
     const api = PROVIDER_API_ROLES.supabase
@@ -2110,7 +2110,7 @@ describe("rights functions with an actor snapshot", () => {
     }
   })
 
-  // Р3-16: фільтр пари — у рядках архетипу, `allow`, `deny` і «кожного
+  // Фільтр пари — у рядках архетипу, `allow`, `deny` і «кожного
   // користувача»; дія — пара ∪ її транзитивні вимоги з `rights_requires`.
   it("filters role rows by the pair and its requirements", () => {
     const style = model.project.naming.attributeCase
@@ -2246,7 +2246,7 @@ describe("rights functions with an actor snapshot", () => {
     ).toHaveLength(1)
   })
 
-  // Р3-3, Р3-15: решта функцій фактів — той самий диспетчер, що й
+  // Решта функцій фактів — той самий диспетчер, що й
   // `rights_mine`; гілки — згенеровані запити знімка й живого варіанта.
   it.each<[string, SnapshotFact, string, string, string]>([
     [
@@ -2305,7 +2305,7 @@ describe("rights functions with an actor snapshot", () => {
       if (access.scope !== undefined) expect(access.scope.verbatim).toBe(false)
   })
 
-  // Р3-3: читання без xid не видає xid — у функціях фактів лише
+  // Читання без xid не видає xid — у функціях фактів лише
   // `txid_current_if_assigned()`.
   it("uses no txid_current() in fact functions", () => {
     for (const compiledModel of [model, adopted, sources]) {

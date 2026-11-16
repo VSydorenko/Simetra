@@ -43,7 +43,7 @@ interface Target {
 /**
  * An operation after {@link prepareInput}: `id` is always there; a scope
  * root `create` also carries the member row id when its kind has a creator.
- * Обидва id T3 генерує раз на `run` (Р-A6-20): повтор бере ті самі, тож
+ * Обидва id T3 генерує раз на `run`: повтор бере ті самі, тож
  * `ctx.id` хуків між спробами не змінюється.
  */
 export type PreparedOperation = Operation & { id: string; memberId?: string }
@@ -70,7 +70,7 @@ function targetOf(
   )
   // Невідомий об'єкт — виняток правила `object`: прив'язати шлях нема до чого.
   if (object === undefined) return { error: invalid("object") }
-  // Функцію ядра й дію контексту дає каталог, а не вхід (Р-A3-1): операції
+  // Функцію ядра й дію контексту дає каталог, а не вхід: операції
   // без функції в каталозі в цього об'єкта немає.
   const target = object.operations?.[op.action]
   if (target === undefined) {
@@ -100,7 +100,7 @@ function rootCreateOf(
 const MEMBER = "creatorMember"
 
 /**
- * `creatorMember` тим самим обходом T0, що й `values` (Р-A6-13): дозволені —
+ * `creatorMember` тим самим обходом T0, що й `values`: дозволені —
  * ключі вставки довідника членства, крім примушених скоупу й користувача
  * (ключ таблиці поза реквізитами й так невідомий обходу).
  */
@@ -383,7 +383,7 @@ function callOf(
         text: `SELECT ${fn(target)}($1::jsonb, $2::bigint) AS r`,
         params: [
           JSON.stringify(encoded.item),
-          // `create` завжди передає ядру `NULL` (Р-A3-1).
+          // `create` завжди передає ядру `NULL`.
           op.action === "create" ? null : String(op.expectedVersion),
         ],
       }
@@ -507,7 +507,7 @@ async function checkTabularRows(
 /**
  * Чернетка хука «до» — та сама перевірка, що й вхід (спека П4 §6.5): ключі
  * поза чернеткою — `command.invalid`; значення перевіряє `encodeItem`.
- * Чернетка `markDeletion` порожня: позначку хук бачить у `ctx.mark` (Р-A3-18).
+ * Чернетка `markDeletion` порожня: позначку хук бачить у `ctx.mark`.
  */
 function checkDraft(
   tx: Transaction,
@@ -550,7 +550,7 @@ async function runNested(
   return runPhase(tx, op)
 }
 
-/** Модуль об'єкта, коли операція піднімає подію запису (Р-A3-2). */
+/** Модуль об'єкта, коли операція піднімає подію запису. */
 function moduleOf(
   tx: Transaction,
   object: RuntimeObject,
@@ -598,7 +598,7 @@ async function beforeWrite(
   )
 }
 
-/** `onWrite` фази над копією рядка: зміна копії не змінює результату (Р-A3-15). */
+/** `onWrite` фази над копією рядка: зміна копії не змінює результату. */
 async function onWrite(
   tx: Transaction,
   phase: HookPhase,
@@ -626,7 +626,7 @@ export async function runPhase(
   if (creation !== undefined) return runRootPhase(tx, found, op, creation)
   const { object } = found
   if (!fullTabularArrays) await checkTabularRows(tx, found, op)
-  // Подію визначає операція (Р-A3-2): `delete` хуків не викликає.
+  // Подію визначає операція: `delete` хуків не викликає.
   const module = moduleOf(tx, object, op)
   const phase = phaseOf(tx, object, op)
   // Контекст фази ставиться після хука «до» (Рт5): фаза його `ctx.run`
@@ -642,7 +642,7 @@ export async function runPhase(
 }
 
 /**
- * Створення тенанта (спека П4 §6.13, Р-A6-14): `beforeWrite` кореня →
+ * Створення тенанта (спека П4 §6.13): `beforeWrite` кореня →
  * `beforeWrite` довідника членства над `{ values: creatorMember }` → повторна
  * перевірка обох чернеток → контекст кореня й ядро `<корінь>_create_root`
  * однією одиницею черги → `onWrite` кореня → `onWrite` членства. Набір змін —
@@ -744,7 +744,7 @@ async function runRootPhase(
 }
 
 /**
- * Контекст і виклик ядра — неподільна одиниця черги (Рт5, Р-A3-15): між
+ * Контекст і виклик ядра — неподільна одиниця черги (Рт5): між
  * ними не стане оператор іншої фази. Повертає текст рядка ядра.
  */
 async function callCore(

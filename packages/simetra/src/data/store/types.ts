@@ -15,7 +15,7 @@ export interface ServerRow {
   readonly key: Key
   readonly version: number
   /**
-   * The row version epoch of the database that answered (P4-B plan B1c, Р5);
+   * The row version epoch of the database that answered (P4-B spec §6.2);
    * absent or `null` — the database has none, so versions compare as usual.
    */
   readonly versionEpoch?: string | null
@@ -125,7 +125,7 @@ export interface CoreLimits {
   readonly preloadTtlMs: number
   /**
    * After a version epoch switch, visible views are re-read at a moment
-   * uniform on `[0, revalidateIntervalMs)` (P4-B plan B1c, Р8): a primary
+   * uniform on `[0, revalidateIntervalMs)` (P4-B spec §6.2): a primary
    * restart switches every client at once. The interval tick itself is B5.
    */
   readonly revalidateIntervalMs: number
@@ -164,7 +164,7 @@ export interface ActiveView {
 /** The only way to change the store (P4-B spec §6.1). */
 export interface Writer {
   /**
-   * Applies one answer of a receiver re-read (P4-B plan B1c, Р7, Р12): the
+   * Applies one answer of a receiver re-read (P4-B spec §6.2): the
    * session gates it once by `versionEpoch` and the epochs of its rows
    * (`acceptEpochs`), so a row of an abandoned epoch discards the whole
    * answer; a discard counts toward the pass of its `commit`, not once per

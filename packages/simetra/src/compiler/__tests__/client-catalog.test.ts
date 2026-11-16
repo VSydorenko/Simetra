@@ -50,7 +50,7 @@ beforeAll(async () => {
   clients = runtimes.map(buildClientCatalog)
 })
 
-// Ключі, яких клієнт не бачить (рішення В7): їх знає лише ядро T3.
+// Ключі, яких клієнт не бачить: їх знає лише ядро T3.
 const SERVER_ONLY = [
   "operations",
   "membership",

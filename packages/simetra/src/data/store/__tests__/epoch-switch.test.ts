@@ -25,7 +25,7 @@ import {
 import { harness, K1, row, S, type Harness } from "./store-support"
 
 /*
- * Перемикання епохи версій бази (P4-B план B1c, Р5–Р8, Р12, Р13): версії
+ * Перемикання епохи версій бази (спека П4-B §6.2): версії
  * порівнюються лише в межах однієї епохи; надгробки, горизонт і поховання пар
  * від епохи не залежать.
  */
@@ -56,7 +56,7 @@ const remember = (h: Harness, r: ServerRow) => {
   h.write((s) => h.store.disown(s, K1))
 }
 
-describe("acceptEpoch (Р6, Р7, Р12)", () => {
+describe("acceptEpoch", () => {
   it("A, null, A: no switch", () => {
     const h = harness()
     expect(accept(h, EA)).toBe("apply")
@@ -169,7 +169,7 @@ describe("acceptEpoch (Р6, Р7, Р12)", () => {
   })
 })
 
-describe("acceptEpochs: one answer of several epochs (Р12)", () => {
+describe("acceptEpochs: one answer of several epochs", () => {
   /** Джерело, що відповідає на кожне читання наступною епохою з `order`. */
   const answering = (order: readonly (string | null)[]): CoreSource => {
     let at = 0
@@ -267,7 +267,7 @@ describe("acceptEpochs: one answer of several epochs (Р12)", () => {
   })
 })
 
-describe("store after a switch (Р5, Р8, Р13)", () => {
+describe("store after a switch", () => {
   it("a null row of a higher version does not replace a row of the current epoch: the key is stale", () => {
     const h = harness()
     accept(h, EA)
@@ -290,7 +290,7 @@ describe("store after a switch (Р5, Р8, Р13)", () => {
     put(h, inEpoch(row(K1, 5), EA))
     accept(h, EB)
     expect(stateOf(h).state).toBe("stale")
-    // Читання до перемикання підтвердити рядка не може (Р13).
+    // Читання до перемикання підтвердити рядка не може.
     put(h, inEpoch(row(K1, 1), EB), start)
     expect(stateOf(h)).toMatchObject({ version: 1, state: "stale" })
     put(h, inEpoch(row(K1, 1), EB))

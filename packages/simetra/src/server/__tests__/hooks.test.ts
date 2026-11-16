@@ -240,7 +240,7 @@ describe("tenant creation hooks", () => {
   })
   const isCore = (text: string) => text.includes("_create_root")
 
-  it("runs both beforeWrite hooks, the core, then both onWrite hooks (Р-A6-14)", async () => {
+  it("runs both beforeWrite hooks, the core, then both onWrite hooks", async () => {
     const events: string[] = []
     const contexts: Record<string, unknown> = {}
     const { db, runtime } = await setupRoots(
@@ -1190,7 +1190,7 @@ describe("depth and queue", () => {
 
 describe("a ctx call rejected without a failure", () => {
   // Хук не чекає `ctx.read`: відхилений проміс без відмови в черзі інакше
-  // дав би COMMIT (Р-A3-15).
+  // дав би COMMIT.
   const readsSubject = (subject: unknown) =>
     setup(rightsCore, {
       catalog: taskCatalog,

@@ -912,7 +912,7 @@ describe("cli adapter", TOOL_PIPELINE, () => {
     })
 
     it("renders the filled rows of a backfill step after apply", () => {
-      // Р8: фактичний `rowCount` поруч із кількістю `NULL` на плані
+      // Фактичний `rowCount` поруч із кількістю `NULL` на плані
       const data: ApplyData = {
         status: "committed",
         attempts: 1,

@@ -212,7 +212,7 @@ describe("buildRuntimeCatalog", () => {
     ).toEqual([])
   })
 
-  // id ТЧ — її ідентичність у формі передачі (рішення В4, В12): береться з
+  // id ТЧ — її ідентичність у формі передачі: береться з
   // походження фізичної таблиці, а не з імені, яке змінюється; стандартна ТЧ
   // (дельта «Ролей») несе синтетичний id елемента.
   it("a tabular section carries its UUID", () => {
@@ -324,7 +324,7 @@ describe("buildRuntimeCatalog", () => {
       kind: "unique",
       columns: index.keys.map((k) => ("column" in k ? k.column : "")),
     })
-    // Колонки CHECK — окремий тест на `Gauge` (Р-A3-21).
+    // Колонки CHECK — окремий тест на `Gauge`.
     for (const check of table.checks) {
       expect(constraints).toContainEqual(
         expect.objectContaining({ name: check.name, kind: "check" })
@@ -746,7 +746,7 @@ describe("buildRuntimeCatalog: maxBytes", () => {
 })
 
 /**
- * Колонка CHECK (Р-A3-21) — побічний результат компілятора за фактично
+ * Колонка CHECK — побічний результат компілятора за фактично
  * призначеним іменем, а не розбір імені обмеження: Postgres повертає лише ім'я,
  * і мапінг `23514` на реквізит (спека П4 §6.10) бере колонку звідси.
  */
@@ -821,8 +821,10 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
 })
 
 /**
- * Позначка `copy` (план B1c Р4): копія носія прав змінюється без версії
- * рядка, тож частковий маркер `known` мусить нести її поточною.
+ * Позначка `copy`: копія носія прав змінюється без версії рядка, тож
+ * частковий маркер `known` мусить нести її поточною. Позначка лежить у
+ * `CompiledModel.copyColumns`, не у фізичному знімку, тож `snapshotHash` не
+ * змінюється.
  */
 describe("buildRuntimeCatalog: copy", () => {
   const sectionAttributes = (catalog: RuntimeCatalog | ClientCatalog) =>

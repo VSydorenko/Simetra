@@ -38,7 +38,7 @@ const putLines = (
 const EA = "a".repeat(64)
 const EB = "b".repeat(64)
 
-describe("sectionLinesStale (B1c Р5)", () => {
+describe("sectionLinesStale", () => {
   it("lines of another epoch than the header are stale although ownerVersion is not lower", () => {
     const h = harness()
     putLines(h, K1, 5, { versionEpoch: EA })
@@ -68,7 +68,7 @@ describe("sectionLinesStale (B1c Р5)", () => {
   })
 })
 
-describe("SectionStore.put epochs (B1c Р5)", () => {
+describe("SectionStore.put epochs", () => {
   it("accepts a lower ownerVersion of a new epoch", () => {
     const h = harness()
     putLines(h, K1, 5, { versionEpoch: EA })
