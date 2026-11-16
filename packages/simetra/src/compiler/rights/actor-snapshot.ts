@@ -26,7 +26,7 @@ const platform = (name: string): QualifiedName => ({
 
 /**
  * Таблиці знімка (спека прав §7): заголовки фактів, входи факту `rights`,
- * Кеш прав початку на COMMIT і рядки решти фактів.
+ * кеш прав початку на COMMIT і рядки решти фактів.
  */
 export const SNAPSHOT_TABLES = {
   header: platform("rights_tx_header"),

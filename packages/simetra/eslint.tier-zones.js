@@ -188,7 +188,8 @@ export const purityConfigs = [
   {
     // Відносний `../model` вбудував би в dist/server другу копію T0, а
     // `pg`/`node:fs` зробили б рантайм залежним від I/O: порт бази приходить
-    // ззовні (A3-10). Дозволено `./…`, simetra/model, zod, node:async_hooks.
+    // ззовні (спека П4 Рт15, Рт17). Дозволено `./…`, simetra/model, zod,
+    // node:async_hooks.
     files: PURITY_FILES("server"),
     ignores: PURITY_IGNORES,
     rules: {

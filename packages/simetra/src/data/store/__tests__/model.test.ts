@@ -46,7 +46,7 @@ const [K1, K2, K3, K4, K5] = KEYS as [Key, Key, Key, Key, Key]
 const ORG_KEYS = [S, T]
 const TITLES = ["a", "m", "t", "z"]
 
-// Розкид перечитування після перемикання епохи (Р8) — у межах кроків `time`.
+// Розкид перечитування після перемикання епохи — у межах кроків `time`.
 const REVALIDATE_MS = 2_000
 
 // П7: межі моделі малі, щоб витіснення пам'яті версій і надгробків і
@@ -395,7 +395,7 @@ async function runModel(
   const wasRemoved = new Map<string, { divergent: boolean; slot: object }>()
   const maxVersion = new Map<string, number>()
   const storeVersion = new Map<string, number>()
-  // Версії порівнюються в межах однієї епохи (Р5): до першого перемикання
+  // Версії порівнюються в межах однієї епохи: до першого перемикання
   // `null` і перша епоха — одна історія, після нього — кожна епоха окремо.
   const versionKey = (object: ObjectName, k: Key) => {
     const e = objectOf(object).rows.get(k)
@@ -637,7 +637,7 @@ async function runModel(
         // лише з позначкою мінімальної версії чи схований горизонтом.
         const top = storeVersion.get(versionKey(name, k)) ?? 0
         // Рядок не поточної епохи з позначкою перемикання — `null`-відповідь
-        // після перемикання: її версії не впорядковані ні з якою епохою (Р5),
+        // після перемикання: її версії не впорядковані ні з якою епохою,
         // і рядок не показано підтвердженим.
         const unordered =
           e.stale.epoch !== undefined &&
@@ -1196,7 +1196,7 @@ async function runModel(
     // надгробок поховав би відповідь читання, що почалось раніше (за
     // задумом), і збіжність мірялась би проти артефакту моделі.
     // База сходиться до епохи, за якою йде сесія: відповіді покинутої
-    // епохи сесія не застосовує ніколи (Р12).
+    // епохи сесія не застосовує ніколи.
     const epochs = inspect.versionEpochs()
     fake.epoch = epochs.current
     vi.advanceTimersByTime(10_000)
@@ -1237,7 +1237,7 @@ async function runModel(
       const snap = handles[v]!.getSnapshot()
       const where = `converge view ${v}`
       if (snap.status === "purged") return
-      // Після межі відкинутих відповідей поспіль сесія не читає (Р12): вихід
+      // Після межі відкинутих відповідей поспіль сесія не читає: вихід
       // — лише нова сесія.
       if (epochs.unavailable) {
         if (

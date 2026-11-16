@@ -507,7 +507,7 @@ describe("mapDatabaseError", () => {
 
 /**
  * `23514` на каталозі з `buildRuntimeCatalog`: колонку CHECK дає компілятор,
- * Тож тест не тримає форми, якої компілятор не будує.
+ * тож тест не тримає форми, якої компілятор не будує.
  */
 describe("mapDatabaseError on a compiled CHECK", () => {
   let compiled: RuntimeCatalog

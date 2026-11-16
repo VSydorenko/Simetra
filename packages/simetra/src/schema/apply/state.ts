@@ -340,7 +340,7 @@ export async function readApplyState(
   const row = JSON.parse(markerRow.row) as MarkerRow
   if (row.format !== APPLY_STATE_FORMAT)
     return corrupt("apply.state-format", { found: row.format })
-  // Таблиці епохи може ще не бути (база до B1e): це «рядка немає», а не збій
+  // Таблиці епохи може ще не бути (база до введення епохи версій): це «рядка немає», а не збій
   const [epoch] = tables?.epoch
     ? await tx.query<{ found: boolean }>(
         `SELECT EXISTS (SELECT FROM ${VERSION_EPOCH}) AS found`

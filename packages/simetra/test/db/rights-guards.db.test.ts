@@ -587,7 +587,7 @@ describe("rights administration guards", () => {
             await client.query("SET CONSTRAINTS ALL IMMEDIATE")
             // Права `other` — живим варіантом аналізу за параметром
             // користувача: транзакцію закріплено за `root` першим знімком,
-            // І claims `other` у ній дали б порожні факти.
+            // і claims `other` у ній дали б порожні факти.
             const mine = await client.query<{ v: string[] }>(
               "SELECT coalesce(array_agg(DISTINCT m.action || '|' || m.extent), '{}') AS v FROM simetra.rights_detail_of($1) m WHERE m.object = 'task'",
               [key("other")]

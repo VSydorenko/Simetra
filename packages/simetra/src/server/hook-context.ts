@@ -114,7 +114,7 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
     })
     const failure = new CommandFailure(INTERNAL)
     // Відмова закриває чергу команди, у чиєму контексті стався виклик,
-    // Перехопивши її, хук не закомітить команду без цієї дії.
+    // перехопивши її, хук не закомітить команду без цієї дії.
     // Після завершення команди — лише журнал.
     const frame = frames.getStore()
     if (frame?.command.active === true) {
@@ -169,7 +169,7 @@ function contextOf(tx: Transaction, phase: HookPhase, scope: Scope) {
         if (depth > tx.state.maxDepth) tx.abort({ code: "command.depth" })
         // Глибина не обмежує ширини: хук у циклі інакше тримав би транзакцію
         // й замки на будь-якій кількості фаз. Лічаться лише фази `ctx.run`:
-        // межа вхідного пакета — окремий вхідний контракт (B1b-2).
+        // межа вхідного пакета — окремий вхідний контракт (`BATCH_MAX` конверта, спека П4-B §4.5).
         if (++tx.nestedPhases > BATCH_MAX) {
           tx.abort({ code: "command.depth", reason: "phases" })
         }

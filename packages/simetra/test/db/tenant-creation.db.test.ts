@@ -769,7 +769,7 @@ describe("tenant creation: self-service with a required member attribute and the
     const outcome = await steps("creator", [
       coreStep(ORG, { id: randomUUID() }, {}, randomUUID()),
     ])
-    // Код T3 для цієї відмови — Задача 6; тут — сира відмова бази
+    // Код T3 для цієї відмови перевіряє unit-тест відображення помилок; тут — сира відмова бази
     expect(outcome.refusal).toMatchObject({ code: "23502", column: "title" })
     expect(outcome.refusal!.message).toMatch(/"org_member"/)
   })

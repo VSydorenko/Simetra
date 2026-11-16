@@ -125,7 +125,7 @@ const memberTable = (membership: RuntimeObject): Table => ({
   prefix: `${MEMBER}.`,
 })
 
-/** Шлях за `DETAIL` `22023` ядра (таблиця брифу Задачі 7). */
+/** Шлях за `DETAIL` `22023` ядра (спека П4 §6.10: від `DETAIL` до шляху помилки). */
 function invalidOf(
   object: RuntimeObject,
   detail: string,

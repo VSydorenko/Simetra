@@ -22,7 +22,7 @@ import type { ServerRow, Values } from "../types"
 import { OBJECTS, S, TASK, key, setup, watch } from "./core-support"
 
 /*
- * Заміри ядра й межа пам'яті (крок 4; спека П4-B
+ * Заміри ядра й межа пам'яті (спека П4-B
  * §14.3). Запуск: `CORE_PERF=1 pnpm --filter simetra test
  * src/data/store/__tests__/perf` — без змінної файл пропускається: час
  * залежить від машини. Метод часу — `performance.now` навколо операції, 30

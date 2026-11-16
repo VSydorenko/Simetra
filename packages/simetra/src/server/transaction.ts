@@ -48,7 +48,7 @@ export interface RuntimeState {
   maxTabularLines: number
   /**
    * `statement_timeout` ceiling of a server read statement, ms; `ctx.read`
-   * sets none (B1b budget).
+   * sets none (P4-B spec §4.5).
    */
   readTimeout: number
   /** Time budget of one server read transaction, all its parts, ms (P4-B spec §4.2). */
@@ -130,7 +130,7 @@ const COMMAND_CLAIMS_TEXT =
   `set_config('lock_timeout', $3, true), ` +
   `set_config('idle_in_transaction_session_timeout', $4, true), ` +
   transactionTimeout("$4")
-// Налаштування транзакції читання — теж одним оператором (спека П4-B §4.5):
+// Налаштування транзакції читання — теж одним оператором (спека П4-B §4.2):
 // `set_config('role', …, true)` діє як `SET LOCAL ROLE`, тож роль — без
 // окремого кругового запиту. Роль — останньою: решту виразів обчислює ще
 // роль входу, як і claims команди до `SET LOCAL ROLE`. Епоху цей оператор
