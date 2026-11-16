@@ -97,8 +97,7 @@ export interface PlanStep {
  * як `NOT NULL`, дає `NULL`.
  */
 export type NotNullCount =
-  | { count: "nulls" | "rows" }
-  | { count: "expression"; expression: string }
+  { count: "nulls" | "rows" } | { count: "expression"; expression: string }
 
 /** Колонка кроку з тим, що порушить її `NOT NULL`. */
 export type NotNullCheck = {

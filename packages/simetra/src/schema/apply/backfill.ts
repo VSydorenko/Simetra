@@ -7,13 +7,14 @@ import {
 import {
   KIND_REGISTRY,
   quoteIdent,
+  type CatalogCheck,
   type CatalogColumn,
   type CatalogModel,
   type CatalogTable,
   type MetadataKind,
   type PhysicalSnapshot,
 } from "simetra/model"
-import type { EngineAction, EngineDiagnostic } from "../engine"
+import type { EngineAction, EngineDiagnostic, EngineObjectRef } from "../engine"
 import { createdByPlan } from "./carrier-backfill"
 import { applyDiagnostic } from "./diagnostic"
 import { ApplyDbError, type ApplyTransaction } from "./port"
@@ -28,6 +29,7 @@ import {
   backfillAction,
   notNullColumns,
   notNullViolation,
+  nullDatum,
   type NotNullCheck,
   type NotNullColumn,
   type NotNullCount,
@@ -528,12 +530,18 @@ export function planBackfills(
     /** Колонка під живим обмеженням `EXCLUDE` (`readBackfillCounts`). */
     excluded?: (target: BackfillTarget) => boolean
   }
-): { actions: PlanAction[]; refusals: EngineDiagnostic[] } {
+): {
+  actions: PlanAction[]
+  refusals: EngineDiagnostic[]
+  probes: BackfillCheckProbe[]
+} {
   const refusals: EngineDiagnostic[] = []
   const fills: (Fill & {
     rows: number
     default: string
+    type: string
     live: CatalogColumn
+    source: CatalogTable
   })[] = []
   for (const site of notNullSites(p)) {
     const { target } = site
@@ -606,12 +614,20 @@ export function planBackfills(
       continue
     }
     const live = site.table.columns.find((c) => c.name === target.column)!
-    fills.push({ ...target, rows, default: desired.default, live })
+    fills.push({
+      ...target,
+      rows,
+      default: desired.default,
+      type: desired.type,
+      live,
+      source: site.table,
+    })
   }
 
   const ordered = defaultsBeforeNotNull(p.actions, fills, p.parse)
   const parsed = ordered.map((a) => statements(a, p.parse))
   const before = new Map<number, PlanAction[]>()
+  const probes: BackfillCheckProbe[] = []
   for (const fill of fills) {
     const n = parsed.findIndex((stmts) => isSetNotNull(stmts, fill))
     if (n < 0 || !defaultInPlace(parsed, n, fill, fill.live, fill.default)) {
@@ -636,11 +652,132 @@ export function planBackfills(
         triggers: [],
       }),
     ])
+    const checks = checksAt(p, ordered.slice(0, n), fill.source).filter((c) =>
+      mentions(c.expression, fill.column, p.parse)
+    )
+    if (checks.length > 0)
+      probes.push({
+        table: fill.table,
+        column: fill.column,
+        default: fill.default,
+        type: fill.type,
+        columns: fill.source.columns.map((c) => c.name),
+        checks,
+      })
   }
   return {
     actions: ordered.flatMap((a, i) => [...(before.get(i) ?? []), a]),
     refusals,
+    probes,
   }
+}
+
+/**
+ * Обмеження `CHECK` таблиці, що діють на момент кроку заповнення, — дії
+ * `prior` стоять перед ним: живі, яких ці дії не зняли, і бажані, які вони
+ * створили. Ідентичність — ім'я обмеження таблиці, як у `produced` і
+ * `destroyed` двигуна.
+ */
+function checksAt(
+  p: BackfillInput,
+  prior: readonly EngineAction[],
+  table: CatalogTable
+): CatalogCheck[] {
+  const refs = (pick: (a: EngineAction) => readonly EngineObjectRef[]) =>
+    new Set(
+      prior.flatMap((a) =>
+        pick(a)
+          .filter(
+            (r) =>
+              r.kind === "constraint" &&
+              r.schema === table.schema &&
+              r.table === table.name
+          )
+          .map((r) => r.name)
+      )
+    )
+  const dropped = refs((a) => a.destroyed)
+  const created = refs((a) => a.produced)
+  const desired = findTable(p.desired, table.schema, table.name)
+  return [
+    ...table.checks.filter((c) => !dropped.has(c.name) && !created.has(c.name)),
+    ...(desired?.checks ?? []).filter((c) => created.has(c.name)),
+  ]
+}
+
+/**
+ * Проба `CHECK` для кроку заповнення (платформна спека §6.6): крок пише
+ * default у кожен рядок з `NULL`, і обмеження колонки, яке відхиляє це
+ * значення, дало б сирий збій кроку на застосуванні. План обчислює
+ * обмеження над рядками з default на місці колонки. Імена — дій двигуна.
+ */
+export interface BackfillCheckProbe {
+  table: { schema: string; name: string }
+  column: string
+  /** Бажаний default і тип колонки. */
+  default: string
+  type: string
+  /** Колонки таблиці на плані: їх читають вирази обмежень. */
+  columns: readonly string[]
+  checks: readonly CatalogCheck[]
+}
+
+/**
+ * Відмови проб `CHECK` (`plan.backfill-check`) у rollback-транзакції
+ * читача під `BACKFILL_SETTINGS`. Рядок, на якому вираз обмеження хибний
+ * (`IS FALSE`: `NULL` обмеження пропускає), — порушення. Кожна проба — під
+ * точкою збереження: проба, якої база не обчислює (default з `nextval` у
+ * транзакції лише для читання, обмеження над колонкою, яку план додає
+ * раніше), відмови не дає, і крок лишається під сирим збоєм, як без проби.
+ * `names` — імена цілі для таблиці й колонок; вирази обмежень читають
+ * імена дій, тож колонки отримують псевдоніми дій.
+ */
+export async function readBackfillCheckRefusals(
+  tx: ApplyTransaction,
+  probes: readonly BackfillCheckProbe[],
+  names: {
+    table: (t: { schema: string; name: string }) => {
+      schema: string
+      name: string
+    }
+    column: (t: { schema: string; name: string }, column: string) => string
+  }
+): Promise<EngineDiagnostic[]> {
+  const refusals: EngineDiagnostic[] = []
+  await withLocalSettings(tx, BACKFILL_SETTINGS, async () => {
+    for (const probe of probes) {
+      const on = (c: string) =>
+        `${quoteIdent(names.column(probe.table, c))} AS ${quoteIdent(c)}`
+      const select = [
+        ...probe.columns.filter((c) => c !== probe.column).map(on),
+        `(${probe.default})::${probe.type} AS ${quoteIdent(probe.column)}`,
+      ].join(", ")
+      const source = `SELECT ${select} FROM ${qualified(names.table(probe.table))} WHERE ${nullDatum(quoteIdent(names.column(probe.table, probe.column)))}`
+      for (const check of probe.checks) {
+        await tx.query("SAVEPOINT simetra_backfill_check")
+        let rows: number | undefined
+        try {
+          const [row] = await tx.query<{ n: string | number }>(
+            `SELECT pg_catalog.count(*) AS n FROM (${source}) AS ${quoteIdent(probe.table.name)} WHERE (${check.expression}) IS FALSE`
+          )
+          rows = row === undefined ? undefined : Number(row.n)
+        } catch (error) {
+          if (!(error instanceof ApplyDbError)) throw error
+        }
+        await tx.query("ROLLBACK TO SAVEPOINT simetra_backfill_check")
+        if (rows !== undefined && rows > 0)
+          refusals.push(
+            applyDiagnostic("plan.backfill-check", "error", {
+              table: qualified(probe.table),
+              column: quoteIdent(probe.column),
+              check: check.name,
+              rows,
+            })
+          )
+      }
+    }
+  })
+  return refusals
 }
 
 /**

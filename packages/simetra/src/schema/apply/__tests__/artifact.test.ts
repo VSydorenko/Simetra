@@ -521,7 +521,11 @@ describe("plan artifact", () => {
       id: "s3",
       sql: 'ALTER TABLE "app"."t" ALTER COLUMN "d" SET NOT NULL',
       notNull: [
-        { table: { schema: "app", name: "t" }, column: "d", count: "nulls" as const },
+        {
+          table: { schema: "app", name: "t" },
+          column: "d",
+          count: "nulls" as const,
+        },
       ],
     }
     const backfill = {

@@ -4846,6 +4846,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "План не записано. Заповніть значення NULL різними значеннями до застосування або дайте реквізиту UUID default newUuid.",
     },
   },
+  "plan.backfill-check": {
+    en: (p) =>
+      `Column ${p.column} of ${p.table} becomes NOT NULL and its NULL values would be filled with the default, but check constraint ${p.check} rejects that value in ${p.rows} row(s)`,
+    uk: (p) =>
+      `Колонка ${p.column} таблиці ${p.table} стає NOT NULL, а її NULL заповнилися б default, але обмеження CHECK ${p.check} відхиляє це значення в рядках: ${p.rows}`,
+    hint: {
+      en: "No plan was written. Give the attribute a default the constraint accepts, or fill the NULL values before applying.",
+      uk: "План не записано. Дайте реквізиту default, який приймає обмеження, або заповніть значення NULL до застосування.",
+    },
+  },
   "plan.backfill-carrier-source": {
     en: (p) =>
       `Column ${p.column} of ${p.table} becomes NOT NULL and its NULL values would be filled with the default, but the rights carrier copy ${p.copy} reads this column, and the plan does not prove the copies follow the filled value`,

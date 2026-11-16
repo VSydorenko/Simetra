@@ -45,6 +45,7 @@ import {
   columnKey,
   planBackfills,
   readBackfillCounts,
+  readBackfillCheckRefusals,
   withNotNullChecks,
   withShownTriggers,
   type BackfillInput,
@@ -361,9 +362,15 @@ async function backfillActions(p: {
     rows: (t) => rows.get(key(t)) ?? Number.NaN,
     excluded: (t) => excluded.has(key(t)),
   })
-  return planned.refusals.length > 0
-    ? { ok: false, diagnostics: planned.refusals }
-    : { ok: true, actions: planned.actions }
+  if (planned.refusals.length > 0)
+    return { ok: false, diagnostics: planned.refusals }
+  if (planned.probes.length > 0) {
+    const checks = await p.reader.transaction(p.target, "rollback", (tx) =>
+      readBackfillCheckRefusals(tx, planned.probes, p.names)
+    )
+    if (checks.length > 0) return { ok: false, diagnostics: checks }
+  }
+  return { ok: true, actions: planned.actions }
 }
 
 /**

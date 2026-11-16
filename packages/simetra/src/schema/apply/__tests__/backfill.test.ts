@@ -466,6 +466,81 @@ describe("planBackfills", () => {
     expect(backfillTargets(input({ actions: [recreated, add] }))).toEqual([])
   })
 
+  // #159 (3): CHECK, що діє на момент заповнення й читає колонку, план
+  // пробує з default на місці NULL
+  it("probes the CHECK constraints in force at the fill that read the column", () => {
+    const check = (name: string, expression: string) => ({ name, expression })
+    const source = model(
+      table([column("id"), column("note"), column("code")], {
+        checks: [
+          check("note_len", "length(note) > 3"),
+          check("code_set", "code <> ''"),
+          check("note_old", "note <> 'old'"),
+        ],
+      })
+    )
+    const desired = model(
+      table(
+        [
+          column("id"),
+          column("note", { notNull: true, default: "''::text" }),
+          column("code"),
+        ],
+        {
+          checks: [
+            check("note_len", "length(note) > 3"),
+            check("note_new", "note <> 'new'"),
+          ],
+        }
+      )
+    )
+    const constraint = (name: string) => ({
+      kind: "constraint",
+      schema: "app",
+      table: "items",
+      name,
+    })
+    const drop = action(
+      'ALTER TABLE "app"."items" DROP CONSTRAINT "note_old"',
+      { destroyed: [constraint("note_old")] }
+    )
+    const add = action(
+      'ALTER TABLE "app"."items" ADD CONSTRAINT "note_new" CHECK (note <> \'new\')',
+      { produced: [constraint("note_new")] }
+    )
+    const r = planBackfills({
+      ...input({
+        actions: [drop, add, SET_DEFAULT, SET_NOT_NULL],
+        source,
+        desired,
+      }),
+      rows: () => 2,
+    })
+    expect(r.refusals).toEqual([])
+    expect(r.probes).toEqual([
+      {
+        table: { schema: "app", name: "items" },
+        column: "note",
+        default: "''::text",
+        type: "text",
+        columns: ["id", "note", "code"],
+        // `code_set` не читає колонки, `note_old` знято до заповнення
+        checks: [
+          check("note_len", "length(note) > 3"),
+          check("note_new", "note <> 'new'"),
+        ],
+      },
+    ])
+    // Обмеження, яке створює дія після заповнення, на заповненні не діє
+    const late = planBackfills({
+      ...input({ actions: [SET_DEFAULT, SET_NOT_NULL, add], source, desired }),
+      rows: () => 2,
+    })
+    expect(late.probes.map((p) => p.checks.map((c) => c.name))).toEqual([
+      ["note_len", "note_old"],
+    ])
+  })
+
   it("counts a recreated and a generated column added as NOT NULL", () => {
     // DROP + ADD: нова колонка отримує значення для кожного наявного рядка,
     // тож живу колонку з тим самим ім'ям план не вважає «вже заповненою»
@@ -486,7 +561,10 @@ describe("planBackfills", () => {
         column("id"),
         column("note"),
         column("code"),
-        column("g", { notNull: true, generated: { expression: "lower(note)" } }),
+        column("g", {
+          notNull: true,
+          generated: { expression: "lower(note)" },
+        }),
       ])
     )
     const addGenerated = action(
@@ -1303,7 +1381,10 @@ describe("withNotNullChecks", () => {
       table([
         column("id"),
         column("extra", { notNull: true }),
-        column("g", { notNull: true, generated: { expression: "lower(note)" } }),
+        column("g", {
+          notNull: true,
+          generated: { expression: "lower(note)" },
+        }),
         column("d", { notNull: true, default: "''::text" }),
       ])
     )

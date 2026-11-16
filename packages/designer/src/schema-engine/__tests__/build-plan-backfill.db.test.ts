@@ -188,6 +188,44 @@ describe.concurrent("buildPlan backfill", () => {
     })
   })
 
+  // #159 (3): default, який відхиляє CHECK колонки, — відмова на плані, а
+  // не сирий 23514 кроку заповнення
+  it("refuses a fill whose default the column CHECK rejects", async () => {
+    const checked = (type: Json, expression: string) => ({
+      ...(notes(type) as unknown as Json),
+      checks: [{ name: "notes_note_check", expression }],
+    })
+    const filled = { ...REQUIRED, default: "'n/a'" }
+    const before = await compiled({
+      [NOTES]: checked({ type: "String", length: 20 }, "note <> 'n/a'"),
+    })
+    const after = await compiled({
+      [NOTES]: checked(filled, "note <> 'n/a'"),
+    })
+    // Позитивний контроль: обмеження, яке default приймає
+    const accepted = await compiled({
+      [NOTES]: checked(filled, "note <> 'x'"),
+    })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await query(url, rows(null, null, "a"))
+      const outcome = await plan(url, after)
+      expect(outcome.status).toBe("refused")
+      expect(params(outcome, "plan.backfill-check")).toEqual([
+        {
+          table: "app.notes",
+          column: "note",
+          check: "notes_note_check",
+          rows: 2,
+        },
+      ])
+      const control = planned(await plan(url, accepted))
+      expect(control.steps.filter((s) => s.origin === "backfill")).toHaveLength(
+        1
+      )
+    })
+  })
+
   it("refuses the backfill of a table with an UPDATE rule with the promotion code", async () => {
     // Р13: передумови запису спільні з кроками даних промоції — правило
     // писало б поза згодою, і лічильник заповнення нічого не довів би
