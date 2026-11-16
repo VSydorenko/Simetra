@@ -346,6 +346,7 @@ export function createCore(options: {
     objectOf,
     dirtySections: () => dirtySections,
     closedSnapshot: () => closed,
+    defects,
   })
 
   // ------------------------------------------------------------ хвіст

@@ -270,12 +270,11 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       // для кожного ключа, їх дочитує перечитування.
       for (const key of keys) ops.clearOwner(scope, o, key)
       for (const key of hidden) rowViews.touch(o.name, key)
-      // Усі ключі, не лише з записом: змонтований вигляд `section` тримає
-      // рядки ТЧ без шапки в сховищі, і після `clearOwner` його дочитує лише
-      // перечитування.
-      if (keys.length === 0) return
+      // ТЧ-підмножини сюди не входять: їх перечитує вигляд за правилом
+      // свіжості (`sectionStale`) — на монтуванні, `preload` і після `commit`.
+      if (hidden.length === 0) return
       const pending = ctx.hiddenKeys.get(o.name) ?? new Set<Key>()
-      for (const key of keys) pending.add(key)
+      for (const key of hidden) pending.add(key)
       ctx.hiddenKeys.set(o.name, pending)
     },
 
@@ -576,7 +575,8 @@ export async function revalidate(
  * row or an `include` target, invisible views included (plan B3-3, Р11): the
  * values return only with a read that started after the `hide`. A failed
  * read leaves them hidden. A view of another object that includes the
- * object is re-read as its own object's view.
+ * object is re-read as its own object's view. Tabular section subsets are
+ * not re-read here: they go stale by the hide epoch of their owner.
  */
 export async function revalidateHolders(
   ctx: WriterContext,
@@ -587,14 +587,14 @@ export async function revalidateHolders(
   const groups = new Map<ObjectState, Subset[]>()
   for (const s of ctx.registry.subsets()) {
     if (!s.alive || s.purged || !s.loaded) continue
-    if (s.form.spec.kind === "section" && s.listeners.size === 0) continue
+    // ТЧ-підмножину перечитує сам вигляд за правилом свіжості
+    // (`sectionStale`): один механізм для змонтованої, утримуваної й тієї,
+    // чиє перше читання було в польоті.
+    if (s.form.spec.kind === "section") continue
     const included = s.included.get(object)
-    const spec = s.form.spec
     const holds =
       (s.form.object.name === object &&
-        [...keys].some(
-          (k) => s.owned.has(k) || (spec.kind === "section" && spec.owner === k)
-        )) ||
+        [...keys].some((k) => s.owned.has(k))) ||
       (included !== undefined && [...keys].some((k) => included.has(k)))
     if (!holds) continue
     const group = groups.get(s.form.object) ?? []

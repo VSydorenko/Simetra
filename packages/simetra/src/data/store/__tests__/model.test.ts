@@ -386,6 +386,9 @@ async function runModel(
   // Ключ, який сховав `hide`: значення — лише з читання, що почалось після
   // нього (план B3-3, Р11), а рядки ТЧ власника — лише з читання ТЧ.
   const hideBarrier = new Map<string, number>()
+  // Вигляд ТЧ (SPECS[4]) утримано `preload` цього кроку: спостереження, як
+  // і слухач, вимагає перечитування після `hide` власника.
+  let preloadedSection = false
   // Ключ, що став `removed`: значення — лише з читання після позначки (П15).
   const removedBarrier = new Map<string, number>()
   // Мить (довжина журналу запитів), коли свіжа відповідь «рядка немає»
@@ -748,6 +751,39 @@ async function runModel(
     handles.forEach((handle, v) => {
       checkSnapshot(label, v, handle.getSnapshot())
     })
+    checkSectionReread(label)
+  }
+
+  /**
+   * ТЧ-підмножина, яку спостерігають (слухач чи `preload` кроку) після
+   * `hide` власника, перечитана (план B3-3, Р11, рішення архітекторки до
+   * задачі 0): є читання ТЧ власника, надіслане після `hide`, або
+   * завантаження вигляду в польоті — після нього перевірка повториться.
+   * Стан підмножини на мить `hide` будь-який: змонтована, утримувана без
+   * слухачів, перше завантаження в польоті, шапка в сховищі чи ні.
+   */
+  const checkSectionReread = (label: string) => {
+    const spec = SPECS[4]!
+    if (spec.kind !== "section") return
+    if (subs[4] === undefined && !preloadedSection) return
+    const barrier = hideBarrier.get(id(TASK, spec.owner))
+    if (barrier === undefined) return
+    const s = internals.registry.find(spec)
+    if (s === undefined || s.purged || s.flight !== undefined) return
+    // Сесія після межі відкинутих відповідей не читає (Р12); власник
+    // `removed` рядків не показує, і читання ТЧ їх не поверне.
+    if (inspect.versionEpochs().unavailable) return
+    if (objectOf(TASK).rows.get(spec.owner)?.removed !== undefined) return
+    const reread = fake.log
+      .slice(barrier)
+      .some(
+        (r) =>
+          r.query !== undefined &&
+          "tabularSection" in r.query &&
+          "owner" in r.query &&
+          r.query.owner === spec.owner
+      )
+    if (!reread) fail(label, `section of ${spec.owner} not re-read after hide`)
   }
 
   /** `purge` прибирає ключі зі складу списків, а картка й ТЧ ключа — `purged`. */
@@ -898,6 +934,7 @@ async function runModel(
     logAt = log.length
     restoredInStep.clear()
     const before = lists()
+    preloadedSection = false
     let userViews = new Set<number>()
     let purgeStep = false
     let purgedScope: { object: ObjectName; scope: string } | undefined
@@ -977,6 +1014,7 @@ async function runModel(
             fail(label, "preload refused with a spare hold")
         }
         promise?.catch((error: unknown) => errors.push(error))
+        if (promise !== undefined && s.v === 4) preloadedSection = true
         break
       }
       case "refresh":
@@ -1202,6 +1240,7 @@ async function runModel(
   // Пізні відповіді на все, що лишилось у польоті: повільні читання й
   // кожне друге з решти — застарілою реплікою (стан на мить запиту) після
   // всіх звільнень і витіснень прогону, інші — станом зараз.
+  preloadedSection = false
   for (let i = 0; late.length > 0 || fake.pending.length > 0; i++) {
     if (i > 500) fail("drain", "reads never end")
     const stepStart = fake.log.length
@@ -1431,6 +1470,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "unbounded-seen",
   "system-reread-via-load",
   "hide-lifted-by-older-read",
+  "section-ignores-hide",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -1446,6 +1486,7 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "unbounded-seen": /seen \d+ > \d+/,
   "system-reread-via-load": /composition/,
   "hide-lifted-by-older-read": /after hide without a later read/,
+  "section-ignores-hide": /not re-read after hide/,
 }
 
 describe("core model self-check", () => {
