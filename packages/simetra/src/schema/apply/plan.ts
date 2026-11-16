@@ -1,5 +1,6 @@
 import {
   canonicalSnapshot,
+  IDENTITY_TRIGGERS,
   loadSqlParser,
   mainTableOf,
   modelFunctions,
@@ -14,12 +15,15 @@ import {
   diffCatalogModels,
   PROVIDER_API_ROLES,
   PROVIDER_IDENTITY_SOURCES,
+  PROVIDER_LOGIN_ROLES,
   quoteIdent,
+  type DatabaseProvider,
   type CatalogModel,
 } from "simetra/model"
 import {
   copiesShadowFromTemplate,
   PROVIDER_EXPECTED_BLIND_FUNCTIONS,
+  PROVIDER_IDENTITY_TRIGGER_LOCKED,
   PROVIDER_INSTALLABLE_EXTENSIONS,
   PROVIDER_LOCKS,
   type DbConnection,
@@ -45,6 +49,7 @@ import {
   backfillWriteTables,
   columnKey,
   planBackfills,
+  triggerReplacements,
   readBackfillCounts,
   withNotNullChecks,
   withShownTriggers,
@@ -349,8 +354,18 @@ async function backfillActions(p: {
   | { ok: true; actions: PlanAction[] }
   | { ok: false; diagnostics: EngineDiagnostic[] }
 > {
-  const targets = backfillTargets(p.input)
-  if (targets.length === 0) return { ok: true, actions: [...p.input.actions] }
+  // Пара DROP + CREATE тригера — один CREATE OR REPLACE ще до заповнень і
+  // класифікації: id кроків, класи й слід рахуються від остаточного списку
+  const input = {
+    ...p.input,
+    actions: triggerReplacements(
+      p.input.actions,
+      p.input.source,
+      p.input.parse
+    ),
+  }
+  const targets = backfillTargets(input)
+  if (targets.length === 0) return { ok: true, actions: [...input.actions] }
   const read = await p.reader.transaction(p.target, "rollback", (tx) =>
     readBackfillCounts(
       tx,
@@ -361,7 +376,7 @@ async function backfillActions(p: {
   const { rows, excluded } = read.counts
   const key = (t: BackfillTarget) => backfillTargetKey(onTarget(p.names, t))
   const planned = planBackfills({
-    ...p.input,
+    ...input,
     // Ціль без прочитаної кількості — дефект конвеєра: `planBackfills`
     // відкидає не ціле число
     rows: (t) => rows.get(key(t)) ?? Number.NaN,
@@ -548,6 +563,61 @@ export function identityTableRefusal(
         table,
         reason: "privilege",
       })
+}
+
+/**
+ * Steps that remove a platform trigger (`IDENTITY_TRIGGERS`) from the
+ * identity table `table` — `plan.identity-trigger-locked`, one per trigger
+ * (spec of provider profiles §4.2). Only `destroyed` counts: a changed
+ * trigger reaches the plan as one `CREATE OR REPLACE TRIGGER` step
+ * (`triggerReplacements`), which needs only `TRIGGER`; a first creation
+ * and a changed provision function are not removals. `login` is the login
+ * role of the provider that owns the table: only it can run the removal.
+ */
+export function identityTriggerLocks(
+  steps: readonly Pick<PlanStep, "destroyed">[],
+  table: { schema: string; name: string },
+  login: string
+): EngineDiagnostic[] {
+  const names = new Set(IDENTITY_TRIGGERS)
+  const removed = new Set(
+    steps.flatMap((s) =>
+      s.destroyed.flatMap((r) =>
+        r.kind === "trigger" &&
+        r.schema === table.schema &&
+        r.table === table.name &&
+        names.has(r.name)
+          ? [r.name]
+          : []
+      )
+    )
+  )
+  return [...removed].sort(byCodeUnit).map((trigger) =>
+    applyDiagnostic("plan.identity-trigger-locked", "error", {
+      trigger,
+      table: `${quoteIdent(table.schema)}.${quoteIdent(table.name)}`,
+      login,
+    })
+  )
+}
+
+/**
+ * Відмова зняття тригерів провізії — лише в профілі, де зняти їх може тільки
+ * власник таблиці (`PROVIDER_IDENTITY_TRIGGER_LOCKED`).
+ */
+function lockedIdentityTriggers(
+  steps: readonly Pick<PlanStep, "destroyed">[],
+  provider: DatabaseProvider
+): EngineDiagnostic[] {
+  if (!PROVIDER_IDENTITY_TRIGGER_LOCKED[provider]) return []
+  const login = PROVIDER_LOGIN_ROLES[provider][0]
+  if (login === undefined)
+    throw new Error(`internal: no login role of provider ${provider}`)
+  return identityTriggerLocks(
+    steps,
+    PROVIDER_IDENTITY_SOURCES[provider].table,
+    login
+  )
 }
 
 /**
@@ -929,6 +999,10 @@ export async function buildPlan(
   })
   if (!filled.ok) return refused([...diagnostics, ...filled.diagnostics])
   const classified = classifySteps(filled.actions, live.extracted.model, parse)
+  // Зняти тригер провізії з чужої таблиці може лише її власник: відмова з
+  // порадою до будь-якого кроку, а не падіння застосування
+  const locked = lockedIdentityTriggers(classified, desired.scope.provider)
+  if (locked.length > 0) return refused([...diagnostics, ...locked])
   // Зміна типу, якій сторожа не побудувати, — відмова, а не крок без
   // перевірки: інакше дозвіл на `destructive` знову означав би «обріж мовчки»
   const guarded = guardedChanges(classified, live.extracted.model, parse)
@@ -1374,6 +1448,12 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     ...analysis.diagnostics,
   ])
   if (!analysis.ok || hasError(withClone)) return refused(withClone)
+  // Той самий гейт тригерів провізії, що й у плані без промоції
+  const locked = lockedIdentityTriggers(
+    analysis.steps,
+    c.model.project.database.provider
+  )
+  if (locked.length > 0) return refused([...withClone, ...locked])
   const { model: cloneModel } = analysis
   const checked = await backfillChecks({
     reader: dbs.reader,

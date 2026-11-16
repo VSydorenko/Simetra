@@ -4470,6 +4470,18 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: (p) => hintOf(IDENTITY_TABLE_HINTS, p, "table").uk,
     },
   },
+  "plan.identity-trigger-locked": {
+    en: (p) =>
+      `The plan removes the provision trigger ${p.trigger} from the identity table ${p.table}, which only the owner of the table, ${p.login}, can do`,
+    uk: (p) =>
+      `План знімає тригер провізії ${p.trigger} з таблиці ідентичності ${p.table}, а це може лише власник таблиці, ${p.login}`,
+    hint: {
+      en: (p) =>
+        `Nothing was planned or written. Run this removal as ${p.login}. If the live trigger was changed outside Simetra, treat it as a sign of tampering and check it with the owner of the table.`,
+      uk: (p) =>
+        `Нічого не сплановано й не записано. Виконайте це зняття від ${p.login}. Якщо живий тригер змінено поза Simetra, вважайте це ознакою підробки й звірте його з власником таблиці.`,
+    },
+  },
   "plan.type-guard-unsupported": {
     en: (p) =>
       p.reason === "equality"

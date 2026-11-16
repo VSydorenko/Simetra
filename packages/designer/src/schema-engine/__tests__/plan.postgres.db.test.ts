@@ -1,7 +1,12 @@
 import { withDatabaseName } from "@supabase/pg-delta"
 import pg from "pg"
-import { canonicalSnapshot, compile } from "simetra/compiler"
-import { quoteIdent } from "simetra/model"
+import {
+  canonicalSnapshot,
+  compile,
+  IDENTITY_TRIGGERS,
+  type CompiledModel,
+} from "simetra/compiler"
+import { PROVIDER_LOGIN_ROLES, quoteIdent } from "simetra/model"
 import {
   buildPlan,
   ensurePostgresCluster,
@@ -13,8 +18,11 @@ import {
 } from "simetra/schema"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
+  catalog,
   dropTaggedCluster,
+  metaFiles,
   migrateBetterAuth,
+  project,
   readReferenceDomain,
   roleUrl,
   setTestPasswords,
@@ -273,5 +281,155 @@ describe("identity table gate on the postgres profile", () => {
       )
     )
     expect(await refusalOf(model)).toEqual(refused("privilege"))
+  })
+})
+
+describe("identity trigger lock on the postgres profile", () => {
+  // Свій набір: сценарій застосовує й змінює тригери провізії
+  const lock: PostgresClusterSet = taggedClusterSet("trglock")
+  const lockDb = (): string => withDatabaseName(superuserUrl, lock.database)
+  const table = `${quoteIdent(lock.identity.schema)}.${quoteIdent(lock.identity.name)}`
+  const [provision] = IDENTITY_TRIGGERS as [string]
+  const options = () => ({
+    target: { url: roleUrl(lock, lock.owner) },
+    shadowTemplate: lock.template,
+  })
+  const lockRoles = async () => {
+    const result = await ensurePostgresCluster(
+      writer,
+      {
+        maintenance: { url: withDatabaseName(superuserUrl, "postgres") },
+        target: { url: lockDb() },
+        template: { url: withDatabaseName(superuserUrl, lock.template) },
+      },
+      lock
+    )
+    if (!result.ok)
+      throw new Error(`roles refused: ${result.error.map((d) => d.code)}`)
+  }
+
+  beforeAll(async () => {
+    await lockRoles()
+    await setTestPasswords(lock)
+    await migrateBetterAuth(roleUrl(lock, lock.auth))
+    await lockRoles()
+  })
+
+  afterAll(() => dropTaggedCluster(lock))
+
+  /** Мала модель профілю: з «Користувачами» (тригери провізії) чи без. */
+  async function smallModel(users: boolean): Promise<CompiledModel> {
+    const compiled = await compile(
+      metaFiles({
+        "project.meta.json": project({ database: { provider: "postgres" } }),
+        ...(users
+          ? {
+              "catalogs/Users/Users.meta.json": catalog("Users", {
+                role: "users",
+                scope: "none",
+              }),
+            }
+          : { "catalogs/Items/Items.meta.json": catalog("Items") }),
+      })
+    )
+    expect(compiled.diagnostics.filter((d) => d.severity === "error")).toEqual(
+      []
+    )
+    return compiled.model!
+  }
+
+  const plannedOf = async (model: CompiledModel): Promise<PlanArtifact> => {
+    const outcome = await buildPlan(engine, dbs, model, options(), [])
+    if (outcome.status !== "planned")
+      throw new Error(
+        `${outcome.status}: ${outcome.diagnostics
+          .filter((d) => d.severity === "error")
+          .map((d) => `${d.code} ${d.message}`)
+          .join("; ")}`
+      )
+    return outcome.artifact
+  }
+
+  const apply = async (artifact: PlanArtifact, model: CompiledModel) => {
+    const outcome = await executePlan(writer, options().target, artifact, {
+      mode: "apply",
+      planHash: artifact.planHash,
+      allow: artifact.requiredPermissions,
+      snapshot: canonicalSnapshot(model),
+    })
+    expect(outcome.status).toBe("committed")
+  }
+
+  /** Живі нетехнічні тригери таблиці ідентичності: ім'я → визначення. */
+  const liveTriggers = () =>
+    admin(lockDb(), async (c) => {
+      const rows = await c.query<{ name: string; def: string }>(
+        `select tgname as name, pg_get_triggerdef(oid) as def from pg_trigger
+          where tgrelid = $1::regclass and not tgisinternal order by tgname`,
+        [table]
+      )
+      return new Map(rows.rows.map((r) => [r.name, r.def]))
+    })
+
+  // Один сценарій: застосування, підміна живого тригера, повернення його
+  // кроком CREATE OR REPLACE від власника, далі справжнє зняття
+  it("returns a changed provision trigger with CREATE OR REPLACE and refuses its removal", async () => {
+    const withUsers = await smallModel(true)
+    await apply(await plannedOf(withUsers), withUsers)
+    const applied = await liveTriggers()
+    const desired = applied.get(provision)
+    expect(desired).toMatch(/ AFTER INSERT ON /)
+
+    // Підміна поза Simetra: та сама назва, інша подія. Від суперкористувача:
+    // роль `auth`, власник таблиці, не має USAGE на схему функції провізії
+    await admin(lockDb(), (c) =>
+      c.query(
+        desired!
+          .replace(/^CREATE TRIGGER /, "CREATE OR REPLACE TRIGGER ")
+          .replace(" AFTER INSERT ON ", " AFTER INSERT OR UPDATE ON ")
+      )
+    )
+    expect((await liveTriggers()).get(provision)).toMatch(
+      / AFTER INSERT OR UPDATE ON /
+    )
+
+    // Рушій дає DROP + CREATE; план зливає їх в один крок без зняття
+    const back = await plannedOf(withUsers)
+    const onTrigger = back.steps.filter((s) =>
+      [...s.produced, ...s.destroyed].some(
+        (r) => r.kind === "trigger" && r.name === provision
+      )
+    )
+    expect(onTrigger.map((s) => [s.verb, s.destroyed])).toEqual([
+      ["create", []],
+    ])
+    expect(onTrigger[0]!.sql).toMatch(/^CREATE OR REPLACE TRIGGER /)
+    expect(back.steps.some((s) => /^DROP TRIGGER/i.test(s.sql))).toBe(false)
+    // Власник має лише TRIGGER, не власність таблиці
+    await apply(back, withUsers)
+    expect(await liveTriggers()).toEqual(applied)
+
+    // Модель без «Користувачів» знімає тригери провізії: це може лише
+    // власник таблиці, тож відмова до будь-якого кроку
+    const outcome = await buildPlan(
+      engine,
+      dbs,
+      await smallModel(false),
+      options(),
+      []
+    )
+    expect(outcome.status).toBe("refused")
+    const locked = outcome.diagnostics.filter((d) => d.severity === "error")
+    expect(locked.map((d) => d.code)).toEqual(
+      [...applied.keys()].map(() => "plan.identity-trigger-locked")
+    )
+    expect(locked.map((d) => d.params)).toEqual(
+      [...applied.keys()].sort().map((trigger) => ({
+        trigger,
+        table,
+        login: PROVIDER_LOGIN_ROLES.postgres[0],
+      }))
+    )
+    expect(await liveTriggers()).toEqual(applied)
   })
 })

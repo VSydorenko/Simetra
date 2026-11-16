@@ -9,24 +9,30 @@ import {
   promoteObject,
   effectsFunctionName,
   effectsTriggerNames,
+  IDENTITY_TRIGGERS,
   platformFunctionSignatures,
   type PromotionRecord,
 } from "simetra/compiler"
 import {
   PLATFORM_ROLES,
   PROVIDER_IDENTITY_SOURCES,
+  PROVIDER_LOGIN_ROLES,
+  quoteIdent,
   type CatalogModel,
+  type DatabaseProvider,
 } from "simetra/model"
 import {
   APPLY_STATE_FORMAT,
   FINGERPRINT_SECTIONS,
   buildPlan,
   desiredForApply,
+  identityTriggerLocks,
   planPlatformFunctions,
   type ApplyDatabase,
   type ApplyTransaction,
   type EngineAction,
   type EngineCatalog,
+  type PlanStep,
   type PromotionInput,
   type SchemaEngine,
 } from "simetra/schema"
@@ -631,6 +637,125 @@ describe("buildPlan", () => {
   )
 })
 
+describe("buildPlan: identity trigger lock", () => {
+  // Гейт — над кроками обох шляхів плану: без промоції після класифікації,
+  // з промоцією — над кроками копії після наміру
+  it.each([
+    { case: "plan", promotion: false },
+    { case: "plan with a promotion", promotion: true },
+  ])(
+    "refuses a removal of a provision trigger on the postgres profile ($case)",
+    async ({ promotion }) => {
+      const domain = onProvider("postgres")
+      const { before, desired, records } = promotion
+        ? await promotedTag(domain)
+        : await samePolicyDomain(domain)
+      const target = await fakeTarget(before, { notCopies: [] })
+      const outcome = await buildPlan(
+        fakeEngine([dropIdentityTrigger("postgres")]),
+        { reader: target.reader, scratch: emptyScratch },
+        desired,
+        { target: { url: "postgres://target" } },
+        records
+      )
+      const table = PROVIDER_IDENTITY_SOURCES.postgres.table
+      expect(outcome.status).toBe("refused")
+      expect(outcome.diagnostics.filter((d) => d.severity === "error")).toEqual(
+        [
+          expect.objectContaining({
+            code: "plan.identity-trigger-locked",
+            params: {
+              trigger: IDENTITY_TRIGGERS[0],
+              table: `${quoteIdent(table.schema)}.${quoteIdent(table.name)}`,
+              login: PROVIDER_LOGIN_ROLES.postgres[0],
+            },
+          }),
+        ]
+      )
+      // Відмова — до сліду плану: права LOCK ціль не питали
+      expect(target.lockTables).toEqual([])
+    }
+  )
+
+  it.each([
+    { case: "plan", promotion: false },
+    { case: "plan with a promotion", promotion: true },
+  ])(
+    "lets the supabase profile remove a provision trigger ($case)",
+    async ({ promotion }) => {
+      const { before, desired, records } = promotion
+        ? await promotedTag()
+        : await samePolicyDomain()
+      const target = await fakeTarget(before, { notCopies: [] })
+      // Гейт пропускає: план іде до сліду, де фейк його зупиняє
+      await expect(
+        buildPlan(
+          fakeEngine([dropIdentityTrigger("supabase")]),
+          { reader: target.reader, scratch: emptyScratch },
+          desired,
+          { target: { url: "postgres://target" } },
+          records
+        )
+      ).rejects.toBeInstanceOf(ReachedLockRights)
+    }
+  )
+})
+
+describe("identityTriggerLocks", () => {
+  const table = { schema: "idp", name: "users" }
+  const ref = (name: string, on = table) => ({
+    kind: "trigger",
+    schema: on.schema,
+    table: on.name,
+    name,
+  })
+  const step = (
+    over: Partial<Pick<PlanStep, "destroyed" | "produced">>
+  ): Pick<PlanStep, "destroyed" | "produced"> => ({
+    destroyed: [],
+    produced: [],
+    ...over,
+  })
+  const [provision] = IDENTITY_TRIGGERS as [string]
+
+  it("refuses a step that removes a provision trigger", () => {
+    expect(
+      identityTriggerLocks(
+        [step({ destroyed: [ref(provision)] })],
+        table,
+        "owner_login"
+      )
+    ).toEqual([
+      expect.objectContaining({
+        code: "plan.identity-trigger-locked",
+        severity: "error",
+        params: {
+          trigger: provision,
+          table: "idp.users",
+          login: "owner_login",
+        },
+      }),
+    ])
+  })
+
+  it.each([
+    [
+      "a replace or a creation (produced only)",
+      [step({ produced: [ref(provision)] })],
+    ],
+    [
+      "another trigger of the same table",
+      [step({ destroyed: [ref("app_trigger")] })],
+    ],
+    [
+      "a provision trigger name on another table",
+      [step({ destroyed: [ref(provision, { schema: "idp", name: "other" })] })],
+    ],
+  ])("passes %s", (_name, steps) => {
+    expect(identityTriggerLocks(steps, table, "owner_login")).toEqual([])
+  })
+})
+
 describe("buildPlan: row version first (Р11)", () => {
   const PARTS = { module: false, contacts: false, invoice: false }
 
@@ -986,6 +1111,41 @@ function fakeEngine(actions: EngineAction[]): SchemaEngine {
 }
 
 /** Дія двигуна, що створює таблицю `name` у `public`. */
+/** Домен політик (чи інший) на профілі `provider`. */
+function onProvider(provider: DatabaseProvider, domain: Domain = policyDomain) {
+  return (...layers: Parameters<Domain>): Map<string, string> => {
+    const files = domain(...layers)
+    const project = JSON.parse(files.get("project.meta.json")!) as {
+      database: { provider: string }
+    }
+    project.database.provider = provider
+    files.set("project.meta.json", JSON.stringify(project))
+    return files
+  }
+}
+
+/** Дія двигуна, що знімає перший платформний тригер таблиці ідентичності. */
+function dropIdentityTrigger(provider: DatabaseProvider): EngineAction {
+  const { schema, name: table } = PROVIDER_IDENTITY_SOURCES[provider].table
+  const name = IDENTITY_TRIGGERS[0]!
+  return {
+    sql: `DROP TRIGGER ${quoteIdent(name)} ON ${quoteIdent(schema)}.${quoteIdent(table)}`,
+    verb: "drop",
+    produces: [],
+    consumes: [],
+    destroys: [`trigger:${schema}.${table}.${name}`],
+    produced: [],
+    destroyed: [{ kind: "trigger", schema, table, name }],
+    consumed: [],
+    transactionality: "transactional",
+    newSegmentBefore: false,
+    lockedTables: [{ schema, name: table }],
+    lockClass: "accessExclusive",
+    dataLoss: false,
+    rewriteRisk: false,
+  }
+}
+
 function createTable(name: string): EngineAction {
   return {
     sql: `CREATE TABLE public.${name} (id uuid)`,
