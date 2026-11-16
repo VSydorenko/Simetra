@@ -523,9 +523,13 @@ const lossSteps = (loss: Loss) =>
     })),
   ])
 
-/** Кроки втрати, що просять дозволу. */
+/**
+ * Кроки втрати, що просять дозволу в повному конвеєрі. Ціль розгорнуто SQL,
+ * а не застосуванням, тож marker немає й жоден об'єкт не власний: зняття
+ * функції механіки — теж послаблення з дозволом (платформна спека §6.6).
+ */
 const permittedLossSteps = (loss: Loss) =>
-  lossSteps(loss).filter((s) => s.class === "relaxation")
+  lossSteps(loss).map((s) => ({ ...s, class: "relaxation" }))
 
 /**
  * Втрата механіки гучна: кроки, що знімають тригери механіки, — клас
@@ -628,7 +632,7 @@ async function expectPlanAndApply(
     allow: [],
     snapshot: canonicalSnapshot(model),
   })
-  if (loss.triggers.length === 0) {
+  if (loss.triggers.length === 0 && loss.functions.length === 0) {
     expect({
       status: applied.status,
       errors: errors(applied.diagnostics),

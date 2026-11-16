@@ -422,7 +422,8 @@ export const constraintNames = (t: CatalogTable): string[] => [
 /**
  * Чи об'єкт належить останньому застосованому стану (`applied`, каталог
  * marker цілі): лише такий об'єкт платформа створила сама. Індекс — за
- * схемою й іменем, обмеження — за таблицею й іменем, тригер і політика — за
+ * схемою й іменем, обмеження — за таблицею й іменем (обмеження домену — за
+ * доменом), тригер і політика — за
  * ідентичністю одиниці, функція, процедура й в'юха — за класом, схемою й
  * іменем (перевантаження з тим самим іменем вважається своїм). Правила
  * платформа не створює, тож воно своїм не буває.
@@ -438,7 +439,16 @@ function inApplied(ref: EngineObjectRef, applied: CatalogModel): boolean {
       const table = applied.tables.find(
         (t) => t.schema === ref.schema && t.name === ref.table
       )
-      return table !== undefined && constraintNames(table).includes(ref.name)
+      if (table !== undefined) return constraintNames(table).includes(ref.name)
+      // Обмеження домену двигун адресує полем `table` з іменем домену, а
+      // домен — одиниця каталогу з обмеженнями в її тексті: власний домен
+      // несе й власні обмеження
+      return applied.units.some(
+        (u) =>
+          u.class === "domain" &&
+          u.schema === ref.schema &&
+          u.name === ref.table
+      )
     }
     case "trigger":
     case "policy":

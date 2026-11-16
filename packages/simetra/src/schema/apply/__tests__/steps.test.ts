@@ -533,6 +533,13 @@ describe("foreignDrops", () => {
         sql: "",
       },
       {
+        class: "domain",
+        identity: "domain:app.d",
+        schema: "app",
+        name: "d",
+        sql: "",
+      },
+      {
         class: "function",
         identity: "function:app.f()",
         schema: "app",
@@ -547,6 +554,8 @@ describe("foreignDrops", () => {
     ["a constraint", ref("constraint", "t_c_check", "t")],
     ["a trigger", ref("trigger", "tr", "t")],
     ["a function", ref("function", "f")],
+    // Двигун адресує обмеження домену полем `table` з іменем домену
+    ["a constraint of a domain", ref("constraint", "d_check", "d")],
   ])("keeps the exception for %s of the last applied state", (_n, own) => {
     expect(foreignDrops([drop(own)], applied, 0)).toEqual(new Set())
   })
