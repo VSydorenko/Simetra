@@ -208,7 +208,7 @@ export function readRoleOf(
   return purposes[provider].includes("user") ? roles[provider].user : undefined
 }
 
-/** Ключ модуля — `"<kind>.<name>"` об'єкта каталогу (Р-A3-17). */
+/** Ключ модуля — `"<kind>.<name>"` об'єкта каталогу. */
 function checkModules(
   catalog: RuntimeCatalog,
   modules: Readonly<Record<string, ObjectModule<object>>>
@@ -253,7 +253,7 @@ const maxTabularLinesSchema = z.int().min(1).max(TABULAR_LINES_MAX).optional()
 const budgetSchema = z.int().min(1000).optional()
 
 /**
- * Створення рантайму — одна транзакція `READ ONLY` (Р-A3-12): членство в
+ * Створення рантайму — одна транзакція `READ ONLY`: членство в
  * ролі запиту, роль команд, хеш застосованого знімка.
  */
 async function inspect(
@@ -478,7 +478,7 @@ async function readParts(
   options: ReadPartsOptions | undefined
 ): Promise<ReadPartsResult> {
   // До будь-якого I/O: друге з'єднання в хуку чекало б на замок своєї ж
-  // команди (Р-A3-11).
+  // команди.
   rejectNested()
   const claims = claimsOf(session)
   // Межу частин тримає й конверт, але викликач у процесі його не проходить.

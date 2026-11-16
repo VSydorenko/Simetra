@@ -23,7 +23,7 @@ import type {
 import { ORG, S, TASK, key, keysOf, setup } from "./core-support"
 
 /*
- * Модельний тест ядра — гейт блоку (план П4-B3-2, задача 10; спека П4-B §11,
+ * Модельний тест ядра — гейт блоку (спека П4-B §11,
  * §12). Випадкові переплетення над фейковим сервером з історією: утримання
  * виглядів, відповіді на будь-який запит у польоті в будь-якому порядку
  * (зокрема пізні — після звільнення, `purge` чи `close`), чужі правки,
@@ -61,7 +61,7 @@ const LIMITS = {
 }
 const RELEASE_MS = 1_000
 
-// Епохи версій бази (P4-B план B1c): `null` — репліка чи база без епохи.
+// Епохи версій бази: `null` — репліка чи база без епохи.
 const EA = "a".repeat(64)
 const EB = "b".repeat(64)
 const EPOCHS = [null, EA, EB] as const
@@ -139,7 +139,7 @@ const k = fc.nat(KEYS.length - 1)
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 
 /**
- * Ваги (бриф, крок 1): сума 229 (перемикання епохи — 6, план B1c); `purge` (16 + 14), відсутній рядок і
+ * Ваги (бриф, крок 1): сума 229 (перемикання епохи — 6); `purge` (16 + 14), відсутній рядок і
  * застаріла репліка — по 30, тобто по ~13,5 % кроків (частина кроків
  * `answer` порожня, бо в польоті нічого нема, тож серед дійових кроків
  * частка вища, близько 15 %). Самотест тримає насіння, яке знаходить
@@ -1402,7 +1402,7 @@ const DEFECTS: readonly DefectFlag[] = [
 const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "removed-keeps-sections": /section lines stored for a removed owner/,
   // Та сама перевірка `checkPurged` для картки й ТЧ: насіння після зміни
-  // генератора (крок епохи, план B1c) знаходить ТЧ.
+  // генератора (крок епохи) знаходить ТЧ.
   "purge-keeps-views": /(card|section) of purged/,
   "purge-marks-unrelated-views": /purged without a purge of its key/,
   "absent-row-ignored": /^converge/,

@@ -581,7 +581,7 @@ describe("runRightsMaintenance: refusals inside the transaction", () => {
   )
 
   // Посилання `member` перевіряє та сама згенерована функція, що й ядро
-  // кореня (Р-A6-12): окремим оператором від власника з `row_security = off`.
+  // кореня: окремим оператором від власника з `row_security = off`.
   const isCheck = (s: Sent) => s.sql.includes("_simetra_member_check")
 
   it("checks the new member row by the generated function before the mode", async () => {

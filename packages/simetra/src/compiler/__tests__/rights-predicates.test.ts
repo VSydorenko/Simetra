@@ -466,7 +466,7 @@ describe("rights predicates", () => {
 
 describe("root insert is boolean", () => {
   // Новий корінь ще не має скоупу серед моїх: `INSERT` кореня судить право
-  // створення булевою формою (спека прав §5.2, Р-A6-11), а не множиною скоупів.
+  // створення булевою формою (спека прав §5.2), а не множиною скоупів.
   let model: CompiledModel
   beforeAll(async () => {
     model = await compiled(rootCreationDomain())

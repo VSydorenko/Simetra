@@ -6,7 +6,7 @@ import {
 import { customTables, FIXTURES, movementQuery } from "./fixtures/e1-fixtures"
 
 /**
- * Спільні фікстури з літералами провайдера (рішення Р7 плану ПГ-2b): без
+ * Спільні фікстури з літералами провайдера (параметр `provider`): без
  * аргументу — `supabase`, тож unit-тести не змінюються; з `"postgres"` —
  * дані профілю `postgres`, які передає DB-тест цього стека.
  */

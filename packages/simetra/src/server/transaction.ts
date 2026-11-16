@@ -113,7 +113,7 @@ export const COMMAND_ROLE = statement(
   `SET LOCAL ROLE ${ident(PLATFORM_ROLES.command)}`
 )
 // Claims, час і формат `bytea` — одним оператором: рядок ядра декодується
-// в UTC і hex незалежно від налаштувань бази (Р-A3-7).
+// в UTC і hex незалежно від налаштувань бази.
 const CLAIMS_TEXT =
   `SELECT set_config(${literal(SESSION_CLAIMS_SETTING)}, $1, true), ` +
   `set_config('TimeZone', 'UTC', true), set_config('bytea_output', 'hex', true)`
@@ -130,7 +130,7 @@ const COMMAND_CLAIMS_TEXT =
   `set_config('lock_timeout', $3, true), ` +
   `set_config('idle_in_transaction_session_timeout', $4, true), ` +
   transactionTimeout("$4")
-// Налаштування транзакції читання — теж одним оператором (Р1 плану B1c):
+// Налаштування транзакції читання — теж одним оператором (спека П4-B §4.5):
 // `set_config('role', …, true)` діє як `SET LOCAL ROLE`, тож роль — без
 // окремого кругового запиту. Роль — останньою: решту виразів обчислює ще
 // роль входу, як і claims команди до `SET LOCAL ROLE`. Епоху цей оператор
@@ -286,8 +286,8 @@ export class ReadBudget {
 }
 
 /**
- * One attempt of a command on one connection: the statement queue
- * (Р-A3-15). Одиниця черги — оператор чи неподільна пара; перша відмова
+ * One attempt of a command on one connection: the statement queue.
+ * Одиниця черги — оператор чи неподільна пара; перша відмова
  * закриває чергу, і далі порт отримує лише `ROLLBACK`.
  */
 export class Transaction {
@@ -564,7 +564,7 @@ export async function runCommand(
   }
   // Знімок входу одразу й копія на кожну спробу: ні викликач після виклику,
   // ні невдала спроба не змінюють того, що виконує наступна. Id, які
-  // згенерував `prepareInput`, — у знімку: повтор бере ті самі (Р-A6-20).
+  // згенерував `prepareInput`, — у знімку: повтор бере ті самі.
   const snapshot = structuredClone(ops)
   const act =
     typeof session.act?.sub === "string" ? { sub: session.act.sub } : undefined
@@ -610,7 +610,7 @@ export async function runCommand(
   if ("terminal" in outcome!) throw outcome.terminal.failure
   const { result, afterCommit } = outcome!
   if (afterCommit.length > 0) {
-    // Поза сховищем: команда, яку запускає дія, не вкладена (Р-A3-11).
+    // Поза сховищем: команда, яку запускає дія, не вкладена.
     const chain = outsideCommand(() => runAfterCommit(afterCommit, state.log))
     if (state.defer === undefined) {
       await chain

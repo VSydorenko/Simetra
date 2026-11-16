@@ -90,8 +90,7 @@ const ASSIGNMENTS_PER_TENANT = 10
  */
 const GLOBAL_ROLES = 500
 /**
- * Знімки паралельних транзакцій у таблицях знімка (план Права-3, Review
- * Focus 6): під навантаженням таблиці тримають рядки чужих xid, доки їх не
+ * Знімки паралельних транзакцій у таблицях знімка: під навантаженням таблиці тримають рядки чужих xid, доки їх не
  * прибере наступний знімок. На сторінці рядків `Seq Scan` — правильний план
  * і нічого не доводить, тож гейт судить план на помітному обсязі.
  */
@@ -116,7 +115,7 @@ const RIGHTS_TABLES = [
 ]
 /** Довідники призначень: їх читає лише жива гілка входів `rights_mine`. */
 const LIVE_INPUT_TABLES = ["org_role_assignments", "global_role_assignments"]
-/** Таблиці знімка (план Права-3, Р3-2, Р3-15) — ім'я відношення в плані. */
+/** Таблиці знімка — ім'я відношення в плані. */
 const SNAPSHOT_NAMES = Object.values(SNAPSHOT_TABLES).map((t) => t.name)
 /** Таблиці рядків фактів — без заголовка, який читають умови гілок. */
 const FACT_TABLE_NAMES = SNAPSHOT_NAMES.filter(
@@ -124,7 +123,7 @@ const FACT_TABLE_NAMES = SNAPSHOT_NAMES.filter(
     name !== SNAPSHOT_TABLES.header.name && name !== SNAPSHOT_TABLES.start.name
 )
 /**
- * Сталі функції компіляції (рішення архітекторки плану Права-3): цикл, чия
+ * Сталі функції компіляції: цикл, чия
  * зовнішня сторона виведена лише з них, повторює CTE стале число разів.
  */
 const CONSTANT_FUNCTIONS = new Set(
@@ -138,7 +137,7 @@ const CONSTANT_FUNCTIONS = new Set(
 const fn = (name: { schema: string; name: string }) =>
   `${name.schema}.${name.name}`
 
-/** Випадок гейта тіл, де діють диспетчери решти фактів (Р3-3). */
+/** Випадок гейта тіл, де діють диспетчери решти фактів. */
 const SET_FUNCTIONS = "set functions of a task policy"
 
 /**
@@ -161,7 +160,7 @@ const liveBranch = (
   )
 }
 
-/** Пара гейта (Р3-16): читання задачі, через яке йдуть функції множин політики. */
+/** Пара гейта: читання задачі, через яке йдуть функції множин політики. */
 const PAIR_SQL = `SELECT count(*) FROM ${fn(RIGHTS_FUNCTIONS.minePair)}('read', '${TASK}')`
 
 type Form = "list" | "count" | "point"
@@ -519,7 +518,7 @@ describe("rights plan gate", () => {
     await client.query(
       `ANALYZE public.organization, public.region, public.org_member, public.org_role_assignments, public.org_roles, public.org_roles_delta, public.users, public.global_role_assignments, public.global_roles, public.global_roles_delta, public.${TASK}, public.${CHECKLIST}, public.${HOURS}, simetra.${JOURNAL}`
     )
-    // Таблиці знімка (план Права-3, Задача 5 крок 1): статистика обсягу
+    // Таблиці знімка: статистика обсягу
     // паралельних знімків, а не оцінка за замовчуванням.
     await snapshotBackground(client)
     await client.query(
@@ -770,12 +769,12 @@ describe("rights plan gate", () => {
 
   /**
    * Тіла функцій прав від власника `fullAccess` у `FULL_ACCESS_SCOPES`
-   * тенантах: `rights_mine()` напряму, права пари (Р3-16) і функції множин
+   * тенантах: `rights_mine()` напряму, права пари і функції множин
    * політики (точкове читання задачі). Без знімка диспетчер `rights_mine`
-   * (Р3-15) виконує живу гілку: план її `RETURN QUERY` у журналі є
+   * Виконує живу гілку: план її `RETURN QUERY` у журналі є
    * (`log_nested_statements`) і читає довідники призначень, а план гілки
    * знімка не виконувався — вхідних таблиць знімка тіла не читають. Решта
-   * функцій фактів (Р3-3) — той самий диспетчер: їхні живі гілки виконано, а
+   * функцій фактів — той самий диспетчер: їхні живі гілки виконано, а
    * таблиць рядків знімка не планує жоден оператор.
    */
   it.each(BODY_CASES())(
@@ -841,7 +840,7 @@ describe("rights plan gate", () => {
   )
 
   /**
-   * Те саме зі знімком (план Права-3, Задача 5 крок 3): до читання запис
+   * Те саме зі знімком: до читання запис
    * власника з контекстом команди в «Користувачів» — тригер оператора знімає
    * всі факти і на нулі рядків. Диспетчери виконують гілки знімка: план
    * кожного `RETURN QUERY` у журналі є, читає таблиці знімка за індексом
@@ -917,7 +916,7 @@ describe("rights plan gate", () => {
   )
 
   /**
-   * Тіло `rights_role_grants` (борг прав §2): запобіжники кличуть його на
+   * Тіло `rights_role_grants`: запобіжники кличуть його на
    * кожну роль, що змінилась, тож дельта з 200 рядків `allow` і `deny` над
    * доменом рівня не повинна перечитувати CTE на кожен рядок.
    */

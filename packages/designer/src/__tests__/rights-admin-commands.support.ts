@@ -525,7 +525,7 @@ export function commandsCases(
   })
 
   // Самопризначення T3 не відхиляє сам: відмову дає база відповіддю на
-  // `COMMIT`, уже після виклику ядра (Р-A4-2).
+  // `COMMIT`, уже після виклику ядра (спека П4 §6.12).
   it("refuses self-assignment as escalation at COMMIT", async () => {
     const { rt, statements } = await runtime()
     const id = randomUUID()

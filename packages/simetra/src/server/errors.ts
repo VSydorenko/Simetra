@@ -91,7 +91,7 @@ function tablesOf(object: RuntimeObject): Table[] {
 
 /**
  * Таблиця за `TABLE` помилки (Postgres дає ім'я без схеми): спершу серед
- * таблиць об'єкта фази, інакше — однозначний збіг у каталозі (Р-A3-19).
+ * таблиць об'єкта фази, інакше — однозначний збіг у каталозі.
  */
 function tableOf(
   catalog: RuntimeCatalog,
@@ -180,7 +180,7 @@ const isVersion = (text: string) =>
  * Maps a database error to the error the outside sees (P4 spec §6.10).
  * `DETAIL` і `HINT` ідуть назовні лише як значення з переліку T0, колонка
  * каталогу чи безпечне ціле: SQL-обробник застосунку може кинути той самий
- * `MESSAGE` з даними рядка (Р-A3-8). Решта — `command.internal` без тексту;
+ * `MESSAGE` з даними рядка. Решта — `command.internal` без тексту;
  * повну помилку логує викликач.
  */
 export function mapDatabaseError(
@@ -250,7 +250,7 @@ export function mapDatabaseError(
       // пройти, тож окремий код, а не збій.
       return { code: "command.busy" }
     case "23503": {
-      // Postgres не заповнює `column` для FK — реквізит за ім'ям обмеження (Р-A3-13).
+      // Postgres не заповнює `column` для FK — реквізит за ім'ям обмеження.
       const table = tableOf(catalog, phase, error.table)
       const fk = table?.constraints.find(
         (c) => c.name === error.constraint && c.kind === "foreignKey"
@@ -335,7 +335,7 @@ export function logsDatabaseError(
 }
 
 /**
- * Відмова RLS на записі (Р-A3-19): таблицю Postgres називає лише в тексті,
+ * Відмова RLS на записі: таблицю Postgres називає лише в тексті,
  * тож об'єкт — з фази, а на `COMMIT` — з однозначного `TABLE`.
  */
 function rlsOf(

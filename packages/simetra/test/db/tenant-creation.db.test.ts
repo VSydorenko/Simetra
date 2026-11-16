@@ -80,7 +80,7 @@ const context = (
   root: string
 ): CommandContext => ({ action, object, root })
 
-/** Виклик ядра кореня: результат — JSON Р-A6-10. */
+/** Виклик ядра кореня: результат — JSON `{ root, member }`. */
 const coreStep = (
   table: string,
   item: Record<string, unknown>,
@@ -641,7 +641,7 @@ describe("tenant creation: self-service with a required member attribute and the
 
   // Прямий виклик функції гранту сирим SQL оминає перевірки посилань ядра:
   // функція перевіряє рядок членства сама — від власника це «ціль існує й у
-  // тому самому скоупі» (Р-A6-12), тож рядок чужого тенанта — відмова, і
+  // тому самому скоупі», тож рядок чужого тенанта — відмова, і
   // жодного рядка членства не лишається
   it.each([
     [
@@ -1083,7 +1083,7 @@ describe("tenant creation: global founder without everyUser create", () => {
     const create = () => coreStep(ORG, { id: randomUUID() }, {}, randomUUID())
     const denied = await steps("full", [create()])
     expect(denied.refusal).toEqual(forbidden(E.forbidden.noRight))
-    // Носій глобального `fullAccess` призначає собі `GlobalFounder` (Р-A6-22)
+    // Носій глобального `fullAccess` призначає собі `GlobalFounder`
     const selfAssign = (user: string): CommandStep => {
       const id = randomUUID()
       return {

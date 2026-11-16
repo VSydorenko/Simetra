@@ -192,7 +192,7 @@ export async function runTool(
           readOnly: false,
           // Людина, що запускає `simetra apply --yes`, і є рішенням про запис
           allowDatabaseWrite: true,
-          // Так само із записом даних (Р-A5-10); права — окремим прапорцем,
+          // Так само із записом даних; права — окремим прапорцем,
           // бо змінюють, хто що може, навіть коли запис даних — рішення людини
           allowDataWrite: true,
           allowRightsWrite: argv["allow-rights-write"] === true,

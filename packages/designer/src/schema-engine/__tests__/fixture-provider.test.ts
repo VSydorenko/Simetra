@@ -3,7 +3,7 @@ import { scopeOf } from "./fixtures/engine-boundary"
 import { classFixtures } from "./fixtures/round-trip-classes"
 
 /**
- * Спільні фікстури рушія з літералами провайдера (рішення Р7 плану ПГ-2b):
+ * Спільні фікстури рушія з літералами провайдера:
  * без аргументу — `supabase`, з `"postgres"` — дані профілю `postgres`.
  */
 describe("provider of the engine fixtures", () => {

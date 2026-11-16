@@ -41,7 +41,7 @@ const attributes: CatalogEntryAttribute[] = [
 ]
 
 /**
- * Три споживачі одного обходу (Р-A6-13): шапка `values` (грант вставки чи
+ * Три споживачі одного обходу: шапка `values` (грант вставки чи
  * оновлення), рядок ТЧ (ключ рядка пише викликач, шляхи з префіксом) і
  * `creatorMember` (примушені ключі, префікс): шляхи й порядок помилок у
  * всіх трьох однакові.
@@ -104,7 +104,7 @@ describe("encodeAttributes", () => {
     ["member: not an object", MEMBER, [], "creatorMember"],
     ["member: a revoked Proxy", MEMBER, revoked(), "creatorMember"],
     ["member: a value getter", MEMBER, throwing("code"), "creatorMember.code"],
-    // Р-A3-8: реквізити за порядком каталогу, невідомі ключі — після них.
+    // Реквізити за порядком каталогу, невідомі ключі — після них.
     [
       "member: an unknown key before an invalid value",
       MEMBER,

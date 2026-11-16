@@ -414,7 +414,7 @@ export async function markDevelopmentDatabase(url: string): Promise<void> {
 }
 
 /**
- * Ідентичність Better Auth тегованої цілі `url` (рішення Р17 плану ПГ-2b):
+ * Ідентичність Better Auth тегованої цілі `url`:
  * ціль дістає той самий стан, що й база тестів після `db:pg:start`, —
  * `CONNECT` і схему `better_auth` ролі входу сервісу, справжню міграцію від
  * неї та тимчасові гранти власнику (`prepareStackIdentity`). Кличеться до
