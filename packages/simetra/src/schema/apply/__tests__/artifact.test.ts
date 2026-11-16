@@ -400,7 +400,7 @@ describe("plan artifact", () => {
     expect(parsed.diagnostic.message).toMatch(
       /plan format 1 is not supported.*rebuild the plan/i
     )
-    expect(PLAN_FORMAT).toBe(8)
+    expect(PLAN_FORMAT).toBe(9)
   })
 
   it("asks to rebuild a plan of the second format", async () => {
@@ -499,13 +499,30 @@ describe("plan artifact", () => {
     })
   })
 
+  it("asks to rebuild a plan of the eighth format", async () => {
+    // Восьмий формат не знав, що рахує сторож `notNull` (`count`): його
+    // раннер рахував би лише `NULL` і пропустив би `ADD COLUMN … NOT NULL`
+    const artifact = await stampPlan(draft())
+    const old: Record<string, unknown> = { ...artifact, format: 8 }
+    expect(parsePlan(JSON.stringify(old))).toMatchObject({
+      ok: false,
+      reason: "format",
+      diagnostic: {
+        code: "apply.plan-format",
+        params: { found: 8, supported: PLAN_FORMAT },
+      },
+    })
+  })
+
   it("round-trips a backfill step and covers its facts with the hash", async () => {
     const base = draft()
     const setNotNull = {
       ...base.steps[0]!,
       id: "s3",
       sql: 'ALTER TABLE "app"."t" ALTER COLUMN "d" SET NOT NULL',
-      notNull: [{ table: { schema: "app", name: "t" }, column: "d" }],
+      notNull: [
+        { table: { schema: "app", name: "t" }, column: "d", count: "nulls" as const },
+      ],
     }
     const backfill = {
       ...base.steps[0]!,

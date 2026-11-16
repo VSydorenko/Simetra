@@ -387,7 +387,7 @@ async function backfillChecks(p: {
   | { ok: true; steps: PlanStep[] }
   | { ok: false; diagnostics: EngineDiagnostic[] }
 > {
-  const steps = withNotNullChecks(p.steps, p.parse)
+  const steps = withNotNullChecks(p.steps, p.parse, p.desired)
   const tables = backfillWriteTables(steps).map((t) => {
     const table = { schema: t.before.schema, name: t.before.table }
     const live = p.names.table(table)

@@ -117,7 +117,7 @@ import {
   backfillAction,
   checkPermissions,
   lintSteps,
-  nullDatum,
+  notNullViolation,
   type PlanStep,
 } from "./steps"
 import { tableKey } from "./table-key"
@@ -1846,11 +1846,15 @@ async function runBackfill(
 }
 
 /**
- * Перевірка перед `SET NOT NULL` без заповнення (платформна спека §6.6):
- * `NULL` могли з'явитися після плану, зокрема від `USING` зміни типу в тому
- * самому плані. Рахує під `BACKFILL_SETTINGS`, бо політика, що ховає рядки,
- * дала б неправдивий нуль; `NULL` є — керована відмова замість сирого
- * `23502` кроку.
+ * Перевірка перед кроком, що робить колонку `NOT NULL` без заповнення
+ * (платформна спека §6.6): `NULL` могли з'явитися після плану, зокрема від
+ * `USING` зміни типу в тому самому плані; рядки — в таблиці, порожній на
+ * плані, куди додають колонку без значення; вираз генерованої колонки дає
+ * `NULL` для рядків, що з'явилися після плану. Рахує під
+ * `BACKFILL_SETTINGS`, бо політика, що ховає рядки, дала б неправдивий
+ * нуль; порушення є — керована відмова замість сирого `23502` кроку. Для
+ * `rows` повний `count(*)` дешевий саме там, де крок пройде: таблиця
+ * порожня.
  */
 async function notNullGuard(
   tx: ApplyTransaction,
@@ -1858,11 +1862,14 @@ async function notNullGuard(
   c: NonNullable<PlanStep["notNull"]>[number]
 ): Promise<void> {
   const table = `${quoteIdent(c.table.schema)}.${quoteIdent(c.table.name)}`
+  const where = notNullViolation(c, quoteIdent(c.column))
   let rows: number
   try {
     rows = await withLocalSettings(tx, BACKFILL_SETTINGS, async () => {
       const [row] = await tx.query<{ n: string | number }>(
-        `SELECT pg_catalog.count(*) AS n FROM ${table} WHERE ${nullDatum(quoteIdent(c.column))}`
+        `SELECT pg_catalog.count(*) AS n FROM ${table}${
+          where === undefined ? "" : ` WHERE ${where}`
+        }`
       )
       if (row === undefined) throw new Error("the NULL count returned no row")
       return countOf(row.n)
@@ -1881,6 +1888,7 @@ async function notNullGuard(
       table: `${c.table.schema}.${c.table.name}`,
       column: c.column,
       rows,
+      detail: c.count,
     })
 }
 

@@ -27,8 +27,10 @@ import { BACKFILL_SETTINGS, withLocalSettings } from "./settings"
 import {
   backfillAction,
   notNullColumns,
-  nullDatum,
+  notNullViolation,
+  type NotNullCheck,
   type NotNullColumn,
+  type NotNullCount,
   type PlanAction,
   type PlanStep,
 } from "./steps"
@@ -37,15 +39,10 @@ import { stringsOf } from "./type-guard"
 
 /**
  * Що план рахує на цілі перед кроком, що робить колонку `NOT NULL`
- * (платформна спека §6.2 п. 4, §6.6): `nulls` — рядки з `NULL` у колонці
- * `SET NOT NULL`, `rows` — усі рядки таблиці `ADD COLUMN … NOT NULL` без
- * default. Імена — ті, в яких діють дії двигуна.
+ * (платформна спека §6.2 п. 4, §6.6), — `NotNullCount`. Імена — ті, в яких
+ * діють дії двигуна.
  */
-export interface BackfillTarget {
-  table: { schema: string; name: string }
-  column: string
-  count: "nulls" | "rows"
-}
+export type BackfillTarget = NotNullCheck
 
 /** Що план знає до підрахунку. */
 export interface BackfillInput {
@@ -103,11 +100,15 @@ interface Site {
 }
 
 /**
- * Колонки, що стають `NOT NULL` на наявній таблиці. Не рахуються (Р5):
- * таблиця, яку план створює чи перестворює; колонка, якої немає в моделі
- * вихідного стану чи яку план перестворює; колонка, уже `NOT NULL`; колонка
- * кроку даних промоції — її `NULL` заповнює сам крок даних; `ADD COLUMN`,
- * що сам дає значення (default, identity, generated).
+ * Колонки, що стають `NOT NULL` на наявній таблиці. `SET NOT NULL` не
+ * рахується (Р5) для колонки, якої немає в моделі вихідного стану, яку план
+ * перестворює, яка вже `NOT NULL` чи яку пише крок даних промоції — її `NULL`
+ * заповнює сам крок даних. `ADD COLUMN … NOT NULL` рахується й тоді, коли
+ * план перестворює колонку (`DROP` + `ADD`): нова колонка однаково
+ * отримує значення для кожного наявного рядка. Без значення — рахуються
+ * рядки; генерована — рядки, де її вираз дає `NULL`; default чи identity
+ * значення дають, тож не рахуються. Таблиця, яку план створює чи
+ * перестворює, не рахується.
  */
 function notNullSites(p: BackfillInput): Site[] {
   const created = createdByPlan(p.actions)
@@ -121,11 +122,19 @@ function notNullSites(p: BackfillInput): Site[] {
       const key = columnKey(table.schema, table.name, at.column)
       if (seen.has(key)) continue
       const live = table.columns.find((c) => c.name === at.column)
+      let count: NotNullCount
       if (at.via === "setNotNull") {
         if (live === undefined || live.notNull) continue
         if (created.columns.has(key)) continue
         if (p.promotion?.dataColumns.has(key) === true) continue
-      } else if (at.filled || live !== undefined) continue
+        count = { count: "nulls" }
+      } else if (at.generated) {
+        count = {
+          count: "expression",
+          expression: generatedOf(p.desired, table, at.column),
+        }
+      } else if (at.filled) continue
+      else count = { count: "rows" }
       seen.add(key)
       out.push({
         index,
@@ -133,12 +142,31 @@ function notNullSites(p: BackfillInput): Site[] {
         target: {
           table: { schema: table.schema, name: table.name },
           column: at.column,
-          count: at.via === "setNotNull" ? "nulls" : "rows",
+          ...count,
         },
       })
     }
   })
   return out
+}
+
+/**
+ * Вираз генерованої колонки бажаного стану: двигун додає її з тим самим
+ * виразом. Немає — дефект конвеєра, а не стан споживача.
+ */
+function generatedOf(
+  desired: CatalogModel,
+  table: { schema: string; name: string },
+  column: string
+): string {
+  const expression = findTable(desired, table.schema, table.name)?.columns.find(
+    (c) => c.name === column
+  )?.generated?.expression
+  if (expression === undefined)
+    throw new Error(
+      `no desired generated expression for ${qualified(table)}.${quoteIdent(column)}`
+    )
+  return expression
 }
 
 /** Що план має порахувати на цілі до `planBackfills` (Р5). */
@@ -518,9 +546,12 @@ export function planBackfills(
       column: quoteIdent(target.column),
       rows,
     }
-    if (target.count === "rows") {
+    if (target.count !== "nulls") {
       refusals.push(
-        refusal("plan.not-null-violation", { ...params, detail: "addColumn" })
+        refusal("plan.not-null-violation", {
+          ...params,
+          detail: target.count === "rows" ? "addColumn" : "generated",
+        })
       )
       continue
     }
@@ -756,7 +787,13 @@ export interface BackfillCounts {
 
 /** Ключ цілі заповнення: колонка й вид підрахунку. */
 export const backfillTargetKey = (t: BackfillTarget): string =>
-  JSON.stringify([t.table.schema, t.table.name, t.column, t.count])
+  JSON.stringify([
+    t.table.schema,
+    t.table.name,
+    t.column,
+    t.count,
+    t.count === "expression" ? t.expression : null,
+  ])
 
 /**
  * Кількості цілей `backfillTargets` на цілі (платформна спека §6.2 п. 4):
@@ -795,10 +832,10 @@ export async function readBackfillCounts(
       const out = new Map<string, number>()
       for (const t of targets) {
         current = t
-        const column = quoteIdent(t.column)
+        const where = notNullViolation(t, quoteIdent(t.column))
         const [row] = await tx.query<{ n: string | number }>(
           `SELECT pg_catalog.count(*) AS n FROM ${qualified(t.table)}${
-            t.count === "nulls" ? ` WHERE ${nullDatum(column)}` : ""
+            where === undefined ? "" : ` WHERE ${where}`
           }`
         )
         if (row === undefined) throw new Error("count(*) returned no row")
@@ -941,16 +978,20 @@ export function withShownTriggers(
 }
 
 /**
- * Поле `notNull` кроків двигуна з `SET NOT NULL` без заповнення перед ними
- * (платформна спека §6.6): `NULL` могли з'явитися після плану, зокрема від
- * `USING` зміни типу в тому самому плані. Колонка з кроком заповнення
- * безпосередньо перед кроком перевірки не має: заповнення в тій самій
- * транзакції під `ACCESS EXCLUSIVE` закриває вікно. Схему таблиці без
- * кваліфікації дає `lockedTables` кроку.
+ * Поле `notNull` кроків двигуна, що роблять колонку `NOT NULL` (платформна
+ * спека §6.6): `SET NOT NULL` без заповнення перед ним — `NULL` могли
+ * з'явитися після плану, зокрема від `USING` зміни типу в тому самому плані;
+ * `ADD COLUMN … NOT NULL` без значення — рядки могли з'явитися в порожній на
+ * плані таблиці; генерована колонка — рядки, де її вираз дає `NULL`.
+ * Колонка з кроком заповнення безпосередньо перед кроком перевірки не має:
+ * заповнення в тій самій транзакції під `ACCESS EXCLUSIVE` закриває вікно.
+ * Схему таблиці без кваліфікації дає `lockedTables` кроку; вираз
+ * генерованої колонки — бажана модель (`desired`), в іменах кроків.
  */
 export function withNotNullChecks(
   steps: readonly PlanStep[],
-  parse: SqlParser
+  parse: SqlParser,
+  desired: CatalogModel
 ): PlanStep[] {
   return steps.map((step, index) => {
     if (step.origin !== "engine") return step
@@ -961,13 +1002,23 @@ export function withNotNullChecks(
     for (let i = index - 1; i >= 0 && steps[i]!.backfill !== undefined; i--)
       filled.push(steps[i]!.backfill!)
     const columns = notNullColumns(result.statements.map((s) => s.stmt))
-      .filter((c) => c.via === "setNotNull")
-      .map((c) => {
+      .filter((c) => c.via === "setNotNull" || c.generated || !c.filled)
+      .map((c): NotNullCheck => {
         const schema =
           c.schema ?? step.lockedTables.find((t) => t.name === c.table)?.schema
         if (schema === undefined)
           throw new Error(`plan step ${step.id}: no schema for ${c.table}`)
-        return { table: { schema, name: c.table }, column: c.column }
+        const table = { schema, name: c.table }
+        const count: NotNullCount =
+          c.via === "setNotNull"
+            ? { count: "nulls" }
+            : c.generated
+              ? {
+                  count: "expression",
+                  expression: generatedOf(desired, table, c.column),
+                }
+              : { count: "rows" }
+        return { table, column: c.column, ...count }
       })
       .filter(
         (c) =>
