@@ -14,7 +14,7 @@ import {
   type CommandRuntime,
   type CommandRuntimeOptions,
 } from "simetra/server"
-import { pooledOf, throughPoolerAs } from "./support/db"
+import { pooledOf, sessionOf, throughPoolerAs } from "./support/db"
 
 import {
   type Env,
@@ -25,7 +25,6 @@ import {
   MODULE_KEY,
   refusal,
   runtimeOver,
-  sessionOf,
 } from "./command-runtime.support"
 
 /**

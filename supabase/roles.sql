@@ -25,3 +25,15 @@ BEGIN
   END IF;
 END
 $$;
+-- Анонімна сесія читає роллю гостя `anon`, а не роллю користувача: стенд, де
+-- роль входу вже створено без цього членства, отримує його тут, окремо від
+-- блоку створення.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members
+      WHERE roleid = 'anon'::pg_catalog.regrole
+        AND member = 'simetra_runtime'::pg_catalog.regrole) THEN
+    GRANT anon TO simetra_runtime WITH INHERIT FALSE, SET TRUE;
+  END IF;
+END
+$$;

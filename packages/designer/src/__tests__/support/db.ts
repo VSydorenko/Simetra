@@ -4,11 +4,14 @@ import pg from "pg"
 import { canonicalSnapshot, type CompiledModel } from "simetra/compiler"
 import {
   CommandFailure,
+  LOGIN_ROLE_REQUEST_PURPOSES,
+  PROVIDER_API_ROLES,
   PROVIDER_IDENTITY_SOURCES,
   PROVIDER_OWNER_ROLES,
   quoteIdent,
   RIGHTS_MAINTENANCE_SETTING,
   type CommandError,
+  type SessionClaims,
 } from "simetra/model"
 import {
   buildPlan,
@@ -23,6 +26,7 @@ import { createApplyDatabase, createPgDeltaEngine } from "../../schema-engine"
 import {
   asSessionLogin,
   authLoginRole,
+  claimsFor,
   devSecret,
   GAUGE_WRITER_ID,
   LOGIN_SECRETS_FILE,
@@ -303,6 +307,8 @@ const quoted = (name: string) => `"${name.replaceAll('"', '""')}"`
  * random tail makes every call's role name unique.
  * `attributes` gives the role a fact the runtime login must not have
  * (`BYPASSRLS`), for tests of the data-tool guards.
+ * A request role in `memberOf` brings every request role of the profile
+ * (`LOGIN_ROLE_REQUEST_PURPOSES`), as the runtime login role has them.
  */
 export async function withRuntimeLogin<T>(
   url: string,
@@ -322,9 +328,18 @@ export async function withRuntimeLogin<T>(
     `create role ${quoted(name)} login noinherit${bypass} password '${password}'`
   )
   const database = quoted(databaseOf(url))
+  // Рантайм перевіряє членство в кожній ролі запиту профілю на створенні:
+  // перелік у кожному виклику розійшовся б із профілем.
+  const provider = testProvider()
+  const requestRoles = LOGIN_ROLE_REQUEST_PURPOSES[provider].map(
+    (purpose) => PROVIDER_API_ROLES[provider][purpose]
+  )
+  const roles = memberOf.some((role) => requestRoles.includes(role))
+    ? [...new Set([...memberOf, ...requestRoles])]
+    : memberOf
   try {
     await asStack(`grant connect on database ${database} to ${quoted(name)}`)
-    for (const role of memberOf)
+    for (const role of roles)
       await asStack(
         `grant ${quoted(role)} to ${quoted(name)} with inherit false, set true`
       )
@@ -653,6 +668,19 @@ export function heldResource<T>(
       release?.()
       await held
     },
+  }
+}
+
+/**
+ * Claims запиту рантайму від користувача `user`: claim аноніма профілю —
+ * явно `false`, бо сесію без нього рантайм відмовляє.
+ */
+export function sessionOf(user: string): SessionClaims {
+  const claim = PROVIDER_IDENTITY_SOURCES[testProvider()].anonymousClaim
+  return {
+    ...claimsFor("user", user),
+    sub: user,
+    ...(claim === null ? {} : { [claim]: false }),
   }
 }
 

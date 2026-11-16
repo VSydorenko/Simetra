@@ -23,7 +23,6 @@ import {
   type CommandRuntimeOptions,
 } from "simetra/server"
 import {
-  claimsFor,
   GAUGE_TABLE,
   policyDomain,
   profileLayer,
@@ -37,6 +36,7 @@ import {
   poolerPoolOf,
   withModelTarget,
   withRuntimeLogin,
+  sessionOf,
 } from "./support/db"
 
 /**
@@ -78,11 +78,6 @@ export interface Env {
   /** Рядок `Gauge` чужого тенанта. */
   foreign: string
 }
-
-export const sessionOf = (user: string): SessionClaims => ({
-  ...claimsFor("user", user),
-  sub: user,
-})
 
 /** Актор фікстури з сесією запиту від його користувача. */
 export async function seedActor(owner: pg.Client): Promise<Actor> {

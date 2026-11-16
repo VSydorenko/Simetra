@@ -1,6 +1,7 @@
 export {
   createCommandRuntime,
   readRoleOf,
+  sessionKind,
   type CommandRuntime,
   type CommandRunOptions,
   type CommandRuntimeOptions,

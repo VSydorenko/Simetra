@@ -23,7 +23,12 @@ import { COMPANY, ID, catalog, rootCatalog } from "./fixtures"
  */
 
 export const USER = "44444444-4444-4444-8444-444444444444"
-export const session = { sub: "user-1", role: "authenticated" }
+// Claim аноніма — явно: сесію без нього рантайм відмовляє ще до бази.
+export const session = {
+  sub: "user-1",
+  role: "authenticated",
+  is_anonymous: false,
+}
 export const CLIENT = { kind: "Catalog" as const, name: "Client" }
 export const RIGHTS = { kind: "Catalog" as const, name: "RightsRole" }
 export const TICKET = { kind: "Catalog" as const, name: "Ticket" }
@@ -79,7 +84,8 @@ export const READ_BEGIN = {
 export const readSetup = (
   role = "simetra_command",
   statement = "15000",
-  guard = "16000"
+  guard = "16000",
+  claims: object = session
 ) => ({
   text:
     CLAIMS.text +
@@ -87,7 +93,7 @@ export const readSetup = (
     ", CASE WHEN current_setting('server_version_num')::int >= 170000" +
     " THEN set_config('transaction_timeout', $3, true) END" +
     ", set_config('role', $4, true)",
-  params: [JSON.stringify(session), statement, guard, role],
+  params: [JSON.stringify(claims), statement, guard, role],
 })
 /** Епоха версій бази — оператор після налаштування, уже під роллю читання. */
 export const EPOCH = {

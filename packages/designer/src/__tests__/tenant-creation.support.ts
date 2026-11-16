@@ -17,7 +17,6 @@ import {
   type ObjectModule,
   type Operation,
   type RuntimeCatalog,
-  type SessionClaims,
 } from "simetra/model"
 import {
   createCommandRuntime,
@@ -32,7 +31,6 @@ import {
   TENANT_AUDITOR_ID,
   TENANT_OWNER_ID,
   TENANT_READER_ID,
-  claimsFor,
   signUp,
   GLOBAL_FOUNDER_ID,
   TENANT_OPERATOR_ID,
@@ -53,6 +51,7 @@ import {
   pooledOf,
   withModelTarget,
   withRuntimeLogin,
+  sessionOf,
 } from "./support/db"
 
 /**
@@ -89,11 +88,6 @@ export interface Env {
   /** Засіяні актори моделі: ім'я → id користувача. */
   users: Record<string, string>
 }
-
-export const sessionOf = (user: string): SessionClaims => ({
-  ...claimsFor("user", user),
-  sub: user,
-})
 
 /** Ціль моделі без ролі входу рантайму. */
 type Target = Omit<Env, "login" | "direct" | "pooled">

@@ -17,7 +17,7 @@ import {
   type CommandRuntimeOptions,
 } from "simetra/server"
 import { GAUGE_TABLE, setLocalSetting } from "../../../simetra/test/support"
-import { seedMarker } from "./support/db"
+import { seedMarker, sessionOf } from "./support/db"
 
 import {
   AMOUNT,
@@ -32,7 +32,6 @@ import {
   refusal,
   REQUEST_ROLE,
   runtimeOver,
-  sessionOf,
 } from "./command-runtime.support"
 /**
  * Рантайм команд (`simetra/server`) над тінню рушія: справжній `pg.Pool`

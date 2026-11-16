@@ -548,7 +548,7 @@ describe("platformRoleRefusals", () => {
 /** Роль входу без провайдера: лише звірка за об'єднанням батьків усіх профілів. */
 const CHECK_RUNTIME = {
   name: RUNTIME,
-  memberOf: ["authenticated", "simetra_anon", COMMAND, "simetra_user"],
+  memberOf: ["anon", "authenticated", "simetra_anon", COMMAND, "simetra_user"],
   checkOnly: true as const,
 }
 
@@ -610,7 +610,7 @@ describe("platformRoleSet", () => {
   it("adds the runtime login role only when the provider is known", () => {
     expect(platformRoleSet("supabase")).toEqual({
       names: Object.values(PLATFORM_ROLES),
-      login: [{ name: RUNTIME, memberOf: [COMMAND, "authenticated"] }],
+      login: [{ name: RUNTIME, memberOf: [COMMAND, "authenticated", "anon"] }],
       checkLogin: [],
     })
     expect(platformRoleSet("postgres")).toEqual({

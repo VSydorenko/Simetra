@@ -319,7 +319,7 @@ export const PLATFORM_LOGIN_ROLES = { runtime: "simetra_runtime" } as const
  */
 export const LOGIN_ROLE_REQUEST_PURPOSES: Readonly<
   Record<DatabaseProvider, readonly RequestRolePurpose[]>
-> = { supabase: ["user"], postgres: ["user", "anonymous"] }
+> = { supabase: ["user", "anonymous"], postgres: ["user", "anonymous"] }
 
 // Ім'я одне для всіх провайдерів, тож літерала поза T0 немає (спека прав §5.3).
 /**

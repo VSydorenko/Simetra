@@ -22,7 +22,6 @@ import {
   readRoleOf,
 } from "simetra/server"
 import {
-  claimsFor,
   policyDomain,
   profileLayer,
   runtimeValuesLayer,
@@ -34,6 +33,7 @@ import {
   seedRuntimeActor,
   withModelTarget,
   withRuntimeLogin,
+  sessionOf,
 } from "./support/db"
 
 /**
@@ -80,7 +80,7 @@ const heldEnv = () =>
                 owner,
                 pool,
                 org: actor.org,
-                session: { ...claimsFor("user", actor.user), sub: actor.user },
+                session: sessionOf(actor.user),
               })
             } finally {
               await pool.end()

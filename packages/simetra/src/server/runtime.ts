@@ -7,6 +7,7 @@ import {
   PLATFORM_ROLES,
   PLATFORM_SCHEMA,
   PROVIDER_API_ROLES,
+  PROVIDER_IDENTITY_SOURCES,
   READ_BATCH_MAX,
   READ_BATCH_STATEMENTS_MAX,
   ROW_VERSION_EPOCH_FUNCTION_NAME,
@@ -17,6 +18,7 @@ import {
   type CommandError,
   type CommandResult,
   type DatabaseProvider,
+  type IdentitySource,
   type ObjectModule,
   type Operation,
   type ProviderApiRoles,
@@ -191,9 +193,9 @@ export interface CommandRuntime {
 }
 
 /**
- * The request role the server reads under for a provider profile;
- * `undefined` — the profile names none (P4 spec Рт18). Таблиці — параметри,
- * щоб правило перевірялося на підставлених профілях.
+ * The request role of `purpose` the server reads under for a provider
+ * profile; `undefined` — the profile names none (P4 spec Рт18). Таблиці —
+ * параметри, щоб правило перевірялося на підставлених профілях.
  */
 export function readRoleOf(
   provider: DatabaseProvider,
@@ -202,10 +204,60 @@ export function readRoleOf(
   > = LOGIN_ROLE_REQUEST_PURPOSES,
   roles: Readonly<
     Record<DatabaseProvider, ProviderApiRoles>
-  > = PROVIDER_API_ROLES
+  > = PROVIDER_API_ROLES,
+  purpose: RequestRolePurpose = "user"
 ): string | undefined {
-  // Серверне читання — від імені користувача сесії, тож лише роль `user`.
-  return purposes[provider].includes("user") ? roles[provider].user : undefined
+  return purposes[provider].includes(purpose)
+    ? roles[provider][purpose]
+    : undefined
+}
+
+/**
+ * The kind of a session by the anonymous claim of the provider
+ * (`PROVIDER_IDENTITY_SOURCES[provider].anonymousClaim`): `true` or `"true"`
+ * — `"anonymous"`, `false` or `"false"` — `"user"`, any other value or none —
+ * `"invalid"`. A provider without anonymous sessions reads every session as
+ * `"user"`. `sources` is a parameter so the rule is testable on a substituted
+ * profile.
+ */
+export function sessionKind(
+  provider: DatabaseProvider,
+  claims: SessionClaims,
+  sources: Readonly<
+    Record<DatabaseProvider, IdentitySource>
+  > = PROVIDER_IDENTITY_SOURCES
+): "user" | "anonymous" | "invalid" {
+  const claim = sources[provider].anonymousClaim
+  if (claim === null) return "user"
+  // Лише власний ключ: claim, успадкований від прототипу, — не claim сесії.
+  const value: unknown = Object.hasOwn(claims, claim)
+    ? (claims as Record<string, unknown>)[claim]
+    : undefined
+  // Текстова форма — як судить SQL (`->> … = 'true'`): інакше SQL бачив би
+  // гостя під роллю користувача.
+  if (value === true || value === "true") return "anonymous"
+  if (value === false || value === "false") return "user"
+  // Відсутній claim — відмова, а не користувач: адаптер host-а, що забув
+  // claim, інакше тихо дав би анонімові права користувача.
+  return "invalid"
+}
+
+/** Вид сесії для запиту; недійсна сесія — відмова до будь-якого I/O. */
+function checkedKind(
+  provider: DatabaseProvider,
+  session: SessionClaims
+): "user" | "anonymous" {
+  let kind: ReturnType<typeof sessionKind>
+  try {
+    kind = sessionKind(provider, session)
+  } catch {
+    // Claims, читання яких кидає, — збій викликача, а не відмова сесії.
+    throw new CommandFailure({ code: "command.internal" })
+  }
+  if (kind === "invalid") {
+    throw new CommandFailure({ code: "command.unauthenticated" })
+  }
+  return kind
 }
 
 /** Ключ модуля — `"<kind>.<name>"` об'єкта каталогу. */
@@ -253,15 +305,18 @@ const maxTabularLinesSchema = z.int().min(1).max(TABULAR_LINES_MAX).optional()
 const budgetSchema = z.int().min(1000).optional()
 
 /**
- * Створення рантайму — одна транзакція `READ ONLY`: членство в
- * ролі запиту, роль команд, хеш застосованого знімка.
+ * Створення рантайму — одна транзакція `READ ONLY`: членство в кожній
+ * ролі запиту профілю, роль команд, хеш застосованого знімка.
  */
 async function inspect(
   database: CommandDatabase,
   catalog: RuntimeCatalog,
-  role: string | undefined,
+  roles: Readonly<Partial<Record<RequestRolePurpose, string>>>,
   log: (entry: LogEntry) => void
-): Promise<{ member: boolean; applied: string | null }> {
+): Promise<{
+  members: Record<RequestRolePurpose, boolean>
+  applied: string | null
+}> {
   const fail = (raw: unknown, error = normalizeError(raw)): CommandFailure => {
     const mapped: CommandError = {
       code: error.connectionLost ? "command.unavailable" : "command.internal",
@@ -276,12 +331,23 @@ async function inspect(
     throw fail(raw)
   }
   let step = BEGIN_READ_ONLY
+  // Роль, членство в якій перевіряє поточний крок.
+  let checking: RequestRolePurpose | undefined
+  // Ролі без членства за замовчуванням: його доводить лише відповідь бази.
+  const members: Record<RequestRolePurpose, boolean> = {
+    user: false,
+    anonymous: false,
+  }
   try {
     await client.query(BEGIN_READ_ONLY, [])
-    let member = true
-    if (role !== undefined) {
+    for (const [purpose, role] of Object.entries(roles) as [
+      RequestRolePurpose,
+      string,
+    ][]) {
       step = MEMBER
-      member = (await client.query(MEMBER, [role])).rows[0]?.member === "t"
+      checking = purpose
+      members[purpose] =
+        (await client.query(MEMBER, [role])).rows[0]?.member === "t"
     }
     step = COMMAND_ROLE.text
     await client.query(COMMAND_ROLE.text, COMMAND_ROLE.params)
@@ -297,7 +363,7 @@ async function inspect(
       })
       throw new CommandFailure({ code: "command.internal" })
     }
-    return { member, applied: hash }
+    return { members, applied: hash }
   } catch (raw) {
     if (raw instanceof CommandFailure) throw raw
     const error = normalizeError(raw)
@@ -306,10 +372,15 @@ async function inspect(
       return mismatch(catalog, null)
     }
     if (step === MEMBER && error.code === UNDEFINED_OBJECT) {
-      // Ролі запиту в базі немає — членства теж; транзакція перервана, тож
-      // хеш звіряє друга, уже без кроку членства.
-      const { applied } = await inspect(database, catalog, undefined, log)
-      return { member: false, applied }
+      // Ролі запиту в базі немає — членства в ній теж; транзакція перервана,
+      // тож решту ролей і хеш звіряє друга, уже без цієї ролі.
+      const rest = { ...roles }
+      delete rest[checking!]
+      const second = await inspect(database, catalog, rest, log)
+      return {
+        members: { ...second.members, [checking!]: false },
+        applied: second.applied,
+      }
     }
     throw fail(raw, error)
   }
@@ -360,16 +431,35 @@ export async function createCommandRuntime(
       // журнал недоступний — відмова однаково йде назовні кодом
     }
   }
-  const role = readRoleOf(catalog.provider)
-  const { member, applied } = await inspect(
+  const roles: Partial<Record<RequestRolePurpose, string>> = {}
+  for (const purpose of ["user", "anonymous"] as const) {
+    const role = readRoleOf(catalog.provider, undefined, undefined, purpose)
+    if (role !== undefined) roles[purpose] = role
+  }
+  const { members, applied } = await inspect(
     options.database,
     catalog,
-    role,
+    roles,
     log
   )
   if (applied !== catalog.snapshotHash) mismatch(catalog, applied)
-  if (role !== undefined && !member && options.readFallback !== true) {
-    throw new CommandFailure({ code: "command.read-role-missing", role })
+  if (
+    roles.user !== undefined &&
+    !members.user &&
+    options.readFallback !== true
+  ) {
+    throw new CommandFailure({
+      code: "command.read-role-missing",
+      role: roles.user,
+    })
+  }
+  // Запасного шляху для аноніма немає: роль команд читала б від імені
+  // користувача там, де профіль дає гостя.
+  if (roles.anonymous !== undefined && !members.anonymous) {
+    throw new CommandFailure({
+      code: "command.read-role-missing",
+      role: roles.anonymous,
+    })
   }
   const state: RuntimeState = {
     database: options.database,
@@ -385,13 +475,25 @@ export async function createCommandRuntime(
     readBudgetMs,
     budgetMs,
     lockTimeoutMs,
-    // Профіль без ролі запиту чи явний запасний шлях — читання під роллю команд.
-    readRole: member ? role : undefined,
+    readRoles: {
+      // Профіль без ролі запиту чи явний запасний шлях — читання користувача
+      // під роллю команд.
+      user: members.user ? roles.user : undefined,
+      anonymous: roles.anonymous,
+    },
   }
   return {
     catalog,
-    run: (session, input, options) =>
-      runCommand(state, session, input, options?.fullTabularArrays === true),
+    // Анонімна команда йде далі: її судить `current_user_id()` = `NULL`.
+    run: async (session, input, options) => {
+      checkedKind(catalog.provider, session)
+      return runCommand(
+        state,
+        session,
+        input,
+        options?.fullTabularArrays === true
+      )
+    },
     // Одиночне читання — пакет з однієї частини: та сама транзакційна
     // дисципліна; відмова частини — відмова читання.
     read: async <Q extends ReadQuery>(session: SessionClaims, query: Q) => {
@@ -454,6 +556,21 @@ function claimsOf(session: SessionClaims): string {
   }
 }
 
+/**
+ * Роль читання сесії: гість — роль `anonymous` профілю, і ніколи не роль
+ * користувача чи команд; користувач — роль `user` чи запасний шлях.
+ */
+function readRoleFor(state: RuntimeState, session: SessionClaims): string {
+  if (checkedKind(state.catalog.provider, session) === "anonymous") {
+    if (state.readRoles.anonymous === undefined) {
+      throw new CommandFailure({ code: "command.unauthenticated" })
+    }
+    return state.readRoles.anonymous
+  }
+  // Запасний шлях — роль команд, без `simetra.command`.
+  return state.readRoles.user ?? PLATFORM_ROLES.command
+}
+
 /** Епоха з відповіді оператора епохи: 64 hex чи `NULL` — інше аномалія. */
 function epochOf(rows: readonly Record<string, unknown>[]): string | null {
   const epoch = rows[0]?.epoch
@@ -481,6 +598,7 @@ async function readParts(
   // команди.
   rejectNested()
   const claims = claimsOf(session)
+  const role = readRoleFor(state, session)
   // Межу частин тримає й конверт, але викликач у процесі його не проходить.
   if (parts.length > READ_BATCH_MAX) {
     throw new CommandFailure({
@@ -548,14 +666,8 @@ async function readParts(
   try {
     await send({ text: BEGIN_READ, params: [] })
     budget = new ReadBudget(deadline, state.readTimeout)
-    // Запасний шлях — роль команд, без `simetra.command`.
     await send(
-      readSetupStatement(
-        claims,
-        budget.setup,
-        state.readBudgetMs + 1000,
-        state.readRole ?? PLATFORM_ROLES.command
-      )
+      readSetupStatement(claims, budget.setup, state.readBudgetMs + 1000, role)
     )
     // Епоху бази знає лише транзакція: проєкцію з `known` будівник рендерить
     // після цього оператора.

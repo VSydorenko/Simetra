@@ -124,10 +124,11 @@ describe("login role parents", () => {
     ])
   })
 
-  it("supabase: as the login role was composed before", () => {
+  it("supabase: command role, then the request roles", () => {
     expect(loginRoleParentNames("runtime", "supabase")).toEqual([
       PLATFORM_ROLES.command,
       "authenticated",
+      "anon",
     ])
     expect(PLATFORM_LOGIN_ROLES.runtime).toBe("simetra_runtime")
   })
