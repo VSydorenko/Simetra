@@ -111,7 +111,11 @@ export function formOf(ctx: FormContext, spec: ViewSpec): Form {
         compare: undefined,
         include: [],
       }
-    case "full": {
+    case "full":
+    case "window": {
+      // Вікно відмовляє за тими самими правилами, що й `full`: його порядок
+      // і фільтр обчислює сервер, але ядро сигналів і `hasNewRows` читає їх
+      // локально (§6.4).
       // Усі відмови — тут, до запиту (§6.1 «Предикати», §6.4 «Бюджет фільтра»).
       const orderBy = spec.orderBy ?? []
       const test =
@@ -154,6 +158,7 @@ export function formOf(ctx: FormContext, spec: ViewSpec): Form {
           spec.where ?? null,
           orderBy,
           include.map((s) => s.attribute).sort(),
+          spec.kind === "window" ? (spec.count ?? null) : null,
         ]),
         object,
         keys: [],

@@ -13,6 +13,7 @@ import {
   type ReaderContext,
   type Write,
 } from "./readers"
+import { dropKeys } from "./window"
 import { DISCARD_PAUSE_MS, type Scope, type Session } from "./session"
 import type { RowViews } from "./snapshot"
 import { ReadLimiterClosed, readKeys } from "./source"
@@ -144,9 +145,14 @@ function forget(
           s.purged = true
       }
       s.owned = without(s.owned, dropped)
-      if (spec.kind === "keys" || spec.kind === "full") {
+      if (
+        spec.kind === "keys" ||
+        spec.kind === "full" ||
+        spec.kind === "window"
+      ) {
         s.layout = s.layout.filter((key) => !dropped.has(key))
         s.layoutSet = new Set(s.layout)
+        if (s.window !== undefined) s.window = dropKeys(s.window, dropped)
       }
     }
     const included = s.included.get(o.name)
@@ -537,6 +543,15 @@ async function writeAgain(
       return readFormWrite(ctx, s, startEpoch, token)
     case "full":
       return readFullAgain(ctx, s, startEpoch, token)
+    case "window": {
+      // Системне перечитування склад не змінює: ключі вікна читаються за
+      // ключем, нові значення лягають на місце, зниклі — `removed`. Читання
+      // сторінок від курсорів з `hasNewRows` — частина a2.
+      const rows = await readKeys(ctx.source, o.entry, s.layout, {
+        keysPerRequest,
+      })
+      return applyKeys(ctx, s, s.layout, rows, startEpoch, false)
+    }
   }
 }
 

@@ -52,6 +52,12 @@ export interface CoreSession {
    * synchronously, before the promise.
    */
   preload(spec: ViewSpec, options?: { ttlMs?: number }): Promise<void>
+  /**
+   * The list strategy of an object (P4-B spec §5.1, Рд19): what the runtime
+   * settings say, `window` by default. A host picks `full` or `window` forms
+   * by it.
+   */
+  residencyOf(object: ObjectName): "full" | "window"
   /** The session token: invalid after `close`. */
   token(): GenerationToken
   /** The current session epoch: a read started now carries it. */
@@ -194,6 +200,8 @@ export function createCore(options: {
   index: CatalogIndex
   limits?: Partial<CoreLimits>
   strict?: boolean
+  /** The list strategy by object id; an object not named is `window`. */
+  residency?: ReadonlyMap<string, "full" | "window">
   log?: (e: CoreLogEntry) => void
 }): CoreSession {
   const limits = limitsOf(options.limits)
@@ -537,6 +545,8 @@ export function createCore(options: {
     signal: session.signal,
     view: (spec) => registry.view(spec),
     preload: (spec, preloadOptions) => registry.preload(spec, preloadOptions),
+    residencyOf: (object) =>
+      options.residency?.get(objectOf(object).entry.id) ?? "window",
     token: () => session.token(),
     readEpoch: () => session.epochs.now(),
     commit(fn, token) {

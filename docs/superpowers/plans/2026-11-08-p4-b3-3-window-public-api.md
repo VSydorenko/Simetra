@@ -5,9 +5,8 @@
 
 **Статус:** переріз тонкого зрізу М3 2026-11-16
 ([ADR-0091](../../adr/0091-m3-thin-slice-scale-later.md); issue #109) під
-код `main` після B1c, B1d, B1e, B3-2 і задачі 0. Приймає архітекторка
-`simetra-d5`. Частина a1 у роботі на гілці `issue-109-b3-3-a1`: її якорі —
-«після a1». Спільне: стек postgres — один DB-прогін за раз, стек не
+код `main` після B1c, B1d, B1e, B3-2, задачі 0 і частини a1. Приймає
+архітекторка `simetra-d5`. Спільне: стек postgres — один DB-прогін за раз, стек не
 зупиняти; `packages/simetra/src/data/**` у серії М3 змінює лише виконавець
 цього плану. Повні рівні `unit`, `db`, `db-supabase` і пакування запускає CI
 на draft PR кожної частини; локально — лише цільові `run-tests … --changed`
@@ -115,7 +114,7 @@ PR і своє «готово». Перевірки — `run-tests unit --change
 перейменування `stale.seen` → `stale.hidden`. Правки спеки Р3, Р8 і Р9 щодо
 `known` з `include` і ярусів описують цільову форму блоків #206 і #207 (§13).
 
-### a1 — форма `window` і ланцюжок (PR 2, після задачі 0)
+### a1 — форма `window` і ланцюжок (PR 2, у `main`)
 
 #### Задача 1 — Форма й ланцюжок
 
@@ -154,7 +153,7 @@ PR і своє «готово». Перевірки — `run-tests unit --change
 
 Спершу — прибрати `count` з `ViewSpec`, `ViewSnapshot`, `snapshot.ts` і
 читачів (Р1; `count` → #206) і додати `ViewHandle.setVisibleRange` без дії
-(Р13), якщо a1 його не дала. Далі `window.ts` (Р9), `readers.ts` і `subsets.ts`, `writer.ts` (`revalidate`
+(Р13): a1 його не дала. Далі `window.ts` (Р9), `readers.ts` і `subsets.ts`, `writer.ts` (`revalidate`
 вікна за Р14), `core.ts`; модельний тест `__tests__/model.test.ts` — кроки
 вікна (`loadAfter`, `loadBefore`, `refresh`, `showNew`, `revalidate` вікна,
 `remove`, `purge` і `hide` ключів сторінок) і гілки дефектів у `defects.ts`.
