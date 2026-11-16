@@ -126,6 +126,7 @@ type Step =
   | { t: "access"; which: number }
   | { t: "purgeKey"; org: boolean; k: number }
   | { t: "purgeScope"; org: boolean; scope: number }
+  | { t: "hide"; org: boolean; k: number }
   | { t: "revalidate"; org: boolean; visibleOnly: boolean }
   | { t: "markStale"; k: number; plus: number }
   | { t: "disconnect"; channel: number; clear: boolean }
@@ -217,6 +218,12 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
       org: fc.boolean(),
       scope: fc.nat(1),
     }),
+  },
+  // `hide` (права, план B3-3, Р11): значення ключа ховаються до читання,
+  // що почалось після нього; перечитування видів-власників іде саме.
+  {
+    weight: 10,
+    arbitrary: fc.record({ t: one("hide"), org: fc.boolean(), k }),
   },
   {
     weight: 10,
@@ -376,6 +383,9 @@ async function runModel(
     if (objectOf(TASK).sections.get(K1, "lines") === undefined)
       sectionBarrier.set(K1, stepStart)
   }
+  // Ключ, який сховав `hide`: значення — лише з читання, що почалось після
+  // нього (план B3-3, Р11), а рядки ТЧ власника — лише з читання ТЧ.
+  const hideBarrier = new Map<string, number>()
   // Ключ, що став `removed`: значення — лише з читання після позначки (П15).
   const removedBarrier = new Map<string, number>()
   // Мить (довжина журналу запитів), коли свіжа відповідь «рядка немає»
@@ -489,8 +499,13 @@ async function runModel(
       fail(label, `${at}: version ${max} → ${row.version} as ${row.state}`)
     maxVersion.set(versionKey(object, row.key), Math.max(max, row.version))
     const fields = Object.keys(row.values)
-    // Схований горизонтом рядок значень не показує.
+    // Схований рядок значень не показує.
+    if (row.hidden === true && fields.length > 0)
+      fail(label, `${at}: hidden with values`)
     if (fields.length === 0) return
+    const hidden = hideBarrier.get(id(object, row.key))
+    if (hidden !== undefined && !deliveredSince(object, row.key, hidden))
+      fail(label, `${at}: shown after hide without a later read`)
     // Показаний рядок (і ціль `refs`) прибраного `purge` ключа — лише з
     // читання, що почалось після нього (П12).
     const purged = purgeBarrier.get(id(object, row.key))
@@ -576,6 +591,14 @@ async function runModel(
       const purged = sectionBarrier.get(owner)
       if (purged !== undefined && !readSince(purged))
         fail(label, `${where}: lines shown after purge`)
+      // `hide` прибирає рядки ТЧ власника: їх повертає лише читання ТЧ після нього.
+      const hidden = hideBarrier.get(id(TASK, owner))
+      if (
+        hidden !== undefined &&
+        !readSince(hidden) &&
+        snap.section.lines.length > 0
+      )
+        fail(label, `${where}: lines shown after hide without a later read`)
       // Після `removed` рядки повертає читання після позначки — ТЧ чи шапки,
       // що зняла `removed`.
       const removed = removedBarrier.get(id(TASK, owner))
@@ -624,6 +647,8 @@ async function runModel(
       fail(label, `seen ${sizes.seen} > ${LIMITS.seenMax}`)
     if (sizes.tombstones > LIMITS.tombstonesMax)
       fail(label, `tombstones ${sizes.tombstones} > ${LIMITS.tombstonesMax}`)
+    if (sizes.hidden > LIMITS.tombstonesMax)
+      fail(label, `hidden marks ${sizes.hidden} > ${LIMITS.tombstonesMax}`)
     // Останнє поховання пари — по одному на об'єкт.
     if (sizes.pairBurials > 2)
       fail(label, `pair burials ${sizes.pairBurials} > 2 objects`)
@@ -698,6 +723,9 @@ async function runModel(
         wasRemoved.delete(id(name, k))
         const values = visibleRow(e)
         if (values !== undefined) {
+          const hidden = hideBarrier.get(id(name, k))
+          if (hidden !== undefined && !deliveredSince(name, k, hidden))
+            fail(label, `${at}: values after hide without a later read`)
           const barrier = removedBarrier.get(id(name, k))
           if (barrier !== undefined && !deliveredSince(name, k, barrier))
             fail(label, `${at}: values after removed without a later read`)
@@ -1098,6 +1126,14 @@ async function runModel(
         if (object === TASK) barrierSections(stepStart)
         break
       }
+      case "hide": {
+        const object = s.org ? ORG : TASK
+        const target = s.org ? ORG_KEYS[s.k % 2]! : KEYS[s.k]!
+        commit((w) => w.hide(object, [target]))
+        if (closed !== undefined) break
+        hideBarrier.set(id(object, target), stepStart)
+        break
+      }
       case "revalidate":
         core
           .revalidate(s.org ? ORG : TASK, { visibleOnly: s.visibleOnly })
@@ -1394,6 +1430,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "absent-row-ignored",
   "unbounded-seen",
   "system-reread-via-load",
+  "hide-lifted-by-older-read",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -1408,6 +1445,7 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "absent-row-ignored": /^converge/,
   "unbounded-seen": /seen \d+ > \d+/,
   "system-reread-via-load": /composition/,
+  "hide-lifted-by-older-read": /after hide without a later read/,
 }
 
 describe("core model self-check", () => {
