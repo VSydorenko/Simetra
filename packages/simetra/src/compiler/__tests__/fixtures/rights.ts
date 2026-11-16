@@ -1458,7 +1458,7 @@ export const GAUGE_LOG_TABLE = "gauge_log"
 export const GAUGE_WRITER_ID = uuid(7520)
 
 /**
- * Значення рантайму команд (Р-A3-7) поверх `policyDomain()`: скоуплений
+ * Значення рантайму команд поверх `policyDomain()`: скоуплений
  * довідник `Gauge` з типами, яких немає в довідниках A2, — `Numeric(30,10)`,
  * `BigInt`, `Json`, `Bytes`, посилання на перерахування `GaugeLevel` (логічне
  * ім'я значення ≠ мітка бази), поліморфний `subject`, масив `BigInt`,
@@ -2475,7 +2475,7 @@ export const BENCH_ZONE_NOTE_FILE = "catalogs/ZoneNote/ZoneNote.meta.json"
 const BENCH_ZONE_SQL_FILE = "sql/public/zone-ids.sql"
 
 /**
- * Шар моделі бенчмарку знімка актора (план Права-3, Р3-9) поверх
+ * Шар моделі бенчмарку знімка актора поверх
  * `teamScopeKind()`: кожна форма джерела фактів, запис у яке міряє
  * сценарій 7. Контейнер — `Project` домену; вимір `zone` бере значення
  * дослівною функцією, що читає таблицю виду `Zone` і кличе функцію членства
@@ -2561,7 +2561,7 @@ const SNAPSHOT_BADGE_DIMENSION_ID = uuid(6880)
 const SNAPSHOT_REGION_NOTE_FILE = "catalogs/RegionNote/RegionNote.meta.json"
 
 /**
- * Модель аналізу джерел знімка (план Права-3, Р3-6): кожна форма джерела
+ * Модель аналізу джерел знімка: кожна форма джерела
  * фактів актора поверх прийнятих джерел (`adoptedSourcesDomain`) і другого
  * виду `team` з довідником членства (`adoptedCrossKind`). Довідник членства —
  * `TeamMember`; прийняті джерела членства й призначень — `Membership`,
@@ -2728,7 +2728,7 @@ export const ACTOR_SNAPSHOT = {
 } as const
 
 /**
- * Шар DB-доказу знімка актора (план Права-3, Задача 6) поверх домену
+ * Шар DB-доказу знімка актора поверх домену
  * політик: кожна форма джерела, яку знімок має взяти до першої зміни. Вид
  * скоупу `team` — дослівна функція множини над таблицею виду `TeamSeat`
  * (місця користувачів; корінь зовнішній, як у бенчмарку: об'єктів виду
@@ -2892,7 +2892,7 @@ export const ADOPTED_SNAPSHOT = {
 } as const
 
 /**
- * Модель DB-доказу знімка над прийнятими джерелами (план Права-3, Задача 6):
+ * Модель DB-доказу знімка над прийнятими джерелами:
  * членство виду `org` — прийнята `Membership` з активністю, призначення
  * `ProjectLead` — прийнята `RoleGrant` з активністю (`activeGrants`), вид
  * `team` — довідник членства `TeamMember` з роллю `TeamLead`. Ролей кожного
@@ -2978,7 +2978,7 @@ export const COUNTRY_ID = uuid(8210)
  * грант на `OrgMember`: рядок членства творця невидимий йому й після гранту.
  * `memberRegions` додає `OrgMember` масив `Ref` і поліморфну пару на
  * скоуплений `Region`: цілі, чий скоуп звіряє перевірка рядка членства у
- * функції гранту (Р-A6-12).
+ * функції гранту.
  */
 export function tenantSelfService(
   options: {
@@ -3147,8 +3147,8 @@ export const GLOBAL_FULL_ID = uuid(8232)
  * `rootCreator` — корінь `Branch`, учасники `BranchMember`, власні довідники
  * прав і роль `BranchAdmin` з `fullAccess`. Глобальні ролі: `TenantOperator`
  * створює `Branch`, `GlobalFounder` — `Organization` (вид з творцем: творця
- * отримує й глобальний актор, Р-A6-19), `GlobalFull` має `fullAccess` без явного
- * гранту на корені (Р-A6-1), `GlobalAdmin` адмініструє глобальні призначення.
+ * отримує й глобальний актор), `GlobalFull` має `fullAccess` без явного
+ * гранту на корені, `GlobalAdmin` адмініструє глобальні призначення.
  * `GlobalAdmin` — той самий файл, що в `adminRoles()`: `fullAccess: false`
  * явно, тож шар поверх `adminRoles()` дає саме цю роль.
  */
@@ -3225,7 +3225,7 @@ export function tenantOperator(): Layer {
 }
 
 /**
- * Створення кореня (спека прав §5.2, Р-A6-11) поверх домену політик:
+ * Створення кореня (спека прав §5.2) поверх домену політик:
  * самообслуговування й оператор разом; корінь `Organization` має другого
  * власника `owner` і ТЧ `sites` (`scopeRootCarrier()`) — `create@own` кореня
  * дає лише автор, а `INSERT` ТЧ кореня лишається колонковим.

@@ -224,7 +224,7 @@ describe("notNullColumns", () => {
       ).toEqual([[true, generated]])
   })
 
-  // І8: ні коментар, ні ім'я колонки не роблять оператор `SET NOT NULL`
+  // Ні коментар, ні ім'я колонки не роблять оператор `SET NOT NULL`
   it("does not take SET NOT NULL from a comment or a column name", () => {
     expect(
       of(
@@ -331,7 +331,7 @@ describe("planBackfills", () => {
     ).toEqual([{ table: "app.items", column: "note", rows: 3 }])
   })
 
-  // І4 і перестановка пари (платформна спека §6.6)
+  // Порядок кроку заповнення й перестановка пари (платформна спека §6.6)
   describe("default order", () => {
     it("moves SET DEFAULT before SET NOT NULL of the same column", () => {
       // Порядок pg-delta: SET NOT NULL, потім SET DEFAULT
@@ -429,7 +429,6 @@ describe("planBackfills", () => {
     })
   })
 
-  // І9
   it("refuses ADD COLUMN … NOT NULL without a default only on a table with rows", () => {
     const add = action(
       'ALTER TABLE "app"."items" ADD COLUMN "extra" text NOT NULL'
@@ -621,7 +620,6 @@ describe("planBackfills", () => {
     ).toEqual([])
   })
 
-  // І13
   it("leaves a promotion data column to its data step and refuses the unit table", () => {
     const promotion = {
       tables: new Set([tableKey("app", "items")]),
@@ -636,7 +634,6 @@ describe("planBackfills", () => {
     ).toEqual(["promotion"])
   })
 
-  // І18
   it("refuses one default for several NULL of a unique column", () => {
     const unique = (over: Partial<CatalogTable>) =>
       model(table([column("id"), column("note"), column("code")], over))
@@ -815,7 +812,6 @@ describe("classifySteps with backfill", () => {
   })
 })
 
-// І10, І19
 describe("backfill permission", () => {
   const permitted = (over: Partial<BackfillInput>): string[] =>
     requiredPermissions({ steps: stepsOf(over), drift: null, promotion: null })
@@ -850,7 +846,7 @@ describe("backfill permission", () => {
   })
 })
 
-// І15: передумови спільні з кроками даних промоції
+// Передумови спільні з кроками даних промоції
 describe("write facts of a backfill", () => {
   const FACTS = (over: Partial<WriteFacts> = {}): WriteFacts => ({
     triggers: new Map(),
@@ -1105,7 +1101,7 @@ describe("readBackfillCounts", () => {
       "SELECT pg_catalog.count(*) AS n FROM app.items WHERE note IS NOT DISTINCT FROM NULL",
       "SELECT pg_catalog.count(*) AS n FROM app.items",
     ])
-    // `row_security = off` ставиться до першого підрахунку (Р5)
+    // `row_security = off` ставиться до першого підрахунку
     const set = log.findIndex(
       (q) =>
         q.sql.includes("set_config") &&

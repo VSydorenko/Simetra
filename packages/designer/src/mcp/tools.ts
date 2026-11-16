@@ -265,7 +265,7 @@ export function registerCatalog(server: McpServer, o: McpToolOptions): void {
             tool.database !== "write" &&
             tool.data !== "write",
           // `delete` даних незворотний: клієнт за анотацією може питати
-          // людину, хоча `confirm` інструмент не вимагає (Р-A5-17)
+          // людину, хоча `confirm` інструмент не вимагає
           destructiveHint: tool.destructive || tool.data === "write",
         },
       },

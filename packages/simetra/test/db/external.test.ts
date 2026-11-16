@@ -236,7 +236,7 @@ describe("removeRunResources", () => {
     expect(docker.calls).toContainEqual(["docker", "rm", "-f", "-v", "mine"])
   })
 
-  // Р5: спорожнення бакета з об'єктами — у ПГ-5
+  // Спорожнення бакета з об'єктами — у ПГ-5
   it("leaves a bucket with objects", async () => {
     const garage = fakeGarage([{ id: "full", alias: `run-${TAG}`, objects: 3 }])
     const result = await removeRunResources(TAG, "postgres", {

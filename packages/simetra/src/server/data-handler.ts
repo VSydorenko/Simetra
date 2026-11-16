@@ -81,8 +81,8 @@ function originRefused(origin: RequestOrigin, request: unknown): boolean {
 }
 
 /**
- * Запит старого розгортання: тип, якого сервер не знає (окремий `version`
- * до B1c), чи `read` без `items` (одиночний `query`). Стара вкладка має
+ * Запит старого розгортання: тип, якого сервер не знає (окремий `version`,
+ * якого більше немає), чи `read` без `items` (одиночний `query`). Стара вкладка має
  * дізнатися про нове розгортання (`stale-client`), а не отримати `invalid`.
  */
 function staleRequest(raw: unknown): boolean {
@@ -106,7 +106,7 @@ function mappedOrRefused<T>(
   throw new Defect(result.unknown)
 }
 
-/** Відмова мапінгу — у форму передачі з `object` операції чи запиту (Р3). */
+/** Відмова мапінгу — у форму передачі з `object` операції чи запиту. */
 function mappingRefusal(
   index: CatalogIndex,
   object: string,
@@ -176,7 +176,7 @@ function envelopeRefusal(
       operation = true
       path = path.slice(2)
     } else if (field === "items" && typeof at === "number") {
-      // Частина читання (B1c): шлях — від її запиту, як в одиночного читання
+      // Частина читання (пакет, Рд41): шлях — від її запиту, як в одиночного читання
       // раніше; поле самої частини (`type`, `query`) — від частини.
       if (path[3] === "query" && path.length > 4) {
         object = rawObject(

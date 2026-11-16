@@ -53,7 +53,7 @@ export interface RootCreatorFacts {
   role: Pick<RoleContract, "roleId" | "fullAccess">
   membership: Inserted & {
     user: string
-    /** `<членство>_simetra_member_check` довідника членства (Р-A6-12). */
+    /** `<членство>_simetra_member_check` довідника членства. */
     check: QualifiedName
     /**
      * Колонки вставки зі списку компіляції (ті самі, що в гілці створення
@@ -123,7 +123,7 @@ export function rootCreatorFunction(facts: RootCreatorFacts): string {
     ...ifRefuse(
       `v_action IS DISTINCT FROM ${sqlLiteral(facts.root.action)} OR v_object IS DISTINCT FROM ${sqlLiteral(facts.root.kindLabel)} OR v_root IS DISTINCT FROM p_root`
     ),
-    // (2) Маркер «корінь вставлено в цій транзакції цим актором» (Р-A6-23).
+    // (2) Маркер «корінь вставлено в цій транзакції цим актором».
     `DELETE FROM ${qualified(ROOT_MARKER_TABLE)} m WHERE m.xid = txid_current() AND m.scope_kind_id = ${kind} AND m.root = p_root AND m.actor = ${CURRENT_USER};`,
     "GET DIAGNOSTICS v_count = ROW_COUNT;",
     ...ifRefuse("v_count = 0"),
@@ -134,9 +134,9 @@ export function rootCreatorFunction(facts: RootCreatorFacts): string {
     // (4) Рядок членства творця: лише колонки вставки, примушені ключ, скоуп і
     // користувач. Вхід уже перевірило INVOKER-ядро, але прямий виклик сирим
     // SQL під `simetra_command` його оминає — тож та сама перевірка рядка
-    // членства ще раз (захист у глибину, як Р-A6-23). Від власника з
+    // членства ще раз (захист у глибину, як для маркера вище). Від власника з
     // `row_security = off` вона означає «ціль існує й у тому самому скоупі», не
-    // видимість — як в інструменті обслуговування (Р-A6-12). Примушені ключі
+    // видимість — як в інструменті обслуговування. Примушені ключі
     // функція ігнорує (їх пише вона сама), тож перевірка їх не бачить.
     ...ifRefuse(
       `${qualified(m.check)}(p_member - ARRAY[${Object.keys(forced).map(sqlLiteral).join(", ")}]::text[], p_root) IS NOT NULL`

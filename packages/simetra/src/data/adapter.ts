@@ -27,7 +27,7 @@ export function serverFunctionAdapter(
   send: RuntimeHandle["send"]
 ): SourceAdapter {
   return {
-    // Сервер повертає `included` сам (§4.2, Р5).
+    // Сервер повертає `included` сам (§4.2).
     capabilities: { include: true },
     async read(items) {
       const value = await send({ type: "read", items: [...items] })

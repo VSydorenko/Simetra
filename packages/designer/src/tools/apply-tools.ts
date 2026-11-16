@@ -587,7 +587,7 @@ export const applyTool = defineTool({
       required(database),
       "apply",
       async (db): Promise<ApplyRun> => {
-        // Профіль `postgres` не має окремого сервера тіней (Р9): відмова до
+        // Профіль `postgres` не має окремого сервера тіней: відмова до
         // будь-якого звернення до бази, і для застосування, і для репетиції
         if (
           copiesShadowFromTemplate(artifact.scope.provider) &&
@@ -608,7 +608,7 @@ export const applyTool = defineTool({
         // з'єднанні, тож бажану тінь будують до відкриття транзакції цілі
         // (спека промоції §7.2): під замками плану її не будують
         const desired = await desiredForApply(model)
-        // Р10: роль без BYPASSRLS — відмова до платформних ролей і до створення тіні
+        // Роль без BYPASSRLS — відмова до платформних ролей і до створення тіні
         const ownerGate = await (
           await applyDatabase({ readOnly: true })
         ).transaction(db.target, "rollback", checkOwnerAttributes)

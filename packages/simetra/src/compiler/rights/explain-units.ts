@@ -73,7 +73,7 @@ interface Subject {
   /**
    * Множини носіїв: варіанти `_of` з `user` чи публічні функції поточного
    * користувача — ті самі, що читає RLS, тож у транзакції зі знімком
-   * актора видимість викликача судиться знімком (Р3-8).
+   * актора видимість викликача судиться знімком.
    */
   sets: "of" | "current"
 }
@@ -198,7 +198,7 @@ function explainBody(
     `  ${DETAIL_SELECT}`,
     `  FROM ${call(F.detailOf, [USER])} d`,
     // Права викликача — ті самі, що читає RLS: `rights_mine()` зі знімком
-    // транзакції (Р3-8); походження ролі для перевірки видимості не потрібне.
+    // транзакції; походження ролі для перевірки видимості не потрібне.
     `), ${CALLER.granted} AS (`,
     `  SELECT m.level, m.scope, m.container, m.object, m.action, m.extent, m.dimension_id, NULL::uuid AS role_id, NULL::uuid AS custom_role`,
     `  FROM ${call(F.mine)} m`,
@@ -461,7 +461,7 @@ function carrierMatch(
     case "column": {
       const { fn, args } = condition.set
       const column = row(condition.column)
-      // Викликач — функції множини політики як є (Р3-8).
+      // Викликач — функції множини політики як є.
       if (subject.sets === "current") return inSet(call(fn, args), column)
       if (same(fn, F.myMembers)) {
         return inSet(call(F.membersOf, [subject.user, ...args]), column)

@@ -15,7 +15,7 @@ const put = (h: ReturnType<typeof harness>, versionEpoch: string | null) =>
     )
   )
 
-describe("computeRowView staleFields (B1c Р5)", () => {
+describe("computeRowView staleFields", () => {
   it("a lazy field read in the epoch of the row is not stale", () => {
     const h = harness()
     put(h, EA)

@@ -344,7 +344,7 @@ describe("encodeRow / decodeRow rows", () => {
     )
   })
 
-  // `maxBytes` — межа входу команди (Р7): збережене значення понад неї
+  // `maxBytes` — межа входу команди: збережене значення понад неї
   // читання віддає, а не відхиляє.
   it("encodes a stored value over maxBytes", () => {
     const text = only(attr("Text", { maxBytes: 1 }))

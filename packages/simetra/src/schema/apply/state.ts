@@ -75,8 +75,8 @@ export function planPlatformFunctions(
  * метаданих від них не залежить. Безпеку схеми дає та сама функція, що й
  * платформному шару, і лише коли шару в моделі немає — інакше одиниці
  * задублювалися б. Таблицям стану грантів немає: їх читає й пише лише роль,
- * що застосовує. Винятки — функції стану: `applied_snapshot_hash()` для ролі команд
- * (рішення Р-A3-16): рантайм звіряє хеш знімка з базою, не отримуючи права
+ * що застосовує. Винятки — функції стану: `applied_snapshot_hash()` для ролі команд:
+ * рантайм звіряє хеш знімка з базою, не отримуючи права
  * читати marker, тож функція — `SECURITY DEFINER`, а її `EXECUTE` — лише
  * ролі команд і в обох випадках, бо функцію платформний шар не дає.
  * Читач епохи `row_version_epoch()` має `EXECUTE` ще й ролей користувача й
@@ -172,7 +172,7 @@ const EPOCH_READERS = ["command", "user", "anonymous"] as const
 
 /**
  * Епоха версій бази: хеш від ідентичності кластера, лінії часу, бази,
- * послідовності, часу старту й UUID рядка `version_epoch` (рішення Р4). `NULL`
+ * послідовності, часу старту й UUID рядка `version_epoch`. `NULL`
  * на репліці (`pg_current_wal_insert_lsn()` там недоступна, тож гілка за
  * `CASE`) і без рядка. Лінія часу — з імені WAL-файла, а не з контрольного
  * файла: швидкий failover змінює її одразу. OID послідовності береться через
@@ -340,7 +340,7 @@ export async function readApplyState(
   const row = JSON.parse(markerRow.row) as MarkerRow
   if (row.format !== APPLY_STATE_FORMAT)
     return corrupt("apply.state-format", { found: row.format })
-  // Таблиці епохи може ще не бути (база до B1e): це «рядка немає», а не збій
+  // Таблиці епохи може ще не бути (база до введення епохи версій): це «рядка немає», а не збій
   const [epoch] = tables?.epoch
     ? await tx.query<{ found: boolean }>(
         `SELECT EXISTS (SELECT FROM ${VERSION_EPOCH}) AS found`

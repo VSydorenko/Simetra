@@ -162,7 +162,7 @@ production показує лише код; помилка `pg` (хост, рол
 
 | Опція | Значення |
 | --- | --- |
-| база | пул `auth-db.ts` з опцією з'єднання `options=-c search_path=better_auth`, без `database.schemaName`; `advanced.database.generateId: "uuid"`. Зі `schemaName` Better Auth шле `CREATE SCHEMA IF NOT EXISTS`, а Postgres вимагає `CREATE` на базу ще до `IF NOT EXISTS` (рішення ПГ-2a Р8); другий шар — налаштування `search_path` ролі `simetra_auth`, яке ставить `roles` (спека профілю §4.1) |
+| база | пул `auth-db.ts` з опцією з'єднання `options=-c search_path=better_auth`, без `database.schemaName`; `advanced.database.generateId: "uuid"`. Зі `schemaName` Better Auth шле `CREATE SCHEMA IF NOT EXISTS`, а Postgres вимагає `CREATE` на базу ще до `IF NOT EXISTS` (перевірено на стеку); другий шар — налаштування `search_path` ролі `simetra_auth`, яке ставить `roles` (спека профілю §4.1) |
 | `baseURL` | `SIMETRA_APP_ORIGIN` |
 | `trustedOrigins` | `[SIMETRA_APP_ORIGIN]` |
 | `secret` | `BETTER_AUTH_SECRET` (§4.1) |

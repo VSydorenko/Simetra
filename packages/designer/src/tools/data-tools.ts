@@ -29,7 +29,7 @@ import {
   type ToolContext,
 } from "./types"
 
-/** Рядок результату для JSON: `bigint` — десятковим рядком (Р-A5-13). */
+/** Рядок результату для JSON: `bigint` — десятковим рядком, бо JSON не має `bigint`. */
 export type JsonRow = Record<string, unknown>
 
 export interface JsonCommandResult {
@@ -115,7 +115,7 @@ function required(data: DataResource | undefined): DataResource {
 type Compiled = { model: CompiledModel } | { failed: RunOutcome<never> }
 
 /**
- * Компіляція на кожен виклик (Р-A5-5): зміна теки між викликами дає нову
+ * Компіляція на кожен виклик (спека П4 §6.14): зміна теки між викликами дає нову
  * модель, і рантайм звіряє її хеш із застосованим — кешу, який треба
  * інвалідувати, немає.
  */

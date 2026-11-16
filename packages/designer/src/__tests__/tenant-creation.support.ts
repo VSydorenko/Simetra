@@ -529,7 +529,7 @@ export function throughCases(target: Targets, port: Port): void {
   })
 
   // Відкат першої спроби прибирає корінь, членство й маркер; повтор бере ті
-  // самі id (Р-A6-20), і другий маркер того самого кореня не конфліктує.
+  // самі id, і другий маркер того самого кореня не конфліктує.
   it("retry keeps ids: a 40001 on the first COMMIT, the second attempt commits", async () => {
     const creator = await user(a)
     const failing = serializationFailureOnce(fromPgPool(port(a)))

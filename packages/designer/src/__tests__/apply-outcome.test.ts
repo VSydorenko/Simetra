@@ -346,7 +346,7 @@ describe("apply with an unknown outcome", TOOL_PIPELINE, () => {
   })
 })
 
-// Профіль `postgres` не має окремого сервера тіней (Р9): відмова до будь-якого
+// Профіль `postgres` не має окремого сервера тіней: відмова до будь-якого
 // звернення до бази, і для застосування, і для репетиції
 describe("apply with a separate shadow server on the postgres profile", () => {
   it.each([false, true])(

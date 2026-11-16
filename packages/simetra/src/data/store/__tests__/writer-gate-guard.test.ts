@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 
 /*
  * Відповідь приймача пишеться лише через `Writer.apply` — після шлюзу епохи
- * (P4-B план B1c, Р7, Р12). Внутрішні `patchRows` / `removeKeys` модуля
+ * (спека П4-B §6.2). Внутрішні `patchRows` / `removeKeys` модуля
  * `writer.ts` поза ним не викликає ніхто: виклик в обхід `apply` записав би
  * `removed` чи рядок з відповіді покинутої епохи. Перевірка — за символом
  * (type checker), а не за іменем: псевдонім імпорту не обходить її.
@@ -117,7 +117,7 @@ describe("writer gate guard self-test", () => {
   })
 })
 
-describe("receiver writes go through Writer.apply (B1c Р7, Р12)", () => {
+describe("receiver writes go through Writer.apply", () => {
   it("no file of src/data uses the internal patch/remove of writer.ts", () => {
     const files = readdirSync(DATA, { recursive: true, withFileTypes: true })
       .filter((e) => e.isFile() && e.name.endsWith(".ts"))

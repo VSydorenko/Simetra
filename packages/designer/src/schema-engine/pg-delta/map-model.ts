@@ -125,7 +125,7 @@ export function mapModel(
     if (view.isReferenceOnly(id)) continue
     // Власник — ребро, а не payload; типового власника проєкція двигуна
     // прибирає, тож ребро, що лишилось, — інший власник, якого модель не має.
-    // Профіль без типового власника (postgres, Р1 ПГ-2a) лишає й ребро до
+    // Профіль без типового власника (postgres) лишає й ребро до
     // ролі сесії — вона і є власником об'єктів без явного `OWNER TO`
     for (const edge of view.outgoingEdges(id))
       if (edge.kind === "owner" && !sessionOwner(edge.to))

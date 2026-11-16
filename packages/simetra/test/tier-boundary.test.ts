@@ -91,7 +91,7 @@ describe("tier zones", () => {
     for (let i = 0; i < TIERS.length; i++) {
       for (let j = 0; j < i; j++) {
         const file = `src/${TIERS[i]}/__fixture.ts`
-        // data і ui не імпортують server попри нижчий ярус (A3-10)
+        // data і ui не імпортують server попри нижчий ярус (спека П4 Рт15)
         if (TIERS[j] === "server" && (TIERS[i] === "data" || TIERS[i] === "ui"))
           continue
         expect(
@@ -283,7 +283,7 @@ describe("tier zones", () => {
     ).toEqual([])
   })
 
-  // Better Auth і kysely — лише тестова залежність `simetra` (рішення Р2):
+  // Better Auth і kysely — лише тестова залежність `simetra`:
   // production-джерело, що їх імпортує, зламалося б у споживача
   it("production sources import neither better-auth nor kysely", async () => {
     for (const spec of [

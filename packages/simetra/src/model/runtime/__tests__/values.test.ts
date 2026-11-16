@@ -41,7 +41,7 @@ const attributes: CatalogEntryAttribute[] = [
 ]
 
 /**
- * Три споживачі одного обходу (Р-A6-13): шапка `values` (грант вставки чи
+ * Три споживачі одного обходу: шапка `values` (грант вставки чи
  * оновлення), рядок ТЧ (ключ рядка пише викликач, шляхи з префіксом) і
  * `creatorMember` (примушені ключі, префікс): шляхи й порядок помилок у
  * всіх трьох однакові.
@@ -104,7 +104,7 @@ describe("encodeAttributes", () => {
     ["member: not an object", MEMBER, [], "creatorMember"],
     ["member: a revoked Proxy", MEMBER, revoked(), "creatorMember"],
     ["member: a value getter", MEMBER, throwing("code"), "creatorMember.code"],
-    // Р-A3-8: реквізити за порядком каталогу, невідомі ключі — після них.
+    // Реквізити за порядком каталогу, невідомі ключі — після них.
     [
       "member: an unknown key before an invalid value",
       MEMBER,
@@ -185,7 +185,7 @@ describe("encodeAttributes", () => {
   })
 })
 
-// `maxBytes` (Рд26, Р7): міра — `jsonBytes` закодованого значення форми
+// `maxBytes` (Рд26): міра — `jsonBytes` закодованого значення форми
 // передачі, тож лапки JSON, екранування й UTF-8 кирилиці входять у межу.
 describe("encodeAttributes: maxBytes", () => {
   const INPUT = { ...HEADER, maxBytes: true } as const
@@ -211,7 +211,7 @@ describe("encodeAttributes: maxBytes", () => {
     }
   )
 
-  // Р7: міра — форма, якою значення піде дротом, а не форма входу.
+  // Міра — форма, якою значення піде дротом, а не форма входу.
   // `Numeric(p, s)` база доповнює до `s` дробових цифр, `DateTime` кодек
   // нормалізує до фіксованої ширини UTC; надісланий базі вхід — без змін.
   it.each<[string, Partial<CatalogEntryAttribute>, unknown, number]>([
