@@ -54,6 +54,11 @@ export interface WriterContext extends ReaderContext {
   invalidateTail(o: ObjectState): void
   /** Deliberate defects of the model test's self-check. */
   readonly defects: Defects
+  /**
+   * Keys `Writer.hide` hid, by object: the core re-reads the views that hold
+   * them once the `commit` ends (`revalidateHolders`), not inside it.
+   */
+  readonly hiddenKeys: Map<ObjectName, Set<Key>>
 }
 
 /**
@@ -254,6 +259,21 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       forget(ctx, scope, o, new Set(dropped), new Set(purged))
       ctx.invalidateTail(o)
       ctx.purges.set(o.name, (ctx.purges.get(o.name) ?? 0) + 1)
+    },
+
+    hide(object, keys) {
+      scope.assert()
+      const o = ctx.objectOf(object)
+      const hidden = o.rows.hideKeys(scope, keys)
+      // Вигляд `section` ховає рядки ТЧ лише за позначкою шапки, а шапки в
+      // сховищі може не бути (`disown`): збережені рядки ТЧ прибираємо самі
+      // для кожного ключа, їх дочитує перечитування.
+      for (const key of keys) ops.clearOwner(scope, o, key)
+      for (const key of hidden) rowViews.touch(o.name, key)
+      if (hidden.length === 0) return
+      const pending = ctx.hiddenKeys.get(o.name) ?? new Set<Key>()
+      for (const key of hidden) pending.add(key)
+      ctx.hiddenKeys.set(o.name, pending)
     },
 
     markStale(object, keys, minVersion) {
@@ -546,6 +566,38 @@ export async function revalidate(
       (s.form.spec.kind !== "section" || s.listeners.size > 0)
   )
   await revalidateViews(ctx, o, targets)
+}
+
+/**
+ * The re-read of every view that holds one of the hidden keys, as an owned
+ * row or an `include` target, invisible views included (plan B3-3, Р11): the
+ * values return only with a read that started after the `hide`. A failed
+ * read leaves them hidden. A view of another object that includes the
+ * object is re-read as its own object's view.
+ */
+export async function revalidateHolders(
+  ctx: WriterContext,
+  object: ObjectName,
+  keys: ReadonlySet<Key>
+): Promise<void> {
+  if (!ctx.session.token().valid) return
+  const groups = new Map<ObjectState, Subset[]>()
+  for (const s of ctx.registry.subsets()) {
+    if (!s.alive || s.purged || !s.loaded) continue
+    if (s.form.spec.kind === "section" && s.listeners.size === 0) continue
+    const included = s.included.get(object)
+    const holds =
+      (s.form.object.name === object &&
+        [...keys].some((k) => s.owned.has(k))) ||
+      (included !== undefined && [...keys].some((k) => included.has(k)))
+    if (!holds) continue
+    const group = groups.get(s.form.object) ?? []
+    group.push(s)
+    groups.set(s.form.object, group)
+  }
+  await Promise.all(
+    [...groups].map(([o, targets]) => revalidateViews(ctx, o, targets))
+  )
 }
 
 /** One two-phase pass over `targets`; views dropped by a purge get another pass. */

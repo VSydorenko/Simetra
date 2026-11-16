@@ -54,6 +54,11 @@ export type RowView =
       readonly values: Values
       readonly state: Exclude<RowState, "removed">
       readonly staleFields: readonly string[]
+      /**
+       * The values are hidden by a mark (the eviction horizon or `Writer.hide`)
+       * until a read that started after it; a form shows no draft meanwhile.
+       */
+      readonly hidden?: true
       readonly refs?: Readonly<Record<string, RowView | null>>
     }
 
@@ -179,6 +184,17 @@ export interface Writer {
     target: { keys: readonly Key[] } | { scope: string | null }
   ): void
   markStale(object: ObjectName, keys: readonly Key[], minVersion: number): void
+  /**
+   * Hides the values of the keys (rights, the eviction horizon): the only
+   * entry point of rights narrowing (plan B3-3, Р11). The values return only
+   * with a read that started after this call, in every view that holds the
+   * key — invisible ones, `include` targets and window snapshots included —
+   * re-read after the `commit`; a failed re-read leaves them hidden. Stored
+   * tabular section lines of the keys are dropped, whether the header is in
+   * the store or not. A write-back does not lift the mark. Whether the key
+   * is gone for good is `purge`, not `hide`.
+   */
+  hide(object: ObjectName, keys: readonly Key[]): void
   /**
    * Marks rows of `channel` (every row when omitted) `stale` from a gap.
    * Marks are kept per channel: a row that moved keeps the mark of its old

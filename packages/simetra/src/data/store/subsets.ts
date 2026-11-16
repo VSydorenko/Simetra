@@ -285,7 +285,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     const e = o.rows.get(key)
     if (e === undefined || e.removed !== undefined || e.row === undefined)
       return false
-    if (e.stale.seen !== undefined) return false
+    if (e.stale.hidden !== undefined) return false
     const values = e.row.values
     return o.lazyFields.some(
       (f) => !Object.hasOwn(values, f) || lazyFieldStale(e, f)
@@ -300,7 +300,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     if (
       e === undefined ||
       e.removed !== undefined ||
-      e.stale.seen !== undefined
+      e.stale.hidden !== undefined
     )
       return false
     const lines = s.form.object.sections.get(spec.owner, spec.section)
@@ -489,7 +489,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       // другому випадку вони лишаються в сховищі, а вирішує хвіст (Р36).
       const hidden =
         header?.state === "removed" ||
-        o.rows.get(spec.owner)?.stale.seen !== undefined
+        o.rows.get(spec.owner)?.stale.hidden !== undefined
       section = {
         ownerVersion: hidden ? undefined : entry?.ownerVersion,
         complete: hidden ? false : (entry?.complete ?? false),

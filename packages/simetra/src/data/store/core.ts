@@ -14,6 +14,7 @@ import {
   activeViews,
   createWriter,
   revalidate,
+  revalidateHolders,
   setVisible,
   type WriterContext,
 } from "./writer"
@@ -100,6 +101,7 @@ export interface CoreInspection {
   serviceSizes(): {
     seen: number
     tombstones: number
+    hidden: number
     horizon: number
     pairBurials: number
     revisions: number
@@ -435,6 +437,15 @@ export function createCore(options: {
         const keys = o.rows.drainTail()
         if (keys.length > 0) scheduleTail(o, keys)
       }
+      // `hide` (права): види, що тримають сховані ключі, перечитуються після
+      // `commit`, з епохою старту не меншою за позначку.
+      const hiddenNow = [...hiddenKeys]
+      hiddenKeys.clear()
+      for (const [name, keys] of hiddenNow) {
+        revalidateHolders(writerContext, name, keys).catch((error: unknown) =>
+          log({ kind: "listener-failed", error })
+        )
+      }
     }
     const notify = registry.afterCommit(closing)
     // Ревізії й кеш `RowView` — лише для рядків, що є в сховищі.
@@ -460,6 +471,7 @@ export function createCore(options: {
   session.onClose(() => {
     written.length = 0
     registry.close()
+    hiddenKeys.clear()
     rowViews.clear()
     dirtySections.clear()
     tails.clear()
@@ -478,6 +490,7 @@ export function createCore(options: {
   }
 
   const purges = new Map<ObjectName, number>()
+  const hiddenKeys = new Map<ObjectName, Set<Key>>()
 
   // Перемикання епохи (Р8): кожен рядок уже `stale` (сховища позначили), а
   // видимі вигляди перечитуються з розкидом — рестарт primary перемикає
@@ -515,6 +528,7 @@ export function createCore(options: {
     purges,
     invalidateTail,
     defects,
+    hiddenKeys,
   }
 
   const core: CoreSession = {

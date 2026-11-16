@@ -147,8 +147,12 @@ export function createSectionStore(options: {
       return true
     // Шапку сховано горизонтом від цього чи новішого читання: рядки ТЧ з
     // того самого читання показали б те, що шапка ховає.
-    if (e?.stale.seen !== undefined && readEpoch < e.stale.seen.epoch)
+    if (e?.stale.hidden !== undefined && readEpoch < e.stale.hidden.epoch)
       return true
+    // Позначка `hide` ключа пережила запис шапки (`disown`, `disownWeak`
+    // знімка): без запису рядки ТЧ з читання, старшого за `hide`, показали б
+    // те, що права вже сховали.
+    if (epochs.hiddenSince(id, readEpoch)) return true
     if (epochs.buriedSince(id, readEpoch)) return true
     const lastPair = epochs.lastPairBurial(object)
     if (

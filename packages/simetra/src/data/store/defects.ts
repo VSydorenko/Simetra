@@ -44,6 +44,8 @@ export type DefectFlag =
   | "unbounded-seen"
   /** `revalidate` re-reads the views through a full load. */
   | "system-reread-via-load"
+  /** A read that started before `hide` lifts its mark. */
+  | "hide-lifted-by-older-read"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

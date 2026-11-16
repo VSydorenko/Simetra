@@ -645,7 +645,7 @@ async function runModel(
         if (
           e.version < top &&
           (e.stale.minVersion?.v ?? -1) < top &&
-          e.stale.seen === undefined &&
+          e.stale.hidden === undefined &&
           !unordered
         )
           fail(label, `${at}: stored version ${top} → ${e.version}`)

@@ -244,15 +244,18 @@ describe("close clears the service maps", () => {
     write(core, (w) => w.purge(TASK, { keys: [key(2)] }))
     write(core, (w) => w.purge(TASK, { scope: S }))
     write(core, (w) => w.purge(ORG, { keys: [key(99_999)] }))
+    write(core, (w) => w.hide(TASK, [key(1)]))
     await settle()
     const busy = inspect.serviceSizes()
     expect(busy.seen + busy.tombstones + busy.horizon).toBeGreaterThan(0)
+    expect(busy.hidden).toBeGreaterThan(0)
     expect(busy.pairBurials).toBeGreaterThan(0)
     core.close("disposed")
     two.unsubscribe()
     expect(inspect.serviceSizes()).toEqual({
       seen: 0,
       tombstones: 0,
+      hidden: 0,
       horizon: 0,
       pairBurials: 0,
       revisions: 0,

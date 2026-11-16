@@ -30,6 +30,14 @@ export interface Epochs {
   /** The horizon of the id's bucket is greater than `readEpoch`. */
   evictedSince(id: string, readEpoch: number): boolean
   /**
+   * Records that the key was hidden (`Writer.hide`, P4-B plan B3-3, Р11) at a
+   * fresh epoch and returns it. The mark outlives the store entry: a read
+   * older than it must not show the row after the entry went away.
+   */
+  hide(id: string): number
+  /** The hide mark of the id is greater than `readEpoch`. */
+  hiddenSince(id: string, readEpoch: number): boolean
+  /**
    * Buries the pair (scope, object) and records it as the last pair burial of
    * the object; every pair purge goes through it, not through `bury`.
    */
@@ -42,6 +50,7 @@ export interface Epochs {
   sizes(): {
     seen: number
     tombstones: number
+    hidden: number
     horizon: number
     pairBurials: number
   }
@@ -118,6 +127,7 @@ export function createEpochs(
   let epoch = 0
   const seen = new Map<string, Seen>()
   const tombstones = new Map<string, number>()
+  const hiddenMarks = new Map<string, number>()
   // Горизонт за хеш-кошиками, а не глобальний: на безперервному витісненні
   // вікна глобальна межа робила б `stale` майже кожну відповідь.
   const horizon = new Uint32Array(limits.horizonBuckets)
@@ -194,15 +204,27 @@ export function createEpochs(
       }
     },
     evictedSince: (id, readEpoch) => (horizon[bucket(id)] ?? 0) > readEpoch,
+    hide(id) {
+      const at = ++epoch
+      hiddenMarks.delete(id)
+      hiddenMarks.set(id, at)
+      // Та сама межа й той самий горизонт, що в надгробків: витіснена позначка
+      // `hide` піднімає горизонт кошика, тож читання, старше за неї, ховається.
+      trim(hiddenMarks, limits.tombstonesMax, (v) => v, skipTombstoneHorizon)
+      return at
+    },
+    hiddenSince: (id, readEpoch) => (hiddenMarks.get(id) ?? -1) > readEpoch,
     clear() {
       seen.clear()
       tombstones.clear()
+      hiddenMarks.clear()
       horizon.fill(0)
       pairBurials.clear()
     },
     sizes: () => ({
       seen: seen.size,
       tombstones: tombstones.size,
+      hidden: hiddenMarks.size,
       horizon: horizon.reduce((n, at) => (at > 0 ? n + 1 : n), 0),
       pairBurials: pairBurials.size,
     }),
