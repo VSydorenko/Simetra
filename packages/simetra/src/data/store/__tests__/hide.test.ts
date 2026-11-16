@@ -16,6 +16,8 @@ import {
 import {
   ORG,
   TASK,
+  isPage,
+  readsOf,
   key,
   seed,
   settle,
@@ -266,17 +268,19 @@ describe("Writer.hide", () => {
     expect(first(core, keys(1))).toMatchObject({ hidden: true, values: {} })
   })
 
-  it("re-reads an invisible view too", async () => {
+  it("re-reads an invisible view as that view, not only by the tail of the key", async () => {
     const { core, fake } = setup()
     seed(fake, 1, 1)
-    watch(core.view(keys(1)))
+    const spec: ViewSpec = { kind: "full", object: TASK }
+    watch(core.view(spec))
     await settle()
-    core.setVisible(keys(1), false)
+    core.setVisible(spec, false)
     const before = fake.log.length
     write(core, (w) => w.hide(TASK, [key(1)]))
     await settle()
-    expect(fake.log.length).toBeGreaterThan(before)
-    expect(first(core, keys(1)).hidden).toBeUndefined()
+    // Хвіст читає за ключем; сторінку читає лише перечитування самого вигляду.
+    expect(fake.log.slice(before).some((read) => isPage(read))).toBe(true)
+    expect(first(core, spec).hidden).toBeUndefined()
   })
 
   it("purge after hide drops the key; the re-read in flight does not bring it back", async () => {
@@ -311,6 +315,7 @@ describe("Writer.hide", () => {
     watch(core.view(spec))
     await settle()
     fake.hold = () => true
+    const before = fake.log.length
     write(core, (w) => w.hide(ORG, [org(1)]))
     expect(first(core, spec).refs?.org).toMatchObject({
       key: org(1),
@@ -319,6 +324,12 @@ describe("Writer.hide", () => {
       values: {},
     })
     await settle()
+    // Вигляд задач, що тримає ціль, перечитується сам: хвіст читає лише ключ.
+    expect(
+      readsOf(fake, TASK).some(
+        (read) => fake.log.indexOf(read) >= before && isPage(read)
+      )
+    ).toBe(true)
     fake.hold = undefined
     fake.deliverAll()
     await settle()
