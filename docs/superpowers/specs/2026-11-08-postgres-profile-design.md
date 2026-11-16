@@ -347,17 +347,28 @@ Auth не можна дешево, і це не мета: `simetra_owner` і т�
 може діяти від імені будь-якого користувача. Тому DSN власника — секрет
 рівня суперкористувача бази: лише в кроці застосування, ніколи в рантаймі
 чи host-і. Рантайм host-а не має DSN власника; гейт це перевіряє:
-`createCommandRuntime` на першому з'єднанні читає атрибути
-`session_user` і відмовляє `runtime.privileged-login`, коли роль входу —
-роль застосування профілю (`PROVIDER_OWNER_ROLES`), член її, суперкористувач
-чи має `BYPASSRLS` (DB-тест — рантайм на DSN власника не створюється). Типових привілеїв на всю схему `better_auth` немає, щоб
+`createCommandRuntime` на першому з'єднанні судить факти `session_user` і
+відмовляє `command.privileged-login`, коли роль входу (сама чи через будь-яке
+членство) досягає: власника схеми `simetra`; ролі з іменем
+`PROVIDER_OWNER_ROLES[provider]`; ролі з `rolsuper`, `rolbypassrls` чи
+`rolcreaterole`; вбудованих `pg_execute_server_program`,
+`pg_read_server_files`, `pg_write_server_files`; ролі входу провайдера
+(`PROVIDER_LOGIN_ROLES`, на `postgres` — `simetra_auth`, власник таблиці
+Better Auth); сервісної ролі профілю, коли вона не `null`. Гейт судить факти,
+а не ім'я, бо `NOINHERIT` не захищає: `SET ROLE` дає владу ролі. Порт
+`CommandDatabase` входить роллю входу напряму; пул, що входить
+суперкористувачем і робить `SET SESSION AUTHORIZATION`, поза моделлю довіри
+(такий host уже тримає DSN суперкористувача). DB-тест — рантайм на DSN
+власника не створюється. Типових привілеїв на всю схему `better_auth` немає, щоб
 `TRIGGER` не розповзався на нові таблиці провайдера.
 
 **Зняття й заміна тригера.** `DROP TRIGGER` вимагає власника таблиці, а
 `TRIGGER` дає лише створення. Тому план відмовляє
-`plan.identity-trigger-locked` на кроці, що знімає чи перестворює тригер
-провізії на `better_auth."user"`, з порадою виконати цей крок від
-`simetra_auth`. Це окрема перевірка плану, а не `PROVIDER_LOCKS`: та мапа
+`plan.identity-trigger-locked` на кроці `DROP TRIGGER` провізії на
+`better_auth."user"`, з порадою виконати цей крок від `simetra_auth`; гейт
+судить дані T2 `PROVIDER_IDENTITY_TRIGGER_LOCKED`, а не факт власності.
+`CREATE OR REPLACE TRIGGER` потребує лише привілею `TRIGGER` і проходить.
+Це окрема перевірка плану, а не `PROVIDER_LOCKS`: та мапа
 описує замки supautils з налаштуванням цілі, а в чистому Postgres їх
 немає (`PROVIDER_LOCKS.postgres` — порожні `sources` і `services`). Зміна
 тіла провізії тригера не чіпає: тіло — функція `simetra`.
@@ -376,6 +387,7 @@ Auth не можна дешево, і це не мета: `simetra_owner` і т�
 | `PROVIDER_SQL_TEXT_FUNCTIONS` | функції `dblink*` (contrib); решти записів `supabase` немає |
 | `PROVIDER_SYSTEM_ROLES` | порожньо: `simetra_auth` не має типових привілеїв у схемах межі |
 | `PROVIDER_SURFACES` | `{ schema: "better_auth", table: "user", classes: ["trigger", "references"] }` |
+| `PROVIDER_IDENTITY_TRIGGER_LOCKED` | `true` (`supabase` — `false`: роль `postgres` знімає тригер на `auth.users`, хоч не власник, завдяки supautils) |
 | `PROVIDER_LOCKS` | `{ sources: [], services: [] }`; зняття тригера судить `plan.identity-trigger-locked` (див. вище) |
 | `PROVIDER_INSTALLABLE_EXTENSIONS` | порожньо (§3.5) |
 | `PROVIDER_EXPECTED_BLIND_FUNCTIONS` | порожньо |
@@ -447,11 +459,17 @@ Host реалізує порт `VerifySession` (`packages/simetra/src/model/runt
 **Анонімна сесія читає як гість.** Сесія аноніма Better Auth має `sub`, а
 політика `<t>_public_read` для ролі запиту користувача відкриває рядки будь-
 кому з цією роллю (платформна спека §6.8). Тому T3 обирає роль запиту за
-claim `anonymousClaim` пресету: `is_anonymous = true` → роль призначення
-`anonymous` (`simetra_anon`), інакше — `user`. Анонім бачить лише
+claim `anonymousClaim` пресету: значення `true` чи `"true"` → роль призначення
+`anonymous` (`simetra_anon`), `false` чи `"false"` — `user`; SQL судить так
+само (`->> … = 'true'`). **Відсутній claim — відмова:** профіль з
+`anonymousClaim` ≠ `null` вимагає claim, інакше читання й команда
+відмовляють `command.unauthenticated` до будь-якого I/O (адаптер host-а, що
+забув claim, інакше тихо дав би анонімові роль `user`). Правило діє на
+claims із суб'єктом (`sub`). Анонім бачить лише
 `publicRead: anon`, команди йому відмовляють (`current_user_id()` —
 `NULL`), токенів Centrifugo й endpoint-ів файлів він не отримує. Правило
-діє в T3 для обох профілів на дверях Server Function; у `supabase` двері
+діє в T3 для обох профілів на дверях Server Function (на `supabase` роль
+входу рантайму — член `anon`); у `supabase` двері
 PostgREST ставлять роль за claim `role` провайдера, і їх вирівнює окреме
 рішення архітекторки (§14).
 
@@ -1141,7 +1159,7 @@ pnpm db:stop
 | --- | --- | --- | --- | --- |
 | **ПГ-1. Стек і тест-інфра** | `docker/` (образ, compose, конфіги, ініціалізація Garage); `pnpm db:pg:*`, `test:db:pg`; stack-guard за профілем (замок, адреси, знімок, контейнери й бакети); Vitest-раннер pgTAP; набір базового стану `postgres` (версія, доступні розширення, налаштування стека, відсутність схем Supabase; ролі й шаблон `simetra_template` — з ПГ-2); проєкт `db-supabase` і перенесення в нього тестів, прив'язаних до Supabase; CI: рядки `supabase-bound` у наявній матриці `db` і job `db-postgres` (§10.6); compose `simetra-sb` з Centrifugo (`pnpm db:signals:*`); текст `AGENTS.md` на затвердження | обидва стеки стартують своїми командами; наявний `db` і `db-supabase` зелені на `supabase`; базовий стан `postgres` зелений через Vitest-раннер; прогін, перерваний SIGINT, не лишає ні баз, ні контейнерів, ні бакетів; CI зелений | — | М3. Перший екран |
 | **ПГ-2. Провайдер у схемному рушії** (поділ на два плани: `docs/superpowers/plans/2026-11-08-pg-2a-provider-in-engine.md` (ПГ-2a) — рушій, ролі, шаблон, тест-інфра; ПГ-2b — переведення наявних DB-тестів, CI, `AGENTS.md`; ролей `simetra_signals` і `simetra_signal_consumer` блок не створює, їх приносить ПГ-4) | `postgres` у `DATABASE_PROVIDERS` і мапах за таблицею §4.2; споживачі `PROVIDER_SCHEMAS.supabase` і `SUPABASE_*` — за `scope.provider`; `renderProviderSeed(provider)`; профіль pg-delta `simetra-postgres`; запис пресету §4.1 (тип `Record<DatabaseProvider, …>` його вимагає); ролі §3 з `LOGIN_ROLE_PARENTS` і власником бази; `plpgsql_check` у цілі й шаблон `simetra_template`; власна провізія тіні й копії з шаблону (§3.5); `service: null`; гейт `plan.owner-not-bypassrls`; таблиця ідентичності в тестах — справжня міграція Better Auth закріпленої версії; переведення проєкту `db` на стек `postgres` і тестів — на дані профілю; теговані бази, `SET ROLE` і claims у Vitest-раннері pgTAP (§10.5); CI-job `db` на стеку `postgres` і окремий job `db-supabase` (рядки `supabase-bound` з ПГ-1) | проєкт `db` зелений на `postgres` від ролі з атрибутами власника, `db-supabase` — на `supabase`; каталожний гейт бачить у чужих схемах лише розширення й тригери провізії; тест ролей §3.1 зелений | ПГ-1 | М3. Перший екран |
-| **ПГ-3. Ідентичність** | адресні гранти `better_auth` у `roles` (§4.2); `plan.identity-table-missing`, `plan.identity-trigger-locked`; вибір ролі читання за `anonymousClaim`; адаптер `verifySession` у шаблоні host-а (разом з П4-D) | DB-тести §4.4 на таблиці справжньої міграції зелені (міграція з `database.schemaName: "better_auth"` створює таблиці саме там); план від `simetra_owner` ставить тригери провізії на `better_auth."user"`, а крок зняття тригера відмовляє `plan.identity-trigger-locked`; анонімна сесія читає лише `publicRead: anon`; `runCommand` і читання з claims Better Auth дають той самий `current_user_id()`, що й на `supabase` | ПГ-2 | М3. Перший екран |
+| **ПГ-3. Ідентичність** | адресні гранти `better_auth` у `roles` (§4.2), зокрема перенесення тимчасових грантів `USAGE`/`TRIGGER` з `pnpm db:pg:start` у `roles` з тестом на тегованому кластері; `pnpm db:roles`; `plan.identity-table-missing`, `plan.identity-trigger-locked`; `command.privileged-login` замість `runtime.privileged-login`; вибір ролі читання за `anonymousClaim`; адаптер `verifySession` — у шаблоні host-а (П4-D) | DB-тести §4.4 на таблиці справжньої міграції зелені (міграція через `search_path = better_auth`, без `schemaName`, створює таблиці саме там); план від `simetra_owner` ставить тригери провізії на `better_auth."user"`, а крок зняття тригера відмовляє `plan.identity-trigger-locked`; анонімна сесія читає лише `publicRead: anon`; `runCommand` і читання з claims Better Auth дають той самий `current_user_id()`, що й на `supabase` | ПГ-2 | М3. Перший екран |
 | **ПГ-4. Outbox, споживач, токени** | ролі `simetra_signals` і `simetra_signal_consumer` в обох профілях (дані T0, `LOGIN_ROLE_PARENTS.signals`, `roles`); таблиця, гранти, політики споживача, `NOTIFY`, `prune`; конфіг Centrifugo з designer; `simetra/server/signals` (порт, EdDSA, JWKS); стенд сигналів у тест-інфрі; разом із B8 П4-B — тіла функцій сигналу й `authorizeChannels` | `supabase/roles.sql` і `supabase/tests/provider-base-state.test.sql` знають `simetra_signal_consumer` і `simetra_signals`; тести §5.3 і §7 зелені в обох профілях; на стенді доведено фактом: `simetra.signal_outbox` зі схемою в `outbox_table_name`, `partition_notification_dsn`, `use_try_lock`, вхід `simetra_signals` з налаштуванням ролі; сигнал команди доходить, чужий канал, прострочений токен і токен з чужим `aud` відхилено; JWKS з ключем Ed25519 (`OKP`) приймається; ротація без розриву; `realtime` у стеку `supabase` вимкнено | ПГ-3; B6 П4-B | М4. Realtime і права на клієнті |
 | **ПГ-5. Сховище файлів** | властивість `storage` у T0 з мапінгом; стандартні реквізити виду; облік і межа обсягу; `FileStore`, `fromS3Client`; endpoint-и й звірка в шаблоні host-а; спорожнення бакета тегу з об'єктами в прибиральнику stack-guard (§10.3) | тести §8 зелені на стеку `postgres` з Garage | ПГ-3 (ідентичність у тестах), П4-D (host) | М5. Повні екрани довідника |
 
