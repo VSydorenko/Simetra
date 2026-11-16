@@ -196,6 +196,7 @@ describe("notNullColumns", () => {
         column: "note",
         via: "setNotNull",
         filled: false,
+        generated: false,
       },
     ])
     expect(
@@ -207,18 +208,20 @@ describe("notNullColumns", () => {
         column: "a",
         via: "addColumn",
         filled: false,
+        generated: false,
       },
     ])
-    for (const fill of [
-      "DEFAULT ''",
-      "GENERATED ALWAYS AS IDENTITY",
-      "GENERATED ALWAYS AS (id::text) STORED",
-    ])
+    // Лише вираз генерованої колонки може дати NULL: його рахує план
+    for (const [fill, generated] of [
+      ["DEFAULT ''", false],
+      ["GENERATED ALWAYS AS IDENTITY", false],
+      ["GENERATED ALWAYS AS (id::text) STORED", true],
+    ] as const)
       expect(
         of(`ALTER TABLE app.items ADD COLUMN a text NOT NULL ${fill}`).map(
-          (c) => c.filled
+          (c) => [c.filled, c.generated]
         )
-      ).toEqual([true])
+      ).toEqual([[true, generated]])
   })
 
   // Ні коментар, ні ім'я колонки не роблять оператор `SET NOT NULL`
@@ -460,6 +463,161 @@ describe("planBackfills", () => {
       produced: [{ kind: "table", schema: "app", name: "items" }],
     })
     expect(backfillTargets(input({ actions: [recreated, add] }))).toEqual([])
+  })
+
+  // #159 (3): CHECK, що діє на момент заповнення й читає колонку, план
+  // пробує з default на місці NULL
+  it("probes the CHECK constraints in force at the fill that read the column", () => {
+    const check = (name: string, expression: string) => ({ name, expression })
+    const source = model(
+      table([column("id"), column("note"), column("code")], {
+        checks: [
+          check("note_len", "length(note) > 3"),
+          check("code_set", "code <> ''"),
+          check("note_old", "note <> 'old'"),
+        ],
+      })
+    )
+    const desired = model(
+      table(
+        [
+          column("id"),
+          column("note", { notNull: true, default: "''::text" }),
+          column("code"),
+        ],
+        {
+          checks: [
+            check("note_len", "length(note) > 3"),
+            check("note_new", "note <> 'new'"),
+          ],
+        }
+      )
+    )
+    const constraint = (name: string) => ({
+      kind: "constraint",
+      schema: "app",
+      table: "items",
+      name,
+    })
+    const drop = action(
+      'ALTER TABLE "app"."items" DROP CONSTRAINT "note_old"',
+      { destroyed: [constraint("note_old")] }
+    )
+    const add = action(
+      'ALTER TABLE "app"."items" ADD CONSTRAINT "note_new" CHECK (note <> \'new\')',
+      { produced: [constraint("note_new")] }
+    )
+    const r = planBackfills({
+      ...input({
+        actions: [drop, add, SET_DEFAULT, SET_NOT_NULL],
+        source,
+        desired,
+      }),
+      rows: () => 2,
+    })
+    expect(r.refusals).toEqual([])
+    expect(r.probes).toEqual([
+      {
+        table: { schema: "app", name: "items" },
+        column: "note",
+        default: "''::text",
+        type: "text",
+        columns: ["id", "note", "code"],
+        // `code_set` не читає колонки, `note_old` знято до заповнення
+        checks: [
+          check("note_len", "length(note) > 3"),
+          check("note_new", "note <> 'new'"),
+        ],
+      },
+    ])
+    // Обмеження, яке створює дія після заповнення, на заповненні не діє
+    const late = planBackfills({
+      ...input({ actions: [SET_DEFAULT, SET_NOT_NULL, add], source, desired }),
+      rows: () => 2,
+    })
+    expect(late.probes.map((p) => p.checks.map((c) => c.name))).toEqual([
+      ["note_len", "note_old"],
+    ])
+  })
+
+  it("counts a recreated and a generated column added as NOT NULL", () => {
+    // DROP + ADD: нова колонка отримує значення для кожного наявного рядка,
+    // тож живу колонку з тим самим ім'ям план не вважає «вже заповненою»
+    const drop = action('ALTER TABLE "app"."items" DROP COLUMN "note"')
+    const add = action(
+      'ALTER TABLE "app"."items" ADD COLUMN "note" text NOT NULL'
+    )
+    expect(backfillTargets(input({ actions: [drop, add] }))).toEqual([
+      {
+        table: { schema: "app", name: "items" },
+        column: "note",
+        count: "rows",
+      },
+    ])
+    // Генерована: рахуються рядки, де вираз бажаного стану дає NULL
+    const generated = model(
+      table([
+        column("id"),
+        column("note"),
+        column("code"),
+        column("g", {
+          notNull: true,
+          generated: { expression: "lower(note)" },
+        }),
+      ])
+    )
+    const addGenerated = action(
+      'ALTER TABLE "app"."items" ADD COLUMN "g" text GENERATED ALWAYS AS (lower((note)::text)) STORED NOT NULL'
+    )
+    const target = {
+      table: { schema: "app", name: "items" },
+      column: "g",
+      count: "expression",
+      expression: "lower(note)",
+    }
+    expect(
+      backfillTargets(input({ actions: [addGenerated], desired: generated }))
+    ).toEqual([target])
+    const r = planBackfills({
+      ...input({ actions: [addGenerated], desired: generated }),
+      rows: () => 3,
+    })
+    expect(r.refusals.map((d) => [d.code, d.params])).toEqual([
+      [
+        "plan.not-null-violation",
+        { table: "app.items", column: "g", rows: 3, detail: "generated" },
+      ],
+    ])
+    expect(
+      planBackfills({
+        ...input({ actions: [addGenerated], desired: generated }),
+        rows: () => 0,
+      }).refusals
+    ).toEqual([]) // Вираз над колонкою, яку додає той самий план: на цілі її ще немає,
+    // тож план не рахує, а лишає сторожеві перед кроком
+    const withQty = model(
+      table([
+        column("id"),
+        column("note"),
+        column("code"),
+        column("qty", { notNull: true, default: "0" }),
+        column("g", { notNull: true, generated: { expression: "(qty * 2)" } }),
+      ])
+    )
+    const addQty = action(
+      'ALTER TABLE "app"."items" ADD COLUMN "qty" integer NOT NULL DEFAULT 0',
+      {
+        produced: [
+          { kind: "column", schema: "app", table: "items", name: "qty" },
+        ],
+      }
+    )
+    const addG = action(
+      'ALTER TABLE "app"."items" ADD COLUMN "g" integer GENERATED ALWAYS AS ((qty * 2)) STORED NOT NULL'
+    )
+    expect(
+      backfillTargets(input({ actions: [addQty, addG], desired: withQty }))
+    ).toEqual([])
   })
 
   it("leaves a promotion data column to its data step and refuses the unit table", () => {
@@ -1198,7 +1356,8 @@ describe("withNotNullChecks", () => {
         SOURCE,
         parse
       ),
-      parse
+      parse,
+      DESIRED
     )
     expect(steps.map((s) => [s.id, s.origin, s.notNull])).toEqual([
       ["s1", "engine", undefined],
@@ -1208,17 +1367,102 @@ describe("withNotNullChecks", () => {
       [
         "s4",
         "engine",
-        [{ table: { schema: "app", name: "items" }, column: "code" }],
+        [
+          {
+            table: { schema: "app", name: "items" },
+            column: "code",
+            count: "nulls",
+          },
+        ],
       ],
     ])
     // Без `NULL` на плані заповнення немає — перевірка є
     const none = withNotNullChecks(
       classifySteps(run({}, { note: 0 }).actions, SOURCE, parse),
-      parse
+      parse,
+      DESIRED
     )
     expect(none.map((s) => s.notNull)).toEqual([
       undefined,
-      [{ table: { schema: "app", name: "items" }, column: "note" }],
+      [
+        {
+          table: { schema: "app", name: "items" },
+          column: "note",
+          count: "nulls",
+        },
+      ],
     ])
+  })
+
+  it("marks ADD COLUMN … NOT NULL without a value and a generated column", () => {
+    // Таблиця, порожня на плані, могла отримати рядки до застосування;
+    // вираз генерованої колонки — з бажаної моделі в іменах кроку
+    const desired = model(
+      table([
+        column("id"),
+        column("extra", { notNull: true }),
+        column("g", {
+          notNull: true,
+          generated: { expression: "lower(note)" },
+        }),
+        column("d", { notNull: true, default: "''::text" }),
+      ])
+    )
+    const steps = withNotNullChecks(
+      classifySteps(
+        [
+          action('ALTER TABLE "app"."items" ADD COLUMN "extra" text NOT NULL'),
+          action(
+            'ALTER TABLE "app"."items" ADD COLUMN "g" text GENERATED ALWAYS AS (lower((note)::text)) STORED NOT NULL'
+          ),
+          action(
+            'ALTER TABLE "app"."items" ADD COLUMN "d" text NOT NULL DEFAULT \'\''
+          ),
+        ],
+        SOURCE,
+        parse
+      ),
+      parse,
+      desired
+    )
+    const items = { schema: "app", name: "items" }
+    expect(steps.map((s) => s.notNull)).toEqual([
+      [{ table: items, column: "extra", count: "rows" }],
+      [
+        {
+          table: items,
+          column: "g",
+          count: "expression",
+          expression: "lower(note)",
+        },
+      ],
+      // Default дає значення кожному рядку: перевіряти нічого
+      undefined,
+    ])
+  })
+
+  it("leaves no expression check when the step adds the column the expression reads", () => {
+    // До кроку колонки `qty` ще немає: сторож її не обчислить
+    const desired = model(
+      table([
+        column("id"),
+        column("qty", { notNull: true, default: "0" }),
+        column("g", { notNull: true, generated: { expression: "(qty * 2)" } }),
+      ])
+    )
+    const steps = withNotNullChecks(
+      classifySteps(
+        [
+          action(
+            'ALTER TABLE "app"."items" ADD COLUMN "qty" integer NOT NULL DEFAULT 0, ADD COLUMN "g" integer GENERATED ALWAYS AS ((qty * 2)) STORED NOT NULL'
+          ),
+        ],
+        SOURCE,
+        parse
+      ),
+      parse,
+      desired
+    )
+    expect(steps.map((s) => s.notNull)).toEqual([undefined])
   })
 })

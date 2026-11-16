@@ -347,7 +347,7 @@ function labelOf(sql: string): string | undefined {
   if (sql.startsWith("WITH filled AS (UPDATE "))
     return `backfill ${/^WITH filled AS \(UPDATE (\S+)/.exec(sql)![1]!}`
   if (sql.startsWith("SELECT pg_catalog.count(*) AS n FROM "))
-    return `nulls ${/ FROM (\S+ WHERE .*)$/.exec(sql)![1]!}`
+    return `nulls ${/ FROM (\S+(?: WHERE .*)?)$/.exec(sql)![1]!}`
   if (sql.startsWith("WITH u AS (UPDATE "))
     return `write ${/^WITH u AS \(UPDATE (\S+)/.exec(sql)![1]!}`
   if (sql.includes("current_setting(s.name)")) return "get-settings"
@@ -1778,7 +1778,7 @@ describe("executePlan", () => {
           {
             ...setNotNull,
             id: "s1",
-            notNull: [{ table: T, column: "d" }],
+            notNull: [{ table: T, column: "d", count: "nulls" }],
           },
         ],
       }
@@ -1801,6 +1801,47 @@ describe("executePlan", () => {
         expect(count).toBe("nulls app.t WHERE d IS NOT DISTINCT FROM NULL")
         expect(seen[count]).toEqual([{ ...PREAMBLE, row_security: "off" }])
       })
+
+      // #159: `ADD COLUMN … NOT NULL` без значення й генерована колонка —
+      // рядки, що з'явилися після плану, ловить той самий сторож
+      it.each([
+        {
+          check: { count: "rows" as const },
+          label: "nulls app.t",
+          detail: "rows",
+        },
+        {
+          check: { count: "expression" as const, expression: "lower(c)" },
+          label: "nulls app.t WHERE (lower(c)) IS NOT DISTINCT FROM NULL",
+          detail: "expression",
+        },
+      ])(
+        "refuses rows before ADD COLUMN … NOT NULL ($detail)",
+        async ({ check, label, detail }) => {
+          const { db, log } = fakeDb({ nulls: 3 })
+          const added: ExecutablePlan = {
+            ...checked,
+            steps: [
+              {
+                ...setNotNull,
+                id: "s1",
+                notNull: [{ table: T, column: "d", ...check }],
+              },
+            ],
+          }
+          expect(await executePlan(db, target, added, options)).toMatchObject({
+            status: "failed",
+            diagnostics: [
+              {
+                code: "apply.not-null-violation",
+                params: { step: "s1", column: "d", rows: 3, detail },
+              },
+            ],
+          })
+          expect(log).toContain(label)
+          expect(log).not.toContain(setNotNull.sql)
+        }
+      )
 
       it("runs the step when the column has no NULL", async () => {
         const { db, log } = fakeDb()

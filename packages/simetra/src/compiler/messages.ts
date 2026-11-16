@@ -4060,12 +4060,20 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.not-null-violation": {
     en: (p) =>
-      `Before plan step ${p.step}, which makes column ${p.column} of ${p.table} NOT NULL, the column has ${p.rows} row(s) with NULL that the plan did not count. The transaction was rolled back`,
+      p.detail === "rows"
+        ? `Before plan step ${p.step}, which adds column ${p.column} to ${p.table} as NOT NULL without a value, the table has ${p.rows} row(s) that the plan did not count. The transaction was rolled back`
+        : p.detail === "expression"
+          ? `Before plan step ${p.step}, which adds generated column ${p.column} to ${p.table} as NOT NULL, its expression gives NULL for ${p.rows} row(s) that the plan did not count. The transaction was rolled back`
+          : `Before plan step ${p.step}, which makes column ${p.column} of ${p.table} NOT NULL, the column has ${p.rows} row(s) with NULL that the plan did not count. The transaction was rolled back`,
     uk: (p) =>
-      `Перед кроком плану ${p.step}, що робить колонку ${p.column} таблиці ${p.table} NOT NULL, колонка має рядків з NULL: ${p.rows}, яких план не рахував. Транзакцію відкочено`,
+      p.detail === "rows"
+        ? `Перед кроком плану ${p.step}, що додає колонку ${p.column} до ${p.table} як NOT NULL без значення, таблиця має рядків: ${p.rows}, яких план не рахував. Транзакцію відкочено`
+        : p.detail === "expression"
+          ? `Перед кроком плану ${p.step}, що додає генеровану колонку ${p.column} до ${p.table} як NOT NULL, її вираз дає NULL для рядків: ${p.rows}, яких план не рахував. Транзакцію відкочено`
+          : `Перед кроком плану ${p.step}, що робить колонку ${p.column} таблиці ${p.table} NOT NULL, колонка має рядків з NULL: ${p.rows}, яких план не рахував. Транзакцію відкочено`,
     hint: {
-      en: "Nothing was written. The NULL values appeared after the plan, or an earlier step of the plan wrote them (a type change with USING). Plan again: the plan counts them and fills them with the default, or refuses.",
-      uk: "Нічого не записано. Значення NULL з'явилися після плану або їх записав попередній крок плану (зміна типу з USING). Сплануйте знову: план порахує їх і заповнить default або відмовить.",
+      en: "Nothing was written. The rows or NULL values appeared after the plan, or an earlier step of the plan wrote them (a type change with USING). Plan again: the plan counts them and fills them with the default, or refuses.",
+      uk: "Нічого не записано. Рядки чи значення NULL з'явилися після плану або їх записав попередній крок плану (зміна типу з USING). Сплануйте знову: план порахує їх і заповнить default або відмовить.",
     },
   },
   "apply.backfill-rows-changed": {
@@ -4792,22 +4800,30 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         ? `Column ${p.column} of ${p.table} becomes NOT NULL and has ${p.rows} row(s) with NULL, and the table belongs to the promotion of this plan, so the plan does not fill it with the default: the preservation proof checks its values`
         : p.detail === "addColumn"
           ? `Column ${p.column} is added to ${p.table} as NOT NULL without a default, and the table has ${p.rows} row(s), which would get NULL`
-          : `Column ${p.column} of ${p.table} becomes NOT NULL and has ${p.rows} row(s) with NULL, and the desired column has no default to fill them with`,
+          : p.detail === "generated"
+            ? `Generated column ${p.column} is added to ${p.table} as NOT NULL, and its expression gives NULL for ${p.rows} row(s)`
+            : `Column ${p.column} of ${p.table} becomes NOT NULL and has ${p.rows} row(s) with NULL, and the desired column has no default to fill them with`,
     uk: (p) =>
       p.detail === "promotion"
         ? `Колонка ${p.column} таблиці ${p.table} стає NOT NULL і має рядків з NULL: ${p.rows}, а таблиця належить промоції цього плану, тож план не заповнює її default: її значення звіряє доказ збереження`
         : p.detail === "addColumn"
           ? `Колонку ${p.column} додають до ${p.table} як NOT NULL без default, а таблиця має рядків: ${p.rows}, і вони отримали б NULL`
-          : `Колонка ${p.column} таблиці ${p.table} стає NOT NULL і має рядків з NULL: ${p.rows}, а бажана колонка не має default, яким їх заповнити`,
+          : p.detail === "generated"
+            ? `Генеровану колонку ${p.column} додають до ${p.table} як NOT NULL, а її вираз дає NULL для рядків: ${p.rows}`
+            : `Колонка ${p.column} таблиці ${p.table} стає NOT NULL і має рядків з NULL: ${p.rows}, а бажана колонка не має default, яким їх заповнити`,
     hint: {
       en: (p) =>
         p.detail === "promotion"
           ? "No plan was written. Declare a data step or a repair of the promotion for this column, or fill the NULL values before applying."
-          : "No plan was written. Give the attribute a defaultValue, or fill the NULL values before applying.",
+          : p.detail === "generated"
+            ? "No plan was written. Change the expression so it gives a value for every row, drop notNull, or fix the data it reads before applying."
+            : "No plan was written. Give the attribute a defaultValue, or fill the NULL values before applying.",
       uk: (p) =>
         p.detail === "promotion"
           ? "План не записано. Оголосіть для цієї колонки крок даних чи ремонт промоції або заповніть значення NULL до застосування."
-          : "План не записано. Дайте реквізиту defaultValue або заповніть значення NULL до застосування.",
+          : p.detail === "generated"
+            ? "План не записано. Змініть вираз так, щоб він давав значення для кожного рядка, зніміть notNull або виправте дані, які він читає, до застосування."
+            : "План не записано. Дайте реквізиту defaultValue або заповніть значення NULL до застосування.",
     },
   },
   "plan.backfill-order": {
@@ -4828,6 +4844,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "No plan was written. Fill the NULL values with distinct values before applying, or give a UUID attribute the newUuid default.",
       uk: "План не записано. Заповніть значення NULL різними значеннями до застосування або дайте реквізиту UUID default newUuid.",
+    },
+  },
+  "plan.backfill-check": {
+    en: (p) =>
+      `Column ${p.column} of ${p.table} becomes NOT NULL and its NULL values would be filled with the default, but check constraint ${p.check} rejects that value in ${p.rows} row(s)`,
+    uk: (p) =>
+      `Колонка ${p.column} таблиці ${p.table} стає NOT NULL, а її NULL заповнилися б default, але обмеження CHECK ${p.check} відхиляє це значення в рядках: ${p.rows}`,
+    hint: {
+      en: "No plan was written. Give the attribute a default the constraint accepts, or fill the NULL values before applying.",
+      uk: "План не записано. Дайте реквізиту default, який приймає обмеження, або заповніть значення NULL до застосування.",
     },
   },
   "plan.backfill-carrier-source": {
