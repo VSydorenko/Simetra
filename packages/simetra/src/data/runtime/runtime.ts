@@ -62,6 +62,12 @@ export interface DataRuntimeOptions {
       >
     >
   }
+  /**
+   * The list strategy per object (P4-B spec §5.1, Рд19): a map of logical
+   * names `"<kind>.<name>"` to `full` or `window`; an object not named is
+   * `window`. A name outside the catalog is a `TypeError`.
+   */
+  residency?: Readonly<Record<string, "full" | "window">>
   /** The row limit of a `full` view (default 5 000); overrides `limits.fullLimit`. */
   fullLimit?: number
   /** `full` over its limit fails with `data.full-too-large` (default `false`). */
@@ -105,6 +111,17 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     if (!index.byRef.has(name)) {
       throw new TypeError(`sources.override: unknown object ${name}`)
     }
+  }
+  const residency = new Map<string, "full" | "window">()
+  for (const [name, strategy] of Object.entries(options.residency ?? {})) {
+    const entry = index.byRef.get(name)
+    if (entry === undefined) {
+      throw new TypeError(`residency: unknown object ${name}`)
+    }
+    if (strategy !== "full" && strategy !== "window") {
+      throw new TypeError(`residency: ${name} must be "full" or "window"`)
+    }
+    residency.set(entry.id, strategy)
   }
   const { fullLimit } = options
   if (
@@ -241,6 +258,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     source,
     index,
     limits,
+    residency,
     ...(options.strict === undefined ? {} : { strict: options.strict }),
     log,
   })

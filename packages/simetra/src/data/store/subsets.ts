@@ -8,9 +8,22 @@ import type { Defects } from "./defects"
 import { keyId } from "./epoch"
 import { formOf, type Form, type ObjectState } from "./forms"
 import { refsOf } from "./include"
-import { lazyFieldStale } from "./object-store"
+import { lazyFieldStale, visibleRow } from "./object-store"
 import { sectionLinesStale } from "./section-store"
-import { diffOwn, readForm, type ReaderTarget, type StoreOps } from "./readers"
+import {
+  diffOwn,
+  gated,
+  readForm,
+  readWindowMore,
+  type ReaderTarget,
+  type StoreOps,
+} from "./readers"
+import {
+  EMPTY_WINDOW,
+  cursorOf,
+  keysOfPages,
+  type WindowCursor,
+} from "./window"
 import { DISCARD_PAUSE_MS, type Session } from "./session"
 import {
   LOADING,
@@ -91,6 +104,8 @@ export interface Subset extends ReaderTarget {
   /** The session epoch at the start of the last card or section read. */
   readStart: number | undefined
   checkQueued: boolean
+  /** The queued check comes from a hold without a listener (`preload`). */
+  checkHeld: boolean
   /** A re-read check found a load in flight: check again when it ends. */
   recheck: boolean
   /**
@@ -100,6 +115,8 @@ export interface Subset extends ReaderTarget {
   purged: boolean
   /** Set by `setVisible`; unset — visible while subscribed. */
   visible: boolean | undefined
+  /** Window pages being read next to an edge: one read per direction. */
+  readonly paging: Set<"after" | "before">
 }
 
 /** The view registry of a core. */
@@ -278,12 +295,135 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         load(s)
       }
       // Шапка змінилась під час польоту: перевірка, відкладена до кінця
-      // читання, не губиться (захист ревізією — від повторів).
+      // читання, не губиться (захист ревізією — від повторів). Її ставив і
+      // `preload` без слухачів (`hide` власника в польоті першого
+      // завантаження ТЧ), тож слухачі тут не умова: інакше ТЧ лишається
+      // порожньою й `ready` до монтування.
       if (s.recheck) {
         s.recheck = false
-        if (s.alive && !isClosed() && s.listeners.size > 0) queueCheck(s)
+        if (
+          s.alive &&
+          !isClosed() &&
+          (s.listeners.size > 0 || !ctx.defects.has("recheck-needs-listeners"))
+        )
+          queueCheck(s, true)
       }
     })
+  }
+
+  /**
+   * The cursor of a window edge: the visible value of the edge row, or of
+   * the nearest row inward when the edge row shows no value (removed,
+   * hidden). `undefined` — no row shows a value, so there is nothing to
+   * continue from.
+   */
+  function edgeCursor(
+    s: Subset,
+    direction: "after" | "before"
+  ): { cursor: WindowCursor | undefined } | undefined {
+    if (s.window === undefined) return undefined
+    const o = s.form.object
+    const spec = s.form.spec
+    if (spec.kind !== "full" && spec.kind !== "window") return undefined
+    const frontier = s.window.frontier[direction]
+    if (frontier !== undefined) return { cursor: frontier }
+    const keys = keysOfPages(s.window.pages)
+    // Вікно без рядків, що не дійшло до кінця (фільтр нічого не знайшов у
+    // першому читанні, чи сторінки спорожнив purge), іде далі від початку
+    // порядку: сторінка читає серверний фільтр.
+    // Лише завершене й не перезапущене читання: до першого завантаження
+    // (чи після його відмови) це було б другим читанням того самого.
+    if (keys.length === 0)
+      return direction === "after" && s.loaded && s.flight === undefined
+        ? { cursor: undefined }
+        : undefined
+    if (direction === "after") keys.reverse()
+    for (const key of keys) {
+      const e = o.rows.get(key)
+      const values =
+        e === undefined || e.removed !== undefined ? undefined : visibleRow(e)
+      if (values !== undefined)
+        return {
+          cursor: cursorOf(spec.orderBy ?? [], o.entry.keyName, values),
+        }
+    }
+    return undefined
+  }
+
+  /**
+   * Reads the page next to an edge of the window (a user action or a host
+   * reaching the edge). One read per direction; the result is written only
+   * while the chain it started in is the current one (Р9). A read whose
+   * answer the session discarded repeats after a growing pause, as a load.
+   */
+  function loadMore(s: Subset, direction: "after" | "before") {
+    const w = s.window
+    if (w === undefined || !s.alive || isClosed() || s.purged) return
+    if (direction === "after" ? s.atEnd : w.atStart) return
+    if (s.paging.has(direction)) return
+    const edge = edgeCursor(s, direction)
+    if (edge === undefined) return
+    const { cursor } = edge
+    s.paging.add(direction)
+    const chain = w.chain
+    const token = session.childToken(() => s.alive && s.window?.chain === chain)
+    const what = `view ${s.form.specKey} page ${direction}`
+    const attempt = (): Promise<void> => {
+      const readEpoch = session.epochs.now()
+      let discarded = false
+      return gated(ctx, readEpoch, (c) =>
+        readWindowMore(c, s, readEpoch, token, direction, cursor)
+      ).then(
+        (apply) => {
+          session.commit(
+            (scope) => {
+              try {
+                if (!apply(scope)) {
+                  discarded = !session.versions.unavailable()
+                  if (!discarded) {
+                    s.status = "error"
+                    s.error = EPOCH_UNAVAILABLE
+                  }
+                  return
+                }
+                if (s.status === "error") {
+                  s.status = "ready"
+                  s.error = undefined
+                }
+              } catch (error) {
+                ctx.log({ kind: "listener-failed", error })
+                s.status = "error"
+                s.error = errorOf(error)
+              } finally {
+                ops.sweep(scope)
+                s.dirty = true
+              }
+            },
+            token,
+            what
+          )
+          if (!discarded || !token.valid) return
+          const pause =
+            DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
+          return new Promise<void>((resolve) => {
+            setTimeout(resolve, pause)
+          }).then(() => (token.valid ? attempt() : undefined))
+        },
+        (error: unknown) => {
+          if (error instanceof ReadLimiterClosed) return
+          session.commit(
+            () => {
+              s.status = "error"
+              s.error = errorOf(error)
+              s.dirty = true
+            },
+            token,
+            what
+          )
+        }
+      )
+    }
+    void attempt().finally(() => s.paging.delete(direction))
   }
 
   /** Mounted card: lazy fields absent or read with an older row version. */
@@ -514,9 +654,16 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       error: undefined,
       needsRefresh: false,
       hasNewRows: false,
-      strategy: form.spec.kind === "full" ? "full" : undefined,
+      strategy:
+        form.spec.kind === "full"
+          ? "full"
+          : form.spec.kind === "window"
+            ? "window"
+            : undefined,
       truncated: false,
       atEnd: form.spec.kind === "full",
+      window: form.spec.kind === "window" ? EMPTY_WINDOW : undefined,
+      paging: new Set(),
       waiters: [],
       dirty: true,
       // Знімок без утримання — той самий LOADING: перша підписка не дає
@@ -527,6 +674,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       readStart: undefined,
       sectionRead: undefined,
       checkQueued: false,
+      checkHeld: false,
       recheck: false,
       purged: false,
       visible: undefined,
@@ -591,9 +739,16 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       hasNewRows: s.hasNewRows,
       needsRefresh: s.needsRefresh,
       ...(section === undefined ? {} : { section }),
-      ...(spec.kind === "full"
+      ...(spec.kind === "full" || spec.kind === "window"
         ? { strategy: s.strategy, truncated: s.truncated, atEnd: s.atEnd }
         : {}),
+      ...(s.window === undefined
+        ? {}
+        : {
+            atStart: s.window.atStart,
+            chain: s.window.chain,
+            target: s.window.target,
+          }),
     })
   }
 
@@ -623,13 +778,16 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     return s.form.include.some((step) => (rows.get(step.target)?.size ?? 0) > 0)
   }
 
-  function queueCheck(s: Subset) {
+  function queueCheck(s: Subset, held = false) {
+    if (held) s.checkHeld = true
     if (s.checkQueued || headerKey(s) === undefined) return
     s.checkQueued = true
     // Не з середини сповіщення: дочитування — власний `commit`.
     queueMicrotask(() => {
       s.checkQueued = false
-      if (!isClosed()) check(s)
+      const heldCheck = s.checkHeld
+      s.checkHeld = false
+      if (!isClosed()) check(s, heldCheck)
     })
   }
 
@@ -658,6 +816,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     subscribe: () => () => {},
     refresh() {},
     showNew() {},
+    loadBefore() {},
+    loadAfter() {},
   })
 
   function makeHandle(form: Form): ViewHandle {
@@ -698,6 +858,14 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       showNew() {
         const s = live()
         if (s !== undefined) load(s)
+      },
+      loadBefore() {
+        const s = live()
+        if (s !== undefined) loadMore(s, "before")
+      },
+      loadAfter() {
+        const s = live()
+        if (s !== undefined) loadMore(s, "after")
       },
     }
   }
@@ -776,6 +944,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         s.included = new Map()
         s.layout = []
         s.layoutSet = new Set()
+        s.window = undefined
+        s.paging.clear()
       }
       for (const cache of idleCaches.values()) delete cache.snapshot
       idleCaches.clear()

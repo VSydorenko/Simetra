@@ -40,6 +40,15 @@ export type ViewSpec =
       orderBy?: OrderBy
       include?: readonly string[]
     }
+  | {
+      kind: "window"
+      object: ObjectName
+      where?: Filter
+      orderBy?: OrderBy
+      include?: readonly string[]
+      /** A lazy `count` of the filtered set (plan B3-3, b1). */
+      count?: true
+    }
 
 /** Row state vocabulary (P4-B spec §6.5). */
 export type RowState =
@@ -88,6 +97,17 @@ export interface ViewSnapshot {
   readonly strategy?: "full" | "window"
   readonly truncated?: boolean
   readonly atEnd?: boolean
+  /** Window only: the list starts at the first row of the sort order. */
+  readonly atStart?: boolean
+  /**
+   * Window only: the number of the composition. It changes only together
+   * with a new composition (P4-B spec §6.4), so a list host remounts by it.
+   */
+  readonly chain?: number
+  /** Window only: where the host scrolls when a new chain replaces the old one. */
+  readonly target?: "start" | "end" | "keep"
+  /** Window only, with `count: true`: the lazy count, `capped` at the limit. */
+  readonly count?: { readonly value: number; readonly capped: boolean }
 }
 
 /** A memoized handle of one view form (P4-B spec §6.4). */
@@ -104,6 +124,10 @@ export interface ViewHandle {
   refresh(): void
   /** A user action: re-reads the view and clears `hasNewRows`. */
   showNew(): void
+  /** Window only (no-op elsewhere): reads the page before the first one. */
+  loadBefore(): void
+  /** Window only (no-op elsewhere): reads the page after the last one. */
+  loadAfter(): void
 }
 
 /** A generation token: async branches write only while it is valid. */
