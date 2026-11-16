@@ -13,6 +13,7 @@
     "db:start": "supabase start && pnpm db:dev-env",
     "db:dev-env": "node scripts/db-dev-env.mjs",
     "db:stop": "supabase stop",
+    "db:roles": "node scripts/db-stack.mjs roles supabase",
     "db:pg:start": "node scripts/db-stack.mjs start postgres",
     "db:pg:stop": "node scripts/db-stack.mjs stop postgres",
     "db:signals:start": "node scripts/db-stack.mjs start supabase-signals",

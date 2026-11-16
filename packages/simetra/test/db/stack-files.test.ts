@@ -331,6 +331,39 @@ describe("Simetra identity of the postgres stack", () => {
   })
 })
 
+// `pnpm db:roles` повторно виконує файл на наявному стеку: кожне членство мусить
+// бути або в блоці створення своєї ролі, або під власною перевіркою
+describe("supabase/roles.sql is additive and idempotent", () => {
+  const sql = readFileSync(
+    fileURLToPath(new URL("../../../../supabase/roles.sql", import.meta.url)),
+    "utf8"
+  )
+  const code = sql
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("--"))
+    .join("\n")
+  const blocks = code.split(/(?<=\$\$;)\s*/)
+
+  it("never alters or drops a role", () => {
+    expect(code).not.toMatch(/\b(ALTER|DROP)\s+(ROLE|USER|OWNED)\b/i)
+  })
+
+  it("guards every GRANT … TO by role creation or a pg_auth_members check", () => {
+    const grants = blocks.filter((b) => /\bGRANT\b[^;]*\bTO\b/i.test(b))
+    expect(grants.length).toBeGreaterThan(0)
+    for (const block of grants) {
+      const createsOwnRole =
+        /IF NOT EXISTS \(SELECT FROM pg_catalog\.pg_roles WHERE rolname = '(\w+)'\)[\s\S]*CREATE ROLE \1\b[\s\S]*GRANT[^;]*\bTO \1\b/.test(
+          block
+        )
+      const checksMembership = /IF NOT EXISTS \([^)]*pg_auth_members/.test(
+        block
+      )
+      expect(createsOwnRole || checksMembership, block).toBe(true)
+    }
+  })
+})
+
 describe("withStackLock", () => {
   // Команда стека й DB-прогін мусять брати один замок: інакше `stop` зупинив
   // би стек посеред прогону

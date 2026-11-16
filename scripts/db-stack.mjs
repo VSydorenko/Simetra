@@ -37,6 +37,10 @@ export const POSTGRES_LOCK_FILE = "simetra-db-stack-postgres.lock"
 // Фіксований `/tmp`, не `tmpdir()`: сесії з різним TMPDIR інакше брали б різні
 // файли замка одного спільного стека; guard бере той самий шлях
 export const POSTGRES_LOCK_PATH = join("/tmp", POSTGRES_LOCK_FILE)
+// Замок стека `supabase` — той самий файл, що бере DB-прогін guard-а
+export const SUPABASE_LOCK_PATH = join("/tmp", "simetra-db-stack.lock")
+/** Контейнер БД локального стека Supabase (`project_id` у `supabase/config.toml`). */
+export const SUPABASE_DB_CONTAINER = "supabase_db_simetra"
 /** Env variable that names the held stack lock to the children of the script. */
 export const STACK_LOCK_ENV = "SIMETRA_DB_STACK_LOCK"
 
@@ -933,11 +937,69 @@ async function stop(ctx, profile, volumes) {
   )
 }
 
+/**
+ * Застосовує `supabase/roles.sql` до запущеного стека Supabase: CLI виконує
+ * файл лише на новому томі. Файл адитивний та ідемпотентний, тож повтор безпечний.
+ *
+ * @param {Ctx} ctx
+ */
+async function rolesSupabase(ctx) {
+  let running = ""
+  try {
+    await runChecked(
+      ctx,
+      "docker",
+      ["inspect", "-f", "{{.State.Running}}", SUPABASE_DB_CONTAINER],
+      {
+        onStdout: (chunk) => {
+          running += chunk
+        },
+      }
+    )
+  } catch (error) {
+    if (ctx.interrupted !== undefined) throw error
+    // `inspect` відмовляє, коли контейнера немає
+    running = ""
+  }
+  if (running.trim() !== "true")
+    throw new Error(
+      `the Supabase stack is not running (container ${SUPABASE_DB_CONTAINER}); start it with \`pnpm db:start\``
+    )
+  await runChecked(
+    ctx,
+    "docker",
+    [
+      "exec",
+      "-i",
+      SUPABASE_DB_CONTAINER,
+      "psql",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-U",
+      "postgres",
+      "-d",
+      "postgres",
+      "-f",
+      "-",
+    ],
+    { input: readFileSync(join(ROOT, "supabase/roles.sql"), "utf8") }
+  )
+}
+
 /** @param {string[]} argv */
 async function main(argv) {
   const [command, profile, ...flags] = argv
   const usage =
-    "usage: node scripts/db-stack.mjs start postgres [--no-build] | stop postgres [--volumes] | files-hash postgres | start supabase-signals | stop supabase-signals"
+    "usage: node scripts/db-stack.mjs start postgres [--no-build] | stop postgres [--volumes] | files-hash postgres | start supabase-signals | stop supabase-signals | roles supabase"
+  if (command === "roles" && profile === "supabase" && flags.length === 0) {
+    const { ctx, release } = commandContext(spawn, process)
+    try {
+      await withStackLock(SUPABASE_LOCK_PATH, () => rolesSupabase(ctx))
+    } finally {
+      release()
+    }
+    return
+  }
   if (
     (profile !== "postgres" && profile !== "supabase-signals") ||
     (command !== "start" && command !== "stop" && command !== "files-hash") ||
