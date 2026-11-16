@@ -145,7 +145,12 @@ describe("command runtime over the engine target", () => {
   it("login gate: a member of the service role is privileged-login bypassrls", async () => {
     await withRuntimeLogin(
       env.login,
-      [PROVIDER_API_ROLES.supabase.service!],
+      // Членства ролі входу рантайму поруч: без гейта вхід створив би рантайм.
+      [
+        PLATFORM_ROLES.command,
+        PROVIDER_API_ROLES.supabase.user,
+        PROVIDER_API_ROLES.supabase.service!,
+      ],
       async (login) => {
         expect(await gate(login)).toEqual({
           code: "command.privileged-login",

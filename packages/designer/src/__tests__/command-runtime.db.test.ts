@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
+  PLATFORM_ROLES,
   PLATFORM_SCHEMA,
   PROVIDER_LOGIN_ROLES,
   PROVIDER_OWNER_ROLES,
@@ -502,6 +503,9 @@ describe("command runtime over the engine target", () => {
     reason,
   })
   const owner = PROVIDER_OWNER_ROLES[testProvider()]
+  // Членства ролі входу рантайму поруч із привілеєм: без гейта такий вхід
+  // створив би рантайм, тож відмову дає саме гейт.
+  const RUNTIME_ROLES = [PLATFORM_ROLES.command, REQUEST_ROLE]
 
   it("login gate: the owner login of the profile is privileged-login owner", async () => {
     expect(await gate(ownerLoginOf(env.login))).toEqual(privileged("owner"))
@@ -541,7 +545,7 @@ describe("command runtime over the engine target", () => {
     await withGroupRole("gate_mid", { memberOf: [owner] }, (middle) =>
       withRuntimeLogin(
         env.login,
-        [middle],
+        [...RUNTIME_ROLES, middle],
         async (login) => {
           expect(await gate(login)).toEqual(privileged("owner"))
         },
@@ -559,7 +563,7 @@ describe("command runtime over the engine target", () => {
       await withGroupRole("gate_rls", { bypassRls: true }, (bypass) =>
         withRuntimeLogin(
           env.login,
-          [bypass],
+          [...RUNTIME_ROLES, bypass],
           async (login) => {
             expect(await gate(login)).toEqual(privileged("bypassrls"))
           },
@@ -580,7 +584,7 @@ describe("command runtime over the engine target", () => {
     async (reason, role) => {
       await withRuntimeLogin(
         env.login,
-        [role],
+        [...RUNTIME_ROLES, role],
         async (login) => {
           expect(await gate(login)).toEqual(privileged(reason))
         },
