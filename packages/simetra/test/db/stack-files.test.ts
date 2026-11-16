@@ -332,38 +332,62 @@ describe("Simetra identity of the postgres stack", () => {
   })
 })
 
-// `pnpm db:roles` повторно виконує файл на наявному стеку: кожне членство мусить
-// бути або в блоці створення своєї ролі, або під власною перевіркою
 /**
- * GRANT-и roles.sql, що стоять не під своєю перевіркою. Судить за межами
- * операторів, а не за блоком цілком: голий GRANT поряд із захищеним DO або
- * GRANT у DO поза його IF інакше пройшли б. Дозволені лише GRANT усередині
- * `IF NOT EXISTS (…) THEN … END IF;`, де умова — створення тієї ж ролі чи
- * перевірка `pg_auth_members`.
+ * GRANT-и roles.sql, що стоять не під доведеною формою. Список дозволів, а не
+ * перелік заборонених форм: із файла прибираються цілі блоки `IF … END IF;`
+ * рівно двох форм, і кожен GRANT, що лишився деінде (верхній рівень, тіло DO,
+ * ELSE, інший IF), — порушення.
+ * (1) створення: `IF NOT EXISTS (… pg_roles … 'r') THEN` рівно один `CREATE ROLE r`,
+ *     далі лише `PERFORM set_config` і GRANT … TO r, без ELSE/ELSIF/вкладених IF;
+ * (2) членство: `IF NOT EXISTS (… pg_auth_members … 'X' … 'Y') THEN` один
+ *     оператор `GRANT X TO Y`, без ELSE/ELSIF/вкладених IF.
  */
 function unguardedGrants(sql: string): string[] {
   const code = sql
     .split("\n")
     .filter((line) => !line.trimStart().startsWith("--"))
     .join("\n")
-  const grant = /\bGRANT\b[^;]*\bTO\b[^;]*;/gi
-  const bad: string[] = []
-  const flag = (text: string): void => {
-    bad.push(...(text.match(grant) ?? []))
-  }
-  const doBlock = /\bDO\s+\$\$([\s\S]*?)\$\$\s*;/g
-  const guarded = /IF NOT EXISTS\s*\(([\s\S]*?)\)\s*THEN([\s\S]*?)END IF\s*;/g
-  flag(code.replace(doBlock, ""))
-  for (const [, body] of code.matchAll(doBlock)) {
-    flag(body!.replace(guarded, ""))
-    for (const [, cond, inner] of body!.matchAll(guarded)) {
-      const role = /pg_roles\s+WHERE\s+rolname\s*=\s*'(\w+)'/.exec(cond!)?.[1]
-      const createsOwnRole =
-        role !== undefined && new RegExp(`CREATE ROLE ${role}\\b`).test(inner!)
-      if (!createsOwnRole && !/pg_auth_members/.test(cond!)) flag(inner!)
+  const ifBlock =
+    /\bIF NOT EXISTS\s*\(([\s\S]*?)\)\s*THEN([\s\S]*?)\bEND IF\s*;/g
+  const grantTarget = /^GRANT\s+([\s\S]+?)\s+TO\s+(\w+)(?:\s+WITH\b[\s\S]*)?$/
+  const proven = (cond: string, body: string): boolean => {
+    if (/\b(ELSE|ELSIF|IF)\b/i.test(body)) return false
+    const statements = body
+      .split(";")
+      .map((st) => st.trim())
+      .filter((st) => st !== "")
+    const created =
+      /^\s*SELECT FROM pg_catalog\.pg_roles WHERE rolname = '(\w+)'\s*$/.exec(
+        cond
+      )?.[1]
+    if (created !== undefined) {
+      const creates = statements.filter((st) =>
+        new RegExp(`^CREATE ROLE ${created}\\b`).test(st)
+      )
+      return (
+        creates.length === 1 &&
+        statements.every(
+          (st) =>
+            creates.includes(st) ||
+            /^PERFORM pg_catalog\.set_config\(/.test(st) ||
+            grantTarget.exec(st)?.[2] === created
+        )
+      )
     }
+    const named =
+      /^\s*SELECT FROM pg_catalog\.pg_auth_members\s+WHERE roleid = '(\w+)'::pg_catalog\.regrole\s+AND member = '(\w+)'::pg_catalog\.regrole\s*$/.exec(
+        cond
+      )
+    if (named === null || statements.length !== 1) return false
+    const grant = /^GRANT\s+(\w+)\s+TO\s+(\w+)(?:\s+WITH\b[\s\S]*)?$/.exec(
+      statements[0]!
+    )
+    return grant?.[1] === named[1] && grant?.[2] === named[2]
   }
-  return bad
+  const rest = code.replace(ifBlock, (whole, cond: string, body: string) =>
+    proven(cond, body) ? "" : whole
+  )
+  return rest.match(/\bGRANT\b[^;]*;/gi) ?? []
 }
 
 // `pnpm db:roles` повторно виконує файл на наявному стеку: кожне членство мусить
@@ -385,43 +409,66 @@ describe("supabase/roles.sql is additive and idempotent", () => {
     expect(unguardedGrants(sql)).toEqual([])
   })
 
-  it("accepts a membership under its own pg_auth_members check", () => {
+  const ROLE =
+    "IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'r')"
+  const MEMBER =
+    "IF NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members WHERE roleid = 'a'::pg_catalog.regrole AND member = 'b'::pg_catalog.regrole)"
+  const wrap = (inner: string): string => `DO $$ BEGIN ${inner} END $$;`
+
+  it("accepts the two proven shapes", () => {
     expect(
-      unguardedGrants(`DO $$ BEGIN
-        IF NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members WHERE true) THEN
-          GRANT anon TO r;
-        END IF; END $$;`)
+      unguardedGrants(
+        wrap(`${ROLE} THEN CREATE ROLE r; GRANT x TO r WITH SET TRUE; END IF;`)
+      )
+    ).toEqual([])
+    expect(
+      unguardedGrants(
+        wrap(`${MEMBER} THEN GRANT a TO b WITH SET TRUE; END IF;`)
+      )
     ).toEqual([])
   })
 
-  it("rejects a bare GRANT before a guarded DO block", () => {
-    expect(
-      unguardedGrants(`GRANT x TO y;
-        DO $$ BEGIN
-          IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'r') THEN
-            CREATE ROLE r; GRANT z TO r;
-          END IF; END $$;`)
-    ).toEqual(["GRANT x TO y;"])
-  })
-
-  it("rejects a GRANT inside a DO block but outside its IF", () => {
-    expect(
-      unguardedGrants(`DO $$ BEGIN
-          IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'r') THEN
-            CREATE ROLE r;
-          END IF;
-          GRANT x TO y;
-        END $$;`)
-    ).toEqual(["GRANT x TO y;"])
-  })
-
-  it("rejects a GRANT under a creation check that creates another role", () => {
-    expect(
-      unguardedGrants(`DO $$ BEGIN
-          IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'r') THEN
-            CREATE ROLE q; GRANT x TO y;
-          END IF; END $$;`)
-    ).toEqual(["GRANT x TO y;"])
+  it.each([
+    [
+      "a bare GRANT before a guarded DO",
+      `GRANT x TO y;\n${wrap(`${ROLE} THEN CREATE ROLE r; END IF;`)}`,
+    ],
+    [
+      "a GRANT in a DO outside its IF",
+      wrap(`${ROLE} THEN CREATE ROLE r; END IF; GRANT x TO y;`),
+    ],
+    [
+      "a creation-block GRANT to another role",
+      wrap(`${ROLE} THEN CREATE ROLE r; GRANT x TO other; END IF;`),
+    ],
+    [
+      "a creation check that creates another role",
+      wrap(`${ROLE} THEN CREATE ROLE q; GRANT x TO q; END IF;`),
+    ],
+    [
+      "a GRANT in an ELSE of a creation block",
+      wrap(`${ROLE} THEN CREATE ROLE r; ELSE GRANT x TO y; END IF;`),
+    ],
+    [
+      "a GRANT in an ELSIF of a membership block",
+      wrap(
+        `${MEMBER} THEN GRANT a TO b; ELSIF true THEN GRANT x TO y; END IF;`
+      ),
+    ],
+    [
+      "two GRANTs in one membership IF",
+      wrap(`${MEMBER} THEN GRANT a TO b; GRANT c TO d; END IF;`),
+    ],
+    [
+      "a membership GRANT that differs from its condition",
+      wrap(`${MEMBER} THEN GRANT c TO d; END IF;`),
+    ],
+    [
+      "a nested IF",
+      wrap(`${MEMBER} THEN IF true THEN GRANT a TO b; END IF; END IF;`),
+    ],
+  ])("rejects %s", (_name, sqlText) => {
+    expect(unguardedGrants(sqlText).length).toBeGreaterThan(0)
   })
 })
 

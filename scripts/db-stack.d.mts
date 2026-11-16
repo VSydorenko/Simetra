@@ -15,8 +15,12 @@ type SignalSource = {
 
 export function withStackLock(
   path: string,
-  fn: () => Promise<void>
+  fn: () => Promise<void>,
+  name?: string
 ): Promise<void>
+
+/** Lock file of the Supabase stack: the same file the DB-run guard takes. */
+export const SUPABASE_LOCK_PATH: string
 
 /** Lock file name of the postgres stack. */
 export const POSTGRES_LOCK_FILE: string
