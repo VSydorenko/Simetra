@@ -27,7 +27,7 @@ import {
   GAUGE_WRITER_ID,
   LOGIN_SECRETS_FILE,
   loginUrl,
-  prepareStackIdentity,
+  migrateBetterAuth,
   signUp,
   superuserClient,
   testDatabaseName,
@@ -40,6 +40,7 @@ import {
   setLocalSetting,
   trackPool,
 } from "../../../../simetra/test/support"
+import { identityGrantSql } from "../../../../simetra/src/schema/apply/postgres-cluster"
 
 /**
  * Спільні помічники DB-тестів designer. Усе, що вони створюють на спільному стеку, називається через
@@ -417,7 +418,9 @@ export async function markDevelopmentDatabase(url: string): Promise<void> {
  * Ідентичність Better Auth тегованої цілі `url` (рішення Р17 плану ПГ-2b):
  * ціль дістає той самий стан, що й база тестів після `db:pg:start`, —
  * `CONNECT` і схему `better_auth` ролі входу сервісу, справжню міграцію від
- * неї та тимчасові гранти власнику (`prepareStackIdentity`). Кличеться до
+ * неї та гранти власнику тим самим SQL, що й `roles` (`identityGrantSql`):
+ * сам `roles` цієї копії не підготує, бо ролі входу стека мають `CONNECT` до
+ * інших баз (`roles.shared-cluster`). Кличеться до
  * першого плану чи застосування, що посилається на ідентичність: таблиця,
  * яку pg-delta створила б заглушкою від ролі рушія, — помилка налаштування
  * тесту, і хелпер її не перевласнює. На `supabase` ідентичність дає
@@ -458,16 +461,24 @@ export async function withTargetIdentity(url: string): Promise<void> {
   } finally {
     await client.end()
   }
-  await prepareStackIdentity({
-    superuserUrl: asSuperuser(url),
-    authUrl: loginUrl(
+  await migrateBetterAuth(
+    loginUrl(
       url,
       auth,
       devSecret("SIMETRA_AUTH_DEV_PASSWORD", LOGIN_SECRETS_FILE)
-    ),
-    auth,
-    owner: PROVIDER_OWNER_ROLES.postgres,
+    )
+  )
+  const grants = identityGrantSql(PROVIDER_OWNER_ROLES.postgres, {
+    schema,
+    name,
   })
+  const admin = await superuserClient(database)
+  try {
+    await admin.query(grants.usage)
+    await admin.query(grants.table)
+  } finally {
+    await admin.end()
+  }
 }
 
 /** Актор рантайму: організація, користувач, від якого діє сесія, і його учасник. */

@@ -183,10 +183,13 @@ export function renderResult(
               ...roles.map((x) => `${x.server}: ${x.name} ${x.outcome}`),
               // Пропуск ролі входу не мовчазний: без провайдера невідомо,
               // членом якої ролі запиту вона мусить бути
-              ...skipped.map(
-                (x) =>
-                  `target: ${x.name} skipped: the directory has no project.meta.json, so database.provider is unknown; run roles in a metadata directory with a project file to create it`
-              ),
+              ...skipped.map((x) => {
+                if (x.reason === "no-project-file")
+                  return `target: ${x.name} skipped: the directory has no project.meta.json, so database.provider is unknown; run roles in a metadata directory with a project file to create it`
+                // Ім'я пропуску — `<таблиця>:<привілей>`; ім'я таблиці двокрапки не має
+                const at = x.name.lastIndexOf(":")
+                return `target: ${x.name.slice(0, at)}: ${x.name.slice(at + 1)} not granted yet — run the Better Auth migration, then simetra roles again`
+              }),
               ...(r.diagnostics.length > 0 ? [report] : []),
             ].join("\n"),
     }

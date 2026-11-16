@@ -314,7 +314,7 @@ describe("Simetra identity of the postgres stack", () => {
     )
     const passwords = secretNames.map((name) => secrets[name]!)
     expect(passwords).toHaveLength(secretNames.length)
-    const step = betterAuthCommand(secrets, "postgresql://postgres@h/simetra")
+    const step = betterAuthCommand(secrets)
     // argv у `ps`: ні psql, ні дочірній процес Better Auth не несуть паролів чи DSN
     const argvs = [POSTGRES_PSQL_ARGS, step.args]
     for (const argv of argvs)
@@ -325,8 +325,9 @@ describe("Simetra identity of the postgres stack", () => {
     expect(step.env.SIMETRA_AUTH_URL).toContain(
       secrets.SIMETRA_AUTH_DEV_PASSWORD
     )
-    expect(script).toContain("SIMETRA_SUPERUSER_URL")
-    expect(script).toContain("SIMETRA_AUTH_URL")
+    // Міграція йде від ролі `auth`: DSN суперкористувача дочірній процес не дістає
+    expect(Object.keys(step.env)).toEqual(["SIMETRA_AUTH_URL"])
+    expect(script).toContain("SIMETRA_DATABASE_URL")
   })
 })
 
@@ -506,7 +507,6 @@ describe("stack lock path", () => {
         encoding: "utf8",
         env: {
           ...env,
-          SIMETRA_SUPERUSER_URL: "postgresql://postgres@127.0.0.1:1/simetra",
           SIMETRA_AUTH_URL: "postgresql://simetra_auth@127.0.0.1:1/simetra",
         },
       }
@@ -1128,7 +1128,8 @@ describe("startPostgres", () => {
     const stack = fakeStack()
     await start(stack)
     const nodeSteps = stack.calls.filter((c) => c.command === process.execPath)
-    expect(nodeSteps).toHaveLength(2)
+    // `roles`, міграція Better Auth, повторний `roles`
+    expect(nodeSteps).toHaveLength(3)
     for (const step of nodeSteps)
       expect((step.options.env as Record<string, string>).PGAPPNAME).toBe(
         "simetra_db_start"
@@ -1146,7 +1147,7 @@ describe("startPostgres", () => {
     }
   })
 
-  it("runs roles, then passwords, then Better Auth, and terminates its backends last", async () => {
+  it("runs roles, then passwords, then Better Auth, then roles again, and terminates its backends last", async () => {
     const stack = fakeStack()
     await start(stack)
     const steps = stack.calls
@@ -1181,6 +1182,7 @@ describe("startPostgres", () => {
       "verifiers",
       "passwords",
       "better-auth",
+      "roles",
       "terminate",
     ])
     const terminate = stack.psqls().at(-1)!

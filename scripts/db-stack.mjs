@@ -742,9 +742,8 @@ export function passwordMatches(verifier, password) {
  * Команда кроку Better Auth: DSN лише в середовищі дочірнього процесу, не в argv.
  *
  * @param {Record<string, string>} secrets
- * @param {string} superuserUrl
  */
-export function betterAuthCommand(secrets, superuserUrl) {
+export function betterAuthCommand(secrets) {
   return {
     args: [
       "--import",
@@ -752,7 +751,6 @@ export function betterAuthCommand(secrets, superuserUrl) {
       join(ROOT, "packages/simetra/test/db/better-auth-cli.ts"),
     ],
     env: {
-      SIMETRA_SUPERUSER_URL: superuserUrl,
       SIMETRA_AUTH_URL: stackUrl(
         "simetra_auth",
         secrets.SIMETRA_AUTH_DEV_PASSWORD
@@ -827,14 +825,16 @@ async function startPostgresSteps(ctx, noBuild) {
         cwd,
         env: { ...process.env, ...env, PGAPPNAME: START_APP_NAME },
       })
-    await node(
-      [
-        join(ROOT, "packages/designer/bin/simetra.mjs"),
-        "roles",
-        join(profile.dir, "project"),
-      ],
-      { SIMETRA_DATABASE_URL: superuserUrl }
-    )
+    const roles = () =>
+      node(
+        [
+          join(ROOT, "packages/designer/bin/simetra.mjs"),
+          "roles",
+          join(profile.dir, "project"),
+        ],
+        { SIMETRA_DATABASE_URL: superuserUrl }
+      )
+    await roles()
     // Пароль ставиться лише там, де відрізняється: ALTER з тим самим паролем
     // знову солить верифікатор, а повторний старт не має змінювати нічого
     const current = new Map(
@@ -866,9 +866,12 @@ async function startPostgresSteps(ctx, noBuild) {
           )
           .join("")
       )
-    const step = betterAuthCommand(secrets, superuserUrl)
+    const step = betterAuthCommand(secrets)
     // `tsx` — залежність пакета simetra, не кореня: звідти її й резолвить `--import`
     await node(step.args, step.env, join(ROOT, "packages/simetra"))
+    // Таблицю ідентичності створила міграція: повторний `roles` дає власнику
+    // `TRIGGER, REFERENCES` на неї (рішення Р7 ПГ-3), перший лише пропустив їх
+    await roles()
   } finally {
     await stopStartBackends(ctx)
   }

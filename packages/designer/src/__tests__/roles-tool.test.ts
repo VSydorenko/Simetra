@@ -83,6 +83,23 @@ describe("roles: the project file", () => {
     }
   })
 
+  it("names a missing identity table with its own line, not the project file", () => {
+    const data: RolesData = {
+      roles: [],
+      skipped: [
+        { name: "better_auth.user:TRIGGER", reason: "identity-table-missing" },
+      ],
+    }
+    const text = renderResult(
+      toolByName("roles")!,
+      { ok: true, changes: [], diagnostics: [], data, written: false },
+      { dir: ".", locale: "en", format: "text" }
+    ).stdout
+    expect(text.split("\n")).toEqual([
+      "target: better_auth.user: TRIGGER not granted yet — run the Better Auth migration, then simetra roles again",
+    ])
+  })
+
   it("adds the login role with the provider's request role from the project file", async () => {
     expect(await projectRoleSet(await project())).toEqual({
       ok: true,

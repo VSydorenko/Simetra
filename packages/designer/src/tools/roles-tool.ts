@@ -18,10 +18,13 @@ import { defineTool, type DatabaseContext } from "./types"
 
 const PROJECT_FILE = "project.meta.json"
 
-/** Роль, яку `roles` свідомо не створював, і чому. */
+/**
+ * Що `roles` свідомо не зробив, і чому: роль входу без файлу проєкту чи
+ * грант на таблицю ідентичності, якої ще немає (ім'я — `<схема>.<таблиця>:TRIGGER`).
+ */
 export interface SkippedRole {
   name: string
-  reason: "no-project-file"
+  reason: "no-project-file" | "identity-table-missing"
 }
 
 export interface RolesData {
@@ -91,17 +94,23 @@ export async function runRoles(
   dbs: ApplyDatabase,
   db: DatabaseContext,
   project: ProjectRoles
-): Promise<{ roles: PlatformRoleOutcome[]; diagnostics: Diagnostic[] }> {
+): Promise<{
+  roles: PlatformRoleOutcome[]
+  skipped: SkippedRole[]
+  diagnostics: Diagnostic[]
+}> {
   if (project.provider === "postgres") {
     if (db.shadowBase !== undefined)
       return {
         roles: [],
+        skipped: [],
         diagnostics: [diagnostic("plan.shadow-base-unsupported", "", "")],
       }
     const database = databaseOf(db.target.url)
     if (database === "")
       return {
         roles: [],
+        skipped: [],
         diagnostics: [
           diagnostic("database.failed", "", "", {
             tool: "roles",
@@ -123,7 +132,11 @@ export async function runRoles(
       set
     )
     if (!result.ok)
-      return { roles: [], diagnostics: result.error.map(fromEngine) }
+      return {
+        roles: [],
+        skipped: [],
+        diagnostics: result.error.map(fromEngine),
+      }
     const outcome = (names: string[], kind: "created" | "present") =>
       names.map((name) => ({ server: "target" as const, name, outcome: kind }))
     return {
@@ -131,6 +144,10 @@ export async function runRoles(
         ...outcome(result.value.created, "created"),
         ...outcome(result.value.present, "present"),
       ],
+      skipped: result.value.skipped.map((name) => ({
+        name,
+        reason: "identity-table-missing" as const,
+      })),
       diagnostics: [],
     }
   }
@@ -148,6 +165,7 @@ export async function runRoles(
   // створеними ролями грантів: показуються обидва
   return {
     roles: ran.created,
+    skipped: [],
     diagnostics: (ran.refusal ?? []).map(fromEngine),
   }
 }
@@ -176,7 +194,10 @@ export const rolesTool = defineTool({
     )
     if (!ran.ok)
       return { ok: false, changes: [], diagnostics: failureDiagnostics(ran) }
-    const data: RolesData = { roles: ran.value.roles, skipped: set.skipped }
+    const data: RolesData = {
+      roles: ran.value.roles,
+      skipped: [...set.skipped, ...ran.value.skipped],
+    }
     return {
       ok: ran.value.diagnostics.length === 0,
       changes: [],

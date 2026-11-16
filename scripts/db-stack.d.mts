@@ -31,10 +31,10 @@ export const STACK_LOCK_ENV: string
 export const POSTGRES_PSQL_ARGS: readonly string[]
 
 /** Argv and environment of the Better Auth step; the DSN is only in `env`. */
-export function betterAuthCommand(
-  secrets: Record<string, string>,
-  superuserUrl: string
-): { args: string[]; env: Record<string, string> }
+export function betterAuthCommand(secrets: Record<string, string>): {
+  args: string[]
+  env: Record<string, string>
+}
 
 /** Runs a child in its own process group; resolves with its exit code. */
 export function runChild(
