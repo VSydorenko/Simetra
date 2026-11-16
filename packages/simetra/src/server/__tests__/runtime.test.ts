@@ -153,17 +153,27 @@ describe("createCommandRuntime", () => {
     }
   )
 
-  it("names the first held fact in the order of the reasons", async () => {
-    const { runtime } = create((text) =>
-      text === FACTS.text
-        ? facts("service", "createrole", "bypassrls")
-        : undefined
-    )
-    expect(await failureOf(runtime)).toEqual({
-      code: "command.privileged-login",
-      reason: "bypassrls",
-    })
-  })
+  // Кожен кейс тримає свій факт і всі пізніші: причина — завжди перша.
+  it.each([
+    ["owner", "owner"],
+    ["superuser", "superuser"],
+    ["bypassrls", "bypassrls"],
+    ["createrole", "createrole"],
+    ["server_files", "server-files"],
+    ["provider_login", "provider-login"],
+  ] as const)(
+    "names %s first when it and every later fact hold",
+    async (column, reason) => {
+      const later = FACT_COLUMNS.slice(FACT_COLUMNS.indexOf(column))
+      const { runtime } = create((text) =>
+        text === FACTS.text ? facts(...later) : undefined
+      )
+      expect(await failureOf(runtime)).toEqual({
+        code: "command.privileged-login",
+        reason,
+      })
+    }
+  )
 
   it("refuses a privileged login before comparing the applied hash", async () => {
     const { runtime } = create((text) =>
