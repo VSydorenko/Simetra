@@ -81,6 +81,22 @@ afterEach(() => {
 /** Відповіді бази рантайму: звірка проходить, ядро віддає рядок `Gauge`. */
 function answer(text: string): Answer {
   if (text.includes("applied_snapshot_hash")) return { rows: [{ hash }] }
+  // Факти ролі входу рантайму — раніше за членство: той самий `pg_has_role`
+  // у тексті; роль входу без жодного привілею.
+  if (text.includes("AS provider_login"))
+    return {
+      rows: [
+        {
+          owner: "f",
+          superuser: "f",
+          bypassrls: "f",
+          createrole: "f",
+          server_files: "f",
+          provider_login: "f",
+          service: "f",
+        },
+      ],
+    }
   if (text.includes("pg_has_role")) return { rows: [{ member: "t" }] }
   // Оператор епохи читання частин: база без рядка епохи відповідає `NULL`.
   if (text.includes(ROW_VERSION_EPOCH_FUNCTION_NAME))

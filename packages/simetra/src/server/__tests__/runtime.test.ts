@@ -16,6 +16,54 @@ const BEGIN = {
   text: "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY",
   params: [],
 }
+// Факти ролі входу — перший оператор кожної транзакції створення; параметри
+// профілю supabase: схема платформи, власник профілю, сервісна роль і ролі
+// входу провайдера літералом масиву (порт передає лише текст).
+const FACTS = {
+  text: `SELECT
+  COALESCE((SELECT pg_catalog.pg_has_role(session_user, n.nspowner, 'MEMBER')
+            FROM pg_catalog.pg_namespace n WHERE n.nspname = $1), false)
+    OR COALESCE((SELECT pg_catalog.pg_has_role(session_user, o.oid, 'MEMBER')
+                 FROM pg_catalog.pg_roles o WHERE o.rolname = $2), false) AS owner,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolsuper
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS superuser,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolbypassrls
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS bypassrls,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolcreaterole
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS createrole,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x
+          WHERE x.rolname IN ('pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files')
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS server_files,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = ANY ($4::text[])
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS provider_login,
+  COALESCE((SELECT pg_catalog.pg_has_role(session_user, s.oid, 'MEMBER')
+            FROM pg_catalog.pg_roles s WHERE s.rolname = $3), false) AS service`,
+  params: [
+    "simetra",
+    "postgres",
+    "service_role",
+    '{"authenticator","supabase_auth_admin","supabase_storage_admin","supabase_realtime_admin","supabase_admin"}',
+  ],
+}
+const FACT_COLUMNS = [
+  "owner",
+  "superuser",
+  "bypassrls",
+  "createrole",
+  "server_files",
+  "provider_login",
+  "service",
+] as const
+/** Рядок фактів: істинні лише `held`. */
+const facts = (
+  ...held: (typeof FACT_COLUMNS)[number][]
+): { rows: Record<string, unknown>[] } => ({
+  rows: [
+    Object.fromEntries(
+      FACT_COLUMNS.map((c) => [c, held.includes(c) ? "t" : "f"])
+    ),
+  ],
+})
 const member = (role: string) => ({
   text: "SELECT pg_has_role(session_user, $1, 'SET') AS member",
   params: [role],
@@ -42,11 +90,13 @@ function create(
   const db = fakeDatabase({
     query: (text, params) =>
       override(text, params) ??
-      (text === HASH.text
-        ? { rows: [{ hash: "hash-1" }] }
-        : text === MEMBER.text
-          ? { rows: [{ member: "t" }] }
-          : {}),
+      (text === FACTS.text
+        ? facts()
+        : text === HASH.text
+          ? { rows: [{ hash: "hash-1" }] }
+          : text === MEMBER.text
+            ? { rows: [{ member: "t" }] }
+            : {}),
   })
   const log = vi.fn()
   const runtime = createCommandRuntime({
@@ -59,12 +109,13 @@ function create(
 }
 
 describe("createCommandRuntime", () => {
-  it("checks membership, role and hash in one read-only transaction", async () => {
+  it("checks login facts, membership, role and hash in one read-only transaction", async () => {
     const { db, runtime } = create()
     await runtime
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,
+      FACTS,
       MEMBER,
       MEMBER_ANON,
       ROLE,
@@ -73,6 +124,112 @@ describe("createCommandRuntime", () => {
       { release: false },
     ])
   })
+
+  it.each([
+    ["owner", "owner"],
+    ["superuser", "superuser"],
+    ["bypassrls", "bypassrls"],
+    ["createrole", "createrole"],
+    ["server_files", "server-files"],
+    ["provider_login", "provider-login"],
+    ["service", "service"],
+  ] as const)(
+    "refuses a login role holding %s as privileged-login %s, before anything else",
+    async (column, reason) => {
+      const { db, runtime } = create((text) =>
+        text === FACTS.text ? facts(column) : undefined
+      )
+      expect(await failureOf(runtime)).toEqual({
+        code: "command.privileged-login",
+        reason,
+      })
+      expect(db.calls).toEqual([
+        { connect: true },
+        BEGIN,
+        FACTS,
+        ROLLBACK,
+        { release: false },
+      ])
+    }
+  )
+
+  it("names the first held fact in the order of the reasons", async () => {
+    const { runtime } = create((text) =>
+      text === FACTS.text
+        ? facts("service", "createrole", "bypassrls")
+        : undefined
+    )
+    expect(await failureOf(runtime)).toEqual({
+      code: "command.privileged-login",
+      reason: "bypassrls",
+    })
+  })
+
+  it("refuses a privileged login before comparing the applied hash", async () => {
+    const { runtime } = create((text) =>
+      text === FACTS.text
+        ? facts("owner")
+        : text === HASH.text
+          ? { rows: [{ hash: "hash-0" }] }
+          : undefined
+    )
+    expect(await failureOf(runtime)).toEqual({
+      code: "command.privileged-login",
+      reason: "owner",
+    })
+  })
+
+  it("judges the login facts again in the transaction after 42704 on the anonymous role", async () => {
+    let judged = 0
+    const { db, runtime } = create((text, params) =>
+      text === FACTS.text
+        ? judged++ === 0
+          ? facts()
+          : facts("bypassrls")
+        : text === MEMBER.text && params[0] === "anon"
+          ? { error: { code: "42704", message: "x" } }
+          : undefined
+    )
+    expect(await failureOf(runtime)).toEqual({
+      code: "command.privileged-login",
+      reason: "bypassrls",
+    })
+    expect(db.calls).toEqual([
+      { connect: true },
+      BEGIN,
+      FACTS,
+      MEMBER,
+      MEMBER_ANON,
+      ROLLBACK,
+      { release: false },
+      { connect: true },
+      BEGIN,
+      FACTS,
+      ROLLBACK,
+      { release: false },
+    ])
+  })
+
+  it.each<[string, Answer]>([
+    ["no row", { rows: [] }],
+    ["a null fact", { rows: [{ ...facts().rows[0], service: null }] }],
+  ])(
+    "refuses facts with %s as command.internal and logs it",
+    async (_, answer) => {
+      const { db, runtime, log } = create((text) =>
+        text === FACTS.text ? answer : undefined
+      )
+      expect(await failureOf(runtime)).toEqual({ code: "command.internal" })
+      expect(log).toHaveBeenCalledTimes(1)
+      expect(db.calls).toEqual([
+        { connect: true },
+        BEGIN,
+        FACTS,
+        ROLLBACK,
+        { release: false },
+      ])
+    }
+  )
 
   it("rejects another applied hash with both hashes", async () => {
     const { runtime } = create((text) =>
@@ -99,6 +256,7 @@ describe("createCommandRuntime", () => {
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,
+      FACTS,
       MEMBER,
       MEMBER_ANON,
       ROLE,
@@ -139,11 +297,13 @@ describe("createCommandRuntime", () => {
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,
+      FACTS,
       MEMBER,
       ROLLBACK,
       { release: false },
       { connect: true },
       BEGIN,
+      FACTS,
       MEMBER_ANON,
       ROLE,
       HASH,
@@ -166,12 +326,14 @@ describe("createCommandRuntime", () => {
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,
+      FACTS,
       MEMBER,
       MEMBER_ANON,
       ROLLBACK,
       { release: false },
       { connect: true },
       BEGIN,
+      FACTS,
       MEMBER,
       ROLE,
       HASH,
@@ -223,6 +385,7 @@ describe("createCommandRuntime", () => {
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,
+      FACTS,
       MEMBER,
       MEMBER_ANON,
       ROLE,
@@ -242,6 +405,7 @@ describe("createCommandRuntime", () => {
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,
+      FACTS,
       MEMBER,
       MEMBER_ANON,
       ROLE,
@@ -309,11 +473,13 @@ describe("an object without operations", () => {
     }
     const db = fakeDatabase({
       query: (text) =>
-        text === HASH.text
-          ? { rows: [{ hash: "hash-1" }] }
-          : text === MEMBER.text
-            ? { rows: [{ member: "t" }] }
-            : {},
+        text === FACTS.text
+          ? facts()
+          : text === HASH.text
+            ? { rows: [{ hash: "hash-1" }] }
+            : text === MEMBER.text
+              ? { rows: [{ member: "t" }] }
+              : {},
     })
     const runtime = await createCommandRuntime({
       database: db.database,

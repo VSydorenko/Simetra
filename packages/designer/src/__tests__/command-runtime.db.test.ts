@@ -2,8 +2,12 @@ import { randomUUID } from "node:crypto"
 import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
+  PLATFORM_SCHEMA,
+  PROVIDER_LOGIN_ROLES,
+  PROVIDER_OWNER_ROLES,
   SESSION_CLAIMS_SETTING,
   defineObjectModule,
+  quoteIdent,
   type Filter,
   type ObjectModule,
   type Operation,
@@ -16,8 +20,20 @@ import {
   type CommandRuntime,
   type CommandRuntimeOptions,
 } from "simetra/server"
-import { GAUGE_TABLE, setLocalSetting } from "../../../simetra/test/support"
-import { seedMarker, sessionOf } from "./support/db"
+import {
+  GAUGE_TABLE,
+  setLocalSetting,
+  superuserClient,
+  testProvider,
+} from "../../../simetra/test/support"
+import {
+  ownerLoginOf,
+  seedMarker,
+  sessionOf,
+  withCopy,
+  withGroupRole,
+  withRuntimeLogin,
+} from "./support/db"
 
 import {
   AMOUNT,
@@ -468,5 +484,112 @@ describe("command runtime over the engine target", () => {
     } finally {
       await pool.end()
     }
+  })
+
+  // Гейт ролі входу судить `session_user` пулу, тож кожен кейс — окремий пул
+  // на DSN своєї ролі входу, а не спільна сесія тестів (там `session_user` —
+  // суперкористувач стека).
+  const gate = async (url: string) => {
+    const pool = new pg.Pool({ connectionString: url })
+    try {
+      return await refusal(runtime(fromPgPool(pool)))
+    } finally {
+      await pool.end()
+    }
+  }
+  const privileged = (reason: string) => ({
+    code: "command.privileged-login",
+    reason,
+  })
+  const owner = PROVIDER_OWNER_ROLES[testProvider()]
+
+  it("login gate: the owner login of the profile is privileged-login owner", async () => {
+    expect(await gate(ownerLoginOf(env.login))).toEqual(privileged("owner"))
+  })
+
+  // Власник схеми платформи з будь-яким іменем: гейт бачить `nspowner`, а не
+  // ім'я ролі власника профілю.
+  it("login gate: the owner of the platform schema under another name is privileged-login owner", async () => {
+    await withCopy("", (copy, database) =>
+      withRuntimeLogin(
+        copy,
+        [],
+        async (login) => {
+          const role = decodeURIComponent(new URL(login).username)
+          expect(role).not.toBe(owner)
+          const su = await superuserClient(database)
+          try {
+            await su.query(
+              `create schema ${quoteIdent(PLATFORM_SCHEMA)} authorization ${quoteIdent(role)}`
+            )
+            try {
+              expect(await gate(login)).toEqual(privileged("owner"))
+            } finally {
+              // Схема тримала б роль від `DROP ROLE`
+              await su.query(`drop schema ${quoteIdent(PLATFORM_SCHEMA)}`)
+            }
+          } finally {
+            await su.end()
+          }
+        },
+        "gate_own"
+      )
+    )
+  })
+
+  it("login gate: a member of the owner through a middle role is privileged-login owner", async () => {
+    await withGroupRole("gate_mid", { memberOf: [owner] }, (middle) =>
+      withRuntimeLogin(
+        env.login,
+        [middle],
+        async (login) => {
+          expect(await gate(login)).toEqual(privileged("owner"))
+        },
+        "gate_via"
+      )
+    )
+  })
+
+  it.each([
+    ["INHERIT TRUE, SET TRUE", true],
+    ["INHERIT FALSE, SET TRUE", false],
+  ])(
+    "login gate: a member of a BYPASSRLS role (%s) is privileged-login bypassrls",
+    async (_, inherit) => {
+      await withGroupRole("gate_rls", { bypassRls: true }, (bypass) =>
+        withRuntimeLogin(
+          env.login,
+          [bypass],
+          async (login) => {
+            expect(await gate(login)).toEqual(privileged("bypassrls"))
+          },
+          "gate_rls_in",
+          { inherit }
+        )
+      )
+    }
+  )
+
+  it.each([
+    // Роль входу провайдера стека — за фіксованим ім'ям профілю: теговану
+    // роль `auth` гейт не бачить.
+    ["provider-login", PROVIDER_LOGIN_ROLES[testProvider()][0]!],
+    ["server-files", "pg_read_server_files"],
+  ])(
+    "login gate: a member of %s role %s is refused with that reason",
+    async (reason, role) => {
+      await withRuntimeLogin(
+        env.login,
+        [role],
+        async (login) => {
+          expect(await gate(login)).toEqual(privileged(reason))
+        },
+        "gate_role"
+      )
+    }
+  )
+
+  it("login gate: the simetra_runtime form of the login role creates the runtime", async () => {
+    await expect(runtime(fromPgPool(env.direct))).resolves.toHaveProperty("run")
   })
 })

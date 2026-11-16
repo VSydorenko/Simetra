@@ -306,7 +306,9 @@ const quoted = (name: string) => `"${name.replaceAll('"', '""')}"`
  * are removed on every path; `label` is the readable part of the name, and a
  * random tail makes every call's role name unique.
  * `attributes` gives the role a fact the runtime login must not have
- * (`BYPASSRLS`), for tests of the data-tool guards.
+ * (`BYPASSRLS`), for tests of the data-tool guards; `inherit` grants the
+ * memberships `WITH INHERIT TRUE, SET TRUE` instead, for tests of the login
+ * gate.
  * The user request role in `memberOf` brings every request role of the
  * profile (`LOGIN_ROLE_REQUEST_PURPOSES`), as the runtime login role has them.
  */
@@ -315,7 +317,7 @@ export async function withRuntimeLogin<T>(
   memberOf: readonly string[],
   fn: (loginUrl: string) => Promise<T>,
   label = "runtime",
-  attributes: { bypassRls?: boolean } = {}
+  attributes: { bypassRls?: boolean; inherit?: boolean } = {}
 ): Promise<T> {
   // Supavisor кешує секрет ролі за ім'ям: роль, перестворена з тим самим
   // ім'ям і новим паролем, через пулер не входить (`28P01`), доки кеш не
@@ -342,7 +344,7 @@ export async function withRuntimeLogin<T>(
     await asStack(`grant connect on database ${database} to ${quoted(name)}`)
     for (const role of roles)
       await asStack(
-        `grant ${quoted(role)} to ${quoted(name)} with inherit false, set true`
+        `grant ${quoted(role)} to ${quoted(name)} with inherit ${attributes.inherit === true}, set true`
       )
     return await fn(loginUrl(url, name, password))
   } finally {
@@ -357,6 +359,30 @@ export async function withRuntimeLogin<T>(
     await asStack(
       `revoke connect on database ${database} from ${quoted(name)}`
     ).catch(() => undefined)
+    await dropRoles(name)
+  }
+}
+
+/**
+ * Runs `fn` with a run-tagged `NOLOGIN` role (its name as the argument) that
+ * has `BYPASSRLS` when asked and is a member of `memberOf` (a plain `GRANT`);
+ * the role, and with it its memberships, is dropped on every path. `label` is
+ * the readable part of the name.
+ */
+export async function withGroupRole<T>(
+  label: string,
+  options: { bypassRls?: boolean; memberOf?: readonly string[] },
+  fn: (name: string) => Promise<T>
+): Promise<T> {
+  const name = testRoleName(`${label}_${randomBytes(4).toString("hex")}`)
+  const bypass = options.bypassRls === true ? " bypassrls" : ""
+  // Створення — до `try`: невдале створення не видаляє чужої ролі з тим ім'ям
+  await asStack(`create role ${quoted(name)} nologin${bypass}`)
+  try {
+    for (const role of options.memberOf ?? [])
+      await asStack(`grant ${quoted(role)} to ${quoted(name)}`)
+    return await fn(name)
+  } finally {
     await dropRoles(name)
   }
 }

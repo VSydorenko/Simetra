@@ -134,11 +134,24 @@ export type Override = (
   params: readonly (string | null)[]
 ) => Answer | undefined
 
+/** Рядок фактів ролі входу без жодного привілею: рантайм створюється. */
+export const LOGIN_FACTS_NONE = {
+  owner: "f",
+  superuser: "f",
+  bypassrls: "f",
+  createrole: "f",
+  server_files: "f",
+  provider_login: "f",
+  service: "f",
+}
+
 /** Відповіді бази за замовчуванням; `override` — лише те, про що кейс. */
 export function answer(text: string): Answer {
   if (text.includes("current_user_id")) return { rows: [{ user_id: USER }] }
   if (text.includes("applied_snapshot_hash"))
     return { rows: [{ hash: "hash-1" }] }
+  // Факти ролі входу — раніше за членство: той самий `pg_has_role` у тексті.
+  if (text.includes("AS provider_login")) return { rows: [LOGIN_FACTS_NONE] }
   if (text.includes("pg_has_role")) return { rows: [{ member: "t" }] }
   // База без рядка епохи: функція відповідає `NULL`.
   if (text.includes("row_version_epoch")) return { rows: [{ epoch: null }] }
