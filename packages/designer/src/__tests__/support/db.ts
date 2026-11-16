@@ -307,8 +307,8 @@ const quoted = (name: string) => `"${name.replaceAll('"', '""')}"`
  * random tail makes every call's role name unique.
  * `attributes` gives the role a fact the runtime login must not have
  * (`BYPASSRLS`), for tests of the data-tool guards.
- * A request role in `memberOf` brings every request role of the profile
- * (`LOGIN_ROLE_REQUEST_PURPOSES`), as the runtime login role has them.
+ * The user request role in `memberOf` brings every request role of the
+ * profile (`LOGIN_ROLE_REQUEST_PURPOSES`), as the runtime login role has them.
  */
 export async function withRuntimeLogin<T>(
   url: string,
@@ -329,12 +329,13 @@ export async function withRuntimeLogin<T>(
   )
   const database = quoted(databaseOf(url))
   // Рантайм перевіряє членство в кожній ролі запиту профілю на створенні:
-  // перелік у кожному виклику розійшовся б із профілем.
+  // перелік у кожному виклику розійшовся б із профілем. Без ролі
+  // користувача — як є: так будується вхід запасного шляху читання.
   const provider = testProvider()
   const requestRoles = LOGIN_ROLE_REQUEST_PURPOSES[provider].map(
     (purpose) => PROVIDER_API_ROLES[provider][purpose]
   )
-  const roles = memberOf.some((role) => requestRoles.includes(role))
+  const roles = memberOf.includes(PROVIDER_API_ROLES[provider].user)
     ? [...new Set([...memberOf, ...requestRoles])]
     : memberOf
   try {

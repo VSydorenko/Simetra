@@ -28,6 +28,7 @@ import {
   profileLayer,
   runtimeValuesLayer,
   testProvider,
+  testRoleFor,
 } from "../../../simetra/test/support"
 import {
   heldResource,
@@ -67,7 +68,10 @@ export interface Env {
   owner: pg.Client
   /** Роль входу з членствами в ролі команд і ролі запиту. */
   login: string
-  /** Роль входу лише з членством у ролі команд. */
+  /**
+   * Роль входу без ролі користувача: роль команд і роль гостя, без якої
+   * рантайм не створюється й на запасному шляху.
+   */
   commandOnly: string
   direct: pg.Pool
   /** Пул через пулер — лише в середовищі, зібраному з `viaPooler`. */
@@ -125,7 +129,7 @@ export const heldEnv = (viaPooler = false) =>
           (login) =>
             withRuntimeLogin(
               url,
-              [PLATFORM_ROLES.command],
+              [PLATFORM_ROLES.command, testRoleFor("anonymous")!],
               async (commandOnly) => {
                 const direct = new pg.Pool({ connectionString: login })
                 let pooled: pg.Pool | null = null
