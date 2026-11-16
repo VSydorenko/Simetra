@@ -514,33 +514,80 @@ function inApplied(ref: EngineObjectRef, applied: CatalogModel): boolean {
 }
 
 /**
- * Id кроків двигуна, що знімають чужий об'єкт без даних (платформна спека
- * §6.6): будь-якого виду поза видами з даними (`DATA_KINDS`), якого немає в
- * останньому застосованому стані (`applied`; першого застосування —
- * жодного). Такий об'єкт створила не платформа,
- * тож його зняття потребує дозволу, хоч би його й створював знову
- * пізніший крок під тим самим ім'ям: виняток «заміна» для нього не діє.
- * `original` повертає посилання до імен `applied` (перейменування наміру
- * промоції); без нього імена дій — імена `applied`. Рахується з дій до
- * `classifySteps`, бо результат — його вхід. `offset` — кількість кроків
- * перед діями двигуна.
+ * Об'єкт, який дія двигуна перевизначає на місці (`CREATE OR REPLACE`,
+ * `ALTER POLICY`, `OWNER TO`, `SET DEFAULT`): дія `alter`, що нічого не
+ * створює й не знімає. Двигун ставить суб'єкт дії першим — `produces[0] ??
+ * destroys[0] ?? consumes[0]`, а дія на місці вживає сам об'єкт першим, а
+ * його залежності — після (pg-delta, `plan/phases/action-emitter.js`;
+ * опору звіряє тест на джерелі двигуна). Суб'єкт без схеми й імені (грант,
+ * коментар, роль) структурного посилання не має, тож об'єктом не є.
  */
-export function foreignDrops(
-  actions: readonly Pick<EngineAction, "destroyed">[],
+function redefined(
+  action: Pick<
+    EngineAction,
+    "verb" | "produces" | "destroys" | "consumes" | "consumed"
+  >
+): EngineObjectRef | undefined {
+  if (action.verb !== "alter") return undefined
+  if (action.produces.length > 0 || action.destroys.length > 0) return undefined
+  const [subject] = action.consumes
+  const [ref] = action.consumed
+  // Структурне посилання — того самого суб'єкта лише тоді, коли його вид
+  // збігається: посилання без схеми й імені `consumed` пропускає
+  if (subject === undefined || ref === undefined) return undefined
+  return kindOf(subject) === ref.kind ? ref : undefined
+}
+
+const sameRef = (a: EngineObjectRef, b: EngineObjectRef): boolean =>
+  a.kind === b.kind &&
+  a.schema === b.schema &&
+  a.table === b.table &&
+  a.name === b.name
+
+/**
+ * Id кроків двигуна, що знімають чи перевизначають на місці чужий об'єкт
+ * без даних (платформна спека §6.6): будь-якого виду поза видами з даними
+ * (`DATA_KINDS`), якого немає в останньому застосованому стані (`applied`;
+ * першого застосування — жодного). Такий об'єкт створила не платформа, тож
+ * його зняття потребує дозволу, хоч би його й створював знову пізніший
+ * крок під тим самим ім'ям (виняток «заміна» для нього не діє), і так само
+ * його перевизначення на місці. Об'єкт, який створює раніша дія того самого
+ * плану, — власний. `original` повертає посилання до імен `applied`
+ * (перейменування наміру промоції); без нього імена дій — імена `applied`.
+ * Рахується з дій двигуна до `classifySteps`, бо результат — його вхід;
+ * злиття дій у кроки його не змінює. `offset` — кількість кроків перед
+ * діями двигуна.
+ */
+export function foreignChanges(
+  actions: readonly Pick<
+    EngineAction,
+    | "verb"
+    | "produces"
+    | "destroys"
+    | "consumes"
+    | "consumed"
+    | "produced"
+    | "destroyed"
+  >[],
   applied: CatalogModel | undefined,
   offset: number,
   original: (ref: EngineObjectRef) => EngineObjectRef = (ref) => ref
 ): Set<string> {
+  const foreign = (ref: EngineObjectRef) =>
+    !DATA_KINDS.has(ref.kind) &&
+    (applied === undefined || !inApplied(original(ref), applied))
   const out = new Set<string>()
+  const created: EngineObjectRef[] = []
   actions.forEach((action, i) => {
+    const altered = redefined(action)
     if (
-      action.destroyed.some(
-        (ref) =>
-          !DATA_KINDS.has(ref.kind) &&
-          (applied === undefined || !inApplied(original(ref), applied))
-      )
+      action.destroyed.some(foreign) ||
+      (altered !== undefined &&
+        foreign(altered) &&
+        !created.some((c) => sameRef(c, altered)))
     )
       out.add(stepId(offset + i))
+    created.push(...action.produced)
   })
   return out
 }

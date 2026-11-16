@@ -161,7 +161,7 @@ import {
 } from "./state"
 import {
   classifySteps,
-  foreignDrops,
+  foreignChanges,
   lintSteps,
   requiredPermissions,
   stepId,
@@ -835,7 +835,7 @@ export async function buildPlan(
     live.extracted.model,
     parse,
     0,
-    { foreign: foreignDrops(filled.actions, applied, 0) }
+    { foreign: foreignChanges(filled.actions, applied, 0) }
   )
   // Зміна типу, якій сторожа не побудувати, — відмова, а не крок без
   // перевірки: інакше дозвіл на `destructive` знову означав би «обріж мовчки»
@@ -1842,7 +1842,7 @@ async function analyseOnClone(p: {
         offset
       ),
       // Дії — у нових іменах наміру, marker — у старих
-      foreign: foreignDrops(actions, p.applied, offset, (ref) =>
+      foreign: foreignChanges(actions, p.applied, offset, (ref) =>
         beforeIntent(p.intent, ref)
       ),
     })

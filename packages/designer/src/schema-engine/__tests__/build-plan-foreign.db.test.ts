@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { canonicalSnapshot } from "simetra/compiler"
 import { executePlan, type PlanArtifact } from "simetra/schema"
 import {
+  ANON,
   compiled,
   EMPTY,
   establish,
@@ -53,14 +54,19 @@ const apply = (
     snapshot: canonicalSnapshot(model),
   })
 
-/** Крок, що знімає об'єкт за шаблоном, має клас з дозволом. */
+/**
+ * Крок, що знімає чи перевизначає об'єкт за шаблоном, має клас з дозволом;
+ * `subject` — ціль дії на місці: двигун ставить її першою серед вжитих.
+ */
 async function expectPermitted(
   url: string,
   model: Awaited<ReturnType<typeof compiled>>,
-  drop: RegExp
+  drop: RegExp,
+  subject?: Json
 ) {
   const artifact = planned(await plan(url, model))
   const [step] = stepMatching(artifact, drop)
+  if (subject !== undefined) expect(step?.consumed[0]).toEqual(subject)
   expect(step?.class).toBe("relaxation")
   expect(artifact.requiredPermissions).toContain(step!.id)
   const without = artifact.requiredPermissions.filter((p) => p !== step!.id)
@@ -116,6 +122,88 @@ describe.concurrent("buildPlan: foreign objects", () => {
       `${FOREIGN_NOTES}\ncreate view app.v as select note, id from app.notes;`,
       (url) => expectPermitted(url, model, /DROP VIEW/)
     )
+  })
+
+  it("asks permission to drop a foreign domain", async () => {
+    // Вид поза вісімкою заміни: правило — для кожного виду без даних
+    const model = await compiled({ [NOTES]: notes() })
+    await inTarget(
+      `${FOREIGN_NOTES}\ncreate domain app.d as text check (value <> '');`,
+      (url) => expectPermitted(url, model, /DROP DOMAIN/)
+    )
+  })
+
+  it("asks permission to redefine a foreign function in place", async () => {
+    // Та сама сигнатура, інше тіло: двигун дає `CREATE OR REPLACE` без
+    // зняття, і ціль дії — сама функція, перша серед вжитих
+    const model = await compiled(
+      withSql(
+        "CREATE FUNCTION app.f() RETURNS integer LANGUAGE sql STABLE AS $$ SELECT 1 $$;"
+      )
+    )
+    await inTarget(
+      `${FOREIGN_NOTES}\ncreate function app.f() returns integer language sql stable as $$ select 2 $$;`,
+      (url) =>
+        expectPermitted(url, model, /CREATE OR REPLACE FUNCTION/, {
+          kind: "function",
+          schema: "app",
+          name: "f",
+        })
+    )
+  })
+
+  it("asks permission to redefine a foreign procedure in place", async () => {
+    const model = await compiled(
+      withSql("CREATE PROCEDURE app.p() LANGUAGE sql AS $$ SELECT 1 $$;")
+    )
+    await inTarget(
+      `${FOREIGN_NOTES}\ncreate procedure app.p() language sql as $$ select 2 $$;`,
+      (url) =>
+        expectPermitted(url, model, /CREATE OR REPLACE PROCEDURE/, {
+          kind: "procedure",
+          schema: "app",
+          name: "p",
+        })
+    )
+  })
+
+  it("asks permission to change the roles of a foreign policy", async () => {
+    const model = await compiled(
+      withSql(`CREATE POLICY p ON app.notes TO ${ANON} USING (true);`)
+    )
+    await inTarget(
+      `${FOREIGN_NOTES}\ncreate policy p on app.notes using (true);`,
+      (url) =>
+        expectPermitted(url, model, /ALTER POLICY/, {
+          kind: "policy",
+          schema: "app",
+          table: "notes",
+          name: "p",
+        })
+    )
+  })
+
+  it("keeps the in-place redefinition of its own function and policy catalogOnly", async () => {
+    // Тіло власної функції читає таблицю: залежність — серед вжитих після
+    // цілі, а не ціль (чужу залежність тіні не поставити: її двигун
+    // перевіряє на копії; правило для чужої залежності — unit-кейс
+    // `foreignChanges`); власна політика міняє ролі
+    const own = (value: string, roles: string) =>
+      withSql(
+        `CREATE FUNCTION app.f() RETURNS bigint LANGUAGE sql STABLE AS $$ SELECT count(*) + ${value} FROM app.notes $$;
+CREATE POLICY p ON app.notes TO ${roles} USING (true);`
+      )
+    const before = await compiled(own("1", "PUBLIC"))
+    const after = await compiled(own("2", ANON))
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      const artifact = planned(await plan(url, after))
+      const [fn] = stepMatching(artifact, /CREATE OR REPLACE FUNCTION/)
+      const [policy] = stepMatching(artifact, /ALTER POLICY/)
+      expect(fn?.consumed[0]).toMatchObject({ kind: "function", name: "f" })
+      expect([fn?.class, policy?.class]).toEqual(["catalogOnly", "catalogOnly"])
+      expect(artifact.requiredPermissions).toEqual([])
+    })
   })
 
   it("keeps the replacement of its own index catalogOnly", async () => {

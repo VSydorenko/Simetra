@@ -4,7 +4,7 @@ import type { CatalogModel, CatalogTable } from "simetra/model"
 import {
   checkPermissions,
   classifySteps,
-  foreignDrops,
+  foreignChanges,
   lintSteps,
   requiredPermissions,
   type DriftReport,
@@ -505,14 +505,25 @@ describe("classifySteps", () => {
 })
 
 // #156: зняття об'єкта поза останнім застосованим станом — з дозволом
-describe("foreignDrops", () => {
+describe("foreignChanges", () => {
   const ref = (kind: string, name: string, table?: string) => ({
     kind,
     schema: "app",
     ...(table === undefined ? {} : { table }),
     name,
   })
-  const drop = (...refs: ReturnType<typeof ref>[]) => ({ destroyed: refs })
+  const drop = (...refs: ReturnType<typeof ref>[]) =>
+    action("DROP", {
+      verb: "drop",
+      destroys: refs.map((r) => `${r.kind}:x`),
+      destroyed: refs,
+    })
+  // Перевизначення на місці: суб'єкт — перший серед вжитих (pg-delta)
+  const alter = (...refs: ReturnType<typeof ref>[]) =>
+    action("ALTER", {
+      consumes: refs.map((r) => `${r.kind}:${r.schema}.${r.name}`),
+      consumed: refs,
+    })
   const applied: CatalogModel = {
     tables: [
       {
@@ -557,7 +568,7 @@ describe("foreignDrops", () => {
     // Двигун адресує обмеження домену полем `table` з іменем домену
     ["a constraint of a domain", ref("constraint", "d_check", "d")],
   ])("keeps the exception for %s of the last applied state", (_n, own) => {
-    expect(foreignDrops([drop(own)], applied, 0)).toEqual(new Set())
+    expect(foreignChanges([drop(own)], applied, 0)).toEqual(new Set())
   })
 
   it.each([
@@ -571,7 +582,7 @@ describe("foreignDrops", () => {
     ["a rule", ref("rule", "r", "t")],
   ])("drops the exception for %s outside it", (_n, foreign) => {
     // Наскрізна нумерація: дія двигуна після двох кроків наміру — `s3`
-    expect(foreignDrops([drop(), drop(foreign)], applied, 1)).toEqual(
+    expect(foreignChanges([drop(), drop(foreign)], applied, 1)).toEqual(
       new Set(["s3"])
     )
   })
@@ -580,8 +591,8 @@ describe("foreignDrops", () => {
     // Намір промоції перейменував таблицю: marker знає її під старим ім'ям
     const renamed = ref("constraint", "t_c_check", "t_new")
     const back = (r: ReturnType<typeof ref>) => ({ ...r, table: "t" })
-    expect(foreignDrops([drop(renamed)], applied, 0)).toEqual(new Set(["s1"]))
-    expect(foreignDrops([drop(renamed)], applied, 0, back)).toEqual(new Set())
+    expect(foreignChanges([drop(renamed)], applied, 0)).toEqual(new Set(["s1"]))
+    expect(foreignChanges([drop(renamed)], applied, 0, back)).toEqual(new Set())
   })
 
   it("classifies a foreign drop as a relaxation, recreated or not", () => {
@@ -596,7 +607,7 @@ describe("foreignDrops", () => {
       verb: "create",
       produces: ["index:app.other_idx"],
     })
-    const foreign = foreignDrops([dropIndex, createIndex], applied, 0)
+    const foreign = foreignChanges([dropIndex, createIndex], applied, 0)
     expect(
       classifySteps([dropIndex, createIndex], UNIQUE, parse, 0, {
         foreign,
@@ -608,14 +619,65 @@ describe("foreignDrops", () => {
     ).toEqual(["catalogOnly", "catalogOnly"])
   })
 
-  it("drops the exception for every object on the first apply", () => {
-    expect(foreignDrops([drop(ref("index", "t_c_idx"))], undefined, 0)).toEqual(
+  it("marks an in-place redefinition of a foreign object", () => {
+    // Функцію двигун перевизначає `CREATE OR REPLACE`: дія `alter` без
+    // produces/destroys, суб'єкт — перший серед вжитих
+    expect(foreignChanges([alter(ref("function", "g"))], applied, 0)).toEqual(
       new Set(["s1"])
     )
+    expect(
+      foreignChanges([alter(ref("policy", "p", "t"))], undefined, 0)
+    ).toEqual(new Set(["s1"]))
+    // Власна функція, чиє тіло читає чужу таблицю: залежність — не суб'єкт
+    expect(
+      foreignChanges(
+        [alter(ref("function", "f"), ref("table", "other"))],
+        applied,
+        0
+      )
+    ).toEqual(new Set())
+    expect(
+      foreignChanges(
+        [alter(ref("trigger", "tr", "t"), ref("function", "g"))],
+        applied,
+        0
+      )
+    ).toEqual(new Set())
+  })
+
+  it("leaves an object the same plan creates to its own plan", () => {
+    // Новий об'єкт плану (`OWNER TO`, `REVOKE` гігієни після створення)
+    const create = action("CREATE FUNCTION app.g()", {
+      verb: "create",
+      produces: ["function:app.g()"],
+      produced: [ref("function", "g")],
+    })
+    expect(
+      foreignChanges([create, alter(ref("function", "g"))], undefined, 0)
+    ).toEqual(new Set())
+    // Суб'єкт без схеми й імені (грант): структурного посилання немає
+    expect(
+      foreignChanges(
+        [
+          action("REVOKE", {
+            consumes: ["acl:x", "function:app.g()"],
+            consumed: [ref("function", "g")],
+          }),
+        ],
+        applied,
+        0
+      )
+    ).toEqual(new Set())
+  })
+
+  it("drops the exception for every object on the first apply", () => {
+    expect(
+      foreignChanges([drop(ref("index", "t_c_idx"))], undefined, 0)
+    ).toEqual(new Set(["s1"]))
     // Стовпець — не об'єкт заміни: його клас дає втрата даних
-    expect(foreignDrops([drop(ref("column", "c", "t"))], undefined, 0)).toEqual(
-      new Set()
-    )
+    expect(
+      foreignChanges([drop(ref("column", "c", "t"))], undefined, 0)
+    ).toEqual(new Set())
   })
 })
 
