@@ -29,6 +29,7 @@ import {
   type DbConnection,
   type EngineAction,
   type EngineDiagnostic,
+  type EngineObjectRef,
   type EnginePlan,
   type EngineScope,
   type Extracted,
@@ -171,6 +172,7 @@ import {
 } from "./state"
 import {
   classifySteps,
+  foreignChanges,
   lintSteps,
   requiredPermissions,
   stepId,
@@ -839,10 +841,12 @@ export async function buildPlan(
   // поза межею застосунку), а крок двигуна замінив би його мовчки (спека
   // промоції §9.2)
   const live = await witness(o.target, scope)
+  // Останній застосований стан: що з об'єктів цілі створила платформа
+  const applied = state.status === "applied" ? state.marker.catalog : undefined
   const taken = providerTriggerConflicts({
     desired: model.sqlUnits,
     live: live.extracted.model,
-    applied: state.status === "applied" ? state.marker.catalog : undefined,
+    applied,
     appSchemas: scope.schemas,
     parse,
   })
@@ -910,6 +914,7 @@ export async function buildPlan(
       rightsOrphans,
       promotion: transition,
       epochExists: state.status === "applied" && state.rowVersionEpoch,
+      applied,
       file: input.file,
       diagnostics: dedupe([
         ...verdict.diagnostics,
@@ -1005,7 +1010,15 @@ export async function buildPlan(
     names: SAME_NAMES,
   })
   if (!filled.ok) return refused([...diagnostics, ...filled.diagnostics])
-  const classified = classifySteps(filled.actions, live.extracted.model, parse)
+  // Зняття об'єкта, якого немає в останньому застосованому стані, — з
+  // дозволом, і однойменна заміна теж (§6.6)
+  const classified = classifySteps(
+    filled.actions,
+    live.extracted.model,
+    parse,
+    0,
+    { foreign: foreignChanges(filled.actions, applied, 0) }
+  )
   // Зняти тригер провізії з чужої таблиці може лише її власник: відмова з
   // порадою до будь-якого кроку, а не падіння застосування
   const locked = lockedIdentityTriggers(classified, desired.scope.provider)
@@ -1214,6 +1227,8 @@ interface PromotionContext {
   promotion: Extract<TransitionVerdict, { status: "promotion" }>
   /** Чи є рядок епохи версій цілі: без нього епоху пише крок `versions`. */
   epochExists: boolean
+  /** Каталог marker цілі: виняток «заміна» — лише для його об'єктів. */
+  applied: CatalogModel | undefined
   /** Файл запису в `plans/`: його називають відмови виявлення. */
   file: string
   /** Діагностики гейта, переходу й бажаного стану. */
@@ -1443,6 +1458,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
         data: data.tables,
         origin,
         parse,
+        applied: c.applied,
         backfills,
       })
   )
@@ -1889,6 +1905,26 @@ async function runOnClone(
 }
 
 /**
+ * Посилання дії двигуна (нові імена наміру промоції) в іменах цілі до
+ * наміру: таблиця — за `tablesNewToOld`, об'єкт, відведений вбік, — за
+ * `tempNames`. Індекс адресується без таблиці, тож його ім'я лишається.
+ */
+function beforeIntent(
+  intent: RenameIntent,
+  ref: EngineObjectRef
+): EngineObjectRef {
+  if (ref.table === undefined) return ref
+  const old = intent.tablesNewToOld.get(tableKey(ref.schema, ref.table))
+  return {
+    ...ref,
+    table: old === undefined ? ref.table : (JSON.parse(old) as string[])[1]!,
+    name:
+      intent.tempNames.get(JSON.stringify([ref.schema, ref.table, ref.name])) ??
+      ref.name,
+  }
+}
+
+/**
  * Перша копія (спека промоції §7.2): кроки наміру й канонічні імена
  * виконуються на ній, план двигуна знімається з неї після них, а класи,
  * сторожі, залежні й приведення змін типу питають саме її — там уже нові
@@ -1910,6 +1946,8 @@ async function analyseOnClone(p: {
   data: readonly PlannedDataTable[]
   origin: DataOrigin
   parse: SqlParser
+  /** Каталог marker цілі: виняток «заміна» — лише для його об'єктів. */
+  applied: CatalogModel | undefined
   /**
    * Заповнення `NULL` перед `NOT NULL` за діями двигуна й моделлю копії
    * після наміру — вихідним станом дій (`backfillActions`).
@@ -1994,6 +2032,10 @@ async function analyseOnClone(p: {
         extracted.model,
         unitTables,
         offset
+      ),
+      // Дії — у нових іменах наміру, marker — у старих
+      foreign: foreignChanges(actions, p.applied, offset, (ref) =>
+        beforeIntent(p.intent, ref)
       ),
     })
     const steps = [...renames, ...names, ...engineSteps]

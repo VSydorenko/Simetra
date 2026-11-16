@@ -440,6 +440,158 @@ function isReplacement(
   )
 }
 
+/** Імена обмежень таблиці моделі каталогу: ключ, унікальні, `CHECK`, FK. */
+export const constraintNames = (t: CatalogTable): string[] => [
+  ...(t.primaryKey === undefined ? [] : [t.primaryKey.name]),
+  ...t.uniques.map((u) => u.name),
+  ...t.checks.map((c) => c.name),
+  ...t.foreignKeys.map((f) => f.name),
+]
+
+/**
+ * Чи об'єкт належить останньому застосованому стану (`applied`, каталог
+ * marker цілі): лише такий об'єкт платформа створила сама. Індекс — за
+ * схемою й іменем; обмеження — за таблицею й іменем (обмеження домену — за
+ * доменом); default — за колонкою таблиці, що має default; тригер і
+ * політика — за ідентичністю одиниці; тип — серед перерахувань; решта видів
+ * одиниць (функція, процедура, агрегат, в'юха, домен) — за класом, схемою й
+ * іменем (перевантаження з тим самим іменем вважається своїм). Виду, якого
+ * модель каталогу не несе (правило, колляція, складений тип, стороння
+ * таблиця), платформа не створює, тож він своїм не буває.
+ */
+function inApplied(ref: EngineObjectRef, applied: CatalogModel): boolean {
+  switch (ref.kind) {
+    case "index":
+      return applied.tables.some(
+        (t) =>
+          t.schema === ref.schema && t.indexes.some((i) => i.name === ref.name)
+      )
+    case "constraint": {
+      const table = applied.tables.find(
+        (t) => t.schema === ref.schema && t.name === ref.table
+      )
+      if (table !== undefined) return constraintNames(table).includes(ref.name)
+      // Обмеження домену двигун адресує полем `table` з іменем домену, а
+      // домен — одиниця каталогу з обмеженнями в її тексті: власний домен
+      // несе й власні обмеження
+      return applied.units.some(
+        (u) =>
+          u.class === "domain" &&
+          u.schema === ref.schema &&
+          u.name === ref.table
+      )
+    }
+    case "trigger":
+    case "policy":
+      return applied.units.some(
+        (u) =>
+          u.class === ref.kind &&
+          u.identity === `${ref.kind}:${ref.schema}.${ref.table}.${ref.name}`
+      )
+    case "default":
+      return applied.tables.some(
+        (t) =>
+          t.schema === ref.schema &&
+          t.name === ref.table &&
+          t.columns.some((c) => c.name === ref.name && c.default !== undefined)
+      )
+    case "type":
+      return applied.enumTypes.some(
+        (e) => e.schema === ref.schema && e.name === ref.name
+      )
+    case "function":
+    case "procedure":
+    case "aggregate":
+    case "view":
+    case "domain":
+      return applied.units.some(
+        (u) =>
+          u.class === ref.kind && u.schema === ref.schema && u.name === ref.name
+      )
+    default:
+      return false
+  }
+}
+
+/**
+ * Об'єкт, який дія двигуна перевизначає на місці (`CREATE OR REPLACE`,
+ * `ALTER POLICY`, `OWNER TO`, `SET DEFAULT`): дія `alter`, що нічого не
+ * створює й не знімає. Двигун ставить суб'єкт дії першим — `produces[0] ??
+ * destroys[0] ?? consumes[0]`, а дія на місці вживає сам об'єкт першим, а
+ * його залежності — після (pg-delta, `plan/phases/action-emitter.js`;
+ * опору звіряє тест на джерелі двигуна). Суб'єкт без схеми й імені (грант,
+ * коментар, роль) структурного посилання не має, тож об'єктом не є.
+ */
+function redefined(
+  action: Pick<
+    EngineAction,
+    "verb" | "produces" | "destroys" | "consumes" | "consumed"
+  >
+): EngineObjectRef | undefined {
+  if (action.verb !== "alter") return undefined
+  if (action.produces.length > 0 || action.destroys.length > 0) return undefined
+  const [subject] = action.consumes
+  const [ref] = action.consumed
+  // Структурне посилання — того самого суб'єкта лише тоді, коли його вид
+  // збігається: посилання без схеми й імені `consumed` пропускає
+  if (subject === undefined || ref === undefined) return undefined
+  return kindOf(subject) === ref.kind ? ref : undefined
+}
+
+const sameRef = (a: EngineObjectRef, b: EngineObjectRef): boolean =>
+  a.kind === b.kind &&
+  a.schema === b.schema &&
+  a.table === b.table &&
+  a.name === b.name
+
+/**
+ * Id кроків двигуна, що знімають чи перевизначають на місці чужий об'єкт
+ * без даних (платформна спека §6.6): будь-якого виду поза видами з даними
+ * (`DATA_KINDS`), якого немає в останньому застосованому стані (`applied`;
+ * першого застосування — жодного). Такий об'єкт створила не платформа, тож
+ * його зняття потребує дозволу, хоч би його й створював знову пізніший
+ * крок під тим самим ім'ям (виняток «заміна» для нього не діє), і так само
+ * його перевизначення на місці. Об'єкт, який створює раніша дія того самого
+ * плану, — власний. `original` повертає посилання до імен `applied`
+ * (перейменування наміру промоції); без нього імена дій — імена `applied`.
+ * Рахується з дій двигуна до `classifySteps`, бо результат — його вхід;
+ * злиття дій у кроки його не змінює. `offset` — кількість кроків перед
+ * діями двигуна.
+ */
+export function foreignChanges(
+  actions: readonly Pick<
+    EngineAction,
+    | "verb"
+    | "produces"
+    | "destroys"
+    | "consumes"
+    | "consumed"
+    | "produced"
+    | "destroyed"
+  >[],
+  applied: CatalogModel | undefined,
+  offset: number,
+  original: (ref: EngineObjectRef) => EngineObjectRef = (ref) => ref
+): Set<string> {
+  const foreign = (ref: EngineObjectRef) =>
+    !DATA_KINDS.has(ref.kind) &&
+    (applied === undefined || !inApplied(original(ref), applied))
+  const out = new Set<string>()
+  const created: EngineObjectRef[] = []
+  actions.forEach((action, i) => {
+    const altered = redefined(action)
+    if (
+      action.destroyed.some(foreign) ||
+      (altered !== undefined &&
+        foreign(altered) &&
+        !created.some((c) => sameRef(c, altered)))
+    )
+      out.add(stepId(offset + i))
+    created.push(...action.produced)
+  })
+  return out
+}
+
 /**
  * Тип колонки з моделі: рядок `format_type()` розбирає той самий парсер, що
  * й оператор, тож обидва боки зводяться до одного дерева типу.
@@ -624,7 +776,7 @@ export function classifySteps(
   target: CatalogModel,
   parse: SqlParser,
   offset = 0,
-  o: { noReplacement?: ReadonlySet<string> } = {}
+  o: { noReplacement?: ReadonlySet<string>; foreign?: ReadonlySet<string> } = {}
 ): PlanStep[] {
   const facts: Facts = {
     indexes: target.tables.flatMap((t) =>
@@ -654,11 +806,17 @@ export function classifySteps(
         backfill: action.backfill,
       }
     const base = baseClass(action, parsed(id, action.sql, parse), facts)
-    // Виняток не перекриває втрату даних: `destructive` сюди не доходить
-    const cls =
-      base === "relaxation" &&
-      o.noReplacement?.has(id) !== true &&
-      isReplacement(action, actions.slice(index + 1))
+    // Виняток не перекриває втрату даних: `destructive` сюди не доходить.
+    // Зняття чужого об'єкта — щонайменше послаблення з дозволом, а виняток
+    // «заміна» для нього не діє
+    const foreign = o.foreign?.has(id) === true
+    const cls: StepClass = foreign
+      ? base === "destructive"
+        ? base
+        : "relaxation"
+      : base === "relaxation" &&
+          o.noReplacement?.has(id) !== true &&
+          isReplacement(action, actions.slice(index + 1))
         ? "catalogOnly"
         : base
     return {
