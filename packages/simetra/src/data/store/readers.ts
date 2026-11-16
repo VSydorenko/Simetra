@@ -17,6 +17,16 @@ import {
   tracked,
   type CoreSource,
 } from "./source"
+import {
+  EMPTY_WINDOW,
+  WINDOW_PAGE,
+  fetchPage,
+  keysOfPages,
+  cursorOf,
+  type WindowCursor,
+  type WindowLower,
+  type WindowState,
+} from "./window"
 import type {
   GenerationToken,
   CoreLimits,
@@ -93,6 +103,11 @@ export interface ReaderTarget {
   truncated: boolean
   atEnd: boolean
   /**
+   * The pages of a `window`, or of a `full` that went over its limit; the
+   * layout is their keys in order. Undefined for every other form.
+   */
+  window: WindowState | undefined
+  /**
    * The start epoch of the last section read the session accepted (section
    * form only): a `hide` of the owner after it makes the subset stale (plan
    * B3-3, Р11).
@@ -127,9 +142,6 @@ export async function gated<C extends ReaderContext>(
     return true
   }
 }
-
-/** The size of the first page of a truncated `full` (P4-B plan П5). */
-const WINDOW_PAGE = 100
 
 function lineOf(
   section: CatalogEntrySection,
@@ -181,13 +193,17 @@ function missed(
   else ops.clearOwner(scope, o, key)
 }
 
-/** Writes the read targets of `include` and moves the view's target ownership to them. */
+/**
+ * Writes the read targets of `include` and moves the view's target ownership
+ * to them; `keep` only adds (the page of a window joins the held ones).
+ */
 export function applyIncluded(
   ctx: ReaderContext,
   scope: Scope,
   s: ReaderTarget,
   included: Included,
-  readEpoch: number
+  readEpoch: number,
+  keep = false
 ) {
   const { ops } = ctx
   const next = new Map<ObjectName, Set<Key>>()
@@ -202,13 +218,18 @@ export function applyIncluded(
     for (const key of keys) {
       if (!got.has(key)) missed(ops, scope, target, key, readEpoch)
     }
+    const prev = s.included.get(name) ?? new Set<Key>()
     next.set(
       name,
-      diffOwn(ops, scope, target, s.included.get(name) ?? new Set(), keys)
+      diffOwn(ops, scope, target, prev, keep ? [...prev, ...keys] : keys)
     )
   }
   for (const [name, keys] of s.included) {
     if (next.has(name)) continue
+    if (keep) {
+      next.set(name, keys)
+      continue
+    }
     const target = ctx.objectOf(name)
     for (const key of keys) ops.disown(scope, target, key)
   }
@@ -351,6 +372,25 @@ async function readFull(
   )
   const values = new Map(kept.map((r) => [r.key, r.values] as const))
   return (scope) => {
+    // Понад межу `full` стає справжнім вікном: перша сторінка — початок
+    // серверного порядку, далі читають `loadAfter`/`loadBefore` (Р1).
+    if (over) {
+      writePage(ctx, scope, s, {
+        rows: kept,
+        included,
+        position: "replace",
+        lower: () => ({ kind: "start" }),
+        end: false,
+        readEpoch,
+      })
+      s.truncated = true
+      ctx.log({
+        kind: "full-truncated",
+        object: o.name,
+        limit: limits.fullLimit,
+      })
+      return
+    }
     for (const row of kept) ops.put(scope, o, row, readEpoch, false)
     s.owned = diffOwn(ops, scope, o, s.owned, values.keys())
     // Рядок, чий `put` відхилено, лишається `removed`: його цілі не беремо
@@ -369,22 +409,181 @@ async function readFull(
       ),
       readEpoch
     )
-    s.strategy = over ? "window" : "full"
-    s.truncated = over
-    s.atEnd = !over
-    setLayout(
-      s,
-      over
-        ? kept.map((r) => r.key).filter((k) => s.owned.has(k))
-        : fullLayout(s, values)
-    )
-    if (over)
-      ctx.log({
-        kind: "full-truncated",
-        object: o.name,
-        limit: limits.fullLimit,
-      })
+    s.strategy = "full"
+    s.truncated = false
+    s.atEnd = true
+    s.window = undefined
+    setLayout(s, fullLayout(s, values))
   }
+}
+
+/** One page of a window to write inside a `commit`. */
+interface PageWrite {
+  readonly rows: readonly ServerRow[]
+  readonly included: Included
+  readonly position: "replace" | "append" | "prepend"
+  /** The lower bound of the page, from its first row that joins the window. */
+  readonly lower: (first: ServerRow | undefined) => WindowLower
+  /** The read went past the order's end in its direction. */
+  readonly end: boolean
+  readonly readEpoch: number
+}
+
+/**
+ * Writes a page of a window: the rows and their `include` targets go the
+ * store's ordinary ways, the window keeps only the keys and the place (Р8).
+ * A new chain (`replace`) owns its rows before the old one lets go, in this
+ * same `commit` (Р9); a page joins the edge with the rows the window does not
+ * already hold.
+ */
+function writePage(
+  ctx: ReaderContext,
+  scope: Scope,
+  s: ReaderTarget,
+  page: PageWrite
+) {
+  const { ops } = ctx
+  const { form } = s
+  const o = form.object
+  const prev = s.window ?? EMPTY_WINDOW
+  const replace = page.position === "replace"
+  for (const row of page.rows) ops.put(scope, o, row, page.readEpoch, false)
+  const fresh = replace
+    ? [...page.rows]
+    : page.rows.filter((row) => !s.layoutSet.has(row.key))
+  s.owned = diffOwn(ops, scope, o, s.owned, [
+    ...(replace ? [] : s.owned),
+    ...fresh.map((row) => row.key),
+  ])
+  const alive = page.rows.filter(
+    (row) => o.rows.get(row.key)?.removed === undefined
+  )
+  applyIncluded(
+    ctx,
+    scope,
+    s,
+    aliveIncluded(
+      page.included,
+      includeKeys(
+        form.include,
+        alive.map((row) => row.values)
+      )
+    ),
+    page.readEpoch,
+    !replace
+  )
+  const keys = fresh.map((row) => row.key).filter((key) => s.owned.has(key))
+  const generation = prev.generation + 1
+  const added =
+    keys.length === 0 ? [] : [{ keys, lower: page.lower(fresh[0]), generation }]
+  const pages = replace
+    ? added
+    : page.position === "append"
+      ? [...prev.pages, ...added]
+      : [...added, ...prev.pages]
+  s.window = {
+    pages,
+    chain: replace ? prev.chain + 1 : prev.chain,
+    target: replace ? "start" : prev.target,
+    atStart: replace
+      ? true
+      : page.position === "prepend"
+        ? page.end
+        : prev.atStart,
+    generation: keys.length === 0 ? prev.generation : generation,
+  }
+  if (page.position !== "prepend") s.atEnd = page.end
+  s.strategy = "window"
+  s.truncated = false
+  setLayout(s, keysOfPages(pages))
+}
+
+async function readWindowIncluded(
+  ctx: ReaderContext,
+  form: Form,
+  rows: readonly ServerRow[],
+  token: GenerationToken
+): Promise<Included | undefined> {
+  const wanted = includeKeys(
+    form.include,
+    rows.map((row) => row.values)
+  )
+  if (!token.valid) return undefined
+  return readIncluded(
+    ctx.source,
+    form.include,
+    wanted,
+    ctx.limits.keysPerRequest
+  )
+}
+
+/** The first page of a window: a new chain from the start of the order. */
+async function readWindowFirst(
+  ctx: ReaderContext,
+  s: ReaderTarget,
+  readEpoch: number,
+  token: GenerationToken
+): Promise<Write> {
+  const fetched = await fetchPage(
+    ctx.source,
+    s.form,
+    { direction: "after" },
+    token
+  )
+  if (fetched === undefined) return NOTHING
+  const included = await readWindowIncluded(ctx, s.form, fetched.rows, token)
+  if (included === undefined) return NOTHING
+  return (scope) =>
+    writePage(ctx, scope, s, {
+      rows: fetched.rows,
+      included,
+      position: "replace",
+      lower: () => ({ kind: "start" }),
+      end: fetched.end,
+      readEpoch,
+    })
+}
+
+/**
+ * The page next to an edge of the window (`loadAfter` / `loadBefore`): read
+ * from `cursor`, the visible value of the edge row. A page read backwards
+ * knows no previous page, so its lower bound is its own first row.
+ */
+export async function readWindowMore(
+  ctx: ReaderContext,
+  s: ReaderTarget,
+  readEpoch: number,
+  token: GenerationToken,
+  direction: "after" | "before",
+  cursor: WindowCursor
+): Promise<Write> {
+  const { form } = s
+  const fetched = await fetchPage(
+    ctx.source,
+    form,
+    { direction, cursor },
+    token
+  )
+  if (fetched === undefined) return NOTHING
+  const included = await readWindowIncluded(ctx, form, fetched.rows, token)
+  if (included === undefined) return NOTHING
+  const spec = form.spec as Extract<ViewSpec, { kind: "full" | "window" }>
+  const keyName = form.object.entry.keyName
+  return (scope) =>
+    writePage(ctx, scope, s, {
+      rows: fetched.rows,
+      included,
+      position: direction === "after" ? "append" : "prepend",
+      lower: (first) =>
+        direction === "after" || first === undefined
+          ? { kind: "after", cursor }
+          : {
+              kind: "from",
+              cursor: cursorOf(spec.orderBy ?? [], keyName, first.values),
+            },
+      end: fetched.end,
+      readEpoch,
+    })
 }
 
 async function readKeysForm(
@@ -501,5 +700,7 @@ export function readFormWrite(
       return readSection(ctx, s, readEpoch)
     case "full":
       return readFull(ctx, s, readEpoch, token)
+    case "window":
+      return readWindowFirst(ctx, s, readEpoch, token)
   }
 }
