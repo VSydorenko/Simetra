@@ -15,7 +15,7 @@
 | № | Рішення | Вплив на спеку |
 | --- | --- | --- |
 | Р2 | Позначку «може бути застарілим» знімка показу ставить хук через 500 мс; ядро дає `stale` одразу. `removed`, `purged`, `hidden` — у тому самому кадрі | немає |
-| Р6 | Хуки й провайдер — окремий вхід `simetra/data/react` (`simetra/data` без `react`). DOM-типи — окремий проєкт `tsconfig.dom.json` для `src/ui/**`, `src/data/react/**` і jsdom-тестів; основний `tsconfig.json` їх виключає, `typecheck` перевіряє обидва (інакше DOM-глобали побачив би T0). Публічний тримач — `runtime/holder.ts`; `runtime/handle.ts` лишається внутрішнім | немає |
+| Р6 | Хуки й провайдер — окремий вхід `simetra/data/react` (`simetra/data` без `react`). DOM-типи — окремий проєкт `tsconfig.dom.json` для `src/ui/**`, `src/data/react/**` і jsdom-тестів; основний `tsconfig.json` їх виключає, `typecheck` перевіряє обидва (інакше DOM-глобали побачив би T0). Публічний тримач — `runtime/holder.ts`; `runtime/handle.ts` лишається внутрішнім | §3, §12 рядок пакування (задача 0 B3-3) |
 | Р7 | `@tanstack/react-virtual` — необов'язковий peer входу `./ui` з точним dev-піном і групою syncpack `sameRange`; вхід tsdown і `publishConfig.exports` `./ui` (dev-експорт `./ui` уже є) | §3 (задача 0) |
 
 ## Частини й задачі
