@@ -92,6 +92,12 @@ export interface ReaderTarget {
   strategy: "full" | "window" | undefined
   truncated: boolean
   atEnd: boolean
+  /**
+   * The start epoch of the last section read the session accepted (section
+   * form only): a `hide` of the owner after it makes the subset stale (plan
+   * B3-3, Р11).
+   */
+  sectionRead: number | undefined
 }
 
 /** Writes a read result inside one `commit`. */
@@ -443,6 +449,9 @@ async function readSection(
   })
   const lines = result.rows.map((values) => lineOf(section, values))
   return (scope) => {
+    // Читання прийнято (шлюз епохи пройдено), навіть коли сховище відкине
+    // рядки: свіжість ТЧ-підмножини міряється епохою цього читання.
+    s.sectionRead = readEpoch
     // Невидимий власник — рядків ТЧ не показуємо.
     if (result.ownerVersion === undefined) {
       ops.clearOwner(scope, o, spec.owner)

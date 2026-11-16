@@ -89,11 +89,12 @@ export function computeRowView(
   }
   const shown = visibleRow(e)
   const values = shown ?? EMPTY_VALUES
-  const { minVersion, disconnect, seen, epoch } = e.stale
+  const { minVersion, disconnect, hidden: mark, epoch } = e.stale
+  const hidden = mark !== undefined
   const state =
     minVersion !== undefined ||
     disconnect !== undefined ||
-    seen !== undefined ||
+    hidden ||
     epoch !== undefined
       ? "stale"
       : "synced"
@@ -116,6 +117,7 @@ export function computeRowView(
     base !== undefined &&
     base.version === e.version &&
     base.state === state &&
+    (base.hidden === true) === hidden &&
     base.values === nextValues &&
     base.staleFields === staleFields &&
     base.refs === undefined
@@ -127,6 +129,7 @@ export function computeRowView(
     values: nextValues === values ? Object.freeze({ ...values }) : nextValues,
     state,
     staleFields,
+    ...(hidden ? { hidden: true as const } : {}),
   })
 }
 
@@ -143,6 +146,7 @@ export function withRefs(
     prev.key === base.key &&
     prev.version === base.version &&
     prev.state === base.state &&
+    prev.hidden === base.hidden &&
     prev.values === base.values &&
     prev.staleFields === base.staleFields &&
     prev.refs !== undefined &&

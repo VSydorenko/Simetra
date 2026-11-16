@@ -135,8 +135,11 @@ export function createSectionStore(options: {
   ): boolean {
     const id = keyId(object, owner)
     const e = rows.get(owner)
-    // Власника без запису ядро могло забути разом з його надгробком.
-    if (e === undefined && epochs.evictedSince(id, readEpoch)) return true
+    // Власника без запису ядро могло забути разом з його надгробком. З
+    // записом — витіснену позначку `hide`: шапку відтоді могли вставити чи
+    // перечитати (позначку знято), а рядки ТЧ з читання, старшого за
+    // горизонт ключа, показали б те, що права сховали.
+    if (epochs.evictedSince(id, readEpoch)) return true
     // Витіснений надгробок пари скоупу власника, якого шапка в сховищі не
     // підтверджує (немає запису чи шапка в іншому скоупі), міг належати purge.
     if (
@@ -147,8 +150,12 @@ export function createSectionStore(options: {
       return true
     // Шапку сховано горизонтом від цього чи новішого читання: рядки ТЧ з
     // того самого читання показали б те, що шапка ховає.
-    if (e?.stale.seen !== undefined && readEpoch < e.stale.seen.epoch)
+    if (e?.stale.hidden !== undefined && readEpoch < e.stale.hidden.epoch)
       return true
+    // Позначка `hide` ключа пережила запис шапки (`disown`, `disownWeak`
+    // знімка): без запису рядки ТЧ з читання, старшого за `hide`, показали б
+    // те, що права вже сховали.
+    if (epochs.hiddenSince(id, readEpoch)) return true
     if (epochs.buriedSince(id, readEpoch)) return true
     const lastPair = epochs.lastPairBurial(object)
     if (
