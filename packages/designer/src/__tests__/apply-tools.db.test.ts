@@ -641,11 +641,11 @@ describe.concurrent("apply", () => {
   })
 
   it("apply reports a failed step and leaves the marker and the ledger", async () => {
-    // Збій, що проходить план: pg-delta перестворює генеровану колонку
-    // одним `ADD COLUMN … NOT NULL`, план її не рахує, і `NULL` з виразу
-    // дає сирий 23502 на кроці (борг `ADD COLUMN … NOT NULL`)
+    // Збій, якого план не передбачить: рядки на плані задовольняють новий
+    // CHECK, а рядок, що його порушує, з'являється між планом і
+    // застосуванням — `ADD CONSTRAINT` дає сирий 23514 на кроці
     const NOTES = "custom-tables/Notes/Notes.meta.json"
-    const notes = (expression: string, over: Record<string, unknown> = {}) =>
+    const notes = (checks: Record<string, unknown>[]) =>
       customTable("Notes", {
         id: uuid(9201),
         physicalName: "notes",
@@ -664,28 +664,23 @@ describe.concurrent("apply", () => {
             type: "String",
             length: 20,
           },
-          {
-            id: uuid(9204),
-            name: "g",
-            physicalName: "g",
-            type: "Text",
-            generated: { expression },
-            ...over,
-          },
         ],
         primaryKey: { name: "notes_pkey", columns: ["id"] },
+        checks,
       })
     await inTarget(EMPTY, async (url) => {
-      const dir = await projectWith({ [NOTES]: notes("upper(note)") })
+      const dir = await projectWith({ [NOTES]: notes([]) })
       await establish(dir, url)
-      await query(
-        url,
-        "insert into app.notes (id, note) values (gen_random_uuid(), null)"
-      )
       await writeMetadata(dir, {
-        [NOTES]: notes("lower(note)", { notNull: true }),
+        [NOTES]: notes([
+          { name: "notes_note_check", expression: "note <> 'x'" },
+        ]),
       })
       const data = await planned(dir, url)
+      await query(
+        url,
+        "insert into app.notes (id, note) values (gen_random_uuid(), 'x')"
+      )
       const state = async () => ({
         marker: await query(
           url,
@@ -710,7 +705,7 @@ describe.concurrent("apply", () => {
       )
       expect(r.ok).toBe(false)
       expect(errors(r)).toEqual(["apply.step-failed"])
-      expect(r.diagnostics[0]!.params).toMatchObject({ sqlstate: "23502" })
+      expect(r.diagnostics[0]!.params).toMatchObject({ sqlstate: "23514" })
       // Невдале застосування даних не має: лише діагностика
       expect(r.data).toBeUndefined()
       expect(await state()).toEqual(before)
