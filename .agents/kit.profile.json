@@ -2,7 +2,7 @@
   "pr": {
     "base": "main",
     "mergeMethod": "merge",
-    "archiveDir": "~/simetra-private/ledgers",
+    "archiveDir": ".agents/private/simetra-private/ledgers",
     "waitTimeout": 1800
   },
   "tests": {
