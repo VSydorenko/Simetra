@@ -106,7 +106,7 @@ function mappedOrRefused<T>(
   throw new Defect(result.unknown)
 }
 
-/** Відмова мапінгу — у форму передачі з `object` операції чи запиту (Р3). */
+/** Відмова мапінгу — у форму передачі з `object` операції чи запиту. */
 function mappingRefusal(
   index: CatalogIndex,
   object: string,

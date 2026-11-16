@@ -774,7 +774,7 @@ export function leakMessage(
         `  database facts now: ${name}; restore the facts from before the run by hand (ALTER DATABASE … ALLOW_CONNECTIONS / IS_TEMPLATE / OWNER TO, GRANT / REVOKE)`,
       ]
     if (kind === "containers") return [`  docker rm -f -v ${name}`]
-    // Порожнити бакет прибиральник ще не вміє (Р5): це робить людина
+    // Порожнити бакет прибиральник ще не вміє: це робить людина
     if (kind === "buckets")
       return [`  bucket ${name}: empty and delete in Garage`]
     return [`  DROP EXTENSION "${local}";  -- in database ${database}`]

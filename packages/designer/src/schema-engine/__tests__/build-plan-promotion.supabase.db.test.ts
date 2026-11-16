@@ -123,7 +123,7 @@ describe.concurrent("buildPlan", () => {
     })
 
     it("refuses through TRUNCATE granted to the service role", async () => {
-      // Сервісної ролі профіль postgres не має (Р5): той самий гейт шляху
+      // Сервісної ролі профіль postgres не має: той самий гейт шляху
       // запису для ролі користувача — кейс «refuses through TRUNCATE»
       // у `build-plan-promotion.db.test.ts`
       const outcome = await planPromotion(await promoted(), {

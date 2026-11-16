@@ -185,7 +185,7 @@ describe("encodeAttributes", () => {
   })
 })
 
-// `maxBytes` (Рд26, Р7): міра — `jsonBytes` закодованого значення форми
+// `maxBytes` (Рд26): міра — `jsonBytes` закодованого значення форми
 // передачі, тож лапки JSON, екранування й UTF-8 кирилиці входять у межу.
 describe("encodeAttributes: maxBytes", () => {
   const INPUT = { ...HEADER, maxBytes: true } as const
@@ -211,7 +211,7 @@ describe("encodeAttributes: maxBytes", () => {
     }
   )
 
-  // Р7: міра — форма, якою значення піде дротом, а не форма входу.
+  // Міра — форма, якою значення піде дротом, а не форма входу.
   // `Numeric(p, s)` база доповнює до `s` дробових цифр, `DateTime` кодек
   // нормалізує до фіксованої ширини UTC; надісланий базі вхід — без змін.
   it.each<[string, Partial<CatalogEntryAttribute>, unknown, number]>([

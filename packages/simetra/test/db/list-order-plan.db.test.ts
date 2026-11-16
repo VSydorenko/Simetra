@@ -82,7 +82,7 @@ const integer = (
 })
 
 /**
- * Довідник скоупу `org` з усіма видами індексу порядку (Р2): `indexed`,
+ * Довідник скоупу `org` з усіма видами індексу порядку: `indexed`,
  * `unique`, складений з `desc`, `indexed` `Ref`; `description` — стандартний.
  */
 function listingLayer(): Layer {
@@ -137,7 +137,7 @@ interface Case {
   readBudget?: number
   /**
    * Межу `Index Cond` і бюджет читання не судити, лише записати числа
-   * («Виміри» плану): відоме обмеження Р8(2) для nullable-колонок.
+   * («Виміри» плану): відоме обмеження для nullable-колонок.
    */
   record?: true
 }
@@ -185,7 +185,7 @@ const CASES: Case[] = [
     orderBy: [{ attribute: "description", direction: "asc" }],
     index: "org_id, description, id",
     sort: "none",
-    // Стандартне найменування — NOT NULL DEFAULT '' (Р9): keyset без гілки
+    // Стандартне найменування — NOT NULL DEFAULT '': keyset без гілки
     // NULL, межа — діапазон індексу, критерій як у `a` (значення унікальні).
     bound: "description",
     group: 1,

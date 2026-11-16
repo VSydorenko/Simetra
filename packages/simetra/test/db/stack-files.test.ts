@@ -218,7 +218,7 @@ describe.each(STACKS)("centrifugo.json of the $title", ({ dir }) => {
     expect(config).toMatchObject({ http_api: { disabled: true } })
   })
 
-  // До ПГ-4 немає таблиці outbox і JWKS (Р7): споживач і перевірка токенів
+  // До ПГ-4 немає таблиці outbox і JWKS: споживач і перевірка токенів
   // з'являються разом із генератором конфігу
   it("has no outbox consumer and no client token yet", () => {
     expect(config).not.toHaveProperty("consumers")

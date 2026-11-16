@@ -100,7 +100,7 @@ const DB_ENGINE_PATTERN = {
     "Runtime boundary: simetra production sources import neither pg nor @supabase/pg-delta; the schema engine and database readers live in @simetrajs/designer (designer plan, decision 4).",
 }
 
-// Better Auth і kysely — лише тестова залежність `simetra` (рішення Р2): міграція
+// Better Auth і kysely — лише тестова залежність `simetra`: міграція
 // схеми `better_auth` потрібна DB-тестам, а не споживачеві пакета.
 const TEST_ONLY_AUTH_PATTERN = {
   regex: "^(?:better-auth|kysely)(?:/|$)",

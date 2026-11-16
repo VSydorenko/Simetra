@@ -15,7 +15,7 @@ const TEST_SUPPORT_PATTERN = {
     "simetra test support boundary: only packages/designer/**/__tests__/** may import packages/simetra/test/support (designer plan, decision 12).",
 }
 
-// Better Auth і kysely — тестова залежність `simetra` (рішення Р2): designer їх
+// Better Auth і kysely — тестова залежність `simetra`: designer їх
 // не оголошує, тож production-імпорт зламався б у споживача.
 const TEST_ONLY_AUTH_PATTERN = {
   regex: "^(?:better-auth|kysely)(?:/|$)",

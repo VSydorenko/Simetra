@@ -283,7 +283,7 @@ describe("tier zones", () => {
     ).toEqual([])
   })
 
-  // Better Auth і kysely — лише тестова залежність `simetra` (рішення Р2):
+  // Better Auth і kysely — лише тестова залежність `simetra`:
   // production-джерело, що їх імпортує, зламалося б у споживача
   it("production sources import neither better-auth nor kysely", async () => {
     for (const spec of [

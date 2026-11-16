@@ -1863,7 +1863,7 @@ describe("rights analysis functions", () => {
   })
 
   it("a level covered only by an adopted source has no analysis gate", async () => {
-    // Відоме обмеження Р2d2: глобальні призначення дає лише прийняте
+    // Відоме обмеження: глобальні призначення дає лише прийняте
     // джерело, довідника призначень глобального рівня немає — гейт лише
     // `org`. Власники глобальних призначень — з рядків джерела.
     const adopted = await compiled(adoptedSourcesDomain())

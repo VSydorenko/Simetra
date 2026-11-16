@@ -764,7 +764,7 @@ async function runAttempt(
     const unsupported = await serverVersionRefusal(tx)
     if (unsupported !== undefined)
       throw new AttemptStop("refused", [unsupported])
-    // Р10: власник без BYPASSRLS після плану (ALTER ROLE між планом і
+    // Власник без BYPASSRLS після плану (ALTER ROLE між планом і
     // застосуванням) — відмова до першого кроку, у ledger нічого
     const ownerGate = await checkOwnerAttributes(tx)
     if (ownerGate !== undefined) throw new AttemptStop("refused", [ownerGate])

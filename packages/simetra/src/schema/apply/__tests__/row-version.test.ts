@@ -302,7 +302,7 @@ describe("rowVersionFirstTables", () => {
   })
 })
 
-describe("rewritten tables (Р10)", () => {
+describe("rewritten tables", () => {
   const column = (table: string, name = "total") => ({
     kind: "column",
     schema: "app",

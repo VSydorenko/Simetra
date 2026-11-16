@@ -207,7 +207,7 @@ async function race(
 /**
  * Ціль з моделлю (`withModelTarget`), засіяний актор і сесія для одиночних
  * команд кейсів. Роль команд сесії беруть за `session_user` адреси тестів,
- * тож членства власника в ній не треба (Р1).
+ * тож членства власника в ній не треба.
  */
 async function withCommandTarget(
   model: CompiledModel,

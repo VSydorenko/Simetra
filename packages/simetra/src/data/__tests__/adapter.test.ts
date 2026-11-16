@@ -125,7 +125,7 @@ describe("createServerFunctionAdapter", () => {
     )
   })
 
-  it("declares include support (Р5)", () => {
+  it("declares include support", () => {
     expect(adapterOver(ok(null)).adapter.capabilities.include).toBe(true)
   })
 })

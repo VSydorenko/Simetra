@@ -289,7 +289,7 @@ describe("creatorMember maxBytes", () => {
     creatorMember: { note },
   })
 
-  // Міра — UTF-8 байти `JSON.stringify` значення (Р7): лапки входять у межу.
+  // Міра — UTF-8 байти `JSON.stringify` значення: лапки входять у межу.
   it("accepts a note at maxBytes", () => {
     expect(refusalOf(createRoot("a".repeat(MAX - 2)), compiled)).toBeUndefined()
   })

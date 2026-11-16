@@ -94,7 +94,7 @@ describe("signUp on the postgres stack", () => {
     })
   })
 
-  // Засів під режимом обслуговування (Р16): `signUp` усередині входу
+  // Засів під режимом обслуговування: `signUp` усередині входу
   // власника повертає саме цей вхід, тож гард режиму далі його пропускає
   it.each(["success", "failure"] as const)(
     "inside asSessionLogin of the owner returns the owner login on %s, and the seed after it passes the maintenance guard",

@@ -19,7 +19,7 @@ import { inTarget, ownerLoginOf, waitForLock } from "./support/db"
  * тільки Postgres доводить, що замок версії серіалізує одночасні зміни, а
  * VOLATILE-перевірка бачить свіжий знімок у READ COMMITTED. Кожна сесія —
  * вхід власника (`ownerLoginOf`): режим обслуговування вимагає
- * `session_user` власника функцій прав (Р16).
+ * `session_user` власника функцій прав.
  */
 
 type Carrier = {
