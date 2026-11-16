@@ -4,6 +4,7 @@ import type { CatalogModel, CatalogTable } from "simetra/model"
 import {
   checkPermissions,
   classifySteps,
+  foreignChanges,
   lintSteps,
   requiredPermissions,
   type DriftReport,
@@ -501,7 +502,186 @@ describe("classifySteps", () => {
       })[0]?.class
     ).toBe("catalogOnly")
   })
+})
 
+// #156: зняття об'єкта поза останнім застосованим станом — з дозволом
+describe("foreignChanges", () => {
+  const ref = (kind: string, name: string, table?: string) => ({
+    kind,
+    schema: "app",
+    ...(table === undefined ? {} : { table }),
+    name,
+  })
+  const drop = (...refs: ReturnType<typeof ref>[]) =>
+    action("DROP", {
+      verb: "drop",
+      destroys: refs.map((r) => `${r.kind}:x`),
+      destroyed: refs,
+    })
+  // Перевизначення на місці: суб'єкт — перший серед вжитих (pg-delta)
+  const alter = (...refs: ReturnType<typeof ref>[]) =>
+    action("ALTER", {
+      consumes: refs.map((r) => `${r.kind}:${r.schema}.${r.name}`),
+      consumed: refs,
+    })
+  const applied: CatalogModel = {
+    tables: [
+      {
+        ...UNIQUE.tables[0]!,
+        indexes: [
+          { name: "t_c_idx", unique: false, keys: [{ column: "c" }] },
+        ] as CatalogTable["indexes"],
+        checks: [{ name: "t_c_check", expression: "c <> ''" }],
+      },
+    ],
+    enumTypes: [],
+    units: [
+      {
+        class: "trigger",
+        identity: "trigger:app.t.tr",
+        schema: "app",
+        name: "tr",
+        sql: "",
+      },
+      {
+        class: "domain",
+        identity: "domain:app.d",
+        schema: "app",
+        name: "d",
+        sql: "",
+      },
+      {
+        class: "function",
+        identity: "function:app.f()",
+        schema: "app",
+        name: "f",
+        sql: "",
+      },
+    ],
+  }
+
+  it.each([
+    ["an index", ref("index", "t_c_idx")],
+    ["a constraint", ref("constraint", "t_c_check", "t")],
+    ["a trigger", ref("trigger", "tr", "t")],
+    ["a function", ref("function", "f")],
+    // Двигун адресує обмеження домену полем `table` з іменем домену
+    ["a constraint of a domain", ref("constraint", "d_check", "d")],
+  ])("keeps the exception for %s of the last applied state", (_n, own) => {
+    expect(foreignChanges([drop(own)], applied, 0)).toEqual(new Set())
+  })
+
+  it.each([
+    ["an index", ref("index", "other_idx")],
+    ["a constraint of another table", ref("constraint", "t_c_check", "u")],
+    [
+      "a trigger with the same name on another table",
+      ref("trigger", "tr", "u"),
+    ],
+    ["a policy", ref("policy", "p", "t")],
+    ["a rule", ref("rule", "r", "t")],
+  ])("drops the exception for %s outside it", (_n, foreign) => {
+    // Наскрізна нумерація: дія двигуна після двох кроків наміру — `s3`
+    expect(foreignChanges([drop(), drop(foreign)], applied, 1)).toEqual(
+      new Set(["s3"])
+    )
+  })
+
+  it("maps a reference to the names of the applied state", () => {
+    // Намір промоції перейменував таблицю: marker знає її під старим ім'ям
+    const renamed = ref("constraint", "t_c_check", "t_new")
+    const back = (r: ReturnType<typeof ref>) => ({ ...r, table: "t" })
+    expect(foreignChanges([drop(renamed)], applied, 0)).toEqual(new Set(["s1"]))
+    expect(foreignChanges([drop(renamed)], applied, 0, back)).toEqual(new Set())
+  })
+
+  it("classifies a foreign drop as a relaxation, recreated or not", () => {
+    // Неунікальний індекс сам по собі нічого не послаблює, але чужий — з
+    // дозволом; виняток «заміна» для чужого не діє
+    const dropIndex = action("DROP INDEX app.other_idx", {
+      verb: "drop",
+      destroys: ["index:app.other_idx"],
+      destroyed: [ref("index", "other_idx")],
+    })
+    const createIndex = action("CREATE INDEX other_idx ON app.t (x)", {
+      verb: "create",
+      produces: ["index:app.other_idx"],
+    })
+    const foreign = foreignChanges([dropIndex, createIndex], applied, 0)
+    expect(
+      classifySteps([dropIndex, createIndex], UNIQUE, parse, 0, {
+        foreign,
+      }).map((s) => s.class)
+    ).toEqual(["relaxation", "catalogOnly"])
+    // Без позначки той самий крок — `catalogOnly`
+    expect(
+      classifySteps([dropIndex, createIndex], UNIQUE, parse).map((s) => s.class)
+    ).toEqual(["catalogOnly", "catalogOnly"])
+  })
+
+  it("marks an in-place redefinition of a foreign object", () => {
+    // Функцію двигун перевизначає `CREATE OR REPLACE`: дія `alter` без
+    // produces/destroys, суб'єкт — перший серед вжитих
+    expect(foreignChanges([alter(ref("function", "g"))], applied, 0)).toEqual(
+      new Set(["s1"])
+    )
+    expect(
+      foreignChanges([alter(ref("policy", "p", "t"))], undefined, 0)
+    ).toEqual(new Set(["s1"]))
+    // Власна функція, чиє тіло читає чужу таблицю: залежність — не суб'єкт
+    expect(
+      foreignChanges(
+        [alter(ref("function", "f"), ref("table", "other"))],
+        applied,
+        0
+      )
+    ).toEqual(new Set())
+    expect(
+      foreignChanges(
+        [alter(ref("trigger", "tr", "t"), ref("function", "g"))],
+        applied,
+        0
+      )
+    ).toEqual(new Set())
+  })
+
+  it("leaves an object the same plan creates to its own plan", () => {
+    // Новий об'єкт плану (`OWNER TO`, `REVOKE` гігієни після створення)
+    const create = action("CREATE FUNCTION app.g()", {
+      verb: "create",
+      produces: ["function:app.g()"],
+      produced: [ref("function", "g")],
+    })
+    expect(
+      foreignChanges([create, alter(ref("function", "g"))], undefined, 0)
+    ).toEqual(new Set())
+    // Суб'єкт без схеми й імені (грант): структурного посилання немає
+    expect(
+      foreignChanges(
+        [
+          action("REVOKE", {
+            consumes: ["acl:x", "function:app.g()"],
+            consumed: [ref("function", "g")],
+          }),
+        ],
+        applied,
+        0
+      )
+    ).toEqual(new Set())
+  })
+
+  it("drops the exception for every object on the first apply", () => {
+    expect(
+      foreignChanges([drop(ref("index", "t_c_idx"))], undefined, 0)
+    ).toEqual(new Set(["s1"]))
+    // Стовпець — не об'єкт заміни: його клас дає втрата даних
+    expect(
+      foreignChanges([drop(ref("column", "c", "t"))], undefined, 0)
+    ).toEqual(new Set())
+  })
+})
+
+describe("classifySteps types", () => {
   it.each(TYPE_CASES)("type change %s", (_name, change, cls) => {
     const step = action(`ALTER TABLE app.t ${change}`, { rewriteRisk: true })
     expect(classifySteps([step], UNIQUE, parse).map((s) => s.class)).toEqual([

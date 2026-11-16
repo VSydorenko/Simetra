@@ -21,7 +21,7 @@ import type {
   EngineObjectRef,
 } from "../../engine"
 import { applyDiagnostic } from "../diagnostic"
-import { stepId, type PlanStep } from "../steps"
+import { constraintNames, stepId, type PlanStep } from "../steps"
 import { tableKey } from "../table-key"
 import { addedColumns, type RenameIntent } from "./intent"
 
@@ -330,13 +330,6 @@ export function adoptedReplacements(
   })
   return out
 }
-
-const constraintNames = (t: CatalogTable): string[] => [
-  ...(t.primaryKey === undefined ? [] : [t.primaryKey.name]),
-  ...t.uniques.map((u) => u.name),
-  ...t.checks.map((c) => c.name),
-  ...t.foreignKeys.map((f) => f.name),
-]
 
 /** Поля колонки, зміну яких не покриває жоден запис (спека промоції §8). */
 const UNCOVERED_COLUMN_FIELDS = ["identity", "generated", "collation"] as const
