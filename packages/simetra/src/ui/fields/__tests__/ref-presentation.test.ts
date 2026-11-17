@@ -15,47 +15,38 @@ const row = (values: Record<string, unknown>): RowView => ({
   staleFields: [],
 })
 // Власні реквізити `description` і `code` є завжди: рішення за `presentation`.
-const target = (presentation?: { description?: string; code?: string }) =>
+const target = (attribute?: string) =>
   catalogEntry({
     attributes: ["description", "code"].map((name) =>
       catalogEntryAttribute({ name, column: name })
     ),
-    presentation,
+    presentation: attribute === undefined ? undefined : { attribute },
   })
 
 describe("refPresentation", () => {
   it.each([
-    [
-      "description",
-      target({ description: "description", code: "code" }),
-      "Acme",
-    ],
-    ["code", target({ code: "code" }), "C-1"],
+    ["description", target("description"), "Acme"],
+    ["code", target("code"), "C-1"],
     ["ключ (власний description не береться)", target(), KEY],
-  ])("гілка %s", (_, entry, expected) => {
+  ])("основне представлення: %s", (_, entry, expected) => {
     expect(
       refPresentation(row({ description: "Acme", code: "C-1" }), entry)
     ).toBe(expected)
   })
 
-  it("порожній description поступається коду", () => {
+  it("порожнє основне значення — ключ", () => {
     expect(
       refPresentation(
         row({ description: "", code: "C-1" }),
-        target({ description: "description", code: "code" })
+        target("description")
       )
-    ).toBe("C-1")
+    ).toBe(KEY)
   })
 
   it("рядок, якого немає чи прибрано, — порожній текст", () => {
-    expect(refPresentation(null, target({ description: "description" }))).toBe(
-      ""
-    )
+    expect(refPresentation(null, target("description"))).toBe("")
     expect(
-      refPresentation(
-        { key: KEY, state: "removed" },
-        target({ description: "description" })
-      )
+      refPresentation({ key: KEY, state: "removed" }, target("description"))
     ).toBe("")
   })
 })

@@ -90,7 +90,7 @@ describe("FieldView — таблиця спеки П4-D §5.3", () => {
       state: "synced",
       staleFields: [],
     }
-    const entry = catalogEntry({ presentation: { description: "description" } })
+    const entry = catalogEntry({ presentation: { attribute: "description" } })
     const { container } = render(
       createElement(FieldView, {
         attribute: attr({ type: "Ref" }),

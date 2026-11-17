@@ -209,16 +209,11 @@ export const catalogEntrySchema = z.strictObject({
    */
   signal: z.boolean(),
   /**
-   * Logical names of the standard attributes a `Ref` to the object shows:
-   * derived from the kind registry's standard columns, absent when the kind and
-   * its settings give none (P4-D spec §5.3).
+   * The attribute that represents the object in a `Ref` text (its logical
+   * name): the main presentation, derived from the kind registry's standard
+   * columns; absent when the kind gives none (P4-D spec §5.3).
    */
-  presentation: z
-    .strictObject({
-      description: z.string().optional(),
-      code: z.string().optional(),
-    })
-    .optional(),
+  presentation: z.strictObject({ attribute: z.string() }).optional(),
   attributes: z.array(catalogEntryAttributeSchema),
   tabularSections: z.array(catalogEntrySectionSchema),
 })

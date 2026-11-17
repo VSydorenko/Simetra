@@ -27,6 +27,7 @@ import {
   type EntityField,
   type ValueSource,
 } from "./entity-fields"
+import type { PresentationBlock } from "./presentation"
 import { sha256HexSync } from "./sha256"
 
 /**
@@ -140,7 +141,10 @@ function runtimeObject(
     versionColumn,
     versionName: fieldOf(fields, versionColumn).name,
     signal: isSignalObject(facts.model, object.id),
-    ...presentationOf(fields),
+    ...presentationOf(
+      facts.model.presentation.objects.find((p) => p.objectId === object.id),
+      fields
+    ),
     ...(scope?.origin.scopeKindId === undefined
       ? {}
       : { scopeKindId: scope.origin.scopeKindId, scopeColumn: scope.name }),
@@ -262,22 +266,21 @@ function rootCreate(rootId: string, model: CompiledModel): RuntimeRootCreate {
   return creator === undefined ? {} : { membership: creator.membership }
 }
 
-// Представлення посилання — факт стандартних колонок виду, а не імені: власний
+// Основне представлення — з блоку подання (`mainPresentation`, типово
+// `Description`) і стандартних колонок виду, а не з імені реквізиту: власний
 // реквізит `description` у виду без стандартного найменування його не підміняє.
-function presentationOf(fields: readonly EntityField[]): {
-  presentation?: { description?: string; code?: string }
-} {
-  const named = (logicalName: string) =>
-    fields.find((f) => f.standard?.logicalName === logicalName)?.name
-  const description = named("description")
-  const code = named("code")
-  if (description === undefined && code === undefined) return {}
-  return {
-    presentation: {
-      ...(description === undefined ? {} : { description }),
-      ...(code === undefined ? {} : { code }),
-    },
-  }
+function presentationOf(
+  block: PresentationBlock | undefined,
+  fields: readonly EntityField[]
+): { presentation?: { attribute: string } } {
+  const logicalName =
+    (block?.mainPresentation ?? "Description") === "Code"
+      ? "code"
+      : "description"
+  const attribute = fields.find(
+    (f) => f.standard?.logicalName === logicalName
+  )?.name
+  return attribute === undefined ? {} : { presentation: { attribute } }
 }
 
 function attributes(

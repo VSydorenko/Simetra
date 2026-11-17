@@ -12,6 +12,7 @@ import {
 } from "simetra/model"
 import {
   COMMENT_FILE,
+  MEMBER_FILE,
   ORGANIZATION_FILE,
   PROJECT_CATALOG_FILE,
   REGION_FILE,
@@ -169,8 +170,20 @@ describe("presentation of a client entry", () => {
         attributes: [custom],
       },
       [REGION_FILE]: { codeLength: 0, descriptionLength: 100 },
-      [ORGANIZATION_FILE]: { codeLength: 5, descriptionLength: 0 },
-      [COMMENT_FILE]: { codeLength: 5, descriptionLength: 100 },
+      // Основне представлення — код; найменування немає.
+      [ORGANIZATION_FILE]: {
+        codeLength: 5,
+        descriptionLength: 0,
+        mainPresentation: "Code",
+      },
+      // Є обидва, основне — код.
+      [COMMENT_FILE]: {
+        codeLength: 5,
+        descriptionLength: 100,
+        mainPresentation: "Code",
+      },
+      // Типове основне — найменування, а його немає: представлення немає.
+      [MEMBER_FILE]: { codeLength: 5, descriptionLength: 0 },
     })
     const client = buildClientCatalog(
       buildRuntimeCatalog(await compiled(files))
@@ -182,13 +195,11 @@ describe("presentation of a client entry", () => {
     )
     expect(byName("Project").presentation).toBeUndefined()
     expect(byName("Region").presentation).toEqual({
-      description: "description",
+      attribute: "description",
     })
-    expect(byName("Organization").presentation).toEqual({ code: "code" })
-    expect(byName("TaskComment").presentation).toEqual({
-      description: "description",
-      code: "code",
-    })
+    expect(byName("Organization").presentation).toEqual({ attribute: "code" })
+    expect(byName("TaskComment").presentation).toEqual({ attribute: "code" })
+    expect(byName("OrgMember").presentation).toBeUndefined()
   })
 })
 

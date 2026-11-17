@@ -443,7 +443,7 @@ describe("ListRow — стани мутації", () => {
     attributes: [
       { ...task.attributes[1]!, name: "description", column: "description" },
     ],
-    presentation: { description: "description" },
+    presentation: { attribute: "description" },
   }
   const catalog = catalogIndex([withOwner, target])
   const columns = headerColumns(withOwner)
