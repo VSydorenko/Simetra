@@ -16,5 +16,13 @@ export default defineConfig({
       "zod",
     ],
   },
-  plugins: [tanstackStart(), nitro({ preset: "node-server" }), viteReact()],
+  plugins: [
+    tanstackStart(),
+    nitro({
+      preset: "node-server",
+      // `useRequest()` в `defer` (runtime.ts) працює лише з асинхронним контекстом
+      experimental: { asyncContext: true },
+    }),
+    viteReact(),
+  ],
 })
