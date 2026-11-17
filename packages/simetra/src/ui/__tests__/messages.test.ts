@@ -6,6 +6,36 @@ import { MESSAGES, MessagesProvider, useMessage } from "../messages"
 
 afterEach(cleanup)
 
+// Явний перелік зі спеки §5.4: видалення ключа з обох локалей має червонити тест.
+const REQUIRED_KEYS = [
+  "state.pending",
+  "state.unknown",
+  "state.failed",
+  "state.conflict",
+  "state.stale",
+  "state.hidden",
+  "state.removed",
+  "state.loading",
+  "state.refreshing",
+  "state.purged",
+  "action.open",
+  "action.save",
+  "action.dismiss",
+  "action.retry",
+  "action.cancel",
+  "action.takeServer",
+  "action.overwrite",
+  "action.remove",
+  "action.showNew",
+  "action.refreshList",
+  "action.refreshCard",
+  "action.reloadPage",
+  "value.yes",
+  "value.no",
+  "value.notInSlice",
+  "app.updateRequired",
+] as const
+
 function Probe() {
   return createElement("span", null, useMessage("state.hidden"))
 }
@@ -18,10 +48,11 @@ describe("каталог повідомлень", () => {
   })
 
   it.each(["en", "uk"] as const)(
-    "кожен ключ має непорожній текст %s",
+    "кожен обов'язковий ключ має непорожній текст %s",
     (locale) => {
-      for (const [key, text] of Object.entries(MESSAGES[locale])) {
-        expect(text.trim(), key).not.toBe("")
+      const catalogue: Record<string, string | undefined> = MESSAGES[locale]
+      for (const key of REQUIRED_KEYS) {
+        expect(catalogue[key]?.trim(), key).toBeTruthy()
       }
     }
   )

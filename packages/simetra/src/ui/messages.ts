@@ -63,11 +63,13 @@ const uk: Record<MessageKey, string> = {
 
 export type Locale = "en" | "uk"
 
+/** UI texts per locale; `en` is the default. */
 export const MESSAGES: Record<Locale, Record<MessageKey, string>> = { en, uk }
 
 // Без провайдера — типова локаль: компонент працює й у тесті без обгортки.
 const LocaleContext = createContext<Locale>("en")
 
+/** Selects the locale for `useMessage` in the subtree. */
 export function MessagesProvider(props: {
   locale: Locale
   children?: ReactNode
@@ -79,6 +81,7 @@ export function MessagesProvider(props: {
   )
 }
 
+/** Text for `key` in the current locale (`en` without a provider). */
 export function useMessage(key: MessageKey): string {
   return MESSAGES[useContext(LocaleContext)][key]
 }
