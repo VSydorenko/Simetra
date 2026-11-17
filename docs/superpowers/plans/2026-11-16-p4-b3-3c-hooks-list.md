@@ -22,7 +22,9 @@
 
 ### c1 — хуки (PR 4, після a2-Л)
 
-**Задача 10.** `src/data/react/` (`index.ts`, `provider.ts`, `use-rows.ts`,
+#### Задача 10 — Хуки й провайдер
+
+`src/data/react/` (`index.ts`, `provider.ts`, `use-rows.ts`,
 `use-row.ts`), `runtime/holder.ts`, `tsconfig.dom.json`, `tsconfig.json`,
 скрипт `typecheck`, `tsdown.config.ts` і exports `./data/react`, лінт-зона T4
 (`src/data/react/**` може імпортувати `react`), `src/data/index.ts` (лише
@@ -40,7 +42,9 @@
 
 ### c2 — компонент списку, вхід `./ui`, лінт T5 (PR 5, після c1)
 
-**Задача 11. `VirtualList` і `./ui`.** `src/ui/list/virtual-list.ts`,
+#### Задача 11 — `VirtualList` і `./ui`
+
+`src/ui/list/virtual-list.ts`,
 `src/ui/index.ts`, `package.json` (Р7), `tsdown.config.ts`, syncpack, тест
 пакування (`./ui` у exports; `react` і `@tanstack/react-virtual` —
 необов'язкові peer; серверний споживач без них). Компонент — за §6.4 і звітом
@@ -53,7 +57,9 @@ SSR через `initialRect`; діапазон — у `setVisibleRange` (у М3 
 з підміненими вимірами (ріст висоти над видимими — зсув рівно на приріст).
 `run-tests unit --filter virtual`.
 
-**Задача 12. Лінт зони T5** за §3 і §12: `eslint.tier-zones.js`,
+#### Задача 12 — Лінт зони T5
+
+за §3 і §12: `eslint.tier-zones.js`,
 `eslint.standard-columns.js` (селектори T5 і стандартних колонок — в одних
 опціях `no-restricted-syntax`, бо пізніший блок заміняє опції цілком;
 атрибути — і як `JSXAttribute`, і як `Property` props `createElement`;

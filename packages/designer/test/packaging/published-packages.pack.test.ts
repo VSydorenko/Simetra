@@ -100,6 +100,7 @@ describe("simetra", () => {
     expect(Object.keys(manifest.exports as object).sort()).toEqual([
       "./compiler",
       "./data",
+      "./data/react",
       "./model",
       "./schema",
       "./schemas/*",
@@ -117,6 +118,8 @@ describe("simetra", () => {
       "dist/compiler/index.js",
       "dist/data/index.js",
       "dist/data/index.d.ts",
+      "dist/data/react/index.js",
+      "dist/data/react/index.d.ts",
       "dist/schema/index.js",
       "dist/server/index.js",
       "dist/server/index.d.ts",
@@ -136,8 +139,15 @@ describe("simetra", () => {
     const js = (await listPackedFiles(tarballs.simetra)).filter((f) =>
       f.endsWith(".js")
     )
+    // Єдиний виняток — чанк внутрішнього хендла рантайму, спільний для
+    // `simetra/data` і `simetra/data/react`: два входи одного яруса мусять
+    // ділити один `WeakMap`, а не мати кожен свій.
     expect(
-      js.filter((f) => !/^dist\/(model|compiler|data|schema|server)\//.test(f))
+      js.filter(
+        (f) =>
+          !/^dist\/(model|compiler|data|schema|server)\//.test(f) &&
+          !/^dist\/handle-[^/]+\.js$/.test(f)
+      )
     ).toEqual([])
   })
 
@@ -318,6 +328,24 @@ describe("simetra/data", () => {
     ).toEqual([])
   })
 
+  it("public declarations of the hooks entry carry no session or store types", async () => {
+    // Входи `data` і `data/react` ділять спільний чанк декларацій у корені
+    // `dist`, тож дивимось і його.
+    const dts = [
+      ...(await packedSources(tarballs.simetra, "dist/", ".d.ts")),
+    ].filter(([f]) => /^dist\/(data\/|[^/]+\.d\.ts$)/.test(f))
+    expect(dts.map(([f]) => f)).toContain("dist/data/react/index.d.ts")
+    expect(
+      dts
+        .filter(
+          ([, s]) =>
+            s.includes("@tanstack/") ||
+            /\b(CoreSession|Session|Scope|ObjectStore|SectionStore)\b/.test(s)
+        )
+        .map(([f]) => f)
+    ).toEqual([])
+  })
+
   it("imports peers by bare specifiers instead of bundling them", async () => {
     // Вбудована копія peer-а — друга копія в бандлі споживача, якої граф
     // модулів не покаже: вона лежить у корені `simetra`
@@ -404,6 +432,19 @@ describe("simetra/data in a pnpm host", () => {
       { cwd: consumer }
     )
     expect(stdout.trim()).toBe("function")
+  })
+
+  it("imports simetra/data/react in plain Node with the peer", async () => {
+    const { stdout } = await exec(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        'const r = await import("simetra/data/react"); const d = await import("simetra/data"); console.log([typeof r.useRows, typeof r.useRow, typeof r.DataRuntimeProvider, typeof d.createRuntimeHolder].join())',
+      ],
+      { cwd: consumer }
+    )
+    expect(stdout.trim()).toBe("function,function,function,function")
   })
 
   it("bundles one copy of each module-state library", async () => {

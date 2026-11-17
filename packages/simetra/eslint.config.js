@@ -35,6 +35,18 @@ export default defineConfig([
     },
     rules: { "@typescript-eslint/no-floating-promises": "error" },
   },
+  {
+    // Файли T4 з DOM-типами не входять у `tsconfig.json` (T0 не бачить DOM) —
+    // їх типізований лінт читає `tsconfig.dom.json`.
+    files: ["src/data/react/**/*.{ts,tsx,mts,cts}"],
+    languageOptions: {
+      parserOptions: {
+        projectService: false,
+        project: ["./tsconfig.dom.json"],
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
   ...tierZoneConfigs,
   ...standardColumnConfigs,
 ])
