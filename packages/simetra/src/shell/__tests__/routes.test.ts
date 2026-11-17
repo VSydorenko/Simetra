@@ -3,7 +3,7 @@ import { act, cleanup, render } from "@testing-library/react"
 import { useState } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createRuntimeHolder } from "../../data/runtime/holder"
-import { TASK, key, settle } from "../../data/store/__tests__/core-support"
+import { ORG, TASK, key, settle } from "../../data/store/__tests__/core-support"
 import { entityListRoute } from "../routes"
 import { harness, memoryRouter, route } from "./support"
 
@@ -74,6 +74,10 @@ describe("entityListRoute", () => {
     await router.load()
     expect(preload).not.toHaveBeenCalled()
     expect(router.state.location.pathname).toBe("/tasks")
+    // Loader не падає без тримача: збій лишився б у стані збігу.
+    expect(router.state.matches.map((match) => match.status)).not.toContain(
+      "error"
+    )
 
     // Тримач без рантайму (вихід) — так само.
     const closed = createRuntimeHolder()
@@ -134,12 +138,25 @@ describe("routerNavigation", () => {
           component: () => null,
           staticData: { simetraCard: entity.id, simetraObject: TASK },
         }),
+        // Картка іншого об'єкта: шукаємо за об'єктом, а не за першою карткою.
+        route(root, "/orgs/$id", {
+          component: () => null,
+          staticData: {
+            simetraCard: app.object({ kind: "Catalog", name: "Organization" })
+              .id,
+            simetraObject: ORG,
+          },
+        }),
       ],
     })
     await router.load()
     navigation.openCard(TASK, key(2))
     await vi.waitFor(() =>
       expect(router.state.location.pathname).toBe(`/tasks/${key(2)}`)
+    )
+    navigation.openCard(ORG, key(3))
+    await vi.waitFor(() =>
+      expect(router.state.location.pathname).toBe(`/orgs/${key(3)}`)
     )
     navigation.openList(TASK)
     await vi.waitFor(() =>
