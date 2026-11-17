@@ -13,8 +13,10 @@ import {
   isKeys,
   key,
   readsOf,
+  S,
   seed,
   settle,
+  taskValues,
   watch,
 } from "./core-support"
 
@@ -444,6 +446,72 @@ describe("write-back without a full row (Р3, Р4)", () => {
     expect(shown(rowOf(card))).toMatchObject({ values: { title: "new" } })
   })
 
+  it("a result of the epoch the session left is not written, though the stored row is of it", async () => {
+    const h = harness()
+    const { version } = await mounted(h)
+    h.fake.insert(TASK, taskValues(2))
+    const other = h.core.view({ kind: "keys", object: TASK, keys: [key(2)] })
+    watch(other)
+    await settle()
+    h.port.hold = true
+    h.port.transform = (value) => ({ ...value, epoch: EPOCH })
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    // Інший вигляд читає вже нову епоху: сесія перемикається, а рядок `K`
+    // лишається в старій.
+    h.fake.epoch = OTHER_EPOCH
+    other.refresh()
+    await settle()
+    expect(h.inspect.versionEpochs().current).toBe(OTHER_EPOCH)
+    // Перечитування за ключем — списочною формою (картка дочитує ліниві поля
+    // своєю формою й рахується окремо).
+    const byKey = () => readsOf(h.fake, TASK).filter(isKeys).length
+    const reads = byKey()
+    h.port.release()
+    await settle()
+    expect(byKey()).toBe(reads + 1)
+    expect(await m.settled).toMatchObject({
+      ok: true,
+      rows: [{ values: { title: "new" } }],
+    })
+  })
+
+  it("a result of the current epoch is not written over a stored row of the epoch the session left", async () => {
+    const h = harness()
+    const { version } = await mounted(h)
+    h.fake.insert(TASK, taskValues(2))
+    const other = h.core.view({ kind: "keys", object: TASK, keys: [key(2)] })
+    watch(other)
+    await settle()
+    h.port.hold = true
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    h.fake.epoch = OTHER_EPOCH
+    other.refresh()
+    await settle()
+    expect(h.inspect.versionEpochs().current).toBe(OTHER_EPOCH)
+    const byKey = () => readsOf(h.fake, TASK).filter(isKeys).length
+    const reads = byKey()
+    h.port.release()
+    await settle()
+    // Версії різних епох не порівнюються: рядок дає лише перечитування.
+    expect(byKey()).toBe(reads + 1)
+    expect(await m.settled).toMatchObject({
+      ok: true,
+      rows: [{ values: { title: "new" } }],
+    })
+  })
+
   it("a key with a newer tombstone settles without a write and is re-read", async () => {
     const h = harness()
     const { version } = await mounted(h)
@@ -463,6 +531,32 @@ describe("write-back without a full row (Р3, Р4)", () => {
     expect(keyReads(h.fake).length).toBe(reads + 1)
     expect(h.inspect.rowCount()).toBe(0)
     expect(h.inspect.serviceSizes().journal).toBe(0)
+  })
+
+  it("a tombstone newer than the attempt refuses the write also when a later read brought the key back", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.hold = true
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    h.core.commit((w) => w.purge(TASK, { keys: [K] }), h.core.token())
+    // Новий вигляд читає ключ після purge (картка прибраного ключа лишається
+    // `purged`): слот є, але надгробок новіший за старт спроби.
+    const again = h.core.view({ kind: "keys", object: TASK, keys: [K] })
+    watch(again)
+    await settle()
+    expect(rowOf(again)).toMatchObject({ values: { title: "t1" } })
+    const reads = keyReads(h.fake).length
+    h.port.release()
+    await settle()
+    expect(await m.settled).toEqual({ ok: true, rows: [undefined] })
+    expect(keyReads(h.fake).length).toBe(reads + 1)
+    expect(card.getSnapshot().status).toBe("purged")
   })
 
   it("write-back keeps hidden: the values return only with the re-read", async () => {
@@ -667,6 +761,34 @@ describe("mutation actions (Р5, Р7, Р11)", () => {
     expect(view.mutation).toHaveProperty("cancel")
   })
 
+  it("removed erases the fields of the mutation: no retry after the row returns", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.refuse = { code: "command.busy" }
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    await m.settled
+    h.fake.setVisibleScopes([])
+    card.refresh()
+    await settle()
+    expect(rowOf(card)).toMatchObject({
+      state: "removed",
+      mutation: { state: "failed" },
+    })
+    expect(rowOf(card).mutation).not.toHaveProperty("retry")
+    h.fake.setVisibleScopes(undefined)
+    card.refresh()
+    await settle()
+    const back = shown(rowOf(card))
+    expect(back).toMatchObject({ state: "failed", values: { title: "t1" } })
+    expect(back.mutation).not.toHaveProperty("retry")
+    expect(back.mutation).toHaveProperty("cancel")
+  })
+
   it("a purge erases the fields of the mutation: no retry, only cancel", async () => {
     const h = harness()
     const { version } = await mounted(h)
@@ -691,6 +813,40 @@ describe("mutation actions (Р5, Р7, Р11)", () => {
     expect(h.inspect.serviceSizes().journal).toBe(1)
     expect(kept.retry!()).toBeUndefined()
     expect(h.port.runs).toBe(1)
+  })
+
+  it("the purge of the pair erases the fields of a mutation of that scope or of an unknown one", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.refuse = { code: "command.busy" }
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    await m.settled
+    // Ключ без рядка в сховищі: скоуп спроби невідомий.
+    const loose = h.core.update(
+      TASK,
+      key(9),
+      { title: "b" },
+      { expectedVersion: 1 }
+    )
+    await loose.settled
+    await settle()
+    const kept = shown(rowOf(card)).mutation!
+    expect(kept).toHaveProperty("retry")
+    h.core.commit((w) => w.purge(TASK, { scope: S }), h.core.token())
+    expect(kept.retry!()).toBeUndefined()
+    // Поля `key(9)` теж стерто: новий вигляд показує мутацію без `retry`.
+    h.fake.insert(TASK, taskValues(9))
+    const nine = cardOf(h.core, key(9))
+    watch(nine)
+    await settle()
+    expect(rowOf(nine).mutation).toMatchObject({ state: "failed" })
+    expect(rowOf(nine).mutation).not.toHaveProperty("retry")
+    expect(h.port.runs).toBe(2)
   })
 })
 
