@@ -145,6 +145,11 @@ export interface CoreLimits {
   readonly readParallel: number
   readonly keysPerRequest: number
   readonly fullPageSize: number
+  /**
+   * The rows of a window page (P4-B spec §6.4: 100). A knob of the core for
+   * the model test, which needs small pages; hosts keep the default.
+   */
+  readonly windowPage: number
   readonly fullLimit: number
   readonly releaseDelayMs: number
   readonly preloadTtlMs: number
@@ -164,6 +169,7 @@ export const DEFAULT_CORE_LIMITS: CoreLimits = {
   readParallel: 4,
   keysPerRequest: 200,
   fullPageSize: 200,
+  windowPage: 100,
   fullLimit: 5_000,
   releaseDelayMs: 1_000,
   preloadTtlMs: 5_000,

@@ -12,7 +12,7 @@ import type { GenerationToken, Key, ServerRow, Values, ViewSpec } from "./types"
  * показує рядок `ObjectStore`.
  */
 
-/** The size of a window page in rows (P4-B spec §6.4). */
+/** The size of a window page in rows (P4-B spec §6.4); the default of `limits.windowPage`. */
 export const WINDOW_PAGE = 100
 
 /** The sort columns of a row and its key: the keyset boundary of a page. */
@@ -150,7 +150,8 @@ export async function fetchPage(
   source: CoreSource,
   form: Form,
   request: { direction: "after" | "before"; cursor?: WindowCursor | undefined },
-  token: GenerationToken
+  token: GenerationToken,
+  pageSize: number
 ): Promise<FetchedPage | undefined> {
   const o = form.object
   const spec = form.spec as Extract<ViewSpec, { kind: "full" | "window" }>
@@ -178,7 +179,7 @@ export async function fetchPage(
       object: o.ref,
       ...(query.length === 0 ? {} : { orderBy: query }),
       ...(where === undefined ? {} : { where }),
-      limit: WINDOW_PAGE - rows.length,
+      limit: pageSize - rows.length,
     })
     // Звільнений чи перезапитаний вигляд далі не читає (токен покоління).
     if (!token.valid) return undefined
@@ -192,7 +193,7 @@ export async function fetchPage(
       end = page.more !== true
       break
     }
-    if (rows.length >= WINDOW_PAGE) break
+    if (rows.length >= pageSize) break
     if (page.more !== true) {
       end = true
       break

@@ -177,6 +177,8 @@ export function limitsOf(
   }
   if (limits.fullPageSize > READ_LIMIT_MAX)
     throw new TypeError(`limits.fullPageSize must not exceed ${READ_LIMIT_MAX}`)
+  if (limits.windowPage > READ_LIMIT_MAX)
+    throw new TypeError(`limits.windowPage must not exceed ${READ_LIMIT_MAX}`)
   if (limits.keysPerRequest > KEYS_PER_REQUEST_MAX)
     throw new TypeError(
       `limits.keysPerRequest must not exceed ${KEYS_PER_REQUEST_MAX}`

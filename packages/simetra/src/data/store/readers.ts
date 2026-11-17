@@ -19,7 +19,6 @@ import {
 } from "./source"
 import {
   EMPTY_WINDOW,
-  WINDOW_PAGE,
   fetchPage,
   keysOfPages,
   cursorOf,
@@ -353,7 +352,7 @@ async function readFull(
   if (over && ctx.strict) throw new DataError("data.full-too-large")
   // Понад межу — перша сторінка вікна в серверному порядку (П5).
   const kept = over
-    ? rows.filter((r) => form.test(r.values)).slice(0, WINDOW_PAGE)
+    ? rows.filter((r) => form.test(r.values)).slice(0, limits.windowPage)
     : rows
   // Цілі — з усіх відфільтрованих рядків читання, зокрема з тих, чий слот
   // зараз `removed`: це читання може його воскресити в тій самій пачці
@@ -543,7 +542,8 @@ async function readWindowFirst(
     ctx.source,
     s.form,
     { direction: "after" },
-    token
+    token,
+    ctx.limits.windowPage
   )
   if (fetched === undefined) return NOTHING
   const included = await readWindowIncluded(ctx, s.form, fetched.rows, token)
@@ -577,7 +577,8 @@ export async function readWindowMore(
     ctx.source,
     form,
     { direction, cursor },
-    token
+    token,
+    ctx.limits.windowPage
   )
   if (fetched === undefined) return NOTHING
   const included = await readWindowIncluded(ctx, form, fetched.rows, token)
