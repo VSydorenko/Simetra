@@ -21,6 +21,7 @@ import {
   testDatabaseName,
   testRoleName,
   testSuperuserUrl,
+  waitForLock,
   withRollback,
   withSessionOptions,
 } from "./connection"
@@ -201,19 +202,6 @@ async function signInAnonymous(): Promise<{ id: string; cookie: string }> {
     .map((c) => c.split(";")[0])
     .join("; ")
   return { id: response!.user.id, cookie }
-}
-
-/** Бекенд, що чекає важкого замка, — з іншої сесії. */
-async function waitForLock(observer: pg.Client, pid: number): Promise<void> {
-  for (let waited = 0; waited < 10_000; waited += 50) {
-    const { rows } = await observer.query<{ wait: string | null }>(
-      "SELECT wait_event_type AS wait FROM pg_stat_activity WHERE pid = $1",
-      [pid]
-    )
-    if (rows[0]?.wait === "Lock") return
-    await new Promise((resolve) => setTimeout(resolve, 50))
-  }
-  throw new Error(`backend ${pid} never waited on a lock`)
 }
 
 describe("platform users layer on Better Auth", () => {
