@@ -180,7 +180,10 @@ export function renderResult(
               2
             )
           : [
-              ...roles.map((x) => `${x.server}: ${x.name} ${x.outcome}`),
+              ...roles.map(
+                (x) =>
+                  `${x.server}: ${x.name} ${x.outcome}${x.added === undefined ? "" : `; added membership in ${x.added.join(", ")}`}`
+              ),
               // Пропуск ролі входу не мовчазний: без провайдера невідомо,
               // членом якої ролі запиту вона мусить бути
               ...skipped.map((x) => {

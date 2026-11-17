@@ -42,8 +42,8 @@ export interface ProjectRoles {
 /**
  * Набір ролей теки проєкту (спека П4 §6.2): провайдер — з файлу проєкту, тим самим
  * читачем, що й `compile`. Без файлу роль входу пропускається явно — пропуск
- * видно у виводі, бо роль без членства в ролі запиту `roles` потім не
- * виправив би (наявну лише звіряє).
+ * видно у виводі, бо без провайдера невідомо, членом яких ролей запиту
+ * роль мусить бути.
  */
 export async function projectRoleSet(
   dir: string
@@ -161,8 +161,9 @@ export async function runRoles(
     ],
     project.roles
   )
-  // Відмова ролі входу (`roles.admin-option-missing`) приходить разом зі
-  // створеними ролями грантів: показуються обидва
+  // Відмова ролі входу (`roles.admin-option-missing`,
+  // `roles.membership-grant-denied`) приходить разом зі створеними ролями
+  // грантів: показуються обидва
   return {
     roles: ran.created,
     skipped: [],
@@ -179,7 +180,7 @@ export async function runRoles(
 export const rolesTool = defineTool({
   name: "roles",
   description:
-    "Create the platform roles: NOLOGIN roles that generated SQL grants to on the target and the shadow server, and the runtime login role on the target only. Reads the project file for `database.provider`; without a project file the login role is skipped, and the output says so. An existing role is only checked. Needs CREATEROLE, and ADMIN OPTION on every parent role of the login role; refuses before creating anything when a server lacks CREATEROLE or a role has an unsafe shape. With the provider `postgres` it prepares the cluster instead, as a superuser (the database URL is a superuser URL of the target database): the owner, auth, grant and request roles, the target database owned by the owner, the schemas `extensions` and `better_auth`, `plpgsql_check`, and the sealed template database for shadows. It refuses before writing when the session is not a superuser, an existing database or role has an unsafe shape, or a Simetra login role can connect to another database; a separate shadow server is not supported there.",
+    "Create the platform roles: NOLOGIN roles that generated SQL grants to on the target and the shadow server, and the runtime login role on the target only. Reads the project file for `database.provider`; without a project file the login role is skipped, and the output says so. An existing role is only checked; the one change it makes is to add a missing membership of an existing login role in a parent of its profile, WITH INHERIT FALSE, SET TRUE, and the output names it. Needs CREATEROLE, and ADMIN OPTION on every parent role of the login role (without it a missing membership is refused with the GRANT statement to run); refuses before creating anything when a server lacks CREATEROLE or a role has an unsafe shape. With the provider `postgres` it prepares the cluster instead, as a superuser (the database URL is a superuser URL of the target database): the owner, auth, grant and request roles, the target database owned by the owner, the schemas `extensions` and `better_auth`, `plpgsql_check`, and the sealed template database for shadows. It refuses before writing when the session is not a superuser, an existing database or role has an unsafe shape, or a Simetra login role can connect to another database; a separate shadow server is not supported there.",
   input: z.strictObject({}),
   files: "read",
   database: "write",

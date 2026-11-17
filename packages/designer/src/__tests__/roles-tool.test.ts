@@ -101,6 +101,28 @@ describe("roles: the project file", () => {
     ])
   })
 
+  it("names a membership added to an existing login role", () => {
+    const data: RolesData = {
+      roles: [
+        {
+          server: "target",
+          name: RUNTIME,
+          outcome: "present",
+          added: ["anon"],
+        },
+      ],
+      skipped: [],
+    }
+    const text = renderResult(
+      toolByName("roles")!,
+      { ok: true, changes: [], diagnostics: [], data, written: false },
+      { dir: ".", locale: "en", format: "text" }
+    ).stdout
+    expect(text.split("\n")).toEqual([
+      `target: ${RUNTIME} present; added membership in anon`,
+    ])
+  })
+
   it("adds the login role with the provider's request role from the project file", async () => {
     expect(await projectRoleSet(await project())).toEqual({
       ok: true,

@@ -5033,6 +5033,18 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Ролі грантів створено чи звірено; роль входу не створено, бо без своїх членств вона мовчки змінила б шлях читання рантайму. Запустіть `simetra roles` від ролі з ADMIN OPTION на кожній батьківській ролі ролі входу або попросіть адміністратора бази її створити.",
     },
   },
+  "roles.membership-grant-denied": {
+    en: (p) =>
+      `The connecting role cannot add the missing membership of the platform login role ${p.role} in ${p.parent} on the ${p.server} server: it lacks ADMIN OPTION on ${p.parent}, or ${p.parent} does not exist`,
+    uk: (p) =>
+      `Роль підключення не може додати платформній ролі входу ${p.role} відсутнє членство в ${p.parent} на сервері ${p.server === "shadow" ? "тіні" : "цілі"}: у неї немає ADMIN OPTION на ${p.parent} або цієї ролі немає`,
+    hint: {
+      en: (p) =>
+        `The grant roles were created or checked; the login role was left as it was, and the command runtime needs this membership. Run \`simetra roles\` with a role that has ADMIN OPTION on ${p.parent}, or ask the database administrator to run \`${p.statement}\`, then run \`simetra roles\` again.`,
+      uk: (p) =>
+        `Ролі грантів створено чи звірено; роль входу лишилася як була, а рантайму команд це членство потрібне. Запустіть \`simetra roles\` від ролі з ADMIN OPTION на ${p.parent} або попросіть адміністратора бази виконати \`${p.statement}\`, потім знову запустіть \`simetra roles\`.`,
+    },
+  },
   "roles.superuser-required": {
     en: (p) =>
       `The connecting role is not a superuser on ${p.database}: the postgres profile prepares the cluster only as a superuser that logs in as itself`,

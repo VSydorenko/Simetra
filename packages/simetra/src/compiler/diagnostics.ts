@@ -368,6 +368,7 @@ export const COMPILER_RULES = [
   "database.failed",
   "roles.create-role-denied",
   "roles.admin-option-missing",
+  "roles.membership-grant-denied",
   "roles.superuser-required",
   "roles.unsafe-schema",
   "roles.unsafe-template",
