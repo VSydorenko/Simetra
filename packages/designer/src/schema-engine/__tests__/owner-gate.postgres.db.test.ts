@@ -18,6 +18,7 @@ import {
   setTestPasswords,
   taggedClusterSet,
   testSuperuserUrl,
+  withSessionOptions,
 } from "../../../../simetra/test/support"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 
@@ -98,7 +99,7 @@ describe("owner gate on the postgres profile", () => {
     const model = await modelOf()
     const [login] = PROVIDER_LOGIN_ROLES.postgres
     const asLogin = {
-      url: `${targetDb()}?options=${encodeURIComponent(`-c role=${login}`)}`,
+      url: withSessionOptions(targetDb(), `-c role=${login}`),
     }
     const refused = await buildPlan(
       engine,
