@@ -35,6 +35,6 @@ describe("nitro startup plugin", () => {
       new URL("../vite.config.ts", import.meta.url),
       "utf8"
     )
-    expect(config).toContain("src/server/startup-plugin.ts")
+    expect(config).toContain('new URL("./src/server/startup-plugin.ts"')
   })
 })
