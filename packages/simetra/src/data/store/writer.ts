@@ -407,7 +407,7 @@ function applyKeys(
     for (const row of rows) {
       got.add(row.key)
       if (s.owned.has(row.key)) ctx.ops.put(scope, o, row, startEpoch, false)
-      else fresh = true
+      else if (!beyond.has(row.key)) fresh = true
     }
     for (const key of requested) {
       if (!got.has(key) && s.owned.has(key))
@@ -560,6 +560,18 @@ async function readWindowAgain(
           keysPerRequest: ctx.limits.keysPerRequest,
         })
   const found = new Map(moved.map((row) => [row.key, row] as const))
+  // Останню сторінку, коли край порядку ще не прочитано, читають із запасом
+  // до розміру сторінки: рядки відповіді після останнього її ключа, що
+  // лишився у відповіді, лежать за завантаженим діапазоном (сторінку
+  // скоротив purge) — вони не нові. Порядок — серверний, клієнт не сортує.
+  const beyond = new Set<Key>()
+  const lastPage = start.pages.at(-1)
+  if (lastPage !== undefined && !s.atEnd) {
+    const answer = answers[start.pages.length - 1]!
+    const mine = new Set(lastPage.keys)
+    const at = answer.map((row) => mine.has(row.key)).lastIndexOf(true)
+    for (const row of at < 0 ? [] : answer.slice(at + 1)) beyond.add(row.key)
+  }
   // Перший рядок сторінки `from` лежить на її межі: keyset читає строго
   // після неї, тож він «випадає» завжди. На місці, якщо сортувальні колонки
   // ті самі, що в курсора, — тоді це не переїзд.
@@ -614,7 +626,7 @@ async function readWindowAgain(
     let fresh = false
     for (const row of got.values()) {
       if (s.owned.has(row.key)) ctx.ops.put(scope, o, row, startEpoch, false)
-      else fresh = true
+      else if (!beyond.has(row.key)) fresh = true
     }
     let needsRefresh = false
     for (const key of composition) {

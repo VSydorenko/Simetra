@@ -574,6 +574,25 @@ describe("a system re-read of a window", () => {
     expect(snap).toMatchObject({ hasNewRows: true, needsRefresh: true })
   })
 
+  it("does not take rows past a purge-shortened last page for new", async () => {
+    const { core, fake, handle } = await twoPages()
+    // Сторінку скоротив purge: відповідь із запасом сягає за завантажене.
+    for (const n of [150, 151, 152]) fake.remove(TASK, key(n))
+    core.commit(
+      (w) => w.purge(TASK, { keys: [key(150), key(151), key(152)] }),
+      core.token()
+    )
+    await settle()
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(handle.getSnapshot().hasNewRows).toBe(false)
+    // Справжня вставка всередині завантаженого діапазону — нова.
+    fake.insert(TASK, taskValues(251, { title: "r150a" }))
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(handle.getSnapshot().hasNewRows).toBe(true)
+  })
+
   it("reads a key that fell out by key: present is needsRefresh, gone is removed", async () => {
     const { core, fake, handle, inspect } = await twoPages()
     const before = keysIn(handle.getSnapshot())
