@@ -162,14 +162,159 @@ describe("tier zones", () => {
       expect(msgs, spec).toHaveLength(1)
       expect(msgs[0]).toContain("Framework boundary")
     }
-    for (const spec of [
-      "react",
-      "react-dom/client",
-      "@tanstack/react-virtual",
-      "next-themes",
-    ]) {
+    for (const spec of ["react", "react-dom/client", "next-themes"]) {
       expect(await restricted(importOf(spec), file), spec).toEqual([])
     }
+  })
+
+  // Правила зони T5 (спека П4-B §6.7): кожне — негативний тест на .ts і .tsx
+  // і позитивний у теці списку, де це дозволено.
+  describe("T5 lint rules", () => {
+    const syntax = (code: string, file: string) =>
+      byRule("no-restricted-syntax", code, file)
+    const globals = (code: string, file: string) =>
+      byRule("no-restricted-globals", code, file)
+    const EXTS = ["ts", "tsx"] as const
+    const ui = (ext: string) => `src/ui/__fixture.${ext}`
+    const list = (ext: string) => `src/ui/list/__fixture.${ext}`
+    // `.ts` без JSX пише атрибути через createElement, `.tsx` — через JSX.
+    const jsx = (attr: string) =>
+      `export const a = <div ${attr}={() => {}} />\n`
+    const create = (attr: string) =>
+      `import { createElement } from "react"\nexport const a = createElement("div", { ${attr}: () => {} })\n`
+    const reactCreate = (attr: string) =>
+      `import React from "react"\nexport const a = React.createElement("div", { ${attr}: () => {} })\n`
+
+    it.each(EXTS)(
+      "rejects @tanstack/react-virtual outside the list (.%s)",
+      async (ext) => {
+        const code = importOf("@tanstack/react-virtual")
+        const msgs = await restricted(code, ui(ext))
+        expect(msgs).toHaveLength(1)
+        expect(msgs[0]).toContain("src/ui/list")
+        expect(
+          await restricted(code, `src/ui/other/__fixture.${ext}`)
+        ).toHaveLength(1)
+        expect(await restricted(code, list(ext))).toEqual([])
+      }
+    )
+
+    it.each(EXTS)(
+      "keeps the other T5 import bans inside the list (.%s)",
+      async (ext) => {
+        expect(
+          await restricted(importOf("@tanstack/react-router"), list(ext))
+        ).toHaveLength(1)
+        expect(
+          await restricted(importOf("simetra/shell"), list(ext))
+        ).toHaveLength(1)
+        expect(
+          await restricted(importOf("../x/../server"), list(ext))
+        ).not.toEqual([])
+      }
+    )
+
+    it.each(EXTS)("rejects useOptimistic from react (.%s)", async (ext) => {
+      const code = `import { useOptimistic } from "react"\nexport const used = useOptimistic\n`
+      for (const file of [ui(ext), list(ext)])
+        expect(await restricted(code, file), file).toHaveLength(1)
+      expect(
+        await restricted(
+          `import { useState } from "react"\nexport const used = useState\n`,
+          ui(ext)
+        )
+      ).toEqual([])
+    })
+
+    it.each(EXTS)(
+      "rejects fetch, XMLHttpRequest, WebSocket and EventSource (.%s)",
+      async (ext) => {
+        for (const name of [
+          "fetch",
+          "XMLHttpRequest",
+          "WebSocket",
+          "EventSource",
+        ]) {
+          const code = `export const used = ${name}\n`
+          for (const file of [ui(ext), list(ext)])
+            expect(await globals(code, file), `${name} ${file}`).toHaveLength(1)
+          expect(await globals(code, `src/shell/__fixture.${ext}`)).toEqual([])
+        }
+      }
+    )
+
+    it.each(EXTS)("rejects Math.random (.%s)", async (ext) => {
+      const code = "export const used = Math.random()\n"
+      for (const file of [ui(ext), list(ext)])
+        expect(await props(code, file), file).toHaveLength(1)
+      expect(await props(code, `src/shell/__fixture.${ext}`)).toEqual([])
+    })
+
+    it.each([
+      ["onScroll", "JSX", jsx],
+      ["onScroll", "createElement", create],
+      ["onScroll", "React.createElement", reactCreate],
+    ] as const)(
+      "rejects %s as %s props outside the list",
+      async (attr, _, make) => {
+        for (const ext of make === jsx ? (["tsx"] as const) : EXTS) {
+          const code = make(attr)
+          expect(await syntax(code, ui(ext)), ext).toHaveLength(1)
+          expect(
+            await syntax(code, `src/ui/other/__fixture.${ext}`),
+            ext
+          ).toHaveLength(1)
+          expect(await syntax(code, list(ext)), `list ${ext}`).toEqual([])
+        }
+      }
+    )
+
+    it.each(EXTS)(
+      'rejects addEventListener("scroll") outside the list (.%s)',
+      async (ext) => {
+        const code = `export const f = (n: HTMLElement) => n.addEventListener("scroll", () => {})\n`
+        expect(await syntax(code, ui(ext))).toHaveLength(1)
+        expect(await syntax(code, list(ext))).toEqual([])
+        expect(
+          await syntax(
+            `export const f = (n: HTMLElement) => n.addEventListener("click", () => {})\n`,
+            ui(ext)
+          )
+        ).toEqual([])
+      }
+    )
+
+    it("rejects suppressHydrationWarning everywhere in ui, JSX and createElement", async () => {
+      const attr = "suppressHydrationWarning"
+      for (const file of [ui("tsx"), list("tsx")])
+        expect(await syntax(jsx(attr), file), file).toHaveLength(1)
+      for (const ext of EXTS)
+        for (const file of [ui(ext), list(ext)])
+          expect(await syntax(create(attr), file), file).toHaveLength(1)
+    })
+
+    it.each(EXTS)(
+      "keeps the standard-column selectors in ui and its list (.%s)",
+      async (ext) => {
+        const code = `export const r = (o: { standard: string }) => o.standard === "x"\n`
+        for (const file of [ui(ext), list(ext)])
+          expect(await syntax(code, file), file).toHaveLength(1)
+      }
+    )
+
+    it.each(EXTS)(
+      "a T5 selector does not replace the standard-column rule (.%s)",
+      async (ext) => {
+        const code = `export const r = (o: { standard: string }) => o.standard === "x"\nexport const f = (n: HTMLElement) => n.addEventListener("scroll", () => {})\n`
+        expect(await syntax(code, ui(ext))).toHaveLength(2)
+      }
+    )
+
+    it("tests under ui are exempt from the T5 syntax rules", async () => {
+      expect(
+        await syntax(create("onScroll"), "src/ui/__tests__/__fixture.ts")
+      ).toEqual([])
+    })
   })
 
   it("framework libraries are legal in shell", async () => {
