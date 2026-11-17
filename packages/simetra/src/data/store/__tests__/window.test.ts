@@ -7,6 +7,7 @@ import { createCoreSource, createReadLimiter } from "../source"
 import { createCore, inspectCore } from "../core"
 import { createFakeSource } from "../testing/fake-source"
 import { DEFAULT_CORE_LIMITS, type ViewSnapshot, type ViewSpec } from "../types"
+import { DISCARD_PAUSE_MS } from "../session"
 import { reversedOrder } from "../window"
 import {
   OBJECTS,
@@ -24,12 +25,15 @@ import {
 
 // Розмір сторінки — типове `limits.windowPage`: одне джерело.
 const WINDOW_PAGE = DEFAULT_CORE_LIMITS.windowPage
+const EA = "a".repeat(64)
+const EB = "b".repeat(64)
 
 beforeEach(() => {
   vi.useFakeTimers()
 })
 afterEach(() => {
   vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 
 const win: ViewSpec = { kind: "window", object: TASK }
@@ -165,6 +169,60 @@ describe("window", () => {
     await settle()
     expect(keysIn(handle.getSnapshot())).toEqual(range(1, 15))
     expect(handle.getSnapshot().atStart).toBe(true)
+    expect(inspect.violations()).toEqual([])
+  })
+
+  it("accepts a loadAfter after a page read that failed", async () => {
+    const { core, fake } = setup({ limits: { windowPage: 5 } })
+    seed(fake, 1, 15)
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    fake.hold = (read) => isPage(read)
+    handle.loadAfter()
+    await settle()
+    fake.take().fail("command.unavailable")
+    await settle()
+    expect(handle.getSnapshot().status).toBe("error")
+    handle.loadAfter()
+    await settle()
+    expect(fake.pending).toHaveLength(1)
+    fake.take().answer()
+    await settle()
+    expect(keysIn(handle.getSnapshot())).toEqual(range(1, 10))
+  })
+
+  it("holds a discarded page read against a duplicate until its retry", async () => {
+    const { core, fake, inspect } = setup({ limits: { windowPage: 5 } })
+    seed(fake, 1, 15)
+    fake.epoch = EA
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    // Перемикання на B: відповідь покинутої епохи A відкидається.
+    vi.spyOn(Math, "random").mockReturnValue(0.99)
+    fake.epoch = EB
+    handle.refresh()
+    await settle()
+    expect(inspect.versionEpochs().current).toBe(EB)
+    fake.epoch = EA
+    fake.hold = (read) => isPage(read)
+    handle.loadAfter()
+    await settle()
+    fake.take().answer()
+    await settle()
+    expect(inspect.versionEpochs().discards).toBe(1)
+    // Пауза перед повтором: те саме читання ще триває.
+    handle.loadAfter()
+    await settle()
+    expect(fake.pending).toHaveLength(0)
+    fake.epoch = EB
+    vi.advanceTimersByTime(DISCARD_PAUSE_MS)
+    await settle()
+    expect(fake.pending).toHaveLength(1)
+    fake.take().answer()
+    await settle()
+    expect(keysIn(handle.getSnapshot())).toEqual(range(1, 10))
     expect(inspect.violations()).toEqual([])
   })
 
