@@ -362,6 +362,30 @@ describe("useRow", () => {
     expect(card.last()).toBe(stable)
   })
 
+  it("is not editable while the header version differs from the lines version", async () => {
+    const { fake, runtime, core } = makeRuntime()
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", [{ ref: key(11), qty: 1 }])
+    const card = mount(createRuntimeHolder(runtime), () =>
+      useRow({ object: TASK, id: key(1), tabularSections: ["lines"] })
+    )
+    await flush()
+    expect(card.last().editable).toBe(true)
+    // Шапку оновив зовнішній запис (сигнал), а рядки ТЧ ще старої версії.
+    fake.edit(TASK, key(1), { title: "changed" })
+    const row = fake.row(TASK, key(1))!
+    act(() => {
+      core.commit(
+        (w) =>
+          w.apply(TASK, { rows: [row], absent: [] }, core.readEpoch(), null),
+        core.token()
+      )
+    })
+    expect(card.last().row?.state).toBe("synced")
+    expect(card.last().version).toBe(row.version)
+    expect(card.last().editable).toBe(false)
+  })
+
   it("is not editable while the values are hidden", async () => {
     const { fake, runtime, core } = makeRuntime()
     seed(fake, 1, 1)
