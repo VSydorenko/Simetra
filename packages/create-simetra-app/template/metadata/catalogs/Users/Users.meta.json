@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../../node_modules/simetra/schemas/catalogs.schema.json",
+  "id": "1220b990-252c-48c4-88e8-bc46b4f9344d",
+  "kind": "Catalog",
+  "name": "Users",
+  "physicalName": "users",
+  "kindLabel": "users",
+  "scope": "none",
+  "title": {
+    "en": "Users"
+  },
+  "role": "users"
+}

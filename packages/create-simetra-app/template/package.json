@@ -1,0 +1,39 @@
+{
+  "name": "create-simetra-app-template",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Working TanStack Start application that the create-simetra-app copier ships",
+  "license": "Apache-2.0",
+  "type": "module",
+  "imports": {
+    "#instrument": "./src/instrument.ts"
+  },
+  "scripts": {
+    "generate": "node scripts/generate-catalogs.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --project unit",
+    "test:db": "vitest run --project db"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "1.170.46",
+    "@tanstack/react-start": "1.169.5",
+    "better-auth": "1.7.12",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "simetra": "workspace:*"
+  },
+  "devDependencies": {
+    "@simetrajs/designer": "workspace:*",
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "@vitejs/plugin-react": "6.3.0",
+    "nitro": "3.0.261103-rc",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}

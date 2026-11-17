@@ -1,0 +1,12 @@
+{
+  "$schema": "../../../../node_modules/simetra/schemas/catalogs.schema.json",
+  "id": "f3fd253a-a1a9-4d9d-ad46-379757fbbab5",
+  "kind": "Catalog",
+  "name": "Country",
+  "physicalName": "country",
+  "kindLabel": "country",
+  "scope": "none",
+  "title": {
+    "en": "Countries"
+  }
+}

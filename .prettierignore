@@ -15,3 +15,8 @@ examples/**/metadata/**
 .agents/codex-audit/
 .agents/out/
 .agents/sdd/
+# Згенеровані каталоги шаблону й дерево маршрутів TanStack Start: пише генератор
+packages/create-simetra-app/template/generated/
+packages/create-simetra-app/template/src/routeTree.gen.ts
+# Метадані шаблону — канонічна форма formatMetaFile, як і в examples
+packages/create-simetra-app/template/metadata/

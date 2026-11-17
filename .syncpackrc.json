@@ -17,6 +17,12 @@
       "packages": ["simetra"],
       "dependencies": ["@types/react", "@types/react-dom"],
       "pinVersion": "19.3.0"
+    },
+    {
+      "label": "better-auth — точний пін: тест-залежність simetra і рантайм-залежність шаблону",
+      "packages": ["simetra", "create-simetra-app-template"],
+      "dependencies": ["better-auth"],
+      "pinVersion": "1.7.12"
     }
   ]
 }

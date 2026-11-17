@@ -585,3 +585,49 @@ describe("tier zones", () => {
     }
   })
 })
+
+// Межа фреймворку пакета `create-simetra-app`: зона з `eslint.tier-zones.js`
+// підключена його власним конфігом, тож і лінт іде з теки того пакета.
+describe("create-simetra-app framework boundary", () => {
+  const APP = join(PKG, "..", "create-simetra-app")
+  const appEslint = new ESLint({ cwd: APP })
+  const START = [
+    "@tanstack/react-start",
+    "@tanstack/react-start/server",
+    "@tanstack/start-plugin-core",
+  ]
+
+  async function lintApp(code: string, file: string) {
+    const [result] = await appEslint.lintText(code, {
+      filePath: join(APP, file),
+      warnIgnored: true,
+    })
+    const messages = result?.messages ?? []
+    // Ігнорований файл дав би порожній результат і мовчки зелений кейс
+    expect(result, `${file}: file ignored by eslint`).toBeDefined()
+    const broken = messages.filter((m) => m.fatal || m.ruleId === null)
+    if (broken.length > 0)
+      throw new Error(
+        `${file}: lint did not run: ${broken.map((m) => m.message).join("; ")}`
+      )
+    return messages
+      .filter((m) => m.ruleId === "no-restricted-imports")
+      .map((m) => m.message)
+  }
+
+  it("rejects TanStack Start in the package sources", async () => {
+    for (const spec of START) {
+      const msgs = await lintApp(importOf(spec), "src/__fixture.ts")
+      expect(msgs, spec).toHaveLength(1)
+      expect(msgs[0]).toContain("Framework boundary")
+    }
+  })
+
+  it("allows TanStack Start in the template and in e2e", async () => {
+    for (const file of ["template/src/__fixture.ts", "e2e/__fixture.ts"])
+      for (const spec of START)
+        expect(await lintApp(importOf(spec), file), `${file}: ${spec}`).toEqual(
+          []
+        )
+  })
+})

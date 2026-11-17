@@ -1,0 +1,14 @@
+{
+  "$schema": "../node_modules/simetra/schemas/project.schema.json",
+  "name": "TemplateApp",
+  "title": {
+    "en": "Template application"
+  },
+  "defaultSchema": "app",
+  "database": {
+    "provider": "postgres"
+  },
+  "naming": {
+    "attributeCase": "camelCase"
+  }
+}

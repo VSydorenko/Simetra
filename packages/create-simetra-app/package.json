@@ -1,0 +1,19 @@
+{
+  "name": "create-simetra-app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Application template for Simetra hosts on TanStack Start",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint --no-error-on-unmatched-pattern",
+    "test:build": "echo \"test:build is added by the host-template job\" && exit 1",
+    "e2e": "echo \"e2e is added by the host-template job\" && exit 1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.14.0",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-eslint": "^8.72.1"
+  }
+}
