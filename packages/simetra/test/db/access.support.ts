@@ -1,9 +1,8 @@
 import type pg from "pg"
 import { compile, type CompiledModel } from "simetra/compiler"
-import { quoteIdent, type ApiRolePurpose } from "simetra/model"
+import type { ApiRolePurpose } from "simetra/model"
 import {
   expectClean,
-  acceptDebt,
   attribute,
   catalog,
   document,
@@ -17,7 +16,7 @@ import {
   role,
   systemCatalog,
 } from "../../src/compiler/__tests__/fixtures/rights"
-import { claimsFor, testRoleFor } from "./connection"
+import { claimsFor } from "./connection"
 import { testProvider } from "./profile"
 import { inMaintenance } from "./rights-seed"
 
@@ -25,8 +24,8 @@ import { inMaintenance } from "./rights-seed"
  * Спільна модель і засів DB-тестів доступу до таблиць виду обох стеків
  * (`access`, `access.supabase`): два сценарії — схема `public`, де на стеку
  * Supabase типові привілеї провайдера дають ролям API усе на кожну нову
- * таблицю, і власна схема застосунку з прийнятим дослівним `USAGE`, який
- * генерація не чіпає.
+ * таблицю, і власна схема застосунку, `USAGE` на яку дає генератор
+ * доступу.
  */
 
 export const SCENARIOS = [
@@ -186,21 +185,9 @@ export async function compiled(scenario: Scenario): Promise<CompiledModel> {
     "catalogs/Secret/Secret.meta.json": catalog("Secret", { scope: "none" }),
     ...orgRights(),
   }
-  let files = metaFiles(entries)
-  if (scenario.schema === "app") {
-    // Прийнятий грант схеми — дослівний борг, як у споживача з власною
-    // схемою: генерація грантів схеми не дає й не відкликає. Ролі — профілю.
-    files.set(
-      "sql/app/usage.sql",
-      (["user", "anonymous"] as const)
-        .map(
-          (purpose) =>
-            `GRANT USAGE ON SCHEMA app TO ${quoteIdent(testRoleFor(purpose)!)};\n`
-        )
-        .join("")
-    )
-    files = await acceptDebt(files)
-  }
+  // Схему `app` ролям, яким вид дає таблиці, відкриває платформа: `USAGE`
+  // на схему застосунку генерує доступ (платформна спека §6.7)
+  const files = metaFiles(entries)
   const result = await compile(files)
   expectClean(result, { allow: ["rights.scope-kind-unread"] })
   return result.model!

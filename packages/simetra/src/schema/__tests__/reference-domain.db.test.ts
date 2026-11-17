@@ -1,17 +1,11 @@
 import { describe, expect, it } from "vitest"
 import type pg from "pg"
 import { compile, type CompiledModel } from "simetra/compiler"
-import { quoteIdent } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import { readCatalog } from "../../../test/db/catalog"
 import { expectCatalogMatchesSnapshot } from "../../../test/db/compare"
 import { signUp } from "../../../test/db/auth"
-import {
-  claimsFor,
-  queryAs,
-  testRoleFor,
-  withRollback,
-} from "../../../test/db/connection"
+import { claimsFor, queryAs, withRollback } from "../../../test/db/connection"
 import { testProvider } from "../../../test/db/profile"
 import { readReferenceDomain } from "../../compiler/__tests__/fixtures/reference-domain"
 import { expectClean } from "../../compiler/__tests__/helpers"
@@ -118,11 +112,8 @@ describe("reference domain in Postgres", () => {
       await member(otherOrg, other)
       // Функції множини обох видів скоупу бачать рівно скоупи користувача під
       // claims запиту: контракт скоупу, на який спиратимуться RLS-політики П3.
-      // Гранти схем застосунку ролям API — П3 (платформна спека §6.7); тут
-      // лише `USAGE`, без якого роль запиту не дістане до функцій схеми.
-      await client.query(
-        `GRANT USAGE ON SCHEMA app TO ${quoteIdent(testRoleFor("user")!)}`
-      )
+      // `USAGE` на схему застосунку роль запиту дістає від генератора доступу
+      // (платформна спека §6.7)
       const scopes = async (claims: Record<string, unknown>) => ({
         orgs: await queryAs(
           client,

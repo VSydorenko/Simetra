@@ -70,6 +70,8 @@ describe("renderDesiredState", () => {
         "index app.item_description_id_idx",
         "index app.item_predefined_name_idx",
         "rowLevelSecurity app.item",
+        "unit grant:grant:schema:app:authenticated:usage",
+        "unit grant:grant:schema:app:simetra_command:usage",
         "unit grant:revoke:table:app.category:anon:all",
         "unit grant:revoke:table:app.category:authenticated:all",
         "unit grant:revoke:table:app.category:public:all",
