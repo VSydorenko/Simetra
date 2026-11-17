@@ -9,7 +9,7 @@ import type { ApplyTransaction } from "./port"
  * Версія формули відбитка. Відбитки різних версій не порівнюються: зміна
  * вмісту секції інакше виглядала б дрейфом (платформна спека §6.2).
  */
-export const FINGERPRINT_VERSION = 2
+export const FINGERPRINT_VERSION = 3
 
 export const FINGERPRINT_SECTIONS = [
   "schemas",
@@ -151,6 +151,18 @@ const sorted = (source: string, expr = "v"): string =>
   `(select string_agg(${expr}, ',' order by ${expr} collate "C") from ${source})`
 
 /**
+ * Чи тригер `t` на поверхні провайдера належить межі: його функція лежить у
+ * схемі межі або є членом розширення. Звичайна функція поза межею робить
+ * тригер зовнішньою інтеграцією — межа двигуна (`scopePolicy`) і перепис
+ * його теж не бачать (спека профілю postgres §4.2).
+ */
+const ownTriggerFunction = (t: string): string => `exists (
+        select from pg_proc f where f.oid = ${t}.tgfoid
+          and (f.pronamespace in (select oid from scope_ns)
+            or exists (select from pg_depend d where d.classid = 'pg_proc'::regclass
+              and d.objid = f.oid and d.deptype = 'e')))`
+
+/**
  * Чи анотація (коментар, мітка безпеки) рядка `a` з `classoid`/`objoid`
  * стосується об'єкта межі. Об'єкт ідентифікує `pg_identify_object` (`io`);
  * у тригера, політики й правила схеми немає, тож межу дає їхня таблиця, а в
@@ -162,7 +174,8 @@ const annotatedInScope = (a: string): string => `case ${a}.classoid
       when 'pg_trigger'::regclass then exists (
         select from pg_trigger t where t.oid = ${a}.objoid
           and (t.tgrelid in (select oid from scope_rel)
-            or t.tgrelid in (select oid from surface_rel where classes ? 'trigger')))
+            or (t.tgrelid in (select oid from surface_rel where classes ? 'trigger')
+              and ${ownTriggerFunction("t")})))
       when 'pg_policy'::regclass then exists (
         select from pg_policy p where p.oid = ${a}.objoid
           and (p.polrelid in (select oid from scope_rel)
@@ -318,7 +331,8 @@ const SECTION_ROWS: Record<FingerprintSection, string> = {
     from pg_trigger t
     where not t.tgisinternal
       and (t.tgrelid in (select oid from scope_rel)
-        or t.tgrelid in (select oid from surface_rel where classes ? 'trigger'))`,
+        or (t.tgrelid in (select oid from surface_rel where classes ? 'trigger')
+          and ${ownTriggerFunction("t")}))`,
 
   policies: `
     select format('%s %I cmd=%s permissive=%s roles=%s using=%L check=%L',

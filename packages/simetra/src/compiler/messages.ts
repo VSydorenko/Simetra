@@ -4754,6 +4754,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "План не записано. Перейменуйте наявний тригер (ALTER TRIGGER … RENAME TO …): він працюватиме далі під новим ім'ям. Підписці можна й дати інший physicalName.",
     },
   },
+  "plan.provider-trigger-undeclared": {
+    en: (p) =>
+      `Step ${p.step} drops trigger ${p.trigger} on ${p.table}: the application does not declare it and it is not in the last applied state`,
+    uk: (p) =>
+      `Крок ${p.step} знімає тригер ${p.trigger} на ${p.table}: застосунок його не оголошує, і його немає в останньому застосованому стані`,
+    hint: {
+      en: "To keep the trigger, declare it as a verbatim SQL unit (its CREATE TRIGGER in a file under sql/) and plan again: the plan then leaves it in place. Allow the relaxation only if the trigger must go.",
+      uk: "Щоб зберегти тригер, оголосіть його дослівною одиницею (його CREATE TRIGGER у файлі під sql/) і сплануйте знову: тоді план його не чіпає. Дозволяйте послаблення, лише якщо тригер треба зняти.",
+    },
+  },
   "plan.trigger-function-unseedable": {
     en: (p) =>
       `Function ${p.function} of a trigger on a provider table lies outside the managed schemas and is written in ${p.language}; the shadow and the proof copy can only reproduce such a function in sql or plpgsql`,

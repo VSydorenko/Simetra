@@ -378,6 +378,75 @@ describe.concurrent("buildPlan", () => {
       )
     })
 
+    it("keeps the external trigger out of drift after an apply", async () => {
+      // Зовнішній тригер з'явився після застосування: гейт дрейфу його не бачить
+      const model = await compiled({ [USERS]: users })
+      await inTarget(EMPTY, async (url) => {
+        await establish(url, model)
+        await query(
+          url,
+          `create schema private;
+           ${external("on_new_user", "private.on_new_user", PLPGSQL)}`
+        )
+        const outcome = await plan(url, model)
+        expect(outcome.status).toBe("unchanged")
+        expect(errors(outcome)).toEqual([])
+      })
+    })
+
+    describe("a trigger on an extension function", () => {
+      // Функція-член розширення: витяг зводить залежність до розширення, тож
+      // такий тригер у межі, як і тригер з функцією схеми застосунку
+      const TCN = "CREATE EXTENSION IF NOT EXISTS tcn WITH SCHEMA app;\n"
+      const TRIGGER = `CREATE TRIGGER user_tcn AFTER INSERT ON better_auth."user" FOR EACH ROW EXECUTE FUNCTION app.triggered_change_notification();\n`
+
+      it("keeps a declared one managed: no second plan, drift when it changes", async () => {
+        const model = await compiled({
+          [USERS]: users,
+          "sql/app/extensions.sql": TCN,
+          "sql/app/user-tcn.sql": TRIGGER,
+        })
+        await inTarget(EMPTY, async (url) => {
+          await establish(url, model)
+          expect((await plan(url, model)).status).toBe("unchanged")
+          await query(
+            url,
+            `alter table better_auth."user" disable trigger user_tcn`
+          )
+          const artifact = planned(await plan(url, model))
+          expect(artifact.drift?.sections).toContain("triggers")
+        })
+      })
+
+      it("names the safe path for an undeclared one the plan drops", async () => {
+        const model = await compiled({
+          [USERS]: users,
+          "sql/app/extensions.sql": TCN,
+        })
+        await inTarget(`create schema app; ${TCN} ${TRIGGER}`, async (url) => {
+          const outcome = await plan(url, model)
+          const artifact = planned(outcome)
+          const [drop] = stepMatching(artifact, /DROP TRIGGER "user_tcn"/)
+          expect(drop?.class).toBe("relaxation")
+          expect(artifact.requiredPermissions).toContain(drop!.id)
+          expect(
+            outcome.diagnostics
+              .filter((d) => d.code === "plan.provider-trigger-undeclared")
+              .map((d) => ({ severity: d.severity, params: d.params }))
+          ).toEqual([
+            {
+              severity: "warning",
+              params: {
+                trigger: "user_tcn",
+                table: "better_auth.user",
+                step: drop!.id,
+              },
+            },
+          ])
+        })
+      })
+    })
+
     it("refuses a trigger function in a language the shadow cannot take verbatim", async () => {
       const model = await compiled({ [USERS]: users })
       await inTarget(EMPTY, async (url) => {

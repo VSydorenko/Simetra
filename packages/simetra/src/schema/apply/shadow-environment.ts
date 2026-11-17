@@ -47,6 +47,10 @@ export async function readShadowEnvironment(
       WHERE NOT t.tgisinternal
         AND cn.nspname = ANY($1::text[])
         AND NOT n.nspname = ANY($2::text[])
+        -- Член розширення дає саме розширення: засів тригер на ньому пропускає
+        AND NOT EXISTS (SELECT FROM pg_catalog.pg_depend d
+                         WHERE d.classid = 'pg_catalog.pg_proc'::regclass
+                           AND d.objid = p.oid AND d.deptype = 'e')
       ORDER BY 1, 2`,
     [[...provider], [...scope.schemas, ...provider, ...AMBIENT_SCHEMAS]]
   )

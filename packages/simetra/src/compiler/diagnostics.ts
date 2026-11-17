@@ -351,6 +351,7 @@ export const COMPILER_RULES = [
   "plan.replication-role",
   "plan.preservation-type",
   "plan.provider-trigger-taken",
+  "plan.provider-trigger-undeclared",
   "plan.trigger-function-unseedable",
   "plan.row-version-first",
   "plan.numbering-not-generated",

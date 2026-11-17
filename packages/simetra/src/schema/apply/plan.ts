@@ -13,8 +13,10 @@ import {
 import {
   diffCatalogModels,
   PROVIDER_API_ROLES,
+  PROVIDER_SCHEMAS,
   quoteIdent,
   type CatalogModel,
+  type DatabaseProvider,
 } from "simetra/model"
 import {
   copiesShadowFromTemplate,
@@ -568,6 +570,33 @@ async function readProviderTriggers(
 }
 
 /**
+ * Неоголошений тригер на таблиці провайдера, який план знімає як чужий
+ * об'єкт (платформна спека §6.6, §6.9): дозвіл на послаблення його знищить,
+ * хоча тригер міг бути інтеграцією споживача. Попередження першим називає
+ * безпечний шлях — оголосити тригер дослівною одиницею.
+ */
+export function undeclaredProviderTriggers(
+  actions: readonly Pick<EngineAction, "destroyed">[],
+  foreign: ReadonlySet<string>,
+  provider: DatabaseProvider
+): EngineDiagnostic[] {
+  const schemas = new Set(PROVIDER_SCHEMAS[provider])
+  return actions.flatMap((action, i) => {
+    const step = stepId(i)
+    if (!foreign.has(step)) return []
+    return action.destroyed
+      .filter((ref) => ref.kind === "trigger" && schemas.has(ref.schema))
+      .map((ref) =>
+        applyDiagnostic("plan.provider-trigger-undeclared", "warning", {
+          trigger: ref.name,
+          table: `${ref.schema}.${ref.table ?? ""}`,
+          step,
+        })
+      )
+  })
+}
+
+/**
  * Нумерація першим записом, якої платформа ще не генерує (спека промоції
  * §9.2): лічильників немає, тож номер лишиться порожнім. Попередження —
  * лише там, де таблиця з'являється вперше чи переходить у вид промоцією:
@@ -913,12 +942,18 @@ export async function buildPlan(
   if (!filled.ok) return refused([...diagnostics, ...filled.diagnostics])
   // Зняття об'єкта, якого немає в останньому застосованому стані, — з
   // дозволом, і однойменна заміна теж (§6.6)
+  const foreign = foreignChanges(filled.actions, applied, 0)
   const classified = classifySteps(
     filled.actions,
     live.extracted.model,
     parse,
     0,
-    { foreign: foreignChanges(filled.actions, applied, 0) }
+    { foreign }
+  )
+  const undeclared = undeclaredProviderTriggers(
+    filled.actions,
+    foreign,
+    scope.provider
   )
   // Зміна типу, якій сторожа не побудувати, — відмова, а не крок без
   // перевірки: інакше дозвіл на `destructive` знову означав би «обріж мовчки»
@@ -1090,6 +1125,7 @@ export async function buildPlan(
     diagnostics: dedupe([
       ...diagnostics,
       ...collected.diagnostics,
+      ...undeclared,
       ...lockWarnings,
       ...numberingNotGenerated({
         model,
