@@ -32,13 +32,19 @@ export type CoreSource =
 // Рантайм і причина закриття читаються двома окремими підписками на тримач,
 // але міняються разом у `replace`: клієнт, що перерендерився між ними, бачить
 // обидва вже новими, бо `useSyncExternalStore` перечитує знімки на кожен кадр.
-export function useCoreSource(): CoreSource {
+/** The holder of the nearest provider; throws without one. */
+export function useHolder(): RuntimeHolder {
   const holder = useContext(HolderContext)
   if (holder === undefined) {
     throw new Error(
       "simetra/data/react: no DataRuntimeProvider above this hook"
     )
   }
+  return holder
+}
+
+export function useCoreSource(): CoreSource {
+  const holder = useHolder()
   const runtime = useSyncExternalStore(
     holder.subscribe,
     holder.current,

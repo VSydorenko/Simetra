@@ -1,0 +1,735 @@
+import { CommandFailure, LIMIT_REASONS, type CommandError } from "simetra/model"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { DataError } from "../../errors"
+import { createCore, inspectCore, type CoreSession } from "../core"
+import { JOURNAL_MAX } from "../overlay"
+import { createCoreSource, createReadLimiter, type ServerPort } from "../source"
+import { createFakeSource, type FakeSource } from "../testing/fake-source"
+import { DEFAULT_CORE_LIMITS, type RowView, type ViewHandle } from "../types"
+import {
+  OBJECTS,
+  TASK,
+  isCard,
+  isKeys,
+  key,
+  readsOf,
+  seed,
+  settle,
+  watch,
+} from "./core-support"
+
+/*
+ * Журнал мутацій і write-back (план B3-4-Л, задача 2; спека П4-B §6.5, §7.1,
+ * §7.2): справжнє ядро над фейковим сервером. Порт запису керований: тест
+ * тримає відповідь `run`, підміняє її форму чи відмовляє, а сервер виконує
+ * запис лише на мить відповіді.
+ */
+
+const EPOCH = "e".repeat(64)
+const OTHER_EPOCH = "f".repeat(64)
+const K = key(1)
+
+interface Port {
+  /** Holds each `run` until {@link release}; the server writes on release. */
+  hold: boolean
+  /** Rewrites the raw value of a `run` answer (drop `rows`, another epoch). */
+  transform: ((value: Record<string, unknown>) => unknown) | undefined
+  /** Refuses each `run` with this error instead of serving it. */
+  refuse: CommandError | undefined
+  runs: number
+  /** The wire requests of every `run`, in order. */
+  readonly requests: Parameters<ServerPort["run"]>[0][]
+  release(): void
+}
+
+function harness() {
+  const fake = createFakeSource({ objects: OBJECTS, epoch: EPOCH })
+  const queue: (() => void)[] = []
+  const port: Port = {
+    hold: false,
+    transform: undefined,
+    refuse: undefined,
+    runs: 0,
+    requests: [],
+    release() {
+      for (const go of queue.splice(0)) go()
+    },
+  }
+  const serve: ServerPort["run"] = async (request) => {
+    if (port.refuse !== undefined) throw new CommandFailure(port.refuse)
+    const value = (await fake.server.run(request)) as Record<string, unknown>
+    return port.transform === undefined ? value : port.transform(value)
+  }
+  const server: ServerPort = {
+    run(request) {
+      port.runs++
+      port.requests.push(request)
+      if (!port.hold) return serve(request)
+      return new Promise((resolve, reject) =>
+        queue.push(() => void serve(request).then(resolve, reject))
+      )
+    },
+    version: () => fake.server.version(),
+  }
+  const source = createCoreSource(
+    () => fake.adapter,
+    fake.index,
+    createReadLimiter(DEFAULT_CORE_LIMITS.readParallel),
+    server
+  )
+  const core = createCore({
+    subject: "u1",
+    source,
+    index: fake.index,
+    log: () => {},
+  })
+  return { fake, core, port, inspect: inspectCore(core) }
+}
+
+type Harness = ReturnType<typeof harness>
+
+const cardOf = (core: CoreSession, k = K): ViewHandle =>
+  core.view({ kind: "card", object: TASK, key: k })
+
+const rowOf = (handle: ViewHandle): RowView => handle.getSnapshot().rows[0]!
+
+const shown = (view: RowView) => {
+  if (view.state === "removed") throw new Error("removed")
+  return view
+}
+
+/** A mounted card of a seeded task, loaded. */
+async function mounted(h: Harness) {
+  seed(h.fake, 1, 1)
+  const card = cardOf(h.core)
+  const seen = watch(card)
+  await settle()
+  return { card, seen, version: shown(rowOf(card)).version }
+}
+
+const keyReads = (fake: FakeSource) =>
+  readsOf(fake, TASK).filter((r) => isKeys(r) || isCard(r))
+
+// Відповідь понад бюджет приходить без `rows` (Рд26).
+const withoutRows = (value: Record<string, unknown>) => {
+  const rest = { ...value }
+  delete rest.rows
+  return rest
+}
+
+const holdReads = (fake: FakeSource) => {
+  fake.hold = () => true
+}
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+describe("DataWriter.update — the await policy", () => {
+  it("shows the confirmed values with the state pending until the answer", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.hold = true
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    const view = shown(rowOf(card))
+    expect(view).toMatchObject({
+      state: "pending",
+      version,
+      values: { title: "t1" },
+      mutation: { id: m.id, state: "pending" },
+    })
+    expect(view.mutation).not.toHaveProperty("retry")
+    expect(view.mutation).not.toHaveProperty("cancel")
+    expect(h.port.runs).toBe(1)
+  })
+
+  it("writes the confirmed row and drops the mutation in one notification", async () => {
+    const h = harness()
+    const { card, seen, version } = await mounted(h)
+    h.port.hold = true
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    const before = seen.seen.length
+    h.port.release()
+    await settle()
+    const result = await m.settled
+    expect(result.ok).toBe(true)
+    const row = result.ok ? result.rows[0] : undefined
+    expect(row).toMatchObject({ key: K, values: { title: "new" } })
+    expect(row!.version).toBeGreaterThan(version)
+    const after = seen.seen.slice(before).map((s) => shown(s.rows[0]!))
+    // Жодного кадру з новим значенням і мутацією чи зі старим без мутації.
+    expect(after[0]).toMatchObject({
+      state: "synced",
+      version: row!.version,
+      values: { title: "new" },
+    })
+    expect(after[0]).not.toHaveProperty("mutation")
+    for (const frame of after)
+      expect(frame.values.title === "new" && frame.mutation === undefined).toBe(
+        true
+      )
+    expect(shown(rowOf(card)).values.title).toBe("new")
+    expect(h.inspect.serviceSizes().journal).toBe(0)
+  })
+
+  it("sends one run of one update with the base and only the given fields", async () => {
+    const h = harness()
+    const { version } = await mounted(h)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "x" },
+      { expectedVersion: version }
+    )
+    await m.settled
+    expect(h.port.requests).toEqual([
+      {
+        operation: {
+          action: "update",
+          object: h.fake.index.byRef.get(TASK)!.id,
+          id: K,
+          expectedVersion: version,
+          values: { title: "x" },
+        },
+        kernels: {
+          [h.fake.index.byRef.get(TASK)!.id]:
+            h.fake.index.byRef.get(TASK)!.kernelHash,
+        },
+      },
+    ])
+  })
+})
+
+describe("DataWriter.update — developer errors before the journal (§6.1)", () => {
+  it("refuses an update without expectedVersion with data.version-required", async () => {
+    const h = harness()
+    await mounted(h)
+    for (const options of [
+      undefined,
+      {},
+      { expectedVersion: 0 },
+      { expectedVersion: 1.5 },
+    ]) {
+      expect(() =>
+        h.core.update(TASK, K, { title: "x" }, options as never)
+      ).toThrow(expect.objectContaining({ code: "data.version-required" }))
+    }
+    expect(h.port.runs).toBe(0)
+    expect(h.inspect.serviceSizes().journal).toBe(0)
+  })
+
+  it("refuses a name outside the catalog synchronously, without the transport", async () => {
+    const h = harness()
+    const { version } = await mounted(h)
+    expect(() =>
+      h.core.update("Catalog.Nope", K, {}, { expectedVersion: version })
+    ).toThrow(TypeError)
+    expect(() =>
+      h.core.update(TASK, K, { nope: 1 }, { expectedVersion: version })
+    ).toThrow(TypeError)
+    expect(h.port.runs).toBe(0)
+  })
+
+  it("Р1: refuses a second update of a pending key with data.mutation-pending", async () => {
+    const h = harness()
+    const { version } = await mounted(h)
+    h.port.hold = true
+    h.core.update(TASK, K, { title: "a" }, { expectedVersion: version })
+    let thrown: unknown
+    try {
+      h.core.update(TASK, K, { title: "b" }, { expectedVersion: version })
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(DataError)
+    expect((thrown as DataError).code).toBe("data.mutation-pending")
+    expect(h.port.runs).toBe(1)
+  })
+
+  it("Р1: an update of a failed key replaces its mutation", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.refuse = { code: "command.busy" }
+    const first = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    expect(await first.settled).toEqual({
+      ok: false,
+      error: { code: "command.busy" },
+    })
+    expect(shown(rowOf(card)).mutation).toMatchObject({ state: "failed" })
+    h.port.refuse = undefined
+    const second = h.core.update(
+      TASK,
+      K,
+      { title: "b" },
+      { expectedVersion: version }
+    )
+    expect(second.id).not.toBe(first.id)
+    const result = await second.settled
+    expect(result).toMatchObject({
+      ok: true,
+      rows: [{ values: { title: "b" } }],
+    })
+    expect(h.port.runs).toBe(2)
+    expect(shown(rowOf(card)).mutation).toBeUndefined()
+  })
+
+  it(`the journal holds ${JOURNAL_MAX} mutations: the next key is data.journal-full without the transport`, () => {
+    const h = harness()
+    h.port.hold = true
+    for (let n = 1; n <= JOURNAL_MAX; n++)
+      h.core.update(TASK, key(n), { title: "x" }, { expectedVersion: 1 })
+    expect(h.port.runs).toBe(JOURNAL_MAX)
+    expect(() =>
+      h.core.update(
+        TASK,
+        key(JOURNAL_MAX + 1),
+        { title: "x" },
+        { expectedVersion: 1 }
+      )
+    ).toThrow(expect.objectContaining({ code: "data.journal-full" }))
+    expect(h.port.runs).toBe(JOURNAL_MAX)
+  })
+})
+
+describe("write-back without a full row (Р3, Р4)", () => {
+  it("an answer without rows re-reads the key before settling, in one notification", async () => {
+    const h = harness()
+    const { card, seen, version } = await mounted(h)
+    h.port.transform = withoutRows
+    holdReads(h.fake)
+    const reads = keyReads(h.fake).length
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    // Відповідь прийшла, перечитування в дорозі: мутація ще `pending`.
+    expect(keyReads(h.fake).length).toBe(reads + 1)
+    expect(shown(rowOf(card))).toMatchObject({
+      state: "pending",
+      values: { title: "t1" },
+    })
+    const before = seen.seen.length
+    h.fake.hold = undefined
+    h.fake.deliverAll()
+    await settle()
+    const first = shown(seen.seen[before]!.rows[0]!)
+    expect(first).toMatchObject({ state: "synced", values: { title: "new" } })
+    expect(first.mutation).toBeUndefined()
+    expect(await m.settled).toMatchObject({
+      ok: true,
+      rows: [{ key: K, values: { title: "new" } }],
+    })
+  })
+
+  it("a changed lazy field re-reads the key before settling", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    holdReads(h.fake)
+    const reads = keyReads(h.fake).length
+    const m = h.core.update(
+      TASK,
+      K,
+      { notes: "n2" },
+      { expectedVersion: version }
+    )
+    await settle()
+    expect(keyReads(h.fake).length).toBeGreaterThan(reads)
+    expect(shown(rowOf(card)).state).toBe("pending")
+    h.fake.hold = undefined
+    h.fake.deliverAll()
+    await settle()
+    expect((await m.settled).ok).toBe(true)
+    expect(shown(rowOf(card)).mutation).toBeUndefined()
+  })
+
+  it("a failed re-read settles with rows [undefined] and leaves the row stale", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.transform = withoutRows
+    holdReads(h.fake)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    h.fake.take().fail("command.internal")
+    await settle()
+    expect(await m.settled).toEqual({ ok: true, rows: [undefined] })
+    expect(shown(rowOf(card))).toMatchObject({
+      state: "stale",
+      values: { title: "t1" },
+    })
+    expect(shown(rowOf(card)).mutation).toBeUndefined()
+  })
+
+  it("a re-read without an answer for 5 s settles with rows [undefined] and stale", async () => {
+    vi.useFakeTimers()
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.transform = withoutRows
+    holdReads(h.fake)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    let result: unknown
+    void m.settled.then((r) => (result = r))
+    await settle()
+    vi.advanceTimersByTime(4_999)
+    await settle()
+    expect(result).toBeUndefined()
+    expect(shown(rowOf(card)).state).toBe("pending")
+    vi.advanceTimersByTime(1)
+    await settle()
+    expect(result).toEqual({ ok: true, rows: [undefined] })
+    expect(shown(rowOf(card))).toMatchObject({ state: "stale" })
+    // Перечитування триває: пізня відповідь пише рядок, мутації вже немає.
+    h.fake.hold = undefined
+    h.fake.deliverAll()
+    await settle()
+    expect(shown(rowOf(card))).toMatchObject({
+      state: "synced",
+      values: { title: "new" },
+    })
+  })
+
+  it("a result of another epoch writes no values and re-reads the key", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.transform = (value) => ({ ...value, epoch: OTHER_EPOCH })
+    holdReads(h.fake)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    expect(shown(rowOf(card))).toMatchObject({
+      state: "pending",
+      version,
+      values: { title: "t1" },
+    })
+    h.fake.hold = undefined
+    h.fake.deliverAll()
+    await settle()
+    expect(await m.settled).toMatchObject({
+      ok: true,
+      rows: [{ values: { title: "new" } }],
+    })
+    expect(shown(rowOf(card))).toMatchObject({ values: { title: "new" } })
+  })
+
+  it("a key with a newer tombstone settles without a write and is re-read", async () => {
+    const h = harness()
+    const { version } = await mounted(h)
+    h.port.hold = true
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    h.core.commit((w) => w.purge(TASK, { keys: [K] }), h.core.token())
+    const reads = keyReads(h.fake).length
+    h.port.release()
+    await settle()
+    expect(await m.settled).toEqual({ ok: true, rows: [undefined] })
+    expect(keyReads(h.fake).length).toBe(reads + 1)
+    expect(h.inspect.rowCount()).toBe(0)
+    expect(h.inspect.serviceSizes().journal).toBe(0)
+  })
+
+  it("write-back keeps hidden: the values return only with the re-read", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.hold = true
+    holdReads(h.fake)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    h.core.commit((w) => w.hide(TASK, [K]), h.core.token())
+    h.port.release()
+    await settle()
+    expect(shown(rowOf(card))).toMatchObject({
+      hidden: true,
+      state: "stale",
+      values: {},
+      mutation: { state: "pending" },
+    })
+    h.fake.hold = undefined
+    h.fake.deliverAll()
+    await settle()
+    const view = shown(rowOf(card))
+    expect(view.hidden).toBeUndefined()
+    expect(view).toMatchObject({ state: "synced", values: { title: "new" } })
+    expect((await m.settled).ok).toBe(true)
+  })
+})
+
+describe("mutation actions (Р5, Р7, Р11)", () => {
+  it("failed offers retry and cancel; retry is a new attempt with a new Mutation", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.refuse = { code: "command.busy" }
+    const first = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    await first.settled
+    await settle()
+    const failed = shown(rowOf(card))
+    expect(failed).toMatchObject({
+      state: "failed",
+      values: { title: "t1" },
+      mutation: { state: "failed", error: { code: "command.busy" } },
+    })
+    expect(Object.keys(failed.mutation!).sort()).toEqual([
+      "cancel",
+      "error",
+      "id",
+      "retry",
+      "state",
+    ])
+    h.port.refuse = undefined
+    h.port.hold = true
+    const again = failed.mutation!.retry!()!
+    expect(again.id).not.toBe(first.id)
+    expect(shown(rowOf(card)).mutation).toMatchObject({
+      id: again.id,
+      state: "pending",
+    })
+    // Дія старого вигляду після повтору нічого не робить.
+    expect(failed.mutation!.retry!()).toBeUndefined()
+    failed.mutation!.cancel!()
+    expect(shown(rowOf(card)).mutation).toMatchObject({ id: again.id })
+    h.port.release()
+    expect(await again.settled).toMatchObject({ ok: true })
+    expect(await first.settled).toMatchObject({ ok: false })
+    expect(h.port.runs).toBe(2)
+  })
+
+  it("conflict offers only cancel; cancel returns to the confirmed row in one notification", async () => {
+    const h = harness()
+    const { card, seen, version } = await mounted(h)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version + 100 }
+    )
+    expect(await m.settled).toMatchObject({
+      ok: false,
+      error: { code: "command.conflict" },
+    })
+    await settle()
+    const view = shown(rowOf(card))
+    expect(view.state).toBe("conflict")
+    expect(Object.keys(view.mutation!).sort()).toEqual([
+      "cancel",
+      "error",
+      "id",
+      "state",
+    ])
+    const before = seen.seen.length
+    view.mutation!.cancel!()
+    expect(seen.seen.length).toBe(before + 1)
+    expect(shown(rowOf(card))).toMatchObject({
+      state: "synced",
+      values: { title: "t1" },
+    })
+    expect(shown(rowOf(card)).mutation).toBeUndefined()
+  })
+
+  it("unavailable on run is unknown with dismiss only, and the key is re-read", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.refuse = { code: "command.unavailable" }
+    const reads = keyReads(h.fake).length
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    expect(await m.settled).toMatchObject({ ok: false })
+    await settle()
+    const view = shown(rowOf(card))
+    expect(view.state).toBe("unknown")
+    expect(Object.keys(view.mutation!).sort()).toEqual([
+      "dismiss",
+      "error",
+      "id",
+      "state",
+    ])
+    expect(keyReads(h.fake).length).toBe(reads + 1)
+    view.mutation!.dismiss!()
+    expect(shown(rowOf(card)).mutation).toBeUndefined()
+    expect(h.inspect.serviceSizes().journal).toBe(0)
+  })
+
+  it("command.internal on run is failed and re-reads the key without values of the answer", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.refuse = { code: "command.internal" }
+    const reads = keyReads(h.fake).length
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    expect(await m.settled).toMatchObject({ ok: false })
+    await settle()
+    expect(shown(rowOf(card)).state).toBe("failed")
+    expect(keyReads(h.fake).length).toBe(reads + 1)
+  })
+
+  it("a removed row carries a pending mutation with cancel; the answer after cancel writes nothing", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.hold = true
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    h.fake.setVisibleScopes([])
+    card.refresh()
+    await settle()
+    const removed = rowOf(card)
+    expect(removed).toMatchObject({
+      state: "removed",
+      mutation: { state: "pending" },
+    })
+    expect(removed.mutation).not.toHaveProperty("retry")
+    removed.mutation!.cancel!()
+    expect(rowOf(card)).toEqual({ key: K, state: "removed" })
+    const reads = keyReads(h.fake).length
+    h.port.release()
+    await settle()
+    expect(await m.settled).toEqual({ ok: true, rows: [undefined] })
+    expect(rowOf(card)).toEqual({ key: K, state: "removed" })
+    expect(keyReads(h.fake).length).toBe(reads)
+    expect(h.inspect.serviceSizes().journal).toBe(0)
+  })
+
+  it("a failed mutation of a hidden key offers no retry", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    holdReads(h.fake)
+    h.port.refuse = { code: "command.busy" }
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    await m.settled
+    h.core.commit((w) => w.hide(TASK, [K]), h.core.token())
+    await settle()
+    const view = shown(rowOf(card))
+    expect(view).toMatchObject({ hidden: true, mutation: { state: "failed" } })
+    expect(view.mutation).not.toHaveProperty("retry")
+    expect(view.mutation).toHaveProperty("cancel")
+  })
+
+  it("a purge erases the fields of the mutation: no retry, only cancel", async () => {
+    const h = harness()
+    const { version } = await mounted(h)
+    const list = h.core.view({ kind: "keys", object: TASK, keys: [K] })
+    watch(list)
+    await settle()
+    h.port.refuse = { code: "command.busy" }
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    await m.settled
+    h.core.commit((w) => w.purge(TASK, { scope: null }), h.core.token())
+    // Скоуп ключа — `S`: purge іншої пари полів не стирає.
+    await settle()
+    const kept = shown(rowOf(list)).mutation!
+    expect(kept).toHaveProperty("retry")
+    h.core.commit((w) => w.purge(TASK, { keys: [K] }), h.core.token())
+    // Ключа в сховищі вже немає: мутація лишається в журналі без полів.
+    expect(h.inspect.serviceSizes().journal).toBe(1)
+    expect(kept.retry!()).toBeUndefined()
+    expect(h.port.runs).toBe(1)
+  })
+})
+
+describe("close (§6.1)", () => {
+  it("settles every live mutation with disposed; the late answer writes nothing", async () => {
+    const h = harness()
+    const { version } = await mounted(h)
+    h.port.hold = true
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    h.core.close("disposed")
+    const disposed = {
+      ok: false,
+      error: { code: "command.unavailable", reason: LIMIT_REASONS.disposed },
+    }
+    expect(await m.settled).toEqual(disposed)
+    h.port.release()
+    await settle()
+    expect(await m.settled).toEqual(disposed)
+    expect(h.inspect.rowCount()).toBe(0)
+    expect(h.inspect.serviceSizes().journal).toBe(0)
+  })
+
+  it("an update after close settles with the close reason and is never sent", async () => {
+    const h = harness()
+    h.core.close("session-changed")
+    const m = h.core.update(TASK, K, { title: "x" }, { expectedVersion: 1 })
+    expect(await m.settled).toEqual({
+      ok: false,
+      error: {
+        code: "command.unauthenticated",
+        reason: LIMIT_REASONS.sessionChanged,
+      },
+    })
+    expect(h.port.runs).toBe(0)
+  })
+})

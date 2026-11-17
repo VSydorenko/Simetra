@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { computeRowView } from "../snapshot"
+import type { RowMutation } from "../types"
 import { harness, K1, row } from "./store-support"
 
 const EA = "a".repeat(64)
@@ -38,5 +39,83 @@ describe("computeRowView staleFields", () => {
     put(h, null)
     const view = computeRowView(K1, h.store.get(K1)!, ["notes"], undefined)
     expect(view).toMatchObject({ staleFields: [] })
+  })
+})
+
+describe("computeRowView with an own mutation (plan B3-4-Л Р5, Р7)", () => {
+  const pending: RowMutation = Object.freeze({ id: "m1", state: "pending" })
+  const failed: RowMutation = Object.freeze({
+    id: "m1",
+    state: "failed" as const,
+    error: { code: "command.busy" as const },
+    cancel: () => {},
+  })
+
+  const stored = () => {
+    const h = harness()
+    put(h, EA)
+    return h
+  }
+
+  it("takes the state of the mutation and keeps the confirmed values", () => {
+    const h = stored()
+    const view = computeRowView(K1, h.store.get(K1)!, [], undefined, pending)
+    expect(view).toMatchObject({
+      state: "pending",
+      version: 1,
+      values: { title: "t1" },
+      mutation: pending,
+    })
+  })
+
+  it("a mutation state outranks stale", () => {
+    const h = stored()
+    h.write((s) => h.store.markStale(s, [K1], 5))
+    const e = h.store.get(K1)!
+    expect(computeRowView(K1, e, [], undefined).state).toBe("stale")
+    expect(computeRowView(K1, e, [], undefined, failed).state).toBe("failed")
+  })
+
+  it("hidden outranks the mutation state, and the view keeps the mutation", () => {
+    const h = stored()
+    h.write((s) => h.store.hideKeys(s, [K1]))
+    const view = computeRowView(K1, h.store.get(K1)!, [], undefined, failed)
+    expect(view).toMatchObject({
+      state: "stale",
+      hidden: true,
+      values: {},
+      mutation: failed,
+    })
+  })
+
+  it("a removed row carries the mutation", () => {
+    const h = stored()
+    h.write((s) => h.store.remove(s, K1, h.now()))
+    const view = computeRowView(K1, h.store.get(K1)!, [], undefined, failed)
+    expect(view).toEqual({ key: K1, state: "removed", mutation: failed })
+    expect(computeRowView(K1, h.store.get(K1)!, [], view, failed)).toBe(view)
+    expect(computeRowView(K1, h.store.get(K1)!, [], view)).toEqual({
+      key: K1,
+      state: "removed",
+    })
+  })
+
+  it("shares the previous view only while the mutation is the same object", () => {
+    const h = stored()
+    const e = h.store.get(K1)!
+    const first = computeRowView(K1, e, [], undefined, pending)
+    expect(computeRowView(K1, e, [], first, pending)).toBe(first)
+    const next = computeRowView(K1, e, [], first, failed)
+    expect(next).not.toBe(first)
+    expect(next).toMatchObject({ state: "failed", mutation: failed })
+    // Зняття мутації — новий вигляд без поля `mutation`.
+    const settled = computeRowView(K1, e, [], next)
+    expect(settled.state).toBe("synced")
+    expect("mutation" in settled).toBe(false)
+    // Значення ті самі: посилка значень спільна.
+    expect(settled).toMatchObject({ values: { title: "t1" } })
+    expect((settled as { values: unknown }).values).toBe(
+      (next as { values: unknown }).values
+    )
   })
 })

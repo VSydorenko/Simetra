@@ -3,6 +3,7 @@ import type { DefectFlag } from "./defects"
 import { fieldInfoOf, filterCollator } from "./filter"
 import { keyId } from "./epoch"
 import { createObjectStore } from "./object-store"
+import { createOverlay, type UpdateOptions } from "./overlay"
 import { createSectionStore } from "./section-store"
 import { createSession, type Scope } from "./session"
 import { createRowViews, purgedSnapshot } from "./snapshot"
@@ -26,7 +27,9 @@ import {
   type CoreLogEntry,
   type GenerationToken,
   type Key,
+  type Mutation,
   type ObjectName,
+  type Values,
   type ViewHandle,
   type ViewSnapshot,
   type ViewSpec,
@@ -68,6 +71,20 @@ export interface CoreSession {
    * A throw of `fn` is passed on; rows it wrote stay only with an owner.
    */
   commit(fn: (writer: Writer) => void, token: GenerationToken): boolean
+  /**
+   * Starts an `update` with the `await` policy (P4-B spec §7.1, plan
+   * B3-4-Л): one mutation per key in the journal, one `run`. Throws
+   * synchronously, before the journal and the transport: `TypeError` for a
+   * name outside the catalog, `DataError` `data.version-required`,
+   * `data.mutation-pending` (the key has a `pending` mutation) and
+   * `data.journal-full`. After `close` it settles with the close reason.
+   */
+  update(
+    object: ObjectName,
+    key: Key,
+    values: Values,
+    options: UpdateOptions
+  ): Mutation
   /** Held views of the object, visible first. */
   activeViews(object: ObjectName): readonly ActiveView[]
   /**
@@ -90,7 +107,8 @@ export interface CoreSession {
   /**
    * Purges every key in one notification batch, after which every handle —
    * new ones included — returns one stable `purged` snapshot with `reason`;
-   * no request goes out and no response is written afterwards.
+   * no request goes out and no response is written afterwards. Every
+   * mutation not yet settled settles with the close.
    */
   close(reason: CloseReason): void
 }
@@ -120,6 +138,8 @@ export interface CoreInspection {
     preloadTimers: number
     /** Re-reads scheduled by a version epoch switch, per object. */
     switchTimers: number
+    /** Mutations in the journal plus attempts not yet settled. */
+    journal: number
     /** Section store maps, summed over objects. */
     sectionOwners: number
     sectionOwnerVersions: number
@@ -226,7 +246,11 @@ export function createCore(options: {
     log,
     defects,
   })
-  const rowViews = createRowViews()
+  // Журнал створюється після ядра (йому потрібен `commit`); вигляд рядка
+  // бере з нього мутацію лише після створення.
+  const rowViews = createRowViews((object, key, e) =>
+    overlay.mutationOf(object, key, e)
+  )
   const dirtySections = new Map<ObjectName, Set<Key>>()
   let closed: ViewSnapshot | undefined
 
@@ -288,6 +312,8 @@ export function createCore(options: {
       if (defects.has("absent-row-ignored")) return
       o.rows.remove(scope, key, readEpoch)
       rowViews.touch(o.name, key)
+      // Перехід у `removed` стирає поля мутації ключа тим самим `commit` (Р11).
+      if (o.rows.get(key)?.removed !== undefined) overlay.erase(o.name, key)
       // `removed` стирає й рядки ТЧ власника (§6.2, правило 5); власник без
       // шапки в сховищі — теж: його рядкам ТЧ нема чим лишатись видимими.
       // Епоху читання рядків ТЧ не порівнюємо навмисно: епоха старту на
@@ -540,6 +566,10 @@ export function createCore(options: {
     invalidateTail,
     defects,
     hiddenKeys,
+    journal: {
+      erase: (object, key) => overlay.erase(object, key),
+      eraseScope: (object, scope) => overlay.eraseScope(object, scope),
+    },
   }
 
   const core: CoreSession = {
@@ -565,6 +595,8 @@ export function createCore(options: {
         "writer"
       )
     },
+    update: (object, key, values, updateOptions) =>
+      overlay.update(object, key, values, updateOptions),
     activeViews: (object) => activeViews(writerContext, object),
     setVisible: (spec, visible) => setVisible(writerContext, spec, visible),
     revalidate: (object, revalidateOptions) =>
@@ -581,8 +613,24 @@ export function createCore(options: {
       }
       // Черга обмежувача: жодного запиту після закриття.
       source.close()
+      overlay.close(reason)
     },
   }
+
+  const overlay = createOverlay({
+    session,
+    source,
+    index,
+    objectOf,
+    rowViews,
+    commit: core.commit,
+    reread(object, key, reread) {
+      revalidateHolders(writerContext, object, new Set([key]), reread).catch(
+        (error: unknown) => log({ kind: "listener-failed", error })
+      )
+    },
+    log,
+  })
 
   internals.set(core, { objects, ops, registry })
 
@@ -613,6 +661,7 @@ export function createCore(options: {
         releaseTimers: subs.filter((s) => s.releaseTimer !== undefined).length,
         preloadTimers: subs.reduce((n, s) => n + s.preloadTimers.size, 0),
         switchTimers: switchTimers.size,
+        journal: overlay.size(),
         sectionOwners: sections.reduce((n, x) => n + x.owners, 0),
         sectionOwnerVersions: sections.reduce((n, x) => n + x.ownerVersions, 0),
       }

@@ -135,6 +135,20 @@ export interface ObjectStore {
     lazyRead: boolean
   ): PutResult
   /**
+   * Writes a row of an own command result (P4-B spec §7.2 step 3, plan
+   * B3-4-Л Р3) by the version rule, without the read path's lifting of marks:
+   * `hidden`, `removed`, `stale` marks and tombstones stay. `"skipped"` — not
+   * written, the caller re-reads the key: no entry or no owner, `removed` or
+   * `hidden`, a key or pair tombstone newer than `readEpoch`, a scope move,
+   * or a row epoch other than the session's and the stored row's.
+   * `"older"` — the store holds a newer version.
+   */
+  writeBack(
+    scope: Scope,
+    row: ServerRow,
+    readEpoch: number
+  ): "written" | "older" | "skipped"
+  /**
    * Always marks `removed` (П15); a repeated non-divergent remove from a read
    * started after the mark is a new mark and moves its epoch. A no-op only for
    * a key with a newer key or pair tombstone and for a key without an entry.
@@ -473,6 +487,39 @@ export function createObjectStore(options: {
       if (!moved) return result
       hideByHorizon(e, row.key)
       return "stale-inserted"
+    },
+
+    writeBack(scope, row, readEpoch) {
+      scope.assert()
+      const e = rows.get(row.key)
+      if (e === undefined || e.owners === 0) return "skipped"
+      // Позначки знімає лише читання, що почалось після них (Р-2 серії):
+      // результат запису читанням не є, тож ключ іде на перечитування.
+      if (e.removed !== undefined || e.stale.hidden !== undefined)
+        return "skipped"
+      if (buried(row.key, e.scope, readEpoch)) return "skipped"
+      const incoming =
+        scopeField !== undefined && Object.hasOwn(row.values, scopeField)
+          ? scopeOf(entry, row.values)
+          : e.scope
+      // Переїзд скоупу перевіряє надгробок нової пари й горизонт — це шлях
+      // читання, а не запису результату.
+      if (incoming !== e.scope) return "skipped"
+      // Версії порівнянні лише в одній епосі (Рд24): епоха результату мусить
+      // бути і поточною епохою сесії, і епохою збереженого рядка.
+      const epoch = row.versionEpoch
+      if (
+        epoch == null ||
+        epoch !== versions.current() ||
+        e.versionEpoch !== epoch
+      )
+        return "skipped"
+      const merged = mergeVersioned(e.row, row)
+      if (merged === undefined) return "older"
+      e.row = merged
+      e.version = merged.version
+      e.writtenEpoch = Math.max(e.writtenEpoch, readEpoch)
+      return "written"
     },
 
     remove(scope, key, readEpoch) {

@@ -4,6 +4,7 @@ import { Component, StrictMode, createElement, type ReactNode } from "react"
 import { renderToString } from "react-dom/server"
 import { afterEach, describe, expect, it } from "vitest"
 import { SUBJECT, clientCatalog } from "../../__tests__/support"
+import { writerOf } from "../../data-writer"
 import { runtimeHandleOf } from "../../runtime/handle"
 import { createRuntimeHolder, type RuntimeHolder } from "../../runtime/holder"
 import { createDataRuntime, type DataRuntime } from "../../runtime/runtime"
@@ -21,6 +22,7 @@ import {
   DataRuntimeProvider,
   useRow,
   useRows,
+  useWriter,
   type UseRowResult,
   type UseRowsResult,
 } from "../index"
@@ -108,6 +110,28 @@ describe("runtime holder", () => {
     off()
     holder.replace(undefined)
     expect(calls).toBe(2)
+  })
+})
+
+describe("useWriter", () => {
+  it("gives the writer of the held runtime, and of the new one after replace", async () => {
+    const a = makeRuntime().runtime
+    const b = makeRuntime().runtime
+    const holder = createRuntimeHolder(a)
+    const view = mount(holder, () => useWriter())
+    expect(view.last()).toBe(writerOf(a))
+    act(() => holder.replace(b))
+    expect(view.last()).toBe(writerOf(b))
+    expect(view.last()).not.toBe(writerOf(a))
+    act(() => holder.replace(undefined, "signed-out"))
+    // Без рантайму мутація осідає причиною закриття й нікуди не йде.
+    const mutation = view
+      .last()
+      .update(TASK, key(1), {}, { expectedVersion: 1 })
+    expect(await mutation.settled).toEqual({
+      ok: false,
+      error: { code: "command.unavailable", reason: "disposed" },
+    })
   })
 })
 
