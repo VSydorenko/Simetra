@@ -9,6 +9,17 @@ const captured = vi.hoisted(() => ({
   request: undefined as undefined | Request,
 }))
 
+// Список, а не `vi.fn`: `restoreAllMocks` стирає лічильник викликів, а обгортка
+// створюється один раз при імпорті
+const wrap = vi.hoisted(() => {
+  const wrapped: unknown[] = []
+  const serverOnly = <F extends (...args: never[]) => unknown>(fn: F): F => {
+    wrapped.push(fn)
+    return fn
+  }
+  return { wrapped, serverOnly }
+})
+
 vi.mock("@tanstack/react-start", () => {
   const isomorphic = {
     server: (fn: () => unknown) => {
@@ -28,6 +39,7 @@ vi.mock("@tanstack/react-start", () => {
       },
     }),
     createIsomorphicFn: () => isomorphic,
+    createServerOnlyFn: wrap.serverOnly,
   }
 })
 vi.mock("@tanstack/react-start/server", () => ({
@@ -130,6 +142,10 @@ describe("session function in process (SSR branch)", () => {
     })
     expect(await readSessionClaimsInProcess(page)).toEqual(USER)
     expect(verifySession).toHaveBeenCalledTimes(1)
+  })
+
+  it("is wrapped by createServerOnlyFn", () => {
+    expect(wrap.wrapped).toContain(readSessionClaimsInProcess)
   })
 
   it("keeps the anonymous and error rules", async () => {

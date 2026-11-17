@@ -1,5 +1,6 @@
 import { tanstackStart } from "@tanstack/react-start/plugin/vite"
 import viteReact from "@vitejs/plugin-react"
+import { fileURLToPath } from "node:url"
 import { nitro } from "nitro/vite"
 import { defineConfig } from "vite"
 
@@ -20,6 +21,12 @@ export default defineConfig({
     tanstackStart(),
     nitro({
       preset: "node-server",
+      // Перевірка оточення на старті сервера (src/server/startup-plugin.ts)
+      plugins: [
+        fileURLToPath(
+          new URL("./src/server/startup-plugin.ts", import.meta.url)
+        ),
+      ],
       // `useRequest()` в `defer` (runtime.ts) працює лише з асинхронним контекстом
       experimental: { asyncContext: true },
     }),

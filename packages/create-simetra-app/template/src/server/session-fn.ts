@@ -1,4 +1,8 @@
-import { createIsomorphicFn, createServerFn } from "@tanstack/react-start"
+import {
+  createIsomorphicFn,
+  createServerFn,
+  createServerOnlyFn,
+} from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
 import { checkRequestOrigin } from "simetra/server"
 import { verifySession, type AppClaims } from "./auth"
@@ -36,23 +40,24 @@ export async function readSessionClaims(
  * законно `none` чи `cross-site` (перехід за посиланням), тож правило
  * походження тут не застосовується. Лише серверна гілка ізоморфної функції.
  */
-export async function readSessionClaimsInProcess(
-  request: Request
-): Promise<AppClaims | null> {
-  try {
-    return await sessionOrNull(request)
-  } catch (error) {
-    console.error("[simetra] session function", error)
-    return null
+export const readSessionClaimsInProcess = createServerOnlyFn(
+  async (request: Request): Promise<AppClaims | null> => {
+    try {
+      return await sessionOrNull(request)
+    } catch (error) {
+      console.error("[simetra] session function", error)
+      return null
+    }
   }
-}
+)
 
 export const getSessionClaims = createServerFn({ method: "GET" }).handler(() =>
   readSessionClaims(getRequest())
 )
 
 /**
- * Те, що кличе `beforeLoad` кореня: на сервері (SSR) — читання сесії в процесі,
+ * Те, що кличе `beforeLoad` кореня (лише цей шлях кличе `sessionClaims` на
+ * сервері: він без правила походження): на сервері (SSR) — читання сесії в процесі,
  * на клієнті — Server Function, яка завжди застосовує правило походження.
  * Розрізнення будовою (`createIsomorphicFn`), а не висновком зі шляху запиту.
  */
