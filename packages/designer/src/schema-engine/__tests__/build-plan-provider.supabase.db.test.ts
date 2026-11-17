@@ -90,6 +90,21 @@ END $$;`
         .filter((d) => d.code === "plan.provider-trigger-taken")
         .map((d) => d.params)
 
+    it("plans around a trigger on auth.users whose function lies outside the boundary", async () => {
+      // Зовнішня інтеграція (спека профілю postgres §4.2): тінь і копія
+      // дістають функцію дослівно, план тригера не торкається
+      const model = await compiled({ [USERS]: users })
+      await inTarget(
+        `create schema private; ${foreignTrigger("private", "on_new_user")}`,
+        async (url) => {
+          const artifact = planned(await plan(url, model))
+          expect(
+            artifact.steps.filter((s) => /on_new_user|private/.test(s.sql))
+          ).toEqual([])
+        }
+      )
+    })
+
     it("refuses a first apply over a foreign trigger with the name of the provision trigger", async () => {
       const model = await compiled({ [USERS]: users })
       await inTarget(foreignTrigger("public", PROVISION), async (url) => {
@@ -163,11 +178,11 @@ END $$;`
       })
     })
 
-    it("refuses at the desired shadow a foreign trigger whose function is in the provider schema", async () => {
+    it("refuses before the desired shadow a foreign trigger whose function is in the provider schema", async () => {
       // Тригер із функцією в схемі провайдера двигун вважає базовим станом
-      // провайдера: він засівається в бажану тінь, і згенерований
-      // `CREATE TRIGGER` там падає на «already exists». Відмова — двигуна,
-      // ще до перевірки імені й копії доказу
+      // провайдера: свідок його не бачить, а засів переносить у бажану тінь,
+      // де згенерований `CREATE TRIGGER` упав би на «already exists». Ім'я
+      // судять за каталогом цілі — кодована відмова до тіні
       const model = await compiled({ [USERS]: users })
       await inTarget(EMPTY, async (url) => {
         const admin = asSuperuser(url)
@@ -188,15 +203,10 @@ END $$;`
         const before = await state()
         const outcome = await plan(url, model)
         expect(outcome.status).toBe("refused")
-        expect(errors(outcome)).toEqual(["engine.shadow-load-failed"])
-        const [failed] = outcome.diagnostics.filter(
-          (d) => d.code === "engine.shadow-load-failed"
-        )
-        expect(failed?.engineCode).toBe("stuck_statement")
-        expect(failed?.message).toContain(
-          `CREATE TRIGGER ${PROVISION} AFTER INSERT ON auth.users`
-        )
-        expect(failed?.message).toContain("already exists")
+        expect(errors(outcome)).toEqual(["plan.provider-trigger-taken"])
+        expect(taken(outcome)).toEqual([
+          { trigger: PROVISION, table: "auth.users" },
+        ])
         // План лише читає ціль: чужий тригер і його функція ті самі, шару
         // платформи не з'явилося
         expect(await state()).toEqual(before)

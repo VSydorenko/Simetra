@@ -25,10 +25,10 @@ const SHADOW_DROP: EngineDiagnostic = {
 }
 
 vi.mock("../schema-engine", async (importOriginal) => {
-  // Транзакція лише для сторожа власника: `undefined` — сторож пропускає
+  // Транзакції лише для читань до тіні; самі читання підмінено нижче
   const database: ApplyDatabase = {
     statement: () => Promise.reject(new Error("no statement expected")),
-    transaction: () => Promise.resolve(undefined as never),
+    transaction: (_db, _mode, fn) => fn({} as never),
   }
   return {
     ...(await importOriginal<typeof import("../schema-engine")>()),
@@ -47,6 +47,8 @@ vi.mock("simetra/schema", async (importOriginal) => {
   return {
     ...actual,
     checkPlatformRoles: () => Promise.resolve({}),
+    checkOwnerAttributes: () => Promise.resolve(undefined),
+    readShadowEnvironment: () => Promise.resolve({ ok: true, statements: [] }),
     executePlan: () => Promise.resolve(committed),
   }
 })
