@@ -32,7 +32,7 @@ export interface DataRuntime {
   /**
    * Holds the view `spec` until its first subscription or `ttlMs` (default
    * 5 s) and resolves after its first load: for a router loader (P4-B spec
-   * §6.1, §6.6). A refused spec throws `DataError` synchronously.
+   * §6.1, §6.6). Throws synchronously on a refused spec (`TypeError`, `DataError`).
    */
   preload(spec: ViewSpec, options?: { ttlMs?: number }): Promise<void>
   /** The list strategy of `object` (`"<kind>.<name>"`): `window` unless the settings name it. */

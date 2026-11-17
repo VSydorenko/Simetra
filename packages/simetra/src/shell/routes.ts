@@ -61,6 +61,7 @@ export function entityListRoute(
 }
 
 // Шов для `entityCardRoute(entity)`: той самий вигляд опцій, а в `staticData`
-// — `simetraCard: entity.id` і `simetraObject: entity.ref`; `openCard`
+// — `simetraCard: entity.id` і ОБОВ'ЯЗКОВО `simetraObject: entity.ref` (без нього
+// `openCard` маршрут не знайде); `openCard`
 // (navigation.ts) вже шукає маршрут саме за ними. Додасть задача 4 разом із
 // `CardHost`.

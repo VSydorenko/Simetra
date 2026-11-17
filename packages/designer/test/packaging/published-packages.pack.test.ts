@@ -373,11 +373,14 @@ describe("simetra/data", () => {
     expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
   })
 
-  it("the ui entry imports only its peers and the hooks entry", async () => {
+  it("the ui entry imports only its peers, the hooks entry and the T0 model", async () => {
     const m = await readPackedManifest(tarballs.simetra)
     const allowed = new Set([
       ...Object.keys(m.peerDependencies as object),
       "simetra/data/react",
+      // Межа ярусів дозволяє T5 імпортувати вниз; T0 залежить лише від `zod`,
+      // а план вимагає кодек T0 (каталог клієнта) у хостах.
+      "simetra/model",
     ])
     const specifiers = [
       ...(await packedSources(tarballs.simetra, "dist/ui/", ".js")).values(),
