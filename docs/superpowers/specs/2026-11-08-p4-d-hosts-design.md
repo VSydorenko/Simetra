@@ -110,7 +110,7 @@ chromium/webkit × production/dev і стиснення відповідей (§
 
 | Файл (у `template/`) | Роль |
 | --- | --- |
-| `simetra.config.ts`, `metadata/` | проєкт профілю `postgres`; довідники `Client` (стандартні `description` і `code` за налаштуваннями виду, `country: Ref → Country`, ТЧ `contacts` з `name` і `phone`) і `Country` (стандартні `description` і `code`); індекс `description` дає реєстр виду (B1d) |
+| `simetra.config.ts`, `metadata/` | проєкт профілю `postgres`; довідники `Client` (стандартні `description` і `code` за налаштуваннями виду, `country: Ref → Country`, ТЧ `contacts` з `name` і `phone`) і `Country` (стандартні `description` і `code`); індекс `description` дає реєстр виду (B1d); роль з `extent: "own"` над `Client` наявною моделлю прав (носій власності — посилання `owner` на каталог користувачів профілю), тож два користувачі бачать різні рядки `Client` і e2e доводить ізоляцію значень між суб'єктами (§8.3) |
 | `generated/` | `runtime-catalog.json`, `client-catalog.json` з `compile --out`; комітяться, тест свіжості |
 | `src/server/runtime.ts` | **зв'язування рантайму**: пул `simetra_runtime` на рівні модуля (Рт17) з DSN `SIMETRA_RUNTIME_DATABASE_URL`, `createCommandRuntime({ database: fromPgPool(pool), catalog, defer })`, `createDataHandler` |
 | `src/server/auth-db.ts` | пул Better Auth з DSN `SIMETRA_AUTH_DATABASE_URL` (роль `simetra_auth`, власник схеми `better_auth`) |
@@ -554,7 +554,8 @@ DOM і журнал Server Function з точним результатом). З�
 | конверт зі `subject` іншого користувача | D2 | `command.unauthenticated` `session-changed` |
 | `get-session` і HTML | D2 | `Cache-Control: no-store`; HTML — `private, no-store` і `Vary: Cookie` |
 | кожен id серверної функції з маніфесту production-збірки: `POST` з сесією, `Sec-Fetch-Site: cross-site` і дійсним конвертом `read` суб'єкта сесії в протоколі серіалізації Start | D3 | жодна відповідь не несе значень рядків; позитивний контроль — та сама проба на `dataFn` того самого походження повертає рядки |
-| SSR сесії A, потім вхід B у тій самій вкладці | D3 | жодного значення A в DOM після заміни рантайму |
+| SSR сесії A, потім вхід B у тій самій вкладці без виходу | D3 | жодного значення власних рядків A в DOM після заміни рантайму; запити даних несуть `subject` B |
+| SSR списку `Client` для A і B послідовно (A, B, A) і паралельно | D3 | HTML і знімок кожного — лише власні рядки й власний `subject`; жодного значення чи `sub` іншого |
 | запит без сесії на сторінку з даними | D3 | перенаправлення на вхід; знімка в HTML немає |
 | анонімна сесія Better Auth на сторінку з даними | D3 | HTML без рядків і без знімка; перенаправлення на вхід |
 | дерево `template/` і `template/package.json` | D2 | немає `test-host`, `frame-oracle`, `simetra/data/testing`, `simetra/server/testing` |

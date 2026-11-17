@@ -25,7 +25,7 @@
 | # | Рішення | Вплив на спеку |
 | --- | --- | --- |
 | Д2-1 | Стиснення відповідей у D2 немає (→ #210); entry ставить межу тіла, кеш, заголовки й адресу клієнта | немає (§4.5 уже виправлено) |
-| Д2-2 | Фікстура e2e — тегована база прогону з ознакою `simetra.environment = 'development'` рівня бази, `db-setup`, `seed` (Д-9), два користувачі через `dev-user`, сервер `node-server` на `127.0.0.1`, `CommandRuntime` другого користувача для зовнішніх змін; одна збірка — production без аліасу `#instrument` | немає |
+| Д2-2 | Фікстура e2e — тегована база прогону з ознакою `simetra.environment = 'development'` рівня бази, `db-setup`, `seed` (Д-9), два користувачі A і B через `dev-user` з різними власними рядками `Client` (Д-13), сервер `node-server` на `127.0.0.1`, `CommandRuntime` другого користувача для зовнішніх змін; одна збірка — production без аліасу `#instrument` | немає |
 | Д2-3 | Обхід #8139, `resolve.dedupe` пакета під `link:` і перевірка версії Rolldown у дереві — за звітом П0 (а); override Rolldown і Vite — у `pnpm-workspace.yaml` | немає |
 
 ## Інваріанти безпеки
@@ -52,6 +52,15 @@
 
 ## Задачі
 
+### Задача 0 — звірка й права `own` (Д-13)
+
+`orient --plan` цього файла. DB-тест на стеку `postgres` (тегована база):
+проєкт з роллю `extent: "own"` над об'єктом з носієм `owner` → два
+користувачі Better Auth (провізія ПГ-3) → `read` через `CommandRuntime` з
+claims кожного бачить лише власні рядки; мутація «носій не звужує» червонить
+кейс. Відмова — звіт архітекторці як дефект ПГ-3, без відступу. `run-tests db
+--filter own-rows`.
+
 ### Задача 7 — пакети, воркспейс, метадані, межа фреймворку, рівні тестів
 
 Файли: `packages/create-simetra-app/package.json` (`create-simetra-app`,
@@ -63,8 +72,9 @@
 `template/{vite.config.ts,tsconfig.json,vitest.config.ts,simetra.config.ts}`
 (vitest-проєкти `unit` і `db`; `db` бере той самий `globalSetup`
 `stack-guard.postgres.ts`, що й `simetra`); `template/metadata/**` (`Client`:
-`description`, `code`, `country: Ref → Country`, ТЧ `contacts` з `name` і
-`phone`; `Country`: `description`, `code`); `template/generated/*.json`;
+`description`, `code`, `country: Ref → Country`, `owner` — носій власності,
+ТЧ `contacts` з `name` і `phone`; `Country`: `description`, `code`; роль з
+`extent: "own"` над `Client` за Д-13); `template/generated/*.json`;
 `template/src/instrument.ts` (чотири обробники без дії, Д-7);
 `template/src/objects.ts`; `pnpm-workspace.yaml` (глоб `template`,
 override за Д2-3); `.prettierignore` (`generated/`, `routeTree.gen.ts`);
