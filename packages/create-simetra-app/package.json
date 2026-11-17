@@ -7,13 +7,23 @@
   "type": "module",
   "scripts": {
     "lint": "eslint --no-error-on-unmatched-pattern",
-    "test:build": "echo \"test:build is added by the host-template job\" && exit 1",
-    "e2e": "echo \"e2e is added by the host-template job\" && exit 1"
+    "test:build": "vitest run --config vitest.build.config.ts",
+    "e2e": "playwright test --config e2e/playwright.config.ts",
+    "e2e:gate": "node e2e/playwright-gate.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.65.0",
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "better-auth": "1.7.12",
     "eslint": "^10.14.0",
+    "pg": "8.23.1",
+    "simetra": "workspace:*",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "typescript-eslint": "^8.72.1"
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.1.0"
   }
 }

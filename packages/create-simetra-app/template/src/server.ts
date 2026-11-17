@@ -7,6 +7,12 @@ import { LIMIT_REASONS, PAYLOAD_MAX_BYTES } from "simetra/model"
 import { appOrigin, authSecret } from "./server/config"
 import { BodyTooLarge, bodyExceeded, limitBody } from "./server/body-limit"
 import { serverHash } from "./server/runtime"
+// Server Function потрапляє в маніфест збірки лише через граф модулів. Роутер
+// D2 не кличе ні `dataFn`, ні `getSessionClaims` (клієнтські виклики — D3), тож
+// без цих імпортів їх немає в production-збірці, і правила походження на
+// HTTP-шляху нічим не перевірити
+import "./server/data-fn"
+import "./server/session-fn"
 
 // Відмова старту (§4.1): хибне оточення має зупинити сервер при імпорті entry,
 // а не першим запитом

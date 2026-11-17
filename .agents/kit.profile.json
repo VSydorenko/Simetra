@@ -10,7 +10,8 @@
     "packages": {
       "simetra": "packages/simetra",
       "designer": "packages/designer",
-      "template": "packages/create-simetra-app/template"
+      "template": "packages/create-simetra-app/template",
+      "e2e": "packages/create-simetra-app"
     },
     "levels": {
       "unit": {
@@ -44,6 +45,15 @@
         "lock": "/tmp/simetra-db-stack.lock",
         "lockWait": 2700,
         "timeout": 1800,
+        "ci": true
+      },
+      "e2e": {
+        "command": ["pnpm", "run", "e2e"],
+        "reporter": "exit-code",
+        "packages": ["e2e"],
+        "lock": "/tmp/simetra-db-stack-postgres.lock",
+        "lockWait": 2700,
+        "timeout": 1500,
         "ci": true
       }
     }

@@ -20,7 +20,11 @@
     },
     {
       "label": "better-auth — точний пін: тест-залежність simetra і рантайм-залежність шаблону",
-      "packages": ["simetra", "create-simetra-app-template"],
+      "packages": [
+        "simetra",
+        "create-simetra-app-template",
+        "create-simetra-app"
+      ],
       "dependencies": ["better-auth"],
       "pinVersion": "1.7.12"
     }

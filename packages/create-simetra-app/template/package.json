@@ -9,6 +9,7 @@
     "#instrument": "./src/instrument.ts"
   },
   "scripts": {
+    "build": "vite build",
     "generate": "node scripts/generate-catalogs.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --project unit",
