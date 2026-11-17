@@ -35,7 +35,9 @@ import { CatalogProvider } from "../../catalog"
 import { MESSAGES, type MessageKey } from "../../messages"
 import { NavigationProvider, type NavigationAdapter } from "../../navigation"
 import { LIST_HEIGHT, ROW_HEIGHT } from "../geometry"
-import { ListHost, ListRow } from "../list-host"
+import { ListHost, ListRow, edgeLoader } from "../list-host"
+import { displayState } from "../state-cell"
+import { VirtualList } from "../virtual-list"
 import { headerColumns } from "../../fields"
 import { catalogIndex } from "simetra/model"
 
@@ -155,6 +157,9 @@ const rowOf = (c: HTMLElement, n: number) =>
   c.querySelector<HTMLElement>(`[data-row-key="${key(n)}"] [role="row"]`)!
 const slotOf = (c: HTMLElement, n: number) =>
   c.querySelector<HTMLElement>(`[data-row-key="${key(n)}"]`)!
+// §5.5: `data-state` — на тому самому елементі, що й `data-row-key`.
+const stateOf = (row: Element) =>
+  row.closest("[data-row-key]")?.getAttribute("data-state")
 const panel = (c: HTMLElement) => c.querySelector('[data-region="panel"]')!
 const button = (c: Element, label: string) =>
   [...c.querySelectorAll("button")].find((b) => b.textContent === label)
@@ -185,12 +190,19 @@ describe("ListHost", () => {
     )
     expect(headers).toEqual(["", "title", "status", "subject"])
     const row = rowOf(c, 1)
-    expect(row.getAttribute("data-state")).toBe("synced")
+    expect(stateOf(row)).toBe("synced")
     expect(row.querySelector('[data-field="title"]')?.textContent).toBe("t1")
     // `synced` — без позначки.
     expect(row.querySelector('[role="gridcell"]')?.textContent).toBe("")
     // Лічильника немає, але слот під нього є.
     expect(panel(c).querySelector('[data-slot="count"]')?.textContent).toBe("")
+  })
+
+  it("data-state стоїть на елементі з data-row-key і лише на ньому", async () => {
+    const { view } = await ready()
+    const slot = slotOf(view.container, 1)
+    expect(slot.getAttribute("data-state")).toBe("synced")
+    expect(slot.querySelector("[data-state]")).toBeNull()
   })
 
   it("без даних — слот завантаження", () => {
@@ -243,7 +255,7 @@ describe("ListHost", () => {
       core.commit((w) => w.markStale(TASK, [key(1)], 99), core.token())
     })
     const row = rowOf(view.container, 1)
-    expect(row.getAttribute("data-state")).toBe("stale")
+    expect(stateOf(row)).toBe("stale")
     expect(row.querySelector('[role="gridcell"]')?.textContent).toBe(
       text("state.stale")
     )
@@ -258,9 +270,11 @@ describe("ListHost", () => {
     const c = view.container
     const row = rowOf(c, 1)
     // Ядро віддає рядок як `stale` зі значеннями; хост показує `hidden`.
-    expect(row.getAttribute("data-state")).toBe("hidden")
+    expect(stateOf(row)).toBe("hidden")
     expect(row.textContent).toBe(text("state.hidden"))
     expect(slotOf(c, 1).textContent).not.toContain("t1")
+    // Ні в тексті, ні в атрибутах (підказка, aria-label) значення немає.
+    expect(slotOf(c, 1).outerHTML).not.toContain("t1")
     expect(slotOf(c, 1).querySelector("[data-field]")).toBeNull()
     expect(slotOf(c, 1).style.height).toBe(`${ROW_HEIGHT}px`)
     expect(slotOf(c, 1).style.height).toBe(slotOf(c, 2).style.height)
@@ -281,11 +295,11 @@ describe("ListHost", () => {
     })
     const c = view.container
     const row = rowOf(c, 2)
-    expect(row.getAttribute("data-state")).toBe("removed")
+    expect(stateOf(row)).toBe("removed")
     expect(row.querySelector('[role="gridcell"]')?.textContent).toBe(
       text("state.removed")
     )
-    expect(slotOf(c, 2).textContent).not.toContain("t2")
+    expect(slotOf(c, 2).outerHTML).not.toContain("t2")
     expect(slotOf(c, 2).querySelector("[data-field]")).toBeNull()
     expect(slotOf(c, 2).style.height).toBe(slotOf(c, 1).style.height)
     // Без незавершеної мутації — лише «Прибрати».
@@ -296,7 +310,7 @@ describe("ListHost", () => {
     fireEvent.click(button(row, text("action.remove"))!)
     await flush()
     expect(c.querySelector(`[data-row-key="${key(2)}"]`)).toBeNull()
-    expect(rowOf(c, 3).getAttribute("data-state")).toBe("synced")
+    expect(stateOf(rowOf(c, 3))).toBe("synced")
   })
 
   it("панель: hasNewRows і needsRefresh з діями, refreshing — у живому регіоні", async () => {
@@ -415,24 +429,68 @@ describe("ListHost", () => {
 })
 
 describe("ListRow — стани мутації", () => {
-  const catalog = catalogIndex(OBJECTS)
-  const columns = headerColumns(task)
-  const values = { title: "secret", status: null, subject: null }
+  // Ціль `Ref` з представленням: значення посилання показується текстом цілі,
+  // тож шлях `refs` — теж значення, яке `hidden` мусить сховати.
+  const owner = {
+    ...task.attributes[0]!,
+    name: "owner",
+    column: "owner_id",
+    ref: { object: ORGANIZATION_ID, constraint: "task_owner_id_fkey" },
+  }
+  const withOwner = { ...task, attributes: [...task.attributes, owner] }
+  const target = {
+    ...OBJECTS[1]!,
+    attributes: [
+      { ...task.attributes[1]!, name: "description", column: "description" },
+    ],
+    presentation: { description: "description" },
+  }
+  const catalog = catalogIndex([withOwner, target])
+  const columns = headerColumns(withOwner)
+  const values = { title: "secret", status: null, subject: null, owner: S }
+  const refs = {
+    owner: {
+      key: S,
+      version: 1,
+      values: { description: "secret-ref" },
+      state: "synced",
+      staleFields: [],
+    },
+  }
+  const mutation = { error: { code: "secret.code" } }
   const synced = (over: Record<string, unknown>): RowView =>
     ({
       key: key(1),
       version: 1,
       values,
+      refs,
       state: "synced",
       staleFields: [],
+      mutation,
       ...over,
     }) as RowView
+  // Рядок малюється в слоті `VirtualList`, як у хості: `data-state` дає слот.
   const draw = (row: RowView, onOpen = vi.fn(), onRemove = vi.fn()) =>
     render(
-      createElement(ListRow, { row, columns, catalog, onOpen, onRemove })
+      createElement(VirtualList, {
+        rows: [row],
+        rowHeight: ROW_HEIGHT,
+        height: LIST_HEIGHT,
+        setVisibleRange: () => {},
+        rowState: displayState,
+        renderRow: (r: RowView) =>
+          createElement(ListRow, {
+            row: r,
+            columns,
+            catalog,
+            onOpen,
+            onRemove,
+          }),
+      })
     ).container.querySelector<HTMLElement>('[role="row"]')!
 
   it.each([
+    ["synced", undefined],
     ["pending", "state.pending"],
     ["unknown", "state.unknown"],
     ["failed", "state.failed"],
@@ -440,24 +498,23 @@ describe("ListRow — стани мутації", () => {
     ["stale", "state.stale"],
   ] as const)("%s — значення й ключ %s", (state, messageKey) => {
     const row = draw(synced({ state }))
-    expect(row.getAttribute("data-state")).toBe(state)
+    expect(stateOf(row)).toBe(state)
     expect(row.querySelector('[role="gridcell"]')?.textContent).toBe(
-      text(messageKey)
+      messageKey === undefined ? "" : text(messageKey)
     )
     expect(row.querySelector('[data-field="title"]')?.textContent).toBe(
       "secret"
     )
+    // Позитивний контроль для кейсу `hidden`: шлях `refs` показує ціль.
+    expect(row.querySelector('[data-field="owner"]')?.textContent).toBe(
+      "secret-ref"
+    )
   })
 
   it("failed — код відмови в підказці", () => {
-    const row = draw(
-      synced({
-        state: "failed",
-        mutation: { error: { code: "command.conflict" } },
-      })
-    )
+    const row = draw(synced({ state: "failed" }))
     expect(row.querySelector('[role="gridcell"]')?.getAttribute("title")).toBe(
-      "command.conflict"
+      "secret.code"
     )
   })
 
@@ -466,10 +523,15 @@ describe("ListRow — стани мутації", () => {
     (state) => {
       const onOpen = vi.fn()
       const row = draw(synced({ state, hidden: true }), onOpen)
-      expect(row.getAttribute("data-state")).toBe("hidden")
+      const slot = row.closest<HTMLElement>("[data-row-key]")!
+      expect(stateOf(row)).toBe("hidden")
       expect(row.textContent).toBe(text("state.hidden"))
       expect(row.querySelector("[data-field]")).toBeNull()
+      // Ні значення, ні ціль посилання, ні код відмови — навіть в атрибутах.
+      for (const secret of ["secret", "secret-ref", "secret.code"])
+        expect(slot.outerHTML).not.toContain(secret)
       fireEvent.click(row)
+      fireEvent.keyDown(row, { key: "Enter" })
       expect(onOpen).not.toHaveBeenCalled()
     }
   )
@@ -482,9 +544,44 @@ describe("ListRow — стани мутації", () => {
       vi.fn(),
       onRemove
     )
+    expect(stateOf(row)).toBe("removed")
     fireEvent.click(button(row, text("action.remove"))!)
     fireEvent.click(button(row, text("action.cancel"))!)
     expect(onRemove).toHaveBeenCalledOnce()
     expect(cancel).toHaveBeenCalledOnce()
+  })
+})
+
+describe("edgeLoader", () => {
+  it("кличе loadBefore раз, коли видно крайовий слот @before", () => {
+    const rows = Array.from({ length: 30 }, (_, i) => ({
+      key: key(i + 1),
+      version: 1,
+      values: {},
+      state: "synced" as const,
+      staleFields: [],
+    }))
+    const view = {
+      rows,
+      atStart: false,
+      atEnd: true,
+      setVisibleRange: vi.fn(),
+      loadBefore: vi.fn(),
+      loadAfter: vi.fn(),
+    }
+    render(
+      createElement(VirtualList, {
+        rows,
+        atStart: false,
+        atEnd: true,
+        rowHeight: ROW_HEIGHT,
+        height: LIST_HEIGHT,
+        setVisibleRange: edgeLoader(() => view),
+        renderRow: () => null,
+      })
+    )
+    expect(view.loadBefore).toHaveBeenCalledOnce()
+    expect(view.loadAfter).not.toHaveBeenCalled()
+    expect(view.setVisibleRange).toHaveBeenCalled()
   })
 })

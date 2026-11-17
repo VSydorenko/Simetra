@@ -42,6 +42,28 @@ const isObjectRef = (column: FieldColumn) =>
   column.attribute.enumValues === undefined &&
   column.attribute.pair === undefined
 
+/** What {@link edgeLoader} reads from `useRows`. */
+export type EdgeView = Pick<
+  UseRowsResult,
+  "rows" | "atStart" | "atEnd" | "setVisibleRange" | "loadBefore" | "loadAfter"
+>
+
+/**
+ * The `setVisibleRange` of a list host: `VirtualList` only shows the edge
+ * slots, so the host reads the next page when a not-reached edge is reached by
+ * the visible range. Exported for the host tests only.
+ */
+export function edgeLoader(
+  view: () => EdgeView
+): (range: { first: number; last: number }) => void {
+  return (range) => {
+    const v = view()
+    v.setVisibleRange(range)
+    if (v.atEnd === false && range.last >= v.rows.length - 1) v.loadAfter()
+    if (v.atStart === false && range.first <= 0) v.loadBefore()
+  }
+}
+
 /** Props of one list row; exported for the host tests only. */
 export interface ListRowProps {
   row: RowView
@@ -68,7 +90,7 @@ export function ListRow(props: ListRowProps): ReactElement {
   if (row.state === "removed" || state === "hidden") {
     return createElement(
       "div",
-      { role: "row", "data-state": state, style: rowStyle },
+      { role: "row", style: rowStyle },
       createElement(StateCell, { state }),
       row.state === "removed"
         ? createElement(
@@ -93,7 +115,6 @@ export function ListRow(props: ListRowProps): ReactElement {
     {
       role: "row",
       tabIndex: 0,
-      "data-state": state,
       style: { ...rowStyle, cursor: "pointer" },
       onClick: open,
       onKeyDown: (event: KeyboardEvent) => {
@@ -155,17 +176,11 @@ export function ListHost(props: ListHostProps): ReactElement {
     include: include.length === 0 ? undefined : include,
   })
 
-  // `VirtualList` лише показує крайовий слот: дочитування сторінки — справа
-  // хоста. Колбек сталий, а вигляд читається з посилання: інакше кожен новий
-  // знімок перезапускав би ефект діапазону й дочитування.
+  // Колбек сталий, а вигляд читається з посилання: інакше кожен новий знімок
+  // перезапускав би ефект діапазону й дочитування.
   const latest = useRef<UseRowsResult>(view)
   latest.current = view
-  const onRange = useCallback((range: { first: number; last: number }) => {
-    const v = latest.current
-    v.setVisibleRange(range)
-    if (v.atEnd === false && range.last >= v.rows.length - 1) v.loadAfter()
-    if (v.atStart === false && range.first <= 0) v.loadBefore()
-  }, [])
+  const onRange = useMemo(() => edgeLoader(() => latest.current), [])
 
   const openCard = useCallback(
     (key: string) => navigation.openCard(object, key),
@@ -188,6 +203,7 @@ export function ListHost(props: ListHostProps): ReactElement {
           chain: view.chain,
           target: view.target,
           setVisibleRange: onRange,
+          rowState: displayState,
           rowHeight: ROW_HEIGHT,
           height: LIST_HEIGHT,
           renderRow: (row: RowView) =>
