@@ -11,5 +11,6 @@
     "allowImportingTsExtensions": true
   },
   "include": ["src", "test", "scripts", "bench"],
-  "exclude": ["node_modules", "dist"]
+  // DOM-типи — лише в `tsconfig.dom.json`: інакше DOM-глобали бачив би і T0
+  "exclude": ["node_modules", "dist", "src/ui", "src/data/react"]
 }

@@ -6,3 +6,4 @@ export {
   type DataRuntime,
   type DataRuntimeOptions,
 } from "./runtime/runtime"
+export { createRuntimeHolder, type RuntimeHolder } from "./runtime/holder"

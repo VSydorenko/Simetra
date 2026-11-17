@@ -10,6 +10,7 @@ export default defineConfig({
     "schema/index": "src/schema/index.ts",
     "server/index": "src/server/index.ts",
     "data/index": "src/data/index.ts",
+    "data/react/index": "src/data/react/index.ts",
   },
   format: "esm",
   platform: "node",
