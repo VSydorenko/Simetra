@@ -1017,7 +1017,9 @@ export async function buildPlan(
     live.extracted.model,
     parse,
     0,
-    { foreign: foreignChanges(filled.actions, applied, 0) }
+    {
+      foreign: foreignChanges(filled.actions, applied, live.extracted.model, 0),
+    }
   )
   // Зняти тригер провізії з чужої таблиці може лише її власник: відмова з
   // порадою до будь-якого кроку, а не падіння застосування
@@ -2034,8 +2036,12 @@ async function analyseOnClone(p: {
         offset
       ),
       // Дії — у нових іменах наміру, marker — у старих
-      foreign: foreignChanges(actions, p.applied, offset, (ref) =>
-        beforeIntent(p.intent, ref)
+      foreign: foreignChanges(
+        actions,
+        p.applied,
+        extracted.model,
+        offset,
+        (ref) => beforeIntent(p.intent, ref)
       ),
     })
     const steps = [...renames, ...names, ...engineSteps]

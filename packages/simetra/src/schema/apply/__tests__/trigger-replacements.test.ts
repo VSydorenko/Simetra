@@ -1,7 +1,13 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { loadSqlParser, type SqlParser } from "simetra/compiler"
 import type { CatalogModel } from "simetra/model"
-import { triggerReplacements, type EngineAction } from "simetra/schema"
+import {
+  classifySteps,
+  foreignChanges,
+  requiredPermissions,
+  triggerReplacements,
+  type EngineAction,
+} from "simetra/schema"
 
 /**
  * Пара дій двигуна `DROP TRIGGER` + `CREATE TRIGGER` одного тригера стає
@@ -193,5 +199,62 @@ describe("triggerReplacements", () => {
   ])("leaves the pair when %s", (_name, actions, live) => {
     const input = actions()
     expect(triggerReplacements(input, live, parse)).toEqual(input)
+  })
+})
+
+/**
+ * Злитий крок перевизначає той самий тригер, що й пара: чужий тригер (немає
+ * в останньому застосованому стані) лишається послабленням з дозволом,
+ * власний — без дозволу (платформна спека §6.6).
+ */
+describe("a merged trigger keeps the class of the pair", () => {
+  // Таблиця тригера — чужа й у цілі, і в marker: кроки на ній — лише тригерів
+  const live = source("t")
+  const classes = (applied: CatalogModel | undefined) => {
+    const pair = [dropTrigger("t"), createTrigger("t")]
+    const merged = triggerReplacements(pair, live, parse)
+    const classify = (actions: EngineAction[]) => {
+      const steps = classifySteps(actions, live, parse, 0, {
+        foreign: foreignChanges(actions, applied, live, 0),
+      })
+      return {
+        classes: steps.map((s) => s.class),
+        permissions: requiredPermissions({
+          steps,
+          drift: null,
+          promotion: null,
+        }),
+      }
+    }
+    return { pair: classify(pair), merged: classify(merged) }
+  }
+
+  it.each<[string, CatalogModel | undefined]>([
+    [
+      "absent from the last applied state",
+      { tables: [], enumTypes: [], units: [] },
+    ],
+    ["on the first apply", undefined],
+  ])("a foreign trigger %s needs the permission of the pair", (_n, applied) => {
+    const { pair, merged } = classes(applied)
+    expect(pair).toEqual({
+      classes: ["relaxation", "catalogOnly"],
+      permissions: ["s1"],
+    })
+    expect(merged).toEqual({ classes: ["relaxation"], permissions: ["s1"] })
+  })
+
+  it("an own trigger stays without a permission", () => {
+    const { pair, merged } = classes(source("t"))
+    expect(pair).toEqual({
+      classes: ["catalogOnly", "catalogOnly"],
+      permissions: [],
+    })
+    expect(merged).toEqual({ classes: ["catalogOnly"], permissions: [] })
+  })
+
+  it("a first creation of a trigger is no redefinition", () => {
+    const created = [createTrigger("u")]
+    expect(foreignChanges(created, undefined, live, 0)).toEqual(new Set())
   })
 })
