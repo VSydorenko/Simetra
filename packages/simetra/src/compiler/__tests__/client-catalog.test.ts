@@ -11,6 +11,10 @@ import {
   type RuntimeCatalog,
 } from "simetra/model"
 import {
+  COMMENT_FILE,
+  ORGANIZATION_FILE,
+  PROJECT_CATALOG_FILE,
+  REGION_FILE,
   adminRoles,
   commandCoreLayer,
   compileRights,
@@ -143,6 +147,47 @@ describe("buildClientCatalog", () => {
           objectColumns(runtimes[index]!.objects[i]!)
         )
       })
+    })
+  })
+})
+
+// Представлення посилання — з стандартних колонок виду, а не з імені реквізиту.
+describe("presentation of a client entry", () => {
+  const custom = {
+    id: "00000000-0000-4000-8000-000000007002",
+    name: "description",
+    physicalName: "custom_description",
+    type: "String",
+    length: 50,
+  }
+  it("стандартні колонки дають presentation; власний description без стандартного — ні", async () => {
+    const files = policyDomain({
+      // Довідник без стандартних найменування й коду, зі своїм `description`.
+      [PROJECT_CATALOG_FILE]: {
+        codeLength: 0,
+        descriptionLength: 0,
+        attributes: [custom],
+      },
+      [REGION_FILE]: { codeLength: 0, descriptionLength: 100 },
+      [ORGANIZATION_FILE]: { codeLength: 5, descriptionLength: 0 },
+      [COMMENT_FILE]: { codeLength: 5, descriptionLength: 100 },
+    })
+    const client = buildClientCatalog(
+      buildRuntimeCatalog(await compiled(files))
+    )
+    const byName = (name: string) =>
+      client.objects.find((o) => o.name === name)!
+    expect(byName("Project").attributes.map((a) => a.name)).toContain(
+      "description"
+    )
+    expect(byName("Project").presentation).toBeUndefined()
+    expect(byName("Region").presentation).toEqual({
+      description: "description",
+    })
+    expect(byName("Organization").presentation).toEqual({ code: "code" })
+    expect(byName("TaskComment").presentation).toEqual({
+      description: "description",
+      code: "code",
     })
   })
 })

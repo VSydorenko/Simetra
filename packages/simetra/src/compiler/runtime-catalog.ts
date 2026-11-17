@@ -140,6 +140,7 @@ function runtimeObject(
     versionColumn,
     versionName: fieldOf(fields, versionColumn).name,
     signal: isSignalObject(facts.model, object.id),
+    ...presentationOf(fields),
     ...(scope?.origin.scopeKindId === undefined
       ? {}
       : { scopeKindId: scope.origin.scopeKindId, scopeColumn: scope.name }),
@@ -259,6 +260,24 @@ function rootCreate(rootId: string, model: CompiledModel): RuntimeRootCreate {
     (k) => "objectId" in k.root && k.root.objectId === rootId
   )?.rootCreator
   return creator === undefined ? {} : { membership: creator.membership }
+}
+
+// Представлення посилання — факт стандартних колонок виду, а не імені: власний
+// реквізит `description` у виду без стандартного найменування його не підміняє.
+function presentationOf(fields: readonly EntityField[]): {
+  presentation?: { description?: string; code?: string }
+} {
+  const named = (logicalName: string) =>
+    fields.find((f) => f.standard?.logicalName === logicalName)?.name
+  const description = named("description")
+  const code = named("code")
+  if (description === undefined && code === undefined) return {}
+  return {
+    presentation: {
+      ...(description === undefined ? {} : { description }),
+      ...(code === undefined ? {} : { code }),
+    },
+  }
 }
 
 function attributes(
