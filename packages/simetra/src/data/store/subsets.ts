@@ -161,6 +161,9 @@ export const errorOf = (error: unknown): CommandError | DataError => {
   return { code: "command.internal" }
 }
 
+// Покоління читань сторінок вікна: одне число на ядро, тож жодне не повторюється.
+let pageGenerations = 0
+
 export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   const { session, limits, ops, rowViews } = ctx
   const subsets = new Map<string, Subset>()
@@ -357,9 +360,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
 
   /**
    * Reads the page next to an edge of the window (a user action or a host
-   * reaching the edge). One read per direction; the result is written only
-   * while the chain it started in is the current one (Р9). A read whose
-   * answer the session discarded repeats after a growing pause, as a load.
+   * reaching the edge). One read per direction; its generation (Р9) lives in
+   * `s.paging` and the result is written only while it is still there: a new
+   * chain or a purge takes it away. A read whose answer the session
+   * discarded repeats after a growing pause, as a load.
    */
   function loadMore(s: Subset, direction: "after" | "before") {
     const w = s.window
@@ -369,15 +373,16 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     const edge = edgeCursor(s, direction)
     if (edge === undefined) return
     const { cursor } = edge
-    s.paging.add(direction)
-    const chain = w.chain
-    // Токен читання сторінки (Р9): сторінка пишеться лише в тому ланцюжку,
-    // де її почали читати.
+    // Токен читання сторінки (Р9): покоління цього читання. Новий ланцюжок
+    // чи `purge` прибирає його з `paging`, і пізня відповідь нічого не пише:
+    // вона могла б принести рядок, якого на мить `purge` у сховищі не було.
+    const generation = ++pageGenerations
+    s.paging.set(direction, generation)
     const token = session.childToken(
       () =>
         s.alive &&
         (ctx.defects.has("page-without-generation") ||
-          s.window?.chain === chain)
+          s.paging.get(direction) === generation)
     )
     const what = `view ${s.form.specKey} page ${direction}`
     const attempt = (): Promise<void> => {
@@ -435,10 +440,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         }
       )
     }
-    // Новий ланцюжок вже зняв позначки старого (`writePage`): пізня відповідь
-    // старого читання не знімає позначки читання нового.
+    // Покоління зняв новий ланцюжок чи `purge`: позначки читання нового вони
+    // не чіпають.
     void attempt().finally(() => {
-      if (s.window?.chain === chain) s.paging.delete(direction)
+      if (s.paging.get(direction) === generation) s.paging.delete(direction)
     })
   }
 
@@ -679,7 +684,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       truncated: false,
       atEnd: form.spec.kind === "full",
       window: form.spec.kind === "window" ? EMPTY_WINDOW : undefined,
-      paging: new Set(),
+      paging: new Map(),
       waiters: [],
       dirty: true,
       // Знімок без утримання — той самий LOADING: перша підписка не дає

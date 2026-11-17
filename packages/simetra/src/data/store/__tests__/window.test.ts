@@ -740,6 +740,29 @@ describe("purge and hide of window keys", () => {
     expect(inspect.violations()).toEqual([])
   })
 
+  it("drops the answer of a page read that a purge overtook", async () => {
+    const { core, fake, inspect } = setup()
+    seed(fake, 1, 250)
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    fake.hold = (read) => isPage(read)
+    handle.loadAfter()
+    await settle()
+    const late = fake.take()
+    core.commit((w) => w.purge(TASK, { keys: [key(150)] }), core.token())
+    fake.hold = undefined
+    late.answer()
+    await settle()
+    expect(keysIn(handle.getSnapshot())).toEqual(range(1, WINDOW_PAGE))
+    expect(inspect.rowCount()).toBe(WINDOW_PAGE)
+    // Наступну сторінку читає нова дія (рядок на сервері лишився).
+    handle.loadAfter()
+    await settle()
+    expect(keysIn(handle.getSnapshot())).toEqual(range(1, 2 * WINDOW_PAGE))
+    expect(inspect.violations()).toEqual([])
+  })
+
   it("shows null for the include target that a purge took away", async () => {
     const { core, fake, inspect } = setup()
     const orgKey = "00000000-0000-4000-8000-0000000000b1"

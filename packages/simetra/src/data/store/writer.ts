@@ -167,6 +167,10 @@ function forget(
       s.included.set(o.name, without(included, dropped))
     if (own && s.form.include.length > 0) releaseTargets(ctx, scope, s)
     s.dirty = true
+    // Читання сторінок вікна в польоті могло нести рядки, яких на мить
+    // `purge` у сховищі не було: їхню відповідь відкинуто (Р9), наступну
+    // сторінку читає дія користувача чи край списку.
+    if ((own || target) && s.window !== undefined) s.paging.clear()
     if (
       (own || target) &&
       s.flight !== undefined &&

@@ -106,8 +106,12 @@ export interface ReaderTarget {
    * layout is their keys in order. Undefined for every other form.
    */
   window: WindowState | undefined
-  /** Window pages being read next to an edge: one read per direction. */
-  readonly paging: Set<"after" | "before">
+  /**
+   * Window pages being read next to an edge: one read per direction, by the
+   * generation of the read (Р9). A new chain and a purge drop them, so the
+   * answers in flight write nothing.
+   */
+  readonly paging: Map<"after" | "before", number>
   /**
    * The start epoch of the last section read the session accepted (section
    * form only): a `hide` of the owner after it makes the subset stale (plan
