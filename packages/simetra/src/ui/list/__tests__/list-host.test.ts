@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render } from "@testing-library/react"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { createElement, useLayoutEffect, useRef, type ReactNode } from "react"
+import { Profiler, createElement, type ReactNode } from "react"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import type { ClientCatalog } from "simetra/model"
 import { SUBJECT, clientCatalog } from "../../../data/__tests__/support"
@@ -29,7 +29,7 @@ import {
   taskValues,
 } from "../../../data/store/__tests__/core-support"
 import { createFakeSource } from "../../../data/store/testing/fake-source"
-import { DataRuntimeProvider, useRows, type RowView } from "simetra/data/react"
+import { DataRuntimeProvider, type RowView } from "simetra/data/react"
 import { ORGANIZATION_ID } from "../../../model/runtime/__tests__/entries"
 import { CatalogProvider } from "../../catalog"
 import { MESSAGES, type MessageKey } from "../../messages"
@@ -344,17 +344,23 @@ describe("ListHost", () => {
     const harness = makeRuntime()
     seed(harness.fake, 1, 3)
     const holder = createRuntimeHolder(harness.runtime)
-    // Кадр — кожен commit: layout-ефект батька бачить DOM дітей того самого
-    // commit, до будь-якого наступного рендеру.
+    // Кадр — кожен commit піддерева: `onRender` профайлера кличеться в фазі
+    // commit, коли DOM уже змінено, і на commit лише дочірнього хоста теж.
     const frames: string[] = []
-    const Frames = (props: { children?: ReactNode }) => {
-      useRows({ object: TASK })
-      const box = useRef<HTMLDivElement>(null)
-      useLayoutEffect(() => {
-        frames.push(box.current?.textContent ?? "")
-      })
-      return createElement("div", { ref: box }, props.children)
-    }
+    const box = { current: null as HTMLDivElement | null }
+    const Frames = (props: { children?: ReactNode }) =>
+      createElement(
+        Profiler,
+        {
+          id: "list",
+          onRender: () => frames.push(box.current?.textContent ?? ""),
+        },
+        createElement(
+          "div",
+          { ref: (node: HTMLDivElement | null) => void (box.current = node) },
+          props.children
+        )
+      )
     const view = render(
       createElement(
         CatalogProvider,
