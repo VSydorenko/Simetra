@@ -530,14 +530,13 @@ describe("window snapshot sharing", () => {
     expect(shareSnapshot(first, next({}))).toBe(first)
   })
 
-  it.each([
-    { chain: 2 },
-    { target: "end" as const },
-    { atStart: false },
-  ])("gives a new snapshot when only %o changed", (extra) => {
-    const first = shareSnapshot(undefined, base)
-    expect(shareSnapshot(first, next(extra))).not.toBe(first)
-  })
+  it.each([{ chain: 2 }, { target: "end" as const }, { atStart: false }])(
+    "gives a new snapshot when only %o changed",
+    (extra) => {
+      const first = shareSnapshot(undefined, base)
+      expect(shareSnapshot(first, next(extra))).not.toBe(first)
+    }
+  )
 })
 
 describe("setVisibleRange", () => {
