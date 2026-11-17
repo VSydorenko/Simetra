@@ -2,6 +2,7 @@ import {
   loadSqlParser,
   localize,
   triggerFunctionSchema,
+  triggerWhenFunctionSchemas,
   unitPlacement,
   unitTargets,
   type CompiledModel,
@@ -19,6 +20,7 @@ import {
   PROVIDER_SURFACES,
   PROVIDER_UNMANAGED_EXTENSIONS,
 } from "./provider/presets"
+import { PROVIDER_ASSUMED_SCHEMAS } from "../apply/provider-trigger-boundary"
 import type {
   EngineDiagnostic,
   EnginePlan,
@@ -213,9 +215,13 @@ function outOfScope(
  * з цілі, і з тіні, тож без діагностики звірка мовчки назвала б їх рівними.
  * Схему одиниці дає її структурована ціль — та сама, що й межі
  * (`engineScope`). Поза межею: об'єкти й цілі в схемі провайдера, крім
- * поверхні пресету (політики й тригери на його таблицях; тригер — лише з
- * функцією поза схемами провайдера, як у правилі двигуна), типові привілеї
- * без `IN SCHEMA` і розширення провайдера.
+ * поверхні пресету (політики й тригери на його таблицях), типові привілеї
+ * без `IN SCHEMA` і розширення провайдера. Тригер поверхні в межі, коли його
+ * функції — у схемі застосунку, з розширення чи вбудовані, і жодна не лежить
+ * у власній схемі провайдера (`providerTriggerInBoundarySql`); функція
+ * тригера в схемі провайдера чи функція `WHEN` у власній схемі провайдера
+ * робить його зовнішнім, тож оголошений такий тригер —
+ * `provider-trigger-function`.
  */
 function outOfScopeDiagnostics(
   model: Pick<CompiledModel, "project" | "physical" | "sqlUnits">,
@@ -256,12 +262,22 @@ function outOfScopeDiagnostics(
             table: `${target.schema}.${target.object ?? ""}`,
           })
         )
-      else if (fnSchema !== undefined && provider.has(fnSchema))
-        out.push(
-          outOfScope(unit.identity, "provider-trigger-function", {
-            schema: fnSchema,
-          })
-        )
+      else {
+        // Функція тригера в схемі провайдера чи функція умови `WHEN` у
+        // власній схемі провайдера робить тригер зовнішнім
+        // (`providerTriggerInBoundarySql`): межа його не бачить
+        const own = new Set(PROVIDER_ASSUMED_SCHEMAS[databaseProvider])
+        const outside =
+          fnSchema !== undefined && provider.has(fnSchema)
+            ? fnSchema
+            : triggerWhenFunctionSchemas(unit, parse).find((s) => own.has(s))
+        if (outside !== undefined)
+          out.push(
+            outOfScope(unit.identity, "provider-trigger-function", {
+              schema: outside,
+            })
+          )
+      }
       continue
     }
     // Коментар на політиці поверхні — у межі (правило двигуна

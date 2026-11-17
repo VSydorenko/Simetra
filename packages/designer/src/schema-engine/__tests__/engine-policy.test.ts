@@ -11,6 +11,7 @@ import {
 import { resolveView } from "@supabase/pg-delta/policy"
 import { describe, expect, it } from "vitest"
 import {
+  PROVIDER_ASSUMED_SCHEMAS,
   PROVIDER_UNMANAGED_EXTENSIONS,
   PROVIDER_SYSTEM_ROLES,
   PROVIDER_SURFACES,
@@ -332,4 +333,18 @@ describe("postgres profile policy", () => {
       expect(actual).toBe(verdict)
     })
   })
+})
+
+describe("PROVIDER_ASSUMED_SCHEMAS", () => {
+  // Середовище тіні не дублює функцій у схемах, які засіває двигун: перелік
+  // мусить дорівнювати припущеним схемам політики межі кожного провайдера
+  it.each(["supabase", "postgres"] as const)(
+    "equals the assumed schemas of the %s scope policy",
+    (provider) => {
+      const policy = scopePolicy({ schemas: ["app"], provider })
+      expect([...flattenPolicy(policy).assumedSchemas].sort()).toEqual(
+        [...PROVIDER_ASSUMED_SCHEMAS[provider]].sort()
+      )
+    }
+  )
 })

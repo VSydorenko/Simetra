@@ -24,6 +24,7 @@ import {
   compareWithDesired,
   desiredForApply,
   engineScope,
+  readShadowEnvironment,
   reverseGenerate,
   type EngineAction,
   type EngineDiagnostic,
@@ -501,12 +502,18 @@ export const diffTool = defineTool({
           desired.scope.provider
         )
         if (roles.refusal !== undefined) return { refusal: roles.refusal }
+        // Функції тригерів провайдера поза межею — у тінь до засіву, як у плані
+        const seeds = await reader.transaction(db.target, "rollback", (tx) =>
+          readShadowEnvironment(tx, desired.scope)
+        )
+        if (!seeds.ok) return { refusal: seeds.diagnostics }
         return {
           comparison: await compareWithDesired(
             engine,
             {
               target: db.target,
               ...(db.shadowBase ? { shadowBase: db.shadowBase } : {}),
+              environment: seeds.statements,
             },
             desired.sql,
             desired.scope,
