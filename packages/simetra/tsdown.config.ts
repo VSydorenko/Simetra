@@ -11,6 +11,7 @@ export default defineConfig({
     "server/index": "src/server/index.ts",
     "data/index": "src/data/index.ts",
     "data/react/index": "src/data/react/index.ts",
+    "ui/index": "src/ui/index.ts",
   },
   format: "esm",
   platform: "node",
@@ -23,7 +24,7 @@ export default defineConfig({
   dts: true,
   outDir: "dist",
   deps: {
-    // `react` — необов'язкова peer-залежність яруса T4: tsdown не вбудовує
+    // `react` і `@tanstack/react-virtual` — необов'язкові peer-залежності (T4 / T5): tsdown не вбудовує
     // peer (`getProductionDeps` її враховує), тож клієнтський host тримає
     // одну копію бібліотеки зі станом на рівні модуля
     // Ярус імпортує інший ярус лише через `simetra/<ярус>`; вбудований, він
