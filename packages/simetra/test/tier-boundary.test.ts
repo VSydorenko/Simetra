@@ -284,6 +284,62 @@ describe("tier zones", () => {
       }
     )
 
+    it.each(EXTS)(
+      "rejects useOptimistic via namespace or member access (.%s)",
+      async (ext) => {
+        for (const code of [
+          `import React from "react"\nexport const used = React.useOptimistic\n`,
+          `import * as R from "react"\nexport const used = R.useOptimistic\n`,
+        ])
+          for (const file of [ui(ext), list(ext)])
+            expect(await syntax(code, file), file).toHaveLength(1)
+        expect(
+          await syntax(
+            `import * as R from "react"\nexport const used = R.useState\n`,
+            ui(ext)
+          )
+        ).toEqual([])
+        expect(
+          await syntax(
+            `import React from "react"\nexport const used = React.useOptimistic\n`,
+            `src/shell/__fixture.${ext}`
+          )
+        ).toEqual([])
+      }
+    )
+
+    it.each(EXTS)(
+      "rejects network globals via globalThis, window and self (.%s)",
+      async (ext) => {
+        for (const obj of ["globalThis", "window", "self"])
+          for (const name of [
+            "fetch",
+            "XMLHttpRequest",
+            "WebSocket",
+            "EventSource",
+          ]) {
+            const code = `export const used = ${obj}.${name}\nexport const made = new ${obj}.${name}("x")\n`
+            for (const file of [ui(ext), list(ext)])
+              expect(
+                await syntax(code, file),
+                `${obj}.${name} ${file}`
+              ).toHaveLength(2)
+            expect(await syntax(code, `src/shell/__fixture.${ext}`)).toEqual([])
+          }
+        expect(
+          await syntax(`export const used = window.location\n`, ui(ext))
+        ).toEqual([])
+      }
+    )
+
+    it("the real VirtualList and tests stay clean under the T5 rules", async () => {
+      const { readFileSync } = await import("node:fs")
+      const file = "src/ui/list/virtual-list.ts"
+      const code = readFileSync(join(PKG, file), "utf8")
+      expect(await syntax(code, file)).toEqual([])
+      expect(await syntax(code, "src/ui/__tests__/__fixture.ts")).toEqual([])
+    })
+
     it("rejects suppressHydrationWarning everywhere in ui, JSX and createElement", async () => {
       const attr = "suppressHydrationWarning"
       for (const file of [ui("tsx"), list("tsx")])

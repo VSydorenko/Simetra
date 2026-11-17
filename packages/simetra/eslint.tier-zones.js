@@ -141,6 +141,22 @@ const HYDRATION_SELECTOR = {
   message:
     "T5 rule: suppressHydrationWarning hides a hydration mismatch the oracle must catch (P4-B spec §6.7).",
 }
+// Обхід `no-restricted-imports`/`no-restricted-globals`: доступ через
+// простір імен React і через глобальний об'єкт.
+const BYPASS_SELECTORS = [
+  {
+    selector:
+      "MemberExpression:matches([property.name='useOptimistic'], [property.value='useOptimistic'])",
+    message:
+      "T5 rule: optimistic display comes only from the data core (predict policy, P4-B spec §6.7); do not use useOptimistic.",
+  },
+  {
+    selector:
+      "MemberExpression[object.name=/^(?:globalThis|window|self)$/]:matches([property.name=/^(?:fetch|XMLHttpRequest|WebSocket|EventSource)$/], [property.value=/^(?:fetch|XMLHttpRequest|WebSocket|EventSource)$/])",
+    message:
+      "T5 rule: data comes only from T4 hooks; own loading skips the core and shows a skeleton after the data (P4-B spec §6.7).",
+  },
+]
 const SCROLL_SELECTORS = [
   {
     selector: attributeSelector("onScroll"),
@@ -162,6 +178,7 @@ const uiRules = {
     "error",
     ...STANDARD_COLUMN_SELECTORS,
     HYDRATION_SELECTOR,
+    ...BYPASS_SELECTORS,
     ...(scroll ? SCROLL_SELECTORS : []),
   ],
   "no-restricted-globals": [
