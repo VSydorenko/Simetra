@@ -52,6 +52,8 @@ export type DefectFlag =
   | "page-without-generation"
   /** A window view keeps a copy of the values and shows it where the store has none. */
   | "window-copies-values"
+  /** A dismissed `removed` slot is buried with the current epoch, not the epoch of its mark. */
+  | "bury-removed-current-epoch"
   /** The re-check deferred by a load in flight is queued only with listeners. */
   | "recheck-needs-listeners"
 

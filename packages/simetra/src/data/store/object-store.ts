@@ -200,8 +200,8 @@ export function createObjectStore(options: {
   const { object, entry, session, log, onRemark } = options
   const { epochs, versions } = session
   const defects = options.defects ?? NO_DEFECTS
-  const bury = (id: string) => {
-    if (!defects.has("no-tombstone")) epochs.bury(id)
+  const bury = (id: string, at?: number) => {
+    if (!defects.has("no-tombstone")) epochs.bury(id, at)
   }
   const scopeField = scopeFieldOf(entry)
   if (entry.scopeColumn !== undefined && scopeField === undefined) {
@@ -597,7 +597,16 @@ export function createObjectStore(options: {
           e.versionEpoch
         )
       // Слот removed без надгробка дав би старій відповіді повернути значення.
-      if (e.removed !== undefined) bury(id)
+      // Епоха — позначки `removed`, а не поточна: позначка доводить відсутність
+      // лише для читань, що почались до неї; читання між позначкою і
+      // поховання, що повернуло рядок, — новіший доказ і мусить його відновити.
+      if (e.removed !== undefined)
+        bury(
+          id,
+          defects.has("bury-removed-current-epoch")
+            ? undefined
+            : e.removed.epoch
+        )
       rows.delete(key)
       tail.delete(key)
     },
