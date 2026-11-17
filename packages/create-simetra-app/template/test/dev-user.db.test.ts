@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth"
+import { getMigrations } from "better-auth/db/migration"
 import pg from "pg"
 import { ensurePostgresCluster, type PostgresClusterSet } from "simetra/schema"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
@@ -12,7 +13,7 @@ import {
   testSuperuserUrl,
 } from "../../../simetra/test/support"
 import { authSchemaOptions, withAuthOptions } from "../scripts/auth-options.mjs"
-import { DevUserRefusal, createDevUser } from "../scripts/dev-user.mjs"
+import { DevGuardRefusal, createDevUser } from "../scripts/dev-user.mjs"
 
 /**
  * `dev-user` на тегованій базі прогону. DB-рівень, бо запобіжник читає
@@ -108,7 +109,22 @@ beforeAll(async () => {
     throw new Error(`roles refused: ${result.error.map((d) => d.code)}`)
   await setTestPasswords(set)
   authUrl = roleUrl(set, set.auth)
-  await prepareStackIdentity({ authUrl, auth: set.auth })
+  // Міграція за опціями скрипта, як у `db-setup`: так схема має ту саму форму
+  await prepareStackIdentity({
+    authUrl,
+    auth: set.auth,
+    migrate: async (url) => {
+      const pool = new pg.Pool({ connectionString: withAuthOptions(url) })
+      try {
+        const { runMigrations } = await getMigrations(
+          authSchemaOptions(pool, { origin: ORIGIN, secret: SECRET })
+        )
+        await runMigrations()
+      } finally {
+        await pool.end()
+      }
+    },
+  })
 }, 120_000)
 
 afterAll(async () => {
@@ -117,7 +133,7 @@ afterAll(async () => {
 
 describe("dev-user", () => {
   it("refuses a database without the database-level flag and writes nothing", async () => {
-    await expect(run(authUrl)).rejects.toThrow(DevUserRefusal)
+    await expect(run(authUrl)).rejects.toThrow(DevGuardRefusal)
     await expect(run(authUrl)).rejects.toThrow("database-level flag")
     expect(await userCount()).toBe(0)
   }, 60_000)
@@ -136,8 +152,26 @@ describe("dev-user", () => {
     } finally {
       await client.end()
     }
-    await expect(run(forged.toString())).rejects.toThrow(DevUserRefusal)
+    await expect(run(forged.toString())).rejects.toThrow(DevGuardRefusal)
     expect(await userCount()).toBe(0)
+  }, 60_000)
+
+  it("is not fooled by a role-level setting, in this database or in all", async () => {
+    const role = `"${set.auth}"`
+    const db = `"${set.database}"`
+    for (const scope of [`IN DATABASE ${db}`, ""]) {
+      await superuser((client) =>
+        client.query(`ALTER ROLE ${role} ${scope} SET ${FLAG} = 'development'`)
+      )
+      try {
+        await expect(run(authUrl)).rejects.toThrow(DevGuardRefusal)
+        expect(await userCount()).toBe(0)
+      } finally {
+        await superuser((client) =>
+          client.query(`ALTER ROLE ${role} ${scope} RESET ${FLAG}`)
+        )
+      }
+    }
   }, 60_000)
 
   it("refuses a non-loopback host and writes nothing", async () => {
@@ -153,6 +187,15 @@ describe("dev-user", () => {
     const hidden = new URL(authUrl)
     hidden.searchParams.set("host", "db.example.test")
     await expect(run(hidden.toString())).rejects.toThrow("not loopback")
+    // Повторний `host`: `URL` бере перший, `pg` — останній, а ходить пул
+    for (const order of [
+      ["127.0.0.1", "db.example.test"],
+      ["localhost", "db.example.test"],
+    ]) {
+      const twice = new URL(authUrl)
+      for (const host of order) twice.searchParams.append("host", host)
+      await expect(run(twice.toString())).rejects.toThrow("not loopback")
+    }
     expect(await userCount()).toBe(0)
   }, 60_000)
 

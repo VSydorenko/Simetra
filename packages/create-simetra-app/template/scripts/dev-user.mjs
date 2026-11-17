@@ -8,6 +8,9 @@ import { fileURLToPath } from "node:url"
 import { betterAuth } from "better-auth"
 import pg from "pg"
 import { authSchemaOptions, withAuthOptions } from "./auth-options.mjs"
+import { assertDevelopmentDatabase, DevGuardRefusal } from "./dev-guard.mjs"
+
+export { DevGuardRefusal }
 
 /**
  * Маркер для тесту складу: рядкова стала, яку скрипт використовує (типове
@@ -17,65 +20,20 @@ import { authSchemaOptions, withAuthOptions } from "./auth-options.mjs"
  */
 export const DEV_USER_MARKER = "simetra-dev-user-script"
 
-/** Ознака бази розробника: та сама, що в guard даних designer. */
-const ENVIRONMENT_FLAG = "simetra.environment=development"
-
-// Налаштування рівня бази (`ALTER DATABASE … SET` від суперкористувача), а не
-// `current_setting`: сесійне `options=-c simetra.environment=development` у DSN
-// підробило б другу. Запит іде на тому самому пулі, що й екземпляр Better Auth.
-const DEVELOPMENT_FLAG_SQL = `SELECT EXISTS (
-  SELECT FROM pg_catalog.pg_db_role_setting d
-  JOIN pg_catalog.pg_database b ON b.oid = d.setdatabase
-  WHERE b.datname = pg_catalog.current_database() AND d.setrole = 0
-    AND $1 = ANY (d.setconfig)) AS development`
-
-const IPV4_LOOPBACK = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
-
-/** Хост, який візьме `pg`: `localhost`, петля IPv4, `::1` чи шлях unix-сокета. */
-export function isLocalHost(host) {
-  if (host === undefined || host === "") return false
-  if (host.startsWith("/")) return true
-  const h = host.replace(/^\[|\]$/g, "").toLowerCase()
-  if (h === "localhost" || h === "::1") return true
-  const m = IPV4_LOOPBACK.exec(h)
-  return m !== null && m.slice(1).every((octet) => Number(octet) <= 255)
-}
-
-/** Хост DSN так, як його візьме `pg`: параметр `host` перекриває хост адреси. */
-function dsnHost(dsn) {
-  const url = new URL(dsn)
-  return url.searchParams.get("host") ?? url.hostname
-}
-
-/** Відмова запобіжника; нічого не записано. */
-export class DevUserRefusal extends Error {}
-
-/** Запобіжник: loopback-хост і ознака рівня бази; інакше — відмова. */
-export async function assertDevelopmentDatabase(pool, dsn) {
-  if (!isLocalHost(dsnHost(dsn)))
-    throw new DevUserRefusal(
-      "dev-user refused: the database host is not loopback"
-    )
-  const { rows } = await pool.query(DEVELOPMENT_FLAG_SQL, [ENVIRONMENT_FLAG])
-  if (rows[0]?.development !== true)
-    throw new DevUserRefusal(
-      "dev-user refused: the database does not carry the database-level flag simetra.environment = 'development' (ALTER DATABASE … SET)"
-    )
-}
-
 /**
  * Створює користувача або міняє пароль наявному; повертає пароль.
  * `dsn` — роль `simetra_auth`; пул один і для запобіжника, і для Better Auth.
  */
 export async function createDevUser(o) {
+  const connectionString = withAuthOptions(o.dsn)
   const pool = new pg.Pool({
-    connectionString: withAuthOptions(o.dsn),
+    connectionString,
     max: 2,
   })
   // Обрив з'єднання між запитами не має валити процес
   pool.on("error", () => {})
   try {
-    await assertDevelopmentDatabase(pool, o.dsn)
+    await assertDevelopmentDatabase(pool, connectionString)
     const auth = betterAuth(
       authSchemaOptions(pool, {
         origin: o.origin,

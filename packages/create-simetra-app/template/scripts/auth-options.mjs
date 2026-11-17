@@ -31,6 +31,8 @@ export function authSchemaOptions(pool, { origin, secret, signUp = false }) {
     secret,
     emailAndPassword: { enabled: true, disableSignUp: !signUp },
     plugins: [anonymous()],
+    // Таблицю `rateLimit` Better Auth додає до схеми лише за цього сховища
+    rateLimit: { enabled: true, storage: /** @type {const} */ ("database") },
     // `const`-каст: без нього `tsc` розширює літерал до `string`
     advanced: { database: { generateId: /** @type {const} */ ("uuid") } },
   }

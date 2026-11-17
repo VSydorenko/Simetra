@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto"
 import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
+import { assertDevelopmentDatabase } from "./dev-guard.mjs"
 
 /** Рядки `Country` і `Client`; `code` — унікальний `varchar(9)`. */
 export async function seed(client, { count, owner }) {
@@ -59,6 +60,8 @@ if (invokedAsCommand()) {
   const client = new pg.Client({ connectionString: dsn })
   await client.connect()
   try {
+    // Той самий запобіжник, що в `dev-user`: до першого запису
+    await assertDevelopmentDatabase(client, dsn)
     await client.query("BEGIN")
     await seed(client, { count, owner })
     await client.query("COMMIT")

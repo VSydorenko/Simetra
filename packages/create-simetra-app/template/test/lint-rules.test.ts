@@ -86,17 +86,15 @@ describe("consumer lint", () => {
       'export const url = process.env["SIMETRA_RUNTIME_DATABASE_URL"]'
     const dotted = "export const url = process.env.SIMETRA_RUNTIME_DATABASE_URL"
     const name = "export const name = `SIMETRA_RUNTIME_DATABASE_URL`"
-    // Звернення через крапку літерала не має: його ловить рядкове ім'я
-    // (`requiredEnv("…")`); сама крапка лишається гігієною коду-рев'ю
-    for (const code of [read, name])
+    for (const code of [read, dotted, name])
       await expectRefused(
         "syntax",
         "src/server/auth.ts",
         code,
         "SIMETRA_RUNTIME_DATABASE_URL"
       )
-    await expectAllowed("syntax", "src/server/runtime.ts", read)
-    await expectAllowed("syntax", "src/server/auth.ts", dotted)
+    for (const code of [read, dotted])
+      await expectAllowed("syntax", "src/server/runtime.ts", code)
   })
 
   it("forbids session SQL strings and templates outside runtime.ts", async () => {
@@ -250,5 +248,55 @@ describe("consumer lint", () => {
       "test/x.test.ts",
       use("../scripts/dev-user.mjs")
     )
+  })
+
+  it("applies the import grants to dynamic import() too", async () => {
+    const dynamic = (specifier: string) =>
+      `export const m = () => import("${specifier}")`
+    const cases: [string, string, string][] = [
+      ["src/routes/x.tsx", "pg", "Postgres driver"],
+      ["src/server/data-fn.ts", "postgres", "Postgres driver"],
+      ["src/routes/x.tsx", "simetra/server", "src/server/**"],
+      ["src/server/auth.ts", "#instrument", "#instrument"],
+      ["src/server/data-fn.ts", "./ssr-transport", "src/router.tsx"],
+      ["src/server/auth.ts", "../../scripts/dev-user.mjs", "Scripts"],
+    ]
+    for (const [file, specifier, text] of cases)
+      await expectRefused("syntax", file, dynamic(specifier), text)
+    await expectAllowed("syntax", "src/server/runtime.ts", dynamic("pg"))
+    await expectAllowed("syntax", "src/server/x.ts", dynamic("simetra/server"))
+    await expectAllowed(
+      "syntax",
+      "src/router.tsx",
+      dynamic("./server/ssr-transport")
+    )
+  })
+
+  it("catches inProcess and createServerFn as template-literal or computed keys", async () => {
+    for (const code of [
+      "export const o = { [`inProcess`]: true }",
+      'export const o = { ["inProcess"]: true }',
+      'export const p = (o: Record<string, unknown>) => o["inProcess"]',
+    ])
+      await expectRefused("syntax", "src/server/data-fn.ts", code, "inProcess")
+    for (const code of [
+      "export const f = (o: Record<string, unknown>) => o[`createServerFn`]",
+      'export const f = (o: Record<string, unknown>) => o["createServerFn"]',
+    ])
+      await expectRefused("syntax", "src/router.tsx", code, "createServerFn")
+  })
+
+  it("matches ssr-transport with a trailing slash or a query", async () => {
+    for (const specifier of [
+      "./ssr-transport/",
+      "./ssr-transport?raw",
+      "./ssr-transport.ts?raw",
+    ])
+      await expectRefused(
+        "imports",
+        "src/server/data-fn.ts",
+        use(specifier),
+        "src/router.tsx"
+      )
   })
 })

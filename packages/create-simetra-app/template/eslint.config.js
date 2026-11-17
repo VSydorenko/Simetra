@@ -19,67 +19,94 @@ const ALLOW = {
   scripts: "scripts",
 }
 
-const PG_DRIVERS =
-  "^(?:pg|pg-.+|postgres|@neondatabase/.+|@vercel/postgres|@electric-sql/pglite|slonik)(?:/.*)?$"
+// Права на імпорт: кожен запис — що файл МОЖЕ, лише якщо йому це дано.
+// Одна таблиця живить і `no-restricted-imports`, і селектори `import()`:
+// перше динамічного імпорту не бачить.
+const GRANTED_IMPORTS = [
+  {
+    grant: ALLOW.pg,
+    regex:
+      "^(?:pg|pg-.+|postgres|@neondatabase/.+|@vercel/postgres|@electric-sql/pglite|slonik)(?:/.*)?$",
+    // Типи драйвера безпечні: пул не з'являється
+    allowTypeImports: true,
+    message:
+      "A Postgres driver is imported only by src/server/runtime.ts and src/server/auth-db.ts (P4-D spec §4.7).",
+  },
+  {
+    grant: ALLOW.server,
+    regex: "^simetra/server(?:/.*)?$",
+    message:
+      "simetra/server is imported only by src/server/** (P4 spec Рт15, P4-D spec §4.7).",
+  },
+  {
+    grant: ALLOW.instrument,
+    regex: "^#instrument$",
+    message:
+      "#instrument is imported only by the points named in P4-D spec §4.1 (Дх9).",
+  },
+  {
+    grant: ALLOW.ssrTransport,
+    // Хвостовий `/` і запит (`?raw`) — той самий модуль
+    regex: "(?:^|/)ssr-transport(?:\\.[a-z]+)?/?(?:\\?.*)?$",
+    message: "ssr-transport is imported only by src/router.tsx (Дх7).",
+  },
+  {
+    grant: ALLOW.scripts,
+    regex: "(?:^|/)scripts/",
+    message: "Scripts (dev-user included) are never imported from src/.",
+  },
+]
+
+// Заборонено всім файлам шаблону, без винятків
+const ORACLE_IMPORTS = [
+  {
+    // Лише на початку шляху: так само називається пакет оракула, а не файл
+    regex: `^${TEST_HOST}(?:/.*)?$`,
+    message:
+      "The template does not depend on the oracle package (P4-D spec Дх9).",
+  },
+  {
+    regex: "^simetra/[^/]+/testing(?:/.*)?$",
+    message: "The template does not import simetra testing entries (Дх9).",
+  },
+]
 
 /** Опції `@typescript-eslint/no-restricted-imports` для файлу з наданими правами. */
 function importRestrictions(allowed) {
   const patterns = [
-    // Лише на початку шляху: так само називається пакет оракула, а не файл
-    {
-      regex: `^${TEST_HOST}(?:/.*)?$`,
-      message:
-        "The template does not depend on the oracle package (P4-D spec Дх9).",
-    },
-    {
-      regex: "^simetra/[^/]+/testing(?:/.*)?$",
-      message: "The template does not import simetra testing entries (Дх9).",
-    },
+    ...ORACLE_IMPORTS,
+    ...GRANTED_IMPORTS.filter((p) => !allowed.has(p.grant)).map(
+      ({ grant: _grant, ...pattern }) => pattern
+    ),
   ]
-  if (!allowed.has(ALLOW.pg))
-    patterns.push({
-      regex: PG_DRIVERS,
-      // Типи драйвера безпечні: пул не з'являється
-      allowTypeImports: true,
-      message:
-        "A Postgres driver is imported only by src/server/runtime.ts and src/server/auth-db.ts (P4-D spec §4.7).",
-    })
-  if (!allowed.has(ALLOW.server))
-    patterns.push({
-      regex: "^simetra/server(?:/.*)?$",
-      message:
-        "simetra/server is imported only by src/server/** (P4 spec Рт15, P4-D spec §4.7).",
-    })
-  if (!allowed.has(ALLOW.instrument))
-    patterns.push({
-      regex: "^#instrument$",
-      message:
-        "#instrument is imported only by the points named in P4-D spec §4.1 (Дх9).",
-    })
-  if (!allowed.has(ALLOW.ssrTransport))
-    patterns.push({
-      regex: "(?:^|/)ssr-transport(?:\\.[a-z]+)?$",
-      message: "ssr-transport is imported only by src/router.tsx (Дх7).",
-    })
-  if (!allowed.has(ALLOW.scripts))
-    patterns.push({
-      regex: "(?:^|/)scripts/",
-      message: "Scripts (dev-user included) are never imported from src/.",
-    })
   return ["error", { patterns }]
 }
 
+/** Той самий перелік для `import("…")`: типових імпортів у виразі немає. */
+function dynamicImportSelectors(allowed) {
+  return GRANTED_IMPORTS.filter((p) => !allowed.has(p.grant)).map((p) => ({
+    // `/` у regex селектора esquery мусить бути екранованим
+    selector: `ImportExpression[source.value=/${p.regex.replaceAll("/", "\\/")}/]`,
+    message: `${p.message} (dynamic import() too)`,
+  }))
+}
+
 const IN_PROCESS = {
-  selector: "Identifier[name='inProcess'], Literal[value='inProcess']",
+  // Ключ-ідентифікатор, рядок (зокрема обчислюваний доступ) і шаблонний літерал
+  selector:
+    "Identifier[name='inProcess'], Literal[value='inProcess'], TemplateElement[value.cooked='inProcess']",
   message:
     "inProcess appears only in src/server/ssr-transport.ts: on the HTTP path it would skip the origin rule (Дх7).",
 }
 const CREATE_SERVER_FN = {
-  selector: "Identifier[name='createServerFn']",
+  selector:
+    "Identifier[name='createServerFn'], Literal[value='createServerFn'], TemplateElement[value.cooked='createServerFn']",
   message:
     "ssr-transport.ts and router.tsx never use createServerFn: the in-process form must not become an HTTP route (Дх7).",
 }
 const ENV_RUNTIME_URL = [
+  // `process.env.SIMETRA_RUNTIME_DATABASE_URL` рядкового літерала не має
+  "MemberExpression[property.name='SIMETRA_RUNTIME_DATABASE_URL']",
   "Literal[value=/SIMETRA_RUNTIME_DATABASE_URL/]",
   "TemplateElement[value.raw=/SIMETRA_RUNTIME_DATABASE_URL/]",
 ].map((selector) => ({
@@ -115,6 +142,7 @@ function syntaxRestrictions(o) {
   return [
     "error",
     ...DYNAMIC_LOADING,
+    ...dynamicImportSelectors(o.allowed),
     ...(o.runtime ? [] : [...ENV_RUNTIME_URL, ...SESSION_SQL]),
     ...(o.ssrTransport ? [] : [IN_PROCESS]),
     ...(o.noServerFn ? [CREATE_SERVER_FN] : []),
@@ -140,6 +168,7 @@ function srcBlock(files, allowed, o = {}) {
         new Set(allowed)
       ),
       "no-restricted-syntax": syntaxRestrictions({
+        allowed: new Set(allowed),
         runtime: o.runtime === true,
         ssrTransport: o.ssrTransport === true,
         noServerFn: o.noServerFn === true,

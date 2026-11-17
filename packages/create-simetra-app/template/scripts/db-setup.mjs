@@ -11,6 +11,7 @@ import { getMigrations } from "better-auth/db/migration"
 import pg from "pg"
 import config from "../simetra.config.ts"
 import { authSchemaOptions, withAuthOptions } from "./auth-options.mjs"
+import { assertLoopback, DevGuardRefusal } from "./dev-guard.mjs"
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -64,6 +65,17 @@ const superuserUrl = requiredEnv("SIMETRA_SUPERUSER_DATABASE_URL")
 const authUrl = requiredEnv("SIMETRA_AUTH_DATABASE_URL")
 const ownerUrl = requiredEnv("SIMETRA_OWNER_DATABASE_URL")
 
+// Ознаки рівня бази ще немає (її ставить оператор після `roles`), тож до
+// першого запису перевіряється лише хост: суперкористувач не має бити по
+// чужому серверу
+try {
+  for (const url of [superuserUrl, authUrl, ownerUrl]) assertLoopback(url)
+} catch (error) {
+  if (!(error instanceof DevGuardRefusal)) throw error
+  console.error(`db-setup ${error.message}`)
+  process.exit(1)
+}
+
 // Крок 1 створює ролі й схему `better_auth`; без нього міграції немає де йти
 simetra(["roles", config.metadataDir], superuserUrl)
 await migrateBetterAuth(authUrl)
@@ -82,6 +94,9 @@ if (planned.planHash === undefined || planned.file === undefined) {
       planned.file,
       config.metadataDir,
       `--plan-hash=${planned.planHash}`,
+      // `apply` — руйнівний інструмент, і без підтвердження CLI відмовляє;
+      // рішення — за людиною, що запустила `db-setup`
+      "--yes",
     ],
     ownerUrl
   )
