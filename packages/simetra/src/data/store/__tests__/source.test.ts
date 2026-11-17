@@ -11,8 +11,10 @@ import {
   type WireReadParts,
 } from "simetra/model"
 import {
+  KERNEL_HASH,
   OBJECT_ID,
   ORGANIZATION_ID,
+  SCOPE_KIND_ID,
   catalogEntry,
   catalogEntryAttribute,
 } from "../../../model/runtime/__tests__/entries"
@@ -27,6 +29,7 @@ import {
   BATCH_RETRY_PAUSE_MS,
   type CoreSource,
   type ReadLimiter,
+  type ServerPort,
 } from "../source"
 import {
   createFakeSource,
@@ -51,6 +54,18 @@ const org: CatalogEntry = catalogEntry({
 })
 const OBJECTS = [task, org]
 
+/** Адаптер для кейсів запису: читання тут не йде. */
+const READS_ONLY_ADAPTER: SourceAdapter = {
+  capabilities: { include: true },
+  read: () => Promise.reject(new Error("unexpected read")),
+}
+
+/** Порт сервера для кейсів читання: запис і версія тут не йдуть. */
+const READS_ONLY: ServerPort = {
+  run: () => Promise.reject(new Error("unexpected run")),
+  version: () => Promise.reject(new Error("unexpected version")),
+}
+
 const key = (n: number) =>
   `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 
@@ -63,7 +78,8 @@ function setup(options: { parallel?: number; fake?: FakeSource } = {}): {
   const source = createCoreSource(
     () => fake.adapter,
     catalogIndex(OBJECTS),
-    createReadLimiter(options.parallel ?? 4)
+    createReadLimiter(options.parallel ?? 4),
+    fake.server
   )
   return { fake, source }
 }
@@ -239,7 +255,8 @@ describe("createCoreSource", () => {
     const source = createCoreSource(
       () => adapter,
       catalogIndex(OBJECTS),
-      createReadLimiter(4)
+      createReadLimiter(4),
+      READS_ONLY
     )
     const { rows } = await readOne(source, { object: TASK, limit: 1 })
     expect(rows).toEqual([{ ref: key(1), version: 3, title: "a" }])
@@ -280,7 +297,8 @@ describe("createCoreSource", () => {
     const source = createCoreSource(
       (object) => (object.name === "Task" ? a.adapter : b.adapter),
       catalogIndex(OBJECTS),
-      createReadLimiter(4)
+      createReadLimiter(4),
+      READS_ONLY
     )
     const tasks = await readOne(source, { object: TASK, limit: 5 })
     const orgs = await readOne(source, { object: ORG, limit: 5 })
@@ -344,7 +362,8 @@ describe("createReadLimiter", () => {
     const source = createCoreSource(
       () => fake.adapter,
       catalogIndex(OBJECTS),
-      limiter
+      limiter,
+      READS_ONLY
     )
     seedTasks(fake, 1)
     // Кожна відмова зловлена тут: необроблених відхилень немає.
@@ -562,7 +581,8 @@ describe("CoreSource on read parts", () => {
     const source = createCoreSource(
       () => fake.adapter,
       catalogIndex(OBJECTS),
-      limiter
+      limiter,
+      READS_ONLY
     )
     seedTasks(fake, 1000)
     const keys = Array.from({ length: 1000 }, (_, i) => key(i + 1))
@@ -578,7 +598,8 @@ describe("CoreSource on read parts", () => {
     const source = createCoreSource(
       () => fake.adapter,
       catalogIndex(OBJECTS),
-      limiter
+      limiter,
+      READS_ONLY
     )
     const keys = Array.from({ length: 4000 }, (_, i) => key(i + 1))
     await readKeys(source, task, keys, { keysPerRequest: 200 })
@@ -601,7 +622,8 @@ describe("CoreSource on read parts", () => {
     const source = createCoreSource(
       (object) => (object.name === "Task" ? a.adapter : b.adapter),
       catalogIndex(OBJECTS),
-      createReadLimiter(4)
+      createReadLimiter(4),
+      READS_ONLY
     )
     const { items } = await source.read([
       { object: ORG, limit: 5 },
@@ -641,7 +663,8 @@ describe("CoreSource on read parts", () => {
     const source = createCoreSource(
       () => adapter,
       catalogIndex(OBJECTS),
-      createReadLimiter(4)
+      createReadLimiter(4),
+      READS_ONLY
     )
     const { items } = await source.read(taskQueries(2))
     expect(items[0]?.ok).toBe(true)
@@ -666,7 +689,8 @@ describe("CoreSource on read parts", () => {
     const source = createCoreSource(
       (object) => (object.name === "Task" ? down : fake.adapter),
       catalogIndex(OBJECTS),
-      createReadLimiter(4)
+      createReadLimiter(4),
+      READS_ONLY
     )
     const { items } = await source.read([
       { object: TASK, limit: 1 },
@@ -688,7 +712,8 @@ describe("CoreSource on read parts", () => {
     const source = createCoreSource(
       () => broken,
       catalogIndex(OBJECTS),
-      createReadLimiter(4)
+      createReadLimiter(4),
+      READS_ONLY
     )
     await expect(source.read(taskQueries(1))).rejects.toThrow("boom")
   })
@@ -707,7 +732,8 @@ describe("CoreSource on read parts", () => {
     const source = createCoreSource(
       () => adapter,
       catalogIndex(OBJECTS),
-      createReadLimiter(4)
+      createReadLimiter(4),
+      READS_ONLY
     )
     const first = await source.read(taskQueries(2))
     expect(first.items.map((i) => !i.ok && i.error.code)).toEqual([
@@ -729,7 +755,8 @@ describe("CoreSource on read parts", () => {
     const source = createCoreSource(
       () => adapter,
       catalogIndex(OBJECTS),
-      createReadLimiter(4)
+      createReadLimiter(4),
+      READS_ONLY
     )
     const { items } = await source.read(taskQueries(1))
     expect(items[0]).toEqual({
@@ -748,7 +775,8 @@ describe("CoreSource on read parts", () => {
     const source = createCoreSource(
       () => adapter,
       catalogIndex(OBJECTS),
-      createReadLimiter(4)
+      createReadLimiter(4),
+      READS_ONLY
     )
     const { items } = await source.read(taskQueries(1))
     expect(items[0]).toEqual({
@@ -778,7 +806,8 @@ describe("CoreSource on read parts", () => {
         const source = createCoreSource(
           () => adapter,
           catalogIndex(OBJECTS),
-          limiter
+          limiter,
+          READS_ONLY
         )
         const read = source.read(taskQueries(5))
         await vi.advanceTimersByTimeAsync(BATCH_RETRY_PAUSE_MS - 1)
@@ -814,7 +843,8 @@ describe("CoreSource on read parts", () => {
         const source = createCoreSource(
           () => adapter,
           catalogIndex(OBJECTS),
-          createReadLimiter(4)
+          createReadLimiter(4),
+          READS_ONLY
         )
         const read = source.read(taskQueries(4))
         await vi.advanceTimersByTimeAsync(BATCH_RETRY_PAUSE_MS)
@@ -844,7 +874,8 @@ describe("CoreSource on read parts", () => {
       const source = createCoreSource(
         () => adapter,
         catalogIndex(OBJECTS),
-        createReadLimiter(4)
+        createReadLimiter(4),
+        READS_ONLY
       )
       const { items } = await source.read(taskQueries(2))
       expect(calls).toEqual([2, 1])
@@ -858,7 +889,8 @@ describe("CoreSource on read parts", () => {
       const source = createCoreSource(
         () => fake.adapter,
         catalogIndex(OBJECTS),
-        createReadLimiter(4)
+        createReadLimiter(4),
+        READS_ONLY
       )
       const { items } = await source.read(taskQueries(3))
       expect(fake.requests).toEqual([3])
@@ -981,5 +1013,279 @@ describe("rowFromMarker", () => {
       values: { ref: key(1), version: 3 },
     }
     expect(rowFromMarker(entry, held, { known: 0 })).toEqual(held)
+  })
+})
+
+describe("CoreSource: run and version", () => {
+  const E = "e".repeat(64)
+  const K = key(7)
+
+  /** Порт, що записує запити й відповідає значенням кейсу. */
+  function port(reply: () => Promise<unknown>): {
+    server: ServerPort
+    runs: Parameters<ServerPort["run"]>[0][]
+    versions: number
+  } {
+    const out = {
+      runs: [] as Parameters<ServerPort["run"]>[0][],
+      versions: 0,
+      server: {
+        run: (request) => {
+          out.runs.push(request)
+          return reply()
+        },
+        version: () => {
+          out.versions++
+          return reply()
+        },
+      } satisfies ServerPort,
+    }
+    return out
+  }
+  const over = (server: ServerPort, adapter?: SourceAdapter) =>
+    createCoreSource(
+      () => adapter ?? READS_ONLY_ADAPTER,
+      catalogIndex(OBJECTS),
+      createReadLimiter(4),
+      server
+    )
+  const update = {
+    action: "update" as const,
+    object: TASK,
+    id: K,
+    expectedVersion: 3,
+    values: { title: "x", status: "Closed" },
+  }
+  const wireRow = {
+    id: K,
+    version: "4",
+    org_id: S,
+    title: "x",
+    status: "closed",
+  }
+  const wireChange = {
+    object: OBJECT_ID,
+    scopeKind: SCOPE_KIND_ID,
+    scope: S,
+    id: K,
+    version: 4,
+    operation: "update",
+  }
+
+  it("sends the wire operation with the kernel hash of its object and decodes the answer", async () => {
+    const p = port(() =>
+      Promise.resolve({ rows: [wireRow], changes: [wireChange], epoch: E })
+    )
+    expect(await over(p.server).run(update)).toStrictEqual({
+      ok: true,
+      rows: [
+        {
+          key: K,
+          version: 4,
+          versionEpoch: E,
+          values: { ref: K, version: 4, org: S, title: "x", status: "Closed" },
+        },
+      ],
+      changes: [{ ...wireChange, object: TASK }],
+      epoch: E,
+    })
+    // Мітка перерахування, UUID об'єкта й хеш ядра лише цього об'єкта.
+    expect(p.runs).toStrictEqual([
+      {
+        operation: {
+          action: "update",
+          object: OBJECT_ID,
+          id: K,
+          expectedVersion: 3,
+          values: { title: "x", status: "closed" },
+        },
+        kernels: { [OBJECT_ID]: KERNEL_HASH },
+      },
+    ])
+  })
+
+  it("gives no row for an answer without rows: the key is reread", async () => {
+    const p = port(() => Promise.resolve({ changes: [wireChange], epoch: E }))
+    expect(await over(p.server).run(update)).toStrictEqual({
+      ok: true,
+      rows: [undefined],
+      changes: [{ ...wireChange, object: TASK }],
+      epoch: E,
+    })
+  })
+
+  it("refuses a value the mapping cannot encode with command.invalid and its logical path, without the port", async () => {
+    const p = port(() => Promise.reject(new Error("unexpected")))
+    const result = await over(p.server).run({
+      ...update,
+      values: { status: "Bogus" },
+    })
+    // Шлях — логічне ім'я реквізиту, як його дає мапінг T0.
+    expect(result).toStrictEqual({
+      ok: false,
+      error: { code: "command.invalid", path: "status" },
+    })
+    expect(p.runs).toEqual([])
+  })
+
+  it("throws TypeError for a name outside the catalog, without the port", async () => {
+    const p = port(() => Promise.reject(new Error("unexpected")))
+    const source = over(p.server)
+    await expect(
+      source.run({ ...update, object: { kind: "Catalog", name: "Nope" } })
+    ).rejects.toThrow(TypeError)
+    await expect(
+      source.run({ ...update, values: { nope: 1 } })
+    ).rejects.toThrow(TypeError)
+    expect(p.runs).toEqual([])
+  })
+
+  it.each<[string, unknown]>([
+    ["no epoch", { rows: [wireRow], changes: [] }],
+    ["a null epoch", { rows: [wireRow], changes: [], epoch: null }],
+    [
+      "an epoch that is not 64 hex",
+      { rows: [wireRow], changes: [], epoch: "e" },
+    ],
+    ["a field outside the form", { changes: [], epoch: E, extra: 1 }],
+    ["not an object", "ok"],
+    [
+      "two rows for one operation",
+      { rows: [wireRow, wireRow], changes: [], epoch: E },
+    ],
+    [
+      "a row of another key",
+      { rows: [{ ...wireRow, id: key(8) }], changes: [], epoch: E },
+    ],
+    [
+      "a row without its version",
+      { rows: [{ id: K, title: "x" }], changes: [], epoch: E },
+    ],
+    [
+      "a malformed version",
+      { rows: [{ ...wireRow, version: "4.5" }], changes: [], epoch: E },
+    ],
+    [
+      "a change of an object outside the catalog",
+      { changes: [{ ...wireChange, object: key(9) }], epoch: E },
+    ],
+  ])("answers command.internal for %s", async (_, value) => {
+    const p = port(() => Promise.resolve(value))
+    expect(await over(p.server).run(update)).toStrictEqual({
+      ok: false,
+      error: { code: "command.internal" },
+    })
+  })
+
+  it("passes a refused request on as its error; another failure rejects", async () => {
+    const conflict = { code: "command.conflict" as const, currentVersion: 5 }
+    const refused = port(() => Promise.reject(new CommandFailure(conflict)))
+    expect(await over(refused.server).run(update)).toStrictEqual({
+      ok: false,
+      error: conflict,
+    })
+    const broken = port(() => Promise.reject(new Error("boom")))
+    await expect(over(broken.server).run(update)).rejects.toThrow("boom")
+  })
+
+  it("writes through the fake server: a confirmed row of the fake epoch, then a conflict on the old version", async () => {
+    const fake = createFakeSource({ objects: OBJECTS, epoch: E })
+    const version = fake.insert(TASK, {
+      ref: K,
+      org: S,
+      title: "a",
+      notes: "n",
+    })
+    const source = over(fake.server)
+    const op = { ...update, expectedVersion: version, values: { title: "b" } }
+    const done = await source.run(op)
+    const next = fake.row(TASK, K)!.version
+    expect(done).toStrictEqual({
+      ok: true,
+      // Лінивого `notes` рядок `run` не несе.
+      rows: [
+        {
+          key: K,
+          version: next,
+          versionEpoch: E,
+          values: { ref: K, version: next, org: S, title: "b" },
+        },
+      ],
+      changes: [
+        {
+          object: TASK,
+          scopeKind: SCOPE_KIND_ID,
+          scope: S,
+          id: K,
+          version: next,
+          operation: "update",
+        },
+      ],
+      epoch: E,
+    })
+    expect(await source.run(op)).toStrictEqual({
+      ok: false,
+      error: {
+        code: "command.conflict",
+        reason: "version",
+        currentVersion: next,
+      },
+    })
+  })
+
+  it("reads the version through the server port even when an override adapter reads the object", async () => {
+    const fake = createFakeSource({ objects: OBJECTS, snapshotHash: "snap" })
+    const read = vi.fn(() => Promise.reject(new Error("unexpected read")))
+    const override: SourceAdapter = { capabilities: { include: true }, read }
+    const version = vi.spyOn(fake.server, "version")
+    expect(await over(fake.server, override).version()).toStrictEqual({
+      ok: true,
+      version: {
+        snapshotHash: "snap",
+        objects: { [OBJECT_ID]: KERNEL_HASH, [ORGANIZATION_ID]: KERNEL_HASH },
+      },
+    })
+    expect(version).toHaveBeenCalledTimes(1)
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it.each<[string, unknown, unknown]>([
+    [
+      "a refused part as its logical error",
+      {
+        epoch: null,
+        items: [
+          {
+            ok: false,
+            error: { code: "command.forbidden", object: OBJECT_ID },
+          },
+        ],
+      },
+      { ok: false, error: { code: "command.forbidden", object: TASK } },
+    ],
+    [
+      "rows instead of a version as command.internal",
+      { epoch: null, items: [{ ok: true, value: { rows: [] } }] },
+      { ok: false, error: { code: "command.internal" } },
+    ],
+    [
+      "two items as command.internal",
+      {
+        epoch: null,
+        items: [
+          { ok: true, value: { snapshotHash: "h", objects: {} } },
+          { ok: true, value: { snapshotHash: "h", objects: {} } },
+        ],
+      },
+      { ok: false, error: { code: "command.internal" } },
+    ],
+    [
+      "not a read value as command.internal",
+      "ok",
+      { ok: false, error: { code: "command.internal" } },
+    ],
+  ])("answers %s for version", async (_, value, expected) => {
+    const p = port(() => Promise.resolve(value))
+    expect(await over(p.server).version()).toStrictEqual(expected)
   })
 })

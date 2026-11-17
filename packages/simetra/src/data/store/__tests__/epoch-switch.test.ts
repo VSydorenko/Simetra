@@ -175,6 +175,8 @@ describe("acceptEpochs: one answer of several epochs", () => {
     let at = 0
     return {
       close: () => {},
+      run: () => Promise.reject(new Error("unexpected run")),
+      version: () => Promise.reject(new Error("unexpected version")),
       read: async (parts) => ({
         items: parts.map(() => ({
           ok: true as const,
@@ -625,7 +627,8 @@ describe("core: the epoch switch", () => {
       source: createCoreSource(
         () => h.fake.adapter,
         h.fake.index,
-        createReadLimiter(4)
+        createReadLimiter(4),
+        h.fake.server
       ),
       index: h.fake.index,
     })
@@ -915,7 +918,8 @@ describe("core: the epoch switch", () => {
       source: createCoreSource(
         () => h.fake.adapter,
         h.fake.index,
-        createReadLimiter(4)
+        createReadLimiter(4),
+        h.fake.server
       ),
       index: h.fake.index,
     })

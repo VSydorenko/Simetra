@@ -94,7 +94,8 @@ export function setup(
   const source = createCoreSource(
     () => adapter,
     fake.index,
-    createReadLimiter(limits.readParallel)
+    createReadLimiter(limits.readParallel),
+    fake.server
   )
   const log: CoreLogEntry[] = []
   const core = createCore({

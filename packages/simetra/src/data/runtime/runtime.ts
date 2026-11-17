@@ -12,7 +12,11 @@ import {
   type DataTransport,
   type SourceAdapter,
 } from "simetra/model"
-import { selectSource, serverFunctionAdapter } from "../adapter"
+import {
+  selectSource,
+  serverFunctionAdapter,
+  serverFunctionPort,
+} from "../adapter"
 import { createCore, limitsOf } from "../store/core"
 import { createCoreSource, createReadLimiter } from "../store/source"
 import type { CloseReason, CoreLimits, CoreLogEntry } from "../store/types"
@@ -251,7 +255,10 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
         serverFunction,
       }),
     index,
-    createReadLimiter(limits.readParallel)
+    createReadLimiter(limits.readParallel),
+    // Запис і версія каталогу — завжди Server Function, навіть коли об'єкт
+    // читає адаптер-перевизначення (§5.1).
+    serverFunctionPort(send)
   )
   const core = createCore({
     subject,
