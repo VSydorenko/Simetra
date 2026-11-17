@@ -87,6 +87,25 @@ export function scopePolicy(scope: EngineScope): Policy {
     id: "simetra-scope",
     extends: [PROVIDER_BASE_POLICY[scope.provider]],
     filter: [
+      // Тригер на таблиці провайдера, функція якого поза схемами застосунку, —
+      // зовнішня інтеграція, а не об'єкт платформи: базова політика бере в межу
+      // кожен тригер з функцією поза схемами провайдера, і тоді план знімав би
+      // його, а копія доказу без його функції не відтворилася б. Тригер у
+      // схемі таблиці, тож `schema` — схема провайдера
+      {
+        match: {
+          all: [
+            { kind: "trigger" },
+            { schema: [...PROVIDER_SCHEMAS[scope.provider]] },
+            {
+              not: {
+                edgeTo: { kind: "function", schema: [...scope.schemas] },
+              },
+            },
+          ],
+        },
+        action: "exclude",
+      },
       {
         match: {
           all: [

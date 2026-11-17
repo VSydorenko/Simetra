@@ -605,24 +605,67 @@ function shadowFailure(error: unknown): EngineDiagnostic[] | undefined {
 }
 
 /**
+ * Середовище цілі (`ShadowOptions.environment`) — на свіжій тіні чи копії до
+ * засіву двигуна: засів припущених схем переносить тригери, чиї функції
+ * лежать поза межею, і без них впав би сирою помилкою. Тіла не перевіряються:
+ * визначення дослівне з цілі, а об'єкти, яких воно торкається, тіні не
+ * потрібні. Збій оператора — кодована відмова, виняток з'єднання — далі.
+ */
+async function seedTargetEnvironment(
+  pool: pg.Pool,
+  statements: readonly string[] | undefined
+): Promise<EngineDiagnostic | undefined> {
+  if (statements === undefined || statements.length === 0) return undefined
+  const client = await pool.connect()
+  let current = ""
+  try {
+    await client.query("BEGIN")
+    await client.query("SET LOCAL check_function_bodies = off")
+    for (const statement of statements) {
+      current = statement
+      await client.query(statement)
+    }
+    await client.query("COMMIT")
+    return undefined
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined)
+    if (!(error instanceof pg.DatabaseError)) throw error
+    // Перший рядок оператора називає об'єкт, тіло функції лише шумить
+    const head = current.split("\n", 1)[0]
+    return engineDiagnostic(
+      "engine.environment-failed",
+      { detail: `\`${head}\`: ${error.message}` },
+      "error",
+      undefined,
+      error.code
+    )
+  } finally {
+    client.release()
+  }
+}
+
+/**
  * Тіло тіні без її прибирання: план «ціль → тінь» і колбек. Діагностики
  * завантаження, цілі, дрейфу немодельованих об'єктів і самого плану
  * віддаються разом із результатом — `unmodeled_drift` означає, що оператор
  * плану впаде на цілі, і мовчати про це не можна.
  */
 async function planAndRun<T>(
-  target: DbConnection,
+  o: ShadowOptions,
   shadowUrl: string,
   desiredSql: string,
   scope: EngineScope,
   fn: (shadow: DbConnection, plan: EnginePlan) => Promise<T>
 ): Promise<ShadowOutcome<T>> {
   const warnings: string[] = []
-  const targetPool = readOnlyTransactionPool(target.url)
+  const targetPool = readOnlyTransactionPool(o.target.url)
   const shadowPool = writablePool(shadowUrl)
   let plan: EnginePlan
   let diagnostics: EngineDiagnostic[]
   try {
+    const unseeded = await seedTargetEnvironment(shadowPool, o.environment)
+    if (unseeded !== undefined)
+      return { status: "shadow-failed", diagnostics: [unseeded] }
     // Засів провайдера — окремим файлом перед бажаним станом: двигун вантажить
     // файли в порядку масиву, а засів припущених схем цілі йде ще раніше, тож
     // `extensions` уже існує. Базовий стан — з пресету, а не з цілі (спека
@@ -762,16 +805,19 @@ async function reproduce(
  * точність її стану перевіряє викликач.
  */
 async function cloneAndRun<T>(
-  target: DbConnection,
+  o: ShadowOptions,
   cloneUrl: string,
   targetCatalog: PgDeltaCatalog,
   scope: EngineScope,
   fn: (clone: DbConnection) => Promise<T>
 ): Promise<ShadowOutcome<T>> {
-  const targetPool = readOnlyTransactionPool(target.url)
+  const targetPool = readOnlyTransactionPool(o.target.url)
   const clonePool = writablePool(cloneUrl)
   let diagnostics: EngineDiagnostic[]
   try {
+    const unseeded = await seedTargetEnvironment(clonePool, o.environment)
+    if (unseeded !== undefined)
+      return { status: "shadow-failed", diagnostics: [unseeded] }
     try {
       await planSchemaFiles(
         targetPool,
@@ -1016,7 +1062,7 @@ export function createPgDeltaEngine(): SchemaEngine {
       // `CREATE DATABASE`; сесія цілі лишається лише для читання
       const shadow = await provisionShadow(o, scope)
       return dropAfter(shadow, () =>
-        planAndRun(o.target, shadow.url, desiredSql, scope, fn)
+        planAndRun(o, shadow.url, desiredSql, scope, fn)
       )
     },
 
@@ -1034,7 +1080,7 @@ export function createPgDeltaEngine(): SchemaEngine {
       // Друга тінь тією самою провізією: копія пише, ціль лише читається
       const clone = await provisionShadow(o, scope)
       return dropAfter(clone, () =>
-        cloneAndRun(o.target, clone.url, catalog, scope, fn)
+        cloneAndRun(o, clone.url, catalog, scope, fn)
       )
     },
   }

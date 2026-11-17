@@ -22,6 +22,15 @@ export interface ShadowOptions {
    * tests that run against a template other than the stack's.
    */
   shadowTemplate?: string
+  /**
+   * Statements the adapter runs on every fresh shadow and proof copy before
+   * the engine seeds it, with function bodies unchecked: objects of the
+   * target outside the boundary that the engine's seed needs, such as the
+   * function of a provider-table trigger that lies outside the managed
+   * schemas (postgres profile spec §4.2). A failing statement is the
+   * `engine.environment-failed` refusal.
+   */
+  environment?: readonly string[]
 }
 
 /**

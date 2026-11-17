@@ -3600,6 +3600,15 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Копія — свіжа тінь, засіяна базовим станом провайдера, тож причина в цілі чи середовищі, а не в метаданих: розширення, якого тінь не встановить, засів провайдера або режим з'єднання тіні (потрібне пряме чи сесійне з'єднання). Усуньте причину з повідомлення.",
     },
   },
+  "engine.environment-failed": {
+    en: (p) =>
+      `The environment of the target could not be reproduced in the shadow before seeding: ${p.detail}`,
+    uk: (p) => `Середовище цілі не відтворилося в тіні до засіву: ${p.detail}`,
+    hint: {
+      en: "The shadow receives, verbatim, the functions of the target's triggers on provider tables that lie outside the managed schemas. The target and its triggers are untouched; fix the function named in the message (for example, an object its definition needs at creation time) and plan again.",
+      uk: "Тінь отримує дослівно функції тригерів цілі на таблицях провайдера, що лежать поза керованими схемами. Ціль і її тригери не змінено; виправте названу функцію (скажімо, об'єкт, потрібний її визначенню під час створення) і сплануйте знову.",
+    },
+  },
   "engine.preamble-unknown": {
     en: (p) =>
       `The schema engine's plan preamble sets ${p.name} = ${p.value}, which is not on the allowed list`,
@@ -4741,8 +4750,18 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Тригер ${p.trigger} на ${p.table} уже є і створений не Simetra; згенерований тригер тихо замінив би його`,
     hint: {
-      en: "No plan was written. Rename or drop the existing trigger; for a subscription, another physicalName also works.",
-      uk: "План не записано. Перейменуйте чи зніміть наявний тригер; підписці можна й дати інший physicalName.",
+      en: "No plan was written. Rename the existing trigger (ALTER TRIGGER … RENAME TO …): it keeps working under the new name. For a subscription, another physicalName also works.",
+      uk: "План не записано. Перейменуйте наявний тригер (ALTER TRIGGER … RENAME TO …): він працюватиме далі під новим ім'ям. Підписці можна й дати інший physicalName.",
+    },
+  },
+  "plan.trigger-function-unseedable": {
+    en: (p) =>
+      `Function ${p.function} of a trigger on a provider table lies outside the managed schemas and is written in ${p.language}; the shadow and the proof copy can only reproduce such a function in sql or plpgsql`,
+    uk: (p) =>
+      `Функція ${p.function} тригера на таблиці провайдера лежить поза керованими схемами й написана мовою ${p.language}; тінь і копія доказу відтворюють таку функцію лише мовою sql чи plpgsql`,
+    hint: {
+      en: "No plan was written. The trigger stays outside Simetra and keeps working; to plan this database, make its function a plpgsql wrapper that calls the current one.",
+      uk: "План не записано. Тригер лишається поза Simetra й працює далі; щоб планувати цю базу, зробіть його функцію обгорткою plpgsql, що кличе поточну.",
     },
   },
   "plan.row-version-first": {

@@ -283,10 +283,15 @@ export {
 } from "./carrier-backfill"
 export type { RightsOrphans } from "./rights-sources"
 export {
+  readShadowEnvironment,
+  type ShadowEnvironment,
+} from "./shadow-environment"
+export {
   buildPlan,
   checkOwnerMembership,
   numberingNotGenerated,
   providerTriggerConflicts,
+  providerTriggerKey,
   type OwnerRefusalCode,
   type PlanDatabases,
   type PlanOutcome,

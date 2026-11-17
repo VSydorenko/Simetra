@@ -12,12 +12,14 @@ import {
 } from "simetra/schema"
 import {
   attribute,
+  catalog,
   customTable,
   uuid,
   loginUrl,
 } from "../../../../simetra/test/support"
 import { asSuperuser, query } from "../../__tests__/support/db"
 import {
+  applyArtifact,
   codes,
   compiled,
   COPIER,
@@ -306,6 +308,95 @@ describe.concurrent("buildPlan", () => {
       await inTarget(EMPTY, async (url) => {
         const outcome = await plan(url, model, polluted)
         expect(errors(outcome)).toEqual(["engine.clone-failed"])
+      })
+    })
+  })
+
+  // Тригер на таблиці провайдера з функцією поза межею — зовнішня інтеграція
+  // (спека профілю postgres §4.2): межа його виключає, тінь і копія дістають
+  // функцію дослівно до засіву двигуна, план його не торкається
+  describe("provider table triggers outside the boundary", () => {
+    const USERS = "catalogs/Users/Users.meta.json"
+    const users = catalog("Users", {
+      id: uuid(9101),
+      role: "users",
+      scope: "none",
+    })
+    /** Тригер на `better_auth."user"` з функцією `fn` і тілом `body`. */
+    const external = (name: string, fn: string, body: string) =>
+      `create function ${fn}() returns trigger ${body};
+       create trigger ${name} after insert on better_auth."user"
+         for each row execute function ${fn}();`
+    const PLPGSQL = "language plpgsql as $$ begin return new; end $$"
+    const triggers = async (url: string) =>
+      (
+        await query<{ name: string; fn: string }>(
+          url,
+          `select t.tgname as name, t.tgfoid::regproc::text as fn
+             from pg_trigger t where t.tgrelid = 'better_auth."user"'::regclass
+              and not t.tgisinternal order by 1`
+        )
+      ).map((r) => `${r.name} → ${r.fn}`)
+
+    it("plans and applies around a trigger whose function lies outside the boundary", async () => {
+      const model = await compiled({ [USERS]: users })
+      await inTarget(
+        `create schema private;
+         ${external("on_new_user", "private.on_new_user", PLPGSQL)}`,
+        async (url) => {
+          const outcome = await plan(url, model)
+          const artifact = planned(outcome)
+          expect(
+            artifact.steps.filter((s) => /on_new_user|private/.test(s.sql))
+          ).toEqual([])
+          await applyArtifact(url, artifact, model)
+          expect(await triggers(url)).toContain(
+            "on_new_user → private.on_new_user"
+          )
+        }
+      )
+    })
+
+    it("refuses a generated name taken by a trigger the boundary does not see", async () => {
+      // Функція у схемі провайдера: базова політика тригер виключає, засів
+      // переносить, і без кодованої відмови тінь упала б «already exists»
+      const model = await compiled({ [USERS]: users })
+      await inTarget(
+        external("simetra_provision_user", "better_auth.foreign_fn", PLPGSQL),
+        async (url) => {
+          const outcome = await plan(url, model)
+          expect(errors(outcome)).toEqual(["plan.provider-trigger-taken"])
+          expect(
+            outcome.diagnostics.find(
+              (d) => d.code === "plan.provider-trigger-taken"
+            )?.params
+          ).toEqual({
+            trigger: "simetra_provision_user",
+            table: "better_auth.user",
+          })
+        }
+      )
+    })
+
+    it("refuses a trigger function in a language the shadow cannot take verbatim", async () => {
+      const model = await compiled({ [USERS]: users })
+      await inTarget(EMPTY, async (url) => {
+        await query(
+          asSuperuser(url),
+          `create schema private;
+           ${external(
+             "on_new_user",
+             "private.on_new_user",
+             "language internal as 'suppress_redundant_updates_trigger'"
+           )}`
+        )
+        const outcome = await plan(url, model)
+        expect(errors(outcome)).toEqual(["plan.trigger-function-unseedable"])
+        expect(
+          outcome.diagnostics.find(
+            (d) => d.code === "plan.trigger-function-unseedable"
+          )?.params
+        ).toEqual({ function: "private.on_new_user", language: "internal" })
       })
     })
   })

@@ -46,6 +46,7 @@ import {
   type RehearsalReport,
   type RightsOrphans,
   type TableLock,
+  readShadowEnvironment,
 } from "simetra/schema"
 import { z } from "zod"
 import { failureDiagnostics, withDatabase } from "../io/database"
@@ -623,10 +624,18 @@ export const applyTool = defineTool({
           artifact.scope.provider
         )
         if (roles.refusal !== undefined) return { rolesRefused: roles.refusal }
+        // Функції тригерів провайдера поза межею — у тінь до засіву, як у плані
+        const seeds = await (
+          await applyDatabase({ readOnly: true })
+        ).transaction(db.target, "rollback", (tx) =>
+          readShadowEnvironment(tx, artifact.scope)
+        )
+        if (!seeds.ok) return { shadowFailed: seeds.diagnostics }
         const shadow = await engine.withDesiredShadow(
           {
             target: db.target,
             ...(db.shadowBase ? { shadowBase: db.shadowBase } : {}),
+            environment: seeds.statements,
           },
           desired.sql,
           artifact.scope,
