@@ -1496,6 +1496,7 @@ async function runModel(
         if (shown === undefined || shown.state === "removed")
           fail(where, `${spec.object}/${k}: on the server, view shows none`)
       }
+      const evicted = inspect.serviceSizes().horizon > 0
       if (spec.kind === "window") {
         // Після `refresh` вікно — перша сторінка серверного порядку.
         const entry = fake.index.byRef.get(TASK)!
@@ -1513,12 +1514,19 @@ async function runModel(
           .slice(0, LIMITS.windowPage)
           .map((values) => values.ref as Key)
         const shown = snap.rows.map((r) => r.key)
-        // Рядок, який читання не змогло покласти в сховище (надгробок іншого
-        // вигляду новіший за його початок), у вікні може бракувати: решта —
-        // з першої сторінки сервера й у його порядку.
+        // Рядок, який читання не змогло покласти в сховище, бракує лише через
+        // надгробок ключа (чи піднятий горизонт, що витіснив надгробок): решта
+        // першої сторінки сервера мусить бути показана, у порядку сервера.
         const at = shown.map((k) => expected.indexOf(k))
         if (at.some((x, n) => x < 0 || (n > 0 && x <= at[n - 1]!)))
           fail(where, `window ${shown.join()} ⊄ server ${expected.join()}`)
+        for (const k of expected) {
+          if (!shown.includes(k) && !evicted && !inspect.buried(TASK, k))
+            fail(
+              where,
+              `window ${shown.join()} lacks ${k} of ${expected.join()}`
+            )
+        }
       }
       if (spec.kind === "full" && snap.atEnd) {
         // Склад `full` — рядки сервера, що проходять фільтр (рядок, що
@@ -1533,7 +1541,14 @@ async function runModel(
                 String((spec.where as { value: unknown }).value))
           )
         })
-        if ([...shown].sort().join() !== [...expected].sort().join())
+        // Рядок, якого читання не змогло покласти в сховище через надгробок
+        // його ключа (інший вигляд звільнив слот пізніше початку читання),
+        // у складі може бракувати: це правило сховища, не втрата.
+        const lost = expected.filter(
+          (k) => !shown.includes(k) && (evicted || inspect.buried(TASK, k))
+        )
+        const rest = expected.filter((k) => !lost.includes(k))
+        if ([...shown].sort().join() !== [...rest].sort().join())
           fail(where, `composition ${shown.join()} ≠ server ${expected.join()}`)
       }
       if (spec.kind === "section" && snap.section !== undefined) {

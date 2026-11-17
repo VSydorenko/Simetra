@@ -102,6 +102,8 @@ export interface CoreInspection {
   /** Broken invariants of ownership and service maps; empty when sound. */
   violations(): string[]
   owners(object: ObjectName, key: Key): number
+  /** A tombstone of the key is held: a read older than it cannot bring the row back. */
+  buried(object: ObjectName, key: Key): boolean
   rowCount(): number
   /** Sizes of the service maps that must not outlive their rows or the session. */
   serviceSizes(): {
@@ -618,6 +620,7 @@ export function createCore(options: {
       }
     },
     owners: (object, key) => objectOf(object).rows.get(key)?.owners ?? 0,
+    buried: (object, key) => session.epochs.buriedSince(keyId(object, key), -1),
     rowCount: () => [...objects.values()].reduce((n, o) => n + o.rows.size, 0),
     violations() {
       const out: string[] = []
