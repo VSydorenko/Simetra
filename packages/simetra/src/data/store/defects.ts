@@ -24,7 +24,7 @@ export type DefectFlag =
   | "purge-by-values"
   /** A purge leaves view loads in flight valid. */
   | "purge-keeps-flights"
-  /** A system re-read rebuilds the composition of the view. */
+  /** A system re-read rebuilds the composition of the view (a window included). */
   | "reread-changes-layout"
   /** A row released by its last owner stays in the store. */
   | "row-without-owner"
@@ -48,6 +48,10 @@ export type DefectFlag =
   | "hide-lifted-by-older-read"
   /** A tabular section subset does not go stale on a `hide` of its owner. */
   | "section-ignores-hide"
+  /** A window page answer is written without the token of its chain and generation. */
+  | "page-without-generation"
+  /** A window view keeps a copy of the values and shows it where the store has none. */
+  | "window-copies-values"
   /** The re-check deferred by a load in flight is queued only with listeners. */
   | "recheck-needs-listeners"
 

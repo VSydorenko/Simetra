@@ -106,6 +106,8 @@ export interface ReaderTarget {
    * layout is their keys in order. Undefined for every other form.
    */
   window: WindowState | undefined
+  /** Window pages being read next to an edge: one read per direction. */
+  readonly paging: Set<"after" | "before">
   /**
    * The start epoch of the last section read the session accepted (section
    * form only): a `hide` of the owner after it makes the subset stale (plan
@@ -506,6 +508,9 @@ function writePage(
         : prev.atStart,
     generation: keys.length === 0 ? prev.generation : generation,
   }
+  // Читання сторінок старого ланцюжка вже нічого не напишуть: їхні позначки
+  // не мають блокувати читання нового.
+  if (replace) s.paging.clear()
   if (page.position !== "prepend") s.atEnd = page.end
   s.strategy = "window"
   s.truncated = false

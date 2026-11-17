@@ -115,8 +115,6 @@ export interface Subset extends ReaderTarget {
   purged: boolean
   /** Set by `setVisible`; unset — visible while subscribed. */
   visible: boolean | undefined
-  /** Window pages being read next to an edge: one read per direction. */
-  readonly paging: Set<"after" | "before">
 }
 
 /** The view registry of a core. */
@@ -138,6 +136,13 @@ export interface SubsetRegistry {
 }
 
 const NO_LINES: readonly SectionLine[] = Object.freeze([])
+// Лише для дефекту самотесту `window-copies-values`.
+const COPIES = new WeakMap<Subset, Map<Key, RowView>>()
+const copiesOf = (s: Subset): Map<Key, RowView> => {
+  const found = COPIES.get(s) ?? new Map<Key, RowView>()
+  COPIES.set(s, found)
+  return found
+}
 const ACCESS_CHANGED = purgedSnapshot("access-changed")
 
 /**
@@ -366,7 +371,14 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     const { cursor } = edge
     s.paging.add(direction)
     const chain = w.chain
-    const token = session.childToken(() => s.alive && s.window?.chain === chain)
+    // Токен читання сторінки (Р9): сторінка пишеться лише в тому ланцюжку,
+    // де її почали читати.
+    const token = session.childToken(
+      () =>
+        s.alive &&
+        (ctx.defects.has("page-without-generation") ||
+          s.window?.chain === chain)
+    )
     const what = `view ${s.form.specKey} page ${direction}`
     const attempt = (): Promise<void> => {
       const readEpoch = session.epochs.now()
@@ -423,7 +435,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         }
       )
     }
-    void attempt().finally(() => s.paging.delete(direction))
+    // Новий ланцюжок вже зняв позначки старого (`writePage`): пізня відповідь
+    // старого читання не знімає позначки читання нового.
+    void attempt().finally(() => {
+      if (s.window?.chain === chain) s.paging.delete(direction)
+    })
   }
 
   /** Mounted card: lazy fields absent or read with an older row version. */
@@ -715,7 +731,19 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     } else {
       const refViews = new Map<Key, RowView>()
       for (const key of s.layout) {
-        const base = viewOf(o, key)
+        let base = viewOf(o, key)
+        // Дефект самотесту: вікно тримає копію показаних значень і показує
+        // її, коли сховище значень уже не дає (Р8 забороняє копію).
+        if (ctx.defects.has("window-copies-values") && s.window !== undefined) {
+          const kept = copiesOf(s)
+          if (
+            base !== undefined &&
+            base.state !== "removed" &&
+            base.hidden !== true
+          )
+            kept.set(key, base)
+          else if (kept.has(key)) base = kept.get(key)
+        }
         if (base === undefined) continue
         if (form.include.length === 0 || base.state === "removed") {
           rows.push(base)

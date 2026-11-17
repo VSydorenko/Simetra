@@ -634,6 +634,20 @@ export function createCore(options: {
         const by = `view ${s.form.specKey}`
         if (!s.alive) out.push(`${by}: released but registered`)
         for (const key of s.owned) hold(s.form.object, key, by)
+        // Вікно тримає лише склад: його сторінки — ключі в тому порядку, у
+        // якому показано список, без повторів і порожніх сторінок (Р8, Р9).
+        if (s.window !== undefined) {
+          const keys = s.window.pages.flatMap((page) => [...page.keys])
+          if (keys.join() !== s.layout.join())
+            out.push(`${by}: layout differs from the keys of its pages`)
+          if (new Set(keys).size !== keys.length)
+            out.push(`${by}: a key in two pages`)
+          if (s.window.pages.some((page) => page.keys.length === 0))
+            out.push(`${by}: an empty page`)
+          for (const key of keys) {
+            if (!s.owned.has(key)) out.push(`${by}: page key ${key} not owned`)
+          }
+        }
         for (const [name, keys] of s.included) {
           for (const key of keys) hold(objectOf(name), key, by)
         }

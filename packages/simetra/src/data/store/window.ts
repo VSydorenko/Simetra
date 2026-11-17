@@ -1,7 +1,12 @@
-import { keysetFilter, type Filter, type OrderBy } from "simetra/model"
+import {
+  CommandFailure,
+  keysetFilter,
+  type Filter,
+  type OrderBy,
+} from "simetra/model"
 import type { Form } from "./forms"
 import { nullableOf } from "./filter"
-import { readOne, serverRow, type CoreSource } from "./source"
+import { readOne, serverRow, type CoreSource, type RowsQuery } from "./source"
 import type { GenerationToken, Key, ServerRow, Values, ViewSpec } from "./types"
 
 /*
@@ -140,6 +145,46 @@ export interface FetchedPage {
 }
 
 /**
+ * The query of one keyset read of `form`: `cursor` is the boundary of the
+ * previous read (strictly after it in `direction`); without it — the start
+ * of that direction.
+ */
+function pageQuery(
+  form: Form,
+  direction: "after" | "before",
+  cursor: WindowCursor | undefined,
+  limit: number
+): RowsQuery {
+  const o = form.object
+  const spec = form.spec as Extract<ViewSpec, { kind: "full" | "window" }>
+  const orderBy = spec.orderBy ?? []
+  const keyName = o.entry.keyName
+  const query: OrderBy =
+    direction === "after" ? orderBy : reversedOrder(orderBy, keyName)
+  const keyset: Filter | undefined =
+    cursor === undefined
+      ? undefined
+      : keysetFilter(
+          orderBy,
+          { ...cursor, direction },
+          keyName,
+          nullableOf(o.info)
+        )
+  const where: Filter | undefined =
+    spec.where === undefined
+      ? keyset
+      : keyset === undefined
+        ? spec.where
+        : { and: [spec.where, keyset] }
+  return {
+    object: o.ref,
+    ...(query.length === 0 ? {} : { orderBy: query }),
+    ...(where === undefined ? {} : { where }),
+    limit,
+  }
+}
+
+/**
  * Reads one page of `form` (a `window`, or a `full` that went over its
  * limit) next to `cursor`; without it — from the start of the order
  * (`after`) or from its end (`before`). A page cut by the response budget
@@ -158,29 +203,14 @@ export async function fetchPage(
   const orderBy = spec.orderBy ?? []
   const keyName = o.entry.keyName
   const { direction } = request
-  const query: OrderBy =
-    direction === "after" ? orderBy : reversedOrder(orderBy, keyName)
-  const nullable = nullableOf(o.info)
   const rows: ServerRow[] = []
   let cursor = request.cursor
   let end = false
   for (;;) {
-    const keyset: Filter | undefined =
-      cursor === undefined
-        ? undefined
-        : keysetFilter(orderBy, { ...cursor, direction }, keyName, nullable)
-    const where: Filter | undefined =
-      spec.where === undefined
-        ? keyset
-        : keyset === undefined
-          ? spec.where
-          : { and: [spec.where, keyset] }
-    const page = await readOne(source, {
-      object: o.ref,
-      ...(query.length === 0 ? {} : { orderBy: query }),
-      ...(where === undefined ? {} : { where }),
-      limit: pageSize - rows.length,
-    })
+    const page = await readOne(
+      source,
+      pageQuery(form, direction, cursor, pageSize - rows.length)
+    )
     // Звільнений чи перезапитаний вигляд далі не читає (токен покоління).
     if (!token.valid) return undefined
     rows.push(
@@ -201,4 +231,61 @@ export async function fetchPage(
     cursor = cursorOf(orderBy, keyName, tail)
   }
   return { rows: direction === "after" ? rows : rows.reverse(), end }
+}
+
+/**
+ * The system re-read of a window's pages (§6.4): every page again from its
+ * lower bound, all of them in one call of the source per round, `pageSize`
+ * rows each. A page cut by the response budget (`more`) goes on from its
+ * last row in the next round. The rows come per page, in the order of
+ * `pages`; a `from` page starts strictly after its cursor, the cursor row
+ * is the caller's to confirm. `undefined` once `token` is invalid.
+ */
+export async function rereadPages(
+  source: CoreSource,
+  form: Form,
+  lowers: readonly WindowLower[],
+  token: GenerationToken,
+  pageSize: number
+): Promise<ServerRow[][] | undefined> {
+  const o = form.object
+  const spec = form.spec as Extract<ViewSpec, { kind: "full" | "window" }>
+  const orderBy = spec.orderBy ?? []
+  const keyName = o.entry.keyName
+  const rows: ServerRow[][] = lowers.map(() => [])
+  const cursors: (WindowCursor | undefined)[] = lowers.map((lower) =>
+    lower.kind === "start" ? undefined : lower.cursor
+  )
+  let open = lowers.map((_, i) => i)
+  while (open.length > 0) {
+    const { items } = await source.read(
+      open.map((i) =>
+        pageQuery(form, "after", cursors[i], pageSize - rows[i]!.length)
+      )
+    )
+    if (!token.valid) return undefined
+    const next: number[] = []
+    for (const [at, item] of items.entries()) {
+      const i = open[at]!
+      if (!item.ok) throw new CommandFailure(item.error)
+      rows[i]!.push(
+        ...item.rows.rows.map((values) =>
+          serverRow(o.entry, values, item.epoch)
+        )
+      )
+      const tail = item.rows.rows.at(-1)
+      // Без `more` чи порожня відповідь — сторінка прочитана; обрізану
+      // бюджетом продовжує keyset від її останнього рядка.
+      if (
+        tail !== undefined &&
+        item.rows.more === true &&
+        rows[i]!.length < pageSize
+      ) {
+        cursors[i] = cursorOf(orderBy, keyName, tail)
+        next.push(i)
+      }
+    }
+    open = next
+  }
+  return rows
 }
