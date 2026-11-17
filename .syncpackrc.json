@@ -5,6 +5,18 @@
       "packages": ["simetra"],
       "dependencies": ["react"],
       "policy": "sameRange"
+    },
+    {
+      "label": "react-dom — версія react (dev-пін react у simetra)",
+      "packages": ["simetra"],
+      "dependencies": ["react-dom"],
+      "pinVersion": "19.3.1"
+    },
+    {
+      "label": "@types/react і @types/react-dom — одна версія",
+      "packages": ["simetra"],
+      "dependencies": ["@types/react", "@types/react-dom"],
+      "pinVersion": "19.3.0"
     }
   ]
 }

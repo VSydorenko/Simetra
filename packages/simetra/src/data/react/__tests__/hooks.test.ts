@@ -11,6 +11,7 @@ import {
   OBJECTS,
   TASK,
   key,
+  S,
   seed,
   settle,
   taskValues,
@@ -30,16 +31,20 @@ import {
 const runtimes: DataRuntime[] = []
 
 function makeRuntime(
-  options: { residency?: Record<string, "full" | "window"> } = {}
+  options: {
+    residency?: Record<string, "full" | "window">
+    objects?: typeof OBJECTS
+  } = {}
 ) {
-  const fake = createFakeSource({ objects: OBJECTS })
+  const { objects = OBJECTS, ...runtimeOptions } = options
+  const fake = createFakeSource({ objects })
   const runtime = createDataRuntime({
-    catalog: { ...clientCatalog(), objects: OBJECTS },
+    catalog: { ...clientCatalog(), objects },
     transport: () => Promise.reject(new Error("unused")),
     subject: SUBJECT,
     log: () => {},
     sources: { override: { [TASK]: () => fake.adapter } },
-    ...options,
+    ...runtimeOptions,
   })
   runtimes.push(runtime)
   return { fake, runtime, core: runtimeHandleOf(runtime).core }
@@ -309,6 +314,28 @@ describe("useRows", () => {
     expect(caught.length).toBe(1)
   })
 
+  it("throws a TypeError in render for an unknown object", () => {
+    const { runtime } = makeRuntime()
+    const Bad = () => {
+      useRows({ object: "Catalog.Nope" })
+      return null
+    }
+    const quiet = console.error
+    console.error = () => {}
+    try {
+      expect(() =>
+        render(
+          createElement(DataRuntimeProvider, {
+            holder: createRuntimeHolder(runtime),
+            children: createElement(Bad),
+          })
+        )
+      ).toThrow(TypeError)
+    } finally {
+      console.error = quiet
+    }
+  })
+
   it("acts on the view: showNew and refresh are bound to the handle", async () => {
     const { fake, runtime } = makeRuntime()
     seed(fake, 1, 2)
@@ -363,8 +390,19 @@ describe("useRow", () => {
   })
 
   it("is not editable while the header version differs from the lines version", async () => {
-    const { fake, runtime, core } = makeRuntime()
-    seed(fake, 1, 1)
+    // Задача без лінивого поля: повторно застосована шапка не робить жодного
+    // поля `stale`, тож `editable` залежить лише від збігу версій.
+    const task = OBJECTS[0]!
+    const { fake, runtime, core } = makeRuntime({
+      objects: [
+        {
+          ...task,
+          attributes: task.attributes.filter((a) => a.name !== "notes"),
+        },
+        ...OBJECTS.slice(1),
+      ],
+    })
+    fake.insert(TASK, { ref: key(1), org: S, title: "t1" })
     fake.setLines(TASK, key(1), "lines", [{ ref: key(11), qty: 1 }])
     const card = mount(createRuntimeHolder(runtime), () =>
       useRow({ object: TASK, id: key(1), tabularSections: ["lines"] })
@@ -381,7 +419,10 @@ describe("useRow", () => {
         core.token()
       )
     })
-    expect(card.last().row?.state).toBe("synced")
+    const shown = card.last().row
+    expect(shown?.state).toBe("synced")
+    expect(shown?.state === "removed" ? [] : shown?.staleFields).toEqual([])
+    expect(card.last().needsRefresh).toBe(false)
     expect(card.last().version).toBe(row.version)
     expect(card.last().editable).toBe(false)
   })
