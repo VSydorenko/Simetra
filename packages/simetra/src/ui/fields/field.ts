@@ -117,16 +117,24 @@ export interface FieldEditorProps {
   disabled?: boolean
 }
 
-const pad = (n: number) => String(n).padStart(2, "0")
+const INTEGER_INPUT = /^-?\d+$/
+
+const pad = (n: number, width = 2) => String(n).padStart(width, "0")
 
 // `datetime-local` не має поясу, а кодек вимагає зсув: значення читається в
-// поясі користувача й іде як момент (ISO UTC); назад — локальний запис моменту.
+// поясі користувача й іде як момент (ISO UTC); назад — локальний запис моменту
+// з секундами й мілісекундами, щоб правка не губила збережену точність.
 function toLocalInput(value: unknown): string {
-  if (typeof value !== "string")
-    return value === null || value === undefined ? "" : String(value)
+  if (value === null || value === undefined) return ""
+  if (typeof value !== "string") return String(value)
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  const ms = date.getMilliseconds()
+  return (
+    `${pad(date.getFullYear(), 4)}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}` +
+    (ms === 0 ? "" : `.${pad(ms, 3)}`)
+  )
 }
 
 function fromLocalInput(text: string): string {
@@ -139,10 +147,10 @@ function read(kind: FieldKind, event: ChangeEvent<HTMLInputElement>): unknown {
   const target = event.target
   if (kind === "boolean") return target.checked
   if (target.value === "") return null
-  if (kind === "integer") {
-    const number = Number(target.value)
-    // Нечисловий текст кодек відхилить сам: він лишається текстом.
-    return Number.isNaN(number) ? target.value : number
+  // Лише запис цілого стає числом: `Number` прийняв би й `0x10`, `1e3`; решту
+  // кодек відхиляє сам, тож вона лишається текстом.
+  if (kind === "integer" && INTEGER_INPUT.test(target.value)) {
+    return Number(target.value)
   }
   if (kind === "dateTime") return fromLocalInput(target.value)
   return target.value
@@ -211,6 +219,8 @@ export function FieldEditor({
             : kind === "dateTime"
               ? "datetime-local"
               : "text",
+        // Секунди не губляться: `step` за замовчуванням ховав би їх у списку.
+        ...(kind === "dateTime" ? { step: "any" } : {}),
         // `maxLength` перевіряє кодек: атрибут input обрізав би вставку мовчки.
         value: kind === "dateTime" ? toLocalInput(value) : text,
         onChange: (e: ChangeEvent<HTMLInputElement>) => emit(read(kind, e)),

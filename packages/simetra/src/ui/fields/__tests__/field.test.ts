@@ -3,7 +3,15 @@ import { cleanup, fireEvent, render } from "@testing-library/react"
 import { createElement } from "react"
 import type { RowView } from "simetra/data/react"
 import type { CatalogEntryAttribute } from "simetra/model"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest"
 import {
   catalogEntry,
   catalogEntryAttribute,
@@ -82,9 +90,7 @@ describe("FieldView — таблиця спеки П4-D §5.3", () => {
       state: "synced",
       staleFields: [],
     }
-    const entry = catalogEntry({
-      attributes: [catalogEntryAttribute({ name: "description", column: "d" })],
-    })
+    const entry = catalogEntry({ presentation: { description: "description" } })
     const { container } = render(
       createElement(FieldView, {
         attribute: attr({ type: "Ref" }),
@@ -166,6 +172,18 @@ describe("FieldEditor — редагування за таблицею §5.3", (
     )
   })
 
+  it.each([["0x10"], ["1e3"], ["abc"], ["1.5"], ["+5"]])(
+    "Integer: %s лишається текстом і відхиляється кодеком",
+    (text) => {
+      const { container, onChange } = edit(attr({ type: "Integer" }))
+      fireEvent.change(control(container)!, { target: { value: text } })
+      expect(onChange).toHaveBeenCalledWith(
+        text,
+        expect.objectContaining({ code: "command.invalid" })
+      )
+    }
+  )
+
   it("довжина String — з каталогу", () => {
     const { container, onChange } = edit(attr({ type: "String", maxLength: 3 }))
     fireEvent.change(control(container)!, { target: { value: "abcd" } })
@@ -197,5 +215,27 @@ describe("FieldEditor — редагування за таблицею §5.3", (
     const [value, error] = onChange.mock.calls[0]!
     expect(value).toMatch(/Z$/)
     expect(error).toBeUndefined()
+  })
+
+  describe("DateTime у фіксованому поясі", () => {
+    const zone = process.env.TZ
+    beforeAll(() => {
+      process.env.TZ = "Europe/Kyiv"
+    })
+    afterAll(() => {
+      if (zone === undefined) delete process.env.TZ
+      else process.env.TZ = zone
+    })
+
+    it("наявне значення з секундами й мілісекундами показується повністю, правка хвилин їх не губить", () => {
+      const { container, onChange } = edit(
+        attr({ type: "DateTime" }),
+        "2026-07-15T10:00:07.123Z"
+      )
+      const input = control(container)!
+      expect(input.value).toBe("2026-07-15T13:00:07.123")
+      fireEvent.change(input, { target: { value: "2026-07-15T13:05:07.123" } })
+      expect(onChange).toHaveBeenCalledWith("2026-07-15T10:05:07.123Z")
+    })
   })
 })

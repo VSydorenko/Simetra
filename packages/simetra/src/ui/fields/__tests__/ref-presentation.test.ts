@@ -14,18 +14,24 @@ const row = (values: Record<string, unknown>): RowView => ({
   state: "synced",
   staleFields: [],
 })
-const target = (...standard: string[]) =>
+// Власні реквізити `description` і `code` є завжди: рішення за `presentation`.
+const target = (presentation?: { description?: string; code?: string }) =>
   catalogEntry({
-    attributes: standard.map((name) =>
+    attributes: ["description", "code"].map((name) =>
       catalogEntryAttribute({ name, column: name })
     ),
+    presentation,
   })
 
 describe("refPresentation", () => {
   it.each([
-    ["description", target("description", "code"), "Acme"],
-    ["code", target("code"), "C-1"],
-    ["ключ", target(), KEY],
+    [
+      "description",
+      target({ description: "description", code: "code" }),
+      "Acme",
+    ],
+    ["code", target({ code: "code" }), "C-1"],
+    ["ключ (власний description не береться)", target(), KEY],
   ])("гілка %s", (_, entry, expected) => {
     expect(
       refPresentation(row({ description: "Acme", code: "C-1" }), entry)
@@ -36,15 +42,20 @@ describe("refPresentation", () => {
     expect(
       refPresentation(
         row({ description: "", code: "C-1" }),
-        target("description", "code")
+        target({ description: "description", code: "code" })
       )
     ).toBe("C-1")
   })
 
   it("рядок, якого немає чи прибрано, — порожній текст", () => {
-    expect(refPresentation(null, target("description"))).toBe("")
+    expect(refPresentation(null, target({ description: "description" }))).toBe(
+      ""
+    )
     expect(
-      refPresentation({ key: KEY, state: "removed" }, target("description"))
+      refPresentation(
+        { key: KEY, state: "removed" },
+        target({ description: "description" })
+      )
     ).toBe("")
   })
 })
