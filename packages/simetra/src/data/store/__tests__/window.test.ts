@@ -619,7 +619,7 @@ describe("a system re-read of a window", () => {
   })
 
   it("reads the start of the order of an empty window: a first row is new", async () => {
-    const { core, fake, handle } = setup()
+    const { core, fake } = setup()
     const view = core.view(byTitle)
     watch(view)
     await settle()
@@ -628,7 +628,6 @@ describe("a system re-read of a window", () => {
     await core.revalidate(TASK, { visibleOnly: false })
     await settle()
     expect(view.getSnapshot()).toMatchObject({ rows: [], hasNewRows: true })
-    void handle
   })
 })
 
