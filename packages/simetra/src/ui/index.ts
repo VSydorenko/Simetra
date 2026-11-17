@@ -1,4 +1,6 @@
 export { VirtualList, type VirtualListProps } from "./list/virtual-list"
+export { ListHost, type ListHostProps } from "./list/list-host"
+export { CatalogProvider, useCatalogEntry } from "./catalog"
 export {
   MESSAGES,
   MessagesProvider,

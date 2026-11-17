@@ -7,5 +7,7 @@
   --simetra-row-height: 40px;
   --simetra-state-cell-width: 160px;
   --simetra-selection-panel-height: 32px;
+  --simetra-selection-count-width: 96px;
+  --simetra-list-height: 600px;
   --simetra-field-height: 32px;
 }
