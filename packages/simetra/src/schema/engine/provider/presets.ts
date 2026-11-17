@@ -50,6 +50,17 @@ export const PROVIDER_LOCKS: Readonly<Record<DatabaseProvider, ProviderLocks>> =
   { supabase: SUPABASE_LOCKS, postgres: POSTGRES_LOCKS }
 
 /**
+ * Whether a plan may not remove a provision trigger on the identity table
+ * (spec of provider profiles §4.2). Data, not a fact of table ownership: on
+ * Supabase the apply role drops the trigger on `auth.users` without owning
+ * the table (supautils), while on `postgres` the role has only `TRIGGER` and
+ * `DROP TRIGGER` needs the owner.
+ */
+export const PROVIDER_IDENTITY_TRIGGER_LOCKED: Readonly<
+  Record<DatabaseProvider, boolean>
+> = { supabase: false, postgres: true }
+
+/**
  * Розширення, які роль застосування може поставити попри `trusted = false`
  * (спека промоції §7.2): так план виводить режим `transient` для
  * `plpgsql_check`.

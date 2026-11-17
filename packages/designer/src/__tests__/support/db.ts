@@ -4,11 +4,14 @@ import pg from "pg"
 import { canonicalSnapshot, type CompiledModel } from "simetra/compiler"
 import {
   CommandFailure,
+  LOGIN_ROLE_REQUEST_PURPOSES,
+  PROVIDER_API_ROLES,
   PROVIDER_IDENTITY_SOURCES,
   PROVIDER_OWNER_ROLES,
   quoteIdent,
   RIGHTS_MAINTENANCE_SETTING,
   type CommandError,
+  type SessionClaims,
 } from "simetra/model"
 import {
   buildPlan,
@@ -23,11 +26,12 @@ import { createApplyDatabase, createPgDeltaEngine } from "../../schema-engine"
 import {
   asSessionLogin,
   authLoginRole,
+  claimsFor,
   devSecret,
   GAUGE_WRITER_ID,
   LOGIN_SECRETS_FILE,
   loginUrl,
-  prepareStackIdentity,
+  migrateBetterAuth,
   signUp,
   superuserClient,
   testDatabaseName,
@@ -40,6 +44,7 @@ import {
   setLocalSetting,
   trackPool,
 } from "../../../../simetra/test/support"
+import { identityGrantSql } from "../../../../simetra/src/schema/apply/postgres-cluster"
 
 /**
  * Спільні помічники DB-тестів designer. Усе, що вони створюють на спільному стеку, називається через
@@ -253,25 +258,6 @@ export async function dropRoles(...names: string[]): Promise<void> {
 }
 
 /**
- * Waits until backend `pid` blocks on a heavyweight lock (row, relation or
- * advisory), observed through `pg_stat_activity` from another session.
- */
-export async function waitForLock(
-  observer: pg.Client,
-  pid: number
-): Promise<void> {
-  for (let waited = 0; waited < 10_000; waited += 50) {
-    const { rows } = await observer.query<{ wait_event_type: string | null }>(
-      "SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
-      [pid]
-    )
-    if (rows[0]?.wait_event_type === "Lock") return
-    await new Promise((resolve) => setTimeout(resolve, 50))
-  }
-  throw new Error(`backend ${pid} never waited on a lock`)
-}
-
-/**
  * Waits until backend `pid` is gone from `pg_stat_activity`, observed from
  * another session; throws when it is still there after the wait.
  */
@@ -301,14 +287,18 @@ const quoted = (name: string) => `"${name.replaceAll('"', '""')}"`
  * are removed on every path; `label` is the readable part of the name, and a
  * random tail makes every call's role name unique.
  * `attributes` gives the role a fact the runtime login must not have
- * (`BYPASSRLS`), for tests of the data-tool guards.
+ * (`BYPASSRLS`), for tests of the data-tool guards; `inherit` grants the
+ * memberships `WITH INHERIT TRUE, SET TRUE` instead, for tests of the login
+ * gate.
+ * The user request role in `memberOf` brings every request role of the
+ * profile (`LOGIN_ROLE_REQUEST_PURPOSES`), as the runtime login role has them.
  */
 export async function withRuntimeLogin<T>(
   url: string,
   memberOf: readonly string[],
   fn: (loginUrl: string) => Promise<T>,
   label = "runtime",
-  attributes: { bypassRls?: boolean } = {}
+  attributes: { bypassRls?: boolean; inherit?: boolean } = {}
 ): Promise<T> {
   // Supavisor кешує секрет ролі за ім'ям: роль, перестворена з тим самим
   // ім'ям і новим паролем, через пулер не входить (`28P01`), доки кеш не
@@ -321,11 +311,21 @@ export async function withRuntimeLogin<T>(
     `create role ${quoted(name)} login noinherit${bypass} password '${password}'`
   )
   const database = quoted(databaseOf(url))
+  // Рантайм перевіряє членство в кожній ролі запиту профілю на створенні:
+  // перелік у кожному виклику розійшовся б із профілем. Без ролі
+  // користувача — як є: так будується вхід запасного шляху читання.
+  const provider = testProvider()
+  const requestRoles = LOGIN_ROLE_REQUEST_PURPOSES[provider].map(
+    (purpose) => PROVIDER_API_ROLES[provider][purpose]
+  )
+  const roles = memberOf.includes(PROVIDER_API_ROLES[provider].user)
+    ? [...new Set([...memberOf, ...requestRoles])]
+    : memberOf
   try {
     await asStack(`grant connect on database ${database} to ${quoted(name)}`)
-    for (const role of memberOf)
+    for (const role of roles)
       await asStack(
-        `grant ${quoted(role)} to ${quoted(name)} with inherit false, set true`
+        `grant ${quoted(role)} to ${quoted(name)} with inherit ${attributes.inherit === true}, set true`
       )
     return await fn(loginUrl(url, name, password))
   } finally {
@@ -340,6 +340,30 @@ export async function withRuntimeLogin<T>(
     await asStack(
       `revoke connect on database ${database} from ${quoted(name)}`
     ).catch(() => undefined)
+    await dropRoles(name)
+  }
+}
+
+/**
+ * Runs `fn` with a run-tagged `NOLOGIN` role (its name as the argument) that
+ * has `BYPASSRLS` when asked and is a member of `memberOf` (a plain `GRANT`);
+ * the role, and with it its memberships, is dropped on every path. `label` is
+ * the readable part of the name.
+ */
+export async function withGroupRole<T>(
+  label: string,
+  options: { bypassRls?: boolean; memberOf?: readonly string[] },
+  fn: (name: string) => Promise<T>
+): Promise<T> {
+  const name = testRoleName(`${label}_${randomBytes(4).toString("hex")}`)
+  const bypass = options.bypassRls === true ? " bypassrls" : ""
+  // Створення — до `try`: невдале створення не видаляє чужої ролі з тим ім'ям
+  await asStack(`create role ${quoted(name)} nologin${bypass}`)
+  try {
+    for (const role of options.memberOf ?? [])
+      await asStack(`grant ${quoted(role)} to ${quoted(name)}`)
+    return await fn(name)
+  } finally {
     await dropRoles(name)
   }
 }
@@ -417,7 +441,9 @@ export async function markDevelopmentDatabase(url: string): Promise<void> {
  * Ідентичність Better Auth тегованої цілі `url`:
  * ціль дістає той самий стан, що й база тестів після `db:pg:start`, —
  * `CONNECT` і схему `better_auth` ролі входу сервісу, справжню міграцію від
- * неї та тимчасові гранти власнику (`prepareStackIdentity`). Кличеться до
+ * неї та гранти власнику тим самим SQL, що й `roles` (`identityGrantSql`):
+ * сам `roles` цієї копії не підготує, бо ролі входу стека мають `CONNECT` до
+ * інших баз (`roles.shared-cluster`). Кличеться до
  * першого плану чи застосування, що посилається на ідентичність: таблиця,
  * яку pg-delta створила б заглушкою від ролі рушія, — помилка налаштування
  * тесту, і хелпер її не перевласнює. На `supabase` ідентичність дає
@@ -458,16 +484,24 @@ export async function withTargetIdentity(url: string): Promise<void> {
   } finally {
     await client.end()
   }
-  await prepareStackIdentity({
-    superuserUrl: asSuperuser(url),
-    authUrl: loginUrl(
+  await migrateBetterAuth(
+    loginUrl(
       url,
       auth,
       devSecret("SIMETRA_AUTH_DEV_PASSWORD", LOGIN_SECRETS_FILE)
-    ),
-    auth,
-    owner: PROVIDER_OWNER_ROLES.postgres,
+    )
+  )
+  const grants = identityGrantSql(PROVIDER_OWNER_ROLES.postgres, {
+    schema,
+    name,
   })
+  const admin = await superuserClient(database)
+  try {
+    await admin.query(grants.usage)
+    await admin.query(grants.table)
+  } finally {
+    await admin.end()
+  }
 }
 
 /** Актор рантайму: організація, користувач, від якого діє сесія, і його учасник. */
@@ -642,6 +676,19 @@ export function heldResource<T>(
       release?.()
       await held
     },
+  }
+}
+
+/**
+ * Claims запиту рантайму від користувача `user`: claim аноніма профілю —
+ * явно `false`, бо сесію без нього рантайм відмовляє.
+ */
+export function sessionOf(user: string): SessionClaims {
+  const claim = PROVIDER_IDENTITY_SOURCES[testProvider()].anonymousClaim
+  return {
+    ...claimsFor("user", user),
+    sub: user,
+    ...(claim === null ? {} : { [claim]: false }),
   }
 }
 

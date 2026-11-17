@@ -3,6 +3,7 @@ import {
   PLATFORM_ROLES,
   PLATFORM_SCHEMA,
   PROVIDER_API_ROLES,
+  PROVIDER_IDENTITY_SOURCES,
   type DatabaseProvider,
   type SessionClaims,
 } from "simetra/model"
@@ -87,16 +88,19 @@ interface GuardFacts {
 
 /**
  * Claims сесії інструмента: права — користувача `--as`, агент лише
- * названий в `act` (RFC 8693) і прав не дає.
+ * названий в `act` (RFC 8693) і прав не дає. Claim аноніма — явно `false`:
+ * сесію без нього рантайм відмовляє.
  */
 export function dataSession(
   provider: DatabaseProvider,
   o: { as: string; agent?: string }
 ): SessionClaims {
   const role = readRoleOf(provider)
+  const claim = PROVIDER_IDENTITY_SOURCES[provider].anonymousClaim
   return {
     sub: o.as,
     ...(role === undefined ? {} : { role }),
+    ...(claim === null ? {} : { [claim]: false }),
     ...(o.agent === undefined ? {} : { act: { sub: o.agent } }),
   }
 }

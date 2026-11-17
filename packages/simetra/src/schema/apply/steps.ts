@@ -522,7 +522,7 @@ function inApplied(ref: EngineObjectRef, applied: CatalogModel): boolean {
  * опору звіряє тест на джерелі двигуна). Суб'єкт без схеми й імені (грант,
  * коментар, роль) структурного посилання не має, тож об'єктом не є.
  */
-function redefined(
+export function redefined(
   action: Pick<
     EngineAction,
     "verb" | "produces" | "destroys" | "consumes" | "consumed"
@@ -557,6 +557,13 @@ const sameRef = (a: EngineObjectRef, b: EngineObjectRef): boolean =>
  * Рахується з дій двигуна до `classifySteps`, бо результат — його вхід;
  * злиття дій у кроки його не змінює. `offset` — кількість кроків перед
  * діями двигуна.
+ *
+ * Дія, що створює об'єкт, який уже є в живій цілі (`live`, вихідний стан
+ * плану в іменах дій), а раніша дія плану його не знімала, — теж
+ * перевизначення на місці: так виглядає `CREATE OR REPLACE TRIGGER`, яким
+ * `triggerReplacements` заміняє пару `DROP` + `CREATE`. Злиття міняє лише
+ * права, яких треба кроку, а не те, що він робить з чужим об'єктом, тож
+ * клас і дозвіл лишаються ті, що в пари.
  */
 export function foreignChanges(
   actions: readonly Pick<
@@ -570,6 +577,7 @@ export function foreignChanges(
     | "destroyed"
   >[],
   applied: CatalogModel | undefined,
+  live: CatalogModel,
   offset: number,
   original: (ref: EngineObjectRef) => EngineObjectRef = (ref) => ref
 ): Set<string> {
@@ -578,16 +586,25 @@ export function foreignChanges(
     (applied === undefined || !inApplied(original(ref), applied))
   const out = new Set<string>()
   const created: EngineObjectRef[] = []
+  const removed: EngineObjectRef[] = []
   actions.forEach((action, i) => {
     const altered = redefined(action)
+    const replaced = action.produced.filter(
+      (r) =>
+        inApplied(r, live) &&
+        !removed.some((d) => sameRef(d, r)) &&
+        !created.some((c) => sameRef(c, r))
+    )
     if (
       action.destroyed.some(foreign) ||
+      replaced.some(foreign) ||
       (altered !== undefined &&
         foreign(altered) &&
         !created.some((c) => sameRef(c, altered)))
     )
       out.add(stepId(offset + i))
     created.push(...action.produced)
+    removed.push(...action.destroyed)
   })
   return out
 }

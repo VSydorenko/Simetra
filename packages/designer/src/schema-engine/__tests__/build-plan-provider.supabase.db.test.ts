@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { canonicalSnapshot, type CompiledModel } from "simetra/compiler"
+import {
+  canonicalSnapshot,
+  IDENTITY_TRIGGERS,
+  type CompiledModel,
+} from "simetra/compiler"
+import { PROVIDER_IDENTITY_SOURCES, quoteIdent } from "simetra/model"
 import {
   executePlan,
   renderDesiredState,
@@ -9,6 +14,7 @@ import {
 import { attribute, catalog, uuid } from "../../../../simetra/test/support"
 import { asSuperuser, query } from "../../__tests__/support/db"
 import {
+  applyArtifact,
   blindDiagnostics,
   codes,
   compiled,
@@ -216,6 +222,55 @@ END $$;`
             layer: false,
           },
         ])
+      })
+    })
+
+    it("plans a changed provision trigger as one CREATE OR REPLACE step", async () => {
+      // Рушій міняє тригер парою DROP + CREATE; план зливає її,
+      // а замка тригерів провізії на цьому профілі немає
+      const model = await compiled({ [USERS]: users })
+      const table = PROVIDER_IDENTITY_SOURCES.supabase.table
+      const relation = `${quoteIdent(table.schema)}.${quoteIdent(table.name)}`
+      const [provision] = IDENTITY_TRIGGERS as [string]
+      await inTarget(EMPTY, async (url) => {
+        await establish(url, model)
+        const admin = asSuperuser(url)
+        const [live] = await query<{ def: string }>(
+          admin,
+          `select pg_get_triggerdef(oid) as def from pg_trigger
+            where tgrelid = $1::regclass and tgname = $2`,
+          [relation, provision]
+        )
+        const replace = (def: string) =>
+          def.replace(/^CREATE TRIGGER /, "CREATE OR REPLACE TRIGGER ")
+        try {
+          // Підміна поза Simetra від суперкористувача стека: модель
+          // з'єднання тестів не перемикає роль на роль провайдера
+          // (`role-switch.test.ts`), а план бачить лише сам тригер
+          await query(
+            admin,
+            replace(live!.def).replace(
+              " AFTER INSERT ON ",
+              " AFTER INSERT OR UPDATE ON "
+            )
+          )
+          const artifact = planned(await plan(url, model))
+          const onTrigger = artifact.steps.filter((s) =>
+            [...s.produced, ...s.destroyed].some(
+              (r) => r.kind === "trigger" && r.name === provision
+            )
+          )
+          expect(onTrigger.map((s) => [s.verb, s.destroyed])).toEqual([
+            ["create", []],
+          ])
+          expect(onTrigger[0]!.sql).toMatch(/^CREATE OR REPLACE TRIGGER /)
+          expect(stepMatching(artifact, /^DROP TRIGGER/i)).toEqual([])
+          // Лише план нічого не доводить: роль застосування Supabase має
+          // вміти замінити тригер на `auth.users`
+          await applyArtifact(url, artifact, model)
+        } finally {
+          await query(admin, replace(live!.def))
+        }
       })
     })
 

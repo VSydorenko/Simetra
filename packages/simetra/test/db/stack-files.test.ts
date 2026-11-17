@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { PassThrough } from "node:stream"
 import { fileURLToPath } from "node:url"
 import {
@@ -36,6 +36,7 @@ import {
   scramKeys,
   STACK_LOCK_ENV,
   STACK_REFUSAL,
+  SUPABASE_LOCK_PATH,
   stackFilesHash,
   startPostgres,
   withStackLock,
@@ -314,7 +315,7 @@ describe("Simetra identity of the postgres stack", () => {
     )
     const passwords = secretNames.map((name) => secrets[name]!)
     expect(passwords).toHaveLength(secretNames.length)
-    const step = betterAuthCommand(secrets, "postgresql://postgres@h/simetra")
+    const step = betterAuthCommand(secrets)
     // argv у `ps`: ні psql, ні дочірній процес Better Auth не несуть паролів чи DSN
     const argvs = [POSTGRES_PSQL_ARGS, step.args]
     for (const argv of argvs)
@@ -325,8 +326,149 @@ describe("Simetra identity of the postgres stack", () => {
     expect(step.env.SIMETRA_AUTH_URL).toContain(
       secrets.SIMETRA_AUTH_DEV_PASSWORD
     )
-    expect(script).toContain("SIMETRA_SUPERUSER_URL")
-    expect(script).toContain("SIMETRA_AUTH_URL")
+    // Міграція йде від ролі `auth`: DSN суперкористувача дочірній процес не дістає
+    expect(Object.keys(step.env)).toEqual(["SIMETRA_AUTH_URL"])
+    expect(script).toContain("SIMETRA_DATABASE_URL")
+  })
+})
+
+/**
+ * GRANT-и roles.sql, що стоять не під доведеною формою. Список дозволів, а не
+ * перелік заборонених форм: із файла прибираються цілі блоки `IF … END IF;`
+ * рівно двох форм, і кожен GRANT, що лишився деінде (верхній рівень, тіло DO,
+ * ELSE, інший IF), — порушення.
+ * (1) створення: `IF NOT EXISTS (… pg_roles … 'r') THEN` рівно один `CREATE ROLE r`,
+ *     далі лише `PERFORM set_config` і GRANT … TO r, без ELSE/ELSIF/вкладених IF;
+ * (2) членство: `IF NOT EXISTS (… pg_auth_members … 'X' … 'Y') THEN` один
+ *     оператор `GRANT X TO Y`, без ELSE/ELSIF/вкладених IF.
+ */
+function unguardedGrants(sql: string): string[] {
+  const code = sql
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("--"))
+    .join("\n")
+  const ifBlock =
+    /\bIF NOT EXISTS\s*\(([\s\S]*?)\)\s*THEN([\s\S]*?)\bEND IF\s*;/g
+  const grantTarget = /^GRANT\s+([\s\S]+?)\s+TO\s+(\w+)(?:\s+WITH\b[\s\S]*)?$/
+  const proven = (cond: string, body: string): boolean => {
+    if (/\b(ELSE|ELSIF|IF)\b/i.test(body)) return false
+    const statements = body
+      .split(";")
+      .map((st) => st.trim())
+      .filter((st) => st !== "")
+    const created =
+      /^\s*SELECT FROM pg_catalog\.pg_roles WHERE rolname = '(\w+)'\s*$/.exec(
+        cond
+      )?.[1]
+    if (created !== undefined) {
+      const creates = statements.filter((st) =>
+        new RegExp(`^CREATE ROLE ${created}\\b`).test(st)
+      )
+      return (
+        creates.length === 1 &&
+        statements.every(
+          (st) =>
+            creates.includes(st) ||
+            /^PERFORM pg_catalog\.set_config\(/.test(st) ||
+            grantTarget.exec(st)?.[2] === created
+        )
+      )
+    }
+    const named =
+      /^\s*SELECT FROM pg_catalog\.pg_auth_members\s+WHERE roleid = '(\w+)'::pg_catalog\.regrole\s+AND member = '(\w+)'::pg_catalog\.regrole\s*$/.exec(
+        cond
+      )
+    if (named === null || statements.length !== 1) return false
+    const grant = /^GRANT\s+(\w+)\s+TO\s+(\w+)(?:\s+WITH\b[\s\S]*)?$/.exec(
+      statements[0]!
+    )
+    return grant?.[1] === named[1] && grant?.[2] === named[2]
+  }
+  const rest = code.replace(ifBlock, (whole, cond: string, body: string) =>
+    proven(cond, body) ? "" : whole
+  )
+  return rest.match(/\bGRANT\b[^;]*;/gi) ?? []
+}
+
+// `pnpm db:roles` повторно виконує файл на наявному стеку: кожне членство мусить
+// бути або в блоці створення своєї ролі, або під власною перевіркою
+describe("supabase/roles.sql is additive and idempotent", () => {
+  const sql = readFileSync(
+    fileURLToPath(new URL("../../../../supabase/roles.sql", import.meta.url)),
+    "utf8"
+  )
+
+  it("never alters or drops a role", () => {
+    expect(sql.replace(/^\s*--.*$/gm, "")).not.toMatch(
+      /\b(ALTER|DROP)\s+(ROLE|USER|OWNED)\b/i
+    )
+  })
+
+  it("guards every GRANT … TO by role creation or a pg_auth_members check", () => {
+    expect(sql).toMatch(/\bGRANT\b/)
+    expect(unguardedGrants(sql)).toEqual([])
+  })
+
+  const ROLE =
+    "IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'r')"
+  const MEMBER =
+    "IF NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members WHERE roleid = 'a'::pg_catalog.regrole AND member = 'b'::pg_catalog.regrole)"
+  const wrap = (inner: string): string => `DO $$ BEGIN ${inner} END $$;`
+
+  it("accepts the two proven shapes", () => {
+    expect(
+      unguardedGrants(
+        wrap(`${ROLE} THEN CREATE ROLE r; GRANT x TO r WITH SET TRUE; END IF;`)
+      )
+    ).toEqual([])
+    expect(
+      unguardedGrants(
+        wrap(`${MEMBER} THEN GRANT a TO b WITH SET TRUE; END IF;`)
+      )
+    ).toEqual([])
+  })
+
+  it.each([
+    [
+      "a bare GRANT before a guarded DO",
+      `GRANT x TO y;\n${wrap(`${ROLE} THEN CREATE ROLE r; END IF;`)}`,
+    ],
+    [
+      "a GRANT in a DO outside its IF",
+      wrap(`${ROLE} THEN CREATE ROLE r; END IF; GRANT x TO y;`),
+    ],
+    [
+      "a creation-block GRANT to another role",
+      wrap(`${ROLE} THEN CREATE ROLE r; GRANT x TO other; END IF;`),
+    ],
+    [
+      "a creation check that creates another role",
+      wrap(`${ROLE} THEN CREATE ROLE q; GRANT x TO q; END IF;`),
+    ],
+    [
+      "a GRANT in an ELSE of a creation block",
+      wrap(`${ROLE} THEN CREATE ROLE r; ELSE GRANT x TO y; END IF;`),
+    ],
+    [
+      "a GRANT in an ELSIF of a membership block",
+      wrap(
+        `${MEMBER} THEN GRANT a TO b; ELSIF true THEN GRANT x TO y; END IF;`
+      ),
+    ],
+    [
+      "two GRANTs in one membership IF",
+      wrap(`${MEMBER} THEN GRANT a TO b; GRANT c TO d; END IF;`),
+    ],
+    [
+      "a membership GRANT that differs from its condition",
+      wrap(`${MEMBER} THEN GRANT c TO d; END IF;`),
+    ],
+    [
+      "a nested IF",
+      wrap(`${MEMBER} THEN IF true THEN GRANT a TO b; END IF; END IF;`),
+    ],
+  ])("rejects %s", (_name, sqlText) => {
+    expect(unguardedGrants(sqlText).length).toBeGreaterThan(0)
   })
 })
 
@@ -335,6 +477,7 @@ describe("withStackLock", () => {
   // би стек посеред прогону
   it("the script locks the same file as the guard of the postgres stack", () => {
     expect(POSTGRES_LOCK_FILE).toBe(TEST_STACKS.postgres.lockFile)
+    expect(basename(SUPABASE_LOCK_PATH)).toBe(TEST_STACKS.supabase.lockFile)
   })
 
   let dir: string
@@ -506,7 +649,6 @@ describe("stack lock path", () => {
         encoding: "utf8",
         env: {
           ...env,
-          SIMETRA_SUPERUSER_URL: "postgresql://postgres@127.0.0.1:1/simetra",
           SIMETRA_AUTH_URL: "postgresql://simetra_auth@127.0.0.1:1/simetra",
         },
       }
@@ -1128,7 +1270,8 @@ describe("startPostgres", () => {
     const stack = fakeStack()
     await start(stack)
     const nodeSteps = stack.calls.filter((c) => c.command === process.execPath)
-    expect(nodeSteps).toHaveLength(2)
+    // `roles`, міграція Better Auth, повторний `roles`
+    expect(nodeSteps).toHaveLength(3)
     for (const step of nodeSteps)
       expect((step.options.env as Record<string, string>).PGAPPNAME).toBe(
         "simetra_db_start"
@@ -1146,7 +1289,7 @@ describe("startPostgres", () => {
     }
   })
 
-  it("runs roles, then passwords, then Better Auth, and terminates its backends last", async () => {
+  it("runs roles, then passwords, then Better Auth, then roles again, and terminates its backends last", async () => {
     const stack = fakeStack()
     await start(stack)
     const steps = stack.calls
@@ -1181,6 +1324,7 @@ describe("startPostgres", () => {
       "verifiers",
       "passwords",
       "better-auth",
+      "roles",
       "terminate",
     ])
     const terminate = stack.psqls().at(-1)!

@@ -12,7 +12,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
   dropTaggedCluster,
-  prepareStackIdentity,
+  migrateBetterAuth,
   readReferenceDomain,
   roleUrl,
   setTestPasswords,
@@ -51,24 +51,24 @@ async function admin<T>(
 }
 
 beforeAll(async () => {
-  const result = await ensurePostgresCluster(
-    writer,
-    {
-      maintenance: { url: withDatabaseName(superuserUrl, "postgres") },
-      target: { url: targetDb() },
-      template: { url: withDatabaseName(superuserUrl, set.template) },
-    },
-    set
-  )
-  if (!result.ok)
-    throw new Error(`roles refused: ${result.error.map((d) => d.code)}`)
+  const roles = async () => {
+    const result = await ensurePostgresCluster(
+      writer,
+      {
+        maintenance: { url: withDatabaseName(superuserUrl, "postgres") },
+        target: { url: targetDb() },
+        template: { url: withDatabaseName(superuserUrl, set.template) },
+      },
+      set
+    )
+    if (!result.ok)
+      throw new Error(`roles refused: ${result.error.map((d) => d.code)}`)
+  }
+  await roles()
   await setTestPasswords(set)
-  await prepareStackIdentity({
-    superuserUrl: targetDb(),
-    authUrl: roleUrl(set, set.auth),
-    auth: set.auth,
-    owner: set.owner,
-  })
+  // Гранти на таблицю ідентичності дає повторний `roles` після міграції
+  await migrateBetterAuth(roleUrl(set, set.auth))
+  await roles()
 })
 
 afterAll(() => dropTaggedCluster(set))

@@ -11,7 +11,8 @@ export interface Epochs {
   now(): number
   /** Increments first, then returns. */
   next(): number
-  bury(id: string): void
+  /** A tombstone with the next epoch, or with `at` (a mark's epoch, never lowering a newer tombstone). */
+  bury(id: string, at?: number): void
   /** The tombstone epoch is greater than `readEpoch`. */
   buriedSince(id: string, readEpoch: number): boolean
   /**
@@ -161,8 +162,12 @@ export function createEpochs(
   const skipTombstoneHorizon = () => defects.has("no-horizon-tombstones")
   const skipSeenHorizon = () => defects.has("no-horizon-seen")
 
-  function bury(id: string) {
-    const at = ++epoch
+  function bury(id: string, markEpoch?: number) {
+    // Надгробок із явною епохою (позначка `removed`) не знижує новішого.
+    const at =
+      markEpoch === undefined
+        ? ++epoch
+        : Math.max(markEpoch, tombstones.get(id) ?? 0)
     tombstones.delete(id)
     tombstones.set(id, at)
     trim(tombstones, limits.tombstonesMax, (v) => v, skipTombstoneHorizon)

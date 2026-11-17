@@ -158,7 +158,6 @@ export function formOf(ctx: FormContext, spec: ViewSpec): Form {
           spec.where ?? null,
           orderBy,
           include.map((s) => s.attribute).sort(),
-          spec.kind === "window" ? (spec.count ?? null) : null,
         ]),
         object,
         keys: [],

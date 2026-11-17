@@ -1,13 +1,14 @@
 import {
   BATCH_MAX,
   PROVIDER_API_ROLES,
+  PROVIDER_IDENTITY_SOURCES,
   TABULAR_LINES_MAX,
   runtimeCatalogSchema,
   type RuntimeObject,
 } from "simetra/model"
 import { describe, expect, it, vi } from "vitest"
 import { ZodError } from "zod"
-import { createCommandRuntime, readRoleOf } from "../runtime"
+import { createCommandRuntime, readRoleOf, sessionKind } from "../runtime"
 import { fakeDatabase, failureOf, type Answer } from "./fake-database"
 import { catalog, commandObject } from "./fixtures"
 
@@ -15,10 +16,70 @@ const BEGIN = {
   text: "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY",
   params: [],
 }
-const MEMBER = {
-  text: "SELECT pg_has_role(session_user, $1, 'SET') AS member",
-  params: ["authenticated"],
+// Факти ролі входу — перший оператор кожної транзакції створення; параметри
+// профілю supabase: схема платформи, власник профілю, сервісна роль і ролі
+// входу провайдера літералом масиву (порт передає лише текст).
+const FACTS = {
+  text: `SELECT
+  COALESCE((SELECT pg_catalog.pg_has_role(session_user, n.nspowner, 'MEMBER')
+            FROM pg_catalog.pg_namespace n WHERE n.nspname = $1), false)
+    OR COALESCE((SELECT pg_catalog.pg_has_role(session_user, o.oid, 'MEMBER')
+                 FROM pg_catalog.pg_roles o WHERE o.rolname = $2), false) AS owner,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolsuper
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS superuser,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolbypassrls
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS bypassrls,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolcreaterole
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS createrole,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x
+          WHERE x.rolname IN ('pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files')
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS server_files,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = 'pg_read_all_data'
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS read_all_data,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = 'pg_write_all_data'
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS write_all_data,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = 'pg_database_owner'
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS database_owner,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = ANY ($4::text[])
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS provider_login,
+  COALESCE((SELECT pg_catalog.pg_has_role(session_user, s.oid, 'MEMBER')
+            FROM pg_catalog.pg_roles s WHERE s.rolname = $3), false) AS service`,
+  params: [
+    "simetra",
+    "postgres",
+    "service_role",
+    '{"authenticator","supabase_auth_admin","supabase_storage_admin","supabase_realtime_admin","supabase_admin"}',
+  ],
 }
+const FACT_COLUMNS = [
+  "owner",
+  "superuser",
+  "bypassrls",
+  "createrole",
+  "server_files",
+  "read_all_data",
+  "write_all_data",
+  "database_owner",
+  "provider_login",
+  "service",
+] as const
+/** Рядок фактів: істинні лише `held`. */
+const facts = (
+  ...held: (typeof FACT_COLUMNS)[number][]
+): { rows: Record<string, unknown>[] } => ({
+  rows: [
+    Object.fromEntries(
+      FACT_COLUMNS.map((c) => [c, held.includes(c) ? "t" : "f"])
+    ),
+  ],
+})
+const member = (role: string) => ({
+  text: "SELECT pg_has_role(session_user, $1, 'SET') AS member",
+  params: [role],
+})
+// Ролі запиту профілю supabase за призначенням: `user`, далі `anonymous`.
+const MEMBER = member("authenticated")
+const MEMBER_ANON = member("anon")
 const ROLE = { text: 'SET LOCAL ROLE "simetra_command"', params: [] }
 const HASH = {
   text: 'SELECT "simetra"."applied_snapshot_hash"() AS hash',
@@ -29,17 +90,22 @@ const ROLLBACK = { text: "ROLLBACK", params: [] }
 
 /** Порт відповідає як база з моделлю каталогу; `override` — про що кейс. */
 function create(
-  override: (text: string) => Answer | undefined = () => undefined,
+  override: (
+    text: string,
+    params: readonly (string | null)[]
+  ) => Answer | undefined = () => undefined,
   options: { readFallback?: boolean; objectModules?: never } = {}
 ) {
   const db = fakeDatabase({
-    query: (text) =>
-      override(text) ??
-      (text === HASH.text
-        ? { rows: [{ hash: "hash-1" }] }
-        : text === MEMBER.text
-          ? { rows: [{ member: "t" }] }
-          : {}),
+    query: (text, params) =>
+      override(text, params) ??
+      (text === FACTS.text
+        ? facts()
+        : text === HASH.text
+          ? { rows: [{ hash: "hash-1" }] }
+          : text === MEMBER.text
+            ? { rows: [{ member: "t" }] }
+            : {}),
   })
   const log = vi.fn()
   const runtime = createCommandRuntime({
@@ -52,19 +118,143 @@ function create(
 }
 
 describe("createCommandRuntime", () => {
-  it("checks membership, role and hash in one read-only transaction", async () => {
+  it("checks login facts, membership, role and hash in one read-only transaction", async () => {
     const { db, runtime } = create()
     await runtime
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,
+      FACTS,
       MEMBER,
+      MEMBER_ANON,
       ROLE,
       HASH,
       COMMIT,
       { release: false },
     ])
   })
+
+  it.each([
+    ["owner", "owner"],
+    ["superuser", "superuser"],
+    ["bypassrls", "bypassrls"],
+    ["createrole", "createrole"],
+    ["server_files", "server-files"],
+    ["read_all_data", "read-all-data"],
+    ["write_all_data", "write-all-data"],
+    ["database_owner", "database-owner"],
+    ["provider_login", "provider-login"],
+    ["service", "service"],
+  ] as const)(
+    "refuses a login role holding %s as privileged-login %s, before anything else",
+    async (column, reason) => {
+      const { db, runtime } = create((text) =>
+        text === FACTS.text ? facts(column) : undefined
+      )
+      expect(await failureOf(runtime)).toEqual({
+        code: "command.privileged-login",
+        reason,
+      })
+      expect(db.calls).toEqual([
+        { connect: true },
+        BEGIN,
+        FACTS,
+        ROLLBACK,
+        { release: false },
+      ])
+    }
+  )
+
+  // Кожен кейс тримає свій факт і всі пізніші: причина — завжди перша.
+  it.each([
+    ["owner", "owner"],
+    ["superuser", "superuser"],
+    ["bypassrls", "bypassrls"],
+    ["createrole", "createrole"],
+    ["server_files", "server-files"],
+    ["read_all_data", "read-all-data"],
+    ["write_all_data", "write-all-data"],
+    ["database_owner", "database-owner"],
+    ["provider_login", "provider-login"],
+  ] as const)(
+    "names %s first when it and every later fact hold",
+    async (column, reason) => {
+      const later = FACT_COLUMNS.slice(FACT_COLUMNS.indexOf(column))
+      const { runtime } = create((text) =>
+        text === FACTS.text ? facts(...later) : undefined
+      )
+      expect(await failureOf(runtime)).toEqual({
+        code: "command.privileged-login",
+        reason,
+      })
+    }
+  )
+
+  it("refuses a privileged login before comparing the applied hash", async () => {
+    const { runtime } = create((text) =>
+      text === FACTS.text
+        ? facts("owner")
+        : text === HASH.text
+          ? { rows: [{ hash: "hash-0" }] }
+          : undefined
+    )
+    expect(await failureOf(runtime)).toEqual({
+      code: "command.privileged-login",
+      reason: "owner",
+    })
+  })
+
+  it("judges the login facts again in the transaction after 42704 on the anonymous role", async () => {
+    let judged = 0
+    const { db, runtime } = create((text, params) =>
+      text === FACTS.text
+        ? judged++ === 0
+          ? facts()
+          : facts("bypassrls")
+        : text === MEMBER.text && params[0] === "anon"
+          ? { error: { code: "42704", message: "x" } }
+          : undefined
+    )
+    expect(await failureOf(runtime)).toEqual({
+      code: "command.privileged-login",
+      reason: "bypassrls",
+    })
+    expect(db.calls).toEqual([
+      { connect: true },
+      BEGIN,
+      FACTS,
+      MEMBER,
+      MEMBER_ANON,
+      ROLLBACK,
+      { release: false },
+      { connect: true },
+      BEGIN,
+      FACTS,
+      ROLLBACK,
+      { release: false },
+    ])
+  })
+
+  it.each<[string, Answer]>([
+    ["no row", { rows: [] }],
+    ["a null fact", { rows: [{ ...facts().rows[0], service: null }] }],
+  ])(
+    "refuses facts with %s as command.internal and logs it",
+    async (_, answer) => {
+      const { db, runtime, log } = create((text) =>
+        text === FACTS.text ? answer : undefined
+      )
+      expect(await failureOf(runtime)).toEqual({ code: "command.internal" })
+      expect(log).toHaveBeenCalledTimes(1)
+      expect(db.calls).toEqual([
+        { connect: true },
+        BEGIN,
+        FACTS,
+        ROLLBACK,
+        { release: false },
+      ])
+    }
+  )
 
   it("rejects another applied hash with both hashes", async () => {
     const { runtime } = create((text) =>
@@ -91,7 +281,9 @@ describe("createCommandRuntime", () => {
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,
+      FACTS,
       MEMBER,
+      MEMBER_ANON,
       ROLE,
       HASH,
       "error" in answer ? ROLLBACK : COMMIT,
@@ -99,35 +291,45 @@ describe("createCommandRuntime", () => {
     ])
   })
 
-  it("rejects a missing request role membership with the role", async () => {
-    const { runtime } = create((text) =>
-      text === MEMBER.text ? { rows: [{ member: "f" }] } : undefined
-    )
-    expect(await failureOf(runtime)).toEqual({
-      code: "command.read-role-missing",
-      role: "authenticated",
-    })
-  })
+  // Відповідь бази на перевірку членства лише ролі `role`.
+  const onMember =
+    (role: string, answer: Answer) =>
+    (text: string, params: readonly (string | null)[]) =>
+      text === MEMBER.text && params[0] === role ? answer : undefined
+  const NOT_MEMBER: Answer = { rows: [{ member: "f" }] }
+  const ABSENT: Answer = { error: { code: "42704", message: "x" } }
+
+  it.each(["authenticated", "anon"])(
+    "rejects a missing membership in %s with the role",
+    async (role) => {
+      const { runtime } = create(onMember(role, NOT_MEMBER))
+      expect(await failureOf(runtime)).toEqual({
+        code: "command.read-role-missing",
+        role,
+      })
+    }
+  )
 
   it("treats a request role absent from the database (42704) as missing", async () => {
-    const absent = (text: string): Answer | undefined =>
-      text === MEMBER.text
-        ? { error: { code: "42704", message: "x" } }
-        : undefined
+    const absent = onMember("authenticated", ABSENT)
     const { db, runtime } = create(absent)
     expect(await failureOf(runtime)).toEqual({
       code: "command.read-role-missing",
       role: "authenticated",
     })
-    // Перервана транзакція — хеш звіряє друга, без кроку членства.
+    // Перервана транзакція — решту ролей і хеш звіряє друга, без ролі, якої
+    // немає.
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,
+      FACTS,
       MEMBER,
       ROLLBACK,
       { release: false },
       { connect: true },
       BEGIN,
+      FACTS,
+      MEMBER_ANON,
       ROLE,
       HASH,
       COMMIT,
@@ -138,13 +340,48 @@ describe("createCommandRuntime", () => {
     ).resolves.toHaveProperty("run")
   })
 
-  it("lets readFallback replace the missing membership", async () => {
-    const { runtime } = create(
-      (text) =>
-        text === MEMBER.text ? { rows: [{ member: "f" }] } : undefined,
-      { readFallback: true }
-    )
+  it("rejects the anonymous role absent from the database (42704) after checking the user role", async () => {
+    const { db, runtime } = create(onMember("anon", ABSENT), {
+      readFallback: true,
+    })
+    expect(await failureOf(runtime)).toEqual({
+      code: "command.read-role-missing",
+      role: "anon",
+    })
+    expect(db.calls).toEqual([
+      { connect: true },
+      BEGIN,
+      FACTS,
+      MEMBER,
+      MEMBER_ANON,
+      ROLLBACK,
+      { release: false },
+      { connect: true },
+      BEGIN,
+      FACTS,
+      MEMBER,
+      ROLE,
+      HASH,
+      COMMIT,
+      { release: false },
+    ])
+  })
+
+  it("lets readFallback replace the missing user membership", async () => {
+    const { runtime } = create(onMember("authenticated", NOT_MEMBER), {
+      readFallback: true,
+    })
     await expect(runtime).resolves.toHaveProperty("run")
+  })
+
+  it("keeps readFallback from replacing the missing anonymous membership", async () => {
+    const { runtime } = create(onMember("anon", NOT_MEMBER), {
+      readFallback: true,
+    })
+    expect(await failureOf(runtime)).toEqual({
+      code: "command.read-role-missing",
+      role: "anon",
+    })
   })
 
   it("maps a failed connect to command.unavailable and logs the original error", async () => {
@@ -173,7 +410,9 @@ describe("createCommandRuntime", () => {
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,
+      FACTS,
       MEMBER,
+      MEMBER_ANON,
       ROLE,
       HASH,
       { release: true },
@@ -191,7 +430,9 @@ describe("createCommandRuntime", () => {
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,
+      FACTS,
       MEMBER,
+      MEMBER_ANON,
       ROLE,
       ROLLBACK,
       { release: false },
@@ -257,11 +498,13 @@ describe("an object without operations", () => {
     }
     const db = fakeDatabase({
       query: (text) =>
-        text === HASH.text
-          ? { rows: [{ hash: "hash-1" }] }
-          : text === MEMBER.text
-            ? { rows: [{ member: "t" }] }
-            : {},
+        text === FACTS.text
+          ? facts()
+          : text === HASH.text
+            ? { rows: [{ hash: "hash-1" }] }
+            : text === MEMBER.text
+              ? { rows: [{ member: "t" }] }
+              : {},
     })
     const runtime = await createCommandRuntime({
       database: db.database,
@@ -273,7 +516,7 @@ describe("an object without operations", () => {
     const created = db.calls.length
     const error = await failureOf(
       runtime.run(
-        { sub: "user-1", role: "authenticated" },
+        { sub: "user-1", role: "authenticated", is_anonymous: false },
         {
           action: "update",
           object: { kind: "Catalog", name: "Report" },
@@ -293,19 +536,56 @@ describe("an object without operations", () => {
 
 describe("readRoleOf", () => {
   it.each([
-    [["user"] as const, "authenticated"],
-    [[] as const, undefined],
-  ])("reads purposes %j as %s", (purposes, role) => {
+    [["user"] as const, "user", "authenticated"],
+    [["user"] as const, "anonymous", undefined],
+    [["user", "anonymous"] as const, "anonymous", "anon"],
+    [[] as const, "user", undefined],
+  ] as const)("reads purposes %j for %s as %s", (purposes, purpose, role) => {
     expect(
       readRoleOf(
         "supabase",
         { supabase: purposes, postgres: [] },
-        PROVIDER_API_ROLES
+        PROVIDER_API_ROLES,
+        purpose
       )
     ).toBe(role)
   })
 
   it("reads under the user role of the postgres profile", () => {
     expect(readRoleOf("postgres")).toBe("simetra_user")
+  })
+
+  it("reads the anonymous role of the supabase profile by default tables", () => {
+    expect(readRoleOf("supabase", undefined, undefined, "anonymous")).toBe(
+      PROVIDER_API_ROLES.supabase.anonymous
+    )
+  })
+})
+
+describe("sessionKind", () => {
+  it.each<[string, Record<string, unknown>, string]>([
+    ["true", { is_anonymous: true }, "anonymous"],
+    ['"true"', { is_anonymous: "true" }, "anonymous"],
+    ["false", { is_anonymous: false }, "user"],
+    ['"false"', { is_anonymous: "false" }, "user"],
+    ["1", { is_anonymous: 1 }, "invalid"],
+    ["null", { is_anonymous: null }, "invalid"],
+    ['"yes"', { is_anonymous: "yes" }, "invalid"],
+    ["an absent claim", {}, "invalid"],
+  ])("reads the anonymous claim %s (%o) as %s", (_, claims, kind) => {
+    for (const provider of ["supabase", "postgres"] as const) {
+      expect(sessionKind(provider, { sub: "user-1", ...claims })).toBe(kind)
+    }
+  })
+
+  it("reads every session of a profile without the anonymous claim as user", () => {
+    const sources = {
+      ...PROVIDER_IDENTITY_SOURCES,
+      supabase: { ...PROVIDER_IDENTITY_SOURCES.supabase, anonymousClaim: null },
+    }
+    expect(sessionKind("supabase", { sub: "user-1" }, sources)).toBe("user")
+    expect(
+      sessionKind("supabase", { sub: "user-1", is_anonymous: true }, sources)
+    ).toBe("user")
   })
 })

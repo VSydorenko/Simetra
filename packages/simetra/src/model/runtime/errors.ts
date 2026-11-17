@@ -15,6 +15,7 @@ export const COMMAND_ERROR_CODES = [
   "command.retry-exhausted",
   "command.model-mismatch",
   "command.read-role-missing",
+  "command.privileged-login",
   "command.unavailable",
   "command.timeout",
   "command.busy",
@@ -49,6 +50,36 @@ export const LIMIT_REASONS = {
   origin: "origin",
   /** A client request after its data runtime was disposed (`command.unavailable`). */
   disposed: "disposed",
+} as const
+
+/**
+ * `reason` values of `command.privileged-login`: the fact through which the
+ * login role of the runtime (`session_user`, itself or through any
+ * membership) reaches a power the runtime must not hold (postgres profile
+ * spec §4.2, "trust boundary"). When several facts hold, the reason is the
+ * first in this order.
+ */
+export const PRIVILEGED_LOGIN_REASONS = {
+  /** The owner of the platform schema or the owner role of the profile. */
+  owner: "owner",
+  /** A role with `SUPERUSER`. */
+  superuser: "superuser",
+  /** A role with `BYPASSRLS`. */
+  bypassRls: "bypassrls",
+  /** A role with `CREATEROLE`. */
+  createRole: "createrole",
+  /** `pg_execute_server_program`, `pg_read_server_files` or `pg_write_server_files`. */
+  serverFiles: "server-files",
+  /** `pg_read_all_data`: reads every table, past grants and RLS. */
+  readAllData: "read-all-data",
+  /** `pg_write_all_data`: writes every table, past grants and RLS. */
+  writeAllData: "write-all-data",
+  /** `pg_database_owner`: the login owns the current database. */
+  databaseOwner: "database-owner",
+  /** A login role of the provider (`PROVIDER_LOGIN_ROLES`). */
+  providerLogin: "provider-login",
+  /** The service role of the profile (`PROVIDER_API_ROLES[provider].service`). */
+  service: "service",
 } as const
 
 /**

@@ -20,7 +20,6 @@ import {
   type CommandRuntimeOptions,
 } from "simetra/server"
 import {
-  claimsFor,
   GAUGE_TABLE,
   gaugeLineCheckLayer,
   policyDomain,
@@ -37,6 +36,7 @@ import {
   seedRuntimeActor,
   withModelTarget,
   withRuntimeLogin,
+  sessionOf,
 } from "./support/db"
 
 /**
@@ -91,7 +91,7 @@ const heldEnv = () =>
                 login,
                 pool,
                 org,
-                session: { ...claimsFor("user", user), sub: user },
+                session: sessionOf(user),
               })
             } finally {
               await pool.end()

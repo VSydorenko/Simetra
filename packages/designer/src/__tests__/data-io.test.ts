@@ -175,6 +175,7 @@ describe("dataSession", () => {
     expect(dataSession("supabase", { as: AS, agent: AGENT })).toEqual({
       sub: AS,
       role: "authenticated",
+      is_anonymous: false,
       act: { sub: AGENT },
     })
   })
@@ -183,6 +184,15 @@ describe("dataSession", () => {
     expect(dataSession("supabase", { as: AS })).toEqual({
       sub: AS,
       role: "authenticated",
+      is_anonymous: false,
+    })
+  })
+
+  it("names the user session of the postgres profile by the anonymous claim false", () => {
+    expect(dataSession("postgres", { as: AS })).toEqual({
+      sub: AS,
+      role: "simetra_user",
+      is_anonymous: false,
     })
   })
 })

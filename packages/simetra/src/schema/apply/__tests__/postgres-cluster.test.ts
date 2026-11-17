@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   PROVIDER_API_ROLES,
+  PROVIDER_IDENTITY_SOURCES,
   PROVIDER_LOGIN_ROLES,
   PROVIDER_OWNER_ROLES,
   PROVIDER_SCHEMAS,
@@ -94,6 +95,7 @@ describe("postgresClusterSet", () => {
       auth: PROVIDER_LOGIN_ROLES.postgres[0],
       template: PROVIDER_SHADOW_TEMPLATES.postgres,
       database: "app",
+      identity: PROVIDER_IDENTITY_SOURCES.postgres.table,
     })
   })
 
@@ -572,74 +574,19 @@ describe("ensurePostgresCluster", () => {
   // Усе наявне й безпечне: фаза запису не створює нічого, окрім ідемпотентних
   // грантів на цілі — жодного оператора поза транзакцією
   it("creates nothing when every object is present and safe", async () => {
-    const roleRows = allRoleNames.map((name) => ({
-      name,
-      attributes:
-        name === set.owner
-          ? ownerAttributes
-          : name === set.auth
-            ? authAttributes
-            : {
-                ...authAttributes,
-                login: set.roles.login.some((l) => l.name === name),
-              },
-      memberOf: set.roles.login
-        .filter((l) => l.name === name)
-        .flatMap((l) =>
-          l.memberOf.map((role) => ({
-            role,
-            grantor: "postgres",
-            admin: false,
-            inherit: false,
-            set: true,
-          }))
-        ),
-      members: set.roles.login
-        .filter((l) => l.memberOf.includes(name))
-        .map((l) => ({
-          role: l.name,
-          admin: false,
-          inherit: false,
-          set: true,
-          manager: false,
-        })),
-      requestPath: [],
-    }))
-    const { dbs, calls } = trapPort((sql) => {
-      if (sql.includes("session_user")) return [{ ok: true, database: "x" }]
-      if (sql.includes("WITH RECURSIVE reach")) return roleRows
-      if (sql.includes("FROM pg_catalog.pg_database d JOIN"))
-        return [
-          {
-            name: set.database,
-            owner: set.owner,
-            ownerSuper: false,
-            isTemplate: false,
-            allowConnections: true,
-            ...icu,
-          },
-          {
-            name: set.template,
-            owner: "postgres",
-            ownerSuper: true,
-            isTemplate: true,
-            allowConnections: false,
-            ...icu,
-          },
-        ]
-      if (sql.includes("aclexplode(d.datacl)")) return []
-      if (sql.includes('AS "createGrantees"'))
-        return [{ ownerSuper: true, createGrantees: [] }]
-      if (sql.includes("'plpgsql_check'")) return [{ schema: "extensions" }]
-      if (sql.includes('AS "schemaOwner"')) return [{ schemaOwner: set.auth }]
-      if (sql.includes('AS "createDatabase"'))
-        return [{ createDatabase: false, createPublic: false }]
-      return []
-    })
+    const { dbs, calls } = trapPort(presentCluster())
     const result = await ensurePostgresCluster(dbs, conns, set)
     expect(result).toEqual({
       ok: true,
-      value: { created: [], present: expect.arrayContaining([set.database]) },
+      value: {
+        created: [],
+        present: expect.arrayContaining([
+          set.database,
+          "better_auth:USAGE",
+          "better_auth.user:TRIGGER",
+        ]),
+        skipped: [],
+      },
     })
     expect(calls.filter((c) => c.kind === "statement")).toEqual([])
     // Шаблон запечатано: до нього не підключаються
@@ -647,7 +594,156 @@ describe("ensurePostgresCluster", () => {
     expect(
       calls
         .flatMap((c) => c.sql)
-        .filter((s) => /^\s*(CREATE|DROP|ALTER DATABASE)/.test(s))
+        .filter((s) =>
+          /^\s*(CREATE|DROP|ALTER DATABASE|GRANT (USAGE ON SCHEMA better_auth|TRIGGER))/.test(
+            s
+          )
+        )
     ).toEqual([])
   })
+
+  describe("the grants of the identity table", () => {
+    const grantSql = (calls: { sql: string[] }[]) =>
+      calls
+        .flatMap((c) => c.sql)
+        .filter(
+          (s) => /better_auth/.test(s) && /^(GRANT|ALTER DEFAULT)/.test(s)
+        )
+
+    it("grants USAGE after it creates the schema and skips TRIGGER while there is no table", async () => {
+      const { dbs, calls } = trapPort((sql) =>
+        sql.includes("session_user") ? [{ ok: true, database: "x" }] : []
+      )
+      const result = await ensurePostgresCluster(dbs, conns, set)
+      expect(result).toMatchObject({
+        ok: true,
+        value: {
+          created: expect.arrayContaining(["better_auth:USAGE"]),
+          skipped: ["better_auth.user:TRIGGER"],
+        },
+      })
+      const sql = calls.flatMap((c) => c.sql)
+      const schema = sql.findIndex((s) =>
+        s.startsWith("CREATE SCHEMA better_auth ")
+      )
+      const usage = sql.indexOf(
+        `GRANT USAGE ON SCHEMA better_auth TO ${quoteIdent(set.owner)}`
+      )
+      expect(schema).toBeGreaterThan(-1)
+      expect(usage).toBeGreaterThan(schema)
+      expect(grantSql(calls)).toEqual([sql[usage]])
+    })
+
+    it("counts only an ordinary or partitioned table as the identity table", async () => {
+      const { dbs, calls } = trapPort(presentCluster())
+      await ensurePostgresCluster(dbs, conns, set)
+      // Вид, послідовність чи індекс з тим самим іменем — таблиці немає
+      const lookup = calls
+        .flatMap((c) => c.sql)
+        .find((s) => s.includes("AS exists"))
+      expect(lookup).toMatch(/c\.relkind IN \('r', 'p'\)/)
+    })
+
+    it.each([
+      ["neither", { trigger: false, references: false }],
+      ["only TRIGGER", { trigger: true, references: false }],
+      ["only REFERENCES", { trigger: false, references: true }],
+    ])(
+      "grants TRIGGER and REFERENCES on the table alone when the owner has %s",
+      async (_title, grants) => {
+        const { dbs, calls } = trapPort(
+          presentCluster({ usage: false, ...grants })
+        )
+        const result = await ensurePostgresCluster(dbs, conns, set)
+        expect(result).toMatchObject({
+          ok: true,
+          value: {
+            created: ["better_auth:USAGE", "better_auth.user:TRIGGER"],
+            skipped: [],
+          },
+        })
+        expect(grantSql(calls)).toEqual([
+          `GRANT USAGE ON SCHEMA better_auth TO ${quoteIdent(set.owner)}`,
+          `GRANT TRIGGER, REFERENCES ON better_auth."user" TO ${quoteIdent(set.owner)}`,
+        ])
+      }
+    )
+  })
 })
+
+/**
+ * Відповіді порту-пастки для кластера, де все є й безпечне; `identity` —
+ * гранти власника на схему й таблицю ідентичності.
+ */
+function presentCluster(
+  identity = { usage: true, trigger: true, references: true }
+): (sql: string) => Record<string, unknown>[] {
+  const roleRows = allRoleNames.map((name) => ({
+    name,
+    attributes:
+      name === set.owner
+        ? ownerAttributes
+        : name === set.auth
+          ? authAttributes
+          : {
+              ...authAttributes,
+              login: set.roles.login.some((l) => l.name === name),
+            },
+    memberOf: set.roles.login
+      .filter((l) => l.name === name)
+      .flatMap((l) =>
+        l.memberOf.map((role) => ({
+          role,
+          grantor: "postgres",
+          admin: false,
+          inherit: false,
+          set: true,
+        }))
+      ),
+    members: set.roles.login
+      .filter((l) => l.memberOf.includes(name))
+      .map((l) => ({
+        role: l.name,
+        admin: false,
+        inherit: false,
+        set: true,
+        manager: false,
+      })),
+    requestPath: [],
+  }))
+  return (sql) => {
+    if (sql.includes("session_user")) return [{ ok: true, database: "x" }]
+    if (sql.includes("WITH RECURSIVE reach")) return roleRows
+    if (sql.includes("FROM pg_catalog.pg_database d JOIN"))
+      return [
+        {
+          name: set.database,
+          owner: set.owner,
+          ownerSuper: false,
+          isTemplate: false,
+          allowConnections: true,
+          ...icu,
+        },
+        {
+          name: set.template,
+          owner: "postgres",
+          ownerSuper: true,
+          isTemplate: true,
+          allowConnections: false,
+          ...icu,
+        },
+      ]
+    if (sql.includes("aclexplode(d.datacl)")) return []
+    if (sql.includes('AS "createGrantees"'))
+      return [{ ownerSuper: true, createGrantees: [] }]
+    if (sql.includes("'plpgsql_check'")) return [{ schema: "extensions" }]
+    if (sql.includes('AS "schemaOwner"')) return [{ schemaOwner: set.auth }]
+    if (sql.includes('AS "createDatabase"'))
+      return [{ createDatabase: false, createPublic: false }]
+    if (sql.includes("AS exists"))
+      return [{ usage: identity.usage, exists: true }]
+    if (sql.includes("AS references"))
+      return [{ trigger: identity.trigger, references: identity.references }]
+    return []
+  }
+}

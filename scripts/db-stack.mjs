@@ -37,6 +37,10 @@ export const POSTGRES_LOCK_FILE = "simetra-db-stack-postgres.lock"
 // Фіксований `/tmp`, не `tmpdir()`: сесії з різним TMPDIR інакше брали б різні
 // файли замка одного спільного стека; guard бере той самий шлях
 export const POSTGRES_LOCK_PATH = join("/tmp", POSTGRES_LOCK_FILE)
+// Замок стека `supabase` — той самий файл, що бере DB-прогін guard-а
+export const SUPABASE_LOCK_PATH = join("/tmp", "simetra-db-stack.lock")
+/** Контейнер БД локального стека Supabase (`project_id` у `supabase/config.toml`). */
+export const SUPABASE_DB_CONTAINER = "supabase_db_simetra"
 /** Env variable that names the held stack lock to the children of the script. */
 export const STACK_LOCK_ENV = "SIMETRA_DB_STACK_LOCK"
 
@@ -76,9 +80,10 @@ const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"]
  *
  * @param {string} path
  * @param {() => Promise<void>} fn
+ * @param {string} [name] profile name for the refusal message
  * @returns {Promise<void>}
  */
-export async function withStackLock(path, fn) {
+export async function withStackLock(path, fn, name = "postgres") {
   for (;;) {
     try {
       const fd = openSync(path, "wx")
@@ -95,7 +100,7 @@ export async function withStackLock(path, fn) {
     const holder = readHolder(path)
     if (holder !== undefined && isAlive(holder.pid))
       throw new Error(
-        `postgres stack is in use by PID ${holder.pid} (${holder.cwd}, since ${holder.since}). Lock file: ${path}`
+        `${name} stack is in use by PID ${holder.pid} (${holder.cwd}, since ${holder.since}). Lock file: ${path}`
       )
     // Убитий процес лишає файл замка без власника — його можна забрати, як і guard
     removeLockFile(path)
@@ -742,9 +747,8 @@ export function passwordMatches(verifier, password) {
  * Команда кроку Better Auth: DSN лише в середовищі дочірнього процесу, не в argv.
  *
  * @param {Record<string, string>} secrets
- * @param {string} superuserUrl
  */
-export function betterAuthCommand(secrets, superuserUrl) {
+export function betterAuthCommand(secrets) {
   return {
     args: [
       "--import",
@@ -752,7 +756,6 @@ export function betterAuthCommand(secrets, superuserUrl) {
       join(ROOT, "packages/simetra/test/db/better-auth-cli.ts"),
     ],
     env: {
-      SIMETRA_SUPERUSER_URL: superuserUrl,
       SIMETRA_AUTH_URL: stackUrl(
         "simetra_auth",
         secrets.SIMETRA_AUTH_DEV_PASSWORD
@@ -827,14 +830,16 @@ async function startPostgresSteps(ctx, noBuild) {
         cwd,
         env: { ...process.env, ...env, PGAPPNAME: START_APP_NAME },
       })
-    await node(
-      [
-        join(ROOT, "packages/designer/bin/simetra.mjs"),
-        "roles",
-        join(profile.dir, "project"),
-      ],
-      { SIMETRA_DATABASE_URL: superuserUrl }
-    )
+    const roles = () =>
+      node(
+        [
+          join(ROOT, "packages/designer/bin/simetra.mjs"),
+          "roles",
+          join(profile.dir, "project"),
+        ],
+        { SIMETRA_DATABASE_URL: superuserUrl }
+      )
+    await roles()
     // Пароль ставиться лише там, де відрізняється: ALTER з тим самим паролем
     // знову солить верифікатор, а повторний старт не має змінювати нічого
     const current = new Map(
@@ -866,9 +871,12 @@ async function startPostgresSteps(ctx, noBuild) {
           )
           .join("")
       )
-    const step = betterAuthCommand(secrets, superuserUrl)
+    const step = betterAuthCommand(secrets)
     // `tsx` — залежність пакета simetra, не кореня: звідти її й резолвить `--import`
     await node(step.args, step.env, join(ROOT, "packages/simetra"))
+    // Таблицю ідентичності створила міграція: повторний `roles` дає власнику
+    // `TRIGGER, REFERENCES` на неї, перший лише пропустив їх
+    await roles()
   } finally {
     await stopStartBackends(ctx)
   }
@@ -930,11 +938,73 @@ async function stop(ctx, profile, volumes) {
   )
 }
 
+/**
+ * Застосовує `supabase/roles.sql` до запущеного стека Supabase: CLI виконує
+ * файл лише на новому томі. Файл адитивний та ідемпотентний, тож повтор безпечний.
+ *
+ * @param {Ctx} ctx
+ */
+async function rolesSupabase(ctx) {
+  let running = ""
+  try {
+    await runChecked(
+      ctx,
+      "docker",
+      ["inspect", "-f", "{{.State.Running}}", SUPABASE_DB_CONTAINER],
+      {
+        onStdout: (chunk) => {
+          running += chunk
+        },
+      }
+    )
+  } catch (error) {
+    if (ctx.interrupted !== undefined) throw error
+    // `inspect` відмовляє, коли контейнера немає
+    running = ""
+  }
+  if (running.trim() !== "true")
+    throw new Error(
+      `the Supabase stack is not running (container ${SUPABASE_DB_CONTAINER}); start it with \`pnpm db:start\``
+    )
+  await runChecked(
+    ctx,
+    "docker",
+    [
+      "exec",
+      "-i",
+      SUPABASE_DB_CONTAINER,
+      "psql",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-U",
+      "postgres",
+      "-d",
+      "postgres",
+      "-f",
+      "-",
+    ],
+    { input: readFileSync(join(ROOT, "supabase/roles.sql"), "utf8") }
+  )
+}
+
 /** @param {string[]} argv */
 async function main(argv) {
   const [command, profile, ...flags] = argv
   const usage =
-    "usage: node scripts/db-stack.mjs start postgres [--no-build] | stop postgres [--volumes] | files-hash postgres | start supabase-signals | stop supabase-signals"
+    "usage: node scripts/db-stack.mjs start postgres [--no-build] | stop postgres [--volumes] | files-hash postgres | start supabase-signals | stop supabase-signals | roles supabase"
+  if (command === "roles" && profile === "supabase" && flags.length === 0) {
+    const { ctx, release } = commandContext(spawn, process)
+    try {
+      await withStackLock(
+        SUPABASE_LOCK_PATH,
+        () => rolesSupabase(ctx),
+        "supabase"
+      )
+    } finally {
+      release()
+    }
+    return
+  }
   if (
     (profile !== "postgres" && profile !== "supabase-signals") ||
     (command !== "start" && command !== "stop" && command !== "files-hash") ||

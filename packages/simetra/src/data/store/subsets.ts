@@ -115,8 +115,6 @@ export interface Subset extends ReaderTarget {
   purged: boolean
   /** Set by `setVisible`; unset — visible while subscribed. */
   visible: boolean | undefined
-  /** Window pages being read next to an edge: one read per direction. */
-  readonly paging: Set<"after" | "before">
 }
 
 /** The view registry of a core. */
@@ -138,6 +136,13 @@ export interface SubsetRegistry {
 }
 
 const NO_LINES: readonly SectionLine[] = Object.freeze([])
+// Лише для дефекту самотесту `window-copies-values`.
+const COPIES = new WeakMap<Subset, Map<Key, RowView>>()
+const copiesOf = (s: Subset): Map<Key, RowView> => {
+  const found = COPIES.get(s) ?? new Map<Key, RowView>()
+  COPIES.set(s, found)
+  return found
+}
 const ACCESS_CHANGED = purgedSnapshot("access-changed")
 
 /**
@@ -155,6 +160,9 @@ export const errorOf = (error: unknown): CommandError | DataError => {
   if (error instanceof DataError) return error
   return { code: "command.internal" }
 }
+
+// Покоління читань сторінок вікна: одне число на ядро, тож жодне не повторюється.
+let pageGenerations = 0
 
 export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   const { session, limits, ops, rowViews } = ctx
@@ -352,9 +360,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
 
   /**
    * Reads the page next to an edge of the window (a user action or a host
-   * reaching the edge). One read per direction; the result is written only
-   * while the chain it started in is the current one (Р9). A read whose
-   * answer the session discarded repeats after a growing pause, as a load.
+   * reaching the edge). One read per direction; its generation (Р9) lives in
+   * `s.paging` and the result is written only while it is still there: a new
+   * chain or a purge takes it away. A read whose answer the session
+   * discarded repeats after a growing pause, as a load.
    */
   function loadMore(s: Subset, direction: "after" | "before") {
     const w = s.window
@@ -364,9 +373,17 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     const edge = edgeCursor(s, direction)
     if (edge === undefined) return
     const { cursor } = edge
-    s.paging.add(direction)
-    const chain = w.chain
-    const token = session.childToken(() => s.alive && s.window?.chain === chain)
+    // Токен читання сторінки (Р9): покоління цього читання. Новий ланцюжок
+    // чи `purge` прибирає його з `paging`, і пізня відповідь нічого не пише:
+    // вона могла б принести рядок, якого на мить `purge` у сховищі не було.
+    const generation = ++pageGenerations
+    s.paging.set(direction, generation)
+    const token = session.childToken(
+      () =>
+        s.alive &&
+        (ctx.defects.has("page-without-generation") ||
+          s.paging.get(direction) === generation)
+    )
     const what = `view ${s.form.specKey} page ${direction}`
     const attempt = (): Promise<void> => {
       const readEpoch = session.epochs.now()
@@ -423,7 +440,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         }
       )
     }
-    void attempt().finally(() => s.paging.delete(direction))
+    // Покоління зняв новий ланцюжок чи `purge`: позначки читання нового вони
+    // не чіпають.
+    void attempt().finally(() => {
+      if (s.paging.get(direction) === generation) s.paging.delete(direction)
+    })
   }
 
   /** Mounted card: lazy fields absent or read with an older row version. */
@@ -663,7 +684,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       truncated: false,
       atEnd: form.spec.kind === "full",
       window: form.spec.kind === "window" ? EMPTY_WINDOW : undefined,
-      paging: new Set(),
+      paging: new Map(),
       waiters: [],
       dirty: true,
       // Знімок без утримання — той самий LOADING: перша підписка не дає
@@ -715,7 +736,19 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     } else {
       const refViews = new Map<Key, RowView>()
       for (const key of s.layout) {
-        const base = viewOf(o, key)
+        let base = viewOf(o, key)
+        // Дефект самотесту: вікно тримає копію показаних значень і показує
+        // її, коли сховище значень уже не дає (Р8 забороняє копію).
+        if (ctx.defects.has("window-copies-values") && s.window !== undefined) {
+          const kept = copiesOf(s)
+          if (
+            base !== undefined &&
+            base.state !== "removed" &&
+            base.hidden !== true
+          )
+            kept.set(key, base)
+          else if (kept.has(key)) base = kept.get(key)
+        }
         if (base === undefined) continue
         if (form.include.length === 0 || base.state === "removed") {
           rows.push(base)
@@ -818,6 +851,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     showNew() {},
     loadBefore() {},
     loadAfter() {},
+    setVisibleRange() {},
   })
 
   function makeHandle(form: Form): ViewHandle {
@@ -867,6 +901,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         const s = live()
         if (s !== undefined) loadMore(s, "after")
       },
+      // Без дії в М3: яруси, які він веде, — #206 (Р13).
+      setVisibleRange() {},
     }
   }
 
