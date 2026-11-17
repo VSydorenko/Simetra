@@ -94,7 +94,12 @@ describe("moving from a verbatim USAGE grant to the generated one", () => {
       },
     })
     expect(fixed.ok).toBe(true)
-    expect(fixed.changes).toEqual([{ path: USAGE, content: null }])
+    // Інші зміни — доповнення файлів метаданих; SQL `fix` торкається лише
+    // дубліката
+    expect(fixed.changes).toContainEqual({ path: USAGE, content: null })
+    expect(
+      fixed.changes.filter((c) => c.path.startsWith("sql/")).map((c) => c.path)
+    ).toEqual([USAGE])
     const model = await compiled({ [PARTY]: party() })
     // База, застосована до генерації грантів: ті самі гранти — дослівною
     // одиницею, і marker несе саме такий знімок
@@ -108,7 +113,9 @@ describe("moving from a verbatim USAGE grant to the generated one", () => {
       }),
     }
     const old: CompiledModel = { ...before, hash: await modelHash(before) }
-    expect(old.hash).not.toBe(model.hash)
+    // Канонічний знімок не несе джерела одиниці (файл чи генератор), тож
+    // marker такої бази — той самий, що й після переходу
+    expect(old.hash).toBe(model.hash)
     await inTarget(EMPTY, async (url) => {
       await establish(url, old)
       const outcome = await plan(url, model)
