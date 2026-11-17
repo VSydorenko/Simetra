@@ -545,3 +545,81 @@ describe("SchemaEngine apply port", () => {
     )
   })
 })
+
+describe("ShadowOptions.environment", () => {
+  // Тригер на таблиці провайдера з функцією поза межею: межа його виключає,
+  // а засів припущеної схеми переносить, тож функція мусить бути в тіні й
+  // копії раніше за засів
+  const FUNCTION = `CREATE OR REPLACE FUNCTION private.on_new_user()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$ begin return new; end $function$`
+  const TARGET = [
+    "create schema private;",
+    `${FUNCTION};`,
+    `create trigger on_new_user after insert on better_auth."user" for each row execute function private.on_new_user();`,
+  ].join("\n")
+  const ENVIRONMENT = ["CREATE SCHEMA IF NOT EXISTS private", FUNCTION]
+
+  const hasFunction = async (url: string) =>
+    (
+      await query(
+        url,
+        "select 1 from pg_proc where oid = to_regproc('private.on_new_user')"
+      )
+    ).length === 1
+
+  /** Тінь і копія цілі `TARGET` з `environment`; коди помилок і наявність функції. */
+  const both = (environment?: readonly string[]) =>
+    inTarget(TARGET, scope, async (url) => {
+      const o = {
+        target: { url },
+        ...(environment === undefined ? {} : { environment }),
+      }
+      const shadow = await engine.withDesiredShadow(
+        o,
+        "select 1;",
+        scope,
+        (db) => hasFunction(db.url)
+      )
+      const clone = await engine.withTargetClone(
+        o,
+        await engine.extract({ url }, scope),
+        scope,
+        (db) => hasFunction(db.url)
+      )
+      const codes = (d: { code: string; severity: string }[]) =>
+        d.filter((x) => x.severity === "error").map((x) => x.code)
+      return {
+        shadow:
+          shadow.status === "loaded" ? shadow.value : codes(shadow.diagnostics),
+        clone:
+          clone.status === "loaded" ? clone.value : codes(clone.diagnostics),
+      }
+    })
+
+  it("seeds neither shadow nor copy without the trigger function", async () => {
+    expect(await both()).toEqual({
+      shadow: ["engine.desired-rejected"],
+      clone: ["engine.clone-failed"],
+    })
+  })
+
+  it("runs the environment on the shadow and the copy before the engine seed", async () => {
+    expect(await both(ENVIRONMENT)).toEqual({ shadow: true, clone: true })
+  })
+
+  it("maps a failing statement to engine.environment-failed on both", async () => {
+    // Тіло стандарту SQL розбирається під час створення навіть без перевірки тіл
+    const mark = provisionedShadows().length
+    const failing = [
+      ...ENVIRONMENT,
+      "CREATE FUNCTION private.atomic() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT private.missing(); END",
+    ]
+    expect(await both(failing)).toEqual({
+      shadow: ["engine.environment-failed"],
+      clone: ["engine.environment-failed"],
+    })
+    expect(await leftoverShadows(mark)).toEqual([])
+  })
+})

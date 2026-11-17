@@ -4,12 +4,16 @@ import {
   type EngineScope,
 } from "../engine"
 import type { ApplyTransaction } from "./port"
+import {
+  PROVIDER_ASSUMED_SCHEMAS,
+  providerTriggerInBoundarySql,
+} from "./provider-trigger-boundary"
 
 /**
  * Версія формули відбитка. Відбитки різних версій не порівнюються: зміна
  * вмісту секції інакше виглядала б дрейфом (платформна спека §6.2).
  */
-export const FINGERPRINT_VERSION = 2
+export const FINGERPRINT_VERSION = 3
 
 export const FINGERPRINT_SECTIONS = [
   "schemas",
@@ -94,6 +98,7 @@ export async function readFingerprint(
     scope.schemas,
     JSON.stringify(surfaces),
     PROVIDER_SYSTEM_ROLES[scope.provider],
+    PROVIDER_ASSUMED_SCHEMAS[scope.provider],
   ])
   const row = rows[0]
   const sections = {} as Record<FingerprintSection, string>
@@ -150,6 +155,14 @@ const grantee = (owner: string): string =>
 const sorted = (source: string, expr = "v"): string =>
   `(select string_agg(${expr}, ',' order by ${expr} collate "C") from ${source})`
 
+/** Чи тригер `t` на поверхні провайдера належить межі — одне правило з політикою. */
+const ownTriggerFunction = (t: string): string =>
+  providerTriggerInBoundarySql(
+    `${t}.oid`,
+    "select oid from scope_ns",
+    "select oid from pg_namespace where nspname = any($4::text[])"
+  )
+
 /**
  * Чи анотація (коментар, мітка безпеки) рядка `a` з `classoid`/`objoid`
  * стосується об'єкта межі. Об'єкт ідентифікує `pg_identify_object` (`io`);
@@ -162,7 +175,8 @@ const annotatedInScope = (a: string): string => `case ${a}.classoid
       when 'pg_trigger'::regclass then exists (
         select from pg_trigger t where t.oid = ${a}.objoid
           and (t.tgrelid in (select oid from scope_rel)
-            or t.tgrelid in (select oid from surface_rel where classes ? 'trigger')))
+            or (t.tgrelid in (select oid from surface_rel where classes ? 'trigger')
+              and ${ownTriggerFunction("t")})))
       when 'pg_policy'::regclass then exists (
         select from pg_policy p where p.oid = ${a}.objoid
           and (p.polrelid in (select oid from scope_rel)
@@ -318,7 +332,8 @@ const SECTION_ROWS: Record<FingerprintSection, string> = {
     from pg_trigger t
     where not t.tgisinternal
       and (t.tgrelid in (select oid from scope_rel)
-        or t.tgrelid in (select oid from surface_rel where classes ? 'trigger'))`,
+        or (t.tgrelid in (select oid from surface_rel where classes ? 'trigger')
+          and ${ownTriggerFunction("t")}))`,
 
   policies: `
     select format('%s %I cmd=%s permissive=%s roles=%s using=%L check=%L',
@@ -547,7 +562,8 @@ const SCOPE_CTES = `
 
 /**
  * Один запит на всі секції: `$1` — схеми межі, `$2` — JSON поверхонь
- * провайдера з `table` як шаблоном `LIKE`, `$3` — системні ролі провайдера.
+ * провайдера з `table` як шаблоном `LIKE`, `$3` — системні ролі провайдера,
+ * `$4` — власні схеми провайдера (`PROVIDER_ASSUMED_SCHEMAS`).
  */
 const FINGERPRINT_SQL = `
 with${SCOPE_CTES},

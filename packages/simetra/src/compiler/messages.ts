@@ -3619,6 +3619,15 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Копія — свіжа тінь, засіяна базовим станом провайдера, тож причина в цілі чи середовищі, а не в метаданих: розширення, якого тінь не встановить, засів провайдера або режим з'єднання тіні (потрібне пряме чи сесійне з'єднання). Усуньте причину з повідомлення.",
     },
   },
+  "engine.environment-failed": {
+    en: (p) =>
+      `The environment of the target could not be reproduced in the shadow before seeding: ${p.detail}`,
+    uk: (p) => `Середовище цілі не відтворилося в тіні до засіву: ${p.detail}`,
+    hint: {
+      en: "The shadow receives, verbatim, the functions of the target's external triggers on provider tables. The target and its triggers are untouched. Move the function named in the message to a schema the applying role can create objects in, or fix what its definition needs at creation time, and plan again.",
+      uk: "Тінь отримує дослівно функції зовнішніх тригерів цілі на таблицях провайдера. Ціль і її тригери не змінено. Перенесіть названу функцію в схему, де роль застосування може створювати об'єкти, або виправте те, що потрібне її визначенню під час створення, і сплануйте знову.",
+    },
+  },
   "engine.preamble-unknown": {
     en: (p) =>
       `The schema engine's plan preamble sets ${p.name} = ${p.value}, which is not on the allowed list`,
@@ -3685,8 +3694,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `${p.object} лежить поза межею, яку порівнює рушій схеми, тож звірка ніколи його не побачить: ${outOfScopeReason(p)?.uk(p) ?? p.reason}`,
     hint: {
-      en: "In a provider schema the application owns only policies and triggers on the provider's surface tables, with trigger functions outside provider schemas; move the object into a schema of the application, scope default privileges with IN SCHEMA, and leave provider extensions to the provider.",
-      uk: "У схемі провайдера застосунку належать лише політики й тригери на таблицях поверхні провайдера, з функціями тригерів поза схемами провайдера; перенесіть об'єкт у схему застосунку, обмежте типові привілеї через IN SCHEMA, а розширення провайдера лишіть провайдерові.",
+      en: "In a provider schema the application owns only policies and triggers on the provider's surface tables, with a trigger function in a schema of the application, from an extension or built in; move the object into a schema of the application, scope default privileges with IN SCHEMA, and leave provider extensions to the provider.",
+      uk: "У схемі провайдера застосунку належать лише політики й тригери на таблицях поверхні провайдера, з функцією тригера в схемі застосунку, з розширення чи вбудованою; перенесіть об'єкт у схему застосунку, обмежте типові привілеї через IN SCHEMA, а розширення провайдера лишіть провайдерові.",
     },
   },
   "apply.state-format": {
@@ -4794,8 +4803,28 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Тригер ${p.trigger} на ${p.table} уже є і створений не Simetra; згенерований тригер тихо замінив би його`,
     hint: {
-      en: "No plan was written. Rename or drop the existing trigger; for a subscription, another physicalName also works.",
-      uk: "План не записано. Перейменуйте чи зніміть наявний тригер; підписці можна й дати інший physicalName.",
+      en: "No plan was written. Rename the existing trigger (ALTER TRIGGER … RENAME TO …): it keeps working under the new name. For a subscription, another physicalName also works.",
+      uk: "План не записано. Перейменуйте наявний тригер (ALTER TRIGGER … RENAME TO …): він працюватиме далі під новим ім'ям. Підписці можна й дати інший physicalName.",
+    },
+  },
+  "plan.provider-trigger-undeclared": {
+    en: (p) =>
+      `Step ${p.step} drops trigger ${p.trigger} on ${p.table}: the application does not declare it and it is not in the last applied state`,
+    uk: (p) =>
+      `Крок ${p.step} знімає тригер ${p.trigger} на ${p.table}: застосунок його не оголошує, і його немає в останньому застосованому стані`,
+    hint: {
+      en: "To keep the trigger, declare it as a verbatim SQL unit (its CREATE TRIGGER in a file under sql/) and plan again: the plan then leaves it in place. Allow the relaxation only if the trigger must go.",
+      uk: "Щоб зберегти тригер, оголосіть його дослівною одиницею (його CREATE TRIGGER у файлі під sql/) і сплануйте знову: тоді план його не чіпає. Дозволяйте послаблення, лише якщо тригер треба зняти.",
+    },
+  },
+  "plan.trigger-function-unseedable": {
+    en: (p) =>
+      `Function ${p.function} of a trigger on a provider table lies outside the managed schemas and is written in ${p.language}; the shadow and the proof copy can only reproduce such a function in sql or plpgsql`,
+    uk: (p) =>
+      `Функція ${p.function} тригера на таблиці провайдера лежить поза керованими схемами й написана мовою ${p.language}; тінь і копія доказу відтворюють таку функцію лише мовою sql чи plpgsql`,
+    hint: {
+      en: "No plan was written. The trigger stays outside Simetra and keeps working; to plan this database, make its function a plpgsql wrapper that calls the current one.",
+      uk: "План не записано. Тригер лишається поза Simetra й працює далі; щоб планувати цю базу, зробіть його функцію обгорткою plpgsql, що кличе поточну.",
     },
   },
   "plan.row-version-first": {
@@ -5319,9 +5348,9 @@ const OUT_OF_SCOPE_REASONS: Readonly<
   },
   "provider-trigger-function": {
     en: (p) =>
-      `the trigger calls a function in the provider schema ${p.schema}, so the provider preset treats it as the provider's own`,
+      `the trigger calls a function in the provider schema ${p.schema}, so it is an external trigger outside the boundary`,
     uk: (p) =>
-      `тригер викликає функцію в схемі провайдера ${p.schema}, тож пресет провайдера вважає його власним тригером провайдера`,
+      `тригер викликає функцію в схемі провайдера ${p.schema}, тож це зовнішній тригер поза межею`,
   },
   "global-default-privileges": {
     en: () =>

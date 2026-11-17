@@ -12,12 +12,14 @@ import {
 } from "simetra/schema"
 import {
   attribute,
+  catalog,
   customTable,
   uuid,
   loginUrl,
 } from "../../../../simetra/test/support"
 import { asSuperuser, query } from "../../__tests__/support/db"
 import {
+  applyArtifact,
   codes,
   compiled,
   COPIER,
@@ -306,6 +308,209 @@ describe.concurrent("buildPlan", () => {
       await inTarget(EMPTY, async (url) => {
         const outcome = await plan(url, model, polluted)
         expect(errors(outcome)).toEqual(["engine.clone-failed"])
+      })
+    })
+  })
+
+  // Тригер на таблиці провайдера з функцією поза межею — зовнішня інтеграція
+  // (спека профілю postgres §4.2): межа його виключає, тінь і копія дістають
+  // функцію дослівно до засіву двигуна, план його не торкається
+  describe("provider table triggers outside the boundary", () => {
+    const USERS = "catalogs/Users/Users.meta.json"
+    const users = catalog("Users", {
+      id: uuid(9101),
+      role: "users",
+      scope: "none",
+    })
+    /** Тригер на `better_auth."user"` з функцією `fn` і тілом `body`. */
+    const external = (name: string, fn: string, body: string) =>
+      `create function ${fn}() returns trigger ${body};
+       create trigger ${name} after insert on better_auth."user"
+         for each row execute function ${fn}();`
+    const PLPGSQL = "language plpgsql as $$ begin return new; end $$"
+    const triggers = async (url: string) =>
+      (
+        await query<{ name: string; fn: string }>(
+          url,
+          `select t.tgname as name, t.tgfoid::regproc::text as fn
+             from pg_trigger t where t.tgrelid = 'better_auth."user"'::regclass
+              and not t.tgisinternal order by 1`
+        )
+      ).map((r) => `${r.name} → ${r.fn}`)
+
+    it("plans and applies around a trigger whose function lies outside the boundary", async () => {
+      const model = await compiled({ [USERS]: users })
+      await inTarget(
+        `create schema private;
+         ${external("on_new_user", "private.on_new_user", PLPGSQL)}`,
+        async (url) => {
+          const outcome = await plan(url, model)
+          const artifact = planned(outcome)
+          expect(
+            artifact.steps.filter((s) => /on_new_user|private/.test(s.sql))
+          ).toEqual([])
+          await applyArtifact(url, artifact, model)
+          expect(await triggers(url)).toContain(
+            "on_new_user → private.on_new_user"
+          )
+        }
+      )
+    })
+
+    it("refuses a generated name taken by a trigger the boundary does not see", async () => {
+      // Функція у схемі провайдера: базова політика тригер виключає, засів
+      // переносить, і без кодованої відмови тінь упала б «already exists»
+      const model = await compiled({ [USERS]: users })
+      await inTarget(
+        external("simetra_provision_user", "better_auth.foreign_fn", PLPGSQL),
+        async (url) => {
+          const outcome = await plan(url, model)
+          expect(errors(outcome)).toEqual(["plan.provider-trigger-taken"])
+          expect(
+            outcome.diagnostics.find(
+              (d) => d.code === "plan.provider-trigger-taken"
+            )?.params
+          ).toEqual({
+            trigger: "simetra_provision_user",
+            table: "better_auth.user",
+          })
+        }
+      )
+    })
+
+    it("keeps the external trigger out of drift after an apply", async () => {
+      // Зовнішній тригер з'явився після застосування: гейт дрейфу його не бачить
+      const model = await compiled({ [USERS]: users })
+      await inTarget(EMPTY, async (url) => {
+        await establish(url, model)
+        await query(
+          url,
+          `create schema private;
+           ${external("on_new_user", "private.on_new_user", PLPGSQL)}`
+        )
+        const outcome = await plan(url, model)
+        expect(outcome.status).toBe("unchanged")
+        expect(errors(outcome)).toEqual([])
+      })
+    })
+
+    it("refuses with a coded diagnostic an external trigger function the shadow cannot recreate", async () => {
+      // `extensions` — схема провайдера, але не припущена: засів двигуна
+      // функцію з неї не дає, тож її дає середовище тіні. Схему тіні з
+      // шаблону тримає суперкористувач, і роль плану функції там не
+      // створить: кодована відмова замість сирої `engine.desired-rejected`
+      const model = await compiled({ [USERS]: users })
+      await inTarget(EMPTY, async (url) => {
+        // Писати в `extensions` може лише суперкористувач стеку
+        await query(
+          asSuperuser(url),
+          external("on_new_user", "extensions.on_new_user", PLPGSQL)
+        )
+        const outcome = await plan(url, model)
+        expect(errors(outcome)).toEqual(["engine.environment-failed"])
+        expect(
+          String(
+            outcome.diagnostics.find(
+              (d) => d.code === "engine.environment-failed"
+            )?.params.detail
+          )
+        ).toContain("extensions.on_new_user")
+      })
+    })
+
+    it("keeps a declared trigger on a built-in function managed", async () => {
+      // Вбудована функція залежності не записує: тригер у межі, як і на
+      // функції схеми застосунку
+      const model = await compiled({
+        [USERS]: users,
+        "sql/app/user-redundant.sql": `CREATE TRIGGER user_redundant BEFORE UPDATE ON better_auth."user" FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();\n`,
+      })
+      await inTarget(EMPTY, async (url) => {
+        const artifact = planned(await plan(url, model))
+        expect(
+          artifact.steps.filter((s) =>
+            /CREATE TRIGGER "?user_redundant/.test(s.sql)
+          )
+        ).toHaveLength(1)
+        await applyArtifact(url, artifact, model)
+        const again = await plan(url, model)
+        expect(again.status).toBe("unchanged")
+        expect(errors(again)).toEqual([])
+      })
+    })
+
+    describe("a trigger on an extension function", () => {
+      // Функція-член розширення: витяг зводить залежність до розширення, тож
+      // такий тригер у межі, як і тригер з функцією схеми застосунку
+      const TCN = "CREATE EXTENSION IF NOT EXISTS tcn WITH SCHEMA app;\n"
+      const TRIGGER = `CREATE TRIGGER user_tcn AFTER INSERT ON better_auth."user" FOR EACH ROW EXECUTE FUNCTION app.triggered_change_notification();\n`
+
+      it("keeps a declared one managed: no second plan, drift when it changes", async () => {
+        const model = await compiled({
+          [USERS]: users,
+          "sql/app/extensions.sql": TCN,
+          "sql/app/user-tcn.sql": TRIGGER,
+        })
+        await inTarget(EMPTY, async (url) => {
+          await establish(url, model)
+          expect((await plan(url, model)).status).toBe("unchanged")
+          await query(
+            url,
+            `alter table better_auth."user" disable trigger user_tcn`
+          )
+          const artifact = planned(await plan(url, model))
+          expect(artifact.drift?.sections).toContain("triggers")
+        })
+      })
+
+      it("names the safe path for an undeclared one the plan drops", async () => {
+        const model = await compiled({
+          [USERS]: users,
+          "sql/app/extensions.sql": TCN,
+        })
+        await inTarget(`create schema app; ${TCN} ${TRIGGER}`, async (url) => {
+          const outcome = await plan(url, model)
+          const artifact = planned(outcome)
+          const [drop] = stepMatching(artifact, /DROP TRIGGER "user_tcn"/)
+          expect(drop?.class).toBe("relaxation")
+          expect(artifact.requiredPermissions).toContain(drop!.id)
+          expect(
+            outcome.diagnostics
+              .filter((d) => d.code === "plan.provider-trigger-undeclared")
+              .map((d) => ({ severity: d.severity, params: d.params }))
+          ).toEqual([
+            {
+              severity: "warning",
+              params: {
+                trigger: "user_tcn",
+                table: "better_auth.user",
+                step: drop!.id,
+              },
+            },
+          ])
+        })
+      })
+    })
+
+    it("refuses a trigger function in a language the shadow cannot take verbatim", async () => {
+      const model = await compiled({ [USERS]: users })
+      await inTarget(EMPTY, async (url) => {
+        await query(
+          asSuperuser(url),
+          `create schema private;
+           ${external(
+             "on_new_user",
+             "private.on_new_user",
+             "language internal as 'suppress_redundant_updates_trigger'"
+           )}`
+        )
+        const outcome = await plan(url, model)
+        expect(errors(outcome)).toEqual(["plan.trigger-function-unseedable"])
+        expect(
+          outcome.diagnostics.find(
+            (d) => d.code === "plan.trigger-function-unseedable"
+          )?.params
+        ).toEqual({ function: "private.on_new_user", language: "internal" })
       })
     })
   })

@@ -850,14 +850,14 @@ describe("messages catalog", () => {
       "Trigger audit_x on auth.users already exists and was not created by Simetra; the generated trigger would silently replace it"
     )
     expect(d.hint).toBe(
-      "No plan was written. Rename or drop the existing trigger; for a subscription, another physicalName also works."
+      "No plan was written. Rename the existing trigger (ALTER TRIGGER … RENAME TO …): it keeps working under the new name. For a subscription, another physicalName also works."
     )
     const uk = localize(d, "uk")
     expect(uk.message).toBe(
       "Тригер audit_x на auth.users уже є і створений не Simetra; згенерований тригер тихо замінив би його"
     )
     expect(uk.hint).toBe(
-      "План не записано. Перейменуйте чи зніміть наявний тригер; підписці можна й дати інший physicalName."
+      "План не записано. Перейменуйте наявний тригер (ALTER TRIGGER … RENAME TO …): він працюватиме далі під новим ім'ям. Підписці можна й дати інший physicalName."
     )
   })
 

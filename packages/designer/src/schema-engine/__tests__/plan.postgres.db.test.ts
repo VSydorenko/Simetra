@@ -147,12 +147,23 @@ describe("plan and apply on the postgres profile", () => {
           where tgrelid = 'better_auth."user"'::regclass and not tgisinternal`
       )
       expect(triggers.rowCount).toBeGreaterThan(0)
-      // Гейт бачить у чужих схемах лише розширення й тригери провізії
-      const census = await readCensus(c, {
-        schemas: [],
-        provider: "postgres",
-      })
-      expect(census.map((x) => x.class).sort()).toEqual(["trigger"])
+      // Гейт бачить у чужих схемах лише тригери провізії, і то лише з
+      // функцією в схемі межі: без схем межі чужого в ній немає, а з межею
+      // плану тригерів рівно стільки, скільки на таблицях межі й провізії
+      const census = (schemas: readonly string[]) =>
+        readCensus(c, { schemas, provider: "postgres" })
+      expect(await census([])).toEqual([])
+      const own = await c.query(
+        `select 1 from pg_trigger t join pg_class r on r.oid = t.tgrelid
+          where not t.tgisinternal
+            and r.relnamespace::regnamespace::text = any($1::text[])`,
+        [artifact.scope.schemas]
+      )
+      expect(
+        (await census(artifact.scope.schemas)).find(
+          (x) => x.class === "trigger"
+        )?.count
+      ).toBe(own.rowCount! + triggers.rowCount!)
       const grants = await c.query<{ usage: boolean }>(
         `select has_schema_privilege($1, 'better_auth', 'USAGE') as usage`,
         [set.owner]

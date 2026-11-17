@@ -6,7 +6,11 @@ import {
   type PromotionRecord,
 } from "simetra/compiler"
 import { catalogFromSnapshot, type CatalogModel } from "simetra/model"
-import { numberingNotGenerated, providerTriggerConflicts } from "simetra/schema"
+import {
+  numberingNotGenerated,
+  providerTriggerConflicts,
+  providerTriggerKey,
+} from "simetra/schema"
 import {
   catalog,
   document,
@@ -99,6 +103,7 @@ describe("providerTriggerConflicts", () => {
       live: catalogOf([FOREIGN_ON_USER]),
       applied: undefined,
       appSchemas: ["public", "simetra"],
+      present: new Set(),
       parse: await loadSqlParser(),
     })
     expect(found).toEqual([
@@ -117,6 +122,7 @@ describe("providerTriggerConflicts", () => {
       live: catalogOf([FOREIGN_ON_USER]),
       applied: catalogOf([FOREIGN_ON_USER]),
       appSchemas: ["public", "simetra"],
+      present: new Set(),
       parse: await loadSqlParser(),
     })
     expect(found).toEqual([])
@@ -137,6 +143,7 @@ describe("providerTriggerConflicts", () => {
       ]),
       applied: undefined,
       appSchemas: ["public", "simetra"],
+      present: new Set(),
       parse: await loadSqlParser(),
     })
     expect(found).toEqual([])
@@ -156,6 +163,7 @@ describe("providerTriggerConflicts", () => {
       ]),
       applied: undefined,
       appSchemas: ["public", "simetra"],
+      present: new Set(),
       parse: await loadSqlParser(),
     })
     expect(found).toEqual([])
@@ -178,6 +186,7 @@ describe("providerTriggerConflicts", () => {
       ]),
       applied: undefined,
       appSchemas: ["public", "simetra"],
+      present: new Set(),
       parse: await loadSqlParser(),
     })
     expect(found.map((d) => d.code)).toEqual(["plan.provider-trigger-taken"])
@@ -210,6 +219,7 @@ describe("providerTriggerConflicts", () => {
         ]),
         applied: undefined,
         appSchemas: ["public", "simetra"],
+        present: new Set(),
         parse: await loadSqlParser(),
       }).map((d) => d.code)
 
@@ -253,6 +263,42 @@ describe("providerTriggerConflicts", () => {
     })
   })
 
+  describe("a name taken outside the boundary", () => {
+    // Свідок не бачить тригера, функція якого у схемі провайдера: базова
+    // політика його виключає, а засів тіні переносить. Зайнятість імені — з
+    // каталогу цілі
+    const conflicts = async (present: string[], applied?: CatalogModel) =>
+      providerTriggerConflicts({
+        desired: (await withSubscriptions()).sqlUnits,
+        live: catalogOf([]),
+        applied,
+        appSchemas: ["public", "simetra"],
+        present: new Set(present),
+        parse: await loadSqlParser(),
+      })
+
+    it("refuses a generated name the catalog holds on the same table", async () => {
+      expect(
+        await conflicts([
+          providerTriggerKey({ schema: "auth", name: "users" }, "on_user"),
+        ])
+      ).toEqual([
+        expect.objectContaining({
+          code: "plan.provider-trigger-taken",
+          params: { trigger: "on_user", table: "auth.users" },
+        }),
+      ])
+    })
+
+    it("lets the name pass on another table", async () => {
+      expect(
+        await conflicts([
+          providerTriggerKey({ schema: "auth", name: "identities" }, "on_user"),
+        ])
+      ).toEqual([])
+    })
+  })
+
   it("refuses when the live trigger text does not parse", async () => {
     // Не розібраний текст не доводить тотожності: обережно — відмова
     const model = await withSubscriptions()
@@ -263,6 +309,7 @@ describe("providerTriggerConflicts", () => {
       ]),
       applied: undefined,
       appSchemas: ["public", "simetra"],
+      present: new Set(),
       parse: await loadSqlParser(),
     })
     expect(found).toEqual([

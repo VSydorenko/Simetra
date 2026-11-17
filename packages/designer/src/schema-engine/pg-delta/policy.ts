@@ -5,7 +5,11 @@ import {
   type IntegrationProfile,
   type Policy,
 } from "@supabase/pg-delta"
-import { PROVIDER_UNMANAGED_EXTENSIONS, type EngineScope } from "simetra/schema"
+import {
+  PROVIDER_ASSUMED_SCHEMAS,
+  PROVIDER_UNMANAGED_EXTENSIONS,
+  type EngineScope,
+} from "simetra/schema"
 import { PROVIDER_SCHEMAS } from "simetra/model"
 
 /**
@@ -18,7 +22,7 @@ import { PROVIDER_SCHEMAS } from "simetra/model"
  */
 export const postgresBasePolicy: Policy = {
   id: "simetra-postgres-base",
-  assumedSchemas: ["better_auth"],
+  assumedSchemas: [...PROVIDER_ASSUMED_SCHEMAS.postgres],
   filter: [
     {
       match: {
@@ -87,6 +91,31 @@ export function scopePolicy(scope: EngineScope): Policy {
     id: "simetra-scope",
     extends: [PROVIDER_BASE_POLICY[scope.provider]],
     filter: [
+      // Зовнішній тригер на таблиці провайдера (`providerTriggerInBoundarySql`
+      // — те саме правило для перепису, відбитка й середовища тіні): залежить
+      // від функції, але ні від функції схеми застосунку, ні від розширення
+      // (член розширення витяг зводить до ребра до розширення). Вбудована
+      // функція ребра не дає, тож тригер на ній лишається в межі. Без правила
+      // базова політика брала б у межу кожен тригер з функцією поза схемами
+      // провайдера: план знімав би інтеграцію споживача, а копія доказу без
+      // її функції не відтворилася б. Тригер у схемі таблиці, тож `schema` —
+      // схема провайдера
+      {
+        match: {
+          all: [
+            { kind: "trigger" },
+            { schema: [...PROVIDER_SCHEMAS[scope.provider]] },
+            { edgeTo: { kind: "function" } },
+            {
+              not: {
+                edgeTo: { kind: "function", schema: [...scope.schemas] },
+              },
+            },
+            { not: { edgeTo: { kind: "extension" } } },
+          ],
+        },
+        action: "exclude",
+      },
       {
         match: {
           all: [

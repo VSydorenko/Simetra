@@ -4,7 +4,9 @@
  */
 import type pg from "pg"
 import {
+  PROVIDER_ASSUMED_SCHEMAS,
   PROVIDER_EVENT_TRIGGERS,
+  providerTriggerInBoundarySql,
   PROVIDER_UNMANAGED_EXTENSIONS,
   type CensusCount,
   type EngineScope,
@@ -19,7 +21,8 @@ import { PROVIDER_SCHEMAS } from "simetra/model"
  * (послідовність identity, конструктори й cast до мультидіапазону
  * діапазонного типу), масиви типів, рядкові типи таблиць, індекси обмежень. `$1` — керовані
  * схеми, `$2` — схеми пресета провайдера, `$3` — розширення провайдера,
- * `$4` — LIKE-шаблони тригерів подій провайдера.
+ * `$4` — LIKE-шаблони тригерів подій провайдера, `$5` — власні схеми
+ * провайдера (`PROVIDER_ASSUMED_SCHEMAS`).
  */
 const CENSUS_SQL = `
 with managed as (
@@ -69,11 +72,18 @@ with managed as (
   from pg_constraint k join rel c on c.oid = k.conrelid
   where k.contype in ('x', 't') and k.conislocal
   union all select 'trigger'
-  from pg_trigger g join pg_class c on c.oid = g.tgrelid join pg_proc f on f.oid = g.tgfoid
+  from pg_trigger g join pg_class c on c.oid = g.tgrelid
   -- тригер-клон секції (tgparentid) — частина тригера батьківської таблиці
   where not g.tgisinternal and g.tgparentid = 0
+    -- на таблиці провайдера — лише тригер у межі: те саме правило, що в
+    -- політиці двигуна й відбитку (providerTriggerInBoundarySql)
     and (c.relnamespace in (select oid from managed)
-         or (c.relnamespace in (select oid from provider) and f.pronamespace not in (select oid from provider)))
+         or (c.relnamespace in (select oid from provider)
+             and ${providerTriggerInBoundarySql(
+               "g.oid",
+               "select oid from managed",
+               "select oid from pg_namespace where nspname = any($5::text[])"
+             )}))
   union all select 'policy'
   from pg_policy y join pg_class c on c.oid = y.polrelid
   where c.relnamespace in (select oid from managed) or c.relnamespace in (select oid from provider)
@@ -139,6 +149,7 @@ export async function readCensus(
     PROVIDER_SCHEMAS[scope.provider],
     PROVIDER_UNMANAGED_EXTENSIONS[scope.provider],
     PROVIDER_EVENT_TRIGGERS[scope.provider],
+    PROVIDER_ASSUMED_SCHEMAS[scope.provider],
   ])
   return rows
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { PROVIDER_SCHEMAS } from "simetra/model"
 import {
+  PROVIDER_ASSUMED_SCHEMAS,
   PROVIDER_EVENT_TRIGGERS,
   PROVIDER_UNMANAGED_EXTENSIONS,
   type EngineScope,
@@ -30,6 +31,7 @@ describe("census query parameters follow the scope provider", () => {
         PROVIDER_SCHEMAS[provider],
         PROVIDER_UNMANAGED_EXTENSIONS[provider],
         PROVIDER_EVENT_TRIGGERS[provider],
+        PROVIDER_ASSUMED_SCHEMAS[provider],
       ],
     ])
   })

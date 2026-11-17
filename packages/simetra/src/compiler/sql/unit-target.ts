@@ -93,6 +93,37 @@ export function triggerFunctionSchema(
 }
 
 /**
+ * Схеми функцій, які кличе умова `WHEN` тригера, — лише кваліфіковані імена:
+ * без схеми функцію знаходить `search_path` тригера, тож у межу вона не
+ * потрапляє залежністю схеми. Межу тригера на таблиці провайдера судять
+ * усі його функції-залежності (`providerTriggerInBoundarySql`).
+ */
+export function triggerWhenFunctionSchemas(
+  unit: TargetUnit,
+  parse: SqlParser
+): string[] {
+  if (unit.class !== "trigger") return []
+  const found: string[] = []
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(walk)
+      return
+    }
+    if (value === null || typeof value !== "object") return
+    const record = value as Record<string, unknown>
+    if ("FuncCall" in record) {
+      const call = record.FuncCall as { funcname?: Node[] }
+      const names = strings(call.funcname)
+      if (names.length > 1) found.push(names.at(-2)!)
+    }
+    Object.values(record).forEach(walk)
+  }
+  for (const stmt of statements(unit, parse))
+    if ("CreateTrigStmt" in stmt) walk(stmt.CreateTrigStmt.whenClause)
+  return found
+}
+
+/**
  * Ключ предмета класу конверсії промоції (спека промоції §8): об'єкт,
  * який клас покриває, коли одиниця зникає з бажаного стану. Будується з
  * класу, цілі й імені одиниці, а не з її ідентичності: об'єкти гранту

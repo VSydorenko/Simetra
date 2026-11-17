@@ -16,9 +16,10 @@ import {
   PROVIDER_API_ROLES,
   PROVIDER_IDENTITY_SOURCES,
   PROVIDER_LOGIN_ROLES,
+  PROVIDER_SCHEMAS,
   quoteIdent,
-  type DatabaseProvider,
   type CatalogModel,
+  type DatabaseProvider,
 } from "simetra/model"
 import {
   copiesShadowFromTemplate,
@@ -93,6 +94,7 @@ import {
   type ObjectOwner,
 } from "./fingerprint"
 import { readInvalidObjects } from "./validity"
+import { readShadowEnvironment } from "./shadow-environment"
 import {
   footprintSubjects,
   footprintTables,
@@ -472,12 +474,20 @@ const PROVIDER_TRIGGER_GENERATORS: ReadonlySet<SqlUnit["generator"]> = new Set<
  * приведення (`withoutRowTextCasts`). Функцію в ньому двигун завжди
  * кваліфікує схемою: витяг pg-delta ставить `search_path` у `pg_catalog`,
  * тож ім'я без схеми — інше дерево, а не та сама функція.
+ *
+ * Свідок бачить не всі тригери таблиці провайдера: тригер, функція якого у
+ * схемі провайдера, базова політика вважає провайдерським і з межі виключає,
+ * а засів тіні переносить його з цілі — тож згенерований `CREATE TRIGGER`
+ * упав би в тіні загальною `engine.shadow-load-failed`. Тому зайнятість імені
+ * судять ще й за каталогом цілі (`present`, ключі `providerTriggerKey`):
+ * тригер поза межею не може бути нашим, бо наш стан знято під межею.
  */
 export function providerTriggerConflicts(p: {
   desired: readonly SqlUnit[]
   live: CatalogModel
   applied: CatalogModel | undefined
   appSchemas: readonly string[]
+  present: ReadonlySet<string>
   parse: SqlParser
 }): EngineDiagnostic[] {
   const live = new Map(
@@ -486,17 +496,18 @@ export function providerTriggerConflicts(p: {
       .map((u) => [u.identity, u.sql])
   )
   const applied = new Set(p.applied?.units.map((u) => u.identity) ?? [])
-  return p.desired
-    .filter(
-      (unit) =>
-        unit.class === "trigger" &&
-        PROVIDER_TRIGGER_GENERATORS.has(unit.generator) &&
-        !p.appSchemas.includes(unit.schema) &&
-        !applied.has(unit.identity)
-    )
+  return providerTriggerUnits(p.desired, p.appSchemas)
+    .filter((unit) => !applied.has(unit.identity))
     .flatMap((unit) => {
+      const taken = applyDiagnostic("plan.provider-trigger-taken", "error", {
+        trigger: unit.name,
+        table: `${unit.table.schema}.${unit.table.name}`,
+      })
       const sql = live.get(unit.identity)
-      if (sql === undefined) return []
+      if (sql === undefined)
+        return p.present.has(providerTriggerKey(unit.table, unit.name))
+          ? [taken]
+          : []
       const parsed = p.parse(sql)
       const same =
         parsed.ok &&
@@ -506,20 +517,72 @@ export function providerTriggerConflicts(p: {
             withoutLocations(parsed.statements[0]!.stmt) as Node
           )
         ) === JSON.stringify(withoutRowTextCasts(unit.tree as Node))
-      if (same) return []
-      // Таблицю дає дерево оператора: генератор завжди кваліфікує її схемою
+      return same ? [] : [taken]
+    })
+}
+
+/** Ключ тригера таблиці для `present` у `providerTriggerConflicts`. */
+export function providerTriggerKey(
+  table: { schema: string; name: string },
+  trigger: string
+): string {
+  return JSON.stringify([table.schema, table.name, trigger])
+}
+
+/**
+ * Згенеровані тригери на таблицях провайдера з таблицею з дерева оператора:
+ * генератор завжди кваліфікує її схемою.
+ */
+function providerTriggerUnits(
+  desired: readonly SqlUnit[],
+  appSchemas: readonly string[]
+): (SqlUnit & { table: { schema: string; name: string } })[] {
+  return desired
+    .filter(
+      (unit) =>
+        unit.class === "trigger" &&
+        PROVIDER_TRIGGER_GENERATORS.has(unit.generator) &&
+        !appSchemas.includes(unit.schema)
+    )
+    .map((unit) => {
       const tree = unit.tree as Node
       const relation =
         "CreateTrigStmt" in tree ? tree.CreateTrigStmt.relation : undefined
       if (relation?.relname === undefined)
         throw new Error(`internal: trigger unit without a table: ${unit.sql}`)
-      return [
-        applyDiagnostic("plan.provider-trigger-taken", "error", {
-          trigger: unit.name,
-          table: `${relation.schemaname ?? unit.schema}.${relation.relname}`,
-        }),
-      ]
+      return {
+        ...unit,
+        table: {
+          schema: relation.schemaname ?? unit.schema,
+          name: relation.relname,
+        },
+      }
     })
+}
+
+/**
+ * Імена тригерів цілі на таблицях згенерованих тригерів провайдера — з
+ * каталогу, а не зі свідка: свідок бачить лише межу.
+ */
+async function readProviderTriggers(
+  tx: ApplyTransaction,
+  tables: readonly { schema: string; name: string }[]
+): Promise<Set<string>> {
+  if (tables.length === 0) return new Set()
+  const rows = await tx.query<{ schema: string; table: string; name: string }>(
+    `SELECT n.nspname AS schema, c.relname AS table, t.tgname AS name
+       FROM pg_catalog.pg_trigger t
+       JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      WHERE NOT t.tgisinternal
+        AND (n.nspname, c.relname) IN (SELECT * FROM unnest($1::text[], $2::text[]))`,
+    [tables.map((t) => t.schema), tables.map((t) => t.name)]
+  )
+  return new Set(
+    rows.map((r) =>
+      providerTriggerKey({ schema: r.schema, name: r.table }, r.name)
+    )
+  )
 }
 
 /**
@@ -538,6 +601,33 @@ export function hasIdentityTriggers(
       u.generator === "platformLayer" &&
       u.identity.startsWith(prefix)
   )
+}
+
+/**
+ * Неоголошений тригер на таблиці провайдера, який план знімає як чужий
+ * об'єкт (платформна спека §6.6, §6.9): дозвіл на послаблення його знищить,
+ * хоча тригер міг бути інтеграцією споживача. Попередження першим називає
+ * безпечний шлях — оголосити тригер дослівною одиницею.
+ */
+export function undeclaredProviderTriggers(
+  actions: readonly Pick<EngineAction, "destroyed">[],
+  foreign: ReadonlySet<string>,
+  provider: DatabaseProvider
+): EngineDiagnostic[] {
+  const schemas = new Set(PROVIDER_SCHEMAS[provider])
+  return actions.flatMap((action, i) => {
+    const step = stepId(i)
+    if (!foreign.has(step)) return []
+    return action.destroyed
+      .filter((ref) => ref.kind === "trigger" && schemas.has(ref.schema))
+      .map((ref) =>
+        applyDiagnostic("plan.provider-trigger-undeclared", "warning", {
+          trigger: ref.name,
+          table: `${ref.schema}.${ref.table ?? ""}`,
+          step,
+        })
+      )
+  })
 }
 
 /**
@@ -837,6 +927,15 @@ export async function buildPlan(
   if (membership.refusal !== undefined) return refused([membership.refusal])
   const targetOwners = membership.owners
 
+  // 2а′. Середовище тіней і копій — функції тригерів провайдера поза межею:
+  // засів двигуна переносить такі тригери, тож без функцій впала б кожна
+  // тінь, і в гілці промоції теж
+  const seeds = await dbs.reader.transaction(o.target, "rollback", (tx) =>
+    readShadowEnvironment(tx, scope)
+  )
+  if (!seeds.ok) return refused(seeds.diagnostics)
+  o = { ...o, environment: seeds.statements }
+
   // 2в. Прийняті джерела прав (спека прав §4.7): доступ ролі
   // застосування до таблиць-джерел і ключі ролей у їхніх даних — однією
   // читальною транзакцією до витягу й тіні і до розгалуження промоції, тож
@@ -865,11 +964,18 @@ export async function buildPlan(
   const live = await witness(o.target, scope)
   // Останній застосований стан: що з об'єктів цілі створила платформа
   const applied = state.status === "applied" ? state.marker.catalog : undefined
+  const present = await dbs.reader.transaction(o.target, "rollback", (tx) =>
+    readProviderTriggers(
+      tx,
+      providerTriggerUnits(model.sqlUnits, scope.schemas).map((u) => u.table)
+    )
+  )
   const taken = providerTriggerConflicts({
     desired: model.sqlUnits,
     live: live.extracted.model,
     applied,
     appSchemas: scope.schemas,
+    present,
     parse,
   })
   if (taken.length > 0) return refused(taken)
@@ -1034,14 +1140,23 @@ export async function buildPlan(
   if (!filled.ok) return refused([...diagnostics, ...filled.diagnostics])
   // Зняття об'єкта, якого немає в останньому застосованому стані, — з
   // дозволом, і однойменна заміна теж (§6.6)
+  const foreign = foreignChanges(
+    filled.actions,
+    applied,
+    live.extracted.model,
+    0
+  )
   const classified = classifySteps(
     filled.actions,
     live.extracted.model,
     parse,
     0,
-    {
-      foreign: foreignChanges(filled.actions, applied, live.extracted.model, 0),
-    }
+    { foreign }
+  )
+  const undeclared = undeclaredProviderTriggers(
+    filled.actions,
+    foreign,
+    scope.provider
   )
   // Зняти тригер провізії з чужої таблиці може лише її власник: відмова з
   // порадою до будь-якого кроку, а не падіння застосування
@@ -1217,6 +1332,7 @@ export async function buildPlan(
     diagnostics: dedupe([
       ...diagnostics,
       ...collected.diagnostics,
+      ...undeclared,
       ...lockWarnings,
       ...numberingNotGenerated({
         model,
