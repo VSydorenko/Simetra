@@ -89,6 +89,7 @@ export type UnitGenerator =
   | "command"
   | "effects"
   | "catalogCommand"
+  | "schemaUsage"
 
 /**
  * Чи тіло функцій генератора фіксоване платформою: таку функцію перевіряють
@@ -115,6 +116,7 @@ const FIXED_BODY: Readonly<Record<UnitGenerator, boolean>> = {
   command: true,
   effects: true,
   catalogCommand: true,
+  schemaUsage: true,
 }
 
 /**

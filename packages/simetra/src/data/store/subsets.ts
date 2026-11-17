@@ -389,6 +389,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           s.paging.get(direction) === generation)
     )
     const what = `view ${s.form.specKey} page ${direction}`
+    // Позначку знімаємо всередині `commit`, що пише результат, — до
+    // сповіщення: підписник цієї сторінки може одразу просити наступну.
+    // Покоління нового ланцюжка чи `purge` вона не чіпає.
+    const release = () => {
+      if (s.paging.get(direction) === generation) s.paging.delete(direction)
+    }
     const attempt = (): Promise<void> => {
       const readEpoch = session.epochs.now()
       let discarded = false
@@ -418,6 +424,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               } finally {
                 ops.sweep(scope)
                 s.dirty = true
+                // Відкинуте читання повториться: позначка тримає дублікати.
+                if (!discarded) release()
               }
             },
             token,
@@ -437,6 +445,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               s.status = "error"
               s.error = errorOf(error)
               s.dirty = true
+              release()
             },
             token,
             what
@@ -444,11 +453,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         }
       )
     }
-    // Покоління зняв новий ланцюжок чи `purge`: позначки читання нового вони
-    // не чіпають.
-    void attempt().finally(() => {
-      if (s.paging.get(direction) === generation) s.paging.delete(direction)
-    })
+    // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
+    void attempt()
   }
 
   /** Mounted card: lazy fields absent or read with an older row version. */

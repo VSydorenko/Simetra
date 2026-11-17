@@ -5,6 +5,8 @@
 // `import("../compiler").X`. Це межа механізму, а не дірка, яку треба
 // закривати переліком.
 
+import { STANDARD_COLUMN_SELECTORS } from "./eslint.standard-columns.js"
+
 // Порядок = номер ярусу: імпортувати дозволено лише нижчі яруси.
 const TIERS = ["model", "compiler", "schema", "server", "data", "ui", "shell"]
 
@@ -20,6 +22,8 @@ function tierPattern(tiers) {
 // Роутер, host-фреймворк і бібліотеки рушія даних заборонені в T5 ui.
 const FRAMEWORK_PATTERN =
   "^(?:@tanstack/(?:react-)?(?:router|start|db|query)(?:[-/].*)?|react-router(?:[-/].*)?|next(?:/.*)?|@supabase/.*)$"
+
+const VIRTUAL_PATTERN = "^@tanstack/react-virtual(?:/|$)"
 
 const FRAMEWORK_MESSAGE =
   "Framework boundary: T5 ui imports only React, T4 contracts and the navigation adapter interface (platform spec §3.1)."
@@ -44,6 +48,19 @@ function tierMessage(tier, index) {
   )
 }
 
+const VIRTUAL_MESSAGE =
+  "T5 list zone: @tanstack/react-virtual is imported only inside src/ui/list; the anchor and remount live in one list component (P4-B spec §6.7)."
+
+// `useOptimistic` — оптимістичний показ дає лише ядро (політика `predict`).
+const UI_IMPORT_PATHS = [
+  {
+    name: "react",
+    importNames: ["useOptimistic"],
+    message:
+      "T5 rule: optimistic display comes only from the data core (predict policy, P4-B spec §6.7); do not use useOptimistic.",
+  },
+]
+
 const tierConfigs = TIERS.flatMap((tier, index) => {
   const higher = TIERS.slice(index + 1)
   // Нормалізований шлях — у кожному ярусі, зокрема shell: опції правила flat
@@ -59,6 +76,7 @@ const tierConfigs = TIERS.flatMap((tier, index) => {
   // замінює опції правила цілком, тож окремий блок затер би ярусну групу.
   if (tier === "ui") {
     patterns.push({ regex: FRAMEWORK_PATTERN, message: FRAMEWORK_MESSAGE })
+    patterns.push({ regex: VIRTUAL_PATTERN, message: VIRTUAL_MESSAGE })
   }
   // data і ui читають лише контракти T0: серверний рантайм (з'єднання,
   // транзакції) — не їхня залежність, хоч ярус server нижчий.
@@ -77,10 +95,131 @@ const tierConfigs = TIERS.flatMap((tier, index) => {
   return [
     {
       files: [`src/${tier}/**/*.{ts,tsx,mts,cts}`],
-      rules: { "no-restricted-imports": ["error", { patterns }] },
+      rules: {
+        "no-restricted-imports": [
+          "error",
+          tier === "ui" ? { patterns, paths: UI_IMPORT_PATHS } : { patterns },
+        ],
+      },
     },
   ]
 })
+
+// Тека списку — власний блок із повним переліком заборон T5 без шаблону
+// віртуалізатора: опції правила замінюються цілком, тож перелік повторено.
+const listImportConfig = (() => {
+  const ui = tierConfigs.find((c) => c.files[0].startsWith("src/ui/"))
+  const { patterns } = ui.rules["no-restricted-imports"][1]
+  return {
+    files: ["src/ui/list/**/*.{ts,tsx,mts,cts}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: patterns.filter((p) => p.regex !== VIRTUAL_PATTERN),
+          paths: UI_IMPORT_PATHS,
+        },
+      ],
+    },
+  }
+})()
+
+// Правила зони T5 (спека П4-B §6.7, Рд45): лише відомі причини мерехтіння з
+// низькими хибними спрацюваннями. Тести виключено, як і в блоках чистоти.
+const UI_FILES = ["src/ui/**/*.{ts,tsx,mts,cts}"]
+const UI_IGNORES = ["**/__tests__/**"]
+
+// Атрибут — і `JSXAttribute`, і ключ у props `createElement` (тести та
+// код без JSX пишуть `createElement(type, { onScroll })`).
+const CREATE_ELEMENT =
+  ":matches(CallExpression[callee.name='createElement'], CallExpression[callee.property.name='createElement'])"
+const attributeSelector = (name) =>
+  `JSXAttribute[name.name='${name}'], ${CREATE_ELEMENT} > ObjectExpression > Property:matches([key.name='${name}'], [key.value='${name}'])`
+
+const HYDRATION_SELECTOR = {
+  selector: attributeSelector("suppressHydrationWarning"),
+  message:
+    "T5 rule: suppressHydrationWarning hides a hydration mismatch the oracle must catch (P4-B spec §6.7).",
+}
+// Обхід `no-restricted-imports`/`no-restricted-globals`: доступ через
+// простір імен React і через глобальний об'єкт.
+const BYPASS_SELECTORS = [
+  {
+    selector:
+      "MemberExpression:matches([property.name='useOptimistic'], [property.value='useOptimistic'])",
+    message:
+      "T5 rule: optimistic display comes only from the data core (predict policy, P4-B spec §6.7); do not use useOptimistic.",
+  },
+  {
+    selector:
+      "MemberExpression[object.name=/^(?:globalThis|window|self)$/]:matches([property.name=/^(?:fetch|XMLHttpRequest|WebSocket|EventSource)$/], [property.value=/^(?:fetch|XMLHttpRequest|WebSocket|EventSource)$/])",
+    message:
+      "T5 rule: data comes only from T4 hooks; own loading skips the core and shows a skeleton after the data (P4-B spec §6.7).",
+  },
+]
+const SCROLL_SELECTORS = [
+  {
+    selector: attributeSelector("onScroll"),
+    message:
+      "T5 rule: only the list component in src/ui/list owns scrolling; setState on scroll causes scroll-rigid (P4-B spec §6.7).",
+  },
+  {
+    selector:
+      "CallExpression[callee.property.name='addEventListener'][arguments.0.value='scroll']",
+    message:
+      "T5 rule: only the list component in src/ui/list listens to scroll (P4-B spec §6.7).",
+  },
+]
+
+const uiRules = {
+  // Одні опції `no-restricted-syntax` для T5 і стандартних колонок: пізніший
+  // блок замінив би опції цілком.
+  syntax: (scroll) => [
+    "error",
+    ...STANDARD_COLUMN_SELECTORS,
+    HYDRATION_SELECTOR,
+    ...BYPASS_SELECTORS,
+    ...(scroll ? SCROLL_SELECTORS : []),
+  ],
+  "no-restricted-globals": [
+    "error",
+    ...["fetch", "XMLHttpRequest", "WebSocket", "EventSource"].map((name) => ({
+      name,
+      message:
+        "T5 rule: data comes only from T4 hooks; own loading skips the core and shows a skeleton after the data (P4-B spec §6.7).",
+    })),
+  ],
+  "no-restricted-properties": [
+    "error",
+    {
+      object: "Math",
+      property: "random",
+      message:
+        "T5 rule: a random value in render differs between SSR and the client; use useId (P4-B spec §6.7).",
+    },
+  ],
+}
+
+const uiRuleConfigs = [
+  {
+    files: UI_FILES,
+    ignores: [...UI_IGNORES, "src/ui/list/**"],
+    rules: {
+      "no-restricted-syntax": uiRules.syntax(true),
+      "no-restricted-globals": uiRules["no-restricted-globals"],
+      "no-restricted-properties": uiRules["no-restricted-properties"],
+    },
+  },
+  {
+    files: ["src/ui/list/**/*.{ts,tsx,mts,cts}"],
+    ignores: UI_IGNORES,
+    rules: {
+      "no-restricted-syntax": uiRules.syntax(false),
+      "no-restricted-globals": uiRules["no-restricted-globals"],
+      "no-restricted-properties": uiRules["no-restricted-properties"],
+    },
+  },
+]
 
 // Межі чистоти ярусів T0, T1, T3, T4, T5 і заборона рушія бази в усьому `src`.
 // Окреме правило `@typescript-eslint/no-restricted-imports`, а не
@@ -260,4 +399,9 @@ export const purityConfigs = [
   },
 ]
 
-export const tierZoneConfigs = [...tierConfigs, ...purityConfigs]
+export const tierZoneConfigs = [
+  ...tierConfigs,
+  listImportConfig,
+  ...uiRuleConfigs,
+  ...purityConfigs,
+]
