@@ -1,6 +1,7 @@
 import { withDatabaseName } from "@supabase/pg-delta"
 import pg from "pg"
 import { canonicalSnapshot, compile } from "simetra/compiler"
+import { PROVIDER_LOGIN_ROLES } from "simetra/model"
 import {
   buildPlan,
   ensurePostgresCluster,
@@ -89,6 +90,55 @@ const options = (role: string) => ({
 })
 
 describe("owner gate on the postgres profile", () => {
+  // Спільний вхід провайдера: сесія суперкористувача з `role`, тож
+  // `current_user` — саме вхід профілю. Без BYPASSRLS він дав би й стару
+  // відмову, тож кейс чекає саме код спільного входу. Іде першим: наступний
+  // кейс забирає BYPASSRLS у власника
+  it("refuses a plan and an apply under the provider's shared login, and plans under the own migrator login", async () => {
+    const model = await modelOf()
+    const [login] = PROVIDER_LOGIN_ROLES.postgres
+    const asLogin = {
+      url: `${targetDb()}?options=${encodeURIComponent(`-c role=${login}`)}`,
+    }
+    const refused = await buildPlan(
+      engine,
+      dbs,
+      model,
+      { target: asLogin, shadowTemplate: set.template },
+      []
+    )
+    expect(refused).toMatchObject({
+      status: "refused",
+      diagnostics: [
+        { code: "plan.owner-provider-login", params: { role: login } },
+      ],
+    })
+
+    const planned = await buildPlan(engine, dbs, model, options(set.owner), [])
+    if (planned.status !== "planned")
+      throw new Error(
+        `${planned.status}: ${planned.diagnostics.map((d) => d.code).join(",")}`
+      )
+    const outcome = await executePlan(writer, asLogin, planned.artifact, {
+      mode: "apply",
+      planHash: planned.artifact.planHash,
+      allow: planned.artifact.requiredPermissions,
+      snapshot: canonicalSnapshot(model),
+    })
+    expect(outcome).toMatchObject({
+      status: "refused",
+      diagnostics: [
+        { code: "plan.owner-provider-login", params: { role: login } },
+      ],
+    })
+    await admin(targetDb(), async (c) => {
+      const found = await c.query<{ found: string | null }>(
+        "select to_regclass('simetra.marker')::text as found"
+      )
+      expect(found.rows[0]?.found).toBeNull()
+    })
+  })
+
   // Один сценарій: роль входу без BYPASSRLS, потім власник, що втрачає
   // BYPASSRLS між планом і застосуванням
   it("refuses a plan from a role without BYPASSRLS, and an apply after the owner loses it", async () => {

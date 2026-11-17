@@ -587,7 +587,7 @@ export async function buildPlan(
       if (unsupported !== undefined) return { ok: false as const, unsupported }
       // Роль без BYPASSRLS читала б стан крізь захист рядків — відмова
       // до будь-якого читання стану й до платформних ролей
-      const ownerGate = await checkOwnerAttributes(tx)
+      const ownerGate = await checkOwnerAttributes(tx, desired.scope.provider)
       if (ownerGate !== undefined)
         return { ok: false as const, unsupported: ownerGate }
       return {

@@ -4435,6 +4435,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Нічого не сплановано й не записано. Від суперкористувача виконайте ALTER ROLE <роль> BYPASSRLS або підключіться роллю, що його має.",
     },
   },
+  "plan.owner-provider-login": {
+    en: (p) =>
+      `The connected role ${p.role} is a shared login of the database provider's services: the application's objects would be owned by the role those services run under`,
+    uk: (p) =>
+      `Підключена роль ${p.role} — спільний вхід сервісів провайдера бази: власником об'єктів застосунку стала б роль, під якою працюють ці сервіси`,
+    hint: {
+      en: "Nothing was planned or written. Connect as your own migrator login: a role of the application with BYPASSRLS that no provider service uses.",
+      uk: "Нічого не сплановано й не записано. Підключіться власним входом мігратора: роллю застосунку з BYPASSRLS, якою не користується жоден сервіс провайдера.",
+    },
+  },
   "plan.shadow-base-unsupported": {
     en: () =>
       "A separate shadow server is not supported with the postgres profile: shadows are built from the template database of the target cluster",

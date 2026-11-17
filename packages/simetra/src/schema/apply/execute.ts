@@ -766,7 +766,7 @@ async function runAttempt(
       throw new AttemptStop("refused", [unsupported])
     // Власник без BYPASSRLS після плану (ALTER ROLE між планом і
     // застосуванням) — відмова до першого кроку, у ledger нічого
-    const ownerGate = await checkOwnerAttributes(tx)
+    const ownerGate = await checkOwnerAttributes(tx, plan.scope.provider)
     if (ownerGate !== undefined) throw new AttemptStop("refused", [ownerGate])
   }
 
