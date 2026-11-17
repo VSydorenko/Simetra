@@ -123,6 +123,51 @@ describe("window", () => {
     expect(keysIn(handle.getSnapshot())).toEqual(range(1, 200))
   })
 
+  // Хост, що дочитує до краю з підписника: позначка читання напряму має
+  // зникнути до сповіщення про сторінку, інакше другий виклик губиться (#233).
+  it("accepts a loadAfter called from a subscriber of the page commit", async () => {
+    const { core, fake, inspect } = setup({ limits: { windowPage: 5 } })
+    seed(fake, 1, 15)
+    const handle = core.view(win)
+    handle.subscribe(() => {
+      const snapshot = handle.getSnapshot()
+      if (snapshot.status === "ready" && !snapshot.atEnd) handle.loadAfter()
+    })
+    await settle()
+    expect(keysIn(handle.getSnapshot())).toEqual(range(1, 15))
+    expect(handle.getSnapshot().atEnd).toBe(true)
+    expect(inspect.violations()).toEqual([])
+  })
+
+  it("accepts a loadBefore called from a subscriber of the page commit", async () => {
+    const { core, fake, inspect } = setup({ limits: { windowPage: 5 } })
+    seed(fake, 1, 15)
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    handle.loadAfter()
+    await settle()
+    handle.loadAfter()
+    await settle()
+    // Вікно, що почалося посеред порядку (так його ставитиме `goTo`).
+    const s = subsetOf(core)
+    const w = s.window!
+    const last = w.pages.at(-1)!
+    s.window = { ...w, pages: [last], atStart: false }
+    s.layout = [...last.keys]
+    s.layoutSet = new Set(s.layout)
+    s.dirty = true
+    expect(keysIn(handle.getSnapshot())).toEqual(range(11, 15))
+    handle.subscribe(() => {
+      if (!handle.getSnapshot().atStart) handle.loadBefore()
+    })
+    handle.loadBefore()
+    await settle()
+    expect(keysIn(handle.getSnapshot())).toEqual(range(1, 15))
+    expect(handle.getSnapshot().atStart).toBe(true)
+    expect(inspect.violations()).toEqual([])
+  })
+
   it("keeps the server order of a sorted window across pages", async () => {
     const { core, fake } = setup()
     for (let n = 1; n <= 250; n++)
