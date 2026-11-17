@@ -6,8 +6,8 @@ import { shareSnapshot } from "../snapshot"
 import { createCoreSource, createReadLimiter } from "../source"
 import { createCore, inspectCore } from "../core"
 import { createFakeSource } from "../testing/fake-source"
-import type { ViewSnapshot, ViewSpec } from "../types"
-import { WINDOW_PAGE, reversedOrder } from "../window"
+import { DEFAULT_CORE_LIMITS, type ViewSnapshot, type ViewSpec } from "../types"
+import { reversedOrder } from "../window"
 import {
   OBJECTS,
   TASK,
@@ -21,6 +21,9 @@ import {
   taskValues,
   watch,
 } from "./core-support"
+
+// Розмір сторінки — типове `limits.windowPage`: одне джерело.
+const WINDOW_PAGE = DEFAULT_CORE_LIMITS.windowPage
 
 beforeEach(() => {
   vi.useFakeTimers()
