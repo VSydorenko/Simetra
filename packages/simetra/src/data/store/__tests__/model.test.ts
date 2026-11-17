@@ -465,6 +465,7 @@ async function runModel(
       ? id(object, k)
       : `${id(object, k)}\u0000${String(e.versionEpoch)}`
   }
+  let convergeStart = 0
   let closed:
     { frames: number; sent: number; snapshot: ViewSnapshot } | undefined
 
@@ -1435,6 +1436,9 @@ async function runModel(
     await flush()
     fake.setVisibleScopes(undefined)
     visibility = undefined
+    // Читання збіжності стартують не раніше цієї епохи: надгробок новіший за
+    // неї міг стати між стартом читання й записом.
+    convergeStart = inspect.epoch()
     for (let v = 0; v < SPECS.length; v++) {
       if (subs[v] !== undefined) handles[v]!.refresh()
     }
@@ -1496,7 +1500,6 @@ async function runModel(
         if (shown === undefined || shown.state === "removed")
           fail(where, `${spec.object}/${k}: on the server, view shows none`)
       }
-      const evicted = inspect.serviceSizes().horizon > 0
       if (spec.kind === "window") {
         // Після `refresh` вікно — перша сторінка серверного порядку.
         const entry = fake.index.byRef.get(TASK)!
@@ -1515,13 +1518,13 @@ async function runModel(
           .map((values) => values.ref as Key)
         const shown = snap.rows.map((r) => r.key)
         // Рядок, який читання не змогло покласти в сховище, бракує лише через
-        // надгробок ключа (чи піднятий горизонт, що витіснив надгробок): решта
+        // надгробок ключа, новіший за старт читання: решта
         // першої сторінки сервера мусить бути показана, у порядку сервера.
         const at = shown.map((k) => expected.indexOf(k))
         if (at.some((x, n) => x < 0 || (n > 0 && x <= at[n - 1]!)))
           fail(where, `window ${shown.join()} ⊄ server ${expected.join()}`)
         for (const k of expected) {
-          if (!shown.includes(k) && !evicted && !inspect.buried(TASK, k))
+          if (!shown.includes(k) && !inspect.buried(TASK, k, convergeStart))
             fail(
               where,
               `window ${shown.join()} lacks ${k} of ${expected.join()}`
@@ -1545,7 +1548,7 @@ async function runModel(
         // його ключа (інший вигляд звільнив слот пізніше початку читання),
         // у складі може бракувати: це правило сховища, не втрата.
         const lost = expected.filter(
-          (k) => !shown.includes(k) && (evicted || inspect.buried(TASK, k))
+          (k) => !shown.includes(k) && inspect.buried(TASK, k, convergeStart)
         )
         const rest = expected.filter((k) => !lost.includes(k))
         if ([...shown].sort().join() !== [...rest].sort().join())
