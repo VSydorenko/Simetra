@@ -44,7 +44,10 @@ export interface UseRowResult {
   readonly error?: CommandError | DataError
   readonly reason?: CloseReason | "access-changed"
   readonly needsRefresh: boolean
-  /** Always `false` in the thin slice (see `UseRowsResult.isStale`). */
+  /**
+   * The shown header is in the `stale` state (see `UseRowsResult.isStale`);
+   * per-field staleness is `row.staleFields`.
+   */
   readonly isStale: boolean
 }
 
@@ -115,7 +118,7 @@ export function useRow(input: UseRowInput): UseRowResult {
       ...(failed?.error === undefined ? {} : { error: failed.error }),
       ...(closed?.reason === undefined ? {} : { reason: closed.reason }),
       needsRefresh,
-      isStale: false,
+      isStale: live?.state === "stale",
     }
   }, [snapshots])
 }

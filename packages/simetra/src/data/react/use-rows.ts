@@ -33,8 +33,9 @@ export interface UseRowsResult {
   readonly hasNewRows: boolean
   readonly needsRefresh: boolean
   /**
-   * The object is incompatible with the build (P4-B spec §10): no check yet in
-   * the thin slice, so always `false`.
+   * Some shown row is in the `stale` state (P4-B spec §6.5: a version-epoch
+   * switch, a gap mark, `markStale`, or hidden values) until a re-read of it
+   * lands. A row-level fact: per-field staleness is `RowView.staleFields`.
    */
   readonly isStale: boolean
   /** Window only: changes with every new composition; a list host remounts by it. */
@@ -56,7 +57,7 @@ function toResult(
 ): UseRowsResult {
   return {
     ...snapshot,
-    isStale: false,
+    isStale: snapshot.rows.some((r) => r.state === "stale"),
     setVisibleRange: handle ? (r) => handle.setVisibleRange(r) : noop,
     loadBefore: handle ? () => handle.loadBefore() : noop,
     loadAfter: handle ? () => handle.loadAfter() : noop,

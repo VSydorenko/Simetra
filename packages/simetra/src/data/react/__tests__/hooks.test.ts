@@ -33,6 +33,7 @@ const runtimes: DataRuntime[] = []
 function makeRuntime(
   options: {
     residency?: Record<string, "full" | "window">
+    limits?: { revalidateIntervalMs: number }
     objects?: typeof OBJECTS
   } = {}
 ) {
@@ -349,6 +350,73 @@ describe("useRows", () => {
     await flush()
     expect(view.last().chain).not.toBe(chain)
     expect(rowsOf(view.last())).toEqual(["t1", "t2", "t3"])
+  })
+})
+
+describe("isStale", () => {
+  const EA = "a".repeat(64)
+  const EB = "b".repeat(64)
+
+  it("follows markStale until the re-read lands, in useRow and useRows", async () => {
+    const { fake, runtime, core } = makeRuntime()
+    seed(fake, 1, 2)
+    const holder = createRuntimeHolder(runtime)
+    const list = mount(holder, () => useRows({ object: TASK }))
+    const card = mount(holder, () => useRow({ object: TASK, id: key(1) }))
+    await flush()
+    expect(list.last().isStale).toBe(false)
+    expect(card.last().isStale).toBe(false)
+    const shown = card.last().row
+    const version = shown?.state === "removed" ? 0 : shown!.version
+    act(() => {
+      core.commit((w) => w.markStale(TASK, [key(1)], version + 1), core.token())
+    })
+    expect(list.last().isStale).toBe(true)
+    expect(card.last().isStale).toBe(true)
+    fake.edit(TASK, key(1), { title: "newer" })
+    const fresh = {
+      ...fake.row(TASK, key(1))!,
+      values: { ...fake.row(TASK, key(1))!.values, notes: "body 1" },
+    }
+    act(() => {
+      core.commit(
+        (w) =>
+          w.apply(TASK, { rows: [fresh], absent: [] }, core.readEpoch(), null),
+        core.token()
+      )
+    })
+    expect(list.last().isStale).toBe(false)
+    expect(card.last().isStale).toBe(false)
+  })
+
+  it("follows a version-epoch switch until the re-read lands", async () => {
+    const { fake, runtime, core } = makeRuntime({
+      limits: { revalidateIntervalMs: 1 },
+    })
+    fake.epoch = EA
+    seed(fake, 1, 2)
+    const holder = createRuntimeHolder(runtime)
+    const list = mount(holder, () => useRows({ object: TASK }))
+    const card = mount(holder, () => useRow({ object: TASK, id: key(1) }))
+    await flush()
+    expect(list.last().isStale).toBe(false)
+    expect(card.last().isStale).toBe(false)
+    // Читання вже з іншою епохою: ядро перемикає епоху й позначає рядки
+    // `stale` до власного перечитування (таймер — до 1 мс, не в мікрозадачах).
+    fake.epoch = EB
+    fake.insert(TASK, taskValues(3))
+    act(() => {
+      void core.preload({ kind: "card", object: TASK, key: key(3) })
+    })
+    await flush()
+    expect(list.last().isStale).toBe(true)
+    expect(card.last().isStale).toBe(true)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+      await settle()
+    })
+    expect(list.last().isStale).toBe(false)
+    expect(card.last().isStale).toBe(false)
   })
 })
 
