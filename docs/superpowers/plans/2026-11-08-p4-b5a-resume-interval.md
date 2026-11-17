@@ -1,5 +1,7 @@
 # П4-B5a. Тригери `resume()` та інтервалу — план імплементації
 
+> тонкий М3 — [`2026-11-17-p4-b3-6a-resume-thin.md`](2026-11-17-p4-b3-6a-resume-thin.md); решта → #209.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Мета:** рантайм T4 сам підтримує свіжість видимих виглядів без каналу
