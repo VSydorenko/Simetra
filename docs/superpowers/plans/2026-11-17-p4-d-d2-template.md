@@ -5,8 +5,9 @@
 > порядок, глобальні обмеження, рішення Д-1…Д-12, інтерфейси з T4 — діє й
 > тут. Перед стартом — `orient --plan` цього файла.
 > **Старт:** після ПГ-3 (#126) у `main`; паралельно з T4 (код T4 D2 не
-> потребує). **Лише CI:** рівні `unit`, `db` повністю, пакування, рівень
-> `e2e`; локально — `run-tests … --filter` і один прогін `e2e` наприкінці.
+> потребує). **Лише CI:** рівні `unit`, `db` повністю, пакування; рівень
+> `e2e`, `test:build` і DB-тести шаблону — job `host-template`, який створює
+> задача 12; локально — `run-tests … --filter` і один прогін `e2e` наприкінці.
 > **Спільний ресурс:** стек `postgres` — один на машину; стартує лише
 > `pnpm db:pg:start` з основного checkout, не зупиняти його за іншими
 > сесіями.
@@ -56,7 +57,8 @@
 Файли: `packages/create-simetra-app/package.json` (`create-simetra-app`,
 `private`, скрипти `test:build` і `e2e`, без скрипта `test`, щоб кореневий
 `pnpm test` не збирав і не брав стек); `template/package.json`
-(`create-simetra-app-template`, `private`; `better-auth` точним піном `1.7.12`
+(`create-simetra-app-template`, `private`; скрипт `test` — лише unit без бази
+й збірки, тож його бере кореневий `pnpm test` у job `checks`; `test:db` — DB-проєкт; `better-auth` точним піном `1.7.12`
 у групі syncpack з тест-залежністю ПГ-2a; поле `imports` для `#instrument`);
 `template/{vite.config.ts,tsconfig.json,vitest.config.ts,simetra.config.ts}`
 (vitest-проєкти `unit` і `db`; `db` бере той самий `globalSetup`
@@ -67,8 +69,9 @@
 `template/src/objects.ts`; `pnpm-workspace.yaml` (глоб `template`,
 override за Д2-3); `.prettierignore` (`generated/`, `routeTree.gen.ts`);
 межа фреймворку в `packages/simetra/eslint.tier-zones.js` і
-`tier-boundary.test.ts`; `.agents/kit.profile.json` (Д-10: пакет `template`;
-рівень `e2e` додає задача 12). `src/objects.ts` з дескрипторами `simetraApp`
+`tier-boundary.test.ts`; `.agents/kit.profile.json` (Д-10: пакет `template` у
+`tests.packages` і в `levels.unit.packages`, `levels.db.packages`; рівень `e2e`
+додає задача 12). `src/objects.ts` з дескрипторами `simetraApp`
 лягає в D3 (T6 дає D1).
 
 Готово: `pnpm -r ls --depth -1` бачить обидва пакети; `run-tests unit
@@ -129,7 +132,9 @@ unit B1b-2, через публічний вхід. `run-tests unit --filter ori
 у межах — тіло без змін; `Content-Encoding: gzip` — відмова; `GET`/`HEAD` —
 без перевірки; шлях не впливає; пряме підключення — адреса сокета; проксі —
 значення його заголовка; підроблений клієнтом `x-simetra-client-ip` не
-доходить до Better Auth за обох джерел. `run-tests unit --filter body-limit`,
+доходить до Better Auth за обох джерел; HTML і неасетні відповіді несуть
+заголовки кешу й безпеки §4.4, відповідь `sign-out` — `Clear-Site-Data:
+"cache"` (мутація «entry не шле `Clear-Site-Data`» червонить кейс). `run-tests unit --filter body-limit`,
 `run-tests unit --filter server-entry`.
 
 ### Задача 11 — скрипти бази, `dev-user`, лінт споживача
@@ -140,7 +145,8 @@ unit B1b-2, через публічний вхід. `run-tests unit --filter ori
 на тому самому `Pool`, що й екземпляр Better Auth з реєстрацією; пароль —
 `crypto.randomBytes`, друкується один раз; повторний запуск — новий пароль
 через внутрішній адаптер за піном ПГ-2a; маркер `simetra-dev-user-script` для
-тесту складу). Лінт — правила П4-D §4.7, кожне з негативним тестом.
+тесту складу — рядкова стала, яку скрипт використовує, а не коментар, щоб
+мініфікація її не прибрала). Лінт — правила П4-D §4.7, кожне з негативним тестом.
 
 Готово: `dev-user.db.test.ts` (тегована база) — відмова без ознаки рівня
 бази, з `options=-c simetra.environment=development` у DSN, з не-loopback
@@ -155,7 +161,11 @@ unit B1b-2, через публічний вхід. `run-tests unit --filter ori
 з таблиці `{ browser, build }` з одним рядком `chromium` × `production` — шов
 #210; `fixtures.ts` за Д2-2, збірку бере з проєкту; `security.spec.ts`; `build-content.build.test.ts`;
 `tarball-build.build.test.ts`); `.agents/kit.profile.json` — рівень `e2e`
-(Д-10).
+(Д-10); `.github/workflows/ci.yml` — job `host-template` за Д-11
+(`strategy.matrix` з однією ногою — шов #210): `pnpm db:pg:start`,
+`pnpm build:packages`, `test:db` шаблону, `test:build`, рівень `e2e`, браузер
+Chromium точного піна Playwright з системними залежностями; червоне на
+`skipped`, `flaky` чи нуль тестів (крок над JSON-звітом Playwright).
 
 Готово:
 - `security.spec.ts` на production-збірці — рядки D2 таблиці П4-D §8.3,
@@ -168,7 +178,9 @@ unit B1b-2, через публічний вхід. `run-tests unit --filter ori
   сентинел у `src/` червонить тест;
 - `tarball-build`: після `pnpm build:packages` копія `template/` у
   тимчасовій теці з `simetra` з tarball-а збирається на `node-server` (Д-6);
-- після прогону на стеку немає об'єктів тегу.
+- після прогону на стеку немає об'єктів тегу;
+- job `host-template` зелений на draft PR; негативний контроль — навмисний
+  `test.skip` червонить job (прибрати до мерджу); час job — у П4-D §8.4.
 
 Команди: `run-tests e2e --filter security` (локально один раз наприкінці);
 `test:build` — у CI рівня `e2e`.
