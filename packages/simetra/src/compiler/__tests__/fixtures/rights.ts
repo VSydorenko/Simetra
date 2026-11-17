@@ -1832,12 +1832,15 @@ export function noteOwnCreator(): Record<string, Record<string, unknown>> {
 
 export const CLIENT_TABLE = "client"
 export const CLIENT_OWNER_ID = uuid(7602)
+export const CLIENT_USERS_READER_ID = uuid(7603)
 
 /**
  * Довідник `Client` з носієм власності `owner` — посиланням на
  * «Користувачів» (не авторство) — і глобальна роль `ClientOwner`: `read`,
  * `create`, `update` `@own`, без права на «Користувачів». Форма шаблону
  * застосунку (#235): власник рядка — реквізит змісту, який задає вхід.
+ * `ClientUsersReader` — ті самі права плюс `read@any` на «Користувачах»:
+ * чужий власник йому видимий, тож відмова — право, а не посилання.
  * Перевизначення для `singleTenantRights`.
  */
 export function clientOwner(): Record<string, Record<string, unknown>> {
@@ -1863,6 +1866,21 @@ export function clientOwner(): Record<string, Record<string, unknown>> {
         ),
       ],
     }),
+    [ROLE_FILE("ClientUsersReader")]: role(
+      CLIENT_USERS_READER_ID,
+      "ClientUsersReader",
+      "global",
+      {
+        grants: [
+          grant(
+            objects(["Catalog", "Client"]),
+            ["read", "create", "update"],
+            "own"
+          ),
+          grant(objects(["Catalog", "Users"]), ["read"], "any"),
+        ],
+      }
+    ),
   }
 }
 

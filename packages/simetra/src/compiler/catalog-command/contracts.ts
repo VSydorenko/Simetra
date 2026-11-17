@@ -27,6 +27,7 @@ import {
 } from "../contracts"
 import { compareStrings } from "../diagnostics"
 import { carrierLinks, type CarrierLink } from "../rights/carrier-units"
+import { isUsers } from "../rights/facts"
 import { generatedTableFunctionName } from "../rights/generated-names"
 import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
@@ -134,6 +135,11 @@ export type CommandReference =
       array: boolean
       /** Свідомо між тенантами: ядро не звіряє скоуп цілі. */
       crossScope?: true
+      /**
+       * Ціль — довідник «Користувачі» (роль реєстру `users`): значення, що
+       * дорівнює `current_user_id()`, видиме без права на них (спека П4 §6.6).
+       */
+      users?: true
     }
   | {
       form: "pair"
@@ -508,7 +514,11 @@ function referenceResolver(
     const found = resolve(ref)
     return found === undefined
       ? undefined
-      : { target: found.table, targetKey: found.key }
+      : {
+          target: found.table,
+          targetKey: found.key,
+          ...(isUsers(found.object) ? { users: true as const } : {}),
+        }
   }
   const pair = (refs: readonly MetadataRef[]) =>
     refs.flatMap((ref) => {

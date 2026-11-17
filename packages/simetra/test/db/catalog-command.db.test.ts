@@ -1,3 +1,4 @@
+import type pg from "pg"
 import { randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
@@ -10,6 +11,7 @@ import {
   NOTE_OWN_CREATOR_ID,
   NOTE_WRITER_ID,
   CLIENT_OWNER_ID,
+  CLIENT_USERS_READER_ID,
   clientOwner,
   TICKET_CHECKLIST_TABLE,
   TICKET_TABLE,
@@ -25,7 +27,13 @@ import {
   writeRoles,
 } from "../../src/compiler/__tests__/fixtures/rights"
 import { signUp } from "./auth"
-import { type Refusal, commandAs, queryAs, claimsFor } from "./connection"
+import {
+  type Refusal,
+  commandAs,
+  commandSteps,
+  queryAs,
+  claimsFor,
+} from "./connection"
 import {
   deploy,
   type Seed,
@@ -1021,8 +1029,10 @@ describe("catalog command core: unscoped Note", () => {
 })
 
 /**
- * Обсяг `own` за реквізитом змісту `owner` на «Користувачів» (#235): роль
- * `ClientOwner` без права на «Користувачів» створює рядок, носій — вона сама.
+ * Обсяг `own` за реквізитом змісту `owner` на «Користувачів» (#235): посилання
+ * на себе видиме без права на «Користувачів» (спека П4 §6.6), решта перевірок
+ * — як були. A — `ClientOwner`, R — `ClientUsersReader` (бачить «Користувачів»),
+ * N — без ролей.
  */
 describe("catalog command core: own carrier on Users", () => {
   const tx = describeTransaction()
@@ -1036,12 +1046,15 @@ describe("catalog command core: own carrier on Users", () => {
     const client = await tx.open()
     await deploy(client, result.model!)
     ids = {}
-    for (const user of ["A", "B", "N"]) ids[user] = await signUp(client)
-    for (const user of ["A", "B"])
+    for (const user of ["A", "R", "N"]) ids[user] = await signUp(client)
+    for (const [user, archetype] of [
+      ["A", CLIENT_OWNER_ID],
+      ["R", CLIENT_USERS_READER_ID],
+    ] as const)
       await insert(
         client,
         "global_role_assignments",
-        assignmentRow(ids[user]!, { archetype: CLIENT_OWNER_ID })
+        assignmentRow(ids[user]!, { archetype })
       )
   }, 120_000)
 
@@ -1052,22 +1065,93 @@ describe("catalog command core: own carrier on Users", () => {
     if (id === undefined) throw new Error(`unknown seed key ${name}`)
     return id
   }
-  const create = async (user: string, item: Record<string, unknown>) =>
+  const create = async (user: string | null, item: Record<string, unknown>) =>
     outcomeOf(
       await commandAs<{ r: string }>(
         tx.client(),
-        claimsFor("user", key(user)),
+        user === null ? claimsFor("anonymous") : claimsFor("user", key(user)),
         { action: "create", object: "client", root: item.id as string },
         "SELECT public.client_save($1::jsonb, NULL::bigint) AS r",
         { params: [JSON.stringify(item)] }
       )
     )
 
-  it("own create: the carrier is the creator", async () => {
-    const item = { id: randomUUID(), owner_id: key("A") }
-    expect(await create("A", item)).toMatchObject({
-      id: item.id,
-      owner_id: key("A"),
+  const read =
+    (sql: string, params: unknown[], user?: string) =>
+    async (client: pg.Client) =>
+      user === undefined
+        ? (await client.query(sql, params)).rows
+        : queryAs(client, "user", claimsFor("user", key(user)), sql, params)
+
+  // Запис і читання — в одній точці збереження: `commandAs` відкочує свою
+  it("own create: the stored carrier is the creator; RLS shows it only to them", async () => {
+    const id = randomUUID()
+    const select = "SELECT id, owner_id FROM public.client WHERE id = $1"
+    const { completed, refusal } = await commandSteps(
+      tx.client(),
+      claimsFor("user", key("A")),
+      [
+        {
+          context: { action: "create", object: "client", root: id },
+          sql: "SELECT public.client_save($1::jsonb, NULL::bigint) AS r",
+          params: [JSON.stringify({ id, owner_id: key("A") })],
+        },
+        { check: read(select, [id]) },
+        { check: read(select, [id], "A") },
+        { check: read(select, [id], "R") },
+      ]
+    )
+    expect(refusal).toBeUndefined()
+    const row = { id, owner_id: key("A") }
+    expect(completed.slice(1)).toEqual([[row], { rows: [row] }, { rows: [] }])
+  })
+
+  // Без права на «Користувачів» чужий рядок невидимий — та сама відмова, що й
+  // для відсутньої цілі (спека П4 §6.6)
+  it.each([
+    ["foreign user", () => key("R")],
+    ["absent user", () => randomUUID()],
+  ])("own create with a %s as the carrier is invalid", async (_, owner) => {
+    const id = randomUUID()
+    expect(await create("A", { id, owner_id: owner() })).toEqual(
+      INVALID("owner_id")
+    )
+  })
+
+  it("own create without the carrier is no-right", async () => {
+    const id = randomUUID()
+    expect(await create("A", { id })).toEqual(NO_RIGHT)
+  })
+
+  // Право на «Користувачів» нічого не змінює: свій — успіх, чужий видимий —
+  // відмова права, а не посилання
+  it("a role with read on Users: own carrier passes, foreign is no-right", async () => {
+    const mine = randomUUID()
+    expect(await create("R", { id: mine, owner_id: key("R") })).toMatchObject({
+      id: mine,
+      owner_id: key("R"),
     })
+    const foreign = randomUUID()
+    expect(await create("R", { id: foreign, owner_id: key("A") })).toEqual(
+      NO_RIGHT
+    )
+  })
+
+  it("no role: create with self as the carrier is no-right", async () => {
+    const id = randomUUID()
+    expect(await create("N", { id, owner_id: key("N") })).toEqual(NO_RIGHT)
+  })
+
+  // В аноніма `current_user_id()` — `NULL`: виняток «на себе» не діє ні для
+  // якого id, і порожній носій — відмова права
+  it.each([
+    ["a user id", () => key("A"), INVALID("owner_id")],
+    ["no carrier", () => undefined, NO_RIGHT],
+  ])("anonymous create with %s is refused", async (_, owner, refusal) => {
+    const id = randomUUID()
+    const value = owner()
+    expect(
+      await create(null, value === undefined ? { id } : { id, owner_id: value })
+    ).toEqual(refusal)
   })
 })
