@@ -1,16 +1,17 @@
 {
   "versionGroups": [
     {
-      "label": "peer і dev одного пакета мають перетинатися (RC-pin у peer, точна версія в dev)",
-      "packages": ["simetra"],
-      "dependencies": ["react"],
-      "policy": "sameRange"
-    },
-    {
       "label": "react-dom — версія react (dev-пін react у simetra)",
       "packages": ["simetra"],
       "dependencies": ["react-dom"],
+      "dependencyTypes": ["dev"],
       "pinVersion": "19.3.1"
+    },
+    {
+      "label": "peer і dev одного пакета мають перетинатися (RC-pin у peer, точна версія в dev)",
+      "packages": ["simetra"],
+      "dependencies": ["react", "react-dom", "@tanstack/react-virtual"],
+      "policy": "sameRange"
     },
     {
       "label": "@types/react і @types/react-dom — одна версія",

@@ -105,6 +105,7 @@ describe("simetra", () => {
       "./schema",
       "./schemas/*",
       "./server",
+      "./ui",
     ])
     expect(manifest.private).toBeUndefined()
     expect(JSON.stringify(manifest)).not.toContain("workspace:")
@@ -123,6 +124,8 @@ describe("simetra", () => {
       "dist/schema/index.js",
       "dist/server/index.js",
       "dist/server/index.d.ts",
+      "dist/ui/index.js",
+      "dist/ui/index.d.ts",
       "schemas/catalogs.schema.json",
       "LICENSE",
       "README.md",
@@ -145,21 +148,25 @@ describe("simetra", () => {
     expect(
       js.filter(
         (f) =>
-          !/^dist\/(model|compiler|data|schema|server)\//.test(f) &&
+          !/^dist\/(model|compiler|data|schema|server|ui)\//.test(f) &&
           !/^dist\/handle-[^/]+\.js$/.test(f)
       )
     ).toEqual([])
   })
 
-  it("declares react as the only, optional peer", async () => {
+  it("declares react, react-dom and react-virtual as the only peers, both optional", async () => {
     const m = await readPackedManifest(tarballs.simetra)
-    expect(m.peerDependencies).toEqual({ react: "^19.3.1" })
-    // Серверний споживач peer не ставить
+    expect(m.peerDependencies).toEqual({
+      "@tanstack/react-virtual": "^3.14.26",
+      react: "^19.3.1",
+      "react-dom": "^19.3.1",
+    })
+    // Серверний споживач peer-ів не ставить
     expect(
       Object.values(
         m.peerDependenciesMeta as Record<string, { optional?: boolean }>
       ).map((v) => v.optional)
-    ).toEqual([true])
+    ).toEqual([true, true, true])
     expect(Object.keys(m.peerDependenciesMeta as object).sort()).toEqual(
       Object.keys(m.peerDependencies as object).sort()
     )
@@ -361,6 +368,19 @@ describe("simetra/data", () => {
     expect(specifiers).toContain("simetra/model")
     expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
   })
+
+  it("the ui entry imports only its peers and the hooks entry", async () => {
+    const m = await readPackedManifest(tarballs.simetra)
+    const allowed = new Set([
+      ...Object.keys(m.peerDependencies as object),
+      "simetra/data/react",
+    ])
+    const specifiers = [
+      ...(await packedSources(tarballs.simetra, "dist/ui/", ".js")).values(),
+    ].flatMap(bareSpecifiers)
+    expect(specifiers).toContain("@tanstack/react-virtual")
+    expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
+  })
 })
 
 // Better Auth і kysely — тестова залежність `simetra`: жоден
@@ -445,6 +465,19 @@ describe("simetra/data in a pnpm host", () => {
       { cwd: consumer }
     )
     expect(stdout.trim()).toBe("function,function,function,function")
+  })
+
+  it("imports simetra/ui in plain Node with the peers", async () => {
+    const { stdout } = await exec(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        'const u = await import("simetra/ui"); console.log(typeof u.VirtualList)',
+      ],
+      { cwd: consumer }
+    )
+    expect(stdout.trim()).toBe("function")
   })
 
   it("bundles one copy of each module-state library", async () => {

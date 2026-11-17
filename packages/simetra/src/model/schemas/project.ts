@@ -169,19 +169,29 @@ export const PROVIDER_API_ROLES: Readonly<
 }
 
 /**
- * Provider login roles that can run untrusted API requests. Rights maintenance
- * mode is never enabled for them, even when one owns the rights functions:
- * provider services work under these shared logins.
+ * Login roles of the provider other than its owner role: rights maintenance
+ * mode is never enabled for them, even when one owns the rights functions,
+ * and plan and apply refuse to run under them. Every session of Auth,
+ * Storage and Realtime connects as one of them (Realtime as
+ * `supabase_admin`); PostgREST connects as `authenticator`. The pooler
+ * (Supavisor) and the migrator share the owner role `postgres`, which is not
+ * listed (postgres profile spec §3.3). The list is exhaustive for the pinned
+ * image: a test fails on any other LOGIN role of the stack that is neither
+ * listed nor excluded with a reason.
  */
 export const PROVIDER_LOGIN_ROLES: Readonly<
   Record<DatabaseProvider, readonly string[]>
 > = {
   supabase: [
     "authenticator",
-    "supabase_auth_admin",
-    "supabase_storage_admin",
-    "supabase_realtime_admin",
+    "pgbouncer",
     "supabase_admin",
+    "supabase_auth_admin",
+    "supabase_etl_admin",
+    "supabase_functions_admin",
+    "supabase_read_only_user",
+    "supabase_replication_admin",
+    "supabase_storage_admin",
   ],
   postgres: ["simetra_auth"],
 }

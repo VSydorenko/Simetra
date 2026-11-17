@@ -612,7 +612,9 @@ export const applyTool = defineTool({
         // Роль без BYPASSRLS — відмова до платформних ролей і до створення тіні
         const ownerGate = await (
           await applyDatabase({ readOnly: true })
-        ).transaction(db.target, "rollback", checkOwnerAttributes)
+        ).transaction(db.target, "rollback", (tx) =>
+          checkOwnerAttributes(tx, artifact.scope.provider)
+        )
         if (ownerGate !== undefined) return { rolesRefused: [ownerGate] }
         // Платформні ролі — до тіні, як у плані (спека designer §3.2)
         const roles = await checkPlatformRoles(
