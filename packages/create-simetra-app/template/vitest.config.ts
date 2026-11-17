@@ -3,9 +3,6 @@ import { defineConfig } from "vitest/config"
 export default defineConfig({
   test: {
     globals: true,
-    // DB-тестів шаблону поки немає (з'являються в задачах 9–12): порожній
-    // проєкт `db` не червонить рівень
-    passWithNoTests: true,
     projects: [
       {
         extends: true,

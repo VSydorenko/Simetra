@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const verifySession = vi.hoisted(() => vi.fn())
+const rpcCall = vi.hoisted(() => vi.fn(() => "rpc"))
 
 const captured = vi.hoisted(() => ({
   handler: undefined as undefined | (() => unknown),
@@ -35,7 +36,7 @@ vi.mock("@tanstack/react-start", () => {
     createServerFn: () => ({
       handler: (fn: () => unknown) => {
         captured.handler = fn
-        return () => "rpc"
+        return () => rpcCall()
       },
     }),
     createIsomorphicFn: () => isomorphic,
@@ -161,6 +162,16 @@ describe("session function in process (SSR branch)", () => {
       headers: { "sec-fetch-site": "cross-site" },
     })
     expect(await captured.server!()).toEqual(USER)
-    expect(captured.client!()).toBe("rpc")
+    expect(await captured.client!()).toBe("rpc")
+  })
+
+  it("the client branch maps a bare Start 403 to null", async () => {
+    rpcCall.mockRejectedValueOnce(new Error("Forbidden"))
+    expect(await captured.client!()).toBeNull()
+  })
+
+  it("the client branch rethrows any other error", async () => {
+    rpcCall.mockRejectedValueOnce(new Error("db.internal"))
+    await expect(captured.client!()).rejects.toThrow("db.internal")
   })
 })

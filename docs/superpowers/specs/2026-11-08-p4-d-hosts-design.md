@@ -566,7 +566,7 @@ DOM і журнал Server Function з точним результатом). З�
 | конверт зі `subject` іншого користувача | D2 | `command.unauthenticated` `session-changed` |
 | `get-session` і HTML | D2 | `Cache-Control: no-store`; HTML — `private, no-store` і `Vary: Cookie` |
 | кожен id серверної функції з маніфесту production-збірки: `POST` з сесією і дійсним конвертом `read` суб'єкта сесії в протоколі серіалізації Start, двічі — з `Sec-Fetch-Site: cross-site` і того самого походження | D3 | міжсайтово жодна відповідь не несе значень рядків, `dataFn` теж; того самого походження рядки віддає лише `dataFn` |
-| Server Function сесії з `Sec-Fetch-Site: cross-site` | D2 | `null`; `getSession` не викликано |
+| Server Function сесії з `Sec-Fetch-Site: cross-site` | D2 | `403` від Start або `null`; `getSession` не викликано |
 | SSR сесії A, потім вхід B у тій самій вкладці без виходу | D3 | жодного значення власних рядків A в DOM після заміни рантайму; запити даних несуть `subject` B |
 | SSR списку `Client` для A і B послідовно (A, B, A) і паралельно | D3 | HTML і знімок кожного — лише власні рядки й власний `subject`; жодного значення чи `sub` іншого |
 | запит без сесії на сторінку з даними | D3 | перенаправлення на вхід; знімка в HTML немає |

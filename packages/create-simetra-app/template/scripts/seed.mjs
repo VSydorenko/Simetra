@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto"
 import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
-import { assertDevelopmentDatabase } from "./dev-guard.mjs"
+import { assertDevelopmentDatabase, assertLoopback } from "./dev-guard.mjs"
 
 /** Рядки `Country` і `Client`; `code` — унікальний `varchar(9)`. */
 export async function seed(client, { count, owner }) {
@@ -55,6 +55,13 @@ if (invokedAsCommand()) {
   }
   if (dsn === undefined || dsn === "") {
     console.error("seed: SIMETRA_OWNER_DATABASE_URL is not set")
+    process.exit(1)
+  }
+  // Loopback до `connect()`: інакше пароль власника йде на чужий хост до відмови
+  try {
+    assertLoopback(dsn)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }
   const client = new pg.Client({ connectionString: dsn })

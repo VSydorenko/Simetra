@@ -86,14 +86,18 @@ describe("consumer lint", () => {
       'export const url = process.env["SIMETRA_RUNTIME_DATABASE_URL"]'
     const dotted = "export const url = process.env.SIMETRA_RUNTIME_DATABASE_URL"
     const name = "export const name = `SIMETRA_RUNTIME_DATABASE_URL`"
-    for (const code of [read, dotted, name])
+    const destructured =
+      "export const { SIMETRA_RUNTIME_DATABASE_URL: url } = process.env"
+    const destructuredLiteral =
+      'export const { "SIMETRA_RUNTIME_DATABASE_URL": url } = process.env'
+    for (const code of [read, dotted, name, destructured, destructuredLiteral])
       await expectRefused(
         "syntax",
         "src/server/auth.ts",
         code,
         "SIMETRA_RUNTIME_DATABASE_URL"
       )
-    for (const code of [read, dotted])
+    for (const code of [read, dotted, destructured])
       await expectAllowed("syntax", "src/server/runtime.ts", code)
   })
 

@@ -107,6 +107,8 @@ const CREATE_SERVER_FN = {
 const ENV_RUNTIME_URL = [
   // `process.env.SIMETRA_RUNTIME_DATABASE_URL` рядкового літерала не має
   "MemberExpression[property.name='SIMETRA_RUNTIME_DATABASE_URL']",
+  // Деструктуризація `const { SIMETRA_RUNTIME_DATABASE_URL: u } = process.env`
+  "Property[key.name='SIMETRA_RUNTIME_DATABASE_URL']",
   "Literal[value=/SIMETRA_RUNTIME_DATABASE_URL/]",
   "TemplateElement[value.raw=/SIMETRA_RUNTIME_DATABASE_URL/]",
 ].map((selector) => ({

@@ -4,6 +4,7 @@ import {
   type DataTransport,
 } from "simetra/model"
 import { dataFn } from "./server/data-fn"
+import { isStartRefusal } from "./start-refusal"
 
 /**
  * Перший шар походження — CSRF-фільтр Start: запит без `Sec-Fetch-Site:
@@ -20,7 +21,7 @@ export function withStartRefusal(
     try {
       return await call(request)
     } catch (error) {
-      if (error instanceof Error && error.message === "Forbidden") {
+      if (isStartRefusal(error)) {
         return {
           ok: false,
           error: { code: "command.forbidden", reason: LIMIT_REASONS.origin },

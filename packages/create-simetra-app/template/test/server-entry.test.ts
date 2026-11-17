@@ -73,7 +73,8 @@ describe("client address", () => {
   it("proxy source without the proxy header drops the forged value", async () => {
     vi.stubEnv("SIMETRA_CLIENT_IP_SOURCE", "x-real-ip")
     const { fetch, seen } = entry()
-    await fetch(get({ "x-simetra-client-ip": "6.6.6.6" }))
+    // Є адреса сокета: у режимі проксі її не можна брати як запасну
+    await fetch(socketRequest({ "x-simetra-client-ip": "6.6.6.6" }, "10.0.0.7"))
     expect(seen[0]!.headers.get("x-simetra-client-ip")).toBeNull()
   })
 })

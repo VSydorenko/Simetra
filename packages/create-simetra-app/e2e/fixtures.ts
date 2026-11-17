@@ -25,8 +25,6 @@ import { promisify } from "node:util"
 import pg from "pg"
 import {
   PLATFORM_LOGIN_ROLES,
-  PLATFORM_ROLES,
-  PROVIDER_API_ROLES,
   PROVIDER_IDENTITY_SOURCES,
   PROVIDER_LOGIN_ROLES,
   PROVIDER_OWNER_ROLES,
@@ -285,15 +283,6 @@ async function prepareDatabase(
   })
   // Файл плану лежить у `template/plans` (git-ignored): прогін його не лишає
   if (applied !== undefined) rmSync(resolve(TEMPLATE, applied), { force: true })
-  // Схема об'єктів `app` (`defaultSchema` шаблону) не дістає `USAGE` ролям
-  // рантайму ні від `apply`, ні від `roles`: без нього читання дає `permission
-  // denied for schema app`. Тимчасово: грант генерує платформа з #172 (PR #225);
-  // після його злиття цей рядок видаляється, і e2e мусить пройти без нього
-  await withClient(dsns.SIMETRA_SUPERUSER_DATABASE_URL!, (client) =>
-    client.query(
-      `GRANT USAGE ON SCHEMA app TO "${PLATFORM_ROLES.command}", "${PROVIDER_API_ROLES.postgres.user}"`
-    )
-  )
 }
 
 async function bringUp(
