@@ -6,7 +6,7 @@ import {
   type ApplyDatabase,
   type PostgresClusterSet,
 } from "simetra/schema"
-import { afterAll, describe, expect, it } from "vitest"
+import { afterAll, describe, expect, it, onTestFinished } from "vitest"
 import {
   clusterRoleNames,
   dropTaggedCluster,
@@ -26,14 +26,20 @@ import { createApplyDatabase } from "../schema-engine"
  * §3.4, §3.5, §4.2). DB-рівень, бо атрибути ролей, власника баз, позначку
  * шаблону й дію `SET role` від власника на сесію суперкористувача вирішує
  * Postgres. Кожен сценарій має свій набір тегованих імен; усе, що він створив,
- * прибирає `dropTaggedCluster`.
+ * прибирає `dropTaggedCluster` одразу після свого тесту.
  */
-const created: { set: PostgresClusterSet; extra: string[] }[] = []
+const created = new Set<{ set: PostgresClusterSet; extra: string[] }>()
 
+async function drop(entry: { set: PostgresClusterSet; extra: string[] }) {
+  await dropTaggedCluster(entry.set, entry.extra)
+  created.delete(entry)
+}
+
+// Запасний шлях: набір, чиє прибирання після тесту впало, пробуємо ще раз
 afterAll(async () => {
   const failures: unknown[] = []
-  for (const { set, extra } of created)
-    await dropTaggedCluster(set, extra).catch((e: unknown) => failures.push(e))
+  for (const entry of created)
+    await drop(entry).catch((e: unknown) => failures.push(e))
   if (failures.length > 0) throw failures[0]
 })
 
@@ -46,7 +52,12 @@ function scenario(label: string) {
     set: taggedClusterSet(`${label}${(scenarios += 1)}`),
     extra: [] as string[],
   }
-  created.push(entry)
+  created.add(entry)
+  // Кожен `DROP DATABASE` просить контрольну точку і чекає на неї. Прибирання
+  // всіх сценаріїв в одному `afterAll` скидало брудні сторінки всього файлу й
+  // десятки точок поспіль під одним лімітом хука (#234). Після свого тесту набір
+  // скидає лише свої сторінки, і кожен хук має власний ліміт
+  onTestFinished(() => drop(entry))
   return entry
 }
 
