@@ -178,7 +178,8 @@ Chromium точного піна Playwright з системними залежн
 - `build-content`: збірка з сентинелами `SIMETRA_RUNTIME_DATABASE_URL`,
   `SIMETRA_AUTH_DATABASE_URL`, `BETTER_AUTH_SECRET` — жодного в
   `.output/public`; у `.output` немає маркера `simetra-dev-user-script`,
-  `simetra/server/testing`, `simetra/data/testing`; негативний контроль —
+  `simetra/server/testing`, `simetra/data/testing`, `countingTransport`,
+  `__oracle`; негативний контроль —
   сентинел у `src/` червонить тест;
 - `tarball-build`: після `pnpm build:packages` копія `template/` у
   тимчасовій теці з `simetra` з tarball-а збирається на `node-server` (Д-6);
