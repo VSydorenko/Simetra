@@ -11,12 +11,17 @@ import {
   type ExecFileException,
 } from "node:child_process"
 import { randomBytes, randomUUID } from "node:crypto"
-import { readFileSync, readdirSync, rmSync } from "node:fs"
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import net from "node:net"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { promisify } from "node:util"
-import { getMigrations } from "better-auth/db/migration"
 import pg from "pg"
 import {
   PLATFORM_LOGIN_ROLES,
@@ -26,8 +31,15 @@ import {
   PROVIDER_LOGIN_ROLES,
   PROVIDER_OWNER_ROLES,
   RIGHTS_MAINTENANCE_SETTING,
+  type SessionClaims,
 } from "simetra/model"
 import { PROVIDER_SHADOW_TEMPLATES } from "simetra/schema"
+import {
+  createCommandRuntime,
+  fromPgPool,
+  type CommandRuntime,
+} from "simetra/server"
+import runtimeCatalog from "../template/generated/runtime-catalog.json" with { type: "json" }
 import { identityGrantSql } from "../../simetra/src/schema/apply/postgres-cluster"
 import {
   runObjectPatterns,
@@ -36,10 +48,7 @@ import {
   testSuperuserUrl,
 } from "../../simetra/test/db/connection"
 import { LOGIN_SECRETS_FILE, devSecret } from "../../simetra/test/db/profile"
-import {
-  authSchemaOptions,
-  withAuthOptions,
-} from "../template/scripts/auth-options.mjs"
+import { runDbSetup } from "../template/scripts/db-setup-steps.mjs"
 import { cookieHeader, send } from "./http"
 
 const exec = promisify(execFile)
@@ -73,6 +82,8 @@ export interface App {
   /** Id Server Function за ім'ям експорту з маніфесту збірки. */
   functionId: (name: "dataFn" | "getSessionClaims") => string
   users: { a: TestUser; b: TestUser }
+  /** `CommandRuntime` користувача B з його claims: зовнішні зміни даних. */
+  runtimeB: { runtime: CommandRuntime; claims: SessionClaims }
   /** Адреса тегованої бази від суперкористувача (звірка стану у тестах). */
   adminUrl: string
   /** Запит від суперкористувача до тегованої бази. */
@@ -224,13 +235,13 @@ async function waitReady(port: number, server: ServerRun): Promise<void> {
 }
 
 /**
- * База розробника за порядком `db-setup` (спека П4-D §4.3), але без його кроку
- * `simetra roles`: на спільному стеку логіни Simetra мають явний `CONNECT` до
+ * База розробника тим самим `runDbSetup`, що й `scripts/db-setup.mjs`
+ * (міграція Better Auth, `plan`, `apply --yes`). Крок `simetra roles` фікстура
+ * замінює власним: на спільному стеку логіни Simetra мають явний `CONNECT` до
  * бази `simetra`, і `roles` відмовляє (`roles.shared-cluster`) для будь-якої
- * іншої бази. Тегована база береться з шаблону тінь-баз власником профілю,
- * `CONNECT`, схему `better_auth`, міграцію Better Auth (опції скриптів
- * шаблону) і гранти власнику дає фікстура тим самим SQL, що й `roles`
- * (`identityGrantSql`); далі — `plan` і `apply` від власника, як у `db-setup`.
+ * іншої бази. Замість нього — база з шаблону тінь-баз власником профілю,
+ * `CONNECT` і схема `better_auth` до міграції та гранти власнику на таблицю
+ * ідентичності після неї (`identityGrantSql`, той самий SQL, що в `roles`).
  */
 async function prepareDatabase(
   database: string,
@@ -243,74 +254,41 @@ async function prepareDatabase(
   const template = PROVIDER_SHADOW_TEMPLATES.postgres
   if (template === null || authRole === undefined)
     throw new Error("the postgres profile has no shadow template or auth role")
-  await withClient(withDatabase(testSuperuserUrl(), "postgres"), (client) =>
-    client.query(
-      `CREATE DATABASE "${database}" OWNER "${owner}" TEMPLATE "${template}"`
-    )
-  )
   const { schema, name } = PROVIDER_IDENTITY_SOURCES.postgres.table
-  await withClient(dsns.SIMETRA_SUPERUSER_DATABASE_URL!, async (client) => {
-    await client.query(
-      `GRANT CONNECT ON DATABASE "${database}" TO "${authRole}"`
-    )
-    await client.query(
-      `CREATE SCHEMA IF NOT EXISTS "${schema}" AUTHORIZATION "${authRole}"`
-    )
+  const applied = await runDbSetup({
+    authUrl: dsns.SIMETRA_AUTH_DATABASE_URL!,
+    ownerUrl: dsns.SIMETRA_OWNER_DATABASE_URL!,
+    origin,
+    secret,
+    beforeMigration: async () => {
+      await withClient(withDatabase(testSuperuserUrl(), "postgres"), (client) =>
+        client.query(
+          `CREATE DATABASE "${database}" OWNER "${owner}" TEMPLATE "${template}"`
+        )
+      )
+      await withClient(dsns.SIMETRA_SUPERUSER_DATABASE_URL!, async (client) => {
+        await client.query(
+          `GRANT CONNECT ON DATABASE "${database}" TO "${authRole}"`
+        )
+        await client.query(
+          `CREATE SCHEMA IF NOT EXISTS "${schema}" AUTHORIZATION "${authRole}"`
+        )
+      })
+    },
+    afterMigration: async () => {
+      const grants = identityGrantSql(owner, { schema, name })
+      await withClient(dsns.SIMETRA_SUPERUSER_DATABASE_URL!, async (client) => {
+        await client.query(grants.usage)
+        await client.query(grants.table)
+      })
+    },
   })
-  const pool = new pg.Pool({
-    connectionString: withAuthOptions(dsns.SIMETRA_AUTH_DATABASE_URL!),
-    max: 1,
-  })
-  try {
-    const { runMigrations } = await getMigrations(
-      authSchemaOptions(pool, { origin, secret })
-    )
-    await runMigrations()
-  } finally {
-    await pool.end()
-  }
-  const grants = identityGrantSql(owner, { schema, name })
-  await withClient(dsns.SIMETRA_SUPERUSER_DATABASE_URL!, async (client) => {
-    await client.query(grants.usage)
-    await client.query(grants.table)
-  })
-
-  const designer = dirname(
-    createRequire(join(TEMPLATE, "package.json")).resolve(
-      "@simetrajs/designer/package.json"
-    )
-  )
-  const simetra = (args: string[], label: string): Promise<string> =>
-    run(
-      join(designer, "bin/simetra.mjs"),
-      args,
-      { SIMETRA_DATABASE_URL: dsns.SIMETRA_OWNER_DATABASE_URL! },
-      label
-    )
-  const planned = JSON.parse(
-    await simetra(["plan", "metadata", "--format=json"], "simetra plan")
-  ) as { planHash?: string; file?: string }
-  if (planned.planHash === undefined || planned.file === undefined)
-    throw new Error("simetra plan produced no plan for an empty database")
-  try {
-    await simetra(
-      [
-        "apply",
-        planned.file,
-        "metadata",
-        `--plan-hash=${planned.planHash}`,
-        "--yes",
-      ],
-      "simetra apply"
-    )
-  } finally {
-    // Файл плану лежить у `template/plans` (git-ignored): прогін його не лишає
-    rmSync(resolve(TEMPLATE, planned.file), { force: true })
-  }
-  // Схема об'єктів `app` (`defaultSchema` шаблону) гранту `USAGE` ролям
-  // рантайму не дістає ні від `apply`, ні від `roles`: без нього читання дає
-  // `permission denied for schema app`. Заглушка фікстури, не рішення: де цей
-  // грант живе — питання до архітекторки (звіт задачі 12)
+  // Файл плану лежить у `template/plans` (git-ignored): прогін його не лишає
+  if (applied !== undefined) rmSync(resolve(TEMPLATE, applied), { force: true })
+  // Схема об'єктів `app` (`defaultSchema` шаблону) не дістає `USAGE` ролям
+  // рантайму ні від `apply`, ні від `roles`: без нього читання дає `permission
+  // denied for schema app`. Тимчасово: грант генерує платформа з #172 (PR #225);
+  // після його злиття цей рядок видаляється, і e2e мусить пройти без нього
   await withClient(dsns.SIMETRA_SUPERUSER_DATABASE_URL!, (client) =>
     client.query(
       `GRANT USAGE ON SCHEMA app TO "${PLATFORM_ROLES.command}", "${PROVIDER_API_ROLES.postgres.user}"`
@@ -412,16 +390,6 @@ async function bringUp(
           "INSERT INTO app.global_role_assignments (id, subject, archetype) VALUES ($1, $2, $3)",
           [randomUUID(), user.id, roleId]
         )
-      for (let i = 0; i < B_ROWS; i++)
-        await client.query(
-          "INSERT INTO app.client (id, code, description, owner_id) VALUES ($1, $2, $3, $4)",
-          [
-            randomUUID(),
-            `B${String(i).padStart(8, "0")}`,
-            `B-only ${i}`,
-            users.b.id,
-          ]
-        )
       await client.query("SET CONSTRAINTS ALL IMMEDIATE")
       await client.query(
         `SELECT set_config('${RIGHTS_MAINTENANCE_SETTING}', 'off', true)`
@@ -432,6 +400,47 @@ async function bringUp(
       throw error
     }
   })
+  // `CommandRuntime` второго користувача: ті самі пул ролі рантайму, каталог і
+  // шлях, що в сервері, з справжніми claims B. Через нього B пише власні
+  // рядки й міняє дані «ззовні» (D3); прямий SQL власника лишається лише там,
+  // де потрібен режим обслуговування прав
+  const runtimePool = new pg.Pool({
+    connectionString: dsns.SIMETRA_RUNTIME_DATABASE_URL,
+  })
+  cleanups.push(() => runtimePool.end())
+  const runtime = await createCommandRuntime({
+    database: fromPgPool(runtimePool),
+    catalog: runtimeCatalog,
+  })
+  const claimsB: SessionClaims = { sub: users.b.id, is_anonymous: false }
+  const runtimeB = { runtime, claims: claimsB }
+  // Вставка рядків B — прямим SQL власника: `create` власного рядка через
+  // рантайм платформа поки відмовляє (`no-right`, #235). Значення ж міняє вже
+  // рантайм B своїми claims: це і є «зовнішня зміна» його рядків
+  await withClient(dsns.SIMETRA_OWNER_DATABASE_URL, async (client) => {
+    for (let i = 0; i < B_ROWS; i++)
+      await client.query(
+        "INSERT INTO app.client (id, code, description, owner_id) VALUES ($1, $2, $3, $4)",
+        [
+          randomUUID(),
+          `B${String(i).padStart(8, "0")}`,
+          "placeholder",
+          users.b.id,
+        ]
+      )
+  })
+  const client = { kind: "Catalog", name: "Client" } as const
+  const own = await runtime.read(claimsB, { object: client, limit: 50 })
+  if (own.rows.length !== B_ROWS)
+    throw new Error(`B sees ${own.rows.length} rows, expected ${B_ROWS}`)
+  for (const [i, row] of own.rows.entries())
+    await runtime.run(claimsB, {
+      action: "update",
+      object: client,
+      id: String(row.ref),
+      expectedVersion: Number(row.version),
+      values: { description: `B-only ${i}` },
+    })
   await run(
     "scripts/seed.mjs",
     [String(SEED_COUNT), users.a.id],
@@ -491,6 +500,7 @@ async function bringUp(
       return id
     },
     users: users as App["users"],
+    runtimeB,
     adminUrl: dsns.SIMETRA_SUPERUSER_DATABASE_URL!,
     query,
     serverOutput: server.output,
@@ -499,14 +509,50 @@ async function bringUp(
   }
 }
 
+// Помилка підйому одна на прогін: без цього кожен із тестів перепідіймав би базу
+// й сервер заново й повторював ту саму помилку. Воркер після падіння фікстури
+// перезапускається, тож стан тримає ще й файл за тегом прогону.
+let setupFailure: string | undefined
+const failureFile = () =>
+  join(TEMPLATE, "..", "test-results", `setup-failure-${runTag()}.txt`)
+
+function knownFailure(): string | undefined {
+  if (setupFailure !== undefined) return setupFailure
+  try {
+    return readFileSync(failureFile(), "utf8")
+  } catch {
+    return undefined
+  }
+}
+
+function recordFailure(error: unknown): void {
+  // `CommandFailure` несе лише код у повідомленні: поля помилки — у `error.error`
+  const detail = (error as { error?: unknown }).error
+  setupFailure =
+    (error instanceof Error ? error.message : String(error)) +
+    (detail === undefined ? "" : ` ${JSON.stringify(detail)}`)
+  mkdirSync(dirname(failureFile()), { recursive: true })
+  writeFileSync(failureFile(), setupFailure)
+}
+
 export const test = base.extend<object, { app: App }>({
   app: [
     async ({}, use, workerInfo) => {
+      const earlier = knownFailure()
+      if (earlier !== undefined)
+        throw new Error(`the e2e setup failed earlier in this run:\n${earlier}`)
       const cleanups: Array<() => Promise<void>> = []
       const failures: unknown[] = []
       try {
         const kind = String(workerInfo.project.metadata.build)
-        await use(await bringUp(kind, cleanups))
+        let app: App
+        try {
+          app = await bringUp(kind, cleanups)
+        } catch (error) {
+          recordFailure(error)
+          throw error
+        }
+        await use(app)
       } finally {
         // Навіть коли підйом упав на півдорозі: тегована база не лишається на стеку
         for (const cleanup of cleanups.reverse())

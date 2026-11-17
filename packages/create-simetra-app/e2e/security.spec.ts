@@ -321,22 +321,41 @@ test.describe("data function (dataFn)", () => {
         )
       ) as {
         value: {
-          items: Array<{ value: { rows: Array<{ owner_id: string }> } }>
+          items: Array<{
+            value: {
+              rows: Array<{ id: string; owner_id: string; description: string }>
+            }
+          }>
         }
       }
       return result.value.items[0]!.value.rows
     }
     expect(await count(app.users.b)).toBe(B_ROWS)
     expect(await count(app.users.a)).toBeGreaterThanOrEqual(SEED_COUNT)
-    for (const [user, other] of [
-      [app.users.a, app.users.b],
-      [app.users.b, app.users.a],
-    ] as const) {
-      const seen = await rows(user)
-      expect(seen.length).toBeGreaterThan(0)
-      expect(seen.every((r) => r.owner_id === user.id)).toBe(true)
-      expect(seen.some((r) => r.owner_id === other.id)).toBe(false)
-    }
+    // Точні набори: рядки B — рівно ті, що вставлено й змінено через його
+    // `CommandRuntime`; сторінка A — підмножина рядків із власником A і без жодного рядка B
+    const idsOf = async (user: TestUser) =>
+      (
+        await app.query<{ id: string }>(
+          "SELECT id FROM app.client WHERE owner_id = $1",
+          [user.id]
+        )
+      ).map((r) => r.id)
+    const bRows = await rows(app.users.b)
+    expect(bRows.map((r) => r.id).sort()).toEqual(
+      (await idsOf(app.users.b)).sort()
+    )
+    expect(bRows.map((r) => r.description).sort()).toEqual(
+      Array.from({ length: B_ROWS }, (_, i) => `B-only ${i}`)
+    )
+    const aIds = new Set(await idsOf(app.users.a))
+    const bIds = new Set(bRows.map((r) => r.id))
+    const aPage = await rows(app.users.a)
+    expect(aPage.length).toBeGreaterThan(0)
+    expect(
+      aPage.every((r) => aIds.has(r.id) && r.owner_id === app.users.a.id)
+    ).toBe(true)
+    expect(aPage.some((r) => bIds.has(r.id))).toBe(false)
   })
 })
 
@@ -592,15 +611,21 @@ test.describe("server start (spec 4.1)", () => {
       NITRO_HOST: "127.0.0.1",
       ...env,
     })
-    const code = await Promise.race([
-      run.exited,
-      new Promise<"alive">((r) => setTimeout(() => r("alive"), 20_000)),
-    ])
-    if (code === "alive") run.child.kill("SIGKILL")
-    expect(code).not.toBe("alive")
-    expect(code).not.toBe(0)
+    // Порт має відмовляти весь час до виходу процесу, а не лише після нього:
+    // сервер, що встиг почати слухати, — вже небезпечний
+    let exitCode: number | null | "alive" = "alive"
+    void run.exited.then((code) => (exitCode = code))
+    const deadline = Date.now() + 20_000
+    while (exitCode === "alive" && Date.now() < deadline) {
+      await expect(send({ port }, { path: "/" })).rejects.toThrow(
+        /ECONNREFUSED/
+      )
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    if (exitCode === "alive") run.child.kill("SIGKILL")
+    expect(exitCode).not.toBe("alive")
+    expect(exitCode).not.toBe(0)
     expect(run.output()).toContain(variable)
-    // Порт не слухається
     await expect(send({ port }, { path: "/" })).rejects.toThrow(/ECONNREFUSED/)
   }
 

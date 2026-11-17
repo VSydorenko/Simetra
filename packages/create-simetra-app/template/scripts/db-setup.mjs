@@ -3,17 +3,9 @@
 // `simetra_auth` → повторний `simetra roles` (адресні гранти на
 // `better_auth."user"`) → `simetra plan` і `simetra apply` від `simetra_owner`.
 // DSN беруться лише зі змінних оточення: argv видно в `ps`.
-import { spawnSync } from "node:child_process"
-import { createRequire } from "node:module"
-import { dirname, join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
-import { getMigrations } from "better-auth/db/migration"
-import pg from "pg"
-import config from "../simetra.config.ts"
-import { authSchemaOptions, withAuthOptions } from "./auth-options.mjs"
 import { assertLoopback, DevGuardRefusal } from "./dev-guard.mjs"
-
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+import { runDbSetup, runSimetra } from "./db-setup-steps.mjs"
+import config from "../simetra.config.ts"
 
 function requiredEnv(name) {
   const value = process.env[name]
@@ -22,43 +14,6 @@ function requiredEnv(name) {
     process.exit(1)
   }
   return value
-}
-
-/** Запускає `simetra <args>` з DSN у змінній `SIMETRA_DATABASE_URL`. */
-function simetra(args, databaseUrl) {
-  const designer = dirname(
-    createRequire(import.meta.url).resolve("@simetrajs/designer/package.json")
-  )
-  const result = spawnSync(
-    process.execPath,
-    [join(designer, "bin/simetra.mjs"), ...args],
-    {
-      cwd: ROOT,
-      encoding: "utf8",
-      env: { ...process.env, SIMETRA_DATABASE_URL: databaseUrl },
-    }
-  )
-  if (result.status !== 0) {
-    console.error(`db-setup: simetra ${args[0]} failed`)
-    console.error(result.stdout + result.stderr)
-    process.exit(1)
-  }
-  return result.stdout
-}
-
-async function migrateBetterAuth(authUrl) {
-  const pool = new pg.Pool({
-    connectionString: withAuthOptions(authUrl),
-    max: 1,
-  })
-  try {
-    const { runMigrations } = await getMigrations(
-      authSchemaOptions(pool, { origin: "http://localhost:3000" })
-    )
-    await runMigrations()
-  } finally {
-    await pool.end()
-  }
 }
 
 const superuserUrl = requiredEnv("SIMETRA_SUPERUSER_DATABASE_URL")
@@ -76,29 +31,23 @@ try {
   process.exit(1)
 }
 
-// Крок 1 створює ролі й схему `better_auth`; без нього міграції немає де йти
-simetra(["roles", config.metadataDir], superuserUrl)
-await migrateBetterAuth(authUrl)
-// Таблиця ідентичності з'явилась: повторний запуск дає власнику гранти на неї
-simetra(["roles", config.metadataDir], superuserUrl)
-
-const planned = JSON.parse(
-  simetra(["plan", config.metadataDir, "--format=json"], ownerUrl)
-)
-if (planned.planHash === undefined || planned.file === undefined) {
-  console.log("db-setup: the database already matches the metadata")
-} else {
-  simetra(
-    [
-      "apply",
-      planned.file,
-      config.metadataDir,
-      `--plan-hash=${planned.planHash}`,
-      // `apply` — руйнівний інструмент, і без підтвердження CLI відмовляє;
-      // рішення — за людиною, що запустила `db-setup`
-      "--yes",
-    ],
-    ownerUrl
+// Крок 1 створює ролі й схему `better_auth`; без нього міграції немає де йти.
+// Після міграції таблиця ідентичності з'явилась: повторний запуск дає
+// власнику гранти на неї
+const roles = () => runSimetra(["roles", config.metadataDir], superuserUrl)
+try {
+  const applied = await runDbSetup({
+    authUrl,
+    ownerUrl,
+    beforeMigration: roles,
+    afterMigration: roles,
+  })
+  console.log(
+    applied === undefined
+      ? "db-setup: the database already matches the metadata"
+      : `db-setup: applied ${applied}`
   )
-  console.log(`db-setup: applied ${planned.file}`)
+} catch (error) {
+  console.error(`db-setup: ${error instanceof Error ? error.message : error}`)
+  process.exit(1)
 }

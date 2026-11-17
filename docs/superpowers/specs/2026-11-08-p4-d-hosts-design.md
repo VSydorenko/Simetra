@@ -544,12 +544,20 @@ DOM і журнал Server Function з точним результатом). З�
 сесії, тож відмова доводить саме правило походження, а не відсутність сесії. Позитивний контроль:
 `run` того самого походження з сесією — `ok`.
 
+Кейси про походження проходять два шари. Перший — власний CSRF-фільтр Start
+на кожній Server Function: запит без `Sec-Fetch-Site: same-origin` він
+відхиляє голим `403 Forbidden` до коду шаблону (фільтр не вимикається).
+Другий — `checkRequestOrigin` шаблону; його точний код видно лише на запиті,
+який Start пропускає (`Sec-Fetch-Site: same-origin` з чужим `Origin`).
+Клієнтський транспорт шаблону перетворює голий `403` Start на
+`command.forbidden` з `reason: origin`, щоб інтерфейс бачив одну відмову.
+
 | Кейс | Частина | Очікування |
 | --- | --- | --- |
-| `dataFn` з `Sec-Fetch-Site: cross-site` | D2 | `command.forbidden` `origin` |
-| `dataFn` без `Sec-Fetch-Site` з чужим `Origin` | D2 | `command.forbidden` `origin` |
-| `dataFn` без обох заголовків | D2 | `command.forbidden` `origin` |
-| `Host`, `X-Forwarded-Host`, `X-Forwarded-Proto` і `Origin` атакувальника | D2 | `command.forbidden` `origin` |
+| `dataFn` з `Sec-Fetch-Site: cross-site` | D2 | `403` від Start або `command.forbidden` `origin` |
+| `dataFn` без `Sec-Fetch-Site` з чужим `Origin` | D2 | `403` від Start або `command.forbidden` `origin` |
+| `dataFn` без обох заголовків | D2 | `403` від Start або `command.forbidden` `origin` |
+| `Host`, `X-Forwarded-Host`, `X-Forwarded-Proto` і `Origin` атакувальника | D2 | `403` від Start або `command.forbidden` `origin` |
 | `dataFn` того самого походження без сесії | D2 | `command.unauthenticated` |
 | тіло понад межу з `Content-Length` і chunked; тіло з `Content-Encoding: gzip`; завелике тіло `sign-in` | D2 | `command.invalid` до розбору |
 | `POST /api/auth/sign-up/email` | D2 | відмова (реєстрацію вимкнено) |
