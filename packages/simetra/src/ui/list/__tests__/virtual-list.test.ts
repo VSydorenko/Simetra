@@ -43,6 +43,11 @@ beforeAll(() => {
     configurable: true,
     get: () => VIEW,
   })
+  // Без `scrollHeight` віртуалізатор бачить «надпрокрутку» і не пише корекцію.
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+    configurable: true,
+    get: () => 100 * EST,
+  })
   Object.defineProperty(HTMLElement.prototype, "clientWidth", {
     configurable: true,
     get: () => 1000,
@@ -244,12 +249,16 @@ describe("VirtualList", () => {
   it("the virtualizer's own compensation of a grown row is off (the anchor alone corrects)", () => {
     // ResizeObserver приходить після commit: вбудована компенсація дала б
     // другу корекцію `scrollTop` (спайк 4 §6). Бібліотека не пише в прокрутку.
-    let notify: ResizeObserverCallback | undefined
+    // Віртуалізатор має два спостерігачі (область і слоти): рядки спостерігає лише один.
+    const observers: { cb: ResizeObserverCallback; seen: Set<Element> }[] = []
     class FakeObserver {
+      readonly seen = new Set<Element>()
       constructor(cb: ResizeObserverCallback) {
-        notify = cb
+        observers.push({ cb, seen: this.seen })
       }
-      observe() {}
+      observe(node: Element) {
+        this.seen.add(node)
+      }
       unobserve() {}
       disconnect() {}
     }
@@ -283,7 +292,8 @@ describe("VirtualList", () => {
       const slot = container.querySelector<HTMLElement>('[data-row-key="r2"]')!
       heights.set("r2", EST + 30)
       act(() => {
-        notify!(
+        const own = observers.find((o) => o.seen.has(slot))!
+        own.cb(
           [
             {
               target: slot,
