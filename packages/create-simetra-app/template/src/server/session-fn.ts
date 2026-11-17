@@ -1,38 +1,46 @@
-import { createServerFn } from "@tanstack/react-start"
+import { createIsomorphicFn, createServerFn } from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
 import { checkRequestOrigin } from "simetra/server"
 import { verifySession, type AppClaims } from "./auth"
 import { httpOrigin } from "./origin"
 
-// Виклик з браузера йде HTTP-запитом на базу Server Function; на SSR функція
-// викликається в процесі, а запит — це сама навігація, у якої `Sec-Fetch-Site`
-// законно `none` чи `cross-site` (перехід за посиланням). Значення — з
-// build-define Start; без нього шлях рахується HTTP (відмова замість пропуску).
-function isServerFnRequest(request: Request): boolean {
-  const base = process.env.TSS_SERVER_FN_BASE
-  if (base === undefined || base === "") return true
-  return new URL(request.url).pathname.startsWith(base)
+async function sessionOrNull(request: Request): Promise<AppClaims | null> {
+  const claims = await verifySession(request.headers)
+  if (claims === null || claims.is_anonymous !== false) return null
+  return claims
 }
 
 /**
- * Claims не анонімної сесії чи `null`. Збій (хост бази, роль) клієнту не
- * віддається: функція ловить виняток і повертає лише `null`.
+ * HTTP-шлях: claims не анонімної сесії чи `null`. Походження перевіряється
+ * ЗАВЖДИ й першим, без огляду на шлях запиту: Start декодує відсотки в шляху
+ * перед маршрутизацією, тож висновок «це не Server Function» з сирого шляху
+ * можна обійти. Збій (хост бази, роль) клієнту не віддається — лише `null`.
  */
 export async function readSessionClaims(
   request: Request
 ): Promise<AppClaims | null> {
   try {
-    // Першим — походження, до `getSession` (вона може писати в базу й ставити
-    // cookie); лише на HTTP-шляху, див. `isServerFnRequest`
-    if (
-      isServerFnRequest(request) &&
-      checkRequestOrigin(httpOrigin(request), undefined) !== undefined
-    ) {
+    // До `getSession`: вона може продовжити сесію записом і `Set-Cookie`
+    if (checkRequestOrigin(httpOrigin(request), undefined) !== undefined) {
       return null
     }
-    const claims = await verifySession(request.headers)
-    if (claims === null || claims.is_anonymous !== false) return null
-    return claims
+    return await sessionOrNull(request)
+  } catch (error) {
+    console.error("[simetra] session function", error)
+    return null
+  }
+}
+
+/**
+ * Шлях SSR (в процесі): запит — сама навігація, у якої `Sec-Fetch-Site`
+ * законно `none` чи `cross-site` (перехід за посиланням), тож правило
+ * походження тут не застосовується. Лише серверна гілка ізоморфної функції.
+ */
+export async function readSessionClaimsInProcess(
+  request: Request
+): Promise<AppClaims | null> {
+  try {
+    return await sessionOrNull(request)
   } catch (error) {
     console.error("[simetra] session function", error)
     return null
@@ -42,3 +50,12 @@ export async function readSessionClaims(
 export const getSessionClaims = createServerFn({ method: "GET" }).handler(() =>
   readSessionClaims(getRequest())
 )
+
+/**
+ * Те, що кличе `beforeLoad` кореня: на сервері (SSR) — читання сесії в процесі,
+ * на клієнті — Server Function, яка завжди застосовує правило походження.
+ * Розрізнення будовою (`createIsomorphicFn`), а не висновком зі шляху запиту.
+ */
+export const sessionClaims = createIsomorphicFn()
+  .server(() => readSessionClaimsInProcess(getRequest()))
+  .client(() => getSessionClaims())

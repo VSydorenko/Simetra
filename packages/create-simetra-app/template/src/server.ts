@@ -4,8 +4,14 @@ import {
   defaultStreamHandler,
 } from "@tanstack/react-start/server"
 import { LIMIT_REASONS, PAYLOAD_MAX_BYTES } from "simetra/model"
+import { appOrigin, authSecret } from "./server/config"
 import { BodyTooLarge, bodyExceeded, limitBody } from "./server/body-limit"
 import { serverHash } from "./server/runtime"
+
+// Відмова старту (§4.1): хибне оточення має зупинити сервер при імпорті entry,
+// а не першим запитом
+appOrigin()
+authSecret()
 
 // Заголовок, який читає Better Auth (`ipAddressHeaders` у `auth.ts`)
 const CLIENT_IP_HEADER = "x-simetra-client-ip"

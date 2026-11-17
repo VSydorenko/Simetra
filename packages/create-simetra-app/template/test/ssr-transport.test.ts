@@ -31,7 +31,7 @@ beforeEach(() => {
 })
 
 describe("ssrTransport", () => {
-  it("throws in the client environment", () => {
+  it("is wrapped by createServerOnlyFn", () => {
     state.client = true
     expect(() => ssrTransport(CLAIMS)).toThrow(/server-only/)
   })

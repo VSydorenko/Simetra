@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+// Entry перевіряє оточення при імпорті, а статичні імпорти піднімаються нагору
+vi.hoisted(() => {
+  process.env.SIMETRA_APP_ORIGIN = "https://app.test"
+})
+
 vi.mock("@tanstack/react-start/server", () => ({
   createServerEntry: (entry: unknown) => entry,
   createStartHandler: () => () => new Response("unused"),
