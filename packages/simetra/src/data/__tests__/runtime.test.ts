@@ -1035,4 +1035,84 @@ describe("version check and the stale mark (§10)", () => {
     await settle()
     expect(onStaleClient).not.toHaveBeenCalled()
   })
+
+  it("a stale-client of a read part calls onStaleClient(object) and asks for the version, without a mark", async () => {
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const t = controlled({ onStaleClient })
+    const read = t.send(card())
+    t.respond(
+      ok({
+        epoch: null,
+        items: [
+          {
+            ok: false,
+            error: { code: "command.stale-client", object: OBJECT_ID },
+          },
+        ],
+      })
+    )
+    await read
+    await settle()
+    expect(onStaleClient.mock.calls).toEqual([[TASK]])
+    expect(versionCalls(t.calls)).toBe(1)
+    // Відповідь `version` без розбіжності: позначки немає, колбек не повторюється.
+    t.respond(versionAnswer(SERVER_HASH))
+    await settle()
+    expect(onStaleClient).toHaveBeenCalledTimes(1)
+  })
+
+  it("a stale-client part without an object names the object of its query", async () => {
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const t = controlled({ onStaleClient })
+    const read = t.send(card())
+    t.respond(
+      ok({
+        epoch: null,
+        items: [{ ok: false, error: { code: "command.stale-client" } }],
+      })
+    )
+    await read
+    await settle()
+    expect(onStaleClient.mock.calls).toEqual([[TASK]])
+  })
+
+  it("a stale-client part answered after dispose() calls nothing", async () => {
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const t = controlled({ onStaleClient })
+    const read = failureOf(t.send(card()))
+    t.runtime.dispose()
+    t.respond(
+      ok({
+        epoch: null,
+        items: [{ ok: false, error: { code: "command.stale-client" } }],
+      })
+    )
+    await read
+    await settle()
+    expect(onStaleClient).not.toHaveBeenCalled()
+    expect(versionCalls(t.calls)).toBe(0)
+  })
+
+  it("a write answered session-changed closes the runtime: onSessionChanged once, the card is purged", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 1)
+    const onSessionChanged = vi.fn()
+    const { runtime, core, replies } = runtimeOver(fake, { onSessionChanged })
+    const handle = core.view(cardOf(1))
+    handle.subscribe(() => {})
+    await settle()
+    replies.push(sessionChanged())
+    const m = core.update(TASK, key(1), { title: "x" }, { expectedVersion: 1 })
+    expect(await m.settled).toMatchObject({
+      ok: false,
+      error: { code: "command.unauthenticated", reason: "session-changed" },
+    })
+    await settle()
+    expect(runtime.disposed).toBe(true)
+    expect(onSessionChanged).toHaveBeenCalledTimes(1)
+    expect(handle.getSnapshot()).toMatchObject({
+      status: "purged",
+      reason: "session-changed",
+    })
+  })
 })

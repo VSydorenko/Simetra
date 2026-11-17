@@ -264,12 +264,36 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     }
     if (response.ok) {
       seen()
+      staleParts(request, response.value)
       return response.value
     }
     const error = errorFromWire(index, response.error)
     if (isSessionChanged(error)) sessionChanged(error)
     else seen()
     throw new CommandFailure(error)
+  }
+
+  // Відмова частини `read` — `stale-client` (несумісна колонка): позначки
+  // вона не ставить, але host дізнається про об'єкт і сумісність
+  // переоцінюється (§10). Викликається лише після перевірки закриття.
+  const staleParts = (request: RuntimeRequest, value: unknown) => {
+    if (request.type !== "read" || typeof value !== "object" || value === null)
+      return
+    const items = (value as { items?: unknown }).items
+    if (!Array.isArray(items)) return
+    items.forEach((item: unknown, slot) => {
+      const error = (item as { ok?: unknown; error?: unknown } | null)?.error
+      if (
+        (item as { ok?: unknown } | null)?.ok !== false ||
+        (error as { code?: unknown } | null)?.code !== "command.stale-client"
+      )
+        return
+      const part = request.items[slot] as
+        { query?: { object?: unknown } } | undefined
+      const id = (error as { object?: unknown }).object ?? part?.query?.object
+      const entry = typeof id === "string" ? index.byId.get(id) : undefined
+      if (entry !== undefined) core.staleClient(`${entry.kind}.${entry.name}`)
+    })
   }
 
   const serverFunction = serverFunctionAdapter(send)

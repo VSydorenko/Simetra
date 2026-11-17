@@ -126,6 +126,12 @@ export interface CoreSession {
    * the hash (no ping-pong between instances of two catalogs).
    */
   serverHash(hash: string, versionPart: boolean): void
+  /**
+   * Internal, for the runtime: a response refused a part `stale-client` (an
+   * incompatible column). Calls `onStaleClient(object)` and asks for the
+   * version; the object is not marked by it (§10).
+   */
+  staleClient(object: ObjectName): void
 }
 
 export type { DefectFlag } from "./defects"
@@ -698,6 +704,10 @@ export function createCore(options: {
       lastHash = hash
       if (changed && !versionPart) core.requestVersion()
     },
+    staleClient(object) {
+      staleClient(object)
+      core.requestVersion()
+    },
     update: (object, key, values, updateOptions) =>
       overlay.update(object, key, values, updateOptions),
     activeViews: (object) => activeViews(writerContext, object),
@@ -728,10 +738,7 @@ export function createCore(options: {
     rowViews,
     commit: core.commit,
     isStale: (object) => staleObjects.has(object),
-    staleClient(object) {
-      staleClient(object)
-      core.requestVersion()
-    },
+    staleClient: (object) => core.staleClient(object),
     reread(object, key, rereadOptions) {
       rereadKey(writerContext, object, key, rereadOptions).catch(
         (error: unknown) => log({ kind: "listener-failed", error })

@@ -1158,10 +1158,13 @@ describe("the table of refusals of a write (§7.3)", () => {
     }
   )
 
-  it("conflict and forbidden re-read the card form for a lazy field", async () => {
+  it.each([
+    ["conflict", { code: "command.conflict", reason: "version" } as const],
+    ["forbidden", { code: "command.forbidden" } as const],
+  ])("%s re-reads the card form for a lazy field", async (_, error) => {
     const h = harness()
     const { version } = await mounted(h)
-    h.port.refuse = { code: "command.forbidden" }
+    h.port.refuse = error
     const reads = readsOf(h.fake, TASK).filter(isCard).length
     const m = h.core.update(
       TASK,
@@ -1172,6 +1175,45 @@ describe("the table of refusals of a write (§7.3)", () => {
     await m.settled
     await settle()
     expect(readsOf(h.fake, TASK).filter(isCard).length).toBe(reads + 1)
+  })
+
+  it("conflict on an owner with a mounted section view: the section shows the lines of the new owner version", async () => {
+    const h = harness()
+    seed(h.fake, 1, 1)
+    h.fake.setLines(TASK, K, "lines", [
+      { ref: key(901), qty: 1, lineNumber: 1 },
+    ])
+    const card = cardOf(h.core)
+    watch(card)
+    const section = h.core.view({
+      kind: "section",
+      object: TASK,
+      owner: K,
+      section: "lines",
+    })
+    watch(section)
+    await settle()
+    const version = shown(rowOf(card)).version
+    // Чужа зміна ТЧ підвищує версію власника; наш запис за старою базою — conflict.
+    const next = h.fake.setLines(TASK, K, "lines", [
+      { ref: key(902), qty: 2, lineNumber: 1 },
+    ])
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    expect(await m.settled).toMatchObject({
+      ok: false,
+      error: { code: "command.conflict" },
+    })
+    await settle()
+    expect(section.getSnapshot().section).toMatchObject({
+      ownerVersion: next,
+      complete: true,
+      lines: [{ key: key(902) }],
+    })
   })
 
   it("forbidden with the row gone from the server makes the row removed", async () => {
