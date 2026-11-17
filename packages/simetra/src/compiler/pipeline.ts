@@ -105,6 +105,7 @@ import {
 import { checkKindTableVerbatim, kindTables } from "./sql/kind-table-verbatim"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { copyColumns } from "./copy-columns"
+import { buildSchemaUsageUnits } from "./schema-usage"
 import { loadPlpgsqlParser } from "./sql/plpgsql"
 import { assertPinnedSearchPath } from "./sql/pinned-search-path"
 import { embedRowRules } from "./sql/row-rule"
@@ -814,7 +815,7 @@ export async function runStages(
         plpgsql,
       })
     : []
-  const sqlUnits = [
+  const modelUnits = [
     ...baseUnits,
     ...buildCatalogCommandUnits({
       catalogCommands,
@@ -835,6 +836,12 @@ export async function runStages(
       parse,
       plpgsql,
     }),
+  ]
+  // `USAGE` на схеми застосунку — над усіма згенерованими грантами, бо схему
+  // відкривають і таблиці, і функції (платформна спека §6.7)
+  const sqlUnits = [
+    ...modelUnits,
+    ...buildSchemaUsageUnits(modelUnits, module, parse),
   ].sort((a, b) => compareStrings(a.identity, b.identity))
   assertPinnedSearchPath(sqlUnits)
   const nameById = new Map(stage1.objects.map((o) => [o.id ?? "", o.name]))
@@ -874,6 +881,8 @@ export async function runStages(
     effects: (unit) =>
       `the action effects check of ${name(unit.ownerObjectId)}`,
     catalogCommand: (unit) => `the command core of ${name(unit.ownerObjectId)}`,
+    // Грант схеми спільний для всіх її об'єктів — власника немає.
+    schemaUsage: (unit) => `the USAGE grant on schema ${unit.name}`,
   }
   const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
   const triggerConflicts = subscriptionTriggerConflicts(

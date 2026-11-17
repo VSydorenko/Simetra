@@ -1,21 +1,14 @@
 import { describe, expect, it } from "vitest"
-import {
-  compile,
-  fixFiles,
-  type CompiledModel,
-  type SqlUnit,
-} from "simetra/compiler"
 import { PLATFORM_ROLES, quoteIdent } from "simetra/model"
-import { modelHash } from "../../../../simetra/src/compiler/canonical"
+import type { PlanOutcome } from "simetra/schema"
 import {
-  acceptDebt,
-  metaFiles,
-  project,
-  testProvider,
+  catalog,
+  uuid,
   withSessionOptions,
 } from "../../../../simetra/test/support"
 import { asSuperuser, query } from "../../__tests__/support/db"
 import {
+  ANON,
   codes,
   compiled,
   EMPTY,
@@ -55,73 +48,70 @@ describe.concurrent("USAGE on the application schema", () => {
   })
 })
 
-describe("moving from a verbatim USAGE grant to the generated one", () => {
+describe("a USAGE grant of the application on its schema", () => {
   const USAGE = "sql/app/usage.sql"
-  const isUsage = (u: CompiledModel["sqlUnits"][number]) =>
-    u.class === "grant" && u.generator === "access" && /ON SCHEMA/i.test(u.sql)
-  const filesWith = async (verbatim: boolean) =>
-    acceptDebt(
-      metaFiles({
-        "project.meta.json": project({
-          defaultSchema: "app",
-          database: { provider: testProvider() },
-        }),
-        [PARTY]: party(),
-        ...(verbatim
-          ? {
-              [USAGE]: [USER, PLATFORM_ROLES.command]
-                .map((r) => `GRANT USAGE ON SCHEMA app TO ${quoteIdent(r)};\n`)
-                .join(""),
-            }
-          : {}),
-      })
-    )
-
-  it("flags the duplicate, removes it with fix and plans nothing on a database applied with it", async () => {
-    // Дослівний тотожний грант — грант платформи: помилка з вирізом `fix`, а
-    // не `sql.unit-duplicate`
-    const verbatim = await filesWith(true)
-    const flagged = await compile(verbatim)
-    expect(
-      flagged.diagnostics
-        .filter((d) => d.severity === "error")
-        .map((d) => d.code)
-    ).toEqual(["sql.generated-grant", "sql.generated-grant"])
-    const fixed = await fixFiles(verbatim, {
-      schemaPath: () => "",
-      newId: () => {
-        throw new Error("fix must not assign ids here")
-      },
+  const REGION = "catalogs/Region/Region.meta.json"
+  const region = (publicRead?: string) =>
+    catalog("Region", {
+      id: uuid(9002),
+      scope: "none",
+      ...(publicRead === undefined ? {} : { publicRead }),
     })
-    expect(fixed.ok).toBe(true)
-    // Інші зміни — доповнення файлів метаданих; SQL `fix` торкається лише
-    // дубліката
-    expect(fixed.changes).toContainEqual({ path: USAGE, content: null })
-    expect(
-      fixed.changes.filter((c) => c.path.startsWith("sql/")).map((c) => c.path)
-    ).toEqual([USAGE])
-    const model = await compiled({ [PARTY]: party() })
-    // База, застосована до генерації грантів: ті самі гранти — дослівною
-    // одиницею, і marker несе саме такий знімок
-    const before: Omit<CompiledModel, "hash"> = {
-      ...model,
-      sqlUnits: model.sqlUnits.map((u) => {
-        if (!isUsage(u)) return u
-        const verbatim: SqlUnit = { ...u, file: USAGE, line: 1 }
-        delete verbatim.generator
-        return verbatim
-      }),
+  const grantSql = (roles: readonly string[]) =>
+    roles
+      .map((r) => `GRANT USAGE ON SCHEMA app TO ${quoteIdent(r)};\n`)
+      .join("")
+  const schemaSteps = (outcome: PlanOutcome) =>
+    (outcome.status === "planned" ? outcome.artifact.steps : [])
+      .map((s) => s.sql)
+      .filter((sql) => /ON SCHEMA "?app"?/i.test(sql))
+
+  it.each([
+    ["keeps the application's grant", true, []],
+    [
+      "revokes the generated grant without it",
+      false,
+      [`REVOKE ALL ON SCHEMA "app" FROM "${ANON}"`],
+    ],
+  ] as const)(
+    "%s when the last need of the platform disappears",
+    async (_name, declared, revoked) => {
+      // Схему ділять таблиці виду й власні об'єкти застосунку: його `USAGE`
+      // ролі `anon` (скажімо, для своїх RPC) переживає зникнення
+      // `publicRead: anon` — план його не відкликає
+      const own = declared ? { [USAGE]: grantSql([ANON]) } : {}
+      const before = await compiled({
+        [PARTY]: party(),
+        [REGION]: region("anon"),
+        ...own,
+      })
+      const after = await compiled({
+        [PARTY]: party(),
+        [REGION]: region(),
+        ...own,
+      })
+      await inTarget(EMPTY, async (url) => {
+        await establish(url, before)
+        expect(schemaSteps(await plan(url, after))).toEqual(revoked)
+      })
     }
-    const old: CompiledModel = { ...before, hash: await modelHash(before) }
-    // Канонічний знімок не несе джерела одиниці (файл чи генератор), тож
-    // marker такої бази — той самий, що й після переходу
-    expect(old.hash).toBe(model.hash)
+  )
+
+  it("plans nothing on a database applied with the identical grant", async () => {
+    // Дослівна тотожна одиниця перемагає згенеровану, тож модель з нею —
+    // та сама, що й до генерації `USAGE`: marker бази, застосованої тоді,
+    // збігається з новим
+    const model = await compiled({
+      [PARTY]: party(),
+      [USAGE]: grantSql([USER, PLATFORM_ROLES.command]),
+    })
+    expect(model.sqlUnits.filter((u) => u.generator === "schemaUsage")).toEqual(
+      []
+    )
     await inTarget(EMPTY, async (url) => {
-      await establish(url, old)
+      await establish(url, model)
       const outcome = await plan(url, model)
       expect(codes(outcome)).not.toContain("apply.drift")
-      const steps = outcome.status === "planned" ? outcome.artifact.steps : []
-      expect(steps.filter((s) => /SCHEMA "?app"?/i.test(s.sql))).toEqual([])
       expect(outcome.status).toBe("unchanged")
     })
   })

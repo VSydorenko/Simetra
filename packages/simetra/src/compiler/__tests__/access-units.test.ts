@@ -427,7 +427,7 @@ describe("buildAccessUnits", () => {
     )
   })
 
-  it("units are generated, owned by the object and never grant on the public schema", async () => {
+  it("units are generated, owned by the object and never grant on a schema", async () => {
     const result = await units([
       contract({ scope: ORG_SCOPE, publicRead: ["anonymous", "user"] }),
     ])
@@ -440,52 +440,6 @@ describe("buildAccessUnits", () => {
         .GrantStmt
       expect(grant?.objtype ?? "OBJECT_TABLE").toBe("OBJECT_TABLE")
     }
-  })
-
-  describe("USAGE on the application schema", () => {
-    const schemaGrants = (result: SqlUnit[]) =>
-      result
-        .filter(
-          (u) =>
-            (u.tree as { GrantStmt?: { objtype?: string } }).GrantStmt
-              ?.objtype === "OBJECT_SCHEMA"
-        )
-        .map((u) => u.sql)
-        .sort()
-
-    it("grants it to the request roles of the kind and the command role", async () => {
-      const result = await units([
-        contract({ table: { schema: "app", name: "item" } }),
-        contract({
-          objectId: "00000000-0000-4000-8000-000000000b02",
-          table: { schema: "app", name: "region" },
-          publicRead: ["anonymous", "user"],
-        }),
-      ])
-      expect(schemaGrants(result)).toEqual(
-        [
-          "GRANT USAGE ON SCHEMA app TO anon;",
-          "GRANT USAGE ON SCHEMA app TO authenticated;",
-          `GRANT USAGE ON SCHEMA app TO ${PLATFORM_ROLES.command};`,
-        ].sort()
-      )
-      const usage = result.filter((u) => u.sql.includes("ON SCHEMA"))
-      for (const unit of usage) {
-        expect(unit.generator).toBe("access")
-        expect(unit.ownerObjectId).toBeUndefined()
-      }
-    })
-
-    it.each(["public", "simetra"])(
-      "leaves the %s schema to its own grants",
-      async (schema) => {
-        expect(
-          schemaGrants(
-            await units([contract({ table: { schema, name: "item" } })])
-          )
-        ).toEqual([])
-      }
-    )
   })
 
   it("quotes names that need it", async () => {

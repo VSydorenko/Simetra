@@ -68,24 +68,13 @@ export function generatedGrantConflicts(
   parse: SqlParser
 ): { diagnostics: Diagnostic[]; flagged: ReadonlySet<SqlUnit> } {
   const owned = platformGrantTargets(units, parse)
-  // Тотожний згенерованому дослівний грант (скажімо, `USAGE` на схему
-  // застосунку тій самій ролі) — той самий оператор платформи, хоч ціль
-  // гранту й не належить платформі цілком: схема може мати й законні чужі
-  // гранти, тож ключем тут — ідентичність, тобто об'єкт разом з отримувачем
-  const generated = new Set(
-    units
-      .filter((unit) => unit.file === undefined && unit.class === "grant")
-      .map((unit) => unit.identity)
-  )
   const diagnostics: Diagnostic[] = []
   const flagged = new Set<SqlUnit>()
   for (const unit of units) {
     if (unit.file === undefined || unit.class !== "grant") continue
-    const objects = generated.has(unit.identity)
-      ? grantObjects(unit.name)
-      : grantTargetKeys(unit, parse)
-          .filter((target) => ownsTarget(owned, target))
-          .map(targetName)
+    const objects = grantTargetKeys(unit, parse)
+      .filter((target) => ownsTarget(owned, target))
+      .map(targetName)
     if (objects.length === 0) continue
     flagged.add(unit)
     diagnostics.push(

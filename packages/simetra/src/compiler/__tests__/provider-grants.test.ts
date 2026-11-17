@@ -126,7 +126,8 @@ describe("grant generators on a profile without the service role", () => {
 
 describe("supabase grants are unchanged", () => {
   // Перелік зібрано компіляцією `examples/reference` на `supabase` на коміті
-  // до зміни (f7ed92d9) плюс `USAGE` схеми застосунку, який дає доступ:
+  // до зміни (f7ed92d9) плюс `USAGE` схеми застосунку отримувачам
+  // згенерованих грантів її таблиць і функцій:
   // лише оператори GRANT/REVOKE, не весь SQL.
   it("reference domain: the GRANT/REVOKE statements equal the baseline", async () => {
     const { units } = await compileReference("supabase")

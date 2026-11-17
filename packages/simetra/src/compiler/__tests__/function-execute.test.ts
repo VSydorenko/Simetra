@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest"
-import { compile, fixFiles } from "simetra/compiler"
+import { compile } from "simetra/compiler"
 import { PLATFORM_ROLES } from "simetra/model"
 import { buildFunctionExecuteUnits } from "../function-execute"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
@@ -324,64 +324,5 @@ describe("sql.generated-grant", () => {
       "GRANT EXECUTE ON FUNCTION public.other() TO anon;"
     )
     expectClean({ diagnostics }, { allow: ["rights.scope-kind-unread"] })
-  })
-})
-
-/**
- * `USAGE` на схему застосунку дає генератор доступу (платформна спека §6.7):
- * дослівний тотожний грант — той самий оператор платформи, а `USAGE` іншим
- * ролям чи іншим складом лишається справою застосунку.
- */
-describe("sql.generated-grant: USAGE on the application schema", () => {
-  const USAGE_FILE = "sql/app/usage.sql"
-  const appFiles = async (sql: string) =>
-    acceptDebt(
-      metaFiles({
-        "project.meta.json": project({ defaultSchema: "app" }),
-        "catalogs/Item/Item.meta.json": catalog("Item", { scope: "none" }),
-        [USAGE_FILE]: sql,
-      })
-    )
-  const flagged = async (sql: string) =>
-    (await compile(await appFiles(sql))).diagnostics
-      .filter((d) => d.severity === "error")
-      .map((d) => [d.code, d.params?.object])
-
-  it.each([
-    ["the request role", "GRANT USAGE ON SCHEMA app TO authenticated;"],
-    [
-      "the command role",
-      `GRANT USAGE ON SCHEMA app TO ${PLATFORM_ROLES.command};`,
-    ],
-  ])("flags a verbatim copy of the grant to %s", async (_name, sql) => {
-    expect(await flagged(sql)).toEqual([["sql.generated-grant", "app"]])
-  })
-
-  it.each([
-    ["another role", "GRANT USAGE ON SCHEMA app TO reporting;"],
-    [
-      "several grantees",
-      "GRANT USAGE ON SCHEMA app TO authenticated, reporting;",
-    ],
-    [
-      "other privileges too",
-      "GRANT USAGE, CREATE ON SCHEMA app TO authenticated;",
-    ],
-  ])("leaves a grant to %s to the application", async (_name, sql) => {
-    expect(await flagged(sql)).toEqual([])
-  })
-
-  it("fix removes the copy and the result compiles clean", async () => {
-    const result = await fixFiles(
-      await appFiles("GRANT USAGE ON SCHEMA app TO authenticated;\n"),
-      {
-        schemaPath: () => "",
-        newId: () => {
-          throw new Error("fix must not assign ids here")
-        },
-      }
-    )
-    expect(result.ok).toBe(true)
-    expect(result.changes).toContainEqual({ path: USAGE_FILE, content: null })
   })
 })
