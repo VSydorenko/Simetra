@@ -465,7 +465,6 @@ async function runModel(
       ? id(object, k)
       : `${id(object, k)}\u0000${String(e.versionEpoch)}`
   }
-  let convergeStart = 0
   let closed:
     { frames: number; sent: number; snapshot: ViewSnapshot } | undefined
 
@@ -1436,9 +1435,6 @@ async function runModel(
     await flush()
     fake.setVisibleScopes(undefined)
     visibility = undefined
-    // Читання збіжності стартують не раніше цієї епохи: надгробок новіший за
-    // неї міг стати між стартом читання й записом.
-    convergeStart = inspect.epoch()
     for (let v = 0; v < SPECS.length; v++) {
       if (subs[v] !== undefined) handles[v]!.refresh()
     }
@@ -1517,14 +1513,12 @@ async function runModel(
           .slice(0, LIMITS.windowPage)
           .map((values) => values.ref as Key)
         const shown = snap.rows.map((r) => r.key)
-        // Рядок, який читання не змогло покласти в сховище, бракує лише через
-        // надгробок ключа, новіший за старт читання: решта
-        // першої сторінки сервера мусить бути показана, у порядку сервера.
+        // Уся перша сторінка сервера показана, у порядку сервера.
         const at = shown.map((k) => expected.indexOf(k))
         if (at.some((x, n) => x < 0 || (n > 0 && x <= at[n - 1]!)))
           fail(where, `window ${shown.join()} ⊄ server ${expected.join()}`)
         for (const k of expected) {
-          if (!shown.includes(k) && !inspect.buried(TASK, k, convergeStart))
+          if (!shown.includes(k))
             fail(
               where,
               `window ${shown.join()} lacks ${k} of ${expected.join()}`
@@ -1544,14 +1538,7 @@ async function runModel(
                 String((spec.where as { value: unknown }).value))
           )
         })
-        // Рядок, якого читання не змогло покласти в сховище через надгробок
-        // його ключа (інший вигляд звільнив слот пізніше початку читання),
-        // у складі може бракувати: це правило сховища, не втрата.
-        const lost = expected.filter(
-          (k) => !shown.includes(k) && inspect.buried(TASK, k, convergeStart)
-        )
-        const rest = expected.filter((k) => !lost.includes(k))
-        if ([...shown].sort().join() !== [...rest].sort().join())
+        if ([...shown].sort().join() !== [...expected].sort().join())
           fail(where, `composition ${shown.join()} ≠ server ${expected.join()}`)
       }
       if (spec.kind === "section" && snap.section !== undefined) {
@@ -1673,6 +1660,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "recheck-needs-listeners",
   "page-without-generation",
   "window-copies-values",
+  "bury-removed-current-epoch",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -1690,6 +1678,9 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "hide-lifted-by-older-read": /after hide without a later read/,
   "section-ignores-hide": /not re-read after hide/,
   "recheck-needs-listeners": /not re-read after hide/,
+  // Читання між позначкою `removed` і похованням слота відкидається, тож
+  // `full` чи вікно закінчують без рядка сервера.
+  "bury-removed-current-epoch": /^converge .*(composition|lacks)/,
 }
 
 describe("core model self-check", () => {
