@@ -1009,14 +1009,19 @@ async function runModel(
       const touched = [b.flight]
       for (let g = (b.gen ?? 0) + 1; g <= (a.gen ?? 0); g++) touched.push(g)
       if (touched.some((g) => g !== undefined && mine?.has(g) === true)) return
-      // Сторінка вікна, читання якої було в польоті: склад росте з краю, а
-      // порядок наявного той самий (дія користувача — `loadAfter`/
-      // `loadBefore`; читання старого ланцюжка позначок не лишає, тож його
-      // пізня відповідь росту не виправдовує).
+      // Сторінка вікна, читання якої було в польоті (дія користувача —
+      // `loadAfter`/`loadBefore`; читання старого ланцюжка позначок не лишає,
+      // тож його пізня відповідь росту не виправдовує): склад росте лише з
+      // краю — попередні ключі лишаються префіксом чи суфіксом нового складу, а
+      // приріст не більший за сторінки в польоті. Порожнє вікно теж росте так:
+      // сторінка від порожнього краю — той самий випадок.
+      const grown = a.keys.length - b.keys.length
       if (
         b.paging > 0 &&
-        a.keys.length > b.keys.length &&
-        a.keys.join().includes(b.keys.join())
+        grown > 0 &&
+        grown <= b.paging * LIMITS.windowPage &&
+        (a.keys.slice(0, b.keys.length).join() === b.keys.join() ||
+          a.keys.slice(grown).join() === b.keys.join())
       )
         return
       if (purgeStep) {
