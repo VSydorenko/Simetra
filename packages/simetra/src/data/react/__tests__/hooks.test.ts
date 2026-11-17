@@ -402,16 +402,29 @@ describe("isStale", () => {
     expect(list.last().isStale).toBe(false)
     expect(card.last().isStale).toBe(false)
     // Читання вже з іншою епохою: ядро перемикає епоху й позначає рядки
-    // `stale` до власного перечитування (таймер — до 1 мс, не в мікрозадачах).
+    // `stale` до власного перечитування. Сервер тримає всі читання, поки тест
+    // їх не відпустить, тож перечитування не може обігнати перевірку.
     fake.epoch = EB
     fake.insert(TASK, taskValues(3))
+    fake.mode = "manual"
     act(() => {
       void core.preload({ kind: "card", object: TASK, key: key(3) })
     })
     await flush()
+    act(() => fake.take().answer())
+    await flush()
     expect(list.last().isStale).toBe(true)
     expect(card.last().isStale).toBe(true)
+    // Таймер системного перечитування (1 мс) спрацьовує, але відповідь тримає сервер.
     await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+      await settle()
+    })
+    expect(list.last().isStale).toBe(true)
+    expect(card.last().isStale).toBe(true)
+    fake.mode = "auto"
+    await act(async () => {
+      fake.deliverAll()
       await new Promise((r) => setTimeout(r, 30))
       await settle()
     })
