@@ -56,7 +56,8 @@ export async function readShadowEnvironment(
         AND cn.nspname = ANY($1::text[])
         AND NOT ${providerTriggerInBoundarySql(
           "t.oid",
-          "SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = ANY($2::text[])"
+          "SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = ANY($2::text[])",
+          "SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = ANY($4::text[])"
         )}
         AND NOT n.nspname = ANY($3::text[])
         AND NOT EXISTS (SELECT FROM pg_catalog.pg_depend x
@@ -67,6 +68,7 @@ export async function readShadowEnvironment(
       [...PROVIDER_SCHEMAS[scope.provider]],
       [...scope.schemas],
       [...PROVIDER_ASSUMED_SCHEMAS[scope.provider], ...AMBIENT_SCHEMAS],
+      [...PROVIDER_ASSUMED_SCHEMAS[scope.provider]],
     ]
   )
   const refusals = rows

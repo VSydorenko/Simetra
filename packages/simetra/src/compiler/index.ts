@@ -88,6 +88,7 @@ export { loadPlpgsqlParser, type PlpgsqlParser } from "./sql/plpgsql"
 export {
   statementTargets,
   triggerFunctionSchema,
+  triggerWhenFunctionSchemas,
   unitPlacement,
   unitSubjectKeys,
   unitTarget,

@@ -4,7 +4,10 @@ import {
   type EngineScope,
 } from "../engine"
 import type { ApplyTransaction } from "./port"
-import { providerTriggerInBoundarySql } from "./provider-trigger-boundary"
+import {
+  PROVIDER_ASSUMED_SCHEMAS,
+  providerTriggerInBoundarySql,
+} from "./provider-trigger-boundary"
 
 /**
  * Версія формули відбитка. Відбитки різних версій не порівнюються: зміна
@@ -95,6 +98,7 @@ export async function readFingerprint(
     scope.schemas,
     JSON.stringify(surfaces),
     PROVIDER_SYSTEM_ROLES[scope.provider],
+    PROVIDER_ASSUMED_SCHEMAS[scope.provider],
   ])
   const row = rows[0]
   const sections = {} as Record<FingerprintSection, string>
@@ -153,7 +157,11 @@ const sorted = (source: string, expr = "v"): string =>
 
 /** Чи тригер `t` на поверхні провайдера належить межі — одне правило з політикою. */
 const ownTriggerFunction = (t: string): string =>
-  providerTriggerInBoundarySql(`${t}.oid`, "select oid from scope_ns")
+  providerTriggerInBoundarySql(
+    `${t}.oid`,
+    "select oid from scope_ns",
+    "select oid from pg_namespace where nspname = any($4::text[])"
+  )
 
 /**
  * Чи анотація (коментар, мітка безпеки) рядка `a` з `classoid`/`objoid`
@@ -554,7 +562,8 @@ const SCOPE_CTES = `
 
 /**
  * Один запит на всі секції: `$1` — схеми межі, `$2` — JSON поверхонь
- * провайдера з `table` як шаблоном `LIKE`, `$3` — системні ролі провайдера.
+ * провайдера з `table` як шаблоном `LIKE`, `$3` — системні ролі провайдера,
+ * `$4` — власні схеми провайдера (`PROVIDER_ASSUMED_SCHEMAS`).
  */
 const FINGERPRINT_SQL = `
 with${SCOPE_CTES},
