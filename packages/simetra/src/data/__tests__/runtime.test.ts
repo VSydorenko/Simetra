@@ -752,3 +752,24 @@ describe("runtime core", () => {
     expect(fake.log).toHaveLength(1)
   })
 })
+
+describe("residency", () => {
+  it("is window unless the settings name the object", () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    expect(runtimeOver(fake).core.residencyOf(TASK)).toBe("window")
+    const { core } = runtimeOver(fake, { residency: { [TASK]: "full" } })
+    expect(core.residencyOf(TASK)).toBe("full")
+  })
+
+  it("refuses an object outside the catalog or a strategy it does not know", () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    expect(() =>
+      runtimeOver(fake, { residency: { "Catalog.Nope": "full" } })
+    ).toThrow(TypeError)
+    expect(() =>
+      runtimeOver(fake, {
+        residency: { [TASK]: "both" as unknown as "full" },
+      })
+    ).toThrow(TypeError)
+  })
+})

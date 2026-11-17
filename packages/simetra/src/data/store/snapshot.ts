@@ -281,10 +281,22 @@ export function shareSnapshot(
     prev.section === section &&
     prev.strategy === next.strategy &&
     prev.truncated === next.truncated &&
-    prev.atEnd === next.atEnd
+    prev.atEnd === next.atEnd &&
+    prev.atStart === next.atStart &&
+    prev.chain === next.chain &&
+    prev.target === next.target &&
+    prev.count?.value === next.count?.value &&
+    prev.count?.capped === next.count?.capped
   )
     return prev
-  const out: Record<string, unknown> = { ...next, rows, section }
+  // Рівний `count` лишає посилку попереднього: знімок не змінюється без причини.
+  const count =
+    prev?.count !== undefined &&
+    prev.count.value === next.count?.value &&
+    prev.count.capped === next.count.capped
+      ? prev.count
+      : next.count
+  const out: Record<string, unknown> = { ...next, rows, section, count }
   for (const name of Object.keys(out)) {
     if (out[name] === undefined) delete out[name]
   }

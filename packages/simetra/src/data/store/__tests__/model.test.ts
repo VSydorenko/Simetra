@@ -410,6 +410,10 @@ async function runModel(
   // Вигляд ТЧ (SPECS[4]) утримано `preload` цього кроку: спостереження, як
   // і слухач, вимагає перечитування після `hide` власника.
   let preloadedSection = false
+  // ТЧ утримується `preload` без слухачів, а `hide` власника був у польоті
+  // її першого завантаження: перечитати її має кінець того польоту, тож
+  // прапорець живе, доки перевірка не побачить завершеного польоту.
+  let heldInFlight = false
   // Ключ, що став `removed`: значення — лише з читання після позначки (П15).
   const removedBarrier = new Map<string, number>()
   // Мить (довжина журналу запитів), коли свіжа відповідь «рядка немає»
@@ -805,11 +809,16 @@ async function runModel(
   const checkSectionReread = (label: string) => {
     const spec = SPECS[4]!
     if (spec.kind !== "section") return
-    if (subs[4] === undefined && !preloadedSection) return
+    if (subs[4] === undefined && !preloadedSection && !heldInFlight) return
     const barrier = hideBarrier.get(id(TASK, spec.owner))
     if (barrier === undefined) return
     const s = internals.registry.find(spec)
-    if (s === undefined || s.purged || s.flight !== undefined) return
+    if (s === undefined || s.purged) {
+      heldInFlight = false
+      return
+    }
+    if (s.flight !== undefined) return
+    heldInFlight = false
     // Сесія після межі відкинутих відповідей не читає (Р12); власник
     // `removed` рядків не показує, і читання ТЧ їх не поверне.
     if (inspect.versionEpochs().unavailable) return
@@ -1191,6 +1200,9 @@ async function runModel(
         break
       }
       case "hide": {
+        // Плоский `hide` держану ТЧ не перечитує (тригери — монтування,
+        // `preload`, `commit` зі слухачем).
+        heldInFlight = false
         const object = s.org ? ORG : TASK
         const target = s.org ? ORG_KEYS[s.k % 2]! : KEYS[s.k]!
         commit((w) => w.hide(object, [target]))
@@ -1201,6 +1213,7 @@ async function runModel(
       case "hideSection": {
         if (closed !== undefined) break
         const section = SPECS[4]!
+        heldInFlight = false
         userViews = new Set([4])
         if (s.state === "mounted") subscribe(4, label)
         else if (s.state === "held") {
@@ -1238,7 +1251,16 @@ async function runModel(
         if (closed !== undefined) break
         await flush()
         if (s.then === "sub") subscribe(4, label)
-        else if (s.then === "preload") preload(4, false, label)
+        else if (s.then === "preload") {
+          preload(4, false, label)
+          // `preload` застає перше завантаження в польоті: перевірку
+          // (`check(s, true)`) відкладено до його кінця, і слухачів тоді
+          // немає. Закінчений політ уже перечитано самим `preload`.
+          heldInFlight =
+            s.state === "flight" &&
+            preloadedSection &&
+            internals.registry.find(section)?.flight !== undefined
+        }
         break
       }
       case "revalidate":
@@ -1540,6 +1562,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "system-reread-via-load",
   "hide-lifted-by-older-read",
   "section-ignores-hide",
+  "recheck-needs-listeners",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -1556,6 +1579,7 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "system-reread-via-load": /composition/,
   "hide-lifted-by-older-read": /after hide without a later read/,
   "section-ignores-hide": /not re-read after hide/,
+  "recheck-needs-listeners": /not re-read after hide/,
 }
 
 describe("core model self-check", () => {
