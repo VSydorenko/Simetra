@@ -48,7 +48,7 @@ const FACTS = {
     "simetra",
     "postgres",
     "service_role",
-    '{"authenticator","supabase_auth_admin","supabase_storage_admin","supabase_realtime_admin","supabase_admin"}',
+    '{"authenticator","pgbouncer","supabase_admin","supabase_auth_admin","supabase_etl_admin","supabase_functions_admin","supabase_read_only_user","supabase_replication_admin","supabase_storage_admin"}',
   ],
 }
 const FACT_COLUMNS = [
