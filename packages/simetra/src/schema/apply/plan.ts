@@ -517,7 +517,7 @@ export function providerTriggerKey(
  * Згенеровані тригери на таблицях провайдера з таблицею з дерева оператора:
  * генератор завжди кваліфікує її схемою.
  */
-export function providerTriggerUnits(
+function providerTriggerUnits(
   desired: readonly SqlUnit[],
   appSchemas: readonly string[]
 ): (SqlUnit & { table: { schema: string; name: string } })[] {
