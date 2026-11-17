@@ -32,7 +32,6 @@ import {
   type ApplyTransaction,
   type EngineAction,
   type EngineCatalog,
-  type PlanStep,
   type PromotionInput,
   type SchemaEngine,
 } from "simetra/schema"
@@ -640,19 +639,32 @@ describe("buildPlan", () => {
 describe("buildPlan: identity trigger lock", () => {
   // Гейт — над кроками обох шляхів плану: без промоції після класифікації,
   // з промоцією — над кроками копії після наміру
-  it.each([
-    { case: "plan", promotion: false },
-    { case: "plan with a promotion", promotion: true },
-  ])(
-    "refuses a removal of a provision trigger on the postgres profile ($case)",
-    async ({ promotion }) => {
+  // Зняття й увімкнення вимкненого тригера провізії — обидва лише для
+  // власника таблиці
+  const CASES = [
+    { case: "plan", promotion: false, reason: "removed" },
+    { case: "plan with a promotion", promotion: true, reason: "removed" },
+    { case: "plan", promotion: false, reason: "disabled" },
+    { case: "plan with a promotion", promotion: true, reason: "disabled" },
+  ] as const
+  const lockedAction = (
+    reason: "removed" | "disabled",
+    provider: DatabaseProvider
+  ): EngineAction =>
+    reason === "removed"
+      ? dropIdentityTrigger(provider)
+      : enableTrigger(PROVIDER_IDENTITY_SOURCES[provider].table)
+
+  it.each(CASES)(
+    "refuses a $reason provision trigger on the postgres profile ($case)",
+    async ({ promotion, reason }) => {
       const domain = onProvider("postgres")
       const { before, desired, records } = promotion
         ? await promotedTag(domain)
         : await samePolicyDomain(domain)
       const target = await fakeTarget(before, { notCopies: [] })
       const outcome = await buildPlan(
-        fakeEngine([dropIdentityTrigger("postgres")]),
+        fakeEngine([lockedAction(reason, "postgres")]),
         { reader: target.reader, scratch: emptyScratch },
         desired,
         { target: { url: "postgres://target" } },
@@ -668,6 +680,7 @@ describe("buildPlan: identity trigger lock", () => {
               trigger: IDENTITY_TRIGGERS[0],
               table: `${quoteIdent(table.schema)}.${quoteIdent(table.name)}`,
               login: PROVIDER_LOGIN_ROLES.postgres[0],
+              reason,
             },
           }),
         ]
@@ -677,12 +690,9 @@ describe("buildPlan: identity trigger lock", () => {
     }
   )
 
-  it.each([
-    { case: "plan", promotion: false },
-    { case: "plan with a promotion", promotion: true },
-  ])(
-    "lets the supabase profile remove a provision trigger ($case)",
-    async ({ promotion }) => {
+  it.each(CASES)(
+    "lets the supabase profile pass a $reason provision trigger ($case)",
+    async ({ promotion, reason }) => {
       const { before, desired, records } = promotion
         ? await promotedTag()
         : await samePolicyDomain()
@@ -690,7 +700,7 @@ describe("buildPlan: identity trigger lock", () => {
       // Гейт пропускає: план іде до сліду, де фейк його зупиняє
       await expect(
         buildPlan(
-          fakeEngine([dropIdentityTrigger("supabase")]),
+          fakeEngine([lockedAction(reason, "supabase")]),
           { reader: target.reader, scratch: emptyScratch },
           desired,
           { target: { url: "postgres://target" } },
@@ -709,11 +719,12 @@ describe("identityTriggerLocks", () => {
     table: on.name,
     name,
   })
-  const step = (
-    over: Partial<Pick<PlanStep, "destroyed" | "produced">>
-  ): Pick<PlanStep, "destroyed" | "produced"> => ({
-    destroyed: [],
-    produced: [],
+  const step = (over: Partial<EngineAction> = {}): EngineAction => ({
+    ...enableTrigger(table),
+    verb: "create",
+    consumes: [],
+    consumed: [],
+    lockedTables: [],
     ...over,
   })
   const [provision] = IDENTITY_TRIGGERS as [string]
@@ -733,9 +744,34 @@ describe("identityTriggerLocks", () => {
           trigger: provision,
           table: "idp.users",
           login: "owner_login",
+          reason: "removed",
         },
       }),
     ])
+  })
+
+  it("refuses a step that enables a disabled provision trigger", () => {
+    expect(
+      identityTriggerLocks([enableTrigger(table)], table, "owner_login")
+    ).toEqual([
+      expect.objectContaining({
+        code: "plan.identity-trigger-locked",
+        params: {
+          trigger: provision,
+          table: "idp.users",
+          login: "owner_login",
+          reason: "disabled",
+        },
+      }),
+    ])
+    // Знятий і ввімкнений тригер — одна відмова зняття
+    expect(
+      identityTriggerLocks(
+        [step({ destroyed: [ref(provision)] }), enableTrigger(table)],
+        table,
+        "owner_login"
+      ).map((d) => d.params.reason)
+    ).toEqual(["removed"])
   })
 
   it.each([
@@ -750,6 +786,24 @@ describe("identityTriggerLocks", () => {
     [
       "a provision trigger name on another table",
       [step({ destroyed: [ref(provision, { schema: "idp", name: "other" })] })],
+    ],
+    [
+      "enabling a provision trigger name on another table",
+      [enableTrigger({ schema: "idp", name: "other" })],
+    ],
+    [
+      // Суб'єкт перевизначення — функція провізії, тригер лише вжито
+      "an in-place change whose subject is not the trigger",
+      [
+        step({
+          verb: "alter",
+          consumes: ["function:idp.f()", `trigger:idp.users.${provision}`],
+          consumed: [
+            { kind: "function", schema: "idp", name: "f" },
+            ref(provision),
+          ],
+        }),
+      ],
     ],
   ])("passes %s", (_name, steps) => {
     expect(identityTriggerLocks(steps, table, "owner_login")).toEqual([])
@@ -1141,6 +1195,30 @@ function dropIdentityTrigger(provider: DatabaseProvider): EngineAction {
     newSegmentBefore: false,
     lockedTables: [{ schema, name: table }],
     lockClass: "accessExclusive",
+    dataLoss: false,
+    rewriteRisk: false,
+  }
+}
+
+/**
+ * Дія двигуна, що вмикає вимкнений живий перший платформний тригер таблиці
+ * `on`: зміна на місці (`enabled: alter` pg-delta), суб'єкт — перший вжитий.
+ */
+function enableTrigger(on: { schema: string; name: string }): EngineAction {
+  const name = IDENTITY_TRIGGERS[0]!
+  return {
+    sql: `ALTER TABLE ${quoteIdent(on.schema)}.${quoteIdent(on.name)} ENABLE TRIGGER ${quoteIdent(name)}`,
+    verb: "alter",
+    produces: [],
+    consumes: [`trigger:${on.schema}.${on.name}.${name}`],
+    destroys: [],
+    produced: [],
+    destroyed: [],
+    consumed: [{ kind: "trigger", schema: on.schema, table: on.name, name }],
+    transactionality: "transactional",
+    newSegmentBefore: false,
+    lockedTables: [{ schema: on.schema, name: on.name }],
+    lockClass: "shareRowExclusive",
     dataLoss: false,
     rewriteRisk: false,
   }

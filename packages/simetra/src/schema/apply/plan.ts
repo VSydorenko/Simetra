@@ -174,6 +174,7 @@ import {
   classifySteps,
   foreignChanges,
   lintSteps,
+  redefined,
   requiredPermissions,
   stepId,
   type PlanAction,
@@ -576,46 +577,64 @@ export function identityTableRefusal(
 
 /**
  * Steps that remove a platform trigger (`IDENTITY_TRIGGERS`) from the
- * identity table `table` — `plan.identity-trigger-locked`, one per trigger
- * (spec of provider profiles §4.2). Only `destroyed` counts: a changed
- * trigger reaches the plan as one `CREATE OR REPLACE TRIGGER` step
- * (`triggerReplacements`), which needs only `TRIGGER`; a first creation
- * and a changed provision function are not removals. `login` is the login
- * role of the provider that owns the table: only it can run the removal.
+ * identity table `table` or change it in place — `plan.identity-trigger-locked`,
+ * one per trigger (spec of provider profiles §4.2), with `reason`
+ * `removed` or `disabled`. A changed definition reaches the plan as one
+ * `CREATE OR REPLACE TRIGGER` step (`triggerReplacements`), which needs only
+ * `TRIGGER`; a first creation and a changed provision function are neither.
+ * `login` is the login role of the provider that owns the table: only it can
+ * run such a step.
  */
 export function identityTriggerLocks(
-  steps: readonly Pick<PlanStep, "destroyed">[],
+  steps: readonly Pick<
+    PlanStep,
+    "verb" | "produces" | "destroys" | "consumes" | "consumed" | "destroyed"
+  >[],
   table: { schema: string; name: string },
   login: string
 ): EngineDiagnostic[] {
   const names = new Set(IDENTITY_TRIGGERS)
+  const provision = (r: EngineObjectRef): boolean =>
+    r.kind === "trigger" &&
+    r.schema === table.schema &&
+    r.table === table.name &&
+    names.has(r.name)
   const removed = new Set(
-    steps.flatMap((s) =>
-      s.destroyed.flatMap((r) =>
-        r.kind === "trigger" &&
-        r.schema === table.schema &&
-        r.table === table.name &&
-        names.has(r.name)
-          ? [r.name]
-          : []
-      )
-    )
+    steps.flatMap((s) => s.destroyed.filter(provision).map((r) => r.name))
   )
-  return [...removed].sort(byCodeUnit).map((trigger) =>
-    applyDiagnostic("plan.identity-trigger-locked", "error", {
-      trigger,
-      table: `${quoteIdent(table.schema)}.${quoteIdent(table.name)}`,
-      login,
+  // Єдина зміна тригера на місці, яку дає двигун, — стан спрацювання
+  // (`ALTER TABLE … ENABLE TRIGGER` над вимкненим живим тригером), а її, як і
+  // зняття, може лише власник таблиці: без відмови тут застосування впало б
+  // з голим 42501
+  const disabled = new Set(
+    steps.flatMap((s) => {
+      const ref = redefined(s)
+      return ref !== undefined && provision(ref) && !removed.has(ref.name)
+        ? [ref.name]
+        : []
     })
   )
+  return [
+    ...[...removed].map((trigger) => ({ trigger, reason: "removed" })),
+    ...[...disabled].map((trigger) => ({ trigger, reason: "disabled" })),
+  ]
+    .sort((a, b) => byCodeUnit(a.trigger, b.trigger))
+    .map(({ trigger, reason }) =>
+      applyDiagnostic("plan.identity-trigger-locked", "error", {
+        trigger,
+        table: `${quoteIdent(table.schema)}.${quoteIdent(table.name)}`,
+        login,
+        reason,
+      })
+    )
 }
 
 /**
- * Відмова зняття тригерів провізії — лише в профілі, де зняти їх може тільки
- * власник таблиці (`PROVIDER_IDENTITY_TRIGGER_LOCKED`).
+ * Відмова зняття чи ввімкнення тригерів провізії — лише в профілі, де це
+ * може тільки власник таблиці (`PROVIDER_IDENTITY_TRIGGER_LOCKED`).
  */
 function lockedIdentityTriggers(
-  steps: readonly Pick<PlanStep, "destroyed">[],
+  steps: Parameters<typeof identityTriggerLocks>[0],
   provider: DatabaseProvider
 ): EngineDiagnostic[] {
   if (!PROVIDER_IDENTITY_TRIGGER_LOCKED[provider]) return []

@@ -4480,14 +4480,22 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "plan.identity-trigger-locked": {
     en: (p) =>
-      `The plan removes the provision trigger ${p.trigger} from the identity table ${p.table}, which only the owner of the table, ${p.login}, can do`,
+      p.reason === "disabled"
+        ? `The plan enables the provision trigger ${p.trigger}, which is disabled on the identity table ${p.table}; only the owner of the table, ${p.login}, can do that`
+        : `The plan removes the provision trigger ${p.trigger} from the identity table ${p.table}, which only the owner of the table, ${p.login}, can do`,
     uk: (p) =>
-      `План знімає тригер провізії ${p.trigger} з таблиці ідентичності ${p.table}, а це може лише власник таблиці, ${p.login}`,
+      p.reason === "disabled"
+        ? `План вмикає тригер провізії ${p.trigger}, вимкнений на таблиці ідентичності ${p.table}; це може лише власник таблиці, ${p.login}`
+        : `План знімає тригер провізії ${p.trigger} з таблиці ідентичності ${p.table}, а це може лише власник таблиці, ${p.login}`,
     hint: {
       en: (p) =>
-        `Nothing was planned or written. Run this removal as ${p.login}. If the live trigger was changed outside Simetra, treat it as a sign of tampering and check it with the owner of the table.`,
+        p.reason === "disabled"
+          ? `Nothing was planned or written. Enable the trigger on ${p.table} as ${p.login}, and plan again. If the trigger was disabled outside Simetra, treat it as a sign of tampering and check it with the owner of the table.`
+          : `Nothing was planned or written. Run this removal as ${p.login}. If the live trigger was changed outside Simetra, treat it as a sign of tampering and check it with the owner of the table.`,
       uk: (p) =>
-        `Нічого не сплановано й не записано. Виконайте це зняття від ${p.login}. Якщо живий тригер змінено поза Simetra, вважайте це ознакою підробки й звірте його з власником таблиці.`,
+        p.reason === "disabled"
+          ? `Нічого не сплановано й не записано. Увімкніть тригер на ${p.table} від ${p.login} і сплануйте знову. Якщо тригер вимкнено поза Simetra, вважайте це ознакою підробки й звірте його з власником таблиці.`
+          : `Нічого не сплановано й не записано. Виконайте це зняття від ${p.login}. Якщо живий тригер змінено поза Simetra, вважайте це ознакою підробки й звірте його з власником таблиці.`,
     },
   },
   "plan.type-guard-unsupported": {

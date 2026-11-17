@@ -522,7 +522,7 @@ function inApplied(ref: EngineObjectRef, applied: CatalogModel): boolean {
  * опору звіряє тест на джерелі двигуна). Суб'єкт без схеми й імені (грант,
  * коментар, роль) структурного посилання не має, тож об'єктом не є.
  */
-function redefined(
+export function redefined(
   action: Pick<
     EngineAction,
     "verb" | "produces" | "destroys" | "consumes" | "consumed"

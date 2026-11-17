@@ -373,7 +373,7 @@ describe("identity trigger lock on the postgres profile", () => {
 
   // Один сценарій: застосування, підміна живого тригера, повернення його
   // кроком CREATE OR REPLACE від власника, далі справжнє зняття
-  it("returns a changed provision trigger with CREATE OR REPLACE and refuses its removal", async () => {
+  it("returns a changed provision trigger with CREATE OR REPLACE, refuses its removal and re-enabling", async () => {
     const withUsers = await smallModel(true)
     await apply(await plannedOf(withUsers), withUsers)
     const applied = await liveTriggers()
@@ -428,8 +428,44 @@ describe("identity trigger lock on the postgres profile", () => {
         trigger,
         table,
         login: PROVIDER_LOGIN_ROLES.postgres[0],
+        reason: "removed",
       }))
     )
+    expect(await liveTriggers()).toEqual(applied)
+
+    // Тригер провізії вимкнено поза Simetra: рушій дає ENABLE TRIGGER, а це
+    // теж лише власник таблиці — відмова плану замість 42501 застосування
+    await admin(lockDb(), (c) =>
+      c.query(`alter table ${table} disable trigger ${quoteIdent(provision)}`)
+    )
+    const enabledOf = () =>
+      admin(lockDb(), async (c) => {
+        const rows = await c.query<{ enabled: string }>(
+          `select tgenabled as enabled from pg_trigger
+            where tgrelid = $1::regclass and tgname = $2`,
+          [table, provision]
+        )
+        return rows.rows.map((r) => r.enabled)
+      })
+    expect(await enabledOf()).toEqual(["D"])
+    const disabled = await buildPlan(engine, dbs, withUsers, options(), [])
+    expect(disabled.status).toBe("refused")
+    expect(
+      disabled.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => [d.code, d.params])
+    ).toEqual([
+      [
+        "plan.identity-trigger-locked",
+        {
+          trigger: provision,
+          table,
+          login: PROVIDER_LOGIN_ROLES.postgres[0],
+          reason: "disabled",
+        },
+      ],
+    ])
+    expect(await enabledOf()).toEqual(["D"])
     expect(await liveTriggers()).toEqual(applied)
   })
 })

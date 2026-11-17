@@ -368,6 +368,10 @@ Better Auth); сервісної ролі профілю, коли вона не
 `better_auth."user"`, з порадою виконати цей крок від `simetra_auth`; гейт
 судить дані T2 `PROVIDER_IDENTITY_TRIGGER_LOCKED`, а не факт власності.
 `CREATE OR REPLACE TRIGGER` потребує лише привілею `TRIGGER` і проходить.
+Увімкнення вимкненого живого тригера провізії (`ALTER TABLE … ENABLE
+TRIGGER`) теж вимагає власника таблиці, тож той самий гейт відмовляє й на
+ньому, з причиною `disabled` (зняття — `removed`) і порадою ввімкнути тригер
+від `simetra_auth`.
 Це окрема перевірка плану, а не `PROVIDER_LOCKS`: та мапа
 описує замки supautils з налаштуванням цілі, а в чистому Postgres їх
 немає (`PROVIDER_LOCKS.postgres` — порожні `sources` і `services`). Зміна
