@@ -514,7 +514,11 @@ export function createObjectStore(options: {
       }
       // Позначки знімає лише читання, що почалось після них (Р-2 серії):
       // результат запису читанням не є, тож ключ іде на перечитування.
-      if (e.removed !== undefined || e.stale.hidden !== undefined)
+      const liftsHidden = defects.has("write-back-lifts-hidden")
+      if (
+        e.removed !== undefined ||
+        (e.stale.hidden !== undefined && !liftsHidden)
+      )
         return "skipped"
       if (buried(row.key, e.scope, readEpoch)) return "skipped"
       const incoming =
@@ -537,6 +541,8 @@ export function createObjectStore(options: {
       e.row = merged
       e.version = merged.version
       e.writtenEpoch = Math.max(e.writtenEpoch, readEpoch)
+      // Дефект самотесту: запис результату знімає позначку `hide`.
+      if (liftsHidden) delete e.stale.hidden
       return "written"
     },
 

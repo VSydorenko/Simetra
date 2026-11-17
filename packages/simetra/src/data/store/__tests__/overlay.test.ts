@@ -5,7 +5,12 @@ import { createCore, inspectCore, type CoreSession } from "../core"
 import { JOURNAL_MAX } from "../overlay"
 import { createCoreSource, createReadLimiter, type ServerPort } from "../source"
 import { createFakeSource, type FakeSource } from "../testing/fake-source"
-import { DEFAULT_CORE_LIMITS, type RowView, type ViewHandle } from "../types"
+import {
+  DEFAULT_CORE_LIMITS,
+  type CoreLimits,
+  type RowView,
+  type ViewHandle,
+} from "../types"
 import {
   OBJECTS,
   TASK,
@@ -47,7 +52,7 @@ interface Port {
   release(): void
 }
 
-function harness() {
+function harness(limits?: Partial<CoreLimits>) {
   const fake = createFakeSource({ objects: OBJECTS, epoch: EPOCH })
   const queue: (() => void)[] = []
   const port: Port = {
@@ -93,6 +98,7 @@ function harness() {
     index: fake.index,
     log: () => {},
     onStaleClient,
+    ...(limits === undefined ? {} : { limits }),
   })
   return { fake, core, port, onStaleClient, inspect: inspectCore(core) }
 }
@@ -663,6 +669,25 @@ describe("write-back without a full row (Р3, Р4)", () => {
     expect(keyReads(h.fake).length).toBe(reads)
     expect(h.inspect.rowCount()).toBe(0)
     expect(h.inspect.serviceSizes().journal).toBe(0)
+  })
+
+  it("a purge whose tombstone was evicted in flight still settles without a row (the horizon)", async () => {
+    const h = harness({ tombstonesMax: 1 })
+    const { version } = await mounted(h)
+    h.port.hold = true
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    h.core.commit((w) => w.purge(TASK, { keys: [K] }), h.core.token())
+    // Надгробок K витісняє надгробок іншого ключа: лишається лише горизонт.
+    h.core.commit((w) => w.purge(TASK, { keys: [key(2)] }), h.core.token())
+    h.port.release()
+    await settle()
+    expect(await m.settled).toEqual({ ok: true, rows: [undefined] })
   })
 
   it("a tombstone newer than the attempt refuses the write also when a later read brought the key back", async () => {

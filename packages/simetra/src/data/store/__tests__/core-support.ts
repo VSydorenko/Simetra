@@ -4,7 +4,7 @@ import {
   catalogEntry,
 } from "../../../model/runtime/__tests__/entries"
 import { createCore, inspectCore, type CoreSession } from "../core"
-import { createCoreSource, createReadLimiter } from "../source"
+import { createCoreSource, createReadLimiter, type ServerPort } from "../source"
 import {
   createFakeSource,
   type FakeRead,
@@ -61,6 +61,8 @@ export function setup(
     reverseRows?: boolean
     /** The catalog of the fake server and the core; default `OBJECTS`. */
     objects?: readonly CatalogEntry[]
+    /** The server port over the fake; default the fake's own. */
+    server?: (fake: FakeSource) => ServerPort
   } = {}
 ): CoreHarness {
   const fake = createFakeSource({
@@ -95,7 +97,7 @@ export function setup(
     () => adapter,
     fake.index,
     createReadLimiter(limits.readParallel),
-    fake.server
+    options.server?.(fake) ?? fake.server
   )
   const log: CoreLogEntry[] = []
   const core = createCore({

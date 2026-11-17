@@ -6,6 +6,7 @@ import {
   type Operation,
 } from "simetra/model"
 import { DataError } from "../errors"
+import { NO_DEFECTS, type Defects } from "./defects"
 import { keyId, pairId } from "./epoch"
 import type { ObjectState } from "./forms"
 import type { RowEntry } from "./object-store"
@@ -96,6 +97,19 @@ export interface Overlay {
   close(reason: CloseReason): void
   /** Mutations in the journal plus attempts not yet settled (inspection). */
   size(): number
+  /** The mutations in the journal (inspection). */
+  entries(): JournalInspection[]
+}
+
+/** One mutation of the journal as the model test sees it. */
+export interface JournalInspection {
+  readonly object: ObjectName
+  readonly key: Key
+  /** The id of the current attempt. */
+  readonly id: string
+  readonly state: MutationState
+  /** The fields were erased by a purge or `removed` (Р11). */
+  readonly erased: boolean
 }
 
 /** One attempt of a mutation: one `run` (§7.1). */
@@ -178,8 +192,16 @@ export function createOverlay(deps: {
   /** Re-reads the key by key (`rereadKey`). */
   reread(object: ObjectName, key: Key, options: RereadOptions): void
   log(entry: CoreLogEntry): void
+  /** Deliberate defects of the model test's self-check. */
+  defects?: Defects
 }): Overlay {
   const { session, source, index, objectOf, rowViews, commit } = deps
+  const defects = deps.defects ?? NO_DEFECTS
+  // Дефект самотесту: відповідь скасованої спроби пишеться — і токеном
+  // сесії, бо токен спроби її вже не пропустив би.
+  const afterCancel = () => defects.has("answer-after-cancel")
+  const tokenOf = (attempt: Attempt) =>
+    afterCancel() ? session.token() : attempt.token
   const journal = new Map<string, JournalEntry>()
   // Спроби, чий `settled` ще не розв'язано, — і ті, що вже поза журналом
   // (скасовані в польоті): закриття розв'язує всі.
@@ -274,7 +296,7 @@ export function createOverlay(deps: {
     local = false
   ) {
     // Скасовано чи закрито: відповідь нічого не пише (Р9, токен спроби).
-    if (!attempt.live) {
+    if (!attempt.live && !afterCancel()) {
       attempt.resolve(
         result.ok
           ? { ok: true, rows: result.rows.map(() => undefined) }
@@ -293,6 +315,7 @@ export function createOverlay(deps: {
     const lazy = o.lazyFields.some((f) => Object.hasOwn(entry.values ?? {}, f))
     const owned = () => (o.rows.get(entry.key)?.owners ?? 0) > 0
     let form: "list" | "card" | undefined
+    let separate = false
     if (row === undefined) form = lazy && owned() ? "card" : "list"
     else {
       const ran = commit((writer) => {
@@ -312,15 +335,29 @@ export function createOverlay(deps: {
           form = lazy ? "card" : "list"
           return
         }
+        if (defects.has("settle-separate-commit")) {
+          separate = true
+          return
+        }
         // Запис рядка й зняття мутації — одне сповіщення (§7.2, крок 3).
         drop(entry)
         attempt.resolve({
           ok: true,
           rows: [buried(entry, attempt) ? undefined : row],
         })
-      }, attempt.token)
+      }, tokenOf(attempt))
       if (!ran) {
         attempt.resolve({ ok: true, rows: [undefined] })
+        return
+      }
+      if (separate) {
+        commit(() => {
+          drop(entry)
+          attempt.resolve({
+            ok: true,
+            rows: [buried(entry, attempt) ? undefined : row],
+          })
+        }, tokenOf(attempt))
         return
       }
       if (form === undefined) return
@@ -350,7 +387,7 @@ export function createOverlay(deps: {
       form,
       unconfirmed,
       onCommit(outcome) {
-        if (!attempt.live) {
+        if (!attempt.live && !afterCancel()) {
           attempt.resolve({ ok: true, rows: [undefined] })
           return
         }
@@ -364,16 +401,20 @@ export function createOverlay(deps: {
     })
   }
 
-  /** A key or pair tombstone newer than the start of the attempt (§7.1). */
+  /**
+   * A key or pair tombstone newer than the start of the attempt (§7.1), or
+   * an eviction horizon newer than it: an evicted tombstone may have been
+   * the purge of this key, as on the read path (§6.2 rule 1).
+   */
   function buried(entry: JournalEntry, attempt: Attempt): boolean {
     const { epochs } = session
+    const since = (id: string) =>
+      epochs.buriedSince(id, attempt.readEpoch) ||
+      epochs.evictedSince(id, attempt.readEpoch)
     return (
-      epochs.buriedSince(keyId(entry.object, entry.key), attempt.readEpoch) ||
+      since(keyId(entry.object, entry.key)) ||
       (attempt.scope !== undefined &&
-        epochs.buriedSince(
-          pairId(entry.object, attempt.scope),
-          attempt.readEpoch
-        ))
+        since(pairId(entry.object, attempt.scope)))
     )
   }
 
@@ -398,7 +439,7 @@ export function createOverlay(deps: {
       commit(() => {
         drop(entry)
         attempt.resolve({ ok: false, error })
-      }, attempt.token)
+      }, tokenOf(attempt))
       attempt.resolve({ ok: false, error })
       return
     }
@@ -407,7 +448,7 @@ export function createOverlay(deps: {
       entry.error = error
       attempt.resolve({ ok: false, error })
       changed(entry)
-    }, attempt.token)
+    }, tokenOf(attempt))
     attempt.resolve({ ok: false, error })
     if (policy.stale && !local) deps.staleClient(entry.object)
     // Значень з відповіді немає, тож ключ перечитується (Р6); ключ без
@@ -432,6 +473,15 @@ export function createOverlay(deps: {
       entry.state = "pending"
       entry.error = undefined
       changed(entry)
+      if (defects.has("predict-before-answer")) {
+        // Дефект самотесту: значення мутації в рядку сховища до відповіді.
+        const e = objectOf(entry.object).rows.get(entry.key)
+        if (e?.row !== undefined)
+          e.row = {
+            ...e.row,
+            values: { ...e.row.values, ...entry.values },
+          }
+      }
     }, session.token())
     send(entry, attempt)
   }
@@ -561,5 +611,14 @@ export function createOverlay(deps: {
     },
 
     size: () => journal.size + unsettled.size,
+
+    entries: () =>
+      [...journal.values()].map((entry) => ({
+        object: entry.object,
+        key: entry.key,
+        id: entry.attempt.id,
+        state: entry.state,
+        erased: entry.values === undefined,
+      })),
   }
 }

@@ -3,7 +3,11 @@ import type { DefectFlag } from "./defects"
 import { fieldInfoOf, filterCollator } from "./filter"
 import { keyId } from "./epoch"
 import { createObjectStore } from "./object-store"
-import { createOverlay, type UpdateOptions } from "./overlay"
+import {
+  createOverlay,
+  type JournalInspection,
+  type UpdateOptions,
+} from "./overlay"
 import { createSectionStore } from "./section-store"
 import { createSession, type Scope } from "./session"
 import { createRowViews, purgedSnapshot } from "./snapshot"
@@ -179,6 +183,8 @@ export interface CoreInspection {
    * is already `removed`; the model then expects no older read to lift it.
    */
   watchRemarks(listener: (object: ObjectName, key: Key) => void): void
+  /** The mutations in the journal of own mutations. */
+  mutations(): JournalInspection[]
 }
 
 const inspections = new WeakMap<CoreSession, CoreInspection>()
@@ -745,6 +751,7 @@ export function createCore(options: {
       )
     },
     log,
+    defects,
   })
 
   internals.set(core, { objects, ops, registry })
@@ -754,6 +761,7 @@ export function createCore(options: {
     watchRemarks(listener) {
       remarkListener = listener
     },
+    mutations: () => overlay.entries(),
     versionEpochs: () => ({
       current: session.versions.current(),
       previous: session.versions.previous(),
