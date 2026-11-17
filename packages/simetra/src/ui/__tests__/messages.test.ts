@@ -54,6 +54,9 @@ describe("каталог повідомлень", () => {
       for (const key of REQUIRED_KEYS) {
         expect(catalogue[key]?.trim(), key).toBeTruthy()
       }
+      for (const [key, text] of Object.entries(MESSAGES[locale])) {
+        expect(text.trim(), key).not.toBe("")
+      }
     }
   )
 
