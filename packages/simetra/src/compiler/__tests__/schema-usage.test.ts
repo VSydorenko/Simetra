@@ -85,17 +85,27 @@ describe("USAGE on the application schema", () => {
   })
 
   it("leaves public and simetra to their own grants", async () => {
-    // Таблиці виду в `public`, функції платформи в `simetra`: генератор
-    // `USAGE` на жодну з них не дає
+    // Таблиці виду в `public`, функції платформного шару в `simetra` з
+    // `GRANT EXECUTE` ролям запиту: генератор `USAGE` на жодну з них не дає
     const model = await compiled({
       "project.meta.json": project({ defaultSchema: "public" }),
       "catalogs/Item/Item.meta.json": catalog("Item", { scope: "none" }),
+      "catalogs/Users/Users.meta.json": catalog("Users", {
+        id: uuid(7003),
+        role: "users",
+        scope: "none",
+      }),
     })
-    expect(
+    const granted = (schema: string) =>
       model.sqlUnits.some(
-        (u) => u.class === "grant" && u.generator === "access"
+        (u) =>
+          u.file === undefined &&
+          u.class === "grant" &&
+          u.identity.startsWith("grant:grant:") &&
+          u.name.startsWith(`${schema}.`)
       )
-    ).toBe(true)
+    expect(granted("public")).toBe(true)
+    expect(granted("simetra")).toBe(true)
     expect(model.sqlUnits.filter((u) => u.generator === "schemaUsage")).toEqual(
       []
     )
