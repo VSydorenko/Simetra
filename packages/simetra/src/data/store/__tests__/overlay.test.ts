@@ -823,6 +823,38 @@ describe("mutation actions (Р5, Р7, Р11)", () => {
     expect(shown(rowOf(card)).mutation).toBeUndefined()
   })
 
+  it("a conflict row older than the known version carries stale: true until a read proves the current one", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    for (let i = 0; i < 3; i++) h.fake.edit(TASK, K, { title: `theirs ${i}` })
+    const current = h.fake.row(TASK, K)!.version
+    // Сигнал приніс новішу версію: рядок сховища — нижчий за відомий.
+    h.core.commit((w) => w.markStale(TASK, [K], current), h.core.token())
+    holdReads(h.fake)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "mine" },
+      { expectedVersion: version }
+    )
+    expect(await m.settled).toMatchObject({
+      ok: false,
+      error: { code: "command.conflict" },
+    })
+    await settle()
+    // Стан мутації затуляє показ `stale` (§6.5), але факт лишається в рядку.
+    expect(shown(rowOf(card))).toMatchObject({
+      state: "conflict",
+      version,
+      stale: true,
+    })
+    h.fake.deliverAll()
+    await settle()
+    const after = shown(rowOf(card))
+    expect(after).toMatchObject({ state: "conflict", version: current })
+    expect(after.stale).toBeUndefined()
+  })
+
   it("unavailable on run is unknown with dismiss only, and the key is re-read", async () => {
     const h = harness()
     const { card, version } = await mounted(h)

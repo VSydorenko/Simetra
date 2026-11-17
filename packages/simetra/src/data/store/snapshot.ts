@@ -99,6 +99,9 @@ export function computeRowView(
   const values = shown ?? EMPTY_VALUES
   const { minVersion, disconnect, hidden: mark, epoch } = e.stale
   const hidden = mark !== undefined
+  // Факт, а не показ: стан мутації може затуляти `stale` (§6.5), а версія
+  // нижча за відому мусить лишатись видимою.
+  const outdated = minVersion !== undefined || epoch !== undefined
   const state =
     mutation !== undefined && !hidden
       ? mutation.state
@@ -128,6 +131,7 @@ export function computeRowView(
     base.version === e.version &&
     base.state === state &&
     (base.hidden === true) === hidden &&
+    (base.stale === true) === outdated &&
     base.values === nextValues &&
     base.staleFields === staleFields &&
     base.mutation === mutation &&
@@ -141,6 +145,7 @@ export function computeRowView(
     state,
     staleFields,
     ...(hidden ? { hidden: true as const } : {}),
+    ...(outdated ? { stale: true as const } : {}),
     ...(mutation === undefined ? {} : { mutation }),
   })
 }
@@ -159,6 +164,7 @@ export function withRefs(
     prev.version === base.version &&
     prev.state === base.state &&
     prev.hidden === base.hidden &&
+    prev.stale === base.stale &&
     prev.values === base.values &&
     prev.staleFields === base.staleFields &&
     prev.mutation === base.mutation &&

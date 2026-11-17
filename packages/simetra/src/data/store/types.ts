@@ -115,6 +115,12 @@ export type RowView =
        * until a read that started after it; a form shows no draft meanwhile.
        */
       readonly hidden?: true
+      /**
+       * The stored row is stale — a version below the known one or a version
+       * epoch switch not proved since — whatever `state` shows: a mutation
+       * state takes precedence over `stale` (§6.5), the fact stays here.
+       */
+      readonly stale?: true
       /** The own mutation of the row; its state is `state` unless hidden. */
       readonly mutation?: RowMutation
       readonly refs?: Readonly<Record<string, RowView | null>>
