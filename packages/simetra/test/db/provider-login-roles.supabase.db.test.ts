@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { PROVIDER_API_ROLES, PROVIDER_LOGIN_ROLES } from "simetra/model"
-import { withRollback } from "./connection"
+import {
+  PLATFORM_LOGIN_ROLES,
+  PROVIDER_API_ROLES,
+  PROVIDER_LOGIN_ROLES,
+  PROVIDER_OWNER_ROLES,
+} from "simetra/model"
+import { runTag, withRollback } from "./connection"
 
 /**
  * `PROVIDER_LOGIN_ROLES.supabase` — за фактом стеку, а не за призначенням:
@@ -11,6 +16,21 @@ import { withRollback } from "./connection"
  * вимкнено), тож `authenticator` доводить членство в ролях запиту API.
  */
 const LOGINS = PROVIDER_LOGIN_ROLES.supabase
+
+/**
+ * Ролі LOGIN стеку, яких навмисно немає в переліку, — кожна з причиною.
+ * Нова роль входу образу, якої немає ні тут, ні в переліку, валить тест.
+ */
+const NOT_PROVIDER_LOGINS: Record<string, string> = {
+  [PROVIDER_OWNER_ROLES.supabase]:
+    "the owner role: the migrator plans and applies under it, and the pooler (Supavisor) shares it",
+  ...Object.fromEntries(
+    Object.values(PLATFORM_LOGIN_ROLES).map((role) => [
+      role,
+      "a login of the platform, not of the provider: roles.sql creates it",
+    ])
+  ),
+}
 
 describe("supabase provider login roles", () => {
   it("lists only LOGIN roles", async () => {
@@ -25,6 +45,26 @@ describe("supabase provider login roles", () => {
     expect(rows).toEqual(
       [...LOGINS].sort().map((role) => ({ role, login: true }))
     )
+  })
+
+  it("names every LOGIN role of the stack, or excludes it with a reason", async () => {
+    // Теговані ролі прогону створюють тести; чужих прогонів на стеку немає:
+    // сторож пускає один DB-прогін за раз
+    const tag = runTag()
+    const roles = await withRollback((client) =>
+      client
+        .query<{ role: string }>(
+          "select rolname as role from pg_roles where rolcanlogin order by 1"
+        )
+        .then((r) => r.rows.map((row) => row.role))
+    )
+    const unexplained = roles.filter(
+      (role) =>
+        !LOGINS.includes(role) &&
+        !(role in NOT_PROVIDER_LOGINS) &&
+        !role.endsWith(`_${tag}`)
+    )
+    expect(unexplained).toEqual([])
   })
 
   it("covers every session of the provider's services", async () => {
