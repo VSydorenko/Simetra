@@ -875,7 +875,7 @@ async function startPostgresSteps(ctx, noBuild) {
     // `tsx` — залежність пакета simetra, не кореня: звідти її й резолвить `--import`
     await node(step.args, step.env, join(ROOT, "packages/simetra"))
     // Таблицю ідентичності створила міграція: повторний `roles` дає власнику
-    // `TRIGGER, REFERENCES` на неї (рішення Р7 ПГ-3), перший лише пропустив їх
+    // `TRIGGER, REFERENCES` на неї, перший лише пропустив їх
     await roles()
   } finally {
     await stopStartBackends(ctx)

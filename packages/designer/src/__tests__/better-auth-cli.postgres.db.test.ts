@@ -138,7 +138,7 @@ async function snapshot(set: PostgresClusterSet): Promise<unknown> {
 const noop = async (): Promise<void> => {}
 
 describe("prepareStackIdentity", () => {
-  // Гранти таблиці ідентичності — справа `roles` (Р7 ПГ-3): крок міграції
+  // Гранти таблиці ідентичності — справа `roles`: крок міграції
   // сам не дає власнику нічого, а повторний `roles` дає `TRIGGER`
   it("migrates as the auth role and grants nothing itself", async () => {
     const set = await cluster("mig")

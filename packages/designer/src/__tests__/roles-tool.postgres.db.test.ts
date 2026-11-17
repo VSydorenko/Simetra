@@ -405,7 +405,7 @@ describe("roles: the postgres profile cluster", () => {
     expect(await clusterState(set)).toEqual(state)
   })
 
-  // Гранти таблиці ідентичності (рішення Р7, Р11 плану ПГ-3): схема `better_auth`
+  // Гранти таблиці ідентичності: схема `better_auth`
   // не тегується, теговані лише база й ролі
   it("grants USAGE before the Better Auth migration, TRIGGER and REFERENCES after it, and nothing wider", async () => {
     const { set } = scenario("ident")

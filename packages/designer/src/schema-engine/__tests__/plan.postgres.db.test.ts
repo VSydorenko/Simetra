@@ -78,7 +78,7 @@ beforeAll(async () => {
   }
   await roles()
   await setTestPasswords(set)
-  // Гранти на таблицю ідентичності дає повторний `roles` після міграції (Р7)
+  // Гранти на таблицю ідентичності дає повторний `roles` після міграції
   await migrateBetterAuth(roleUrl(set, set.auth))
   await roles()
   // Рядок цілі, якого в копії доказу бути не має
@@ -261,7 +261,7 @@ describe("identity table gate on the postgres profile", () => {
     expect(await refusalOf(model)).toEqual(refused("table"))
 
     // Схему вертає `roles`, таблицю — міграція, гранти на неї — повторний
-    // `roles` (Р7)
+    // `roles`
     await gateRoles()
     await migrateBetterAuth(roleUrl(gate, gate.auth))
     await gateRoles()

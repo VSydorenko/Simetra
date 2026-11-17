@@ -14,6 +14,7 @@ import {
 import { attribute, catalog, uuid } from "../../../../simetra/test/support"
 import { asSuperuser, query } from "../../__tests__/support/db"
 import {
+  applyArtifact,
   blindDiagnostics,
   codes,
   compiled,
@@ -225,8 +226,8 @@ END $$;`
     })
 
     it("plans a changed provision trigger as one CREATE OR REPLACE step", async () => {
-      // Рушій міняє тригер парою DROP + CREATE; план зливає її (задача 3
-      // ПГ-3), а замка тригерів провізії на цьому профілі немає
+      // Рушій міняє тригер парою DROP + CREATE; план зливає її,
+      // а замка тригерів провізії на цьому профілі немає
       const model = await compiled({ [USERS]: users })
       const table = PROVIDER_IDENTITY_SOURCES.supabase.table
       const relation = `${quoteIdent(table.schema)}.${quoteIdent(table.name)}`
@@ -264,6 +265,9 @@ END $$;`
           ])
           expect(onTrigger[0]!.sql).toMatch(/^CREATE OR REPLACE TRIGGER /)
           expect(stepMatching(artifact, /^DROP TRIGGER/i)).toEqual([])
+          // Лише план нічого не доводить: роль застосування Supabase має
+          // вміти замінити тригер на `auth.users`
+          await applyArtifact(url, artifact, model)
         } finally {
           await query(admin, replace(live!.def))
         }

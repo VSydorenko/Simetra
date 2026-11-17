@@ -965,7 +965,7 @@ FileStore = {
 
 | Команда | Дія |
 | --- | --- |
-| `pnpm db:pg:start` | `docker compose -p simetra-pg up -d --wait`, ініціалізація Garage і `simetra.environment = 'development'`; з ПГ-2 далі ролі Simetra й шаблон `simetra_template` кроком `simetra roles` (§3.4, §3.5) з теки `docker/postgres-stack/project/` (`project.meta.json`, `provider: "postgres"`), dev-паролі ролям входу (з `login-secrets.env`), міграція Better Auth у базі `simetra` від `simetra_auth` і тимчасові гранти `USAGE` на `better_auth` та `TRIGGER`, `REFERENCES` на `better_auth."user"` для `simetra_owner` (усе під замком стека, гранти — лише після успішної міграції, повтор нічого не змінює); гранти до ПГ-3 стоять тут, ПГ-3 переносить їх у `roles`; `start` на запущеному стеку йде як `up -d --wait --no-recreate`, без `--build`, і відмовляє, коли файли `docker/postgres-stack/**` стека відрізняються від гілки (мітка `simetra.stack-files-hash` — `sha256` вмісту цих файлів — на кожному контейнері стека: в образу `postgres` з аргументу збірки, у решти сервісів з `labels` compose; хеш конфігу compose не звіряється, бо містить абсолютний шлях bind-монтувань і відрізнявся б між checkout-ами); зупинка стека — за власником |
+| `pnpm db:pg:start` | `docker compose -p simetra-pg up -d --wait`, ініціалізація Garage і `simetra.environment = 'development'`; з ПГ-2 далі ролі Simetra й шаблон `simetra_template` кроком `simetra roles` (§3.4, §3.5) з теки `docker/postgres-stack/project/` (`project.meta.json`, `provider: "postgres"`), dev-паролі ролям входу (з `login-secrets.env`), міграція Better Auth у базі `simetra` від `simetra_auth` і повторний `simetra roles`, що дає `simetra_owner` `USAGE` на `better_auth` та `TRIGGER`, `REFERENCES` на `better_auth."user"` (усе під замком стека, повтор нічого не змінює); `start` на запущеному стеку йде як `up -d --wait --no-recreate`, без `--build`, і відмовляє, коли файли `docker/postgres-stack/**` стека відрізняються від гілки (мітка `simetra.stack-files-hash` — `sha256` вмісту цих файлів — на кожному контейнері стека: в образу `postgres` з аргументу збірки, у решти сервісів з `labels` compose; хеш конфігу compose не звіряється, бо містить абсолютний шлях bind-монтувань і відрізнявся б між checkout-ами); зупинка стека — за власником |
 | `pnpm db:pg:stop` | `docker compose -p simetra-pg down` (томи лишаються; `--volumes` — лише явно) |
 | `pnpm test:db:pg` | набір базового стану `postgres` через Vitest-раннер, тест переривання і DB-тести `simetra` та `@simetrajs/designer` (проєкт `db`) на стеку `postgres` |
 | `pnpm db:signals:start`, `pnpm db:signals:stop` | Centrifugo поруч зі стеком `supabase` (compose-проєкт `simetra-sb`, §10.1) |
@@ -1031,7 +1031,7 @@ FileStore = {
   прогону — збій. На старті guard звіряє колонки `better_auth."user"` з
   `PROVIDER_EVENT_SOURCES.postgres` і стан після `db:pg:start` (власник
   `simetra_auth`, лише очікувані гранти); розбіжність — відмова з порадою.
-  Міграцію й тимчасові гранти дає `db:pg:start`, не `globalSetup`;
+  Міграцію й гранти на таблицю ідентичності (повторний `simetra roles`) дає `db:pg:start`, не `globalSetup`;
 - **прибирання на сигналах:** ті самі SIGINT, SIGTERM, SIGHUP; додатково
   `docker rm -f` контейнерів свого тегу; бакет свого тегу спершу
   спорожнюється, потім видаляється (Garage видаляє лише порожній бакет).

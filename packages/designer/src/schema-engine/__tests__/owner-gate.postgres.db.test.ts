@@ -64,7 +64,7 @@ beforeAll(async () => {
   }
   await roles()
   await setTestPasswords(set)
-  // Гранти на таблицю ідентичності дає повторний `roles` після міграції (Р7)
+  // Гранти на таблицю ідентичності дає повторний `roles` після міграції
   await migrateBetterAuth(roleUrl(set, set.auth))
   await roles()
 })
