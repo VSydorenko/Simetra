@@ -14,8 +14,8 @@ const ROLES_SQL = resolve(import.meta.dirname, "../../../../supabase/roles.sql")
 
 describe("provider roles", () => {
   it("roles.sql creates an ADMIN-only grant role and a SET-only login role under postgres whatever createrole_self_grant says", async () => {
-    // Справжні імена кластерні: файл виконується на тегованих, батько
-    // `authenticated` — справжній, у відкатній транзакції
+    // Справжні імена кластерні: файл виконується на тегованих, батьки
+    // `authenticated` і `anon` — справжні, у відкатній транзакції
     const command = testRoleName("command")
     const runtime = testRoleName("runtime")
     const sql = (await readFile(ROLES_SQL, "utf8"))
@@ -34,7 +34,7 @@ describe("provider roles", () => {
       expect(found.map((r) => r.name).sort()).toEqual([command, runtime].sort())
       expect(
         platformRoleRefusals([command, runtime], found, "target", [
-          { name: runtime, memberOf: [command, "authenticated"] },
+          { name: runtime, memberOf: [command, "authenticated", "anon"] },
         ])
       ).toEqual([])
     })

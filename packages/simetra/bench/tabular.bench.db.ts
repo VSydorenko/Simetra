@@ -3,7 +3,7 @@ import { afterAll, describe, expect, it } from "vitest"
 import pg from "pg"
 import { buildRuntimeCatalog, compile } from "simetra/compiler"
 import {
-  PLATFORM_ROLES,
+  loginRoleParentNames,
   RIGHTS_MAINTENANCE_SETTING,
   TABULAR_LINES_MAX,
   catalogIndex,
@@ -249,7 +249,9 @@ describe("tabular section limit", () => {
       `create role ${quoted(login)} login noinherit password '${password}'`
     )
     created.role = true
-    for (const role of [PLATFORM_ROLES.command, REQUEST_ROLE])
+    // Ті самі батьки, що й у `withRuntimeLogin`: роль команд і ролі запиту
+    // профілю (анонімна потрібна, відколи claims читає роль гостя)
+    for (const role of loginRoleParentNames("runtime", "supabase"))
       await admin.query(
         `grant ${quoted(role)} to ${quoted(login)} with inherit false, set true`
       )

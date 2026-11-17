@@ -29,7 +29,6 @@ import {
   GAUGE_TABLE,
   GAUGE_WRITER_ID,
   ORG_ADMIN_ID,
-  claimsFor,
   policyDomain,
   profileLayer,
   readQueryLayer,
@@ -44,6 +43,7 @@ import {
   seedRuntimeActor,
   withModelTarget,
   withRuntimeLogin,
+  sessionOf,
 } from "./support/db"
 
 /**
@@ -96,7 +96,7 @@ const heldEnv = () =>
         )
         const actor = async (archetypes?: string[]): Promise<Actor> => {
           const { org, user } = await seedRuntimeActor(owner, archetypes)
-          return { org, session: { ...claimsFor("user", user), sub: user } }
+          return { org, session: sessionOf(user) }
         }
         const me = await actor()
         const other = await actor()

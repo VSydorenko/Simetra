@@ -61,8 +61,9 @@ export interface PlatformLoginRole {
   /** Для `checkOnly` — дозволені батьки, а не обов'язкові. */
   memberOf: readonly string[]
   /**
-   * Наявну роль лише звіряють за дозволеними батьками; брак членства не
-   * порушення, а саму роль ніхто не створює (провайдер невідомий).
+   * Наявну роль звіряють лише за дозволеними батьками: брак членства не
+   * порушення. Так звіряє роль входу без провайдера (її ніхто не створює) і
+   * гейт `roles`, що брак членства сам доповнює.
    */
   checkOnly?: true
 }
@@ -88,6 +89,8 @@ export interface PlatformRoleOutcome {
   server: RoleServer
   name: string
   outcome: "created" | "present"
+  /** Батьки, членство в яких цей виклик додав наявній ролі входу. */
+  added?: string[]
 }
 
 /**
@@ -474,16 +477,38 @@ export function platformRoleSet(provider?: DatabaseProvider): PlatformRoleSet {
 }
 
 /**
- * Право сесії видати членство в кожному батьку ролі входу. Відсутній
+ * Членство ролі входу в батьку — пара §6.2. `INHERIT FALSE` явно: з PG16
+ * типове значення членства бере атрибут ролі, а пара мусить бути саме такою.
+ */
+const pairGrant = (parent: string, login: string): string =>
+  `GRANT ${quoteIdent(parent)} TO ${quoteIdent(login)} WITH INHERIT FALSE, SET TRUE`
+
+/** Обов'язкові батьки ролі входу, членства в яких наявна роль не має. */
+const lackingParents = (
+  login: PlatformLoginRole,
+  found: PlatformRoleRow
+): string[] =>
+  login.memberOf.filter((p) => !found.memberOf.some((m) => m.role === p))
+
+/**
+ * Гейт `roles` для ролі входу: брак обов'язкового членства — не відмова, бо
+ * `roles` його доповнює; будь-яке інше порушення лишається відмовою.
+ */
+const allowingLack = (login: PlatformLoginRole): PlatformLoginRole => ({
+  ...login,
+  checkOnly: true,
+})
+
+/**
+ * Батьки з `parents`, членство в яких сесія видати не може. Відсутній
  * батько, якого цей виклик створить, перевірки не потребує: творець
  * отримує на нього `ADMIN` сам.
  */
 async function missingAdmin(
   tx: ApplyTransaction,
-  login: PlatformLoginRole,
-  names: readonly string[],
-  server: RoleServer
-): Promise<EngineDiagnostic[]> {
+  parents: readonly string[],
+  names: readonly string[]
+): Promise<string[]> {
   const rows = await tx.query<{
     role: string
     present: boolean
@@ -495,18 +520,27 @@ async function missingAdmin(
       "FROM unnest($1::text[]) AS p(role)",
       "LEFT JOIN pg_catalog.pg_roles r ON r.rolname = p.role",
     ].join("\n"),
-    [[...login.memberOf]]
+    [[...parents]]
   )
-  return login.memberOf
-    .filter((parent) => {
-      const found = rows.find((r) => r.role === parent)
-      if (found?.present !== true) return !names.includes(parent)
-      return !found.admin
-    })
-    .map((role) =>
-      applyDiagnostic("roles.admin-option-missing", "error", { role, server })
-    )
+  return parents.filter((parent) => {
+    const found = rows.find((r) => r.role === parent)
+    if (found?.present !== true) return !names.includes(parent)
+    return !found.admin
+  })
 }
+
+/** Відмова доповнення: параметри несуть точний `GRANT`, який виконати замість. */
+const grantDenied = (
+  login: string,
+  parent: string,
+  server: RoleServer
+): EngineDiagnostic =>
+  applyDiagnostic("roles.membership-grant-denied", "error", {
+    role: login,
+    parent,
+    server,
+    statement: pairGrant(parent, login),
+  })
 
 /**
  * Створює відсутні платформні ролі (спека designer §3.2, спека П4 §6.2). Спершу на всіх серверах
@@ -517,6 +551,11 @@ async function missingAdmin(
  * другому вже `present`. Брак `ADMIN` на батьку ролі входу зупиняє лише
  * роль входу: ролі грантів потрібні `plan` кожного проєкту, а роль входу
  * без членства в ролі запиту мовчки змінила б шлях читання.
+ *
+ * Наявній ролі входу `roles` додає брак обов'язкового членства — рівно пару
+ * §6.2, як при створенні: інакше базу, створену до нового батька профілю,
+ * без ручного SQL не оновити. Інша форма членства, зайвий батько чи будь-яке
+ * інше порушення — та сама відмова форми, без тихого виправлення.
  */
 export async function ensurePlatformRoles(
   dbs: ApplyDatabase,
@@ -525,6 +564,8 @@ export async function ensurePlatformRoles(
 ): Promise<{ created: PlatformRoleOutcome[]; refusal?: EngineDiagnostic[] }> {
   const { names, login } = roles
   const gated = [...login, ...(roles.checkLogin ?? [])]
+  // Брак членства доповнюється нижче, тож гейт його не відхиляє
+  const gateLogins = gated.map(allowingLack)
   const refusal: EngineDiagnostic[] = []
   const adminRefusal: EngineDiagnostic[] = []
   for (const { server, db } of servers) {
@@ -544,7 +585,7 @@ export async function ensurePlatformRoles(
       const shape = await platformRoleGate(
         tx,
         server === "target" ? [...names, ...present.map((l) => l.name)] : names,
-        gated,
+        gateLogins,
         server
       )
       const missing = names.filter(
@@ -553,10 +594,26 @@ export async function ensurePlatformRoles(
       const denied = allowed ? [] : missing
       if (server === "target")
         for (const l of login) {
-          if (present.includes(l)) continue
-          if (!allowed) denied.push(l.name)
+          const row = found.find((r) => r.name === l.name)
+          if (row !== undefined) {
+            // Доповнення наявної: GRANT членства вимагає лише ADMIN на батьку
+            const lacking = lackingParents(l, row)
+            if (lacking.length > 0)
+              adminRefusal.push(
+                ...(await missingAdmin(tx, lacking, missing)).map((parent) =>
+                  grantDenied(l.name, parent, server)
+                )
+              )
+          } else if (!allowed) denied.push(l.name)
           else
-            adminRefusal.push(...(await missingAdmin(tx, l, missing, server)))
+            adminRefusal.push(
+              ...(await missingAdmin(tx, l.memberOf, missing)).map((role) =>
+                applyDiagnostic("roles.admin-option-missing", "error", {
+                  role,
+                  server,
+                })
+              )
+            )
         }
       return { shape, denied }
     })
@@ -575,10 +632,16 @@ export async function ensurePlatformRoles(
   const record = (
     server: RoleServer,
     name: string,
-    outcome: "created" | "present" | EngineDiagnostic[]
+    outcome: "created" | "present" | EngineDiagnostic[],
+    added: string[] = []
   ) => {
     if (outcome === "created" || outcome === "present")
-      created.push({ server, name, outcome })
+      created.push({
+        server,
+        name,
+        outcome,
+        ...(added.length > 0 ? { added } : {}),
+      })
     else late.push(...outcome)
   }
   for (const { server, db } of servers) {
@@ -595,35 +658,74 @@ export async function ensurePlatformRoles(
             tx,
             name,
             [`CREATE ROLE ${quoteIdent(name)} NOLOGIN NOINHERIT`],
-            () => platformRoleGate(tx, [name], gated, server)
+            () => platformRoleGate(tx, [name], gateLogins, server)
           )
         )
       if (server === "target" && adminRefusal.length === 0)
         for (const l of login) {
-          const q = quoteIdent(l.name)
-          record(
-            server,
+          const outcome = await createOrCheck(
+            tx,
             l.name,
-            await createOrCheck(
-              tx,
-              l.name,
-              [
-                `CREATE ROLE ${q} LOGIN NOINHERIT`,
-                // INHERIT FALSE явно: з PG16 типове значення членства бере
-                // атрибут ролі, а пара §6.2 мусить бути саме такою
-                ...l.memberOf.map(
-                  (parent) =>
-                    `GRANT ${quoteIdent(parent)} TO ${q} WITH INHERIT FALSE, SET TRUE`
-                ),
-              ],
-              () => platformRoleGate(tx, [l.name], gated, server)
-            )
+            [
+              `CREATE ROLE ${quoteIdent(l.name)} LOGIN NOINHERIT`,
+              ...l.memberOf.map((parent) => pairGrant(parent, l.name)),
+            ],
+            () => platformRoleGate(tx, [l.name], gateLogins, server)
           )
+          if (outcome !== "present") {
+            record(server, l.name, outcome)
+            continue
+          }
+          // Брак — за свіжим рядком: членство могло з'явитися між фазами
+          const [row] = await readPlatformRoles(tx, [l.name])
+          const { added, denied } = await addMemberships(
+            tx,
+            l.name,
+            row === undefined ? [] : lackingParents(l, row),
+            server
+          )
+          late.push(...denied)
+          record(server, l.name, outcome, added)
         }
     })
   }
   const all = [...late, ...adminRefusal]
   return all.length > 0 ? { created, refusal: all } : { created }
+}
+
+/**
+ * Доповнення наявної ролі входу парами §6.2. Право перевірила фаза читання;
+ * батько, якого між фазами відкликали чи позбавили сесію `ADMIN`, дає
+ * кодовану відмову з точним `GRANT`, а не сирий `42501`: точка збереження
+ * тримає транзакцію живою.
+ */
+async function addMemberships(
+  tx: ApplyTransaction,
+  login: string,
+  parents: readonly string[],
+  server: RoleServer
+): Promise<{ added: string[]; denied: EngineDiagnostic[] }> {
+  const added: string[] = []
+  const denied: EngineDiagnostic[] = []
+  for (const parent of parents) {
+    await tx.query("SAVEPOINT platform_membership")
+    try {
+      await tx.query(pairGrant(parent, login))
+    } catch (error) {
+      // 42501 — немає ADMIN, 42704 — батька вже немає
+      if (
+        !(error instanceof ApplyDbError) ||
+        (error.sqlstate !== "42501" && error.sqlstate !== "42704")
+      )
+        throw error
+      await tx.query("ROLLBACK TO SAVEPOINT platform_membership")
+      denied.push(grantDenied(login, parent, server))
+      continue
+    }
+    await tx.query("RELEASE SAVEPOINT platform_membership")
+    added.push(parent)
+  }
+  return { added, denied }
 }
 
 /**

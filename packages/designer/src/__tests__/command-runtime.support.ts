@@ -23,12 +23,12 @@ import {
   type CommandRuntimeOptions,
 } from "simetra/server"
 import {
-  claimsFor,
   GAUGE_TABLE,
   policyDomain,
   profileLayer,
   runtimeValuesLayer,
   testProvider,
+  testRoleFor,
 } from "../../../simetra/test/support"
 import {
   heldResource,
@@ -37,6 +37,7 @@ import {
   poolerPoolOf,
   withModelTarget,
   withRuntimeLogin,
+  sessionOf,
 } from "./support/db"
 
 /**
@@ -67,7 +68,10 @@ export interface Env {
   owner: pg.Client
   /** Роль входу з членствами в ролі команд і ролі запиту. */
   login: string
-  /** Роль входу лише з членством у ролі команд. */
+  /**
+   * Роль входу без ролі користувача: роль команд і роль гостя, без якої
+   * рантайм не створюється й на запасному шляху.
+   */
   commandOnly: string
   direct: pg.Pool
   /** Пул через пулер — лише в середовищі, зібраному з `viaPooler`. */
@@ -78,11 +82,6 @@ export interface Env {
   /** Рядок `Gauge` чужого тенанта. */
   foreign: string
 }
-
-export const sessionOf = (user: string): SessionClaims => ({
-  ...claimsFor("user", user),
-  sub: user,
-})
 
 /** Актор фікстури з сесією запиту від його користувача. */
 export async function seedActor(owner: pg.Client): Promise<Actor> {
@@ -130,7 +129,7 @@ export const heldEnv = (viaPooler = false) =>
           (login) =>
             withRuntimeLogin(
               url,
-              [PLATFORM_ROLES.command],
+              [PLATFORM_ROLES.command, testRoleFor("anonymous")!],
               async (commandOnly) => {
                 const direct = new pg.Pool({ connectionString: login })
                 let pooled: pg.Pool | null = null

@@ -10,6 +10,7 @@ import { afterAll, describe, expect, it } from "vitest"
 import {
   clusterRoleNames,
   dropTaggedCluster,
+  migrateBetterAuth,
   roleUrl,
   setTestPasswords,
   taggedClusterSet,
@@ -387,6 +388,7 @@ describe("roles: the postgres profile cluster", () => {
     expect(await mustEnsure(set)).toEqual({
       created: [],
       present: expect.arrayContaining([set.database, set.template]),
+      skipped: [`${set.identity.schema}.${set.identity.name}:TRIGGER`],
     })
     expect(await clusterState(set)).toEqual(state)
     // TOAST-відношення таблиці `auth` живе в `pg_toast` з її власником: це не
@@ -398,9 +400,81 @@ describe("roles: the postgres profile cluster", () => {
     expect(await mustEnsure(set)).toEqual({
       created: [],
       present: expect.any(Array),
+      skipped: [`${set.identity.schema}.${set.identity.name}:TRIGGER`],
     })
     expect(await clusterState(set)).toEqual(state)
   })
+
+  // Гранти таблиці ідентичності: схема `better_auth`
+  // не тегується, теговані лише база й ролі
+  it("grants USAGE before the Better Auth migration, TRIGGER and REFERENCES after it, and nothing wider", async () => {
+    const { set } = scenario("ident")
+    const { schema, name } = set.identity
+    const table = `${id(schema)}.${id(name)}`
+    const usage = `${schema}:USAGE`
+    const trigger = `${schema}.${name}:TRIGGER`
+    const privileges = async (relation: string) =>
+      (
+        await sql<Record<string, unknown>>(
+          set.database,
+          `select has_schema_privilege($1, $2, 'USAGE') as usage,
+                  to_regclass($3) is not null as exists,
+                  case when to_regclass($3) is null then null
+                       else has_table_privilege($1, $3, 'TRIGGER') end as trigger,
+                  case when to_regclass($3) is null then null
+                       else has_table_privilege($1, $3, 'REFERENCES') end as references`,
+          [set.owner, schema, relation]
+        )
+      )[0]
+
+    // До міграції таблиці немає: USAGE є, TRIGGER — пропуск, а не відмова
+    const cold = await mustEnsure(set)
+    expect(cold.created).toContain(usage)
+    expect(cold.skipped).toEqual([trigger])
+    expect(await privileges(table)).toEqual({
+      usage: true,
+      exists: false,
+      trigger: null,
+      references: null,
+    })
+
+    await setTestPasswords(set)
+    await migrateBetterAuth(roleUrl(set, set.auth))
+    const warm = await mustEnsure(set)
+    expect(warm.created).toEqual([trigger])
+    expect(warm.present).toContain(usage)
+    expect(warm.skipped).toEqual([])
+    expect(await privileges(table)).toEqual({
+      usage: true,
+      exists: true,
+      trigger: true,
+      references: true,
+    })
+
+    const again = await mustEnsure(set)
+    expect(again.created).toEqual([])
+    expect(again.present).toEqual(expect.arrayContaining([usage, trigger]))
+    expect(again.skipped).toEqual([])
+
+    // Інша таблиця схеми гранту не дістає: ні гранту на неї, ні типових
+    // привілеїв, що дали б його майбутнім таблицям
+    await asRole(set, set.auth, (c) =>
+      c.query(`create table ${id(schema)}.extra (id int)`)
+    )
+    await mustEnsure(set)
+    expect(await privileges(`${id(schema)}.extra`)).toMatchObject({
+      trigger: false,
+      references: false,
+    })
+    expect(
+      await sql(
+        set.database,
+        `select 1 from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace
+          where n.nspname = $1`,
+        [schema]
+      )
+    ).toEqual([])
+  }, 120_000)
 
   it("finishes and seals a template that a superuser left unmarked", async () => {
     const { set } = scenario("unfin")
@@ -789,6 +863,10 @@ describe("roles: the postgres profile cluster", () => {
          as $$ begin insert into public.marker values (current_user); return true; end $$`,
       `create function public.has_schema_privilege(oid, oid, text) returns boolean language plpgsql
          as $$ begin insert into public.marker values (current_user); return true; end $$`,
+      `create function public.has_schema_privilege(text, text, text) returns boolean language plpgsql
+         as $$ begin insert into public.marker values (current_user); return true; end $$`,
+      `create function public.to_regclass(text) returns regclass language plpgsql
+         as $$ begin insert into public.marker values (current_user); return null; end $$`,
       `create function public.aclexplode(aclitem[])
          returns table (grantor oid, grantee oid, privilege_type text, is_grantable boolean)
          language plpgsql
@@ -811,7 +889,11 @@ describe("roles: the postgres profile cluster", () => {
     const result = await ensure(set)
     expect(result).toEqual({
       ok: true,
-      value: { created: [], present: expect.any(Array) },
+      value: {
+        created: [],
+        present: expect.any(Array),
+        skipped: [`${set.identity.schema}.${set.identity.name}:TRIGGER`],
+      },
     })
     expect(await sql(set.database, `select who from public.marker`)).toEqual([])
   })

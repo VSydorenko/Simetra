@@ -62,6 +62,12 @@ const TRIGGERS = {
   invalidateSoftDelete: "simetra_invalidate_user_soft_delete",
 } as const
 
+/**
+ * Names of the platform triggers on the identity table of the provider; the
+ * map `TRIGGERS` stays their source.
+ */
+export const IDENTITY_TRIGGERS: readonly string[] = Object.values(TRIGGERS)
+
 const KIND_LABELS = fn("kind_labels")
 const KIND_LABEL_COLUMNS = [
   "label",

@@ -3,6 +3,7 @@ import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
   PLATFORM_ROLES,
+  PROVIDER_API_ROLES,
   SESSION_CLAIMS_SETTING,
   defineObjectModule,
   type ObjectModule,
@@ -14,7 +15,13 @@ import {
   type CommandRuntime,
   type CommandRuntimeOptions,
 } from "simetra/server"
-import { pooledOf, throughPoolerAs } from "./support/db"
+import {
+  ownerLoginOf,
+  pooledOf,
+  sessionOf,
+  throughPoolerAs,
+  withRuntimeLogin,
+} from "./support/db"
 
 import {
   type Env,
@@ -25,7 +32,6 @@ import {
   MODULE_KEY,
   refusal,
   runtimeOver,
-  sessionOf,
 } from "./command-runtime.support"
 
 /**
@@ -114,6 +120,45 @@ describe("command runtime over the engine target", () => {
     } finally {
       await pool.end()
     }
+  })
+
+  // Гейт ролі входу судить `session_user` пулу: кожен кейс — окремий пул на
+  // DSN своєї ролі входу.
+  const gate = async (url: string) => {
+    const pool = new pg.Pool({ connectionString: url })
+    try {
+      return await refusal(runtime(fromPgPool(pool)))
+    } finally {
+      await pool.end()
+    }
+  }
+
+  it("login gate: the postgres login of the profile is privileged-login owner", async () => {
+    expect(await gate(ownerLoginOf(env.login))).toEqual({
+      code: "command.privileged-login",
+      reason: "owner",
+    })
+  })
+
+  // Факт стека: `service_role` має `BYPASSRLS`, тож член сервісної ролі
+  // відмовляє раніше, ніж до причини `service` дійде черга.
+  it("login gate: a member of the service role is privileged-login bypassrls", async () => {
+    await withRuntimeLogin(
+      env.login,
+      // Членства ролі входу рантайму поруч: без гейта вхід створив би рантайм.
+      [
+        PLATFORM_ROLES.command,
+        PROVIDER_API_ROLES.supabase.user,
+        PROVIDER_API_ROLES.supabase.service!,
+      ],
+      async (login) => {
+        expect(await gate(login)).toEqual({
+          code: "command.privileged-login",
+          reason: "bypassrls",
+        })
+      },
+      "gate_svc"
+    )
   })
 })
 

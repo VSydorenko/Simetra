@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
   applyChanges,
   canonicalSnapshot,
@@ -9,15 +9,24 @@ import {
   promoteObject,
   effectsFunctionName,
   effectsTriggerNames,
+  IDENTITY_TRIGGERS,
   platformFunctionSignatures,
   type PromotionRecord,
 } from "simetra/compiler"
-import { PLATFORM_ROLES, type CatalogModel } from "simetra/model"
+import {
+  PLATFORM_ROLES,
+  PROVIDER_IDENTITY_SOURCES,
+  PROVIDER_LOGIN_ROLES,
+  quoteIdent,
+  type CatalogModel,
+  type DatabaseProvider,
+} from "simetra/model"
 import {
   APPLY_STATE_FORMAT,
   FINGERPRINT_SECTIONS,
   buildPlan,
   desiredForApply,
+  identityTriggerLocks,
   planPlatformFunctions,
   type ApplyDatabase,
   type ApplyTransaction,
@@ -55,6 +64,23 @@ import {
 } from "../../../compiler/__tests__/fixtures/promotion"
 import { uuid } from "../../../compiler/__tests__/helpers"
 import { applyDiagnostic } from "../diagnostic"
+import { requiredPermissions, type PlanStep } from "../steps"
+import type { IdentityTableFacts } from "../plan"
+
+// Фейкова ціль не доходить до готового плану, а шлях з промоцією до дозволів
+// — теж: обгортка лише записує кроки, які повернув класифікатор
+const classified = vi.hoisted(() => [] as { id: string; sql: string }[][])
+vi.mock("../steps", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../steps")>()
+  return {
+    ...actual,
+    classifySteps: (...args: Parameters<typeof actual.classifySteps>) => {
+      const steps = actual.classifySteps(...args)
+      classified.push(steps)
+      return steps
+    },
+  }
+})
 
 /**
  * Конвеєр плану на фейковому порті — лише те, що не потребує справжньої
@@ -196,6 +222,94 @@ describe("buildPlan", () => {
       expect(queries.filter((q) => q.includes("AS bypassrls"))).toHaveLength(1)
     }
   )
+
+  // Гейт таблиці ідентичності — у тій самій читальній транзакції,
+  // що й гейт власника: відмова до стану, платформних ролей і будь-якої тіні
+  it("refuses a plan without the identity table before any state read or platform-role check", async () => {
+    const model = (await compile(policyDomain(adminRoles()))).model!
+    const queries: string[] = []
+    const target = await fakeTarget(model, {
+      notCopies: [],
+      queries,
+      identity: { usage: true, exists: false, trigger: false, triggers: [] },
+    })
+    const outcome = await buildPlan(
+      fakeEngine([]),
+      { reader: target.reader, scratch: emptyScratch },
+      model,
+      { target: { url: "postgres://target" } },
+      []
+    )
+    expect(outcome).toEqual({
+      status: "refused",
+      diagnostics: [
+        expect.objectContaining({
+          code: "plan.identity-table-missing",
+          params: {
+            table: expect.stringContaining(
+              PROVIDER_IDENTITY_SOURCES.supabase.table.name
+            ),
+            reason: "table",
+          },
+        }),
+      ],
+    })
+    expect(queries.at(-1)).toContain('AS "triggers"')
+    // Гейт власника — раніше: роль без BYPASSRLS не дійшла б і до фактів
+    const ownerGate = queries.findIndex((q) => q.includes("AS bypassrls"))
+    expect(ownerGate).toBeGreaterThanOrEqual(0)
+    expect(ownerGate).toBeLessThan(queries.length - 1)
+  })
+
+  it("counts only an ordinary or partitioned table as the identity table", async () => {
+    const model = (await compile(policyDomain(adminRoles()))).model!
+    const queries: string[] = []
+    const target = await fakeTarget(model, {
+      notCopies: [],
+      queries,
+      identity: { usage: true, exists: false, trigger: false, triggers: [] },
+    })
+    await buildPlan(
+      fakeEngine([]),
+      { reader: target.reader, scratch: emptyScratch },
+      model,
+      { target: { url: "postgres://target" } },
+      []
+    )
+    // Вид, послідовність чи індекс з тим самим іменем — не таблиця
+    expect(queries.find((q) => q.includes('AS "triggers"'))).toMatch(
+      /c\.relkind IN \('r', 'p'\)/
+    )
+  })
+
+  it("reads no identity facts for a model without provision triggers", async () => {
+    const compiled = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "catalogs/Items/Items.meta.json": catalog("Items"),
+      })
+    )
+    expectClean(compiled)
+    const model = compiled.model!
+    const queries: string[] = []
+    const target = await fakeTarget(model, {
+      notCopies: [],
+      queries,
+      // Відмова, якби факти прочитали: тест бачить і запит, і її відсутність
+      identity: { usage: false, exists: false, trigger: false, triggers: [] },
+    })
+    const outcome = await buildPlan(
+      shadowFailing(),
+      { reader: target.reader, scratch: emptyScratch },
+      model,
+      { target: { url: "postgres://target" } },
+      []
+    )
+    expect(outcome.diagnostics.map((d) => d.code)).not.toContain(
+      "plan.identity-table-missing"
+    )
+    expect(queries.some((q) => q.includes('AS "triggers"'))).toBe(false)
+  })
 
   it("hands the engine the hashed effects function of a long table and no truncated one", async () => {
     // До хешу ім'я функції ефектів довгої таблиці було іменем її
@@ -559,6 +673,270 @@ describe("buildPlan", () => {
   )
 })
 
+describe("buildPlan: identity trigger lock", () => {
+  // Гейт — над кроками обох шляхів плану: без промоції після класифікації,
+  // з промоцією — над кроками копії після наміру
+  // Зняття й увімкнення вимкненого тригера провізії — обидва лише для
+  // власника таблиці
+  const CASES = [
+    { case: "plan", promotion: false, reason: "removed" },
+    { case: "plan with a promotion", promotion: true, reason: "removed" },
+    { case: "plan", promotion: false, reason: "disabled" },
+    { case: "plan with a promotion", promotion: true, reason: "disabled" },
+  ] as const
+  const lockedAction = (
+    reason: "removed" | "disabled",
+    provider: DatabaseProvider
+  ): EngineAction =>
+    reason === "removed"
+      ? dropIdentityTrigger(provider)
+      : enableTrigger(PROVIDER_IDENTITY_SOURCES[provider].table)
+
+  it.each(CASES)(
+    "refuses a $reason provision trigger on the postgres profile ($case)",
+    async ({ promotion, reason }) => {
+      const domain = onProvider("postgres")
+      const { before, desired, records } = promotion
+        ? await promotedTag(domain)
+        : await samePolicyDomain(domain)
+      const target = await fakeTarget(before, { notCopies: [] })
+      const outcome = await buildPlan(
+        fakeEngine([lockedAction(reason, "postgres")]),
+        { reader: target.reader, scratch: emptyScratch },
+        desired,
+        { target: { url: "postgres://target" } },
+        records
+      )
+      const table = PROVIDER_IDENTITY_SOURCES.postgres.table
+      expect(outcome.status).toBe("refused")
+      expect(outcome.diagnostics.filter((d) => d.severity === "error")).toEqual(
+        [
+          expect.objectContaining({
+            code: "plan.identity-trigger-locked",
+            params: {
+              trigger: IDENTITY_TRIGGERS[0],
+              table: `${quoteIdent(table.schema)}.${quoteIdent(table.name)}`,
+              login: PROVIDER_LOGIN_ROLES.postgres[0],
+              reason,
+            },
+          }),
+        ]
+      )
+      // Відмова — до сліду плану: права LOCK ціль не питали
+      expect(target.lockTables).toEqual([])
+    }
+  )
+
+  it.each(CASES)(
+    "lets the supabase profile pass a $reason provision trigger ($case)",
+    async ({ promotion, reason }) => {
+      const { before, desired, records } = promotion
+        ? await promotedTag()
+        : await samePolicyDomain()
+      const target = await fakeTarget(before, { notCopies: [] })
+      // Гейт пропускає: план іде до сліду, де фейк його зупиняє
+      await expect(
+        buildPlan(
+          fakeEngine([lockedAction(reason, "supabase")]),
+          { reader: target.reader, scratch: emptyScratch },
+          desired,
+          { target: { url: "postgres://target" } },
+          records
+        )
+      ).rejects.toBeInstanceOf(ReachedLockRights)
+    }
+  )
+})
+
+describe("buildPlan: a merged trigger replacement over a foreign trigger", () => {
+  // Чужий тригер — немає в marker цілі. Двигун міняє його парою DROP +
+  // CREATE, план зливає її в `CREATE OR REPLACE TRIGGER`, і дозвіл лишається:
+  // його вимагає перевизначення чужого об'єкта на місці
+  const TABLE = { schema: "public", name: "foreign_items" }
+  const NAME = "foreign_trg"
+  const live: CatalogModel = {
+    tables: [],
+    enumTypes: [],
+    units: [
+      {
+        class: "trigger",
+        identity: `trigger:${TABLE.schema}.${TABLE.name}.${NAME}`,
+        schema: TABLE.schema,
+        name: NAME,
+        sql: `CREATE TRIGGER ${NAME} AFTER INSERT ON ${TABLE.schema}.${TABLE.name} FOR EACH ROW EXECUTE FUNCTION public.f()`,
+      },
+    ],
+  }
+  const ref = {
+    kind: "trigger",
+    schema: TABLE.schema,
+    table: TABLE.name,
+    name: NAME,
+  }
+  const pair = (): EngineAction[] => [
+    {
+      ...createTable("unused"),
+      sql: `DROP TRIGGER ${NAME} ON ${TABLE.schema}.${TABLE.name}`,
+      verb: "drop",
+      produces: [],
+      produced: [],
+      destroys: [`trigger:${TABLE.schema}.${TABLE.name}.${NAME}`],
+      destroyed: [ref],
+      lockedTables: [TABLE],
+      lockClass: "accessExclusive",
+    },
+    {
+      ...createTable("unused"),
+      sql: `CREATE TRIGGER ${NAME} AFTER INSERT ON ${TABLE.schema}.${TABLE.name} FOR EACH ROW EXECUTE FUNCTION public.f()`,
+      verb: "create",
+      produces: [`trigger:${TABLE.schema}.${TABLE.name}.${NAME}`],
+      produced: [ref],
+      lockedTables: [TABLE],
+      lockClass: "shareRowExclusive",
+    },
+  ]
+
+  it.each([
+    { case: "plan", promotion: false },
+    { case: "plan with a promotion", promotion: true },
+  ])(
+    "requires the permission of the merged step ($case)",
+    async ({ promotion }) => {
+      const { before, desired, records } = promotion
+        ? await promotedTag()
+        : await samePolicyDomain()
+      const target = await fakeTarget(before, {
+        notCopies: [],
+        toBlindFunctions: true,
+      })
+      classified.length = 0
+      await expect(
+        buildPlan(
+          fakeEngine(pair(), live),
+          { reader: target.reader, scratch: emptyScratch },
+          desired,
+          { target: { url: "postgres://target" } },
+          records
+        )
+      ).rejects.toBeInstanceOf(ReachedBlindFunctions)
+      const steps = classified.find((c) =>
+        c.some((st) => /^CREATE OR REPLACE TRIGGER/i.test(st.sql))
+      )!
+      const merged = steps.filter((st) =>
+        /^CREATE OR REPLACE TRIGGER/i.test(st.sql)
+      )
+      expect(merged).toHaveLength(1)
+      expect(steps.some((st) => /^DROP TRIGGER/i.test(st.sql))).toBe(false)
+      expect(
+        requiredPermissions({
+          steps: steps as PlanStep[],
+          drift: null,
+          promotion: null,
+        })
+      ).toEqual([merged[0]!.id])
+    }
+  )
+})
+
+describe("identityTriggerLocks", () => {
+  const table = { schema: "idp", name: "users" }
+  const ref = (name: string, on = table) => ({
+    kind: "trigger",
+    schema: on.schema,
+    table: on.name,
+    name,
+  })
+  const step = (over: Partial<EngineAction> = {}): EngineAction => ({
+    ...enableTrigger(table),
+    verb: "create",
+    consumes: [],
+    consumed: [],
+    lockedTables: [],
+    ...over,
+  })
+  const [provision] = IDENTITY_TRIGGERS as [string]
+
+  it("refuses a step that removes a provision trigger", () => {
+    expect(
+      identityTriggerLocks(
+        [step({ destroyed: [ref(provision)] })],
+        table,
+        "owner_login"
+      )
+    ).toEqual([
+      expect.objectContaining({
+        code: "plan.identity-trigger-locked",
+        severity: "error",
+        params: {
+          trigger: provision,
+          table: "idp.users",
+          login: "owner_login",
+          reason: "removed",
+        },
+      }),
+    ])
+  })
+
+  it("refuses a step that enables a disabled provision trigger", () => {
+    expect(
+      identityTriggerLocks([enableTrigger(table)], table, "owner_login")
+    ).toEqual([
+      expect.objectContaining({
+        code: "plan.identity-trigger-locked",
+        params: {
+          trigger: provision,
+          table: "idp.users",
+          login: "owner_login",
+          reason: "disabled",
+        },
+      }),
+    ])
+    // Знятий і ввімкнений тригер — одна відмова зняття
+    expect(
+      identityTriggerLocks(
+        [step({ destroyed: [ref(provision)] }), enableTrigger(table)],
+        table,
+        "owner_login"
+      ).map((d) => d.params.reason)
+    ).toEqual(["removed"])
+  })
+
+  it.each([
+    [
+      "a replace or a creation (produced only)",
+      [step({ produced: [ref(provision)] })],
+    ],
+    [
+      "another trigger of the same table",
+      [step({ destroyed: [ref("app_trigger")] })],
+    ],
+    [
+      "a provision trigger name on another table",
+      [step({ destroyed: [ref(provision, { schema: "idp", name: "other" })] })],
+    ],
+    [
+      "enabling a provision trigger name on another table",
+      [enableTrigger({ schema: "idp", name: "other" })],
+    ],
+    [
+      // Суб'єкт перевизначення — функція провізії, тригер лише вжито
+      "an in-place change whose subject is not the trigger",
+      [
+        step({
+          verb: "alter",
+          consumes: ["function:idp.f()", `trigger:idp.users.${provision}`],
+          consumed: [
+            { kind: "function", schema: "idp", name: "f" },
+            ref(provision),
+          ],
+        }),
+      ],
+    ],
+  ])("passes %s", (_name, steps) => {
+    expect(identityTriggerLocks(steps, table, "owner_login")).toEqual([])
+  })
+})
+
 describe("buildPlan: row version first", () => {
   const PARTS = { module: false, contacts: false, invoice: false }
 
@@ -722,6 +1100,8 @@ async function fakeTarget(
     owner?: { bypassrls: boolean; superuser: boolean } | "none"
     /** Усі запити, які бачить фейк, — у порядку надходження. */
     queries?: string[]
+    /** Факти таблиці ідентичності; за замовчуванням повні (гейт проходить). */
+    identity?: IdentityTableFacts
     /**
      * Таблиці прийнятих джерел прав: доступ ролі застосування й ключ ролі,
      * якого не оголошує жодна роль, у кожному джерелі призначень.
@@ -785,6 +1165,15 @@ async function fakeTarget(
       return o.owner === "none"
         ? []
         : [o.owner ?? { bypassrls: true, superuser: false }]
+    if (sql.includes('AS "triggers"'))
+      return [
+        o.identity ?? {
+          usage: true,
+          exists: true,
+          trigger: true,
+          triggers: [],
+        },
+      ]
     if (sql.includes("AS marker, to_regclass"))
       return [{ marker: true, ledger: true }]
     if (sql.includes("to_jsonb(m)")) return [{ row: JSON.stringify(marker) }]
@@ -869,9 +1258,12 @@ type Named = { schema: string; name: string }
 const ENGINE = { name: "fake", version: "1" }
 
 /** Двигун, чия бажана тінь дає план з `actions`; інших викликів не чекає. */
-function fakeEngine(actions: EngineAction[]): SchemaEngine {
+function fakeEngine(
+  actions: EngineAction[],
+  live: CatalogModel = EMPTY_CATALOG
+): SchemaEngine {
   const extracted = {
-    model: EMPTY_CATALOG,
+    model: live,
     catalog: {} as EngineCatalog,
     diagnostics: [],
     unpopulated: [],
@@ -900,6 +1292,65 @@ function fakeEngine(actions: EngineAction[]): SchemaEngine {
       throw new Error(`no engine call expected: ${String(name)}`)
     },
   })
+}
+
+/** Домен політик (чи інший) на профілі `provider`. */
+function onProvider(provider: DatabaseProvider, domain: Domain = policyDomain) {
+  return (...layers: Parameters<Domain>): Map<string, string> => {
+    const files = domain(...layers)
+    const project = JSON.parse(files.get("project.meta.json")!) as {
+      database: { provider: string }
+    }
+    project.database.provider = provider
+    files.set("project.meta.json", JSON.stringify(project))
+    return files
+  }
+}
+
+/** Дія двигуна, що знімає перший платформний тригер таблиці ідентичності. */
+function dropIdentityTrigger(provider: DatabaseProvider): EngineAction {
+  const { schema, name: table } = PROVIDER_IDENTITY_SOURCES[provider].table
+  const name = IDENTITY_TRIGGERS[0]!
+  return {
+    sql: `DROP TRIGGER ${quoteIdent(name)} ON ${quoteIdent(schema)}.${quoteIdent(table)}`,
+    verb: "drop",
+    produces: [],
+    consumes: [],
+    destroys: [`trigger:${schema}.${table}.${name}`],
+    produced: [],
+    destroyed: [{ kind: "trigger", schema, table, name }],
+    consumed: [],
+    transactionality: "transactional",
+    newSegmentBefore: false,
+    lockedTables: [{ schema, name: table }],
+    lockClass: "accessExclusive",
+    dataLoss: false,
+    rewriteRisk: false,
+  }
+}
+
+/**
+ * Дія двигуна, що вмикає вимкнений живий перший платформний тригер таблиці
+ * `on`: зміна на місці (`enabled: alter` pg-delta), суб'єкт — перший вжитий.
+ */
+function enableTrigger(on: { schema: string; name: string }): EngineAction {
+  const name = IDENTITY_TRIGGERS[0]!
+  return {
+    sql: `ALTER TABLE ${quoteIdent(on.schema)}.${quoteIdent(on.name)} ENABLE TRIGGER ${quoteIdent(name)}`,
+    verb: "alter",
+    produces: [],
+    consumes: [`trigger:${on.schema}.${on.name}.${name}`],
+    destroys: [],
+    produced: [],
+    destroyed: [],
+    consumed: [{ kind: "trigger", schema: on.schema, table: on.name, name }],
+    transactionality: "transactional",
+    newSegmentBefore: false,
+    lockedTables: [{ schema: on.schema, name: on.name }],
+    lockClass: "shareRowExclusive",
+    dataLoss: false,
+    rewriteRisk: false,
+  }
 }
 
 /** Дія двигуна, що створює таблицю `name` у `public`. */

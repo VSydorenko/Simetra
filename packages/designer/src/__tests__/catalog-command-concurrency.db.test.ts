@@ -26,11 +26,11 @@ import {
   withSql,
   writeRoles,
   setLocalSetting,
+  waitForLock,
 } from "../../../simetra/test/support"
 import {
   committed,
   seedRuntimeActor,
-  waitForLock,
   withModelTarget,
   type RuntimeActor,
 } from "./support/db"
