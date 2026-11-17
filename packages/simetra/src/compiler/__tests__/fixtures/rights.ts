@@ -1830,6 +1830,42 @@ export function noteOwnCreator(): Record<string, Record<string, unknown>> {
   }
 }
 
+export const CLIENT_TABLE = "client"
+export const CLIENT_OWNER_ID = uuid(7602)
+
+/**
+ * Довідник `Client` з носієм власності `owner` — посиланням на
+ * «Користувачів» (не авторство) — і глобальна роль `ClientOwner`: `read`,
+ * `create`, `update` `@own`, без права на «Користувачів». Форма шаблону
+ * застосунку (#235): власник рядка — реквізит змісту, який задає вхід.
+ * Перевизначення для `singleTenantRights`.
+ */
+export function clientOwner(): Record<string, Record<string, unknown>> {
+  return {
+    "catalogs/Client/Client.meta.json": catalog(
+      uuid(7600),
+      "Client",
+      CLIENT_TABLE,
+      {
+        scope: "none",
+        ownership: ["owner"],
+        attributes: [
+          refAttribute(7601, "owner", "owner_id", ref("Catalog", "Users")),
+        ],
+      }
+    ),
+    [ROLE_FILE("ClientOwner")]: role(CLIENT_OWNER_ID, "ClientOwner", "global", {
+      grants: [
+        grant(
+          objects(["Catalog", "Client"]),
+          ["read", "create", "update"],
+          "own"
+        ),
+      ],
+    }),
+  }
+}
+
 export const TEAM_RIGHTS_ADMIN_ID = uuid(6750)
 export const RIGHTS_ONLY_ADMIN_ID = uuid(6751)
 

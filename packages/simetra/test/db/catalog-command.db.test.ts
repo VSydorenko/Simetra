@@ -9,6 +9,8 @@ import {
   MEMBER_EDITOR_ID,
   NOTE_OWN_CREATOR_ID,
   NOTE_WRITER_ID,
+  CLIENT_OWNER_ID,
+  clientOwner,
   TICKET_CHECKLIST_TABLE,
   TICKET_TABLE,
   adminRoles,
@@ -1015,5 +1017,57 @@ describe("catalog command core: unscoped Note", () => {
         "SELECT * FROM simetra.current_user_carrier_sources()"
       )
     ).toEqual({ code: "42501" })
+  })
+})
+
+/**
+ * Обсяг `own` за реквізитом змісту `owner` на «Користувачів» (#235): роль
+ * `ClientOwner` без права на «Користувачів» створює рядок, носій — вона сама.
+ */
+describe("catalog command core: own carrier on Users", () => {
+  const tx = describeTransaction()
+  let ids: Seed = {}
+
+  beforeAll(async () => {
+    const result = await compileRights(
+      singleTenantRights(clientOwner(), testProvider())
+    )
+    expect(result.diagnostics).toEqual([])
+    const client = await tx.open()
+    await deploy(client, result.model!)
+    ids = {}
+    for (const user of ["A", "B", "N"]) ids[user] = await signUp(client)
+    for (const user of ["A", "B"])
+      await insert(
+        client,
+        "global_role_assignments",
+        assignmentRow(ids[user]!, { archetype: CLIENT_OWNER_ID })
+      )
+  }, 120_000)
+
+  afterAll(() => tx.close())
+
+  const key = (name: string) => {
+    const id = ids[name]
+    if (id === undefined) throw new Error(`unknown seed key ${name}`)
+    return id
+  }
+  const create = async (user: string, item: Record<string, unknown>) =>
+    outcomeOf(
+      await commandAs<{ r: string }>(
+        tx.client(),
+        claimsFor("user", key(user)),
+        { action: "create", object: "client", root: item.id as string },
+        "SELECT public.client_save($1::jsonb, NULL::bigint) AS r",
+        { params: [JSON.stringify(item)] }
+      )
+    )
+
+  it("own create: the carrier is the creator", async () => {
+    const item = { id: randomUUID(), owner_id: key("A") }
+    expect(await create("A", item)).toMatchObject({
+      id: item.id,
+      owner_id: key("A"),
+    })
   })
 })
