@@ -760,11 +760,6 @@ identity data marks anonymous sessions with a claim, a session that has a
 subject but no anonymous claim is refused with `command.unauthenticated`
 before any database work: the claim must be present, `true` or `false`.
 
-On an existing `supabase` stand, run `pnpm db:roles` once after upgrading. It
-applies `supabase/roles.sql` to the running stack, additive and idempotent, and
-makes the runtime login a member of `anon` (`WITH INHERIT FALSE, SET TRUE`).
-Without it creating the runtime fails with `command.read-role-missing`.
-
 ## Reading past row-level security
 
 `sql.definer-reads-rls` (a warning) marks a unit that reads a table under

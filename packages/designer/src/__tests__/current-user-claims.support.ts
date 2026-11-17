@@ -104,7 +104,10 @@ export function describeBetterAuthClaims() {
     it("runCommand and runtime.read resolve current_user_id to the users row id", async () => {
       // Claims у формі сесії Better Auth — ті самі в обох профілях: без
       // claim `role`, з явним claim аноніма
-      const claims = { sub: env.user, is_anonymous: false } satisfies SessionClaims
+      const claims = {
+        sub: env.user,
+        is_anonymous: false,
+      } satisfies SessionClaims
       const runtime = await createCommandRuntime({
         database: fromPgPool(env.pool),
         catalog: env.catalog,
