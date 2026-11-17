@@ -1,6 +1,7 @@
 import {
   KIND_REGISTRY,
   PLATFORM_ROLES,
+  PLATFORM_SCHEMA,
   PROVIDER_API_ROLES,
   PUBLIC_READ_PURPOSES,
   makeObjectName,
@@ -451,12 +452,11 @@ export function buildAccessUnits(
   const visibleUsers = hasVisibleUsers(contracts, provider)
   const rightsById = new Map(contracts.rights.map((c) => [c.objectId, c]))
   const policyLabel = rightsPolicyLabel(contracts)
-  return access
-    .flatMap((contract) => {
+  return [
+    ...schemaUsageUnits(access, provider, module, parse),
+    ...access.flatMap((contract) => {
       const { table } = contract
-      const readers = [
-        ...new Set<ApiRolePurpose>(["user", ...contract.publicRead]),
-      ]
+      const readers = readersOf(contract)
       const names = accessPolicyNames(table)
       const policies: string[] = []
       const publicRead = contract.publicRead.length > 0
@@ -580,8 +580,54 @@ export function buildAccessUnits(
         module,
         generator: "access",
       }))
-    })
-    .sort((a, b) => compareStrings(a.identity, b.identity))
+    }),
+  ].sort((a, b) => compareStrings(a.identity, b.identity))
+}
+
+/**
+ * `USAGE` на схему застосунку (платформна спека §6.7): гранти на таблицю
+ * ролі не дадуть нічого без доступу до її схеми, тож платформа дає `USAGE`
+ * тим самим ролям, яким вид дає таблиці схеми, — ролям запиту й ролі команд.
+ * `public` — схема провайдера з вбудованим `USAGE` для `PUBLIC` і грантами
+ * пресету, `simetra` — схема платформного шару зі своїми грантами
+ * (`platformSchemaGrants`); їх правило не чіпає. Гранти поштучно на
+ * отримувача — у тій самій формі, в якій їх читає extract.
+ */
+function schemaUsageUnits(
+  access: readonly AccessContract[],
+  provider: DatabaseProvider,
+  module: string,
+  parse: SqlParser
+): SqlUnit[] {
+  const apiRoles = PROVIDER_API_ROLES[provider]
+  const grantees = new Map<string, Set<string>>()
+  for (const contract of access) {
+    const { schema } = contract.table
+    if (schema === "public" || schema === PLATFORM_SCHEMA) continue
+    const roles = grantees.get(schema) ?? new Set<string>()
+    for (const purpose of readersOf(contract)) {
+      const role = apiRoles[purpose]
+      if (role !== null) roles.add(role)
+    }
+    roles.add(PLATFORM_ROLES.command)
+    grantees.set(schema, roles)
+  }
+  return [...grantees].flatMap(([schema, roles]) =>
+    [...roles].map((role): SqlUnit => ({
+      ...generatedUnit(
+        `GRANT USAGE ON SCHEMA ${quoteIdent(schema)} TO ${quoteIdent(role)};`,
+        schema,
+        parse
+      ),
+      module,
+      generator: "access",
+    }))
+  )
+}
+
+/** Ролі API, яким вид дає читання таблиці: користувач і `publicRead`. */
+function readersOf(contract: AccessContract): ApiRolePurpose[] {
+  return [...new Set<ApiRolePurpose>(["user", ...contract.publicRead])]
 }
 
 const DMLS: readonly Dml[] = ["insert", "update", "delete"]
