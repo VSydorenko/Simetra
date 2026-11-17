@@ -525,7 +525,7 @@ export function providerTriggerConflicts(p: {
 /**
  * Whether the desired state places provision triggers on the identity table
  * `table`: a platform-layer trigger unit on it. Only then does the plan need
- * the table and the `TRIGGER` grant on it (decision Р5 of plan ПГ-3).
+ * the table and the `TRIGGER` grant on it.
  */
 export function hasIdentityTriggers(
   units: readonly SqlUnit[],
@@ -553,8 +553,8 @@ export interface IdentityTableFacts {
 }
 
 /**
- * Refusal of a plan whose provision triggers cannot be placed (decision Р5
- * of plan ПГ-3), in both profiles. A missing table (or schema) comes first:
+ * Refusal of a plan whose provision triggers cannot be placed, in both profiles. A missing table (or schema) comes
+ * first:
  * the provider migration creates it, and only then can grants on it exist.
  * `table` is the display name of the identity table.
  */
@@ -656,6 +656,8 @@ function lockedIdentityTriggers(
  * зламала б усю читальну транзакцію плану замість відмови. Функції за oid
  * на відсутньому об'єкті дають `NULL`, тож `COALESCE` робить його `false`.
  * Каталог читається без `USAGE`, тож `exists` правдивий і без нього.
+ * Таблицею вважається лише звичайна чи секціонована (`relkind` r, p): вид,
+ * послідовність чи індекс з тим самим іменем — це відсутня таблиця.
  */
 async function readIdentityTableFacts(
   tx: ApplyTransaction,
@@ -677,6 +679,7 @@ async function readIdentityTableFacts(
       "FROM (SELECT $1::text AS nspname, $2::text AS relname) k",
       "LEFT JOIN pg_catalog.pg_namespace n ON n.nspname = k.nspname",
       "LEFT JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = k.relname",
+      "  AND c.relkind IN ('r', 'p')",
     ].join("\n"),
     [table.schema, table.name]
   )
@@ -780,7 +783,7 @@ export async function buildPlan(
       const ownerGate = await checkOwnerAttributes(tx)
       if (ownerGate !== undefined)
         return { ok: false as const, unsupported: ownerGate }
-      // Р5 ПГ-3: тригерам провізії потрібні таблиця ідентичності й `TRIGGER`
+      // Тригерам провізії потрібні таблиця ідентичності й `TRIGGER`
       // на неї — відмова з порадою до будь-якого кроку, а не сира помилка
       // тіні чи застосування. Лише коли бажаний стан ці тригери має
       if (hasIdentityTriggers(model.sqlUnits, identityTable)) {

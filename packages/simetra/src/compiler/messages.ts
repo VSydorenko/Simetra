@@ -34,7 +34,7 @@ function hintOf<K extends string>(
 }
 
 /**
- * Поради відмови таблиці ідентичності (ПГ-3, Р5) за причиною: таблиці немає —
+ * Поради відмови таблиці ідентичності за причиною: таблиці немає —
  * її створює міграція провайдера, а гранти на неї дає повторний `roles`;
  * немає `USAGE` чи `TRIGGER` — гранти дає `roles` від суперкористувача.
  */
@@ -4481,20 +4481,20 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "plan.identity-trigger-locked": {
     en: (p) =>
       p.reason === "disabled"
-        ? `The plan enables the provision trigger ${p.trigger}, which is disabled on the identity table ${p.table}; only the owner of the table, ${p.login}, can do that`
+        ? `The plan changes the enabled state of the provision trigger ${p.trigger} on the identity table ${p.table} (it is not in its normal enabled state); only the owner of the table, ${p.login}, can do that`
         : `The plan removes the provision trigger ${p.trigger} from the identity table ${p.table}, which only the owner of the table, ${p.login}, can do`,
     uk: (p) =>
       p.reason === "disabled"
-        ? `План вмикає тригер провізії ${p.trigger}, вимкнений на таблиці ідентичності ${p.table}; це може лише власник таблиці, ${p.login}`
+        ? `План змінює стан вмикання тригера провізії ${p.trigger} на таблиці ідентичності ${p.table} (він не в звичайному ввімкненому стані); це може лише власник таблиці, ${p.login}`
         : `План знімає тригер провізії ${p.trigger} з таблиці ідентичності ${p.table}, а це може лише власник таблиці, ${p.login}`,
     hint: {
       en: (p) =>
         p.reason === "disabled"
-          ? `Nothing was planned or written. Enable the trigger on ${p.table} as ${p.login}, and plan again. If the trigger was disabled outside Simetra, treat it as a sign of tampering and check it with the owner of the table.`
+          ? `Nothing was planned or written. Set the trigger on ${p.table} back to its enabled state as ${p.login}, and plan again. If the trigger was changed outside Simetra, treat it as a sign of tampering and check it with the owner of the table.`
           : `Nothing was planned or written. Run this removal as ${p.login}. If the live trigger was changed outside Simetra, treat it as a sign of tampering and check it with the owner of the table.`,
       uk: (p) =>
         p.reason === "disabled"
-          ? `Нічого не сплановано й не записано. Увімкніть тригер на ${p.table} від ${p.login} і сплануйте знову. Якщо тригер вимкнено поза Simetra, вважайте це ознакою підробки й звірте його з власником таблиці.`
+          ? `Нічого не сплановано й не записано. Поверніть тригеру на ${p.table} звичайний ввімкнений стан від ${p.login} і сплануйте знову. Якщо тригер змінено поза Simetra, вважайте це ознакою підробки й звірте його з власником таблиці.`
           : `Нічого не сплановано й не записано. Виконайте це зняття від ${p.login}. Якщо живий тригер змінено поза Simetra, вважайте це ознакою підробки й звірте його з власником таблиці.`,
     },
   },

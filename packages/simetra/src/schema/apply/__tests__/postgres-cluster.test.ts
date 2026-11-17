@@ -634,6 +634,16 @@ describe("ensurePostgresCluster", () => {
       expect(grantSql(calls)).toEqual([sql[usage]])
     })
 
+    it("counts only an ordinary or partitioned table as the identity table", async () => {
+      const { dbs, calls } = trapPort(presentCluster())
+      await ensurePostgresCluster(dbs, conns, set)
+      // Вид, послідовність чи індекс з тим самим іменем — таблиці немає
+      const lookup = calls
+        .flatMap((c) => c.sql)
+        .find((s) => s.includes("AS exists"))
+      expect(lookup).toMatch(/c\.relkind IN \('r', 'p'\)/)
+    })
+
     it.each([
       ["neither", { trigger: false, references: false }],
       ["only TRIGGER", { trigger: true, references: false }],

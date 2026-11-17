@@ -322,9 +322,9 @@ export function templateState(found: TemplateRow | undefined): TemplateState {
 }
 
 // Схеми профілю: імена з переліку `PROVIDER_SCHEMAS.postgres` (T0); тест
-// тримає збіг
+// тримає збіг. Схема Better Auth — одне джерело з таблицею ідентичності
 const EXTENSIONS_SCHEMA = "extensions"
-const AUTH_SCHEMA = "better_auth"
+const AUTH_SCHEMA = PROVIDER_IDENTITY_SOURCES.postgres.table.schema
 const CHECK_EXTENSION = "plpgsql_check"
 
 /**
@@ -420,9 +420,9 @@ const qualified = (table: { schema: string; name: string }): string =>
   `${q(table.schema)}.${q(table.name)}`
 
 /**
- * The grants of the owner on the identity table (decisions Р7, Р11 of plan
- * ПГ-3): `USAGE` on its schema, `TRIGGER, REFERENCES` on the table alone (the
- * provision trigger and the foreign key of the model). The single source of
+ * The grants of the owner on the identity table: `USAGE` on its schema,
+ * `TRIGGER, REFERENCES` on the table alone (the provision trigger and the
+ * foreign key of the model). The single source of
  * this SQL: the `ensurePostgresCluster` write phase and the test helper of a
  * tagged copy database, which `roles` cannot prepare, both run it.
  */
@@ -436,7 +436,11 @@ export function identityGrantSql(
   }
 }
 
-/** Гранти власника на схему й таблицю ідентичності; схема вже є. */
+/**
+ * Гранти власника на схему й таблицю ідентичності; схема вже є. Таблиця — лише
+ * звичайна чи секціонована (`relkind` r, p): вид чи послідовність з тим самим
+ * іменем рахується відсутньою таблицею.
+ */
 async function readIdentityGrants(
   tx: ApplyTransaction,
   set: PostgresClusterSet
@@ -445,7 +449,8 @@ async function readIdentityGrants(
   const [schema] = await tx.query<{ usage: boolean; exists: boolean }>(
     [
       "SELECT pg_catalog.has_schema_privilege($1::text, $2::text, 'USAGE') AS usage,",
-      "  pg_catalog.to_regclass($3::text) IS NOT NULL AS exists",
+      "  EXISTS (SELECT 1 FROM pg_catalog.pg_class c",
+      "    WHERE c.oid = pg_catalog.to_regclass($3::text) AND c.relkind IN ('r', 'p')) AS exists",
     ].join("\n"),
     [set.owner, set.identity.schema, table]
   )
@@ -997,8 +1002,8 @@ async function writePhase(
     await tx.query(
       `ALTER ROLE ${q(set.auth)} IN DATABASE ${q(set.database)} SET search_path = ${q(AUTH_SCHEMA)}`
     )
-    // Гранти власнику лише на схему й одну таблицю ідентичності (рішення Р7,
-    // Р11): тригер провізії й зовнішній ключ моделі. Без `ALTER DEFAULT
+    // Гранти власнику лише на схему й одну таблицю ідентичності:
+    // тригер провізії й зовнішній ключ моделі. Без `ALTER DEFAULT
     // PRIVILEGES` — інші таблиці Better Auth власнику не відкриваються
     const grants = snapshot.identityGrants
     const grantSql = identityGrantSql(set.owner, set.identity)

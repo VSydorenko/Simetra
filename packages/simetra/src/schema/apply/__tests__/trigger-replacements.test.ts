@@ -11,8 +11,7 @@ import {
 
 /**
  * Пара дій двигуна `DROP TRIGGER` + `CREATE TRIGGER` одного тригера стає
- * одним `CREATE OR REPLACE TRIGGER` (рішення архітекторки, задача 3 ПГ-3):
- * pg-delta міняє визначення тригера лише заміною, а `DROP` на чужій таблиці
+ * одним `CREATE OR REPLACE TRIGGER`: pg-delta міняє визначення тригера лише заміною, а `DROP` на чужій таблиці
  * (таблиця ідентичності) вимагає власника. Синтетичні дії; справжній план —
  * у DB-тестах designer.
  */
@@ -53,12 +52,17 @@ function action(sql: string, over: Partial<EngineAction> = {}): EngineAction {
 const id = (name: string, table = TABLE.name) =>
   `trigger:${TABLE.schema}.${table}.${name}`
 
-function dropTrigger(name: string, table = TABLE.name): EngineAction {
+function dropTrigger(
+  name: string,
+  table = TABLE.name,
+  over: Partial<EngineAction> = {}
+): EngineAction {
   return action(`DROP TRIGGER "${name}" ON "${TABLE.schema}"."${table}"`, {
     verb: "drop",
     destroys: [id(name, table)],
     destroyed: [triggerRef(name, table)],
     lockClass: "accessExclusive",
+    ...over,
   })
 }
 
@@ -156,6 +160,15 @@ describe("triggerReplacements", () => {
       () => [
         dropTrigger("t"),
         createTrigger("t", { over: { newSegmentBefore: true } }),
+      ],
+      source("t"),
+    ],
+    [
+      // Межа коміту на самому DROP: злиття зняло б її разом із дією
+      "another phase (a commit boundary before the drop)",
+      () => [
+        dropTrigger("t", TABLE.name, { newSegmentBefore: true }),
+        createTrigger("t"),
       ],
       source("t"),
     ],

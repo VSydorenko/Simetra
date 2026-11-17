@@ -430,7 +430,7 @@ export function triggerReplacements(
       (r.table === ref.table || (r.kind === "table" && r.name === ref.table))
     const samePhase =
       span.every((a) => a.transactionality === "transactional") &&
-      span.slice(1).every((a) => !a.newSegmentBefore)
+      span.every((a) => !a.newSegmentBefore)
     const clear = between.every(
       (a) =>
         a.destroys.length === 0 &&
