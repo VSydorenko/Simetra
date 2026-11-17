@@ -481,7 +481,7 @@ function ownerReferences(
 interface ReferenceResolver {
   single(
     ref: MetadataRef
-  ): { target: PhysicalTable; targetKey: string } | undefined
+  ): { target: PhysicalTable; targetKey: string; users?: true } | undefined
   pair(
     refs: readonly MetadataRef[]
   ): Extract<CommandReference, { form: "pair" }>["targets"]

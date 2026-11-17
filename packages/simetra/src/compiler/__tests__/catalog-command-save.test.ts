@@ -782,6 +782,21 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
             array: true,
             crossScope: true,
           },
+          {
+            id: uuid(6963),
+            name: "readers",
+            physicalName: "readers",
+            type: "Ref",
+            ref: { kind: "Catalog", name: "Users" },
+            array: true,
+          },
+          {
+            id: uuid(6964),
+            name: "author",
+            physicalName: "author_id",
+            type: "Ref",
+            ref: { kind: "Catalog", name: "Users" },
+          },
         ],
       }),
       ["roles/MemoWriter/MemoWriter.meta.json"]: role(
@@ -831,6 +846,18 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
         "crossScope — без умови скоупу",
         "memo",
         "EXISTS (SELECT 1 FROM unnest(v_new.peers) AS a(v) WHERE a.v IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.org_member g WHERE g.id = a.v))",
+      ],
+      // «Користувачі» нескоуплені: умови скоупу немає, а посилання на себе
+      // видиме без права на них (спека П4 §6.6)
+      [
+        "масив на «Користувачів» — свій id видимий",
+        "memo",
+        "EXISTS (SELECT 1 FROM unnest(v_new.readers) AS a(v) WHERE a.v IS NOT NULL AND NOT ((a.v = (SELECT simetra.current_user_id())) IS TRUE OR EXISTS (SELECT 1 FROM public.users g WHERE g.id = a.v)))",
+      ],
+      [
+        "одиничний на «Користувачів» — свій id видимий",
+        "memo",
+        "v_new.author_id IS NOT NULL AND NOT ((v_new.author_id = (SELECT simetra.current_user_id())) IS TRUE OR EXISTS (SELECT 1 FROM public.users g WHERE g.id = v_new.author_id))",
       ],
     ])("%s", (_, table, condition) => {
       // Гілка створення — кожне значення; гілку зміни тримає «лише змінене».
