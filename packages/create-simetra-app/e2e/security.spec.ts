@@ -72,6 +72,8 @@ function callData(
 /** Значення, яке Server Function віддала клієнту. */
 function valueOf(reply: Reply): Json {
   expect(reply.status).toBe(200)
+  // Відповідь Server Function несе значення сесії: його не кешують ні клієнт, ні проксі
+  expect(reply.headers["cache-control"]).toBe("no-store")
   return (decodeResponse(reply.text) as { result: Json }).result
 }
 
