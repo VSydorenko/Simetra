@@ -70,6 +70,12 @@ export const PRIVILEGED_LOGIN_REASONS = {
   createRole: "createrole",
   /** `pg_execute_server_program`, `pg_read_server_files` or `pg_write_server_files`. */
   serverFiles: "server-files",
+  /** `pg_read_all_data`: reads every table, past grants and RLS. */
+  readAllData: "read-all-data",
+  /** `pg_write_all_data`: writes every table, past grants and RLS. */
+  writeAllData: "write-all-data",
+  /** `pg_database_owner`: the login owns the current database. */
+  databaseOwner: "database-owner",
   /** A login role of the provider (`PROVIDER_LOGIN_ROLES`). */
   providerLogin: "provider-login",
   /** The service role of the profile (`PROVIDER_API_ROLES[provider].service`). */

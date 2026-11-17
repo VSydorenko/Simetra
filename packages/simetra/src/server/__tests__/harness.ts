@@ -141,6 +141,9 @@ export const LOGIN_FACTS_NONE = {
   bypassrls: "f",
   createrole: "f",
   server_files: "f",
+  read_all_data: "f",
+  write_all_data: "f",
+  database_owner: "f",
   provider_login: "f",
   service: "f",
 }

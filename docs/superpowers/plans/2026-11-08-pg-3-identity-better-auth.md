@@ -103,7 +103,7 @@ devDependency з ПГ-2a).
 | Р2 | `LOGIN_ROLE_REQUEST_PURPOSES.supabase = ["user", "anonymous"]`: роль входу рантайму на `supabase` стає членом `anon` з `SET`. Рантайм без членства в ролі `anonymous` профілю — `command.read-role-missing` на створенні, без запасного шляху через роль команд. Анонім — гість в обох профілях на дверях Server Function (двері PostgREST `supabase` — блок B4) | спека профілю §4.4; спека П4 §6.2 рядок `simetra_runtime` для `supabase`, §6.11 (задача 0) |
 | Р3 | Сесію вважаємо анонімною, коли claim `PROVIDER_IDENTITY_SOURCES[provider].anonymousClaim` дорівнює `true` або `"true"`. SQL судить так само (`->> … = 'true'`); розбіжність дала б SQL-гостя під роллю `user`. Нового поля каталогу немає: T3 бере claim з даних T0 за `catalog.provider` | §4.4 «Анонімна сесія читає як гість» (задача 0) |
 | Р8 | **Відсутній claim аноніма — відмова, а не роль `user`.** Профіль з `anonymousClaim` ≠ `null` вимагає claim зі значенням `true`, `false`, `"true"` чи `"false"`. Інакше читання й команда (`run`) відмовляють `command.unauthenticated` до будь-якого I/O; `authorizeChannels` (ПГ-4/B2, задача 11) з тим самим `sessionKind` дає `{ user: null, channels: [] }`. Команди теж: у проєкті без «Користувачів» `subjectUserFunction` за відсутнього claim повертає `sub::uuid`, тобто анонім виконав би команду з правами `everyUser`. Правило діє лише на claims із суб'єктом (`sub`): запит без суб'єкта T3 відхиляє ще до нього (Рт8), і Р8 цього не змінює. Причина: адаптер host-а, що забув claim, інакше тихо дав би анонімові права `user` (fail-open). Сесії інструментів designer (`dataSession`) і тест-помічники ставлять `false` явно (рішення автора плану після аудиту безпеки; подано архітекторці) | §4.4 (задача 0) |
-| Р9 | **Гейт входу судить факти, а не ім'я.** Відмова, коли `session_user` (сам чи через будь-яке членство, `pg_has_role … 'MEMBER'`) досягає: власника схеми `simetra` (`nspowner`); ролі з іменем `PROVIDER_OWNER_ROLES[provider]`; ролі з `rolsuper`, `rolbypassrls` чи `rolcreaterole`; вбудованих `pg_execute_server_program`, `pg_read_server_files`, `pg_write_server_files`; ролі входу провайдера (`PROVIDER_LOGIN_ROLES`, на `postgres` — `simetra_auth`, власник таблиці Better Auth); сервісної ролі профілю, коли вона не `null`. Обмеження порту: `CommandDatabase` входить роллю входу напряму; пул, що входить суперкористувачем і робить `SET SESSION AUTHORIZATION`, — поза моделлю довіри (такий host уже тримає DSN суперкористувача), це записано в JSDoc `CommandRuntimeOptions.database`. `NOINHERIT` тут не захищає: `SET ROLE` дає владу ролі | §4.2 «Межа довіри» (задача 0) |
+| Р9 | **Гейт входу судить факти, а не ім'я.** Відмова, коли `session_user` (сам чи через будь-яке членство, `pg_has_role … 'MEMBER'`) досягає: власника схеми `simetra` (`nspowner`); ролі з іменем `PROVIDER_OWNER_ROLES[provider]`; ролі з `rolsuper`, `rolbypassrls` чи `rolcreaterole`; вбудованих `pg_execute_server_program`, `pg_read_server_files`, `pg_write_server_files`; вбудованих `pg_read_all_data`, `pg_write_all_data` і `pg_database_owner` (власник поточної бази); ролі входу провайдера (`PROVIDER_LOGIN_ROLES`, на `postgres` — `simetra_auth`, власник таблиці Better Auth); сервісної ролі профілю, коли вона не `null`. Обмеження порту: `CommandDatabase` входить роллю входу напряму; пул, що входить суперкористувачем і робить `SET SESSION AUTHORIZATION`, — поза моделлю довіри (такий host уже тримає DSN суперкористувача), це записано в JSDoc `CommandRuntimeOptions.database`. `NOINHERIT` тут не захищає: `SET ROLE` дає владу ролі | §4.2 «Межа довіри» (задача 0) |
 | Р10 | Адаптер `verifySession` Better Auth — у шаблоні host-а (П4-D, `packages/create-simetra-app/template`), а не в цьому плані, хоч §12 спеки називає його в ПГ-3 (рішення архітекторки, межа з П4-D) | §12 рядок ПГ-3 (задача 0) |
 | Р4 | `plan.identity-trigger-locked` судить дані T2 `PROVIDER_IDENTITY_TRIGGER_LOCKED = { supabase: false, postgres: true }`, а не факт власності таблиці. Факт стека Supabase: роль `postgres` знімає тригер на `auth.users`, хоч не власник і не суперкористувач (supautils). Гейт за власністю зламав би `supabase` | §4.2 таблиця мап, новий рядок (задача 0) |
 | Р5 | `plan.identity-table-missing` — спільна перевірка фактів в обох профілях: `to_regclass` таблиці ідентичності й `has_table_privilege(current_user, …, 'TRIGGER')`. Діє лише тоді, коли бажаний стан має тригери провізії. На стеку Supabase обидві умови істинні (перевірено) | немає |
@@ -563,7 +563,8 @@ devDependency з ПГ-2a).
 - Produces:
   - `CommandError` з `code: "command.privileged-login"` і наявним полем
     `reason`: `"owner"`, `"superuser"`, `"bypassrls"`, `"createrole"`,
-    `"server-files"`, `"provider-login"`, `"service"`. Ці
+    `"server-files"`, `"read-all-data"`, `"write-all-data"`,
+    `"database-owner"`, `"provider-login"`, `"service"`. Ці
     значення — новий перелік `PRIVILEGED_LOGIN_REASONS` поруч із
     `LIMIT_REASONS` у `errors.ts`, з тим самим оформленням документації.
     Причина `service` на наявних профілях недосяжна окремо: `service_role`
@@ -586,6 +587,12 @@ devDependency з ПГ-2a).
       EXISTS (SELECT FROM pg_catalog.pg_roles x
               WHERE x.rolname IN ('pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files')
               AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS server_files,
+      EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = 'pg_read_all_data'
+              AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS read_all_data,
+      EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = 'pg_write_all_data'
+              AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS write_all_data,
+      EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = 'pg_database_owner'
+              AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS database_owner,
       EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = ANY ($4::text[])
               AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS provider_login,
       COALESCE((SELECT pg_catalog.pg_has_role(session_user, s.oid, 'MEMBER')
@@ -597,7 +604,8 @@ devDependency з ПГ-2a).
     `pg_has_role(…, 'MEMBER')` бачить і саму роль, і
     непряме членство незалежно від `INHERIT` і `SET`;
   - причина — перша істинна в порядку `owner`, `superuser`, `bypassrls`,
-    `createrole`, `server-files`, `provider-login`, `service`. Відмова — до
+    `createrole`, `server-files`, `read-all-data`, `write-all-data`,
+    `database-owner`, `provider-login`, `service`. Відмова — до
     звірки хешу (`command.model-mismatch`). З'єднання звільняється;
   - запит фактів — безумовний перший оператор **кожної** транзакції
     `inspect`, зокрема повтору після `42704` на членстві. Повтор не має
@@ -632,7 +640,12 @@ devDependency з ПГ-2a).
     - тегована роль, член ролі входу провайдера `simetra_auth` стека
       (фіксоване ім'я з `PROVIDER_LOGIN_ROLES`; тегована `auth` гейт не
       бачить), — `provider-login`. Членство знімається разом із тегованою
-      роллю; член `pg_read_server_files` — `server-files`;
+      роллю; член `pg_read_server_files` — `server-files`; член
+      `pg_read_all_data` — `read-all-data`; член `pg_write_all_data` —
+      `write-all-data`;
+    - тегована роль входу, власник тегованої копії бази, з входом саме в
+      цю копію (членство в `pg_database_owner` неявне лише в своїй базі), —
+      `database-owner`;
     - тегована роль входу форми `simetra_runtime` — рантайм створюється;
   - DB, стек `supabase`: DSN ролі `postgres` — `owner`; тегована роль, член
     `service_role`, — `bypassrls` (`service_role` має `BYPASSRLS`;

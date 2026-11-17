@@ -34,6 +34,12 @@ const FACTS = {
   EXISTS (SELECT FROM pg_catalog.pg_roles x
           WHERE x.rolname IN ('pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files')
           AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS server_files,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = 'pg_read_all_data'
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS read_all_data,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = 'pg_write_all_data'
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS write_all_data,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = 'pg_database_owner'
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS database_owner,
   EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = ANY ($4::text[])
           AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS provider_login,
   COALESCE((SELECT pg_catalog.pg_has_role(session_user, s.oid, 'MEMBER')
@@ -51,6 +57,9 @@ const FACT_COLUMNS = [
   "bypassrls",
   "createrole",
   "server_files",
+  "read_all_data",
+  "write_all_data",
+  "database_owner",
   "provider_login",
   "service",
 ] as const
@@ -131,6 +140,9 @@ describe("createCommandRuntime", () => {
     ["bypassrls", "bypassrls"],
     ["createrole", "createrole"],
     ["server_files", "server-files"],
+    ["read_all_data", "read-all-data"],
+    ["write_all_data", "write-all-data"],
+    ["database_owner", "database-owner"],
     ["provider_login", "provider-login"],
     ["service", "service"],
   ] as const)(
@@ -160,6 +172,9 @@ describe("createCommandRuntime", () => {
     ["bypassrls", "bypassrls"],
     ["createrole", "createrole"],
     ["server_files", "server-files"],
+    ["read_all_data", "read-all-data"],
+    ["write_all_data", "write-all-data"],
+    ["database_owner", "database-owner"],
     ["provider_login", "provider-login"],
   ] as const)(
     "names %s first when it and every later fact hold",

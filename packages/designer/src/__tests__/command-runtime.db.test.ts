@@ -579,6 +579,8 @@ describe("command runtime over the engine target", () => {
     // роль `auth` гейт не бачить.
     ["provider-login", PROVIDER_LOGIN_ROLES[testProvider()][0]!],
     ["server-files", "pg_read_server_files"],
+    ["read-all-data", "pg_read_all_data"],
+    ["write-all-data", "pg_write_all_data"],
   ])(
     "login gate: a member of %s role %s is refused with that reason",
     async (reason, role) => {
@@ -592,6 +594,37 @@ describe("command runtime over the engine target", () => {
       )
     }
   )
+
+  // Власник бази — член `pg_database_owner` лише неявно, у своїй базі: тож
+  // окрема копія, якою володіє тегована роль входу, і вхід саме в неї.
+  it("login gate: the owner of the current database is privileged-login database-owner", async () => {
+    await withCopy("", (copy, database) =>
+      withRuntimeLogin(
+        copy,
+        [],
+        async (login) => {
+          const role = decodeURIComponent(new URL(login).username)
+          const su = await superuserClient(database)
+          try {
+            await su.query(
+              `alter database ${quoteIdent(database)} owner to ${quoteIdent(role)}`
+            )
+            try {
+              expect(await gate(login)).toEqual(privileged("database-owner"))
+            } finally {
+              // Володіння базою тримало б роль від `DROP ROLE`
+              await su.query(
+                `alter database ${quoteIdent(database)} owner to ${quoteIdent(owner)}`
+              )
+            }
+          } finally {
+            await su.end()
+          }
+        },
+        "gate_dbo"
+      )
+    )
+  })
 
   it("login gate: the simetra_runtime form of the login role creates the runtime", async () => {
     await expect(runtime(fromPgPool(env.direct))).resolves.toHaveProperty("run")

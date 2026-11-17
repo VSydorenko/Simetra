@@ -754,7 +754,9 @@ each other in some form, even `ADMIN` alone; revoke that membership.
 The runtime refuses to start with `command.privileged-login` when its login
 role reaches a power it must not hold, itself or through a membership; the
 `reason` names the first fact found: `owner`, `superuser`, `bypassrls`,
-`createrole`, `server-files`, `provider-login` or `service`. Use the
+`createrole`, `server-files`, `read-all-data`, `write-all-data`,
+`database-owner` (the login owns the current database), `provider-login` or
+`service`. Use the
 dedicated runtime login role `simetra_runtime`, not an owner, a superuser or a
 provider login.
 

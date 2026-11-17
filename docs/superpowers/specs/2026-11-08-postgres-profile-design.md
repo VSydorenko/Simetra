@@ -352,7 +352,10 @@ Auth не можна дешево, і це не мета: `simetra_owner` і т�
 членство) досягає: власника схеми `simetra`; ролі з іменем
 `PROVIDER_OWNER_ROLES[provider]`; ролі з `rolsuper`, `rolbypassrls` чи
 `rolcreaterole`; вбудованих `pg_execute_server_program`,
-`pg_read_server_files`, `pg_write_server_files`; ролі входу провайдера
+`pg_read_server_files`, `pg_write_server_files`; вбудованих
+`pg_read_all_data` і `pg_write_all_data` (читання й запис повз гранти, зокрема
+токени сесій у `better_auth`, де RLS немає); `pg_database_owner`, тобто
+володіння поточною базою; ролі входу провайдера
 (`PROVIDER_LOGIN_ROLES`, на `postgres` — `simetra_auth`, власник таблиці
 Better Auth); сервісної ролі профілю, коли вона не `null`. Гейт судить факти,
 а не ім'я, бо `NOINHERIT` не захищає: `SET ROLE` дає владу ролі. Порт

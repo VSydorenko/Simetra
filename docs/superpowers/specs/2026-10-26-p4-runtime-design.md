@@ -988,7 +988,7 @@ INSERT OR UPDATE` лише на таблицях із `trackAuthor`, коли п
 | `command.nested`, `command.depth` | §6.5 | `command.depth` понад межу фаз `ctx.run` — `reason: "phases"` |
 | `command.retry-exhausted` | §6.5 | — |
 | `command.model-mismatch` | створення рантайму (§6.3) | обидва хеші |
-| `command.privileged-login` | створення рантайму: `session_user` досягає власника схеми `simetra`, ролі власника профілю, суперкористувача, `BYPASSRLS`, `CREATEROLE`, вбудованих ролей файлів і програм, ролі входу провайдера чи сервісної ролі профілю (спека профілю `postgres` §4.2) | `reason` — перша істинна з переліку `PRIVILEGED_LOGIN_REASONS` T0 (`packages/simetra/src/model/runtime/errors.ts`) у його порядку |
+| `command.privileged-login` | створення рантайму: `session_user` досягає власника схеми `simetra`, ролі власника профілю, суперкористувача, `BYPASSRLS`, `CREATEROLE`, вбудованих ролей файлів і програм, `pg_read_all_data`, `pg_write_all_data`, власника поточної бази (`pg_database_owner`), ролі входу провайдера чи сервісної ролі профілю (спека профілю `postgres` §4.2) | `reason` — перша істинна з переліку `PRIVILEGED_LOGIN_REASONS` T0 (`packages/simetra/src/model/runtime/errors.ts`) у його порядку |
 | `command.read-role-missing` | створення рантайму: профіль вимагає роль запиту, а `simetra_runtime` не має членства `SET` у ній (Рт18) | роль |
 | `command.timeout` | `57014` (`statement_timeout`) читання (§6.11) і фаз запису; бюджет часу команди вичерпано (§6.5); збережений `25P04` чи `25P03` до надсилання `COMMIT` (з'єднання знищено) | — |
 | `command.busy` | `55P03` (`lock_timeout`): рядок тримає інша транзакція; автоповтору немає | — |

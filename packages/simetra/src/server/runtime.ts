@@ -304,7 +304,8 @@ const EPOCH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(ROW_VERSION_EPOCH_FUNCTI
 // Факти ролі входу судять `session_user`, а не ім'я: `'MEMBER'` бачить саму
 // роль і будь-яке членство, зокрема без успадкування — `SET ROLE` однаково
 // дає владу ролі. Відсутня роль дає `false`, а не `42704`: підзапити з
-// `COALESCE` і `EXISTS`.
+// `COALESCE` і `EXISTS`. Членство в `pg_database_owner` Postgres дає неявно
+// власникові поточної бази, тож факт ловить і вхід, що володіє базою.
 const LOGIN_FACTS = `SELECT
   COALESCE((SELECT pg_catalog.pg_has_role(session_user, n.nspowner, 'MEMBER')
             FROM pg_catalog.pg_namespace n WHERE n.nspname = $1), false)
@@ -319,6 +320,12 @@ const LOGIN_FACTS = `SELECT
   EXISTS (SELECT FROM pg_catalog.pg_roles x
           WHERE x.rolname IN ('pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files')
           AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS server_files,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = 'pg_read_all_data'
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS read_all_data,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = 'pg_write_all_data'
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS write_all_data,
+  EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = 'pg_database_owner'
+          AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS database_owner,
   EXISTS (SELECT FROM pg_catalog.pg_roles x WHERE x.rolname = ANY ($4::text[])
           AND pg_catalog.pg_has_role(session_user, x.oid, 'MEMBER')) AS provider_login,
   COALESCE((SELECT pg_catalog.pg_has_role(session_user, s.oid, 'MEMBER')
@@ -330,6 +337,9 @@ const LOGIN_FACT_REASONS = [
   ["bypassrls", PRIVILEGED_LOGIN_REASONS.bypassRls],
   ["createrole", PRIVILEGED_LOGIN_REASONS.createRole],
   ["server_files", PRIVILEGED_LOGIN_REASONS.serverFiles],
+  ["read_all_data", PRIVILEGED_LOGIN_REASONS.readAllData],
+  ["write_all_data", PRIVILEGED_LOGIN_REASONS.writeAllData],
+  ["database_owner", PRIVILEGED_LOGIN_REASONS.databaseOwner],
   ["provider_login", PRIVILEGED_LOGIN_REASONS.providerLogin],
   ["service", PRIVILEGED_LOGIN_REASONS.service],
 ] as const
