@@ -105,6 +105,7 @@ describe("simetra", () => {
       "./schema",
       "./schemas/*",
       "./server",
+      "./shell",
       "./ui",
     ])
     expect(manifest.private).toBeUndefined()
@@ -126,6 +127,8 @@ describe("simetra", () => {
       "dist/server/index.d.ts",
       "dist/ui/index.js",
       "dist/ui/index.d.ts",
+      "dist/shell/index.js",
+      "dist/shell/index.d.ts",
       "schemas/catalogs.schema.json",
       "LICENSE",
       "README.md",
@@ -148,15 +151,16 @@ describe("simetra", () => {
     expect(
       js.filter(
         (f) =>
-          !/^dist\/(model|compiler|data|schema|server|ui)\//.test(f) &&
+          !/^dist\/(model|compiler|data|schema|server|ui|shell)\//.test(f) &&
           !/^dist\/handle-[^/]+\.js$/.test(f)
       )
     ).toEqual([])
   })
 
-  it("declares react, react-dom and react-virtual as the only peers, both optional", async () => {
+  it("declares react, react-dom, react-virtual and react-router as the only peers, all optional", async () => {
     const m = await readPackedManifest(tarballs.simetra)
     expect(m.peerDependencies).toEqual({
+      "@tanstack/react-router": "^1.170.46",
       "@tanstack/react-virtual": "^3.14.26",
       react: "^19.3.1",
       "react-dom": "^19.3.1",
@@ -166,7 +170,7 @@ describe("simetra", () => {
       Object.values(
         m.peerDependenciesMeta as Record<string, { optional?: boolean }>
       ).map((v) => v.optional)
-    ).toEqual([true, true, true])
+    ).toEqual([true, true, true, true])
     expect(Object.keys(m.peerDependenciesMeta as object).sort()).toEqual(
       Object.keys(m.peerDependencies as object).sort()
     )
@@ -379,6 +383,22 @@ describe("simetra/data", () => {
       ...(await packedSources(tarballs.simetra, "dist/ui/", ".js")).values(),
     ].flatMap(bareSpecifiers)
     expect(specifiers).toContain("@tanstack/react-virtual")
+    expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
+  })
+
+  it("the shell entry imports only its peers and the lower tiers", async () => {
+    const m = await readPackedManifest(tarballs.simetra)
+    const allowed = new Set([
+      ...Object.keys(m.peerDependencies as object),
+      "simetra/data",
+      "simetra/data/react",
+      "simetra/model",
+      "simetra/ui",
+    ])
+    const specifiers = [
+      ...(await packedSources(tarballs.simetra, "dist/shell/", ".js")).values(),
+    ].flatMap(bareSpecifiers)
+    expect(specifiers).toContain("@tanstack/react-router")
     expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
   })
 })

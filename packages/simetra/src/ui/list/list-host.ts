@@ -7,7 +7,7 @@ import {
   type ReactElement,
 } from "react"
 import { useRows, type RowView, type UseRowsResult } from "simetra/data/react"
-import type { CatalogIndex, OrderBy } from "simetra/model"
+import type { CatalogEntry, CatalogIndex, OrderBy } from "simetra/model"
 import { useCatalogEntry, useCatalogIndex } from "../catalog"
 import { FieldView, headerColumns, type FieldColumn } from "../fields"
 import { useMessage } from "../messages"
@@ -41,6 +41,28 @@ const isObjectRef = (column: FieldColumn) =>
   column.attribute.ref !== undefined &&
   column.attribute.enumValues === undefined &&
   column.attribute.pair === undefined
+
+/**
+ * The read of a list: sort order and `include`. One function for the host and
+ * the route loader (P4-D spec §6), so the view a loader preloads is the view
+ * the host subscribes to.
+ */
+export function listQuery(
+  entry: CatalogEntry,
+  options: { orderBy?: OrderBy; include?: readonly string[] } = {}
+): { orderBy: OrderBy; include?: readonly string[] } {
+  const include =
+    options.include ??
+    headerColumns(entry)
+      .filter(isObjectRef)
+      .map((column) => column.name)
+  return {
+    orderBy: options.orderBy ?? [
+      { attribute: entry.keyName, direction: "asc" },
+    ],
+    ...(include.length === 0 ? {} : { include }),
+  }
+}
 
 /** What {@link edgeLoader} reads from `useRows`. */
 export type EdgeView = Pick<
@@ -161,20 +183,11 @@ export function ListHost(props: ListHostProps): ReactElement {
   const navigation = useNavigation()
   const loading = useMessage("state.loading")
   const columns = useMemo(() => headerColumns(entry), [entry])
-  const include = useMemo(
-    () =>
-      props.include ?? columns.filter(isObjectRef).map((column) => column.name),
-    [props.include, columns]
+  const query = useMemo(
+    () => listQuery(entry, { orderBy: props.orderBy, include: props.include }),
+    [entry, props.orderBy, props.include]
   )
-  const orderBy = useMemo<OrderBy>(
-    () => props.orderBy ?? [{ attribute: entry.keyName, direction: "asc" }],
-    [props.orderBy, entry]
-  )
-  const view = useRows({
-    object,
-    orderBy,
-    include: include.length === 0 ? undefined : include,
-  })
+  const view = useRows({ object, ...query })
 
   // Колбек сталий, а вигляд читається з посилання: інакше кожен новий знімок
   // перезапускав би ефект діапазону й дочитування.
