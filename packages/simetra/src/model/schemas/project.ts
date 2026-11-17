@@ -169,9 +169,11 @@ export const PROVIDER_API_ROLES: Readonly<
 }
 
 /**
- * Provider login roles that can run untrusted API requests. Rights maintenance
- * mode is never enabled for them, even when one owns the rights functions:
- * provider services work under these shared logins.
+ * Shared logins the provider's services connect with: rights maintenance mode
+ * is never enabled for them, even when one owns the rights functions, and
+ * plan and apply refuse to run under them. Proven against the provider's
+ * stack: every entry is a LOGIN role and every service session connects as
+ * one of them (Realtime as `supabase_admin`, PostgREST as `authenticator`).
  */
 export const PROVIDER_LOGIN_ROLES: Readonly<
   Record<DatabaseProvider, readonly string[]>
@@ -180,7 +182,6 @@ export const PROVIDER_LOGIN_ROLES: Readonly<
     "authenticator",
     "supabase_auth_admin",
     "supabase_storage_admin",
-    "supabase_realtime_admin",
     "supabase_admin",
   ],
   postgres: ["simetra_auth"],
