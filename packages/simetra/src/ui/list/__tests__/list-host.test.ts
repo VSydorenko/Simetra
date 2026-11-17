@@ -410,21 +410,26 @@ describe("ListHost", () => {
   })
 
   it("хост дочитує сторінку, коли крайовий слот видно, і не раніше", async () => {
-    const { fake, runtime, catalog } = makeRuntime({ windowPage: 20 })
+    // Сторінка з 5 рядків менша за 15 видимих: хост дочитує з ефекту коміту
+    // сторінки, доки крайовий слот у виді (#233), і зупиняється, коли вид заповнено.
+    const { fake, runtime, catalog } = makeRuntime({ windowPage: 5 })
     seed(fake, 1, 60)
     const view = mount(createRuntimeHolder(runtime), catalog)
     await flush()
     const pages = () => readsOf(fake, TASK).filter((r) => isPage(r)).length
-    // Сторінка з 20 рядків заповнює 15 видимих: крайовий слот поза видом.
-    expect(pages()).toBe(1)
+    const filled = pages()
+    expect(slotOf(view.container, 15)).not.toBeNull()
+    expect(filled * 5).toBeLessThan(60)
+    await flush()
+    expect(pages()).toBe(filled)
     const scroller = view.container.querySelector<HTMLElement>("[data-scroll]")!
     act(() => {
-      scroller.scrollTop = 20 * ROW_HEIGHT - LIST_HEIGHT + ROW_HEIGHT
+      scroller.scrollTop = filled * 5 * ROW_HEIGHT - LIST_HEIGHT + ROW_HEIGHT
       fireEvent.scroll(scroller)
     })
     await flush()
-    expect(pages()).toBe(2)
-    expect(slotOf(view.container, 21)).not.toBeNull()
+    expect(pages()).toBeGreaterThan(filled)
+    expect(slotOf(view.container, filled * 5 + 1)).not.toBeNull()
   })
 })
 
