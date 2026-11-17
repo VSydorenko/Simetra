@@ -17,9 +17,6 @@ import type { GenerationToken, Key, ServerRow, Values, ViewSpec } from "./types"
  * показує рядок `ObjectStore`.
  */
 
-/** The size of a window page in rows (P4-B spec §6.4); the default of `limits.windowPage`. */
-export const WINDOW_PAGE = 100
-
 /** The sort columns of a row and its key: the keyset boundary of a page. */
 export interface WindowCursor {
   readonly values: Values
