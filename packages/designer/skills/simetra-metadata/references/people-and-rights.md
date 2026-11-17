@@ -677,7 +677,7 @@ on another overload of the same name is not affected.
 `simetra_command` (`NOLOGIN NOINHERIT`, on the target and the shadow server)
 and, when a project file is present, the runtime login role `simetra_runtime`
 on the target only (`LOGIN NOINHERIT`, a member of `simetra_command` and, for
-`supabase`, of `authenticated`, each `WITH INHERIT FALSE, SET TRUE`). It reads
+`supabase`, of `authenticated` and `anon`, each `WITH INHERIT FALSE, SET TRUE`). It reads
 `database.provider` from the project file; without a project file it skips the
 login role, and the output says why. The operator sets the login role's
 password; the platform keeps no secrets.
@@ -685,7 +685,10 @@ password; the platform keeps no secrets.
 The login role needs `ADMIN OPTION` on each of its parent roles in the role
 that runs `roles`. Without it `roles` still creates the grant roles, but
 refuses the login role with `roles.admin-option-missing` and does not create
-it. An existing role is only checked, never changed.
+it. An existing role is only checked, with one change: after upgrading
+Simetra, run `roles` again on an existing database; it adds a missing
+membership of the login role in a parent of its profile, or refuses with
+`roles.membership-grant-denied`, which names the `GRANT` to run.
 
 ### The `postgres` provider
 
