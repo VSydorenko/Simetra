@@ -8,6 +8,7 @@ import {
 import { channelTopic, readResultFromWire, type ReadRows } from "simetra/model"
 import { DataError } from "../../errors"
 import { coreInternals, type CoreSession, type DefectFlag } from "../core"
+import { compareRows, fieldInfoOf, filterCollator } from "../filter"
 import { visibleRow } from "../object-store"
 import type { Subset } from "../subsets"
 import type { FakeRead } from "../testing/fake-source"
@@ -57,6 +58,8 @@ const LIMITS = {
   horizonBuckets: 16,
   viewsMax: 8,
   fullPageSize: 3,
+  // Сторінка вікна у два рядки: п'ять задач дають кілька сторінок.
+  windowPage: 2,
   revalidateIntervalMs: REVALIDATE_MS,
 }
 const RELEASE_MS = 1_000
@@ -88,10 +91,20 @@ const SPECS: readonly ViewSpec[] = [
   { kind: "keys", object: TASK, keys: [K1] },
   { kind: "keys", object: ORG, keys: [S, T] },
   { kind: "keys", object: ORG, keys: [S] },
+  // Вікна (план B3-3, a2-Л): у порядку заголовка, що змінюють чужі правки, і
+  // у порядку ключа з ціллю `include`.
+  {
+    kind: "window",
+    object: TASK,
+    orderBy: [{ attribute: "title", direction: "asc" }],
+  },
+  { kind: "window", object: TASK, include: ["org"] },
 ]
 /** Вигляди прокрутки: списки й картки без `full` (він тримає все). */
 const SCROLL = SPECS.flatMap((spec, v) => (spec.kind === "full" ? [] : [v]))
-const isList = (spec: ViewSpec) => spec.kind === "keys" || spec.kind === "full"
+const WINDOWS = SPECS.flatMap((spec, v) => (spec.kind === "window" ? [v] : []))
+const isList = (spec: ViewSpec) =>
+  spec.kind === "keys" || spec.kind === "full" || spec.kind === "window"
 
 const channel = (object: ObjectName, scope: string) =>
   channelTopic({
@@ -116,6 +129,7 @@ type Step =
   | { t: "preload"; v: number; short: boolean }
   | { t: "slow"; v: number }
   | { t: "refresh"; v: number; showNew: boolean }
+  | { t: "page"; w: number; dir: "after" | "before" }
   | { t: "visible"; v: number; on: boolean }
   | { t: "answer"; pick: number; how: How; at: number }
   | { t: "edit"; k: number; title: number }
@@ -146,8 +160,8 @@ const k = fc.nat(KEYS.length - 1)
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 
 /**
- * Ваги (бриф, крок 1): сума 235 (перемикання епохи — 6; `hide` над
- * ТЧ-підмножиною — 6); `purge` (16 + 14), відсутній рядок і
+ * Ваги (бриф, крок 1): сума 243 (перемикання епохи — 6; `hide` над
+ * ТЧ-підмножиною — 6; сторінка вікна — 8); `purge` (16 + 14), відсутній рядок і
  * застаріла репліка — по 30, тобто по ~13,5 % кроків (частина кроків
  * `answer` порожня, бо в польоті нічого нема, тож серед дійових кроків
  * частка вища, близько 15 %). Самотест тримає насіння, яке знаходить
@@ -179,6 +193,16 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
   {
     weight: 10,
     arbitrary: fc.record({ t: one("refresh"), v: view, showNew: fc.boolean() }),
+  },
+  // Сторінка вікна від краю: читання в польоті доходить пізніше, зокрема
+  // після нового ланцюжка, `purge` чи `close`.
+  {
+    weight: 8,
+    arbitrary: fc.record({
+      t: one("page"),
+      w: fc.nat(WINDOWS.length - 1),
+      dir: fc.constantFrom<"after" | "before">("after", "after", "before"),
+    }),
   },
   {
     weight: 2,
@@ -527,6 +551,8 @@ async function runModel(
         flight: s?.flight,
         gen: s?.gen,
         subset: s,
+        // Сторінки вікна в польоті: вони виправдовують ріст складу.
+        paging: s === undefined ? 0 : s.paging.size,
       }
     })
 
@@ -796,6 +822,28 @@ async function runModel(
       checkSnapshot(label, v, handle.getSnapshot())
     })
     checkSectionReread(label)
+    checkWindows(label)
+  }
+
+  /**
+   * Вікно (план B3-3, Р8, Р9): знімок несе ланцюжок вікна, а ланцюжок не
+   * спадає — він змінюється лише разом із новим складом; склад і сторінки
+   * (ключі без значень) тримає `violations`.
+   */
+  const chains = new WeakMap<Subset, number>()
+  const checkWindows = (label: string) => {
+    for (const v of WINDOWS) {
+      if (subs[v] === undefined) continue
+      const s = internals.registry.find(SPECS[v]!)
+      if (s?.window === undefined) continue
+      const snap = handles[v]!.getSnapshot()
+      if (snap.chain !== s.window.chain)
+        fail(label, `view ${v}: snapshot chain ${String(snap.chain)}`)
+      const last = chains.get(s) ?? 0
+      if (s.window.chain < last)
+        fail(label, `view ${v}: chain ${last} → ${s.window.chain}`)
+      chains.set(s, s.window.chain)
+    }
   }
 
   /**
@@ -961,6 +1009,16 @@ async function runModel(
       const touched = [b.flight]
       for (let g = (b.gen ?? 0) + 1; g <= (a.gen ?? 0); g++) touched.push(g)
       if (touched.some((g) => g !== undefined && mine?.has(g) === true)) return
+      // Сторінка вікна, читання якої було в польоті: склад росте з краю, а
+      // порядок наявного той самий (дія користувача — `loadAfter`/
+      // `loadBefore`; читання старого ланцюжка позначок не лишає, тож його
+      // пізня відповідь росту не виправдовує).
+      if (
+        b.paging > 0 &&
+        a.keys.length > b.keys.length &&
+        a.keys.join().includes(b.keys.join())
+      )
+        return
       if (purgeStep) {
         // purge лише прибирає ключі, порядок решти той самий.
         const kept = b.keys.filter((x) => a.keys.includes(x))
@@ -1057,6 +1115,14 @@ async function runModel(
         if (s.showNew) handles[s.v]!.showNew()
         else handles[s.v]!.refresh()
         break
+      case "page": {
+        const v = WINDOWS[s.w]!
+        // Лише підписаний вигляд: без нього вікна ще нема.
+        if (subs[v] === undefined) break
+        if (s.dir === "after") handles[v]!.loadAfter()
+        else handles[v]!.loadBefore()
+        break
+      }
       case "visible":
         core.setVisible(SPECS[s.v]!, s.on)
         break
@@ -1430,6 +1496,30 @@ async function runModel(
         if (shown === undefined || shown.state === "removed")
           fail(where, `${spec.object}/${k}: on the server, view shows none`)
       }
+      if (spec.kind === "window") {
+        // Після `refresh` вікно — перша сторінка серверного порядку.
+        const entry = fake.index.byRef.get(TASK)!
+        const compare = compareRows(
+          spec.orderBy ?? [],
+          fieldInfoOf(entry),
+          entry.keyName,
+          filterCollator()
+        )
+        const expected = KEYS.flatMap((k) => {
+          const row = fake.row(TASK, k)
+          return row === undefined ? [] : [row.values]
+        })
+          .sort(compare)
+          .slice(0, LIMITS.windowPage)
+          .map((values) => values.ref as Key)
+        const shown = snap.rows.map((r) => r.key)
+        // Рядок, який читання не змогло покласти в сховище (надгробок іншого
+        // вигляду новіший за його початок), у вікні може бракувати: решта —
+        // з першої сторінки сервера й у його порядку.
+        const at = shown.map((k) => expected.indexOf(k))
+        if (at.some((x, n) => x < 0 || (n > 0 && x <= at[n - 1]!)))
+          fail(where, `window ${shown.join()} ⊄ server ${expected.join()}`)
+      }
       if (spec.kind === "full" && snap.atEnd) {
         // Склад `full` — рядки сервера, що проходять фільтр (рядок, що
         // зник із сервера, склад уже прибрав перезавантаження).
@@ -1563,6 +1653,8 @@ const DEFECTS: readonly DefectFlag[] = [
   "hide-lifted-by-older-read",
   "section-ignores-hide",
   "recheck-needs-listeners",
+  "page-without-generation",
+  "window-copies-values",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
