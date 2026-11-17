@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
 } from "react"
@@ -40,12 +41,7 @@ export interface VirtualListProps {
 
 const OVERSCAN = 6
 
-// Перший список сторінки (гідратація SSR) звітує діапазон лише після першої
-// прокрутки: інакше дочитування наступної сторінки змінило б DOM (висоту
-// прокрутки) без дії користувача. Наступні списки — одразу. Прапорець —
-// «сторінка вже гідратована»; він на рівні модуля, бо гідратація одна на
-// сторінку, а не на екземпляр.
-let hydrated = false
+const noopSubscribe = () => () => {}
 
 interface Anchor {
   key: string
@@ -187,10 +183,18 @@ function Scroller(props: VirtualListProps & { startAt: string }) {
     first ??= i
     last = i
   }
-  const [active, setActive] = useState(() => hydrated)
-  useEffect(() => {
-    hydrated = true
-  }, [])
+  // Список, що гідратує серверний HTML, звітує діапазон лише після першої
+  // прокрутки: інакше дочитування наступної сторінки змінило б DOM (висоту
+  // прокрутки) без дії користувача. Клієнтський монтаж звітує одразу. Серверний
+  // знімок `useSyncExternalStore` читається лише під час гідратації, тож
+  // `hydrating` визначає екземпляр, а не сторінку; значення фіксується
+  // початковим станом, бо після гідратації знімок стає клієнтським.
+  const hydrating = useSyncExternalStore(
+    noopSubscribe,
+    () => false,
+    () => true
+  )
+  const [active, setActive] = useState(() => !hydrating)
   useEffect(() => {
     if (active && first !== undefined && last !== undefined)
       setVisibleRange({ first, last })

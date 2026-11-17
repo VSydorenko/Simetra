@@ -51,13 +51,17 @@
   },
   "peerDependencies": {
     "@tanstack/react-virtual": "^3.14.26",
-    "react": "^19.3.1"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "peerDependenciesMeta": {
     "@tanstack/react-virtual": {
       "optional": true
     },
     "react": {
+      "optional": true
+    },
+    "react-dom": {
       "optional": true
     }
   },

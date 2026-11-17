@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render } from "@testing-library/react"
 import { createElement, type ReactNode } from "react"
+import { hydrateRoot, type Root } from "react-dom/client"
 import { renderToString } from "react-dom/server"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import type { RowView } from "simetra/data/react"
@@ -194,23 +195,110 @@ describe("VirtualList", () => {
     expect(slotTop()).toBe(0)
   })
 
-  it("reports the visible range only after the first scroll on a hydrating page, then at once", async () => {
-    vi.resetModules()
-    const { VirtualList: Fresh } = await import("../virtual-list")
+  it("a client-only mount reports the visible range at once", () => {
     const setVisibleRange = vi.fn()
-    const view = () =>
-      createElement(Fresh, props(makeRows(100), { setVisibleRange }))
-    const first = render(view())
-    expect(setVisibleRange).not.toHaveBeenCalled()
+    render(
+      createElement(VirtualList, props(makeRows(100), { setVisibleRange }))
+    )
+    expect(setVisibleRange).toHaveBeenCalledWith({ first: 0, last: 3 })
+  })
+
+  it("a hydrated mount reports the range only after the first scroll; lists are independent", () => {
+    const hydrated = vi.fn()
+    const mounted = vi.fn()
+    const html = renderToString(
+      createElement(VirtualList, props(makeRows(100)))
+    )
+    const host = document.createElement("div")
+    host.innerHTML = html
+    document.body.append(host)
+    let root!: Root
     act(() => {
-      const scroller =
-        first.container.querySelector<HTMLElement>("[data-scroll]")!
-      fireEvent.scroll(scroller)
+      root = hydrateRoot(
+        host,
+        createElement(
+          VirtualList,
+          props(makeRows(100), { setVisibleRange: hydrated })
+        )
+      )
     })
-    expect(setVisibleRange).toHaveBeenCalledWith({ first: 0, last: 3 })
-    first.unmount()
-    setVisibleRange.mockClear()
-    render(view())
-    expect(setVisibleRange).toHaveBeenCalledWith({ first: 0, last: 3 })
+    expect(hydrated).not.toHaveBeenCalled()
+    // Другий список, змонтований на клієнті, від першого не залежить.
+    const other = render(
+      createElement(
+        VirtualList,
+        props(makeRows(100), { setVisibleRange: mounted })
+      )
+    )
+    expect(mounted).toHaveBeenCalledWith({ first: 0, last: 3 })
+    expect(hydrated).not.toHaveBeenCalled()
+    act(() => {
+      fireEvent.scroll(host.querySelector<HTMLElement>("[data-scroll]")!)
+    })
+    expect(hydrated).toHaveBeenCalledWith({ first: 0, last: 3 })
+    act(() => root.unmount())
+    other.unmount()
+    host.remove()
+  })
+
+  it("the virtualizer's own compensation of a grown row is off (the anchor alone corrects)", () => {
+    // ResizeObserver приходить після commit: вбудована компенсація дала б
+    // другу корекцію `scrollTop` (спайк 4 §6). Бібліотека не пише в прокрутку.
+    let notify: ResizeObserverCallback | undefined
+    class FakeObserver {
+      constructor(cb: ResizeObserverCallback) {
+        notify = cb
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeObserver)
+    ;(window as unknown as { ResizeObserver: unknown }).ResizeObserver =
+      FakeObserver
+    const writes: number[] = []
+    const proto = HTMLElement.prototype as unknown as {
+      scrollTo?: (o: ScrollToOptions) => void
+    }
+    proto.scrollTo = function (this: HTMLElement, o: ScrollToOptions) {
+      writes.push(o.top ?? 0)
+      this.scrollTop = o.top ?? 0
+    }
+    try {
+      const { container } = render(
+        createElement(
+          VirtualList,
+          props(makeRows(30), {
+            measure: true,
+            renderRow: () => createElement("span", null, "x"),
+          })
+        )
+      )
+      const scroller = container.querySelector<HTMLElement>("[data-scroll]")!
+      act(() => {
+        scroller.scrollTop = 250
+        fireEvent.scroll(scroller)
+      })
+      writes.length = 0
+      const slot = container.querySelector<HTMLElement>('[data-row-key="r2"]')!
+      heights.set("r2", EST + 30)
+      act(() => {
+        notify!(
+          [
+            {
+              target: slot,
+              borderBoxSize: [{ blockSize: EST + 30, inlineSize: 1000 }],
+            } as unknown as ResizeObserverEntry,
+          ],
+          {} as ResizeObserver
+        )
+      })
+      expect(writes).toEqual([])
+      expect(scroller.scrollTop).toBe(250)
+    } finally {
+      delete proto.scrollTo
+      vi.unstubAllGlobals()
+      delete (window as unknown as { ResizeObserver?: unknown }).ResizeObserver
+    }
   })
 })

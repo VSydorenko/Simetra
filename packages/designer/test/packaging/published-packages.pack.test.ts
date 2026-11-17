@@ -154,18 +154,19 @@ describe("simetra", () => {
     ).toEqual([])
   })
 
-  it("declares react and react-virtual as the only peers, both optional", async () => {
+  it("declares react, react-dom and react-virtual as the only peers, both optional", async () => {
     const m = await readPackedManifest(tarballs.simetra)
     expect(m.peerDependencies).toEqual({
       "@tanstack/react-virtual": "^3.14.26",
       react: "^19.3.1",
+      "react-dom": "^19.3.1",
     })
     // Серверний споживач peer-ів не ставить
     expect(
       Object.values(
         m.peerDependenciesMeta as Record<string, { optional?: boolean }>
       ).map((v) => v.optional)
-    ).toEqual([true, true])
+    ).toEqual([true, true, true])
     expect(Object.keys(m.peerDependenciesMeta as object).sort()).toEqual(
       Object.keys(m.peerDependencies as object).sort()
     )
