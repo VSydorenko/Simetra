@@ -97,22 +97,32 @@ describe("a USAGE grant of the application on its schema", () => {
     }
   )
 
-  it("plans nothing on a database applied with the identical grant", async () => {
-    // Дослівна тотожна одиниця перемагає згенеровану, тож модель з нею —
-    // та сама, що й до генерації `USAGE`: marker бази, застосованої тоді,
-    // збігається з новим
-    const model = await compiled({
-      [PARTY]: party(),
-      [USAGE]: grantSql([USER, PLATFORM_ROLES.command]),
-    })
-    expect(model.sqlUnits.filter((u) => u.generator === "schemaUsage")).toEqual(
-      []
-    )
-    await inTarget(EMPTY, async (url) => {
-      await establish(url, model)
-      const outcome = await plan(url, model)
-      expect(codes(outcome)).not.toContain("apply.drift")
-      expect(outcome.status).toBe("unchanged")
-    })
-  })
+  it.each([
+    ["the generated grants", "the identical verbatim grant", false],
+    ["the identical verbatim grant", "the generated grants", true],
+  ] as const)(
+    "plans nothing for %s on a database applied with %s",
+    async (_planned, _applied, appliedVerbatim) => {
+      // Гарантія переходу на робочій базі: дослівна тотожна одиниця й
+      // згенерована дають ту саму модель, тож план між ними порожній в обидва
+      // боки
+      const generated = await compiled({ [PARTY]: party() })
+      const verbatim = await compiled({
+        [PARTY]: party(),
+        [USAGE]: grantSql([USER, PLATFORM_ROLES.command]),
+      })
+      expect(
+        verbatim.sqlUnits.filter((u) => u.generator === "schemaUsage")
+      ).toEqual([])
+      const [applied, planned] = appliedVerbatim
+        ? [verbatim, generated]
+        : [generated, verbatim]
+      await inTarget(EMPTY, async (url) => {
+        await establish(url, applied)
+        const outcome = await plan(url, planned)
+        expect(codes(outcome)).not.toContain("apply.drift")
+        expect(outcome.status).toBe("unchanged")
+      })
+    }
+  )
 })

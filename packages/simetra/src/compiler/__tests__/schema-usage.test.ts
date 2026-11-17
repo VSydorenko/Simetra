@@ -133,4 +133,22 @@ describe("USAGE on the application schema", () => {
       ])
     }
   )
+
+  it("gives the same model hash with the generated grants and with their identical verbatim copy", async () => {
+    // Гарантія переходу: база, застосована з дослівним грантом, і модель, де
+    // його дає платформа, мають той самий знімок — план порожній
+    const entries = {
+      "project.meta.json": project({ defaultSchema: "app" }),
+      "catalogs/Item/Item.meta.json": catalog("Item", { scope: "none" }),
+    }
+    const generated = await compiled(entries)
+    const verbatim = await compiled({
+      ...entries,
+      [USAGE_FILE]: `GRANT USAGE ON SCHEMA app TO authenticated;\nGRANT USAGE ON SCHEMA app TO ${COMMAND};\n`,
+    })
+    expect(
+      verbatim.sqlUnits.filter((u) => u.generator === "schemaUsage")
+    ).toEqual([])
+    expect(verbatim.hash).toBe(generated.hash)
+  })
 })
