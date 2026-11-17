@@ -19,7 +19,6 @@ import {
 } from "./source"
 import {
   EMPTY_WINDOW,
-  WINDOW_PAGE,
   fetchPage,
   keysOfPages,
   cursorOf,
@@ -107,6 +106,12 @@ export interface ReaderTarget {
    * layout is their keys in order. Undefined for every other form.
    */
   window: WindowState | undefined
+  /**
+   * Window pages being read next to an edge: one read per direction, by the
+   * generation of the read (Р9). A new chain and a purge drop them, so the
+   * answers in flight write nothing.
+   */
+  readonly paging: Map<"after" | "before", number>
   /**
    * The start epoch of the last section read the session accepted (section
    * form only): a `hide` of the owner after it makes the subset stale (plan
@@ -353,7 +358,7 @@ async function readFull(
   if (over && ctx.strict) throw new DataError("data.full-too-large")
   // Понад межу — перша сторінка вікна в серверному порядку (П5).
   const kept = over
-    ? rows.filter((r) => form.test(r.values)).slice(0, WINDOW_PAGE)
+    ? rows.filter((r) => form.test(r.values)).slice(0, limits.windowPage)
     : rows
   // Цілі — з усіх відфільтрованих рядків читання, зокрема з тих, чий слот
   // зараз `removed`: це читання може його воскресити в тій самій пачці
@@ -507,6 +512,9 @@ function writePage(
         : prev.atStart,
     generation: keys.length === 0 ? prev.generation : generation,
   }
+  // Читання сторінок старого ланцюжка вже нічого не напишуть: їхні позначки
+  // не мають блокувати читання нового.
+  if (replace) s.paging.clear()
   if (page.position !== "prepend") s.atEnd = page.end
   s.strategy = "window"
   s.truncated = false
@@ -543,7 +551,8 @@ async function readWindowFirst(
     ctx.source,
     s.form,
     { direction: "after" },
-    token
+    token,
+    ctx.limits.windowPage
   )
   if (fetched === undefined) return NOTHING
   const included = await readWindowIncluded(ctx, s.form, fetched.rows, token)
@@ -577,7 +586,8 @@ export async function readWindowMore(
     ctx.source,
     form,
     { direction, cursor },
-    token
+    token,
+    ctx.limits.windowPage
   )
   if (fetched === undefined) return NOTHING
   const included = await readWindowIncluded(ctx, form, fetched.rows, token)

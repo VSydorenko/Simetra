@@ -6,8 +6,8 @@ import { shareSnapshot } from "../snapshot"
 import { createCoreSource, createReadLimiter } from "../source"
 import { createCore, inspectCore } from "../core"
 import { createFakeSource } from "../testing/fake-source"
-import type { ViewSnapshot, ViewSpec } from "../types"
-import { WINDOW_PAGE, reversedOrder } from "../window"
+import { DEFAULT_CORE_LIMITS, type ViewSnapshot, type ViewSpec } from "../types"
+import { reversedOrder } from "../window"
 import {
   OBJECTS,
   TASK,
@@ -21,6 +21,9 @@ import {
   taskValues,
   watch,
 } from "./core-support"
+
+// Розмір сторінки — типове `limits.windowPage`: одне джерело.
+const WINDOW_PAGE = DEFAULT_CORE_LIMITS.windowPage
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -321,6 +324,18 @@ describe("window", () => {
     expect(handle.getSnapshot().atStart).toBe(true)
     expect(keysIn(handle.getSnapshot())).toEqual(range(1, 200))
     expect(inspect.violations()).toEqual([])
+
+    // Системне перечитування: перший рядок сторінки `from` лежить на її
+    // межі, keyset читає строго після неї — рядок підтверджено за ключем і
+    // лишається на місці, це не переїзд.
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(keysIn(handle.getSnapshot())).toEqual(range(1, 200))
+    expect(handle.getSnapshot()).toMatchObject({
+      needsRefresh: false,
+      hasNewRows: false,
+    })
+    expect(inspect.violations()).toEqual([])
   })
 
   it("moves on when a fetched page adds nothing the window did not hold", async () => {
@@ -510,6 +525,307 @@ describe("window", () => {
   })
 })
 
+describe("a system re-read of a window", () => {
+  const byTitle: ViewSpec = {
+    kind: "window",
+    object: TASK,
+    orderBy: [{ attribute: "title", direction: "asc" }],
+  }
+  const title = (n: number) => `r${String(n).padStart(3, "0")}`
+  const seedTitled = (fake: ReturnType<typeof setup>["fake"], to: number) => {
+    for (let n = 1; n <= to; n++)
+      fake.insert(TASK, taskValues(n, { title: title(n) }))
+  }
+  /** Два сторінки у вікні з 250 рядків. */
+  async function twoPages() {
+    const h = setup()
+    seedTitled(h.fake, 250)
+    const handle = h.core.view(byTitle)
+    const seen = watch(handle).seen
+    await settle()
+    handle.loadAfter()
+    await settle()
+    expect(handle.getSnapshot().rows).toHaveLength(2 * WINDOW_PAGE)
+    return { ...h, handle, seen }
+  }
+
+  it("reads every page from its lower bound in one request", async () => {
+    const { core, fake, handle } = await twoPages()
+    const requests = fake.requests.length
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(fake.requests.slice(requests)).toEqual([2])
+    const [first, second] = fake.log.slice(-2).map((r) => r.query)
+    expect(first).toMatchObject({ limit: WINDOW_PAGE })
+    expect(first).not.toHaveProperty("where")
+    expect(second).toHaveProperty("where")
+    expect(handle.getSnapshot().chain).toBe(1)
+  })
+
+  it("keeps the composition: a value goes to its place, a new key is hasNewRows", async () => {
+    const { core, fake, handle } = await twoPages()
+    const before = keysIn(handle.getSnapshot())
+    fake.edit(TASK, key(3), { status: "Closed" })
+    fake.insert(TASK, taskValues(251, { title: "a000" }))
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    const snap = handle.getSnapshot()
+    expect(keysIn(snap)).toEqual(before)
+    expect(snap.rows[2]).toMatchObject({ values: { status: "Closed" } })
+    // Новий рядок виштовхнув останній ключ першої сторінки: той читається за
+    // ключем і лишається на місці, а список вже не збігається з сервером.
+    expect(snap).toMatchObject({ hasNewRows: true, needsRefresh: true })
+  })
+
+  it("does not take rows past a purge-shortened last page for new", async () => {
+    const { core, fake, handle } = await twoPages()
+    // Сторінку скоротив purge: відповідь із запасом сягає за завантажене.
+    for (const n of [150, 151, 152]) fake.remove(TASK, key(n))
+    core.commit(
+      (w) => w.purge(TASK, { keys: [key(150), key(151), key(152)] }),
+      core.token()
+    )
+    await settle()
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(handle.getSnapshot().hasNewRows).toBe(false)
+    // Справжня вставка всередині завантаженого діапазону — нова.
+    fake.insert(TASK, taskValues(251, { title: "r150a" }))
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(handle.getSnapshot().hasNewRows).toBe(true)
+  })
+
+  it("reads a key that fell out by key: present is needsRefresh, gone is removed", async () => {
+    const { core, fake, handle, inspect } = await twoPages()
+    const before = keysIn(handle.getSnapshot())
+    // Рядок переїхав за межі складу.
+    fake.edit(TASK, key(3), { title: "zzz" })
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    let snap = handle.getSnapshot()
+    expect(keysIn(snap)).toEqual(before)
+    expect(snap.needsRefresh).toBe(true)
+    expect(snap.rows[2]).toMatchObject({ values: { title: "zzz" } })
+    // Рядок зник: читання за ключем порожнє.
+    fake.remove(TASK, key(4))
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    snap = handle.getSnapshot()
+    expect(keysIn(snap)).toEqual(before)
+    expect(snap.rows[3]).toMatchObject({ state: "removed" })
+    expect(inspect.violations()).toEqual([])
+  })
+
+  it("writes nothing when its chain was replaced meanwhile", async () => {
+    const { core, fake, handle } = await twoPages()
+    fake.edit(TASK, key(3), { status: "Closed" })
+    fake.hold = () => true
+    const again = core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    // Одна частина на сторінку: відповіді старого ланцюжка.
+    const late = [fake.take(), fake.take()]
+    handle.refresh()
+    await settle()
+    fake.hold = undefined
+    fake.take().answer()
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ chain: 2 })
+    for (const read of late) read.answer()
+    await again
+    await settle()
+    expect(keysIn(handle.getSnapshot())).toEqual(range(1, WINDOW_PAGE))
+    expect(handle.getSnapshot().rows[2]).toMatchObject({
+      values: { status: "Closed" },
+    })
+  })
+
+  it("reads the start of the order of an empty window: a first row is new", async () => {
+    const { core, fake } = setup()
+    const view = core.view(byTitle)
+    watch(view)
+    await settle()
+    expect(view.getSnapshot().rows).toEqual([])
+    fake.insert(TASK, taskValues(1))
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(view.getSnapshot()).toMatchObject({ rows: [], hasNewRows: true })
+  })
+})
+
+describe("refresh and showNew of a window", () => {
+  it("shows the old chain while the new one is read, then replaces it in one commit", async () => {
+    const { core, fake, inspect } = setup()
+    seed(fake, 1, 250)
+    const handle = core.view(win)
+    const { seen } = watch(handle)
+    await settle()
+    const old = handle.getSnapshot()
+    fake.insert(TASK, taskValues(0))
+    fake.hold = (read) => isPage(read)
+    handle.refresh()
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({
+      status: "refreshing",
+      chain: 1,
+    })
+    expect(keysIn(handle.getSnapshot())).toEqual(keysIn(old))
+    const frames = seen.length
+    fake.take().answer()
+    await settle()
+    const next = handle.getSnapshot()
+    expect(next).toMatchObject({ status: "ready", chain: 2, target: "start" })
+    expect(next.rows[0]!.key).toBe(key(0))
+    // Одним кадром: старий склад замінено новим разом.
+    expect(seen.length).toBe(frames + 1)
+    expect(inspect.violations()).toEqual([])
+    expect(inspect.rowCount()).toBe(WINDOW_PAGE)
+  })
+
+  it("clears hasNewRows with showNew and starts from the start of the order", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 250)
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    fake.insert(TASK, taskValues(0))
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(handle.getSnapshot().hasNewRows).toBe(true)
+    handle.loadAfter()
+    await settle()
+    handle.showNew()
+    await settle()
+    const snap = handle.getSnapshot()
+    expect(snap).toMatchObject({ hasNewRows: false, chain: 2, atStart: true })
+    expect(snap.rows).toHaveLength(WINDOW_PAGE)
+    expect(snap.rows[0]!.key).toBe(key(0))
+  })
+
+  it("asks nothing and writes nothing after the core is closed", async () => {
+    const { core, fake, inspect } = setup()
+    seed(fake, 1, 250)
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    fake.hold = (read) => isPage(read)
+    handle.refresh()
+    await settle()
+    const late = fake.take()
+    core.close("disposed")
+    late.answer()
+    await settle()
+    handle.refresh()
+    await settle()
+    expect(inspect.rowCount()).toBe(0)
+    expect(fake.pending).toHaveLength(0)
+  })
+
+  it("lets the new chain read pages while a page of the old one is still in flight", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 250)
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    fake.hold = (read) => isPage(read)
+    handle.loadAfter()
+    await settle()
+    fake.hold = undefined
+    handle.refresh()
+    await settle()
+    // Читання старого ланцюжка в польоті не блокує сторінку нового.
+    handle.loadAfter()
+    await settle()
+    expect(keysIn(handle.getSnapshot())).toEqual(range(1, 2 * WINDOW_PAGE))
+  })
+})
+
+describe("purge and hide of window keys", () => {
+  it("takes purged keys out of the pages in one commit", async () => {
+    const { core, fake, inspect } = setup()
+    seed(fake, 1, 250)
+    const handle = core.view(win)
+    const { seen } = watch(handle)
+    await settle()
+    handle.loadAfter()
+    await settle()
+    const frames = seen.length
+    core.commit(
+      (w) => w.purge(TASK, { keys: [key(5), key(150)] }),
+      core.token()
+    )
+    expect(seen.length).toBe(frames + 1)
+    const keys = keysIn(handle.getSnapshot())
+    expect(keys).not.toContain(key(5))
+    expect(keys).not.toContain(key(150))
+    expect(keys).toHaveLength(2 * WINDOW_PAGE - 2)
+    expect(inspect.violations()).toEqual([])
+  })
+
+  it("drops the answer of a page read that a purge overtook", async () => {
+    const { core, fake, inspect } = setup()
+    seed(fake, 1, 250)
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    fake.hold = (read) => isPage(read)
+    handle.loadAfter()
+    await settle()
+    const late = fake.take()
+    core.commit((w) => w.purge(TASK, { keys: [key(150)] }), core.token())
+    fake.hold = undefined
+    late.answer()
+    await settle()
+    expect(keysIn(handle.getSnapshot())).toEqual(range(1, WINDOW_PAGE))
+    expect(inspect.rowCount()).toBe(WINDOW_PAGE)
+    // Наступну сторінку читає нова дія (рядок на сервері лишився).
+    handle.loadAfter()
+    await settle()
+    expect(keysIn(handle.getSnapshot())).toEqual(range(1, 2 * WINDOW_PAGE))
+    expect(inspect.violations()).toEqual([])
+  })
+
+  it("shows null for the include target that a purge took away", async () => {
+    const { core, fake, inspect } = setup()
+    const orgKey = "00000000-0000-4000-8000-0000000000b1"
+    fake.insert("Catalog.Organization", { ref: orgKey })
+    seed(fake, 1, 3)
+    const handle = core.view({ kind: "window", object: TASK, include: ["org"] })
+    watch(handle)
+    await settle()
+    expect(handle.getSnapshot().rows[0]).toMatchObject({
+      refs: { org: { key: orgKey } },
+    })
+    core.commit(
+      (w) => w.purge("Catalog.Organization", { keys: [orgKey] }),
+      core.token()
+    )
+    await settle()
+    expect(handle.getSnapshot().rows[0]).toMatchObject({ refs: { org: null } })
+    expect(inspect.violations()).toEqual([])
+  })
+
+  it("hides the values of a page key until a read that started after the hide", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 250)
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    fake.hold = () => true
+    core.commit((w) => w.hide(TASK, [key(2)]), core.token())
+    await settle()
+    expect(handle.getSnapshot().rows[1]).toMatchObject({ hidden: true })
+    expect(keysIn(handle.getSnapshot())).toHaveLength(WINDOW_PAGE)
+    fake.hold = undefined
+    fake.deliverAll()
+    await settle()
+    expect(handle.getSnapshot().rows[1]).toMatchObject({
+      values: { title: "t2" },
+    })
+    expect(handle.getSnapshot().rows[1]).not.toHaveProperty("hidden")
+  })
+})
+
 describe("window snapshot sharing", () => {
   const base: ViewSnapshot = {
     status: "ready",
@@ -530,24 +846,28 @@ describe("window snapshot sharing", () => {
     expect(shareSnapshot(first, next({}))).toBe(first)
   })
 
-  it.each([
-    { chain: 2 },
-    { target: "end" as const },
-    { atStart: false },
-    { count: { value: 3, capped: false } },
-  ])("gives a new snapshot when only %o changed", (extra) => {
-    const first = shareSnapshot(undefined, base)
-    expect(shareSnapshot(first, next(extra))).not.toBe(first)
-  })
+  it.each([{ chain: 2 }, { target: "end" as const }, { atStart: false }])(
+    "gives a new snapshot when only %o changed",
+    (extra) => {
+      const first = shareSnapshot(undefined, base)
+      expect(shareSnapshot(first, next(extra))).not.toBe(first)
+    }
+  )
+})
 
-  it("keeps the snapshot for an equal count", () => {
-    const counted = shareSnapshot(
-      undefined,
-      next({ count: { value: 3, capped: false } })
-    )
-    expect(
-      shareSnapshot(counted, next({ count: { value: 3, capped: false } }))
-    ).toBe(counted)
+describe("setVisibleRange", () => {
+  it("changes nothing: no read, the same snapshot", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 250)
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    const before = handle.getSnapshot()
+    const reads = fake.log.length
+    handle.setVisibleRange({ first: 10, last: 20 })
+    await settle()
+    expect(handle.getSnapshot()).toBe(before)
+    expect(fake.log).toHaveLength(reads)
   })
 })
 

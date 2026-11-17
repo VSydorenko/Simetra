@@ -13,7 +13,14 @@ import {
   type ReaderContext,
   type Write,
 } from "./readers"
-import { dropKeys } from "./window"
+import {
+  dropKeys,
+  keysOfPages,
+  rereadPages,
+  cursorOf,
+  type WindowCursor,
+  type WindowPage,
+} from "./window"
 import { DISCARD_PAUSE_MS, type Scope, type Session } from "./session"
 import type { RowViews } from "./snapshot"
 import { ReadLimiterClosed, readKeys } from "./source"
@@ -160,6 +167,10 @@ function forget(
       s.included.set(o.name, without(included, dropped))
     if (own && s.form.include.length > 0) releaseTargets(ctx, scope, s)
     s.dirty = true
+    // Читання сторінок вікна в польоті могло нести рядки, яких на мить
+    // `purge` у сховищі не було: їхню відповідь відкинуто (Р9), наступну
+    // сторінку читає дія користувача чи край списку.
+    if ((own || target) && s.window !== undefined) s.paging.clear()
     if (
       (own || target) &&
       s.flight !== undefined &&
@@ -505,6 +516,137 @@ async function readFullAgain(
   }
 }
 
+/**
+ * The system re-read of a window (P4-B spec §6.4, plan B3-3, Р14): every
+ * own page again by a keyset from its lower bound, all in one call of the
+ * source, without `known`. The composition stays: a value goes to its place,
+ * a key that is not in the pages of the answer is read by key — absent is
+ * `removed`, present is `needsRefresh` (it moved) — and a key the window
+ * does not hold is only `hasNewRows`. The result is written only while the
+ * window is in the same chain and every page keeps the generation it was
+ * read with (Р9).
+ */
+async function readWindowAgain(
+  ctx: WriterContext,
+  s: Subset,
+  startEpoch: number,
+  token: GenerationToken
+): Promise<Write> {
+  const { form } = s
+  const o = form.object
+  const start = s.window!
+  const chain = start.chain
+  // Вікно без сторінок (фільтр нічого не знайшов) теж читає початок порядку:
+  // перший рядок там — новий.
+  const pages: readonly Pick<WindowPage, "keys" | "lower" | "generation">[] =
+    start.pages.length > 0
+      ? start.pages
+      : [{ keys: [], lower: { kind: "start" }, generation: 0 }]
+  const answers = await rereadPages(
+    ctx.source,
+    form,
+    pages.map((page) => page.lower),
+    token,
+    ctx.limits.windowPage
+  )
+  if (answers === undefined) return () => {}
+  const got = new Map(answers.flat().map((row) => [row.key, row] as const))
+  const composition = keysOfPages(start.pages)
+  const missing = composition.filter((key) => !got.has(key))
+  const moved =
+    missing.length === 0
+      ? []
+      : await readKeys(ctx.source, o.entry, missing, {
+          keysPerRequest: ctx.limits.keysPerRequest,
+        })
+  const found = new Map(moved.map((row) => [row.key, row] as const))
+  // Останню сторінку, коли край порядку ще не прочитано, читають із запасом
+  // до розміру сторінки: рядки відповіді після останнього її ключа, що
+  // лишився у відповіді, лежать за завантаженим діапазоном (сторінку
+  // скоротив purge) — вони не нові. Порядок — серверний, клієнт не сортує.
+  const beyond = new Set<Key>()
+  const lastPage = start.pages.at(-1)
+  if (lastPage !== undefined && !s.atEnd) {
+    const answer = answers[start.pages.length - 1]!
+    const mine = new Set(lastPage.keys)
+    const at = answer.map((row) => mine.has(row.key)).lastIndexOf(true)
+    for (const row of at < 0 ? [] : answer.slice(at + 1)) beyond.add(row.key)
+  }
+  // Перший рядок сторінки `from` лежить на її межі: keyset читає строго
+  // після неї, тож він «випадає» завжди. На місці, якщо сортувальні колонки
+  // ті самі, що в курсора, — тоді це не переїзд.
+  const orderBy = (form.spec as { orderBy?: Parameters<typeof cursorOf>[0] })
+    .orderBy
+  const boundary = new Map<Key, WindowCursor>(
+    start.pages.flatMap((page) =>
+      page.lower.kind === "from"
+        ? [[page.lower.cursor.key, page.lower.cursor]]
+        : []
+    )
+  )
+  const inPlace = (row: ServerRow) => {
+    const edge = boundary.get(row.key)
+    if (edge === undefined) return false
+    const now = cursorOf(orderBy ?? [], o.entry.keyName, row.values)
+    return Object.keys(edge.values).every((name) =>
+      Object.is(edge.values[name], now.values[name])
+    )
+  }
+  const wanted = includeKeys(
+    form.include,
+    composition.flatMap((key) => {
+      const row = got.get(key) ?? found.get(key)
+      return row !== undefined && form.test(row.values) ? [row.values] : []
+    })
+  )
+  const included =
+    form.include.length === 0
+      ? undefined
+      : await readIncluded(
+          ctx.source,
+          form.include,
+          wanted,
+          ctx.limits.keysPerRequest
+        )
+  return (scope) => {
+    const now = s.window
+    if (now === undefined) return
+    if (!ctx.defects.has("page-without-generation")) {
+      // Токен читання (Р9): той самий ланцюжок і те саме покоління кожної
+      // сторінки; інакше відповідь нічого не пише.
+      if (now.chain !== chain) return
+      const alive = new Set(now.pages.map((page) => page.generation))
+      if (
+        start.pages.length === 0
+          ? now.pages.length > 0
+          : !pages.every((page) => alive.has(page.generation))
+      )
+        return
+    }
+    let fresh = false
+    for (const row of got.values()) {
+      if (s.owned.has(row.key)) ctx.ops.put(scope, o, row, startEpoch, false)
+      else if (!beyond.has(row.key)) fresh = true
+    }
+    let needsRefresh = false
+    for (const key of composition) {
+      if (!s.owned.has(key) || got.has(key)) continue
+      const row = found.get(key)
+      if (row === undefined) {
+        ctx.ops.remove(scope, o, key, startEpoch)
+        continue
+      }
+      ctx.ops.put(scope, o, row, startEpoch, false)
+      if (!inPlace(row)) needsRefresh = true
+    }
+    if (included !== undefined)
+      applyIncluded(ctx, scope, s, included, startEpoch, true)
+    if (fresh) s.hasNewRows = true
+    if (needsRefresh) s.needsRefresh = true
+    rebuildLayout(ctx, s)
+  }
+}
+
 function readAgain(
   ctx: WriterContext,
   s: Subset,
@@ -543,15 +685,8 @@ async function writeAgain(
       return readFormWrite(ctx, s, startEpoch, token)
     case "full":
       return readFullAgain(ctx, s, startEpoch, token)
-    case "window": {
-      // Системне перечитування склад не змінює: ключі вікна читаються за
-      // ключем, нові значення лягають на місце, зниклі — `removed`. Читання
-      // сторінок від курсорів з `hasNewRows` — частина a2.
-      const rows = await readKeys(ctx.source, o.entry, s.layout, {
-        keysPerRequest,
-      })
-      return applyKeys(ctx, s, s.layout, rows, startEpoch, false)
-    }
+    case "window":
+      return readWindowAgain(ctx, s, startEpoch, token)
   }
 }
 
