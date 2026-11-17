@@ -36,7 +36,7 @@
 | --- | --- | --- |
 | `inProcess` ніколи не йде з HTTP-шляху (Дх7) | `dataFn` передає `{ inProcess: true }` | `data-fn` unit; лінт задачі 11 |
 | | `ssrTransport` через `createServerFn` | `ssr-transport` unit; лінт задачі 11 |
-| Походження — перший крок, до будь-якого кроку з сесією | `verifySession` перед `checkRequestOrigin` | `data-fn` unit («`getSession` не викликано») |
+| Походження — перший крок, до будь-якого кроку з сесією | `verifySession` перед `checkRequestOrigin` у `dataFn` чи `session-fn` | `data-fn` і `session-fn` unit («`getSession` не викликано») |
 | `expectedOrigin` лише з `SIMETRA_APP_ORIGIN` | `expectedOrigin` з `Host` чи `X-Forwarded-Host` | `data-fn` unit; `security.spec.ts` рядок `X-Forwarded-*` |
 | Межа тіла — кожен не-`GET`/`HEAD` запит, за `Content-Length` і потоком | перевірка лише за `Content-Length` чи лише для Server Function | `body-limit` unit (chunked; шлях `/api/auth/sign-in/email`) |
 | Реєстрацію вимкнено; анонімний вхід закрито | `disableSignUp` прибрано; `/sign-in/anonymous` відкрито | `auth-config` unit; `security.spec.ts` |
@@ -102,8 +102,10 @@ unit B1b-2, через публічний вхід. `run-tests unit --filter ori
 регістром, `is_anonymous` завжди булеве); порт бази йде через
 `wrapDatabase` з `#instrument` (шов #210, «Шлях до #210 і #206» файла D1); `httpOrigin(request)`; `dataFn` за
 кроками §4.2, підсумкова відповідь іде в `onDataResponse` з `#instrument`;
-`getSessionClaims` — `null` для відсутньої й анонімної сесії і для винятку
-(запис у журнал); `ssrTransport(claims)` під `createServerOnlyFn` з
+`getSessionClaims` — на HTTP-шляху першим кроком `checkRequestOrigin`
+(відмова — `null` без `getSession`, бо `getSession` може продовжити сесію
+записом), далі `null` для відсутньої й анонімної сесії і для винятку (запис
+у журнал); `ssrTransport(claims)` під `createServerOnlyFn` з
 `{ inProcess: true }`.
 
 Готово (unit з фейками `auth.api.getSession` і обробника): неканонічне
@@ -118,7 +120,8 @@ unit B1b-2, через публічний вхід. `run-tests unit --filter ori
 сесії й з анонімною — `unauthenticated` без обробника; обробник бачить лише
 `httpOrigin(request)`; `Host` і `X-Forwarded-Host` не впливають; виняток поза
 обробником — `command.internal` без тексту; `session-fn` при збої з текстом
-хоста й ролі — `null` без тексту; `ssrTransport` у клієнтському середовищі
+хоста й ролі — `null` без тексту; `session-fn` з чужим `Origin` чи
+`Sec-Fetch-Site: cross-site` — `null` і `getSession` не викликано; `ssrTransport` у клієнтському середовищі
 кидає, на сервері — `{ inProcess: true }`; два послідовні запити — `defer`
 кожного у `waitUntil` свого. `run-tests unit --package template`.
 
@@ -164,7 +167,8 @@ unit B1b-2, через публічний вхід. `run-tests unit --filter ori
 (Д-10); `.github/workflows/ci.yml` — job `host-template` за Д-11
 (`strategy.matrix` з однією ногою — шов #210): `pnpm db:pg:start`,
 `pnpm build:packages`, `test:db` шаблону, `test:build`, рівень `e2e`, браузер
-Chromium точного піна Playwright з системними залежностями; червоне на
+Chromium точного піна Playwright з системними залежностями; `BETTER_AUTH_SECRET`
+і паролі — випадкові на прогін, без секретів репозиторію; червоне на
 `skipped`, `flaky` чи нуль тестів (крок над JSON-звітом Playwright).
 
 Готово:
