@@ -50,15 +50,20 @@
     "zod": "^4.6.7"
   },
   "peerDependencies": {
+    "@tanstack/react-virtual": "^3.14.26",
     "react": "^19.3.1"
   },
   "peerDependenciesMeta": {
+    "@tanstack/react-virtual": {
+      "optional": true
+    },
     "react": {
       "optional": true
     }
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@tanstack/react-virtual": "3.14.26",
     "@testing-library/dom": "10.4.2",
     "@testing-library/react": "16.3.3",
     "@types/node": "^24.19.2",
@@ -117,6 +122,10 @@
       "./data/react": {
         "types": "./dist/data/react/index.d.ts",
         "import": "./dist/data/react/index.js"
+      },
+      "./ui": {
+        "types": "./dist/ui/index.d.ts",
+        "import": "./dist/ui/index.js"
       },
       "./schemas/*": "./schemas/*"
     }
