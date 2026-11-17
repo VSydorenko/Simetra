@@ -12,6 +12,7 @@ import {
   isCard,
   isKeys,
   key,
+  keysOf,
   readsOf,
   S,
   seed,
@@ -343,11 +344,16 @@ describe("write-back without a full row (Р3, Р4)", () => {
     })
   })
 
-  it("a changed lazy field re-reads the key before settling", async () => {
+  it("a changed lazy field settles only after the card form read of the key, with its value", async () => {
     const h = harness()
-    const { card, version } = await mounted(h)
+    const { card, seen, version } = await mounted(h)
+    // Повний список над тим самим об'єктом: перечитування за ключем його не
+    // перечитує (відповідь архітекторки, правила (a), (b)).
+    const list = h.core.view({ kind: "full", object: TASK })
+    watch(list)
+    await settle()
     holdReads(h.fake)
-    const reads = keyReads(h.fake).length
+    const reads = h.fake.log.length
     const m = h.core.update(
       TASK,
       K,
@@ -355,13 +361,78 @@ describe("write-back without a full row (Р3, Р4)", () => {
       { expectedVersion: version }
     )
     await settle()
-    expect(keyReads(h.fake).length).toBeGreaterThan(reads)
-    expect(shown(rowOf(card)).state).toBe("pending")
+    expect(shown(rowOf(card))).toMatchObject({
+      state: "pending",
+      values: { notes: "body 1" },
+    })
+    const sent = h.fake.log.slice(reads)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]!.query).toEqual({
+      object: { kind: "Catalog", name: "Task" },
+      id: K,
+    })
+    const before = seen.seen.length
     h.fake.hold = undefined
     h.fake.deliverAll()
     await settle()
-    expect((await m.settled).ok).toBe(true)
-    expect(shown(rowOf(card)).mutation).toBeUndefined()
+    expect(h.fake.log.length).toBe(reads + 1)
+    const result = await m.settled
+    expect(result).toMatchObject({
+      ok: true,
+      rows: [{ key: K, values: { notes: "n2" } }],
+    })
+    const first = shown(seen.seen[before]!.rows[0]!)
+    expect(first).toMatchObject({
+      state: "synced",
+      values: { notes: "n2" },
+      staleFields: [],
+    })
+    expect(first.mutation).toBeUndefined()
+  })
+
+  it("an answer without rows under a full list and a card is one read by key", async () => {
+    const h = harness()
+    const { version } = await mounted(h)
+    const list = h.core.view({ kind: "full", object: TASK })
+    watch(list)
+    await settle()
+    h.port.transform = withoutRows
+    const reads = h.fake.log.length
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    expect(await m.settled).toMatchObject({
+      ok: true,
+      rows: [{ values: { title: "new" } }],
+    })
+    await settle()
+    const sent = h.fake.log.slice(reads)
+    // Після осідання картка дочитує ліниві поля своєю формою — це її
+    // перевірка, не перечитування запису.
+    expect(sent.filter((r) => !isCard(r))).toHaveLength(1)
+    expect(keysOf(sent.find((r) => !isCard(r))!.query)).toEqual([K])
+  })
+
+  it("a key without an owner settles from the run row with no read", async () => {
+    const h = harness()
+    seed(h.fake, 1, 1)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: h.fake.row(TASK, K)!.version }
+    )
+    expect(await m.settled).toMatchObject({
+      ok: true,
+      rows: [{ key: K, values: { title: "new" } }],
+    })
+    await settle()
+    expect(h.fake.log).toHaveLength(0)
+    expect(h.inspect.rowCount()).toBe(0)
+    expect(h.inspect.serviceSizes().journal).toBe(0)
   })
 
   it("a failed re-read settles with rows [undefined] and leaves the row stale", async () => {
@@ -446,6 +517,57 @@ describe("write-back without a full row (Р3, Р4)", () => {
     expect(shown(rowOf(card))).toMatchObject({ values: { title: "new" } })
   })
 
+  it("a result of another epoch whose re-read fails leaves the row stale", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.transform = (value) => ({ ...value, epoch: OTHER_EPOCH })
+    holdReads(h.fake)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    h.fake.take().fail("command.internal")
+    await settle()
+    expect(await m.settled).toEqual({ ok: true, rows: [undefined] })
+    expect(shown(rowOf(card))).toMatchObject({
+      state: "stale",
+      values: { title: "t1" },
+    })
+  })
+
+  it("a re-read answer of the epoch the session left writes nothing and settles with rows [undefined]", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.fake.insert(TASK, taskValues(2))
+    const other = h.core.view({ kind: "keys", object: TASK, keys: [key(2)] })
+    watch(other)
+    await settle()
+    h.port.transform = withoutRows
+    holdReads(h.fake)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    const reread = h.fake.take()
+    h.fake.hold = undefined
+    h.fake.epoch = OTHER_EPOCH
+    other.refresh()
+    await settle()
+    expect(h.inspect.versionEpochs().current).toBe(OTHER_EPOCH)
+    // Відповідь перечитування приходить з покинутої епохи.
+    h.fake.epoch = EPOCH
+    reread.answer()
+    await settle()
+    expect(await m.settled).toEqual({ ok: true, rows: [undefined] })
+    expect(shown(rowOf(card))).toMatchObject({ values: { title: "t1" } })
+  })
+
   it("a result of the epoch the session left is not written, though the stored row is of it", async () => {
     const h = harness()
     const { version } = await mounted(h)
@@ -512,7 +634,7 @@ describe("write-back without a full row (Р3, Р4)", () => {
     })
   })
 
-  it("a key with a newer tombstone settles without a write and is re-read", async () => {
+  it("a key with a newer tombstone and no owner settles without a write and without a re-read", async () => {
     const h = harness()
     const { version } = await mounted(h)
     h.port.hold = true
@@ -528,7 +650,9 @@ describe("write-back without a full row (Р3, Р4)", () => {
     h.port.release()
     await settle()
     expect(await m.settled).toEqual({ ok: true, rows: [undefined] })
-    expect(keyReads(h.fake).length).toBe(reads + 1)
+    // Ключ без власника осідає з відповіді `run` (відповідь архітекторки,
+    // правило (c)): перечитувати нема для кого.
+    expect(keyReads(h.fake).length).toBe(reads)
     expect(h.inspect.rowCount()).toBe(0)
     expect(h.inspect.serviceSizes().journal).toBe(0)
   })
@@ -811,6 +935,33 @@ describe("mutation actions (Р5, Р7, Р11)", () => {
     h.core.commit((w) => w.purge(TASK, { keys: [K] }), h.core.token())
     // Ключа в сховищі вже немає: мутація лишається в журналі без полів.
     expect(h.inspect.serviceSizes().journal).toBe(1)
+    expect(kept.retry!()).toBeUndefined()
+    expect(h.port.runs).toBe(1)
+  })
+
+  it("the purge of a pair erases the fields of a key that moved into it after the attempt", async () => {
+    const h = harness()
+    const S2 = "00000000-0000-4000-8000-0000000000b2"
+    h.fake.insert(TASK, taskValues(1, { org: S2 }))
+    const card = cardOf(h.core)
+    watch(card)
+    await settle()
+    h.port.refuse = { code: "command.busy" }
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: shown(rowOf(card)).version }
+    )
+    await m.settled
+    await settle()
+    const kept = shown(rowOf(card)).mutation!
+    // Рядок переїжджає в скоуп `S` уже після старту спроби.
+    h.fake.edit(TASK, K, { org: S })
+    card.refresh()
+    await settle()
+    expect(shown(rowOf(card)).values.org).toBe(S)
+    h.core.commit((w) => w.purge(TASK, { scope: S }), h.core.token())
     expect(kept.retry!()).toBeUndefined()
     expect(h.port.runs).toBe(1)
   })

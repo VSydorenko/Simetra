@@ -270,11 +270,12 @@ export interface Writer {
    * Writes the rows of an own command result (P4-B spec §7.2 step 3), and
    * only the journal calls it. A row is written by the version rule only for
    * a key with an owner, whose stored row and session are in `epoch`; it
-   * never lifts `hidden`, `removed` or a tombstone. Returns the keys it did
-   * not write — no owner, such a mark, a key or pair tombstone newer than
-   * `readEpoch` (the start of the attempt), another epoch: the caller
-   * re-reads them. A row older than the stored one is not returned: the
-   * store already holds a newer confirmed version.
+   * never lifts `hidden`, `removed` or a tombstone. Returns the keys the
+   * caller re-reads by key: such a mark, a key or pair tombstone newer than
+   * `readEpoch` (the start of the attempt), another epoch. A key without an
+   * owner is not returned unless its `epoch` differs from the session's
+   * (nothing to write — the answer row stands), nor is a row older than the
+   * stored one (the store holds a newer confirmed version).
    */
   writeBack(
     object: ObjectName,

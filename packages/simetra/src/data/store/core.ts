@@ -16,6 +16,7 @@ import {
   createWriter,
   revalidate,
   revalidateHolders,
+  rereadKey,
   setVisible,
   type WriterContext,
 } from "./writer"
@@ -624,8 +625,8 @@ export function createCore(options: {
     objectOf,
     rowViews,
     commit: core.commit,
-    reread(object, key, reread) {
-      revalidateHolders(writerContext, object, new Set([key]), reread).catch(
+    reread(object, key, rereadOptions) {
+      rereadKey(writerContext, object, key, rereadOptions).catch(
         (error: unknown) => log({ kind: "listener-failed", error })
       )
     },

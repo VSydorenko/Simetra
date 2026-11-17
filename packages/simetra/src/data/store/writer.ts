@@ -81,24 +81,14 @@ export interface WriterContext extends ReaderContext {
 export const REREAD_TIMEOUT_MS = 5_000
 
 /**
- * The outcome of a re-read of keys (plan B3-4-Л Р4): `read` — an answer was
- * applied (`rows` only when no view held the keys: they were read by key
- * and written nowhere); `failed` — the read failed or ran out of
- * {@link REREAD_TIMEOUT_MS}; `discarded` — the answer came from an abandoned
- * version epoch.
+ * The outcome of a re-read by key (plan B3-4-Л Р4): `read` — the answer
+ * passed the epoch gate (`row` — the key's row, `undefined` when absent);
+ * `failed` — the read failed or ran out of {@link REREAD_TIMEOUT_MS};
+ * `discarded` — the answer came from an abandoned version epoch.
  */
 export type RereadOutcome =
-  | { readonly kind: "read"; readonly rows?: readonly ServerRow[] }
+  | { readonly kind: "read"; readonly row: ServerRow | undefined }
   | { readonly kind: "failed" | "discarded" }
-
-/**
- * A re-read the caller waits for: `onCommit` runs once, inside the `commit`
- * that writes the re-read rows (or, on a failure or the time limit, in a
- * `commit` of its own), so the caller's change shares its notification.
- */
-export interface Reread {
-  onCommit(outcome: RereadOutcome, writer: Writer): void
-}
 
 /**
  * The change channel of a row (§8.3): `channelTopic` of the scope kind, the
@@ -223,7 +213,8 @@ function patchRows(
   o: ObjectState,
   rows: readonly ServerRow[],
   readEpoch: number,
-  versionEpoch: string | null
+  versionEpoch: string | null,
+  lazyRead = false
 ) {
   for (const row of rows) {
     if ((o.rows.get(row.key)?.owners ?? 0) === 0) continue
@@ -233,7 +224,7 @@ function patchRows(
       o,
       { ...row, versionEpoch: effectiveEpoch(versionEpoch, row.versionEpoch) },
       readEpoch,
-      false
+      lazyRead
     )
   }
 }
@@ -302,9 +293,14 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       }
       // ТЧ записано зі скоупом шапки на мить запису: шапка, що відтоді
       // переїхала в прибраний скоуп, лишила б рядки ТЧ без `clearOwner`.
+      // Ключ, що переїхав у прибраний скоуп після старту спроби, прибрано
+      // за збереженим скоупом: його поля стираються за ключем.
       if ("keys" in target)
         for (const key of target.keys) ctx.journal.erase(o.name, key)
-      else ctx.journal.eraseScope(o.name, target.scope)
+      else {
+        ctx.journal.eraseScope(o.name, target.scope)
+        for (const key of dropped) ctx.journal.erase(o.name, key)
+      }
       for (const key of [...purged, ...cleared]) ops.clearOwner(scope, o, key)
       for (const key of [...dropped, ...cleared]) rowViews.touch(o.name, key)
       forget(ctx, scope, o, new Set(dropped), new Set(purged))
@@ -778,19 +774,11 @@ export async function revalidate(
  * read leaves them hidden. A view of another object that includes the
  * object is re-read as its own object's view. Tabular section subsets are
  * not re-read here: they go stale by the hide epoch of their owner.
- *
- * With `reread` (plan B3-4-Л Р4) the caller learns the outcome inside a
- * `commit`: the first group of views whose answer was applied reports
- * `read`; when every group failed, the last outcome. Keys no view holds are
- * read by key and written nowhere — the outcome carries their rows. After
- * {@link REREAD_TIMEOUT_MS} without an outcome it is `failed`; the reads go
- * on and still write to their views.
  */
 export async function revalidateHolders(
   ctx: WriterContext,
   object: ObjectName,
-  keys: ReadonlySet<Key>,
-  reread?: Reread
+  keys: ReadonlySet<Key>
 ): Promise<void> {
   if (!ctx.session.token().valid) return
   const groups = new Map<ObjectState, Subset[]>()
@@ -810,108 +798,19 @@ export async function revalidateHolders(
     group.push(s)
     groups.set(s.form.object, group)
   }
-  if (reread === undefined) {
-    await Promise.all(
-      [...groups].map(([o, targets]) => revalidateViews(ctx, o, targets))
-    )
-    return
-  }
-  const report = reportOnce(ctx, reread, groups.size)
-  if (groups.size === 0) {
-    await readUnheld(ctx, ctx.objectOf(object), [...keys], report)
-    return
-  }
   await Promise.all(
-    [...groups].map(([o, targets]) =>
-      revalidateViews(ctx, o, targets, report.pass)
-    )
+    [...groups].map(([o, targets]) => revalidateViews(ctx, o, targets))
   )
 }
 
-/** Reports a re-read to its caller once, with the time limit. */
-function reportOnce(ctx: WriterContext, reread: Reread, groups: number) {
-  let done = false
-  let left = groups
-  const fire = (outcome: RereadOutcome, scope: Scope) => {
-    if (done) return
-    done = true
-    clearTimeout(timer)
-    reread.onCommit(outcome, createWriter(ctx, scope))
-  }
-  // Межа часу (§7.2, крок 4): мутація не чекає перечитування без кінця.
-  const timer = setTimeout(() => {
-    if (done || !ctx.session.token().valid) return
-    ctx.session.commit(
-      (scope) => fire({ kind: "failed" }, scope),
-      ctx.session.token(),
-      "reread timeout"
-    )
-  }, REREAD_TIMEOUT_MS)
-  return {
-    fire,
-    /** One pass over a group of views: `read` wins, else the last group decides. */
-    pass(kind: RereadOutcome["kind"], scope: Scope) {
-      if (done) return
-      if (kind === "read" || --left <= 0) fire({ kind }, scope)
-    },
-  }
-}
-
-/**
- * Keys without a holder: read by key only for the caller's outcome. The
- * store has no owner for them, so nothing is written (§7.2 step 5).
- */
-async function readUnheld(
-  ctx: WriterContext,
-  o: ObjectState,
-  keys: readonly Key[],
-  report: ReturnType<typeof reportOnce>
-): Promise<void> {
-  const { session } = ctx
-  const startEpoch = session.epochs.now()
-  const token = session.token()
-  const read = tracked(ctx.source)
-  let rows: readonly ServerRow[] | undefined
-  try {
-    rows = await readKeys(read.source, o.entry, keys, {
-      keysPerRequest: ctx.limits.keysPerRequest,
-    })
-  } catch {
-    rows = undefined
-  }
-  session.commit(
-    (scope) => {
-      if (rows === undefined) report.fire({ kind: "failed" }, scope)
-      else if (session.acceptEpochs(read.epochs, startEpoch) === "discard")
-        report.fire({ kind: "discarded" }, scope)
-      else report.fire({ kind: "read", rows }, scope)
-    },
-    token,
-    `reread ${o.name}`
-  )
-}
-
-/**
- * One two-phase pass over `targets`; views dropped by a purge get another
- * pass. `onPass` learns inside the `commit` whether an answer was applied
- * (`read`), else whether one was discarded; with views to pass again and
- * none applied, the next pass reports instead.
- */
+/** One two-phase pass over `targets`; views dropped by a purge get another pass. */
 async function revalidateViews(
   ctx: WriterContext,
   o: ObjectState,
-  targets: readonly Subset[],
-  onPass?: (kind: RereadOutcome["kind"], scope: Scope) => void
+  targets: readonly Subset[]
 ): Promise<void> {
   const { session } = ctx
-  if (!session.token().valid) return
-  if (targets.length === 0) {
-    // Повторного проходу немає (вигляди звільнено чи їх оновить власне
-    // завантаження): викликач не чекає межі часу.
-    if (onPass !== undefined)
-      session.commit((scope) => onPass("failed", scope), session.token())
-    return
-  }
+  if (targets.length === 0 || !session.token().valid) return
   const startEpoch = session.epochs.now()
   const token = session.token()
   // Завантаження, що стартувало чи завершилось після старту, свіжіше за це
@@ -933,8 +832,6 @@ async function revalidateViews(
   )
   const again: Subset[] = []
   const discarded: Subset[] = []
-  let applied = false
-  let reported = false
   session.commit(
     (scope) => {
       try {
@@ -972,7 +869,6 @@ async function revalidateViews(
               } else discarded.push(s)
               continue
             }
-            applied = true
             if (s.status === "error") {
               s.status = "ready"
               s.error = undefined
@@ -982,15 +878,6 @@ async function revalidateViews(
             s.status = "error"
             s.error = errorOf(error)
           }
-        }
-        // Викликач дізнається результат у тому самому `commit`, що записав
-        // перечитані рядки: його зміна йде тим самим сповіщенням.
-        if (onPass !== undefined && (applied || again.length === 0)) {
-          reported = true
-          onPass(
-            applied ? "read" : discarded.length > 0 ? "discarded" : "failed",
-            scope
-          )
         }
       } finally {
         ctx.ops.sweep(scope)
@@ -1038,7 +925,98 @@ async function revalidateViews(
   await revalidateViews(
     ctx,
     o,
-    again.filter((s) => s.alive && !s.purged && s.flight === undefined),
-    reported ? undefined : onPass
+    again.filter((s) => s.alive && !s.purged && s.flight === undefined)
+  )
+}
+
+/**
+ * The re-read of one key after an own write (plan B3-4-Л Р4, the architect
+ * answer to the re-read fork): by key through `readKeys` — the list form, or
+ * the card form with lazy columns for a lazy-field edit — never a re-read of
+ * the views that hold it. The answer passes the same epoch gate as
+ * `Writer.apply` and is written with its start epoch only into slots with an
+ * owner (`hidden` and tombstones hold); an absent key becomes `removed`.
+ * `onCommit` runs once inside that `commit`; on a failure, a discarded answer
+ * or after {@link REREAD_TIMEOUT_MS}, in a `commit` of its own. An answer
+ * after the limit is still written. On a failure `unconfirmed` — the version
+ * and epoch of an own write the store did not take — marks the key `stale`
+ * (§7.2 step 4).
+ */
+export async function rereadKey(
+  ctx: WriterContext,
+  object: ObjectName,
+  key: Key,
+  options: {
+    readonly form: "list" | "card"
+    readonly unconfirmed?: { readonly version: number; readonly epoch: string }
+    readonly onCommit?: (outcome: RereadOutcome, scope: Scope) => void
+  }
+): Promise<void> {
+  const { form, unconfirmed, onCommit } = options
+  const { session } = ctx
+  if (!session.token().valid) return
+  const o = ctx.objectOf(object)
+  const startEpoch = session.epochs.now()
+  const token = session.token()
+  let done = false
+  const fire = (outcome: RereadOutcome, scope: Scope) => {
+    if (done) return
+    done = true
+    clearTimeout(timer)
+    if (outcome.kind !== "read" && unconfirmed !== undefined) {
+      o.rows.markUnconfirmed(scope, key, unconfirmed.version, unconfirmed.epoch)
+      if (o.rows.get(key) !== undefined) ctx.rowViews.touch(o.name, key)
+    }
+    onCommit?.(outcome, scope)
+  }
+  // Межа часу (§7.2, крок 4): мутація не чекає перечитування без кінця.
+  const timer = setTimeout(() => {
+    if (done || !token.valid) return
+    session.commit(
+      (scope) => fire({ kind: "failed" }, scope),
+      token,
+      "reread timeout"
+    )
+  }, REREAD_TIMEOUT_MS)
+  const read = tracked(ctx.source)
+  let rows: readonly ServerRow[] | undefined
+  try {
+    rows = await readKeys(
+      read.source,
+      o.entry,
+      [key],
+      form === "card"
+        ? { form: "card" }
+        : { keysPerRequest: ctx.limits.keysPerRequest }
+    )
+  } catch {
+    rows = undefined
+  }
+  if (!token.valid) {
+    clearTimeout(timer)
+    return
+  }
+  session.commit(
+    (scope) => {
+      if (rows === undefined) {
+        fire({ kind: "failed" }, scope)
+        return
+      }
+      // Шлюз відповіді — той самий, що в `Writer.apply`: епохи частин і
+      // рядків; відкинута відповідь не пише нічого.
+      const epochs = new Set<string | null>(read.epochs)
+      for (const row of rows) epochs.add(row.versionEpoch ?? null)
+      if (session.acceptEpochs(epochs, startEpoch) === "discard") {
+        fire({ kind: "discarded" }, scope)
+        return
+      }
+      patchRows(ctx, scope, o, rows, startEpoch, null, form === "card")
+      const row = rows.find((r) => r.key.toLowerCase() === key.toLowerCase())
+      if (row === undefined && (o.rows.get(key)?.owners ?? 0) > 0)
+        removeKeys(ctx, scope, o, [key], startEpoch)
+      fire({ kind: "read", row }, scope)
+    },
+    token,
+    `reread ${o.name}`
   )
 }

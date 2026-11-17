@@ -8,7 +8,7 @@ import {
 import { DataError } from "../errors"
 import { keyId, pairId } from "./epoch"
 import type { ObjectState } from "./forms"
-import { visibleRow, type RowEntry } from "./object-store"
+import type { RowEntry } from "./object-store"
 import type { Session } from "./session"
 import type { RowViews } from "./snapshot"
 import type { CoreRunResult, CoreSource } from "./source"
@@ -22,11 +22,12 @@ import type {
   MutationState,
   ObjectName,
   RowMutation,
-  ServerRow,
   Values,
   Writer,
 } from "./types"
-import type { Reread } from "./writer"
+import type { rereadKey } from "./writer"
+
+type RereadOptions = Parameters<typeof rereadKey>[3]
 
 /*
  * Журнал власних мутацій (спека П4-B §6.1 `Overlay`, §7.1, §7.2; план
@@ -144,8 +145,8 @@ export function createOverlay(deps: {
   rowViews: RowViews
   /** `CoreSession.commit`: the writer is the only way to write the store. */
   commit(fn: (writer: Writer) => void, token: GenerationToken): boolean
-  /** Re-reads the key's holders (`revalidateHolders`); `reread` waits. */
-  reread(object: ObjectName, key: Key, reread?: Reread): void
+  /** Re-reads the key by key (`rereadKey`). */
+  reread(object: ObjectName, key: Key, options: RereadOptions): void
   log(entry: CoreLogEntry): void
 }): Overlay {
   const { session, source, index, objectOf, rowViews, commit } = deps
@@ -244,27 +245,41 @@ export function createOverlay(deps: {
     const o = objectOf(entry.object)
     const row = result.rows[0]
     // Рядок `run` — без лінивих колонок (§4.5): змінене ліниве поле він не
-    // підтверджує, тож ключ перечитується до осідання (Р4).
+    // підтверджує, тож власник отримує його з форми картки до осідання (Р4).
     const lazy = o.lazyFields.some((f) => Object.hasOwn(entry.values ?? {}, f))
-    if (row !== undefined && !lazy) {
-      let skipped: readonly Key[] = []
+    const owned = () => (o.rows.get(entry.key)?.owners ?? 0) > 0
+    let form: "list" | "card" | undefined
+    if (row === undefined) form = lazy && owned() ? "card" : "list"
+    else {
       const ran = commit((writer) => {
-        skipped = writer.writeBack(
+        if (lazy && owned()) {
+          form = "card"
+          return
+        }
+        // Повний рядок тієї самої епохи: осідання з рядка `run` без
+        // перечитування; ключ без власника не пише нічого (§7.2, крок 5).
+        const skipped = writer.writeBack(
           entry.object,
           [row],
           result.epoch,
           attempt.readEpoch
         )
-        if (skipped.length > 0) return
+        if (skipped.length > 0) {
+          form = lazy ? "card" : "list"
+          return
+        }
         // Запис рядка й зняття мутації — одне сповіщення (§7.2, крок 3).
         drop(entry)
-        attempt.resolve({ ok: true, rows: [row] })
+        attempt.resolve({
+          ok: true,
+          rows: [buried(entry, attempt) ? undefined : row],
+        })
       }, attempt.token)
       if (!ran) {
         attempt.resolve({ ok: true, rows: [undefined] })
         return
       }
-      if (skipped.length === 0) return
+      if (form === undefined) return
     }
     const change = result.changes.find(
       (c) =>
@@ -273,46 +288,42 @@ export function createOverlay(deps: {
         sameKey(c.id, entry.key)
     )
     const version = row?.version ?? change?.version ?? entry.expectedVersion + 1
-    reread(entry, attempt, version, result.epoch)
+    reread(entry, attempt, form, { version, epoch: result.epoch })
   }
 
   /**
-   * The key without a confirmed row of the result: re-read before settling
-   * (§7.2 step 4); the mutation leaves in the `commit` of the re-read row.
+   * The key without a confirmed row of the result: re-read by key before
+   * settling (§7.2 step 4); the mutation leaves in the `commit` that writes
+   * the re-read row. A failure leaves the key `stale` (`unconfirmed`).
    */
   function reread(
     entry: JournalEntry,
     attempt: Attempt,
-    version: number,
-    epoch: string
+    form: "list" | "card",
+    unconfirmed: { version: number; epoch: string }
   ) {
     deps.reread(entry.object, entry.key, {
-      onCommit(outcome, writer) {
+      form,
+      unconfirmed,
+      onCommit(outcome) {
         if (!attempt.live) {
           attempt.resolve({ ok: true, rows: [undefined] })
           return
         }
-        let row: ServerRow | undefined
-        if (outcome.kind === "read") row = shownRow(entry, attempt, outcome)
-        // Перечитування не вдалось: значення не підтверджено, рядок —
-        // `stale`, доки його не прочитає версія результату (§7.2, крок 4).
-        // Версія іншої епохи з рядками сховища не порівнюється.
-        else if (epoch === session.versions.current())
-          writer.markStale(entry.object, [entry.key], version)
+        const row =
+          outcome.kind === "read" && !buried(entry, attempt)
+            ? outcome.row
+            : undefined
         drop(entry)
         attempt.resolve({ ok: true, rows: [row] })
       },
     })
   }
 
-  /** The re-read row the mutation settles with; none behind a newer tombstone. */
-  function shownRow(
-    entry: JournalEntry,
-    attempt: Attempt,
-    outcome: { rows?: readonly ServerRow[] }
-  ): ServerRow | undefined {
+  /** A key or pair tombstone newer than the start of the attempt (§7.1). */
+  function buried(entry: JournalEntry, attempt: Attempt): boolean {
     const { epochs } = session
-    if (
+    return (
       epochs.buriedSince(keyId(entry.object, entry.key), attempt.readEpoch) ||
       (attempt.scope !== undefined &&
         epochs.buriedSince(
@@ -320,11 +331,6 @@ export function createOverlay(deps: {
           attempt.readEpoch
         ))
     )
-      return undefined
-    if (outcome.rows !== undefined)
-      return outcome.rows.find((r) => sameKey(r.key, entry.key))
-    const e = objectOf(entry.object).rows.get(entry.key)
-    return e !== undefined && visibleRow(e) !== undefined ? e.row : undefined
   }
 
   function fail(entry: JournalEntry, attempt: Attempt, error: CommandError) {
@@ -347,8 +353,12 @@ export function createOverlay(deps: {
     // Запис міг відбутися: `unavailable` — результат невідомий; `internal`
     // буває й після `COMMIT` (епоха без рядка, Р10). Значень з відповіді
     // немає, тож ключ перечитується (Р6).
-    if (state === "unknown" || error.code === "command.internal")
-      deps.reread(entry.object, entry.key)
+    // Ключ без власника перечитувати нема для кого.
+    if (
+      (state === "unknown" || error.code === "command.internal") &&
+      (objectOf(entry.object).rows.get(entry.key)?.owners ?? 0) > 0
+    )
+      deps.reread(entry.object, entry.key, { form: "list" })
   }
 
   /** Starts an attempt of the entry in one `commit` and sends it. */
