@@ -34,6 +34,25 @@ function hintOf<K extends string>(
 }
 
 /**
+ * Поради відмови таблиці ідентичності за причиною: таблиці немає —
+ * її створює міграція провайдера, а гранти на неї дає повторний `roles`;
+ * немає `USAGE` чи `TRIGGER` — гранти дає `roles` від суперкористувача.
+ */
+const IDENTITY_TABLE_HINTS: Record<
+  "table" | "privilege",
+  { en: string; uk: string }
+> = {
+  table: {
+    en: "Nothing was planned or written. Run the Better Auth migration as the provider login role, then `simetra roles` again, and plan again.",
+    uk: "Нічого не сплановано й не записано. Запустіть міграцію Better Auth від ролі входу провайдера, потім знову `simetra roles`, і сплануйте знову.",
+  },
+  privilege: {
+    en: "Nothing was planned or written. Run `simetra roles` again as superuser, and plan again.",
+    uk: "Нічого не сплановано й не записано. Запустіть `simetra roles` знову від суперкористувача й сплануйте знову.",
+  },
+}
+
+/**
  * Поради цілі FK прийнятої таблиці (спека прав §4.7) за причиною: ціль-вид
  * називає ключ (`key`), ціль `CustomTable` — колонки.
  */
@@ -4454,6 +4473,40 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Нічого не сплановано й не створено. Запустіть команду без змінної сервера тіней.",
     },
   },
+  "plan.identity-table-missing": {
+    en: (p) =>
+      p.reason === "privilege"
+        ? `The connected role cannot place the provision triggers on the identity table ${p.table}: it needs USAGE on its schema and TRIGGER on the table`
+        : `The identity table ${p.table} does not exist, so the provision triggers of the model have no table to be placed on`,
+    uk: (p) =>
+      p.reason === "privilege"
+        ? `Підключена роль не може поставити тригери провізії на таблицю ідентичності ${p.table}: їй потрібні USAGE на схему й TRIGGER на таблицю`
+        : `Таблиці ідентичності ${p.table} немає, тож тригерам провізії моделі ніде стати`,
+    hint: {
+      en: (p) => hintOf(IDENTITY_TABLE_HINTS, p, "table").en,
+      uk: (p) => hintOf(IDENTITY_TABLE_HINTS, p, "table").uk,
+    },
+  },
+  "plan.identity-trigger-locked": {
+    en: (p) =>
+      p.reason === "disabled"
+        ? `The plan changes the enabled state of the provision trigger ${p.trigger} on the identity table ${p.table} (it is not in its normal enabled state); only the owner of the table, ${p.login}, can do that`
+        : `The plan removes the provision trigger ${p.trigger} from the identity table ${p.table}, which only the owner of the table, ${p.login}, can do`,
+    uk: (p) =>
+      p.reason === "disabled"
+        ? `План змінює стан вмикання тригера провізії ${p.trigger} на таблиці ідентичності ${p.table} (він не в звичайному ввімкненому стані); це може лише власник таблиці, ${p.login}`
+        : `План знімає тригер провізії ${p.trigger} з таблиці ідентичності ${p.table}, а це може лише власник таблиці, ${p.login}`,
+    hint: {
+      en: (p) =>
+        p.reason === "disabled"
+          ? `Nothing was planned or written. Set the trigger on ${p.table} back to its enabled state as ${p.login}, and plan again. If the trigger was changed outside Simetra, treat it as a sign of tampering and check it with the owner of the table.`
+          : `Nothing was planned or written. Run this removal as ${p.login}. If the live trigger was changed outside Simetra, treat it as a sign of tampering and check it with the owner of the table.`,
+      uk: (p) =>
+        p.reason === "disabled"
+          ? `Нічого не сплановано й не записано. Поверніть тригеру на ${p.table} звичайний ввімкнений стан від ${p.login} і сплануйте знову. Якщо тригер змінено поза Simetra, вважайте це ознакою підробки й звірте його з власником таблиці.`
+          : `Нічого не сплановано й не записано. Виконайте це зняття від ${p.login}. Якщо живий тригер змінено поза Simetra, вважайте це ознакою підробки й звірте його з власником таблиці.`,
+    },
+  },
   "plan.type-guard-unsupported": {
     en: (p) =>
       p.reason === "equality"
@@ -5007,6 +5060,18 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "The grant roles were created or checked; the login role was not created, because a login role without its memberships would silently change how the runtime reads. Run `simetra roles` with a role that has ADMIN OPTION on every parent of the login role, or ask the database administrator to create it.",
       uk: "Ролі грантів створено чи звірено; роль входу не створено, бо без своїх членств вона мовчки змінила б шлях читання рантайму. Запустіть `simetra roles` від ролі з ADMIN OPTION на кожній батьківській ролі ролі входу або попросіть адміністратора бази її створити.",
+    },
+  },
+  "roles.membership-grant-denied": {
+    en: (p) =>
+      `The connecting role cannot add the missing membership of the platform login role ${p.role} in ${p.parent} on the ${p.server} server: it lacks ADMIN OPTION on ${p.parent}, or ${p.parent} does not exist`,
+    uk: (p) =>
+      `Роль підключення не може додати платформній ролі входу ${p.role} відсутнє членство в ${p.parent} на сервері ${p.server === "shadow" ? "тіні" : "цілі"}: у неї немає ADMIN OPTION на ${p.parent} або цієї ролі немає`,
+    hint: {
+      en: (p) =>
+        `The grant roles were created or checked; the login role was left as it was, and the command runtime needs this membership. Run \`simetra roles\` with a role that has ADMIN OPTION on ${p.parent}, or ask the database administrator to run \`${p.statement}\`, then run \`simetra roles\` again.`,
+      uk: (p) =>
+        `Ролі грантів створено чи звірено; роль входу лишилася як була, а рантайму команд це членство потрібне. Запустіть \`simetra roles\` від ролі з ADMIN OPTION на ${p.parent} або попросіть адміністратора бази виконати \`${p.statement}\`, потім знову запустіть \`simetra roles\`.`,
     },
   },
   "roles.superuser-required": {

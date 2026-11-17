@@ -5,7 +5,6 @@ import { afterAll, describe, expect, it, vi } from "vitest"
 import {
   clusterRoleNames,
   dropTaggedCluster,
-  migrateBetterAuth,
   prepareStackIdentity,
   roleUrl,
   setTestPasswords,
@@ -15,8 +14,8 @@ import {
 import { createApplyDatabase } from "../schema-engine"
 
 /**
- * `prepareStackIdentity` на тегованому кластері. DB-рівень, бо гранти,
- * їх відкликання й власника відношень вирішує Postgres, а міграція Better Auth
+ * `prepareStackIdentity` на тегованому кластері. DB-рівень, бо
+ * власника відношень вирішує Postgres, а міграція Better Auth
  * потребує справжньої схеми під роллю без CREATE на базу. Тест лежить у
  * designer: двигун, що готує кластер, — адаптер цього пакета, а `simetra` його
  * не імпортує.
@@ -55,10 +54,8 @@ const superuserUrl = (set: PostgresClusterSet): string =>
   withDatabaseName(testSuperuserUrl(), set.database)
 
 const identity = (set: PostgresClusterSet) => ({
-  superuserUrl: superuserUrl(set),
   authUrl: roleUrl(set, set.auth),
   auth: set.auth,
-  owner: set.owner,
 })
 
 async function sql<T extends Record<string, unknown>>(
@@ -101,13 +98,18 @@ async function snapshot(set: PostgresClusterSet): Promise<unknown> {
          from pg_auth_members a join pg_roles m on m.oid = a.member join pg_roles r on r.oid = a.roleid
         where m.rolname = any($1) or r.rolname = any($1) order by 1, 2`
     ),
+    // Таблиці може ще не бути: тоді її привілеї — `null`
     privileges: (
-      await sql<{ usage: boolean; sel: boolean; ins: boolean; trg: boolean }>(
+      await sql<Record<string, boolean | null>>(
         set,
         `select has_schema_privilege($1, 'better_auth', 'USAGE') as usage,
-                has_table_privilege($1, 'better_auth."user"', 'SELECT') as sel,
-                has_table_privilege($1, 'better_auth."user"', 'INSERT') as ins,
-                has_table_privilege($1, 'better_auth."user"', 'TRIGGER') as trg`,
+                ${["SELECT", "INSERT", "TRIGGER", "REFERENCES"]
+                  .map(
+                    (p) =>
+                      `case when to_regclass('better_auth."user"') is null then null
+                            else has_table_privilege($1, 'better_auth."user"', '${p}') end as "${p}"`
+                  )
+                  .join(",\n")}`,
         [set.owner]
       )
     )[0],
@@ -136,10 +138,25 @@ async function snapshot(set: PostgresClusterSet): Promise<unknown> {
 const noop = async (): Promise<void> => {}
 
 describe("prepareStackIdentity", () => {
+  // Гранти таблиці ідентичності — справа `roles`: крок міграції
+  // сам не дає власнику нічого, а повторний `roles` дає `TRIGGER`
+  it("migrates as the auth role and grants nothing itself", async () => {
+    const set = await cluster("mig")
+    const before = await grants(set)
+    await prepareStackIdentity(identity(set))
+    expect(before).toEqual({ usage: true, trigger: null })
+    expect(await grants(set)).toEqual({ usage: true, trigger: false })
+    const owners = await sql<{ owner: string }>(
+      set,
+      `select distinct pg_get_userbyid(c.relowner)::text as owner from pg_class c
+         join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'better_auth'`
+    )
+    expect(owners).toEqual([{ owner: set.auth }])
+  }, 120_000)
+
   it("changes nothing on a repeat call", async () => {
     const set = await cluster("rep")
     await prepareStackIdentity(identity(set))
-    expect(await grants(set)).toEqual({ usage: true, trigger: true })
     const first = await snapshot(set)
     await prepareStackIdentity(identity(set))
     expect(await snapshot(set)).toEqual(first)
@@ -148,6 +165,7 @@ describe("prepareStackIdentity", () => {
   it("refuses an auth DSN of another role and changes nothing", async () => {
     const set = await cluster("who")
     const migrate = vi.fn(noop)
+    const before = await snapshot(set)
     await expect(
       prepareStackIdentity({
         ...identity(set),
@@ -156,86 +174,6 @@ describe("prepareStackIdentity", () => {
       })
     ).rejects.toThrow("does not log in as the auth role")
     expect(migrate).not.toHaveBeenCalled()
-    expect(await grants(set)).toEqual({ usage: false, trigger: null })
+    expect(await snapshot(set)).toEqual(before)
   }, 120_000)
-
-  it("leaves no grants when the migration fails, cold and warm", async () => {
-    const set = await cluster("fail")
-    // Справжня міграція виконується, а тоді падає: таблиці вже є, гранту ще нема
-    await expect(
-      prepareStackIdentity({
-        ...identity(set),
-        migrate: async (url) => {
-          await migrateBetterAuth(url)
-          throw new Error("after migration")
-        },
-      })
-    ).rejects.toThrow("after migration")
-    expect(await grants(set)).toEqual({ usage: false, trigger: false })
-    // Підставна міграція створює частину таблиць і падає
-    await expect(
-      prepareStackIdentity({
-        ...identity(set),
-        migrate: async (url) => {
-          const client = new pg.Client({ connectionString: url })
-          await client.connect()
-          try {
-            await client.query(
-              "create table better_auth.partial_probe (id int)"
-            )
-          } finally {
-            await client.end()
-          }
-          throw new Error("partial")
-        },
-      })
-    ).rejects.toThrow("partial")
-    expect(await grants(set)).toEqual({ usage: false, trigger: false })
-    await prepareStackIdentity(identity(set))
-    expect(await grants(set)).toEqual({ usage: true, trigger: true })
-    // Тепла база: гранти вже видано, збій наступної міграції їх відкликає
-    await expect(
-      prepareStackIdentity({
-        ...identity(set),
-        migrate: async () => {
-          throw new Error("warm")
-        },
-      })
-    ).rejects.toThrow("warm")
-    expect(await grants(set)).toEqual({ usage: false, trigger: false })
-  }, 120_000)
-
-  it("leaves no grants on a half-created schema before any table exists", async () => {
-    const set = await cluster("cold")
-    await expect(
-      prepareStackIdentity({
-        ...identity(set),
-        migrate: async () => {
-          throw new Error("cold")
-        },
-      })
-    ).rejects.toThrow("cold")
-    expect(await grants(set)).toEqual({ usage: false, trigger: null })
-  }, 120_000)
-
-  it.each([
-    ["a view", () => `create view better_auth."user" as select 1 as id`],
-    [
-      "a table of another owner",
-      (set: PostgresClusterSet) =>
-        `create table better_auth."user" (id int); alter table better_auth."user" owner to "${set.owner}"`,
-    ],
-  ])(
-    "refuses %s as better_auth.user and grants nothing",
-    async (_, ddl) => {
-      const set = await cluster("bad")
-      await sql(set, ddl(set))
-      await expect(
-        prepareStackIdentity({ ...identity(set), migrate: noop })
-      ).rejects.toThrow("must be a table owned by the auth role")
-      expect((await grants(set))?.usage).toBe(false)
-      expect((await grants(set))?.trigger).toBe(false)
-    },
-    120_000
-  )
 })

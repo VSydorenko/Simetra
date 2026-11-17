@@ -42,7 +42,9 @@ import {
 
 // Профіль без ролі запиту: таблиця T0 підмінна, щоб правило §6.11
 // перевірялося без гілки за іменем провайдера.
-const purposes = vi.hoisted(() => ({ supabase: ["user"] as string[] }))
+const purposes = vi.hoisted(() => ({
+  supabase: ["user", "anonymous"] as string[],
+}))
 vi.mock("simetra/model", async (importOriginal) => ({
   ...(await importOriginal<typeof import("simetra/model")>()),
   LOGIN_ROLE_REQUEST_PURPOSES: purposes,
@@ -54,12 +56,13 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["performance"] })
 })
 afterEach(() => {
-  purposes.supabase = ["user"]
+  purposes.supabase = ["user", "anonymous"]
   vi.useRealTimers()
 })
 
 // Роль запиту профілю supabase; запасний шлях — роль команд (`readSetup`).
 const REQUEST_ROLE = "authenticated"
+const ANONYMOUS_ROLE = "anon"
 const COMMIT = { text: "COMMIT", params: [] }
 // Оператор читання — за таблицею: створення рантайму теж шле `SELECT`.
 const READ = 'FROM "public"."rights_role" t'
@@ -194,10 +197,10 @@ describe("CommandRuntime.read", () => {
     expect(db.calls).toEqual(read(byId, REQUEST_ROLE))
   })
 
-  it("reads through the fallback path under readFallback without the membership", async () => {
+  it("reads through the fallback path under readFallback without the user membership", async () => {
     const { db, runtime } = await setup(
       (text, params) =>
-        text.includes("pg_has_role")
+        text.includes("pg_has_role") && params[0] === REQUEST_ROLE
           ? { rows: [{ member: "f" }] }
           : rows(text, params),
       { readFallback: true }
@@ -212,6 +215,108 @@ describe("CommandRuntime.read", () => {
     await runtime.read(session, { object: RIGHTS, id: OTHER })
     expect(db.calls).toEqual(read(byId))
   })
+
+  it.each([true, "true"])(
+    "reads an anonymous session (claim %j) under the anonymous role",
+    async (claim) => {
+      const { db, runtime } = await setup(rows)
+      const anonymous = { ...session, is_anonymous: claim }
+      await runtime.read(anonymous, { object: RIGHTS, id: OTHER })
+      expect(db.calls).toEqual([
+        { connect: true },
+        READ_BEGIN,
+        readSetup(ANONYMOUS_ROLE, undefined, undefined, anonymous),
+        EPOCH,
+        byId,
+        COMMIT,
+        { release: false },
+      ])
+    }
+  )
+
+  it("keeps the anonymous role under readFallback without the user membership", async () => {
+    const { db, runtime } = await setup(
+      (text, params) =>
+        text.includes("pg_has_role") && params[0] === REQUEST_ROLE
+          ? { rows: [{ member: "f" }] }
+          : rows(text, params),
+      { readFallback: true }
+    )
+    const anonymous = { ...session, is_anonymous: true }
+    await runtime.read(anonymous, { object: RIGHTS, id: OTHER })
+    expect(db.calls[2]).toEqual(
+      readSetup(ANONYMOUS_ROLE, undefined, undefined, anonymous)
+    )
+  })
+
+  it.each([
+    ["the user role", ["user"]],
+    ["any request role", []],
+  ])(
+    "refuses an anonymous session of a profile with only %s as command.unauthenticated before the database",
+    async (_, list) => {
+      purposes.supabase = list
+      const { db, runtime } = await setup(rows)
+      expect(
+        await failureOf(
+          runtime.read(
+            { ...session, is_anonymous: true },
+            { object: RIGHTS, id: OTHER }
+          )
+        )
+      ).toEqual({ code: "command.unauthenticated" })
+      expect(db.calls).toEqual([])
+    }
+  )
+
+  it("refuses a profile with the anonymous role but without its membership at creation, readFallback or not", async () => {
+    for (const readFallback of [false, true]) {
+      const failure = await failureOf(
+        setup(
+          (text, params) =>
+            text.includes("pg_has_role") && params[0] === ANONYMOUS_ROLE
+              ? { rows: [{ member: "f" }] }
+              : undefined,
+          { readFallback }
+        )
+      )
+      expect(failure).toEqual({
+        code: "command.read-role-missing",
+        role: ANONYMOUS_ROLE,
+      })
+    }
+  })
+
+  // Сесія із суб'єктом, але без дійсного claim аноніма: інакше адаптер
+  // host-а, що забув claim, тихо дав би анонімові права користувача.
+  const invalidClaims: [string, object][] = [
+    ["without the anonymous claim", { sub: "user-1", role: "authenticated" }],
+    ["with the claim 1", { ...session, is_anonymous: 1 }],
+    ["with the claim null", { ...session, is_anonymous: null }],
+    ['with the claim "yes"', { ...session, is_anonymous: "yes" }],
+  ]
+  it.each(
+    invalidClaims.flatMap(([name, claims]) => [
+      [
+        `read ${name}`,
+        (runtime: CommandRuntime) =>
+          runtime.read(claims as never, { object: RIGHTS, id: OTHER }),
+      ] as const,
+      [
+        `run ${name}`,
+        (runtime: CommandRuntime) => runtime.run(claims as never, create),
+      ] as const,
+    ])
+  )(
+    "refuses %s as command.unauthenticated before the database",
+    async (_, act) => {
+      const { db, runtime } = await setup()
+      expect(await failureOf(act(runtime))).toEqual({
+        code: "command.unauthenticated",
+      })
+      expect(db.calls).toEqual([])
+    }
+  )
 
   it.each([
     ["a limit over 200", { ...page, limit: 201 }, { path: "limit" }],

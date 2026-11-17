@@ -45,7 +45,6 @@ import {
   TICKET_WRITER_ID,
   acceptDebt,
   adminRoles,
-  claimsFor,
   commandCoreLayer,
   memberCreator,
   policyDomain,
@@ -62,6 +61,7 @@ import {
   withIdentityTarget,
   withRuntimeLogin,
   type RecordedStatement,
+  sessionOf,
 } from "./support/db"
 
 /**
@@ -110,11 +110,6 @@ export interface Org {
   /** Id засіяного призначення за ключем `<людина>:<архетип>`. */
   assignments: Record<string, string>
 }
-
-export const sessionOf = (user: string): SessionClaims => ({
-  ...claimsFor("user", user),
-  sub: user,
-})
 
 /** Корінь проєкту з `node_modules/simetra` і текою метаданих моделі файлу. */
 export async function writeProject(): Promise<string> {

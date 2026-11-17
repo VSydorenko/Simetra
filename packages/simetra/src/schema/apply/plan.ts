@@ -1,5 +1,6 @@
 import {
   canonicalSnapshot,
+  IDENTITY_TRIGGERS,
   loadSqlParser,
   mainTableOf,
   modelFunctions,
@@ -13,6 +14,8 @@ import {
 import {
   diffCatalogModels,
   PROVIDER_API_ROLES,
+  PROVIDER_IDENTITY_SOURCES,
+  PROVIDER_LOGIN_ROLES,
   PROVIDER_SCHEMAS,
   quoteIdent,
   type CatalogModel,
@@ -21,6 +24,7 @@ import {
 import {
   copiesShadowFromTemplate,
   PROVIDER_EXPECTED_BLIND_FUNCTIONS,
+  PROVIDER_IDENTITY_TRIGGER_LOCKED,
   PROVIDER_INSTALLABLE_EXTENSIONS,
   PROVIDER_LOCKS,
   type DbConnection,
@@ -47,6 +51,7 @@ import {
   backfillWriteTables,
   columnKey,
   planBackfills,
+  triggerReplacements,
   readBackfillCounts,
   readBackfillCheckRefusals,
   withNotNullChecks,
@@ -171,6 +176,7 @@ import {
   classifySteps,
   foreignChanges,
   lintSteps,
+  redefined,
   requiredPermissions,
   stepId,
   type PlanAction,
@@ -354,8 +360,18 @@ async function backfillActions(p: {
   | { ok: true; actions: PlanAction[] }
   | { ok: false; diagnostics: EngineDiagnostic[] }
 > {
-  const targets = backfillTargets(p.input)
-  if (targets.length === 0) return { ok: true, actions: [...p.input.actions] }
+  // Пара DROP + CREATE тригера — один CREATE OR REPLACE ще до заповнень і
+  // класифікації: id кроків, класи й слід рахуються від остаточного списку
+  const input = {
+    ...p.input,
+    actions: triggerReplacements(
+      p.input.actions,
+      p.input.source,
+      p.input.parse
+    ),
+  }
+  const targets = backfillTargets(input)
+  if (targets.length === 0) return { ok: true, actions: [...input.actions] }
   const read = await p.reader.transaction(p.target, "rollback", (tx) =>
     readBackfillCounts(
       tx,
@@ -366,7 +382,7 @@ async function backfillActions(p: {
   const { rows, excluded } = read.counts
   const key = (t: BackfillTarget) => backfillTargetKey(onTarget(p.names, t))
   const planned = planBackfills({
-    ...p.input,
+    ...input,
     // Ціль без прочитаної кількості — дефект конвеєра: `planBackfills`
     // відкидає не ціле число
     rows: (t) => rows.get(key(t)) ?? Number.NaN,
@@ -570,6 +586,24 @@ async function readProviderTriggers(
 }
 
 /**
+ * Whether the desired state places provision triggers on the identity table
+ * `table`: a platform-layer trigger unit on it. Only then does the plan need
+ * the table and the `TRIGGER` grant on it.
+ */
+export function hasIdentityTriggers(
+  units: readonly SqlUnit[],
+  table: { schema: string; name: string }
+): boolean {
+  const prefix = `trigger:${table.schema}.${table.name}.`
+  return units.some(
+    (u) =>
+      u.class === "trigger" &&
+      u.generator === "platformLayer" &&
+      u.identity.startsWith(prefix)
+  )
+}
+
+/**
  * Неоголошений тригер на таблиці провайдера, який план знімає як чужий
  * об'єкт (платформна спека §6.6, §6.9): дозвіл на послаблення його знищить,
  * хоча тригер міг бути інтеграцією споживача. Попередження першим називає
@@ -594,6 +628,158 @@ export function undeclaredProviderTriggers(
         })
       )
   })
+}
+
+/**
+ * Facts of the identity table for the connected role. Without the schema
+ * both `usage` and `exists` are `false`. `triggers` names the existing
+ * non-internal triggers of the table, for the plan report.
+ */
+export interface IdentityTableFacts {
+  usage: boolean
+  exists: boolean
+  trigger: boolean
+  triggers: string[]
+}
+
+/**
+ * Refusal of a plan whose provision triggers cannot be placed, in both profiles. A missing table (or schema) comes
+ * first:
+ * the provider migration creates it, and only then can grants on it exist.
+ * `table` is the display name of the identity table.
+ */
+export function identityTableRefusal(
+  facts: IdentityTableFacts,
+  table: string
+): EngineDiagnostic | undefined {
+  if (!facts.exists)
+    return applyDiagnostic("plan.identity-table-missing", "error", {
+      table,
+      reason: "table",
+    })
+  return facts.usage && facts.trigger
+    ? undefined
+    : applyDiagnostic("plan.identity-table-missing", "error", {
+        table,
+        reason: "privilege",
+      })
+}
+
+/**
+ * Steps that remove a platform trigger (`IDENTITY_TRIGGERS`) from the
+ * identity table `table` or change it in place — `plan.identity-trigger-locked`,
+ * one per trigger (spec of provider profiles §4.2), with `reason`
+ * `removed` or `disabled`. A changed definition reaches the plan as one
+ * `CREATE OR REPLACE TRIGGER` step (`triggerReplacements`), which needs only
+ * `TRIGGER`; a first creation and a changed provision function are neither.
+ * `login` is the login role of the provider that owns the table: only it can
+ * run such a step.
+ */
+export function identityTriggerLocks(
+  steps: readonly Pick<
+    PlanStep,
+    "verb" | "produces" | "destroys" | "consumes" | "consumed" | "destroyed"
+  >[],
+  table: { schema: string; name: string },
+  login: string
+): EngineDiagnostic[] {
+  const names = new Set(IDENTITY_TRIGGERS)
+  const provision = (r: EngineObjectRef): boolean =>
+    r.kind === "trigger" &&
+    r.schema === table.schema &&
+    r.table === table.name &&
+    names.has(r.name)
+  const removed = new Set(
+    steps.flatMap((s) => s.destroyed.filter(provision).map((r) => r.name))
+  )
+  // Єдина зміна тригера на місці, яку дає двигун, — стан спрацювання
+  // (`ALTER TABLE … ENABLE TRIGGER` над вимкненим живим тригером), а її, як і
+  // зняття, може лише власник таблиці: без відмови тут застосування впало б
+  // з голим 42501
+  const disabled = new Set(
+    steps.flatMap((s) => {
+      const ref = redefined(s)
+      return ref !== undefined && provision(ref) && !removed.has(ref.name)
+        ? [ref.name]
+        : []
+    })
+  )
+  return [
+    ...[...removed].map((trigger) => ({ trigger, reason: "removed" })),
+    ...[...disabled].map((trigger) => ({ trigger, reason: "disabled" })),
+  ]
+    .sort((a, b) => byCodeUnit(a.trigger, b.trigger))
+    .map(({ trigger, reason }) =>
+      applyDiagnostic("plan.identity-trigger-locked", "error", {
+        trigger,
+        table: `${quoteIdent(table.schema)}.${quoteIdent(table.name)}`,
+        login,
+        reason,
+      })
+    )
+}
+
+/**
+ * Відмова зняття чи ввімкнення тригерів провізії — лише в профілі, де це
+ * може тільки власник таблиці (`PROVIDER_IDENTITY_TRIGGER_LOCKED`).
+ */
+function lockedIdentityTriggers(
+  steps: Parameters<typeof identityTriggerLocks>[0],
+  provider: DatabaseProvider
+): EngineDiagnostic[] {
+  if (!PROVIDER_IDENTITY_TRIGGER_LOCKED[provider]) return []
+  const login = PROVIDER_LOGIN_ROLES[provider][0]
+  if (login === undefined)
+    throw new Error(`internal: no login role of provider ${provider}`)
+  return identityTriggerLocks(
+    steps,
+    PROVIDER_IDENTITY_SOURCES[provider].table,
+    login
+  )
+}
+
+/**
+ * Факти таблиці ідентичності одним запитом лише до каталогу. Схема й таблиця
+ * шукаються за іменами в `pg_namespace`/`pg_class`, а привілеї — за oid:
+ * `has_schema_privilege` за іменем відсутньої схеми кидає `3F000`, а
+ * `to_regclass` без `USAGE` на схему — `42501`, і кожна така помилка
+ * зламала б усю читальну транзакцію плану замість відмови. Функції за oid
+ * на відсутньому об'єкті дають `NULL`, тож `COALESCE` робить його `false`.
+ * Каталог читається без `USAGE`, тож `exists` правдивий і без нього.
+ * Таблицею вважається лише звичайна чи секціонована (`relkind` r, p): вид,
+ * послідовність чи індекс з тим самим іменем — це відсутня таблиця.
+ */
+async function readIdentityTableFacts(
+  tx: ApplyTransaction,
+  table: { schema: string; name: string }
+): Promise<IdentityTableFacts> {
+  const [row] = await tx.query<{
+    usage: boolean
+    exists: boolean
+    trigger: boolean
+    triggers: string[]
+  }>(
+    [
+      "SELECT COALESCE(pg_catalog.has_schema_privilege(current_user, n.oid, 'USAGE'), false) AS \"usage\",",
+      '  c.oid IS NOT NULL AS "exists",',
+      "  COALESCE(pg_catalog.has_table_privilege(current_user, c.oid, 'TRIGGER'), false) AS \"trigger\",",
+      "  COALESCE((SELECT pg_catalog.array_agg(t.tgname::text ORDER BY t.tgname)",
+      "    FROM pg_catalog.pg_trigger t WHERE t.tgrelid = c.oid AND NOT t.tgisinternal),",
+      "    '{}'::text[]) AS \"triggers\"",
+      "FROM (SELECT $1::text AS nspname, $2::text AS relname) k",
+      "LEFT JOIN pg_catalog.pg_namespace n ON n.nspname = k.nspname",
+      "LEFT JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = k.relname",
+      "  AND c.relkind IN ('r', 'p')",
+    ].join("\n"),
+    [table.schema, table.name]
+  )
+  if (row === undefined) throw new Error("identity table facts returned no row")
+  return {
+    usage: row.usage,
+    exists: row.exists,
+    trigger: row.trigger,
+    triggers: row.triggers,
+  }
 }
 
 /**
@@ -675,6 +861,7 @@ export async function buildPlan(
   // того самого моменту, що й ланцюжок. Сервер, старіший за мінімум
   // платформи, — відмова до версійно залежних читань (`readServerFacts` на
   // Postgres 16 упав би сирим `42703`)
+  const identityTable = PROVIDER_IDENTITY_SOURCES[desired.scope.provider].table
   const read = await dbs.reader.transaction(
     o.target,
     "rollback",
@@ -686,6 +873,17 @@ export async function buildPlan(
       const ownerGate = await checkOwnerAttributes(tx)
       if (ownerGate !== undefined)
         return { ok: false as const, unsupported: ownerGate }
+      // Тригерам провізії потрібні таблиця ідентичності й `TRIGGER`
+      // на неї — відмова з порадою до будь-якого кроку, а не сира помилка
+      // тіні чи застосування. Лише коли бажаний стан ці тригери має
+      if (hasIdentityTriggers(model.sqlUnits, identityTable)) {
+        const identityGate = identityTableRefusal(
+          await readIdentityTableFacts(tx, identityTable),
+          `${quoteIdent(identityTable.schema)}.${quoteIdent(identityTable.name)}`
+        )
+        if (identityGate !== undefined)
+          return { ok: false as const, unsupported: identityGate }
+      }
       return {
         ok: true as const,
         state: await readApplyState(tx),
@@ -942,7 +1140,12 @@ export async function buildPlan(
   if (!filled.ok) return refused([...diagnostics, ...filled.diagnostics])
   // Зняття об'єкта, якого немає в останньому застосованому стані, — з
   // дозволом, і однойменна заміна теж (§6.6)
-  const foreign = foreignChanges(filled.actions, applied, 0)
+  const foreign = foreignChanges(
+    filled.actions,
+    applied,
+    live.extracted.model,
+    0
+  )
   const classified = classifySteps(
     filled.actions,
     live.extracted.model,
@@ -955,6 +1158,10 @@ export async function buildPlan(
     foreign,
     scope.provider
   )
+  // Зняти тригер провізії з чужої таблиці може лише її власник: відмова з
+  // порадою до будь-якого кроку, а не падіння застосування
+  const locked = lockedIdentityTriggers(classified, desired.scope.provider)
+  if (locked.length > 0) return refused([...diagnostics, ...locked])
   // Зміна типу, якій сторожа не побудувати, — відмова, а не крок без
   // перевірки: інакше дозвіл на `destructive` знову означав би «обріж мовчки»
   const guarded = guardedChanges(classified, live.extracted.model, parse)
@@ -1404,6 +1611,12 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     ...analysis.diagnostics,
   ])
   if (!analysis.ok || hasError(withClone)) return refused(withClone)
+  // Той самий гейт тригерів провізії, що й у плані без промоції
+  const locked = lockedIdentityTriggers(
+    analysis.steps,
+    c.model.project.database.provider
+  )
+  if (locked.length > 0) return refused([...withClone, ...locked])
   const { model: cloneModel } = analysis
   const checked = await backfillChecks({
     reader: dbs.reader,
@@ -1961,8 +2174,12 @@ async function analyseOnClone(p: {
         offset
       ),
       // Дії — у нових іменах наміру, marker — у старих
-      foreign: foreignChanges(actions, p.applied, offset, (ref) =>
-        beforeIntent(p.intent, ref)
+      foreign: foreignChanges(
+        actions,
+        p.applied,
+        extracted.model,
+        offset,
+        (ref) => beforeIntent(p.intent, ref)
       ),
     })
     const steps = [...renames, ...names, ...engineSteps]

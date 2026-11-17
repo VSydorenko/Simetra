@@ -1,4 +1,4 @@
--- CLI виконує цей файл лише на новому томі; на наявному локальному стеку зміну застосовує `docker exec -i supabase_db_simetra psql -v ON_ERROR_STOP=1 -U postgres -d postgres -f - < supabase/roles.sql`.
+-- CLI виконує цей файл лише на новому томі; на наявному локальному стеку зміну застосовує `pnpm db:roles`. Файл адитивний та ідемпотентний: лише CREATE відсутнього і членства, які додає сам файл (поза блоком створення ролі — під власною перевіркою `pg_auth_members`).
 -- Роль команд платформи (спека прав §5.1, спека П4 §6.2): кластерна, тож її немає в
 -- бажаному стані бази; на базі споживача її створює `simetra roles`.
 -- CLI засіває файл під `postgres`, а він не суперкористувач: без скидання
@@ -22,6 +22,18 @@ BEGIN
     CREATE ROLE simetra_runtime LOGIN NOINHERIT;
     GRANT simetra_command TO simetra_runtime WITH INHERIT FALSE, SET TRUE;
     GRANT authenticated TO simetra_runtime WITH INHERIT FALSE, SET TRUE;
+  END IF;
+END
+$$;
+-- Анонімна сесія читає роллю гостя `anon`, а не роллю користувача: стенд, де
+-- роль входу вже створено без цього членства, отримує його тут, окремо від
+-- блоку створення.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members
+      WHERE roleid = 'anon'::pg_catalog.regrole
+        AND member = 'simetra_runtime'::pg_catalog.regrole) THEN
+    GRANT anon TO simetra_runtime WITH INHERIT FALSE, SET TRUE;
   END IF;
 END
 $$;

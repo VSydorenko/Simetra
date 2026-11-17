@@ -5,7 +5,6 @@ import { buildRuntimeCatalog, compile } from "simetra/compiler"
 import { PLATFORM_ROLES, type MetadataRef } from "simetra/model"
 import { createCommandRuntime, fromPgPool, readRoleOf } from "simetra/server"
 import {
-  claimsFor,
   policyDomain,
   profileLayer,
   testProvider,
@@ -17,6 +16,7 @@ import {
   seedRuntimeActor,
   withModelTarget,
   withRuntimeLogin,
+  sessionOf,
 } from "./support/db"
 
 /**
@@ -48,7 +48,7 @@ describe("command core with more than 50 text columns", () => {
       try {
         await seedMarker(owner, model.hash)
         const actor = await seedRuntimeActor(owner)
-        const session = { ...claimsFor("user", actor.user), sub: actor.user }
+        const session = sessionOf(actor.user)
         await withRuntimeLogin(
           url,
           [PLATFORM_ROLES.command, REQUEST_ROLE],

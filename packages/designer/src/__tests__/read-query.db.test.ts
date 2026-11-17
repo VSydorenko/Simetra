@@ -26,7 +26,6 @@ import {
   type CommandRuntimeOptions,
 } from "simetra/server"
 import {
-  claimsFor,
   GAUGE_LOG_TABLE,
   GAUGE_TABLE,
   policyDomain,
@@ -43,6 +42,7 @@ import {
   seedRuntimeActor,
   withModelTarget,
   withRuntimeLogin,
+  sessionOf,
 } from "./support/db"
 
 /**
@@ -77,7 +77,7 @@ interface Env {
 
 async function seedActor(owner: pg.Client): Promise<Actor> {
   const { org, user } = await seedRuntimeActor(owner)
-  return { org, session: { ...claimsFor("user", user), sub: user } }
+  return { org, session: sessionOf(user) }
 }
 
 const heldEnv = () =>

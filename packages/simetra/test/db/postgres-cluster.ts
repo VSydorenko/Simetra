@@ -1,5 +1,5 @@
 import pg from "pg"
-import { quoteIdent } from "simetra/model"
+import { PROVIDER_IDENTITY_SOURCES, quoteIdent } from "simetra/model"
 import type { PostgresClusterSet } from "simetra/schema"
 
 import {
@@ -22,7 +22,8 @@ export const TEST_LOGIN_PASSWORD = "simetra-test-login"
  * Набір імен кластера з тегами прогону для одного сценарію. Структура та
  * сама, що в `postgresClusterSet` (платформа та її ролі запиту й входу), але
  * кожне ім'я тегове: прибиральник стека впізнає лишки за тегом, а паралельний
- * сценарій не стикається з іншим.
+ * сценарій не стикається з іншим. Схема й таблиця ідентичності — профілю: вони
+ * живуть у тегованій базі, тож тег їм не потрібен.
  */
 export function taggedClusterSet(label: string): PostgresClusterSet {
   const command = testRoleName(`${label}_cmd`)
@@ -43,6 +44,7 @@ export function taggedClusterSet(label: string): PostgresClusterSet {
     },
     template: testDatabaseName(`${label}_tpl`),
     database: testDatabaseName(label),
+    identity: PROVIDER_IDENTITY_SOURCES.postgres.table,
   }
 }
 

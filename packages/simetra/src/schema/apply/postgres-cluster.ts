@@ -1,5 +1,6 @@
 import {
   PROVIDER_API_ROLES,
+  PROVIDER_IDENTITY_SOURCES,
   PROVIDER_LOGIN_ROLES,
   PROVIDER_OWNER_ROLES,
   quoteIdent,
@@ -40,12 +41,24 @@ export interface PostgresClusterSet {
   template: string
   /** The target database. */
   database: string
+  /**
+   * The identity table of the profile (`PROVIDER_IDENTITY_SOURCES`): the owner
+   * gets `USAGE` on its schema and `TRIGGER, REFERENCES` on the table only.
+   */
+  identity: { schema: string; name: string }
 }
 
-/** What a call created and what it only found. Roles and databases by name. */
+/**
+ * What a call created, what it only found, and what it could not do yet.
+ * Roles and databases by name; the identity grants as `<schema>:USAGE` and
+ * `<schema>.<table>:TRIGGER` (the latter covers `TRIGGER, REFERENCES`). The
+ * table grant is skipped, not refused, while the table does not exist: the
+ * Better Auth migration creates it, and a repeat call grants it.
+ */
 export interface PostgresClusterOutcome {
   created: string[]
   present: string[]
+  skipped: string[]
 }
 
 /** Result of `ensurePostgresCluster`: nothing was written when it is a refusal. */
@@ -70,6 +83,7 @@ export function postgresClusterSet(database: string): PostgresClusterSet {
     auth,
     template,
     database,
+    identity: PROVIDER_IDENTITY_SOURCES.postgres.table,
   }
 }
 
@@ -308,9 +322,9 @@ export function templateState(found: TemplateRow | undefined): TemplateState {
 }
 
 // Схеми профілю: імена з переліку `PROVIDER_SCHEMAS.postgres` (T0); тест
-// тримає збіг
+// тримає збіг. Схема Better Auth — одне джерело з таблицею ідентичності
 const EXTENSIONS_SCHEMA = "extensions"
-const AUTH_SCHEMA = "better_auth"
+const AUTH_SCHEMA = PROVIDER_IDENTITY_SOURCES.postgres.table.schema
 const CHECK_EXTENSION = "plpgsql_check"
 
 /**
@@ -393,6 +407,70 @@ interface DatabaseFacts {
   extensionsSchema: boolean
   checkInstalled: boolean
   betterAuth: boolean
+}
+
+/** Гранти власника на таблицю ідентичності, які вже є в цілі. */
+interface IdentityGrantFacts {
+  usage: boolean
+  /** `undefined` — таблиці ще немає. */
+  table: { trigger: boolean; references: boolean } | undefined
+}
+
+const qualified = (table: { schema: string; name: string }): string =>
+  `${q(table.schema)}.${q(table.name)}`
+
+/**
+ * The grants of the owner on the identity table: `USAGE` on its schema,
+ * `TRIGGER, REFERENCES` on the table alone (the provision trigger and the
+ * foreign key of the model). The single source of
+ * this SQL: the `ensurePostgresCluster` write phase and the test helper of a
+ * tagged copy database, which `roles` cannot prepare, both run it.
+ */
+export function identityGrantSql(
+  owner: string,
+  identity: { schema: string; name: string }
+): { usage: string; table: string } {
+  return {
+    usage: `GRANT USAGE ON SCHEMA ${q(identity.schema)} TO ${q(owner)}`,
+    table: `GRANT TRIGGER, REFERENCES ON ${qualified(identity)} TO ${q(owner)}`,
+  }
+}
+
+/**
+ * Гранти власника на схему й таблицю ідентичності; схема вже є. Таблиця — лише
+ * звичайна чи секціонована (`relkind` r, p): вид чи послідовність з тим самим
+ * іменем рахується відсутньою таблицею.
+ */
+async function readIdentityGrants(
+  tx: ApplyTransaction,
+  set: PostgresClusterSet
+): Promise<IdentityGrantFacts> {
+  const table = qualified(set.identity)
+  const [schema] = await tx.query<{ usage: boolean; exists: boolean }>(
+    [
+      "SELECT pg_catalog.has_schema_privilege($1::text, $2::text, 'USAGE') AS usage,",
+      "  EXISTS (SELECT 1 FROM pg_catalog.pg_class c",
+      "    WHERE c.oid = pg_catalog.to_regclass($3::text) AND c.relkind IN ('r', 'p')) AS exists",
+    ].join("\n"),
+    [set.owner, set.identity.schema, table]
+  )
+  if (schema?.exists !== true)
+    return { usage: schema?.usage === true, table: undefined }
+  // Окремим запитом: `has_table_privilege` відсутньої таблиці — помилка
+  const [grants] = await tx.query<{ trigger: boolean; references: boolean }>(
+    [
+      "SELECT pg_catalog.has_table_privilege($1::text, $2::text, 'TRIGGER') AS trigger,",
+      "  pg_catalog.has_table_privilege($1::text, $2::text, 'REFERENCES') AS references",
+    ].join("\n"),
+    [set.owner, table]
+  )
+  return {
+    usage: schema.usage,
+    table: {
+      trigger: grants?.trigger === true,
+      references: grants?.references === true,
+    },
+  }
 }
 
 /** Факти схеми `extensions` у базі транзакції. */
@@ -556,6 +634,8 @@ interface Snapshot {
   database: boolean
   template: "absent" | "sealed" | "unsealed"
   target: DatabaseFacts | undefined
+  /** `undefined` — схеми `better_auth` у цілі ще немає. */
+  identityGrants: IdentityGrantFacts | undefined
   templateFacts: DatabaseFacts | undefined
 }
 
@@ -742,11 +822,17 @@ async function readPhase(
     Array.isArray(value)
 
   let target: DatabaseFacts | undefined
+  let identityGrants: IdentityGrantFacts | undefined
   if (targetRow !== undefined && targetRow.owner === set.owner) {
     const read = await inspect(conns.target, async (tx) => {
       const ext = await readExtensionsFacts(tx)
       const auth = await readAuthFacts(tx, set.auth)
-      return { ext, auth }
+      // Схеми ще немає — обидва гранти дасть фаза запису після її створення
+      const grants =
+        auth.schemaOwner === undefined
+          ? undefined
+          : await readIdentityGrants(tx, set)
+      return { ext, auth, grants }
     })
     if (isRefusal(read)) refusal.push(...read)
     else {
@@ -761,6 +847,7 @@ async function readPhase(
         checkInstalled: read.ext.checkSchema !== undefined,
         betterAuth: read.auth.schemaOwner !== undefined,
       }
+      identityGrants = read.grants
     }
   }
   let templateFacts: DatabaseFacts | undefined
@@ -802,6 +889,7 @@ async function readPhase(
       database: targetRow !== undefined,
       template: template.state === "unsafe" ? "absent" : template.state,
       target,
+      identityGrants,
       templateFacts,
     },
   }
@@ -867,6 +955,7 @@ async function writePhase(
 ): Promise<PostgresClusterOutcome> {
   const created: string[] = []
   const present: string[] = []
+  const skipped: string[] = []
   const planned = plannedRoles(set)
 
   // 1. Ролі кластера
@@ -913,6 +1002,27 @@ async function writePhase(
     await tx.query(
       `ALTER ROLE ${q(set.auth)} IN DATABASE ${q(set.database)} SET search_path = ${q(AUTH_SCHEMA)}`
     )
+    // Гранти власнику лише на схему й одну таблицю ідентичності:
+    // тригер провізії й зовнішній ключ моделі. Без `ALTER DEFAULT
+    // PRIVILEGES` — інші таблиці Better Auth власнику не відкриваються
+    const grants = snapshot.identityGrants
+    const grantSql = identityGrantSql(set.owner, set.identity)
+    const usage = `${set.identity.schema}:USAGE`
+    if (grants?.usage === true) present.push(usage)
+    else {
+      await tx.query(grantSql.usage)
+      created.push(usage)
+    }
+    const trigger = `${set.identity.schema}.${set.identity.name}:TRIGGER`
+    // Таблиці ще немає — її створить міграція Better Auth, і грант дасть
+    // повторний `roles`; це не відмова
+    if (grants?.table === undefined) skipped.push(trigger)
+    else if (grants.table.trigger && grants.table.references)
+      present.push(trigger)
+    else {
+      await tx.query(grantSql.table)
+      created.push(trigger)
+    }
   })
 
   // 4. Шаблон
@@ -956,7 +1066,7 @@ async function writePhase(
         .then(() => undefined)
     )
   }
-  return { created, present }
+  return { created, present, skipped }
 }
 
 /** З'єднання підготовки кластера: службова база, ціль, шаблон. */

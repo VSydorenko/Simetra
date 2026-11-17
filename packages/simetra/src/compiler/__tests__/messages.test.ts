@@ -164,6 +164,22 @@ describe("messages catalog", () => {
     })
   })
 
+  it("plan.identity-trigger-locked renders every reason with its params", () => {
+    const params = {
+      trigger: "trg_x",
+      table: "better_auth.user",
+      login: "owner_login",
+    }
+    for (const reason of ["removed", "disabled"]) {
+      const text = MESSAGES["plan.identity-trigger-locked"].en({
+        ...params,
+        reason,
+      })
+      for (const value of Object.values(params))
+        expect(text, reason).toContain(value)
+    }
+  })
+
   it("sql.closed-shell puts the line on the statement only for dynamic SQL", () => {
     const text = (problem: string, locale: "en" | "uk") =>
       localize(
