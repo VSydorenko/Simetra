@@ -4,6 +4,7 @@ import {
   type EngineScope,
 } from "../engine"
 import type { ApplyTransaction } from "./port"
+import { providerTriggerInBoundarySql } from "./provider-trigger-boundary"
 
 /**
  * Версія формули відбитка. Відбитки різних версій не порівнюються: зміна
@@ -150,17 +151,9 @@ const grantee = (owner: string): string =>
 const sorted = (source: string, expr = "v"): string =>
   `(select string_agg(${expr}, ',' order by ${expr} collate "C") from ${source})`
 
-/**
- * Чи тригер `t` на поверхні провайдера належить межі: його функція лежить у
- * схемі межі або є членом розширення. Звичайна функція поза межею робить
- * тригер зовнішньою інтеграцією — межа двигуна (`scopePolicy`) і перепис
- * його теж не бачать (спека профілю postgres §4.2).
- */
-const ownTriggerFunction = (t: string): string => `exists (
-        select from pg_proc f where f.oid = ${t}.tgfoid
-          and (f.pronamespace in (select oid from scope_ns)
-            or exists (select from pg_depend d where d.classid = 'pg_proc'::regclass
-              and d.objid = f.oid and d.deptype = 'e')))`
+/** Чи тригер `t` на поверхні провайдера належить межі — одне правило з політикою. */
+const ownTriggerFunction = (t: string): string =>
+  providerTriggerInBoundarySql(`${t}.oid`, "select oid from scope_ns")
 
 /**
  * Чи анотація (коментар, мітка безпеки) рядка `a` з `classoid`/`objoid`

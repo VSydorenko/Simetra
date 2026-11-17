@@ -3605,8 +3605,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       `The environment of the target could not be reproduced in the shadow before seeding: ${p.detail}`,
     uk: (p) => `Середовище цілі не відтворилося в тіні до засіву: ${p.detail}`,
     hint: {
-      en: "The shadow receives, verbatim, the functions of the target's triggers on provider tables that lie outside the managed schemas. The target and its triggers are untouched; fix the function named in the message (for example, an object its definition needs at creation time) and plan again.",
-      uk: "Тінь отримує дослівно функції тригерів цілі на таблицях провайдера, що лежать поза керованими схемами. Ціль і її тригери не змінено; виправте названу функцію (скажімо, об'єкт, потрібний її визначенню під час створення) і сплануйте знову.",
+      en: "The shadow receives, verbatim, the functions of the target's external triggers on provider tables. The target and its triggers are untouched. Move the function named in the message to a schema the applying role can create objects in, or fix what its definition needs at creation time, and plan again.",
+      uk: "Тінь отримує дослівно функції зовнішніх тригерів цілі на таблицях провайдера. Ціль і її тригери не змінено. Перенесіть названу функцію в схему, де роль застосування може створювати об'єкти, або виправте те, що потрібне її визначенню під час створення, і сплануйте знову.",
     },
   },
   "engine.preamble-unknown": {
@@ -3675,8 +3675,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `${p.object} лежить поза межею, яку порівнює рушій схеми, тож звірка ніколи його не побачить: ${outOfScopeReason(p)?.uk(p) ?? p.reason}`,
     hint: {
-      en: "In a provider schema the application owns only policies and triggers on the provider's surface tables, with trigger functions outside provider schemas; move the object into a schema of the application, scope default privileges with IN SCHEMA, and leave provider extensions to the provider.",
-      uk: "У схемі провайдера застосунку належать лише політики й тригери на таблицях поверхні провайдера, з функціями тригерів поза схемами провайдера; перенесіть об'єкт у схему застосунку, обмежте типові привілеї через IN SCHEMA, а розширення провайдера лишіть провайдерові.",
+      en: "In a provider schema the application owns only policies and triggers on the provider's surface tables, with a trigger function in a schema of the application, from an extension or built in; move the object into a schema of the application, scope default privileges with IN SCHEMA, and leave provider extensions to the provider.",
+      uk: "У схемі провайдера застосунку належать лише політики й тригери на таблицях поверхні провайдера, з функцією тригера в схемі застосунку, з розширення чи вбудованою; перенесіть об'єкт у схему застосунку, обмежте типові привілеї через IN SCHEMA, а розширення провайдера лишіть провайдерові.",
     },
   },
   "apply.state-format": {
@@ -5283,9 +5283,9 @@ const OUT_OF_SCOPE_REASONS: Readonly<
   },
   "provider-trigger-function": {
     en: (p) =>
-      `the trigger calls a function in the provider schema ${p.schema}, so the provider preset treats it as the provider's own`,
+      `the trigger calls a function in the provider schema ${p.schema}, so it is an external trigger outside the boundary`,
     uk: (p) =>
-      `тригер викликає функцію в схемі провайдера ${p.schema}, тож пресет провайдера вважає його власним тригером провайдера`,
+      `тригер викликає функцію в схемі провайдера ${p.schema}, тож це зовнішній тригер поза межею`,
   },
   "global-default-privileges": {
     en: () =>

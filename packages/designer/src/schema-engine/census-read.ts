@@ -5,6 +5,7 @@
 import type pg from "pg"
 import {
   PROVIDER_EVENT_TRIGGERS,
+  providerTriggerInBoundarySql,
   PROVIDER_UNMANAGED_EXTENSIONS,
   type CensusCount,
   type EngineScope,
@@ -69,16 +70,14 @@ with managed as (
   from pg_constraint k join rel c on c.oid = k.conrelid
   where k.contype in ('x', 't') and k.conislocal
   union all select 'trigger'
-  from pg_trigger g join pg_class c on c.oid = g.tgrelid join pg_proc f on f.oid = g.tgfoid
+  from pg_trigger g join pg_class c on c.oid = g.tgrelid
   -- тригер-клон секції (tgparentid) — частина тригера батьківської таблиці
   where not g.tgisinternal and g.tgparentid = 0
-    -- на таблиці провайдера — тригер з функцією в керованих схемах чи з
-    -- членом розширення; звичайна функція поза ними робить тригер зовнішньою
-    -- інтеграцією поза межею (те саме правило, що в політиці двигуна)
+    -- на таблиці провайдера — лише тригер у межі: те саме правило, що в
+    -- політиці двигуна й відбитку (providerTriggerInBoundarySql)
     and (c.relnamespace in (select oid from managed)
          or (c.relnamespace in (select oid from provider)
-             and (f.pronamespace in (select oid from managed)
-                  or exists (select 1 from ext where classid = 'pg_proc'::regclass and objid = f.oid))))
+             and ${providerTriggerInBoundarySql("g.oid", "select oid from managed")}))
   union all select 'policy'
   from pg_policy y join pg_class c on c.oid = y.polrelid
   where c.relnamespace in (select oid from managed) or c.relnamespace in (select oid from provider)

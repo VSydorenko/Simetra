@@ -1,6 +1,10 @@
 import { PROVIDER_SCHEMAS, quoteIdent } from "simetra/model"
 import type { EngineDiagnostic, EngineScope } from "../engine"
 import { applyDiagnostic } from "./diagnostic"
+import {
+  PROVIDER_ASSUMED_SCHEMAS,
+  providerTriggerInBoundarySql,
+} from "./provider-trigger-boundary"
 import type { ApplyTransaction } from "./port"
 
 /** Мови, визначення яких тінь приймає дослівно без перевірки тіла. */
@@ -15,8 +19,8 @@ export type ShadowEnvironment =
 
 /**
  * Середовище тіні й копії, яке двигун має застати до засіву (спека профілю
- * postgres §4.2): функції тригерів на таблицях провайдера, що лежать поза
- * межею. Такий тригер — зовнішня інтеграція, межа його виключає, але засів
+ * postgres §4.2): функції зовнішніх тригерів на таблицях провайдера
+ * (`providerTriggerInBoundarySql`), яких засів двигуна не дає. Такий тригер — зовнішня інтеграція, межа його виключає, але засів
  * припущених схем двигуна переносить його з цілі, а залежність, яку
  * обрізала політика межі, вважає наявною в кластері — і `CREATE TRIGGER`
  * падав би без функції. Тож функцію беруть з цілі дослівно
@@ -29,30 +33,41 @@ export async function readShadowEnvironment(
   tx: ApplyTransaction,
   scope: EngineScope
 ): Promise<ShadowEnvironment> {
-  const provider = PROVIDER_SCHEMAS[scope.provider]
   const rows = await tx.query<{
     schema: string
     name: string
     language: string
     def: string
   }>(
+    // Функції зовнішніх тригерів — усі, від яких тригер залежить (і з умови
+    // `WHEN`), крім членів розширень і схем, які засів двигуна й кластер дають
+    // самі
     `SELECT DISTINCT n.nspname AS schema, p.proname AS name,
             l.lanname AS language, pg_catalog.pg_get_functiondef(p.oid) AS def
        FROM pg_catalog.pg_trigger t
        JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
        JOIN pg_catalog.pg_namespace cn ON cn.oid = c.relnamespace
-       JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+       JOIN pg_catalog.pg_depend d ON d.classid = 'pg_catalog.pg_trigger'::regclass
+        AND d.objid = t.oid AND d.refclassid = 'pg_catalog.pg_proc'::regclass
+       JOIN pg_catalog.pg_proc p ON p.oid = d.refobjid
        JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
        JOIN pg_catalog.pg_language l ON l.oid = p.prolang
       WHERE NOT t.tgisinternal
         AND cn.nspname = ANY($1::text[])
-        AND NOT n.nspname = ANY($2::text[])
-        -- Член розширення дає саме розширення: засів тригер на ньому пропускає
-        AND NOT EXISTS (SELECT FROM pg_catalog.pg_depend d
-                         WHERE d.classid = 'pg_catalog.pg_proc'::regclass
-                           AND d.objid = p.oid AND d.deptype = 'e')
+        AND NOT ${providerTriggerInBoundarySql(
+          "t.oid",
+          "SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = ANY($2::text[])"
+        )}
+        AND NOT n.nspname = ANY($3::text[])
+        AND NOT EXISTS (SELECT FROM pg_catalog.pg_depend x
+                         WHERE x.classid = 'pg_catalog.pg_proc'::regclass
+                           AND x.objid = p.oid AND x.deptype = 'e')
       ORDER BY 1, 2`,
-    [[...provider], [...scope.schemas, ...provider, ...AMBIENT_SCHEMAS]]
+    [
+      [...PROVIDER_SCHEMAS[scope.provider]],
+      [...scope.schemas],
+      [...PROVIDER_ASSUMED_SCHEMAS[scope.provider], ...AMBIENT_SCHEMAS],
+    ]
   )
   const refusals = rows
     .filter((r) => !SEEDABLE_LANGUAGES.has(r.language))

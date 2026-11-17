@@ -162,7 +162,7 @@ describe("engine.out-of-scope", () => {
         ].join("\n")
       )
     ).toEqual([
-      `trigger:auth.users.app_on_user ${OUTSIDE}: the trigger calls a function in the provider schema extensions, so the provider preset treats it as the provider's own`,
+      `trigger:auth.users.app_on_user ${OUTSIDE}: the trigger calls a function in the provider schema extensions, so it is an external trigger outside the boundary`,
     ])
   })
 

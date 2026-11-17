@@ -283,6 +283,10 @@ export {
 } from "./carrier-backfill"
 export type { RightsOrphans } from "./rights-sources"
 export {
+  PROVIDER_ASSUMED_SCHEMAS,
+  providerTriggerInBoundarySql,
+} from "./provider-trigger-boundary"
+export {
   readShadowEnvironment,
   type ShadowEnvironment,
 } from "./shadow-environment"

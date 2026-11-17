@@ -394,6 +394,51 @@ describe.concurrent("buildPlan", () => {
       })
     })
 
+    it("refuses with a coded diagnostic an external trigger function the shadow cannot recreate", async () => {
+      // `extensions` — схема провайдера, але не припущена: засів двигуна
+      // функцію з неї не дає, тож її дає середовище тіні. Схему тіні з
+      // шаблону тримає суперкористувач, і роль плану функції там не
+      // створить: кодована відмова замість сирої `engine.desired-rejected`
+      const model = await compiled({ [USERS]: users })
+      await inTarget(EMPTY, async (url) => {
+        // Писати в `extensions` може лише суперкористувач стеку
+        await query(
+          asSuperuser(url),
+          external("on_new_user", "extensions.on_new_user", PLPGSQL)
+        )
+        const outcome = await plan(url, model)
+        expect(errors(outcome)).toEqual(["engine.environment-failed"])
+        expect(
+          String(
+            outcome.diagnostics.find(
+              (d) => d.code === "engine.environment-failed"
+            )?.params.detail
+          )
+        ).toContain("extensions.on_new_user")
+      })
+    })
+
+    it("keeps a declared trigger on a built-in function managed", async () => {
+      // Вбудована функція залежності не записує: тригер у межі, як і на
+      // функції схеми застосунку
+      const model = await compiled({
+        [USERS]: users,
+        "sql/app/user-redundant.sql": `CREATE TRIGGER user_redundant BEFORE UPDATE ON better_auth."user" FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();\n`,
+      })
+      await inTarget(EMPTY, async (url) => {
+        const artifact = planned(await plan(url, model))
+        expect(
+          artifact.steps.filter((s) =>
+            /CREATE TRIGGER "?user_redundant/.test(s.sql)
+          )
+        ).toHaveLength(1)
+        await applyArtifact(url, artifact, model)
+        const again = await plan(url, model)
+        expect(again.status).toBe("unchanged")
+        expect(errors(again)).toEqual([])
+      })
+    })
+
     describe("a trigger on an extension function", () => {
       // Функція-член розширення: витяг зводить залежність до розширення, тож
       // такий тригер у межі, як і тригер з функцією схеми застосунку
