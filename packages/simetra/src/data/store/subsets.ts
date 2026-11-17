@@ -818,6 +818,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     showNew() {},
     loadBefore() {},
     loadAfter() {},
+    setVisibleRange() {},
   })
 
   function makeHandle(form: Form): ViewHandle {
@@ -867,6 +868,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         const s = live()
         if (s !== undefined) loadMore(s, "after")
       },
+      // Без дії в М3: яруси, які він веде, — #206 (Р13).
+      setVisibleRange() {},
     }
   }
 

@@ -46,8 +46,6 @@ export type ViewSpec =
       where?: Filter
       orderBy?: OrderBy
       include?: readonly string[]
-      /** A lazy `count` of the filtered set (plan B3-3, b1). */
-      count?: true
     }
 
 /** Row state vocabulary (P4-B spec §6.5). */
@@ -106,8 +104,6 @@ export interface ViewSnapshot {
   readonly chain?: number
   /** Window only: where the host scrolls when a new chain replaces the old one. */
   readonly target?: "start" | "end" | "keep"
-  /** Window only, with `count: true`: the lazy count, `capped` at the limit. */
-  readonly count?: { readonly value: number; readonly capped: boolean }
 }
 
 /** A memoized handle of one view form (P4-B spec §6.4). */
@@ -128,6 +124,11 @@ export interface ViewHandle {
   loadBefore(): void
   /** Window only (no-op elsewhere): reads the page after the last one. */
   loadAfter(): void
+  /**
+   * The rows a list host shows, by index in the composition. Does nothing in
+   * the thin M3 slice: the tiers it would drive are plan B3-3 issue #206.
+   */
+  setVisibleRange(range: { first: number; last: number }): void
 }
 
 /** A generation token: async branches write only while it is valid. */

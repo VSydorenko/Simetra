@@ -534,20 +534,25 @@ describe("window snapshot sharing", () => {
     { chain: 2 },
     { target: "end" as const },
     { atStart: false },
-    { count: { value: 3, capped: false } },
   ])("gives a new snapshot when only %o changed", (extra) => {
     const first = shareSnapshot(undefined, base)
     expect(shareSnapshot(first, next(extra))).not.toBe(first)
   })
+})
 
-  it("keeps the snapshot for an equal count", () => {
-    const counted = shareSnapshot(
-      undefined,
-      next({ count: { value: 3, capped: false } })
-    )
-    expect(
-      shareSnapshot(counted, next({ count: { value: 3, capped: false } }))
-    ).toBe(counted)
+describe("setVisibleRange", () => {
+  it("changes nothing: no read, the same snapshot", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 250)
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    const before = handle.getSnapshot()
+    const reads = fake.log.length
+    handle.setVisibleRange({ first: 10, last: 20 })
+    await settle()
+    expect(handle.getSnapshot()).toBe(before)
+    expect(fake.log).toHaveLength(reads)
   })
 })
 
