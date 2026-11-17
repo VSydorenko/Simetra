@@ -223,6 +223,7 @@ pnpm db:pg:stop
 
 pnpm db:start                             # local Supabase stack (needs Docker) — supabase-profile regression only
 pnpm test:db                              # provider base-state pgTAP + *.supabase.db.test.ts against the Supabase stack
+pnpm db:roles                             # apply supabase/roles.sql to the running Supabase stack (additive, idempotent)
 pnpm db:stop
 
 pnpm db:signals:start                     # Centrifugo beside the Supabase stack (needs Docker)
@@ -237,6 +238,9 @@ pnpm db:signals:stop
   without the project name. Start the `postgres` stack from the main checkout:
   its bind mounts point into the checkout that started it, so removing a
   worktree that started the stack breaks it.
+- An existing local Supabase stack needs `pnpm db:roles` once after pulling
+  changes to `supabase/roles.sql`; without it the runtime refuses to start
+  (`command.read-role-missing`).
 - Each local stack (`postgres`, `supabase`) is one per profile per machine and
   shared by every session and agent on it. The `globalSetup` of each DB project
   (`stack-guard.<provider>.ts` over the guard module
