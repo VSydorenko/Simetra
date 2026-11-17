@@ -112,6 +112,20 @@ export interface CoreSession {
    * mutation not yet settled settles with the close.
    */
   close(reason: CloseReason): void
+  /**
+   * Asks the server for the catalog version (P4-B spec §10) and re-marks the
+   * stale objects by the answer. Single-flight with one tail: calls before the
+   * request goes out (one microtask) make one request, calls while it flies
+   * make exactly one more after it.
+   */
+  requestVersion(): void
+  /**
+   * Internal, for the runtime: the `serverHash` of a response that passed the
+   * closed check. A change against the last seen hash asks for the version —
+   * unless the response carried the `version` part itself, which only updates
+   * the hash (no ping-pong between instances of two catalogs).
+   */
+  serverHash(hash: string, versionPart: boolean): void
 }
 
 export type { DefectFlag } from "./defects"
@@ -226,6 +240,10 @@ export function createCore(options: {
   /** The list strategy by object id; an object not named is `window`. */
   residency?: ReadonlyMap<string, "full" | "window">
   log?: (e: CoreLogEntry) => void
+  /** The `snapshotHash` of the client catalog: the first hash to compare with. */
+  snapshotHash?: string
+  /** Host callback: an object turned stale-client or a write was refused so. */
+  onStaleClient?: (object: ObjectName) => void
 }): CoreSession {
   const limits = limitsOf(options.limits)
   const { source, index } = options
@@ -253,6 +271,11 @@ export function createCore(options: {
     overlay.mutationOf(object, key, e)
   )
   const dirtySections = new Map<ObjectName, Set<Key>>()
+  // Позначка «застарілий» об'єкта (§10): лише за kernelHash чи невідомим
+  // об'єктом; `dirtyObjects` — об'єкти, чия позначка змінилась у цьому commit.
+  const staleObjects = new Set<ObjectName>()
+  const dirtyObjects = new Set<ObjectName>()
+  let lastHash = options.snapshotHash
   let closed: ViewSnapshot | undefined
 
   const objects = new Map<ObjectName, ObjectState>()
@@ -382,6 +405,8 @@ export function createCore(options: {
     rowViews,
     objectOf,
     dirtySections: () => dirtySections,
+    dirtyObjects: () => dirtyObjects,
+    isStale: (object) => staleObjects.has(object),
     closedSnapshot: () => closed,
     defects,
   })
@@ -493,6 +518,7 @@ export function createCore(options: {
         objectOf(object).rows.get(key) !== undefined
     )
     dirtySections.clear()
+    dirtyObjects.clear()
     for (const s of notify) {
       for (const listener of [...s.listeners]) {
         // Слухач міг закрити ядро: далі нікого не сповіщаємо.
@@ -512,10 +538,12 @@ export function createCore(options: {
     hiddenKeys.clear()
     rowViews.clear()
     dirtySections.clear()
+    dirtyObjects.clear()
     tails.clear()
     purges.clear()
     for (const timer of switchTimers.values()) clearTimeout(timer)
     switchTimers.clear()
+    staleObjects.clear()
   })
 
   // Хвіст у польоті під час purge: його відповідь могла нести рядок, якого на
@@ -573,6 +601,64 @@ export function createCore(options: {
     },
   }
 
+  // ------------------------------------------------------------ версія
+
+  const staleClient = (object: ObjectName) => {
+    try {
+      options.onStaleClient?.(object)
+    } catch (error) {
+      // Збій колбека host-а не ламає ядро й не підміняє результат запису.
+      log({ kind: "listener-failed", error })
+    }
+  }
+
+  // Позначки за відповіддю `version`: об'єкт, якого сервер не знає, чи з
+  // іншим kernelHash, — застарілий; збіг хеша позначку знімає (§10).
+  function applyVersion(objectsOfServer: Readonly<Record<string, string>>) {
+    const token = session.token()
+    const turned: ObjectName[] = []
+    session.commit(
+      () => {
+        for (const o of objects.values()) {
+          const stale = objectsOfServer[o.entry.id] !== o.entry.kernelHash
+          if (stale === staleObjects.has(o.name)) continue
+          if (stale) {
+            staleObjects.add(o.name)
+            turned.push(o.name)
+          } else staleObjects.delete(o.name)
+          dirtyObjects.add(o.name)
+        }
+      },
+      token,
+      "version"
+    )
+    // Колбек — після commit: host не бачить напівзастосованого стану.
+    for (const object of turned) staleClient(object)
+  }
+
+  // Один запит `version` за раз і не більше одного хвоста: перед відправкою
+  // (мікрозадача) виклики зливаються, під час польоту — один хвіст.
+  let versionState: "idle" | "scheduled" | "flying" = "idle"
+  let versionTail = false
+  function startVersion() {
+    versionState = "flying"
+    const token = session.token()
+    source
+      .version()
+      .then(
+        (result) => {
+          if (token.valid && result.ok) applyVersion(result.version.objects)
+        },
+        (error: unknown) => log({ kind: "listener-failed", error })
+      )
+      .finally(() => {
+        versionState = "idle"
+        if (!versionTail) return
+        versionTail = false
+        core.requestVersion()
+      })
+  }
+
   const core: CoreSession = {
     subject: options.subject,
     signal: session.signal,
@@ -595,6 +681,22 @@ export function createCore(options: {
         token,
         "writer"
       )
+    },
+    requestVersion() {
+      if (!session.token().valid) return
+      if (versionState === "flying") versionTail = true
+      else if (versionState === "idle") {
+        versionState = "scheduled"
+        queueMicrotask(() => {
+          if (session.token().valid) startVersion()
+          else versionState = "idle"
+        })
+      }
+    },
+    serverHash(hash, versionPart) {
+      const changed = lastHash !== undefined && hash !== lastHash
+      lastHash = hash
+      if (changed && !versionPart) core.requestVersion()
     },
     update: (object, key, values, updateOptions) =>
       overlay.update(object, key, values, updateOptions),
@@ -625,6 +727,11 @@ export function createCore(options: {
     objectOf,
     rowViews,
     commit: core.commit,
+    isStale: (object) => staleObjects.has(object),
+    staleClient(object) {
+      staleClient(object)
+      core.requestVersion()
+    },
     reread(object, key, rereadOptions) {
       rereadKey(writerContext, object, key, rereadOptions).catch(
         (error: unknown) => log({ kind: "listener-failed", error })

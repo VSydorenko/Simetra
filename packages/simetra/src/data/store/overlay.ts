@@ -128,13 +128,39 @@ interface JournalEntry {
 
 const sameKey = (a: Key, b: Key) => a.toLowerCase() === b.toLowerCase()
 
-// Збій запису після відповіді сервера (§7.3): відмова — стан мутації з
-// кодом; «недоступно» — результат невідомий; решта — `failed`. Повну
-// таблицю кодів дає задача 3 плану.
-function stateOf(error: CommandError): MutationState {
-  if (error.code === "command.conflict") return "conflict"
-  if (error.code === "command.unavailable") return "unknown"
-  return "failed"
+/*
+ * Таблиця «код → стан і дія» для запису (§7.3). `reread` — перечитати ключ за
+ * ключем (лише з власником); `stale` — позначка й запит `version`, без повтору;
+ * `close` — сесію закрито, мутація нічого не показує. `unavailable` на `run`
+ * (зокрема тайм-аут чи обрив транспорту, які раннер зводить до нього) —
+ * результат невідомий; `command.timeout` — відмова БД до `COMMIT`, тож `failed`.
+ * `internal` може йти й після `COMMIT` (Р10), тож ключ теж перечитується.
+ */
+interface Policy {
+  readonly state: MutationState | "closed"
+  readonly reread: boolean
+  readonly stale: boolean
+}
+
+function policyOf(error: CommandError): Policy {
+  switch (error.code) {
+    case "command.conflict":
+      return { state: "conflict", reread: true, stale: false }
+    case "command.forbidden":
+    case "command.internal":
+      return { state: "failed", reread: true, stale: false }
+    case "command.stale-client":
+      return { state: "failed", reread: false, stale: true }
+    case "command.unavailable":
+      return { state: "unknown", reread: true, stale: false }
+    case "command.unauthenticated":
+      return error.reason === LIMIT_REASONS.sessionChanged
+        ? { state: "closed", reread: false, stale: false }
+        : { state: "failed", reread: false, stale: false }
+    default:
+      // `invalid` (з логічним `path`), `busy`, `timeout` і решта: лише стан і дії.
+      return { state: "failed", reread: false, stale: false }
+  }
 }
 
 export function createOverlay(deps: {
@@ -145,6 +171,10 @@ export function createOverlay(deps: {
   rowViews: RowViews
   /** `CoreSession.commit`: the writer is the only way to write the store. */
   commit(fn: (writer: Writer) => void, token: GenerationToken): boolean
+  /** Whether the object is marked stale-client: no write passes (§10). */
+  isStale(object: ObjectName): boolean
+  /** A server refusal `stale-client`: `onStaleClient` and a `version` request. */
+  staleClient(object: ObjectName): void
   /** Re-reads the key by key (`rereadKey`). */
   reread(object: ObjectName, key: Key, options: RereadOptions): void
   log(entry: CoreLogEntry): void
@@ -210,6 +240,19 @@ export function createOverlay(deps: {
       expectedVersion: entry.expectedVersion,
       values: entry.values ?? {},
     }
+    // Позначений об'єкт запису не приймає (§10): відмова без транспорту, і
+    // без `onStaleClient` — відповіді сервера не було.
+    if (deps.isStale(entry.object)) {
+      queueMicrotask(() =>
+        onResult(
+          entry,
+          attempt,
+          { ok: false, error: { code: "command.stale-client", object: o.ref } },
+          true
+        )
+      )
+      return
+    }
     source.run(operation).then(
       (result) => onResult(entry, attempt, result),
       (error: unknown) => {
@@ -227,7 +270,8 @@ export function createOverlay(deps: {
   function onResult(
     entry: JournalEntry,
     attempt: Attempt,
-    result: CoreRunResult
+    result: CoreRunResult,
+    local = false
   ) {
     // Скасовано чи закрито: відповідь нічого не пише (Р9, токен спроби).
     if (!attempt.live) {
@@ -239,7 +283,7 @@ export function createOverlay(deps: {
       return
     }
     if (!result.ok) {
-      fail(entry, attempt, result.error)
+      fail(entry, attempt, result.error, local)
       return
     }
     const o = objectOf(entry.object)
@@ -333,7 +377,12 @@ export function createOverlay(deps: {
     )
   }
 
-  function fail(entry: JournalEntry, attempt: Attempt, error: CommandError) {
+  function fail(
+    entry: JournalEntry,
+    attempt: Attempt,
+    error: CommandError,
+    local: boolean
+  ) {
     // Рантайм закрито: ні стану, ні перечитування (§7.3).
     if (
       error.code === "command.unavailable" &&
@@ -342,23 +391,36 @@ export function createOverlay(deps: {
       attempt.resolve({ ok: false, error })
       return
     }
-    const state = stateOf(error)
+    const policy = policyOf(error)
+    if (policy.state === "closed") {
+      // `session-changed` закриває рантайм; без нього (ядро саме) запис
+      // просто не лишається висіти в журналі.
+      commit(() => {
+        drop(entry)
+        attempt.resolve({ ok: false, error })
+      }, attempt.token)
+      attempt.resolve({ ok: false, error })
+      return
+    }
     commit(() => {
-      entry.state = state
+      entry.state = policy.state as MutationState
       entry.error = error
       attempt.resolve({ ok: false, error })
       changed(entry)
     }, attempt.token)
     attempt.resolve({ ok: false, error })
-    // Запис міг відбутися: `unavailable` — результат невідомий; `internal`
-    // буває й після `COMMIT` (епоха без рядка, Р10). Значень з відповіді
-    // немає, тож ключ перечитується (Р6).
-    // Ключ без власника перечитувати нема для кого.
+    if (policy.stale && !local) deps.staleClient(entry.object)
+    // Значень з відповіді немає, тож ключ перечитується (Р6); ключ без
+    // власника перечитувати нема для кого.
     if (
-      (state === "unknown" || error.code === "command.internal") &&
+      policy.reread &&
       (objectOf(entry.object).rows.get(entry.key)?.owners ?? 0) > 0
-    )
-      deps.reread(entry.object, entry.key, { form: "list" })
+    ) {
+      const lazy = objectOf(entry.object).lazyFields.some((f) =>
+        Object.hasOwn(entry.values ?? {}, f)
+      )
+      deps.reread(entry.object, entry.key, { form: lazy ? "card" : "list" })
+    }
   }
 
   /** Starts an attempt of the entry in one `commit` and sends it. */

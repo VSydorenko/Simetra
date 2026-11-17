@@ -133,6 +133,12 @@ export interface ViewSnapshot {
   readonly rows: readonly RowView[]
   readonly hasNewRows: boolean
   readonly needsRefresh: boolean
+  /**
+   * The object of the view is marked stale (P4-B spec §10): the server
+   * contract of its kernel differs from this build, no write to it passes.
+   * Present only while true; not to be confused with a `stale` row.
+   */
+  readonly isStale?: boolean
   readonly section?: {
     readonly ownerVersion: number | undefined
     readonly complete: boolean

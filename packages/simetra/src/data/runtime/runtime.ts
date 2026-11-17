@@ -42,6 +42,13 @@ export interface DataRuntimeOptions {
    * `session-changed`; the runtime is already closed by then.
    */
   onSessionChanged?: () => void
+  /**
+   * Called when an object of the catalog turns stale (its kernel differs from
+   * the server's) and on every write the server refuses `command.stale-client`
+   * (P4-B spec §10). It only offers a reload: the runtime never reloads itself,
+   * so unsaved forms of other objects are not lost.
+   */
+  onStaleClient?: (object: string) => void
   /** The runtime journal (default `console.warn`); see {@link DataLogEntry}. */
   log?: (entry: DataLogEntry) => void
   /**
@@ -98,6 +105,15 @@ const DISPOSED: CommandError = {
   code: "command.unavailable",
   reason: LIMIT_REASONS.disposed,
 }
+
+const hasVersionPart = (request: RuntimeRequest): boolean =>
+  request.type === "read" &&
+  request.items.some(
+    (item) =>
+      typeof item === "object" &&
+      item !== null &&
+      (item as { type?: unknown }).type === "version"
+  )
 
 const isSessionChanged = (error: CommandError) =>
   error.code === "command.unauthenticated" &&
@@ -239,9 +255,20 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     }
     // Відповідь, що прийшла після закриття, нікуди не йде (спека §11, інв. 12).
     if (closedWith !== undefined) throw new CommandFailure(closedWith)
-    if (response.ok) return response.value
+    // Хеш звіряється лише після перевірки закриття (вище): відповідь закритого
+    // рантайму не запускає `version`. Відповідь з частиною `version` хеш лише
+    // оновлює.
+    const seen = () => {
+      if (typeof response.serverHash === "string")
+        core.serverHash(response.serverHash, hasVersionPart(request))
+    }
+    if (response.ok) {
+      seen()
+      return response.value
+    }
     const error = errorFromWire(index, response.error)
     if (isSessionChanged(error)) sessionChanged(error)
+    else seen()
     throw new CommandFailure(error)
   }
 
@@ -268,6 +295,10 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     residency,
     ...(options.strict === undefined ? {} : { strict: options.strict }),
     log,
+    snapshotHash: catalog.snapshotHash,
+    ...(options.onStaleClient === undefined
+      ? {}
+      : { onStaleClient: options.onStaleClient }),
   })
   // Фабрики — після обгортки `send` і ядра: адаптер отримує саме цей
   // `subject` і саме цю обгортку, тож його запити несуть суб'єкт рантайму.

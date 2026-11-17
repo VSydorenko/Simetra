@@ -309,6 +309,7 @@ export function shareSnapshot(
     prev.rows === rows &&
     prev.hasNewRows === next.hasNewRows &&
     prev.needsRefresh === next.needsRefresh &&
+    prev.isStale === next.isStale &&
     prev.section === section &&
     prev.strategy === next.strategy &&
     prev.truncated === next.truncated &&

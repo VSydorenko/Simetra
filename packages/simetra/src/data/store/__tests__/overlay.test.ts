@@ -40,6 +40,8 @@ interface Port {
   /** Refuses each `run` with this error instead of serving it. */
   refuse: CommandError | undefined
   runs: number
+  /** The `version` requests the server received. */
+  versions: number
   /** The wire requests of every `run`, in order. */
   readonly requests: Parameters<ServerPort["run"]>[0][]
   release(): void
@@ -53,6 +55,7 @@ function harness() {
     transform: undefined,
     refuse: undefined,
     runs: 0,
+    versions: 0,
     requests: [],
     release() {
       for (const go of queue.splice(0)) go()
@@ -72,7 +75,10 @@ function harness() {
         queue.push(() => void serve(request).then(resolve, reject))
       )
     },
-    version: () => fake.server.version(),
+    version() {
+      port.versions++
+      return fake.server.version()
+    },
   }
   const source = createCoreSource(
     () => fake.adapter,
@@ -80,13 +86,15 @@ function harness() {
     createReadLimiter(DEFAULT_CORE_LIMITS.readParallel),
     server
   )
+  const onStaleClient = vi.fn<(object: string) => void>()
   const core = createCore({
     subject: "u1",
     source,
     index: fake.index,
     log: () => {},
+    onStaleClient,
   })
-  return { fake, core, port, inspect: inspectCore(core) }
+  return { fake, core, port, onStaleClient, inspect: inspectCore(core) }
 }
 
 type Harness = ReturnType<typeof harness>
@@ -1038,5 +1046,260 @@ describe("close (§6.1)", () => {
       },
     })
     expect(h.port.runs).toBe(0)
+  })
+})
+
+describe("the table of refusals of a write (§7.3)", () => {
+  const SESSION_CHANGED: CommandError = {
+    code: "command.unauthenticated",
+    reason: LIMIT_REASONS.sessionChanged,
+  }
+  interface Row {
+    readonly name: string
+    readonly error: CommandError
+    readonly state: "conflict" | "failed" | "unknown"
+    /** The key is re-read by key after the refusal. */
+    readonly reread: boolean
+    readonly actions: readonly string[]
+  }
+  const FAILED = ["cancel", "retry"]
+  const rows: Row[] = [
+    {
+      name: "conflict",
+      error: { code: "command.conflict", reason: "version" },
+      state: "conflict",
+      reread: true,
+      actions: ["cancel"],
+    },
+    {
+      name: "forbidden",
+      error: { code: "command.forbidden" },
+      state: "failed",
+      reread: true,
+      actions: FAILED,
+    },
+    {
+      name: "invalid",
+      error: { code: "command.invalid", path: "title" },
+      state: "failed",
+      reread: false,
+      actions: FAILED,
+    },
+    {
+      name: "stale-client",
+      error: { code: "command.stale-client" },
+      state: "failed",
+      reread: false,
+      actions: FAILED,
+    },
+    {
+      name: "unavailable (transport broke or timed out)",
+      error: { code: "command.unavailable" },
+      state: "unknown",
+      reread: true,
+      actions: ["dismiss"],
+    },
+    {
+      name: "busy",
+      error: { code: "command.busy" },
+      state: "failed",
+      reread: false,
+      actions: FAILED,
+    },
+    {
+      name: "timeout",
+      error: { code: "command.timeout" },
+      state: "failed",
+      reread: false,
+      actions: FAILED,
+    },
+    {
+      name: "internal",
+      error: { code: "command.internal" },
+      state: "failed",
+      reread: true,
+      actions: FAILED,
+    },
+    {
+      name: "the rest (constraint)",
+      error: { code: "command.constraint" },
+      state: "failed",
+      reread: false,
+      actions: FAILED,
+    },
+  ]
+
+  it.each(rows)(
+    "$name: state $state, re-read $reread, actions $actions",
+    async ({ error, state, reread, actions }) => {
+      const h = harness()
+      const { card, version } = await mounted(h)
+      h.port.refuse = error
+      const reads = keyReads(h.fake).length
+      const m = h.core.update(
+        TASK,
+        K,
+        { title: "a" },
+        { expectedVersion: version }
+      )
+      expect(await m.settled).toEqual({ ok: false, error })
+      await settle()
+      const view = shown(rowOf(card))
+      expect(view.state).toBe(state)
+      expect(view.mutation!.error).toEqual(error)
+      expect(
+        Object.keys(view.mutation!)
+          .filter((k) => k !== "id" && k !== "state" && k !== "error")
+          .sort()
+      ).toEqual([...actions].sort())
+      expect(keyReads(h.fake).length).toBe(reads + (reread ? 1 : 0))
+      // Без автоповтору на жодному коді.
+      expect(h.port.runs).toBe(1)
+    }
+  )
+
+  it("conflict and forbidden re-read the card form for a lazy field", async () => {
+    const h = harness()
+    const { version } = await mounted(h)
+    h.port.refuse = { code: "command.forbidden" }
+    const reads = readsOf(h.fake, TASK).filter(isCard).length
+    const m = h.core.update(
+      TASK,
+      K,
+      { notes: "lazy" },
+      { expectedVersion: version }
+    )
+    await m.settled
+    await settle()
+    expect(readsOf(h.fake, TASK).filter(isCard).length).toBe(reads + 1)
+  })
+
+  it("forbidden with the row gone from the server makes the row removed", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.refuse = { code: "command.forbidden" }
+    h.fake.remove(TASK, K)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    await m.settled
+    await settle()
+    const view = rowOf(card)
+    expect(view.state).toBe("removed")
+    expect(view.mutation).toMatchObject({ state: "failed" })
+    expect(view.mutation!.cancel).toBeTypeOf("function")
+  })
+
+  it("invalid: a value that does not encode is failed with the logical path, never sent", async () => {
+    const h = harness()
+    const { card } = await mounted(h)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: { not: "encodable" } as never },
+      { expectedVersion: 1 }
+    )
+    expect(await m.settled).toMatchObject({
+      ok: false,
+      error: { code: "command.invalid", path: "title" },
+    })
+    await settle()
+    expect(h.port.runs).toBe(0)
+    expect(shown(rowOf(card)).state).toBe("failed")
+  })
+
+  it("stale-client: failed, one version request, onStaleClient(object), no second run", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.refuse = { code: "command.stale-client" }
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    await m.settled
+    await settle()
+    expect(h.port.versions).toBe(1)
+    expect(h.onStaleClient.mock.calls).toEqual([[TASK]])
+    expect(h.port.runs).toBe(1)
+    expect(shown(rowOf(card)).state).toBe("failed")
+  })
+
+  it("unavailable disposed: nothing — no state, no re-read, no version request", async () => {
+    const h = harness()
+    const { version } = await mounted(h)
+    h.port.refuse = {
+      code: "command.unavailable",
+      reason: LIMIT_REASONS.disposed,
+    }
+    const reads = keyReads(h.fake).length
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    expect(await m.settled).toMatchObject({ ok: false })
+    await settle()
+    expect(keyReads(h.fake).length).toBe(reads)
+    expect(h.port.versions).toBe(0)
+    expect(h.onStaleClient).not.toHaveBeenCalled()
+  })
+
+  it("session-changed: settles with the refusal, leaves no mutation, re-reads nothing", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.refuse = SESSION_CHANGED
+    const reads = keyReads(h.fake).length
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    expect(await m.settled).toEqual({ ok: false, error: SESSION_CHANGED })
+    await settle()
+    expect(keyReads(h.fake).length).toBe(reads)
+    expect(shown(rowOf(card)).mutation).toBeUndefined()
+    expect(h.inspect.serviceSizes().journal).toBe(0)
+  })
+
+  it("a write to a marked object is stale-client without the transport and without onStaleClient", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    // Позначка — відповіддю `version` з чужим kernelHash.
+    const real = h.fake.server.version
+    h.fake.server.version = async () => {
+      const answer = (await real()) as {
+        items: { value: { objects: Record<string, string> } }[]
+      }
+      answer.items[0]!.value.objects[h.fake.index.byRef.get(TASK)!.id] =
+        "1".repeat(64)
+      return answer
+    }
+    h.core.requestVersion()
+    await settle()
+    expect(
+      h.core.view({ kind: "card", object: TASK, key: K }).getSnapshot()
+    ).toMatchObject({ isStale: true })
+    expect(h.onStaleClient).toHaveBeenCalledTimes(1)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    expect(await m.settled).toMatchObject({
+      ok: false,
+      error: { code: "command.stale-client" },
+    })
+    await settle()
+    expect(h.port.runs).toBe(0)
+    expect(h.onStaleClient).toHaveBeenCalledTimes(1)
+    expect(shown(rowOf(card)).state).toBe("failed")
   })
 })
