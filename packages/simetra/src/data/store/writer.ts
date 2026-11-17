@@ -407,7 +407,7 @@ function applyKeys(
     for (const row of rows) {
       got.add(row.key)
       if (s.owned.has(row.key)) ctx.ops.put(scope, o, row, startEpoch, false)
-      else if (!beyond.has(row.key)) fresh = true
+      else fresh = true
     }
     for (const key of requested) {
       if (!got.has(key) && s.owned.has(key))
