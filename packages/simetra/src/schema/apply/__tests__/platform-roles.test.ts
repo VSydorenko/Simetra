@@ -548,7 +548,7 @@ describe("platformRoleRefusals", () => {
 /** Роль входу без провайдера: лише звірка за об'єднанням батьків усіх профілів. */
 const CHECK_RUNTIME = {
   name: RUNTIME,
-  memberOf: ["authenticated", "simetra_anon", COMMAND, "simetra_user"],
+  memberOf: ["anon", "authenticated", "simetra_anon", COMMAND, "simetra_user"],
   checkOnly: true as const,
 }
 
@@ -610,7 +610,7 @@ describe("platformRoleSet", () => {
   it("adds the runtime login role only when the provider is known", () => {
     expect(platformRoleSet("supabase")).toEqual({
       names: Object.values(PLATFORM_ROLES),
-      login: [{ name: RUNTIME, memberOf: [COMMAND, "authenticated"] }],
+      login: [{ name: RUNTIME, memberOf: [COMMAND, "authenticated", "anon"] }],
       checkLogin: [],
     })
     expect(platformRoleSet("postgres")).toEqual({
@@ -672,6 +672,11 @@ function fakeCluster(o: {
    * `CREATE ROLE`, тож власний падає `42710`.
    */
   appear?: { row: PlatformRoleRow; on: "read" | "create" }
+  /**
+   * Батько, `GRANT` якого фаза запису отримує `42501`: право відкликали
+   * між фазами, хоч читання його бачило.
+   */
+  grantDenied?: string
 }): { dbs: ApplyDatabase; writes: { url: string; sql: string }[] } {
   const roles = new Map<string, PlatformRoleRow[]>(
     Object.entries(o.roles ?? {})
@@ -729,6 +734,8 @@ function fakeCluster(o: {
           const granted = /^GRANT "?([a-z0-9_]+)"? TO "?([a-z0-9_]+)"?/.exec(
             sql
           )
+          if (granted !== null && granted[1] === o.grantDenied)
+            throw new ApplyDbError("must have admin option", "42501")
           if (granted !== null) {
             const child = cluster.find((r) => r.name === granted[2])
             child?.memberOf.push(pair(granted[1]!))
@@ -986,5 +993,155 @@ describe("ensurePlatformRoles", () => {
       ],
     })
     expect(writes).toEqual([])
+  })
+
+  // Доповнення наявної ролі входу: справжня форма й право — у DB-тесті
+  // roles-upgrade; тут — рішення над рядками каталогу
+  describe("an existing login role without a membership of its profile", () => {
+    const AUTH_PAIR = `GRANT authenticated TO ${RUNTIME} WITH INHERIT FALSE, SET TRUE`
+    const lacking = (over: Parameters<typeof loginRow>[0] = {}) =>
+      fakeCluster({
+        canCreate: { [TARGET.url]: true },
+        roles: {
+          [TARGET.url]: [
+            commandWith(),
+            row({ name: "authenticated" }),
+            loginRow({ memberOf: [pair(COMMAND)], ...over }),
+          ],
+        },
+        admin: ["authenticated"],
+      })
+    const violations = (
+      outcome: Awaited<ReturnType<typeof ensurePlatformRoles>>
+    ) => (outcome.refusal ?? []).map((d) => [d.code, d.params?.violation])
+
+    it("adds the missing pair, names it, and adds nothing on a second run", async () => {
+      const { dbs, writes } = lacking()
+      expect(await ensurePlatformRoles(dbs, [BOTH[0]!], WITH_LOGIN)).toEqual({
+        created: [
+          { server: "target", name: COMMAND, outcome: "present" },
+          {
+            server: "target",
+            name: RUNTIME,
+            outcome: "present",
+            added: ["authenticated"],
+          },
+        ],
+      })
+      expect(writes.map((w) => w.sql)).toEqual([
+        "SET LOCAL createrole_self_grant = ''",
+        "SAVEPOINT platform_membership",
+        AUTH_PAIR,
+        "RELEASE SAVEPOINT platform_membership",
+      ])
+      writes.length = 0
+      expect(await ensurePlatformRoles(dbs, [BOTH[0]!], WITH_LOGIN)).toEqual({
+        created: [
+          { server: "target", name: COMMAND, outcome: "present" },
+          { server: "target", name: RUNTIME, outcome: "present" },
+        ],
+      })
+      expect(writes.map((w) => w.sql)).toEqual([
+        "SET LOCAL createrole_self_grant = ''",
+      ])
+    })
+
+    it.each([
+      {
+        case: "INHERIT TRUE on a present parent",
+        memberOf: [pair(COMMAND, { inherit: true })],
+        violation: `membership-option:${COMMAND}`,
+      },
+      {
+        case: "ADMIN on a present parent",
+        memberOf: [pair(COMMAND, { admin: true })],
+        violation: `membership-option:${COMMAND}`,
+      },
+      {
+        case: "a parent outside its profile",
+        memberOf: [pair(COMMAND), pair("stranger")],
+        violation: "member-of:stranger",
+      },
+      {
+        case: "a login attribute out of shape",
+        memberOf: [pair(COMMAND)],
+        attributes: { inherit: true },
+        violation: "inherit",
+      },
+    ])(
+      "refuses $case instead of adding the missing pair",
+      async ({ memberOf, attributes, violation }) => {
+        const { dbs, writes } = lacking({ memberOf, attributes })
+        const outcome = await ensurePlatformRoles(dbs, [BOTH[0]!], WITH_LOGIN)
+        expect(outcome.created).toEqual([])
+        expect(violations(outcome)).toEqual([
+          ["plan.platform-role-shape", violation],
+        ])
+        expect(writes).toEqual([])
+      }
+    )
+
+    it("refuses with the exact GRANT when the session lacks ADMIN on the parent", async () => {
+      const { dbs, writes } = fakeCluster({
+        canCreate: { [TARGET.url]: true },
+        roles: {
+          [TARGET.url]: [
+            commandWith(),
+            row({ name: "authenticated" }),
+            loginRow({ memberOf: [pair(COMMAND)] }),
+          ],
+        },
+      })
+      expect(await ensurePlatformRoles(dbs, [BOTH[0]!], WITH_LOGIN)).toEqual({
+        created: [{ server: "target", name: COMMAND, outcome: "present" }],
+        refusal: [
+          expect.objectContaining({
+            code: "roles.membership-grant-denied",
+            params: {
+              role: RUNTIME,
+              parent: "authenticated",
+              server: "target",
+              statement: AUTH_PAIR,
+            },
+          }),
+        ],
+      })
+      expect(writes.filter((w) => w.sql.includes(RUNTIME))).toEqual([])
+    })
+
+    it("refuses with the exact GRANT when the grant fails between the phases", async () => {
+      const { dbs } = fakeCluster({
+        canCreate: { [TARGET.url]: true },
+        roles: {
+          [TARGET.url]: [
+            commandWith(),
+            row({ name: "authenticated" }),
+            loginRow({ memberOf: [pair(COMMAND)] }),
+          ],
+        },
+        admin: ["authenticated"],
+        grantDenied: "authenticated",
+      })
+      expect(await ensurePlatformRoles(dbs, [BOTH[0]!], WITH_LOGIN)).toEqual({
+        created: [
+          { server: "target", name: COMMAND, outcome: "present" },
+          { server: "target", name: RUNTIME, outcome: "present" },
+        ],
+        refusal: [
+          expect.objectContaining({
+            code: "roles.membership-grant-denied",
+            params: expect.objectContaining({ statement: AUTH_PAIR }),
+          }),
+        ],
+      })
+    })
+
+    it("never adds a membership to a check-only login role", async () => {
+      const { dbs, writes } = lacking()
+      expect(await ensurePlatformRoles(dbs, [BOTH[0]!], CHECK_ONLY)).toEqual({
+        created: [{ server: "target", name: COMMAND, outcome: "present" }],
+      })
+      expect(writes.filter((w) => w.sql.includes(RUNTIME))).toEqual([])
+    })
   })
 })

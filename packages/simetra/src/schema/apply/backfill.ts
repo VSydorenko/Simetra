@@ -339,6 +339,120 @@ export function defaultsBeforeNotNull(
   return out
 }
 
+/** Один оператор дії — `CREATE TRIGGER`, інакше `undefined`. */
+function createdTrigger(
+  sql: string,
+  parse: SqlParser
+): { isconstraint?: boolean; replace?: boolean } | undefined {
+  const result = parse(sql)
+  if (!result.ok || result.statements.length !== 1) return undefined
+  const stmt = result.statements[0]!.stmt
+  return "CreateTrigStmt" in stmt ? stmt.CreateTrigStmt : undefined
+}
+
+/** Один оператор дії — `DROP TRIGGER` рівно одного тригера. */
+function dropsOneTrigger(sql: string, parse: SqlParser): boolean {
+  const result = parse(sql)
+  if (!result.ok || result.statements.length !== 1) return false
+  const stmt = result.statements[0]!.stmt
+  return (
+    "DropStmt" in stmt &&
+    stmt.DropStmt.removeType === "OBJECT_TRIGGER" &&
+    (stmt.DropStmt.objects ?? []).length === 1
+  )
+}
+
+const sameTrigger = (a: EngineObjectRef, b: EngineObjectRef): boolean =>
+  a.kind === "trigger" &&
+  b.kind === "trigger" &&
+  a.schema === b.schema &&
+  a.table === b.table &&
+  a.name === b.name
+
+/**
+ * Pairs of engine actions `DROP TRIGGER` + `CREATE TRIGGER` of the same
+ * trigger (name and table) become one `CREATE OR REPLACE TRIGGER` action at
+ * the place of the create: it produces the trigger and destroys nothing.
+ *
+ * Чому: pg-delta міняє визначення тригера лише заміною (`def: "replace"`), а
+ * `DROP TRIGGER` вимагає власника таблиці. На чужій таблиці (таблиця
+ * ідентичності профілю `postgres`) роль застосування має лише `TRIGGER`,
+ * якого `CREATE OR REPLACE TRIGGER` досить. Пара лишається як є, коли
+ * злиття могло б змінити наслідок: тригер обмеження (живий чи бажаний —
+ * `OR REPLACE` для нього Postgres не приймає); межа коміту чи
+ * нетранзакційна дія між ними (інша фаза); дія між ними щось знімає (старий
+ * тригер міг його тримати) чи чіпає таблицю тригера (зміну колонки, яку
+ * читає визначення, живий тригер заборонив би).
+ */
+export function triggerReplacements(
+  actions: readonly EngineAction[],
+  source: CatalogModel,
+  parse: SqlParser
+): EngineAction[] {
+  const out = [...actions]
+  for (let c = 0; c < out.length; c++) {
+    const create = out[c]!
+    const created = createdTrigger(create.sql, parse)
+    const [ref] = create.produced
+    if (
+      created === undefined ||
+      created.isconstraint === true ||
+      created.replace === true ||
+      create.produced.length !== 1 ||
+      ref?.kind !== "trigger" ||
+      ref.table === undefined ||
+      create.destroys.length > 0
+    )
+      continue
+    const d = out.findIndex(
+      (a, i) =>
+        i < c &&
+        a.destroyed.length === 1 &&
+        a.destroys.length === 1 &&
+        a.produces.length === 0 &&
+        sameTrigger(a.destroyed[0]!, ref) &&
+        dropsOneTrigger(a.sql, parse)
+    )
+    if (d < 0) continue
+    const live = source.units.find(
+      (u) =>
+        u.class === "trigger" &&
+        u.identity === `trigger:${ref.schema}.${ref.table}.${ref.name}`
+    )
+    // Живого визначення немає — злиття не довести, пара лишається
+    const liveTrigger =
+      live === undefined ? undefined : createdTrigger(live.sql, parse)
+    if (liveTrigger === undefined || liveTrigger.isconstraint === true) continue
+    const span = out.slice(d, c + 1)
+    const between = out.slice(d + 1, c)
+    const onTable = (r: EngineObjectRef): boolean =>
+      r.schema === ref.schema &&
+      (r.table === ref.table || (r.kind === "table" && r.name === ref.table))
+    const samePhase =
+      span.every((a) => a.transactionality === "transactional") &&
+      span.every((a) => !a.newSegmentBefore)
+    const clear = between.every(
+      (a) =>
+        a.destroys.length === 0 &&
+        ![...a.produced, ...a.destroyed, ...a.consumed].some(onTable) &&
+        !a.lockedTables.some(
+          (t) => t.schema === ref.schema && t.name === ref.table
+        )
+    )
+    if (!samePhase || !clear) continue
+    const sql = create.sql.replace(
+      /^(\s*)CREATE\s+TRIGGER\b/i,
+      "$1CREATE OR REPLACE TRIGGER"
+    )
+    if (createdTrigger(sql, parse)?.replace !== true)
+      throw new Error(`internal: not a CREATE OR REPLACE TRIGGER: ${sql}`)
+    out[c] = { ...create, sql, destroys: [], destroyed: [] }
+    out.splice(d, 1)
+    c--
+  }
+  return out
+}
+
 /**
  * Чи default бажаної колонки діє на момент кроку заповнення: кожна
  * зміна default колонки стоїть до дії `SET NOT NULL`, і остання з них його

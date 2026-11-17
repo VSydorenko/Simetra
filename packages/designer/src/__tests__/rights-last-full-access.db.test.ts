@@ -11,8 +11,9 @@ import {
   profileLayer,
   writeRoles,
   setLocalSetting,
+  waitForLock,
 } from "../../../simetra/test/support"
-import { inTarget, ownerLoginOf, waitForLock } from "./support/db"
+import { inTarget, ownerLoginOf } from "./support/db"
 
 /**
  * Останнього носія перевіряємо двома з'єднаннями після реального COMMIT:

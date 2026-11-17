@@ -23,7 +23,12 @@ import { COMPANY, ID, catalog, rootCatalog } from "./fixtures"
  */
 
 export const USER = "44444444-4444-4444-8444-444444444444"
-export const session = { sub: "user-1", role: "authenticated" }
+// Claim аноніма — явно: сесію без нього рантайм відмовляє ще до бази.
+export const session = {
+  sub: "user-1",
+  role: "authenticated",
+  is_anonymous: false,
+}
 export const CLIENT = { kind: "Catalog" as const, name: "Client" }
 export const RIGHTS = { kind: "Catalog" as const, name: "RightsRole" }
 export const TICKET = { kind: "Catalog" as const, name: "Ticket" }
@@ -79,7 +84,8 @@ export const READ_BEGIN = {
 export const readSetup = (
   role = "simetra_command",
   statement = "15000",
-  guard = "16000"
+  guard = "16000",
+  claims: object = session
 ) => ({
   text:
     CLAIMS.text +
@@ -87,7 +93,7 @@ export const readSetup = (
     ", CASE WHEN current_setting('server_version_num')::int >= 170000" +
     " THEN set_config('transaction_timeout', $3, true) END" +
     ", set_config('role', $4, true)",
-  params: [JSON.stringify(session), statement, guard, role],
+  params: [JSON.stringify(claims), statement, guard, role],
 })
 /** Епоха версій бази — оператор після налаштування, уже під роллю читання. */
 export const EPOCH = {
@@ -128,11 +134,27 @@ export type Override = (
   params: readonly (string | null)[]
 ) => Answer | undefined
 
+/** Рядок фактів ролі входу без жодного привілею: рантайм створюється. */
+export const LOGIN_FACTS_NONE = {
+  owner: "f",
+  superuser: "f",
+  bypassrls: "f",
+  createrole: "f",
+  server_files: "f",
+  read_all_data: "f",
+  write_all_data: "f",
+  database_owner: "f",
+  provider_login: "f",
+  service: "f",
+}
+
 /** Відповіді бази за замовчуванням; `override` — лише те, про що кейс. */
 export function answer(text: string): Answer {
   if (text.includes("current_user_id")) return { rows: [{ user_id: USER }] }
   if (text.includes("applied_snapshot_hash"))
     return { rows: [{ hash: "hash-1" }] }
+  // Факти ролі входу — раніше за членство: той самий `pg_has_role` у тексті.
+  if (text.includes("AS provider_login")) return { rows: [LOGIN_FACTS_NONE] }
   if (text.includes("pg_has_role")) return { rows: [{ member: "t" }] }
   // База без рядка епохи: функція відповідає `NULL`.
   if (text.includes("row_version_epoch")) return { rows: [{ epoch: null }] }

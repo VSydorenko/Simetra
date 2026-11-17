@@ -42,7 +42,7 @@ select is((SELECT rolcanlogin AND NOT rolinherit AND NOT rolsuper
     AND NOT rolreplication
   FROM pg_roles WHERE rolname = 'simetra_runtime'), true,
   'simetra_runtime has LOGIN and no INHERIT or privileged attribute');
--- Рівно дві пари: роль команд і роль запиту, кожна лише через SET ROLE.
+-- Рівно три пари: роль команд і дві ролі запиту, кожна лише через SET ROLE.
 -- `name::text` несе колацію "C", літерали VALUES — типову: без явного
 -- COLLATE results_eq не може порівняти рядки.
 select results_eq(
@@ -50,9 +50,10 @@ select results_eq(
     FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid
     WHERE m.member = to_regrole('simetra_runtime')
     ORDER BY 1$$,
-  $$VALUES ('authenticated', false, false, true),
+  $$VALUES ('anon', false, false, true),
+    ('authenticated', false, false, true),
     ('simetra_command', false, false, true)$$,
-  'simetra_runtime belongs only to simetra_command and authenticated, with INHERIT FALSE, SET TRUE');
+  'simetra_runtime belongs only to simetra_command, authenticated and anon, with INHERIT FALSE, SET TRUE');
 -- Роль команд і роль запиту не входять одна в одну: інакше SET ROLE
 -- однієї давав би права другої.
 select is((SELECT count(*) FROM pg_auth_members m

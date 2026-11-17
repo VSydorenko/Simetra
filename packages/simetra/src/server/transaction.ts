@@ -53,8 +53,12 @@ export interface RuntimeState {
   readTimeout: number
   /** Time budget of one server read transaction, all its parts, ms (P4-B spec §4.2). */
   readBudgetMs: number
-  /** The request role of reads; `undefined` — the fallback path (§6.11). */
-  readRole: string | undefined
+  /**
+   * The request roles of reads by session kind: `user` `undefined` — the
+   * fallback path (§6.11); `anonymous` `undefined` — the profile reads no
+   * anonymous session.
+   */
+  readRoles: { user?: string; anonymous?: string }
   /** Time budget of one `run` call with its retries, ms (P4-B spec §7.1). */
   budgetMs: number
   /** `lock_timeout` of a command transaction, ms. */

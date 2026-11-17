@@ -524,6 +524,8 @@ describe("foreignChanges", () => {
       consumes: refs.map((r) => `${r.kind}:${r.schema}.${r.name}`),
       consumed: refs,
     })
+  // Жива ціль без об'єктів: дія, що створює, — нове створення
+  const LIVE: CatalogModel = { tables: [], enumTypes: [], units: [] }
   const applied: CatalogModel = {
     tables: [
       {
@@ -568,7 +570,7 @@ describe("foreignChanges", () => {
     // Двигун адресує обмеження домену полем `table` з іменем домену
     ["a constraint of a domain", ref("constraint", "d_check", "d")],
   ])("keeps the exception for %s of the last applied state", (_n, own) => {
-    expect(foreignChanges([drop(own)], applied, 0)).toEqual(new Set())
+    expect(foreignChanges([drop(own)], applied, LIVE, 0)).toEqual(new Set())
   })
 
   it.each([
@@ -582,7 +584,7 @@ describe("foreignChanges", () => {
     ["a rule", ref("rule", "r", "t")],
   ])("drops the exception for %s outside it", (_n, foreign) => {
     // Наскрізна нумерація: дія двигуна після двох кроків наміру — `s3`
-    expect(foreignChanges([drop(), drop(foreign)], applied, 1)).toEqual(
+    expect(foreignChanges([drop(), drop(foreign)], applied, LIVE, 1)).toEqual(
       new Set(["s3"])
     )
   })
@@ -591,8 +593,12 @@ describe("foreignChanges", () => {
     // Намір промоції перейменував таблицю: marker знає її під старим ім'ям
     const renamed = ref("constraint", "t_c_check", "t_new")
     const back = (r: ReturnType<typeof ref>) => ({ ...r, table: "t" })
-    expect(foreignChanges([drop(renamed)], applied, 0)).toEqual(new Set(["s1"]))
-    expect(foreignChanges([drop(renamed)], applied, 0, back)).toEqual(new Set())
+    expect(foreignChanges([drop(renamed)], applied, LIVE, 0)).toEqual(
+      new Set(["s1"])
+    )
+    expect(foreignChanges([drop(renamed)], applied, LIVE, 0, back)).toEqual(
+      new Set()
+    )
   })
 
   it("classifies a foreign drop as a relaxation, recreated or not", () => {
@@ -607,7 +613,7 @@ describe("foreignChanges", () => {
       verb: "create",
       produces: ["index:app.other_idx"],
     })
-    const foreign = foreignChanges([dropIndex, createIndex], applied, 0)
+    const foreign = foreignChanges([dropIndex, createIndex], applied, LIVE, 0)
     expect(
       classifySteps([dropIndex, createIndex], UNIQUE, parse, 0, {
         foreign,
@@ -622,17 +628,18 @@ describe("foreignChanges", () => {
   it("marks an in-place redefinition of a foreign object", () => {
     // Функцію двигун перевизначає `CREATE OR REPLACE`: дія `alter` без
     // produces/destroys, суб'єкт — перший серед вжитих
-    expect(foreignChanges([alter(ref("function", "g"))], applied, 0)).toEqual(
-      new Set(["s1"])
-    )
     expect(
-      foreignChanges([alter(ref("policy", "p", "t"))], undefined, 0)
+      foreignChanges([alter(ref("function", "g"))], applied, LIVE, 0)
+    ).toEqual(new Set(["s1"]))
+    expect(
+      foreignChanges([alter(ref("policy", "p", "t"))], undefined, LIVE, 0)
     ).toEqual(new Set(["s1"]))
     // Власна функція, чиє тіло читає чужу таблицю: залежність — не суб'єкт
     expect(
       foreignChanges(
         [alter(ref("function", "f"), ref("table", "other"))],
         applied,
+        LIVE,
         0
       )
     ).toEqual(new Set())
@@ -640,6 +647,7 @@ describe("foreignChanges", () => {
       foreignChanges(
         [alter(ref("trigger", "tr", "t"), ref("function", "g"))],
         applied,
+        LIVE,
         0
       )
     ).toEqual(new Set())
@@ -653,7 +661,7 @@ describe("foreignChanges", () => {
       produced: [ref("function", "g")],
     })
     expect(
-      foreignChanges([create, alter(ref("function", "g"))], undefined, 0)
+      foreignChanges([create, alter(ref("function", "g"))], undefined, LIVE, 0)
     ).toEqual(new Set())
     // Суб'єкт без схеми й імені (грант): структурного посилання немає
     expect(
@@ -665,6 +673,7 @@ describe("foreignChanges", () => {
           }),
         ],
         applied,
+        LIVE,
         0
       )
     ).toEqual(new Set())
@@ -672,11 +681,11 @@ describe("foreignChanges", () => {
 
   it("drops the exception for every object on the first apply", () => {
     expect(
-      foreignChanges([drop(ref("index", "t_c_idx"))], undefined, 0)
+      foreignChanges([drop(ref("index", "t_c_idx"))], undefined, LIVE, 0)
     ).toEqual(new Set(["s1"]))
     // Стовпець — не об'єкт заміни: його клас дає втрата даних
     expect(
-      foreignChanges([drop(ref("column", "c", "t"))], undefined, 0)
+      foreignChanges([drop(ref("column", "c", "t"))], undefined, LIVE, 0)
     ).toEqual(new Set())
   })
 })

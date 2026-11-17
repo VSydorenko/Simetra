@@ -677,7 +677,7 @@ on another overload of the same name is not affected.
 `simetra_command` (`NOLOGIN NOINHERIT`, on the target and the shadow server)
 and, when a project file is present, the runtime login role `simetra_runtime`
 on the target only (`LOGIN NOINHERIT`, a member of `simetra_command` and, for
-`supabase`, of `authenticated`, each `WITH INHERIT FALSE, SET TRUE`). It reads
+`supabase`, of `authenticated` and `anon`, each `WITH INHERIT FALSE, SET TRUE`). It reads
 `database.provider` from the project file; without a project file it skips the
 login role, and the output says why. The operator sets the login role's
 password; the platform keeps no secrets.
@@ -685,7 +685,10 @@ password; the platform keeps no secrets.
 The login role needs `ADMIN OPTION` on each of its parent roles in the role
 that runs `roles`. Without it `roles` still creates the grant roles, but
 refuses the login role with `roles.admin-option-missing` and does not create
-it. An existing role is only checked, never changed.
+it. An existing role is only checked, with one change: after upgrading
+Simetra, run `roles` again on an existing database; it adds a missing
+membership of the login role in a parent of its profile, or refuses with
+`roles.membership-grant-denied`, which names the `GRANT` to run.
 
 ### The `postgres` provider
 
@@ -696,7 +699,14 @@ superuser DSN is not the one `plan` and `apply` use). It creates the roles of
 the profile, the application database owned by `simetra_owner`,
 `plpgsql_check` in that database, and the sealed template database
 `simetra_template` that shadows and proof copies are built from. Running it
-again converges the declared state and creates nothing. The spec of the
+again converges the declared state and creates nothing.
+
+The identity provider's own roles get their grants here too: the role of the
+platform owner receives `USAGE` on the `better_auth` schema and `TRIGGER` and
+`REFERENCES` on `better_auth."user"`, so the provision triggers and the foreign
+keys of the model can sit on the account table. Before the identity provider's
+migration has created that table, the table grants are skipped and the output
+says so; run `roles` again after the migration. The spec of the
 profile has the role set and the reasons:
 `docs/superpowers/specs/2026-11-08-postgres-profile-design.md` §3.
 
@@ -724,9 +734,36 @@ otherwise:
 - `plan.shadow-base-unsupported` — a separate shadow server is not supported
   on `postgres`; drop `--shadow-url-env`.
 
+- `plan.identity-table-missing` — the model needs provision triggers on the
+  account table of the identity provider and the connected role cannot place
+  them: reason `table` means the table does not exist yet (run the provider's
+  migration first), reason `privilege` means the role lacks `USAGE` on its
+  schema or `TRIGGER` on the table (run `roles` again as the superuser).
+- `plan.identity-trigger-locked` — on `postgres` only the owner of the account
+  table can remove or enable a provision trigger on it, and `plan` does not run
+  as that owner: reason `removed` means the plan drops a trigger, reason
+  `disabled` means it would enable a trigger that is disabled. Do the change by
+  hand as the table owner.
+
 `plan.platform-role-shape` with the violation `request-role:<role>` means an
 API request role (such as `authenticated`) and a platform role are members of
 each other in some form, even `ADMIN` alone; revoke that membership.
+
+### Runtime login and anonymous sessions
+
+The runtime refuses to start with `command.privileged-login` when its login
+role reaches a power it must not hold, itself or through a membership; the
+`reason` names the first fact found: `owner`, `superuser`, `bypassrls`,
+`createrole`, `server-files`, `read-all-data`, `write-all-data`,
+`database-owner` (the login owns the current database), `provider-login` or
+`service`. Use the
+dedicated runtime login role `simetra_runtime`, not an owner, a superuser or a
+provider login.
+
+An anonymous session is a guest and reads as one. On a provider whose
+identity data marks anonymous sessions with a claim, a session that has a
+subject but no anonymous claim is refused with `command.unauthenticated`
+before any database work: the claim must be present, `true` or `false`.
 
 ## Reading past row-level security
 

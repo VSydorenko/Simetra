@@ -178,7 +178,7 @@ Postgres»](2026-10-01-platform-in-postgres-design.md) §9, п. 1 і п. 4) на
 | Роль | Атрибути | Членство |
 | --- | --- | --- |
 | `simetra_command` | `NOLOGIN NOINHERIT` | без змін (спека прав §5.3) |
-| `simetra_runtime` | `LOGIN NOINHERIT`, без пароля від платформи | член `simetra_command`; у профілі `supabase` — ще й ролі запиту користувача (`PROVIDER_API_ROLES.supabase.user`); обидва `WITH INHERIT FALSE, SET TRUE`; у профілі `postgres` — ще й `simetra_user` та `simetra_anon` (спека профілю `postgres` §3.1); рядка `simetra_signals` у `roles` немає до блоку ПГ-4 |
+| `simetra_runtime` | `LOGIN NOINHERIT`, без пароля від платформи | член `simetra_command`; у профілі `supabase` — ще й члени `authenticated` і `anon` (ролі запиту користувача й аноніма, `PROVIDER_API_ROLES.supabase`), обидва `WITH INHERIT FALSE, SET TRUE`; у профілі `postgres` — ще й `simetra_user` та `simetra_anon` (спека профілю `postgres` §3.1); рядка `simetra_signals` у `roles` немає до блоку ПГ-4 |
 
 Інваріанти, які тримає тест членства ролей і гейт:
 
@@ -211,7 +211,15 @@ Postgres»](2026-10-01-platform-in-postgres-design.md) §9, п. 1 і п. 4) на
 `database.provider` файлу проєкту (новий доступ інструмента — читання файлів
 проєкту); без файлу проєкту `database.provider` невідомий, тож роль входу не
 створюється, і вивід `roles` називає пропуск і причину; наявну роль входу
-`roles` без файлу лише звіряє — з батьками, дозволеними будь-яким профілем. `ensurePlatformRoles`
+`roles` без файлу лише звіряє — з батьками, дозволеними будь-яким профілем.
+Наявній ролі входу `roles` з файлом проєкту додає відсутнє членство в батьку
+її профілю (`LOGIN_ROLE_PARENTS`) — рівно пару `WITH INHERIT FALSE, SET TRUE`,
+як при створенні, і вивід називає додане: базу, створену до нового батька
+профілю, оновлює повторний `roles`, а не ручний SQL. Інше не змінюється:
+членство іншої форми, зайвий батько чи інше порушення — та сама відмова
+`plan.platform-role-shape`, без тихого виправлення. Профіль `postgres` готує
+кластер окремим шляхом ([спека профілю postgres](2026-11-08-postgres-profile-design.md) §3.4), і там брак членства лишається
+відмовою форми. `ensurePlatformRoles`
 приймає перелік імен, тож DB-тест інструмента працює на тегованих іменах
 (`packages/simetra/test/db/connection.ts`), а не на справжніх кластерних
 ролях стека. Правило «жодного члена з `SET`» послаблюється рівно для пар цієї
@@ -228,7 +236,9 @@ Postgres»](2026-10-01-platform-in-postgres-design.md) §9, п. 1 і п. 4) на
 входу, зокрема на `simetra_command`, створеній іншою роллю. Якщо `ADMIN` немає,
 `roles` створює ролі грантів, а на ролі входу відмовляє
 `roles.admin-option-missing` і її не створює: роль без членства в ролі запиту
-мовчки змінила б шлях читання. Запасний шлях серверного читання під
+мовчки змінила б шлях читання. Відсутнє членство наявної ролі входу без `ADMIN`
+на батьку — відмова `roles.membership-grant-denied`, параметри якої несуть
+точний `GRANT` для адміністратора; роль входу лишається як була. Запасний шлях серверного читання під
 `simetra_command` (§6.11) — явний вибір мінімальної доставки (§9), не неявна
 деградація.
 
@@ -450,7 +460,9 @@ await runtime.read(session, query)
 T3 передає дії `afterCommit` (`waitUntil` на Vercel, Рт17). `objectModules` —
 мапа «`"<kind>.<name>"` об'єкта → модуль об'єкта» (§6.4); невідомий об'єкт чи ключ модуля —
 відмова `createCommandRuntime`, а не першої команди. Під час створення T3
-також перевіряє членство `simetra_runtime` у ролі запиту профілю (Рт18);
+також перевіряє членство `simetra_runtime` у ролях запиту профілю (Рт18); першим
+оператором транзакції створення гейт судить факти ролі входу
+(`command.privileged-login`, спека профілю `postgres` §4.2 «Межа довіри»);
 `readFallback: true` — явний вибір запасного шляху читання §6.11 замість
 відмови `command.read-role-missing`.
 T3 не виконує I/O під час завантаження модуля, тож `createCommandRuntime`
@@ -970,12 +982,13 @@ INSERT OR UPDATE` лише на таблицях із `trackAuthor`, коли п
 | `command.invalid` | вхід не проходить Zod каталогу чи правила операції; масив ТЧ не називає наявного рядка ні в масиві, ні в `deleteIds` (`reason: "tabular-rows-missing"`, `path` — ТЧ; спека П4-B §7.1); `22023` ядра; поліморфна ціль; предвизначений рядок; цикл ієрархії (`DETAIL` — колонка батька, §6.6); `23503` — посилання перевіряє ядро (§6.6), тож це лише гонка; `22P02` значення фільтра читання; запит читання, що не проходить перевірку до бази (П4-B §4.1); об'єкт із модулем у MCP (`reason: "object-module"`, §6.14); межі запиту, команди й відповіді (спека П4-B Рд26, §7.1): `reason` `batch-too-large`, `tabular-too-large` (`path` — ТЧ), `too-large` (значення понад `maxBytes`), `payload-too-large` (тіло конверта), `response-too-large` (відповідь, яку не можна обрізати) | `path` — логічний шлях; для `23503` — реквізит за ім'ям FK-обмеження з каталогу (Postgres не заповнює `column`) |
 | `command.constraint` | `23502`, `23505` (не ключ), `23514` | `kind`, логічні реквізити з імені обмеження за каталогом |
 | `command.context` | `42501` з `MESSAGE 'command.context'` — дефект платформи, не застосунку | `detail` |
-| `command.unauthenticated` | `current_user_id()` = `NULL`; читання з claims без `sub` (§6.11); `subject` конверта даних ≠ `sub` сесії (спека П4-B §4.5) | `reason: "session-changed"` — для `subject` конверта |
+| `command.unauthenticated` | `current_user_id()` = `NULL`; читання з claims без `sub` (§6.11); немає claim аноніма в профілі з `anonymousClaim` (§6.11); `subject` конверта даних ≠ `sub` сесії (спека П4-B §4.5) | `reason: "session-changed"` — для `subject` конверта |
 | `command.stale-client` | запит форми передачі несумісний з каталогом сервера — і на записі, і на читанні (спека П4-B §10) | `object` — UUID об'єкта запиту |
 | `command.rejected` | `ctx.reject` | `reason` — код застосунку, `path` |
 | `command.nested`, `command.depth` | §6.5 | `command.depth` понад межу фаз `ctx.run` — `reason: "phases"` |
 | `command.retry-exhausted` | §6.5 | — |
 | `command.model-mismatch` | створення рантайму (§6.3) | обидва хеші |
+| `command.privileged-login` | створення рантайму: `session_user` досягає власника схеми `simetra`, ролі власника профілю, суперкористувача, `BYPASSRLS`, `CREATEROLE`, вбудованих ролей файлів і програм, `pg_read_all_data`, `pg_write_all_data`, власника поточної бази (`pg_database_owner`), ролі входу провайдера чи сервісної ролі профілю (спека профілю `postgres` §4.2) | `reason` — перша істинна з переліку `PRIVILEGED_LOGIN_REASONS` T0 (`packages/simetra/src/model/runtime/errors.ts`) у його порядку |
 | `command.read-role-missing` | створення рантайму: профіль вимагає роль запиту, а `simetra_runtime` не має членства `SET` у ній (Рт18) | роль |
 | `command.timeout` | `57014` (`statement_timeout`) читання (§6.11) і фаз запису; бюджет часу команди вичерпано (§6.5); збережений `25P04` чи `25P03` до надсилання `COMMIT` (з'єднання знищено) | — |
 | `command.busy` | `55P03` (`lock_timeout`): рядок тримає інша транзакція; автоповтору немає | — |
@@ -1022,6 +1035,10 @@ UUID v7 (платформна спека §13) лишає 74 випадкові 
   будівник і форму результату задає [спека П4-B](2026-11-05-p4-b-client-data-design.md) §4.1–§4.2;
 - claims без `sub` — `command.unauthenticated` до бази, як і команда (Рт8):
   інакше політики бачили б анонімний запит, а не користувача;
+- профіль з `anonymousClaim` ≠ `null`: claim `true` чи `"true"` — роль
+  аноніма профілю (`PROVIDER_API_ROLES[provider].anonymous`), `false` чи
+  `"false"` — роль користувача, відсутній чи інший — `command.unauthenticated`
+  до бази (команда теж; спека профілю `postgres` §4.4);
 - транзакція `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY` → один
   оператор налаштування: `statement_timeout` читання до кінця транзакції
   (опція рантайму, типово 15 с), claims (той самий оператор, що в кроці 2
@@ -1468,8 +1485,9 @@ SECURITY` (його буває лише в прийнятої `CustomTable`), а
 8. Колонки поза грантом (§6.2) не змінює жодна команда: ядро відмовляє
    `command.invalid` раніше за грант, а прямий запис — `42501`.
 9. Авторство під командою — завжди поточний користувач.
-10. Серверне читання бачить рівно те, що PostgREST з тими самими claims;
-    інваріант поширено на запит другої форми ([спека П4-B](2026-11-05-p4-b-client-data-design.md) §4.3).
+10. Серверне читання бачить рівно те, що PostgREST з тими самими claims
+    (для аноніма на `supabase` двері розходяться до B4: T3 читає за claim
+    аноніма, PostgREST — за claim `role`); інваріант поширено на запит другої форми ([спека П4-B](2026-11-05-p4-b-client-data-design.md) §4.3).
 11. Рядок ТЧ змінює й видаляє лише команда його власника; будь-яка зміна ТЧ
     командою підвищує версію власника.
 12. Знімок актора доповнює лише створення тенанта — правами `rootCreator`
