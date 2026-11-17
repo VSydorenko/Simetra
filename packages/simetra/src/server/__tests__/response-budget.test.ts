@@ -543,7 +543,7 @@ describe("fitRunResult", () => {
         tabularSections: { [SECTION]: [] },
       },
     ]
-    const result = { rows, changes: [change(1), change(2)] }
+    const result = { rows, changes: [change(1), change(2)], epoch: EPOCH }
     expect(
       fitRunResult(index, [update(link.id), update(sample.id)], result, HASH)
     ).toStrictEqual({
@@ -552,6 +552,7 @@ describe("fitRunResult", () => {
         { id: ID, version: "3", code_col: "b" },
       ],
       changes: result.changes,
+      epoch: EPOCH,
     })
   })
 
@@ -559,15 +560,55 @@ describe("fitRunResult", () => {
     const rows: WireRow[] = [{ id: ID, code: "x".repeat(5 * MIB) }]
     const changes = [change(1)]
     expect(
-      fitRunResult(index, [update(link.id)], { rows, changes }, HASH)
-    ).toStrictEqual({ changes })
+      fitRunResult(
+        index,
+        [update(link.id)],
+        { rows, changes, epoch: EPOCH },
+        HASH
+      )
+    ).toStrictEqual({ changes, epoch: EPOCH })
+  })
+
+  it("епоха входить у міру відповіді", () => {
+    const measure = (code: string, epoch: string | null) =>
+      jsonBytes({
+        ok: true,
+        value: { rows: [{ id: ID, code }], changes: [], epoch },
+        serverHash: HASH,
+      })
+    // Рядок, з яким відповідь з епохою на байт понад бюджет, а з `null` —
+    // у межах: різниця лише в довжині епохи.
+    const code = "x".repeat(RESPONSE_BUDGET_BYTES - measure("", EPOCH) + 1)
+    const rows: WireRow[] = [{ id: ID, code }]
+    expect(measure(code, null)).toBeLessThanOrEqual(RESPONSE_BUDGET_BYTES)
+    expect(
+      fitRunResult(
+        index,
+        [update(link.id)],
+        { rows, changes: [], epoch: EPOCH },
+        HASH
+      )
+    ).toStrictEqual({ changes: [], epoch: EPOCH })
+    expect(
+      fitRunResult(
+        index,
+        [update(link.id)],
+        { rows, changes: [], epoch: null },
+        HASH
+      )
+    ).toStrictEqual({ rows, changes: [], epoch: null })
   })
 
   it("ліниві колонки не рахуються в бюджет", () => {
     const rows: WireRow[] = [{ id: ID, archive_id: "x".repeat(5 * MIB) }]
     expect(
-      fitRunResult(index, [update(link.id)], { rows, changes: [] }, HASH)
-    ).toStrictEqual({ rows: [{ id: ID }], changes: [] })
+      fitRunResult(
+        index,
+        [update(link.id)],
+        { rows, changes: [], epoch: EPOCH },
+        HASH
+      )
+    ).toStrictEqual({ rows: [{ id: ID }], changes: [], epoch: EPOCH })
   })
 
   it.each<[string, WireOperation[], WireRow[]]>([
@@ -580,7 +621,7 @@ describe("fitRunResult", () => {
     ["об'єкт поза каталогом", [update(uuid(4242))], [{ id: ID }]],
   ])("%s — виняток (дефект сервера)", (_, operations, rows) => {
     expect(() =>
-      fitRunResult(index, operations, { rows, changes: [] }, HASH)
+      fitRunResult(index, operations, { rows, changes: [], epoch: EPOCH }, HASH)
     ).toThrow()
   })
 
@@ -597,8 +638,15 @@ describe("fitRunResult", () => {
         operation: "markDeletion",
       })
     )
-    const value = fitRunResult(index, [], { rows: [], changes }, HASH)
-    expect(value).toStrictEqual({ rows: [], changes })
-    expect(responseSize({ changes })).toBeLessThan(RESPONSE_BUDGET_BYTES / 10)
+    const value = fitRunResult(
+      index,
+      [],
+      { rows: [], changes, epoch: EPOCH },
+      HASH
+    )
+    expect(value).toStrictEqual({ rows: [], changes, epoch: EPOCH })
+    expect(responseSize({ changes, epoch: EPOCH })).toBeLessThan(
+      RESPONSE_BUDGET_BYTES / 10
+    )
   })
 })

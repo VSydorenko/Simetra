@@ -24,6 +24,7 @@ import {
 import {
   BRANCH,
   CLIENT,
+  EPOCH,
   COMMIT,
   MEMBER_ROW,
   OPEN,
@@ -173,6 +174,7 @@ describe("hook order", () => {
       ...OPEN,
       ...ticketCreatePhase(),
       ...clientPhase,
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -423,6 +425,7 @@ describe("rights phases in a batch", () => {
       ...assignPhase(THIRD),
       ...clientPhaseOf(OTHER),
       ...assignPhase(THIRD),
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -781,6 +784,7 @@ describe("hook failures", () => {
       ...OPEN,
       ...ticketCreatePhase(),
       ...clientPhase,
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -957,6 +961,7 @@ describe("depth and queue", () => {
       readRights(OTHER),
       ...ticketCreatePhase(),
       ...clientPhase,
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -988,6 +993,7 @@ describe("depth and queue", () => {
       ...ticketCreatePhase(),
       ...ticketCreatePhase(THIRD),
       ...clientPhase,
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -1018,6 +1024,7 @@ describe("depth and queue", () => {
       ...OPEN,
       readRights(OTHER),
       ...clientPhase,
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -1072,6 +1079,7 @@ describe("depth and queue", () => {
         params: [THIRD],
       },
       ...clientPhase,
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -1149,6 +1157,7 @@ describe("depth and queue", () => {
         params: ["10001"],
       },
       ...clientPhase,
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -1489,6 +1498,7 @@ describe("ctx lifetime", () => {
       ...OPEN,
       readRights(OTHER),
       ...clientPhase,
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -1587,7 +1597,7 @@ describe("afterCommit", () => {
     )
     await runtime.run(session, create)
     // Після `COMMIT` і `release()`.
-    expect(order).toEqual([`a:${OPEN.length + 4}`, "b"])
+    expect(order).toEqual([`a:${OPEN.length + 5}`, "b"])
   })
 
   it("hands the actions to defer", async () => {
@@ -1632,10 +1642,12 @@ describe("command.nested", () => {
   const TWO_COMMANDS = [
     ...OPEN,
     ...clientPhase,
+    EPOCH,
     COMMIT,
     { release: false },
     ...OPEN,
     ...rightsRolePhase(),
+    EPOCH,
     COMMIT,
     { release: false },
   ]
@@ -1773,6 +1785,7 @@ describe("tabular section arrays", () => {
       check([LINE, OTHER]),
       orderContext,
       orderCore([LINE]),
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -1792,6 +1805,7 @@ describe("tabular section arrays", () => {
       check([LINE]),
       orderContext,
       orderCore([LINE]),
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -1900,6 +1914,7 @@ describe("tabular section arrays", () => {
       ...OPEN,
       orderContext,
       orderCore([LINE]),
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -1936,6 +1951,7 @@ describe("tabular section arrays", () => {
       orderContext,
       orderCore([LINE]),
       ...clientPhase,
+      EPOCH,
       COMMIT,
       { release: false },
     ])

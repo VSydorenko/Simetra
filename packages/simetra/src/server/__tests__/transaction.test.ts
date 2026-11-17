@@ -21,6 +21,7 @@ import {
 import {
   BRANCH,
   CLIENT,
+  EPOCH,
   COMMIT,
   CREATE_ROOT,
   MEMBER_ROW,
@@ -50,14 +51,20 @@ import {
   type Override,
 } from "./harness"
 
+const VERSION_EPOCH = "e".repeat(64)
+
 describe("command transaction", () => {
   it("runs a create as the exact statement sequence", async () => {
-    const { db, runtime } = await setup()
+    // Епоха — після запису ядра, у тій самій транзакції (П4-B §7.2 п. 3).
+    const { db, runtime } = await setup((text) =>
+      text === EPOCH.text ? { rows: [{ epoch: VERSION_EPOCH }] } : undefined
+    )
     const result = await runtime.run(session, create)
     expect(db.calls).toEqual([
       ...OPEN,
       context("create", "client", ID),
       createCall,
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -73,8 +80,30 @@ describe("command transaction", () => {
           operation: "create",
         },
       ],
+      epoch: VERSION_EPOCH,
     })
   })
+
+  it.each<[string, Record<string, unknown>[]]>([
+    ["a value that is not 64 hex", [{ epoch: "not-hex" }]],
+    ["no row", []],
+  ])(
+    "fails with command.internal and rolls back when the epoch is %s",
+    async (_, rows) => {
+      const log = vi.fn()
+      const { db, runtime } = await setup(
+        (text) => (text === EPOCH.text ? { rows } : undefined),
+        { log }
+      )
+      expect(await failureOf(runtime.run(session, create))).toEqual({
+        code: "command.internal",
+      })
+      expect(db.calls).not.toContainEqual(COMMIT)
+      expect(log).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "database" })
+      )
+    }
+  )
 
   it("runs a batch of two phases with one row per operation", async () => {
     const { db, runtime } = await setup((text) =>
@@ -110,6 +139,7 @@ describe("command transaction", () => {
         "3",
         "true",
       ]),
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -135,6 +165,7 @@ describe("command transaction", () => {
       ...OPEN,
       context("delete", "client", ID),
       call("client_delete", "$1::uuid, $2::bigint", [ID, "5"]),
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -155,6 +186,7 @@ describe("command transaction", () => {
         JSON.stringify({ id: ID, code: "R" }),
         null,
       ]),
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -274,6 +306,7 @@ describe("command transaction", () => {
         { release: false },
         ...OPEN,
         ...phase,
+        EPOCH,
         COMMIT,
         { release: false },
       ])
@@ -312,6 +345,7 @@ describe("command transaction", () => {
       ...OPEN,
       context("create", "client", ID),
       createCall,
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -344,6 +378,7 @@ describe("command transaction", () => {
       ...OPEN,
       context("create", "client", ID),
       createCall,
+      EPOCH,
       COMMIT,
       ROLLBACK,
       { release: false },
@@ -515,7 +550,7 @@ describe("command transaction", () => {
         : undefined
     )
     await runtime.run(session, create)
-    const phase = [context("create", "client", ID), createCall, COMMIT]
+    const phase = [context("create", "client", ID), createCall, EPOCH, COMMIT]
     expect(db.calls).toEqual([
       ...OPEN,
       ...phase,
@@ -664,6 +699,7 @@ describe("scope root creation", () => {
         JSON.stringify({ title: "T" }),
         MEMBER_ROW
       ),
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -679,6 +715,7 @@ describe("scope root creation", () => {
           operation: "create",
         },
       ],
+      epoch: null,
     })
   })
 
@@ -808,6 +845,7 @@ describe("scope root creation", () => {
         { release: false },
         ...OPEN,
         ...phase,
+        EPOCH,
         COMMIT,
         { release: false },
       ])
@@ -912,6 +950,7 @@ describe("rights self-assignment", () => {
         JSON.stringify({ id: ID, subject_id: MEMBER, role_id: ROLE_ID }),
         null,
       ]),
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -951,6 +990,7 @@ describe("command time budget", () => {
       ...opened(commandClaims("1000", "250", "2000")),
       context("create", "client", ID),
       createCall,
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -965,6 +1005,7 @@ describe("command time budget", () => {
       statementTimeout("12346"),
       context("create", "client", ID),
       createCall,
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -1006,6 +1047,7 @@ describe("command time budget", () => {
       { release: false },
       ...opened(commandClaims("15000")),
       ...phase,
+      EPOCH,
       COMMIT,
       { release: false },
     ])
@@ -1089,7 +1131,13 @@ describe("COMMIT boundary", () => {
     expect(await failureOf(runtime.run(session, create))).toEqual({
       code: "command.unavailable",
     })
-    expect(db.calls).toEqual([...OPEN, ...phase, COMMIT, { release: true }])
+    expect(db.calls).toEqual([
+      ...OPEN,
+      ...phase,
+      EPOCH,
+      COMMIT,
+      { release: true },
+    ])
   })
 
   it("maps 25P03 on the statement_timeout prelude of COMMIT to command.timeout", async () => {

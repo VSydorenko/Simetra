@@ -535,4 +535,33 @@ describe("read batch with known over the engine target", () => {
     expect(value.epoch).toBe(epoch)
     expect(value.items).toEqual([{ ok: true, value: { rows: [0] } }])
   })
+
+  // Епоха `run` (спека П4-B §7.2 п. 3, §7.4) — той самий оператор, що й у
+  // читанні, у транзакції команди після запису: ядро звіряє її з епохою
+  // сховища перед write-back, тож вона мусить збігатися з епохою читання
+  // тієї самої бази й іти за скиданням.
+  it("a run carries the epoch a read of the same base answers; after a reset — the new one", async () => {
+    const [id] = await seedGauges(env.me.org, 1)
+    const rt = await runtime()
+    const card = { object: GAUGE, id: id! }
+    const update = (version: unknown) =>
+      rt.run(env.me.session, {
+        action: "update",
+        object: GAUGE,
+        id: id!,
+        expectedVersion: version as number,
+        values: { reading: 1 },
+      })
+    const before = await full(rt, env.me.session, card)
+    const first = await update(before.rows[0]!.version)
+    expect(first.epoch).toMatch(HEX64)
+    expect(first.epoch).toBe(before.epoch)
+    // Скидання бере `LOCK … IN SHARE MODE` на таблиці видів: між командами
+    // воно не чекає нічого й дає нову епоху.
+    await env.owner.query("SELECT simetra.reset_row_version_epoch()")
+    const after = await full(rt, env.me.session, card)
+    expect(after.epoch).not.toBe(before.epoch)
+    const second = await update(after.rows[0]!.version)
+    expect(second.epoch).toBe(after.epoch)
+  })
 })
