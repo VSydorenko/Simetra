@@ -280,6 +280,35 @@ describe("checkDefinerReads: SECURITY DEFINER functions", () => {
     ])
   })
 
+  // Виняток функції множини — за ідентичністю (схема, ім'я, аргументи), а не
+  // за ім'ям: перевантаження з аргументами й однойменна функція іншої схеми
+  // — звичайні definer-функції.
+  it.each([
+    {
+      name: "a definer overload of the set function",
+      file: SCOPE_FUNCTIONS_FILE,
+      sql: `CREATE FUNCTION public.team_ids(a uuid) RETURNS SETOF uuid LANGUAGE sql STABLE ${CLOSED} AS $$ SELECT a $$;\n`,
+      fn: "public.team_ids",
+    },
+    {
+      name: "a same-named definer function of another schema",
+      file: "sql/app/rpc.sql",
+      sql: `CREATE FUNCTION app.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE ${CLOSED} AS $$ SELECT NULL::uuid $$;\n`,
+      fn: "app.team_ids",
+    },
+  ])("refuses $name", async ({ file, sql, fn }) => {
+    const set = `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE ${CLOSED} AS $$ SELECT id FROM ${TASK} $$;\n`
+    const sources =
+      file === SCOPE_FUNCTIONS_FILE
+        ? { [SCOPE_FUNCTIONS_FILE]: set + sql }
+        : { [SCOPE_FUNCTIONS_FILE]: set, [file]: sql }
+    const result = await compiled(sources, [teamScopeKind()])
+    const line = file === SCOPE_FUNCTIONS_FILE ? 2 : 1
+    expect(brief(result.diagnostics, CODES)).toEqual([
+      refused(fn, EVERYONE, file, line),
+    ])
+  })
+
   // Функції, яких не кличуть як RPC: функції множини й виміру кличе політика
   // від імені запиту, тригерну функцію — лише тригер.
   it.each<{ name: string; sql: Record<string, string>; layers: Layer[] }>([

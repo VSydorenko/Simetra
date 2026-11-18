@@ -95,10 +95,10 @@ export const readSetup = (
     ", set_config('role', $4, true)",
   params: [JSON.stringify(claims), statement, guard, role],
 })
-/** Епоха версій бази — оператор після налаштування, уже під роллю читання. */
 /** The row version epoch the default answers give. */
 export const HARNESS_EPOCH = "f".repeat(64)
 
+/** Епоха версій бази — оператор після налаштування, уже під роллю читання. */
 export const EPOCH = {
   text: 'SELECT "simetra"."row_version_epoch"() AS epoch',
   params: [],
