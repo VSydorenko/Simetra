@@ -13,6 +13,7 @@ import {
   OBJECTS,
   TASK,
   isCard,
+  isSection,
   key,
   readsOf,
   S,
@@ -558,12 +559,16 @@ describe("useRow", () => {
     // Шапку оновив зовнішній запис (сигнал), а рядки ТЧ ще старої версії.
     fake.edit(TASK, key(1), { title: "changed" })
     const row = fake.row(TASK, key(1))!
-    act(() => {
+    // Перечитування ТЧ за новою версією шапки стартує мікрозадачею: `act`
+    // його чекає, а відповідь тримає сервер.
+    fake.mode = "manual"
+    await act(async () => {
       core.commit(
         (w) =>
           w.apply(TASK, { rows: [row], absent: [] }, core.readEpoch(), null),
         core.token()
       )
+      await settle()
     })
     const shown = card.last().row
     expect(shown?.state).toBe("synced")
@@ -590,11 +595,19 @@ describe("useRow", () => {
   })
 
   /** A mounted card of task 1, editable before the case changes one fact. */
-  async function editableCard(options: Parameters<typeof makeRuntime>[0] = {}) {
+  async function editableCard(
+    options: Parameters<typeof makeRuntime>[0] = {},
+    tabularSections?: readonly string[]
+  ) {
     const made = makeRuntime(options)
     seed(made.fake, 1, 1)
+    made.fake.setLines(TASK, key(1), "lines", [{ ref: key(11), qty: 1 }])
     const card = mount(createRuntimeHolder(made.runtime), () =>
-      useRow({ object: TASK, id: key(1) })
+      useRow({
+        object: TASK,
+        id: key(1),
+        ...(tabularSections === undefined ? {} : { tabularSections }),
+      })
     )
     await flush()
     expect(card.last().editable).toBe(true)
@@ -683,8 +696,8 @@ describe("useRow", () => {
     expect(shown.editable).toBe(false)
   })
 
-  it("refresh re-reads the card and clears needsRefresh after the answer", async () => {
-    const { fake, core, card } = await editableCard()
+  it("refresh re-reads the header and the sections, needsRefresh clears after the answer", async () => {
+    const { fake, core, card } = await editableCard({}, ["lines"])
     act(() => {
       core.commit(
         (w) => w.markViews(TASK, { needsRefresh: true }),
@@ -692,9 +705,11 @@ describe("useRow", () => {
       )
     })
     expect(card.last().needsRefresh).toBe(true)
-    const reads = readsOf(fake, TASK).filter(isCard).length
+    const cards = readsOf(fake, TASK).filter(isCard).length
+    const sections = readsOf(fake, TASK).filter(isSection).length
     act(() => card.last().refresh())
-    expect(readsOf(fake, TASK).filter(isCard).length).toBe(reads + 1)
+    expect(readsOf(fake, TASK).filter(isCard).length).toBe(cards + 1)
+    expect(readsOf(fake, TASK).filter(isSection).length).toBe(sections + 1)
     expect(card.last().needsRefresh).toBe(true)
     await act(async () => {
       fake.deliverAll()
