@@ -771,9 +771,11 @@ A `SECURITY DEFINER` function runs as its owner, the applying role, which
 bypasses row-level security (`FORCE ROW LEVEL SECURITY` does not stop it).
 One that a role of the API (or `PUBLIC`) may `EXECUTE` fails `compile` with
 `sql.definer-caller-unchecked` in any `.sql` file, SQL debt included, whatever
-it reads: the check of its caller has no declaration yet. The forms the
-platform calls itself are exempt: subscription handlers, scope set functions
-and dimension value functions.
+it reads, until it names the check of its caller. Two ways out: link it to a
+scope kind as its set function (or to an access dimension as its values
+function), or declare its signature with the named check. After `introspect`
+from scratch, set functions come back unlinked and fail this way until you
+link them.
 
 `sql.definer-reads-rls` (a warning) marks a view that reads a table under
 row-level security as its owner, so the caller's policies do not apply, while
