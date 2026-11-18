@@ -7,7 +7,7 @@ import { DataError } from "../errors"
 import type { Defects } from "./defects"
 import { keyId } from "./epoch"
 import { formOf, type Form, type ObjectState } from "./forms"
-import { refsOf } from "./include"
+import { includeKeys, refsOf } from "./include"
 import { lazyFieldStale, visibleRow } from "./object-store"
 import { sectionLinesStale } from "./section-store"
 import {
@@ -23,8 +23,9 @@ import {
   cursorOf,
   keysOfPages,
   type WindowCursor,
+  type WindowState,
 } from "./window"
-import { DISCARD_PAUSE_MS, type Session } from "./session"
+import { DISCARD_PAUSE_MS, type Scope, type Session } from "./session"
 import {
   LOADING,
   purgedSnapshot,
@@ -119,6 +120,24 @@ export interface Subset extends ReaderTarget {
   purged: boolean
   /** Set by `setVisible`; unset — visible while subscribed. */
   visible: boolean | undefined
+  /**
+   * Taken from a core snapshot and not yet subscribed: the snapshot holds the
+   * subset until the first subscription or `endHydration` (spec §6.6).
+   */
+  hydrated: boolean
+}
+
+/** The state of a view taken from a core snapshot (the hydration). */
+export interface AdoptedView {
+  /** The composition in list order: keys that have an entry in the store. */
+  readonly layout: readonly Key[]
+  /** Owned without being shown (a `full` filter drops them locally). */
+  readonly unshown: readonly Key[]
+  readonly window: WindowState | undefined
+  readonly atEnd: boolean
+  readonly truncated: boolean
+  /** The epoch of the hydration: the read epoch of a section it brings. */
+  readonly at: number
 }
 
 /** The view registry of a core. */
@@ -128,6 +147,16 @@ export interface SubsetRegistry {
   subsets(): Iterable<Subset>
   /** The held subset of a form, if any; throws on a refused form as `view` does. */
   find(spec: ViewSpec): Subset | undefined
+  /** The validated form of a spec; throws on a refused form as `view` does. */
+  formOf(spec: ViewSpec): Form
+  /**
+   * Creates the held subset of a form from a core snapshot, loaded and ready,
+   * and owns its rows (the hydration, inside its `commit`). The snapshot holds
+   * it until the first subscription.
+   */
+  adopt(scope: Scope, form: Form, state: AdoptedView): void
+  /** Lets go of the subsets the snapshot still holds: released after the delay. */
+  endHydration(): void
   /** Starts a load (single-flight: merges into one trailing request). */
   load(s: Subset): void
   /**
@@ -641,7 +670,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   }
 
   function idle(s: Subset) {
-    return s.listeners.size === 0 && s.preloads === 0
+    return s.listeners.size === 0 && s.preloads === 0 && !s.hydrated
   }
 
   function scheduleRelease(s: Subset) {
@@ -709,6 +738,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       recheck: false,
       purged: false,
       visible: undefined,
+      hydrated: false,
     }
     subsets.set(form.specKey, s)
     return s
@@ -885,8 +915,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         s.listeners.add(entry)
         if (s.releaseTimer !== undefined) clearTimeout(s.releaseTimer)
         s.releaseTimer = undefined
-        // Перша підписка знімає утримання `preload`.
+        // Перша підписка знімає утримання `preload` і знімка гідратації.
         s.preloads = 0
+        s.hydrated = false
         for (const timer of s.preloadTimers) clearTimeout(timer)
         s.preloadTimers.clear()
         start(s, true)
@@ -964,7 +995,65 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
 
     subsets: () => subsets.values(),
     find: (spec) => subsets.get(formOf(ctx, spec).specKey),
+    formOf: (spec) => formOf(ctx, spec),
     load,
+
+    adopt(scope, form, state) {
+      const s = acquire(form)
+      const o = form.object
+      const spec = form.spec
+      s.owned = diffOwn(ops, scope, o, new Set(), [
+        ...state.layout,
+        ...state.unshown,
+      ])
+      // Картка тримає склад із ключа форми, ТЧ складу не має.
+      if (spec.kind !== "card" && spec.kind !== "section") {
+        s.layout = state.layout.filter((key) => s.owned.has(key))
+        s.layoutSet = new Set(s.layout)
+      }
+      if (form.include.length > 0) {
+        const wanted = includeKeys(
+          form.include,
+          s.layout.flatMap((key) => {
+            const e = o.rows.get(key)
+            const values = e === undefined ? undefined : visibleRow(e)
+            return values === undefined ? [] : [values]
+          })
+        )
+        s.included = new Map(
+          [...wanted].map(([name, keys]) => [
+            name,
+            diffOwn(ops, scope, ctx.objectOf(name), new Set(), keys),
+          ])
+        )
+      }
+      if (spec.kind === "full" || spec.kind === "window") {
+        s.window = state.window
+        s.strategy = state.window === undefined ? "full" : "window"
+        s.atEnd = state.atEnd
+        s.truncated = state.truncated
+      }
+      if (spec.kind === "section") {
+        // Читання ТЧ, що пройшло до знімка, свіже на мить гідратації: `hide`
+        // власника лише після неї вимагає перечитування.
+        s.sectionRead = state.at
+        s.readStart = state.at
+      }
+      s.loaded = true
+      s.settled = true
+      s.status = "ready"
+      s.snapshot = undefined
+      s.dirty = true
+      s.hydrated = true
+    },
+
+    endHydration() {
+      for (const s of subsets.values()) {
+        if (!s.hydrated) continue
+        s.hydrated = false
+        if (idle(s)) scheduleRelease(s)
+      }
+    },
 
     afterCommit(closing) {
       const notify: Subset[] = []

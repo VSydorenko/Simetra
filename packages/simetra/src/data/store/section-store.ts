@@ -70,6 +70,11 @@ export interface SectionStore {
    * lines were dropped.
    */
   purgeScope(scope: Scope, scopeId: string | null): Key[]
+  /**
+   * Puts the lines of a core snapshot (the hydration) as they were read: the
+   * remembered owner version follows them, the way `put` leaves it.
+   */
+  restore(scope: Scope, owner: Key, section: string, entry: SectionEntry): void
   resetCompleteness(scope: Scope, owner: Key, section: string): void
   clearOwner(scope: Scope, owner: Key): void
   get(owner: Key, section: string): SectionEntry | undefined
@@ -257,6 +262,26 @@ export function createSectionStore(options: {
         if (sections.size === 0) drop(owner)
       }
       return dropped
+    },
+
+    restore(scope, owner, section, entry) {
+      scope.assert()
+      const sections = owners.get(owner) ?? new Map<string, SectionEntry>()
+      sections.set(section, {
+        ...entry,
+        versionEpoch: heldEpoch(entry.versionEpoch),
+      })
+      owners.set(owner, sections)
+      const seen = ownerVersions.get(owner)
+      if (
+        seen === undefined ||
+        differentEpochs(seen.versionEpoch, entry.versionEpoch) ||
+        entry.ownerVersion > seen.version
+      )
+        ownerVersions.set(owner, {
+          version: entry.ownerVersion,
+          versionEpoch: heldEpoch(entry.versionEpoch),
+        })
     },
 
     resetCompleteness(scope, owner, section) {

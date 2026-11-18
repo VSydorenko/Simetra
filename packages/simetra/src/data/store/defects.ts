@@ -64,6 +64,10 @@ export type DefectFlag =
   | "write-back-lifts-hidden"
   /** The answer of a cancelled attempt is written. */
   | "answer-after-cancel"
+  /** A hidden slot of the SSR snapshot carries the values of its row. */
+  | "hidden-values-in-snapshot"
+  /** The check after hydration re-reads no visible view. */
+  | "hydrate-without-revalidate"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

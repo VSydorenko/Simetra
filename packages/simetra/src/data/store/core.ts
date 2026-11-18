@@ -10,6 +10,7 @@ import {
 } from "./overlay"
 import { createSectionStore } from "./section-store"
 import { createSession, type Scope } from "./session"
+import { applySnapshot, dehydrate, parseSnapshot, type SsrContext } from "./ssr"
 import { createRowViews, purgedSnapshot } from "./snapshot"
 import { readKeys, tracked, type CoreSource } from "./source"
 import type { ObjectState } from "./forms"
@@ -30,6 +31,7 @@ import {
   type CloseReason,
   type CoreLimits,
   type CoreLogEntry,
+  type CoreSnapshot,
   type GenerationToken,
   type Key,
   type Mutation,
@@ -136,6 +138,28 @@ export interface CoreSession {
    * version; the object is not marked by it (§10).
    */
   staleClient(object: ObjectName): void
+  /**
+   * The snapshot of the ready held views (P4-B spec §6.6): their rows,
+   * compositions and tabular section lines, and no value of a row the views
+   * do not show (`hidden`, `removed`). Throws `TypeError` once the core is
+   * closed.
+   */
+  dehydrate(): CoreSnapshot
+  /**
+   * Takes a snapshot into an empty core before its first render (§6.6): every
+   * view of it is held, loaded and ready, and a subscription to one starts no
+   * read. Throws `TypeError`, writing nothing, for a snapshot of another
+   * `format` or catalog, or when the core was hydrated or already holds a
+   * view. Does nothing after `close`.
+   */
+  hydrate(snapshot: CoreSnapshot): void
+  /**
+   * Ends the hydration, once (a repeat does nothing): releases the views no
+   * subscription took after `releaseDelayMs`, asks for the catalog version
+   * and re-reads the visible views of every object — synchronously, so the
+   * requests leave in one microtask (plan B3-6a, Р6).
+   */
+  endHydration(): void
 }
 
 export type { DefectFlag } from "./defects"
@@ -401,6 +425,16 @@ export function createCore(options: {
       o.sections.clearOwner(scope, owner)
       touchSection(o, owner)
     },
+    restore(scope, o, row, at) {
+      o.rows.restore(scope, row, at)
+      rowViews.touch(o.name, row.key)
+      // Слот без вигляду-власника (знімок, чий вигляд не прийнято) знімає `sweep`.
+      written.push([o, row.key])
+    },
+    restoreSection(scope, o, owner, section, entry) {
+      o.sections.restore(scope, owner, section, entry)
+      touchSection(o, owner)
+    },
   }
 
   const registry = createRegistry({
@@ -422,6 +456,20 @@ export function createCore(options: {
     closedSnapshot: () => closed,
     defects,
   })
+
+  // ------------------------------------------------------------ знімок SSR
+
+  const ssr: SsrContext = {
+    session,
+    objects,
+    registry,
+    ops,
+    limits,
+    defects,
+  }
+  // Гідратація одноразова: `endHydration` повторюється під StrictMode, а
+  // другий знімок змішався б із першим.
+  let hydration: "none" | "hydrated" | "ended" = "none"
 
   // ------------------------------------------------------------ хвіст
 
@@ -713,6 +761,46 @@ export function createCore(options: {
     staleClient(object) {
       staleClient(object)
       core.requestVersion()
+    },
+    dehydrate() {
+      if (closed !== undefined || !session.token().valid)
+        throw new TypeError("the core is closed")
+      return dehydrate(ssr)
+    },
+    hydrate(snapshot) {
+      if (closed !== undefined || !session.token().valid) return
+      if (hydration !== "none" || [...registry.subsets()].length > 0)
+        throw new TypeError("the core is hydrated or already holds views")
+      const parsed = parseSnapshot(ssr, snapshot)
+      hydration = "hydrated"
+      session.commit(
+        (scope) => {
+          try {
+            applySnapshot(ssr, scope, parsed)
+          } finally {
+            // Слот, якого не взяв жоден вигляд, не лишається без власника.
+            ops.sweep(scope)
+          }
+        },
+        session.token(),
+        "hydrate"
+      )
+    },
+    endHydration() {
+      if (hydration !== "hydrated") return
+      hydration = "ended"
+      if (!session.token().valid) return
+      registry.endHydration()
+      // Звірка (Р6): запити йдуть синхронно, без `await` між об'єктами, тож
+      // збирач пакета читань зіллє їх, а цей код не зміниться.
+      core.requestVersion()
+      if (defects.has("hydrate-without-revalidate")) return
+      for (const o of objects.values()) {
+        if (!activeViews(writerContext, o.name).some((v) => v.visible)) continue
+        revalidate(writerContext, o.name, { visibleOnly: true }).catch(
+          (error: unknown) => log({ kind: "listener-failed", error })
+        )
+      }
     },
     update: (object, key, values, updateOptions) =>
       overlay.update(object, key, values, updateOptions),

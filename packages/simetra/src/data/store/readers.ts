@@ -7,8 +7,8 @@ import { DataError } from "../errors"
 import type { Form, ObjectState } from "./forms"
 import { nullableOf } from "./filter"
 import { includeKeys, readIncluded, type Included } from "./include"
-import { visibleRow, type PutResult } from "./object-store"
-import type { OwnerScope } from "./section-store"
+import { visibleRow, type PutResult, type RestoredRow } from "./object-store"
+import type { OwnerScope, SectionEntry } from "./section-store"
 import type { Scope, Session } from "./session"
 import {
   readKeys,
@@ -72,6 +72,16 @@ export interface StoreOps {
     ownerScope: OwnerScope
   ): void
   clearOwner(scope: Scope, o: ObjectState, owner: Key): void
+  /** Puts a row of a core snapshot (the hydration); see `ObjectStore.restore`. */
+  restore(scope: Scope, o: ObjectState, row: RestoredRow, at: number): void
+  /** Puts the lines of a core snapshot (the hydration). */
+  restoreSection(
+    scope: Scope,
+    o: ObjectState,
+    owner: Key,
+    section: string,
+    entry: SectionEntry
+  ): void
   /**
    * Drops the entries written in this `commit` that are left without an
    * owner (an `apply` that threw half-way): a row never outlives its commit
