@@ -72,6 +72,8 @@ function statusKey(
   // `hidden` і `removed` старші за стан чернетки: значень немає.
   const shown = displayState(row)
   if (shown === "hidden" || shown === "removed") return stateMessageKey(shown)
+  // Серверний рядок конфлікту ще читається: показуємо читання, не стару базу.
+  if (draft.state === "conflict" && !draft.serverRead) return "state.refreshing"
   return DRAFT_KEYS[draft.state] ?? stateMessageKey(shown)
 }
 
@@ -126,8 +128,9 @@ function Field(props: {
           createElement(Text, { messageKey: "state.stale" })
         )
       : null,
-    // `conflict`: поточний серверний рядок поруч із правкою.
-    draft.state === "conflict" && draft.edited.has(name) && live !== undefined
+    // `conflict`: поточний серверний рядок поруч із правкою — лише
+    // перечитаний, бо до того сховище показує базу користувача.
+    draft.serverRead && draft.edited.has(name) && live !== undefined
       ? createElement(
           "span",
           { "data-server": name },
@@ -230,6 +233,7 @@ function Actions(props: { card: UseRowResult; draft: CardDraft }) {
       ? createElement(Button, {
           messageKey: "action.retry",
           onClick: draft.retry,
+          disabled: !draft.canRetry,
         })
       : null,
     draft.state === "failed"
@@ -250,6 +254,7 @@ function Actions(props: { card: UseRowResult; draft: CardDraft }) {
       ? createElement(Button, {
           messageKey: "action.overwrite",
           onClick: draft.overwrite,
+          disabled: !draft.canOverwrite,
         })
       : null,
     draft.state === "unknown"

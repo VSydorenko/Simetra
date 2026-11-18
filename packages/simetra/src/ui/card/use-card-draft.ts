@@ -64,13 +64,22 @@ export interface CardDraft {
   readonly error?: CommandError
   /** «Save» is allowed now. */
   readonly canSave: boolean
+  /**
+   * `conflict`: the re-read of the server row has landed (its version is
+   * above {@link base}), so the shown server value is the current one.
+   */
+  readonly serverRead: boolean
+  /** «Overwrite» is allowed now. */
+  readonly canOverwrite: boolean
+  /** «Retry» is allowed now. */
+  readonly canRetry: boolean
   /** Records an edit; `error` is the codec refusal of the input, if any. */
   setValue(field: string, value: unknown, error?: CommandError): void
   /** Sends the edited attributes with `expectedVersion` = {@link base}. */
   save(): void
-  /** `conflict`: a new save based on the current server row. */
+  /** `conflict`: a new save based on the current server row; only while {@link canOverwrite}. */
   overwrite(): void
-  /** `failed`: the mutation's `retry`. */
+  /** `failed`: the mutation's `retry`; only while {@link canRetry}. */
   retry(): void
   /** Drops the draft and the own mutation; one frame back to the confirmed row. */
   cancel(): void
@@ -92,6 +101,31 @@ interface DraftMeta {
   sent: number
   /** Покоління чернетки: відповідь спроби старшого покоління ігнорується. */
   generation: number
+}
+
+/*
+ * Єдина охорона запису картки: її беруть `save`, `overwrite` і `retry`, а не
+ * лише кнопки. Застарілий рядок `editable` хука ще не враховує (#242 зведе
+ * охорону до `editable` і кодека).
+ */
+function writable(
+  card: UseRowResult,
+  codecErrors: Readonly<Record<string, CommandError>>
+): boolean {
+  return (
+    card.editable &&
+    !card.isStale &&
+    card.row?.state !== "removed" &&
+    card.row?.stale !== true &&
+    Object.keys(codecErrors).length === 0
+  )
+}
+
+/** Що дозволено в останньому кадрі: функції хука читають це, а не замикання. */
+interface Allowed {
+  save: boolean
+  overwrite: boolean
+  retry: boolean
 }
 
 const freshMeta = (generation: number): DraftMeta => ({
@@ -128,6 +162,11 @@ export function useCardDraft(input: UseCardDraftInput): CardDraft {
   }>({})
   const latest = useRef(card)
   latest.current = card
+  const allowed = useRef<Allowed>({
+    save: false,
+    overwrite: false,
+    retry: false,
+  })
 
   const row = card.row
   const live = row !== undefined && row.state !== "removed" ? row : undefined
@@ -213,11 +252,12 @@ export function useCardDraft(input: UseCardDraftInput): CardDraft {
 
   const save = useCallback(() => {
     const base = meta.current.base
-    if (base !== undefined) send(base)
+    if (allowed.current.save && base !== undefined) send(base)
   }, [send])
 
   const overwrite = useCallback(() => {
     const shownRow = latest.current.row
+    if (!allowed.current.overwrite) return
     if (shownRow === undefined || shownRow.state === "removed") return
     // «Перезаписати» — свідома згода з поточним серверним рядком: він і є
     // новою базою.
@@ -227,6 +267,7 @@ export function useCardDraft(input: UseCardDraftInput): CardDraft {
   }, [send])
 
   const retry = useCallback(() => {
+    if (!allowed.current.retry) return
     const next = latest.current.row?.mutation?.retry?.()
     if (next !== undefined) track(next, meta.current.sent)
   }, [track])
@@ -270,16 +311,23 @@ export function useCardDraft(input: UseCardDraftInput): CardDraft {
     [purged, hidden, live, draft]
   )
   const dirty = !purged && edited.size > 0
+  const base = meta.current.base
+  const canWrite = writable(card, codecErrors)
   const canSave =
     dirty &&
     (state === "idle" || state === "failed") &&
-    card.editable &&
-    // Застарілий рядок (П4-D §5.4): «Зберегти» вимкнено, доки його не
-    // перечитано; `editable` хука цього факту не несе.
-    live?.stale !== true &&
-    !card.isStale &&
-    meta.current.base !== undefined &&
-    Object.keys(codecErrors).length === 0
+    canWrite &&
+    base !== undefined
+  // `conflict` настає раніше за перечитування (оверлей T4 спершу віддає стан):
+  // доти сховище тримає базовий рядок, і «Перезаписати» взяло б стару базу.
+  const serverRead =
+    state === "conflict" &&
+    live !== undefined &&
+    base !== undefined &&
+    live.version > base
+  const canOverwrite = serverRead && canWrite
+  const canRetry = state === "failed" && canWrite
+  allowed.current = { save: canSave, overwrite: canOverwrite, retry: canRetry }
 
   return {
     state,
@@ -290,6 +338,9 @@ export function useCardDraft(input: UseCardDraftInput): CardDraft {
     fieldErrors: purged || hidden ? NO_ERRORS : fieldErrors,
     ...(failure === undefined || purged || hidden ? {} : { error: failure }),
     canSave,
+    serverRead,
+    canOverwrite,
+    canRetry,
     setValue,
     save,
     overwrite,

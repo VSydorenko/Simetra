@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render } from "@testing-library/react"
 import { Profiler, createElement } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { ClientCatalog, SourceAdapter } from "simetra/model"
-import { DataRuntimeProvider } from "simetra/data/react"
+import { DataRuntimeProvider, useRow } from "simetra/data/react"
 import { SUBJECT, clientCatalog, failed } from "../../../data/__tests__/support"
 import { runtimeHandleOf } from "../../../data/runtime/handle"
 import { createRuntimeHolder } from "../../../data/runtime/holder"
@@ -29,6 +29,7 @@ import { CatalogProvider } from "../../catalog"
 import { MESSAGES, type MessageKey } from "../../messages"
 import { NavigationProvider, type NavigationAdapter } from "../../navigation"
 import { CardHost } from "../card-host"
+import { useCardDraft, type CardDraft } from "../use-card-draft"
 
 // Картка тестується над справжнім рантаймом T4: читання — адаптером
 // фейкового сервера, запис — справжнім `useWriter` через транспорт до того
@@ -73,6 +74,8 @@ async function opened(
     adapter?: (fake: FakeSource) => SourceAdapter
     objects?: ClientCatalog["objects"]
     lines?: Parameters<FakeSource["setLines"]>[3]
+    /** Mounts the bare hook instead of the host, to call its functions. */
+    probe?: boolean
   } = {}
 ) {
   const objects = options.objects ?? OBJECTS
@@ -98,6 +101,12 @@ async function opened(
   // Кадр — commit піддерева картки (як у тесті списку): DOM уже змінено.
   const frames: string[] = []
   const box = { current: null as HTMLDivElement | null }
+  const draft = { current: undefined as unknown as CardDraft }
+  function Probe() {
+    const row = useRow({ object: TASK, id: K })
+    draft.current = useCardDraft({ object: TASK, id: K, card: row })
+    return null
+  }
   const view = render(
     createElement(
       CatalogProvider,
@@ -119,7 +128,9 @@ async function opened(
               {
                 ref: (node: HTMLDivElement | null) => void (box.current = node),
               },
-              createElement(CardHost, { object: TASK, id: K })
+              options.probe === true
+                ? createElement(Probe)
+                : createElement(CardHost, { object: TASK, id: K })
             )
           )
         )
@@ -128,7 +139,7 @@ async function opened(
   )
   await flush()
   const c = view.container
-  return { fake, wire, runtime, core, holder, blocks, frames, c }
+  return { fake, wire, runtime, core, holder, blocks, frames, c, draft }
 }
 
 type Opened = Awaited<ReturnType<typeof opened>>
@@ -175,6 +186,101 @@ async function foreignChange(o: Opened, values: Record<string, unknown>) {
   void o.core.revalidate(TASK, { visibleOnly: false })
   await flush()
 }
+
+/** An adapter whose reads wait while `gate.held` is set, until `gate.open()`. */
+function gated() {
+  const waiting: (() => void)[] = []
+  const gate = {
+    held: false,
+    open() {
+      gate.held = false
+      for (const go of waiting.splice(0)) go()
+    },
+  }
+  const adapter = (fake: FakeSource): SourceAdapter => ({
+    capabilities: fake.adapter.capabilities,
+    async read(items) {
+      if (gate.held) await new Promise<void>((go) => void waiting.push(go))
+      return fake.adapter.read(items)
+    },
+  })
+  return { gate, adapter }
+}
+
+/** An edit and a save through the host or through the bare hook. */
+async function editAndSave(o: Opened, via: "host" | "probe", value: string) {
+  if (via === "host") type(o.c, "title", value)
+  else act(() => o.draft.current.setValue("title", value))
+  return async () => {
+    if (via === "host") click(o.c, "action.save")
+    else act(() => o.draft.current.save())
+    await flush()
+  }
+}
+
+/** Brings the own mutation of the row to `conflict` or `failed`. */
+async function reach(
+  o: Opened,
+  state: "conflict" | "failed",
+  via: "host" | "probe"
+) {
+  const save = await editAndSave(o, via, "mine")
+  if (state === "conflict") await foreignChange(o, { title: "theirs" })
+  else o.wire.replies.push(failed({ code: "command.forbidden" }))
+  await save()
+  expect(o.draft.current?.state ?? draftState(o.c)).toBe(state)
+}
+
+/** What takes the write away from the card (П4-D §5.2, §5.4, П4-B §6.4). */
+const BLOCKERS: [string, (o: Opened) => Promise<void>][] = [
+  [
+    "isStale (несумісний клієнт)",
+    async (o) => {
+      staleKernel(o.fake, task.id)
+      act(() => o.core.requestVersion())
+      await flush()
+    },
+  ],
+  [
+    "editable = false (поле шапки застаріле)",
+    async (o) => {
+      o.fake.edit(TASK, K, { title: "newer" })
+      const full = o.fake.row(TASK, K)!
+      const row = {
+        ...full,
+        values: Object.fromEntries(
+          Object.entries(full.values).filter(([name]) => name !== "notes")
+        ),
+      }
+      act(() => {
+        o.core.commit(
+          (w) =>
+            w.apply(
+              TASK,
+              { rows: [row], absent: [] },
+              o.core.readEpoch(),
+              null
+            ),
+          o.core.token()
+        )
+      })
+      // Без `flush`: картка сама дочитує застаріле поле, і стан минає.
+    },
+  ],
+  [
+    "row.stale (застарілий рядок)",
+    async (o) => {
+      act(() => {
+        o.core.commit((w) => w.markStale(TASK, [K], 99), o.core.token())
+      })
+      await flush()
+    },
+  ],
+]
+
+const WRITES: MessageKey[] = ["action.save", "action.overwrite", "action.retry"]
+const enabledWrites = (c: HTMLElement) =>
+  WRITES.filter((k) => button(c, k)?.disabled === false)
 
 describe("CardHost — показ", () => {
   it("шапка в порядку каталогу; редаговане лише з update: true; ТЧ лише для читання в порядку номера рядка", async () => {
@@ -442,6 +548,79 @@ describe("useCardDraft — запис", () => {
     expect(draftState(o.c)).toBe("idle")
     expect(input(o.c, "title")?.value).toBe("maybe")
     expect(o.blocks.at(-1)).toBe(true)
+  })
+})
+
+describe("useCardDraft — одна охорона запису: save, overwrite, retry", () => {
+  describe.each(["conflict", "failed"] as const)("%s", (state) => {
+    it.each(BLOCKERS)(
+      "%s — жодної ввімкненої дії запису в картці",
+      async (_, block) => {
+        const o = await opened()
+        await reach(o, state, "host")
+        await block(o)
+        expect(draftState(o.c)).toBe(state)
+        expect(enabledWrites(o.c)).toEqual([])
+      }
+    )
+
+    it.each(BLOCKERS)(
+      "%s — overwrite() і retry() хука нічого не шлють",
+      async (_, block) => {
+        const o = await opened({ probe: true })
+        await reach(o, state, "probe")
+        await block(o)
+        expect(o.draft.current.canSave).toBe(false)
+        const sent = runs(o).length
+        act(() => {
+          o.draft.current.overwrite()
+          o.draft.current.retry()
+        })
+        await flush()
+        expect(runs(o)).toHaveLength(sent)
+      }
+    )
+
+    // Позитивний контроль: без перешкоди та сама дія хука шле запис.
+    it("без перешкоди — дія хука шле запис", async () => {
+      const o = await opened({ probe: true })
+      await reach(o, state, "probe")
+      const sent = runs(o).length
+      act(() =>
+        state === "conflict"
+          ? o.draft.current.overwrite()
+          : o.draft.current.retry()
+      )
+      await flush()
+      expect(runs(o)).toHaveLength(sent + 1)
+    })
+  })
+
+  it("conflict до перечитування — без серверного значення й «Перезаписати»; після — обидва з новою версією", async () => {
+    const { gate, adapter } = gated()
+    const o = await opened({ adapter })
+    type(o.c, "title", "mine")
+    // Чужа зміна на сервері, якої сховище ще не бачило.
+    o.fake.edit(TASK, K, { title: "theirs" })
+    const v6 = versionOf(o)
+    gate.held = true
+    click(o.c, "action.save")
+    await flush()
+    expect(draftState(o.c)).toBe("conflict")
+    expect(o.c.querySelector("[data-server]")).toBeNull()
+    expect(button(o.c, "action.overwrite")?.disabled).not.toBe(false)
+    expect(status(o.c)).toBe(text("state.refreshing"))
+    act(() => gate.open())
+    await flush()
+    expect(
+      slot(o.c, "title").querySelector('[data-server="title"]')?.textContent
+    ).toBe("theirs")
+    expect(status(o.c)).toBe(text("state.conflict"))
+    expect(button(o.c, "action.overwrite")?.disabled).toBe(false)
+    click(o.c, "action.overwrite")
+    await flush()
+    expect(runs(o)[1]!.expectedVersion).toBe(v6)
+    expect(draftState(o.c)).toBe("idle")
   })
 })
 
