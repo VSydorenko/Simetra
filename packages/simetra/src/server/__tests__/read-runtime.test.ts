@@ -787,6 +787,51 @@ describe("CommandRuntime.readParts", () => {
     expect(db.calls[5]).toEqual(cardOf(R2))
   })
 
+  it("a marker with include reads its targets in the same transaction: statements are the epoch, the known read and one per target", async () => {
+    const { db, runtime } = await setup(
+      (text) =>
+        text.includes("row_version_epoch")
+          ? { rows: [{ epoch: HEX }] }
+          : text.includes("simetra_known")
+            ? {
+                rows: [
+                  { row: JSON.stringify({ $known: 0, region_id: R1 }) },
+                  { row: JSON.stringify({ $known: 1, region_id: R1 }) },
+                ],
+              }
+            : text.includes('"public"."region"')
+              ? {
+                  rows: [
+                    { row: JSON.stringify({ id: R1, version: 2, code: "N" }) },
+                  ],
+                }
+              : undefined,
+      { catalog: linkCatalog }
+    )
+    const result = await runtime.readParts(session, [
+      {
+        type: "query",
+        query: { object: LINK, limit: 10, include: ["region"] },
+        known: { epoch: HEX, keys: [ID, OTHER], versions: ["1", "1"] },
+      },
+    ])
+    expect(result).toEqual({
+      epoch: HEX,
+      items: [
+        ok({
+          rows: [
+            { known: 0, copies: { region: R1 } },
+            { known: 1, copies: { region: R1 } },
+          ],
+          included: { "Catalog.Region": [{ ref: R1, version: 2, code: "N" }] },
+        }),
+      ],
+    })
+    // Відкриття — 4 записи, далі частина й одна ціль, `COMMIT` і повернення зʼєднання.
+    expect(db.calls).toHaveLength(4 + 2 + 2)
+    expect(db.calls[5]).toEqual(regions)
+  })
+
   it.each<[string, Answer]>([
     ["an epoch that is not 64 hex", { rows: [{ epoch: "zz" }] }],
     ["an epoch of the wrong type", { rows: [{ epoch: 42 }] }],

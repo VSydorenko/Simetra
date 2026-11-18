@@ -407,15 +407,15 @@ export type KnownVersions = z.infer<typeof knownSchema>
 
 /**
  * Whether a read query form may carry `known`: a list or a card, without
- * `tabularSections` and `include`. Any other form is refused with
+ * `tabularSections`; `include` is allowed. Any other form is refused with
  * `reason: "known-form"`.
  */
-// Маркер заміняє рядок шапки за ключем; ТЧ і лічильник ключа рядка не мають,
-// а `include` з маркером вводить B3-3: id цілей маркерного рядка будівнику ще
-// не відомі. Форму визначають ключі, як і `formIndex`.
+// Маркер заміняє рядок шапки за ключем; ТЧ і лічильник ключа рядка не мають.
+// З `include` маркер несе колонки посилань, тож id цілей відомі. Форму
+// визначають ключі, як і `formIndex`.
 export function knownFormAllowed(query: object): boolean {
-  return !["tabularSection", "count", "tabularSections", "include"].some(
-    (key) => Object.hasOwn(query, key)
+  return !["tabularSection", "count", "tabularSections"].some((key) =>
+    Object.hasOwn(query, key)
   )
 }
 
@@ -429,7 +429,9 @@ export interface ReadPart {
 /**
  * A row the server left out because the client holds it (P4-B spec §4.1):
  * `known` — its position in the part's `known`; `copies` — the values of the
- * object's `copy` attributes by logical name, which the client cannot keep.
+ * object's `copy` attributes by logical name, which the client cannot keep,
+ * and, in a read with `include`, the values of the reference attributes it
+ * lists.
  */
 export interface KnownMarker {
   known: number

@@ -114,7 +114,7 @@ const wireSectionIdsSchema = z.array(elementIdSchema).min(1)
  * A read query in wire form: the logical forms with the object by UUID,
  * physical columns in `where`, `orderBy` and `include`, and section ids in
  * `tabularSection` and `tabularSections`. A list and a card without
- * `tabularSections` and `include` may carry `known` (a conditional read);
+ * `tabularSections` may carry `known` (a conditional read);
  * any other form with `known` is refused with `reason: "known-form"`.
  */
 // Форму з `known` перевіряє препроцесор до розбору форми: суворий об'єкт
@@ -131,7 +131,7 @@ export const wireReadQuerySchema = z.preprocess(
         code: "custom",
         path: ["known"],
         message:
-          "known is allowed only on a list or a card without tabularSections and include",
+          "known is allowed only on a list or a card without tabularSections",
         params: { reason: "known-form" },
       })
     }

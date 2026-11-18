@@ -447,6 +447,91 @@ describe("read batch with known over the engine target", () => {
     )
   })
 
+  /** Значення першої частини умовного читання з `included` (успіх — інакше помилка тесту). */
+  async function conditionalValue(
+    rt: CommandRuntime,
+    session: SessionClaims,
+    query: ReadQuery,
+    heldKnown: KnownVersions
+  ): Promise<{ rows: Row[]; included?: Record<string, Row[]> }> {
+    const { items } = await rt.readParts(session, [part(query, heldKnown)])
+    const item = items[0]!
+    if (!item.ok || !("rows" in item.value)) {
+      throw new Error(`conditional read failed: ${JSON.stringify(items)}`)
+    }
+    return item.value as { rows: Row[]; included?: Record<string, Row[]> }
+  }
+
+  // Ціль `include` читається за правилами її власного RLS: маркер рядка вигляду
+  // не відкриває невидиму ціль, а видима приходить повним рядком.
+  it("a marker with include carries the reference column; an invisible target stays out of included", async () => {
+    const [own] = await env.owner
+      .query<{ id: string }>(
+        "INSERT INTO public.region (id, org_id) VALUES (gen_random_uuid(), $1) RETURNING id",
+        [env.me.org]
+      )
+      .then((r) => r.rows.map((row) => row.id))
+    const [foreign] = await env.owner
+      .query<{ id: string }>(
+        "INSERT INTO public.region (id, org_id) VALUES (gen_random_uuid(), $1) RETURNING id",
+        [env.other.org]
+      )
+      .then((r) => r.rows.map((row) => row.id))
+    const gauges = await seedGauges(env.me.org, 2)
+    await env.owner.query(
+      `UPDATE public.${GAUGE_TABLE} SET site_id = $1 WHERE id = $2`,
+      [foreign, gauges[0]]
+    )
+    await env.owner.query(
+      `UPDATE public.${GAUGE_TABLE} SET site_id = $1 WHERE id = $2`,
+      [own, gauges[1]]
+    )
+    const rt = await runtime()
+    const query: ReadQuery = {
+      object: GAUGE,
+      where: { attribute: "ref", op: "in", value: gauges },
+      orderBy: [{ attribute: "ref", direction: "asc" }],
+      limit: 200,
+      include: ["site"],
+    }
+    const { items } = await rt.readParts(env.me.session, [part(query)])
+    const plain = items[0]!
+    if (!plain.ok || !("rows" in plain.value)) throw new Error("plain read")
+    const epoch = (await rt.readParts(env.me.session, [part(query)])).epoch!
+    const rows = plain.value.rows as Row[]
+    const value = await conditionalValue(
+      rt,
+      env.me.session,
+      query,
+      known(epoch, rows)
+    )
+    // Маркери без копій носія: у кожному лише позиція й колонка посилання.
+    expect(value.rows).toEqual(
+      rows.map((row, i) => ({ known: i, copies: { site: row.site } }))
+    )
+    // І1: невидима ціль відсутня, хоча рядок прийшов маркером; рядок лишається.
+    expect(value.included).toEqual({
+      "Catalog.Region": [expect.objectContaining({ ref: own })],
+    })
+    expect(JSON.stringify(value.included)).not.toContain(foreign!)
+    // Ціль приходить повністю, як у читанні без `known`.
+    expect(value.included).toEqual(plain.value.included)
+
+    // Картка: той самий маркер із колонкою посилання.
+    const card: ReadQuery = { object: GAUGE, id: gauges[1]!, include: ["site"] }
+    const cardRow = (await full(rt, env.me.session, card)).rows[0]!
+    const cardValue = await conditionalValue(
+      rt,
+      env.me.session,
+      card,
+      known(epoch, [cardRow])
+    )
+    expect(cardValue.rows).toEqual([{ known: 0, copies: { site: own } }])
+    expect(cardValue.included).toEqual({
+      "Catalog.Region": [expect.objectContaining({ ref: own })],
+    })
+  })
+
   it("two parts read one snapshot under a concurrent commit between them", async () => {
     const [existing] = await seedGauges(env.me.org, 1)
     const added = randomUUID()
