@@ -261,6 +261,10 @@ export interface CoreInspection {
   mutations(): JournalInspection[]
   /** The plans the scheduler made (calls of one turn merge into one). */
   schedulerPlans(): number
+  /** The earliest due time the scheduler would plan; `undefined` — no target. */
+  schedulerDueAt(): number | undefined
+  /** The due time of the objects with a deferred re-read (epoch switch, discarded answer). */
+  scheduledDue(): ReadonlyMap<ObjectName, number>
 }
 
 const inspections = new WeakMap<CoreSession, CoreInspection>()
@@ -900,6 +904,19 @@ export function createCore(options: {
     )
   }
 
+  function schedulerDue(): number | undefined {
+    let due: number | undefined
+    for (const held of scheduled.values()) {
+      for (const at of [held.whole, held.retry?.at])
+        if (at !== undefined && (due === undefined || at < due)) due = at
+    }
+    for (const o of objects.values()) {
+      if (staleObjects.has(o.name)) continue
+      const at = nextViewDue(writerContext, o.name)
+      if (at !== undefined && (due === undefined || at < due)) due = at
+    }
+    return due
+  }
   let lastTickAt: number | undefined
   // Один таймер на ядро (§6.7). Такт — звірка з вікном `0,1 × I`, але без
   // частини `version`: версію каталогу звіряють гідратація, `resume()` і
@@ -908,19 +925,7 @@ export function createCore(options: {
     now,
     visible: () => visible,
     closed: () => closed !== undefined || !session.token().valid,
-    dueAt() {
-      let due: number | undefined
-      for (const held of scheduled.values()) {
-        for (const at of [held.whole, held.retry?.at])
-          if (at !== undefined && (due === undefined || at < due)) due = at
-      }
-      for (const o of objects.values()) {
-        if (staleObjects.has(o.name)) continue
-        const at = nextViewDue(writerContext, o.name)
-        if (at !== undefined && (due === undefined || at < due)) due = at
-      }
-      return due
-    },
+    dueAt: schedulerDue,
     tick() {
       const minAgeMs = 0.9 * limits.revalidateIntervalMs
       // Такт без цілей `lastTickAt` не рухає (шов B5b, Р10).
@@ -939,7 +944,9 @@ export function createCore(options: {
   })
   // Кожен `commit` (осідання читання, запис, звільнення, purge) міг змінити
   // набір цілей чи строк: перепланування зливається в одне на мікрозадачу.
-  session.onFlush(() => scheduler.request())
+  session.onFlush(() => {
+    if (!defects.has("scheduler-no-reschedule")) scheduler.request()
+  })
 
   const writerContext: WriterContext = {
     session,
@@ -1280,6 +1287,17 @@ export function createCore(options: {
     },
     mutations: () => overlay.entries(),
     schedulerPlans: () => scheduler.plans(),
+    schedulerDueAt: schedulerDue,
+    scheduledDue: () =>
+      new Map(
+        [...scheduled].flatMap(([name, held]) => {
+          const at = Math.min(
+            held.whole ?? Number.POSITIVE_INFINITY,
+            held.retry?.at ?? Number.POSITIVE_INFINITY
+          )
+          return Number.isFinite(at) ? [[name, at] as const] : []
+        })
+      ),
     versionEpochs: () => ({
       current: session.versions.current(),
       previous: session.versions.previous(),

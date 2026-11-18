@@ -931,6 +931,14 @@ const unavailable = (s: Subset) =>
 const inFlight = (s: Subset) =>
   s.flight !== undefined || s.rereadEpochs.length > 0
 
+// Строк вигляду; дефект самотесту «без паузи» не бачить збоїв вигляду.
+const dueOf = (ctx: WriterContext, s: Subset, ageMs?: number) =>
+  viewDueAt(
+    ctx.defects.has("scheduler-no-pause") ? { ...s, failures: 0 } : s,
+    ctx.limits.revalidateIntervalMs,
+    ageMs
+  )
+
 function eligible(ctx: WriterContext, s: Subset, options: RevalidateOptions) {
   const { minAgeMs } = options
   return (
@@ -948,8 +956,7 @@ function eligible(ctx: WriterContext, s: Subset, options: RevalidateOptions) {
         s.form.spec.kind === "section") ||
       (s.refreshedAt !== undefined && ctx.defects.has("min-age-all-young")
         ? false
-        : ctx.now() >=
-          viewDueAt(s, ctx.limits.revalidateIntervalMs, minAgeMs))) &&
+        : ctx.now() >= dueOf(ctx, s, minAgeMs))) &&
     (s.form.spec.kind !== "section" ||
       s.listeners.size > 0 ||
       options.alsoViews?.has(s) === true)
@@ -970,7 +977,7 @@ export function nextViewDue(
   for (const s of subsetsOf(ctx, ctx.objectOf(object))) {
     if (!eligible(ctx, s, { visibleOnly: true })) continue
     if (inFlight(s) || unavailable(s)) continue
-    const at = viewDueAt(s, ctx.limits.revalidateIntervalMs)
+    const at = dueOf(ctx, s)
     // Вигляд, що ще не читався, строку не має.
     if (!Number.isFinite(at)) continue
     if (due === undefined || at < due) due = at
@@ -1033,7 +1040,8 @@ async function tailPass(
   if (
     !ctx.session.token().valid ||
     unavailable(s) ||
-    !eligible(ctx, s, options)
+    !eligible(ctx, s, options) ||
+    ctx.defects.has("revalidate-no-tail")
   )
     return
   await revalidateViews(ctx, o, [s])

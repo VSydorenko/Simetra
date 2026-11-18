@@ -32,29 +32,30 @@ export interface Scheduler {
   suspend(): void
   /** Drops the timer for good: the session closes. */
   stop(): void
-  /** 1 while a timer is set, else 0. */
+  /** The number of live timers: 1 while one is set, else 0. */
   timers(): number
   /** The plans made so far (an inspection counter). */
   plans(): number
 }
 
 export function createScheduler(ctx: SchedulerContext): Scheduler {
-  let timer: ReturnType<typeof setTimeout> | undefined
+  // Множина, а не одне поле: лічильник чесно показує й зайві таймери.
+  const timers = new Set<ReturnType<typeof setTimeout>>()
   let pending = false
   let plans = 0
   let immediate = false
 
   const clear = () => {
-    if (timer !== undefined) clearTimeout(timer)
-    timer = undefined
+    for (const timer of timers) clearTimeout(timer)
+    timers.clear()
   }
 
   // Дефект самотесту «спрацювання на прихованій вкладці»: ні планування, ні
   // спрацювання не питають видимість.
   const hiddenOk = () => ctx.defects.has("scheduler-fires-hidden")
 
-  const fire = () => {
-    timer = undefined
+  const fire = (self?: ReturnType<typeof setTimeout>) => {
+    if (self !== undefined) timers.delete(self)
     // Видимість — у момент спрацювання, а не лише при постановці: таймер міг
     // пережити `suspend()`; прихована вкладка нічого не шле (§6.7).
     if (ctx.closed() || (!ctx.visible() && !hiddenOk())) return
@@ -74,7 +75,8 @@ export function createScheduler(ctx: SchedulerContext): Scheduler {
       immediate = false
       return
     }
-    clear()
+    // Дефект самотесту: нове планування лишає попередній таймер.
+    if (!ctx.defects.has("scheduler-timer-per-object")) clear()
     const due = ctx.dueAt()
     if (due === undefined) {
       immediate = false
@@ -91,7 +93,11 @@ export function createScheduler(ctx: SchedulerContext): Scheduler {
       return
     }
     immediate = false
-    timer = setTimeout(fire, Math.max(0, wait))
+    const timer: ReturnType<typeof setTimeout> = setTimeout(
+      () => fire(timer),
+      Math.max(0, wait)
+    )
+    timers.add(timer)
   }
 
   function request() {
@@ -108,7 +114,7 @@ export function createScheduler(ctx: SchedulerContext): Scheduler {
       clear()
     },
     stop: clear,
-    timers: () => (timer === undefined ? 0 : 1),
+    timers: () => timers.size,
     plans: () => plans,
   }
 }

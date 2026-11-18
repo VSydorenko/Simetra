@@ -86,6 +86,14 @@ export type DefectFlag =
   | "scheduler-keeps-timer-on-suspend"
   /** The scheduler plans and fires its tick on a hidden tab. */
   | "scheduler-fires-hidden"
+  /** Every plan of the scheduler adds a timer; the previous one stays. */
+  | "scheduler-timer-per-object"
+  /** The due time of a view ignores its failures: no pause after a failed read. */
+  | "scheduler-no-pause"
+  /** The settling of a read does not re-plan the scheduler. */
+  | "scheduler-no-reschedule"
+  /** An explicit `revalidate` over a view in flight leaves no tail pass. */
+  | "revalidate-no-tail"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>
