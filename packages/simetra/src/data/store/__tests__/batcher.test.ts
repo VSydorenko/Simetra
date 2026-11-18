@@ -276,17 +276,27 @@ describe("the core over the batcher", () => {
     expect(fake.requests.slice(requests)).toEqual([3])
   })
 
+  it("merges the version asks of one tick into one part: no tail for a part not sent yet", async () => {
+    const { core, fake } = setup()
+    core.requestVersion()
+    core.requestVersion()
+    await settle()
+    expect(fake.requests).toEqual([1])
+  })
+
   it("barrier: a version that makes the object incompatible stops the rows of its successful read part", async () => {
     const { core, fake, inspect } = setup()
     seed(fake, 1, 1)
     const handle = core.view(list)
-    watch(handle)
+    const { seen } = watch(handle)
     fake.kernelHashes[task.id] = "1".repeat(64)
     core.requestVersion()
     await settle()
     expect(handle.getSnapshot()).toMatchObject({ isStale: true })
     expect(handle.getSnapshot().rows).toEqual([])
     expect(inspect.rowCount()).toBe(0)
+    // Ні в одному кадрі підписника рядка з цього читання не було.
+    expect(seen.flatMap((snapshot) => snapshot.rows)).toEqual([])
   })
 
   it("I8: a part queued in the batcher of an object marked stale-client never reaches the server", async () => {
