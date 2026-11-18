@@ -17,10 +17,22 @@ import {
   catalog,
   client,
   commandObject,
+  organization,
   region,
   REGION,
+  rootCatalog,
 } from "./fixtures"
-import { CLIENT, answer, session, setup, type Override } from "./harness"
+import {
+  CLIENT,
+  ROOT,
+  answer,
+  createOrganization,
+  generatedIds,
+  rootResult,
+  session,
+  setup,
+  type Override,
+} from "./harness"
 
 /**
  * Режим злиття сигналів у T3 (спека П4-B §8.2): лік сигнальних фаз
@@ -232,6 +244,30 @@ describe("signal merge mode", () => {
     expect(mergeIndexes(db.calls)).toEqual([cores[0]! + 1])
     expect(db.calls[cores[1]! + 1]).toEqual(
       invalidate(client.id, client.scopeKindId!, COMPANY)
+    )
+  })
+
+  // Р9: пара кореня — його власний id; ядро шле сигнал кореня в той самий
+  // канал (носій скоупу кореня — колонка ключа, як і `scopeColumn` каталогу).
+  it("a root create after the switch: one invalidate into the root's own pair", async () => {
+    generatedIds(ROOT, "88888888-8888-4888-8888-888888888888")
+    const { db, runtime } = await setup(
+      (text, params) =>
+        text.includes("_create_root")
+          ? { rows: [{ r: rootResult() }] }
+          : echoCore(text, params),
+      { catalog: rootCatalog, signalMergeThreshold: 1 }
+    )
+    expect(organization.scopeColumn).toBe(organization.key)
+    await runtime.run(session, [createIn(CLIENT), createOrganization])
+    const cores = coreIndexes(db.calls)
+    expect(mergeIndexes(db.calls)).toEqual([cores[0]! + 1])
+    // Один `invalidate` пари кореня — одразу за його ядром, до хуків.
+    expect(invalidates(db.calls)).toEqual([
+      invalidate(organization.id, organization.scopeKindId!, ROOT),
+    ])
+    expect(db.calls[cores[1]! + 1]).toEqual(
+      invalidate(organization.id, organization.scopeKindId!, ROOT)
     )
   })
 

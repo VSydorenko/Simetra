@@ -19,9 +19,22 @@ import {
   MEMBER_CREATOR_ID,
   ORG_KIND_ID,
   TICKET_WRITER_ID,
+  policyDomain,
+  profileLayer,
+  signUp,
   superuserClient,
+  tenantSelfService,
 } from "../../../simetra/test/support"
-import { withRuntimeLogin } from "./support/db"
+import { buildRuntimeCatalog, compile } from "simetra/compiler"
+import { SIGNAL_FUNCTIONS } from "../../../simetra/src/compiler/signal/names"
+import {
+  committed,
+  heldResource,
+  seedMarker,
+  sessionOf,
+  withModelTarget,
+  withRuntimeLogin,
+} from "./support/db"
 import {
   MEMBERS,
   REQUEST_ROLE,
@@ -191,13 +204,38 @@ export function describeSignalMerge(): void {
       expect(signals).toEqual(Array.from({ length: THRESHOLD }, change))
     })
 
-    // `invalidate` іде на фазі, а не перед `COMMIT`: пізніша фаза, що
-    // знімає писаря з членства скоупу, не губить уже надісланого.
-    it("a later phase that marks the writer's membership loses no sent invalidate", async () => {
+    // Пізніша фаза над членством писаря: вона — сама нова пара в режимі
+    // злиття зі своїм `invalidate`, а вже надісланий `invalidate` Ticket
+    // лишається. Вивести писаря зі скоупу в межах транзакції команда не
+    // може: множина скоупів під знімком актора зафіксована на транзакцію
+    // (спека прав §7), команди членства не мають `delete`, а користувача
+    // рядка членства не змінюють. Проба перед `COMMIT` це й показує: канал
+    // Ticket і далі дозволено для відправки. Порядок «на фазі, а не перед
+    // `COMMIT`» тримає unit-тест T3 (`signal-merge.test.ts`).
+    it("a later phase on the writer's membership is its own pair and loses no sent invalidate", async () => {
       const { rows } = await env.owner.query<{ version: number }>(
         "SELECT version::int AS version FROM public.org_member WHERE id = $1",
         [writer().member]
       )
+      let allowedBeforeCommit: unknown
+      const probe = (inner: CommandDatabase): CommandDatabase => ({
+        async connect() {
+          const client = await inner.connect()
+          return {
+            async query(text, params) {
+              if (text === "COMMIT") {
+                const { rows: probed } = await client.query(
+                  `SELECT ${quoteIdent(SIGNAL_FUNCTIONS.topicAllowed.schema)}.${quoteIdent(SIGNAL_FUNCTIONS.topicAllowed.name)}($1, true)::text AS ok`,
+                  [channel()]
+                )
+                allowedBeforeCommit = probed[0]?.ok
+              }
+              return client.query(text, params)
+            },
+            release: (destroy) => client.release(destroy),
+          }
+        },
+      })
       const signals = await signalsOf(() =>
         withRuntime(
           env,
@@ -212,9 +250,11 @@ export function describeSignalMerge(): void {
                 mark: true,
               },
             ]),
-          { session: writer().session }
+          { session: writer().session, wrap: probe }
         )
       )
+      // Порт рантайму віддає значення текстом Postgres.
+      expect(allowedBeforeCommit).toBe("true")
       // Фаза членства — сама нова пара в режимі злиття: свій `invalidate`.
       expect(signals).toEqual([
         ...Array.from({ length: THRESHOLD }, change),
@@ -293,6 +333,123 @@ export function describeSignalMerge(): void {
       )
       expect(seen).toBe("merge")
       expect(signals).toEqual([change(), change()])
+    })
+  })
+}
+
+/**
+ * Створення кореня виду скоупу в режимі злиття (Р9: пара кореня — його
+ * власний id): ядро сигналу кореня не шле, T3 дає один `invalidate` у канал
+ * нового кореня, і політика outbox його пропускає — творець бачить новий
+ * скоуп у тій самій транзакції (модель з `rootCreator`).
+ */
+export function describeRootMerge(): void {
+  describe("signal merge mode on a scope root creation", () => {
+    const target = heldResource<{ url: string; owner: pg.Client; env: Env }>(
+      async (use) => {
+        const result = await compile(
+          policyDomain(
+            tenantSelfService({ requiredMember: true }),
+            profileLayer()
+          )
+        )
+        expect(result.diagnostics).toEqual([])
+        const model = result.model!
+        await withModelTarget(model, async (url) => {
+          const owner = new pg.Client({ connectionString: url })
+          await owner.connect()
+          try {
+            await seedMarker(owner, model.hash)
+            await use({
+              url,
+              owner,
+              env: {
+                dir: "",
+                url,
+                model,
+                catalog: buildRuntimeCatalog(model),
+                owner,
+              },
+            })
+          } finally {
+            await owner.end()
+          }
+        })
+      }
+    )
+    let held: { url: string; owner: pg.Client; env: Env }
+
+    beforeAll(async () => {
+      held = await target.open()
+    }, 180_000)
+    afterAll(() => target.close(), 60_000)
+
+    it("a root create after the switch: one invalidate into the root's own channel, no row signal", async () => {
+      const { env, owner } = held
+      let creator = ""
+      await committed(owner, async () => {
+        creator = await signUp(owner)
+      })
+      const organization = env.catalog.objects.find(
+        (o) => o.name === "Organization"
+      )!
+      expect(organization.signal).toBe(true)
+      const before = (
+        await owner.query<{ id: string }>(
+          `SELECT coalesce(max(id), 0)::text AS id FROM ${OUTBOX}`
+        )
+      ).rows[0]!.id
+      // Поріг 1: перший корінь шле свій сигнал і вмикає режим, другий —
+      // уже в режимі злиття.
+      const created = await withRuntimeLogin(
+        env.url,
+        [PLATFORM_ROLES.command, REQUEST_ROLE],
+        async (login) => {
+          const pool = new pg.Pool({ connectionString: login })
+          try {
+            const runtime = await createCommandRuntime({
+              database: fromPgPool(pool),
+              catalog: env.catalog,
+              signalMergeThreshold: 1,
+            })
+            const create = (title: string): Operation => ({
+              action: "create",
+              object: { kind: "Catalog", name: "Organization" },
+              creatorMember: { title },
+            })
+            return await runtime.run(sessionOf(creator), [
+              create("first"),
+              create("second"),
+            ])
+          } finally {
+            await pool.end()
+          }
+        },
+        "sig_root"
+      )
+      const [first, second] = created.rows.map(
+        (row) => row[organization.keyName] as string
+      )
+      const { rows } = await owner.query<{ payload: Signal }>(
+        `SELECT payload FROM ${OUTBOX} WHERE id > $1::bigint ORDER BY id`,
+        [before]
+      )
+      const rootChannel = (root: string) =>
+        channelTopic({
+          kind: "changes",
+          scopeKindId: ORG_KIND_ID,
+          scope: root,
+          object: organization.id,
+        })
+      expect(
+        rows.map(({ payload }) => ({
+          channel: payload.channel,
+          op: payload.data.op,
+        }))
+      ).toEqual([
+        { channel: rootChannel(first!), op: "create" },
+        { channel: rootChannel(second!), op: "invalidate" },
+      ])
     })
   })
 }

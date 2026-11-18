@@ -402,6 +402,9 @@ describe("buildRuntimeCatalog: signal", () => {
       (o) => o.name === "Organization"
     )
     expect(organization?.signal).toBe(true)
+    // Пара `invalidate` кореня в T3 (Р9 плану B2) — колонка скоупу каталогу;
+    // носій сигналу ядра — та сама колонка з `origin.scopeKindId`: ключ.
+    expect(organization?.scopeColumn).toBe(organization?.key)
   })
 
   // Ознака не залежить від набору операцій запису: генератор ядра (B2)
