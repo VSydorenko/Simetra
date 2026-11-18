@@ -10,7 +10,12 @@ import { catalogEntry } from "../../../model/runtime/__tests__/entries"
 import { createCore, type CoreSession } from "../core"
 import { createCoreSource, createReadLimiter } from "../source"
 import type { FakeReadLog, FakeSource } from "../testing/fake-source"
-import { DEFAULT_CORE_LIMITS, type Key, type ViewSpec } from "../types"
+import {
+  DEFAULT_CORE_LIMITS,
+  type CoreSnapshot,
+  type Key,
+  type ViewSpec,
+} from "../types"
 import {
   ORG,
   TASK,
@@ -26,6 +31,7 @@ import {
 } from "./core-support"
 
 const EA = "a".repeat(64)
+const EB = "b".repeat(64)
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -44,6 +50,7 @@ afterEach(() => {
 const orgKey = (n: number) => key(10_000 + n)
 const ROWS = 12
 const INCLUDE = { include: ["org"] }
+const LINES = [{ ref: key(900), qty: 1, lineNumber: 1 }]
 const LIST: ViewSpec = { kind: "window", object: TASK, ...INCLUDE }
 
 // Об'єкт з копією носія: маркер несе її значення, тож і ця відповідь більша.
@@ -105,19 +112,28 @@ function partWithoutKeys(fake: FakeSource, query: ReadQuery): number {
 
 // Верхня оцінка тіла запиту за кодеком, а не за виміром (джерела:
 // `readPartToWire` / `readQueryMap` у `model/runtime/mapping.ts` і
-// `knownSchema` у `model/runtime/read.ts`):
+// `knownSchema` / `knownVersionSchema` у `model/runtime/read.ts`):
 //  - стала частини (об'єкт, форма): `{"type":"query","query":{...}}` з об'єктом
 //    як UUID, колонками фізичних імен і порожнім списком ключів — її кодує
 //    сам `readPartToWire`, тож число не вгадане;
-//  - ключ частини без `known`: 36 символів UUID, дві лапки й кома — 39 Б;
-//  - ключ `known`: 64 Б (ключ 39 Б + версія текстом до 16 цифр + лапки й кома
-//    — межа `knownVersionSchema`, не більше 64 Б);
+//  - ключ у `where` (`in`): 36 символів UUID, дві лапки й кома — 39 Б; його
+//    платить кожна частина, і з `known` теж — ключі йдуть і в `where`, і в
+//    `known.keys`;
+//  - конверт `known` частини: `"known":{"epoch":<64 hex>,"keys":[],"versions":[]}`
+//    — кодується з порожніми списками, `epoch` — `versionEpochSchema`;
+//  - ключ `known`: 39 Б ключа + версія найдовшою формою `knownVersionSchema`
+//    (`^[1-9]\d{0,15}$`: 16 цифр, дві лапки, кома) — 19 Б;
 //  - частина `version`: `{"type":"version"}`;
 //  - 2 КіБ — запас §12.
 const KEY_BYTES = 39
-const KNOWN_KEY_BYTES = 64
+const KNOWN_KEY_BYTES = KEY_BYTES + jsonBytes("9".repeat(16)) + 1
+const KNOWN_ENVELOPE_BYTES = jsonBytes({
+  known: { epoch: "0".repeat(64), keys: [], versions: [] },
+})
 const VERSION_PART_BYTES = jsonBytes({ type: "version" })
 const SLACK = 2048
+/** §12: the `version` part of a reply, 2 KiB + 128 B per catalog object. */
+const VERSION_BOUND = (objects: number) => 2048 + 128 * objects
 
 function bodyBound(
   fake: FakeSource,
@@ -127,11 +143,9 @@ function bodyBound(
   let bound = SLACK + (hasVersion ? VERSION_PART_BYTES : 0)
   for (const read of reads) {
     bound += partWithoutKeys(fake, read.query!)
-    // Ключи читання за ключами несе й `where`; частина з `known` має їх у
-    // `known` (їхні 64 Б покривають і ключ `where`, бо це ті самі ключі).
-    const known = read.known?.keys.length ?? 0
-    bound += known * KNOWN_KEY_BYTES
-    if (known === 0) bound += keysOf(read.query).length * KEY_BYTES
+    bound += keysOf(read.query).length * KEY_BYTES
+    if (read.known !== undefined)
+      bound += KNOWN_ENVELOPE_BYTES + read.known.keys.length * KNOWN_KEY_BYTES
   }
   return bound
 }
@@ -193,6 +207,7 @@ describe.each(OBJECT_SETS)("read budgets, $name", (set) => {
   const open = () => {
     const h = setup({ objects: set.objects })
     seedWithOrgs(h.fake, ROWS)
+    h.fake.setLines(TASK, key(1), "lines", LINES)
     return h
   }
   const copiesOf = (fake: FakeSource) =>
@@ -228,6 +243,12 @@ describe.each(OBJECT_SETS)("read budgets, $name", (set) => {
     await settle()
     const requests = counted(fake, from)
     expect(requests).toHaveLength(1)
+    // Корисне: рядок картки, його ТЧ і ціль `include`.
+    const useful =
+      jsonBytes(fake.row(TASK, key(1))!.values) +
+      jsonBytes(LINES) +
+      jsonBytes(fake.row(ORG, orgKey(1))!.values)
+    expect(requests[0]!.response).toBeLessThanOrEqual(1.1 * useful + 2048)
     expectBodyBudget(requests)
   })
 
@@ -272,13 +293,7 @@ describe.each(OBJECT_SETS)("read budgets, $name", (set) => {
       fake.log.filter((r) => r.request === from).some((r) => r.known)
     ).toBe(true)
     expect(requests[0]!.response).toBeLessThanOrEqual(
-      8 * 2 * ROWS +
-        2048 +
-        copiesOf(fake) +
-        jsonBytes({
-          snapshotHash: fake.snapshotHash,
-          objects: fake.kernelHashes,
-        })
+      8 * 2 * ROWS + 2048 + copiesOf(fake) + VERSION_BOUND(set.objects.length)
     )
     expectBodyBudget(requests)
   })
@@ -304,13 +319,7 @@ describe.each(OBJECT_SETS)("read budgets, $name", (set) => {
       expect(requests[0]!.hasVersion).toBe(true)
       expect(requests[0]!.parts).toBeGreaterThan(1)
       expect(requests[0]!.response).toBeLessThanOrEqual(
-        8 * ROWS +
-          2048 +
-          copiesOf(fake) +
-          jsonBytes({
-            snapshotHash: fake.snapshotHash,
-            objects: fake.kernelHashes,
-          })
+        8 * ROWS + 2048 + copiesOf(fake) + VERSION_BOUND(set.objects.length)
       )
       expectBodyBudget(requests)
     })
@@ -326,10 +335,74 @@ describe.each(OBJECT_SETS)("read budgets, $name", (set) => {
       expect(requests[0]!.parts).toBe(1)
       expect(requests[0]!.hasVersion).toBe(true)
       expect(requests[0]!.response).toBeLessThanOrEqual(
-        2048 + 128 * set.objects.length
+        VERSION_BOUND(set.objects.length)
       )
       expectBodyBudget(requests)
     })
+  })
+})
+
+describe("a 300-row list with include", () => {
+  it("re-reads on resume() with known keys in where and in known: the body within the codec bound", async () => {
+    const { core, fake } = setup()
+    seedWithOrgs(fake, 300)
+    watch(core.view({ kind: "full", object: TASK, ...INCLUDE }))
+    await settle()
+    vi.advanceTimersByTime(DEFAULT_CORE_LIMITS.resumeMinIntervalMs + 1)
+    const from = fake.requests.length
+    core.resume()
+    await settle()
+    const requests = counted(fake, from)
+    expect(requests.length).toBeGreaterThan(0)
+    // Частини `keys` з `known` несуть кожен ключ двічі.
+    expect(
+      fake.log
+        .filter((r) => r.request >= from)
+        .some((r) => r.known !== undefined && keysOf(r.query).length > 0)
+    ).toBe(true)
+    expectBodyBudget(requests)
+  })
+})
+
+/** The snapshot of rows 1..2 of one epoch, as the HTML carries it. */
+async function twoRowSnapshot() {
+  const { core, fake } = setup()
+  fake.epoch = EA
+  for (let n = 1; n <= 2; n++)
+    fake.insert(TASK, taskValues(n, { status: null, subject: null }))
+  watch(core.view({ kind: "window", object: TASK }))
+  await settle()
+  const snapshot = JSON.parse(JSON.stringify(core.dehydrate())) as CoreSnapshot
+  return { fake, snapshot }
+}
+
+/** Hydrates `snapshot` over the fake and returns the `known` of the reconcile. */
+async function knownAfterHydration(fake: FakeSource, snapshot: CoreSnapshot) {
+  const next = coreOver(fake)
+  next.hydrate(snapshot)
+  watch(next.view({ kind: "window", object: TASK }))
+  const from = fake.log.length
+  next.endHydration()
+  await settle()
+  return fake.log.slice(from).flatMap((r) => (r.known ? [r.known] : []))
+}
+
+describe("the version epoch of an SSR snapshot", () => {
+  it("one epoch of every row becomes the epoch of the session: the re-read carries known of it", async () => {
+    const { fake, snapshot } = await twoRowSnapshot()
+    const known = await knownAfterHydration(fake, snapshot)
+    expect(known.map((k) => k.epoch)).toEqual([EA])
+    expect(known[0]!.keys).toHaveLength(2)
+  })
+
+  it("rows of two epochs: the session guesses none, no part carries known", async () => {
+    const { fake, snapshot } = await twoRowSnapshot()
+    const slots = snapshot.objects[TASK]!.slots as unknown as [
+      Record<string, unknown>,
+      Record<string, unknown>?,
+    ][]
+    slots[1] = [slots[1]![0], { ...slots[1]![1], epoch: EB }]
+    expect(await knownAfterHydration(fake, snapshot)).toEqual([])
   })
 })
 

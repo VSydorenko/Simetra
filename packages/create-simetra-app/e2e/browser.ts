@@ -2,9 +2,15 @@
 // відповідей `dataFn` з мережевого журналу Playwright, а не лічильники host-а
 // (журнал з `#instrument` — #210).
 import type { Browser, BrowserContext, Page } from "@playwright/test"
+import { catalogIndex, clientCatalogSchema, type OrderBy } from "simetra/model"
+import { listQuery } from "simetra/ui"
+import clientCatalogJson from "../template/generated/client-catalog.json" with { type: "json" }
 import type { App, TestUser } from "./fixtures"
 import { send } from "./http"
 import { decodeResponse } from "./serialization"
+
+const catalog = clientCatalogSchema.parse(clientCatalogJson)
+const index = catalogIndex(catalog.objects)
 
 /** Контекст браузера з cookie сесії (рядок заголовка `Cookie`). */
 export async function contextWithCookie(
@@ -122,6 +128,32 @@ export function watchDataFn(page: Page, app: App) {
  */
 export function expectedHydrationRequests(): number {
   return 1
+}
+
+/**
+ * Objects whose `query` parts the single request after hydration must carry
+ * (§6.7): the list object itself and, per `include`, the target object of
+ * each reference that is not empty in at least one row of the snapshot (an
+ * empty reference holds no target, so no held-target part exists). The
+ * snapshot is the HTML of the SSR response. One function for every scenario:
+ * a change of the views is fixed here, not in literals.
+ */
+export function expectedHydrationObjects(
+  objectRef: "Catalog.Client" | "Catalog.Country",
+  snapshotHtml: string,
+  orderBy?: OrderBy
+): string[] {
+  const entry = index.byRef.get(objectRef)
+  if (entry === undefined) throw new Error(`no ${objectRef} in the catalog`)
+  const targets = (listQuery(entry, { orderBy }).include ?? [])
+    .filter((attribute) => new RegExp(`[{,]${attribute}:"`).test(snapshotHtml))
+    .map((attribute) => {
+      const target = entry.attributes.find((a) => a.name === attribute)?.ref
+      if (target === undefined)
+        throw new Error(`include ${attribute} has no target object`)
+      return target.object
+    })
+  return [...new Set([entry.id, ...targets])]
 }
 
 // ------------------------------------------------------------ запис кадрів
