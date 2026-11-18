@@ -23,6 +23,8 @@ import {
   profileLayer,
   signUp,
   superuserClient,
+  TENANT_OPERATOR_ID,
+  tenantOperator,
   tenantSelfService,
 } from "../../../simetra/test/support"
 import { buildRuntimeCatalog, compile } from "simetra/compiler"
@@ -44,6 +46,7 @@ import {
   heldEnv,
   seedOrg,
 } from "./rights-admin-commands.support"
+import { seedGlobal } from "./tenant-creation.support"
 
 /**
  * Режим злиття сигналів (спека П4-B §8.2) через `runtime.run` над ціллю,
@@ -345,62 +348,79 @@ export function describeSignalMerge(): void {
  */
 export function describeRootMerge(): void {
   describe("signal merge mode on a scope root creation", () => {
-    const target = heldResource<{ url: string; owner: pg.Client; env: Env }>(
-      async (use) => {
-        const result = await compile(
-          policyDomain(
-            tenantSelfService({ requiredMember: true }),
-            profileLayer()
-          )
+    // Модель А створення тенанта: «кожен користувач» створює `Organization`
+    // з творцем; `TenantOperator` створює `Branch` без творця.
+    const target = heldResource<{
+      owner: pg.Client
+      env: Env
+      operator: string
+    }>(async (use) => {
+      const result = await compile(
+        policyDomain(
+          tenantSelfService({ requiredMember: true }),
+          tenantOperator(),
+          profileLayer()
         )
-        expect(result.diagnostics).toEqual([])
-        const model = result.model!
-        await withModelTarget(model, async (url) => {
-          const owner = new pg.Client({ connectionString: url })
-          await owner.connect()
-          try {
-            await seedMarker(owner, model.hash)
-            await use({
+      )
+      expect(result.diagnostics).toEqual([])
+      const model = result.model!
+      await withModelTarget(model, async (url) => {
+        const owner = new pg.Client({ connectionString: url })
+        await owner.connect()
+        try {
+          await seedMarker(owner, model.hash)
+          const { operator } = await seedGlobal(owner, {
+            operator: TENANT_OPERATOR_ID,
+          })
+          await use({
+            owner,
+            operator: operator!,
+            env: {
+              dir: "",
               url,
+              model,
+              catalog: buildRuntimeCatalog(model),
               owner,
-              env: {
-                dir: "",
-                url,
-                model,
-                catalog: buildRuntimeCatalog(model),
-                owner,
-              },
-            })
-          } finally {
-            await owner.end()
-          }
-        })
-      }
-    )
-    let held: { url: string; owner: pg.Client; env: Env }
+            },
+          })
+        } finally {
+          await owner.end()
+        }
+      })
+    })
+    let held: { owner: pg.Client; env: Env; operator: string }
 
     beforeAll(async () => {
       held = await target.open()
     }, 180_000)
     afterAll(() => target.close(), 60_000)
 
-    it("a root create after the switch: one invalidate into the root's own channel, no row signal", async () => {
-      const { env, owner } = held
-      let creator = ""
-      await committed(owner, async () => {
-        creator = await signUp(owner)
+    const objectOf = (name: string) =>
+      held.env.catalog.objects.find((o) => o.name === name)!
+    const rootChannel = (object: string, root: string) =>
+      channelTopic({
+        kind: "changes",
+        scopeKindId: ORG_KIND_ID,
+        scope: root,
+        object,
       })
-      const organization = env.catalog.objects.find(
-        (o) => o.name === "Organization"
-      )!
-      expect(organization.signal).toBe(true)
+
+    /**
+     * Пакет `operations` від користувача `user` з порогом 1: перша
+     * сигнальна фаза шле свій сигнал і вмикає режим. Повертає ключі рядків
+     * результату й сигнали, які дописала команда.
+     */
+    const runRoots = async (
+      user: string,
+      key: string,
+      operations: Operation[]
+    ) => {
+      const { env, owner } = held
       const before = (
         await owner.query<{ id: string }>(
           `SELECT coalesce(max(id), 0)::text AS id FROM ${OUTBOX}`
         )
       ).rows[0]!.id
-      // Поріг 1: перший корінь шле свій сигнал і вмикає режим, другий —
-      // уже в режимі злиття.
       const created = await withRuntimeLogin(
         env.url,
         [PLATFORM_ROLES.command, REQUEST_ROLE],
@@ -412,44 +432,66 @@ export function describeRootMerge(): void {
               catalog: env.catalog,
               signalMergeThreshold: 1,
             })
-            const create = (title: string): Operation => ({
-              action: "create",
-              object: { kind: "Catalog", name: "Organization" },
-              creatorMember: { title },
-            })
-            return await runtime.run(sessionOf(creator), [
-              create("first"),
-              create("second"),
-            ])
+            return await runtime.run(sessionOf(user), operations)
           } finally {
             await pool.end()
           }
         },
         "sig_root"
       )
-      const [first, second] = created.rows.map(
-        (row) => row[organization.keyName] as string
-      )
       const { rows } = await owner.query<{ payload: Signal }>(
         `SELECT payload FROM ${OUTBOX} WHERE id > $1::bigint ORDER BY id`,
         [before]
       )
-      const rootChannel = (root: string) =>
-        channelTopic({
-          kind: "changes",
-          scopeKindId: ORG_KIND_ID,
-          scope: root,
-          object: organization.id,
-        })
-      expect(
-        rows.map(({ payload }) => ({
+      return {
+        keys: created.rows.map((row) => row[key] as string),
+        signals: rows.map(({ payload }) => ({
           channel: payload.channel,
           op: payload.data.op,
-        }))
-      ).toEqual([
-        { channel: rootChannel(first!), op: "create" },
-        { channel: rootChannel(second!), op: "invalidate" },
+        })),
+      }
+    }
+
+    it("a root create after the switch: one invalidate into the root's own channel, no row signal", async () => {
+      let creator = ""
+      await committed(held.owner, async () => {
+        creator = await signUp(held.owner)
+      })
+      const organization = objectOf("Organization")
+      expect(organization.signal).toBe(true)
+      const create = (title: string): Operation => ({
+        action: "create",
+        object: { kind: "Catalog", name: "Organization" },
+        creatorMember: { title },
+      })
+      const { keys, signals } = await runRoots(creator, organization.keyName, [
+        create("first"),
+        create("second"),
       ])
+      expect(signals).toEqual([
+        { channel: rootChannel(organization.id, keys[0]!), op: "create" },
+        { channel: rootChannel(organization.id, keys[1]!), op: "invalidate" },
+      ])
+    })
+
+    // Корінь без творця (модель оператора) ядро не сигналить (Р8): актор
+    // нового скоупу не бачить. Така фаза не лічиться й `invalidate` не
+    // дає — інакше політика outbox відхилила б його й з ним усю команду.
+    it("operator roots after the switch: the command succeeds and no root signals", async () => {
+      const branch = objectOf("Branch")
+      expect(branch.signal).toBe(true)
+      expect(branch.operations?.create?.root?.membership).toBeUndefined()
+      const create: Operation = {
+        action: "create",
+        object: { kind: "Catalog", name: "Branch" },
+      }
+      const { keys, signals } = await runRoots(held.operator, branch.keyName, [
+        create,
+        create,
+        create,
+      ])
+      expect(keys).toHaveLength(3)
+      expect(signals).toEqual([])
     })
   })
 }

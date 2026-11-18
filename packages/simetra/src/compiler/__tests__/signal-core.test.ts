@@ -230,45 +230,73 @@ describe("command core: the signal call", () => {
 })
 
 // Одне джерело (спека П4-B §8.3): ознака `signal` каталогу рантайму — рівно
-// наявність виклику в ядрі, над справжнім доменом прикладу.
-describe("the signal flag of the reference domain", () => {
-  it("equals the presence of the call in every command core function", async () => {
-    const result = await compile(readReferenceDomain())
-    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
-    const model = result.model!
-    // Ядро створення кореня без творця сигналу не шле за задумом (Р8).
-    const withoutCreator = new Set(
-      model.scopeKinds.flatMap((k) =>
-        "objectId" in k.root && k.rootCreator === undefined
-          ? [k.root.objectId]
-          : []
+// наявність виклику в ядрі, над справжнім доменом прикладу й над доменом з
+// обома моделями створення кореня (з творцем і без).
+describe("the signal flag of the runtime catalog", () => {
+  it.each([
+    ["the reference domain", () => compile(readReferenceDomain()), false],
+    [
+      "the root creation domain",
+      () => compileRights(rootCreationDomain()),
+      true,
+    ],
+  ] as const)(
+    "%s: equals the presence of the call in every command core function",
+    async (_, compiled, roots) => {
+      const result = await compiled()
+      expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual(
+        []
       )
-    )
-    const functions = model.sqlUnits.filter(
-      (u) => u.generator === "catalogCommand" && u.class === "function"
-    )
-    const flags = buildRuntimeCatalog(model).objects.flatMap((object) => {
-      const own = functions.filter(
-        (u) =>
-          u.ownerObjectId === object.id &&
-          // Перевірка рядка членства — не ядро запису.
-          !u.identity.includes("_simetra_member_check(")
+      const model = result.model!
+      // Ядро створення кореня без творця сигналу не шле за задумом (Р8). Факт
+      // творця — той, яким T3 вирішує, чи фаза кореня сигнальна
+      // (`operations.create.root.membership`): так лік фаз і `invalidate` T3
+      // не розходяться з ядром.
+      const catalog = buildRuntimeCatalog(model)
+      const withoutCreator = new Set(
+        catalog.objects.flatMap((o) =>
+          o.operations?.create?.root !== undefined &&
+          o.operations.create.root.membership === undefined
+            ? [o.id]
+            : []
+        )
       )
-      if (own.length === 0) return []
-      return own.map((u) => ({
-        fn: u.identity,
-        signal:
-          object.signal &&
-          !(
-            u.identity.includes("_create_root(") &&
-            withoutCreator.has(object.id)
-          ),
-        call: hasSignal(u.sql),
-      }))
-    })
-    // Обидві гілки представлено: інакше рівність нічого б не доводила.
-    expect(flags.some((f) => f.signal)).toBe(true)
-    expect(flags.some((f) => !f.signal)).toBe(true)
-    expect(flags.filter((f) => f.call !== f.signal)).toEqual([])
-  })
+      if (roots) {
+        // Обидві гілки створення кореня представлено.
+        expect(withoutCreator.size).toBeGreaterThan(0)
+        expect(
+          catalog.objects.some(
+            (o) => o.operations?.create?.root?.membership !== undefined
+          )
+        ).toBe(true)
+      }
+      const functions = model.sqlUnits.filter(
+        (u) => u.generator === "catalogCommand" && u.class === "function"
+      )
+      const flags = catalog.objects.flatMap((object) => {
+        const own = functions.filter(
+          (u) =>
+            u.ownerObjectId === object.id &&
+            // Перевірка рядка членства й грант творцю кореня — не ядра запису.
+            !u.identity.includes("_simetra_member_check(") &&
+            !u.identity.includes("_root_creator(")
+        )
+        if (own.length === 0) return []
+        return own.map((u) => ({
+          fn: u.identity,
+          signal:
+            object.signal &&
+            !(
+              u.identity.includes("_create_root(") &&
+              withoutCreator.has(object.id)
+            ),
+          call: hasSignal(u.sql),
+        }))
+      })
+      // Обидві гілки представлено: інакше рівність нічого б не доводила.
+      expect(flags.some((f) => f.signal)).toBe(true)
+      expect(flags.some((f) => !f.signal)).toBe(true)
+      expect(flags.filter((f) => f.call !== f.signal)).toEqual([])
+    }
+  )
 })

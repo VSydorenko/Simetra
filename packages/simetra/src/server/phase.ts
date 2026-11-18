@@ -634,7 +634,7 @@ export async function runPhase(
   const draft = await beforeWrite(tx, phase, module, draftOf(op))
   const call = callOf(found, op, draft)
   if ("error" in call) tx.abort(call.error)
-  const { text, merged } = await callCore(tx, found, op, call)
+  const { text, merged } = await callCore(tx, found, op, call, object.signal)
   const row = decodeCoreRow(tx, object, () => JSON.parse(text) as unknown)
   if (merged) await tx.invalidate(object, row.scope, writePhase(object, op))
   recordChange(tx, object, op, row)
@@ -714,7 +714,14 @@ async function runRootPhase(
       op.memberId ?? null,
     ],
   }
-  const { text, merged } = await callCore(tx, found, op, call, membership)
+  const { text, merged } = await callCore(
+    tx,
+    found,
+    op,
+    call,
+    phaseSignals(object, membership),
+    membership
+  )
   let result: unknown
   const rootRow = decodeCoreRow(tx, object, () => {
     result = JSON.parse(text)
@@ -755,15 +762,30 @@ const writePhase = (object: RuntimeObject, op: Operation): ErrorPhase => ({
 })
 
 /**
+ * Чи шле ядро фази створення кореня сигнал — одне правило з генератором
+ * ядра (Р8 плану B2): лише сигнальний об'єкт і лише з творцем. Творця дає
+ * той самий факт виду (`rootCreator`), що й функцію гранту в ядрі:
+ * `operations.create.root.membership` каталогу рантайму. Без творця актор
+ * нового скоупу не бачить, і `invalidate` такого кореня відхилила б
+ * політика outbox — фаза сигнальною не є, не лічиться й `invalidate` не дає.
+ */
+const phaseSignals = (
+  object: RuntimeObject,
+  membership: RuntimeObject | undefined
+): boolean => object.signal && membership !== undefined
+
+/**
  * Контекст і виклик ядра — неподільна одиниця черги (Рт5): між
  * ними не стане оператор іншої фази. Повертає текст рядка ядра і чи йшла
- * фаза в режимі злиття сигналів (спека П4-B §8.2).
+ * фаза в режимі злиття сигналів (спека П4-B §8.2); `signals` — чи шле ядро
+ * фази сигнал.
  */
 async function callCore(
   tx: Transaction,
   { object, target }: Target,
   op: PreparedOperation,
   call: Statement,
+  signals: boolean,
   membership?: RuntimeObject
 ): Promise<{ text: string; merged: boolean }> {
   const phase: ErrorPhase = {
@@ -772,7 +794,7 @@ async function callCore(
   }
   const core = tx.enqueue([contextOf({ object, target }, op), call], phase)
   // Лік — одразу за постановкою ядра в чергу, без `await` між ними.
-  const { merged, switched } = tx.signalPhase(object, phase)
+  const { merged, switched } = tx.signalPhase(signals, phase)
   const { rows } = await core
   await switched
   const text = rows[0]?.r

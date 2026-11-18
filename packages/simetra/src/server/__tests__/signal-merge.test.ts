@@ -23,6 +23,7 @@ import {
   rootCatalog,
 } from "./fixtures"
 import {
+  BRANCH,
   CLIENT,
   ROOT,
   answer,
@@ -269,6 +270,31 @@ describe("signal merge mode", () => {
     expect(db.calls[cores[1]! + 1]).toEqual(
       invalidate(organization.id, organization.scopeKindId!, ROOT)
     )
+  })
+
+  // Корінь без творця ядро не сигналить (Р8 плану B2): фаза не лічиться й
+  // `invalidate` не дає — інакше політика outbox відхилила б команду.
+  it("does not count a root without a creator and gives it no invalidate", async () => {
+    const { db, runtime } = await setup(
+      (text, params) => {
+        if (!text.includes("branch_create_root")) return echoCore(text, params)
+        const item = JSON.parse(params[0]!) as { id: string }
+        return {
+          rows: [{ r: rootResult({ id: item.id, version: 1 }, null) }],
+        }
+      },
+      { catalog: rootCatalog, signalMergeThreshold: 1 }
+    )
+    const branchRoot: Operation = { action: "create", object: BRANCH }
+    await runtime.run(session, [branchRoot, branchRoot])
+    expect(mergeIndexes(db.calls)).toEqual([])
+
+    db.calls.splice(0)
+    await runtime.run(session, [branchRoot, createIn(CLIENT), branchRoot])
+    const cores = coreIndexes(db.calls)
+    // Режим — лише за ядром `Client`; другий корінь без творця — без `invalidate`.
+    expect(mergeIndexes(db.calls)).toEqual([cores[1]! + 1])
+    expect(invalidates(db.calls)).toEqual([])
   })
 
   // Типовий поріг — з бенчмарку `bench:signals` (спека П4-B §8.2): поріг +

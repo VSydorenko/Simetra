@@ -451,8 +451,9 @@ export class Transaction {
   }
 
   /**
-   * Лічить фазу над `object`, ядро якої щойно стало в чергу (спека П4-B
-   * §8.2): `true` — фаза йде вже в режимі злиття, і ядро сигналу не шле.
+   * Лічить фазу, ядро якої щойно стало в чергу (спека П4-B §8.2), коли
+   * `signals` — ядро фази шле сигнал (див. `phaseSignals` у `phase.ts`):
+   * `true` — фаза йде вже в режимі злиття, і ядро сигналу не шле.
    * Фаза, що доводить лік до порогу, ще шле свій сигнал; режим ставиться
    * одразу за її ядром, до будь-якої наступної фази, й більше не знімається.
    * Лік синхронний із чергою: паралельні `ctx.run` хука лічаться в тому
@@ -460,10 +461,10 @@ export class Transaction {
    * режиму, щоб фаза дочекалася його відмови.
    */
   signalPhase(
-    object: RuntimeObject,
+    signals: boolean,
     phase: ErrorPhase
   ): { merged: boolean; switched?: Promise<unknown> } {
-    if (!object.signal) return { merged: false }
+    if (!signals) return { merged: false }
     if (this.signalMerge) return { merged: true }
     if (++this.signalPhases < this.state.signalMergeThreshold) {
       return { merged: false }
