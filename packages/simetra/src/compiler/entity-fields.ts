@@ -2,6 +2,7 @@ import {
   KIND_REGISTRY,
   standardLogicalName,
   standardElementId,
+  isObjectOrigin,
   type LocalizedString,
   type LogicalType,
   type MetadataRef,
@@ -98,6 +99,7 @@ export function objectEntity(
   // інтерфейсів не мають.
   const main = model.physical.tables.find(
     (table) =>
+      isObjectOrigin(table.origin) &&
       table.origin.objectId === object.id &&
       table.origin.part === undefined &&
       table.origin.tabularSectionId === undefined

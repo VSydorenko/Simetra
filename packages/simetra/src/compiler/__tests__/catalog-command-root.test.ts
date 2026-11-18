@@ -1,3 +1,4 @@
+import { objectTable } from "simetra/model"
 import { parsePlPgSQLSync } from "@libpg-query/parser"
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompileResult, CompiledModel } from "simetra/compiler"
@@ -67,7 +68,9 @@ describe("<root>_create_root", () => {
   it("runs input → creatorMember → context → after-state → right → INSERT → grant → reads", () => {
     const root = contract("organization")
     const shape = bodyShape(unitOf("organization").sql)
-    const main = model.physical.tables.find((t) => t.name === "organization")!
+    const main = objectTable(
+      model.physical.tables.find((t) => t.name === "organization")!
+    )
     const rights = model.contracts.rights.find(
       (r) => r.objectId === root.objectId
     )!

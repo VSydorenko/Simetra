@@ -479,7 +479,15 @@ describe("buildPlan", () => {
         target: "postgres://target",
         shadow: "postgres://shadow",
       }
-      // Свіжа ціль Postgres 17; роль команд є лише на іншому сервері
+      // Свіжа ціль Postgres 17; роль команд є лише на іншому сервері, а
+      // група споживача сигналів — на обох: відмова — лише за роллю команд
+      const role = (name: string) => ({
+        name,
+        attributes: {},
+        memberOf: [],
+        members: [],
+        requestPath: [],
+      })
       const reader: ApplyDatabase = {
         statement: () => Promise.reject(new Error("no statement expected")),
         transaction: (db, _end, fn) =>
@@ -489,16 +497,12 @@ describe("buildPlan", () => {
                 ? [{ num: 170004, version: "17.4", major: 17 }]
                 : sql.includes("AS bypassrls")
                   ? [{ bypassrls: true, superuser: false }]
-                  : sql.includes("pg_auth_members") &&
-                      db.url !== urls[server as "target" | "shadow"]
+                  : sql.includes("pg_auth_members")
                     ? [
-                        {
-                          name: PLATFORM_ROLES.command,
-                          attributes: {},
-                          memberOf: [],
-                          members: [],
-                          requestPath: [],
-                        },
+                        ...(db.url !== urls[server as "target" | "shadow"]
+                          ? [role(PLATFORM_ROLES.command)]
+                          : []),
+                        role(PLATFORM_ROLES.signalConsumer),
                       ]
                     : []) as unknown as R[],
             extract: () => Promise.reject(new Error("no extract expected")),

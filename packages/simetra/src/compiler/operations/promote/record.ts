@@ -4,6 +4,7 @@ import {
   SQL_UNIT_CLASSES,
   standardLogicalName,
   standardElementId,
+  isObjectOrigin,
   type AttributeCase,
   type PhysicalColumn,
   type PhysicalSnapshot,
@@ -428,6 +429,7 @@ function derive(
     const was = single(
       before.tables.filter(
         ({ origin }) =>
+          isObjectOrigin(origin) &&
           origin.objectId === id &&
           origin.tabularSectionId === undefined &&
           origin.part === undefined
@@ -438,6 +440,7 @@ function derive(
     const now = single(
       after.physical.tables.filter(
         ({ origin }) =>
+          isObjectOrigin(origin) &&
           origin.objectId === objectId &&
           origin.part === undefined &&
           origin.tabularSectionId === (id === objectId ? undefined : id)
@@ -833,12 +836,16 @@ function deleteSemantics(
     pairs.slice(0, 1).map(({ now }) => JSON.stringify([now.schema, now.name]))
   )
   for (const table of after.tables) {
-    if (table.origin.objectId === objectId) continue
+    // Outbox платформи FK не має, тож у каскад промоції не входить.
+    if (!isObjectOrigin(table.origin) || table.origin.objectId === objectId)
+      continue
+    const { origin } = table
     const was = before.tables.find(
       (t) =>
-        t.origin.objectId === table.origin.objectId &&
-        t.origin.tabularSectionId === table.origin.tabularSectionId &&
-        t.origin.part === table.origin.part
+        isObjectOrigin(t.origin) &&
+        t.origin.objectId === origin.objectId &&
+        t.origin.tabularSectionId === origin.tabularSectionId &&
+        t.origin.part === origin.part
     )
     for (const fk of table.foreignKeys) {
       const target = JSON.stringify([fk.references.schema, fk.references.table])

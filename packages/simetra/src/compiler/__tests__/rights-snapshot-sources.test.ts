@@ -4,6 +4,7 @@ import {
   KIND_REGISTRY,
   PLATFORM_SCHEMA,
   PROVIDER_API_ROLES,
+  isObjectOrigin,
 } from "simetra/model"
 import { SNAPSHOT_TABLES, type SnapshotFact } from "../rights/actor-snapshot"
 import { RIGHTS_FUNCTIONS } from "../rights/functions"
@@ -186,6 +187,7 @@ describe("actor snapshot sources", () => {
         if (
           table === undefined ||
           table.schema === PLATFORM_SCHEMA ||
+          !isObjectOrigin(table.origin) ||
           KIND_REGISTRY[kinds.get(table.origin.objectId)!].declared
         )
           continue

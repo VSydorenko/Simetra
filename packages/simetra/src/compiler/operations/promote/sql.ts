@@ -3,6 +3,7 @@ import {
   KIND_REGISTRY,
   PROVIDER_EVENT_SOURCES,
   standardLogicalName,
+  isObjectOrigin,
   type MetadataRef,
   type StandardColumnDef,
 } from "simetra/model"
@@ -380,6 +381,7 @@ function mainTable(
   )
   const table = model.physical.tables.find(
     ({ origin }) =>
+      isObjectOrigin(origin) &&
       origin.objectId === object?.id &&
       origin.part === undefined &&
       origin.tabularSectionId === undefined
@@ -774,7 +776,7 @@ export function labelConsumers(
   for (const object of after.objects) {
     const def = KIND_REGISTRY[object.kind]
     const tables = after.physical.tables.filter(
-      (t) => t.origin.objectId === object.id
+      (t) => isObjectOrigin(t.origin) && t.origin.objectId === object.id
     )
     for (const { ref, pointer, pair } of def.references(object.data)) {
       if (!pair || ref.kind !== target.kind || ref.name !== target.name) {

@@ -111,6 +111,7 @@ describe("grant generators on a profile without the service role", () => {
         "PUBLIC",
         "simetra_anon",
         "simetra_command",
+        "simetra_signal_consumer",
         "simetra_user",
       ])
       expect(grants.some((sql) => sql.includes("simetra_user"))).toBe(true)
@@ -129,9 +130,14 @@ describe("supabase grants are unchanged", () => {
   // до зміни (f7ed92d9) плюс `USAGE` схеми застосунку отримувачам
   // згенерованих грантів її таблиць і функцій:
   // лише оператори GRANT/REVOKE, не весь SQL.
+  // Гранти outbox сигналів з'явилися пізніше за базу; їх точний перелік на
+  // кожному провайдері звіряє signal-outbox.test.ts.
   it("reference domain: the GRANT/REVOKE statements equal the baseline", async () => {
     const { units } = await compileReference("supabase")
-    const grants = units.map((u) => u.sql.trim()).filter(isGrant)
+    const grants = units
+      .filter((u) => u.generator !== "signalOutbox")
+      .map((u) => u.sql.trim())
+      .filter(isGrant)
     expect(grants).toEqual(supabaseGrants)
   })
 })

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { objectTable } from "simetra/model"
 import { describe, expect, it } from "vitest"
 import {
   compile,
@@ -1059,7 +1060,7 @@ describe.concurrent("buildPlan", () => {
               result.diagnostics.filter((d) => d.severity === "error")
             ).toEqual([])
             const before = result.model!.physical
-            const t = before.tables.find((x) => x.name === "t")!
+            const t = objectTable(before.tables.find((x) => x.name === "t")!)
             expect(t.columns.find((c) => c.name === "c")!.type).toBe(
               "public.code_t"
             )

@@ -13,6 +13,7 @@ import {
 import { applyDiagnostic } from "./diagnostic"
 import { CLUSTER_ADVISORY_LOCK } from "./execute"
 import {
+  loginSettingSql,
   platformRoleRefusals,
   platformRoleSet,
   readPlatformRoles,
@@ -664,6 +665,7 @@ function plannedRoles(set: PostgresClusterSet): {
         (parent) =>
           `GRANT ${q(parent)} TO ${q(l.name)} WITH INHERIT FALSE, SET TRUE`
       ),
+      ...loginSettingSql(l),
     ],
   })
   return [

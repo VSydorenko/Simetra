@@ -582,7 +582,11 @@ describe("stage 3: physical snapshot", () => {
     expect(searchIndexes(order).map((i) => i.name)).toEqual([
       "order_description_id_idx",
     ])
-    expect(physical.tables.map((t) => t.name)).toEqual(["order"])
+    // Поруч — лише outbox сигналів платформи, що є в кожному проєкті.
+    expect(physical.tables.map((t) => t.name)).toEqual([
+      "order",
+      "signal_outbox",
+    ])
   })
 
   it("array of references is uuid[] without fk", async () => {

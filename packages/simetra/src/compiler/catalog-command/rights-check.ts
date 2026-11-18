@@ -1,4 +1,4 @@
-import type { PhysicalTable } from "simetra/model"
+import type { ObjectTable } from "simetra/model"
 import type { RightsContract } from "../contracts"
 import {
   renderCondition,
@@ -22,7 +22,7 @@ export type CommandRow = "v_old" | "v_new"
 export function rightsCheckPredicates(
   contract: RightsContract,
   action: string,
-  main: PhysicalTable,
+  main: ObjectTable,
   row: CommandRow,
   dml: PredicateDml
 ): string[] {
@@ -40,7 +40,7 @@ export function rightsCheckPredicates(
 export function rightsCheck(
   contract: RightsContract,
   action: string,
-  main: PhysicalTable,
+  main: ObjectTable,
   row: CommandRow,
   dml: PredicateDml
 ): string {

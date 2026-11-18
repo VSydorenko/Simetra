@@ -17,8 +17,11 @@ export interface PhysicalSnapshot {
   enumTypes: PhysicalEnumType[]
 }
 
-/** Звідки в метаданих походить фізичний об'єкт (для `explain`). */
-export interface PhysicalOrigin {
+/** Звідки походить фізичний об'єкт (для `explain`): з об'єкта метаданих чи з самої платформи. */
+export type PhysicalOrigin = ObjectOrigin | PlatformOrigin
+
+/** Фізичний об'єкт, який виводить об'єкт метаданих. */
+export interface ObjectOrigin {
   objectId: string
   tabularSectionId?: string
   /**
@@ -45,11 +48,47 @@ export interface PhysicalOrigin {
     | "rightsTxRootMarker"
 }
 
+/**
+ * Таблиця платформи, що є в кожному проєкті й не має об'єкта-власника
+ * (спека профілю `postgres` §5.1): outbox сигналів. `objectId` у неї немає
+ * зовсім, а не порожній — читач розрізняє форми явно, і порожній id не
+ * збігається мовчки з чужим пошуком.
+ */
+export interface PlatformOrigin {
+  part: "signalOutbox"
+}
+
+/** Чи походить об'єкт з об'єкта метаданих (а не з самої платформи). */
+export function isObjectOrigin(origin: PhysicalOrigin): origin is ObjectOrigin {
+  return "objectId" in origin
+}
+
+/** Таблиця знімка, яку виводить об'єкт метаданих. */
+export type ObjectTable = PhysicalTable & { origin: ObjectOrigin }
+
+/** Чи таблицю виводить об'єкт метаданих (а не платформа без об'єкта). */
+export function isObjectTable(table: PhysicalTable): table is ObjectTable {
+  return isObjectOrigin(table.origin)
+}
+
+/**
+ * Таблиця, яка за побудовою належить об'єкту (знайдена за його контрактом чи
+ * ключем). Таблиця платформи тут — дефект компілятора, а не стан моделі.
+ */
+export function objectTable(table: PhysicalTable): ObjectTable {
+  if (!isObjectTable(table)) {
+    throw new Error(
+      `internal: ${table.schema}.${table.name} is a platform table without an object`
+    )
+  }
+  return table
+}
+
 export interface PhysicalEnumType {
   schema: string
   name: string
   values: string[]
-  origin: PhysicalOrigin
+  origin: ObjectOrigin
 }
 
 export interface PhysicalTable {

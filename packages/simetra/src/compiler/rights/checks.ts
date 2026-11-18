@@ -7,6 +7,7 @@ import {
   standardLogicalName,
   toSnakeCase,
   standardElementId,
+  isObjectOrigin,
   type CarrierCopyOf,
   type CustomAction,
   type AssignmentSource,
@@ -540,7 +541,9 @@ function checkCarrierCopies(
   const owner = { schema: main.schema, name: main.name }
   const sections = carriers.physical.tables.filter(
     (t) =>
-      t.origin.objectId === objectId && t.origin.tabularSectionId !== undefined
+      isObjectOrigin(t.origin) &&
+      t.origin.objectId === objectId &&
+      t.origin.tabularSectionId !== undefined
   )
   const diagnostics: Diagnostic[] = []
   const reported = new Set<string>()

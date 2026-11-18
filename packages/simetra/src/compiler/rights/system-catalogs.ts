@@ -2,6 +2,7 @@ import {
   KIND_REGISTRY,
   RIGHTS_DELTA_SECTION,
   standardElementId,
+  isObjectOrigin,
   type Catalog,
   type PhysicalSnapshot,
   type RightsSystemCatalog,
@@ -303,7 +304,7 @@ export function rightsCatalogTables(
   )
   return new Set(
     physical.tables
-      .filter((t) => ids.has(t.origin.objectId))
+      .filter((t) => isObjectOrigin(t.origin) && ids.has(t.origin.objectId))
       .map((t) => `${t.schema}.${t.name}`)
   )
 }
@@ -337,6 +338,7 @@ export function rightsCatalogContracts(
         ? mainTableOf(physical, id)
         : physical.tables.find(
             (t) =>
+              isObjectOrigin(t.origin) &&
               t.origin.objectId === id &&
               t.origin.tabularSectionId === tabularSectionId
           )

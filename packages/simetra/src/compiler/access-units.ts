@@ -3,7 +3,9 @@ import {
   PLATFORM_ROLES,
   PROVIDER_API_ROLES,
   PUBLIC_READ_PURPOSES,
+  isObjectTable,
   makeObjectName,
+  objectTable,
   quoteIdent,
   tabularParentColumn,
   toSnakeCase,
@@ -11,8 +13,8 @@ import {
   type AttributeCase,
   type DatabaseProvider,
   type Dml,
+  type ObjectTable,
   type PhysicalSnapshot,
-  type PhysicalTable,
   type PublicReadRole,
   type RequestRolePurpose,
 } from "simetra/model"
@@ -79,7 +81,9 @@ export function accessContracts(
   const withRights = new Set(rights.map((r) => r.objectId))
   return physical.tables
     .flatMap((table): AccessContract[] => {
-      if (table.rowLevelSecurity === "off") return []
+      // Outbox сигналів (походження платформи) має RLS, але не об'єкт: його
+      // гранти й політики дає платформний шар, а не контракт доступу.
+      if (table.rowLevelSecurity === "off" || !isObjectTable(table)) return []
       const object = must(byId.get(table.origin.objectId))
       if (isDeclaredTable(object)) return []
       const kindId = scopeKindIdByFile.get(object.file)
@@ -147,7 +151,7 @@ export function accessContracts(
  * за тригером ефектів.
  */
 function commandColumns(
-  table: PhysicalTable,
+  table: ObjectTable,
   facts: {
     attributeCase: AttributeCase
     main: boolean
@@ -609,8 +613,8 @@ const DML_COMMAND = {
  */
 function writePolicies(
   rights: RightsContract,
-  table: PhysicalTable,
-  main: PhysicalTable,
+  table: ObjectTable,
+  main: ObjectTable,
   names: ReturnType<typeof accessPolicyNames>,
   label: (predicate: RightsPredicate) => string
 ): string[] {
@@ -741,15 +745,18 @@ function rightsLabel(
 }
 
 /** Колонка id користувача: ключ основної таблиці, у рядку ТЧ — `parent_id`. */
-function usersKey(table: PhysicalTable, keyColumn: string): string {
+function usersKey(table: ObjectTable, keyColumn: string): string {
   if (table.origin.tabularSectionId === undefined) return keyColumn
   return styleFreeColumn(table, tabularParentColumn()).name
 }
 
+// Таблиця контракту доступу — завжди таблиця об'єкта (`accessContracts`).
 function tableOf(physical: PhysicalSnapshot, name: QualifiedName) {
-  return must(
-    physical.tables.find(
-      (t) => t.schema === name.schema && t.name === name.name
+  return objectTable(
+    must(
+      physical.tables.find(
+        (t) => t.schema === name.schema && t.name === name.name
+      )
     )
   )
 }

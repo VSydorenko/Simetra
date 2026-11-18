@@ -2,6 +2,7 @@ import {
   MEMBERSHIP_SET_FUNCTION,
   makeObjectName,
   quoteIdent,
+  isObjectOrigin,
   type GrantPurpose,
   type PhysicalSnapshot,
   type PhysicalTable,
@@ -101,6 +102,7 @@ export function membershipsOf(
       const table = must(
         physical.tables.find(
           (t) =>
+            isObjectOrigin(t.origin) &&
             t.origin.objectId === object.id &&
             t.origin.tabularSectionId === undefined &&
             t.origin.part === undefined

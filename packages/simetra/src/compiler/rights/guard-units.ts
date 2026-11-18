@@ -9,6 +9,8 @@ import {
   keyColumn,
   quoteIdent,
   tabularParentColumn,
+  isObjectTable,
+  objectTable,
   type AttributeCase,
   type DatabaseProvider,
   type PhysicalSnapshot,
@@ -17,6 +19,7 @@ import {
   KIND_REGISTRY,
   COMMAND_CORE_ERRORS,
   CURRENT_USER_FUNCTION_NAME,
+  type ObjectTable,
 } from "simetra/model"
 import {
   qualified,
@@ -70,7 +73,7 @@ export type GuardContracts = Pick<
 
 type CatalogKind = "role" | "delta" | "assignment"
 interface CatalogTable {
-  table: PhysicalTable
+  table: ObjectTable
   kind: CatalogKind
   catalog: RightsCatalogContract
   key: string
@@ -136,16 +139,14 @@ function scopeColumn(table: PhysicalTable): string | undefined {
     ?.name
 }
 
-function tableOf(
-  physical: PhysicalSnapshot,
-  name: QualifiedName
-): PhysicalTable {
+// Таблиці прав і їхніх джерел — таблиці об'єктів.
+function tableOf(physical: PhysicalSnapshot, name: QualifiedName): ObjectTable {
   const found = physical.tables.find(
     (table) => table.schema === name.schema && table.name === name.name
   )
   if (found === undefined)
     throw new Error(`internal: missing rights table ${ref(name)}`)
-  return found
+  return objectTable(found)
 }
 
 function catalogTables(
@@ -1203,7 +1204,7 @@ export function buildRightsGuardUnits(
     for (const sql of executeGrants(`${ref(name)}()`, [], provider))
       add(sql, ownerObjectId)
   }
-  const addTruncate = (table: PhysicalTable) => {
+  const addTruncate = (table: ObjectTable) => {
     const name = tableName(table)
     const fn = functionName(name, labels.truncate)
     addFunction(fn, truncateBody(table), table.origin.objectId)
@@ -1361,7 +1362,8 @@ export function buildRightsGuardUnits(
     if (relations.has(key)) continue
     relations.add(key)
     const table = physical.tables.find(
-      (candidate) =>
+      (candidate): candidate is ObjectTable =>
+        isObjectTable(candidate) &&
         candidate.schema === relation.table.schema &&
         candidate.name === relation.table.name &&
         candidate.origin.objectId === relation.objectId &&

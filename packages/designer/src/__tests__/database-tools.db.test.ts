@@ -32,11 +32,12 @@ import {
   loginUrl,
   withSessionOptions,
 } from "../../../simetra/test/support"
-import { asSuperuser, dropRoles, query } from "./support/db"
+import { asSuperuser, dropRoles, outboxSql, query } from "./support/db"
 import {
   call,
   ENV,
   errors,
+  expectOnlyPlatformInstall,
   freshProject,
   inTarget,
   introspected,
@@ -215,8 +216,12 @@ describe("introspect", () => {
 })
 
 describe("diff", () => {
-  it("diff of an introspected database is empty", async () => {
+  it("diff of an introspected database is exactly the platform install", async () => {
     await introspected(async (dir, env) => {
+      // Платформну установку (outbox сигналів) має кожен проєкт; базу без
+      // стану застосування доповнить перше застосування — інших
+      // відмінностей немає
+      await expectOnlyPlatformInstall(await diffData(dir, env), dir)
       const r = await runTool(
         toolByName("diff")!,
         { _: [dir] },
@@ -224,8 +229,9 @@ describe("diff", () => {
         process.cwd(),
         env
       )
-      expect(r.stdout).toContain("diff: the database matches the metadata")
-      expect(r.exitCode).toBe(0)
+      expect(r.stdout).toContain("signal_outbox")
+      // Непорожня звірка — код 1: CI чекає порожньої (cli/command.ts)
+      expect(r.exitCode).toBe(1)
     })
   })
 
@@ -370,6 +376,8 @@ const withoutSequence = (model: CompiledModel): string =>
 async function applyComplete(url: string, model: CompiledModel): Promise<void> {
   await query(url, renderApplyState(model))
   await query(url, sequenceSql(model))
+  // Повне застосування створює й outbox сигналів, що є в кожному проєкті
+  await query(url, outboxSql(model))
 }
 
 const diffData = async (
@@ -398,15 +406,9 @@ async function usersProject(): Promise<{ dir: string; model: CompiledModel }> {
 }
 
 describe("diff and the apply state", () => {
-  it("a database without the apply state matches its metadata", async () => {
+  it("a database without the apply state matches its metadata but for the platform install", async () => {
     await introspected(async (dir, env) => {
-      const data = await diffData(dir, env)
-      expect(data).toMatchObject({
-        plan: [],
-        differences: [],
-        empty: true,
-        applyState: "absent",
-      })
+      await expectOnlyPlatformInstall(await diffData(dir, env), dir)
       const cli = await runTool(
         toolByName("diff")!,
         { _: [dir] },
@@ -414,7 +416,7 @@ describe("diff and the apply state", () => {
         process.cwd(),
         env
       )
-      expect(cli.exitCode).toBe(0)
+      expect(cli.exitCode).toBe(1)
     })
   })
 

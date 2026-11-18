@@ -19,9 +19,12 @@ import { basename, join } from "node:path"
 import { PassThrough } from "node:stream"
 import { fileURLToPath } from "node:url"
 import {
+  LOGIN_ROLE_SETTINGS,
+  loginRoleParentNames,
   PLATFORM_LOGIN_ROLES,
   PROVIDER_LOGIN_ROLES,
   PROVIDER_OWNER_ROLES,
+  type PlatformLoginPurpose,
 } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
@@ -390,6 +393,68 @@ function unguardedGrants(sql: string): string[] {
   return rest.match(/\bGRANT\b[^;]*;/gi) ?? []
 }
 
+/**
+ * Пари (роль входу, група) налаштування `role` з даних T0: налаштування
+ * `LOGIN_ROLE_SETTINGS`, а група — серед батьків ролі за `LOGIN_ROLE_PARENTS`
+ * (профіль `supabase`, бо файл — його). Пара поза обома даними не дозволена.
+ */
+const ROLE_SETTING_PAIRS: readonly (readonly [string, string])[] = (
+  Object.entries(LOGIN_ROLE_SETTINGS) as [
+    PlatformLoginPurpose,
+    { role: string },
+  ][]
+)
+  .filter(([purpose, { role }]) =>
+    loginRoleParentNames(purpose, "supabase").includes(role)
+  )
+  .map(([purpose, { role }]) => [PLATFORM_LOGIN_ROLES[purpose], role] as const)
+
+/**
+ * `ALTER|DROP ROLE|USER|OWNED` roles.sql, що стоять не під доведеною формою
+ * (архітектурне рішення К1). Єдина дозволена: `ALTER ROLE r SET role = 'g'` у
+ * блоці створення тієї самої ролі (`IF NOT EXISTS (… pg_roles … 'r') THEN`
+ * рівно один `CREATE ROLE r`, без ELSE/ELSIF/вкладених IF) і з парою (r, g) з
+ * `pairs`. Наявну роль файл так не змінить: блок виконується лише при
+ * створенні. Решта — порушення, де б вона не стояла.
+ */
+function unguardedRoleChanges(
+  sql: string,
+  pairs: readonly (readonly [string, string])[] = ROLE_SETTING_PAIRS
+): string[] {
+  const code = sql
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("--"))
+    .join("\n")
+  const ifBlock =
+    /\bIF NOT EXISTS\s*\(([\s\S]*?)\)\s*THEN([\s\S]*?)\bEND IF\s*;/g
+  const rest = code.replace(ifBlock, (whole, cond: string, body: string) => {
+    const created =
+      /^\s*SELECT FROM pg_catalog\.pg_roles WHERE rolname = '(\w+)'\s*$/.exec(
+        cond
+      )?.[1]
+    if (created === undefined || /\b(ELSE|ELSIF|IF)\b/i.test(body)) return whole
+    const statements = body.split(";").map((st) => st.trim())
+    if (
+      statements.filter((st) =>
+        new RegExp(`^CREATE ROLE ${created}\\b`).test(st)
+      ).length !== 1
+    )
+      return whole
+    // Блок створення лишається для інших перевірок без дозволених налаштувань
+    return statements
+      .filter((st) => {
+        const setting = /^ALTER ROLE (\w+) SET role = '(\w+)'$/.exec(st)
+        return !(
+          setting !== null &&
+          setting[1] === created &&
+          pairs.some(([r, g]) => r === setting[1] && g === setting[2])
+        )
+      })
+      .join("; ")
+  })
+  return rest.match(/\b(ALTER|DROP)\s+(ROLE|USER|OWNED)\b[^;]*/gi) ?? []
+}
+
 // `pnpm db:roles` повторно виконує файл на наявному стеку: кожне членство мусить
 // бути або в блоці створення своєї ролі, або під власною перевіркою
 describe("supabase/roles.sql is additive and idempotent", () => {
@@ -398,10 +463,16 @@ describe("supabase/roles.sql is additive and idempotent", () => {
     "utf8"
   )
 
-  it("never alters or drops a role", () => {
-    expect(sql.replace(/^\s*--.*$/gm, "")).not.toMatch(
-      /\b(ALTER|DROP)\s+(ROLE|USER|OWNED)\b/i
+  it("never alters or drops a role, except the role setting of a login role it creates", () => {
+    expect(unguardedRoleChanges(sql)).toEqual([])
+  })
+
+  it("sets the role setting of every login role with one in the T0 data", () => {
+    expect(ROLE_SETTING_PAIRS.length).toBe(
+      Object.keys(LOGIN_ROLE_SETTINGS).length
     )
+    for (const [r, g] of ROLE_SETTING_PAIRS)
+      expect(sql).toContain(`ALTER ROLE ${r} SET role = '${g}';`)
   })
 
   it("guards every GRANT … TO by role creation or a pg_auth_members check", () => {
@@ -414,6 +485,52 @@ describe("supabase/roles.sql is additive and idempotent", () => {
   const MEMBER =
     "IF NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members WHERE roleid = 'a'::pg_catalog.regrole AND member = 'b'::pg_catalog.regrole)"
   const wrap = (inner: string): string => `DO $$ BEGIN ${inner} END $$;`
+
+  describe("the role setting", () => {
+    const [pair] = ROLE_SETTING_PAIRS
+    const [r, g] = pair!
+    const created = (name: string, inner: string): string =>
+      wrap(
+        `IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${name}') THEN CREATE ROLE ${name} LOGIN; ${inner} END IF;`
+      )
+
+    it("accepts the setting of the T0 data inside the creation block of its role", () => {
+      expect(
+        unguardedRoleChanges(created(r, `ALTER ROLE ${r} SET role = '${g}';`))
+      ).toEqual([])
+    })
+
+    it.each([
+      [
+        "the setting outside the creation block",
+        `${created(r, "")}\nALTER ROLE ${r} SET role = '${g}';`,
+      ],
+      [
+        "the setting of another role in a creation block",
+        created(r, `ALTER ROLE other_role SET role = '${g}';`),
+      ],
+      [
+        "the setting of another role in its own creation block",
+        created("other_role", `ALTER ROLE other_role SET role = '${g}';`),
+      ],
+      [
+        "a pair outside the T0 data",
+        created(r, `ALTER ROLE ${r} SET role = 'simetra_command';`),
+      ],
+      [
+        "another ALTER in the creation block",
+        created(r, `ALTER ROLE ${r} SUPERUSER;`),
+      ],
+      ["a DROP ROLE", "DROP ROLE x;"],
+      ["a DROP OWNED", created(r, "DROP OWNED BY x;")],
+      [
+        "the setting in an ELSE of the creation block",
+        created(r, `ELSE ALTER ROLE ${r} SET role = '${g}';`),
+      ],
+    ])("rejects %s", (_name, sqlText) => {
+      expect(unguardedRoleChanges(sqlText).length).toBeGreaterThan(0)
+    })
+  })
 
   it("accepts the two proven shapes", () => {
     expect(

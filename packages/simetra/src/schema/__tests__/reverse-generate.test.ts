@@ -13,6 +13,7 @@ import {
 import {
   catalogFromSnapshot,
   customTableSchema,
+  isObjectOrigin,
   type AttributeCase,
   type DatabaseProvider,
   type CatalogColumn,
@@ -196,6 +197,124 @@ const DEBT_TOUCH = TOUCH.replace(
 )
 
 describe("reverseGenerate", () => {
+  it.each(["supabase", "postgres"] as const)(
+    "%s: the signal outbox and its units are the platform's, adoption from scratch writes none of them",
+    async (provider) => {
+      // База, до якої застосовано Simetra, завжди несе outbox сигналів: прийом
+      // з нуля не описує його теці (спека профілю `postgres` §5.1)
+      const compiled = await compile(
+        metaFiles({
+          "project.meta.json": project({ database: { provider } }),
+        })
+      )
+      expect(compiled.diagnostics).toEqual([])
+      const outbox = compiled.model!.sqlUnits.filter(
+        (u) => u.generator === "signalOutbox"
+      )
+      expect(outbox.length).toBeGreaterThan(0)
+      const result = await reverseGenerate(
+        model({
+          tables: [
+            ...catalogFromSnapshot(compiled.model!.physical).tables,
+            table("app", "fresh"),
+          ],
+          units: units(outbox.map((u) => u.sql).join("\n")),
+        }),
+        options(new Map(), { databaseProvider: provider })
+      )
+      expect(result.diagnostics).toEqual([])
+      expect([...result.files.keys()].sort()).toEqual([
+        "custom-tables/Fresh/Fresh.meta.json",
+        "project.meta.json",
+        "sql-debt.json",
+      ])
+    }
+  )
+
+  it.each(["supabase", "postgres"] as const)(
+    "%s: the platform install in the catalog's own grant form is the platform's; a user's grant beside it is written",
+    async (provider) => {
+      // Каталог тримає гранти по колонці й зливає привілеї однієї ролі: ці
+      // одиниці не мають ідентичності одиниці компілятора, а належать
+      // платформі за атомами власних грантів установки (напрям, ціль, роль,
+      // привілей). Послідовність версій теж ставить платформа
+      const install = await compile(
+        metaFiles({ "project.meta.json": project({ database: { provider } }) })
+      )
+      expect(install.diagnostics).toEqual([])
+      const catalogForm = [
+        'GRANT INSERT ("method") ON TABLE "simetra"."signal_outbox" TO "simetra_command";',
+        'GRANT INSERT ("payload") ON TABLE "simetra"."signal_outbox" TO "simetra_command";',
+        'GRANT DELETE, SELECT ON TABLE "simetra"."signal_outbox" TO "simetra_signal_consumer";',
+        'REVOKE EXECUTE ON FUNCTION "simetra"."signal_outbox_prune"(interval) FROM PUBLIC;',
+        "CREATE SEQUENCE simetra.row_version AS bigint MINVALUE 1 NO CYCLE CACHE 1;",
+      ].join("\n")
+      const own =
+        "GRANT SELECT ON TABLE simetra.signal_outbox, app.fresh TO simetra_command;"
+      const result = await reverseGenerate(
+        model({
+          tables: [
+            ...catalogFromSnapshot(install.model!.physical).tables,
+            table("app", "fresh"),
+          ],
+          units: units(`${catalogForm}\n${own}`),
+        }),
+        options(new Map(), { databaseProvider: provider })
+      )
+      // Грант на об'єкт платформи разом з таблицею застосунку — не
+      // платформний: його пише тека, а компіляція відмовляє за ціллю в
+      // `simetra`. Більше тека з бази нічого не бере
+      expect({
+        files: [...result.files.keys()].sort(),
+        codes: result.diagnostics.map((d) => d.code),
+      }).toEqual({
+        files: [
+          "custom-tables/Fresh/Fresh.meta.json",
+          "project.meta.json",
+          "sql-debt.json",
+          "sql/app/grant__table__app_fresh_simetra_signal_outbox__simetra_command__select.sql",
+        ],
+        codes: ["schema.reserved"],
+      })
+    }
+  )
+
+  it.each(["supabase", "postgres"] as const)(
+    "%s: a grant on an install object the install does not give goes to the folder and is refused",
+    async (provider) => {
+      // Інша роль чи `PUBLIC` на таблиці outbox — чужий грант, а не
+      // установка: його не губимо мовчки, тека отримує його, а компіляція
+      // відмовляє за ціллю в `simetra`
+      const install = await compile(
+        metaFiles({ "project.meta.json": project({ database: { provider } }) })
+      )
+      expect(install.diagnostics).toEqual([])
+      const result = await reverseGenerate(
+        model({
+          tables: catalogFromSnapshot(install.model!.physical).tables,
+          units: units(
+            [
+              'GRANT SELECT ON TABLE "simetra"."signal_outbox" TO "some_extra_role";',
+              'GRANT DELETE, INSERT, SELECT ON TABLE "simetra"."signal_outbox" TO PUBLIC;',
+            ].join("\n")
+          ),
+        }),
+        options(new Map(), { databaseProvider: provider })
+      )
+      expect({
+        files: [...result.files.keys()].filter((p) => p.startsWith("sql/")),
+        codes: result.diagnostics.map((d) => d.code),
+      }).toEqual({
+        files: [
+          "sql/simetra/grant__table__simetra_signal_outbox__public__delete_insert_select.sql",
+          "sql/simetra/grant__table__simetra_signal_outbox__some_extra_role__select.sql",
+        ],
+        codes: ["schema.reserved", "schema.reserved"],
+      })
+      expect(result.changes).toEqual([])
+    }
+  )
+
   it("table becomes a CustomTable with explicit names", async () => {
     const result = await reverseGenerate(
       model({
@@ -1104,7 +1223,7 @@ describe("reverseGenerate", () => {
     const compiled = await compile(kept)
     expect(compiled.diagnostics).toEqual([])
     const rates = compiled.model!.physical.tables.find(
-      (t) => t.origin.tabularSectionId !== undefined
+      (t) => isObjectOrigin(t.origin) && t.origin.tabularSectionId !== undefined
     )!
     const result = await reverseGenerate(
       model({

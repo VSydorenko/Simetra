@@ -5,11 +5,13 @@ import {
   serviceDateColumns,
   standardLogicalName,
   versionColumn,
+  isObjectTable,
   type AttributeCase,
   type DatabaseProvider,
   type PhysicalColumn,
   type PhysicalSnapshot,
   type PhysicalTable,
+  type ObjectTable,
 } from "simetra/model"
 import { platformBeforeTriggerName } from "./before-trigger-names"
 import type { QualifiedName } from "./contracts"
@@ -174,9 +176,9 @@ export function contentChangeCondition(
 export function mechanicsTables(
   physical: Pick<PhysicalSnapshot, "tables">,
   attributeCase: AttributeCase
-): PhysicalTable[] {
+): ObjectTable[] {
   const mechanics = mechanicsStandardNames(attributeCase)
-  return physical.tables.filter((table) => {
+  return physical.tables.filter(isObjectTable).filter((table) => {
     const found = table.columns.filter((c) =>
       mechanics.has(c.origin.standard ?? "")
     )
@@ -224,7 +226,7 @@ export function buildMechanicsUnits(
     generator: "mechanics",
   })
   const trigger = (
-    table: PhysicalSnapshot["tables"][number],
+    table: ObjectTable,
     name: string,
     events: string,
     when?: string

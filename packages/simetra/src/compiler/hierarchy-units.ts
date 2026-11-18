@@ -2,12 +2,13 @@ import {
   KIND_REGISTRY,
   makeObjectName,
   quoteIdent,
+  isObjectTable,
   type AttributeCase,
   type DatabaseProvider,
   type PhysicalSnapshot,
-  type PhysicalTable,
   COMMAND_CORE_ERRORS,
   HIERARCHY_ISOLATION_ERROR,
+  type ObjectTable,
 } from "simetra/model"
 import type { QualifiedName } from "./contracts"
 import { compareStrings } from "./diagnostics"
@@ -65,7 +66,7 @@ export function hierarchyLockSql(table: QualifiedName): string {
 
 /** Ієрархічна основна таблиця: колонки батька й ключа. */
 export interface HierarchyTable {
-  table: PhysicalTable
+  table: ObjectTable
   parent: string
   key: string
 }
@@ -87,6 +88,7 @@ export function hierarchyTables(
   const result: HierarchyTable[] = []
   for (const table of physical.tables) {
     if (
+      !isObjectTable(table) ||
       table.origin.tabularSectionId !== undefined ||
       table.origin.part !== undefined
     )

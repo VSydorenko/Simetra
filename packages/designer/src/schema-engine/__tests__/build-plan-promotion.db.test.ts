@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { isObjectOrigin } from "simetra/model"
 import {
   compile,
   promoteObject,
@@ -224,7 +225,7 @@ describe.concurrent("buildPlan", () => {
       const outcome = await planPromotion(p)
       const artifact = planned(outcome)
       const region = p.after.physical.tables.find(
-        (t) => t.origin.objectId === uuid(7301)
+        (t) => isObjectOrigin(t.origin) && t.origin.objectId === uuid(7301)
       )!
       // Перейменування колонки FK і самого FK займає лише власну таблицю
       // (спека промоції §7.2): ціль FK не блокується ні явно, ні неявно

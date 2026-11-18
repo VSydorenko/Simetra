@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { SIGNAL_OUTBOX } from "simetra/model"
 import { compile, type CompileResult } from "simetra/compiler"
 import {
   textCalls,
@@ -76,13 +77,21 @@ async function compileWith(
 async function order(entries: Record<string, unknown>): Promise<string[]> {
   const result = await compileWith(entries)
   expectClean(result, { allow: ["rights.scope-kind-unread"] })
+  // Outbox сигналів є в кожному проєкті; його порядок звіряє
+  // signal-outbox.test.ts.
+  const outbox = new Set([
+    `table:${SIGNAL_OUTBOX.schema}.${SIGNAL_OUTBOX.name}`,
+    ...result
+      .model!.sqlUnits.filter((u) => u.generator === "signalOutbox")
+      .map((u) => u.identity),
+  ])
   return result
     .model!.creationOrder.map((node) =>
       node.type === "unit"
         ? node.identity
         : `${node.type}:${node.schema}.${node.name}`
     )
-    .filter((id) => !id.includes("simetra.row_version"))
+    .filter((id) => !id.includes("simetra.row_version") && !outbox.has(id))
 }
 
 /** Кожна пара `[раніше, пізніше]` стоїть у порядку саме так. */
@@ -963,6 +972,9 @@ describe("creation order", () => {
       stock: "enabled",
       stock_totals: "enabled",
       stock_turnovers_month: "enabled",
+      // Outbox сигналів платформи — у кожному проєкті (спека профілю
+      // `postgres` §5.1).
+      signal_outbox: "enabled",
     })
   })
 })

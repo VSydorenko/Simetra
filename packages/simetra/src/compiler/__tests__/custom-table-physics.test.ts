@@ -328,6 +328,8 @@ describe("CustomTable physics round-trip", () => {
     // Далі носії прав отримали денормалізовані копії — нові колонки
     // з `origin.copyOf` та їхні індекси в `item`, `sale` і їхніх ТЧ; без них
     // хеш той самий, що до копій.
+    // Далі кожен проєкт отримав таблицю платформи `simetra.signal_outbox`;
+    // без неї хеш той самий.
     // Далі стандартне найменування довідника стало `indexed` — пошуковий
     // індекс `(…, description, id)` у кожній таблиці довідника.
     const derived = {
@@ -340,6 +342,7 @@ describe("CustomTable physics round-trip", () => {
             "crew",
             "role_grant",
             "source_role",
+            "signal_outbox",
           ].includes(t.name)
       ),
       enumTypes: physical.enumTypes,

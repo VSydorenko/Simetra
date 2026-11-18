@@ -1,4 +1,10 @@
-import type { MetadataKind, PhysicalOrigin, ReferenceRole } from "simetra/model"
+import {
+  isObjectTable,
+  type MetadataKind,
+  type ObjectOrigin,
+  type ObjectTable,
+  type ReferenceRole,
+} from "simetra/model"
 import type { CompiledModel } from "./compile"
 
 export interface Explanation {
@@ -12,7 +18,7 @@ export interface Explanation {
   tables: {
     schema: string
     name: string
-    part?: "main" | "tabularSection" | PhysicalOrigin["part"]
+    part?: "main" | "tabularSection" | ObjectOrigin["part"]
     columns: {
       name: string
       type: string
@@ -78,7 +84,10 @@ export function explainObject(
       : model.scopeKinds.find((k) => k.id === object.scopeKindId)?.name
 
   const tables = model.physical.tables
-    .filter((t) => t.origin.objectId === object.id)
+    .filter(
+      (t): t is ObjectTable =>
+        isObjectTable(t) && t.origin.objectId === object.id
+    )
     .map((t) => {
       const part: Explanation["tables"][number]["part"] =
         t.origin.part ??

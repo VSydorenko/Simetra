@@ -1,3 +1,4 @@
+import { objectTable } from "simetra/model"
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import {
@@ -180,7 +181,9 @@ describe("predefined catalog items", () => {
         .indexes.find((i) => i.where !== undefined)!
         .keys.map((key) => ("column" in key ? key.column : key.expression))
     const contractKeyOf = (name: string) => {
-      const table = model.physical.tables.find((t) => t.name === name)!
+      const table = objectTable(
+        model.physical.tables.find((t) => t.name === name)!
+      )
       const contract = model.contracts.predefined.find(
         (c) => c.objectId === table.origin.objectId
       )!

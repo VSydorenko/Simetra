@@ -1,6 +1,7 @@
 import type { Node } from "libpg-query"
 import {
   quoteIdent,
+  isObjectOrigin,
   type PhysicalSnapshot,
   type PhysicalTable,
 } from "simetra/model"
@@ -147,7 +148,11 @@ export function embedRowRules(
       (t) => t.schema === rule.schema && t.name === rule.table
     )
     const at = { table: `${rule.schema}.${rule.table}`, line: rule.line }
-    if (table === undefined || table.origin.objectId !== objectId) {
+    if (
+      table === undefined ||
+      !isObjectOrigin(table.origin) ||
+      table.origin.objectId !== objectId
+    ) {
       diagnostics.push(
         diagnostic("sql.row-rule-foreign-table", rule.file, "", at)
       )

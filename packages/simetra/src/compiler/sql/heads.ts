@@ -3,6 +3,7 @@ import {
   KIND_REGISTRY,
   PLATFORM_SCHEMA,
   PROVIDER_FUNCTIONS,
+  isObjectOrigin,
   type PhysicalSnapshot,
   type PhysicalTable,
   type Project,
@@ -117,6 +118,7 @@ export function headScope(
   const mainTable = (objectId: string) =>
     physical.tables.find(
       (t) =>
+        isObjectOrigin(t.origin) &&
         t.origin.objectId === objectId &&
         t.origin.tabularSectionId === undefined &&
         t.origin.part === undefined

@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto"
 import pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, expect } from "vitest"
+import { SIGNAL_OUTBOX } from "simetra/model"
 import {
   canonicalSnapshot,
   compile,
   loadSqlParser,
+  platformInstall,
   platformTriggers,
   type CompiledModel,
   type SchemaPathResolver,
@@ -35,7 +37,7 @@ import {
   testDatabaseUrl,
   testProvider,
 } from "../../../../simetra/test/support"
-import { inTarget as loadTarget } from "../../__tests__/support/db"
+import { inTarget as loadTarget, outboxSql } from "../../__tests__/support/db"
 import {
   leftoverShadows,
   provisionedShadows,
@@ -290,11 +292,12 @@ function expectRefusedDefiners(
 }
 
 /**
- * Послідовність версій компілятор видає завжди, тож межа з метаданих завжди
- * містить `simetra`, а застосована база її має. Фікстури класів — сирий SQL
- * без платформного шару, тому ціль доповнюється так, як її доповнило б
- * перше застосування: інакше звірка бачила б послідовність як різницю, а не
- * як втрачену чи збережену одиницю.
+ * Послідовність версій і outbox сигналів компілятор видає завжди, тож межа з
+ * метаданих завжди містить `simetra`, а застосована база їх має. Фікстури
+ * класів — сирий SQL без платформного шару, тому ціль доповнюється так, як її
+ * доповнило б перше застосування: інакше звірка бачила б їх як різницю, а не
+ * як втрачену чи збережену одиницю. Ціль, розгорнута з бажаного стану, outbox
+ * уже має — тоді його не створюємо вдруге.
  */
 const withPlatformSequence = (target: DbConnection) =>
   withClient(target, async (c) => {
@@ -302,7 +305,29 @@ const withPlatformSequence = (target: DbConnection) =>
     await c.query(
       "CREATE SEQUENCE IF NOT EXISTS simetra.row_version AS bigint MINVALUE 1 NO CYCLE CACHE 1"
     )
+    const { rows } = await c.query<{ present: boolean }>(
+      "SELECT to_regclass($1) IS NOT NULL AS present",
+      [`${SIGNAL_OUTBOX.schema}.${SIGNAL_OUTBOX.name}`]
+    )
+    if (rows[0]?.present !== true) await c.query(await outboxOfProfile())
   })
+
+/** Outbox сигналів профілю прогону — з бажаного стану порожнього проєкту. */
+async function outboxOfProfile(): Promise<string> {
+  const compiled = await compile(
+    new Map([
+      [
+        "project.meta.json",
+        JSON.stringify({
+          name: "Outbox",
+          database: { provider: testProvider() },
+        }),
+      ],
+    ])
+  )
+  expect(errors(compiled.diagnostics)).toEqual([])
+  return outboxSql(compiled.model!)
+}
 
 const dropTrigger = (t: Loss["triggers"][number]) =>
   `DROP TRIGGER "${t.name}" ON "${t.schema}"."${t.table}"`
@@ -493,6 +518,18 @@ export const tableKeys = (model: CompiledModel) =>
   model.physical.tables.map((t) => `${t.schema}.${t.name}`).sort()
 
 /**
+ * Таблиці моделі без платформної установки (`platformInstall`): їх тека
+ * застосунку не описує (ADR-0095), тож з ними звіряють теку, а не модель.
+ */
+export async function applicationTableKeys(
+  model: CompiledModel
+): Promise<string[]> {
+  const install = await platformInstall(model.project.database.provider)
+  const platform = new Set(install.tables.map((t) => `${t.schema}.${t.name}`))
+  return tableKeys(model).filter((key) => !platform.has(key))
+}
+
+/**
  * Механіка джерела, якої не буде після прийому з нуля: таблиця виду стає
  * `CustomTable` без стандартних колонок, а introspect механіки не пише
  * (спека промоції §9.2). Повертає механіку лише промоція у вид. Тригери
@@ -649,6 +686,71 @@ function expectLossNeedsPermission(trip: RoundTrip, loss: Loss): void {
     }),
   ])
   expect(checkPermissions(subject, ids)).toEqual([])
+}
+
+/**
+ * Властивість класу фікстури (`ClassFixture.property`) над оракулом без
+ * платформної установки (`platformInstall`): фікстура — сирий SQL у своїх
+ * схемах, а таблицю, функції, тригери й політики outbox сигналів ціль має
+ * від доповнення (`withPlatformSequence`). Порівняння цілі з тінню бачить
+ * установку й далі — тут її не бачить лише проєкція класу.
+ */
+export async function classProperty(
+  fixture: ClassFixture,
+  shape: OracleShape
+): Promise<unknown> {
+  const install = await platformInstall(testProvider())
+  const relations = new Set([
+    ...install.tables.flatMap((t) => [
+      `${t.schema}.${t.name}`,
+      ...t.columns.flatMap((c) =>
+        c.identity === undefined ? [] : [`${t.schema}.${c.identity.sequence}`]
+      ),
+    ]),
+    ...install.units
+      .filter((u) => u.class === "sequence")
+      .map((u) => `${u.schema}.${u.name}`),
+  ])
+  const functions = new Set(
+    install.units
+      .filter((u) => u.class === "function")
+      .map((u) => `${u.schema}.${u.name}`)
+  )
+  const members = new Set(
+    install.units
+      .filter((u) => u.class === "trigger" || u.class === "policy")
+      .map((u) => u.identity.slice(u.identity.indexOf(":") + 1))
+  )
+  const fn = (signature: string) => functions.has(signature.split("(")[0]!)
+  // Об'єкт ACL оракула: `<relkind>:<схема>.<ім'я>[.<колонка>]` чи `f:<сигнатура>`
+  const aclOf = (object: string) => {
+    const [kind, name] = [object.slice(0, 1), object.slice(2)]
+    if (kind === "f") return fn(name)
+    if (kind === "c")
+      return relations.has(name.split(".").slice(0, 2).join("."))
+    return relations.has(name)
+  }
+  return fixture.property({
+    ...shape,
+    catalog: {
+      ...shape.catalog,
+      tables: shape.catalog.tables.filter(
+        (t) => !relations.has(`${t.schema}.${t.name}`)
+      ),
+      functions: shape.catalog.functions.filter(
+        (f) => !functions.has(`${f.schema}.${f.name}`)
+      ),
+    },
+    triggers: shape.triggers.filter(
+      (t) => !members.has(`${t.table}.${t.name}`)
+    ),
+    policies: shape.policies.filter(
+      (p) => !members.has(`${p.table}.${p.name}`)
+    ),
+    functions: shape.functions.filter((f) => !fn(f.name)),
+    acls: shape.acls.filter((a) => !aclOf(a.object)),
+    ownedBy: shape.ownedBy.filter((o) => !relations.has(o.sequence)),
+  })
 }
 
 /** Тригери, функції та їхні ACL оракула без втраченої механіки. */

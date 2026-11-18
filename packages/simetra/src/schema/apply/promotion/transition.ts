@@ -14,6 +14,7 @@ import {
 import {
   KIND_REGISTRY,
   metadataKindSchema,
+  isObjectOrigin,
   type MetadataKind,
   type PhysicalTable,
 } from "simetra/model"
@@ -62,11 +63,15 @@ const markerSnapshotSchema = z.looseObject({
       z.looseObject({
         schema: z.string(),
         name: z.string(),
-        origin: z.looseObject({
-          objectId: z.string(),
-          tabularSectionId: z.string().optional(),
-          part: z.string().optional(),
-        }),
+        // Походження з об'єкта чи платформне без об'єкта (outbox сигналів).
+        origin: z.union([
+          z.looseObject({
+            objectId: z.string(),
+            tabularSectionId: z.string().optional(),
+            part: z.string().optional(),
+          }),
+          z.looseObject({ part: z.literal("signalOutbox") }),
+        ]),
         rowLevelSecurity: z.string(),
         columns: z.array(
           z.looseObject({
@@ -203,6 +208,7 @@ function unitTablesDifference(
   const { objectId } = record
   const expected = new Set([objectId])
   for (const { origin } of model.physical.tables) {
+    if (!isObjectOrigin(origin)) continue
     const section = origin.tabularSectionId
     if (
       origin.objectId === objectId &&
@@ -301,6 +307,7 @@ async function reconcile(
   for (const { id } of record.tables) {
     const table = before.tables.find(
       ({ origin }) =>
+        isObjectOrigin(origin) &&
         origin.objectId === id &&
         origin.tabularSectionId === undefined &&
         origin.part === undefined

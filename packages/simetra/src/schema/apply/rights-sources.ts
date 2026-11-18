@@ -142,11 +142,16 @@ const level = z.discriminatedUnion("level", [
   z.object({ level: z.literal("global") }),
   z.object({ level: z.literal("scope"), scopeKindId: z.string() }),
 ])
-const origin = z.object({
-  objectId: z.string(),
-  tabularSectionId: z.string().optional(),
-  part: z.string().optional(),
-})
+// Походження таблиці знімка: з об'єкта чи платформне без об'єкта (outbox
+// сигналів) — застосований знімок несе обидві форми.
+const origin = z.union([
+  z.object({
+    objectId: z.string(),
+    tabularSectionId: z.string().optional(),
+    part: z.string().optional(),
+  }),
+  z.object({ part: z.literal("signalOutbox") }),
+])
 const appliedRightsSchema = z.object({
   // Стиль застосованого знімка: його колонки несуть `origin.standard` у
   // стилі свого проєкту, а не бажаного. Немає — типовий camelCase.
@@ -401,7 +406,11 @@ export function rightsSourceInput(
   // (`transition.ts`): фізичне ім'я промоція перепризначає, а таблиця нового
   // об'єкта з тим самим ім'ям — інша таблиця, і її рядки інші
   const identity = (o: z.infer<typeof origin>) =>
-    JSON.stringify([o.objectId, o.tabularSectionId ?? null, o.part ?? null])
+    JSON.stringify(
+      "objectId" in o
+        ? [o.objectId, o.tabularSectionId ?? null, o.part ?? null]
+        : [null, null, o.part]
+    )
   const desiredTables = new Set(physical.tables.map((t) => identity(t.origin)))
   const kept = (table: QualifiedName) => {
     const was = old!.physical.tables.find(

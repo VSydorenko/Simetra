@@ -2,9 +2,11 @@ import {
   PLATFORM_SCHEMA,
   authorColumns,
   quoteIdent,
+  isObjectTable,
   type AttributeCase,
   type DatabaseProvider,
   type PhysicalSnapshot,
+  type ObjectTable,
 } from "simetra/model"
 import { platformBeforeTriggerName } from "./before-trigger-names"
 import type { Contracts, QualifiedName } from "./contracts"
@@ -64,7 +66,7 @@ export function buildAuthorUnits(
 ): SqlUnit[] {
   if (!hasRightsFunctions(contracts, provider)) return []
   const author = authorStandardNames(attributeCase)
-  const tables = physical.tables.filter((table) => {
+  const tables = physical.tables.filter(isObjectTable).filter((table) => {
     const found = table.columns.filter((c) =>
       author.has(c.origin.standard ?? "")
     )
@@ -99,7 +101,7 @@ export function buildAuthorUnits(
     ...(withRequires ? { requires } : {}),
   })
   const trigger = (
-    table: PhysicalSnapshot["tables"][number],
+    table: ObjectTable,
     name: string,
     events: string,
     when?: string

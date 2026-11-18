@@ -7,6 +7,7 @@ import {
 import {
   KIND_REGISTRY,
   quoteIdent,
+  isObjectOrigin,
   type CatalogCheck,
   type CatalogColumn,
   type CatalogModel,
@@ -651,7 +652,10 @@ function needsPermission(
     (t) => t.schema === fill.table.schema && t.name === fill.table.name
   )
   if (table === undefined) return true
-  const kind = p.objects.find((o) => o.id === table.origin.objectId)?.kind
+  const { origin } = table
+  const kind = isObjectOrigin(origin)
+    ? p.objects.find((o) => o.id === origin.objectId)?.kind
+    : undefined
   if (kind === undefined || KIND_REGISTRY[kind].consumerData === true)
     return true
   return !sameDefault(

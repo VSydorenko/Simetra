@@ -7,10 +7,13 @@ import {
   kindKeyColumns,
   platformGrantTargets,
   sortDiagnostics,
+  platformInstall,
+  platformInstallRecogniser,
   type CompiledModel,
   type Diagnostic,
   type FileChange,
   type IdSource,
+  type PlatformInstallRecogniser,
   type KindKey,
   type SchemaPathResolver,
   type SqlParser,
@@ -20,6 +23,8 @@ import {
   KIND_REGISTRY,
   SQL_DEBT_FILE,
   formatProjectFile,
+  isObjectTable,
+  DATABASE_PROVIDERS,
   type AttributeCase,
   type CatalogModel,
   type CatalogTable,
@@ -126,6 +131,8 @@ async function describedElsewhere(
     if (kept.has(item.origin.objectId))
       found.relations.add(qualified(item.schema, item.name))
   for (const table of model.physical.tables) {
+    // Таблицю платформи без об'єкта описує сама платформа (`platformInstall`)
+    if (!isObjectTable(table)) continue
     const object = kept.get(table.origin.objectId)
     if (object === undefined) continue
     const key = qualified(table.schema, table.name)
@@ -148,6 +155,21 @@ async function describedElsewhere(
     found.handlers.add(qualified(handler.schema, handler.name))
   found.platformGrants = platformGrantTargets(model.sqlUnits, parse)
   return found
+}
+
+/**
+ * Розпізнавач того, що платформа ставить у кожну базу провайдера
+ * (`platformInstall`): ні таблиці, ні одиниці платформи не пишуться в теку —
+ * ні при прийомі з нуля, ні поверх наявної теки. Провайдер — файлу проєкту,
+ * коли він є (той самий, що діє для теки). Невідомий провайдер уже названо
+ * `introspect.project-mismatch` чи помилкою файлу проєкту.
+ */
+async function platformOf(
+  provider: DatabaseProvider,
+  parse: SqlParser
+): Promise<PlatformInstallRecogniser | undefined> {
+  if (!DATABASE_PROVIDERS.includes(provider)) return undefined
+  return platformInstallRecogniser(await platformInstall(provider), parse)
 }
 
 /**
@@ -306,6 +328,13 @@ export async function reverseGenerate(
     ...projectMismatch(folder, o.project),
   ]
   const elsewhere = await describedElsewhere(o.existing, o.parse)
+  const platform = await platformOf(
+    folder.project?.databaseProvider ?? o.project.databaseProvider,
+    o.parse
+  )
+  for (const table of model.tables)
+    if (platform?.table(table.schema, table.name) === true)
+      elsewhere.relations.add(qualified(table.schema, table.name))
   const existingOf = (kind: string, schema: string, physical: string) =>
     folder.objects.get(objectKey(kind, schema, physical))
 
@@ -434,14 +463,17 @@ export async function reverseGenerate(
   // Виклики тригерної функції рахуються й серед одиниць збережених файлів і
   // збережених підписок: функція, яку кличе ще й тригер чи підписка
   // довідника, не належить одній таблиці.
-  const laid = layoutUnits(model.units, {
-    parse: o.parse,
-    defaultSchema,
-    sidecars,
-    described: elsewhere.units,
-    handlers: elsewhere.handlers,
-    platformGrants: elsewhere.platformGrants,
-  })
+  const laid = layoutUnits(
+    model.units.filter((u) => platform?.unit(u) !== true),
+    {
+      parse: o.parse,
+      defaultSchema,
+      sidecars,
+      described: elsewhere.units,
+      handlers: elsewhere.handlers,
+      platformGrants: elsewhere.platformGrants,
+    }
+  )
   diagnostics.push(...laid.diagnostics)
   for (const [path, text] of laid.files) generated.set(path, text)
 

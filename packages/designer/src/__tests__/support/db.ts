@@ -10,6 +10,7 @@ import {
   PROVIDER_OWNER_ROLES,
   quoteIdent,
   RIGHTS_MAINTENANCE_SETTING,
+  SIGNAL_OUTBOX,
   type CommandError,
   type SessionClaims,
 } from "simetra/model"
@@ -18,6 +19,7 @@ import {
   desiredForApply,
   executePlan,
   PROVIDER_SHADOW_TEMPLATES,
+  renderDesiredState,
   type EngineScope,
   type SchemaEngine,
 } from "simetra/schema"
@@ -53,6 +55,28 @@ import { identityGrantSql } from "../../../../simetra/src/schema/apply/postgres-
 
 /** Двигун за замовчуванням: адаптер без стану, одного екземпляра досить. */
 const defaultEngine: SchemaEngine = createPgDeltaEngine()
+
+/**
+ * Statements of the desired state of `model` that create the signal outbox
+ * (postgres profile spec §5.1), in creation order. The outbox is in every
+ * project and the first apply creates it; a test that builds a target from raw
+ * SQL as an applied database adds it with these, as it adds the version
+ * sequence.
+ */
+export function outboxSql(model: CompiledModel): string {
+  const units = new Set(
+    model.sqlUnits
+      .filter((u) => u.generator === "signalOutbox")
+      .map((u) => u.identity)
+  )
+  const table = `${SIGNAL_OUTBOX.schema}.${SIGNAL_OUTBOX.name}`
+  return renderDesiredState(model)
+    .statements.filter((s) =>
+      s.kind === "unit" ? units.has(s.object) : s.object === table
+    )
+    .map((s) => s.sql)
+    .join("\n")
+}
 
 /** One query (or several statements) on a connection of its own. */
 export async function query<R extends pg.QueryResultRow>(

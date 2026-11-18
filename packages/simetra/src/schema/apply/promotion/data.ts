@@ -10,7 +10,11 @@ import {
   type RuleCode,
   type SqlParser,
 } from "simetra/compiler"
-import { quoteIdent, type PhysicalSnapshot } from "simetra/model"
+import {
+  isObjectOrigin,
+  quoteIdent,
+  type PhysicalSnapshot,
+} from "simetra/model"
 import type { EngineDiagnostic } from "../../engine"
 import { applyDiagnostic } from "../diagnostic"
 import { ApplyDbError, type ApplyTransaction } from "../port"
@@ -214,6 +218,7 @@ function desiredTableOf(
   id: string
 ): PhysicalSnapshot["tables"][number] | undefined {
   return desired.tables.find(({ origin }) => {
+    if (!isObjectOrigin(origin)) return false
     const { objectId, tabularSectionId, part } = origin
     return part === undefined && (tabularSectionId ?? objectId) === id
   })

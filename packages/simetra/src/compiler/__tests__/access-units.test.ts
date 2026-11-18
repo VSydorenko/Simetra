@@ -1,6 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
-import { PLATFORM_ROLES, makeObjectName, type Dml } from "simetra/model"
+import {
+  PLATFORM_ROLES,
+  isObjectTable,
+  makeObjectName,
+  objectTable,
+  type Dml,
+} from "simetra/model"
 import {
   accessPolicyNames,
   buildAccessUnits,
@@ -161,6 +167,7 @@ describe("accessContracts", () => {
     const model = await compiled(scoped(entries))
     const stockId = model.objects.find((o) => o.name === "Stock")!.id
     const parts = model.physical.tables
+      .filter(isObjectTable)
       .filter((t) => t.origin.objectId === stockId)
       .map((t) => t.origin.part ?? "main")
       .sort()
@@ -613,9 +620,12 @@ describe("rights read and users visibility policies", () => {
       const contract = domain.contracts.rights.find(
         (c) => c.objectId === access.rights!.objectId
       )!
-      const table = domain.physical.tables.find(
-        (t) => t.schema === access.table.schema && t.name === access.table.name
-      )!
+      const table = objectTable(
+        domain.physical.tables.find(
+          (t) =>
+            t.schema === access.table.schema && t.name === access.table.name
+        )!
+      )
       for (const predicate of rightsPredicates(
         contract,
         "read",
@@ -895,7 +905,9 @@ describe("rights write policies", () => {
     root: { key: string; label: string } | undefined,
     rest: Partial<Record<Dml, string>>
   ): Map<string, string> {
-    const table = model.physical.tables.find((t) => t.name === tableName)!
+    const table = objectTable(
+      model.physical.tables.find((t) => t.name === tableName)!
+    )
     const contract = model.contracts.rights.find(
       (c) => c.objectId === table.origin.objectId
     )!
@@ -960,7 +972,9 @@ describe("rights write policies", () => {
     tableName: string,
     writes: ReadonlyMap<string, string>
   ): string[] {
-    const table = model.physical.tables.find((t) => t.name === tableName)!
+    const table = objectTable(
+      model.physical.tables.find((t) => t.name === tableName)!
+    )
     const contract = model.contracts.rights.find(
       (c) => c.objectId === table.origin.objectId
     )!
@@ -1407,7 +1421,9 @@ describe("simetra_command table grants", () => {
     // документа, якого роль команд не пише), тож фільтр перевіряє фізична
     // таблиця довідника з доданою генерованою колонкою: значення дає база,
     // і грант на запис у неї був би відмовою Postgres на кожну команду.
-    const item = snake.physical.tables.find((t) => t.name === "item")!
+    const item = objectTable(
+      snake.physical.tables.find((t) => t.name === "item")!
+    )
     const table = {
       ...item,
       columns: [
@@ -1450,7 +1466,12 @@ describe("simetra_command table grants", () => {
         expect(unit.sql).toMatch(
           /^GRANT (SELECT|INSERT \([^)]+\)|UPDATE \([^)]+\)|DELETE) ON TABLE /
         )
-        expect(unit.name.startsWith("simetra.")).toBe(false)
+        // Єдиний названий виняток у схемі `simetra` — запис сигналу в outbox
+        // (спека профілю `postgres` §5.2).
+        if (unit.name.startsWith("simetra."))
+          expect(unit.sql).toBe(
+            `GRANT INSERT (method, payload) ON TABLE simetra.signal_outbox TO ${COMMAND};`
+          )
       }
     }
   })

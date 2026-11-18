@@ -1,10 +1,12 @@
 import {
   KIND_REGISTRY,
+  isObjectTable,
   type PhysicalSnapshot,
   type PhysicalTable,
   type Project,
   type ReferenceRole,
   type RightsCarrier,
+  type ObjectTable,
 } from "simetra/model"
 import { mainTableOf, type CarrierContract } from "../contracts"
 import { diagnostic, type Diagnostic } from "../diagnostics"
@@ -251,9 +253,10 @@ function objectOfTable(
   ctx: CarrierContext
 ): ParsedObject | undefined {
   const table = ctx.physical.tables.find(
-    (t) =>
+    (t): t is ObjectTable =>
       t.schema === references.schema &&
       t.name === references.table &&
+      isObjectTable(t) &&
       t.origin.tabularSectionId === undefined &&
       t.origin.part === undefined
   )

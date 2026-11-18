@@ -3,6 +3,7 @@ import {
   formatMetaFile,
   formatProjectFile,
   projectSchema,
+  isObjectOrigin,
   type MetadataRef,
 } from "simetra/model"
 import type { z } from "zod"
@@ -264,6 +265,7 @@ function restrictForeignKey(
   if (fk === undefined) return []
   const table = model.physical.tables.find(
     (t) =>
+      isObjectOrigin(t.origin) &&
       t.origin.objectId === ref.from.objectId &&
       t.origin.tabularSectionId === undefined &&
       t.origin.part === undefined

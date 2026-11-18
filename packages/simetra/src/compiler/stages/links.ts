@@ -2,6 +2,7 @@ import {
   KIND_REGISTRY,
   MEMBERSHIP_SET_FUNCTION,
   standardLogicalName,
+  isObjectOrigin,
   type MetadataRef,
   type MovementDecl,
   type PhysicalSnapshot,
@@ -630,6 +631,7 @@ function beforeWriteCarriers(
     const table = physical.tables.find(
       (t) =>
         target?.id !== undefined &&
+        isObjectOrigin(t.origin) &&
         t.origin.objectId === target.id &&
         t.origin.tabularSectionId === undefined &&
         t.origin.part === undefined

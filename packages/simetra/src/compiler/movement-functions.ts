@@ -5,6 +5,7 @@ import {
   parseExpression,
   quoteIdent,
   standardLogicalName,
+  isObjectOrigin,
   type Attribute,
   type AttributeCase,
   type Expr,
@@ -210,6 +211,7 @@ class Context {
     return must(
       this.physical.tables.find(
         (t) =>
+          isObjectOrigin(t.origin) &&
           t.origin.objectId === objectId &&
           t.origin.tabularSectionId === tabularSectionId &&
           t.origin.part === undefined

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest"
 import type { CompileResult, CompiledModel } from "simetra/compiler"
-import type { PhysicalTable } from "simetra/model"
+import type { ObjectTable } from "simetra/model"
 import { accessPolicyNames, tenantBoundary } from "../access-units"
 import {
   rightsCheck,
@@ -96,7 +96,7 @@ function objectOf(model: CompiledModel, table: string) {
   const contract: RightsContract = model.contracts.rights.find(
     (c) => c.objectId === access.rights!.objectId
   )!
-  const main: PhysicalTable = mainTableOf(model.physical, contract.objectId)!
+  const main: ObjectTable = mainTableOf(model.physical, contract.objectId)!
   return { access, contract, main }
 }
 

@@ -24,17 +24,21 @@ export function withoutAccess<T extends Pick<SqlUnit, "generator">>(
 }
 
 /**
- * Одиниці без механіки рядка й незмінності ключа: функції `simetra.touch()`
- * і `simetra.key_immutable()`, їхні гранти й тригери дає кожна таблиця з
- * колонками механіки чи ключем `ref` (Catalog, Document, рядки ТЧ), тож тест
- * іншого генератора звіряє свої одиниці без них; їх звіряють
- * mechanics-units.test.ts і key-units.test.ts.
+ * Одиниці без механіки рядка, незмінності ключа й outbox сигналів: функції
+ * `simetra.touch()` і `simetra.key_immutable()`, їхні гранти й тригери дає
+ * кожна таблиця з колонками механіки чи ключем `ref` (Catalog, Document,
+ * рядки ТЧ), а об'єкти outbox — кожен проєкт, тож тест іншого генератора
+ * звіряє свої одиниці без них; їх звіряють mechanics-units.test.ts,
+ * key-units.test.ts і signal-outbox.test.ts.
  */
 export function withoutMechanics<T extends Pick<SqlUnit, "generator">>(
   units: readonly T[]
 ): T[] {
   return units.filter(
-    (u) => u.generator !== "mechanics" && u.generator !== "key"
+    (u) =>
+      u.generator !== "mechanics" &&
+      u.generator !== "key" &&
+      u.generator !== "signalOutbox"
   )
 }
 

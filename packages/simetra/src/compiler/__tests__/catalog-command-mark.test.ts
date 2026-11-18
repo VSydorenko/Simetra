@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompileResult, CompiledModel } from "simetra/compiler"
-import type { Dml } from "simetra/model"
+import { objectTable, type Dml } from "simetra/model"
 import { rightsCheck } from "../catalog-command/rights-check"
 import { HIERARCHY_LOCK_SPACE } from "../hierarchy-units"
 import { executeGrants } from "../sql/execute-grants"
@@ -71,7 +71,7 @@ const at = (shape: Shape, type: string, sql: string, from = 0) =>
 const ifAt = (shape: Shape, condition: string, from = 0) =>
   at(shape, "if", `SELECT ${condition}`, from)
 const mainOf = (model: CompiledModel, table: string) =>
-  model.physical.tables.find((t) => t.name === table)!
+  objectTable(model.physical.tables.find((t) => t.name === table)!)
 const rightsOf = (model: CompiledModel, table: string) =>
   model.contracts.rights.find(
     (r) => r.objectId === mainOf(model, table).origin.objectId

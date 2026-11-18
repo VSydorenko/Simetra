@@ -281,7 +281,10 @@ export const PROVIDER_EXPRESSION_FUNCTIONS: Readonly<
  * Роль кластерна: її немає в бажаному SQL, і згенерований SQL нею не
  * керує — лише дає їй `EXECUTE` функцій і `USAGE` схеми.
  */
-export const PLATFORM_ROLES = { command: "simetra_command" } as const
+export const PLATFORM_ROLES = {
+  command: "simetra_command",
+  signalConsumer: "simetra_signal_consumer",
+} as const
 
 /**
  * Ролі входу платформи (спека П4 §6.2): на відміну від `PLATFORM_ROLES` у
@@ -290,7 +293,10 @@ export const PLATFORM_ROLES = { command: "simetra_command" } as const
  * (`GrantPurpose` їх не знає), а режим обслуговування прав для них не
  * вмикається: рантайм не власник функцій прав (спека прав §7).
  */
-export const PLATFORM_LOGIN_ROLES = { runtime: "simetra_runtime" } as const
+export const PLATFORM_LOGIN_ROLES = {
+  runtime: "simetra_runtime",
+  signals: "simetra_signals",
+} as const
 
 /**
  * Ролі запиту, членом яких стає роль входу рантайму, за провайдером: профіль
@@ -346,8 +352,16 @@ export interface CommandContext {
   object: string
   root: string
 }
-/** Роль команд: виконує функції прав і команди, DML таблиць виду не має. */
-export type PlatformRolePurpose = keyof typeof PLATFORM_ROLES
+/**
+ * Призначення гранту згенерованого SQL серед ролей платформи — лише роль
+ * команд: вона виконує функції прав і команди, DML таблиць виду не має. Група
+ * споживача сигналів (`signalConsumer`) призначенням не є: її права — лише на
+ * outbox, і дає їх власний блок грантів outbox, а не `executeGrants`.
+ */
+export type PlatformRolePurpose = Exclude<
+  keyof typeof PLATFORM_ROLES,
+  "signalConsumer"
+>
 /** Отримувач гранту згенерованого SQL: роль API провайдера чи платформи. */
 export type GrantPurpose = ApiRolePurpose | PlatformRolePurpose
 
@@ -445,26 +459,40 @@ export type PlatformLoginPurpose = keyof typeof PLATFORM_LOGIN_ROLES
 /**
  * Дозволені батьки кожної ролі входу платформи (спека профілю postgres §3.1):
  * `command` — роль команд, `request` — ролі запиту профілю за
- * `LOGIN_ROLE_REQUEST_PURPOSES`. Гейт ролей звіряє кожну роль входу за її
- * рядком, а не за спільною множиною: інакше майбутня роль входу з членством
- * у ролі команд пройшла б гейт.
+ * `LOGIN_ROLE_REQUEST_PURPOSES`, `signalConsumer` — група споживача сигналів.
+ * Гейт ролей звіряє кожну роль входу за її рядком, а не за спільною
+ * множиною: інакше роль входу сигналів з членством у ролі команд пройшла б
+ * гейт, і витік DSN споживача дав би роль команд.
  */
 export const LOGIN_ROLE_PARENTS: Readonly<
-  Record<PlatformLoginPurpose, readonly ("command" | "request")[]>
-> = { runtime: ["command", "request"] }
+  Record<
+    PlatformLoginPurpose,
+    readonly ("command" | "request" | "signalConsumer")[]
+  >
+> = { runtime: ["command", "request"], signals: ["signalConsumer"] }
+
+/**
+ * Налаштування ролі входу (`ALTER ROLE … SET`): Centrifugo не вміє `SET ROLE`,
+ * тож групу споживача ставить налаштування `role` — воно діє з першого
+ * оператора сесії (спека профілю postgres §3.1). Ролі без рядка налаштувань
+ * не мають.
+ */
+export const LOGIN_ROLE_SETTINGS: Readonly<
+  Partial<Record<PlatformLoginPurpose, Readonly<{ role: string }>>>
+> = { signals: { role: PLATFORM_ROLES.signalConsumer } }
 
 /** Імена ролей-батьків ролі входу для профілю: за `LOGIN_ROLE_PARENTS`. */
 export function loginRoleParentNames(
   purpose: PlatformLoginPurpose,
   provider: DatabaseProvider
 ): readonly string[] {
-  return LOGIN_ROLE_PARENTS[purpose].flatMap((parent) =>
-    parent === "command"
-      ? [PLATFORM_ROLES.command]
-      : LOGIN_ROLE_REQUEST_PURPOSES[provider].map(
-          (request) => PROVIDER_API_ROLES[provider][request]
-        )
-  )
+  return LOGIN_ROLE_PARENTS[purpose].flatMap((parent) => {
+    if (parent === "command") return [PLATFORM_ROLES.command]
+    if (parent === "signalConsumer") return [PLATFORM_ROLES.signalConsumer]
+    return LOGIN_ROLE_REQUEST_PURPOSES[provider].map(
+      (request) => PROVIDER_API_ROLES[provider][request]
+    )
+  })
 }
 
 /** Файл проєкту: ідентичність, правила іменування й часовий пояс застосунку. */

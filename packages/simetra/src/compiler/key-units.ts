@@ -2,11 +2,13 @@ import {
   PLATFORM_SCHEMA,
   keyColumn,
   quoteIdent,
+  isObjectTable,
   type AttributeCase,
   type DatabaseProvider,
   type PhysicalSnapshot,
   type PhysicalTable,
   COMMAND_CORE_ERRORS,
+  type ObjectTable,
 } from "simetra/model"
 import { platformBeforeTriggerName } from "./before-trigger-names"
 import type { QualifiedName } from "./contracts"
@@ -82,7 +84,7 @@ export function buildKeyUnits(
   module: string,
   parse: SqlParser
 ): SqlUnit[] {
-  const tables = physical.tables.flatMap((table) => {
+  const tables = physical.tables.filter(isObjectTable).flatMap((table) => {
     const key = keyColumnOf(table, attributeCase)
     return key === undefined ? [] : [{ table, key }]
   })
@@ -94,7 +96,7 @@ export function buildKeyUnits(
     generator: "key",
   })
   const trigger = (
-    table: PhysicalTable,
+    table: ObjectTable,
     name: string,
     timing: "BEFORE" | "AFTER",
     key: string

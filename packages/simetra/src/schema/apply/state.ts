@@ -579,20 +579,14 @@ export function applyStateOf(
   model: Pick<CompiledModel, "contracts">
 ): ApplyStateObjects {
   const schemaIsState = model.contracts.users === undefined
-  const tables = STATE_TABLES.map((name) => `${PLATFORM_SCHEMA}.${name}`)
   const schemaId = `schema:${PLATFORM_SCHEMA}`
   const tablesAbsent = !target.model.tables.some(
     (t) =>
       t.schema === PLATFORM_SCHEMA &&
       (STATE_TABLES as readonly string[]).includes(t.name)
   )
-  const functions = [
-    SNAPSHOT_HASH_FUNCTION,
-    EPOCH_FUNCTION,
-    RESET_FUNCTION,
-  ].map((f) => `function:${f}`)
   const functionAbsent = !target.model.units.some((u) =>
-    functions.includes(u.identity)
+    STATE_FUNCTIONS.includes(u.identity)
   )
   // Послідовність версій — одиниця генератора механіки, але її життя
   // прив'язане до стану: без стану вона так само «ще не застосована»
@@ -600,6 +594,36 @@ export function applyStateOf(
     (u) => u.identity === SEQUENCE_ID
   )
   const schemaAbsent = plan.actions.some((a) => a.produces.includes(schemaId))
+  return {
+    state:
+      tablesAbsent &&
+      functionAbsent &&
+      sequenceAbsent &&
+      (!schemaIsState || schemaAbsent)
+        ? "absent"
+        : "present",
+    ...applyStateOwnership(model),
+  }
+}
+
+const STATE_FUNCTIONS = [
+  SNAPSHOT_HASH_FUNCTION,
+  EPOCH_FUNCTION,
+  RESET_FUNCTION,
+].map((f) => `function:${f}`)
+
+/**
+ * Recogniser of the apply-state objects of `model` (`ApplyStateObjects`
+ * without the state of a target): what `diff` leaves out while the state is
+ * absent. It depends only on whether the model has the platform layer.
+ */
+export function applyStateOwnership(
+  model: Pick<CompiledModel, "contracts">
+): Pick<ApplyStateObjects, "owns" | "ownsPath"> {
+  const schemaIsState = model.contracts.users === undefined
+  const tables = STATE_TABLES.map((name) => `${PLATFORM_SCHEMA}.${name}`)
+  const schemaId = `schema:${PLATFORM_SCHEMA}`
+  const functions = STATE_FUNCTIONS
   const sub = /^(?:column|constraint|trigger|rule|policy|default):(.*)$/
   // Одиниця гранту компілятора: `grant:<grant|revoke>:<клас>:<об'єкти>:…`;
   // лише схема `simetra` сама, без інших об'єктів у тому самому операторі
@@ -632,13 +656,6 @@ export function applyStateOf(
     )
   }
   return {
-    state:
-      tablesAbsent &&
-      functionAbsent &&
-      sequenceAbsent &&
-      (!schemaIsState || schemaAbsent)
-        ? "absent"
-        : "present",
     owns,
     ownsPath: (path) =>
       tables.some(

@@ -121,6 +121,8 @@ describe("stage 1: files", () => {
       "public.audit_log",
       "public.contract",
       "public.sales_order",
+      // Outbox сигналів платформи — у кожному проєкті.
+      "simetra.signal_outbox",
     ])
   })
 

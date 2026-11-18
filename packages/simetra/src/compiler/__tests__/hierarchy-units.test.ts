@@ -1,3 +1,4 @@
+import { isObjectOrigin } from "simetra/model"
 import { beforeAll, describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
 import {
@@ -212,7 +213,10 @@ describe("buildHierarchyUnits", () => {
     expectClean(result, { allow: ["rights.scope-kind-unread"] })
     const model = result.model!
     const table = model.physical.tables.find(
-      (t) => t.origin.tabularSectionId === undefined && t.name === "folder"
+      (t) =>
+        isObjectOrigin(t.origin) &&
+        t.origin.tabularSectionId === undefined &&
+        t.name === "folder"
     )!
     expect(
       table.columns.find((c) => c.name === "parent_id")?.origin.standard

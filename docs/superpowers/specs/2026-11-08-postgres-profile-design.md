@@ -522,7 +522,7 @@ Supabase.
 
 ```sql
 CREATE TABLE simetra.signal_outbox (
-  id         bigserial PRIMARY KEY,
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   method     text NOT NULL CHECK (method = 'publish'),
   payload    jsonb NOT NULL,
   partition  integer NOT NULL DEFAULT 0 CHECK (partition = 0),
@@ -531,11 +531,15 @@ CREATE TABLE simetra.signal_outbox (
 ```
 
 - Колонки — рівно формат споживача Centrifugo (`id`, `method`, `payload`,
-  `partition`, `created_at`); імена й типи змінювати не можна.
+  `partition`, `created_at`); імена й типи змінювати не можна. `id` —
+  identity `ALWAYS`: значення ставить лише база, а вставка в identity-колонку
+  не потребує прав на її послідовність.
 - Форма `payload` закрита на рівні бази: `CHECK` — рівно ключі `channel`,
   `data`, `idempotency_key`; `channel` відповідає формі топіків П4-B
   (`^simetra(-rights|-user)?:[0-9a-f:-]+$`); `idempotency_key` =
-  `data->>'id'`. Інакше вставка в outbox могла б додати поля запиту
+  `data->>'id'` = `id` рядка (його вписує тригер штампа `BEFORE INSERT`:
+  роль команд свого `id` не бачить); текст `payload` — не більше 1024
+  октетів. Інакше вставка в outbox могла б додати поля запиту
   публікації Centrifugo (`skip_history`, `b64data`, `tags`) чи чужий ключ
   ідемпотентності. Політику `INSERT` режиму відправки П4-B будує над
   `payload->>'channel'`: окремої колонки `topic` у формі споживача немає.
@@ -549,15 +553,18 @@ CREATE TABLE simetra.signal_outbox (
   `id`). Ця спека додає лише `idempotency_key` = `data->>'id'`: якщо
   споживач опублікував подію, а `DELETE` не закомітився, повтор не дасть
   дубля в історії каналу.
-- Таблицю, послідовність, тригер і функцію тригера генерує платформа в
+- Таблиця — таблиця фізичного знімка з платформним походженням без об'єкта
+  (`origin: { part: "signalOutbox" }`): її несе знімок кожного проєкту,
+  тож хеш, порядок створення, `explain` і межа звірки бачать її разом із
+  моделлю. Тригери, гранти, політики й `prune` — одиниці платформного шару в
   схемі `simetra`; власник — `simetra_owner` (у `supabase` — роль
-  застосування). Таблиця входить у межу гейта як об'єкт платформи.
+  застосування).
 
 ### 5.2 Гранти, RLS, `NOTIFY`
 
 - `ENABLE ROW LEVEL SECURITY`, без `FORCE`.
-- `simetra_command`: `INSERT (method, payload)`, `USAGE` на послідовність
-  `id`. Це названий виняток із правила «ролі застосунку не мають грантів на
+- `simetra_command`: `INSERT (method, payload)`; прав на послідовність `id`
+  не треба (identity). Це названий виняток із правила «ролі застосунку не мають грантів на
   таблиці `simetra`» (С1, платформна спека §6.7): сигнал пише функція
   `SECURITY INVOKER` від ролі команд (П4-B). Політику `INSERT` у режимі
   відправки задає П4-B; іншого запису в outbox у ролей застосунку немає.
@@ -625,10 +632,13 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
   (§14). `use_try_lock` лишається: короткий перекрив під час
   перезапуску не тримає транзакцію.
 
-**Вплив на код:** генератор об'єктів outbox у шарі платформи
-(`packages/simetra/src/compiler/platform/units.ts`), гранти й політики
-споживача, функція `prune`; тіла `signal`, `signal_rights`,
-`signal_user_rights` для outbox — блок B8 П4-B за цією формою.
+**Вплив на код:** таблиця outbox і одиниці її тригерів, грантів, політик
+споживача й функції `prune` — `packages/simetra/src/compiler/platform/outbox.ts`
+(одиниці підключає шар платформи, таблицю — знімок кожного проєкту); тіла `signal`, `signal_rights`,
+`signal_user_rights` для outbox — за цією формою: `signal` і `signal_invalidate` —
+блок B2 П4-B, `signal_rights` і `signal_user_rights` — B6. У B2 канали
+`simetra-rights:` і `simetra-user:` у `signal_topic_allowed` — `false` в
+обох режимах; права в підписці дає B6.
 
 **Тести:**
 
@@ -657,8 +667,8 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
   "client": {
     "allowed_origins": ["<origin застосунку>"],
     "token": {
-      "jwks_public_endpoint": "<внутрішня адреса host-а>/simetra/signals/jwks",
-      "audience": "centrifugo:<id застосунку>",
+      "jwks_public_endpoint": "<jwksUrl — вхід генератора>",
+      "audience": "centrifugo:<project.name>",
       "issuer": "<origin host-а>"
     },
     "recovery_max_publication_limit": 300
@@ -678,6 +688,9 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
 
 Правила:
 
+- `jwksUrl` — вхід генератора, не шаблон: шлях на host-і — константа
+  `SIGNALS_JWKS_PATH`, за якою host монтує маршрут. Окремого id застосунку
+  немає, тож `audience` будується з `project.name`.
 - Простір Centrifugo — частина топіка до першої `:`; топіки П4-B
   (`simetra:…`, `simetra-rights:…`, `simetra-user:…`) лягають у три простори
   без зміни формату.
@@ -701,7 +714,9 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
   сплеск команди в межах `history_ttl`; пропуск понад
   `recovery_max_publication_limit` чи понад історію дає `recovered: false`
   і перечитування — це коректно (звіт спайку realtime, вимога 4). Числа
-  уточнює бенчмарк блоку B2 П4-B.
+  уточнює бенчмарк блоку B2 П4-B. Поріг злиття обмежено зверху
+  історією: типовий поріг + 1 (`invalidate`) ≤ `history_size` простору
+  `simetra` (П4-B §8.2); числа — задача 9 плану B2.
 - Рушій — пам'ять (один інстанс). Рестарт — нова епоха, клієнти
   перечитують. Redis-рушій для кількох інстансів — поза першим випуском.
 
@@ -709,9 +724,12 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
 
 | Токен | Claims | TTL | Хто видає |
 | --- | --- | --- | --- |
-| з'єднання | `sub` = `claims.sub` сесії, `aud`, `iss`, `exp` | 15 хв | endpoint host-а після `verifySession`; без сесії, для аноніма й коли `current_user_id()` = `NULL` (недійсний користувач) — 401 |
+| з'єднання | `sub` = id користувача з `authorizeChannels` (`current_user_id()`), не сирий `claims.sub`; `aud`, `iss`, `exp` | 15 хв | endpoint host-а після `verifySession`; без сесії, для аноніма й коли `current_user_id()` = `NULL` (недійсний користувач) — 401 |
 | каналу | `sub`, `channel`, `aud`, `iss`, `exp` | 5 хв | endpoint host-а: `runtime.authorizeChannels` (П4-B) повертає дозволені канали, порт підписує токен на кожен |
 
+- Межа відкликання — TTL токена плюс `client.expired_sub_close_delay`
+  Centrifugo (типово 25 с; для з'єднання — `expired_close_delay`). Типові
+  значення лишаються, у білий список ключів конфігу не входять.
 - Клієнт оновлює обидва токени колбеком `getToken` SDK до `exp`; відмова
   авторизації каналу — `auth` порту каналу без автоповтору (П4-B).
 - Відкликане право перестає тримати підписку щонайпізніше через TTL токена
@@ -746,10 +764,10 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
 
 - Алгоритм — EdDSA (Ed25519, `kty: OKP`); ключ — WebCrypto, без залежності.
   Кожен токен має `kid`.
-- `aud` — `centrifugo:<id застосунку>`, `iss` — origin host-а; Centrifugo
+- `aud` — `centrifugo:<project.name>` (окремого id застосунку немає), `iss` — origin host-а; Centrifugo
   перевіряє обидва (`client.token.audience`, `client.token.issuer`), тож
   токен іншого застосунку чи середовища не приймається.
-- Host публікує JWKS на `/simetra/signals/jwks`; Centrifugo кешує ключі до
+- Host публікує JWKS на шляху `SIGNALS_JWKS_PATH` (`/simetra/signals/jwks`); Centrifugo кешує ключі до
   години. Centrifugo бере JWKS лише за внутрішньою адресою host-а або через
   TLS: підміна відповіді JWKS дала б токен на будь-який канал.
 - **Ротація:** (1) новий ключ додається в JWKS; (2) підпис новим ключем
@@ -955,6 +973,20 @@ FileStore = {
 | Garage | `dxflrs/garage`, точний тег | 3900 (S3), 3903 (admin) | `postgres` |
 | Supabase | Supabase CLI (пін у `package.json`) | 54322, 54329 | `supabase` |
 
+- **Centrifugo стеків — `network_mode: host`.** Host-и (`pnpm demo`, e2e)
+  слухають лише `127.0.0.1`, а `host-gateway` на Linux їх не бачить, тож
+  Centrifugo слухає HTTP на `127.0.0.1:8100` (`simetra-pg`) і
+  `127.0.0.1:8101` (`simetra-sb`), а його `jwksUrl` — `http://127.0.0.1:3000`
+  (порт `pnpm demo`). Host на `0.0.0.0` не прив'язують. Конфіг стека — вихід
+  генератора з цими адресами (інструмент `signals-config`), статичні конфіги
+  замінено в тій самій зміні; e2e під свій порт генерує конфіг сам.
+- **DSN `simetra_signals` — середовищем процесу compose.** Пароль із
+  `login-secrets.env` читає лише `scripts/db-stack.mjs`: будує DSN і
+  передає через `composeEnv()`; compose-файл має тільки інтерполяцію в
+  `environment:` Centrifugo (змінні `CENTRIFUGO_CONSUMERS_SIMETRA_OUTBOX_POSTGRESQL_*`
+  перевизначають споживача, оголошеного в конфігу). Пароль не в
+  `env_file` і не в argv. Centrifugo стартує після ролей і паролів; зміна
+  пароля перестворює лише його (стану не тримає).
 - Порти стека публікуються лише на `127.0.0.1`: Docker інакше відкриває їх
   на всіх інтерфейсах в обхід брандмауера, а стек має суперкористувача з
   відомим паролем і admin Garage.
@@ -1074,7 +1106,8 @@ FileStore = {
 Помічник стенду переноситься з гілки `spike/t4-realtime`
 (`packages/simetra/test/realtime/stand.ts` там) у тест-інфру з тегом
 прогону й прибиранням stack-guard. Стенд — частина DB-проєкту, не окремий
-конфіг.
+конфіг. Centrifugo стенду — з `--network host`, HTTP на `127.0.0.1` і
+вільному порту; JWKS віддає тестовий сервер на `127.0.0.1`.
 
 ### 10.5 pgTAP і розподіл тестів
 
@@ -1173,7 +1206,8 @@ pnpm db:stop
 
 - Метрики транспорту без приватних даних: вік найстаршого рядка outbox,
   число рядків, помилки споживача за кодом, `recovered: false` на клієнті
-  (рішення T4 §4, зобов'язання 12).
+  (рішення T4 §4, зобов'язання 12). Відкладено в #268: приймача метрик
+  ще немає; `recovered: false` — B5b.
 - Журнал Centrifugo не пише `data` публікацій (рівень `info`, без debug у
   проді).
 - Резервна копія бази не мусить містити outbox: після відновлення клієнти
@@ -1188,7 +1222,7 @@ pnpm db:stop
 | **ПГ-1. Стек і тест-інфра** | `docker/` (образ, compose, конфіги, ініціалізація Garage); `pnpm db:pg:*`, `test:db:pg`; stack-guard за профілем (замок, адреси, знімок, контейнери й бакети); Vitest-раннер pgTAP; набір базового стану `postgres` (версія, доступні розширення, налаштування стека, відсутність схем Supabase; ролі й шаблон `simetra_template` — з ПГ-2); проєкт `db-supabase` і перенесення в нього тестів, прив'язаних до Supabase; CI: рядки `supabase-bound` у наявній матриці `db` і job `db-postgres` (§10.6); compose `simetra-sb` з Centrifugo (`pnpm db:signals:*`); текст `AGENTS.md` на затвердження | обидва стеки стартують своїми командами; наявний `db` і `db-supabase` зелені на `supabase`; базовий стан `postgres` зелений через Vitest-раннер; прогін, перерваний SIGINT, не лишає ні баз, ні контейнерів, ні бакетів; CI зелений | — | М3. Перший екран |
 | **ПГ-2. Провайдер у схемному рушії** (два блоки: ПГ-2a — рушій, ролі, шаблон, тест-інфра; ПГ-2b — переведення наявних DB-тестів, CI, `AGENTS.md`; ролей `simetra_signals` і `simetra_signal_consumer` блок не створює, їх приносить ПГ-4) | `postgres` у `DATABASE_PROVIDERS` і мапах за таблицею §4.2; споживачі `PROVIDER_SCHEMAS.supabase` і `SUPABASE_*` — за `scope.provider`; `renderProviderSeed(provider)`; профіль pg-delta `simetra-postgres`; запис пресету §4.1 (тип `Record<DatabaseProvider, …>` його вимагає); ролі §3 з `LOGIN_ROLE_PARENTS` і власником бази; `plpgsql_check` у цілі й шаблон `simetra_template`; власна провізія тіні й копії з шаблону (§3.5); `service: null`; гейт `plan.owner-not-bypassrls`; таблиця ідентичності в тестах — справжня міграція Better Auth закріпленої версії; переведення проєкту `db` на стек `postgres` і тестів — на дані профілю; теговані бази, `SET ROLE` і claims у Vitest-раннері pgTAP (§10.5); CI-job `db` на стеку `postgres` і окремий job `db-supabase` (рядки `supabase-bound` з ПГ-1) | проєкт `db` зелений на `postgres` від ролі з атрибутами власника, `db-supabase` — на `supabase`; каталожний гейт бачить у чужих схемах лише розширення й тригери провізії; тест ролей §3.1 зелений | ПГ-1 | М3. Перший екран |
 | **ПГ-3. Ідентичність** | адресні гранти `better_auth` у `roles` (§4.2), зокрема перенесення тимчасових грантів `USAGE`/`TRIGGER` з `pnpm db:pg:start` у `roles` з тестом на тегованому кластері; `pnpm db:roles`; `plan.identity-table-missing`, `plan.identity-trigger-locked`; `command.privileged-login` замість `runtime.privileged-login`; вибір ролі читання за `anonymousClaim`; адаптер `verifySession` — у шаблоні host-а (П4-D) | DB-тести §4.4 на таблиці справжньої міграції зелені (міграція через `search_path = better_auth`, без `schemaName`, створює таблиці саме там); план від `simetra_owner` ставить тригери провізії на `better_auth."user"`, а крок зняття тригера відмовляє `plan.identity-trigger-locked`; анонімна сесія читає лише `publicRead: anon`; `runCommand` і читання з claims Better Auth дають той самий `current_user_id()`, що й на `supabase` | ПГ-2 | М3. Перший екран |
-| **ПГ-4. Outbox, споживач, токени** | ролі `simetra_signals` і `simetra_signal_consumer` в обох профілях (дані T0, `LOGIN_ROLE_PARENTS.signals`, `roles`); таблиця, гранти, політики споживача, `NOTIFY`, `prune`; конфіг Centrifugo з designer; `simetra/server/signals` (порт, EdDSA, JWKS); стенд сигналів у тест-інфрі; разом із B8 П4-B — тіла функцій сигналу й `authorizeChannels` | `supabase/roles.sql` і `supabase/tests/provider-base-state.test.sql` знають `simetra_signal_consumer` і `simetra_signals`; тести §5.3 і §7 зелені в обох профілях; на стенді доведено фактом: `simetra.signal_outbox` зі схемою в `outbox_table_name`, `partition_notification_dsn`, `use_try_lock`, вхід `simetra_signals` з налаштуванням ролі; сигнал команди доходить, чужий канал, прострочений токен і токен з чужим `aud` відхилено; JWKS з ключем Ed25519 (`OKP`) приймається; ротація без розриву; `realtime` у стеку `supabase` вимкнено | ПГ-3; B6 П4-B | М4. Realtime і права на клієнті |
+| **ПГ-4. Outbox, споживач, токени** | ролі `simetra_signals` і `simetra_signal_consumer` в обох профілях (дані T0, `LOGIN_ROLE_PARENTS.signals`, `roles`); таблиця, гранти, політики споживача, `NOTIFY`, `prune`; конфіг Centrifugo з designer; `simetra/server/signals` (порт, EdDSA, JWKS); стенд сигналів у тест-інфрі; разом із B2 П4-B — тіла `signal` і `signal_invalidate`, `signal_topic_allowed`, `signal_payload_allowed` і `authorizeChannels` | `supabase/roles.sql` і `supabase/tests/provider-base-state.test.sql` знають `simetra_signal_consumer` і `simetra_signals`; тести §5.3 і §7 зелені в обох профілях; на стенді доведено фактом: `simetra.signal_outbox` зі схемою в `outbox_table_name`, `partition_notification_dsn`, `use_try_lock`, вхід `simetra_signals` з налаштуванням ролі; сигнал команди доходить, чужий канал, прострочений токен і токен з чужим `aud` відхилено; JWKS з ключем Ed25519 (`OKP`) приймається; ротація без розриву; `realtime` у стеку `supabase` вимкнено | ПГ-3, B1e, B3-4 П4-B (у `main`); частина B — ще #173. Сигнали прав і канали прав у підписці — B6 | М4. Realtime і права на клієнті |
 | **ПГ-5. Сховище файлів** | властивість `storage` у T0 з мапінгом; стандартні реквізити виду; облік і межа обсягу; `FileStore`, `fromS3Client`; endpoint-и й звірка в шаблоні host-а; спорожнення бакета тегу з об'єктами в прибиральнику stack-guard (§10.3) | тести §8 зелені на стеку `postgres` з Garage | ПГ-3 (ідентичність у тестах), П4-D (host) | М5. Повні екрани довідника |
 
 ПГ-5 не залежить від ПГ-4 і може йти паралельно з ним після ПГ-3.
@@ -1210,7 +1244,7 @@ pnpm db:stop
 | спека системної схеми | С1, §3 | у схемі `simetra` — `signal_outbox`, `storage_usage`, `storage_quota`; грант групи споживача | ПГ7, ПГ11 |
 | спека П4 | §6.2 | рядок `simetra_runtime` для `postgres`: член `simetra_user` і `simetra_anon`; новий рядок `simetra_signals` | ПГ1, ПГ7 |
 | спека П4 | §6.11 | роль читання обирається за `anonymousClaim`: анонімна сесія — роль призначення `anonymous` | §4.4 |
-| спека П4-B (редакція 3) | §8.2, §8.3, §8.5, §8.6, B2, B8 | тіла сигналу — outbox в обох профілях; кеш авторизації Realtime замінює TTL токена каналу; порт каналу над `centrifuge`; e2e-стек — стенд сигналів цієї спеки | узгоджує архітекторка |
+| спека П4-B (редакція 3) | §8.2, §8.3, §8.5, §8.6, B2, B6 | тіла сигналу — outbox в обох профілях; кеш авторизації Realtime замінює TTL токена каналу; порт каналу над `centrifuge`; e2e-стек — стенд сигналів цієї спеки | узгоджує архітекторка |
 | `AGENTS.md` | «Commands and gates» | текст §10.7 | власник |
 
 ## 14. Відкриті питання

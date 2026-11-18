@@ -1,4 +1,23 @@
 import { z } from "zod"
+import { PLATFORM_SCHEMA } from "../schemas/pg-schema"
+
+/**
+ * The outbox the Centrifugo consumer reads (postgres profile spec §5.1): a
+ * platform table of the schema `simetra` in every project.
+ */
+export const SIGNAL_OUTBOX = {
+  schema: PLATFORM_SCHEMA,
+  name: "signal_outbox",
+} as const
+
+/** The `NOTIFY` channel the consumer listens on (postgres profile spec §5.3). */
+export const SIGNAL_NOTIFY_CHANNEL = "simetra_signal_outbox"
+
+/**
+ * Upper bound of one outbox `payload` in octets of its text form: a signal
+ * carries ids, not row contents, so a larger payload is a defect.
+ */
+export const SIGNAL_PAYLOAD_MAX_BYTES = 1024
 
 /** A signal channel: object changes in a scope, rights in a scope, or one user. */
 export type Channel =

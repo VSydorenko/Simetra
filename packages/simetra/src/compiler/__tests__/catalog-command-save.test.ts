@@ -1,3 +1,4 @@
+import { objectTable } from "simetra/model"
 import { parsePlPgSQLSync } from "@libpg-query/parser"
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompileResult, CompiledModel } from "simetra/compiler"
@@ -109,7 +110,7 @@ const rightsOf = (model: CompiledModel, table: string) =>
     (r) => r.objectId === contractOf(model, table).objectId
   )!
 const mainOf = (model: CompiledModel, table: string) =>
-  model.physical.tables.find((t) => t.name === table)!
+  objectTable(model.physical.tables.find((t) => t.name === table)!)
 const context = (action: string, label: string) =>
   `(SELECT simetra.command_action()) IS DISTINCT FROM '${action}' OR (SELECT simetra.command_root('${label}')) IS DISTINCT FROM v_in.id`
 const lock = (table: string) =>

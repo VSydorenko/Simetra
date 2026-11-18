@@ -2,7 +2,7 @@ import {
   quoteIdent,
   tabularParentColumn,
   type Dml,
-  type PhysicalTable,
+  type ObjectTable,
 } from "simetra/model"
 import type {
   CarrierContract,
@@ -95,8 +95,8 @@ interface Inner {
 export function rightsPredicates(
   contract: RightsContract,
   action: string | typeof COMMAND_ACTION,
-  table: PhysicalTable,
-  main: PhysicalTable,
+  table: ObjectTable,
+  main: ObjectTable,
   dml: PredicateDml
 ): RightsPredicate[] {
   if (
@@ -254,8 +254,8 @@ function rootCreatePredicates(contract: RightsContract): RightsPredicate[] {
 function carrierColumn(
   contract: RightsContract,
   carrier: CarrierContract,
-  table: PhysicalTable,
-  main: PhysicalTable
+  table: ObjectTable,
+  main: ObjectTable
 ): string {
   const same = (t: { schema: string; name: string }) =>
     t.schema === contract.table.schema && t.name === contract.table.name

@@ -3,6 +3,7 @@ import {
   PLATFORM_SCHEMA,
   PLATFORM_STATE_TABLES,
   PROVIDER_IDENTITY_SOURCES,
+  isObjectOrigin,
   type DatabaseProvider,
   type PhysicalTable,
 } from "simetra/model"
@@ -51,7 +52,11 @@ export function kindTables(
   const byName = new Map<string, string[]>()
   const bySchema = new Map<string, string[]>()
   for (const table of tables) {
-    if (!kindObjects.has(table.origin.objectId)) continue
+    if (
+      !isObjectOrigin(table.origin) ||
+      !kindObjects.has(table.origin.objectId)
+    )
+      continue
     const key = `${table.schema}.${table.name}`
     qualified.add(key)
     byName.set(table.name, [...(byName.get(table.name) ?? []), key])

@@ -13,6 +13,7 @@ import { project, useTmpProjects } from "./helpers/catalog"
 useTmpProjects()
 
 const RUNTIME = PLATFORM_LOGIN_ROLES.runtime
+const SIGNALS = PLATFORM_LOGIN_ROLES.signals
 
 async function emptyDir(): Promise<{ dir: string; dispose(): Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), "simetra-roles-"))
@@ -42,9 +43,18 @@ describe("roles: the project file", () => {
               ],
               checkOnly: true,
             },
+            {
+              name: SIGNALS,
+              memberOf: [PLATFORM_ROLES.signalConsumer],
+              settings: { role: PLATFORM_ROLES.signalConsumer },
+              checkOnly: true,
+            },
           ],
         },
-        skipped: [{ name: RUNTIME, reason: "no-project-file" }],
+        skipped: [
+          { name: RUNTIME, reason: "no-project-file" },
+          { name: SIGNALS, reason: "no-project-file" },
+        ],
       })
       const data: RolesData = {
         roles: [
@@ -63,9 +73,11 @@ describe("roles: the project file", () => {
       ).stdout
       expect(text.split("\n")).toEqual([
         `target: ${PLATFORM_ROLES.command} created`,
-        expect.stringMatching(
-          new RegExp(
-            `^target: ${RUNTIME} skipped: .*project\\.meta\\.json.*database\\.provider`
+        ...[RUNTIME, SIGNALS].map((name) =>
+          expect.stringMatching(
+            new RegExp(
+              `^target: ${name} skipped: .*project\\.meta\\.json.*database\\.provider`
+            )
           )
         ),
       ])
@@ -78,6 +90,7 @@ describe("roles: the project file", () => {
       ) as { skipped: unknown }
       expect(json.skipped).toEqual([
         { name: RUNTIME, reason: "no-project-file" },
+        { name: SIGNALS, reason: "no-project-file" },
       ])
     } finally {
       await empty.dispose()
@@ -133,6 +146,11 @@ describe("roles: the project file", () => {
           {
             name: RUNTIME,
             memberOf: [PLATFORM_ROLES.command, "authenticated", "anon"],
+          },
+          {
+            name: SIGNALS,
+            memberOf: [PLATFORM_ROLES.signalConsumer],
+            settings: { role: PLATFORM_ROLES.signalConsumer },
           },
         ],
         checkLogin: [],

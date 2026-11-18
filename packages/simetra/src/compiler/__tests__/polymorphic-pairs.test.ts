@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
-import { KIND_REGISTRY, METADATA_KINDS } from "simetra/model"
+import { KIND_REGISTRY, METADATA_KINDS, isObjectOrigin } from "simetra/model"
 import { kitchenSink } from "./fixtures/kitchen-sink"
 
 /**
@@ -95,7 +95,9 @@ function physicalPairs(model: CompiledModel): Map<string, Carriers> {
           c.origin.standard === column.origin.standard
       )
       if (sibling === undefined) continue
-      const objectId = table.origin.objectId ?? "(no object)"
+      const objectId = isObjectOrigin(table.origin)
+        ? table.origin.objectId
+        : "(no object)"
       const carriers = found.get(objectId) ?? empty()
       found.set(objectId, carriers)
       if (column.origin.elementId !== undefined) {
