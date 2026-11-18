@@ -122,7 +122,8 @@ pnpm demo:drop                  # remove the demo database from the stack
 
 `pnpm demo` prints two logins with fresh passwords on every run. Each user sees
 only their own clients; the countries are shared. A rerun keeps the data, and
-Ctrl-C stops the server.
+Ctrl-C stops the server. After a change to the template metadata, run
+`pnpm demo:drop` first: a rerun does not migrate the demo database.
 
 Before opening a pull request, run the same gates as CI:
 
