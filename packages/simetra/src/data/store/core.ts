@@ -729,16 +729,42 @@ export function createCore(options: {
   })
 
   /**
-   * Підмножина зі знімка, яку ще не читали, стає видимою після `endHydration`
-   * (пізня підписка чи `setVisible(true)`): її значення довіряються лише до
-   * першого читання, тож вона читається зараз, поодинці (§6.6). До кінця
-   * гідратації читання робить `endHydration` разом з усіма.
+   * Довіра до значень — факт РЯДКА: рядок, який записала лише гідратація
+   * (`writtenEpoch` < епохи гідратації), не читався після неї (§6.6). Вигляд
+   * над таким рядком — власним чи `include` — стає видимим після `endHydration`
+   * (пізня підписка чи `setVisible(true)`) і читається зараз, поодинці, доки
+   * читання, що стартувало після гідратації, не перезапише рядок. ТЧ міряється
+   * епохою свого читання (`sectionRead`). До кінця гідратації читання робить
+   * `endHydration` разом з усіма.
    */
+  let hydrationEpoch = 0
+  // Лише для самотесту: вигляди, які знімок тримав сам (дефект
+  // `hydrated-row-not-reread` читає тільки їх, як колишній прапор вигляду).
+  const heldBySnapshot = new Set<Subset>()
+
+  function overHydratedRows(s: Subset): boolean {
+    if (s.form.spec.kind === "section")
+      return s.sectionRead !== undefined && s.sectionRead < hydrationEpoch
+    const stale = (o: ObjectState, keys: Iterable<Key>) => {
+      for (const key of keys) {
+        const e = o.rows.get(key)
+        if (e !== undefined && e.writtenEpoch < hydrationEpoch) return true
+      }
+      return false
+    }
+    if (stale(s.form.object, s.owned)) return true
+    for (const [name, keys] of s.included)
+      if (stale(objectOf(name), keys)) return true
+    return false
+  }
+
   function readHydrated(s: Subset) {
-    if (hydration !== "ended" || !s.unread) return
+    if (hydration !== "ended") return
     if (defects.has("late-hydrated-not-reread")) return
     if (staleObjects.has(s.form.object.name)) return
     if (!(s.visible ?? s.listeners.size > 0)) return
+    if (defects.has("hydrated-row-not-reread") && !heldBySnapshot.has(s)) return
+    if (!overHydratedRows(s)) return
     revalidateHydrated(writerContext, s).catch((error: unknown) =>
       log({ kind: "listener-failed", error })
     )
@@ -934,6 +960,11 @@ export function createCore(options: {
         session.token(),
         "hydrate"
       )
+      // Свіжіша за епоху записаних рядків: читання, що стартувало після
+      // гідратації, має епоху не нижчу й пише рядки вже «довіреними».
+      hydrationEpoch = session.epochs.next()
+      if (defects.has("hydrated-row-not-reread"))
+        for (const s of registry.subsets()) heldBySnapshot.add(s)
     },
     endHydration() {
       if (hydration !== "hydrated") return

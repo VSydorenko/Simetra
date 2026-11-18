@@ -78,7 +78,7 @@ export interface RegistryContext {
   readonly defects: Defects
   /** The monotonic clock in ms (`performance.now()`; a test substitutes it). */
   readonly now: () => number
-  /** Reads a hydrated, still unread view that was just subscribed (§6.6). */
+  /** Reads a view over hydration-only rows that just became visible (§6.6). */
   readHydrated(s: Subset): void
 }
 
@@ -137,12 +137,6 @@ export interface Subset extends ReaderTarget {
    * subset until the first subscription or `endHydration` (spec §6.6).
    */
   hydrated: boolean
-  /**
-   * Taken from a core snapshot and not read since: its values are trusted only
-   * until the first read after the hydration (spec §6.6). Cleared when a read
-   * of the view starts; a view that becomes visible with it set is read.
-   */
-  unread: boolean
 }
 
 /** The state of a view taken from a core snapshot (the hydration). */
@@ -255,7 +249,6 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     }
     const gen = ++s.gen
     s.flight = gen
-    s.unread = false
     // Токен покоління: недійсний після звільнення й нового запиту (§6.1).
     const token = session.childToken(() => s.alive && s.gen === gen)
     const what = `view ${s.form.specKey}`
@@ -763,7 +756,6 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       purged: false,
       visible: undefined,
       hydrated: false,
-      unread: false,
       headerState: undefined,
     }
     subsets.set(form.specKey, s)
@@ -1076,7 +1068,6 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       s.snapshot = undefined
       s.dirty = true
       s.hydrated = true
-      s.unread = true
     },
 
     endHydration() {

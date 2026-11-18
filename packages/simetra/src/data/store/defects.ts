@@ -78,6 +78,8 @@ export type DefectFlag =
   | "min-age-all-young"
   /** A hydrated view first shown after the reconciliation is not read. */
   | "late-hydrated-not-reread"
+  /** A view over rows only the hydration wrote, not held by the snapshot itself, is not read. */
+  | "hydrated-row-not-reread"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

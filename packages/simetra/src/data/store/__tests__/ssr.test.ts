@@ -701,6 +701,43 @@ describe("a hydrated view first shown after the reconciliation", () => {
     expect(t.reads() - before).toBe(0)
   })
 
+  it("a card mounted after endHydration over a row held only by an invisible hydrated list reads once", async () => {
+    // Рядок 1 записала лише гідратація: список його тримає, але не підписаний.
+    const t = await hydrated([keysView(1, 2)], { preload: true })
+    const before = t.reads()
+    const handle = t.core.view(card(1))
+    watch(handle)
+    await settle()
+    expect(t.reads() - before).toBe(1)
+    // Довіра — факт рядка: друга картка над тим самим рядком не читає.
+    watch(t.core.view(card(1)))
+    watch(t.core.view(card(2)))
+    await settle()
+    expect(t.reads() - before).toBe(2)
+    expect(t.inspect.violations()).toEqual([])
+  })
+
+  it("two subscriptions to one view over hydration-only rows, while its read is in flight, read once", async () => {
+    const t = await hydrated([keysView(1, 2)], { preload: true })
+    const before = t.reads()
+    watch(t.core.view(card(1)))
+    watch(t.core.view(card(1)))
+    await settle()
+    expect(t.reads() - before).toBe(1)
+  })
+
+  it("a card over a row already re-read after the hydration is not read", async () => {
+    const t = await hydrated([keysView(1, 2)], { preload: true })
+    const first = watch(t.core.view(card(1)))
+    await settle()
+    // Картка прочитала рядок після гідратації: повторне монтування — без читання.
+    first.unsubscribe()
+    const before = t.reads()
+    watch(t.core.view(card(1)))
+    await settle()
+    expect(t.reads() - before).toBe(0)
+  })
+
   it("a stale-client object is not read", async () => {
     const t = await hydrated([card(1)])
     t.core.staleClient(TASK)

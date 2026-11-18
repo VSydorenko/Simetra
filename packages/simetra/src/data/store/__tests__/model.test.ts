@@ -1654,6 +1654,8 @@ async function runModel(
       nextInspect.defects.add("hydrate-without-revalidate")
     if (defects.includes("late-hydrated-not-reread"))
       nextInspect.defects.add("late-hydrated-not-reread")
+    if (defects.includes("hydrated-row-not-reread"))
+      nextInspect.defects.add("hydrated-row-not-reread")
     try {
       next.hydrate(snapshot)
       const violations = nextInspect.violations()
@@ -1672,9 +1674,9 @@ async function runModel(
       }
       // Звірка: видимі вигляди — підписані; кожен другий підписується вже
       // після `endHydration` (умовне монтування, §6.6) і мусить читатися сам.
-      const subscribeHeld = (late: boolean) =>
+      const subscribeHeld = (late: boolean, skip: readonly unknown[] = []) =>
         held.flatMap((sub, i) => {
-          if ((i % 2 === 1) !== late) return []
+          if ((i % 2 === 1) !== late || skip.includes(sub)) return []
           const v = SPECS.findIndex(
             (spec) => JSON.stringify(spec) === JSON.stringify(sub.form.spec)
           )
@@ -1682,11 +1684,41 @@ async function runModel(
         })
       const unsubscribe = subscribeHeld(false)
       next.endHydration()
-      unsubscribe.push(...subscribeHeld(true))
+      // Картка над рядком, який тримає лише непідписаний гідрований список
+      // (довіра — факт рядка, §6.6): список лишається без підписки, тож рядок
+      // читає тільки сама картка.
+      const donor = held.find(
+        (sub, i) =>
+          i % 2 === 1 &&
+          sub.form.spec.kind !== "card" &&
+          sub.form.spec.kind !== "section" &&
+          !staled.has(sub.form.object.name) &&
+          sub.layout.length > 0 &&
+          !held.some(
+            (other) =>
+              other.form.spec.kind === "card" &&
+              other.form.spec.object === sub.form.object.name &&
+              other.form.spec.key === sub.layout[0]
+          )
+      )
+      const donorCard: ViewSpec | undefined =
+        donor === undefined
+          ? undefined
+          : {
+              kind: "card",
+              object: donor.form.object.name,
+              key: donor.layout[0]!,
+            }
+      if (donorCard !== undefined)
+        unsubscribe.push(next.view(donorCard).subscribe(() => {}))
+      unsubscribe.push(
+        ...subscribeHeld(true, donor === undefined ? [] : [donor])
+      )
       for (let round = 0; round < 20; round++) await flush()
       const after = nextInspect.violations()
       if (after.length > 0) fail(label, `after reconcile: ${after.join("; ")}`)
       for (const sub of held) {
+        if (sub === donor) continue
         const v = SPECS.findIndex(
           (spec) => JSON.stringify(spec) === JSON.stringify(sub.form.spec)
         )
@@ -1705,6 +1737,21 @@ async function runModel(
             if (!Object.is(row.values[field], server!.values[field]))
               fail(label, `${at}.${field} differs from the server`)
           }
+        }
+      }
+      // Дефект `late-hydrated-not-reread` ловить перевірка вище; ця — лише свій.
+      if (
+        donorCard !== undefined &&
+        !defects.includes("late-hydrated-not-reread")
+      ) {
+        const snap = next.view(donorCard).getSnapshot()
+        const row = snap.rows[0]
+        if (row !== undefined && row.state !== "removed") {
+          const at = `after hydrate: card over a hydration-only row ${row.key}`
+          if (row.hidden === true) fail(label, `${at} still hidden`)
+          const server = fake.row(donorCard.object, row.key)
+          if (server === undefined || server.version !== row.version)
+            fail(label, `${at}: version ${row.version}, server differs`)
         }
       }
       for (const stop of unsubscribe) stop()
@@ -2664,6 +2711,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "min-age-ignored-sections",
   "min-age-all-young",
   "late-hydrated-not-reread",
+  "hydrated-row-not-reread",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -2700,6 +2748,8 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "min-age-all-young": /a view older than the limit was not re-read/,
   // Пізня підписка гідрованого вигляду (§6.6): рядок знімка без читання.
   "late-hydrated-not-reread": /after hydrate: view \d+ .*(server|hidden)/,
+  // Довіра — факт рядка: картка над рядком непідписаного гідрованого списку.
+  "hydrated-row-not-reread": /after hydrate: card over a hydration-only row/,
 }
 
 describe("core model self-check", () => {

@@ -779,8 +779,8 @@ export async function revalidate(
 }
 
 /**
- * The system re-read of one hydrated view that has not been read since the
- * hydration, at the moment it becomes visible (spec §6.6). A section is read
+ * The system re-read of one view over rows that only the hydration wrote, at
+ * the moment it becomes visible (spec §6.6). A section is read
  * only while mounted, like in `revalidate`.
  */
 export async function revalidateHydrated(
@@ -846,10 +846,7 @@ async function revalidateViews(
     targets.map((s) => [s, { gen: s.gen, flight: s.flight }] as const)
   )
   const startedAt = ctx.now()
-  for (const s of targets) {
-    s.rereads++
-    s.unread = false
-  }
+  for (const s of targets) s.rereads++
   const purgesAtStart = new Map(ctx.purges)
   const purgedSince = (name: ObjectName) =>
     (ctx.purges.get(name) ?? 0) !== (purgesAtStart.get(name) ?? 0)
