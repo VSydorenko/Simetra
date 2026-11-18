@@ -20,7 +20,12 @@ import {
 import { createWriter } from "../data-writer"
 import { createCore, limitsOf } from "../store/core"
 import { createCoreSource, createReadLimiter } from "../store/source"
-import type { CloseReason, CoreLimits, CoreLogEntry } from "../store/types"
+import type {
+  CloseReason,
+  CoreLimits,
+  CoreLogEntry,
+  ViewSpec,
+} from "../store/types"
 import { bindRuntimeHandle, type RuntimeRequest } from "./handle"
 
 /** The data runtime of one user session (P4-B spec §6.1). */
@@ -29,6 +34,14 @@ export interface DataRuntime {
   readonly subject: string
   /** Closes the runtime; later requests are refused without the transport. */
   dispose(): void
+  /**
+   * Holds the view `spec` until its first subscription or `ttlMs` (default
+   * 5 s) and resolves after its first load: for a router loader (P4-B spec
+   * §6.1, §6.6). Throws synchronously on a refused spec (`TypeError`, `DataError`).
+   */
+  preload(spec: ViewSpec, options?: { ttlMs?: number }): Promise<void>
+  /** The list strategy of `object` (`"<kind>.<name>"`): `window` unless the settings name it. */
+  residencyOf(object: string): "full" | "window"
   readonly disposed: boolean
 }
 
@@ -358,6 +371,8 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
       return closedWith !== undefined
     },
     dispose: () => close(DISPOSED, "disposed"),
+    preload: (spec, preloadOptions) => core.preload(spec, preloadOptions),
+    residencyOf: (object) => core.residencyOf(object),
   }
   bindRuntimeHandle(runtime, { send, core, writer: createWriter(core) })
   return runtime

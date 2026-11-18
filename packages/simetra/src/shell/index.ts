@@ -1,4 +1,8 @@
-// Вміст ярусу з'явиться в наступних кроках П2 чи підпроєктах (платформна
-// спека §3.1); тека й subpath існують від початку, бо лінт-зони й експорти
-// покривають кожен ярус.
-export {}
+export { simetraApp, type EntityDescriptor, type SimetraApp } from "./app"
+export type { SimetraRouterContext } from "./context"
+export {
+  entityCardRoute,
+  entityListRoute,
+  type EntityListRouteOptions,
+} from "./routes"
+export { routerNavigation } from "./navigation"

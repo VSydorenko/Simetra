@@ -105,6 +105,7 @@ describe("simetra", () => {
       "./schema",
       "./schemas/*",
       "./server",
+      "./shell",
       "./ui",
     ])
     expect(manifest.private).toBeUndefined()
@@ -126,6 +127,8 @@ describe("simetra", () => {
       "dist/server/index.d.ts",
       "dist/ui/index.js",
       "dist/ui/index.d.ts",
+      "dist/shell/index.js",
+      "dist/shell/index.d.ts",
       "schemas/catalogs.schema.json",
       "LICENSE",
       "README.md",
@@ -151,7 +154,7 @@ describe("simetra", () => {
     expect(
       js.filter(
         (f) =>
-          !/^dist\/(model|compiler|data|schema|server|ui)\//.test(f) &&
+          !/^dist\/(model|compiler|data|schema|server|ui|shell)\//.test(f) &&
           !/^dist\/handle-[^/]+\.js$/.test(f)
       )
     ).toEqual([])
@@ -171,9 +174,11 @@ describe("simetra", () => {
     ])
   })
 
-  it("declares react, react-dom and react-virtual as the only peers, both optional", async () => {
+  it("declares react, react-dom, react-virtual, react-form and react-router as the only peers, all optional", async () => {
     const m = await readPackedManifest(tarballs.simetra)
     expect(m.peerDependencies).toEqual({
+      "@tanstack/react-form": "^1.33.5",
+      "@tanstack/react-router": "^1.170.46",
       "@tanstack/react-virtual": "^3.14.26",
       react: "^19.3.1",
       "react-dom": "^19.3.1",
@@ -183,7 +188,7 @@ describe("simetra", () => {
       Object.values(
         m.peerDependenciesMeta as Record<string, { optional?: boolean }>
       ).map((v) => v.optional)
-    ).toEqual([true, true, true])
+    ).toEqual([true, true, true, true, true])
     expect(Object.keys(m.peerDependenciesMeta as object).sort()).toEqual(
       Object.keys(m.peerDependencies as object).sort()
     )
@@ -200,9 +205,12 @@ describe("simetra", () => {
       { cwd: consumer }
     )
     expect(stdout).toBe("")
-    await expect(
-      readFile(join(consumer, "node_modules/react/package.json"))
-    ).rejects.toThrow()
+    // Серверний споживач не ставить ні React, ні бібліотеку форм входу `./ui`.
+    for (const peer of ["react", "@tanstack/react-form"]) {
+      await expect(
+        readFile(join(consumer, `node_modules/${peer}/package.json`))
+      ).rejects.toThrow()
+    }
   })
 
   it("imports every tier in plain Node", async () => {
@@ -374,8 +382,12 @@ describe("simetra/data", () => {
     // Вбудована копія peer-а — друга копія в бандлі споживача, якої граф
     // модулів не покаже: вона лежить у корені `simetra`
     const m = await readPackedManifest(tarballs.simetra)
+    // Peer-и інших входів (роутер — лише `./shell`, virtual — лише `./ui`)
+    // у `dist/data` потрапляти не мають.
     const allowed = new Set([
-      ...Object.keys(m.peerDependencies as object),
+      ...Object.keys(m.peerDependencies as object).filter(
+        (p) => !p.startsWith("@tanstack/")
+      ),
       "simetra/model",
     ])
     const specifiers = [
@@ -386,16 +398,72 @@ describe("simetra/data", () => {
     expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
   })
 
-  it("the ui entry imports only its peers and the hooks entry", async () => {
+  it("the ui entry imports only its peers, the hooks entry and the T0 model", async () => {
     const m = await readPackedManifest(tarballs.simetra)
+    // Роутер — peer лише входу `./shell`, тож у `dist/ui` йому не місце.
     const allowed = new Set([
-      ...Object.keys(m.peerDependencies as object),
+      ...Object.keys(m.peerDependencies as object).filter(
+        (p) => p !== "@tanstack/react-router"
+      ),
       "simetra/data/react",
+      // Межа ярусів дозволяє T5 імпортувати вниз; T0 залежить лише від `zod`,
+      // а план вимагає кодек T0 (каталог клієнта) у хостах.
+      "simetra/model",
     ])
     const specifiers = [
       ...(await packedSources(tarballs.simetra, "dist/ui/", ".js")).values(),
     ].flatMap(bareSpecifiers)
     expect(specifiers).toContain("@tanstack/react-virtual")
+    // Форма картки — peer входу `./ui` (чернетка `CardHost`).
+    expect(specifiers).toContain("@tanstack/react-form")
+    expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
+  })
+
+  it("the ui entry does not expose the card draft hook", async () => {
+    // Чернетка належить одному власникові лише під ключем `CardHost`; голий
+    // хук після заміни рантайму переніс би чернетку суб'єкта A до B.
+    const names = async (suffix: string): Promise<string[]> => {
+      const sources = await packedSources(tarballs.simetra, "dist/ui/", suffix)
+      const index = sources.get(`dist/ui/index${suffix}`) ?? ""
+      // Експортовані імена: списки `export { … }` / `export type { … }` і
+      // оголошення `export declare …`; коментарі й тіла модуля не рахуються.
+      const listed = [...index.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}/g)]
+        .flatMap((m) => m[1]!.split(","))
+        .map((n) =>
+          n
+            .trim()
+            .split(/\s+as\s+/)
+            .at(-1)!
+        )
+      const declared = [
+        ...index.matchAll(/export\s+declare\s+\w+\s+(\w+)/g),
+      ].map((m) => m[1]!)
+      return [...listed, ...declared].filter((n) => n !== "")
+    }
+    for (const suffix of [".js", ".d.ts"]) {
+      const exported = await names(suffix)
+      expect(exported).toContain("CardHost")
+      expect(exported).not.toContain("useCardDraft")
+      expect(exported).not.toContain("UseCardDraftInput")
+    }
+  })
+
+  it("the shell entry imports only its peers and the lower tiers", async () => {
+    const m = await readPackedManifest(tarballs.simetra)
+    // Бібліотеку форм T6 не імпортує сам: вона приходить через `simetra/ui`.
+    const allowed = new Set([
+      ...Object.keys(m.peerDependencies as object).filter(
+        (p) => p !== "@tanstack/react-form"
+      ),
+      "simetra/data",
+      "simetra/data/react",
+      "simetra/model",
+      "simetra/ui",
+    ])
+    const specifiers = [
+      ...(await packedSources(tarballs.simetra, "dist/shell/", ".js")).values(),
+    ].flatMap(bareSpecifiers)
+    expect(specifiers).toContain("@tanstack/react-router")
     expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
   })
 })

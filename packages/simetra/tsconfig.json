@@ -12,5 +12,5 @@
   },
   "include": ["src", "test", "scripts", "bench"],
   // DOM-типи — лише в `tsconfig.dom.json`: інакше DOM-глобали бачив би і T0
-  "exclude": ["node_modules", "dist", "src/ui", "src/data/react"]
+  "exclude": ["node_modules", "dist", "src/ui", "src/shell", "src/data/react"]
 }

@@ -208,6 +208,12 @@ export const catalogEntrySchema = z.strictObject({
    * `uuid` key and no read boundary but the tenant one.
    */
   signal: z.boolean(),
+  /**
+   * The attribute that represents the object in a `Ref` text (its logical
+   * name): the main presentation, derived from the kind registry's standard
+   * columns; absent when the kind gives none (P4-D spec §5.3).
+   */
+  presentation: z.strictObject({ attribute: z.string() }).optional(),
   attributes: z.array(catalogEntryAttributeSchema),
   tabularSections: z.array(catalogEntrySectionSchema),
 })

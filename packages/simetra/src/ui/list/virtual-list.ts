@@ -26,6 +26,8 @@ export interface VirtualListProps {
   setVisibleRange(range: { first: number; last: number }): void
   /** The content of a row slot; `removed` and `hidden` rows come too. */
   renderRow(row: RowView, index: number): ReactNode
+  /** The `data-state` of a row slot (P4-D spec §5.5: on the `[data-row-key]` element). */
+  rowState?(row: RowView): string
   /** Loading slot content of an edge not reached; empty by default. */
   renderPlaceholder?(edge: "before" | "after"): ReactNode
   /** Row slot height in px: exact when `measure` is off, an estimate otherwise. */
@@ -251,6 +253,7 @@ function Scroller(props: VirtualListProps & { startAt: string }) {
               ref,
               "data-index": it.index,
               "data-row-key": String(row.key),
+              "data-state": props.rowState?.(row),
               style: slotStyle,
             },
             props.renderRow(row, i)

@@ -69,6 +69,7 @@ const entryOf = (o: RuntimeObject): CatalogEntry => ({
   ...present("creatorMembership", o.creatorMembership),
   kernelHash: o.kernelHash,
   signal: o.signal,
+  ...present("presentation", o.presentation),
   attributes: o.attributes.map(attributeOf),
   tabularSections: o.tabularSections.map(sectionOf),
 })

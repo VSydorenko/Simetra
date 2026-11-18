@@ -1,5 +1,6 @@
 import {
   CAST_TYPES,
+  DEFAULT_MAIN_PRESENTATION,
   KIND_REGISTRY,
   effectiveMaxBytes,
   type MetadataRef,
@@ -27,6 +28,7 @@ import {
   type EntityField,
   type ValueSource,
 } from "./entity-fields"
+import type { PresentationBlock } from "./presentation"
 import { sha256HexSync } from "./sha256"
 
 /**
@@ -140,6 +142,10 @@ function runtimeObject(
     versionColumn,
     versionName: fieldOf(fields, versionColumn).name,
     signal: isSignalObject(facts.model, object.id),
+    ...presentationOf(
+      facts.model.presentation.objects.find((p) => p.objectId === object.id),
+      fields
+    ),
     ...(scope?.origin.scopeKindId === undefined
       ? {}
       : { scopeKindId: scope.origin.scopeKindId, scopeColumn: scope.name }),
@@ -259,6 +265,23 @@ function rootCreate(rootId: string, model: CompiledModel): RuntimeRootCreate {
     (k) => "objectId" in k.root && k.root.objectId === rootId
   )?.rootCreator
   return creator === undefined ? {} : { membership: creator.membership }
+}
+
+// Основне представлення — з блоку подання (`mainPresentation`, типово
+// `Description`) і стандартних колонок виду, а не з імені реквізиту: власний
+// реквізит `description` у виду без стандартного найменування його не підміняє.
+function presentationOf(
+  block: PresentationBlock | undefined,
+  fields: readonly EntityField[]
+): { presentation?: { attribute: string } } {
+  const logicalName =
+    (block?.mainPresentation ?? DEFAULT_MAIN_PRESENTATION) === "Code"
+      ? "code"
+      : "description"
+  const attribute = fields.find(
+    (f) => f.standard?.logicalName === logicalName
+  )?.name
+  return attribute === undefined ? {} : { presentation: { attribute } }
 }
 
 function attributes(
