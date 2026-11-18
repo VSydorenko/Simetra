@@ -28,7 +28,7 @@ export interface ServerRow {
   /**
    * Set on a row a `known` marker stands for (P4-B spec §6.7): the held row
    * the request was built from. Such a row confirms the held one — the
-   * store applies it through `ObjectStore.applyMarker`, never as new values.
+   * store applies it as a marker, never as new values.
    */
   readonly marker?: ServerRow
 }
