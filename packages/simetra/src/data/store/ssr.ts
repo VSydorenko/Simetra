@@ -1,7 +1,13 @@
 import type { Defects } from "./defects"
 import { heldEpoch } from "./epoch"
 import type { Form, ObjectState } from "./forms"
-import { scopeOf, type RestoredRow, type RowEntry } from "./object-store"
+import { includeKeys } from "./include"
+import {
+  scopeOf,
+  visibleRow,
+  type RestoredRow,
+  type RowEntry,
+} from "./object-store"
 import type { StoreOps } from "./readers"
 import type { SectionEntry } from "./section-store"
 import type { Scope, Session } from "./session"
@@ -241,10 +247,20 @@ export function dehydrate(ctx: SsrContext): CoreSnapshot {
       o,
       [...s.owned].filter((key) => !shownKeys.has(key))
     )
-    // Цілі `include` — не окремий перелік: їх дають значення рядків. Їхні
-    // рядки йдуть у знімок, бо вигляд їх тримає.
-    for (const [name, keys] of s.included)
-      indicesOf(ctx.objects.get(name)!, keys)
+    // Цілі `include` — не окремий перелік: їх дають значення показаних
+    // рядків, так само як `refs` вигляду, тож у знімок йдуть ті цілі, які
+    // вигляд показує, а не ті, що він утримував на мить читання.
+    if (s.form.include.length > 0) {
+      const wanted = includeKeys(
+        s.form.include,
+        layoutKeys.flatMap((key) => {
+          const e = o.rows.get(key)
+          const values = e === undefined ? undefined : visibleRow(e)
+          return values === undefined ? [] : [values]
+        })
+      )
+      for (const [name, keys] of wanted) indicesOf(ctx.objects.get(name)!, keys)
+    }
     subsets.push({
       spec,
       ...(layout.length === 0 ? {} : { layout: runsOf(layout) }),

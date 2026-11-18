@@ -514,7 +514,9 @@ describe("hydrate", () => {
     await settle()
     const snapshot = through(core.dehydrate())
     const next = coreOver(fake)
-    expect(() => next.core.hydrate(break_(snapshot))).toThrow(TypeError)
+    expect(() => next.core.hydrate(break_(snapshot) as CoreSnapshot)).toThrow(
+      TypeError
+    )
     expect(next.inspect.rowCount()).toBe(0)
     expect(heldSpecs(next.core)).toEqual([])
     // Отказ не витрачає гідратацію: правильний знімок ще береться.

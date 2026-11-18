@@ -13,22 +13,30 @@ import {
   type ReadRows,
 } from "simetra/model"
 import { DataError } from "../../errors"
-import { coreInternals, type CoreSession, type DefectFlag } from "../core"
+import {
+  coreInternals,
+  createCore,
+  inspectCore,
+  type CoreSession,
+  type DefectFlag,
+} from "../core"
 import { compareRows, fieldInfoOf, filterCollator } from "../filter"
 import { visibleRow } from "../object-store"
-import type { ServerPort } from "../source"
+import { createCoreSource, createReadLimiter, type ServerPort } from "../source"
 import type { Subset } from "../subsets"
-import type { FakeRead } from "../testing/fake-source"
-import type {
-  CloseReason,
-  Key,
-  MutationResult,
-  MutationState,
-  ObjectName,
-  RowView,
-  ViewHandle,
-  ViewSnapshot,
-  ViewSpec,
+import type { FakeRead, FakeReadLog } from "../testing/fake-source"
+import {
+  DEFAULT_CORE_LIMITS,
+  type CloseReason,
+  type CoreSnapshot,
+  type Key,
+  type MutationResult,
+  type MutationState,
+  type ObjectName,
+  type RowView,
+  type ViewHandle,
+  type ViewSnapshot,
+  type ViewSpec,
 } from "../types"
 import { ORG, S, TASK, key, keysOf, setup } from "./core-support"
 
@@ -176,13 +184,14 @@ type Step =
     }
   | { t: "removeMut"; k: number; cancel: boolean }
   | { t: "closeInFlight" }
+  | { t: "rehydrate" }
 
 const view = fc.nat(SPECS.length - 1)
 const k = fc.nat(KEYS.length - 1)
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 
 /**
- * Ваги (бриф, крок 1): сума 293 (перемикання епохи — 6; `hide` над
+ * Ваги (бриф, крок 1): сума 299 (перегідратація — 6; перемикання епохи — 6; `hide` над
  * ТЧ-підмножиною — 6; сторінка вікна — 8; запис — 50: `update` 14, відповідь
  * `run` 20, дії мутації 8, чужа правка, `purge` чи `hide` ключа з мутацією 6,
  * `dispose()` з мутацією в дорозі 2); `purge` (16 + 14), відсутній рядок і
@@ -393,6 +402,9 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
     }),
   },
   { weight: 2, arbitrary: fc.record({ t: one("closeInFlight") }) },
+  // Перегідратація (план B3-6a, задача 1): знімок ядра, нове ядро над тим
+  // самим сервером, `hydrate`, `endHydration`, звірка.
+  { weight: 6, arbitrary: fc.record({ t: one("rehydrate") }) },
   {
     weight: 1,
     arbitrary: fc.record({
@@ -1504,6 +1516,219 @@ async function runModel(
     core.commit(fn, core.token())
   }
 
+  /**
+   * Перегідратація (план B3-6a, задача 1): знімок ядра йде в нове ядро над
+   * тим самим сервером. Перевіряємо безпеку знімка (жодних значень `hidden`
+   * чи `removed` ключа, жодного рядка без власника), що вигляди нового ядра
+   * після `hydrate` показують те саме, що старого, і що після звірки
+   * (`endHydration`) вони дорівнюють серверним. Читання нового ядра модель
+   * відповідає сама й прибирає з журналу сервера: вони не належать основному
+   * ядру, і його бар'єри не мають їх бачити.
+   */
+  async function rehydrate(label: string) {
+    const raw = core.dehydrate()
+    for (const [name, group] of Object.entries(raw.objects)) {
+      const o = objectOf(name)
+      const keyName = o.entry.keyName
+      for (const slot of group.slots) {
+        const slotKey = "state" in slot ? slot.key : (slot[0][keyName] as Key)
+        const e = o.rows.get(slotKey)
+        if (e === undefined)
+          fail(label, `snapshot: ${name}/${slotKey} has no entry in the store`)
+        else if (inspect.owners(name, slotKey) === 0)
+          fail(label, `snapshot: ${name}/${slotKey} has no owner`)
+        const hides =
+          e!.removed !== undefined ||
+          e!.stale.hidden !== undefined ||
+          e!.row === undefined
+        if (!("state" in slot) && hides)
+          fail(label, `snapshot: values of a hidden or removed ${slotKey}`)
+        if ("state" in slot && Object.hasOwn(slot, "values"))
+          fail(label, `snapshot: a ${slot.state} slot carries values`)
+      }
+    }
+    for (const [name, list] of Object.entries(raw.sections)) {
+      for (const entry of list) {
+        const header = objectOf(name).rows.get(entry.owner)
+        if (
+          header !== undefined &&
+          (header.removed !== undefined || header.stale.hidden !== undefined)
+        )
+          fail(label, `snapshot: lines of a hidden owner ${entry.owner}`)
+      }
+    }
+    // Знімок проходить крізь JSON, як крізь HTML.
+    const snapshot = JSON.parse(JSON.stringify(raw)) as CoreSnapshot
+
+    const mine: FakeReadLog[] = []
+    const adapter = {
+      capabilities: fake.adapter.capabilities,
+      read: (items: Parameters<typeof fake.adapter.read>[0]) => {
+        const from = fake.log.length
+        const from2 = fake.pending.length
+        const result = fake.adapter.read(items)
+        mine.push(...fake.log.slice(from))
+        for (const read of (fake.pending as FakeRead[]).splice(from2))
+          queueMicrotask(() => read.answer())
+        return result
+      },
+    }
+    const next = createCore({
+      subject: "u1",
+      source: createCoreSource(
+        () => adapter,
+        fake.index,
+        createReadLimiter(DEFAULT_CORE_LIMITS.readParallel),
+        {
+          run: () =>
+            Promise.reject(new Error("a hydrated core writes nothing")),
+          version: () => fake.server.version(),
+        }
+      ),
+      index: fake.index,
+      limits: LIMITS,
+      log: (entry) => {
+        if (entry.kind === "listener-failed") errors.push(entry.error)
+      },
+    })
+    const nextInspect = inspectCore(next)
+    // Дефекти основного ядра нового не стосуються: їх ловить своя перевірка
+    // (`CAUGHT_BY`), а не перегідратація; нове ядро ламає лише власний.
+    if (defects.includes("hydrate-without-revalidate"))
+      nextInspect.defects.add("hydrate-without-revalidate")
+    try {
+      next.hydrate(snapshot)
+      const violations = nextInspect.violations()
+      if (violations.length > 0)
+        fail(label, `after hydrate: ${violations.join("; ")}`)
+      const held = [...coreInternals(next).registry.subsets()]
+      for (const sub of held) {
+        const v = SPECS.findIndex(
+          (spec) => JSON.stringify(spec) === JSON.stringify(sub.form.spec)
+        )
+        if (v < 0) fail(label, "after hydrate: a view the model never held")
+        sameViews(label, v, handles[v]!.getSnapshot(), next)
+      }
+      // Звірка: видимі вигляди — підписані.
+      const unsubscribe = held.map((sub) => {
+        const v = SPECS.findIndex(
+          (spec) => JSON.stringify(spec) === JSON.stringify(sub.form.spec)
+        )
+        return next.view(SPECS[v]!).subscribe(() => {})
+      })
+      next.endHydration()
+      for (let round = 0; round < 20; round++) await flush()
+      const after = nextInspect.violations()
+      if (after.length > 0) fail(label, `after reconcile: ${after.join("; ")}`)
+      for (const sub of held) {
+        const v = SPECS.findIndex(
+          (spec) => JSON.stringify(spec) === JSON.stringify(sub.form.spec)
+        )
+        const snap = next.view(SPECS[v]!).getSnapshot()
+        if (snap.status === "error" || snap.status === "purged") continue
+        for (const row of snap.rows) {
+          if (row.state === "removed") continue
+          const at = `after hydrate: view ${v} ${row.key}`
+          if (row.hidden === true) fail(label, `${at} still hidden`)
+          const server = fake.row(sub.form.object.name, row.key)
+          if (server === undefined || server.version !== row.version)
+            fail(label, `${at}: version ${row.version}, server differs`)
+          for (const field of Object.keys(row.values)) {
+            if (field === "notes" && row.staleFields.includes(field)) continue
+            if (!Object.is(row.values[field], server!.values[field]))
+              fail(label, `${at}.${field} differs from the server`)
+          }
+        }
+      }
+      for (const stop of unsubscribe) stop()
+    } finally {
+      next.close("disposed")
+      for (const read of mine) {
+        const at = fake.log.indexOf(read)
+        if (at >= 0) (fake.log as FakeReadLog[]).splice(at, 1)
+      }
+    }
+  }
+
+  /** The view of the old core and of the new one show the same (spec §6.6). */
+  function sameViews(
+    label: string,
+    v: number,
+    a: ViewSnapshot,
+    nextCore: CoreSession
+  ) {
+    const where = `after hydrate: view ${v}`
+    const to = nextCore.view(SPECS[v]!).getSnapshot()
+    const owner = (SPECS[v] as { owner: Key }).owner
+    const carried = (k: Key) =>
+      coreInternals(nextCore).objects.get(TASK)!.rows.get(k) !== undefined
+    // Мутація журналу не переходить у знімок: стан рядка з нею — інший.
+    const mutated = new Set<Key>()
+    const noteMutations = (row: RowView) => {
+      if (row.mutation !== undefined) mutated.add(row.key)
+      if (row.state === "removed") return
+      for (const ref of Object.values(row.refs ?? {}))
+        if (ref !== null) noteMutations(ref)
+    }
+    a.rows.forEach(noteMutations)
+    const shape = (row: RowView): unknown =>
+      row.state === "removed"
+        ? { key: row.key, state: "removed" }
+        : {
+            key: row.key,
+            version: row.version,
+            values: row.values,
+            staleFields: row.staleFields,
+            hidden: row.hidden,
+            stale: row.stale,
+            ...(mutated.has(row.key) ? {} : { state: row.state }),
+            refs:
+              row.refs === undefined
+                ? undefined
+                : Object.fromEntries(
+                    Object.entries(row.refs).map(([name, ref]) => [
+                      name,
+                      ref === null ? null : shape(ref),
+                    ])
+                  ),
+          }
+    const view = (snap: ViewSnapshot) => ({
+      status: snap.status,
+      isStale: snap.isStale,
+      strategy: snap.strategy,
+      truncated: snap.truncated,
+      atEnd: snap.atEnd,
+      atStart: snap.atStart,
+      chain: snap.chain,
+      target: snap.target,
+      // Мутація, що тримала рядок `removed`, у знімок не йде.
+      rows: snap.rows.map(shape),
+      section:
+        snap.section === undefined
+          ? undefined
+          : {
+              ownerVersion: snap.section.ownerVersion,
+              complete: snap.section.complete,
+              lines: snap.section.lines,
+              // Шапку, яку тримає не готовий вигляд, знімок не несе: власник
+              // без шапки — `unknown`, і це не розбіжність гідратації.
+              ownerState:
+                journal.has(owner) ||
+                (objectOf(TASK).rows.get(owner) !== undefined &&
+                  !carried(owner))
+                  ? undefined
+                  : snap.section.ownerState,
+            },
+    })
+    const was = view(a)
+    const now = view(to)
+    for (const field of Object.keys(was) as (keyof typeof was)[]) {
+      const x = JSON.stringify(was[field])
+      const y = JSON.stringify(now[field])
+      if (x !== y) fail(label, `${where}: ${field} ${x} → ${y}`)
+    }
+  }
+
   for (const [n, raw] of plan.entries()) {
     const s = onMutation(raw)
     const label = `step ${n} ${JSON.stringify(s)}`
@@ -1963,6 +2188,10 @@ async function runModel(
         dropEntry(entry)
         break
       }
+      case "rehydrate":
+        if (closed !== undefined) break
+        await rehydrate(label)
+        break
       case "close":
         if (closed !== undefined) break
         // Кожна неосіла мутація осідає закриттям, не успіхом.
@@ -2281,6 +2510,8 @@ const DEFECTS: readonly DefectFlag[] = [
   "settle-separate-commit",
   "write-back-lifts-hidden",
   "answer-after-cancel",
+  "hidden-values-in-snapshot",
+  "hydrate-without-revalidate",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -2306,6 +2537,9 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "settle-separate-commit": /the run row shown with its mutation pending/,
   "write-back-lifts-hidden": /after hide without a later read/,
   "answer-after-cancel": /a cancelled attempt settled with a row/,
+  // Перегідратація (план B3-6a, задача 1): знімок і звірка.
+  "hidden-values-in-snapshot": /snapshot: a hidden slot carries values/,
+  "hydrate-without-revalidate": /after hydrate: view \d+ .*(server|hidden)/,
 }
 
 describe("core model self-check", () => {
