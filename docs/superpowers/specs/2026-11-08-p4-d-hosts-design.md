@@ -369,7 +369,7 @@ user.isAnonymous === true }`, `sub` — нижнім регістром. `is_ano
   вигляду — `true` і `isStale` — `false`.
 - **ТЧ** — таблиця кожної ТЧ лише для читання (Дх5), рядки в порядку номера
   рядка; понад `TABULAR_LINES_MAX` — стан `tabular-too-large` з причиною.
-- **Чернетка** — хук T5 `useCardDraft` над TanStack Form за спекою П4-B §7.1:
+- **Чернетка** — внутрішній хук T5 `useCardDraft` над TanStack Form за спекою П4-B §7.1; поза `simetra/ui` не експортується: власника чернетки (рантайм, об'єкт, id) тримає ключ, з яким `CardHost` монтує тіло картки, тож заміна рантайму чи рядка дає чисту чернетку:
   - база — підтверджений рядок і `version`; кожна правка підвищує ревізію;
   - «Зберегти» шле `writer.update(object, id, changed, { expectedVersion: base })`
     лише зміненими атрибутами; поле під час збереження показує значення
@@ -648,7 +648,7 @@ DOM і журнал Server Function з точним результатом). З�
 
 | Частина | Зміст | Готово, коли | Віха |
 | --- | --- | --- | --- |
-| **D1. T5 і T6** | `NavigationAdapter`, каталог повідомлень, `ListHost`, `CardHost`, поля, комірка стану, панель, `useCardDraft`; `entityListRoute`, `entityCardRoute`, `routerNavigation`, `SimetraRouterContext`; вхід `./shell` | unit T5 (jsdom) і T6 зелені; пакування імпортує `simetra/shell` з tarball-а | М3. Перший екран |
+| **D1. T5 і T6** | `NavigationAdapter`, каталог повідомлень, `ListHost`, `CardHost` (з внутрішньою чернеткою), поля, комірка стану, панель; `entityListRoute`, `entityCardRoute`, `routerNavigation`, `SimetraRouterContext`; вхід `./shell` | unit T5 (jsdom) і T6 зелені; пакування імпортує `simetra/shell` з tarball-а | М3. Перший екран |
 | **D2. Каркас шаблону** | пакет і воркспейс; метадані й згенеровані артефакти; експорт `checkRequestOrigin`; пули, зв'язування рантайму, `dataFn`, Server Function сесії, `ssrTransport`; серверний entry; Better Auth і `verifySession`; `db-setup`, `dev-user`, `seed`; лінт споживача; межа фреймворку; збірка з tarball-ів | шаблон збирається на `node-server` з tarball-ів; кейси D2 §8.3 зелені на `node-server`; негативні тести лінту зелені | М3. Перший екран |
 | **D3. SSR, маршрути, `resume()`** | фабрика роутера, гідратація, контекст роутера, колбеки рантайму, маршрути з одного рядка, вхід і вихід, обгортка транспорту Дх14, `resume()` на фокусі; e2e запису (сценарії 4–6 §8.1) і job `host-template` у Chromium на production-збірці без бюджетів | сценарії 1 і 3–10 §8.1 і кейси D3 §8.3 зелені в Chromium на production-збірці | М3. Перший екран |
 | **D4. Документи** | документи зрізу й рядки §13 спеки П4-B для відкладених блоків; сценарій 2, оракул, бюджети §8.2 і матриця job `host-template` — блок якості B3-10 спеки П4-B (#210) | документи внесено, `doc anchors && doc lint` зелені | М3. Перший екран |

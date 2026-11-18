@@ -414,9 +414,38 @@ describe("simetra/data", () => {
       ...(await packedSources(tarballs.simetra, "dist/ui/", ".js")).values(),
     ].flatMap(bareSpecifiers)
     expect(specifiers).toContain("@tanstack/react-virtual")
-    // Форма картки — peer входу `./ui` (`useCardDraft`).
+    // Форма картки — peer входу `./ui` (чернетка `CardHost`).
     expect(specifiers).toContain("@tanstack/react-form")
     expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
+  })
+
+  it("the ui entry does not expose the card draft hook", async () => {
+    // Чернетка належить одному власникові лише під ключем `CardHost`; голий
+    // хук після заміни рантайму переніс би чернетку суб'єкта A до B.
+    const names = async (suffix: string): Promise<string[]> => {
+      const sources = await packedSources(tarballs.simetra, "dist/ui/", suffix)
+      const index = sources.get(`dist/ui/index${suffix}`) ?? ""
+      // Експортовані імена: списки `export { … }` / `export type { … }` і
+      // оголошення `export declare …`; коментарі й тіла модуля не рахуються.
+      const listed = [...index.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}/g)]
+        .flatMap((m) => m[1]!.split(","))
+        .map((n) =>
+          n
+            .trim()
+            .split(/\s+as\s+/)
+            .at(-1)!
+        )
+      const declared = [
+        ...index.matchAll(/export\s+declare\s+\w+\s+(\w+)/g),
+      ].map((m) => m[1]!)
+      return [...listed, ...declared].filter((n) => n !== "")
+    }
+    for (const suffix of [".js", ".d.ts"]) {
+      const exported = await names(suffix)
+      expect(exported).toContain("CardHost")
+      expect(exported).not.toContain("useCardDraft")
+      expect(exported).not.toContain("UseCardDraftInput")
+    }
   })
 
   it("the shell entry imports only its peers and the lower tiers", async () => {

@@ -313,7 +313,7 @@ function writerNumber(writer: DataWriter): number {
 
 /**
  * The standard card of an object (P4-D spec §5.2): the header fields in
- * catalog order with the draft of `useCardDraft`, and every tabular section
+ * catalog order with the card draft, and every tabular section
  * read-only. A dirty draft blocks navigation. A `hidden` card shows no value
  * of the row or the draft; a purged or `removed` one drops the draft. Another
  * runtime, object or key is another card with a clean draft. Needs
