@@ -1032,14 +1032,16 @@ describe("core: the epoch switch", () => {
   it("a switch on a hidden tab, the due time passed: 0 reads; resume() — 1 read taking the object though its freshness mark is younger than resumeMinIntervalMs", async () => {
     const h = await loaded()
     h.core.suspend()
-    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    vi.spyOn(Math, "random").mockReturnValue(0.1)
     h.fake.epoch = EB
     h.handle.refresh()
     await deliver(h)
     expect(h.inspect.versionEpochs().current).toBe(EB)
     expect(h.inspect.serviceSizes().scheduledObjects).toBe(1)
     const before = h.fake.log.length
-    vi.advanceTimersByTime(2 * INTERVAL)
+    // Строк (0,1 × I) минув, а власний строк виглядів (I) — ще ні: читання
+    // дає лише строк перемикання.
+    vi.advanceTimersByTime(INTERVAL / 2)
     await deliver(h)
     expect(h.fake.log.length).toBe(before)
     expect(h.inspect.serviceSizes()).toMatchObject({
@@ -1050,7 +1052,7 @@ describe("core: the epoch switch", () => {
       { state: "stale" },
       { state: "stale" },
     ])
-    // Строк минув за 2 с, а відмітка свіжості (рефреш) молодша за 15 с.
+    // Відмітка свіжості (рефреш) молодша за 15 с — `resumeMinIntervalMs`.
     const sent = h.fake.log.length
     h.core.resume()
     await settle()
