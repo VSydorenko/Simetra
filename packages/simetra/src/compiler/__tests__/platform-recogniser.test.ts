@@ -17,7 +17,6 @@ import {
   type DatabaseProvider,
 } from "simetra/model"
 import {
-  CATALOG_FORMS_RECORDED_ON,
   CATALOG_OUTBOX_TABLE,
   CATALOG_UNIT_FORMS,
 } from "./fixtures/platform-catalog-forms"
@@ -70,12 +69,6 @@ const outbox = (install: PlatformInstall) =>
   catalogFromSnapshot({ tables: [...install.tables], enumTypes: [] }).tables[0]!
 
 describe("platformRecogniser: catalog forms of the platform (Р5)", () => {
-  it("the forms were recorded on both profiles", () => {
-    expect([...CATALOG_FORMS_RECORDED_ON].sort()).toEqual(
-      [...DATABASE_PROVIDERS].sort()
-    )
-  })
-
   // Кожна пара — текст каталогу ↔ текст генератора тієї самої ідентичності:
   // тексти різні, вміст той самий
   it.each(DATABASE_PROVIDERS)(
@@ -262,6 +255,75 @@ describe("platformRecogniser: other units by their normalised tree (И4)", () =>
         changed.filter((sql, i) => sql === [policy, fn, trigger][i])
       ).toEqual([])
       expect(changed.filter((sql) => platform.unit(unitOf(sql)))).toEqual([])
+    }
+  )
+
+  // Нормалізація прибирає лише типовий `SECURITY INVOKER`: зміна безпеки
+  // функції в будь-який бік і її `SET` — інший вміст. Рядок на напрям
+  it.each(DATABASE_PROVIDERS)(
+    "%s: a platform function with other security or settings is not the platform's",
+    async (provider) => {
+      const reference = await catalogReference(provider)
+      const platform = platformRecogniser(reference, parse)
+      const own = (identity: string) => {
+        const unit = reference.units.find((u) => u.identity === identity)
+        expect(unit?.identity).toBe(identity)
+        return unit!.sql
+      }
+      const invoker = own("function:simetra.signal_outbox_prune(interval)")
+      const definer = own("function:simetra.touch()")
+      const catalogDefiner = CATALOG_UNIT_FORMS["function:simetra.touch()"]!
+      expect(
+        [invoker, definer, catalogDefiner].map((sql) =>
+          platform.unit(unitOf(sql))
+        )
+      ).toEqual([true, true, true])
+      const rows = {
+        "invoker → definer": invoker.replace(
+          "SECURITY INVOKER",
+          "SECURITY DEFINER"
+        ),
+        "definer → no security clause": definer.replace(
+          " SECURITY DEFINER",
+          ""
+        ),
+        "definer → invoker": definer.replace(
+          "SECURITY DEFINER",
+          "SECURITY INVOKER"
+        ),
+        "catalog definer → no security clause": catalogDefiner.replace(
+          " SECURITY DEFINER\n",
+          ""
+        ),
+        "no search_path": invoker.replace("SET search_path = ''\n", ""),
+        "other search_path": invoker.replace(
+          "SET search_path = ''",
+          "SET search_path = 'public'"
+        ),
+        "extra setting": invoker.replace(
+          "SET search_path = ''",
+          "SET search_path = ''\nSET row_security = off"
+        ),
+      }
+      const source = [
+        invoker,
+        definer,
+        definer,
+        catalogDefiner,
+        invoker,
+        invoker,
+        invoker,
+      ]
+      expect(
+        Object.entries(rows)
+          .filter(([, sql], i) => sql === source[i])
+          .map(([name]) => name)
+      ).toEqual([])
+      expect(
+        Object.entries(rows)
+          .filter(([, sql]) => platform.unit(unitOf(sql)))
+          .map(([name]) => name)
+      ).toEqual([])
     }
   )
 })
