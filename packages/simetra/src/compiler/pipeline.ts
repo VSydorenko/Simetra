@@ -884,6 +884,8 @@ export async function runStages(
     catalogCommand: (unit) => `the command core of ${name(unit.ownerObjectId)}`,
     // Грант схеми спільний для всіх її об'єктів — власника немає.
     schemaUsage: (unit) => `the USAGE grant on schema ${unit.name}`,
+    // Outbox сигналів — у кожному проєкті, власника немає.
+    signalOutbox: () => "the signal outbox of the platform",
   }
   const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
   const triggerConflicts = subscriptionTriggerConflicts(

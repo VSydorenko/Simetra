@@ -267,9 +267,13 @@ describe("buildMechanicsUnits", () => {
       "sql/public/f.sql":
         "CREATE FUNCTION public.f(n int4) RETURNS int4 LANGUAGE sql IMMUTABLE AS $$ SELECT n $$;",
     })
-    // Функція незмінності ключа — теж платформна (key-units.test.ts).
+    // Функція незмінності ключа — теж платформна (key-units.test.ts), як і
+    // функції outbox сигналів (signal-outbox.test.ts).
     expect(platformFunctionSignatures(model.sqlUnits)).toEqual([
       "simetra.key_immutable()",
+      "simetra.signal_outbox_notify()",
+      "simetra.signal_outbox_prune(interval)",
+      "simetra.signal_outbox_stamp()",
       "simetra.touch()",
     ])
   })

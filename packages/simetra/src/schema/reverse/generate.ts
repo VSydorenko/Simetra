@@ -127,11 +127,15 @@ async function describedElsewhere(
     if (kept.has(item.origin.objectId))
       found.relations.add(qualified(item.schema, item.name))
   for (const table of model.physical.tables) {
-    // Таблиця платформи без об'єкта не є відношенням застосунку.
-    if (!isObjectTable(table)) continue
+    const key = qualified(table.schema, table.name)
+    // Таблицю платформи без об'єкта (outbox сигналів) описує сама платформа
+    // в кожному проєкті: описати її файлом теки вдруге не можна.
+    if (!isObjectTable(table)) {
+      found.relations.add(key)
+      continue
+    }
     const object = kept.get(table.origin.objectId)
     if (object === undefined) continue
-    const key = qualified(table.schema, table.name)
     found.relations.add(key)
     // Таблиця ТЧ чи похідна таблиця регістра `MetadataRef` не має: посилання
     // на об'єкт — це його основна таблиця.

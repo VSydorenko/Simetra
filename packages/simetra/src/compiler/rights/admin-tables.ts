@@ -4,7 +4,7 @@ import {
   makeObjectName,
   type PhysicalColumn,
   type PhysicalIndexKey,
-  type PhysicalOrigin,
+  type ObjectOrigin,
   type PhysicalTable,
 } from "simetra/model"
 import { compareStrings } from "../diagnostics"
@@ -80,7 +80,7 @@ export function rightsAdminTables(
   ): PhysicalColumn => ({ name, type, notNull, origin: {}, ...extra })
   const table = (
     name: string,
-    part: PhysicalOrigin["part"],
+    part: ObjectOrigin["part"],
     columns: PhysicalColumn[],
     key?: string[],
     indexes: (

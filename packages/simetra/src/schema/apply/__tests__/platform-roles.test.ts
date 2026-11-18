@@ -792,8 +792,10 @@ describe("requiredPlatformRoles", () => {
     )
     expect(plain.diagnostics).toEqual([])
     const withoutUsers = await desiredForApply(plain.model!)
+    // Група споживача сигналів — з грантів outbox, що є в кожному проєкті
     expect(requiredPlatformRoles(withoutUsers.sql, parse)).toEqual([
       PLATFORM_ROLES.command,
+      PLATFORM_ROLES.signalConsumer,
     ])
     // З «Користувачами» ті самі гранти дає платформний шар
     const users = await compileRights(rightsFiles())
@@ -801,6 +803,7 @@ describe("requiredPlatformRoles", () => {
     const withUsers = await desiredForApply(users.model!)
     expect(requiredPlatformRoles(withUsers.sql, parse)).toEqual([
       PLATFORM_ROLES.command,
+      PLATFORM_ROLES.signalConsumer,
     ])
   })
 })

@@ -1466,7 +1466,12 @@ describe("simetra_command table grants", () => {
         expect(unit.sql).toMatch(
           /^GRANT (SELECT|INSERT \([^)]+\)|UPDATE \([^)]+\)|DELETE) ON TABLE /
         )
-        expect(unit.name.startsWith("simetra.")).toBe(false)
+        // Єдиний названий виняток у схемі `simetra` — запис сигналу в outbox
+        // (спека профілю `postgres` §5.2).
+        if (unit.name.startsWith("simetra."))
+          expect(unit.sql).toBe(
+            `GRANT INSERT (method, payload) ON TABLE simetra.signal_outbox TO ${COMMAND};`
+          )
       }
     }
   })

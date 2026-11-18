@@ -6,6 +6,7 @@ import {
   PLATFORM_SCHEMA,
   PROVIDER_IDENTITY_SOURCES,
   SESSION_CLAIMS_SETTING,
+  SIGNAL_OUTBOX,
   type IdentitySource,
 } from "simetra/model"
 import { buildPlatformUnits, platformSchemaGrants } from "../platform/units"
@@ -87,9 +88,13 @@ describe("platform layer", () => {
     const model = await compileOk({
       "catalogs/Currency/Currency.meta.json": catalog("Currency"),
     })
-    expect(model.physical.tables.map((t) => t.schema)).not.toContain(
-      PLATFORM_SCHEMA
-    )
+    // Єдина таблиця схеми платформи без «Користувачів» — outbox сигналів,
+    // що є в кожному проєкті (спека профілю `postgres` §5.1).
+    expect(
+      model.physical.tables
+        .filter((t) => t.schema === PLATFORM_SCHEMA)
+        .map((t) => t.name)
+    ).toEqual([SIGNAL_OUTBOX.name])
     // Механіка рядка лежить у `simetra` і без «Користувачів» — це не шар.
     // Шукаємо кваліфіковане ім'я: роль команд `simetra_command` — не схема.
     expect(
@@ -246,7 +251,13 @@ describe("platform layer", () => {
             "RoleSpec" in g ? g.RoleSpec.rolename : undefined
           )
           if (!grantees.includes(PLATFORM_ROLES.command)) continue
-          expect(unit.generator, unit.identity).toBe("access")
+          // Названий виняток — `INSERT (method, payload)` на outbox сигналів
+          // (спека профілю `postgres` §5.2); решта — контракт доступу.
+          expect(unit.generator, unit.identity).toBe(
+            unit.name === `${SIGNAL_OUTBOX.schema}.${SIGNAL_OUTBOX.name}`
+              ? "signalOutbox"
+              : "access"
+          )
           const privileges = (stmt.GrantStmt.privileges ?? []).map((p) =>
             "AccessPriv" in p ? p.AccessPriv.priv_name : undefined
           )
@@ -420,7 +431,9 @@ describe("platform layer", () => {
       expect(text, supabase).not.toContain(supabase)
     }
     // Без ознак анонімності й м'якого видалення — немає ні перевірки, ні тригера.
-    expect(units.filter((u) => u.class === "trigger")).toHaveLength(2)
+    expect(
+      withoutMechanics(units).filter((u) => u.class === "trigger")
+    ).toHaveLength(2)
   })
 
   it("anonymous conversion trigger comes from the anonymity column of the source", async () => {
@@ -632,7 +645,8 @@ describe("platform layer without users", () => {
       parse,
       PROVIDER_IDENTITY_SOURCES.supabase
     )
-    expect(units).toEqual([])
+    // Лишається лише outbox сигналів — він не залежить від сесії.
+    expect(withoutMechanics(units)).toEqual([])
     // Проєкт без «Користувачів» і без джерела членства: ні шару, ні прав.
     const plain = await compileOk({
       "catalogs/Currency/Currency.meta.json": catalog("Currency"),

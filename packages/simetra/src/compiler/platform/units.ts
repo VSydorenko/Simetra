@@ -26,6 +26,7 @@ import { generatedUnit, type SqlUnit } from "../sql/units"
 import type { ParsedObject } from "../stages/files"
 import { kindLabelOf, sqlLiteral } from "../stages/model"
 import { IDENTITIES_TABLE } from "./identities"
+import { outboxUnits } from "./outbox"
 import { CURRENT_USER_FUNCTION } from "./names"
 
 /**
@@ -93,9 +94,10 @@ export interface PlatformLayerInput {
  * записів провайдера й в'юха міток виду — згенеровані одиниці без файлу з
  * власником «Користувачі». Без довідника з роллю «користувачі» шар — лише
  * функція поточного користувача з `sub`, коли вона є (`hasSessionUser`,
- * спека користувачів §7), інакше порожній.
+ * спека користувачів §7). Об'єкти outbox сигналів (`outboxUnits`) — у
+ * кожному проєкті.
  *
- * Кожна функція — `SECURITY DEFINER` з порожнім `search_path` і повністю
+ * Кожна функція користувачів — `SECURITY DEFINER` з порожнім `search_path` і повністю
  * кваліфікованими іменами: тригер провайдера спрацьовує від ролі сервісу
  * автентифікації без прав на `simetra` і схеми застосунку, а функцію сесії
  * кличе роль запиту. `EXECUTE` від `PUBLIC` і ролей провайдера відкликано на
@@ -113,10 +115,15 @@ export function buildPlatformUnits(
 ): SqlUnit[] {
   const { users } = input.contracts
   const { provider } = input.project.database
+  // Outbox сигналів — у кожному проєкті, незалежно від «Користувачів».
+  const outbox = outboxUnits(input.project.name, provider, parse)
   if (users === undefined) {
-    return hasSessionUser(input.contracts, provider)
+    const subject = hasSessionUser(input.contracts, provider)
       ? subjectUserUnits(input.project.name, provider, parse, source)
       : []
+    return [...subject, ...outbox].sort((a, b) =>
+      compareStrings(a.identity, b.identity)
+    )
   }
   const tables: CreationNode[] = [
     { type: "table", ...users.table },
@@ -164,6 +171,7 @@ export function buildPlatformUnits(
     ]),
     ...triggers(source).map((sql) => unit(sql)),
     unit(kindLabelsView(input.objects, input.physical)),
+    ...outbox,
   ]
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
 }

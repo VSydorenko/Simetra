@@ -63,11 +63,15 @@ const markerSnapshotSchema = z.looseObject({
       z.looseObject({
         schema: z.string(),
         name: z.string(),
-        origin: z.looseObject({
-          objectId: z.string(),
-          tabularSectionId: z.string().optional(),
-          part: z.string().optional(),
-        }),
+        // Походження з об'єкта чи платформне без об'єкта (outbox сигналів).
+        origin: z.union([
+          z.looseObject({
+            objectId: z.string(),
+            tabularSectionId: z.string().optional(),
+            part: z.string().optional(),
+          }),
+          z.looseObject({ part: z.literal("signalOutbox") }),
+        ]),
         rowLevelSecurity: z.string(),
         columns: z.array(
           z.looseObject({

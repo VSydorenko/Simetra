@@ -90,6 +90,7 @@ export type UnitGenerator =
   | "effects"
   | "catalogCommand"
   | "schemaUsage"
+  | "signalOutbox"
 
 /**
  * Чи тіло функцій генератора фіксоване платформою: таку функцію перевіряють
@@ -117,6 +118,7 @@ const FIXED_BODY: Readonly<Record<UnitGenerator, boolean>> = {
   effects: true,
   catalogCommand: true,
   schemaUsage: true,
+  signalOutbox: true,
 }
 
 /**

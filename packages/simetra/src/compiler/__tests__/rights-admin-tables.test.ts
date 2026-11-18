@@ -446,6 +446,7 @@ describe("rights administration storage", () => {
       result
         .model!.physical.tables.filter((t) => t.schema === PLATFORM_SCHEMA)
         .map((t) => t.name)
-    ).toEqual(["identities"])
+      // Outbox сигналів — таблиця платформи кожного проєкту, не сховище прав.
+    ).toEqual(["identities", "signal_outbox"])
   })
 })

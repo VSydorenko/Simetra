@@ -54,6 +54,7 @@ import {
 import { compareStrings, valueAt } from "../diagnostics"
 import { rightsAdminTables } from "../rights/admin-tables"
 import { identitiesTable } from "../platform/identities"
+import { signalOutboxTable } from "../platform/outbox"
 import { carrierDeclarations } from "../rights/facts"
 import { objectKey, type ParsedObject } from "./files"
 import { COLUMN_NAME_ROLES, type ResolvedReference } from "./identity"
@@ -387,9 +388,11 @@ export function buildModel(
     ...result,
     physical: {
       ...result.physical,
-      tables: [...result.physical.tables, ...rightsAdminTables(objects)].sort(
-        bySchemaAndName
-      ),
+      tables: [
+        ...result.physical.tables,
+        ...rightsAdminTables(objects),
+        signalOutboxTable(),
+      ].sort(bySchemaAndName),
     },
   }
 }
