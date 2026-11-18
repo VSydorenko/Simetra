@@ -1616,32 +1616,44 @@ describe("reverseGenerate", () => {
     for (const unit of layer) expect(written).not.toContain(unit.sql)
   })
 
-  it("a mechanics trigger on a CustomTable without the mechanics columns goes to the folder", async () => {
-    // Еталон тригера шару — лише для таблиці з колонками його генератора
-    // (спека промоції §9.2): без них тригер механіки й авторства не
-    // платформний, а дослівний SQL таблиці, і виклик функції платформи на
-    // ньому — гучна помилка. Ключ `id` таблиця має, тож тригери ключа —
-    // платформні.
-    const layer = noteLayer()
-    const result = await reverseGenerate(
-      model({ tables: [table("app", "note")], units: layer }),
-      options()
-    )
-    const written = [
-      "trigger:app.note.note_simetra_author",
-      "trigger:app.note.note_simetra_touch",
-    ]
-    expect(
-      errors(result).map((d) => ({ code: d.code, unit: d.params?.unit }))
-    ).toEqual(
-      written.map((unit) => ({ code: "sql.platform-function-call", unit }))
-    )
-    expect(result.files.get("custom-tables/Note/Note.sql")).toBe(
-      `${written
-        .map((identity) => layer.find((u) => u.identity === identity)!.sql)
-        .join(";\n\n")};\n`
-    )
-  })
+  it.each([
+    ["no layer column", []],
+    ["only updated_at", ["updated_at"]],
+    ["only version", ["version"]],
+    ["only created_by_id", ["created_by_id"]],
+    ["only updated_by_id", ["updated_by_id"]],
+  ])(
+    "a mechanics trigger on a CustomTable without the mechanics columns goes to the folder (%s)",
+    async (_, present) => {
+      // Еталон тригера шару — лише для таблиці з усіма колонками його
+      // генератора (спека промоції §9.2): без них тригер механіки й авторства
+      // не платформний, а дослівний SQL таблиці, і виклик функції платформи на
+      // ньому — гучна помилка. Частини колонок замало. Ключ `id` таблиця має,
+      // тож тригери ключа — платформні.
+      const layer = noteLayer()
+      const columns = LAYER_TABLE_COLUMNS.filter(
+        (c) => c.name === "id" || present.includes(c.name)
+      )
+      const result = await reverseGenerate(
+        model({ tables: [table("app", "note", { columns })], units: layer }),
+        options()
+      )
+      const written = [
+        "trigger:app.note.note_simetra_author",
+        "trigger:app.note.note_simetra_touch",
+      ]
+      expect(
+        errors(result).map((d) => ({ code: d.code, unit: d.params?.unit }))
+      ).toEqual(
+        written.map((unit) => ({ code: "sql.platform-function-call", unit }))
+      )
+      expect(result.files.get("custom-tables/Note/Note.sql")).toBe(
+        `${written
+          .map((identity) => layer.find((u) => u.identity === identity)!.sql)
+          .join(";\n\n")};\n`
+      )
+    }
+  )
 
   it("a trigger under a mechanics name with another event goes to the folder", async () => {
     // Вміст, а не ім'я (И4): тригер з ім'ям механіки на таблиці з її
