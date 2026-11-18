@@ -111,6 +111,20 @@ pnpm db:pg:start && pnpm test:db:pg && pnpm db:pg:stop # DB tests (default)
 pnpm db:start && pnpm test:db && pnpm db:stop          # supabase-profile regression
 ```
 
+### Run the demo
+
+The app template runs locally on the postgres-profile stack:
+
+```bash
+pnpm db:pg:start && pnpm demo   # build and serve the template on http://localhost:3000
+pnpm demo:drop                  # remove the demo database from the stack
+```
+
+`pnpm demo` prints two logins with fresh passwords on every run. Each user sees
+only their own clients; the countries are shared. A rerun keeps the data, and
+Ctrl-C stops the server. After a change to the template metadata, run
+`pnpm demo:drop` first: a rerun does not migrate the demo database.
+
 Before opening a pull request, run the same gates as CI:
 
 ```bash

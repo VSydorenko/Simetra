@@ -40,6 +40,16 @@ export function betterAuthCommand(secrets: Record<string, string>): {
   env: Record<string, string>
 }
 
+/** Address of the postgres stack for `user`; `database` defaults to `simetra`. */
+export function stackUrl(
+  user: string,
+  password: string,
+  database?: string
+): string
+
+/** Dev passwords of the Simetra login roles (`login-secrets.env`) by variable name. */
+export function loginSecrets(): Record<string, string>
+
 /** Runs a child in its own process group; resolves with its exit code. */
 export function runChild(
   command: string,

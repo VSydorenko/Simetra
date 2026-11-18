@@ -4,41 +4,35 @@
 // `node-server` на 127.0.0.1. Усе піднімає один воркерний `app`; збірку він бере
 // з метаданих проєкту Playwright (шов #210: нові ноги — рядки матриці).
 import { test as base } from "@playwright/test"
-import {
-  execFile,
-  spawn,
-  type ChildProcess,
-  type ExecFileException,
-} from "node:child_process"
-import { randomBytes, randomUUID } from "node:crypto"
-import {
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs"
+import { execFile, type ExecFileException } from "node:child_process"
+import { randomBytes } from "node:crypto"
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import net from "node:net"
-import { createRequire } from "node:module"
-import { dirname, join, resolve } from "node:path"
+import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 import pg from "pg"
-import {
-  PLATFORM_LOGIN_ROLES,
-  PROVIDER_IDENTITY_SOURCES,
-  PROVIDER_LOGIN_ROLES,
-  PROVIDER_OWNER_ROLES,
-  RIGHTS_MAINTENANCE_SETTING,
-  type SessionClaims,
-} from "simetra/model"
-import { PROVIDER_SHADOW_TEMPLATES } from "simetra/schema"
+import type { SessionClaims } from "simetra/model"
 import {
   createCommandRuntime,
   fromPgPool,
   type CommandRuntime,
 } from "simetra/server"
 import runtimeCatalog from "../template/generated/runtime-catalog.json" with { type: "json" }
-import { identityGrantSql } from "../../simetra/src/schema/apply/postgres-cluster"
+import {
+  TEMPLATE,
+  appDsns,
+  appServerEnv,
+  assignClientOwner,
+  buildTemplate,
+  insertOwnClients,
+  prepareDatabase,
+  startServer,
+  stopServer,
+  waitReady,
+  withClient,
+  withDatabase,
+  type ServerRun,
+} from "../scripts/lib/app-database.mts"
 import {
   runObjectPatterns,
   runTag,
@@ -46,12 +40,11 @@ import {
   testSuperuserUrl,
 } from "../../simetra/test/db/connection"
 import { LOGIN_SECRETS_FILE, devSecret } from "../../simetra/test/db/profile"
-import { runDbSetup } from "../template/scripts/db-setup-steps.mjs"
 import { cookieHeader, send } from "./http"
 
 const exec = promisify(execFile)
 
-export const TEMPLATE = resolve(import.meta.dirname, "../template")
+export { TEMPLATE }
 
 /** Кількість `Client` засіву: дві повні сторінки по 100 і неповна. */
 export const SEED_COUNT = 250
@@ -69,11 +62,7 @@ export interface TestUser {
   address: string
 }
 
-export interface ServerRun {
-  child: ChildProcess
-  output: () => string
-  exited: Promise<number | null>
-}
+export type { ServerRun }
 
 export interface App {
   origin: string
@@ -99,33 +88,6 @@ export interface App {
   /** Окремий запуск збірки з іншим оточенням (відмова старту). */
   start: (env: Record<string, string | undefined>) => ServerRun
   freePort: () => Promise<number>
-}
-
-function withDatabase(dsn: string, database: string): string {
-  const url = new URL(dsn)
-  url.pathname = `/${database}`
-  url.search = ""
-  return url.toString()
-}
-
-function loginUrl(role: string, secret: string, database: string): string {
-  const url = new URL(withDatabase(testSuperuserUrl(), database))
-  url.username = role
-  url.password = devSecret(secret, LOGIN_SECRETS_FILE)
-  return url.toString()
-}
-
-async function withClient<T>(
-  dsn: string,
-  fn: (client: pg.Client) => Promise<T>
-): Promise<T> {
-  const client = new pg.Client({ connectionString: dsn })
-  await client.connect()
-  try {
-    return await fn(client)
-  } finally {
-    await client.end()
-  }
 }
 
 /** Прибирає лише базу з тегом цього прогону; чужу відмовляється чіпати. */
@@ -173,13 +135,7 @@ async function run(
 async function build(kind: string): Promise<void> {
   if (kind !== "production")
     throw new Error(`the e2e build "${kind}" is not supported yet (#210)`)
-  const vite = join(
-    dirname(
-      createRequire(join(TEMPLATE, "package.json")).resolve("vite/package.json")
-    ),
-    "bin/vite.js"
-  )
-  await run(vite, ["build"], { NODE_ENV: "production" }, "vite build")
+  await buildTemplate()
 }
 
 /** Id Server Function з маніфесту production-збірки: `<sha256>` за іменем експорту. */
@@ -202,95 +158,6 @@ function functionIds(): Record<string, string> {
   return ids
 }
 
-function startServer(env: Record<string, string | undefined>): ServerRun {
-  const child = spawn(
-    process.execPath,
-    [join(TEMPLATE, ".output/server/index.mjs")],
-    {
-      cwd: TEMPLATE,
-      env: { PATH: process.env.PATH, ...env } as NodeJS.ProcessEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-    }
-  )
-  let log = ""
-  child.stdout!.on("data", (c: Buffer) => (log += c.toString()))
-  child.stderr!.on("data", (c: Buffer) => (log += c.toString()))
-  const exited = new Promise<number | null>((resolveExit) =>
-    child.once("exit", (code) => resolveExit(code))
-  )
-  return { child, output: () => log, exited }
-}
-
-async function waitReady(port: number, server: ServerRun): Promise<void> {
-  const deadline = Date.now() + 30_000
-  let exited = false
-  void server.exited.then(() => (exited = true))
-  while (Date.now() < deadline) {
-    if (exited)
-      throw new Error(`the server exited at start:\n${server.output()}`)
-    try {
-      const reply = await send({ port }, { path: "/" })
-      if (reply.status > 0) return
-    } catch {
-      await new Promise((r) => setTimeout(r, 200))
-    }
-  }
-  throw new Error(`the server did not answer in time:\n${server.output()}`)
-}
-
-/**
- * База розробника тим самим `runDbSetup`, що й `scripts/db-setup.mjs`
- * (міграція Better Auth, `plan`, `apply --yes`). Крок `simetra roles` фікстура
- * замінює власним: на спільному стеку логіни Simetra мають явний `CONNECT` до
- * бази `simetra`, і `roles` відмовляє (`roles.shared-cluster`) для будь-якої
- * іншої бази. Замість нього — база з шаблону тінь-баз власником профілю,
- * `CONNECT` і схема `better_auth` до міграції та гранти власнику на таблицю
- * ідентичності після неї (`identityGrantSql`, той самий SQL, що в `roles`).
- */
-async function prepareDatabase(
-  database: string,
-  dsns: Record<string, string>,
-  origin: string,
-  secret: string
-): Promise<void> {
-  const owner = PROVIDER_OWNER_ROLES.postgres
-  const [authRole] = PROVIDER_LOGIN_ROLES.postgres
-  const template = PROVIDER_SHADOW_TEMPLATES.postgres
-  if (template === null || authRole === undefined)
-    throw new Error("the postgres profile has no shadow template or auth role")
-  const { schema, name } = PROVIDER_IDENTITY_SOURCES.postgres.table
-  const applied = await runDbSetup({
-    authUrl: dsns.SIMETRA_AUTH_DATABASE_URL!,
-    ownerUrl: dsns.SIMETRA_OWNER_DATABASE_URL!,
-    origin,
-    secret,
-    beforeMigration: async () => {
-      await withClient(withDatabase(testSuperuserUrl(), "postgres"), (client) =>
-        client.query(
-          `CREATE DATABASE "${database}" OWNER "${owner}" TEMPLATE "${template}"`
-        )
-      )
-      await withClient(dsns.SIMETRA_SUPERUSER_DATABASE_URL!, async (client) => {
-        await client.query(
-          `GRANT CONNECT ON DATABASE "${database}" TO "${authRole}"`
-        )
-        await client.query(
-          `CREATE SCHEMA IF NOT EXISTS "${schema}" AUTHORIZATION "${authRole}"`
-        )
-      })
-    },
-    afterMigration: async () => {
-      const grants = identityGrantSql(owner, { schema, name })
-      await withClient(dsns.SIMETRA_SUPERUSER_DATABASE_URL!, async (client) => {
-        await client.query(grants.usage)
-        await client.query(grants.table)
-      })
-    },
-  })
-  // Файл плану лежить у `template/plans` (git-ignored): прогін його не лишає
-  if (applied !== undefined) rmSync(resolve(TEMPLATE, applied), { force: true })
-}
-
 async function bringUp(
   buildKind: string,
   cleanups: Array<() => Promise<void>>
@@ -298,27 +165,20 @@ async function bringUp(
   const database = testDatabaseName("e2e")
   // Роль cluster-wide, але пароль і ім'я — стека: `roles` лише знаходить їх
   cleanups.push(() => dropDatabase(database))
-  const owner = PROVIDER_OWNER_ROLES.postgres
-  const [authRole] = PROVIDER_LOGIN_ROLES.postgres
-  const runtimeRole = PLATFORM_LOGIN_ROLES.runtime
-  const dsns = {
-    SIMETRA_SUPERUSER_DATABASE_URL: withDatabase(testSuperuserUrl(), database),
-    SIMETRA_OWNER_DATABASE_URL: loginUrl(
-      owner,
+  const dsns = appDsns(testSuperuserUrl(), database, {
+    SIMETRA_OWNER_DEV_PASSWORD: devSecret(
       "SIMETRA_OWNER_DEV_PASSWORD",
-      database
+      LOGIN_SECRETS_FILE
     ),
-    SIMETRA_AUTH_DATABASE_URL: loginUrl(
-      authRole!,
+    SIMETRA_AUTH_DEV_PASSWORD: devSecret(
       "SIMETRA_AUTH_DEV_PASSWORD",
-      database
+      LOGIN_SECRETS_FILE
     ),
-    SIMETRA_RUNTIME_DATABASE_URL: loginUrl(
-      runtimeRole,
+    SIMETRA_RUNTIME_DEV_PASSWORD: devSecret(
       "SIMETRA_RUNTIME_DEV_PASSWORD",
-      database
+      LOGIN_SECRETS_FILE
     ),
-  }
+  })
   const port = await freePort()
   const origin = `http://127.0.0.1:${port}`
   // Випадковий на прогін, без секретів репозиторію
@@ -329,12 +189,13 @@ async function bringUp(
     BETTER_AUTH_SECRET: secret,
   }
 
-  await prepareDatabase(database, dsns, origin, secret)
-  await withClient(dsns.SIMETRA_SUPERUSER_DATABASE_URL, (client) =>
-    client.query(
-      `ALTER DATABASE "${database}" SET simetra.environment = 'development'`
-    )
-  )
+  await prepareDatabase({
+    database,
+    maintenanceUrl: withDatabase(testSuperuserUrl(), "postgres"),
+    dsns,
+    origin,
+    secret,
+  })
   const query = <T extends pg.QueryResultRow>(
     sql: string,
     params?: unknown[]
@@ -372,35 +233,10 @@ async function bringUp(
   }
 
   // Права: роль `ClientOwner` обох (носій `owner` звужує читання до власних рядків)
-  const roleId = (
-    JSON.parse(
-      readFileSync(
-        join(TEMPLATE, "metadata/roles/ClientOwner/ClientOwner.meta.json"),
-        "utf8"
-      )
-    ) as { id: string }
-  ).id
-  await withClient(dsns.SIMETRA_OWNER_DATABASE_URL, async (client) => {
-    await client.query("BEGIN")
-    try {
-      await client.query(
-        `SELECT set_config('${RIGHTS_MAINTENANCE_SETTING}', 'on', true)`
-      )
-      for (const user of [users.a, users.b])
-        await client.query(
-          "INSERT INTO app.global_role_assignments (id, subject, archetype) VALUES ($1, $2, $3)",
-          [randomUUID(), user.id, roleId]
-        )
-      await client.query("SET CONSTRAINTS ALL IMMEDIATE")
-      await client.query(
-        `SELECT set_config('${RIGHTS_MAINTENANCE_SETTING}', 'off', true)`
-      )
-      await client.query("COMMIT")
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined)
-      throw error
-    }
-  })
+  await assignClientOwner(dsns.SIMETRA_OWNER_DATABASE_URL, [
+    users.a.id,
+    users.b.id,
+  ])
   // `CommandRuntime` второго користувача: ті самі пул ролі рантайму, каталог і
   // шлях, що в сервері, з справжніми claims B. Через нього B пише власні
   // рядки й міняє дані «ззовні» (D3); прямий SQL власника лишається лише там,
@@ -418,17 +254,11 @@ async function bringUp(
   // Початкові рядки B вставляє прямий SQL власника, значення міняє вже рантайм
   // B своїми claims: це і є «зовнішня зміна» його рядків. Новий рядок під час
   // тесту (сценарій 9) створюється вже через `create` рантайму B
-  await withClient(dsns.SIMETRA_OWNER_DATABASE_URL, async (client) => {
-    for (let i = 0; i < B_ROWS; i++)
-      await client.query(
-        "INSERT INTO app.client (id, code, description, owner_id) VALUES ($1, $2, $3, $4)",
-        [
-          randomUUID(),
-          `B${String(i).padStart(8, "0")}`,
-          "placeholder",
-          users.b.id,
-        ]
-      )
+  await insertOwnClients(dsns.SIMETRA_OWNER_DATABASE_URL, {
+    owner: users.b.id,
+    count: B_ROWS,
+    prefix: "B",
+    description: "placeholder",
   })
   const client = { kind: "Catalog", name: "Client" } as const
   const own = await runtime.read(claimsB, { object: client, limit: 50 })
@@ -451,26 +281,16 @@ async function bringUp(
 
   await build(buildKind)
   const ids = functionIds()
-  const serverEnv = {
-    NODE_ENV: "production",
-    PORT: String(port),
-    HOST: "127.0.0.1",
-    NITRO_HOST: "127.0.0.1",
-    SIMETRA_APP_ORIGIN: origin,
-    BETTER_AUTH_SECRET: secret,
-    SIMETRA_RUNTIME_DATABASE_URL: dsns.SIMETRA_RUNTIME_DATABASE_URL,
-    SIMETRA_AUTH_DATABASE_URL: dsns.SIMETRA_AUTH_DATABASE_URL,
-  }
-  const server = startServer(serverEnv)
-  cleanups.push(async () => {
-    server.child.kill("SIGTERM")
-    await Promise.race([
-      server.exited,
-      new Promise((r) => setTimeout(r, 5_000)),
-    ])
-    if (server.child.exitCode === null) server.child.kill("SIGKILL")
+  const serverEnv = appServerEnv({
+    dsns,
+    origin,
+    port,
+    host: "127.0.0.1",
+    secret,
   })
-  await waitReady(port, server)
+  const server = startServer(serverEnv)
+  cleanups.push(() => stopServer(server))
+  await waitReady(`${origin}/`, server)
 
   for (const key of ["a", "b"] as const) {
     const user = users[key]
