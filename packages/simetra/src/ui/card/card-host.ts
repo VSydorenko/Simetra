@@ -4,7 +4,13 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react"
-import { useRow, type CardSection, type UseRowResult } from "simetra/data/react"
+import {
+  useRow,
+  useWriter,
+  type CardSection,
+  type DataWriter,
+  type UseRowResult,
+} from "simetra/data/react"
 import type { CatalogEntry, CatalogEntrySection } from "simetra/model"
 import { useCatalogEntry } from "../catalog"
 import {
@@ -291,14 +297,38 @@ function Actions(props: { card: UseRowResult; draft: CardDraft }) {
   )
 }
 
+// Номер рантайму для ключа картки: writer — один на рантайм, а WeakMap не
+// тримає рантайму після його заміни. Лічильник модуля не дає двом рантаймам
+// одного номера.
+const writerNumbers = new WeakMap<DataWriter, number>()
+let lastWriterNumber = 0
+function writerNumber(writer: DataWriter): number {
+  let n = writerNumbers.get(writer)
+  if (n === undefined) {
+    n = ++lastWriterNumber
+    writerNumbers.set(writer, n)
+  }
+  return n
+}
+
 /**
  * The standard card of an object (P4-D spec §5.2): the header fields in
  * catalog order with the draft of `useCardDraft`, and every tabular section
  * read-only. A dirty draft blocks navigation. A `hidden` card shows no value
- * of the row or the draft; a purged or `removed` one drops the draft. Needs
+ * of the row or the draft; a purged or `removed` one drops the draft. Another
+ * runtime, object or key is another card with a clean draft. Needs
  * `CatalogProvider`, `NavigationProvider` and `DataRuntimeProvider`.
  */
 export function CardHost(props: CardHostProps): ReactElement {
+  const { object, id } = props
+  // Чернетка належить одному власнику (рантайм, об'єкт, ключ): інший власник
+  // — новий екземпляр із чистою формою й поколінням, а не скидання в рендері.
+  // Тож і незакомічений рендер іншого ключа не чіпає поточної чернетки.
+  const owner = JSON.stringify([writerNumber(useWriter()), object, id])
+  return createElement(CardBody, { key: owner, object, id })
+}
+
+function CardBody(props: CardHostProps): ReactElement {
   const { object, id } = props
   const entry = useCatalogEntry(object)
   const query = useMemo(() => cardQuery(entry), [entry])

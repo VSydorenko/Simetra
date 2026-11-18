@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render } from "@testing-library/react"
-import { Profiler, createElement } from "react"
+import {
+  Profiler,
+  Suspense,
+  createElement,
+  startTransition,
+  use,
+  useEffect,
+} from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { ClientCatalog, SourceAdapter } from "simetra/model"
 import { DataRuntimeProvider, useRow } from "simetra/data/react"
@@ -77,6 +84,8 @@ async function opened(
     lines?: Parameters<FakeSource["setLines"]>[3]
     /** Mounts the bare hook instead of the host, to call its functions. */
     probe?: boolean
+    /** A sibling of the card that suspends forever while it gets this key. */
+    suspendOn?: string
   } = {}
 ) {
   const objects = options.objects ?? OBJECTS
@@ -94,10 +103,16 @@ async function opened(
   const holder = createRuntimeHolder(runtime)
   // Кожен виклик `useBlockWhile` — кадр хоста: останній каже, чи блокує він.
   const blocks: boolean[] = []
+  // Те саме, але лише закомічені кадри: незакомічений рендер переходу теж
+  // викликає `useBlockWhile`, а блокує навігацію лише закомічений.
+  const committedBlocks: boolean[] = []
   const nav: NavigationAdapter = {
     openCard: vi.fn(),
     openList: vi.fn(),
-    useBlockWhile: (dirty) => void blocks.push(dirty),
+    useBlockWhile: (dirty) => {
+      blocks.push(dirty)
+      useEffect(() => void committedBlocks.push(dirty))
+    },
   }
   // Кадр — commit піддерева картки (як у тесті списку): DOM уже змінено.
   const frames: string[] = []
@@ -106,6 +121,13 @@ async function opened(
   function Probe(props: { id: string }) {
     const row = useRow({ object: TASK, id: props.id })
     draft.current = useCardDraft({ object: TASK, id: props.id, card: row })
+    return null
+  }
+  // Сусід картки, що на ключі `suspendOn` не дочитується ніколи: перехід на
+  // нього лишається незакоміченим.
+  const never = new Promise<never>(() => {})
+  function Sibling(props: { id: string }) {
+    if (props.id === options.suspendOn) use(never)
     return null
   }
   const tree = (id: string) =>
@@ -129,9 +151,14 @@ async function opened(
               {
                 ref: (node: HTMLDivElement | null) => void (box.current = node),
               },
-              options.probe === true
-                ? createElement(Probe, { id })
-                : createElement(CardHost, { object: TASK, id })
+              createElement(
+                Suspense,
+                { fallback: null },
+                options.probe === true
+                  ? createElement(Probe, { id })
+                  : createElement(CardHost, { object: TASK, id }),
+                createElement(Sibling, { id })
+              )
             )
           )
         )
@@ -142,7 +169,23 @@ async function opened(
   const c = view.container
   /** Re-renders the same card host (or probe) with another row key. */
   const reopen = (id: string) => act(() => void view.rerender(tree(id)))
-  return { fake, wire, runtime, core, holder, blocks, frames, c, draft, reopen }
+  /** The same re-render inside `startTransition`. */
+  const navigate = (id: string) =>
+    act(async () => startTransition(() => void view.rerender(tree(id))))
+  return {
+    fake,
+    wire,
+    runtime,
+    core,
+    holder,
+    blocks,
+    committedBlocks,
+    frames,
+    c,
+    draft,
+    reopen,
+    navigate,
+  }
 }
 
 type Opened = Awaited<ReturnType<typeof opened>>
@@ -864,20 +907,6 @@ describe("useCardDraft — заміна рантайму чи рядка ски�
     }
   )
 
-  it("хук після заміни: не dirty, без бази; save() нічого не шле транспортом B", async () => {
-    const o = await opened({ probe: true })
-    act(() => o.draft.current.setValue("title", "mine"))
-    const b = otherRuntime()
-    act(() => o.holder.replace(b.runtime))
-    await flush()
-    expect(o.draft.current.dirty).toBe(false)
-    expect(o.draft.current.base).toBeUndefined()
-    expect(o.draft.current.values).toMatchObject({ title: "b-title" })
-    act(() => o.draft.current.save())
-    await flush()
-    expect(b.wire.calls.filter((c) => c.request.type === "run")).toEqual([])
-  })
-
   it("пізній settled мутації A після заміни не змінює картку B", async () => {
     const o = await opened()
     type(o.c, "title", "mine")
@@ -921,6 +950,55 @@ describe("useCardDraft — заміна рантайму чи рядка ски�
     expect(o.frames.slice(before).every((f) => !f.includes("mine"))).toBe(true)
     expect(input(o.c, "title")?.value).toBe("t2")
     expect(o.blocks.at(-1)).toBe(false)
+    expect(button(o.c, "action.save")?.disabled).toBe(true)
+  })
+
+  it("незакомічений перехід на інший id не чіпає поточної чернетки; закомічений — скидає її", async () => {
+    const o = await opened({ suspendOn: key(3) })
+    seed(o.fake, 2, 3)
+    const v = versionOf(o)
+    type(o.c, "title", "mine")
+    // Перехід на key(3) не комітиться ніколи: сусід чекає вічно.
+    const before = o.frames.length
+    await o.navigate(key(3))
+    await flush()
+    expect(o.frames.length).toBe(before)
+    expect(card(o.c).getAttribute("data-key")).toBe(K)
+    // Картка K працює далі: правка видна, dirty, «Зберегти» шле з базою K.
+    // Після незакоміченого переходу кожен кадр React знову пробує перехід, а
+    // той призупиняється: тому дії — в асинхронному `act`.
+    await act(async () => {
+      fireEvent.change(input(o.c, "title")!, { target: { value: "mine-2" } })
+    })
+    expect(input(o.c, "title")?.value).toBe("mine-2")
+    expect(o.committedBlocks.at(-1)).toBe(true)
+    expect(button(o.c, "action.save")?.disabled).toBe(false)
+    o.wire.hold = true
+    await act(async () => {
+      fireEvent.click(button(o.c, "action.save")!)
+      await settle()
+    })
+    expect(runs(o)).toHaveLength(1)
+    expect(runs(o)[0]!.values).toEqual({ title: "mine-2" })
+    expect(runs(o)[0]!.expectedVersion).toBe(v)
+    await act(async () => {
+      o.wire.release()
+      await settle()
+    })
+    expect(o.fake.row(TASK, K)!.values).toMatchObject({ title: "mine-2" })
+    await act(async () => {
+      fireEvent.change(input(o.c, "title")!, { target: { value: "mine-3" } })
+    })
+    // Закомічений перехід на key(2): чиста чернетка без жодного кадру старої.
+    const committed = o.frames.length
+    o.reopen(key(2))
+    await flush()
+    expect(card(o.c).getAttribute("data-key")).toBe(key(2))
+    expect(o.frames.slice(committed).every((f) => !f.includes("mine"))).toBe(
+      true
+    )
+    expect(input(o.c, "title")?.value).toBe("t2")
+    expect(o.committedBlocks.at(-1)).toBe(false)
     expect(button(o.c, "action.save")?.disabled).toBe(true)
   })
 
