@@ -263,7 +263,7 @@ describe("close clears the service maps", () => {
       purges: 0,
       releaseTimers: 0,
       preloadTimers: 0,
-      switchTimers: 0,
+      scheduledObjects: 0,
       schedulerTimers: 0,
       journal: 0,
       sectionOwners: 0,

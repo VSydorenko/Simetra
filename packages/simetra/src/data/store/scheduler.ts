@@ -42,6 +42,7 @@ export function createScheduler(ctx: SchedulerContext): Scheduler {
   let timer: ReturnType<typeof setTimeout> | undefined
   let pending = false
   let plans = 0
+  let immediate = false
 
   const clear = () => {
     if (timer !== undefined) clearTimeout(timer)
@@ -57,19 +58,40 @@ export function createScheduler(ctx: SchedulerContext): Scheduler {
     // Видимість — у момент спрацювання, а не лише при постановці: таймер міг
     // пережити `suspend()`; прихована вкладка нічого не шле (§6.7).
     if (ctx.closed() || (!ctx.visible() && !hiddenOk())) return
-    ctx.tick()
-    request()
+    // Синхронний збій такту не вбиває таймер: перепланування йде в будь-якому разі.
+    try {
+      ctx.tick()
+    } finally {
+      request()
+    }
   }
 
   const plan = () => {
     pending = false
     plans++
     // Таймер знімають `cancel` (suspend, закриття) і постановка нового.
-    if (ctx.closed() || (!ctx.visible() && !hiddenOk())) return
+    if (ctx.closed() || (!ctx.visible() && !hiddenOk())) {
+      immediate = false
+      return
+    }
     clear()
     const due = ctx.dueAt()
-    if (due === undefined) return
-    timer = setTimeout(fire, Math.max(0, due - ctx.now()))
+    if (due === undefined) {
+      immediate = false
+      return
+    }
+    const wait = due - ctx.now()
+    // Строк, що вже настав (`requestReread` з `jitterMs` 0), виконує це саме
+    // перепланування без таймера: виклики одного ходу — один такт. Після
+    // такту строк, який такт не зняв, іде вже таймером, а не мікрозадачею:
+    // розбіжність ядра й планувальника не голодує цикл подій.
+    if (wait <= 0 && !immediate) {
+      immediate = true
+      fire()
+      return
+    }
+    immediate = false
+    timer = setTimeout(fire, Math.max(0, wait))
   }
 
   function request() {

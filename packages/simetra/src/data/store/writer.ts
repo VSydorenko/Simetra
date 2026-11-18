@@ -77,6 +77,16 @@ export interface WriterContext extends ReaderContext {
    */
   readonly hiddenKeys: Map<ObjectName, Set<Key>>
   /**
+   * Sets the due time of the object in the scheduler (`now + delayMs`): the
+   * re-read of `views` (all visible views of the object when unset) waits for
+   * the tick, and on a hidden tab for `resume()` (§8.4).
+   */
+  schedule(
+    object: ObjectName,
+    delayMs: number,
+    views?: ReadonlySet<Subset>
+  ): void
+  /**
    * The mutation journal: a purge erases the fields of the mutations it
    * touches in the same `commit`.
    */
@@ -882,7 +892,14 @@ export async function revalidate(
   // Явний виклик: вигляд у польоті отримує один хвіст — ще один прохід після
   // осідання з новою епохою старту; наступні виклики чекають той самий хвіст.
   const tails = targets.filter(inFlight).map((s) => {
-    s.rereadTail ??= tailPass(ctx, o, s, options)
+    // Хвіст, що вже чекає, бере суму викликів: `visibleOnly: false` перемагає,
+    // `alsoViews` об'єднуються (інакше пізній виклик міг би загубитися).
+    const pending = tailOptions.get(s)
+    tailOptions.set(
+      s,
+      pending === undefined ? options : mergeOptions(pending, options)
+    )
+    s.rereadTail ??= tailPass(ctx, o, s)
     return s.rereadTail
   })
   await Promise.all([
@@ -961,6 +978,37 @@ export function nextViewDue(
   return due
 }
 
+/** The options of the tail waiting over a view: the sum of the calls that joined it. */
+const tailOptions = new WeakMap<Subset, RevalidateOptions>()
+
+function mergeOptions(
+  a: RevalidateOptions,
+  b: RevalidateOptions
+): RevalidateOptions {
+  const also = new Set([...(a.alsoViews ?? []), ...(b.alsoViews ?? [])])
+  return {
+    visibleOnly: a.visibleOnly && b.visibleOnly,
+    ...(also.size === 0 ? {} : { alsoViews: also }),
+  }
+}
+
+/**
+ * Whether the interval tick reads a view of the object: the same filter
+ * `revalidate` applies with `minAgeMs`.
+ */
+export function hasDueViews(
+  ctx: WriterContext,
+  object: ObjectName,
+  minAgeMs: number
+): boolean {
+  return subsetsOf(ctx, ctx.objectOf(object)).some(
+    (s) =>
+      eligible(ctx, s, { visibleOnly: true, minAgeMs }) &&
+      !inFlight(s) &&
+      !unavailable(s)
+  )
+}
+
 /**
  * The tail of an explicit `revalidate` over a view in flight: waits until the
  * load and the system re-reads of the view settle, then re-reads it once with
@@ -969,8 +1017,7 @@ export function nextViewDue(
 async function tailPass(
   ctx: WriterContext,
   o: ObjectState,
-  s: Subset,
-  options: RevalidateOptions
+  s: Subset
 ): Promise<void> {
   try {
     while (inFlight(s) && s.alive && !s.purged && ctx.session.token().valid) {
@@ -981,6 +1028,8 @@ async function tailPass(
   } finally {
     s.rereadTail = undefined
   }
+  const options = tailOptions.get(s) ?? { visibleOnly: false }
+  tailOptions.delete(s)
   if (
     !ctx.session.token().valid ||
     unavailable(s) ||
@@ -1042,7 +1091,7 @@ export async function revalidateHolders(
 }
 
 /** One two-phase pass over `targets`; views dropped by a purge get another pass. */
-async function revalidateViews(
+export async function revalidateViews(
   ctx: WriterContext,
   o: ObjectState,
   targets: readonly Subset[]
@@ -1162,15 +1211,10 @@ async function revalidateViews(
   } else if (discarded.length > 0) {
     const pause =
       DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
-    // Не чекаємо паузи: `revalidate` завершується, а повтор іде тим самим
-    // системним шляхом (склад не змінюється).
-    setTimeout(() => {
-      revalidateViews(
-        ctx,
-        o,
-        discarded.filter((s) => s.alive && !s.purged)
-      ).catch((error: unknown) => ctx.log({ kind: "listener-failed", error }))
-    }, pause)
+    // Не чекаємо паузи: `revalidate` завершується, а повтор — строк об'єкта в
+    // планувальнику (на прихованій вкладці чекає `resume()`); іде тим самим
+    // системним шляхом, склад не змінюється.
+    ctx.schedule(o.name, pause, new Set(discarded))
   }
   // Дефект самотесту «системне перечитування через завантаження».
   if (ctx.defects.has("system-reread-via-load")) {

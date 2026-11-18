@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { catalogEntry } from "../../../model/runtime/__tests__/entries"
 import type { CommandErrorCode } from "simetra/model"
+import { createScheduler } from "../scheduler"
 import { DISCARDS_MAX } from "../session"
 import type { CoreLimits, ViewSpec } from "../types"
 import {
@@ -430,7 +431,7 @@ describe("scheduler: the discard limit", () => {
       status: "error",
       error: { code: "command.unavailable" },
     })
-    // Таймер перемикання епохи (не планувальника) відпрацьовує в межах `I`.
+    // Строк перемикання епохи (теж планувальника) настає в межах `I`.
     await vi.advanceTimersByTimeAsync(big)
     await deliver()
     expect(h.inspect.serviceSizes().schedulerTimers).toBe(0)
@@ -472,5 +473,123 @@ describe("scheduler: close", () => {
     expect(h.inspect.rowCount()).toBe(0)
     expect(view.getSnapshot().status).toBe("purged")
     expect(h.inspect.violations()).toEqual([])
+  })
+})
+
+/** Запити (не частини), що пішли після `base` частин журналу. */
+const requestsSince = (h: CoreHarness, base: number) =>
+  new Set(h.fake.log.slice(base).map((l) => l.request)).size
+
+describe("scheduler: the seam of the rights block (B5b)", () => {
+  /** Три об'єкти з видимими виглядами, прочитаними в момент 0. */
+  async function threeObjects(visible = true) {
+    const h = build({ objects: THREE, visible })
+    for (const spec of [taskKeys(1, 2), orgKeys(1), thirdKeys(1)])
+      watch(h.core.view(spec))
+    await settle()
+    return h
+  }
+
+  it("requestReread with jitterMs 0 for three objects in one turn: 1 request after the microtask, no timer advanced", async () => {
+    const h = await threeObjects()
+    const base = readsAt(h)
+    h.core.freshness.requestReread([TASK, ORG, THIRD_OBJ], { jitterMs: 0 })
+    h.core.freshness.requestReread([TASK], { jitterMs: 0 })
+    await settle()
+    expect(readsAt(h) - base).toBe(3)
+    expect(requestsSince(h, base)).toBe(1)
+  })
+
+  it("requestReread on a hidden tab: 0 reads, the due time waits for resume()", async () => {
+    const h = await threeObjects()
+    h.core.suspend()
+    const base = readsAt(h)
+    h.core.freshness.requestReread([TASK, ORG], { jitterMs: 0 })
+    await settle()
+    await advance(5_000)
+    expect(readsAt(h)).toBe(base)
+    h.core.resume()
+    await settle()
+    expect(readsAt(h) - base).toBeGreaterThanOrEqual(2)
+  })
+
+  it("requestReread spreads the due time over [0, jitterMs): nothing before it, 1 read at it", async () => {
+    const h = await threeObjects()
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    const base = readsAt(h)
+    h.core.freshness.requestReread([TASK], { jitterMs: 10_000 })
+    await advance(4_999)
+    expect(readsAt(h)).toBe(base)
+    await advance(1)
+    expect(readsAt(h)).toBe(base + 1)
+  })
+
+  it("lastTickAt: the start of the last tick that read; a tick without targets leaves it", async () => {
+    const h = await threeObjects()
+    expect(h.core.freshness.lastTickAt()).toBeUndefined()
+    const startedAt = Date.now()
+    await advance(I)
+    expect(h.core.freshness.lastTickAt()).toBe(startedAt + I)
+    // Об'єкт без видимих виглядів: строк настав, а читати нічого.
+    const h2 = build({ objects: THREE })
+    watch(h2.core.view(taskKeys(1)))
+    await settle()
+    await advance(I)
+    const at = h2.core.freshness.lastTickAt()
+    expect(at).toBeDefined()
+    h2.core.freshness.requestReread([ORG], { jitterMs: 0 })
+    await settle()
+    expect(h2.core.freshness.lastTickAt()).toBe(at)
+  })
+})
+
+describe("scheduler: a synchronous failure of the tick", () => {
+  it("a throwing tick does not kill the timer: the next due time fires", async () => {
+    let ticks = 0
+    const scheduler = createScheduler({
+      now: () => Date.now(),
+      visible: () => true,
+      closed: () => false,
+      dueAt: () => (ticks < 2 ? Date.now() + 10 : undefined),
+      tick() {
+        ticks++
+        if (ticks === 1) throw new Error("tick failed")
+      },
+      defects: new Set(),
+    })
+    scheduler.request()
+    await settle()
+    expect(() => vi.advanceTimersByTime(10)).toThrow("tick failed")
+    await settle()
+    expect(scheduler.timers()).toBe(1)
+    vi.advanceTimersByTime(10)
+    expect(ticks).toBe(2)
+  })
+})
+
+describe("scheduler: the tail of an explicit revalidate", () => {
+  it("a later call with visibleOnly: false joins the pending tail and is not lost", async () => {
+    const h = build({ mode: "manual" })
+    const spec = taskKeys(1, 2)
+    const view = h.core.view(spec)
+    watch(view)
+    const deliver = async () => {
+      await settle()
+      h.fake.deliverAll()
+      await settle()
+    }
+    await deliver()
+    h.core.setVisible(spec, false)
+    view.refresh()
+    await settle()
+    expect(h.fake.pending).toHaveLength(1)
+    void h.core.revalidate(TASK, { visibleOnly: true })
+    void h.core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    const base = readsAt(h)
+    await deliver()
+    // Хвіст бере суму викликів: невидимий вигляд перечитано один раз.
+    await deliver()
+    expect(readsAt(h) - base).toBe(1)
   })
 })
