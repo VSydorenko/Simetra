@@ -10,16 +10,18 @@ import {
 } from "./overlay"
 import { createSectionStore } from "./section-store"
 import { createSession, type Scope } from "./session"
+import { applySnapshot, dehydrate, parseSnapshot, type SsrContext } from "./ssr"
 import { createRowViews, purgedSnapshot } from "./snapshot"
-import { readKeys, tracked, type CoreSource } from "./source"
+import { readKeys, tracked, type CoreReadItem, type CoreSource } from "./source"
 import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
-import { createRegistry, type SubsetRegistry } from "./subsets"
+import { createRegistry, type Subset, type SubsetRegistry } from "./subsets"
 import {
   activeViews,
   createWriter,
   revalidate,
   revalidateHolders,
+  revalidateHydrated,
   rereadKey,
   setVisible,
   type WriterContext,
@@ -30,6 +32,7 @@ import {
   type CloseReason,
   type CoreLimits,
   type CoreLogEntry,
+  type CoreSnapshot,
   type GenerationToken,
   type Key,
   type Mutation,
@@ -104,11 +107,12 @@ export interface CoreSession {
    * reads first, then one `commit`; `visibleOnly` skips invisible views.
    * Views that never loaded are skipped (their first read is a load); a
    * purge after the start drops the results and re-reads those views again
-   * by the same rule (composition kept).
+   * by the same rule (composition kept). `minAgeMs` skips a view whose
+   * freshness mark — the start of its last settled read — is younger.
    */
   revalidate(
     object: ObjectName,
-    options: { visibleOnly: boolean }
+    options: { visibleOnly: boolean; minAgeMs?: number }
   ): Promise<void>
   /**
    * Purges every key in one notification batch, after which every handle —
@@ -132,11 +136,48 @@ export interface CoreSession {
    */
   serverHash(hash: string, versionPart: boolean): void
   /**
-   * Internal, for the runtime: a response refused a part `stale-client` (an
-   * incompatible column). Calls `onStaleClient(object)` and asks for the
-   * version; the object is not marked by it (§10).
+   * Internal, for the runtime and the write journal: the one entry of the
+   * sticky `stale-client` mark (P4-B spec §10), whatever the cause of the
+   * refusal. On the transition only: hides every row of the object and of its
+   * owners' sections (`Writer.hide`), makes its views `isStale`, stops its
+   * reads, calls `onStaleClient(object)` once and asks for the version. A
+   * mark already set, or a closed core, does nothing.
    */
   staleClient(object: ObjectName): void
+  /**
+   * The snapshot of the ready held views (P4-B spec §6.6): their rows,
+   * compositions and tabular section lines, and no value of a row the views
+   * do not show (`hidden`, `removed`). Throws `TypeError` once the core is
+   * closed, and while the journal of mutations is not empty (an SSR runtime
+   * writes nothing).
+   */
+  dehydrate(): CoreSnapshot
+  /**
+   * Takes a snapshot into an empty core before its first render (§6.6): every
+   * view of it is held, loaded and ready, and a subscription to one starts no
+   * read. Throws `TypeError`, writing nothing, for a snapshot of another
+   * `format` or catalog, or when the core was hydrated or already holds a
+   * view. Does nothing after `close`.
+   */
+  hydrate(snapshot: CoreSnapshot): void
+  /**
+   * Ends the hydration, once (a repeat does nothing): releases the views no
+   * subscription took after `releaseDelayMs`, asks for the catalog version
+   * and re-reads the visible views of every object — synchronously, so the
+   * requests leave in one microtask (plan B3-6a, Р6).
+   */
+  endHydration(): void
+  /** Whether the host shows the application (`resume` sets, `suspend` clears). */
+  readonly visible: boolean
+  /** Marks the application hidden; idempotent, sends nothing (plan B3-6a, Р12). */
+  suspend(): void
+  /**
+   * Marks the application visible. A call less than `RESUME_COALESCE_MS`
+   * after the last accepted one does nothing more. An accepted call asks for
+   * the catalog version and re-reads the visible views whose freshness mark is
+   * older than `limits.resumeMinIntervalMs` or missing, synchronously (Р11).
+   */
+  resume(): void
 }
 
 export type { DefectFlag } from "./defects"
@@ -198,6 +239,9 @@ export function inspectCore(session: CoreSession): CoreInspection {
   return found
 }
 
+/** `resume()` closer than this to the last accepted one does nothing (Р11). */
+const RESUME_COALESCE_MS = 1_000
+
 const KEYS_PER_REQUEST_MAX = Math.min(READ_LIMIT_MAX, FILTER_IN_MAX)
 
 // Нуль чи дріб у межі тихо вимикає її (горизонт без кошиків пропускає все):
@@ -214,9 +258,16 @@ export function limitsOf(
   const set = Object.entries(overrides ?? {}).filter(
     ([, value]) => value !== undefined
   )
+  const explicit = Object.fromEntries(set) as Partial<CoreLimits>
   const limits: CoreLimits = {
     ...DEFAULT_CORE_LIMITS,
-    ...(Object.fromEntries(set) as Partial<CoreLimits>),
+    // Типова межа `resume()` не перевищує інтервал звірки: host з коротким
+    // `revalidateIntervalMs` не мусить знати про нову межу.
+    resumeMinIntervalMs: Math.min(
+      DEFAULT_CORE_LIMITS.resumeMinIntervalMs,
+      explicit.revalidateIntervalMs ?? DEFAULT_CORE_LIMITS.revalidateIntervalMs
+    ),
+    ...explicit,
   }
   for (const [name, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value < 1) {
@@ -230,6 +281,11 @@ export function limitsOf(
   if (limits.keysPerRequest > KEYS_PER_REQUEST_MAX)
     throw new TypeError(
       `limits.keysPerRequest must not exceed ${KEYS_PER_REQUEST_MAX}`
+    )
+  // Лише для явної межі: типова вже не більша за інтервал.
+  if (limits.resumeMinIntervalMs > limits.revalidateIntervalMs)
+    throw new TypeError(
+      `limits.resumeMinIntervalMs (${limits.resumeMinIntervalMs}) must not exceed limits.revalidateIntervalMs (${limits.revalidateIntervalMs})`
     )
   return limits
 }
@@ -255,11 +311,16 @@ export function createCore(options: {
   log?: (e: CoreLogEntry) => void
   /** The `snapshotHash` of the client catalog: the first hash to compare with. */
   snapshotHash?: string
-  /** Host callback: an object turned stale-client or a write was refused so. */
+  /** Host callback: once per object, on its transition to stale-client. */
   onStaleClient?: (object: ObjectName) => void
+  /** Initial `visible` (default `true`). */
+  visible?: boolean
+  /** The monotonic clock in ms; tests substitute it, hosts never do. */
+  now?: () => number
 }): CoreSession {
   const limits = limitsOf(options.limits)
-  const { source, index } = options
+  const { index } = options
+  const now = options.now ?? (() => performance.now())
   // Збій журналу не змінює результату.
   const log = (entry: CoreLogEntry) => {
     try {
@@ -284,10 +345,47 @@ export function createCore(options: {
     overlay.mutationOf(object, key, e)
   )
   const dirtySections = new Map<ObjectName, Set<Key>>()
-  // Позначка «застарілий» об'єкта (§10): лише за kernelHash чи невідомим
-  // об'єктом; `dirtyObjects` — об'єкти, чия позначка змінилась у цьому commit.
+  // Липка позначка «застарілий» об'єкта (§10): її ставить кожна відмова
+  // `stale-client` і відповідь `version`, знімає лише перезавантаження;
+  // `dirtyObjects` — об'єкти, чия позначка змінилась у цьому commit.
   const staleObjects = new Set<ObjectName>()
   const dirtyObjects = new Set<ObjectName>()
+  // Читання несумісного об'єкта (§10) ядро не шле й не приймає: клієнт не
+  // може перевірити його права, тож і відповідь, що вже летить, нічого не
+  // пише. Відмова — той самий `stale-client`, що дав би сервер.
+  const source: CoreSource = {
+    close: () => options.source.close(),
+    refuse: (object) => options.source.refuse?.(object),
+    run: (operation) => options.source.run(operation),
+    version: () => options.source.version(),
+    async read(parts) {
+      const isLive = (part: (typeof parts)[number]) => {
+        const { kind, name } = part.object
+        return !staleObjects.has(`${kind}.${name}`)
+      }
+      const refused = (part: (typeof parts)[number]): CoreReadItem => {
+        return {
+          ok: false,
+          error: { code: "command.stale-client", object: part.object },
+        }
+      }
+      const sent = parts.map(isLive)
+      const forward = parts.filter((_, slot) => sent[slot])
+      const answered =
+        forward.length === 0
+          ? { items: [] as CoreReadItem[] }
+          : await options.source.read(forward)
+      let next = 0
+      const items = parts.map((part, slot): CoreReadItem => {
+        if (!sent[slot]) return refused(part)
+        const item = answered.items[next++]!
+        // Об'єкт став несумісним, поки відповідь летіла: вона вже не діє.
+        return isLive(part) ? item : refused(part)
+      })
+      return { items }
+    },
+  }
+
   let lastHash = options.snapshotHash
   let closed: ViewSnapshot | undefined
 
@@ -331,6 +429,9 @@ export function createCore(options: {
   const written: Array<readonly [ObjectState, Key]> = []
   const ops: StoreOps = {
     put(scope, o, row, readEpoch, lazyRead) {
+      // Читання, що вже закінчилось і чекає свого `commit` (вікно після
+      // `include`), не вносить значень несумісного об'єкта (§10).
+      if (staleObjects.has(o.name)) return "rejected"
       const result = o.rows.put(scope, row, readEpoch, lazyRead)
       if (result !== "rejected") {
         rowViews.touch(o.name, row.key)
@@ -379,6 +480,7 @@ export function createCore(options: {
       readEpoch,
       ownerScope
     ) {
+      if (staleObjects.has(o.name)) return
       const result = o.sections.put(
         scope,
         owner,
@@ -402,6 +504,16 @@ export function createCore(options: {
       o.sections.clearOwner(scope, owner)
       touchSection(o, owner)
     },
+    restore(scope, o, row, at) {
+      o.rows.restore(scope, row, at)
+      rowViews.touch(o.name, row.key)
+      // Слот без вигляду-власника (знімок, чий вигляд не прийнято) знімає `sweep`.
+      written.push([o, row.key])
+    },
+    restoreSection(scope, o, owner, section, entry) {
+      o.sections.restore(scope, owner, section, entry)
+      touchSection(o, owner)
+    },
   }
 
   const registry = createRegistry({
@@ -422,7 +534,25 @@ export function createCore(options: {
     isStale: (object) => staleObjects.has(object),
     closedSnapshot: () => closed,
     defects,
+    now,
+    readHydrated: (s) => readHydrated(s),
   })
+
+  // ------------------------------------------------------------ знімок SSR
+
+  const ssr: SsrContext = {
+    session,
+    objects,
+    registry,
+    ops,
+    limits,
+    defects,
+  }
+  // Гідратація одноразова: `endHydration` повторюється під StrictMode, а
+  // другий знімок змішався б із першим.
+  let hydration: "none" | "hydrated" | "ended" = "none"
+  let visible = options.visible ?? true
+  let lastResumeAt: number | undefined
 
   // ------------------------------------------------------------ хвіст
 
@@ -518,6 +648,8 @@ export function createCore(options: {
       const hiddenNow = [...hiddenKeys]
       hiddenKeys.clear()
       for (const [name, keys] of hiddenNow) {
+        // Несумісний об'єкт не перечитується: його значення не повертаються.
+        if (staleObjects.has(name)) continue
         revalidateHolders(writerContext, name, keys).catch((error: unknown) =>
           log({ kind: "listener-failed", error })
         )
@@ -578,6 +710,9 @@ export function createCore(options: {
   session.onSwitch(() => {
     for (const o of objects.values()) {
       for (const key of o.rows.keys()) rowViews.touch(o.name, key)
+      // Несумісний об'єкт не перечитується (§10): його вигляди лишаються в
+      // стані `isStale`, а не переходять в `error`.
+      if (staleObjects.has(o.name)) continue
       if (switchTimers.has(o.name)) continue
       if (!activeViews(writerContext, o.name).some((v) => v.visible)) continue
       const delay = Math.floor(Math.random() * limits.revalidateIntervalMs)
@@ -593,6 +728,59 @@ export function createCore(options: {
     }
   })
 
+  /**
+   * Довіра до значень — факт РЯДКА: рядок, який записала лише гідратація
+   * (`writtenEpoch` < епохи гідратації), не читався після неї (§6.6). Вигляд
+   * над таким рядком — власним чи `include` — стає видимим після `endHydration`
+   * (пізня підписка чи `setVisible(true)`) і читається зараз, поодинці, доки
+   * читання, що стартувало після гідратації, не перезапише рядок. ТЧ міряється
+   * епохою свого читання (`sectionRead`). До кінця гідратації читання робить
+   * `endHydration` разом з усіма.
+   */
+  let hydrationEpoch = 0
+  // Лише для самотесту: вигляди, які знімок тримав сам (дефект
+  // `hydrated-row-not-reread` читає тільки їх, як колишній прапор вигляду).
+  const heldBySnapshot = new Set<Subset>()
+
+  function overHydratedRows(s: Subset): boolean {
+    if (s.form.spec.kind === "section")
+      return s.sectionRead !== undefined && s.sectionRead < hydrationEpoch
+    const stale = (o: ObjectState, keys: Iterable<Key>) => {
+      for (const key of keys) {
+        const e = o.rows.get(key)
+        // `removed` не лишає недовірених значень; слот `hidden` (без значень)
+        // лишається: лише читання після гідратації знімає позначку.
+        if (
+          e !== undefined &&
+          e.removed === undefined &&
+          e.writtenEpoch < hydrationEpoch
+        )
+          return true
+      }
+      return false
+    }
+    if (stale(s.form.object, s.owned)) return true
+    for (const [name, keys] of s.included)
+      if (stale(objectOf(name), keys)) return true
+    return false
+  }
+
+  function readHydrated(s: Subset) {
+    if (hydration !== "ended") return
+    if (defects.has("late-hydrated-not-reread")) return
+    if (staleObjects.has(s.form.object.name)) return
+    if (!(s.visible ?? s.listeners.size > 0)) return
+    if (defects.has("hydrated-row-not-reread") && !heldBySnapshot.has(s)) return
+    if (!overHydratedRows(s)) return
+    // Читання, що стартувало після гідратації, уже в польоті (звірка чи `revalidate`):
+    // його відповідь зробить рядки довіреними; власне завантаження ловить
+    // `revalidateHydrated` (`flight`).
+    if (s.rereadEpochs.some((at) => at >= hydrationEpoch)) return
+    revalidateHydrated(writerContext, s).catch((error: unknown) =>
+      log({ kind: "listener-failed", error })
+    )
+  }
+
   const writerContext: WriterContext = {
     session,
     source,
@@ -607,6 +795,7 @@ export function createCore(options: {
     purges,
     invalidateTail,
     defects,
+    now,
     hiddenKeys,
     journal: {
       erase: (object, key) => overlay.erase(object, key),
@@ -616,7 +805,7 @@ export function createCore(options: {
 
   // ------------------------------------------------------------ версія
 
-  const staleClient = (object: ObjectName) => {
+  const notifyStaleClient = (object: ObjectName) => {
     try {
       options.onStaleClient?.(object)
     } catch (error) {
@@ -625,28 +814,57 @@ export function createCore(options: {
     }
   }
 
+  // Липка позначка «застарілий» (§10): єдиний вхід — і `version`, і відмова
+  // `stale-client` частини читання чи запису. Позначка не знімається до
+  // перезавантаження: клієнт не може перевірити права несумісного об'єкта,
+  // тож закриває його, а не показує. Значення рядків і ТЧ їхніх власників
+  // ховає наявний `Writer.hide`; повернути їх може лише читання, а читань
+  // об'єкта більше немає (`source` вище).
+  const markStale = (scope: Scope, o: ObjectState): boolean => {
+    if (staleObjects.has(o.name)) return false
+    staleObjects.add(o.name)
+    dirtyObjects.add(o.name)
+    // Таймер перемикання епохи не перечитає несумісний об'єкт: `revalidate` у
+    // ньому перевів би вигляди в `error` замість `isStale`.
+    const timer = switchTimers.get(o.name)
+    if (timer !== undefined) clearTimeout(timer)
+    switchTimers.delete(o.name)
+    // Частини, що вже стоять у черзі обмежувача, теж не підуть.
+    source.refuse?.(o.name)
+    // Власник із рядками ТЧ може не мати шапки в сховищі (`disown`).
+    createWriter(writerContext, scope).hide(o.name, [
+      ...new Set([...o.rows.keys(), ...o.sections.owners()]),
+    ])
+    return true
+  }
+
   // Позначки за відповіддю `version`: об'єкт, якого сервер не знає, чи з
-  // іншим kernelHash, — застарілий; збіг хеша позначку знімає (§10).
+  // іншим kernelHash, — застарілий; збіг хеша позначку НЕ знімає.
   function applyVersion(objectsOfServer: Readonly<Record<string, string>>) {
     const token = session.token()
     const turned: ObjectName[] = []
     session.commit(
-      () => {
-        for (const o of objects.values()) {
-          const stale = objectsOfServer[o.entry.id] !== o.entry.kernelHash
-          if (stale === staleObjects.has(o.name)) continue
-          if (stale) {
-            staleObjects.add(o.name)
-            turned.push(o.name)
-          } else staleObjects.delete(o.name)
-          dirtyObjects.add(o.name)
+      (scope) => {
+        try {
+          for (const o of objects.values()) {
+            const stale = objectsOfServer[o.entry.id] !== o.entry.kernelHash
+            if (stale && markStale(scope, o)) turned.push(o.name)
+            else if (
+              !stale &&
+              defects.has("stale-mark-lifts") &&
+              staleObjects.delete(o.name)
+            )
+              dirtyObjects.add(o.name)
+          }
+        } finally {
+          ops.sweep(scope)
         }
       },
       token,
       "version"
     )
     // Колбек — після commit: host не бачить напівзастосованого стану.
-    for (const object of turned) staleClient(object)
+    for (const object of turned) notifyStaleClient(object)
   }
 
   // Один запит `version` за раз і не більше одного хвоста: перед відправкою
@@ -712,13 +930,112 @@ export function createCore(options: {
       if (changed && !versionPart) core.requestVersion()
     },
     staleClient(object) {
-      staleClient(object)
+      const o = objects.get(object)
+      if (o === undefined || !session.token().valid) return
+      const token = session.token()
+      let turned = false
+      session.commit(
+        (scope) => {
+          try {
+            turned = markStale(scope, o)
+          } finally {
+            ops.sweep(scope)
+          }
+        },
+        token,
+        "stale-client"
+      )
+      if (!turned) return
+      notifyStaleClient(object)
       core.requestVersion()
+    },
+    dehydrate() {
+      if (closed !== undefined || !session.token().valid)
+        throw new TypeError("the core is closed")
+      // SSR-рантайм нічого не пише: знімок після запису — помилка host-а, а
+      // журнал мутацій у знімок не переходить.
+      if (overlay.size() > 0)
+        throw new TypeError("the journal of mutations is not empty")
+      return dehydrate(ssr)
+    },
+    hydrate(snapshot) {
+      if (closed !== undefined || !session.token().valid) return
+      if (hydration !== "none" || [...registry.subsets()].length > 0)
+        throw new TypeError("the core is hydrated or already holds views")
+      const parsed = parseSnapshot(ssr, snapshot)
+      hydration = "hydrated"
+      session.commit(
+        (scope) => {
+          try {
+            applySnapshot(ssr, scope, parsed)
+          } finally {
+            // Слот, якого не взяв жоден вигляд, не лишається без власника.
+            ops.sweep(scope)
+          }
+        },
+        session.token(),
+        "hydrate"
+      )
+      // Свіжіша за епоху записаних рядків: читання, що стартувало після
+      // гідратації, має епоху не нижчу й пише рядки вже «довіреними».
+      hydrationEpoch = session.epochs.next()
+      if (defects.has("hydrated-row-not-reread"))
+        for (const s of registry.subsets()) heldBySnapshot.add(s)
+    },
+    endHydration() {
+      if (hydration !== "hydrated") return
+      hydration = "ended"
+      if (!session.token().valid) return
+      registry.endHydration()
+      // Звірка (Р6): запити йдуть синхронно, без `await` між об'єктами, тож
+      // збирач пакета читань зіллє їх, а цей код не зміниться.
+      core.requestVersion()
+      if (defects.has("hydrate-without-revalidate")) return
+      for (const o of objects.values()) {
+        // Несумісний об'єкт не читається (§10): перечитування перевело б
+        // його вигляди в `error` замість показати `isStale`.
+        if (staleObjects.has(o.name)) continue
+        if (!activeViews(writerContext, o.name).some((v) => v.visible)) continue
+        revalidate(writerContext, o.name, { visibleOnly: true }).catch(
+          (error: unknown) => log({ kind: "listener-failed", error })
+        )
+      }
+    },
+    get visible() {
+      return visible
+    },
+    suspend() {
+      visible = false
+    },
+    resume() {
+      visible = true
+      if (!session.token().valid) return
+      // Злиття: подвійний сигнал повернення (focus + visibilitychange) — одна
+      // звірка; відлік іде від останнього прийнятого, а не від кожного виклику.
+      const at = now()
+      if (lastResumeAt !== undefined && at - lastResumeAt < RESUME_COALESCE_MS)
+        return
+      lastResumeAt = at
+      // Як в `endHydration`: усе синхронно, без `await` між об'єктами.
+      core.requestVersion()
+      for (const o of objects.values()) {
+        // Як в `endHydration`: несумісний об'єкт не перечитується.
+        if (staleObjects.has(o.name)) continue
+        revalidate(writerContext, o.name, {
+          visibleOnly: true,
+          minAgeMs: limits.resumeMinIntervalMs,
+        }).catch((error: unknown) => log({ kind: "listener-failed", error }))
+      }
     },
     update: (object, key, values, updateOptions) =>
       overlay.update(object, key, values, updateOptions),
     activeViews: (object) => activeViews(writerContext, object),
-    setVisible: (spec, visible) => setVisible(writerContext, spec, visible),
+    setVisible(spec, visible) {
+      setVisible(writerContext, spec, visible)
+      if (!visible) return
+      const s = registry.find(spec)
+      if (s !== undefined) readHydrated(s)
+    },
     revalidate: (object, revalidateOptions) =>
       revalidate(writerContext, object, revalidateOptions),
     close(reason) {

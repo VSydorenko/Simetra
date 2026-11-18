@@ -616,11 +616,14 @@ describe("useCardDraft — одна охорона запису: save, overwrite
   describe.each(["conflict", "failed"] as const)("%s", (state) => {
     it.each(BLOCKERS)(
       "%s — жодної ввімкненої дії запису в картці",
-      async (_, block) => {
+      async (name, block) => {
         const o = await opened()
         await reach(o, state, "host")
         await block(o)
-        expect(draftState(o.c)).toBe(state)
+        // Несумісний клієнт ховає рядок (Р7): чернетка переходить у `hidden`.
+        expect(draftState(o.c)).toBe(
+          name.startsWith("isStale") ? "hidden" : state
+        )
         expect(enabledWrites(o.c)).toEqual([])
       }
     )
@@ -838,9 +841,9 @@ describe("useCardDraft — закриття, сховування, несумі�
     expect(input(o.c, "title")?.value).toBe("secret-draft")
   })
 
-  it("isStale (несумісний клієнт) — «Потрібне оновлення застосунку» замість «Зберегти», поля лише для показу", async () => {
+  it("isStale (несумісний клієнт) — «Потрібне оновлення застосунку» замість «Зберегти», ні значень рядка, ні чернетки в DOM", async () => {
     const o = await opened()
-    type(o.c, "title", "mine")
+    type(o.c, "title", "mine-draft")
     staleKernel(o.fake, task.id)
     act(() => o.core.requestVersion())
     await flush()
@@ -849,8 +852,11 @@ describe("useCardDraft — закриття, сховування, несумі�
       text("app.updateRequired")
     )
     expect(input(o.c, "title")).toBeNull()
-    // Чернетку не втрачено: поле показує правку.
-    expect(slot(o.c, "title").textContent).toContain("mine")
+    // Клієнт не може перевірити права несумісного об'єкта: значень рядка й
+    // чернетки в DOM немає (так само, як у `hidden`).
+    const html = card(o.c).outerHTML
+    for (const secret of ["mine-draft", "t1", "body 1"])
+      expect(html).not.toContain(secret)
   })
 
   it("застарілий рядок — підказка й «Зберегти» вимкнено, без банера несумісного клієнта", async () => {

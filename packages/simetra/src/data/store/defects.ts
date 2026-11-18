@@ -8,6 +8,8 @@
 
 /** A deliberate defect of the core switched on by the model test's self-check. */
 export type DefectFlag =
+  /** A `version` answer without a divergence lifts the stale-client mark. */
+  | "stale-mark-lifts"
   /** `commit` ignores an invalid generation token. */
   | "no-token-check"
   /** The version rule accepts an older row. */
@@ -64,6 +66,20 @@ export type DefectFlag =
   | "write-back-lifts-hidden"
   /** The answer of a cancelled attempt is written. */
   | "answer-after-cancel"
+  /** A hidden slot of the SSR snapshot carries the values of its row. */
+  | "hidden-values-in-snapshot"
+  /** The check after hydration re-reads no visible view. */
+  | "hydrate-without-revalidate"
+  /** `revalidate` ignores `minAgeMs`: a view with a young freshness mark is re-read. */
+  | "min-age-ignored"
+  /** `revalidate` ignores `minAgeMs` for tabular section views only. */
+  | "min-age-ignored-sections"
+  /** `revalidate` treats every view with a freshness mark as young, however old. */
+  | "min-age-all-young"
+  /** A hydrated view first shown after the reconciliation is not read. */
+  | "late-hydrated-not-reread"
+  /** A view over rows only the hydration wrote, not held by the snapshot itself, is not read. */
+  | "hydrated-row-not-reread"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

@@ -126,6 +126,21 @@ export function visibleRow(e: RowEntry): Values | undefined {
 
 export type PutResult = "written" | "rejected" | "stale-inserted"
 
+/** A row of a core snapshot, parsed and ready to be put into the store. */
+export interface RestoredRow {
+  readonly key: Key
+  /** `hidden` and `removed` slots keep no values: `row` is `undefined`. */
+  readonly state: "row" | "hidden" | "removed"
+  readonly row: ServerRow | undefined
+  readonly scope: string | null
+  readonly version: number
+  readonly versionEpoch: string | null
+  readonly lazyVersions: ReadonlyMap<string, number>
+  readonly lazyIn: ReadonlyMap<string, string | null>
+  /** One mark: the row is not proved since the hydration. */
+  readonly stale: boolean
+}
+
 /** The header rows of one object (P4-B spec §6.1, §6.2). */
 export interface ObjectStore {
   put(
@@ -197,6 +212,16 @@ export interface ObjectStore {
    * entry.
    */
   hideKeys(scope: Scope, keys: readonly Key[]): Key[]
+  /**
+   * Puts a row of a core snapshot (the hydration): the slot is new, so no
+   * version rule applies. A `removed` or `hidden` state is marked with the
+   * epoch `at` of the hydration, which only a read that started after it
+   * lifts; a stale row gets the one mark "not proved since the hydration"
+   * (the version it was served with, cleared by a read of that version
+   * started after `at`). The slot has no owner yet and joins no tail re-read:
+   * the check after the hydration re-reads the visible views.
+   */
+  restore(scope: Scope, init: RestoredRow, at: number): void
   get(key: Key): RowEntry | undefined
   /** The number of entries, removed slots included. */
   readonly size: number
@@ -716,6 +741,44 @@ export function createObjectStore(options: {
         hiddenKeys.push(key)
       }
       return hiddenKeys
+    },
+
+    restore(scope, init, at) {
+      scope.assert()
+      const e: RowEntry = {
+        row:
+          init.row === undefined
+            ? undefined
+            : {
+                ...init.row,
+                versionEpoch: effectiveEpoch(
+                  init.row.versionEpoch,
+                  init.versionEpoch
+                ),
+              },
+        scope: init.scope,
+        version: init.version,
+        versionEpoch: heldEpoch(init.versionEpoch),
+        writtenEpoch: at,
+        owners: 0,
+        lazyVersions: new Map(init.lazyVersions),
+        lazyEpochs: new Map(),
+        stale: {},
+      }
+      for (const [field, epoch] of init.lazyIn)
+        e.lazyEpochs.set(field, effectiveEpoch(epoch, e.versionEpoch))
+      if (init.state === "removed") e.removed = { epoch: at, divergent: false }
+      if (init.state === "hidden") {
+        e.stale.hidden = { epoch: at }
+        e.hiddenAt = at
+      }
+      if (init.stale)
+        e.stale.minVersion = {
+          v: init.version,
+          epoch: at,
+          versionEpoch: heldEpoch(init.versionEpoch),
+        }
+      rows.set(init.key, e)
     },
 
     get: (key) => rows.get(key),

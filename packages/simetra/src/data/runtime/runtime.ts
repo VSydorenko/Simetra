@@ -24,6 +24,7 @@ import type {
   CloseReason,
   CoreLimits,
   CoreLogEntry,
+  CoreSnapshot,
   ViewSpec,
 } from "../store/types"
 import { bindRuntimeHandle, type RuntimeRequest } from "./handle"
@@ -43,6 +44,59 @@ export interface DataRuntime {
   /** The list strategy of `object` (`"<kind>.<name>"`): `window` unless the settings name it. */
   residencyOf(object: string): "full" | "window"
   readonly disposed: boolean
+  /**
+   * The snapshot of the ready held views for the client (P4-B spec §6.6):
+   * `meta` names the subject the rows were read for. Throws
+   * `TypeError` once the runtime is disposed, and while a write is in the
+   * journal. The server calls it, then `dispose()`.
+   */
+  dehydrate(): DataSnapshot
+  /**
+   * Takes a snapshot before the first render: every view of it is held,
+   * loaded and ready. Throws `TypeError`, writing nothing, when the `format`
+   * is unknown, `meta.subject` is not this runtime's, the runtime was already
+   * hydrated or holds views. Does nothing after `dispose()`. A snapshot of
+   * another subject never enters this runtime.
+   */
+  hydrate(snapshot: DataSnapshot): void
+  /**
+   * Ends the hydration, once: reconciles with the server (the catalog
+   * version, one re-read of every visible view) in one microtask. A repeat
+   * does nothing, so StrictMode is safe.
+   */
+  endHydration(): void
+  /** Whether the host shows the application; starts as `options.visible`. */
+  readonly visible: boolean
+  /**
+   * Marks the application hidden; the host calls it on `visibilitychange`
+   * to `hidden`. Idempotent, sends nothing, and does nothing after
+   * `dispose()`.
+   */
+  suspend(): void
+  /**
+   * Marks the application visible again; the host calls it on
+   * `visibilitychange` to `visible` and on `focus`. Does nothing after
+   * `dispose()`. A call less than a second after the
+   * last accepted one only sets `visible`. An accepted call asks for the
+   * catalog version and re-reads the visible views last refreshed longer ago
+   * than `limits.resumeMinIntervalMs` (or never), in one microtask.
+   */
+  resume(): void
+}
+
+/**
+ * What the server hands to the client runtime (P4-B spec §6.6): plain JSON,
+ * the same after `JSON.parse(JSON.stringify(...))`.
+ */
+export interface DataSnapshot {
+  readonly meta: SnapshotMeta
+  readonly core: CoreSnapshot
+}
+
+/** Who a {@link DataSnapshot} was taken for. */
+export interface SnapshotMeta {
+  /** The session `sub` of the runtime that took it. */
+  readonly subject: string
 }
 
 export interface DataRuntimeOptions {
@@ -57,12 +111,14 @@ export interface DataRuntimeOptions {
    */
   onSessionChanged?: () => void
   /**
-   * Called when an object of the catalog turns stale (its kernel differs from
-   * the server's) and on every write the server refuses `command.stale-client`
-   * (P4-B spec §10). It only offers a reload: the runtime never reloads itself,
+   * Called once per object, on its transition to stale (its kernel differs
+   * from the server's or a part of a read or write is refused
+   * `command.stale-client`; P4-B spec §10). It only offers a reload: the runtime never reloads itself,
    * so unsaved forms of other objects are not lost.
    */
   onStaleClient?: (object: string) => void
+  /** The initial `visible` of the runtime (default `true`). */
+  visible?: boolean
   /** The runtime journal (default `console.warn`); see {@link DataLogEntry}. */
   log?: (entry: DataLogEntry) => void
   /**
@@ -308,9 +364,10 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     for (const object of objects) core.staleClient(object)
   }
 
-  // Відмова частини `read` — `stale-client` (несумісна колонка): позначки
-  // вона не ставить, але host дізнається про об'єкт і сумісність
-  // переоцінюється (§10). Викликається лише після перевірки закриття.
+  // Відмова частини `read` — `stale-client`, хоч би яка причина (колонка поза
+  // переліком, невідомий об'єкт, інший kernelHash): сервер причини не несе, тож
+  // ядро ставить липку позначку об'єкта (§10). Викликається лише після
+  // перевірки закриття.
   const staleParts = (request: RuntimeRequest, value: unknown) => {
     if (request.type !== "read" || typeof value !== "object" || value === null)
       return
@@ -353,6 +410,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     limits,
     residency,
     ...(options.strict === undefined ? {} : { strict: options.strict }),
+    ...(options.visible === undefined ? {} : { visible: options.visible }),
     log,
     snapshotHash: catalog.snapshotHash,
     ...(options.onStaleClient === undefined
@@ -371,6 +429,36 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
       return closedWith !== undefined
     },
     dispose: () => close(DISPOSED, "disposed"),
+    dehydrate: () => ({
+      meta: { subject },
+      core: core.dehydrate(),
+    }),
+    hydrate(snapshot) {
+      if (closedWith !== undefined) return
+      const meta = (snapshot as { meta?: unknown } | null)?.meta as
+        { subject?: unknown } | undefined
+      if (typeof meta?.subject !== "string")
+        throw new TypeError("snapshot: meta is malformed")
+      // Знімок іншого суб'єкта не входить у цей рантайм: ні рядка, ні
+      // підмножини; сервер на звірці однаково відповів би `session-changed`.
+      if (meta.subject !== subject)
+        throw new TypeError("snapshot: the subject differs from the runtime's")
+      core.hydrate(snapshot.core)
+    },
+    // Збірку клієнта, що розійшлась зі збіркою рендера, ловить `version`, який
+    // звірка ядра шле завжди: розбіжність іде шляхом `stale-client`.
+    endHydration() {
+      if (closedWith === undefined) core.endHydration()
+    },
+    get visible() {
+      return core.visible
+    },
+    suspend() {
+      if (closedWith === undefined) core.suspend()
+    },
+    resume() {
+      if (closedWith === undefined) core.resume()
+    },
     preload: (spec, preloadOptions) => core.preload(spec, preloadOptions),
     residencyOf: (object) => core.residencyOf(object),
   }

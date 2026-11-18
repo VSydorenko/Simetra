@@ -189,6 +189,13 @@ export interface CoreSource {
    */
   version(): Promise<CoreVersionResult>
   /**
+   * Closes reads of the object (`"<kind>.<name>"`) until the source dies: a
+   * part of it that waits in the limiter goes out as `command.stale-client`
+   * without a request (P4-B spec §10). Optional: a source that never queues
+   * reads has nothing to stop.
+   */
+  refuse?(object: string): void
+  /**
    * Closes the read limiter of the source (session close): a read still
    * queued never goes out and rejects with {@link ReadLimiterClosed}.
    */
@@ -283,6 +290,14 @@ export function createCoreSource(
     }
   }
 
+  // Об'єкти, яким ядро закрило читання (`stale-client`, §10): частина, що
+  // вже стоїть у черзі обмежувача, не йде на сервер, коли дійде черга.
+  const refused = new Set<string>()
+  const refusal = (query: RowsQuery): CoreReadItem => ({
+    ok: false,
+    error: { code: "command.stale-client", object: query.object },
+  })
+
   // Один запит — один слот обмежувача; відмова всього запиту (CommandFailure
   // адаптера: транспорт, `session-changed`) стає відмовою кожної його частини.
   const send = async (
@@ -290,17 +305,30 @@ export function createCoreSource(
     queries: readonly RowsQuery[],
     wires: readonly WireQueryPart[]
   ): Promise<CoreReadItem[]> => {
-    let answer: WireReadParts
+    let answer: WireReadParts | undefined
+    // Частини, що справді пішли: добираються на старті задачі, не при постановці.
+    let live: number[] = []
     try {
-      answer = await limiter.run(() => adapter.read(wires))
+      answer = await limiter.run(() => {
+        live = queries.flatMap((query, i) =>
+          refused.has(`${query.object.kind}.${query.object.name}`) ? [] : [i]
+        )
+        return live.length === 0
+          ? Promise.resolve(undefined)
+          : adapter.read(live.map((i) => wires[i]!))
+      })
     } catch (error) {
       if (!(error instanceof CommandFailure)) throw error
       return queries.map(() => ({ ok: false, error: error.error }))
     }
+    if (answer === undefined) return queries.map(refusal)
     const { epoch, items } = answer
     // Рівно по відповіді на частину: інакше порядок не співставити.
-    if (items.length !== queries.length) return queries.map(internal)
-    return queries.map((query, i) => decode(query, items[i]!, epoch))
+    if (items.length !== live.length) return queries.map(internal)
+    return queries.map((query, i) => {
+      const at = live.indexOf(i)
+      return at < 0 ? refusal(query) : decode(query, items[at]!, epoch)
+    })
   }
 
   const group = async (
@@ -389,6 +417,9 @@ export function createCoreSource(
 
   return {
     close: () => limiter.close(),
+    refuse: (object) => {
+      refused.add(object)
+    },
     async run(operation) {
       const entry = index.byRef.get(
         `${operation.object.kind}.${operation.object.name}`

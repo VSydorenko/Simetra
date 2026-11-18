@@ -1279,6 +1279,12 @@ describe("the table of refusals of a write (§7.3)", () => {
     readonly name: string
     readonly error: CommandError
     readonly state: "conflict" | "failed" | "unknown"
+    /**
+     * The state the row shows when it differs from the mutation's: a
+     * `stale-client` refusal marks the object (sticky, §10) and hides its
+     * rows, and `hidden` outranks the mutation state in the row view.
+     */
+    readonly shown?: "stale"
     /** The key is re-read by key after the refusal. */
     readonly reread: boolean
     readonly actions: readonly string[]
@@ -1310,8 +1316,10 @@ describe("the table of refusals of a write (§7.3)", () => {
       name: "stale-client",
       error: { code: "command.stale-client" },
       state: "failed",
+      shown: "stale",
       reread: false,
-      actions: FAILED,
+      // Схований рядок не показує значень мутації, тож повтор не пропонується.
+      actions: ["cancel"],
     },
     {
       name: "unavailable (transport broke or timed out)",
@@ -1352,7 +1360,7 @@ describe("the table of refusals of a write (§7.3)", () => {
 
   it.each(rows)(
     "$name: state $state, re-read $reread, actions $actions",
-    async ({ error, state, reread, actions }) => {
+    async ({ error, state, shown: shownState, reread, actions }) => {
       const h = harness()
       const { card, version } = await mounted(h)
       h.port.refuse = error
@@ -1366,7 +1374,8 @@ describe("the table of refusals of a write (§7.3)", () => {
       expect(await m.settled).toEqual({ ok: false, error })
       await settle()
       const view = shown(rowOf(card))
-      expect(view.state).toBe(state)
+      expect(view.state).toBe(shownState ?? state)
+      expect(view.mutation!.state).toBe(state)
       expect(view.mutation!.error).toEqual(error)
       expect(
         Object.keys(view.mutation!)
@@ -1489,7 +1498,10 @@ describe("the table of refusals of a write (§7.3)", () => {
     expect(h.port.versions).toBe(1)
     expect(h.onStaleClient.mock.calls).toEqual([[TASK]])
     expect(h.port.runs).toBe(1)
-    expect(shown(rowOf(card)).state).toBe("failed")
+    // Відмова ставить липку позначку: рядок схований, стан мутації — `failed`.
+    expect(shown(rowOf(card)).state).toBe("stale")
+    expect(shown(rowOf(card)).mutation!.state).toBe("failed")
+    expect(shown(rowOf(card)).hidden).toBe(true)
   })
 
   it("unavailable disposed: nothing — no state, no re-read, no version request", async () => {
@@ -1563,6 +1575,7 @@ describe("the table of refusals of a write (§7.3)", () => {
     await settle()
     expect(h.port.runs).toBe(0)
     expect(h.onStaleClient).toHaveBeenCalledTimes(1)
-    expect(shown(rowOf(card)).state).toBe("failed")
+    expect(shown(rowOf(card)).state).toBe("stale")
+    expect(shown(rowOf(card)).mutation!.state).toBe("failed")
   })
 })

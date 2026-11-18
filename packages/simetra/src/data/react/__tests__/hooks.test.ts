@@ -445,13 +445,14 @@ describe("isStale", () => {
     })
     expect(list.last().isStale).toBe(true)
     expect(card.last().isStale).toBe(true)
+    // Позначка липка (§10): збіг kernelHash її не знімає до перезавантаження.
     kernel = OBJECTS[0]!.kernelHash
     await act(async () => {
       core.requestVersion()
       await settle()
     })
-    expect(list.last().isStale).toBe(false)
-    expect(card.last().isStale).toBe(false)
+    expect(list.last().isStale).toBe(true)
+    expect(card.last().isStale).toBe(true)
   })
 
   it("a version-epoch switch makes rows stale but not the object", async () => {
@@ -646,9 +647,8 @@ describe("useRow", () => {
     })
     const shown = card.last()
     expect(shown.isStale).toBe(true)
-    expect(shown.row).toMatchObject({ state: "synced", staleFields: [] })
-    expect(shown.row).not.toHaveProperty("stale")
-    expect(shown.row).not.toHaveProperty("hidden")
+    // Несумісний клієнт ховає рядок (Р7): UI не читає його значень.
+    expect(shown.row).toMatchObject({ hidden: true })
     expect(shown.needsRefresh).toBe(false)
     expect(shown.editable).toBe(false)
   })

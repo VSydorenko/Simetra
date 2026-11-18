@@ -13,22 +13,30 @@ import {
   type ReadRows,
 } from "simetra/model"
 import { DataError } from "../../errors"
-import { coreInternals, type CoreSession, type DefectFlag } from "../core"
+import {
+  coreInternals,
+  createCore,
+  inspectCore,
+  type CoreSession,
+  type DefectFlag,
+} from "../core"
 import { compareRows, fieldInfoOf, filterCollator } from "../filter"
 import { visibleRow } from "../object-store"
-import type { ServerPort } from "../source"
+import { createCoreSource, createReadLimiter, type ServerPort } from "../source"
 import type { Subset } from "../subsets"
-import type { FakeRead } from "../testing/fake-source"
-import type {
-  CloseReason,
-  Key,
-  MutationResult,
-  MutationState,
-  ObjectName,
-  RowView,
-  ViewHandle,
-  ViewSnapshot,
-  ViewSpec,
+import type { FakeRead, FakeReadLog } from "../testing/fake-source"
+import {
+  DEFAULT_CORE_LIMITS,
+  type CloseReason,
+  type CoreSnapshot,
+  type Key,
+  type MutationResult,
+  type MutationState,
+  type ObjectName,
+  type RowView,
+  type ViewHandle,
+  type ViewSnapshot,
+  type ViewSpec,
 } from "../types"
 import { ORG, S, TASK, key, keysOf, setup } from "./core-support"
 
@@ -176,17 +184,21 @@ type Step =
     }
   | { t: "removeMut"; k: number; cancel: boolean }
   | { t: "closeInFlight" }
+  | { t: "rehydrate" }
+  | { t: "stale"; org: boolean }
+  | { t: "version" }
+  | { t: "return"; minAge: number }
 
 const view = fc.nat(SPECS.length - 1)
 const k = fc.nat(KEYS.length - 1)
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 
 /**
- * Ваги (бриф, крок 1): сума 293 (перемикання епохи — 6; `hide` над
+ * Ваги (бриф, крок 1): сума 242 (повернення — 8; перегідратація — 6; перемикання епохи — 6; `hide` над
  * ТЧ-підмножиною — 6; сторінка вікна — 8; запис — 50: `update` 14, відповідь
  * `run` 20, дії мутації 8, чужа правка, `purge` чи `hide` ключа з мутацією 6,
  * `dispose()` з мутацією в дорозі 2); `purge` (16 + 14), відсутній рядок і
- * застаріла репліка — по 30, тобто по ~11 % кроків (частина кроків
+ * застаріла репліка — по 30, тобто по ~12 % кроків (частина кроків
  * `answer` порожня, бо в польоті нічого нема, тож серед дійових кроків
  * частка вища, близько 15 %). Самотест тримає насіння, яке знаходить
  * дефекти за кількістю прогонів: зміна генератора (ваги, профілі, масиви
@@ -393,6 +405,22 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
     }),
   },
   { weight: 2, arbitrary: fc.record({ t: one("closeInFlight") }) },
+  // Перегідратація (план B3-6a, задача 1): знімок ядра, нове ядро над тим
+  // самим сервером, `hydrate`, `endHydration`, звірка.
+  { weight: 6, arbitrary: fc.record({ t: one("rehydrate") }) },
+  // Несумісний об'єкт (План B3-6a, задача 2): липка позначка `stale-client`
+  // й відповіді `version` без розбіжності, що її не знімають.
+  { weight: 1, arbitrary: fc.record({ t: one("stale"), org: fc.boolean() }) },
+  { weight: 2, arbitrary: fc.record({ t: one("version") }) },
+  // Повернення (план B3-6a, задача 3): частина `version` і перечитування
+  // видимих виглядів з межею свіжості; межі — менша й більша за кроки `time`.
+  {
+    weight: 8,
+    arbitrary: fc.record({
+      t: one("return"),
+      minAge: fc.constantFrom(RELEASE_MS, 5_000),
+    }),
+  },
   {
     weight: 1,
     arbitrary: fc.record({
@@ -515,7 +543,15 @@ async function runModel(
   let sending: ModelAttempt | undefined
   // Порушення, які модель бачить поза кроком: у слухачі чи в `settled`.
   const asyncViolations: string[] = []
+  // Годинник ядра — свій: фальшиві таймери vitest його не рухають, тож крок
+  // `time` зсуває його разом із таймерами (інакше відмітки свіжості не старіють).
+  let clock = 0
+  const advance = (ms: number) => {
+    clock += ms
+    vi.advanceTimersByTime(ms)
+  }
   const { fake, core, log, inspect } = setup({
+    now: () => clock,
     limits: LIMITS,
     mode: "manual",
     server: (f) => ({
@@ -615,6 +651,10 @@ async function runModel(
       ? id(object, k)
       : `${id(object, k)}\u0000${String(e.versionEpoch)}`
   }
+  // Об'єкти з липкою позначкою `stale-client` (§10) і довжина журналу
+  // запитів у мить позначки: відтоді запитів об'єкта не буде, а його рядки
+  // нічого не показують до кінця прогону.
+  const staled = new Map<ObjectName, number>()
   let closed:
     { frames: number; sent: number; snapshot: ViewSnapshot } | undefined
 
@@ -718,6 +758,11 @@ async function runModel(
   ) => {
     const at = `${where} ${object}/${row.key}`
     if (row.state === "removed") return
+    if (staled.has(object)) {
+      if (Object.keys(row.values).length > 0)
+        fail(label, `${at}: values of a stale-client object`)
+      return
+    }
     const max = maxVersion.get(versionKey(object, row.key)) ?? 0
     const fields = Object.keys(row.values)
     // Старі значення ніколи не показано мовчки — два інваріанти (рішення
@@ -779,6 +824,18 @@ async function runModel(
   const checkSnapshot = (label: string, v: number, snap: ViewSnapshot) => {
     const spec = SPECS[v]!
     const where = `view ${v}`
+    // `loading` без даних — спільний знімок без рядків: ознаку він не несе,
+    // а перше ж відмовлене читання дає `error` з `isStale`.
+    if (
+      staled.has(spec.object) &&
+      snap.status !== "purged" &&
+      snap.status !== "loading"
+    ) {
+      if (snap.isStale !== true)
+        fail(label, `${where}: a stale-client object, the view is not isStale`)
+      if ((snap.section?.lines.length ?? 0) > 0)
+        fail(label, `${where}: lines of a stale-client object`)
+    }
     for (const row of snap.rows) {
       checkRow(label, spec.object, row, where)
       if (row.state === "removed" || row.refs === undefined) continue
@@ -868,6 +925,13 @@ async function runModel(
   const check = (label: string, stepStart: number) => {
     if (errors.length > 0)
       fail(label, `unexpected rejection ${String(errors[0])}`)
+    for (const [object, mark] of staled) {
+      for (const sent of fake.log.slice(mark)) {
+        const target = sent.query?.object
+        if (target !== undefined && `${target.kind}.${target.name}` === object)
+          fail(label, `${object}: a read went out after the stale-client mark`)
+      }
+    }
     if (closed !== undefined) {
       // Після `close` — жодного сповіщення, запиту й рядка; кожен хендл
       // (і новий) — та сама посилка `purged`.
@@ -1058,6 +1122,8 @@ async function runModel(
     // Сесія після межі відкинутих відповідей не читає (Р12); власник
     // `removed` рядків не показує, і читання ТЧ їх не поверне.
     if (inspect.versionEpochs().unavailable) return
+    // Несумісний об'єкт не перечитується взагалі (§10).
+    if (staled.has(TASK)) return
     const header = objectOf(TASK).rows.get(spec.owner)
     if (header?.removed !== undefined) return
     // Шапку сховано горизонтом, а не `hide` (`hiddenAt` немає): позначку
@@ -1506,6 +1572,262 @@ async function runModel(
     core.commit(fn, core.token())
   }
 
+  /**
+   * Перегідратація (план B3-6a, задача 1): знімок ядра йде в нове ядро над
+   * тим самим сервером. Перевіряємо безпеку знімка (жодних значень `hidden`
+   * чи `removed` ключа, жодного рядка без власника), що вигляди нового ядра
+   * після `hydrate` показують те саме, що старого, і що після звірки
+   * (`endHydration`) вони дорівнюють серверним. Читання нового ядра модель
+   * відповідає сама й прибирає з журналу сервера: вони не належать основному
+   * ядру, і його бар'єри не мають їх бачити.
+   */
+  async function rehydrate(label: string) {
+    const raw = core.dehydrate()
+    for (const [name, group] of Object.entries(raw.objects)) {
+      const o = objectOf(name)
+      const keyName = o.entry.keyName
+      for (const slot of group.slots) {
+        const slotKey = "state" in slot ? slot.key : (slot[0][keyName] as Key)
+        const e = o.rows.get(slotKey)
+        if (e === undefined)
+          fail(label, `snapshot: ${name}/${slotKey} has no entry in the store`)
+        else if (inspect.owners(name, slotKey) === 0)
+          fail(label, `snapshot: ${name}/${slotKey} has no owner`)
+        const hides =
+          e!.removed !== undefined ||
+          e!.stale.hidden !== undefined ||
+          e!.row === undefined
+        if (!("state" in slot) && hides)
+          fail(label, `snapshot: values of a hidden or removed ${slotKey}`)
+        if ("state" in slot && Object.hasOwn(slot, "values"))
+          fail(label, `snapshot: a ${slot.state} slot carries values`)
+      }
+    }
+    for (const [name, list] of Object.entries(raw.sections)) {
+      for (const entry of list) {
+        const header = objectOf(name).rows.get(entry.owner)
+        if (
+          header !== undefined &&
+          (header.removed !== undefined || header.stale.hidden !== undefined)
+        )
+          fail(label, `snapshot: lines of a hidden owner ${entry.owner}`)
+      }
+    }
+    // Знімок проходить крізь JSON, як крізь HTML.
+    const snapshot = JSON.parse(JSON.stringify(raw)) as CoreSnapshot
+
+    const mine: FakeReadLog[] = []
+    const adapter = {
+      capabilities: fake.adapter.capabilities,
+      read: (items: Parameters<typeof fake.adapter.read>[0]) => {
+        const from = fake.log.length
+        const from2 = fake.pending.length
+        const result = fake.adapter.read(items)
+        mine.push(...fake.log.slice(from))
+        for (const read of (fake.pending as FakeRead[]).splice(from2))
+          queueMicrotask(() => read.answer())
+        return result
+      },
+    }
+    const next = createCore({
+      subject: "u1",
+      source: createCoreSource(
+        () => adapter,
+        fake.index,
+        createReadLimiter(DEFAULT_CORE_LIMITS.readParallel),
+        {
+          run: () =>
+            Promise.reject(new Error("a hydrated core writes nothing")),
+          version: () => fake.server.version(),
+        }
+      ),
+      index: fake.index,
+      limits: LIMITS,
+      log: (entry) => {
+        if (entry.kind === "listener-failed") errors.push(entry.error)
+      },
+    })
+    const nextInspect = inspectCore(next)
+    // Дефекти основного ядра нового не стосуються: їх ловить своя перевірка
+    // (`CAUGHT_BY`), а не перегідратація; нове ядро ламає лише власний.
+    if (defects.includes("hydrate-without-revalidate"))
+      nextInspect.defects.add("hydrate-without-revalidate")
+    if (defects.includes("late-hydrated-not-reread"))
+      nextInspect.defects.add("late-hydrated-not-reread")
+    if (defects.includes("hydrated-row-not-reread"))
+      nextInspect.defects.add("hydrated-row-not-reread")
+    try {
+      next.hydrate(snapshot)
+      const violations = nextInspect.violations()
+      if (violations.length > 0)
+        fail(label, `after hydrate: ${violations.join("; ")}`)
+      const held = [...coreInternals(next).registry.subsets()]
+      for (const sub of held) {
+        const v = SPECS.findIndex(
+          (spec) => JSON.stringify(spec) === JSON.stringify(sub.form.spec)
+        )
+        if (v < 0) fail(label, "after hydrate: a view the model never held")
+        // Новий рантайм не несе позначки старого: вигляд несумісного об'єкта
+        // у ньому не `isStale`; безпеку його знімка перевірено вище.
+        if (staled.has(SPECS[v]!.object)) continue
+        sameViews(label, v, handles[v]!.getSnapshot(), next)
+      }
+      // Звірка: видимі вигляди — підписані; кожен другий підписується вже
+      // після `endHydration` (умовне монтування, §6.6) і мусить читатися сам.
+      const subscribeHeld = (late: boolean, skip: readonly unknown[] = []) =>
+        held.flatMap((sub, i) => {
+          if ((i % 2 === 1) !== late || skip.includes(sub)) return []
+          const v = SPECS.findIndex(
+            (spec) => JSON.stringify(spec) === JSON.stringify(sub.form.spec)
+          )
+          return [next.view(SPECS[v]!).subscribe(() => {})]
+        })
+      const unsubscribe = subscribeHeld(false)
+      next.endHydration()
+      // Картка над рядком, який тримає лише непідписаний гідрований список
+      // (довіра — факт рядка, §6.6): список лишається без підписки, тож рядок
+      // читає тільки сама картка.
+      const donor = held.find(
+        (sub, i) =>
+          i % 2 === 1 &&
+          sub.form.spec.kind !== "card" &&
+          sub.form.spec.kind !== "section" &&
+          !staled.has(sub.form.object.name) &&
+          sub.layout.length > 0 &&
+          !held.some(
+            (other) =>
+              other.form.spec.kind === "card" &&
+              other.form.spec.object === sub.form.object.name &&
+              other.form.spec.key === sub.layout[0]
+          )
+      )
+      const donorCard: ViewSpec | undefined =
+        donor === undefined
+          ? undefined
+          : {
+              kind: "card",
+              object: donor.form.object.name,
+              key: donor.layout[0]!,
+            }
+      if (donorCard !== undefined)
+        unsubscribe.push(next.view(donorCard).subscribe(() => {}))
+      unsubscribe.push(
+        ...subscribeHeld(true, donor === undefined ? [] : [donor])
+      )
+      for (let round = 0; round < 20; round++) await flush()
+      const after = nextInspect.violations()
+      if (after.length > 0) fail(label, `after reconcile: ${after.join("; ")}`)
+      for (const sub of held) {
+        if (sub === donor) continue
+        const v = SPECS.findIndex(
+          (spec) => JSON.stringify(spec) === JSON.stringify(sub.form.spec)
+        )
+        if (staled.has(SPECS[v]!.object)) continue
+        const snap = next.view(SPECS[v]!).getSnapshot()
+        if (snap.status === "error" || snap.status === "purged") continue
+        for (const row of snap.rows) {
+          if (row.state === "removed") continue
+          const at = `after hydrate: view ${v} ${row.key}`
+          if (row.hidden === true) fail(label, `${at} still hidden`)
+          const server = fake.row(sub.form.object.name, row.key)
+          if (server === undefined || server.version !== row.version)
+            fail(label, `${at}: version ${row.version}, server differs`)
+          for (const field of Object.keys(row.values)) {
+            if (field === "notes" && row.staleFields.includes(field)) continue
+            if (!Object.is(row.values[field], server!.values[field]))
+              fail(label, `${at}.${field} differs from the server`)
+          }
+        }
+      }
+      // Дефект `late-hydrated-not-reread` ловить перевірка вище; ця — лише свій.
+      if (
+        donorCard !== undefined &&
+        !defects.includes("late-hydrated-not-reread")
+      ) {
+        const snap = next.view(donorCard).getSnapshot()
+        const row = snap.rows[0]
+        if (row !== undefined && row.state !== "removed") {
+          const at = `after hydrate: card over a hydration-only row ${row.key}`
+          if (row.hidden === true) fail(label, `${at} still hidden`)
+          const server = fake.row(donorCard.object, row.key)
+          if (server === undefined || server.version !== row.version)
+            fail(label, `${at}: version ${row.version}, server differs`)
+        }
+      }
+      for (const stop of unsubscribe) stop()
+    } finally {
+      next.close("disposed")
+      for (const read of mine) {
+        const at = fake.log.indexOf(read)
+        if (at >= 0) (fake.log as FakeReadLog[]).splice(at, 1)
+      }
+    }
+  }
+
+  /** The view of the old core and of the new one show the same (spec §6.6). */
+  function sameViews(
+    label: string,
+    v: number,
+    a: ViewSnapshot,
+    nextCore: CoreSession
+  ) {
+    const where = `after hydrate: view ${v}`
+    const to = nextCore.view(SPECS[v]!).getSnapshot()
+    // Слот `hidden` лишає місце, а не факти рядка: його `version` і `stale`
+    // знімок не несе (гідрований рядок має умовну версію 0), решта
+    // порівнюється повністю.
+    const shape = (row: RowView): unknown =>
+      row.state === "removed"
+        ? { key: row.key, state: "removed" }
+        : {
+            key: row.key,
+            version: row.hidden === true ? undefined : row.version,
+            values: row.values,
+            staleFields: row.staleFields,
+            hidden: row.hidden,
+            stale: row.hidden === true ? undefined : row.stale,
+            state: row.state,
+            refs:
+              row.refs === undefined
+                ? undefined
+                : Object.fromEntries(
+                    Object.entries(row.refs).map(([name, ref]) => [
+                      name,
+                      ref === null ? null : shape(ref),
+                    ])
+                  ),
+          }
+    const view = (snap: ViewSnapshot) => ({
+      status: snap.status,
+      isStale: snap.isStale,
+      strategy: snap.strategy,
+      truncated: snap.truncated,
+      atEnd: snap.atEnd,
+      atStart: snap.atStart,
+      chain: snap.chain,
+      target: snap.target,
+      // Журнал порожній (`rehydrate` інакше лише перевіряє відмову), тож
+      // стан рядка однаковий на обох боках.
+      rows: snap.rows.map(shape),
+      section:
+        snap.section === undefined
+          ? undefined
+          : {
+              ownerVersion: snap.section.ownerVersion,
+              complete: snap.section.complete,
+              lines: snap.section.lines,
+              ownerState: snap.section.ownerState,
+            },
+    })
+    const was = view(a)
+    const now = view(to)
+    for (const field of Object.keys(was) as (keyof typeof was)[]) {
+      const x = JSON.stringify(was[field])
+      const y = JSON.stringify(now[field])
+      if (x !== y) fail(label, `${where}: ${field} ${x} → ${y}`)
+    }
+  }
+
   for (const [n, raw] of plan.entries()) {
     const s = onMutation(raw)
     const label = `step ${n} ${JSON.stringify(s)}`
@@ -1516,6 +1838,12 @@ async function runModel(
     preloadedSection = false
     let userViews = new Set<number>()
     let purgeStep = false
+    // Об'єкти, яким крок «повернення» не мав слати читань.
+    const quiet = new Set<ObjectName>()
+    // Вигляди з молодою відміткою й їхні лічильники перечитувань на старті.
+    const youngViews = new Map<{ rereads: number }, number>()
+    // Вигляди зі старою (чи без) відміткою: звірка мусить їх перечитати.
+    const agedViews = new Map<{ rereads: number }, number>()
     let purgedScope: { object: ObjectName; scope: string } | undefined
     // Ключі, які `purge` кроку прибрав зі сховища (або назвав явно).
     let purgedKeys: { object: ObjectName; keys: Key[] } | undefined
@@ -1527,7 +1855,7 @@ async function runModel(
       case "unsub":
         subs[s.v]?.()
         subs[s.v] = undefined
-        if (s.release) vi.advanceTimersByTime(RELEASE_MS)
+        if (s.release) advance(RELEASE_MS)
         break
       case "churn": {
         const order = s.scroll
@@ -1555,7 +1883,7 @@ async function runModel(
           // `subscribe` записав відписку: `at` не звужений перевіркою вище.
           subs.at(v)?.()
           subs[v] = undefined
-          vi.advanceTimersByTime(RELEASE_MS)
+          advance(RELEASE_MS)
         }
         break
       }
@@ -1759,6 +2087,7 @@ async function runModel(
         // `preload`, `commit` зі слухачем).
         heldInFlight = false
         const object = s.org ? ORG : TASK
+        if (staled.has(object)) break
         const target = s.org ? ORG_KEYS[s.k % 2]! : KEYS[s.k]!
         commit((w) => w.hide(object, [target]))
         if (closed !== undefined) break
@@ -1766,7 +2095,9 @@ async function runModel(
         break
       }
       case "hideSection": {
-        if (closed !== undefined) break
+        // Несумісний об'єкт не перечитується: `hide` над ним вже нічого не
+        // змінює, а очікування перечитування було б хибним.
+        if (closed !== undefined || staled.has(TASK)) break
         const section = SPECS[4]!
         heldInFlight = false
         userViews = new Set([4])
@@ -1848,13 +2179,16 @@ async function runModel(
         break
       }
       case "time":
-        vi.advanceTimersByTime(s.ms)
+        advance(s.ms)
         break
       case "epoch":
         fake.epoch = EPOCHS[s.which]!
         if (fake.epoch !== null) primaryEpoch = fake.epoch
         break
       case "update": {
+        // Запис у несумісний об'єкт відмовляється без транспорту (§10):
+        // модель `run` тут нічого не чекає, а відмову перевіряє `ssr.test.ts`.
+        if (staled.has(TASK)) break
         const k = KEYS[s.k]!
         const stored = objectOf(TASK).rows.get(k)
         const server = fake.row(TASK, k)
@@ -1953,7 +2287,7 @@ async function runModel(
         const shown = rowsOf(k)[0]?.mutation
         if (entry === undefined || shown?.id !== entry.attempt.id) break
         if (s.act === "retry") {
-          if (shown.retry === undefined) break
+          if (shown.retry === undefined || staled.has(TASK)) break
           const attempt = begin(k)
           const next = shown.retry()
           if (next === undefined) {
@@ -1971,6 +2305,68 @@ async function runModel(
         dropEntry(entry)
         break
       }
+      case "stale": {
+        if (closed !== undefined) break
+        const object = s.org ? ORG : TASK
+        if (!staled.has(object)) staled.set(object, fake.log.length)
+        core.staleClient(object)
+        break
+      }
+      case "version":
+        if (closed === undefined) core.requestVersion()
+        break
+      case "return": {
+        if (closed !== undefined) break
+        // Вигляд із відміткою молодшою за межу читання від кроку не отримує
+        // (лічильник перечитувань вигляду); об'єкт «тихий», коли таких усі
+        // видимі завантажені вигляди, що читають його (власним читанням чи
+        // ціллю `include`): тоді жодного читання не мало піти й до джерела.
+        const at = clock
+        const readers = [...coreInternals(core).registry.subsets()].filter(
+          (sub) =>
+            sub.alive &&
+            !sub.purged &&
+            sub.loaded &&
+            (sub.visible ?? sub.listeners.size > 0) &&
+            (sub.form.spec.kind !== "section" || sub.listeners.size > 0)
+        )
+        const young = (sub: (typeof readers)[number]) =>
+          sub.refreshedAt !== undefined && at - sub.refreshedAt < s.minAge
+        for (const sub of readers)
+          if (young(sub)) youngViews.set(sub, sub.rereads)
+          else if (!staled.has(sub.form.object.name))
+            agedViews.set(sub, sub.rereads)
+        for (const object of [TASK, ORG]) {
+          const of = readers.filter(
+            (sub) =>
+              sub.form.object.name === object ||
+              sub.form.include.some((step) => step.target === object)
+          )
+          if (of.every(young)) quiet.add(object)
+        }
+        core.requestVersion()
+        for (const object of [TASK, ORG])
+          core
+            .revalidate(object, { visibleOnly: true, minAgeMs: s.minAge })
+            .catch((error: unknown) => errors.push(error))
+        break
+      }
+      case "rehydrate":
+        // Журнал мутацій у знімок не йде: `dehydrate` після запису — помилка
+        // host-а (`TypeError`), тож крок виконується лише з порожнім журналом.
+        if (closed !== undefined) break
+        if (inspect.serviceSizes().journal > 0) {
+          let refused = false
+          try {
+            core.dehydrate()
+          } catch (error) {
+            refused = error instanceof TypeError
+          }
+          if (!refused) fail(label, "dehydrate with a non-empty journal")
+          break
+        }
+        await rehydrate(label)
+        break
       case "close":
         if (closed !== undefined) break
         // Кожна неосіла мутація осідає закриттям, не успіхом.
@@ -1991,6 +2387,21 @@ async function runModel(
         break
     }
     await flush()
+    for (const [sub, rereads] of youngViews) {
+      if (sub.rereads !== rereads)
+        fail(label, "a view younger than the limit was re-read")
+    }
+    for (const [sub, rereads] of agedViews) {
+      if (sub.rereads === rereads)
+        fail(label, "a view older than the limit was not re-read")
+    }
+    for (const object of quiet) {
+      for (const sent of fake.log.slice(stepStart)) {
+        const target = sent.query?.object
+        if (target !== undefined && `${target.kind}.${target.name}` === object)
+          fail(label, `${object}: a view younger than the limit got a read`)
+      }
+    }
     if (purgedScope !== undefined) {
       const o = objectOf(purgedScope.object)
       for (const k of o.rows.keys()) {
@@ -2055,7 +2466,7 @@ async function runModel(
     // епохи сесія не застосовує ніколи.
     const epochs = inspect.versionEpochs()
     fake.epoch = epochs.current
-    vi.advanceTimersByTime(10_000)
+    advance(10_000)
     await flush()
     fake.setVisibleScopes(undefined)
     visibility = undefined
@@ -2093,6 +2504,9 @@ async function runModel(
       const snap = handles[v]!.getSnapshot()
       const where = `converge view ${v}`
       if (snap.status === "purged") return
+      // Вигляд несумісного об'єкта закритий; вигляд, що вмикає його ціллю
+      // `include`, живий: ціль нерозв'язана, а решта збігається з сервером.
+      if (staled.has(spec.object)) return
       // Після межі відкинутих відповідей поспіль сесія не читає: вихід
       // — лише нова сесія.
       if (epochs.unavailable) {
@@ -2196,6 +2610,7 @@ async function runModel(
 
   function sameAsServer(where: string, object: ObjectName, row: RowView) {
     const at = `${where} ${object}/${row.key}`
+    if (staled.has(object)) return
     const server = fake.row(object, row.key)
     if (row.state === "removed") {
       if (server !== undefined)
@@ -2215,7 +2630,7 @@ async function runModel(
     }
     for (const [field, ref] of Object.entries(row.refs ?? {})) {
       if (ref !== null) sameAsServer(`${where} ref`, ORG, ref)
-      else {
+      else if (!staled.has(ORG)) {
         // `null` — лише для цілі, якої сервер не показує; наявна ціль
         // не може лишитись порожньою (гонка власності `include`).
         const target = row.values[field]
@@ -2289,6 +2704,14 @@ const DEFECTS: readonly DefectFlag[] = [
   "settle-separate-commit",
   "write-back-lifts-hidden",
   "answer-after-cancel",
+  "hidden-values-in-snapshot",
+  "hydrate-without-revalidate",
+  "stale-mark-lifts",
+  "min-age-ignored",
+  "min-age-ignored-sections",
+  "min-age-all-young",
+  "late-hydrated-not-reread",
+  "hydrated-row-not-reread",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -2314,6 +2737,19 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "settle-separate-commit": /the run row shown with its mutation pending/,
   "write-back-lifts-hidden": /after hide without a later read/,
   "answer-after-cancel": /a cancelled attempt settled with a row/,
+  // Перегідратація (план B3-6a, задача 1): знімок і звірка.
+  "hidden-values-in-snapshot": /snapshot: a hidden slot carries values/,
+  "hydrate-without-revalidate": /after hydrate: view \d+ .*(server|hidden)/,
+  // Липка позначка (задача 2): збіг `kernelHash` її не знімає.
+  "stale-mark-lifts": /not isStale/,
+  // Повернення (задача 3): межа свіжості виглядів.
+  "min-age-ignored": /a view younger than the limit (got a read|was re-read)/,
+  "min-age-ignored-sections": /a view younger than the limit was re-read/,
+  "min-age-all-young": /a view older than the limit was not re-read/,
+  // Пізня підписка гідрованого вигляду (§6.6): рядок знімка без читання.
+  "late-hydrated-not-reread": /after hydrate: view \d+ .*(server|hidden)/,
+  // Довіра — факт рядка: картка над рядком непідписаного гідрованого списку.
+  "hydrated-row-not-reread": /after hydrate: card over a hydration-only row/,
 }
 
 describe("core model self-check", () => {

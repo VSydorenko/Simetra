@@ -124,6 +124,9 @@ export type RowView =
       /**
        * The values are hidden by a mark (the eviction horizon or `Writer.hide`)
        * until a read that started after it; a form shows no draft meanwhile.
+       * A row hydrated from an SSR snapshot has no facts of the row: its
+       * `version` is the sentinel 0 and it carries no `stale`; the UI must not
+       * read either while `hidden` is set.
        */
       readonly hidden?: true
       /**
@@ -154,7 +157,8 @@ export interface ViewSnapshot {
   /**
    * The object of the view is marked stale (P4-B spec §10): the server
    * contract of its kernel differs from this build, no write to it passes.
-   * Present only while true; not to be confused with a `stale` row.
+   * Sticky until the page reloads. Present only while true; not to be
+   * confused with a `stale` row.
    */
   readonly isStale?: boolean
   readonly section?: {
@@ -206,6 +210,125 @@ export interface ViewHandle {
   setVisibleRange(range: { first: number; last: number }): void
 }
 
+/**
+ * A row of a core snapshot (P4-B spec §6.6). A row with values is a tuple
+ * `[values, extra?]`: its key and version are the key and version fields of
+ * `values`, so nothing is repeated. A `removed` or `hidden` slot carries no
+ * values and no facts of the row (a slot keeps the place, nothing more):
+ * the HTML and the first client frame show the same composition without a
+ * value leaving the server.
+ */
+export type RowSlot =
+  | readonly [values: Values]
+  | readonly [values: Values, extra: RowSlotExtra]
+  | {
+      readonly key: Key
+      readonly state: "removed"
+      readonly scope: string | null
+    }
+  | {
+      readonly key: Key
+      readonly state: "hidden"
+      readonly scope: string | null
+    }
+
+/** What a row slot adds to its values; absent when it is all the default. */
+export interface RowSlotExtra {
+  /** The version epoch of the row, when it is not the object's `epoch`. */
+  readonly epoch?: string | null
+  /** The row version each lazy field was read with. */
+  readonly lazy?: Readonly<Record<string, number>>
+  /** The version epoch of a lazy field, when it is not the row's. */
+  readonly lazyIn?: Readonly<Record<string, string | null>>
+  /** The row carries a stale mark (the epochs of the marks stay on the server). */
+  readonly stale?: true
+}
+
+/** The rows of one object in a core snapshot. */
+export interface ObjectSnapshot {
+  /** The version epoch most rows are in; a slot names its own when it differs. */
+  readonly epoch: string | null
+  readonly slots: readonly RowSlot[]
+}
+
+/** One tabular section of one owner in a core snapshot. */
+export interface SectionSnapshot {
+  readonly owner: Key
+  readonly section: string
+  /** The values of the lines, in order; a line key is the section's key field. */
+  readonly lines: readonly Values[]
+  readonly ownerVersion: number
+  readonly epoch: string | null
+  readonly complete: boolean
+  /** The scope of the owner when the lines were read; `"unknown"` — no header then. */
+  readonly scope: string | null
+  /** A `null` answer after an epoch switch was not ordered with the lines. */
+  readonly stale?: true
+}
+
+/** The cursor of a window page edge: the sort columns and the key of a row. */
+export interface CursorSnapshot {
+  readonly values: Values
+  readonly key: Key
+}
+
+/** The lower bound a window page was read with (P4-B spec §6.4). */
+export type LowerSnapshot =
+  | { readonly kind: "start" }
+  | { readonly kind: "after" | "from"; readonly cursor: CursorSnapshot }
+
+/** The pages of a window in a core snapshot: counts of rows, not keys. */
+export interface WindowSnapshot {
+  readonly pages: readonly {
+    readonly size: number
+    readonly lower: LowerSnapshot
+    readonly generation: number
+  }[]
+  readonly chain: number
+  readonly target: "start" | "end" | "keep"
+  readonly atStart: boolean
+  readonly generation: number
+  readonly frontier: {
+    readonly after?: CursorSnapshot
+    readonly before?: CursorSnapshot
+  }
+}
+
+/**
+ * A ready held view in a core snapshot. `layout` and `unshown` are runs
+ * `[start, length, …]` of indices into `objects[spec.object].slots`: the
+ * rows of the composition in list order, and the rows the view owns without
+ * showing (a `full` filter drops them locally). The `include` targets are not
+ * listed: they follow from the values of the rows.
+ */
+export interface SubsetSnapshot {
+  readonly spec: ViewSpec
+  readonly layout?: readonly number[]
+  readonly unshown?: readonly number[]
+  readonly window?: WindowSnapshot
+  /** `full` and `window` forms: the list reached the end of the order. */
+  readonly atEnd?: boolean
+  readonly truncated?: true
+  /**
+   * Section views only: the state of the owner header when the store holds
+   * it but no row of the snapshot carries it (the header belongs to a view
+   * that is not ready), so `ownerState` is the same on both sides.
+   */
+  readonly ownerState?: RowState
+}
+
+/**
+ * The state of a core a client takes over before its first render (P4-B spec
+ * §6.6): only what ready held views show — never the journal of mutations,
+ * the listeners, the rows nobody owns or the epochs of the session.
+ */
+export interface CoreSnapshot {
+  readonly format: 1
+  readonly objects: Readonly<Record<ObjectName, ObjectSnapshot>>
+  readonly sections: Readonly<Record<ObjectName, readonly SectionSnapshot[]>>
+  readonly subsets: readonly SubsetSnapshot[]
+}
+
 /** A generation token: async branches write only while it is valid. */
 export interface GenerationToken {
   readonly valid: boolean
@@ -234,6 +357,12 @@ export interface CoreLimits {
    * restart switches every client at once. The interval tick itself is B5.
    */
   readonly revalidateIntervalMs: number
+  /**
+   * The least age of a view's freshness mark for `resume()` to re-read it
+   * (P4-B spec §6.3 «Частота»). The default is 15 s, but not above
+   * `revalidateIntervalMs`; an explicit value above it is a `TypeError`.
+   */
+  readonly resumeMinIntervalMs: number
 }
 
 export const DEFAULT_CORE_LIMITS: CoreLimits = {
@@ -249,6 +378,7 @@ export const DEFAULT_CORE_LIMITS: CoreLimits = {
   releaseDelayMs: 1_000,
   preloadTtlMs: 5_000,
   revalidateIntervalMs: 60_000,
+  resumeMinIntervalMs: 15_000,
 }
 
 /** Diagnostic events of the core. */
