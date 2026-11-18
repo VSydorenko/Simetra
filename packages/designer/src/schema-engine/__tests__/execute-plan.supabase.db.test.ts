@@ -158,18 +158,18 @@ describe.concurrent("executePlan", () => {
     await inTarget(setup, async (url) => {
       await query(
         asSuperuser(url),
-        `revoke all on schema realtime from public;
+        `revoke all on schema storage from public;
          grant usage on schema auth to ${LOCKER}`
       )
       const asLocker = loginAs(url, LOCKER, LOCKER_PASSWORD)
       const [usage] = await query<{ usable: boolean }>(
         asLocker,
-        "select pg_catalog.has_schema_privilege('realtime', 'USAGE') as usable"
+        "select pg_catalog.has_schema_privilege('storage', 'USAGE') as usable"
       )
       expect(usage!.usable).toBe(false)
       // `to_regclass` тут кидає 42501 — саме це зірвало б транзакцію плану
       await expect(
-        query(asLocker, "select to_regclass('realtime.messages')")
+        query(asLocker, "select to_regclass('storage.objects')")
       ).rejects.toMatchObject({ code: "42501" })
       const reader = createApplyDatabase({ readOnly: true })
       const { sets, rights } = await reader.transaction(
@@ -190,7 +190,7 @@ describe.concurrent("executePlan", () => {
       )
       const tables = sets.flatMap((set) => set.tables)
       expect(tables).toContainEqual({ schema: "auth", name: "users" })
-      expect(tables.filter((t) => t.schema === "realtime")).toEqual([])
+      expect(tables.filter((t) => t.schema === "storage")).toEqual([])
       expect(rights).toEqual(new Map([[tableKey("app", "t"), true]]))
     })
   })
