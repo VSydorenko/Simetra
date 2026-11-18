@@ -31,8 +31,10 @@ export { readProjectFile } from "./stages/files"
 export type { ResolvedReference } from "./stages/identity"
 export type { CreationNode } from "./sql/dependencies"
 export {
+  grantRoles,
   platformFunctionSignatures,
   readSqlUnits,
+  splitIdentity,
   withoutLocations,
   type SqlSource,
   type SqlUnit,

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { compile, type CompileResult } from "simetra/compiler"
+import {
+  compile,
+  grantRoles,
+  splitIdentity,
+  type CompileResult,
+} from "simetra/compiler"
 import {
   STOCK_FILE,
   acceptDebt,
@@ -454,6 +459,19 @@ describe("sql units", () => {
       "grant:revoke:table:public.t:anon:select",
       "grant:revoke:table:public.t:anon:update*",
     ])
+  })
+
+  // Ім'я ролі в ідентичності — за правилом `quoteIdent`: кома чи двокрапка
+  // в імені не ділять ролі, а `grantRoles` повертає імена каталогу
+  it("quotes role names in the grant identity", async () => {
+    const [identity] = await identities(
+      'GRANT SELECT ON public.t TO "a,b", "x:""y""", PUBLIC;'
+    )
+    expect(identity).toBe(
+      'grant:grant:table:public.t:"a,b","x:""y""",public:select'
+    )
+    const roles = splitIdentity(identity!, ":")[4]!
+    expect(grantRoles(roles)).toEqual(["a,b", 'x:"y"', "public"])
   })
 
   it("two ALTER PUBLICATION ADD TABLE for different tables are different units", async () => {

@@ -2,7 +2,9 @@ import type { GrantStmt, Node, RoleSpec } from "libpg-query"
 import {
   authorTableColumns,
   contentChangeCondition,
+  grantRoles,
   platformTriggers,
+  splitIdentity,
   statementTargets,
   uniqueDifferences,
   unitSubjectKeys,
@@ -953,11 +955,11 @@ function subjectGrant(name: string): {
   privileges: Privilege[]
   grantOption: boolean
 } {
-  const [action, roles = "", ...rest] = name.split(":")
+  const [action, roles = "", ...rest] = splitIdentity(name, ":")
   const atoms = [...rest.join(":").matchAll(/([^,()*]+)(?:\(([^)]*)\))?(\*)?/g)]
   return {
     action: action === "grant" ? "grant" : "revoke",
-    roles: roles.split(","),
+    roles: grantRoles(roles),
     privileges: atoms.map((m) => ({
       privilege: m[1]!,
       columns: m[2] === undefined ? [] : m[2].split(","),

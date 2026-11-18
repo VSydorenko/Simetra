@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
+  grantAtoms,
   loadSqlParser,
   platformInstall,
   platformInstallRecogniser,
@@ -92,4 +93,40 @@ describe("platformInstall", () => {
       )
     }
   )
+  // Ідентичність платформного гранту з опцією — вже інша ідентичність: шлях
+  // «та сама ідентичність» установки її не бере (#277)
+  it.each(DATABASE_PROVIDERS)(
+    "%s: a grant with the option under the identity of an install grant is not the platform's",
+    async (provider) => {
+      const install = await platformInstall(provider)
+      const platform = platformInstallRecogniser(install)
+      const grants = install.units.filter(
+        (u) => u.class === "grant" && u.identity.startsWith("grant:grant:")
+      )
+      expect(grants.length).toBeGreaterThan(0)
+      const optioned = grants.map((u) =>
+        unitOf(`${u.sql.trim().replace(/;$/, "")} WITH GRANT OPTION;`)
+      )
+      expect(
+        optioned.filter((u) => platform.unit(u)).map((u) => u.identity)
+      ).toEqual([])
+      expect(optioned.map((u) => u.identity.replaceAll("*", ""))).toEqual(
+        grants.map((u) => u.identity)
+      )
+    }
+  )
+
+  // Роль у лапках з комою чи двокрапкою не ділить ідентичність гранту
+  it("splits grant atoms by quoted role names", () => {
+    const unit = unitOf(
+      'GRANT SELECT ON public.t TO "a,b", "x:""y""" WITH GRANT OPTION;'
+    )
+    expect(unit.identity).toBe(
+      'grant:grant:table:public.t:"a,b","x:""y""":select*'
+    )
+    expect(grantAtoms(unit.identity)).toEqual([
+      'grant|table|public.t|"a,b"|select*',
+      'grant|table|public.t|"x:""y"""|select*',
+    ])
+  })
 })

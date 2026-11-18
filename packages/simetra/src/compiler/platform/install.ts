@@ -5,7 +5,7 @@ import {
 } from "simetra/model"
 import { compile } from "../compile"
 import { PROJECT_FILE } from "../stages/files"
-import { grantObjects, type SqlUnit } from "../sql/units"
+import { grantObjects, splitIdentity, type SqlUnit } from "../sql/units"
 
 /**
  * What the platform installs in every database of a provider: the snapshot
@@ -87,7 +87,10 @@ export interface PlatformInstallRecogniser {
  * option never matches an atom of the install, which gives none.
  */
 export function grantAtoms(identity: string): string[] {
-  const [, action, kind, objects, roles, privileges] = identity.split(":")
+  const [, action, kind, objects, roles, privileges] = splitIdentity(
+    identity,
+    ":"
+  )
   const privilegeAtoms = grantObjects(privileges ?? "").flatMap((p) => {
     const columns = /^([^(]+)\((.*)\)(\*?)$/.exec(p)
     return columns === null
@@ -95,11 +98,9 @@ export function grantAtoms(identity: string): string[] {
       : columns[2]!.split(",").map((c) => `${columns[1]}(${c})${columns[3]}`)
   })
   return grantObjects(objects ?? "").flatMap((object) =>
-    (roles ?? "")
-      .split(",")
-      .flatMap((role) =>
-        privilegeAtoms.map((p) => `${action}|${kind}|${object}|${role}|${p}`)
-      )
+    splitIdentity(roles ?? "", ",").flatMap((role) =>
+      privilegeAtoms.map((p) => `${action}|${kind}|${object}|${role}|${p}`)
+    )
   )
 }
 

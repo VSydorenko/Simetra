@@ -10,6 +10,7 @@ import type {
   TypeName,
 } from "libpg-query"
 import {
+  quoteIdent,
   type PhysicalSnapshot,
   type PhysicalTable,
   type SqlUnitClass,
@@ -1253,28 +1254,57 @@ export function grantParts(node: GrantStmt): {
  * типів моделі не резолвить, тож ціль гранту читають з імені.
  */
 export function grantObjects(name: string): string[] {
-  const names: string[] = []
+  return splitIdentity(name, ",")
+}
+
+/**
+ * Частини ідентичності між роздільниками `separator` поза лапками й дужками:
+ * роль чи ціль у лапках може містити і кому, і двокрапку.
+ */
+export function splitIdentity(text: string, separator: string): string[] {
+  const parts: string[] = []
   let depth = 0
   let quoted = false
   let current = ""
-  for (const char of name) {
+  for (const char of text) {
     if (char === '"') quoted = !quoted
     if (!quoted && char === "(") depth += 1
     if (!quoted && char === ")") depth -= 1
-    if (!quoted && depth === 0 && char === ",") {
-      names.push(current)
+    if (!quoted && depth === 0 && char === separator) {
+      parts.push(current)
       current = ""
     } else {
       current += char
     }
   }
-  names.push(current)
-  return names
+  parts.push(current)
+  return parts
 }
 
+/**
+ * Ролі частини ідентичності гранту (`grantParts`) іменами каталогу: ім'я в
+ * лапках — без лапок, ключове слово (`public`) — як є.
+ */
+export function grantRoles(roles: string): string[] {
+  return splitIdentity(roles, ",").map((r) =>
+    r.startsWith('"') ? r.slice(1, -1).replaceAll('""', '"') : r
+  )
+}
+
+/**
+ * Роль в ідентичності гранту: ім'я — за правилом `quoteIdent`, тож кома чи
+ * двокрапка в імені ідентичність не ділить; ключове слово (`PUBLIC`,
+ * `CURRENT_USER`) — як є, у нижньому регістрі.
+ */
 function roles(nodes: readonly Node[] | undefined): string {
   return sorted(
-    (nodes ?? []).map((n) => ("RoleSpec" in n ? role(n.RoleSpec) : ""))
+    (nodes ?? []).map((n) => {
+      if (!("RoleSpec" in n)) return ""
+      const spec = n.RoleSpec
+      return spec.roletype === "ROLESPEC_CSTRING" && spec.rolename !== undefined
+        ? quoteIdent(spec.rolename)
+        : role(spec)
+    })
   ).join(",")
 }
 
