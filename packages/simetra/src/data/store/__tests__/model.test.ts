@@ -2734,7 +2734,10 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // `full` чи вікно закінчують без рядка сервера.
   "bury-removed-current-epoch": /^converge .*(composition|lacks)/,
   // Запис: кожен дефект — своєю перевіркою.
-  "predict-before-answer": /\.(title|notes) = [uw]\d+, server at/,
+  // Колонка залежить від порядку кроків насіння: збирач пакета зсуває читання
+  // на такт, і перший підтверджений рядок зі значенням мутації буває `title`
+  // (`u<n>`) чи лінива `notes` (`w<n>`).
+  "predict-before-answer": /\.(title = u|notes = w)\d+, server at/,
   "settle-separate-commit": /the run row shown with its mutation pending/,
   "write-back-lifts-hidden": /after hide without a later read/,
   "answer-after-cancel": /a cancelled attempt settled with a row/,
