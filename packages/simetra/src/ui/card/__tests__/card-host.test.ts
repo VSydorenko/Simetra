@@ -565,7 +565,7 @@ describe("useCardDraft — одна охорона запису: save, overwrite
     )
 
     it.each(BLOCKERS)(
-      "%s — overwrite() і retry() хука нічого не шлють",
+      "%s — save(), overwrite() і retry() хука нічого не шлють",
       async (_, block) => {
         const o = await opened({ probe: true })
         await reach(o, state, "probe")
@@ -573,6 +573,7 @@ describe("useCardDraft — одна охорона запису: save, overwrite
         expect(o.draft.current.canSave).toBe(false)
         const sent = runs(o).length
         act(() => {
+          o.draft.current.save()
           o.draft.current.overwrite()
           o.draft.current.retry()
         })
