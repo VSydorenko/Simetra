@@ -156,7 +156,15 @@ function formOf(
     const view = (unit.tree as { ViewStmt?: { options?: Options } }).ViewStmt
     return securityInvoker(view?.options ?? []) ? undefined : "view"
   }
-  if (unit.class !== "function" || skipped.has(unit.identity)) return undefined
+  if (unit.class === "aggregate")
+    return definerComponent(unit, units) ? "function" : undefined
+  // Процедуру з `SECURITY DEFINER` досягає `CALL` з функції, яку кличе роль
+  // API, тож вона — та сама форма, що й функція.
+  if (
+    (unit.class !== "function" && unit.class !== "procedure") ||
+    skipped.has(unit.identity)
+  )
+    return undefined
   const fn = (unit.tree as { CreateFunctionStmt?: FunctionTree })
     .CreateFunctionStmt
   if (fn === undefined || returnsTrigger(fn)) return undefined
@@ -171,6 +179,59 @@ function formOf(
       )
     )
   return definer ? "function" : undefined
+}
+
+/** Опції агрегату, що називають функцію-складову. */
+const AGGREGATE_COMPONENTS: ReadonlySet<string> = new Set([
+  "sfunc",
+  "finalfunc",
+  "combinefunc",
+  "serialfunc",
+  "deserialfunc",
+  "msfunc",
+  "minvfunc",
+  "mfinalfunc",
+])
+
+/**
+ * Чи складова агрегату — `SECURITY DEFINER`-функція моделі. `EXECUTE`
+ * складової Postgres перевіряє в ролі власника агрегату, а не викликача, тож
+ * роль API, якій дано агрегат, виконує складову від власника, навіть коли
+ * саму функцію їй відкликано. Некваліфіковане ім'я — будь-яка схема
+ * (fail-closed).
+ */
+function definerComponent(
+  unit: VerbatimUnit,
+  units: readonly VerbatimUnit[]
+): boolean {
+  const define = (
+    unit.tree as {
+      DefineStmt?: {
+        definition?: {
+          DefElem?: {
+            defname?: string
+            arg?: { TypeName?: { names?: { String?: { sval?: string } }[] } }
+          }
+        }[]
+      }
+    }
+  ).DefineStmt
+  const names = (define?.definition ?? []).flatMap(({ DefElem: e }) =>
+    e !== undefined && AGGREGATE_COMPONENTS.has(e.defname ?? "")
+      ? [(e.arg?.TypeName?.names ?? []).map((n) => n.String?.sval ?? "")]
+      : []
+  )
+  return names.some((parts) => {
+    const name = parts.at(-1)
+    const schema = parts.length > 1 ? parts.at(-2) : undefined
+    return units.some(
+      (u) =>
+        u.class === "function" &&
+        u.name === name &&
+        (schema === undefined || u.schema === schema) &&
+        isSecurityDefiner(u, units)
+    )
+  })
 }
 
 /**
@@ -303,9 +364,16 @@ function securityInvoker(options: Options): boolean {
 
 /** Чи ключ цілі гранту (`grantTargetKeys`) називає одиницю. */
 function targetOf(unit: VerbatimUnit): (key: string) => boolean {
-  if (unit.class === "function") {
-    // `ON FUNCTION f` без аргументів — кожне перевантаження, як `ownsTarget`.
-    const own = new Set([`function|${unit.identity.slice("function:".length)}`])
+  if (
+    unit.class === "function" ||
+    unit.class === "procedure" ||
+    unit.class === "aggregate"
+  ) {
+    // `ON FUNCTION f` без аргументів — кожне перевантаження, як `ownsTarget`;
+    // грант процедури й агрегату має той самий ключ `function|`.
+    const own = new Set([
+      `function|${unit.identity.slice(unit.identity.indexOf(":") + 1)}`,
+    ])
     return (key) => ownsTarget(own, key)
   }
   const own = `table|${unit.schema}.${unit.name}`

@@ -328,7 +328,7 @@ describe("sql.function-body-statement: a call that executes SQL text (спека
   })
 
   it.each(PLACES)(
-    "a listed provider function, a pinned search_path and a model function in %s → no error",
+    "a listed provider function and a pinned search_path in %s → no error; an unqualified model function → dynamicText",
     async (file) => {
       const accepted = [
         plpgsql("PERFORM auth.uid()"),
@@ -345,7 +345,38 @@ describe("sql.function-body-statement: a call that executes SQL text (спека
           })
         )
       )
-      expect(brief(own.diagnostics)).toEqual([])
+      expect(brief(own.diagnostics)).toEqual([
+        bodyStatement(file, "dynamicText"),
+      ])
+    }
+  )
+
+  // Однойменна функція моделі не закриває некваліфікованого виклику: Postgres
+  // обирає перевантаження серед усіх схем шляху — інша арність чи схема
+  // раніше у шляху веде до `extensions.dblink_exec`.
+  it.each(PLACES)(
+    "an unqualified call that collides with a model function in %s → dynamicText; qualified → no error",
+    async (file) => {
+      const own =
+        "CREATE FUNCTION public.dblink_exec(n int) RETURNS int LANGUAGE sql IMMUTABLE AS $$ SELECT n $$;"
+      const collides = await compile(
+        await acceptDebt(
+          files({
+            [file]: `${plpgsql("PERFORM dblink_exec('dbname=postgres', 'SELECT 1')")};\n${own}`,
+          })
+        )
+      )
+      expect(brief(collides.diagnostics)).toEqual([
+        bodyStatement(file, "dynamicText"),
+      ])
+      const qualified = await compile(
+        await acceptDebt(
+          files({
+            [file]: `${plpgsql("PERFORM public.dblink_exec(1)")};\n${own}`,
+          })
+        )
+      )
+      expect(brief(qualified.diagnostics)).toEqual([])
     }
   )
 

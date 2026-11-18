@@ -72,10 +72,10 @@ const warned = (
   },
 })
 
-const refused = (fn: string, roles = EVERYONE, file = RPC_FILE) => ({
+const refused = (fn: string, roles = EVERYONE, file = RPC_FILE, line = 1) => ({
   code: "sql.definer-caller-unchecked",
   file,
-  params: { function: fn, roles, line: 1 },
+  params: { function: fn, roles, line },
 })
 
 /** Обидва коди: помилка й попередження не дублюють одне одного. */
@@ -256,6 +256,28 @@ describe("checkDefinerReads: SECURITY DEFINER functions", () => {
   ])("$name", async ({ sql, expected }) => {
     const result = await compiled(sql)
     expect(brief(result.diagnostics, CODES)).toEqual(expected)
+  })
+
+  // `CALL` з функції, яку кличе роль API, досягає definer-процедури; складову
+  // агрегату Postgres виконує з правами власника агрегату, тож агрегат, даний
+  // ролі API, виконує definer-складову від власника, хоч саму її відкликано.
+  it("refuses a SECURITY DEFINER procedure an API role can execute", async () => {
+    const result = await compiled({
+      [RPC_FILE]: `CREATE PROCEDURE public.p() LANGUAGE plpgsql ${CLOSED} AS $$ BEGIN PERFORM 1; END $$;\n`,
+    })
+    expect(brief(result.diagnostics, CODES)).toEqual([refused("public.p")])
+  })
+
+  it("refuses an aggregate an API role can execute over a SECURITY DEFINER state function", async () => {
+    const result = await compiled({
+      [RPC_FILE]:
+        `CREATE FUNCTION public.sf(a int, b int) RETURNS int LANGUAGE sql IMMUTABLE ${CLOSED} AS $$ SELECT a + b $$;\n` +
+        `REVOKE EXECUTE ON FUNCTION public.sf(int, int) FROM ${ALL.join(", ")};\n` +
+        "CREATE AGGREGATE public.agg2(int) (sfunc = public.sf, stype = int);\n",
+    })
+    expect(brief(result.diagnostics, CODES)).toEqual([
+      refused("public.agg2", EVERYONE, RPC_FILE, 3),
+    ])
   })
 
   // Функції, яких не кличуть як RPC: функції множини й виміру кличе політика

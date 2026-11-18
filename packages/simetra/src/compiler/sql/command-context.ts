@@ -152,17 +152,9 @@ export interface ProviderCalls {
    * (`schema.name`): `PROVIDER_FUNCTIONS` і `PROVIDER_EXPRESSION_FUNCTIONS`.
    */
   allowed: ReadonlySet<string>
-  /** Імена функцій, процедур і агрегатів самої моделі: їх шлях сесії не підміняє. */
-  routines: ReadonlySet<string>
   /** Усі одиниці: ефективний `search_path` функції залежить від її `ALTER FUNCTION`. */
   units: readonly VerbatimUnit[]
 }
-
-const ROUTINE_CLASSES: ReadonlySet<VerbatimUnit["class"]> = new Set([
-  "function",
-  "procedure",
-  "aggregate",
-])
 
 const BUILTIN_NAMES: ReadonlySet<string> = new Set(BUILTIN_FUNCTIONS)
 const REGCLASS_NAMES: ReadonlySet<string> = new Set(REGCLASS_BUILTINS)
@@ -187,9 +179,6 @@ export function providerCalls(
             ...PROVIDER_EXPRESSION_FUNCTIONS[provider],
           ]
     ),
-    routines: new Set(
-      units.filter((u) => ROUTINE_CLASSES.has(u.class)).map((u) => u.name)
-    ),
     units,
   }
 }
@@ -200,8 +189,8 @@ export function providerCalls(
  * схеми провайдера поза позитивним переліком. Некваліфікований виклик
  * розв'язує шлях пошуку сесії: у тілі без порожнього `search_path`
  * (`searchPathOpen`) він може потрапити в схему провайдера (Supabase кладе
- * `extensions` у шлях), тож ім'я, що не є вбудованою чи функцією моделі,
- * судиться так само. З порожнім шляхом розв'язується лише `pg_catalog`.
+ * `extensions` у шлях), тож ім'я, що не є вбудованою, судиться так само —
+ * зокрема й однойменне з функцією моделі. З порожнім шляхом розв'язується лише `pg_catalog`.
  */
 function sqlTextCall(
   parts: readonly { String?: { sval?: string } }[] | undefined,
@@ -221,7 +210,11 @@ function sqlTextCall(
   if (schema !== undefined) {
     return calls.schemas.has(schema) && !calls.allowed.has(`${schema}.${name}`)
   }
-  return searchPathOpen && !isBuiltin(name) && !calls.routines.has(name)
+  // Однойменна функція моделі не рятує: Postgres обирає перевантаження за
+  // аргументами серед усіх схем шляху, тож `dblink_exec(…)` з іншою арністю
+  // чи раніше у шляху дістанеться `extensions.dblink_exec`. Функцію моделі тут
+  // кличуть кваліфікованою.
+  return searchPathOpen && !isBuiltin(name)
 }
 
 /**
