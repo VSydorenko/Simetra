@@ -7,6 +7,7 @@ import {
   kindKeyColumns,
   platformGrantTargets,
   sortDiagnostics,
+  outboxUnits,
   type CompiledModel,
   type Diagnostic,
   type FileChange,
@@ -21,6 +22,8 @@ import {
   SQL_DEBT_FILE,
   formatProjectFile,
   isObjectTable,
+  SIGNAL_OUTBOX,
+  DATABASE_PROVIDERS,
   type AttributeCase,
   type CatalogModel,
   type CatalogTable,
@@ -127,15 +130,11 @@ async function describedElsewhere(
     if (kept.has(item.origin.objectId))
       found.relations.add(qualified(item.schema, item.name))
   for (const table of model.physical.tables) {
-    const key = qualified(table.schema, table.name)
-    // Таблицю платформи без об'єкта (outbox сигналів) описує сама платформа
-    // в кожному проєкті: описати її файлом теки вдруге не можна.
-    if (!isObjectTable(table)) {
-      found.relations.add(key)
-      continue
-    }
+    // Таблицю платформи без об'єкта описує сама платформа (`platformOutbox`)
+    if (!isObjectTable(table)) continue
     const object = kept.get(table.origin.objectId)
     if (object === undefined) continue
+    const key = qualified(table.schema, table.name)
     found.relations.add(key)
     // Таблиця ТЧ чи похідна таблиця регістра `MetadataRef` не має: посилання
     // на об'єкт — це його основна таблиця.
@@ -155,6 +154,25 @@ async function describedElsewhere(
     found.handlers.add(qualified(handler.schema, handler.name))
   found.platformGrants = platformGrantTargets(model.sqlUnits, parse)
   return found
+}
+
+/**
+ * Outbox сигналів має кожна база, до якої застосовано Simetra, а описує його
+ * сама платформа (спека профілю `postgres` §5.1): ні таблиця, ні її тригери,
+ * функції, гранти й політики не пишуться в теку — і при прийомі з нуля, і
+ * поверх наявної теки. Одиниці впізнаються за ідентичністю, яку дає той самий
+ * генератор, тож власна одиниця користувача з іншою ідентичністю лишається.
+ */
+function platformOutbox(
+  elsewhere: Elsewhere,
+  provider: DatabaseProvider,
+  parse: SqlParser
+): void {
+  elsewhere.relations.add(qualified(SIGNAL_OUTBOX.schema, SIGNAL_OUTBOX.name))
+  // Невідомий провайдер виклику вже названо `introspect.project-mismatch`
+  if (!DATABASE_PROVIDERS.includes(provider)) return
+  for (const unit of outboxUnits("", provider, parse))
+    elsewhere.units.add(unit.identity)
 }
 
 /**
@@ -313,6 +331,7 @@ export async function reverseGenerate(
     ...projectMismatch(folder, o.project),
   ]
   const elsewhere = await describedElsewhere(o.existing, o.parse)
+  platformOutbox(elsewhere, o.project.databaseProvider, o.parse)
   const existingOf = (kind: string, schema: string, physical: string) =>
     folder.objects.get(objectKey(kind, schema, physical))
 

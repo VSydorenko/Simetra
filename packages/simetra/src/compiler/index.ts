@@ -39,6 +39,7 @@ export {
 } from "./sql/units"
 export { loadSqlParser, relationNameText, type SqlParser } from "./sql/parse"
 export { IDENTITY_TRIGGERS, platformSchemaGrants } from "./platform/units"
+export { outboxUnits } from "./platform/outbox"
 export { executeGrants } from "./sql/execute-grants"
 export {
   AUTHOR_FUNCTION,

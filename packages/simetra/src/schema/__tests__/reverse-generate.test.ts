@@ -197,6 +197,40 @@ const DEBT_TOUCH = TOUCH.replace(
 )
 
 describe("reverseGenerate", () => {
+  it.each(["supabase", "postgres"] as const)(
+    "%s: the signal outbox and its units are the platform's, adoption from scratch writes none of them",
+    async (provider) => {
+      // База, до якої застосовано Simetra, завжди несе outbox сигналів: прийом
+      // з нуля не описує його теці (спека профілю `postgres` §5.1)
+      const compiled = await compile(
+        metaFiles({
+          "project.meta.json": project({ database: { provider } }),
+        })
+      )
+      expect(compiled.diagnostics).toEqual([])
+      const outbox = compiled.model!.sqlUnits.filter(
+        (u) => u.generator === "signalOutbox"
+      )
+      expect(outbox.length).toBeGreaterThan(0)
+      const result = await reverseGenerate(
+        model({
+          tables: [
+            ...catalogFromSnapshot(compiled.model!.physical).tables,
+            table("app", "fresh"),
+          ],
+          units: units(outbox.map((u) => u.sql).join("\n")),
+        }),
+        options(new Map(), { databaseProvider: provider })
+      )
+      expect(result.diagnostics).toEqual([])
+      expect([...result.files.keys()].sort()).toEqual([
+        "custom-tables/Fresh/Fresh.meta.json",
+        "project.meta.json",
+        "sql-debt.json",
+      ])
+    }
+  )
+
   it("table becomes a CustomTable with explicit names", async () => {
     const result = await reverseGenerate(
       model({
