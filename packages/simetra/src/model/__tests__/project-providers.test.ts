@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, expectTypeOf, it } from "vitest"
 import {
   DATABASE_PROVIDERS,
   LOGIN_ROLE_PARENTS,
+  LOGIN_ROLE_SETTINGS,
   LOGIN_ROLE_REQUEST_PURPOSES,
   PLATFORM_LOGIN_ROLES,
   PLATFORM_ROLES,
@@ -16,6 +17,8 @@ import {
   PROVIDER_SQL_TEXT_FUNCTIONS,
   loginRoleParentNames,
   projectSchema,
+  type GrantPurpose,
+  type PlatformRolePurpose,
 } from "simetra/model"
 
 // Значення `postgres` — таблиця «Значення пресету `postgres`» спеки профілю
@@ -113,7 +116,27 @@ describe("provider maps of T0", () => {
 
 describe("login role parents", () => {
   it("runtime may be a member of the command role and the request roles", () => {
-    expect(LOGIN_ROLE_PARENTS).toEqual({ runtime: ["command", "request"] })
+    expect(LOGIN_ROLE_PARENTS).toEqual({
+      runtime: ["command", "request"],
+      signals: ["signalConsumer"],
+    })
+  })
+
+  it("signals: only the signal consumer group in both profiles", () => {
+    expect(PLATFORM_ROLES.signalConsumer).toBe("simetra_signal_consumer")
+    expect(PLATFORM_LOGIN_ROLES.signals).toBe("simetra_signals")
+    for (const provider of ["supabase", "postgres"] as const)
+      expect(loginRoleParentNames("signals", provider)).toEqual([
+        "simetra_signal_consumer",
+      ])
+    expect(LOGIN_ROLE_SETTINGS).toEqual({
+      signals: { role: "simetra_signal_consumer" },
+    })
+  })
+
+  it("the consumer role is not a grant purpose", () => {
+    expectTypeOf<PlatformRolePurpose>().toEqualTypeOf<"command">()
+    expectTypeOf<"signalConsumer">().not.toExtend<GrantPurpose>()
   })
 
   it("postgres: command role, then the request roles", () => {

@@ -610,7 +610,13 @@ describe("platformRoleSet", () => {
   it("adds the runtime login role only when the provider is known", () => {
     expect(platformRoleSet("supabase")).toEqual({
       names: Object.values(PLATFORM_ROLES),
-      login: [{ name: RUNTIME, memberOf: [COMMAND, "authenticated", "anon"] }],
+      login: [
+        { name: RUNTIME, memberOf: [COMMAND, "authenticated", "anon"] },
+        {
+          name: PLATFORM_LOGIN_ROLES.signals,
+          memberOf: [PLATFORM_ROLES.signalConsumer],
+        },
+      ],
       checkLogin: [],
     })
     expect(platformRoleSet("postgres")).toEqual({
@@ -620,13 +626,26 @@ describe("platformRoleSet", () => {
           name: RUNTIME,
           memberOf: [COMMAND, "simetra_user", "simetra_anon"],
         },
+        {
+          name: PLATFORM_LOGIN_ROLES.signals,
+          memberOf: [PLATFORM_ROLES.signalConsumer],
+        },
       ],
       checkLogin: [],
     })
     expect(platformRoleSet(undefined)).toEqual({
       names: Object.values(PLATFORM_ROLES),
       login: [],
-      checkLogin: [CHECK_RUNTIME],
+      checkLogin: [
+        CHECK_RUNTIME,
+        {
+          ...{
+            name: PLATFORM_LOGIN_ROLES.signals,
+            memberOf: [PLATFORM_ROLES.signalConsumer],
+          },
+          checkOnly: true,
+        },
+      ],
     })
   })
 })

@@ -42,6 +42,11 @@ describe("roles: the project file", () => {
               ],
               checkOnly: true,
             },
+            {
+              name: PLATFORM_LOGIN_ROLES.signals,
+              memberOf: [PLATFORM_ROLES.signalConsumer],
+              checkOnly: true,
+            },
           ],
         },
         skipped: [{ name: RUNTIME, reason: "no-project-file" }],
@@ -133,6 +138,10 @@ describe("roles: the project file", () => {
           {
             name: RUNTIME,
             memberOf: [PLATFORM_ROLES.command, "authenticated", "anon"],
+          },
+          {
+            name: PLATFORM_LOGIN_ROLES.signals,
+            memberOf: [PLATFORM_ROLES.signalConsumer],
           },
         ],
         checkLogin: [],
