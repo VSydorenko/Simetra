@@ -559,7 +559,8 @@ export function createObjectStore(options: {
               ? Math.max(prior.v, version)
               : version,
           epoch: epochs.next(),
-          versionEpoch: epoch,
+          // Гілка лише за рівності: епоха позначки — власна епоха запису.
+          versionEpoch: heldEpoch(e.versionEpoch),
         }
         return
       }

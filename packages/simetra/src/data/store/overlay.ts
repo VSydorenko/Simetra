@@ -7,7 +7,7 @@ import {
 } from "simetra/model"
 import { DataError } from "../errors"
 import { NO_DEFECTS, type Defects } from "./defects"
-import { keyId, pairId } from "./epoch"
+import { heldEpoch, keyId, pairId } from "./epoch"
 import type { ObjectState } from "./forms"
 import type { RowEntry } from "./object-store"
 import type { Session } from "./session"
@@ -479,6 +479,7 @@ export function createOverlay(deps: {
         if (e?.row !== undefined)
           e.row = {
             ...e.row,
+            versionEpoch: heldEpoch(e.row.versionEpoch),
             values: { ...e.row.values, ...entry.values },
           }
       }

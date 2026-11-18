@@ -1,6 +1,6 @@
 import { ZERO_UUID, channelTopic, type CatalogEntry } from "simetra/model"
 import type { Defects } from "./defects"
-import { effectiveEpoch } from "./epoch"
+import { effectiveEpoch, heldEpoch } from "./epoch"
 import type { ObjectState } from "./forms"
 import { includeKeys, readIncluded } from "./include"
 import { visibleRow, type RowEntry } from "./object-store"
@@ -313,10 +313,11 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       const o = ctx.objectOf(object)
       const skipped: Key[] = []
       for (const row of rows) {
-        // Епоха рядка — епоха результату `run`, а не епоха читання.
+        // Епоха рядка — епоха результату `run`, а не епоха читання; вона
+        // непорожня, тож власна епоха рядка її не заміняє.
         const result = o.rows.writeBack(
           scope,
-          { ...row, versionEpoch: epoch },
+          { ...row, versionEpoch: effectiveEpoch(epoch, row.versionEpoch) },
           readEpoch
         )
         if (result === "skipped") skipped.push(row.key)
@@ -1011,10 +1012,16 @@ export async function rereadKey(
         return
       }
       patchRows(ctx, scope, o, rows, startEpoch, null, form === "card")
-      const row = rows.find((r) => r.key.toLowerCase() === key.toLowerCase())
-      if (row === undefined && (o.rows.get(key)?.owners ?? 0) > 0)
+      const found = rows.find((r) => r.key.toLowerCase() === key.toLowerCase())
+      if (found === undefined && (o.rows.get(key)?.owners ?? 0) > 0)
         removeKeys(ctx, scope, o, [key], startEpoch)
-      fire({ kind: "read", row }, scope)
+      // Підсумок несе рядок відповіді з його власною епохою, як він прийшов:
+      // у сховище цей рядок уже записав `patchRows` за правилом епох.
+      const answer =
+        found === undefined
+          ? undefined
+          : { ...found, versionEpoch: heldEpoch(found.versionEpoch) }
+      fire({ kind: "read", row: answer }, scope)
     },
     token,
     `reread ${o.name}`
