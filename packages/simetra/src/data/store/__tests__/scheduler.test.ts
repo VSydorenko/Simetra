@@ -524,6 +524,17 @@ describe("scheduler: the seam of the rights block (B5b)", () => {
     expect(readsAt(h)).toBe(base + 1)
   })
 
+  it("requestReread of a stale-client object sets no due time: 0 reads", async () => {
+    const h = await threeObjects()
+    h.core.staleClient(TASK)
+    await settle()
+    const base = readsAt(h)
+    h.core.freshness.requestReread([TASK], { jitterMs: 0 })
+    await settle()
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(0)
+    expect(readsAt(h)).toBe(base)
+  })
+
   it("lastTickAt: the start of the last tick that read; a tick without targets leaves it", async () => {
     const h = await threeObjects()
     expect(h.core.freshness.lastTickAt()).toBeUndefined()

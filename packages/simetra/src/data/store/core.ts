@@ -784,6 +784,8 @@ export function createCore(options: {
     delayMs: number,
     views?: ReadonlySet<Subset>
   ) {
+    // Несумісний об'єкт не читається (§10): строк йому не ставимо.
+    if (staleObjects.has(object)) return
     const at = now() + delayMs
     const held = scheduled.get(object) ?? {}
     scheduled.set(object, held)
@@ -803,10 +805,6 @@ export function createCore(options: {
     let ran = false
     const catchLog = (error: unknown) => log({ kind: "listener-failed", error })
     for (const [name, held] of [...scheduled]) {
-      if (staleObjects.has(name)) {
-        scheduled.delete(name)
-        continue
-      }
       if (held.whole !== undefined && held.whole <= now()) {
         held.whole = undefined
         // Строк об'єкта без видимих виглядів нічого не читає: такту з читанням
@@ -904,8 +902,7 @@ export function createCore(options: {
     closed: () => closed !== undefined || !session.token().valid,
     dueAt() {
       let due: number | undefined
-      for (const [name, held] of scheduled) {
-        if (staleObjects.has(name)) continue
+      for (const held of scheduled.values()) {
         for (const at of [held.whole, held.retry?.at])
           if (at !== undefined && (due === undefined || at < due)) due = at
       }
