@@ -107,7 +107,10 @@
       "packages/*/README.md"
     ]
   },
+  "format": {
+    "check": ["pnpm", "exec", "prettier", "--check"]
+  },
   "kit": {
-    "version": "0.4.2"
+    "version": "0.7.0"
   }
 }
