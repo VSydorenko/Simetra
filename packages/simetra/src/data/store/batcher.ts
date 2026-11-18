@@ -78,7 +78,9 @@ export function createBatcher(
     }
     try {
       for (const item of items) {
-        if (item.ok && "type" in item) options.onVersion?.(item.version)
+        if (item.ok && "type" in item && item.type === "version") {
+          options.onVersion?.(item.version)
+        }
       }
     } catch (error) {
       for (const call of calls) call.reject(error)

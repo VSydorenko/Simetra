@@ -126,12 +126,12 @@ export type CorePart =
 
 /** The outcome of one read part, in the order of the parts asked for. */
 export type CoreReadItem =
-  | { ok: true; rows: ReadRows; epoch: string | null }
-  | { ok: true; type: "version"; version: VersionValue }
-  | { ok: false; error: CommandError }
+  CoreRowsItem | { ok: true; type: "version"; version: VersionValue }
 
 /** The outcome of a rows part: the result of a `query` part is never a version. */
-export type CoreRowsItem = Exclude<CoreReadItem, { type: "version" }>
+export type CoreRowsItem =
+  | { ok: true; rows: ReadRows; epoch: string | null }
+  | { ok: false; error: CommandError }
 
 /** The outcomes of {@link CoreSource.read}: one item per part. */
 export interface CoreReadResult {
