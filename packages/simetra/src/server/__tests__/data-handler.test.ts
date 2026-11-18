@@ -849,6 +849,8 @@ describe("createDataHandler: steps 4–6", () => {
           operation: "create",
         }),
       ],
+      // Стенд без рядка епохи: `null` іде як є, рішення — за клієнтом.
+      epoch: null,
     })
     expect(calls.run).toBe(1)
   })
@@ -1001,7 +1003,7 @@ describe("createDataHandler: steps 4–6", () => {
     ],
     [
       "run rows do not match the operations",
-      { run: () => Promise.resolve({ rows: [], changes: [] }) },
+      { run: () => Promise.resolve({ rows: [], changes: [], epoch: null }) },
       runOf(createClient),
     ],
     [
@@ -1047,6 +1049,8 @@ describe("createDataHandler: steps 4–6", () => {
     expect(second).toStrictEqual(first)
   })
 
+  const RUN_EPOCH = "e".repeat(64)
+
   it("encodes only the header of a run row: a section line the codec refuses does not fail a committed run", async () => {
     const { runtime } = await harness()
     // Рядок, який рантайм повернув би після `COMMIT`, з рядком ТЧ, номер
@@ -1061,7 +1065,8 @@ describe("createDataHandler: steps 4–6", () => {
     const handle = createDataHandler(
       {
         ...runtime,
-        run: () => Promise.resolve({ rows: [row], changes: [] }),
+        run: () =>
+          Promise.resolve({ rows: [row], changes: [], epoch: RUN_EPOCH }),
       },
       { log }
     )
@@ -1075,6 +1080,7 @@ describe("createDataHandler: steps 4–6", () => {
     expect(value).toStrictEqual({
       rows: [{ id: ID, version: "1", code_col: "A" }],
       changes: [],
+      epoch: RUN_EPOCH,
     })
     expect(log).not.toHaveBeenCalled()
   })

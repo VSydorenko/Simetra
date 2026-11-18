@@ -2,8 +2,10 @@
 import { act, cleanup, render } from "@testing-library/react"
 import { Component, StrictMode, createElement, type ReactNode } from "react"
 import { renderToString } from "react-dom/server"
+import type { DataTransport } from "simetra/model"
 import { afterEach, describe, expect, it } from "vitest"
 import { SUBJECT, clientCatalog } from "../../__tests__/support"
+import { writerOf } from "../../data-writer"
 import { runtimeHandleOf } from "../../runtime/handle"
 import { createRuntimeHolder, type RuntimeHolder } from "../../runtime/holder"
 import { createDataRuntime, type DataRuntime } from "../../runtime/runtime"
@@ -21,6 +23,7 @@ import {
   DataRuntimeProvider,
   useRow,
   useRows,
+  useWriter,
   type UseRowResult,
   type UseRowsResult,
 } from "../index"
@@ -35,13 +38,14 @@ function makeRuntime(
     residency?: Record<string, "full" | "window">
     limits?: { revalidateIntervalMs: number }
     objects?: typeof OBJECTS
+    transport?: DataTransport
   } = {}
 ) {
-  const { objects = OBJECTS, ...runtimeOptions } = options
+  const { objects = OBJECTS, transport, ...runtimeOptions } = options
   const fake = createFakeSource({ objects })
   const runtime = createDataRuntime({
     catalog: { ...clientCatalog(), objects },
-    transport: () => Promise.reject(new Error("unused")),
+    transport: transport ?? (() => Promise.reject(new Error("unused"))),
     subject: SUBJECT,
     log: () => {},
     sources: { override: { [TASK]: () => fake.adapter } },
@@ -108,6 +112,28 @@ describe("runtime holder", () => {
     off()
     holder.replace(undefined)
     expect(calls).toBe(2)
+  })
+})
+
+describe("useWriter", () => {
+  it("gives the writer of the held runtime, and of the new one after replace", async () => {
+    const a = makeRuntime().runtime
+    const b = makeRuntime().runtime
+    const holder = createRuntimeHolder(a)
+    const view = mount(holder, () => useWriter())
+    expect(view.last()).toBe(writerOf(a))
+    act(() => holder.replace(b))
+    expect(view.last()).toBe(writerOf(b))
+    expect(view.last()).not.toBe(writerOf(a))
+    act(() => holder.replace(undefined, "signed-out"))
+    // Без рантайму мутація осідає причиною закриття й нікуди не йде.
+    const mutation = view
+      .last()
+      .update(TASK, key(1), {}, { expectedVersion: 1 })
+    expect(await mutation.settled).toEqual({
+      ok: false,
+      error: { code: "command.unavailable", reason: "disposed" },
+    })
   })
 })
 
@@ -357,8 +383,33 @@ describe("isStale", () => {
   const EA = "a".repeat(64)
   const EB = "b".repeat(64)
 
-  it("follows markStale until the re-read lands, in useRow and useRows", async () => {
-    const { fake, runtime, core } = makeRuntime()
+  it("follows the stale-client mark of the object, not the state of a row", async () => {
+    // Транспорт відповідає лише на `version`: kernelHash задає тест.
+    let kernel = OBJECTS[0]!.kernelHash
+    const { fake, runtime, core } = makeRuntime({
+      transport: () =>
+        Promise.resolve({
+          ok: true,
+          serverHash: "server-hash",
+          value: {
+            epoch: null,
+            items: [
+              {
+                ok: true,
+                value: {
+                  snapshotHash: "server-hash",
+                  objects: Object.fromEntries(
+                    OBJECTS.map((o) => [
+                      o.id,
+                      o.id === OBJECTS[0]!.id ? kernel : o.kernelHash,
+                    ])
+                  ),
+                },
+              },
+            ],
+          },
+        }),
+    })
     seed(fake, 1, 2)
     const holder = createRuntimeHolder(runtime)
     const list = mount(holder, () => useRows({ object: TASK }))
@@ -366,30 +417,33 @@ describe("isStale", () => {
     await flush()
     expect(list.last().isStale).toBe(false)
     expect(card.last().isStale).toBe(false)
+    // Стан рядка `stale` (markStale) об'єкта застарілим не робить.
     const shown = card.last().row
     const version = shown?.state === "removed" ? 0 : shown!.version
     act(() => {
       core.commit((w) => w.markStale(TASK, [key(1)], version + 1), core.token())
     })
+    expect(card.last().row).toMatchObject({ state: "stale" })
+    expect(list.last().isStale).toBe(false)
+    expect(card.last().isStale).toBe(false)
+    // Позначка об'єкта — відповіддю `version` з іншим kernelHash.
+    kernel = "1".repeat(64)
+    await act(async () => {
+      core.requestVersion()
+      await settle()
+    })
     expect(list.last().isStale).toBe(true)
     expect(card.last().isStale).toBe(true)
-    fake.edit(TASK, key(1), { title: "newer" })
-    const fresh = {
-      ...fake.row(TASK, key(1))!,
-      values: { ...fake.row(TASK, key(1))!.values, notes: "body 1" },
-    }
-    act(() => {
-      core.commit(
-        (w) =>
-          w.apply(TASK, { rows: [fresh], absent: [] }, core.readEpoch(), null),
-        core.token()
-      )
+    kernel = OBJECTS[0]!.kernelHash
+    await act(async () => {
+      core.requestVersion()
+      await settle()
     })
     expect(list.last().isStale).toBe(false)
     expect(card.last().isStale).toBe(false)
   })
 
-  it("follows a version-epoch switch until the re-read lands", async () => {
+  it("a version-epoch switch makes rows stale but not the object", async () => {
     const { fake, runtime, core } = makeRuntime({
       limits: { revalidateIntervalMs: 1 },
     })
@@ -413,21 +467,22 @@ describe("isStale", () => {
     await flush()
     act(() => fake.take().answer())
     await flush()
-    expect(list.last().isStale).toBe(true)
-    expect(card.last().isStale).toBe(true)
+    expect(card.last().row).toMatchObject({ state: "stale" })
+    expect(list.last().isStale).toBe(false)
+    expect(card.last().isStale).toBe(false)
     // Таймер системного перечитування (1 мс) спрацьовує, але відповідь тримає сервер.
     await act(async () => {
       await new Promise((r) => setTimeout(r, 30))
       await settle()
     })
-    expect(list.last().isStale).toBe(true)
-    expect(card.last().isStale).toBe(true)
+    expect(card.last().row).toMatchObject({ state: "stale" })
     fake.mode = "auto"
     await act(async () => {
       fake.deliverAll()
       await new Promise((r) => setTimeout(r, 30))
       await settle()
     })
+    expect(card.last().row).toMatchObject({ state: "synced" })
     expect(list.last().isStale).toBe(false)
     expect(card.last().isStale).toBe(false)
   })

@@ -8,6 +8,8 @@ export type DataErrorCode =
   | "data.tabular-incomplete"
   | "data.full-too-large"
   | "data.views-limit"
+  | "data.journal-full"
+  | "data.mutation-pending"
 
 /** A developer error of the data runtime; `message` defaults to the code. */
 export class DataError extends Error {

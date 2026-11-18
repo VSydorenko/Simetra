@@ -369,7 +369,12 @@ describe("window", () => {
     }
     const core = createCore({
       subject: "u1",
-      source: createCoreSource(() => adapter, fake.index, createReadLimiter(4)),
+      source: createCoreSource(
+        () => adapter,
+        fake.index,
+        createReadLimiter(4),
+        fake.server
+      ),
       index: fake.index,
     })
     const handle = core.view(win)

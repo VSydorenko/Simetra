@@ -19,4 +19,10 @@ export interface CommandResult {
   rows: Record<string, unknown>[]
   /** Every phase, `ctx.run` included, in the order the core was called. */
   changes: Change[]
+  /**
+   * The row version epoch, read in the command transaction after its writes
+   * (P4-B spec §7.2, §7.4): versions compare only within one epoch. `null` —
+   * the database has no epoch.
+   */
+  epoch: string | null
 }

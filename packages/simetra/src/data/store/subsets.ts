@@ -66,6 +66,10 @@ export interface RegistryContext {
   readonly rowViews: RowViews
   objectOf(name: ObjectName): ObjectState
   dirtySections(): ReadonlyMap<ObjectName, ReadonlySet<Key>>
+  /** Objects whose stale-client mark changed in the current `commit`. */
+  dirtyObjects(): ReadonlySet<ObjectName>
+  /** Whether the object is marked stale-client (§10). */
+  isStale(object: ObjectName): boolean
   /** The purged snapshot once the core closes. */
   closedSnapshot(): ViewSnapshot | undefined
   /** Deliberate defects of the model test's self-check. */
@@ -777,6 +781,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       rows,
       hasNewRows: s.hasNewRows,
       needsRefresh: s.needsRefresh,
+      ...(ctx.isStale(o.name) ? { isStale: true } : {}),
       ...(section === undefined ? {} : { section }),
       ...(spec.kind === "full" || spec.kind === "window"
         ? { strategy: s.strategy, truncated: s.truncated, atEnd: s.atEnd }
@@ -801,6 +806,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
 
   function affected(s: Subset): boolean {
     const o = s.form.object
+    if (ctx.dirtyObjects().has(o.name)) return true
     const rows = rowViews.dirty()
     const spec = s.form.spec
     if (spec.kind === "section") {
@@ -846,6 +852,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       rows: [row],
       hasNewRows: false,
       needsRefresh: false,
+      ...(ctx.isStale(form.object.name) ? { isStale: true } : {}),
     })
     return prev.snapshot
   }

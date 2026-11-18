@@ -35,6 +35,8 @@ export type JsonRow = Record<string, unknown>
 export interface JsonCommandResult {
   rows: JsonRow[]
   changes: Change[]
+  /** Row version epoch read in the command transaction; `null` — the database has no epoch. */
+  epoch: string | null
 }
 
 /** A read result for JSON: rows with `bigint` as decimal strings, or a count. */

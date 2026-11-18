@@ -12,7 +12,12 @@ import {
   type DataTransport,
   type SourceAdapter,
 } from "simetra/model"
-import { selectSource, serverFunctionAdapter } from "../adapter"
+import {
+  selectSource,
+  serverFunctionAdapter,
+  serverFunctionPort,
+} from "../adapter"
+import { createWriter } from "../data-writer"
 import { createCore, limitsOf } from "../store/core"
 import { createCoreSource, createReadLimiter } from "../store/source"
 import type { CloseReason, CoreLimits, CoreLogEntry } from "../store/types"
@@ -38,6 +43,13 @@ export interface DataRuntimeOptions {
    * `session-changed`; the runtime is already closed by then.
    */
   onSessionChanged?: () => void
+  /**
+   * Called when an object of the catalog turns stale (its kernel differs from
+   * the server's) and on every write the server refuses `command.stale-client`
+   * (P4-B spec §10). It only offers a reload: the runtime never reloads itself,
+   * so unsaved forms of other objects are not lost.
+   */
+  onStaleClient?: (object: string) => void
   /** The runtime journal (default `console.warn`); see {@link DataLogEntry}. */
   log?: (entry: DataLogEntry) => void
   /**
@@ -94,6 +106,15 @@ const DISPOSED: CommandError = {
   code: "command.unavailable",
   reason: LIMIT_REASONS.disposed,
 }
+
+const hasVersionPart = (request: RuntimeRequest): boolean =>
+  request.type === "read" &&
+  request.items.some(
+    (item) =>
+      typeof item === "object" &&
+      item !== null &&
+      (item as { type?: unknown }).type === "version"
+  )
 
 const isSessionChanged = (error: CommandError) =>
   error.code === "command.unauthenticated" &&
@@ -235,10 +256,66 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     }
     // Відповідь, що прийшла після закриття, нікуди не йде (спека §11, інв. 12).
     if (closedWith !== undefined) throw new CommandFailure(closedWith)
-    if (response.ok) return response.value
+    // Хеш звіряється лише після перевірки закриття (вище): відповідь закритого
+    // рантайму не запускає `version`. Відповідь з частиною `version` хеш лише
+    // оновлює.
+    const seen = () => {
+      if (typeof response.serverHash === "string")
+        core.serverHash(response.serverHash, hasVersionPart(request))
+    }
+    if (response.ok) {
+      seen()
+      staleParts(request, response.value)
+      return response.value
+    }
     const error = errorFromWire(index, response.error)
     if (isSessionChanged(error)) sessionChanged(error)
+    else {
+      seen()
+      staleRead(request, error)
+    }
     throw new CommandFailure(error)
+  }
+
+  // Відмова всього `read` — `stale-client` (запит старого розгортання, §10):
+  // об'єкт відмови, а без нього — кожен об'єкт частин запиту. Викликається
+  // лише після перевірки закриття, як і `staleParts`.
+  const staleRead = (request: RuntimeRequest, error: CommandError) => {
+    if (request.type !== "read" || error.code !== "command.stale-client") return
+    if (error.object !== undefined) {
+      core.staleClient(`${error.object.kind}.${error.object.name}`)
+      return
+    }
+    const objects = new Set<string>()
+    for (const part of request.items) {
+      const id = (part as { query?: { object?: unknown } }).query?.object
+      const entry = typeof id === "string" ? index.byId.get(id) : undefined
+      if (entry !== undefined) objects.add(`${entry.kind}.${entry.name}`)
+    }
+    for (const object of objects) core.staleClient(object)
+  }
+
+  // Відмова частини `read` — `stale-client` (несумісна колонка): позначки
+  // вона не ставить, але host дізнається про об'єкт і сумісність
+  // переоцінюється (§10). Викликається лише після перевірки закриття.
+  const staleParts = (request: RuntimeRequest, value: unknown) => {
+    if (request.type !== "read" || typeof value !== "object" || value === null)
+      return
+    const items = (value as { items?: unknown }).items
+    if (!Array.isArray(items)) return
+    items.forEach((item: unknown, slot) => {
+      const error = (item as { ok?: unknown; error?: unknown } | null)?.error
+      if (
+        (item as { ok?: unknown } | null)?.ok !== false ||
+        (error as { code?: unknown } | null)?.code !== "command.stale-client"
+      )
+        return
+      const part = request.items[slot] as
+        { query?: { object?: unknown } } | undefined
+      const id = (error as { object?: unknown }).object ?? part?.query?.object
+      const entry = typeof id === "string" ? index.byId.get(id) : undefined
+      if (entry !== undefined) core.staleClient(`${entry.kind}.${entry.name}`)
+    })
   }
 
   const serverFunction = serverFunctionAdapter(send)
@@ -251,7 +328,10 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
         serverFunction,
       }),
     index,
-    createReadLimiter(limits.readParallel)
+    createReadLimiter(limits.readParallel),
+    // Запис і версія каталогу — завжди Server Function, навіть коли об'єкт
+    // читає адаптер-перевизначення (§5.1).
+    serverFunctionPort(send)
   )
   const core = createCore({
     subject,
@@ -261,6 +341,10 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     residency,
     ...(options.strict === undefined ? {} : { strict: options.strict }),
     log,
+    snapshotHash: catalog.snapshotHash,
+    ...(options.onStaleClient === undefined
+      ? {}
+      : { onStaleClient: options.onStaleClient }),
   })
   // Фабрики — після обгортки `send` і ядра: адаптер отримує саме цей
   // `subject` і саме цю обгортку, тож його запити несуть суб'єкт рантайму.
@@ -275,6 +359,6 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     },
     dispose: () => close(DISPOSED, "disposed"),
   }
-  bindRuntimeHandle(runtime, { send, core })
+  bindRuntimeHandle(runtime, { send, core, writer: createWriter(core) })
   return runtime
 }

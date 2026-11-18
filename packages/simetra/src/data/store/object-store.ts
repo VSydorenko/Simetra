@@ -135,6 +135,31 @@ export interface ObjectStore {
     lazyRead: boolean
   ): PutResult
   /**
+   * Writes a row of an own command result (P4-B spec §7.2 step 3, plan
+   * B3-4-Л Р3) by the version rule, without the read path's lifting of marks:
+   * `hidden`, `removed`, `stale` marks and tombstones stay. `"unowned"` — no
+   * entry or no owner: nothing to write, the row of the answer stands
+   * (§7.2 step 5). `"skipped"` — not written, the caller re-reads the key:
+   * `removed` or `hidden`, a key or pair tombstone newer than `readEpoch`, a
+   * scope move, or a row epoch other than the session's (for an unowned key
+   * too, once the session has one) and the stored row's. `"older"` — the
+   * store holds a newer version.
+   */
+  writeBack(
+    scope: Scope,
+    row: ServerRow,
+    readEpoch: number
+  ): "written" | "older" | "unowned" | "skipped"
+  /**
+   * Marks the key `stale` after an own write of `version` in `epoch` that the
+   * store did not take and no read confirmed (P4-B spec §7.2 step 4): the
+   * minimal version mark when `epoch` is the session's and the stored row's
+   * (a later read of that version clears it), the epoch mark otherwise —
+   * versions of different epochs do not compare, and a read of the current
+   * epoch clears it.
+   */
+  markUnconfirmed(scope: Scope, key: Key, version: number, epoch: string): void
+  /**
    * Always marks `removed` (П15); a repeated non-divergent remove from a read
    * started after the mark is a new mark and moves its epoch. A no-op only for
    * a key with a newer key or pair tombstone and for a key without an entry.
@@ -473,6 +498,73 @@ export function createObjectStore(options: {
       if (!moved) return result
       hideByHorizon(e, row.key)
       return "stale-inserted"
+    },
+
+    writeBack(scope, row, readEpoch) {
+      scope.assert()
+      const e = rows.get(row.key)
+      const epoch = row.versionEpoch
+      if (e === undefined || e.owners === 0) {
+        // Без власника писати нікуди; відповідь іншої епохи, ніж поточна
+        // епоха сесії, перевіряє лише перечитування за ключем.
+        const current = versions.current()
+        return epoch == null || (current !== null && epoch !== current)
+          ? "skipped"
+          : "unowned"
+      }
+      // Позначки знімає лише читання, що почалось після них (Р-2 серії):
+      // результат запису читанням не є, тож ключ іде на перечитування.
+      const liftsHidden = defects.has("write-back-lifts-hidden")
+      if (
+        e.removed !== undefined ||
+        (e.stale.hidden !== undefined && !liftsHidden)
+      )
+        return "skipped"
+      if (buried(row.key, e.scope, readEpoch)) return "skipped"
+      const incoming =
+        scopeField !== undefined && Object.hasOwn(row.values, scopeField)
+          ? scopeOf(entry, row.values)
+          : e.scope
+      // Переїзд скоупу перевіряє надгробок нової пари й горизонт — це шлях
+      // читання, а не запису результату.
+      if (incoming !== e.scope) return "skipped"
+      // Версії порівнянні лише в одній епосі (Рд24): епоха результату мусить
+      // бути і поточною епохою сесії, і епохою збереженого рядка.
+      if (
+        epoch == null ||
+        epoch !== versions.current() ||
+        e.versionEpoch !== epoch
+      )
+        return "skipped"
+      const merged = mergeVersioned(e.row, row)
+      if (merged === undefined) return "older"
+      e.row = merged
+      e.version = merged.version
+      e.writtenEpoch = Math.max(e.writtenEpoch, readEpoch)
+      // Дефект самотесту: запис результату знімає позначку `hide`.
+      if (liftsHidden) delete e.stale.hidden
+      return "written"
+    },
+
+    markUnconfirmed(scope, key, version, epoch) {
+      scope.assert()
+      const e = rows.get(key)
+      if (e === undefined) return
+      if (epoch === versions.current() && e.versionEpoch === epoch) {
+        if (e.version >= version) return
+        const prior = e.stale.minVersion
+        e.stale.minVersion = {
+          v:
+            prior !== undefined && prior.versionEpoch === epoch
+              ? Math.max(prior.v, version)
+              : version,
+          epoch: epochs.next(),
+          // Гілка лише за рівності: епоха позначки — власна епоха запису.
+          versionEpoch: heldEpoch(e.versionEpoch),
+        }
+        return
+      }
+      e.stale.epoch = true
     },
 
     remove(scope, key, readEpoch) {

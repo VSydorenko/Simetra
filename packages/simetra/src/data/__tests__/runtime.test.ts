@@ -33,10 +33,12 @@ import { createFakeSource, type FakeSource } from "../store/testing/fake-source"
 import type { ViewSpec } from "../store/types"
 import {
   OBJECT_ID,
+  SERVER_HASH,
   SUBJECT,
   answeringTransport,
   clientCatalog,
   controlledTransport,
+  failed,
   ok,
   sessionChanged,
 } from "./support"
@@ -771,5 +773,395 @@ describe("residency", () => {
         residency: { [TASK]: "both" as unknown as "full" },
       })
     ).toThrow(TypeError)
+  })
+})
+
+// ------------------------------------------------- версія й позначка «застарілий»
+
+// Не збігається з kernelHash фікстур (усі нулі).
+const BAD_HASH = "1".repeat(64)
+
+/** The raw value of a `read` request with one `version` part (spec §10). */
+const versionAnswer = (
+  snapshotHash: string,
+  staleObjects: readonly CatalogEntry[] = []
+): DataResponse => ({
+  ...ok({
+    epoch: null,
+    items: [
+      {
+        ok: true,
+        value: {
+          snapshotHash,
+          objects: Object.fromEntries(
+            OBJECTS.map((o) => [
+              o.id,
+              staleObjects.includes(o) ? BAD_HASH : o.kernelHash,
+            ])
+          ),
+        },
+      },
+    ],
+  }),
+  // Сервер кладе в `serverHash` той самий `snapshotHash`, що й у значення.
+  serverHash: snapshotHash,
+})
+
+const isVersion = (call: DataRequest) =>
+  call.request.type === "read" &&
+  (call.request.items[0] as { type: string }).type === "version"
+
+const versionCalls = (calls: readonly DataRequest[]) =>
+  calls.filter(isVersion).length
+
+const changed = (response: DataResponse, serverHash: string): DataResponse => ({
+  ...response,
+  serverHash,
+})
+
+function controlled(options: Partial<DataRuntimeOptions> = {}) {
+  const wire = controlledTransport()
+  const runtime = createDataRuntime({
+    catalog: catalogOf(OBJECTS),
+    transport: wire.transport,
+    subject: SUBJECT,
+    log: () => {},
+    ...options,
+  })
+  const handle = runtimeHandleOf(runtime)
+  return { runtime, core: handle.core, send: handle.send, ...wire }
+}
+
+describe("version check and the stale mark (§10)", () => {
+  it("a changed serverHash asks for the version exactly once, and the answer asks for nothing", async () => {
+    const t = controlled()
+    const first = t.send(card())
+    t.respond(changed(ok(null), "server-2"))
+    await first
+    await settle()
+    expect(versionCalls(t.calls)).toBe(1)
+    // Хеш уже запам'ятано: той самий хеш, поки версія летить, запиту не дає.
+    const again = t.send(card())
+    // Черга: спершу `version` (одна частина), потім другий запит.
+    t.respond(versionAnswer("server-3"))
+    t.respond(changed(ok(null), "server-2"))
+    await again
+    await settle()
+    // `server-2` після `server-3` — зміна хеша: це відповідь не з частиною
+    // `version`, тож вона просить версію; сама відповідь `version` — ні.
+    expect(versionCalls(t.calls)).toBe(2)
+    t.respond(versionAnswer("server-2"))
+    await settle()
+    expect(versionCalls(t.calls)).toBe(2)
+    expect(t.pending).toHaveLength(0)
+    // Хеш `server-2` запам'ятано: відповідь з ним нового запиту не дає.
+    const third = t.send(card())
+    t.respond(changed(ok(null), "server-2"))
+    await third
+    await settle()
+    expect(versionCalls(t.calls)).toBe(2)
+  })
+
+  it("the first hash is compared with the snapshotHash of the client catalog", async () => {
+    const t = controlled()
+    const same = t.send(card())
+    t.respond(ok(null))
+    await same
+    await settle()
+    expect(versionCalls(t.calls)).toBe(0)
+  })
+
+  it("a refusal carries the hash too", async () => {
+    const t = controlled()
+    const refused = failureOf(t.send(card()))
+    t.respond({
+      ok: false,
+      error: { code: "command.forbidden" },
+      serverHash: "server-2",
+    })
+    await refused
+    await settle()
+    expect(versionCalls(t.calls)).toBe(1)
+  })
+
+  it("two calls within a microtask make one version part", async () => {
+    const t = controlled()
+    t.core.requestVersion()
+    t.core.requestVersion()
+    await settle()
+    expect(versionCalls(t.calls)).toBe(1)
+  })
+
+  it("three calls while the request flies make exactly one tail", async () => {
+    const t = controlled()
+    t.core.requestVersion()
+    await settle()
+    expect(versionCalls(t.calls)).toBe(1)
+    t.core.requestVersion()
+    t.core.requestVersion()
+    t.core.requestVersion()
+    await settle()
+    expect(versionCalls(t.calls)).toBe(1)
+    t.respond(versionAnswer(SERVER_HASH))
+    await settle()
+    expect(versionCalls(t.calls)).toBe(2)
+    t.respond(versionAnswer(SERVER_HASH))
+    await settle()
+    expect(versionCalls(t.calls)).toBe(2)
+    expect(t.pending).toHaveLength(0)
+  })
+
+  it("the version answer only updates the hash and the marks: no request, rows untouched", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 1)
+    const { core, calls, replies } = runtimeOver(fake)
+    const handle = core.view(cardOf(1))
+    handle.subscribe(() => {})
+    await settle()
+    const rows = handle.getSnapshot().rows
+    const before = calls.length
+    replies.push(versionAnswer("server-2", [OBJECTS[0]!]))
+    core.requestVersion()
+    await settle()
+    expect(calls).toHaveLength(before + 1)
+    expect(handle.getSnapshot().rows).toBe(rows)
+  })
+
+  it("isStale is set and cleared with the version answers, onStaleClient once per set", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 1)
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const { core, replies } = runtimeOver(fake, { onStaleClient })
+    const handle = core.view(cardOf(1))
+    const notified = vi.fn()
+    handle.subscribe(notified)
+    await settle()
+    expect(handle.getSnapshot().isStale).toBeUndefined()
+    const ask = async (answer: DataResponse) => {
+      replies.push(answer)
+      core.requestVersion()
+      await settle()
+    }
+    await ask(versionAnswer(SERVER_HASH, [OBJECTS[0]!]))
+    expect(handle.getSnapshot().isStale).toBe(true)
+    expect(onStaleClient.mock.calls).toEqual([[TASK]])
+    // Той самий стан: ні нового сповіщення, ні другого виклику колбека.
+    const seen = notified.mock.calls.length
+    await ask(versionAnswer(SERVER_HASH, [OBJECTS[0]!]))
+    expect(notified.mock.calls.length).toBe(seen)
+    expect(onStaleClient).toHaveBeenCalledTimes(1)
+    await ask(versionAnswer(SERVER_HASH))
+    expect(handle.getSnapshot().isStale).toBeUndefined()
+    expect(onStaleClient).toHaveBeenCalledTimes(1)
+    // Розкатка по черзі: позначка ставиться знову — і колбек знову.
+    await ask(versionAnswer(SERVER_HASH, [OBJECTS[0]!]))
+    expect(handle.getSnapshot().isStale).toBe(true)
+    expect(onStaleClient).toHaveBeenCalledTimes(2)
+  })
+
+  it("an object the server does not know is stale", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 1)
+    const { core, replies } = runtimeOver(fake)
+    const handle = core.view(cardOf(1))
+    handle.subscribe(() => {})
+    await settle()
+    replies.push(
+      ok({
+        epoch: null,
+        items: [
+          {
+            ok: true,
+            value: {
+              snapshotHash: SERVER_HASH,
+              objects: { [OBJECTS[1]!.id]: OBJECTS[1]!.kernelHash },
+            },
+          },
+        ],
+      })
+    )
+    core.requestVersion()
+    await settle()
+    expect(handle.getSnapshot().isStale).toBe(true)
+  })
+
+  it("a write to a marked object is refused stale-client without the transport", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 1)
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const { core, calls, replies } = runtimeOver(fake, { onStaleClient })
+    core.view(cardOf(1)).subscribe(() => {})
+    await settle()
+    replies.push(versionAnswer(SERVER_HASH, [OBJECTS[0]!]))
+    core.requestVersion()
+    await settle()
+    const sent = calls.length
+    const m = core.update(TASK, key(1), { title: "x" }, { expectedVersion: 1 })
+    expect(await m.settled).toMatchObject({
+      ok: false,
+      error: { code: "command.stale-client" },
+    })
+    await settle()
+    expect(calls).toHaveLength(sent)
+    // Відповіді сервера не було: колбек лише за переходом позначки.
+    expect(onStaleClient).toHaveBeenCalledTimes(1)
+  })
+
+  it("a response after dispose() or session-changed starts no version request and no onStaleClient", async () => {
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const disposed = controlled({ onStaleClient })
+    const late = failureOf(disposed.send(card()))
+    disposed.runtime.dispose()
+    disposed.respond(changed(ok(null), "server-2"))
+    await late
+    await settle()
+    expect(versionCalls(disposed.calls)).toBe(0)
+
+    const changedSession = controlled({ onStaleClient })
+    const refused = failureOf(changedSession.send(card()))
+    changedSession.respond(changed(sessionChanged(), "server-2"))
+    await refused
+    await settle()
+    expect(versionCalls(changedSession.calls)).toBe(0)
+    expect(onStaleClient).not.toHaveBeenCalled()
+  })
+
+  it("an answer of a version request that arrives after dispose() marks nothing", async () => {
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const t = controlled({ onStaleClient })
+    t.core.requestVersion()
+    await settle()
+    t.runtime.dispose()
+    t.respond(versionAnswer(SERVER_HASH, [OBJECTS[0]!]))
+    await settle()
+    expect(onStaleClient).not.toHaveBeenCalled()
+  })
+
+  it("a stale-client of a read part calls onStaleClient(object) and asks for the version, without a mark", async () => {
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const t = controlled({ onStaleClient })
+    const read = t.send(card())
+    t.respond(
+      ok({
+        epoch: null,
+        items: [
+          {
+            ok: false,
+            error: { code: "command.stale-client", object: OBJECT_ID },
+          },
+        ],
+      })
+    )
+    await read
+    await settle()
+    expect(onStaleClient.mock.calls).toEqual([[TASK]])
+    expect(versionCalls(t.calls)).toBe(1)
+    // Відповідь `version` без розбіжності: позначки немає, колбек не повторюється.
+    t.respond(versionAnswer(SERVER_HASH))
+    await settle()
+    expect(onStaleClient).toHaveBeenCalledTimes(1)
+  })
+
+  it("a stale-client part without an object names the object of its query", async () => {
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const t = controlled({ onStaleClient })
+    const read = t.send(card())
+    t.respond(
+      ok({
+        epoch: null,
+        items: [{ ok: false, error: { code: "command.stale-client" } }],
+      })
+    )
+    await read
+    await settle()
+    expect(onStaleClient.mock.calls).toEqual([[TASK]])
+  })
+
+  it("a whole read refused stale-client calls onStaleClient(object) for the object of the refusal", async () => {
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const t = controlled({ onStaleClient })
+    const read = failureOf(
+      t.send({
+        type: "read",
+        items: [
+          { type: "query", query: { object: task.id, id: ID } },
+          { type: "query", query: { object: org.id, id: ID } },
+        ],
+      })
+    )
+    t.respond(failed({ code: "command.stale-client", object: task.id }))
+    expect(await read).toMatchObject({ code: "command.stale-client" })
+    await settle()
+    expect(onStaleClient.mock.calls).toEqual([[TASK]])
+  })
+
+  it("a whole read refused stale-client without an object names each object of its items", async () => {
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const t = controlled({ onStaleClient })
+    const read = failureOf(
+      t.send({
+        type: "read",
+        items: [
+          { type: "query", query: { object: task.id, id: ID } },
+          { type: "query", query: { object: org.id, id: ID } },
+          { type: "version" },
+        ],
+      })
+    )
+    t.respond(failed({ code: "command.stale-client" }))
+    expect(await read).toMatchObject({ code: "command.stale-client" })
+    await settle()
+    expect(onStaleClient.mock.calls).toEqual([[TASK], [ORG]])
+  })
+
+  it("a whole read refused stale-client after dispose() calls nothing", async () => {
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const t = controlled({ onStaleClient })
+    const read = failureOf(t.send(card()))
+    t.runtime.dispose()
+    t.respond(failed({ code: "command.stale-client" }))
+    await read
+    await settle()
+    expect(onStaleClient).not.toHaveBeenCalled()
+  })
+
+  it("a stale-client part answered after dispose() calls nothing", async () => {
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const t = controlled({ onStaleClient })
+    const read = failureOf(t.send(card()))
+    t.runtime.dispose()
+    t.respond(
+      ok({
+        epoch: null,
+        items: [{ ok: false, error: { code: "command.stale-client" } }],
+      })
+    )
+    await read
+    await settle()
+    expect(onStaleClient).not.toHaveBeenCalled()
+    expect(versionCalls(t.calls)).toBe(0)
+  })
+
+  it("a write answered session-changed closes the runtime: onSessionChanged once, the card is purged", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 1)
+    const onSessionChanged = vi.fn()
+    const { runtime, core, replies } = runtimeOver(fake, { onSessionChanged })
+    const handle = core.view(cardOf(1))
+    handle.subscribe(() => {})
+    await settle()
+    replies.push(sessionChanged())
+    const m = core.update(TASK, key(1), { title: "x" }, { expectedVersion: 1 })
+    expect(await m.settled).toMatchObject({
+      ok: false,
+      error: { code: "command.unauthenticated", reason: "session-changed" },
+    })
+    await settle()
+    expect(runtime.disposed).toBe(true)
+    expect(onSessionChanged).toHaveBeenCalledTimes(1)
+    expect(handle.getSnapshot()).toMatchObject({
+      status: "purged",
+      reason: "session-changed",
+    })
   })
 })

@@ -3,6 +3,11 @@ import type { DefectFlag } from "./defects"
 import { fieldInfoOf, filterCollator } from "./filter"
 import { keyId } from "./epoch"
 import { createObjectStore } from "./object-store"
+import {
+  createOverlay,
+  type JournalInspection,
+  type UpdateOptions,
+} from "./overlay"
 import { createSectionStore } from "./section-store"
 import { createSession, type Scope } from "./session"
 import { createRowViews, purgedSnapshot } from "./snapshot"
@@ -15,6 +20,7 @@ import {
   createWriter,
   revalidate,
   revalidateHolders,
+  rereadKey,
   setVisible,
   type WriterContext,
 } from "./writer"
@@ -26,7 +32,9 @@ import {
   type CoreLogEntry,
   type GenerationToken,
   type Key,
+  type Mutation,
   type ObjectName,
+  type Values,
   type ViewHandle,
   type ViewSnapshot,
   type ViewSpec,
@@ -68,6 +76,20 @@ export interface CoreSession {
    * A throw of `fn` is passed on; rows it wrote stay only with an owner.
    */
   commit(fn: (writer: Writer) => void, token: GenerationToken): boolean
+  /**
+   * Starts an `update` with the `await` policy (P4-B spec §7.1, plan
+   * B3-4-Л): one mutation per key in the journal, one `run`. Throws
+   * synchronously, before the journal and the transport: `TypeError` for a
+   * name outside the catalog, `DataError` `data.version-required`,
+   * `data.mutation-pending` (the key has a `pending` mutation) and
+   * `data.journal-full`. After `close` it settles with the close reason.
+   */
+  update(
+    object: ObjectName,
+    key: Key,
+    values: Values,
+    options: UpdateOptions
+  ): Mutation
   /** Held views of the object, visible first. */
   activeViews(object: ObjectName): readonly ActiveView[]
   /**
@@ -90,9 +112,30 @@ export interface CoreSession {
   /**
    * Purges every key in one notification batch, after which every handle —
    * new ones included — returns one stable `purged` snapshot with `reason`;
-   * no request goes out and no response is written afterwards.
+   * no request goes out and no response is written afterwards. Every
+   * mutation not yet settled settles with the close.
    */
   close(reason: CloseReason): void
+  /**
+   * Asks the server for the catalog version (P4-B spec §10) and re-marks the
+   * stale objects by the answer. Single-flight with one tail: calls before the
+   * request goes out (one microtask) make one request, calls while it flies
+   * make exactly one more after it.
+   */
+  requestVersion(): void
+  /**
+   * Internal, for the runtime: the `serverHash` of a response that passed the
+   * closed check. A change against the last seen hash asks for the version —
+   * unless the response carried the `version` part itself, which only updates
+   * the hash (no ping-pong between instances of two catalogs).
+   */
+  serverHash(hash: string, versionPart: boolean): void
+  /**
+   * Internal, for the runtime: a response refused a part `stale-client` (an
+   * incompatible column). Calls `onStaleClient(object)` and asks for the
+   * version; the object is not marked by it (§10).
+   */
+  staleClient(object: ObjectName): void
 }
 
 export type { DefectFlag } from "./defects"
@@ -120,6 +163,8 @@ export interface CoreInspection {
     preloadTimers: number
     /** Re-reads scheduled by a version epoch switch, per object. */
     switchTimers: number
+    /** Mutations in the journal plus attempts not yet settled. */
+    journal: number
     /** Section store maps, summed over objects. */
     sectionOwners: number
     sectionOwnerVersions: number
@@ -138,6 +183,8 @@ export interface CoreInspection {
    * is already `removed`; the model then expects no older read to lift it.
    */
   watchRemarks(listener: (object: ObjectName, key: Key) => void): void
+  /** The mutations in the journal of own mutations. */
+  mutations(): JournalInspection[]
 }
 
 const inspections = new WeakMap<CoreSession, CoreInspection>()
@@ -205,6 +252,10 @@ export function createCore(options: {
   /** The list strategy by object id; an object not named is `window`. */
   residency?: ReadonlyMap<string, "full" | "window">
   log?: (e: CoreLogEntry) => void
+  /** The `snapshotHash` of the client catalog: the first hash to compare with. */
+  snapshotHash?: string
+  /** Host callback: an object turned stale-client or a write was refused so. */
+  onStaleClient?: (object: ObjectName) => void
 }): CoreSession {
   const limits = limitsOf(options.limits)
   const { source, index } = options
@@ -226,8 +277,17 @@ export function createCore(options: {
     log,
     defects,
   })
-  const rowViews = createRowViews()
+  // Журнал створюється після ядра (йому потрібен `commit`); вигляд рядка
+  // бере з нього мутацію лише після створення.
+  const rowViews = createRowViews((object, key, e) =>
+    overlay.mutationOf(object, key, e)
+  )
   const dirtySections = new Map<ObjectName, Set<Key>>()
+  // Позначка «застарілий» об'єкта (§10): лише за kernelHash чи невідомим
+  // об'єктом; `dirtyObjects` — об'єкти, чия позначка змінилась у цьому commit.
+  const staleObjects = new Set<ObjectName>()
+  const dirtyObjects = new Set<ObjectName>()
+  let lastHash = options.snapshotHash
   let closed: ViewSnapshot | undefined
 
   const objects = new Map<ObjectName, ObjectState>()
@@ -288,6 +348,8 @@ export function createCore(options: {
       if (defects.has("absent-row-ignored")) return
       o.rows.remove(scope, key, readEpoch)
       rowViews.touch(o.name, key)
+      // Перехід у `removed` стирає поля мутації ключа тим самим `commit` (Р11).
+      if (o.rows.get(key)?.removed !== undefined) overlay.erase(o.name, key)
       // `removed` стирає й рядки ТЧ власника (§6.2, правило 5); власник без
       // шапки в сховищі — теж: його рядкам ТЧ нема чим лишатись видимими.
       // Епоху читання рядків ТЧ не порівнюємо навмисно: епоха старту на
@@ -355,6 +417,8 @@ export function createCore(options: {
     rowViews,
     objectOf,
     dirtySections: () => dirtySections,
+    dirtyObjects: () => dirtyObjects,
+    isStale: (object) => staleObjects.has(object),
     closedSnapshot: () => closed,
     defects,
   })
@@ -466,6 +530,7 @@ export function createCore(options: {
         objectOf(object).rows.get(key) !== undefined
     )
     dirtySections.clear()
+    dirtyObjects.clear()
     for (const s of notify) {
       for (const listener of [...s.listeners]) {
         // Слухач міг закрити ядро: далі нікого не сповіщаємо.
@@ -485,10 +550,12 @@ export function createCore(options: {
     hiddenKeys.clear()
     rowViews.clear()
     dirtySections.clear()
+    dirtyObjects.clear()
     tails.clear()
     purges.clear()
     for (const timer of switchTimers.values()) clearTimeout(timer)
     switchTimers.clear()
+    staleObjects.clear()
   })
 
   // Хвіст у польоті під час purge: його відповідь могла нести рядок, якого на
@@ -540,6 +607,68 @@ export function createCore(options: {
     invalidateTail,
     defects,
     hiddenKeys,
+    journal: {
+      erase: (object, key) => overlay.erase(object, key),
+      eraseScope: (object, scope) => overlay.eraseScope(object, scope),
+    },
+  }
+
+  // ------------------------------------------------------------ версія
+
+  const staleClient = (object: ObjectName) => {
+    try {
+      options.onStaleClient?.(object)
+    } catch (error) {
+      // Збій колбека host-а не ламає ядро й не підміняє результат запису.
+      log({ kind: "listener-failed", error })
+    }
+  }
+
+  // Позначки за відповіддю `version`: об'єкт, якого сервер не знає, чи з
+  // іншим kernelHash, — застарілий; збіг хеша позначку знімає (§10).
+  function applyVersion(objectsOfServer: Readonly<Record<string, string>>) {
+    const token = session.token()
+    const turned: ObjectName[] = []
+    session.commit(
+      () => {
+        for (const o of objects.values()) {
+          const stale = objectsOfServer[o.entry.id] !== o.entry.kernelHash
+          if (stale === staleObjects.has(o.name)) continue
+          if (stale) {
+            staleObjects.add(o.name)
+            turned.push(o.name)
+          } else staleObjects.delete(o.name)
+          dirtyObjects.add(o.name)
+        }
+      },
+      token,
+      "version"
+    )
+    // Колбек — після commit: host не бачить напівзастосованого стану.
+    for (const object of turned) staleClient(object)
+  }
+
+  // Один запит `version` за раз і не більше одного хвоста: перед відправкою
+  // (мікрозадача) виклики зливаються, під час польоту — один хвіст.
+  let versionState: "idle" | "scheduled" | "flying" = "idle"
+  let versionTail = false
+  function startVersion() {
+    versionState = "flying"
+    const token = session.token()
+    source
+      .version()
+      .then(
+        (result) => {
+          if (token.valid && result.ok) applyVersion(result.version.objects)
+        },
+        (error: unknown) => log({ kind: "listener-failed", error })
+      )
+      .finally(() => {
+        versionState = "idle"
+        if (!versionTail) return
+        versionTail = false
+        core.requestVersion()
+      })
   }
 
   const core: CoreSession = {
@@ -565,6 +694,28 @@ export function createCore(options: {
         "writer"
       )
     },
+    requestVersion() {
+      if (!session.token().valid) return
+      if (versionState === "flying") versionTail = true
+      else if (versionState === "idle") {
+        versionState = "scheduled"
+        queueMicrotask(() => {
+          if (session.token().valid) startVersion()
+          else versionState = "idle"
+        })
+      }
+    },
+    serverHash(hash, versionPart) {
+      const changed = lastHash !== undefined && hash !== lastHash
+      lastHash = hash
+      if (changed && !versionPart) core.requestVersion()
+    },
+    staleClient(object) {
+      staleClient(object)
+      core.requestVersion()
+    },
+    update: (object, key, values, updateOptions) =>
+      overlay.update(object, key, values, updateOptions),
     activeViews: (object) => activeViews(writerContext, object),
     setVisible: (spec, visible) => setVisible(writerContext, spec, visible),
     revalidate: (object, revalidateOptions) =>
@@ -581,8 +732,27 @@ export function createCore(options: {
       }
       // Черга обмежувача: жодного запиту після закриття.
       source.close()
+      overlay.close(reason)
     },
   }
+
+  const overlay = createOverlay({
+    session,
+    source,
+    index,
+    objectOf,
+    rowViews,
+    commit: core.commit,
+    isStale: (object) => staleObjects.has(object),
+    staleClient: (object) => core.staleClient(object),
+    reread(object, key, rereadOptions) {
+      rereadKey(writerContext, object, key, rereadOptions).catch(
+        (error: unknown) => log({ kind: "listener-failed", error })
+      )
+    },
+    log,
+    defects,
+  })
 
   internals.set(core, { objects, ops, registry })
 
@@ -591,6 +761,7 @@ export function createCore(options: {
     watchRemarks(listener) {
       remarkListener = listener
     },
+    mutations: () => overlay.entries(),
     versionEpochs: () => ({
       current: session.versions.current(),
       previous: session.versions.previous(),
@@ -613,6 +784,7 @@ export function createCore(options: {
         releaseTimers: subs.filter((s) => s.releaseTimer !== undefined).length,
         preloadTimers: subs.reduce((n, s) => n + s.preloadTimers.size, 0),
         switchTimers: switchTimers.size,
+        journal: overlay.size(),
         sectionOwners: sections.reduce((n, x) => n + x.owners, 0),
         sectionOwnerVersions: sections.reduce((n, x) => n + x.ownerVersions, 0),
       }
