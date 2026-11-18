@@ -498,21 +498,44 @@ const listKnown = (s: Subset) => (keys: readonly Key[]) =>
   s.form.object.rows.knownFor(keys, { owned: s.owned, form: "list" })
 
 /**
- * The system re-read of the `include` targets the view holds (Р8а): a `keys`
- * part with `known` per target, started in the same tick as the parts of the
- * view, so both go in one request. The view's own parts carry no `include`:
- * targets would come back whole every time.
+ * The system re-read of the `include` targets of a view (Р8а): a `keys` part
+ * per target, started in the same tick as the parts of the view, so both go in
+ * one request. The keys are the ones the view holds plus the ones its
+ * composition rows refer to now: a target the view never held a row for (the
+ * snapshot of a hydration keeps none; a target the reader may not see) would
+ * otherwise wait for the answer and cost a request of its own at every
+ * re-read. `known` goes only for held rows. The view's own parts carry no
+ * `include`: targets would come back whole every time.
  */
-function readHeldTargets(ctx: WriterContext, s: Subset): Promise<Included> {
-  const held = new Map(
-    [...s.included]
-      .filter(([, keys]) => keys.size > 0)
-      .map(([name, keys]) => [name, [...keys]] as const)
+function readHeldTargets(
+  ctx: WriterContext,
+  s: Subset,
+  composition: readonly Key[]
+): Promise<Included> {
+  const o = s.form.object
+  const referred = includeKeys(
+    s.form.include,
+    composition.flatMap((key) => {
+      const e = o.rows.get(key)
+      const values = e === undefined ? undefined : visibleRow(e)
+      return values !== undefined && s.form.test(values) ? [values] : []
+    })
+  )
+  const wanted = new Map<ObjectName, readonly Key[]>(
+    s.form.include.map(({ target }) => [
+      target,
+      [
+        ...new Set([
+          ...(s.included.get(target) ?? []),
+          ...(referred.get(target) ?? []),
+        ]),
+      ],
+    ])
   )
   return readIncluded(
     ctx.source,
     s.form.include,
-    held,
+    wanted,
     ctx.limits.keysPerRequest,
     (name) => (keys) =>
       ctx.objectOf(name).rows.knownFor(keys, {
@@ -533,7 +556,7 @@ async function readFullAgain(
   const { keysPerRequest } = ctx.limits
   const [fetched, held] = await Promise.all([
     fetchFull(ctx, form, token, s),
-    readHeldTargets(ctx, s),
+    readHeldTargets(ctx, s, [...s.owned]),
   ])
   if (fetched === undefined) return () => {}
   const got = new Map(fetched.rows.map((r) => [r.key, r] as const))
@@ -647,7 +670,7 @@ async function readWindowAgain(
       token,
       ctx.limits.windowPage
     ),
-    readHeldTargets(ctx, s),
+    readHeldTargets(ctx, s, keysOfPages(start.pages)),
   ])
   if (answers === undefined) return () => {}
   const got = new Map(answers.flat().map((row) => [row.key, row] as const))
@@ -784,7 +807,7 @@ async function writeAgain(
           keysPerRequest,
           known: listKnown(s),
         }),
-        readHeldTargets(ctx, s),
+        readHeldTargets(ctx, s, [spec.key]),
       ])
       const write = applyKeys(ctx, s, [spec.key], rows, startEpoch, false)
       if (s.form.include.length === 0) return write

@@ -453,6 +453,35 @@ describe("the reconciliation after hydration", () => {
     expect(a.wire.calls.filter(isVersion)).toHaveLength(1)
   })
 
+  it.each<[string, ViewSpec]>([
+    ["full", { kind: "full", object: TASK, include: ["org"] }],
+    ["window", { kind: "window", object: TASK, include: ["org"] }],
+  ])(
+    "sends one request for a %s view whose row refers to a target nobody can read",
+    async (_name, spec) => {
+      const fake = serverWorld()
+      // Посилання на ціль без рядка: знімок гідратації ключа цілі не несе, а
+      // читання її лишається порожнім — вона не мусить мати власного запиту.
+      fake.insert(TASK, { ref: key(77), org: key(88_888), title: "x" })
+      const snapshot = await takeSnapshot(fake, [spec])
+      const a = runtimeOver(fake)
+      a.runtime.hydrate(snapshot)
+      a.core.view(spec).subscribe(() => {})
+      a.runtime.endHydration()
+      await settle()
+      expect(a.wire.calls).toHaveLength(1)
+      const request = a.wire.calls[0]!.request
+      const parts = (request.type === "read" ? request.items : []) as {
+        type: string
+      }[]
+      expect(parts.map((part) => part.type)).toEqual([
+        "version",
+        "query",
+        "query",
+      ])
+    }
+  )
+
   it("does it once: a repeat of endHydration sends nothing", async () => {
     const fake = serverWorld()
     const snapshot = await takeSnapshot(fake, [card(1)])
