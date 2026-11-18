@@ -6,6 +6,7 @@ import {
   PROVIDER_OWNER_ROLES,
   quoteIdent,
   RIGHTS_MAINTENANCE_SETTING,
+  SIGNAL_MODE_SETTING,
   SESSION_CLAIMS_SETTING,
   type ApiRolePurpose,
   type CommandContext,
@@ -347,6 +348,7 @@ export type SimetraSetting =
   | typeof SESSION_CLAIMS_SETTING
   | typeof COMMAND_SETTING
   | typeof RIGHTS_MAINTENANCE_SETTING
+  | typeof SIGNAL_MODE_SETTING
 
 /**
  * `set_config(name, value, true)`: перший аргумент — лише названа стала
