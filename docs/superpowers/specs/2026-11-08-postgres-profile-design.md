@@ -632,9 +632,9 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
   (§14). `use_try_lock` лишається: короткий перекрив під час
   перезапуску не тримає транзакцію.
 
-**Вплив на код:** генератор об'єктів outbox у шарі платформи
-(`packages/simetra/src/compiler/platform/units.ts`), гранти й політики
-споживача, функція `prune`; тіла `signal`, `signal_rights`,
+**Вплив на код:** таблиця outbox і одиниці її тригерів, грантів, політик
+споживача й функції `prune` — `packages/simetra/src/compiler/platform/outbox.ts`
+(одиниці підключає шар платформи, таблицю — знімок кожного проєкту); тіла `signal`, `signal_rights`,
 `signal_user_rights` для outbox — за цією формою: `signal` і `signal_invalidate` —
 блок B2 П4-B, `signal_rights` і `signal_user_rights` — B6. У B2 канали
 `simetra-rights:` і `simetra-user:` у `signal_topic_allowed` — `false` в
