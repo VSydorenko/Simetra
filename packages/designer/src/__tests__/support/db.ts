@@ -179,7 +179,15 @@ export async function withModelTarget<T>(
 ): Promise<T> {
   if (testProvider() !== "postgres") {
     const desired = await desiredForApply(model)
-    return inTarget(desired.sql, desired.scope, fn)
+    // Рядок епохи пише крок `versions` застосування, якого тінь рушія не
+    // проходить; без нього команда відкочується (спека П4-B §7.4).
+    return inTarget(desired.sql, desired.scope, async (url) => {
+      await query(
+        url,
+        "INSERT INTO simetra.version_epoch DEFAULT VALUES ON CONFLICT (singleton) DO NOTHING"
+      )
+      return fn(url)
+    })
   }
   return withTemplateTarget(async (url) => {
     await withTargetIdentity(url)

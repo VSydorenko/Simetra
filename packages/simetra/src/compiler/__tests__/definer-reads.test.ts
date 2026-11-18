@@ -72,6 +72,15 @@ const warned = (
   },
 })
 
+const refused = (fn: string, roles = EVERYONE, file = RPC_FILE, line = 1) => ({
+  code: "sql.definer-caller-unchecked",
+  file,
+  params: { function: fn, roles, line },
+})
+
+/** Обидва коди: помилка й попередження не дублюють одне одного. */
+const CODES = ["sql.definer-caller-unchecked", "sql.definer-reads-rls"]
+
 const brief = (diagnostics: readonly Diagnostic[], codes: readonly string[]) =>
   diagnostics
     .filter((d) => codes.includes(d.code))
@@ -84,7 +93,11 @@ async function compiled(sql: Record<string, string>, layers: Layer[] = []) {
   return compile(await acceptDebt(files))
 }
 
-describe("checkDefinerReads: functions", () => {
+// Перевірку викликача називає декларація сигнатури (платформна спека §6.7),
+// якої ще немає: definer-функція, яку може виконати роль API, — помилка в
+// будь-якій одиниці SQL застосунку, борг включно, незалежно від того, що вона
+// читає; попередження Р30 її не дублює.
+describe("checkDefinerReads: SECURITY DEFINER functions", () => {
   it.each([
     {
       name: "a closed-shell function granted to the user role",
@@ -93,24 +106,24 @@ describe("checkDefinerReads: functions", () => {
           countTask() +
           grants(`GRANT EXECUTE ON FUNCTION ${RPC}() TO`, [API.user]),
       },
-      expected: [warned(RPC)],
+      expected: [refused(RPC)],
     },
     {
       // Postgres дає EXECUTE PUBLIC, провайдер — ролям API.
       name: "a function without any grant",
       sql: { [RPC_FILE]: countTask() },
-      expected: [warned(RPC)],
+      expected: [refused(RPC)],
     },
     {
       name: "a debt function outside the closed shell",
       sql: { [RPC_FILE]: countTask("SECURITY DEFINER") },
-      expected: [warned(RPC)],
+      expected: [refused(RPC)],
     },
     {
       // Типові привілеї провайдера лишаються.
       name: "EXECUTE revoked from PUBLIC only",
       sql: { [RPC_FILE]: countTask() + revokeExecute("PUBLIC") },
-      expected: [warned(RPC, { roles: `${API.user}, ${API.anonymous}` })],
+      expected: [refused(RPC, `${API.user}, ${API.anonymous}`)],
     },
     {
       name: "EXECUTE revoked from PUBLIC and each API role",
@@ -123,7 +136,7 @@ describe("checkDefinerReads: functions", () => {
       sql: {
         [RPC_FILE]: countTask() + revokeExecute(API.user, API.anonymous),
       },
-      expected: [warned(RPC)],
+      expected: [refused(RPC)],
     },
     {
       name: "REVOKE ALL without arguments from every recipient at once",
@@ -142,7 +155,7 @@ describe("checkDefinerReads: functions", () => {
           revokeExecute(...ALL) +
           grants(`GRANT EXECUTE ON FUNCTION ${RPC}() TO`, [API.anonymous]),
       },
-      expected: [warned(RPC, { roles: API.anonymous })],
+      expected: [refused(RPC, API.anonymous)],
     },
     {
       // Грант PUBLIC повертає EXECUTE кожній ролі API (платформна спека §6.7).
@@ -153,7 +166,7 @@ describe("checkDefinerReads: functions", () => {
           revokeExecute(...ALL) +
           grants(`GRANT EXECUTE ON FUNCTION ${RPC}() TO`, ["PUBLIC"]),
       },
-      expected: [warned(RPC)],
+      expected: [refused(RPC)],
     },
     {
       // Відкликає лише право передавати привілей, не сам привілей.
@@ -166,7 +179,7 @@ describe("checkDefinerReads: functions", () => {
             ALL
           ),
       },
-      expected: [warned(RPC)],
+      expected: [refused(RPC)],
     },
     {
       name: "SECURITY DEFINER set by a separate ALTER FUNCTION",
@@ -175,7 +188,7 @@ describe("checkDefinerReads: functions", () => {
           countTask("SECURITY INVOKER") +
           `ALTER FUNCTION ${RPC}() SECURITY DEFINER;\n`,
       },
-      expected: [warned(RPC)],
+      expected: [refused(RPC)],
     },
     {
       name: "a SECURITY INVOKER function",
@@ -190,7 +203,7 @@ describe("checkDefinerReads: functions", () => {
           "SELECT count(*) FROM public.comment_counter"
         ),
       },
-      expected: [],
+      expected: [refused(RPC)],
     },
     {
       // Без власного search_path ім'я розв'язується за шляхом сесії.
@@ -202,13 +215,13 @@ describe("checkDefinerReads: functions", () => {
           "SECURITY DEFINER"
         ),
       },
-      expected: [warned(RPC)],
+      expected: [refused(RPC)],
     },
     {
-      // З порожнім search_path ім'я називає лише pg_catalog чи pg_temp.
+      // Помилка не залежить від того, що функція читає.
       name: "an unqualified table name under an empty search_path",
       sql: { [RPC_FILE]: sqlFunction(RPC, "SELECT count(*) FROM task") },
-      expected: [],
+      expected: [refused(RPC)],
     },
     {
       name: "a plpgsql SELECT INTO from a tabular section",
@@ -217,7 +230,7 @@ describe("checkDefinerReads: functions", () => {
           `SELECT count(*) INTO v FROM public.${CHECKLIST_TABLE};`
         ),
       },
-      expected: [warned(RPC, { tables: `public.${CHECKLIST_TABLE}` })],
+      expected: [refused(RPC)],
     },
     {
       // Помічник виконується від власника зовнішньої функції.
@@ -231,20 +244,69 @@ describe("checkDefinerReads: functions", () => {
             "SECURITY INVOKER"
           ),
       },
-      expected: [warned(RPC)],
+      expected: [refused(RPC)],
     },
     {
       // Закрита оболонка не забороняє читати таблицю під RLS, а EXECUTE без
       // явного REVOKE має PUBLIC.
       name: "a function of a closed module",
       sql: { [PROJECT_MODULE]: countTask() },
-      expected: [warned(RPC, {}, PROJECT_MODULE)],
+      expected: [refused(RPC, EVERYONE, PROJECT_MODULE)],
     },
   ])("$name", async ({ sql, expected }) => {
     const result = await compiled(sql)
-    expect(brief(result.diagnostics, ["sql.definer-reads-rls"])).toEqual(
-      expected
-    )
+    expect(brief(result.diagnostics, CODES)).toEqual(expected)
+  })
+
+  // `CALL` з функції, яку кличе роль API, досягає definer-процедури; складову
+  // агрегату Postgres виконує з правами власника агрегату, тож агрегат, даний
+  // ролі API, виконує definer-складову від власника, хоч саму її відкликано.
+  it("refuses a SECURITY DEFINER procedure an API role can execute", async () => {
+    const result = await compiled({
+      [RPC_FILE]: `CREATE PROCEDURE public.p() LANGUAGE plpgsql ${CLOSED} AS $$ BEGIN PERFORM 1; END $$;\n`,
+    })
+    expect(brief(result.diagnostics, CODES)).toEqual([refused("public.p")])
+  })
+
+  it("refuses an aggregate an API role can execute over a SECURITY DEFINER state function", async () => {
+    const result = await compiled({
+      [RPC_FILE]:
+        `CREATE FUNCTION public.sf(a int, b int) RETURNS int LANGUAGE sql IMMUTABLE ${CLOSED} AS $$ SELECT a + b $$;\n` +
+        `REVOKE EXECUTE ON FUNCTION public.sf(int, int) FROM ${ALL.join(", ")};\n` +
+        "CREATE AGGREGATE public.agg2(int) (sfunc = public.sf, stype = int);\n",
+    })
+    expect(brief(result.diagnostics, CODES)).toEqual([
+      refused("public.agg2", EVERYONE, RPC_FILE, 3),
+    ])
+  })
+
+  // Виняток функції множини — за ідентичністю (схема, ім'я, аргументи), а не
+  // за ім'ям: перевантаження з аргументами й однойменна функція іншої схеми
+  // — звичайні definer-функції.
+  it.each([
+    {
+      name: "a definer overload of the set function",
+      file: SCOPE_FUNCTIONS_FILE,
+      sql: `CREATE FUNCTION public.team_ids(a uuid) RETURNS SETOF uuid LANGUAGE sql STABLE ${CLOSED} AS $$ SELECT a $$;\n`,
+      fn: "public.team_ids",
+    },
+    {
+      name: "a same-named definer function of another schema",
+      file: "sql/app/rpc.sql",
+      sql: `CREATE FUNCTION app.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE ${CLOSED} AS $$ SELECT NULL::uuid $$;\n`,
+      fn: "app.team_ids",
+    },
+  ])("refuses $name", async ({ file, sql, fn }) => {
+    const set = `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE ${CLOSED} AS $$ SELECT id FROM ${TASK} $$;\n`
+    const sources =
+      file === SCOPE_FUNCTIONS_FILE
+        ? { [SCOPE_FUNCTIONS_FILE]: set + sql }
+        : { [SCOPE_FUNCTIONS_FILE]: set, [file]: sql }
+    const result = await compiled(sources, [teamScopeKind()])
+    const line = file === SCOPE_FUNCTIONS_FILE ? 2 : 1
+    expect(brief(result.diagnostics, CODES)).toEqual([
+      refused(fn, EVERYONE, file, line),
+    ])
   })
 
   // Функції, яких не кличуть як RPC: функції множини й виміру кличе політика
@@ -273,21 +335,16 @@ describe("checkDefinerReads: functions", () => {
     },
   ])("skips $name", async ({ sql, layers }) => {
     const result = await compiled(sql, layers)
-    expect(brief(result.diagnostics, ["sql.definer-reads-rls"])).toEqual([])
+    expect(brief(result.diagnostics, CODES)).toEqual([])
   })
 
   it("names an adopted table once its row-level security is on", async () => {
     const result = await compiled(
-      {
-        [RPC_FILE]: sqlFunction(
-          RPC,
-          "SELECT count(*) FROM public.comment_counter"
-        ),
-      },
+      { [RPC_FILE]: view("public.v", "", "public.comment_counter") },
       [{ [COMMENT_COUNTER_FILE]: { rowLevelSecurity: "enabled" } }]
     )
-    expect(brief(result.diagnostics, ["sql.definer-reads-rls"])).toEqual([
-      warned(RPC, { tables: "public.comment_counter" }),
+    expect(brief(result.diagnostics, CODES)).toEqual([
+      warned("public.v", { form: "view", tables: "public.comment_counter" }),
     ])
   })
 })

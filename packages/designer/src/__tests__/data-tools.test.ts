@@ -101,9 +101,10 @@ function answer(text: string): Answer {
       ],
     }
   if (text.includes("pg_has_role")) return { rows: [{ member: "t" }] }
-  // Оператор епохи читання частин: база без рядка епохи відповідає `NULL`.
+  // Оператор епохи читання й команди: база з рядком епохи. Без нього команда
+  // відкочується (П4-B §7.4).
   if (text.includes(ROW_VERSION_EPOCH_FUNCTION_NAME))
-    return { rows: [{ epoch: null }] }
+    return { rows: [{ epoch: "e".repeat(64) }] }
   if (text.includes("current_user_id")) return { rows: [{ user_id: AS }] }
   const row = JSON.stringify({ id: ID, version: 2, counter: BIG, org_id: ORG })
   if (text.includes(" AS row FROM ")) return { rows: [{ row }] }

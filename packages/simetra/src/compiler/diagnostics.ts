@@ -43,6 +43,7 @@ export const COMPILER_RULES = [
   "sql.debt-session-write",
   "sql.debt-extension-schema",
   "sql.definer-reads-rls",
+  "sql.definer-caller-unchecked",
   "rewrite.ambiguous-name",
   "rewrite.unqualified-table",
   "rewrite.unsupported",

@@ -305,6 +305,81 @@ describe("sql.function-body-statement: a call that executes SQL text (спека
     ])
   })
 
+  // Позитивний перелік провайдера (спека прав §5.3): виклик функції його схеми,
+  // якої перелік не називає, судиться як виконання тексту, а не пропускається.
+  it.each(
+    PLACES.flatMap((file) =>
+      [
+        {
+          name: "an unnamed function of a provider schema",
+          sql: plpgsql("PERFORM extensions.unknown_exec('SELECT 1')"),
+        },
+        {
+          name: "an unqualified unknown call without an empty search_path",
+          sql: plpgsql("PERFORM unknown_exec('SELECT 1')"),
+        },
+      ].map((row) => ({ ...row, file }))
+    )
+  )("$name in $file → dynamicText", async ({ file, sql }) => {
+    const result = await compile(await acceptDebt(files({ [file]: sql })))
+    expect(brief(result.diagnostics)).toEqual([
+      bodyStatement(file, "dynamicText"),
+    ])
+  })
+
+  it.each(PLACES)(
+    "a listed provider function and a pinned search_path in %s → no error; an unqualified model function → dynamicText",
+    async (file) => {
+      const accepted = [
+        plpgsql("PERFORM auth.uid()"),
+        plpgsql("PERFORM unknown_exec('SELECT 1')", "SET search_path = ''"),
+      ]
+      for (const sql of accepted) {
+        const result = await compile(await acceptDebt(files({ [file]: sql })))
+        expect(brief(result.diagnostics)).toEqual([])
+      }
+      const own = await compile(
+        await acceptDebt(
+          files({
+            [file]: `${plpgsql("PERFORM helper(1)")};\nCREATE FUNCTION public.helper(a int) RETURNS int LANGUAGE sql AS $$ SELECT a $$;`,
+          })
+        )
+      )
+      expect(brief(own.diagnostics)).toEqual([
+        bodyStatement(file, "dynamicText"),
+      ])
+    }
+  )
+
+  // Однойменна функція моделі не закриває некваліфікованого виклику: Postgres
+  // обирає перевантаження серед усіх схем шляху — інша арність чи схема
+  // раніше у шляху веде до `extensions.dblink_exec`.
+  it.each(PLACES)(
+    "an unqualified call that collides with a model function in %s → dynamicText; qualified → no error",
+    async (file) => {
+      const own =
+        "CREATE FUNCTION public.dblink_exec(n int) RETURNS int LANGUAGE sql IMMUTABLE AS $$ SELECT n $$;"
+      const collides = await compile(
+        await acceptDebt(
+          files({
+            [file]: `${plpgsql("PERFORM dblink_exec('dbname=postgres', 'SELECT 1')")};\n${own}`,
+          })
+        )
+      )
+      expect(brief(collides.diagnostics)).toEqual([
+        bodyStatement(file, "dynamicText"),
+      ])
+      const qualified = await compile(
+        await acceptDebt(
+          files({
+            [file]: `${plpgsql("PERFORM public.dblink_exec(1)")};\n${own}`,
+          })
+        )
+      )
+      expect(brief(qualified.diagnostics)).toEqual([])
+    }
+  )
+
   it.each(PLACES)("an ordinary builtin call in %s → no error", async (file) => {
     const result = await compile(
       await acceptDebt(

@@ -35,7 +35,7 @@ import {
   region,
   sample,
 } from "./fixtures"
-import { session, setup, type Override } from "./harness"
+import { HARNESS_EPOCH, session, setup, type Override } from "./harness"
 
 // Справжня звірка; кейс «`unknown` після звірки» підміняє один виклик.
 vi.mock("../compatibility", async (importOriginal) => {
@@ -520,7 +520,7 @@ describe("createDataHandler: steps 4–6", () => {
     const { calls, handle } = await harness(regionRows)
     const value = valueOf(await handle(session, readOf({}), IN_PROCESS))
     expect(value).toStrictEqual({
-      epoch: null,
+      epoch: HARNESS_EPOCH,
       items: [
         { ok: true, value: { rows: [{ id: ID, version: "2", code: "R" }] } },
       ],
@@ -849,8 +849,7 @@ describe("createDataHandler: steps 4–6", () => {
           operation: "create",
         }),
       ],
-      // Стенд без рядка епохи: `null` іде як є, рішення — за клієнтом.
-      epoch: null,
+      epoch: HARNESS_EPOCH,
     })
     expect(calls.run).toBe(1)
   })
@@ -1003,7 +1002,10 @@ describe("createDataHandler: steps 4–6", () => {
     ],
     [
       "run rows do not match the operations",
-      { run: () => Promise.resolve({ rows: [], changes: [], epoch: null }) },
+      {
+        run: () =>
+          Promise.resolve({ rows: [], changes: [], epoch: HARNESS_EPOCH }),
+      },
       runOf(createClient),
     ],
     [

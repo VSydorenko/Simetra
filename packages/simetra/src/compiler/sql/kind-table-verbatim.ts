@@ -1,5 +1,7 @@
 import type { Node } from "libpg-query"
 import {
+  PLATFORM_SCHEMA,
+  PLATFORM_STATE_TABLES,
   PROVIDER_IDENTITY_SOURCES,
   type DatabaseProvider,
   type PhysicalTable,
@@ -29,6 +31,11 @@ export interface KindTables {
   qualified: ReadonlySet<string>
   byName: ReadonlyMap<string, readonly string[]>
   bySchema: ReadonlyMap<string, readonly string[]>
+  /**
+   * Схеми, кожне відношення яких закрите, зокрема те, якого знімок не знає:
+   * кваліфікована ціль у такій схемі судиться без переліку імен.
+   */
+  closedSchemas?: ReadonlySet<string>
 }
 
 export function kindTables(
@@ -54,29 +61,42 @@ export function kindTables(
 }
 
 /**
- * Таблиці, у які SQL застосунку не пише (Правило 1): таблиці виду і таблиця
+ * Таблиці, у які SQL застосунку не пише (Правило 1): таблиці виду, таблиця
  * джерела ідентичностей провайдера — тригери платформи переносять запис у неї
  * в «Користувачі» й `simetra.identities` (спека прав §6.1), тож запис туди змінював би
- * таблицю виду повз команду. Лише для DML тіла: дослівні політики й тригери
- * (спека прав §6.1) судяться над `kindTables`.
+ * таблицю виду повз команду, — і кожне відношення схеми `simetra`. Стан
+ * застосування, квитанції й черга сигналів живуть там поза знімком, а
+ * функція застосунку з `SECURITY DEFINER` писала б їх від імені власника
+ * повз команду. Некваліфіковане ім'я судиться за таблицями схеми, які відомі
+ * (знімок і стан застосування, `PLATFORM_STATE_TABLES`), кваліфіковане —
+ * будь-яке. Лише для DML тіла: дослівні політики й тригери (спека прав §6.1)
+ * судяться над `kindTables`.
  */
 export function ruleOneTables(
   tables: KindTables,
   provider: DatabaseProvider | undefined
 ): KindTables {
-  if (provider === undefined) return tables
-  const { schema, name } = PROVIDER_IDENTITY_SOURCES[provider].table
-  const key = `${schema}.${name}`
+  const closed = [
+    ...PLATFORM_STATE_TABLES.map((name) => ({ schema: PLATFORM_SCHEMA, name })),
+    ...(provider === undefined
+      ? []
+      : [PROVIDER_IDENTITY_SOURCES[provider].table]),
+  ]
+  const qualified = new Set(tables.qualified)
+  const byName = new Map(tables.byName)
+  const bySchema = new Map(tables.bySchema)
+  for (const { schema, name } of closed) {
+    const key = `${schema}.${name}`
+    if (qualified.has(key)) continue
+    qualified.add(key)
+    byName.set(name, [...(byName.get(name) ?? []), key])
+    bySchema.set(schema, [...(bySchema.get(schema) ?? []), key])
+  }
   return {
-    qualified: new Set([...tables.qualified, key]),
-    byName: new Map([
-      ...tables.byName,
-      [name, [...(tables.byName.get(name) ?? []), key]],
-    ]),
-    bySchema: new Map([
-      ...tables.bySchema,
-      [schema, [...(tables.bySchema.get(schema) ?? []), key]],
-    ]),
+    qualified,
+    byName,
+    bySchema,
+    closedSchemas: new Set([...(tables.closedSchemas ?? []), PLATFORM_SCHEMA]),
   }
 }
 
@@ -93,11 +113,16 @@ function kindTableNamed(
   own: string,
   tables: KindTables
 ): string | undefined {
-  if (target.kind === "schema") return tables.bySchema.get(target.schema)?.[0]
+  const closed = tables.closedSchemas?.has(target.schema) === true
+  if (target.kind === "schema")
+    return (
+      tables.bySchema.get(target.schema)?.[0] ??
+      (closed ? `${target.schema}.*` : undefined)
+    )
   const name = target.object ?? ""
   if (target.schema !== "") {
     const key = `${target.schema}.${name}`
-    return tables.qualified.has(key) ? key : undefined
+    return tables.qualified.has(key) || closed ? key : undefined
   }
   const mine = `${own}.${name}`
   if (tables.qualified.has(mine)) return mine

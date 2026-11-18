@@ -250,11 +250,18 @@ describe("checkHeads: Rule 3 — query functions", () => {
       sql: selectWhere("t.id = auth.uid()"),
       expected: [],
     },
-    ...["extensions.gen_random_bytes(16)", "auth.other()"].map((call) => ({
+    ...["extensions.gen_random_bytes(16)"].map((call) => ({
       name: `provider ${call}`,
       sql: selectWhere(`${call} IS NOT NULL`),
       expected: [found("call", call.slice(0, call.indexOf("(")), SET_FUNCTION)],
     })),
+    {
+      // Функція схеми провайдера поза позитивним переліком — виконання тексту
+      // (спека прав §5.3): її судить перелік тіла раніше за голову.
+      name: "provider auth.other",
+      sql: selectWhere("auth.other() IS NOT NULL"),
+      expected: [["sql.function-body-statement"]],
+    },
     {
       name: "generated membership function",
       sql: selectWhere("public.org_member_my_member(t.id) IS NOT NULL"),
