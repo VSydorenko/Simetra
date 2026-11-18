@@ -1674,7 +1674,7 @@ async function runModel(
       // після `endHydration` (умовне монтування, §6.6) і мусить читатися сам.
       const subscribeHeld = (late: boolean) =>
         held.flatMap((sub, i) => {
-          if (i % 2 === 1 !== late) return []
+          if ((i % 2 === 1) !== late) return []
           const v = SPECS.findIndex(
             (spec) => JSON.stringify(spec) === JSON.stringify(sub.form.spec)
           )
