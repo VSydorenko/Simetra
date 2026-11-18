@@ -1,65 +1,100 @@
-import {
-  quoteIdent,
-  type GrantPurpose,
-  type DatabaseProvider,
-} from "simetra/model"
-import type { QualifiedName } from "./contracts"
+import type { DatabaseProvider, GrantPurpose } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "./diagnostics"
-import { PLATFORM_FORM_PURPOSES } from "./sql/declarations"
+import type { PlatformFormSource } from "./sql/closed-forms"
+import {
+  PLATFORM_FORM_PURPOSES,
+  type DeclaredFunction,
+} from "./sql/declarations"
 import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
-import { generatedUnit, grantObjects, type SqlUnit } from "./sql/units"
+import {
+  functionIdentity,
+  functionSignatureSql,
+  generatedUnit,
+  grantObjects,
+  type SqlUnit,
+  type VerbatimUnit,
+} from "./sql/units"
+
+/** Функції, `EXECUTE` яких виводить платформа (`buildFunctionExecuteUnits`). */
+export interface FunctionExecuteSources {
+  /** Форми платформи (`platformFormSources`); `membership` там немає. */
+  forms: readonly PlatformFormSource[]
+  /** Задекларовані функції (`declaredFunctions`). */
+  declared: readonly DeclaredFunction[]
+  /** Дослівні одиниці: `CREATE` кожного джерела й функції модулів видів. */
+  units: readonly VerbatimUnit[]
+  /** Файли об'єктів видів із закритим модулем (`closedModuleOwners`). */
+  moduleOwners: ReadonlySet<string>
+}
 
 /**
- * `EXECUTE` функцій, які оголошують метадані (платформна спека §6.7): функцію
- * множини виду скоупу викликає політика від імені запиту, тож її виконують
- * роль користувача й сервісна, а також роль команд — від неї функції прав
- * обчислюють скоупи (спека прав §5.1); обробник підписки викликає тригер без
- * `EXECUTE` у ролі, що пише, тож він не потрібен жодній ролі API. Функцію
- * множини `membership` сюди не передають: її гранти дає генератор членства.
- * Одна функція в кількох видах скоупу чи підписках — одна група грантів.
+ * `EXECUTE` функцій, ACL яких належить платформі (платформна спека §6.7,
+ * спека декларацій функцій §5.1): форм платформи — з призначень форми
+ * (`PLATFORM_FORM_PURPOSES`), задекларованих — з викликачів, недекларованих
+ * функцій модуля виду — з порожніх призначень: модуль не приймає дослівних
+ * грантів, тож інакше функція лишилася б з `EXECUTE` від `PUBLIC` і типових
+ * привілеїв провайдера. Функцію множини `membership` сюди не передають: її
+ * гранти дає генератор членства. Одна функція — одна група грантів:
+ * форма перемагає декларацію (її помилку `sql.declaration-platform-form`
+ * названо окремо), декларація — типову групу модуля. Підпис — з типів
+ * аргументів `CREATE` функції: функція модуля може мати параметри, і грант
+ * без них цілив би в іншу функцію.
  */
 export function buildFunctionExecuteUnits(
-  setFunctions: readonly QualifiedName[],
-  handlers: readonly QualifiedName[],
+  sources: FunctionExecuteSources,
   provider: DatabaseProvider,
   module: string,
   parse: SqlParser
 ): SqlUnit[] {
+  const { forms, declared, units, moduleOwners } = sources
   const groups = new Map<
     string,
-    { fn: QualifiedName; purposes: GrantPurpose[] }
+    { signature: string; schema: string; purposes: readonly GrantPurpose[] }
   >()
-  // Функція множини (`SETOF uuid`) і обробник (`trigger`) — різні функції за
-  // правилами стадії 5, тож перша назва не перекриває другу на чистій моделі.
-  for (const fn of setFunctions)
-    if (!groups.has(key(fn)))
-      groups.set(key(fn), {
-        fn,
-        purposes: [...PLATFORM_FORM_PURPOSES.setFunction],
-      })
-  for (const fn of handlers)
-    if (!groups.has(key(fn)))
-      groups.set(key(fn), {
-        fn,
-        purposes: [...PLATFORM_FORM_PURPOSES.subscriptionHandler],
-      })
+  const add = (
+    unit: Pick<VerbatimUnit, "identity" | "schema" | "name">,
+    purposes: readonly GrantPurpose[]
+  ) => {
+    if (groups.has(unit.identity)) return
+    groups.set(unit.identity, {
+      signature: functionSignatureSql(unit),
+      schema: unit.schema,
+      purposes,
+    })
+  }
+  for (const { function: fn, form } of forms) {
+    const named = units.filter(
+      (u) =>
+        u.class === "function" && u.schema === fn.schema && u.name === fn.name
+    )
+    // Форма — функція без аргументів (стадія 5); без єдиного `CREATE` її
+    // помилку названо там же, а грант цілить у цю саму функцію `()`.
+    add(
+      named.length === 1
+        ? named[0]!
+        : { ...fn, identity: functionIdentity(fn.schema, fn.name, []) },
+      PLATFORM_FORM_PURPOSES[form]
+    )
+  }
+  for (const { unit, declaration } of declared) add(unit, declaration.callers)
+  for (const unit of units)
+    if (
+      unit.class === "function" &&
+      unit.ownerFile !== undefined &&
+      moduleOwners.has(unit.ownerFile)
+    )
+      add(unit, [])
   return [...groups.values()]
-    .flatMap(({ fn, purposes }) =>
-      executeGrants(
-        `${quoteIdent(fn.schema)}.${quoteIdent(fn.name)}()`,
-        purposes,
-        provider
-      ).map((sql): SqlUnit => ({
-        ...generatedUnit(sql, fn.schema, parse),
+    .flatMap(({ signature, schema, purposes }) =>
+      executeGrants(signature, purposes, provider).map((sql): SqlUnit => ({
+        ...generatedUnit(sql, schema, parse),
         module,
         generator: "functionExecute",
       }))
     )
     .sort((a, b) => compareStrings(a.identity, b.identity))
 }
-
-const key = (fn: QualifiedName) => `${fn.schema}.${fn.name}`
 
 /**
  * Дослівний грант на об'єкт, правами якого володіє платформа (платформна спека §6.7):

@@ -814,7 +814,16 @@ describe("kind module: closed forms only", () => {
       withoutMechanics(withoutAccess(result.model!.sqlUnits)).map(
         (u) => u.class
       )
-    ).toEqual(["movementQuery", "function"])
+    ).toEqual([
+      "movementQuery",
+      "function",
+      // Функція модуля без декларації — `REVOKE` від `PUBLIC` і ролей API
+      // (спека декларацій функцій §5.1); перелік — function-execute.test.ts.
+      "grant",
+      "grant",
+      "grant",
+      "grant",
+    ])
   })
 })
 

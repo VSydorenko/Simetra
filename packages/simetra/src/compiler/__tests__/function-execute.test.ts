@@ -1,8 +1,17 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import { PLATFORM_ROLES } from "simetra/model"
-import { buildFunctionExecuteUnits } from "../function-execute"
+import type { QualifiedName } from "../contracts"
+import {
+  buildFunctionExecuteUnits,
+  type FunctionExecuteSources,
+} from "../function-execute"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
+import {
+  DIMENSION_SQL,
+  compiledPolicyDomain,
+  dimensionFunction,
+} from "./fixtures/rights"
 import {
   expectClean,
   acceptDebt,
@@ -113,11 +122,30 @@ async function grantDiagnostics(entries: Record<string, unknown>, sql: string) {
   )
 }
 
+/** Джерела генератора: лише форми платформи, без одиниць `CREATE`. */
+const sources = (
+  setFunctions: QualifiedName[],
+  handlers: QualifiedName[]
+): FunctionExecuteSources => ({
+  forms: [
+    ...setFunctions.map((fn) => ({
+      function: fn,
+      form: "setFunction" as const,
+    })),
+    ...handlers.map((fn) => ({
+      function: fn,
+      form: "subscriptionHandler" as const,
+    })),
+  ],
+  declared: [],
+  units: [],
+  moduleOwners: new Set(),
+})
+
 describe("buildFunctionExecuteUnits", () => {
   it("a declared set function revokes PUBLIC and anon and grants authenticated, service_role and the command role", () => {
     const units = buildFunctionExecuteUnits(
-      [{ schema: "public", name: "my_orgs" }],
-      [],
+      sources([{ schema: "public", name: "my_orgs" }], []),
       "supabase",
       "app",
       parse
@@ -141,8 +169,7 @@ describe("buildFunctionExecuteUnits", () => {
 
   it("a declared set function is executable by the command role", () => {
     const sql = buildFunctionExecuteUnits(
-      [{ schema: "public", name: "my_orgs" }],
-      [],
+      sources([{ schema: "public", name: "my_orgs" }], []),
       "supabase",
       "app",
       parse
@@ -164,8 +191,7 @@ describe("buildFunctionExecuteUnits", () => {
         .sort()
     ).toEqual(
       buildFunctionExecuteUnits(
-        [{ schema: "public", name: "my_orgs" }],
-        [],
+        sources([{ schema: "public", name: "my_orgs" }], []),
         "supabase",
         "TestApp",
         parse
@@ -186,8 +212,7 @@ describe("buildFunctionExecuteUnits", () => {
 
   it("a subscription handler is revoked from PUBLIC and every API role", () => {
     const units = buildFunctionExecuteUnits(
-      [],
-      [{ schema: "public", name: "stamp" }],
+      sources([], [{ schema: "public", name: "stamp" }]),
       "supabase",
       "app",
       parse
@@ -324,5 +349,316 @@ describe("sql.generated-grant", () => {
       "GRANT EXECUTE ON FUNCTION public.other() TO anon;"
     )
     expectClean({ diagnostics }, { allow: ["rights.scope-kind-unread"] })
+  })
+})
+
+/** Функція в закритій оболонці; `definer` — `SECURITY DEFINER`. */
+const closedFn = (name: string, args = "", definer = false) =>
+  `CREATE FUNCTION ${name}(${args}) RETURNS int LANGUAGE sql STABLE${definer ? " SECURITY DEFINER" : ""} SET search_path = '' AS $$ SELECT 1 $$;\n`
+
+let nextDeclarationId = 9400
+const functionsFile = (
+  ...entries: {
+    function: { schema?: string; name: string }
+    callers: string[]
+  }[]
+) =>
+  JSON.stringify({
+    functions: entries.map((entry) => ({
+      id: uuid(++nextDeclarationId),
+      ...entry,
+    })),
+  })
+
+const ITEM_FILE = "catalogs/Item/Item.meta.json"
+const ITEM_MODULE = "catalogs/Item/Item.sql"
+
+/** Компіляція `entries` на `provider` з прийнятим боргом; результат цілий. */
+async function compiledOn(
+  entries: Record<string, unknown>,
+  provider: "supabase" | "postgres" = "supabase"
+) {
+  const files = await acceptDebt(
+    metaFiles({
+      "project.meta.json": project({ database: { provider } }),
+      [ITEM_FILE]: catalog("Item", { scope: "none" }),
+      ...entries,
+    })
+  )
+  const result = await compile(files)
+  return result
+}
+
+async function executeSql(
+  entries: Record<string, unknown>,
+  provider: "supabase" | "postgres" = "supabase"
+) {
+  const result = await compiledOn(entries, provider)
+  expectClean(result)
+  return result
+    .model!.sqlUnits.filter((u) => u.generator === "functionExecute")
+    .map((u) => u.sql)
+    .sort()
+}
+
+describe("EXECUTE of declared, dimension and module functions", () => {
+  it.each([
+    {
+      provider: "supabase" as const,
+      callers: ["user"],
+      expected: [
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC;",
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM anon;",
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM service_role;",
+        "GRANT EXECUTE ON FUNCTION public.f() TO authenticated;",
+      ],
+    },
+    {
+      provider: "postgres" as const,
+      callers: ["user"],
+      expected: [
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC;",
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM simetra_anon;",
+        "GRANT EXECUTE ON FUNCTION public.f() TO simetra_user;",
+      ],
+    },
+    {
+      provider: "supabase" as const,
+      callers: ["anonymous", "service", "command"],
+      expected: [
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC;",
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM authenticated;",
+        "GRANT EXECUTE ON FUNCTION public.f() TO anon;",
+        "GRANT EXECUTE ON FUNCTION public.f() TO service_role;",
+        `GRANT EXECUTE ON FUNCTION public.f() TO ${PLATFORM_ROLES.command};`,
+      ],
+    },
+    {
+      // Сервісної ролі профіль `postgres` не має: призначення пропускається.
+      provider: "postgres" as const,
+      callers: ["anonymous", "service", "command"],
+      expected: [
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC;",
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM simetra_user;",
+        "GRANT EXECUTE ON FUNCTION public.f() TO simetra_anon;",
+        `GRANT EXECUTE ON FUNCTION public.f() TO ${PLATFORM_ROLES.command};`,
+      ],
+    },
+    {
+      provider: "supabase" as const,
+      callers: [],
+      expected: [
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC;",
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM anon;",
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM authenticated;",
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM service_role;",
+      ],
+    },
+  ])(
+    "a declared function with callers $callers on $provider",
+    async ({ provider, callers, expected }) => {
+      expect(
+        await executeSql(
+          {
+            "sql/public/fns.sql": closedFn("public.f"),
+            "sql/public/fns.functions.json": functionsFile({
+              function: { name: "f" },
+              callers,
+            }),
+          },
+          provider
+        )
+      ).toEqual(expected.sort())
+    }
+  )
+
+  it.each(["supabase", "postgres"] as const)(
+    "a declared definer function with callers service is revoked from PUBLIC and every other API role on %s",
+    async (provider) => {
+      const sql = await executeSql(
+        {
+          "sql/public/fns.sql": closedFn("public.svc", "", true),
+          "sql/public/fns.functions.json": functionsFile({
+            function: { name: "svc" },
+            callers: ["service"],
+          }),
+        },
+        provider
+      )
+      expect(sql).toEqual(
+        (provider === "supabase"
+          ? [
+              "REVOKE EXECUTE ON FUNCTION public.svc() FROM PUBLIC;",
+              "REVOKE EXECUTE ON FUNCTION public.svc() FROM anon;",
+              "REVOKE EXECUTE ON FUNCTION public.svc() FROM authenticated;",
+              "GRANT EXECUTE ON FUNCTION public.svc() TO service_role;",
+            ]
+          : [
+              "REVOKE EXECUTE ON FUNCTION public.svc() FROM PUBLIC;",
+              "REVOKE EXECUTE ON FUNCTION public.svc() FROM simetra_anon;",
+              "REVOKE EXECUTE ON FUNCTION public.svc() FROM simetra_user;",
+            ]
+        ).sort()
+      )
+    }
+  )
+
+  it("a declared function signature carries its argument types", async () => {
+    expect(
+      await executeSql({
+        "sql/public/fns.sql": closedFn("public.f", "p_id uuid, p_names text[]"),
+        "sql/public/fns.functions.json": functionsFile({
+          function: { name: "f" },
+          callers: ["user"],
+        }),
+      })
+    ).toContain(
+      "GRANT EXECUTE ON FUNCTION public.f(uuid, text[]) TO authenticated;"
+    )
+  })
+
+  it("a declared function outside public gives USAGE on its schema to the callers", async () => {
+    const result = await compiledOn({
+      "sql/app/fns.sql": closedFn("app.f"),
+      "sql/app/fns.functions.json": functionsFile({
+        function: { schema: "app", name: "f" },
+        callers: ["user", "command"],
+      }),
+    })
+    expectClean(result)
+    expect(
+      result
+        .model!.sqlUnits.filter((u) => u.generator === "schemaUsage")
+        .map((u) => u.sql)
+        .sort()
+    ).toEqual(
+      [
+        "GRANT USAGE ON SCHEMA app TO authenticated;",
+        `GRANT USAGE ON SCHEMA app TO ${PLATFORM_ROLES.command};`,
+      ].sort()
+    )
+  })
+
+  it("an undeclared module function with a parameter is revoked from PUBLIC and every API role", async () => {
+    expect(
+      await executeSql({
+        [ITEM_MODULE]: closedFn("public.item_total", "p_id uuid"),
+      })
+    ).toEqual(
+      [
+        "REVOKE EXECUTE ON FUNCTION public.item_total(uuid) FROM PUBLIC;",
+        "REVOKE EXECUTE ON FUNCTION public.item_total(uuid) FROM anon;",
+        "REVOKE EXECUTE ON FUNCTION public.item_total(uuid) FROM authenticated;",
+        "REVOKE EXECUTE ON FUNCTION public.item_total(uuid) FROM service_role;",
+      ].sort()
+    )
+  })
+
+  it("a declared module function gets its callers' grants", async () => {
+    expect(
+      await executeSql(
+        {
+          [ITEM_MODULE]: closedFn("public.item_total", "p_id uuid"),
+          "catalogs/Item/Item.functions.json": functionsFile({
+            function: { name: "item_total" },
+            callers: ["user"],
+          }),
+        },
+        "postgres"
+      )
+    ).toEqual(
+      [
+        "REVOKE EXECUTE ON FUNCTION public.item_total(uuid) FROM PUBLIC;",
+        "REVOKE EXECUTE ON FUNCTION public.item_total(uuid) FROM simetra_anon;",
+        "GRANT EXECUTE ON FUNCTION public.item_total(uuid) TO simetra_user;",
+      ].sort()
+    )
+  })
+
+  it("a dimension value function is revoked from PUBLIC and every API role", async () => {
+    const result = await compiledPolicyDomain(
+      { "sql/public/region.sql": DIMENSION_SQL },
+      [dimensionFunction()]
+    )
+    expect(
+      result
+        .model!.sqlUnits.filter(
+          (u) => u.generator === "functionExecute" && u.sql.includes("region_")
+        )
+        .map((u) => u.sql)
+        .sort()
+    ).toEqual(
+      [
+        "REVOKE EXECUTE ON FUNCTION public.region_ids() FROM PUBLIC;",
+        "REVOKE EXECUTE ON FUNCTION public.region_ids() FROM anon;",
+        "REVOKE EXECUTE ON FUNCTION public.region_ids() FROM authenticated;",
+        "REVOKE EXECUTE ON FUNCTION public.region_ids() FROM service_role;",
+      ].sort()
+    )
+  })
+})
+
+describe("sql.generated-grant on declared, dimension and module functions", () => {
+  /** Коди й цілі `sql.generated-grant` компіляції з дослівним `GRANTS_FILE`. */
+  async function generatedGrants(
+    entries: Record<string, unknown>,
+    sql: string
+  ) {
+    const result = await compiledOn({ ...entries, [GRANTS_FILE]: sql })
+    return result.diagnostics.map((d) => [d.code, d.params?.object])
+  }
+
+  const service = {
+    "sql/public/fns.sql": closedFn("public.svc", "", true),
+    "sql/public/fns.functions.json": functionsFile({
+      function: { name: "svc" },
+      callers: ["service"],
+    }),
+  }
+
+  it.each(["anon", PLATFORM_ROLES.command])(
+    "a verbatim grant to %s on a declared definer function with callers service",
+    async (role) => {
+      expect(
+        await generatedGrants(
+          service,
+          `GRANT EXECUTE ON FUNCTION public.svc() TO ${role};`
+        )
+      ).toEqual([["sql.generated-grant", "public.svc()"]])
+    }
+  )
+
+  it("a verbatim revoke on a declared function", async () => {
+    expect(
+      await generatedGrants(
+        service,
+        "REVOKE EXECUTE ON FUNCTION public.svc() FROM service_role;"
+      )
+    ).toEqual([["sql.generated-grant", "public.svc()"]])
+  })
+
+  it("a verbatim grant on a module function with a parameter", async () => {
+    expect(
+      await generatedGrants(
+        { [ITEM_MODULE]: closedFn("public.item_total", "p_id uuid") },
+        "GRANT EXECUTE ON FUNCTION public.item_total(uuid) TO authenticated;"
+      )
+    ).toEqual([["sql.generated-grant", "public.item_total(uuid)"]])
+  })
+
+  it("a verbatim grant on a dimension value function", async () => {
+    const result = await compiledPolicyDomain(
+      {
+        "sql/public/region.sql": DIMENSION_SQL,
+        [GRANTS_FILE]:
+          "GRANT EXECUTE ON FUNCTION public.region_ids() TO authenticated;",
+      },
+      [dimensionFunction()]
+    )
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "sql.generated-grant")
+        .map((d) => d.params?.object)
+    ).toEqual(["public.region_ids()"])
   })
 })

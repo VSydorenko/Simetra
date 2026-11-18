@@ -89,7 +89,11 @@ import {
 } from "./subscription-units"
 import { buildMembershipFunctions, membershipsOf } from "./membership-functions"
 import { buildPlatformUnits } from "./platform/units"
-import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
+import {
+  checkSqlModules,
+  closedModuleOwners,
+  platformFormSources,
+} from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
 import { checkDebt, debtPredicate } from "./sql/debt"
 import { checkDeclarations, declaredFunctions } from "./sql/declarations"
@@ -516,7 +520,7 @@ export async function runStages(
   // для меж доступу: без нього всі мовчать (спека прав §4.6).
   const users = usersContractOf(stage1.objects, physical)
   // Дослівні функції множини видів скоупу — факт актора `scopeSets` (спека
-  // прав §5.2): той самий перелік, що гранти `setFunctions`, з видом.
+  // прав §5.2): ті самі функції, що отримують гранти форми `setFunction`, з видом.
   const scopeSetFunctions = scopeKinds
     .filter((kind) =>
       stage1.project!.scopeKinds.some(
@@ -579,22 +583,10 @@ export async function runStages(
     parse
   )
   const module = projectModule
-  // Підписки потрібні і контрактам, і грантам обробників — один масив.
   const eventSubscriptions = eventSubscriptionContracts(
     stage1.objects,
     physical,
     stage1.project
-  )
-  // Функцію множини `membership` з її грантами дає генератор членства.
-  const setFunctions = stage1.project.scopeKinds.flatMap((kind) =>
-    typeof kind.setFunction === "string"
-      ? []
-      : [
-          {
-            schema: kind.setFunction.schema ?? defaultSchema,
-            name: kind.setFunction.name,
-          },
-        ]
   )
   const membership = membershipContracts(
     stage1.objects,
@@ -664,8 +656,12 @@ export async function runStages(
       parse
     ),
     ...buildFunctionExecuteUnits(
-      setFunctions,
-      eventSubscriptions.map((s) => s.handler),
+      {
+        forms: platformFormSources(stage1.objects, stage1.project),
+        declared,
+        units: sql.units,
+        moduleOwners: owners,
+      },
       stage1.project.database.provider,
       module,
       parse
