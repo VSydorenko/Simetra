@@ -92,6 +92,7 @@ import { buildPlatformUnits } from "./platform/units"
 import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
 import { checkDebt, debtPredicate } from "./sql/debt"
+import { checkDeclarations, declaredFunctions } from "./sql/declarations"
 import {
   checkFunctionBodies,
   checkPlatformCalls,
@@ -168,7 +169,7 @@ export async function runStages(
     loadSqlParser(),
     loadPlpgsqlParser(),
   ])
-  const { stage2, upstream, stage3, sql } = sqlStage(stage1, parse)
+  const { stage2, upstream, stage3, sql, declared } = sqlStage(stage1, parse)
   // id є в кожного об'єкта, лише коли стадія 2 чиста; її помилки закривають
   // шлях до вкладення правил і далі, тож порожнє id сюди не доходить.
   const idByFile = new Map(stage1.objects.map((o) => [o.file, o.id ?? ""]))
@@ -205,7 +206,8 @@ export async function runStages(
           stage1.sqlDebt,
           !sql.diagnostics.some((d) => d.code === "sql.parse"),
           parse,
-          plpgsql
+          plpgsql,
+          declared
         )
   // Згенеровані функції схем застосунку відомі лише зі знімка. Подання й
   // політики їх не судять дозвільним переліком виразів (спека прав §5.3): ті, що
@@ -254,11 +256,13 @@ export async function runStages(
         parse,
         plpgsql,
         modelViews(sql.units),
-        sql.units
+        sql.units,
+        declared
       ),
       parse,
       plpgsql,
-      stage1.project?.database.provider
+      stage1.project?.database.provider,
+      declared
     ),
     // Оболонку судимих функцій задає лише `CREATE` (спека прав §5.3): набір судимих
     // відомий до стадії 3, тож помилка стоїть поруч із формами модулів.
@@ -267,7 +271,20 @@ export async function runStages(
       stage1.project,
       sql.units,
       parse,
-      plpgsql
+      plpgsql,
+      declared
+    ),
+    // Резолв декларацій функцій (спека декларацій функцій §5.1) потребує лише
+    // одиниць і метаданих, тож стоїть у ранньому блоці: нерезолвлена
+    // декларація не має доходити до генератора `EXECUTE`.
+    ...checkDeclarations(
+      stage1.functionsFiles,
+      sql.units,
+      stage1.objects,
+      stage1.project,
+      new Set(
+        sql.diagnostics.filter((d) => d.code === "sql.parse").map((d) => d.file)
+      )
     ),
     ...debt.grows,
     // Дослівна політика чи тригер на таблиці виду і тіло функції, що її
@@ -1053,7 +1070,17 @@ export function sqlStage(stage1: FilesStageResult, parse: SqlParser) {
           ...enumTypes(stage1, stage1.project.defaultSchema),
           ...(stage3 === undefined ? [] : rowTypesOf(stage3.physical)),
         ])
-  return { stage2, upstream, stage3, sql }
+  // Декларації резолвляться над тими самими одиницями, тож ратчет боргу
+  // (`fix`, `introspect`) і стадії бачать одне й те саме виключення.
+  const declared =
+    stage1.project === undefined
+      ? []
+      : declaredFunctions(
+          stage1.functionsFiles,
+          sql.units,
+          stage1.project.defaultSchema
+        )
+  return { stage2, upstream, stage3, sql, declared }
 }
 
 /**

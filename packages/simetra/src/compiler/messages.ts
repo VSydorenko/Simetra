@@ -1357,6 +1357,44 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Функція SECURITY DEFINER виконується від свого власника, який обходить захист рядків, тож роль API, що може її виконати, діє повз права. Така функція відхиляється в будь-якому файлі .sql, борг включно, доки не набуде форми платформи чи не назве перевірку викликача: зв'яжіть її з видом скоупу як функцію множини (чи з виміром доступу як функцію значень) або задекларуйте її сигнатуру з названою перевіркою. Інакше зробіть її SECURITY INVOKER, відкличте EXECUTE від PUBLIC і від кожної ролі API або запишіть операцію командою чи TypeScript-хуком.",
     },
   },
+  "sql.declaration-target-missing": {
+    en: (p) =>
+      `Declaration of ${p.function} names a function that ${p.sqlFile} does not create`,
+    uk: (p) =>
+      `Декларація ${p.function} називає функцію, якої ${p.sqlFile} не створює`,
+    hint: {
+      en: "A .functions.json file declares only functions of its sibling .sql file. Fix the schema or the name of the entry, move the entry beside the file that creates the function, or remove it.",
+      uk: "Файл .functions.json декларує лише функції сусіднього файлу .sql. Виправте схему чи ім'я запису, перенесіть запис до файлу, що створює функцію, або видаліть його.",
+    },
+  },
+  "sql.declaration-overload": {
+    en: (p) =>
+      `Declaration of ${p.function} is ambiguous: ${p.count} routines share this name`,
+    uk: (p) =>
+      `Декларація ${p.function} неоднозначна: це ім'я мають ${p.count} підпрограми`,
+    hint: {
+      en: "A declaration tells a function by its schema and name only. Give the declared function its own name in the schema.",
+      uk: "Декларація розрізняє функцію лише схемою й ім'ям. Дайте задекларованій функції власне ім'я в схемі.",
+    },
+  },
+  "sql.declaration-duplicate": {
+    en: (p) => `${p.function} is already declared at ${p.first}`,
+    uk: (p) => `${p.function} уже задекларовано в ${p.first}`,
+    hint: {
+      en: "A function has one declaration. Keep one entry and remove the other; an entry without schema takes the defaultSchema of the project.",
+      uk: "Функція має одну декларацію. Залиште один запис і видаліть інший; запис без схеми бере defaultSchema проєкту.",
+    },
+  },
+  "sql.declaration-platform-form": {
+    en: (p) =>
+      `${p.function} is a platform form (${p.form}): its EXECUTE comes from the metadata, not from a declaration`,
+    uk: (p) =>
+      `${p.function} — форма платформи (${p.form}): її EXECUTE задають метадані, а не декларація`,
+    hint: {
+      en: "Set functions of scope kinds, subscription handlers and values functions of access dimensions get their grants from the platform. Remove the declaration of this function.",
+      uk: "Функції множини видів скоупу, обробники підписок і функції значень вимірів доступу отримують гранти від платформи. Видаліть декларацію цієї функції.",
+    },
+  },
   "sql.debt-stale": {
     en: (p) =>
       `sql-debt.json lists ${p.identity}, which is no longer verbatim SQL debt`,

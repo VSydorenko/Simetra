@@ -5,6 +5,7 @@ import {
 } from "simetra/model"
 import type { QualifiedName } from "./contracts"
 import { compareStrings, diagnostic, type Diagnostic } from "./diagnostics"
+import { PLATFORM_FORM_PURPOSES } from "./sql/declarations"
 import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, grantObjects, type SqlUnit } from "./sql/units"
@@ -33,9 +34,16 @@ export function buildFunctionExecuteUnits(
   // правилами стадії 5, тож перша назва не перекриває другу на чистій моделі.
   for (const fn of setFunctions)
     if (!groups.has(key(fn)))
-      groups.set(key(fn), { fn, purposes: ["user", "service", "command"] })
+      groups.set(key(fn), {
+        fn,
+        purposes: [...PLATFORM_FORM_PURPOSES.setFunction],
+      })
   for (const fn of handlers)
-    if (!groups.has(key(fn))) groups.set(key(fn), { fn, purposes: [] })
+    if (!groups.has(key(fn)))
+      groups.set(key(fn), {
+        fn,
+        purposes: [...PLATFORM_FORM_PURPOSES.subscriptionHandler],
+      })
   return [...groups.values()]
     .flatMap(({ fn, purposes }) =>
       executeGrants(

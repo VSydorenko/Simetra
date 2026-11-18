@@ -13,6 +13,7 @@ import {
   providerCalls,
   type CommandContextHit,
 } from "./command-context"
+import type { DeclaredFunction } from "./declarations"
 import { isExpressionUnit } from "./expression-calls"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
@@ -435,7 +436,8 @@ export function checkSqlModules(
   isDebt: (unit: VerbatimUnit) => boolean,
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  provider: DatabaseProvider | undefined
+  provider: DatabaseProvider | undefined,
+  declared: readonly DeclaredFunction[]
 ): Diagnostic[] {
   const calls = providerCalls(provider, units)
   const owners = closedModuleOwners(objects)
@@ -550,19 +552,7 @@ export function checkSqlModules(
     const shellUnit = { tree: unit.tree as Node, sql: unit.sql }
     const problem = closedShellProblem(shellUnit, plpgsql)
     if (problem !== undefined) {
-      // Для динамічного SQL автору потрібен рядок самого оператора, а не
-      // початку функції: тіло буває на сотню рядків.
-      const line =
-        problem === "dynamicSql"
-          ? (firstDynamicSqlLine(shellUnit, unit.line, plpgsql) ?? unit.line)
-          : unit.line
-      found.push(
-        diagnostic("sql.closed-shell", unit.file, "", {
-          function: `${unit.schema}.${unit.name}`,
-          line,
-          problem,
-        })
-      )
+      found.push(closedShellDiagnostic(unit, problem, plpgsql))
     }
     // Контекст команди ставить лише `runCommand` (спека прав §5.3): SQL застосунку
     // виконується посеред оператора команди, і змінений ним контекст побачили
@@ -595,5 +585,42 @@ export function checkSqlModules(
       )
     }
   }
+  // Задекларована функція поза модулем виду теж мусить бути в закритій
+  // оболонці (спека декларацій функцій §5.1): декларація дає їй `EXECUTE`
+  // ролей застосунку, тож динамічний SQL чи definer без порожнього
+  // `search_path` тут — помилка, а не борг.
+  const declaredUnits = new Set(declared.map((d) => d.unit))
+  for (const unit of units) {
+    if (closed(unit) || !declaredUnits.has(unit)) continue
+    const problem = closedShellProblem(
+      { tree: unit.tree as Node, sql: unit.sql },
+      plpgsql
+    )
+    if (problem !== undefined) {
+      found.push(closedShellDiagnostic(unit, problem, plpgsql))
+    }
+  }
   return found
+}
+
+function closedShellDiagnostic(
+  unit: VerbatimUnit,
+  problem: ClosedShellProblem,
+  plpgsql: PlpgsqlParser
+): Diagnostic {
+  // Для динамічного SQL автору потрібен рядок самого оператора, а не
+  // початку функції: тіло буває на сотню рядків.
+  const line =
+    problem === "dynamicSql"
+      ? (firstDynamicSqlLine(
+          { tree: unit.tree as Node, sql: unit.sql },
+          unit.line,
+          plpgsql
+        ) ?? unit.line)
+      : unit.line
+  return diagnostic("sql.closed-shell", unit.file, "", {
+    function: `${unit.schema}.${unit.name}`,
+    line,
+    problem,
+  })
 }

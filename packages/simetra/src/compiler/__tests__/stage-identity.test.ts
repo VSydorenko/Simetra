@@ -552,7 +552,9 @@ describe("stage 2: identity of function declarations", () => {
     functions: [
       {
         ...(id === undefined ? {} : { id }),
-        function: { name: "set_scope" },
+        // Некваліфікований `CREATE` файлу `sql/app/` створює `app.set_scope`,
+        // а запис без схеми бере `defaultSchema` проєкту.
+        function: { schema: "app", name: "set_scope" },
         callers: [],
       },
     ],
