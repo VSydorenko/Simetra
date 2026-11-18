@@ -3,7 +3,7 @@ import { jsonBytes, type CatalogEntry } from "simetra/model"
 import { catalogEntry } from "../../../model/runtime/__tests__/entries"
 import { visibleRow } from "../object-store"
 import type { FakeReadLog, FakeSource } from "../testing/fake-source"
-import type { Key, ServerRow, ViewSpec } from "../types"
+import type { Key, ServerRow, ViewSnapshot, ViewSpec } from "../types"
 import {
   TASK,
   isPage,
@@ -481,5 +481,78 @@ describe("a marker on a row that changed between the start and the answer", () =
     expect(byKey.length).toBeGreaterThan(0)
     expect(byKey.every((r) => r.known === undefined)).toBe(true)
     expect(inspect.violations()).toEqual([])
+  })
+})
+
+describe("copies of a carrier carried by a partial marker", () => {
+  const objects = [withCopy(catalogEntry()), org]
+  const EPOCH_READ = 1_000_000_000
+
+  /** Holds the rows, then makes the client's copy of `title` differ from the server's. */
+  async function heldWithOldCopy(extraViews: readonly ViewSpec[] = []) {
+    const h = setup({ objects })
+    h.fake.epoch = EA
+    for (let n = 1; n <= 3; n++) h.fake.insert(TASK, fullValues(n))
+    const handles = [{ kind: "window", object: TASK } as ViewSpec]
+      .concat(extraViews)
+      .map((spec) => h.core.view(spec))
+    for (const handle of handles) watch(handle)
+    await settle()
+    const server = h.fake.row(TASK, key(2))!
+    // Той самий рядок тієї самої версії зі старою копією: версія не зросла.
+    h.core.commit(
+      (w) =>
+        w.apply(
+          TASK,
+          {
+            rows: [
+              {
+                ...server,
+                versionEpoch: EA,
+                values: { ...server.values, title: "old" },
+              },
+            ],
+            absent: [],
+          },
+          EPOCH_READ,
+          EA
+        ),
+      h.core.token()
+    )
+    return { ...h, handles, server }
+  }
+
+  const titleOf = (handle: { getSnapshot(): ViewSnapshot }, k: Key) => {
+    const row = handle.getSnapshot().rows.find((r) => r.key === k)!
+    return row.state === "removed" ? undefined : row.values.title
+  }
+
+  it("writes the copy of the marker into the held row", async () => {
+    const { core, fake, handles, server } = await heldWithOldCopy()
+    expect(titleOf(handles[0]!, key(2))).toBe("old")
+    const from = fake.log.length
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    const page = fake.log.slice(from).find(isPage)!
+    // Частковий маркер: об'єкт з `$known` і копією.
+    expect(
+      (page.response as { rows: unknown[] }).rows.some(
+        (row) => typeof row === "object" && row !== null
+      )
+    ).toBe(true)
+    expect(titleOf(handles[0]!, key(2))).toBe(server.values.title)
+  })
+
+  it("re-reads two views of one carrier key in one request, though the copy changed", async () => {
+    const { core, fake, handles, server } = await heldWithOldCopy([
+      { kind: "keys", object: TASK, keys: [key(2)] },
+    ])
+    const requests = fake.requests.length
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(fake.requests.length).toBe(requests + 1)
+    for (const handle of handles) {
+      expect(titleOf(handle, key(2))).toBe(server.values.title)
+    }
   })
 })

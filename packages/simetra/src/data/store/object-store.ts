@@ -454,6 +454,10 @@ export function createObjectStore(options: {
     ...entry.attributes.filter((a) => a.load !== "lazy").map((a) => a.name),
   ]
 
+  const copyNames = new Set(
+    entry.attributes.filter((a) => a.copy === true).map((a) => a.name)
+  )
+
   // Копія повна для форми читання: усі колонки переліку, а для картки ще
   // кожне ліниве поле, прочитане з версією рядка.
   function complete(e: RowEntry, form: "list" | "card"): boolean {
@@ -473,10 +477,14 @@ export function createObjectStore(options: {
     if (e.version !== held.version || e.versionEpoch !== row.versionEpoch)
       return false
     const values = e.row.values
+    // Копії носія змінюються без підвищення версії й їх несе сам маркер: два
+    // вигляди одного ключа читають за один такт, і другий маркер бачив би вже
+    // записану першим копію.
     return Object.keys(held.values).every(
       (name) =>
-        Object.hasOwn(values, name) &&
-        Object.is(values[name], held.values[name])
+        copyNames.has(name) ||
+        (Object.hasOwn(values, name) &&
+          Object.is(values[name], held.values[name]))
     )
   }
 

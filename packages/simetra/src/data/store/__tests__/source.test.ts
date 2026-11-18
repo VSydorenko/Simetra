@@ -779,6 +779,31 @@ describe("CoreSource on read parts", () => {
     })
   })
 
+  // Маркер частини з `known` мусить лежати в епосі `known` і в його межах.
+  it.each<[string, string, number]>([
+    ["in another epoch than known", EPOCH_B, 0],
+    ["at an index past the keys of known", EPOCH_A, 1],
+    ["at a negative index", EPOCH_A, -1],
+  ])("answers command.internal for a marker %s", async (_, epoch, at) => {
+    const { adapter } = scripted([
+      () => ({ epoch, items: [{ ok: true, value: { rows: [at] } }] }),
+    ])
+    const source = createCoreSource(
+      () => adapter,
+      catalogIndex(OBJECTS),
+      createReadLimiter(4),
+      READS_ONLY
+    )
+    const known = { epoch: EPOCH_A, keys: [key(1)], versions: ["1"] }
+    const { items } = await source.read(
+      taskQueries(1).map((p) => ({ ...p, known }))
+    )
+    expect(items[0]).toEqual({
+      ok: false,
+      error: { code: "command.internal" },
+    })
+  })
+
   it("answers command.internal for a partial marker too", async () => {
     const { adapter } = scripted([
       () => ({
