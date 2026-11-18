@@ -312,6 +312,19 @@ describe("resume()", () => {
     expect(t.reads()).toBe(0)
   })
 
+  it("leaves the views of a stale-client object stale, not in error", async () => {
+    const t = await loaded()
+    t.core.staleClient(TASK)
+    await settle()
+    vi.advanceTimersByTime(20_000)
+    t.runtime.resume()
+    await settle()
+    const snap = t.core.view(list).getSnapshot()
+    expect(snap.isStale).toBe(true)
+    expect(snap.status).not.toBe("error")
+    expect(snap.error).toBeUndefined()
+  })
+
   it("does nothing after dispose()", async () => {
     const t = await loaded()
     t.runtime.dispose()

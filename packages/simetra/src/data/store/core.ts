@@ -924,6 +924,9 @@ export function createCore(options: {
       core.requestVersion()
       if (defects.has("hydrate-without-revalidate")) return
       for (const o of objects.values()) {
+        // Несумісний об'єкт не читається (§10): перечитування перевело б
+        // його вигляди в `error` замість показати `isStale`.
+        if (staleObjects.has(o.name)) continue
         if (!activeViews(writerContext, o.name).some((v) => v.visible)) continue
         revalidate(writerContext, o.name, { visibleOnly: true }).catch(
           (error: unknown) => log({ kind: "listener-failed", error })
@@ -948,6 +951,8 @@ export function createCore(options: {
       // Як в `endHydration`: усе синхронно, без `await` між об'єктами.
       core.requestVersion()
       for (const o of objects.values()) {
+        // Як в `endHydration`: несумісний об'єкт не перечитується.
+        if (staleObjects.has(o.name)) continue
         revalidate(writerContext, o.name, {
           visibleOnly: true,
           minAgeMs: limits.resumeMinIntervalMs,

@@ -679,6 +679,22 @@ describe("a stale-client object is closed until reload (spec §10)", () => {
         )
     ).length
 
+  it("the reconciliation after hydration skips a stale-client object: no read, the view stays stale", async () => {
+    const fake = serverWorld()
+    const snapshot = await takeSnapshot(fake, [card(1)])
+    const a = runtimeOver(fake)
+    a.runtime.hydrate(snapshot)
+    a.core.view(card(1)).subscribe(() => {})
+    a.core.staleClient(TASK)
+    a.runtime.endHydration()
+    await settle()
+    expect(queriesOf(a.wire, task.id)).toBe(0)
+    const snap = a.core.view(card(1)).getSnapshot()
+    expect(snap.isStale).toBe(true)
+    expect(snap.status).not.toBe("error")
+    expect(snap.error).toBeUndefined()
+  })
+
   it("a read of the object queued in the limiter never reaches the transport after the mark", async () => {
     const fake = serverWorld()
     const a = runtimeOver(fake, { limits: { readParallel: 1 } })
