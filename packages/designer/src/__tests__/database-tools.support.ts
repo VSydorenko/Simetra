@@ -108,10 +108,11 @@ export async function expectOnlyPlatformInstall(
   )
   expect(data.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   expect(data.applyState).toBe("absent")
-  expect(expected.length).toBeGreaterThan(0)
+  expect(expected.objects.length).toBeGreaterThan(0)
   expect(installMismatch(data, expected)).toEqual({
     foreignActions: [],
     foreignDifferences: [],
+    foreignGrants: [],
     unplanned: [],
     undifferenced: [],
   })

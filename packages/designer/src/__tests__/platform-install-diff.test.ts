@@ -2,13 +2,18 @@ import { describe, expect, it } from "vitest"
 import { compile, platformInstall } from "simetra/compiler"
 import { DATABASE_PROVIDERS, type DatabaseProvider } from "simetra/model"
 import { applyStateOwnership } from "simetra/schema"
-import { installMismatch, installObjects } from "./support/platform-install"
+import {
+  installMismatch,
+  installObjects,
+  type InstallExpectation,
+} from "./support/platform-install"
 
 /**
  * Точна звірка `diff` бази без стану застосування з платформною установкою
  * (`installMismatch`) на формі, яку дає двигун: дії й відмінності нижче —
  * це вихід `diff` над базою SHOP у CI (ідентичності двигуна й адреси
- * відмінностей каталогу), кожна дія — лише ті поля, які читає звірка.
+ * відмінностей каталогу), кожна дія — лише ті поля, які читає звірка
+ * (текст оператора — лише його дієслово й об'єкт).
  */
 
 const T = "simetra.signal_outbox"
@@ -17,11 +22,19 @@ const F = {
   prune: "function:simetra.signal_outbox_prune(interval)",
   stamp: "function:simetra.signal_outbox_stamp()",
 }
-const action = (produces: string[], consumes: string[]) => ({
+const action = (produces: string[], consumes: string[], sql = "CREATE") => ({
+  sql,
   produces,
   consumes,
   destroys: [],
 })
+
+const CONSUMER_GRANT = action(
+  [],
+  [`table:${T}`, "role:simetra_signal_consumer"],
+  `GRANT DELETE, SELECT ON TABLE ${T} TO "simetra_signal_consumer"`
+)
+const CONSUMER_PATH = `units.grant:grant:table:${T}:simetra_signal_consumer:delete,select`
 
 const PLAN = [
   action(
@@ -51,11 +64,21 @@ const PLAN = [
       [`table:${T}`, "role:simetra_signal_consumer"]
     )
   ),
-  ...Object.values(F).map((f) => action([`acl:(${f}).PUBLIC`], [f])),
-  ...["method", "payload"].map((c) =>
-    action([], [`column:${T}.${c}`, "role:simetra_command"])
+  ...Object.values(F).map((f) =>
+    action(
+      [`acl:(${f}).PUBLIC`],
+      [f],
+      `REVOKE ALL ON FUNCTION ${f} FROM PUBLIC`
+    )
   ),
-  action([], [`table:${T}`, "role:simetra_signal_consumer"]),
+  ...["method", "payload"].map((c) =>
+    action(
+      [],
+      [`column:${T}.${c}`, "role:simetra_command"],
+      `GRANT INSERT ("${c}") ON TABLE ${T} TO "simetra_command"`
+    )
+  ),
+  CONSUMER_GRANT,
 ]
 
 const extra = (path: string) => ({
@@ -69,7 +92,7 @@ const DIFFERENCES = [
   ...Object.values(F).map((f) => `units.${f}`),
   `units.grant:grant:table:${T}:simetra_command:insert(method)`,
   `units.grant:grant:table:${T}:simetra_command:insert(payload)`,
-  `units.grant:grant:table:${T}:simetra_signal_consumer:delete,select`,
+  CONSUMER_PATH,
   ...Object.values(F).map(
     (f) =>
       `units.grant:revoke:function:${f.slice("function:".length)}:public:execute`
@@ -85,12 +108,15 @@ const DATA = { plan: PLAN, differences: DIFFERENCES }
 const EXACT = {
   foreignActions: [],
   foreignDifferences: [],
+  foreignGrants: [],
   unplanned: [],
   undifferenced: [],
 }
 
 /** Очікувані об'єкти моделі SHOP: без «Користувачів», схема — стану. */
-async function expected(provider: DatabaseProvider): Promise<string[]> {
+async function expected(
+  provider: DatabaseProvider
+): Promise<InstallExpectation> {
   const compiled = await compile(
     new Map([
       [
@@ -111,8 +137,17 @@ describe("installMismatch", () => {
     async (provider) => {
       const objects = await expected(provider)
       // Послідовність версій — стану застосування, її `diff` не показує
-      expect(objects).not.toContain("sequence:simetra.row_version")
-      expect(objects).toContain(`table:${T}`)
+      expect(objects.objects).not.toContain("sequence:simetra.row_version")
+      expect(objects.objects).toContain(`table:${T}`)
+      // Видимі гранти: власні гранти установки й відкликання від `PUBLIC`
+      // того, що `PUBLIC` має за замовчуванням (`EXECUTE` функцій)
+      expect(objects.grants).toEqual([
+        `grant|table:${T}|simetra_command`,
+        `grant|table:${T}|simetra_signal_consumer`,
+        ...Object.values(F)
+          .map((f) => `revoke|${f}|public`)
+          .sort(),
+      ])
       expect(installMismatch(DATA, objects)).toEqual(EXACT)
     }
   )
@@ -134,7 +169,11 @@ describe("installMismatch", () => {
   it("an action or a difference outside the install is a mismatch", async () => {
     const objects = await expected("postgres")
     const foreign = action(["table:simetra.receipts"], ["schema:simetra"])
-    const schemaGrant = action([], ["schema:simetra", "role:simetra_command"])
+    const schemaGrant = action(
+      [],
+      ["schema:simetra", "role:simetra_command"],
+      'GRANT USAGE ON SCHEMA simetra TO "simetra_command"'
+    )
     const own = extra(
       "units.grant:grant:table:app.orders:simetra_command:select"
     )
@@ -150,16 +189,103 @@ describe("installMismatch", () => {
       ...EXACT,
       foreignActions: [foreign, schemaGrant],
       foreignDifferences: [own.path],
+      foreignGrants: ["grant|table:app.orders|simetra_command"],
     })
   })
 
   it("an install object the derived set lacks turns the diff foreign", async () => {
-    const objects = (await expected("postgres")).filter((o) => o !== F.prune)
+    const all = await expected("postgres")
+    const objects = {
+      ...all,
+      objects: all.objects.filter((o) => o !== F.prune),
+    }
     const mismatch = installMismatch(DATA, objects)
     expect(mismatch.foreignActions).toHaveLength(2)
     expect(mismatch.foreignDifferences).toEqual([
       `units.${F.prune}`,
       "units.grant:revoke:function:simetra.signal_outbox_prune(interval):public:execute",
     ])
+  })
+
+  it("a grant to a wrong or an extra role is a mismatch", async () => {
+    const objects = await expected("postgres")
+    const extraRole = action(
+      [],
+      [`table:${T}`, "role:some_extra_role"],
+      `GRANT SELECT ON TABLE ${T} TO "some_extra_role"`
+    )
+    const wrongRole = action(
+      [],
+      [`table:${T}`, "role:simetra_command"],
+      `GRANT DELETE, SELECT ON TABLE ${T} TO "simetra_command"`
+    )
+    const path = `units.grant:grant:table:${T}:some_extra_role:select`
+    expect(
+      installMismatch(
+        {
+          plan: [...PLAN.filter((a) => a !== CONSUMER_GRANT), extraRole],
+          differences: [
+            ...DIFFERENCES.filter((d) => d.path !== CONSUMER_PATH),
+            extra(path),
+          ],
+        },
+        objects
+      )
+    ).toEqual({
+      ...EXACT,
+      foreignGrants: [`grant|table:${T}|some_extra_role`],
+      unplanned: [`grant|table:${T}|simetra_signal_consumer`],
+      undifferenced: [`grant|table:${T}|simetra_signal_consumer`],
+    })
+    // Грант не тій ролі: споживача немає, а роль команд має зайве — пару
+    // (ціль, роль) цим не покрити, тож видно лише брак гранту споживачеві
+    expect(
+      installMismatch(
+        {
+          plan: [...PLAN.filter((a) => a !== CONSUMER_GRANT), wrongRole],
+          differences: DIFFERENCES,
+        },
+        objects
+      )
+    ).toEqual({
+      ...EXACT,
+      unplanned: [`grant|table:${T}|simetra_signal_consumer`],
+    })
+  })
+
+  it("a grant to PUBLIC is a mismatch", async () => {
+    const objects = await expected("postgres")
+    const toPublic = action(
+      [`acl:(table:${T}).PUBLIC`],
+      [`table:${T}`],
+      `GRANT SELECT ON TABLE ${T} TO PUBLIC`
+    )
+    const path = `units.grant:grant:table:${T}:public:select`
+    expect(
+      installMismatch(
+        {
+          plan: [...PLAN, toPublic],
+          differences: [...DIFFERENCES, extra(path)],
+        },
+        objects
+      )
+    ).toEqual({ ...EXACT, foreignGrants: [`grant|table:${T}|public`] })
+  })
+
+  it("the consumer's grant missing is a mismatch", async () => {
+    const objects = await expected("postgres")
+    expect(
+      installMismatch(
+        {
+          plan: PLAN.filter((a) => a !== CONSUMER_GRANT),
+          differences: DIFFERENCES.filter((d) => d.path !== CONSUMER_PATH),
+        },
+        objects
+      )
+    ).toEqual({
+      ...EXACT,
+      unplanned: [`grant|table:${T}|simetra_signal_consumer`],
+      undifferenced: [`grant|table:${T}|simetra_signal_consumer`],
+    })
   })
 })
