@@ -455,8 +455,15 @@ Centrifugo на `127.0.0.1` змінними (замість `ports`), інте�
 `SIMETRA_SIGNALS_DEV_PASSWORD`; `scripts/db-stack.mjs` — DSN у `composeEnv()`,
 порядок старту, пароль `simetra_signals` у `db:pg:start` і `db:roles`, DSN
 у `db:signals:start` (`postgres` — `127.0.0.1:54422`, база `simetra`;
-`supabase` — `127.0.0.1:54322`, база `postgres`). Тест файлів стека тримає
-`127.0.0.1` для HTTP Centrifugo замість перевірки `ports`.
+`supabase` — `127.0.0.1:54322`, база `postgres`). Тест файлів стека
+(послаблення гейта — на погодження архітекторки, Р17): заборона
+`network_mode` лишається для кожного сервісу, крім `centrifugo`, якому
+дозволено лише `host`; у `centrifugo` — жодного `ports:`, а в `environment:`
+обов'язково адреса `127.0.0.1` і порт `8100`/`8101`; healthcheck — на цей
+порт; решта сервісів тримає правило `127.0.0.1:` для `ports`. Інших
+слухачів Centrifugo (internal, gRPC, admin) немає — білий список інваріанта
+11. Мутації: `network_mode: host` у `postgres`; адреса `0.0.0.0` у
+Centrifugo — тест червоніє.
 `packages/simetra/test/db/stack-files.test.ts` — тест дрейфу (файл стека =
 вихід генератора) замість тесту «no outbox consumer», правила секретів
 розширено на новий пароль (не в `env_file`, не в argv, не в
