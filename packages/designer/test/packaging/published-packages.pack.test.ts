@@ -174,9 +174,10 @@ describe("simetra", () => {
     ])
   })
 
-  it("declares react, react-dom, react-virtual and react-router as the only peers, all optional", async () => {
+  it("declares react, react-dom, react-virtual, react-form and react-router as the only peers, all optional", async () => {
     const m = await readPackedManifest(tarballs.simetra)
     expect(m.peerDependencies).toEqual({
+      "@tanstack/react-form": "^1.33.5",
       "@tanstack/react-router": "^1.170.46",
       "@tanstack/react-virtual": "^3.14.26",
       react: "^19.3.1",
@@ -187,7 +188,7 @@ describe("simetra", () => {
       Object.values(
         m.peerDependenciesMeta as Record<string, { optional?: boolean }>
       ).map((v) => v.optional)
-    ).toEqual([true, true, true, true])
+    ).toEqual([true, true, true, true, true])
     expect(Object.keys(m.peerDependenciesMeta as object).sort()).toEqual(
       Object.keys(m.peerDependencies as object).sort()
     )
@@ -204,9 +205,12 @@ describe("simetra", () => {
       { cwd: consumer }
     )
     expect(stdout).toBe("")
-    await expect(
-      readFile(join(consumer, "node_modules/react/package.json"))
-    ).rejects.toThrow()
+    // Серверний споживач не ставить ні React, ні бібліотеку форм входу `./ui`.
+    for (const peer of ["react", "@tanstack/react-form"]) {
+      await expect(
+        readFile(join(consumer, `node_modules/${peer}/package.json`))
+      ).rejects.toThrow()
+    }
   })
 
   it("imports every tier in plain Node", async () => {
@@ -410,13 +414,18 @@ describe("simetra/data", () => {
       ...(await packedSources(tarballs.simetra, "dist/ui/", ".js")).values(),
     ].flatMap(bareSpecifiers)
     expect(specifiers).toContain("@tanstack/react-virtual")
+    // Форма картки — peer входу `./ui` (`useCardDraft`).
+    expect(specifiers).toContain("@tanstack/react-form")
     expect(specifiers.filter((s) => !allowed.has(s))).toEqual([])
   })
 
   it("the shell entry imports only its peers and the lower tiers", async () => {
     const m = await readPackedManifest(tarballs.simetra)
+    // Бібліотеку форм T6 не імпортує сам: вона приходить через `simetra/ui`.
     const allowed = new Set([
-      ...Object.keys(m.peerDependencies as object),
+      ...Object.keys(m.peerDependencies as object).filter(
+        (p) => p !== "@tanstack/react-form"
+      ),
       "simetra/data",
       "simetra/data/react",
       "simetra/model",
