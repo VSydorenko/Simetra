@@ -282,6 +282,36 @@ describe("actor snapshot sources", () => {
     ])
   })
 
+  // З порожнім `search_path` Postgres шукає некваліфіковане відношення
+  // спершу в `pg_temp` сесії: тимчасова таблиця викликача підмінила б факт
+  // прав, тож таке читання — невідоме джерело, а не вбудоване.
+  it("reports an unqualified relation under an empty search_path as unknown", async () => {
+    const input = inputOf(model)
+    const fake = (sql: string): SqlUnit => ({
+      ...generatedUnit(sql, PLATFORM_SCHEMA, parse),
+      module: "fake",
+      generator: "rights",
+    })
+    const shell = "LANGUAGE sql STABLE SET search_path = ''"
+    const found = snapshotSources({
+      ...input,
+      contracts: { ...input.contracts, rightsCatalogs: [] },
+      generated: [
+        ...input.generated.filter(
+          (u) => u.name !== RIGHTS_FUNCTIONS.dimensionValuesLive.name
+        ),
+        fake(
+          `CREATE FUNCTION simetra.rights_dimension_values_live(p_dimension uuid) RETURNS SETOF uuid ${shell} AS $$ SELECT m.id FROM membership m $$`
+        ),
+      ],
+    })
+    expect(found.unknown).toContainEqual({
+      relation: "pg_temp.membership",
+      fact: "values",
+      via: "function:simetra.rights_dimension_values_live(uuid)",
+    })
+  })
+
   it("reports an unknown relation", async () => {
     // Напряму: судження голів раніше відхилило б таку дослівну функцію, і
     // конвеєр до генерації не дійшов би.
