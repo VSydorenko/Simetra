@@ -15,12 +15,13 @@ import { createRowViews, purgedSnapshot } from "./snapshot"
 import { readKeys, tracked, type CoreReadItem, type CoreSource } from "./source"
 import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
-import { createRegistry, type SubsetRegistry } from "./subsets"
+import { createRegistry, type Subset, type SubsetRegistry } from "./subsets"
 import {
   activeViews,
   createWriter,
   revalidate,
   revalidateHolders,
+  revalidateHydrated,
   rereadKey,
   setVisible,
   type WriterContext,
@@ -534,6 +535,7 @@ export function createCore(options: {
     closedSnapshot: () => closed,
     defects,
     now,
+    readHydrated: (s) => readHydrated(s),
   })
 
   // ------------------------------------------------------------ знімок SSR
@@ -722,6 +724,22 @@ export function createCore(options: {
       )
     }
   })
+
+  /**
+   * Підмножина зі знімка, яку ще не читали, стає видимою після `endHydration`
+   * (пізня підписка чи `setVisible(true)`): її значення довіряються лише до
+   * першого читання, тож вона читається зараз, поодинці (§6.6). До кінця
+   * гідратації читання робить `endHydration` разом з усіма.
+   */
+  function readHydrated(s: Subset) {
+    if (hydration !== "ended" || !s.unread) return
+    if (defects.has("late-hydrated-not-reread")) return
+    if (staleObjects.has(s.form.object.name)) return
+    if (!(s.visible ?? s.listeners.size > 0)) return
+    revalidateHydrated(writerContext, s).catch((error: unknown) =>
+      log({ kind: "listener-failed", error })
+    )
+  }
 
   const writerContext: WriterContext = {
     session,
@@ -962,7 +980,12 @@ export function createCore(options: {
     update: (object, key, values, updateOptions) =>
       overlay.update(object, key, values, updateOptions),
     activeViews: (object) => activeViews(writerContext, object),
-    setVisible: (spec, visible) => setVisible(writerContext, spec, visible),
+    setVisible(spec, visible) {
+      setVisible(writerContext, spec, visible)
+      if (!visible) return
+      const s = registry.find(spec)
+      if (s !== undefined) readHydrated(s)
+    },
     revalidate: (object, revalidateOptions) =>
       revalidate(writerContext, object, revalidateOptions),
     close(reason) {

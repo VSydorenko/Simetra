@@ -608,6 +608,111 @@ describe("hydrate", () => {
   })
 })
 
+describe("a hydrated view first shown after the reconciliation", () => {
+  /**
+   * A snapshot of the views and a core hydrated from it, `endHydration` done:
+   * the reconciliation read only what was subscribed before it.
+   */
+  async function hydrated(
+    specs: readonly ViewSpec[],
+    options: { preload?: boolean; keep?: readonly ViewSpec[] } = {}
+  ) {
+    const { core, fake } = setup()
+    seed(fake, 1, 3)
+    fake.setLines(TASK, key(1), "lines", lines(5))
+    for (const spec of specs) {
+      if (options.preload === true) await core.preload(spec)
+      else watch(core.view(spec))
+    }
+    await settle()
+    const snapshot = through(core.dehydrate())
+    const next = coreOver(fake)
+    next.core.hydrate(snapshot)
+    for (const spec of options.keep ?? []) watch(next.core.view(spec))
+    next.core.endHydration()
+    await settle()
+    return { ...next, fake, reads: () => fake.log.length }
+  }
+
+  it("a view preloaded into the snapshot, first subscribed after endHydration, is read once", async () => {
+    const t = await hydrated([keysView(1, 2)], { preload: true })
+    const before = t.reads()
+    watch(t.core.view(keysView(1, 2)))
+    await settle()
+    expect(t.reads() - before).toBe(1)
+    expect(t.inspect.violations()).toEqual([])
+  })
+
+  it("a conditional mount within the release delay reads once", async () => {
+    const t = await hydrated([keysView(1), keysView(2)])
+    const before = t.reads()
+    vi.advanceTimersByTime(RELEASE - 1)
+    watch(t.core.view(keysView(2)))
+    await settle()
+    expect(t.reads() - before).toBe(1)
+  })
+
+  it("a hydrated card subscribed late reads once", async () => {
+    const t = await hydrated([card(1)])
+    const before = t.reads()
+    watch(t.core.view(card(1)))
+    await settle()
+    expect(t.reads() - before).toBe(1)
+  })
+
+  it("a hydrated tabular section subscribed late reads once", async () => {
+    const t = await hydrated([section(1)])
+    const before = t.reads()
+    watch(t.core.view(section(1)))
+    await settle()
+    expect(t.reads() - before).toBe(1)
+  })
+
+  it("a hydrated view with visible false reads once on setVisible(true)", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 3)
+    const spec = keysView(1, 2)
+    watch(core.view(spec))
+    await settle()
+    const next = coreOver(fake)
+    next.core.hydrate(through(core.dehydrate()))
+    watch(next.core.view(spec))
+    next.core.setVisible(spec, false)
+    next.core.endHydration()
+    await settle()
+    // Невидимий вигляд звірка не читає.
+    expect(next.versions.calls).toBe(1)
+    const before = fake.log.length
+    next.core.setVisible(spec, true)
+    await settle()
+    expect(fake.log.length - before).toBe(1)
+    next.core.setVisible(spec, false)
+    next.core.setVisible(spec, true)
+    await settle()
+    expect(fake.log.length - before).toBe(1)
+  })
+
+  it("a view the reconciliation already read is not read again on a new subscription", async () => {
+    const spec = keysView(1, 2)
+    const t = await hydrated([spec], { keep: [spec] })
+    const before = t.reads()
+    watch(t.core.view(spec))
+    await settle()
+    expect(t.reads() - before).toBe(0)
+  })
+
+  it("a stale-client object is not read", async () => {
+    const t = await hydrated([card(1)])
+    t.core.staleClient(TASK)
+    const before = t.reads()
+    const handle = t.core.view(card(1))
+    watch(handle)
+    await settle()
+    expect(t.reads() - before).toBe(0)
+    expect(handle.getSnapshot().isStale).toBe(true)
+  })
+})
+
 describe("dehydrate after a write", () => {
   it("throws a TypeError while the journal of mutations is not empty and writes nothing", async () => {
     const { core, fake } = setup()

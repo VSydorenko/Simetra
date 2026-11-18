@@ -779,6 +779,21 @@ export async function revalidate(
 }
 
 /**
+ * The system re-read of one hydrated view that has not been read since the
+ * hydration, at the moment it becomes visible (spec §6.6). A section is read
+ * only while mounted, like in `revalidate`.
+ */
+export async function revalidateHydrated(
+  ctx: WriterContext,
+  s: Subset
+): Promise<void> {
+  if (!ctx.session.token().valid) return
+  if (!s.alive || s.purged || !s.loaded || s.flight !== undefined) return
+  if (s.form.spec.kind === "section" && s.listeners.size === 0) return
+  await revalidateViews(ctx, s.form.object, [s])
+}
+
+/**
  * The re-read of every view that holds one of the hidden keys, as an owned
  * row or an `include` target, invisible views included (plan B3-3, Р11): the
  * values return only with a read that started after the `hide`. A failed
@@ -831,7 +846,10 @@ async function revalidateViews(
     targets.map((s) => [s, { gen: s.gen, flight: s.flight }] as const)
   )
   const startedAt = ctx.now()
-  for (const s of targets) s.rereads++
+  for (const s of targets) {
+    s.rereads++
+    s.unread = false
+  }
   const purgesAtStart = new Map(ctx.purges)
   const purgedSince = (name: ObjectName) =>
     (ctx.purges.get(name) ?? 0) !== (purgesAtStart.get(name) ?? 0)

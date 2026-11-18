@@ -1652,6 +1652,8 @@ async function runModel(
     // (`CAUGHT_BY`), а не перегідратація; нове ядро ламає лише власний.
     if (defects.includes("hydrate-without-revalidate"))
       nextInspect.defects.add("hydrate-without-revalidate")
+    if (defects.includes("late-hydrated-not-reread"))
+      nextInspect.defects.add("late-hydrated-not-reread")
     try {
       next.hydrate(snapshot)
       const violations = nextInspect.violations()
@@ -1668,14 +1670,19 @@ async function runModel(
         if (staled.has(SPECS[v]!.object)) continue
         sameViews(label, v, handles[v]!.getSnapshot(), next)
       }
-      // Звірка: видимі вигляди — підписані.
-      const unsubscribe = held.map((sub) => {
-        const v = SPECS.findIndex(
-          (spec) => JSON.stringify(spec) === JSON.stringify(sub.form.spec)
-        )
-        return next.view(SPECS[v]!).subscribe(() => {})
-      })
+      // Звірка: видимі вигляди — підписані; кожен другий підписується вже
+      // після `endHydration` (умовне монтування, §6.6) і мусить читатися сам.
+      const subscribeHeld = (late: boolean) =>
+        held.flatMap((sub, i) => {
+          if (i % 2 === 1 !== late) return []
+          const v = SPECS.findIndex(
+            (spec) => JSON.stringify(spec) === JSON.stringify(sub.form.spec)
+          )
+          return [next.view(SPECS[v]!).subscribe(() => {})]
+        })
+      const unsubscribe = subscribeHeld(false)
       next.endHydration()
+      unsubscribe.push(...subscribeHeld(true))
       for (let round = 0; round < 20; round++) await flush()
       const after = nextInspect.violations()
       if (after.length > 0) fail(label, `after reconcile: ${after.join("; ")}`)
@@ -2656,6 +2663,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "min-age-ignored",
   "min-age-ignored-sections",
   "min-age-all-young",
+  "late-hydrated-not-reread",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -2690,6 +2698,8 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "min-age-ignored": /a view younger than the limit (got a read|was re-read)/,
   "min-age-ignored-sections": /a view younger than the limit was re-read/,
   "min-age-all-young": /a view older than the limit was not re-read/,
+  // Пізня підписка гідрованого вигляду (§6.6): рядок знімка без читання.
+  "late-hydrated-not-reread": /after hydrate: view \d+ .*(server|hidden)/,
 }
 
 describe("core model self-check", () => {
