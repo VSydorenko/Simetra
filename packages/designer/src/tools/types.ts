@@ -118,6 +118,12 @@ export interface ToolContext {
 /** `run` лише читає теку й викликає операцію; запис робить `invoke`. */
 export interface RunOutcome<D> {
   ok: boolean
+  /**
+   * Мутація режиму `repair` прийняла результат з помилками лише класу
+   * ремонту (`OperationResult.written`): `ok` лишається `false`, а `invoke`
+   * пише `changes`.
+   */
+  written?: true
   changes: FileChange[]
   diagnostics: Diagnostic[]
   data?: D

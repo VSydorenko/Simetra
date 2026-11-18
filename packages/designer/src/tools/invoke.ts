@@ -228,10 +228,14 @@ export async function invoke<D>(
             )
           writeArtifacts = outcome.ok && artifacts.length > 0
           break
-        case "write":
-          write = outcome.ok && !o.dryRun && outcome.changes.length > 0
-          writeArtifacts = outcome.ok && !o.dryRun && artifacts.length > 0
+        case "write": {
+          // Режим `repair` (спека декларацій функцій §5.1): прийнятий
+          // результат з помилками лише класу ремонту пишеться при `ok: false`.
+          const accepted = outcome.ok || outcome.written === true
+          write = accepted && !o.dryRun && outcome.changes.length > 0
+          writeArtifacts = accepted && !o.dryRun && artifacts.length > 0
           break
+        }
       }
       // Артефакти — до змін теки: записаний запис промоції без змін теки
       // інертний (план відмовить, повторний `promote` перезапише його), а

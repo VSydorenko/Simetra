@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs"
+import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { runCommand } from "citty"
 import pg from "pg"
@@ -29,6 +30,10 @@ const noStdin = async (): Promise<string> => {
   throw new Error("stdin must not be read")
 }
 const tool = (name: string) => toolByName(name)!
+/** Недекларована definer-функція: помилка лише класу ремонту. */
+const RPC_SQL = "sql/app/rpc.sql"
+const RPC_DEFINER =
+  "CREATE FUNCTION app.rpc() RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;\n"
 const scratch = { kind: "Catalog", name: "Scratch", data: { scope: "none" } }
 const scratchTarget = { target: { kind: "Catalog", name: "Scratch" } }
 
@@ -118,6 +123,22 @@ describe("cli adapter", TOOL_PIPELINE, () => {
     })
     expect(r.exitCode).toBe(0)
     expect(r.stdout).toContain("written")
+    expect(existsSync(join(dir, "catalogs/Scratch/Scratch.meta.json"))).toBe(
+      true
+    )
+  })
+
+  // Режим `repair` (спека декларацій функцій §5.1): результат з помилками
+  // лише класу ремонту записано, а код виходу ненульовий — тека ще не чиста.
+  it("create into a folder with repair-class errors only writes and exits 1", async () => {
+    const dir = await project()
+    await writeFile(join(dir, RPC_SQL), RPC_DEFINER)
+    const r = await runTool(tool("create"), {
+      _: [JSON.stringify(scratch), dir],
+    })
+    expect(r.exitCode).toBe(1)
+    expect(r.stdout).toContain("sql.definer-caller-unchecked")
+    expect(r.stdout).not.toContain("nothing written")
     expect(existsSync(join(dir, "catalogs/Scratch/Scratch.meta.json"))).toBe(
       true
     )

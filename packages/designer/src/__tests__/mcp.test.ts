@@ -499,6 +499,29 @@ describe("simetra mcp", TOOL_PIPELINE, () => {
     expect((await call(client, "compile", {})).out.ok).toBe(true)
   })
 
+  // Режим `repair` (спека декларацій функцій §5.1): MCP повертає `ok: false`
+  // з помилками класу, а результат записано.
+  it("add into a folder with repair-class errors only returns ok false and writes", async () => {
+    const dir = await project()
+    await writeFile(
+      join(dir, "sql/app/rpc.sql"),
+      "CREATE FUNCTION app.rpc() RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;\n"
+    )
+    const client = await connect(dir, false)
+    const r = await call(client, "add", {
+      target: { kind: "Catalog", name: "Currency" },
+      collection: "attributes",
+      element: { name: "note", type: "Boolean" },
+    })
+    expect(r.isError).toBe(true)
+    expect(r.out.ok).toBe(false)
+    expect(r.out.written).toBe(true)
+    expect(r.out.changes.map((c) => c.path)).toEqual([CURRENCY])
+    expect(
+      r.out.diagnostics.filter((d) => d.severity === "error").map((d) => d.code)
+    ).toEqual(["sql.definer-caller-unchecked"])
+  })
+
   it("dry run writes nothing", async () => {
     const dir = await project()
     const before = await snapshotOf(dir)

@@ -254,7 +254,13 @@ export function renderResult(
   return {
     stdout: [
       ...r.changes.map((c) => `${verb(c.deleted)} ${o.dir}/${c.path}`),
-      ...(r.ok ? [] : ["nothing written: the result has errors"]),
+      ...(r.ok
+        ? []
+        : r.written
+          ? [
+              "written: the result keeps only repair-class errors the directory already had",
+            ]
+          : ["nothing written: the result has errors"]),
       report,
       ...(tool.name === "promote" && r.data !== undefined
         ? [renderPromotion(r.data as PromotionRecord, r.written)]
