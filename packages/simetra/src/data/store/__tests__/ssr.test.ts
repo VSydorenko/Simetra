@@ -276,19 +276,25 @@ describe("what the snapshot carries", () => {
 })
 
 describe("what the snapshot never carries", () => {
-  it("rows of a released view and of a view still loading", async () => {
+  it("rows of a released view and of a view that is reading again, whose rows stay in the store", async () => {
     const { core, fake } = setup()
     seed(fake, 1, 3)
     for (const n of [1, 2, 3]) fake.edit(TASK, key(n), { title: `SECRET-${n}` })
     const gone = watch(core.view(keysView(1)))
     watch(core.view(keysView(2)))
+    const again = core.view(keysView(3))
+    watch(again)
     await settle()
     gone.unsubscribe()
     vi.advanceTimersByTime(RELEASE)
-    // Читання вигляду 3 тримається: він ще `loading`.
+    // Вигляд 3 читає наново: його рядки ще в сховищі, але він не `ready`.
     fake.hold = () => true
-    watch(core.view(keysView(3)))
+    again.refresh()
     await settle()
+    expect(again.getSnapshot().status).toBe("refreshing")
+    expect(
+      coreInternals(core).objects.get(TASK)!.rows.get(key(3))
+    ).toBeDefined()
     const text = JSON.stringify(core.dehydrate())
     expect(text).toContain("SECRET-2")
     expect(text).not.toContain("SECRET-1")
