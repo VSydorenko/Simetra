@@ -294,6 +294,19 @@ describe("createCentrifugoTokens", () => {
       ).rejects.toMatchObject({ code: "signals.invalid-key" })
     })
 
+    // Імпорт примусово Ed25519, тож справжній матеріал Ed25519 з чужою
+    // міткою пройшов би без перевірки `kty`/`crv`.
+    it.each([
+      ["crv X25519", { crv: "X25519" }],
+      ["kty EC", { kty: "EC" }],
+    ])("a key labelled %s over Ed25519 material", async (_, label) => {
+      await expect(
+        create([
+          { kid: "a", privateJwk: { ...jwkA, ...label }, addedAt: ago(600) },
+        ])
+      ).rejects.toMatchObject({ code: "signals.invalid-key" })
+    })
+
     it("an x that is not the public key of d", async () => {
       await expect(
         create([
