@@ -63,6 +63,8 @@ export function setup(
     objects?: readonly CatalogEntry[]
     /** The server port over the fake; default the fake's own. */
     server?: (fake: FakeSource) => ServerPort
+    /** The monotonic clock of the core; default the core's own. */
+    now?: () => number
   } = {}
 ): CoreHarness {
   const fake = createFakeSource({
@@ -106,6 +108,7 @@ export function setup(
     index: fake.index,
     ...(options.limits === undefined ? {} : { limits: options.limits }),
     ...(options.strict === undefined ? {} : { strict: options.strict }),
+    ...(options.now === undefined ? {} : { now: options.now }),
     log: (e) => log.push(e),
   })
   return { fake, core, log, inspect: inspectCore(core) }

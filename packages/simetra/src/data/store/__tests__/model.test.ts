@@ -543,7 +543,15 @@ async function runModel(
   let sending: ModelAttempt | undefined
   // Порушення, які модель бачить поза кроком: у слухачі чи в `settled`.
   const asyncViolations: string[] = []
+  // Годинник ядра — свій: фальшиві таймери vitest його не рухають, тож крок
+  // `time` зсуває його разом із таймерами (інакше відмітки свіжості не старіють).
+  let clock = 0
+  const advance = (ms: number) => {
+    clock += ms
+    vi.advanceTimersByTime(ms)
+  }
   const { fake, core, log, inspect } = setup({
+    now: () => clock,
     limits: LIMITS,
     mode: "manual",
     server: (f) => ({
@@ -1780,6 +1788,8 @@ async function runModel(
     const quiet = new Set<ObjectName>()
     // Вигляди з молодою відміткою й їхні лічильники перечитувань на старті.
     const youngViews = new Map<{ rereads: number }, number>()
+    // Вигляди зі старою (чи без) відміткою: звірка мусить їх перечитати.
+    const agedViews = new Map<{ rereads: number }, number>()
     let purgedScope: { object: ObjectName; scope: string } | undefined
     // Ключі, які `purge` кроку прибрав зі сховища (або назвав явно).
     let purgedKeys: { object: ObjectName; keys: Key[] } | undefined
@@ -1791,7 +1801,7 @@ async function runModel(
       case "unsub":
         subs[s.v]?.()
         subs[s.v] = undefined
-        if (s.release) vi.advanceTimersByTime(RELEASE_MS)
+        if (s.release) advance(RELEASE_MS)
         break
       case "churn": {
         const order = s.scroll
@@ -1819,7 +1829,7 @@ async function runModel(
           // `subscribe` записав відписку: `at` не звужений перевіркою вище.
           subs.at(v)?.()
           subs[v] = undefined
-          vi.advanceTimersByTime(RELEASE_MS)
+          advance(RELEASE_MS)
         }
         break
       }
@@ -2115,7 +2125,7 @@ async function runModel(
         break
       }
       case "time":
-        vi.advanceTimersByTime(s.ms)
+        advance(s.ms)
         break
       case "epoch":
         fake.epoch = EPOCHS[s.which]!
@@ -2257,7 +2267,7 @@ async function runModel(
         // (лічильник перечитувань вигляду); об'єкт «тихий», коли таких усі
         // видимі завантажені вигляди, що читають його (власним читанням чи
         // ціллю `include`): тоді жодного читання не мало піти й до джерела.
-        const at = performance.now()
+        const at = clock
         const readers = [...coreInternals(core).registry.subsets()].filter(
           (sub) =>
             sub.alive &&
@@ -2270,6 +2280,8 @@ async function runModel(
           sub.refreshedAt !== undefined && at - sub.refreshedAt < s.minAge
         for (const sub of readers)
           if (young(sub)) youngViews.set(sub, sub.rereads)
+          else if (!staled.has(sub.form.object.name))
+            agedViews.set(sub, sub.rereads)
         for (const object of [TASK, ORG]) {
           const of = readers.filter(
             (sub) =>
@@ -2324,6 +2336,10 @@ async function runModel(
     for (const [sub, rereads] of youngViews) {
       if (sub.rereads !== rereads)
         fail(label, "a view younger than the limit was re-read")
+    }
+    for (const [sub, rereads] of agedViews) {
+      if (sub.rereads === rereads)
+        fail(label, "a view older than the limit was not re-read")
     }
     for (const object of quiet) {
       for (const sent of fake.log.slice(stepStart)) {
@@ -2396,7 +2412,7 @@ async function runModel(
     // епохи сесія не застосовує ніколи.
     const epochs = inspect.versionEpochs()
     fake.epoch = epochs.current
-    vi.advanceTimersByTime(10_000)
+    advance(10_000)
     await flush()
     fake.setVisibleScopes(undefined)
     visibility = undefined
@@ -2639,6 +2655,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "stale-mark-lifts",
   "min-age-ignored",
   "min-age-ignored-sections",
+  "min-age-all-young",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -2672,6 +2689,7 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // Повернення (задача 3): межа свіжості виглядів.
   "min-age-ignored": /a view younger than the limit (got a read|was re-read)/,
   "min-age-ignored-sections": /a view younger than the limit was re-read/,
+  "min-age-all-young": /a view older than the limit was not re-read/,
 }
 
 describe("core model self-check", () => {

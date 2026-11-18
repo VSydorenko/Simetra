@@ -74,6 +74,8 @@ export type DefectFlag =
   | "min-age-ignored"
   /** `revalidate` ignores `minAgeMs` for tabular section views only. */
   | "min-age-ignored-sections"
+  /** `revalidate` treats every view with a freshness mark as young, however old. */
+  | "min-age-all-young"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

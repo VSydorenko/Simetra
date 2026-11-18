@@ -771,7 +771,8 @@ export async function revalidate(
         (ctx.defects.has("min-age-ignored-sections") &&
           s.form.spec.kind === "section") ||
         s.refreshedAt === undefined ||
-        ctx.now() - s.refreshedAt >= options.minAgeMs) &&
+        (!ctx.defects.has("min-age-all-young") &&
+          ctx.now() - s.refreshedAt >= options.minAgeMs)) &&
       (s.form.spec.kind !== "section" || s.listeners.size > 0)
   )
   await revalidateViews(ctx, o, targets)
