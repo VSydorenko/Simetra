@@ -648,12 +648,15 @@ describe("useRow", () => {
     const values = { ...fresh.values }
     delete values.notes
     const row = { ...fresh, values }
-    act(() => {
+    // Дочитування поля змонтованою карткою стартує мікрозадачею: `act` його
+    // чекає, а відповідь тримає сервер.
+    await act(async () => {
       core.commit(
         (w) =>
           w.apply(TASK, { rows: [row], absent: [] }, core.readEpoch(), null),
         core.token()
       )
+      await settle()
     })
     const shown = card.last()
     expect(shown.row).toMatchObject({ staleFields: ["notes"] })
