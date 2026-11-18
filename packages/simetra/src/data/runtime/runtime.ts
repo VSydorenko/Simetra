@@ -269,8 +269,29 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     }
     const error = errorFromWire(index, response.error)
     if (isSessionChanged(error)) sessionChanged(error)
-    else seen()
+    else {
+      seen()
+      staleRead(request, error)
+    }
     throw new CommandFailure(error)
+  }
+
+  // Відмова всього `read` — `stale-client` (запит старого розгортання, §10):
+  // об'єкт відмови, а без нього — кожен об'єкт частин запиту. Викликається
+  // лише після перевірки закриття, як і `staleParts`.
+  const staleRead = (request: RuntimeRequest, error: CommandError) => {
+    if (request.type !== "read" || error.code !== "command.stale-client") return
+    if (error.object !== undefined) {
+      core.staleClient(`${error.object.kind}.${error.object.name}`)
+      return
+    }
+    const objects = new Set<string>()
+    for (const part of request.items) {
+      const id = (part as { query?: { object?: unknown } }).query?.object
+      const entry = typeof id === "string" ? index.byId.get(id) : undefined
+      if (entry !== undefined) objects.add(`${entry.kind}.${entry.name}`)
+    }
+    for (const object of objects) core.staleClient(object)
   }
 
   // Відмова частини `read` — `stale-client` (несумісна колонка): позначки

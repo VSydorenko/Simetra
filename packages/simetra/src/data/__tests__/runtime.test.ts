@@ -38,6 +38,7 @@ import {
   answeringTransport,
   clientCatalog,
   controlledTransport,
+  failed,
   ok,
   sessionChanged,
 } from "./support"
@@ -1074,6 +1075,54 @@ describe("version check and the stale mark (§10)", () => {
     await read
     await settle()
     expect(onStaleClient.mock.calls).toEqual([[TASK]])
+  })
+
+  it("a whole read refused stale-client calls onStaleClient(object) for the object of the refusal", async () => {
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const t = controlled({ onStaleClient })
+    const read = failureOf(
+      t.send({
+        type: "read",
+        items: [
+          { type: "query", query: { object: task.id, id: ID } },
+          { type: "query", query: { object: org.id, id: ID } },
+        ],
+      })
+    )
+    t.respond(failed({ code: "command.stale-client", object: task.id }))
+    expect(await read).toMatchObject({ code: "command.stale-client" })
+    await settle()
+    expect(onStaleClient.mock.calls).toEqual([[TASK]])
+  })
+
+  it("a whole read refused stale-client without an object names each object of its items", async () => {
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const t = controlled({ onStaleClient })
+    const read = failureOf(
+      t.send({
+        type: "read",
+        items: [
+          { type: "query", query: { object: task.id, id: ID } },
+          { type: "query", query: { object: org.id, id: ID } },
+          { type: "version" },
+        ],
+      })
+    )
+    t.respond(failed({ code: "command.stale-client" }))
+    expect(await read).toMatchObject({ code: "command.stale-client" })
+    await settle()
+    expect(onStaleClient.mock.calls).toEqual([[TASK], [ORG]])
+  })
+
+  it("a whole read refused stale-client after dispose() calls nothing", async () => {
+    const onStaleClient = vi.fn<(object: string) => void>()
+    const t = controlled({ onStaleClient })
+    const read = failureOf(t.send(card()))
+    t.runtime.dispose()
+    t.respond(failed({ code: "command.stale-client" }))
+    await read
+    await settle()
+    expect(onStaleClient).not.toHaveBeenCalled()
   })
 
   it("a stale-client part answered after dispose() calls nothing", async () => {
