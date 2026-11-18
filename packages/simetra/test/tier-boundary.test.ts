@@ -185,6 +185,30 @@ describe("tier zones", () => {
     const reactCreate = (attr: string) =>
       `import React from "react"\nexport const a = React.createElement("div", { ${attr}: () => {} })\n`
 
+    // Безголові UI-бібліотеки, які називає спека, дозволені в T5; роутер,
+    // рушії даних і host-фреймворк — ні (межа фреймворку, AGENTS.md).
+    it.each(EXTS)(
+      "allows the headless form library in T5 (.%s)",
+      async (ext) => {
+        expect(
+          await restricted(importOf("@tanstack/react-form"), ui(ext))
+        ).toEqual([])
+      }
+    )
+
+    it.each(
+      EXTS.flatMap((ext) =>
+        [
+          "@tanstack/react-router",
+          "@tanstack/react-start",
+          "@tanstack/react-query",
+          "@tanstack/react-db",
+        ].map((spec) => [spec, ext])
+      )
+    )("rejects %s in T5 (.%s)", async (spec, ext) => {
+      expect(await restricted(importOf(spec), ui(ext))).toHaveLength(1)
+    })
+
     it.each(EXTS)(
       "rejects @tanstack/react-virtual outside the list (.%s)",
       async (ext) => {
