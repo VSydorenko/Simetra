@@ -15,24 +15,15 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { SIGNAL_NOTIFY_CHANNEL, SIGNAL_OUTBOX, quoteIdent } from "simetra/model"
+// Ім'я споживача й змінні його DSN — з генератора конфігу: стенд і стеки ставлять
+// DSN тими самими змінними (Р16), тож друге місце імен розійшлося б
+import {
+  SIGNAL_CONSUMER_ENV,
+  SIGNAL_CONSUMER_NAME,
+} from "../../../designer/src/tools/signals-config"
 import { runApplicationName, runTag } from "./connection"
 import { nodeExec, runContainerLabels } from "./external"
 import { testProvider } from "./profile"
-
-/** Ім'я споживача outbox у конфігу Centrifugo (спека профілю §6.1). */
-export const SIGNAL_CONSUMER_NAME = "simetra_outbox"
-
-/**
- * Змінні контейнера, якими стенд ставить DSN споживача (Р16): Centrifugo
- * перевизначає ними споживача, оголошеного в конфігу, тож пароль не потрапляє
- * ні у файл конфігу, ні в argv. Єдине місце імен: ними ж користуватимуться
- * стеки розробки.
- */
-export const SIGNAL_CONSUMER_ENV = {
-  dsn: "CENTRIFUGO_CONSUMERS_SIMETRA_OUTBOX_POSTGRESQL_DSN",
-  notificationDsn:
-    "CENTRIFUGO_CONSUMERS_SIMETRA_OUTBOX_POSTGRESQL_PARTITION_NOTIFICATION_DSN",
-} as const
 
 const COMPOSE_FILE = fileURLToPath(
   new URL("../../../../docker/postgres-stack/compose.yaml", import.meta.url)

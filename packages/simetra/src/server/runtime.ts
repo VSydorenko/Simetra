@@ -14,6 +14,7 @@ import {
   PROVIDER_OWNER_ROLES,
   READ_BATCH_MAX,
   READ_BATCH_STATEMENTS_MAX,
+  SIGNAL_MERGE_THRESHOLD,
   SIGNAL_TOPIC_ALLOWED_FUNCTION_NAME,
   TABULAR_LINES_MAX,
   runtimeCatalogSchema,
@@ -417,11 +418,6 @@ const limitSchema = z.int().min(1).optional()
 // ще схема, тож така опція була б оманою конфігурації.
 const maxBatchSchema = z.int().min(1).max(BATCH_MAX).optional()
 const maxTabularLinesSchema = z.int().min(1).max(TABULAR_LINES_MAX).optional()
-// Типовий поріг злиття сигналів — з бенчмарку `bench:signals` (спека П4-B
-// §8.2); поріг + 1 (`invalidate`) ≤ `history_size` простору `simetra`
-// (спека профілю postgres §6.1).
-const SIGNAL_MERGE_THRESHOLD = 90
-
 // Бюджет менший за секунду не вміщує й одного кругового запиту з запасом.
 const budgetSchema = z.int().min(1000).optional()
 

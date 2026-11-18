@@ -11,6 +11,7 @@ import {
 import { compileTool, explainTool, fixTool } from "./read"
 import { rightsMaintenanceTool } from "./rights-maintenance-tool"
 import { rolesTool } from "./roles-tool"
+import { signalsConfigTool } from "./signals-config"
 import type { Tool } from "./types"
 
 export type {
@@ -46,6 +47,7 @@ export const TOOLS: readonly Tool[] = [
   applyTool,
   rolesTool,
   rightsMaintenanceTool,
+  signalsConfigTool,
   dataReadTool,
   dataCommandTool,
 ]
