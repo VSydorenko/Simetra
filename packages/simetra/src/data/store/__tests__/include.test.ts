@@ -457,7 +457,10 @@ describe("a row of the answer whose put is rejected", () => {
     const { core, fake, inspect } = setup()
     seedWithOrgs(fake, 2)
     watch(core.view({ kind: "keys", object: TASK, keys: [key(1)] }))
+    // Ціль уже в сховищі: без відбору живих ключів її позначило б `removed`.
+    watch(core.view({ kind: "keys", object: ORG, keys: [orgKey(1)] }))
     await settle()
+    fake.remove(ORG, orgKey(1))
     // Ключ стає `removed` у польоті читання: його рядок у відповіді відхилено
     // (епоха позначки новіша за старт), тож ціль вигляд брати не мусить.
     fake.hold = (read) => read.object === TASK
@@ -478,6 +481,8 @@ describe("a row of the answer whose put is rejected", () => {
       (s) => s.form.spec.kind === "full"
     )!
     expect([...(subset.included.get(ORG) ?? [])]).toEqual([orgKey(2)])
-    expect(inspect.owners(ORG, orgKey(1))).toBe(0)
+    // Власник цілі — лише вигляд за ключем; ціль не `removed` цим читанням.
+    expect(inspect.owners(ORG, orgKey(1))).toBe(1)
+    expect(orgRow(core, orgKey(1))?.removed).toBeUndefined()
   })
 })
