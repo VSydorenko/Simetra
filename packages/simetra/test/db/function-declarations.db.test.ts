@@ -63,7 +63,7 @@ const declaredF = (callers: string[]) =>
     }),
   })
 
-/** Роли API профілю стека (сервісної на `postgres` немає). */
+/** Ролі API профілю стека (сервісної на `postgres` немає). */
 const API_PURPOSES = (["user", "anonymous", "service"] as const).filter(
   (purpose) => testRoleFor(purpose) !== null
 )
