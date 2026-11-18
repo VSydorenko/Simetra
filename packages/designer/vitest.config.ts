@@ -73,6 +73,22 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          // Бенчмарк порогу злиття сигналів (спека П4-B §8.2): стек postgres і
+          // його сторож, як у `db`, але поза `test:db` і CI — результат є
+          // замірами машини
+          name: "bench",
+          include: ["test/bench/**/*.bench.db.ts"],
+          exclude: ["**/node_modules/**", "**/dist/**"],
+          fileParallelism: false,
+          globalSetup: ["../simetra/test/db/stack-guard.postgres.ts"],
+          setupFiles: ["./src/__tests__/support/db-setup.ts"],
+          testTimeout: 30 * 60_000,
+          hookTimeout: 30 * 60_000,
+        },
+      },
+      {
+        extends: true,
+        test: {
           name: "packaging",
           include: ["test/packaging/**/*.pack.test.ts"],
           // Пакування й `npm install` у тимчасовий проєкт — I/O і мережа:

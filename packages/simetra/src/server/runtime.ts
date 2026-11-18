@@ -125,6 +125,15 @@ export interface CommandRuntimeOptions {
    * default 5 000. A lock wait past it rejects with `command.busy`.
    */
   lockTimeoutMs?: number
+  /**
+   * Signal phases of one command transaction, `ctx.run` phases included,
+   * that each send a row signal (integer ≥ 1); default 90. The phases
+   * after it run in signal merge mode: one `invalidate` per (scope, object)
+   * pair instead of a signal per phase (P4-B spec §8.2). Keep it below the
+   * channel history size, so the signals of one pair fit the history and a
+   * short gap still recovers.
+   */
+  signalMergeThreshold?: number
   /** Receives errors that never leave the runtime; default `console.error`. */
   log?: (entry: LogEntry) => void
 }
@@ -384,6 +393,11 @@ const limitSchema = z.int().min(1).optional()
 // ще схема, тож така опція була б оманою конфігурації.
 const maxBatchSchema = z.int().min(1).max(BATCH_MAX).optional()
 const maxTabularLinesSchema = z.int().min(1).max(TABULAR_LINES_MAX).optional()
+// Типовий поріг злиття сигналів — з бенчмарку `bench:signals` (спека П4-B
+// §8.2); поріг + 1 (`invalidate`) ≤ `history_size` простору `simetra`
+// (спека профілю postgres §6.1).
+const SIGNAL_MERGE_THRESHOLD = 90
+
 // Бюджет менший за секунду не вміщує й одного кругового запиту з запасом.
 const budgetSchema = z.int().min(1000).optional()
 
@@ -522,6 +536,8 @@ export async function createCommandRuntime(
   const readBudgetMs = budgetSchema.parse(options.readBudgetMs) ?? 15_000
   const budgetMs = budgetSchema.parse(options.commandBudgetMs) ?? 60_000
   const lockTimeoutMs = limitSchema.parse(options.lockTimeoutMs) ?? 5_000
+  const signalMergeThreshold =
+    limitSchema.parse(options.signalMergeThreshold) ?? SIGNAL_MERGE_THRESHOLD
   const maxBatch = maxBatchSchema.parse(options.maxBatch) ?? BATCH_MAX
   const maxTabularLines =
     maxTabularLinesSchema.parse(options.maxTabularLines) ?? TABULAR_LINES_MAX
@@ -578,6 +594,7 @@ export async function createCommandRuntime(
     readBudgetMs,
     budgetMs,
     lockTimeoutMs,
+    signalMergeThreshold,
     readRoles: {
       // Профіль без ролі запиту чи явний запасний шлях — читання користувача
       // під роллю команд.

@@ -750,14 +750,16 @@ describe("vitest configs", () => {
     }
   )
 
-  // Проєкт `db` — стек postgres, `db-supabase` — Supabase, `bench` лишається
-  // на Supabase; решта проєктів із сторожем — помилка конфігу
+  // Проєкт `db` — стек postgres, `db-supabase` — Supabase, `bench` simetra
+  // лишається на Supabase, `bench` designer (поріг злиття сигналів) — на
+  // postgres; решта проєктів із сторожем — помилка конфігу
   it.each([
     ["simetra/db", "postgres"],
     ["simetra/db-supabase", "supabase"],
     ["simetra/bench", "supabase"],
     ["designer/db", "postgres"],
     ["designer/db-supabase", "supabase"],
+    ["designer/bench", "postgres"],
   ] as const)("DB project %s runs on the %s stack", (name, stack) => {
     expect(project(name).stack).toBe(stack)
   })
@@ -801,6 +803,7 @@ describe("vitest configs", () => {
         "simetra/bench",
         "designer/db",
         "designer/db-supabase",
+        "designer/bench",
       ])
     )
   })

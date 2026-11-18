@@ -39,7 +39,8 @@
     "test:watch": "vitest --project unit",
     "test:db": "vitest run --project db",
     "test:db:supabase": "vitest run --project db-supabase",
-    "test:packaging": "vitest run --project packaging"
+    "test:packaging": "vitest run --project packaging",
+    "bench:signals": "vitest run --project bench signals"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.4.0",

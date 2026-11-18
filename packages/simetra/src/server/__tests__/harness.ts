@@ -64,6 +64,8 @@ export const commandClaims = (
 ) => ({
   text:
     CLAIMS.text +
+    // Скидання режиму злиття сигналів (Р14 плану B2): той самий оператор.
+    ", set_config('simetra.signal_mode', '', true)" +
     ", set_config('statement_timeout', $2, true)" +
     ", set_config('lock_timeout', $3, true)" +
     ", set_config('idle_in_transaction_session_timeout', $4, true)" +
