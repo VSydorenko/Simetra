@@ -157,7 +157,8 @@ export interface ViewSnapshot {
   /**
    * The object of the view is marked stale (P4-B spec §10): the server
    * contract of its kernel differs from this build, no write to it passes.
-   * Present only while true; not to be confused with a `stale` row.
+   * Sticky until the page reloads. Present only while true; not to be
+   * confused with a `stale` row.
    */
   readonly isStale?: boolean
   readonly section?: {

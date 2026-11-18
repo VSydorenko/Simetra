@@ -111,9 +111,9 @@ export interface DataRuntimeOptions {
    */
   onSessionChanged?: () => void
   /**
-   * Called when an object of the catalog turns stale (its kernel differs from
-   * the server's) and on every write the server refuses `command.stale-client`
-   * (P4-B spec §10). It only offers a reload: the runtime never reloads itself,
+   * Called once per object, on its transition to stale (its kernel differs
+   * from the server's or a part of a read or write is refused
+   * `command.stale-client`; P4-B spec §10). It only offers a reload: the runtime never reloads itself,
    * so unsaved forms of other objects are not lost.
    */
   onStaleClient?: (object: string) => void

@@ -311,7 +311,7 @@ export function createCore(options: {
   log?: (e: CoreLogEntry) => void
   /** The `snapshotHash` of the client catalog: the first hash to compare with. */
   snapshotHash?: string
-  /** Host callback: an object turned stale-client or a write was refused so. */
+  /** Host callback: once per object, on its transition to stale-client. */
   onStaleClient?: (object: ObjectName) => void
   /** Initial `visible` (default `true`). */
   visible?: boolean
