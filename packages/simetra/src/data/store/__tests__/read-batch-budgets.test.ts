@@ -1,15 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { READ_BATCH_MAX, jsonBytes, type CatalogEntry } from "simetra/model"
+import {
+  READ_BATCH_MAX,
+  jsonBytes,
+  readPartToWire,
+  type CatalogEntry,
+  type ReadQuery,
+} from "simetra/model"
 import { catalogEntry } from "../../../model/runtime/__tests__/entries"
 import { createCore, type CoreSession } from "../core"
 import { createCoreSource, createReadLimiter } from "../source"
-import type { FakeSource } from "../testing/fake-source"
+import type { FakeReadLog, FakeSource } from "../testing/fake-source"
 import { DEFAULT_CORE_LIMITS, type Key, type ViewSpec } from "../types"
 import {
   ORG,
   TASK,
   isPage,
   key,
+  keysOf,
   org,
   settle,
   setup,
@@ -78,10 +85,55 @@ interface Counted {
   hasVersion: boolean
   /** Bytes of the body: every part with its `known`. */
   body: number
-  /** Keys of every `known` of the request. */
-  knownKeys: number
+  /** The bound of the body derived from the codec, see {@link bodyBound}. */
+  bound: number
   /** Bytes of the answer, the `version` value included. */
   response: number
+}
+
+/** The wire part of a query with the list of its keys emptied. */
+function partWithoutKeys(fake: FakeSource, query: ReadQuery): number {
+  const where = "where" in query ? query.where : undefined
+  const emptied: ReadQuery =
+    where !== undefined && "op" in where && where.op === "in"
+      ? ({ ...query, where: { ...where, value: [] } } as ReadQuery)
+      : query
+  const wire = readPartToWire(fake.index, { type: "query", query: emptied })
+  if (!wire.ok) throw new Error("the part does not encode")
+  return jsonBytes(wire.value)
+}
+
+// Верхня оцінка тіла запиту за кодеком, а не за виміром (джерела:
+// `readPartToWire` / `readQueryMap` у `model/runtime/mapping.ts` і
+// `knownSchema` у `model/runtime/read.ts`):
+//  - стала частини (об'єкт, форма): `{"type":"query","query":{...}}` з об'єктом
+//    як UUID, колонками фізичних імен і порожнім списком ключів — її кодує
+//    сам `readPartToWire`, тож число не вгадане;
+//  - ключ частини без `known`: 36 символів UUID, дві лапки й кома — 39 Б;
+//  - ключ `known`: 64 Б (ключ 39 Б + версія текстом до 16 цифр + лапки й кома
+//    — межа `knownVersionSchema`, не більше 64 Б);
+//  - частина `version`: `{"type":"version"}`;
+//  - 2 КіБ — запас §12.
+const KEY_BYTES = 39
+const KNOWN_KEY_BYTES = 64
+const VERSION_PART_BYTES = jsonBytes({ type: "version" })
+const SLACK = 2048
+
+function bodyBound(
+  fake: FakeSource,
+  reads: readonly FakeReadLog[],
+  hasVersion: boolean
+): number {
+  let bound = SLACK + (hasVersion ? VERSION_PART_BYTES : 0)
+  for (const read of reads) {
+    bound += partWithoutKeys(fake, read.query!)
+    // Ключи читання за ключами несе й `where`; частина з `known` має їх у
+    // `known` (їхні 64 Б покривають і ключ `where`, бо це ті самі ключі).
+    const known = read.known?.keys.length ?? 0
+    bound += known * KNOWN_KEY_BYTES
+    if (known === 0) bound += keysOf(read.query).length * KEY_BYTES
+  }
+  return bound
 }
 
 /** The requests the fake received from `from` on, each with its budgets. */
@@ -97,12 +149,12 @@ function counted(fake: FakeSource, from: number): Counted[] {
       parts,
       hasVersion,
       body:
-        (hasVersion ? jsonBytes({ type: "version" }) : 0) +
+        (hasVersion ? VERSION_PART_BYTES : 0) +
         reads.reduce(
           (sum, r) => sum + jsonBytes({ ...r.wire, known: r.known }),
           0
         ),
-      knownKeys: reads.reduce((sum, r) => sum + (r.known?.keys.length ?? 0), 0),
+      bound: bodyBound(fake, reads, hasVersion),
       response:
         (hasVersion ? versionBytes : 0) +
         reads.reduce((sum, r) => sum + jsonBytes(r.response), 0),
@@ -113,7 +165,7 @@ function counted(fake: FakeSource, from: number): Counted[] {
 /** The body column of §12, held by every request of every scenario. */
 const expectBodyBudget = (requests: readonly Counted[]) => {
   for (const request of requests)
-    expect(request.body).toBeLessThanOrEqual(64 * request.knownKeys + 2048)
+    expect(request.body).toBeLessThanOrEqual(request.bound)
 }
 
 /** A second core over the same fake server, as the browser after SSR. */
@@ -214,9 +266,20 @@ describe.each(OBJECT_SETS)("read budgets, $name", (set) => {
     const requests = counted(fake, from)
     expect(requests).toHaveLength(1)
     expect(requests[0]!.hasVersion).toBe(true)
-    // Байтовий стовпець відповіді тут не перевіряється: сесія після гідратації
-    // ще не має епохи версій, тож `known` немає й перечитування приходить
-    // повними рядками (розвилка до архітекторки, див. звіт).
+    // Знімок несе епоху версій рядків, тож перечитування йде з `known` і
+    // приходить маркерами: 8 Б на ключ вигляду, копії носіїв, версія й 2 КіБ.
+    expect(
+      fake.log.filter((r) => r.request === from).some((r) => r.known)
+    ).toBe(true)
+    expect(requests[0]!.response).toBeLessThanOrEqual(
+      8 * 2 * ROWS +
+        2048 +
+        copiesOf(fake) +
+        jsonBytes({
+          snapshotHash: fake.snapshotHash,
+          objects: fake.kernelHashes,
+        })
+    )
     expectBodyBudget(requests)
   })
 
@@ -282,7 +345,6 @@ describe("a flood of views", () => {
     const requests = counted(fake, 0)
     expect(requests).toHaveLength(Math.ceil(20 / READ_BATCH_MAX))
     expect(requests.map((r) => r.parts)).toEqual([READ_BATCH_MAX, 4])
-    // Тіло без `known` тут не міряється: 16 частин по ~145 Б — 2320 Б проти
-    // 2 КіБ (розвилка до архітекторки, див. звіт).
+    expectBodyBudget(requests)
   })
 })
