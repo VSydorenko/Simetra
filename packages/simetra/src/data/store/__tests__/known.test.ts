@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { jsonBytes, type CatalogEntry } from "simetra/model"
 import { catalogEntry } from "../../../model/runtime/__tests__/entries"
+import { bodyBound } from "./body-bound"
 import { visibleRow } from "../object-store"
 import type { FakeReadLog, FakeSource } from "../testing/fake-source"
 import type { Key, ServerRow, ViewSnapshot, ViewSpec } from "../types"
@@ -296,6 +297,55 @@ describe("applyMarker", () => {
       expect(h.store.drainTail()).toEqual([K1])
     })
 
+    // Значення збігаються з тими, з яких збудовано `known`, тож відхилити
+    // маркер може лише перевірка версії й епохи (`holdsMarked`).
+    it.each([{ name: "a higher", version: 3 }])(
+      "$name version of the same values: only the version check rejects",
+      ({ version }) => {
+        const h = inEpoch()
+        const at = hold(h, listRow(K1, 2))
+        const snapshot = h.store.knownFor([K1], list(K1))!
+        h.write((scope) =>
+          h.store.put(
+            scope,
+            { ...listRow(K1, 2), version, values: listRow(K1, 2).values },
+            h.now(),
+            false
+          )
+        )
+        expect(h.store.get(K1)?.version).toBe(version)
+        h.store.drainTail()
+        const result = h.write((scope) =>
+          h.store.put(scope, markerOf(snapshot.held[0]!), at, false)
+        )
+        expect(result).toBe("rejected")
+        expect(h.store.get(K1)?.version).toBe(version)
+        expect(h.store.drainTail()).toEqual([K1])
+      }
+    )
+
+    it("another version epoch of the same version and values: only the epoch check rejects", () => {
+      const h = inEpoch()
+      const at = hold(h, listRow(K1, 2))
+      const snapshot = h.store.knownFor([K1], list(K1))!
+      h.write((scope) =>
+        h.store.put(
+          scope,
+          { ...listRow(K1, 2), versionEpoch: EB },
+          h.now(),
+          false
+        )
+      )
+      expect(h.store.get(K1)?.versionEpoch).toBe(EB)
+      h.store.drainTail()
+      const result = h.write((scope) =>
+        h.store.put(scope, markerOf(snapshot.held[0]!), at, false)
+      )
+      expect(result).toBe("rejected")
+      expect(h.store.get(K1)?.versionEpoch).toBe(EB)
+      expect(h.store.drainTail()).toEqual([K1])
+    })
+
     it("the store holds no such key: a marker never creates a row", () => {
       const h = inEpoch()
       const result = h.write((scope) =>
@@ -435,10 +485,10 @@ describe.each(OBJECT_SETS)("system re-read of own rows, $name", (set) => {
       expect(jsonBytes(page.response)).toBeLessThanOrEqual(
         8 * ROWS + 2048 + copies
       )
-      // Тіло: 64 Б на ключ `known` і 2 КіБ.
+      // Тіло: межа §12 за кодеком (`bodyBound`), не оцінка «64 Б на ключ».
       expect(
         jsonBytes({ ...page.wire, known: page.known })
-      ).toBeLessThanOrEqual(64 * ROWS + 2048)
+      ).toBeLessThanOrEqual(bodyBound(fake, [page], false))
       expect(JSON.stringify(handle.getSnapshot().rows)).toBe(shown)
       expect(inspect.violations()).toEqual([])
     }
