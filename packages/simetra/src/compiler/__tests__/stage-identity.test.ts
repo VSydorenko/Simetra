@@ -544,3 +544,55 @@ describe("stage 2: enumeration defaults", () => {
     ])
   })
 })
+
+describe("stage 2: identity of function declarations", () => {
+  const SQL = "sql/app/approvals.sql"
+  const DECLARATIONS = "sql/app/approvals.functions.json"
+  const declaration = (id?: string) => ({
+    functions: [
+      {
+        ...(id === undefined ? {} : { id }),
+        function: { name: "set_scope" },
+        callers: [],
+      },
+    ],
+  })
+  const withDeclarations = (id: string | undefined) =>
+    compileWith({
+      [CONTRACT]: catalog("Contract", { id: uuid(7) }),
+      [SQL]:
+        "CREATE FUNCTION set_scope() RETURNS void LANGUAGE sql VOLATILE AS $$ select $$;",
+      [DECLARATIONS]: declaration(id),
+    })
+  const brief = (
+    diagnostics: {
+      code: string
+      file: string
+      pointer: string
+      params?: unknown
+    }[]
+  ) => diagnostics.map((d) => [d.code, d.file, d.pointer, d.params ?? {}])
+
+  it("a declaration without id is identity.id-missing", async () => {
+    const result = await withDeclarations(undefined)
+    expect(brief(result.diagnostics)).toEqual([
+      ["identity.id-missing", DECLARATIONS, "/functions/0/id", {}],
+    ])
+  })
+
+  it("the id of an object reused by a declaration is a duplicate", async () => {
+    const result = await withDeclarations(uuid(7))
+    expect(brief(result.diagnostics)).toEqual([
+      [
+        "identity.id-duplicate",
+        DECLARATIONS,
+        "/functions/0/id",
+        { id: uuid(7), firstFile: CONTRACT },
+      ],
+    ])
+  })
+
+  it("a fresh declaration id compiles clean", async () => {
+    expectClean(await withDeclarations(uuid(8)))
+  })
+})

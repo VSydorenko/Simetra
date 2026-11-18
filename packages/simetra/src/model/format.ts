@@ -3,6 +3,11 @@ import { KIND_REGISTRY } from "./kinds/registry"
 import { projectSchema } from "./schemas/project"
 import type { MetadataKind } from "./schemas/metadata-kind"
 import type { SqlDebt } from "./schemas/sql-debt"
+import {
+  compareDeclaredFunctions,
+  sqlFunctionsFileSchema,
+  type SqlFunctionsFile,
+} from "./schemas/sql-functions"
 
 /** Ключі project.meta.json — у порядку оголошення схеми проєкту. */
 export const PROJECT_KEY_ORDER: readonly string[] = Object.keys(
@@ -169,6 +174,20 @@ export function formatSqlDebtFile(debt: SqlDebt): string {
     ...(debt.$schema === undefined ? {} : { $schema: debt.$schema }),
     units,
   })
+}
+
+/**
+ * Канонічна форма `<основа>.functions.json` (спека декларацій функцій §5.1):
+ * ключі в порядку схеми на кожному рівні, записи відсортовано за `function`
+ * тим самим порівнянням, що й правило `declarations.not-canonical`. Дублів
+ * запис не зливає: два записи однієї функції можуть різнитися викликачами,
+ * і вибір між ними — рішення автора, а не форматера, тож їх показує схема.
+ */
+export function formatSqlFunctionsFile(file: SqlFunctionsFile): string {
+  const functions = [...file.functions].sort((a, b) =>
+    compareDeclaredFunctions(a.function, b.function)
+  )
+  return serialize(canonicalize({ ...file, functions }, sqlFunctionsFileSchema))
 }
 
 /** Сегменти JSON Pointer (RFC 6901) без екранування `~1`/`~0`. */

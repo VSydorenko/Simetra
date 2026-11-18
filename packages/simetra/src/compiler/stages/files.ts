@@ -1,15 +1,18 @@
 import { z, type ZodType } from "zod"
 import {
+  FUNCTIONS_FILE_SUFFIX,
   PLATFORM_SCHEMA,
   SCHEMA_RULES,
   SQL_DEBT_FILE,
   kindByDir,
   sqlDebtSchema,
+  sqlFunctionsFileSchema,
   projectSchema,
   type KindDefinition,
   type MetadataKind,
   type Project,
   type SchemaRule,
+  type SqlFunctionDeclaration,
   postsMovements,
 } from "simetra/model"
 import {
@@ -33,6 +36,16 @@ export interface ParsedMovementBlock {
   register: string
   sql: string
   line: number
+}
+
+/**
+ * Файл декларацій функцій, що пройшов схему T0 (спека декларацій функцій
+ * §5.1); `sqlFile` — сусідній `.sql`, чиї функції він описує.
+ */
+export interface ParsedFunctionsFile {
+  file: string
+  sqlFile: string
+  functions: SqlFunctionDeclaration[]
 }
 
 /** Об'єкт, чий файл пройшов схему виду; id може бути відсутнім до стадії 2. */
@@ -69,6 +82,11 @@ export interface FilesStageResult {
   }[]
   moduleFiles: { file: string; ownerFile: string }[]
   /**
+   * Файли `<основа>.functions.json` з наявним сусіднім `.sql`, відсортовані
+   * за шляхом. Зламаний файл сюди не потрапляє: причину вже названо.
+   */
+  functionsFiles: ParsedFunctionsFile[]
+  /**
    * Перелік боргу `sql-debt.json`; файла немає — порожній перелік (спека П2 §8.6).
    * `undefined` — файл зламаний: причину вже названо,
    * а ратчет над невідомим переліком звітував би кожну одиницю боргу.
@@ -81,7 +99,15 @@ export function objectKey(kind: string, name: string): string {
   return `${kind}/${name}`
 }
 
-type Sidecar = { file: string; ownerFile: string; type: "module" | "sql" }
+/**
+ * Супутній файл і файл, без якого він сирота: для модуля й `.sql` — `.meta.json`
+ * об'єкта, для декларацій функцій — сусідній `.sql` (і в спільному `sql/`).
+ */
+type Sidecar = {
+  file: string
+  ownerFile: string
+  type: "module" | "sql" | "functions"
+}
 
 /**
  * Стадія 1 (спека П2 §8.2): розкладка файлів, JSON і схема виду. Кожен файл
@@ -95,6 +121,7 @@ export function readFiles(
     brokenNames: new Set(),
     sqlFiles: [],
     moduleFiles: [],
+    functionsFiles: [],
     sqlDebt: [],
     diagnostics: [],
   }
@@ -129,6 +156,23 @@ export function readFiles(
       readMovementBlocks(file, text, undefined, result.diagnostics)
       continue
     }
+    if (
+      segments.length === 3 &&
+      segments[0] === "sql" &&
+      hasBase(segments[2]!, FUNCTIONS_FILE_SUFFIX)
+    ) {
+      // Декларації функцій схеми платформи — та сама зарезервована тека.
+      if (segments[1] === PLATFORM_SCHEMA) {
+        result.diagnostics.push(diagnostic("schema.reserved", file, ""))
+        continue
+      }
+      sidecars.push({
+        file,
+        ownerFile: `sql/${segments[1]}/${baseOf(segments[2]!, FUNCTIONS_FILE_SUFFIX)}${SQL_SUFFIX}`,
+        type: "functions",
+      })
+      continue
+    }
 
     const def = segments.length === 3 ? kindByDir(segments[0]!) : undefined
     const fileName = segments[2] ?? ""
@@ -148,6 +192,15 @@ export function readFiles(
         file,
         ownerFile: `${folder}${base}${META_SUFFIX}`,
         type: "module",
+      })
+    } else if (def !== undefined && hasBase(fileName, FUNCTIONS_FILE_SUFFIX)) {
+      // Декларації описують функції сусіднього `.sql`; чи той `.sql` має
+      // власника — його окреме питання, про яке звітує він сам.
+      const base = baseOf(fileName, FUNCTIONS_FILE_SUFFIX)
+      sidecars.push({
+        file,
+        ownerFile: `${folder}${base}${SQL_SUFFIX}`,
+        type: "functions",
       })
     } else if (def !== undefined && hasBase(fileName, SQL_SUFFIX)) {
       const base = baseOf(fileName, SQL_SUFFIX)
@@ -175,6 +228,19 @@ export function readFiles(
           expected: sidecar.ownerFile,
         })
       )
+    } else if (sidecar.type === "functions") {
+      const functions = readFunctionsFile(
+        sidecar.file,
+        files.get(sidecar.file) ?? "",
+        result.diagnostics
+      )
+      if (functions !== undefined) {
+        result.functionsFiles.push({
+          file: sidecar.file,
+          sqlFile: sidecar.ownerFile,
+          functions,
+        })
+      }
     } else if (sidecar.type === "module") {
       result.moduleFiles.push({
         file: sidecar.file,
@@ -316,6 +382,23 @@ function readSqlDebt(
     return undefined
   }
   return parsed.data.units
+}
+
+function readFunctionsFile(
+  file: string,
+  text: string,
+  diagnostics: Diagnostic[]
+): SqlFunctionDeclaration[] | undefined {
+  const json = parseJson(file, text, diagnostics)
+  if (json === undefined) return undefined
+  const parsed = sqlFunctionsFileSchema.safeParse(json.value)
+  if (!parsed.success) {
+    diagnostics.push(
+      ...zodDiagnostics(file, sqlFunctionsFileSchema, json.value)
+    )
+    return undefined
+  }
+  return parsed.data.functions
 }
 
 function missingDatabase(

@@ -14,6 +14,7 @@ import {
   withoutAccess,
   withoutMechanics,
 } from "./helpers"
+import { readFiles } from "../stages/files"
 
 function codes(diagnostics: Diagnostic[]): string[] {
   return diagnostics.map((d) => d.code)
@@ -806,5 +807,99 @@ describe("stage 1: strict schemas", () => {
       start: { line: 3, character: 2 },
       end: { line: 3, character: 10 },
     })
+  })
+})
+
+describe("stage 1: function declarations", () => {
+  const ID = "0b6f4c1e-2a3d-4e5f-8a9b-1c2d3e4f5a6b"
+  const declarations = {
+    functions: [{ id: ID, function: { name: "approve" }, callers: ["user"] }],
+  }
+  const SHARED_SQL =
+    "CREATE FUNCTION set_scope() RETURNS void LANGUAGE sql VOLATILE AS $$ select $$;"
+
+  it.each([
+    ["the object folder", "catalogs/Contract/Contract", catalog("Contract")],
+    ["the shared sql folder", "sql/app/approvals", undefined],
+    // `.sql` прийнятої таблиці — борг; декларації лежать поруч так само.
+    [
+      "the debt of a CustomTable",
+      "custom-tables/AuditLog/AuditLog",
+      customTable("AuditLog"),
+    ],
+  ])("reads the declarations next to the .sql in %s", (_, base, owner) => {
+    const stage1 = readFiles(
+      metaFiles({
+        "project.meta.json": project(),
+        ...(owner === undefined ? {} : { [`${base}.meta.json`]: owner }),
+        [`${base}.sql`]: "select 1;",
+        [`${base}.functions.json`]: declarations,
+      })
+    )
+    expect(stage1.diagnostics).toEqual([])
+    expect(stage1.functionsFiles).toEqual([
+      {
+        file: `${base}.functions.json`,
+        sqlFile: `${base}.sql`,
+        functions: declarations.functions,
+      },
+    ])
+  })
+
+  it.each([
+    [
+      "catalogs/Contract/Contract",
+      { "catalogs/Contract/Contract.meta.json": catalog("Contract") },
+    ],
+    ["sql/app/approvals", {}],
+  ])(
+    "declarations without their .sql in %s are an orphan",
+    async (base, extra) => {
+      // Р8: сирота — сам файл, а не `target-missing` на кожен запис.
+      const result = await compile(
+        metaFiles({
+          "project.meta.json": project(),
+          ...extra,
+          [`${base}.functions.json`]: declarations,
+        })
+      )
+      expect(result.diagnostics.map((d) => [d.code, d.file, d.params])).toEqual(
+        [["file.orphan", `${base}.functions.json`, { expected: `${base}.sql` }]]
+      )
+    }
+  )
+
+  it("a schema error of the declarations is a diagnostic of their file", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "sql/app/approvals.sql": SHARED_SQL,
+        "sql/app/approvals.functions.json": {
+          functions: [
+            { function: { schema: "b", name: "x" }, callers: [] },
+            { function: { schema: "a", name: "x" }, callers: [] },
+          ],
+        },
+      })
+    )
+    expect(result.diagnostics.map((d) => [d.code, d.file, d.pointer])).toEqual([
+      [
+        "declarations.not-canonical",
+        "sql/app/approvals.functions.json",
+        "/functions/1",
+      ],
+    ])
+  })
+
+  it("declarations under sql/simetra are reserved", async () => {
+    const result = await compile(
+      metaFiles({
+        "project.meta.json": project(),
+        "sql/simetra/own.functions.json": declarations,
+      })
+    )
+    expect(result.diagnostics.map((d) => [d.code, d.file])).toEqual([
+      ["schema.reserved", "sql/simetra/own.functions.json"],
+    ])
   })
 })

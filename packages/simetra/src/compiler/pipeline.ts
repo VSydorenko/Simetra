@@ -1033,7 +1033,8 @@ export function sqlStage(stage1: FilesStageResult, parse: SqlParser) {
   const stage2 = checkIdentity(
     stage1.objects,
     stage1.brokenNames,
-    stage1.project
+    stage1.project,
+    stage1.functionsFiles
   )
   const upstream = [...stage1.diagnostics, ...stage2.diagnostics]
   // Стадії 3–4 спираються на резолвлені посилання й наявні id та

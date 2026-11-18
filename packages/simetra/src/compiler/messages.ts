@@ -884,6 +884,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Виконайте simetra fix, коли файли метаданих коректні й кожен .sql розбирається: він відсортує перелік і прибере дублі та записи, що вже не є боргом.",
     },
   },
+  "declarations.not-canonical": {
+    en: () =>
+      "A .functions.json file lists its declarations sorted by function (entries without schema first, then by schema and name) and declares each function once",
+    uk: () =>
+      "Файл .functions.json перелічує декларації відсортованими за функцією (записи без схеми — першими, далі за схемою й ім'ям) і декларує кожну функцію один раз",
+  },
   "scope.name-reserved": {
     en: () => 'Scope kind name "none" is reserved',
     uk: () => 'Ім\'я виду скоупу "none" зарезервоване',
