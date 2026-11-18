@@ -72,6 +72,9 @@ const STACKS = [
     project: "simetra-pg",
     script: "postgres",
     signalsPort: "8100",
+    // Порти публікує postgres і Garage; у стеку Supabase лише Centrifugo в
+    // мережі хоста, без портів
+    expectsPorts: true,
   },
   {
     title: "supabase-signals stack",
@@ -79,6 +82,7 @@ const STACKS = [
     project: "simetra-sb",
     script: "supabase-signals",
     signalsPort: "8101",
+    expectsPorts: false,
   },
 ] as const
 
@@ -150,41 +154,46 @@ function environmentOf(block: string): Record<string, string> {
   )
 }
 
-describe.each(STACKS)("compose.yaml of the $title", ({ dir, project }) => {
-  const compose = read("compose.yaml", dir)
-  const services = serviceBlocks(compose)
+describe.each(STACKS)(
+  "compose.yaml of the $title",
+  ({ dir, project, expectsPorts }) => {
+    const compose = read("compose.yaml", dir)
+    const services = serviceBlocks(compose)
 
-  it("names the compose project", () => {
-    expect(compose).toMatch(new RegExp(`^name: ${project}$`, "m"))
-  })
+    it("names the compose project", () => {
+      expect(compose).toMatch(new RegExp(`^name: ${project}$`, "m"))
+    })
 
-  it("publishes every port on 127.0.0.1 only and never the Garage RPC port", () => {
-    const ports = publishedPorts(compose)
-    for (const port of ports) expect(port).toMatch(/^127\.0\.0\.1:\d+:\d+$/)
-    expect(ports.some((p) => /:3901(:|$)/.test(p))).toBe(false)
-  })
+    it("publishes every port on 127.0.0.1 only and never the Garage RPC port", () => {
+      const ports = publishedPorts(compose)
+      // Порожній перелік пройшов би цикл нижче без жодної перевірки
+      expect(ports.length > 0).toBe(expectsPorts)
+      for (const port of ports) expect(port).toMatch(/^127\.0\.0\.1:\d+:\d+$/)
+      expect(ports.some((p) => /:3901(:|$)/.test(p))).toBe(false)
+    })
 
-  // Р17: мережа хоста дозволена лише Centrifugo, і лише `host`; решта
-  // сервісів публікує порти Docker-ом на 127.0.0.1
-  it("has network_mode only on centrifugo, and only host", () => {
-    expect(services.has("centrifugo")).toBe(true)
-    for (const [name, block] of services)
-      expect(networkModes(block), name).toEqual(
-        name === "centrifugo" ? ["host"] : []
-      )
-    // Ключ поза блоками сервісів теж не проходить
-    expect(networkModes(compose)).toEqual(["host"])
-  })
+    // Р17: мережа хоста дозволена лише Centrifugo, і лише `host`; решта
+    // сервісів публікує порти Docker-ом на 127.0.0.1
+    it("has network_mode only on centrifugo, and only host", () => {
+      expect(services.has("centrifugo")).toBe(true)
+      for (const [name, block] of services)
+        expect(networkModes(block), name).toEqual(
+          name === "centrifugo" ? ["host"] : []
+        )
+      // Ключ поза блоками сервісів теж не проходить
+      expect(networkModes(compose)).toEqual(["host"])
+    })
 
-  it("publishes no port of centrifugo: it is on the host network", () => {
-    expect(services.get("centrifugo")).not.toMatch(/^\s*["']?ports["']?\s*:/m)
-  })
+    it("publishes no port of centrifugo: it is on the host network", () => {
+      expect(services.get("centrifugo")).not.toMatch(/^\s*["']?ports["']?\s*:/m)
+    })
 
-  it("pins the Centrifugo image by tag and digest", () => {
-    const [image] = [...compose.matchAll(/^\s*image:\s*(centrifugo\S+)/gm)]
-    expect(image?.[1]).toMatch(/^[^:@\s]+:[^:@\s]+@sha256:[0-9a-f]{64}$/)
-  })
-})
+    it("pins the Centrifugo image by tag and digest", () => {
+      const [image] = [...compose.matchAll(/^\s*image:\s*(centrifugo\S+)/gm)]
+      expect(image?.[1]).toMatch(/^[^:@\s]+:[^:@\s]+@sha256:[0-9a-f]{64}$/)
+    })
+  }
+)
 
 it("pins one Centrifugo image in both stacks", () => {
   const images = STACKS.map(
@@ -803,12 +812,9 @@ const SCRIPT_URL = new URL("../../../../scripts/db-stack.mjs", import.meta.url)
 describe("stack-files hash wiring of the postgres stack", () => {
   /** Блок сервісу в compose.yaml: рядки від `  <name>:` до наступного сервісу. */
   const serviceBlock = (name: string): string => {
-    const compose = read("compose.yaml")
-    const m = new RegExp(`^  ${name}:\\n((?:    .*\\n|\\s*\\n)*)`, "m").exec(
-      compose
-    )
-    expect(m, name).not.toBeNull()
-    return m![1]!
+    const block = serviceBlocks(read("compose.yaml")).get(name)
+    expect(block, name).toBeDefined()
+    return block!
   }
 
   it("the Dockerfile labels the image with the build argument, after the packages", () => {
