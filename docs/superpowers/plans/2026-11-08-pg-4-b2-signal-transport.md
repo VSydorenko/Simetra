@@ -90,8 +90,8 @@
 | Р13 | `CHECK` прив'язує `idempotency_key` і `data.id` до `id`: вимкнений тригер — `23514` | немає |
 | Р14 | Режим злиття скидається в тому самому операторі, що ставить claims команди: `ALTER ROLE … SET` не гасить сигналів | немає |
 | Р15 | 🔴 Політика `INSERT` outbox — `WITH CHECK (signal_payload_allowed(payload))`: канал за `signal_topic_allowed(…, true)`, точна форма `data` за `op`, `object` = об'єкт топіка, рівно один ключ з ім'ям колонки ключа й UUID. Правило форми — лише там. `signal_payload_allowed` — `STABLE SECURITY INVOKER SET search_path = ''` (імена колонок ключа — константи компілятора, прав власника не треба), `REVOKE … FROM PUBLIC`, `EXECUTE` лише `simetra_command`: інакше вона — другий вхід в оракул Р10 | П4-B §8.2, §8.3 |
-| Р16 | **DSN `simetra_signals` до Centrifugo стеків.** Пароль `SIMETRA_SIGNALS_DEV_PASSWORD` — у `login-secrets.env`. `scripts/db-stack.mjs` будує DSN і передає compose середовищем процесу (`composeEnv()`); compose має лише інтерполяцію `${SIMETRA_SIGNALS_DSN:-}` у `environment:` Centrifugo (`CENTRIFUGO_CONSUMERS_SIMETRA_OUTBOX_POSTGRESQL_DSN`, `…_PARTITION_NOTIFICATION_DSN`; Centrifugo v6.10.2 `internal/config/config.go` перевизначає поля лише споживача, оголошеного в конфігу, за ім'ям; задача 4 доводить це на справжньому контейнері). Compose файлу не читає; пароль не в `env_file` і не в argv. `db:pg:start`: Postgres → ролі й паролі → `up --wait centrifugo`. `db:roles` ставить пароль на стеку Supabase, `db:signals:start` бере той самий DSN. Зміна пароля перестворює лише Centrifugo (стану не тримає) | профіль §10.1, §10.2 |
-| Р17 | **`jwksUrl` — вхід, не шаблон; JWKS лише на loopback.** `centrifugoConfig({ projectName, origin, issuer, jwksUrl })`; шлях — `SIGNALS_JWKS_PATH` з `simetra/server/signals`, за ним D5 монтує маршрут. Centrifugo обох стеків іде з `network_mode: host` і HTTP на `127.0.0.1:8100`/`8101` змінними контейнера, як стенд (Р6): host-и (`pnpm demo`, e2e) слухають лише `127.0.0.1`, а `host-gateway` на Linux їх не бачить. Тому JWKS стеків — `http://127.0.0.1:3000` (порт `pnpm demo`), DSN — `127.0.0.1:54422` / `127.0.0.1:54322`. Host на `0.0.0.0` не прив'язують. E2e (#263, вільний порт) і D5 генерують конфіг під свій порт — рішення D5 | профіль §10.1 (порти Centrifugo) |
+| Р16 | **DSN `simetra_signals` до Centrifugo стеків** — середовищем процесу compose: пароль у `login-secrets.env` читає лише `scripts/db-stack.mjs`, будує DSN і передає через `composeEnv()`; compose-файл має тільки інтерполяцію в `environment:` Centrifugo (змінні `CENTRIFUGO_CONSUMERS_SIMETRA_OUTBOX_POSTGRESQL_*` перевизначають споживача, оголошеного в конфігу, — Centrifugo v6.10.2 `internal/config/config.go`). Пароль не в `env_file` і не в argv. Centrifugo стартує після ролей і паролів; зміна пароля перестворює лише його (стану не тримає). Деталі — задача 12 | профіль §10.1, §10.2 |
+| Р17 | **`jwksUrl` — вхід, не шаблон; JWKS лише на loopback.** `centrifugoConfig` бере `jwksUrl`; шлях — `SIGNALS_JWKS_PATH`, за ним D5 монтує маршрут. Host-и (`pnpm demo`, e2e) слухають лише `127.0.0.1`, а `host-gateway` на Linux їх не бачить, тож Centrifugo стеків — `network_mode: host` з HTTP на `127.0.0.1:8100`/`8101`, як стенд (Р6); JWKS стеків — `http://127.0.0.1:3000` (порт `pnpm demo`). Host на `0.0.0.0` не прив'язують. E2e (#263) і D5 генерують конфіг під свій порт — рішення D5. **На погодження:** тест файлів стека дозволяє `network_mode` лише `centrifugo` (задача 12) | профіль §10.1 |
 | Р18 | Межа відкликання = TTL токена + `client.expired_sub_close_delay` (типово 25 с; з'єднання — `expired_close_delay`). Типові значення лишаються, у білий список ключі не входять | профіль §6.2, П4-B §8.6 |
 | Р19 | Метрики транспорту §11 відкладено в #268: приймача метрик ще немає; `recovered: false` — B5b; журнал Centrifugo — `info` | профіль §11 |
 | Р20 | `prune` за розкладом шаблон не кличе (Р27): оператор — `pg_cron` чи зовнішній cron від власника; рецепт — у скілі `simetra-metadata`. Демо й e2e спорожнює сам споживач | немає |
@@ -528,33 +528,14 @@ D5 (#122).
 
 ## Аудит
 
-Раунд 1 — три лінзи паралельно. Sonnet «план проти спеки й коду» знайшов 1
-major: частина C бере `signal_topic_allowed` і сигнал ядра з B. Виправлено
-порядком A → B → C. Minor про issue метрик закрито #268. Sonnet «бюджети»
-знайшов 3 major: невизначений метод порогу злиття, загублений зв'язок порогу
-з `history_size` (Р23), метод виміру затримки. Усі виправлено. Minor про
-найбільший законний сигнал — рядок у задачі 3. Opus «безпека» знайшов 2
-security major і 1 minor:
-- `signal_payload_allowed` без режиму й `EXECUTE` — другий вхід в оракул.
-  Тепер `INVOKER`, `EXECUTE` лише `simetra_command`, інваріант 4.
-- JWKS на `host.docker.internal` недосяжний для host-а на `127.0.0.1` і
-  штовхав до `0.0.0.0`. Тепер `network_mode: host` і loopback, Р17.
-- Межа відкликання — кейс стенду в задачі 13.
-
-Раунд 2 — Opus на diff: (a)–(c) закрито. Одна нова major: тест файлів стека
-послабив би заборону `network_mode` для всіх сервісів. Звужено до
-`centrifugo` з мутаціями; на погодження архітекторки. Codex (тригер —
-security major Opus) дав 5 знахідок, усі спростовано:
-- «оракул через `simetra_runtime`» — це довірений логін сервера, який і так
-  ставить claims будь-якому користувачу;
-- «вигаданий сигнал правильної форми від `simetra_command`» — SQL застосунку
-  цього шляху не має (Правило 1, `checkPlatformCalls`), а сигнал без даних дає
-  лише перечитування під RLS (§8.6);
-- «спільний `aud` двох розгортань» — `iss` = origin розгортання, ключі — секрет
-  кожного розгортання;
-- «JWKS на однослівному імені й зайнятому loopback-порту» — межа довіри
-  машини розробника; у проді `https` чи внутрішня мережа (§6.3);
-- blocker «пароль у закоміченому `login-secrets.env`» — це навмисні
-  dev-паролі стека на `127.0.0.1`, так само як наявні.
-
-Лишилось 0 blocker і 0 security major.
+Раунд 1: Sonnet «план проти коду» — 1 major (C залежить від B; виправлено
+порядком A → B → C); Sonnet «бюджети» — 3 major (метод порогу, межа історії
+Р23, метод виміру затримки; виправлено); Opus «безпека» — 2 security major
+(`signal_payload_allowed` як другий вхід в оракул; JWKS недосяжний з
+`host-gateway` і штовхав до `0.0.0.0`) і minor (межа відкликання без тесту) —
+виправлено. Раунд 2 (Opus на diff): закрито; нова major — послаблення заборони
+`network_mode` у тесті файлів стека звужено до `centrifugo` (на погодження
+архітекторки). Codex: 5 знахідок, усі спростовано (довірений логін
+`simetra_runtime`; сигнал без даних лише дає перечитування; `iss` = origin
+розгортання; межа довіри машини розробника; навмисні dev-паролі стека).
+Підсумок: 0 blocker, 0 security major. Деталі — у тілі PR.
