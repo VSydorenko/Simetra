@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { ZERO_UUID } from "../core"
 import {
   changeSignalSchema,
+  CENTRIFUGO_CHANNEL_MAX,
   channelTopic,
   invalidateSignalSchema,
   parseTopic,
@@ -70,6 +71,19 @@ describe("channel topics", () => {
   })
 })
 
+describe("channel name limit", () => {
+  it("keeps the longest topic within Centrifugo's limit, with allowed characters", () => {
+    const longest = channelTopic({
+      kind: "changes",
+      scopeKindId: KIND,
+      scope: SCOPE,
+      object: OBJECT,
+    })
+    expect(longest.length).toBeLessThanOrEqual(CENTRIFUGO_CHANNEL_MAX)
+    expect(longest).toMatch(/^[a-z0-9:-]+$/)
+  })
+})
+
 describe("signal schemas", () => {
   const change = {
     object: OBJECT,
@@ -95,12 +109,32 @@ describe("signal schemas", () => {
       expect(sent.safeParse(ok).success).toBe(true)
       expect(sent.safeParse({ ...ok, extra: 1 }).success).toBe(false)
       expect(sent.safeParse({ ...ok, id: USER }).success).toBe(false)
-      expect(got.safeParse({ ...ok, id: USER }).success).toBe(true)
+      expect(got.safeParse({ ...ok, id: "17" }).success).toBe(true)
       expect(got.safeParse(ok).success).toBe(false)
       expect(got.safeParse({ ...ok, id: "x" }).success).toBe(false)
-      expect(got.safeParse({ ...ok, id: USER, extra: 1 }).success).toBe(false)
+      expect(got.safeParse({ ...ok, id: "17", extra: 1 }).success).toBe(false)
     }
   )
+
+  it.each([
+    ["a uuid", USER],
+    ["zero", "0"],
+    ["a leading zero", "01"],
+    ["a number", 17],
+    ["20 digits", "10000000000000000000"],
+    ["a sign", "-5"],
+  ])("received id refuses %s", (_n, id) => {
+    expect(receivedRightsSchema.safeParse({ ...rights, id }).success).toBe(
+      false
+    )
+  })
+
+  it("received id accepts the largest 19-digit decimal", () => {
+    expect(
+      receivedRightsSchema.safeParse({ ...rights, id: "9223372036854775807" })
+        .success
+    ).toBe(true)
+  })
 
   it("refuses the removed sections field", () => {
     expect(

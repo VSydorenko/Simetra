@@ -19,6 +19,16 @@ export const SIGNAL_NOTIFY_CHANNEL = "simetra_signal_outbox"
  */
 export const SIGNAL_PAYLOAD_MAX_BYTES = 1024
 
+/**
+ * The transaction setting that switches a command from per-row signals to the
+ * merged `invalidate` per (scope, object); only the exact merge value counts.
+ */
+export const SIGNAL_MODE_SETTING = "simetra.signal_mode"
+export const SIGNAL_MERGE_MODE = "merge"
+
+/** Centrifugo's channel name length limit (`channel_max_length`, octets). */
+export const CENTRIFUGO_CHANNEL_MAX = 255
+
 /** A signal channel: object changes in a scope, rights in a scope, or one user. */
 export type Channel =
   | { kind: "changes"; scopeKindId: string; scope: string; object: string }
@@ -68,6 +78,9 @@ export function parseTopic(topic: string): Channel | undefined {
 
 const uuid = z.guid()
 
+// Десятковий рядок id рядка outbox: `bigint` понад 2^53 у JS губить точність.
+const signalId = z.string().regex(/^[1-9][0-9]{0,18}$/)
+
 // Рівно один ключ `<колонка>: <UUID>`: сигнал несе лише ідентифікатор рядка,
 // а не його вміст — решту клієнт дочитує звичайним читанням.
 const keysSchema = z
@@ -95,11 +108,11 @@ export const rightsSignalSchema = z.strictObject({
 })
 
 // Транспорт додає `id` повідомлення при отриманні; надсилається сигнал без нього.
-export const receivedChangeSchema = changeSignalSchema.extend({ id: uuid })
+export const receivedChangeSchema = changeSignalSchema.extend({ id: signalId })
 export const receivedInvalidateSchema = invalidateSignalSchema.extend({
-  id: uuid,
+  id: signalId,
 })
-export const receivedRightsSchema = rightsSignalSchema.extend({ id: uuid })
+export const receivedRightsSchema = rightsSignalSchema.extend({ id: signalId })
 
 export type ChangeSignal = z.infer<typeof changeSignalSchema>
 export type InvalidateSignal = z.infer<typeof invalidateSignalSchema>
