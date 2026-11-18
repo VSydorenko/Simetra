@@ -228,7 +228,7 @@ describe("receiver writes go through Writer.apply", () => {
     expect(
       outsideUses(program, files, writerFile, (f) => relative(DATA, f))
     ).toEqual([])
-    // Результат власного запису пише лише журнал (план B3-4-Л, Р3), а
+    // Результат власного запису пише лише журнал, а
     // сховище його бачить лише через `Writer.writeBack`.
     expect(
       memberCalls(

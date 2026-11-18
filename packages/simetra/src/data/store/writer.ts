@@ -71,7 +71,7 @@ export interface WriterContext extends ReaderContext {
   readonly hiddenKeys: Map<ObjectName, Set<Key>>
   /**
    * The mutation journal: a purge erases the fields of the mutations it
-   * touches in the same `commit` (plan B3-4-Л Р11).
+   * touches in the same `commit`.
    */
   readonly journal: {
     erase(object: ObjectName, key: Key): void
@@ -83,7 +83,7 @@ export interface WriterContext extends ReaderContext {
 export const REREAD_TIMEOUT_MS = 5_000
 
 /**
- * The outcome of a re-read by key (plan B3-4-Л Р4): `read` — the answer
+ * The outcome of a re-read by key: `read` — the answer
  * passed the epoch gate (`row` — the key's row, `undefined` when absent);
  * `failed` — the read failed or ran out of {@link REREAD_TIMEOUT_MS};
  * `discarded` — the answer came from an abandoned version epoch.
@@ -191,7 +191,7 @@ function forget(
     if (own && s.form.include.length > 0) releaseTargets(ctx, scope, s)
     s.dirty = true
     // Читання сторінок вікна в польоті могло нести рядки, яких на мить
-    // `purge` у сховищі не було: їхню відповідь відкинуто (Р9), наступну
+    // `purge` у сховищі не було: їхню відповідь відкинуто, наступну
     // сторінку читає дія користувача чи край списку.
     if ((own || target) && s.window !== undefined) s.paging.clear()
     if (
@@ -567,14 +567,14 @@ async function readFullAgain(
 }
 
 /**
- * The system re-read of a window (P4-B spec §6.4, plan B3-3, Р14): every
+ * The system re-read of a window (P4-B spec §6.4): every
  * own page again by a keyset from its lower bound, all in one call of the
  * source, without `known`. The composition stays: a value goes to its place,
  * a key that is not in the pages of the answer is read by key — absent is
  * `removed`, present is `needsRefresh` (it moved) — and a key the window
  * does not hold is only `hasNewRows`. The result is written only while the
  * window is in the same chain and every page keeps the generation it was
- * read with (Р9).
+ * read with.
  */
 async function readWindowAgain(
   ctx: WriterContext,
@@ -662,7 +662,7 @@ async function readWindowAgain(
     const now = s.window
     if (now === undefined) return
     if (!ctx.defects.has("page-without-generation")) {
-      // Токен читання (Р9): той самий ланцюжок і те саме покоління кожної
+      // Токен читання: той самий ланцюжок і те саме покоління кожної
       // сторінки; інакше відповідь нічого не пише.
       if (now.chain !== chain) return
       const alive = new Set(now.pages.map((page) => page.generation))
@@ -765,7 +765,7 @@ export async function revalidate(
     (s) =>
       s.loaded &&
       (!options.visibleOnly || isVisible(s)) &&
-      // Відмітка свіжості (Р10): без неї вигляд вважається простроченим.
+      // Відмітка свіжості: без неї вигляд вважається простроченим.
       (options.minAgeMs === undefined ||
         ctx.defects.has("min-age-ignored") ||
         (ctx.defects.has("min-age-ignored-sections") &&
@@ -795,7 +795,7 @@ export async function revalidateHydrated(
 
 /**
  * The re-read of every view that holds one of the hidden keys, as an owned
- * row or an `include` target, invisible views included (plan B3-3, Р11): the
+ * row or an `include` target, invisible views included: the
  * values return only with a read that started after the `hide`. A failed
  * read leaves them hidden. A view of another object that includes the
  * object is re-read as its own object's view. Tabular section subsets are
@@ -966,8 +966,7 @@ async function revalidateViews(
 }
 
 /**
- * The re-read of one key after an own write (plan B3-4-Л Р4, the architect
- * answer to the re-read fork): by key through `readKeys` — the list form, or
+ * The re-read of one key after an own write (P4-B spec §7.2): by key through `readKeys` — the list form, or
  * the card form with lazy columns for a lazy-field edit — never a re-read of
  * the views that hold it. The answer passes the same epoch gate as
  * `Writer.apply` and is written with its start epoch only into slots with an

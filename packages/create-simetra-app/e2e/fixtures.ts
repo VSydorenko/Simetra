@@ -1,4 +1,4 @@
-// Фікстура e2e (Д2-2): тегована база прогону з ознакою `simetra.environment =
+// Фікстура e2e: тегована база прогону з ознакою `simetra.environment =
 // 'development'` рівня бази, `db-setup`, `seed`, двоє користувачів Better Auth
 // з різними власними рядками `Client`, production-збірка шаблону й сервер
 // `node-server` на 127.0.0.1. Усе піднімає один воркерний `app`; збірку він бере
@@ -53,7 +53,7 @@ const exec = promisify(execFile)
 
 export const TEMPLATE = resolve(import.meta.dirname, "../template")
 
-/** Кількість `Client` засіву (Д-9): дві повні сторінки по 100 і неповна. */
+/** Кількість `Client` засіву: дві повні сторінки по 100 і неповна. */
 export const SEED_COUNT = 250
 /** Власні рядки користувача B: їх бачить лише B. */
 export const B_ROWS = 3

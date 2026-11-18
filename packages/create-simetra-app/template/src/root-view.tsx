@@ -69,7 +69,7 @@ export function RootLayout({ scope }: { scope: HostScope }) {
   const router = useRouter()
   // Адаптер на роутер: новий на кожен кадр перезапускав би блокувальник
   const navigation = useMemo(() => routerNavigation(router), [router])
-  // Один раз на гідратацію: звірка, `data-hydrated` (Д-8), видимість
+  // Один раз на гідратацію: звірка, `data-hydrated`, видимість
   useEffect(() => startClient(scope, document, window), [scope])
   return (
     <app.Provider>

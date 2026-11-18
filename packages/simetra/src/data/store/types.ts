@@ -205,7 +205,7 @@ export interface ViewHandle {
   loadAfter(): void
   /**
    * The rows a list host shows, by index in the composition. Does nothing in
-   * the thin M3 slice: the tiers it would drive are plan B3-3 issue #206.
+   * the thin M3 slice: the tiers it would drive are #206.
    */
   setVisibleRange(range: { first: number; last: number }): void
 }
@@ -439,7 +439,7 @@ export interface Writer {
   ): readonly Key[]
   /**
    * Hides the values of the keys (rights, the eviction horizon): the only
-   * entry point of rights narrowing (plan B3-3, Р11). The values return only
+   * entry point of rights narrowing. The values return only
    * with a read that started after this call, in every view that holds the
    * key — invisible ones, `include` targets and window snapshots included —
    * re-read after the `commit`; a failed re-read leaves them hidden. Stored

@@ -1,4 +1,4 @@
-// Збірка шаблону з tarball-ів (Д-6): копія `template/` у тимчасовій теці поза
+// Збірка шаблону з tarball-ів: копія `template/` у тимчасовій теці поза
 // репо, `simetra` і `@simetrajs/designer` — із tarball-ів, які побачить реєстр
 // (`pnpm pack` бере поля `publishConfig`), решта — з реєстру. Пресет —
 // `node-server`. Потребує свіжого `pnpm build:packages`.

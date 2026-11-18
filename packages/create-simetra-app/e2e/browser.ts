@@ -1,4 +1,4 @@
-// Помічники браузерних сценаріїв D3 (Д3-1): кінцева умова — стан DOM і тіла
+// Помічники браузерних сценаріїв D3: кінцева умова — стан DOM і тіла
 // відповідей `dataFn` з мережевого журналу Playwright, а не лічильники host-а
 // (журнал з `#instrument` — #210).
 import type { Browser, BrowserContext, Page } from "@playwright/test"

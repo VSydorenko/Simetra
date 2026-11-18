@@ -620,7 +620,7 @@ describe("useCardDraft — одна охорона запису: save, overwrite
         const o = await opened()
         await reach(o, state, "host")
         await block(o)
-        // Несумісний клієнт ховає рядок (Р7): чернетка переходить у `hidden`.
+        // Несумісний клієнт ховає рядок (спека П4-B §10): чернетка переходить у `hidden`.
         expect(draftState(o.c)).toBe(
           name.startsWith("isStale") ? "hidden" : state
         )

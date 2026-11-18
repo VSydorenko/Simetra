@@ -80,8 +80,7 @@ export interface CoreSession {
    */
   commit(fn: (writer: Writer) => void, token: GenerationToken): boolean
   /**
-   * Starts an `update` with the `await` policy (P4-B spec §7.1, plan
-   * B3-4-Л): one mutation per key in the journal, one `run`. Throws
+   * Starts an `update` with the `await` policy (P4-B spec §7.1): one mutation per key in the journal, one `run`. Throws
    * synchronously, before the journal and the transport, only for a caller
    * error: `TypeError` for a name outside the catalog, `DataError`
    * `data.version-required`. `data.mutation-pending` (the key has a
@@ -164,18 +163,18 @@ export interface CoreSession {
    * Ends the hydration, once (a repeat does nothing): releases the views no
    * subscription took after `releaseDelayMs`, asks for the catalog version
    * and re-reads the visible views of every object — synchronously, so the
-   * requests leave in one microtask (plan B3-6a, Р6).
+   * requests leave in one microtask.
    */
   endHydration(): void
   /** Whether the host shows the application (`resume` sets, `suspend` clears). */
   readonly visible: boolean
-  /** Marks the application hidden; idempotent, sends nothing (plan B3-6a, Р12). */
+  /** Marks the application hidden; idempotent, sends nothing. */
   suspend(): void
   /**
    * Marks the application visible. A call less than `RESUME_COALESCE_MS`
    * after the last accepted one does nothing more. An accepted call asks for
    * the catalog version and re-reads the visible views whose freshness mark is
-   * older than `limits.resumeMinIntervalMs` or missing, synchronously (Р11).
+   * older than `limits.resumeMinIntervalMs` or missing, synchronously.
    */
   resume(): void
 }
@@ -239,7 +238,7 @@ export function inspectCore(session: CoreSession): CoreInspection {
   return found
 }
 
-/** `resume()` closer than this to the last accepted one does nothing (Р11). */
+/** `resume()` closer than this to the last accepted one does nothing. */
 const RESUME_COALESCE_MS = 1_000
 
 const KEYS_PER_REQUEST_MAX = Math.min(READ_LIMIT_MAX, FILTER_IN_MAX)
@@ -450,7 +449,7 @@ export function createCore(options: {
       if (defects.has("absent-row-ignored")) return
       o.rows.remove(scope, key, readEpoch)
       rowViews.touch(o.name, key)
-      // Перехід у `removed` стирає поля мутації ключа тим самим `commit` (Р11).
+      // Перехід у `removed` стирає поля мутації ключа тим самим `commit`.
       if (o.rows.get(key)?.removed !== undefined) overlay.erase(o.name, key)
       // `removed` стирає й рядки ТЧ власника (§6.2, правило 5); власник без
       // шапки в сховищі — теж: його рядкам ТЧ нема чим лишатись видимими.
@@ -987,7 +986,7 @@ export function createCore(options: {
       hydration = "ended"
       if (!session.token().valid) return
       registry.endHydration()
-      // Звірка (Р6): запити йдуть синхронно, без `await` між об'єктами, тож
+      // Звірка: запити йдуть синхронно, без `await` між об'єктами, тож
       // збирач пакета читань зіллє їх, а цей код не зміниться.
       core.requestVersion()
       if (defects.has("hydrate-without-revalidate")) return
@@ -1125,7 +1124,7 @@ export function createCore(options: {
         if (!s.alive) out.push(`${by}: released but registered`)
         for (const key of s.owned) hold(s.form.object, key, by)
         // Вікно тримає лише склад: його сторінки — ключі в тому порядку, у
-        // якому показано список, без повторів і порожніх сторінок (Р8, Р9).
+        // якому показано список, без повторів і порожніх сторінок (спека П4-B §6.4).
         if (s.window !== undefined) {
           const keys = s.window.pages.flatMap((page) => [...page.keys])
           if (keys.join() !== s.layout.join())

@@ -28,7 +28,7 @@ import {
 } from "./core-support"
 
 /*
- * Журнал мутацій і write-back (план B3-4-Л, задача 2; спека П4-B §6.5, §7.1,
+ * Журнал мутацій і write-back (спека П4-B §6.5, §7.1,
  * §7.2): справжнє ядро над фейковим сервером. Порт запису керований: тест
  * тримає відповідь `run`, підміняє її форму чи відмовляє, а сервер виконує
  * запис лише на мить відповіді.
@@ -282,7 +282,7 @@ describe("DataWriter.update — developer errors before the journal (§6.1)", ()
     expect(h.port.runs).toBe(0)
   })
 
-  it("Р1: an update of a failed key replaces its mutation", async () => {
+  it("an update of a failed key replaces its mutation", async () => {
     const h = harness()
     const { card, version } = await mounted(h)
     h.port.refuse = { code: "command.busy" }
@@ -328,7 +328,7 @@ describe("DataWriter.update — a refusal by the write state settles failed (§7
     expect(result.ok === false && result.error).toBeInstanceOf(DataError)
   }
 
-  it("Р1: a second update of a pending key settles failed with data.mutation-pending", async () => {
+  it("a second update of a pending key settles failed with data.mutation-pending", async () => {
     const h = harness()
     const { card, seen, version } = await mounted(h)
     h.port.hold = true
@@ -388,7 +388,7 @@ describe("DataWriter.update — a refusal by the write state settles failed (§7
   })
 })
 
-describe("write-back without a full row (Р3, Р4)", () => {
+describe("write-back without a full row", () => {
   it("an answer without rows re-reads the key before settling, in one notification", async () => {
     const h = harness()
     const { card, seen, version } = await mounted(h)
@@ -528,7 +528,7 @@ describe("write-back without a full row (Р3, Р4)", () => {
       { expectedVersion: h.fake.row(TASK, K)!.version }
     )
     // Значень іншої епохи немає, а перечитування ключа без власника нічого
-    // не пише (рішення архітекторки): осідання без читання.
+    // не пише (спека П4-B §7.2): осідання без читання.
     expect(await m.settled).toEqual({ ok: true, rows: [undefined] })
     await settle()
     expect(h.fake.log.slice(reads)).toHaveLength(0)
@@ -911,7 +911,7 @@ describe("write-back without a full row (Р3, Р4)", () => {
   })
 })
 
-describe("mutation actions (Р5, Р7, Р11)", () => {
+describe("mutation actions", () => {
   it("failed offers retry and cancel; retry is a new attempt with a new Mutation", async () => {
     const h = harness()
     const { card, version } = await mounted(h)

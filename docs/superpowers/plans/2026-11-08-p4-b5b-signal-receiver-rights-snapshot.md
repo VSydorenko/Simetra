@@ -1,8 +1,8 @@
 # П4-B5b — знімок прав клієнта, приймач сигналів і транспорт Centrifugo: план реалізації
 
 > **Статус:** проєкт плану, 2026-11-08; приймає архітекторка
-> `runtime-client-data`. Блок B5b спеки П4-B. Межі B5a/B5b задає план B5a
-> (задача 0: поділ рядка B5 у §13). Дві частини, кожна має своє «готово» й
+> `runtime-client-data`. Блок B5b спеки П4-B. Межі B5a/B5b задає §13 спеки П4-B
+> (рядки B5a, B5b, B5c). Дві частини, кожна має своє «готово» й
 > окремий PR (рішення архітекторки):
 > - **A** — знімок прав клієнта;
 > - **B** — приймач сигналів і транспорт.
@@ -11,12 +11,10 @@
 > B3-2, B3-3, B3-4, B3-6, B5a і ПГ-3 (`sessionKind`). Частина B — ще й після ПГ-4/B2 частин B і C. Якорі на
 > незмерджене позначено «після X». Ядро T4
 > (`packages/simetra/src/data/store/`) і пакет читань — у `main`; функцій сигналу й
-> `SignalTokens` ще немає: їх дають плани
-> [B3-3](2026-11-08-p4-b3-3-window-public-api.md),
-> [B3-4/B3-5](2026-11-08-p4-b3-4-b3-5-write-receipts.md),
-> [B3-6](2026-11-08-p4-b3-6-oracle-host-ssr.md), B5a,
-> [ПГ-3](2026-11-08-pg-3-identity-better-auth.md) і
-> [ПГ-4/B2](2026-11-08-pg-4-b2-signal-transport.md).
+> `SignalTokens` ще немає: їх дає план
+> [ПГ-4/B2](2026-11-08-pg-4-b2-signal-transport.md); B3-3, B3-4, B3-6,
+> B5a і ПГ-3 — у `main` у тонкій формі М3 (ADR-0091), решта B3-4/B3-5 —
+> #208 і #111.
 > **Межа з B6** (рішення архітекторки). Функції сигналів прав, підписка на
 > `simetra-rights:` і `simetra-user:`, реакція на їхні сигнали, контракт прав
 > дій у каталозі, обчислювач і `useCan` — B6. B5b дає `refreshTokens` як
@@ -178,7 +176,7 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
 
 ## Частина A — знімок прав клієнта
 
-### Task 0: поправки спеки й плану B3-4
+### Task 0: поправки спеки
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-11-05-p4-b-client-data-design.md`:
@@ -197,14 +195,6 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
     B4 дістає «`reason: "schema"` у T0 і `requestVersion()` на ньому» (Р9).
   
   Звір із поділом, який вносить B5a.
-- Modify: `docs/superpowers/plans/2026-11-08-p4-b3-4-b3-5-write-receipts.md`
-  (Р9), задача 4, Step 1:
-  - речення «приєднання без `recovered` і `schema` — B5b» → «приєднання без
-    `recovered` — B5b, `schema` — B4»;
-  - рядок таблиці «приєднання без `recovered`, сигнал `schema` | B5b» →
-    два рядки: «приєднання без `recovered` | B5b» і «сигнал `schema` | B4».
-  
-  План B5a на `main` подій `schema` не розподіляє — у ньому правок немає.
 
 - [ ] **Step 1:** правки. Без лічильників і наративу фаз.
 - [ ] **Step 2:** `python3 scripts/check-doc-anchors.py` і `pnpm format:check` — зелені.

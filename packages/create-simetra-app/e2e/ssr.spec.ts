@@ -1,6 +1,6 @@
 // SSR, вхід і вихід, розрив сесії й повернення фокуса (сценарії 1, 3, 7–10 спеки
 // П4-D §8.1) і безпекові кейси D3 (§8.3) на production-збірці без аліасу
-// `#instrument`. Кінцева умова (Д3-1) — стан DOM і тіла відповідей `dataFn` з
+// `#instrument`. Кінцева умова — стан DOM і тіла відповідей `dataFn` з
 // мережевого журналу Playwright. Кадри записує `browser.ts`: `page.clock`
 // підміняє `requestAnimationFrame`, тож сценарії 9 і 10 (які ведуть час) беруть
 // записувач змін DOM, решта — кадровий.
@@ -108,7 +108,7 @@ test.describe("scenario 1: SSR entry on the Client list", () => {
       )
     )
 
-    // Кожен кадр зі значеннями — той самий склад і порядок, що в HTML (Д-12)
+    // Кожен кадр зі значеннями — той самий склад і порядок, що в HTML
     const frames = await framesFromRows(page)
     expect(frames.some((f) => f.hydrated)).toBe(true)
     for (const frame of frames) {
@@ -464,7 +464,7 @@ test.describe("security: data runtime per request", () => {
   }
 
   /**
-   * Власні рядки відкриваються лише своєму суб'єкту (права `own`, Д-13); HTML
+   * Власні рядки відкриваються лише своєму суб'єкту (права `own`, спека П4-D §8.1); HTML
    * несе й знімок (`$_TSR`), тож один пошук покриває обидва.
    */
   function expectOwn(

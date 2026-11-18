@@ -74,8 +74,7 @@ const sameList = <T>(a: readonly T[], b: readonly T[]) =>
   a.length === b.length && a.every((x, i) => x === b[i])
 
 /**
- * The values a row shows under the write mode of its own mutation (plan
- * B3-4-Л «Шлях до #208»): `await` shows the confirmed row of the store.
+ * The values a row shows under the write mode of its own mutation (the seam of #208): `await` shows the confirmed row of the store.
  */
 const SHOWN: Readonly<
   Record<WritePolicy, (e: RowEntry) => Values | undefined>
@@ -87,7 +86,7 @@ const SHOWN: Readonly<
  * `staleFields` are the lazy fields read with an older row version (§6.2
  * rule 2). The state of an own mutation takes precedence over `stale`
  * and `synced` (§6.5); `hidden` takes precedence over the mutation, which
- * the view still carries with its actions (plan B3-4-Л Р7). The shown values
+ * the view still carries with its actions. The shown values
  * come through the write mode `policy` of the mutation.
  */
 export function computeRowView(

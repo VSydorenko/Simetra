@@ -33,10 +33,9 @@ import type { rereadKey } from "./writer"
 type RereadOptions = Parameters<typeof rereadKey>[3]
 
 /*
- * Журнал власних мутацій (спека П4-B §6.1 `Overlay`, §7.1, §7.2; план
- * B3-4-Л). Тонкий зріз М3: лише `update` з політикою `await`, одна мутація на
- * ключ (Р1), без рядків у журналі (Р2) — показ бере підтверджений рядок
- * сховища, а журнал дає рядку лише стан і дії (Р5). Кожна зміна журналу —
+ * Журнал власних мутацій (спека П4-B §6.1 `Overlay`, §7.1, §7.2). Тонкий зріз М3: лише `update` з політикою `await`, одна мутація на
+ * ключ, без рядків у журналі — показ бере підтверджений рядок
+ * сховища, а журнал дає рядку лише стан і дії. Кожна зміна журналу —
  * усередині `commit`, тож разом із записом рядка вона дає одне сповіщення.
  */
 
@@ -66,9 +65,9 @@ export interface Overlay {
   ): Mutation
   /** The mutation a row view of the entry shows (`createRowViews`). */
   mutationOf(object: ObjectName, key: Key, e: RowEntry): OwnMutation | undefined
-  /** Inside a `commit`: a purge or `removed` erased the fields (Р11). */
+  /** Inside a `commit`: a purge or `removed` erased the fields. */
   erase(object: ObjectName, key: Key): void
-  /** Inside a `commit`: the purge of a pair erased the fields (Р11). */
+  /** Inside a `commit`: the purge of a pair erased the fields. */
   eraseScope(object: ObjectName, scope: string | null): void
   /** Settles every live mutation with the close and empties the journal. */
   close(reason: CloseReason): void
@@ -86,7 +85,7 @@ export interface JournalInspection {
   readonly id: string
   readonly policy: WritePolicy
   readonly state: MutationState
-  /** The fields were erased by a purge or `removed` (Р11). */
+  /** The fields were erased by a purge or `removed`. */
   readonly erased: boolean
 }
 
@@ -116,7 +115,7 @@ interface JournalEntry {
   readonly key: Key
   /** The write mode: the row view reads the shown values through it. */
   readonly policy: WritePolicy
-  /** `undefined` — erased by a purge or `removed` (Р11): no `retry`. */
+  /** `undefined` — erased by a purge or `removed`: no `retry`. */
   values: Values | undefined
   readonly expectedVersion: number
   state: MutationState
@@ -134,7 +133,7 @@ const sameKey = (a: Key, b: Key) => a.toLowerCase() === b.toLowerCase()
  * `close` — сесію закрито, мутація нічого не показує. `unavailable` на `run`
  * (зокрема тайм-аут чи обрив транспорту, які раннер зводить до нього) —
  * результат невідомий; `command.timeout` — відмова БД до `COMMIT`, тож `failed`.
- * `internal` може йти й після `COMMIT` (Р10), тож ключ теж перечитується.
+ * `internal` може йти й після `COMMIT`, тож ключ теж перечитується.
  */
 interface Policy {
   readonly state: MutationState | "closed"
@@ -189,7 +188,7 @@ export function createOverlay(deps: {
   const tokenOf = (attempt: Attempt) =>
     afterCancel() ? session.token() : attempt.token
   // Індекс журналу — черга записів ключа (шов #208: кілька записів ключа,
-  // база з попереднього); у М3 у черзі рівно один запис (Р1), тож межа
+  // база з попереднього); у М3 у черзі рівно один запис, тож межа
   // журналу рахує ключі.
   const journal = new Map<ObjectName, Map<Key, JournalEntry[]>>()
   let keys = 0
@@ -309,7 +308,7 @@ export function createOverlay(deps: {
     result: CoreRunResult,
     local = false
   ) {
-    // Скасовано чи закрито: відповідь нічого не пише (Р9, токен спроби).
+    // Скасовано чи закрито: відповідь нічого не пише (токен спроби).
     if (!attempt.live && !afterCancel()) {
       attempt.resolve(
         result.ok
@@ -325,7 +324,7 @@ export function createOverlay(deps: {
     const o = objectOf(entry.object)
     const row = result.rows[0]
     // Рядок `run` — без лінивих колонок (§4.5): змінене ліниве поле він не
-    // підтверджує, тож власник отримує його з форми картки до осідання (Р4).
+    // підтверджує, тож власник отримує його з форми картки до осідання.
     const lazy = o.lazyFields.some((f) => Object.hasOwn(entry.values ?? {}, f))
     const owned = () => (o.rows.get(entry.key)?.owners ?? 0) > 0
     let form: "list" | "card" | undefined
@@ -482,7 +481,7 @@ export function createOverlay(deps: {
     }, tokenOf(attempt))
     attempt.resolve({ ok: false, error })
     if (policy.stale && !local) deps.staleClient(entry.object)
-    // Значень з відповіді немає, тож ключ перечитується (Р6); ключ без
+    // Значень з відповіді немає, тож ключ перечитується; ключ без
     // власника перечитувати нема для кого.
     if (
       policy.reread &&

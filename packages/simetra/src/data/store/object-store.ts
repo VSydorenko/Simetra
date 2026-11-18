@@ -70,8 +70,7 @@ export interface RowEntry {
   /** `divergent` — the remove came from a read older than the last write (П15). */
   removed?: { epoch: number; divergent: boolean }
   /**
-   * The epoch of the last `hide` of the key while this entry lives (plan
-   * B3-3, Р11). Unlike `stale.hidden`, no read lifts it, and unlike the
+   * The epoch of the last `hide` of the key while this entry lives. Unlike `stale.hidden`, no read lifts it, and unlike the
    * `Epochs` mark it is not evicted: the owner's sections read before it
    * stay stale (`sectionStale`), and a horizon mark is never taken for it.
    */
@@ -79,7 +78,7 @@ export interface RowEntry {
   /**
    * Four `stale` marks, each cleared by its own rule (spec §6.1). While
    * `hidden` is set, the values are hidden: by the eviction horizon (§6.2
-   * rule 1) or by `hideKeys` (rights, plan B3-3, Р11). Only a read that
+   * rule 1) or by `hideKeys` (rights). Only a read that
    * started after the mark clears it; a write-back does not.
    */
   stale: {
@@ -150,8 +149,7 @@ export interface ObjectStore {
     lazyRead: boolean
   ): PutResult
   /**
-   * Writes a row of an own command result (P4-B spec §7.2 step 3, plan
-   * B3-4-Л Р3) by the version rule, without the read path's lifting of marks:
+   * Writes a row of an own command result (P4-B spec §7.2 step 3) by the version rule, without the read path's lifting of marks:
    * `hidden`, `removed`, `stale` marks and tombstones stay. `"unowned"` — no
    * entry or no owner: nothing to write, the row of the answer stands
    * (§7.2 step 5). `"skipped"` — not written, the caller re-reads the key:
@@ -203,8 +201,8 @@ export interface ObjectStore {
   /** At zero owners: the version goes to memory; a removed slot is also buried. */
   disown(scope: Scope, key: Key): void
   /**
-   * Hides the values of the keys until a read that starts after this call
-   * (plan B3-3, Р11): a fresh epoch even over an existing mark (a read that
+   * Hides the values of the keys until a read that starts after this call:
+   * a fresh epoch even over an existing mark (a read that
    * started between the two would otherwise lift the newer one), and a
    * `Epochs.hiddenSince` mark for every key, entry or not — the entry may go
    * away (`disown`) before the old read arrives. Keys with an entry go to the
@@ -537,7 +535,7 @@ export function createObjectStore(options: {
           ? "skipped"
           : "unowned"
       }
-      // Позначки знімає лише читання, що почалось після них (Р-2 серії):
+      // Позначки знімає лише читання, що почалось після них:
       // результат запису читанням не є, тож ключ іде на перечитування.
       const liftsHidden = defects.has("write-back-lifts-hidden")
       if (

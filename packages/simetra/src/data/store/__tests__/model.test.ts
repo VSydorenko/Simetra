@@ -108,7 +108,7 @@ const SPECS: readonly ViewSpec[] = [
   { kind: "keys", object: TASK, keys: [K1] },
   { kind: "keys", object: ORG, keys: [S, T] },
   { kind: "keys", object: ORG, keys: [S] },
-  // Вікна (план B3-3, a2-Л): у порядку заголовка, що змінюють чужі правки, і
+  // Вікна: у порядку заголовка, що змінюють чужі правки, і
   // у порядку ключа з ціллю `include`.
   {
     kind: "window",
@@ -139,7 +139,7 @@ const CHANNELS = [
 
 type How = "ok" | "stale" | "forbidden" | "missing" | "unavailable"
 
-/** How the model answers a held `run` (план B3-4-Л, задача 4). */
+/** How the model answers a held `run`. */
 type RunHow = "ok" | "conflict" | "forbidden" | "unavailable"
 
 type Step =
@@ -286,7 +286,7 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
       scope: fc.nat(1),
     }),
   },
-  // `hide` (права, план B3-3, Р11): значення ключа ховаються до читання,
+  // `hide` (права): значення ключа ховаються до читання,
   // що почалось після нього; перечитування видів-власників іде саме.
   {
     weight: 10,
@@ -349,7 +349,7 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
     weight: 6,
     arbitrary: fc.record({ t: one("epoch"), which: fc.nat(EPOCHS.length - 1) }),
   },
-  // Запис (план B3-4-Л, задача 4): `update` з базою — підтвердженою версією,
+  // Запис: `update` з базою — підтвердженою версією,
   // серверною чи застарілою; ліниве поле перечитує картка.
   {
     weight: 14,
@@ -405,14 +405,14 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
     }),
   },
   { weight: 2, arbitrary: fc.record({ t: one("closeInFlight") }) },
-  // Перегідратація (план B3-6a, задача 1): знімок ядра, нове ядро над тим
+  // Перегідратація: знімок ядра, нове ядро над тим
   // самим сервером, `hydrate`, `endHydration`, звірка.
   { weight: 6, arbitrary: fc.record({ t: one("rehydrate") }) },
-  // Несумісний об'єкт (План B3-6a, задача 2): липка позначка `stale-client`
+  // Несумісний об'єкт: липка позначка `stale-client`
   // й відповіді `version` без розбіжності, що її не знімають.
   { weight: 1, arbitrary: fc.record({ t: one("stale"), org: fc.boolean() }) },
   { weight: 2, arbitrary: fc.record({ t: one("version") }) },
-  // Повернення (план B3-6a, задача 3): частина `version` і перечитування
+  // Повернення: частина `version` і перечитування
   // видимих виглядів з межею свіжості; межі — менша й більша за кроки `time`.
   {
     weight: 8,
@@ -471,7 +471,7 @@ interface ModelAttempt {
 interface ModelEntry {
   readonly key: Key
   attempt: ModelAttempt
-  /** A purge or `removed` erased its fields (Р11): no `retry`. */
+  /** A purge or `removed` erased its fields: no `retry`. */
   erased: boolean
   /** The number of checks before the entry was created. */
   readonly created: number
@@ -615,7 +615,7 @@ async function runModel(
       sectionBarrier.set(K1, stepStart)
   }
   // Ключ, який сховав `hide`: значення — лише з читання, що почалось після
-  // нього (план B3-3, Р11), а рядки ТЧ власника — лише з читання ТЧ.
+  // нього, а рядки ТЧ власника — лише з читання ТЧ.
   const hideBarrier = new Map<string, number>()
   // Вигляд ТЧ (SPECS[4]) утримано `preload` цього кроку: спостереження, як
   // і слухач, вимагає перечитування після `hide` власника.
@@ -799,7 +799,7 @@ async function runModel(
       fail(label, `${at}: shown after purge without a later read`)
     // Версія — з доставленого читання або з відповіді `run` живої спроби;
     // бар'єри (`hide`, `purge`, `removed`) знімає лише читання: write-back
-    // позначок не знімає й прибраного не воскрешає (Р3, Р7, Р11).
+    // позначок не знімає й прибраного не воскрешає.
     if (
       !deliveredVersion(object, row.key, row.version) &&
       !runDelivered.has(`${id(object, row.key)}\u0000${row.version}`)
@@ -1008,7 +1008,7 @@ async function runModel(
         if (e.removed !== undefined) {
           if (before === undefined) {
             removedBarrier.set(id(name, k), stepStart)
-            // Перехід у `removed` стирає поля мутації ключа (Р11), що вже
+            // Перехід у `removed` стирає поля мутації ключа, що вже
             // була в журналі до кроку.
             const entry = name === TASK ? journal.get(k) : undefined
             if (entry !== undefined && entry.created < checks)
@@ -1078,7 +1078,7 @@ async function runModel(
   }
 
   /**
-   * Вікно (план B3-3, Р8, Р9): знімок несе ланцюжок вікна, а ланцюжок не
+   * Вікно: знімок несе ланцюжок вікна, а ланцюжок не
    * спадає — він змінюється лише разом із новим складом; склад і сторінки
    * (ключі без значень) тримає `violations`.
    */
@@ -1100,8 +1100,7 @@ async function runModel(
 
   /**
    * ТЧ-підмножина, яку спостерігають (слухач чи `preload` кроку) після
-   * `hide` власника, перечитана (план B3-3, Р11, рішення архітекторки до
-   * задачі 0): є читання ТЧ власника, надіслане після `hide`, або
+   * `hide` власника, перечитана: є читання ТЧ власника, надіслане після `hide`, або
    * завантаження вигляду в польоті — після нього перевірка повториться.
    * Стан підмножини на мить `hide` будь-який: змонтована, утримувана без
    * слухачів, перше завантаження в польоті, шапка в сховищі чи ні.
@@ -1119,7 +1118,7 @@ async function runModel(
     }
     if (s.flight !== undefined) return
     heldInFlight = false
-    // Сесія після межі відкинутих відповідей не читає (Р12); власник
+    // Сесія після межі відкинутих відповідей не читає; власник
     // `removed` рядків не показує, і читання ТЧ їх не поверне.
     if (inspect.versionEpochs().unavailable) return
     // Несумісний об'єкт не перечитується взагалі (§10).
@@ -1190,7 +1189,7 @@ async function runModel(
   let logAt = 0
   const restoredInStep = new Map<ObjectName, number>()
 
-  // ── Запис (план B3-4-Л, задача 4) ──
+  // ── Запис ──
   // Журнал моделі: мутація ключа, доки її не прибрав успіх, дія чи `close`.
   const journal = new Map<Key, ModelEntry>()
   const attempts: ModelAttempt[] = []
@@ -1236,7 +1235,7 @@ async function runModel(
     const at = `${attempt.key} ${attempt.id}`
     if (result.ok && attempt.mustFail)
       asyncViolations.push(`${at}: settled ok after close`)
-    // Скасована спроба нічого не пише й рядків не віддає (Р9).
+    // Скасована спроба нічого не пише й рядків не віддає.
     if (
       result.ok &&
       attempt.cancelled &&
@@ -1302,7 +1301,7 @@ async function runModel(
   /**
    * Журнал ядра проти моделі: відмова не прибирає мутації мовчки, межа
    * журналу (мутації плюс неосілі спроби — ні більше, ні менше), стан і дії в
-   * рядку, стерті поля після `purge` чи `removed` (Р5, Р7, Р11).
+   * рядку, стерті поля після `purge` чи `removed`.
    */
   const checkMutations = (label: string) => {
     const unsettled = attempts.filter((a) => a.result === undefined).length
@@ -1341,7 +1340,7 @@ async function runModel(
             label,
             `${k}: row shows mutation ${String(shown?.id)} ${String(shown?.state)}`
           )
-        // `hidden` і `removed` мають пріоритет показу над станом мутації (Р7);
+        // `hidden` і `removed` мають пріоритет показу над станом мутації;
         // інакше рядок показує стан мутації — за `await` з підтвердженими
         // значеннями (`checkRow`).
         if (
@@ -1352,7 +1351,7 @@ async function runModel(
           fail(label, `${k}: row ${row.state}, mutation ${m!.state}`)
         if (entry.erased && shown!.retry !== undefined)
           fail(label, `${k}: retry offered after the fields were erased`)
-        // Дії за станом (Р5): `retry` — лише `failed`, `dismiss` — лише
+        // Дії за станом: `retry` — лише `failed`, `dismiss` — лише
         // `unknown`, `pending` без `removed` дій не має.
         if (shown!.retry !== undefined && m!.state !== "failed")
           fail(label, `${k}: retry offered on ${m!.state}`)
@@ -1573,7 +1572,7 @@ async function runModel(
   }
 
   /**
-   * Перегідратація (план B3-6a, задача 1): знімок ядра йде в нове ядро над
+   * Перегідратація: знімок ядра йде в нове ядро над
    * тим самим сервером. Перевіряємо безпеку знімка (жодних значень `hidden`
    * чи `removed` ключа, жодного рядка без власника), що вигляди нового ядра
    * після `hydrate` показують те саме, що старого, і що після звірки
@@ -2021,7 +2020,7 @@ async function runModel(
         if (closed !== undefined) break
         if (object === TASK) {
           // Надгробок ключа: відповідь польоту значень не пише, а журнал
-          // стирає поля (Р11).
+          // стирає поля.
           for (const a of attempts)
             if (a.result === undefined && a.key === target) a.purged = true
           const entry = journal.get(target)
@@ -2051,7 +2050,7 @@ async function runModel(
         if (object === TASK) {
           // Надгробок пари — для спроби зі скоупом пари на старті; надгробок
           // ключа — для прибраного ключа. Поля стирає запис цього скоупу чи
-          // невідомого (Р11).
+          // невідомого.
           const buried = new Set(purgedKeys.keys)
           for (const a of attempts)
             if (
@@ -2209,7 +2208,7 @@ async function runModel(
         const mutation = core.update(TASK, k, values, { expectedVersion: base })
         if (pending) {
           sending = undefined
-          // Одна мутація на ключ (Р1): `pending` — відмова до журналу й
+          // Одна мутація на ключ: `pending` — відмова до журналу й
           // транспорту, мутація осідає `failed` з кодом (§7.1).
           if (attempt.sent)
             fail(label, `${k}: an update of a pending key went out`)
@@ -2244,7 +2243,7 @@ async function runModel(
       case "removeMut": {
         // Ключ з мутацією стає `removed`: RLS на мить ховає його скоуп від
         // перечитування виглядів; дія «Скасувати» `removed` з мутацією в
-        // дорозі — відповідь після неї нічого не пише (Р7, Р9).
+        // дорозі — відповідь після неї нічого не пише.
         const k = KEYS[s.k]!
         const row = fake.row(TASK, k)
         if (row === undefined || closed !== undefined) break
@@ -2732,17 +2731,17 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // Читання між позначкою `removed` і похованням слота відкидається, тож
   // `full` чи вікно закінчують без рядка сервера.
   "bury-removed-current-epoch": /^converge .*(composition|lacks)/,
-  // Запис (план B3-4-Л, задача 4): кожен дефект — своєю перевіркою.
+  // Запис: кожен дефект — своєю перевіркою.
   "predict-before-answer": /\.title = u\d+, server at/,
   "settle-separate-commit": /the run row shown with its mutation pending/,
   "write-back-lifts-hidden": /after hide without a later read/,
   "answer-after-cancel": /a cancelled attempt settled with a row/,
-  // Перегідратація (план B3-6a, задача 1): знімок і звірка.
+  // Перегідратація: знімок і звірка.
   "hidden-values-in-snapshot": /snapshot: a hidden slot carries values/,
   "hydrate-without-revalidate": /after hydrate: view \d+ .*(server|hidden)/,
-  // Липка позначка (задача 2): збіг `kernelHash` її не знімає.
+  // Липка позначка: збіг `kernelHash` її не знімає.
   "stale-mark-lifts": /not isStale/,
-  // Повернення (задача 3): межа свіжості виглядів.
+  // Повернення: межа свіжості виглядів.
   "min-age-ignored": /a view younger than the limit (got a read|was re-read)/,
   "min-age-ignored-sections": /a view younger than the limit was re-read/,
   "min-age-all-young": /a view older than the limit was not re-read/,

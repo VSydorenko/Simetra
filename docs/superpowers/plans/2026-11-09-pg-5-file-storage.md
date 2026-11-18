@@ -7,7 +7,7 @@
 > **Частини.** **А** (задачі 0–6) — T0, T1/T2, T3, тест-інфра; стартує після
 > мерджу ПГ-3 (а з ним ПГ-2a/2b: проєкт `db` на стеку `postgres`). **Б**
 > (задачі 7–8) — endpoint-и й звірка в шаблоні host-а; стартує після мерджу
-> зрізу П4-D (`2026-11-08-p4-d-slice.md`) і частини А.
+> зрізу П4-D (у `main`) і частини А.
 > **Перед стартом кожної частини:** `.agents/skills/codebase-research/scripts/orient --plan <цей файл>`.
 > Якорі «після ПГ-2b/ПГ-3»: `asRole`, `queryAs`, `claimsFor`, `signUp`,
 > `testAuth`, `withRuntimeLogin`, `withCopy`, `PROVIDER_OWNER_ROLES`.
