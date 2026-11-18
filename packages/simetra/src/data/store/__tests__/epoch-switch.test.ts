@@ -1051,9 +1051,13 @@ describe("core: the epoch switch", () => {
       { state: "stale" },
     ])
     // Строк минув за 2 с, а відмітка свіжості (рефреш) молодша за 15 с.
+    const sent = h.fake.log.length
     h.core.resume()
     await settle()
     expect(h.fake.pending.filter(isKeys)).toHaveLength(1)
+    // Читання об'єкта перемикання йде тим самим пакетом, що й частина `version`
+    // звірки, а не окремим запитом пізніше.
+    expect(new Set(h.fake.log.slice(sent).map((l) => l.request)).size).toBe(1)
     await deliver(h)
     expect(h.handle.getSnapshot().rows).toMatchObject([
       { state: "synced" },

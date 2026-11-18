@@ -548,6 +548,7 @@ describe("scheduler: the seam of the rights block (B5b)", () => {
     await advance(I)
     const at = h2.core.freshness.lastTickAt()
     expect(at).toBeDefined()
+    await advance(100)
     h2.core.freshness.requestReread([ORG], { jitterMs: 0 })
     await settle()
     expect(h2.core.freshness.lastTickAt()).toBe(at)
@@ -590,11 +591,13 @@ describe("scheduler: the tail of an explicit revalidate", () => {
       await settle()
     }
     await deliver()
-    h.core.setVisible(spec, false)
     view.refresh()
     await settle()
     expect(h.fake.pending).toHaveLength(1)
+    // Видимий вигляд у польоті: перший виклик ставить хвіст з `visibleOnly`.
     void h.core.revalidate(TASK, { visibleOnly: true })
+    h.core.setVisible(spec, false)
+    // Другий виклик приєднується до цього хвоста й розширює його.
     void h.core.revalidate(TASK, { visibleOnly: false })
     await settle()
     const base = readsAt(h)
