@@ -1,6 +1,8 @@
 import {
   PLATFORM_ROLES,
   PLATFORM_SCHEMA,
+  SIGNAL_MERGE_MODE,
+  SIGNAL_MODE_SETTING,
   SIGNAL_OUTBOX,
   TOPIC_UUID_PATTERN,
   ZERO_UUID,
@@ -25,12 +27,7 @@ import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
 import { generatedUnit, type SqlUnit } from "../sql/units"
 import { sqlLiteral } from "../stages/model"
-
-/** Signal authorization functions of the schema `simetra` (P4-B spec §8.3). */
-export const SIGNAL_FUNCTIONS = {
-  topicAllowed: { schema: PLATFORM_SCHEMA, name: "signal_topic_allowed" },
-  payloadAllowed: { schema: PLATFORM_SCHEMA, name: "signal_payload_allowed" },
-} as const
+import { SIGNAL_FUNCTIONS } from "./names"
 
 /** The outbox `INSERT` policy of the command role (P4-B spec §8.2). */
 export const SIGNAL_INSERT_POLICY = "signal_outbox_command_insert"
@@ -74,11 +71,12 @@ interface SignalFacts {
 }
 
 /**
- * Генератор `signal` (P4-B spec §8.2, §8.3): оракул каналу
- * `signal_topic_allowed`, правило форми `signal_payload_allowed` і політика
- * `INSERT` outbox для ролі команд. Лише там, де є функції прав, як ядро
- * команд: без ядра сигналів не шле ніхто, а RLS outbox без політики
- * відхиляє будь-яку вставку ролі команд (fail-closed).
+ * Генератор `signal` (P4-B spec §8.2, §8.3): відправка `signal` і
+ * `signal_invalidate`, оракул каналу `signal_topic_allowed`, правило форми
+ * `signal_payload_allowed` і політика `INSERT` outbox для ролі команд. Лише
+ * там, де є функції прав, як ядро команд: без ядра сигналів не шле ніхто, а
+ * RLS outbox без політики відхиляє будь-яку вставку ролі команд
+ * (fail-closed).
  */
 export function buildSignalUnits(input: SignalInput): SqlUnit[] {
   const { contracts, provider } = input
@@ -99,7 +97,26 @@ export function buildSignalUnits(input: SignalInput): SqlUnit[] {
   )
   const topicSignature = `${qualified(SIGNAL_FUNCTIONS.topicAllowed)}(text, boolean)`
   const payloadSignature = `${qualified(SIGNAL_FUNCTIONS.payloadAllowed)}(jsonb)`
+  // Відправка: форму не перевіряє (Р15) — її судить політика `INSERT`, тож
+  // `EXECUTE` лише ролі команд (П4-B §14.3): інша роль дала б тій самій
+  // політиці вставку від себе.
+  const senders = [
+    {
+      signature: `${qualified(SIGNAL_FUNCTIONS.signal)}(uuid, uuid, uuid, jsonb, bigint, text)`,
+      sql: signalFunction(),
+    },
+    {
+      signature: `${qualified(SIGNAL_FUNCTIONS.invalidate)}(uuid, uuid, uuid)`,
+      sql: invalidateFunction(),
+    },
+  ].flatMap(({ signature, sql }) => [
+    unit(sql, bodyRequires(sql, input)),
+    ...executeGrants(signature, ["command"], provider).map((grant) =>
+      unit(grant)
+    ),
+  ])
   return [
+    ...senders,
     topicUnit,
     // Р10: `PUBLIC` дав би будь-якій ролі з `USAGE` на `simetra` оракул прав;
     // `EXECUTE` — роль, що вставляє в outbox, і роль, що видає токени.
@@ -313,17 +330,81 @@ function payloadAllowedFunction(facts: readonly SignalFacts[]): string {
   )
 }
 
+/**
+ * Канал змін `channelTopic` (T0) у SQL: `uuid::text` — нижній регістр, як
+ * вимагає `parseTopic`.
+ */
+const CHANNEL =
+  "'simetra:' || p_scope_kind::text || ':' || p_scope::text || ':' || p_object::text"
+
+/** Вставка сигналу в outbox: `id` і ключ ідемпотентності ставить тригер штампа. */
+function outboxInsert(data: string): string {
+  return (
+    `  INSERT INTO ${qualified(SIGNAL_OUTBOX)} (method, payload) VALUES ('publish', ` +
+    `jsonb_build_object('channel', ${CHANNEL}, 'data', ${data}));`
+  )
+}
+
+/**
+ * `simetra.signal(…)` (P4-B spec §8.2): рядок outbox зміни рядка в
+ * транзакції команди. Режим злиття гасить сигнал лише точним значенням
+ * (§8.2: «режим відкритий за замовчуванням»): будь-яке інше значення, як і
+ * відсутнє налаштування, лишає сигнал на фазу. `SECURITY INVOKER`: вставку
+ * судить політика outbox ролі команд, а не права власника.
+ */
+function signalFunction(): string {
+  return plpgsqlFunction(
+    `${qualified(SIGNAL_FUNCTIONS.signal)}(p_object uuid, p_scope_kind uuid, p_scope uuid, p_keys jsonb, p_version bigint, p_operation text)`,
+    "SECURITY INVOKER",
+    [
+      "BEGIN",
+      `  IF current_setting(${sqlLiteral(SIGNAL_MODE_SETTING)}, true) = ${sqlLiteral(SIGNAL_MERGE_MODE)} THEN`,
+      "    RETURN;",
+      "  END IF;",
+      outboxInsert(
+        "jsonb_build_object('object', p_object, 'op', p_operation, 'keys', p_keys, 'row_ver', p_version)"
+      ),
+      "END",
+    ],
+    { returns: "void", volatility: "VOLATILE" }
+  )
+}
+
+/**
+ * `simetra.signal_invalidate(…)` (P4-B spec §8.2): `invalidate` пари
+ * (скоуп, об'єкт). Його кличе T3 саме в режимі злиття, тож режиму не
+ * перевіряє.
+ */
+function invalidateFunction(): string {
+  return plpgsqlFunction(
+    `${qualified(SIGNAL_FUNCTIONS.invalidate)}(p_object uuid, p_scope_kind uuid, p_scope uuid)`,
+    "SECURITY INVOKER",
+    [
+      "BEGIN",
+      outboxInsert(
+        "jsonb_build_object('object', p_object, 'op', 'invalidate')"
+      ),
+      "END",
+    ],
+    { returns: "void", volatility: "VOLATILE" }
+  )
+}
+
 function plpgsqlFunction(
   signature: string,
   security: "SECURITY DEFINER" | "SECURITY INVOKER",
-  body: readonly string[]
+  body: readonly string[],
+  head: { returns: "boolean" | "void"; volatility: "STABLE" | "VOLATILE" } = {
+    returns: "boolean",
+    volatility: "STABLE",
+  }
 ): string {
   const text = body.join("\n")
   const tag = dollarTag(text)
   return (
     `CREATE OR REPLACE FUNCTION ${signature}\n` +
-    `RETURNS boolean\n` +
-    `LANGUAGE plpgsql STABLE ${security}\n` +
+    `RETURNS ${head.returns}\n` +
+    `LANGUAGE plpgsql ${head.volatility} ${security}\n` +
     `SET search_path = ''\n` +
     `AS ${tag}\n${text}\n${tag};`
   )

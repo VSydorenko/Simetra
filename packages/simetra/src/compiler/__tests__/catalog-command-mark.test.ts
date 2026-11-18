@@ -6,6 +6,7 @@ import { HIERARCHY_LOCK_SPACE } from "../hierarchy-units"
 import { executeGrants } from "../sql/execute-grants"
 import { hasEmptySearchPath } from "../sql/closed-forms"
 import {
+  ORG_KIND_ID,
   adminRoles,
   commandCoreLayer,
   compileRights,
@@ -237,7 +238,7 @@ describe("<t>_mark_deletion", () => {
 })
 
 describe("<t>_delete", () => {
-  it("порядок: контекст → замок → версія → право «до» → DELETE → GET DIAGNOSTICS → ключ, версія й скоуп", () => {
+  it("порядок: контекст → замок → версія → право «до» → DELETE → GET DIAGNOSTICS → сигнал «до» → ключ, версія й скоуп", () => {
     const table = "org_role_assignments"
     const shape = bodyShape(deleteSql(domain, table))
     const remove = at(
@@ -268,13 +269,20 @@ describe("<t>_delete", () => {
       target: { variable: "v_count" },
     })
     expect(ifAt(shape, "v_count = 0", remove + 2)).toBe(remove + 2)
-    expect(shape[remove + 4]!.type).toBe("return")
+    // Сигнал — версія й скоуп стану «до» (спека П4-B §8.2): рядка вже немає.
+    expect(shape[remove + 4]!.type).toBe("perform")
     expect(shape[remove + 4]!.expressions[0]!.tree).toEqual(
+      tree(
+        `SELECT simetra.signal('${mainOf(domain, table).origin.objectId}'::uuid, '${ORG_KIND_ID}'::uuid, v_old.org_id, jsonb_build_object('id', v_old.id), v_old.version, 'delete')`
+      )
+    )
+    expect(shape[remove + 5]!.type).toBe("return")
+    expect(shape[remove + 5]!.expressions[0]!.tree).toEqual(
       tree(
         "SELECT jsonb_build_object('id', p_id, 'version', v_old.version::text, 'org_id', v_old.org_id)::text"
       )
     )
-    expect(shape).toHaveLength(remove + 5)
+    expect(shape).toHaveLength(remove + 6)
   })
 
   it("гранти: EXECUTE лише command", () => {

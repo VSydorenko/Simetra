@@ -1,8 +1,14 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { compile, type CompiledModel, type Diagnostic } from "simetra/compiler"
-import { PLATFORM_ROLES, PROVIDER_API_ROLES } from "simetra/model"
+import {
+  PLATFORM_ROLES,
+  PROVIDER_API_ROLES,
+  SIGNAL_MERGE_MODE,
+  SIGNAL_MODE_SETTING,
+} from "simetra/model"
 import { isSignalObject } from "../access-units"
-import { SIGNAL_FUNCTIONS, SIGNAL_INSERT_POLICY } from "../signal/units"
+import { SIGNAL_FUNCTIONS } from "../signal/names"
+import { SIGNAL_INSERT_POLICY } from "../signal/units"
 import {
   ANNOUNCEMENT_ID,
   ORG_KIND_ID,
@@ -13,6 +19,7 @@ import {
   writeRoles,
 } from "./fixtures/rights"
 import { acceptDebt, catalog, metaFiles, project, uuid } from "./helpers"
+import { bodyShape, loadShapeParsers, tree } from "./fixtures/sql-shape"
 
 /**
  * Генератор `signal` (спека П4-B §8.2, §8.3): оракул каналу, правило форми
@@ -43,16 +50,24 @@ const branches = () =>
   )
 
 beforeAll(async () => {
+  await loadShapeParsers()
   const result = await compileRights(policyDomain(writeRoles()))
   expect(result.diagnostics).toEqual([])
   model = result.model!
 })
 
 describe("signal authorization units", () => {
-  it("grants EXECUTE on the topic oracle only to the command and user roles, the shape rule only to the command role (Р10, Р15)", () => {
+  it("grants EXECUTE on the topic oracle only to the command and user roles, the shape rule and the senders only to the command role (Р10, Р15, invariant 6)", () => {
     const roles = PROVIDER_API_ROLES.supabase
     const topic = "simetra.signal_topic_allowed(text, boolean)"
     const payload = "simetra.signal_payload_allowed(jsonb)"
+    const commandOnly = (fn: string) => [
+      `REVOKE EXECUTE ON FUNCTION ${fn} FROM PUBLIC;`,
+      `REVOKE EXECUTE ON FUNCTION ${fn} FROM ${roles.anonymous};`,
+      `REVOKE EXECUTE ON FUNCTION ${fn} FROM ${roles.user};`,
+      `REVOKE EXECUTE ON FUNCTION ${fn} FROM ${roles.service};`,
+      `GRANT EXECUTE ON FUNCTION ${fn} TO ${COMMAND};`,
+    ]
     expect(
       signalUnits()
         .filter((u) => u.class === "grant")
@@ -65,11 +80,9 @@ describe("signal authorization units", () => {
         `REVOKE EXECUTE ON FUNCTION ${topic} FROM ${roles.service};`,
         `GRANT EXECUTE ON FUNCTION ${topic} TO ${roles.user};`,
         `GRANT EXECUTE ON FUNCTION ${topic} TO ${COMMAND};`,
-        `REVOKE EXECUTE ON FUNCTION ${payload} FROM PUBLIC;`,
-        `REVOKE EXECUTE ON FUNCTION ${payload} FROM ${roles.anonymous};`,
-        `REVOKE EXECUTE ON FUNCTION ${payload} FROM ${roles.user};`,
-        `REVOKE EXECUTE ON FUNCTION ${payload} FROM ${roles.service};`,
-        `GRANT EXECUTE ON FUNCTION ${payload} TO ${COMMAND};`,
+        ...commandOnly(payload),
+        ...commandOnly("simetra.signal(uuid, uuid, uuid, jsonb, bigint, text)"),
+        ...commandOnly("simetra.signal_invalidate(uuid, uuid, uuid)"),
       ].sort()
     )
   })
@@ -115,6 +128,62 @@ describe("signal authorization units", () => {
     expect(branches().get(ANNOUNCEMENT_ID)).toBe(
       `v_kind = ${zero} AND CASE WHEN p_send THEN v_scope = ${zero} ELSE v_scope = ${zero} AND ((SELECT simetra.has_right('read', 'announcement', 'any', NULL))) END`
     )
+  })
+
+  it("the senders are VOLATILE SECURITY INVOKER with an empty search_path and return nothing", () => {
+    const head = (sql: string) => sql.split("\nAS ")[0]
+    expect(head(functionSql(SIGNAL_FUNCTIONS.signal.name))).toBe(
+      "CREATE OR REPLACE FUNCTION simetra.signal(p_object uuid, p_scope_kind uuid, p_scope uuid, p_keys jsonb, p_version bigint, p_operation text)\nRETURNS void\nLANGUAGE plpgsql VOLATILE SECURITY INVOKER\nSET search_path = ''"
+    )
+    expect(head(functionSql(SIGNAL_FUNCTIONS.invalidate.name))).toBe(
+      "CREATE OR REPLACE FUNCTION simetra.signal_invalidate(p_object uuid, p_scope_kind uuid, p_scope uuid)\nRETURNS void\nLANGUAGE plpgsql VOLATILE SECURITY INVOKER\nSET search_path = ''"
+    )
+  })
+
+  // Режим відкритий за замовчуванням (спека П4-B §8.2): гасить лише точне
+  // значення злиття, а не будь-яке непорожнє.
+  it("signal returns without an insert only on the exact merge mode, then writes one outbox row", () => {
+    const shape = bodyShape(functionSql(SIGNAL_FUNCTIONS.signal.name))
+    expect(shape.map((s) => s.type)).toEqual([
+      "block",
+      "if",
+      "return",
+      "execsql",
+      "return",
+    ])
+    expect(shape[1]!.expressions[0]!.tree).toEqual(
+      tree(
+        `SELECT current_setting('${SIGNAL_MODE_SETTING}', true) = '${SIGNAL_MERGE_MODE}'`
+      )
+    )
+    expect(shape[3]!.expressions[0]!.tree).toEqual(
+      tree(
+        "INSERT INTO simetra.signal_outbox (method, payload) VALUES ('publish', jsonb_build_object('channel', 'simetra:' || p_scope_kind::text || ':' || p_scope::text || ':' || p_object::text, 'data', jsonb_build_object('object', p_object, 'op', p_operation, 'keys', p_keys, 'row_ver', p_version)))"
+      )
+    )
+  })
+
+  it("signal_invalidate writes an invalidate without a mode check", () => {
+    const shape = bodyShape(functionSql(SIGNAL_FUNCTIONS.invalidate.name))
+    expect(shape.map((s) => s.type)).toEqual(["block", "execsql", "return"])
+    expect(shape[1]!.expressions[0]!.tree).toEqual(
+      tree(
+        "INSERT INTO simetra.signal_outbox (method, payload) VALUES ('publish', jsonb_build_object('channel', 'simetra:' || p_scope_kind::text || ':' || p_scope::text || ':' || p_object::text, 'data', jsonb_build_object('object', p_object, 'op', 'invalidate')))"
+      )
+    )
+  })
+
+  it("the senders require the outbox table", () => {
+    for (const fn of [SIGNAL_FUNCTIONS.signal, SIGNAL_FUNCTIONS.invalidate]) {
+      const unit = signalUnits().find(
+        (u) =>
+          u.class === "function" &&
+          u.identity.startsWith(`function:simetra.${fn.name}(`)
+      )!
+      expect(unit.requires).toEqual([
+        { type: "table", schema: "simetra", name: "signal_outbox" },
+      ])
+    }
   })
 
   it("lets the command role insert into the outbox only through the shape rule (Р15)", () => {

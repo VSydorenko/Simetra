@@ -812,15 +812,15 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
 
   // Мапа — не частина знімка: хеш фікстури той самий, що до появи мапи
   // (обчислений на коміті до неї). Зміна фікстури чи платформних таблиць
-  // знімка (outbox сигналів) чи нові згенеровані одиниці (оракул сигналу)
-  // змінюють і цей літерал.
+  // знімка (outbox сигналів) чи нові згенеровані одиниці (оракул сигналу,
+  // функції відправки й виклик сигналу в ядрі) змінюють і цей літерал.
   it("stays outside the canonical snapshot and the hash", async () => {
     const { model: m } = await checksOf(policyDomain(runtimeValuesLayer()))
     expect(m.checkColumns.length).toBeGreaterThan(0)
     expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
-      "198b5261549419154f4a4dab4a8fb789f0cd7b76e812cd785ea483793cbf3665"
+      "60bae9ffe489affe8d438a7458511e6abb816dae6ee607c8ed3f99ec04cf57e9"
     )
   })
 })

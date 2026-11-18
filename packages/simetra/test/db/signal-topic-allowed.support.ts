@@ -475,7 +475,7 @@ export function defineSignalTopicCases(options: {
       )
 
     // Ролі запиту провайдера (на Supabase — з типовими привілеями схеми):
-    // outbox для них закритий цілком, а оракул `user` має лише за Р10 —
+    // outbox і відправка для них закриті цілком, а оракул `user` має лише за Р10 —
     // його відповіді звіряють кейси підписки вище.
     const OUTBOX = `${SIGNAL_OUTBOX.schema}.${SIGNAL_OUTBOX.name}`
     const TABLE_DENIED = {
@@ -511,6 +511,28 @@ export function defineSignalTopicCases(options: {
         PAYLOAD_SQL,
         () => [JSON.stringify(change("A"))],
         fnDenied("signal_payload_allowed"),
+      ],
+      // Інваріант 6: відправку кличе лише роль команд.
+      [
+        purpose,
+        "EXECUTE signal",
+        "SELECT simetra.signal($1::uuid, $2::uuid, $3::uuid, $4::jsonb, $5::bigint, $6::text)",
+        () => [
+          TASK_ID,
+          ORG_KIND_ID,
+          key("A"),
+          JSON.stringify({ id: randomUUID() }),
+          1,
+          "update",
+        ],
+        fnDenied("signal"),
+      ],
+      [
+        purpose,
+        "EXECUTE signal_invalidate",
+        "SELECT simetra.signal_invalidate($1::uuid, $2::uuid, $3::uuid)",
+        () => [TASK_ID, ORG_KIND_ID, key("A")],
+        fnDenied("signal_invalidate"),
       ],
       ...(purpose === "anonymous"
         ? [
