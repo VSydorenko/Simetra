@@ -1341,6 +1341,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: (p) => definerReads(p.form).hint.uk,
     },
   },
+  "sql.definer-caller-unchecked": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line} is SECURITY DEFINER and ${p.roles} can execute it, but nothing names the check of its caller`,
+    uk: (p) =>
+      `Функція ${p.function} у рядку ${p.line} — SECURITY DEFINER, і ${p.roles} може її виконати, але перевірки викликача ніщо не називає`,
+    hint: {
+      en: "A SECURITY DEFINER function runs as its owner, who bypasses row level security, so a role of the API that can execute it acts past the rights. Its check of the caller is named in the signature declaration, which the platform does not have yet: until then such a function is refused in any .sql file, SQL debt included. Make it SECURITY INVOKER, revoke EXECUTE from PUBLIC and from each API role, or write the operation as a command or a TypeScript hook.",
+      uk: "Функція SECURITY DEFINER виконується від свого власника, який обходить захист рядків, тож роль API, що може її виконати, діє повз права. Перевірку викликача називає декларація сигнатури, якої платформа ще не має: до неї така функція відхиляється в будь-якому файлі .sql, борг включно. Зробіть її SECURITY INVOKER, відкличте EXECUTE від PUBLIC і від кожної ролі API або запишіть операцію командою чи TypeScript-хуком.",
+    },
+  },
   "sql.debt-stale": {
     en: (p) =>
       `sql-debt.json lists ${p.identity}, which is no longer verbatim SQL debt`,

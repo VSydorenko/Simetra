@@ -37,8 +37,9 @@ Only commands write a table of a kind: write a change of its rows as a
 command of the object or its TypeScript hook. No application SQL, in any
 file and in debt too, writes one: an `INSERT`, `UPDATE`, `DELETE` or `MERGE`
 in a function or procedure body whose target is a table of a kind, a tabular
-section, a view of the model over one, or the provider's account table
-(`auth.users`) is `sql.kind-table-verbatim` with the form `functionBody`, also
+section, a view of the model over one, the provider's account table
+(`auth.users`) or any relation of the platform schema `simetra` is
+`sql.kind-table-verbatim` with the form `functionBody`, also
 inside a literal `EXECUTE`, a `DO` block or a function the body creates.
 Reading the table (`SELECT`, `FOR UPDATE`, `UPDATE … FROM`, `MERGE … USING`)
 and `LOCK` are fine. An unqualified table name counts in every schema,

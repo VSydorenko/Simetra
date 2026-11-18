@@ -102,7 +102,7 @@ describe("kind module: closed forms only", () => {
     expect(
       await heads({
         [SALE_SQL]: shell(
-          "LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER SET search_path = ''",
+          "LANGUAGE plpgsql IMMUTABLE SET search_path = ''",
           "BEGIN RETURN 1; END"
         ),
       })

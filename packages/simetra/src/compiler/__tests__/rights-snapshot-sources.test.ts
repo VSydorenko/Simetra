@@ -1,6 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
-import { KIND_REGISTRY, PLATFORM_SCHEMA } from "simetra/model"
+import {
+  KIND_REGISTRY,
+  PLATFORM_SCHEMA,
+  PROVIDER_API_ROLES,
+} from "simetra/model"
 import { SNAPSHOT_TABLES, type SnapshotFact } from "../rights/actor-snapshot"
 import { RIGHTS_FUNCTIONS } from "../rights/functions"
 import { snapshotSources } from "../rights/snapshot-sources"
@@ -373,6 +377,7 @@ describe("actor snapshot sources", () => {
  * виняток — прийняте членство `public.membership`.
  */
 describe("snapshot exempt writers", () => {
+  const API = PROVIDER_API_ROLES.supabase
   const WRITER_FILE = "sql/public/writer.sql"
   const writers = async (sql: string) => {
     const files = adoptedSourcesDomain()
@@ -383,22 +388,36 @@ describe("snapshot exempt writers", () => {
     expect(
       result.diagnostics.filter(
         (d) =>
-          d.severity === "error" && d.code !== "rights.snapshot-exempt-writer"
+          d.severity === "error" &&
+          d.code !== "rights.snapshot-exempt-writer" &&
+          d.code !== "sql.definer-caller-unchecked"
       )
     ).toEqual([])
+    // Definer-функція, яку може виконати роль API, — ще й помилка перевірки
+    // викликача (платформна спека §6.7): обидва правила судять своє.
     return result.diagnostics
-      .filter((d) => d.code === "rights.snapshot-exempt-writer")
-      .map((d) => ({
-        form: d.params?.form,
-        table: d.params?.table,
-        object: d.params?.object,
-      }))
+      .filter(
+        (d) =>
+          d.code === "rights.snapshot-exempt-writer" ||
+          d.code === "sql.definer-caller-unchecked"
+      )
+      .map((d) =>
+        d.code === "sql.definer-caller-unchecked"
+          ? { form: "caller", table: undefined, object: d.params?.function }
+          : {
+              form: d.params?.form,
+              table: d.params?.table,
+              object: d.params?.object,
+            }
+      )
   }
   const DEFINER = "SECURITY DEFINER SET search_path = ''"
   const writer = (name: string, body: string) =>
     `CREATE FUNCTION public.${name}() RETURNS void LANGUAGE sql VOLATILE ${DEFINER} AS $$ ${body} $$;`
   const UPDATE = "UPDATE public.membership SET is_active = true WHERE false"
-  const REVOKE = "REVOKE EXECUTE ON FUNCTION public.touch() FROM PUBLIC;"
+  // Від `PUBLIC` і від ролей API: інакше definer-функцію виконує роль API.
+  const REVOKE = `REVOKE EXECUTE ON FUNCTION public.touch() FROM PUBLIC, ${API.user}, ${API.anonymous};`
+  const CALLER = { form: "caller", table: undefined, object: "public.touch" }
 
   it("accepts an adopted source without grants", async () => {
     const result = await compileRights(adoptedSourcesDomain())
@@ -430,7 +449,8 @@ describe("snapshot exempt writers", () => {
         writer(
           "touch",
           "WITH t AS (UPDATE public.membership SET is_active = true WHERE false RETURNING 1) SELECT FROM t"
-        )
+        ) +
+          `\n${REVOKE}\nGRANT EXECUTE ON FUNCTION public.touch() TO simetra_command;`
       )
     ).toEqual([
       { form: "definer", table: "public.membership", object: "public.touch" },
@@ -449,8 +469,11 @@ describe("snapshot exempt writers", () => {
   ])(
     "refuses a definer writer whose execute is revoked only in default privileges (%s)",
     async (_, defaults) => {
+      // Типове відкликання не діє на наявну функцію: `PUBLIC`, а з ним і ролі
+      // API, лишають `EXECUTE`. Тож функцію відмовляє вже перевірка викликача
+      // (стадія 5), і правило винятків знімка до неї не доходить.
       expect(await writers(`${defaults}\n${writer("touch", UPDATE)}`)).toEqual([
-        { form: "definer", table: "public.membership", object: "public.touch" },
+        CALLER,
       ])
       expect(await writers(`${writer("touch", UPDATE)}\n${REVOKE}`)).toEqual([])
     }
