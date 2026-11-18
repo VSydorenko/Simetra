@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 // Дерево роутера тягне серверні модулі (пул, Better Auth): тест перевіряє
 // фабрику, а не їх
 vi.mock("../src/server/data-fn", () => ({ dataFn: vi.fn() }))
-vi.mock("../src/server/session-fn", () => ({ sessionClaims: vi.fn() }))
+vi.mock("../src/server/session", () => ({ sessionClaims: vi.fn() }))
 vi.mock("../src/server/ssr-transport", () => ({ ssrTransport: vi.fn() }))
 vi.mock("../src/server/auth", () => ({ auth: {}, verifySession: vi.fn() }))
 vi.mock("../src/routes/api/auth/$", async () => {

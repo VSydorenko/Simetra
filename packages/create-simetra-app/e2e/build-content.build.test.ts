@@ -34,9 +34,8 @@ const MARKERS = [
 ]
 
 /**
- * Серверний код, якого в клієнтських асетах бути не може (задача 13 D3: щойно
- * клієнтський граф імпортує `data-transport.ts`, серверні імпорти можуть
- * протекти разом із ним). Маркери — рядки, що переживають мініфікацію:
+ * Серверний код, якого в клієнтських асетах бути не може (клієнтський граф
+ * імпортує `data-transport.ts`, тож серверні імпорти можуть протекти разом із ним). Маркери — рядки, що переживають мініфікацію:
  * назва змінної пулу, рядок журналу обробника даних, текст помилки драйвера `pg` і
  * назва секрету Better Auth.
  */
@@ -79,16 +78,19 @@ describe("production build content", () => {
     await writeFile(
       join(dir, "src/routes/server-leak.tsx"),
       `import { createFileRoute } from "@tanstack/react-router"
-import { serverHash } from "../server/runtime"
+import { getDataHandler, serverHash } from "../server/runtime"
 import { verifySession } from "../server/auth"
 export const Route = createFileRoute("/server-leak")({
-  component: () => <p>{serverHash}{typeof verifySession}</p>,
+  component: () => <p>{serverHash}{typeof verifySession}{typeof getDataHandler}</p>,
 })
 `
     )
     await viteBuild(dir, SENTINELS)
     const found = await leaks(dir)
-    expect(Object.keys(found.serverInClient).length).toBeGreaterThan(0)
+    // Кожен маркер, а не будь-який: пропущений маркер означав би сліпу перевірку
+    expect(
+      [...new Set(Object.values(found.serverInClient).flat())].sort()
+    ).toEqual([...SERVER_MARKERS].sort())
   })
 
   it("the check finds a leak (negative control)", async () => {

@@ -10,7 +10,7 @@ const claims = vi.hoisted(() => vi.fn())
 const ssrTransport = vi.hoisted(() => vi.fn())
 
 vi.mock("../src/server/data-fn", () => ({ dataFn: vi.fn() }))
-vi.mock("../src/server/session-fn", () => ({ sessionClaims: claims }))
+vi.mock("../src/server/session", () => ({ sessionClaims: claims }))
 vi.mock("../src/server/ssr-transport", () => ({ ssrTransport }))
 vi.mock("../src/server/auth", () => ({ auth: {}, verifySession: vi.fn() }))
 vi.mock("../src/routes/api/auth/$", async () => {

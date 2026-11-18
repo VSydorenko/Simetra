@@ -188,7 +188,6 @@ describe("consumer lint", () => {
       expect(messages.length, file).toBeGreaterThan(1)
       expect(messages[0]).toContain("createServerFn")
     }
-    await expectAllowed("syntax", "src/server/session-fn.ts", code)
     await expectAllowed("syntax", "src/server/data-fn.ts", code)
   })
 

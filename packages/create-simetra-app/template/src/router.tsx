@@ -10,7 +10,7 @@ import {
   clientContext,
 } from "./host-session"
 import { routeTree } from "./routeTree.gen"
-import { sessionClaims } from "./server/session-fn"
+import { sessionClaims } from "./server/session"
 import { ssrTransport } from "./server/ssr-transport"
 
 // Розрізнення сервер/клієнт — будовою (компілятор Start прибирає чужу гілку з

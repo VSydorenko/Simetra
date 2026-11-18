@@ -91,7 +91,7 @@ export function establishServerSession<C extends { sub: string }>(
 /**
  * Клієнт, `beforeLoad` кореня під час навігації: сесію клієнт не опитує.
  * Тримач на клієнті змінюють лише форма входу й вихід (вони кличуть
- * `scope.holder.replace(...)` самі: ШОВ для форми входу, задача 14), а розрив
+ * `scope.holder.replace(...)` самі, див. `session-actions.ts`), а розрив
  * сесії в іншій вкладці ловить `session-changed` з `dataFn` (Дх14). Тут лише
  * віддаємо маршрутам те, що тримач тримає зараз.
  */

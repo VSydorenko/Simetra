@@ -80,7 +80,7 @@ export interface App {
   port: number
   secret: string
   /** Id Server Function за ім'ям експорту з маніфесту збірки. */
-  functionId: (name: "dataFn" | "getSessionClaims") => string
+  functionId: (name: "dataFn") => string
   /** Усі Server Function маніфесту збірки: ім'я експорту → id. */
   serverFunctions: Record<string, string>
   /** Оточення основного сервера: запуск ще одного з однією зміненою змінною. */

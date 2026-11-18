@@ -34,8 +34,6 @@ interface Json {
 }
 
 const dataPath = (app: App) => `/_serverFn/${app.functionId("dataFn")}`
-const sessionPath = (app: App, prefix = "/_serverFn") =>
-  `${prefix}/${app.functionId("getSessionClaims")}`
 
 /** Адреса сокета клієнта, окрема на кейс: межа частоти рахує саме її. */
 const address = (n: number) => `127.0.2.${n}`
@@ -533,56 +531,6 @@ test.describe("Better Auth", () => {
       )
     ).toHaveLength(1)
   })
-})
-
-test.describe("session function (getSessionClaims)", () => {
-  const call = (app: App, headers: Record<string, string>, prefix?: string) =>
-    send(app, {
-      path: sessionPath(app, prefix),
-      headers: { "x-tsr-serverfn": "true", ...headers },
-    })
-
-  for (const [name, prefix] of [
-    ["the plain path", "/_serverFn"],
-    ["the percent-encoded path", "/%5FserverFn"],
-  ] as const) {
-    test(`${name}: claims for the same origin, null for a foreign one`, async ({
-      app,
-    }) => {
-      // Контроль: те саме походження й той самий cookie — claims, тож `null`
-      // нижче — відмова правила походження, а не відсутність сесії
-      expect(valueOf(await call(app, same(app, app.users.a), prefix))).toEqual({
-        sub: app.users.a.id,
-        is_anonymous: false,
-      })
-      // Start пропускає `same-origin`, а правило шаблону відмовляє чужому `Origin`
-      expect(
-        valueOf(
-          await call(
-            app,
-            {
-              "sec-fetch-site": "same-origin",
-              origin: EVIL,
-              cookie: app.users.a.cookie,
-            },
-            prefix
-          )
-        )
-      ).toBeNull()
-    })
-
-    test(`${name}: a cross-site request does not get claims`, async ({
-      app,
-    }) => {
-      const reply = await call(
-        app,
-        { ...same(app, app.users.a), "sec-fetch-site": "cross-site" },
-        prefix
-      )
-      if (reply.status === 403) expect(reply.text).toBe("Forbidden")
-      else expect(valueOf(reply)).toBeNull()
-    })
-  }
 })
 
 test.describe("HTML", () => {
