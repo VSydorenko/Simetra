@@ -97,6 +97,11 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
     reason: "this test: the reasons of its exceptions name the forms",
   },
   {
+    file: "packages/simetra/test/db/stack-files.test.ts",
+    reason:
+      "the roles.sql guard: it names the one allowed ALTER ROLE … SET role form and the forms it rejects",
+  },
+  {
     file: "packages/simetra/test/db/profile.ts",
     reason:
       "SUPERUSER_PRELUDE: the one form the superuser connections of the guard and the sweep take",

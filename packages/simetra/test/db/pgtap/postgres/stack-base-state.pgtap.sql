@@ -4,7 +4,7 @@
 -- раннер (test/db/pgtap.ts), тож керування транзакцією тут заборонене.
 create extension if not exists pgtap;
 
-select plan(13);
+select plan(14);
 
 select is(
   current_setting('server_version_num')::int / 10000,
@@ -37,14 +37,16 @@ select is(
 select is(
   (select jsonb_object_agg(rolname, array[rolcanlogin, rolinherit, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication])
      from pg_roles
-    where rolname in ('simetra_owner', 'simetra_auth', 'simetra_command', 'simetra_user', 'simetra_anon', 'simetra_runtime')),
+    where rolname in ('simetra_owner', 'simetra_auth', 'simetra_command', 'simetra_user', 'simetra_anon', 'simetra_runtime', 'simetra_signal_consumer', 'simetra_signals')),
   jsonb_build_object(
     'simetra_owner', array[true, false, false, true, false, true, false],
     'simetra_auth', array[true, false, false, false, false, false, false],
     'simetra_command', array[false, false, false, false, false, false, false],
     'simetra_user', array[false, false, false, false, false, false, false],
     'simetra_anon', array[false, false, false, false, false, false, false],
-    'simetra_runtime', array[true, false, false, false, false, false, false]
+    'simetra_runtime', array[true, false, false, false, false, false, false],
+    'simetra_signal_consumer', array[false, false, false, false, false, false, false],
+    'simetra_signals', array[true, false, false, false, false, false, false]
   ),
   'Simetra roles have the attributes of the profile'
 );
@@ -54,10 +56,15 @@ select is(
              from pg_auth_members a
              join pg_roles u on u.oid = a.member
              join pg_roles r on r.oid = a.roleid
-            where u.rolname in ('simetra_owner', 'simetra_runtime', 'simetra_auth', 'simetra_user', 'simetra_anon', 'simetra_command')
-               or r.rolname in ('simetra_owner', 'simetra_runtime', 'simetra_auth', 'simetra_user', 'simetra_anon', 'simetra_command')) m),
-  '["simetra_runtime>simetra_anon", "simetra_runtime>simetra_command", "simetra_runtime>simetra_user"]'::jsonb,
-  'the only memberships of Simetra roles are those of the runtime login role'
+            where u.rolname in ('simetra_owner', 'simetra_runtime', 'simetra_auth', 'simetra_user', 'simetra_anon', 'simetra_command', 'simetra_signal_consumer', 'simetra_signals')
+               or r.rolname in ('simetra_owner', 'simetra_runtime', 'simetra_auth', 'simetra_user', 'simetra_anon', 'simetra_command', 'simetra_signal_consumer', 'simetra_signals')) m),
+  '["simetra_runtime>simetra_anon", "simetra_runtime>simetra_command", "simetra_runtime>simetra_user", "simetra_signals>simetra_signal_consumer"]'::jsonb,
+  'the only memberships of Simetra roles are those of the runtime and signals login roles'
+);
+select is(
+  (select rolconfig from pg_roles where rolname = 'simetra_signals'),
+  array['role=simetra_signal_consumer'],
+  'simetra_signals sets role to simetra_signal_consumer'
 );
 select is(
   (select r.rolname::text from pg_database d join pg_roles r on r.oid = d.datdba where d.datname = 'simetra'),

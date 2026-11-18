@@ -8,10 +8,11 @@ const ROLES_SQL = readFileSync(
   "utf8"
 )
 
-// Ролі Simetra — лише ті, що створює roles.sql; членства — де вони учасник чи
-// група, щоб поява нового члена в чужій ролі теж стала б дрейфом
+// Ролі Simetra — лише ті, що створює roles.sql, з налаштуваннями ролі;
+// членства — де вони учасник чи група, щоб поява нового члена в чужій ролі
+// теж стала б дрейфом
 const SNAPSHOT = `
-  SELECT 'role' AS kind, r.rolname AS a, concat_ws(',', r.rolcanlogin, r.rolinherit, r.rolsuper, r.rolcreaterole, r.rolbypassrls) AS b
+  SELECT 'role' AS kind, r.rolname AS a, concat_ws(',', r.rolcanlogin, r.rolinherit, r.rolsuper, r.rolcreaterole, r.rolbypassrls, array_to_string(r.rolconfig, ';')) AS b
     FROM pg_catalog.pg_roles r WHERE r.rolname LIKE 'simetra\\_%'
   UNION ALL
   SELECT 'member', g.rolname || '<-' || m.rolname, concat_ws(',', am.inherit_option, am.set_option, am.admin_option)
