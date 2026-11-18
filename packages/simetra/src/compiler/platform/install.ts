@@ -60,19 +60,44 @@ async function compileEmpty(
 }
 
 /** A unit of a live catalog or of a folder, as the recogniser reads it. */
-type RecognisedUnit = Pick<SqlUnit, "class" | "identity" | "name">
+type RecognisedUnit = Pick<SqlUnit, "class" | "identity">
 
 /**
  * Recogniser of the platform install among the objects of a catalog: a table
  * of the install, a unit with the identity of an install unit, or a grant
- * whose every target is an install object (a table, its identity sequence, a
- * function or sequence unit). The platform owns the whole ACL of its objects,
- * and the catalog keeps a grant in its own form (one unit per column, merged
- * privileges), so a grant is recognised by its targets, not by its identity.
+ * whose every atom (direction, target, role, privilege) is an atom of the
+ * install's own grant units. The catalog keeps a grant in its own form (one
+ * unit per column, merged privileges) but keeps each atom, so the atoms
+ * match where the identity does not. A grant on an install object to another
+ * role, to `PUBLIC` or of another privilege is not the platform's: the folder
+ * gets it and the compiler refuses it, it is never dropped silently.
  */
 export interface PlatformInstallRecogniser {
   table(schema: string, name: string): boolean
   unit(unit: RecognisedUnit): boolean
+}
+
+/**
+ * Atoms `<grant|revoke>|<class>|<object>|<role>|<privilege>` of a grant unit,
+ * read from its identity
+ * `grant:<grant|revoke>:<class>:<objects>:<roles>:<privileges>`; a column
+ * privilege is one atom per column (`insert(method)`).
+ */
+export function grantAtoms(identity: string): string[] {
+  const [, action, kind, objects, roles, privileges] = identity.split(":")
+  const privilegeAtoms = grantObjects(privileges ?? "").flatMap((p) => {
+    const columns = /^([^(]+)\((.*)\)$/.exec(p)
+    return columns === null
+      ? [p]
+      : columns[2]!.split(",").map((c) => `${columns[1]}(${c})`)
+  })
+  return grantObjects(objects ?? "").flatMap((object) =>
+    (roles ?? "")
+      .split(",")
+      .flatMap((role) =>
+        privilegeAtoms.map((p) => `${action}|${kind}|${object}|${role}|${p}`)
+      )
+  )
 }
 
 export function platformInstallRecogniser(
@@ -80,31 +105,18 @@ export function platformInstallRecogniser(
 ): PlatformInstallRecogniser {
   const tables = new Set(install.tables.map((t) => `${t.schema}.${t.name}`))
   const identities = new Set(install.units.map((u) => u.identity))
-  const objects = new Set([
-    ...install.tables.flatMap((t) => [
-      `table|${t.schema}.${t.name}`,
-      ...t.columns.flatMap((c) =>
-        c.identity === undefined
-          ? []
-          : [`sequence|${t.schema}.${c.identity.sequence}`]
-      ),
-    ]),
-    ...install.units
-      .filter((u) => u.class !== "grant")
-      .map((u) => u.identity.replace(":", "|")),
-  ])
+  const atoms = new Set(
+    install.units
+      .filter((u) => u.class === "grant")
+      .flatMap((u) => grantAtoms(u.identity))
+  )
   return {
     table: (schema, name) => tables.has(`${schema}.${name}`),
     unit: (unit) => {
       if (identities.has(unit.identity)) return true
       if (unit.class !== "grant") return false
-      // Ідентичність гранту: `grant:<grant|revoke>:<клас>:<об'єкти>:…`
-      const kind = unit.identity.split(":")[2]
-      const targets = grantObjects(unit.name)
-      return (
-        targets.length > 0 &&
-        targets.every((target) => objects.has(`${kind}|${target}`))
-      )
+      const own = grantAtoms(unit.identity)
+      return own.length > 0 && own.every((t) => atoms.has(t))
     },
   }
 }

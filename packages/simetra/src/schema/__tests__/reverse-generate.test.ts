@@ -236,7 +236,8 @@ describe("reverseGenerate", () => {
     async (provider) => {
       // Каталог тримає гранти по колонці й зливає привілеї однієї ролі: ці
       // одиниці не мають ідентичності одиниці компілятора, а належать
-      // платформі за ціллю. Послідовність версій теж ставить платформа
+      // платформі за атомами власних грантів установки (напрям, ціль, роль,
+      // привілей). Послідовність версій теж ставить платформа
       const install = await compile(
         metaFiles({ "project.meta.json": project({ database: { provider } }) })
       )
@@ -245,7 +246,7 @@ describe("reverseGenerate", () => {
         'GRANT INSERT ("method") ON TABLE "simetra"."signal_outbox" TO "simetra_command";',
         'GRANT INSERT ("payload") ON TABLE "simetra"."signal_outbox" TO "simetra_command";',
         'GRANT DELETE, SELECT ON TABLE "simetra"."signal_outbox" TO "simetra_signal_consumer";',
-        'REVOKE ALL ON FUNCTION "simetra"."signal_outbox_prune"(interval) FROM PUBLIC;',
+        'REVOKE EXECUTE ON FUNCTION "simetra"."signal_outbox_prune"(interval) FROM PUBLIC;',
         "CREATE SEQUENCE simetra.row_version AS bigint MINVALUE 1 NO CYCLE CACHE 1;",
       ].join("\n")
       const own =
@@ -275,6 +276,42 @@ describe("reverseGenerate", () => {
         ],
         codes: ["schema.reserved"],
       })
+    }
+  )
+
+  it.each(["supabase", "postgres"] as const)(
+    "%s: a grant on an install object the install does not give goes to the folder and is refused",
+    async (provider) => {
+      // Інша роль чи `PUBLIC` на таблиці outbox — чужий грант, а не
+      // установка: його не губимо мовчки, тека отримує його, а компіляція
+      // відмовляє за ціллю в `simetra`
+      const install = await compile(
+        metaFiles({ "project.meta.json": project({ database: { provider } }) })
+      )
+      expect(install.diagnostics).toEqual([])
+      const result = await reverseGenerate(
+        model({
+          tables: catalogFromSnapshot(install.model!.physical).tables,
+          units: units(
+            [
+              'GRANT SELECT ON TABLE "simetra"."signal_outbox" TO "some_extra_role";',
+              'GRANT DELETE, INSERT, SELECT ON TABLE "simetra"."signal_outbox" TO PUBLIC;',
+            ].join("\n")
+          ),
+        }),
+        options(new Map(), { databaseProvider: provider })
+      )
+      expect({
+        files: [...result.files.keys()].filter((p) => p.startsWith("sql/")),
+        codes: result.diagnostics.map((d) => d.code),
+      }).toEqual({
+        files: [
+          "sql/simetra/grant__table__simetra_signal_outbox__public__delete_insert_select.sql",
+          "sql/simetra/grant__table__simetra_signal_outbox__some_extra_role__select.sql",
+        ],
+        codes: ["schema.reserved", "schema.reserved"],
+      })
+      expect(result.changes).toEqual([])
     }
   )
 

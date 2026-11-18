@@ -50,7 +50,7 @@ describe("platformInstall", () => {
   )
 
   it.each(DATABASE_PROVIDERS)(
-    "%s: the recogniser takes install objects and grants on them only",
+    "%s: the recogniser takes install objects and the install's own grants only",
     async (provider) => {
       const platform = platformInstallRecogniser(
         await platformInstall(provider)
@@ -63,12 +63,20 @@ describe("platformInstall", () => {
         // Форма каталогу: грант по колонці, злиті привілеї однієї ролі
         'GRANT INSERT ("method") ON TABLE simetra.signal_outbox TO simetra_command;',
         "GRANT DELETE, SELECT ON TABLE simetra.signal_outbox TO simetra_signal_consumer;",
-        "GRANT USAGE ON SEQUENCE simetra.signal_outbox_id_seq TO simetra_command;",
-        "REVOKE ALL ON FUNCTION simetra.signal_outbox_prune(interval) FROM PUBLIC;",
-        "GRANT USAGE ON SEQUENCE simetra.row_version TO simetra_command;",
+        'GRANT INSERT ("payload") ON TABLE simetra.signal_outbox TO simetra_command;',
+        "REVOKE EXECUTE ON FUNCTION simetra.signal_outbox_prune(interval) FROM PUBLIC;",
         "CREATE TRIGGER simetra_signal_outbox_stamp BEFORE INSERT ON simetra.signal_outbox FOR EACH ROW EXECUTE FUNCTION simetra.signal_outbox_stamp();",
       ]
+      // Грант на об'єкт установки, якого установка не дає: інша роль,
+      // `PUBLIC`, інший привілей чи інша колонка — тека, а не платформа
       const notPlatform = [
+        "GRANT SELECT ON TABLE simetra.signal_outbox TO some_extra_role;",
+        "GRANT ALL ON TABLE simetra.signal_outbox TO PUBLIC;",
+        "GRANT SELECT ON TABLE simetra.signal_outbox TO simetra_command;",
+        'GRANT INSERT ("partition") ON TABLE simetra.signal_outbox TO simetra_command;',
+        "GRANT EXECUTE ON FUNCTION simetra.signal_outbox_prune(interval) TO PUBLIC;",
+        "GRANT USAGE ON SEQUENCE simetra.signal_outbox_id_seq TO simetra_command;",
+        "GRANT USAGE ON SEQUENCE simetra.row_version TO simetra_command;",
         "GRANT SELECT ON TABLE simetra.signal_outbox, app.note TO simetra_command;",
         "GRANT EXECUTE ON FUNCTION simetra.signal_outbox_prune(text) TO simetra_command;",
         "CREATE TRIGGER own AFTER INSERT ON simetra.signal_outbox FOR EACH ROW EXECUTE FUNCTION simetra.signal_outbox_stamp();",

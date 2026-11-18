@@ -41,6 +41,7 @@ export { loadSqlParser, relationNameText, type SqlParser } from "./sql/parse"
 export { IDENTITY_TRIGGERS, platformSchemaGrants } from "./platform/units"
 export {
   platformInstall,
+  grantAtoms,
   platformInstallRecogniser,
   type PlatformInstall,
   type PlatformInstallRecogniser,
