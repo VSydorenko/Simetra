@@ -117,8 +117,10 @@ chromium/webkit × production/dev і стиснення відповідей (§
 | `src/server/auth.ts` | конфіг Better Auth (§4.3) і `verifySession` |
 | `src/server/origin.ts` | факти походження й канонічне походження застосунку |
 | `src/server/data-fn.ts` | одна Server Function даних (§4.2) |
+| `src/server/data-request.ts` | `handleDataRequest`: кроки §4.2 винесено з файлу Server Function, щоб `auth`, пул і каталог рантайму не потрапляли в клієнтський пакет |
 | `src/server/ssr-transport.ts` | `ssrTransport` (Дх7) |
 | `src/server/session-fn.ts` | Server Function сесії для `beforeLoad` кореня |
+| `src/server/session.ts` | читання сесії (HTTP-шлях і в процесі) — винесено з `session-fn.ts` з тієї ж причини |
 | `src/routes/api/auth/$.ts` | маршрут Better Auth |
 | `src/server.ts` | серверний entry (Дх8, §4.4, §4.5) |
 | `src/router.tsx` | фабрика роутера з рантаймом на запит і тримачем (§4.6) |
@@ -126,7 +128,7 @@ chromium/webkit × production/dev і стиснення відповідей (§
 | `src/routes/` | корінь із сесією, вхід, маршрути з одного рядка (§6) |
 | `scripts/` | `db-setup`, `dev-user`, `seed` (§4.3) |
 | `eslint.config.js` | лінт споживача (§4.7) |
-| `src/instrument.ts` | порожні точки інструментування (`wrapTransport`, `wrapDatabase`, `onDataResponse`, `markHydrated`); e2e-збірка підміняє модуль аліасом (Дх9) |
+| `src/instrument.ts` | порожні точки інструментування (`wrapTransport`, `wrapDatabase`, `onDataResponse`, `markHydrated`); e2e-збірка підміняє модуль аліасом (Дх9); його імпортують `router.tsx`, `client.tsx`, `data-transport.ts` (`wrapTransport`), `server/runtime.ts`, `server/data-fn.ts` і `server/data-request.ts` |
 
 Ціль збірки зрізу — пресет Nitro `node-server` (еталонна ціль, e2e);
 збірка Vercel у CI — #210, розгортання на Vercel — #215. Обхід #8139,
@@ -294,7 +296,11 @@ user.isAnonymous === true }`, `sub` — нижнім регістром. `is_ano
   `version` на фокусі дає блок T4 B5a (рішення архітекторки 2026-11-08); один
   таймер інтервалу на рантайм — B5c (#209). Звірка прав на фокусі — B5b
   (рядок B5 спеки П4-B §13).
-  Серверний рантайм `resume()` не кличе.
+  Серверний рантайм `resume()` не кличе. Серверний рантайм закривається після
+  завершення відповіді (`router.serverSsr.onCleanup`), шляхи помилок
+  включно, а не відразу після `dehydrate`: рендер ще читає його. Клієнт сесію
+  не опитує; межа затримки в іншій вкладці — перший запит даних (див. сценарій
+  10); тримач на клієнті змінюють форма входу й вихід.
 - **`defer`** — на кожен виклик бере `waitUntil` поточного запиту з контексту
   запиту Nitro, а не захоплює функцію першого запиту: рантайм на рівні модуля
   живе довше за запит (Рт17).

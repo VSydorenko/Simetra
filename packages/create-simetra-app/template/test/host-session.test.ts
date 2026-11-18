@@ -8,7 +8,7 @@ import { createHostScope, type AppRouterContext } from "../src/host-scope"
 import {
   createClientRuntime,
   establishServerSession,
-  reconcileClientSession,
+  clientContext,
 } from "../src/host-session"
 
 afterEach(() => {
@@ -141,35 +141,18 @@ describe("createClientRuntime", () => {
   })
 })
 
-describe("reconcileClientSession", () => {
-  it("another user over a live cookie replaces the runtime: no rows of the previous", () => {
+describe("clientContext", () => {
+  it("gives routes the holder while it holds a runtime and null otherwise; never asks for a session", () => {
     vi.stubGlobal("document", { hidden: false })
     const { scope, context } = newScope()
-    reconcileClientSession(scope, context, { sub: "a" })
-    const a = scope.holder.current()
-    expect(a?.subject).toBe("a")
-    reconcileClientSession(scope, context, { sub: "b" })
-    expect(a?.disposed).toBe(true)
-    expect(scope.holder.current()?.subject).toBe("b")
+    clientContext(scope, context)
+    expect(context.data).toBeNull()
+    scope.holder.replace(createClientRuntime(scope, "a"))
+    clientContext(scope, context)
     expect(context.data).toBe(scope.holder)
-  })
-
-  it("the same user keeps the runtime", () => {
-    vi.stubGlobal("document", { hidden: false })
-    const { scope, context } = newScope()
-    reconcileClientSession(scope, context, { sub: "a" })
-    const a = scope.holder.current()
-    reconcileClientSession(scope, context, { sub: "a" })
-    expect(scope.holder.current()).toBe(a)
-  })
-
-  it("a lost session closes the holder and clears context.data", () => {
-    vi.stubGlobal("document", { hidden: false })
-    const { scope, context } = newScope()
-    reconcileClientSession(scope, context, { sub: "a" })
-    reconcileClientSession(scope, context, null)
-    expect(scope.holder.current()).toBeUndefined()
-    expect(scope.holder.closed()).toBe("signed-out")
+    // Вихід чи вхід кличуть `holder.replace` самі: контекст іде за тримачем
+    scope.holder.replace(undefined, "signed-out")
+    clientContext(scope, context)
     expect(context.data).toBeNull()
   })
 })

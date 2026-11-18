@@ -89,24 +89,15 @@ export function establishServerSession<C extends { sub: string }>(
 }
 
 /**
- * Клієнт, `beforeLoad` кореня під час навігації (першу гідратацію веде
- * `router.options.hydrate`): тримач узгоджується з поточною сесією. Інший
- * користувач (вхід B поверх живого cookie A) — новий рантайм, і значень A
- * немає ні в тримачі, ні в DOM.
+ * Клієнт, `beforeLoad` кореня під час навігації: сесію клієнт не опитує.
+ * Тримач на клієнті змінюють лише форма входу й вихід (вони кличуть
+ * `scope.holder.replace(...)` самі: ШОВ для форми входу, задача 14), а розрив
+ * сесії в іншій вкладці ловить `session-changed` з `dataFn` (Дх14). Тут лише
+ * віддаємо маршрутам те, що тримач тримає зараз.
  */
-export function reconcileClientSession(
+export function clientContext(
   scope: HostScope,
-  context: AppRouterContext,
-  claims: { sub: string } | null
+  context: AppRouterContext
 ): void {
-  const current = scope.holder.current()
-  if (claims === null) {
-    if (current !== undefined) scope.holder.replace(undefined, "signed-out")
-    context.data = null
-    return
-  }
-  if (current === undefined || current.subject !== claims.sub) {
-    scope.holder.replace(createClientRuntime(scope, claims.sub))
-  }
-  context.data = scope.holder
+  context.data = scope.holder.current() === undefined ? null : scope.holder
 }

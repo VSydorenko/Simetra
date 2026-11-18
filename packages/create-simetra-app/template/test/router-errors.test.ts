@@ -19,7 +19,11 @@ vi.mock("../src/routes/index", async () => {
   return { Route: createFileRoute("/")({ loader }) }
 })
 
-import { createMemoryHistory } from "@tanstack/react-router"
+import {
+  createMemoryHistory,
+  isNotFound,
+  notFound,
+} from "@tanstack/react-router"
 import { getRouter } from "../src/router"
 
 /** Як Start: історія запиту задається після створення роутера. */
@@ -103,6 +107,47 @@ describe("the server router", () => {
       (root as { __beforeLoadContext?: unknown }).__beforeLoadContext
     ).toBeUndefined()
     host.holder.current()?.dispose()
+  })
+
+  it("the request runtime is closed after the response, on success and when a loader fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+    claims.mockResolvedValue({ sub: "user-a" })
+    ssrTransport.mockReturnValue(() => Promise.reject(new Error("no network")))
+    for (const outcome of [
+      () => loader.mockResolvedValue(undefined),
+      () => loader.mockRejectedValue(new Error(SECRET)),
+    ]) {
+      outcome()
+      const { router, cleanups } = serverRouter()
+      await router.load()
+      const { holder } = router.options.context.host
+      const runtime = holder.current()
+      expect(runtime?.disposed).toBe(false)
+      for (const action of cleanups) action()
+      expect(runtime?.disposed).toBe(true)
+      expect(holder.current()).toBeUndefined()
+    }
+  })
+
+  it("without serverSsr the request runtime cannot be closed, which is a failure", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+    loader.mockResolvedValue(undefined)
+    claims.mockResolvedValue({ sub: "user-a" })
+    ssrTransport.mockReturnValue(() => Promise.reject(new Error("no network")))
+    const router = withHistory(getRouter())
+    await router.load()
+    const failed = router.state.matches.find((m) => m.error !== undefined)
+    expect((failed?.error as Error).message).toContain("serverSsr")
+    router.options.context.host.holder.current()?.dispose()
+  })
+
+  it("a notFound thrown by a loader is left as it is", async () => {
+    loader.mockRejectedValue(notFound())
+    const { router } = serverRouter()
+    await router.load()
+    const original = router.state.matches.find((m) => m.status === "notFound")
+    expect(original).toBeDefined()
+    expect(isNotFound(original?.error)).toBe(true)
   })
 
   it("the client router does not rewrite errors (no server SSR state)", async () => {

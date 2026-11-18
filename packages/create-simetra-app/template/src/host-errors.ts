@@ -1,3 +1,5 @@
+import { isNotFound } from "@tanstack/react-router"
+
 /** Код помилки (`command.*`, `data.*`): єдине, що з помилки йде клієнту. */
 const CODE = /^(?:command|data)\.[a-z][a-z-]*$/
 
@@ -40,6 +42,8 @@ export function sanitizeMatchErrors(
   for (const match of matches) {
     const original = match.error
     if (original === undefined) continue
+    // `notFound` не несе тексту джерела, а межа 404 читає його поля
+    if (isNotFound(original)) continue
     if (
       original instanceof Error &&
       original.message === errorCode(original) &&

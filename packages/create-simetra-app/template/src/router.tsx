@@ -7,7 +7,7 @@ import { createHostScope, type AppRouterContext } from "./host-scope"
 import {
   createClientRuntime,
   establishServerSession,
-  reconcileClientSession,
+  clientContext,
 } from "./host-session"
 import { routeTree } from "./routeTree.gen"
 import { sessionClaims } from "./server/session-fn"
@@ -22,8 +22,9 @@ const establishSession = createIsomorphicFn()
       ssrTransport(claims)
     )
   })
-  .client(async (scope, context: AppRouterContext) => {
-    reconcileClientSession(scope, context, await sessionClaims())
+  .client((scope, context: AppRouterContext) => {
+    clientContext(scope, context)
+    return Promise.resolve()
   })
 
 /** Що сервер віддає клієнту крім розмітки: знімок рантайму суб'єкта сесії. */
@@ -45,7 +46,13 @@ export function getRouter() {
   const scope = createHostScope({
     // Адресу входу беремо рядком: маршрут входу додає шар маршрутів
     toLogin: () => void router.navigate({ href: "/login", replace: true }),
-    onResponseEnd: (action) => router.serverSsr?.onCleanup(action),
+    onResponseEnd: (action) => {
+      // Без `serverSsr` закрити рантайм запиту нічим: це збій, а не пропуск
+      if (router.serverSsr === undefined) {
+        throw new Error("serverSsr is missing: the request runtime would leak")
+      }
+      router.serverSsr.onCleanup(action)
+    },
     markHydrated,
     establish: (self, context) => establishSession(self, context),
   })
