@@ -5,7 +5,8 @@ import { Socket } from "node:net"
 import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
-  PLATFORM_LOGIN_ROLES,
+  LOGIN_ROLE_SETTINGS,
+  loginRoleParentNames,
   PLATFORM_ROLES,
   SIGNAL_OUTBOX,
   ZERO_UUID,
@@ -23,6 +24,7 @@ import {
   loginUrl,
   runTag,
   testDatabaseName,
+  testRoleName,
   testSuperuserUrl,
 } from "./connection"
 import { nodeExec, runContainers } from "./external"
@@ -41,7 +43,6 @@ import {
  */
 
 const OUTBOX = `${quoteIdent(SIGNAL_OUTBOX.schema)}.${quoteIdent(SIGNAL_OUTBOX.name)}`
-const LOGIN = PLATFORM_LOGIN_ROLES.signals
 const WARMUP = 20
 const MEASURED = 200
 const STEP_MS = 2
@@ -56,7 +57,11 @@ export function defineSignalStandCases(): void {
   let admin: pg.Client | undefined
   let owner: pg.Client | undefined
   let created = false
-  let passwordSet = false
+  let roleCreated = false
+  // Роль входу прогону тієї самої форми, що `simetra_signals` (T0): спільну
+  // кластерну роль тест не змінює
+  const LOGIN = testRoleName("signals")
+  const ROLE_SETTING = LOGIN_ROLE_SETTINGS.signals!.role
 
   const urlOf = (user?: { name: string; password: string }) => {
     const url = new URL(testSuperuserUrl())
@@ -83,10 +88,17 @@ export function defineSignalStandCases(): void {
     owner = new pg.Client({ connectionString: urlOf() })
     await owner.connect()
     await owner.query(renderDesiredState(result.model!).sql)
-    // Роль входу кластерна й без пароля до задачі стеків: пароль лише на час
-    // прогону (прогін на стеку один), у `afterAll` він знімається
-    await admin.query(`ALTER ROLE ${quoteIdent(LOGIN)} PASSWORD '${password}'`)
-    passwordSet = true
+    await admin.query(
+      `CREATE ROLE ${quoteIdent(LOGIN)} LOGIN NOINHERIT PASSWORD '${password}'`
+    )
+    roleCreated = true
+    for (const parent of loginRoleParentNames("signals", testProvider()))
+      await admin.query(
+        `GRANT ${quoteIdent(parent)} TO ${quoteIdent(LOGIN)} WITH INHERIT FALSE, SET TRUE`
+      )
+    await admin.query(
+      `ALTER ROLE ${quoteIdent(LOGIN)} SET role = '${ROLE_SETTING}'`
+    )
   }, 120_000)
 
   afterAll(async () => {
@@ -100,8 +112,8 @@ export function defineSignalStandCases(): void {
           await admin?.query(
             `DROP DATABASE IF EXISTS ${quoteIdent(database)} WITH (FORCE)`
           )
-        if (passwordSet)
-          await admin?.query(`ALTER ROLE ${quoteIdent(LOGIN)} PASSWORD NULL`)
+        if (roleCreated)
+          await admin?.query(`DROP ROLE IF EXISTS ${quoteIdent(LOGIN)}`)
       } finally {
         await admin?.end().catch(() => undefined)
       }
@@ -217,7 +229,37 @@ export function defineSignalStandCases(): void {
       }
     }, 240_000)
 
-    it("the real login only reads and deletes the outbox", async () => {
+    it("the run login has the shape T0 prescribes for simetra_signals", async () => {
+      const { rows } = await admin!.query<{
+        login: boolean
+        inherit: boolean
+        settings: string[] | null
+        parents: string[]
+        pair: boolean[]
+      }>(
+        `SELECT r.rolcanlogin AS login, r.rolinherit AS inherit,
+                (SELECT s.setconfig FROM pg_db_role_setting s
+                  WHERE s.setrole = r.oid AND s.setdatabase = 0) AS settings,
+                coalesce(array_agg(p.rolname) FILTER (WHERE p.rolname IS NOT NULL), '{}') AS parents,
+                coalesce(array_agg(m.inherit_option = false AND m.set_option) FILTER (WHERE p.rolname IS NOT NULL), '{}') AS pair
+           FROM pg_roles r
+           LEFT JOIN pg_auth_members m ON m.member = r.oid
+           LEFT JOIN pg_roles p ON p.oid = m.roleid
+          WHERE r.rolname = $1
+          GROUP BY r.oid, r.rolcanlogin, r.rolinherit`,
+        [LOGIN]
+      )
+      const row = rows[0]!
+      expect(row.login).toBe(true)
+      expect(row.inherit).toBe(false)
+      expect(row.parents).toEqual([
+        ...loginRoleParentNames("signals", testProvider()),
+      ])
+      expect(row.pair.every(Boolean)).toBe(true)
+      expect(row.settings).toEqual([`role=${ROLE_SETTING}`])
+    })
+
+    it("the run login only reads and deletes the outbox", async () => {
       const client = new pg.Client({ connectionString: consumerUrl() })
       await client.connect()
       try {
