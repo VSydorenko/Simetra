@@ -598,6 +598,7 @@ DOM і журнал Server Function з точним результатом). З�
 | SSR списку `Client` для A і B послідовно (A, B, A) і паралельно | D3 | HTML і знімок кожного — лише власні рядки й власний `subject`; жодного значення чи `sub` іншого |
 | запит без сесії на сторінку з даними | D3 | перенаправлення на вхід; знімка в HTML немає |
 | анонімна сесія Better Auth на сторінку з даними | D3 | HTML без рядків і без знімка; перенаправлення на вхід |
+| помилка loader-а чи `beforeLoad` кореня з текстом хоста й ролі | D3 | у серіалізованому стані роутера (`$_TSR`) і в HTML тексту немає, лише код; e2e з кинутим винятком — #210 (збірка з `#instrument`); у М3 — unit на справжньому шляху серіалізації SSR роутера |
 | дерево `template/` і `template/package.json` | D2 | немає `test-host`, `frame-oracle`, `simetra/data/testing`, `simetra/server/testing` |
 | production-збірка: маркер `dev-user.mjs`, `simetra/server/testing`, `simetra/data/testing`, лічильник, обгортка порту, глобали обв'язки | D2 | відсутні в `.output` |
 | збірка з сентинелами `SIMETRA_RUNTIME_DATABASE_URL`, `SIMETRA_AUTH_DATABASE_URL`, `BETTER_AUTH_SECRET` | D2 | жодного сентинела в `.output/public` |
