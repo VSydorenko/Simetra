@@ -28,6 +28,8 @@ const CLIENT = "08f4943e-0296-4fbd-8d89-61b6f11355ee"
 const SEED_ROW = /Client \d+/
 // Один елемент `resume()` дальше `resumeMinIntervalMs` (за замовчуванням 15 с)
 const BEYOND_RESUME_INTERVAL_MS = 16_000
+// Типовий інтервал такту свіжості `revalidateIntervalMs` (§6.7)
+const REVALIDATE_INTERVAL_MS = 60_000
 
 const ORDER = [{ attribute: "description", direction: "asc" }] as const
 
@@ -350,6 +352,76 @@ test.describe("scenario 9: focus after a change by another session", () => {
         targetId,
       ])
       await app.query("DELETE FROM app.client WHERE code = $1", ["BNEW00001"])
+    }
+  })
+})
+
+test.describe("scenario 11: the freshness tick by the interval", () => {
+  test("a visible page sends 1 request per interval, a hidden one none, the show — 1", async ({
+    app,
+    browser,
+  }) => {
+    const context = await contextWithCookie(browser, app, app.users.b.cookie)
+    try {
+      const page = await context.newPage()
+      await page.clock.install()
+      const log = watchDataFn(page, app)
+      const serverFnRequests: string[] = []
+      page.on("request", (request) => {
+        if (request.url().includes("/_serverFn/"))
+          serverFnRequests.push(request.url())
+      })
+      await page.goto(`${app.origin}/clients`)
+      await page.waitForSelector("html[data-hydrated]")
+      await settleHydrated(
+        page,
+        log,
+        app,
+        app.users.b.cookie,
+        "/clients",
+        "Catalog.Client"
+      )
+      const setHidden = (hidden: boolean) =>
+        page.evaluate((value) => {
+          Object.defineProperty(document, "hidden", {
+            configurable: true,
+            get: () => value,
+          })
+          document.dispatchEvent(new Event("visibilitychange"))
+        }, hidden)
+      // Кількість запитів `/_serverFn/` від позначки, після короткої тиші
+      const sentSince = async (mark: number) => {
+        await page.waitForTimeout(500)
+        await log.flush()
+        return serverFnRequests.length - mark
+      }
+
+      // Видима: на інтервал — рівно один запит, і без частини `version`
+      let mark = serverFnRequests.length
+      let calls = log.calls.length
+      await page.clock.fastForward(REVALIDATE_INTERVAL_MS)
+      await expect.poll(() => serverFnRequests.length - mark).toBe(1)
+      expect(await sentSince(mark)).toBe(1)
+      const tick = log.calls.slice(calls)
+      expect(tick).toHaveLength(1)
+      expect(tick[0]!.items).not.toContain("version")
+      expect(tick[0]!.items.length).toBeGreaterThan(0)
+
+      // Прихована: три інтервали — жодного запиту
+      await setHidden(true)
+      mark = serverFnRequests.length
+      await page.clock.fastForward(3 * REVALIDATE_INTERVAL_MS)
+      expect(await sentSince(mark)).toBe(0)
+
+      // Показ — звірка `resume()`: один запит
+      calls = log.calls.length
+      await setHidden(false)
+      await expect.poll(() => serverFnRequests.length - mark).toBe(1)
+      expect(await sentSince(mark)).toBe(1)
+      await log.flush()
+      expect(log.calls.slice(calls)).toHaveLength(1)
+    } finally {
+      await context.close()
     }
   })
 })
