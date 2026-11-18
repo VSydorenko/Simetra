@@ -6,6 +6,16 @@ type RouteLike = {
   options: { staticData?: Record<string, unknown> }
 }
 
+// Адаптер не знає дерева маршрутів застосунку: опції `navigate` типізує
+// `Register` застосунку-споживача (у ньому цього маршруту може й не бути на
+// момент перевірки типів), а тут шлях — рядок, знайдений за `staticData`.
+function go(
+  router: AnyRouter,
+  options: { to: string; params?: Record<string, string> }
+): void {
+  void router.navigate(options as never)
+}
+
 // Маршрути знаходить застосунок-власник дерева, а шляху T6 не вигадує
 // (спека П4-D §6): шукаємо в дереві роутера за `staticData`.
 function findRoute(
@@ -31,14 +41,14 @@ export function routerNavigation(router: AnyRouter): NavigationAdapter {
       if (route === undefined) {
         throw new Error(`routerNavigation: no card route for ${object}`)
       }
-      void router.navigate({ to: route.fullPath, params: { id: key } })
+      go(router, { to: route.fullPath, params: { id: key } })
     },
     openList(object) {
       const route = findRoute(router, "simetraList", object)
       if (route === undefined) {
         throw new Error(`routerNavigation: no list route for ${object}`)
       }
-      void router.navigate({ to: route.fullPath })
+      go(router, { to: route.fullPath })
     },
     useBlockWhile(dirty) {
       // Хук викликає хост на кожному кадрі: умова — у `shouldBlockFn`, а не в
