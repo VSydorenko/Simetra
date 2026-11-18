@@ -105,6 +105,39 @@ describe("command transaction", () => {
     }
   )
 
+  it.each<[string, Override]>([
+    [
+      "a database error on the epoch read",
+      (text) =>
+        text === EPOCH.text
+          ? { error: { code: "XX000", message: "epoch failed" } }
+          : undefined,
+    ],
+    [
+      "an epoch that is not 64 hex",
+      (text) =>
+        text === EPOCH.text ? { rows: [{ epoch: "not-hex" }] } : undefined,
+    ],
+  ])(
+    "rolls back the written phase when the epoch step fails: %s",
+    async (_, answer) => {
+      // Епоху читають після записів: її відмова мусить відкотити записане,
+      // а не зафіксувати запис і віддати клієнтові `command.internal`.
+      const { db, runtime } = await setup(answer)
+      expect(await failureOf(runtime.run(session, create))).toEqual({
+        code: "command.internal",
+      })
+      expect(db.calls).toEqual([
+        ...OPEN,
+        context("create", "client", ID),
+        createCall,
+        EPOCH,
+        ROLLBACK,
+        { release: false },
+      ])
+    }
+  )
+
   it("runs a batch of two phases with one row per operation", async () => {
     const { db, runtime } = await setup((text) =>
       text.includes("mark_deletion")
