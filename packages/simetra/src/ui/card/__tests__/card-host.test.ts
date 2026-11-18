@@ -21,13 +21,14 @@ import {
 import { JOURNAL_MAX } from "../../../data/store/overlay"
 import {
   OBJECTS,
-  ORG,
   TASK,
   key,
   seed,
   settle,
   task,
+  taskValues,
 } from "../../../data/store/__tests__/core-support"
+import { catalogEntry } from "../../../model/runtime/__tests__/entries"
 import {
   createFakeSource,
   type FakeSource,
@@ -70,7 +71,9 @@ function makeRuntime(
     subject: SUBJECT,
     log: () => {},
     sources: {
-      override: { [TASK]: () => adapter(fake), [ORG]: () => adapter(fake) },
+      override: Object.fromEntries(
+        objects.map((o) => [`${o.kind}.${o.name}`, () => adapter(fake)])
+      ),
     },
   })
   runtimes.push(runtime)
@@ -130,7 +133,7 @@ async function opened(
     if (props.id === options.suspendOn) use(never)
     return null
   }
-  const tree = (id: string) =>
+  const tree = (id: string, object = TASK) =>
     createElement(
       CatalogProvider,
       { catalog },
@@ -156,7 +159,7 @@ async function opened(
                 { fallback: null },
                 options.probe === true
                   ? createElement(Probe, { id })
-                  : createElement(CardHost, { object: TASK, id }),
+                  : createElement(CardHost, { object, id }),
                 createElement(Sibling, { id })
               )
             )
@@ -167,8 +170,9 @@ async function opened(
   const view = render(tree(K))
   await flush()
   const c = view.container
-  /** Re-renders the same card host (or probe) with another row key. */
-  const reopen = (id: string) => act(() => void view.rerender(tree(id)))
+  /** Re-renders the same card host (or probe) with another row key or object. */
+  const reopen = (id: string, object?: string) =>
+    act(() => void view.rerender(tree(id, object)))
   /** The same re-render inside `startTransition`. */
   const navigate = (id: string) =>
     act(async () => startTransition(() => void view.rerender(tree(id))))
@@ -861,6 +865,16 @@ describe("useCardDraft — закриття, сховування, несумі�
   })
 })
 
+/** A second object with the attributes of `task` and its own table. */
+const PROJECT = "Catalog.Project"
+const project = catalogEntry({
+  id: "00000000-0000-4000-8000-000000000106",
+  name: "Project",
+  kindLabel: "project",
+  table: { schema: "public", name: "project" },
+  tabularSections: [],
+})
+
 /** The runtime of another subject over its own server: the same key, another title. */
 function otherRuntime() {
   const fake = createFakeSource({ objects: OBJECTS, epoch: EPOCH })
@@ -951,6 +965,23 @@ describe("useCardDraft — заміна рантайму чи рядка ски�
     expect(input(o.c, "title")?.value).toBe("t2")
     expect(o.blocks.at(-1)).toBe(false)
     expect(button(o.c, "action.save")?.disabled).toBe(true)
+  })
+
+  it("CardHost з іншим object і тим самим id — чернетку скинуто, запису немає", async () => {
+    const o = await opened({ objects: [...OBJECTS, project] })
+    o.fake.insert(PROJECT, taskValues(1, { title: "p1" }))
+    type(o.c, "title", "mine")
+    const before = o.frames.length
+    o.reopen(K, PROJECT)
+    await flush()
+    expect(o.frames.slice(before).every((f) => !f.includes("mine"))).toBe(true)
+    expect(card(o.c).getAttribute("data-object")).toBe(PROJECT)
+    expect(input(o.c, "title")?.value).toBe("p1")
+    expect(o.blocks.at(-1)).toBe(false)
+    expect(button(o.c, "action.save")?.disabled).toBe(true)
+    click(o.c, "action.save")
+    await flush()
+    expect(runs(o)).toEqual([])
   })
 
   it("незакомічений перехід на інший id не чіпає поточної чернетки; закомічений — скидає її", async () => {
