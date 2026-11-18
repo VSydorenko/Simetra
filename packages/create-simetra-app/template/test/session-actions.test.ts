@@ -61,6 +61,22 @@ describe("signIn", () => {
   })
 })
 
+describe("signIn with a malformed success body", () => {
+  it("a non-JSON 2xx gives command.internal and leaves the holder alone", async () => {
+    const scope = newScope()
+    const before = runtimeOf("user-a")
+    scope.holder.replace(before)
+    stubFetch(new Response("<html>proxy</html>", { status: 200 }))
+
+    expect(await signIn(scope, "b@e2e.test", "pw")).toEqual({
+      ok: false,
+      code: "command.internal",
+    })
+    expect(scope.holder.current()).toBe(before)
+    before.dispose()
+  })
+})
+
 describe("signIn refusal codes", () => {
   it.each([
     [500, "command.internal"],

@@ -36,8 +36,14 @@ export async function signIn(
             : "command.forbidden",
     }
   }
-  const body = (await response.json()) as { user?: { id?: unknown } }
-  const id = body.user?.id
+  let body: { user?: { id?: unknown } } | null
+  try {
+    body = (await response.json()) as { user?: { id?: unknown } } | null
+  } catch {
+    // 2xx не з Better Auth (проксі, сторінка помилки): виняток із `submit` лишив би форму зайнятою
+    return { ok: false, code: "command.internal" }
+  }
+  const id = body?.user?.id
   if (typeof id !== "string") return { ok: false, code: "command.internal" }
   // `sub` сервера — UUID нижнім регістром (`createVerifySession`)
   scope.holder.replace(createClientRuntime(scope, id.toLowerCase()))
