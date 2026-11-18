@@ -61,6 +61,19 @@ describe("signIn", () => {
   })
 })
 
+describe("signIn refusal codes", () => {
+  it.each([
+    [500, "command.internal"],
+    [503, "command.internal"],
+    [429, "command.rate-limited"],
+    [401, "command.forbidden"],
+  ])("status %i gives %s", async (status, code) => {
+    const scope = newScope()
+    stubFetch(new Response("x", { status }))
+    expect(await signIn(scope, "b@e2e.test", "pw")).toEqual({ ok: false, code })
+  })
+})
+
 describe("signOut", () => {
   it("closes the holder with signed-out only after the server accepted", async () => {
     const scope = newScope()

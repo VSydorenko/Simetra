@@ -27,8 +27,13 @@ export async function signIn(
   if (!response.ok) {
     return {
       ok: false,
+      // Збій сервера — не відмова входу: код `forbidden` на 5xx вводив би в оману
       code:
-        response.status === 429 ? "command.rate-limited" : "command.forbidden",
+        response.status >= 500
+          ? "command.internal"
+          : response.status === 429
+            ? "command.rate-limited"
+            : "command.forbidden",
     }
   }
   const body = (await response.json()) as { user?: { id?: unknown } }
