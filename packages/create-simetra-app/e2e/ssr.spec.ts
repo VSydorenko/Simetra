@@ -231,6 +231,12 @@ test.describe("scenario 7: sign-out in the current tab", () => {
     for (const frame of after.filter((f) => f.rows.length === 0))
       expect(frame.body).not.toMatch(SEED_ROW)
 
+    // Тримач закрито: перехід на список у цій же вкладці веде на вхід, а не до
+    // рядків попередньої сесії
+    await page.getByRole("link", { name: "Clients" }).click()
+    await expect(page).toHaveURL(/\/login$/)
+    expect(await page.locator("[data-row-key]").count()).toBe(0)
+
     // Сесії немає: список веде на вхід і не несе рядків
     const reply = await html(app, cookie, "/clients")
     expect(reply.status).toBe(307)
