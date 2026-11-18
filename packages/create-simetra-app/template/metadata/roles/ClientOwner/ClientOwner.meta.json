@@ -16,6 +16,18 @@
         "actions": ["read", "create", "update"],
         "extent": "own"
       }
+    },
+    {
+      "grant": {
+        "objects": [
+          {
+            "kind": "Catalog",
+            "name": "Country"
+          }
+        ],
+        "actions": ["read"],
+        "extent": "any"
+      }
     }
   ]
 }
