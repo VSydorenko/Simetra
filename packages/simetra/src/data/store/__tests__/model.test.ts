@@ -708,6 +708,21 @@ async function runModel(
       list.push({ index, object, rows: new Map([[k, version]]) })
       deliveries.set(id(object, k), list)
     }
+    // Цілі `include` приходять рядками `included` тієї самої відповіді (Р8):
+    // це доставка читання, що почалось у цю мить журналу, як і читання за
+    // ключем цілі. Цілі завжди повні, маркерів вони не мають.
+    for (const [name, targets] of Object.entries(result.included ?? {})) {
+      for (const row of targets) {
+        const k = row.ref as Key
+        const list = deliveries.get(id(name, k)) ?? []
+        list.push({
+          index,
+          object: name,
+          rows: new Map([[k, row.version as number]]),
+        })
+        deliveries.set(id(name, k), list)
+      }
+    }
   }
 
   const deliveredSince = (object: ObjectName, k: Key, index: number) =>

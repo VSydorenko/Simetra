@@ -452,12 +452,17 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
         if (at < 0 || known.versions[at] !== String(row[entry.versionName])) {
           return row
         }
-        return copies.length === 0
+        // З `include` маркер несе й колонки посилань (Рд40).
+        const carried = [
+          ...copies.map((a) => a.name),
+          ...("include" in query ? (query.include ?? []) : []),
+        ]
+        return carried.length === 0
           ? { known: at }
           : {
               known: at,
               copies: Object.fromEntries(
-                copies.map((a) => [a.name, row[a.name]])
+                carried.map((name) => [name, row[name]])
               ),
             }
       }),

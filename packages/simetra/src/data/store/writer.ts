@@ -2,7 +2,12 @@ import { ZERO_UUID, channelTopic, type CatalogEntry } from "simetra/model"
 import type { Defects } from "./defects"
 import { effectiveEpoch, heldEpoch } from "./epoch"
 import type { ObjectState } from "./forms"
-import { includeKeys, readIncluded } from "./include"
+import {
+  completeIncluded,
+  includeKeys,
+  readIncluded,
+  type Included,
+} from "./include"
 import { visibleRow, type RowEntry } from "./object-store"
 import {
   applyIncluded,
@@ -491,6 +496,31 @@ function outOfPlace(s: Subset): boolean {
 const listKnown = (s: Subset) => (keys: readonly Key[]) =>
   s.form.object.rows.knownFor(keys, { owned: s.owned, form: "list" })
 
+/**
+ * The system re-read of the `include` targets the view holds (Р8а): a `keys`
+ * part with `known` per target, started in the same tick as the parts of the
+ * view, so both go in one request. The view's own parts carry no `include`:
+ * targets would come back whole every time.
+ */
+function readHeldTargets(ctx: WriterContext, s: Subset): Promise<Included> {
+  const held = new Map(
+    [...s.included]
+      .filter(([, keys]) => keys.size > 0)
+      .map(([name, keys]) => [name, [...keys]] as const)
+  )
+  return readIncluded(
+    ctx.source,
+    s.form.include,
+    held,
+    ctx.limits.keysPerRequest,
+    (name) => (keys) =>
+      ctx.objectOf(name).rows.knownFor(keys, {
+        owned: s.included.get(name) ?? new Set<Key>(),
+        form: "list",
+      })
+  )
+}
+
 async function readFullAgain(
   ctx: WriterContext,
   s: Subset,
@@ -500,7 +530,10 @@ async function readFullAgain(
   const { form } = s
   const o = form.object
   const { keysPerRequest } = ctx.limits
-  const fetched = await fetchFull(ctx, form, token, s)
+  const [fetched, held] = await Promise.all([
+    fetchFull(ctx, form, token, s),
+    readHeldTargets(ctx, s),
+  ])
   if (fetched === undefined) return () => {}
   const got = new Map(fetched.rows.map((r) => [r.key, r] as const))
   const composition = [...s.owned]
@@ -536,10 +569,17 @@ async function readFullAgain(
       return row !== undefined && form.test(row.values) ? [row.values] : []
     })
   )
+  // Цілі з відповіді, яких вигляд ще не тримав, — частиною наступного пакета.
   const included =
     form.include.length === 0
       ? undefined
-      : await readIncluded(ctx.source, form.include, wanted, keysPerRequest)
+      : await completeIncluded(
+          ctx.source,
+          form.include,
+          wanted,
+          held,
+          keysPerRequest
+        )
   return (scope) => {
     let fresh = false
     for (const row of got.values()) {
@@ -597,14 +637,17 @@ async function readWindowAgain(
     start.pages.length > 0
       ? start.pages
       : [{ keys: [], lower: { kind: "start" }, generation: 0 }]
-  const answers = await rereadPages(
-    ctx.source,
-    form,
-    pages,
-    listKnown(s),
-    token,
-    ctx.limits.windowPage
-  )
+  const [answers, held] = await Promise.all([
+    rereadPages(
+      ctx.source,
+      form,
+      pages,
+      listKnown(s),
+      token,
+      ctx.limits.windowPage
+    ),
+    readHeldTargets(ctx, s),
+  ])
   if (answers === undefined) return () => {}
   const got = new Map(answers.flat().map((row) => [row.key, row] as const))
   const composition = keysOfPages(start.pages)
@@ -659,10 +702,11 @@ async function readWindowAgain(
   const included =
     form.include.length === 0
       ? undefined
-      : await readIncluded(
+      : await completeIncluded(
           ctx.source,
           form.include,
           wanted,
+          held,
           ctx.limits.keysPerRequest
         )
   return (scope) => {

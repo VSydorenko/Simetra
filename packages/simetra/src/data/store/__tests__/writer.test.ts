@@ -667,7 +667,8 @@ describe("purge", () => {
     const { core, fake, inspect } = setup()
     fake.insert(ORG, { ref: S })
     seed(fake, 1, 1)
-    fake.hold = (read) => read.object === ORG
+    // Цілі йдуть тим самим запитом, що й сторінка вигляду (Р8).
+    fake.hold = (read) => read.object === TASK
     const full = core.view({ kind: "full", object: TASK, include: ["org"] })
     watch(full)
     await settle()

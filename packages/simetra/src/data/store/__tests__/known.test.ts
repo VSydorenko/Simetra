@@ -534,12 +534,21 @@ describe("copies of a carrier carried by a partial marker", () => {
     await core.revalidate(TASK, { visibleOnly: false })
     await settle()
     const page = fake.log.slice(from).find(isPage)!
-    // Частковий маркер: об'єкт з `$known` і копією.
-    expect(
-      (page.response as { rows: unknown[] }).rows.some(
-        (row) => typeof row === "object" && row !== null
-      )
-    ).toBe(true)
+    // Частковий маркер на передачі: `$known` і колонка копії, без колонки
+    // ключа (за нею рядок відрізняють від маркера).
+    const wire = (page.response as { rows: Record<string, unknown>[] }).rows
+    const markers = wire.filter(
+      (row) => typeof row === "object" && row !== null && "$known" in row
+    )
+    expect(markers.length).toBeGreaterThan(0)
+    for (const marker of markers) {
+      expect(marker).not.toHaveProperty(objects[0]!.key)
+      expect(marker).toHaveProperty("title")
+    }
+    // Маркер ключа з розійшлою копією несе її серверне значення.
+    expect(markers).toContainEqual(
+      expect.objectContaining({ title: server.values.title })
+    )
     expect(titleOf(handles[0]!, key(2))).toBe(server.values.title)
   })
 

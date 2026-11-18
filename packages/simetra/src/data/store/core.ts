@@ -381,8 +381,35 @@ export function createCore(options: {
           },
         }
       }
+      // Несумісна ціль `include` (§10) не просить `include`: ціль — не об'єкт
+      // частини, її мітку звіряємо окремо (Р8, І9); рядки, що вже прийшли,
+      // відкидає `applyIncluded` на мить застосування.
+      const targetOf = (part: (typeof parts)[number], attribute: string) => {
+        if (part.type !== "query") return undefined
+        const { kind, name } = part.query.object
+        const ref = index.byRef
+          .get(`${kind}.${name}`)
+          ?.attributes.find((a) => a.name === attribute)?.ref
+        const target =
+          ref === undefined ? undefined : index.byId.get(ref.object)
+        return target === undefined
+          ? undefined
+          : `${target.kind}.${target.name}`
+      }
+      const withLiveInclude = (part: (typeof parts)[number]) => {
+        if (part.type !== "query" || !("include" in part.query)) return part
+        const { include, ...rest } = part.query
+        const live = (include ?? []).filter((attribute) => {
+          const target = targetOf(part, attribute)
+          return target === undefined || !staleObjects.has(target)
+        })
+        return {
+          ...part,
+          query: live.length === 0 ? rest : { ...rest, include: live },
+        } as typeof part
+      }
       const sent = parts.map(isLive)
-      const forward = parts.filter((_, slot) => sent[slot])
+      const forward = parts.filter((_, slot) => sent[slot]).map(withLiveInclude)
       const answered =
         forward.length === 0
           ? { items: [] as CoreReadItem[] }
@@ -803,6 +830,7 @@ export function createCore(options: {
     objectOf,
     registry,
     rowViews,
+    isStale: (object) => staleObjects.has(object),
     objects,
     purges,
     invalidateTail,

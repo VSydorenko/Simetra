@@ -246,9 +246,10 @@ describe("ListHost", () => {
     const page = readsOf(harness.fake, TASK).find((r) => isPage(r))!
     expect(page.query).toMatchObject({
       orderBy: [{ attribute: "ref", direction: "asc" }],
+      include: ["owner"],
     })
-    // Ціль `include` читається окремо за ключами — це й видно серверу.
-    expect(readsOf(harness.fake, ORG).length).toBeGreaterThan(0)
+    // Ціль `include` приходить тим самим запитом, окремого читання немає.
+    expect(readsOf(harness.fake, ORG)).toHaveLength(0)
   })
 
   it("клік і Enter відкривають картку", async () => {

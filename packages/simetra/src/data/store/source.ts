@@ -252,6 +252,20 @@ const retryReason = (item: CoreReadItem): string | undefined =>
 const isMarker = (entry: CatalogEntry, row: object) =>
   !Object.hasOwn(row, entry.keyName) && "known" in row
 
+// Імена, які частковий маркер мусить нести: колонки `copy` об'єкта й колонки
+// посилань `include` частини.
+const carriedNames = (entry: CatalogEntry, query: RowsQuery): string[] => [
+  ...entry.attributes.filter((a) => a.copy === true).map((a) => a.name),
+  ...("include" in query ? (query.include ?? []) : []),
+]
+
+const carries = (row: object, names: readonly string[]) => {
+  const copies = (row as { copies?: Record<string, unknown> }).copies
+  return names.every(
+    (name) => copies !== undefined && Object.hasOwn(copies, name)
+  )
+}
+
 const inKnown = (row: object, known: KnownVersions) => {
   const at = (row as { known?: unknown }).known
   return (
@@ -314,6 +328,11 @@ export function createCoreSource(
         ) {
           return internal()
         }
+        // Маркер несе кожну колонку `copy` і кожну колонку посилання `include`
+        // частини: без них клієнт лишив би в тримуваному рядку стару копію чи
+        // не знайшов би цілей (Рд40, І6).
+        const carried = carriedNames(entry, query)
+        if (markers.some((row) => !carries(row, carried))) return internal()
       }
       return { ok: true, rows: value as ReadRows, epoch }
     } catch (error) {
@@ -499,7 +518,16 @@ export function createCoreSource(
       const id = "id" in operation ? operation.id : undefined
       return answer.ok ? decodeRun(entry, id, answer.value) : answer
     },
-    async read(parts) {
+    async read(requested) {
+      // Адаптер без `capabilities.include` не віддає `included`: частина йде
+      // без `include`, а цілі ядро дочитує само (Р8).
+      const parts = requested.map((part): CorePart => {
+        if (part.type !== "query" || !("include" in part.query)) return part
+        if (sourceFor(part.query.object).capabilities.include) return part
+        const query = { ...part.query }
+        delete (query as { include?: unknown }).include
+        return { ...part, query }
+      })
       const wires = parts.map((part): WireReadPart => {
         if (part.type === "version") return { type: "version" }
         const mapped = readPartToWire(index, part)
@@ -710,7 +738,13 @@ export async function readRows(
   entry: CatalogEntry,
   query: RowsQuery,
   snapshot?: KnownSnapshot
-): Promise<{ rows: ServerRow[]; more: boolean; epoch: string | null }> {
+): Promise<{
+  rows: ServerRow[]
+  /** The raw `included` of the answer, keyed `"<kind>.<name>"`. */
+  included: ReadRows["included"]
+  more: boolean
+  epoch: string | null
+}> {
   const [item] = (
     await source.read([
       {
@@ -727,6 +761,7 @@ export async function readRows(
   }
   return {
     rows: rowsOf(entry, item.rows.rows, item.epoch, snapshot),
+    included: item.rows.included,
     more: item.rows.more === true,
     epoch: item.epoch,
   }

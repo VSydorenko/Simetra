@@ -6,6 +6,12 @@ import {
 } from "simetra/model"
 import type { Form } from "./forms"
 import { nullableOf } from "./filter"
+import {
+  includedFrom,
+  mergeIncluded,
+  type IncludeStep,
+  type Included,
+} from "./include"
 import { readRows, rowsOf, type CoreSource, type RowsQuery } from "./source"
 import type {
   GenerationToken,
@@ -144,6 +150,8 @@ export function reversedOrder(orderBy: OrderBy, keyName: string): OrderBy {
 /** What `fetchPage` returns: the rows in list order and whether the order ended. */
 export interface FetchedPage {
   readonly rows: ServerRow[]
+  /** The targets the read answered for, when it asked for `include`. */
+  readonly included: Included
   /** The read went past the last row of its direction: no further page. */
   readonly end: boolean
 }
@@ -200,7 +208,8 @@ export async function fetchPage(
   form: Form,
   request: { direction: "after" | "before"; cursor?: WindowCursor | undefined },
   token: GenerationToken,
-  pageSize: number
+  pageSize: number,
+  include: readonly IncludeStep[] = []
 ): Promise<FetchedPage | undefined> {
   const o = form.object
   const spec = form.spec as Extract<ViewSpec, { kind: "full" | "window" }>
@@ -210,14 +219,25 @@ export async function fetchPage(
   const rows: ServerRow[] = []
   let cursor = request.cursor
   let end = false
+  let included: Included = includedFrom(include, [], undefined, null)
   for (;;) {
-    const page = await readRows(
-      source,
-      o.entry,
-      pageQuery(form, direction, cursor, pageSize - rows.length)
-    )
+    const page = await readRows(source, o.entry, {
+      ...pageQuery(form, direction, cursor, pageSize - rows.length),
+      ...(include.length === 0
+        ? {}
+        : { include: include.map((step) => step.attribute) }),
+    })
     // Звільнений чи перезапитаний вигляд далі не читає (токен покоління).
     if (!token.valid) return undefined
+    included = mergeIncluded(
+      included,
+      includedFrom(
+        include,
+        page.rows.map((row) => row.values),
+        page.included,
+        page.epoch
+      )
+    )
     rows.push(...page.rows)
     const tail = page.rows.at(-1)
     // Порожня відповідь не просуває курсора: повторювати нічого. Без `more`
@@ -233,7 +253,11 @@ export async function fetchPage(
     }
     cursor = cursorOf(orderBy, keyName, tail.values)
   }
-  return { rows: direction === "after" ? rows : rows.reverse(), end }
+  return {
+    rows: direction === "after" ? rows : rows.reverse(),
+    included,
+    end,
+  }
 }
 
 /**

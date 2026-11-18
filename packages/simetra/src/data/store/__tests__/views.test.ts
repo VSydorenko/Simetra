@@ -723,8 +723,14 @@ describe("include", () => {
     }
   }
 
+  // Адаптер без `capabilities.include`: цілі дочитує ядро за ключами (Р8).
   it("reads 450 targets in three requests through the limiter", async () => {
-    const { core, fake } = setup()
+    const { core, fake } = setup({
+      adapter: (fake) => ({
+        capabilities: { include: false },
+        read: fake.adapter.read,
+      }),
+    })
     seedWithOrgs(fake, 450)
     const handle = core.view(full)
     watch(handle)

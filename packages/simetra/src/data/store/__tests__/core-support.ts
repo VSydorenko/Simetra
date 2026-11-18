@@ -61,6 +61,8 @@ export function setup(
     reverseRows?: boolean
     /** The catalog of the fake server and the core; default `OBJECTS`. */
     objects?: readonly CatalogEntry[]
+    /** The adapter over the fake; default the fake's own (or `reverseRows`). */
+    adapter?: (fake: FakeSource) => SourceAdapter
     /** The server port over the fake; default the fake's own. */
     server?: (fake: FakeSource) => ServerPort
     /** The monotonic clock of the core; default the core's own. */
@@ -73,28 +75,30 @@ export function setup(
   })
   const limits = { ...DEFAULT_CORE_LIMITS, ...options.limits }
   const adapter: SourceAdapter =
-    options.reverseRows === true
-      ? {
-          capabilities: fake.adapter.capabilities,
-          read: async (items) => {
-            const result = await fake.adapter.read(items)
-            return {
-              ...result,
-              items: result.items.map((item) =>
-                item.ok && "rows" in item.value
-                  ? {
-                      ...item,
-                      value: {
-                        ...item.value,
-                        rows: [...item.value.rows].reverse(),
-                      },
-                    }
-                  : item
-              ),
-            }
-          },
-        }
-      : fake.adapter
+    options.adapter !== undefined
+      ? options.adapter(fake)
+      : options.reverseRows === true
+        ? {
+            capabilities: fake.adapter.capabilities,
+            read: async (items) => {
+              const result = await fake.adapter.read(items)
+              return {
+                ...result,
+                items: result.items.map((item) =>
+                  item.ok && "rows" in item.value
+                    ? {
+                        ...item,
+                        value: {
+                          ...item.value,
+                          rows: [...item.value.rows].reverse(),
+                        },
+                      }
+                    : item
+                ),
+              }
+            },
+          }
+        : fake.adapter
   const source = createCoreSource(
     () => adapter,
     fake.index,

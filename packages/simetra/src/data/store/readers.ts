@@ -6,7 +6,13 @@ import {
 import { DataError } from "../errors"
 import type { Form, ObjectState } from "./forms"
 import { nullableOf } from "./filter"
-import { includeKeys, readIncluded, type Included } from "./include"
+import {
+  completeIncluded,
+  includeKeys,
+  includedFrom,
+  type IncludeStep,
+  type Included,
+} from "./include"
 import { visibleRow, type PutResult, type RestoredRow } from "./object-store"
 import type { OwnerScope, SectionEntry } from "./section-store"
 import type { Scope, Session } from "./session"
@@ -94,6 +100,8 @@ export interface ReaderContext {
   readonly log: (entry: CoreLogEntry) => void
   readonly ops: StoreOps
   objectOf(name: ObjectName): ObjectState
+  /** Whether the object is marked stale-client (§10): nothing of it is written. */
+  isStale(object: ObjectName): boolean
 }
 
 /** The part of a subset a reader's `apply` writes. */
@@ -222,6 +230,13 @@ export function applyIncluded(
   const { ops } = ctx
   const next = new Map<ObjectName, Set<Key>>()
   for (const [name, { keys, rows }] of included) {
+    // Несумісна ціль (§10) — на мить застосування, а не лише запиту: вона
+    // могла стати такою, поки відповідь летіла. Нічого не пишемо, ключі не
+    // стають `removed`, утримане лишається за виглядом.
+    if (ctx.isStale(name)) {
+      next.set(name, s.included.get(name) ?? new Set<Key>())
+      continue
+    }
     const target = ctx.objectOf(name)
     const got = new Set<Key>()
     for (const row of rows) {
@@ -250,16 +265,24 @@ export function applyIncluded(
   s.included = next
 }
 
-/** Лишає з прочитаних цілей лише ті, що потрібні живим рядкам читання. */
+/**
+ * Лишає з прочитаних цілей лише ті, що потрібні живим рядкам читання; ключі —
+ * ті з них, на які читання відповідало.
+ */
 function aliveIncluded(
   included: Included,
   wanted: ReadonlyMap<ObjectName, readonly Key[]>
 ): Included {
   return new Map(
-    [...included].map(([name, { rows }]) => {
-      const keys = wanted.get(name) ?? []
-      const set = new Set(keys)
-      return [name, { keys, rows: rows.filter((r) => set.has(r.key)) }]
+    [...included].map(([name, { keys, rows }]) => {
+      const alive = new Set(wanted.get(name))
+      return [
+        name,
+        {
+          keys: keys.filter((key) => alive.has(key)),
+          rows: rows.filter((r) => alive.has(r.key)),
+        },
+      ]
     })
   )
 }
@@ -310,14 +333,20 @@ export async function fetchFull(
   ctx: ReaderContext,
   form: Form,
   token: GenerationToken,
-  own?: Pick<ReaderTarget, "owned" | "layout">
-): Promise<{ rows: ServerRow[]; over: boolean } | undefined> {
+  own?: Pick<ReaderTarget, "owned" | "layout">,
+  include: readonly IncludeStep[] = []
+): Promise<
+  { rows: ServerRow[]; over: boolean; included: Included } | undefined
+> {
   const { source, limits } = ctx
   const o = form.object
   const spec = form.spec as Extract<ViewSpec, { kind: "full" }>
   const orderBy = spec.orderBy ?? []
   const pages: ServerRow[] = []
   const answered = new Set<Key>()
+  // Цілі `include` просить лише перша сторінка (§6.7): наступні дочитує
+  // частина `keys` наступного пакета.
+  let included: Included = includedFrom(include, [], undefined, null)
   let last: Record<string, unknown> | undefined
   // Сторінки — поза сховищем до кінця вибірки; зупинка лише на сторінці
   // без `more` і коротшій за `limit` (§6.1).
@@ -347,6 +376,9 @@ export async function fetchFull(
         ...(orderBy.length === 0 ? {} : { orderBy }),
         ...(where === undefined ? {} : { where }),
         limit: limits.fullPageSize,
+        ...(last === undefined && include.length > 0
+          ? { include: include.map((step) => step.attribute) }
+          : {}),
       },
       own === undefined
         ? undefined
@@ -355,6 +387,13 @@ export async function fetchFull(
     // Звільнений чи перезапитаний вигляд далі не читає: наступна сторінка
     // була б запитом, результат якого нікуди не запишеться.
     if (!token.valid) return undefined
+    if (last === undefined)
+      included = includedFrom(
+        include,
+        page.rows.map((r) => r.values),
+        page.included,
+        page.epoch
+      )
     pages.push(...page.rows)
     for (const row of page.rows) answered.add(row.key)
     if (pages.length > limits.fullLimit) break
@@ -363,7 +402,7 @@ export async function fetchFull(
     if (!page.more && page.rows.length < limits.fullPageSize) break
     last = tail.values
   }
-  return { rows: pages, over: pages.length > limits.fullLimit }
+  return { rows: pages, over: pages.length > limits.fullLimit, included }
 }
 
 async function readFull(
@@ -375,7 +414,7 @@ async function readFull(
   const { limits, ops } = ctx
   const { form } = s
   const o = form.object
-  const fetched = await fetchFull(ctx, form, token, s)
+  const fetched = await fetchFull(ctx, form, token, s, form.include)
   if (fetched === undefined) return NOTHING
   const { rows, over } = fetched
   if (over && ctx.strict) throw new DataError("data.full-too-large")
@@ -392,10 +431,11 @@ async function readFull(
     shown.map((r) => r.values)
   )
   if (!token.valid) return NOTHING
-  const included = await readIncluded(
+  const included = await completeIncluded(
     ctx.source,
     form.include,
     wanted,
+    fetched.included,
     limits.keysPerRequest
   )
   const values = new Map(kept.map((r) => [r.key, r.values] as const))
@@ -546,19 +586,31 @@ function writePage(
 
 async function readWindowIncluded(
   ctx: ReaderContext,
-  form: Form,
+  s: ReaderTarget,
   rows: readonly ServerRow[],
-  token: GenerationToken
+  token: GenerationToken,
+  covered: Included,
+  skipHeld: boolean
 ): Promise<Included | undefined> {
-  const wanted = includeKeys(
-    form.include,
-    rows.map((row) => row.values)
+  const { form } = s
+  // Ціль, яку вигляд уже тримає, не дочитується (§6.7): наступна сторінка
+  // просить лише відсутні.
+  const held = (name: ObjectName) =>
+    skipHeld ? s.included.get(name) : undefined
+  const wanted = new Map(
+    [
+      ...includeKeys(
+        form.include,
+        rows.map((row) => row.values)
+      ),
+    ].map(([name, keys]) => [name, keys.filter((key) => !held(name)?.has(key))])
   )
   if (!token.valid) return undefined
-  return readIncluded(
+  return completeIncluded(
     ctx.source,
     form.include,
     wanted,
+    covered,
     ctx.limits.keysPerRequest
   )
 }
@@ -575,10 +627,18 @@ async function readWindowFirst(
     s.form,
     { direction: "after" },
     token,
-    ctx.limits.windowPage
+    ctx.limits.windowPage,
+    s.form.include
   )
   if (fetched === undefined) return NOTHING
-  const included = await readWindowIncluded(ctx, s.form, fetched.rows, token)
+  const included = await readWindowIncluded(
+    ctx,
+    s,
+    fetched.rows,
+    token,
+    fetched.included,
+    false
+  )
   if (included === undefined) return NOTHING
   return (scope) =>
     writePage(ctx, scope, s, {
@@ -613,7 +673,14 @@ export async function readWindowMore(
     ctx.limits.windowPage
   )
   if (fetched === undefined) return NOTHING
-  const included = await readWindowIncluded(ctx, form, fetched.rows, token)
+  const included = await readWindowIncluded(
+    ctx,
+    s,
+    fetched.rows,
+    token,
+    fetched.included,
+    true
+  )
   if (included === undefined) return NOTHING
   const spec = form.spec as Extract<ViewSpec, { kind: "full" | "window" }>
   const keyName = form.object.entry.keyName

@@ -1434,3 +1434,79 @@ describe("CoreSource: the version part in the Server Function request", () => {
     expect(items[2]).toMatchObject({ ok: true })
   })
 })
+
+// Маркер несе кожну колонку `copy` об'єкта й кожну колонку посилання `include`
+// частини (Рд40, І6): без них клієнт лишив би в тримуваному рядку стару копію
+// чи не знайшов би цілей.
+describe("a marker that carries what the part needs", () => {
+  const carrier: CatalogEntry = {
+    ...task,
+    attributes: task.attributes.map((a) =>
+      a.name === "title" ? { ...a, copy: true as const } : a
+    ),
+  }
+  const known = { epoch: EPOCH_A, keys: [key(1)], versions: ["1"] }
+
+  const answer = async (
+    entry: CatalogEntry,
+    query: RowsQuery,
+    marker: number | Record<string, unknown>
+  ) => {
+    const { adapter } = scripted([
+      () => ({
+        epoch: EPOCH_A,
+        items: [{ ok: true, value: { rows: [marker] } }],
+      }),
+    ])
+    const source = createCoreSource(
+      () => adapter,
+      catalogIndex([entry, org]),
+      createReadLimiter(4),
+      READS_ONLY
+    )
+    return (await source.read([{ type: "query", query, known }])).items[0]!
+  }
+  const internal = { ok: false, error: { code: "command.internal" } }
+  const withInclude: RowsQuery = { object: TASK, limit: 1, include: ["org"] }
+  const plain: RowsQuery = { object: TASK, limit: 1 }
+
+  it.each<[string, number | Record<string, unknown>]>([
+    ["a bare integer", 0],
+    ["an empty partial one", { $known: 0 }],
+    ["one with another column", { $known: 0, notes: "x" }],
+  ])("refuses %s marker of a part with include", async (_, marker) => {
+    expect(await answer(task, withInclude, marker)).toEqual(internal)
+  })
+
+  it("accepts a marker with the reference column of the include", async () => {
+    expect(
+      await answer(task, withInclude, { $known: 0, org_id: S })
+    ).toMatchObject({ ok: true })
+  })
+
+  it.each<[string, number | Record<string, unknown>]>([
+    ["a bare integer", 0],
+    ["a partial one without the copy", { $known: 0, notes: "x" }],
+  ])("refuses %s marker of an object with a copy", async (_, marker) => {
+    expect(await answer(carrier, plain, marker)).toEqual(internal)
+  })
+
+  it("accepts a marker with the copy of the object", async () => {
+    expect(
+      await answer(carrier, plain, { $known: 0, title: "t" })
+    ).toMatchObject({ ok: true })
+  })
+
+  it("wants the copy and the include column both", async () => {
+    expect(
+      await answer(carrier, withInclude, { $known: 0, title: "t" })
+    ).toEqual(internal)
+    expect(
+      await answer(carrier, withInclude, { $known: 0, title: "t", org_id: S })
+    ).toMatchObject({ ok: true })
+  })
+
+  it("accepts a bare marker of an object without copies in a part without include", async () => {
+    expect(await answer(task, plain, 0)).toMatchObject({ ok: true })
+  })
+})
