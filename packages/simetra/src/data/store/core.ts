@@ -710,6 +710,9 @@ export function createCore(options: {
   session.onSwitch(() => {
     for (const o of objects.values()) {
       for (const key of o.rows.keys()) rowViews.touch(o.name, key)
+      // Несумісний об'єкт не перечитується (§10): його вигляди лишаються в
+      // стані `isStale`, а не переходять в `error`.
+      if (staleObjects.has(o.name)) continue
       if (switchTimers.has(o.name)) continue
       if (!activeViews(writerContext, o.name).some((v) => v.visible)) continue
       const delay = Math.floor(Math.random() * limits.revalidateIntervalMs)

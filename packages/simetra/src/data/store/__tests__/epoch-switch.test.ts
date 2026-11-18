@@ -12,6 +12,7 @@ import { DISCARD_PAUSE_MS, DISCARDS_MAX } from "../session"
 import { computeRowView } from "../snapshot"
 import type { ServerRow, ViewSpec } from "../types"
 import {
+  ORG,
   TASK,
   isKeys,
   isSection,
@@ -499,6 +500,38 @@ describe("core: the epoch switch", () => {
       { state: "synced", values: { title: "b1" } },
       { state: "synced" },
     ])
+  })
+
+  it("a stale-client object is not re-read after the switch and keeps isStale", async () => {
+    const h = await loaded()
+    h.fake.insert(ORG, { ref: S })
+    h.core.staleClient(TASK)
+    expect(h.handle.getSnapshot().isStale).toBe(true)
+    // Перемикання приходить з читання іншого об'єкта.
+    h.fake.epoch = EB
+    watch(h.core.view({ kind: "keys", object: ORG, keys: [S] }))
+    await deliver(h)
+    expect(h.inspect.versionEpochs().current).toBe(EB)
+    const before = h.fake.log.length
+    vi.advanceTimersByTime(INTERVAL)
+    await deliver(h)
+    // Читання ORG (власне перемикання) лишається; читань TASK немає.
+    expect(
+      h.fake.log.slice(before).filter((l) => l.query?.object.name === "Task")
+    ).toEqual([])
+    expect(h.handle.getSnapshot()).toMatchObject({ isStale: true })
+    expect(h.handle.getSnapshot().status).not.toBe("error")
+  })
+
+  it("refresh() of a stale-client object sends no read", async () => {
+    const h = await loaded()
+    h.core.staleClient(TASK)
+    const before = h.fake.log.length
+    h.handle.refresh()
+    await deliver(h)
+    expect(h.fake.log.length).toBe(before)
+    expect(h.handle.getSnapshot().isStale).toBe(true)
+    expect(h.handle.getSnapshot().status).not.toBe("error")
   })
 
   it("a late answer of A after the switch is not applied", async () => {

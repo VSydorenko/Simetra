@@ -957,10 +957,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         }
       },
       refresh() {
+        // Несумісний об'єкт не читається (§10): вигляд лишається `isStale`.
+        if (ctx.isStale(form.object.name)) return
         const s = live()
         if (s !== undefined) load(s)
       },
       showNew() {
+        if (ctx.isStale(form.object.name)) return
         const s = live()
         if (s !== undefined) load(s)
       },
