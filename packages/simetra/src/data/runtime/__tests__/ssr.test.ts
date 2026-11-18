@@ -352,6 +352,38 @@ describe("RuntimeHolder.hydrateFrom", () => {
     expect(listener).not.toHaveBeenCalled()
   })
 
+  it("refuses a created runtime that is the held one: it stays held and alive", async () => {
+    const fake = serverWorld()
+    const snapshot = await takeSnapshot(fake, [card(1)])
+    const held = runtimeOver(fake).runtime
+    const holder = createRuntimeHolder(held)
+    const listener = vi.fn()
+    holder.subscribe(listener)
+    expect(() => holder.hydrateFrom(snapshot, () => held)).toThrow(TypeError)
+    expect(holder.current()).toBe(held)
+    expect(held.disposed).toBe(false)
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it("refuses a created runtime that is already disposed: the held one stays", async () => {
+    const fake = serverWorld()
+    const snapshot = await takeSnapshot(fake, [card(1)])
+    const held = runtimeOver(fake).runtime
+    const holder = createRuntimeHolder(held)
+    const listener = vi.fn()
+    holder.subscribe(listener)
+    expect(() =>
+      holder.hydrateFrom(snapshot, (subject) => {
+        const dead = runtimeOver(fake, { subject }).runtime
+        dead.dispose()
+        return dead
+      })
+    ).toThrow(TypeError)
+    expect(holder.current()).toBe(held)
+    expect(held.disposed).toBe(false)
+    expect(listener).not.toHaveBeenCalled()
+  })
+
   it("disposes the new runtime when its hydration is refused", async () => {
     const fake = serverWorld()
     const snapshot = await takeSnapshot(fake, [card(1)])

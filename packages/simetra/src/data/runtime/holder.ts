@@ -25,7 +25,8 @@ export interface RuntimeHolder {
   /**
    * Builds the runtime of the snapshot's subject with `create`, hydrates it
    * and swaps it in (P4-B spec §6.6). The runtime `create` returns must have
-   * that `subject`: otherwise `TypeError` and the held runtime is untouched.
+   * that `subject` and must be a new live runtime (not the held one, not a
+   * disposed one): otherwise `TypeError` and the held runtime is untouched.
    * On any refusal after `create` the new runtime is disposed before the
    * error leaves. The host then calls `endHydration()` of the new runtime.
    */
@@ -60,6 +61,12 @@ export function createRuntimeHolder(initial?: DataRuntime): RuntimeHolder {
       if (typeof subject !== "string")
         throw new TypeError("snapshot: meta is malformed")
       const next = create(subject)
+      // Уже тримаємий або закритий рантайм не гідрується: інакше catch нижче
+      // закрив би живий рантайм холдера, а replace не змінив би нічого.
+      if (next === current)
+        throw new TypeError("snapshot: create returned the held runtime")
+      if (next.disposed)
+        throw new TypeError("snapshot: create returned a disposed runtime")
       try {
         if (next.subject !== subject)
           throw new TypeError(
