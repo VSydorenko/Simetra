@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const SECRET = 'connection to "db.internal.example" role simetra_runtime failed'
+// Унікальний маркер у тексті помилки: його нема в жодній іншій частині відповіді,
+// тож знайдений у серіалізованому рядку він міг прийти лише з помилки
+const MARKER = `leak-probe-${crypto.randomUUID()}`
+const SECRET = `connection to "db.internal.example" role simetra_runtime failed ${MARKER}`
 
 const loader = vi.hoisted(() => vi.fn())
 const claims = vi.hoisted(() => vi.fn())
@@ -24,6 +27,10 @@ import {
   isNotFound,
   notFound,
 } from "@tanstack/react-router"
+import { attachRouterServerSsrUtils } from "@tanstack/react-start/server"
+import { createElement } from "react"
+import { renderToStaticMarkup } from "react-dom/server"
+import { RootError } from "../src/root-view"
 import { getRouter } from "../src/router"
 
 /** Як Start: історія запиту задається після створення роутера. */
@@ -34,14 +41,30 @@ function withHistory(router: ReturnType<typeof getRouter>) {
   return router
 }
 
-/** Роутер запиту: `serverSsr` ставить обробник Start, тут — його заміна. */
+/**
+ * Роутер запиту з справжнім `router.serverSsr` із router-core: рівно те, що
+ * прикріплює обробник Start до `load()`, зі стандартними адаптерами
+ * серіалізації (зокрема `ShallowErrorPlugin`).
+ */
 function serverRouter() {
   const router = withHistory(getRouter())
-  const cleanups: Array<() => void> = []
-  router.serverSsr = {
-    onCleanup: (action: () => void) => void cleanups.push(action),
-  } as never
-  return { router, cleanups }
+  attachRouterServerSsrUtils({ router, manifest: undefined })
+  return { router, serverSsr: router.serverSsr! }
+}
+
+/**
+ * Рядок, який Start вставляє в HTML як `$_TSR.router=…`: початкові теги
+ * гідратації після `dehydrate()` (серіалізатор seroval з адаптерами).
+ */
+async function serializedState(
+  serverSsr: NonNullable<ReturnType<typeof getRouter>["serverSsr"]>
+) {
+  await serverSsr.dehydrate()
+  const tags = serverSsr.takeInitialHydrationScriptTags()
+  const text = JSON.stringify(tags)
+  // Дивимось у справжній стан роутера, а не в порожній рядок
+  expect(text).toContain("$_TSR.router=")
+  return text
 }
 
 beforeEach(() => {
@@ -50,38 +73,50 @@ beforeEach(() => {
 })
 
 describe("the server router", () => {
-  it("a loader error reaches the dehydrated state as a code, the original goes to the log", async () => {
+  it("a loader error: the serialized state has the code, not the text; the original is in the log", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined)
     loader.mockRejectedValue(new Error(SECRET))
-    const { router } = serverRouter()
+    const { router, serverSsr } = serverRouter()
     await router.load()
-    const errors = router.state.matches.map((match) => match.error)
-    const failed = errors.find((error) => error !== undefined) as Error
-    expect(failed.message).toBe("command.internal")
-    // ShallowErrorPlugin серіалізує лише `message`
-    expect(JSON.stringify({ message: failed.message })).not.toContain(
-      "db.internal"
-    )
+    const serialized = await serializedState(serverSsr)
+    expect(serialized).toContain("command.internal")
+    expect(serialized).not.toContain(MARKER)
+    expect(serialized).not.toContain("db.internal")
+    // Позитивний контроль: помилку справді кинуто й її текст є в журналі host-а
     expect(log).toHaveBeenCalledWith(
       "[simetra] route error",
-      expect.objectContaining({ message: SECRET })
+      expect.objectContaining({ message: expect.stringContaining(MARKER) })
     )
+    serverSsr.cleanup()
   })
 
-  it("a beforeLoad error of the root (session or runtime) is replaced the same way", async () => {
+  it("a beforeLoad error of the root (session or runtime): the same in the serialized state", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined)
     loader.mockResolvedValue(undefined)
     claims.mockRejectedValue(new Error(SECRET))
-    const { router } = serverRouter()
+    const { router, serverSsr } = serverRouter()
     await router.load()
-    const errors = router.state.matches.map((match) => match.error)
-    const failed = errors.find((error) => error !== undefined) as Error
-    expect(failed.message).toBe("command.internal")
-    // ShallowErrorPlugin серіалізує лише `message`
-    expect(JSON.stringify({ message: failed.message })).not.toContain(
-      "db.internal"
+    const serialized = await serializedState(serverSsr)
+    expect(serialized).toContain("command.internal")
+    expect(serialized).not.toContain(MARKER)
+    expect(serialized).not.toContain("db.internal")
+    expect(log).toHaveBeenCalledWith(
+      "[simetra] route error",
+      expect.objectContaining({ message: expect.stringContaining(MARKER) })
     )
-    expect(log).toHaveBeenCalled()
+    serverSsr.cleanup()
+  })
+
+  it("errorComponent of the root shows the code, never the message", () => {
+    const html = renderToStaticMarkup(
+      createElement(RootError, {
+        error: new Error(SECRET),
+        reset: () => undefined,
+      })
+    )
+    expect(html).toContain("command.internal")
+    expect(html).not.toContain(MARKER)
+    expect(html).not.toContain("db.internal")
   })
 
   it("an anonymous request has no data in the context and no runtime", async () => {
@@ -109,7 +144,7 @@ describe("the server router", () => {
     host.holder.current()?.dispose()
   })
 
-  it("the request runtime is closed after the response, on success and when a loader fails", async () => {
+  it("the request runtime is closed by the real serverSsr cleanup, on success and when a loader fails", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined)
     claims.mockResolvedValue({ sub: "user-a" })
     ssrTransport.mockReturnValue(() => Promise.reject(new Error("no network")))
@@ -118,12 +153,12 @@ describe("the server router", () => {
       () => loader.mockRejectedValue(new Error(SECRET)),
     ]) {
       outcome()
-      const { router, cleanups } = serverRouter()
+      const { router, serverSsr } = serverRouter()
       await router.load()
       const { holder } = router.options.context.host
       const runtime = holder.current()
       expect(runtime?.disposed).toBe(false)
-      for (const action of cleanups) action()
+      serverSsr.cleanup()
       expect(runtime?.disposed).toBe(true)
       expect(holder.current()).toBeUndefined()
     }
