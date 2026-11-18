@@ -1,13 +1,17 @@
 import type { Node } from "libpg-query"
 import {
   PROTECTED_SESSION_SETTINGS,
-  PROVIDER_SQL_TEXT_FUNCTIONS,
+  PROVIDER_EXPRESSION_FUNCTIONS,
+  PROVIDER_FUNCTIONS,
+  PROVIDER_SCHEMAS,
   type DatabaseProvider,
 } from "simetra/model"
-import { executesSqlText } from "./builtin-exclusions"
+import { excludedBuiltin, executesSqlText } from "./builtin-exclusions"
+import { BUILTIN_FUNCTIONS, REGCLASS_BUILTINS } from "./builtin-functions"
 import { plpgsqlExpressionTrees } from "./rewrite/plpgsql-body"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
+import type { VerbatimUnit } from "./units"
 
 /**
  * Чим SQL застосунку зачіпає захищене налаштування сесії (спека прав §5.3).
@@ -134,14 +138,64 @@ export function isBuiltinSetConfig(
 }
 
 /**
+ * Що потрібно, щоб судити виклик функції як виконання тексту SQL (спека прав
+ * §5.3): позитивний перелік замість денайліста провайдера. Функція схеми
+ * провайдера, якої немає в переліку, може виконувати текст (`dblink*`,
+ * `cron.schedule`, `graphql.resolve`, будь-яка нова), тож судиться вона саме
+ * так, а не навпаки.
+ */
+export interface ProviderCalls {
+  /** Схеми провайдера (`PROVIDER_SCHEMAS`); без проєкту — порожньо. */
+  schemas: ReadonlySet<string>
+  /**
+   * Функції провайдера, що рев'ю визнало не виконуючими текст SQL
+   * (`schema.name`): `PROVIDER_FUNCTIONS` і `PROVIDER_EXPRESSION_FUNCTIONS`.
+   */
+  allowed: ReadonlySet<string>
+  /** Усі одиниці: ефективний `search_path` функції залежить від її `ALTER FUNCTION`. */
+  units: readonly VerbatimUnit[]
+}
+
+const BUILTIN_NAMES: ReadonlySet<string> = new Set(BUILTIN_FUNCTIONS)
+const REGCLASS_NAMES: ReadonlySet<string> = new Set(REGCLASS_BUILTINS)
+
+/** Вбудована `pg_catalog`: з дозвільного переліку чи з виключених класів. */
+function isBuiltin(name: string): boolean {
+  return BUILTIN_NAMES.has(name) || excludedBuiltin(name, REGCLASS_NAMES)
+}
+
+/** Дані суддівства викликів провайдера (`schema.name`, спека прав §5.3). */
+export function providerCalls(
+  provider: DatabaseProvider | undefined,
+  units: readonly VerbatimUnit[]
+): ProviderCalls {
+  return {
+    schemas: new Set(provider === undefined ? [] : PROVIDER_SCHEMAS[provider]),
+    allowed: new Set(
+      provider === undefined
+        ? []
+        : [
+            ...PROVIDER_FUNCTIONS[provider],
+            ...PROVIDER_EXPRESSION_FUNCTIONS[provider],
+          ]
+    ),
+    units,
+  }
+}
+
+/**
  * Чи кличе виклик функцію, що виконує текст SQL: вбудовану з класу
  * виключень (некваліфіковану чи `pg_catalog.`, як `set_config`) або функцію
- * провайдера з поіменного переліку. Некваліфікований виклик розв'язує шлях
- * пошуку сесії, тож він судиться за голим ім'ям кожного елемента переліку.
+ * схеми провайдера поза позитивним переліком. Некваліфікований виклик
+ * розв'язує шлях пошуку сесії: у тілі без порожнього `search_path`
+ * (`searchPathOpen`) він може потрапити в схему провайдера (Supabase кладе
+ * `extensions` у шлях), тож ім'я, що не є вбудованою, судиться так само —
+ * зокрема й однойменне з функцією моделі. З порожнім шляхом розв'язується лише `pg_catalog`.
  */
 function sqlTextCall(
   parts: readonly { String?: { sval?: string } }[] | undefined,
-  textFunctions: ReadonlySet<string>
+  calls: ProviderCalls,
+  searchPathOpen: boolean
 ): boolean {
   const names = (parts ?? []).map((f) => f.String?.sval?.toLowerCase())
   const name = names.at(-1)
@@ -153,17 +207,14 @@ function sqlTextCall(
   ) {
     return true
   }
-  if (schema !== undefined) return textFunctions.has(`${schema}.${name}`)
-  return [...textFunctions].some((fn) => fn.split(".").at(-1) === name)
-}
-
-/** Функції провайдера, що виконують текст SQL (`schema.name`, спека прав §5.3). */
-export function providerTextFunctions(
-  provider: DatabaseProvider | undefined
-): ReadonlySet<string> {
-  return new Set(
-    provider === undefined ? [] : PROVIDER_SQL_TEXT_FUNCTIONS[provider]
-  )
+  if (schema !== undefined) {
+    return calls.schemas.has(schema) && !calls.allowed.has(`${schema}.${name}`)
+  }
+  // Однойменна функція моделі не рятує: Postgres обирає перевантаження за
+  // аргументами серед усіх схем шляху, тож `dblink_exec(…)` з іншою арністю
+  // чи раніше у шляху дістанеться `extensions.dblink_exec`. Функцію моделі тут
+  // кличуть кваліфікованою.
+  return searchPathOpen && !isBuiltin(name)
 }
 
 /**
@@ -173,23 +224,26 @@ export function providerTextFunctions(
  */
 export function callsSqlText(
   value: unknown,
-  textFunctions: ReadonlySet<string>
+  calls: ProviderCalls,
+  searchPathOpen: boolean
 ): boolean {
   if (Array.isArray(value))
-    return value.some((v) => callsSqlText(v, textFunctions))
+    return value.some((v) => callsSqlText(v, calls, searchPathOpen))
   if (typeof value !== "object" || value === null) return false
   const node = value as Record<string, unknown>
   const call = node.FuncCall as CallNode | undefined
-  if (call !== undefined && sqlTextCall(call.funcname, textFunctions))
+  if (call !== undefined && sqlTextCall(call.funcname, calls, searchPathOpen))
     return true
-  return Object.values(node).some((v) => callsSqlText(v, textFunctions))
+  return Object.values(node).some((v) => callsSqlText(v, calls, searchPathOpen))
 }
 
 function callWrite(
   call: CallNode,
-  textFunctions: ReadonlySet<string>
+  calls: ProviderCalls
 ): CommandContextHit | undefined {
-  if (sqlTextCall(call.funcname, textFunctions)) return { form: "dynamicText" }
+  // Некваліфіковані виклики тіла судить перелік тіла (`bodyStatementProblem`),
+  // тож тут шлях пошуку не враховується.
+  if (sqlTextCall(call.funcname, calls, false)) return { form: "dynamicText" }
   if (!isBuiltinSetConfig(call.funcname)) return undefined
   const first = call.args?.[0]
   if (first === undefined) return undefined
@@ -272,11 +326,8 @@ function readsRelation(
  * раніше за дітей), тож перший елемент — та сама форма, що бачила перевірка
  * першого запису.
  */
-function treeWrites(
-  value: unknown,
-  textFunctions: ReadonlySet<string>
-): CommandContextHit[] {
-  const walk = (v: unknown) => treeWrites(v, textFunctions)
+function treeWrites(value: unknown, calls: ProviderCalls): CommandContextHit[] {
+  const walk = (v: unknown) => treeWrites(v, calls)
   if (Array.isArray(value)) return value.flatMap(walk)
   if (typeof value !== "object" || value === null) return []
   const node = value as Record<string, unknown>
@@ -284,7 +335,7 @@ function treeWrites(
   const call =
     node.FuncCall === undefined
       ? undefined
-      : callWrite(node.FuncCall as CallNode, textFunctions)
+      : callWrite(node.FuncCall as CallNode, calls)
   if (call !== undefined) own.push(call)
   else if (settingsTableWrite(node) || settingsView(node)) {
     own.push({ form: "settingsTable" })
@@ -349,15 +400,15 @@ function optionWrites(
  * (спека прав §5.3); тут вона лишається для одиниць без тіла.
  * Усі записи одиниці, а не перший: у борговому SQL `SET ROLE` перед
  * `set_config('simetra.…')` інакше сховав би помилку за попередженням
- * (спека прав §5.3). Порожній масив — записів немає. `textFunctions` — функції
- * провайдера, що виконують текст SQL (`schema.name`, спека прав §5.3).
+ * (спека прав §5.3). Порожній масив — записів немає. `calls` — дані суддівства
+ * викликів провайдера (спека прав §5.3).
  */
 export function commandContextWrite(
   tree: Node,
   sql: string,
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  textFunctions: ReadonlySet<string> = new Set()
+  calls: ProviderCalls
 ): CommandContextHit[] {
   const fn = (tree as { CreateFunctionStmt?: FunctionTree }).CreateFunctionStmt
   if (fn === undefined) {
@@ -368,10 +419,10 @@ export function commandContextWrite(
     if (alter !== undefined) {
       return [
         ...optionWrites(alter.actions),
-        ...treeWrites({ ...alter, actions: [] }, textFunctions),
+        ...treeWrites({ ...alter, actions: [] }, calls),
       ]
     }
-    return treeWrites(tree, textFunctions)
+    return treeWrites(tree, calls)
   }
   const options = optionWrites(fn.options)
   const defs = (fn.options ?? []).flatMap((o) =>
@@ -384,14 +435,11 @@ export function commandContextWrite(
   // Значення параметрів за замовчуванням обчислює виклик, а тіло
   // `BEGIN ATOMIC` уже розібране: обидва — частина дерева самого оператора.
   // Опції судить `optionWrites`, тож у загальний обхід вони не входять.
-  const declared = [
-    ...options,
-    ...treeWrites({ ...fn, options: [] }, textFunctions),
-  ]
+  const declared = [...options, ...treeWrites({ ...fn, options: [] }, calls)]
   if (fn.sql_body !== undefined) return declared
   return [
     ...declared,
-    ...bodyWrites(defs, language, sql, parse, plpgsql, textFunctions),
+    ...bodyWrites(defs, language, sql, parse, plpgsql, calls),
   ]
 }
 
@@ -402,9 +450,9 @@ function bodyWrites(
   sql: string,
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  textFunctions: ReadonlySet<string>
+  calls: ProviderCalls
 ): CommandContextHit[] {
-  const walk = (v: unknown) => treeWrites(v, textFunctions)
+  const walk = (v: unknown) => treeWrites(v, calls)
   if (language === "sql") {
     const body = (
       defs.find((d) => d.defname === "as")?.arg as

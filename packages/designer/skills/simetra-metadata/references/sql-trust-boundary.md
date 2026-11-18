@@ -37,8 +37,9 @@ Only commands write a table of a kind: write a change of its rows as a
 command of the object or its TypeScript hook. No application SQL, in any
 file and in debt too, writes one: an `INSERT`, `UPDATE`, `DELETE` or `MERGE`
 in a function or procedure body whose target is a table of a kind, a tabular
-section, a view of the model over one, or the provider's account table
-(`auth.users`) is `sql.kind-table-verbatim` with the form `functionBody`, also
+section, a view of the model over one, the provider's account table
+(`auth.users`) or any relation of the platform schema `simetra` is
+`sql.kind-table-verbatim` with the form `functionBody`, also
 inside a literal `EXECUTE`, a `DO` block or a function the body creates.
 Reading the table (`SELECT`, `FOR UPDATE`, `UPDATE … FROM`, `MERGE … USING`)
 and `LOCK` are fine. An unqualified table name counts in every schema,
@@ -52,8 +53,11 @@ the statements the hint of `sql.function-body-statement` lists; the field
 `statement` names the one refused. A body never changes the schema: move DDL
 into metadata or a migration.
 
-- `nonLiteralExecute`, `dynamicText` (a call of a builtin or provider
-  function that executes SQL text, such as `query_to_xml` or `dblink`) and
+- `nonLiteralExecute`, `dynamicText` (a call of a builtin that executes SQL
+  text, such as `query_to_xml`, or of any function of a provider schema that
+  is not on the provider's reviewed list, such as `dblink` or `cron.schedule`;
+  in a body without an empty `search_path`, also an unqualified call that is
+  neither a builtin nor a function of the model) and
   `language` (a language other than `sql` and `plpgsql`) cannot be judged:
   rewrite the function with static SQL or remove it. Partition maintenance or
   statistics through `EXECUTE format(…)` is refused on adoption for the same

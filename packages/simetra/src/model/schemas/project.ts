@@ -244,7 +244,8 @@ export const PROVIDER_SCHEMAS: Readonly<
 }
 
 // Довіри до цілої схеми провайдера немає (спека прав §5.3): голова кличе лише
-// поіменні функції, що читають; нова — поповнення переліку з рев'ю.
+// поіменні функції, що читають; нова — поповнення переліку з рев'ю. Виклик
+// будь-якої іншої функції схеми провайдера судиться як виконання тексту SQL.
 /**
  * Provider functions that application SQL running inside a command (kind
  * module functions, subscription handlers, set and dimension functions,
@@ -271,37 +272,6 @@ export const PROVIDER_EXPRESSION_FUNCTIONS: Readonly<
   supabase: ["extensions.gen_random_bytes", "extensions.uuid_generate_v4"],
   // `gen_random_uuid()` — ядро Postgres, поіменного дозволу не потребує.
   postgres: [],
-}
-
-// Що саме виконає така функція, статично не відомо, тож її виклик з
-// вільного SQL — зміна сесії невідомою формою (спека прав §5.3). Поіменно, а не
-// схемою: перелік поповнюється з рев'ю.
-/**
- * Provider functions that execute the SQL text passed to them, as
- * `schema.name`.
- */
-export const PROVIDER_SQL_TEXT_FUNCTIONS: Readonly<
-  Record<DatabaseProvider, readonly string[]>
-> = {
-  supabase: [
-    "extensions.dblink",
-    "extensions.dblink_exec",
-    "extensions.dblink_send_query",
-    "extensions.dblink_open",
-    "graphql.resolve",
-    "graphql_public.graphql",
-    "pgtle.install_extension",
-    "cron.schedule",
-    "cron.schedule_in_database",
-    "cron.alter_job",
-  ],
-  // Лише `dblink*` (contrib); решта записів — функції образу Supabase.
-  postgres: [
-    "extensions.dblink",
-    "extensions.dblink_exec",
-    "extensions.dblink_send_query",
-    "extensions.dblink_open",
-  ],
 }
 
 /**

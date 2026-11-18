@@ -10,6 +10,7 @@ import {
   APPLIED_SNAPSHOT_HASH_FUNCTION_NAME,
   ROW_VERSION_EPOCH_FUNCTION_NAME,
   PLATFORM_SCHEMA,
+  PLATFORM_STATE_TABLES,
   quoteIdent,
   type CatalogModel,
   type DatabaseProvider,
@@ -547,7 +548,7 @@ export async function readAppliedPromotions(
   return new Set(rows.map((r) => r.hash))
 }
 
-const STATE_TABLES = ["marker", "ledger", "version_epoch"] as const
+const STATE_TABLES = PLATFORM_STATE_TABLES
 
 /** Стан застосування цілі для звірки та розпізнавач його об'єктів. */
 export interface ApplyStateObjects {

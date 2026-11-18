@@ -767,24 +767,32 @@ before any database work: the claim must be present, `true` or `false`.
 
 ## Reading past row-level security
 
-`sql.definer-reads-rls` (a warning) marks a unit that reads a table under
-row-level security as its owner, so the caller's policies do not apply, while
-a role of the API (or `PUBLIC`) can run or read it:
+A `SECURITY DEFINER` function runs as its owner, the applying role, which
+bypasses row-level security (`FORCE ROW LEVEL SECURITY` does not stop it).
+One that a role of the API (or `PUBLIC`) may `EXECUTE` fails `compile` with
+`sql.definer-caller-unchecked` in any `.sql` file, SQL debt included, whatever
+it reads, until it names the check of its caller. Two ways out: link it to a
+scope kind as its set function (or to an access dimension as its values
+function), or declare its signature with the named check. After `introspect`
+from scratch, set functions come back unlinked and fail this way until you
+link them.
 
-- a `SECURITY DEFINER` function that someone may `EXECUTE`;
+`sql.definer-reads-rls` (a warning) marks a view that reads a table under
+row-level security as its owner, so the caller's policies do not apply, while
+a role of the API (or `PUBLIC`) can read it:
+
 - a view without `security_invoker` that someone may `SELECT`;
 - a materialized view, which stores the rows its owner read at `REFRESH`.
 
-The diagnostic lists the tables it found. The compiler does not see the owner of a function,
-so one whose owner is itself subject to row-level security is flagged too.
-Convert in this order of preference:
+The diagnostic lists the tables it found. Convert in this order of
+preference:
 
 1. Read through a right and a policy: let the caller read the kind's table
    itself, so the platform's policies decide, and make the unit
    `SECURITY INVOKER` (a view: `WITH (security_invoker = true)` in
    `CREATE VIEW`; a separate `ALTER VIEW` is not accepted in `.sql` files).
-2. If the unit must run as its owner, check the caller's membership or rights
-   inside it, or filter the rows with the rights functions in a view.
+2. Write the operation as a command of the object or a TypeScript hook; a
+   view may filter the rows with the rights functions.
 3. If no API caller needs it, `REVOKE EXECUTE` (function) or `REVOKE SELECT`
    (view, materialized view) from `PUBLIC` and from each API role. A
    materialized view that serves callers is replaced by a view with

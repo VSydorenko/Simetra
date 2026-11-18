@@ -89,11 +89,6 @@ const heldEnv = () =>
       await owner.connect()
       try {
         await seedMarker(owner, model.hash)
-        // Рядок епохи пише крок `versions` застосування, якого тінь рушія
-        // (ціль профілю, що дає ідентичність) не проходить.
-        await owner.query(
-          "INSERT INTO simetra.version_epoch DEFAULT VALUES ON CONFLICT (singleton) DO NOTHING"
-        )
         const actor = async (archetypes?: string[]): Promise<Actor> => {
           const { org, user } = await seedRuntimeActor(owner, archetypes)
           return { org, session: sessionOf(user) }

@@ -21,8 +21,8 @@ export interface CommandResult {
   changes: Change[]
   /**
    * The row version epoch, read in the command transaction after its writes
-   * (P4-B spec §7.2, §7.4): versions compare only within one epoch. `null` —
-   * the database has no epoch.
+   * (P4-B spec §7.2, §7.4): versions compare only within one epoch. A
+   * command without an epoch rolls back as `command.internal`.
    */
-  epoch: string | null
+  epoch: string
 }

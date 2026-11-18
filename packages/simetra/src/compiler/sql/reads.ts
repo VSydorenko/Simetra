@@ -29,6 +29,8 @@ const ROUTINES: ReadonlySet<string> = new Set([
 /** Класи з тілом, яке виконується; агрегат лише називає функції-складові. */
 const BODIES: ReadonlySet<string> = new Set(["function", "procedure"])
 const VIEWS: ReadonlySet<string> = new Set(["view", "materializedView"])
+/** Тимчасова схема сесії: Postgres шукає в ній відношення першою. */
+const TEMP_SCHEMA = "pg_temp"
 
 /**
  * Посилання одиниці. `bound` — ім'я зв'язано під час створення з
@@ -118,10 +120,14 @@ function emptyPathOf(
 /**
  * Відношення, які одиниця читає чи пише, з того самого розбору, що й обхід
  * (тіло `sql`, вирази plpgsql, текст літерального `EXECUTE`, визначення
- * подання): два прочитання одного тіла розійшлися б. Некваліфіковане ім'я,
- * яке з порожнім `search_path` може назвати лише `pg_catalog` чи `pg_temp`,
- * не входить; решта некваліфікованих — без схеми (збіг у будь-якій схемі,
- * fail-closed): шлях, за яким Postgres їх розв'яже, статично не відомий.
+ * подання): два прочитання одного тіла розійшлися б. Некваліфіковане ім'я з
+ * порожнім `search_path` — `pg_temp.<ім'я>`: Postgres шукає відношення спершу
+ * в тимчасовій схемі сесії, навіть не названій у шляху, і лише потім у
+ * `pg_catalog`. Тимчасову таблицю створює викликач, тож таке читання
+ * definer-функції він підміняє; жодне відношення моделі в `pg_temp` не живе,
+ * і споживач судить його як невідоме (fail-closed). Решта некваліфікованих —
+ * без схеми (збіг у будь-якій схемі, fail-closed): шлях, за яким Postgres їх
+ * розв'яже, статично не відомий.
  */
 export function relationReads(
   unit: VerbatimUnit,
@@ -134,7 +140,9 @@ export function relationReads(
   return analysis.refs.flatMap((ref): ReferencedName[] => {
     if (ref.space !== "rel") return []
     if (ref.schema === undefined)
-      return empty && !ref.bound ? [] : [{ name: ref.name }]
+      return empty && !ref.bound
+        ? [{ schema: TEMP_SCHEMA, name: ref.name }]
+        : [{ name: ref.name }]
     return [{ schema: ref.schema, name: ref.name }]
   })
 }

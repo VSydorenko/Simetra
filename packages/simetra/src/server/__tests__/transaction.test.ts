@@ -44,6 +44,7 @@ import {
   createCall,
   createOrganization,
   generatedIds,
+  HARNESS_EPOCH,
   rootResult,
   session,
   setup,
@@ -87,6 +88,8 @@ describe("command transaction", () => {
   it.each<[string, Record<string, unknown>[]]>([
     ["a value that is not 64 hex", [{ epoch: "not-hex" }]],
     ["no row", []],
+    // Немає рядка `simetra.version_epoch`: функція відповідає `NULL`.
+    ["null: the database has no epoch row", [{ epoch: null }]],
   ])(
     "fails with command.internal and rolls back when the epoch is %s",
     async (_, rows) => {
@@ -117,6 +120,10 @@ describe("command transaction", () => {
       "an epoch that is not 64 hex",
       (text) =>
         text === EPOCH.text ? { rows: [{ epoch: "not-hex" }] } : undefined,
+    ],
+    [
+      "no epoch row in the database",
+      (text) => (text === EPOCH.text ? { rows: [{ epoch: null }] } : undefined),
     ],
   ])(
     "rolls back the written phase when the epoch step fails: %s",
@@ -748,7 +755,7 @@ describe("scope root creation", () => {
           operation: "create",
         },
       ],
-      epoch: null,
+      epoch: HARNESS_EPOCH,
     })
   })
 

@@ -25,7 +25,9 @@ const PUBLIC = "PUBLIC"
  * відкривають, видно повз модель прав. Форми:
  * - функція з `SECURITY DEFINER` (у `CREATE` чи окремим `ALTER FUNCTION`) і
  *   дієвим `EXECUTE` для ролі API — незалежно від закритої оболонки: типова
- *   така RPC якраз має форму `STABLE SECURITY DEFINER SET search_path = ''`;
+ *   така RPC якраз має форму `STABLE SECURITY DEFINER SET search_path = ''`.
+ *   Ця форма — помилка `sql.definer-caller-unchecked` (нижче), а не
+ *   попередження;
  * - подання без `security_invoker` з дієвим `SELECT` для ролі API: воно читає
  *   від імені власника;
  * - матеріалізоване подання з дієвим `SELECT` — завжди: його рядки зберіг
@@ -36,9 +38,20 @@ const PUBLIC = "PUBLIC"
  * читати повз RLS їм належить за задумом (обмеження їхніх тіл судять власні
  * правила стадії 5). Власника одиниці статично не видно (власник без обходу RLS
  * нічого не відкриває), а подання може саме фільтрувати рядки функціями прав,
- * тож це попередження, а не помилка. Недосудних форм тіла (нелітеральний
+ * тож це попередження, а не помилка. Власник одиниці — роль застосування:
+ * інший власник — відмова плану (`plan.owner-mismatch`), а гейт власника
+ * вимагає `BYPASSRLS` (`plan.owner-not-bypassrls`). Тож `FORCE ROW LEVEL
+ * SECURITY` таблиці читання від імені власника не обмежує, і таблиця з ним
+ * судиться як будь-яка під RLS. Недосудних форм тіла (нелітеральний
  * `EXECUTE`, інша мова, непрочитаний текст) стадія 5 не бачить: їх відмовляє
  * ранній блок (спека прав §6.1).
+ *
+ * Функція з `SECURITY DEFINER`, яку може виконати роль API, мусить сама
+ * перевіряти викликача, і назвати перевірку має декларація сигнатури
+ * (платформна спека §6.7). Декларації ще немає, тож така функція в будь-якій
+ * одиниці SQL застосунку, борг включно, — помилка
+ * `sql.definer-caller-unchecked` незалежно від того, що вона читає; попередження
+ * класу Р30 лишається поданням і матеріалізованим поданням.
  */
 export function checkDefinerReads(
   objects: readonly ParsedObject[],
@@ -67,6 +80,16 @@ export function checkDefinerReads(
       apiRoles
     )
     if (!privileged.some((role) => role !== PUBLIC)) continue
+    if (form === "function") {
+      found.push(
+        diagnostic("sql.definer-caller-unchecked", unit.file, "", {
+          function: `${unit.schema}.${unit.name}`,
+          roles: privileged.join(", "),
+          line: unit.line,
+        })
+      )
+      continue
+    }
     // Перелік таблиць — те, чиї рядки одиниця віддає: її власні читання й
     // читання функцій і подань, яких вона досягає.
     const readers = [unit, ...reachableUnits(unit, units, parse, plpgsql)]
@@ -133,7 +156,15 @@ function formOf(
     const view = (unit.tree as { ViewStmt?: { options?: Options } }).ViewStmt
     return securityInvoker(view?.options ?? []) ? undefined : "view"
   }
-  if (unit.class !== "function" || skipped.has(unit.identity)) return undefined
+  if (unit.class === "aggregate")
+    return definerComponent(unit, units) ? "function" : undefined
+  // Процедуру з `SECURITY DEFINER` досягає `CALL` з функції, яку кличе роль
+  // API, тож вона — та сама форма, що й функція.
+  if (
+    (unit.class !== "function" && unit.class !== "procedure") ||
+    skipped.has(unit.identity)
+  )
+    return undefined
   const fn = (unit.tree as { CreateFunctionStmt?: FunctionTree })
     .CreateFunctionStmt
   if (fn === undefined || returnsTrigger(fn)) return undefined
@@ -148,6 +179,59 @@ function formOf(
       )
     )
   return definer ? "function" : undefined
+}
+
+/** Опції агрегату, що називають функцію-складову. */
+const AGGREGATE_COMPONENTS: ReadonlySet<string> = new Set([
+  "sfunc",
+  "finalfunc",
+  "combinefunc",
+  "serialfunc",
+  "deserialfunc",
+  "msfunc",
+  "minvfunc",
+  "mfinalfunc",
+])
+
+/**
+ * Чи складова агрегату — `SECURITY DEFINER`-функція моделі. `EXECUTE`
+ * складової Postgres перевіряє в ролі власника агрегату, а не викликача, тож
+ * роль API, якій дано агрегат, виконує складову від власника, навіть коли
+ * саму функцію їй відкликано. Некваліфіковане ім'я — будь-яка схема
+ * (fail-closed).
+ */
+function definerComponent(
+  unit: VerbatimUnit,
+  units: readonly VerbatimUnit[]
+): boolean {
+  const define = (
+    unit.tree as {
+      DefineStmt?: {
+        definition?: {
+          DefElem?: {
+            defname?: string
+            arg?: { TypeName?: { names?: { String?: { sval?: string } }[] } }
+          }
+        }[]
+      }
+    }
+  ).DefineStmt
+  const names = (define?.definition ?? []).flatMap(({ DefElem: e }) =>
+    e !== undefined && AGGREGATE_COMPONENTS.has(e.defname ?? "")
+      ? [(e.arg?.TypeName?.names ?? []).map((n) => n.String?.sval ?? "")]
+      : []
+  )
+  return names.some((parts) => {
+    const name = parts.at(-1)
+    const schema = parts.length > 1 ? parts.at(-2) : undefined
+    return units.some(
+      (u) =>
+        u.class === "function" &&
+        u.name === name &&
+        (schema === undefined || u.schema === schema) &&
+        isSecurityDefiner(u, units)
+    )
+  })
 }
 
 /**
@@ -280,9 +364,16 @@ function securityInvoker(options: Options): boolean {
 
 /** Чи ключ цілі гранту (`grantTargetKeys`) називає одиницю. */
 function targetOf(unit: VerbatimUnit): (key: string) => boolean {
-  if (unit.class === "function") {
-    // `ON FUNCTION f` без аргументів — кожне перевантаження, як `ownsTarget`.
-    const own = new Set([`function|${unit.identity.slice("function:".length)}`])
+  if (
+    unit.class === "function" ||
+    unit.class === "procedure" ||
+    unit.class === "aggregate"
+  ) {
+    // `ON FUNCTION f` без аргументів — кожне перевантаження, як `ownsTarget`;
+    // грант процедури й агрегату має той самий ключ `function|`.
+    const own = new Set([
+      `function|${unit.identity.slice(unit.identity.indexOf(":") + 1)}`,
+    ])
     return (key) => ownsTarget(own, key)
   }
   const own = `table|${unit.schema}.${unit.name}`

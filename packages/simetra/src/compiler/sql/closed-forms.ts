@@ -3,13 +3,16 @@ import {
   KIND_REGISTRY,
   PLATFORM_SETTING_PREFIX,
   PROVIDER_SCHEMAS,
-  PROVIDER_SQL_TEXT_FUNCTIONS,
   type DatabaseProvider,
   type Project,
 } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
-import { commandContextWrite, type CommandContextHit } from "./command-context"
+import {
+  commandContextWrite,
+  providerCalls,
+  type CommandContextHit,
+} from "./command-context"
 import { isExpressionUnit } from "./expression-calls"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
@@ -420,8 +423,9 @@ const CALL_FORMS: ReadonlySet<CommandContextHit["form"]> = new Set([
  * і спільних `sql/`-файлів, обробники підписок і функції множини — будь-де;
  * одиниця боргу (`isDebt` — `debtPredicate` ратчета) — лише платформним
  * префіксом, решта її записів — попередження `sql.debt-session-write`
- * (спека прав §5.3). Функції провайдера `provider`, що виконують текст SQL,
- * судяться формою `dynamicText` (спека прав §5.3); без проєкту провайдера немає. У
+ * (спека прав §5.3). Виклик функції схеми провайдера `provider` поза позитивним
+ * переліком судиться формою `dynamicText` (спека прав §5.3); без проєкту
+ * провайдера немає. У
  * функції чи процедурі цю форму судить перелік тіла (`judgedElsewhere`).
  */
 export function checkSqlModules(
@@ -433,9 +437,7 @@ export function checkSqlModules(
   plpgsql: PlpgsqlParser,
   provider: DatabaseProvider | undefined
 ): Diagnostic[] {
-  const textFunctions: ReadonlySet<string> = new Set(
-    provider === undefined ? [] : PROVIDER_SQL_TEXT_FUNCTIONS[provider]
-  )
+  const calls = providerCalls(provider, units)
   const owners = closedModuleOwners(objects)
   const closed = (unit: { ownerFile?: string }) =>
     unit.ownerFile !== undefined && owners.has(unit.ownerFile)
@@ -469,7 +471,7 @@ export function checkSqlModules(
       unit.sql,
       parse,
       plpgsql,
-      textFunctions
+      calls
     ).filter((hit) => !judgedElsewhere(unit, hit))
     if (writes.length === 0) continue
     const name = unit.schema === "" ? unit.name : `${unit.schema}.${unit.name}`
@@ -572,7 +574,7 @@ export function checkSqlModules(
             unit.sql,
             parse,
             plpgsql,
-            textFunctions
+            calls
           ).find((hit) => !judgedElsewhere(unit, hit))
         : undefined
     if (write !== undefined) {

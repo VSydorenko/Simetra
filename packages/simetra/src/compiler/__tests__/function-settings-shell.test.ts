@@ -221,7 +221,10 @@ describe("sql.function-settings-shell", () => {
       await compiledPolicyDomain({
         [SHARED]:
           sqlFunction("public.plain", "SELECT 1") +
-          "ALTER FUNCTION public.plain() SECURITY DEFINER;",
+          "ALTER FUNCTION public.plain() SECURITY DEFINER;\n" +
+          // Без цього definer-функцію виконувала б роль API, і її відмовила б
+          // перевірка викликача (платформна спека §6.7).
+          "REVOKE EXECUTE ON FUNCTION public.plain() FROM PUBLIC, authenticated, anon;",
       })
     )
   })
