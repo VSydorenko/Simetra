@@ -8,6 +8,8 @@
 
 /** A deliberate defect of the core switched on by the model test's self-check. */
 export type DefectFlag =
+  /** A `version` answer without a divergence lifts the stale-client mark. */
+  | "stale-mark-lifts"
   /** `commit` ignores an invalid generation token. */
   | "no-token-check"
   /** The version rule accepts an older row. */

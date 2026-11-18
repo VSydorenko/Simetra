@@ -78,6 +78,8 @@ export interface SectionStore {
   resetCompleteness(scope: Scope, owner: Key, section: string): void
   clearOwner(scope: Scope, owner: Key): void
   get(owner: Key, section: string): SectionEntry | undefined
+  /** Owners that hold lines; the header row of an owner may be absent. */
+  owners(): Key[]
   /** Sizes of the owner maps (inspection). */
   sizes(): { owners: number; ownerVersions: number }
 }
@@ -298,6 +300,7 @@ export function createSectionStore(options: {
     },
 
     get: (owner, section) => owners.get(owner)?.get(section),
+    owners: () => [...owners.keys()],
     sizes: () => ({ owners: owners.size, ownerVersions: ownerVersions.size }),
   }
 }

@@ -434,13 +434,14 @@ describe("isStale", () => {
     })
     expect(list.last().isStale).toBe(true)
     expect(card.last().isStale).toBe(true)
+    // Позначка липка (§10): збіг kernelHash її не знімає до перезавантаження.
     kernel = OBJECTS[0]!.kernelHash
     await act(async () => {
       core.requestVersion()
       await settle()
     })
-    expect(list.last().isStale).toBe(false)
-    expect(card.last().isStale).toBe(false)
+    expect(list.last().isStale).toBe(true)
+    expect(card.last().isStale).toBe(true)
   })
 
   it("a version-epoch switch makes rows stale but not the object", async () => {

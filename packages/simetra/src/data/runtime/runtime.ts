@@ -20,7 +20,12 @@ import {
 import { createWriter } from "../data-writer"
 import { createCore, limitsOf } from "../store/core"
 import { createCoreSource, createReadLimiter } from "../store/source"
-import type { CloseReason, CoreLimits, CoreLogEntry } from "../store/types"
+import type {
+  CloseReason,
+  CoreLimits,
+  CoreLogEntry,
+  CoreSnapshot,
+} from "../store/types"
 import { bindRuntimeHandle, type RuntimeRequest } from "./handle"
 
 /** The data runtime of one user session (P4-B spec §6.1). */
@@ -30,6 +35,44 @@ export interface DataRuntime {
   /** Closes the runtime; later requests are refused without the transport. */
   dispose(): void
   readonly disposed: boolean
+  /**
+   * The snapshot of the ready held views for the client (P4-B spec §6.6):
+   * `meta` names the subject and the catalog the rows were read under. Throws
+   * `TypeError` once the runtime is disposed, and while a write is in the
+   * journal. The server calls it, then `dispose()`.
+   */
+  dehydrate(): DataSnapshot
+  /**
+   * Takes a snapshot before the first render: every view of it is held,
+   * loaded and ready. Throws `TypeError`, writing nothing, when the `format`
+   * is unknown, `meta.subject` is not this runtime's, the runtime was already
+   * hydrated or holds views. Does nothing after `dispose()`. A snapshot of
+   * another subject never enters this runtime.
+   */
+  hydrate(snapshot: DataSnapshot): void
+  /**
+   * Ends the hydration, once: reconciles with the server (the catalog
+   * version, one re-read of every visible view) in one microtask. A repeat
+   * does nothing, so StrictMode is safe.
+   */
+  endHydration(): void
+}
+
+/**
+ * What the server hands to the client runtime (P4-B spec §6.6): plain JSON,
+ * the same after `JSON.parse(JSON.stringify(...))`.
+ */
+export interface DataSnapshot {
+  readonly meta: SnapshotMeta
+  readonly core: CoreSnapshot
+}
+
+/** Who and under which catalog a {@link DataSnapshot} was taken. */
+export interface SnapshotMeta {
+  /** The session `sub` of the runtime that took it. */
+  readonly subject: string
+  /** The `snapshotHash` of that runtime's client catalog. */
+  readonly catalogHash: string
 }
 
 export interface DataRuntimeOptions {
@@ -295,9 +338,10 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     for (const object of objects) core.staleClient(object)
   }
 
-  // Відмова частини `read` — `stale-client` (несумісна колонка): позначки
-  // вона не ставить, але host дізнається про об'єкт і сумісність
-  // переоцінюється (§10). Викликається лише після перевірки закриття.
+  // Відмова частини `read` — `stale-client`, хоч би яка причина (колонка поза
+  // переліком, невідомий об'єкт, інший kernelHash): сервер причини не несе, тож
+  // ядро ставить липку позначку об'єкта (§10). Викликається лише після
+  // перевірки закриття.
   const staleParts = (request: RuntimeRequest, value: unknown) => {
     if (request.type !== "read" || typeof value !== "object" || value === null)
       return
@@ -352,12 +396,45 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     adapters.set(name, watchSessionChanged(factory({ subject, send })))
   }
 
+  // `catalogHash` знімка, ще не поданий у правило `serverHash`: він іде разом
+  // зі звіркою, в одній мікрозадачі з її `version`, а не при гідратації.
+  let hydratedHash: string | undefined
+
   const runtime: DataRuntime = {
     subject,
     get disposed() {
       return closedWith !== undefined
     },
     dispose: () => close(DISPOSED, "disposed"),
+    dehydrate: () => ({
+      meta: { subject, catalogHash: catalog.snapshotHash },
+      core: core.dehydrate(),
+    }),
+    hydrate(snapshot) {
+      if (closedWith !== undefined) return
+      const meta = (snapshot as { meta?: unknown } | null)?.meta as
+        { subject?: unknown; catalogHash?: unknown } | undefined
+      if (
+        typeof meta?.subject !== "string" ||
+        typeof meta.catalogHash !== "string"
+      )
+        throw new TypeError("snapshot: meta is malformed")
+      // Знімок іншого суб'єкта не входить у цей рантайм: ні рядка, ні
+      // підмножини; сервер на звірці однаково відповів би `session-changed`.
+      if (meta.subject !== subject)
+        throw new TypeError("snapshot: the subject differs from the runtime's")
+      core.hydrate(snapshot.core)
+      hydratedHash = meta.catalogHash
+    },
+    endHydration() {
+      if (closedWith !== undefined || hydratedHash === undefined) return
+      const hash = hydratedHash
+      hydratedHash = undefined
+      // Інший хеш — `requestVersion`, що зіллється з тим, який кличе
+      // `endHydration` ядра (відповідь `version` лише оновлює хеш).
+      core.serverHash(hash, false)
+      core.endHydration()
+    },
   }
   bindRuntimeHandle(runtime, { send, core, writer: createWriter(core) })
   return runtime

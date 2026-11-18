@@ -911,7 +911,7 @@ describe("version check and the stale mark (§10)", () => {
     expect(t.pending).toHaveLength(0)
   })
 
-  it("the version answer only updates the hash and the marks: no request, rows untouched", async () => {
+  it("the version answer only updates the hash: no request, rows untouched", async () => {
     const fake = createFakeSource({ objects: OBJECTS })
     seed(fake, 1, 1)
     const { core, calls, replies } = runtimeOver(fake)
@@ -920,14 +920,14 @@ describe("version check and the stale mark (§10)", () => {
     await settle()
     const rows = handle.getSnapshot().rows
     const before = calls.length
-    replies.push(versionAnswer("server-2", [OBJECTS[0]!]))
+    replies.push(versionAnswer("server-2"))
     core.requestVersion()
     await settle()
     expect(calls).toHaveLength(before + 1)
     expect(handle.getSnapshot().rows).toBe(rows)
   })
 
-  it("isStale is set and cleared with the version answers, onStaleClient once per set", async () => {
+  it("isStale is sticky: a version answer without a divergence never clears it, onStaleClient once", async () => {
     const fake = createFakeSource({ objects: OBJECTS })
     seed(fake, 1, 1)
     const onStaleClient = vi.fn<(object: string) => void>()
@@ -950,13 +950,12 @@ describe("version check and the stale mark (§10)", () => {
     await ask(versionAnswer(SERVER_HASH, [OBJECTS[0]!]))
     expect(notified.mock.calls.length).toBe(seen)
     expect(onStaleClient).toHaveBeenCalledTimes(1)
+    // Розкатка по черзі: відповідь без розбіжності позначки не знімає (§10).
     await ask(versionAnswer(SERVER_HASH))
-    expect(handle.getSnapshot().isStale).toBeUndefined()
-    expect(onStaleClient).toHaveBeenCalledTimes(1)
-    // Розкатка по черзі: позначка ставиться знову — і колбек знову.
+    expect(handle.getSnapshot().isStale).toBe(true)
     await ask(versionAnswer(SERVER_HASH, [OBJECTS[0]!]))
     expect(handle.getSnapshot().isStale).toBe(true)
-    expect(onStaleClient).toHaveBeenCalledTimes(2)
+    expect(onStaleClient).toHaveBeenCalledTimes(1)
   })
 
   it("an object the server does not know is stale", async () => {
@@ -1037,7 +1036,7 @@ describe("version check and the stale mark (§10)", () => {
     expect(onStaleClient).not.toHaveBeenCalled()
   })
 
-  it("a stale-client of a read part calls onStaleClient(object) and asks for the version, without a mark", async () => {
+  it("a stale-client of a read part marks the object, calls onStaleClient(object) once and asks for the version", async () => {
     const onStaleClient = vi.fn<(object: string) => void>()
     const t = controlled({ onStaleClient })
     const read = t.send(card())
@@ -1056,7 +1055,7 @@ describe("version check and the stale mark (§10)", () => {
     await settle()
     expect(onStaleClient.mock.calls).toEqual([[TASK]])
     expect(versionCalls(t.calls)).toBe(1)
-    // Відповідь `version` без розбіжності: позначки немає, колбек не повторюється.
+    // Відповідь `version` без розбіжності: позначка липка, колбек не повторюється.
     t.respond(versionAnswer(SERVER_HASH))
     await settle()
     expect(onStaleClient).toHaveBeenCalledTimes(1)

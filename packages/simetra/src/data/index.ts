@@ -6,10 +6,13 @@ export {
   type DataLogEntry,
   type DataRuntime,
   type DataRuntimeOptions,
+  type DataSnapshot,
+  type SnapshotMeta,
 } from "./runtime/runtime"
 export { createRuntimeHolder, type RuntimeHolder } from "./runtime/holder"
 export type { UpdateOptions } from "./store/overlay"
 export type {
+  CoreSnapshot,
   Mutation,
   MutationResult,
   MutationState,

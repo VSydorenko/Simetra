@@ -185,6 +185,8 @@ type Step =
   | { t: "removeMut"; k: number; cancel: boolean }
   | { t: "closeInFlight" }
   | { t: "rehydrate" }
+  | { t: "stale"; org: boolean }
+  | { t: "version" }
 
 const view = fc.nat(SPECS.length - 1)
 const k = fc.nat(KEYS.length - 1)
@@ -405,6 +407,10 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
   // Перегідратація (план B3-6a, задача 1): знімок ядра, нове ядро над тим
   // самим сервером, `hydrate`, `endHydration`, звірка.
   { weight: 6, arbitrary: fc.record({ t: one("rehydrate") }) },
+  // Несумісний об'єкт (План B3-6a, задача 2): липка позначка `stale-client`
+  // й відповіді `version` без розбіжності, що її не знімають.
+  { weight: 1, arbitrary: fc.record({ t: one("stale"), org: fc.boolean() }) },
+  { weight: 2, arbitrary: fc.record({ t: one("version") }) },
   {
     weight: 1,
     arbitrary: fc.record({
@@ -627,6 +633,10 @@ async function runModel(
       ? id(object, k)
       : `${id(object, k)}\u0000${String(e.versionEpoch)}`
   }
+  // Об'єкти з липкою позначкою `stale-client` (§10) і довжина журналу
+  // запитів у мить позначки: відтоді запитів об'єкта не буде, а його рядки
+  // нічого не показують до кінця прогону.
+  const staled = new Map<ObjectName, number>()
   let closed:
     { frames: number; sent: number; snapshot: ViewSnapshot } | undefined
 
@@ -730,6 +740,11 @@ async function runModel(
   ) => {
     const at = `${where} ${object}/${row.key}`
     if (row.state === "removed") return
+    if (staled.has(object)) {
+      if (Object.keys(row.values).length > 0)
+        fail(label, `${at}: values of a stale-client object`)
+      return
+    }
     const max = maxVersion.get(versionKey(object, row.key)) ?? 0
     const fields = Object.keys(row.values)
     // Старі значення ніколи не показано мовчки — два інваріанти (рішення
@@ -791,6 +806,18 @@ async function runModel(
   const checkSnapshot = (label: string, v: number, snap: ViewSnapshot) => {
     const spec = SPECS[v]!
     const where = `view ${v}`
+    // `loading` без даних — спільний знімок без рядків: ознаку він не несе,
+    // а перше ж відмовлене читання дає `error` з `isStale`.
+    if (
+      staled.has(spec.object) &&
+      snap.status !== "purged" &&
+      snap.status !== "loading"
+    ) {
+      if (snap.isStale !== true)
+        fail(label, `${where}: a stale-client object, the view is not isStale`)
+      if ((snap.section?.lines.length ?? 0) > 0)
+        fail(label, `${where}: lines of a stale-client object`)
+    }
     for (const row of snap.rows) {
       checkRow(label, spec.object, row, where)
       if (row.state === "removed" || row.refs === undefined) continue
@@ -880,6 +907,13 @@ async function runModel(
   const check = (label: string, stepStart: number) => {
     if (errors.length > 0)
       fail(label, `unexpected rejection ${String(errors[0])}`)
+    for (const [object, mark] of staled) {
+      for (const sent of fake.log.slice(mark)) {
+        const target = sent.query?.object
+        if (target !== undefined && `${target.kind}.${target.name}` === object)
+          fail(label, `${object}: a read went out after the stale-client mark`)
+      }
+    }
     if (closed !== undefined) {
       // Після `close` — жодного сповіщення, запиту й рядка; кожен хендл
       // (і новий) — та сама посилка `purged`.
@@ -1070,6 +1104,8 @@ async function runModel(
     // Сесія після межі відкинутих відповідей не читає (Р12); власник
     // `removed` рядків не показує, і читання ТЧ їх не поверне.
     if (inspect.versionEpochs().unavailable) return
+    // Несумісний об'єкт не перечитується взагалі (§10).
+    if (staled.has(TASK)) return
     const header = objectOf(TASK).rows.get(spec.owner)
     if (header?.removed !== undefined) return
     // Шапку сховано горизонтом, а не `hide` (`hiddenAt` немає): позначку
@@ -1967,6 +2003,7 @@ async function runModel(
         // `preload`, `commit` зі слухачем).
         heldInFlight = false
         const object = s.org ? ORG : TASK
+        if (staled.has(object)) break
         const target = s.org ? ORG_KEYS[s.k % 2]! : KEYS[s.k]!
         commit((w) => w.hide(object, [target]))
         if (closed !== undefined) break
@@ -1974,7 +2011,9 @@ async function runModel(
         break
       }
       case "hideSection": {
-        if (closed !== undefined) break
+        // Несумісний об'єкт не перечитується: `hide` над ним вже нічого не
+        // змінює, а очікування перечитування було б хибним.
+        if (closed !== undefined || staled.has(TASK)) break
         const section = SPECS[4]!
         heldInFlight = false
         userViews = new Set([4])
@@ -2063,6 +2102,9 @@ async function runModel(
         if (fake.epoch !== null) primaryEpoch = fake.epoch
         break
       case "update": {
+        // Запис у несумісний об'єкт відмовляється без транспорту (§10):
+        // модель `run` тут нічого не чекає, а відмову перевіряє `ssr.test.ts`.
+        if (staled.has(TASK)) break
         const k = KEYS[s.k]!
         const stored = objectOf(TASK).rows.get(k)
         const server = fake.row(TASK, k)
@@ -2155,7 +2197,7 @@ async function runModel(
         const shown = rowsOf(k)[0]?.mutation
         if (entry === undefined || shown?.id !== entry.attempt.id) break
         if (s.act === "retry") {
-          if (shown.retry === undefined) break
+          if (shown.retry === undefined || staled.has(TASK)) break
           const attempt = begin(k)
           const next = shown.retry()
           if (next === undefined) {
@@ -2173,7 +2215,20 @@ async function runModel(
         dropEntry(entry)
         break
       }
+      case "stale": {
+        if (closed !== undefined) break
+        const object = s.org ? ORG : TASK
+        if (!staled.has(object)) staled.set(object, fake.log.length)
+        core.staleClient(object)
+        break
+      }
+      case "version":
+        if (closed === undefined) core.requestVersion()
+        break
       case "rehydrate":
+        // Знімок несумісного об'єкта порожній за задумом: гідрація й
+        // позначка разом перевіряються в `runtime/__tests__/ssr.test.ts`.
+        if (staled.size > 0) break
         // Журнал мутацій у знімок не йде: `dehydrate` після запису — помилка
         // host-а (`TypeError`), тож крок виконується лише з порожнім журналом.
         if (closed !== undefined) break
@@ -2311,6 +2366,15 @@ async function runModel(
       const snap = handles[v]!.getSnapshot()
       const where = `converge view ${v}`
       if (snap.status === "purged") return
+      // Вигляд несумісного об'єкта закритий, а вигляд, що вмикає його ціллю
+      // `include`, — читання цілі відмовлено, тож склад не збігається з
+      // сервером (закривається, а не показує).
+      const include = (spec as { include?: readonly string[] }).include
+      if (
+        staled.has(spec.object) ||
+        (include !== undefined && include.length > 0 && staled.has(ORG))
+      )
+        return
       // Після межі відкинутих відповідей поспіль сесія не читає: вихід
       // — лише нова сесія.
       if (epochs.unavailable) {
@@ -2414,6 +2478,7 @@ async function runModel(
 
   function sameAsServer(where: string, object: ObjectName, row: RowView) {
     const at = `${where} ${object}/${row.key}`
+    if (staled.has(object)) return
     const server = fake.row(object, row.key)
     if (row.state === "removed") {
       if (server !== undefined)
@@ -2509,6 +2574,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "answer-after-cancel",
   "hidden-values-in-snapshot",
   "hydrate-without-revalidate",
+  "stale-mark-lifts",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -2537,6 +2603,8 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // Перегідратація (план B3-6a, задача 1): знімок і звірка.
   "hidden-values-in-snapshot": /snapshot: a hidden slot carries values/,
   "hydrate-without-revalidate": /after hydrate: view \d+ .*(server|hidden)/,
+  // Липка позначка (задача 2): збіг `kernelHash` її не знімає.
+  "stale-mark-lifts": /not isStale/,
 }
 
 describe("core model self-check", () => {

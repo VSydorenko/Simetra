@@ -12,7 +12,7 @@ import { createSectionStore } from "./section-store"
 import { createSession, type Scope } from "./session"
 import { applySnapshot, dehydrate, parseSnapshot, type SsrContext } from "./ssr"
 import { createRowViews, purgedSnapshot } from "./snapshot"
-import { readKeys, tracked, type CoreSource } from "./source"
+import { readKeys, tracked, type CoreReadItem, type CoreSource } from "./source"
 import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
 import { createRegistry, type SubsetRegistry } from "./subsets"
@@ -133,9 +133,12 @@ export interface CoreSession {
    */
   serverHash(hash: string, versionPart: boolean): void
   /**
-   * Internal, for the runtime: a response refused a part `stale-client` (an
-   * incompatible column). Calls `onStaleClient(object)` and asks for the
-   * version; the object is not marked by it (§10).
+   * Internal, for the runtime and the write journal: the one entry of the
+   * sticky `stale-client` mark (P4-B spec §10), whatever the cause of the
+   * refusal. On the transition only: hides every row of the object and of its
+   * owners' sections (`Writer.hide`), makes its views `isStale`, stops its
+   * reads, calls `onStaleClient(object)` once and asks for the version. A
+   * mark already set, or a closed core, does nothing.
    */
   staleClient(object: ObjectName): void
   /**
@@ -283,7 +286,7 @@ export function createCore(options: {
   onStaleClient?: (object: ObjectName) => void
 }): CoreSession {
   const limits = limitsOf(options.limits)
-  const { source, index } = options
+  const { index } = options
   // Збій журналу не змінює результату.
   const log = (entry: CoreLogEntry) => {
     try {
@@ -308,10 +311,47 @@ export function createCore(options: {
     overlay.mutationOf(object, key, e)
   )
   const dirtySections = new Map<ObjectName, Set<Key>>()
-  // Позначка «застарілий» об'єкта (§10): лише за kernelHash чи невідомим
-  // об'єктом; `dirtyObjects` — об'єкти, чия позначка змінилась у цьому commit.
+  // Липка позначка «застарілий» об'єкта (§10): її ставить кожна відмова
+  // `stale-client` і відповідь `version`, знімає лише перезавантаження;
+  // `dirtyObjects` — об'єкти, чия позначка змінилась у цьому commit.
   const staleObjects = new Set<ObjectName>()
   const dirtyObjects = new Set<ObjectName>()
+  // Читання несумісного об'єкта (§10) ядро не шле й не приймає: клієнт не
+  // може перевірити його права, тож і відповідь, що вже летить, нічого не
+  // пише. Відмова — той самий `stale-client`, що дав би сервер.
+  const source: CoreSource = {
+    close: () => options.source.close(),
+    refuse: (object) => options.source.refuse?.(object),
+    run: (operation) => options.source.run(operation),
+    version: () => options.source.version(),
+    async read(parts) {
+      const isLive = (part: (typeof parts)[number]) => {
+        const { kind, name } = part.object
+        return !staleObjects.has(`${kind}.${name}`)
+      }
+      const refused = (part: (typeof parts)[number]): CoreReadItem => {
+        return {
+          ok: false,
+          error: { code: "command.stale-client", object: part.object },
+        }
+      }
+      const sent = parts.map(isLive)
+      const forward = parts.filter((_, slot) => sent[slot])
+      const answered =
+        forward.length === 0
+          ? { items: [] as CoreReadItem[] }
+          : await options.source.read(forward)
+      let next = 0
+      const items = parts.map((part, slot): CoreReadItem => {
+        if (!sent[slot]) return refused(part)
+        const item = answered.items[next++]!
+        // Об'єкт став несумісним, поки відповідь летіла: вона вже не діє.
+        return isLive(part) ? item : refused(part)
+      })
+      return { items }
+    },
+  }
+
   let lastHash = options.snapshotHash
   let closed: ViewSnapshot | undefined
 
@@ -355,6 +395,9 @@ export function createCore(options: {
   const written: Array<readonly [ObjectState, Key]> = []
   const ops: StoreOps = {
     put(scope, o, row, readEpoch, lazyRead) {
+      // Читання, що вже закінчилось і чекає свого `commit` (вікно після
+      // `include`), не вносить значень несумісного об'єкта (§10).
+      if (staleObjects.has(o.name)) return "rejected"
       const result = o.rows.put(scope, row, readEpoch, lazyRead)
       if (result !== "rejected") {
         rowViews.touch(o.name, row.key)
@@ -403,6 +446,7 @@ export function createCore(options: {
       readEpoch,
       ownerScope
     ) {
+      if (staleObjects.has(o.name)) return
       const result = o.sections.put(
         scope,
         owner,
@@ -566,6 +610,8 @@ export function createCore(options: {
       const hiddenNow = [...hiddenKeys]
       hiddenKeys.clear()
       for (const [name, keys] of hiddenNow) {
+        // Несумісний об'єкт не перечитується: його значення не повертаються.
+        if (staleObjects.has(name)) continue
         revalidateHolders(writerContext, name, keys).catch((error: unknown) =>
           log({ kind: "listener-failed", error })
         )
@@ -664,7 +710,7 @@ export function createCore(options: {
 
   // ------------------------------------------------------------ версія
 
-  const staleClient = (object: ObjectName) => {
+  const notifyStaleClient = (object: ObjectName) => {
     try {
       options.onStaleClient?.(object)
     } catch (error) {
@@ -673,28 +719,52 @@ export function createCore(options: {
     }
   }
 
+  // Липка позначка «застарілий» (§10): єдиний вхід — і `version`, і відмова
+  // `stale-client` частини читання чи запису. Позначка не знімається до
+  // перезавантаження: клієнт не може перевірити права несумісного об'єкта,
+  // тож закриває його, а не показує. Значення рядків і ТЧ їхніх власників
+  // ховає наявний `Writer.hide`; повернути їх може лише читання, а читань
+  // об'єкта більше немає (`source` вище).
+  const markStale = (scope: Scope, o: ObjectState): boolean => {
+    if (staleObjects.has(o.name)) return false
+    staleObjects.add(o.name)
+    dirtyObjects.add(o.name)
+    // Частини, що вже стоять у черзі обмежувача, теж не підуть.
+    source.refuse?.(o.name)
+    // Власник із рядками ТЧ може не мати шапки в сховищі (`disown`).
+    createWriter(writerContext, scope).hide(o.name, [
+      ...new Set([...o.rows.keys(), ...o.sections.owners()]),
+    ])
+    return true
+  }
+
   // Позначки за відповіддю `version`: об'єкт, якого сервер не знає, чи з
-  // іншим kernelHash, — застарілий; збіг хеша позначку знімає (§10).
+  // іншим kernelHash, — застарілий; збіг хеша позначку НЕ знімає.
   function applyVersion(objectsOfServer: Readonly<Record<string, string>>) {
     const token = session.token()
     const turned: ObjectName[] = []
     session.commit(
-      () => {
-        for (const o of objects.values()) {
-          const stale = objectsOfServer[o.entry.id] !== o.entry.kernelHash
-          if (stale === staleObjects.has(o.name)) continue
-          if (stale) {
-            staleObjects.add(o.name)
-            turned.push(o.name)
-          } else staleObjects.delete(o.name)
-          dirtyObjects.add(o.name)
+      (scope) => {
+        try {
+          for (const o of objects.values()) {
+            const stale = objectsOfServer[o.entry.id] !== o.entry.kernelHash
+            if (stale && markStale(scope, o)) turned.push(o.name)
+            else if (
+              !stale &&
+              defects.has("stale-mark-lifts") &&
+              staleObjects.delete(o.name)
+            )
+              dirtyObjects.add(o.name)
+          }
+        } finally {
+          ops.sweep(scope)
         }
       },
       token,
       "version"
     )
     // Колбек — після commit: host не бачить напівзастосованого стану.
-    for (const object of turned) staleClient(object)
+    for (const object of turned) notifyStaleClient(object)
   }
 
   // Один запит `version` за раз і не більше одного хвоста: перед відправкою
@@ -760,7 +830,23 @@ export function createCore(options: {
       if (changed && !versionPart) core.requestVersion()
     },
     staleClient(object) {
-      staleClient(object)
+      const o = objects.get(object)
+      if (o === undefined || !session.token().valid) return
+      const token = session.token()
+      let turned = false
+      session.commit(
+        (scope) => {
+          try {
+            turned = markStale(scope, o)
+          } finally {
+            ops.sweep(scope)
+          }
+        },
+        token,
+        "stale-client"
+      )
+      if (!turned) return
+      notifyStaleClient(object)
       core.requestVersion()
     },
     dehydrate() {
