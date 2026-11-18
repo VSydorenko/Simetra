@@ -168,8 +168,8 @@ describe("knownFormAllowed", () => {
     ["a section page", false, { tabularSection: "s", limit: 1 }],
     ["the lines of one owner", false, { tabularSection: "s", owner: ID }],
     ["a card with sections", false, { id: ID, tabularSections: true }],
-    ["a card with include", false, { id: ID, include: ["org"] }],
-    ["a list with include", false, { limit: 1, include: ["org"] }],
+    ["a card with include", true, { id: ID, include: ["org"] }],
+    ["a list with include", true, { limit: 1, include: ["org"] }],
   ])("%s -> %s", (_, allowed, query) => {
     expect(knownFormAllowed(query)).toBe(allowed)
   })

@@ -3,7 +3,12 @@ import {
   type CatalogEntry,
   type CatalogIndex,
 } from "simetra/model"
-import { readKeys, type CoreSource } from "./source"
+import {
+  readKeys,
+  serverRow,
+  type CoreSource,
+  type ReadKeysOptions,
+} from "./source"
 import type { Key, ObjectName, RowView, ServerRow, Values } from "./types"
 
 /*
@@ -64,21 +69,107 @@ export function includeKeys(
   return new Map([...wanted].map(([object, keys]) => [object, [...keys]]))
 }
 
-/** The target rows read for a view, by target object. */
+/**
+ * The target rows read for a view, by target object. `keys` — the targets the
+ * read answered for (a requested key without a row is `removed`); `rows` are
+ * written as they come, also those outside `keys` (a held target the view no
+ * longer refers to is written and let go).
+ */
 export type Included = Map<
   ObjectName,
   { readonly keys: readonly Key[]; readonly rows: readonly ServerRow[] }
 >
 
 /**
+ * The targets a read with `include` answered (§6.7): the keys the rows of the
+ * page refer to, for every target the answer carries. A target the answer
+ * lacks (no `included` at all — an adapter without the capability — or a
+ * target the core stripped as incompatible) is not answered: no keys.
+ */
+export function includedFrom(
+  steps: readonly IncludeStep[],
+  rows: Iterable<Values>,
+  raw: Record<string, Record<string, unknown>[]> | undefined,
+  epoch: string | null
+): Included {
+  const wanted = includeKeys(steps, rows)
+  const entries = new Map(steps.map((s) => [s.target, s.entry]))
+  return new Map(
+    [...wanted].map(([object, keys]) => {
+      const answered = raw?.[object]
+      return [
+        object,
+        answered === undefined
+          ? { keys: [], rows: [] }
+          : {
+              keys,
+              rows: answered.map((values) =>
+                serverRow(entries.get(object)!, values, epoch)
+              ),
+            },
+      ]
+    })
+  )
+}
+
+/** Both reads of a target together: keys and rows united, the first row of a key stays. */
+export function mergeIncluded(a: Included, b: Included): Included {
+  const out: Included = new Map()
+  for (const object of new Set([...a.keys(), ...b.keys()])) {
+    const parts = [a.get(object), b.get(object)]
+    const seen = new Set<Key>()
+    out.set(object, {
+      keys: [...new Set(parts.flatMap((part) => part?.keys ?? []))],
+      rows: parts
+        .flatMap((part) => part?.rows ?? [])
+        .filter((row) => !seen.has(row.key) && seen.add(row.key)),
+    })
+  }
+  return out
+}
+
+/**
+ * Completes the targets a read already answered (`covered`) to `wanted`: only
+ * the keys it did not answer for are read, by keys, in the next request; the
+ * result answers for `wanted` keys it covers (the rows stay as they came).
+ */
+export async function completeIncluded(
+  source: CoreSource,
+  steps: readonly IncludeStep[],
+  wanted: ReadonlyMap<ObjectName, readonly Key[]>,
+  covered: Included,
+  keysPerRequest: number
+): Promise<Included> {
+  const rest = new Map(
+    [...wanted].map(([object, keys]) => {
+      const done = new Set(covered.get(object)?.keys)
+      return [object, keys.filter((key) => !done.has(key))] as const
+    })
+  )
+  const merged = mergeIncluded(
+    covered,
+    await readIncluded(source, steps, rest, keysPerRequest)
+  )
+  return new Map(
+    [...merged].map(([object, { keys, rows }]) => {
+      const want = new Set(wanted.get(object))
+      return [object, { keys: keys.filter((key) => want.has(key)), rows }]
+    })
+  )
+}
+
+/**
  * Reads the target keys of every step through `readKeys` — every object in
- * parallel, the source limiter bounds the reads in flight.
+ * parallel, the source limiter bounds the reads in flight. `known` — the
+ * `known` of a read of the keys of a target (§6.7, held targets of a system
+ * re-read).
  */
 export async function readIncluded(
   source: CoreSource,
   steps: readonly IncludeStep[],
   wanted: ReadonlyMap<ObjectName, readonly Key[]>,
-  keysPerRequest: number
+  keysPerRequest: number,
+  known?: (object: ObjectName) => ReadKeysOptions["known"]
 ): Promise<Included> {
   const entries = new Map(steps.map((s) => [s.target, s.entry]))
   const results = await Promise.all(
@@ -93,6 +184,7 @@ export async function readIncluded(
         try {
           const rows = await readKeys(source, entries.get(object)!, keys, {
             keysPerRequest,
+            ...(known === undefined ? {} : { known: known(object) }),
           })
           return [object, { keys, rows }] as const
         } catch (error) {

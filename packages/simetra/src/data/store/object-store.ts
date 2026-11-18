@@ -1,4 +1,4 @@
-import type { CatalogEntry } from "simetra/model"
+import { READ_LIMIT_MAX, type CatalogEntry } from "simetra/model"
 import { NO_DEFECTS, type Defects } from "./defects"
 import {
   differentEpochs,
@@ -8,7 +8,14 @@ import {
   pairId,
 } from "./epoch"
 import type { Scope, Session } from "./session"
-import type { CoreLogEntry, Key, ObjectName, ServerRow, Values } from "./types"
+import type {
+  CoreLogEntry,
+  Key,
+  KnownSnapshot,
+  ObjectName,
+  ServerRow,
+  Values,
+} from "./types"
 
 /**
  * The version rule (P4-B spec §6.2 rule 1, Рд24) — one function for every
@@ -143,6 +150,34 @@ export interface RestoredRow {
 /** The header rows of one object (P4-B spec §6.1, §6.2). */
 export interface ObjectStore {
   put(
+    scope: Scope,
+    row: ServerRow,
+    readEpoch: number,
+    lazyRead: boolean
+  ): PutResult
+  /**
+   * The `known` of a read of `keys` (P4-B spec §6.7): the keys the store may
+   * answer with a marker. A key goes in only when its row shows values (not
+   * `removed`, not hidden), has no unconfirmed version mark, was read in the
+   * current version epoch, is complete for `form` (a list: every column of
+   * the list read; a card: also every lazy field read with the row version)
+   * and is owned by the reading view (`owned`). `undefined` — no key
+   * qualifies, or the session has no version epoch yet. At most
+   * `READ_LIMIT_MAX` keys.
+   */
+  knownFor(
+    keys: readonly Key[],
+    options: { owned: ReadonlySet<Key>; form: "list" | "card" }
+  ): KnownSnapshot | undefined
+  /**
+   * Applies a marked row (`row.marker`: the held row the request was built
+   * from) as a row of that version, by the path of `put` (P4-B spec §6.7).
+   * It writes only while the store still holds that version with the same
+   * values and no mark newer than the start of the read hides them;
+   * otherwise it writes nothing, returns `"rejected"` and queues the key for
+   * a re-read without `known`. `put` routes a marked row here.
+   */
+  applyMarker(
     scope: Scope,
     row: ServerRow,
     readEpoch: number,
@@ -413,8 +448,116 @@ export function createObjectStore(options: {
     return "stale-inserted"
   }
 
-  return {
+  const listColumns = [
+    entry.keyName,
+    entry.versionName,
+    ...entry.attributes.filter((a) => a.load !== "lazy").map((a) => a.name),
+  ]
+
+  const copyNames = new Set(
+    entry.attributes.filter((a) => a.copy === true).map((a) => a.name)
+  )
+
+  // Копія повна для форми читання: усі колонки переліку, а для картки ще
+  // кожне ліниве поле, прочитане з версією рядка.
+  function complete(e: RowEntry, form: "list" | "card"): boolean {
+    const values = e.row?.values
+    if (values === undefined) return false
+    if (!listColumns.every((name) => Object.hasOwn(values, name))) return false
+    return (
+      form === "list" ||
+      lazyFields.every((f) => Object.hasOwn(values, f) && !lazyFieldStale(e, f))
+    )
+  }
+
+  // Сховище досі тримає рядок, з якого збудовано `known`: та сама версія й
+  // епоха, ті самі значення колонок.
+  function holdsMarked(e: RowEntry, row: ServerRow, held: ServerRow): boolean {
+    if (e.removed !== undefined || e.row === undefined) return false
+    if (e.version !== held.version || e.versionEpoch !== row.versionEpoch)
+      return false
+    const values = e.row.values
+    // Копії носія змінюються без підвищення версії й їх несе сам маркер: два
+    // вигляди одного ключа читають за один такт, і другий маркер бачив би вже
+    // записану першим копію.
+    return Object.keys(held.values).every(
+      (name) =>
+        copyNames.has(name) ||
+        (Object.hasOwn(values, name) &&
+          Object.is(values[name], held.values[name]))
+    )
+  }
+
+  function markerPut(
+    scope: Scope,
+    row: ServerRow,
+    readEpoch: number,
+    lazyRead: boolean
+  ): PutResult {
+    scope.assert()
+    const held = row.marker!
+    const e = rows.get(row.key)
+    // Без запису значень немає: прибраний `purge` ключ відновлює лише
+    // читання за ключем, яке почалось після нього.
+    if (e === undefined) return "rejected"
+    const mark = e.stale.hidden
+    const newer = mark !== undefined && mark.epoch > readEpoch
+    const lifts = newer && defects.has("marker-lifts-newer-mark")
+    if (!holdsMarked(e, row, held) || (newer && !lifts)) {
+      tail.add(row.key)
+      return "rejected"
+    }
+    // Дефект самотесту: маркер знімає позначку, новішу за старт читання.
+    if (lifts) delete e.stale.hidden
+    return store.put(
+      scope,
+      {
+        key: row.key,
+        version: row.version,
+        versionEpoch: effectiveEpoch(row.versionEpoch, e.versionEpoch),
+        values: row.values,
+      },
+      readEpoch,
+      lazyRead
+    )
+  }
+
+  const store: ObjectStore = {
+    knownFor(keys, options) {
+      const epoch = versions.current()
+      if (epoch === null) return undefined
+      const known = { epoch, keys: [] as string[], versions: [] as string[] }
+      const held: ServerRow[] = []
+      const seen = new Set<string>()
+      for (const key of keys) {
+        if (held.length >= READ_LIMIT_MAX) break
+        const e = rows.get(key)
+        if (
+          !options.owned.has(key) ||
+          e === undefined ||
+          e.row === undefined ||
+          e.removed !== undefined ||
+          e.stale.hidden !== undefined ||
+          e.stale.minVersion !== undefined ||
+          e.stale.epoch !== undefined ||
+          e.versionEpoch !== epoch ||
+          seen.has(key.toLowerCase()) ||
+          !complete(e, options.form)
+        )
+          continue
+        seen.add(key.toLowerCase())
+        known.keys.push(key)
+        known.versions.push(String(e.version))
+        held.push(e.row)
+      }
+      return held.length === 0 ? undefined : { known, held }
+    },
+
+    applyMarker: markerPut,
+
     put(scope, row, readEpoch, lazyRead) {
+      if (row.marker !== undefined)
+        return markerPut(scope, row, readEpoch, lazyRead)
       scope.assert()
       const e = rows.get(row.key)
       const hasScope =
@@ -793,4 +936,5 @@ export function createObjectStore(options: {
       return keys
     },
   }
+  return store
 }

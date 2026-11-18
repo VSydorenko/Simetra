@@ -15,6 +15,7 @@ import {
   readQuerySchema,
   type BaseCastType,
   type CommandError,
+  type KnownMarker,
   type KnownVersions,
   type OrderBy,
   type ReadPartValue,
@@ -171,16 +172,22 @@ const KNOWN_POSITION = "simetra_known.simetra_known_position - 1"
 
 /**
  * Маркер незмінного рядка (спека П4-B §4.1): позиція в `known`, а в об'єкта з
- * копіями — `{ $known, <колонки copy> }` з тими самими приведеннями, що в
- * рядку: копія змінюється без версії, тож клієнт не може її тримати. Ключа в
+ * копіями чи з `include` — `{ $known, <колонки copy>, <колонки посилань
+ * include> }` з тими самими приведеннями, що в рядку: копія змінюється без
+ * версії, тож клієнт не може її тримати. Ключа в
  * частковому маркері немає — цим його й відрізняє декодер. `undefined` —
  * колонка копії зветься `$known` і затерла б позицію: тоді читання повне.
  */
 function markerProjection(
   object: RuntimeObject,
-  card: boolean
+  card: boolean,
+  includes: readonly string[]
 ): string | undefined {
-  const copies = object.attributes.filter((a) => a.copy === true)
+  // З `include` у маркері йдуть і колонки посилань: id цілей оператор
+  // `include` бере з маркерних рядків, а клієнт іншого джерела не має.
+  const copies = object.attributes.filter(
+    (a) => a.copy === true || includes.includes(a.name)
+  )
   if (
     copies.some(
       (a) => a.column === KNOWN_MARKER || a.pair?.typeColumn === KNOWN_MARKER
@@ -189,7 +196,7 @@ function markerProjection(
     return undefined
   }
   const pairs = attributePairs(copies, "t", card)
-  return pairs.length === 0
+  return pairs.length === 0 && includes.length === 0
     ? `(${KNOWN_POSITION})::text`
     : `${jsonbBuildObject([`${literal(KNOWN_MARKER)}, ${KNOWN_POSITION}`, ...pairs])}::text`
 }
@@ -418,11 +425,18 @@ function buildReadPlan(
   query: ReadQuery,
   known: KnownVersions | undefined
 ): ReadPlan | { error: CommandError } {
-  // Форму з `known` уже перевірив `prepareRead`: ТЧ його не мають.
+  // Форму з `known` уже перевірив `prepareRead`: ТЧ його не мають. Імена
+  // `include` для маркера беруться без перевірки: хибне ім'я відхилить
+  // `includeSteps` нижче, а порядок відмов лишається за планом рядків.
   const plan =
     "tabularSection" in query
       ? buildSectionPlan(object, query)
-      : buildObjectPlan(object, query, known)
+      : buildObjectPlan(
+          object,
+          query,
+          known,
+          "include" in query ? (query.include ?? []) : []
+        )
   if ("error" in plan || !("include" in query) || query.include === undefined) {
     return plan
   }
@@ -475,11 +489,12 @@ function rowsPlan(
   tail: string,
   params: (string | null)[],
   known: KnownVersions | undefined,
-  card: boolean
+  card: boolean,
+  includes: readonly string[]
 ): ReadPlan {
   const from = `${tableOf(object)} t`
   const marker =
-    known === undefined ? undefined : markerProjection(object, card)
+    known === undefined ? undefined : markerProjection(object, card, includes)
   if (known === undefined || marker === undefined) {
     return {
       statement: { text: rowsText(row, from, tail), params },
@@ -504,7 +519,8 @@ function rowsPlan(
 function buildObjectPlan(
   object: RuntimeObject,
   query: ObjectQuery,
-  known: KnownVersions | undefined
+  known: KnownVersions | undefined,
+  includes: readonly string[]
 ): ReadPlan | { error: CommandError } {
   const { params, bind } = binder()
   const table = tableOf(object)
@@ -515,7 +531,15 @@ function buildObjectPlan(
     // Ключ — з аліасом `t`: умовне читання приєднує `simetra_known`.
     const tail = ` WHERE t.${ident(object.key)} = ${id} LIMIT 1`
     if (sections.length === 0) {
-      return rowsPlan(object, cardProjection(object), tail, params, known, true)
+      return rowsPlan(
+        object,
+        cardProjection(object),
+        tail,
+        params,
+        known,
+        true,
+        includes
+      )
     }
     const tabular = `, ${tabularColumn(sections, bind(LINES_LIMIT))}`
     const text = `SELECT ${cardProjection(object)} AS row${tabular} FROM ${table} t${tail}`
@@ -545,7 +569,15 @@ function buildObjectPlan(
   if (query.offset !== undefined) {
     tail += ` OFFSET ${bind(String(query.offset))}`
   }
-  return rowsPlan(object, listProjection(object), tail, params, known, false)
+  return rowsPlan(
+    object,
+    listProjection(object),
+    tail,
+    params,
+    known,
+    false,
+    includes
+  )
 }
 
 /** `known` плану, коли епоха бази транзакції — його епоха й не `NULL`. */
@@ -774,8 +806,15 @@ export async function executeRead(
   const known = knownIn(plan, dbEpoch)?.keys.length ?? 0
   const result = readResult(object, plan, rows, known)
   if (plan.include === undefined || !("rows" in result)) return result
-  // `known` з `include` не буває (known-form), тож маркерів серед рядків нема.
-  const read = result.rows as Record<string, unknown>[]
+  // Маркерний рядок несе колонки посилань у `copies`: id цілей беруться і з
+  // повних рядків, і з маркерів.
+  const read = (
+    result.rows as Array<Record<string, unknown> | KnownMarker>
+  ).map((row) =>
+    Object.hasOwn(row, object.keyName) || !Object.hasOwn(row, "known")
+      ? (row as Record<string, unknown>)
+      : ((row as KnownMarker).copies ?? {})
+  )
   const included: NonNullable<ReadRows["included"]> = {}
   for (const step of plan.include) {
     const statement = includeStatement(step, read)

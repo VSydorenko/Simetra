@@ -9,16 +9,16 @@ import {
   decodeRow,
   errorFromWire,
   operationToWire,
-  readQueryToWire,
+  readPartToWire,
   readResultFromWire,
   versionValueSchema,
-  wireReadPartsResultSchema,
   wireRunResultSchema,
   type CatalogEntry,
   type CatalogIndex,
   type Change,
   type CommandError,
   type KnownMarker,
+  type KnownVersions,
   type MetadataRef,
   type Operation,
   type ReadQuery,
@@ -27,11 +27,12 @@ import {
   type VersionValue,
   type WireOperation,
   type WireQueryPart,
+  type WireReadPart,
   type WireReadParts,
-  type WireRowsQuery,
 } from "simetra/model"
 import { DataError } from "../errors"
-import type { Key, ServerRow } from "./types"
+import { effectiveEpoch } from "./epoch"
+import type { Key, KnownSnapshot, ServerRow } from "./types"
 
 // Причини `command.unavailable` частини, яку сервер не виконав (П4-B §4.5).
 const BATCH_ABORTED = "batch-aborted"
@@ -114,8 +115,21 @@ export function createReadLimiter(parallel: number): ReadLimiter {
   }
 }
 
+/**
+ * A part of a core read (P4-B spec §6.7): a rows query, with the rows the
+ * core already holds (`known`), or the catalog `version`. A part without an
+ * object goes first in its request.
+ */
+export type CorePart =
+  | { type: "query"; query: RowsQuery; known?: KnownVersions }
+  | { type: "version" }
+
 /** The outcome of one read part, in the order of the parts asked for. */
 export type CoreReadItem =
+  CoreRowsItem | { ok: true; type: "version"; version: VersionValue }
+
+/** The outcome of a rows part: the result of a `query` part is never a version. */
+export type CoreRowsItem =
   | { ok: true; rows: ReadRows; epoch: string | null }
   | { ok: false; error: CommandError }
 
@@ -127,18 +141,22 @@ export interface CoreReadResult {
 /**
  * What the core sends past the source adapters (P4-B spec §5.1): a write and
  * the catalog version go only through the data transport, whichever adapter
- * reads the object. Each method resolves with the raw `value` of the
- * response — the core checks its form — and rejects with `CommandFailure`
- * when the whole request is refused.
+ * reads the object. Rejects with `CommandFailure` when the whole request is
+ * refused.
  */
 export interface ServerPort {
-  /** Sends one `run` request of one operation. */
+  /** Sends one `run` request of one operation; resolves with the raw value. */
   run(request: {
     operation: WireOperation
     kernels: Record<string, string>
   }): Promise<unknown>
-  /** Sends one `read` request with a single `version` part. */
-  version(): Promise<unknown>
+  /**
+   * Sends one `read` request through the Server Function: the parts of the
+   * objects it serves and the parts without an object. The adapter of those
+   * objects is the one whose `read` is this very function (see
+   * `serverFunctionAdapter`), so their parts and `version` share a request.
+   */
+  read(items: readonly WireReadPart[]): Promise<WireReadParts>
 }
 
 /**
@@ -155,10 +173,6 @@ export type CoreRunResult =
     }
   | { ok: false; error: CommandError }
 
-/** The outcome of {@link CoreSource.version}. */
-export type CoreVersionResult =
-  { ok: true; version: VersionValue } | { ok: false; error: CommandError }
-
 /**
  * The core's source over the per-object source adapters and the server
  * port: maps logical queries and operations to the wire form, groups reads
@@ -170,9 +184,11 @@ export interface CoreSource {
    * Reads parts: parts of one adapter go in requests of at most
    * `READ_BATCH_MAX` parts, a request takes one limiter slot. The epoch is
    * the answer's, per part. A failed part is its own `ok: false` item, as is
-   * every part of a request the adapter rejected with `CommandFailure`.
+   * every part of a request the adapter rejected with `CommandFailure`. A
+   * `version` part goes in the request of the Server Function, first; an
+   * answer of the wrong form is `command.internal`.
    */
-  read(parts: readonly RowsQuery[]): Promise<CoreReadResult>
+  read(parts: readonly CorePart[]): Promise<CoreReadResult>
   /**
    * Runs one operation through the server port with the kernel hash of its
    * object, outside the read limiter. A value the mapping cannot encode is
@@ -182,12 +198,6 @@ export interface CoreSource {
    * `command.internal`; a refused request is its error.
    */
   run(operation: Operation): Promise<CoreRunResult>
-  /**
-   * Reads the catalog version through the server port, never through a
-   * source adapter. An answer of the wrong form is `command.internal`; a
-   * refused request or part is its error.
-   */
-  version(): Promise<CoreVersionResult>
   /**
    * Closes reads of the object (`"<kind>.<name>"`) until the source dies: a
    * part of it that waits in the limiter goes out as `command.stale-client`
@@ -238,6 +248,33 @@ const retryReason = (item: CoreReadItem): string | undefined =>
     ? item.error.reason
     : undefined
 
+// Маркер у логічній формі відрізняє від рядка відсутність ключа (Рд40).
+const isMarker = (entry: CatalogEntry, row: object) =>
+  !Object.hasOwn(row, entry.keyName) && "known" in row
+
+// Імена, які частковий маркер мусить нести: колонки `copy` об'єкта й колонки
+// посилань `include` частини.
+const carriedNames = (entry: CatalogEntry, query: RowsQuery): string[] => [
+  ...entry.attributes.filter((a) => a.copy === true).map((a) => a.name),
+  ...("include" in query ? (query.include ?? []) : []),
+]
+
+const carries = (row: object, names: readonly string[]) => {
+  const copies = (row as { copies?: Record<string, unknown> }).copies
+  return names.every(
+    (name) => copies !== undefined && Object.hasOwn(copies, name)
+  )
+}
+
+const inKnown = (row: object, known: KnownVersions) => {
+  const at = (row as { known?: unknown }).known
+  return (
+    Number.isSafeInteger(at) &&
+    (at as number) >= 0 &&
+    (at as number) < known.keys.length
+  )
+}
+
 /**
  * Creates the core read source. A query the mapping refuses never reaches the
  * adapter: an untranslatable value is `CommandFailure` `command.invalid` with
@@ -260,26 +297,42 @@ export function createCoreSource(
   server: ServerPort
 ): CoreSource {
   const decode = (
-    query: RowsQuery,
+    part: CorePart,
     item: WireReadParts["items"][number],
     epoch: string | null
   ): CoreReadItem => {
     if (!item.ok) return { ok: false, error: errorFromWire(index, item.error) }
+    if (part.type === "version") {
+      const version = versionValueSchema.safeParse(item.value)
+      return version.success
+        ? { ok: true, type: "version", version: version.data }
+        : internal()
+    }
+    const { query } = part
     if (!("rows" in item.value)) return internal()
     try {
       const value = readResultFromWire(index, query, item.value)
       if (!("rows" in value)) return internal()
       const entry = index.byRef.get(`${query.object.kind}.${query.object.name}`)
-      // Маркер без `known`: ядро його не слало (B3-3 починає), тож сервер
-      // порушив контракт. Рядок ТЧ маркером бути не може.
-      if (
-        entry !== undefined &&
-        !("tabularSection" in query) &&
-        value.rows.some(
-          (row) => !Object.hasOwn(row, entry.keyName) && "known" in row
-        )
-      ) {
-        return internal()
+      if (entry !== undefined && !("tabularSection" in query)) {
+        const markers = value.rows.filter((row) => isMarker(entry, row))
+        // Маркер без `known`: ядро його не слало, тож сервер порушив
+        // контракт. Рядок ТЧ маркером бути не може.
+        if (markers.length > 0 && part.known === undefined) return internal()
+        // Маркер — лише в епосі `known`, і його позиція — у межах `known`.
+        if (
+          part.known !== undefined &&
+          markers.length > 0 &&
+          (epoch !== part.known.epoch ||
+            markers.some((row) => !inKnown(row, part.known!)))
+        ) {
+          return internal()
+        }
+        // Маркер несе кожну колонку `copy` і кожну колонку посилання `include`
+        // частини: без них клієнт лишив би в тримуваному рядку стару копію чи
+        // не знайшов би цілей (Рд40, І6).
+        const carried = carriedNames(entry, query)
+        if (markers.some((row) => !carries(row, carried))) return internal()
       }
       return { ok: true, rows: value as ReadRows, epoch }
     } catch (error) {
@@ -290,32 +343,54 @@ export function createCoreSource(
     }
   }
 
+  // Об'єкт частини; частина без об'єкта — рівня каталогу.
+  const objectOf = (part: CorePart): MetadataRef | undefined =>
+    part.type === "query" ? part.query.object : undefined
+
   // Об'єкти, яким ядро закрило читання (`stale-client`, §10): частина, що
   // вже стоїть у черзі обмежувача, не йде на сервер, коли дійде черга.
   const refused = new Set<string>()
-  const refusal = (query: RowsQuery): CoreReadItem => ({
+  const isRefused = (part: CorePart): boolean => {
+    const object = objectOf(part)
+    return object !== undefined && refused.has(`${object.kind}.${object.name}`)
+  }
+  const refusal = (part: CorePart): CoreReadItem => ({
     ok: false,
-    error: { code: "command.stale-client", object: query.object },
+    error: { code: "command.stale-client", object: objectOf(part)! },
   })
+
+  // Адаптер Server Function приймає й частини без об'єкта; адаптер-
+  // перевизначення — лише частини запитів. Групи без адаптера (`null`) —
+  // самі частини каталогу, коли жоден об'єкт не читає Server Function.
+  const readVia = (
+    adapter: SourceAdapter | null,
+    wires: readonly WireReadPart[]
+  ): Promise<WireReadParts> =>
+    adapter === null || adapter.read === server.read
+      ? server.read(wires)
+      : adapter.read(
+          wires.filter((wire): wire is WireQueryPart => wire.type === "query")
+        )
 
   // Один запит — один слот обмежувача; відмова всього запиту (CommandFailure
   // адаптера: транспорт, `session-changed`) стає відмовою кожної його частини.
   const send = async (
-    adapter: SourceAdapter,
-    queries: readonly RowsQuery[],
-    wires: readonly WireQueryPart[]
+    adapter: SourceAdapter | null,
+    queries: readonly CorePart[],
+    wires: readonly WireReadPart[]
   ): Promise<CoreReadItem[]> => {
     let answer: WireReadParts | undefined
     // Частини, що справді пішли: добираються на старті задачі, не при постановці.
     let live: number[] = []
     try {
       answer = await limiter.run(() => {
-        live = queries.flatMap((query, i) =>
-          refused.has(`${query.object.kind}.${query.object.name}`) ? [] : [i]
-        )
+        live = queries.flatMap((part, i) => (isRefused(part) ? [] : [i]))
         return live.length === 0
           ? Promise.resolve(undefined)
-          : adapter.read(live.map((i) => wires[i]!))
+          : readVia(
+              adapter,
+              live.map((i) => wires[i]!)
+            )
       })
     } catch (error) {
       if (!(error instanceof CommandFailure)) throw error
@@ -325,17 +400,17 @@ export function createCoreSource(
     const { epoch, items } = answer
     // Рівно по відповіді на частину: інакше порядок не співставити.
     if (items.length !== live.length) return queries.map(internal)
-    return queries.map((query, i) => {
+    return queries.map((part, i) => {
       const at = live.indexOf(i)
-      return at < 0 ? refusal(query) : decode(query, items[at]!, epoch)
+      return at < 0 ? refusal(part) : decode(part, items[at]!, epoch)
     })
   }
 
   const group = async (
-    adapter: SourceAdapter,
+    adapter: SourceAdapter | null,
     slots: readonly number[],
-    queries: readonly RowsQuery[],
-    wires: readonly WireQueryPart[],
+    queries: readonly CorePart[],
+    wires: readonly WireReadPart[],
     out: CoreReadItem[]
   ): Promise<void> => {
     let pending = slots
@@ -443,38 +518,60 @@ export function createCoreSource(
       const id = "id" in operation ? operation.id : undefined
       return answer.ok ? decodeRun(entry, id, answer.value) : answer
     },
-    async version() {
-      const answer = await answerOf(() => server.version())
-      if (!answer.ok) return answer
-      const parsed = wireReadPartsResultSchema.safeParse(answer.value)
-      if (!parsed.success || parsed.data.items.length !== 1) return internal()
-      const [item] = parsed.data.items
-      if (!item!.ok) {
-        return { ok: false, error: errorFromWire(index, item!.error) }
-      }
-      const version = versionValueSchema.safeParse(item!.value)
-      return version.success ? { ok: true, version: version.data } : internal()
-    },
-    async read(parts) {
-      const wires = parts.map((query): WireQueryPart => {
-        const mapped = readQueryToWire(index, query)
+    async read(requested) {
+      // Адаптер без `capabilities.include` не віддає `included`: частина йде
+      // без `include`, а цілі ядро дочитує само (Р8).
+      const parts = requested.map((part): CorePart => {
+        if (part.type !== "query" || !("include" in part.query)) return part
+        if (sourceFor(part.query.object).capabilities.include) return part
+        const query = { ...part.query }
+        delete (query as { include?: unknown }).include
+        return { ...part, query }
+      })
+      const wires = parts.map((part): WireReadPart => {
+        if (part.type === "version") return { type: "version" }
+        const mapped = readPartToWire(index, part)
         if (!mapped.ok) {
           if ("invalid" in mapped) throw new CommandFailure(mapped.invalid)
           throw new DataError("data.unsupported-predicate")
         }
-        return { type: "query", query: mapped.value as WireRowsQuery }
+        return mapped.value
       })
       // Адаптер обирається на кожну частину: застосунок може дати окреме
       // джерело кожному об'єкту (§5.1); частини одного адаптера йдуть разом.
-      const groups = new Map<SourceAdapter, number[]>()
-      parts.forEach((query, slot) => {
-        const adapter = sourceFor(query.object)
+      const groups = new Map<SourceAdapter | null, number[]>()
+      parts.forEach((part, slot) => {
+        const object = objectOf(part)
+        if (object === undefined) return
+        const adapter = sourceFor(object)
         groups.set(adapter, [...(groups.get(adapter) ?? []), slot])
+      })
+      // Частини каталогу ідуть у запиті Server Function; якщо жоден об'єкт її
+      // не читає, вони йдуть самі.
+      const catalogue = [...groups.keys()].find(
+        (adapter) => adapter?.read === server.read
+      )
+      parts.forEach((part, slot) => {
+        if (objectOf(part) !== undefined) return
+        const key = catalogue ?? null
+        groups.set(key, [...(groups.get(key) ?? []), slot])
       })
       const items: CoreReadItem[] = []
       await Promise.all(
         [...groups].map(([adapter, slots]) =>
-          group(adapter, slots, parts, wires, items)
+          group(
+            adapter,
+            // Частини без об'єкта першими (§6.7): помилка бази в частині
+            // даних їх не скасовує.
+            [...slots].sort(
+              (a, b) =>
+                Number(objectOf(parts[a]!) !== undefined) -
+                  Number(objectOf(parts[b]!) !== undefined) || a - b
+            ),
+            parts,
+            wires,
+            items
+          )
         )
       )
       return { items }
@@ -497,13 +594,13 @@ export function tracked(source: CoreSource): {
     epochs,
     source: {
       close: () => source.close(),
-      // Запис і версія каталогу — не читання: їхні епохи шлюз читання не
-      // приймає (епоху `run` звіряє write-back).
+      // Запис — не читання: його епоху шлюз читання не приймає (епоху `run`
+      // звіряє write-back); частина `version` епохи не має.
       run: (operation) => source.run(operation),
-      version: () => source.version(),
       async read(parts) {
         const result = await source.read(parts)
-        for (const item of result.items) if (item.ok) epochs.add(item.epoch)
+        for (const item of result.items)
+          if (item.ok && "epoch" in item) epochs.add(item.epoch)
         return result
       },
     },
@@ -518,9 +615,11 @@ export async function readOne(
   source: CoreSource,
   query: RowsQuery
 ): Promise<ReadRows & { epoch: string | null }> {
-  const [item] = (await source.read([query])).items
-  if (item === undefined || !item.ok) {
-    throw new CommandFailure(item?.error ?? { code: "command.internal" })
+  const [item] = (await source.read([{ type: "query", query }])).items
+  if (item === undefined || !item.ok || !("rows" in item)) {
+    throw new CommandFailure(
+      item !== undefined && !item.ok ? item.error : { code: "command.internal" }
+    )
   }
   return { ...item.rows, epoch: item.epoch }
 }
@@ -557,9 +656,17 @@ const KEYS_PER_REQUEST_MAX = Math.min(READ_LIMIT_MAX, FILTER_IN_MAX)
  * `keysPerRequest` (1 to `READ_LIMIT_MAX`); `form: "card"` reads each key by
  * the card form, lazy columns included.
  */
-export type ReadKeysOptions =
+export type ReadKeysOptions = (
   | { readonly form?: "list"; readonly keysPerRequest: number }
   | { readonly form: "card" }
+) & {
+  /**
+   * The `known` of a read of these keys (P4-B spec §6.7); asked for each
+   * request, the halves of a split one included. Without it no part
+   * carries `known`.
+   */
+  readonly known?: (keys: readonly Key[]) => KnownSnapshot | undefined
+}
 
 const isTooLarge = (error: CommandError): boolean =>
   error.code === "command.invalid" &&
@@ -583,6 +690,84 @@ export function serverRow(
 }
 
 /**
+ * The rows of an answer. A marker of a part with `known` becomes the held row
+ * it stands for plus its copies, with `marker` set: the store applies it as a
+ * confirmation, not as new values (`ObjectStore.applyMarker`). A marker
+ * outside `snapshot` is a defect of the source.
+ */
+export function rowsOf(
+  entry: CatalogEntry,
+  rows: ReadRows["rows"],
+  versionEpoch: string | null,
+  snapshot?: KnownSnapshot
+): ServerRow[] {
+  return rows.map((values) =>
+    snapshot === undefined || !isMarker(entry, values)
+      ? serverRow(entry, values, versionEpoch)
+      : markedRow(entry, snapshot, values, versionEpoch)
+  )
+}
+
+function markedRow(
+  entry: CatalogEntry,
+  snapshot: KnownSnapshot,
+  marker: object,
+  versionEpoch: string | null
+): ServerRow {
+  const held = snapshot.held[(marker as { known: number }).known]
+  if (held === undefined) {
+    throw new CommandFailure({ code: "command.internal" })
+  }
+  const resolved = rowFromMarker(entry, held, marker as KnownMarker)
+  return {
+    key: resolved.key,
+    version: resolved.version,
+    versionEpoch: effectiveEpoch(versionEpoch, held.versionEpoch),
+    values: resolved.values,
+    marker: held,
+  }
+}
+
+/**
+ * Reads one rows part of the object of `entry` and returns its rows in
+ * answer order (markers resolved, see {@link rowsOf}); a failed part is
+ * `CommandFailure` of its error. `snapshot` is the `known` the part carries.
+ */
+export async function readRows(
+  source: CoreSource,
+  entry: CatalogEntry,
+  query: RowsQuery,
+  snapshot?: KnownSnapshot
+): Promise<{
+  rows: ServerRow[]
+  /** The raw `included` of the answer, keyed `"<kind>.<name>"`. */
+  included: ReadRows["included"]
+  more: boolean
+  epoch: string | null
+}> {
+  const [item] = (
+    await source.read([
+      {
+        type: "query",
+        query,
+        ...(snapshot === undefined ? {} : { known: snapshot.known }),
+      },
+    ])
+  ).items
+  if (item === undefined || !item.ok || !("rows" in item)) {
+    throw new CommandFailure(
+      item !== undefined && !item.ok ? item.error : { code: "command.internal" }
+    )
+  }
+  return {
+    rows: rowsOf(entry, item.rows.rows, item.epoch, snapshot),
+    included: item.rows.included,
+    more: item.rows.more === true,
+    epoch: item.epoch,
+  }
+}
+
+/**
  * Reads rows of the object of `entry` by keys (P4-B spec §6.1, form `keys`) — the single
  * path of every re-read by key. The list form goes by `keysPerRequest` keys
  * per request; on `response-too-large` a chunk is halved down to one key,
@@ -597,12 +782,40 @@ export async function readKeys(
 ): Promise<ServerRow[]> {
   // Об'єкт — із запису каталогу: окремий параметр міг би з ним розійтися.
   const object: MetadataRef = { kind: entry.kind, name: entry.name }
-  const toRows = (result: ReadRows, epoch: string | null) =>
-    result.rows.map((values) => serverRow(entry, values, epoch))
+  const toRows = (
+    result: ReadRows,
+    epoch: string | null,
+    snapshot: KnownSnapshot | undefined
+  ) => rowsOf(entry, result.rows, epoch, snapshot)
   // Усі частини — одним викликом: запити по `READ_BATCH_MAX` і слот на запит
   // вирішує джерело. Перша відмова за порядком частин — відмова читання.
-  const readAll = async (queries: readonly RowsQuery[]) => {
-    const { items } = await source.read(queries)
+  const readParts = async (
+    queries: readonly RowsQuery[],
+    snapshots: readonly (KnownSnapshot | undefined)[]
+  ) => {
+    const { items } = await source.read(
+      queries.map((query, at): CorePart => {
+        const snapshot = snapshots[at]
+        return {
+          type: "query",
+          query,
+          ...(snapshot === undefined ? {} : { known: snapshot.known }),
+        }
+      })
+    )
+    return items.map((item): CoreRowsItem => {
+      if (!item.ok) return item
+      if (!("rows" in item)) {
+        throw new CommandFailure({ code: "command.internal" })
+      }
+      return item
+    })
+  }
+  const readAll = async (
+    queries: readonly RowsQuery[],
+    snapshots: readonly (KnownSnapshot | undefined)[]
+  ) => {
+    const items = await readParts(queries, snapshots)
     const failed = items.find((item) => !item.ok)
     if (failed !== undefined && !failed.ok) {
       throw new CommandFailure(failed.error)
@@ -611,9 +824,15 @@ export async function readKeys(
   }
   if (options.form === "card") {
     // Форма картки читає один ключ: ділити нічого, понад бюджет — відмова.
-    const items = await readAll(keys.map((id) => ({ object, id })))
-    return items.flatMap((item) =>
-      item.ok ? toRows(item.rows, item.epoch) : []
+    const snapshots = keys.map((id) => options.known?.([id]))
+    const items = await readAll(
+      keys.map((id) => ({ object, id })),
+      snapshots
+    )
+    return items.flatMap((item, at) =>
+      item.ok && "rows" in item
+        ? toRows(item.rows, item.epoch, snapshots[at])
+        : []
     )
   }
   const { keysPerRequest } = options
@@ -637,14 +856,15 @@ export async function readKeys(
   const readChunks = async (
     chunks: readonly (readonly Key[])[]
   ): Promise<ServerRow[][]> => {
-    const { items } = await source.read(chunks.map(queryOf))
+    const snapshots = chunks.map((chunk) => options.known?.(chunk))
+    const items = await readParts(chunks.map(queryOf), snapshots)
     const rows: ServerRow[][] = []
     const halves: Key[][] = []
     const halved: number[] = []
     for (const [at, item] of items.entries()) {
       const chunk = chunks[at]!
-      if (item.ok) {
-        rows[at] = toRows(item.rows, item.epoch)
+      if (item.ok && "rows" in item) {
+        rows[at] = toRows(item.rows, item.epoch, snapshots[at])
       } else if (isTooLarge(item.error) && chunk.length > 1) {
         const half = Math.ceil(chunk.length / 2)
         halved.push(at)

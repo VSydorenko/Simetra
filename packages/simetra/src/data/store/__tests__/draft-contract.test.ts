@@ -47,7 +47,7 @@ function harness() {
         queue.push(() => void fake.server.run(request).then(resolve, reject))
       )
     },
-    version: () => fake.server.version(),
+    read: (items) => fake.server.read(items),
   }
   const core = createCore({
     subject: "u1",

@@ -1041,8 +1041,6 @@ describe("conditional read with known", () => {
   })
 
   it.each([
-    ["include", { object: LINK, include: ["region"], limit: 10 }],
-    ["a card with include", { object: LINK, id: ID, include: ["region"] }],
     [
       "a card with tabularSections",
       { object: ref, id: ID, tabularSections: true },
@@ -1122,6 +1120,127 @@ describe("conditional read with known", () => {
       ])
     ).resolves.toEqual({
       rows: [{ known: 0, copies: { owner: "X", amount: "1.5" } }, { known: 1 }],
+    })
+  })
+
+  describe("with include", () => {
+    const R1 = "77777777-7777-4777-8777-777777777777"
+    const R2 = "88888888-8888-4888-8888-888888888888"
+    const KNOWN_REF = `'$known', simetra_known.simetra_known_position - 1`
+    const textOf = (query: unknown) => {
+      const prepared = prepareRead(catalog, query, known)
+      if ("error" in prepared) throw new Error(prepared.error.code)
+      return renderKnown(prepared.plan, EPOCH).text
+    }
+
+    it("a list marker of an object without copies carries the reference columns", () => {
+      expect(
+        textOf({ object: LINK, include: ["region", "backup"], limit: 10 })
+      ).toContain(
+        ` THEN jsonb_build_object(${KNOWN_REF}, 'region_id', t."region_id",` +
+          ` 'backup_id', t."backup_id")::text ELSE `
+      )
+    })
+
+    it("a card marker carries a lazy reference column", () => {
+      expect(textOf({ object: LINK, id: ID, include: ["archive"] })).toContain(
+        ` THEN jsonb_build_object(${KNOWN_REF}, 'archive_id', t."archive_id")::text ELSE `
+      )
+    })
+
+    it("a marker of an object with copies carries the copies and the reference columns once", () => {
+      const withRef = runtimeObjectSchema.parse({
+        ...copiedObject,
+        attributes: [
+          ...copiedObject.attributes.filter((a) => a.name !== "blob"),
+          { ...link.attributes[1]!, copy: true },
+        ],
+      })
+      const own = runtimeCatalogSchema.parse({
+        format: 1,
+        snapshotHash: "hash-1",
+        provider: "supabase",
+        objects: [withRef, region],
+      })
+      const prepared = prepareRead(
+        own,
+        { object: COPIED, include: ["region"], limit: 5 },
+        known
+      )
+      if ("error" in prepared) throw new Error(prepared.error.code)
+      expect(renderKnown(prepared.plan, EPOCH).text).toContain(
+        ` THEN jsonb_build_object(${KNOWN_REF}, 'owner_col', t."owner_col",` +
+          ` 'amount_col', t."amount_col"::text, 'region_id', t."region_id")::text ELSE `
+      )
+    })
+
+    it("takes the target ids from marker rows and full rows, one statement per target", async () => {
+      const prepared = prepareRead(
+        catalog,
+        { object: LINK, include: ["region", "backup"], limit: 10 },
+        known
+      )
+      if ("error" in prepared) throw new Error(prepared.error.code)
+      const calls: unknown[] = []
+      const answers = [
+        [
+          { row: JSON.stringify({ $known: 0, region_id: R1, backup_id: R2 }) },
+          {
+            row: JSON.stringify({ $known: 1, region_id: R1, backup_id: null }),
+          },
+        ],
+        [
+          { row: JSON.stringify({ id: R1, version: 2, code: "N" }) },
+          { row: JSON.stringify({ id: R2, version: 2, code: "N" }) },
+        ],
+      ]
+      const result = await executeRead(
+        prepared.object,
+        prepared.plan,
+        (statement, target) => {
+          calls.push({ params: statement.params, object: target.name })
+          return Promise.resolve(answers.shift() ?? [])
+        },
+        EPOCH
+      )
+      // Сторінка з одних маркерів: цілі читаються лише за їхніми колонками.
+      expect(calls.slice(1)).toEqual([{ params: [R1, R2], object: "Region" }])
+      expect(result).toMatchObject({
+        rows: [
+          { known: 0, copies: { region: R1, backup: R2 } },
+          { known: 1, copies: { region: R1, backup: null } },
+        ],
+        included: {
+          "Catalog.Region": [
+            { ref: R1, version: 2, code: "N" },
+            { ref: R2, version: 2, code: "N" },
+          ],
+        },
+      })
+    })
+
+    it("a marker without the reference columns reads no target", async () => {
+      const prepared = prepareRead(
+        catalog,
+        { object: LINK, include: ["region"], limit: 10 },
+        known
+      )
+      if ("error" in prepared) throw new Error(prepared.error.code)
+      const calls: unknown[] = []
+      const result = await executeRead(
+        prepared.object,
+        prepared.plan,
+        (statement) => {
+          calls.push(statement)
+          return Promise.resolve([{ row: "0" }])
+        },
+        EPOCH
+      )
+      expect(calls).toHaveLength(1)
+      expect(result).toEqual({
+        rows: [{ known: 0 }],
+        included: { "Catalog.Region": [] },
+      })
     })
   })
 

@@ -251,8 +251,18 @@ describe("wire schemas", () => {
     expect(parsed.error?.issues[0]?.path).toEqual(["known", "versions", 0])
   })
 
-  // `known` з `include` — B3-3: id цілей маркерного рядка будівнику ще не
-  // відомі. Причина — щоб клієнт відрізнив форму від хибного поля.
+  it.each<[string, Record<string, unknown>]>([
+    ["a card with include", { object: OBJECT_ID, id: ID, include: ["org_id"] }],
+    [
+      "a list with include",
+      { object: OBJECT_ID, limit: 1, include: ["org_id"] },
+    ],
+  ])("wireReadQuerySchema: known on %s passes", (_, query) => {
+    const parsed = wireReadQuerySchema.safeParse({ ...query, known: KNOWN })
+    expect(parsed.data).toEqual({ ...query, known: KNOWN })
+  })
+
+  // Причина — щоб клієнт відрізнив форму від хибного поля.
   it.each<[string, Record<string, unknown>]>([
     ["a count", { object: OBJECT_ID, count: true }],
     [
@@ -274,11 +284,6 @@ describe("wire schemas", () => {
     [
       "a card with named sections",
       { object: OBJECT_ID, id: ID, tabularSections: [SECTION_ID] },
-    ],
-    ["a card with include", { object: OBJECT_ID, id: ID, include: ["org_id"] }],
-    [
-      "a list with include",
-      { object: OBJECT_ID, limit: 1, include: ["org_id"] },
     ],
   ])("wireReadQuerySchema: known on %s is known-form", (_, query) => {
     const parsed = wireReadQuerySchema.safeParse({ ...query, known: KNOWN })

@@ -1,4 +1,9 @@
-import type { CommandError, Filter, OrderBy } from "simetra/model"
+import type {
+  CommandError,
+  Filter,
+  KnownVersions,
+  OrderBy,
+} from "simetra/model"
 import type { DataError } from "../errors"
 
 /** Logical object name: `"<kind>.<name>"`. */
@@ -20,6 +25,21 @@ export interface ServerRow {
    */
   readonly versionEpoch?: string | null
   readonly values: Values
+  /**
+   * Set on a row a `known` marker stands for (P4-B spec §6.7): the held row
+   * the request was built from. Such a row confirms the held one — the
+   * store applies it as a marker, never as new values.
+   */
+  readonly marker?: ServerRow
+}
+
+/**
+ * The `known` of one read part and the rows it was built from, position by
+ * position: a marker answers with its position in `known.keys`.
+ */
+export interface KnownSnapshot {
+  readonly known: KnownVersions
+  readonly held: readonly ServerRow[]
 }
 
 /** A row of a tabular section of an owner. */
@@ -31,7 +51,13 @@ export interface SectionLine {
 /** What a view reads (P4-B spec §6.2). */
 export type ViewSpec =
   | { kind: "keys"; object: ObjectName; keys: readonly Key[] }
-  | { kind: "card"; object: ObjectName; key: Key }
+  | {
+      kind: "card"
+      object: ObjectName
+      key: Key
+      /** Single-target `Ref` attributes whose target rows are read with the card. */
+      include?: readonly string[]
+    }
   | { kind: "section"; object: ObjectName; owner: Key; section: string }
   | {
       kind: "full"

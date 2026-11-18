@@ -708,6 +708,10 @@ describe("useRow", () => {
     const cards = readsOf(fake, TASK).filter(isCard).length
     const sections = readsOf(fake, TASK).filter(isSection).length
     act(() => card.last().refresh())
+    // Читання йдуть у запит мікрозадачею збирача.
+    await act(async () => {
+      await settle()
+    })
     expect(readsOf(fake, TASK).filter(isCard).length).toBe(cards + 1)
     expect(readsOf(fake, TASK).filter(isSection).length).toBe(sections + 1)
     expect(card.last().needsRefresh).toBe(true)

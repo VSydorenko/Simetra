@@ -36,9 +36,9 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-const isVersion = (b: DataRequest) =>
-  b.request.type === "read" &&
-  (b.request.items[0] as { type: string }).type === "version"
+const partsOf = (b: DataRequest): { type: string }[] =>
+  b.request.type === "read" ? (b.request.items as { type: string }[]) : []
+const isVersion = (b: DataRequest) => partsOf(b)[0]?.type === "version"
 
 /** The runtime over a fake server; `fail` makes the next reads fail. */
 function setup(options: Partial<DataRuntimeOptions> = {}) {
@@ -65,22 +65,15 @@ function setup(options: Partial<DataRuntimeOptions> = {}) {
     const { request } = body
     if (request.type !== "read") return answer(ok(null))
     const parts = request.items as { type: string }[]
-    if (parts[0]?.type === "version")
+    const queries = parts.filter((part) => part.type === "query")
+    const versionValue = {
+      snapshotHash: SERVER_HASH,
+      objects: Object.fromEntries(OBJECTS.map((o) => [o.id, o.kernelHash])),
+    }
+    // Запит без читань — лише `version`: ні збій, ні утримання його не чіпають.
+    if (queries.length === 0)
       return answer(
-        ok({
-          items: [
-            {
-              ok: true,
-              value: {
-                snapshotHash: SERVER_HASH,
-                objects: Object.fromEntries(
-                  OBJECTS.map((o) => [o.id, o.kernelHash])
-                ),
-              },
-            },
-          ],
-          epoch: null,
-        })
+        ok({ items: [{ ok: true, value: versionValue }], epoch: null })
       )
     // Епоха відповіді — на мить запиту, як у бази, що відповіла б тоді.
     const epoch = wire.epoch
@@ -92,9 +85,15 @@ function setup(options: Partial<DataRuntimeOptions> = {}) {
     if (wire.delayMs > 0)
       await new Promise((resolve) => setTimeout(resolve, wire.delayMs))
     const read = await fake.adapter.read(
-      parts as unknown as Parameters<SourceAdapter["read"]>[0]
+      queries as unknown as Parameters<SourceAdapter["read"]>[0]
     )
-    return answer(ok({ ...read, epoch }))
+    let next = 0
+    const items = parts.map((part) =>
+      part.type === "version"
+        ? { ok: true, value: versionValue }
+        : read.items[next++]!
+    )
+    return answer(ok({ ...read, epoch, items }))
   }
   const runtime = createDataRuntime({
     catalog: { ...clientCatalog(), objects: [...OBJECTS] },
@@ -105,8 +104,15 @@ function setup(options: Partial<DataRuntimeOptions> = {}) {
     ...options,
   })
   const core = runtimeHandleOf(runtime).core
-  const reads = () => calls.filter((c) => !isVersion(c)).length
-  const versions = () => calls.filter(isVersion).length
+  // Читання — частини `query`, версії — частини `version` усіх запитів:
+  // збирач кладе їх в один запит, тож запитів менше, ніж частин.
+  const count = (type: string) =>
+    calls.reduce(
+      (n, c) => n + partsOf(c).filter((part) => part.type === type).length,
+      0
+    )
+  const reads = () => count("query")
+  const versions = () => count("version")
   return { runtime, core, calls, wire, reads, versions }
 }
 
@@ -151,6 +157,9 @@ describe("resume()", () => {
     await settle()
     expect(t.versions()).toBe(1)
     expect(t.reads()).toBe(2)
+    // Одна звірка — один запит: `version` першою частиною, без хвоста.
+    expect(t.calls).toHaveLength(1)
+    expect(isVersion(t.calls[0]!)).toBe(true)
   })
 
   it("counts the coalescing from the accepted call: 1st, 3rd and 5th of five at 600 ms", async () => {
