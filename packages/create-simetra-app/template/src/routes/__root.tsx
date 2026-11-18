@@ -1,14 +1,14 @@
 import {
-  createRootRoute,
+  createRootRouteWithContext,
   HeadContent,
-  Outlet,
   Scripts,
 } from "@tanstack/react-router"
+import type { ReactNode } from "react"
+import type { AppRouterContext } from "../host-scope"
+import { RootError, RootLayout } from "../root-view"
 
-// Лише оболонка HTML: без loader і `beforeLoad` (текст їхніх помилок потрапив
-// би в dehydrated state, §4.2). Дані й `errorComponent` — D3.
-export const Route = createRootRoute({
-  component: () => (
+function RootDocument({ children }: { children: ReactNode }) {
+  return (
     <html lang="en">
       <head>
         <meta charSet="utf-8" />
@@ -16,9 +16,26 @@ export const Route = createRootRoute({
         <HeadContent />
       </head>
       <body>
-        <Outlet />
+        {children}
         <Scripts />
       </body>
     </html>
-  ),
+  )
+}
+
+function Layout() {
+  const { host } = Route.useRouteContext()
+  return <RootLayout scope={host} />
+}
+
+// Сесію й рантайм кореня встановлює `host.establish`; значення `beforeLoad`
+// дегідрується, тому він нічого не повертає (текст його помилок і тримач у
+// дегідрований стан не йдуть, §4.2).
+export const Route = createRootRouteWithContext<AppRouterContext>()({
+  beforeLoad: async ({ context }) => {
+    await context.host.establish(context)
+  },
+  shellComponent: RootDocument,
+  component: Layout,
+  errorComponent: RootError,
 })

@@ -16,7 +16,7 @@ vi.mock("../src/server/runtime", () => ({
 }))
 vi.mock("#instrument", () => ({ onDataResponse }))
 
-import { handleDataRequest } from "../src/server/data-fn"
+import { handleDataRequest } from "../src/server/data-request"
 
 const APP = "https://app.test"
 const USER = { sub: "u1", is_anonymous: false }

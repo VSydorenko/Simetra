@@ -33,6 +33,20 @@ const MARKERS = [
   "__oracle",
 ]
 
+/**
+ * Серверний код, якого в клієнтських асетах бути не може (задача 13 D3: щойно
+ * клієнтський граф імпортує `data-transport.ts`, серверні імпорти можуть
+ * протекти разом із ним). Маркери — рядки, що переживають мініфікацію:
+ * назва змінної пулу, рядок журналу обробника даних, текст помилки драйвера `pg` і
+ * назва секрету Better Auth.
+ */
+const SERVER_MARKERS = [
+  "SIMETRA_RUNTIME_DATABASE_URL",
+  "[simetra] data handler",
+  "Connection terminated unexpectedly",
+  "BETTER_AUTH_SECRET",
+]
+
 async function leaks(dir: string) {
   return {
     publicSentinels: await findNeedles(
@@ -40,6 +54,10 @@ async function leaks(dir: string) {
       Object.values(SENTINELS)
     ),
     markers: await findNeedles(join(dir, ".output"), MARKERS),
+    serverInClient: await findNeedles(
+      join(dir, ".output/public"),
+      SERVER_MARKERS
+    ),
   }
 }
 
@@ -47,7 +65,30 @@ describe("production build content", () => {
   it("has no sentinel in the client assets and no marker anywhere", async () => {
     const dir = await copyTemplate("clean")
     await viteBuild(dir, SENTINELS)
-    expect(await leaks(dir)).toEqual({ publicSentinels: {}, markers: {} })
+    expect(await leaks(dir)).toEqual({
+      publicSentinels: {},
+      markers: {},
+      serverInClient: {},
+    })
+  })
+
+  it("the server-in-client check finds a server import in the client graph (negative control)", async () => {
+    const dir = await copyTemplate("server-in-client")
+    // Клієнтський маршрут тягне серверний модуль із пулом і каталогом рантайму
+    await mkdir(join(dir, "src/routes"), { recursive: true })
+    await writeFile(
+      join(dir, "src/routes/server-leak.tsx"),
+      `import { createFileRoute } from "@tanstack/react-router"
+import { serverHash } from "../server/runtime"
+import { verifySession } from "../server/auth"
+export const Route = createFileRoute("/server-leak")({
+  component: () => <p>{serverHash}{typeof verifySession}</p>,
+})
+`
+    )
+    await viteBuild(dir, SENTINELS)
+    const found = await leaks(dir)
+    expect(Object.keys(found.serverInClient).length).toBeGreaterThan(0)
   })
 
   it("the check finds a leak (negative control)", async () => {

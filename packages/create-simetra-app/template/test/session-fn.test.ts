@@ -48,10 +48,11 @@ vi.mock("@tanstack/react-start/server", () => ({
 }))
 vi.mock("../src/server/auth", () => ({ verifySession }))
 
+import "../src/server/session-fn"
 import {
   readSessionClaims,
   readSessionClaimsInProcess,
-} from "../src/server/session-fn"
+} from "../src/server/session"
 
 const APP = "https://app.test"
 const USER = { sub: "u1", is_anonymous: false }

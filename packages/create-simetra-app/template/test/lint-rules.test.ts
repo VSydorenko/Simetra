@@ -230,8 +230,10 @@ describe("consumer lint", () => {
     for (const file of [
       "src/router.tsx",
       "src/client.tsx",
+      "src/data-transport.ts",
       "src/server/runtime.ts",
       "src/server/data-fn.ts",
+      "src/server/data-request.ts",
     ])
       await expectAllowed("imports", file, use("#instrument"))
   })

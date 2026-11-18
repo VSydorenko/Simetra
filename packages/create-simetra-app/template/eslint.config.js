@@ -157,7 +157,10 @@ const GRANTS = {
   "src/server/runtime.ts": [ALLOW.pg, ALLOW.server, ALLOW.instrument],
   "src/server/auth-db.ts": [ALLOW.pg, ALLOW.server],
   "src/server/data-fn.ts": [ALLOW.server, ALLOW.instrument],
+  "src/server/data-request.ts": [ALLOW.server, ALLOW.instrument],
   "src/server/ssr-transport.ts": [ALLOW.server],
+  // `wrapTransport` обгортає клієнтський транспорт там, де його зібрано
+  "src/data-transport.ts": [ALLOW.instrument],
   "src/router.tsx": [ALLOW.ssrTransport, ALLOW.instrument],
   "src/client.tsx": [ALLOW.instrument],
 }
