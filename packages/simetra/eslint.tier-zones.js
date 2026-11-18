@@ -26,7 +26,7 @@ const FRAMEWORK_PATTERN =
 const VIRTUAL_PATTERN = "^@tanstack/react-virtual(?:/|$)"
 
 const FRAMEWORK_MESSAGE =
-  "Framework boundary: T5 ui imports only React, T4 contracts and the navigation adapter interface (platform spec §3.1)."
+  "Framework boundary: T5 ui imports only React, T4 contracts, the navigation adapter interface and the headless UI libraries the spec names (forms, virtualisation) — never routing, data fetching or the host framework (platform spec §3.1)."
 
 const SERVER_MESSAGE =
   "Tier zone: src/data and src/ui must not import simetra/server; they depend on T4 contracts and T0 metadata only (P4 spec Рт15)."
