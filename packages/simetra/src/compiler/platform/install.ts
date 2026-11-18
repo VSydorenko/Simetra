@@ -5,7 +5,6 @@ import {
 } from "simetra/model"
 import { compile } from "../compile"
 import { PROJECT_FILE } from "../stages/files"
-import type { SqlParser } from "../sql/parse"
 import { grantObjects, type SqlUnit } from "../sql/units"
 
 /**
@@ -61,7 +60,7 @@ async function compileEmpty(
 }
 
 /** A unit of a live catalog or of a folder, as the recogniser reads it. */
-type RecognisedUnit = Pick<SqlUnit, "class" | "identity" | "sql">
+type RecognisedUnit = Pick<SqlUnit, "class" | "identity">
 
 /**
  * Recogniser of the platform install among the objects of a catalog: a table
@@ -83,15 +82,17 @@ export interface PlatformInstallRecogniser {
  * Atoms `<grant|revoke>|<class>|<object>|<role>|<privilege>` of a grant unit,
  * read from its identity
  * `grant:<grant|revoke>:<class>:<objects>:<roles>:<privileges>`; a column
- * privilege is one atom per column (`insert(method)`).
+ * privilege is one atom per column (`insert(method)`), and the grant option
+ * stays on each atom (`select*`, `insert(method)*`), so a grant with the
+ * option never matches an atom of the install, which gives none.
  */
 export function grantAtoms(identity: string): string[] {
   const [, action, kind, objects, roles, privileges] = identity.split(":")
   const privilegeAtoms = grantObjects(privileges ?? "").flatMap((p) => {
-    const columns = /^([^(]+)\((.*)\)$/.exec(p)
+    const columns = /^([^(]+)\((.*)\)(\*?)$/.exec(p)
     return columns === null
       ? [p]
-      : columns[2]!.split(",").map((c) => `${columns[1]}(${c})`)
+      : columns[2]!.split(",").map((c) => `${columns[1]}(${c})${columns[3]}`)
   })
   return grantObjects(objects ?? "").flatMap((object) =>
     (roles ?? "")
@@ -102,23 +103,8 @@ export function grantAtoms(identity: string): string[] {
   )
 }
 
-/**
- * Whether the grant statement gives the grant option. The install gives
- * none, and the grant identity does not carry the option (the catalog renders
- * `… WITH GRANT OPTION` under the identity of the plain grant, #277), so the
- * recogniser reads it from the statement.
- */
-function withGrantOption(unit: RecognisedUnit, parse: SqlParser): boolean {
-  const parsed = parse(unit.sql)
-  if (!parsed.ok) return true
-  return parsed.statements.some(
-    ({ stmt }) => "GrantStmt" in stmt && stmt.GrantStmt.grant_option === true
-  )
-}
-
 export function platformInstallRecogniser(
-  install: PlatformInstall,
-  parse: SqlParser
+  install: PlatformInstall
 ): PlatformInstallRecogniser {
   const tables = new Set(install.tables.map((t) => `${t.schema}.${t.name}`))
   const identities = new Set(install.units.map((u) => u.identity))
@@ -131,7 +117,7 @@ export function platformInstallRecogniser(
     table: (schema, name) => tables.has(`${schema}.${name}`),
     unit: (unit) => {
       if (identities.has(unit.identity)) return true
-      if (unit.class !== "grant" || withGrantOption(unit, parse)) return false
+      if (unit.class !== "grant") return false
       const own = grantAtoms(unit.identity)
       return own.length > 0 && own.every((t) => atoms.has(t))
     },

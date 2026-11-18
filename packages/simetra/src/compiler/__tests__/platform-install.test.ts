@@ -53,8 +53,7 @@ describe("platformInstall", () => {
     "%s: the recogniser takes install objects and the install's own grants only",
     async (provider) => {
       const platform = platformInstallRecogniser(
-        await platformInstall(provider),
-        parse
+        await platformInstall(provider)
       )
       expect(platform.table(SIGNAL_OUTBOX.schema, SIGNAL_OUTBOX.name)).toBe(
         true
@@ -73,7 +72,7 @@ describe("platformInstall", () => {
       const notPlatform = [
         "GRANT SELECT ON TABLE simetra.signal_outbox TO some_extra_role;",
         "GRANT ALL ON TABLE simetra.signal_outbox TO PUBLIC;",
-        // Опція гранту — не установки: ідентичність її не несе (#277)
+        // Опція гранту — не установки: її несе атом ідентичності (`select*`)
         "GRANT DELETE, SELECT ON TABLE simetra.signal_outbox TO simetra_signal_consumer WITH GRANT OPTION;",
         "GRANT SELECT ON TABLE simetra.signal_outbox TO simetra_command;",
         'GRANT INSERT ("partition") ON TABLE simetra.signal_outbox TO simetra_command;',

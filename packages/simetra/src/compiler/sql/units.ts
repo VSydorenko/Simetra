@@ -803,7 +803,8 @@ function classify(stmt: Node, scope: TypeScope): Classified {
         objectType(action.objtype),
         action.is_grant === true ? "grant" : "revoke",
         roles(action.grantees),
-        privileges(action.privileges),
+        // Опція — так само, як у гранту (`grantParts`)
+        privileges(action.privileges, action.grant_option === true),
       ].join(":")
     )
   }
@@ -1229,7 +1230,9 @@ function role(spec: RoleSpec): string {
 /**
  * Частини ідентичності гранту, що не називають його об'єктів: дія, ролі й
  * привілеї. Їх читає й ключ предмета промоції (`unitSubjectKeys`), тож обидва
- * будуються одним правилом.
+ * будуються одним правилом. Опція гранту — частина атома кожного привілею
+ * (`select*`, як в `aclitem` Postgres): `WITH GRANT OPTION` гранту чи
+ * `GRANT OPTION FOR` відкликання — інший стан ACL, тож і інша одиниця.
  */
 export function grantParts(node: GrantStmt): {
   action: "grant" | "revoke"
@@ -1239,7 +1242,7 @@ export function grantParts(node: GrantStmt): {
   return {
     action: node.is_grant === true ? "grant" : "revoke",
     roles: roles(node.grantees),
-    privileges: privileges(node.privileges),
+    privileges: privileges(node.privileges, node.grant_option === true),
   }
 }
 
@@ -1275,14 +1278,18 @@ function roles(nodes: readonly Node[] | undefined): string {
   ).join(",")
 }
 
-/** Без списку привілеїв — `ALL`. */
-function privileges(nodes: readonly Node[] | undefined): string {
-  if (nodes === undefined || nodes.length === 0) return "all"
+/** Без списку привілеїв — `ALL`; `*` — опція гранту. */
+function privileges(
+  nodes: readonly Node[] | undefined,
+  option: boolean
+): string {
+  const mark = option ? "*" : ""
+  if (nodes === undefined || nodes.length === 0) return `all${mark}`
   return sorted(
     nodes.map((n) => {
       const priv: AccessPriv = "AccessPriv" in n ? n.AccessPriv : {}
       const cols = sorted(strings(priv.cols))
-      return `${priv.priv_name ?? "all"}${cols.length > 0 ? `(${cols.join(",")})` : ""}`
+      return `${priv.priv_name ?? "all"}${cols.length > 0 ? `(${cols.join(",")})` : ""}${mark}`
     })
   ).join(",")
 }
