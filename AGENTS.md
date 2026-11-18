@@ -278,8 +278,10 @@ pnpm db:signals:stop
   its own stack: base-state pgTAP through the Vitest runner with `simetra`, then
   `@simetrajs/designer` split by `vitest --shard`), a `db-supabase` job
   (provider pgTAP and `*.supabase.db.test.ts` on the Supabase stack), and a
-  `packaging` job (`pnpm build:packages && pnpm test:packaging`). It does
-  not run the anchor check — run it yourself whenever you edit docs or skills,
+  `packaging` job (`pnpm build:packages && pnpm test:packaging`). A PR that
+  changes only documentation (every file under `docs/` or a Markdown file
+  outside `packages/`) runs only the `Checks` job; a push to `main` runs every job. It
+  does not run the anchor check — run it yourself whenever you edit docs or skills,
   or rename or move a file. Releases and npm publishing —
   `docs/architecture/release.md`.
 - Versions live in `.node-version`, `package.json` and the stack files
