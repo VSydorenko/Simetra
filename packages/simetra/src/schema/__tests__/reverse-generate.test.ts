@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
+  authorTriggerName,
   compile,
   keyTriggerNames,
   loadSqlParser,
@@ -2259,6 +2260,134 @@ describe("reverseGenerate", () => {
         ),
       }),
       options(kept)
+    )
+    expect(errors(result).map((d) => [d.code, d.file])).toEqual([
+      ["schema.reserved", "sql/simetra/touch.sql"],
+    ])
+  })
+
+  it("a second introspect over the folder of the first is clean", async () => {
+    // Тека першого прийому — `CustomTable` і перелік боргу: еталон над нею
+    // несе й установку, і шар, що не залежить від моделі, тож механіка
+    // таблиці лишається платформною й удруге
+    const catalog = model({
+      tables: [table("app", "note", { columns: LAYER_TABLE_COLUMNS })],
+      units: [...noteLayer(), ...units([AUDIT_FN, AUDIT].join("\n"))],
+    })
+    const first = await reverseGenerate(catalog, options())
+    expect(first.diagnostics).toEqual([])
+    const second = await reverseGenerate(catalog, options(first.files))
+    expect(second.diagnostics).toEqual([])
+    expect(second.changes).toEqual([])
+  })
+
+  it("over a mixed folder the layer of a CustomTable is the platform's", async () => {
+    // Тека з довідником і таблицею без виду, що має колонки й тригери шару:
+    // тригери довідника рендерить тека, тригери таблиці — шар
+    const kept = keptCatalog()
+    const compiled = await compile(kept)
+    expectClean(compiled)
+    const layer = noteLayer()
+    const catalog = model({
+      tables: [
+        ...catalogFromSnapshot(compiled.model!.physical).tables,
+        table("app", "note", { columns: LAYER_TABLE_COLUMNS }),
+      ],
+      units: [
+        ...compiled.model!.sqlUnits.map((u) => ({
+          class: u.class,
+          identity: u.identity,
+          schema: u.schema,
+          name: u.name,
+          sql: u.sql,
+        })),
+        ...layer,
+      ],
+    })
+    const result = await reverseGenerate(catalog, options(kept))
+    expect(result.diagnostics).toEqual([])
+    const written = result.changes.map((c) => c.content ?? "").join("\n")
+    for (const unit of layer) expect(written).not.toContain(unit.sql)
+    expect(result.changes.map((c) => c.path).sort()).toEqual([
+      "custom-tables/Note/Note.meta.json",
+      "sql-debt.json",
+    ])
+    // Тека тепер змішана — вид і `CustomTable` з шаром; удруге — так само чисто
+    const second = await reverseGenerate(catalog, options(result.files))
+    expect(second.diagnostics).toEqual([])
+    expect(second.changes).toEqual([])
+  })
+
+  it("over a kept folder a layer trigger on a kind table that the folder does not render goes to the folder", async () => {
+    // Тригери таблиці виду рендерить тека, а не шар: тригер авторства на
+    // довіднику без авторства — чужий SQL, навіть коли таблиця в базі має
+    // колонки авторства
+    const kept = keptCatalog()
+    const compiled = await compile(kept)
+    expectClean(compiled)
+    const tables = catalogFromSnapshot(compiled.model!.physical).tables
+    const currency = tables.find((t) => t.name === "currency")!
+    expect(currency.columns.map((c) => c.name)).not.toContain("created_by_id")
+    const author = units(
+      renderModelIndependentLayer(
+        { schema: "app", name: "currency" },
+        "supabase",
+        parse
+      )
+        .filter((u) => u.name === authorTriggerName("currency"))
+        .map((u) => u.sql)
+        .join("\n")
+    )
+    expect(author).toHaveLength(1)
+    const result = await reverseGenerate(
+      model({
+        tables: tables.map((t) =>
+          t === currency
+            ? {
+                ...t,
+                columns: [
+                  ...t.columns,
+                  ...LAYER_TABLE_COLUMNS.filter((c) =>
+                    ["created_by_id", "updated_by_id"].includes(c.name)
+                  ),
+                ],
+              }
+            : t
+        ),
+        units: [
+          ...compiled.model!.sqlUnits.map((u) => ({
+            class: u.class,
+            identity: u.identity,
+            schema: u.schema,
+            name: u.name,
+            sql: u.sql,
+          })),
+          ...author,
+        ],
+      }),
+      options(kept)
+    )
+    expect(
+      errors(result).map((d) => [d.code, d.params?.identity ?? d.params?.unit])
+    ).toEqual([
+      ["sql.kind-table-verbatim", author[0]!.identity],
+      ["sql.platform-function-call", author[0]!.identity],
+    ])
+  })
+
+  it("a layer function with another body in the database goes to the folder", async () => {
+    // Шар упізнається лише за вмістом: функція механіки з іншим тілом під
+    // тим самим ім'ям — чужий SQL і без теки
+    const layer = noteLayer()
+    const touch = layer.find((u) => u.identity === "function:simetra.touch()")!
+    const changed = touch.sql.replace("RETURN NEW;", "RETURN NULL;")
+    expect(changed).not.toBe(touch.sql)
+    const result = await reverseGenerate(
+      model({
+        tables: [table("app", "note", { columns: LAYER_TABLE_COLUMNS })],
+        units: layer.map((u) => (u === touch ? { ...u, sql: changed } : u)),
+      }),
+      options()
     )
     expect(errors(result).map((d) => [d.code, d.file])).toEqual([
       ["schema.reserved", "sql/simetra/touch.sql"],

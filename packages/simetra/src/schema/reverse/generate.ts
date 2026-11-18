@@ -178,10 +178,12 @@ const LAYER_COLUMNS: Partial<
 /**
  * Еталонні тригери шару для тригерів каталогу: лише тригер з тим самим
  * іменем на тій самій таблиці каталогу, і лише коли таблиця має колонки
- * його генератора. Інакше еталона немає, і тригер іде в теку.
+ * його генератора. Інакше еталона немає, і тригер іде в теку. Таблиця виду
+ * збереженої теки (`kinds`) шару не бере: її тригери рендерить тека.
  */
 function layerTriggers(
   catalog: CatalogModel,
+  kinds: ReadonlySet<string>,
   provider: DatabaseProvider,
   parse: SqlParser
 ): PlatformReference["units"][number][] {
@@ -193,8 +195,9 @@ function layerTriggers(
     if (unit.class !== "trigger") continue
     const target = unitTarget(unit, parse)
     if (target?.object === undefined || target.schema === "") continue
-    const table = tables.get(qualified(target.schema, target.object))
-    if (table === undefined) continue
+    const key = qualified(target.schema, target.object)
+    const table = tables.get(key)
+    if (table === undefined || kinds.has(key)) continue
     const entry = platformTriggers(table).find((e) => e.trigger === unit.name)
     const needed = entry === undefined ? undefined : LAYER_COLUMNS[entry.family]
     if (
@@ -212,44 +215,43 @@ function layerTriggers(
 
 /**
  * Розпізнавач платформного вмісту каталогу (`platformRecogniser`) з еталоном
- * за вмістом (спека П2 §9, «Платформне — за вмістом»). Тека, що
- * компілюється, — її згенеровані одиниці з тілом, яке фіксує платформа, і
- * таблиці платформи її моделі. Без теки — установка провайдера (файлу
- * проєкту, коли він є) і шар, що не залежить від моделі; родини, вміст яких
- * залежить від моделі видів, еталона не мають і йдуть у теку. Невідомий
- * провайдер уже названо `introspect.project-mismatch` чи помилкою файлу
- * проєкту.
+ * за вмістом (спека П2 §9, «Платформне — за вмістом»): установка провайдера
+ * (файлу проєкту, коли він є) і шар, що не залежить від моделі, для таблиць
+ * без виду теки; тека, що компілюється, додає свої згенеровані одиниці з
+ * тілом, яке фіксує платформа, і таблиці платформи своєї моделі. Тож
+ * повторний прийом над текою першого не губить шару таблиць `CustomTable`.
+ * Родини, вміст яких залежить від моделі видів, без теки еталона не мають і
+ * йдуть у теку. Невідомий провайдер уже названо
+ * `introspect.project-mismatch` чи помилкою файлу проєкту.
  */
 async function platformOf(
   provider: DatabaseProvider,
   kept: CompiledModel | undefined,
+  kinds: ReadonlySet<string>,
   catalog: CatalogModel,
   parse: SqlParser
 ): Promise<PlatformRecogniser | undefined> {
-  if (kept !== undefined)
-    return platformRecogniser(
-      {
-        tables: kept.physical.tables.filter((t) => !isObjectTable(t)),
-        // Обгортка запиту рухів несе запит автора: її описує блок об'єкта
-        // (`describedElsewhere`), а не еталон
-        units: kept.sqlUnits.filter(
-          (u) =>
-            u.file === undefined &&
-            u.generator !== undefined &&
-            !isMovementQuery(u)
-        ),
-      },
-      parse
-    )
   if (!DATABASE_PROVIDERS.includes(provider)) return undefined
   const install = await platformInstall(provider)
   return platformRecogniser(
     {
-      tables: install.tables,
+      tables: [
+        ...install.tables,
+        ...(kept?.physical.tables.filter((t) => !isObjectTable(t)) ?? []),
+      ],
+      // Одиниці теки — останніми: та сама ідентичність у теці важить більше.
+      // Обгортка запиту рухів несе запит автора: її описує блок об'єкта
+      // (`describedElsewhere`), а не еталон
       units: [
         ...install.units,
         ...renderSharedTriggerFunctions(provider, parse),
-        ...layerTriggers(catalog, provider, parse),
+        ...layerTriggers(catalog, kinds, provider, parse),
+        ...(kept?.sqlUnits.filter(
+          (u) =>
+            u.file === undefined &&
+            u.generator !== undefined &&
+            !isMovementQuery(u)
+        ) ?? []),
       ],
     },
     parse
@@ -430,6 +432,7 @@ export async function reverseGenerate(
   const platform = await platformOf(
     folder.project?.databaseProvider ?? o.project.databaseProvider,
     kept,
+    elsewhere.relations,
     model,
     o.parse
   )
