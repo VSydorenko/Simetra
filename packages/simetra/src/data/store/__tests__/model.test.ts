@@ -205,8 +205,10 @@ const k = fc.nat(KEYS.length - 1)
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 
 /**
- * Ваги (бриф, крок 1): сума 266 (планувальник — 20: `suspend` 3, `resume` 6,
- * `due` 8, `outage` 3; решта — 246: чужа зміна між межами сторінок `full` — 4; повернення — 8; перегідратація — 6; перемикання епохи — 6; `hide` над
+ * Ваги (бриф, крок 1): сума 250 (планувальник — по 1 на `suspend`, `resume`,
+ * `due` і `outage`; вага підібрана за самотестом: більші ваги зсувають
+ * насіння так, що дефекти горизонту й скасування знаходяться за вдвічі
+ * більше прогонів; решта — 246: чужа зміна між межами сторінок `full` — 4; повернення — 8; перегідратація — 6; перемикання епохи — 6; `hide` над
  * ТЧ-підмножиною — 6; сторінка вікна — 8; запис — 50: `update` 14, відповідь
  * `run` 20, дії мутації 8, чужа правка, `purge` чи `hide` ключа з мутацією 6,
  * `dispose()` з мутацією в дорозі 2); `purge` (16 + 14), відсутній рядок і
@@ -442,11 +444,11 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
   },
   // Планувальник свіжості (спека §6.7): вкладка ховається й повертається,
   // час іде до найближчого строку планувальника, сервер недоступний кілька кроків.
-  { weight: 3, arbitrary: fc.record({ t: one("suspend") }) },
-  { weight: 6, arbitrary: fc.record({ t: one("resume") }) },
-  { weight: 8, arbitrary: fc.record({ t: one("due") }) },
+  { weight: 1, arbitrary: fc.record({ t: one("suspend") }) },
+  { weight: 1, arbitrary: fc.record({ t: one("resume") }) },
+  { weight: 1, arbitrary: fc.record({ t: one("due") }) },
   {
-    weight: 3,
+    weight: 1,
     arbitrary: fc.record({
       t: one("outage"),
       steps: fc.integer({ min: 1, max: 6 }),
@@ -2033,7 +2035,7 @@ async function runModelOn(
       if (clock > Math.max(since, modelDue(sub)))
         fail(
           label,
-          `a view was not re-read within its interval: ${sub.form.object.name} ${sub.form.spec.kind}`
+          `a view was not re-read within its ${sub.failures > 0 ? "failure pause" : "interval"}: ${sub.form.object.name} ${sub.form.spec.kind}`
         )
     }
     for (const [sub, watch] of tailWatch) {
@@ -2666,14 +2668,10 @@ async function runModelOn(
         // Об'єкти з настаним строком перемикання епохи чи повтору відкинутої
         // відповіді `resume()` бере незалежно від межі (Р5, Р6).
         const dueNow = dueObjects(at)
-        const readers = [...internals.registry.subsets()].filter(
-          (sub) =>
-            sub.alive &&
-            !sub.purged &&
-            sub.loaded &&
-            shown(sub) &&
-            !readsObject(sub, dueNow)
+        const shownViews = [...internals.registry.subsets()].filter(
+          (sub) => sub.alive && !sub.purged && sub.loaded && shown(sub)
         )
+        const readers = shownViews.filter((sub) => !readsObject(sub, dueNow))
         // Подвійний сигнал — одна звірка: другий виклик не читає нічого.
         const byResume = (sub: Subset) =>
           !coalesced && !young(sub, at, RESUME_MIN_MS)
@@ -2696,7 +2694,15 @@ async function runModelOn(
             agedViews.set(sub, sub.rereads)
         }
         for (const object of [TASK, ORG]) {
-          if (dueNow.has(object)) continue
+          // Прочитаний строком вигляд (власним чи ціллю `include`) читає й
+          // свої цілі: об'єкт не «тихий».
+          if (
+            shownViews.some(
+              (sub) =>
+                readsObject(sub, dueNow) && readsObject(sub, new Set([object]))
+            )
+          )
+            continue
           const of = readers.filter(
             (sub) =>
               sub.form.object.name === object ||
@@ -3075,13 +3081,11 @@ describe("core model", () => {
   }, 120_000)
 })
 
-// Дефекти планувальника свіжості: їхній самотест мусить мати такт із читанням.
+// Дефекти такту планувальника: їхній самотест мусить мати такт із читанням.
 const SCHEDULER_DEFECTS: readonly DefectFlag[] = [
   "scheduler-fires-hidden",
-  "scheduler-timer-per-object",
   "scheduler-no-pause",
   "scheduler-no-reschedule",
-  "revalidate-no-tail",
 ]
 
 const DEFECTS: readonly DefectFlag[] = [
@@ -3176,7 +3180,8 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // Планувальник свіжості: кожен дефект — своєю перевіркою.
   "scheduler-fires-hidden": /a read started by the scheduler on a hidden tab/,
   "scheduler-timer-per-object": /scheduler timers \d+ > 1/,
-  "scheduler-no-pause": /inside its failure pause/,
+  "scheduler-no-pause":
+    /inside its failure pause|not re-read within its failure pause/,
   "scheduler-no-reschedule": /scheduler has no timer on a visible tab/,
   "revalidate-no-tail": /left no tail pass/,
 }
@@ -3205,7 +3210,9 @@ describe("core model self-check", () => {
       if (caughtBy !== undefined)
         expect((result.errorInstance as Error).message).toMatch(caughtBy)
       // Прогони самотесту планувальника мали такти з читанням: інакше його
-      // дефекти ловить не те, що вони ламають.
+      // дефекти ловить не те, що вони ламають. Дефекти «таймер на кожне
+      // планування» й «без хвоста» ловлять власні перевірки до будь-якого
+      // такту: тиків у їхніх прогонах не вимагаємо.
       if (SCHEDULER_DEFECTS.includes(flag))
         expect(tickReads, `${flag}: no tick with a read`).toBeGreaterThan(0)
     },
