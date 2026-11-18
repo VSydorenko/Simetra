@@ -28,38 +28,8 @@ const SEED_ROW = /Client \d+/
 // Один елемент `resume()` дальше `resumeMinIntervalMs` (за замовчуванням 15 с)
 const BEYOND_RESUME_INTERVAL_MS = 16_000
 
-const ORDER = [{ attribute: "description", direction: "asc" }] as const
-
 const html = (app: App, cookie: string, path: string): Promise<Reply> =>
   send(app, { path, headers: { cookie } })
-
-/** Скільки запитів чекати після гідратації списку, за знімком у HTML цього ж запиту. */
-async function expectedFor(
-  app: App,
-  cookie: string,
-  path: string,
-  objectRef: "Catalog.Client" | "Catalog.Country",
-  literal: number
-): Promise<number> {
-  const { text } = await html(app, cookie, path)
-  const derived = expectedHydrationRequests(
-    objectRef,
-    objectRef === "Catalog.Country" ? "full" : "window",
-    text,
-    objectRef === "Catalog.Client" ? [...ORDER] : undefined
-  )
-  // Перехресна перевірка виведеного числа буквальним для відомих даних
-  // фікстури: функція не може мовчки повторити помилку реалізації
-  expect(derived).toBe(literal)
-  return derived
-}
-
-// Відомі дані фікстури: `version` + вигляди. A: список `Client` + `country` +
-// `owner`; B: рядки без `country`, тож список + `owner`; `Country` (full): набір
-// і вигляд списку
-const CLIENT_A_REQUESTS = 4
-const CLIENT_B_REQUESTS = 3
-const COUNTRY_A_REQUESTS = 3
 
 /** Після гідратації: усі запити `dataFn` зроблено, далі тиша. */
 async function settle(
@@ -77,7 +47,7 @@ async function settle(
 }
 
 test.describe("scenario 1: SSR entry on the Client list", () => {
-  test("HTML and the first frame after hydration agree, then 1 + N requests and silence", async ({
+  test("HTML and the first frame after hydration agree, then one request and silence", async ({
     app,
     browser,
   }) => {
@@ -96,17 +66,7 @@ test.describe("scenario 1: SSR entry on the Client list", () => {
     const log = watchDataFn(page, app)
     await page.goto(`${app.origin}/clients`)
     await page.waitForSelector("html[data-hydrated]")
-    await settle(
-      page,
-      log,
-      await expectedFor(
-        app,
-        app.users.a.cookie,
-        "/clients",
-        "Catalog.Client",
-        CLIENT_A_REQUESTS
-      )
-    )
+    await settle(page, log, expectedHydrationRequests())
 
     // Кожен кадр зі значеннями — той самий склад і порядок, що в HTML
     const frames = await framesFromRows(page)
@@ -117,8 +77,9 @@ test.describe("scenario 1: SSR entry on the Client list", () => {
       expect(frame.keys).toEqual(server.keys)
       expect(frame.rows).toEqual(server.rows)
     }
-    // 1 запит `version` + запити виглядів, усі від суб'єкта сесії
-    expect(log.calls[0]?.items).toEqual(["version"])
+    // Один запит: частина `version` першою, далі перечитування виглядів;
+    // усі від суб'єкта сесії
+    expect(log.calls[0]?.items[0]).toBe("version")
     for (const call of log.calls) {
       expect(call.subject).toBe(app.users.a.id)
       expect(call.result?.ok).toBe(true)
@@ -128,7 +89,7 @@ test.describe("scenario 1: SSR entry on the Client list", () => {
 })
 
 test.describe("scenario 8: full Country list with SSR", () => {
-  test("HTML and the first frame agree, the full view costs 1 + N requests", async ({
+  test("HTML and the first frame agree, the full view costs one request", async ({
     app,
     browser,
   }) => {
@@ -147,17 +108,7 @@ test.describe("scenario 8: full Country list with SSR", () => {
     const log = watchDataFn(page, app)
     await page.goto(`${app.origin}/countries`)
     await page.waitForSelector("html[data-hydrated]")
-    await settle(
-      page,
-      log,
-      await expectedFor(
-        app,
-        app.users.a.cookie,
-        "/countries",
-        "Catalog.Country",
-        COUNTRY_A_REQUESTS
-      )
-    )
+    await settle(page, log, expectedHydrationRequests())
     const frames = await framesFromRows(page)
     expect(frames.some((f) => f.hydrated)).toBe(true)
     for (const frame of frames) {
@@ -179,17 +130,7 @@ test.describe("scenario 3: list, card, list within releaseDelayMs", () => {
     const log = watchDataFn(page, app)
     await page.goto(`${app.origin}/clients`)
     await page.waitForSelector("html[data-hydrated]")
-    await settle(
-      page,
-      log,
-      await expectedFor(
-        app,
-        app.users.a.cookie,
-        "/clients",
-        "Catalog.Client",
-        CLIENT_A_REQUESTS
-      )
-    )
+    await settle(page, log, expectedHydrationRequests())
     const hydrationCalls = log.calls.length
     const before = await listRows(page)
     const first = page.locator("[data-row-key]").first()
@@ -237,17 +178,7 @@ test.describe("scenario 7: sign-out in the current tab", () => {
     const log = watchDataFn(page, app)
     await page.goto(`${app.origin}/clients`)
     await page.waitForSelector("html[data-hydrated]")
-    await settle(
-      page,
-      log,
-      await expectedFor(
-        app,
-        cookie,
-        "/clients",
-        "Catalog.Client",
-        CLIENT_A_REQUESTS
-      )
-    )
+    await settle(page, log, expectedHydrationRequests())
     const shown = (await listRows(page)).rows.length
     expect(shown).toBeGreaterThan(0)
     const mark = (await framesOf(page)).length
@@ -300,17 +231,7 @@ test.describe("scenario 9: focus after a change by another session", () => {
       const log = watchDataFn(page, app)
       await page.goto(`${app.origin}/clients`)
       await page.waitForSelector("html[data-hydrated]")
-      await settle(
-        page,
-        log,
-        await expectedFor(
-          app,
-          app.users.b.cookie,
-          "/clients",
-          "Catalog.Client",
-          CLIENT_B_REQUESTS
-        )
-      )
+      await settle(page, log, expectedHydrationRequests())
       const before = await listRows(page)
       expect(before.rows).toHaveLength(B_ROWS)
       expect(before.rows.join()).not.toMatch(SEED_ROW)
@@ -388,17 +309,7 @@ test.describe("scenario 10: sign-out in another tab, then focus", () => {
     const log = watchDataFn(first, app)
     await first.goto(`${app.origin}/clients`)
     await first.waitForSelector("html[data-hydrated]")
-    await settle(
-      first,
-      log,
-      await expectedFor(
-        app,
-        cookie,
-        "/clients",
-        "Catalog.Client",
-        CLIENT_A_REQUESTS
-      )
-    )
+    await settle(first, log, expectedHydrationRequests())
     const shown = (await listRows(first)).rows.length
     expect(shown).toBeGreaterThan(0)
 

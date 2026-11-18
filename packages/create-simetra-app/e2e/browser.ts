@@ -2,15 +2,9 @@
 // відповідей `dataFn` з мережевого журналу Playwright, а не лічильники host-а
 // (журнал з `#instrument` — #210).
 import type { Browser, BrowserContext, Page } from "@playwright/test"
-import { catalogIndex, clientCatalogSchema, type OrderBy } from "simetra/model"
-import { listQuery } from "simetra/ui"
-import clientCatalogJson from "../template/generated/client-catalog.json" with { type: "json" }
 import type { App, TestUser } from "./fixtures"
 import { send } from "./http"
 import { decodeResponse } from "./serialization"
-
-const catalog = clientCatalogSchema.parse(clientCatalogJson)
-const index = catalogIndex(catalog.objects)
 
 /** Контекст браузера з cookie сесії (рядок заголовка `Cookie`). */
 export async function contextWithCookie(
@@ -122,27 +116,12 @@ export function watchDataFn(page: Page, app: App) {
 }
 
 /**
- * Скільки запитів `dataFn` іде після гідратації списку об'єкта (шов #207): один
- * на `version` плюс по одному на видимий вигляд знімка (§8.1: `revalidate`
- * кожного). Видимі вигляди: сам список (над `full` ще й вигляд повного
- * набору) і по виглядові на кожен `include`, чиє посилання хоч в одному рядку
- * знімка не порожнє (порожніх посилань вигляд не читає). Знімок — HTML
- * відповіді SSR. Одна функція на всі сценарії: зміна числа виглядів правиться
- * тут.
+ * Скільки запитів `dataFn` іде після гідратації списку: один, хоч скільки
+ * виглядів і `include` у знімку (§6.7, Р10) — збирач віддає частину
+ * `version` і перечитування всіх видимих виглядів одним пакетом.
  */
-export function expectedHydrationRequests(
-  objectRef: "Catalog.Client" | "Catalog.Country",
-  residency: "window" | "full",
-  snapshotHtml: string,
-  orderBy?: OrderBy
-): number {
-  const entry = index.byRef.get(objectRef)
-  if (entry === undefined) throw new Error(`no ${objectRef} in the catalog`)
-  const includes = (listQuery(entry, { orderBy }).include ?? []).filter(
-    (attribute) => new RegExp(`[{,]${attribute}:"`).test(snapshotHtml)
-  )
-  const views = 1 + (residency === "full" ? 1 : 0) + includes.length
-  return 1 + views
+export function expectedHydrationRequests(): number {
+  return 1
 }
 
 // ------------------------------------------------------------ запис кадрів
