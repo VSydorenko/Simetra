@@ -76,6 +76,12 @@ export interface Mutation {
 }
 
 /**
+ * The write mode of an own mutation (P4-B spec §7.1). The thin M3 slice has
+ * `await` only: the row shows its confirmed values until the answer.
+ */
+export type WritePolicy = "await"
+
+/**
  * The own mutation of a row with the actions its state allows (P4-B spec
  * §6.5): `failed` — `retry`, `cancel`; `conflict` — `cancel`; `unknown` —
  * `dismiss`; a `removed` row — `cancel` (`dismiss` for `unknown`). `retry`

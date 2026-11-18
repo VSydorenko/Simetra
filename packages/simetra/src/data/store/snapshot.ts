@@ -1,5 +1,6 @@
 import { keyId } from "./epoch"
 import { lazyFieldStale, visibleRow, type RowEntry } from "./object-store"
+import type { OwnMutation } from "./overlay"
 import type {
   CloseReason,
   Key,
@@ -8,6 +9,7 @@ import type {
   RowView,
   Values,
   ViewSnapshot,
+  WritePolicy,
 } from "./types"
 
 /*
@@ -72,19 +74,29 @@ const sameList = <T>(a: readonly T[], b: readonly T[]) =>
   a.length === b.length && a.every((x, i) => x === b[i])
 
 /**
+ * The values a row shows under the write mode of its own mutation (plan
+ * B3-4-Л «Шлях до #208»): `await` shows the confirmed row of the store.
+ */
+const SHOWN: Readonly<
+  Record<WritePolicy, (e: RowEntry) => Values | undefined>
+> = { await: visibleRow }
+
+/**
  * The view of a store entry, sharing `prev` (and its parts) while nothing
  * shown changed. A slot hidden by the eviction horizon shows no values;
  * `staleFields` are the lazy fields read with an older row version (§6.2
  * rule 2). The state of an own mutation takes precedence over `stale`
  * and `synced` (§6.5); `hidden` takes precedence over the mutation, which
- * the view still carries with its actions (plan B3-4-Л Р7).
+ * the view still carries with its actions (plan B3-4-Л Р7). The shown values
+ * come through the write mode `policy` of the mutation.
  */
 export function computeRowView(
   key: Key,
   e: RowEntry,
   lazyFields: readonly string[],
   prev: RowView | undefined,
-  mutation?: RowMutation
+  mutation?: RowMutation,
+  policy: WritePolicy = "await"
 ): RowView {
   if (e.removed !== undefined) {
     return prev?.state === "removed" && prev.mutation === mutation
@@ -95,7 +107,7 @@ export function computeRowView(
           ...(mutation === undefined ? {} : { mutation }),
         })
   }
-  const shown = visibleRow(e)
+  const shown = SHOWN[policy](e)
   const values = shown ?? EMPTY_VALUES
   const { minVersion, disconnect, hidden: mark, epoch } = e.stale
   const hidden = mark !== undefined
@@ -203,14 +215,14 @@ export interface RowViews {
 }
 
 /**
- * The own mutation a row view shows for a store entry; the same object while
- * it is unchanged, so a view stays shared.
+ * The own mutation a row view shows for a store entry, with its write mode;
+ * its `view` is the same object while it is unchanged, so a view stays shared.
  */
 export type MutationOf = (
   object: ObjectName,
   key: Key,
   e: RowEntry
-) => RowMutation | undefined
+) => OwnMutation | undefined
 
 export function createRowViews(
   mutationOf: MutationOf = () => undefined
@@ -248,12 +260,14 @@ export function createRowViews(
       const rev = revisions.get(id) ?? 0
       const cached = cache.get(id)
       if (cached !== undefined && cached.rev === rev) return cached.view
+      const own = mutationOf(object, key, e)
       const view = computeRowView(
         key,
         e,
         lazyFields,
         cached?.view,
-        mutationOf(object, key, e)
+        own?.view,
+        own?.policy
       )
       cache.set(id, { rev, view })
       parts.set(id, { object, key })

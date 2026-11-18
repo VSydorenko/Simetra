@@ -201,6 +201,28 @@ describe("DataWriter.update — the await policy", () => {
     expect(h.inspect.serviceSizes().journal).toBe(0)
   })
 
+  it("a new mutation carries the write mode await (the seam of #208)", async () => {
+    const h = harness()
+    const { version } = await mounted(h)
+    h.port.hold = true
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    expect(h.inspect.mutations()).toEqual([
+      {
+        object: TASK,
+        key: K,
+        id: m.id,
+        policy: "await",
+        state: "pending",
+        erased: false,
+      },
+    ])
+  })
+
   it("sends one run of one update with the base and only the given fields", async () => {
     const h = harness()
     const { version } = await mounted(h)

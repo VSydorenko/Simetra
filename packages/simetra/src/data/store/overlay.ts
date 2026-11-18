@@ -24,6 +24,7 @@ import type {
   ObjectName,
   RowMutation,
   Values,
+  WritePolicy,
   Writer,
 } from "./types"
 import type { rereadKey } from "./writer"
@@ -88,7 +89,7 @@ export interface Overlay {
     options: UpdateOptions
   ): Mutation
   /** The mutation a row view of the entry shows (`createRowViews`). */
-  mutationOf(object: ObjectName, key: Key, e: RowEntry): RowMutation | undefined
+  mutationOf(object: ObjectName, key: Key, e: RowEntry): OwnMutation | undefined
   /** Inside a `commit`: a purge or `removed` erased the fields (Р11). */
   erase(object: ObjectName, key: Key): void
   /** Inside a `commit`: the purge of a pair erased the fields (Р11). */
@@ -107,6 +108,7 @@ export interface JournalInspection {
   readonly key: Key
   /** The id of the current attempt. */
   readonly id: string
+  readonly policy: WritePolicy
   readonly state: MutationState
   /** The fields were erased by a purge or `removed` (Р11). */
   readonly erased: boolean
@@ -126,10 +128,18 @@ interface Attempt {
   resolve(result: MutationResult): void
 }
 
+/** The own mutation of a row view: its write mode and its actions. */
+export interface OwnMutation {
+  readonly policy: WritePolicy
+  readonly view: RowMutation
+}
+
 /** A mutation in the journal. */
 interface JournalEntry {
   readonly object: ObjectName
   readonly key: Key
+  /** The write mode: the row view reads the shown values through it. */
+  readonly policy: WritePolicy
   /** `undefined` — erased by a purge or `removed` (Р11): no `retry`. */
   values: Values | undefined
   readonly expectedVersion: number
@@ -202,7 +212,23 @@ export function createOverlay(deps: {
   const afterCancel = () => defects.has("answer-after-cancel")
   const tokenOf = (attempt: Attempt) =>
     afterCancel() ? session.token() : attempt.token
-  const journal = new Map<string, JournalEntry>()
+  // Індекс журналу — черга записів ключа (шов #208: кілька записів ключа,
+  // база з попереднього); у М3 у черзі рівно один запис (Р1), тож межа
+  // журналу рахує ключі.
+  const journal = new Map<ObjectName, Map<Key, JournalEntry[]>>()
+  let keys = 0
+  const entryOf = (object: ObjectName, key: Key) =>
+    journal.get(object)?.get(key)?.[0]
+  const entriesOf = function* () {
+    for (const byKey of journal.values())
+      for (const queue of byKey.values()) yield* queue
+  }
+  const place = (entry: JournalEntry) => {
+    let byKey = journal.get(entry.object)
+    if (byKey === undefined) journal.set(entry.object, (byKey = new Map()))
+    if (!byKey.has(entry.key)) keys++
+    byKey.set(entry.key, [entry])
+  }
   // Спроби, чий `settled` ще не розв'язано, — і ті, що вже поза журналом
   // (скасовані в польоті): закриття розв'язує всі.
   const unsettled = new Set<Attempt>()
@@ -220,8 +246,7 @@ export function createOverlay(deps: {
   }
 
   const current = (entry: JournalEntry, attempt: Attempt) =>
-    journal.get(keyId(entry.object, entry.key)) === entry &&
-    entry.attempt === attempt
+    entryOf(entry.object, entry.key) === entry && entry.attempt === attempt
 
   function newAttempt(entry: Pick<JournalEntry, "object" | "key">): Attempt {
     let resolve!: (result: MutationResult) => void
@@ -248,8 +273,12 @@ export function createOverlay(deps: {
 
   /** Removes the entry in the current `commit` (one notification with the row). */
   function drop(entry: JournalEntry) {
-    const id = keyId(entry.object, entry.key)
-    if (journal.get(id) === entry) journal.delete(id)
+    const byKey = journal.get(entry.object)
+    if (byKey?.get(entry.key)?.[0] === entry) {
+      byKey.delete(entry.key)
+      keys--
+      if (byKey.size === 0) journal.delete(entry.object)
+    }
     touch(entry)
   }
 
@@ -466,9 +495,8 @@ export function createOverlay(deps: {
 
   /** Starts an attempt of the entry in one `commit` and sends it. */
   function start(entry: JournalEntry, attempt: Attempt, replace: boolean) {
-    const id = keyId(entry.object, entry.key)
     commit(() => {
-      if (replace) journal.set(id, entry)
+      if (replace) place(entry)
       entry.attempt = attempt
       entry.state = "pending"
       entry.error = undefined
@@ -555,15 +583,16 @@ export function createOverlay(deps: {
         throw new TypeError(`update: ${object} has no such attribute`)
       if (!session.token().valid)
         return closedMutation(session.closed ?? "disposed")
-      const existing = journal.get(keyId(object, key))
+      const existing = entryOf(object, key)
       if (existing?.state === "pending")
         throw new DataError("data.mutation-pending")
-      if (existing === undefined && journal.size >= JOURNAL_MAX)
+      if (existing === undefined && keys >= JOURNAL_MAX)
         throw new DataError("data.journal-full")
       const attempt = newAttempt({ object, key })
       const entry: JournalEntry = {
         object,
         key,
+        policy: "await",
         values: Object.freeze({ ...values }),
         expectedVersion,
         state: "pending",
@@ -576,7 +605,7 @@ export function createOverlay(deps: {
     },
 
     mutationOf(object, key, e) {
-      const entry = journal.get(keyId(object, key))
+      const entry = entryOf(object, key)
       if (entry === undefined) return undefined
       const flags = `${e.removed !== undefined}/${e.stale.hidden !== undefined}`
       let view = entry.views.get(flags)
@@ -584,19 +613,20 @@ export function createOverlay(deps: {
         view = buildView(entry, e)
         entry.views.set(flags, view)
       }
-      return view
+      return { policy: entry.policy, view }
     },
 
     erase(object, key) {
-      const entry = journal.get(keyId(object, key))
+      const entry = entryOf(object, key)
       if (entry === undefined || entry.values === undefined) return
       entry.values = undefined
       changed(entry)
     },
 
     eraseScope(object, scope) {
-      for (const entry of journal.values()) {
-        if (entry.object !== object || entry.values === undefined) continue
+      for (const queue of journal.get(object)?.values() ?? []) {
+        const entry = queue[0]
+        if (entry === undefined || entry.values === undefined) continue
         const at = entry.attempt.scope
         if (at !== undefined && at !== scope) continue
         entry.values = undefined
@@ -609,15 +639,17 @@ export function createOverlay(deps: {
       for (const attempt of [...unsettled])
         attempt.resolve({ ok: false, error })
       journal.clear()
+      keys = 0
     },
 
-    size: () => journal.size + unsettled.size,
+    size: () => keys + unsettled.size,
 
     entries: () =>
-      [...journal.values()].map((entry) => ({
+      [...entriesOf()].map((entry) => ({
         object: entry.object,
         key: entry.key,
         id: entry.attempt.id,
+        policy: entry.policy,
         state: entry.state,
         erased: entry.values === undefined,
       })),
