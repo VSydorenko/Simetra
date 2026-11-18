@@ -507,11 +507,27 @@ export function referenceViolations(
   if (reference.form === "single") {
     const value = row.value(reference.column)
     const old = row.old?.(reference.column)
+    // Свій id викликач і так знає: наявність свого рядка «Користувачів»
+    // нічого не розкриває, а без права на них посилання на себе (носій
+    // власності) відмовляло б завжди (спека П4 §6.6). Чужий id — як був.
+    // `IS TRUE`: в аноніма `current_user_id()` — `NULL`, і `NOT (NULL OR
+    // false)` дав би `NULL` — перевірка мовчки пропустила б посилання.
+    const target = (id: string, withScope: boolean) => {
+      const found = visible(
+        reference.target,
+        reference.targetKey,
+        id,
+        withScope
+      )
+      return reference.users === true
+        ? `((${id} = (SELECT simetra.current_user_id())) IS TRUE OR ${found})`
+        : found
+    }
     if (!reference.array) {
       return [
         {
           column: reference.column,
-          condition: `${value} IS NOT NULL${old === undefined ? "" : ` AND ${value} IS DISTINCT FROM ${old}`} AND NOT ${visible(reference.target, reference.targetKey, value, false)}`,
+          condition: `${value} IS NOT NULL${old === undefined ? "" : ` AND ${value} IS DISTINCT FROM ${old}`} AND NOT ${target(value, false)}`,
         },
       ]
     }
@@ -521,7 +537,7 @@ export function referenceViolations(
         // Новизна елемента — `IS NOT TRUE`: `<> ALL` над старим масивом з `NULL`
         // дає `NULL`, і новий елемент мовчки пропустив би перевірку видимості й
         // скоупу, а FK на елементи масиву немає — це єдиний захист.
-        condition: `EXISTS (SELECT 1 FROM unnest(${value}) AS a(v) WHERE a.v IS NOT NULL${old === undefined ? "" : ` AND (a.v = ANY (coalesce(${old}, '{}'))) IS NOT TRUE`} AND NOT ${visible(reference.target, reference.targetKey, "a.v", true)})`,
+        condition: `EXISTS (SELECT 1 FROM unnest(${value}) AS a(v) WHERE a.v IS NOT NULL${old === undefined ? "" : ` AND (a.v = ANY (coalesce(${old}, '{}'))) IS NOT TRUE`} AND NOT ${target("a.v", true)})`,
       },
     ]
   }
