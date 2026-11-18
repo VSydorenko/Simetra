@@ -886,8 +886,13 @@ describe("useCardDraft — заміна рантайму чи рядка ски�
     await flush()
     expect(draftState(o.c)).toBe("saving")
     const b = otherRuntime()
+    const before = o.frames.length
     act(() => o.holder.replace(b.runtime))
     await flush()
+    // Спроба A не показується на B ні кадру.
+    expect(
+      o.frames.slice(before).some((f) => f.includes('data-draft="saving"'))
+    ).toBe(false)
     act(() => o.wire.release())
     await flush()
     expect(draftState(o.c)).toBe("idle")
