@@ -29,6 +29,8 @@ import {
   GAUGE_TABLE,
   GAUGE_WRITER_ID,
   ORG_ADMIN_ID,
+  commandCoreLayer,
+  noteCopyLayer,
   policyDomain,
   profileLayer,
   readQueryLayer,
@@ -56,6 +58,7 @@ import {
 
 const GAUGE: MetadataRef = { kind: "Catalog", name: "Gauge" }
 const COMMENT: MetadataRef = { kind: "Catalog", name: "TaskComment" }
+const NOTE: MetadataRef = { kind: "Catalog", name: "TicketNote" }
 const REQUEST_ROLE = readRoleOf(testProvider())!
 // Анонімна роль є в кожному профілі, що його бере прогін
 const ANONYMOUS_ROLE = testRoleFor("anonymous")!
@@ -81,7 +84,14 @@ interface Env {
 
 const heldEnv = () =>
   heldResource<Env>(async (use) => {
-    const result = await compile(policyDomain(readQueryLayer(), profileLayer()))
+    const result = await compile(
+      policyDomain(
+        readQueryLayer(),
+        commandCoreLayer(),
+        noteCopyLayer(),
+        profileLayer()
+      )
+    )
     expect(result.diagnostics).toEqual([])
     const model: CompiledModel = result.model!
     await withModelTarget(model, async (url) => {
@@ -530,6 +540,77 @@ describe("read batch with known over the engine target", () => {
     expect(cardValue.included).toEqual({
       "Catalog.Region": [expect.objectContaining({ ref: own })],
     })
+  })
+
+  it("a marker of an object with copies carries the copies and the reference column; targets come from the marker under RLS", async () => {
+    const { org, session } = env.admin
+    const member = randomUUID()
+    const ticket = randomUUID()
+    await env.owner.query(
+      "INSERT INTO public.org_member (id, org_id) VALUES ($1, $2)",
+      [member, org]
+    )
+    await env.owner.query(
+      "INSERT INTO public.ticket (id, org_id, assignee_id) VALUES ($1, $2, $3)",
+      [ticket, org, member]
+    )
+    const regionIn = async (scope: string) =>
+      (
+        await env.owner.query<{ id: string }>(
+          "INSERT INTO public.region (id, org_id) VALUES (gen_random_uuid(), $1) RETURNING id",
+          [scope]
+        )
+      ).rows[0]!.id
+    const own = await regionIn(org)
+    const foreign = await regionIn(env.other.org)
+    const notes: string[] = []
+    for (const site of [own, foreign]) {
+      const id = randomUUID()
+      await env.owner.query(
+        "INSERT INTO public.ticket_note (id, org_id, ticket_id, site_id) VALUES ($1, $2, $3, $4)",
+        [id, org, ticket, site]
+      )
+      notes.push(id)
+    }
+    const rt = await runtime()
+    const query: ReadQuery = {
+      object: NOTE,
+      where: { attribute: "ref", op: "in", value: notes },
+      orderBy: [{ attribute: "ref", direction: "asc" }],
+      limit: 200,
+      include: ["site", "ticket"],
+    }
+    const plain = await rt.readParts(session, [part(query)])
+    const plainItem = plain.items[0]!
+    if (!plainItem.ok || !("rows" in plainItem.value)) {
+      throw new Error(`plain read failed: ${JSON.stringify(plain.items)}`)
+    }
+    const rows = plainItem.value.rows as Row[]
+    expect(rows).toHaveLength(2)
+    const value = await conditionalValue(
+      rt,
+      session,
+      query,
+      known(plain.epoch!, rows)
+    )
+    // Копія носія й обидві колонки посилань — в одному частковому маркері.
+    expect(value.rows).toEqual(
+      rows.map((row, i) => ({
+        known: i,
+        copies: {
+          ticket_id_assignee_id: member,
+          ticket,
+          site: row.site,
+        },
+      }))
+    )
+    // Цілі взято з маркерів: видима область і картка носія є, невидима — ні.
+    expect(value.included).toEqual({
+      "Catalog.Region": [expect.objectContaining({ ref: own })],
+      "Catalog.Ticket": [expect.objectContaining({ ref: ticket })],
+    })
+    expect(JSON.stringify(value.included)).not.toContain(foreign)
+    expect(value.included).toEqual(plainItem.value.included)
   })
 
   it("two parts read one snapshot under a concurrent commit between them", async () => {
