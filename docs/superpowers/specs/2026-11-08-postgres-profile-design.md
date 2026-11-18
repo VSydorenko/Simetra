@@ -404,7 +404,6 @@ TRIGGER`) теж вимагає власника таблиці, тож той �
 | `PROVIDER_EVENT_SOURCES` | `better_auth."user"` з колонками `id`, `name`, `email`, `emailVerified`, `image`, `createdAt`, `updatedAt`, `isAnonymous`; джерела `storage.objects` немає |
 | `PROVIDER_FUNCTIONS` | порожньо (`auth.uid` тощо — лише `supabase`) |
 | `PROVIDER_EXPRESSION_FUNCTIONS` | порожньо: `gen_random_uuid()` — ядро Postgres |
-| `PROVIDER_SQL_TEXT_FUNCTIONS` | функції `dblink*` (contrib); решти записів `supabase` немає |
 | `PROVIDER_SYSTEM_ROLES` | порожньо: `simetra_auth` не має типових привілеїв у схемах межі |
 | `PROVIDER_SURFACES` | `{ schema: "better_auth", table: "user", classes: ["trigger", "references"] }` |
 | `PROVIDER_IDENTITY_TRIGGER_LOCKED` | `true` (`supabase` — `false`: роль `postgres` знімає тригер на `auth.users`, хоч не власник, завдяки supautils) |

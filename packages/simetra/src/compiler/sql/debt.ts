@@ -3,7 +3,7 @@ import { KIND_REGISTRY, SQL_DEBT_FILE, type Project } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { closedShellProblem, ruledFunctions } from "./closed-forms"
-import { providerTextFunctions } from "./command-context"
+import { providerCalls } from "./command-context"
 import {
   bodyStatementProblem,
   modelViews,
@@ -51,7 +51,8 @@ export function debtUnits(
     kindTables,
     parse,
     plpgsql,
-    modelViews(units)
+    modelViews(units),
+    units
   )
   return [...new Set(units.filter(isDebt).map((unit) => unit.identity))].sort(
     compareStrings
@@ -70,7 +71,8 @@ export function debtPredicate(
   kindTables: KindTables,
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  views: readonly ModelView[]
+  views: readonly ModelView[],
+  units: readonly VerbatimUnit[]
 ): (unit: VerbatimUnit) => boolean {
   const debtOwners = new Set(
     objects
@@ -79,14 +81,13 @@ export function debtPredicate(
   )
   const ruled = ruledFunctions(objects, project)
   const written = ruleOneTables(kindTables, project?.database.provider)
-  const textFunctions = providerTextFunctions(project?.database.provider)
+  const calls = providerCalls(project?.database.provider, units)
   return (unit) =>
     (unit.ownerFile === undefined || debtOwners.has(unit.ownerFile)) &&
     !(unit.class === "function" && ruled.has(unit.identity)) &&
     kindTableOf(unit, kindTables) === undefined &&
     bodyKindTable(unit, written, parse, plpgsql, views) === undefined &&
-    bodyStatementProblem(unit, parse, plpgsql, views, textFunctions) ===
-      undefined &&
+    bodyStatementProblem(unit, parse, plpgsql, views, calls) === undefined &&
     !(
       unit.class === "function" &&
       closedShellProblem(
@@ -125,7 +126,8 @@ export function checkDebt(
     kindTables,
     parse,
     plpgsql,
-    modelViews(units)
+    modelViews(units),
+    units
   )
   const debt = units.filter(isDebt)
   const grows = debt

@@ -703,7 +703,10 @@ describe("reverseGenerate", () => {
       model({
         tables: [table("app", "old")],
         units: units(
-          "CREATE FUNCTION app.f() RETURNS integer LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$;"
+          // Борг — завдяки `SECURITY DEFINER` поза оболонкою; без `EXECUTE`
+          // для ролей API, інакше її відмовила б перевірка викликача.
+          "CREATE FUNCTION app.f() RETURNS integer LANGUAGE sql SECURITY DEFINER AS $$ SELECT 1 $$;\n" +
+            "REVOKE EXECUTE ON FUNCTION app.f() FROM PUBLIC, authenticated, anon;"
         ),
       }),
       options(kept)
@@ -730,6 +733,10 @@ describe("reverseGenerate", () => {
       // Борг зник разом зі своєю функцією: introspect переписує перелік цілим.
       ["sql-debt.json", false],
       ["sql/app/f.sql", true],
+      [
+        "sql/app/grant__revoke__function__app_f__anon_authenticated_public__execute.sql",
+        true,
+      ],
     ])
     expect(result.files.get("catalogs/Currency/Currency.meta.json")).toBe(
       kept.get("catalogs/Currency/Currency.meta.json")

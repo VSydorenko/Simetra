@@ -497,7 +497,7 @@ async function attempt(
   const tx: Transaction = new Transaction(client, state, deadline)
   tx.act = act
   const rows: Record<string, unknown>[] = []
-  let epoch: string | null = null
+  let epoch = ""
   let tag: string
   try {
     tag = await inCommand({ command, tx, depth: 0 }, async () => {
@@ -519,11 +519,18 @@ async function attempt(
       // (§7.2 п. 3, §7.4). Прочитана до записів, вона могла б змінитися між
       // оператором і записом.
       const { rows: epochRows } = await tx.enqueue([EPOCH])
+      let read: string | null = null
       try {
-        epoch = epochOf(epochRows)
+        read = epochOf(epochRows)
       } catch (error) {
         tx.anomaly(error)
       }
+      // Без епохи результат не має законної форми (схема передачі `run`
+      // вимагає 64 hex), а `NULL` функція дає лише на репліці й до
+      // застосування — там команда не пише. Відкат до `COMMIT`: відповідь
+      // клієнтові мусить збігатися з долею транзакції.
+      if (read === null) tx.anomaly(new Error("row version epoch is missing"))
+      epoch = read
       return (await tx.enqueue([COMMIT])).command
     })
   } catch (error) {

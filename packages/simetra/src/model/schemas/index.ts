@@ -13,7 +13,11 @@ export {
   type Attribute,
   type CatalogAttribute,
 } from "./attribute"
-export { PLATFORM_SCHEMA, appSchemaNameSchema } from "./pg-schema"
+export {
+  PLATFORM_SCHEMA,
+  PLATFORM_STATE_TABLES,
+  appSchemaNameSchema,
+} from "./pg-schema"
 export { tabularSectionSchema, type TabularSection } from "./tabular-section"
 export {
   compositeIndexesSchema,
@@ -176,7 +180,6 @@ export {
   PROVIDER_SCHEMAS,
   PROVIDER_EXPRESSION_FUNCTIONS,
   PROVIDER_FUNCTIONS,
-  PROVIDER_SQL_TEXT_FUNCTIONS,
   SESSION_CLAIMS_SETTING,
   type ApiRolePurpose,
   type CommandContext,

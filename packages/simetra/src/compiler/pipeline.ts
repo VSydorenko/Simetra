@@ -252,7 +252,8 @@ export async function runStages(
         kinds,
         parse,
         plpgsql,
-        modelViews(sql.units)
+        modelViews(sql.units),
+        sql.units
       ),
       parse,
       plpgsql,

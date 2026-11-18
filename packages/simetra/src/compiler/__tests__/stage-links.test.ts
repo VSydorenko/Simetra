@@ -353,7 +353,11 @@ describe("stage 5: scope set functions", () => {
       metaFiles({
         "project.meta.json": scopedProject(),
         "catalogs/Organization/Organization.meta.json": organization(),
-        [FUNCTIONS]: sql ?? create("unrelated()"),
+        // Не функція множини, тож без `SECURITY DEFINER`: інакше її, доступну
+        // ролям API, відмовила б перевірка викликача (платформна спека §6.7).
+        [FUNCTIONS]:
+          sql ??
+          create("unrelated()", "RETURNS SETOF uuid LANGUAGE sql STABLE"),
       })
     )
 
@@ -495,7 +499,12 @@ describe("stage 5: scope set functions", () => {
   })
 
   it.each([
-    ["arguments", create("org_ids(a uuid)")],
+    // З аргументом це вже не функція множини, а definer-функція застосунку
+    // відмовлялася б ще й перевіркою викликача: оболонка без `SECURITY DEFINER`.
+    [
+      "arguments",
+      create("org_ids(a uuid)", "RETURNS SETOF uuid LANGUAGE sql STABLE"),
+    ],
     ["not setof", create("org_ids()", "RETURNS uuid LANGUAGE sql STABLE")],
     ["not uuid", create("org_ids()", "RETURNS SETOF text LANGUAGE sql STABLE")],
     [

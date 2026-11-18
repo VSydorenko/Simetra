@@ -14,7 +14,6 @@ import {
   PROVIDER_LOGIN_ROLES,
   PROVIDER_OWNER_ROLES,
   PROVIDER_SCHEMAS,
-  PROVIDER_SQL_TEXT_FUNCTIONS,
   loginRoleParentNames,
   projectSchema,
   type GrantPurpose,
@@ -47,16 +46,6 @@ const POSTGRES_ROWS = [
   ],
   ["PROVIDER_FUNCTIONS", PROVIDER_FUNCTIONS, []],
   ["PROVIDER_EXPRESSION_FUNCTIONS", PROVIDER_EXPRESSION_FUNCTIONS, []],
-  [
-    "PROVIDER_SQL_TEXT_FUNCTIONS",
-    PROVIDER_SQL_TEXT_FUNCTIONS,
-    [
-      "extensions.dblink",
-      "extensions.dblink_exec",
-      "extensions.dblink_send_query",
-      "extensions.dblink_open",
-    ],
-  ],
   [
     "PROVIDER_IDENTITY_SOURCES",
     PROVIDER_IDENTITY_SOURCES,

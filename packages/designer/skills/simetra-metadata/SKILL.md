@@ -362,9 +362,9 @@ tolerates. It only shrinks:
   function; moving it to another file does not make it acceptable.
 - A project with an existing `sql/` folder and no list is seeded by running
   `introspect` again (see `simetra-adoption`).
-- Debt SQL must not write `simetra.*` (`sql.command-context-write`), and its
-  function bodies follow `sql.function-body-statement` (`references/sql-trust-boundary.md`);
-  `sql.definer-reads-rls` marks reads past RLS (`references/people-and-rights.md`).
+- Debt SQL must not write `simetra.*`; its function bodies follow
+  `sql.function-body-statement` (`references/sql-trust-boundary.md`); for
+  `SECURITY DEFINER` and views see `references/people-and-rights.md`.
 
 ## The database: introspect and diff
 

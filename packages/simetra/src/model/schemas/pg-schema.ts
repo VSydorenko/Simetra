@@ -9,6 +9,17 @@ import type { SchemaRule } from "./rules"
 export const PLATFORM_SCHEMA = "simetra"
 
 /**
+ * Tables of the apply state in the platform schema (P2 spec §8.6): the
+ * marker, the ledger and the row version epoch row. They live outside the
+ * physical snapshot, so the compiler takes their names from here.
+ */
+export const PLATFORM_STATE_TABLES = [
+  "marker",
+  "ledger",
+  "version_epoch",
+] as const
+
+/**
  * Ім'я PostgreSQL-схеми, яку обирає застосунок. Єдине місце перевірки
  * резервування: поля схем, що несуть ім'я схеми застосунку, беруть цю схему,
  * а не повторюють порівняння.
