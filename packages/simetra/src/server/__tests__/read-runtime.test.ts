@@ -33,6 +33,7 @@ import {
   ORGANIZATION,
   answer,
   create,
+  HARNESS_EPOCH,
   readSetup,
   session,
   setup,
@@ -723,7 +724,7 @@ describe("CommandRuntime.readParts", () => {
         { type: "query", query: { object: RIGHTS, count: true } },
       ])
     ).toEqual({
-      epoch: null,
+      epoch: HARNESS_EPOCH,
       items: [
         ok(valueOf(OTHER)),
         ok({
@@ -787,6 +788,26 @@ describe("CommandRuntime.readParts", () => {
     expect(db.calls[5]).toEqual(cardOf(R2))
   })
 
+  it("reads with a null epoch and ignores known when the database has no epoch row", async () => {
+    // Для читання `NULL` законний (репліка, база без рядка епохи, П4-B §4.5):
+    // відповідь повна, `known` не береться до уваги.
+    const { db, runtime } = await setup((text, params) =>
+      text.includes("row_version_epoch")
+        ? { rows: [{ epoch: null }] }
+        : cards(text, params)
+    )
+    const result = await runtime.readParts(session, [
+      { ...card(OTHER), known: { epoch: HEX, keys: [OTHER], versions: ["1"] } },
+    ])
+    expect(result).toEqual({ epoch: null, items: [ok(valueOf(OTHER))] })
+    expect(db.calls).toEqual([
+      ...opened(),
+      cardOf(OTHER),
+      COMMIT,
+      { release: false },
+    ])
+  })
+
   it.each<[string, Answer]>([
     ["an epoch that is not 64 hex", { rows: [{ epoch: "zz" }] }],
     ["an epoch of the wrong type", { rows: [{ epoch: 42 }] }],
@@ -818,7 +839,7 @@ describe("CommandRuntime.readParts", () => {
       failing(R2, { error: { code: "57014", message: "canceling statement" } })
     )
     expect(await runtime.readParts(session, three)).toEqual({
-      epoch: null,
+      epoch: HARNESS_EPOCH,
       items: [ok(valueOf(OTHER)), fail(TIMEOUT), fail(ABORTED)],
     })
     expect(db.calls).toEqual([
@@ -836,7 +857,7 @@ describe("CommandRuntime.readParts", () => {
       failing(R2, { error: { code: "25P04", message: "transaction timeout" } })
     )
     expect(await runtime.readParts(session, three)).toEqual({
-      epoch: null,
+      epoch: HARNESS_EPOCH,
       items: [ok(valueOf(OTHER)), fail(TIMEOUT), fail(ABORTED)],
     })
     expect(db.calls).toEqual([
@@ -852,7 +873,7 @@ describe("CommandRuntime.readParts", () => {
       failing(R2, { error: { code: "08006", message: "gone" } })
     )
     expect(await runtime.readParts(session, three)).toEqual({
-      epoch: null,
+      epoch: HARNESS_EPOCH,
       items: [
         ok(valueOf(OTHER)),
         fail({ code: "command.unavailable" }),
@@ -876,7 +897,7 @@ describe("CommandRuntime.readParts", () => {
     async (_, failure) => {
       const { db, runtime, log } = await setup(failing(R2, failure))
       expect(await runtime.readParts(session, three)).toEqual({
-        epoch: null,
+        epoch: HARNESS_EPOCH,
         items: [
           ok(valueOf(OTHER)),
           fail({ code: "command.internal" }),
@@ -900,7 +921,7 @@ describe("CommandRuntime.readParts", () => {
     expect(
       await runtime.readParts(session, [card(OTHER), invalid, card(R2)])
     ).toEqual({
-      epoch: null,
+      epoch: HARNESS_EPOCH,
       items: [
         ok(valueOf(OTHER)),
         fail({ code: "command.invalid", path: "limit", object: RIGHTS }),
@@ -924,7 +945,7 @@ describe("CommandRuntime.readParts", () => {
     expect(
       await runtime.readParts(session, [card(OTHER), invalid, card(R2)])
     ).toEqual({
-      epoch: null,
+      epoch: HARNESS_EPOCH,
       items: [
         fail(TIMEOUT),
         fail({ code: "command.invalid", path: "limit", object: RIGHTS }),
@@ -1056,7 +1077,7 @@ describe("CommandRuntime.readParts", () => {
       index === 1 ? ("overflow" as const) : ("accept" as const)
     )
     expect(await runtime.readParts(session, three, { fit })).toEqual({
-      epoch: null,
+      epoch: HARNESS_EPOCH,
       items: [
         ok(valueOf(OTHER)),
         ok(valueOf(R2)),
@@ -1097,7 +1118,7 @@ describe("CommandRuntime.readParts", () => {
       armed = true
       expect(await runtime.readParts(session, [card(OTHER), card(R2)])).toEqual(
         {
-          epoch: null,
+          epoch: HARNESS_EPOCH,
           items: [ok(valueOf(OTHER)), ok(valueOf(R2))],
         }
       )
@@ -1242,7 +1263,10 @@ describe("CommandRuntime.readParts", () => {
         const { db, runtime } = await setup(elapse(atEpoch, ms))
         expect(
           await runtime.readParts(session, [card(OTHER), card(R2)])
-        ).toEqual({ epoch: null, items: [fail(TIMEOUT), fail(TIMEOUT)] })
+        ).toEqual({
+          epoch: HARNESS_EPOCH,
+          items: [fail(TIMEOUT), fail(TIMEOUT)],
+        })
         expect(db.calls).toEqual([...opened(), COMMIT, { release: false }])
       }
     )
@@ -1252,7 +1276,7 @@ describe("CommandRuntime.readParts", () => {
         elapse((text, params) => isRead(text) && params[0] === OTHER, 15_000)
       )
       expect(await runtime.readParts(session, three)).toEqual({
-        epoch: null,
+        epoch: HARNESS_EPOCH,
         items: [ok(valueOf(OTHER)), fail(TIMEOUT), fail(TIMEOUT)],
       })
       expect(db.calls).toEqual([
@@ -1286,7 +1310,7 @@ describe("CommandRuntime.readParts", () => {
           },
           card(OTHER),
         ])
-      ).toEqual({ epoch: null, items: [fail(TIMEOUT), fail(TIMEOUT)] })
+      ).toEqual({ epoch: HARNESS_EPOCH, items: [fail(TIMEOUT), fail(TIMEOUT)] })
       expect(db.calls).toEqual([
         ...opened(),
         linkCard,

@@ -96,6 +96,9 @@ export const readSetup = (
   params: [JSON.stringify(claims), statement, guard, role],
 })
 /** Епоха версій бази — оператор після налаштування, уже під роллю читання. */
+/** The row version epoch the default answers give. */
+export const HARNESS_EPOCH = "f".repeat(64)
+
 export const EPOCH = {
   text: 'SELECT "simetra"."row_version_epoch"() AS epoch',
   params: [],
@@ -156,8 +159,9 @@ export function answer(text: string): Answer {
   // Факти ролі входу — раніше за членство: той самий `pg_has_role` у тексті.
   if (text.includes("AS provider_login")) return { rows: [LOGIN_FACTS_NONE] }
   if (text.includes("pg_has_role")) return { rows: [{ member: "t" }] }
-  // База без рядка епохи: функція відповідає `NULL`.
-  if (text.includes("row_version_epoch")) return { rows: [{ epoch: null }] }
+  // База з епохою: без неї команда відкочується (П4-B §7.4).
+  if (text.includes("row_version_epoch"))
+    return { rows: [{ epoch: HARNESS_EPOCH }] }
   if (text.includes("rights_role_")) {
     return { rows: [{ r: JSON.stringify({ id: ID, version: 1, code: "R" }) }] }
   }
