@@ -197,8 +197,9 @@ export function useRoundTrip(): void {
 export const schemaPath: SchemaPathResolver = (_file, schemaFile) =>
   `schemas/${schemaFile}`
 
-export const errors = (diagnostics: readonly { severity: string }[]) =>
-  diagnostics.filter((d) => d.severity === "error")
+export const errors = <T extends { severity: string }>(
+  diagnostics: readonly T[]
+) => diagnostics.filter((d) => d.severity === "error")
 
 export async function withClient<T>(
   db: DbConnection,
@@ -243,6 +244,15 @@ interface Loss {
   triggers: { schema: string; table: string; name: string }[]
   functions: { schema: string; name: string }[]
   identities: string[]
+  /**
+   * Функції форм платформи (множини скоупу, значень виміру), які прийом з нуля
+   * повертає звичайними `SECURITY DEFINER`-функціями з `EXECUTE` для ролей
+   * API: зв'язку з видом скоупу чи виміром зворотна генерація не знає, тож
+   * компіляція повернутої теки відмовляє їм `sql.definer-caller-unchecked`
+   * (платформна спека §6.7), доки їх не зв'язано чи не задекларовано. Далі
+   * ланцюжок іде без них — як без втраченої механіки.
+   */
+  definers: { schema: string; name: string }[]
 }
 
 const NO_LOSS = (scope: EngineScope): Loss => ({
@@ -250,7 +260,33 @@ const NO_LOSS = (scope: EngineScope): Loss => ({
   triggers: [],
   functions: [],
   identities: [],
+  definers: [],
 })
+
+const qualifiedName = (f: { schema: string; name: string }) =>
+  `${f.schema}.${f.name}`
+
+/** Помилки прийому — рівно відмови `definers`, решти немає. */
+function expectRefusedDefiners(
+  diagnostics: readonly {
+    severity: string
+    code: string
+    params?: Record<string, unknown>
+  }[],
+  definers: Loss["definers"]
+): void {
+  expect(
+    errors(diagnostics).map((d) => ({
+      code: d.code,
+      function: d.params?.function,
+    }))
+  ).toEqual(
+    definers.map((f) => ({
+      code: "sql.definer-caller-unchecked",
+      function: qualifiedName(f),
+    }))
+  )
+}
 
 /**
  * Послідовність версій компілятор видає завжди, тож межа з метаданих завжди
@@ -290,7 +326,8 @@ interface RoundTrip {
 async function expectKindLabelsKept(
   extracted: Extracted,
   project: Project,
-  files: ReadonlyMap<string, string>
+  files: ReadonlyMap<string, string>,
+  definers: Loss["definers"]
 ): Promise<void> {
   const labels = (map: ReadonlyMap<string, string>) =>
     new Map(
@@ -317,8 +354,37 @@ async function expectKindLabelsKept(
     schemaPath,
     parse,
   })
-  expect(errors(again.diagnostics)).toEqual([])
+  expectRefusedDefiners(again.diagnostics, definers)
   expect(labels(again.files)).toEqual(labels(existing))
+}
+
+/**
+ * Прийом з нуля бази з функціями форм платформи (`Loss.definers`): ланцюжок
+ * §9 закінчується на зворотній генерації — її помилки рівно відмови цих
+ * функцій, а моделі з такою текою компілятор не дає. Повертає теку.
+ * Задокументований вихід (зв'язати функцію з видом скоупу) над прийнятими
+ * `CustomTable` вимагає ще й оголосити скоуп кожної таблиці
+ * (`scope.declaration-missing`) — #276.
+ */
+async function refusedRoundTrip(
+  target: DbConnection,
+  extractScope: EngineScope,
+  project: Project,
+  loss: Loss
+): Promise<Map<string, string>> {
+  await withPlatformSequence(target)
+  const extracted = await engine.extract(target, extractScope)
+  expect(errors(extracted.diagnostics)).toEqual([])
+  const reversed = await reverseGenerate(extracted.model, {
+    project: { name: "RoundTrip", ...project },
+    existing: new Map(),
+    newId: () => randomUUID(),
+    schemaPath,
+    parse,
+  })
+  expectRefusedDefiners(reversed.diagnostics, loss.definers)
+  await expectKindLabelsKept(extracted, project, reversed.files, loss.definers)
+  return new Map(reversed.files)
 }
 
 /**
@@ -343,8 +409,8 @@ export async function roundTripOf(
     schemaPath,
     parse,
   })
-  expect(errors(reversed.diagnostics)).toEqual([])
-  await expectKindLabelsKept(extracted, project, reversed.files)
+  expectRefusedDefiners(reversed.diagnostics, loss.definers)
+  await expectKindLabelsKept(extracted, project, reversed.files, loss.definers)
 
   const compiled = await compile(reversed.files)
   expect(errors(compiled.diagnostics)).toEqual([])
@@ -493,6 +559,28 @@ async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
     )
   )
   expect(grants.every((u) => u !== undefined)).toBe(true)
+  // Функції форм платформи, названі проєктом: функція множини виду скоупу
+  // (крім згенерованої з членства) і функція значень виміру.
+  const { project } = source
+  const named = [
+    ...project.scopeKinds.flatMap((kind) =>
+      typeof kind.setFunction === "object" ? [kind.setFunction] : []
+    ),
+    ...project.accessDimensions.flatMap((dimension) =>
+      "function" in dimension.values ? [dimension.values.function] : []
+    ),
+  ].map((f) => ({ schema: f.schema ?? project.defaultSchema, name: f.name }))
+  const definers = [
+    ...new Map(
+      named
+        .filter((f) =>
+          source.sqlUnits.some(
+            (u) => u.identity === `function:${qualifiedName(f)}()`
+          )
+        )
+        .map((f) => [qualifiedName(f), f])
+    ).values(),
+  ].sort((a, b) => (qualifiedName(a) < qualifiedName(b) ? -1 : 1))
   return {
     schemas: [...inScope],
     triggers,
@@ -502,6 +590,7 @@ async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
       ...fnIdentities,
       ...grants.map((u) => u!.identity),
     ],
+    definers,
   }
 }
 
@@ -658,29 +747,36 @@ export async function deployedRoundTrip(
   files: Map<string, string>,
   existing: ReadonlyMap<string, string>,
   endToEnd: boolean
-): Promise<{ source: CompiledModel; result: RoundTrip }> {
+): Promise<{
+  source: CompiledModel
+  result?: RoundTrip
+  adopted?: Map<string, string>
+}> {
   const original = await compile(files)
   expect(errors(original.diagnostics)).toEqual([])
   const source = original.model!
   const { scope } = await engineScope(source)
   const loss =
     existing.size === 0 ? await mechanicsLoss(source) : NO_LOSS(scope)
+  const project = {
+    name: source.project.name,
+    defaultSchema: source.project.defaultSchema,
+    attributeCase: source.project.naming.attributeCase,
+    databaseProvider: source.project.database.provider,
+  }
+  if (loss.definers.length > 0) {
+    const adopted = await inTarget(
+      renderDesiredState(source).sql,
+      scope,
+      (target) => refusedRoundTrip(target, scope, project, loss)
+    )
+    return { source, adopted }
+  }
   const result = await inTarget(
     renderDesiredState(source).sql,
     scope,
     async (target) => {
-      const trip = await roundTripOf(
-        target,
-        scope,
-        {
-          name: source.project.name,
-          defaultSchema: source.project.defaultSchema,
-          attributeCase: source.project.naming.attributeCase,
-          databaseProvider: source.project.database.provider,
-        },
-        existing,
-        loss
-      )
+      const trip = await roundTripOf(target, scope, project, existing, loss)
       if (loss.triggers.length > 0) expectLossNeedsPermission(trip, loss)
       if (endToEnd) await expectPlanAndApply(target, trip.model, loss)
       return trip
@@ -692,6 +788,41 @@ export async function deployedRoundTrip(
 
 export const kindsOf = (model: CompiledModel) =>
   [...new Set(model.objects.map((o) => o.kind))].sort()
+
+/** Метадані об'єктів повернутої теки: вид, схема й фізичне ім'я таблиці. */
+const metaOf = (files: ReadonlyMap<string, string>) =>
+  [...files]
+    .filter(
+      ([path]) => path.endsWith(".meta.json") && path !== "project.meta.json"
+    )
+    .map(
+      ([, text]) =>
+        JSON.parse(text) as {
+          kind: string
+          schema?: string
+          physicalName?: string
+        }
+    )
+
+/** Види об'єктів повернутої теки (`*.meta.json`). */
+export const kindsOfFiles = (files: ReadonlyMap<string, string>) =>
+  [...new Set(metaOf(files).map((m) => m.kind))].sort()
+
+/**
+ * Таблиці `CustomTable` повернутої теки як `схема.ім'я`: зворотна генерація
+ * лишає фізичні імена (спека П2 §9), тож кожна таблиця мусить їх назвати.
+ */
+export const tableKeysOfFiles = (
+  files: ReadonlyMap<string, string>,
+  defaultSchema: string
+) =>
+  metaOf(files)
+    .filter((m) => m.kind === "CustomTable")
+    .map((m) => {
+      expect(m.physicalName).toBeDefined()
+      return `${m.schema ?? defaultSchema}.${m.physicalName}`
+    })
+    .sort()
 
 /** Діагностики extract-у цілі з `sql`. */
 export async function extractDiagnostics(

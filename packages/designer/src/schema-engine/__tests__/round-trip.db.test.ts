@@ -24,7 +24,9 @@ import {
   roundTripOf,
   schemaPath,
   scopeOf,
+  kindsOfFiles,
   tableKeys,
+  tableKeysOfFiles,
   useRoundTrip,
 } from "./round-trip.support"
 
@@ -192,17 +194,24 @@ describe("a role of the application's own", () => {
 describe("adoption from scratch: the deployment fixture corpus survives the round trip", () => {
   for (const [name, fixture] of FIXTURES) {
     it(name, async () => {
-      const { source, result } = await deployedRoundTrip(
+      const { source, result, adopted } = await deployedRoundTrip(
         fixture(testProvider()),
         new Map(),
         true
       )
-      // Види 1С повертаються як `CustomTable` з тими самими фізичними іменами
-      expect(tableKeys(result.model)).toEqual(tableKeys(source))
+      // Види 1С повертаються як `CustomTable` з тими самими фізичними іменами.
+      // Фікстура з функцією множини скоупу після прийому з нуля моделі не дає
+      // (`sql.definer-caller-unchecked`, платформна спека §6.7): тоді таблиці
+      // й види — з повернутих метаданих.
+      const tables =
+        result !== undefined
+          ? tableKeys(result.model)
+          : tableKeysOfFiles(adopted!, source.project.defaultSchema)
+      const kinds =
+        result !== undefined ? kindsOf(result.model) : kindsOfFiles(adopted!)
+      expect(tables).toEqual(tableKeys(source))
       expect(
-        kindsOf(result.model).filter(
-          (kind) => kind !== "CustomTable" && kind !== "PgEnum"
-        )
+        kinds.filter((kind) => kind !== "CustomTable" && kind !== "PgEnum")
       ).toEqual([])
     })
   }
@@ -216,7 +225,12 @@ describe("adoption from scratch: the deployment fixture corpus survives the roun
 describe("over existing metadata: the reference domain survives the round trip", () => {
   it("reference domain", async () => {
     const files = readReferenceDomain(testProvider())
-    const { source, result } = await deployedRoundTrip(files, files, false)
+    const { source, result: trip } = await deployedRoundTrip(
+      files,
+      files,
+      false
+    )
+    const result = trip!
     // Види 1С і платформний шар лишаються описаними власною текою
     expect(tableKeys(result.model)).toEqual(tableKeys(source))
     expect(kindsOf(result.model)).toEqual(kindsOf(source))
