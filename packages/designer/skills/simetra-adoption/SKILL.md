@@ -1,6 +1,6 @@
 ---
 name: simetra-adoption
-description: Use when bringing an existing live PostgreSQL database under Simetra metadata for the first time — reading its schemas into a `metadata/` directory with `simetra introspect`, then proving with `simetra diff` that the metadata and the database match. Covers choosing the scope (`--schemas`, `--tables`), the connection and shadow database settings, exit codes, and how to treat unrepresentable objects and non-empty results. Not for everyday editing of metadata (that is `simetra-metadata`).
+description: Use when bringing an existing live PostgreSQL database under Simetra metadata for the first time — reading its schemas into a `metadata/` directory with `simetra introspect`, then proving with `simetra diff` that the metadata and the database match. Covers choosing the scope (`--schemas`, `--tables`), the connection and shadow database settings, exit codes, and how to treat unrepresentable objects and non-empty results. Also covers the first screen after adoption: one-line list and card routes (`entityListRoute`, `entityCardRoute`). Not for everyday editing of metadata (that is `simetra-metadata`).
 ---
 
 # Simetra adoption — introspect a live database, then diff
@@ -183,3 +183,31 @@ class `platform` only when the kind replaces it, and `plan` refuses
 - `diff` also reports `applyState`: `absent` while the database holds none of
   the platform's apply state (the first `apply` creates it, so it is not a
   difference), `present` otherwise.
+
+## First screen: one-line routes
+
+After adoption, an object gets a standard list and card screen from one line
+per route in the template app (`src/routes/`). `entity` is the descriptor the
+app exports for the object (`Client` in the example); the route files stay
+under TanStack Router's file naming:
+
+```ts
+// src/routes/clients/index.tsx
+export const Route = createFileRoute("/clients/")(entityListRoute(Client))
+
+// src/routes/clients/$id.tsx
+export const Route = createFileRoute("/clients/$id")(entityCardRoute(Client))
+```
+
+- Both helpers come from `simetra/shell`. The list route preloads the list
+  view and renders `ListHost`; the card route preloads the card and its
+  tabular sections for the `id` path parameter and renders `CardHost`. Both
+  set `ssr: true`, so the first paint already carries the user's own rows.
+- `entityListRoute(entity, { orderBy, include })` takes optional `orderBy`
+  (for example `[{ attribute: "description", direction: "asc" }]`) and
+  `include` references.
+- Do not add a data-fetching loader, a query or a store by hand: the data
+  runtime of the request is already in the router context, and the route
+  helpers use it.
+- The card edits header attributes only; creating rows and editing tabular
+  sections are not part of these routes.
