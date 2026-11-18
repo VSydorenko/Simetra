@@ -5,7 +5,7 @@ import {
   type CommandError,
   type Operation,
 } from "simetra/model"
-import { DataError } from "../errors"
+import { DataError, type DataErrorCode } from "../errors"
 import { closedError, closedMutation, nextMutationId } from "./closed-mutation"
 import { NO_DEFECTS, type Defects } from "./defects"
 import { heldEpoch, keyId, pairId } from "./epoch"
@@ -52,9 +52,11 @@ export interface UpdateOptions {
 export interface Overlay {
   /**
    * Starts an `update` (P4-B spec §7.1). Throws synchronously, before the
-   * journal and the transport: `TypeError` for a name outside the catalog,
-   * `DataError` `data.version-required`, `data.mutation-pending`,
-   * `data.journal-full`.
+   * journal and the transport, only for a caller error: `TypeError` for a
+   * name outside the catalog, `DataError` `data.version-required`. A refusal
+   * by the write state — `data.mutation-pending`, `data.journal-full` — is a
+   * mutation that settles failed with that `DataError`, the journal and the
+   * row unchanged.
    */
   update(
     object: ObjectName,
@@ -241,6 +243,15 @@ export function createOverlay(deps: {
     unsettled.add(attempt)
     return attempt
   }
+
+  /** A mutation refused by the write state: settled failed, never sent. */
+  const refused = (code: DataErrorCode): Mutation =>
+    Object.freeze({
+      id: nextMutationId(),
+      settled: Promise.resolve<MutationResult>(
+        Object.freeze({ ok: false, error: new DataError(code) })
+      ),
+    })
 
   const mutationOfAttempt = (attempt: Attempt): Mutation =>
     Object.freeze({ id: attempt.id, settled: attempt.settled })
@@ -574,11 +585,12 @@ export function createOverlay(deps: {
         throw new TypeError(`update: ${object} has no such attribute`)
       if (!session.token().valid)
         return closedMutation(session.closed ?? "disposed")
+      // Стан запису — не помилка викликача: та сама форма відмови, що й від
+      // сервера (`settled` з `failed`), без журналу й транспорту (§7.1).
       const existing = entryOf(object, key)
-      if (existing?.state === "pending")
-        throw new DataError("data.mutation-pending")
+      if (existing?.state === "pending") return refused("data.mutation-pending")
       if (existing === undefined && keys >= JOURNAL_MAX)
-        throw new DataError("data.journal-full")
+        return refused("data.journal-full")
       const attempt = newAttempt({ object, key })
       const entry: JournalEntry = {
         object,

@@ -15,8 +15,10 @@ export interface DataWriter {
    * confirmed version the edit is based on. The shown row keeps its values
    * until the answer and has the state `pending`; `settled` resolves when
    * the attempt settles and never rejects. Throws synchronously, before the
-   * transport: `TypeError` for a name outside the catalog, `DataError`
-   * `data.version-required`, `data.mutation-pending` (the key has a
+   * transport, only for a caller error: `TypeError` for a name outside the
+   * catalog, `DataError` `data.version-required`. A refusal by the write
+   * state settles failed with its `DataError`, without the transport and
+   * with the journal unchanged: `data.mutation-pending` (the key has a
    * `pending` mutation), `data.journal-full`. An update of a key with a
    * `failed`, `conflict` or `unknown` mutation replaces it.
    */

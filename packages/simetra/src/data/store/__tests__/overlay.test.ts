@@ -8,6 +8,7 @@ import { createFakeSource, type FakeSource } from "../testing/fake-source"
 import {
   DEFAULT_CORE_LIMITS,
   type CoreLimits,
+  type Mutation,
   type RowView,
   type ViewHandle,
 } from "../types"
@@ -281,22 +282,6 @@ describe("DataWriter.update — developer errors before the journal (§6.1)", ()
     expect(h.port.runs).toBe(0)
   })
 
-  it("Р1: refuses a second update of a pending key with data.mutation-pending", async () => {
-    const h = harness()
-    const { version } = await mounted(h)
-    h.port.hold = true
-    h.core.update(TASK, K, { title: "a" }, { expectedVersion: version })
-    let thrown: unknown
-    try {
-      h.core.update(TASK, K, { title: "b" }, { expectedVersion: version })
-    } catch (error) {
-      thrown = error
-    }
-    expect(thrown).toBeInstanceOf(DataError)
-    expect((thrown as DataError).code).toBe("data.mutation-pending")
-    expect(h.port.runs).toBe(1)
-  })
-
   it("Р1: an update of a failed key replaces its mutation", async () => {
     const h = harness()
     const { card, version } = await mounted(h)
@@ -328,22 +313,78 @@ describe("DataWriter.update — developer errors before the journal (§6.1)", ()
     expect(h.port.runs).toBe(2)
     expect(shown(rowOf(card)).mutation).toBeUndefined()
   })
+})
 
-  it(`the journal holds ${JOURNAL_MAX} mutations: the next key is data.journal-full without the transport`, () => {
+/*
+ * Стан запису (ключ `pending`, повний журнал) — не помилка викликача, а
+ * відмова запису: `update` не кидає, а повертає мутацію, що осідає `failed`
+ * з кодом, — одна форма відмови для всього шляху запису (§7.1, #242).
+ */
+describe("DataWriter.update — a refusal by the write state settles failed (§7.1)", () => {
+  /** The refusal of a mutation: a `DataError` with its code in `settled`. */
+  async function refusedWith(mutation: Mutation, code: DataError["code"]) {
+    const result = await mutation.settled
+    expect(result).toMatchObject({ ok: false, error: { code } })
+    expect(result.ok === false && result.error).toBeInstanceOf(DataError)
+  }
+
+  it("Р1: a second update of a pending key settles failed with data.mutation-pending", async () => {
     const h = harness()
+    const { card, seen, version } = await mounted(h)
     h.port.hold = true
-    for (let n = 1; n <= JOURNAL_MAX; n++)
+    const first = h.core.update(
+      TASK,
+      K,
+      { title: "a" },
+      { expectedVersion: version }
+    )
+    const journal = h.inspect.mutations()
+    const row = rowOf(card)
+    const notified = seen.seen.length
+    const second = h.core.update(
+      TASK,
+      K,
+      { title: "b" },
+      { expectedVersion: version }
+    )
+    expect(second.id).not.toBe(first.id)
+    await refusedWith(second, "data.mutation-pending")
+    expect(h.port.runs).toBe(1)
+    expect(h.inspect.mutations()).toEqual(journal)
+    // Рядок показує ту саму мутацію `pending`: відмова його не чіпає.
+    expect(rowOf(card)).toBe(row)
+    expect(seen.seen.length).toBe(notified)
+    h.port.release()
+    expect(await first.settled).toMatchObject({
+      ok: true,
+      rows: [{ values: { title: "a" } }],
+    })
+  })
+
+  it(`the journal holds ${JOURNAL_MAX} mutations: the next key settles failed with data.journal-full without the transport`, async () => {
+    const h = harness()
+    const { card, seen, version } = await mounted(h)
+    h.port.hold = true
+    for (let n = 2; n <= JOURNAL_MAX + 1; n++)
       h.core.update(TASK, key(n), { title: "x" }, { expectedVersion: 1 })
     expect(h.port.runs).toBe(JOURNAL_MAX)
-    expect(() =>
-      h.core.update(
-        TASK,
-        key(JOURNAL_MAX + 1),
-        { title: "x" },
-        { expectedVersion: 1 }
-      )
-    ).toThrow(expect.objectContaining({ code: "data.journal-full" }))
+    const journal = h.inspect.mutations()
+    const size = h.inspect.serviceSizes().journal
+    const row = rowOf(card)
+    const notified = seen.seen.length
+    const refused = h.core.update(
+      TASK,
+      K,
+      { title: "x" },
+      { expectedVersion: version }
+    )
+    await refusedWith(refused, "data.journal-full")
     expect(h.port.runs).toBe(JOURNAL_MAX)
+    expect(h.inspect.mutations()).toEqual(journal)
+    expect(h.inspect.serviceSizes().journal).toBe(size)
+    expect(rowOf(card)).toBe(row)
+    expect(row).not.toHaveProperty("mutation")
+    expect(seen.seen.length).toBe(notified)
   })
 })
 
