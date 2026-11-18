@@ -327,6 +327,22 @@ describe("scheduler: the pause after a failure", () => {
     expect(healthy).toHaveLength(1 + 10)
   })
 
+  it("the window of 10 % does not take a view in its pause: it is read at the end of the pause, not on the tick of another view", async () => {
+    const h = build()
+    const { view } = await loadedTask(h, taskKeys(1, 2))
+    await loadedTask(h, orgKeys(1))
+    const t0 = Date.now()
+    const moments = breakServer(h, (object) => object === TASK)
+    await advance(57_000)
+    view.refresh() // збій о 57 с: пауза до 63 с
+    await settle()
+    await advance(3_000) // 60 с: такт справного вигляду
+    expect(moments.map((m) => (m.at - t0) / 1000)).toEqual([57])
+    expect(h.fake.requests.at(-1)).toBe(1)
+    await advance(3_000)
+    expect(moments.map((m) => (m.at - t0) / 1000)).toEqual([57, 63])
+  })
+
   it("refresh() fails at 30 s: 0 reads before 36 s, exactly 1 at 36 s", async () => {
     const h = build()
     const { view } = await loadedTask(h)

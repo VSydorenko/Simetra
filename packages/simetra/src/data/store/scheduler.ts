@@ -75,7 +75,8 @@ export function createScheduler(ctx: SchedulerContext): Scheduler {
   function request() {
     if (pending) return
     pending = true
-    queueMicrotask(plan)
+    // Не `queueMicrotask`: його підміняють тести перевідкидання помилок host-а.
+    void Promise.resolve().then(plan)
   }
 
   return {
