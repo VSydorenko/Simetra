@@ -482,6 +482,44 @@ describe("the reconciliation after hydration", () => {
     }
   )
 
+  it("re-reads the views of the snapshot nobody subscribed to yet in one request with the version (preload, endHydration, subscribe later)", async () => {
+    const fake = serverWorld()
+    const spec: ViewSpec = { kind: "full", object: TASK, include: ["org"] }
+    const snapshot = await takeSnapshot(fake, [spec])
+    const a = runtimeOver(fake)
+    a.runtime.hydrate(snapshot)
+    await a.runtime.preload(spec)
+    a.runtime.endHydration()
+    await settle()
+    // Порядок реального host-а: підписка маршруту — пізніше за ефект кореня.
+    a.core.view(spec).subscribe(() => {})
+    await settle()
+    expect(a.wire.calls).toHaveLength(1)
+    const request = a.wire.calls[0]!.request
+    const parts = (request.type === "read" ? request.items : []) as {
+      type: string
+    }[]
+    expect(parts.map((part) => part.type)).toEqual([
+      "version",
+      "query",
+      "query",
+    ])
+  })
+
+  it("lets a snapshot view nobody subscribes to go after the release delay: the re-read does not extend the hold", async () => {
+    const fake = serverWorld()
+    const snapshot = await takeSnapshot(fake, [list])
+    const a = runtimeOver(fake)
+    a.runtime.hydrate(snapshot)
+    a.runtime.endHydration()
+    await settle()
+    expect(a.wire.calls).toHaveLength(1)
+    expect([...coreInternals(a.core).registry.subsets()]).toHaveLength(1)
+    vi.advanceTimersByTime(60_000)
+    await settle()
+    expect([...coreInternals(a.core).registry.subsets()]).toHaveLength(0)
+  })
+
   it("does it once: a repeat of endHydration sends nothing", async () => {
     const fake = serverWorld()
     const snapshot = await takeSnapshot(fake, [card(1)])

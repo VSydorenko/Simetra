@@ -860,7 +860,12 @@ async function writeAgain(
 export async function revalidate(
   ctx: WriterContext,
   object: ObjectName,
-  options: { visibleOnly: boolean; minAgeMs?: number }
+  options: {
+    visibleOnly: boolean
+    minAgeMs?: number
+    /** Views the hydration brought: read although nobody is subscribed yet. */
+    alsoViews?: ReadonlySet<Subset>
+  }
 ): Promise<void> {
   const o = ctx.objectOf(object)
   // Єдина ознака закриття — токен сесії: він недійсний уже з `closing`, коли
@@ -871,7 +876,9 @@ export async function revalidate(
   const targets = subsetsOf(ctx, o).filter(
     (s) =>
       s.loaded &&
-      (!options.visibleOnly || isVisible(s)) &&
+      (!options.visibleOnly ||
+        isVisible(s) ||
+        options.alsoViews?.has(s) === true) &&
       // Відмітка свіжості: без неї вигляд вважається простроченим.
       (options.minAgeMs === undefined ||
         ctx.defects.has("min-age-ignored") ||
@@ -880,7 +887,9 @@ export async function revalidate(
         s.refreshedAt === undefined ||
         (!ctx.defects.has("min-age-all-young") &&
           ctx.now() - s.refreshedAt >= options.minAgeMs)) &&
-      (s.form.spec.kind !== "section" || s.listeners.size > 0)
+      (s.form.spec.kind !== "section" ||
+        s.listeners.size > 0 ||
+        options.alsoViews?.has(s) === true)
   )
   await revalidateViews(ctx, o, targets)
 }

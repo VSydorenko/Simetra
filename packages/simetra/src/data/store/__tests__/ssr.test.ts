@@ -622,7 +622,8 @@ describe("hydrate", () => {
 describe("a hydrated view first shown after the reconciliation", () => {
   /**
    * A snapshot of the views and a core hydrated from it, `endHydration` done:
-   * the reconciliation read only what was subscribed before it.
+   * the reconciliation read every view of the snapshot, subscribed or not.
+   * `since` — the log length before `endHydration`.
    */
   async function hydrated(
     specs: readonly ViewSpec[],
@@ -643,43 +644,42 @@ describe("a hydrated view first shown after the reconciliation", () => {
     const next = coreOver(fake)
     next.core.hydrate(snapshot)
     for (const spec of options.keep ?? []) watch(next.core.view(spec))
+    const since = fake.log.length
     next.core.endHydration()
     await settle()
-    return { ...next, fake, reads: () => fake.log.length }
+    return { ...next, fake, since, reads: () => fake.log.length }
   }
 
   it("a view preloaded into the snapshot, first subscribed after endHydration, is read once", async () => {
     const t = await hydrated([keysView(1, 2)], { preload: true })
-    const before = t.reads()
     watch(t.core.view(keysView(1, 2)))
     await settle()
-    expect(t.reads() - before).toBe(1)
+    // Читання — звірки (вигляд знімка), підписка нового не додає.
+    expect(t.reads() - t.since).toBe(1)
     expect(t.inspect.violations()).toEqual([])
   })
 
   it("a conditional mount within the release delay reads once", async () => {
     const t = await hydrated([keysView(1), keysView(2)])
-    const before = t.reads()
     vi.advanceTimersByTime(RELEASE - 1)
     watch(t.core.view(keysView(2)))
     await settle()
-    expect(t.reads() - before).toBe(1)
+    // По читанню на вигляд знімка, зроблених звіркою; пізня підписка нового не додає.
+    expect(t.reads() - t.since).toBe(2)
   })
 
   it("a hydrated card subscribed late reads once", async () => {
     const t = await hydrated([card(1)])
-    const before = t.reads()
     watch(t.core.view(card(1)))
     await settle()
-    expect(t.reads() - before).toBe(1)
+    expect(t.reads() - t.since).toBe(1)
   })
 
   it("a hydrated tabular section subscribed late reads once", async () => {
     const t = await hydrated([section(1)])
-    const before = t.reads()
     watch(t.core.view(section(1)))
     await settle()
-    expect(t.reads() - before).toBe(1)
+    expect(t.reads() - t.since).toBe(1)
   })
 
   it("a hydrated view with visible false reads once on setVisible(true)", async () => {
@@ -715,7 +715,7 @@ describe("a hydrated view first shown after the reconciliation", () => {
     expect(t.reads() - before).toBe(0)
   })
 
-  it("a card mounted after endHydration over a row held only by an invisible hydrated list reads once", async () => {
+  it("a card mounted after endHydration over a row held only by an invisible hydrated list adds no read: the reconciliation read the list", async () => {
     // Організація без лінивих полів: читання картки — лише від недовіри до
     // рядка, який записала гідратація.
     const orgs: ViewSpec = { kind: "keys", object: ORG, keys: [S, T] }
@@ -725,16 +725,12 @@ describe("a hydrated view first shown after the reconciliation", () => {
       key: ref,
     })
     const t = await hydrated([orgs], { preload: true })
-    const before = t.reads()
-    watch(t.core.view(orgCard(S)))
-    await settle()
-    expect(t.reads() - before).toBe(1)
-    // Довіра — факт рядка: друга картка над тим самим рядком не читає, над
-    // іншим — читає.
+    // Список знімка звірка прочитала, тож рядки вже довірені: картки над
+    // ними нового читання не дають.
     watch(t.core.view(orgCard(S)))
     watch(t.core.view(orgCard(T)))
     await settle()
-    expect(t.reads() - before).toBe(2)
+    expect(t.reads() - t.since).toBe(1)
     expect(t.inspect.violations()).toEqual([])
   })
 
@@ -750,12 +746,11 @@ describe("a hydrated view first shown after the reconciliation", () => {
       preload: true,
       keep: [keysView(1, 2, 3)],
     })
-    const before = t.fake.log.length
     watch(t.core.view(withOrg))
     await settle()
     expect(
       t.fake.log
-        .slice(before)
+        .slice(t.since)
         .some((l) => l.query?.object.name === "Organization")
     ).toBe(true)
   })

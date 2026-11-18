@@ -936,19 +936,30 @@ export function createCore(options: {
   // Звірка (§6.7): версія каталогу й перечитування видимих виглядів живих
   // об'єктів. Усе синхронно, без `await` між об'єктами, тож збирач пакета
   // читань зливає їх в один запит. Її кличуть `endHydration` і `resume`.
-  function reconcile(reconcileOptions: { minAgeMs?: number } = {}) {
+  function reconcile(
+    reconcileOptions: { minAgeMs?: number } = {},
+    snapshotViews?: ReadonlySet<Subset>
+  ) {
     core.requestVersion()
     for (const o of objects.values()) {
       // Несумісний об'єкт не читається (§10): перечитування перевело б його
       // вигляди в `error` замість показати `isStale`.
       if (staleObjects.has(o.name)) continue
-      if (!activeViews(writerContext, o.name).some((v) => v.visible)) continue
+      if (
+        !activeViews(writerContext, o.name).some((v) => v.visible) &&
+        !(snapshotViews !== undefined && holdsAny(o, snapshotViews))
+      )
+        continue
       revalidate(writerContext, o.name, {
         visibleOnly: true,
+        ...(snapshotViews === undefined ? {} : { alsoViews: snapshotViews }),
         ...reconcileOptions,
       }).catch((error: unknown) => log({ kind: "listener-failed", error }))
     }
   }
+
+  const holdsAny = (o: ObjectState, views: ReadonlySet<Subset>) =>
+    [...views].some((s) => s.form.object === o)
 
   const core: CoreSession = {
     subject: options.subject,
@@ -1040,9 +1051,23 @@ export function createCore(options: {
       if (hydration !== "hydrated") return
       hydration = "ended"
       if (!session.token().valid) return
+      // Вигляди знімка — те, що показав SSR: звірка читає їх усі, зокрема ті,
+      // на які ще ніхто не підписався, одним пакетом з `version`. Вигляд, на
+      // який ніхто не підпишеться, звільняється як і раніше: читання
+      // утримання не продовжує.
+      const fromSnapshot = new Set(
+        [...registry.subsets()].filter((s) => s.hydrated)
+      )
       registry.endHydration()
       if (defects.has("hydrate-without-revalidate")) core.requestVersion()
-      else reconcile()
+      // Дефекти самотесту дають колишню звірку лише видимих: без них довіра до
+      // рядків знімка тримається на пізньому читанні, яке вони вимикають.
+      else if (
+        defects.has("late-hydrated-not-reread") ||
+        defects.has("hydrated-row-not-reread")
+      )
+        reconcile()
+      else reconcile({}, fromSnapshot)
     },
     get visible() {
       return visible
