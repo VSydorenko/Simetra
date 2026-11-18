@@ -14,6 +14,7 @@ import {
 import { dropRoles } from "../../__tests__/support/db"
 import type { OracleShape } from "./fixtures/round-trip-classes"
 import {
+  applicationTableKeys,
   deployedRoundTrip,
   engine,
   errors,
@@ -229,8 +230,9 @@ describe("adoption from scratch: the deployment fixture corpus survives the roun
       true
     )
     expect(result).toBeUndefined()
+    // Таблиці платформної установки тека не описує — їх ставить платформа
     expect(tableKeysOfFiles(adopted!, source.project.defaultSchema)).toEqual(
-      tableKeys(source)
+      await applicationTableKeys(source)
     )
     expect(
       kindsOfFiles(adopted!).filter(

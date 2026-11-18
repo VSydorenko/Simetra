@@ -518,6 +518,18 @@ export const tableKeys = (model: CompiledModel) =>
   model.physical.tables.map((t) => `${t.schema}.${t.name}`).sort()
 
 /**
+ * Таблиці моделі без платформної установки (`platformInstall`): їх тека
+ * застосунку не описує (ADR-0095), тож з ними звіряють теку, а не модель.
+ */
+export async function applicationTableKeys(
+  model: CompiledModel
+): Promise<string[]> {
+  const install = await platformInstall(model.project.database.provider)
+  const platform = new Set(install.tables.map((t) => `${t.schema}.${t.name}`))
+  return tableKeys(model).filter((key) => !platform.has(key))
+}
+
+/**
  * Механіка джерела, якої не буде після прийому з нуля: таблиця виду стає
  * `CustomTable` без стандартних колонок, а introspect механіки не пише
  * (спека промоції §9.2). Повертає механіку лише промоція у вид. Тригери
