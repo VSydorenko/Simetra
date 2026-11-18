@@ -616,11 +616,14 @@ describe("useCardDraft — одна охорона запису: save, overwrite
   describe.each(["conflict", "failed"] as const)("%s", (state) => {
     it.each(BLOCKERS)(
       "%s — жодної ввімкненої дії запису в картці",
-      async (_, block) => {
+      async (name, block) => {
         const o = await opened()
         await reach(o, state, "host")
         await block(o)
-        expect(draftState(o.c)).toBe(state)
+        // Несумісний клієнт ховає рядок (Р7): чернетка переходить у `hidden`.
+        expect(draftState(o.c)).toBe(
+          name.startsWith("isStale") ? "hidden" : state
+        )
         expect(enabledWrites(o.c)).toEqual([])
       }
     )

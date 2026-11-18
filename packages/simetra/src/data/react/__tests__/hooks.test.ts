@@ -647,9 +647,8 @@ describe("useRow", () => {
     })
     const shown = card.last()
     expect(shown.isStale).toBe(true)
-    expect(shown.row).toMatchObject({ state: "synced", staleFields: [] })
-    expect(shown.row).not.toHaveProperty("stale")
-    expect(shown.row).not.toHaveProperty("hidden")
+    // Несумісний клієнт ховає рядок (Р7): UI не читає його значень.
+    expect(shown.row).toMatchObject({ hidden: true })
     expect(shown.needsRefresh).toBe(false)
     expect(shown.editable).toBe(false)
   })
