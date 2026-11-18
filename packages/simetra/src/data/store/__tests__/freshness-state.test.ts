@@ -128,6 +128,9 @@ describe("reconcile with minAgeMs", () => {
   it("does not take a view with a load in flight", async () => {
     const h = await loaded()
     vi.advanceTimersByTime(I)
+    // Видимий вигляд на строку `I` має такт планувальника: він читає й осідає
+    // до того, як тест тримає читання.
+    await settle()
     h.fake.hold = (read) => isKeys(read)
     h.handle.refresh()
     await settle()

@@ -120,6 +120,8 @@ describe("full", () => {
     a.unsubscribe()
     b.unsubscribe()
     vi.advanceTimersByTime(RELEASE)
+    // Перепланування планувальника після відписки — мікрозадача.
+    await settle()
     expect(inspect.rowCount()).toBe(0)
     // Ревізія чи кешований RowView ключа поза сховищем — порушення.
     expect(inspect.violations()).toEqual([])

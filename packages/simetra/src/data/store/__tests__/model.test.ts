@@ -545,6 +545,9 @@ async function runModel(
   profile: Profile,
   defects: readonly DefectFlag[] = []
 ) {
+  // Ядро попереднього прогону не закривається, а його таймер планувальника
+  // (чужий годинник, що стоїть) спрацьовував би в кожному `advance` цього.
+  vi.clearAllTimers()
   // Порт запису моделі: кожен `run` тримається, доки крок `run` не відповість
   // на нього (будь-який у будь-якому порядку); сервер пише лише тоді.
   const runs: HeldRun[] = []
@@ -2395,8 +2398,8 @@ async function runModel(
             (sub.visible ?? sub.listeners.size > 0) &&
             (sub.form.spec.kind !== "section" || sub.listeners.size > 0)
         )
-        // Читання не бере вигляд, чий строк не настав (молодша за межу відмітка
-        // чи пауза після збою), вигляд у польоті й вигляд, що вичерпав межу
+        // Читання не бере вигляд, чий строк не настав (молодша за межу відмітка,
+        // пауза після збою чи вигляд, що ще не читався), вигляд у польоті й вигляд, що вичерпав межу
         // відкинутих (спека П4-B §6.7).
         const young = (sub: (typeof readers)[number]) =>
           sub.flight !== undefined ||
@@ -2404,7 +2407,9 @@ async function runModel(
           (sub.status === "error" && sub.error === EPOCH_UNAVAILABLE) ||
           (sub.failures > 0
             ? at < viewDueAt(sub, REVALIDATE_MS, s.minAge)
-            : sub.refreshedAt !== undefined && at - sub.refreshedAt < s.minAge)
+            : // Вигляд, що ще не читався (картка зі сховища, гідратований),
+              // строку не має (Р3): його рядок свіжіє виглядом-носієм.
+              sub.refreshedAt === undefined || at - sub.refreshedAt < s.minAge)
         for (const sub of readers)
           if (young(sub)) youngViews.set(sub, sub.rereads)
           else if (!staled.has(sub.form.object.name))

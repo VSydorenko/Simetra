@@ -380,7 +380,9 @@ export interface CoreLimits {
   /**
    * After a version epoch switch, visible views are re-read at a moment
    * uniform on `[0, revalidateIntervalMs)` (P4-B spec §6.2): a primary
-   * restart switches every client at once. The interval tick itself is B5.
+   * restart switches every client at once. It is also the interval of the
+   * freshness tick: a visible view is re-read this long after its last read
+   * (P4-B spec §6.7).
    */
   readonly revalidateIntervalMs: number
   /**

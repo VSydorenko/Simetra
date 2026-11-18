@@ -80,6 +80,8 @@ export interface RegistryContext {
   readonly now: () => number
   /** Reads a view over hydration-only rows that just became visible (§6.6). */
   readHydrated(s: Subset): void
+  /** The set of visible views changed: the scheduler re-plans its timer. */
+  touchSchedule(): void
 }
 
 type Timer = ReturnType<typeof setTimeout>
@@ -105,7 +107,8 @@ export interface Subset extends ReaderTarget {
   loaded: boolean
   /**
    * The start time of the last read that settled successfully (P4-B spec §6.7);
-   * a hydrated view has none and counts as overdue.
+   * a view never read (a hydrated one, a card shown from the store) has none
+   * and no due time.
    */
   refreshedAt: number | undefined
   /** The system re-reads started for this view; the model test counts them. */
@@ -213,8 +216,9 @@ export const failurePause = (failures: number, intervalMs: number): number =>
 /**
  * The due time of a loaded view (one function for the `revalidate` filter and
  * the scheduler): after failures — the end of the pause, else
- * `refreshedAt + ageMs` (the interval by default); a view without a freshness
- * mark is due at once.
+ * `refreshedAt + ageMs` (the interval by default). A view never read has no
+ * due time: a card shown from the store freshens with the view that holds its
+ * row, a hydrated view is read by the reconciliation of the hydration.
  */
 export const viewDueAt = (
   s: Subset,
@@ -224,7 +228,7 @@ export const viewDueAt = (
   s.failures > 0 && s.failedAt !== undefined
     ? s.failedAt + failurePause(s.failures, intervalMs)
     : s.refreshedAt === undefined
-      ? Number.NEGATIVE_INFINITY
+      ? Number.POSITIVE_INFINITY
       : s.refreshedAt + ageMs
 
 const ACCESS_CHANGED = purgedSnapshot("access-changed")
@@ -390,6 +394,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     void attempt().finally(() => {
       if (s.flight !== gen) return
       s.flight = undefined
+      // Вигляд у польоті — не ціль планувальника: `commit` відповіді був до
+      // цього рядка, тож перепланування потрібне й тут.
+      ctx.touchSchedule()
       s.settled = true
       resolveWaiters(s)
       if (s.trailing && s.alive && !isClosed()) {
@@ -991,11 +998,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         s.preloadTimers.clear()
         start(s, true)
         ctx.readHydrated(s)
+        ctx.touchSchedule()
         let done = false
         return () => {
           if (done) return
           done = true
           s.listeners.delete(entry)
+          ctx.touchSchedule()
           if (s.alive && idle(s) && !isClosed()) scheduleRelease(s)
         }
       },

@@ -16,10 +16,12 @@ import { createBatcher } from "./batcher"
 import { readKeys, tracked, type CoreReadItem, type CoreSource } from "./source"
 import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
+import { createScheduler } from "./scheduler"
 import { createRegistry, type Subset, type SubsetRegistry } from "./subsets"
 import {
   activeViews,
   createWriter,
+  nextViewDue,
   revalidate,
   revalidateHolders,
   revalidateHydrated,
@@ -205,6 +207,8 @@ export interface CoreInspection {
     preloadTimers: number
     /** Re-reads scheduled by a version epoch switch, per object. */
     switchTimers: number
+    /** 1 while the scheduler holds its single timer, else 0. */
+    schedulerTimers: number
     /** Mutations in the journal plus attempts not yet settled. */
     journal: number
     /** Section store maps, summed over objects. */
@@ -227,6 +231,8 @@ export interface CoreInspection {
   watchRemarks(listener: (object: ObjectName, key: Key) => void): void
   /** The mutations in the journal of own mutations. */
   mutations(): JournalInspection[]
+  /** The plans the scheduler made (calls of one turn merge into one). */
+  schedulerPlans(): number
 }
 
 const inspections = new WeakMap<CoreSession, CoreInspection>()
@@ -575,6 +581,7 @@ export function createCore(options: {
     defects,
     now,
     readHydrated: (s) => readHydrated(s),
+    touchSchedule: () => scheduler.request(),
   })
 
   // ------------------------------------------------------------ знімок SSR
@@ -727,6 +734,7 @@ export function createCore(options: {
     purges.clear()
     for (const timer of switchTimers.values()) clearTimeout(timer)
     switchTimers.clear()
+    scheduler.stop()
     staleObjects.clear()
   })
 
@@ -819,6 +827,30 @@ export function createCore(options: {
       log({ kind: "listener-failed", error })
     )
   }
+
+  // Один таймер на ядро (§6.7). Такт — звірка з вікном `0,1 × I`, але без
+  // частини `version`: версію каталогу звіряють гідратація, `resume()` і
+  // `serverHash` (Р8).
+  const scheduler = createScheduler({
+    now,
+    visible: () => visible,
+    closed: () => closed !== undefined || !session.token().valid,
+    dueAt() {
+      let due: number | undefined
+      for (const o of objects.values()) {
+        if (staleObjects.has(o.name)) continue
+        const at = nextViewDue(writerContext, o.name)
+        if (at !== undefined && (due === undefined || at < due)) due = at
+      }
+      return due
+    },
+    tick: () =>
+      reconcile({ minAgeMs: 0.9 * limits.revalidateIntervalMs }, undefined, []),
+    defects,
+  })
+  // Кожен `commit` (осідання читання, запис, звільнення, purge) міг змінити
+  // набір цілей чи строк: перепланування зливається в одне на мікрозадачу.
+  session.onFlush(() => scheduler.request())
 
   const writerContext: WriterContext = {
     session,
@@ -933,14 +965,19 @@ export function createCore(options: {
       })
   }
 
+  type ServicePart = "version"
+
   // Звірка (§6.7): версія каталогу й перечитування видимих виглядів живих
   // об'єктів. Усе синхронно, без `await` між об'єктами, тож збирач пакета
   // читань зливає їх в один запит. Її кличуть `endHydration` і `resume`.
   function reconcile(
     reconcileOptions: { minAgeMs?: number } = {},
-    snapshotViews?: ReadonlySet<Subset>
+    snapshotViews?: ReadonlySet<Subset>,
+    // Склад службових частин (Р8): `endHydration` і `resume()` шлють
+    // `version`, такт інтервалу — жодної.
+    services: readonly ServicePart[] = ["version"]
   ) {
-    core.requestVersion()
+    if (services.includes("version")) core.requestVersion()
     for (const o of objects.values()) {
       // Несумісний об'єкт не читається (§10): перечитування перевело б його
       // вигляди в `error` замість показати `isStale`.
@@ -1074,9 +1111,11 @@ export function createCore(options: {
     },
     suspend() {
       visible = false
+      scheduler.suspend()
     },
     resume() {
       visible = true
+      scheduler.request()
       if (!session.token().valid) return
       // Злиття: подвійний сигнал повернення (focus + visibilitychange) — одна
       // звірка; відлік іде від останнього прийнятого, а не від кожного виклику.
@@ -1091,6 +1130,7 @@ export function createCore(options: {
     activeViews: (object) => activeViews(writerContext, object),
     setVisible(spec, visible) {
       setVisible(writerContext, spec, visible)
+      scheduler.request()
       if (!visible) return
       const s = registry.find(spec)
       if (s !== undefined) readHydrated(s)
@@ -1139,6 +1179,7 @@ export function createCore(options: {
       remarkListener = listener
     },
     mutations: () => overlay.entries(),
+    schedulerPlans: () => scheduler.plans(),
     versionEpochs: () => ({
       current: session.versions.current(),
       previous: session.versions.previous(),
@@ -1161,6 +1202,7 @@ export function createCore(options: {
         releaseTimers: subs.filter((s) => s.releaseTimer !== undefined).length,
         preloadTimers: subs.reduce((n, s) => n + s.preloadTimers.size, 0),
         switchTimers: switchTimers.size,
+        schedulerTimers: scheduler.timers(),
         journal: overlay.size(),
         sectionOwners: sections.reduce((n, x) => n + x.owners, 0),
         sectionOwnerVersions: sections.reduce((n, x) => n + x.ownerVersions, 0),

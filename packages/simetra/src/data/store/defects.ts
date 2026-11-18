@@ -82,6 +82,10 @@ export type DefectFlag =
   | "hydrated-row-not-reread"
   /** A `known` marker lifts a `hidden` mark newer than the start of its read. */
   | "marker-lifts-newer-mark"
+  /** `suspend()` leaves the timer of the scheduler in place. */
+  | "scheduler-keeps-timer-on-suspend"
+  /** The scheduler plans and fires its tick on a hidden tab. */
+  | "scheduler-fires-hidden"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

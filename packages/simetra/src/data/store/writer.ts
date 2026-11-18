@@ -940,6 +940,28 @@ function eligible(ctx: WriterContext, s: Subset, options: RevalidateOptions) {
 }
 
 /**
+ * The earliest due time of the object's views the interval tick would read
+ * (P4-B spec §6.7): visible, loaded, not in flight, not out of the discard
+ * limit — the same filter `revalidate` applies with `minAgeMs`, so the timer
+ * never fires for a view the tick then skips.
+ */
+export function nextViewDue(
+  ctx: WriterContext,
+  object: ObjectName
+): number | undefined {
+  let due: number | undefined
+  for (const s of subsetsOf(ctx, ctx.objectOf(object))) {
+    if (!eligible(ctx, s, { visibleOnly: true })) continue
+    if (inFlight(s) || unavailable(s)) continue
+    const at = viewDueAt(s, ctx.limits.revalidateIntervalMs)
+    // Вигляд, що ще не читався, строку не має.
+    if (!Number.isFinite(at)) continue
+    if (due === undefined || at < due) due = at
+  }
+  return due
+}
+
+/**
  * The tail of an explicit `revalidate` over a view in flight: waits until the
  * load and the system re-reads of the view settle, then re-reads it once with
  * a new start epoch, composition kept.
