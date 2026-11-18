@@ -231,6 +231,53 @@ describe("reverseGenerate", () => {
     }
   )
 
+  it.each(["supabase", "postgres"] as const)(
+    "%s: the platform install in the catalog's own grant form is the platform's; a user's grant beside it is written",
+    async (provider) => {
+      // Каталог тримає гранти по колонці й зливає привілеї однієї ролі: ці
+      // одиниці не мають ідентичності одиниці компілятора, а належать
+      // платформі за ціллю. Послідовність версій теж ставить платформа
+      const install = await compile(
+        metaFiles({ "project.meta.json": project({ database: { provider } }) })
+      )
+      expect(install.diagnostics).toEqual([])
+      const catalogForm = [
+        'GRANT INSERT ("method") ON TABLE "simetra"."signal_outbox" TO "simetra_command";',
+        'GRANT INSERT ("payload") ON TABLE "simetra"."signal_outbox" TO "simetra_command";',
+        'GRANT DELETE, SELECT ON TABLE "simetra"."signal_outbox" TO "simetra_signal_consumer";',
+        'REVOKE ALL ON FUNCTION "simetra"."signal_outbox_prune"(interval) FROM PUBLIC;',
+        "CREATE SEQUENCE simetra.row_version AS bigint MINVALUE 1 NO CYCLE CACHE 1;",
+      ].join("\n")
+      const own =
+        "GRANT SELECT ON TABLE simetra.signal_outbox, app.fresh TO simetra_command;"
+      const result = await reverseGenerate(
+        model({
+          tables: [
+            ...catalogFromSnapshot(install.model!.physical).tables,
+            table("app", "fresh"),
+          ],
+          units: units(`${catalogForm}\n${own}`),
+        }),
+        options(new Map(), { databaseProvider: provider })
+      )
+      // Грант на об'єкт платформи разом з таблицею застосунку — не
+      // платформний: його пише тека, а компіляція відмовляє за ціллю в
+      // `simetra`. Більше тека з бази нічого не бере
+      expect({
+        files: [...result.files.keys()].sort(),
+        codes: result.diagnostics.map((d) => d.code),
+      }).toEqual({
+        files: [
+          "custom-tables/Fresh/Fresh.meta.json",
+          "project.meta.json",
+          "sql-debt.json",
+          "sql/app/grant__table__app_fresh_simetra_signal_outbox__simetra_command__select.sql",
+        ],
+        codes: ["schema.reserved"],
+      })
+    }
+  )
+
   it("table becomes a CustomTable with explicit names", async () => {
     const result = await reverseGenerate(
       model({
