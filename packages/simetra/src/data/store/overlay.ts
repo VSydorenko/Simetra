@@ -6,6 +6,7 @@ import {
   type Operation,
 } from "simetra/model"
 import { DataError } from "../errors"
+import { closedError, closedMutation, nextMutationId } from "./closed-mutation"
 import { NO_DEFECTS, type Defects } from "./defects"
 import { heldEpoch, keyId, pairId } from "./epoch"
 import type { ObjectState } from "./forms"
@@ -41,33 +42,6 @@ type RereadOptions = Parameters<typeof rereadKey>[3]
 
 /** The journal limit (P4-B spec §6.2): a new key over it is `data.journal-full`. */
 export const JOURNAL_MAX = 500
-
-let mutationSeq = 0
-const nextMutationId = () => `m${++mutationSeq}`
-
-/**
- * The refusal a mutation settles with once its runtime is closed: the same
- * error the transport wrapper gives a request after the close.
- */
-export function closedError(reason: CloseReason): CommandError {
-  return reason === "session-changed"
-    ? {
-        code: "command.unauthenticated",
-        reason: LIMIT_REASONS.sessionChanged,
-      }
-    : { code: "command.unavailable", reason: LIMIT_REASONS.disposed }
-}
-
-/** A mutation of a closed runtime: settled with the close, never sent. */
-export function closedMutation(reason: CloseReason): Mutation {
-  return Object.freeze({
-    id: nextMutationId(),
-    settled: Promise.resolve<MutationResult>({
-      ok: false,
-      error: closedError(reason),
-    }),
-  })
-}
 
 /** The options of `update`; `expectedVersion` is the base (§7.1). */
 export interface UpdateOptions {

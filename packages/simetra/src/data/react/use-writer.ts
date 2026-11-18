@@ -1,6 +1,24 @@
 import { useSyncExternalStore } from "react"
-import { closedWriter, writerOf, type DataWriter } from "../data-writer"
+import type { DataWriter } from "../data-writer"
+import { runtimeHandleOf } from "../runtime/handle"
+import { closedMutation } from "../store/closed-mutation"
 import { useHolder } from "./provider"
+import type { CloseReason } from "../store/types"
+
+const closedWriters = new Map<CloseReason, DataWriter>()
+
+/**
+ * The writer of a holder without a runtime: every mutation settles with the
+ * close reason and is never sent.
+ */
+function closedWriter(reason: CloseReason): DataWriter {
+  let writer = closedWriters.get(reason)
+  if (writer === undefined) {
+    writer = Object.freeze({ update: () => closedMutation(reason) })
+    closedWriters.set(reason, writer)
+  }
+  return writer
+}
 
 /**
  * The {@link DataWriter} of the runtime the provider's holder holds (P4-B
@@ -20,7 +38,9 @@ export function useWriter(): DataWriter {
     holder.closed,
     holder.closed
   )
+  // Хендл, а не `writerOf`: модуль writer-а з журналом лишається лише в
+  // `simetra/data`, а спільним для обох входів є тільки чанк хендла.
   return runtime === undefined
     ? closedWriter(reason ?? "disposed")
-    : writerOf(runtime)
+    : runtimeHandleOf(runtime).writer
 }

@@ -1,13 +1,8 @@
 import { runtimeHandleOf } from "./runtime/handle"
 import type { DataRuntime } from "./runtime/runtime"
-import { closedMutation, type UpdateOptions } from "./store/overlay"
-import type {
-  CloseReason,
-  Key,
-  Mutation,
-  ObjectName,
-  Values,
-} from "./store/types"
+import type { CoreSession } from "./store/core"
+import type { UpdateOptions } from "./store/overlay"
+import type { Key, Mutation, ObjectName, Values } from "./store/types"
 
 /**
  * The write API of the data runtime (P4-B spec §7.1). Each call is one
@@ -33,34 +28,20 @@ export interface DataWriter {
   ): Mutation
 }
 
-// Один writer на рантайм: хук і host отримують той самий об'єкт.
-const writers = new WeakMap<DataRuntime, DataWriter>()
+/**
+ * Builds the writer of a core; `createDataRuntime` calls it once and keeps
+ * the writer in the runtime handle.
+ */
+export function createWriter(core: CoreSession): DataWriter {
+  return Object.freeze({
+    update: (object, id, values, options) =>
+      core.update(object, id, values, options),
+  } satisfies DataWriter)
+}
 
 /** The writer of a runtime made by `createDataRuntime`. */
 export function writerOf(runtime: DataRuntime): DataWriter {
-  let writer = writers.get(runtime)
-  if (writer === undefined) {
-    const { core } = runtimeHandleOf(runtime)
-    writer = Object.freeze({
-      update: (object, id, values, options) =>
-        core.update(object, id, values, options),
-    } satisfies DataWriter)
-    writers.set(runtime, writer)
-  }
-  return writer
-}
-
-const closedWriters = new Map<CloseReason, DataWriter>()
-
-/**
- * The writer of a holder without a runtime: every mutation settles with the
- * close reason and is never sent.
- */
-export function closedWriter(reason: CloseReason): DataWriter {
-  let writer = closedWriters.get(reason)
-  if (writer === undefined) {
-    writer = Object.freeze({ update: () => closedMutation(reason) })
-    closedWriters.set(reason, writer)
-  }
-  return writer
+  // Writer живе в хендлі, а не в мапі цього модуля: хук `simetra/data/react`
+  // бере той самий об'єкт через хендл, не тягнучи журнал у спільний чанк.
+  return runtimeHandleOf(runtime).writer
 }

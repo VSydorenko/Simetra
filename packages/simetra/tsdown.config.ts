@@ -23,6 +23,20 @@ export default defineConfig({
   // імпорти без розширень, і споживач із `nodenext` типів не резолвить
   dts: true,
   outDir: "dist",
+  outputOptions: {
+    codeSplitting: {
+      // Спільний чанк двох входів `simetra/data` і `simetra/data/react` — лише
+      // спільний стан-одинак: `WeakMap` хендлів рантайму й лічильник id
+      // мутацій. Явна група дає йому стале ім'я `handle`; решта модулів
+      // ярусу в спільний чанк не йде (тест пакування).
+      groups: [
+        {
+          name: "handle",
+          test: /[\\/]src[\\/]data[\\/](?:runtime[\\/]handle|store[\\/]closed-mutation)\.ts$/,
+        },
+      ],
+    },
+  },
   deps: {
     // `react` і `@tanstack/react-virtual` — необов'язкові peer-залежності (T4 / T5): tsdown не вбудовує
     // peer (`getProductionDeps` її враховує), тож клієнтський host тримає

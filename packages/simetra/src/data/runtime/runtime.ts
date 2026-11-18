@@ -17,6 +17,7 @@ import {
   serverFunctionAdapter,
   serverFunctionPort,
 } from "../adapter"
+import { createWriter } from "../data-writer"
 import { createCore, limitsOf } from "../store/core"
 import { createCoreSource, createReadLimiter } from "../store/source"
 import type { CloseReason, CoreLimits, CoreLogEntry } from "../store/types"
@@ -358,6 +359,6 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     },
     dispose: () => close(DISPOSED, "disposed"),
   }
-  bindRuntimeHandle(runtime, { send, core })
+  bindRuntimeHandle(runtime, { send, core, writer: createWriter(core) })
   return runtime
 }

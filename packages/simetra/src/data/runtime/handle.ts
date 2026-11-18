@@ -1,4 +1,5 @@
 import type { DataRequest } from "simetra/model"
+import type { DataWriter } from "../data-writer"
 import type { CoreSession } from "../store/core"
 import type { DataRuntime } from "./runtime"
 
@@ -23,6 +24,8 @@ export interface RuntimeHandle {
    * (`disposed`) and by `session-changed`.
    */
   readonly core: CoreSession
+  /** The writer of the core: one object per runtime (`writerOf`, `useWriter`). */
+  readonly writer: DataWriter
 }
 
 // Хендл живе в окремому модулі, а не в `runtime.ts`: `runtime.ts` входить у
