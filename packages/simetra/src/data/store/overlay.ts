@@ -319,8 +319,21 @@ export function createOverlay(deps: {
     const owned = () => (o.rows.get(entry.key)?.owners ?? 0) > 0
     let form: "list" | "card" | undefined
     let separate = false
-    if (row === undefined) form = lazy && owned() ? "card" : "list"
-    else {
+    // Перечитування ключа без власника нічого не пише (§7.2, крок 5), тож
+    // без значень з відповіді (немає `rows` чи інша епоха) він осідає з
+    // `rows: [undefined]` без читання.
+    const unread = () => {
+      drop(entry)
+      attempt.resolve({ ok: true, rows: [undefined] })
+    }
+    if (row === undefined) {
+      if (!owned()) {
+        commit(unread, tokenOf(attempt))
+        attempt.resolve({ ok: true, rows: [undefined] })
+        return
+      }
+      form = lazy ? "card" : "list"
+    } else {
       const ran = commit((writer) => {
         if (lazy && owned()) {
           form = "card"
@@ -335,7 +348,8 @@ export function createOverlay(deps: {
           attempt.readEpoch
         )
         if (skipped.length > 0) {
-          form = lazy ? "card" : "list"
+          if (owned()) form = lazy ? "card" : "list"
+          else unread()
           return
         }
         if (defects.has("settle-separate-commit")) {

@@ -471,7 +471,7 @@ describe("write-back without a full row (Р3, Р4)", () => {
     expect(h.inspect.serviceSizes().journal).toBe(0)
   })
 
-  it("a key without an owner and a result of another epoch is read once by key and settles with the re-read row", async () => {
+  it("a key without an owner and a result of another epoch settles with rows [undefined] and no read", async () => {
     const h = harness()
     seed(h.fake, 1, 2)
     // Картка іншого ключа дає сесії поточну епоху; ключ K без власника.
@@ -486,16 +486,29 @@ describe("write-back without a full row (Р3, Р4)", () => {
       { title: "new" },
       { expectedVersion: h.fake.row(TASK, K)!.version }
     )
-    expect(await m.settled).toMatchObject({
-      ok: true,
-      rows: [{ key: K, versionEpoch: EPOCH, values: { title: "new" } }],
-    })
+    // Значень іншої епохи немає, а перечитування ключа без власника нічого
+    // не пише (рішення архітекторки): осідання без читання.
+    expect(await m.settled).toEqual({ ok: true, rows: [undefined] })
     await settle()
-    const sent = h.fake.log.slice(reads)
-    expect(sent).toHaveLength(1)
-    expect(keysOf(sent[0]!.query)).toEqual([K])
-    // Ключ без власника перечитаний лише для осідання: слота не з'явилось.
+    expect(h.fake.log.slice(reads)).toHaveLength(0)
     expect(h.inspect.rowCount()).toBe(1)
+    expect(h.inspect.serviceSizes().journal).toBe(0)
+  })
+
+  it("a key without an owner and an answer without rows settles with rows [undefined] and no read", async () => {
+    const h = harness()
+    seed(h.fake, 1, 1)
+    h.port.transform = withoutRows
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: h.fake.row(TASK, K)!.version }
+    )
+    expect(await m.settled).toEqual({ ok: true, rows: [undefined] })
+    await settle()
+    expect(h.fake.log).toHaveLength(0)
+    expect(h.inspect.rowCount()).toBe(0)
     expect(h.inspect.serviceSizes().journal).toBe(0)
   })
 
