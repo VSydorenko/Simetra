@@ -48,6 +48,9 @@ const ALLOWED: Record<string, string> = {
   // Маркер підтверджує збережений рядок як є: сервер шле його лише в епосі,
   // рівній епосі `known`, тож епоха збереженого рядка — епоха відповіді.
   "source.ts rowFromMarker row-spread": "a marker confirms the held row",
+  // Рядок-маркер лише вказує на утримуваний рядок, з якого збудовано
+  // `known`: у сховище він не йде, його застосовує `ObjectStore.applyMarker`.
+  "source.ts markedRow row-value": "a marked row only points at the held row",
   // Копія запису з власною епохою без змін — лише `complete` скидається.
   "section-store.ts resetCompleteness row-spread": "copies its own epoch",
   "section-store.ts resetCompleteness row-value sections.set":

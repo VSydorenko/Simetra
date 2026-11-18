@@ -487,6 +487,10 @@ function outOfPlace(s: Subset): boolean {
   return false
 }
 
+/** The `known` of a re-read by keys of the view's own rows (§6.7). */
+const listKnown = (s: Subset) => (keys: readonly Key[]) =>
+  s.form.object.rows.knownFor(keys, { owned: s.owned, form: "list" })
+
 async function readFullAgain(
   ctx: WriterContext,
   s: Subset,
@@ -496,7 +500,7 @@ async function readFullAgain(
   const { form } = s
   const o = form.object
   const { keysPerRequest } = ctx.limits
-  const fetched = await fetchFull(ctx, form, token)
+  const fetched = await fetchFull(ctx, form, token, s)
   if (fetched === undefined) return () => {}
   const got = new Map(fetched.rows.map((r) => [r.key, r] as const))
   const composition = [...s.owned]
@@ -508,6 +512,7 @@ async function readFullAgain(
   if (missing.length > 0) {
     const rows = await readKeys(ctx.source, o.entry, missing, {
       keysPerRequest,
+      known: listKnown(s),
     })
     for (const row of rows) {
       got.set(row.key, row)
@@ -569,7 +574,7 @@ async function readFullAgain(
 /**
  * The system re-read of a window (P4-B spec §6.4): every
  * own page again by a keyset from its lower bound, all in one call of the
- * source, without `known`. The composition stays: a value goes to its place,
+ * source, with the `known` of its own keys (§6.7). The composition stays: a value goes to its place,
  * a key that is not in the pages of the answer is read by key — absent is
  * `removed`, present is `needsRefresh` (it moved) — and a key the window
  * does not hold is only `hasNewRows`. The result is written only while the
@@ -595,7 +600,8 @@ async function readWindowAgain(
   const answers = await rereadPages(
     ctx.source,
     form,
-    pages.map((page) => page.lower),
+    pages,
+    listKnown(s),
     token,
     ctx.limits.windowPage
   )
@@ -608,6 +614,7 @@ async function readWindowAgain(
       ? []
       : await readKeys(ctx.source, o.entry, missing, {
           keysPerRequest: ctx.limits.keysPerRequest,
+          known: listKnown(s),
         })
   const found = new Map(moved.map((row) => [row.key, row] as const))
   // Останню сторінку, коли край порядку ще не прочитано, читають із запасом
@@ -719,6 +726,7 @@ async function writeAgain(
     case "keys": {
       const rows = await readKeys(ctx.source, o.entry, s.form.keys, {
         keysPerRequest,
+        known: listKnown(s),
       })
       return applyKeys(ctx, s, s.form.keys, rows, startEpoch, true)
     }
@@ -728,6 +736,7 @@ async function writeAgain(
       // Картка не має дії «показати нові»: `hasNewRows` їй не ставимо.
       const rows = await readKeys(ctx.source, o.entry, [spec.key], {
         keysPerRequest,
+        known: listKnown(s),
       })
       return applyKeys(ctx, s, [spec.key], rows, startEpoch, false)
     }

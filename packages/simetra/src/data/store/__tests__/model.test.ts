@@ -580,6 +580,9 @@ async function runModel(
       org: i < 2 ? S : T,
       title: `t${i + 1}`,
       notes: `n${i + 1}`,
+      // Рядок повний для списочної форми: без цього ключ не йшов би в `known`.
+      status: null,
+      subject: null,
     })
   )
   let created = false
@@ -603,6 +606,14 @@ async function runModel(
 
   // Журнал доставлених відповідей і бар'єри позначок.
   const deliveries = new Map<string, Delivery[]>()
+  // Індекси журналу запитів доставлених читань, що відповіли на ключ маркером.
+  const markerReads = new Map<string, number[]>()
+  // Причина показу після `hide`: маркер читання, що почалось до нього, — свій
+  // шлях (його не знімає позначки, новішої за старт, спека §6.7).
+  const afterHide = (object: ObjectName, k: Key, barrier: number) =>
+    (markerReads.get(id(object, k)) ?? []).some((index) => index < barrier)
+      ? " (a marker of a read older than the hide)"
+      : ""
   const sectionDeliveries: Delivery[] = []
   // Ключ, якого торкнувся `purge`: будь-який запис у сховищі — лише з
   // читання, що надійшло на сервер після нього (П12).
@@ -679,8 +690,19 @@ async function runModel(
       return
     }
     const rows = new Map<Key, number>()
-    for (const row of result.rows)
+    for (const row of result.rows) {
+      // Маркер не несе рядка: доставлено лише підтвердження ключа `known`.
+      if (!("ref" in row)) {
+        const marked = read.log.known?.keys[(row as { known: number }).known]
+        if (marked !== undefined) {
+          const list = markerReads.get(id(object, marked as Key)) ?? []
+          list.push(index)
+          markerReads.set(id(object, marked as Key), list)
+        }
+        continue
+      }
       rows.set(row.ref as Key, row.version as number)
+    }
     for (const [k, version] of rows) {
       const list = deliveries.get(id(object, k)) ?? []
       list.push({ index, object, rows: new Map([[k, version]]) })
@@ -791,7 +813,10 @@ async function runModel(
     if (fields.length === 0) return
     const hidden = hideBarrier.get(id(object, row.key))
     if (hidden !== undefined && !deliveredSince(object, row.key, hidden))
-      fail(label, `${at}: shown after hide without a later read`)
+      fail(
+        label,
+        `${at}: shown after hide without a later read${afterHide(object, row.key, hidden)}`
+      )
     // Показаний рядок (і ціль `refs`) прибраного `purge` ключа — лише з
     // читання, що почалось після нього (П12).
     const purged = purgeBarrier.get(id(object, row.key))
@@ -1049,7 +1074,10 @@ async function runModel(
         if (values !== undefined) {
           const hidden = hideBarrier.get(id(name, k))
           if (hidden !== undefined && !deliveredSince(name, k, hidden))
-            fail(label, `${at}: values after hide without a later read`)
+            fail(
+              label,
+              `${at}: values after hide without a later read${afterHide(name, k, hidden)}`
+            )
           const barrier = removedBarrier.get(id(name, k))
           if (barrier !== undefined && !deliveredSince(name, k, barrier))
             fail(label, `${at}: values after removed without a later read`)
@@ -2007,6 +2035,8 @@ async function runModel(
             org: SCOPES[s.scope],
             title: "c",
             notes: "n5",
+            status: null,
+            subject: null,
           })
         }
         break
@@ -2713,6 +2743,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "min-age-all-young",
   "late-hydrated-not-reread",
   "hydrated-row-not-reread",
+  "marker-lifts-newer-mark",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -2754,6 +2785,8 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "late-hydrated-not-reread": /after hydrate: view \d+ .*(server|hidden)/,
   // Довіра — факт рядка: картка над рядком непідписаного гідрованого списку.
   "hydrated-row-not-reread": /after hydrate: card over a hydration-only row/,
+  // Маркер читання, що почалось до `hide`, не знімає його позначки.
+  "marker-lifts-newer-mark": /a marker of a read older than the hide/,
 }
 
 describe("core model self-check", () => {

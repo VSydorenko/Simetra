@@ -10,13 +10,7 @@ import { includeKeys, readIncluded, type Included } from "./include"
 import { visibleRow, type PutResult, type RestoredRow } from "./object-store"
 import type { OwnerScope, SectionEntry } from "./section-store"
 import type { Scope, Session } from "./session"
-import {
-  readKeys,
-  readOne,
-  serverRow,
-  tracked,
-  type CoreSource,
-} from "./source"
+import { readKeys, readOne, readRows, tracked, type CoreSource } from "./source"
 import {
   EMPTY_WINDOW,
   fetchPage,
@@ -307,18 +301,23 @@ const NOTHING: Write = () => {}
 /**
  * The keyset fetch of a `full` form (§6.1): pages in the view's order up to
  * `fullLimit`; `over` — the visible set is larger. `undefined` once `token`
- * is invalid: a released or re-requested view reads no further page.
+ * is invalid: a released or re-requested view reads no further page. `own`
+ * — the keys the view holds (§6.7): each page carries the `known` of those
+ * the earlier pages did not answer, the view's order first, so a page
+ * without changes comes back as markers.
  */
 export async function fetchFull(
   ctx: ReaderContext,
   form: Form,
-  token: GenerationToken
+  token: GenerationToken,
+  own?: Pick<ReaderTarget, "owned" | "layout">
 ): Promise<{ rows: ServerRow[]; over: boolean } | undefined> {
   const { source, limits } = ctx
   const o = form.object
   const spec = form.spec as Extract<ViewSpec, { kind: "full" }>
   const orderBy = spec.orderBy ?? []
-  const pages: { values: Record<string, unknown>; epoch: string | null }[] = []
+  const pages: ServerRow[] = []
+  const answered = new Set<Key>()
   let last: Record<string, unknown> | undefined
   // Сторінки — поза сховищем до кінця вибірки; зупинка лише на сторінці
   // без `more` і коротшій за `limit` (§6.1).
@@ -336,26 +335,35 @@ export async function fetchFull(
             o.entry.keyName,
             nullableOf(o.info)
           )
-    const page = await readOne(source, {
-      object: o.ref,
-      ...(orderBy.length === 0 ? {} : { orderBy }),
-      ...(where === undefined ? {} : { where }),
-      limit: limits.fullPageSize,
-    })
+    const waiting =
+      own === undefined
+        ? []
+        : [...own.layout, ...own.owned].filter((key) => !answered.has(key))
+    const page = await readRows(
+      source,
+      o.entry,
+      {
+        object: o.ref,
+        ...(orderBy.length === 0 ? {} : { orderBy }),
+        ...(where === undefined ? {} : { where }),
+        limit: limits.fullPageSize,
+      },
+      own === undefined
+        ? undefined
+        : o.rows.knownFor(waiting, { owned: own.owned, form: "list" })
+    )
     // Звільнений чи перезапитаний вигляд далі не читає: наступна сторінка
     // була б запитом, результат якого нікуди не запишеться.
     if (!token.valid) return undefined
-    pages.push(...page.rows.map((values) => ({ values, epoch: page.epoch })))
+    pages.push(...page.rows)
+    for (const row of page.rows) answered.add(row.key)
     if (pages.length > limits.fullLimit) break
     const tail = page.rows.at(-1)
     if (tail === undefined) break
-    if (page.more !== true && page.rows.length < limits.fullPageSize) break
-    last = tail
+    if (!page.more && page.rows.length < limits.fullPageSize) break
+    last = tail.values
   }
-  return {
-    rows: pages.map((p) => serverRow(o.entry, p.values, p.epoch)),
-    over: pages.length > limits.fullLimit,
-  }
+  return { rows: pages, over: pages.length > limits.fullLimit }
 }
 
 async function readFull(
@@ -367,7 +375,7 @@ async function readFull(
   const { limits, ops } = ctx
   const { form } = s
   const o = form.object
-  const fetched = await fetchFull(ctx, form, token)
+  const fetched = await fetchFull(ctx, form, token, s)
   if (fetched === undefined) return NOTHING
   const { rows, over } = fetched
   if (over && ctx.strict) throw new DataError("data.full-too-large")
@@ -640,6 +648,7 @@ async function readKeysForm(
   const o = form.object
   const rows = await readKeys(ctx.source, o.entry, form.keys, {
     keysPerRequest: ctx.limits.keysPerRequest,
+    known: (keys) => o.rows.knownFor(keys, { owned: s.owned, form: "list" }),
   })
   return (scope) => {
     const got = new Set<Key>()
@@ -667,7 +676,10 @@ async function readCard(
   const { ops } = ctx
   const o = s.form.object
   const key = s.form.keys[0]!
-  const rows = await readKeys(ctx.source, o.entry, [key], { form: "card" })
+  const rows = await readKeys(ctx.source, o.entry, [key], {
+    form: "card",
+    known: (keys) => o.rows.knownFor(keys, { owned: s.owned, form: "card" }),
+  })
   return (scope) => {
     const row = rows.find((r) => r.key === key)
     if (row !== undefined) ops.put(scope, o, row, readEpoch, true)

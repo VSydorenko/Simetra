@@ -80,6 +80,8 @@ export type DefectFlag =
   | "late-hydrated-not-reread"
   /** A view over rows only the hydration wrote, not held by the snapshot itself, is not read. */
   | "hydrated-row-not-reread"
+  /** A `known` marker lifts a `hidden` mark newer than the start of its read. */
+  | "marker-lifts-newer-mark"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

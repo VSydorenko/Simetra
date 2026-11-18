@@ -6,8 +6,15 @@ import {
 } from "simetra/model"
 import type { Form } from "./forms"
 import { nullableOf } from "./filter"
-import { readOne, serverRow, type CoreSource, type RowsQuery } from "./source"
-import type { GenerationToken, Key, ServerRow, Values, ViewSpec } from "./types"
+import { readRows, rowsOf, type CoreSource, type RowsQuery } from "./source"
+import type {
+  GenerationToken,
+  Key,
+  KnownSnapshot,
+  ServerRow,
+  Values,
+  ViewSpec,
+} from "./types"
 
 /*
  * Вікно (спека П4-B §6.4 «Вікно `useRows`»): сторінки keyset-читання в
@@ -204,28 +211,27 @@ export async function fetchPage(
   let cursor = request.cursor
   let end = false
   for (;;) {
-    const page = await readOne(
+    const page = await readRows(
       source,
+      o.entry,
       pageQuery(form, direction, cursor, pageSize - rows.length)
     )
     // Звільнений чи перезапитаний вигляд далі не читає (токен покоління).
     if (!token.valid) return undefined
-    rows.push(
-      ...page.rows.map((values) => serverRow(o.entry, values, page.epoch))
-    )
+    rows.push(...page.rows)
     const tail = page.rows.at(-1)
     // Порожня відповідь не просуває курсора: повторювати нічого. Без `more`
     // вона означає кінець порядку.
     if (tail === undefined) {
-      end = page.more !== true
+      end = !page.more
       break
     }
     if (rows.length >= pageSize) break
-    if (page.more !== true) {
+    if (!page.more) {
       end = true
       break
     }
-    cursor = cursorOf(orderBy, keyName, tail)
+    cursor = cursorOf(orderBy, keyName, tail.values)
   }
   return { rows: direction === "after" ? rows : rows.reverse(), end }
 }
@@ -233,15 +239,21 @@ export async function fetchPage(
 /**
  * The system re-read of a window's pages (§6.4): every page again from its
  * lower bound, all of them in one call of the source per round, `pageSize`
- * rows each. A page cut by the response budget (`more`) goes on from its
- * last row in the next round. The rows come per page, in the order of
- * `pages`; a `from` page starts strictly after its cursor, the cursor row
+ * rows each. `known` gives the `known` of a page from its own keys (§6.7): a
+ * row the core still holds comes back as a marker, resolved to the held row
+ * (`ServerRow.marker`). A page cut by the response budget (`more`) goes on
+ * from its last row in the next round. The rows come per page, in the order
+ * of `pages`; a `from` page starts strictly after its cursor, the cursor row
  * is the caller's to confirm. `undefined` once `token` is invalid.
  */
 export async function rereadPages(
   source: CoreSource,
   form: Form,
-  lowers: readonly WindowLower[],
+  pages: readonly {
+    readonly lower: WindowLower
+    readonly keys: readonly Key[]
+  }[],
+  known: (keys: readonly Key[]) => KnownSnapshot | undefined,
   token: GenerationToken,
   pageSize: number
 ): Promise<ServerRow[][] | undefined> {
@@ -249,17 +261,27 @@ export async function rereadPages(
   const spec = form.spec as Extract<ViewSpec, { kind: "full" | "window" }>
   const orderBy = spec.orderBy ?? []
   const keyName = o.entry.keyName
-  const rows: ServerRow[][] = lowers.map(() => [])
-  const cursors: (WindowCursor | undefined)[] = lowers.map((lower) =>
+  const rows: ServerRow[][] = pages.map(() => [])
+  const cursors: (WindowCursor | undefined)[] = pages.map(({ lower }) =>
     lower.kind === "start" ? undefined : lower.cursor
   )
-  let open = lowers.map((_, i) => i)
+  let open = pages.map((_, i) => i)
   while (open.length > 0) {
+    const snapshots = open.map((i) => known(pages[i]!.keys))
     const { items } = await source.read(
-      open.map((i) => ({
-        type: "query",
-        query: pageQuery(form, "after", cursors[i], pageSize - rows[i]!.length),
-      }))
+      open.map((i, at) => {
+        const snapshot = snapshots[at]
+        return {
+          type: "query",
+          query: pageQuery(
+            form,
+            "after",
+            cursors[i],
+            pageSize - rows[i]!.length
+          ),
+          ...(snapshot === undefined ? {} : { known: snapshot.known }),
+        }
+      })
     )
     if (!token.valid) return undefined
     const next: number[] = []
@@ -268,12 +290,9 @@ export async function rereadPages(
       if (!item.ok) throw new CommandFailure(item.error)
       if (!("rows" in item))
         throw new CommandFailure({ code: "command.internal" })
-      rows[i]!.push(
-        ...item.rows.rows.map((values) =>
-          serverRow(o.entry, values, item.epoch)
-        )
-      )
-      const tail = item.rows.rows.at(-1)
+      const got = rowsOf(o.entry, item.rows.rows, item.epoch, snapshots[at])
+      rows[i]!.push(...got)
+      const tail = got.at(-1)
       // Без `more` чи порожня відповідь — сторінка прочитана; обрізану
       // бюджетом продовжує keyset від її останнього рядка.
       if (
@@ -281,7 +300,7 @@ export async function rereadPages(
         item.rows.more === true &&
         rows[i]!.length < pageSize
       ) {
-        cursors[i] = cursorOf(orderBy, keyName, tail)
+        cursors[i] = cursorOf(orderBy, keyName, tail.values)
         next.push(i)
       }
     }
