@@ -3,6 +3,8 @@ import {
   wireReadPartsResultSchema,
   type DatabaseProvider,
   type SourceAdapter,
+  type WireReadPart,
+  type WireReadParts,
 } from "simetra/model"
 import { runtimeHandleOf, type RuntimeHandle } from "./runtime/handle"
 import type { DataRuntime } from "./runtime/runtime"
@@ -16,8 +18,17 @@ import type { ServerPort } from "./store/source"
  */
 export function createServerFunctionAdapter(
   runtime: DataRuntime
-): SourceAdapter {
+): ServerFunctionAdapter {
   return serverFunctionAdapter(runtimeHandleOf(runtime).send)
+}
+
+/**
+ * The Server Function adapter: besides the parts of its objects it takes the
+ * parts without an object (the catalog `version`), which the core source
+ * puts in the same request.
+ */
+export interface ServerFunctionAdapter extends SourceAdapter {
+  read(items: readonly WireReadPart[]): Promise<WireReadParts>
 }
 
 /**
@@ -26,7 +37,7 @@ export function createServerFunctionAdapter(
  */
 export function serverFunctionAdapter(
   send: RuntimeHandle["send"]
-): SourceAdapter {
+): ServerFunctionAdapter {
   return {
     // Сервер повертає `included` сам (§4.2).
     capabilities: { include: true },
@@ -46,14 +57,17 @@ export function serverFunctionAdapter(
 
 /**
  * The Server Function side of what never goes through a source adapter
- * (P4-B spec §5.1): a `run` request and a `read` request with one `version`
- * part, both through the transport wrapper. The values stay raw: the core
- * source checks their form.
+ * (P4-B spec §5.1): a `run` request through the transport wrapper, and the
+ * `read` of the same adapter, so that the core source can tell the objects it
+ * serves and put the catalog `version` in their request.
  */
-export function serverFunctionPort(send: RuntimeHandle["send"]): ServerPort {
+export function serverFunctionPort(
+  send: RuntimeHandle["send"],
+  adapter: ServerFunctionAdapter
+): ServerPort {
   return {
     run: ({ operation, kernels }) => send({ type: "run", operation, kernels }),
-    version: () => send({ type: "read", items: [{ type: "version" }] }),
+    read: adapter.read,
   }
 }
 

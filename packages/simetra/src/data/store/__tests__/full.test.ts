@@ -168,6 +168,9 @@ describe("full", () => {
     const moment = fake.edit(TASK, key(1), { title: "0" })
     fake.hold = (read) => isPage(read)
     handle.refresh()
+    // Сторінка вийшла окремим запитом: інакше відповідь на `single` чекала б
+    // на утримане читання сторінки в одному пакеті.
+    await settle()
     fake.remove(TASK, key(2))
     single.refresh()
     await settle()
@@ -242,6 +245,7 @@ describe("full", () => {
     fake.hold = (read) => isPage(read)
     const handle = core.view({ kind: "full", object: TASK, include: ["org"] })
     watch(handle).unsubscribe()
+    await settle()
     const first = fake.take()
     vi.advanceTimersByTime(RELEASE)
     first.answer()

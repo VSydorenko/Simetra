@@ -12,6 +12,7 @@ import { createSectionStore } from "./section-store"
 import { createSession, type Scope } from "./session"
 import { applySnapshot, dehydrate, parseSnapshot, type SsrContext } from "./ssr"
 import { createRowViews, purgedSnapshot } from "./snapshot"
+import { createBatcher } from "./batcher"
 import { readKeys, tracked, type CoreReadItem, type CoreSource } from "./source"
 import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
@@ -352,20 +353,32 @@ export function createCore(options: {
   // Читання несумісного об'єкта (§10) ядро не шле й не приймає: клієнт не
   // може перевірити його права, тож і відповідь, що вже летить, нічого не
   // пише. Відмова — той самий `stale-client`, що дав би сервер.
+  // Збирач (§6.7) стоїть під цим фільтром: через нього йдуть усі читання, а
+  // значення `version` відповіді застосовується до видачі її частин даних.
+  const batcher = createBatcher(options.source, {
+    onVersion(version) {
+      if (session.token().valid) applyVersion(version.objects)
+    },
+  })
   const source: CoreSource = {
-    close: () => options.source.close(),
-    refuse: (object) => options.source.refuse?.(object),
-    run: (operation) => options.source.run(operation),
-    version: () => options.source.version(),
+    close: () => batcher.close(),
+    refuse: (object) => batcher.refuse?.(object),
+    run: (operation) => batcher.run(operation),
     async read(parts) {
+      // Частина без об'єкта (`version`) несумісності не має.
       const isLive = (part: (typeof parts)[number]) => {
-        const { kind, name } = part.object
+        if (part.type !== "query") return true
+        const { kind, name } = part.query.object
         return !staleObjects.has(`${kind}.${name}`)
       }
       const refused = (part: (typeof parts)[number]): CoreReadItem => {
         return {
           ok: false,
-          error: { code: "command.stale-client", object: part.object },
+          error: {
+            code: "command.stale-client",
+            object: (part as Extract<typeof part, { type: "query" }>).query
+              .object,
+          },
         }
       }
       const sent = parts.map(isLive)
@@ -373,7 +386,7 @@ export function createCore(options: {
       const answered =
         forward.length === 0
           ? { items: [] as CoreReadItem[] }
-          : await options.source.read(forward)
+          : await batcher.read(forward)
       let next = 0
       const items = parts.map((part, slot): CoreReadItem => {
         if (!sent[slot]) return refused(part)
@@ -866,27 +879,47 @@ export function createCore(options: {
     for (const object of turned) notifyStaleClient(object)
   }
 
-  // Один запит `version` за раз і не більше одного хвоста: перед відправкою
-  // (мікрозадача) виклики зливаються, під час польоту — один хвіст.
-  let versionState: "idle" | "scheduled" | "flying" = "idle"
+  // Один запит `version` за раз і не більше одного хвоста: частина, що ще
+  // стоїть у черзі збирача, зливає виклики (вона вийде з наступним пакетом),
+  // під час польоту — один хвіст.
+  let versionFlying = false
   let versionTail = false
   function startVersion() {
-    versionState = "flying"
+    versionFlying = true
     const token = session.token()
     source
-      .version()
+      .read([{ type: "version" }])
       .then(
-        (result) => {
-          if (token.valid && result.ok) applyVersion(result.version.objects)
+        () => {
+          // Значення застосував збирач синхронно з відповіддю (бар'єр Р3).
         },
-        (error: unknown) => log({ kind: "listener-failed", error })
+        (error: unknown) => {
+          if (token.valid) log({ kind: "listener-failed", error })
+        }
       )
       .finally(() => {
-        versionState = "idle"
+        versionFlying = false
         if (!versionTail) return
         versionTail = false
         core.requestVersion()
       })
+  }
+
+  // Звірка (§6.7): версія каталогу й перечитування видимих виглядів живих
+  // об'єктів. Усе синхронно, без `await` між об'єктами, тож збирач пакета
+  // читань зливає їх в один запит. Її кличуть `endHydration` і `resume`.
+  function reconcile(reconcileOptions: { minAgeMs?: number } = {}) {
+    core.requestVersion()
+    for (const o of objects.values()) {
+      // Несумісний об'єкт не читається (§10): перечитування перевело б його
+      // вигляди в `error` замість показати `isStale`.
+      if (staleObjects.has(o.name)) continue
+      if (!activeViews(writerContext, o.name).some((v) => v.visible)) continue
+      revalidate(writerContext, o.name, {
+        visibleOnly: true,
+        ...reconcileOptions,
+      }).catch((error: unknown) => log({ kind: "listener-failed", error }))
+    }
   }
 
   const core: CoreSession = {
@@ -914,14 +947,8 @@ export function createCore(options: {
     },
     requestVersion() {
       if (!session.token().valid) return
-      if (versionState === "flying") versionTail = true
-      else if (versionState === "idle") {
-        versionState = "scheduled"
-        queueMicrotask(() => {
-          if (session.token().valid) startVersion()
-          else versionState = "idle"
-        })
-      }
+      if (!versionFlying) startVersion()
+      else if (!batcher.hasQueuedVersion()) versionTail = true
     },
     serverHash(hash, versionPart) {
       const changed = lastHash !== undefined && hash !== lastHash
@@ -986,19 +1013,8 @@ export function createCore(options: {
       hydration = "ended"
       if (!session.token().valid) return
       registry.endHydration()
-      // Звірка: запити йдуть синхронно, без `await` між об'єктами, тож
-      // збирач пакета читань зіллє їх, а цей код не зміниться.
-      core.requestVersion()
-      if (defects.has("hydrate-without-revalidate")) return
-      for (const o of objects.values()) {
-        // Несумісний об'єкт не читається (§10): перечитування перевело б
-        // його вигляди в `error` замість показати `isStale`.
-        if (staleObjects.has(o.name)) continue
-        if (!activeViews(writerContext, o.name).some((v) => v.visible)) continue
-        revalidate(writerContext, o.name, { visibleOnly: true }).catch(
-          (error: unknown) => log({ kind: "listener-failed", error })
-        )
-      }
+      if (defects.has("hydrate-without-revalidate")) core.requestVersion()
+      else reconcile()
     },
     get visible() {
       return visible
@@ -1015,16 +1031,7 @@ export function createCore(options: {
       if (lastResumeAt !== undefined && at - lastResumeAt < RESUME_COALESCE_MS)
         return
       lastResumeAt = at
-      // Як в `endHydration`: усе синхронно, без `await` між об'єктами.
-      core.requestVersion()
-      for (const o of objects.values()) {
-        // Як в `endHydration`: несумісний об'єкт не перечитується.
-        if (staleObjects.has(o.name)) continue
-        revalidate(writerContext, o.name, {
-          visibleOnly: true,
-          minAgeMs: limits.resumeMinIntervalMs,
-        }).catch((error: unknown) => log({ kind: "listener-failed", error }))
-      }
+      reconcile({ minAgeMs: limits.resumeMinIntervalMs })
     },
     update: (object, key, values, updateOptions) =>
       overlay.update(object, key, values, updateOptions),

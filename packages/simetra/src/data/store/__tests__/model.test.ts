@@ -566,7 +566,7 @@ async function runModel(
           runs.push({ request, resolve, reject, attempt })
         )
       },
-      version: () => f.server.version(),
+      read: (items) => f.server.read(items),
     }),
   })
   for (const flag of defects) inspect.defects.add(flag)
@@ -1469,8 +1469,10 @@ async function runModel(
       frames++
       checkFrame(second)
     })
-    for (let i = 0; i < 50 && fake.pending.length > 0; i++) {
+    // Читання доходить до фейка мікрозадачею збирача: спершу `flush`.
+    for (let i = 0; i < 50; i++) {
       await flush()
+      if (fake.pending.length === 0) break
       while (fake.pending.length > 0) {
         const read = fake.take()
         read.answer()
@@ -1637,7 +1639,7 @@ async function runModel(
         {
           run: () =>
             Promise.reject(new Error("a hydrated core writes nothing")),
-          version: () => fake.server.version(),
+          read: (items) => fake.server.read(items),
         }
       ),
       index: fake.index,
@@ -2732,7 +2734,7 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // `full` чи вікно закінчують без рядка сервера.
   "bury-removed-current-epoch": /^converge .*(composition|lacks)/,
   // Запис: кожен дефект — своєю перевіркою.
-  "predict-before-answer": /\.title = u\d+, server at/,
+  "predict-before-answer": /\.(title|notes) = [uw]\d+, server at/,
   "settle-separate-commit": /the run row shown with its mutation pending/,
   "write-back-lifts-hidden": /after hide without a later read/,
   "answer-after-cancel": /a cancelled attempt settled with a row/,

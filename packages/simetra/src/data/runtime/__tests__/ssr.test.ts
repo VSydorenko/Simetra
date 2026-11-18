@@ -403,7 +403,7 @@ describe("RuntimeHolder.hydrateFrom", () => {
 })
 
 describe("the reconciliation after hydration", () => {
-  it("sends 1 + N requests in one go: the version and a re-read of every visible view", async () => {
+  it("sends one request: the version part first and a re-read of every visible view", async () => {
     const fake = serverWorld()
     const snapshot = await takeSnapshot(fake, [card(1), list, orgCard])
     const a = runtimeOver(fake)
@@ -416,21 +416,24 @@ describe("the reconciliation after hydration", () => {
     a.wire.hold = true
     a.runtime.endHydration()
     await settle()
-    // Жодної відповіді ще не було: усі запити поставлено разом.
-    const versions = a.wire.calls.filter(
-      (c) =>
-        c.request.type === "read" &&
-        (c.request.items[0] as { type: string }).type === "version"
-    )
-    expect(versions).toHaveLength(1)
-    expect(a.wire.calls).toHaveLength(1 + 2)
-    expect(a.wire.held).toHaveLength(1 + 2)
-    expect(a.wire.release()).toBe(1 + 2)
+    // Жодної відповіді ще не було: збирач віддав усе одним запитом.
+    expect(a.wire.calls).toHaveLength(1)
+    expect(a.wire.held).toHaveLength(1)
+    const request = a.wire.calls[0]!.request
+    const parts = (request.type === "read" ? request.items : []) as {
+      type: string
+    }[]
+    expect(parts.map((part) => part.type)).toEqual([
+      "version",
+      "query",
+      "query",
+    ])
+    expect(a.wire.release()).toBe(1)
     await settle()
-    expect(a.wire.calls).toHaveLength(1 + 2)
+    expect(a.wire.calls).toHaveLength(1)
   })
 
-  it("re-read answers that come before the version answer start no second version request", async () => {
+  it("answers the version and the re-reads in one response: no second version request", async () => {
     const fake = serverWorld()
     const snapshot = await takeSnapshot(fake, [card(1), list])
     const a = runtimeOver(fake)
@@ -443,12 +446,10 @@ describe("the reconciliation after hydration", () => {
     const isVersion = (b: DataRequest) =>
       b.request.type === "read" &&
       (b.request.items[0] as { type: string }).type === "version"
-    expect(a.wire.held).toHaveLength(1 + 2)
-    expect(a.wire.release((b) => !isVersion(b))).toBe(2)
-    await settle()
+    expect(a.wire.held).toHaveLength(1)
     expect(a.wire.release(isVersion)).toBe(1)
     await settle()
-    expect(a.wire.calls).toHaveLength(1 + 2)
+    expect(a.wire.calls).toHaveLength(1)
     expect(a.wire.calls.filter(isVersion)).toHaveLength(1)
   })
 
@@ -527,9 +528,9 @@ describe("the reconciliation after hydration", () => {
     a.wire.hold = true
     a.runtime.endHydration()
     await settle()
-    expect(a.wire.held).toHaveLength(1 + 1)
+    expect(a.wire.held).toHaveLength(1)
     a.runtime.dispose()
-    expect(a.wire.release()).toBe(1 + 1)
+    expect(a.wire.release()).toBe(1)
     await settle()
     expect(onStaleClient).not.toHaveBeenCalled()
     expect(handle.getSnapshot()).toMatchObject({
@@ -699,6 +700,8 @@ describe("a stale-client object is closed until reload (spec §10)", () => {
     const a = runtimeOver(fake, { limits: { readParallel: 1 } })
     a.wire.hold = true
     a.core.view(orgCard).subscribe(() => {})
+    await settle()
+    // Читання TASK — наступним тактом: збирач не зливає його з читанням ORG.
     a.core.view(card(1)).subscribe(() => {})
     await settle()
     // Читання ORG у польоті займає єдиний слот, читання TASK стоїть у черзі.

@@ -177,7 +177,6 @@ describe("acceptEpochs: one answer of several epochs", () => {
     return {
       close: () => {},
       run: () => Promise.reject(new Error("unexpected run")),
-      version: () => Promise.reject(new Error("unexpected version")),
       read: async (parts) => ({
         items: parts.map(() => ({
           ok: true as const,
@@ -195,7 +194,10 @@ describe("acceptEpochs: one answer of several epochs", () => {
     const read = tracked(answering([EA, EB, EA]))
     for (let i = 0; i < 3; i++)
       await read.source.read([
-        { object: { kind: "Catalog", name: "Task" }, id: key(1) },
+        {
+          type: "query",
+          query: { object: { kind: "Catalog", name: "Task" }, id: key(1) },
+        },
       ])
     expect(h.write(() => h.session.acceptEpochs(read.epochs, start))).toBe(
       "discard"

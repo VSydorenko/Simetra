@@ -256,15 +256,18 @@ export async function rereadPages(
   let open = lowers.map((_, i) => i)
   while (open.length > 0) {
     const { items } = await source.read(
-      open.map((i) =>
-        pageQuery(form, "after", cursors[i], pageSize - rows[i]!.length)
-      )
+      open.map((i) => ({
+        type: "query",
+        query: pageQuery(form, "after", cursors[i], pageSize - rows[i]!.length),
+      }))
     )
     if (!token.valid) return undefined
     const next: number[] = []
     for (const [at, item] of items.entries()) {
       const i = open[at]!
       if (!item.ok) throw new CommandFailure(item.error)
+      if (!("rows" in item))
+        throw new CommandFailure({ code: "command.internal" })
       rows[i]!.push(
         ...item.rows.rows.map((values) =>
           serverRow(o.entry, values, item.epoch)

@@ -5,6 +5,7 @@ import {
   inspectCore,
   type CoreSession,
 } from "../core"
+import type { ServerFunctionAdapter } from "../../adapter"
 import { createCoreSource, createReadLimiter } from "../source"
 import type { FakeSource } from "../testing/fake-source"
 import {
@@ -95,17 +96,20 @@ const through = (snapshot: CoreSnapshot): CoreSnapshot =>
 function coreOver(fake: FakeSource, limits: Partial<CoreLimits> = {}) {
   const versions = { calls: 0 }
   const merged = { ...DEFAULT_CORE_LIMITS, ...limits }
+  // Той самий `read` в адаптері й порту: версія йде в запиті частин об'єктів.
+  const read: ServerFunctionAdapter["read"] = (items) => {
+    versions.calls += items.filter((item) => item.type === "version").length
+    return fake.adapter.read(items)
+  }
+  const adapter: ServerFunctionAdapter = {
+    capabilities: fake.adapter.capabilities,
+    read,
+  }
   const source = createCoreSource(
-    () => fake.adapter,
+    () => adapter,
     fake.index,
     createReadLimiter(merged.readParallel),
-    {
-      run: fake.server.run,
-      version: () => {
-        versions.calls++
-        return fake.server.version()
-      },
-    }
+    { run: fake.server.run, read }
   )
   const core = createCore({
     subject: "u1",
@@ -510,10 +514,15 @@ describe("hydrate", () => {
     next.core.hydrate(snapshot)
     for (const spec of specs) watch(next.core.view(spec))
     const before = fake.log.length
+    const requests = fake.requests.length
     next.core.endHydration()
-    // Запити поставлено до першої мікрозадачі: між об'єктами `await` нема.
+    // Запити поставлено до першої мікрозадачі: між об'єктами `await` нема, тож
+    // збирач віддає їх разом із `version` одним запитом.
+    await Promise.resolve()
     expect(fake.log.length).toBeGreaterThan(before)
+    expect(fake.requests.length).toBe(requests + 1)
     await settle()
+    expect(fake.requests.length).toBe(requests + 1)
     expect(next.versions.calls).toBe(1)
     const objects = new Set(
       fake.log

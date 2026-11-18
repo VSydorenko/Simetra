@@ -161,9 +161,11 @@ describe("view registry and holds", () => {
     seed(fake, 1, 1)
     const handle = core.view(keys(1))
     watch(handle)
+    await settle()
     expect(fake.pending).toHaveLength(1)
     handle.refresh()
     handle.refresh()
+    await settle()
     expect(fake.pending).toHaveLength(1)
     fake.take().answer()
     await settle()
@@ -181,6 +183,7 @@ describe("view registry and holds", () => {
     const handle = core.view(keys(1))
     watch(handle).unsubscribe()
     vi.advanceTimersByTime(RELEASE)
+    await settle()
     // Звільнено: відповідь нікуди не пише.
     fake.take().answer()
     await settle()
@@ -190,8 +193,10 @@ describe("view registry and holds", () => {
     // Звільнено й підписано знову: відповідь старого покоління після нового
     // запиту не пише, нове покоління — пише.
     watch(handle).unsubscribe()
+    await settle()
     vi.advanceTimersByTime(RELEASE)
     const sub = watch(handle)
+    await settle()
     expect(fake.pending).toHaveLength(2)
     fake.edit(TASK, key(1), { title: "new" })
     fake.take(0).answer()
@@ -216,6 +221,7 @@ describe("view registry and holds", () => {
     fake.hold = (read) => holding && keysOf(read.query).includes(key(1))
     const handle = core.view(keys(1))
     watch(handle)
+    await settle()
     const first = fake.take()
     // Витіснення пам'яті версій після старту читання піднімає горизонт.
     watch(core.view(keys(2, 3))).unsubscribe()
@@ -257,6 +263,7 @@ describe("view registry and holds", () => {
     fake.mode = "manual"
     handle.refresh()
     expect(handle.getSnapshot().status).toBe("refreshing")
+    await settle()
     fake.take().answer()
     await settle()
     expect(seen.map((s) => s.status)).toEqual(["ready", "refreshing", "ready"])
@@ -271,6 +278,7 @@ describe("view registry and holds", () => {
     const rows = handle.getSnapshot().rows
     fake.mode = "manual"
     handle.refresh()
+    await settle()
     fake.take().fail("command.unavailable")
     await settle()
     const failed = handle.getSnapshot()
@@ -378,6 +386,7 @@ describe("tail re-read", () => {
     h.fake.hold = (read) => holds-- > 0 && isKeys(read)
     const handle = h.core.view(keys(1))
     const sub = watch(handle)
+    await settle()
     const reads = h.fake.log.length
     return { ...h, handle, sub, reads, moment }
   }
@@ -470,6 +479,7 @@ describe("section", () => {
     expect(before?.lines).toHaveLength(2)
     fake.mode = "manual"
     handle.refresh()
+    await settle()
     fake.take().answer(old)
     await settle()
     expect(handle.getSnapshot().section).toBe(before)
@@ -533,8 +543,12 @@ describe("section", () => {
       holding && (keysOf(read.query).includes(key(1)) || isSection(read))
     const header = core.view(keys(1))
     watch(header)
+    // Читання шапки й ТЧ — окремими запитами: відповідь одного пакета
+    // доходить, лише коли відповіли на всі його частини.
+    await settle()
     const sectionView = core.view(section(1))
     watch(sectionView)
+    await settle()
     const headerRead = fake.take((r) => isKeys(r))
     const sectionRead = fake.take((r) => isSection(r))
     watch(core.view(keys(2, 3))).unsubscribe()
@@ -781,7 +795,11 @@ describe("close", () => {
     })
     seed(fake, 1, 2)
     watch(core.view(keys(1)))
+    // Друге читання — наступним тактом: збирач не зливає його з першим, і
+    // воно стоїть у черзі обмежувача, а не йде з першим запитом.
+    await settle()
     watch(core.view(keys(2)))
+    await settle()
     expect(fake.pending).toHaveLength(1)
     core.close("disposed")
     fake.take().answer()
