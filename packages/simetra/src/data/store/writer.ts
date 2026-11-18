@@ -768,6 +768,8 @@ export async function revalidate(
       // Відмітка свіжості (Р10): без неї вигляд вважається простроченим.
       (options.minAgeMs === undefined ||
         ctx.defects.has("min-age-ignored") ||
+        (ctx.defects.has("min-age-ignored-sections") &&
+          s.form.spec.kind === "section") ||
         s.refreshedAt === undefined ||
         ctx.now() - s.refreshedAt >= options.minAgeMs) &&
       (s.form.spec.kind !== "section" || s.listeners.size > 0)
@@ -828,6 +830,7 @@ async function revalidateViews(
     targets.map((s) => [s, { gen: s.gen, flight: s.flight }] as const)
   )
   const startedAt = ctx.now()
+  for (const s of targets) s.rereads++
   const purgesAtStart = new Map(ctx.purges)
   const purgedSince = (name: ObjectName) =>
     (ctx.purges.get(name) ?? 0) !== (purgesAtStart.get(name) ?? 0)

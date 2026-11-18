@@ -194,11 +194,11 @@ const k = fc.nat(KEYS.length - 1)
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 
 /**
- * Ваги (бриф, крок 1): сума 299 (перегідратація — 6; перемикання епохи — 6; `hide` над
+ * Ваги (бриф, крок 1): сума 242 (повернення — 8; перегідратація — 6; перемикання епохи — 6; `hide` над
  * ТЧ-підмножиною — 6; сторінка вікна — 8; запис — 50: `update` 14, відповідь
  * `run` 20, дії мутації 8, чужа правка, `purge` чи `hide` ключа з мутацією 6,
  * `dispose()` з мутацією в дорозі 2); `purge` (16 + 14), відсутній рядок і
- * застаріла репліка — по 30, тобто по ~11 % кроків (частина кроків
+ * застаріла репліка — по 30, тобто по ~12 % кроків (частина кроків
  * `answer` порожня, бо в польоті нічого нема, тож серед дійових кроків
  * частка вища, близько 15 %). Самотест тримає насіння, яке знаходить
  * дефекти за кількістю прогонів: зміна генератора (ваги, профілі, масиви
@@ -1776,6 +1776,8 @@ async function runModel(
     let purgeStep = false
     // Об'єкти, яким крок «повернення» не мав слати читань.
     const quiet = new Set<ObjectName>()
+    // Вигляди з молодою відміткою й їхні лічильники перечитувань на старті.
+    const youngViews = new Map<{ rereads: number }, number>()
     let purgedScope: { object: ObjectName; scope: string } | undefined
     // Ключі, які `purge` кроку прибрав зі сховища (або назвав явно).
     let purgedKeys: { object: ObjectName; keys: Key[] } | undefined
@@ -2243,9 +2245,10 @@ async function runModel(
         break
       case "return": {
         if (closed !== undefined) break
-        // Вигляд із відміткою молодшою за межу читання від кроку не отримує:
-        // об'єкт «тихий», коли таких і є всі видимі завантажені вигляди, що
-        // читають його (власним читанням чи ціллю `include`).
+        // Вигляд із відміткою молодшою за межу читання від кроку не отримує
+        // (лічильник перечитувань вигляду); об'єкт «тихий», коли таких усі
+        // видимі завантажені вигляди, що читають його (власним читанням чи
+        // ціллю `include`): тоді жодного читання не мало піти й до джерела.
         const at = performance.now()
         const readers = [...coreInternals(core).registry.subsets()].filter(
           (sub) =>
@@ -2255,19 +2258,17 @@ async function runModel(
             (sub.visible ?? sub.listeners.size > 0) &&
             (sub.form.spec.kind !== "section" || sub.listeners.size > 0)
         )
+        const young = (sub: (typeof readers)[number]) =>
+          sub.refreshedAt !== undefined && at - sub.refreshedAt < s.minAge
+        for (const sub of readers)
+          if (young(sub)) youngViews.set(sub, sub.rereads)
         for (const object of [TASK, ORG]) {
           const of = readers.filter(
             (sub) =>
               sub.form.object.name === object ||
               sub.form.include.some((step) => step.target === object)
           )
-          if (
-            of.every(
-              (sub) =>
-                sub.refreshedAt !== undefined && at - sub.refreshedAt < s.minAge
-            )
-          )
-            quiet.add(object)
+          if (of.every(young)) quiet.add(object)
         }
         core.requestVersion()
         for (const object of [TASK, ORG])
@@ -2312,6 +2313,10 @@ async function runModel(
         break
     }
     await flush()
+    for (const [sub, rereads] of youngViews) {
+      if (sub.rereads !== rereads)
+        fail(label, "a view younger than the limit was re-read")
+    }
     for (const object of quiet) {
       for (const sent of fake.log.slice(stepStart)) {
         const target = sent.query?.object
@@ -2625,6 +2630,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "hydrate-without-revalidate",
   "stale-mark-lifts",
   "min-age-ignored",
+  "min-age-ignored-sections",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -2656,7 +2662,8 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // Липка позначка (задача 2): збіг `kernelHash` її не знімає.
   "stale-mark-lifts": /not isStale/,
   // Повернення (задача 3): межа свіжості виглядів.
-  "min-age-ignored": /a view younger than the limit got a read/,
+  "min-age-ignored": /a view younger than the limit (got a read|was re-read)/,
+  "min-age-ignored-sections": /a view younger than the limit was re-read/,
 }
 
 describe("core model self-check", () => {

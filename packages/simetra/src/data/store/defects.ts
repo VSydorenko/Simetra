@@ -72,6 +72,8 @@ export type DefectFlag =
   | "hydrate-without-revalidate"
   /** `revalidate` ignores `minAgeMs`: a view with a young freshness mark is re-read. */
   | "min-age-ignored"
+  /** `revalidate` ignores `minAgeMs` for tabular section views only. */
+  | "min-age-ignored-sections"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

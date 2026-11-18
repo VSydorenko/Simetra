@@ -104,6 +104,8 @@ export interface Subset extends ReaderTarget {
    * Р10); a hydrated view has none and counts as overdue.
    */
   refreshedAt: number | undefined
+  /** The system re-reads started for this view; the model test counts them. */
+  rereads: number
   status: "loading" | "ready" | "refreshing" | "error"
   error: CommandError | DataError | undefined
   needsRefresh: boolean
@@ -718,6 +720,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       settled: false,
       loaded: false,
       refreshedAt: undefined,
+      rereads: 0,
       owned: new Set(),
       included: new Map(),
       layout: form.spec.kind === "card" ? [form.spec.key] : [],

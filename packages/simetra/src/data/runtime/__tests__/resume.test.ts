@@ -32,6 +32,7 @@ beforeEach(() => {
   vi.useFakeTimers()
 })
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.useRealTimers()
 })
 
@@ -44,7 +45,17 @@ function setup(options: Partial<DataRuntimeOptions> = {}) {
   const fake: FakeSource = createFakeSource({ objects: OBJECTS })
   seed(fake, 1, 3)
   const calls: DataRequest[] = []
-  const wire = { fail: false, delayMs: 0 }
+  const wire = {
+    fail: false,
+    delayMs: 0,
+    epoch: null as string | null,
+    hold: false,
+    held: [] as (() => void)[],
+    release() {
+      wire.hold = false
+      for (const deliver of wire.held.splice(0)) deliver()
+    },
+  }
   const transport: DataTransport = async (body) => {
     calls.push(body)
     const answer = (value: DataResponse): DataResponse => ({
@@ -71,13 +82,19 @@ function setup(options: Partial<DataRuntimeOptions> = {}) {
           epoch: null,
         })
       )
+    // Епоха відповіді — на мить запиту, як у бази, що відповіла б тоді.
+    const epoch = wire.epoch
     if (wire.fail) throw new Error("network down")
+    if (wire.hold)
+      await new Promise<void>((resolve) => {
+        wire.held.push(resolve)
+      })
     if (wire.delayMs > 0)
       await new Promise((resolve) => setTimeout(resolve, wire.delayMs))
     const read = await fake.adapter.read(
       parts as unknown as Parameters<SourceAdapter["read"]>[0]
     )
-    return answer(ok({ ...read, epoch: null }))
+    return answer(ok({ ...read, epoch }))
   }
   const runtime = createDataRuntime({
     catalog: { ...clientCatalog(), objects: [...OBJECTS] },
@@ -162,14 +179,33 @@ describe("resume()", () => {
     expect(t.reads()).toBe(0)
   })
 
-  it("re-reads a view whose mark reaches the limit, and one with no mark", async () => {
+  // Межа — на віку відмітки: 14 999 мс ще свіжий, 15 000 мс уже прострочений.
+  it.each([
+    [14_999, 0],
+    [15_000, 1],
+  ])("a view marked %i ms ago is re-read %i times", async (age, reads) => {
     const t = await loaded()
-    vi.advanceTimersByTime(14_999)
+    vi.advanceTimersByTime(age)
     t.runtime.resume()
     await settle()
-    expect(t.reads()).toBe(0)
+    expect(t.reads()).toBe(reads)
+  })
+
+  it("re-reads a hydrated view whose reconciliation read failed: it has no mark", async () => {
+    const server = setup()
+    server.core.view(list).subscribe(() => {})
+    await settle()
+    const snapshot = server.runtime.dehydrate()
+    const t = setup()
+    t.runtime.hydrate(snapshot)
+    t.core.view(list).subscribe(() => {})
+    t.wire.fail = true
+    t.runtime.endHydration()
+    await settle()
+    expect(t.reads()).toBe(1)
+    t.wire.fail = false
     t.calls.length = 0
-    vi.advanceTimersByTime(1_000)
+    vi.advanceTimersByTime(1)
     t.runtime.resume()
     await settle()
     expect(t.reads()).toBe(1)
@@ -195,6 +231,54 @@ describe("resume()", () => {
     t.wire.fail = false
     t.calls.length = 0
     vi.advanceTimersByTime(1_500)
+    t.runtime.resume()
+    await settle()
+    expect(t.reads()).toBe(1)
+  })
+
+  it("sets no mark on a discarded answer: the next resume re-reads again", async () => {
+    // Відповідь відкинуто (читання почалось до перемикання епохи): він нічого не
+    // записав, тож і свіжості не дав.
+    const EA = "a".repeat(64)
+    const EB = "b".repeat(64)
+    vi.spyOn(Math, "random").mockReturnValue(0.99)
+    const t = setup()
+    t.wire.epoch = EA
+    t.core.view(list).subscribe(() => {})
+    await settle()
+    vi.advanceTimersByTime(20_000)
+    t.wire.hold = true
+    t.runtime.resume()
+    await settle()
+    expect(t.reads()).toBe(2)
+    // Інше читання приносить відповідь нової епохи, доки перше тримається.
+    t.wire.hold = false
+    t.wire.epoch = EB
+    t.core.view(card(3)).subscribe(() => {})
+    await settle()
+    t.wire.release()
+    // Повтор відкинутого читання теж тримається: він не ставить відмітки.
+    t.wire.hold = true
+    await settle()
+    // Відкинуте читання повторюється після паузи: це доводить відкидання.
+    t.calls.length = 0
+    await vi.advanceTimersByTimeAsync(1_500)
+    expect(t.reads()).toBe(1)
+    t.calls.length = 0
+    t.runtime.resume()
+    await settle()
+    expect(t.reads()).toBe(1)
+  })
+
+  it("takes the first-load mark at its start, not at its settling", async () => {
+    const t = setup()
+    t.wire.delayMs = 10_000
+    t.core.view(list).subscribe(() => {})
+    await vi.advanceTimersByTimeAsync(10_000)
+    t.wire.delayMs = 0
+    expect(t.reads()).toBe(1)
+    t.calls.length = 0
+    vi.advanceTimersByTime(5_000)
     t.runtime.resume()
     await settle()
     expect(t.reads()).toBe(1)
