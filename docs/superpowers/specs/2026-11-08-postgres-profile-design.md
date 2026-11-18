@@ -785,8 +785,8 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
 
 ```text
 SignalTokens = {
-  connectionToken(subject: string): Promise<{ token, expiresAt }>,
-  channelToken(subject: string, channel: string): Promise<{ token, expiresAt }>,
+  connectionToken(grant: ChannelGrant): Promise<{ token, expiresAt }>,
+  channelTokens(grant: ChannelGrant): Promise<{ channel, token, expiresAt }[]>,
   jwks(): JsonWebKeySet
 }
 ```

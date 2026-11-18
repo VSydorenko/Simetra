@@ -105,6 +105,7 @@
     "./compiler": "./src/compiler/index.ts",
     "./schema": "./src/schema/index.ts",
     "./server": "./src/server/index.ts",
+    "./server/signals": "./src/server/signals/index.ts",
     "./data": "./src/data/index.ts",
     "./data/react": "./src/data/react/index.ts",
     "./ui": "./src/ui/index.ts",
@@ -129,6 +130,10 @@
       "./server": {
         "types": "./dist/server/index.d.ts",
         "import": "./dist/server/index.js"
+      },
+      "./server/signals": {
+        "types": "./dist/server/signals/index.d.ts",
+        "import": "./dist/server/signals/index.js"
       },
       "./data": {
         "types": "./dist/data/index.d.ts",

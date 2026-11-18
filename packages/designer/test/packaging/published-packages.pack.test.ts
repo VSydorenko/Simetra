@@ -105,6 +105,7 @@ describe("simetra", () => {
       "./schema",
       "./schemas/*",
       "./server",
+      "./server/signals",
       "./shell",
       "./ui",
     ])
@@ -125,6 +126,8 @@ describe("simetra", () => {
       "dist/schema/index.js",
       "dist/server/index.js",
       "dist/server/index.d.ts",
+      "dist/server/signals/index.js",
+      "dist/server/signals/index.d.ts",
       "dist/ui/index.js",
       "dist/ui/index.d.ts",
       "dist/shell/index.js",
@@ -200,7 +203,7 @@ describe("simetra", () => {
       [
         "--input-type=module",
         "-e",
-        'await import("simetra/server"); await import("simetra/data")',
+        'await import("simetra/server"); await import("simetra/server/signals"); await import("simetra/data")',
       ],
       { cwd: consumer }
     )
@@ -227,6 +230,23 @@ describe("simetra", () => {
       { cwd: consumer }
     )
     expect(stdout.trim()).toBe("true,true,true,true")
+  })
+
+  it("simetra/server/signals exposes the token port, not the grant constructor", async () => {
+    // Грант дає лише `runtime.authorizeChannels`: конструктор у публічному
+    // вході дав би токен на будь-який канал без перевірки прав.
+    const { stdout } = await exec(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        'const s = await import("simetra/server/signals"); console.log(Object.keys(s).sort().join())',
+      ],
+      { cwd: consumer }
+    )
+    expect(stdout.trim()).toBe(
+      "SIGNALS_JWKS_PATH,SignalTokenError,createCentrifugoTokens"
+    )
   })
 
   it("passes publint", async () => {
