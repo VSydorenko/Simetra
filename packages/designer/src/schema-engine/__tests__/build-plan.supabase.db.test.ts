@@ -8,6 +8,7 @@ import {
   compiled,
   EMPTY,
   errors,
+  expectGrantOptionDrift,
   inTarget,
   party,
   PARTY,
@@ -28,6 +29,10 @@ useBuildPlanRoles()
 // Конкурентно: ціль і копії кожного тесту — власні бази, ролі створює лише
 // `beforeAll`
 describe.concurrent("buildPlan", () => {
+  // Опція гранту ролі API провайдера (#277); той самий випадок на стеку
+  // postgres — `build-plan.db.test.ts`
+  it("plans over drift of a grant option alone", expectGrantOptionDrift)
+
   // Спека промоції §7.2: сліпа функція з переліку
   // пресету провайдера — рядок виводу, а не попередження; сліпа функція
   // провайдера поза переліком і функція застосування — попередження

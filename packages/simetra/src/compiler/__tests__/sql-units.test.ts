@@ -435,6 +435,27 @@ describe("sql units", () => {
     ])
   })
 
+  // Опція гранту — частина атома привілею (`*`, як в `aclitem` Postgres):
+  // грант, що відрізняється лише нею, — інша одиниця, так само відкликання
+  // самої опції (#277)
+  it("the grant option is part of each privilege atom", async () => {
+    expect(
+      await identities(
+        [
+          "GRANT SELECT ON public.t TO authenticated;",
+          "GRANT INSERT (a, b), SELECT ON public.t TO anon WITH GRANT OPTION;",
+          "REVOKE SELECT ON public.t FROM anon;",
+          "REVOKE GRANT OPTION FOR UPDATE ON public.t FROM anon;",
+        ].join("\n")
+      )
+    ).toEqual([
+      "grant:grant:table:public.t:anon:insert(a,b)*,select*",
+      "grant:grant:table:public.t:authenticated:select",
+      "grant:revoke:table:public.t:anon:select",
+      "grant:revoke:table:public.t:anon:update*",
+    ])
+  })
+
   it("two ALTER PUBLICATION ADD TABLE for different tables are different units", async () => {
     expect(
       await identities(
