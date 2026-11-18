@@ -37,7 +37,7 @@ import {
   call,
   ENV,
   errors,
-  expectOnlyOutbox,
+  expectOnlyPlatformInstall,
   freshProject,
   inTarget,
   introspected,
@@ -216,11 +216,12 @@ describe("introspect", () => {
 })
 
 describe("diff", () => {
-  it("diff of an introspected database differs only by the signal outbox", async () => {
+  it("diff of an introspected database is exactly the platform install", async () => {
     await introspected(async (dir, env) => {
-      // Outbox є в кожному проєкті; базу без стану застосування доповнить
-      // перше застосування — інших відмінностей немає
-      expectOnlyOutbox(await diffData(dir, env))
+      // Платформну установку (outbox сигналів) має кожен проєкт; базу без
+      // стану застосування доповнить перше застосування — інших
+      // відмінностей немає
+      await expectOnlyPlatformInstall(await diffData(dir, env), dir)
       const r = await runTool(
         toolByName("diff")!,
         { _: [dir] },
@@ -229,7 +230,8 @@ describe("diff", () => {
         env
       )
       expect(r.stdout).toContain("signal_outbox")
-      expect(r.exitCode).toBe(0)
+      // Непорожня звірка — код 1: CI чекає порожньої (cli/command.ts)
+      expect(r.exitCode).toBe(1)
     })
   })
 
@@ -404,9 +406,9 @@ async function usersProject(): Promise<{ dir: string; model: CompiledModel }> {
 }
 
 describe("diff and the apply state", () => {
-  it("a database without the apply state matches its metadata but for the signal outbox", async () => {
+  it("a database without the apply state matches its metadata but for the platform install", async () => {
     await introspected(async (dir, env) => {
-      expectOnlyOutbox(await diffData(dir, env))
+      await expectOnlyPlatformInstall(await diffData(dir, env), dir)
       const cli = await runTool(
         toolByName("diff")!,
         { _: [dir] },
@@ -414,7 +416,7 @@ describe("diff and the apply state", () => {
         process.cwd(),
         env
       )
-      expect(cli.exitCode).toBe(0)
+      expect(cli.exitCode).toBe(1)
     })
   })
 

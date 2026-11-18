@@ -15,6 +15,7 @@ export { desiredForApply, type ApplyDesired } from "./desired"
 export {
   APPLY_STATE_FORMAT,
   applyStateOf,
+  applyStateOwnership,
   findApply,
   planPlatformFunctions,
   readApplyState,

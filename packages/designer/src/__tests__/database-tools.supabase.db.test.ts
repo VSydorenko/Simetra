@@ -4,7 +4,7 @@ import { testDatabaseUrl } from "../../../simetra/test/support"
 import {
   call,
   errors,
-  expectOnlyOutbox,
+  expectOnlyPlatformInstall,
   introspected,
   options,
   useDatabaseToolsCleanup,
@@ -29,9 +29,9 @@ describe("sessions", () => {
         options(dir, { ...env, SHADOW_URL: testDatabaseUrl() }, "SHADOW_URL")
       )
       expect(errors(r)).toEqual([])
-      // Повний шлях тіні на іншому сервері: єдина різниця — outbox сигналів,
-      // який створить перше застосування
-      expectOnlyOutbox(r.data as DiffData)
+      // Повний шлях тіні на іншому сервері: єдина різниця — платформна
+      // установка, яку зробить перше застосування
+      await expectOnlyPlatformInstall(r.data as DiffData, dir)
     })
   })
 })

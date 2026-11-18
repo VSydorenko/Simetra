@@ -1,16 +1,18 @@
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import type { EngineScope } from "simetra/schema"
 import { afterEach, expect } from "vitest"
 import { databaseResource } from "../io/database"
 import { toolByName } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
 import type { InvokeOptions, ToolResult } from "../tools/types"
 import type { DiffData } from "../tools/database-tools"
-import { PLATFORM_ROLES, SIGNAL_OUTBOX } from "simetra/model"
+import { compile, platformInstall } from "simetra/compiler"
+import { applyStateOwnership, type EngineScope } from "simetra/schema"
+import { readMetadataDir } from "../io/metadata-dir"
 import { testProvider } from "../../../simetra/test/support"
 import { inTarget as loadTarget } from "./support/db"
+import { installMismatch, installObjects } from "./support/platform-install"
 
 /**
  * Спільна підготовка тестів `introspect` і `diff` над живою базою
@@ -86,25 +88,33 @@ export const errors = (r: ToolResult) =>
   r.diagnostics.filter((d) => d.severity === "error")
 
 /**
- * Diff of a database without the apply state against its own introspected
- * metadata: the one difference is the signal outbox, which every project has
- * and the first apply creates (postgres profile spec §5.1) — its table, units
- * and the consumer's grants, and nothing else.
+ * Diff of a database without the apply state against the metadata `dir`
+ * holds: no errors, and the plan and the differences are exactly the
+ * platform install (fork (b) of the outbox: the first apply installs it,
+ * `diff` lists that install) — derived by `installObjects` from the compiled
+ * empty project, without what the apply state owns. A new platform table or
+ * unit changes the expected set by itself; an action or difference outside it
+ * is red.
  */
-export function expectOnlyOutbox(data: DiffData): void {
-  // Ім'я таблиці, її послідовності й функцій — у лапках чи без них
-  const name = new RegExp(
-    `"?${SIGNAL_OUTBOX.schema}"?\\."?${SIGNAL_OUTBOX.name}`
+export async function expectOnlyPlatformInstall(
+  data: DiffData,
+  dir: string
+): Promise<void> {
+  const compiled = await compile(await readMetadataDir(dir))
+  expect(compiled.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+  const expected = installObjects(
+    await platformInstall(testProvider()),
+    applyStateOwnership(compiled.model!).owns
   )
-  const outbox = (text: string) =>
-    name.test(text) || text.includes(PLATFORM_ROLES.signalConsumer)
   expect(data.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   expect(data.applyState).toBe("absent")
-  expect(data.plan.length).toBeGreaterThan(0)
-  expect(data.plan.map((a) => a.sql).filter((sql) => !outbox(sql))).toEqual([])
-  expect(
-    data.differences.map((d) => d.path).filter((path) => !outbox(path))
-  ).toEqual([])
+  expect(expected.length).toBeGreaterThan(0)
+  expect(installMismatch(data, expected)).toEqual({
+    foreignActions: [],
+    foreignDifferences: [],
+    unplanned: [],
+    undifferenced: [],
+  })
 }
 
 export const SHOP = `
