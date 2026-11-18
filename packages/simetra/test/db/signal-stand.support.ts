@@ -14,6 +14,11 @@ import {
   quoteIdent,
 } from "simetra/model"
 import { compile } from "simetra/compiler"
+import {
+  SIGNAL_OUTBOX_POLICIES,
+  outboxUnits,
+} from "../../src/compiler/platform/outbox"
+import { loadSqlParser } from "../../src/compiler/sql/parse"
 import { loginSettingSql } from "../../src/schema/apply/platform-roles"
 import { renderDesiredState } from "simetra/schema"
 import {
@@ -58,10 +63,15 @@ export function defineSignalStandCases(): void {
   let admin: pg.Client | undefined
   let owner: pg.Client | undefined
   let created = false
-  let roleCreated = false
+  let rolesCreated = 0
   // Роль входу прогону тієї самої форми, що `simetra_signals` (T0): спільну
   // кластерну роль тест не змінює
   const LOGIN = testRoleName("signals")
+  // Група споживача прогону: спільну `simetra_signal_consumer` членом не
+  // доповнюють — гейт ролей побачив би чужого члена
+  const GROUP = testRoleName("signals_grp")
+  // Той самий вхід без налаштування `role`: сесія лишається голою роллю входу
+  const BARE = testRoleName("signals_bare")
   const ROLE_SETTING = LOGIN_ROLE_SETTINGS.signals!.role
 
   const urlOf = (user?: { name: string; password: string }) => {
@@ -89,19 +99,45 @@ export function defineSignalStandCases(): void {
     owner = new pg.Client({ connectionString: urlOf() })
     await owner.connect()
     await owner.query(renderDesiredState(result.model!).sql)
+    await admin.query(`CREATE ROLE ${quoteIdent(GROUP)} NOLOGIN NOINHERIT`)
+    rolesCreated = 1
+    // Гранти групи — ті самі одиниці outbox, що дає генератор, з іменем
+    // групи прогону й іменами політик з суфіксом (політики таблиці унікальні)
+    const real = PLATFORM_ROLES.signalConsumer
+    const policyNames = Object.values(SIGNAL_OUTBOX_POLICIES)
+    const grants = outboxUnits(
+      "signal-stand",
+      testProvider(),
+      await loadSqlParser()
+    )
+      .map((unit) => unit.sql)
+      .filter((sql) => sql.includes(quoteIdent(real)))
+    for (const sql of grants) {
+      let tagged = sql.split(quoteIdent(real)).join(quoteIdent(GROUP))
+      for (const name of policyNames)
+        tagged = tagged.split(name).join(`${name}_${runTag()}`)
+      await owner.query(tagged)
+    }
+    expect(grants.length).toBeGreaterThanOrEqual(5)
     await admin.query(
       `CREATE ROLE ${quoteIdent(LOGIN)} LOGIN NOINHERIT PASSWORD '${password}'`
     )
-    roleCreated = true
-    for (const parent of loginRoleParentNames("signals", testProvider()))
-      await admin.query(
-        `GRANT ${quoteIdent(parent)} TO ${quoteIdent(LOGIN)} WITH INHERIT FALSE, SET TRUE`
-      )
+    rolesCreated = 2
+    await admin.query(
+      `GRANT ${quoteIdent(GROUP)} TO ${quoteIdent(LOGIN)} WITH INHERIT FALSE, SET TRUE`
+    )
     // Налаштування — тим самим SQL, що ставить `roles` справжній ролі входу
+    await admin.query(
+      `CREATE ROLE ${quoteIdent(BARE)} LOGIN NOINHERIT PASSWORD '${password}'`
+    )
+    rolesCreated = 3
+    await admin.query(
+      `GRANT ${quoteIdent(GROUP)} TO ${quoteIdent(BARE)} WITH INHERIT FALSE, SET TRUE`
+    )
     for (const sql of loginSettingSql({
       name: LOGIN,
       memberOf: [],
-      settings: LOGIN_ROLE_SETTINGS.signals!,
+      settings: { role: GROUP },
     }))
       await admin.query(sql)
   }, 120_000)
@@ -117,8 +153,12 @@ export function defineSignalStandCases(): void {
           await admin?.query(
             `DROP DATABASE IF EXISTS ${quoteIdent(database)} WITH (FORCE)`
           )
-        if (roleCreated)
+        if (rolesCreated >= 3)
+          await admin?.query(`DROP ROLE IF EXISTS ${quoteIdent(BARE)}`)
+        if (rolesCreated >= 2)
           await admin?.query(`DROP ROLE IF EXISTS ${quoteIdent(LOGIN)}`)
+        if (rolesCreated >= 1)
+          await admin?.query(`DROP ROLE IF EXISTS ${quoteIdent(GROUP)}`)
       } finally {
         await admin?.end().catch(() => undefined)
       }
@@ -257,11 +297,15 @@ export function defineSignalStandCases(): void {
       const row = rows[0]!
       expect(row.login).toBe(true)
       expect(row.inherit).toBe(false)
-      expect(row.parents).toEqual([
-        ...loginRoleParentNames("signals", testProvider()),
-      ])
+      // Група прогону стоїть на місці спільної `simetra_signal_consumer`
+      expect(
+        row.parents.map((p) =>
+          p === GROUP ? PLATFORM_ROLES.signalConsumer : p
+        )
+      ).toEqual([...loginRoleParentNames("signals", testProvider())])
       expect(row.pair.every(Boolean)).toBe(true)
-      expect(row.settings).toEqual([`role=${ROLE_SETTING}`])
+      expect(row.settings).toEqual([`role=${GROUP}`])
+      expect(ROLE_SETTING).toBe(PLATFORM_ROLES.signalConsumer)
     })
 
     it("the run login only reads and deletes the outbox", async () => {
@@ -271,7 +315,7 @@ export function defineSignalStandCases(): void {
         const who = await client.query<{ u: string }>(
           "SELECT current_user AS u"
         )
-        expect(who.rows[0]?.u).toBe(PLATFORM_ROLES.signalConsumer)
+        expect(who.rows[0]?.u).toBe(GROUP)
         await client.query(`SELECT id FROM ${OUTBOX}`)
         const payload = JSON.stringify({
           channel: `simetra:${ZERO_UUID}:${ZERO_UUID}:${randomUUID()}`,
@@ -293,6 +337,26 @@ export function defineSignalStandCases(): void {
           "42501"
         )
         expect(await refused(`DELETE FROM ${OUTBOX}`)).toBe("allowed")
+      } finally {
+        await client.end()
+      }
+    })
+
+    it("a login without the role setting has no rights", async () => {
+      const client = new pg.Client({
+        connectionString: urlOf({ name: BARE, password }),
+      })
+      await client.connect()
+      try {
+        const who = await client.query<{ u: string }>(
+          "SELECT current_user AS u"
+        )
+        expect(who.rows[0]?.u).toBe(BARE)
+        const refused = await client.query(`SELECT id FROM ${OUTBOX}`).then(
+          () => "allowed",
+          (error: { code?: string }) => error.code
+        )
+        expect(refused).toBe("42501")
       } finally {
         await client.end()
       }
