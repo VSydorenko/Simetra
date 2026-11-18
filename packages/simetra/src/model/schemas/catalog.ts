@@ -17,13 +17,13 @@ import {
   physicalNameSchema,
 } from "./identity"
 import { metadataRefSchema } from "./metadata-ref"
-
-/** Default `mainPresentation` of a catalog: the standard attribute that represents an item. */
-export const DEFAULT_MAIN_PRESENTATION = "Description"
 import {
   objectHeaderShape,
   standardAttributeOverridesSchema,
 } from "./object-header"
+
+/** Default `mainPresentation` of a catalog: the standard attribute that represents an item. */
+export const DEFAULT_MAIN_PRESENTATION = "Description"
 
 /** Довідник. */
 export const catalogSchema = z.strictObject({
