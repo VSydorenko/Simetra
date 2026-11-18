@@ -21,7 +21,7 @@ import {
   TABULAR_LINES_MAX,
 } from "simetra/model"
 import { decodeCoreRow as decodeCore } from "./decode"
-import { refOf, withObject } from "./errors"
+import { refOf, withObject, type ErrorPhase } from "./errors"
 import { callHook, type HookPhase } from "./hook-context"
 import type { z } from "zod"
 import {
@@ -634,8 +634,9 @@ export async function runPhase(
   const draft = await beforeWrite(tx, phase, module, draftOf(op))
   const call = callOf(found, op, draft)
   if ("error" in call) tx.abort(call.error)
-  const text = await callCore(tx, found, op, call)
+  const { text, merged } = await callCore(tx, found, op, call)
   const row = decodeCoreRow(tx, object, () => JSON.parse(text) as unknown)
+  if (merged) await tx.invalidate(object, row.scope, writePhase(object, op))
   recordChange(tx, object, op, row)
   await onWrite(tx, phase, module, row.row)
   return row.row
@@ -713,13 +714,16 @@ async function runRootPhase(
       op.memberId ?? null,
     ],
   }
-  const text = await callCore(tx, found, op, call, membership)
+  const { text, merged } = await callCore(tx, found, op, call, membership)
   let result: unknown
   const rootRow = decodeCoreRow(tx, object, () => {
     result = JSON.parse(text)
     if (!isPlainObject(result)) throw new Error("root core result")
     return result.root
   })
+  if (merged) {
+    await tx.invalidate(object, rootRow.scope, writePhase(object, op))
+  }
   recordChange(tx, object, op, rootRow)
   let memberRow: Record<string, unknown> | undefined
   if (member !== undefined) {
@@ -743,9 +747,17 @@ async function runRootPhase(
   return rootRow.row
 }
 
+/** Фаза відмови запису: оператори сигналу фази мапляться як її запис. */
+const writePhase = (object: RuntimeObject, op: Operation): ErrorPhase => ({
+  kind: "write",
+  object,
+  operation: op.action,
+})
+
 /**
  * Контекст і виклик ядра — неподільна одиниця черги (Рт5): між
- * ними не стане оператор іншої фази. Повертає текст рядка ядра.
+ * ними не стане оператор іншої фази. Повертає текст рядка ядра і чи йшла
+ * фаза в режимі злиття сигналів (спека П4-B §8.2).
  */
 async function callCore(
   tx: Transaction,
@@ -753,16 +765,19 @@ async function callCore(
   op: PreparedOperation,
   call: Statement,
   membership?: RuntimeObject
-): Promise<string> {
-  const { rows } = await tx.enqueue([contextOf({ object, target }, op), call], {
-    kind: "write",
-    object,
-    operation: op.action,
+): Promise<{ text: string; merged: boolean }> {
+  const phase: ErrorPhase = {
+    ...writePhase(object, op),
     ...(membership === undefined ? {} : { membership }),
-  })
+  }
+  const core = tx.enqueue([contextOf({ object, target }, op), call], phase)
+  // Лік — одразу за постановкою ядра в чергу, без `await` між ними.
+  const { merged, switched } = tx.signalPhase(object, phase)
+  const { rows } = await core
+  await switched
   const text = rows[0]?.r
   if (typeof text !== "string") coreAnomaly(tx, object)
-  return text
+  return { text, merged }
 }
 
 /** Відповідь бази не тієї форми — аномалія: назовні код, у журнал — подробиці. */

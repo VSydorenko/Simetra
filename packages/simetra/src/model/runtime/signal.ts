@@ -26,6 +26,12 @@ export const SIGNAL_PAYLOAD_MAX_BYTES = 1024
 export const SIGNAL_MODE_SETTING = "simetra.signal_mode"
 export const SIGNAL_MERGE_MODE = "merge"
 
+/**
+ * The function (schema `PLATFORM_SCHEMA`) that writes the merged `invalidate`
+ * of one (scope, object) pair; the command runtime calls it in merge mode.
+ */
+export const SIGNAL_INVALIDATE_FUNCTION_NAME = "signal_invalidate"
+
 /** Centrifugo's channel name length limit (`channel_max_length`, octets). */
 export const CENTRIFUGO_CHANNEL_MAX = 255
 

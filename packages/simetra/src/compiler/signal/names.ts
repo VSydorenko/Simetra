@@ -1,4 +1,4 @@
-import { PLATFORM_SCHEMA } from "simetra/model"
+import { PLATFORM_SCHEMA, SIGNAL_INVALIDATE_FUNCTION_NAME } from "simetra/model"
 
 /**
  * Signal functions of the schema `simetra` (P4-B spec §8.2, §8.3). A module
@@ -7,7 +7,11 @@ import { PLATFORM_SCHEMA } from "simetra/model"
  */
 export const SIGNAL_FUNCTIONS = {
   signal: { schema: PLATFORM_SCHEMA, name: "signal" },
-  invalidate: { schema: PLATFORM_SCHEMA, name: "signal_invalidate" },
+  // Ім'я — у T0: T3 кличе її в режимі злиття, а імпортує лише `simetra/model`.
+  invalidate: {
+    schema: PLATFORM_SCHEMA,
+    name: SIGNAL_INVALIDATE_FUNCTION_NAME,
+  },
   topicAllowed: { schema: PLATFORM_SCHEMA, name: "signal_topic_allowed" },
   payloadAllowed: { schema: PLATFORM_SCHEMA, name: "signal_payload_allowed" },
 } as const
