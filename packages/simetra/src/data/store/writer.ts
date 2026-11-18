@@ -10,6 +10,7 @@ import {
 } from "./include"
 import { visibleRow, type RowEntry } from "./object-store"
 import {
+  aliveIncluded,
   applyIncluded,
   fetchFull,
   gated,
@@ -778,11 +779,41 @@ async function writeAgain(
       // Шапка списочною формою; ліниві поля змонтованої картки дочитує
       // перевірка вигляду, коли версія рядка зросла (§6.2, правило 2).
       // Картка не має дії «показати нові»: `hasNewRows` їй не ставимо.
-      const rows = await readKeys(ctx.source, o.entry, [spec.key], {
-        keysPerRequest,
-        known: listKnown(s),
-      })
-      return applyKeys(ctx, s, [spec.key], rows, startEpoch, false)
+      const [rows, held] = await Promise.all([
+        readKeys(ctx.source, o.entry, [spec.key], {
+          keysPerRequest,
+          known: listKnown(s),
+        }),
+        readHeldTargets(ctx, s),
+      ])
+      const write = applyKeys(ctx, s, [spec.key], rows, startEpoch, false)
+      if (s.form.include.length === 0) return write
+      const row = rows.find((r) => r.key === spec.key)
+      const included = await completeIncluded(
+        ctx.source,
+        s.form.include,
+        includeKeys(s.form.include, row === undefined ? [] : [row.values]),
+        held,
+        keysPerRequest
+      )
+      return (scope) => {
+        write(scope)
+        // Рядок, чий `put` відхилено, лишається `removed`: його цілей не беремо.
+        const alive = o.rows.get(spec.key)?.removed === undefined
+        applyIncluded(
+          ctx,
+          scope,
+          s,
+          aliveIncluded(
+            included,
+            includeKeys(
+              s.form.include,
+              alive && row !== undefined ? [row.values] : []
+            )
+          ),
+          startEpoch
+        )
+      }
     }
     case "section":
       return readFormWrite(ctx, s, startEpoch, token)

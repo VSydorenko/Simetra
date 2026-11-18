@@ -88,16 +88,23 @@ export function formOf(ctx: FormContext, spec: ViewSpec): Form {
         include: [],
       }
     }
-    case "card":
+    case "card": {
+      const include = includeSteps(spec.object, entry, ctx.index, spec.include)
       return {
         spec,
-        specKey: canonical([spec.kind, spec.object, spec.key]),
+        specKey: canonical([
+          spec.kind,
+          spec.object,
+          spec.key,
+          include.map((s) => s.attribute).sort(),
+        ]),
         object,
         keys: [spec.key],
         test: all,
         compare: undefined,
-        include: [],
+        include,
       }
+    }
     case "section":
       if (!entry.tabularSections.some((s) => s.name === spec.section)) {
         throw new TypeError(`${spec.object}: unknown section ${spec.section}`)

@@ -269,7 +269,7 @@ export function applyIncluded(
  * Лишає з прочитаних цілей лише ті, що потрібні живим рядкам читання; ключі —
  * ті з них, на які читання відповідало.
  */
-function aliveIncluded(
+export function aliveIncluded(
   included: Included,
   wanted: ReadonlyMap<ObjectName, readonly Key[]>
 ): Included {
@@ -740,18 +740,54 @@ async function readCard(
   s: ReaderTarget,
   readEpoch: number
 ): Promise<Write> {
-  const { ops } = ctx
-  const o = s.form.object
-  const key = s.form.keys[0]!
-  const rows = await readKeys(ctx.source, o.entry, [key], {
-    form: "card",
-    known: (keys) => o.rows.knownFor(keys, { owned: s.owned, form: "card" }),
-  })
+  const { ops, limits } = ctx
+  const { form } = s
+  const o = form.object
+  const key = form.keys[0]!
+  // Картка просить `include` тим самим запитом (§6.7); читання за id — та сама
+  // форма картки, що й читання за ключем.
+  const answer = await readRows(
+    ctx.source,
+    o.entry,
+    {
+      object: o.ref,
+      id: key,
+      ...(form.include.length === 0
+        ? {}
+        : { include: form.include.map((step) => step.attribute) }),
+    },
+    o.rows.knownFor([key], { owned: s.owned, form: "card" })
+  )
+  const row = answer.rows.find((r) => r.key === key)
+  const included = await completeIncluded(
+    ctx.source,
+    form.include,
+    includeKeys(form.include, row === undefined ? [] : [row.values]),
+    includedFrom(
+      form.include,
+      answer.rows.map((r) => r.values),
+      answer.included,
+      answer.epoch
+    ),
+    limits.keysPerRequest
+  )
   return (scope) => {
-    const row = rows.find((r) => r.key === key)
     if (row !== undefined) ops.put(scope, o, row, readEpoch, true)
     else missed(ops, scope, o, key, readEpoch)
     s.owned = diffOwn(ops, scope, o, s.owned, [key])
+    if (form.include.length === 0) return
+    // Рядок, чий `put` відхилено, лишається `removed`: його цілей не беремо.
+    const alive = o.rows.get(key)?.removed === undefined && row !== undefined
+    applyIncluded(
+      ctx,
+      scope,
+      s,
+      aliveIncluded(
+        included,
+        includeKeys(form.include, alive ? [row.values] : [])
+      ),
+      readEpoch
+    )
   }
 }
 

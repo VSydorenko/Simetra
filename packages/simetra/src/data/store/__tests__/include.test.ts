@@ -314,8 +314,40 @@ describe("an incompatible include target", () => {
   })
 })
 
-describe("a card read with the header and the lines of its owner", () => {
-  it("goes in one request when the list holding the header has include", async () => {
+// Картка має власний `include` (§6.7): цілі — тим самим запитом.
+describe("a card with its own include", () => {
+  const CARD: ViewSpec = { kind: "card", object: TASK, key: key(1), ...LIST }
+  const SECTION: ViewSpec = {
+    kind: "section",
+    object: TASK,
+    owner: key(1),
+    section: "lines",
+  }
+
+  it("validates include as a list does: a bad attribute is a TypeError, a form with include is another form", () => {
+    const { core } = setup()
+    expect(() => core.view({ ...CARD, include: ["title"] })).toThrow(TypeError)
+    expect(core.view(CARD)).not.toBe(
+      core.view({ kind: "card", object: TASK, key: key(1) })
+    )
+    expect(core.view(CARD)).toBe(core.view({ ...CARD, include: ["org"] }))
+  })
+
+  it("opens directly, without a list, in one request with its targets", async () => {
+    const { core, fake } = setup()
+    seedWithOrgs(fake, 2)
+    const handle = core.view(CARD)
+    watch(handle)
+    await settle()
+    expect(fake.requests).toEqual([1])
+    expect(includeOf(fake.log[0]!)).toEqual(["org"])
+    expect(readsOf(fake, ORG)).toHaveLength(0)
+    expect(handle.getSnapshot().rows[0]).toMatchObject({
+      refs: { org: { key: orgKey(1), state: "synced" } },
+    })
+  })
+
+  it("goes with the lines of its owner in one request", async () => {
     const { core, fake } = setup()
     seedWithOrgs(fake, 2)
     fake.setLines(TASK, key(1), "lines", [
@@ -324,17 +356,128 @@ describe("a card read with the header and the lines of its owner", () => {
     watch(core.view(FULL))
     await settle()
     const requests = fake.requests.length
-    watch(core.view({ kind: "card", object: TASK, key: key(1) }))
-    watch(
-      core.view({
-        kind: "section",
-        object: TASK,
-        owner: key(1),
-        section: "lines",
-      })
-    )
+    const card = core.view(CARD)
+    watch(card)
+    watch(core.view(SECTION))
     await settle()
     expect(fake.requests.length).toBe(requests + 1)
     expect(fake.requests.at(-1)).toBe(2)
+    expect(fake.log.slice(-2).some((r) => includeOf(r) !== undefined)).toBe(
+      true
+    )
+    expect(card.getSnapshot().rows[0]).toMatchObject({
+      refs: { org: { key: orgKey(1) } },
+    })
+  })
+
+  it("re-reads unchanged in one request, the targets as markers", async () => {
+    const { core, fake } = setup()
+    seedWithOrgs(fake, 2)
+    watch(core.view(CARD))
+    await settle()
+    const requests = fake.requests.length
+    const from = fake.log.length
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(fake.requests.length).toBe(requests + 1)
+    const reads = fake.log.slice(from)
+    expect(reads).toHaveLength(2)
+    expect(reads.every((r) => includeOf(r) === undefined)).toBe(true)
+    expect(reads.every(markersOnly)).toBe(true)
+  })
+
+  it("re-reads a changed reference in one more request with only the new id; the old target leaves", async () => {
+    const { core, fake, inspect } = setup()
+    seedWithOrgs(fake, 2)
+    fake.insert(ORG, { ref: orgKey(9) })
+    const handle = core.view(CARD)
+    watch(handle)
+    await settle()
+    fake.edit(TASK, key(1), { org: orgKey(9) })
+    const requests = fake.requests.length
+    const from = fake.log.length
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    // Звірка — два запити; третій — перевірка лінивих полів змонтованої
+    // картки, бо версія рядка зросла (§6.2, правило 2).
+    const revalidation = fake.log
+      .slice(from)
+      .filter((r) => r.request < requests + 2)
+    expect(new Set(revalidation.map((r) => r.request)).size).toBe(2)
+    const fresh = revalidation.filter(
+      (r) => keysOf(r.query).length > 0 && r.known === undefined
+    )
+    expect(fresh.map((r) => keysOf(r.query))).toEqual([[orgKey(9)]])
+    const [s] = [...coreInternals(core).registry.subsets()]
+    expect([...s!.included.get(ORG)!]).toEqual([orgKey(9)])
+    expect(inspect.owners(ORG, orgKey(1))).toBe(0)
+  })
+
+  it("marks a held target the keys part did not answer as removed", async () => {
+    const { core, fake } = setup()
+    seedWithOrgs(fake, 1)
+    const handle = core.view(CARD)
+    watch(handle)
+    await settle()
+    fake.remove(ORG, orgKey(1))
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(orgRow(core, orgKey(1))?.removed).toBeDefined()
+    expect(handle.getSnapshot().rows[0]).toMatchObject({ refs: { org: null } })
+  })
+})
+
+describe("a window whose reference changed", () => {
+  it("keeps the old target held and reads the new id in the next request", async () => {
+    const { core, fake } = setup()
+    seedWithOrgs(fake, 2)
+    fake.insert(ORG, { ref: orgKey(9) })
+    watch(core.view(WINDOW))
+    await settle()
+    fake.edit(TASK, key(1), { org: orgKey(9) })
+    const requests = fake.requests.length
+    const from = fake.log.length
+    await core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(fake.requests.length).toBe(requests + 2)
+    const fresh = fake.log
+      .slice(from)
+      .filter((r) => keysOf(r.query).length > 0 && r.known === undefined)
+    expect(fresh.map((r) => keysOf(r.query))).toEqual([[orgKey(9)]])
+    expect(fresh[0]!.request).toBe(requests + 1)
+    const [s] = [...coreInternals(core).registry.subsets()]
+    expect([...s!.included.get(ORG)!].sort()).toEqual(
+      [orgKey(1), orgKey(2), orgKey(9)].sort()
+    )
+  })
+})
+
+describe("a row of the answer whose put is rejected", () => {
+  it("does not own its target", async () => {
+    const { core, fake, inspect } = setup()
+    seedWithOrgs(fake, 2)
+    watch(core.view({ kind: "keys", object: TASK, keys: [key(1)] }))
+    await settle()
+    // Ключ стає `removed` у польоті читання: його рядок у відповіді відхилено
+    // (епоха позначки новіша за старт), тож ціль вигляд брати не мусить.
+    fake.hold = (read) => read.object === TASK
+    const full = core.view(FULL)
+    watch(full)
+    await settle()
+    const page = fake.take()
+    core.commit(
+      (w) => w.apply(TASK, { rows: [], absent: [key(1)] }, 1_000_000_000, EA),
+      core.token()
+    )
+    page.answer()
+    await settle()
+    expect(
+      coreInternals(core).objects.get(TASK)!.rows.get(key(1))?.removed
+    ).toBeDefined()
+    const subset = [...coreInternals(core).registry.subsets()].find(
+      (s) => s.form.spec.kind === "full"
+    )!
+    expect([...(subset.included.get(ORG) ?? [])]).toEqual([orgKey(2)])
+    expect(inspect.owners(ORG, orgKey(1))).toBe(0)
   })
 })

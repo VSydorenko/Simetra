@@ -51,7 +51,13 @@ export interface SectionLine {
 /** What a view reads (P4-B spec §6.2). */
 export type ViewSpec =
   | { kind: "keys"; object: ObjectName; keys: readonly Key[] }
-  | { kind: "card"; object: ObjectName; key: Key }
+  | {
+      kind: "card"
+      object: ObjectName
+      key: Key
+      /** Single-target `Ref` attributes whose target rows are read with the card. */
+      include?: readonly string[]
+    }
   | { kind: "section"; object: ObjectName; owner: Key; section: string }
   | {
       kind: "full"
