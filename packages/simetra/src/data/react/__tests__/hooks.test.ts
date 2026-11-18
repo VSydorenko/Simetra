@@ -19,6 +19,7 @@ import {
   taskValues,
 } from "../../store/__tests__/core-support"
 import { createFakeSource } from "../../store/testing/fake-source"
+import type { RowView } from "../../store/types"
 import {
   DataRuntimeProvider,
   useRow,
@@ -89,6 +90,35 @@ function mount<T>(
     rerender: () => view.rerender(tree()),
   }
 }
+
+/**
+ * Транспорт, що відповідає лише на `version`: kernelHash задачі дає тест,
+ * тож інший хеш ставить об'єкту позначку stale-client (§6.4, §10).
+ */
+const versionTransport =
+  (kernelOfTask: () => string): DataTransport =>
+  () =>
+    Promise.resolve({
+      ok: true,
+      serverHash: "server-hash",
+      value: {
+        epoch: null,
+        items: [
+          {
+            ok: true,
+            value: {
+              snapshotHash: "server-hash",
+              objects: Object.fromEntries(
+                OBJECTS.map((o) => [
+                  o.id,
+                  o.id === OBJECTS[0]!.id ? kernelOfTask() : o.kernelHash,
+                ])
+              ),
+            },
+          },
+        ],
+      },
+    })
 
 const rowsOf = (result: UseRowsResult) =>
   result.rows.map((r) => (r.state === "removed" ? undefined : r.values.title))
@@ -384,31 +414,9 @@ describe("isStale", () => {
   const EB = "b".repeat(64)
 
   it("follows the stale-client mark of the object, not the state of a row", async () => {
-    // Транспорт відповідає лише на `version`: kernelHash задає тест.
     let kernel = OBJECTS[0]!.kernelHash
     const { fake, runtime, core } = makeRuntime({
-      transport: () =>
-        Promise.resolve({
-          ok: true,
-          serverHash: "server-hash",
-          value: {
-            epoch: null,
-            items: [
-              {
-                ok: true,
-                value: {
-                  snapshotHash: "server-hash",
-                  objects: Object.fromEntries(
-                    OBJECTS.map((o) => [
-                      o.id,
-                      o.id === OBJECTS[0]!.id ? kernel : o.kernelHash,
-                    ])
-                  ),
-                },
-              },
-            ],
-          },
-        }),
+      transport: versionTransport(() => kernel),
     })
     seed(fake, 1, 2)
     const holder = createRuntimeHolder(runtime)
@@ -577,6 +585,97 @@ describe("useRow", () => {
       core.commit((w) => w.hide(TASK, [key(1)]), core.token())
     })
     expect(card.last().editable).toBe(false)
+  })
+
+  /** A mounted card of task 1, editable before the case changes one fact. */
+  async function editableCard(options: Parameters<typeof makeRuntime>[0] = {}) {
+    const made = makeRuntime(options)
+    seed(made.fake, 1, 1)
+    const card = mount(createRuntimeHolder(made.runtime), () =>
+      useRow({ object: TASK, id: key(1) })
+    )
+    await flush()
+    expect(card.last().editable).toBe(true)
+    // Перечитування, яке позначка запускає, тримає сервер: перевіряється
+    // стан саме з позначкою.
+    made.fake.mode = "manual"
+    return { ...made, card }
+  }
+
+  const versionOf = (row: RowView | undefined) =>
+    row === undefined || row.state === "removed" ? 0 : row.version
+
+  it("is not editable while the row carries a stale mark, and nothing else", async () => {
+    const { core, card } = await editableCard()
+    const version = versionOf(card.last().row)
+    act(() => {
+      core.commit((w) => w.markStale(TASK, [key(1)], version + 1), core.token())
+    })
+    const shown = card.last()
+    expect(shown.row).toMatchObject({ stale: true, staleFields: [] })
+    expect(shown.row).not.toHaveProperty("hidden")
+    expect(shown.needsRefresh).toBe(false)
+    expect(shown.isStale).toBe(false)
+    expect(shown.editable).toBe(false)
+  })
+
+  it("is not editable while the object is marked stale-client, and nothing else", async () => {
+    let kernel = OBJECTS[0]!.kernelHash
+    const { core, card } = await editableCard({
+      transport: versionTransport(() => kernel),
+    })
+    kernel = "1".repeat(64)
+    await act(async () => {
+      core.requestVersion()
+      await settle()
+    })
+    const shown = card.last()
+    expect(shown.isStale).toBe(true)
+    expect(shown.row).toMatchObject({ state: "synced", staleFields: [] })
+    expect(shown.row).not.toHaveProperty("stale")
+    expect(shown.row).not.toHaveProperty("hidden")
+    expect(shown.needsRefresh).toBe(false)
+    expect(shown.editable).toBe(false)
+  })
+
+  it("is not editable while a field is stale, and nothing else", async () => {
+    const { fake, core, card } = await editableCard()
+    // Новіша шапка без лінивої колонки: `notes` — `stale` на рівні поля.
+    fake.edit(TASK, key(1), { title: "changed" })
+    const fresh = fake.row(TASK, key(1))!
+    const values = { ...fresh.values }
+    delete values.notes
+    const row = { ...fresh, values }
+    act(() => {
+      core.commit(
+        (w) =>
+          w.apply(TASK, { rows: [row], absent: [] }, core.readEpoch(), null),
+        core.token()
+      )
+    })
+    const shown = card.last()
+    expect(shown.row).toMatchObject({ staleFields: ["notes"] })
+    expect(shown.row).not.toHaveProperty("stale")
+    expect(shown.row).not.toHaveProperty("hidden")
+    expect(shown.needsRefresh).toBe(false)
+    expect(shown.isStale).toBe(false)
+    expect(shown.editable).toBe(false)
+  })
+
+  it("is not editable while a view needsRefresh, and nothing else", async () => {
+    const { core, card } = await editableCard()
+    act(() => {
+      core.commit(
+        (w) => w.markViews(TASK, { needsRefresh: true }),
+        core.token()
+      )
+    })
+    const shown = card.last()
+    expect(shown.needsRefresh).toBe(true)
+    expect(shown.row).toMatchObject({ state: "synced", staleFields: [] })
+    expect(shown.row).not.toHaveProperty("stale")
+    expect(shown.isStale).toBe(false)
+    expect(shown.editable).toBe(false)
   })
 
   it("is closed with the reason when the runtime is disposed", async () => {

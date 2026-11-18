@@ -35,9 +35,11 @@ export interface UseRowResult {
   /** The confirmed version of the header. */
   readonly version: number | undefined
   /**
-   * `false` while the header is not whole: its version differs from the one
-   * of a section, any field is `stale`, a view `needsRefresh`, or the values
-   * are `hidden`.
+   * The only editability fact for T5 (P4-B spec §6.1): `false` while the
+   * header is not whole — its version differs from the one of a section,
+   * the row carries a stale mark (`row.stale`) or any field is `stale`, a
+   * view `needsRefresh`, the values are `hidden` — or while the object is
+   * marked stale-client (`isStale`).
    */
   readonly editable: boolean
   readonly status: ViewSnapshot["status"]
@@ -100,6 +102,7 @@ export function useRow(input: UseRowInput): UseRowResult {
     })
     const live = row !== undefined && row.state !== "removed" ? row : undefined
     const needsRefresh = snapshots.some((s) => s.needsRefresh)
+    const isStale = snapshots.some((s) => s.isStale === true)
     const failed = snapshots.find((s) => s.error !== undefined)
     const closed = snapshots.find((s) => s.reason !== undefined)
     return {
@@ -109,8 +112,10 @@ export function useRow(input: UseRowInput): UseRowResult {
       editable:
         live !== undefined &&
         live.hidden === undefined &&
+        live.stale === undefined &&
         live.staleFields.length === 0 &&
         !needsRefresh &&
+        !isStale &&
         sections.every(
           (_, i) => snapshots[i + 1]?.section?.ownerVersion === live.version
         ),
@@ -118,7 +123,7 @@ export function useRow(input: UseRowInput): UseRowResult {
       ...(failed?.error === undefined ? {} : { error: failed.error }),
       ...(closed?.reason === undefined ? {} : { reason: closed.reason }),
       needsRefresh,
-      isStale: snapshots.some((s) => s.isStale === true),
+      isStale,
     }
   }, [snapshots])
 }
