@@ -17,6 +17,9 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "presentation": {
+        "attribute": "description"
+      },
       "attributes": [
         {
           "name": "code",
@@ -267,6 +270,9 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "presentation": {
+        "attribute": "description"
+      },
       "attributes": [
         {
           "name": "code",
@@ -399,6 +405,9 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "presentation": {
+        "attribute": "description"
+      },
       "attributes": [
         {
           "name": "code",
@@ -606,6 +615,9 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "presentation": {
+        "attribute": "description"
+      },
       "attributes": [
         {
           "name": "code",
@@ -875,6 +887,9 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "presentation": {
+        "attribute": "description"
+      },
       "attributes": [
         {
           "name": "code",

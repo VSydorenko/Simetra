@@ -62,7 +62,11 @@ export {
 export { SCHEMA_RULES, type SchemaRule } from "./rules"
 
 // Metadata types
-export { catalogSchema, type Catalog } from "./catalog"
+export {
+  DEFAULT_MAIN_PRESENTATION,
+  catalogSchema,
+  type Catalog,
+} from "./catalog"
 export { documentSchema, type Document, type MovementDecl } from "./document"
 export {
   enumerationSchema,

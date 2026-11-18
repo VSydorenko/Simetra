@@ -11,6 +11,11 @@ import {
   type RuntimeCatalog,
 } from "simetra/model"
 import {
+  COMMENT_FILE,
+  MEMBER_FILE,
+  ORGANIZATION_FILE,
+  PROJECT_CATALOG_FILE,
+  REGION_FILE,
   adminRoles,
   commandCoreLayer,
   compileRights,
@@ -144,6 +149,57 @@ describe("buildClientCatalog", () => {
         )
       })
     })
+  })
+})
+
+// Представлення посилання — з стандартних колонок виду, а не з імені реквізиту.
+describe("presentation of a client entry", () => {
+  const custom = {
+    id: "00000000-0000-4000-8000-000000007002",
+    name: "description",
+    physicalName: "custom_description",
+    type: "String",
+    length: 50,
+  }
+  it("стандартні колонки дають presentation; власний description без стандартного — ні", async () => {
+    const files = policyDomain({
+      // Довідник без стандартних найменування й коду, зі своїм `description`.
+      [PROJECT_CATALOG_FILE]: {
+        codeLength: 0,
+        descriptionLength: 0,
+        attributes: [custom],
+      },
+      [REGION_FILE]: { codeLength: 0, descriptionLength: 100 },
+      // Основне представлення — код; найменування немає.
+      [ORGANIZATION_FILE]: {
+        codeLength: 5,
+        descriptionLength: 0,
+        mainPresentation: "Code",
+      },
+      // Є обидва, основне — код.
+      [COMMENT_FILE]: {
+        codeLength: 5,
+        descriptionLength: 100,
+        mainPresentation: "Code",
+      },
+      // Типове основне — найменування, а його немає: представлення немає.
+      [MEMBER_FILE]: { codeLength: 5, descriptionLength: 0 },
+    })
+    const client = buildClientCatalog(
+      buildRuntimeCatalog(await compiled(files))
+    )
+    const byName = (name: string) =>
+      client.objects.find((o) => o.name === name)!
+    expect(byName("Project").attributes.map((a) => a.name)).toContain(
+      "description"
+    )
+    expect(byName("Project").presentation).toBeUndefined()
+    expect(byName("Region").presentation).toEqual({
+      attribute: "description",
+    })
+    expect(byName("Organization").presentation).toEqual({ attribute: "code" })
+    expect(byName("TaskComment").presentation).toEqual({ attribute: "code" })
+    expect(byName("OrgMember").presentation).toBeUndefined()
   })
 })
 

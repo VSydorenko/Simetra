@@ -776,6 +776,35 @@ describe("residency", () => {
   })
 })
 
+describe("runtime.preload", () => {
+  it("holds the view for the first subscription: the core preload through the public runtime", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 1)
+    const { runtime, core } = runtimeOver(fake)
+    await runtime.preload(cardOf(1), { ttlMs: 500 })
+    expect(fake.log).toHaveLength(1)
+    // Знімок готовий до першої підписки: без утримання рядок не лишився б.
+    const handle = core.view(cardOf(1))
+    expect(handle.getSnapshot().status).toBe("ready")
+    expect(inspectCore(core).rowCount()).toBe(1)
+  })
+
+  it("sends no request after dispose", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    const { runtime } = runtimeOver(fake)
+    runtime.dispose()
+    await runtime.preload(cardOf(1))
+    expect(fake.log).toHaveLength(0)
+  })
+
+  it("names the residency of an object like the core", () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    expect(runtimeOver(fake).runtime.residencyOf(TASK)).toBe("window")
+    const { runtime } = runtimeOver(fake, { residency: { [TASK]: "full" } })
+    expect(runtime.residencyOf(TASK)).toBe("full")
+  })
+})
+
 // ------------------------------------------------- версія й позначка «застарілий»
 
 // Не збігається з kernelHash фікстур (усі нулі).

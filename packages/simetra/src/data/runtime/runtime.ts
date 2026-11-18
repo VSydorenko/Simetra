@@ -25,6 +25,7 @@ import type {
   CoreLimits,
   CoreLogEntry,
   CoreSnapshot,
+  ViewSpec,
 } from "../store/types"
 import { bindRuntimeHandle, type RuntimeRequest } from "./handle"
 
@@ -34,6 +35,14 @@ export interface DataRuntime {
   readonly subject: string
   /** Closes the runtime; later requests are refused without the transport. */
   dispose(): void
+  /**
+   * Holds the view `spec` until its first subscription or `ttlMs` (default
+   * 5 s) and resolves after its first load: for a router loader (P4-B spec
+   * §6.1, §6.6). Throws synchronously on a refused spec (`TypeError`, `DataError`).
+   */
+  preload(spec: ViewSpec, options?: { ttlMs?: number }): Promise<void>
+  /** The list strategy of `object` (`"<kind>.<name>"`): `window` unless the settings name it. */
+  residencyOf(object: string): "full" | "window"
   readonly disposed: boolean
   /**
    * The snapshot of the ready held views for the client (P4-B spec §6.6):
@@ -450,6 +459,8 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     resume() {
       if (closedWith === undefined) core.resume()
     },
+    preload: (spec, preloadOptions) => core.preload(spec, preloadOptions),
+    residencyOf: (object) => core.residencyOf(object),
   }
   bindRuntimeHandle(runtime, { send, core, writer: createWriter(core) })
   return runtime
