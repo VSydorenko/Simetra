@@ -1,6 +1,7 @@
 import type { SqlParser } from "simetra/compiler"
 import {
   DATABASE_PROVIDERS,
+  LOGIN_ROLE_SETTINGS,
   loginRoleParentNames,
   PLATFORM_LOGIN_ROLES,
   PLATFORM_ROLES,
@@ -53,6 +54,13 @@ export interface PlatformRoleRow {
    * керують цією роллю (член з `ADMIN`) чи мають `SUPERUSER`.
    */
   requestPath: string[]
+  /**
+   * Значення `role` з `ALTER ROLE … SET` для всіх баз (`pg_db_role_setting`,
+   * `setdatabase = 0`); `null` — налаштування немає. Налаштування окремої бази
+   * не читається: воно може вказати лише на роль, членом якої роль уже є, а
+   * членства звіряє гейт.
+   */
+  roleSetting: string | null
 }
 
 /** Роль входу платформи і батьки, в які вона входить парою `INHERIT FALSE, SET TRUE`. */
@@ -60,6 +68,11 @@ export interface PlatformLoginRole {
   name: string
   /** Для `checkOnly` — дозволені батьки, а не обов'язкові. */
   memberOf: readonly string[]
+  /**
+   * Налаштування ролі (`LOGIN_ROLE_SETTINGS`): `role` — група, яку сесія
+   * отримує з першого оператора. Без нього налаштування `role` бути не може.
+   */
+  settings?: Readonly<{ role: string }>
   /**
    * Наявну роль звіряють лише за дозволеними батьками: брак членства не
    * порушення. Так звіряє роль входу без провайдера (її ніхто не створює) і
@@ -204,7 +217,11 @@ export async function readPlatformRoles(
       "  (SELECT COALESCE(jsonb_agg(x.rolname ORDER BY x.rolname), '[]'::jsonb)",
       "     FROM reach JOIN pg_catalog.pg_roles x ON x.oid = reach.oid",
       "    WHERE x.rolsuper OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members a",
-      '      WHERE a.roleid = r.oid AND a.member = x.oid AND a.admin_option)) AS "requestPath"',
+      '      WHERE a.roleid = r.oid AND a.member = x.oid AND a.admin_option)) AS "requestPath",',
+      "  (SELECT pg_catalog.substr(c, 6) FROM pg_catalog.pg_db_role_setting s",
+      "     CROSS JOIN LATERAL pg_catalog.unnest(s.setconfig) AS c",
+      "    WHERE s.setrole = r.oid AND s.setdatabase = 0",
+      "      AND pg_catalog.starts_with(c, 'role=')) AS \"roleSetting\"",
       "FROM pg_catalog.pg_roles r",
       "WHERE r.rolname = ANY($1::text[])",
       "ORDER BY r.rolname",
@@ -233,10 +250,11 @@ const isPair = (m: {
  */
 function loginViolation(
   found: PlatformRoleRow,
-  allowed: ReadonlySet<string>,
+  def: PlatformLoginRole,
   expected: readonly string[],
   requestNames: readonly string[]
 ): string | undefined {
+  const allowed = new Set(def.memberOf)
   const attribute = ATTRIBUTES.find(
     (a) => found.attributes[a] !== (a === "login")
   )
@@ -255,7 +273,12 @@ function loginViolation(
   const [path] = found.requestPath
   if (path !== undefined) return `request-path:${path}`
   const holder = found.members.find((m) => !managesOnly(m))
-  return holder === undefined ? undefined : `member:${holder.role}`
+  if (holder !== undefined) return `member:${holder.role}`
+  // Без налаштування роль лишається без прав (fail-closed), але звірка
+  // його вимагає: інша роль у налаштуванні — не та форма, що в даних T0
+  return (found.roleSetting ?? undefined) === def.settings?.role
+    ? undefined
+    : "setting:role"
 }
 
 /**
@@ -312,12 +335,7 @@ function grantRoleViolations(
     if (checkedLogins.has(name)) continue
     // Дозволені батьки — власні батьки цієї ролі входу, а не спільна
     // множина: батько, дозволений іншій ролі входу, цій не належить
-    const broken = loginViolation(
-      loginRow,
-      new Set(def.memberOf),
-      [],
-      requestNames
-    )
+    const broken = loginViolation(loginRow, def, [], requestNames)
     if (broken !== undefined) logins.push({ role: name, violation: broken })
   }
   return logins
@@ -358,7 +376,7 @@ export function platformRoleRefusals(
         ? (() => {
             const violation = loginViolation(
               row,
-              new Set(own.memberOf),
+              own,
               own.checkOnly === true ? [] : own.memberOf,
               requestNames
             )
@@ -462,6 +480,7 @@ export function platformRoleSet(provider?: DatabaseProvider): PlatformRoleSet {
         memberOf: sortedNames(
           DATABASE_PROVIDERS.flatMap((p) => loginRoleParentNames(purpose, p))
         ),
+        ...loginSettings(purpose),
         checkOnly: true as const,
       })),
     }
@@ -472,9 +491,30 @@ export function platformRoleSet(provider?: DatabaseProvider): PlatformRoleSet {
     login: purposes.map(([purpose, name]) => ({
       name,
       memberOf: loginRoleParentNames(purpose, provider),
+      ...loginSettings(purpose),
     })),
   }
 }
+
+/** Налаштування ролі входу з даних T0; без рядка — поля немає. */
+const loginSettings = (
+  purpose: PlatformLoginPurpose
+): Pick<PlatformLoginRole, "settings"> => {
+  const settings = LOGIN_ROLE_SETTINGS[purpose]
+  return settings === undefined ? {} : { settings }
+}
+
+/**
+ * Налаштування ролі входу при створенні (спека профілю postgres §3.1):
+ * Centrifugo не вміє `SET ROLE`, тож групу ставить `ALTER ROLE … SET role`.
+ * Наявній ролі налаштування не доповнюється: інше чи відсутнє — відмова форми.
+ */
+export const loginSettingSql = (login: PlatformLoginRole): string[] =>
+  login.settings === undefined
+    ? []
+    : [
+        `ALTER ROLE ${quoteIdent(login.name)} SET role = '${login.settings.role.replaceAll("'", "''")}'`,
+      ]
 
 /**
  * Членство ролі входу в батьку — пара §6.2. `INHERIT FALSE` явно: з PG16
@@ -549,8 +589,8 @@ const grantDenied = (
  * потрібне лише там, де роль відсутня. Ціль і `shadowBase` можуть бути
  * одним кластером, а ролі кластерні: роль, створена на першому сервері, на
  * другому вже `present`. Брак `ADMIN` на батьку ролі входу зупиняє лише
- * роль входу: ролі грантів потрібні `plan` кожного проєкту, а роль входу
- * без членства в ролі запиту мовчки змінила б шлях читання.
+ * цю роль входу: ролі грантів і інші ролі входу потрібні незалежно від неї, а
+ * роль входу без членства в ролі запиту мовчки змінила б шлях читання.
  *
  * Наявній ролі входу `roles` додає брак обов'язкового членства — рівно пару
  * §6.2, як при створенні: інакше базу, створену до нового батька профілю,
@@ -568,6 +608,8 @@ export async function ensurePlatformRoles(
   const gateLogins = gated.map(allowingLack)
   const refusal: EngineDiagnostic[] = []
   const adminRefusal: EngineDiagnostic[] = []
+  // Р21: роль входу без ADMIN на своєму батьку зупиняється сама, решта ні
+  const blocked = new Set<string>()
   for (const { server, db } of servers) {
     const read = await dbs.transaction(db, "rollback", async (tx) => {
       const [self] = await tx.query<{ allowed: boolean }>(
@@ -598,22 +640,25 @@ export async function ensurePlatformRoles(
           if (row !== undefined) {
             // Доповнення наявної: GRANT членства вимагає лише ADMIN на батьку
             const lacking = lackingParents(l, row)
-            if (lacking.length > 0)
-              adminRefusal.push(
-                ...(await missingAdmin(tx, lacking, missing)).map((parent) =>
-                  grantDenied(l.name, parent, server)
-                )
-              )
-          } else if (!allowed) denied.push(l.name)
-          else
+            const without =
+              lacking.length > 0 ? await missingAdmin(tx, lacking, missing) : []
+            if (without.length > 0) blocked.add(l.name)
             adminRefusal.push(
-              ...(await missingAdmin(tx, l.memberOf, missing)).map((role) =>
+              ...without.map((parent) => grantDenied(l.name, parent, server))
+            )
+          } else if (!allowed) denied.push(l.name)
+          else {
+            const without = await missingAdmin(tx, l.memberOf, missing)
+            if (without.length > 0) blocked.add(l.name)
+            adminRefusal.push(
+              ...without.map((role) =>
                 applyDiagnostic("roles.admin-option-missing", "error", {
                   role,
                   server,
                 })
               )
             )
+          }
         }
       return { shape, denied }
     })
@@ -661,14 +706,16 @@ export async function ensurePlatformRoles(
             () => platformRoleGate(tx, [name], gateLogins, server)
           )
         )
-      if (server === "target" && adminRefusal.length === 0)
+      if (server === "target")
         for (const l of login) {
+          if (blocked.has(l.name)) continue
           const outcome = await createOrCheck(
             tx,
             l.name,
             [
               `CREATE ROLE ${quoteIdent(l.name)} LOGIN NOINHERIT`,
               ...l.memberOf.map((parent) => pairGrant(parent, l.name)),
+              ...loginSettingSql(l),
             ],
             () => platformRoleGate(tx, [l.name], gateLogins, server)
           )

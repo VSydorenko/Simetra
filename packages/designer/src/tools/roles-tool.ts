@@ -41,9 +41,9 @@ export interface ProjectRoles {
 
 /**
  * Набір ролей теки проєкту (спека П4 §6.2): провайдер — з файлу проєкту, тим самим
- * читачем, що й `compile`. Без файлу роль входу пропускається явно — пропуск
+ * читачем, що й `compile`. Без файлу ролі входу пропускаються явно — пропуск
  * видно у виводі, бо без провайдера невідомо, членом яких ролей запиту
- * роль мусить бути.
+ * роль рантайму мусить бути.
  */
 export async function projectRoleSet(
   dir: string
@@ -60,9 +60,11 @@ export async function projectRoleSet(
       ok: true,
       provider: undefined,
       roles: platformRoleSet(undefined),
-      skipped: [
-        { name: PLATFORM_LOGIN_ROLES.runtime, reason: "no-project-file" },
-      ],
+      // Пропущено кожну роль входу: без провайдера `roles` не створює жодної
+      skipped: Object.values(PLATFORM_LOGIN_ROLES).map((name) => ({
+        name,
+        reason: "no-project-file" as const,
+      })),
     }
   const read = readProjectFile(text)
   if (read.project === undefined)
@@ -163,7 +165,7 @@ export async function runRoles(
   )
   // Відмова ролі входу (`roles.admin-option-missing`,
   // `roles.membership-grant-denied`) приходить разом зі створеними ролями
-  // грантів: показуються обидва
+  // грантів та іншими ролями входу (Р21): показуються обидва
   return {
     roles: ran.created,
     skipped: [],
@@ -180,7 +182,7 @@ export async function runRoles(
 export const rolesTool = defineTool({
   name: "roles",
   description:
-    "Create the platform roles: NOLOGIN roles that generated SQL grants to on the target and the shadow server, and the runtime login role on the target only. Reads the project file for `database.provider`; without a project file the login role is skipped, and the output says so. An existing role is only checked; the one change it makes is to add a missing membership of an existing login role in a parent of its profile, WITH INHERIT FALSE, SET TRUE, and the output names it. Needs CREATEROLE, and ADMIN OPTION on every parent role of the login role (without it a missing membership is refused with the GRANT statement to run); refuses before creating anything when a server lacks CREATEROLE or a role has an unsafe shape. With the provider `postgres` it prepares the cluster instead, as a superuser (the database URL is a superuser URL of the target database): the owner, auth, grant and request roles, the target database owned by the owner, the schemas `extensions` and `better_auth`, `plpgsql_check`, and the sealed template database for shadows. It refuses before writing when the session is not a superuser, an existing database or role has an unsafe shape, or a Simetra login role can connect to another database; a separate shadow server is not supported there.",
+    "Create the platform roles: NOLOGIN roles that generated SQL grants to on the target and the shadow server, and the login roles (the runtime and the signals consumer) on the target only, each a member of its parents WITH INHERIT FALSE, SET TRUE; the signals login role also gets a role setting (ALTER ROLE … SET) that makes its consumer group the role of every new session. Reads the project file for `database.provider`; without a project file the login roles are skipped, and the output says so. An existing role is only checked, its role setting included; the one change it makes is to add a missing membership of an existing login role in a parent of its profile, WITH INHERIT FALSE, SET TRUE, and the output names it. Needs CREATEROLE, and ADMIN OPTION on every parent role of a login role (without it that login role alone is refused, a missing membership with the GRANT statement to run); refuses before creating anything when a server lacks CREATEROLE or a role has an unsafe shape. With the provider `postgres` it prepares the cluster instead, as a superuser (the database URL is a superuser URL of the target database): the owner, auth, grant and request roles, the target database owned by the owner, the schemas `extensions` and `better_auth`, `plpgsql_check`, and the sealed template database for shadows. It refuses before writing when the session is not a superuser, an existing database or role has an unsafe shape, or a Simetra login role can connect to another database; a separate shadow server is not supported there.",
   input: z.strictObject({}),
   files: "read",
   database: "write",

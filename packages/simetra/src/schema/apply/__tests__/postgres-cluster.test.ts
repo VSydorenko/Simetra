@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
+  PLATFORM_LOGIN_ROLES,
+  PLATFORM_ROLES,
   PROVIDER_API_ROLES,
   PROVIDER_IDENTITY_SOURCES,
   PROVIDER_LOGIN_ROLES,
@@ -67,6 +69,7 @@ const row = (
   memberOf: over.memberOf ?? [],
   members: over.members ?? [],
   requestPath: [],
+  roleSetting: null,
 })
 
 const membership = (role: string): PlatformRoleRow["memberOf"][number] => ({
@@ -602,6 +605,55 @@ describe("ensurePostgresCluster", () => {
     ).toEqual([])
   })
 
+  // Споживач сигналів (спека профілю §3.1): група до ролі входу, а ролі входу —
+  // пара й налаштування `role` у тій самій транзакції створення
+  it("creates the signals consumer and its login role with the pair and the role setting", async () => {
+    const { dbs, calls } = trapPort((sql) =>
+      sql.includes("session_user") ? [{ ok: true, database: "x" }] : []
+    )
+    expect(await ensurePostgresCluster(dbs, conns, set)).toMatchObject({
+      ok: true,
+    })
+    const consumer = PLATFORM_ROLES.signalConsumer
+    const signals = PLATFORM_LOGIN_ROLES.signals
+    const roleSql = calls
+      .filter((c) => c.end === "commit" && c.db === "maintenance")
+      .flatMap((c) => c.sql)
+      .filter((s) => s.includes(consumer) || s.includes(signals))
+    expect(roleSql).toEqual([
+      `CREATE ROLE ${consumer} NOLOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION`,
+      `CREATE ROLE ${signals} LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION`,
+      `GRANT ${consumer} TO ${signals} WITH INHERIT FALSE, SET TRUE`,
+      `ALTER ROLE ${signals} SET role = '${consumer}'`,
+    ])
+  })
+
+  it("refuses a present signals login role without its role setting before it writes", async () => {
+    const present = presentCluster()
+    const { dbs, calls } = trapPort((sql) =>
+      sql.includes("WITH RECURSIVE reach")
+        ? present(sql).map((r) =>
+            r.name === PLATFORM_LOGIN_ROLES.signals
+              ? { ...r, roleSetting: null }
+              : r
+          )
+        : present(sql)
+    )
+    expect(await ensurePostgresCluster(dbs, conns, set)).toMatchObject({
+      ok: false,
+      error: [
+        {
+          code: "plan.platform-role-shape",
+          params: {
+            role: PLATFORM_LOGIN_ROLES.signals,
+            violation: "setting:role",
+          },
+        },
+      ],
+    })
+    expect(calls.filter((c) => c.end === "commit")).toEqual([])
+  })
+
   describe("the grants of the identity table", () => {
     const grantSql = (calls: { sql: string[] }[]) =>
       calls
@@ -710,6 +762,8 @@ function presentCluster(
         manager: false,
       })),
     requestPath: [],
+    roleSetting:
+      set.roles.login.find((l) => l.name === name)?.settings?.role ?? null,
   }))
   return (sql) => {
     if (sql.includes("session_user")) return [{ ok: true, database: "x" }]

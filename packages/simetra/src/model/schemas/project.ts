@@ -383,9 +383,10 @@ export interface CommandContext {
   root: string
 }
 /**
- * Роль команд: виконує функції прав і команди, DML таблиць виду не має.
- * Роль споживача сигналів (`signalConsumer`) призначенням гранту не стає:
- * її права — лише на outbox, їх дає власний гранти-блок, а не `executeGrants`.
+ * Призначення гранту згенерованого SQL серед ролей платформи — лише роль
+ * команд: вона виконує функції прав і команди, DML таблиць виду не має. Група
+ * споживача сигналів (`signalConsumer`) призначенням не є: її права — лише на
+ * outbox, і дає їх власний блок грантів outbox, а не `executeGrants`.
  */
 export type PlatformRolePurpose = Exclude<
   keyof typeof PLATFORM_ROLES,
@@ -488,9 +489,10 @@ export type PlatformLoginPurpose = keyof typeof PLATFORM_LOGIN_ROLES
 /**
  * Дозволені батьки кожної ролі входу платформи (спека профілю postgres §3.1):
  * `command` — роль команд, `request` — ролі запиту профілю за
- * `LOGIN_ROLE_REQUEST_PURPOSES`, `signalConsumer` — група споживача сигналів. Гейт ролей звіряє кожну роль входу за її
- * рядком, а не за спільною множиною: інакше майбутня роль входу з членством
- * у ролі команд пройшла б гейт.
+ * `LOGIN_ROLE_REQUEST_PURPOSES`, `signalConsumer` — група споживача сигналів.
+ * Гейт ролей звіряє кожну роль входу за її рядком, а не за спільною
+ * множиною: інакше роль входу сигналів з членством у ролі команд пройшла б
+ * гейт, і витік DSN споживача дав би роль команд.
  */
 export const LOGIN_ROLE_PARENTS: Readonly<
   Record<

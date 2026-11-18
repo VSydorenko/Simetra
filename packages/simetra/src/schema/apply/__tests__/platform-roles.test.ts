@@ -41,6 +41,7 @@ const row = (
     memberOf?: Membership[]
     members?: Member[]
     requestPath?: string[]
+    roleSetting?: string | null
   } = {}
 ): PlatformRoleRow => ({
   name: over.name ?? PLATFORM_ROLES.command,
@@ -57,6 +58,7 @@ const row = (
   memberOf: over.memberOf ?? [],
   members: over.members ?? [],
   requestPath: over.requestPath ?? [],
+  roleSetting: over.roleSetting ?? null,
 })
 
 const RUNTIME = PLATFORM_LOGIN_ROLES.runtime
@@ -606,6 +608,133 @@ describe("platformRoleRefusals of a check-only login role", () => {
   })
 })
 
+/**
+ * Роль входу споживача сигналів (інваріант 2 плану ПГ-4/B2, спека профілю
+ * postgres §3.1): лише пара з групою споживача, налаштування `role` на неї і
+ * жодного члена. Кожна форма порушення — власна відмова.
+ */
+describe("platformRoleRefusals of the signals login role", () => {
+  const SIGNALS = PLATFORM_LOGIN_ROLES.signals
+  const CONSUMER = PLATFORM_ROLES.signalConsumer
+  const login = platformRoleSet("supabase").login
+  const consumer = row({
+    name: CONSUMER,
+    members: [
+      member(),
+      member({ role: SIGNALS, admin: false, set: true, manager: false }),
+    ],
+  })
+  const signals = (
+    over: {
+      memberOf?: Membership[]
+      members?: Member[]
+      roleSetting?: string | null
+    } = {}
+  ): PlatformRoleRow =>
+    row({
+      name: SIGNALS,
+      attributes: { login: true },
+      memberOf: over.memberOf ?? [pair(CONSUMER)],
+      members: over.members ?? [member()],
+      roleSetting: over.roleSetting === undefined ? CONSUMER : over.roleSetting,
+    })
+  const refusals = (found: PlatformRoleRow[]) =>
+    platformRoleRefusals([CONSUMER, SIGNALS], found, "target", login).map(
+      (d) => [d.params?.role, d.params?.violation]
+    )
+
+  it("accepts the pair with the role setting of the T0 data", () => {
+    expect(refusals([consumer, signals()])).toEqual([])
+  })
+
+  it.each([
+    {
+      case: "a foreign parent",
+      found: [consumer, signals({ memberOf: [pair(CONSUMER), pair(COMMAND)] })],
+      want: [[SIGNALS, `member-of:${COMMAND}`]],
+    },
+    {
+      case: "no role setting",
+      found: [consumer, signals({ roleSetting: null })],
+      want: [[SIGNALS, "setting:role"]],
+    },
+    {
+      case: "a role setting on another role",
+      found: [consumer, signals({ roleSetting: COMMAND })],
+      want: [[SIGNALS, "setting:role"]],
+    },
+    {
+      case: "a membership with INHERIT TRUE",
+      found: [
+        row({
+          name: CONSUMER,
+          members: [
+            member(),
+            member({
+              role: SIGNALS,
+              admin: false,
+              inherit: true,
+              set: true,
+              manager: false,
+            }),
+          ],
+        }),
+        signals({ memberOf: [pair(CONSUMER, { inherit: true })] }),
+      ],
+      want: [
+        [CONSUMER, `member:${SIGNALS}`],
+        [SIGNALS, `membership-option:${CONSUMER}`],
+      ],
+    },
+    {
+      case: "a membership into it (GRANT signals TO authenticated)",
+      found: [
+        consumer,
+        signals({
+          members: [
+            member(),
+            member({
+              role: "authenticated",
+              admin: false,
+              set: true,
+              manager: false,
+            }),
+          ],
+        }),
+      ],
+      want: [[SIGNALS, "request-role:authenticated"]],
+    },
+  ])("refuses $case", ({ found, want }) => {
+    expect(refusals(found)).toEqual(want)
+  })
+
+  // Гейт `plan` бачить роль входу лише як члена ролі грантів (виняток пари)
+  it("refuses a missing role setting through the pair of the consumer role", () => {
+    expect(
+      platformRoleRefusals(
+        [CONSUMER],
+        [consumer, signals({ roleSetting: null })],
+        "target",
+        login
+      ).map((d) => [d.params?.role, d.params?.violation])
+    ).toEqual([[SIGNALS, "setting:role"]])
+  })
+
+  it("refuses a role setting on a login role that has none in the T0 data", () => {
+    expect(
+      platformRoleRefusals(
+        [RUNTIME],
+        [loginRow({ memberOf: [pair(COMMAND)] })].map((r) => ({
+          ...r,
+          roleSetting: COMMAND,
+        })),
+        "target",
+        [{ name: RUNTIME, memberOf: [COMMAND] }]
+      ).map((d) => d.params?.violation)
+    ).toEqual(["setting:role"])
+  })
+})
+
 describe("platformRoleSet", () => {
   it("adds the runtime login role only when the provider is known", () => {
     expect(platformRoleSet("supabase")).toEqual({
@@ -615,6 +744,7 @@ describe("platformRoleSet", () => {
         {
           name: PLATFORM_LOGIN_ROLES.signals,
           memberOf: [PLATFORM_ROLES.signalConsumer],
+          settings: { role: PLATFORM_ROLES.signalConsumer },
         },
       ],
       checkLogin: [],
@@ -629,6 +759,7 @@ describe("platformRoleSet", () => {
         {
           name: PLATFORM_LOGIN_ROLES.signals,
           memberOf: [PLATFORM_ROLES.signalConsumer],
+          settings: { role: PLATFORM_ROLES.signalConsumer },
         },
       ],
       checkLogin: [],
@@ -639,10 +770,9 @@ describe("platformRoleSet", () => {
       checkLogin: [
         CHECK_RUNTIME,
         {
-          ...{
-            name: PLATFORM_LOGIN_ROLES.signals,
-            memberOf: [PLATFORM_ROLES.signalConsumer],
-          },
+          name: PLATFORM_LOGIN_ROLES.signals,
+          memberOf: [PLATFORM_ROLES.signalConsumer],
+          settings: { role: PLATFORM_ROLES.signalConsumer },
           checkOnly: true,
         },
       ],
@@ -758,6 +888,14 @@ function fakeCluster(o: {
           if (granted !== null) {
             const child = cluster.find((r) => r.name === granted[2])
             child?.memberOf.push(pair(granted[1]!))
+          }
+          const setting =
+            /^ALTER ROLE "?([a-z0-9_]+)"? SET role = '([a-z0-9_]+)'$/.exec(sql)
+          if (setting !== null) {
+            const login = (roles.get(key) ?? []).find(
+              (r) => r.name === setting[1]
+            )
+            if (login !== undefined) login.roleSetting = setting[2]!
           }
           return [] as R[]
         },
@@ -955,6 +1093,121 @@ describe("ensurePlatformRoles", () => {
       `CREATE ROLE ${COMMAND} NOLOGIN NOINHERIT`
     )
     expect(writes.filter((w) => w.sql.includes(RUNTIME))).toEqual([])
+  })
+
+  describe("the login roles of the T0 data", () => {
+    const SIGNALS = PLATFORM_LOGIN_ROLES.signals
+    const CONSUMER = PLATFORM_ROLES.signalConsumer
+    const roles = platformRoleSet("supabase")
+
+    it("creates the signals login role with its pair and its role setting, then finds it present", async () => {
+      const { dbs, writes } = fakeCluster({
+        canCreate: { [TARGET.url]: true },
+        roles: {
+          [TARGET.url]: [row({ name: "authenticated" }), row({ name: "anon" })],
+        },
+        admin: ["authenticated", "anon"],
+      })
+      expect(await ensurePlatformRoles(dbs, [BOTH[0]!], roles)).toEqual({
+        created: [
+          { server: "target", name: COMMAND, outcome: "created" },
+          { server: "target", name: CONSUMER, outcome: "created" },
+          { server: "target", name: RUNTIME, outcome: "created" },
+          { server: "target", name: SIGNALS, outcome: "created" },
+        ],
+      })
+      expect(writes.map((w) => w.sql)).toEqual(
+        expect.arrayContaining([
+          `CREATE ROLE ${CONSUMER} NOLOGIN NOINHERIT`,
+          `CREATE ROLE ${SIGNALS} LOGIN NOINHERIT`,
+          `GRANT ${CONSUMER} TO ${SIGNALS} WITH INHERIT FALSE, SET TRUE`,
+          `ALTER ROLE ${SIGNALS} SET role = '${CONSUMER}'`,
+        ])
+      )
+      writes.length = 0
+      expect(await ensurePlatformRoles(dbs, [BOTH[0]!], roles)).toEqual({
+        created: [COMMAND, CONSUMER, RUNTIME, SIGNALS].map((name) => ({
+          server: "target",
+          name,
+          outcome: "present",
+        })),
+      })
+      expect(writes.map((w) => w.sql)).toEqual([
+        "SET LOCAL createrole_self_grant = ''",
+      ])
+    })
+
+    // Р21: брак ADMIN на батьку однієї ролі входу зупиняє лише її
+    it("creates the runtime login role when the session lacks ADMIN on the consumer role only", async () => {
+      const { dbs, writes } = fakeCluster({
+        canCreate: { [TARGET.url]: true },
+        roles: {
+          [TARGET.url]: [
+            row({ members: [member()] }),
+            row({ name: CONSUMER, members: [member()] }),
+            row({ name: "authenticated" }),
+            row({ name: "anon" }),
+          ],
+        },
+        admin: [COMMAND, "authenticated", "anon"],
+      })
+      expect(await ensurePlatformRoles(dbs, [BOTH[0]!], roles)).toEqual({
+        created: [
+          { server: "target", name: COMMAND, outcome: "present" },
+          { server: "target", name: CONSUMER, outcome: "present" },
+          { server: "target", name: RUNTIME, outcome: "created" },
+        ],
+        refusal: [
+          expect.objectContaining({
+            code: "roles.admin-option-missing",
+            params: { role: CONSUMER, server: "target" },
+          }),
+        ],
+      })
+      expect(writes.map((w) => w.sql)).toContain(
+        `CREATE ROLE ${RUNTIME} LOGIN NOINHERIT`
+      )
+      expect(writes.filter((w) => w.sql.includes(SIGNALS))).toEqual([])
+    })
+
+    it("refuses a present signals login role without its role setting and writes nothing", async () => {
+      const { dbs, writes } = fakeCluster({
+        canCreate: { [TARGET.url]: true },
+        roles: {
+          [TARGET.url]: [
+            row({
+              name: CONSUMER,
+              members: [
+                member(),
+                member({
+                  role: SIGNALS,
+                  admin: false,
+                  set: true,
+                  manager: false,
+                }),
+              ],
+            }),
+            row({
+              name: SIGNALS,
+              attributes: { login: true },
+              memberOf: [pair(CONSUMER)],
+              members: [member()],
+            }),
+          ],
+        },
+      })
+      const outcome = await ensurePlatformRoles(dbs, [BOTH[0]!], {
+        names: [CONSUMER],
+        login: roles.login.filter((l) => l.name === SIGNALS),
+      })
+      expect(
+        (outcome.refusal ?? []).map((d) => [
+          d.params?.role,
+          d.params?.violation,
+        ])
+      ).toEqual([[SIGNALS, "setting:role"]])
+      expect(writes).toEqual([])
+    })
   })
 
   it("refuses the login role when a parent the call does not create is absent", async () => {

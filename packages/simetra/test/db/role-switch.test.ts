@@ -127,6 +127,12 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
     reason: "the superuser prelude of `roles` (ПГ-2a)",
   },
   {
+    file: "packages/simetra/src/schema/apply/platform-roles.ts",
+    reason:
+      "ALTER ROLE … SET role of a login role from LOGIN_ROLE_SETTINGS: the signals consumer cannot SET ROLE (ПГ-4)",
+    within: ["loginSettingSql"],
+  },
+  {
     file: "packages/designer/src/schema-engine/apply-database.ts",
     reason: "ApplyDatabase.statement runs without a start role (ПГ-2a)",
   },
@@ -168,6 +174,8 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
     "packages/simetra/src/compiler/__tests__/stage-integrity.test.ts",
     "packages/simetra/src/compiler/__tests__/mechanics-units.test.ts",
     "packages/simetra/src/schema/apply/__tests__/execute.test.ts",
+    "packages/simetra/src/schema/apply/__tests__/platform-roles.test.ts",
+    "packages/simetra/src/schema/apply/__tests__/postgres-cluster.test.ts",
     "packages/simetra/src/schema/apply/__tests__/state.test.ts",
     "packages/simetra/src/server/__tests__/harness.ts",
     "packages/simetra/src/server/__tests__/runtime.test.ts",
