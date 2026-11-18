@@ -19,7 +19,9 @@ jobs:
   # Чи змінює подія код (#249). PR лише з документацією не ганяє бази,
   # пакування й шаблон host-а; `Checks` біжить завжди. Фільтр на рівні job,
   # не `paths:` в `on:`: без прогону CI `pr-gate land` не мерджить, а формат
-  # документації ніхто б не перевірив. Push у main ганяє все завжди
+  # документації ніхто б не перевірив. Push у main ганяє все завжди.
+  # Умова jobs — `!= 'false'`: порожній вихід (скрипт нічого не надрукував)
+  # ганяє все, а не тихо пропускає перевірки
   changes:
     name: Changes
     runs-on: ubuntu-latest
@@ -88,7 +90,7 @@ jobs:
   db:
     name: Database (${{ matrix.name }})
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -163,7 +165,7 @@ jobs:
   db-supabase:
     name: Database Supabase (${{ matrix.name }})
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -209,7 +211,7 @@ jobs:
   packaging:
     name: Packaging
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -236,7 +238,7 @@ jobs:
   host-template:
     name: Host template (${{ matrix.name }})
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
