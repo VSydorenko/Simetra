@@ -44,10 +44,14 @@ export { IDENTITY_TRIGGERS, platformSchemaGrants } from "./platform/units"
 export {
   platformInstall,
   grantAtoms,
-  platformInstallRecogniser,
   type PlatformInstall,
-  type PlatformInstallRecogniser,
 } from "./platform/install"
+export {
+  platformRecogniser,
+  type PlatformRecogniser,
+  type PlatformReference,
+  type RecognisedUnit,
+} from "./platform/recogniser"
 export { executeGrants } from "./sql/execute-grants"
 export {
   AUTHOR_FUNCTION,

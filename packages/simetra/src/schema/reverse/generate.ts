@@ -8,12 +8,12 @@ import {
   platformGrantTargets,
   sortDiagnostics,
   platformInstall,
-  platformInstallRecogniser,
+  platformRecogniser,
   type CompiledModel,
   type Diagnostic,
   type FileChange,
   type IdSource,
-  type PlatformInstallRecogniser,
+  type PlatformRecogniser,
   type KindKey,
   type SchemaPathResolver,
   type SqlParser,
@@ -159,16 +159,18 @@ async function describedElsewhere(
 
 /**
  * Розпізнавач того, що платформа ставить у кожну базу провайдера
- * (`platformInstall`): ні таблиці, ні одиниці платформи не пишуться в теку —
+ * (`platformInstall`), за вмістом (`platformRecogniser`): ні таблиці, ні
+ * одиниці платформи не пишуться в теку —
  * ні при прийомі з нуля, ні поверх наявної теки. Провайдер — файлу проєкту,
  * коли він є (той самий, що діє для теки). Невідомий провайдер уже названо
  * `introspect.project-mismatch` чи помилкою файлу проєкту.
  */
 async function platformOf(
-  provider: DatabaseProvider
-): Promise<PlatformInstallRecogniser | undefined> {
+  provider: DatabaseProvider,
+  parse: SqlParser
+): Promise<PlatformRecogniser | undefined> {
   if (!DATABASE_PROVIDERS.includes(provider)) return undefined
-  return platformInstallRecogniser(await platformInstall(provider))
+  return platformRecogniser(await platformInstall(provider), parse)
 }
 
 /**
@@ -328,10 +330,11 @@ export async function reverseGenerate(
   ]
   const elsewhere = await describedElsewhere(o.existing, o.parse)
   const platform = await platformOf(
-    folder.project?.databaseProvider ?? o.project.databaseProvider
+    folder.project?.databaseProvider ?? o.project.databaseProvider,
+    o.parse
   )
   for (const table of model.tables)
-    if (platform?.table(table.schema, table.name) === true)
+    if (platform?.table(table) === true)
       elsewhere.relations.add(qualified(table.schema, table.name))
   const existingOf = (kind: string, schema: string, physical: string) =>
     folder.objects.get(objectKey(kind, schema, physical))

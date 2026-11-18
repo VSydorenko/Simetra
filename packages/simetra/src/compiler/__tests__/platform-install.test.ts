@@ -3,12 +3,16 @@ import {
   grantAtoms,
   loadSqlParser,
   platformInstall,
-  platformInstallRecogniser,
+  platformRecogniser,
   readSqlUnits,
   ROW_VERSION_SEQUENCE,
   type SqlParser,
 } from "simetra/compiler"
-import { DATABASE_PROVIDERS, SIGNAL_OUTBOX } from "simetra/model"
+import {
+  catalogFromSnapshot,
+  DATABASE_PROVIDERS,
+  SIGNAL_OUTBOX,
+} from "simetra/model"
 import { outboxUnits } from "../platform/outbox"
 
 /**
@@ -53,13 +57,18 @@ describe("platformInstall", () => {
   it.each(DATABASE_PROVIDERS)(
     "%s: the recogniser takes install objects and the install's own grants only",
     async (provider) => {
-      const platform = platformInstallRecogniser(
-        await platformInstall(provider)
-      )
-      expect(platform.table(SIGNAL_OUTBOX.schema, SIGNAL_OUTBOX.name)).toBe(
-        true
-      )
-      expect(platform.table("app", SIGNAL_OUTBOX.name)).toBe(false)
+      const install = await platformInstall(provider)
+      const platform = platformRecogniser(install, parse)
+      const outbox = catalogFromSnapshot({
+        tables: [...install.tables],
+        enumTypes: [],
+      }).tables[0]!
+      expect([outbox.schema, outbox.name]).toEqual([
+        SIGNAL_OUTBOX.schema,
+        SIGNAL_OUTBOX.name,
+      ])
+      expect(platform.table(outbox)).toBe(true)
+      expect(platform.table({ ...outbox, schema: "app" })).toBe(false)
       const ofPlatform = [
         // Форма каталогу: грант по колонці, злиті привілеї однієї ролі
         'GRANT INSERT ("method") ON TABLE simetra.signal_outbox TO simetra_command;',
@@ -73,7 +82,7 @@ describe("platformInstall", () => {
       const notPlatform = [
         "GRANT SELECT ON TABLE simetra.signal_outbox TO some_extra_role;",
         "GRANT ALL ON TABLE simetra.signal_outbox TO PUBLIC;",
-        // Опція гранту — не установки: її несе атом ідентичності (`select*`)
+        // Опція гранту — не установки: її несе атом дерева розбору
         "GRANT DELETE, SELECT ON TABLE simetra.signal_outbox TO simetra_signal_consumer WITH GRANT OPTION;",
         "GRANT SELECT ON TABLE simetra.signal_outbox TO simetra_command;",
         'GRANT INSERT ("partition") ON TABLE simetra.signal_outbox TO simetra_command;',
@@ -93,13 +102,13 @@ describe("platformInstall", () => {
       )
     }
   )
-  // Ідентичність платформного гранту з опцією — вже інша ідентичність: шлях
-  // «та сама ідентичність» установки її не бере (#277)
+  // Грант установки з опцією під ідентичністю гранту установки (#277):
+  // помічник судить атоми дерева розбору, а не ідентичність
   it.each(DATABASE_PROVIDERS)(
     "%s: a grant with the option under the identity of an install grant is not the platform's",
     async (provider) => {
       const install = await platformInstall(provider)
-      const platform = platformInstallRecogniser(install)
+      const platform = platformRecogniser(install, parse)
       const grants = install.units.filter(
         (u) => u.class === "grant" && u.identity.startsWith("grant:grant:")
       )
