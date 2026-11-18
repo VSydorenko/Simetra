@@ -4,6 +4,7 @@ import { testDatabaseUrl } from "../../../simetra/test/support"
 import {
   call,
   errors,
+  expectOnlyOutbox,
   introspected,
   options,
   useDatabaseToolsCleanup,
@@ -28,7 +29,9 @@ describe("sessions", () => {
         options(dir, { ...env, SHADOW_URL: testDatabaseUrl() }, "SHADOW_URL")
       )
       expect(errors(r)).toEqual([])
-      expect((r.data as DiffData).empty).toBe(true)
+      // Повний шлях тіні на іншому сервері: єдина різниця — outbox сигналів,
+      // який створить перше застосування
+      expectOnlyOutbox(r.data as DiffData)
     })
   })
 })

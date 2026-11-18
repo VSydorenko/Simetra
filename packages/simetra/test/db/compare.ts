@@ -153,6 +153,22 @@ function catalogShape(table: CatalogTable) {
 }
 
 /**
+ * The part of a snapshot in `schemas` — the schemas a test reads back. The
+ * snapshot of every project also holds platform tables in `simetra` (the
+ * signal outbox); a test of kind tables reads only their schemas, and the
+ * outbox is checked by its own DB test.
+ */
+export function inSchemas(
+  physical: PhysicalSnapshot,
+  schemas: readonly string[]
+): PhysicalSnapshot {
+  return {
+    tables: physical.tables.filter((t) => schemas.includes(t.schema)),
+    enumTypes: physical.enumTypes.filter((t) => schemas.includes(t.schema)),
+  }
+}
+
+/**
  * Asserts that the catalog read after deploying a desired state matches the
  * physical snapshot it was rendered from: the same tables and enum types,
  * and per table the same columns in order, keys, checks, foreign keys,

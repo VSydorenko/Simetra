@@ -9,7 +9,7 @@ import {
   project,
 } from "../../src/compiler/__tests__/helpers"
 import { readCatalog } from "./catalog"
-import { expectCatalogMatchesSnapshot } from "./compare"
+import { expectCatalogMatchesSnapshot, inSchemas } from "./compare"
 import { withRollback } from "./connection"
 import { testProvider } from "./profile"
 
@@ -60,7 +60,10 @@ describe("row rule in Postgres", () => {
     await withRollback(async (client) => {
       const model = await deploy(client)
       const catalog = await readCatalog(client, ["public"])
-      expectCatalogMatchesSnapshot(catalog, model.physical)
+      expectCatalogMatchesSnapshot(
+        catalog,
+        inSchemas(model.physical, ["public"])
+      )
       const party = catalog.tables.find((t) => t.name === "party")!
       expect(
         party.constraints.find((c) => c.name === "party_one_side")?.definition

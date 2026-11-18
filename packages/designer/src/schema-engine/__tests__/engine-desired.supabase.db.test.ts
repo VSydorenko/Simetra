@@ -138,7 +138,8 @@ describe("compareWithDesired", () => {
       result.desired.model.tables
         .filter((t) => t.schema === "simetra")
         .map((t) => t.name)
-    ).toEqual(["identities"])
+      // Поруч з `identities` — outbox сигналів, що є в кожному проєкті.
+    ).toEqual(["identities", "signal_outbox"])
     // Одиниці шару справді порівняно, а не відкинуто з обох боків: кожна
     // згенерована одиниця є в моделі тіні й жодна не «нерепрезентовна».
     // `REVOKE` — відсутність привілею, тож у каталозі одиницею не читається

@@ -9,7 +9,7 @@ import {
   project,
 } from "../../src/compiler/__tests__/helpers"
 import { readCatalog } from "./catalog"
-import { expectCatalogMatchesSnapshot } from "./compare"
+import { expectCatalogMatchesSnapshot, inSchemas } from "./compare"
 import { withRollback } from "./connection"
 import { testProvider } from "./profile"
 
@@ -82,7 +82,7 @@ describe("value checks in Postgres", () => {
       const model = await deploy(client)
       expectCatalogMatchesSnapshot(
         await readCatalog(client, ["public"]),
-        model.physical
+        inSchemas(model.physical, ["public"])
       )
     })
   })

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, expect } from "vitest"
+import { SIGNAL_OUTBOX } from "simetra/model"
 import {
   canonicalSnapshot,
   compile,
@@ -35,7 +36,7 @@ import {
   testDatabaseUrl,
   testProvider,
 } from "../../../../simetra/test/support"
-import { inTarget as loadTarget } from "../../__tests__/support/db"
+import { inTarget as loadTarget, outboxSql } from "../../__tests__/support/db"
 import {
   leftoverShadows,
   provisionedShadows,
@@ -290,11 +291,12 @@ function expectRefusedDefiners(
 }
 
 /**
- * Послідовність версій компілятор видає завжди, тож межа з метаданих завжди
- * містить `simetra`, а застосована база її має. Фікстури класів — сирий SQL
- * без платформного шару, тому ціль доповнюється так, як її доповнило б
- * перше застосування: інакше звірка бачила б послідовність як різницю, а не
- * як втрачену чи збережену одиницю.
+ * Послідовність версій і outbox сигналів компілятор видає завжди, тож межа з
+ * метаданих завжди містить `simetra`, а застосована база їх має. Фікстури
+ * класів — сирий SQL без платформного шару, тому ціль доповнюється так, як її
+ * доповнило б перше застосування: інакше звірка бачила б їх як різницю, а не
+ * як втрачену чи збережену одиницю. Ціль, розгорнута з бажаного стану, outbox
+ * уже має — тоді його не створюємо вдруге.
  */
 const withPlatformSequence = (target: DbConnection) =>
   withClient(target, async (c) => {
@@ -302,7 +304,29 @@ const withPlatformSequence = (target: DbConnection) =>
     await c.query(
       "CREATE SEQUENCE IF NOT EXISTS simetra.row_version AS bigint MINVALUE 1 NO CYCLE CACHE 1"
     )
+    const { rows } = await c.query<{ present: boolean }>(
+      "SELECT to_regclass($1) IS NOT NULL AS present",
+      [`${SIGNAL_OUTBOX.schema}.${SIGNAL_OUTBOX.name}`]
+    )
+    if (rows[0]?.present !== true) await c.query(await outboxOfProfile())
   })
+
+/** Outbox сигналів профілю прогону — з бажаного стану порожнього проєкту. */
+async function outboxOfProfile(): Promise<string> {
+  const compiled = await compile(
+    new Map([
+      [
+        "project.meta.json",
+        JSON.stringify({
+          name: "Outbox",
+          database: { provider: testProvider() },
+        }),
+      ],
+    ])
+  )
+  expect(errors(compiled.diagnostics)).toEqual([])
+  return outboxSql(compiled.model!)
+}
 
 const dropTrigger = (t: Loss["triggers"][number]) =>
   `DROP TRIGGER "${t.name}" ON "${t.schema}"."${t.table}"`

@@ -7,6 +7,8 @@ import { databaseResource } from "../io/database"
 import { toolByName } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
 import type { InvokeOptions, ToolResult } from "../tools/types"
+import type { DiffData } from "../tools/database-tools"
+import { PLATFORM_ROLES, SIGNAL_OUTBOX } from "simetra/model"
 import { testProvider } from "../../../simetra/test/support"
 import { inTarget as loadTarget } from "./support/db"
 
@@ -82,6 +84,28 @@ export const call = (
 
 export const errors = (r: ToolResult) =>
   r.diagnostics.filter((d) => d.severity === "error")
+
+/**
+ * Diff of a database without the apply state against its own introspected
+ * metadata: the one difference is the signal outbox, which every project has
+ * and the first apply creates (postgres profile spec §5.1) — its table, units
+ * and the consumer's grants, and nothing else.
+ */
+export function expectOnlyOutbox(data: DiffData): void {
+  // Ім'я таблиці, її послідовності й функцій — у лапках чи без них
+  const name = new RegExp(
+    `"?${SIGNAL_OUTBOX.schema}"?\\."?${SIGNAL_OUTBOX.name}`
+  )
+  const outbox = (text: string) =>
+    name.test(text) || text.includes(PLATFORM_ROLES.signalConsumer)
+  expect(data.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+  expect(data.applyState).toBe("absent")
+  expect(data.plan.length).toBeGreaterThan(0)
+  expect(data.plan.map((a) => a.sql).filter((sql) => !outbox(sql))).toEqual([])
+  expect(
+    data.differences.map((d) => d.path).filter((path) => !outbox(path))
+  ).toEqual([])
+}
 
 export const SHOP = `
   CREATE SCHEMA app;
