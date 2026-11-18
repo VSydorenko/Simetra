@@ -9,6 +9,7 @@ import {
 } from "react"
 import {
   useWriter,
+  type DataWriter,
   type Mutation,
   type MutationResult,
   type UseRowResult,
@@ -99,8 +100,24 @@ export interface CardDraft {
 const EMPTY: Values = Object.freeze({})
 const NO_ERRORS: Readonly<Record<string, CommandError>> = Object.freeze({})
 
+/**
+ * Чий рядок править чернетка: writer — один на рантайм (а рантайм — один на
+ * суб'єкт), тож заміна рантайму в тримачі міняє і його.
+ */
+interface Owner {
+  writer: DataWriter
+  object: string
+  id: string
+}
+
 /** Бухгалтерія чернетки, що не є значеннями: значення тримає TanStack Form. */
 interface DraftMeta {
+  owner: Owner
+  /**
+   * Власника змінено, а форма ще тримає значення попереднього: до скидання
+   * ефектом кадр не показує з неї нічого.
+   */
+  foreign: boolean
   base: number | undefined
   /** Лічильник ревізій: кожна правка — нова ревізія. */
   revision: number
@@ -131,7 +148,13 @@ interface Allowed {
   retry: boolean
 }
 
-const freshMeta = (generation: number): DraftMeta => ({
+const freshMeta = (
+  generation: number,
+  owner: Owner,
+  foreign = false
+): DraftMeta => ({
+  owner,
+  foreign,
   base: undefined,
   revision: 0,
   revisions: new Map(),
@@ -150,19 +173,34 @@ export function useCardDraft(input: UseCardDraftInput): CardDraft {
   const { object, id, card } = input
   const writer = useWriter()
   const form = useForm({ defaultValues: EMPTY as Record<string, unknown> })
-  const draft = useSelector(form.store, (s) => s.values)
-  const meta = useRef<DraftMeta>(freshMeta(0))
+  const formValues = useSelector(form.store, (s) => s.values)
+  const meta = useRef<DraftMeta>(freshMeta(0, { writer, object, id }))
+  // Інший рантайм (суб'єкт) чи інший рядок — інша чернетка. Покоління й база
+  // скидаються ще в рендері: пізня відповідь старого рантайму вже чужа, а
+  // запис цього кадру не візьме базу чужого рядка.
+  const owner = meta.current.owner
+  if (owner.writer !== writer || owner.object !== object || owner.id !== id) {
+    meta.current = freshMeta(
+      meta.current.generation + 1,
+      { writer, object, id },
+      true
+    )
+  }
+  const foreign = meta.current.foreign
   // База живе в `meta` (її читають асинхронні продовження), а кадр із новою
   // базою без зміни значень дає цей лічильник.
   const [, rendered] = useReducer((n: number) => n + 1, 0)
-  const [codecErrors, setCodecErrors] =
+  const [ownCodecErrors, setCodecErrors] =
     useState<Readonly<Record<string, CommandError>>>(NO_ERRORS)
   // Спроба в польоті й відмова без мутації рядка (закритий writer): лише
   // тоді стан не дає `RowView.mutation`.
-  const [attempt, setAttempt] = useState<{
+  const [ownAttempt, setAttempt] = useState<{
     id?: string
     error?: CardWriteError
   }>({})
+  const draft = foreign ? EMPTY : formValues
+  const codecErrors = foreign ? NO_ERRORS : ownCodecErrors
+  const attempt = foreign ? {} : ownAttempt
   const latest = useRef(card)
   latest.current = card
   const allowed = useRef<Allowed>({
@@ -178,7 +216,7 @@ export function useCardDraft(input: UseCardDraftInput): CardDraft {
   const hidden = live?.hidden === true
 
   const reset = useCallback(() => {
-    meta.current = freshMeta(meta.current.generation + 1)
+    meta.current = freshMeta(meta.current.generation + 1, meta.current.owner)
     form.reset(EMPTY as Record<string, unknown>)
     setCodecErrors(NO_ERRORS)
     setAttempt({})
@@ -190,6 +228,12 @@ export function useCardDraft(input: UseCardDraftInput): CardDraft {
   useEffect(() => {
     if (purged) reset()
   }, [purged, reset])
+
+  // Форма й відмови попереднього власника — так само ефектом; до нього показ
+  // охороняє `foreign`.
+  useEffect(() => {
+    if (meta.current.foreign) reset()
+  }, [writer, object, id, reset])
 
   const track = useCallback(
     (m: Mutation, sent: number) => {

@@ -103,12 +103,12 @@ async function opened(
   const frames: string[] = []
   const box = { current: null as HTMLDivElement | null }
   const draft = { current: undefined as unknown as CardDraft }
-  function Probe() {
-    const row = useRow({ object: TASK, id: K })
-    draft.current = useCardDraft({ object: TASK, id: K, card: row })
+  function Probe(props: { id: string }) {
+    const row = useRow({ object: TASK, id: props.id })
+    draft.current = useCardDraft({ object: TASK, id: props.id, card: row })
     return null
   }
-  const view = render(
+  const tree = (id: string) =>
     createElement(
       CatalogProvider,
       { catalog },
@@ -130,17 +130,19 @@ async function opened(
                 ref: (node: HTMLDivElement | null) => void (box.current = node),
               },
               options.probe === true
-                ? createElement(Probe)
-                : createElement(CardHost, { object: TASK, id: K })
+                ? createElement(Probe, { id })
+                : createElement(CardHost, { object: TASK, id })
             )
           )
         )
       )
     )
-  )
+  const view = render(tree(K))
   await flush()
   const c = view.container
-  return { fake, wire, runtime, core, holder, blocks, frames, c, draft }
+  /** Re-renders the same card host (or probe) with another row key. */
+  const reopen = (id: string) => act(() => void view.rerender(tree(id)))
+  return { fake, wire, runtime, core, holder, blocks, frames, c, draft, reopen }
 }
 
 type Opened = Awaited<ReturnType<typeof opened>>
@@ -813,5 +815,120 @@ describe("useCardDraft — закриття, сховування, несумі�
     expect(status(o.c)).toContain(text("state.stale"))
     expect(button(o.c, "action.save")?.disabled).toBe(true)
     expect(o.c.querySelector('[data-app="update-required"]')).toBeNull()
+  })
+})
+
+/** The runtime of another subject over its own server: the same key, another title. */
+function otherRuntime() {
+  const fake = createFakeSource({ objects: OBJECTS, epoch: EPOCH })
+  seed(fake, 1, 1)
+  // Дві правки: версія B вища за версію A навіть після власного запису A.
+  fake.edit(TASK, K, { title: "b-0" })
+  fake.edit(TASK, K, { title: "b-title" })
+  const wire = serverTransport(fake)
+  return { fake, wire, ...makeRuntime(fake, wire) }
+}
+
+// Чернетка належить парі (рантайм, рядок): пряма заміна рантайму (інший
+// суб'єкт, SSR-знімок) не проходить через `purged`, тож чернетка A інакше
+// лягла б на рядок B і пішла б його транспортом.
+describe("useCardDraft — заміна рантайму чи рядка скидає чернетку", () => {
+  it.each([
+    ["видима чернетка", false],
+    ["чернетка під hidden", true],
+  ])(
+    "%s — після holder.replace(B) у DOM немає правки A, поле показує B, запису немає",
+    async (_, hide) => {
+      const o = await opened()
+      type(o.c, "title", "mine")
+      if (hide) {
+        act(() => {
+          o.core.commit((w) => w.hide(TASK, [K]), o.core.token())
+        })
+      }
+      const b = otherRuntime()
+      const before = o.frames.length
+      const blocked = o.blocks.length
+      act(() => o.holder.replace(b.runtime))
+      await flush()
+      expect(o.frames.slice(before).every((f) => !f.includes("mine"))).toBe(
+        true
+      )
+      expect(o.blocks.slice(blocked).every((dirty) => !dirty)).toBe(true)
+      expect(input(o.c, "title")?.value).toBe("b-title")
+      expect(draftState(o.c)).toBe("idle")
+      expect(button(o.c, "action.save")?.disabled).toBe(true)
+      click(o.c, "action.save")
+      await flush()
+      expect(b.wire.calls.filter((c) => c.request.type === "run")).toEqual([])
+    }
+  )
+
+  it("хук після заміни: не dirty, без бази; save() нічого не шле транспортом B", async () => {
+    const o = await opened({ probe: true })
+    act(() => o.draft.current.setValue("title", "mine"))
+    const b = otherRuntime()
+    act(() => o.holder.replace(b.runtime))
+    await flush()
+    expect(o.draft.current.dirty).toBe(false)
+    expect(o.draft.current.base).toBeUndefined()
+    expect(o.draft.current.values).toMatchObject({ title: "b-title" })
+    act(() => o.draft.current.save())
+    await flush()
+    expect(b.wire.calls.filter((c) => c.request.type === "run")).toEqual([])
+  })
+
+  it("пізній settled мутації A після заміни не змінює картку B", async () => {
+    const o = await opened()
+    type(o.c, "title", "mine")
+    o.wire.hold = true
+    click(o.c, "action.save")
+    await flush()
+    expect(draftState(o.c)).toBe("saving")
+    const b = otherRuntime()
+    act(() => o.holder.replace(b.runtime))
+    await flush()
+    act(() => o.wire.release())
+    await flush()
+    expect(draftState(o.c)).toBe("idle")
+    expect(o.c.querySelector("[data-save-error]")).toBeNull()
+    expect(input(o.c, "title")?.value).toBe("b-title")
+    // Нова чернетка на B базується на версії B (не A) і йде транспортом B.
+    const versionB = b.fake.row(TASK, K)!.version
+    expect(versionB).not.toBe(versionOf(o))
+    type(o.c, "title", "on-b")
+    click(o.c, "action.save")
+    await flush()
+    const sent = b.wire.calls
+      .filter((c) => c.request.type === "run")
+      .map((c) => c.request as { operation: { expectedVersion: number } })
+    expect(sent.map((r) => r.operation.expectedVersion)).toEqual([versionB])
+    expect(b.fake.row(TASK, K)!.values).toMatchObject({ title: "on-b" })
+  })
+
+  it("CardHost з іншим id — чернетку скинуто, навігація не блокується", async () => {
+    const o = await opened()
+    seed(o.fake, 2, 2)
+    type(o.c, "title", "mine")
+    const before = o.frames.length
+    o.reopen(key(2))
+    await flush()
+    expect(o.frames.slice(before).every((f) => !f.includes("mine"))).toBe(true)
+    expect(input(o.c, "title")?.value).toBe("t2")
+    expect(o.blocks.at(-1)).toBe(false)
+    expect(button(o.c, "action.save")?.disabled).toBe(true)
+  })
+
+  it("values хука порожні під hidden і після purged", async () => {
+    const o = await opened({ probe: true })
+    act(() => o.draft.current.setValue("title", "mine"))
+    act(() => {
+      o.core.commit((w) => w.hide(TASK, [K]), o.core.token())
+    })
+    expect(o.draft.current.state).toBe("hidden")
+    expect(o.draft.current.values).toEqual({})
+    act(() => o.holder.replace(undefined, "signed-out"))
+    expect(o.draft.current.state).toBe("purged")
+    expect(o.draft.current.values).toEqual({})
   })
 })
