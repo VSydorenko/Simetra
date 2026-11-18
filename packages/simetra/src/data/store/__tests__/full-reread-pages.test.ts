@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { ViewSpec } from "../types"
-import { TASK, key, settle, setup, taskValues, watch } from "./core-support"
+import {
+  TASK,
+  key,
+  keysOf,
+  settle,
+  setup,
+  taskValues,
+  watch,
+} from "./core-support"
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -74,8 +82,13 @@ describe("the system re-read of a full view over one page", () => {
       TASK,
       taskValues(2, { ref: key(1995), status: null, subject: null })
     )
+    const from = h.fake.log.length
     const requests = await revalidate(h)
     expect(requests).toHaveLength(2)
+    // Після двох сторінок пакета — одне читання від кінця першої (без ключів):
+    // проміжок прочитано, а не підтверджено ключами складу.
+    const after = h.fake.log.slice(from + 2)
+    expect(after.map((r) => keysOf(r.query).length)).toEqual([0])
     const keys = keysOfView(h)
     // Склад стабільний (§6.5): нові рядки не входять без `showNew`.
     expect(keys).toEqual(Array.from({ length: ROWS }, (_, i) => at(i + 1)))
