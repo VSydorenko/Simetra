@@ -11,6 +11,7 @@ import {
   createDataRuntime,
   type DataRuntime,
 } from "../../../data/runtime/runtime"
+import { JOURNAL_MAX } from "../../../data/store/overlay"
 import {
   OBJECTS,
   ORG,
@@ -187,11 +188,15 @@ async function foreignChange(o: Opened, values: Record<string, unknown>) {
   await flush()
 }
 
-/** An adapter whose reads wait while `gate.held` is set, until `gate.open()`. */
+/**
+ * An adapter whose reads wait while `gate.held` is set, until `gate.open()`,
+ * and fail while `gate.failing` is set.
+ */
 function gated() {
   const waiting: (() => void)[] = []
   const gate = {
     held: false,
+    failing: false,
     open() {
       gate.held = false
       for (const go of waiting.splice(0)) go()
@@ -201,6 +206,7 @@ function gated() {
     capabilities: fake.adapter.capabilities,
     async read(items) {
       if (gate.held) await new Promise<void>((go) => void waiting.push(go))
+      if (gate.failing) throw new Error("read failed")
       return fake.adapter.read(items)
     },
   })
@@ -610,6 +616,8 @@ describe("useCardDraft — одна охорона запису: save, overwrite
     expect(draftState(o.c)).toBe("conflict")
     expect(o.c.querySelector("[data-server]")).toBeNull()
     expect(button(o.c, "action.overwrite")?.disabled).not.toBe(false)
+    // «Взяти серверне» теж чекає: інакше поля на мить показали б стару базу.
+    expect(button(o.c, "action.takeServer")?.disabled).not.toBe(false)
     expect(status(o.c)).toBe(text("state.refreshing"))
     act(() => gate.open())
     await flush()
@@ -618,10 +626,95 @@ describe("useCardDraft — одна охорона запису: save, overwrite
     ).toBe("theirs")
     expect(status(o.c)).toBe(text("state.conflict"))
     expect(button(o.c, "action.overwrite")?.disabled).toBe(false)
+    expect(button(o.c, "action.takeServer")?.disabled).toBe(false)
     click(o.c, "action.overwrite")
     await flush()
     expect(runs(o)[1]!.expectedVersion).toBe(v6)
     expect(draftState(o.c)).toBe("idle")
+  })
+})
+
+describe("useCardDraft — перечитування і відмова стану запису", () => {
+  it("перечитування після conflict упало — «Оновити картку»; після нього серверне й «Перезаписати» з новою версією", async () => {
+    const { gate, adapter } = gated()
+    const o = await opened({ adapter })
+    type(o.c, "title", "mine")
+    o.fake.edit(TASK, K, { title: "theirs" })
+    const v6 = versionOf(o)
+    gate.failing = true
+    click(o.c, "action.save")
+    await flush()
+    expect(draftState(o.c)).toBe("conflict")
+    expect(o.c.querySelector("[data-server]")).toBeNull()
+    expect(button(o.c, "action.refreshCard")?.disabled).toBe(false)
+    gate.failing = false
+    click(o.c, "action.refreshCard")
+    await flush()
+    expect(
+      slot(o.c, "title").querySelector('[data-server="title"]')?.textContent
+    ).toBe("theirs")
+    expect(button(o.c, "action.refreshCard")).toBeUndefined()
+    expect(input(o.c, "title")?.value).toBe("mine")
+    click(o.c, "action.overwrite")
+    await flush()
+    expect(runs(o).at(-1)!.expectedVersion).toBe(v6)
+    expect(draftState(o.c)).toBe("idle")
+  })
+
+  it("needsRefresh — «Картка змінилась — оновити» перечитує картку; правки лишаються", async () => {
+    const o = await opened()
+    type(o.c, "title", "mine")
+    expect(button(o.c, "action.refreshCard")).toBeUndefined()
+    act(() => {
+      o.core.commit(
+        (w) => w.markViews(TASK, { needsRefresh: true }),
+        o.core.token()
+      )
+    })
+    expect(button(o.c, "action.save")?.disabled).toBe(true)
+    click(o.c, "action.refreshCard")
+    await flush()
+    expect(button(o.c, "action.refreshCard")).toBeUndefined()
+    expect(input(o.c, "title")?.value).toBe("mine")
+    expect(button(o.c, "action.save")?.disabled).toBe(false)
+  })
+
+  it("журнал повний — код data.journal-full біля «Зберегти», правки лишаються; «Повторити» шле знову", async () => {
+    const o = await opened()
+    seed(o.fake, 2, JOURNAL_MAX + 1)
+    type(o.c, "title", "mine")
+    // Журнал заповнюють записи інших ключів, що чекають на відповідь.
+    o.wire.hold = true
+    for (let n = 2; n <= JOURNAL_MAX + 1; n++)
+      o.core.update(
+        TASK,
+        key(n),
+        { title: "x" },
+        { expectedVersion: o.fake.row(TASK, key(n))!.version }
+      )
+    const sent = runs(o).length
+    click(o.c, "action.save")
+    await flush()
+    expect(runs(o)).toHaveLength(sent)
+    expect(draftState(o.c)).toBe("failed")
+    const actions = o.c.querySelector('[data-region="card-actions"]')!
+    expect(
+      actions
+        .querySelector("[data-save-error]")
+        ?.getAttribute("data-save-error")
+    ).toBe("data.journal-full")
+    expect(o.c.querySelector("[data-field-error]")).toBeNull()
+    expect(input(o.c, "title")?.value).toBe("mine")
+    expect(o.blocks.at(-1)).toBe(true)
+    expect(button(o.c, "action.retry")?.disabled).toBe(false)
+    // Журнал звільнився: «Повторити» шле ту саму чернетку.
+    act(() => o.wire.release())
+    await flush()
+    click(o.c, "action.retry")
+    await flush()
+    expect(o.fake.row(TASK, K)!.values).toMatchObject({ title: "mine" })
+    expect(draftState(o.c)).toBe("idle")
+    expect(o.c.querySelector("[data-save-error]")).toBeNull()
   })
 })
 

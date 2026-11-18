@@ -209,6 +209,13 @@ function Section(props: {
 function Actions(props: { card: UseRowResult; draft: CardDraft }) {
   const { card, draft } = props
   const updateRequired = useMessage("app.updateRequired")
+  // Відмова без місця біля поля (`DataError` стану запису чи відмова без
+  // `path`) — біля «Зберегти».
+  const saveError =
+    draft.error !== undefined &&
+    !Object.values(draft.fieldErrors).some((e) => e === draft.error)
+      ? draft.error
+      : undefined
   if (draft.state === "purged") {
     return createElement(Button, {
       messageKey: "action.reloadPage",
@@ -229,6 +236,22 @@ function Actions(props: { card: UseRowResult; draft: CardDraft }) {
           onClick: draft.save,
           disabled: !draft.canSave,
         }),
+    saveError === undefined
+      ? null
+      : createElement(
+          "span",
+          { role: "alert", "data-save-error": saveError.code },
+          saveError.code
+        ),
+    // Перечитування — не запис, тож охорона запису його не вимикає: так
+    // картка виходить і з `needsRefresh`, і з конфлікту, чиє перечитування
+    // не дійшло (П4-D §5.4).
+    card.needsRefresh || (draft.state === "conflict" && !draft.serverRead)
+      ? createElement(Button, {
+          messageKey: "action.refreshCard",
+          onClick: card.refresh,
+        })
+      : null,
     draft.state === "failed"
       ? createElement(Button, {
           messageKey: "action.retry",
@@ -248,6 +271,8 @@ function Actions(props: { card: UseRowResult; draft: CardDraft }) {
       ? createElement(Button, {
           messageKey: "action.takeServer",
           onClick: draft.cancel,
+          // До перечитування сховище тримає базу, а не серверний рядок.
+          disabled: !draft.serverRead,
         })
       : null,
     draft.state === "conflict"

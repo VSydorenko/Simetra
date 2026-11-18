@@ -27,6 +27,12 @@ export type CardDraftState =
 
 type Values = Readonly<Record<string, unknown>>
 
+/**
+ * A refusal of a write: of the server or the transport, or of the write
+ * state before the transport (`data.journal-full`, `data.mutation-pending`).
+ */
+export type CardWriteError = Extract<MutationResult, { ok: false }>["error"]
+
 export interface UseCardDraftInput {
   /** Logical object name `"<kind>.<name>"`. */
   object: string
@@ -61,7 +67,7 @@ export interface CardDraft {
    */
   readonly fieldErrors: Readonly<Record<string, CommandError>>
   /** The refusal of the last save, when it has one. */
-  readonly error?: CommandError
+  readonly error?: CardWriteError
   /** «Save» is allowed now. */
   readonly canSave: boolean
   /**
@@ -79,7 +85,10 @@ export interface CardDraft {
   save(): void
   /** `conflict`: a new save based on the current server row; only while {@link canOverwrite}. */
   overwrite(): void
-  /** `failed`: the mutation's `retry`; only while {@link canRetry}. */
+  /**
+   * `failed`: the mutation's `retry`, or a new save when the refusal left no
+   * mutation on the row; only while {@link canRetry}.
+   */
   retry(): void
   /** Drops the draft and the own mutation; one frame back to the confirmed row. */
   cancel(): void
@@ -105,20 +114,14 @@ interface DraftMeta {
 
 /*
  * Єдина охорона запису картки: її беруть `save`, `overwrite` і `retry`, а не
- * лише кнопки. Застарілий рядок `editable` хука ще не враховує (#242 зведе
- * охорону до `editable` і кодека).
+ * лише кнопки. `editable` хука вже несе `removed`, `hidden`, застарілий рядок
+ * і несумісний клієнт; кодек лишається фактом самої чернетки.
  */
 function writable(
   card: UseRowResult,
   codecErrors: Readonly<Record<string, CommandError>>
 ): boolean {
-  return (
-    card.editable &&
-    !card.isStale &&
-    card.row?.state !== "removed" &&
-    card.row?.stale !== true &&
-    Object.keys(codecErrors).length === 0
-  )
+  return card.editable && Object.keys(codecErrors).length === 0
 }
 
 /** Що дозволено в останньому кадрі: функції хука читають це, а не замикання. */
@@ -158,7 +161,7 @@ export function useCardDraft(input: UseCardDraftInput): CardDraft {
   // тоді стан не дає `RowView.mutation`.
   const [attempt, setAttempt] = useState<{
     id?: string
-    error?: CommandError
+    error?: CardWriteError
   }>({})
   const latest = useRef(card)
   latest.current = card
@@ -268,9 +271,17 @@ export function useCardDraft(input: UseCardDraftInput): CardDraft {
 
   const retry = useCallback(() => {
     if (!allowed.current.retry) return
-    const next = latest.current.row?.mutation?.retry?.()
-    if (next !== undefined) track(next, meta.current.sent)
-  }, [track])
+    const own = latest.current.row?.mutation
+    if (own !== undefined) {
+      const next = own.retry?.()
+      if (next !== undefined) track(next, meta.current.sent)
+      return
+    }
+    // Відмова стану запису (`data.journal-full`) мутації в рядку не лишає:
+    // повтор — нова спроба з тією самою базою.
+    const base = meta.current.base
+    if (base !== undefined) send(base)
+  }, [track, send])
 
   const cancel = useCallback(() => {
     const own = latest.current.row?.mutation
