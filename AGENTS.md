@@ -221,6 +221,7 @@ pnpm build:packages && pnpm test:packaging # build the npm packages, then test t
 
 pnpm db:pg:start                          # local postgres-profile stack: Postgres 17, Centrifugo, Garage (needs Docker)
 pnpm test:db:pg                           # the default DB suite: base-state pgTAP and DB tests of simetra and @simetrajs/designer on the postgres stack
+pnpm demo                                 # the app template on the postgres stack at http://localhost:3000; prints two logins; pnpm demo:drop removes its database
 pnpm db:pg:stop
 
 pnpm db:start                             # local Supabase stack (needs Docker) — supabase-profile regression only
