@@ -17,7 +17,10 @@ import {
   createReadLimiter,
   readKeys,
 } from "../src/data/store/source"
-import { createFakeSource } from "../src/data/store/testing/fake-source"
+import {
+  createFakeSource,
+  withSleep,
+} from "../src/data/store/testing/fake-source"
 import { fitParts } from "../src/server/response-budget"
 
 /*
@@ -111,7 +114,7 @@ function budgeted(sizes: ReadonlyMap<number, number>) {
     createReadLimiter(4),
     fake.server
   )
-  return { source, fake, responses, values }
+  return { source: withSleep(source), fake, responses, values }
 }
 
 const reasonsOf = (response: WireReadParts) =>

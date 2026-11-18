@@ -87,10 +87,12 @@ function recording(
   return { source, calls, refused, closed: () => closed }
 }
 
+const SLEEP = () => Promise.resolve()
+
 describe("createBatcher: the window", () => {
   it("gives the parts of three views of one tick to the source as one call, in order", async () => {
     const r = recording()
-    const batcher = createBatcher(r.source)
+    const batcher = createBatcher(r.source, { sleep: SLEEP })
     const first = batcher.read([query(TASK_REF, 1), query(TASK_REF, 2)])
     const second = batcher.read([query(ORG_REF, 3)])
     const third = batcher.read([query(TASK_REF, 4)])
@@ -114,7 +116,7 @@ describe("createBatcher: the window", () => {
 
   it("sends the part of the next tick in a second call", async () => {
     const r = recording()
-    const batcher = createBatcher(r.source)
+    const batcher = createBatcher(r.source, { sleep: SLEEP })
     const first = batcher.read([query(TASK_REF, 1)])
     await first
     const second = batcher.read([query(TASK_REF, 2)])
@@ -124,7 +126,7 @@ describe("createBatcher: the window", () => {
 
   it("has no timer: the parts go out without the fake timers advancing", async () => {
     const r = recording()
-    const batcher = createBatcher(r.source)
+    const batcher = createBatcher(r.source, { sleep: SLEEP })
     const read = batcher.read([query(TASK_REF, 1)])
     expect(vi.getTimerCount()).toBe(0)
     await read
@@ -134,7 +136,7 @@ describe("createBatcher: the window", () => {
 
   it("passes run and refuse past the queue, without a delay", () => {
     const r = recording()
-    const batcher = createBatcher(r.source)
+    const batcher = createBatcher(r.source, { sleep: SLEEP })
     void batcher.read([query(TASK_REF, 1)])
     batcher.refuse?.("Catalog.Task")
     expect(r.refused).toEqual(["Catalog.Task"])
@@ -143,7 +145,7 @@ describe("createBatcher: the window", () => {
 
   it("tells whether a version part waits in the queue", async () => {
     const r = recording()
-    const batcher = createBatcher(r.source)
+    const batcher = createBatcher(r.source, { sleep: SLEEP })
     expect(batcher.hasQueuedVersion()).toBe(false)
     const read = batcher.read([VERSION])
     expect(batcher.hasQueuedVersion()).toBe(true)
@@ -155,7 +157,7 @@ describe("createBatcher: the window", () => {
 describe("createBatcher: close() with parts queued (I7)", () => {
   it("sends no request and rejects every queued call without a write", async () => {
     const r = recording()
-    const batcher = createBatcher(r.source)
+    const batcher = createBatcher(r.source, { sleep: SLEEP })
     const first = batcher.read([query(TASK_REF, 1)]).catch((e: unknown) => e)
     const second = batcher.read([query(ORG_REF, 2)]).catch((e: unknown) => e)
     batcher.close()
@@ -168,7 +170,7 @@ describe("createBatcher: close() with parts queued (I7)", () => {
 
   it("rejects a read asked for after close without a request", async () => {
     const r = recording()
-    const batcher = createBatcher(r.source)
+    const batcher = createBatcher(r.source, { sleep: SLEEP })
     batcher.close()
     await expect(batcher.read([query(TASK_REF, 1)])).rejects.toBeInstanceOf(
       ReadLimiterClosed
@@ -180,7 +182,7 @@ describe("createBatcher: close() with parts queued (I7)", () => {
 describe("createBatcher: an object refused while its part queued (I8)", () => {
   it("does not send the part, answers it stale-client, and sends the others", async () => {
     const r = recording()
-    const batcher = createBatcher(r.source)
+    const batcher = createBatcher(r.source, { sleep: SLEEP })
     const read = batcher.read([query(TASK_REF, 1), query(ORG_REF, 2)])
     batcher.refuse?.("Catalog.Task")
     const { items } = await read
@@ -194,7 +196,7 @@ describe("createBatcher: an object refused while its part queued (I8)", () => {
 
   it("sends nothing at all when every queued part is refused", async () => {
     const r = recording()
-    const batcher = createBatcher(r.source)
+    const batcher = createBatcher(r.source, { sleep: SLEEP })
     const read = batcher.read([query(TASK_REF, 1)])
     batcher.refuse?.("Catalog.Task")
     const { items } = await read
@@ -208,6 +210,7 @@ describe("createBatcher: the version barrier", () => {
     const order: string[] = []
     const r = recording()
     const batcher = createBatcher(r.source, {
+      sleep: SLEEP,
       onVersion: () => order.push("version applied"),
     })
     const data = batcher.read([query(TASK_REF, 1)]).then(() => {
@@ -226,7 +229,7 @@ describe("createBatcher: the version barrier", () => {
     const r = recording(() =>
       Promise.resolve({ items: [{ ok: false as const, error }] })
     )
-    const batcher = createBatcher(r.source, { onVersion })
+    const batcher = createBatcher(r.source, { sleep: SLEEP, onVersion })
     const { items } = await batcher.read([VERSION])
     expect(items).toEqual([{ ok: false, error }])
     expect(onVersion).not.toHaveBeenCalled()
@@ -241,7 +244,7 @@ describe("createBatcher: failures of the call", () => {
         ? Promise.reject(invalid)
         : Promise.resolve({ items: [rowsItem(7)] })
     )
-    const batcher = createBatcher(r.source)
+    const batcher = createBatcher(r.source, { sleep: SLEEP })
     const bad = batcher.read([query(TASK_REF, 1)])
     const good = batcher.read([query(ORG_REF, 2)])
     const results = await Promise.allSettled([bad, good])
@@ -253,7 +256,7 @@ describe("createBatcher: failures of the call", () => {
 
   it("rejects every caller of the call with a failure that is not a mapping refusal", async () => {
     const r = recording(() => Promise.reject(new Error("boom")))
-    const batcher = createBatcher(r.source)
+    const batcher = createBatcher(r.source, { sleep: SLEEP })
     const first = batcher.read([query(TASK_REF, 1)]).catch((e: unknown) => e)
     const second = batcher.read([query(ORG_REF, 2)]).catch((e: unknown) => e)
     expect(((await first) as Error).message).toBe("boom")

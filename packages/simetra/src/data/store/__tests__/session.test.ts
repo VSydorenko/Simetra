@@ -206,3 +206,58 @@ describe("session.close", () => {
     expect(hook).toHaveBeenCalledTimes(1)
   })
 })
+
+describe("session.sleep", () => {
+  afterEach(() => vi.useRealTimers())
+
+  it("wakes after the pause and leaves no timer", async () => {
+    vi.useFakeTimers()
+    const { session } = make()
+    let woke = false
+    void session.sleep(100).then(() => (woke = true))
+    await vi.advanceTimersByTimeAsync(99)
+    expect(woke).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(woke).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it("close clears the timer and wakes the wait at once", async () => {
+    vi.useFakeTimers()
+    const { session } = make()
+    let woke = false
+    const sleeping = session.sleep(60_000).then(() => (woke = true))
+    void session.sleep(60_000, new AbortController().signal)
+    expect(vi.getTimerCount()).toBe(2)
+    session.close("disposed", () => {})
+    expect(vi.getTimerCount()).toBe(0)
+    // Без продовження годинника: очікування завершує сама мікрозадача.
+    await sleeping
+    expect(woke).toBe(true)
+  })
+
+  it("a sleep after close resolves at once with no timer", async () => {
+    vi.useFakeTimers()
+    const { session } = make()
+    session.close("disposed", () => {})
+    await session.sleep(60_000)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it("an aborted signal wakes only its own sleep and clears its timer", async () => {
+    vi.useFakeTimers()
+    const { session } = make()
+    const stop = new AbortController()
+    let first = false
+    let second = false
+    void session.sleep(1_000, stop.signal).then(() => (first = true))
+    void session.sleep(1_000).then(() => (second = true))
+    stop.abort()
+    await Promise.resolve()
+    expect(first).toBe(true)
+    expect(second).toBe(false)
+    expect(vi.getTimerCount()).toBe(1)
+    await session.sleep(0, stop.signal)
+    expect(vi.getTimerCount()).toBe(1)
+  })
+})

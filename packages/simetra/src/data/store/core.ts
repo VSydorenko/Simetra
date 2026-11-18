@@ -13,7 +13,13 @@ import { createSession, type Scope } from "./session"
 import { applySnapshot, dehydrate, parseSnapshot, type SsrContext } from "./ssr"
 import { createRowViews, purgedSnapshot } from "./snapshot"
 import { createBatcher } from "./batcher"
-import { readKeys, tracked, type CoreReadItem, type CoreSource } from "./source"
+import {
+  readKeys,
+  tracked,
+  type CoreReadItem,
+  type CoreSource,
+  type StoreSource,
+} from "./source"
 import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
 import { createScheduler } from "./scheduler"
@@ -384,11 +390,13 @@ export function createCore(options: {
   // Збирач (§6.7) стоїть під цим фільтром: через нього йдуть усі читання, а
   // значення `version` відповіді застосовується до видачі її частин даних.
   const batcher = createBatcher(options.source, {
+    // Сон сесії йде в кожне читання джерела: власного таймера джерело не має.
+    sleep: session.sleep,
     onVersion(version) {
       if (session.token().valid) applyVersion(version.objects)
     },
   })
-  const source: CoreSource = {
+  const source: StoreSource = {
     close: () => batcher.close(),
     refuse: (object) => batcher.refuse?.(object),
     run: (operation) => batcher.run(operation),

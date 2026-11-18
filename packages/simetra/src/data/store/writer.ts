@@ -1263,7 +1263,7 @@ export async function rereadKey(
   const fire = (outcome: RereadOutcome, scope: Scope) => {
     if (done) return
     done = true
-    clearTimeout(timer)
+    limit.abort()
     if (outcome.kind !== "read" && unconfirmed !== undefined) {
       o.rows.markUnconfirmed(scope, key, unconfirmed.version, unconfirmed.epoch)
       if (o.rows.get(key) !== undefined) ctx.rowViews.touch(o.name, key)
@@ -1271,14 +1271,16 @@ export async function rereadKey(
     onCommit?.(outcome, scope)
   }
   // Межа часу (§7.2, крок 4): мутація не чекає перечитування без кінця.
-  const timer = setTimeout(() => {
+  // Очікування — сон сесії: закриття будить його одразу й таймера не лишає.
+  const limit = new AbortController()
+  void session.sleep(REREAD_TIMEOUT_MS, limit.signal).then(() => {
     if (done || !token.valid) return
     session.commit(
       (scope) => fire({ kind: "failed" }, scope),
       token,
       "reread timeout"
     )
-  }, REREAD_TIMEOUT_MS)
+  })
   const read = tracked(ctx.source)
   let rows: readonly ServerRow[] | undefined
   try {
@@ -1294,7 +1296,7 @@ export async function rereadKey(
     rows = undefined
   }
   if (!token.valid) {
-    clearTimeout(timer)
+    limit.abort()
     return
   }
   session.commit(

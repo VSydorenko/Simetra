@@ -226,6 +226,32 @@ describe("window", () => {
     expect(inspect.violations()).toEqual([])
   })
 
+  it("a core close in the pause of a discarded page read leaves no timer and sends nothing", async () => {
+    const { core, fake, inspect } = setup({ limits: { windowPage: 5 } })
+    seed(fake, 1, 15)
+    fake.epoch = EA
+    const handle = core.view(win)
+    watch(handle)
+    await settle()
+    vi.spyOn(Math, "random").mockReturnValue(0.99)
+    fake.epoch = EB
+    handle.refresh()
+    await settle()
+    fake.epoch = EA
+    fake.hold = (read) => isPage(read)
+    handle.loadAfter()
+    await settle()
+    fake.take().answer()
+    await settle()
+    expect(inspect.versionEpochs().discards).toBe(1)
+    expect(vi.getTimerCount()).toBeGreaterThan(0)
+    core.close("disposed")
+    expect(vi.getTimerCount()).toBe(0)
+    await settle()
+    expect(fake.pending).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it("keeps the server order of a sorted window across pages", async () => {
     const { core, fake } = setup()
     for (let n = 1; n <= 250; n++)

@@ -575,6 +575,31 @@ describe("write-back without a full row", () => {
     expect(shown(rowOf(card)).mutation).toBeUndefined()
   })
 
+  it("a core close while the re-read waits for its 5 s limit leaves no timer and the write settles", async () => {
+    vi.useFakeTimers()
+    const h = harness()
+    const { version } = await mounted(h)
+    h.port.transform = withoutRows
+    holdReads(h.fake)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    let settled = false
+    void m.settled.then(() => (settled = true))
+    await settle()
+    expect(h.fake.pending).toHaveLength(1)
+    expect(vi.getTimerCount()).toBeGreaterThan(0)
+    h.core.close("disposed")
+    // Годинник не рухається: таймер знято закриттям, а не добіг.
+    expect(vi.getTimerCount()).toBe(0)
+    await settle()
+    expect(settled).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it("a re-read without an answer for 5 s settles with rows [undefined] and stale", async () => {
     vi.useFakeTimers()
     const h = harness()

@@ -6,7 +6,7 @@ import {
 import {
   readKeys,
   serverRow,
-  type CoreSource,
+  type StoreSource,
   type ReadKeysOptions,
 } from "./source"
 import type { Key, ObjectName, RowView, ServerRow, Values } from "./types"
@@ -134,7 +134,7 @@ export function mergeIncluded(a: Included, b: Included): Included {
  * result answers for `wanted` keys it covers (the rows stay as they came).
  */
 export async function completeIncluded(
-  source: CoreSource,
+  source: StoreSource,
   steps: readonly IncludeStep[],
   wanted: ReadonlyMap<ObjectName, readonly Key[]>,
   covered: Included,
@@ -165,7 +165,7 @@ export async function completeIncluded(
  * re-read).
  */
 export async function readIncluded(
-  source: CoreSource,
+  source: StoreSource,
   steps: readonly IncludeStep[],
   wanted: ReadonlyMap<ObjectName, readonly Key[]>,
   keysPerRequest: number,

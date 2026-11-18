@@ -23,6 +23,7 @@ import {
   watch,
   type CoreHarness,
 } from "./core-support"
+import { withSleep } from "../testing/fake-source"
 import { harness, K1, row, S, type Harness } from "./store-support"
 
 /*
@@ -191,7 +192,7 @@ describe("acceptEpochs: one answer of several epochs", () => {
     const h = harness()
     accept(h, EA)
     const start = h.now()
-    const read = tracked(answering([EA, EB, EA]))
+    const read = tracked(withSleep(answering([EA, EB, EA])))
     for (let i = 0; i < 3; i++)
       await read.source.read([
         {
@@ -936,6 +937,22 @@ describe("core: the epoch switch", () => {
     expect(h.inspect.versionEpochs().discards).toBe(0)
     for (const handle of handles)
       expect(handle.getSnapshot()).toMatchObject({ status: "ready" })
+  })
+
+  it("a core close in the pause of a discarded load leaves no timer and sends nothing", async () => {
+    const h = await proven()
+    h.fake.epoch = EA
+    seed(h.fake, 3, 3)
+    watch(h.core.view(keysView(3)))
+    await drain(h)
+    expect(h.inspect.versionEpochs().discards).toBe(1)
+    // Повтор очікує паузу: це його таймер.
+    expect(vi.getTimerCount()).toBeGreaterThan(0)
+    h.core.close("disposed")
+    expect(vi.getTimerCount()).toBe(0)
+    await settle()
+    expect(h.fake.pending).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it(`${DISCARDS_MAX} revalidate passes in a row with the pause: command.unavailable; a new session works`, async () => {

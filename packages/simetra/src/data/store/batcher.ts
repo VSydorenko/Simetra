@@ -5,10 +5,12 @@ import {
   type CorePart,
   type CoreReadItem,
   type CoreSource,
+  type ReadOptions,
+  type StoreSource,
 } from "./source"
 
-/** The batcher: a {@link CoreSource} that also knows its queue. */
-export interface Batcher extends CoreSource {
+/** The batcher: a {@link StoreSource} that also knows its queue. */
+export interface Batcher extends StoreSource {
   /** Whether a `version` part waits in the queue, not sent yet. */
   hasQueuedVersion(): boolean
 }
@@ -43,7 +45,11 @@ const isMappingRefusal = (error: unknown): boolean =>
  */
 export function createBatcher(
   source: CoreSource,
-  options: { onVersion?: (version: VersionValue) => void } = {}
+  options: {
+    /** Passed to every `source.read`: the session's sleep. */
+    sleep: ReadOptions["sleep"]
+    onVersion?: (version: VersionValue) => void
+  }
 ): Batcher {
   let queue: Call[] = []
   let scheduled = false
@@ -65,7 +71,12 @@ export function createBatcher(
     let items: CoreReadItem[] = []
     try {
       if (sent.length > 0) {
-        items = (await source.read(sent.map(({ part }) => part))).items
+        items = (
+          await source.read(
+            sent.map(({ part }) => part),
+            { sleep: options.sleep }
+          )
+        ).items
       }
     } catch (error) {
       if (calls.length > 1 && isMappingRefusal(error)) {

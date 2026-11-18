@@ -33,7 +33,7 @@ import {
   withRefs,
   type RowViews,
 } from "./snapshot"
-import { ReadLimiterClosed, type CoreSource } from "./source"
+import { ReadLimiterClosed, type StoreSource } from "./source"
 import type {
   CoreLimits,
   CoreLogEntry,
@@ -57,7 +57,7 @@ import type {
 
 export interface RegistryContext {
   readonly session: Session
-  readonly source: CoreSource
+  readonly source: StoreSource
   readonly index: CatalogIndex
   readonly limits: CoreLimits
   readonly strict: boolean
@@ -365,9 +365,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           }
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
-          return new Promise<void>((resolve) => {
-            setTimeout(resolve, pause)
-          }).then(() => (token.valid ? attempt() : undefined))
+          return session
+            .sleep(pause)
+            .then(() => (token.valid ? attempt() : undefined))
         },
         (error: unknown) => {
           // Закритий обмежувач — сесію закрито: писати нікуди.
@@ -531,9 +531,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           if (!discarded || !token.valid) return
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
-          return new Promise<void>((resolve) => {
-            setTimeout(resolve, pause)
-          }).then(() => (token.valid ? attempt() : undefined))
+          return session
+            .sleep(pause)
+            .then(() => (token.valid ? attempt() : undefined))
         },
         (error: unknown) => {
           if (error instanceof ReadLimiterClosed) return

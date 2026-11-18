@@ -12,7 +12,7 @@ import {
   type IncludeStep,
   type Included,
 } from "./include"
-import { readRows, rowsOf, type CoreSource, type RowsQuery } from "./source"
+import { readRows, rowsOf, type StoreSource, type RowsQuery } from "./source"
 import type {
   GenerationToken,
   Key,
@@ -204,7 +204,7 @@ function pageQuery(
  * move the cursor is not repeated. `undefined` once `token` is invalid.
  */
 export async function fetchPage(
-  source: CoreSource,
+  source: StoreSource,
   form: Form,
   request: { direction: "after" | "before"; cursor?: WindowCursor | undefined },
   token: GenerationToken,
@@ -271,7 +271,7 @@ export async function fetchPage(
  * is the caller's to confirm. `undefined` once `token` is invalid.
  */
 export async function rereadPages(
-  source: CoreSource,
+  source: StoreSource,
   form: Form,
   pages: readonly {
     readonly lower: WindowLower

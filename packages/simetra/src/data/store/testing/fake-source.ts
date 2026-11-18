@@ -30,7 +30,12 @@ import {
 } from "../filter"
 import { scopeOf } from "../object-store"
 import type { ServerFunctionAdapter } from "../../adapter"
-import type { ServerPort } from "../source"
+import type {
+  CoreSource,
+  ReadOptions,
+  ServerPort,
+  StoreSource,
+} from "../source"
 import type { Key, ObjectName, ServerRow, Values } from "../types"
 
 /**
@@ -740,4 +745,22 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
     },
   }
   return fake
+}
+
+/**
+ * A {@link CoreSource} as the store modules see it: `read` carries the sleep
+ * the core would pass (the session's). Tests that call a source directly use
+ * it; the default sleep is a plain timer.
+ */
+export function withSleep(
+  source: CoreSource,
+  sleep: ReadOptions["sleep"] = (ms) =>
+    new Promise<void>((resolve) => setTimeout(resolve, ms))
+): StoreSource {
+  return {
+    close: () => source.close(),
+    refuse: source.refuse?.bind(source),
+    run: (operation) => source.run(operation),
+    read: (parts) => source.read(parts, { sleep }),
+  }
 }

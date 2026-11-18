@@ -13,7 +13,7 @@ import type { ObjectState } from "./forms"
 import type { RowEntry } from "./object-store"
 import type { Session } from "./session"
 import type { RowViews } from "./snapshot"
-import type { CoreRunResult, CoreSource } from "./source"
+import type { CoreRunResult, StoreSource } from "./source"
 import type {
   CloseReason,
   CoreLogEntry,
@@ -164,7 +164,7 @@ function policyOf(error: CommandError): Policy {
 
 export function createOverlay(deps: {
   session: Session
-  source: CoreSource
+  source: StoreSource
   index: CatalogIndex
   objectOf(name: ObjectName): ObjectState
   rowViews: RowViews
