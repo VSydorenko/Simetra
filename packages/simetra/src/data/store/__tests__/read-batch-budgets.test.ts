@@ -1,15 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import {
-  READ_BATCH_MAX,
-  jsonBytes,
-  readPartToWire,
-  type CatalogEntry,
-  type ReadQuery,
-} from "simetra/model"
+import { READ_BATCH_MAX, jsonBytes, type CatalogEntry } from "simetra/model"
 import { catalogEntry } from "../../../model/runtime/__tests__/entries"
 import { createCore, type CoreSession } from "../core"
 import { createCoreSource, createReadLimiter } from "../source"
-import type { FakeReadLog, FakeSource } from "../testing/fake-source"
+import type { FakeSource } from "../testing/fake-source"
 import {
   DEFAULT_CORE_LIMITS,
   type CoreSnapshot,
