@@ -119,14 +119,13 @@ export interface ReaderTarget {
   window: WindowState | undefined
   /**
    * Window pages being read next to an edge: one read per direction, by the
-   * generation of the read (Р9). A new chain and a purge drop them, so the
+   * generation of the read. A new chain and a purge drop them, so the
    * answers in flight write nothing.
    */
   readonly paging: Map<"after" | "before", number>
   /**
    * The start epoch of the last section read the session accepted (section
-   * form only): a `hide` of the owner after it makes the subset stale (plan
-   * B3-3, Р11).
+   * form only): a `hide` of the owner after it makes the subset stale.
    */
   sectionRead: number | undefined
   /**
@@ -394,7 +393,7 @@ async function readFull(
   const values = new Map(kept.map((r) => [r.key, r.values] as const))
   return (scope) => {
     // Понад межу `full` стає справжнім вікном: перша сторінка — початок
-    // серверного порядку, далі читають `loadAfter`/`loadBefore` (Р1).
+    // серверного порядку, далі читають `loadAfter`/`loadBefore`.
     if (over) {
       writePage(ctx, scope, s, {
         rows: kept,
@@ -452,9 +451,9 @@ interface PageWrite {
 
 /**
  * Writes a page of a window: the rows and their `include` targets go the
- * store's ordinary ways, the window keeps only the keys and the place (Р8).
+ * store's ordinary ways, the window keeps only the keys and the place.
  * A new chain (`replace`) owns its rows before the old one lets go, in this
- * same `commit` (Р9); a page joins the edge with the rows the window does not
+ * same `commit`; a page joins the edge with the rows the window does not
  * already hold.
  */
 function writePage(

@@ -161,7 +161,7 @@ class FakeForm {
     return this.send(this.base!)
   }
 
-  /** «Перезаписати»: a new `update` with the current server row as the base (Р1). */
+  /** «Перезаписати»: a new `update` with the current server row as the base. */
   async overwrite(): Promise<MutationResult> {
     const row = this.row
     if (row === undefined || row.state === "removed") throw new Error("no row")

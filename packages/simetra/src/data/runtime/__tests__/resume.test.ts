@@ -24,7 +24,7 @@ import { createDataRuntime, type DataRuntimeOptions } from "../runtime"
 
 /*
  * `resume()`, `suspend()` і відмітка свіжості вигляду (спека П4-B §6.3
- * «Частота», §6.1; план B3-6a, задача 3). Час — підроблений годинник vitest:
+ * «Частота», §6.1). Час — підроблений годинник vitest:
  * `performance.now()` рухається разом із ним.
  */
 

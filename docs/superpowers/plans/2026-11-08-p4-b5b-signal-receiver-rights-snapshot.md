@@ -1,8 +1,8 @@
 # П4-B5b — знімок прав клієнта, приймач сигналів і транспорт Centrifugo: план реалізації
 
 > **Статус:** проєкт плану, 2026-11-08; приймає архітекторка
-> `runtime-client-data`. Блок B5b спеки П4-B. Межі B5a/B5b задає план B5a
-> (задача 0: поділ рядка B5 у §13). Дві частини, кожна має своє «готово» й
+> `runtime-client-data`. Блок B5b спеки П4-B. Межі B5a/B5b задає §13 спеки П4-B
+> (рядки B5a, B5 — у П4-D B5b, — і B5c). Дві частини, кожна має своє «готово» й
 > окремий PR (рішення архітекторки):
 > - **A** — знімок прав клієнта;
 > - **B** — приймач сигналів і транспорт.
@@ -11,12 +11,10 @@
 > B3-2, B3-3, B3-4, B3-6, B5a і ПГ-3 (`sessionKind`). Частина B — ще й після ПГ-4/B2 частин B і C. Якорі на
 > незмерджене позначено «після X». Ядро T4
 > (`packages/simetra/src/data/store/`) і пакет читань — у `main`; функцій сигналу й
-> `SignalTokens` ще немає: їх дають плани
-> [B3-3](2026-11-08-p4-b3-3-window-public-api.md),
-> [B3-4/B3-5](2026-11-08-p4-b3-4-b3-5-write-receipts.md),
-> [B3-6](2026-11-08-p4-b3-6-oracle-host-ssr.md), B5a,
-> [ПГ-3](2026-11-08-pg-3-identity-better-auth.md) і
-> [ПГ-4/B2](2026-11-08-pg-4-b2-signal-transport.md).
+> `SignalTokens` ще немає: їх дає план
+> [ПГ-4/B2](2026-11-08-pg-4-b2-signal-transport.md); B3-3, B3-4, B3-6 і
+> B5a — у `main` у тонкій формі М3 (ADR-0091), ПГ-3 — у `main`; решта
+> B3-4/B3-5 — #208 і #111.
 > **Межа з B6** (рішення архітекторки). Функції сигналів прав, підписка на
 > `simetra-rights:` і `simetra-user:`, реакція на їхні сигнали, контракт прав
 > дій у каталозі, обчислювач і `useCan` — B6. B5b дає `refreshTokens` як
@@ -141,7 +139,7 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
 | Р8 | Порт T0 (§8.5): `subscribe(channels, onSignal, onError({ kind, channel?, session?, final? }))`, `onSubscribed(({ channel, recovered }) => void)`, `refreshTokens(channels?): Promise<void>`, `close(): void`. `kind: "auth"` каналу — лише 403 чи «канал не дозволено» (`authorizeChannels` його не повернув); 401 токена каналу — `auth` з `session: true` (шлях сесії, Р13); відмова токена з'єднання — `auth` без каналу, друга поспіль — ще й `final: true` (Р13); мережевий збій і 5xx — `transport` | §8.5 — уточнення `auth`, `close()` (задача 0) |
 | Р9 | Сигнал `schema` (`command.unavailable` з `reason: "schema"`) дають лише коди PostgREST (§5.3, §7.3) — у B5b джерела немає. Обробка переходить у B4 разом із `reason` (рішення архітекторки) | §13 рядок B4; плани B3-4 і B5a (задача 0) |
 | Р10 | `CoreSession.readKeys(object, keys): Promise<ReadKeysResult>` — тонка обгортка ядра (рішення архітекторки), **без другого читача**: над наявним `readKeys` з `store/source.ts` B3-2 (200 ключів на запит, поділ навпіл на `response-too-large`) і над тим самим шляхом запису, що й хвостове перечитування `stale-inserted` (епоха старту, `commit` з токеном, правило версії, надгробки). Іде через збирач B3-3. `ReadKeysResult = { returned: Key[]; missing: Key[]; versions: Map<Key, number>; fresh: Map<Key, Values> }`. Пише лише ключі, що вже є в сховищі; рядки ключів поза ним — у `fresh`, без запису | немає |
-| Р11 | **Приєднання без `recovered` перечитує те, що старше за приєднання.** Опорна мить — `joinedAt` = час **кожної** події `onSubscribed` каналу (перша підписка, авто-перепідписка клієнта після розриву, перепідписка `refreshTokens`). Перечитуються вигляди об'єкта пари з `refreshedAt < joinedAt` (вигляд у польоті отримує хвіст `revalidate` B5a Р5); `rights` — коли `lastRightsAt < joinedAt`; `version` — коли `lastVersionAt < joinedAt`. Отже перше приєднання теж дає 1 умовний запит з `known` — як вимагає §8.4. Хвиля — одне вікно джитера: перший `onSubscribed` без `recovered` ставить таймер `random() × REJOIN_JITTER_MS`, решта входить у нього; наступна хвиля — не раніше ніж через `REJOIN_JITTER_MS` після спрацювання попередньої. Прихована вкладка: виглядам хвилі — `needsRefresh` і позначка `rejoinPending`, яку `resume()` (B5a) бере поза межею `resumeMinIntervalMs`. **Прийнятий ризик:** зміна між активацією підписки на сервері й `onSubscribed` на клієнті (≈ RTT) дійде лише перечитуванням хвилі — воно й закриває вікно | §8.4 — опорна мить приєднання, прийнятий ризик (задача 0) |
+| Р11 | **Приєднання без `recovered` перечитує те, що старше за приєднання.** Опорна мить — `joinedAt` = час **кожної** події `onSubscribed` каналу (перша підписка, авто-перепідписка клієнта після розриву, перепідписка `refreshTokens`). Перечитуються вигляди об'єкта пари з `refreshedAt < joinedAt` (вигляд у польоті отримує хвіст single-flight `revalidate`, #209); `rights` — коли `lastRightsAt < joinedAt`; `version` — коли `lastVersionAt < joinedAt`. Отже перше приєднання теж дає 1 умовний запит з `known` — як вимагає §8.4. Хвиля — одне вікно джитера: перший `onSubscribed` без `recovered` ставить таймер `random() × REJOIN_JITTER_MS`, решта входить у нього; наступна хвиля — не раніше ніж через `REJOIN_JITTER_MS` після спрацювання попередньої. Прихована вкладка: виглядам хвилі — `needsRefresh` і позначка `rejoinPending`, яку `resume()` (B5a) бере поза межею `resumeMinIntervalMs`. **Прийнятий ризик:** зміна між активацією підписки на сервері й `onSubscribed` на клієнті (≈ RTT) дійде лише перечитуванням хвилі — воно й закриває вікно | §8.4 — опорна мить приєднання, прийнятий ризик (задача 0) |
 | Р12 | Позначка «розрив»: `transport` → `markDisconnected(channel?)`. Знімає `clearDisconnected(channel)`: `recovered: true` — після `RECOVERED_SETTLE_MS` тиші після `onSubscribed` (і після пачки відновлених, якщо вони є); `recovered: false` — коли всі вигляди об'єкта пари мають `refreshedAt ≥ joinedAt` (`freshnessOf`, B5a). Збій перечитування лишає позначку | немає |
 | Р13 | Відмова токена **з'єднання** (`getConnectionToken` 401/403 чи відмова Centrifugo на з'єднанні): перша — `requestVersion()` і один новий токен з'єднання (`connect()` клієнта); друга поспіль без успішного з'єднання між ними — `core.close("connection-refused")` через шлях рантайму. Лічильник скидає подія успішного **з'єднання** клієнта, а не `onSubscribed` каналу. Лічильник і `connect()` веде транспорт — лише він бачить подію з'єднання; другу відмову поспіль він повідомляє `final: true`, і приймач на ній закриває ядро. 401 від `getChannelToken` — лише `requestVersion()` (шлях сесії), без `connect()` і без лічильника. `CloseReason` дістає `"connection-refused"` | §6.1 — причина закриття (задача 0) |
 | Р15 | **Життєвий цикл транспорту.** `DataRuntimeOptions.signals` — фабрика `(subject: string) => SignalTransport`: транспорт створюється на суб'єкта рантайму й закривається разом із ним. `dispose()` і `session-changed` знімають кожну підписку й кличуть `close()`; перевикористати транспорт іншого суб'єкта не можна | §8.5 (задача 0) |
@@ -178,7 +176,7 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
 
 ## Частина A — знімок прав клієнта
 
-### Task 0: поправки спеки й плану B3-4
+### Task 0: поправки спеки
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-11-05-p4-b-client-data-design.md`:
@@ -197,14 +195,6 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
     B4 дістає «`reason: "schema"` у T0 і `requestVersion()` на ньому» (Р9).
   
   Звір із поділом, який вносить B5a.
-- Modify: `docs/superpowers/plans/2026-11-08-p4-b3-4-b3-5-write-receipts.md`
-  (Р9), задача 4, Step 1:
-  - речення «приєднання без `recovered` і `schema` — B5b» → «приєднання без
-    `recovered` — B5b, `schema` — B4»;
-  - рядок таблиці «приєднання без `recovered`, сигнал `schema` | B5b» →
-    два рядки: «приєднання без `recovered` | B5b» і «сигнал `schema` | B4».
-  
-  План B5a на `main` подій `schema` не розподіляє — у ньому правок немає.
 
 - [ ] **Step 1:** правки. Без лічильників і наративу фаз.
 - [ ] **Step 2:** `python3 scripts/check-doc-anchors.py` і `pnpm format:check` — зелені.
@@ -558,7 +548,7 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
 
 **Files:**
 - Modify (після B3-2/B3-3): `packages/simetra/src/data/store/` — `readKeys`
-- Create (після B3-6 Р6): `packages/simetra/src/data/testing/fake-signal-transport.ts`
+- Create (після dev-only входу `simetra/data/testing`, #210): `packages/simetra/src/data/testing/fake-signal-transport.ts`
   (вхід `simetra/data/testing`)
 - Test: `packages/simetra/src/data/store/__tests__/read-keys.test.ts`,
   `packages/simetra/src/data/testing/__tests__/fake-signal-transport.test.ts`
@@ -578,7 +568,7 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
 
 - [ ] **Step 1: failing tests:**
   - `readKeys` ставить `readAt` повернутих рядків = старт перечитування
-    (B5a Р2);
+    (спека П4-B §6.7);
   - ключ поза сховищем: повернувся — у `fresh`, у сховищі його немає;
     ключ у сховищі — `patch`, у `fresh` його немає;
   - `readKeys` двох об'єктів в одній мікрозадачі — 1 запит; 200 ключів — 1
@@ -741,7 +731,7 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
     на `REJOIN_JITTER_MS`; на спрацюванні одним запитом, для кожного об'єкта
     хвилі: якщо в нього є вигляд у польоті чи без `refreshedAt` зі стартом
     (`attemptAt`) до `joinedAt` — `revalidate(object, { visibleOnly: true })`
-    **без** `select` (хвіст B5a Р5 для вигляду в польоті й перечитування
+    **без** `select` (single-flight з хвостом, #209, для вигляду в польоті й перечитування
     решти); інакше — `revalidate(object, { visibleOnly: true, select: v => v.refreshedAt < joinedAt })`; `requestRights()`
     лише коли `lastRightsAt < joinedAt`, `requestVersion()` лише коли
     `lastVersionAt < joinedAt`; невидимим — `needsRefresh`; прихована
@@ -888,7 +878,7 @@ Playwright (`page.clock`), `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд
     (`purge` і причина), інший `userId` (`session-changed`);
   - Modify: `e2e/budgets.spec.ts` — приєднання без `recovered` (рівно 1
     запит), `resume()` і звірка гідратації з частиною `rights` (байти §12);
-  - Modify: маніфести `manifest.<project>.<build>.json` (B3-6 Р8) — нові id
+  - Modify: маніфести `manifest.<project>.<build>.json` (job `oracle`, #210) — нові id
     тестів, інакше гейт червоніє.
 - Modify: `packages/designer/skills/simetra-metadata/` — розділ про
   рантайм даних: `signals` в опціях, `simetra/data/centrifugo`, токени через

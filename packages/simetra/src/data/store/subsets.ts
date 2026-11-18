@@ -104,8 +104,8 @@ export interface Subset extends ReaderTarget {
   /** A load succeeded: a later read is `refreshing`, not `loading` (§6.5). */
   loaded: boolean
   /**
-   * The start time of the last read that settled successfully (plan B3-6a,
-   * Р10); a hydrated view has none and counts as overdue.
+   * The start time of the last read that settled successfully (P4-B spec §6.7);
+   * a hydrated view has none and counts as overdue.
    */
   refreshedAt: number | undefined
   /** The system re-reads started for this view; the model test counts them. */
@@ -410,7 +410,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
 
   /**
    * Reads the page next to an edge of the window (a user action or a host
-   * reaching the edge). One read per direction; its generation (Р9) lives in
+   * reaching the edge). One read per direction; its generation lives in
    * `s.paging` and the result is written only while it is still there: a new
    * chain or a purge takes it away. A read whose answer the session
    * discarded repeats after a growing pause, as a load.
@@ -423,7 +423,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     const edge = edgeCursor(s, direction)
     if (edge === undefined) return
     const { cursor } = edge
-    // Токен читання сторінки (Р9): покоління цього читання. Новий ланцюжок
+    // Токен читання сторінки: покоління цього читання. Новий ланцюжок
     // чи `purge` прибирає його з `paging`, і пізня відповідь нічого не пише:
     // вона могла б принести рядок, якого на мить `purge` у сховищі не було.
     const generation = ++pageGenerations
@@ -531,7 +531,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   }
 
   /**
-   * A held section is stale (plan B3-3, Р11; the single decision point for
+   * A held section is stale (the single decision point for
    * mount, `preload` and the check after a `commit`): its owner was hidden
    * after the last accepted section read, there is neither a header nor
    * lines in the store, or the lines are older than the header.
@@ -799,7 +799,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       for (const key of s.layout) {
         let base = viewOf(o, key)
         // Дефект самотесту: вікно тримає копію показаних значень і показує
-        // її, коли сховище значень уже не дає (Р8 забороняє копію).
+        // її, коли сховище значень уже не дає (копія значень у вікні заборонена, Рд20).
         if (ctx.defects.has("window-copies-values") && s.window !== undefined) {
           const kept = copiesOf(s)
           if (
@@ -970,7 +970,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         const s = live()
         if (s !== undefined) loadMore(s, "after")
       },
-      // Без дії в М3: яруси, які він веде, — #206 (Р13).
+      // Без дії в М3: яруси, які він веде, — #206.
       setVisibleRange() {},
     }
   }

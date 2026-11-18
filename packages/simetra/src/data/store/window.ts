@@ -13,7 +13,7 @@ import type { GenerationToken, Key, ServerRow, Values, ViewSpec } from "./types"
  * Вікно (спека П4-B §6.4 «Вікно `useRows`»): сторінки keyset-читання в
  * серверному порядку. Модуль не знає сховища — лише склад вікна й побудову
  * та читання однієї сторінки; запис рядків і власність — `readers.ts`.
- * Вікно не тримає значень рядків (Р8): сторінка — ключі й курсор, значення
+ * Вікно не тримає значень рядків (Рд20): сторінка — ключі й курсор, значення
  * показує рядок `ObjectStore`.
  */
 
@@ -38,7 +38,7 @@ export type WindowLower =
 export interface WindowPage {
   readonly keys: readonly Key[]
   readonly lower: WindowLower
-  /** The generation of the read that wrote the page (Р9). */
+  /** The generation of the read that wrote the page. */
   readonly generation: number
 }
 

@@ -647,7 +647,7 @@ describe("useRow", () => {
     })
     const shown = card.last()
     expect(shown.isStale).toBe(true)
-    // Несумісний клієнт ховає рядок (Р7): UI не читає його значень.
+    // Несумісний клієнт ховає рядок (спека П4-B §10): UI не читає його значень.
     expect(shown.row).toMatchObject({ hidden: true })
     expect(shown.needsRefresh).toBe(false)
     expect(shown.editable).toBe(false)

@@ -31,7 +31,7 @@ export interface Epochs {
   /** The horizon of the id's bucket is greater than `readEpoch`. */
   evictedSince(id: string, readEpoch: number): boolean
   /**
-   * Records that the key was hidden (`Writer.hide`, P4-B plan B3-3, Р11) at a
+   * Records that the key was hidden (`Writer.hide`) at a
    * fresh epoch and returns it. The mark outlives the store entry: a read
    * older than it must not show the row after the entry went away.
    */

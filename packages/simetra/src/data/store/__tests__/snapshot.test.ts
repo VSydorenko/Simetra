@@ -42,7 +42,7 @@ describe("computeRowView staleFields", () => {
   })
 })
 
-describe("computeRowView with an own mutation (plan B3-4-Л Р5, Р7)", () => {
+describe("computeRowView with an own mutation", () => {
   const pending: RowMutation = Object.freeze({ id: "m1", state: "pending" })
   const failed: RowMutation = Object.freeze({
     id: "m1",
