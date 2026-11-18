@@ -118,7 +118,7 @@ unit B1b-2, через публічний вхід. `run-tests unit --filter ori
 у журнал); `ssrTransport(claims)` під `createServerOnlyFn` з
 `{ inProcess: true }`.
 
-Готово (unit з фейками `auth.api.getSession` і обробника): неканонічне
+Готово (unit з фейками `auth.api.getSession` і обробника): Server Function сесії з `Sec-Fetch-Site: cross-site` — `403` від Start або `null` (клієнтська гілка `sessionClaims` голий 403 Start перетворює на `null`), `getSession` не викликано; неканонічне
 походження (`https://a.test/`, `https://a.test/x`) — виняток; production без
 секрету — виняток; `verifySession`: `null`, `isAnonymous` `false`/відсутнє/
 `true`; конфіг Better Auth — таблиця §4.3 рядок за рядком (`disableSignUp`,

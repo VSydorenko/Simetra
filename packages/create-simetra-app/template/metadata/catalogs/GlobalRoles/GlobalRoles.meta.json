@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../../node_modules/simetra/schemas/catalogs.schema.json",
+  "id": "212f0a7e-14da-420e-9791-3efb9931b2f0",
+  "kind": "Catalog",
+  "name": "GlobalRoles",
+  "physicalName": "global_roles",
+  "kindLabel": "global_roles",
+  "scope": "none",
+  "title": {
+    "en": "Global roles"
+  },
+  "role": "rightsRoles"
+}

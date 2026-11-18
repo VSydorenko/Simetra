@@ -1,0 +1,1013 @@
+{
+  "format": 1,
+  "snapshotHash": "1085378bf4d65217ca6629763a52f643e641bac7a79b538c47ee202a0b19fdda",
+  "provider": "postgres",
+  "objects": [
+    {
+      "id": "08f4943e-0296-4fbd-8d89-61b6f11355ee",
+      "name": "Client",
+      "kind": "Catalog",
+      "kindLabel": "client",
+      "table": {
+        "schema": "app",
+        "name": "client"
+      },
+      "key": "id",
+      "keyName": "ref",
+      "versionColumn": "version",
+      "versionName": "version",
+      "signal": true,
+      "attributes": [
+        {
+          "name": "code",
+          "column": "code",
+          "pgType": "character varying(9)",
+          "castType": "character varying",
+          "type": "String",
+          "required": false,
+          "maxLength": 9,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "description",
+          "column": "description",
+          "pgType": "character varying(150)",
+          "castType": "character varying",
+          "type": "String",
+          "required": false,
+          "notNull": true,
+          "maxLength": 150,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "deletionMark",
+          "column": "deletion_mark",
+          "pgType": "boolean",
+          "castType": "boolean",
+          "type": "Boolean",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "predefinedName",
+          "column": "predefined_name",
+          "pgType": "text",
+          "castType": "text",
+          "type": "Text",
+          "required": false,
+          "insert": false,
+          "update": false,
+          "maxBytes": 65536
+        },
+        {
+          "name": "createdAt",
+          "column": "created_at",
+          "pgType": "timestamp with time zone",
+          "castType": "timestamp with time zone",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "updatedAt",
+          "column": "updated_at",
+          "pgType": "timestamp with time zone",
+          "castType": "timestamp with time zone",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "country",
+          "column": "country_id",
+          "pgType": "uuid",
+          "castType": "uuid",
+          "type": "Ref",
+          "required": false,
+          "insert": true,
+          "update": true,
+          "ref": {
+            "object": "f3fd253a-a1a9-4d9d-ad46-379757fbbab5",
+            "constraint": "client_country_id_fkey"
+          }
+        },
+        {
+          "name": "owner",
+          "column": "owner_id",
+          "pgType": "uuid",
+          "castType": "uuid",
+          "type": "Ref",
+          "required": false,
+          "insert": true,
+          "update": true,
+          "ref": {
+            "object": "1220b990-252c-48c4-88e8-bc46b4f9344d",
+            "constraint": "client_owner_id_fkey"
+          }
+        }
+      ],
+      "tabularSections": [
+        {
+          "id": "1b5bd8cd-ee2a-4d70-8c46-e6c59ff58fd5",
+          "name": "contacts",
+          "table": {
+            "schema": "app",
+            "name": "client_contacts"
+          },
+          "key": "id",
+          "keyName": "ref",
+          "parent": "parent_id",
+          "parentName": "parent",
+          "lineNumber": "line_number",
+          "lineNumberName": "lineNumber",
+          "parentConstraint": "client_contacts_parent_id_fkey",
+          "attributes": [
+            {
+              "name": "name",
+              "column": "name",
+              "pgType": "character varying(150)",
+              "castType": "character varying",
+              "type": "String",
+              "required": false,
+              "maxLength": 150,
+              "insert": true,
+              "update": true
+            },
+            {
+              "name": "phone",
+              "column": "phone",
+              "pgType": "character varying(32)",
+              "castType": "character varying",
+              "type": "String",
+              "required": false,
+              "maxLength": 32,
+              "insert": true,
+              "update": true
+            },
+            {
+              "name": "owner_id",
+              "column": "owner_id",
+              "pgType": "uuid",
+              "castType": "uuid",
+              "type": "Raw",
+              "required": false,
+              "insert": false,
+              "update": false,
+              "copy": true
+            }
+          ],
+          "constraints": [
+            {
+              "name": "client_contacts_pkey",
+              "kind": "primaryKey",
+              "columns": [
+                "id"
+              ]
+            },
+            {
+              "name": "client_contacts_parent_id_fkey",
+              "kind": "foreignKey",
+              "columns": [
+                "parent_id"
+              ],
+              "references": [
+                "id"
+              ]
+            }
+          ]
+        }
+      ],
+      "kernelHash": "0f83f2243ed39161f34412c27b93f22b1991f009df3f6ad9fd6afd79a333c6f4",
+      "operations": {
+        "create": {
+          "function": {
+            "schema": "app",
+            "name": "client_save"
+          },
+          "context": "create"
+        },
+        "update": {
+          "function": {
+            "schema": "app",
+            "name": "client_save"
+          },
+          "context": "update"
+        },
+        "markDeletion": {
+          "function": {
+            "schema": "app",
+            "name": "client_mark_deletion"
+          },
+          "context": "markDeletion"
+        }
+      },
+      "constraints": [
+        {
+          "name": "client_pkey",
+          "kind": "primaryKey",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "client_code_key",
+          "kind": "unique",
+          "columns": [
+            "code"
+          ]
+        },
+        {
+          "name": "client_predefined_name_idx",
+          "kind": "unique",
+          "columns": [
+            "predefined_name"
+          ]
+        },
+        {
+          "name": "client_country_id_fkey",
+          "kind": "foreignKey",
+          "columns": [
+            "country_id"
+          ],
+          "references": [
+            "id"
+          ]
+        },
+        {
+          "name": "client_owner_id_fkey",
+          "kind": "foreignKey",
+          "columns": [
+            "owner_id"
+          ],
+          "references": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "f3fd253a-a1a9-4d9d-ad46-379757fbbab5",
+      "name": "Country",
+      "kind": "Catalog",
+      "kindLabel": "country",
+      "table": {
+        "schema": "app",
+        "name": "country"
+      },
+      "key": "id",
+      "keyName": "ref",
+      "versionColumn": "version",
+      "versionName": "version",
+      "signal": true,
+      "attributes": [
+        {
+          "name": "code",
+          "column": "code",
+          "pgType": "character varying(9)",
+          "castType": "character varying",
+          "type": "String",
+          "required": false,
+          "maxLength": 9,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "description",
+          "column": "description",
+          "pgType": "character varying(150)",
+          "castType": "character varying",
+          "type": "String",
+          "required": false,
+          "notNull": true,
+          "maxLength": 150,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "deletionMark",
+          "column": "deletion_mark",
+          "pgType": "boolean",
+          "castType": "boolean",
+          "type": "Boolean",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "predefinedName",
+          "column": "predefined_name",
+          "pgType": "text",
+          "castType": "text",
+          "type": "Text",
+          "required": false,
+          "insert": false,
+          "update": false,
+          "maxBytes": 65536
+        },
+        {
+          "name": "createdAt",
+          "column": "created_at",
+          "pgType": "timestamp with time zone",
+          "castType": "timestamp with time zone",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "updatedAt",
+          "column": "updated_at",
+          "pgType": "timestamp with time zone",
+          "castType": "timestamp with time zone",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        }
+      ],
+      "tabularSections": [],
+      "kernelHash": "ebc8521f858b032322f9308d7d4fea6e20bcc5121fd781a33a41992857e79a7a",
+      "operations": {
+        "create": {
+          "function": {
+            "schema": "app",
+            "name": "country_save"
+          },
+          "context": "create"
+        },
+        "update": {
+          "function": {
+            "schema": "app",
+            "name": "country_save"
+          },
+          "context": "update"
+        },
+        "markDeletion": {
+          "function": {
+            "schema": "app",
+            "name": "country_mark_deletion"
+          },
+          "context": "markDeletion"
+        }
+      },
+      "constraints": [
+        {
+          "name": "country_pkey",
+          "kind": "primaryKey",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "country_code_key",
+          "kind": "unique",
+          "columns": [
+            "code"
+          ]
+        },
+        {
+          "name": "country_predefined_name_idx",
+          "kind": "unique",
+          "columns": [
+            "predefined_name"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "7539667a-7ed8-4438-bb93-2d6d847bb86e",
+      "name": "GlobalRoleAssignments",
+      "kind": "Catalog",
+      "kindLabel": "global_role_assignments",
+      "table": {
+        "schema": "app",
+        "name": "global_role_assignments"
+      },
+      "key": "id",
+      "keyName": "ref",
+      "versionColumn": "version",
+      "versionName": "version",
+      "signal": true,
+      "attributes": [
+        {
+          "name": "code",
+          "column": "code",
+          "pgType": "character varying(9)",
+          "castType": "character varying",
+          "type": "String",
+          "required": false,
+          "maxLength": 9,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "description",
+          "column": "description",
+          "pgType": "character varying(150)",
+          "castType": "character varying",
+          "type": "String",
+          "required": false,
+          "notNull": true,
+          "maxLength": 150,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "deletionMark",
+          "column": "deletion_mark",
+          "pgType": "boolean",
+          "castType": "boolean",
+          "type": "Boolean",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "subject",
+          "column": "subject",
+          "pgType": "uuid",
+          "castType": "uuid",
+          "type": "UUID",
+          "required": true,
+          "notNull": true,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "archetype",
+          "column": "archetype",
+          "pgType": "uuid",
+          "castType": "uuid",
+          "type": "UUID",
+          "required": false,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "customRole",
+          "column": "custom_role",
+          "pgType": "uuid",
+          "castType": "uuid",
+          "type": "UUID",
+          "required": false,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "container",
+          "column": "container",
+          "pgType": "uuid",
+          "castType": "uuid",
+          "type": "UUID",
+          "required": false,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "predefinedName",
+          "column": "predefined_name",
+          "pgType": "text",
+          "castType": "text",
+          "type": "Text",
+          "required": false,
+          "insert": false,
+          "update": false,
+          "maxBytes": 65536
+        },
+        {
+          "name": "createdAt",
+          "column": "created_at",
+          "pgType": "timestamp with time zone",
+          "castType": "timestamp with time zone",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "updatedAt",
+          "column": "updated_at",
+          "pgType": "timestamp with time zone",
+          "castType": "timestamp with time zone",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        }
+      ],
+      "tabularSections": [],
+      "kernelHash": "f18e31557a8996afed0613e5198277049a1ccee0e440ba3cc23dec451da781a3",
+      "operations": {
+        "create": {
+          "function": {
+            "schema": "app",
+            "name": "global_role_assignments_save"
+          },
+          "context": "administerRights"
+        },
+        "update": {
+          "function": {
+            "schema": "app",
+            "name": "global_role_assignments_save"
+          },
+          "context": "administerRights"
+        },
+        "markDeletion": {
+          "function": {
+            "schema": "app",
+            "name": "global_role_assignments_mark_deletion"
+          },
+          "context": "administerRights"
+        },
+        "delete": {
+          "function": {
+            "schema": "app",
+            "name": "global_role_assignments_delete"
+          },
+          "context": "administerRights"
+        }
+      },
+      "constraints": [
+        {
+          "name": "global_role_assignments_pkey",
+          "kind": "primaryKey",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "global_role_assignments_code_key",
+          "kind": "unique",
+          "columns": [
+            "code"
+          ]
+        },
+        {
+          "name": "global_role_assignments_predefined_name_idx",
+          "kind": "unique",
+          "columns": [
+            "predefined_name"
+          ]
+        },
+        {
+          "name": "global_role_assignments_custom_role_check",
+          "kind": "check",
+          "columns": [
+            "custom_role"
+          ]
+        },
+        {
+          "name": "global_role_assignments_custom_role_fkey",
+          "kind": "foreignKey",
+          "columns": [
+            "custom_role"
+          ],
+          "references": [
+            "id"
+          ]
+        },
+        {
+          "name": "global_role_assignments_subject_fkey",
+          "kind": "foreignKey",
+          "columns": [
+            "subject"
+          ],
+          "references": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "212f0a7e-14da-420e-9791-3efb9931b2f0",
+      "name": "GlobalRoles",
+      "kind": "Catalog",
+      "kindLabel": "global_roles",
+      "table": {
+        "schema": "app",
+        "name": "global_roles"
+      },
+      "key": "id",
+      "keyName": "ref",
+      "versionColumn": "version",
+      "versionName": "version",
+      "signal": true,
+      "attributes": [
+        {
+          "name": "code",
+          "column": "code",
+          "pgType": "character varying(9)",
+          "castType": "character varying",
+          "type": "String",
+          "required": false,
+          "maxLength": 9,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "description",
+          "column": "description",
+          "pgType": "character varying(150)",
+          "castType": "character varying",
+          "type": "String",
+          "required": false,
+          "notNull": true,
+          "maxLength": 150,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "deletionMark",
+          "column": "deletion_mark",
+          "pgType": "boolean",
+          "castType": "boolean",
+          "type": "Boolean",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "archetype",
+          "column": "archetype",
+          "pgType": "uuid",
+          "castType": "uuid",
+          "type": "UUID",
+          "required": true,
+          "notNull": true,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "order",
+          "column": "order",
+          "pgType": "integer",
+          "castType": "integer",
+          "type": "Integer",
+          "required": false,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "predefinedName",
+          "column": "predefined_name",
+          "pgType": "text",
+          "castType": "text",
+          "type": "Text",
+          "required": false,
+          "insert": false,
+          "update": false,
+          "maxBytes": 65536
+        },
+        {
+          "name": "createdAt",
+          "column": "created_at",
+          "pgType": "timestamp with time zone",
+          "castType": "timestamp with time zone",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "updatedAt",
+          "column": "updated_at",
+          "pgType": "timestamp with time zone",
+          "castType": "timestamp with time zone",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        }
+      ],
+      "tabularSections": [
+        {
+          "id": "212f0a7e-14da-420e-9791-3efb9931b2f0#delta",
+          "name": "delta",
+          "table": {
+            "schema": "app",
+            "name": "global_roles_delta"
+          },
+          "key": "id",
+          "keyName": "ref",
+          "parent": "parent_id",
+          "parentName": "parent",
+          "lineNumber": "line_number",
+          "lineNumberName": "lineNumber",
+          "parentConstraint": "global_roles_delta_parent_id_fkey",
+          "attributes": [
+            {
+              "name": "object",
+              "column": "object",
+              "pgType": "text",
+              "castType": "text",
+              "type": "Text",
+              "required": true,
+              "notNull": true,
+              "insert": true,
+              "update": true,
+              "maxBytes": 65536
+            },
+            {
+              "name": "action",
+              "column": "action",
+              "pgType": "text",
+              "castType": "text",
+              "type": "Text",
+              "required": true,
+              "notNull": true,
+              "insert": true,
+              "update": true,
+              "maxBytes": 65536
+            },
+            {
+              "name": "extent",
+              "column": "extent",
+              "pgType": "text",
+              "castType": "text",
+              "type": "Text",
+              "required": true,
+              "notNull": true,
+              "insert": true,
+              "update": true,
+              "maxBytes": 65536
+            },
+            {
+              "name": "dimension",
+              "column": "dimension",
+              "pgType": "uuid",
+              "castType": "uuid",
+              "type": "UUID",
+              "required": false,
+              "insert": true,
+              "update": true
+            },
+            {
+              "name": "effect",
+              "column": "effect",
+              "pgType": "text",
+              "castType": "text",
+              "type": "Text",
+              "required": true,
+              "notNull": true,
+              "insert": true,
+              "update": true,
+              "maxBytes": 65536
+            }
+          ],
+          "constraints": [
+            {
+              "name": "global_roles_delta_pkey",
+              "kind": "primaryKey",
+              "columns": [
+                "id"
+              ]
+            },
+            {
+              "name": "global_roles_delta_dimension_check",
+              "kind": "check",
+              "columns": [
+                "dimension"
+              ]
+            },
+            {
+              "name": "global_roles_delta_effect_check",
+              "kind": "check",
+              "columns": [
+                "effect"
+              ]
+            },
+            {
+              "name": "global_roles_delta_extent_check",
+              "kind": "check",
+              "columns": [
+                "extent"
+              ]
+            },
+            {
+              "name": "global_roles_delta_parent_id_fkey",
+              "kind": "foreignKey",
+              "columns": [
+                "parent_id"
+              ],
+              "references": [
+                "id"
+              ]
+            }
+          ]
+        }
+      ],
+      "kernelHash": "f66cbb34200ae1846604fce8852fa546743f6b489e736472b2ecf273a7aa7f3d",
+      "operations": {
+        "create": {
+          "function": {
+            "schema": "app",
+            "name": "global_roles_save"
+          },
+          "context": "administerRights"
+        },
+        "update": {
+          "function": {
+            "schema": "app",
+            "name": "global_roles_save"
+          },
+          "context": "administerRights"
+        },
+        "markDeletion": {
+          "function": {
+            "schema": "app",
+            "name": "global_roles_mark_deletion"
+          },
+          "context": "administerRights"
+        }
+      },
+      "constraints": [
+        {
+          "name": "global_roles_pkey",
+          "kind": "primaryKey",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "global_roles_code_key",
+          "kind": "unique",
+          "columns": [
+            "code"
+          ]
+        },
+        {
+          "name": "global_roles_predefined_name_idx",
+          "kind": "unique",
+          "columns": [
+            "predefined_name"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "1220b990-252c-48c4-88e8-bc46b4f9344d",
+      "name": "Users",
+      "kind": "Catalog",
+      "kindLabel": "users",
+      "table": {
+        "schema": "app",
+        "name": "users"
+      },
+      "key": "id",
+      "keyName": "ref",
+      "versionColumn": "version",
+      "versionName": "version",
+      "signal": true,
+      "attributes": [
+        {
+          "name": "code",
+          "column": "code",
+          "pgType": "character varying(9)",
+          "castType": "character varying",
+          "type": "String",
+          "required": false,
+          "maxLength": 9,
+          "insert": false,
+          "update": true
+        },
+        {
+          "name": "description",
+          "column": "description",
+          "pgType": "character varying(150)",
+          "castType": "character varying",
+          "type": "String",
+          "required": false,
+          "notNull": true,
+          "maxLength": 150,
+          "insert": false,
+          "update": true
+        },
+        {
+          "name": "deletionMark",
+          "column": "deletion_mark",
+          "pgType": "boolean",
+          "castType": "boolean",
+          "type": "Boolean",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "userKind",
+          "column": "user_kind",
+          "pgType": "text",
+          "castType": "text",
+          "type": "Text",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false,
+          "maxBytes": 65536
+        },
+        {
+          "name": "invalid",
+          "column": "invalid",
+          "pgType": "boolean",
+          "castType": "boolean",
+          "type": "Boolean",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "predefinedName",
+          "column": "predefined_name",
+          "pgType": "text",
+          "castType": "text",
+          "type": "Text",
+          "required": false,
+          "insert": false,
+          "update": false,
+          "maxBytes": 65536
+        },
+        {
+          "name": "createdAt",
+          "column": "created_at",
+          "pgType": "timestamp with time zone",
+          "castType": "timestamp with time zone",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "updatedAt",
+          "column": "updated_at",
+          "pgType": "timestamp with time zone",
+          "castType": "timestamp with time zone",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        }
+      ],
+      "tabularSections": [],
+      "kernelHash": "a7c749d3dd4c4b60ee0be86b3db2966bf65684d63cd3a843ce69a8997fda64f9",
+      "operations": {
+        "update": {
+          "function": {
+            "schema": "app",
+            "name": "users_save"
+          },
+          "context": "update"
+        }
+      },
+      "constraints": [
+        {
+          "name": "users_pkey",
+          "kind": "primaryKey",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "users_code_key",
+          "kind": "unique",
+          "columns": [
+            "code"
+          ]
+        },
+        {
+          "name": "users_predefined_name_idx",
+          "kind": "unique",
+          "columns": [
+            "predefined_name"
+          ]
+        },
+        {
+          "name": "users_user_kind_check",
+          "kind": "check",
+          "columns": [
+            "user_kind"
+          ]
+        }
+      ]
+    }
+  ]
+}

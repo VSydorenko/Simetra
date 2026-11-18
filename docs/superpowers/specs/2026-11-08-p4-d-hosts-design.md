@@ -544,12 +544,20 @@ DOM і журнал Server Function з точним результатом). З�
 сесії, тож відмова доводить саме правило походження, а не відсутність сесії. Позитивний контроль:
 `run` того самого походження з сесією — `ok`.
 
+Кейси про походження проходять два шари. Перший — власний CSRF-фільтр Start
+на кожній Server Function: запит без `Sec-Fetch-Site: same-origin` він
+відхиляє голим `403 Forbidden` до коду шаблону (фільтр не вимикається).
+Другий — `checkRequestOrigin` шаблону; його точний код видно лише на запиті,
+який Start пропускає (`Sec-Fetch-Site: same-origin` з чужим `Origin`).
+Клієнтський транспорт шаблону перетворює голий `403` Start на
+`command.forbidden` з `reason: origin`, щоб інтерфейс бачив одну відмову.
+
 | Кейс | Частина | Очікування |
 | --- | --- | --- |
-| `dataFn` з `Sec-Fetch-Site: cross-site` | D2 | `command.forbidden` `origin` |
-| `dataFn` без `Sec-Fetch-Site` з чужим `Origin` | D2 | `command.forbidden` `origin` |
-| `dataFn` без обох заголовків | D2 | `command.forbidden` `origin` |
-| `Host`, `X-Forwarded-Host`, `X-Forwarded-Proto` і `Origin` атакувальника | D2 | `command.forbidden` `origin` |
+| `dataFn` з `Sec-Fetch-Site: cross-site` | D2 | `403` від Start або `command.forbidden` `origin` |
+| `dataFn` без `Sec-Fetch-Site` з чужим `Origin` | D2 | `403` від Start або `command.forbidden` `origin` |
+| `dataFn` без обох заголовків | D2 | `403` від Start або `command.forbidden` `origin` |
+| `Host`, `X-Forwarded-Host`, `X-Forwarded-Proto` і `Origin` атакувальника | D2 | `403` від Start або `command.forbidden` `origin` |
 | `dataFn` того самого походження без сесії | D2 | `command.unauthenticated` |
 | тіло понад межу з `Content-Length` і chunked; тіло з `Content-Encoding: gzip`; завелике тіло `sign-in` | D2 | `command.invalid` до розбору |
 | `POST /api/auth/sign-up/email` | D2 | відмова (реєстрацію вимкнено) |
@@ -558,7 +566,7 @@ DOM і журнал Server Function з точним результатом). З�
 | конверт зі `subject` іншого користувача | D2 | `command.unauthenticated` `session-changed` |
 | `get-session` і HTML | D2 | `Cache-Control: no-store`; HTML — `private, no-store` і `Vary: Cookie` |
 | кожен id серверної функції з маніфесту production-збірки: `POST` з сесією і дійсним конвертом `read` суб'єкта сесії в протоколі серіалізації Start, двічі — з `Sec-Fetch-Site: cross-site` і того самого походження | D3 | міжсайтово жодна відповідь не несе значень рядків, `dataFn` теж; того самого походження рядки віддає лише `dataFn` |
-| Server Function сесії з `Sec-Fetch-Site: cross-site` | D2 | `null`; `getSession` не викликано |
+| Server Function сесії з `Sec-Fetch-Site: cross-site` | D2 | `403` від Start або `null`; `getSession` не викликано |
 | SSR сесії A, потім вхід B у тій самій вкладці без виходу | D3 | жодного значення власних рядків A в DOM після заміни рантайму; запити даних несуть `subject` B |
 | SSR списку `Client` для A і B послідовно (A, B, A) і паралельно | D3 | HTML і знімок кожного — лише власні рядки й власний `subject`; жодного значення чи `sub` іншого |
 | запит без сесії на сторінку з даними | D3 | перенаправлення на вхід; знімка в HTML немає |

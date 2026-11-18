@@ -1,0 +1,5 @@
+plans/
+.output/
+.nitro/
+.tanstack/
+dist/

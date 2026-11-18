@@ -184,3 +184,77 @@ jobs:
         run: pnpm build:packages
       - name: Packaging tests
         run: pnpm test:packaging
+
+  # Шаблон host-а (П4-D, D2): DB-тести шаблону, склад збірки й збірка з
+  # tarball-ів, безпекові e2e на production-збірці. Нога матриці — {браузер,
+  # збірка}: нові ноги (WebKit, dev-збірка, бюджети) додаються рядками матриці
+  # (#210), а не новим job. Секрети прогону — випадкові на прогін: фікстура
+  # сама генерує `BETTER_AUTH_SECRET` і паролі користувачів, секретів репо тут
+  # немає.
+  host-template:
+    name: Host template (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: chromium production
+            browser: chromium
+            build: production
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Версію pnpm бере з поля packageManager у package.json
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      # Той самий образ стека, що й у job `db`: тег із compose-файла, мітка
+      # хеша файлів стека
+      - name: Stack image inputs
+        id: image
+        run: |
+          echo "tag=$(grep -oE 'simetra-pg/postgres:[^ ]+' docker/postgres-stack/compose.yaml | head -1)" >> "$GITHUB_OUTPUT"
+          echo "files-hash=$(node scripts/db-stack.mjs files-hash postgres)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build postgres image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: docker/postgres-stack
+          load: true
+          push: false
+          tags: ${{ steps.image.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            SIMETRA_STACK_FILES_HASH=${{ steps.image.outputs.files-hash }}
+      - name: Start postgres stack
+        run: |
+          for attempt in 1 2 3; do
+            if pnpm db:pg:start --no-build; then exit 0; fi
+            if [ "$attempt" -eq 3 ]; then break; fi
+            echo "::warning::postgres stack start failed (attempt $attempt), cleaning up and retrying"
+            node scripts/db-stack.mjs stop postgres --volumes || true
+            sleep $((attempt * 30))
+          done
+          exit 1
+      # Збірка з tarball-ів і e2e потребують зібраних пакетів
+      - name: Build packages
+        run: pnpm build:packages
+      # Браузер точного піна Playwright (версія — у package.json пакета) із
+      # системними залежностями
+      - name: Install browser
+        run: pnpm --filter create-simetra-app exec playwright install --with-deps ${{ matrix.browser }}
+      - name: Template database tests
+        run: pnpm --filter create-simetra-app-template test:db
+      - name: Build content and tarball build
+        run: pnpm --filter create-simetra-app test:build
+      - name: Security e2e
+        run: pnpm --filter create-simetra-app e2e --project=${{ matrix.browser }}-${{ matrix.build }}
+      # Червоне на хибно-зеленому: `skipped`, `flaky` чи нуль тестів Playwright
+      # рахує успіхом, а звіт — ні
+      - name: Playwright report gate
+        run: pnpm --filter create-simetra-app e2e:gate
