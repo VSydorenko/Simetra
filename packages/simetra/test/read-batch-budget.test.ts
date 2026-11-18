@@ -105,7 +105,12 @@ function budgeted(sizes: ReadonlyMap<number, number>) {
       return value
     },
   }
-  const source = createCoreSource(() => adapter, index, createReadLimiter(4))
+  const source = createCoreSource(
+    () => adapter,
+    index,
+    createReadLimiter(4),
+    fake.server
+  )
   return { source, fake, responses, values }
 }
 

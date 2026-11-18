@@ -13,11 +13,9 @@ import {
   PROVIDER_OWNER_ROLES,
   READ_BATCH_MAX,
   READ_BATCH_STATEMENTS_MAX,
-  ROW_VERSION_EPOCH_FUNCTION_NAME,
   TABULAR_LINES_MAX,
   runtimeCatalogSchema,
   sessionClaimsSchema,
-  versionEpochSchema,
   type CommandError,
   type CommandResult,
   type DatabaseProvider,
@@ -53,7 +51,9 @@ import {
 import {
   COMMAND_ROLE,
   COMMIT,
+  EPOCH,
   ReadBudget,
+  epochOf,
   endFailed,
   readRefusal,
   readSetupStatement,
@@ -298,9 +298,6 @@ const BEGIN_READ_ONLY = "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY"
 // Читання частин: один знімок на всі; транзакція лише для читання на цьому
 // рівні помилок серіалізації не дає (Рд41).
 const BEGIN_READ = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
-// Окремим оператором під роллю читання: `EXECUTE` функції перевіряється на
-// старті виконавця, а в операторі налаштування роль ще — роль входу.
-const EPOCH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(ROW_VERSION_EPOCH_FUNCTION_NAME)}() AS epoch`
 // Факти ролі входу судять `session_user`, а не ім'я: `'MEMBER'` бачить саму
 // роль і будь-яке членство, зокрема без успадкування — `SET ROLE` однаково
 // дає владу ролі. Відсутня роль дає `false`, а не `42704`: підзапити з
@@ -677,17 +674,6 @@ function readRoleFor(state: RuntimeState, session: SessionClaims): string {
   return state.readRoles.user ?? PLATFORM_ROLES.command
 }
 
-/** Епоха з відповіді оператора епохи: 64 hex чи `NULL` — інше аномалія. */
-function epochOf(rows: readonly Record<string, unknown>[]): string | null {
-  const epoch = rows[0]?.epoch
-  if (rows.length === 1 && epoch === null) return null
-  const parsed = versionEpochSchema.safeParse(epoch)
-  if (rows.length !== 1 || !parsed.success) {
-    throw new Error("row version epoch is not 64 hex")
-  }
-  return parsed.data
-}
-
 /**
  * Серверне читання (спека П4 §6.11, П4-B §4.2): усі частини — одна
  * транзакція `REPEATABLE READ READ ONLY` під роллю запиту, тож частини
@@ -776,8 +762,10 @@ async function readParts(
       readSetupStatement(claims, budget.setup, state.readBudgetMs + 1000, role)
     )
     // Епоху бази знає лише транзакція: проєкцію з `known` будівник рендерить
-    // після цього оператора.
-    epoch = epochOf((await send({ text: EPOCH, params: [] })).rows)
+    // після цього оператора. Окремим оператором під роллю читання: `EXECUTE`
+    // функції перевіряється на старті виконавця, а в операторі налаштування
+    // роль ще — роль входу.
+    epoch = epochOf((await send(EPOCH)).rows)
   } catch (error) {
     // Жодна частина не виконана: збій прелюдії — помилка кожної.
     const refusal = refusalOf(error)

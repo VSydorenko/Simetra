@@ -440,7 +440,7 @@ export function createDataHandler(
       value: fitRunResult(
         index,
         operations,
-        { rows, changes: changes.value },
+        { rows, changes: changes.value, epoch: result.epoch },
         serverHash
       ),
       serverHash,

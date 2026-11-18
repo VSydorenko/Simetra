@@ -383,6 +383,8 @@ export function fitParts(
 export interface WireRunResult {
   rows?: WireRow[]
   changes: WireChange[]
+  /** The row version epoch of the command transaction (`CommandResult.epoch`). */
+  epoch: string | null
 }
 
 // Ключ ТЧ закодованого рядка (`encodeRow`): рядок `run` їх не несе (Рд27).
@@ -392,7 +394,7 @@ const SECTIONS = "tabularSections"
  * Fits a `run` result into the response budget (P4-B spec §4.5 step 6):
  * rows lose their lazy columns and tabular sections; if the whole
  * `DataResponse` still exceeds the budget, the result goes without `rows`
- * and the client rereads by key. Row `i` belongs to `operations[i]`
+ * and the client rereads by key. `changes` and `epoch` always go. Row `i` belongs to `operations[i]`
  * (`CommandResult.rows` — one row per input operation, in input order).
  *
  * `changes` never exceed the budget: there are at most `BATCH_MAX` batch
@@ -406,7 +408,7 @@ const SECTIONS = "tabularSections"
 export function fitRunResult(
   index: CatalogIndex,
   operations: readonly WireOperation[],
-  result: { rows: WireRow[]; changes: WireChange[] },
+  result: { rows: WireRow[]; changes: WireChange[]; epoch: string | null },
   serverHash: string
 ): WireRunResult {
   if (result.rows.length !== operations.length) {
@@ -430,8 +432,10 @@ export function fitRunResult(
       Object.entries(row).filter(([key]) => key !== SECTIONS && !skip.has(key))
     )
   })
-  const value = { rows, changes: result.changes }
+  // Епоха — у мірі, як у читанні: вона частина відповіді, що серіалізується.
+  const { changes, epoch } = result
+  const value = { rows, changes, epoch }
   return responseBytes(value, serverHash) <= RESPONSE_BUDGET_BYTES
     ? value
-    : { changes: result.changes }
+    : { changes, epoch }
 }

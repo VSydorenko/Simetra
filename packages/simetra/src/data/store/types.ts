@@ -52,9 +52,64 @@ export type ViewSpec =
 export type RowState =
   "synced" | "pending" | "failed" | "conflict" | "unknown" | "stale" | "removed"
 
+/** The state of an own mutation in the journal (P4-B spec §6.5). */
+export type MutationState = "pending" | "failed" | "conflict" | "unknown"
+
+/** What a mutation settled with (P4-B spec §7.1); `settled` never rejects. */
+export type MutationResult =
+  | {
+      readonly ok: true
+      /**
+       * One row per operation: the confirmed row, or `undefined` when the
+       * answer carried none that could be shown — no `rows`, a key with a
+       * tombstone or a mark newer than the attempt, a re-read that failed.
+       */
+      readonly rows: readonly (ServerRow | undefined)[]
+    }
+  | { readonly ok: false; readonly error: CommandError }
+
+/** One logical mutation of the data writer (P4-B spec §7.1). */
+export interface Mutation {
+  /** A local id of this attempt, not the `mutationId` of the envelope. */
+  readonly id: string
+  readonly settled: Promise<MutationResult>
+}
+
+/**
+ * The write mode of an own mutation (P4-B spec §7.1). The thin M3 slice has
+ * `await` only: the row shows its confirmed values until the answer.
+ */
+export type WritePolicy = "await"
+
+/**
+ * The own mutation of a row with the actions its state allows (P4-B spec
+ * §6.5): `failed` — `retry`, `cancel`; `conflict` — `cancel`; `unknown` —
+ * `dismiss`; a `removed` row — `cancel` (`dismiss` for `unknown`). `retry`
+ * is absent while the values are hidden and after a purge or `removed`
+ * erased the fields of the mutation.
+ */
+export interface RowMutation {
+  readonly id: string
+  readonly state: MutationState
+  readonly error?: CommandError
+  /**
+   * A new attempt with the same fields and base; `undefined` when the
+   * mutation is no longer the one this view showed.
+   */
+  readonly retry?: () => Mutation | undefined
+  /** Drops the mutation: the row shows the confirmed values again. */
+  readonly cancel?: () => void
+  /** Drops an `unknown` mutation from the row. */
+  readonly dismiss?: () => void
+}
+
 /** A row as a view shows it; `removed` keeps the place without values. */
 export type RowView =
-  | { readonly key: Key; readonly state: "removed" }
+  | {
+      readonly key: Key
+      readonly state: "removed"
+      readonly mutation?: RowMutation
+    }
   | {
       readonly key: Key
       readonly version: number
@@ -66,6 +121,15 @@ export type RowView =
        * until a read that started after it; a form shows no draft meanwhile.
        */
       readonly hidden?: true
+      /**
+       * The stored row carries a stale mark — a version below the known one,
+       * a version epoch switch not proved since, or a signal gap — whatever
+       * `state` shows: a mutation state takes precedence over `stale` (§6.5),
+       * the fact stays here. A `hide` is the separate fact `hidden`.
+       */
+      readonly stale?: true
+      /** The own mutation of the row; its state is `state` unless hidden. */
+      readonly mutation?: RowMutation
       readonly refs?: Readonly<Record<string, RowView | null>>
     }
 
@@ -82,6 +146,12 @@ export interface ViewSnapshot {
   readonly rows: readonly RowView[]
   readonly hasNewRows: boolean
   readonly needsRefresh: boolean
+  /**
+   * The object of the view is marked stale (P4-B spec §10): the server
+   * contract of its kernel differs from this build, no write to it passes.
+   * Present only while true; not to be confused with a `stale` row.
+   */
+  readonly isStale?: boolean
   readonly section?: {
     readonly ownerVersion: number | undefined
     readonly complete: boolean
@@ -215,6 +285,23 @@ export interface Writer {
     target: { keys: readonly Key[] } | { scope: string | null }
   ): void
   markStale(object: ObjectName, keys: readonly Key[], minVersion: number): void
+  /**
+   * Writes the rows of an own command result (P4-B spec §7.2 step 3), and
+   * only the journal calls it. A row is written by the version rule only for
+   * a key with an owner, whose stored row and session are in `epoch`; it
+   * never lifts `hidden`, `removed` or a tombstone. Returns the keys the
+   * caller re-reads by key: such a mark, a key or pair tombstone newer than
+   * `readEpoch` (the start of the attempt), another epoch. A key without an
+   * owner is not returned unless its `epoch` differs from the session's
+   * (nothing to write — the answer row stands), nor is a row older than the
+   * stored one (the store holds a newer confirmed version).
+   */
+  writeBack(
+    object: ObjectName,
+    rows: readonly ServerRow[],
+    epoch: string,
+    readEpoch: number
+  ): readonly Key[]
   /**
    * Hides the values of the keys (rights, the eviction horizon): the only
    * entry point of rights narrowing (plan B3-3, Р11). The values return only

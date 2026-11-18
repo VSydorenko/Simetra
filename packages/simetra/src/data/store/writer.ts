@@ -1,6 +1,6 @@
 import { ZERO_UUID, channelTopic, type CatalogEntry } from "simetra/model"
 import type { Defects } from "./defects"
-import { effectiveEpoch } from "./epoch"
+import { effectiveEpoch, heldEpoch } from "./epoch"
 import type { ObjectState } from "./forms"
 import { includeKeys, readIncluded } from "./include"
 import { visibleRow, type RowEntry } from "./object-store"
@@ -23,7 +23,7 @@ import {
 } from "./window"
 import { DISCARD_PAUSE_MS, type Scope, type Session } from "./session"
 import type { RowViews } from "./snapshot"
-import { ReadLimiterClosed, readKeys } from "./source"
+import { ReadLimiterClosed, readKeys, tracked } from "./source"
 import {
   EPOCH_UNAVAILABLE,
   errorOf,
@@ -67,7 +67,28 @@ export interface WriterContext extends ReaderContext {
    * them once the `commit` ends (`revalidateHolders`), not inside it.
    */
   readonly hiddenKeys: Map<ObjectName, Set<Key>>
+  /**
+   * The mutation journal: a purge erases the fields of the mutations it
+   * touches in the same `commit` (plan B3-4-Л Р11).
+   */
+  readonly journal: {
+    erase(object: ObjectName, key: Key): void
+    eraseScope(object: ObjectName, scope: string | null): void
+  }
 }
+
+/** The longest wait for a re-read the journal settles a mutation by (§7.2 step 4). */
+export const REREAD_TIMEOUT_MS = 5_000
+
+/**
+ * The outcome of a re-read by key (plan B3-4-Л Р4): `read` — the answer
+ * passed the epoch gate (`row` — the key's row, `undefined` when absent);
+ * `failed` — the read failed or ran out of {@link REREAD_TIMEOUT_MS};
+ * `discarded` — the answer came from an abandoned version epoch.
+ */
+export type RereadOutcome =
+  | { readonly kind: "read"; readonly row: ServerRow | undefined }
+  | { readonly kind: "failed" | "discarded" }
 
 /**
  * The change channel of a row (§8.3): `channelTopic` of the scope kind, the
@@ -192,7 +213,8 @@ function patchRows(
   o: ObjectState,
   rows: readonly ServerRow[],
   readEpoch: number,
-  versionEpoch: string | null
+  versionEpoch: string | null,
+  lazyRead = false
 ) {
   for (const row of rows) {
     if ((o.rows.get(row.key)?.owners ?? 0) === 0) continue
@@ -202,7 +224,7 @@ function patchRows(
       o,
       { ...row, versionEpoch: effectiveEpoch(versionEpoch, row.versionEpoch) },
       readEpoch,
-      false
+      lazyRead
     )
   }
 }
@@ -271,11 +293,37 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       }
       // ТЧ записано зі скоупом шапки на мить запису: шапка, що відтоді
       // переїхала в прибраний скоуп, лишила б рядки ТЧ без `clearOwner`.
+      // Ключ, що переїхав у прибраний скоуп після старту спроби, прибрано
+      // за збереженим скоупом: його поля стираються за ключем.
+      if ("keys" in target)
+        for (const key of target.keys) ctx.journal.erase(o.name, key)
+      else {
+        ctx.journal.eraseScope(o.name, target.scope)
+        for (const key of dropped) ctx.journal.erase(o.name, key)
+      }
       for (const key of [...purged, ...cleared]) ops.clearOwner(scope, o, key)
       for (const key of [...dropped, ...cleared]) rowViews.touch(o.name, key)
       forget(ctx, scope, o, new Set(dropped), new Set(purged))
       ctx.invalidateTail(o)
       ctx.purges.set(o.name, (ctx.purges.get(o.name) ?? 0) + 1)
+    },
+
+    writeBack(object, rows, epoch, readEpoch) {
+      scope.assert()
+      const o = ctx.objectOf(object)
+      const skipped: Key[] = []
+      for (const row of rows) {
+        // Епоха рядка — епоха результату `run`, а не епоха читання; вона
+        // непорожня, тож власна епоха рядка її не заміняє.
+        const result = o.rows.writeBack(
+          scope,
+          { ...row, versionEpoch: effectiveEpoch(epoch, row.versionEpoch) },
+          readEpoch
+        )
+        if (result === "skipped") skipped.push(row.key)
+        else if (result === "written") rowViews.touch(o.name, row.key)
+      }
+      return skipped
     },
 
     hide(object, keys) {
@@ -879,5 +927,103 @@ async function revalidateViews(
     ctx,
     o,
     again.filter((s) => s.alive && !s.purged && s.flight === undefined)
+  )
+}
+
+/**
+ * The re-read of one key after an own write (plan B3-4-Л Р4, the architect
+ * answer to the re-read fork): by key through `readKeys` — the list form, or
+ * the card form with lazy columns for a lazy-field edit — never a re-read of
+ * the views that hold it. The answer passes the same epoch gate as
+ * `Writer.apply` and is written with its start epoch only into slots with an
+ * owner (`hidden` and tombstones hold); an absent key becomes `removed`.
+ * `onCommit` runs once inside that `commit`; on a failure, a discarded answer
+ * or after {@link REREAD_TIMEOUT_MS}, in a `commit` of its own. An answer
+ * after the limit is still written. On a failure `unconfirmed` — the version
+ * and epoch of an own write the store did not take — marks the key `stale`
+ * (§7.2 step 4).
+ */
+export async function rereadKey(
+  ctx: WriterContext,
+  object: ObjectName,
+  key: Key,
+  options: {
+    readonly form: "list" | "card"
+    readonly unconfirmed?: { readonly version: number; readonly epoch: string }
+    readonly onCommit?: (outcome: RereadOutcome, scope: Scope) => void
+  }
+): Promise<void> {
+  const { form, unconfirmed, onCommit } = options
+  const { session } = ctx
+  if (!session.token().valid) return
+  const o = ctx.objectOf(object)
+  const startEpoch = session.epochs.now()
+  const token = session.token()
+  let done = false
+  const fire = (outcome: RereadOutcome, scope: Scope) => {
+    if (done) return
+    done = true
+    clearTimeout(timer)
+    if (outcome.kind !== "read" && unconfirmed !== undefined) {
+      o.rows.markUnconfirmed(scope, key, unconfirmed.version, unconfirmed.epoch)
+      if (o.rows.get(key) !== undefined) ctx.rowViews.touch(o.name, key)
+    }
+    onCommit?.(outcome, scope)
+  }
+  // Межа часу (§7.2, крок 4): мутація не чекає перечитування без кінця.
+  const timer = setTimeout(() => {
+    if (done || !token.valid) return
+    session.commit(
+      (scope) => fire({ kind: "failed" }, scope),
+      token,
+      "reread timeout"
+    )
+  }, REREAD_TIMEOUT_MS)
+  const read = tracked(ctx.source)
+  let rows: readonly ServerRow[] | undefined
+  try {
+    rows = await readKeys(
+      read.source,
+      o.entry,
+      [key],
+      form === "card"
+        ? { form: "card" }
+        : { keysPerRequest: ctx.limits.keysPerRequest }
+    )
+  } catch {
+    rows = undefined
+  }
+  if (!token.valid) {
+    clearTimeout(timer)
+    return
+  }
+  session.commit(
+    (scope) => {
+      if (rows === undefined) {
+        fire({ kind: "failed" }, scope)
+        return
+      }
+      // Шлюз відповіді — той самий, що в `Writer.apply`: епохи частин і
+      // рядків; відкинута відповідь не пише нічого.
+      const epochs = new Set<string | null>(read.epochs)
+      for (const row of rows) epochs.add(row.versionEpoch ?? null)
+      if (session.acceptEpochs(epochs, startEpoch) === "discard") {
+        fire({ kind: "discarded" }, scope)
+        return
+      }
+      patchRows(ctx, scope, o, rows, startEpoch, null, form === "card")
+      const found = rows.find((r) => r.key.toLowerCase() === key.toLowerCase())
+      if (found === undefined && (o.rows.get(key)?.owners ?? 0) > 0)
+        removeKeys(ctx, scope, o, [key], startEpoch)
+      // Підсумок несе рядок відповіді з його власною епохою, як він прийшов:
+      // у сховище цей рядок уже записав `patchRows` за правилом епох.
+      const answer =
+        found === undefined
+          ? undefined
+          : { ...found, versionEpoch: heldEpoch(found.versionEpoch) }
+      fire({ kind: "read", row: answer }, scope)
+    },
+    token,
+    `reread ${o.name}`
   )
 }

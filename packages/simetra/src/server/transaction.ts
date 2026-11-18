@@ -2,6 +2,7 @@ import {
   PLATFORM_ROLES,
   PLATFORM_SCHEMA,
   CURRENT_USER_FUNCTION_NAME,
+  ROW_VERSION_EPOCH_FUNCTION_NAME,
   SESSION_CLAIMS_SETTING,
   type Change,
   type CommandError,
@@ -10,6 +11,7 @@ import {
   type RuntimeCatalog,
   type SessionClaims,
   CommandFailure,
+  versionEpochSchema,
 } from "simetra/model"
 import { logsDatabaseError, mapDatabaseError, type ErrorPhase } from "./errors"
 import { inCommand, outsideCommand, rejectNested } from "./hook-context"
@@ -112,6 +114,30 @@ const timeoutMs = (remaining: number) => Math.max(1, Math.ceil(remaining))
 const BEGIN = statement("BEGIN ISOLATION LEVEL READ COMMITTED")
 export const COMMIT = statement("COMMIT")
 const ROLLBACK = statement("ROLLBACK")
+/**
+ * The row version epoch of the database (P4-B spec §4.5): the one statement
+ * of a read transaction and of a command transaction alike.
+ */
+export const EPOCH = statement(
+  `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(ROW_VERSION_EPOCH_FUNCTION_NAME)}() AS epoch`
+)
+
+/**
+ * The epoch from the rows of {@link EPOCH}: 64 hex or `null` (the database
+ * has no epoch); any other answer throws — an anomaly.
+ */
+export function epochOf(
+  rows: readonly Record<string, unknown>[]
+): string | null {
+  const epoch = rows[0]?.epoch
+  if (rows.length === 1 && epoch === null) return null
+  const parsed = versionEpochSchema.safeParse(epoch)
+  if (rows.length !== 1 || !parsed.success) {
+    throw new Error("row version epoch is not 64 hex")
+  }
+  return parsed.data
+}
+
 /** `SET LOCAL ROLE` на роль команд — і в транзакції створення рантайму. */
 export const COMMAND_ROLE = statement(
   `SET LOCAL ROLE ${ident(PLATFORM_ROLES.command)}`
@@ -471,6 +497,7 @@ async function attempt(
   const tx: Transaction = new Transaction(client, state, deadline)
   tx.act = act
   const rows: Record<string, unknown>[] = []
+  let epoch: string | null = null
   let tag: string
   try {
     tag = await inCommand({ command, tx, depth: 0 }, async () => {
@@ -485,6 +512,17 @@ async function attempt(
       tx.user = user
       for (const op of ops) {
         rows.push(await runPhase(tx, op, fullTabularArrays))
+      }
+      // Епоха — після записів команди, у її транзакції: скидання епохи бере
+      // `LOCK … IN SHARE MODE` на таблиці видів і чекає `COMMIT` цієї
+      // транзакції, тож версії результату належать саме прочитаній епосі
+      // (§7.2 п. 3, §7.4). Прочитана до записів, вона могла б змінитися між
+      // оператором і записом.
+      const { rows: epochRows } = await tx.enqueue([EPOCH])
+      try {
+        epoch = epochOf(epochRows)
+      } catch (error) {
+        tx.anomaly(error)
       }
       return (await tx.enqueue([COMMIT])).command
     })
@@ -518,7 +556,10 @@ async function attempt(
       },
     }
   }
-  return { result: { rows, changes: tx.changes }, afterCommit: tx.afterCommit }
+  return {
+    result: { rows, changes: tx.changes, epoch },
+    afterCommit: tx.afterCommit,
+  }
 }
 
 /**

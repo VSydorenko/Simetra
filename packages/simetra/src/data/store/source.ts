@@ -5,17 +5,27 @@ import {
   READ_BATCH_MAX,
   READ_LIMIT_MAX,
   WireDecodeError,
+  changesFromWire,
+  decodeRow,
   errorFromWire,
+  operationToWire,
   readQueryToWire,
   readResultFromWire,
+  versionValueSchema,
+  wireReadPartsResultSchema,
+  wireRunResultSchema,
   type CatalogEntry,
   type CatalogIndex,
+  type Change,
   type CommandError,
   type KnownMarker,
   type MetadataRef,
+  type Operation,
   type ReadQuery,
   type ReadRows,
   type SourceAdapter,
+  type VersionValue,
+  type WireOperation,
   type WireQueryPart,
   type WireReadParts,
   type WireRowsQuery,
@@ -115,9 +125,45 @@ export interface CoreReadResult {
 }
 
 /**
- * The core's read source over the per-object source adapters: maps logical
- * queries to the wire form, groups them into requests per adapter, reads
- * through the shared limiter and decodes the answers back to logical names.
+ * What the core sends past the source adapters (P4-B spec §5.1): a write and
+ * the catalog version go only through the data transport, whichever adapter
+ * reads the object. Each method resolves with the raw `value` of the
+ * response — the core checks its form — and rejects with `CommandFailure`
+ * when the whole request is refused.
+ */
+export interface ServerPort {
+  /** Sends one `run` request of one operation. */
+  run(request: {
+    operation: WireOperation
+    kernels: Record<string, string>
+  }): Promise<unknown>
+  /** Sends one `read` request with a single `version` part. */
+  version(): Promise<unknown>
+}
+
+/**
+ * The outcome of {@link CoreSource.run}: per operation its confirmed row, or
+ * `undefined` when the answer carries none (over the response budget), the
+ * change set and the row version epoch of the command transaction.
+ */
+export type CoreRunResult =
+  | {
+      ok: true
+      rows: (ServerRow | undefined)[]
+      changes: Change[]
+      epoch: string
+    }
+  | { ok: false; error: CommandError }
+
+/** The outcome of {@link CoreSource.version}. */
+export type CoreVersionResult =
+  { ok: true; version: VersionValue } | { ok: false; error: CommandError }
+
+/**
+ * The core's source over the per-object source adapters and the server
+ * port: maps logical queries and operations to the wire form, groups reads
+ * into requests per adapter, reads through the shared limiter and decodes the
+ * answers back to logical names.
  */
 export interface CoreSource {
   /**
@@ -127,6 +173,21 @@ export interface CoreSource {
    * every part of a request the adapter rejected with `CommandFailure`.
    */
   read(parts: readonly RowsQuery[]): Promise<CoreReadResult>
+  /**
+   * Runs one operation through the server port with the kernel hash of its
+   * object, outside the read limiter. A value the mapping cannot encode is
+   * `command.invalid` with its logical `path` and never reaches the port; a
+   * name outside the catalog throws `TypeError` (a defect of the caller). An
+   * answer of the wrong form — the epoch missing or `null` included — is
+   * `command.internal`; a refused request is its error.
+   */
+  run(operation: Operation): Promise<CoreRunResult>
+  /**
+   * Reads the catalog version through the server port, never through a
+   * source adapter. An answer of the wrong form is `command.internal`; a
+   * refused request or part is its error.
+   */
+  version(): Promise<CoreVersionResult>
   /**
    * Closes the read limiter of the source (session close): a read still
    * queued never goes out and rejects with {@link ReadLimiterClosed}.
@@ -142,10 +203,26 @@ export const BATCH_RETRY_MAX = 5
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms))
 
-const internal = (): CoreReadItem => ({
+const internal = (): { ok: false; error: CommandError } => ({
   ok: false,
   error: { code: "command.internal" },
 })
+
+/**
+ * Відповідь порту: сире значення чи відмова всього запиту. Інший виняток —
+ * не відмова сервера, а дефект: він виходить назовні, як і в читанні.
+ */
+async function answerOf(
+  request: () => Promise<unknown>
+): Promise<{ ok: true; value: unknown } | { ok: false; error: CommandError }> {
+  try {
+    return { ok: true, value: await request() }
+  } catch (error) {
+    if (error instanceof CommandFailure)
+      return { ok: false, error: error.error }
+    throw error
+  }
+}
 
 const retryReason = (item: CoreReadItem): string | undefined =>
   !item.ok &&
@@ -172,7 +249,8 @@ const retryReason = (item: CoreReadItem): string | undefined =>
 export function createCoreSource(
   sourceFor: (object: MetadataRef) => SourceAdapter,
   index: CatalogIndex,
-  limiter: ReadLimiter
+  limiter: ReadLimiter,
+  server: ServerPort
 ): CoreSource {
   const decode = (
     query: RowsQuery,
@@ -274,8 +352,78 @@ export function createCoreSource(
     }
   }
 
+  /**
+   * Рядки результату `run` за операціями. Значення — від сервера: хибна форма
+   * рядка, зміни поза каталогом чи рядків не стільки, скільки операцій, —
+   * дефект сервера, а не вводу ядра.
+   */
+  const decodeRun = (
+    entry: CatalogEntry,
+    id: string | undefined,
+    value: unknown
+  ): CoreRunResult => {
+    const parsed = wireRunResultSchema.safeParse(value)
+    if (!parsed.success) return internal()
+    const { rows, changes, epoch } = parsed.data
+    const mapped = changesFromWire(index, changes)
+    if (!mapped.ok) return internal()
+    // Без `rows` — відповідь понад бюджет: рядок ядро перечитує за ключем.
+    if (rows === undefined) {
+      return { ok: true, rows: [undefined], changes: mapped.value, epoch }
+    }
+    if (rows.length !== 1) return internal()
+    try {
+      const row = serverRow(entry, decodeRow(entry, rows[0]!), epoch)
+      // Рядок чужого ключа write-back записав би не туди: це дефект сервера.
+      if (id !== undefined && row.key.toLowerCase() !== id.toLowerCase()) {
+        return internal()
+      }
+      return { ok: true, rows: [row], changes: mapped.value, epoch }
+    } catch (error) {
+      if (error instanceof WireDecodeError || error instanceof CommandFailure) {
+        return internal()
+      }
+      throw error
+    }
+  }
+
   return {
     close: () => limiter.close(),
+    async run(operation) {
+      const entry = index.byRef.get(
+        `${operation.object.kind}.${operation.object.name}`
+      )
+      if (entry === undefined) {
+        throw new TypeError("run: object outside the catalog")
+      }
+      const mapped = operationToWire(index, operation)
+      if (!mapped.ok) {
+        if ("invalid" in mapped) return { ok: false, error: mapped.invalid }
+        throw new TypeError("run: name outside the catalog")
+      }
+      // Хеш ядра лише об'єкта операції: за ним сервер звіряє контракт, з
+      // яким клієнт зібрав команду (Рд12). Запис не займає слота читання.
+      const answer = await answerOf(() =>
+        server.run({
+          operation: mapped.value,
+          kernels: { [entry.id]: entry.kernelHash },
+        })
+      )
+      const id = "id" in operation ? operation.id : undefined
+      return answer.ok ? decodeRun(entry, id, answer.value) : answer
+    },
+    async version() {
+      const answer = await answerOf(() => server.version())
+      if (!answer.ok) return answer
+      const parsed = wireReadPartsResultSchema.safeParse(answer.value)
+      if (!parsed.success || parsed.data.items.length !== 1) return internal()
+      const [item] = parsed.data.items
+      if (!item!.ok) {
+        return { ok: false, error: errorFromWire(index, item!.error) }
+      }
+      const version = versionValueSchema.safeParse(item!.value)
+      return version.success ? { ok: true, version: version.data } : internal()
+    },
     async read(parts) {
       const wires = parts.map((query): WireQueryPart => {
         const mapped = readQueryToWire(index, query)
@@ -318,6 +466,10 @@ export function tracked(source: CoreSource): {
     epochs,
     source: {
       close: () => source.close(),
+      // Запис і версія каталогу — не читання: їхні епохи шлюз читання не
+      // приймає (епоху `run` звіряє write-back).
+      run: (operation) => source.run(operation),
+      version: () => source.version(),
       async read(parts) {
         const result = await source.read(parts)
         for (const item of result.items) if (item.ok) epochs.add(item.epoch)

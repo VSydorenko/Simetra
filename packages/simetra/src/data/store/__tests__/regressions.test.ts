@@ -264,6 +264,7 @@ describe("close clears the service maps", () => {
       releaseTimers: 0,
       preloadTimers: 0,
       switchTimers: 0,
+      journal: 0,
       sectionOwners: 0,
       sectionOwnerVersions: 0,
     })

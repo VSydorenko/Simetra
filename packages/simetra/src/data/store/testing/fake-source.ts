@@ -2,7 +2,9 @@ import {
   CommandFailure,
   LIMIT_REASONS,
   catalogIndex,
+  encodeRow,
   errorToWire,
+  operationFromWire,
   readPartFromWire,
   readQuerySchema,
   readResultToWire,
@@ -28,6 +30,7 @@ import {
   filterCollator,
 } from "../filter"
 import { scopeOf } from "../object-store"
+import type { ServerPort } from "../source"
 import type { Key, ObjectName, ServerRow, Values } from "../types"
 
 /**
@@ -53,6 +56,8 @@ export interface FakeSourceInit {
   readonly responseRows?: number
   /** The row version epoch of the fake database; default `null`. */
   readonly epoch?: string | null
+  /** The catalog snapshot hash a `version` part answers; default `"fake-snapshot"`. */
+  readonly snapshotHash?: string
 }
 
 /** One read part the fake server received, in the order of arrival. */
@@ -94,6 +99,16 @@ export interface FakeRead {
 export interface FakeSource {
   /** The adapter the core reads through. */
   readonly adapter: SourceAdapter
+  /**
+   * The server port of the core: `run` serves one `update` (a version other
+   * than `expectedVersion` is `command.conflict`, a kernel hash other than
+   * the catalog's is `command.stale-client`) and answers in a microtask with
+   * the row without lazy columns, its change and {@link epoch}; `version`
+   * answers {@link snapshotHash} and the kernel hashes of the catalog.
+   */
+  readonly server: ServerPort
+  /** The catalog snapshot hash a `version` part answers. */
+  snapshotHash: string
   readonly index: CatalogIndex
   /**
    * The row version epoch of the database. A part with `known` of the same
@@ -443,9 +458,83 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
     }
   }
 
+  /** Запис `update`, як його виконав би сервер: звірка версії, рядок і зміна. */
+  const runUpdate = (request: Parameters<ServerPort["run"]>[0]) => {
+    const decoded = operationFromWire(index, request.operation)
+    if (!decoded.ok) {
+      throw new CommandFailure(
+        "invalid" in decoded
+          ? decoded.invalid
+          : { code: "command.stale-client" }
+      )
+    }
+    const op = decoded.value
+    if (op.action !== "update") throw new Error("fake: only update is served")
+    const entry = entryOf(op.object)
+    if (request.kernels[entry.id] !== entry.kernelHash) {
+      throw new CommandFailure({ code: "command.stale-client" })
+    }
+    const { current } = liveRow(op.object, op.id)
+    const currentVersion = current[entry.versionName] as number
+    if (currentVersion !== op.expectedVersion) {
+      throw new CommandFailure({
+        code: "command.conflict",
+        reason: "version",
+        currentVersion,
+      })
+    }
+    const version = write(op.object, op.id, { ...current, ...op.values })
+    const values = valueAt(tableOf(op.object).get(op.id)!, version)!
+    // Рядок `run` — без лінивих колонок і без ТЧ, як після `fitRunResult`.
+    const lazy = new Set(
+      entry.attributes.filter((a) => a.load === "lazy").map((a) => a.name)
+    )
+    const row = Object.fromEntries(
+      Object.entries(values).filter(([name]) => !lazy.has(name))
+    )
+    const scope = scopeOf(entry, values)
+    return {
+      rows: [encodeRow(entry, row)],
+      changes: [
+        {
+          object: entry.id,
+          ...(entry.scopeKindId === undefined
+            ? {}
+            : { scopeKind: entry.scopeKindId }),
+          ...(scope === null ? {} : { scope }),
+          id: op.id,
+          version,
+          operation: "update" as const,
+        },
+      ],
+      epoch: fake.epoch,
+    }
+  }
+
   const fake: FakeSource = {
     index,
     epoch: init.epoch ?? null,
+    snapshotHash: init.snapshotHash ?? "fake-snapshot",
+    server: {
+      // Запис і відповідь — мікрозадачею: викликач, як і з транспортом,
+      // не бачить результату синхронно.
+      run: (request) => Promise.resolve().then(() => runUpdate(request)),
+      version: () =>
+        Promise.resolve({
+          epoch: fake.epoch,
+          items: [
+            {
+              ok: true,
+              value: {
+                snapshotHash: fake.snapshotHash,
+                objects: Object.fromEntries(
+                  init.objects.map((entry) => [entry.id, entry.kernelHash])
+                ),
+              },
+            },
+          ],
+        }),
+    },
     get requests() {
       return requests
     },

@@ -6,6 +6,7 @@ import {
 } from "simetra/model"
 import { runtimeHandleOf, type RuntimeHandle } from "./runtime/handle"
 import type { DataRuntime } from "./runtime/runtime"
+import type { ServerPort } from "./store/source"
 
 /**
  * The Server Function source adapter (P4-B spec §5.2): the parts go through
@@ -40,6 +41,19 @@ export function serverFunctionAdapter(
       }
       return parsed.data
     },
+  }
+}
+
+/**
+ * The Server Function side of what never goes through a source adapter
+ * (P4-B spec §5.1): a `run` request and a `read` request with one `version`
+ * part, both through the transport wrapper. The values stay raw: the core
+ * source checks their form.
+ */
+export function serverFunctionPort(send: RuntimeHandle["send"]): ServerPort {
+  return {
+    run: ({ operation, kernels }) => send({ type: "run", operation, kernels }),
+    version: () => send({ type: "read", items: [{ type: "version" }] }),
   }
 }
 

@@ -5,16 +5,25 @@ import {
   OBJECT_ID,
   SCOPE_KIND_ID,
 } from "../../../model/runtime/__tests__/entries"
-import { channelTopic, readResultFromWire, type ReadRows } from "simetra/model"
+import {
+  CommandFailure,
+  channelTopic,
+  readResultFromWire,
+  type CommandError,
+  type ReadRows,
+} from "simetra/model"
 import { DataError } from "../../errors"
 import { coreInternals, type CoreSession, type DefectFlag } from "../core"
 import { compareRows, fieldInfoOf, filterCollator } from "../filter"
 import { visibleRow } from "../object-store"
+import type { ServerPort } from "../source"
 import type { Subset } from "../subsets"
 import type { FakeRead } from "../testing/fake-source"
 import type {
   CloseReason,
   Key,
+  MutationResult,
+  MutationState,
   ObjectName,
   RowView,
   ViewHandle,
@@ -122,6 +131,9 @@ const CHANNELS = [
 
 type How = "ok" | "stale" | "forbidden" | "missing" | "unavailable"
 
+/** How the model answers a held `run` (план B3-4-Л, задача 4). */
+type RunHow = "ok" | "conflict" | "forbidden" | "unavailable"
+
 type Step =
   | { t: "sub"; v: number }
   | { t: "unsub"; v: number; release: boolean }
@@ -154,15 +166,27 @@ type Step =
   | { t: "time"; ms: number }
   | { t: "epoch"; which: number }
   | { t: "close"; reason: CloseReason }
+  | { t: "update"; k: number; lazy: boolean; base: number }
+  | { t: "run"; pick: number; how: RunHow; at: number }
+  | { t: "act"; k: number; act: "retry" | "cancel" | "dismiss" }
+  | {
+      t: "onMutation"
+      pick: number
+      what: "edit" | "purge" | "hide" | "remove"
+    }
+  | { t: "removeMut"; k: number; cancel: boolean }
+  | { t: "closeInFlight" }
 
 const view = fc.nat(SPECS.length - 1)
 const k = fc.nat(KEYS.length - 1)
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 
 /**
- * Ваги (бриф, крок 1): сума 243 (перемикання епохи — 6; `hide` над
- * ТЧ-підмножиною — 6; сторінка вікна — 8); `purge` (16 + 14), відсутній рядок і
- * застаріла репліка — по 30, тобто по ~13,5 % кроків (частина кроків
+ * Ваги (бриф, крок 1): сума 293 (перемикання епохи — 6; `hide` над
+ * ТЧ-підмножиною — 6; сторінка вікна — 8; запис — 50: `update` 14, відповідь
+ * `run` 20, дії мутації 8, чужа правка, `purge` чи `hide` ключа з мутацією 6,
+ * `dispose()` з мутацією в дорозі 2); `purge` (16 + 14), відсутній рядок і
+ * застаріла репліка — по 30, тобто по ~11 % кроків (частина кроків
  * `answer` порожня, бо в польоті нічого нема, тож серед дійових кроків
  * частка вища, близько 15 %). Самотест тримає насіння, яке знаходить
  * дефекти за кількістю прогонів: зміна генератора (ваги, профілі, масиви
@@ -313,6 +337,62 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
     weight: 6,
     arbitrary: fc.record({ t: one("epoch"), which: fc.nat(EPOCHS.length - 1) }),
   },
+  // Запис (план B3-4-Л, задача 4): `update` з базою — підтвердженою версією,
+  // серверною чи застарілою; ліниве поле перечитує картка.
+  {
+    weight: 14,
+    arbitrary: fc.record({
+      t: one("update"),
+      k,
+      lazy: fc.boolean(),
+      base: fc.nat(2),
+    }),
+  },
+  // Відповідь на будь-який `run` у польоті в будь-якому порядку.
+  ...(
+    [
+      ["ok", 10],
+      ["conflict", 3],
+      ["forbidden", 3],
+      ["unavailable", 4],
+    ] as const
+  ).map(([how, weight]) => ({
+    weight,
+    arbitrary: fc.record({
+      t: one("run"),
+      pick: fc.nat(3),
+      how: fc.constant<RunHow>(how),
+      at: fc.nat(1),
+    }),
+  })),
+  {
+    weight: 8,
+    arbitrary: fc.record({
+      t: one("act"),
+      k,
+      act: fc.constantFrom<"retry" | "cancel" | "dismiss">(
+        "retry",
+        "cancel",
+        "dismiss"
+      ),
+    }),
+  },
+  // Чужа правка, `purge` чи `hide` саме ключа з мутацією: випадкові кроки
+  // рідко влучають у нього.
+  {
+    weight: 6,
+    arbitrary: fc.record({
+      t: one("onMutation"),
+      pick: fc.nat(3),
+      what: fc.constantFrom<"edit" | "purge" | "hide" | "remove">(
+        "edit",
+        "purge",
+        "hide",
+        "remove"
+      ),
+    }),
+  },
+  { weight: 2, arbitrary: fc.record({ t: one("closeInFlight") }) },
   {
     weight: 1,
     arbitrary: fc.record({
@@ -337,6 +417,53 @@ interface Delivery {
 }
 
 class ModelFailure extends Error {}
+
+/** One attempt of a mutation as the model tracks it. */
+interface ModelAttempt {
+  id: string
+  readonly key: Key
+  /** The stored scope of the key at the start; `undefined` — no row. */
+  readonly scope: string | null | undefined
+  /** The core sent its `run` (a closed runtime sends nothing). */
+  sent: boolean
+  /** Cancelled or dismissed by the model while unsettled. */
+  cancelled: boolean
+  /** Unsettled at `close` or started after it: never `ok: true`. */
+  mustFail: boolean
+  /** The key (or its pair) was purged after the start: no row in `settled`. */
+  purged: boolean
+  /** What the model's server answered: `ok` or the refusal code. */
+  answer?: "ok" | CommandError["code"]
+  /** The version the server wrote for an `ok` answer of a live attempt. */
+  runVersion?: number
+  result?: MutationResult
+}
+
+/** A mutation in the journal as the model tracks it. */
+interface ModelEntry {
+  readonly key: Key
+  attempt: ModelAttempt
+  /** A purge or `removed` erased its fields (Р11): no `retry`. */
+  erased: boolean
+  /** The number of checks before the entry was created. */
+  readonly created: number
+}
+
+/** A `run` the model's server holds. */
+interface HeldRun {
+  readonly request: Parameters<ServerPort["run"]>[0]
+  readonly resolve: (value: unknown) => void
+  readonly reject: (error: unknown) => void
+  readonly attempt: ModelAttempt | undefined
+}
+
+/** The state of a mutation the refusal leaves (§7.3). */
+const refusedState = (code: CommandError["code"]): MutationState =>
+  code === "command.conflict"
+    ? "conflict"
+    : code === "command.unavailable"
+      ? "unknown"
+      : "failed"
 
 /**
  * Профіль прогону. `full` — кроки як згенеровано. Інші не тримають `full`
@@ -382,7 +509,30 @@ async function runModel(
   profile: Profile,
   defects: readonly DefectFlag[] = []
 ) {
-  const { fake, core, log, inspect } = setup({ limits: LIMITS, mode: "manual" })
+  // Порт запису моделі: кожен `run` тримається, доки крок `run` не відповість
+  // на нього (будь-який у будь-якому порядку); сервер пише лише тоді.
+  const runs: HeldRun[] = []
+  let sending: ModelAttempt | undefined
+  // Порушення, які модель бачить поза кроком: у слухачі чи в `settled`.
+  const asyncViolations: string[] = []
+  const { fake, core, log, inspect } = setup({
+    limits: LIMITS,
+    mode: "manual",
+    server: (f) => ({
+      run(request) {
+        const attempt = sending
+        sending = undefined
+        // Кожен `run` — від `update` чи `retry` моделі: автоповтору немає.
+        if (attempt === undefined)
+          asyncViolations.push("a run nobody asked for")
+        else attempt.sent = true
+        return new Promise((resolve, reject) =>
+          runs.push({ request, resolve, reject, attempt })
+        )
+      },
+      version: () => f.server.version(),
+    }),
+  })
   for (const flag of defects) inspect.defects.add(flag)
   const internals = coreInternals(core)
 
@@ -510,6 +660,7 @@ async function runModel(
     try {
       subs[v] = handles[v]!.subscribe(() => {
         frames++
+        checkFrame(v)
       })
     } catch (error) {
       if (!(error instanceof DataError) || error.code !== "data.views-limit")
@@ -568,11 +719,28 @@ async function runModel(
     const at = `${where} ${object}/${row.key}`
     if (row.state === "removed") return
     const max = maxVersion.get(versionKey(object, row.key)) ?? 0
-    if (row.version < max && row.state !== "stale")
+    const fields = Object.keys(row.values)
+    // Старі значення ніколи не показано мовчки — два інваріанти (рішення
+    // архітекторки, розвилка оракула 2): (1) рядок, що показує значення
+    // версії, нижчої за відому, несе факт `stale` за будь-якого стану (стан
+    // мутації затуляє показ `stale`, §6.5, але не факт); (2) схований рядок
+    // значень не показує зовсім — горизонт ховає й рядок, нижчу версію якого
+    // витіснена пам'ять уже не знає.
+    if (row.version < max && fields.length > 0 && row.stale !== true)
       fail(label, `${at}: version ${max} → ${row.version} as ${row.state}`)
     maxVersion.set(versionKey(object, row.key), Math.max(max, row.version))
-    const fields = Object.keys(row.values)
-    // Схований рядок значень не показує.
+    // Факт `stale` покриває кожну позначку застарілості збереженого рядка —
+    // нижчу версію, зміну епохи, розрив сигналів — за будь-якого стану
+    // мутації (§6.5); `hide` — окремий факт `hidden`.
+    const marks = objectOf(object).rows.get(row.key)?.stale
+    if (
+      marks !== undefined &&
+      (marks.minVersion !== undefined ||
+        marks.epoch !== undefined ||
+        marks.disconnect !== undefined) &&
+      row.stale !== true
+    )
+      fail(label, `${at}: a stale mark not shown as stale (${row.state})`)
     if (row.hidden === true && fields.length > 0)
       fail(label, `${at}: hidden with values`)
     if (fields.length === 0) return
@@ -584,7 +752,13 @@ async function runModel(
     const purged = purgeBarrier.get(id(object, row.key))
     if (purged !== undefined && !deliveredSince(object, row.key, purged))
       fail(label, `${at}: shown after purge without a later read`)
-    if (!deliveredVersion(object, row.key, row.version))
+    // Версія — з доставленого читання або з відповіді `run` живої спроби;
+    // бар'єри (`hide`, `purge`, `removed`) знімає лише читання: write-back
+    // позначок не знімає й прибраного не воскрешає (Р3, Р7, Р11).
+    if (
+      !deliveredVersion(object, row.key, row.version) &&
+      !runDelivered.has(`${id(object, row.key)}\u0000${row.version}`)
+    )
       fail(label, `${at}: version ${row.version} never delivered`)
     const server = fake.row(object, row.key, row.version)
     if (server === undefined || server.version !== row.version)
@@ -654,6 +828,9 @@ async function runModel(
       )
       if (!ok) fail(label, `${where}: owner version ${version} never read`)
       const header = objectOf(TASK).rows.get(owner)
+      // Схований власник не показує й рядків ТЧ (інваріант (2)).
+      if (header?.stale.hidden !== undefined && snap.section.lines.length > 0)
+        fail(label, `${where}: lines of a hidden owner`)
       // ТЧ власника `removed` показує причину без рядків (§6.2, правило 5).
       if (header?.removed !== undefined)
         fail(label, `${where}: lines of a removed owner`)
@@ -709,8 +886,13 @@ async function runModel(
       for (const [name, size] of Object.entries(inspect.serviceSizes())) {
         if (size !== 0) fail(label, `${name} = ${size} after close`)
       }
+      // Після `dispose()` кожна мутація осіла, і жодна — успіхом.
+      if (asyncViolations.length > 0) fail(label, asyncViolations[0]!)
+      if (attempts.some((a) => a.result === undefined))
+        fail(label, "a mutation unsettled after close")
       return
     }
+    if (asyncViolations.length > 0) fail(label, asyncViolations[0]!)
     const violations = inspect.violations()
     if (violations.length > 0) fail(label, violations.join("; "))
     // Межі §6.2: читання, пам'ять версій, надгробки й горизонт.
@@ -762,6 +944,11 @@ async function runModel(
         if (e.removed !== undefined) {
           if (before === undefined) {
             removedBarrier.set(id(name, k), stepStart)
+            // Перехід у `removed` стирає поля мутації ключа (Р11), що вже
+            // була в журналі до кроку.
+            const entry = name === TASK ? journal.get(k) : undefined
+            if (entry !== undefined && entry.created < checks)
+              entry.erased = true
           }
           wasRemoved.set(id(name, k), {
             divergent: e.removed.divergent,
@@ -821,6 +1008,7 @@ async function runModel(
     handles.forEach((handle, v) => {
       checkSnapshot(label, v, handle.getSnapshot())
     })
+    checkMutations(label)
     checkSectionReread(label)
     checkWindows(label)
   }
@@ -936,6 +1124,269 @@ async function runModel(
   let logAt = 0
   const restoredInStep = new Map<ObjectName, number>()
 
+  // ── Запис (план B3-4-Л, задача 4) ──
+  // Журнал моделі: мутація ключа, доки її не прибрав успіх, дія чи `close`.
+  const journal = new Map<Key, ModelEntry>()
+  const attempts: ModelAttempt[] = []
+  const attemptById = new Map<string, ModelAttempt>()
+  // Версії, які принесла відповідь `run` живої спроби: джерело показаного
+  // рядка поряд із читаннями, але не зняття бар'єрів.
+  const runDelivered = new Set<string>()
+  let checks = 0
+  // Епоха primary, на який іде `run`.
+  let primaryEpoch = EA
+
+  /** Starts tracking an attempt; `sending` links it to the `run` it sends. */
+  const begin = (key: Key) => {
+    const attempt: ModelAttempt = {
+      id: "",
+      key,
+      scope: objectOf(TASK).rows.get(key)?.scope,
+      sent: false,
+      cancelled: false,
+      mustFail: closed !== undefined,
+      purged: false,
+    }
+    sending = attempt
+    return attempt
+  }
+
+  /** Records the mutation a call returned and watches its `settled`. */
+  const track = (
+    attempt: ModelAttempt,
+    mutation: { id: string; settled: Promise<MutationResult> }
+  ) => {
+    sending = undefined
+    attempt.id = mutation.id
+    attempts.push(attempt)
+    attemptById.set(mutation.id, attempt)
+    if (closed !== undefined && attempt.sent)
+      asyncViolations.push(`${mutation.id}: sent after close`)
+    void mutation.settled.then((result) => settled(attempt, result))
+  }
+
+  const settled = (attempt: ModelAttempt, result: MutationResult) => {
+    attempt.result = result
+    const at = `${attempt.key} ${attempt.id}`
+    if (result.ok && attempt.mustFail)
+      asyncViolations.push(`${at}: settled ok after close`)
+    // Скасована спроба нічого не пише й рядків не віддає (Р9).
+    if (
+      result.ok &&
+      attempt.cancelled &&
+      result.rows.some((r) => r !== undefined)
+    )
+      asyncViolations.push(`${at}: a cancelled attempt settled with a row`)
+    if (result.ok && attempt.purged && result.rows[0] !== undefined)
+      asyncViolations.push(
+        `${at}: settled with a row of a key purged in flight`
+      )
+    if (!attempt.mustFail && !attempt.cancelled) {
+      // Результат — той, що дав сервер моделі, без автоповтору й підміни.
+      const answer = result.ok ? "ok" : result.error.code
+      if (attempt.answer !== answer)
+        asyncViolations.push(
+          `${at}: settled ${answer}, the server answered ${String(attempt.answer)}`
+        )
+    }
+    if (result.ok && result.rows[0] !== undefined) {
+      const row = result.rows[0]
+      const server = fake.row(TASK, attempt.key, row.version)
+      for (const [field, value] of Object.entries(row.values)) {
+        if (!Object.is(server?.values[field], value))
+          asyncViolations.push(
+            `${at}: settled ${field} ≠ server at ${row.version}`
+          )
+      }
+    }
+    // Успіх прибирає мутацію з журналу; відмова лишає її (§6.5).
+    const entry = journal.get(attempt.key)
+    if (result.ok && entry?.attempt === attempt) journal.delete(attempt.key)
+  }
+
+  /** The row views of a task key in the subscribed views. */
+  const rowsOf = (k: Key) =>
+    SPECS.flatMap((spec, v) => {
+      if (subs[v] === undefined || spec.object !== TASK) return []
+      return handles[v]!.getSnapshot().rows.filter((r) => r.key === k)
+    })
+
+  /**
+   * Кадр слухача (§7.2, крок 3): рядок, версію якого приніс лише `run` його
+   * мутації, показаний без стану `pending` — запис і зняття мутації одним
+   * `commit`.
+   */
+  const checkFrame = (v: number) => {
+    if (closed !== undefined || SPECS[v]!.object !== TASK) return
+    for (const row of handles[v]!.getSnapshot().rows) {
+      if (row.state === "removed" || row.mutation?.state !== "pending") continue
+      const attempt = attemptById.get(row.mutation.id)
+      if (
+        // Версія саме цієї спроби: рядок, підтверджений попередньою, з
+        // новою мутацією `pending` — звичайний стан.
+        attempt?.runVersion === row.version &&
+        !deliveredVersion(TASK, row.key, row.version)
+      )
+        asyncViolations.push(
+          `view ${v} ${row.key}: the run row shown with its mutation pending`
+        )
+    }
+  }
+
+  /**
+   * Журнал ядра проти моделі: відмова не прибирає мутації мовчки, межа
+   * журналу (мутації плюс неосілі спроби — ні більше, ні менше), стан і дії в
+   * рядку, стерті поля після `purge` чи `removed` (Р5, Р7, Р11).
+   */
+  const checkMutations = (label: string) => {
+    const unsettled = attempts.filter((a) => a.result === undefined).length
+    const size = inspect.serviceSizes().journal
+    if (size !== journal.size + unsettled)
+      fail(
+        label,
+        `journal ${size}, model ${journal.size} + ${unsettled} unsettled`
+      )
+    const inCore = new Map(inspect.mutations().map((m) => [m.key, m]))
+    for (const m of inCore.values()) {
+      if (!journal.has(m.key))
+        fail(label, `${m.key}: mutation ${m.id} not in the model`)
+    }
+    for (const [k, entry] of journal) {
+      const m = inCore.get(k)
+      const { attempt } = entry
+      if (m === undefined || m.id !== attempt.id)
+        fail(label, `${k}: mutation ${attempt.id} left the journal silently`)
+      const state =
+        attempt.result === undefined
+          ? "pending"
+          : attempt.result.ok
+            ? undefined
+            : refusedState(attempt.result.error.code)
+      if (m!.state !== state)
+        fail(label, `${k}: mutation ${m!.state}, model ${String(state)}`)
+      if (entry.erased && !m!.erased)
+        fail(label, `${k}: the journal keeps values after purge or removed`)
+      for (const row of rowsOf(k)) {
+        const shown = row.mutation
+        if (shown?.id !== m!.id || shown.state !== m!.state)
+          fail(
+            label,
+            `${k}: row shows mutation ${String(shown?.id)} ${String(shown?.state)}`
+          )
+        // `hidden` і `removed` мають пріоритет показу над станом мутації (Р7);
+        // інакше рядок показує стан мутації — за `await` з підтвердженими
+        // значеннями (`checkRow`).
+        if (
+          row.state !== "removed" &&
+          row.hidden !== true &&
+          row.state !== m!.state
+        )
+          fail(label, `${k}: row ${row.state}, mutation ${m!.state}`)
+        if (entry.erased && shown!.retry !== undefined)
+          fail(label, `${k}: retry offered after the fields were erased`)
+        // Дії за станом (Р5): `retry` — лише `failed`, `dismiss` — лише
+        // `unknown`, `pending` без `removed` дій не має.
+        if (shown!.retry !== undefined && m!.state !== "failed")
+          fail(label, `${k}: retry offered on ${m!.state}`)
+        if ((shown!.dismiss !== undefined) !== (m!.state === "unknown"))
+          fail(label, `${k}: dismiss on ${m!.state}`)
+        if (
+          m!.state === "pending" &&
+          row.state !== "removed" &&
+          shown!.cancel !== undefined
+        )
+          fail(label, `${k}: cancel offered on a pending row`)
+        if (m!.state === "conflict" && shown!.cancel === undefined)
+          fail(label, `${k}: conflict without cancel`)
+      }
+    }
+    checks++
+  }
+
+  /** Answers a held `run`: the server writes only for `ok` (and committed `unavailable`). */
+  const answerRun = (held: HeldRun, how: RunHow, at: number) => {
+    const { attempt } = held
+    const k = attempt?.key
+    const refuse = (error: CommandError) => {
+      if (attempt !== undefined) attempt.answer = error.code
+      held.reject(new CommandFailure(error))
+    }
+    if (k === undefined || !live(TASK, k)) {
+      refuse({ code: "command.forbidden" })
+      return
+    }
+    if (how === "conflict") {
+      refuse({
+        code: "command.conflict",
+        reason: "version",
+        currentVersion: fake.row(TASK, k)!.version,
+      })
+      return
+    }
+    if (how === "forbidden") {
+      refuse({ code: "command.forbidden" })
+      return
+    }
+    // `unavailable` — обрив після `COMMIT` (через раз) чи до нього.
+    if (how === "unavailable" && at === 0) {
+      refuse({ code: "command.unavailable" })
+      return
+    }
+    fake.server.run(held.request).then(
+      (value) => {
+        if (how === "unavailable") {
+          refuse({ code: "command.unavailable" })
+          return
+        }
+        attempt!.answer = "ok"
+        // `run` іде на primary, і його епоха не `null` (§7.2 п. 3): `null`
+        // моделі — репліка читання чи база до першого перемикання.
+        const raw = value as Record<string, unknown>
+        if (raw.epoch === null) value = { ...raw, epoch: primaryEpoch }
+        // Відповідь скасованої спроби чи після `close` показати не можна.
+        if (!attempt!.cancelled && closed === undefined) {
+          attempt!.runVersion = fake.row(TASK, k)!.version
+          runDelivered.add(`${id(TASK, k)}\u0000${attempt!.runVersion}`)
+        }
+        held.resolve(value)
+      },
+      (error: unknown) => {
+        // Звірка версії сервера: `conflict` з поточною версією.
+        if (error instanceof CommandFailure) attempt!.answer = error.error.code
+        held.reject(error)
+      }
+    )
+  }
+
+  /** Drops the model entry by a user action; an unsettled attempt is cancelled. */
+  const dropEntry = (entry: ModelEntry) => {
+    journal.delete(entry.key)
+    if (entry.attempt.result === undefined) entry.attempt.cancelled = true
+  }
+
+  /**
+   * Кроки над ключем з мутацією — чужа правка, `purge` чи `hide` того ключа,
+   * `dispose()` з `run` у дорозі; без мутації — над випадковим ключем.
+   */
+  const onMutation = (step: Step): Step => {
+    if (step.t === "closeInFlight")
+      return runs.length > 0
+        ? { t: "close", reason: "disposed" }
+        : { t: "time", ms: 500 }
+    if (step.t !== "onMutation") return step
+    const keys = [...journal.keys()]
+    const at =
+      keys.length === 0
+        ? step.pick % KEYS.length
+        : KEYS.indexOf(keys[step.pick % keys.length]!)
+    if (step.what === "edit")
+      return { t: "edit", k: at, title: step.pick % TITLES.length }
+    if (step.what === "purge") return { t: "purgeKey", org: false, k: at }
+    if (step.what === "remove")
+      return { t: "removeMut", k: at, cancel: step.pick % 2 === 0 }
+    return { t: "hide", org: false, k: at }
+  }
+
   const lean = profile !== "full"
   const plan = lean ? steps.map((s) => leanStep(s, profile)) : steps
 
@@ -943,8 +1394,14 @@ async function runModel(
     // Половина прогонів стартує з даними: список і `full` (чи другий список)
     // завантажені.
     const second = lean ? 9 : 5
-    subs[0] = handles[0]!.subscribe(() => frames++)
-    subs[second] = handles[second]!.subscribe(() => frames++)
+    subs[0] = handles[0]!.subscribe(() => {
+      frames++
+      checkFrame(0)
+    })
+    subs[second] = handles[second]!.subscribe(() => {
+      frames++
+      checkFrame(second)
+    })
     for (let i = 0; i < 50 && fake.pending.length > 0; i++) {
       await flush()
       while (fake.pending.length > 0) {
@@ -1047,7 +1504,8 @@ async function runModel(
     core.commit(fn, core.token())
   }
 
-  for (const [n, s] of plan.entries()) {
+  for (const [n, raw] of plan.entries()) {
+    const s = onMutation(raw)
     const label = `step ${n} ${JSON.stringify(s)}`
     const stepStart = fake.log.length
     logAt = log.length
@@ -1231,6 +1689,14 @@ async function runModel(
         const target = s.org ? ORG_KEYS[s.k % 2]! : KEYS[s.k]!
         commit((w) => w.purge(object, { keys: [target] }))
         if (closed !== undefined) break
+        if (object === TASK) {
+          // Надгробок ключа: відповідь польоту значень не пише, а журнал
+          // стирає поля (Р11).
+          for (const a of attempts)
+            if (a.result === undefined && a.key === target) a.purged = true
+          const entry = journal.get(target)
+          if (entry !== undefined) entry.erased = true
+        }
         purgedKeys = { object, keys: [target] }
         purgedTargets.add(id(object, target))
         purgeBarrier.set(id(object, target), stepStart)
@@ -1251,6 +1717,22 @@ async function runModel(
         purgedKeys = {
           object,
           keys: held.filter((k) => objectOf(object).rows.get(k) === undefined),
+        }
+        if (object === TASK) {
+          // Надгробок пари — для спроби зі скоупом пари на старті; надгробок
+          // ключа — для прибраного ключа. Поля стирає запис цього скоупу чи
+          // невідомого (Р11).
+          const buried = new Set(purgedKeys.keys)
+          for (const a of attempts)
+            if (
+              a.result === undefined &&
+              (a.scope === scope || buried.has(a.key))
+            )
+              a.purged = true
+          for (const entry of journal.values()) {
+            const at = entry.attempt.scope
+            if (at === undefined || at === scope) entry.erased = true
+          }
         }
         for (const k of purgedKeys.keys) purgedTargets.add(id(object, k))
         // Власник без шапки в сховищі, чиї рядки ТЧ прибрано, — прибраний;
@@ -1368,9 +1850,124 @@ async function runModel(
         break
       case "epoch":
         fake.epoch = EPOCHS[s.which]!
+        if (fake.epoch !== null) primaryEpoch = fake.epoch
         break
+      case "update": {
+        const k = KEYS[s.k]!
+        const stored = objectOf(TASK).rows.get(k)
+        const server = fake.row(TASK, k)
+        // База: підтверджена версія сховища, серверна чи застаріла.
+        const base =
+          s.base === 0
+            ? (stored?.version ?? server?.version ?? 1)
+            : s.base === 1
+              ? (server?.version ?? 1)
+              : Math.max(1, (stored?.version ?? 1) - 1)
+        const values = s.lazy ? { notes: `w${n}` } : { title: `u${n}` }
+        const existing = journal.get(k)
+        const pending =
+          closed === undefined &&
+          existing !== undefined &&
+          existing.attempt.result === undefined
+        const attempt = begin(k)
+        let mutation
+        try {
+          mutation = core.update(TASK, k, values, { expectedVersion: base })
+        } catch (error) {
+          sending = undefined
+          // Одна мутація на ключ (Р1): `pending` — відмова до журналу.
+          if (
+            pending &&
+            error instanceof DataError &&
+            error.code === "data.mutation-pending"
+          )
+            break
+          throw error
+        }
+        if (pending) fail(label, `${k}: an update of a pending key went out`)
+        if (closed === undefined && !attempt.sent)
+          fail(label, `${k}: an update sent no run`)
+        track(attempt, mutation)
+        if (closed === undefined)
+          journal.set(k, { key: k, attempt, erased: false, created: checks })
+        break
+      }
+      case "run": {
+        if (runs.length === 0) break
+        // Як і з читаннями: з кінця черги, тож давні `run` доходять пізно.
+        const [held] = runs.splice(runs.length - 1 - (s.pick % runs.length), 1)
+        answerRun(held!, s.how, s.at)
+        break
+      }
+      case "removeMut": {
+        // Ключ з мутацією стає `removed`: RLS на мить ховає його скоуп від
+        // перечитування виглядів; дія «Скасувати» `removed` з мутацією в
+        // дорозі — відповідь після неї нічого не пише (Р7, Р9).
+        const k = KEYS[s.k]!
+        const row = fake.row(TASK, k)
+        if (row === undefined || closed !== undefined) break
+        const hiddenScope = row.values.org as string
+        fake.setVisibleScopes(
+          (visibility ?? SCOPES).filter((x) => x !== hiddenScope)
+        )
+        core
+          .revalidate(TASK, { visibleOnly: false })
+          .catch((error: unknown) => errors.push(error))
+        for (let round = 0; round < 20; round++) {
+          await flush()
+          const own = fake.pending.filter(
+            (r) => fake.log.indexOf(r.log) >= stepStart
+          )
+          if (own.length === 0) break
+          for (const read of own) {
+            fake.take((r) => r === read).answer()
+            record(read)
+          }
+        }
+        fake.setVisibleScopes(visibility)
+        const entry = journal.get(k)
+        const shown = rowsOf(k)[0]
+        if (
+          s.cancel &&
+          entry !== undefined &&
+          shown?.state === "removed" &&
+          shown.mutation?.id === entry.attempt.id &&
+          shown.mutation.cancel !== undefined
+        ) {
+          shown.mutation.cancel()
+          dropEntry(entry)
+        }
+        break
+      }
+      case "act": {
+        const k = KEYS[s.k]!
+        const entry = journal.get(k)
+        const shown = rowsOf(k)[0]?.mutation
+        if (entry === undefined || shown?.id !== entry.attempt.id) break
+        if (s.act === "retry") {
+          if (shown.retry === undefined) break
+          const attempt = begin(k)
+          const next = shown.retry()
+          if (next === undefined) {
+            sending = undefined
+            fail(label, `${k}: retry offered, no attempt`)
+          }
+          if (!attempt.sent) fail(label, `${k}: retry sent no run`)
+          track(attempt, next!)
+          entry.attempt = attempt
+          break
+        }
+        const action = s.act === "cancel" ? shown.cancel : shown.dismiss
+        if (action === undefined) break
+        action()
+        dropEntry(entry)
+        break
+      }
       case "close":
         if (closed !== undefined) break
+        // Кожна неосіла мутація осідає закриттям, не успіхом.
+        for (const a of attempts) if (a.result === undefined) a.mustFail = true
+        journal.clear()
         core.close(s.reason)
         closed = {
           frames,
@@ -1397,6 +1994,20 @@ async function runModel(
     if (purgedKeys !== undefined) checkPurged(label, purgedKeys)
     noteGens(userViews.size > 0)
     stability(label, before, purgeStep)
+  }
+
+  // Відповіді на `run`, що лишились у польоті: сервер приймає кожен.
+  for (let i = 0; runs.length > 0; i++) {
+    if (i > 100) fail("drain runs", "runs never end")
+    const stepStart = fake.log.length
+    logAt = log.length
+    restoredInStep.clear()
+    const before = lists()
+    answerRun(runs.shift()!, "ok", 1)
+    await flush()
+    check(`drain run ${i}`, stepStart)
+    noteGens(false)
+    stability(`drain run ${i}`, before, false)
   }
 
   // Пізні відповіді на все, що лишилось у польоті: повільні читання й
@@ -1666,6 +2277,10 @@ const DEFECTS: readonly DefectFlag[] = [
   "page-without-generation",
   "window-copies-values",
   "bury-removed-current-epoch",
+  "predict-before-answer",
+  "settle-separate-commit",
+  "write-back-lifts-hidden",
+  "answer-after-cancel",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -1686,6 +2301,11 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // Читання між позначкою `removed` і похованням слота відкидається, тож
   // `full` чи вікно закінчують без рядка сервера.
   "bury-removed-current-epoch": /^converge .*(composition|lacks)/,
+  // Запис (план B3-4-Л, задача 4): кожен дефект — своєю перевіркою.
+  "predict-before-answer": /\.title = u\d+, server at/,
+  "settle-separate-commit": /the run row shown with its mutation pending/,
+  "write-back-lifts-hidden": /after hide without a later read/,
+  "answer-after-cancel": /a cancelled attempt settled with a row/,
 }
 
 describe("core model self-check", () => {

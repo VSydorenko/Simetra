@@ -1,12 +1,15 @@
 import { keyId } from "./epoch"
 import { lazyFieldStale, visibleRow, type RowEntry } from "./object-store"
+import type { OwnMutation } from "./overlay"
 import type {
   CloseReason,
   Key,
   ObjectName,
+  RowMutation,
   RowView,
   Values,
   ViewSnapshot,
+  WritePolicy,
 } from "./types"
 
 /*
@@ -71,33 +74,54 @@ const sameList = <T>(a: readonly T[], b: readonly T[]) =>
   a.length === b.length && a.every((x, i) => x === b[i])
 
 /**
+ * The values a row shows under the write mode of its own mutation (plan
+ * B3-4-Л «Шлях до #208»): `await` shows the confirmed row of the store.
+ */
+const SHOWN: Readonly<
+  Record<WritePolicy, (e: RowEntry) => Values | undefined>
+> = { await: visibleRow }
+
+/**
  * The view of a store entry, sharing `prev` (and its parts) while nothing
  * shown changed. A slot hidden by the eviction horizon shows no values;
  * `staleFields` are the lazy fields read with an older row version (§6.2
- * rule 2).
+ * rule 2). The state of an own mutation takes precedence over `stale`
+ * and `synced` (§6.5); `hidden` takes precedence over the mutation, which
+ * the view still carries with its actions (plan B3-4-Л Р7). The shown values
+ * come through the write mode `policy` of the mutation.
  */
 export function computeRowView(
   key: Key,
   e: RowEntry,
   lazyFields: readonly string[],
-  prev: RowView | undefined
+  prev: RowView | undefined,
+  mutation?: RowMutation,
+  policy: WritePolicy = "await"
 ): RowView {
   if (e.removed !== undefined) {
-    return prev?.state === "removed"
+    return prev?.state === "removed" && prev.mutation === mutation
       ? prev
-      : Object.freeze({ key, state: "removed" })
+      : Object.freeze({
+          key,
+          state: "removed",
+          ...(mutation === undefined ? {} : { mutation }),
+        })
   }
-  const shown = visibleRow(e)
+  const shown = SHOWN[policy](e)
   const values = shown ?? EMPTY_VALUES
   const { minVersion, disconnect, hidden: mark, epoch } = e.stale
   const hidden = mark !== undefined
+  // Факт, а не показ: стан мутації може затуляти `stale` (§6.5), а кожна
+  // позначка застарілості — нижча версія, зміна епохи, розрив сигналів —
+  // мусить лишатись видимою. `hide` — окремий факт `hidden`, не `stale`.
+  const outdated =
+    minVersion !== undefined || disconnect !== undefined || epoch !== undefined
   const state =
-    minVersion !== undefined ||
-    disconnect !== undefined ||
-    hidden ||
-    epoch !== undefined
-      ? "stale"
-      : "synced"
+    mutation !== undefined && !hidden
+      ? mutation.state
+      : outdated || hidden
+        ? "stale"
+        : "synced"
   const stale =
     shown === undefined
       ? NO_FIELDS
@@ -118,8 +142,10 @@ export function computeRowView(
     base.version === e.version &&
     base.state === state &&
     (base.hidden === true) === hidden &&
+    (base.stale === true) === outdated &&
     base.values === nextValues &&
     base.staleFields === staleFields &&
+    base.mutation === mutation &&
     base.refs === undefined
   )
     return base
@@ -130,6 +156,8 @@ export function computeRowView(
     state,
     staleFields,
     ...(hidden ? { hidden: true as const } : {}),
+    ...(outdated ? { stale: true as const } : {}),
+    ...(mutation === undefined ? {} : { mutation }),
   })
 }
 
@@ -147,8 +175,10 @@ export function withRefs(
     prev.version === base.version &&
     prev.state === base.state &&
     prev.hidden === base.hidden &&
+    prev.stale === base.stale &&
     prev.values === base.values &&
     prev.staleFields === base.staleFields &&
+    prev.mutation === base.mutation &&
     prev.refs !== undefined &&
     Object.keys(refs).every((name) => prev.refs?.[name] === refs[name])
   )
@@ -183,7 +213,19 @@ export interface RowViews {
   clear(): void
 }
 
-export function createRowViews(): RowViews {
+/**
+ * The own mutation a row view shows for a store entry, with its write mode;
+ * its `view` is the same object while it is unchanged, so a view stays shared.
+ */
+export type MutationOf = (
+  object: ObjectName,
+  key: Key,
+  e: RowEntry
+) => OwnMutation | undefined
+
+export function createRowViews(
+  mutationOf: MutationOf = () => undefined
+): RowViews {
   let clock = 0
   const revisions = new Map<string, number>()
   const cache = new Map<string, { rev: number; view: RowView }>()
@@ -217,7 +259,15 @@ export function createRowViews(): RowViews {
       const rev = revisions.get(id) ?? 0
       const cached = cache.get(id)
       if (cached !== undefined && cached.rev === rev) return cached.view
-      const view = computeRowView(key, e, lazyFields, cached?.view)
+      const own = mutationOf(object, key, e)
+      const view = computeRowView(
+        key,
+        e,
+        lazyFields,
+        cached?.view,
+        own?.view,
+        own?.policy
+      )
       cache.set(id, { rev, view })
       parts.set(id, { object, key })
       return view
@@ -278,6 +328,7 @@ export function shareSnapshot(
     prev.rows === rows &&
     prev.hasNewRows === next.hasNewRows &&
     prev.needsRefresh === next.needsRefresh &&
+    prev.isStale === next.isStale &&
     prev.section === section &&
     prev.strategy === next.strategy &&
     prev.truncated === next.truncated &&

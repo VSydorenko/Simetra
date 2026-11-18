@@ -63,6 +63,48 @@ function outsideUses(
   return out
 }
 
+/**
+ * Calls of the method `owner.member` (an interface declared in `declFile`)
+ * outside the file `allowed`: `file:line`.
+ */
+function memberCalls(
+  program: ts.Program,
+  files: readonly string[],
+  [owner, member]: readonly [string, string],
+  declFile: string,
+  allowed: string,
+  label: (file: string) => string
+): string[] {
+  const checker = program.getTypeChecker()
+  const out: string[] = []
+  for (const file of files) {
+    if (file === allowed) continue
+    const sf = program.getSourceFile(file)!
+    const visit = (n: ts.Node): void => {
+      if (
+        ts.isCallExpression(n) &&
+        ts.isPropertyAccessExpression(n.expression) &&
+        n.expression.name.text === member
+      ) {
+        const symbol = checker.getSymbolAtLocation(n.expression.name)
+        const declared = (symbol?.declarations ?? []).some(
+          (d) =>
+            d.getSourceFile().fileName === declFile &&
+            ts.isInterfaceDeclaration(d.parent) &&
+            d.parent.name.text === owner
+        )
+        if (declared) {
+          const line = sf.getLineAndCharacterOfPosition(n.getStart()).line + 1
+          out.push(`${label(file)}:${line}`)
+        }
+      }
+      ts.forEachChild(n, visit)
+    }
+    visit(sf)
+  }
+  return out
+}
+
 /** Members of the public `Writer` type (types.ts) by name. */
 function writerMembers(program: ts.Program, typesFile: string): string[] {
   const sf = program.getSourceFile(typesFile)!
@@ -75,7 +117,7 @@ function writerMembers(program: ts.Program, typesFile: string): string[] {
   )
 }
 
-function inline(sources: Record<string, string>) {
+function inlineProgram(sources: Record<string, string>) {
   const options = { ...BASE_OPTIONS, noLib: true }
   const host = ts.createCompilerHost(options, true)
   const files = new Map(
@@ -91,8 +133,16 @@ function inline(sources: Record<string, string>) {
   host.readFile = (file) => sources[file]
   host.directoryExists = (dir) => dir === "/v" || dir === "/"
   host.realpath = (path) => path
-  const program = ts.createProgram([...files.keys()], options, host)
-  return outsideUses(program, [...files.keys()], "/v/writer.ts", (f) => f)
+  return ts.createProgram([...files.keys()], options, host)
+}
+
+function inline(sources: Record<string, string>) {
+  return outsideUses(
+    inlineProgram(sources),
+    Object.keys(sources),
+    "/v/writer.ts",
+    (f) => f
+  )
 }
 
 describe("writer gate guard self-test", () => {
@@ -114,6 +164,28 @@ describe("writer gate guard self-test", () => {
         "/v/core.ts": `import { apply } from "./writer.ts"\napply()\n`,
       })
     ).toEqual([])
+  })
+})
+
+describe("write-back guard self-test", () => {
+  const types = `export interface Writer { writeBack(): void }\nexport interface Other { writeBack(): void }\n`
+  const calls = (sources: Record<string, string>) =>
+    memberCalls(
+      inlineProgram({ "/v/types.ts": types, ...sources }),
+      Object.keys(sources),
+      ["Writer", "writeBack"],
+      "/v/types.ts",
+      "/v/overlay.ts",
+      (f) => f
+    )
+
+  it("flags a Writer.writeBack call outside the journal, not one of another type", () => {
+    expect(
+      calls({
+        "/v/overlay.ts": `import type { Writer } from "./types.ts"\nexport const a = (w: Writer) => w.writeBack()\n`,
+        "/v/core.ts": `import type { Other, Writer } from "./types.ts"\nexport const b = (w: Writer, o: Other) => {\n  o.writeBack()\n  w.writeBack()\n}\n`,
+      })
+    ).toEqual(["/v/core.ts:4"])
   })
 })
 
@@ -156,8 +228,31 @@ describe("receiver writes go through Writer.apply", () => {
     expect(
       outsideUses(program, files, writerFile, (f) => relative(DATA, f))
     ).toEqual([])
+    // Результат власного запису пише лише журнал (план B3-4-Л, Р3), а
+    // сховище його бачить лише через `Writer.writeBack`.
+    expect(
+      memberCalls(
+        program,
+        files,
+        ["Writer", "writeBack"],
+        join(DATA, "store/types.ts"),
+        join(DATA, "store/overlay.ts"),
+        (f) => relative(DATA, f)
+      )
+    ).toEqual([])
+    expect(
+      memberCalls(
+        program,
+        files,
+        ["ObjectStore", "writeBack"],
+        join(DATA, "store/object-store.ts"),
+        writerFile,
+        (f) => relative(DATA, f)
+      )
+    ).toEqual([])
     const members = writerMembers(program, join(DATA, "store/types.ts"))
     expect(members).toContain("apply")
+    expect(members).toContain("writeBack")
     expect(members).not.toContain("patch")
     expect(members).not.toContain("remove")
   }, 60_000)

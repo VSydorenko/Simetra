@@ -22,7 +22,8 @@ export const SERVER_HASH = "server-hash"
 /** A client catalog with the default T0 test object (`Catalog.Task`). */
 export const clientCatalog = (): ClientCatalog => ({
   format: 1,
-  snapshotHash: "snapshot-hash",
+  // Збігається з `serverHash` відповідей: збіг не викликає запиту `version`.
+  snapshotHash: SERVER_HASH,
   provider: "supabase",
   objects: [catalogEntry()],
 })

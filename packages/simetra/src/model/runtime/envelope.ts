@@ -221,6 +221,20 @@ const runRequestSchema = z.union([
   }),
 ])
 
+/**
+ * The value of a `run` response as the client accepts it (P4-B spec §4.5,
+ * §7.2): a row per operation in wire form (absent over the response budget),
+ * the change set and the row version epoch of the command transaction.
+ */
+// Епоха обов'язкова й не `null`: версії результату порівнянні з версіями
+// сховища лише в одній епосі, а шляху write-back без епохи немає (§7.2 п. 3).
+// `null` від сервера — база без епохи, дефект для клієнта.
+export const wireRunResultSchema = z.strictObject({
+  rows: z.array(wireRowSchema).optional(),
+  changes: z.array(wireChangeSchema),
+  epoch: versionEpochSchema,
+})
+
 /** The catalog version a `version` part returns. */
 export const versionValueSchema = z.strictObject({
   snapshotHash: z.string(),

@@ -56,6 +56,14 @@ export type DefectFlag =
   | "bury-removed-current-epoch"
   /** The re-check deferred by a load in flight is queued only with listeners. */
   | "recheck-needs-listeners"
+  /** An `update` shows its values in the row before the answer. */
+  | "predict-before-answer"
+  /** The write-back of a `run` row and the settling of its mutation are two `commit`s. */
+  | "settle-separate-commit"
+  /** A write-back lifts the `hidden` mark of the key. */
+  | "write-back-lifts-hidden"
+  /** The answer of a cancelled attempt is written. */
+  | "answer-after-cancel"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

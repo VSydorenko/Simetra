@@ -145,9 +145,12 @@ describe("simetra", () => {
     const js = (await listPackedFiles(tarballs.simetra)).filter((f) =>
       f.endsWith(".js")
     )
-    // Єдиний виняток — чанк внутрішнього хендла рантайму, спільний для
-    // `simetra/data` і `simetra/data/react`: два входи одного яруса мусять
-    // ділити один `WeakMap`, а не мати кожен свій.
+    // Єдиний виняток — чанк `handle`, спільний для `simetra/data` і
+    // `simetra/data/react`. Правило: спільний чанк — лише спільний стан-одинак,
+    // який два входи одного яруса мусять ділити, а не мати кожен свій:
+    // `WeakMap` хендлів рантайму й лічильник id мутацій. Тому чанк несе рівно
+    // ці два модулі: журнал (`overlay`) чи інший модуль без спільного стану
+    // там — код входу, що втік у спільний чанк.
     expect(
       js.filter(
         (f) =>
@@ -155,6 +158,20 @@ describe("simetra", () => {
           !/^dist\/handle-[^/]+\.js$/.test(f)
       )
     ).toEqual([])
+    const shared = js.filter((f) => /^dist\/handle-[^/]+\.js$/.test(f))
+    expect(shared).toHaveLength(1)
+    const { stdout } = await exec("tar", [
+      "-xOzf",
+      tarballs.simetra,
+      `package/${shared[0]!}`,
+    ])
+    // Маркер модуля `// src/…` бандлер ставить перед кодом кожного модуля.
+    expect(
+      [...stdout.matchAll(/^\/\/ (src\/\S+\.ts)$/gm)].map((m) => m[1])
+    ).toEqual([
+      "src/data/runtime/handle.ts",
+      "src/data/store/closed-mutation.ts",
+    ])
   })
 
   it("declares react, react-dom, react-virtual and react-router as the only peers, all optional", async () => {
