@@ -249,6 +249,48 @@ export const stepMatching = (artifact: PlanArtifact, pattern: RegExp) =>
  * Читач цілі, на якій `plpgsql_check` немає й поставити його не можна: на
  * запиті фактів розширення справжній читач підмінено, решта — як є.
  */
+/**
+ * Грант, що відрізняється від бажаного лише опцією гранту (#277): ціль з
+ * опцією поверх простого бажаного — дрейф обох свідків (модель каталогу
+ * бачить одиницю з опцією, `*` в атомі привілею) і план, що її знімає;
+ * бажана опція поверх простого гранту — крок `WITH GRANT OPTION`. Спільний
+ * для профілів: роль API — свого профілю.
+ */
+export async function expectGrantOptionDrift(): Promise<void> {
+  // Гранти згенерованих таблиць дає компілятор, а таблиць `.sql` не пише,
+  // тож об'єкт — представлення модуля
+  const grant = (option: string) => ({
+    "sql/app/note.sql": [
+      "CREATE VIEW app.note AS SELECT 1 AS id;",
+      `GRANT SELECT ON app.note TO ${ANON}${option};`,
+    ].join("\n"),
+  })
+  const plain = await compiled(grant(""))
+  const optioned = await compiled(grant(" WITH GRANT OPTION"))
+  await inTarget(EMPTY, async (url) => {
+    await establish(url, plain)
+    await query(url, `grant select on app.note to ${ANON} with grant option`)
+    const drifted = planned(await plan(url, plain))
+    expect(drifted.drift?.reason).toBe("drift")
+    expect(drifted.drift?.sections).toContain("acl")
+    expect(drifted.drift?.paths).toContain(
+      `units.grant:grant:table:app.note:${ANON}:select*`
+    )
+    await applyArtifact(url, drifted, plain)
+    expect((await plan(url, plain)).status).toBe("unchanged")
+    const widened = planned(await plan(url, optioned))
+    expect(widened.drift).toBeNull()
+    expect(stepMatching(widened, /WITH GRANT OPTION/)).toHaveLength(1)
+    await applyArtifact(url, widened, optioned)
+    expect((await plan(url, optioned)).status).toBe("unchanged")
+  })
+  expect(
+    optioned.sqlUnits
+      .filter((u) => u.class === "grant" && u.name === "app.note")
+      .map((u) => u.identity)
+  ).toEqual([`grant:grant:table:app.note:${ANON}:select*`])
+}
+
 export const readerWithoutPlpgsqlCheck: ApplyDatabase = {
   statement: (target, sql) => dbs.reader.statement(target, sql),
   transaction: (target, end, fn) =>

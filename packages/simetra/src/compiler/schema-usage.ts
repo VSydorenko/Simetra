@@ -57,7 +57,10 @@ function grantedInSchemas(unit: SqlUnit): {
  * тій самій ролі буває й законною потребою застосунку. Тотожна дослівна
  * одиниця (та сама ідентичність, у будь-якому варіанті оператора) тому
  * перемагає: згенерована тоді не з'являється, і коли потреба платформи
- * зникає, грант застосунку лишається, а план його не відкликає.
+ * зникає, грант застосунку лишається, а план його не відкликає. Так само
+ * перемагає дослівний грант того самого `USAGE` з опцією гранту (атом
+ * `usage*`): він дає все, що згенерований, а два оператори на одну пару
+ * каталог тримає однією одиницею з опцією.
  */
 export function buildSchemaUsageUnits(
   units: readonly SqlUnit[],
@@ -90,6 +93,9 @@ export function buildSchemaUsageUnits(
         generator: "schemaUsage",
       }))
     )
-    .filter((unit) => !verbatim.has(unit.identity))
+    .filter(
+      (unit) =>
+        !verbatim.has(unit.identity) && !verbatim.has(`${unit.identity}*`)
+    )
     .sort((a, b) => compareStrings(a.identity, b.identity))
 }
