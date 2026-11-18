@@ -471,6 +471,34 @@ describe("write-back without a full row (Р3, Р4)", () => {
     expect(h.inspect.serviceSizes().journal).toBe(0)
   })
 
+  it("a key without an owner and a result of another epoch is read once by key and settles with the re-read row", async () => {
+    const h = harness()
+    seed(h.fake, 1, 2)
+    // Картка іншого ключа дає сесії поточну епоху; ключ K без власника.
+    const other = cardOf(h.core, key(2))
+    watch(other)
+    await settle()
+    const reads = h.fake.log.length
+    h.port.transform = (value) => ({ ...value, epoch: OTHER_EPOCH })
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: h.fake.row(TASK, K)!.version }
+    )
+    expect(await m.settled).toMatchObject({
+      ok: true,
+      rows: [{ key: K, versionEpoch: EPOCH, values: { title: "new" } }],
+    })
+    await settle()
+    const sent = h.fake.log.slice(reads)
+    expect(sent).toHaveLength(1)
+    expect(keysOf(sent[0]!.query)).toEqual([K])
+    // Ключ без власника перечитаний лише для осідання: слота не з'явилось.
+    expect(h.inspect.rowCount()).toBe(1)
+    expect(h.inspect.serviceSizes().journal).toBe(0)
+  })
+
   it("a failed re-read settles with rows [undefined] and leaves the row stale", async () => {
     const h = harness()
     const { card, version } = await mounted(h)

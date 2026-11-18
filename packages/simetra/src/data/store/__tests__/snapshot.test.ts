@@ -76,6 +76,35 @@ describe("computeRowView with an own mutation (plan B3-4-Л Р5, Р7)", () => {
     expect(computeRowView(K1, e, [], undefined, failed).state).toBe("failed")
   })
 
+  it("an epoch mark under failed or conflict shows stale; a read proving the current epoch clears it", () => {
+    const conflict: RowMutation = Object.freeze({
+      id: "m1",
+      state: "conflict" as const,
+      error: { code: "command.conflict" as const },
+      cancel: () => {},
+    })
+    const h = harness()
+    const accept = (epoch: string) =>
+      h.write(() => h.session.acceptEpoch(epoch, h.now()))
+    accept(EA)
+    put(h, EA)
+    accept(EB)
+    // Лише епохова половина: нижньої межі версії немає.
+    expect(h.store.get(K1)!.stale).toEqual({ epoch: true })
+    for (const mutation of [failed, conflict])
+      expect(
+        computeRowView(K1, h.store.get(K1)!, [], undefined, mutation)
+      ).toMatchObject({ state: mutation.state, stale: true })
+    h.write((s) =>
+      h.store.put(s, { ...row(K1, 1), versionEpoch: EB }, h.now(), false)
+    )
+    for (const mutation of [failed, conflict]) {
+      const view = computeRowView(K1, h.store.get(K1)!, [], undefined, mutation)
+      expect(view).toMatchObject({ state: mutation.state })
+      expect("stale" in view).toBe(false)
+    }
+  })
+
   it("hidden outranks the mutation state, and the view keeps the mutation", () => {
     const h = stored()
     h.write((s) => h.store.hideKeys(s, [K1]))
