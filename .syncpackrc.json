@@ -14,7 +14,8 @@
         "react",
         "react-dom",
         "@tanstack/react-virtual",
-        "@tanstack/react-router"
+        "@tanstack/react-router",
+        "@tanstack/react-form"
       ],
       "policy": "sameRange"
     },

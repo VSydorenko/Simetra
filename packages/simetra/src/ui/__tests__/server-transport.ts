@@ -16,11 +16,13 @@ import type { FakeSource } from "../../data/store/testing/fake-source"
  */
 export function serverTransport(fake: FakeSource) {
   const calls: DataRequest[] = []
-  const replies: DataResponse[] = []
+  // Наступні відповіді замість сервера; `Error` — збій транспорту.
+  const replies: (DataResponse | Error)[] = []
   const held: (() => void)[] = []
   const state = { hold: false }
   const answer = async (body: DataRequest): Promise<DataResponse> => {
     const reply = replies.shift()
+    if (reply instanceof Error) throw reply
     if (reply !== undefined) return reply
     try {
       const { request } = body
