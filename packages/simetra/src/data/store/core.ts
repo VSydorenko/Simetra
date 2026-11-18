@@ -79,10 +79,11 @@ export interface CoreSession {
   /**
    * Starts an `update` with the `await` policy (P4-B spec §7.1, plan
    * B3-4-Л): one mutation per key in the journal, one `run`. Throws
-   * synchronously, before the journal and the transport: `TypeError` for a
-   * name outside the catalog, `DataError` `data.version-required`,
-   * `data.mutation-pending` (the key has a `pending` mutation) and
-   * `data.journal-full`. After `close` it settles with the close reason.
+   * synchronously, before the journal and the transport, only for a caller
+   * error: `TypeError` for a name outside the catalog, `DataError`
+   * `data.version-required`. `data.mutation-pending` (the key has a
+   * `pending` mutation) and `data.journal-full` settle the mutation failed
+   * with that `DataError`. After `close` it settles with the close reason.
    */
   update(
     object: ObjectName,
