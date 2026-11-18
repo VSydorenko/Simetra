@@ -2,7 +2,6 @@
   "pr": {
     "base": "main",
     "mergeMethod": "merge",
-    "archiveDir": ".agents/private/simetra-private/ledgers",
     "waitTimeout": 1800
   },
   "tests": {
@@ -15,16 +14,38 @@
     },
     "levels": {
       "unit": {
-        "command": ["pnpm", "exec", "vitest", "run", "--project", "unit"],
+        "command": [
+          "pnpm",
+          "exec",
+          "vitest",
+          "run",
+          "--project",
+          "unit"
+        ],
         "reporter": "vitest-json",
-        "packages": ["simetra", "designer", "template"],
+        "packages": [
+          "simetra",
+          "designer",
+          "template"
+        ],
         "timeout": 900,
         "ci": true
       },
       "db": {
-        "command": ["pnpm", "exec", "vitest", "run", "--project", "db"],
+        "command": [
+          "pnpm",
+          "exec",
+          "vitest",
+          "run",
+          "--project",
+          "db"
+        ],
         "reporter": "vitest-json",
-        "packages": ["simetra", "designer", "template"],
+        "packages": [
+          "simetra",
+          "designer",
+          "template"
+        ],
         "lock": "/tmp/simetra-db-stack-postgres.lock",
         "lockWait": 2700,
         "timeout": 2400,
@@ -41,16 +62,25 @@
           "--passWithNoTests"
         ],
         "reporter": "vitest-json",
-        "packages": ["simetra", "designer"],
+        "packages": [
+          "simetra",
+          "designer"
+        ],
         "lock": "/tmp/simetra-db-stack.lock",
         "lockWait": 2700,
         "timeout": 1800,
         "ci": true
       },
       "e2e": {
-        "command": ["pnpm", "run", "e2e"],
+        "command": [
+          "pnpm",
+          "run",
+          "e2e"
+        ],
         "reporter": "exit-code",
-        "packages": ["e2e"],
+        "packages": [
+          "e2e"
+        ],
         "lock": "/tmp/simetra-db-stack-postgres.lock",
         "lockWait": 2700,
         "timeout": 1500,
@@ -64,7 +94,10 @@
     "docs": "docs",
     "glossary": "docs/GLOSSARY.md",
     "adr": "docs/adr",
-    "skills": [".agents/skills", "packages/*/skills"],
+    "skills": [
+      ".agents/skills",
+      "packages/*/skills"
+    ],
     "anchors": {
       "include": [
         "AGENTS.md",
@@ -76,7 +109,10 @@
         "packages/*/skills/**/*.md",
         ".claude/**/*.md"
       ],
-      "exclude": ["docs/research/**", "docs/superpowers/**"],
+      "exclude": [
+        "docs/research/**",
+        "docs/superpowers/**"
+      ],
       "roots": [
         "packages",
         "docs",
@@ -89,11 +125,18 @@
         "examples",
         "legacy"
       ],
-      "external": ["MEMORY.md", "SKILL.md", "CLAUDE.local.md"]
+      "external": [
+        "MEMORY.md",
+        "SKILL.md",
+        "CLAUDE.local.md"
+      ]
     }
   },
   "review": {
-    "exclude": ["pnpm-lock.yaml", "**/*.snap"],
+    "exclude": [
+      "pnpm-lock.yaml",
+      "**/*.snap"
+    ],
     "criteria": ".agents/review-criteria.md"
   },
   "research": {
@@ -108,9 +151,14 @@
     ]
   },
   "format": {
-    "check": ["pnpm", "exec", "prettier", "--check"]
+    "check": [
+      "pnpm",
+      "exec",
+      "prettier",
+      "--check"
+    ]
   },
   "kit": {
-    "version": "0.7.0"
+    "version": "0.8.0"
   }
 }
