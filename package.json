@@ -25,6 +25,7 @@
     "format": "turbo format",
     "typecheck": "turbo typecheck",
     "test": "turbo test --concurrency=1",
+    "test:docs": "pnpm -r --if-present test:docs",
     "format:fix": "prettier --write .",
     "format:check": "prettier --check .",
     "deps:check": "syncpack lint",

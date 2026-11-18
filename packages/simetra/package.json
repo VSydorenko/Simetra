@@ -34,6 +34,7 @@
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.dom.json",
     "test": "vitest run --project unit",
+    "test:docs": "vitest run --project unit .docs.test.",
     "test:watch": "vitest --project unit",
     "test:db": "vitest run --project db",
     "test:db:supabase": "vitest run --project db-supabase",

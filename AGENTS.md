@@ -281,7 +281,9 @@ pnpm db:signals:stop
   (provider pgTAP and `*.supabase.db.test.ts` on the Supabase stack), and a
   `packaging` job (`pnpm build:packages && pnpm test:packaging`). A PR that
   changes only documentation (every file under `docs/` or a Markdown file
-  outside `packages/`) runs only the `Checks` job; a push to `main` runs every job. It
+  outside `packages/`) runs only the `Checks` job, and in it only the format check
+  and the tests that read `docs/` — those live in `*.docs.test.ts` files and run
+  with `pnpm test:docs`; a push to `main` runs every job. It
   does not run the anchor check — run it yourself whenever you edit docs or skills,
   or rename or move a file. Releases and npm publishing —
   `docs/architecture/release.md`.
