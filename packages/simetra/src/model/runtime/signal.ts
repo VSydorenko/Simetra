@@ -32,6 +32,13 @@ export const SIGNAL_MERGE_MODE = "merge"
  */
 export const SIGNAL_INVALIDATE_FUNCTION_NAME = "signal_invalidate"
 
+/**
+ * The channel oracle (schema `PLATFORM_SCHEMA`), `(p_topic text, p_send
+ * boolean) → boolean`; the command runtime asks it in subscribe mode for
+ * `authorizeChannels`.
+ */
+export const SIGNAL_TOPIC_ALLOWED_FUNCTION_NAME = "signal_topic_allowed"
+
 /** Centrifugo's channel name length limit (`channel_max_length`, octets). */
 export const CENTRIFUGO_CHANNEL_MAX = 255
 

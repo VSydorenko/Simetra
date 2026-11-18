@@ -36,6 +36,14 @@ export default defineConfig({
           name: "handle",
           test: /[\\/]src[\\/]data[\\/](?:runtime[\\/]handle|store[\\/]closed-mutation)\.ts$/,
         },
+        // Клеймо гранту каналів — приватний `WeakSet`, спільний для входів
+        // `simetra/server` (його дає `authorizeChannels`) і
+        // `simetra/server/signals` (його перевіряє порт токенів): копія на
+        // вхід відхилила б справжній грант як підробку.
+        {
+          name: "channel-grant",
+          test: /[\\/]src[\\/]server[\\/]signals[\\/]grant\.ts$/,
+        },
       ],
     },
   },

@@ -148,33 +148,45 @@ describe("simetra", () => {
     const js = (await listPackedFiles(tarballs.simetra)).filter((f) =>
       f.endsWith(".js")
     )
-    // Єдиний виняток — чанк `handle`, спільний для `simetra/data` і
-    // `simetra/data/react`. Правило: спільний чанк — лише спільний стан-одинак,
-    // який два входи одного яруса мусять ділити, а не мати кожен свій:
-    // `WeakMap` хендлів рантайму й лічильник id мутацій. Тому чанк несе рівно
-    // ці два модулі: журнал (`overlay`) чи інший модуль без спільного стану
-    // там — код входу, що втік у спільний чанк.
+    // Винятки — чанки зі спільним станом-одинаком, який два входи одного
+    // яруса мусять ділити, а не мати кожен свій: `handle` (`simetra/data` і
+    // `simetra/data/react` — `WeakMap` хендлів рантайму й лічильник id
+    // мутацій) і `channel-grant` (`simetra/server` і `simetra/server/signals`
+    // — `WeakSet` клейма гранту каналів). Тому кожен чанк несе рівно свої
+    // модулі: журнал (`overlay`) чи інший модуль без спільного стану там —
+    // код входу, що втік у спільний чанк.
+    const CHUNKS: Record<string, string[]> = {
+      handle: [
+        "src/data/runtime/handle.ts",
+        "src/data/store/closed-mutation.ts",
+      ],
+      "channel-grant": ["src/server/signals/grant.ts"],
+    }
+    const chunkOf = (f: string) =>
+      Object.keys(CHUNKS).find((name) =>
+        new RegExp(`^dist/${name}-[^/]+\\.js$`).test(f)
+      )
     expect(
       js.filter(
         (f) =>
           !/^dist\/(model|compiler|data|schema|server|ui|shell)\//.test(f) &&
-          !/^dist\/handle-[^/]+\.js$/.test(f)
+          chunkOf(f) === undefined
       )
     ).toEqual([])
-    const shared = js.filter((f) => /^dist\/handle-[^/]+\.js$/.test(f))
-    expect(shared).toHaveLength(1)
-    const { stdout } = await exec("tar", [
-      "-xOzf",
-      tarballs.simetra,
-      `package/${shared[0]!}`,
-    ])
-    // Маркер модуля `// src/…` бандлер ставить перед кодом кожного модуля.
-    expect(
-      [...stdout.matchAll(/^\/\/ (src\/\S+\.ts)$/gm)].map((m) => m[1])
-    ).toEqual([
-      "src/data/runtime/handle.ts",
-      "src/data/store/closed-mutation.ts",
-    ])
+    for (const [name, modules] of Object.entries(CHUNKS)) {
+      const shared = js.filter((f) => chunkOf(f) === name)
+      expect(shared, name).toHaveLength(1)
+      const { stdout } = await exec("tar", [
+        "-xOzf",
+        tarballs.simetra,
+        `package/${shared[0]!}`,
+      ])
+      // Маркер модуля `// src/…` бандлер ставить перед кодом кожного модуля.
+      expect(
+        [...stdout.matchAll(/^\/\/ (src\/\S+\.ts)$/gm)].map((m) => m[1]),
+        name
+      ).toEqual(modules)
+    }
   })
 
   it("declares react, react-dom, react-virtual, react-form and react-router as the only peers, all optional", async () => {
@@ -247,6 +259,55 @@ describe("simetra", () => {
     expect(stdout.trim()).toBe(
       "SIGNALS_JWKS_PATH,SignalTokenError,createCentrifugoTokens"
     )
+  })
+
+  it("the token port of simetra/server/signals accepts a grant of simetra/server's runtime and refuses a forged one", async () => {
+    // Один `WeakSet` клейма на обидва входи (чанк `channel-grant`): з копією
+    // на вхід порт відхилив би справжній грант як підробку. Порт-фейк
+    // відповідає створенню рантайму й транзакції `authorizeChannels`.
+    const script = `
+const { createCommandRuntime } = await import("simetra/server")
+const { createCentrifugoTokens } = await import("simetra/server/signals")
+const USER = "44444444-4444-4444-8444-444444444444"
+const CHANNEL = "simetra-gate"
+const FACTS = ["owner", "superuser", "bypassrls", "createrole", "server_files", "read_all_data", "write_all_data", "database_owner", "provider_login", "service"]
+const rowsOf = (text) =>
+  text.includes("AS provider_login") ? [Object.fromEntries(FACTS.map((f) => [f, "f"]))]
+  : text.includes("pg_has_role") ? [{ member: "t" }]
+  : text.includes("applied_snapshot_hash") ? [{ hash: "gate" }]
+  : text.includes("current_user_id") ? [{ user_id: USER }]
+  : text.includes("signal_topic_allowed") ? [{ channel: CHANNEL }]
+  : []
+const database = {
+  connect: async () => ({
+    query: async (text) => ({ rows: rowsOf(text), command: text.split(" ")[0] }),
+    release() {},
+  }),
+}
+const runtime = await createCommandRuntime({
+  database,
+  catalog: { format: 1, snapshotHash: "gate", provider: "supabase", objects: [] },
+})
+const grant = await runtime.authorizeChannels({ sub: USER, is_anonymous: false }, [CHANNEL])
+const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"])
+const tokens = await createCentrifugoTokens({
+  keys: [{ kid: "k1", privateJwk: await crypto.subtle.exportKey("jwk", pair.privateKey), addedAt: new Date(0) }],
+  audience: "centrifugo:gate",
+  issuer: "http://127.0.0.1:3000",
+})
+const signed = (await tokens.channelTokens(grant)).map((t) => t.channel)
+const forged = await tokens.channelTokens({ subject: USER, channels: [CHANNEL] }).then(() => "signed", (e) => e.code)
+console.log(JSON.stringify({ signed, forged }))
+`
+    const { stdout } = await exec(
+      process.execPath,
+      ["--input-type=module", "-e", script],
+      { cwd: consumer }
+    )
+    expect(JSON.parse(stdout)).toEqual({
+      signed: ["simetra-gate"],
+      forged: "signals.forged-grant",
+    })
   })
 
   it("passes publint", async () => {

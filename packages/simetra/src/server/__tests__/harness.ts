@@ -272,6 +272,8 @@ export const checkedRuntime = (
     })
     return result
   },
+  authorizeChannels: (session, channels) =>
+    runtime.authorizeChannels(session, channels),
 })
 
 export async function setup(
