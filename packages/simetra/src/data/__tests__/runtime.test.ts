@@ -1059,6 +1059,19 @@ describe("version check and the stale mark (§10)", () => {
     t.respond(versionAnswer(SERVER_HASH))
     await settle()
     expect(onStaleClient).toHaveBeenCalledTimes(1)
+    // Позначка видна й після збігу: запис відмовляється без транспорту.
+    const sent = t.calls.length
+    const write = t.core.update(
+      TASK,
+      key(1),
+      { title: "x" },
+      { expectedVersion: 1 }
+    )
+    expect(await write.settled).toMatchObject({
+      ok: false,
+      error: { code: "command.stale-client" },
+    })
+    expect(t.calls).toHaveLength(sent)
   })
 
   it("a stale-client part without an object names the object of its query", async () => {

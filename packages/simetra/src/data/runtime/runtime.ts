@@ -396,10 +396,6 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     adapters.set(name, watchSessionChanged(factory({ subject, send })))
   }
 
-  // `catalogHash` знімка, ще не поданий у правило `serverHash`: він іде разом
-  // зі звіркою, в одній мікрозадачі з її `version`, а не при гідратації.
-  let hydratedHash: string | undefined
-
   const runtime: DataRuntime = {
     subject,
     get disposed() {
@@ -424,16 +420,12 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
       if (meta.subject !== subject)
         throw new TypeError("snapshot: the subject differs from the runtime's")
       core.hydrate(snapshot.core)
-      hydratedHash = meta.catalogHash
     },
+    // Звірка ядра завжди питає `version`, тож інший `catalogHash` знімка
+    // окремого запиту не потребує; `lastHash` ядра не чіпаємо, інакше
+    // відповіді перечитувань, що обігнали `version`, дали б другий запит.
     endHydration() {
-      if (closedWith !== undefined || hydratedHash === undefined) return
-      const hash = hydratedHash
-      hydratedHash = undefined
-      // Інший хеш — `requestVersion`, що зіллється з тим, який кличе
-      // `endHydration` ядра (відповідь `version` лише оновлює хеш).
-      core.serverHash(hash, false)
-      core.endHydration()
+      if (closedWith === undefined) core.endHydration()
     },
   }
   bindRuntimeHandle(runtime, { send, core, writer: createWriter(core) })

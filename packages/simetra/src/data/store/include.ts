@@ -1,4 +1,8 @@
-import type { CatalogEntry, CatalogIndex } from "simetra/model"
+import {
+  CommandFailure,
+  type CatalogEntry,
+  type CatalogIndex,
+} from "simetra/model"
 import { readKeys, type CoreSource } from "./source"
 import type { Key, ObjectName, RowView, ServerRow, Values } from "./types"
 
@@ -78,15 +82,32 @@ export async function readIncluded(
 ): Promise<Included> {
   const entries = new Map(steps.map((s) => [s.target, s.entry]))
   const results = await Promise.all(
-    [...wanted].map(async ([object, keys]) => {
-      const rows =
-        keys.length === 0
-          ? []
-          : await readKeys(source, entries.get(object)!, keys, {
-              keysPerRequest,
-            })
-      return [object, { keys, rows }] as const
-    })
+    [...wanted].map(
+      async ([object, keys]): Promise<
+        readonly [
+          ObjectName,
+          { keys: readonly Key[]; rows: readonly ServerRow[] },
+        ]
+      > => {
+        if (keys.length === 0) return [object, { keys, rows: [] }] as const
+        try {
+          const rows = await readKeys(source, entries.get(object)!, keys, {
+            keysPerRequest,
+          })
+          return [object, { keys, rows }] as const
+        } catch (error) {
+          // Ціль несумісна (`stale-client`, §10): її значень немає й не буде, а
+          // вигляд власника лишається живим. Без ключів ціль не «зникає»:
+          // відсутні ключі стали б `removed`.
+          if (
+            error instanceof CommandFailure &&
+            error.error.code === "command.stale-client"
+          )
+            return [object, { keys: [], rows: [] }] as const
+          throw error
+        }
+      }
+    )
   )
   return new Map(results)
 }

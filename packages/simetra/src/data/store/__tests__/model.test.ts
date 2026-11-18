@@ -1643,6 +1643,9 @@ async function runModel(
           (spec) => JSON.stringify(spec) === JSON.stringify(sub.form.spec)
         )
         if (v < 0) fail(label, "after hydrate: a view the model never held")
+        // Новий рантайм не несе позначки старого: вигляд несумісного об'єкта
+        // у ньому не `isStale`; безпеку його знімка перевірено вище.
+        if (staled.has(SPECS[v]!.object)) continue
         sameViews(label, v, handles[v]!.getSnapshot(), next)
       }
       // Звірка: видимі вигляди — підписані.
@@ -1660,6 +1663,7 @@ async function runModel(
         const v = SPECS.findIndex(
           (spec) => JSON.stringify(spec) === JSON.stringify(sub.form.spec)
         )
+        if (staled.has(SPECS[v]!.object)) continue
         const snap = next.view(SPECS[v]!).getSnapshot()
         if (snap.status === "error" || snap.status === "purged") continue
         for (const row of snap.rows) {
@@ -2226,9 +2230,6 @@ async function runModel(
         if (closed === undefined) core.requestVersion()
         break
       case "rehydrate":
-        // Знімок несумісного об'єкта порожній за задумом: гідрація й
-        // позначка разом перевіряються в `runtime/__tests__/ssr.test.ts`.
-        if (staled.size > 0) break
         // Журнал мутацій у знімок не йде: `dehydrate` після запису — помилка
         // host-а (`TypeError`), тож крок виконується лише з порожнім журналом.
         if (closed !== undefined) break
@@ -2366,15 +2367,9 @@ async function runModel(
       const snap = handles[v]!.getSnapshot()
       const where = `converge view ${v}`
       if (snap.status === "purged") return
-      // Вигляд несумісного об'єкта закритий, а вигляд, що вмикає його ціллю
-      // `include`, — читання цілі відмовлено, тож склад не збігається з
-      // сервером (закривається, а не показує).
-      const include = (spec as { include?: readonly string[] }).include
-      if (
-        staled.has(spec.object) ||
-        (include !== undefined && include.length > 0 && staled.has(ORG))
-      )
-        return
+      // Вигляд несумісного об'єкта закритий; вигляд, що вмикає його ціллю
+      // `include`, живий: ціль нерозв'язана, а решта збігається з сервером.
+      if (staled.has(spec.object)) return
       // Після межі відкинутих відповідей поспіль сесія не читає: вихід
       // — лише нова сесія.
       if (epochs.unavailable) {
@@ -2498,7 +2493,7 @@ async function runModel(
     }
     for (const [field, ref] of Object.entries(row.refs ?? {})) {
       if (ref !== null) sameAsServer(`${where} ref`, ORG, ref)
-      else {
+      else if (!staled.has(ORG)) {
         // `null` — лише для цілі, якої сервер не показує; наявна ціль
         // не може лишитись порожньою (гонка власності `include`).
         const target = row.values[field]

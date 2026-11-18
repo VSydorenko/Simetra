@@ -70,13 +70,17 @@ interface Wire {
   sessionChanged: boolean
   /** Holds every answer until {@link Wire.release}. */
   hold: boolean
-  release(): void
+  /** Requests held, not yet delivered. */
+  readonly held: { readonly body: DataRequest; deliver(): void }[]
+  /**
+   * Delivers every held request that `which` accepts (all by default), in
+   * order, and stops holding; returns how many were delivered.
+   */
+  release(which?: (body: DataRequest) => boolean): number
 }
 
 /** A transport over the fake server; answers are computed on delivery. */
 function serverWire(fake: FakeSource): Wire & { transport: DataTransport } {
-  let open: () => void = () => {}
-  let gate = Promise.resolve()
   const wire: Wire = {
     calls: [],
     refuse: new Set(),
@@ -84,18 +88,23 @@ function serverWire(fake: FakeSource): Wire & { transport: DataTransport } {
     hash: SERVER_HASH,
     sessionChanged: false,
     hold: false,
-    release() {
+    held: [],
+    release(which = () => true) {
       wire.hold = false
-      open()
+      const now = wire.held.filter((h) => which(h.body))
+      for (const h of now) {
+        wire.held.splice(wire.held.indexOf(h), 1)
+        h.deliver()
+      }
+      return now.length
     },
   }
   const transport: DataTransport = async (body) => {
     wire.calls.push(body)
     if (wire.hold) {
-      gate = new Promise<void>((resolve) => {
-        open = resolve
+      await new Promise<void>((resolve) => {
+        wire.held.push({ body, deliver: resolve })
       })
-      await gate
     }
     const answer = (value: DataResponse): DataResponse => ({
       ...value,
@@ -383,9 +392,37 @@ describe("the reconciliation after hydration", () => {
     )
     expect(versions).toHaveLength(1)
     expect(a.wire.calls).toHaveLength(1 + 2)
-    a.wire.release()
+    expect(a.wire.held).toHaveLength(1 + 2)
+    expect(a.wire.release()).toBe(1 + 2)
     await settle()
     expect(a.wire.calls).toHaveLength(1 + 2)
+  })
+
+  it("re-read answers that come before the version answer start no second version request", async () => {
+    const fake = serverWorld()
+    const snapshot = await takeSnapshot(fake, [card(1), list])
+    const a = runtimeOver(fake)
+    a.runtime.hydrate({
+      meta: { ...snapshot.meta, catalogHash: "another-catalog" },
+      core: snapshot.core,
+    })
+    a.core.view(card(1)).subscribe(() => {})
+    a.core.view(list).subscribe(() => {})
+    // Знімок з іншим хешем каталогу не змінює «останній баченого» хеша: сервер
+    // відповідає хешем клієнтського каталогу.
+    a.wire.hold = true
+    a.runtime.endHydration()
+    await settle()
+    const isVersion = (b: DataRequest) =>
+      b.request.type === "read" &&
+      (b.request.items[0] as { type: string }).type === "version"
+    expect(a.wire.held).toHaveLength(1 + 2)
+    expect(a.wire.release((b) => !isVersion(b))).toBe(2)
+    await settle()
+    expect(a.wire.release(isVersion)).toBe(1)
+    await settle()
+    expect(a.wire.calls).toHaveLength(1 + 2)
+    expect(a.wire.calls.filter(isVersion)).toHaveLength(1)
   })
 
   it("does it once: a repeat of endHydration sends nothing", async () => {
@@ -444,7 +481,13 @@ describe("the reconciliation after hydration", () => {
     const a = runtimeOver(fake, { onSessionChanged })
     a.runtime.hydrate(snapshot)
     const handles = [card(1), orgCard].map((spec) => a.core.view(spec))
-    handles.forEach((h) => h.subscribe(() => {}))
+    // Одне сповіщення `purged` на вигляд.
+    const purges = handles.map(() => 0)
+    handles.forEach((h, i) =>
+      h.subscribe(() => {
+        if (h.getSnapshot().status === "purged") purges[i]!++
+      })
+    )
     a.wire.sessionChanged = true
     a.runtime.endHydration()
     await settle()
@@ -457,6 +500,12 @@ describe("the reconciliation after hydration", () => {
         rows: [],
       })
     expect(inspectCore(a.core).rowCount()).toBe(0)
+    // Після закриття нічого більше не йде, навіть через плин часу.
+    const sent = a.wire.calls.length
+    vi.advanceTimersByTime(10 * 60_000)
+    await settle()
+    expect(a.wire.calls).toHaveLength(sent)
+    expect(purges).toEqual([1, 1])
   })
 
   it("nothing a response brings after dispose() changes the views", async () => {
@@ -472,8 +521,9 @@ describe("the reconciliation after hydration", () => {
     a.wire.hold = true
     a.runtime.endHydration()
     await settle()
+    expect(a.wire.held).toHaveLength(1 + 1)
     a.runtime.dispose()
-    a.wire.release()
+    expect(a.wire.release()).toBe(1 + 1)
     await settle()
     expect(onStaleClient).not.toHaveBeenCalled()
     expect(handle.getSnapshot()).toMatchObject({
@@ -604,12 +654,73 @@ describe("a stale-client object is closed until reload (spec §10)", () => {
     await settle()
     expect(handle.getSnapshot().status).toBe("loading")
     a.core.staleClient(TASK)
-    a.wire.release()
+    expect(a.wire.release()).toBeGreaterThan(0)
     await settle()
     const snap = handle.getSnapshot()
     expect(snap.isStale).toBe(true)
     expect(snap.rows).toEqual([])
     expect(inspectCore(a.core).rowCount()).toBe(0)
+  })
+
+  const queriesOf = (wire: Wire, object: string) =>
+    wire.calls.filter(
+      (c) =>
+        c.request.type === "read" &&
+        c.request.items.some(
+          (item) =>
+            (item as { query?: { object?: string } }).query?.object === object
+        )
+    ).length
+
+  it("a read of the object queued in the limiter never reaches the transport after the mark", async () => {
+    const fake = serverWorld()
+    const a = runtimeOver(fake, { limits: { readParallel: 1 } })
+    a.wire.hold = true
+    a.core.view(orgCard).subscribe(() => {})
+    a.core.view(card(1)).subscribe(() => {})
+    await settle()
+    // Читання ORG у польоті займає єдиний слот, читання TASK стоїть у черзі.
+    expect(a.wire.held).toHaveLength(1)
+    expect(queriesOf(a.wire, task.id)).toBe(0)
+    a.core.staleClient(TASK)
+    a.wire.release()
+    await settle()
+    expect(queriesOf(a.wire, task.id)).toBe(0)
+    expect(a.core.view(orgCard).getSnapshot().status).toBe("ready")
+    expect(a.core.view(card(1)).getSnapshot().isStale).toBe(true)
+  })
+
+  it("a view that includes a stale object stays ready; the target is unresolved and never asked for", async () => {
+    const fake = serverWorld()
+    const a = runtimeOver(fake)
+    const withOrg: ViewSpec = {
+      kind: "window",
+      object: TASK,
+      orderBy: [{ attribute: "title", direction: "asc" }],
+      include: ["org"],
+    }
+    const handle = a.core.view(withOrg)
+    handle.subscribe(() => {})
+    await settle()
+    const before = handle.getSnapshot()
+    expect(before.status).toBe("ready")
+    const resolved = before.rows[0] as { refs?: Record<string, unknown> }
+    expect(resolved.refs?.org).toMatchObject({ state: "synced" })
+    a.core.staleClient(ORG)
+    await settle()
+    const asked = queriesOf(a.wire, org.id)
+    handle.refresh()
+    await settle()
+    const after = handle.getSnapshot()
+    expect(after.status).toBe("ready")
+    expect(after.isStale).toBeUndefined()
+    expect(after.rows.length).toBeGreaterThan(0)
+    for (const row of after.rows) {
+      const target = (row as { refs?: Record<string, unknown> }).refs?.org as
+        { values?: object } | null | undefined
+      expect(Object.keys(target?.values ?? {})).toEqual([])
+    }
+    expect(queriesOf(a.wire, org.id)).toBe(asked)
   })
 
   it("the mark is runtime-wide: another object turns stale on its own and the first stays closed", async () => {
