@@ -4,6 +4,7 @@ import { reverseGenerate } from "simetra/schema"
 import { PROVIDER_OWNER_ROLES } from "simetra/model"
 import {
   FIXTURES,
+  movementQuery,
   readReferenceDomain,
   superuserClient,
   testProvider,
@@ -27,6 +28,7 @@ import {
   kindsOfFiles,
   tableKeys,
   tableKeysOfFiles,
+  unscoped,
   useRoundTrip,
 } from "./round-trip.support"
 
@@ -192,29 +194,45 @@ describe("a role of the application's own", () => {
 })
 
 describe("adoption from scratch: the deployment fixture corpus survives the round trip", () => {
+  // Без видів скоупу (параметр корпусу `unscoped`): повний ланцюжок §9.
   for (const [name, fixture] of FIXTURES) {
     it(name, async () => {
-      const { source, result, adopted } = await deployedRoundTrip(
-        fixture(testProvider()),
+      const { source, result } = await deployedRoundTrip(
+        unscoped(fixture(testProvider())),
         new Map(),
         true
       )
-      // Види 1С повертаються як `CustomTable` з тими самими фізичними іменами.
-      // Фікстура з функцією множини скоупу після прийому з нуля моделі не дає
-      // (`sql.definer-caller-unchecked`, платформна спека §6.7): тоді таблиці
-      // й види — з повернутих метаданих.
-      const tables =
-        result !== undefined
-          ? tableKeys(result.model)
-          : tableKeysOfFiles(adopted!, source.project.defaultSchema)
-      const kinds =
-        result !== undefined ? kindsOf(result.model) : kindsOfFiles(adopted!)
-      expect(tables).toEqual(tableKeys(source))
+      // Види 1С повертаються як `CustomTable` з тими самими фізичними іменами
+      expect(tableKeys(result!.model)).toEqual(tableKeys(source))
       expect(
-        kinds.filter((kind) => kind !== "CustomTable" && kind !== "PgEnum")
+        kindsOf(result!.model).filter(
+          (kind) => kind !== "CustomTable" && kind !== "PgEnum"
+        )
       ).toEqual([])
     })
   }
+
+  // Іменовані функції множини скоупу після прийому з нуля повертаються
+  // незв'язаними: зворотна генерація дає рівно їхні відмови
+  // `sql.definer-caller-unchecked` (платформна спека §6.7), а моделі немає —
+  // таблиці й види звіряються з повернутих метаданих. Повний ланцюжок для
+  // фікстур зі `scopeKinds` — #271.
+  it("movement query with named scope set functions: exactly their refusals", async () => {
+    const { source, result, adopted } = await deployedRoundTrip(
+      movementQuery(testProvider()),
+      new Map(),
+      true
+    )
+    expect(result).toBeUndefined()
+    expect(tableKeysOfFiles(adopted!, source.project.defaultSchema)).toEqual(
+      tableKeys(source)
+    )
+    expect(
+      kindsOfFiles(adopted!).filter(
+        (kind) => kind !== "CustomTable" && kind !== "PgEnum"
+      )
+    ).toEqual([])
+  })
 })
 
 // Референсний домен має довідник «Користувачі», тож база несе платформний

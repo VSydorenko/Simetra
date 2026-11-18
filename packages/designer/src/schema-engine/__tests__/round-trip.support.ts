@@ -29,6 +29,7 @@ import {
 } from "simetra/schema"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import {
+  SCOPE_FUNCTIONS_FILE,
   shadowAgeMinutes,
   shadowDatabaseNames,
   testDatabaseUrl,
@@ -249,8 +250,8 @@ interface Loss {
    * повертає звичайними `SECURITY DEFINER`-функціями з `EXECUTE` для ролей
    * API: зв'язку з видом скоупу чи виміром зворотна генерація не знає, тож
    * компіляція повернутої теки відмовляє їм `sql.definer-caller-unchecked`
-   * (платформна спека §6.7), доки їх не зв'язано чи не задекларовано. Далі
-   * ланцюжок іде без них — як без втраченої механіки.
+   * (платформна спека §6.7), доки їх не зв'язано чи не задекларовано. Тоді
+   * ланцюжок закінчується на зворотній генерації (`refusedRoundTrip`, до #271).
    */
   definers: { schema: string; name: string }[]
 }
@@ -362,9 +363,9 @@ async function expectKindLabelsKept(
  * Прийом з нуля бази з функціями форм платформи (`Loss.definers`): ланцюжок
  * §9 закінчується на зворотній генерації — її помилки рівно відмови цих
  * функцій, а моделі з такою текою компілятор не дає. Повертає теку.
- * Задокументований вихід (зв'язати функцію з видом скоупу) над прийнятими
- * `CustomTable` вимагає ще й оголосити скоуп кожної таблиці
- * (`scope.declaration-missing`) — #276.
+ * Тимчасово: іменовані функції множини, які кличуть політики, стануть формою
+ * «функція політики» (ADR-0094, #271); тоді фікстури зі `scopeKinds` підуть
+ * повним ланцюжком, а цю функцію буде видалено (умова записана в #271).
  */
 async function refusedRoundTrip(
   target: DbConnection,
@@ -788,6 +789,40 @@ export async function deployedRoundTrip(
 
 export const kindsOf = (model: CompiledModel) =>
   [...new Set(model.objects.map((o) => o.kind))].sort()
+
+/**
+ * Параметр корпусу `scoped: false`: та сама фікстура без видів скоупу —
+ * без `scopeKinds` проєкту, полів `scope` і `scopeColumn` об'єктів, FK у межах
+ * тенанта (`scopedRef`) і файлу функцій множини.
+ * Так прийом з нуля веде повний ланцюжок §9: функції множини, що після
+ * прийому повертаються незв'язаними, відмовляє `sql.definer-caller-unchecked`
+ * (платформна спека §6.7). Механіку скоупу в прийомі з нуля перевірить #271.
+ */
+export function unscoped(
+  files: ReadonlyMap<string, string>
+): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const [path, text] of files) {
+    if (path === SCOPE_FUNCTIONS_FILE) continue
+    if (!path.endsWith(".meta.json")) {
+      out.set(path, text)
+      continue
+    }
+    const data = JSON.parse(text) as Record<string, unknown>
+    if (path === "project.meta.json") delete data.scopeKinds
+    else {
+      delete data.scope
+      delete data.scopeColumn
+      // FK у межах тенанта (`scopedRef`) існує лише зі скоупом.
+      if (Array.isArray(data.foreignKeys))
+        data.foreignKeys = (
+          data.foreignKeys as { references?: { key?: string } }[]
+        ).filter((fk) => fk.references?.key !== "scopedRef")
+    }
+    out.set(path, JSON.stringify(data))
+  }
+  return out
+}
 
 /** Метадані об'єктів повернутої теки: вид, схема й фізичне ім'я таблиці. */
 const metaOf = (files: ReadonlyMap<string, string>) =>
