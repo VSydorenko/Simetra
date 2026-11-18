@@ -266,7 +266,7 @@ designer](2026-10-02-simetra-designer-design.md) §4.4). Виняток пром
   нелітеральний динамічний SQL чи нерозбірне тіло там — помилка компілятора
   `sql.function-body-statement` ([спека прав](2026-10-17-rights-design.md) §5.3).
   `plpgsql_check` у тіні — П3; названа перевірка викликача й право `EXECUTE` —
-  з TS-декларацією (П4). Дослівний SQL `CustomTable` і `PgEnum`
+  з декларації функції ([спека декларацій](2026-11-18-sql-function-declarations-design.md)). Дослівний SQL `CustomTable` і `PgEnum`
   та спільні `metadata/sql/` — борг без нових одиниць: перелік боргу
   `metadata/sql-debt.json` тримає відсортовані ідентичності дослівних
   одиниць поза закритими формами, пише його лише `introspect` (з каталогу
