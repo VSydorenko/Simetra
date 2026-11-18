@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render } from "@testing-library/react"
-import { readFileSync } from "node:fs"
+import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { Profiler, createElement, type ReactNode } from "react"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
@@ -165,16 +165,27 @@ const button = (c: Element, label: string) =>
   [...c.querySelectorAll("button")].find((b) => b.textContent === label)
 
 describe("геометрія", () => {
-  it("висоти рядка й списку збігаються з slots.css", () => {
-    const css = readFileSync(
-      join(import.meta.dirname, "../../slots.css"),
-      "utf8"
+  it("кожна CSS-змінна --simetra-* у джерелах src/ui має запасне значення", () => {
+    const root = join(import.meta.dirname, "../..")
+    const files = (
+      readdirSync(root, {
+        recursive: true,
+        encoding: "utf8",
+      }) as string[]
+    ).filter(
+      (f) =>
+        /\.tsx?$/.test(f) && !f.includes("__tests__") && !/\.test\./.test(f)
     )
-    const px = (name: string) =>
-      Number(new RegExp(`${name}:\\s*(\\d+)px`).exec(css)?.[1])
-    expect(px("--simetra-row-height")).toBe(40)
-    expect(ROW_HEIGHT).toBe(px("--simetra-row-height"))
-    expect(LIST_HEIGHT).toBe(px("--simetra-list-height"))
+    const uses = files.flatMap((f) =>
+      [
+        ...readFileSync(join(root, f), "utf8").matchAll(
+          /var\(--simetra-[^)]*\)/g
+        ),
+      ].map((m) => m[0])
+    )
+    expect(uses.length).toBeGreaterThan(0)
+    for (const use of uses)
+      expect(use).toMatch(/^var\(--simetra-[\w-]+, \d+px\)$/)
   })
 })
 
@@ -269,7 +280,8 @@ describe("ListHost", () => {
     })
     const c = view.container
     const row = rowOf(c, 1)
-    // Ядро віддає рядок як `stale` зі значеннями; хост показує `hidden`.
+    // Ядро віддає прихований рядок як `stale`, але вже без значень
+    // (`visibleRow`, `EMPTY_VALUES`); хост показує `hidden`.
     expect(stateOf(row)).toBe("hidden")
     expect(row.textContent).toBe(text("state.hidden"))
     expect(slotOf(c, 1).textContent).not.toContain("t1")

@@ -1,6 +1,7 @@
 import { createElement, type ReactElement } from "react"
 import type { RowState, RowView } from "simetra/data/react"
 import { useMessage, type MessageKey } from "../messages"
+import { STATE_CELL_WIDTH } from "./geometry"
 
 /** The state a host shows for a row: the row state, or `hidden` over it. */
 export type DisplayState = RowState | "hidden"
@@ -55,7 +56,7 @@ export function StateCell(props: {
       title: props.title,
       style: {
         flex: "none",
-        width: "var(--simetra-state-cell-width)",
+        width: STATE_CELL_WIDTH,
         overflow: "hidden",
       },
     },

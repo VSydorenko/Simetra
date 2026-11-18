@@ -12,7 +12,7 @@ import { useCatalogEntry, useCatalogIndex } from "../catalog"
 import { FieldView, headerColumns, type FieldColumn } from "../fields"
 import { useMessage } from "../messages"
 import { useNavigation } from "../navigation"
-import { LIST_HEIGHT, ROW_HEIGHT } from "./geometry"
+import { LIST_HEIGHT, ROW_HEIGHT, STATE_CELL_WIDTH } from "./geometry"
 import { SelectionPanel } from "./selection-panel"
 import { StateCell, displayState } from "./state-cell"
 import { VirtualList } from "./virtual-list"
@@ -199,9 +199,7 @@ export function ListHost(props: ListHostProps): ReactElement {
     (key: string) => navigation.openCard(object, key),
     [navigation, object]
   )
-  // Виняток безпеки: жодного рядка в тому самому кадрі, навіть якщо знімок
-  // ще несе попередні.
-  const rows = view.status === "purged" ? [] : view.rows
+  const rows = view.rows
   const body =
     view.status === "loading" && rows.length === 0
       ? createElement(
@@ -237,7 +235,7 @@ export function ListHost(props: ListHostProps): ReactElement {
       { role: "row", style: { display: "flex", height: ROW_HEIGHT } },
       createElement("span", {
         role: "columnheader",
-        style: { flex: "none", width: "var(--simetra-state-cell-width)" },
+        style: { flex: "none", width: STATE_CELL_WIDTH },
       }),
       ...columns.map((column) =>
         createElement(

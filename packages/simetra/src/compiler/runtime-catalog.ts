@@ -1,5 +1,6 @@
 import {
   CAST_TYPES,
+  DEFAULT_MAIN_PRESENTATION,
   KIND_REGISTRY,
   effectiveMaxBytes,
   type MetadataRef,
@@ -274,7 +275,7 @@ function presentationOf(
   fields: readonly EntityField[]
 ): { presentation?: { attribute: string } } {
   const logicalName =
-    (block?.mainPresentation ?? "Description") === "Code"
+    (block?.mainPresentation ?? DEFAULT_MAIN_PRESENTATION) === "Code"
       ? "code"
       : "description"
   const attribute = fields.find(

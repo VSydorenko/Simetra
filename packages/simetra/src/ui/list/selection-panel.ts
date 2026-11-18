@@ -1,6 +1,7 @@
 import { createElement, type ReactElement } from "react"
 import type { UseRowsResult } from "simetra/data/react"
 import { useMessage } from "../messages"
+import { SELECTION_COUNT_WIDTH, SELECTION_PANEL_HEIGHT } from "./geometry"
 
 /** What the panel reads from `useRows`. */
 export type SelectionPanelView = Pick<
@@ -47,7 +48,7 @@ export function SelectionPanel(props: {
       style: {
         display: "flex",
         alignItems: "center",
-        height: "var(--simetra-selection-panel-height)",
+        height: SELECTION_PANEL_HEIGHT,
         overflow: "hidden",
       },
     },
@@ -100,7 +101,7 @@ export function SelectionPanel(props: {
       style: {
         marginInlineStart: "auto",
         flex: "none",
-        width: "var(--simetra-selection-count-width)",
+        width: SELECTION_COUNT_WIDTH,
       },
     })
   )

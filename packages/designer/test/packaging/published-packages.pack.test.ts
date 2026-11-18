@@ -361,8 +361,12 @@ describe("simetra/data", () => {
     // Вбудована копія peer-а — друга копія в бандлі споживача, якої граф
     // модулів не покаже: вона лежить у корені `simetra`
     const m = await readPackedManifest(tarballs.simetra)
+    // Peer-и інших входів (роутер — лише `./shell`, virtual — лише `./ui`)
+    // у `dist/data` потрапляти не мають.
     const allowed = new Set([
-      ...Object.keys(m.peerDependencies as object),
+      ...Object.keys(m.peerDependencies as object).filter(
+        (p) => !p.startsWith("@tanstack/")
+      ),
       "simetra/model",
     ])
     const specifiers = [
@@ -375,8 +379,11 @@ describe("simetra/data", () => {
 
   it("the ui entry imports only its peers, the hooks entry and the T0 model", async () => {
     const m = await readPackedManifest(tarballs.simetra)
+    // Роутер — peer лише входу `./shell`, тож у `dist/ui` йому не місце.
     const allowed = new Set([
-      ...Object.keys(m.peerDependencies as object),
+      ...Object.keys(m.peerDependencies as object).filter(
+        (p) => p !== "@tanstack/react-router"
+      ),
       "simetra/data/react",
       // Межа ярусів дозволяє T5 імпортувати вниз; T0 залежить лише від `zod`,
       // а план вимагає кодек T0 (каталог клієнта) у хостах.

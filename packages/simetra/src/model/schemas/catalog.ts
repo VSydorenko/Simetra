@@ -17,6 +17,9 @@ import {
   physicalNameSchema,
 } from "./identity"
 import { metadataRefSchema } from "./metadata-ref"
+
+/** Default `mainPresentation` of a catalog: the standard attribute that represents an item. */
+export const DEFAULT_MAIN_PRESENTATION = "Description"
 import {
   objectHeaderShape,
   standardAttributeOverridesSchema,
@@ -77,7 +80,7 @@ export const catalogSchema = z.strictObject({
     .meta({ description: "Whether the code must be unique." }),
   mainPresentation: z
     .enum(["Code", "Description"])
-    .default("Description")
+    .default(DEFAULT_MAIN_PRESENTATION)
     .meta({
       description:
         "Which standard attribute represents an item in lists and references.",
