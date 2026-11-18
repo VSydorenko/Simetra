@@ -16,6 +16,42 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Чи змінює подія код (#249). PR лише з документацією не ганяє бази,
+  # пакування й шаблон host-а; `Checks` біжить завжди. Фільтр на рівні job,
+  # не `paths:` в `on:`: без прогону CI `pr-gate land` не мерджить, а формат
+  # документації ніхто б не перевірив. Push у main ганяє все завжди
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Три крапки в diff потребують спільного предка бази й голови PR
+          fetch-depth: 0
+      # Класифікатор — `.mts`: Node з .node-version виконує його без збірки
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+      # Збій diff валить job, і залежні jobs не біжать — червоне, не тихий пропуск
+      - name: Classify changed files
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          cat "$RUNNER_TEMP/changed.txt"
+          node scripts/ci/docs-only.mts < "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
+
   checks:
     name: Checks
     runs-on: ubuntu-latest
@@ -51,6 +87,8 @@ jobs:
   # pg-delta). Локально `pnpm test:db:pg` лишається одним послідовним прогоном.
   db:
     name: Database (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -124,6 +162,8 @@ jobs:
   # перевищив би timeout-minutes
   db-supabase:
     name: Database Supabase (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -168,6 +208,8 @@ jobs:
   # у тимчасовий проєкт споживача через npm (імпорт ярусів, CLI, MCP)
   packaging:
     name: Packaging
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -193,6 +235,8 @@ jobs:
   # немає.
   host-template:
     name: Host template (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
