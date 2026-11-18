@@ -1830,6 +1830,60 @@ export function noteOwnCreator(): Record<string, Record<string, unknown>> {
   }
 }
 
+export const CLIENT_TABLE = "client"
+export const CLIENT_OWNER_ID = uuid(7602)
+export const CLIENT_USERS_READER_ID = uuid(7603)
+
+/**
+ * Довідник `Client` з носієм власності `owner` — посиланням на
+ * «Користувачів» (не авторство) — і глобальна роль `ClientOwner`: `read`,
+ * `create`, `update` `@own`, без права на «Користувачів». Форма шаблону
+ * застосунку (#235): власник рядка — реквізит змісту, який задає вхід.
+ * `ClientUsersReader` — ті самі права плюс `read@any` на «Користувачах»:
+ * чужий власник йому видимий, тож відмова — право, а не посилання.
+ * Перевизначення для `singleTenantRights`.
+ */
+export function clientOwner(): Record<string, Record<string, unknown>> {
+  return {
+    "catalogs/Client/Client.meta.json": catalog(
+      uuid(7600),
+      "Client",
+      CLIENT_TABLE,
+      {
+        scope: "none",
+        ownership: ["owner"],
+        attributes: [
+          refAttribute(7601, "owner", "owner_id", ref("Catalog", "Users")),
+        ],
+      }
+    ),
+    [ROLE_FILE("ClientOwner")]: role(CLIENT_OWNER_ID, "ClientOwner", "global", {
+      grants: [
+        grant(
+          objects(["Catalog", "Client"]),
+          ["read", "create", "update"],
+          "own"
+        ),
+      ],
+    }),
+    [ROLE_FILE("ClientUsersReader")]: role(
+      CLIENT_USERS_READER_ID,
+      "ClientUsersReader",
+      "global",
+      {
+        grants: [
+          grant(
+            objects(["Catalog", "Client"]),
+            ["read", "create", "update"],
+            "own"
+          ),
+          grant(objects(["Catalog", "Users"]), ["read"], "any"),
+        ],
+      }
+    ),
+  }
+}
+
 export const TEAM_RIGHTS_ADMIN_ID = uuid(6750)
 export const RIGHTS_ONLY_ADMIN_ID = uuid(6751)
 

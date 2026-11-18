@@ -1,6 +1,6 @@
 import { LIMIT_REASONS } from "simetra/model"
 import { describe, expect, it } from "vitest"
-import { checkRequestOrigin, type RequestOrigin } from "../origin"
+import { checkRequestOrigin, type RequestOrigin } from "../index"
 
 const OWN = "https://app.example.com"
 const refusal = { code: "command.forbidden", reason: LIMIT_REASONS.origin }

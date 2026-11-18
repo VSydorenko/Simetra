@@ -405,3 +405,28 @@ export const tierZoneConfigs = [
   ...uiRuleConfigs,
   ...purityConfigs,
 ]
+
+// Межа фреймворку для пакета `create-simetra-app` (AGENTS.md): TanStack Start —
+// лише в застосунку шаблону `template/` і в `e2e/`; `src/` пакета (копіювальник)
+// його не імпортує. Конфіг підключає `packages/create-simetra-app/eslint.config.js`,
+// файли — відносно теки того пакета, тож `template/**` і `e2e/**` зоною не
+// зачеплено.
+export const frameworkBoundaryConfigs = [
+  {
+    files: ["src/**/*.{ts,tsx,mts,cts}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex: "^@tanstack/(?:react-|solid-)?start(?:[-/].*)?$",
+              message:
+                "Framework boundary: TanStack Start is imported only by the host template (template/) and its e2e tests (e2e/), never by the package sources (AGENTS.md).",
+            },
+          ],
+        },
+      ],
+    },
+  },
+]

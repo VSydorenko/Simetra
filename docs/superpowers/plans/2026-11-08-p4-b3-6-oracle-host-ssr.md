@@ -1,5 +1,7 @@
 # П4-B3-6. Оракул, тестовий хост і SSR — план імплементації
 
+> тонкий М3 — [`2026-11-17-p4-b3-6a-resume-thin.md`](2026-11-17-p4-b3-6a-resume-thin.md); решта → #210.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Мета:** SSR-гідратація даних T4 за §6.6 — сторінка з даними гідрується без

@@ -1,0 +1,581 @@
+{
+  "format": 1,
+  "snapshotHash": "a37dabd31449584ae8a22eb8a3efd0ac49121fc14af4aff18cb0131d030ca031",
+  "provider": "postgres",
+  "objects": [
+    {
+      "id": "08f4943e-0296-4fbd-8d89-61b6f11355ee",
+      "name": "Client",
+      "kind": "Catalog",
+      "kindLabel": "client",
+      "table": {
+        "schema": "app",
+        "name": "client"
+      },
+      "key": "id",
+      "keyName": "ref",
+      "versionColumn": "version",
+      "versionName": "version",
+      "kernelHash": "0f83f2243ed39161f34412c27b93f22b1991f009df3f6ad9fd6afd79a333c6f4",
+      "signal": true,
+      "attributes": [
+        {
+          "name": "code",
+          "column": "code",
+          "type": "String",
+          "required": false,
+          "maxLength": 9,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "description",
+          "column": "description",
+          "type": "String",
+          "required": false,
+          "notNull": true,
+          "maxLength": 150,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "deletionMark",
+          "column": "deletion_mark",
+          "type": "Boolean",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "predefinedName",
+          "column": "predefined_name",
+          "type": "Text",
+          "required": false,
+          "insert": false,
+          "update": false,
+          "maxBytes": 65536
+        },
+        {
+          "name": "createdAt",
+          "column": "created_at",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "updatedAt",
+          "column": "updated_at",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "country",
+          "column": "country_id",
+          "type": "Ref",
+          "required": false,
+          "insert": true,
+          "update": true,
+          "ref": {
+            "object": "f3fd253a-a1a9-4d9d-ad46-379757fbbab5",
+            "constraint": "client_country_id_fkey"
+          }
+        },
+        {
+          "name": "owner",
+          "column": "owner_id",
+          "type": "Ref",
+          "required": false,
+          "insert": true,
+          "update": true,
+          "ref": {
+            "object": "1220b990-252c-48c4-88e8-bc46b4f9344d",
+            "constraint": "client_owner_id_fkey"
+          }
+        }
+      ],
+      "tabularSections": [
+        {
+          "id": "1b5bd8cd-ee2a-4d70-8c46-e6c59ff58fd5",
+          "name": "contacts",
+          "table": {
+            "schema": "app",
+            "name": "client_contacts"
+          },
+          "key": "id",
+          "keyName": "ref",
+          "parent": "parent_id",
+          "parentName": "parent",
+          "lineNumber": "line_number",
+          "lineNumberName": "lineNumber",
+          "parentConstraint": "client_contacts_parent_id_fkey",
+          "attributes": [
+            {
+              "name": "name",
+              "column": "name",
+              "type": "String",
+              "required": false,
+              "maxLength": 150,
+              "insert": true,
+              "update": true
+            },
+            {
+              "name": "phone",
+              "column": "phone",
+              "type": "String",
+              "required": false,
+              "maxLength": 32,
+              "insert": true,
+              "update": true
+            },
+            {
+              "name": "owner_id",
+              "column": "owner_id",
+              "type": "Raw",
+              "required": false,
+              "insert": false,
+              "update": false,
+              "copy": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "f3fd253a-a1a9-4d9d-ad46-379757fbbab5",
+      "name": "Country",
+      "kind": "Catalog",
+      "kindLabel": "country",
+      "table": {
+        "schema": "app",
+        "name": "country"
+      },
+      "key": "id",
+      "keyName": "ref",
+      "versionColumn": "version",
+      "versionName": "version",
+      "kernelHash": "ebc8521f858b032322f9308d7d4fea6e20bcc5121fd781a33a41992857e79a7a",
+      "signal": true,
+      "attributes": [
+        {
+          "name": "code",
+          "column": "code",
+          "type": "String",
+          "required": false,
+          "maxLength": 9,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "description",
+          "column": "description",
+          "type": "String",
+          "required": false,
+          "notNull": true,
+          "maxLength": 150,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "deletionMark",
+          "column": "deletion_mark",
+          "type": "Boolean",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "predefinedName",
+          "column": "predefined_name",
+          "type": "Text",
+          "required": false,
+          "insert": false,
+          "update": false,
+          "maxBytes": 65536
+        },
+        {
+          "name": "createdAt",
+          "column": "created_at",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "updatedAt",
+          "column": "updated_at",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        }
+      ],
+      "tabularSections": []
+    },
+    {
+      "id": "7539667a-7ed8-4438-bb93-2d6d847bb86e",
+      "name": "GlobalRoleAssignments",
+      "kind": "Catalog",
+      "kindLabel": "global_role_assignments",
+      "table": {
+        "schema": "app",
+        "name": "global_role_assignments"
+      },
+      "key": "id",
+      "keyName": "ref",
+      "versionColumn": "version",
+      "versionName": "version",
+      "kernelHash": "f18e31557a8996afed0613e5198277049a1ccee0e440ba3cc23dec451da781a3",
+      "signal": true,
+      "attributes": [
+        {
+          "name": "code",
+          "column": "code",
+          "type": "String",
+          "required": false,
+          "maxLength": 9,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "description",
+          "column": "description",
+          "type": "String",
+          "required": false,
+          "notNull": true,
+          "maxLength": 150,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "deletionMark",
+          "column": "deletion_mark",
+          "type": "Boolean",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "subject",
+          "column": "subject",
+          "type": "UUID",
+          "required": true,
+          "notNull": true,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "archetype",
+          "column": "archetype",
+          "type": "UUID",
+          "required": false,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "customRole",
+          "column": "custom_role",
+          "type": "UUID",
+          "required": false,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "container",
+          "column": "container",
+          "type": "UUID",
+          "required": false,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "predefinedName",
+          "column": "predefined_name",
+          "type": "Text",
+          "required": false,
+          "insert": false,
+          "update": false,
+          "maxBytes": 65536
+        },
+        {
+          "name": "createdAt",
+          "column": "created_at",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "updatedAt",
+          "column": "updated_at",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        }
+      ],
+      "tabularSections": []
+    },
+    {
+      "id": "212f0a7e-14da-420e-9791-3efb9931b2f0",
+      "name": "GlobalRoles",
+      "kind": "Catalog",
+      "kindLabel": "global_roles",
+      "table": {
+        "schema": "app",
+        "name": "global_roles"
+      },
+      "key": "id",
+      "keyName": "ref",
+      "versionColumn": "version",
+      "versionName": "version",
+      "kernelHash": "f66cbb34200ae1846604fce8852fa546743f6b489e736472b2ecf273a7aa7f3d",
+      "signal": true,
+      "attributes": [
+        {
+          "name": "code",
+          "column": "code",
+          "type": "String",
+          "required": false,
+          "maxLength": 9,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "description",
+          "column": "description",
+          "type": "String",
+          "required": false,
+          "notNull": true,
+          "maxLength": 150,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "deletionMark",
+          "column": "deletion_mark",
+          "type": "Boolean",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "archetype",
+          "column": "archetype",
+          "type": "UUID",
+          "required": true,
+          "notNull": true,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "order",
+          "column": "order",
+          "type": "Integer",
+          "required": false,
+          "insert": true,
+          "update": true
+        },
+        {
+          "name": "predefinedName",
+          "column": "predefined_name",
+          "type": "Text",
+          "required": false,
+          "insert": false,
+          "update": false,
+          "maxBytes": 65536
+        },
+        {
+          "name": "createdAt",
+          "column": "created_at",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "updatedAt",
+          "column": "updated_at",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        }
+      ],
+      "tabularSections": [
+        {
+          "id": "212f0a7e-14da-420e-9791-3efb9931b2f0#delta",
+          "name": "delta",
+          "table": {
+            "schema": "app",
+            "name": "global_roles_delta"
+          },
+          "key": "id",
+          "keyName": "ref",
+          "parent": "parent_id",
+          "parentName": "parent",
+          "lineNumber": "line_number",
+          "lineNumberName": "lineNumber",
+          "parentConstraint": "global_roles_delta_parent_id_fkey",
+          "attributes": [
+            {
+              "name": "object",
+              "column": "object",
+              "type": "Text",
+              "required": true,
+              "notNull": true,
+              "insert": true,
+              "update": true,
+              "maxBytes": 65536
+            },
+            {
+              "name": "action",
+              "column": "action",
+              "type": "Text",
+              "required": true,
+              "notNull": true,
+              "insert": true,
+              "update": true,
+              "maxBytes": 65536
+            },
+            {
+              "name": "extent",
+              "column": "extent",
+              "type": "Text",
+              "required": true,
+              "notNull": true,
+              "insert": true,
+              "update": true,
+              "maxBytes": 65536
+            },
+            {
+              "name": "dimension",
+              "column": "dimension",
+              "type": "UUID",
+              "required": false,
+              "insert": true,
+              "update": true
+            },
+            {
+              "name": "effect",
+              "column": "effect",
+              "type": "Text",
+              "required": true,
+              "notNull": true,
+              "insert": true,
+              "update": true,
+              "maxBytes": 65536
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "1220b990-252c-48c4-88e8-bc46b4f9344d",
+      "name": "Users",
+      "kind": "Catalog",
+      "kindLabel": "users",
+      "table": {
+        "schema": "app",
+        "name": "users"
+      },
+      "key": "id",
+      "keyName": "ref",
+      "versionColumn": "version",
+      "versionName": "version",
+      "kernelHash": "a7c749d3dd4c4b60ee0be86b3db2966bf65684d63cd3a843ce69a8997fda64f9",
+      "signal": true,
+      "attributes": [
+        {
+          "name": "code",
+          "column": "code",
+          "type": "String",
+          "required": false,
+          "maxLength": 9,
+          "insert": false,
+          "update": true
+        },
+        {
+          "name": "description",
+          "column": "description",
+          "type": "String",
+          "required": false,
+          "notNull": true,
+          "maxLength": 150,
+          "insert": false,
+          "update": true
+        },
+        {
+          "name": "deletionMark",
+          "column": "deletion_mark",
+          "type": "Boolean",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "userKind",
+          "column": "user_kind",
+          "type": "Text",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false,
+          "maxBytes": 65536
+        },
+        {
+          "name": "invalid",
+          "column": "invalid",
+          "type": "Boolean",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "predefinedName",
+          "column": "predefined_name",
+          "type": "Text",
+          "required": false,
+          "insert": false,
+          "update": false,
+          "maxBytes": 65536
+        },
+        {
+          "name": "createdAt",
+          "column": "created_at",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        },
+        {
+          "name": "updatedAt",
+          "column": "updated_at",
+          "type": "DateTime",
+          "required": false,
+          "notNull": true,
+          "insert": false,
+          "update": false
+        }
+      ],
+      "tabularSections": []
+    }
+  ]
+}

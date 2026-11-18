@@ -1,0 +1,78 @@
+{
+  "$schema": "../../../../node_modules/simetra/schemas/catalogs.schema.json",
+  "id": "08f4943e-0296-4fbd-8d89-61b6f11355ee",
+  "kind": "Catalog",
+  "name": "Client",
+  "physicalName": "client",
+  "kindLabel": "client",
+  "scope": "none",
+  "title": {
+    "en": "Clients"
+  },
+  "ownership": ["owner"],
+  "attributes": [
+    {
+      "id": "2762a523-c604-4bbd-9971-bc6cc3cda241",
+      "name": "country",
+      "physicalName": "country_id",
+      "title": {
+        "en": "Country"
+      },
+      "type": "Ref",
+      "ref": {
+        "kind": "Catalog",
+        "name": "Country"
+      }
+    },
+    {
+      "id": "af2bb168-ee0c-4b1d-9729-d48ce691300c",
+      "name": "owner",
+      "physicalName": "owner_id",
+      "title": {
+        "en": "Owner"
+      },
+      "type": "Ref",
+      "ref": {
+        "kind": "Catalog",
+        "name": "Users"
+      }
+    }
+  ],
+  "tabularSections": [
+    {
+      "id": "1b5bd8cd-ee2a-4d70-8c46-e6c59ff58fd5",
+      "name": "contacts",
+      "physicalName": "client_contacts",
+      "title": {
+        "en": "Contacts"
+      },
+      "attributes": [
+        {
+          "id": "1eab3c6f-ca51-4a70-99d3-49ca2b1446c1",
+          "name": "name",
+          "physicalName": "name",
+          "title": {
+            "en": "Name"
+          },
+          "type": "String",
+          "length": 150
+        },
+        {
+          "id": "fe32a682-539e-4e93-9bed-e68c2cf9bae3",
+          "name": "phone",
+          "physicalName": "phone",
+          "title": {
+            "en": "Phone"
+          },
+          "type": "String",
+          "length": 32
+        }
+      ]
+    }
+  ],
+  "indexes": [
+    {
+      "attributes": ["description"]
+    }
+  ]
+}
