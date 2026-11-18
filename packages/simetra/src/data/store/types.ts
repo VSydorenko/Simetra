@@ -123,9 +123,9 @@ export type RowView =
       readonly hidden?: true
       /**
        * The stored row carries a stale mark — a version below the known one,
-       * a signal gap, a `hide`, or a version epoch switch not proved since —
-       * whatever `state` shows: a mutation state takes precedence over
-       * `stale` (§6.5), the fact stays here.
+       * a version epoch switch not proved since, or a signal gap — whatever
+       * `state` shows: a mutation state takes precedence over `stale` (§6.5),
+       * the fact stays here. A `hide` is the separate fact `hidden`.
        */
       readonly stale?: true
       /** The own mutation of the row; its state is `state` unless hidden. */

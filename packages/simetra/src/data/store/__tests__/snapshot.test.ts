@@ -117,17 +117,26 @@ describe("computeRowView with an own mutation (plan B3-4-Л Р5, Р7)", () => {
     expect("stale" in view).toBe(false)
   })
 
-  it("a hide mark under failed shows stale; a read started after it lifts it", () => {
+  it("a minimal version mark under failed shows stale; a read started after it lifts it", () => {
     const h = stored()
-    h.write((s) => h.store.hideKeys(s, [K1]))
+    h.write((s) => h.store.markStale(s, [K1], 5))
     expect(
       computeRowView(K1, h.store.get(K1)!, [], undefined, failed)
-    ).toMatchObject({ hidden: true, stale: true })
-    h.write((s) => h.store.put(s, row(K1, 1), h.now(), false))
+    ).toMatchObject({ state: "failed", stale: true })
+    h.write((s) =>
+      h.store.put(s, { ...row(K1, 5), versionEpoch: EA }, h.now(), false)
+    )
     const view = computeRowView(K1, h.store.get(K1)!, [], undefined, failed)
-    expect(view).toMatchObject({ state: "failed" })
+    expect(view).toMatchObject({ state: "failed", version: 5 })
     expect("stale" in view).toBe(false)
-    expect("hidden" in view).toBe(false)
+  })
+
+  it("a hide-only mark is the fact hidden, not stale", () => {
+    const h = stored()
+    h.write((s) => h.store.hideKeys(s, [K1]))
+    const view = computeRowView(K1, h.store.get(K1)!, [], undefined, failed)
+    expect(view).toMatchObject({ state: "stale", hidden: true })
+    expect("stale" in view).toBe(false)
   })
 
   it("hidden outranks the mutation state, and the view keeps the mutation", () => {

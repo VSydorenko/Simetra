@@ -729,12 +729,15 @@ async function runModel(
     if (row.version < max && fields.length > 0 && row.stale !== true)
       fail(label, `${at}: version ${max} → ${row.version} as ${row.state}`)
     maxVersion.set(versionKey(object, row.key), Math.max(max, row.version))
-    // Факт `stale` покриває кожну позначку збереженого рядка, зокрема розрив
-    // сигналів, за будь-якого стану мутації (§6.5).
+    // Факт `stale` покриває кожну позначку застарілості збереженого рядка —
+    // нижчу версію, зміну епохи, розрив сигналів — за будь-якого стану
+    // мутації (§6.5); `hide` — окремий факт `hidden`.
     const marks = objectOf(object).rows.get(row.key)?.stale
     if (
       marks !== undefined &&
-      Object.values(marks).some((m) => m !== undefined) &&
+      (marks.minVersion !== undefined ||
+        marks.epoch !== undefined ||
+        marks.disconnect !== undefined) &&
       row.stale !== true
     )
       fail(label, `${at}: a stale mark not shown as stale (${row.state})`)
