@@ -442,6 +442,85 @@ describe("sql.kind-table-verbatim: application SQL does not write a kind table (
     }
   )
 
+  // Уся схема `simetra` закрита для DML застосунку (Правило 1): стан
+  // застосування, квитанції й черга сигналів живуть поза знімком, а
+  // `SECURITY DEFINER`-функція писала б їх від імені власника. Кваліфікована
+  // ціль — будь-яке ім'я схеми, некваліфікована — fail-closed за відомими
+  // таблицями схеми.
+  it.each([
+    {
+      name: "INSERT into a table of the apply state",
+      sql: plpgsqlFn("INSERT INTO simetra.ledger DEFAULT VALUES"),
+      expected: bodyVerbatim(EXTRA, "simetra.ledger", "InsertStmt"),
+    },
+    {
+      name: "UPDATE of the epoch row",
+      sql: sqlFn("UPDATE simetra.version_epoch SET epoch = gen_random_uuid()"),
+      expected: bodyVerbatim(EXTRA, "simetra.version_epoch", "UpdateStmt"),
+    },
+    {
+      name: "DELETE from a table the snapshot does not know",
+      sql: plpgsqlFn("DELETE FROM simetra.outbox WHERE false"),
+      expected: bodyVerbatim(EXTRA, "simetra.outbox", "DeleteStmt"),
+    },
+    {
+      name: "MERGE into a platform table",
+      sql: plpgsqlFn(
+        "MERGE INTO simetra.receipts r USING (SELECT 1 AS x) s ON false WHEN NOT MATCHED THEN DO NOTHING"
+      ),
+      expected: bodyVerbatim(EXTRA, "simetra.receipts", "MergeStmt"),
+    },
+    {
+      name: "a SECURITY DEFINER function",
+      sql: "CREATE FUNCTION public.f() RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $$ BEGIN DELETE FROM simetra.marker WHERE false; END $$",
+      expected: bodyVerbatim(EXTRA, "simetra.marker", "DeleteStmt"),
+    },
+    {
+      // Шлях пошуку викликача може вести в `simetra`.
+      name: "an unqualified table of the apply state",
+      sql: plpgsqlFn("DELETE FROM ledger WHERE false"),
+      expected: bodyVerbatim(EXTRA, "simetra.ledger", "DeleteStmt"),
+    },
+    {
+      name: "a DO block in a body",
+      sql: plpgsqlFn(
+        "DO $d$ BEGIN DELETE FROM simetra.outbox WHERE false; END $d$"
+      ),
+      expected: bodyVerbatim(EXTRA, "simetra.outbox", "DeleteStmt"),
+    },
+    {
+      name: "a data-modifying CTE",
+      sql: sqlFn("WITH d AS (DELETE FROM simetra.outbox RETURNING 1) SELECT 1"),
+      expected: bodyVerbatim(EXTRA, "simetra.outbox", "DeleteStmt"),
+    },
+    {
+      name: "DML in a literal EXECUTE",
+      sql: plpgsqlFn("EXECUTE 'INSERT INTO simetra.outbox DEFAULT VALUES'"),
+      expected: bodyVerbatim(EXTRA, "simetra.outbox", "InsertStmt"),
+    },
+  ])(
+    "$name → error: a table of the platform schema",
+    async ({ sql, expected }) => {
+      const result = await compile(await acceptDebt(files({ [EXTRA]: sql })))
+      expect(brief(result.diagnostics)).toEqual([expected])
+    }
+  )
+
+  it("reading a table of the platform schema stays allowed", async () => {
+    const result = await compile(
+      await acceptDebt(
+        files({
+          [EXTRA]: plpgsqlFn(
+            "PERFORM 1 FROM simetra.version_epoch",
+            "public.f",
+            ""
+          ),
+        })
+      )
+    )
+    expect(brief(result.diagnostics)).toEqual([])
+  })
+
   it("a listed function with such a body is an error and a stale entry", async () => {
     const result = await compile(
       files({ [EXTRA]: sqlFn("DELETE FROM public.task WHERE false") }, [

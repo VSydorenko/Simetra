@@ -1,3 +1,4 @@
+import { PLATFORM_SCHEMA } from "simetra/model"
 import type {
   Diagnostic,
   DiagnosticParams,
@@ -1096,20 +1097,20 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   "sql.kind-table-verbatim": {
     en: (p) =>
       p.form === "functionBody"
-        ? `Function ${p.function} at line ${p.line} runs ${p.statement} on ${p.table}, a table of a kind`
+        ? `Function ${p.function} at line ${p.line} runs ${p.statement} on ${p.table}, ${String(p.table).startsWith(`${PLATFORM_SCHEMA}.`) ? "a table of the platform schema" : "a table of a kind"}`
         : `Verbatim ${p.form === "trigger" ? "trigger" : "policy"} ${p.identity} at line ${p.line} is on ${p.table}, a table of a kind`,
     uk: (p) =>
       p.form === "functionBody"
-        ? `Функція ${p.function} у рядку ${p.line} виконує ${p.statement} над ${p.table} — таблицею виду`
+        ? `Функція ${p.function} у рядку ${p.line} виконує ${p.statement} над ${p.table} — ${String(p.table).startsWith(`${PLATFORM_SCHEMA}.`) ? "таблицею схеми платформи" : "таблицею виду"}`
         : `${p.form === "trigger" ? "Дослівний тригер" : "Дослівна політика"} ${p.identity} у рядку ${p.line} стоїть на ${p.table} — таблиці виду`,
     hint: {
       en: (p) =>
         p.form === "functionBody"
-          ? "Only the platform writes a table of a kind: the command core, the posting shell and the platform's triggers. INSERT, UPDATE, DELETE or MERGE by application SQL, also through a view of the model or in the text of a literal EXECUTE, would change its rows past the rights, the movements and the checks of a command, so such a function is never SQL debt and sql-debt.json cannot list it. The same holds for the identity table of the database provider. Reading and locking the rows (SELECT, SELECT … FOR UPDATE, LOCK) stays allowed. Run the change as a command of the object, or write it in a TypeScript hook."
+          ? "Only the platform writes a table of a kind: the command core, the posting shell and the platform's triggers. INSERT, UPDATE, DELETE or MERGE by application SQL, also through a view of the model or in the text of a literal EXECUTE, would change its rows past the rights, the movements and the checks of a command, so such a function is never SQL debt and sql-debt.json cannot list it. The same holds for the identity table of the database provider and for every table of the platform schema simetra: its apply state, receipts and signal queue change only through the platform. Reading and locking the rows (SELECT, SELECT … FOR UPDATE, LOCK) stays allowed. Run the change as a command of the object, or write it in a TypeScript hook."
           : `Only the platform attaches policies and triggers to a table of a kind, in any .sql file: a hand-written one would open rows past the rights or act inside every command. Such a statement is never SQL debt, so sql-debt.json cannot list it. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).en}`,
       uk: (p) =>
         p.form === "functionBody"
-          ? "Таблицю виду пише лише платформа: ядро команд, оболонка проведення й тригери платформи. INSERT, UPDATE, DELETE чи MERGE з SQL застосунку, зокрема через подання моделі чи в тексті літерального EXECUTE, змінили б її рядки повз права, рухи й перевірки команди, тож така функція ніколи не є боргом дослівного SQL, і sql-debt.json її не перелічує. Те саме стосується таблиці ідентичностей провайдера бази. Читати й блокувати рядки (SELECT, SELECT … FOR UPDATE, LOCK) дозволено. Виконайте зміну командою об'єкта або запишіть її в TypeScript-хуку."
+          ? "Таблицю виду пише лише платформа: ядро команд, оболонка проведення й тригери платформи. INSERT, UPDATE, DELETE чи MERGE з SQL застосунку, зокрема через подання моделі чи в тексті літерального EXECUTE, змінили б її рядки повз права, рухи й перевірки команди, тож така функція ніколи не є боргом дослівного SQL, і sql-debt.json її не перелічує. Те саме стосується таблиці ідентичностей провайдера бази й кожної таблиці схеми платформи simetra: її стан застосування, квитанції й черга сигналів змінюються лише через платформу. Читати й блокувати рядки (SELECT, SELECT … FOR UPDATE, LOCK) дозволено. Виконайте зміну командою об'єкта або запишіть її в TypeScript-хуку."
           : `Політики й тригери на таблицю виду ставить лише платформа, у будь-якому файлі .sql: написані вручну відкрили б рядки повз права чи діяли б усередині кожної команди. Такий оператор ніколи не є боргом дослівного SQL, тож sql-debt.json його не перелічує. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).uk}`,
     },
   },
