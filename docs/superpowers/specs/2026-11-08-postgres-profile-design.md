@@ -522,7 +522,7 @@ Supabase.
 
 ```sql
 CREATE TABLE simetra.signal_outbox (
-  id         bigserial PRIMARY KEY,
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   method     text NOT NULL CHECK (method = 'publish'),
   payload    jsonb NOT NULL,
   partition  integer NOT NULL DEFAULT 0 CHECK (partition = 0),
@@ -531,11 +531,15 @@ CREATE TABLE simetra.signal_outbox (
 ```
 
 - Колонки — рівно формат споживача Centrifugo (`id`, `method`, `payload`,
-  `partition`, `created_at`); імена й типи змінювати не можна.
+  `partition`, `created_at`); імена й типи змінювати не можна. `id` —
+  identity `ALWAYS`: значення ставить лише база, а вставка в identity-колонку
+  не потребує прав на її послідовність.
 - Форма `payload` закрита на рівні бази: `CHECK` — рівно ключі `channel`,
   `data`, `idempotency_key`; `channel` відповідає формі топіків П4-B
   (`^simetra(-rights|-user)?:[0-9a-f:-]+$`); `idempotency_key` =
-  `data->>'id'`. Інакше вставка в outbox могла б додати поля запиту
+  `data->>'id'` = `id` рядка (його вписує тригер штампа `BEFORE INSERT`:
+  роль команд свого `id` не бачить); текст `payload` — не більше 1024
+  октетів. Інакше вставка в outbox могла б додати поля запиту
   публікації Centrifugo (`skip_history`, `b64data`, `tags`) чи чужий ключ
   ідемпотентності. Політику `INSERT` режиму відправки П4-B будує над
   `payload->>'channel'`: окремої колонки `topic` у формі споживача немає.
@@ -549,15 +553,18 @@ CREATE TABLE simetra.signal_outbox (
   `id`). Ця спека додає лише `idempotency_key` = `data->>'id'`: якщо
   споживач опублікував подію, а `DELETE` не закомітився, повтор не дасть
   дубля в історії каналу.
-- Таблицю, послідовність, тригер і функцію тригера генерує платформа в
+- Таблиця — таблиця фізичного знімка з платформним походженням без об'єкта
+  (`origin: { part: "signalOutbox" }`): її несе знімок кожного проєкту,
+  тож хеш, порядок створення, `explain` і межа звірки бачать її разом із
+  моделлю. Тригери, гранти, політики й `prune` — одиниці платформного шару в
   схемі `simetra`; власник — `simetra_owner` (у `supabase` — роль
-  застосування). Таблиця входить у межу гейта як об'єкт платформи.
+  застосування).
 
 ### 5.2 Гранти, RLS, `NOTIFY`
 
 - `ENABLE ROW LEVEL SECURITY`, без `FORCE`.
-- `simetra_command`: `INSERT (method, payload)`, `USAGE` на послідовність
-  `id`. Це названий виняток із правила «ролі застосунку не мають грантів на
+- `simetra_command`: `INSERT (method, payload)`; прав на послідовність `id`
+  не треба (identity). Це названий виняток із правила «ролі застосунку не мають грантів на
   таблиці `simetra`» (С1, платформна спека §6.7): сигнал пише функція
   `SECURITY INVOKER` від ролі команд (П4-B). Політику `INSERT` у режимі
   відправки задає П4-B; іншого запису в outbox у ролей застосунку немає.
