@@ -26,16 +26,6 @@ export interface ListHostProps {
   include?: readonly string[]
 }
 
-// after ⑤ (#222): `RowView.mutation` за планом B3-4-Л (Р5, Р7) — і на гілці
-// `removed`; до мерджу тип рядка цього поля не має, тож воно читається
-// структурно, без власної заміни в T5.
-interface RowMutation {
-  readonly error?: { readonly code: string }
-  readonly cancel?: () => void
-}
-const mutationOf = (row: RowView): RowMutation | undefined =>
-  (row as { readonly mutation?: RowMutation }).mutation
-
 const isObjectRef = (column: FieldColumn) =>
   column.attribute.type === "Ref" &&
   column.attribute.ref !== undefined &&
@@ -101,7 +91,7 @@ export function ListRow(props: ListRowProps): ReactElement {
   const remove = useMessage("action.remove")
   const cancel = useMessage("action.cancel")
   const state = displayState(row)
-  const mutation = mutationOf(row)
+  const mutation = row.mutation
   const rowStyle = {
     display: "flex",
     alignItems: "center",
@@ -121,7 +111,8 @@ export function ListRow(props: ListRowProps): ReactElement {
             remove
           )
         : null,
-      // after ⑤ (#222): «Скасувати» — дія мутації рядка `removed` (Р7).
+      // «Скасувати» на `removed` — дія мутації рядка (П4-B §6.5): без неї
+      // невідправлена правка зникла б разом зі слотом.
       row.state === "removed" && mutation?.cancel !== undefined
         ? createElement(
             "button",
@@ -145,8 +136,9 @@ export function ListRow(props: ListRowProps): ReactElement {
     },
     createElement(StateCell, {
       state,
-      // after ⑤ (#222): код відмови — у підказці комірки (П4-B §6.5).
+      // Код відмови — у підказці комірки (П4-B §6.5).
       title: state === "failed" ? mutation?.error?.code : undefined,
+      stale: row.stale === true,
     }),
     ...props.columns.map((column) => {
       const ref = column.attribute.ref

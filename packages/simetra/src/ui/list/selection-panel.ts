@@ -75,8 +75,8 @@ export function SelectionPanel(props: {
     !isPurged && view.needsRefresh
       ? createElement(Button, { label: refreshList, onClick: view.refresh })
       : null,
-    // after ⑤ (#222): `isStale` хука — несумісний клієнт (П4-B §6.4), не
-    // застарілість рядка; до #222 хук ще рахує його зі стану рядків.
+    // `isStale` хука — несумісний клієнт (П4-B §6.4, §10), не застарілість
+    // рядка: застарілий рядок показує власна комірка стану.
     view.isStale ? createElement("span", null, updateRequired) : null,
     createElement(
       "span",

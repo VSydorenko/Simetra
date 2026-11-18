@@ -38,13 +38,14 @@ import { LIST_HEIGHT, ROW_HEIGHT } from "../geometry"
 import { ListHost, ListRow, edgeLoader } from "../list-host"
 import { displayState } from "../state-cell"
 import { VirtualList } from "../virtual-list"
+import { serverTransport, staleKernel } from "../../__tests__/server-transport"
 import { headerColumns } from "../../fields"
 import { catalogIndex } from "simetra/model"
 
 // Хост тестується над справжнім рантаймом T4 і фейковим сервером: стани
 // рядків і вибірки дає ядро, а не підставлений знімок. Стани мутації
-// (`pending`, `failed`, `conflict`, `unknown`) рантайм до #222 не дає — їх
-// перевіряє рядок напряму.
+// (`pending`, `failed`, `conflict`, `unknown`) малюються з рядка напряму:
+// їх відтворення ядром перевіряють тести T4, а тут — лише показ.
 
 const text = (key: MessageKey) => MESSAGES.en[key]
 
@@ -94,7 +95,7 @@ function makeRuntime(
   const catalog: ClientCatalog = { ...clientCatalog(), objects: [...objects] }
   const runtime = createDataRuntime({
     catalog,
-    transport: () => Promise.reject(new Error("unused")),
+    transport: serverTransport(fake).transport,
     subject: SUBJECT,
     log: () => {},
     sources: {
@@ -273,6 +274,24 @@ describe("ListHost", () => {
     expect(row.querySelector('[data-field="title"]')?.textContent).toBe("t1")
   })
 
+  it("застарілий рядок сам не піднімає банера несумісного клієнта", async () => {
+    const { view, core, fake } = await ready()
+    act(() => {
+      core.commit((w) => w.markStale(TASK, [key(1)], 99), core.token())
+    })
+    expect(stateOf(rowOf(view.container, 1))).toBe("stale")
+    expect(panel(view.container).textContent).not.toContain(
+      text("app.updateRequired")
+    )
+    // Позитивний контроль: об'єкт, позначений несумісним, банер піднімає.
+    staleKernel(fake, task.id)
+    act(() => core.requestVersion())
+    await flush()
+    expect(panel(view.container).textContent).toContain(
+      text("app.updateRequired")
+    )
+  })
+
   it("hidden — слот того самого розміру без значень і без відкриття картки", async () => {
     const { view, core, nav } = await ready()
     act(() => {
@@ -280,8 +299,8 @@ describe("ListHost", () => {
     })
     const c = view.container
     const row = rowOf(c, 1)
-    // Ядро віддає прихований рядок як `stale`, але вже без значень
-    // (`visibleRow`, `EMPTY_VALUES`); хост показує `hidden`.
+    // Ядро віддає прихований рядок уже без значень (`visibleRow`,
+    // `EMPTY_VALUES`) з фактом `hidden`; хост показує `hidden`.
     expect(stateOf(row)).toBe("hidden")
     expect(row.textContent).toBe(text("state.hidden"))
     expect(slotOf(c, 1).textContent).not.toContain("t1")
@@ -474,7 +493,11 @@ describe("ListRow — стани мутації", () => {
       staleFields: [],
     },
   }
-  const mutation = { error: { code: "secret.code" } }
+  const mutation = {
+    id: "m1",
+    state: "failed",
+    error: { code: "secret.code" },
+  }
   const synced = (over: Record<string, unknown>): RowView =>
     ({
       key: key(1),
@@ -528,6 +551,32 @@ describe("ListRow — стани мутації", () => {
     )
   })
 
+  it.each(["pending", "conflict"] as const)(
+    "stale: true на %s — назва стану мутації й підказка застарілості",
+    (state) => {
+      const row = draw(synced({ state, stale: true }))
+      const cell = row.querySelector('[role="gridcell"]')!
+      expect(stateOf(row)).toBe(state)
+      expect(cell.querySelector('[data-hint="stale"]')?.textContent).toBe(
+        text("state.stale")
+      )
+      expect(cell.textContent).toBe(
+        text(`state.${state}`) + text("state.stale")
+      )
+    }
+  )
+
+  it("без stale: true підказки застарілості немає; на stale-рядку — лише назва", () => {
+    const conflict = draw(synced({ state: "conflict" }))
+    expect(conflict.querySelector('[data-hint="stale"]')).toBeNull()
+    cleanup()
+    const stale = draw(synced({ state: "stale", stale: true }))
+    expect(stale.querySelector('[data-hint="stale"]')).toBeNull()
+    expect(stale.querySelector('[role="gridcell"]')?.textContent).toBe(
+      text("state.stale")
+    )
+  })
+
   it("failed — код відмови в підказці", () => {
     const row = draw(synced({ state: "failed" }))
     expect(row.querySelector('[role="gridcell"]')?.getAttribute("title")).toBe(
@@ -557,7 +606,11 @@ describe("ListRow — стани мутації", () => {
     const cancel = vi.fn()
     const onRemove = vi.fn()
     const row = draw(
-      { key: key(1), state: "removed", mutation: { cancel } } as RowView,
+      {
+        key: key(1),
+        state: "removed",
+        mutation: { id: "m1", state: "conflict", cancel },
+      } as RowView,
       vi.fn(),
       onRemove
     )
