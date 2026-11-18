@@ -9,20 +9,22 @@
     "default": "unit",
     "packages": {
       "simetra": "packages/simetra",
-      "designer": "packages/designer"
+      "designer": "packages/designer",
+      "template": "packages/create-simetra-app/template",
+      "e2e": "packages/create-simetra-app"
     },
     "levels": {
       "unit": {
         "command": ["pnpm", "exec", "vitest", "run", "--project", "unit"],
         "reporter": "vitest-json",
-        "packages": ["simetra", "designer"],
+        "packages": ["simetra", "designer", "template"],
         "timeout": 900,
         "ci": true
       },
       "db": {
         "command": ["pnpm", "exec", "vitest", "run", "--project", "db"],
         "reporter": "vitest-json",
-        "packages": ["simetra", "designer"],
+        "packages": ["simetra", "designer", "template"],
         "lock": "/tmp/simetra-db-stack-postgres.lock",
         "lockWait": 2700,
         "timeout": 2400,
@@ -43,6 +45,15 @@
         "lock": "/tmp/simetra-db-stack.lock",
         "lockWait": 2700,
         "timeout": 1800,
+        "ci": true
+      },
+      "e2e": {
+        "command": ["pnpm", "run", "e2e"],
+        "reporter": "exit-code",
+        "packages": ["e2e"],
+        "lock": "/tmp/simetra-db-stack-postgres.lock",
+        "lockWait": 2700,
+        "timeout": 1500,
         "ci": true
       }
     }

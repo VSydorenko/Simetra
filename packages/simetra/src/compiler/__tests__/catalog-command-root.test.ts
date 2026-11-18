@@ -97,7 +97,7 @@ describe("<root>_create_root", () => {
       author: at(shape, "assign", "SELECT (SELECT simetra.current_user_id())"),
       reference: ifAt(
         shape,
-        "v_new.owner_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.users g WHERE g.id = v_new.owner_id)"
+        "v_new.owner_id IS NOT NULL AND NOT ((v_new.owner_id = (SELECT simetra.current_user_id())) IS TRUE OR EXISTS (SELECT 1 FROM public.users g WHERE g.id = v_new.owner_id))"
       ),
       right: ifAt(
         shape,
