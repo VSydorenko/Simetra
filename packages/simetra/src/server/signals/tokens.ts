@@ -135,8 +135,10 @@ async function load(key: SigningKey): Promise<LoadedKey> {
     alg: "EdDSA",
     use: "sig",
   }
+  // Імпорт приватного JWK звіряє `x` з `d` (WebCrypto Node — `DataError`):
+  // невідповідний `x` опублікував би ключ, яким жоден токен не перевіряється,
+  // і Centrifugo відкидав би всі з'єднання без пояснення.
   let privateKey: CryptoKey
-  let publicKey: CryptoKey
   try {
     privateKey = await crypto.subtle.importKey(
       "jwk",
@@ -145,22 +147,9 @@ async function load(key: SigningKey): Promise<LoadedKey> {
       false,
       ["sign"]
     )
-    publicKey = await crypto.subtle.importKey(
-      "jwk",
-      { kty: "OKP", crv: "Ed25519", x: jwk.x },
-      ED25519,
-      false,
-      ["verify"]
-    )
   } catch {
-    throw invalid("the JWK does not import as an Ed25519 key")
+    throw invalid("the JWK is not an Ed25519 key pair (x must match d)")
   }
-  // `x`, що не відповідає `d`, опублікував би ключ, яким жоден токен не
-  // перевіряється: Centrifugo відкидав би всі з'єднання без пояснення.
-  const probe = encoder.encode(key.kid)
-  const signature = await crypto.subtle.sign(ED25519, privateKey, probe)
-  if (!(await crypto.subtle.verify(ED25519, publicKey, signature, probe)))
-    throw invalid("x is not the public key of d")
   return { key, privateKey, publicJwk }
 }
 
