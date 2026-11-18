@@ -12,7 +12,9 @@ import { createDataRuntime, type DataRuntime } from "../../runtime/runtime"
 import {
   OBJECTS,
   TASK,
+  isCard,
   key,
+  readsOf,
   S,
   seed,
   settle,
@@ -676,6 +678,27 @@ describe("useRow", () => {
     expect(shown.row).not.toHaveProperty("stale")
     expect(shown.isStale).toBe(false)
     expect(shown.editable).toBe(false)
+  })
+
+  it("refresh re-reads the card and clears needsRefresh after the answer", async () => {
+    const { fake, core, card } = await editableCard()
+    act(() => {
+      core.commit(
+        (w) => w.markViews(TASK, { needsRefresh: true }),
+        core.token()
+      )
+    })
+    expect(card.last().needsRefresh).toBe(true)
+    const reads = readsOf(fake, TASK).filter(isCard).length
+    act(() => card.last().refresh())
+    expect(readsOf(fake, TASK).filter(isCard).length).toBe(reads + 1)
+    expect(card.last().needsRefresh).toBe(true)
+    await act(async () => {
+      fake.deliverAll()
+      await settle()
+    })
+    expect(card.last().needsRefresh).toBe(false)
+    expect(card.last().editable).toBe(true)
   })
 
   it("is closed with the reason when the runtime is disposed", async () => {

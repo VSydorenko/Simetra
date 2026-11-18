@@ -51,6 +51,8 @@ export interface UseRowResult {
    * staleness of the header is `row.state` and `row.staleFields`.
    */
   readonly isStale: boolean
+  /** Re-reads the views of the card, as `UseRowsResult.refresh` does. */
+  refresh(): void
 }
 
 // Старшинство стану комбінації виглядів: закрите й помилка важать більше за
@@ -74,7 +76,7 @@ export function useRow(input: UseRowInput): UseRowResult {
   const source = useCoreSource()
   const { object, id } = input
   const sections = input.tabularSections ?? []
-  const { snapshots } = useViews(
+  const { snapshots, handles } = useViews(
     source,
     () => [
       { kind: "card", object, key: id },
@@ -124,6 +126,9 @@ export function useRow(input: UseRowInput): UseRowResult {
       ...(closed?.reason === undefined ? {} : { reason: closed.reason }),
       needsRefresh,
       isStale,
+      refresh: () => {
+        for (const handle of handles) handle.refresh()
+      },
     }
-  }, [snapshots])
+  }, [snapshots, handles])
 }
