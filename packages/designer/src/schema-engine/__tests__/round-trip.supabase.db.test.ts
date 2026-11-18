@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import { reverseGenerate } from "simetra/schema"
 import {
+  classProperty,
   engine,
   errors,
   inTarget,
@@ -31,8 +32,12 @@ describe("class fixtures survive the round trip", () => {
           attributeCase: "snake_case",
           databaseProvider: "supabase",
         })
-        expect(fixture.property(result.target)).toEqual(fixture.expected)
-        expect(fixture.property(result.shadow)).toEqual(fixture.expected)
+        expect(await classProperty(fixture, result.target)).toEqual(
+          fixture.expected
+        )
+        expect(await classProperty(fixture, result.shadow)).toEqual(
+          fixture.expected
+        )
         expect(result.shadow).toEqual(result.target)
       })
     })

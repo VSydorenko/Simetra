@@ -18,6 +18,7 @@ import {
   engine,
   errors,
   extractDiagnostics,
+  classProperty,
   inTarget,
   kindsOf,
   parser,
@@ -71,8 +72,12 @@ describe("class fixtures survive the round trip", () => {
           databaseProvider: testProvider(),
         })
         // Властивість класу є в цілі (фікстура її створила) і в тіні
-        expect(fixture.property(result.target)).toEqual(fixture.expected)
-        expect(fixture.property(result.shadow)).toEqual(fixture.expected)
+        expect(await classProperty(fixture, result.target)).toEqual(
+          fixture.expected
+        )
+        expect(await classProperty(fixture, result.shadow)).toEqual(
+          fixture.expected
+        )
         expect(result.shadow).toEqual(result.target)
       })
     })

@@ -6,6 +6,7 @@ import {
   canonicalSnapshot,
   compile,
   loadSqlParser,
+  platformInstall,
   platformTriggers,
   type CompiledModel,
   type SchemaPathResolver,
@@ -673,6 +674,71 @@ function expectLossNeedsPermission(trip: RoundTrip, loss: Loss): void {
     }),
   ])
   expect(checkPermissions(subject, ids)).toEqual([])
+}
+
+/**
+ * Властивість класу фікстури (`ClassFixture.property`) над оракулом без
+ * платформної установки (`platformInstall`): фікстура — сирий SQL у своїх
+ * схемах, а таблицю, функції, тригери й політики outbox сигналів ціль має
+ * від доповнення (`withPlatformSequence`). Порівняння цілі з тінню бачить
+ * установку й далі — тут її не бачить лише проєкція класу.
+ */
+export async function classProperty(
+  fixture: ClassFixture,
+  shape: OracleShape
+): Promise<unknown> {
+  const install = await platformInstall(testProvider())
+  const relations = new Set([
+    ...install.tables.flatMap((t) => [
+      `${t.schema}.${t.name}`,
+      ...t.columns.flatMap((c) =>
+        c.identity === undefined ? [] : [`${t.schema}.${c.identity.sequence}`]
+      ),
+    ]),
+    ...install.units
+      .filter((u) => u.class === "sequence")
+      .map((u) => `${u.schema}.${u.name}`),
+  ])
+  const functions = new Set(
+    install.units
+      .filter((u) => u.class === "function")
+      .map((u) => `${u.schema}.${u.name}`)
+  )
+  const members = new Set(
+    install.units
+      .filter((u) => u.class === "trigger" || u.class === "policy")
+      .map((u) => u.identity.slice(u.identity.indexOf(":") + 1))
+  )
+  const fn = (signature: string) => functions.has(signature.split("(")[0]!)
+  // Об'єкт ACL оракула: `<relkind>:<схема>.<ім'я>[.<колонка>]` чи `f:<сигнатура>`
+  const aclOf = (object: string) => {
+    const [kind, name] = [object.slice(0, 1), object.slice(2)]
+    if (kind === "f") return fn(name)
+    if (kind === "c")
+      return relations.has(name.split(".").slice(0, 2).join("."))
+    return relations.has(name)
+  }
+  return fixture.property({
+    ...shape,
+    catalog: {
+      ...shape.catalog,
+      tables: shape.catalog.tables.filter(
+        (t) => !relations.has(`${t.schema}.${t.name}`)
+      ),
+      functions: shape.catalog.functions.filter(
+        (f) => !functions.has(`${f.schema}.${f.name}`)
+      ),
+    },
+    triggers: shape.triggers.filter(
+      (t) => !members.has(`${t.table}.${t.name}`)
+    ),
+    policies: shape.policies.filter(
+      (p) => !members.has(`${p.table}.${p.name}`)
+    ),
+    functions: shape.functions.filter((f) => !fn(f.name)),
+    acls: shape.acls.filter((a) => !aclOf(a.object)),
+    ownedBy: shape.ownedBy.filter((o) => !relations.has(o.sequence)),
+  })
 }
 
 /** Тригери, функції та їхні ACL оракула без втраченої механіки. */
