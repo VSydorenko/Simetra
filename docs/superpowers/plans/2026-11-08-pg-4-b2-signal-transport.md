@@ -7,9 +7,12 @@
 > **A** — ролі, outbox і споживач (ПГ-4); **B** — функції сигналу, виклик у
 > ядрі, авторизація каналу й злиття (B2); **C** — токени,
 > `authorizeChannels`, конфіг Centrifugo й гейт доставки (ПГ-4).
-> **Якорі «після #173».** Частина B стартує лише після мерджу #173 (Правило 1
-> для таблиць `simetra`, сесія `simetra-aa`): до того `packages/simetra/src/compiler/sql/**`
-> належить їй. Частини A і C від #173 не залежать.
+> **Порядок A → B → C; якорі «після #173».** Частина B стартує лише після
+> мерджу #173 (Правило 1 для таблиць `simetra`, сесія `simetra-aa`): до того
+> `packages/simetra/src/compiler/sql/**` належить їй. Частина A від #173 не
+> залежить. У частині C задачі 10 і 12 від B не залежать і можуть іти
+> паралельно з нею; задачі 11 і 13 беруть `signal_topic_allowed` і сигнал ядра
+> з B, тож PR частини C — після мерджу B.
 > **Поза планом:** маршрути токенів, JWKS, сокет і шина вкладок у шаблоні —
 > D5 (#122); приймач — B5b (#114); сигнали й канали прав — B6 (#115).
 > **Спільні стеки.** Виконавець не зупиняє й не перестворює стеків; DB-тести —
@@ -87,7 +90,7 @@
 | Р13 | `CHECK` прив'язує `idempotency_key` і `data.id` до `id`: вимкнений тригер — `23514` | немає |
 | Р14 | Режим злиття скидається в тому самому операторі, що ставить claims команди: `ALTER ROLE … SET` не гасить сигналів | немає |
 | Р15 | 🔴 Політика `INSERT` outbox — `WITH CHECK (signal_payload_allowed(payload))`: канал за `signal_topic_allowed(…, true)`, точна форма `data` за `op`, `object` = об'єкт топіка, рівно один ключ з ім'ям колонки ключа й UUID. Правило форми — лише там | П4-B §8.2, §8.3 |
-| Р16 | **DSN `simetra_signals` до Centrifugo стеків.** Пароль `SIMETRA_SIGNALS_DEV_PASSWORD` — у `login-secrets.env`. `scripts/db-stack.mjs` будує DSN і передає compose середовищем процесу (`composeEnv()`); compose має лише інтерполяцію `${SIMETRA_SIGNALS_DSN:-}` у `environment:` Centrifugo (`CENTRIFUGO_CONSUMERS_SIMETRA_OUTBOX_POSTGRESQL_DSN`, `…_PARTITION_NOTIFICATION_DSN`; перевизначення діє лише для споживача, оголошеного в конфігу). Compose файлу не читає; пароль не в `env_file` і не в argv. `db:pg:start`: Postgres → ролі й паролі → `up --wait centrifugo`. `db:roles` ставить пароль на стеку Supabase, `db:signals:start` бере той самий DSN. Зміна пароля перестворює лише Centrifugo (стану не тримає) | профіль §10.1, §10.2 |
+| Р16 | **DSN `simetra_signals` до Centrifugo стеків.** Пароль `SIMETRA_SIGNALS_DEV_PASSWORD` — у `login-secrets.env`. `scripts/db-stack.mjs` будує DSN і передає compose середовищем процесу (`composeEnv()`); compose має лише інтерполяцію `${SIMETRA_SIGNALS_DSN:-}` у `environment:` Centrifugo (`CENTRIFUGO_CONSUMERS_SIMETRA_OUTBOX_POSTGRESQL_DSN`, `…_PARTITION_NOTIFICATION_DSN`; Centrifugo v6.10.2 `internal/config/config.go` перевизначає поля лише споживача, оголошеного в конфігу, за ім'ям; задача 4 доводить це на справжньому контейнері). Compose файлу не читає; пароль не в `env_file` і не в argv. `db:pg:start`: Postgres → ролі й паролі → `up --wait centrifugo`. `db:roles` ставить пароль на стеку Supabase, `db:signals:start` бере той самий DSN. Зміна пароля перестворює лише Centrifugo (стану не тримає) | профіль §10.1, §10.2 |
 | Р17 | **`jwksUrl` — вхід, не шаблон.** `centrifugoConfig({ projectName, origin, issuer, jwksUrl })`; шлях — `SIGNALS_JWKS_PATH` з `simetra/server/signals`, за ним D5 монтує маршрут. Файли стеків — з базою `http://host.docker.internal:3000` (порт `pnpm demo`). E2e (#263, вільний порт) і D5 генерують конфіг під свій порт — рішення D5 | немає |
 | Р18 | Межа відкликання = TTL токена + `client.expired_sub_close_delay` (типово 25 с; з'єднання — `expired_close_delay`). Типові значення лишаються, у білий список ключі не входять | профіль §6.2, П4-B §8.6 |
 | Р19 | Метрики транспорту §11 відкладено в #268: приймача метрик ще немає; `recovered: false` — B5b; журнал Centrifugo — `info` | профіль §11 |
