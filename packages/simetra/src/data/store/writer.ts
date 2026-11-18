@@ -62,6 +62,8 @@ export interface WriterContext extends ReaderContext {
   invalidateTail(o: ObjectState): void
   /** Deliberate defects of the model test's self-check. */
   readonly defects: Defects
+  /** The monotonic clock in ms (`performance.now()`; a test substitutes it). */
+  readonly now: () => number
   /**
    * Keys `Writer.hide` hid, by object: the core re-reads the views that hold
    * them once the `commit` ends (`revalidateHolders`), not inside it.
@@ -751,7 +753,7 @@ async function writeAgain(
 export async function revalidate(
   ctx: WriterContext,
   object: ObjectName,
-  options: { visibleOnly: boolean }
+  options: { visibleOnly: boolean; minAgeMs?: number }
 ): Promise<void> {
   const o = ctx.objectOf(object)
   // Єдина ознака закриття — токен сесії: він недійсний уже з `closing`, коли
@@ -763,6 +765,11 @@ export async function revalidate(
     (s) =>
       s.loaded &&
       (!options.visibleOnly || isVisible(s)) &&
+      // Відмітка свіжості (Р10): без неї вигляд вважається простроченим.
+      (options.minAgeMs === undefined ||
+        ctx.defects.has("min-age-ignored") ||
+        s.refreshedAt === undefined ||
+        ctx.now() - s.refreshedAt >= options.minAgeMs) &&
       (s.form.spec.kind !== "section" || s.listeners.size > 0)
   )
   await revalidateViews(ctx, o, targets)
@@ -820,6 +827,7 @@ async function revalidateViews(
   const loadsAtStart = new Map(
     targets.map((s) => [s, { gen: s.gen, flight: s.flight }] as const)
   )
+  const startedAt = ctx.now()
   const purgesAtStart = new Map(ctx.purges)
   const purgedSince = (name: ObjectName) =>
     (ctx.purges.get(name) ?? 0) !== (purgesAtStart.get(name) ?? 0)
@@ -870,6 +878,7 @@ async function revalidateViews(
               } else discarded.push(s)
               continue
             }
+            s.refreshedAt = startedAt
             if (s.status === "error") {
               s.status = "ready"
               s.error = undefined

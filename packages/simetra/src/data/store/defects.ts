@@ -70,6 +70,8 @@ export type DefectFlag =
   | "hidden-values-in-snapshot"
   /** The check after hydration re-reads no visible view. */
   | "hydrate-without-revalidate"
+  /** `revalidate` ignores `minAgeMs`: a view with a young freshness mark is re-read. */
+  | "min-age-ignored"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

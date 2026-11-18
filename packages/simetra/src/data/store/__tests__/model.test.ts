@@ -187,6 +187,7 @@ type Step =
   | { t: "rehydrate" }
   | { t: "stale"; org: boolean }
   | { t: "version" }
+  | { t: "return"; minAge: number }
 
 const view = fc.nat(SPECS.length - 1)
 const k = fc.nat(KEYS.length - 1)
@@ -411,6 +412,15 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
   // й відповіді `version` без розбіжності, що її не знімають.
   { weight: 1, arbitrary: fc.record({ t: one("stale"), org: fc.boolean() }) },
   { weight: 2, arbitrary: fc.record({ t: one("version") }) },
+  // Повернення (план B3-6a, задача 3): частина `version` і перечитування
+  // видимих виглядів з межею свіжості; межі — менша й більша за кроки `time`.
+  {
+    weight: 8,
+    arbitrary: fc.record({
+      t: one("return"),
+      minAge: fc.constantFrom(RELEASE_MS, 5_000),
+    }),
+  },
   {
     weight: 1,
     arbitrary: fc.record({
@@ -1764,6 +1774,8 @@ async function runModel(
     preloadedSection = false
     let userViews = new Set<number>()
     let purgeStep = false
+    // Об'єкти, яким крок «повернення» не мав слати читань.
+    const quiet = new Set<ObjectName>()
     let purgedScope: { object: ObjectName; scope: string } | undefined
     // Ключі, які `purge` кроку прибрав зі сховища (або назвав явно).
     let purgedKeys: { object: ObjectName; keys: Key[] } | undefined
@@ -2229,6 +2241,41 @@ async function runModel(
       case "version":
         if (closed === undefined) core.requestVersion()
         break
+      case "return": {
+        if (closed !== undefined) break
+        // Вигляд із відміткою молодшою за межу читання від кроку не отримує:
+        // об'єкт «тихий», коли таких і є всі видимі завантажені вигляди, що
+        // читають його (власним читанням чи ціллю `include`).
+        const at = performance.now()
+        const readers = [...coreInternals(core).registry.subsets()].filter(
+          (sub) =>
+            sub.alive &&
+            !sub.purged &&
+            sub.loaded &&
+            (sub.visible ?? sub.listeners.size > 0) &&
+            (sub.form.spec.kind !== "section" || sub.listeners.size > 0)
+        )
+        for (const object of [TASK, ORG]) {
+          const of = readers.filter(
+            (sub) =>
+              sub.form.object.name === object ||
+              sub.form.include.some((step) => step.target === object)
+          )
+          if (
+            of.every(
+              (sub) =>
+                sub.refreshedAt !== undefined && at - sub.refreshedAt < s.minAge
+            )
+          )
+            quiet.add(object)
+        }
+        core.requestVersion()
+        for (const object of [TASK, ORG])
+          core
+            .revalidate(object, { visibleOnly: true, minAgeMs: s.minAge })
+            .catch((error: unknown) => errors.push(error))
+        break
+      }
       case "rehydrate":
         // Журнал мутацій у знімок не йде: `dehydrate` після запису — помилка
         // host-а (`TypeError`), тож крок виконується лише з порожнім журналом.
@@ -2265,6 +2312,13 @@ async function runModel(
         break
     }
     await flush()
+    for (const object of quiet) {
+      for (const sent of fake.log.slice(stepStart)) {
+        const target = sent.query?.object
+        if (target !== undefined && `${target.kind}.${target.name}` === object)
+          fail(label, `${object}: a view younger than the limit got a read`)
+      }
+    }
     if (purgedScope !== undefined) {
       const o = objectOf(purgedScope.object)
       for (const k of o.rows.keys()) {
@@ -2570,6 +2624,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "hidden-values-in-snapshot",
   "hydrate-without-revalidate",
   "stale-mark-lifts",
+  "min-age-ignored",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -2600,6 +2655,8 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "hydrate-without-revalidate": /after hydrate: view \d+ .*(server|hidden)/,
   // Липка позначка (задача 2): збіг `kernelHash` її не знімає.
   "stale-mark-lifts": /not isStale/,
+  // Повернення (задача 3): межа свіжості виглядів.
+  "min-age-ignored": /a view younger than the limit got a read/,
 }
 
 describe("core model self-check", () => {

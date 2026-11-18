@@ -76,6 +76,8 @@ export interface RegistryContext {
   closedSnapshot(): ViewSnapshot | undefined
   /** Deliberate defects of the model test's self-check. */
   readonly defects: Defects
+  /** The monotonic clock in ms (`performance.now()`; a test substitutes it). */
+  readonly now: () => number
 }
 
 type Timer = ReturnType<typeof setTimeout>
@@ -97,6 +99,11 @@ export interface Subset extends ReaderTarget {
   settled: boolean
   /** A load succeeded: a later read is `refreshing`, not `loading` (§6.5). */
   loaded: boolean
+  /**
+   * The start time of the last read that settled successfully (plan B3-6a,
+   * Р10); a hydrated view has none and counts as overdue.
+   */
+  refreshedAt: number | undefined
   status: "loading" | "ready" | "refreshing" | "error"
   error: CommandError | DataError | undefined
   needsRefresh: boolean
@@ -254,6 +261,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     // покоління й політ не змінюються, тож це й далі дія, що його почала.
     const attempt = (): Promise<void> => {
       const readEpoch = session.epochs.now()
+      const startedAt = ctx.now()
       if (header !== undefined) {
         s.readRevision = rowViews.revision(s.form.object.name, header)
         s.readStart = readEpoch
@@ -273,6 +281,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                   return
                 }
                 s.loaded = true
+                s.refreshedAt = startedAt
                 s.status = "ready"
                 s.error = undefined
                 s.needsRefresh = false
@@ -708,6 +717,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       trailing: false,
       settled: false,
       loaded: false,
+      refreshedAt: undefined,
       owned: new Set(),
       included: new Map(),
       layout: form.spec.kind === "card" ? [form.spec.key] : [],

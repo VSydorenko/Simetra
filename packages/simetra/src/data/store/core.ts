@@ -105,11 +105,12 @@ export interface CoreSession {
    * reads first, then one `commit`; `visibleOnly` skips invisible views.
    * Views that never loaded are skipped (their first read is a load); a
    * purge after the start drops the results and re-reads those views again
-   * by the same rule (composition kept).
+   * by the same rule (composition kept). `minAgeMs` skips a view whose
+   * freshness mark — the start of its last settled read — is younger.
    */
   revalidate(
     object: ObjectName,
-    options: { visibleOnly: boolean }
+    options: { visibleOnly: boolean; minAgeMs?: number }
   ): Promise<void>
   /**
    * Purges every key in one notification batch, after which every handle —
@@ -164,6 +165,17 @@ export interface CoreSession {
    * requests leave in one microtask (plan B3-6a, Р6).
    */
   endHydration(): void
+  /** Whether the host shows the application (`resume` sets, `suspend` clears). */
+  readonly visible: boolean
+  /** Marks the application hidden; idempotent, sends nothing (plan B3-6a, Р12). */
+  suspend(): void
+  /**
+   * Marks the application visible. A call less than `RESUME_COALESCE_MS`
+   * after the last accepted one does nothing more. An accepted call asks for
+   * the catalog version and re-reads the visible views whose freshness mark is
+   * older than `limits.resumeMinIntervalMs` or missing, synchronously (Р11).
+   */
+  resume(): void
 }
 
 export type { DefectFlag } from "./defects"
@@ -225,6 +237,9 @@ export function inspectCore(session: CoreSession): CoreInspection {
   return found
 }
 
+/** `resume()` closer than this to the last accepted one does nothing (Р11). */
+const RESUME_COALESCE_MS = 1_000
+
 const KEYS_PER_REQUEST_MAX = Math.min(READ_LIMIT_MAX, FILTER_IN_MAX)
 
 // Нуль чи дріб у межі тихо вимикає її (горизонт без кошиків пропускає все):
@@ -241,9 +256,16 @@ export function limitsOf(
   const set = Object.entries(overrides ?? {}).filter(
     ([, value]) => value !== undefined
   )
+  const explicit = Object.fromEntries(set) as Partial<CoreLimits>
   const limits: CoreLimits = {
     ...DEFAULT_CORE_LIMITS,
-    ...(Object.fromEntries(set) as Partial<CoreLimits>),
+    // Типова межа `resume()` не перевищує інтервал звірки: host з коротким
+    // `revalidateIntervalMs` не мусить знати про нову межу.
+    resumeMinIntervalMs: Math.min(
+      DEFAULT_CORE_LIMITS.resumeMinIntervalMs,
+      explicit.revalidateIntervalMs ?? DEFAULT_CORE_LIMITS.revalidateIntervalMs
+    ),
+    ...explicit,
   }
   for (const [name, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value < 1) {
@@ -257,6 +279,11 @@ export function limitsOf(
   if (limits.keysPerRequest > KEYS_PER_REQUEST_MAX)
     throw new TypeError(
       `limits.keysPerRequest must not exceed ${KEYS_PER_REQUEST_MAX}`
+    )
+  // Лише для явної межі: типова вже не більша за інтервал.
+  if (limits.resumeMinIntervalMs > limits.revalidateIntervalMs)
+    throw new TypeError(
+      `limits.resumeMinIntervalMs (${limits.resumeMinIntervalMs}) must not exceed limits.revalidateIntervalMs (${limits.revalidateIntervalMs})`
     )
   return limits
 }
@@ -284,9 +311,14 @@ export function createCore(options: {
   snapshotHash?: string
   /** Host callback: an object turned stale-client or a write was refused so. */
   onStaleClient?: (object: ObjectName) => void
+  /** Initial `visible` (default `true`). */
+  visible?: boolean
+  /** The monotonic clock in ms; tests substitute it, hosts never do. */
+  now?: () => number
 }): CoreSession {
   const limits = limitsOf(options.limits)
   const { index } = options
+  const now = options.now ?? (() => performance.now())
   // Збій журналу не змінює результату.
   const log = (entry: CoreLogEntry) => {
     try {
@@ -500,6 +532,7 @@ export function createCore(options: {
     isStale: (object) => staleObjects.has(object),
     closedSnapshot: () => closed,
     defects,
+    now,
   })
 
   // ------------------------------------------------------------ знімок SSR
@@ -515,6 +548,8 @@ export function createCore(options: {
   // Гідратація одноразова: `endHydration` повторюється під StrictMode, а
   // другий знімок змішався б із першим.
   let hydration: "none" | "hydrated" | "ended" = "none"
+  let visible = options.visible ?? true
+  let lastResumeAt: number | undefined
 
   // ------------------------------------------------------------ хвіст
 
@@ -701,6 +736,7 @@ export function createCore(options: {
     purges,
     invalidateTail,
     defects,
+    now,
     hiddenKeys,
     journal: {
       erase: (object, key) => overlay.erase(object, key),
@@ -891,6 +927,30 @@ export function createCore(options: {
         revalidate(writerContext, o.name, { visibleOnly: true }).catch(
           (error: unknown) => log({ kind: "listener-failed", error })
         )
+      }
+    },
+    get visible() {
+      return visible
+    },
+    suspend() {
+      visible = false
+    },
+    resume() {
+      visible = true
+      if (!session.token().valid) return
+      // Злиття: подвійний сигнал повернення (focus + visibilitychange) — одна
+      // звірка; відлік іде від останнього прийнятого, а не від кожного виклику.
+      const at = now()
+      if (lastResumeAt !== undefined && at - lastResumeAt < RESUME_COALESCE_MS)
+        return
+      lastResumeAt = at
+      // Як в `endHydration`: усе синхронно, без `await` між об'єктами.
+      core.requestVersion()
+      for (const o of objects.values()) {
+        revalidate(writerContext, o.name, {
+          visibleOnly: true,
+          minAgeMs: limits.resumeMinIntervalMs,
+        }).catch((error: unknown) => log({ kind: "listener-failed", error }))
       }
     },
     update: (object, key, values, updateOptions) =>

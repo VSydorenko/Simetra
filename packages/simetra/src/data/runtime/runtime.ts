@@ -56,6 +56,21 @@ export interface DataRuntime {
    * does nothing, so StrictMode is safe.
    */
   endHydration(): void
+  /** Whether the host shows the application; starts as `options.visible`. */
+  readonly visible: boolean
+  /**
+   * Marks the application hidden (a hidden tab); idempotent, sends nothing,
+   * and does nothing after `dispose()`.
+   */
+  suspend(): void
+  /**
+   * Marks the application visible again (focus, `visibilitychange`, network
+   * back); idempotent after `dispose()`. A call less than a second after the
+   * last accepted one only sets `visible`. An accepted call asks for the
+   * catalog version and re-reads the visible views last refreshed longer ago
+   * than `limits.resumeMinIntervalMs` (or never), in one microtask.
+   */
+  resume(): void
 }
 
 /**
@@ -91,6 +106,8 @@ export interface DataRuntimeOptions {
    * so unsaved forms of other objects are not lost.
    */
   onStaleClient?: (object: string) => void
+  /** The initial `visible` of the runtime (default `true`). */
+  visible?: boolean
   /** The runtime journal (default `console.warn`); see {@link DataLogEntry}. */
   log?: (entry: DataLogEntry) => void
   /**
@@ -382,6 +399,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     limits,
     residency,
     ...(options.strict === undefined ? {} : { strict: options.strict }),
+    ...(options.visible === undefined ? {} : { visible: options.visible }),
     log,
     snapshotHash: catalog.snapshotHash,
     ...(options.onStaleClient === undefined
@@ -420,6 +438,15 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     // звірка ядра шле завжди: розбіжність іде шляхом `stale-client`.
     endHydration() {
       if (closedWith === undefined) core.endHydration()
+    },
+    get visible() {
+      return core.visible
+    },
+    suspend() {
+      if (closedWith === undefined) core.suspend()
+    },
+    resume() {
+      if (closedWith === undefined) core.resume()
     },
   }
   bindRuntimeHandle(runtime, { send, core, writer: createWriter(core) })

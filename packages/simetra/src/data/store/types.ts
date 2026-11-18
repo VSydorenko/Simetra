@@ -351,6 +351,12 @@ export interface CoreLimits {
    * restart switches every client at once. The interval tick itself is B5.
    */
   readonly revalidateIntervalMs: number
+  /**
+   * The least age of a view's freshness mark for `resume()` to re-read it
+   * (P4-B spec §6.3 «Частота»). The default is 15 s, but not above
+   * `revalidateIntervalMs`; an explicit value above it is a `TypeError`.
+   */
+  readonly resumeMinIntervalMs: number
 }
 
 export const DEFAULT_CORE_LIMITS: CoreLimits = {
@@ -366,6 +372,7 @@ export const DEFAULT_CORE_LIMITS: CoreLimits = {
   releaseDelayMs: 1_000,
   preloadTtlMs: 5_000,
   revalidateIntervalMs: 60_000,
+  resumeMinIntervalMs: 15_000,
 }
 
 /** Diagnostic events of the core. */
