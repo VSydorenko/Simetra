@@ -185,6 +185,55 @@ describe("centrifugoConfigRefusals: every mutation of invariant 11 is refused", 
   })
 })
 
+// Межа відкликання (спека профілю §6.2): TTL токена каналу + 25 с + 5 с
+describe("centrifugoConfigRefusals: the revocation bound", () => {
+  const client = () => centrifugoConfig(INPUT).client
+
+  it("writes the expiry close delay and the presence tick explicitly", () => {
+    expect(client()).toMatchObject({
+      presence_update_interval: "5s",
+      expired_sub_close_delay: "25s",
+    })
+  })
+
+  it.each([
+    ["presence_update_interval", "4s"],
+    ["presence_update_interval", "500ms"],
+    ["expired_sub_close_delay", "10s"],
+  ] as const)("accepts %s %s", (key, value) => {
+    const c = centrifugoConfig(INPUT)
+    c.client[key] = value
+    expect(centrifugoConfigRefusals(c)).toEqual([])
+  })
+
+  it.each([
+    ["presence_update_interval", "30s"],
+    ["presence_update_interval", "6s"],
+    ["presence_update_interval", "1m"],
+    ["presence_update_interval", "0s"],
+    ["presence_update_interval", "5"],
+    ["expired_sub_close_delay", "30s"],
+    ["expired_sub_close_delay", "1h"],
+  ] as const)("refuses %s %s", (key, value) => {
+    const c = centrifugoConfig(INPUT)
+    c.client[key] = value
+    expect(centrifugoConfigRefusals(c)).toEqual([
+      `config.client.${key}: must be a positive duration not above ${key === "presence_update_interval" ? "5s" : "25s"}`,
+    ])
+  })
+
+  it.each(["presence_update_interval", "expired_sub_close_delay"] as const)(
+    "refuses a config without %s (the image default would apply)",
+    (key) => {
+      const c = centrifugoConfig(INPUT)
+      Reflect.deleteProperty(c.client, key)
+      expect(centrifugoConfigRefusals(c)).toEqual([
+        `config.client.${key}: missing`,
+      ])
+    }
+  )
+})
+
 describe("centrifugoConfigRefusals: jwksUrl", () => {
   const refused = (jwksUrl: string) =>
     centrifugoConfigRefusals(centrifugoConfig({ ...INPUT, jwksUrl }))

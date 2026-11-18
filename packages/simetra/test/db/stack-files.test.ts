@@ -342,6 +342,17 @@ describe.each(STACKS)("centrifugo.json of the $title", ({ dir }) => {
     expect(centrifugoConfigRefusals(config)).toEqual([])
   })
 
+  // Межа відкликання (спека профілю §6.2) не залежить від типового значення
+  // образу: такт присутності й затримка закриття — у файлі стека
+  it("pins the revocation bound: the presence tick and the expiry close delay", () => {
+    expect(config).toMatchObject({
+      client: {
+        presence_update_interval: "5s",
+        expired_sub_close_delay: "25s",
+      },
+    })
+  })
+
   it("holds no login password", () => {
     const text = read("centrifugo.json", dir)
     for (const password of Object.values(loginSecrets))

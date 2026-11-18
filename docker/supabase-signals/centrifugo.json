@@ -6,7 +6,9 @@
       "audience": "centrifugo:simetra-dev",
       "issuer": "http://127.0.0.1:3000"
     },
-    "recovery_max_publication_limit": 300
+    "recovery_max_publication_limit": 300,
+    "presence_update_interval": "5s",
+    "expired_sub_close_delay": "25s"
   },
   "channel": {
     "max_length": 255,

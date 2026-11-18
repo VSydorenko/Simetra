@@ -40,6 +40,13 @@ const NAMESPACES: readonly { name: string; historySize: number }[] = [
   { name: "simetra-user", historySize: 20 },
 ]
 
+// Межа відкликання (спека профілю §6.2): Centrifugo закриває прострочену
+// підписку лише на такті присутності клієнта, тож межа — TTL токена каналу +
+// `expired_sub_close_delay` + `presence_update_interval`. Обидва ключі пише
+// генератор явно: межа — властивість безпеки, а не типове значення образу
+const PRESENCE_UPDATE_INTERVAL = "5s"
+const EXPIRED_SUB_CLOSE_DELAY = "25s"
+
 const HISTORY_TTL = "300s"
 const HISTORY_META_TTL = "24h"
 const RECOVERY_MAX_PUBLICATION_LIMIT = 300
@@ -72,6 +79,8 @@ export function centrifugoConfig(o: CentrifugoConfigInput) {
         issuer: o.issuer,
       },
       recovery_max_publication_limit: RECOVERY_MAX_PUBLICATION_LIMIT,
+      presence_update_interval: PRESENCE_UPDATE_INTERVAL,
+      expired_sub_close_delay: EXPIRED_SUB_CLOSE_DELAY,
     },
     channel: {
       max_length: CENTRIFUGO_CHANNEL_MAX,
@@ -153,6 +162,23 @@ const duration: Rule = (value, path) =>
   typeof value === "string" && /^\d+(ms|s|m|h)$/.test(value)
     ? []
     : [`${path}: must be a duration such as "300s"`]
+
+const DURATION_MS = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 } as const
+
+const durationMs = (value: string): number => {
+  const [, amount, unit] = /^(\d+)(ms|s|m|h)$/.exec(value)!
+  return Number(amount) * DURATION_MS[unit as keyof typeof DURATION_MS]
+}
+
+// Більше значення відсунуло б межу відкликання за число спеки
+const durationAtMost =
+  (bound: string): Rule =>
+  (value, path) =>
+    duration(value, path).length === 0 &&
+    durationMs(value as string) > 0 &&
+    durationMs(value as string) <= durationMs(bound)
+      ? []
+      : [`${path}: must be a positive duration not above ${bound}`]
 
 const nonEmpty: Rule = (value, path) =>
   typeof value === "string" && value.trim() !== ""
@@ -266,6 +292,8 @@ const config = object({
       issuer: nonEmpty,
     }),
     recovery_max_publication_limit: int(1),
+    presence_update_interval: durationAtMost(PRESENCE_UPDATE_INTERVAL),
+    expired_sub_close_delay: durationAtMost(EXPIRED_SUB_CLOSE_DELAY),
   }),
   channel: object({
     max_length: int(1, CENTRIFUGO_CHANNEL_MAX),
