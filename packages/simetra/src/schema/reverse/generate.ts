@@ -165,10 +165,11 @@ async function describedElsewhere(
  * `introspect.project-mismatch` чи помилкою файлу проєкту.
  */
 async function platformOf(
-  provider: DatabaseProvider
+  provider: DatabaseProvider,
+  parse: SqlParser
 ): Promise<PlatformInstallRecogniser | undefined> {
   if (!DATABASE_PROVIDERS.includes(provider)) return undefined
-  return platformInstallRecogniser(await platformInstall(provider))
+  return platformInstallRecogniser(await platformInstall(provider), parse)
 }
 
 /**
@@ -328,7 +329,8 @@ export async function reverseGenerate(
   ]
   const elsewhere = await describedElsewhere(o.existing, o.parse)
   const platform = await platformOf(
-    folder.project?.databaseProvider ?? o.project.databaseProvider
+    folder.project?.databaseProvider ?? o.project.databaseProvider,
+    o.parse
   )
   for (const table of model.tables)
     if (platform?.table(table.schema, table.name) === true)
