@@ -11,6 +11,7 @@ import {
   DEFAULT_CORE_LIMITS,
   type CoreLimits,
   type CoreSnapshot,
+  type ViewSnapshot,
   type ViewSpec,
   type Writer,
 } from "../types"
@@ -113,14 +114,28 @@ function coreOver(fake: FakeSource, limits: Partial<CoreLimits> = {}) {
   return { core, inspect: inspectCore(core), versions }
 }
 
-/** Every view of the old core must show in the new one what it showed. */
+/**
+ * Every view of the old core must show in the new one what it showed. A hidden
+ * row is the exception by rule: its slot keeps the place and carries no facts
+ * of the row, so only its key, `hidden` and the absence of values are compared.
+ */
 const expectSameViews = (
   from: CoreSession,
   to: CoreSession,
   specs: readonly ViewSpec[]
 ) => {
+  const plain = (snapshot: ViewSnapshot) => ({
+    ...snapshot,
+    rows: snapshot.rows.map((row) =>
+      row.state !== "removed" && row.hidden === true
+        ? { key: row.key, hidden: true, values: row.values }
+        : row
+    ),
+  })
   for (const spec of specs)
-    expect(to.view(spec).getSnapshot()).toEqual(from.view(spec).getSnapshot())
+    expect(plain(to.view(spec).getSnapshot())).toEqual(
+      plain(from.view(spec).getSnapshot())
+    )
 }
 
 const heldSpecs = (core: CoreSession) =>
@@ -318,6 +333,8 @@ describe("what the snapshot never carries", () => {
     for (const sentinel of ["SECRET-HIDDEN", "SECRET-NOTES", "7777777"])
       expect(open).toContain(sentinel)
 
+    // Ключ зі старою позначкою `stale` теж іде слотом без фактів рядка.
+    write(core, (w) => w.markStale(TASK, [key(1)], 99))
     fake.hold = () => true
     write(core, (w) => w.hide(TASK, [key(1)]))
     const snapshot = core.dehydrate()
@@ -325,9 +342,11 @@ describe("what the snapshot never carries", () => {
     for (const sentinel of ["SECRET-HIDDEN", "SECRET-NOTES", "7777777"])
       expect(text).not.toContain(sentinel)
     expect(text).toContain("OPEN-ROW")
-    expect(snapshot.objects[TASK]!.slots).toContainEqual(
-      expect.objectContaining({ key: key(1), state: "hidden" })
-    )
+    expect(snapshot.objects[TASK]!.slots).toContainEqual({
+      key: key(1),
+      state: "hidden",
+      scope: expect.any(String),
+    })
 
     const next = coreOver(fake)
     next.core.hydrate(through(snapshot))
@@ -389,6 +408,30 @@ describe("what the snapshot never carries", () => {
     const snapshot = core.dehydrate()
     expect(JSON.stringify(snapshot)).not.toContain("CURSOR-SECRET")
     expect(snapshot.subsets).toEqual([])
+  })
+})
+
+describe("an owner header held by a view that is not ready", () => {
+  it("the section view shows the same owner state without the header row in the snapshot", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 1)
+    fake.edit(TASK, key(1), { title: "SECRET-HEADER" })
+    fake.setLines(TASK, key(1), "lines", lines(3))
+    const header = core.view(keysView(1))
+    watch(header)
+    watch(core.view(section(1)))
+    await settle()
+    fake.hold = () => true
+    header.refresh()
+    await settle()
+    expect(core.view(section(1)).getSnapshot().section?.ownerState).toBe(
+      "synced"
+    )
+    const snapshot = through(core.dehydrate())
+    expect(JSON.stringify(snapshot)).not.toContain("SECRET-HEADER")
+    const next = coreOver(fake)
+    next.core.hydrate(snapshot)
+    expectSameViews(core, next.core, [section(1)])
   })
 })
 
@@ -562,6 +605,27 @@ describe("hydrate", () => {
     expect(fake.log.length).toBe(before)
     expect(next.inspect.rowCount()).toBe(0)
     expect(() => next.core.dehydrate()).toThrow(TypeError)
+  })
+})
+
+describe("dehydrate after a write", () => {
+  it("throws a TypeError while the journal of mutations is not empty and writes nothing", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 1)
+    watch(core.view(keysView(1)))
+    await settle()
+    const rows = fake.log.length
+    const version = fake.row(TASK, key(1))!.version
+    const mutation = core.update(
+      TASK,
+      key(1),
+      { title: "x" },
+      { expectedVersion: version }
+    )
+    expect(() => core.dehydrate()).toThrow(TypeError)
+    expect(fake.log.length).toBe(rows)
+    await mutation.settled
+    await settle()
   })
 })
 

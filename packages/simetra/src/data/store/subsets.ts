@@ -39,6 +39,7 @@ import type {
   CoreLogEntry,
   Key,
   ObjectName,
+  RowState,
   RowView,
   SectionLine,
   ViewHandle,
@@ -136,6 +137,7 @@ export interface AdoptedView {
   readonly window: WindowState | undefined
   readonly atEnd: boolean
   readonly truncated: boolean
+  readonly ownerState: RowState | undefined
   /** The epoch of the hydration: the read epoch of a section it brings. */
   readonly at: number
 }
@@ -739,6 +741,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       purged: false,
       visible: undefined,
       hydrated: false,
+      headerState: undefined,
     }
     subsets.set(form.specKey, s)
     return s
@@ -771,7 +774,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         complete: hidden ? false : (entry?.complete ?? false),
         lines: hidden ? NO_LINES : (entry?.lines ?? NO_LINES),
         // Без шапки в сховищі стан власника невідомий.
-        ownerState: header?.state ?? "unknown",
+        ownerState: header?.state ?? s.headerState ?? "unknown",
       }
     } else {
       const refViews = new Map<Key, RowView>()
@@ -1038,6 +1041,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         // власника лише після неї вимагає перечитування.
         s.sectionRead = state.at
         s.readStart = state.at
+        s.headerState = state.ownerState
       }
       s.loaded = true
       s.settled = true

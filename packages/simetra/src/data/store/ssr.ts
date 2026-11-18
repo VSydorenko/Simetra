@@ -152,9 +152,6 @@ function slotOf(
       key,
       state: "hidden",
       scope: e.scope,
-      version: e.version,
-      epoch: e.versionEpoch,
-      ...(outdated(e) ? { stale: true as const } : {}),
       // Дефект самотесту: слот `hidden` несе значення свого рядка.
       ...(defects.has("hidden-values-in-snapshot")
         ? { values: e.row?.values }
@@ -212,6 +209,7 @@ export function dehydrate(ctx: SsrContext): CoreSnapshot {
     })
 
   const subsets: SubsetSnapshot[] = []
+  const headers: { at: number; o: ObjectState; owner: Key }[] = []
   const sections: Record<ObjectName, SectionSnapshot[]> = {}
   for (const s of ready) {
     const { spec } = s.form
@@ -236,6 +234,7 @@ export function dehydrate(ctx: SsrContext): CoreSnapshot {
           ...(entry.staleEpoch === true ? { stale: true as const } : {}),
         })
       }
+      headers.push({ at: subsets.length, o, owner: spec.owner })
       subsets.push({ spec })
       continue
     }
@@ -271,6 +270,22 @@ export function dehydrate(ctx: SsrContext): CoreSnapshot {
         : {}),
       ...(s.truncated ? { truncated: true as const } : {}),
     })
+  }
+
+  // Шапка, яку тримає не готовий вигляд, у знімок не йде: вигляд ТЧ несе
+  // лише її стан, без значень, щоб `ownerState` збігався з серверним.
+  for (const { at, o, owner } of headers) {
+    const e = o.rows.get(owner)
+    if (e === undefined || placed.get(o.name)?.has(owner) === true) continue
+    subsets[at] = {
+      ...subsets[at]!,
+      ownerState:
+        e.removed !== undefined
+          ? "removed"
+          : hidesValues(e) || outdated(e)
+            ? "stale"
+            : "synced",
+    }
   }
 
   const objects: Record<ObjectName, ObjectSnapshot> = {}
@@ -392,19 +407,17 @@ function parseSlot(
     return restored
   }
   if (raw.state === "hidden") {
-    if (typeof raw.version !== "number" || !isEpoch(raw.epoch))
-      return bad("a hidden slot")
-    // Значення такого слота не читаються, навіть коли їх дописали.
+    // Слот лишає місце, а не факти рядка; значення, навіть дописані, не читаються.
     const restored: RestoredRow = {
       key: raw.key,
       state: "hidden",
       row: undefined,
       scope,
-      version: raw.version,
-      versionEpoch: heldEpoch(raw.epoch),
+      version: 0,
+      versionEpoch: heldEpoch(null),
       lazyVersions: new Map(),
       lazyIn: new Map(),
-      stale: raw.stale === true,
+      stale: false,
     }
     return restored
   }
@@ -538,9 +551,24 @@ export function parseSnapshot(
     if (spec.kind === "window" && sub.window === undefined)
       return bad("a window without pages")
     if (listed && typeof sub.atEnd !== "boolean") return bad("atEnd")
+    const ownerStates = [
+      "synced",
+      "pending",
+      "failed",
+      "conflict",
+      "unknown",
+      "stale",
+      "removed",
+    ]
+    if (
+      sub.ownerState !== undefined &&
+      (spec.kind !== "section" || !ownerStates.includes(sub.ownerState))
+    )
+      return bad("an owner state")
     parsedSubsets.push({
       form,
       state: {
+        ownerState: sub.ownerState,
         layout,
         unshown,
         window:

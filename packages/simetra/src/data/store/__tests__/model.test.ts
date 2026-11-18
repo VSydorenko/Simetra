@@ -1659,39 +1659,31 @@ async function runModel(
   ) {
     const where = `after hydrate: view ${v}`
     const to = nextCore.view(SPECS[v]!).getSnapshot()
-    const owner = (SPECS[v] as { owner: Key }).owner
-    const carried = (k: Key) =>
-      coreInternals(nextCore).objects.get(TASK)!.rows.get(k) !== undefined
-    // Мутація журналу не переходить у знімок: стан рядка з нею — інший.
-    const mutated = new Set<Key>()
-    const noteMutations = (row: RowView) => {
-      if (row.mutation !== undefined) mutated.add(row.key)
-      if (row.state === "removed") return
-      for (const ref of Object.values(row.refs ?? {}))
-        if (ref !== null) noteMutations(ref)
-    }
-    a.rows.forEach(noteMutations)
+    // Слот `hidden` лишає місце, а не факти рядка (версію, позначки): для
+    // схованого ключа порівнюються лише ключ, `hidden` і відсутність значень.
     const shape = (row: RowView): unknown =>
       row.state === "removed"
         ? { key: row.key, state: "removed" }
-        : {
-            key: row.key,
-            version: row.version,
-            values: row.values,
-            staleFields: row.staleFields,
-            hidden: row.hidden,
-            stale: row.stale,
-            ...(mutated.has(row.key) ? {} : { state: row.state }),
-            refs:
-              row.refs === undefined
-                ? undefined
-                : Object.fromEntries(
-                    Object.entries(row.refs).map(([name, ref]) => [
-                      name,
-                      ref === null ? null : shape(ref),
-                    ])
-                  ),
-          }
+        : row.hidden === true
+          ? { key: row.key, hidden: true, values: row.values }
+          : {
+              key: row.key,
+              version: row.version,
+              values: row.values,
+              staleFields: row.staleFields,
+              hidden: row.hidden,
+              stale: row.stale,
+              state: row.state,
+              refs:
+                row.refs === undefined
+                  ? undefined
+                  : Object.fromEntries(
+                      Object.entries(row.refs).map(([name, ref]) => [
+                        name,
+                        ref === null ? null : shape(ref),
+                      ])
+                    ),
+            }
     const view = (snap: ViewSnapshot) => ({
       status: snap.status,
       isStale: snap.isStale,
@@ -1710,14 +1702,7 @@ async function runModel(
               ownerVersion: snap.section.ownerVersion,
               complete: snap.section.complete,
               lines: snap.section.lines,
-              // Шапку, яку тримає не готовий вигляд, знімок не несе: власник
-              // без шапки — `unknown`, і це не розбіжність гідратації.
-              ownerState:
-                journal.has(owner) ||
-                (objectOf(TASK).rows.get(owner) !== undefined &&
-                  !carried(owner))
-                  ? undefined
-                  : snap.section.ownerState,
+              ownerState: snap.section.ownerState,
             },
     })
     const was = view(a)
@@ -2189,7 +2174,19 @@ async function runModel(
         break
       }
       case "rehydrate":
+        // Журнал мутацій у знімок не йде: `dehydrate` після запису — помилка
+        // host-а (`TypeError`), тож крок виконується лише з порожнім журналом.
         if (closed !== undefined) break
+        if (inspect.serviceSizes().journal > 0) {
+          let refused = false
+          try {
+            core.dehydrate()
+          } catch (error) {
+            refused = error instanceof TypeError
+          }
+          if (!refused) fail(label, "dehydrate with a non-empty journal")
+          break
+        }
         await rehydrate(label)
         break
       case "close":

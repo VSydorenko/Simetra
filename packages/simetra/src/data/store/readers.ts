@@ -32,6 +32,7 @@ import type {
   CoreLogEntry,
   Key,
   ObjectName,
+  RowState,
   SectionLine,
   ServerRow,
   Values,
@@ -128,6 +129,11 @@ export interface ReaderTarget {
    * B3-3, Р11).
    */
   sectionRead: number | undefined
+  /**
+   * Section form only: the owner state a snapshot brought for a header the
+   * store does not hold; any accepted read of the section drops it.
+   */
+  headerState: RowState | undefined
 }
 
 /** Writes a read result inside one `commit`. */
@@ -690,6 +696,7 @@ async function readSection(
     // Читання прийнято (шлюз епохи пройдено), навіть коли сховище відкине
     // рядки: свіжість ТЧ-підмножини міряється епохою цього читання.
     s.sectionRead = readEpoch
+    s.headerState = undefined
     // Невидимий власник — рядків ТЧ не показуємо.
     if (result.ownerVersion === undefined) {
       ops.clearOwner(scope, o, spec.owner)

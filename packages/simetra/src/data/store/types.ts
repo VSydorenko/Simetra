@@ -205,8 +205,9 @@ export interface ViewHandle {
  * A row of a core snapshot (P4-B spec §6.6). A row with values is a tuple
  * `[values, extra?]`: its key and version are the key and version fields of
  * `values`, so nothing is repeated. A `removed` or `hidden` slot carries no
- * values: the HTML and the first client frame show the same composition
- * without a value leaving the server.
+ * values and no facts of the row (a slot keeps the place, nothing more):
+ * the HTML and the first client frame show the same composition without a
+ * value leaving the server.
  */
 export type RowSlot =
   | readonly [values: Values]
@@ -220,9 +221,6 @@ export type RowSlot =
       readonly key: Key
       readonly state: "hidden"
       readonly scope: string | null
-      readonly version: number
-      readonly epoch: string | null
-      readonly stale?: true
     }
 
 /** What a row slot adds to its values; absent when it is all the default. */
@@ -302,6 +300,12 @@ export interface SubsetSnapshot {
   /** `full` and `window` forms: the list reached the end of the order. */
   readonly atEnd?: boolean
   readonly truncated?: true
+  /**
+   * Section views only: the state of the owner header when the store holds
+   * it but no row of the snapshot carries it (the header belongs to a view
+   * that is not ready), so `ownerState` is the same on both sides.
+   */
+  readonly ownerState?: RowState
 }
 
 /**

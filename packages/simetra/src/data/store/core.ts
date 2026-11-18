@@ -142,7 +142,8 @@ export interface CoreSession {
    * The snapshot of the ready held views (P4-B spec §6.6): their rows,
    * compositions and tabular section lines, and no value of a row the views
    * do not show (`hidden`, `removed`). Throws `TypeError` once the core is
-   * closed.
+   * closed, and while the journal of mutations is not empty (an SSR runtime
+   * writes nothing).
    */
   dehydrate(): CoreSnapshot
   /**
@@ -765,6 +766,10 @@ export function createCore(options: {
     dehydrate() {
       if (closed !== undefined || !session.token().valid)
         throw new TypeError("the core is closed")
+      // SSR-рантайм нічого не пише: знімок після запису — помилка host-а, а
+      // журнал мутацій у знімок не переходить.
+      if (overlay.size() > 0)
+        throw new TypeError("the journal of mutations is not empty")
       return dehydrate(ssr)
     },
     hydrate(snapshot) {
