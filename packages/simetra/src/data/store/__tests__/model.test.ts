@@ -1659,31 +1659,30 @@ async function runModel(
   ) {
     const where = `after hydrate: view ${v}`
     const to = nextCore.view(SPECS[v]!).getSnapshot()
-    // Слот `hidden` лишає місце, а не факти рядка (версію, позначки): для
-    // схованого ключа порівнюються лише ключ, `hidden` і відсутність значень.
+    // Слот `hidden` лишає місце, а не факти рядка: його `version` і `stale`
+    // знімок не несе (гідрований рядок має умовну версію 0), решта
+    // порівнюється повністю.
     const shape = (row: RowView): unknown =>
       row.state === "removed"
         ? { key: row.key, state: "removed" }
-        : row.hidden === true
-          ? { key: row.key, hidden: true, values: row.values }
-          : {
-              key: row.key,
-              version: row.version,
-              values: row.values,
-              staleFields: row.staleFields,
-              hidden: row.hidden,
-              stale: row.stale,
-              state: row.state,
-              refs:
-                row.refs === undefined
-                  ? undefined
-                  : Object.fromEntries(
-                      Object.entries(row.refs).map(([name, ref]) => [
-                        name,
-                        ref === null ? null : shape(ref),
-                      ])
-                    ),
-            }
+        : {
+            key: row.key,
+            version: row.hidden === true ? undefined : row.version,
+            values: row.values,
+            staleFields: row.staleFields,
+            hidden: row.hidden,
+            stale: row.hidden === true ? undefined : row.stale,
+            state: row.state,
+            refs:
+              row.refs === undefined
+                ? undefined
+                : Object.fromEntries(
+                    Object.entries(row.refs).map(([name, ref]) => [
+                      name,
+                      ref === null ? null : shape(ref),
+                    ])
+                  ),
+          }
     const view = (snap: ViewSnapshot) => ({
       status: snap.status,
       isStale: snap.isStale,
@@ -1693,7 +1692,8 @@ async function runModel(
       atStart: snap.atStart,
       chain: snap.chain,
       target: snap.target,
-      // Мутація, що тримала рядок `removed`, у знімок не йде.
+      // Журнал порожній (`rehydrate` інакше лише перевіряє відмову), тож
+      // стан рядка однаковий на обох боках.
       rows: snap.rows.map(shape),
       section:
         snap.section === undefined

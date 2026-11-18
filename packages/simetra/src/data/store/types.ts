@@ -119,6 +119,9 @@ export type RowView =
       /**
        * The values are hidden by a mark (the eviction horizon or `Writer.hide`)
        * until a read that started after it; a form shows no draft meanwhile.
+       * A row hydrated from an SSR snapshot has no facts of the row: its
+       * `version` is the sentinel 0 and it carries no `stale`; the UI must not
+       * read either while `hidden` is set.
        */
       readonly hidden?: true
       /**

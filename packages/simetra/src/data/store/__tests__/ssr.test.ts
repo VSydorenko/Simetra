@@ -116,8 +116,8 @@ function coreOver(fake: FakeSource, limits: Partial<CoreLimits> = {}) {
 
 /**
  * Every view of the old core must show in the new one what it showed. A hidden
- * row is the exception by rule: its slot keeps the place and carries no facts
- * of the row, so only its key, `hidden` and the absence of values are compared.
+ * row is the exception by rule only for its `version` and `stale`: its slot
+ * keeps the place and carries no facts of the row.
  */
 const expectSameViews = (
   from: CoreSession,
@@ -128,7 +128,7 @@ const expectSameViews = (
     ...snapshot,
     rows: snapshot.rows.map((row) =>
       row.state !== "removed" && row.hidden === true
-        ? { key: row.key, hidden: true, values: row.values }
+        ? { ...row, version: undefined, stale: undefined }
         : row
     ),
   })
