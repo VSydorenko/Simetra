@@ -89,9 +89,9 @@
 | Р12 | `sub` токена з'єднання = `user` з `authorizeChannels` (`current_user_id()`), не сирий `claims.sub` | профіль §6.2, П4-B §8.3 |
 | Р13 | `CHECK` прив'язує `idempotency_key` і `data.id` до `id`: вимкнений тригер — `23514` | немає |
 | Р14 | Режим злиття скидається в тому самому операторі, що ставить claims команди: `ALTER ROLE … SET` не гасить сигналів | немає |
-| Р15 | 🔴 Політика `INSERT` outbox — `WITH CHECK (signal_payload_allowed(payload))`: канал за `signal_topic_allowed(…, true)`, точна форма `data` за `op`, `object` = об'єкт топіка, рівно один ключ з ім'ям колонки ключа й UUID. Правило форми — лише там | П4-B §8.2, §8.3 |
+| Р15 | 🔴 Політика `INSERT` outbox — `WITH CHECK (signal_payload_allowed(payload))`: канал за `signal_topic_allowed(…, true)`, точна форма `data` за `op`, `object` = об'єкт топіка, рівно один ключ з ім'ям колонки ключа й UUID. Правило форми — лише там. `signal_payload_allowed` — `STABLE SECURITY INVOKER SET search_path = ''` (імена колонок ключа — константи компілятора, прав власника не треба), `REVOKE … FROM PUBLIC`, `EXECUTE` лише `simetra_command`: інакше вона — другий вхід в оракул Р10 | П4-B §8.2, §8.3 |
 | Р16 | **DSN `simetra_signals` до Centrifugo стеків.** Пароль `SIMETRA_SIGNALS_DEV_PASSWORD` — у `login-secrets.env`. `scripts/db-stack.mjs` будує DSN і передає compose середовищем процесу (`composeEnv()`); compose має лише інтерполяцію `${SIMETRA_SIGNALS_DSN:-}` у `environment:` Centrifugo (`CENTRIFUGO_CONSUMERS_SIMETRA_OUTBOX_POSTGRESQL_DSN`, `…_PARTITION_NOTIFICATION_DSN`; Centrifugo v6.10.2 `internal/config/config.go` перевизначає поля лише споживача, оголошеного в конфігу, за ім'ям; задача 4 доводить це на справжньому контейнері). Compose файлу не читає; пароль не в `env_file` і не в argv. `db:pg:start`: Postgres → ролі й паролі → `up --wait centrifugo`. `db:roles` ставить пароль на стеку Supabase, `db:signals:start` бере той самий DSN. Зміна пароля перестворює лише Centrifugo (стану не тримає) | профіль §10.1, §10.2 |
-| Р17 | **`jwksUrl` — вхід, не шаблон.** `centrifugoConfig({ projectName, origin, issuer, jwksUrl })`; шлях — `SIGNALS_JWKS_PATH` з `simetra/server/signals`, за ним D5 монтує маршрут. Файли стеків — з базою `http://host.docker.internal:3000` (порт `pnpm demo`). E2e (#263, вільний порт) і D5 генерують конфіг під свій порт — рішення D5 | немає |
+| Р17 | **`jwksUrl` — вхід, не шаблон; JWKS лише на loopback.** `centrifugoConfig({ projectName, origin, issuer, jwksUrl })`; шлях — `SIGNALS_JWKS_PATH` з `simetra/server/signals`, за ним D5 монтує маршрут. Centrifugo обох стеків іде з `network_mode: host` і HTTP на `127.0.0.1:8100`/`8101` змінними контейнера, як стенд (Р6): host-и (`pnpm demo`, e2e) слухають лише `127.0.0.1`, а `host-gateway` на Linux їх не бачить. Тому JWKS стеків — `http://127.0.0.1:3000` (порт `pnpm demo`), DSN — `127.0.0.1:54422` / `127.0.0.1:54322`. Host на `0.0.0.0` не прив'язують. E2e (#263, вільний порт) і D5 генерують конфіг під свій порт — рішення D5 | профіль §10.1 (порти Centrifugo) |
 | Р18 | Межа відкликання = TTL токена + `client.expired_sub_close_delay` (типово 25 с; з'єднання — `expired_close_delay`). Типові значення лишаються, у білий список ключі не входять | профіль §6.2, П4-B §8.6 |
 | Р19 | Метрики транспорту §11 відкладено в #268: приймача метрик ще немає; `recovered: false` — B5b; журнал Centrifugo — `info` | профіль §11 |
 | Р20 | `prune` за розкладом шаблон не кличе (Р27): оператор — `pg_cron` чи зовнішній cron від власника; рецепт — у скілі `simetra-metadata`. Демо й e2e спорожнює сам споживач | немає |
@@ -124,14 +124,16 @@
    переписує `data.id`; `CHECK` без прив'язки до `id`. Задача 3.
 2. **Споживач бачить лише outbox.** Роль входу без налаштування `role` —
    `42501`; член `simetra_command` чи ролі запиту — відмова гейта ролей;
-   `SELECT` з `simetra.ledger`, таблиці виду й `EXECUTE` будь-якої функції
-   `simetra` — `42501`/`false`. Членство всередину (`GRANT simetra_signals TO
+   `SELECT` з `simetra.ledger`, таблиці виду — `42501`; `has_function_privilege`
+   на будь-яку функцію схеми `simetra` — `false`. Членство всередину (`GRANT simetra_signals TO
    authenticated`) — відмова гейта. Мутація: зайвий грант споживачу. Задачі 2–3.
 3. **Канал у транзакції.** Дозволений, потім недозволений канал — другий
    рядок відхилено разом із транзакцією. Задача 7.
-4. **Оракул прав закрито (Р10).** Виклик `signal_topic_allowed` від
-   `simetra_signals` і ролі `anonymous` — `42501`. Мутація: `GRANT EXECUTE …
-   TO PUBLIC` у генераторі. Задача 7.
+4. **Оракул прав закрито (Р10, Р15).** Виклик `signal_topic_allowed` і
+   `signal_payload_allowed` від `simetra_signals` з підробленими claims
+   справжнього учасника і від ролі `anonymous` — `42501` (не `false`);
+   `signal_payload_allowed` — `SECURITY INVOKER`. Мутації окремо: `GRANT
+   EXECUTE … TO PUBLIC` на кожну з двох функцій. Задача 7.
 5. **Довільні дані в сигналі (Р15).** Прямий `INSERT` в outbox і прямий
    виклик `signal()` від `simetra_command`: зайве поле в `data`, `op:
    "rights"`, чужий `object`, вигадане ім'я ключа, два ключі, версія 0 —
@@ -256,7 +258,8 @@ designer: конфіг дає виклик; у частині A — власни
 справді вимкнено); справжній логін `simetra_signals` з
 грантами задачі 3 працює; два інстанси з `use_try_lock` — кожен рядок рівно
 раз; `restart()` — рядки, вставлені під час рестарту, доходять; на `0.0.0.0`
-зовнішнього інтерфейсу нічого не слухає; після `down()` і після `throw` у
+зовнішнього інтерфейсу нічого не слухає; журнал контейнера не містить пароля
+DSN; після `down()` і після `throw` у
 тесті — `docker ps -a --filter label=simetra-run=<тег>` порожньо.
 `run-tests db --filter signal-stand`; `run-tests db-supabase --filter signal-stand`.
 
@@ -441,17 +444,19 @@ Create: `packages/designer/src/tools/signals-config.ts` (+ `catalog.ts`, `types.
 — чиста функція; простори, споживач `simetra_outbox` з DSN-заглушкою, `health`,
 `log: info`, без `http_server`. `centrifugoConfigRefusals(config)` — білий
 список ключів кожного рівня (інваріант 11; `jwksUrl` — `https:` або `http:`
-на loopback, `host.docker.internal` чи однослівне ім'я сервісу). Інструмент `signals-config` (`files: "read"`, `database: "none"`)
+на loopback чи однослівне ім'я сервісу). Інструмент `signals-config` (`files: "read"`, `database: "none"`)
 називає обидві змінні DSN; секрет у файл не пишеться.
 
 Стеки (Р16, Р17): `docker/postgres-stack/centrifugo.json` і
 `docker/supabase-signals/centrifugo.json` — вихід генератора з базою
-`http://host.docker.internal:3000`; `compose.yaml` обох — інтерполяція DSN,
-`extra_hosts: host.docker.internal:host-gateway`; `login-secrets.env` —
+`http://127.0.0.1:3000`; `compose.yaml` обох — `network_mode: host`, HTTP
+Centrifugo на `127.0.0.1` змінними (замість `ports`), інтерполяція DSN;
+`login-secrets.env` —
 `SIMETRA_SIGNALS_DEV_PASSWORD`; `scripts/db-stack.mjs` — DSN у `composeEnv()`,
 порядок старту, пароль `simetra_signals` у `db:pg:start` і `db:roles`, DSN
-у `db:signals:start` (`postgres` — сервіс `postgres`, база `simetra`;
-`supabase` — `host.docker.internal:54322`, база `postgres`).
+у `db:signals:start` (`postgres` — `127.0.0.1:54422`, база `simetra`;
+`supabase` — `127.0.0.1:54322`, база `postgres`). Тест файлів стека тримає
+`127.0.0.1` для HTTP Centrifugo замість перевірки `ports`.
 `packages/simetra/test/db/stack-files.test.ts` — тест дрейфу (файл стека =
 вихід генератора) замість тесту «no outbox consumer», правила секретів
 розширено на новий пароль (не в `env_file`, не в argv, не в
@@ -480,7 +485,9 @@ Create: `packages/designer/src/tools/signals-config.ts` (+ `catalog.ts`, `types.
 рівно раз у своєму скоупі й жодного в чужому; учасник без `read` токена не
 має; клієнт не публікує); відмови токенів інваріанту 10 і чужого каналу,
 прострочення, чужого `aud`, невідомого `kid`; `OKP` приймається; ротація без
-розриву з годинником порту; `recovered: true` після короткого розриву,
+розриву з годинником порту; межа відкликання Р18 — токен каналу з `exp`
+за кілька секунд, поновлення відмовлено: підписку закрито не пізніше `exp` +
+25 с + запас; `recovered: true` після короткого розриву,
 `false` після `restart()`; p95 «коміт → подія клієнта» ≤ 50 мс на 200
 командах; падіння тесту не лишає контейнерів. `run-tests db --filter signal-delivery`;
 `run-tests db-supabase --filter signal-delivery`.
