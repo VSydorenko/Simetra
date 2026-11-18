@@ -53,8 +53,11 @@ the statements the hint of `sql.function-body-statement` lists; the field
 `statement` names the one refused. A body never changes the schema: move DDL
 into metadata or a migration.
 
-- `nonLiteralExecute`, `dynamicText` (a call of a builtin or provider
-  function that executes SQL text, such as `query_to_xml` or `dblink`) and
+- `nonLiteralExecute`, `dynamicText` (a call of a builtin that executes SQL
+  text, such as `query_to_xml`, or of any function of a provider schema that
+  is not on the provider's reviewed list, such as `dblink` or `cron.schedule`;
+  in a body without an empty `search_path`, also an unqualified call that is
+  neither a builtin nor a function of the model) and
   `language` (a language other than `sql` and `plpgsql`) cannot be judged:
   rewrite the function with static SQL or remove it. Partition maintenance or
   statistics through `EXECUTE format(…)` is refused on adoption for the same

@@ -305,6 +305,50 @@ describe("sql.function-body-statement: a call that executes SQL text (спека
     ])
   })
 
+  // Позитивний перелік провайдера (спека прав §5.3): виклик функції його схеми,
+  // якої перелік не називає, судиться як виконання тексту, а не пропускається.
+  it.each(
+    PLACES.flatMap((file) =>
+      [
+        {
+          name: "an unnamed function of a provider schema",
+          sql: plpgsql("PERFORM extensions.unknown_exec('SELECT 1')"),
+        },
+        {
+          name: "an unqualified unknown call without an empty search_path",
+          sql: plpgsql("PERFORM unknown_exec('SELECT 1')"),
+        },
+      ].map((row) => ({ ...row, file }))
+    )
+  )("$name in $file → dynamicText", async ({ file, sql }) => {
+    const result = await compile(await acceptDebt(files({ [file]: sql })))
+    expect(brief(result.diagnostics)).toEqual([
+      bodyStatement(file, "dynamicText"),
+    ])
+  })
+
+  it.each(PLACES)(
+    "a listed provider function, a pinned search_path and a model function in %s → no error",
+    async (file) => {
+      const accepted = [
+        plpgsql("PERFORM auth.uid()"),
+        plpgsql("PERFORM unknown_exec('SELECT 1')", "SET search_path = ''"),
+      ]
+      for (const sql of accepted) {
+        const result = await compile(await acceptDebt(files({ [file]: sql })))
+        expect(brief(result.diagnostics)).toEqual([])
+      }
+      const own = await compile(
+        await acceptDebt(
+          files({
+            [file]: `${plpgsql("PERFORM helper(1)")};\nCREATE FUNCTION public.helper(a int) RETURNS int LANGUAGE sql AS $$ SELECT a $$;`,
+          })
+        )
+      )
+      expect(brief(own.diagnostics)).toEqual([])
+    }
+  )
+
   it.each(PLACES)("an ordinary builtin call in %s → no error", async (file) => {
     const result = await compile(
       await acceptDebt(

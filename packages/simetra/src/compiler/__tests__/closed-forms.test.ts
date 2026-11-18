@@ -624,6 +624,8 @@ describe("kind module: closed forms only", () => {
       // Некваліфікований виклик розв'язує шлях сесії: судиться голе ім'я.
       ["dblink_exec('c', 'SELECT 1')"],
       ["cron.schedule('j', '* * * * *', 'SELECT 1')"],
+      // Функція схеми провайдера, якої немає в позитивному переліку.
+      ["extensions.unknown_exec('SELECT 1')"],
     ])("a call of %s executes SQL text", async (call) => {
       for (const wrap of [closedShell, debtShell]) {
         const found = await diagnostics({
@@ -641,6 +643,26 @@ describe("kind module: closed forms only", () => {
           .filter((d) => d.code === "sql.expression-call-not-allowed")
           .map((d) => d.params?.call)
       ).toHaveLength(1)
+    })
+
+    // Одиниця без тіла й не вираз (домен): виклик судить запис контексту
+    // команди. Позитивний перелік (спека прав §5.3): функція схеми провайдера,
+    // якої він не називає, — `dynamicText`; названа — запису немає.
+    it.each([
+      ["extensions.unknown_exec('x')", [[WARNING, "dynamicText", undefined]]],
+      [
+        "cron.schedule('j', '* * * * *', 'SELECT 1')",
+        [[WARNING, "dynamicText", undefined]],
+      ],
+      ["auth.uid()::text", []],
+    ])("a domain default (debt) %s", async (call, expected) => {
+      expect(
+        sessionWrites(
+          await diagnostics({
+            [SHARED_SQL]: `CREATE DOMAIN public.d AS text DEFAULT ${call};`,
+          })
+        )
+      ).toEqual(expected)
     })
 
     it("an ordinary builtin call writes nothing", async () => {
