@@ -67,12 +67,10 @@ export interface DataSnapshot {
   readonly core: CoreSnapshot
 }
 
-/** Who and under which catalog a {@link DataSnapshot} was taken. */
+/** Who a {@link DataSnapshot} was taken for. */
 export interface SnapshotMeta {
   /** The session `sub` of the runtime that took it. */
   readonly subject: string
-  /** The `snapshotHash` of that runtime's client catalog. */
-  readonly catalogHash: string
 }
 
 export interface DataRuntimeOptions {
@@ -403,17 +401,14 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     },
     dispose: () => close(DISPOSED, "disposed"),
     dehydrate: () => ({
-      meta: { subject, catalogHash: catalog.snapshotHash },
+      meta: { subject },
       core: core.dehydrate(),
     }),
     hydrate(snapshot) {
       if (closedWith !== undefined) return
       const meta = (snapshot as { meta?: unknown } | null)?.meta as
-        { subject?: unknown; catalogHash?: unknown } | undefined
-      if (
-        typeof meta?.subject !== "string" ||
-        typeof meta.catalogHash !== "string"
-      )
+        { subject?: unknown } | undefined
+      if (typeof meta?.subject !== "string")
         throw new TypeError("snapshot: meta is malformed")
       // Знімок іншого суб'єкта не входить у цей рантайм: ні рядка, ні
       // підмножини; сервер на звірці однаково відповів би `session-changed`.
@@ -421,9 +416,8 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
         throw new TypeError("snapshot: the subject differs from the runtime's")
       core.hydrate(snapshot.core)
     },
-    // Звірка ядра завжди питає `version`, тож інший `catalogHash` знімка
-    // окремого запиту не потребує; `lastHash` ядра не чіпаємо, інакше
-    // відповіді перечитувань, що обігнали `version`, дали б другий запит.
+    // Збірку клієнта, що розійшлась зі збіркою рендера, ловить `version`, який
+    // звірка ядра шле завжди: розбіжність іде шляхом `stale-client`.
     endHydration() {
       if (closedWith === undefined) core.endHydration()
     },

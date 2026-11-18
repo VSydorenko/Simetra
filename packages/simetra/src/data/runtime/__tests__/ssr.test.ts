@@ -223,13 +223,10 @@ const titleOf = (snapshot: ViewSnapshot) =>
   (snapshot.rows[0] as { values: { title?: string } }).values.title
 
 describe("the snapshot of a runtime", () => {
-  it("names the subject and the catalog hash of the runtime", async () => {
+  it("names only the subject", async () => {
     const fake = serverWorld()
     const snapshot = await takeSnapshot(fake, [card(1)])
-    expect(snapshot.meta).toEqual({
-      subject: SUBJECT_A,
-      catalogHash: clientCatalog().snapshotHash,
-    })
+    expect(snapshot.meta).toEqual({ subject: SUBJECT_A })
   })
 
   it("hydrates a view the same through JSON as directly", async () => {
@@ -293,6 +290,10 @@ describe("hydrate refuses without writing", () => {
         core: { ...snapshot.core, format: 2 } as never,
       })
     ).toThrow(TypeError)
+    expect([...coreInternals(a.core).registry.subsets()]).toHaveLength(0)
+    a.runtime.endHydration()
+    await settle()
+    expect(a.wire.calls).toHaveLength(0)
     expect(() => a.runtime.hydrate({ core: snapshot.core } as never)).toThrow(
       TypeError
     )
@@ -402,14 +403,9 @@ describe("the reconciliation after hydration", () => {
     const fake = serverWorld()
     const snapshot = await takeSnapshot(fake, [card(1), list])
     const a = runtimeOver(fake)
-    a.runtime.hydrate({
-      meta: { ...snapshot.meta, catalogHash: "another-catalog" },
-      core: snapshot.core,
-    })
+    a.runtime.hydrate(snapshot)
     a.core.view(card(1)).subscribe(() => {})
     a.core.view(list).subscribe(() => {})
-    // Знімок з іншим хешем каталогу не змінює «останній баченого» хеша: сервер
-    // відповідає хешем клієнтського каталогу.
     a.wire.hold = true
     a.runtime.endHydration()
     await settle()
@@ -437,27 +433,6 @@ describe("the reconciliation after hydration", () => {
     a.runtime.endHydration()
     await settle()
     expect(a.wire.calls).toHaveLength(sent)
-  })
-
-  it("a different catalogHash still makes exactly one version request", async () => {
-    const fake = serverWorld()
-    const snapshot = await takeSnapshot(fake, [card(1)])
-    const a = runtimeOver(fake)
-    a.runtime.hydrate({
-      meta: { ...snapshot.meta, catalogHash: "another-catalog" },
-      core: snapshot.core,
-    })
-    a.core.view(card(1)).subscribe(() => {})
-    await settle()
-    expect(a.wire.calls).toHaveLength(0)
-    a.runtime.endHydration()
-    await settle()
-    const versions = a.wire.calls.filter(
-      (c) =>
-        c.request.type === "read" &&
-        (c.request.items[0] as { type: string }).type === "version"
-    )
-    expect(versions).toHaveLength(1)
   })
 
   it("refreshes the rows the server changed meanwhile", async () => {
