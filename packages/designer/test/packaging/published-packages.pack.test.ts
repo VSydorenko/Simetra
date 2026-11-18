@@ -261,6 +261,21 @@ describe("simetra", () => {
     )
   })
 
+  it("no entry importable in plain Node exposes the grant constructor or its brand check", async () => {
+    // Входи `ui` і `shell` тягнуть peer-и React: їх цей споживач не ставить.
+    const script = [
+      'const entries = ["model", "compiler", "schema", "server", "server/signals", "data"]',
+      "const names = await Promise.all(entries.map(async (e) => Object.keys(await import(`simetra/${e}`))))",
+      "console.log(names.flat().filter((n) => /ChannelGrant/.test(n)).join())",
+    ].join("\n")
+    const { stdout } = await exec(
+      process.execPath,
+      ["--input-type=module", "-e", script],
+      { cwd: consumer }
+    )
+    expect(stdout.trim()).toBe("")
+  })
+
   it("the token port of simetra/server/signals accepts a grant of simetra/server's runtime and refuses a forged one", async () => {
     // Один `WeakSet` клейма на обидва входи (чанк `channel-grant`): з копією
     // на вхід порт відхилив би справжній грант як підробку. Порт-фейк
