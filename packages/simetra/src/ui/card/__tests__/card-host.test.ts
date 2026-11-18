@@ -258,7 +258,10 @@ const BLOCKERS: [string, (o: Opened) => Promise<void>][] = [
           Object.entries(full.values).filter(([name]) => name !== "notes")
         ),
       }
-      act(() => {
+      // Картка сама дочитує застаріле поле: сервер тримає читання, тож
+      // стан не минає, а дочитування стартує всередині `act`.
+      o.fake.mode = "manual"
+      await act(async () => {
         o.core.commit(
           (w) =>
             w.apply(
@@ -269,8 +272,8 @@ const BLOCKERS: [string, (o: Opened) => Promise<void>][] = [
             ),
           o.core.token()
         )
+        await settle()
       })
-      // Без `flush`: картка сама дочитує застаріле поле, і стан минає.
     },
   ],
   [
@@ -341,12 +344,15 @@ describe("CardHost — показ", () => {
         Object.entries(full.values).filter(([name]) => name !== "notes")
       ),
     }
-    act(() => {
+    // Дочитування поля сервер тримає: так воно стартує всередині `act`.
+    o.fake.mode = "manual"
+    await act(async () => {
       o.core.commit(
         (w) =>
           w.apply(TASK, { rows: [row], absent: [] }, o.core.readEpoch(), null),
         o.core.token()
       )
+      await settle()
     })
     expect(input(o.c, "title")).toBeNull()
     expect(slot(o.c, "title").textContent).toContain("newer")
