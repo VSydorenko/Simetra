@@ -157,9 +157,7 @@ export function renderModelIndependentLayer(
 ): RenderedUnit[] {
   const key = keyTriggerNames(table.name)
   return [
-    ...renderMechanicsFunction(provider, parse),
-    ...renderAuthorFunction(provider, parse),
-    ...renderKeyFunction(provider, parse),
+    ...renderSharedTriggerFunctions(provider, parse),
     renderMechanicsTrigger(
       table,
       mechanicsTriggerName(table.name),
@@ -174,5 +172,21 @@ export function renderModelIndependentLayer(
     ),
     renderKeyTrigger(table, key.before, "BEFORE", KEY_COLUMN, parse),
     renderKeyTrigger(table, key.after, "AFTER", KEY_COLUMN, parse),
+  ]
+}
+
+/**
+ * Спільні функції механіки, авторства й ключа з їхніми грантами: частина
+ * шару, що не залежить ні від моделі, ні від таблиці, — еталон зворотної
+ * генерації бере її й без жодного тригера.
+ */
+export function renderSharedTriggerFunctions(
+  provider: DatabaseProvider,
+  parse: SqlParser
+): RenderedUnit[] {
+  return [
+    ...renderMechanicsFunction(provider, parse),
+    ...renderAuthorFunction(provider, parse),
+    ...renderKeyFunction(provider, parse),
   ]
 }

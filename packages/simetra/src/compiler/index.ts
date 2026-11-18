@@ -32,6 +32,7 @@ export type { ResolvedReference } from "./stages/identity"
 export type { CreationNode } from "./sql/dependencies"
 export {
   grantRoles,
+  isMovementQuery,
   platformFunctionSignatures,
   readSqlUnits,
   splitIdentity,
@@ -62,6 +63,8 @@ export { hierarchyNames } from "./hierarchy-units"
 export {
   SHARED_TRIGGER_FUNCTIONS,
   platformTriggers,
+  renderModelIndependentLayer,
+  renderSharedTriggerFunctions,
   type PlatformTrigger,
   type PlatformTriggerFamily,
 } from "./platform-triggers"

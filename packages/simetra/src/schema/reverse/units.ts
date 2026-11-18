@@ -1,10 +1,6 @@
 import {
   diagnostic,
-  grantTargetKeys,
-  ownsTarget,
-  platformTriggers,
   readSqlUnits,
-  SHARED_TRIGGER_FUNCTIONS,
   unitPlacement,
   unitTarget,
   type Diagnostic,
@@ -31,12 +27,6 @@ export interface UnitsContext {
    * але функцію вже кличе збережений файл.
    */
   handlers: ReadonlySet<string>
-  /**
-   * Цілі згенерованих грантів збереженої теки (`grantTargetKeys`): дослівний
-   * грант на них не пишемо — правами володіє платформа, і в теці він був би
-   * помилкою `sql.generated-grant`.
-   */
-  platformGrants: ReadonlySet<string>
 }
 
 export interface UnitFiles {
@@ -232,83 +222,6 @@ function ownerTable(unit: CatalogUnit, ctx: UnitsContext): string | undefined {
   }
 }
 
-/**
- * Функція, яку платформний тригер таблиці мусить кликати за своїм іменем, —
- * з реєстру платформних тригерів таблиці (`platformTriggers`). Інше ім'я —
- * не платформний тригер.
- */
-function platformTriggerFunction(
-  unit: CatalogUnit,
-  ctx: UnitsContext
-): string | undefined {
-  const target = unitTarget(unit, ctx.parse)
-  if (target?.object === undefined) return undefined
-  const entry = platformTriggers({
-    schema: target.schema || ctx.defaultSchema,
-    name: target.object,
-  }).find((e) => e.trigger === unit.name)
-  return entry === undefined
-    ? undefined
-    : qualified(entry.function.schema, entry.function.name)
-}
-
-/**
- * Функції платформних тригерів серед одиниць: механіка, авторство й
- * незмінність ключа (по одній функції на проєкт) й ті функції носіїв,
- * які кличе тригер носіїв з відповідним іменем. Функцію носіїв за самим
- * іменем не впізнаємо: ім'я таблиці, від якого воно походить, дає лише
- * тригер.
- */
-function platformFunctions(
-  units: readonly CatalogUnit[],
-  ctx: UnitsContext
-): ReadonlySet<string> {
-  const found = new Set(
-    SHARED_TRIGGER_FUNCTIONS.map((fn) => qualified(fn.schema, fn.name))
-  )
-  for (const unit of units) {
-    if (unit.class !== "trigger") continue
-    const fn = platformTriggerFunction(unit, ctx)
-    if (fn !== undefined && triggerFunction(unit, ctx) === fn) found.add(fn)
-  }
-  return found
-}
-
-/**
- * Платформна одиниця тригерів таблиці (спека промоції §9.2, §9.3):
- * механіка рядка й копії носіїв — функція без аргументів, грант лише на такі
- * функції й тригер з платформним ім'ям, що кличе саме свою функцію. Ними
- * володіє платформа, тож вони не пишуться й без збереженого опису теки —
- * модуль користувача ними не володіє. Інший тригер, що кличе ту саму
- * функцію, — власний тригер таблиці: пропуск за самою схемою `simetra` чи
- * за міткою імені його б загубив.
- */
-function isPlatformTrigger(
-  unit: CatalogUnit,
-  ctx: UnitsContext,
-  functions: ReadonlySet<string>
-): boolean {
-  switch (unit.class) {
-    case "function":
-      return [...functions].some((fn) => unit.identity === `function:${fn}()`)
-    case "grant": {
-      const targets = grantTargetKeys(unit, ctx.parse)
-      return (
-        targets.length > 0 &&
-        targets.every((t) =>
-          [...functions].some((fn) => t === `function|${fn}()`)
-        )
-      )
-    }
-    case "trigger": {
-      const fn = platformTriggerFunction(unit, ctx)
-      return fn !== undefined && triggerFunction(unit, ctx) === fn
-    }
-    default:
-      return false
-  }
-}
-
 /** Сегмент імені файлу: лише безпечні символи, `[]` — `_array`. */
 function slug(text: string): string {
   return text
@@ -409,18 +322,8 @@ export function layoutUnits(
   }
 
   const grouped = new Map<string, CatalogUnit[]>()
-  const platform = platformFunctions(units, ctx)
-  const platformOwned = (unit: CatalogUnit) =>
-    grantTargetKeys(unit, ctx.parse).some((target) =>
-      ownsTarget(ctx.platformGrants, target)
-    )
   for (const unit of units) {
-    if (
-      ctx.described.has(unit.identity) ||
-      platformOwned(unit) ||
-      isPlatformTrigger(unit, ctx, platform)
-    )
-      continue
+    if (ctx.described.has(unit.identity)) continue
     const path = pathOf(unit)
     grouped.set(path, [...(grouped.get(path) ?? []), unit])
   }
