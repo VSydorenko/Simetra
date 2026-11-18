@@ -128,7 +128,7 @@ chromium/webkit × production/dev і стиснення відповідей (§
 | `src/routes/` | корінь із сесією, вхід, маршрути з одного рядка (§6) |
 | `scripts/` | `db-setup`, `dev-user`, `seed` (§4.3) |
 | `eslint.config.js` | лінт споживача (§4.7) |
-| `src/instrument.ts` | порожні точки інструментування (`wrapTransport`, `wrapDatabase`, `onDataResponse`, `markHydrated`); e2e-збірка підміняє модуль аліасом (Дх9); його імпортують `router.tsx`, `client.tsx`, `data-transport.ts` (`wrapTransport`), `server/runtime.ts`, `server/data-fn.ts` і `server/data-request.ts` |
+| `src/instrument.ts` | порожні точки інструментування (`wrapTransport`, `wrapDatabase`, `onDataResponse`, `markHydrated`); e2e-збірка підміняє модуль аліасом (Дх9); імпортувати його можуть лише `router.tsx`, `client.tsx`, `data-transport.ts` (`wrapTransport`), `server/runtime.ts`, `server/data-fn.ts` і `server/data-request.ts` (правило лінту) |
 
 Ціль збірки зрізу — пресет Nitro `node-server` (еталонна ціль, e2e);
 збірка Vercel у CI — #210, розгортання на Vercel — #215. Обхід #8139,
