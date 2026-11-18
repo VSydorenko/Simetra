@@ -93,15 +93,48 @@ describe("signal outbox", () => {
     expect(exprTree(checkOf(model, "size"))).toEqual(
       exprTree(`octet_length(payload::text) <= ${SIGNAL_PAYLOAD_MAX_BYTES}`)
     )
-    // Форма й прив'язка до `id` — під `IS TRUE`: `NULL` відсутнього ключа
-    // не пропускає рядок. Поведінку кожної умови доводить DB-тест.
-    for (const label of ["payload", "id"]) {
-      expect(
-        nodes(exprTree(checkOf(model, label)), "BooleanTest"),
-        label
-      ).toHaveLength(1)
-    }
-    expect(checkOf(model, "id")).toContain("= id::text")
+    // Прив'язка до `id` (Р13) — обидва ключі, кожен рядком; під `IS TRUE`:
+    // `NULL` відсутнього ключа не пропускає рядок
+    expect(exprTree(checkOf(model, "id"))).toEqual(
+      exprTree(
+        "(jsonb_typeof(payload -> 'idempotency_key') = 'string'" +
+          " AND (payload ->> 'idempotency_key') = id::text" +
+          " AND jsonb_typeof(payload -> 'data' -> 'id') = 'string'" +
+          " AND (payload -> 'data' ->> 'id') = id::text) IS TRUE"
+      )
+    )
+    // Форма — теж під `IS TRUE`; поведінку кожної її умови доводить DB-тест
+    expect(
+      nodes(exprTree(checkOf(model, "payload")), "BooleanTest")
+    ).toHaveLength(1)
+  })
+
+  it("creation order: the table before its triggers, policies, grants and prune", async () => {
+    const model = await compiled("postgres")
+    const order = model.creationOrder.map((node) =>
+      node.type === "unit"
+        ? node.identity
+        : `${node.type}:${node.schema}.${node.name}`
+    )
+    const table = order.indexOf(`table:${TABLE}`)
+    expect(table).toBeGreaterThanOrEqual(0)
+    const prune = `function:${SIGNAL_OUTBOX.schema}.signal_outbox_prune(interval)`
+    const after = unitsOn(model)
+      .filter(
+        (u) =>
+          u.class === "trigger" ||
+          u.class === "policy" ||
+          u.identity === prune ||
+          (u.class === "grant" && u.sql.includes(` TABLE ${TABLE} `))
+      )
+      .map((u) => u.identity)
+    expect(after.length).toBeGreaterThan(0)
+    for (const identity of after)
+      expect(order.indexOf(identity), identity).toBeGreaterThan(table)
+    // Тіло plpgsql граф не читає: ребро до таблиці `prune` називає явно
+    expect(model.sqlUnits.find((u) => u.identity === prune)?.requires).toEqual([
+      { type: "table", ...SIGNAL_OUTBOX },
+    ])
   })
 
   it("stamp — BEFORE INSERT per row, notify — AFTER INSERT per statement", async () => {

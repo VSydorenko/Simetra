@@ -16,7 +16,7 @@ import {
   project,
   testProvider,
 } from "../../../simetra/test/support"
-import { asSuperuser, withModelTarget } from "./support/db"
+import { asSuperuser, query, withModelTarget } from "./support/db"
 
 /**
  * Outbox сигналів (спека профілю `postgres` §5.1–§5.2, інваріанти 1–2 плану
@@ -155,7 +155,7 @@ export function describeSignalOutbox(): void {
       )
     })
 
-    it("without the stamp trigger a forged key is refused with 23514", async () => {
+    it("without the stamp trigger a forged key or a forged data.id is refused with 23514", async () => {
       await withModelTarget(model, (url) =>
         inRollback(url, async (client) => {
           // Перший рядок — щоб `last_value` послідовності вже був виданим
@@ -163,16 +163,32 @@ export function describeSignalOutbox(): void {
           await client.query(
             `ALTER TABLE ${TABLE} DISABLE TRIGGER simetra_signal_outbox_stamp`
           )
-          const next = (
-            await client.query<{ id: string }>(
-              `SELECT (last_value + 1)::text AS id FROM ${quoteIdent(SIGNAL_OUTBOX.schema)}.${quoteIdent(`${SIGNAL_OUTBOX.name}_id_seq`)}`
-            )
-          ).rows[0]!.id
-          // Підробка вгадує і наступний `id`: CHECK звіряє ключ саме з ним,
-          // тож відмова тут — від розбіжності ключа ідемпотентності й `data.id`
+          // Відмовлена вставка теж бере значення послідовності: наступний `id`
+          // читається перед кожною спробою
+          const next = async () =>
+            (
+              await client.query<{ id: string }>(
+                `SELECT (last_value + 1)::text AS id FROM ${quoteIdent(SIGNAL_OUTBOX.schema)}.${quoteIdent(`${SIGNAL_OUTBOX.name}_id_seq`)}`
+              )
+            ).rows[0]!.id
+          // Кожна підробка вгадує наступний `id` для другого ключа, тож
+          // відмова — саме від прив'язки підробленого ключа до `id` (Р13)
+          let id = await next()
           expect(
-            await insert(client, signal({ id: "1" }, { idempotency_key: next }))
+            await insert(client, signal({ id: "1" }, { idempotency_key: id })),
+            "forged data.id"
           ).toBe("23514")
+          id = await next()
+          expect(
+            await insert(client, signal({ id }, { idempotency_key: "1" })),
+            "forged idempotency_key"
+          ).toBe("23514")
+          // Контроль: обидва ключі = `id` — рядок проходить і без тригера
+          id = await next()
+          expect(
+            await insert(client, signal({ id }, { idempotency_key: id })),
+            "both keys are the id"
+          ).toBeNull()
         })
       )
     })
@@ -226,6 +242,15 @@ export function describeSignalOutbox(): void {
 
     it("one notification per transaction of three inserts, none after ROLLBACK", async () => {
       await withModelTarget(model, async (url) => {
+        // Postgres зводить однакові сповіщення транзакції в одне, тож рівень
+        // тригера видно лише з каталогу: AFTER INSERT рівня оператора
+        // (`tgtype`: біт 0 — ROW, біт 1 — BEFORE, біт 2 — INSERT)
+        const [trigger] = await query<{ tgtype: number }>(
+          url,
+          "SELECT tgtype FROM pg_catalog.pg_trigger WHERE tgrelid = $1::regclass AND tgname = 'simetra_signal_outbox_notify'",
+          [`${SIGNAL_OUTBOX.schema}.${SIGNAL_OUTBOX.name}`]
+        )
+        expect(trigger!.tgtype & 0b111).toBe(0b100)
         const listener = new pg.Client({ connectionString: url })
         const writer = new pg.Client({ connectionString: url })
         await listener.connect()
