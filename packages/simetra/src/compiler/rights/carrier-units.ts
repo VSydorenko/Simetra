@@ -3,11 +3,13 @@ import {
   authorColumns,
   makeObjectName,
   quoteIdent,
+  isObjectTable,
   type AttributeCase,
   type DatabaseProvider,
   type PhysicalColumn,
   type PhysicalSnapshot,
   type PhysicalTable,
+  type ObjectTable,
 } from "simetra/model"
 import { platformBeforeTriggerName } from "../before-trigger-names"
 import type { QualifiedName } from "../contracts"
@@ -82,8 +84,8 @@ export function carrierCopies(
  * скоупу не дублюється.
  */
 export interface CarrierLink {
-  table: PhysicalTable
-  source: PhysicalTable
+  table: ObjectTable
+  source: ObjectTable
   through: string
   pairs: { local: string; source: string }[]
   /** Копії зв'язку в порядку колонок таблиці: ім'я й колонка джерела. */
@@ -102,9 +104,11 @@ const tableKey = (t: { schema: string; name: string }) =>
 export function carrierLinks(
   physical: Pick<PhysicalSnapshot, "tables">
 ): CarrierLink[] {
-  const byKey = new Map(physical.tables.map((t) => [tableKey(t), t]))
+  // Копії носіїв бувають лише в таблицях об'єктів; outbox платформи їх не має.
+  const tables = physical.tables.filter(isObjectTable)
+  const byKey = new Map(tables.map((t) => [tableKey(t), t]))
   const links: CarrierLink[] = []
-  for (const table of physical.tables) {
+  for (const table of tables) {
     const groups = new Map<string, CarrierLink>()
     for (const column of carrierCopies(table)) {
       const copyOf = column.origin.copyOf!
@@ -152,7 +156,7 @@ export function carrierLinks(
 
 /** Функція носіїв знімка: таблиця, на якій її тригери, і її роль. */
 export interface CarrierFunction {
-  table: PhysicalTable
+  table: ObjectTable
   fn: QualifiedName
   role: "derive" | "propagate"
 }
@@ -165,8 +169,8 @@ export function carrierFunctions(
   physical: PhysicalSnapshot
 ): CarrierFunction[] {
   const links = carrierLinks(physical)
-  const derived = new Map<string, PhysicalTable>()
-  const sources = new Map<string, PhysicalTable>()
+  const derived = new Map<string, ObjectTable>()
+  const sources = new Map<string, ObjectTable>()
   for (const link of links) {
     derived.set(tableKey(link.table), link.table)
     sources.set(tableKey(link.source), link.source)
@@ -239,7 +243,7 @@ export function authorCarrierSources(
  * на «Користувачів» без скоупу, тож джерело одне, а пара — одна. Інше —
  * дефект компілятора.
  */
-function authorSource(links: readonly CarrierLink[]): PhysicalTable & {
+function authorSource(links: readonly CarrierLink[]): ObjectTable & {
   key: string
 } {
   const source = links[0]!.source
@@ -341,7 +345,7 @@ export function buildCarrierUnits(
     parse
   )
   const unit = (
-    table: PhysicalTable,
+    table: ObjectTable,
     sql: string,
     requires?: readonly CreationNode[]
   ): SqlUnit => ({
@@ -356,7 +360,7 @@ export function buildCarrierUnits(
     schema: t.schema,
     name: t.name,
   })
-  const byTable = (pick: (link: CarrierLink) => PhysicalTable) => {
+  const byTable = (pick: (link: CarrierLink) => ObjectTable) => {
     const groups = new Map<string, CarrierLink[]>()
     for (const link of links) {
       const key = tableKey(pick(link))
@@ -417,7 +421,7 @@ export function buildCarrierUnits(
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
 }
 
-function uniqueTables(tables: readonly PhysicalTable[]): PhysicalTable[] {
+function uniqueTables<T extends PhysicalTable>(tables: readonly T[]): T[] {
   return [...new Map(tables.map((t) => [tableKey(t), t])).values()].sort(
     (a, b) => compareStrings(tableKey(a), tableKey(b))
   )

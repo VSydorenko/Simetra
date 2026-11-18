@@ -9,6 +9,8 @@ import {
   standardLogicalName,
   tabularParentColumn,
   standardElementId,
+  isObjectOrigin,
+  isObjectTable,
   type Attribute,
   type DatabaseProvider,
   type Dml,
@@ -26,6 +28,7 @@ import {
   type ScopeKind,
   type SubscriptionEvent,
   type VirtualTableKind,
+  type ObjectTable,
 } from "simetra/model"
 import {
   CATALOG_COMMAND_LABELS,
@@ -698,7 +701,7 @@ const MEASURES = ["opening", "receipt", "expense", "closing"] as const
 export function mainTableOf(
   physical: PhysicalSnapshot,
   objectId: string
-): PhysicalTable | undefined {
+): ObjectTable | undefined {
   return mainTableIn(physical.tables, objectId)
 }
 
@@ -711,8 +714,8 @@ export function mainTableOf(
  * політик запису й тригера ефектів.
  */
 export function rootFamilyKey(
-  table: PhysicalTable,
-  main: PhysicalTable
+  table: ObjectTable,
+  main: ObjectTable
 ): string | undefined {
   const key = main.primaryKey?.columns
   const ref = findStyleFreeColumn(main, keyColumn(false))
@@ -731,8 +734,8 @@ export function rootFamilyKey(
 
 /** Таблиця з тригером ефектів, її основна таблиця й ключ кореневої родини. */
 export interface EffectsTable {
-  table: PhysicalTable
-  main: PhysicalTable
+  table: ObjectTable
+  main: ObjectTable
   key: string
 }
 
@@ -744,7 +747,7 @@ export interface EffectsTable {
 export function effectsTables(physical: PhysicalSnapshot): EffectsTable[] {
   return physical.tables
     .flatMap((table): EffectsTable[] => {
-      if (table.origin.part !== undefined) return []
+      if (!isObjectTable(table) || table.origin.part !== undefined) return []
       const main = mainTableOf(physical, table.origin.objectId)
       if (main === undefined) return []
       const key = rootFamilyKey(table, main)
@@ -763,7 +766,10 @@ function derivedTableOf(
   part: "totals" | "turnoversMonth"
 ): PhysicalTable | undefined {
   return physical.tables.find(
-    (t) => t.origin.objectId === objectId && t.origin.part === part
+    (t) =>
+      isObjectOrigin(t.origin) &&
+      t.origin.objectId === objectId &&
+      t.origin.part === part
   )
 }
 
@@ -1254,7 +1260,11 @@ function personalDataContracts(
       ).flatMap((section) =>
         record(
           objectId,
-          physical.tables.find((t) => t.origin.tabularSectionId === section.id),
+          physical.tables.find(
+            (t) =>
+              isObjectOrigin(t.origin) &&
+              t.origin.tabularSectionId === section.id
+          ),
           personal(section.attributes)
         )
       )
@@ -1450,7 +1460,10 @@ function requiredOnPost(
   // реквізиту, а стандартна ТЧ реквізитів не має.
   const sections = data.tabularSections.flatMap((section) => {
     const sectionTable = must(
-      physical.tables.find((t) => t.origin.tabularSectionId === section.id)
+      physical.tables.find(
+        (t) =>
+          isObjectOrigin(t.origin) && t.origin.tabularSectionId === section.id
+      )
     )
     const columns = section.attributes
       .filter((attribute) => attribute.required)
@@ -1492,7 +1505,11 @@ function immutability(
     ).map((section) => standardElementId(document.id ?? "", section)),
   ]
   const sections = ids.map((id) =>
-    must(physical.tables.find((t) => t.origin.tabularSectionId === id))
+    must(
+      physical.tables.find(
+        (t) => isObjectOrigin(t.origin) && t.origin.tabularSectionId === id
+      )
+    )
   )
   return {
     trigger: makeObjectName(table.name, undefined, "immutable"),

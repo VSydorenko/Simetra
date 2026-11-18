@@ -1,6 +1,7 @@
 import {
   KIND_REGISTRY,
   versionColumn,
+  isObjectOrigin,
   type LocalizedString,
   type LogicalType,
   type MetadataRef,
@@ -423,6 +424,7 @@ export function emitEntityTypes(model: CompiledModel): string {
         .flatMap(({ section, name }) => {
           const table = model.physical.tables.find(
             (candidate) =>
+              isObjectOrigin(candidate.origin) &&
               candidate.origin.objectId === object.id &&
               candidate.origin.tabularSectionId === section.id
           )

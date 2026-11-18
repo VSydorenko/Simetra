@@ -9,7 +9,7 @@ import {
   versionColumn,
   type AttributeCase,
   type PhysicalColumn,
-  type PhysicalTable,
+  type ObjectTable,
 } from "simetra/model"
 import { findStandardColumn } from "../standard-column"
 
@@ -40,7 +40,7 @@ function platformWrittenNames(attributeCase: AttributeCase): Set<string> {
  * реквізитів «Користувачів».
  */
 export function commandWriteColumns(
-  table: PhysicalTable,
+  table: ObjectTable,
   facts: { attributeCase: AttributeCase; main: boolean; users: boolean }
 ): { base: PhysicalColumn[]; update: PhysicalColumn[] } {
   const platform = platformWrittenNames(facts.attributeCase)

@@ -22,6 +22,7 @@ import {
   standardLogicalName,
   truncatedPeriodExpression,
   standardElementId,
+  isObjectOrigin,
   type Attribute,
   type CatalogAttribute,
   type AttributeCase,
@@ -47,6 +48,8 @@ import {
   type StandardColumnDef,
   type TabularSection,
   type ValueType,
+  type ObjectOrigin,
+  type PhysicalOrigin,
 } from "simetra/model"
 import { compareStrings, valueAt } from "../diagnostics"
 import { rightsAdminTables } from "../rights/admin-tables"
@@ -210,7 +213,7 @@ interface PendingTable {
   schema: string
   name: string
   comment?: string
-  origin: PhysicalTable["origin"]
+  origin: ObjectOrigin
   rowLevelSecurity: PhysicalTable["rowLevelSecurity"]
   /** Без `identity`: його послідовність отримує ім'я в `assignNames`. */
   columns: PhysicalColumn[]
@@ -408,6 +411,7 @@ function withIdentities(
       ? undefined
       : result.physical.tables.find(
           (t) =>
+            isObjectOrigin(t.origin) &&
             t.origin.objectId === users.id &&
             t.origin.tabularSectionId === undefined &&
             t.origin.part === undefined
@@ -925,7 +929,7 @@ class SnapshotBuilder {
     object: ParsedObject,
     schema: string,
     register: string,
-    origin: PhysicalTable["origin"],
+    origin: ObjectOrigin,
     dimensions: readonly Attribute[],
     scope: TableScope | undefined
   ): void {
@@ -964,7 +968,7 @@ class SnapshotBuilder {
     object: ParsedObject,
     schema: string,
     register: string,
-    origin: PhysicalTable["origin"],
+    origin: ObjectOrigin,
     dimensions: readonly Attribute[],
     scope: TableScope | undefined,
     split: boolean
@@ -1217,7 +1221,7 @@ class SnapshotBuilder {
   private pendingTable(
     schema: string,
     name: string,
-    origin: PhysicalTable["origin"],
+    origin: ObjectOrigin,
     object: ParsedObject
   ): PendingTable {
     return {
@@ -2235,12 +2239,13 @@ export type KindKey = Extract<
 >["key"]
 
 /** Основна таблиця об'єкта: не ТЧ і не похідна таблиця регістра. */
-export function mainTableIn<T extends { origin: PhysicalTable["origin"] }>(
+export function mainTableIn<T extends { origin: PhysicalOrigin }>(
   tables: readonly T[],
   objectId: string | undefined
-): T | undefined {
+): (T & { origin: ObjectOrigin }) | undefined {
   return tables.find(
-    (t) =>
+    (t): t is T & { origin: ObjectOrigin } =>
+      isObjectOrigin(t.origin) &&
       t.origin.objectId === objectId &&
       t.origin.tabularSectionId === undefined &&
       t.origin.part === undefined
@@ -2771,7 +2776,7 @@ function assignNames(pending: readonly PendingTable[]): {
         }
         if (elementId !== undefined) {
           elementChecks.push({
-            objectId: table.origin.objectId ?? "",
+            objectId: table.origin.objectId,
             attributeId: elementId,
             table: { schema: table.schema, name: table.name },
             check: assigned,

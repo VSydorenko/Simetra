@@ -1,9 +1,11 @@
 import {
   KIND_REGISTRY,
   PLATFORM_SCHEMA,
+  isObjectTable,
   type AttributeCase,
   type PhysicalSnapshot,
   type PhysicalTable,
+  type ObjectTable,
 } from "simetra/model"
 import type { QualifiedName } from "../contracts"
 import { compareStrings } from "../diagnostics"
@@ -38,7 +40,7 @@ export type SnapshotExemptReason =
 
 export interface SnapshotSources {
   /** Таблиці виду, що живлять факти; за `(schema, name)`. */
-  sources: { table: PhysicalTable; facts: readonly SnapshotFact[] }[]
+  sources: { table: ObjectTable; facts: readonly SnapshotFact[] }[]
   /** Відношення, які факти читають без тригера знімка; за `(schema, name)`. */
   exempt: { table: QualifiedName; reason: SnapshotExemptReason }[]
   /** Відношення, яких аналіз не класифікував, — помилка компілятора. */
@@ -91,7 +93,7 @@ function asVerbatim(
 }
 
 type Classified =
-  | { kind: "source"; table: PhysicalTable }
+  | { kind: "source"; table: ObjectTable }
   | { kind: "exempt"; table: QualifiedName; reason: SnapshotExemptReason }
   | { kind: "unknown" }
 
@@ -138,6 +140,8 @@ export function snapshotSources(input: SnapshotSourcesInput): SnapshotSources {
     }
     const reason = exemptTables.get(key(name))
     if (reason !== undefined) return { kind: "exempt", table: name, reason }
+    // Таблиця без об'єкта живе лише в схемі платформи (гілка вище).
+    if (!isObjectTable(table)) return { kind: "unknown" }
     const kind = kinds.get(table.origin.objectId)
     if (kind === undefined) return { kind: "unknown" }
     if (KIND_REGISTRY[kind].declared)
@@ -186,7 +190,7 @@ export function snapshotSources(input: SnapshotSourcesInput): SnapshotSources {
 
   const sourceFacts = new Map<
     string,
-    { table: PhysicalTable; facts: Set<SnapshotFact> }
+    { table: ObjectTable; facts: Set<SnapshotFact> }
   >()
   const exempt = new Map<
     string,

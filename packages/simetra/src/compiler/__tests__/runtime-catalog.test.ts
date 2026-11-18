@@ -12,6 +12,7 @@ import {
   objectColumns,
   runtimeCatalogSchema,
   standardElementId,
+  objectTable,
   type ClientCatalog,
   type RuntimeCatalog,
   type RuntimeObject,
@@ -222,12 +223,14 @@ describe("buildRuntimeCatalog", () => {
       standardElementId(roles.id, { logicalName: "delta" })
     )
     for (const section of sections) {
-      const table = model.physical.tables.find(
-        (t) =>
-          t.schema === section.table.schema && t.name === section.table.name
+      const table = objectTable(
+        model.physical.tables.find(
+          (t) =>
+            t.schema === section.table.schema && t.name === section.table.name
+        )!
       )
-      expect(table?.origin.tabularSectionId, section.table.name).toBeDefined()
-      expect(section.id).toBe(table!.origin.tabularSectionId)
+      expect(table.origin.tabularSectionId, section.table.name).toBeDefined()
+      expect(section.id).toBe(table.origin.tabularSectionId)
     }
   })
 

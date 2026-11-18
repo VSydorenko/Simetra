@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
-import { KIND_REGISTRY, PLATFORM_SCHEMA } from "simetra/model"
+import { KIND_REGISTRY, PLATFORM_SCHEMA, isObjectOrigin } from "simetra/model"
 import { SNAPSHOT_TABLES, type SnapshotFact } from "../rights/actor-snapshot"
 import { RIGHTS_FUNCTIONS } from "../rights/functions"
 import { snapshotSources } from "../rights/snapshot-sources"
@@ -182,6 +182,7 @@ describe("actor snapshot sources", () => {
         if (
           table === undefined ||
           table.schema === PLATFORM_SCHEMA ||
+          !isObjectOrigin(table.origin) ||
           KIND_REGISTRY[kinds.get(table.origin.objectId)!].declared
         )
           continue

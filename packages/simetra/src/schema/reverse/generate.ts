@@ -20,6 +20,7 @@ import {
   KIND_REGISTRY,
   SQL_DEBT_FILE,
   formatProjectFile,
+  isObjectTable,
   type AttributeCase,
   type CatalogModel,
   type CatalogTable,
@@ -126,6 +127,8 @@ async function describedElsewhere(
     if (kept.has(item.origin.objectId))
       found.relations.add(qualified(item.schema, item.name))
   for (const table of model.physical.tables) {
+    // Таблиця платформи без об'єкта не є відношенням застосунку.
+    if (!isObjectTable(table)) continue
     const object = kept.get(table.origin.objectId)
     if (object === undefined) continue
     const key = qualified(table.schema, table.name)

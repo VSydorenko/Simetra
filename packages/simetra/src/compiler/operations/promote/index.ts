@@ -3,6 +3,7 @@ import {
   postsMovements,
   SQL_DEBT_FILE,
   standardLogicalName,
+  isObjectOrigin,
   type MetadataRef,
   type PhysicalTable,
 } from "simetra/model"
@@ -102,7 +103,10 @@ const isAdoptedTable = (object: SourceObject) =>
 /** Таблиця прийнятого об'єкта у знімку моделі до промоції. */
 const adoptedTable = (model: CompiledModel, object: SourceObject) =>
   model.physical.tables.find(
-    ({ origin }) => origin.objectId === object.id && origin.part === undefined
+    ({ origin }) =>
+      isObjectOrigin(origin) &&
+      origin.objectId === object.id &&
+      origin.part === undefined
   )
 
 /**

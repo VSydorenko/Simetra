@@ -10,6 +10,7 @@ import {
   defaultMayRepeat,
   defaultViolatesValueChecks,
   standardElementId,
+  isObjectOrigin,
   type Attribute,
   type AttributeCase,
   type Catalog,
@@ -312,7 +313,8 @@ function checkUsersCatalogs(
       })
     }
     for (const table of model.physical.tables) {
-      if (table.origin.objectId !== object.id) continue
+      if (!isObjectOrigin(table.origin) || table.origin.objectId !== object.id)
+        continue
       for (const check of table.checks) {
         if (check.origin === undefined) continue
         found.push(

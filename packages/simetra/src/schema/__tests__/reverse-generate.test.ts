@@ -13,6 +13,7 @@ import {
 import {
   catalogFromSnapshot,
   customTableSchema,
+  isObjectOrigin,
   type AttributeCase,
   type DatabaseProvider,
   type CatalogColumn,
@@ -1097,7 +1098,7 @@ describe("reverseGenerate", () => {
     const compiled = await compile(kept)
     expect(compiled.diagnostics).toEqual([])
     const rates = compiled.model!.physical.tables.find(
-      (t) => t.origin.tabularSectionId !== undefined
+      (t) => isObjectOrigin(t.origin) && t.origin.tabularSectionId !== undefined
     )!
     const result = await reverseGenerate(
       model({

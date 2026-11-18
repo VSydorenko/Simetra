@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { PLATFORM_SCHEMA } from "simetra/model"
+import { PLATFORM_SCHEMA, objectTable } from "simetra/model"
 import { INPUT_COLUMNS } from "../rights/admin-tables"
 import { snapshotInputs } from "../rights/actor-snapshot"
 import { LIVE, liveInputs } from "../rights/functions"
@@ -165,7 +165,7 @@ describe("rights administration storage", () => {
       )
       expect(table).toBeDefined()
       expect(table!.origin.part).toBe(part)
-      expect(table!.origin.objectId).toBe(
+      expect(objectTable(table!).origin.objectId).toBe(
         result.model!.contracts.rightsCatalogs[0]!.assignments.objectId
       )
       expect(table!.columns.map((c) => c.name)).toEqual(columns)

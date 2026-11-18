@@ -4,7 +4,7 @@ import {
   quoteIdent,
   type DatabaseProvider,
   type PhysicalSnapshot,
-  type PhysicalTable,
+  type ObjectTable,
 } from "simetra/model"
 import {
   accessPolicyNames,
@@ -224,7 +224,7 @@ function branch(
   access: AccessContract,
   rights: RightsContract | undefined,
   kindLabel: string,
-  main: PhysicalTable,
+  main: ObjectTable,
   key: string,
   context: BranchContext
 ): string | undefined {
@@ -287,7 +287,7 @@ function visibility(rows: readonly ExplainRow[]): string {
 function explainRows(
   access: AccessContract,
   rights: RightsContract | undefined,
-  main: PhysicalTable,
+  main: ObjectTable,
   { contracts, label, visibleUsers }: BranchContext,
   subject: Subject
 ): ExplainRow[] {

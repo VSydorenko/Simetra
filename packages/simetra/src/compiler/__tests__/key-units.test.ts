@@ -1,3 +1,4 @@
+import { isObjectOrigin, isObjectTable } from "simetra/model"
 import { beforeAll, describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
 import { platformBeforeTriggerName } from "../before-trigger-names"
@@ -91,7 +92,9 @@ describe("buildKeyUnits", () => {
     const withKey = new Set(["Catalog", "Document"])
     let checked = { with: 0, without: 0 }
     for (const table of sink.physical.tables) {
-      const kind = kindOf.get(table.origin.objectId) ?? ""
+      const kind = isObjectOrigin(table.origin)
+        ? (kindOf.get(table.origin.objectId) ?? "")
+        : ""
       const triggers = keyTriggers(sink, table.schema, table.name)
       // Похідні таблиці виду (`identities` «Користувачів», службові таблиці
       // прав) — не рядки довідника: ключа `ref` у них немає.
@@ -110,7 +113,9 @@ describe("buildKeyUnits", () => {
     expect(checked.with).toBeGreaterThan(0)
     expect(checked.without).toBeGreaterThan(0)
     const kinds = new Set(
-      sink.physical.tables.map((t) => kindOf.get(t.origin.objectId))
+      sink.physical.tables
+        .filter(isObjectTable)
+        .map((t) => kindOf.get(t.origin.objectId))
     )
     for (const kind of ["AccumulationRegister", "Constant", "CustomTable"])
       expect(kinds.has(kind as never), kind).toBe(true)

@@ -3,6 +3,7 @@ import {
   DEFAULT_MAIN_PRESENTATION,
   KIND_REGISTRY,
   effectiveMaxBytes,
+  isObjectTable,
   type MetadataRef,
   type PhysicalTable,
   type RuntimeAttribute,
@@ -12,6 +13,7 @@ import {
   type RuntimeOperationTarget,
   type RuntimeRootCreate,
   type RuntimeSection,
+  type ObjectTable,
 } from "simetra/model"
 import { isSignalObject } from "./access-units"
 import { canonicalize } from "./canonical"
@@ -70,8 +72,9 @@ export function buildRuntimeCatalog(model: CompiledModel): RuntimeCatalog {
       const table = model.physical.tables.find(
         (t) => t.schema === schema && t.name === name
       )
-      // Рядок ТЧ і похідна таблиця — не ціль `Ref`: у них немає об'єкта.
+      // Рядок ТЧ, похідна таблиця й таблиця платформи — не ціль `Ref`.
       return table === undefined ||
+        !isObjectTable(table) ||
         table.origin.tabularSectionId !== undefined ||
         table.origin.part !== undefined
         ? undefined
@@ -107,9 +110,9 @@ interface Facts {
   checkColumns: ReadonlyMap<string, string>
   /** Значення перерахування-цілі `Ref`; `undefined` — ціль не перерахування. */
   enumValues: (ref: MetadataRef) => RuntimeAttribute["enumValues"]
-  objectRef: (table: PhysicalTable) => MetadataRef
+  objectRef: (table: ObjectTable) => MetadataRef
   /** Основна таблиця об'єкта за іменем; `undefined` — таблиця не основна. */
-  mainTable: (schema: string, name: string) => PhysicalTable | undefined
+  mainTable: (schema: string, name: string) => ObjectTable | undefined
 }
 
 function runtimeObject(

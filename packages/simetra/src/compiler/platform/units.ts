@@ -2,6 +2,7 @@ import {
   PLATFORM_SCHEMA,
   quoteIdent,
   SESSION_CLAIMS_SETTING,
+  isObjectOrigin,
   type DatabaseProvider,
   type GrantPurpose,
   type IdentityNameSource,
@@ -421,6 +422,7 @@ function kindLabelsView(
       const label = kindLabelOf(object)
       const table = physical.tables.find(
         (t) =>
+          isObjectOrigin(t.origin) &&
           t.origin.objectId === object.id &&
           t.origin.tabularSectionId === undefined &&
           t.origin.part === undefined

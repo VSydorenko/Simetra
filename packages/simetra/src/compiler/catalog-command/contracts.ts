@@ -8,6 +8,7 @@ import {
   standardLogicalName,
   tabularParentColumn,
   versionColumn,
+  isObjectTable,
   type Attribute,
   type AttributeCase,
   type Catalog,
@@ -15,6 +16,7 @@ import {
   type PhysicalSnapshot,
   type PhysicalTable,
   type StandardColumnDef,
+  type ObjectTable,
 } from "simetra/model"
 import {
   derived,
@@ -71,7 +73,7 @@ export function memberCheckFunctionName(table: QualifiedName): QualifiedName {
 export interface CatalogCommandContract {
   objectId: string
   kindLabel: string
-  table: PhysicalTable
+  table: ObjectTable
   /** Колонка з `origin.scopeKindId`; у кореня виду скоупу — сам ключ. */
   scopeColumn?: string
   key: string
@@ -106,7 +108,7 @@ export interface CatalogCommandContract {
 
 /** ТЧ довідника в контракті ядра; ключ ТЧ у `p_item.tabular` — `table.name`. */
 export interface CatalogCommandSection {
-  table: PhysicalTable
+  table: ObjectTable
   key: string
   parent: string
   lineNumber: string
@@ -149,7 +151,7 @@ export type CommandReference =
       crossScope?: true
       targets: {
         label: string
-        table: PhysicalTable
+        table: ObjectTable
         key: string
         scopeColumn?: string
       }[]
@@ -271,7 +273,8 @@ export function catalogCommandContracts(input: {
           updateKeys: command.update.filter((c) => !excluded.has(c)),
           tabularSections: physical.tables
             .filter(
-              (t) =>
+              (t): t is ObjectTable =>
+                isObjectTable(t) &&
                 t.origin.objectId === access.objectId &&
                 t.origin.tabularSectionId !== undefined &&
                 t.origin.part === undefined
@@ -359,7 +362,7 @@ function actionsOf(
 }
 
 function sectionContract(
-  table: PhysicalTable,
+  table: ObjectTable,
   command: NonNullable<AccessContract["command"]>,
   facts: {
     style: AttributeCase

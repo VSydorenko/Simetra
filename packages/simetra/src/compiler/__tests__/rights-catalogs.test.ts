@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import type { PhysicalSnapshot, PhysicalTable } from "simetra/model"
+import {
+  isObjectOrigin,
+  type PhysicalSnapshot,
+  type PhysicalTable,
+} from "simetra/model"
 import {
   GLOBAL_ASSIGNMENTS_FILE,
   GLOBAL_ASSIGNMENTS_ID,
@@ -328,11 +332,15 @@ describe("system rights catalogs", () => {
       [ORG_ASSIGNMENTS_FILE]: { physicalName: long("org_assignments") },
     })
     const delta = physical.tables.find(
-      (t) => t.origin.tabularSectionId === `${ORG_ROLES_ID}#delta`
+      (t) =>
+        isObjectOrigin(t.origin) &&
+        t.origin.tabularSectionId === `${ORG_ROLES_ID}#delta`
     )!
     const assignments = physical.tables.find(
       (t) =>
-        t.origin.objectId === ORG_ASSIGNMENTS_ID && !t.origin.tabularSectionId
+        isObjectOrigin(t.origin) &&
+        t.origin.objectId === ORG_ASSIGNMENTS_ID &&
+        !t.origin.tabularSectionId
     )!
     const bytes = (name: string) => new TextEncoder().encode(name).length
     expect(bytes(delta.name)).toBeLessThanOrEqual(63)

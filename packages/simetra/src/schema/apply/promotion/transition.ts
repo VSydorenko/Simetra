@@ -14,6 +14,7 @@ import {
 import {
   KIND_REGISTRY,
   metadataKindSchema,
+  isObjectOrigin,
   type MetadataKind,
   type PhysicalTable,
 } from "simetra/model"
@@ -203,6 +204,7 @@ function unitTablesDifference(
   const { objectId } = record
   const expected = new Set([objectId])
   for (const { origin } of model.physical.tables) {
+    if (!isObjectOrigin(origin)) continue
     const section = origin.tabularSectionId
     if (
       origin.objectId === objectId &&
@@ -301,6 +303,7 @@ async function reconcile(
   for (const { id } of record.tables) {
     const table = before.tables.find(
       ({ origin }) =>
+        isObjectOrigin(origin) &&
         origin.objectId === id &&
         origin.tabularSectionId === undefined &&
         origin.part === undefined

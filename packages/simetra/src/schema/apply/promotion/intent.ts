@@ -1,5 +1,9 @@
 import type { PromotionRecord } from "simetra/compiler"
-import { quoteIdent, type PhysicalSnapshot } from "simetra/model"
+import {
+  isObjectOrigin,
+  quoteIdent,
+  type PhysicalSnapshot,
+} from "simetra/model"
 import type { LockedTable } from "../../engine"
 import { intentStep, type PlanStep } from "../steps"
 import { tableKey } from "../table-key"
@@ -228,6 +232,7 @@ function isTableOf(
   table: PhysicalSnapshot["tables"][number],
   id: string
 ): boolean {
+  if (!isObjectOrigin(table.origin)) return false
   const { objectId, tabularSectionId, part } = table.origin
   return part === undefined && (tabularSectionId ?? objectId) === id
 }

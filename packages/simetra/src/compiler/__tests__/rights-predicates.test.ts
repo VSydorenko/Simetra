@@ -1,3 +1,4 @@
+import { objectTable } from "simetra/model"
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
 import { compile } from "simetra/compiler"
@@ -183,9 +184,11 @@ describe("rights predicates", () => {
         const tables = model.contracts.access
           .filter((a) => a.rights?.objectId === contract.objectId)
           .map((a) =>
-            model.physical.tables.find(
-              (t) => t.schema === a.table.schema && t.name === a.table.name
-            )!
+            objectTable(
+              model.physical.tables.find(
+                (t) => t.schema === a.table.schema && t.name === a.table.name
+              )!
+            )
           )
         for (const table of tables) {
           const names = new Set(table.columns.map((c) => c.name))
@@ -561,9 +564,9 @@ describe("root insert is boolean", () => {
       (c) => c.kindLabel === "organization"
     )!
     const main = mainTableOf(model.physical, contract.objectId)!
-    const sites = model.physical.tables.find(
-      (t) => t.name === "organization_sites"
-    )!
+    const sites = objectTable(
+      model.physical.tables.find((t) => t.name === "organization_sites")!
+    )
     const predicates = rightsPredicates(
       contract,
       "update",

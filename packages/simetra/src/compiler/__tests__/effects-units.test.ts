@@ -1,3 +1,4 @@
+import { isObjectOrigin, objectTable } from "simetra/model"
 import { parsePlPgSQLSync } from "@libpg-query/parser"
 import { beforeAll, describe, expect, it } from "vitest"
 import type { CompiledModel } from "simetra/compiler"
@@ -61,7 +62,7 @@ function unit(model: CompiledModel, identity: string): SqlUnit {
 }
 
 const tableOf = (model: CompiledModel, name: string) =>
-  model.physical.tables.find((t) => t.name === name)!
+  objectTable(model.physical.tables.find((t) => t.name === name)!)
 
 /** Відмова тригера ефектів — оракул тесту, а не генератора. */
 const refuse = (table: string, column?: string) =>
@@ -409,6 +410,7 @@ describe("buildEffectsUnits", () => {
           ? undefined
           : domain.physical.tables.find(
               (candidate) =>
+                isObjectOrigin(candidate.origin) &&
                 candidate.origin.objectId === table.origin.objectId &&
                 candidate.origin.tabularSectionId === undefined &&
                 candidate.origin.part === undefined
