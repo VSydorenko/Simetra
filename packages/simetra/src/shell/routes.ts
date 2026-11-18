@@ -1,6 +1,7 @@
+import { useParams } from "@tanstack/react-router"
 import { createElement, type ReactElement } from "react"
 import type { OrderBy } from "simetra/model"
-import { ListHost, listQuery } from "simetra/ui"
+import { CardHost, ListHost, cardQuery, listQuery } from "simetra/ui"
 import { entryOf, type EntityDescriptor } from "./app"
 import type { SimetraRouterContext } from "./context"
 
@@ -60,8 +61,42 @@ export function entityListRoute(
   }
 }
 
-// Шов для `entityCardRoute(entity)`: той самий вигляд опцій, а в `staticData`
-// — `simetraCard: entity.id` і ОБОВ'ЯЗКОВО `simetraObject: entity.ref` (без нього
-// `openCard` маршрут не знайде); `openCard`
-// (navigation.ts) вже шукає маршрут саме за ними. Додасть задача 4 разом із
-// `CardHost`.
+/**
+ * The route options of the standard card of an object: a loader that
+ * preloads the card view and its tabular sections for the `id` path
+ * parameter, the `CardHost` component, `ssr: true` and the `staticData` the
+ * navigation adapter looks up (P4-D spec §6). Use it as
+ * `createFileRoute("/clients/$id")(entityCardRoute(Client))`.
+ */
+export function entityCardRoute(entity: EntityDescriptor) {
+  // Той самий `cardQuery`, що в `CardHost`: loader гріє саме ті вигляди
+  // (шапка й кожна ТЧ), на які підпишеться `useRow` хоста.
+  const { tabularSections } = cardQuery(entryOf(entity))
+  const object = entity.ref
+  return {
+    loader: async ({
+      context,
+      params,
+    }: {
+      context: SimetraRouterContext
+      params: { id: string }
+    }): Promise<void> => {
+      const runtime = context.data?.current()
+      if (runtime === undefined) return
+      const id = params.id
+      await Promise.all([
+        runtime.preload({ kind: "card", object, key: id }),
+        ...tabularSections.map((section) =>
+          runtime.preload({ kind: "section", object, owner: id, section })
+        ),
+      ])
+    },
+    component: function EntityCard(): ReactElement {
+      const { id } = useParams({ strict: false }) as { id: string }
+      return createElement(CardHost, { object, id })
+    },
+    ssr: true as const,
+    // `simetraObject` обов'язковий: за ним `openCard` знаходить маршрут.
+    staticData: { simetraCard: entity.id, simetraObject: object },
+  }
+}
