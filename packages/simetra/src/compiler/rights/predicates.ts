@@ -203,6 +203,37 @@ export function rightsPredicates(
 }
 
 /**
+ * The row-free form of an action's right (P4-B spec §8.3): the grant part of
+ * each scope-level predicate of `rightsPredicates` — the scope sets of `any`,
+ * `own` and a dimension, or `has_right` with the same extents for an unscoped
+ * object. No "mine" condition and no container: a container right does not
+ * reach a whole scope.
+ */
+export function rowFreeGrants(
+  contract: RightsContract,
+  action: string,
+  main: ObjectTable
+): RightsCondition[] {
+  // Той самий будівник, що й політика читання: умова з гранту — остання в
+  // предикаті, а умова «мій» і носій рядка — без рядка не мають сенсу.
+  const grants = new Map<string, RightsCondition>()
+  for (const predicate of rightsPredicates(
+    contract,
+    action,
+    main,
+    main,
+    "select"
+  )) {
+    if (typeof predicate.extent !== "string" && "container" in predicate.extent)
+      continue
+    const grant = must(predicate.conditions.at(-1))
+    // Кілька носіїв власності дають ту саму множину `own`.
+    grants.set(JSON.stringify(grant), grant)
+  }
+  return [...grants.values()]
+}
+
+/**
  * `INSERT` кореня виду скоупу (спека прав §5.2): булева форма над
  * `has_right` без колонки скоупу. Дія — завжди літерал `'create'`, а не дія
  * виклику чи `command_action()`: `has_right` рахує й рядки рівня скоупу

@@ -50,10 +50,16 @@ export function channelTopic(channel: Channel): string {
   }
 }
 
+/**
+ * One topic segment: a lowercase UUID. The one pattern for `parseTopic` and
+ * the SQL check of a topic, so the two parsers never disagree.
+ */
+export const TOPIC_UUID_PATTERN =
+  "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+
 // Нижній регістр і фіксована кількість сегментів: топік чужого формату
 // (інший реалтайм-канал у тій самій шині) не має проходити за свій.
-const UUID_LOWER =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const UUID_LOWER = new RegExp(`^${TOPIC_UUID_PATTERN}$`)
 
 /**
  * Parses a topic back to a channel. Strict: the exact segment count, every

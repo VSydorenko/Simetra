@@ -76,6 +76,7 @@ import {
 import { buildAuthorUnits } from "./author-units"
 import { catalogCommandContracts } from "./catalog-command/contracts"
 import { buildCatalogCommandUnits } from "./catalog-command/units"
+import { buildSignalUnits } from "./signal/units"
 import { buildHierarchyUnits } from "./hierarchy-units"
 import { buildMechanicsUnits } from "./mechanics-units"
 import { buildKeyUnits } from "./key-units"
@@ -837,6 +838,24 @@ export async function runStages(
       parse,
       plpgsql,
     }),
+    // Оракул каналу й політика `INSERT` outbox — за тією самою умовою, що
+    // ядро: сигнали шле лише воно (спека П4-B §8.2).
+    ...buildSignalUnits({
+      contracts: {
+        access,
+        rights,
+        roles,
+        users,
+        membership,
+        membershipSources: sources.membershipSources,
+      },
+      physical,
+      provider: stage1.project.database.provider,
+      module,
+      units: baseUnits,
+      parse,
+      plpgsql,
+    }),
   ]
   // `USAGE` на схеми застосунку — над усіма згенерованими грантами, бо схему
   // відкривають і таблиці, і функції (платформна спека §6.7)
@@ -886,6 +905,8 @@ export async function runStages(
     schemaUsage: (unit) => `the USAGE grant on schema ${unit.name}`,
     // Outbox сигналів — у кожному проєкті, власника немає.
     signalOutbox: () => "the signal outbox of the platform",
+    // Оракул каналу й правило форми сигналу спільні — власника немає.
+    signal: (unit) => `the signal authorization ${unit.name}`,
   }
   const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
   const triggerConflicts = subscriptionTriggerConflicts(

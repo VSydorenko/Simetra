@@ -361,7 +361,7 @@ function rootCreators(
  * які називають вирази тіла, — явні ребра. Функції — лише ті, що їх дають
  * інші генератори (вбудовані порядку не потребують); таблиці — зі знімка.
  */
-function bodyRequires(
+export function bodyRequires(
   sql: string,
   input: Pick<CatalogCommandInput, "physical" | "units" | "parse" | "plpgsql">
 ): CreationNode[] {
