@@ -1,8 +1,15 @@
 {
   "client": {
+    "allowed_origins": ["http://127.0.0.1:3000"],
+    "token": {
+      "jwks_public_endpoint": "http://127.0.0.1:3000/simetra/signals/jwks",
+      "audience": "centrifugo:simetra-dev",
+      "issuer": "http://127.0.0.1:3000"
+    },
     "recovery_max_publication_limit": 300
   },
   "channel": {
+    "max_length": 255,
     "without_namespace": {},
     "namespaces": [
       {
@@ -28,6 +35,30 @@
       }
     ]
   },
-  "http_api": { "disabled": true },
-  "health": { "enabled": true }
+  "consumers": [
+    {
+      "enabled": true,
+      "name": "simetra_outbox",
+      "type": "postgresql",
+      "postgresql": {
+        "dsn": "",
+        "partition_notification_dsn": "",
+        "outbox_table_name": "simetra.signal_outbox",
+        "num_partitions": 1,
+        "partition_select_limit": 100,
+        "partition_poll_interval": "300ms",
+        "partition_notification_channel": "simetra_signal_outbox",
+        "use_try_lock": true
+      }
+    }
+  ],
+  "http_api": {
+    "disabled": true
+  },
+  "health": {
+    "enabled": true
+  },
+  "log": {
+    "level": "info"
+  }
 }
