@@ -1,6 +1,6 @@
 ---
 name: simetra-adoption
-description: Use when bringing an existing live PostgreSQL database under Simetra metadata for the first time — reading its schemas into a `metadata/` directory with `simetra introspect`, then proving with `simetra diff` that the metadata and the database match. Covers choosing the scope (`--schemas`, `--tables`), the connection and shadow database settings, exit codes, and how to treat unrepresentable objects and non-empty results. Not for everyday editing of metadata (that is `simetra-metadata`).
+description: Use when bringing an existing live PostgreSQL database under Simetra metadata for the first time — reading its schemas into a `metadata/` directory with `simetra introspect`, then proving with `simetra diff` that the metadata and the database match. Covers choosing the scope (`--schemas`, `--tables`), the connection and shadow database settings, exit codes, and how to treat unrepresentable objects and non-empty results. Also covers the first screen after adoption: one-line list and card routes (`entityListRoute`, `entityCardRoute`). Not for everyday editing of metadata (that is `simetra-metadata`).
 ---
 
 # Simetra adoption — introspect a live database, then diff
@@ -209,5 +209,5 @@ export const Route = createFileRoute("/clients/$id")(entityCardRoute(Client))
 - Do not add a data-fetching loader, a query or a store by hand: the data
   runtime of the request is already in the router context, and the route
   helpers use it.
-- Visual styling and write flows beyond editing the card header belong to
-  later milestones; this screen is the thin first slice.
+- The card edits header attributes only; creating rows and editing tabular
+  sections are not part of these routes.
