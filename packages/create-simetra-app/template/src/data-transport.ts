@@ -1,8 +1,11 @@
+import type { RuntimeHolder } from "simetra/data"
 import {
   LIMIT_REASONS,
   type DataResponse,
   type DataTransport,
 } from "simetra/model"
+import { wrapTransport } from "#instrument"
+import { clientHash } from "./app"
 import { dataFn } from "./server/data-fn"
 import { isStartRefusal } from "./start-refusal"
 
@@ -40,4 +43,35 @@ export function dataTransport(serverHash: string): DataTransport {
     async (request) => (await dataFn({ data: request })) as DataResponse,
     serverHash
   )
+}
+
+/**
+ * Транспорт клієнтського рантайму шаблону. `unauthenticated` без `reason` —
+ * розрив сесії поза цим рантаймом (вихід в іншій вкладці, Дх14): тримач
+ * замінюється одразу, без значень попереднього користувача, і вкладка йде на
+ * вхід. З `reason: session-changed` обгортка нічого не робить: цей шлях веде
+ * сам рантайм (`onSessionChanged`), і друга заміна була б подвійною.
+ *
+ * Заміна лише якщо відповідь стосується того, що тримач тримає зараз: пізня
+ * відповідь рантайму іншого суб'єкта (вхід B, поки запит A ще в польоті) не
+ * має закрити живий рантайм B.
+ */
+export function clientTransport(
+  holder: RuntimeHolder,
+  navigateToLogin: () => void
+): DataTransport {
+  const call = dataTransport(clientHash)
+  return wrapTransport(async (request) => {
+    const response = await call(request)
+    if (
+      !response.ok &&
+      response.error.code === "command.unauthenticated" &&
+      response.error.reason === undefined &&
+      holder.current()?.subject === request.subject
+    ) {
+      holder.replace(undefined, "signed-out")
+      navigateToLogin()
+    }
+    return response
+  })
 }

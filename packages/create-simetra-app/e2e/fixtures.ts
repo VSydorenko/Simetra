@@ -61,6 +61,8 @@ export const B_ROWS = 3
 export interface TestUser {
   id: string
   email: string
+  /** Пароль: форма входу в браузері (вхід B поверх живої сесії A). */
+  password: string
   /** Заголовок `Cookie` дійсної сесії. */
   cookie: string
   /** Адреса сокета, з якої користувач увійшов (межа частоти рахує її). */
@@ -78,7 +80,11 @@ export interface App {
   port: number
   secret: string
   /** Id Server Function за ім'ям експорту з маніфесту збірки. */
-  functionId: (name: "dataFn" | "getSessionClaims") => string
+  functionId: (name: "dataFn") => string
+  /** Усі Server Function маніфесту збірки: ім'я експорту → id. */
+  serverFunctions: Record<string, string>
+  /** Оточення основного сервера: запуск ще одного з однією зміненою змінною. */
+  serverEnv: Record<string, string>
   users: { a: TestUser; b: TestUser }
   /** `CommandRuntime` користувача B з його claims: зовнішні зміни даних. */
   runtimeB: { runtime: CommandRuntime; claims: SessionClaims }
@@ -356,7 +362,13 @@ async function bringUp(
       'SELECT id FROM better_auth."user" WHERE email = $1',
       [email]
     )
-    users[key] = { id: row!.id.toLowerCase(), email, cookie: "", address }
+    users[key] = {
+      id: row!.id.toLowerCase(),
+      email,
+      password: passwords[key]!,
+      cookie: "",
+      address,
+    }
   }
 
   // Права: роль `ClientOwner` обох (носій `owner` звужує читання до власних рядків)
@@ -403,9 +415,9 @@ async function bringUp(
   })
   const claimsB: SessionClaims = { sub: users.b.id, is_anonymous: false }
   const runtimeB = { runtime, claims: claimsB }
-  // Вставка рядків B — прямим SQL власника: `create` власного рядка через
-  // рантайм платформа поки відмовляє (`no-right`, #235). Значення ж міняє вже
-  // рантайм B своїми claims: це і є «зовнішня зміна» його рядків
+  // Початкові рядки B вставляє прямий SQL власника, значення міняє вже рантайм
+  // B своїми claims: це і є «зовнішня зміна» його рядків. Новий рядок під час
+  // тесту (сценарій 9) створюється вже через `create` рантайму B
   await withClient(dsns.SIMETRA_OWNER_DATABASE_URL, async (client) => {
     for (let i = 0; i < B_ROWS; i++)
       await client.query(
@@ -439,7 +451,7 @@ async function bringUp(
 
   await build(buildKind)
   const ids = functionIds()
-  const server = startServer({
+  const serverEnv = {
     NODE_ENV: "production",
     PORT: String(port),
     HOST: "127.0.0.1",
@@ -448,7 +460,8 @@ async function bringUp(
     BETTER_AUTH_SECRET: secret,
     SIMETRA_RUNTIME_DATABASE_URL: dsns.SIMETRA_RUNTIME_DATABASE_URL,
     SIMETRA_AUTH_DATABASE_URL: dsns.SIMETRA_AUTH_DATABASE_URL,
-  })
+  }
+  const server = startServer(serverEnv)
   cleanups.push(async () => {
     server.child.kill("SIGTERM")
     await Promise.race([
@@ -488,6 +501,8 @@ async function bringUp(
         throw new Error(`no server function "${name}" in the build manifest`)
       return id
     },
+    serverFunctions: ids,
+    serverEnv,
     users: users as App["users"],
     runtimeB,
     adminUrl: dsns.SIMETRA_SUPERUSER_DATABASE_URL!,

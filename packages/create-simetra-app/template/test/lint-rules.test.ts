@@ -188,7 +188,6 @@ describe("consumer lint", () => {
       expect(messages.length, file).toBeGreaterThan(1)
       expect(messages[0]).toContain("createServerFn")
     }
-    await expectAllowed("syntax", "src/server/session-fn.ts", code)
     await expectAllowed("syntax", "src/server/data-fn.ts", code)
   })
 
@@ -230,8 +229,10 @@ describe("consumer lint", () => {
     for (const file of [
       "src/router.tsx",
       "src/client.tsx",
+      "src/data-transport.ts",
       "src/server/runtime.ts",
       "src/server/data-fn.ts",
+      "src/server/data-request.ts",
     ])
       await expectAllowed("imports", file, use("#instrument"))
   })
