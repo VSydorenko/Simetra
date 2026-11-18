@@ -360,7 +360,7 @@ export function createOverlay(deps: {
         drop(entry)
         attempt.resolve({
           ok: true,
-          rows: [buried(entry, attempt) ? undefined : row],
+          rows: [marked(entry, attempt) ? undefined : row],
         })
       }, tokenOf(attempt))
       if (!ran) {
@@ -372,7 +372,7 @@ export function createOverlay(deps: {
           drop(entry)
           attempt.resolve({
             ok: true,
-            rows: [buried(entry, attempt) ? undefined : row],
+            rows: [marked(entry, attempt) ? undefined : row],
           })
         }, tokenOf(attempt))
         return
@@ -409,7 +409,7 @@ export function createOverlay(deps: {
           return
         }
         const row =
-          outcome.kind === "read" && !buried(entry, attempt)
+          outcome.kind === "read" && !marked(entry, attempt)
             ? outcome.row
             : undefined
         drop(entry)
@@ -419,17 +419,20 @@ export function createOverlay(deps: {
   }
 
   /**
-   * A key or pair tombstone newer than the start of the attempt (§7.1), or
-   * an eviction horizon newer than it: an evicted tombstone may have been
-   * the purge of this key, as on the read path (§6.2 rule 1).
+   * A mark newer than the start of the attempt (§7.1): a key or pair
+   * tombstone, a `hide` of the key, or an eviction horizon — an evicted
+   * tombstone may have been the purge of this key, as on the read path
+   * (§6.2 rule 1). `settled` then carries no row.
    */
-  function buried(entry: JournalEntry, attempt: Attempt): boolean {
+  function marked(entry: JournalEntry, attempt: Attempt): boolean {
     const { epochs } = session
     const since = (id: string) =>
       epochs.buriedSince(id, attempt.readEpoch) ||
       epochs.evictedSince(id, attempt.readEpoch)
+    const id = keyId(entry.object, entry.key)
     return (
-      since(keyId(entry.object, entry.key)) ||
+      since(id) ||
+      epochs.hiddenSince(id, attempt.readEpoch) ||
       (attempt.scope !== undefined &&
         since(pairId(entry.object, attempt.scope)))
     )

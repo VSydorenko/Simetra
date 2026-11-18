@@ -808,6 +808,66 @@ describe("write-back without a full row (Р3, Р4)", () => {
     expect(view).toMatchObject({ state: "synced", values: { title: "new" } })
     expect((await m.settled).ok).toBe(true)
   })
+
+  it("a hide of the key in flight settles with rows [undefined] (a mark newer than the attempt)", async () => {
+    const h = harness()
+    const { card, version } = await mounted(h)
+    h.port.hold = true
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    h.core.commit((w) => w.hide(TASK, [K]), h.core.token())
+    h.port.release()
+    await settle()
+    // Перечитування після `hide` повертає рядок у сховище, але `settled`
+    // рядка новішої за спробу позначки не віддає (§7.1).
+    expect(await m.settled).toEqual({ ok: true, rows: [undefined] })
+    expect(shown(rowOf(card))).toMatchObject({
+      state: "synced",
+      values: { title: "new" },
+    })
+  })
+
+  it("a hide of the key during the post-write re-read settles with rows [undefined]", async () => {
+    const h = harness()
+    const { version } = await mounted(h)
+    h.port.transform = withoutRows
+    holdReads(h.fake)
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: version }
+    )
+    await settle()
+    h.core.commit((w) => w.hide(TASK, [K]), h.core.token())
+    h.fake.hold = undefined
+    h.fake.deliverAll()
+    await settle()
+    expect(await m.settled).toEqual({ ok: true, rows: [undefined] })
+  })
+
+  it("a hide of a key without an owner in flight settles with rows [undefined]", async () => {
+    const h = harness()
+    seed(h.fake, 1, 1)
+    h.port.hold = true
+    const m = h.core.update(
+      TASK,
+      K,
+      { title: "new" },
+      { expectedVersion: h.fake.row(TASK, K)!.version }
+    )
+    await settle()
+    h.core.commit((w) => w.hide(TASK, [K]), h.core.token())
+    h.port.release()
+    expect(await m.settled).toEqual({ ok: true, rows: [undefined] })
+    await settle()
+    expect(h.fake.log).toHaveLength(0)
+  })
 })
 
 describe("mutation actions (Р5, Р7, Р11)", () => {
