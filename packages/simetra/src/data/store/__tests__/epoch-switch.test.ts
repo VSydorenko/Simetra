@@ -523,6 +523,24 @@ describe("core: the epoch switch", () => {
     expect(h.handle.getSnapshot().status).not.toBe("error")
   })
 
+  it("a stale mark after the switch cancels the re-read timer: the view stays ready and isStale", async () => {
+    const h = await loaded()
+    h.fake.edit(TASK, key(1), { title: "b1" })
+    h.fake.epoch = EB
+    h.handle.refresh()
+    vi.spyOn(Math, "random").mockReturnValue(0.99)
+    await deliver(h)
+    expect(h.inspect.serviceSizes().switchTimers).toBe(1)
+    h.core.staleClient(TASK)
+    const before = h.fake.log.length
+    vi.advanceTimersByTime(INTERVAL)
+    await deliver(h)
+    expect(h.fake.log.length).toBe(before)
+    expect(h.handle.getSnapshot()).toMatchObject({ isStale: true })
+    expect(h.handle.getSnapshot().status).not.toBe("error")
+    expect(h.inspect.serviceSizes().switchTimers).toBe(0)
+  })
+
   it("refresh() of a stale-client object sends no read", async () => {
     const h = await loaded()
     h.core.staleClient(TASK)

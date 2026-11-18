@@ -824,6 +824,11 @@ export function createCore(options: {
     if (staleObjects.has(o.name)) return false
     staleObjects.add(o.name)
     dirtyObjects.add(o.name)
+    // Таймер перемикання епохи не перечитає несумісний об'єкт: `revalidate` у
+    // ньому перевів би вигляди в `error` замість `isStale`.
+    const timer = switchTimers.get(o.name)
+    if (timer !== undefined) clearTimeout(timer)
+    switchTimers.delete(o.name)
     // Частини, що вже стоять у черзі обмежувача, теж не підуть.
     source.refuse?.(o.name)
     // Власник із рядками ТЧ може не мати шапки в сховищі (`disown`).
