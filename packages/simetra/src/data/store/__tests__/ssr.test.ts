@@ -17,6 +17,7 @@ import {
 } from "../types"
 import {
   ORG,
+  S,
   TASK,
   isPage,
   key,
@@ -33,6 +34,7 @@ import {
  * JSON, а не в структурі, яку знає лише цей код.
  */
 
+const T = "00000000-0000-4000-8000-0000000000b2"
 const RELEASE = DEFAULT_CORE_LIMITS.releaseDelayMs
 
 beforeEach(() => {
@@ -619,6 +621,9 @@ describe("a hydrated view first shown after the reconciliation", () => {
   ) {
     const { core, fake } = setup()
     seed(fake, 1, 3)
+    // Без ліниві полів: картка над такою організацією читається лише через
+    // довіру до рядка, не через `notes`.
+    for (const ref of [S, T]) fake.insert(ORG, { ref })
     fake.setLines(TASK, key(1), "lines", lines(5))
     for (const spec of specs) {
       if (options.preload === true) await core.preload(spec)
@@ -702,19 +707,48 @@ describe("a hydrated view first shown after the reconciliation", () => {
   })
 
   it("a card mounted after endHydration over a row held only by an invisible hydrated list reads once", async () => {
-    // Рядок 1 записала лише гідратація: список його тримає, але не підписаний.
-    const t = await hydrated([keysView(1, 2)], { preload: true })
+    // Організація без лінивих полів: читання картки — лише від недовіри до
+    // рядка, який записала гідратація.
+    const orgs: ViewSpec = { kind: "keys", object: ORG, keys: [S, T] }
+    const orgCard = (ref: string): ViewSpec => ({
+      kind: "card",
+      object: ORG,
+      key: ref,
+    })
+    const t = await hydrated([orgs], { preload: true })
     const before = t.reads()
-    const handle = t.core.view(card(1))
-    watch(handle)
+    watch(t.core.view(orgCard(S)))
     await settle()
     expect(t.reads() - before).toBe(1)
-    // Довіра — факт рядка: друга картка над тим самим рядком не читає.
-    watch(t.core.view(card(1)))
-    watch(t.core.view(card(2)))
+    // Довіра — факт рядка: друга картка над тим самим рядком не читає, над
+    // іншим — читає.
+    watch(t.core.view(orgCard(S)))
+    watch(t.core.view(orgCard(T)))
     await settle()
     expect(t.reads() - before).toBe(2)
     expect(t.inspect.violations()).toEqual([])
+  })
+
+  it("a view over an include target written only by the hydration reads it", async () => {
+    const withOrg: ViewSpec = {
+      kind: "full",
+      object: TASK,
+      include: ["org"],
+    }
+    // Власні рядки (1–3) перечитує підписка до `endHydration`; ціль `include`
+    // (ORG) — ні: її записала лише гідратація.
+    const t = await hydrated([withOrg], {
+      preload: true,
+      keep: [keysView(1, 2, 3)],
+    })
+    const before = t.fake.log.length
+    watch(t.core.view(withOrg))
+    await settle()
+    expect(
+      t.fake.log
+        .slice(before)
+        .some((l) => l.query?.object.name === "Organization")
+    ).toBe(true)
   })
 
   it("two subscriptions to one view over hydration-only rows, while its read is in flight, read once", async () => {
