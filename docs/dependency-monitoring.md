@@ -130,6 +130,19 @@ Production-джерела їх не імпортують (лінт-зони `pac
 звірити `getMigrations`, порядок колонок `user` з `PROVIDER_EVENT_SOURCES.postgres`
 і поведінку `search_path`.
 
+## `centrifuge` — тестовий клієнт Centrifugo
+
+Лише `devDependencies` пакета `simetra`, точний пін (`centrifuge` 5.8.0,
+ліцензія MIT — `LICENSE` репозиторію `centrifugal/centrifuge-js`). Потрібен
+гейту доставки сигналу на стенді (`packages/simetra/test/db/signal-stand.ts`,
+`packages/designer/src/__tests__/signal-delivery.support.ts`): клієнт
+WebSocket Node з токенами порту `simetra/server/signals`. Production-джерела
+його не імпортують. Скрипт збирання `protobufjs` вимкнено (`allowBuilds` у
+`pnpm-workspace.yaml`): гейт іде транспортом JSON. Коди відмов, які гейт
+закріплює (3500, 3501, 109, 2501), і відновлення (`recovered`) — поведінка
+пари SDK і образу Centrifugo стека: на оновленні будь-якого з них — звірити
+кейси гейта.
+
 ## Драйвер `pg`
 
 `TRANSPORT_MESSAGE` (`packages/designer/src/schema-engine/apply-database.ts`)
