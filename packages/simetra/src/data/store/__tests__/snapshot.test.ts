@@ -105,6 +105,31 @@ describe("computeRowView with an own mutation (plan B3-4-Л Р5, Р7)", () => {
     }
   })
 
+  it("a gap mark under failed shows stale; clearing the channel lifts it", () => {
+    const h = stored()
+    h.write((s) => h.store.markDisconnected(s, () => "c1"))
+    expect(
+      computeRowView(K1, h.store.get(K1)!, [], undefined, failed)
+    ).toMatchObject({ state: "failed", stale: true })
+    h.write((s) => h.store.clearDisconnected(s, "c1"))
+    const view = computeRowView(K1, h.store.get(K1)!, [], undefined, failed)
+    expect(view).toMatchObject({ state: "failed" })
+    expect("stale" in view).toBe(false)
+  })
+
+  it("a hide mark under failed shows stale; a read started after it lifts it", () => {
+    const h = stored()
+    h.write((s) => h.store.hideKeys(s, [K1]))
+    expect(
+      computeRowView(K1, h.store.get(K1)!, [], undefined, failed)
+    ).toMatchObject({ hidden: true, stale: true })
+    h.write((s) => h.store.put(s, row(K1, 1), h.now(), false))
+    const view = computeRowView(K1, h.store.get(K1)!, [], undefined, failed)
+    expect(view).toMatchObject({ state: "failed" })
+    expect("stale" in view).toBe(false)
+    expect("hidden" in view).toBe(false)
+  })
+
   it("hidden outranks the mutation state, and the view keeps the mutation", () => {
     const h = stored()
     h.write((s) => h.store.hideKeys(s, [K1]))

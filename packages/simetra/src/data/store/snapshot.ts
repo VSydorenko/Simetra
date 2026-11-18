@@ -111,16 +111,18 @@ export function computeRowView(
   const values = shown ?? EMPTY_VALUES
   const { minVersion, disconnect, hidden: mark, epoch } = e.stale
   const hidden = mark !== undefined
-  // Факт, а не показ: стан мутації може затуляти `stale` (§6.5), а версія
-  // нижча за відому мусить лишатись видимою.
-  const outdated = minVersion !== undefined || epoch !== undefined
+  // Факт, а не показ: стан мутації може затуляти `stale` (§6.5), а кожна
+  // позначка рядка — нижча версія, розрив сигналів, `hide`, зміна епохи —
+  // мусить лишатись видимою.
+  const outdated =
+    minVersion !== undefined ||
+    disconnect !== undefined ||
+    hidden ||
+    epoch !== undefined
   const state =
     mutation !== undefined && !hidden
       ? mutation.state
-      : minVersion !== undefined ||
-          disconnect !== undefined ||
-          hidden ||
-          epoch !== undefined
+      : outdated
         ? "stale"
         : "synced"
   const stale =
