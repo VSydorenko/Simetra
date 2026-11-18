@@ -11,5 +11,5 @@
     "allowImportingTsExtensions": true,
     "allowJs": true
   },
-  "include": ["e2e", "vitest.build.config.ts"]
+  "include": ["e2e", "scripts", "vitest.config.ts", "vitest.build.config.ts"]
 }

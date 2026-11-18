@@ -653,9 +653,14 @@ async function initGarage(ctx) {
 const STACK_HOST = "127.0.0.1:54422"
 const STACK_DATABASE = "simetra"
 
-/** @param {string} user @param {string} password */
-const stackUrl = (user, password) =>
-  `postgresql://${user}:${password}@${STACK_HOST}/${STACK_DATABASE}`
+/**
+ * Address of the postgres stack for `user`; `database` defaults to the stack's
+ * application database `simetra`.
+ *
+ * @param {string} user @param {string} password @param {string} [database]
+ */
+export const stackUrl = (user, password, database = STACK_DATABASE) =>
+  `postgresql://${user}:${password}@${STACK_HOST}/${database}`
 
 // Ролі входу Simetra й змінні їхніх dev-паролів. Імена — ті самі, що дають
 // `PROVIDER_OWNER_ROLES`, `PROVIDER_LOGIN_ROLES` і `PLATFORM_LOGIN_ROLES`;
@@ -665,6 +670,25 @@ const LOGIN_ROLES = [
   { role: "simetra_runtime", secret: "SIMETRA_RUNTIME_DEV_PASSWORD" },
   { role: "simetra_auth", secret: "SIMETRA_AUTH_DEV_PASSWORD" },
 ]
+
+/**
+ * Dev passwords of the Simetra login roles of the postgres stack
+ * (`login-secrets.env`), keyed by variable name.
+ *
+ * @returns {Record<string, string>}
+ */
+export function loginSecrets() {
+  const secrets = readEnvFile(
+    "login-secrets.env",
+    LOGIN_ROLES.map((r) => r.secret)
+  )
+  for (const { secret } of LOGIN_ROLES)
+    if (!SAFE_PASSWORD.test(secrets[secret]))
+      throw new Error(
+        `${secret} in login-secrets.env has unsupported characters`
+      )
+  return secrets
+}
 
 /** Пароль у `\set` без екранування: лише безпечні символи, інакше SQL зламався б. */
 const SAFE_PASSWORD = /^[A-Za-z0-9._-]+$/
@@ -811,15 +835,7 @@ async function startPostgresSteps(ctx, noBuild) {
       imageTagVersion()
     )
     await psql(readFileSync(join(profile.dir, "dev-environment.sql"), "utf8"))
-    const secrets = readEnvFile(
-      "login-secrets.env",
-      LOGIN_ROLES.map((r) => r.secret)
-    )
-    for (const { secret } of LOGIN_ROLES)
-      if (!SAFE_PASSWORD.test(secrets[secret]))
-        throw new Error(
-          `${secret} in login-secrets.env has unsupported characters`
-        )
+    const secrets = loginSecrets()
     const superuserUrl = stackUrl("postgres", "postgres")
     const node = (
       /** @type {string[]} */ args,

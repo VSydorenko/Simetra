@@ -7,6 +7,9 @@
   "type": "module",
   "scripts": {
     "lint": "eslint --no-error-on-unmatched-pattern",
+    "test": "vitest run",
+    "demo": "node scripts/demo.mts",
+    "demo:drop": "node scripts/demo.mts drop",
     "test:build": "vitest run --config vitest.build.config.ts",
     "e2e": "playwright test --config e2e/playwright.config.ts",
     "e2e:gate": "node e2e/playwright-gate.mjs",
@@ -22,6 +25,7 @@
     "eslint": "^10.14.0",
     "pg": "8.23.1",
     "simetra": "workspace:*",
+    "tsx": "4.23.15",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "typescript-eslint": "^8.72.1",
     "vitest": "^5.1.0"

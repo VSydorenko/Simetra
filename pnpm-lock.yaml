@@ -66,6 +66,9 @@ importers:
       simetra:
         specifier: workspace:*
         version: link:../simetra
+      tsx:
+        specifier: 4.23.15
+        version: 4.23.15
       typescript:
         specifier: npm:@typescript/typescript6@^6.0.2
         version: '@typescript/typescript6@6.0.2'
