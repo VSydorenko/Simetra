@@ -189,10 +189,11 @@ describe("centrifugoConfigRefusals: every mutation of invariant 11 is refused", 
 describe("centrifugoConfigRefusals: the revocation bound", () => {
   const client = () => centrifugoConfig(INPUT).client
 
-  it("writes the expiry close delay and the presence tick explicitly", () => {
+  it("writes the expiry close delays and the presence tick explicitly", () => {
     expect(client()).toMatchObject({
       presence_update_interval: "5s",
       expired_sub_close_delay: "25s",
+      expired_close_delay: "25s",
     })
   })
 
@@ -200,6 +201,7 @@ describe("centrifugoConfigRefusals: the revocation bound", () => {
     ["presence_update_interval", "4s"],
     ["presence_update_interval", "500ms"],
     ["expired_sub_close_delay", "10s"],
+    ["expired_close_delay", "10s"],
   ] as const)("accepts %s %s", (key, value) => {
     const c = centrifugoConfig(INPUT)
     c.client[key] = value
@@ -214,6 +216,9 @@ describe("centrifugoConfigRefusals: the revocation bound", () => {
     ["presence_update_interval", "5"],
     ["expired_sub_close_delay", "30s"],
     ["expired_sub_close_delay", "1h"],
+    ["expired_close_delay", "30s"],
+    ["expired_close_delay", "26s"],
+    ["expired_close_delay", "0s"],
   ] as const)("refuses %s %s", (key, value) => {
     const c = centrifugoConfig(INPUT)
     c.client[key] = value
@@ -222,7 +227,11 @@ describe("centrifugoConfigRefusals: the revocation bound", () => {
     ])
   })
 
-  it.each(["presence_update_interval", "expired_sub_close_delay"] as const)(
+  it.each([
+    "presence_update_interval",
+    "expired_sub_close_delay",
+    "expired_close_delay",
+  ] as const)(
     "refuses a config without %s (the image default would apply)",
     (key) => {
       const c = centrifugoConfig(INPUT)

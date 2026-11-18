@@ -43,9 +43,12 @@ const NAMESPACES: readonly { name: string; historySize: number }[] = [
 // Межа відкликання (спека профілю §6.2): Centrifugo закриває прострочену
 // підписку лише на такті присутності клієнта, тож межа — TTL токена каналу +
 // `expired_sub_close_delay` + `presence_update_interval`. Обидва ключі пише
-// генератор явно: межа — властивість безпеки, а не типове значення образу
+// генератор явно: межа — властивість безпеки, а не типове значення образу.
+// З'єднання закривається власним таймером строку: TTL токена з'єднання +
+// `expired_close_delay` — і цей ключ пише генератор з тієї самої причини
 const PRESENCE_UPDATE_INTERVAL = "5s"
 const EXPIRED_SUB_CLOSE_DELAY = "25s"
+const EXPIRED_CLOSE_DELAY = "25s"
 
 const HISTORY_TTL = "300s"
 const HISTORY_META_TTL = "24h"
@@ -81,6 +84,7 @@ export function centrifugoConfig(o: CentrifugoConfigInput) {
       recovery_max_publication_limit: RECOVERY_MAX_PUBLICATION_LIMIT,
       presence_update_interval: PRESENCE_UPDATE_INTERVAL,
       expired_sub_close_delay: EXPIRED_SUB_CLOSE_DELAY,
+      expired_close_delay: EXPIRED_CLOSE_DELAY,
     },
     channel: {
       max_length: CENTRIFUGO_CHANNEL_MAX,
@@ -294,6 +298,7 @@ const config = object({
     recovery_max_publication_limit: int(1),
     presence_update_interval: durationAtMost(PRESENCE_UPDATE_INTERVAL),
     expired_sub_close_delay: durationAtMost(EXPIRED_SUB_CLOSE_DELAY),
+    expired_close_delay: durationAtMost(EXPIRED_CLOSE_DELAY),
   }),
   channel: object({
     max_length: int(1, CENTRIFUGO_CHANNEL_MAX),

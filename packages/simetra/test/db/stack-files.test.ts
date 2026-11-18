@@ -343,12 +343,14 @@ describe.each(STACKS)("centrifugo.json of the $title", ({ dir }) => {
   })
 
   // Межа відкликання (спека профілю §6.2) не залежить від типового значення
-  // образу: такт присутності й затримка закриття — у файлі стека
-  it("pins the revocation bound: the presence tick and the expiry close delay", () => {
+  // образу: такт присутності й затримки закриття підписки та з'єднання — у
+  // файлі стека
+  it("pins the revocation bound: the presence tick and the expiry close delays", () => {
     expect(config).toMatchObject({
       client: {
         presence_update_interval: "5s",
         expired_sub_close_delay: "25s",
+        expired_close_delay: "25s",
       },
     })
   })
