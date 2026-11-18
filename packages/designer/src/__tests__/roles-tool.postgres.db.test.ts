@@ -234,8 +234,8 @@ describe("roles: the postgres profile cluster", () => {
       ])
     )
     expect(outcome.present).toEqual([])
-    const [runtime] = set.roles.login
-    const [command] = set.roles.names
+    const [runtime, signals] = set.roles.login
+    const [command, consumer] = set.roles.names
     const [user, anon] = set.request
 
     const attrs = await sql<{ rolname: string } & Record<string, unknown>>(
@@ -271,25 +271,41 @@ describe("roles: the postgres profile cluster", () => {
         shape(user!, false),
         shape(anon!, false),
         shape(runtime!.name, true),
+        // Споживач сигналів (§3.1): група без атрибутів, роль входу з
+        // налаштуванням `role` на групу
+        shape(consumer!, false),
+        shape(signals!.name, true, { rolconfig: [`role=${consumer!}`] }),
       ].sort(byRole)
     )
 
-    // Єдині членства — пари ролі входу рантайму: INHERIT FALSE, SET TRUE
+    // Єдині членства — пари ролей входу рантайму й сигналів: INHERIT FALSE, SET TRUE
     const members = (await clusterState(set)).members as {
       role: string
     }[]
+    const pairOf = (role: string, member: string) => ({
+      role,
+      member,
+      grantor: expect.any(String),
+      admin_option: false,
+      inherit_option: false,
+      set_option: true,
+    })
     expect([...members].sort((a, b) => (a.role < b.role ? -1 : 1))).toEqual(
-      [command!, user!, anon!]
-        .map((role) => ({
-          role,
-          member: runtime!.name,
-          grantor: expect.any(String),
-          admin_option: false,
-          inherit_option: false,
-          set_option: true,
-        }))
-        .sort((a, b) => (a.role < b.role ? -1 : 1))
+      [
+        ...[command!, user!, anon!].map((role) => pairOf(role, runtime!.name)),
+        pairOf(consumer!, signals!.name),
+      ].sort((a, b) => (a.role < b.role ? -1 : 1))
     )
+
+    // Нова сесія ролі входу сигналів одразу працює від групи споживача
+    await setTestPasswords(set)
+    expect(
+      await asRole(
+        set,
+        signals!.name,
+        async (c) => (await c.query("select current_user, session_user")).rows
+      )
+    ).toEqual([{ current_user: consumer, session_user: signals!.name }])
 
     const databases = await sql<{
       datname: string
@@ -340,9 +356,14 @@ describe("roles: the postgres profile cluster", () => {
       )
     ).toEqual([{ owner: set.auth }])
     const settings = (await clusterState(set)).settings
-    expect(settings).toHaveLength(2)
+    expect(settings).toHaveLength(3)
     expect(settings).toEqual(
       expect.arrayContaining([
+        {
+          rolname: signals!.name,
+          datname: null,
+          setconfig: [`role=${consumer!}`],
+        },
         {
           rolname: set.auth,
           datname: null,
@@ -616,22 +637,29 @@ describe("roles: the postgres profile cluster", () => {
     })
   })
 
-  it("refuses an explicit CONNECT of a Simetra login role to another database", async () => {
-    const { set, extra } = scenario("shared")
-    await mustEnsure(set)
-    const other = testDatabaseName("shared_other")
-    extra.push(other)
-    await sql(undefined, `create database ${id(other)}`)
-    await sql(
-      undefined,
-      `grant connect on database ${id(other)} to ${id(set.roles.login[0]!.name)}`
-    )
-    await expectRefusal(
-      set,
-      [{ code: "roles.shared-cluster", params: { databases: other } }],
-      [other]
-    )
-  })
+  // Кожна роль входу платформи: рантайм і споживач сигналів
+  it.each([
+    ["runtime", 0],
+    ["signals", 1],
+  ])(
+    "refuses an explicit CONNECT of the %s login role to another database",
+    async (_name, index) => {
+      const { set, extra } = scenario("shared")
+      await mustEnsure(set)
+      const other = testDatabaseName("shared_other")
+      extra.push(other)
+      await sql(undefined, `create database ${id(other)}`)
+      await sql(
+        undefined,
+        `grant connect on database ${id(other)} to ${id(set.roles.login[index]!.name)}`
+      )
+      await expectRefusal(
+        set,
+        [{ code: "roles.shared-cluster", params: { databases: other } }],
+        [other]
+      )
+    }
+  )
 
   describe("a schema that the superuser session cannot trust", () => {
     const cases: [string, (set: PostgresClusterSet) => string[]][] = [

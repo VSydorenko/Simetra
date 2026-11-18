@@ -27,6 +27,7 @@ export const TEST_LOGIN_PASSWORD = "simetra-test-login"
  */
 export function taggedClusterSet(label: string): PostgresClusterSet {
   const command = testRoleName(`${label}_cmd`)
+  const consumer = testRoleName(`${label}_sgc`)
   const user = testRoleName(`${label}_usr`)
   const anonymous = testRoleName(`${label}_anon`)
   return {
@@ -34,11 +35,16 @@ export function taggedClusterSet(label: string): PostgresClusterSet {
     auth: testRoleName(`${label}_auth`),
     request: [user, anonymous],
     roles: {
-      names: [command],
+      names: [command, consumer],
       login: [
         {
           name: testRoleName(`${label}_rt`),
           memberOf: [command, user, anonymous],
+        },
+        {
+          name: testRoleName(`${label}_sgl`),
+          memberOf: [consumer],
+          settings: { role: consumer },
         },
       ],
     },
@@ -59,7 +65,7 @@ export function clusterRoleNames(set: PostgresClusterSet): string[] {
   ]
 }
 
-/** Ролі входу набору, які мають мати пароль: власник, `auth`, рантайм. */
+/** Ролі входу набору, які мають мати пароль: власник, `auth`, ролі входу платформи. */
 function loginRoleNames(set: PostgresClusterSet): string[] {
   return [set.owner, set.auth, ...set.roles.login.map((l) => l.name)]
 }

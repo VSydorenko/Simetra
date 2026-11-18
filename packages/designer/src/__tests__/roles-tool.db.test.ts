@@ -192,7 +192,8 @@ describe("roles", () => {
   // Наявну пару лише звіряють: у підсумку її немає, відмови теж
   it("without a project file an existing login pair is checked, not refused or created", async () => {
     await withRollback(async (client) => {
-      // Локальний стек після `roles.sql`: пара runtime → command SET-only
+      // Локальний стек після `roles`: пари runtime → command і signals →
+      // група споживача, обидві SET-only; ролі грантів уже є
       expect(
         await ensurePlatformRoles(
           rollbackDatabase(client),
@@ -200,13 +201,11 @@ describe("roles", () => {
           platformRoleSet(undefined)
         )
       ).toEqual({
-        created: [
-          {
-            server: "target",
-            name: PLATFORM_ROLES.command,
-            outcome: "present",
-          },
-        ],
+        created: Object.values(PLATFORM_ROLES).map((name) => ({
+          server: "target",
+          name,
+          outcome: "present",
+        })),
       })
     })
   })
