@@ -37,7 +37,10 @@ export async function addElement(
 ): Promise<OperationResult> {
   const supplied = refuseSuppliedId(files, input.element, "element")
   if (supplied !== undefined) return supplied
-  const clean = await compileInput(files)
+  // Режим `repair` (спека декларацій функцій §5.1): тека після зворотної
+  // генерації з помилками лише класу ремонту доходить до 0 помилок саме
+  // мутаціями, тож вхід з ними приймається, а хвіст не дає додати нову.
+  const clean = await compileInput(files, { repair: true })
   if (!clean.ok) return clean.result
 
   const container = locateContainer(clean.model, files, input.target)
@@ -70,5 +73,11 @@ export async function addElement(
 
   const after = new Map(files)
   after.set(container.file, JSON.stringify(raw))
-  return completeAndCompile(files, after, o, new Set([container.file]))
+  return completeAndCompile(
+    files,
+    after,
+    o,
+    new Set([container.file]),
+    clean.accepted
+  )
 }

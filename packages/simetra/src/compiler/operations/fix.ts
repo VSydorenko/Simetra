@@ -20,7 +20,12 @@ import {
   type CompiledModel,
 } from "../compile"
 import { derivedFunctionLabels } from "../contracts"
-import { diagnostic, sortDiagnostics, type Diagnostic } from "../diagnostics"
+import {
+  diagnostic,
+  sortDiagnostics,
+  type Diagnostic,
+  type RepairKey,
+} from "../diagnostics"
 import { SQL_DEBT_SCHEMA_FILE } from "../json-schema"
 import { withRanges } from "../locate"
 import {
@@ -38,6 +43,7 @@ import {
 import { PROJECT_FILE } from "../stages/files"
 import { DERIVED_TABLE_LABELS } from "../stages/model"
 import { ownsWholeGrant } from "../function-execute"
+import { acceptsRepair } from "./refuse"
 import { loadSqlParser } from "../sql/parse"
 import { applyEdits, type TextEdit } from "../sql/rewrite/renames"
 import { statementPositions } from "../sql/units"
@@ -477,16 +483,21 @@ export function completeFiles(
 
 /**
  * Хвіст кожної операції, що пише файли: доповнення, компіляція результату й
- * перелік змін відносно входу. `ok` — результат без помилок; лише тоді
- * обгортка пише `changes`.
+ * перелік змін відносно входу. `ok` — результат без помилок; тоді обгортка
+ * пише `changes`. `repair` — ключі помилок класу ремонту входу
+ * (`compileInput` з `repair`): результат компілюється в тому ж режимі, і
+ * прийнятий за `acceptsRepair` несе `written` (спека декларацій функцій §5.1).
  */
 export async function completeAndCompile(
   before: ReadonlyMap<string, string>,
   after: ReadonlyMap<string, string>,
   o: CompletionOptions,
-  only?: ReadonlySet<string>
+  only?: ReadonlySet<string>,
+  repair?: readonly RepairKey[]
 ): Promise<OperationResult> {
-  return (await compileCompletion(before, completeFiles(after, o, only))).result
+  return (
+    await compileCompletion(before, completeFiles(after, o, only), repair)
+  ).result
 }
 
 /** Результат хвоста мутації разом із моделлю, з якої операція будує свій запис. */
@@ -518,12 +529,19 @@ export async function completeNarrowAndCompile(
 
 async function compileCompletion(
   before: ReadonlyMap<string, string>,
-  completed: CompletionResult
+  completed: CompletionResult,
+  repair?: readonly RepairKey[]
 ): Promise<CompiledCompletion> {
-  const compiled = await compile(completed.files)
+  const compiled = await compile(
+    completed.files,
+    repair === undefined ? {} : { repair: true }
+  )
+  const written =
+    repair !== undefined && !compiled.ok && acceptsRepair(repair, compiled)
   return {
     result: {
       ok: compiled.ok,
+      ...(written ? { written: true as const } : {}),
       changes: changesBetween(before, completed.files),
       diagnostics: sortDiagnostics([
         ...compiled.diagnostics,

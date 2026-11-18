@@ -315,9 +315,10 @@ interface DefaultPrivilegesTree {
  * ADP ролі-власника провайдера в його керованій схемі
  * (`PROVIDER_DEFAULT_PRIVILEGE_SCHEMAS`) власнику й ролям API: без `FOR ROLE`
  * ADP діє для ролі, що застосовує схему, тобто для власника. Ключ класу ремонту (Р7): `schema` —
- * схеми `IN SCHEMA` через кому (порожньо — глобальний ADP), `name` — ролі
- * `FOR ROLE` через кому (порожньо — роль застосування), як в ідентичності
- * одиниці.
+ * схеми `IN SCHEMA` через кому (порожньо — глобальний ADP), `name` —
+ * ідентичність одиниці ADP: вона несе й тип об'єктів, напрям, отримувачів і
+ * привілеї, тож два різні ADP на ту саму схему й роль не зливаються в один
+ * ключ, і мутація, що додала другий, — нова помилка класу.
  */
 export function checkDefaultPrivilegesExecute(
   units: readonly VerbatimUnit[],
@@ -372,7 +373,7 @@ export function checkDefaultPrivilegesExecute(
     return [
       diagnostic("sql.default-privileges-execute", unit.file, "", {
         schema: [...schemas].sort(compareStrings).join(","),
-        name: [...roles].sort(compareStrings).join(","),
+        name: unit.identity,
         line: unit.line,
       }),
     ]

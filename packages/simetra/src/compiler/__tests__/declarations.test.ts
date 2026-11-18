@@ -536,7 +536,9 @@ describe("repair-class codes carry params.schema and params.name", () => {
             "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA app GRANT EXECUTE ON FUNCTIONS TO anon;\n",
         }),
       schema: "app",
-      name: "postgres",
+      // Ідентичність одиниці ADP: два різні ADP на ту саму схему й роль
+      // (інші отримувачі чи привілеї) — різні ключі.
+      name: "defaultPrivileges:postgres:app:function:grant:anon:execute",
     },
   ])("$code", async ({ code, diagnostics, schema, name }) => {
     const found = (await diagnostics()).filter((d) => d.code === code)
@@ -579,7 +581,17 @@ describe("sql.default-privileges-execute", () => {
         [ADP_FILE]:
           "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT EXECUTE ON FUNCTIONS TO authenticated;\n",
       })
-    ).toEqual([[ADP_FILE, { schema: "app", name: "", line: 1 }]])
+    ).toEqual([
+      [
+        ADP_FILE,
+        {
+          schema: "app",
+          // Ключ класу ремонту — ідентичність одиниці ADP (див. нижче).
+          name: "defaultPrivileges::app:function:grant:authenticated:execute",
+          line: 1,
+        },
+      ],
+    ])
   })
 
   it.each([

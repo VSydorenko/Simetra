@@ -14,6 +14,7 @@ import type {
 import {
   compareStrings,
   diagnostic,
+  isRepairError,
   sortDiagnostics,
   type Diagnostic,
 } from "./diagnostics"
@@ -167,8 +168,17 @@ function validMembershipFunctions(
  * споживача» стоїть саме тут і бачить, які поля схем хтось прочитав.
  */
 export async function runStages(
-  stage1: FilesStageResult
+  stage1: FilesStageResult,
+  options: { repair?: true } = {}
 ): Promise<CompileResult> {
+  // Гейт стадій: у режимі `repair` помилки класу ремонту його не закривають
+  // (спека декларацій функцій §5.1) — модель будується, а `ok` лишається
+  // `false` за `hasErrors`.
+  const blocks = (diagnostics: readonly Diagnostic[]) =>
+    diagnostics.some(
+      (d) =>
+        d.severity === "error" && !(options.repair === true && isRepairError(d))
+    )
   const [parse, plpgsql] = await Promise.all([
     loadSqlParser(),
     loadPlpgsqlParser(),
@@ -323,7 +333,7 @@ export async function runStages(
     ...(embedded?.diagnostics ?? []),
   ]
   if (
-    hasErrors(early) ||
+    blocks(early) ||
     stage1.project === undefined ||
     stage3 === undefined ||
     embedded === undefined
@@ -373,7 +383,7 @@ export async function runStages(
     ),
   ])
   const ok = !hasErrors(staged)
-  if (!ok) return { ok, diagnostics: staged }
+  if (blocks(staged)) return { ok, diagnostics: staged }
 
   const rights = rightsContracts(
     stage1.objects,
@@ -1024,7 +1034,7 @@ export async function runStages(
   // Бюджет рядка рахується за формою передачі, а її дає лише каталог
   // рантайму — проєкція готової моделі, тож правило йде останнім.
   const budget = rowBudgetDiagnostics(buildRuntimeCatalog(compiled), objects)
-  if (hasErrors(budget)) {
+  if (blocks(budget)) {
     return {
       ok: false,
       diagnostics: sortDiagnostics([...diagnostics, ...budget]),
