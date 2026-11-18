@@ -154,6 +154,7 @@ type Step =
   | { t: "answer"; pick: number; how: How; at: number }
   | { t: "edit"; k: number; title: number }
   | { t: "delete"; k: number }
+  | { t: "gap"; k: number; remove: boolean }
   | { t: "move"; k: number }
   | { t: "lines"; qty: number }
   | { t: "create"; scope: number }
@@ -194,7 +195,7 @@ const k = fc.nat(KEYS.length - 1)
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 
 /**
- * Ваги (бриф, крок 1): сума 242 (повернення — 8; перегідратація — 6; перемикання епохи — 6; `hide` над
+ * Ваги (бриф, крок 1): сума 246 (чужа зміна між межами сторінок `full` — 4; повернення — 8; перегідратація — 6; перемикання епохи — 6; `hide` над
  * ТЧ-підмножиною — 6; сторінка вікна — 8; запис — 50: `update` 14, відповідь
  * `run` 20, дії мутації 8, чужа правка, `purge` чи `hide` ключа з мутацією 6,
  * `dispose()` з мутацією в дорозі 2); `purge` (16 + 14), відсутній рядок і
@@ -270,6 +271,13 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
     }),
   },
   { weight: 4, arbitrary: fc.record({ t: one("delete"), k }) },
+  // Чужа зміна між збереженими межами сторінок системного перечитування
+  // `full`: рядок зникає чи перелітає на край порядку (за `title`) саме тоді,
+  // коли перечитування стартувало. Хибна межа не дає ні пропуску, ні дубля.
+  {
+    weight: 4,
+    arbitrary: fc.record({ t: one("gap"), k, remove: fc.boolean() }),
+  },
   { weight: 6, arbitrary: fc.record({ t: one("move"), k }) },
   { weight: 2, arbitrary: fc.record({ t: one("lines"), qty: fc.nat(9) }) },
   { weight: 2, arbitrary: fc.record({ t: one("create"), scope: fc.nat(1) }) },
@@ -2033,6 +2041,17 @@ async function runModel(
           deleted.add(id(TASK, KEYS[s.k]!))
         }
         break
+      case "gap": {
+        core
+          .revalidate(TASK, { visibleOnly: false })
+          .catch((error: unknown) => errors.push(error))
+        if (!live(TASK, KEYS[s.k]!)) break
+        if (s.remove) {
+          fake.remove(TASK, KEYS[s.k]!)
+          deleted.add(id(TASK, KEYS[s.k]!))
+        } else fake.edit(TASK, KEYS[s.k]!, { title: `zz${n}` })
+        break
+      }
       case "move": {
         const row = fake.row(TASK, KEYS[s.k]!)
         if (row !== undefined && live(TASK, KEYS[s.k]!))

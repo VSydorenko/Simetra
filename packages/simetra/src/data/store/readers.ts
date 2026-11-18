@@ -16,7 +16,14 @@ import {
 import { visibleRow, type PutResult, type RestoredRow } from "./object-store"
 import type { OwnerScope, SectionEntry } from "./section-store"
 import type { Scope, Session } from "./session"
-import { readKeys, readOne, readRows, tracked, type CoreSource } from "./source"
+import {
+  readKeys,
+  readOne,
+  readRows,
+  rowsOf,
+  tracked,
+  type CoreSource,
+} from "./source"
 import {
   EMPTY_WINDOW,
   fetchPage,
@@ -334,7 +341,8 @@ export async function fetchFull(
   form: Form,
   token: GenerationToken,
   own?: Pick<ReaderTarget, "owned" | "layout">,
-  include: readonly IncludeStep[] = []
+  include: readonly IncludeStep[] = [],
+  prefix: readonly ServerRow[] = []
 ): Promise<
   { rows: ServerRow[]; over: boolean; included: Included } | undefined
 > {
@@ -342,12 +350,14 @@ export async function fetchFull(
   const o = form.object
   const spec = form.spec as Extract<ViewSpec, { kind: "full" }>
   const orderBy = spec.orderBy ?? []
-  const pages: ServerRow[] = []
-  const answered = new Set<Key>()
+  // `prefix` — страницы, які вже прочитано й прийнято: вибірка продовжується
+  // keyset-ом від останнього рядка.
+  const pages: ServerRow[] = [...prefix]
+  const answered = new Set<Key>(prefix.map((r) => r.key))
   // Цілі `include` просить лише перша сторінка (§6.7): наступні дочитує
   // частина `keys` наступного пакета.
   let included: Included = includedFrom(include, [], undefined, null)
-  let last: Record<string, unknown> | undefined
+  let last: Record<string, unknown> | undefined = prefix.at(-1)?.values
   // Сторінки — поза сховищем до кінця вибірки; зупинка лише на сторінці
   // без `more` і коротшій за `limit` (§6.1).
   for (;;) {
@@ -403,6 +413,103 @@ export async function fetchFull(
     last = tail.values
   }
   return { rows: pages, over: pages.length > limits.fullLimit, included }
+}
+
+/**
+ * The system re-read of a `full` view (§6.7, Рд41): the pages go as parts of
+ * ONE package, each from the stored bound of the composition (the stored last
+ * row of the previous page, in the view's order) and with the `known` of its
+ * own stored keys, so an unchanged list is one request of markers. A page
+ * counts only while the last row of the answer is the stored bound of the
+ * page: otherwise the answers of the pages after it are dropped (their
+ * boundaries are stale — a gap or a duplicate) and the read goes on
+ * sequentially from the last row of the page that did not match, as
+ * {@link fetchFull} does. A short page ends the read.
+ */
+export async function fetchFullAgain(
+  ctx: ReaderContext,
+  form: Form,
+  token: GenerationToken,
+  own: Pick<ReaderTarget, "owned" | "layout">
+): ReturnType<typeof fetchFull> {
+  const { source, limits } = ctx
+  const o = form.object
+  const size = limits.fullPageSize
+  const spec = form.spec as Extract<ViewSpec, { kind: "full" }>
+  const orderBy = spec.orderBy ?? []
+  // Склад у серверному порядку: лише рядки, чиї значення відомі.
+  const stored: { key: Key; values: Values }[] = []
+  for (const key of own.owned) {
+    const e = o.rows.get(key)
+    const values = e === undefined ? undefined : visibleRow(e)
+    if (values !== undefined) stored.push({ key, values })
+  }
+  if (form.compare === undefined || stored.length <= size)
+    return fetchFull(ctx, form, token, own)
+  const compare = form.compare
+  stored.sort((a, b) => compare(a.values, b.values))
+  const pages = Array.from(
+    { length: Math.ceil(stored.length / size) },
+    (_, i) => stored.slice(i * size, (i + 1) * size)
+  )
+  const snapshots = pages.map((page) =>
+    o.rows.knownFor(
+      page.map((r) => r.key),
+      { owned: own.owned, form: "list" }
+    )
+  )
+  const { items } = await source.read(
+    pages.map((_, i) => {
+      const bound = i === 0 ? undefined : stored[i * size - 1]!.values
+      const where =
+        bound === undefined
+          ? undefined
+          : keysetFilter(
+              orderBy,
+              {
+                ...cursorOf(orderBy, o.entry.keyName, bound),
+                direction: "after",
+              },
+              o.entry.keyName,
+              nullableOf(o.info)
+            )
+      return {
+        type: "query" as const,
+        query: {
+          object: o.ref,
+          ...(orderBy.length === 0 ? {} : { orderBy }),
+          ...(where === undefined ? {} : { where }),
+          limit: size,
+        },
+        ...(snapshots[i] === undefined ? {} : { known: snapshots[i]!.known }),
+      }
+    })
+  )
+  if (!token.valid) return undefined
+  const accepted: ServerRow[] = []
+  let ended = false
+  for (const [i, item] of items.entries()) {
+    if (!item.ok) throw new CommandFailure(item.error)
+    if (!("rows" in item))
+      throw new CommandFailure({ code: "command.internal" })
+    const got = rowsOf(o.entry, item.rows.rows, item.epoch, snapshots[i])
+    accepted.push(...got)
+    if (!(item.rows.more === true) && got.length < size) {
+      ended = true
+      break
+    }
+    // Не остання сторінка: її кінець мусить бути збереженою межею.
+    if (i < pages.length - 1 && got.at(-1)?.key !== pages[i]!.at(-1)!.key) {
+      break
+    }
+  }
+  if (ended)
+    return {
+      rows: accepted,
+      over: accepted.length > limits.fullLimit,
+      included: includedFrom([], [], undefined, null),
+    }
+  return fetchFull(ctx, form, token, own, [], accepted)
 }
 
 async function readFull(

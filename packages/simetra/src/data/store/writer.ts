@@ -12,7 +12,7 @@ import { visibleRow, type RowEntry } from "./object-store"
 import {
   aliveIncluded,
   applyIncluded,
-  fetchFull,
+  fetchFullAgain,
   gated,
   readFormWrite,
   type Apply,
@@ -555,7 +555,7 @@ async function readFullAgain(
   const o = form.object
   const { keysPerRequest } = ctx.limits
   const [fetched, held] = await Promise.all([
-    fetchFull(ctx, form, token, s),
+    fetchFullAgain(ctx, form, token, s),
     readHeldTargets(ctx, s, [...s.owned]),
   ])
   if (fetched === undefined) return () => {}
