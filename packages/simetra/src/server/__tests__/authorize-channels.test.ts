@@ -10,9 +10,11 @@ import { failureOf } from "./fake-database"
 import {
   COMMIT,
   CURRENT_USER,
+  OPEN,
   READ_BEGIN,
   ROLLBACK,
   USER,
+  create,
   readSetup,
   session,
   setup,
@@ -187,6 +189,25 @@ describe("runtime.authorizeChannels", () => {
       )
     ).toEqual({ code: "command.invalid", path: "1" })
     expect(db.calls).toEqual([])
+  })
+
+  it("inside a hook it is command.nested and takes no connection", async () => {
+    const inner: unknown[] = []
+    const { db, runtime } = await setup(undefined, {
+      objectModules: {
+        "Catalog.Client": {
+          async beforeWrite({ draft }) {
+            inner.push(await failureOf(runtime.authorizeChannels(session, [A])))
+            return draft
+          },
+        },
+      },
+    })
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.nested",
+    })
+    expect(inner).toEqual([{ code: "command.nested" }])
+    expect(db.calls).toEqual([...OPEN, ROLLBACK, { release: false }])
   })
 
   it("an answer outside the request is an anomaly: rolled back, logged, command.internal", async () => {
