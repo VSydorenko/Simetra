@@ -799,7 +799,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       for (const key of s.layout) {
         let base = viewOf(o, key)
         // Дефект самотесту: вікно тримає копію показаних значень і показує
-        // її, коли сховище значень уже не дає (копія значень у вікні заборонена, Рд22).
+        // її, коли сховище значень уже не дає (копія значень у вікні заборонена, Рд20).
         if (ctx.defects.has("window-copies-values") && s.window !== undefined) {
           const kept = copiesOf(s)
           if (

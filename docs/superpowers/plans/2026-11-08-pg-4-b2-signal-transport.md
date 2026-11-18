@@ -96,7 +96,7 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   `simetra_signals`) з'являються на стеку лише кроком ролей:
   - `postgres` — повторний `pnpm db:pg:start` (ідемпотентний, кличе
     `simetra roles`, Р2 ПГ-2b);
-  - `supabase` — `pnpm db:roles` (вводить ПГ-3, задача 4a): виконує
+  - `supabase` — `pnpm db:roles` (у `main`): виконує
     ідемпотентний `supabase/roles.sql` на запущеному стеку під замком.
   
   Обидва кроки адитивні (Р11, дозволено архітекторкою): лише `CREATE`
@@ -228,7 +228,7 @@ Centrifugo v6 (образ, закріплений у `docker/postgres-stack/comp
   (`platformRoleSet`, `platformRoleRefusals`, `checkPlatformRoles`,
   `ensurePlatformRoles`), `packages/simetra/src/schema/apply/postgres-cluster.ts`
   (після ПГ-2), `packages/designer/src/tools/roles-tool.ts`
-- Modify: `supabase/roles.sql` — за правилом ідемпотентності задачі 4a ПГ-3
+- Modify: `supabase/roles.sql` — за правилом ідемпотентності `roles.sql`
   (кожне членство під власною перевіркою `pg_auth_members`):
   `simetra_signal_consumer` (`NOLOGIN NOINHERIT`),
   `simetra_signals` (`LOGIN NOINHERIT`, член `simetra_signal_consumer`
