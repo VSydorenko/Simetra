@@ -235,6 +235,19 @@ describe("signal merge mode", () => {
     )
   })
 
+  // Типовий поріг — з бенчмарку `bench:signals` (спека П4-B §8.2): поріг +
+  // `invalidate` вміщуються в історію каналу (`history_size` 100, Р23).
+  it("switches after the 90th signal phase by default", async () => {
+    const { db, runtime } = await mergeSetup({
+      signalMergeThreshold: undefined,
+    })
+    await runtime.run(session, clients(89))
+    expect(mergeIndexes(db.calls)).toEqual([])
+    db.calls.splice(0)
+    await runtime.run(session, clients(90))
+    expect(mergeIndexes(db.calls)).toEqual([coreIndexes(db.calls).at(-1)! + 1])
+  })
+
   it.each([0, 1.5, -1])("refuses the threshold %s", async (threshold) => {
     const db = fakeDatabase({ query: (text) => answer(text) })
     await expect(
