@@ -56,6 +56,7 @@ jobs:
 
   checks:
     name: Checks
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -75,12 +76,22 @@ jobs:
       - name: Format check
         run: pnpm format:check
       - name: Lint
+        if: needs.changes.outputs.code != 'false'
         run: pnpm lint
       - name: Typecheck
+        if: needs.changes.outputs.code != 'false'
         run: pnpm typecheck
       - name: Test
+        if: needs.changes.outputs.code != 'false'
         run: pnpm test
+      # PR лише з документацією: замість повного набору — тести, що читають
+      # `docs/` (`*.docs.test.ts`), бо зміна спеки може розійтися з кодом,
+      # який вони звіряють; повний `Test` їх і так містить (#265)
+      - name: Docs tests
+        if: needs.changes.outputs.code == 'false'
+        run: pnpm test:docs
       - name: Metadata check
+        if: needs.changes.outputs.code != 'false'
         run: pnpm metadata:check
 
   # DB-тести (проєкт db) йдуть проти стека postgres: Postgres, Centrifugo, Garage.
