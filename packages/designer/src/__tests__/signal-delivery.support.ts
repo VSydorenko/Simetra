@@ -3,8 +3,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
   CommandFailure,
   channelTopic,
+  defineObjectModule,
   quoteIdent,
   type MetadataRef,
+  type ObjectModule,
   type Operation,
 } from "simetra/model"
 import {
@@ -804,10 +806,34 @@ export function describeSignalDelivery(): void {
             },
           ])
         ).rejects.toBeInstanceOf(CommandFailure)
+        // Відмова хука після вдалого запису: транзакцію відкочує сам рантайм
+        // (`ROLLBACK`), а не помилка Postgres, яка обірвала б її й без нього
+        const refused = randomUUID()
+        const hooked = await createCommandRuntime({
+          database: fromPgPool(pools.direct),
+          catalog: env.catalog,
+          objectModules: {
+            "Catalog.Ticket": defineObjectModule({
+              onWrite: async ({ ctx }) => {
+                if (ctx.action === "create")
+                  throw new CommandFailure({ code: "command.internal" })
+              },
+            }) as ObjectModule<object>,
+          },
+        })
+        await expect(
+          hooked.run(writer.session, {
+            action: "create",
+            object: TICKET,
+            id: refused,
+            values: { org: a.id },
+          })
+        ).rejects.toBeInstanceOf(CommandFailure)
         const sentinel = (await createTicket(writer, a)).id
         await sub.next(about(sentinel))
         await quiet()
         expect(countOf(sub, lost)).toBe(0)
+        expect(countOf(sub, refused)).toBe(0)
       } finally {
         client.disconnect()
       }
