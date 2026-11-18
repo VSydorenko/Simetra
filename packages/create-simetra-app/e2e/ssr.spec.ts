@@ -11,6 +11,7 @@ import { authOptions } from "../template/src/server/auth"
 import {
   contextWithCookie,
   expectedHydrationRequests,
+  framesFromRows,
   framesOf,
   freshSession,
   listRows,
@@ -37,16 +38,28 @@ async function expectedFor(
   app: App,
   cookie: string,
   path: string,
-  objectRef: "Catalog.Client" | "Catalog.Country"
+  objectRef: "Catalog.Client" | "Catalog.Country",
+  literal: number
 ): Promise<number> {
   const { text } = await html(app, cookie, path)
-  return expectedHydrationRequests(
+  const derived = expectedHydrationRequests(
     objectRef,
     objectRef === "Catalog.Country" ? "full" : "window",
     text,
     objectRef === "Catalog.Client" ? [...ORDER] : undefined
   )
+  // Перехресна перевірка виведеного числа буквальним для відомих даних
+  // фікстури: функція не може мовчки повторити помилку реалізації
+  expect(derived).toBe(literal)
+  return derived
 }
+
+// Відомі дані фікстури: `version` + вигляди. A: список `Client` + `country` +
+// `owner`; B: рядки без `country`, тож список + `owner`; `Country` (full): набір
+// і вигляд списку
+const CLIENT_A_REQUESTS = 4
+const CLIENT_B_REQUESTS = 3
+const COUNTRY_A_REQUESTS = 3
 
 /** Після гідратації: усі запити `dataFn` зроблено, далі тиша. */
 async function settle(
@@ -86,13 +99,21 @@ test.describe("scenario 1: SSR entry on the Client list", () => {
     await settle(
       page,
       log,
-      await expectedFor(app, app.users.a.cookie, "/clients", "Catalog.Client")
+      await expectedFor(
+        app,
+        app.users.a.cookie,
+        "/clients",
+        "Catalog.Client",
+        CLIENT_A_REQUESTS
+      )
     )
 
     // Кожен кадр зі значеннями — той самий склад і порядок, що в HTML (Д-12)
-    const frames = (await framesOf(page)).filter((f) => f.rows.length > 0)
+    const frames = await framesFromRows(page)
     expect(frames.some((f) => f.hydrated)).toBe(true)
     for (const frame of frames) {
+      // Порожній кадр після SSR — блимання: не відсіюється
+      expect(frame.rows.length).toBeGreaterThan(0)
       expect(frame.keys).toEqual(server.keys)
       expect(frame.rows).toEqual(server.rows)
     }
@@ -133,11 +154,14 @@ test.describe("scenario 8: full Country list with SSR", () => {
         app,
         app.users.a.cookie,
         "/countries",
-        "Catalog.Country"
+        "Catalog.Country",
+        COUNTRY_A_REQUESTS
       )
     )
-    const frames = (await framesOf(page)).filter((f) => f.rows.length > 0)
+    const frames = await framesFromRows(page)
+    expect(frames.some((f) => f.hydrated)).toBe(true)
     for (const frame of frames) {
+      expect(frame.rows.length).toBeGreaterThan(0)
       expect(frame.keys).toEqual(server.keys)
       expect(frame.rows).toEqual(server.rows)
     }
@@ -158,7 +182,13 @@ test.describe("scenario 3: list, card, list within releaseDelayMs", () => {
     await settle(
       page,
       log,
-      await expectedFor(app, app.users.a.cookie, "/clients", "Catalog.Client")
+      await expectedFor(
+        app,
+        app.users.a.cookie,
+        "/clients",
+        "Catalog.Client",
+        CLIENT_A_REQUESTS
+      )
     )
     const hydrationCalls = log.calls.length
     const before = await listRows(page)
@@ -210,7 +240,13 @@ test.describe("scenario 7: sign-out in the current tab", () => {
     await settle(
       page,
       log,
-      await expectedFor(app, cookie, "/clients", "Catalog.Client")
+      await expectedFor(
+        app,
+        cookie,
+        "/clients",
+        "Catalog.Client",
+        CLIENT_A_REQUESTS
+      )
     )
     const shown = (await listRows(page)).rows.length
     expect(shown).toBeGreaterThan(0)
@@ -267,7 +303,13 @@ test.describe("scenario 9: focus after a change by another session", () => {
       await settle(
         page,
         log,
-        await expectedFor(app, app.users.b.cookie, "/clients", "Catalog.Client")
+        await expectedFor(
+          app,
+          app.users.b.cookie,
+          "/clients",
+          "Catalog.Client",
+          CLIENT_B_REQUESTS
+        )
       )
       const before = await listRows(page)
       expect(before.rows).toHaveLength(B_ROWS)
@@ -317,10 +359,10 @@ test.describe("scenario 9: focus after a change by another session", () => {
       expect(afterNew.keys).toEqual(before.keys)
       expect(afterNew.rows.join()).not.toContain("B-new row")
       // Кожен стан DOM між ними мав склад із B_ROWS рядків
-      for (const frame of (await framesOf(page)).filter(
-        (f) => f.rows.length > 0
-      ))
+      for (const frame of await framesFromRows(page)) {
+        expect(frame.rows).toHaveLength(B_ROWS)
         expect(frame.keys).toEqual(before.keys)
+      }
     } finally {
       await context.close()
       // Дані B повертаються до виду фікстури: інші тести бачать рівно B_ROWS
@@ -349,7 +391,13 @@ test.describe("scenario 10: sign-out in another tab, then focus", () => {
     await settle(
       first,
       log,
-      await expectedFor(app, cookie, "/clients", "Catalog.Client")
+      await expectedFor(
+        app,
+        cookie,
+        "/clients",
+        "Catalog.Client",
+        CLIENT_A_REQUESTS
+      )
     )
     const shown = (await listRows(first)).rows.length
     expect(shown).toBeGreaterThan(0)
@@ -389,8 +437,42 @@ test.describe("scenario 10: sign-out in another tab, then focus", () => {
 })
 
 test.describe("security: data runtime per request", () => {
-  /** Власні рядки відкриваються лише своєму суб'єкту (права `own`, Д-13). */
-  function expectOwn(reply: Reply, who: "a" | "b", app: App): void {
+  interface OwnRow {
+    id: string
+    code: string
+    description: string
+    country_id: string | null
+    owner_id: string | null
+  }
+
+  /** Усі значення рядків суб'єкта (`id`, `code`, `description`, посилання): їх не має бути в чужій відповіді. */
+  async function valuesOf(app: App, ownerId: string): Promise<string[]> {
+    const rows = await app.query<OwnRow>(
+      "SELECT id, code, description, country_id, owner_id FROM app.client WHERE owner_id = $1",
+      [ownerId]
+    )
+    expect(rows.length).toBeGreaterThan(0)
+    return [
+      ...new Set(
+        rows.flatMap((row) =>
+          [row.id, row.code, row.description, row.country_id].filter(
+            (value): value is string => value !== null
+          )
+        )
+      ),
+    ]
+  }
+
+  /**
+   * Власні рядки відкриваються лише своєму суб'єкту (права `own`, Д-13); HTML
+   * несе й знімок (`$_TSR`), тож один пошук покриває обидва.
+   */
+  function expectOwn(
+    reply: Reply,
+    who: "a" | "b",
+    app: App,
+    foreign: string[]
+  ): void {
     expect(reply.status).toBe(200)
     const own = who === "a" ? app.users.a : app.users.b
     const other = who === "a" ? app.users.b : app.users.a
@@ -398,12 +480,20 @@ test.describe("security: data runtime per request", () => {
     expect(reply.text).toContain(who === "a" ? "Client 0" : "B-only 0")
     expect(reply.text).toContain(`subject:"${own.id}"`)
     expect(reply.text).not.toContain(other.id)
-    expect(reply.text).not.toMatch(who === "a" ? /B-only \d/ : SEED_ROW)
+    for (const value of foreign)
+      expect(
+        reply.text,
+        `a value of the other subject: ${value}`
+      ).not.toContain(value)
   }
 
   test("A, B, A in turn and in parallel: only own rows and own subject", async ({
     app,
   }) => {
+    const foreign = {
+      a: await valuesOf(app, app.users.b.id),
+      b: await valuesOf(app, app.users.a.id),
+    }
     const ask = (who: "a" | "b") =>
       html(app, app.users[who].cookie, "/clients").then((reply) => ({
         who,
@@ -411,12 +501,13 @@ test.describe("security: data runtime per request", () => {
       }))
     for (const who of ["a", "b", "a"] as const) {
       const { reply } = await ask(who)
-      expectOwn(reply, who, app)
+      expectOwn(reply, who, app, foreign[who])
     }
     const replies = await Promise.all(
       (["a", "b", "b", "a", "a", "b"] as const).map(ask)
     )
-    for (const { who, reply } of replies) expectOwn(reply, who, app)
+    for (const { who, reply } of replies)
+      expectOwn(reply, who, app, foreign[who])
   })
 })
 
@@ -648,12 +739,17 @@ test.describe("the Start CSRF refusal reaches the UI as command.forbidden", () =
     const errors: string[] = []
     page.on("pageerror", (error) => errors.push(error.message))
     // Рівно та відповідь, яку Start дає на запит без `Sec-Fetch-Site:
-    // same-origin` (§8.3, перший шар; сам фільтр доведено в `security.spec.ts`):
-    // браузер не дає підробити `Sec-Fetch-*`, тож шар підміняється відповіддю
+    // same-origin` (§8.3, перший шар; сам фільтр доведено в `security.spec.ts`).
+    // Джерело: `@tanstack/start-client-core@1.170.39`,
+    // `src/createCsrfMiddleware.ts`, функція відмови (рядок 239):
+    // `new Response('Forbidden', { status: 403 })` — статус 403, заголовків
+    // немає (`content-type` ставить сам `Response` для рядкового тіла), тіло
+    // `Forbidden`. Браузер не дає підробити `Sec-Fetch-*`, тож шар
+    // підміняється його відповіддю
     await page.route("**/_serverFn/**", (route) =>
       route.fulfill({
         status: 403,
-        contentType: "text/plain",
+        headers: { "content-type": "text/plain;charset=UTF-8" },
         body: "Forbidden",
       })
     )

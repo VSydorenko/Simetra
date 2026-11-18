@@ -213,6 +213,17 @@ export function framesOf(page: Page): Promise<Frame[]> {
   )
 }
 
+/**
+ * Кадри від першого з рядками (DOM, який віддав SSR): кадр без рядків після
+ * цього — блимання, а не розбір HTML, тож відсіювати порожні не можна.
+ */
+export async function framesFromRows(page: Page): Promise<Frame[]> {
+  const frames = await framesOf(page)
+  const first = frames.findIndex((frame) => frame.rows.length > 0)
+  if (first < 0) throw new Error("no frame with list rows was recorded")
+  return frames.slice(first)
+}
+
 /** Рядки списку (текст) і ключі в поточному DOM. */
 export function listRows(
   page: Page
