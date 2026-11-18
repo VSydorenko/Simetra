@@ -37,7 +37,7 @@ export interface DataRuntime {
   readonly disposed: boolean
   /**
    * The snapshot of the ready held views for the client (P4-B spec §6.6):
-   * `meta` names the subject and the catalog the rows were read under. Throws
+   * `meta` names the subject the rows were read for. Throws
    * `TypeError` once the runtime is disposed, and while a write is in the
    * journal. The server calls it, then `dispose()`.
    */
@@ -59,13 +59,15 @@ export interface DataRuntime {
   /** Whether the host shows the application; starts as `options.visible`. */
   readonly visible: boolean
   /**
-   * Marks the application hidden (a hidden tab); idempotent, sends nothing,
-   * and does nothing after `dispose()`.
+   * Marks the application hidden; the host calls it on `visibilitychange`
+   * to `hidden`. Idempotent, sends nothing, and does nothing after
+   * `dispose()`.
    */
   suspend(): void
   /**
-   * Marks the application visible again (focus, `visibilitychange`, network
-   * back); idempotent after `dispose()`. A call less than a second after the
+   * Marks the application visible again; the host calls it on
+   * `visibilitychange` to `visible` and on `focus`. Does nothing after
+   * `dispose()`. A call less than a second after the
    * last accepted one only sets `visible`. An accepted call asks for the
    * catalog version and re-reads the visible views last refreshed longer ago
    * than `limits.resumeMinIntervalMs` (or never), in one microtask.
