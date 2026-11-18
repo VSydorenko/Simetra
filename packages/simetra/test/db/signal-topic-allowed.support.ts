@@ -136,6 +136,39 @@ type TopicCase = [
   allowed: boolean,
 ]
 
+/**
+ * Якорі суворого шаблону топіка: кожен кейс — дозволений канал `m1` з
+ * хвостом, префіксом, не-UUID сегментом чи кінцевим `\n`.
+ */
+const ANCHOR_CASES: TopicCase[] = [
+  [
+    "an extra trailing segment",
+    "m1",
+    { raw: `simetra:${ORG_KIND_ID}:{A}:${TASK_ID}:${TASK_ID}` },
+    false,
+  ],
+  [
+    "a leading prefix",
+    "m1",
+    { raw: `xsimetra:${ORG_KIND_ID}:{A}:${TASK_ID}` },
+    false,
+  ],
+  [
+    "a non-UUID segment",
+    "m1",
+    { raw: `simetra:${ORG_KIND_ID}:{A}:task` },
+    false,
+  ],
+  [
+    "a trailing newline",
+    "m1",
+    { raw: `simetra:${ORG_KIND_ID}:{A}:${TASK_ID}\n` },
+    false,
+  ],
+  // Позитивний контроль: той самий канал без перекручень дозволено.
+  ["the same channel as is", "m1", [ORG_KIND_ID, "A", TASK_ID], true],
+]
+
 const SUBSCRIBE: TopicCase[] = [
   ["own scope with a read right", "m1", [ORG_KIND_ID, "A", TASK_ID], true],
   // Інваріант 8: скоуп без умови права відкрив би канал учаснику без права.
@@ -210,6 +243,7 @@ const SUBSCRIBE: TopicCase[] = [
     false,
   ],
   ["without a user", null, [ORG_KIND_ID, "A", TASK_ID], false],
+  ...ANCHOR_CASES,
 ]
 
 const SEND: TopicCase[] = [
@@ -240,6 +274,7 @@ const SEND: TopicCase[] = [
   ],
   ["own user channel", "m1", { raw: "simetra-user:{m1}" }, false],
   ["without a user", null, [ORG_KIND_ID, "A", TASK_ID], false],
+  ...ANCHOR_CASES,
 ]
 
 const TOPIC_SQL = "SELECT simetra.signal_topic_allowed($1, $2) AS v"
@@ -439,19 +474,71 @@ export function defineSignalTopicCases(options: {
         })
       )
 
-    it.each(ORACLES)(
-      "%s is closed to the anonymous role",
-      async (_, sql, params) => {
+    // Ролі запиту провайдера (на Supabase — з типовими привілеями схеми):
+    // outbox для них закритий цілком, а оракул `user` має лише за Р10 —
+    // його відповіді звіряють кейси підписки вище.
+    const OUTBOX = `${SIGNAL_OUTBOX.schema}.${SIGNAL_OUTBOX.name}`
+    const TABLE_DENIED = {
+      code: "42501",
+      message: `permission denied for table ${SIGNAL_OUTBOX.name}`,
+    }
+    const fnDenied = (name: string) => ({
+      code: "42501",
+      message: `permission denied for function ${name}`,
+    })
+    type RequestRoleCase = [
+      purpose: "anonymous" | "user",
+      what: string,
+      sql: string,
+      params: () => unknown[],
+      expected: { code: string; message: string },
+    ]
+    const REQUEST_ROLE_CASES: RequestRoleCase[] = (
+      ["anonymous", "user"] as const
+    ).flatMap((purpose): RequestRoleCase[] => [
+      [purpose, "SELECT", `SELECT id FROM ${OUTBOX}`, () => [], TABLE_DENIED],
+      [
+        purpose,
+        "INSERT",
+        OUTBOX_INSERT,
+        () => [JSON.stringify(change("A"))],
+        TABLE_DENIED,
+      ],
+      [purpose, "DELETE", `DELETE FROM ${OUTBOX}`, () => [], TABLE_DENIED],
+      [
+        purpose,
+        "EXECUTE signal_payload_allowed",
+        PAYLOAD_SQL,
+        () => [JSON.stringify(change("A"))],
+        fnDenied("signal_payload_allowed"),
+      ],
+      ...(purpose === "anonymous"
+        ? [
+            [
+              purpose,
+              "EXECUTE signal_topic_allowed",
+              TOPIC_SQL,
+              () => [changes(ORG_KIND_ID, key("A"), TASK_ID), false],
+              fnDenied("signal_topic_allowed"),
+            ] satisfies RequestRoleCase,
+          ]
+        : []),
+    ])
+
+    // Інваріант 4 і умова архітекторки: живий кейс на привілеях провайдера.
+    it.each(REQUEST_ROLE_CASES)(
+      "the %s role cannot %s on the outbox signal objects",
+      async (purpose, _, sql, params, expected) => {
         const client = tx.client()
-        await client.query("SAVEPOINT anonymous_oracle")
-        const anonymous = await outcome(
+        await client.query("SAVEPOINT request_role_outbox")
+        const result = await outcome(
           (async () => {
-            await asRole(client, "anonymous", claimsFor("anonymous", key("m1")))
-            await client.query(sql, [...params()])
+            await asRole(client, purpose, claimsFor(purpose, key("m1")))
+            await client.query(sql, params())
           })()
         )
-        await client.query("ROLLBACK TO SAVEPOINT anonymous_oracle")
-        expect(anonymous).toEqual(DENIED)
+        await client.query("ROLLBACK TO SAVEPOINT request_role_outbox")
+        expect(result).toEqual(expected)
       }
     )
 
