@@ -386,7 +386,15 @@ export function signalObject(
  * entry for the runtime catalog and the kernel generator.
  */
 export function isSignalObject(
-  model: CompiledModel,
+  model: Pick<CompiledModel, "physical"> & {
+    contracts: Pick<
+      Contracts,
+      "access" | "roles" | "users" | "membership" | "membershipSources"
+    >
+    project: {
+      database: Pick<CompiledModel["project"]["database"], "provider">
+    }
+  },
   objectId: string
 ): boolean {
   // Той самий вхід пише виклик сигналу в ядрі (B2), тож рішення одне (§8.3).

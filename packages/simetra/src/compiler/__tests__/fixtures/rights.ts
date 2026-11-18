@@ -3324,3 +3324,68 @@ export function rootCreationDomain(): Map<string, string> {
     }
   )
 }
+
+export const SIGNAL_READER_ID = uuid(9701)
+export const TASK_OWN_READER_ID = uuid(9702)
+export const ANNOUNCEMENT_OWN_READER_ID = uuid(9703)
+
+/**
+ * Домен оракула каналу сигналу (спека П4-B §8.3) поверх `policyDomain` і
+ * `writeRoles` (`Bulletin` з `publicRead`, контейнерна `ProjectWriter`):
+ * вид `org` з дослівною функцією множини, що відсікає організацію з
+ * позначкою видалення, хоч членство й права в ній лишаються; `Announcement`
+ * з носієм власності за автором. Ролі: `SignalReader` рівня скоупу —
+ * `read@any` кореня `Organization` і нескоупленого `Announcement`;
+ * `TaskOwnReader` — лише `read@own` задач; глобальна
+ * `AnnouncementOwnReader` — лише `read@own` оголошень.
+ */
+export function signalTopicDomain(...layers: Layer[]): Map<string, string> {
+  const files = policyDomain(writeRoles(), signalTopicLayer(), ...layers)
+  files.set(
+    SCOPE_FUNCTIONS_FILE,
+    "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT m.org_id FROM public.org_member m JOIN public.organization o ON o.id = m.org_id WHERE m.user_id = (SELECT simetra.current_user_id()) AND NOT o.deletion_mark $$;"
+  )
+  return files
+}
+
+function signalTopicLayer(): Layer {
+  return {
+    [PROJECT_FILE]: {
+      scopeKinds: [
+        {
+          ...ORG_SCOPE_KIND,
+          setFunction: { schema: "public", name: "org_ids" },
+        },
+      ],
+    },
+    [ANNOUNCEMENT_FILE]: { trackAuthor: true, ownership: ["createdBy"] },
+    [ROLE_FILE("SignalReader")]: role(
+      SIGNAL_READER_ID,
+      "SignalReader",
+      { scopeKind: "org" },
+      {
+        grants: [
+          grant(
+            objects(["Catalog", "Organization"], ["Document", "Announcement"]),
+            ["read"],
+            "any"
+          ),
+        ],
+      }
+    ),
+    [ROLE_FILE("TaskOwnReader")]: role(
+      TASK_OWN_READER_ID,
+      "TaskOwnReader",
+      { scopeKind: "org" },
+      { grants: [grant(objects(["Document", "Task"]), ["read"], "own")] }
+    ),
+    [ROLE_FILE("AnnouncementOwnReader")]: role(
+      ANNOUNCEMENT_OWN_READER_ID,
+      "AnnouncementOwnReader",
+      "global",
+      {
+        grants: [grant(objects(["Document", "Announcement"]), ["read"], "own")],
+      }
+    ),
+  }
+}

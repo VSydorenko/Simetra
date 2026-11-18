@@ -4,11 +4,16 @@ import {
   CURRENT_USER_FUNCTION_NAME,
   ROW_VERSION_EPOCH_FUNCTION_NAME,
   SESSION_CLAIMS_SETTING,
+  SIGNAL_INVALIDATE_FUNCTION_NAME,
+  SIGNAL_MERGE_MODE,
+  SIGNAL_MODE_SETTING,
+  ZERO_UUID,
   type Change,
   type CommandError,
   type CommandResult,
   type ObjectModule,
   type RuntimeCatalog,
+  type RuntimeObject,
   type SessionClaims,
   CommandFailure,
   versionEpochSchema,
@@ -65,6 +70,11 @@ export interface RuntimeState {
   budgetMs: number
   /** `lock_timeout` of a command transaction, ms. */
   lockTimeoutMs: number
+  /**
+   * Signal phases of a command transaction, `ctx.run` included, after which
+   * the rest of the transaction runs in signal merge mode (P4-B spec §8.2).
+   */
+  signalMergeThreshold: number
 }
 
 type QueryResult = Awaited<ReturnType<DatabaseClient["query"]>>
@@ -155,8 +165,12 @@ const transactionTimeout = (param: string) =>
 // Межі часу команди — у тому самому операторі claims, без кругового запиту
 // (Ф4, Ф6). Запобіжники простою й транзакції — бюджет + 1 с: бюджет
 // спрацьовує раніше, вони ловлять завислий хук чи обірваного клієнта.
+// Режим злиття сигналів скидається тут же (Р14): значення з
+// `ALTER ROLE … SET` ролі входу інакше гасило б сигнал на фазу з першої фази.
+// Порожній рядок — не режим злиття: `simetra.signal` гасить лише точне значення.
 const COMMAND_CLAIMS_TEXT =
-  `${CLAIMS_TEXT}, set_config('statement_timeout', $2, true), ` +
+  `${CLAIMS_TEXT}, set_config(${literal(SIGNAL_MODE_SETTING)}, '', true), ` +
+  `set_config('statement_timeout', $2, true), ` +
   `set_config('lock_timeout', $3, true), ` +
   `set_config('idle_in_transaction_session_timeout', $4, true), ` +
   transactionTimeout("$4")
@@ -180,6 +194,11 @@ export const readSetupStatement = (
   role: string
 ) =>
   statement(READ_SETUP_TEXT, claims, String(statementMs), String(guardMs), role)
+/** Режим злиття сигналів до кінця транзакції (спека П4-B §8.2). */
+const MERGE_MODE = statement(
+  `SELECT set_config(${literal(SIGNAL_MODE_SETTING)}, ${literal(SIGNAL_MERGE_MODE)}, true)`
+)
+const INVALIDATE_TEXT = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(SIGNAL_INVALIDATE_FUNCTION_NAME)}($1::uuid, $2::uuid, $3::uuid)`
 const CURRENT_USER = statement(
   `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(CURRENT_USER_FUNCTION_NAME)}() AS user_id`
 )
@@ -329,6 +348,14 @@ export class Transaction {
   act: { sub: string } | undefined
   /** Фази, які вже почав `ctx.run` у цій спробі (межа `BATCH_MAX`, Ф1). */
   nestedPhases = 0
+  /**
+   * Сигнальні фази спроби до режиму злиття. Лік — на спробу: повтор після
+   * `40001` починає нову транзакцію, а з нею й налаштування режиму.
+   */
+  private signalPhases = 0
+  private signalMerge = false
+  /** Пари (об'єкт, скоуп), які вже отримали `invalidate` у режимі злиття. */
+  private readonly invalidated = new Set<string>()
   private tail: Promise<unknown> = Promise.resolve()
   /**
    * `statement_timeout` у силі, мс; `undefined` — до claims: поза транзакцією
@@ -421,6 +448,60 @@ export class Transaction {
     } catch (raw) {
       throw this.close(terminalOf(raw, this.state, phase, this.commitSent))
     }
+  }
+
+  /**
+   * Лічить фазу, ядро якої щойно стало в чергу (спека П4-B §8.2), коли
+   * `signals` — ядро фази шле сигнал (див. `phaseSignals` у `phase.ts`):
+   * `true` — фаза йде вже в режимі злиття, і ядро сигналу не шле.
+   * Фаза, що доводить лік до порогу, ще шле свій сигнал; режим ставиться
+   * одразу за її ядром, до будь-якої наступної фази, й більше не знімається.
+   * Лік синхронний із чергою: паралельні `ctx.run` хука лічаться в тому
+   * порядку, в якому їхні ядра йдуть до бази. Повертає й обіцянку оператора
+   * режиму, щоб фаза дочекалася його відмови.
+   */
+  signalPhase(
+    signals: boolean,
+    phase: ErrorPhase
+  ): { merged: boolean; switched?: Promise<unknown> } {
+    if (!signals) return { merged: false }
+    if (this.signalMerge) return { merged: true }
+    if (++this.signalPhases < this.state.signalMergeThreshold) {
+      return { merged: false }
+    }
+    this.signalMerge = true
+    const switched = this.enqueue([MERGE_MODE], phase)
+    // Відмову ядра фаза бачить першою; ця обіцянка тоді лишилася б без обробника.
+    switched.catch(() => undefined)
+    return { merged: false, switched }
+  }
+
+  /**
+   * `invalidate` пари (скоуп, об'єкт) у режимі злиття — один на пару, на
+   * фазі, а не перед `COMMIT`: пізніша фаза могла б вивести писаря зі
+   * скоупу, і режим відправки відхилив би сигнал. Пара — з каталогу й рядка
+   * ядра (Р9): нескоуплений об'єкт — `ZERO_UUID`.
+   */
+  async invalidate(
+    object: RuntimeObject,
+    scope: unknown,
+    phase: ErrorPhase
+  ): Promise<void> {
+    const scopeId = typeof scope === "string" ? scope : ZERO_UUID
+    const pair = `${object.id}:${scopeId}`
+    if (this.invalidated.has(pair)) return
+    this.invalidated.add(pair)
+    await this.enqueue(
+      [
+        statement(
+          INVALIDATE_TEXT,
+          object.id,
+          object.scopeKindId ?? ZERO_UUID,
+          scopeId
+        ),
+      ],
+      phase
+    )
   }
 
   /** Closes the queue; the first failure decides the attempt. */

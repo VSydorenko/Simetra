@@ -72,6 +72,14 @@ granted to the owner needs `WITH INHERIT TRUE`, because `simetra_owner` is
 A login role a test creates gets a unique name: a pooler caches the secret by
 role name, so a role re-created with the same name and a new password fails
 with `28P01`, and a retry does not help.
+A test never changes a role the stack already has: no password, membership or
+setting on a platform role (`simetra_signals`, `simetra_signal_consumer`, …),
+not even with a reset in `afterAll`. Another session sees the change while the
+run lasts and after a SIGKILL; a tagged member of a platform group also makes
+the role gate refuse every `plan` on the stack. Create a run-tagged copy of
+the same shape instead, derive its shape from the T0 role data
+(`LOGIN_ROLE_PARENTS`, `LOGIN_ROLE_SETTINGS`), and pin that shape with one case
+that compares the copy with T0.
 Seed users only through provisioning or `signUp` (`packages/simetra/test/db/auth.ts`):
 a bare row in the users catalog has no identity, so `current_user_id()` returns
 `NULL` and every command fails with a misleading `no-right`.

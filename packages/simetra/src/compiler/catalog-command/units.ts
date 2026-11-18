@@ -10,8 +10,10 @@ import {
   type PhysicalSnapshot,
   type PhysicalTable,
   COMMAND_CORE_ERRORS,
+  ZERO_UUID,
   isTextEncodedType,
   jsonbBuildObject,
+  type ChangeSignal,
 } from "simetra/model"
 import type { CompiledScopeKind } from "../compile"
 import type {
@@ -23,7 +25,7 @@ import type {
 import { compareStrings } from "../diagnostics"
 import { hierarchyLockSql } from "../hierarchy-units"
 import { CURRENT_USER } from "../membership-functions"
-import { tenantBoundary } from "../access-units"
+import { isSignalObject, tenantBoundary } from "../access-units"
 import { dollarTag } from "../movement-functions"
 import {
   AUTHOR_CARRIER_SOURCES_FUNCTION,
@@ -32,7 +34,7 @@ import {
   type CarrierLink,
 } from "../rights/carrier-units"
 import { COMMAND_FUNCTIONS } from "../rights/command-units"
-import { hasRightsFunctions } from "../rights/functions"
+import { hasRightsFunctions, uuidLiteral } from "../rights/functions"
 import {
   rootCreatorFunction,
   rootCreatorFunctionName,
@@ -54,6 +56,7 @@ import {
 } from "./contracts"
 import { memberCheckFunction } from "./member-check"
 import { ROW_VERSION_SETTING } from "../mechanics-units"
+import { SIGNAL_FUNCTIONS } from "../signal/names"
 
 const q = quoteIdent
 const relation = (t: { schema: string; name: string }) =>
@@ -198,14 +201,32 @@ export function buildCatalogCommandUnits(
   }
   // Ядро кореня кличе перевірку членства й функцію гранту цього генератора.
   const known = [...input.units, ...units]
+  // Ознаку `signal` каталогу рантайму й виклик сигналу вирішує одне
+  // джерело — `isSignalObject` (спека П4-B §8.3).
+  const signalModel = {
+    physical: input.physical,
+    contracts,
+    project: { database: { provider } },
+  }
   for (const contract of commands) {
     const rights = rightsById.get(contract.objectId)!
+    const access = accessByTable.get(relation(contract.table))
     const parts = coreParts(contract, {
       rights,
-      access: accessByTable.get(relation(contract.table)),
+      access,
       attributeCase: input.attributeCase,
       authorLink: (link) =>
         authorLinks.has(`${relation(link.table)}\0${link.through}`),
+      signal:
+        access === undefined || !isSignalObject(signalModel, contract.objectId)
+          ? undefined
+          : {
+              objectId: contract.objectId,
+              scopeKindId: access.scope?.scopeKindId ?? ZERO_UUID,
+              ...(access.scope === undefined
+                ? {}
+                : { carrier: access.scope.carrier }),
+            },
     })
     // Функція є рівно для тих дій, що їх дав контракт (спека П4 §6.6): позначки
     // немає в «Користувачів», видалення — лише в «Призначень», ядро
@@ -361,7 +382,7 @@ function rootCreators(
  * які називають вирази тіла, — явні ребра. Функції — лише ті, що їх дають
  * інші генератори (вбудовані порядку не потребують); таблиці — зі знімка.
  */
-function bodyRequires(
+export function bodyRequires(
   sql: string,
   input: Pick<CatalogCommandInput, "physical" | "units" | "parse" | "plpgsql">
 ): CreationNode[] {
@@ -414,6 +435,17 @@ interface CoreFacts {
   access: AccessContract | undefined
   attributeCase: AttributeCase
   authorLink: (link: CarrierLink) => boolean
+  /** Сигнальний об'єкт (спека П4-B §8.3); немає — ядро сигналу не шле. */
+  signal: SignalTarget | undefined
+}
+
+/** Канал сигналу об'єкта: вид скоупу й колонка-носій скоупу рядка. */
+interface SignalTarget {
+  objectId: string
+  /** Вид скоупу каналу; нескоуплений — `ZERO_UUID`. */
+  scopeKindId: string
+  /** Носій скоупу основної таблиці (у кореня — його `id`); немає — нескоуплений. */
+  carrier?: string
 }
 
 /** Значення колонки за замовчуванням зі знімка чи `NULL`. */
@@ -642,6 +674,11 @@ interface CoreParts {
     reason: string
   ) => string[]
   /**
+   * `PERFORM simetra.signal(…)` рядка `row` (спека П4-B §8.2): ключ і скоуп —
+   * з `row`, версія — вираз `version`; несигнальний об'єкт — нічого.
+   */
+  signal: (row: string, op: string, version: string) => string[]
+  /**
    * Рядок «до» під замком (спека П4 §6.6: після контексту) і версія. Сила замка —
    * за дією функції (спека П4 §6.6): зміна — `NO KEY UPDATE`, видалення — `UPDATE`.
    */
@@ -704,6 +741,17 @@ function coreParts(
           [copyRead(link)]
         )
       ),
+    signal: (row, op, version) => {
+      const target = facts.signal
+      if (target === undefined) return []
+      const scope =
+        target.carrier === undefined
+          ? uuidLiteral(ZERO_UUID)
+          : `${row}.${q(target.carrier)}`
+      return [
+        `PERFORM ${relation(SIGNAL_FUNCTIONS.signal)}(${uuidLiteral(target.objectId)}, ${uuidLiteral(target.scopeKindId)}, ${scope}, jsonb_build_object(${sqlLiteral(key)}, ${row}.${q(key)}), ${version}, ${op});`,
+      ]
+    },
     rightsIf: (action, dml, row, reason) =>
       ifThen(
         `(${rightsCheck(facts.rights, action, table, row, dml)}) IS NOT TRUE`,
@@ -864,6 +912,12 @@ function saveFunction(
       ...indent(updateBranch),
       "END IF;",
       ...tabularLines(contract, scope, ownScopeKind),
+      // Після DML шапки й ТЧ, з версією «після» (спека П4-B §8.2).
+      ...parts.signal(
+        "v_row",
+        `CASE WHEN p_expected_version IS NULL THEN ${signalOp("create")} ELSE ${signalOp("update")} END`,
+        `v_row.${q(contract.versionColumn)}`
+      ),
       ...resultLines(contract, root, true),
     ]
   )
@@ -1439,6 +1493,12 @@ function createRootFunction(
           "v_member",
           "v_member_version"
         )),
+    // Останнім кроком і лише з творцем (Р8 плану B2): у моделі оператора
+    // актор нового скоупу не бачить, і режим відправки відхилив би сигнал.
+    // Версія — з налаштування механіки: `INSERT` кореня — без `RETURNING`.
+    ...(creator === undefined
+      ? []
+      : parts.signal("v_in", signalOp("create"), "v_root_version::bigint")),
     "RETURN jsonb_build_object('root', v_result, 'member', v_member)::text;",
   ]
   return coreFunction(
@@ -1516,6 +1576,11 @@ function markDeletionFunction(
     // Відкликання права між замком і `UPDATE` — нуль рядків, відмова.
     "GET DIAGNOSTICS v_count = ROW_COUNT;",
     ...ifThen("v_count = 0", [noRight]),
+    ...parts.signal(
+      "v_row",
+      signalOp("markDeletion"),
+      `v_row.${q(contract.versionColumn)}`
+    ),
     ...resultLines(contract, root, false),
   ]
   return coreFunction(
@@ -1567,6 +1632,12 @@ function deleteFunction(
     // Відкликання права між замком і `DELETE` — нуль рядків, відмова.
     "GET DIAGNOSTICS v_count = ROW_COUNT;",
     ...ifThen("v_count = 0", [noRight]),
+    // Версія й скоуп — стану «до»: рядка вже немає (спека П4-B §8.2).
+    ...parts.signal(
+      "v_old",
+      signalOp("delete"),
+      `v_old.${q(contract.versionColumn)}`
+    ),
     `RETURN jsonb_build_object(${sqlLiteral(key)}, ${root}, ${sqlLiteral(contract.versionColumn)}, v_old.${q(contract.versionColumn)}::text${scope})::text;`,
   ]
   return coreFunction(
@@ -1576,6 +1647,9 @@ function deleteFunction(
     statements
   )
 }
+
+/** Операція сигналу зміни рядка (схема відправки T0, спека П4-B §8.1). */
+const signalOp = (op: ChangeSignal["op"]) => sqlLiteral(op)
 
 function must<T>(value: T | undefined): T {
   if (value === undefined) throw new Error("internal: missing command input")

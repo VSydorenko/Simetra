@@ -11,6 +11,7 @@ import {
   COMMAND_SETTING,
   RIGHTS_MAINTENANCE_SETTING,
   SESSION_CLAIMS_SETTING,
+  SIGNAL_MODE_SETTING,
 } from "simetra/model"
 import ts from "typescript"
 import { describe, expect, it } from "vitest"
@@ -40,6 +41,8 @@ const ALLOWED_SETTINGS = [
   SESSION_CLAIMS_SETTING,
   COMMAND_SETTING,
   RIGHTS_MAINTENANCE_SETTING,
+  // Режим злиття сигналів ставить і скидає T3 (спека П4-B §8.2).
+  SIGNAL_MODE_SETTING,
 ]
 
 /** Сталі налаштувань, дозволені підстановкою першим аргументом `set_config`. */

@@ -402,6 +402,9 @@ describe("buildRuntimeCatalog: signal", () => {
       (o) => o.name === "Organization"
     )
     expect(organization?.signal).toBe(true)
+    // Пара `invalidate` кореня в T3 (Р9 плану B2) — колонка скоупу каталогу;
+    // носій сигналу ядра — та сама колонка з `origin.scopeKindId`: ключ.
+    expect(organization?.scopeColumn).toBe(organization?.key)
   })
 
   // Ознака не залежить від набору операцій запису: генератор ядра (B2)
@@ -812,14 +815,15 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
 
   // Мапа — не частина знімка: хеш фікстури той самий, що до появи мапи
   // (обчислений на коміті до неї). Зміна фікстури чи платформних таблиць
-  // знімка (outbox сигналів) змінює і цей літерал.
+  // знімка (outbox сигналів) чи нові згенеровані одиниці (оракул сигналу,
+  // функції відправки й виклик сигналу в ядрі) змінюють і цей літерал.
   it("stays outside the canonical snapshot and the hash", async () => {
     const { model: m } = await checksOf(policyDomain(runtimeValuesLayer()))
     expect(m.checkColumns.length).toBeGreaterThan(0)
     expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
-      "7220d4c15aa582f35757157444723f0ad0498ece06939aa3e3a024d2747d6740"
+      "60bae9ffe489affe8d438a7458511e6abb816dae6ee607c8ed3f99ec04cf57e9"
     )
   })
 })
