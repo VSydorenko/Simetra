@@ -244,6 +244,26 @@ describe("declaration key: a (schema, name) pair", () => {
   })
 })
 
+describe("declaredFunctions", () => {
+  // Нерезолвлена декларація не має давати функції ні виключення з боргу, ні
+  // (далі) `EXECUTE`: декларація описує лише функцію сусіднього `.sql`.
+  it("does not resolve a function of another .sql file", () => {
+    expect(
+      declaredFunctions(
+        [
+          {
+            file: FUNCTIONS,
+            sqlFile: SQL,
+            functions: [declaration({ name: "g" })],
+          },
+        ],
+        [unit("public", "g", OTHER_SQL)],
+        "public"
+      )
+    ).toEqual([])
+  })
+})
+
 function unit(schema: string, name: string, file: string): VerbatimUnit {
   return {
     class: "function",
