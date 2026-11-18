@@ -364,7 +364,8 @@ export async function runStages(
         stage1.project,
         integrity
       ),
-      rightsCatalogTables(stage1.objects, physical)
+      rightsCatalogTables(stage1.objects, physical),
+      declared
     ),
   ])
   const ok = !hasErrors(staged)

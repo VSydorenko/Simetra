@@ -13,7 +13,7 @@ import {
   providerCalls,
   type CommandContextHit,
 } from "./command-context"
-import type { DeclaredFunction } from "./declarations"
+import type { DeclaredFunction, PlatformForm } from "./declarations"
 import { isExpressionUnit } from "./expression-calls"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
@@ -304,6 +304,52 @@ export function platformWrite(hit: CommandContextHit): boolean {
   )
 }
 
+/** Функція форми платформи: пара `(schema, name)` після підстановки `defaultSchema`. */
+export interface PlatformFormSource {
+  function: { schema: string; name: string }
+  form: PlatformForm
+}
+
+/**
+ * Функції форм платформи — єдине джерело переліку (спека декларацій функцій
+ * §5.3): функції множини видів скоупу, обробники підписок і функції значень
+ * вимірів доступу, у цьому порядку. Решта переліків — його проєкції
+ * (`ruledFunctions`, `platformFormFunctions`), тож нова форма (функція
+ * політики, Д5) додається тут один раз. Згенерована функція множини
+ * (`membership`) — не дослівна одиниця, тож її тут немає.
+ */
+export function platformFormSources(
+  objects: readonly ParsedObject[],
+  project: Project | undefined
+): PlatformFormSource[] {
+  if (project === undefined) return []
+  const source = (
+    fn: { schema?: string; name: string },
+    form: PlatformForm
+  ): PlatformFormSource => ({
+    function: { schema: fn.schema ?? project.defaultSchema, name: fn.name },
+    form,
+  })
+  return [
+    ...project.scopeKinds.flatMap((kind) =>
+      typeof kind.setFunction === "string"
+        ? []
+        : [source(kind.setFunction, "setFunction")]
+    ),
+    ...objects.flatMap((o) => {
+      const spec = KIND_REGISTRY[o.kind].subscription?.(o.data)
+      return spec === undefined
+        ? []
+        : [source(spec.handler, "subscriptionHandler")]
+    }),
+    ...project.accessDimensions.flatMap((dimension) =>
+      "function" in dimension.values
+        ? [source(dimension.values.function, "dimension")]
+        : []
+    ),
+  ]
+}
+
 /**
  * Ідентичності функцій без аргументів, які оголошують метадані: обробники
  * підписок і функції множини видів скоупу. Обидві мають власні правила
@@ -313,21 +359,10 @@ export function ruledFunctions(
   objects: readonly ParsedObject[],
   project: Project | undefined
 ): ReadonlySet<string> {
-  if (project === undefined) return new Set()
-  const declared = [
-    ...objects.flatMap((o) => {
-      const spec = KIND_REGISTRY[o.kind].subscription?.(o.data)
-      return spec === undefined ? [] : [spec.handler]
-    }),
-    // Згенерована функція множини (`membership`) — не дослівна одиниця.
-    ...project.scopeKinds.flatMap((kind) =>
-      typeof kind.setFunction === "string" ? [] : [kind.setFunction]
-    ),
-  ]
   return new Set(
-    declared.map((fn) =>
-      functionIdentity(fn.schema ?? project.defaultSchema, fn.name, [])
-    )
+    platformFormSources(objects, project)
+      .filter((s) => s.form !== "dimension")
+      .map((s) => functionIdentity(s.function.schema, s.function.name, []))
   )
 }
 

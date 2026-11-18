@@ -1395,6 +1395,46 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Функції множини видів скоупу, обробники підписок і функції значень вимірів доступу отримують гранти від платформи. Видаліть декларацію цієї функції.",
     },
   },
+  "sql.declaration-check-missing": {
+    en: (p) =>
+      `${p.function} is SECURITY DEFINER and acts for a user (callers user or command), but its declaration names no check`,
+    uk: (p) =>
+      `${p.function} — SECURITY DEFINER і діє від імені користувача (викликачі user чи command), але декларація не називає перевірки`,
+    hint: {
+      en: "A SECURITY DEFINER function runs as its owner, who bypasses row level security, and the command role acts for the user, so a command hook with an id from the client would read past the rights. Name the check in the declaration (check: action, object, row or scope), make the function SECURITY INVOKER, or leave only the service caller.",
+      uk: "Функція SECURITY DEFINER виконується від свого власника, який обходить захист рядків, а роль команд діє від імені користувача, тож хук команди з id від клієнта читав би повз права. Назвіть перевірку в декларації (check: action, object, row чи scope), зробіть функцію SECURITY INVOKER або залиште лише викликача service.",
+    },
+  },
+  "sql.declaration-check-not-applied": {
+    en: (p) =>
+      `${p.function} is SECURITY DEFINER with callers that act for a user, and its body does not prove the named check (${p.reason})`,
+    uk: (p) =>
+      `${p.function} — SECURITY DEFINER з викликачами від імені користувача, і тіло не доводить названої перевірки (${p.reason})`,
+    hint: {
+      en: "The named check counts only once the body applies it through the platform call guard; until the compiler can prove the guard, such a function is refused. Make the function SECURITY INVOKER or leave only the service caller.",
+      uk: "Названа перевірка діє, лише коли тіло застосовує її запобіжником виклику платформи; доки компілятор не може довести запобіжник, така функція відхиляється. Зробіть функцію SECURITY INVOKER або залиште лише викликача service.",
+    },
+  },
+  "sql.declaration-anonymous-definer": {
+    en: (p) =>
+      `${p.function} is SECURITY DEFINER and declares the anonymous caller`,
+    uk: (p) =>
+      `${p.function} — SECURITY DEFINER і декларує анонімного викликача`,
+    hint: {
+      en: "A role without a session has no user to check, so a SECURITY DEFINER function would read past the rights for anyone. Remove anonymous from the callers or make the function SECURITY INVOKER.",
+      uk: "Роль без сесії не має користувача для перевірки, тож функція SECURITY DEFINER читала б повз права для будь-кого. Приберіть anonymous із викликачів або зробіть функцію SECURITY INVOKER.",
+    },
+  },
+  "sql.default-privileges-execute": {
+    en: (p) =>
+      `ALTER DEFAULT PRIVILEGES at line ${p.line} grants privileges on functions created later`,
+    uk: (p) =>
+      `ALTER DEFAULT PRIVILEGES у рядку ${p.line} дає права на функції, створені пізніше`,
+    hint: {
+      en: "Default privileges would give EXECUTE to future functions past the grants the platform derives, and only the platform derives EXECUTE. Remove the statement and declare the callers of each function in its .functions.json; a REVOKE of default privileges stays allowed.",
+      uk: "Типові привілеї дали б EXECUTE майбутнім функціям повз гранти, які виводить платформа, а EXECUTE виводить лише платформа. Приберіть оператор і задекларуйте викликачів кожної функції в її .functions.json; REVOKE типових привілеїв лишається дозволеним.",
+    },
+  },
   "sql.debt-stale": {
     en: (p) =>
       `sql-debt.json lists ${p.identity}, which is no longer verbatim SQL debt`,

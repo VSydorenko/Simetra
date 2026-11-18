@@ -269,26 +269,44 @@ const NO_LOSS = (scope: EngineScope): Loss => ({
 const qualifiedName = (f: { schema: string; name: string }) =>
   `${f.schema}.${f.name}`
 
-/** Помилки прийому — рівно відмови `definers`, решти немає. */
-function expectRefusedDefiners(
+/** Відмова прийому — помилка класу ремонту з її ключем `{ code, schema, name }` (Р7). */
+export interface Refusal {
+  code: string
+  schema: string
+  name: string
+}
+
+const definerRefusals = (definers: Loss["definers"]): Refusal[] =>
+  definers.map((f) => ({
+    code: "sql.definer-caller-unchecked",
+    schema: f.schema,
+    name: f.name,
+  }))
+
+/** Помилки прийому — рівно відмови `refusals`, решти немає. */
+function expectRefusals(
   diagnostics: readonly {
     severity: string
     code: string
     params?: Record<string, unknown>
   }[],
-  definers: Loss["definers"]
+  refusals: readonly Refusal[]
 ): void {
   expect(
     errors(diagnostics).map((d) => ({
       code: d.code,
-      function: d.params?.function,
+      schema: d.params?.schema,
+      name: d.params?.name,
     }))
-  ).toEqual(
-    definers.map((f) => ({
-      code: "sql.definer-caller-unchecked",
-      function: qualifiedName(f),
-    }))
-  )
+  ).toEqual(refusals)
+}
+
+/** Помилки прийому — рівно відмови `definers`, решти немає. */
+function expectRefusedDefiners(
+  diagnostics: Parameters<typeof expectRefusals>[0],
+  definers: Loss["definers"]
+): void {
+  expectRefusals(diagnostics, definerRefusals(definers))
 }
 
 /**
@@ -398,6 +416,33 @@ async function refusedRoundTrip(
   project: Project,
   loss: Loss
 ): Promise<Map<string, string>> {
+  const { extracted, files } = await refusedAdoption(
+    target,
+    extractScope,
+    project,
+    definerRefusals(loss.definers)
+  )
+  await expectKindLabelsKept(extracted, project, files, loss.definers)
+  return files
+}
+
+/**
+ * Прийом, який компілятор відмовляє: extract без помилок, а помилки
+ * зворотної генерації — рівно `refusals` (класу ремонту). Моделі з такою
+ * текою немає, тож ланцюжок §9 закінчується тут. Повертає витяг, теку,
+ * діагностики й оракул цілі (тіні без моделі немає).
+ */
+export async function refusedAdoption(
+  target: DbConnection,
+  extractScope: EngineScope,
+  project: Project,
+  refusals: readonly Refusal[]
+): Promise<{
+  extracted: Extracted
+  files: Map<string, string>
+  diagnostics: Awaited<ReturnType<typeof reverseGenerate>>["diagnostics"]
+  target: OracleShape
+}> {
   await withPlatformSequence(target)
   const extracted = await engine.extract(target, extractScope)
   expect(errors(extracted.diagnostics)).toEqual([])
@@ -408,9 +453,15 @@ async function refusedRoundTrip(
     schemaPath,
     parse,
   })
-  expectRefusedDefiners(reversed.diagnostics, loss.definers)
-  await expectKindLabelsKept(extracted, project, reversed.files, loss.definers)
-  return new Map(reversed.files)
+  expectRefusals(reversed.diagnostics, refusals)
+  return {
+    extracted,
+    files: new Map(reversed.files),
+    diagnostics: reversed.diagnostics,
+    target: await withClient(target, (c) =>
+      readOracle(c, [...extractScope.schemas])
+    ),
+  }
 }
 
 /**

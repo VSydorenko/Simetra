@@ -11,7 +11,13 @@ import {
   dimensionFunction,
   teamScopeKind,
 } from "./fixtures/rights"
-import { SCOPE_FUNCTIONS_FILE, metaFiles, project, uuid } from "./helpers"
+import {
+  SCOPE_FUNCTIONS_FILE,
+  acceptDebt,
+  metaFiles,
+  project,
+  uuid,
+} from "./helpers"
 
 const SQL = "sql/public/fns.sql"
 const FUNCTIONS = "sql/public/fns.functions.json"
@@ -335,5 +341,287 @@ describe("sql.declaration-platform-form", () => {
         { ...keyParams("public", name), form },
       ],
     ])
+  })
+})
+
+/** Definer-функція в закритій оболонці: ні боргу, ні інших діагностик. */
+const definer = (name: string) =>
+  `CREATE FUNCTION ${name}() RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;\n`
+
+const CHECK: NonNullable<SqlFunctionDeclaration["check"]> = {
+  action: "read",
+  object: { kind: "Catalog", name: "Project" },
+}
+
+const CALLER_CODES = [
+  "sql.declaration-check-missing",
+  "sql.declaration-check-not-applied",
+  "sql.declaration-anonymous-definer",
+  "sql.definer-caller-unchecked",
+  "sql.definer-reads-rls",
+]
+
+async function callerDiagnostics(files: Map<string, string>) {
+  const { diagnostics } = await compile(files)
+  return diagnostics
+    .filter((d) => CALLER_CODES.includes(d.code))
+    .map((d) => [d.code, d.file, d.pointer, d.params])
+}
+
+// Інваріант 4: definer-функція з викликачами від імені користувача не
+// компілюється без доведеної перевірки; у Д1 довести її нічим (Р3).
+describe("callers of a declared SECURITY DEFINER function", () => {
+  const declared = (entry: SqlFunctionDeclaration, sql = definer("public.f")) =>
+    callerDiagnostics(
+      metaFiles({
+        "project.meta.json": project(),
+        [SQL]: sql,
+        [FUNCTIONS]: functionsFile(entry),
+      })
+    )
+  const at = (code: string, extra: Record<string, string> = {}) => [
+    code,
+    FUNCTIONS,
+    "/functions/0",
+    { ...keyParams("public", "f"), ...extra },
+  ]
+
+  it.each<{
+    name: string
+    callers: SqlFunctionDeclaration["callers"]
+    check?: boolean
+    expected: unknown[]
+  }>([
+    {
+      name: "user without check is check-missing",
+      callers: ["user"],
+      expected: [at("sql.declaration-check-missing")],
+    },
+    {
+      // Роль команд діє від імені користувача (спека прав §5.2).
+      name: "command without check is check-missing",
+      callers: ["command"],
+      expected: [at("sql.declaration-check-missing")],
+    },
+    {
+      name: "user with check is check-not-applied: no guard to prove it",
+      callers: ["user"],
+      check: true,
+      expected: [
+        at("sql.declaration-check-not-applied", { reason: "guardUnavailable" }),
+      ],
+    },
+    {
+      name: "command with check is check-not-applied",
+      callers: ["command", "service"],
+      check: true,
+      expected: [
+        at("sql.declaration-check-not-applied", { reason: "guardUnavailable" }),
+      ],
+    },
+    {
+      name: "anonymous is anonymous-definer",
+      callers: ["anonymous"],
+      expected: [at("sql.declaration-anonymous-definer")],
+    },
+    {
+      name: "anonymous and user are both refused",
+      callers: ["anonymous", "user"],
+      expected: [
+        at("sql.declaration-anonymous-definer"),
+        at("sql.declaration-check-missing"),
+      ],
+    },
+    {
+      // Сервісна роль не діє від імені користувача.
+      name: "service alone compiles without a check",
+      callers: ["service"],
+      expected: [],
+    },
+    {
+      name: "no callers compile without a check",
+      callers: [],
+      expected: [],
+    },
+  ])("$name", async ({ callers, check, expected }) => {
+    const entry = {
+      ...declaration({ name: "f" }, callers),
+      ...(check === true ? { check: CHECK } : {}),
+    }
+    expect(await declared(entry)).toEqual(expected)
+  })
+
+  it("an invoker function with every caller compiles clean", async () => {
+    const files = metaFiles({
+      "project.meta.json": project(),
+      [SQL]: fn("public.f"),
+      [FUNCTIONS]: functionsFile(
+        declaration({ name: "f" }, ["user", "anonymous", "service", "command"])
+      ),
+    })
+    expect((await compile(files)).diagnostics).toEqual([])
+  })
+})
+
+// Р7: кожна помилка класу ремонту ототожнюється кортежем `code`, `schema`,
+// `name`, тож кожен код класу несе обидва параметри.
+describe("repair-class codes carry params.schema and params.name", () => {
+  // Дослівний ADP — борг: його приймає ратчет, предмет тесту — інше правило.
+  const compiled = async (entries: Record<string, string>) =>
+    (
+      await compile(
+        await acceptDebt(
+          metaFiles({ "project.meta.json": project(), ...entries })
+        )
+      )
+    ).diagnostics
+
+  it.each<{
+    code: string
+    diagnostics: () => Promise<readonly { code: string; params?: object }[]>
+    schema: string
+    name: string
+  }>([
+    {
+      code: "sql.definer-caller-unchecked",
+      diagnostics: () => compiled({ [SQL]: definer("public.f") }),
+      schema: "public",
+      name: "f",
+    },
+    {
+      code: "sql.declaration-check-missing",
+      diagnostics: () =>
+        compiled({
+          [SQL]: definer("public.f"),
+          [FUNCTIONS]: functionsFile(declaration({ name: "f" }, ["user"])),
+        }),
+      schema: "public",
+      name: "f",
+    },
+    {
+      code: "sql.declaration-check-not-applied",
+      diagnostics: () =>
+        compiled({
+          [SQL]: definer("public.f"),
+          [FUNCTIONS]: functionsFile({
+            ...declaration({ name: "f" }, ["user"]),
+            check: CHECK,
+          }),
+        }),
+      schema: "public",
+      name: "f",
+    },
+    {
+      code: "sql.declaration-platform-form",
+      diagnostics: async () =>
+        (
+          await compiledPolicyDomain(
+            {
+              "sql/public/region.sql": DIMENSION_SQL,
+              "sql/public/region.functions.json": functionsFile(
+                declaration({ name: "region_ids" }, [])
+              ),
+            },
+            [dimensionFunction()]
+          )
+        ).diagnostics,
+      schema: "public",
+      name: "region_ids",
+    },
+    {
+      code: "sql.default-privileges-execute",
+      diagnostics: () =>
+        compiled({
+          "sql/app/adp.sql":
+            "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA app GRANT EXECUTE ON FUNCTIONS TO anon;\n",
+        }),
+      schema: "app",
+      name: "postgres",
+    },
+  ])("$code", async ({ code, diagnostics, schema, name }) => {
+    const found = (await diagnostics()).filter((d) => d.code === code)
+    expect(found).toHaveLength(1)
+    expect(found[0]!.params).toMatchObject({ schema, name })
+  })
+})
+
+// Р15, інваріант 9: типові привілеї не віддають `EXECUTE` майбутнім функціям
+// повз виведені гранти.
+describe("sql.default-privileges-execute", () => {
+  const ADP_FILE = "sql/app/adp.sql"
+  const adp = async (entries: Record<string, string>) =>
+    (
+      await compile(
+        await acceptDebt(
+          metaFiles({ "project.meta.json": project(), ...entries })
+        )
+      )
+    ).diagnostics
+      .filter((d) => d.code === "sql.default-privileges-execute")
+      .map((d) => [d.file, d.params])
+
+  it.each<{ name: string; entries: Record<string, string> }>([
+    {
+      name: "beside a declared service-only definer function",
+      entries: {
+        [SQL]: definer("public.f"),
+        [FUNCTIONS]: functionsFile(declaration({ name: "f" }, ["service"])),
+      },
+    },
+    {
+      name: "beside an undeclared definer function",
+      entries: { [SQL]: definer("public.f") },
+    },
+  ])("an ADP in schema app is refused $name", async ({ entries }) => {
+    expect(
+      await adp({
+        ...entries,
+        [ADP_FILE]:
+          "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT EXECUTE ON FUNCTIONS TO authenticated;\n",
+      })
+    ).toEqual([[ADP_FILE, { schema: "app", name: "", line: 1 }]])
+  })
+
+  it.each([
+    // Postgres розбирає ROUTINES у той самий клас об'єктів, що й FUNCTIONS.
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT EXECUTE ON ROUTINES TO anon;",
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON ROUTINES TO PUBLIC;",
+    // Глобальний ADP досягає кожної схеми.
+    "ALTER DEFAULT PRIVILEGES GRANT EXECUTE ON FUNCTIONS TO anon;",
+    // Виняток провайдера — лише в його керованій схемі.
+    "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA app GRANT ALL ON FUNCTIONS TO postgres, anon, authenticated, service_role;",
+  ])("refuses %s", async (statement) => {
+    expect(await adp({ [ADP_FILE]: `${statement}\n` })).toHaveLength(1)
+  })
+
+  it.each([
+    // ADP пресету Supabase у керованій `public`: не SQL застосунку.
+    "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON FUNCTIONS TO postgres, anon, authenticated, service_role;",
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon;",
+  ])(
+    "the provider owner's ADP in public is not judged: %s",
+    async (statement) => {
+      expect(await adp({ [SQL]: `${statement}\n` })).toEqual([])
+    }
+  )
+
+  it.each([
+    // Роль команд не має типових привілеїв, які рахувало б `checkDefinerReads`.
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO simetra_command;",
+    // ADP іншої ролі — не ADP провайдера.
+    "ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon;",
+  ])(
+    "an ADP in public outside the provider preset is refused: %s",
+    async (statement) => {
+      expect(await adp({ [SQL]: `${statement}\n` })).toHaveLength(1)
+    }
+  )
+
+  it.each([
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA app REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;",
+    "ALTER DEFAULT PRIVILEGES REVOKE ALL ON ROUTINES FROM anon;",
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO anon;",
+  ])("does not judge %s", async (statement) => {
+    expect(await adp({ [ADP_FILE]: `${statement}\n` })).toEqual([])
   })
 })
