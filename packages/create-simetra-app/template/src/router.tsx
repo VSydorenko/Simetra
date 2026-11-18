@@ -44,8 +44,7 @@ interface Dehydrated {
 /** Фабрика на кожен запит (§4.6): рантайм і тримач живуть не довше запиту. */
 export function getRouter() {
   const scope = createHostScope({
-    // Адресу входу беремо рядком: маршрут входу додає шар маршрутів
-    toLogin: () => void router.navigate({ href: "/login", replace: true }),
+    toLogin: () => void router.navigate({ to: "/login", replace: true }),
     onResponseEnd: (action) => {
       // Без `serverSsr` закрити рантайм запиту нічим: це збій, а не пропуск
       if (router.serverSsr === undefined) {

@@ -10,3 +10,8 @@ export const app = simetraApp(clientCatalog)
 
 /** Хеш каталогу клієнта: ним позначено відмови, що не дійшли до сервера. */
 export const clientHash: string = clientCatalog.snapshotHash
+
+// Дескриптори об'єктів для маршрутів: невідомий об'єкт падає при імпорті
+// модуля, а не першим переходом (спека П4-D §6)
+export const Client = app.object({ kind: "Catalog", name: "Client" })
+export const Country = app.object({ kind: "Catalog", name: "Country" })
