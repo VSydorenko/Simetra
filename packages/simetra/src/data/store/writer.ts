@@ -846,7 +846,10 @@ async function revalidateViews(
     targets.map((s) => [s, { gen: s.gen, flight: s.flight }] as const)
   )
   const startedAt = ctx.now()
-  for (const s of targets) s.rereads++
+  for (const s of targets) {
+    s.rereads++
+    s.rereadEpochs.push(startEpoch)
+  }
   const purgesAtStart = new Map(ctx.purges)
   const purgedSince = (name: ObjectName) =>
     (ctx.purges.get(name) ?? 0) !== (purgesAtStart.get(name) ?? 0)
@@ -858,6 +861,10 @@ async function revalidateViews(
       )
     )
   )
+  for (const s of targets) {
+    const at = s.rereadEpochs.indexOf(startEpoch)
+    if (at >= 0) s.rereadEpochs.splice(at, 1)
+  }
   const again: Subset[] = []
   const discarded: Subset[] = []
   session.commit(

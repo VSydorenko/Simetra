@@ -96,6 +96,8 @@ export interface Subset extends ReaderTarget {
   gen: number
   /** The generation of the load in flight. */
   flight: number | undefined
+  /** The start epochs of the system re-reads (`revalidate`) in flight. */
+  rereadEpochs: number[]
   trailing: boolean
   /** At least one load finished (or a card showed its stored row). */
   settled: boolean
@@ -718,6 +720,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       alive: true,
       gen: 0,
       flight: undefined,
+      rereadEpochs: [],
       trailing: false,
       settled: false,
       loaded: false,

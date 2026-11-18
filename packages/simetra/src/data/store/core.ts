@@ -748,7 +748,14 @@ export function createCore(options: {
     const stale = (o: ObjectState, keys: Iterable<Key>) => {
       for (const key of keys) {
         const e = o.rows.get(key)
-        if (e !== undefined && e.writtenEpoch < hydrationEpoch) return true
+        // `removed` не лишає недовірених значень; слот `hidden` (без значень)
+        // лишається: лише читання після гідратації знімає позначку.
+        if (
+          e !== undefined &&
+          e.removed === undefined &&
+          e.writtenEpoch < hydrationEpoch
+        )
+          return true
       }
       return false
     }
@@ -765,6 +772,10 @@ export function createCore(options: {
     if (!(s.visible ?? s.listeners.size > 0)) return
     if (defects.has("hydrated-row-not-reread") && !heldBySnapshot.has(s)) return
     if (!overHydratedRows(s)) return
+    // Читання, що стартувало після гідратації, уже в польоті (звірка чи `revalidate`):
+    // його відповідь зробить рядки довіреними; власне завантаження ловить
+    // `revalidateHydrated` (`flight`).
+    if (s.rereadEpochs.some((at) => at >= hydrationEpoch)) return
     revalidateHydrated(writerContext, s).catch((error: unknown) =>
       log({ kind: "listener-failed", error })
     )

@@ -738,6 +738,99 @@ describe("a hydrated view first shown after the reconciliation", () => {
     expect(t.reads() - before).toBe(0)
   })
 
+  it.each([
+    ["card", card(1)],
+    ["keys view", keysView(1, 2)],
+  ])(
+    "a %s over a row the server deleted is not re-read on later subscriptions",
+    async (_name, spec) => {
+      const t = await hydrated([spec], { preload: true })
+      t.fake.remove(TASK, key(1))
+      const first = watch(t.core.view(spec))
+      await settle()
+      const before = t.reads()
+      first.unsubscribe()
+      for (let n = 0; n < 3; n++) {
+        const w = watch(t.core.view(spec))
+        await settle()
+        if (n === 1) w.unsubscribe()
+      }
+      expect(t.reads() - before).toBe(0)
+    }
+  )
+
+  it("a view over a removed slot of the snapshot is not re-read repeatedly", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 3)
+    const spec = keysView(1, 2)
+    watch(core.view(spec))
+    await settle()
+    fake.remove(TASK, key(2))
+    void core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    const next = coreOver(fake)
+    next.core.hydrate(through(core.dehydrate()))
+    next.core.endHydration()
+    await settle()
+    const first = watch(next.core.view(spec))
+    await settle()
+    const before = fake.log.length
+    first.unsubscribe()
+    for (let n = 0; n < 3; n++) {
+      watch(next.core.view(spec))
+      await settle()
+    }
+    expect(fake.log.length - before).toBe(0)
+  })
+
+  it("a resubscription while the reconciliation read is in flight adds no read", async () => {
+    const baseline = async (resubscribe: boolean) => {
+      const { core, fake } = setup()
+      seed(fake, 1, 3)
+      const specs = [keysView(1), keysView(2)]
+      for (const spec of specs) watch(core.view(spec))
+      await settle()
+      const next = coreOver(fake)
+      next.core.hydrate(through(core.dehydrate()))
+      const subs = specs.map((spec) => watch(next.core.view(spec)))
+      const from = fake.log.length
+      next.core.endHydration()
+      if (resubscribe) {
+        // StrictMode: отписка й нова підписка до відповіді звірки.
+        for (const sub of subs) sub.unsubscribe()
+        for (const spec of specs) watch(next.core.view(spec))
+      }
+      await settle()
+      return fake.log.length - from
+    }
+    const once = await baseline(false)
+    expect(once).toBeGreaterThan(0)
+    expect(await baseline(true)).toBe(once)
+  })
+
+  it("a new view and loadBefore/loadAfter of a stale-client object send no request and carry the stale-client code", async () => {
+    const { core, fake } = setup()
+    seedOrdered(fake, 6)
+    watch(core.view(win))
+    await settle()
+    core.staleClient(TASK)
+    const before = fake.log.length
+    core.view(win).loadAfter()
+    core.view(win).loadBefore()
+    const fresh = core.view(keysView(1, 2))
+    watch(fresh)
+    await settle()
+    expect(fake.log.length - before).toBe(0)
+    expect(core.view(win).getSnapshot()).toMatchObject({
+      status: "ready",
+      isStale: true,
+    })
+    expect(fresh.getSnapshot()).toMatchObject({
+      isStale: true,
+      error: { code: "command.stale-client" },
+    })
+  })
+
   it("a stale-client object is not read", async () => {
     const t = await hydrated([card(1)])
     t.core.staleClient(TASK)
