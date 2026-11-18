@@ -16,8 +16,9 @@ import {
   createFakeSource,
   type FakeSource,
 } from "../../store/testing/fake-source"
-import { limitsOf } from "../../store/core"
-import type { ViewSpec } from "../../store/types"
+import { coreInternals, limitsOf } from "../../store/core"
+import { failurePause } from "../../store/subsets"
+import { DEFAULT_CORE_LIMITS, type ViewSpec } from "../../store/types"
 import { clientCatalog, ok, SERVER_HASH } from "../../__tests__/support"
 import { runtimeHandleOf } from "../handle"
 import { createDataRuntime, type DataRuntimeOptions } from "../runtime"
@@ -27,6 +28,12 @@ import { createDataRuntime, type DataRuntimeOptions } from "../runtime"
  * «Частота», §6.1). Час — підроблений годинник vitest:
  * `performance.now()` рухається разом із ним.
  */
+
+// Пауза після першого збою (спека П4-B §6.7), від старту невдалої спроби.
+const PAUSE = failurePause(1, DEFAULT_CORE_LIMITS.revalidateIntervalMs)
+
+// Повторний `resume()` після вікна злиття (1 с у ядрі) не зливається з першим.
+const RESUME_AFTER_COALESCE = 1_000
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -214,7 +221,12 @@ describe("resume()", () => {
     expect(t.reads()).toBe(1)
     t.wire.fail = false
     t.calls.length = 0
+    // Пауза після збою діє й на `resume()`: у ній вигляд не читається.
     vi.advanceTimersByTime(1)
+    t.runtime.resume()
+    await settle()
+    expect(t.reads()).toBe(0)
+    vi.advanceTimersByTime(PAUSE)
     t.runtime.resume()
     await settle()
     expect(t.reads()).toBe(1)
@@ -239,13 +251,18 @@ describe("resume()", () => {
     expect(t.reads()).toBe(1)
     t.wire.fail = false
     t.calls.length = 0
+    // Пауза після збою діє й на `resume()`: у ній вигляд не читається.
     vi.advanceTimersByTime(1_500)
+    t.runtime.resume()
+    await settle()
+    expect(t.reads()).toBe(0)
+    vi.advanceTimersByTime(PAUSE)
     t.runtime.resume()
     await settle()
     expect(t.reads()).toBe(1)
   })
 
-  it("sets no mark on a discarded answer: the next resume re-reads again", async () => {
+  it("sets no mark on a discarded answer: resume does not duplicate the retry in flight", async () => {
     // Відповідь відкинуто (читання почалось до перемикання епохи): він нічого не
     // записав, тож і свіжості не дав.
     const EA = "a".repeat(64)
@@ -255,6 +272,8 @@ describe("resume()", () => {
     t.wire.epoch = EA
     t.core.view(list).subscribe(() => {})
     await settle()
+    const subset = coreInternals(t.core).registry.find(list)!
+    const marked = subset.refreshedAt
     vi.advanceTimersByTime(20_000)
     t.wire.hold = true
     t.runtime.resume()
@@ -273,10 +292,16 @@ describe("resume()", () => {
     t.calls.length = 0
     await vi.advanceTimersByTimeAsync(1_500)
     expect(t.reads()).toBe(1)
+    // Відкинута відповідь відмітки не дала.
+    expect(marked).toBeDefined()
+    expect(subset.refreshedAt).toBe(marked)
+    // Повтор у польоті: `resume()` вигляд у польоті не бере (§6.3, Р7), тож
+    // дубля читання немає.
     t.calls.length = 0
+    vi.advanceTimersByTime(RESUME_AFTER_COALESCE)
     t.runtime.resume()
     await settle()
-    expect(t.reads()).toBe(1)
+    expect(t.reads()).toBe(0)
   })
 
   it("takes the first-load mark at its start, not at its settling", async () => {

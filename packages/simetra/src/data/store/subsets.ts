@@ -110,6 +110,17 @@ export interface Subset extends ReaderTarget {
   refreshedAt: number | undefined
   /** The system re-reads started for this view; the model test counts them. */
   rereads: number
+  /**
+   * Failed reads of a loaded view in a row (a system re-read or `refresh()`);
+   * a success resets it. A discarded answer is not a failure (P4-B spec §6.7).
+   */
+  failures: number
+  /** The start time of the last failed read; `refreshedAt` stays untouched. */
+  failedAt: number | undefined
+  /** The tail pass of an explicit `revalidate` waiting for the view in flight. */
+  rereadTail: Promise<void> | undefined
+  /** Resolved when a system re-read of the view settles. */
+  rereadWaiters: Array<() => void>
   status: "loading" | "ready" | "refreshing" | "error"
   error: CommandError | DataError | undefined
   needsRefresh: boolean
@@ -191,6 +202,31 @@ const copiesOf = (s: Subset): Map<Key, RowView> => {
   COPIES.set(s, found)
   return found
 }
+
+/**
+ * The pause after `failures` failed reads in a row (P4-B spec §6.7):
+ * `min(I, 0.1 × I × 2^(n − 1))` from the start of the failed attempt.
+ */
+export const failurePause = (failures: number, intervalMs: number): number =>
+  Math.min(intervalMs, 0.1 * intervalMs * 2 ** (failures - 1))
+
+/**
+ * The due time of a loaded view (one function for the `revalidate` filter and
+ * the scheduler): after failures — the end of the pause, else
+ * `refreshedAt + ageMs` (the interval by default); a view without a freshness
+ * mark is due at once.
+ */
+export const viewDueAt = (
+  s: Subset,
+  intervalMs: number,
+  ageMs: number = intervalMs
+): number =>
+  s.failures > 0 && s.failedAt !== undefined
+    ? s.failedAt + failurePause(s.failures, intervalMs)
+    : s.refreshedAt === undefined
+      ? Number.NEGATIVE_INFINITY
+      : s.refreshedAt + ageMs
+
 const ACCESS_CHANGED = purgedSnapshot("access-changed")
 
 /**
@@ -288,6 +324,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                 }
                 s.loaded = true
                 s.refreshedAt = startedAt
+                s.failures = 0
+                s.failedAt = undefined
                 s.status = "ready"
                 s.error = undefined
                 s.needsRefresh = false
@@ -332,6 +370,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           if (error instanceof ReadLimiterClosed) return
           session.commit(
             () => {
+              // Збій читання вже завантаженого вигляду — лічильник паузи
+              // (§6.7); збій першого завантаження його не веде.
+              if (s.loaded) {
+                s.failures++
+                s.failedAt = startedAt
+              }
               s.status = "error"
               s.error = errorOf(error)
               s.dirty = true
@@ -726,6 +770,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       loaded: false,
       refreshedAt: undefined,
       rereads: 0,
+      failures: 0,
+      failedAt: undefined,
+      rereadTail: undefined,
+      rereadWaiters: [],
       owned: new Set(),
       included: new Map(),
       layout: form.spec.kind === "card" ? [form.spec.key] : [],

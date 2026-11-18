@@ -23,7 +23,7 @@ import {
 import { compareRows, fieldInfoOf, filterCollator } from "../filter"
 import { visibleRow } from "../object-store"
 import { createCoreSource, createReadLimiter, type ServerPort } from "../source"
-import type { Subset } from "../subsets"
+import { EPOCH_UNAVAILABLE, viewDueAt, type Subset } from "../subsets"
 import type { FakeRead, FakeReadLog } from "../testing/fake-source"
 import {
   DEFAULT_CORE_LIMITS,
@@ -2395,8 +2395,16 @@ async function runModel(
             (sub.visible ?? sub.listeners.size > 0) &&
             (sub.form.spec.kind !== "section" || sub.listeners.size > 0)
         )
+        // Читання не бере вигляд, чий строк не настав (молодша за межу відмітка
+        // чи пауза після збою), вигляд у польоті й вигляд, що вичерпав межу
+        // відкинутих (спека П4-B §6.7).
         const young = (sub: (typeof readers)[number]) =>
-          sub.refreshedAt !== undefined && at - sub.refreshedAt < s.minAge
+          sub.flight !== undefined ||
+          sub.rereadEpochs.length > 0 ||
+          (sub.status === "error" && sub.error === EPOCH_UNAVAILABLE) ||
+          (sub.failures > 0
+            ? at < viewDueAt(sub, REVALIDATE_MS, s.minAge)
+            : sub.refreshedAt !== undefined && at - sub.refreshedAt < s.minAge)
         for (const sub of readers)
           if (young(sub)) youngViews.set(sub, sub.rereads)
           else if (!staled.has(sub.form.object.name))
