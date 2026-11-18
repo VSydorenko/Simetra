@@ -66,7 +66,12 @@ export type MutationResult =
        */
       readonly rows: readonly (ServerRow | undefined)[]
     }
-  | { readonly ok: false; readonly error: CommandError }
+  /**
+   * A refusal: of the server or the transport (`CommandError`), or of the
+   * write state before the transport — `DataError` `data.mutation-pending`,
+   * `data.journal-full` (P4-B spec §7.1).
+   */
+  | { readonly ok: false; readonly error: CommandError | DataError }
 
 /** One logical mutation of the data writer (P4-B spec §7.1). */
 export interface Mutation {

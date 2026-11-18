@@ -1261,7 +1261,9 @@ async function runModel(
           ? "pending"
           : attempt.result.ok
             ? undefined
-            : refusedState(attempt.result.error.code)
+            : attempt.result.error instanceof DataError
+              ? fail(label, `${k}: a journal mutation settled with a DataError`)
+              : refusedState(attempt.result.error.code)
       if (m!.state !== state)
         fail(label, `${k}: mutation ${m!.state}, model ${String(state)}`)
       if (entry.erased && !m!.erased)
@@ -1870,21 +1872,27 @@ async function runModel(
           existing !== undefined &&
           existing.attempt.result === undefined
         const attempt = begin(k)
-        let mutation
-        try {
-          mutation = core.update(TASK, k, values, { expectedVersion: base })
-        } catch (error) {
+        const mutation = core.update(TASK, k, values, { expectedVersion: base })
+        if (pending) {
           sending = undefined
-          // Одна мутація на ключ (Р1): `pending` — відмова до журналу.
-          if (
-            pending &&
-            error instanceof DataError &&
-            error.code === "data.mutation-pending"
-          )
-            break
-          throw error
+          // Одна мутація на ключ (Р1): `pending` — відмова до журналу й
+          // транспорту, мутація осідає `failed` з кодом (§7.1).
+          if (attempt.sent)
+            fail(label, `${k}: an update of a pending key went out`)
+          if (mutation.id === existing.attempt.id)
+            fail(label, `${k}: a refused update reused the pending attempt`)
+          void mutation.settled.then((result) => {
+            if (
+              result.ok ||
+              !(result.error instanceof DataError) ||
+              result.error.code !== "data.mutation-pending"
+            )
+              asyncViolations.push(
+                `${k} ${mutation.id}: a refused update settled ${result.ok ? "ok" : result.error.code}`
+              )
+          })
+          break
         }
-        if (pending) fail(label, `${k}: an update of a pending key went out`)
         if (closed === undefined && !attempt.sent)
           fail(label, `${k}: an update sent no run`)
         track(attempt, mutation)
