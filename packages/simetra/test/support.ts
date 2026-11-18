@@ -37,6 +37,7 @@ export {
   rightsAdminReadingMembers,
   runtimeValuesLayer,
   readQueryLayer,
+  noteCopyLayer,
   policyDomain,
   requiredMemberAttribute,
   ROLE_FILE,

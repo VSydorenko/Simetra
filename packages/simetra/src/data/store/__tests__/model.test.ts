@@ -154,6 +154,7 @@ type Step =
   | { t: "answer"; pick: number; how: How; at: number }
   | { t: "edit"; k: number; title: number }
   | { t: "delete"; k: number }
+  | { t: "gap"; k: number; remove: boolean }
   | { t: "move"; k: number }
   | { t: "lines"; qty: number }
   | { t: "create"; scope: number }
@@ -194,7 +195,7 @@ const k = fc.nat(KEYS.length - 1)
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 
 /**
- * Ваги (бриф, крок 1): сума 242 (повернення — 8; перегідратація — 6; перемикання епохи — 6; `hide` над
+ * Ваги (бриф, крок 1): сума 246 (чужа зміна між межами сторінок `full` — 4; повернення — 8; перегідратація — 6; перемикання епохи — 6; `hide` над
  * ТЧ-підмножиною — 6; сторінка вікна — 8; запис — 50: `update` 14, відповідь
  * `run` 20, дії мутації 8, чужа правка, `purge` чи `hide` ключа з мутацією 6,
  * `dispose()` з мутацією в дорозі 2); `purge` (16 + 14), відсутній рядок і
@@ -270,6 +271,13 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
     }),
   },
   { weight: 4, arbitrary: fc.record({ t: one("delete"), k }) },
+  // Чужа зміна між збереженими межами сторінок системного перечитування
+  // `full`: рядок зникає чи перелітає на край порядку (за `title`) саме тоді,
+  // коли перечитування стартувало. Хибна межа не дає ні пропуску, ні дубля.
+  {
+    weight: 4,
+    arbitrary: fc.record({ t: one("gap"), k, remove: fc.boolean() }),
+  },
   { weight: 6, arbitrary: fc.record({ t: one("move"), k }) },
   { weight: 2, arbitrary: fc.record({ t: one("lines"), qty: fc.nat(9) }) },
   { weight: 2, arbitrary: fc.record({ t: one("create"), scope: fc.nat(1) }) },
@@ -566,7 +574,7 @@ async function runModel(
           runs.push({ request, resolve, reject, attempt })
         )
       },
-      version: () => f.server.version(),
+      read: (items) => f.server.read(items),
     }),
   })
   for (const flag of defects) inspect.defects.add(flag)
@@ -580,6 +588,9 @@ async function runModel(
       org: i < 2 ? S : T,
       title: `t${i + 1}`,
       notes: `n${i + 1}`,
+      // Рядок повний для списочної форми: без цього ключ не йшов би в `known`.
+      status: null,
+      subject: null,
     })
   )
   let created = false
@@ -603,6 +614,14 @@ async function runModel(
 
   // Журнал доставлених відповідей і бар'єри позначок.
   const deliveries = new Map<string, Delivery[]>()
+  // Індекси журналу запитів доставлених читань, що відповіли на ключ маркером.
+  const markerReads = new Map<string, number[]>()
+  // Причина показу після `hide`: маркер читання, що почалось до нього, — свій
+  // шлях (його не знімає позначки, новішої за старт, спека §6.7).
+  const afterHide = (object: ObjectName, k: Key, barrier: number) =>
+    (markerReads.get(id(object, k)) ?? []).some((index) => index < barrier)
+      ? " (a marker of a read older than the hide)"
+      : ""
   const sectionDeliveries: Delivery[] = []
   // Ключ, якого торкнувся `purge`: будь-який запис у сховищі — лише з
   // читання, що надійшло на сервер після нього (П12).
@@ -679,12 +698,38 @@ async function runModel(
       return
     }
     const rows = new Map<Key, number>()
-    for (const row of result.rows)
+    for (const row of result.rows) {
+      // Маркер не несе рядка: доставлено лише підтвердження ключа `known`.
+      if (!("ref" in row)) {
+        const marked = read.log.known?.keys[(row as { known: number }).known]
+        if (marked !== undefined) {
+          const list = markerReads.get(id(object, marked as Key)) ?? []
+          list.push(index)
+          markerReads.set(id(object, marked as Key), list)
+        }
+        continue
+      }
       rows.set(row.ref as Key, row.version as number)
+    }
     for (const [k, version] of rows) {
       const list = deliveries.get(id(object, k)) ?? []
       list.push({ index, object, rows: new Map([[k, version]]) })
       deliveries.set(id(object, k), list)
+    }
+    // Цілі `include` приходять рядками `included` тієї самої відповіді (Р8):
+    // це доставка читання, що почалось у цю мить журналу, як і читання за
+    // ключем цілі. Цілі завжди повні, маркерів вони не мають.
+    for (const [name, targets] of Object.entries(result.included ?? {})) {
+      for (const row of targets) {
+        const k = row.ref as Key
+        const list = deliveries.get(id(name, k)) ?? []
+        list.push({
+          index,
+          object: name,
+          rows: new Map([[k, row.version as number]]),
+        })
+        deliveries.set(id(name, k), list)
+      }
     }
   }
 
@@ -791,7 +836,10 @@ async function runModel(
     if (fields.length === 0) return
     const hidden = hideBarrier.get(id(object, row.key))
     if (hidden !== undefined && !deliveredSince(object, row.key, hidden))
-      fail(label, `${at}: shown after hide without a later read`)
+      fail(
+        label,
+        `${at}: shown after hide without a later read${afterHide(object, row.key, hidden)}`
+      )
     // Показаний рядок (і ціль `refs`) прибраного `purge` ключа — лише з
     // читання, що почалось після нього (П12).
     const purged = purgeBarrier.get(id(object, row.key))
@@ -1049,7 +1097,10 @@ async function runModel(
         if (values !== undefined) {
           const hidden = hideBarrier.get(id(name, k))
           if (hidden !== undefined && !deliveredSince(name, k, hidden))
-            fail(label, `${at}: values after hide without a later read`)
+            fail(
+              label,
+              `${at}: values after hide without a later read${afterHide(name, k, hidden)}`
+            )
           const barrier = removedBarrier.get(id(name, k))
           if (barrier !== undefined && !deliveredSince(name, k, barrier))
             fail(label, `${at}: values after removed without a later read`)
@@ -1469,8 +1520,10 @@ async function runModel(
       frames++
       checkFrame(second)
     })
-    for (let i = 0; i < 50 && fake.pending.length > 0; i++) {
+    // Читання доходить до фейка мікрозадачею збирача: спершу `flush`.
+    for (let i = 0; i < 50; i++) {
       await flush()
+      if (fake.pending.length === 0) break
       while (fake.pending.length > 0) {
         const read = fake.take()
         read.answer()
@@ -1637,7 +1690,7 @@ async function runModel(
         {
           run: () =>
             Promise.reject(new Error("a hydrated core writes nothing")),
-          version: () => fake.server.version(),
+          read: (items) => fake.server.read(items),
         }
       ),
       index: fake.index,
@@ -1988,6 +2041,17 @@ async function runModel(
           deleted.add(id(TASK, KEYS[s.k]!))
         }
         break
+      case "gap": {
+        core
+          .revalidate(TASK, { visibleOnly: false })
+          .catch((error: unknown) => errors.push(error))
+        if (!live(TASK, KEYS[s.k]!)) break
+        if (s.remove) {
+          fake.remove(TASK, KEYS[s.k]!)
+          deleted.add(id(TASK, KEYS[s.k]!))
+        } else fake.edit(TASK, KEYS[s.k]!, { title: `zz${n}` })
+        break
+      }
       case "move": {
         const row = fake.row(TASK, KEYS[s.k]!)
         if (row !== undefined && live(TASK, KEYS[s.k]!))
@@ -2005,6 +2069,8 @@ async function runModel(
             org: SCOPES[s.scope],
             title: "c",
             notes: "n5",
+            status: null,
+            subject: null,
           })
         }
         break
@@ -2711,6 +2777,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "min-age-all-young",
   "late-hydrated-not-reread",
   "hydrated-row-not-reread",
+  "marker-lifts-newer-mark",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -2732,7 +2799,10 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // `full` чи вікно закінчують без рядка сервера.
   "bury-removed-current-epoch": /^converge .*(composition|lacks)/,
   // Запис: кожен дефект — своєю перевіркою.
-  "predict-before-answer": /\.title = u\d+, server at/,
+  // Колонка залежить від порядку кроків насіння: збирач пакета зсуває читання
+  // на такт, і перший підтверджений рядок зі значенням мутації буває `title`
+  // (`u<n>`) чи лінива `notes` (`w<n>`).
+  "predict-before-answer": /\.(title = u|notes = w)\d+, server at/,
   "settle-separate-commit": /the run row shown with its mutation pending/,
   "write-back-lifts-hidden": /after hide without a later read/,
   "answer-after-cancel": /a cancelled attempt settled with a row/,
@@ -2749,6 +2819,8 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "late-hydrated-not-reread": /after hydrate: view \d+ .*(server|hidden)/,
   // Довіра — факт рядка: картка над рядком непідписаного гідрованого списку.
   "hydrated-row-not-reread": /after hydrate: card over a hydration-only row/,
+  // Маркер читання, що почалось до `hide`, не знімає його позначки.
+  "marker-lifts-newer-mark": /a marker of a read older than the hide/,
 }
 
 describe("core model self-check", () => {

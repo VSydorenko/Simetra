@@ -2,11 +2,17 @@ import { ZERO_UUID, channelTopic, type CatalogEntry } from "simetra/model"
 import type { Defects } from "./defects"
 import { effectiveEpoch, heldEpoch } from "./epoch"
 import type { ObjectState } from "./forms"
-import { includeKeys, readIncluded } from "./include"
+import {
+  completeIncluded,
+  includeKeys,
+  readIncluded,
+  type Included,
+} from "./include"
 import { visibleRow, type RowEntry } from "./object-store"
 import {
+  aliveIncluded,
   applyIncluded,
-  fetchFull,
+  fetchFullAgain,
   gated,
   readFormWrite,
   type Apply,
@@ -487,6 +493,58 @@ function outOfPlace(s: Subset): boolean {
   return false
 }
 
+/** The `known` of a re-read by keys of the view's own rows (§6.7). */
+const listKnown = (s: Subset) => (keys: readonly Key[]) =>
+  s.form.object.rows.knownFor(keys, { owned: s.owned, form: "list" })
+
+/**
+ * The system re-read of the `include` targets of a view (Р8а): a `keys` part
+ * per target, started in the same tick as the parts of the view, so both go in
+ * one request. The keys are the ones the view holds plus the ones its
+ * composition rows refer to now: a target the view never held a row for (the
+ * snapshot of a hydration keeps none; a target the reader may not see) would
+ * otherwise wait for the answer and cost a request of its own at every
+ * re-read. `known` goes only for held rows. The view's own parts carry no
+ * `include`: targets would come back whole every time.
+ */
+function readHeldTargets(
+  ctx: WriterContext,
+  s: Subset,
+  composition: readonly Key[]
+): Promise<Included> {
+  const o = s.form.object
+  const referred = includeKeys(
+    s.form.include,
+    composition.flatMap((key) => {
+      const e = o.rows.get(key)
+      const values = e === undefined ? undefined : visibleRow(e)
+      return values !== undefined && s.form.test(values) ? [values] : []
+    })
+  )
+  const wanted = new Map<ObjectName, readonly Key[]>(
+    s.form.include.map(({ target }) => [
+      target,
+      [
+        ...new Set([
+          ...(s.included.get(target) ?? []),
+          ...(referred.get(target) ?? []),
+        ]),
+      ],
+    ])
+  )
+  return readIncluded(
+    ctx.source,
+    s.form.include,
+    wanted,
+    ctx.limits.keysPerRequest,
+    (name) => (keys) =>
+      ctx.objectOf(name).rows.knownFor(keys, {
+        owned: s.included.get(name) ?? new Set<Key>(),
+        form: "list",
+      })
+  )
+}
+
 async function readFullAgain(
   ctx: WriterContext,
   s: Subset,
@@ -496,7 +554,10 @@ async function readFullAgain(
   const { form } = s
   const o = form.object
   const { keysPerRequest } = ctx.limits
-  const fetched = await fetchFull(ctx, form, token)
+  const [fetched, held] = await Promise.all([
+    fetchFullAgain(ctx, form, token, s),
+    readHeldTargets(ctx, s, [...s.owned]),
+  ])
   if (fetched === undefined) return () => {}
   const got = new Map(fetched.rows.map((r) => [r.key, r] as const))
   const composition = [...s.owned]
@@ -508,6 +569,7 @@ async function readFullAgain(
   if (missing.length > 0) {
     const rows = await readKeys(ctx.source, o.entry, missing, {
       keysPerRequest,
+      known: listKnown(s),
     })
     for (const row of rows) {
       got.set(row.key, row)
@@ -531,10 +593,17 @@ async function readFullAgain(
       return row !== undefined && form.test(row.values) ? [row.values] : []
     })
   )
+  // Цілі з відповіді, яких вигляд ще не тримав, — частиною наступного пакета.
   const included =
     form.include.length === 0
       ? undefined
-      : await readIncluded(ctx.source, form.include, wanted, keysPerRequest)
+      : await completeIncluded(
+          ctx.source,
+          form.include,
+          wanted,
+          held,
+          keysPerRequest
+        )
   return (scope) => {
     let fresh = false
     for (const row of got.values()) {
@@ -569,7 +638,7 @@ async function readFullAgain(
 /**
  * The system re-read of a window (P4-B spec §6.4): every
  * own page again by a keyset from its lower bound, all in one call of the
- * source, without `known`. The composition stays: a value goes to its place,
+ * source, with the `known` of its own keys (§6.7). The composition stays: a value goes to its place,
  * a key that is not in the pages of the answer is read by key — absent is
  * `removed`, present is `needsRefresh` (it moved) — and a key the window
  * does not hold is only `hasNewRows`. The result is written only while the
@@ -592,13 +661,17 @@ async function readWindowAgain(
     start.pages.length > 0
       ? start.pages
       : [{ keys: [], lower: { kind: "start" }, generation: 0 }]
-  const answers = await rereadPages(
-    ctx.source,
-    form,
-    pages.map((page) => page.lower),
-    token,
-    ctx.limits.windowPage
-  )
+  const [answers, held] = await Promise.all([
+    rereadPages(
+      ctx.source,
+      form,
+      pages,
+      listKnown(s),
+      token,
+      ctx.limits.windowPage
+    ),
+    readHeldTargets(ctx, s, keysOfPages(start.pages)),
+  ])
   if (answers === undefined) return () => {}
   const got = new Map(answers.flat().map((row) => [row.key, row] as const))
   const composition = keysOfPages(start.pages)
@@ -608,6 +681,7 @@ async function readWindowAgain(
       ? []
       : await readKeys(ctx.source, o.entry, missing, {
           keysPerRequest: ctx.limits.keysPerRequest,
+          known: listKnown(s),
         })
   const found = new Map(moved.map((row) => [row.key, row] as const))
   // Останню сторінку, коли край порядку ще не прочитано, читають із запасом
@@ -652,10 +726,11 @@ async function readWindowAgain(
   const included =
     form.include.length === 0
       ? undefined
-      : await readIncluded(
+      : await completeIncluded(
           ctx.source,
           form.include,
           wanted,
+          held,
           ctx.limits.keysPerRequest
         )
   return (scope) => {
@@ -719,6 +794,7 @@ async function writeAgain(
     case "keys": {
       const rows = await readKeys(ctx.source, o.entry, s.form.keys, {
         keysPerRequest,
+        known: listKnown(s),
       })
       return applyKeys(ctx, s, s.form.keys, rows, startEpoch, true)
     }
@@ -726,10 +802,41 @@ async function writeAgain(
       // Шапка списочною формою; ліниві поля змонтованої картки дочитує
       // перевірка вигляду, коли версія рядка зросла (§6.2, правило 2).
       // Картка не має дії «показати нові»: `hasNewRows` їй не ставимо.
-      const rows = await readKeys(ctx.source, o.entry, [spec.key], {
-        keysPerRequest,
-      })
-      return applyKeys(ctx, s, [spec.key], rows, startEpoch, false)
+      const [rows, held] = await Promise.all([
+        readKeys(ctx.source, o.entry, [spec.key], {
+          keysPerRequest,
+          known: listKnown(s),
+        }),
+        readHeldTargets(ctx, s, [spec.key]),
+      ])
+      const write = applyKeys(ctx, s, [spec.key], rows, startEpoch, false)
+      if (s.form.include.length === 0) return write
+      const row = rows.find((r) => r.key === spec.key)
+      const included = await completeIncluded(
+        ctx.source,
+        s.form.include,
+        includeKeys(s.form.include, row === undefined ? [] : [row.values]),
+        held,
+        keysPerRequest
+      )
+      return (scope) => {
+        write(scope)
+        // Рядок, чий `put` відхилено, лишається `removed`: його цілей не беремо.
+        const alive = o.rows.get(spec.key)?.removed === undefined
+        applyIncluded(
+          ctx,
+          scope,
+          s,
+          aliveIncluded(
+            included,
+            includeKeys(
+              s.form.include,
+              alive && row !== undefined ? [row.values] : []
+            )
+          ),
+          startEpoch
+        )
+      }
     }
     case "section":
       return readFormWrite(ctx, s, startEpoch, token)
@@ -753,7 +860,12 @@ async function writeAgain(
 export async function revalidate(
   ctx: WriterContext,
   object: ObjectName,
-  options: { visibleOnly: boolean; minAgeMs?: number }
+  options: {
+    visibleOnly: boolean
+    minAgeMs?: number
+    /** Views the hydration brought: read although nobody is subscribed yet. */
+    alsoViews?: ReadonlySet<Subset>
+  }
 ): Promise<void> {
   const o = ctx.objectOf(object)
   // Єдина ознака закриття — токен сесії: він недійсний уже з `closing`, коли
@@ -764,7 +876,9 @@ export async function revalidate(
   const targets = subsetsOf(ctx, o).filter(
     (s) =>
       s.loaded &&
-      (!options.visibleOnly || isVisible(s)) &&
+      (!options.visibleOnly ||
+        isVisible(s) ||
+        options.alsoViews?.has(s) === true) &&
       // Відмітка свіжості: без неї вигляд вважається простроченим.
       (options.minAgeMs === undefined ||
         ctx.defects.has("min-age-ignored") ||
@@ -773,7 +887,9 @@ export async function revalidate(
         s.refreshedAt === undefined ||
         (!ctx.defects.has("min-age-all-young") &&
           ctx.now() - s.refreshedAt >= options.minAgeMs)) &&
-      (s.form.spec.kind !== "section" || s.listeners.size > 0)
+      (s.form.spec.kind !== "section" ||
+        s.listeners.size > 0 ||
+        options.alsoViews?.has(s) === true)
   )
   await revalidateViews(ctx, o, targets)
 }

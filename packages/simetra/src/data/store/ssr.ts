@@ -43,7 +43,7 @@ import type {
 
 /** What the snapshot and the hydration need from the core. */
 export interface SsrContext {
-  readonly session: Pick<Session, "epochs">
+  readonly session: Pick<Session, "epochs" | "acceptEpoch">
   readonly objects: ReadonlyMap<ObjectName, ObjectState>
   readonly registry: SubsetRegistry
   readonly ops: StoreOps
@@ -647,6 +647,17 @@ export function applySnapshot(
   const at = ctx.session.epochs.next()
   for (const [object, row] of parsed.rows)
     ctx.ops.restore(scope, object, row, at)
+  // Сесія бере епоху версій знімка: без неї перечитування після гідратації
+  // не має `known` (правило Р5 — рядок прочитано за поточної епохи) і
+  // повертає повні рядки. Лише коли епоха одна: знімок з рядками різних
+  // епох (SSR зробив кілька читань, епоха змінилась між ними) не вгадує, яка
+  // поточна, — тоді `known` не буде, а перша відповідь сервера скаже.
+  const epochs = new Set(
+    parsed.rows.flatMap(([, row]) =>
+      row.versionEpoch === null ? [] : [row.versionEpoch]
+    )
+  )
+  if (epochs.size === 1) ctx.session.acceptEpoch([...epochs][0]!, at)
   for (const { object, owner, section, entry } of parsed.sections)
     ctx.ops.restoreSection(scope, object, owner, section, entry)
   for (const { form, state } of parsed.subsets)

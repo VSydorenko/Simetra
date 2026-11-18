@@ -402,6 +402,7 @@ describe("purge", () => {
     fake.hold = (read) => isPage(read)
     const handle = core.view({ kind: "full", object: TASK })
     watch(handle)
+    await settle()
     const page = fake.take()
     const visible = fake.clock
     fake.setVisibleScopes([])
@@ -451,6 +452,7 @@ describe("purge", () => {
     const lineView = core.view(section(1))
     watch(cardView)
     watch(lineView)
+    await settle()
     const held = [fake.take(), fake.take()]
     const visible = fake.clock
     fake.setVisibleScopes([])
@@ -596,6 +598,7 @@ describe("purge", () => {
       object: TASK,
       count: 1,
     })
+    await settle()
     expect(fake.pending).toHaveLength(1)
     fake.take().answer()
     await settle()
@@ -664,7 +667,8 @@ describe("purge", () => {
     const { core, fake, inspect } = setup()
     fake.insert(ORG, { ref: S })
     seed(fake, 1, 1)
-    fake.hold = (read) => read.object === ORG
+    // Цілі йдуть тим самим запитом, що й сторінка вигляду (Р8).
+    fake.hold = (read) => read.object === TASK
     const full = core.view({ kind: "full", object: TASK, include: ["org"] })
     watch(full)
     await settle()
@@ -686,6 +690,7 @@ describe("purge", () => {
     fake.hold = (read) => holding && keysOf(read.query).includes(key(1))
     const handle = core.view(keys(1))
     watch(handle)
+    await settle()
     const first = fake.take()
     watch(core.view(keys(2, 3))).unsubscribe()
     await settle()
@@ -1052,7 +1057,7 @@ describe("revalidate", () => {
     expect(snapshot.needsRefresh).toBe(true)
   })
 
-  it("reads nine views at most four at a time", async () => {
+  it("reads nine views in one request, not nine", async () => {
     const { core, fake } = setup()
     seed(fake, 1, 9)
     for (let n = 1; n <= 9; n++) watch(core.view(keys(n)))
@@ -1064,13 +1069,15 @@ describe("revalidate", () => {
     for (;;) {
       await settle()
       if (fake.pending.length === 0) break
-      expect(fake.pending.length).toBeLessThanOrEqual(4)
       reads += fake.pending.length
       fake.deliverAll()
     }
     await done
+    // Читання одного такту — частини одного запиту (до `READ_BATCH_MAX`);
+    // обмежувач `readParallel` рахує запити, а не частини (source.test).
     expect(reads).toBe(9)
-    expect(fake.maxInFlight).toBe(4)
+    expect(fake.requests.at(-1)).toBe(9)
+    expect(fake.maxInFlight).toBe(1)
   })
 
   it("re-reads only visible views with visibleOnly and keeps disconnect marks", async () => {

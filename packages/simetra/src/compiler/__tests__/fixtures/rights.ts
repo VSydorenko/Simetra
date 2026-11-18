@@ -1695,6 +1695,33 @@ export function readQueryLayer(): Layer {
 }
 
 /**
+ * `TicketNote` поверх `commandCoreLayer()`: довідник із копією носія власності
+ * за шляхом `ticket.assignee` (колонка `ticket_id_assignee_id`) і посиланням
+ * `site` на `Region` з `crossScope: true` — ціль `include`, яку RLS може
+ * сховати. Читає його `fullAccess`-роль `OrgAdmin`. Ціль посилання-носія —
+ * довідник `Ticket`, а не документ: документів у каталозі рантайму немає.
+ */
+export function noteCopyLayer(): Layer {
+  return {
+    "catalogs/TicketNote/TicketNote.meta.json": catalog(
+      uuid(7610),
+      "TicketNote",
+      "ticket_note",
+      {
+        ownership: [["ticket", "assignee"]],
+        attributes: [
+          refAttribute(7611, "ticket", "ticket_id", ref("Catalog", "Ticket")),
+          {
+            ...refAttribute(7612, "site", "site_id", ref("Catalog", "Region")),
+            crossScope: true,
+          },
+        ],
+      }
+    ),
+  }
+}
+
+/**
  * `runtimeValuesLayer()` з `nonNegative` на `lines.qty`: CHECK з колонкою
  * реквізиту ТЧ, тобто `23514` з шляхом `lines.qty`. Окремий шар, а не зміна
  * типового: решта кейсів пише в `qty` будь-які числа.

@@ -8,6 +8,7 @@ import {
   type MetadataRef,
   type SourceAdapter,
   type WireQueryPart,
+  type WireReadPart,
   type WireReadParts,
 } from "simetra/model"
 import {
@@ -18,6 +19,11 @@ import {
   catalogEntry,
   catalogEntryAttribute,
 } from "../../../model/runtime/__tests__/entries"
+import {
+  serverFunctionAdapter,
+  serverFunctionPort,
+  type ServerFunctionAdapter,
+} from "../../adapter"
 import { DataError } from "../../errors"
 import {
   createCoreSource,
@@ -27,7 +33,9 @@ import {
   ReadLimiterClosed,
   rowFromMarker,
   BATCH_RETRY_PAUSE_MS,
+  type CorePart,
   type CoreSource,
+  type RowsQuery,
   type ReadLimiter,
   type ServerPort,
 } from "../source"
@@ -60,10 +68,10 @@ const READS_ONLY_ADAPTER: SourceAdapter = {
   read: () => Promise.reject(new Error("unexpected read")),
 }
 
-/** Порт сервера для кейсів читання: запис і версія тут не йдуть. */
+/** Порт сервера для кейсів читання: запис і Server Function тут не йдуть. */
 const READS_ONLY: ServerPort = {
   run: () => Promise.reject(new Error("unexpected run")),
-  version: () => Promise.reject(new Error("unexpected version")),
+  read: () => Promise.reject(new Error("unexpected read")),
 }
 
 const key = (n: number) =>
@@ -571,8 +579,12 @@ function scripted(replies: Array<(size: number) => WireReadParts>) {
   return { adapter, calls }
 }
 
+const part = (query: RowsQuery): CorePart => ({ type: "query", query })
+
 const taskQueries = (count: number) =>
-  Array.from({ length: count }, (_, i) => ({ object: TASK, id: key(i + 1) }))
+  Array.from({ length: count }, (_, i) =>
+    part({ object: TASK, id: key(i + 1) })
+  )
 
 describe("CoreSource on read parts", () => {
   it("keeps 1000 keys as 5 parts of one request and one limiter slot", async () => {
@@ -626,15 +638,17 @@ describe("CoreSource on read parts", () => {
       READS_ONLY
     )
     const { items } = await source.read([
-      { object: ORG, limit: 5 },
-      { object: TASK, limit: 5 },
-      { object: ORG, limit: 5 },
+      part({ object: ORG, limit: 5 }),
+      part({ object: TASK, limit: 5 }),
+      part({ object: ORG, limit: 5 }),
     ])
     expect(a.requests).toEqual([1])
     expect(b.requests).toEqual([2])
     expect(
       items.map((i) =>
-        i.ok ? [i.rows.rows.map((r) => r.ref), i.epoch] : "failed"
+        i.ok && "rows" in i
+          ? [i.rows.rows.map((r) => r.ref), i.epoch]
+          : "failed"
       )
     ).toEqual([
       [[S], null],
@@ -693,9 +707,9 @@ describe("CoreSource on read parts", () => {
       READS_ONLY
     )
     const { items } = await source.read([
-      { object: TASK, limit: 1 },
-      { object: ORG, limit: 1 },
-      { object: TASK, id: key(1) },
+      part({ object: TASK, limit: 1 }),
+      part({ object: ORG, limit: 1 }),
+      part({ object: TASK, id: key(1) }),
     ])
     expect(items.map((i) => (i.ok ? "ok" : i.error.code))).toEqual([
       "command.unavailable",
@@ -765,6 +779,31 @@ describe("CoreSource on read parts", () => {
     })
   })
 
+  // Маркер частини з `known` мусить лежати в епосі `known` і в його межах.
+  it.each<[string, string, number]>([
+    ["in another epoch than known", EPOCH_B, 0],
+    ["at an index past the keys of known", EPOCH_A, 1],
+    ["at a negative index", EPOCH_A, -1],
+  ])("answers command.internal for a marker %s", async (_, epoch, at) => {
+    const { adapter } = scripted([
+      () => ({ epoch, items: [{ ok: true, value: { rows: [at] } }] }),
+    ])
+    const source = createCoreSource(
+      () => adapter,
+      catalogIndex(OBJECTS),
+      createReadLimiter(4),
+      READS_ONLY
+    )
+    const known = { epoch: EPOCH_A, keys: [key(1)], versions: ["1"] }
+    const { items } = await source.read(
+      taskQueries(1).map((p) => ({ ...p, known }))
+    )
+    expect(items[0]).toEqual({
+      ok: false,
+      error: { code: "command.internal" },
+    })
+  })
+
   it("answers command.internal for a partial marker too", async () => {
     const { adapter } = scripted([
       () => ({
@@ -817,7 +856,13 @@ describe("CoreSource on read parts", () => {
         expect(calls).toEqual([5, 2])
         expect(limiter.runs).toBe(2)
         expect(
-          items.map((i) => (i.ok ? i.rows.rows[0]!.ref : i.error.code))
+          items.map((i) =>
+            i.ok && "rows" in i
+              ? i.rows.rows[0]!.ref
+              : "error" in i
+                ? i.error.code
+                : "version"
+          )
         ).toEqual([key(1), key(2), "command.timeout", key(4), key(5)])
       } finally {
         vi.useRealTimers()
@@ -879,7 +924,10 @@ describe("CoreSource on read parts", () => {
       )
       const { items } = await source.read(taskQueries(2))
       expect(calls).toEqual([2, 1])
-      expect(items.map((i) => i.ok && i.epoch)).toEqual([EPOCH_A, EPOCH_B])
+      expect(items.map((i) => i.ok && "epoch" in i && i.epoch)).toEqual([
+        EPOCH_A,
+        EPOCH_B,
+      ])
     })
 
     it("does not re-send a part refused response-too-large: the view gets the error", async () => {
@@ -1034,9 +1082,9 @@ describe("CoreSource: run and version", () => {
           out.runs.push(request)
           return reply()
         },
-        version: () => {
-          out.versions++
-          return reply()
+        read: (items) => {
+          out.versions += items.filter((item) => item.type === "version").length
+          return reply() as Promise<WireReadParts>
         },
       } satisfies ServerPort,
     }
@@ -1233,19 +1281,27 @@ describe("CoreSource: run and version", () => {
     })
   })
 
-  it("reads the version through the server port even when an override adapter reads the object", async () => {
+  it("sends the version alone in a Server Function request when an override adapter reads every object", async () => {
     const fake = createFakeSource({ objects: OBJECTS, snapshotHash: "snap" })
     const read = vi.fn(() => Promise.reject(new Error("unexpected read")))
     const override: SourceAdapter = { capabilities: { include: true }, read }
-    const version = vi.spyOn(fake.server, "version")
-    expect(await over(fake.server, override).version()).toStrictEqual({
-      ok: true,
-      version: {
-        snapshotHash: "snap",
-        objects: { [OBJECT_ID]: KERNEL_HASH, [ORGANIZATION_ID]: KERNEL_HASH },
+    const { items } = await over(fake.server, override).read([
+      { type: "version" },
+    ])
+    expect(items).toStrictEqual([
+      {
+        ok: true,
+        type: "version",
+        version: {
+          snapshotHash: "snap",
+          objects: {
+            [OBJECT_ID]: KERNEL_HASH,
+            [ORGANIZATION_ID]: KERNEL_HASH,
+          },
+        },
       },
-    })
-    expect(version).toHaveBeenCalledTimes(1)
+    ])
+    expect(fake.requests).toEqual([1])
     expect(read).not.toHaveBeenCalled()
   })
 
@@ -1279,13 +1335,178 @@ describe("CoreSource: run and version", () => {
       },
       { ok: false, error: { code: "command.internal" } },
     ],
-    [
-      "not a read value as command.internal",
-      "ok",
-      { ok: false, error: { code: "command.internal" } },
-    ],
   ])("answers %s for version", async (_, value, expected) => {
     const p = port(() => Promise.resolve(value))
-    expect(await over(p.server).version()).toStrictEqual(expected)
+    const { items } = await over(p.server).read([{ type: "version" }])
+    expect(items).toStrictEqual([expected])
+  })
+
+  it("answers a response that is not a read value as command.internal for version", async () => {
+    const send = () => Promise.resolve("ok")
+    const server = serverFunctionPort(send, serverFunctionAdapter(send))
+    const { items } = await over(server).read([{ type: "version" }])
+    expect(items).toStrictEqual([
+      { ok: false, error: { code: "command.internal" } },
+    ])
+  })
+})
+
+describe("CoreSource: the version part in the Server Function request", () => {
+  /** Server Function над записом: те саме `read` у порту й в адаптері. */
+  function serverFunction(
+    answer: (items: readonly WireReadPart[], call: number) => WireReadParts
+  ) {
+    const calls: WireReadPart[][] = []
+    const read: ServerFunctionAdapter["read"] = async (items) => {
+      calls.push([...items])
+      return answer(items, calls.length - 1)
+    }
+    const adapter: ServerFunctionAdapter = {
+      capabilities: { include: true },
+      read,
+    }
+    const server: ServerPort = { run: READS_ONLY.run, read }
+    const source = createCoreSource(
+      () => adapter,
+      catalogIndex(OBJECTS),
+      createReadLimiter(4),
+      server
+    )
+    return { source, calls }
+  }
+  const VERSION_OK = {
+    ok: true as const,
+    value: { snapshotHash: "h", objects: {} },
+  }
+  const typesOf = (call: readonly WireReadPart[]) => call.map((p) => p.type)
+
+  it("puts version first and keeps the order of the results", async () => {
+    const { source, calls } = serverFunction(() => ({
+      epoch: null,
+      items: [VERSION_OK, okPart(1), okPart(2)],
+    }))
+    const { items } = await source.read([
+      part({ object: TASK, id: key(1) }),
+      { type: "version" },
+      part({ object: TASK, id: key(2) }),
+    ])
+    expect(calls.map(typesOf)).toEqual([["version", "query", "query"]])
+    expect(
+      items.map((i) => ("rows" in i ? i.rows.rows[0]!.ref : "version"))
+    ).toEqual([key(1), "version", key(2)])
+  })
+
+  it("sends the version of the fake Server Function with the parts of its objects in one request", async () => {
+    const { fake, source } = setup()
+    seedTasks(fake, 1)
+    const { items } = await source.read([
+      part({ object: TASK, id: key(1) }),
+      { type: "version" },
+    ])
+    expect(fake.requests).toEqual([2])
+    expect(items.map((i) => i.ok)).toEqual([true, true])
+  })
+
+  it("does not touch the version with a data part refused batch-budget", async () => {
+    const { source, calls } = serverFunction((items, call) => ({
+      epoch: null,
+      items:
+        call === 0
+          ? [
+              VERSION_OK,
+              refusal("command.unavailable", "batch-budget"),
+              okPart(2),
+            ]
+          : items.map(() => okPart(1)),
+    }))
+    const { items } = await source.read([
+      { type: "version" },
+      part({ object: TASK, id: key(1) }),
+      part({ object: TASK, id: key(2) }),
+    ])
+    // Повтор — лише частина даних, окремим запитом; `version` не повторюється.
+    expect(calls.map(typesOf)).toEqual([
+      ["version", "query", "query"],
+      ["query"],
+    ])
+    expect(items[0]).toMatchObject({ ok: true, type: "version" })
+    expect(items[1]).toMatchObject({ ok: true })
+    expect(items[2]).toMatchObject({ ok: true })
+  })
+})
+
+// Маркер несе кожну колонку `copy` об'єкта й кожну колонку посилання `include`
+// частини (Рд40, І6): без них клієнт лишив би в тримуваному рядку стару копію
+// чи не знайшов би цілей.
+describe("a marker that carries what the part needs", () => {
+  const carrier: CatalogEntry = {
+    ...task,
+    attributes: task.attributes.map((a) =>
+      a.name === "title" ? { ...a, copy: true as const } : a
+    ),
+  }
+  const known = { epoch: EPOCH_A, keys: [key(1)], versions: ["1"] }
+
+  const answer = async (
+    entry: CatalogEntry,
+    query: RowsQuery,
+    marker: number | Record<string, unknown>
+  ) => {
+    const { adapter } = scripted([
+      () => ({
+        epoch: EPOCH_A,
+        items: [{ ok: true, value: { rows: [marker] } }],
+      }),
+    ])
+    const source = createCoreSource(
+      () => adapter,
+      catalogIndex([entry, org]),
+      createReadLimiter(4),
+      READS_ONLY
+    )
+    return (await source.read([{ type: "query", query, known }])).items[0]!
+  }
+  const internal = { ok: false, error: { code: "command.internal" } }
+  const withInclude: RowsQuery = { object: TASK, limit: 1, include: ["org"] }
+  const plain: RowsQuery = { object: TASK, limit: 1 }
+
+  it.each<[string, number | Record<string, unknown>]>([
+    ["a bare integer", 0],
+    ["an empty partial one", { $known: 0 }],
+    ["one with another column", { $known: 0, notes: "x" }],
+  ])("refuses %s marker of a part with include", async (_, marker) => {
+    expect(await answer(task, withInclude, marker)).toEqual(internal)
+  })
+
+  it("accepts a marker with the reference column of the include", async () => {
+    expect(
+      await answer(task, withInclude, { $known: 0, org_id: S })
+    ).toMatchObject({ ok: true })
+  })
+
+  it.each<[string, number | Record<string, unknown>]>([
+    ["a bare integer", 0],
+    ["a partial one without the copy", { $known: 0, notes: "x" }],
+  ])("refuses %s marker of an object with a copy", async (_, marker) => {
+    expect(await answer(carrier, plain, marker)).toEqual(internal)
+  })
+
+  it("accepts a marker with the copy of the object", async () => {
+    expect(
+      await answer(carrier, plain, { $known: 0, title: "t" })
+    ).toMatchObject({ ok: true })
+  })
+
+  it("wants the copy and the include column both", async () => {
+    expect(
+      await answer(carrier, withInclude, { $known: 0, title: "t" })
+    ).toEqual(internal)
+    expect(
+      await answer(carrier, withInclude, { $known: 0, title: "t", org_id: S })
+    ).toMatchObject({ ok: true })
+  })
+
+  it("accepts a bare marker of an object without copies in a part without include", async () => {
+    expect(await answer(task, plain, 0)).toMatchObject({ ok: true })
   })
 })

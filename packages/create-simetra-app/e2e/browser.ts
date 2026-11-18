@@ -122,27 +122,38 @@ export function watchDataFn(page: Page, app: App) {
 }
 
 /**
- * Скільки запитів `dataFn` іде після гідратації списку об'єкта (шов #207): один
- * на `version` плюс по одному на видимий вигляд знімка (§8.1: `revalidate`
- * кожного). Видимі вигляди: сам список (над `full` ще й вигляд повного
- * набору) і по виглядові на кожен `include`, чиє посилання хоч в одному рядку
- * знімка не порожнє (порожніх посилань вигляд не читає). Знімок — HTML
- * відповіді SSR. Одна функція на всі сценарії: зміна числа виглядів правиться
- * тут.
+ * Скільки запитів `dataFn` іде після гідратації списку: один, хоч скільки
+ * виглядів і `include` у знімку (§6.7, Р10) — збирач віддає частину
+ * `version` і перечитування всіх видимих виглядів одним пакетом.
  */
-export function expectedHydrationRequests(
+export function expectedHydrationRequests(): number {
+  return 1
+}
+
+/**
+ * Objects whose `query` parts the single request after hydration must carry
+ * (§6.7): the list object itself and, per `include`, the target object of
+ * each reference that is not empty in at least one row of the snapshot (an
+ * empty reference holds no target, so no held-target part exists). The
+ * snapshot is the HTML of the SSR response. One function for every scenario:
+ * a change of the views is fixed here, not in literals.
+ */
+export function expectedHydrationObjects(
   objectRef: "Catalog.Client" | "Catalog.Country",
-  residency: "window" | "full",
   snapshotHtml: string,
   orderBy?: OrderBy
-): number {
+): string[] {
   const entry = index.byRef.get(objectRef)
   if (entry === undefined) throw new Error(`no ${objectRef} in the catalog`)
-  const includes = (listQuery(entry, { orderBy }).include ?? []).filter(
-    (attribute) => new RegExp(`[{,]${attribute}:"`).test(snapshotHtml)
-  )
-  const views = 1 + (residency === "full" ? 1 : 0) + includes.length
-  return 1 + views
+  const targets = (listQuery(entry, { orderBy }).include ?? [])
+    .filter((attribute) => new RegExp(`[{,]${attribute}:"`).test(snapshotHtml))
+    .map((attribute) => {
+      const target = entry.attributes.find((a) => a.name === attribute)?.ref
+      if (target === undefined)
+        throw new Error(`include ${attribute} has no target object`)
+      return target.object
+    })
+  return [...new Set([entry.id, ...targets])]
 }
 
 // ------------------------------------------------------------ запис кадрів

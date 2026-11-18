@@ -18,7 +18,6 @@ import {
   type ReadPartValue,
   type ReadQuery,
   type ReadRows,
-  type SourceAdapter,
   type WireReadParts,
   type WireReadResult,
   type WireRowsQuery,
@@ -30,6 +29,7 @@ import {
   filterCollator,
 } from "../filter"
 import { scopeOf } from "../object-store"
+import type { ServerFunctionAdapter } from "../../adapter"
 import type { ServerPort } from "../source"
 import type { Key, ObjectName, ServerRow, Values } from "../types"
 
@@ -98,17 +98,23 @@ export interface FakeRead {
 /** The fake server and its controlled transport. */
 export interface FakeSource {
   /** The adapter the core reads through. */
-  readonly adapter: SourceAdapter
+  readonly adapter: ServerFunctionAdapter
   /**
    * The server port of the core: `run` serves one `update` (a version other
    * than `expectedVersion` is `command.conflict`, a kernel hash other than
    * the catalog's is `command.stale-client`) and answers in a microtask with
-   * the row without lazy columns, its change and {@link epoch}; `version`
-   * answers {@link snapshotHash} and the kernel hashes of the catalog.
+   * the row without lazy columns, its change and {@link epoch}; `read` is the
+   * {@link adapter}'s own, so the `version` part answers {@link snapshotHash}
+   * and {@link kernelHashes} in the request of the adapter's parts.
    */
   readonly server: ServerPort
   /** The catalog snapshot hash a `version` part answers. */
   snapshotHash: string
+  /**
+   * The kernel hash per object id a `version` part answers; the catalog's own
+   * to begin with. A test changes an entry to make the object incompatible.
+   */
+  kernelHashes: Record<string, string>
   readonly index: CatalogIndex
   /**
    * The row version epoch of the database. A part with `known` of the same
@@ -446,12 +452,17 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
         if (at < 0 || known.versions[at] !== String(row[entry.versionName])) {
           return row
         }
-        return copies.length === 0
+        // З `include` маркер несе й колонки посилань (Рд40).
+        const carried = [
+          ...copies.map((a) => a.name),
+          ...("include" in query ? (query.include ?? []) : []),
+        ]
+        return carried.length === 0
           ? { known: at }
           : {
               known: at,
               copies: Object.fromEntries(
-                copies.map((a) => [a.name, row[a.name]])
+                carried.map((name) => [name, row[name]])
               ),
             }
       }),
@@ -511,29 +522,126 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
     }
   }
 
+  const adapter: ServerFunctionAdapter = {
+    capabilities: { include: true },
+    read(items) {
+      return new Promise<WireReadParts>((resolve, reject) => {
+        const request = requests.length
+        requests.push(items.length)
+        inFlight++
+        maxInFlight = Math.max(maxInFlight, inFlight)
+        const slots: WireReadParts["items"][number][] = []
+        let left = items.length
+        let rejected = false
+        const settle = () => {
+          if (rejected || --left > 0) return
+          inFlight--
+          resolve({ epoch: fake.epoch, items: slots })
+        }
+        const fail = (error: unknown) => {
+          if (rejected) return
+          rejected = true
+          inFlight--
+          reject(error)
+        }
+        items.forEach((item, slot) => {
+          if (item.type === "version") {
+            // Версія каталогу відповідає сама, не чекаючи читань пакета.
+            slots[slot] = {
+              ok: true,
+              value: {
+                snapshotHash: fake.snapshotHash,
+                objects: { ...fake.kernelHashes },
+              },
+            }
+            settle()
+            return
+          }
+          const decoded = readPartFromWire(index, item)
+          const query = decoded.ok ? decoded.value.query : undefined
+          const known = decoded.ok ? decoded.value.known : undefined
+          const wire: Record<string, unknown> = { ...item.query }
+          delete wire.known
+          const entry: FakeReadLog = {
+            wire: wire as WireRowsQuery,
+            known,
+            request,
+            query,
+            issuedAt: clock,
+          }
+          log.push(entry)
+          let done = false
+          const deliver = (outcome: () => WireReadResult) => {
+            if (done) throw new Error("fake: read already delivered")
+            done = true
+            try {
+              entry.response = outcome()
+              slots[slot] = { ok: true, value: entry.response }
+            } catch (error) {
+              entry.error = error
+              // Відмова частини — її результат; усе інше ламає запит.
+              if (!(error instanceof CommandFailure)) return fail(error)
+              slots[slot] = {
+                ok: false,
+                error: errorToWire(index, error.error),
+              }
+            }
+            settle()
+          }
+          const read: FakeRead = {
+            log: entry,
+            object: query === undefined ? undefined : nameOf(query.object),
+            query,
+            issuedAt: entry.issuedAt,
+            answer(at = clock) {
+              deliver(() => {
+                if (!decoded.ok) {
+                  // Чужий для каталогу сервера запит — відмова звірки (Рд12).
+                  throw new CommandFailure(
+                    "invalid" in decoded
+                      ? decoded.invalid
+                      : { code: "command.stale-client" }
+                  )
+                }
+                const rows = execute(decoded.value.query, at)
+                return readResultToWire(
+                  index,
+                  decoded.value.query,
+                  withMarkers(decoded.value.query, rows, known)
+                )
+              })
+            },
+            fail(error) {
+              deliver(() => {
+                throw new CommandFailure(toError(error))
+              })
+            },
+          }
+          if (fake.mode === "manual" || fake.hold?.(read) === true) {
+            pending.push(read)
+            return
+          }
+          // Стан — на мить виконання, доставка — окремою мікрозадачею, тож
+          // одночасні читання одного такту видно в лічильнику.
+          const at = clock
+          queueMicrotask(() => read.answer(at))
+        })
+      })
+    },
+  }
+
   const fake: FakeSource = {
     index,
     epoch: init.epoch ?? null,
     snapshotHash: init.snapshotHash ?? "fake-snapshot",
+    kernelHashes: Object.fromEntries(
+      init.objects.map((entry) => [entry.id, entry.kernelHash])
+    ),
     server: {
       // Запис і відповідь — мікрозадачею: викликач, як і з транспортом,
       // не бачить результату синхронно.
       run: (request) => Promise.resolve().then(() => runUpdate(request)),
-      version: () =>
-        Promise.resolve({
-          epoch: fake.epoch,
-          items: [
-            {
-              ok: true,
-              value: {
-                snapshotHash: fake.snapshotHash,
-                objects: Object.fromEntries(
-                  init.objects.map((entry) => [entry.id, entry.kernelHash])
-                ),
-              },
-            },
-          ],
-        }),
+      read: adapter.read,
     },
     get requests() {
       return requests
@@ -569,101 +677,7 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
     deliverAll() {
       while (pending.length > 0) pending.shift()!.answer()
     },
-    adapter: {
-      capabilities: { include: true },
-      read(items) {
-        return new Promise<WireReadParts>((resolve, reject) => {
-          const request = requests.length
-          requests.push(items.length)
-          inFlight++
-          maxInFlight = Math.max(maxInFlight, inFlight)
-          const slots: WireReadParts["items"][number][] = []
-          let left = items.length
-          let rejected = false
-          const settle = () => {
-            if (rejected || --left > 0) return
-            inFlight--
-            resolve({ epoch: fake.epoch, items: slots })
-          }
-          const fail = (error: unknown) => {
-            if (rejected) return
-            rejected = true
-            inFlight--
-            reject(error)
-          }
-          items.forEach((item, slot) => {
-            const decoded = readPartFromWire(index, item)
-            const query = decoded.ok ? decoded.value.query : undefined
-            const known = decoded.ok ? decoded.value.known : undefined
-            const wire: Record<string, unknown> = { ...item.query }
-            delete wire.known
-            const entry: FakeReadLog = {
-              wire: wire as WireRowsQuery,
-              known,
-              request,
-              query,
-              issuedAt: clock,
-            }
-            log.push(entry)
-            let done = false
-            const deliver = (outcome: () => WireReadResult) => {
-              if (done) throw new Error("fake: read already delivered")
-              done = true
-              try {
-                entry.response = outcome()
-                slots[slot] = { ok: true, value: entry.response }
-              } catch (error) {
-                entry.error = error
-                // Відмова частини — її результат; усе інше ламає запит.
-                if (!(error instanceof CommandFailure)) return fail(error)
-                slots[slot] = {
-                  ok: false,
-                  error: errorToWire(index, error.error),
-                }
-              }
-              settle()
-            }
-            const read: FakeRead = {
-              log: entry,
-              object: query === undefined ? undefined : nameOf(query.object),
-              query,
-              issuedAt: entry.issuedAt,
-              answer(at = clock) {
-                deliver(() => {
-                  if (!decoded.ok) {
-                    // Чужий для каталогу сервера запит — відмова звірки (Рд12).
-                    throw new CommandFailure(
-                      "invalid" in decoded
-                        ? decoded.invalid
-                        : { code: "command.stale-client" }
-                    )
-                  }
-                  const rows = execute(decoded.value.query, at)
-                  return readResultToWire(
-                    index,
-                    decoded.value.query,
-                    withMarkers(decoded.value.query, rows, known)
-                  )
-                })
-              },
-              fail(error) {
-                deliver(() => {
-                  throw new CommandFailure(toError(error))
-                })
-              },
-            }
-            if (fake.mode === "manual" || fake.hold?.(read) === true) {
-              pending.push(read)
-              return
-            }
-            // Стан — на мить виконання, доставка — окремою мікрозадачею, тож
-            // одночасні читання одного такту видно в лічильнику.
-            const at = clock
-            queueMicrotask(() => read.answer(at))
-          })
-        })
-      },
-    },
+    adapter,
     insert(object, values) {
       const entry = entryOf(object)
       const key = values[entry.keyName]

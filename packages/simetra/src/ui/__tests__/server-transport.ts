@@ -31,7 +31,9 @@ export function serverTransport(fake: FakeSource) {
           ? await fake.server.run(
               request as Parameters<FakeSource["server"]["run"]>[0]
             )
-          : await fake.server.version()
+          : await fake.server.read(
+              request.items as Parameters<FakeSource["server"]["read"]>[0]
+            )
       return ok(value)
     } catch (error) {
       if (error instanceof CommandFailure)
@@ -61,14 +63,7 @@ export function serverTransport(fake: FakeSource) {
   }
 }
 
-/** The next `version` answers a foreign kernel hash for `objectId`: the object turns stale-client. */
+/** The `version` part answers a foreign kernel hash for `objectId`: the object turns stale-client. */
 export function staleKernel(fake: FakeSource, objectId: string) {
-  const real = fake.server.version
-  fake.server.version = async () => {
-    const answer = (await real()) as {
-      items: { value: { objects: Record<string, string> } }[]
-    }
-    answer.items[0]!.value.objects[objectId] = "1".repeat(64)
-    return answer
-  }
+  fake.kernelHashes[objectId] = "1".repeat(64)
 }

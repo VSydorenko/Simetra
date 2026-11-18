@@ -401,7 +401,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     createReadLimiter(limits.readParallel),
     // Запис і версія каталогу — завжди Server Function, навіть коли об'єкт
     // читає адаптер-перевизначення (§5.1).
-    serverFunctionPort(send)
+    serverFunctionPort(send, serverFunction)
   )
   const core = createCore({
     subject,

@@ -1,4 +1,8 @@
-export { createServerFunctionAdapter, selectSource } from "./adapter"
+export {
+  createServerFunctionAdapter,
+  selectSource,
+  type ServerFunctionAdapter,
+} from "./adapter"
 export { writerOf, type DataWriter } from "./data-writer"
 export { DataError, type DataErrorCode } from "./errors"
 export {

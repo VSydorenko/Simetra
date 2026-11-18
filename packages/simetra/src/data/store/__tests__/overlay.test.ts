@@ -81,9 +81,9 @@ function harness(limits?: Partial<CoreLimits>) {
         queue.push(() => void serve(request).then(resolve, reject))
       )
     },
-    version() {
-      port.versions++
-      return fake.server.version()
+    read(items) {
+      port.versions += items.filter((item) => item.type === "version").length
+      return fake.server.read(items)
     },
   }
   const source = createCoreSource(
@@ -1547,15 +1547,7 @@ describe("the table of refusals of a write (§7.3)", () => {
     const h = harness()
     const { card, version } = await mounted(h)
     // Позначка — відповіддю `version` з чужим kernelHash.
-    const real = h.fake.server.version
-    h.fake.server.version = async () => {
-      const answer = (await real()) as {
-        items: { value: { objects: Record<string, string> } }[]
-      }
-      answer.items[0]!.value.objects[h.fake.index.byRef.get(TASK)!.id] =
-        "1".repeat(64)
-      return answer
-    }
+    h.fake.kernelHashes[h.fake.index.byRef.get(TASK)!.id] = "1".repeat(64)
     h.core.requestVersion()
     await settle()
     expect(
