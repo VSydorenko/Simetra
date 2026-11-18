@@ -14,6 +14,7 @@ import {
   quoteIdent,
 } from "simetra/model"
 import { compile } from "simetra/compiler"
+import { loginSettingSql } from "../../src/schema/apply/platform-roles"
 import { renderDesiredState } from "simetra/schema"
 import {
   expectClean,
@@ -96,9 +97,13 @@ export function defineSignalStandCases(): void {
       await admin.query(
         `GRANT ${quoteIdent(parent)} TO ${quoteIdent(LOGIN)} WITH INHERIT FALSE, SET TRUE`
       )
-    await admin.query(
-      `ALTER ROLE ${quoteIdent(LOGIN)} SET role = '${ROLE_SETTING}'`
-    )
+    // Налаштування — тим самим SQL, що ставить `roles` справжній ролі входу
+    for (const sql of loginSettingSql({
+      name: LOGIN,
+      memberOf: [],
+      settings: LOGIN_ROLE_SETTINGS.signals!,
+    }))
+      await admin.query(sql)
   }, 120_000)
 
   afterAll(async () => {
@@ -238,9 +243,9 @@ export function defineSignalStandCases(): void {
         pair: boolean[]
       }>(
         `SELECT r.rolcanlogin AS login, r.rolinherit AS inherit,
-                (SELECT s.setconfig FROM pg_db_role_setting s
+                (SELECT s.setconfig::text[] FROM pg_db_role_setting s
                   WHERE s.setrole = r.oid AND s.setdatabase = 0) AS settings,
-                coalesce(array_agg(p.rolname) FILTER (WHERE p.rolname IS NOT NULL), '{}') AS parents,
+                coalesce(array_agg(p.rolname::text) FILTER (WHERE p.rolname IS NOT NULL), '{}'::text[]) AS parents,
                 coalesce(array_agg(m.inherit_option = false AND m.set_option) FILTER (WHERE p.rolname IS NOT NULL), '{}') AS pair
            FROM pg_roles r
            LEFT JOIN pg_auth_members m ON m.member = r.oid

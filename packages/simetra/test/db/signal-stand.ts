@@ -178,7 +178,12 @@ let counter = 0
 
 /** Прибирає кожен стенд процесу, що лишився. */
 export async function downAllStands(): Promise<void> {
-  for (const stand of [...live]) await stand.down()
+  const results = await Promise.allSettled([...live].map((s) => s.down()))
+  const errors = results.flatMap((r) =>
+    r.status === "rejected" ? [r.reason] : []
+  )
+  if (errors.length > 0)
+    throw new AggregateError(errors, "signal stands were not removed")
 }
 
 /** DSN з `application_name` прогону: сторож завершує бекенди за цим тегом. */
@@ -273,13 +278,12 @@ export async function startSignalStand(
     },
     async down() {
       if (downed) return
+      // Лише після успішного `rm`: збій лишає стенд у `live`, і `downAll`
+      // спробує ще раз
+      await docker("rm", "-f", "-v", name)
       downed = true
       live.delete(stand)
-      try {
-        await docker("rm", "-f", "-v", name)
-      } finally {
-        rmSync(dir, { recursive: true, force: true })
-      }
+      rmSync(dir, { recursive: true, force: true })
     },
   }
   live.add(stand)
