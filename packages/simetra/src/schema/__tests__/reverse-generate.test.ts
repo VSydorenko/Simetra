@@ -64,9 +64,13 @@ function options(
     defaultSchema?: string
     attributeCase?: AttributeCase
     databaseProvider?: DatabaseProvider
+    reference?: CatalogModel
   } = {}
 ) {
   return {
+    ...(overrides.reference === undefined
+      ? {}
+      : { reference: overrides.reference }),
     project: {
       name: overrides.name ?? "App",
       defaultSchema: overrides.defaultSchema ?? "app",
@@ -77,6 +81,29 @@ function options(
     newId: counter(),
     schemaPath,
     parse,
+  }
+}
+
+/**
+ * Еталон теки у формі каталогу (`reference`) без бази: тінь з бажаним станом
+ * теки тут заступає її рендер, бо одиничний «каталог» тестів — теж текст
+ * генератора. Розбіжність форм каталогу й генератора судять живі тести.
+ */
+async function renderedFolder(
+  kept: ReadonlyMap<string, string>
+): Promise<CatalogModel> {
+  const compiled = await compile(kept)
+  expect(compiled.model, "the kept folder compiles").toBeDefined()
+  return {
+    tables: catalogFromSnapshot(compiled.model!.physical).tables,
+    enumTypes: [],
+    units: compiled.model!.sqlUnits.map((u) => ({
+      class: u.class,
+      identity: u.identity,
+      schema: u.schema,
+      name: u.name,
+      sql: u.sql,
+    })),
   }
 }
 
@@ -1545,7 +1572,7 @@ describe("reverseGenerate", () => {
           sql: u.sql,
         })),
       }),
-      options(kept)
+      options(kept, { reference: await renderedFolder(kept) })
     )
     expect(result.diagnostics).toEqual([])
     // Лише перелік боргу (теки без нього introspect пише завжди) — і він
@@ -1737,6 +1764,7 @@ describe("reverseGenerate", () => {
           ],
         }),
         options(kept, {
+          reference: await renderedFolder(kept),
           name: "RightsApp",
           defaultSchema: "public",
           attributeCase: "camelCase",
@@ -1781,6 +1809,7 @@ describe("reverseGenerate", () => {
         ],
       }),
       options(kept, {
+        reference: await renderedFolder(kept),
         name: "RightsApp",
         defaultSchema: "public",
         attributeCase: "camelCase",
@@ -1829,6 +1858,7 @@ describe("reverseGenerate", () => {
         ],
       }),
       options(kept, {
+        reference: await renderedFolder(kept),
         name: "SingleTenantRights",
         defaultSchema: "public",
         attributeCase: "camelCase",
@@ -1871,6 +1901,7 @@ describe("reverseGenerate", () => {
         ],
       }),
       options(kept, {
+        reference: await renderedFolder(kept),
         name: "RightsApp",
         defaultSchema: "public",
         attributeCase: "camelCase",
@@ -1921,6 +1952,7 @@ describe("reverseGenerate", () => {
         })),
       }),
       options(kept, {
+        reference: await renderedFolder(kept),
         name: "RightsApp",
         defaultSchema: "public",
         attributeCase: "camelCase",
@@ -2157,7 +2189,7 @@ describe("reverseGenerate", () => {
           ...units([...foreign, OWN_GRANT].join("\n")),
         ],
       }),
-      options(kept)
+      options(kept, { reference: await renderedFolder(kept) })
     )
     const files = [
       "sql/app/grant__function__app_my_orgs__anon__execute.sql",
@@ -2224,6 +2256,7 @@ describe("reverseGenerate", () => {
         ],
       }),
       options(kept, {
+        reference: await renderedFolder(kept),
         name: "TestApp",
         defaultSchema: "public",
         attributeCase: "camelCase",
@@ -2259,10 +2292,86 @@ describe("reverseGenerate", () => {
           u === touch ? { ...u, sql: changed } : u
         ),
       }),
-      options(kept)
+      options(kept, { reference: await renderedFolder(kept) })
     )
     expect(errors(result).map((d) => [d.code, d.file])).toEqual([
       ["schema.reserved", "sql/simetra/touch.sql"],
+    ])
+  })
+
+  it("over an applied folder without the folder reference the generated units are not the platform's", async () => {
+    // Еталон теки — лише форма каталогу її тіні: без неї половина еталона від
+    // теки порожня, і згенеровані одиниці довідника йдуть у теку гучно, а не
+    // тонуть мовчки
+    const kept = keptCatalog()
+    const compiled = await compile(kept)
+    expectClean(compiled)
+    const catalog = model({
+      tables: catalogFromSnapshot(compiled.model!.physical).tables,
+      units: compiled.model!.sqlUnits.map((u) => ({
+        class: u.class,
+        identity: u.identity,
+        schema: u.schema,
+        name: u.name,
+        sql: u.sql,
+      })),
+    })
+    const without = await reverseGenerate(catalog, options(kept))
+    // Кожен тригер довідника, який рендерить тека: усі три гучні
+    expect(errors(without).map((d) => [d.code, d.file])).toEqual(
+      [
+        "currency__currency_simetra_key",
+        "currency__currency_simetra_key_after",
+        "currency__currency_simetra_touch",
+      ].flatMap((name) => [
+        ["sql.kind-table-verbatim", `sql/app/${name}.sql`],
+        ["sql.platform-function-call", `sql/app/${name}.sql`],
+      ])
+    )
+    expect(without.changes).toEqual([])
+    const withReference = await reverseGenerate(
+      catalog,
+      options(kept, { reference: await renderedFolder(kept) })
+    )
+    expect(errors(withReference)).toEqual([])
+  })
+
+  it("over a kept folder a generated unit is compared with the reference's catalog form, not the generator text", async () => {
+    // Каталог пише одиницю у своїй формі; еталон теки — та сама форма з її
+    // тіні. Тож рівність з формою еталона — платформне, а рівність лише з
+    // текстом генератора — ні
+    const kept = keptCatalog()
+    const compiled = await compile(kept)
+    expectClean(compiled)
+    const identity = "trigger:app.currency.currency_simetra_key"
+    const own = compiled.model!.sqlUnits.find((u) => u.identity === identity)!
+    // Інше дерево розбору без правила нормалізації — як вираз, який каталог
+    // переписав у своїй формі
+    const catalogForm = own.sql.replace("WHEN (", "WHEN (true AND ")
+    expect(catalogForm).not.toBe(own.sql)
+    const reference = await renderedFolder(kept)
+    const inCatalogForm = (m: CatalogModel): CatalogModel => ({
+      ...m,
+      units: m.units.map((u) =>
+        u.identity === identity ? { ...u, sql: catalogForm } : u
+      ),
+    })
+    const catalog = inCatalogForm(reference)
+    const same = await reverseGenerate(
+      catalog,
+      options(kept, { reference: inCatalogForm(reference) })
+    )
+    expect(errors(same)).toEqual([])
+    const generatorOnly = await reverseGenerate(
+      catalog,
+      options(kept, { reference })
+    )
+    expect(errors(generatorOnly).map((d) => [d.code, d.file])).toEqual([
+      ["sql.kind-table-verbatim", "sql/app/currency__currency_simetra_key.sql"],
+      [
+        "sql.platform-function-call",
+        "sql/app/currency__currency_simetra_key.sql",
+      ],
     ])
   })
 
@@ -2304,7 +2413,10 @@ describe("reverseGenerate", () => {
         ...layer,
       ],
     })
-    const result = await reverseGenerate(catalog, options(kept))
+    const result = await reverseGenerate(
+      catalog,
+      options(kept, { reference: await renderedFolder(kept) })
+    )
     expect(result.diagnostics).toEqual([])
     const written = result.changes.map((c) => c.content ?? "").join("\n")
     for (const unit of layer) expect(written).not.toContain(unit.sql)
@@ -2313,7 +2425,10 @@ describe("reverseGenerate", () => {
       "sql-debt.json",
     ])
     // Тека тепер змішана — вид і `CustomTable` з шаром; удруге — так само чисто
-    const second = await reverseGenerate(catalog, options(result.files))
+    const second = await reverseGenerate(
+      catalog,
+      options(result.files, { reference: await renderedFolder(result.files) })
+    )
     expect(second.diagnostics).toEqual([])
     expect(second.changes).toEqual([])
   })
@@ -2365,7 +2480,7 @@ describe("reverseGenerate", () => {
           ...author,
         ],
       }),
-      options(kept)
+      options(kept, { reference: await renderedFolder(kept) })
     )
     expect(
       errors(result).map((d) => [d.code, d.params?.identity ?? d.params?.unit])

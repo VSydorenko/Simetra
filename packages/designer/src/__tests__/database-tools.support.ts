@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { databaseResource } from "../io/database"
 import { toolByName } from "../tools/catalog"
@@ -14,11 +14,23 @@ import {
   renderModelIndependentLayer,
   renderSharedTriggerFunctions,
 } from "simetra/compiler"
-import { applyStateOwnership, type EngineScope } from "simetra/schema"
+import {
+  applyStateOwnership,
+  renderDesiredState,
+  type EngineScope,
+} from "simetra/schema"
 import { readMetadataDir } from "../io/metadata-dir"
-import { testProvider } from "../../../simetra/test/support"
+import {
+  acceptDebt,
+  catalog,
+  metaFiles,
+  project as projectFile,
+  runTag,
+  testProvider,
+} from "../../../simetra/test/support"
 import { inTarget as loadTarget } from "./support/db"
 import { installMismatch, installObjects } from "./support/platform-install"
+import { leftoverShadows, provisionedShadows } from "./support/shadows"
 
 /**
  * Спільна підготовка тестів `introspect` і `diff` над живою базою
@@ -263,6 +275,99 @@ export function describeToolPathInvariants(): void {
           },
         ])
       })
+    })
+  })
+
+  describe("introspect over an applied folder judges its generated units by the catalog form of one shadow", () => {
+    /** Тека з довідником: його тригери й гранти рендерить тека, не шар. */
+    const kept = () =>
+      metaFiles({
+        "project.meta.json": projectFile({
+          name: "Shop",
+          defaultSchema: "app",
+          naming: { attributeCase: "snake_case" },
+          database: { provider: testProvider() },
+        }),
+        "catalogs/Currency/Currency.meta.json": catalog("Currency", {
+          schema: "app",
+        }),
+      })
+
+    async function written(
+      dir: string,
+      files: ReadonlyMap<string, string>
+    ): Promise<void> {
+      for (const [path, text] of files) {
+        await mkdir(dirname(join(dir, path)), { recursive: true })
+        await writeFile(join(dir, path), text)
+      }
+    }
+
+    it("the folder's units are the platform's, through one run-tagged shadow that is gone after the call", async () => {
+      const files = kept()
+      const compiled = await compile(files)
+      expect(
+        compiled.diagnostics.filter((d) => d.severity === "error")
+      ).toEqual([])
+      await inTarget(
+        renderDesiredState(compiled.model!).sql,
+        ["app"],
+        async (url) => {
+          const dir = await freshProject()
+          await written(dir, files)
+          const mark = provisionedShadows().length
+          const r = await call("introspect", {}, options(dir, { [ENV]: url }))
+          expect(errors(r)).toEqual([])
+          expect(r.written).toBe(true)
+          // Тригери довідника не стали дослівним SQL теки
+          const after = await compile(await readMetadataDir(dir))
+          expect(
+            after
+              .model!.sqlUnits.filter((u) => u.file !== undefined)
+              .map((u) => u.identity)
+          ).toEqual([])
+          // Одна тінь на виклик, з тегом прогону, і її вже немає
+          const shadows = provisionedShadows().slice(mark)
+          expect(shadows).toHaveLength(1)
+          expect(shadows[0]).toContain(runTag())
+          expect(await leftoverShadows(mark)).toEqual([])
+        }
+      )
+    })
+
+    it("a folder whose shadow fails is refused loudly, and the shadow is gone", async () => {
+      // Тінь теки падає на поданні над таблицею, якої немає: еталона теки
+      // немає, і introspect це називає, а не пише теку без нього
+      const files = kept()
+      const compiled = await compile(files)
+      expect(
+        compiled.diagnostics.filter((d) => d.severity === "error")
+      ).toEqual([])
+      const broken = await acceptDebt(
+        new Map([
+          ...files,
+          [
+            "sql/app/broken.sql",
+            "CREATE VIEW app.broken AS SELECT id FROM app.nowhere;\n",
+          ],
+        ])
+      )
+      await inTarget(
+        renderDesiredState(compiled.model!).sql,
+        ["app"],
+        async (url) => {
+          const dir = await freshProject()
+          await written(dir, broken)
+          const mark = provisionedShadows().length
+          const r = await call("introspect", {}, options(dir, { [ENV]: url }))
+          expect(r.written).toBe(false)
+          expect(errors(r).map((d) => d.code)).toContain(
+            "engine.shadow-load-failed"
+          )
+          expect(provisionedShadows().slice(mark)).toHaveLength(1)
+          expect(await leftoverShadows(mark)).toEqual([])
+        }
+      )
     })
   })
 }

@@ -74,6 +74,15 @@ export interface ReverseOptions {
   newId: IdSource
   schemaPath: SchemaPathResolver
   parse: SqlParser
+  /**
+   * Еталон наявної теки у формі каталогу: модель каталогу тіні, у яку
+   * завантажено бажаний стан теки (`folderReference`). Згенеровані одиниці
+   * теки впізнаються за цією формою, а не за текстом генератора: каталог
+   * пише політики, функції й подання інакше. Без нього половина еталона від
+   * теки порожня (невідоме — не платформне): одиниці й таблиці платформи
+   * теки йдуть у теку, і їх судить компілятор.
+   */
+  reference?: CatalogModel
 }
 
 export interface ReverseResult {
@@ -218,7 +227,12 @@ function layerTriggers(
  * за вмістом (спека П2 §9, «Платформне — за вмістом»): установка провайдера
  * (файлу проєкту, коли він є) і шар, що не залежить від моделі, для таблиць
  * без виду теки; тека, що компілюється, додає свої згенеровані одиниці з
- * тілом, яке фіксує платформа, і таблиці платформи своєї моделі. Тож
+ * тілом, яке фіксує платформа, і таблиці платформи своєї моделі — лише з
+ * еталоном теки у формі каталогу (`reference`). Одиниці, крім грантів,
+ * беруться з нього за ідентичностями згенерованих одиниць теки: каталог
+ * проти каталогу, як у `diff`. Гранти порівнюються атомами дерева розбору,
+ * які від форми не залежать, а ідентичність гранту в каталозі інша (одна
+ * одиниця на колонку), тож їх дає модель теки. Тож
  * повторний прийом над текою першого не губить шару таблиць `CustomTable`.
  * Родини, вміст яких залежить від моделі видів, без теки еталона не мають і
  * йдуть у теку. Невідомий провайдер уже названо
@@ -227,31 +241,26 @@ function layerTriggers(
 async function platformOf(
   provider: DatabaseProvider,
   kept: CompiledModel | undefined,
+  reference: CatalogModel | undefined,
   kinds: ReadonlySet<string>,
   catalog: CatalogModel,
   parse: SqlParser
 ): Promise<PlatformRecogniser | undefined> {
   if (!DATABASE_PROVIDERS.includes(provider)) return undefined
   const install = await platformInstall(provider)
+  const folder =
+    kept === undefined || reference === undefined
+      ? { tables: [], units: [] }
+      : folderHalf(kept, reference)
   return platformRecogniser(
     {
-      tables: [
-        ...install.tables,
-        ...(kept?.physical.tables.filter((t) => !isObjectTable(t)) ?? []),
-      ],
-      // Одиниці теки — останніми: та сама ідентичність у теці важить більше.
-      // Обгортка запиту рухів несе запит автора: її описує блок об'єкта
-      // (`describedElsewhere`), а не еталон
+      tables: [...install.tables, ...folder.tables],
+      // Одиниці теки — останніми: та сама ідентичність у теці важить більше
       units: [
         ...install.units,
         ...renderSharedTriggerFunctions(provider, parse),
         ...layerTriggers(catalog, kinds, provider, parse),
-        ...(kept?.sqlUnits.filter(
-          (u) =>
-            u.file === undefined &&
-            u.generator !== undefined &&
-            !isMovementQuery(u)
-        ) ?? []),
+        ...folder.units,
       ],
     },
     parse
@@ -259,10 +268,38 @@ async function platformOf(
 }
 
 /**
+ * Половина еталона від теки: таблиці платформи її моделі, її згенеровані
+ * гранти й одиниці каталогу тіні під ідентичностями решти її згенерованих
+ * одиниць. Обгортка запиту рухів несе запит автора: її описує блок об'єкта
+ * (`describedElsewhere`), а не еталон.
+ */
+function folderHalf(
+  kept: CompiledModel,
+  reference: CatalogModel
+): PlatformReference {
+  const generated = kept.sqlUnits.filter(
+    (u) =>
+      u.file === undefined && u.generator !== undefined && !isMovementQuery(u)
+  )
+  const identities = new Set(
+    generated.filter((u) => u.class !== "grant").map((u) => u.identity)
+  )
+  return {
+    tables: kept.physical.tables.filter((t) => !isObjectTable(t)),
+    units: [
+      ...generated.filter((u) => u.class === "grant"),
+      ...reference.units.filter(
+        (u) => u.class !== "grant" && identities.has(u.identity)
+      ),
+    ],
+  }
+}
+
+/**
  * Модель наявної теки, коли тека є (файл поза генератором і файлом
  * проєкту) і компілюється; інакше `undefined`.
  */
-async function keptModel(
+export async function keptModel(
   existing: ReadonlyMap<string, string>
 ): Promise<CompiledModel | undefined> {
   if (
@@ -432,6 +469,7 @@ export async function reverseGenerate(
   const platform = await platformOf(
     folder.project?.databaseProvider ?? o.project.databaseProvider,
     kept,
+    o.reference,
     elsewhere.relations,
     model,
     o.parse

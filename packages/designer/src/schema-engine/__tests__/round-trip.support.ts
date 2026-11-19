@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto"
 import pg from "pg"
-import { afterAll, afterEach, beforeAll, beforeEach, expect } from "vitest"
-import { SIGNAL_OUTBOX } from "simetra/model"
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "vitest"
+import { SIGNAL_OUTBOX, type CatalogModel } from "simetra/model"
 import {
   canonicalSnapshot,
   compile,
@@ -20,6 +28,7 @@ import {
   compareWithDesired,
   engineScope,
   executePlan,
+  folderReference,
   requiredPermissions,
   renderDesiredState,
   reverseGenerate,
@@ -33,6 +42,7 @@ import {
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import {
   SCOPE_FUNCTIONS_FILE,
+  readReferenceDomain,
   shadowAgeMinutes,
   shadowDatabaseNames,
   testDatabaseUrl,
@@ -347,13 +357,37 @@ interface RoundTrip {
 }
 
 /**
+ * Еталон наявної теки для `reverseGenerate` — той самий шлях, що й в
+ * `introspect` (`folderReference`): тінь з бажаним станом теки, без помилок.
+ */
+async function referenceOf(
+  target: DbConnection,
+  existing: ReadonlyMap<string, string>
+): Promise<{ reference?: CatalogModel }> {
+  const reference = await folderReference(
+    engine,
+    dbs.reader,
+    { target },
+    existing
+  )
+  expect(reference.diagnostics).toEqual([])
+  return reference.catalog === undefined ? {} : { reference: reference.catalog }
+}
+
+/**
  * Повторний introspect у ту саму теку не змінює мітки виду: її призначено
  * раз. Мітки свідомо зсунуто від тих, що дало б доповнення, — інакше загублену
- * мітку непомітно відновило б саме доповнення.
+ * мітку непомітно відновило б саме доповнення. Зсуваються лише мітки, які
+ * призначив перший прохід (у теці до нього, `before`, їх немає): мітка, що
+ * вже була в теці, — вміст розгорнутої бази (`rights_any(…, '<мітка>')`,
+ * подання `simetra.kind_labels`), тож зсунута — уже інша тека, яку прийом за
+ * вмістом справедливо відмовляє. Що й вона лишається, звіряє та сама рівність.
  */
 async function expectKindLabelsKept(
+  target: DbConnection,
   extracted: Extracted,
   project: Project,
+  before: ReadonlyMap<string, string>,
   files: ReadonlyMap<string, string>,
   definers: Loss["definers"]
 ): Promise<void> {
@@ -367,6 +401,7 @@ async function expectKindLabelsKept(
     )
   const existing = new Map(files)
   for (const [path, label] of labels(files)) {
+    if (labels(before).has(path)) continue
     existing.set(
       path,
       JSON.stringify({
@@ -381,6 +416,7 @@ async function expectKindLabelsKept(
     newId: () => randomUUID(),
     schemaPath,
     parse,
+    ...(await referenceOf(target, existing)),
   })
   expectRefusedDefiners(again.diagnostics, definers)
   expect(labels(again.files)).toEqual(labels(existing))
@@ -411,7 +447,14 @@ async function refusedRoundTrip(
     parse,
   })
   expectRefusedDefiners(reversed.diagnostics, loss.definers)
-  await expectKindLabelsKept(extracted, project, reversed.files, loss.definers)
+  await expectKindLabelsKept(
+    target,
+    extracted,
+    project,
+    new Map(),
+    reversed.files,
+    loss.definers
+  )
   return new Map(reversed.files)
 }
 
@@ -436,9 +479,17 @@ export async function roundTripOf(
     newId: () => randomUUID(),
     schemaPath,
     parse,
+    ...(await referenceOf(target, existing)),
   })
   expectRefusedDefiners(reversed.diagnostics, loss.definers)
-  await expectKindLabelsKept(extracted, project, reversed.files, loss.definers)
+  await expectKindLabelsKept(
+    target,
+    extracted,
+    project,
+    existing,
+    reversed.files,
+    loss.definers
+  )
 
   const compiled = await compile(reversed.files)
   expect(errors(compiled.diagnostics)).toEqual([])
@@ -968,4 +1019,30 @@ export async function extractDiagnostics(
     scope,
     async (target) => (await engine.extract(target, scope)).diagnostics
   )
+}
+
+/**
+ * Прийом над наявною текою еталонного домену: еталон теки — форма каталогу
+ * її тіні (`folderReference`), тож згенеровані одиниці теки (політики,
+ * функції команд, подання) — платформні. Реєструється з файлу кожного
+ * профілю (`round-trip.db.test.ts`, `round-trip.supabase.db.test.ts`).
+ */
+export function describeReferenceDomain(): void {
+  describe("over existing metadata: the reference domain survives the round trip", () => {
+    it("reference domain", async () => {
+      const files = readReferenceDomain(testProvider())
+      const { source, result: trip } = await deployedRoundTrip(
+        files,
+        files,
+        false
+      )
+      const result = trip!
+      // Види 1С і платформний шар лишаються описаними власною текою
+      expect(tableKeys(result.model)).toEqual(tableKeys(source))
+      expect(kindsOf(result.model)).toEqual(kindsOf(source))
+      expect(result.model.sqlUnits.map((u) => u.identity).sort()).toEqual(
+        source.sqlUnits.map((u) => u.identity).sort()
+      )
+    })
+  })
 }

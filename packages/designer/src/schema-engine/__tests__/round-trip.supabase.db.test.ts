@@ -12,6 +12,7 @@ import {
   schemaPath,
   scopeOf,
   useRoundTrip,
+  describeReferenceDomain,
 } from "./round-trip.support"
 import {
   describeAdoptionFromScratch,
@@ -30,6 +31,7 @@ useRoundTrip()
 // Supabase; спільні з `round-trip.db.test.ts`
 describeAdoptionFromScratch()
 describeModelPathInvariants()
+describeReferenceDomain()
 
 describe("class fixtures survive the round trip", () => {
   for (const fixture of presetClassFixtures()) {

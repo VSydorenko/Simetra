@@ -4,7 +4,6 @@ import { reverseGenerate } from "simetra/schema"
 import { PROVIDER_OWNER_ROLES } from "simetra/model"
 import {
   movementQuery,
-  readReferenceDomain,
   superuserClient,
   testProvider,
   testRoleFor,
@@ -24,16 +23,15 @@ import {
   extractDiagnostics,
   classProperty,
   inTarget,
-  kindsOf,
   parser,
   portableClassFixtures,
   roundTripOf,
   schemaPath,
   scopeOf,
   kindsOfFiles,
-  tableKeys,
   tableKeysOfFiles,
   useRoundTrip,
+  describeReferenceDomain,
 } from "./round-trip.support"
 
 /**
@@ -205,6 +203,7 @@ describe("a role of the application's own", () => {
 // файлом профілю Supabase
 describeAdoptionFromScratch()
 describeModelPathInvariants()
+describeReferenceDomain()
 
 describe("adoption from scratch with named scope set functions", () => {
   // Іменовані функції множини скоупу після прийому з нуля повертаються
@@ -236,23 +235,6 @@ describe("adoption from scratch with named scope set functions", () => {
 // користувачів §12): свіжий introspect розклав би `simetra` у метадані
 // застосунку, а схема зарезервована. Тому домен проходить round-trip поверх
 // власної теки: шар і види 1С описані в ній, генератор їх не дублює.
-describe("over existing metadata: the reference domain survives the round trip", () => {
-  it("reference domain", async () => {
-    const files = readReferenceDomain(testProvider())
-    const { source, result: trip } = await deployedRoundTrip(
-      files,
-      files,
-      false
-    )
-    const result = trip!
-    // Види 1С і платформний шар лишаються описаними власною текою
-    expect(tableKeys(result.model)).toEqual(tableKeys(source))
-    expect(kindsOf(result.model)).toEqual(kindsOf(source))
-    expect(result.model.sqlUnits.map((u) => u.identity).sort()).toEqual(
-      source.sqlUnits.map((u) => u.identity).sort()
-    )
-  })
-})
 
 describe("what the round trip cannot carry is loud", () => {
   it("an exclusion constraint is unrepresentable by name", async () => {
