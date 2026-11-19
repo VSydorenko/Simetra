@@ -32,6 +32,7 @@ export type { ResolvedReference } from "./stages/identity"
 export type { CreationNode } from "./sql/dependencies"
 export {
   grantRoles,
+  hasFixedBody,
   isMovementQuery,
   platformFunctionSignatures,
   readSqlUnits,

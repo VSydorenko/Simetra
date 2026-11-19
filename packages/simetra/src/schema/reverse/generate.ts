@@ -4,6 +4,7 @@ import {
   completeFiles,
   currentDebt,
   diagnostic,
+  hasFixedBody,
   isMovementQuery,
   kindKeyColumns,
   sortDiagnostics,
@@ -278,8 +279,7 @@ function folderHalf(
   reference: CatalogModel
 ): PlatformReference {
   const generated = kept.sqlUnits.filter(
-    (u) =>
-      u.file === undefined && u.generator !== undefined && !isMovementQuery(u)
+    (u) => u.file === undefined && hasFixedBody(u)
   )
   const identities = new Set(
     generated.filter((u) => u.class !== "grant").map((u) => u.identity)
