@@ -251,8 +251,10 @@ const sameSet = (a: readonly string[], b: readonly string[]) =>
  * не одиниця (спека П2 §9);
  * відкликане з них — `REVOKE`; зайве — `GRANT` усіх прав пари; пара, якій і
  * бракує очікуваного, і є зайве, — обидва: один `GRANT` відкликаного не
- * виражає й мовчки зберіг би його. Розбіжність опції, якої оператори не
- * виражають, — `engine.unrepresentable`. Порожній масив — одиниці немає.
+ * виражає й мовчки зберіг би його. Опція гранту — частина ідентичності
+ * одиниці (атом `select*`), тож права з опцією й без неї — окремі оператори:
+ * `GRANT … WITH GRANT OPTION` додає опцію, `REVOKE GRANT OPTION FOR` знімає
+ * типову, якої пара не має. Порожній масив — одиниці немає.
  */
 function aclStatement(
   fact: Fact,
@@ -274,61 +276,44 @@ function aclStatement(
   const privileges = strings(fact.payload.privileges)
   const grantable = strings(fact.payload.grantable)
   const expected = expectedPrivileges(fact, defaults, provider)
-  if (
-    sameSet(privileges, expected.privileges) &&
-    sameSet(grantable, expected.grantable)
-  )
-    return []
   const column = id.column === undefined ? "" : ` (${quoteIdent(id.column)})`
   const list = (privs: readonly string[]) =>
     privs.map((p) => `${p}${column}`).join(", ")
+  const to = grantee(id.grantee)
   const extra = privileges.filter((p) => !expected.privileges.includes(p))
   const missing = expected.privileges.filter((p) => !privileges.includes(p))
-  const revoke = `REVOKE ${list(missing)} ON ${target} FROM ${grantee(id.grantee)}`
-  if (extra.length === 0 && missing.length > 0) {
-    // `REVOKE` прибирає привілеї разом з опцією; розбіжність опції на тих, що
-    // лишилися, — другий оператор на пару, тож гучно, а не тихо
-    const keptGrantable = expected.grantable.filter((p) =>
-      privileges.includes(p)
-    )
-    if (!sameSet(grantable, keptGrantable)) {
-      issues.push({
-        object: id,
-        property: "grantable",
-        detail: `grant option on ${grantable.join(",") || "nothing"} differs from the default ${keptGrantable.join(",") || "nothing"} besides revoked ${missing.join(",")}`,
-      })
-      return []
-    }
-    return [revoke]
-  }
-  // `GRANT` опцію не відкликає: опція, вужча за типову на наявних правах,
-  // потребує `REVOKE GRANT OPTION FOR` — другого оператора на пару
+  // `GRANT` опцію не відкликає, а `REVOKE` прав прибирає їх разом з опцією:
+  // типова опція на правах, що лишилися, але пара її не має, — окреме
+  // відкликання самої опції
   const narrowed = expected.grantable.filter(
     (p) => privileges.includes(p) && !grantable.includes(p)
   )
-  if (narrowed.length > 0) {
-    issues.push({
-      object: id,
-      property: "grantable",
-      detail: `grant option on ${narrowed.join(",")} is revoked from the default, which GRANT cannot express`,
-    })
-    return []
-  }
-  // Ідентичність гранту опцію не несе, а частковий `WITH GRANT OPTION` — це
-  // два оператори на одну пару
-  if (grantable.length > 0 && grantable.length !== privileges.length) {
-    issues.push({
-      object: id,
-      property: "grantable",
-      detail: `grant option on ${grantable.join(",")} only of ${privileges.join(",")}`,
-    })
-    return []
-  }
+  // Зайве — `GRANT` усіх прав пари (без опції й з нею окремо); без зайвого
+  // лише опція, ширша за типову, — `GRANT … WITH GRANT OPTION` саме її
+  const granted =
+    extra.length > 0
+      ? { plain: privileges.filter((p) => !grantable.includes(p)), grantable }
+      : {
+          plain: [],
+          grantable: grantable.filter((p) => !expected.grantable.includes(p)),
+        }
   // Відкликання раніше за грант на тому самому об'єкті дає граф створення
   // компілятора, а не порядок тут
   return [
-    ...(missing.length > 0 ? [revoke] : []),
-    `GRANT ${list(privileges)} ON ${target} TO ${grantee(id.grantee)}${grantable.length > 0 ? " WITH GRANT OPTION" : ""}`,
+    ...(missing.length > 0
+      ? [`REVOKE ${list(missing)} ON ${target} FROM ${to}`]
+      : []),
+    ...(narrowed.length > 0
+      ? [`REVOKE GRANT OPTION FOR ${list(narrowed)} ON ${target} FROM ${to}`]
+      : []),
+    ...(granted.plain.length > 0
+      ? [`GRANT ${list(granted.plain)} ON ${target} TO ${to}`]
+      : []),
+    ...(granted.grantable.length > 0
+      ? [
+          `GRANT ${list(granted.grantable)} ON ${target} TO ${to} WITH GRANT OPTION`,
+        ]
+      : []),
   ]
 }
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { compile, type CompileResult } from "simetra/compiler"
+import {
+  compile,
+  grantRoles,
+  splitIdentity,
+  type CompileResult,
+} from "simetra/compiler"
 import {
   STOCK_FILE,
   acceptDebt,
@@ -433,6 +438,40 @@ describe("sql units", () => {
       "grant:grant:table:public.t:authenticated:insert",
       "grant:grant:table:public.t:authenticated:select",
     ])
+  })
+
+  // Опція гранту — частина атома привілею (`*`, як в `aclitem` Postgres):
+  // грант, що відрізняється лише нею, — інша одиниця, так само відкликання
+  // самої опції (#277)
+  it("the grant option is part of each privilege atom", async () => {
+    expect(
+      await identities(
+        [
+          "GRANT SELECT ON public.t TO authenticated;",
+          "GRANT INSERT (a, b), SELECT ON public.t TO anon WITH GRANT OPTION;",
+          "REVOKE SELECT ON public.t FROM anon;",
+          "REVOKE GRANT OPTION FOR UPDATE ON public.t FROM anon;",
+        ].join("\n")
+      )
+    ).toEqual([
+      "grant:grant:table:public.t:anon:insert(a,b)*,select*",
+      "grant:grant:table:public.t:authenticated:select",
+      "grant:revoke:table:public.t:anon:select",
+      "grant:revoke:table:public.t:anon:update*",
+    ])
+  })
+
+  // Ім'я ролі в ідентичності — за правилом `quoteIdent`: кома чи двокрапка
+  // в імені не ділять ролі, а `grantRoles` повертає імена каталогу
+  it("quotes role names in the grant identity", async () => {
+    const [identity] = await identities(
+      'GRANT SELECT ON public.t TO "a,b", "x:""y""", PUBLIC;'
+    )
+    expect(identity).toBe(
+      'grant:grant:table:public.t:"a,b","x:""y""",public:select'
+    )
+    const roles = splitIdentity(identity!, ":")[4]!
+    expect(grantRoles(roles)).toEqual(["a,b", 'x:"y"', "public"])
   })
 
   it("two ALTER PUBLICATION ADD TABLE for different tables are different units", async () => {

@@ -32,6 +32,7 @@ diagnostics themselves.
 | Apply a reviewed plan to the database                                             | `apply`      | `simetra apply <plan> [dir] --plan-hash <hex> --yes` | `apply` with `{plan, planHash, allow?, confirm}` |
 | Create the platform's cluster roles once per server (before the first `plan`); reads the project file | `roles`      | `simetra roles`                          | `roles` with `{}`                           |
 | Restore rights access outside commands: the first global assignment, a global or tenant `fullAccess` owner nobody holds (as the migrator) | `rights-maintenance` | `simetra rights-maintenance '<json>' [dir] --yes` | not available: command line only |
+| Generate the Centrifugo config of the project's signals (no secret in it) | `signals-config` | `simetra signals-config '<json>' [dir]` | `signals-config` with `{origin, issuer, jwksUrl}` |
 | Read application data of the development database as a user, with that user's rights | `data-read` | `simetra data-read '<json>' [dir] --data-url-env <VAR> --as <uuid>` | `data-read` with `{query}` |
 | Change application data of the development database as a user (seed test data, reproduce a bug) | `data-command` | `simetra data-command '<json>' [dir] --data-url-env <VAR> --as <uuid>` | `data-command` with `{operations}` |
 
@@ -466,6 +467,34 @@ If `apply` reports `outcome unknown`, the connection was lost and the apply may
 or may not have been committed. Never apply again blindly: look up the printed
 apply id in the `apply_id` column of `simetra.ledger` first — a row means it was
 committed.
+
+## Signals: the Centrifugo config
+
+Signals of committed commands reach clients through Centrifugo, which reads the
+outbox table `simetra.signal_outbox`. Generate its config from the project
+instead of writing it by hand:
+
+```sh
+pnpm exec simetra signals-config '{"origin":"https://app.example.com","issuer":"https://app.example.com","jwksUrl":"http://app:3000/simetra/signals/jwks"}' > centrifugo.json
+```
+
+- `origin` is the browser origin of the application, `issuer` the host origin
+  that signs the tokens; the token audience is `centrifugo:<project name>`.
+  `jwksUrl` is where the host serves its JWKS: `https:`, or `http:` only on a
+  loopback address or an internal single-label service name. Anything else, or
+  a hand-edited config that leaves the tool's whitelist, is refused.
+- The config holds no secret. Give Centrifugo the DSN of the login role
+  `simetra_signals` in its environment, in the two variables the tool names
+  (`--format json` lists them): a direct connection, or a pooler in session
+  mode only (the consumer needs `LISTEN`). Set the HTTP listener through the
+  environment as well (`CENTRIFUGO_HTTP_SERVER_ADDRESS`,
+  `CENTRIFUGO_HTTP_SERVER_PORT`).
+- Run exactly one Centrifugo per application: history lives in its memory, so
+  a second instance reading the same outbox would take signals its clients
+  never see.
+- While Centrifugo is down the outbox grows; it publishes the backlog when it
+  is back. Trim old rows on your own schedule (`pg_cron` or an external cron)
+  as the owner role: `SELECT simetra.signal_outbox_prune('1 hour');`.
 
 ## Agents over MCP
 

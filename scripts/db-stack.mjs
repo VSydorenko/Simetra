@@ -44,19 +44,29 @@ export const SUPABASE_DB_CONTAINER = "supabase_db_simetra"
 /** Env variable that names the held stack lock to the children of the script. */
 export const STACK_LOCK_ENV = "SIMETRA_DB_STACK_LOCK"
 
+/** Порт бази локального стека Supabase (`[db] port` у `supabase/config.toml`). */
+const SUPABASE_DB_HOST = "127.0.0.1:54322"
+
 // Профілі скрипта як дані. `lock` — замок, той самий, що бере DB-прогін. `supabase-signals` без
 // замка: DB-прогін його не вживає (стек Supabase має власний замок guard-а), а
-// кроку ініціалізації, що мусив би йти під замком, у нього немає.
+// кроку ініціалізації, що мусив би йти під замком, у нього немає. `signalsDsn` —
+// адреса споживача outbox Centrifugo стека (роль `simetra_signals`): Centrifugo
+// у мережі хоста бачить опублікований порт бази.
 const PROFILES = {
   postgres: {
     dir: join(ROOT, "docker/postgres-stack"),
     project: "simetra-pg",
     lock: POSTGRES_LOCK_PATH,
+    /** @param {string} password */
+    signalsDsn: (password) => stackUrl("simetra_signals", password),
   },
   "supabase-signals": {
     dir: join(ROOT, "docker/supabase-signals"),
     project: "simetra-sb",
     lock: undefined,
+    /** @param {string} password */
+    signalsDsn: (password) =>
+      `postgresql://simetra_signals:${password}@${SUPABASE_DB_HOST}/postgres`,
   },
 }
 const BUCKET = "simetra-dev"
@@ -361,15 +371,31 @@ const composeArgv = (profile, args) => [
 ]
 
 // Хеш файлів стека — у середовищі кожного виклику compose: він підставляє його
-// в аргумент збірки, і `config` бачить той самий файл, що й `up`
-const composeEnv = () => ({
+// в аргумент збірки, і `config` бачить той самий файл, що й `up`. DSN ролі
+// `simetra_signals` — теж лише тут: compose-файл інтерполює його в середовище
+// Centrifugo, тож пароль не потрапляє ні в `env_file`, ні в argv
+/** @param {{ signalsDsn: (password: string) => string }} profile */
+const composeEnv = (profile) => ({
   ...process.env,
   SIMETRA_STACK_FILES_HASH: stackFilesHash(),
+  SIMETRA_SIGNALS_DSN: profile.signalsDsn(
+    loginSecrets().SIMETRA_SIGNALS_DEV_PASSWORD
+  ),
 })
 
 /**
+ * DSN of the outbox consumer of a stack's Centrifugo (`SIMETRA_SIGNALS_DSN` of
+ * the compose environment), with the dev password of `simetra_signals`.
+ *
+ * @param {"postgres" | "supabase-signals"} name
+ * @returns {string}
+ */
+export const signalsDsn = (name) =>
+  composeEnv(PROFILES[name]).SIMETRA_SIGNALS_DSN
+
+/**
  * @param {Ctx} ctx
- * @param {{ dir: string, project: string }} profile
+ * @param {{ dir: string, project: string, signalsDsn: (password: string) => string }} profile
  * @param {string[]} args
  * @param {{ input?: string, capture?: boolean }} [options]
  * @returns {Promise<string>}
@@ -377,7 +403,7 @@ const composeEnv = () => ({
 async function compose(ctx, profile, args, options = {}) {
   let stdout = ""
   await runChecked(ctx, "docker", composeArgv(profile, args), {
-    env: composeEnv(),
+    env: composeEnv(profile),
     input: options.input,
     onStdout:
       options.capture === true
@@ -669,6 +695,7 @@ const LOGIN_ROLES = [
   { role: "simetra_owner", secret: "SIMETRA_OWNER_DEV_PASSWORD" },
   { role: "simetra_runtime", secret: "SIMETRA_RUNTIME_DEV_PASSWORD" },
   { role: "simetra_auth", secret: "SIMETRA_AUTH_DEV_PASSWORD" },
+  { role: "simetra_signals", secret: "SIMETRA_SIGNALS_DEV_PASSWORD" },
 ]
 
 /**
@@ -816,14 +843,27 @@ async function startPostgresSteps(ctx, noBuild) {
   // образу з файлів цієї гілки, навіть коли контейнер лишається
   if (containers.size > 0) {
     await assertSameStack(ctx, containers)
-    await compose(ctx, profile, ["up", "-d", "--wait", "--no-recreate"])
+    await compose(ctx, profile, [
+      "up",
+      "-d",
+      "--wait",
+      "--no-recreate",
+      ...BEFORE_SIGNALS,
+    ])
   } else
     await compose(ctx, profile, [
       "up",
       "-d",
       "--wait",
       ...(noBuild ? [] : ["--build"]),
+      ...BEFORE_SIGNALS,
     ])
+  // Centrifugo стартує лише після ролей і паролів (споживач інакше входив би
+  // без пароля), але контейнер є одразу: старт, що впав посередині, повторюється
+  // без відмови «немає контейнера» у звірці стека
+  await compose(ctx, profile, ["create", "--no-recreate", SIGNALS_SERVICE])
+  /** Пароль `simetra_signals` змінено цим стартом: DSN Centrifugo застарів. */
+  let signalsPasswordChanged = false
   try {
     await initGarage(ctx)
     const psql = (
@@ -877,6 +917,7 @@ async function startPostgresSteps(ctx, noBuild) {
       ({ role, secret }) =>
         !passwordMatches(current.get(role) ?? "", secrets[secret])
     )
+    signalsPasswordChanged = stale.some((r) => r.role === "simetra_signals")
     // Пароль іде у stdin `psql` (`\set` + `:'pw'`), а не в `-v`: argv видно в `ps`
     if (stale.length > 0)
       await psql(
@@ -896,7 +937,20 @@ async function startPostgresSteps(ctx, noBuild) {
   } finally {
     await stopStartBackends(ctx)
   }
+  // Новий пароль перестворює лише Centrifugo (стану він не тримає); інакше
+  // запущений контейнер лишається, зокрема створений з іншого checkout-а
+  await compose(ctx, profile, [
+    "up",
+    "-d",
+    "--wait",
+    signalsPasswordChanged ? "--force-recreate" : "--no-recreate",
+    SIGNALS_SERVICE,
+  ])
 }
+
+// Сервіс Centrifugo стека й решта сервісів, що стартують до нього
+const SIGNALS_SERVICE = "centrifugo"
+const BEFORE_SIGNALS = ["postgres", "garage"]
 
 // Прибирання бекендів не чує сигналів скрипту (другий Ctrl-C інакше вбив би
 // саме його), тож має власну межу: завислий psql не тримає замок довше
@@ -920,7 +974,7 @@ async function stopStartBackends(ctx) {
     "docker",
     composeArgv(PROFILES.postgres, psqlArgs("-q")),
     {
-      env: composeEnv(),
+      env: composeEnv(PROFILES.postgres),
       input: `SELECT pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE application_name = '${START_APP_NAME}' AND pid <> pg_catalog.pg_backend_pid();\n`,
       onStdout: () => {},
       signals: deadline,
@@ -936,7 +990,12 @@ async function stopStartBackends(ctx) {
     )
 }
 
-/** @param {Ctx} ctx */
+/**
+ * DSN споживача — з `login-secrets.env` (`composeEnv`); пароль ролі
+ * `simetra_signals` на стеку Supabase ставить `pnpm db:roles`.
+ *
+ * @param {Ctx} ctx
+ */
 async function startSignals(ctx) {
   await compose(ctx, PROFILES["supabase-signals"], ["up", "-d", "--wait"])
 }
@@ -999,8 +1058,21 @@ async function rolesSupabase(ctx) {
       "-f",
       "-",
     ],
-    { input: readFileSync(join(ROOT, "supabase/roles.sql"), "utf8") }
+    { input: rolesSupabaseInput() }
   )
+}
+
+/**
+ * `supabase/roles.sql` і dev-пароль `simetra_signals` для споживача Centrifugo
+ * (`pnpm db:signals:start`). Пароль — у stdin (`\set`), не в argv; ставиться
+ * щоразу, бо `postgres` Supabase не суперкористувач і верифікатора не
+ * прочитає, а той самий пароль нічого не змінює для входу.
+ *
+ * @returns {string}
+ */
+export function rolesSupabaseInput() {
+  const password = loginSecrets().SIMETRA_SIGNALS_DEV_PASSWORD
+  return `${readFileSync(join(ROOT, "supabase/roles.sql"), "utf8")}\n\\set pw '${password}'\nALTER ROLE simetra_signals PASSWORD :'pw';\n`
 }
 
 /** @param {string[]} argv */

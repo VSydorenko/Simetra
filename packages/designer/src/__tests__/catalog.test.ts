@@ -142,6 +142,7 @@ describe("tool catalog", TOOL_PIPELINE, () => {
       "rename",
       "rights-maintenance",
       "roles",
+      "signals-config",
     ])
   })
 
