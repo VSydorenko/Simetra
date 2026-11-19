@@ -3,10 +3,15 @@ import { z } from "zod"
 import {
   formatMetaFile,
   formatProjectFile,
+  formatSqlFunctionsFile,
   isRecordKeyAt,
   PROJECT_KEY_ORDER,
 } from "../format"
-import { projectSchema } from "../schemas"
+import {
+  projectSchema,
+  sqlFunctionsFileSchema,
+  type SqlFunctionsFile,
+} from "../schemas"
 
 const ID = "3f2b8a52-6d1e-4c0a-9b7e-5a1c2d3e4f50"
 
@@ -84,6 +89,61 @@ describe("formatMetaFile", () => {
     expect(formatMetaFile({ name: "Item", kind: "Catalog" })).toBe(
       '{\n  "kind": "Catalog",\n  "name": "Item"\n}\n'
     )
+  })
+})
+
+describe("formatSqlFunctionsFile", () => {
+  const OTHER_ID = "9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d"
+  // Канонічний текст, записаний руками: порядок ключів схеми на кожному
+  // рівні, запис без схеми першим, два пробіли й перевід рядка наприкінці.
+  const CANONICAL = `${JSON.stringify(
+    {
+      $schema: "../../schemas/functions.schema.json",
+      functions: [
+        {
+          id: OTHER_ID,
+          function: { name: "helper" },
+          callers: [],
+        },
+        {
+          id: ID,
+          function: { schema: "app", name: "approve" },
+          callers: ["user", "service"],
+          check: {
+            action: "approve",
+            object: { kind: "Document", name: "Invoice" },
+            row: "p_invoice",
+          },
+        },
+      ],
+    },
+    null,
+    2
+  )}\n`
+
+  it("parse and canonical write round-trip without changes", () => {
+    const parsed = sqlFunctionsFileSchema.parse(JSON.parse(CANONICAL))
+    expect(formatSqlFunctionsFile(parsed)).toBe(CANONICAL)
+  })
+
+  it("orders keys by the schema and entries by function", () => {
+    const shuffled: SqlFunctionsFile = {
+      functions: [
+        {
+          check: {
+            row: "p_invoice",
+            object: { name: "Invoice", kind: "Document" },
+            action: "approve",
+          },
+          callers: ["user", "service"],
+          function: { name: "approve", schema: "app" },
+          id: ID,
+        },
+        { callers: [], function: { name: "helper" }, id: OTHER_ID },
+      ],
+      $schema: "../../schemas/functions.schema.json",
+    }
+    expect(formatSqlFunctionsFile(shuffled)).toBe(CANONICAL)
   })
 })
 

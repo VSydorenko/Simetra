@@ -627,6 +627,57 @@ export function functionIdentity(
   return `function:${signature(name, argTypes, { schema, types: new Map() })}`
 }
 
+/**
+ * Підпис `схема.ім'я(типи)` для `ON FUNCTION` з ідентичності одиниці
+ * `CREATE FUNCTION`: типи вже канонічні й резолвлені за типами моделі
+ * (`inputArgumentTypes` + `signature`), тож згенерований грант, розібраний
+ * без типів моделі (`generatedUnit`), має ту саму ціль, що й дослівний грант
+ * на цю функцію. Частини імен — у лапках за потреби, бо канонічний текст їх
+ * не несе.
+ */
+export function functionSignatureSql(
+  unit: Pick<VerbatimUnit, "identity" | "schema" | "name">
+): string {
+  const prefix = `function:${unit.schema}.${unit.name}(`
+  if (!unit.identity.startsWith(prefix) || !unit.identity.endsWith(")")) {
+    throw new Error(`internal: not a function identity: ${unit.identity}`)
+  }
+  const args = unit.identity.slice(prefix.length, -1)
+  const types = args === "" ? [] : splitIdentity(args, ",").map(sqlTypeName)
+  return `${quoteIdent(unit.schema)}.${quoteIdent(unit.name)}(${types.join(", ")})`
+}
+
+/**
+ * Перша частина ідентифікатора функції чи типу її аргументу, яку
+ * `functionSignatureSql` не відтворить: канонічна ідентичність не зберігає
+ * меж лапкованого імені, тож `.`, `,` чи `"` усередині частини дали б інший
+ * підпис (#297). Частини — з розібраного `CREATE` (`funcname` уже в
+ * `schema`/`name` одиниці, типи — вузли `TypeName`), а не з ідентичності.
+ * Одиниця без дерева `CREATE` (форма платформи без нього) — лише ім'я.
+ */
+export function unsupportedSignaturePart(
+  unit: Pick<VerbatimUnit, "schema" | "name"> & { tree?: unknown }
+): string | undefined {
+  const node = (
+    unit.tree as { CreateFunctionStmt?: CreateFunctionStmt } | undefined
+  )?.CreateFunctionStmt
+  const types = node === undefined ? [] : inputArgumentTypes(node)
+  return [
+    unit.schema,
+    unit.name,
+    ...types.flatMap((type) => strings(type?.names)),
+  ].find((part) => /[.,"]/.test(part))
+}
+
+/** Канонічний тип (`typeName`) як текст SQL: частини імені — `quoteIdent`. */
+function sqlTypeName(canonical: string): string {
+  if (canonical.endsWith("%type")) return canonical
+  const base = canonical.replace(/(\[\])+$/, "")
+  return (
+    base.split(".").map(quoteIdent).join(".") + canonical.slice(base.length)
+  )
+}
+
 /** Типи вхідних аргументів `CREATE FUNCTION`/`PROCEDURE` — те, що входить в ідентичність. */
 export function inputArgumentTypes(
   node: CreateFunctionStmt

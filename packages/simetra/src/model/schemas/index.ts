@@ -158,6 +158,17 @@ export {
 // Debt ratchet of verbatim SQL
 export { SQL_DEBT_FILE, sqlDebtSchema, type SqlDebt } from "./sql-debt"
 
+// Declarations of SQL functions
+export {
+  FUNCTIONS_FILE_SUFFIX,
+  SQL_FUNCTION_CALLERS,
+  sqlFunctionDeclarationSchema,
+  sqlFunctionsFileSchema,
+  type SqlFunctionCaller,
+  type SqlFunctionDeclaration,
+  type SqlFunctionsFile,
+} from "./sql-functions"
+
 // Project
 export {
   projectSchema,

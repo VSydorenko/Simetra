@@ -104,7 +104,10 @@ export interface CompiledModel {
 export interface CompileResult {
   ok: boolean
   diagnostics: Diagnostic[]
-  /** Лише коли прогін без помилок: наступні шари не бачать напівмоделі. */
+  /**
+   * Лише коли прогін без помилок: наступні шари не бачать напівмоделі. Режим
+   * `repair` — виняток: модель є й тоді, коли кожна помилка — класу ремонту.
+   */
   model?: CompiledModel
 }
 
@@ -114,6 +117,13 @@ export interface CompileOptions {
    * призначені раз, звіряються з нею; немає — перевірки немає.
    */
   baseline?: ReadonlyMap<string, string>
+  /**
+   * Режим ремонту (спека декларацій функцій §5.1): модель повертається й
+   * тоді, коли кожна помилка — класу ремонту (`REPAIR_CLASS`), а `ok`
+   * лишається `false`. Передають лише мутації, що лагодять теку крок за
+   * кроком (`create`, `add`); без поля модель — лише з чистого прогону.
+   */
+  repair?: true
 }
 
 /**
@@ -126,7 +136,10 @@ export async function compile(
   files: ReadonlyMap<string, string>,
   options: CompileOptions = {}
 ): Promise<CompileResult> {
-  const result = await runStages(readFiles(files))
+  const result = await runStages(
+    readFiles(files),
+    options.repair === true ? { repair: true } : {}
+  )
   // Звірка з базовим станом — крок поза стадіями 1–5: вона порівнює два
   // стани файлів, а не читає модель, тож біжить і над зламаною моделлю.
   const assigned =
@@ -178,7 +191,7 @@ export async function currentDebt(
     loadSqlParser(),
     loadPlpgsqlParser(),
   ])
-  const { stage3, sql } = sqlStage(stage1, parse)
+  const { stage3, sql, declared } = sqlStage(stage1, parse)
   if (
     stage3 === undefined ||
     sql.diagnostics.some((d) => d.code === "sql.parse")
@@ -191,6 +204,7 @@ export async function currentDebt(
     stage1.project,
     kindTables(stage1.objects, stage3.physical.tables),
     parse,
-    plpgsql
+    plpgsql,
+    declared
   )
 }

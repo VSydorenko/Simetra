@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join, relative, resolve, sep } from "node:path"
 import type { FileChange } from "simetra/compiler"
-import { SQL_DEBT_FILE } from "simetra/model"
+import { FUNCTIONS_FILE_SUFFIX, SQL_DEBT_FILE } from "simetra/model"
 import { UsageError } from "./usage-error"
 
 /**
@@ -9,7 +9,12 @@ import { UsageError } from "./usage-error"
  * боргу — один файл у корені теки: без нього ратчет бачив би порожній перелік
  * і звітував кожну одиницю боргу.
  */
-const METADATA_SUFFIXES = [".meta.json", ".sql", ".module.ts"]
+const METADATA_SUFFIXES = [
+  ".meta.json",
+  ".sql",
+  ".module.ts",
+  FUNCTIONS_FILE_SUFFIX,
+]
 export const isMetadataFile = (key: string): boolean =>
   key === SQL_DEBT_FILE ||
   METADATA_SUFFIXES.some((suffix) => key.endsWith(suffix))

@@ -1,12 +1,19 @@
 import {
   PROVIDER_API_ROLES,
+  type GrantPurpose,
   type PhysicalSnapshot,
   type Project,
 } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import { grantTargetKeys, ownsTarget } from "../function-execute"
 import type { ParsedObject } from "../stages/files"
-import { functionSettingsOf, ruledFunctions } from "./closed-forms"
+import {
+  closedModuleOwners,
+  functionSettingsOf,
+  platformFormSources,
+} from "./closed-forms"
+import type { DeclaredFunction } from "./declarations"
+import { grantRole } from "./execute-grants"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 import { reachableUnits, relationReads } from "./reads"
@@ -32,8 +39,8 @@ const PUBLIC = "PUBLIC"
  *   від імені власника;
  * - матеріалізоване подання з дієвим `SELECT` — завжди: його рядки зберіг
  *   власник під час `REFRESH`, а читача RLS не обмежує зовсім.
- * Обробники й функції множини (`ruledFunctions`), функції значень виміру й
- * тригерні функції не судяться: це не RPC — тригерну функцію Postgres кличе
+ * Форми платформи (`platformFormSources`: функції множини, обробники, функції
+ * значень виміру) й тригерні функції не судяться: це не RPC — тригерну функцію Postgres кличе
  * лише тригером, функції множини й виміру — політика від імені запиту, і
  * читати повз RLS їм належить за задумом (обмеження їхніх тіл судять власні
  * правила стадії 5). Власника одиниці статично не видно (власник без обходу RLS
@@ -46,12 +53,20 @@ const PUBLIC = "PUBLIC"
  * `EXECUTE`, інша мова, непрочитаний текст) стадія 5 не бачить: їх відмовляє
  * ранній блок (спека прав §6.1).
  *
- * Функція з `SECURITY DEFINER`, яку може виконати роль API, мусить сама
- * перевіряти викликача, і назвати перевірку має декларація сигнатури
- * (платформна спека §6.7). Декларації ще немає, тож така функція в будь-якій
- * одиниці SQL застосунку, борг включно, — помилка
- * `sql.definer-caller-unchecked` незалежно від того, що вона читає; попередження
- * класу Р30 лишається поданням і матеріалізованим поданням.
+ * Функція з `SECURITY DEFINER`, яку може виконати роль API чи роль команд,
+ * мусить сама перевіряти викликача, і назвати перевірку має декларація
+ * (платформна спека §6.7, спека декларацій функцій §5.1). Недекларована така
+ * функція в будь-якій одиниці SQL застосунку, борг включно, — помилка
+ * `sql.definer-caller-unchecked` незалежно від того, що вона читає. Роль
+ * команд діє від імені користувача, тож рахується теж, але лише через
+ * `PUBLIC` чи явний грант: типових привілеїв провайдера вона не має.
+ * Недекларовану функцію модуля виду правило не судить: її `EXECUTE` виводить
+ * платформа з порожніми призначеннями. Агрегат над definer-складовою судиться
+ * завжди: його `EXECUTE` декларація складової не обмежує. Задекларовану
+ * definer-функцію з викликачами від імені користувача судять правила
+ * декларацій (`checkDeclaredCallers`), а тут вона — попередження класу Р30 з
+ * ролями викликачів: її ACL виводить платформа, тож дослівні гранти ролей не
+ * рахуються. Перевірка обмежує виклик, а не обсяг прочитаного.
  */
 export function checkDefinerReads(
   objects: readonly ParsedObject[],
@@ -59,36 +74,60 @@ export function checkDefinerReads(
   physical: PhysicalSnapshot,
   units: readonly VerbatimUnit[],
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  declared: readonly DeclaredFunction[]
 ): Diagnostic[] {
   const rlsTables = physical.tables.filter((t) => t.rowLevelSecurity !== "off")
-  const skipped = new Set([
-    ...ruledFunctions(objects, project),
-    ...dimensionFunctions(project),
-  ])
+  const skipped = new Set(
+    platformFormSources(objects, project).map((s) =>
+      functionIdentity(s.function.schema, s.function.name, [])
+    )
+  )
+  const modules = closedModuleOwners(objects)
+  const declarations = new Map(declared.map((d) => [d.unit, d.declaration]))
   const grants = grantFacts(units, parse)
-  const roles = PROVIDER_API_ROLES[project.database.provider]
+  const provider = project.database.provider
+  const roles = PROVIDER_API_ROLES[provider]
   const apiRoles = [roles.user, roles.anonymous]
+  const commandRole = grantRole("command", provider)
   const found: Diagnostic[] = []
   for (const unit of units) {
     const form = formOf(unit, units, skipped)
     if (form === undefined) continue
-    const privileged = privilegedRoles(
-      targetOf(unit),
-      form === "function" ? "execute" : "select",
-      grants,
-      apiRoles
-    )
-    if (!privileged.some((role) => role !== PUBLIC)) continue
-    if (form === "function") {
-      found.push(
-        diagnostic("sql.definer-caller-unchecked", unit.file, "", {
-          function: `${unit.schema}.${unit.name}`,
-          roles: privileged.join(", "),
-          line: unit.line,
-        })
+    const declaration = declarations.get(unit)
+    let privileged: string[]
+    if (declaration !== undefined) {
+      if (!declaration.callers.some((c) => ON_BEHALF_OF_USER.has(c))) continue
+      privileged = declaration.callers
+        .map((caller) => grantRole(caller, provider))
+        .filter((role): role is string => role !== null)
+    } else {
+      if (
+        unit.class === "function" &&
+        unit.ownerFile !== undefined &&
+        modules.has(unit.ownerFile)
       )
-      continue
+        continue
+      privileged = privilegedRoles(
+        targetOf(unit),
+        form === "function" ? "execute" : "select",
+        grants,
+        apiRoles,
+        form === "function" && commandRole !== null ? [commandRole] : []
+      )
+      if (!privileged.some((role) => role !== PUBLIC)) continue
+      if (form === "function") {
+        found.push(
+          diagnostic("sql.definer-caller-unchecked", unit.file, "", {
+            schema: unit.schema,
+            name: unit.name,
+            function: `${unit.schema}.${unit.name}`,
+            roles: privileged.join(", "),
+            line: unit.line,
+          })
+        )
+        continue
+      }
     }
     // Перелік таблиць — те, чиї рядки одиниця віддає: її власні читання й
     // читання функцій і подань, яких вона досягає.
@@ -120,14 +159,12 @@ export function checkDefinerReads(
   return found
 }
 
-/** Ідентичності функцій значень вимірів доступу. */
-function dimensionFunctions(project: Project): string[] {
-  return project.accessDimensions.flatMap((dimension) => {
-    if (!("function" in dimension.values)) return []
-    const { schema = project.defaultSchema, name } = dimension.values.function
-    return [functionIdentity(schema, name, [])]
-  })
-}
+/**
+ * Викликачі, що діють від імені користувача (спека прав §5.2): роль команд
+ * виконує хук команди з id від клієнта.
+ */
+export const ON_BEHALF_OF_USER: ReadonlySet<GrantPurpose> =
+  new Set<GrantPurpose>(["user", "command"])
 
 interface DefElem {
   defname?: string
@@ -436,7 +473,9 @@ function grantFacts(
  * Хто може мати привілей (платформна спека §6.7): `PUBLIC` — без явного відкликання від
  * `PUBLIC` чи з явним грантом йому (Postgres дає `PUBLIC` `EXECUTE` функцій);
  * роль API — так само щодо себе, або через `PUBLIC` (провайдер дає ролям API
- * привілеї типовими привілеями схеми). Типові привілеї не моделюються, а
+ * привілеї типовими привілеями схеми). `grantedRoles` (роль команд) типових
+ * привілеїв не мають, тож мають привілей лише через `PUBLIC` чи явний грант.
+ * Типові привілеї не моделюються, а
  * порядок операторів — теж (грант перемагає): для попередження надлишок
  * безпечніший за пропуск. Відкликання лише на колонки чи лише права передачі
  * привілею не прибирає.
@@ -445,7 +484,8 @@ function privilegedRoles(
   target: (key: string) => boolean,
   privilege: "execute" | "select",
   grants: readonly GrantFact[],
-  apiRoles: readonly string[]
+  apiRoles: readonly string[],
+  grantedRoles: readonly string[] = []
 ): string[] {
   const covers = (fact: GrantFact) =>
     fact.privileges.length === 0 ||
@@ -462,5 +502,6 @@ function privilegedRoles(
   return [
     ...(publicHas ? [PUBLIC] : []),
     ...apiRoles.filter((role) => publicHas || granted(role) || !revoked(role)),
+    ...grantedRoles.filter((role) => publicHas || granted(role)),
   ]
 }

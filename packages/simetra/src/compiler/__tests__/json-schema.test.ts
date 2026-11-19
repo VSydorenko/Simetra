@@ -51,6 +51,22 @@ describe("buildJsonSchemas", () => {
     ).toEqual(Object.keys(buildJsonSchemas()).sort())
   })
 
+  it("the functions file schema lists the four caller purposes", () => {
+    // Редактор підказує ті самі викликачі, що приймає стадія 1 (Р4).
+    const schema = buildJsonSchemas()["functions.schema.json"] as JsonObject
+    const functions = (schema.properties as Record<string, JsonObject>)
+      .functions!
+    const entry = functions.items as JsonObject
+    const callers = (entry.properties as Record<string, JsonObject>).callers!
+    expect((callers.items as JsonObject).enum).toEqual([
+      "user",
+      "anonymous",
+      "service",
+      "command",
+    ])
+    expect(entry.required).toEqual(["function", "callers"])
+  })
+
   it("descriptions are present", () => {
     const catalogs = buildJsonSchemas()["catalogs.schema.json"] as JsonObject
     const properties = catalogs.properties as Record<string, JsonObject>

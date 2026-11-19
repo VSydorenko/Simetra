@@ -732,6 +732,12 @@ describe("sql units", () => {
     expect(units.map((u) => [u.class, u.identity])).toEqual([
       ["movementQuery", "function:public.sale_stock_movements(uuid)"],
       ["function", "function:public.sale_total(uuid)"],
+      // Функція модуля без декларації — `REVOKE` від `PUBLIC` і ролей API
+      // (спека декларацій функцій §5.1).
+      ...["anon", "authenticated", "public", "service_role"].map((role) => [
+        "grant",
+        `grant:revoke:function:public.sale_total(uuid):${role}:execute`,
+      ]),
     ])
     expect(units[1]).toMatchObject({
       file: "documents/Sale/Sale.sql",

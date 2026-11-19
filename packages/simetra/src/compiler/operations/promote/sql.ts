@@ -1,10 +1,14 @@
 import type { Node } from "libpg-query"
 import {
+  FUNCTIONS_FILE_SUFFIX,
   KIND_REGISTRY,
   PROVIDER_EVENT_SOURCES,
+  formatSqlFunctionsFile,
+  sqlFunctionsFileSchema,
   standardLogicalName,
   isObjectOrigin,
   type MetadataRef,
+  type SqlFunctionDeclaration,
   type StandardColumnDef,
 } from "simetra/model"
 import type { CompiledModel } from "../../compile"
@@ -44,6 +48,8 @@ import {
   statementPositions,
   type SqlUnit,
 } from "../../sql/units"
+import { FUNCTIONS_SCHEMA_FILE } from "../../json-schema"
+import type { SchemaPathResolver } from "../fix"
 import type { PromoteInput } from "../inputs"
 import { cut, mergeDeletions } from "../text-edits"
 import type { QualifiedTable } from "./gates"
@@ -505,6 +511,78 @@ export function rewriteCandidates(
     for (const c of rewritten.contractChanges) {
       result.changes.push({ unit, ...c })
     }
+  }
+  return result
+}
+
+/** `<основа>.functions.json` поруч із `<основа>.sql`. */
+const sidecarOf = (sqlFile: string) =>
+  `${sqlFile.replace(/\.sql$/, "")}${FUNCTIONS_FILE_SUFFIX}`
+
+/**
+ * Тексти `.functions.json` після промоції (спека декларацій функцій §5.5):
+ * декларація йде за своєю функцією — у файл поруч із тим `.sql`, куди
+ * переїжджає функція (`staged` — місце проміжної компіляції), тож функції
+ * одного модуля, що розходяться по різних файлах, розводять і декларації.
+ * Знімаються лише файли декларацій, що зникають разом із прийнятими таблицями
+ * (`deleted`); наявний файл призначення доповнюється, новий отримує
+ * `$schema`. Запис — канонічний. Фінальний текст повертає проміжні файли
+ * (`staged`) до стану входу.
+ */
+export function declarationTexts(
+  files: ReadonlyMap<string, string>,
+  plan: UnitPlan,
+  deleted: ReadonlySet<string>,
+  defaultSchema: string,
+  schemaPath: SchemaPathResolver,
+  staged = false
+): Map<string, string | undefined> {
+  const read = (path: string) =>
+    sqlFunctionsFileSchema.parse(JSON.parse(files.get(path)!))
+  const carried = new Map<string, SqlFunctionDeclaration[]>()
+  for (const path of [...deleted].sort(compareStrings)) {
+    if (!path.endsWith(FUNCTIONS_FILE_SUFFIX)) continue
+    for (const declaration of read(path).functions) {
+      const schema = declaration.function.schema ?? defaultSchema
+      const { name } = declaration.function
+      const move = plan.moved.find(
+        (m) => m.unit.schema === schema && m.unit.name === name
+      )
+      // Чистий вхід гарантує: задекларована функція — у закритій оболонці
+      // свого `.sql` (інакше `sql.closed-shell`), а така функція модуля
+      // переїжджає завжди.
+      if (move === undefined) {
+        throw new Error(
+          `internal: the declaration of ${schema}.${name} in ${path} has no moved function`
+        )
+      }
+      const to = sidecarOf(staged ? (move.staged ?? move.to) : move.to)
+      carried.set(to, [...(carried.get(to) ?? []), declaration])
+    }
+  }
+  const result = new Map<string, string | undefined>()
+  if (!staged) {
+    for (const move of plan.moved) {
+      if (move.staged === undefined) continue
+      const path = sidecarOf(move.staged)
+      if (!carried.has(path)) result.set(path, files.get(path))
+    }
+  }
+  for (const [to, list] of carried) {
+    const base =
+      deleted.has(to) || !files.has(to)
+        ? {
+            $schema: schemaPath(to, FUNCTIONS_SCHEMA_FILE),
+            functions: [] as SqlFunctionDeclaration[],
+          }
+        : read(to)
+    result.set(
+      to,
+      formatSqlFunctionsFile({
+        ...base,
+        functions: [...base.functions, ...list],
+      })
+    )
   }
   return result
 }

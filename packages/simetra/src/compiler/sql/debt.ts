@@ -16,6 +16,7 @@ import {
   type KindTables,
 } from "./kind-table-verbatim"
 import type { SqlParser } from "./parse"
+import type { DeclaredFunction } from "./declarations"
 import type { PlpgsqlParser } from "./plpgsql"
 import type { VerbatimUnit } from "./units"
 
@@ -35,7 +36,9 @@ import type { VerbatimUnit } from "./units"
  * «внести в борг» вела б не туди, а запис у переліку — застарілий. Так само
  * функція чи процедура, тіло якої пише таблицю виду (Правило 1, та сама
  * помилка з формою `functionBody`) чи виконує оператор поза дозвільним
- * переліком (`sql.function-body-statement`, спека прав §6.1).
+ * переліком (`sql.function-body-statement`, спека прав §6.1). Задекларована
+ * функція (`declared`) боргом не буває теж (спека декларацій функцій §5.3):
+ * поза закритою оболонкою вона — `sql.closed-shell`, а не запис ратчета.
  */
 export function debtUnits(
   units: readonly VerbatimUnit[],
@@ -43,7 +46,8 @@ export function debtUnits(
   project: Project | undefined,
   kindTables: KindTables,
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  declared: readonly DeclaredFunction[]
 ): string[] {
   const isDebt = debtPredicate(
     objects,
@@ -52,7 +56,8 @@ export function debtUnits(
     parse,
     plpgsql,
     modelViews(units),
-    units
+    units,
+    declared
   )
   return [...new Set(units.filter(isDebt).map((unit) => unit.identity))].sort(
     compareStrings
@@ -72,7 +77,8 @@ export function debtPredicate(
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
   views: readonly ModelView[],
-  units: readonly VerbatimUnit[]
+  units: readonly VerbatimUnit[],
+  declared: readonly DeclaredFunction[]
 ): (unit: VerbatimUnit) => boolean {
   const debtOwners = new Set(
     objects
@@ -80,11 +86,13 @@ export function debtPredicate(
       .map((o) => o.file)
   )
   const ruled = ruledFunctions(objects, project)
+  const declaredUnits = new Set(declared.map((d) => d.unit))
   const written = ruleOneTables(kindTables, project?.database.provider)
   const calls = providerCalls(project?.database.provider, units)
   return (unit) =>
     (unit.ownerFile === undefined || debtOwners.has(unit.ownerFile)) &&
     !(unit.class === "function" && ruled.has(unit.identity)) &&
+    !declaredUnits.has(unit) &&
     kindTableOf(unit, kindTables) === undefined &&
     bodyKindTable(unit, written, parse, plpgsql, views) === undefined &&
     bodyStatementProblem(unit, parse, plpgsql, views, calls) === undefined &&
@@ -117,7 +125,8 @@ export function checkDebt(
   listed: readonly string[],
   unitsComplete: boolean,
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  declared: readonly DeclaredFunction[]
 ): { grows: Diagnostic[]; stale: Diagnostic[] } {
   const accepted = new Set(listed)
   const isDebt = debtPredicate(
@@ -127,7 +136,8 @@ export function checkDebt(
     parse,
     plpgsql,
     modelViews(units),
-    units
+    units,
+    declared
   )
   const debt = units.filter(isDebt)
   const grows = debt

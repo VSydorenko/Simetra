@@ -233,6 +233,12 @@ export interface ClassFixture {
   sql: string
   property: (shape: OracleShape) => unknown
   expected: unknown
+  /**
+   * Відмови компілятора на повернутій теці (класу ремонту, ключ
+   * `{ code, schema, name }`): тоді тіні немає, і властивість звіряється лише
+   * в цілі.
+   */
+  refused?: { code: string; schema: string; name: string }[]
 }
 
 /**
@@ -628,6 +634,16 @@ export function classFixtures(
           .find((a) => a.object === "f:app.secret()")
           ?.acl.filter((item) => item.startsWith("=")),
       expected: [],
+      // `GRANT EXECUTE ON FUNCTIONS` у ADP схеми застосунку дав би `EXECUTE`
+      // майбутнім функціям повз виведені гранти (Р15 спеки декларацій функцій):
+      // прийом відмовляє рівно йому, а глобальне `REVOKE` не судиться
+      refused: [
+        {
+          code: "sql.default-privileges-execute",
+          schema: "app",
+          name: `defaultPrivileges:${owner}:app:function:grant:${anon}:execute`,
+        },
+      ],
     },
     {
       name: "PUBLIC usage revoked on a type and a domain beside a schema ADP",

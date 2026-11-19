@@ -369,6 +369,23 @@ export function withRoles(...layers: Layer[]): Map<string, string> {
  * Другий вид скоупу `team` без членства: зовнішній корінь і дослівна функція
  * множини, тож проєкт компілюється без довідника членства виду.
  */
+/** Вимір `region` зі значеннями з функції `region_ids` і її ланкою. */
+export const dimensionFunction = (): Layer => ({
+  [PROJECT_FILE]: {
+    accessDimensions: [
+      {
+        id: REGION_DIMENSION_ID,
+        name: "region",
+        target: { kind: "Catalog", name: "Region" },
+        values: { function: { name: "region_ids" } },
+      },
+    ],
+  },
+})
+export const DIMENSION_SQL =
+  "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT public.region_link() $$;\n" +
+  "CREATE FUNCTION public.region_link() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT NULL::uuid $$;\n"
+
 export function teamScopeKind(): Layer {
   return {
     [PROJECT_FILE]: {

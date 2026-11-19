@@ -884,6 +884,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Виконайте simetra fix, коли файли метаданих коректні й кожен .sql розбирається: він відсортує перелік і прибере дублі та записи, що вже не є боргом.",
     },
   },
+  "declarations.not-canonical": {
+    en: () =>
+      "A .functions.json file lists its declarations sorted by function (entries without schema first, then by schema and name) and declares each function once",
+    uk: () =>
+      "Файл .functions.json перелічує декларації відсортованими за функцією (записи без схеми — першими, далі за схемою й ім'ям) і декларує кожну функцію один раз",
+  },
   "scope.name-reserved": {
     en: () => 'Scope kind name "none" is reserved',
     uk: () => 'Ім\'я виду скоупу "none" зарезервоване',
@@ -1349,6 +1355,104 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "A SECURITY DEFINER function runs as its owner, who bypasses row level security, so a role of the API that can execute it acts past the rights. Such a function is refused in any .sql file, SQL debt included, until it takes a platform form or names the check of its caller: link it to a scope kind as its set function (or to an access dimension as its values function), or declare its signature with the named check. Otherwise make it SECURITY INVOKER, revoke EXECUTE from PUBLIC and from each API role, or write the operation as a command or a TypeScript hook.",
       uk: "Функція SECURITY DEFINER виконується від свого власника, який обходить захист рядків, тож роль API, що може її виконати, діє повз права. Така функція відхиляється в будь-якому файлі .sql, борг включно, доки не набуде форми платформи чи не назве перевірку викликача: зв'яжіть її з видом скоупу як функцію множини (чи з виміром доступу як функцію значень) або задекларуйте її сигнатуру з названою перевіркою. Інакше зробіть її SECURITY INVOKER, відкличте EXECUTE від PUBLIC і від кожної ролі API або запишіть операцію командою чи TypeScript-хуком.",
+    },
+  },
+  "sql.declaration-target-missing": {
+    en: (p) =>
+      `Declaration of ${p.function} names a function that ${p.sqlFile} does not create`,
+    uk: (p) =>
+      `Декларація ${p.function} називає функцію, якої ${p.sqlFile} не створює`,
+    hint: {
+      en: "A .functions.json file declares only functions of its sibling .sql file. Fix the schema or the name of the entry, move the entry beside the file that creates the function, or remove it.",
+      uk: "Файл .functions.json декларує лише функції сусіднього файлу .sql. Виправте схему чи ім'я запису, перенесіть запис до файлу, що створює функцію, або видаліть його.",
+    },
+  },
+  "sql.declaration-overload": {
+    en: (p) =>
+      `Declaration of ${p.function} is ambiguous: ${p.count} routines share this name`,
+    uk: (p) =>
+      `Декларація ${p.function} неоднозначна: це ім'я мають ${p.count} підпрограми`,
+    hint: {
+      en: "A declaration tells a function by its schema and name only. Give the declared function its own name in the schema.",
+      uk: "Декларація розрізняє функцію лише схемою й ім'ям. Дайте задекларованій функції власне ім'я в схемі.",
+    },
+  },
+  "sql.declaration-duplicate": {
+    en: (p) => `${p.function} is already declared at ${p.first}`,
+    uk: (p) => `${p.function} уже задекларовано в ${p.first}`,
+    hint: {
+      en: "A function has one declaration. Keep one entry and remove the other; an entry without schema takes the defaultSchema of the project.",
+      uk: "Функція має одну декларацію. Залиште один запис і видаліть інший; запис без схеми бере defaultSchema проєкту.",
+    },
+  },
+  "sql.function-name-unsupported": {
+    en: (p) =>
+      `EXECUTE of ${p.function} cannot be generated: the identifier part ${JSON.stringify(p.part)} contains ".", "," or a double quote`,
+    uk: (p) =>
+      `EXECUTE для ${p.function} не згенерувати: частина ідентифікатора ${JSON.stringify(p.part)} містить «.», «,» чи подвійні лапки`,
+    hint: {
+      en: "The platform cannot yet address such a function in a grant (issue #297), and without the grant it would keep EXECUTE from PUBLIC. Rename the function, its schema or the argument type to an identifier without these characters.",
+      uk: "Платформа поки не вміє адресувати таку функцію в гранті (issue #297), а без гранту вона лишилася б з EXECUTE від PUBLIC. Перейменуйте функцію, її схему чи тип аргументу на ідентифікатор без цих символів.",
+    },
+  },
+  "sql.declaration-platform-form": {
+    en: (p) =>
+      `${p.function} is a platform form (${p.form}): its EXECUTE comes from the metadata, not from a declaration`,
+    uk: (p) =>
+      `${p.function} — форма платформи (${p.form}): її EXECUTE задають метадані, а не декларація`,
+    hint: {
+      en: "Set functions of scope kinds, subscription handlers and values functions of access dimensions get their grants from the platform. Remove the declaration of this function.",
+      uk: "Функції множини видів скоупу, обробники підписок і функції значень вимірів доступу отримують гранти від платформи. Видаліть декларацію цієї функції.",
+    },
+  },
+  "sql.declaration-platform-form-widens": {
+    en: (p) =>
+      `${p.function} became a platform form (${p.form}): its declaration is removed, and the form also grants EXECUTE to ${p.roles}`,
+    uk: (p) =>
+      `${p.function} стала формою платформи (${p.form}): її декларацію видалено, і форма відкриває EXECUTE ще й ${p.roles}`,
+    hint: {
+      en: "The platform derives the grants of a platform form from the metadata, and they are wider than the callers the declaration named. Check that these roles may call the function, or keep it out of the platform form.",
+      uk: "Гранти форми платформи виводить платформа з метаданих, і вони ширші за викликачів, яких називала декларація. Перевірте, що цим ролям можна кликати функцію, або не робіть її формою платформи.",
+    },
+  },
+  "sql.declaration-check-missing": {
+    en: (p) =>
+      `${p.function} is SECURITY DEFINER and acts for a user (callers user or command), but its declaration names no check`,
+    uk: (p) =>
+      `${p.function} — SECURITY DEFINER і діє від імені користувача (викликачі user чи command), але декларація не називає перевірки`,
+    hint: {
+      en: "A SECURITY DEFINER function runs as its owner, who bypasses row level security, and the command role acts for the user, so a command hook with an id from the client would read past the rights. Name the check in the declaration (check: action, object, row or scope), make the function SECURITY INVOKER, or leave only the service caller.",
+      uk: "Функція SECURITY DEFINER виконується від свого власника, який обходить захист рядків, а роль команд діє від імені користувача, тож хук команди з id від клієнта читав би повз права. Назвіть перевірку в декларації (check: action, object, row чи scope), зробіть функцію SECURITY INVOKER або залиште лише викликача service.",
+    },
+  },
+  "sql.declaration-check-not-applied": {
+    en: (p) =>
+      `${p.function} is SECURITY DEFINER with callers that act for a user, and its body does not prove the named check (${p.reason})`,
+    uk: (p) =>
+      `${p.function} — SECURITY DEFINER з викликачами від імені користувача, і тіло не доводить названої перевірки (${p.reason})`,
+    hint: {
+      en: "The named check counts only once the body applies it through the platform call guard; until the compiler can prove the guard, such a function is refused. Make the function SECURITY INVOKER or leave only the service caller.",
+      uk: "Названа перевірка діє, лише коли тіло застосовує її запобіжником виклику платформи; доки компілятор не може довести запобіжник, така функція відхиляється. Зробіть функцію SECURITY INVOKER або залиште лише викликача service.",
+    },
+  },
+  "sql.declaration-anonymous-definer": {
+    en: (p) =>
+      `${p.function} is SECURITY DEFINER and declares the anonymous caller`,
+    uk: (p) =>
+      `${p.function} — SECURITY DEFINER і декларує анонімного викликача`,
+    hint: {
+      en: "A role without a session has no user to check, so a SECURITY DEFINER function would read past the rights for anyone. Remove anonymous from the callers or make the function SECURITY INVOKER.",
+      uk: "Роль без сесії не має користувача для перевірки, тож функція SECURITY DEFINER читала б повз права для будь-кого. Приберіть anonymous із викликачів або зробіть функцію SECURITY INVOKER.",
+    },
+  },
+  "sql.default-privileges-execute": {
+    en: (p) =>
+      `ALTER DEFAULT PRIVILEGES at line ${p.line} grants privileges on functions created later`,
+    uk: (p) =>
+      `ALTER DEFAULT PRIVILEGES у рядку ${p.line} дає права на функції, створені пізніше`,
+    hint: {
+      en: "Default privileges would give EXECUTE to future functions past the grants the platform derives, and only the platform derives EXECUTE. Remove the statement and declare the callers of each function in its .functions.json; a REVOKE of default privileges stays allowed.",
+      uk: "Типові привілеї дали б EXECUTE майбутнім функціям повз гранти, які виводить платформа, а EXECUTE виводить лише платформа. Приберіть оператор і задекларуйте викликачів кожної функції в її .functions.json; REVOKE типових привілеїв лишається дозволеним.",
     },
   },
   "sql.debt-stale": {

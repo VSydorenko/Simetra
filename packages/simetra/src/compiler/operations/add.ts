@@ -2,6 +2,7 @@ import { namedCollections } from "simetra/model"
 import { diagnostic } from "../diagnostics"
 import { completeAndCompile, type CompletionOptions } from "./fix"
 import type { AddElementInput } from "./inputs"
+import { toPlatformForms } from "./platform-forms"
 import { compileInput, refused, refuseSuppliedId } from "./refuse"
 import { describeTarget, locateContainer } from "./target"
 import type { OperationResult } from "./types"
@@ -37,7 +38,10 @@ export async function addElement(
 ): Promise<OperationResult> {
   const supplied = refuseSuppliedId(files, input.element, "element")
   if (supplied !== undefined) return supplied
-  const clean = await compileInput(files)
+  // Режим `repair` (спека декларацій функцій §5.1): тека після зворотної
+  // генерації з помилками лише класу ремонту доходить до 0 помилок саме
+  // мутаціями, тож вхід з ними приймається, а хвіст не дає додати нову.
+  const clean = await compileInput(files, { repair: true })
   if (!clean.ok) return clean.result
 
   const container = locateContainer(clean.model, files, input.target)
@@ -68,7 +72,18 @@ export async function addElement(
   if (Array.isArray(items)) items.push(element)
   else owner[input.collection] = [element]
 
-  const after = new Map(files)
-  after.set(container.file, JSON.stringify(raw))
-  return completeAndCompile(files, after, o, new Set([container.file]))
+  const changed = new Map(files)
+  changed.set(container.file, JSON.stringify(raw))
+  // Новий елемент може зробити задекларовану функцію формою платформи
+  // (вид скоупу з `setFunction`, вимір з функцією значень): декларація
+  // зникає в тій самій зміні (Р12).
+  const after = toPlatformForms(changed)
+  return completeAndCompile(
+    files,
+    after.files,
+    o,
+    new Set([container.file]),
+    clean.accepted,
+    after.diagnostics
+  )
 }

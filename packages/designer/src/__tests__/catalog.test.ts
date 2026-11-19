@@ -256,6 +256,79 @@ describe("tool catalog", TOOL_PIPELINE, () => {
     expect(after.attributes[0]!.physicalName).toBeTypeOf("string")
   })
 
+  // Режим `repair` (спека декларацій функцій §5.1): шлюз пише при
+  // `ok || written`, а не при `!ok` загалом.
+  describe("the write gateway and a repair-mode result", () => {
+    const NOTE = "note.txt"
+    const writer = (outcome: { ok: boolean; written?: true }) =>
+      stubOf({ files: "write", database: "none", data: "none" }, async () => ({
+        ...outcome,
+        changes: [{ path: NOTE, content: "x" }],
+        diagnostics: [],
+      }))
+
+    it("writes a not-ok result marked written and keeps ok false", async () => {
+      const dir = await project()
+      const r = await invoke(
+        writer({ ok: false, written: true }),
+        {},
+        opts(dir)
+      )
+      expect(r.ok).toBe(false)
+      expect(r.written).toBe(true)
+      expect(existsSync(join(dir, NOTE))).toBe(true)
+    })
+
+    it("does not write a not-ok result without written", async () => {
+      const dir = await project()
+      const r = await invoke(writer({ ok: false }), {}, opts(dir))
+      expect(r.ok).toBe(false)
+      expect(r.written).toBe(false)
+      expect(existsSync(join(dir, NOTE))).toBe(false)
+    })
+
+    it("a dry run does not write a result marked written", async () => {
+      const dir = await project()
+      const r = await invoke(
+        writer({ ok: false, written: true }),
+        {},
+        {
+          ...opts(dir),
+          dryRun: true,
+        }
+      )
+      expect(r.written).toBe(false)
+      // Перегляд каже, що запуск без `--dry-run` записав би результат
+      expect(r.wouldWrite).toBe(true)
+      expect(existsSync(join(dir, NOTE))).toBe(false)
+    })
+
+    it("a dry run of a not-ok result without written would write nothing", async () => {
+      const dir = await project()
+      const r = await invoke(
+        writer({ ok: false }),
+        {},
+        {
+          ...opts(dir),
+          dryRun: true,
+        }
+      )
+      expect(r.written).toBe(false)
+      expect(r.wouldWrite).toBeUndefined()
+    })
+
+    it("a real run carries no wouldWrite", async () => {
+      const dir = await project()
+      const r = await invoke(
+        writer({ ok: false, written: true }),
+        {},
+        opts(dir)
+      )
+      expect(r.written).toBe(true)
+      expect(r.wouldWrite).toBeUndefined()
+    })
+  })
+
   it("every (files, database, data) triple has a permit rule", () => {
     // Повний добуток осей, а не лише трійки з TOOLS: правило для нової
     // трійки мусить існувати до того, як з'явиться інструмент із нею.
