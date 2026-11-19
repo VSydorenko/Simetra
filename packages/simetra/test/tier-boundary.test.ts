@@ -586,6 +586,35 @@ describe("tier zones", () => {
     ).toEqual([])
   })
 
+  // Вхід `simetra/server/signals` — частина T3: та сама ярусна межа й та
+  // сама чистота (WebCrypto — глобал, а не `node:crypto`), а `../` з теки
+  // входу вбудував би в `dist/server/signals` другу копію рантайму.
+  it("server/signals is T3: refused below and from data/ui, pure inside", async () => {
+    for (const tier of ["model", "compiler", "schema"]) {
+      const msgs = await restricted(
+        importOf("simetra/server/signals"),
+        `src/${tier}/__fixture.ts`
+      )
+      expect(msgs, tier).toHaveLength(1)
+      expect(msgs[0]).toContain("Tier zone")
+    }
+    for (const tier of ["data", "ui"]) {
+      const msgs = await restricted(
+        importOf("simetra/server/signals"),
+        `src/${tier}/__fixture.ts`
+      )
+      expect(msgs, tier).toHaveLength(1)
+      expect(msgs[0]).toContain("must not import simetra/server")
+    }
+    const file = "src/server/signals/__fixture.ts"
+    for (const spec of ["node:crypto", "../runtime", "simetra/server", "pg"]) {
+      const msgs = await ruleIds(importOf(spec), file)
+      expect(msgs, spec).toContain("@typescript-eslint/no-restricted-imports")
+    }
+    for (const spec of ["./grant", "simetra/model", "zod"])
+      expect(await purity(importOf(spec), file), spec).toEqual([])
+  })
+
   // Ненормалізований шлях (`..` після звичайного сегмента) обходив ярусний
   // regex, що бачить лише `..` на початку.
   it.each([

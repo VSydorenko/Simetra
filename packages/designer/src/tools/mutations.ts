@@ -37,6 +37,7 @@ async function apply(
   const result = await operation(await readMetadataDir(dir))
   return {
     ok: result.ok,
+    ...(result.written === true ? { written: true as const } : {}),
     changes: result.changes,
     diagnostics: result.diagnostics,
   }
@@ -74,7 +75,7 @@ async function applyPromotion(
 export const createTool = defineTool({
   name: "create",
   description:
-    "Create a metadata object; ids and physical names are assigned. Writes only when the result compiles without errors.",
+    "Create a metadata object; ids and physical names are assigned. Writes when the result compiles without errors, or when its only errors are repair-class errors the directory already had (then ok is false and written is true).",
   input: createObjectInput,
   files: "write",
   database: "none",
@@ -87,7 +88,7 @@ export const createTool = defineTool({
 export const addTool = defineTool({
   name: "add",
   description:
-    "Add a named element (attribute, tabular section, value, scope kind, ...) to a collection of an object or of the project root. Writes only when the result compiles without errors.",
+    "Add a named element (attribute, tabular section, value, scope kind, ...) to a collection of an object or of the project root. Writes when the result compiles without errors, or when its only errors are repair-class errors the directory already had (then ok is false and written is true).",
   input: addElementInput,
   files: "write",
   database: "none",

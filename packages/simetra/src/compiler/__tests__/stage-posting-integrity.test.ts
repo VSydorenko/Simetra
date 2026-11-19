@@ -982,7 +982,8 @@ describe("stage 4: robustness", () => {
     const stage2 = checkIdentity(
       stage1.objects,
       stage1.brokenNames,
-      stage1.project
+      stage1.project,
+      stage1.functionsFiles
     )
     expect(stage2.diagnostics.map((d) => d.code)).toEqual([
       "posting.field-unknown",
@@ -1011,7 +1012,8 @@ describe("stage 4: robustness", () => {
     const stage2 = checkIdentity(
       stage1.objects,
       stage1.brokenNames,
-      stage1.project
+      stage1.project,
+      stage1.functionsFiles
     )
     // Об'єкт уже розібрано: зламаний вираз підставляємо в дані напряму, як
     // лишила б його стадія 1 без гарантій T0.

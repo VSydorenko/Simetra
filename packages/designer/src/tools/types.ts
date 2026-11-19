@@ -20,6 +20,7 @@ export const TOOL_NAMES = [
   "apply",
   "roles",
   "rights-maintenance",
+  "signals-config",
   "data-read",
   "data-command",
 ] as const
@@ -118,6 +119,12 @@ export interface ToolContext {
 /** `run` лише читає теку й викликає операцію; запис робить `invoke`. */
 export interface RunOutcome<D> {
   ok: boolean
+  /**
+   * Мутація режиму `repair` прийняла результат з помилками лише класу
+   * ремонту (`OperationResult.written`): `ok` лишається `false`, а `invoke`
+   * пише `changes`.
+   */
+  written?: true
   changes: FileChange[]
   diagnostics: Diagnostic[]
   data?: D
@@ -169,6 +176,12 @@ export type RefusalReason =
 export interface ToolResult<D = unknown> {
   ok: boolean
   written: boolean
+  /**
+   * Перегляд (`dryRun`) результату, який запуск без перегляду записав би:
+   * при `ok: false` — прийнятий режимом `repair` (спека декларацій функцій
+   * §5.1). Поза переглядом відсутній — там відповідає `written`.
+   */
+  wouldWrite?: true
   changes: { path: string; deleted: boolean }[]
   diagnostics: Diagnostic[]
   data?: D

@@ -14,6 +14,7 @@ import {
   SCOPE_FUNCTIONS_FILE,
   salesDocument,
   scopedProject,
+  uuid,
   withoutAccess,
   withoutMechanics,
 } from "./helpers"
@@ -813,7 +814,16 @@ describe("kind module: closed forms only", () => {
       withoutMechanics(withoutAccess(result.model!.sqlUnits)).map(
         (u) => u.class
       )
-    ).toEqual(["movementQuery", "function"])
+    ).toEqual([
+      "movementQuery",
+      "function",
+      // Функція модуля без декларації — `REVOKE` від `PUBLIC` і ролей API
+      // (спека декларацій функцій §5.1); перелік — function-execute.test.ts.
+      "grant",
+      "grant",
+      "grant",
+      "grant",
+    ])
   })
 })
 
@@ -842,4 +852,38 @@ describe("extensions of application SQL (спека прав §5.3)", () => {
     const found = await diagnostics({ "sql/public/extensions.sql": sql })
     expect(found.map((d) => [d.code, d.severity, d.params])).toEqual(expected)
   })
+})
+
+describe("declared functions: the closed shell in any file", () => {
+  // Декларація дає функції `EXECUTE` ролей застосунку, тож поза модулем виду
+  // вона судиться оболонкою, як функція модуля (спека декларацій функцій
+  // §5.1); фікстура приймає весь борг, тож без декларації ті самі тексти —
+  // прийнятий борг поза оболонкою, без `sql.closed-shell`.
+  const declared = (sqlFile: string, name: string) => ({
+    [sqlFile.replace(/\.sql$/, ".functions.json")]: JSON.stringify({
+      functions: [{ id: uuid(7101), function: { name }, callers: ["service"] }],
+    }),
+  })
+  const DEFINER_OPEN =
+    "CREATE FUNCTION public.f() RETURNS int LANGUAGE sql STABLE SECURITY DEFINER AS $$ SELECT 1 $$;"
+  const DYNAMIC =
+    "CREATE FUNCTION public.f() RETURNS int LANGUAGE plpgsql VOLATILE AS $$\nBEGIN\n  EXECUTE 'select 1';\n  RETURN 1;\nEND $$;"
+  const SHARED_SQL = "sql/public/rpc.sql"
+
+  it.each([
+    { file: SHARED_SQL, sql: DEFINER_OPEN, problem: "searchPath", line: 1 },
+    { file: SHARED_SQL, sql: DYNAMIC, problem: "dynamicSql", line: 3 },
+    { file: TABLE_SQL, sql: DEFINER_OPEN, problem: "searchPath", line: 1 },
+  ])(
+    "$problem in $file is sql.closed-shell",
+    async ({ file, sql, problem, line }) => {
+      expect(
+        (await diagnostics({ [file]: sql })).map((d) => d.code)
+      ).not.toContain("sql.closed-shell")
+      const found = await diagnostics({ [file]: sql, ...declared(file, "f") })
+      expect(found.map((d) => [d.code, d.file, d.params])).toEqual([
+        ["sql.closed-shell", file, { function: "public.f", line, problem }],
+      ])
+    }
+  )
 })

@@ -19,6 +19,7 @@ import {
 } from "../tools/data-tools"
 import type { RightsMaintenanceData } from "../tools/rights-maintenance-tool"
 import type { RolesData } from "../tools/roles-tool"
+import type { SignalsConfigData } from "../tools/signals-config"
 
 /** Текст пояснення об'єкта для терміналу; JSON-вигляд друкується як є. */
 export function renderExplanation(e: Explanation): string {
@@ -210,6 +211,17 @@ export function renderResult(
           : `assigned ${done.assignment}${done.member === undefined ? "" : ` to member ${done.member}`}`,
     }
   }
+  // Текстовий вигляд — рівно файл конфігу, щоб його можна було перенаправити
+  // у файл; імена змінних DSN — у JSON-вигляді й в описі інструмента
+  if (tool.name === "signals-config" && r.data !== undefined) {
+    const data = r.data as SignalsConfigData
+    return {
+      stdout:
+        o.format === "json"
+          ? JSON.stringify({ ok: r.ok, ...data }, null, 2)
+          : JSON.stringify(data.config, null, 2),
+    }
+  }
   // Дані рантайму — лише коли вони є; помилка компіляції чи збій бази
   // ідуть загальною гілкою з діагностикою
   if (
@@ -232,6 +244,7 @@ export function renderResult(
         {
           ok: r.ok,
           written: r.written,
+          ...(r.wouldWrite === true ? { wouldWrite: true } : {}),
           changed,
           diagnostics: JSON.parse(report) as unknown,
           ...(tool.name === "promote" && r.data !== undefined
@@ -254,7 +267,17 @@ export function renderResult(
   return {
     stdout: [
       ...r.changes.map((c) => `${verb(c.deleted)} ${o.dir}/${c.path}`),
-      ...(r.ok ? [] : ["nothing written: the result has errors"]),
+      ...(r.ok
+        ? []
+        : r.written
+          ? [
+              "written: the result keeps only repair-class errors the directory already had",
+            ]
+          : r.wouldWrite === true
+            ? [
+                "would write: the result keeps only repair-class errors the directory already had",
+              ]
+            : ["nothing written: the result has errors"]),
       report,
       ...(tool.name === "promote" && r.data !== undefined
         ? [renderPromotion(r.data as PromotionRecord, r.written)]

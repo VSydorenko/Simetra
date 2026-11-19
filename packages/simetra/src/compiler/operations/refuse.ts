@@ -1,9 +1,12 @@
-import { compile, type CompiledModel } from "../compile"
+import { compile, type CompiledModel, type CompileResult } from "../compile"
 import {
   diagnostic,
+  newRepairErrors,
+  repairKeys,
   sortDiagnostics,
   toPointer,
   type Diagnostic,
+  type RepairKey,
 } from "../diagnostics"
 import { withRanges } from "../locate"
 import { changesBetween } from "./changes"
@@ -63,15 +66,24 @@ function findId(value: unknown, path: string[]): string[] | undefined {
  * Мутація вимагає чистої компіляції входу: адресація й
  * каскади спираються на індекс чистої моделі, а напівмоделі компілятор не
  * віддає. Відмова несе діагностику входу — вона й пояснює, що лагодити.
+ * З `repair` вхід з помилками лише класу ремонту приймається (спека
+ * декларацій функцій §5.1); `accepted` — їхні ключі, з якими хвіст мутації
+ * звіряє результат (`acceptsRepair`). Чистий вхід дає порожні `accepted`.
  */
 export async function compileInput(
-  files: ReadonlyMap<string, string>
+  files: ReadonlyMap<string, string>,
+  options: { repair?: true } = {}
 ): Promise<
-  { ok: true; model: CompiledModel } | { ok: false; result: OperationResult }
+  | { ok: true; model: CompiledModel; accepted: RepairKey[] }
+  | { ok: false; result: OperationResult }
 > {
-  const compiled = await compile(files)
-  if (compiled.ok && compiled.model !== undefined) {
-    return { ok: true, model: compiled.model }
+  const compiled = await compile(files, options)
+  if (compiled.model !== undefined) {
+    return {
+      ok: true,
+      model: compiled.model,
+      accepted: repairKeys(compiled.diagnostics),
+    }
   }
   return {
     ok: false,
@@ -80,6 +92,21 @@ export async function compileInput(
       ...compiled.diagnostics,
     ]),
   }
+}
+
+/**
+ * Правило прийому мутації в режимі `repair` (§5.1): результат пишеться, якщо
+ * модель є (поза класом помилок немає) і жодна помилка класу не нова відносно
+ * входу — за кортежем ключа, а не за кількістю.
+ */
+export function acceptsRepair(
+  accepted: readonly RepairKey[],
+  compiled: CompileResult
+): boolean {
+  return (
+    compiled.model !== undefined &&
+    newRepairErrors(accepted, compiled.diagnostics).length === 0
+  )
 }
 
 /**

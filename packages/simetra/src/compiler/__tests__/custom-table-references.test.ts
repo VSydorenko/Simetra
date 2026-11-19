@@ -187,7 +187,8 @@ describe("custom table column references", () => {
     const stage2 = checkIdentity(
       stage1.objects,
       stage1.brokenNames,
-      stage1.project
+      stage1.project,
+      stage1.functionsFiles
     )
     expect(
       stage2.diagnostics.map((d) => [d.code, d.file, d.pointer, d.message])
@@ -302,7 +303,8 @@ describe("custom table column references", () => {
     const stage2 = checkIdentity(
       stage1.objects,
       stage1.brokenNames,
-      stage1.project
+      stage1.project,
+      stage1.functionsFiles
     )
     expect([...stage1.diagnostics, ...stage2.diagnostics]).toEqual([])
     const indexed = stage2.references

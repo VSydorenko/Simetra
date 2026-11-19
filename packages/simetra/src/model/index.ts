@@ -7,6 +7,7 @@ export {
   formatMetaFile,
   formatProjectFile,
   formatSqlDebtFile,
+  formatSqlFunctionsFile,
   isRecordKeyAt,
   PROJECT_KEY_ORDER,
 } from "./format"

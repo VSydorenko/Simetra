@@ -475,18 +475,21 @@ describe("snapshot exempt writers", () => {
     expect(await writers(`${fn}\n${REVOKE}`)).toEqual([])
   })
 
+  // Явний грант ролі команд на недекларовану definer-функцію — уже помилка
+  // перевірки викликача (стадія 5, Р14 спеки декларацій функцій): роль команд
+  // діє від імені користувача. Правило винятків знімка після неї не
+  // запускається; без гранту ролі команд функція компілюється без обох.
   it("refuses a definer function writing an exempt table through a data-modifying CTE", async () => {
+    const cte = writer(
+      "touch",
+      "WITH t AS (UPDATE public.membership SET is_active = true WHERE false RETURNING 1) SELECT FROM t"
+    )
     expect(
       await writers(
-        writer(
-          "touch",
-          "WITH t AS (UPDATE public.membership SET is_active = true WHERE false RETURNING 1) SELECT FROM t"
-        ) +
-          `\n${REVOKE}\nGRANT EXECUTE ON FUNCTION public.touch() TO simetra_command;`
+        `${cte}\n${REVOKE}\nGRANT EXECUTE ON FUNCTION public.touch() TO simetra_command;`
       )
-    ).toEqual([
-      { form: "definer", table: "public.membership", object: "public.touch" },
-    ])
+    ).toEqual([CALLER])
+    expect(await writers(`${cte}\n${REVOKE}`)).toEqual([])
   })
 
   it.each([
@@ -516,9 +519,7 @@ describe("snapshot exempt writers", () => {
       await writers(
         `${writer("touch", UPDATE)}\n${REVOKE}\nGRANT EXECUTE ON FUNCTION public.touch() TO simetra_command;`
       )
-    ).toEqual([
-      { form: "definer", table: "public.membership", object: "public.touch" },
-    ])
+    ).toEqual([CALLER])
     expect(await writers(`${writer("touch", UPDATE)}\n${REVOKE}`)).toEqual([])
   })
 

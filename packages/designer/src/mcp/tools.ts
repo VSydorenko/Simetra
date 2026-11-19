@@ -100,7 +100,7 @@ function toResponse(
   o: McpToolOptions,
   dry: boolean
 ): CallToolResult {
-  const { ok, written, changes, diagnostics, refusal } = result
+  const { ok, written, wouldWrite, changes, diagnostics, refusal } = result
   if (refusal !== undefined) {
     // Код відмови — і в `structuredContent`: агент читає причину, а не текст
     return {
@@ -218,7 +218,13 @@ function toResponse(
         ? [`${tool.name}: the database has objects the engine cannot read`]
         : tool.files === "write"
           ? [
-              "nothing written: the operation was refused or the result has errors",
+              // Результат, прийнятий режимом `repair` (спека декларацій
+              // функцій §5.1), записано чи (перегляд) було б записано
+              written
+                ? "written: the result keeps only repair-class errors the directory already had"
+                : wouldWrite === true
+                  ? "would write: the result keeps only repair-class errors the directory already had"
+                  : "nothing written: the operation was refused or the result has errors",
             ]
           : [`${tool.name}: the metadata has errors`]
   return {
@@ -226,6 +232,7 @@ function toResponse(
     structuredContent: {
       ok,
       written,
+      ...(wouldWrite === true ? { wouldWrite } : {}),
       changes,
       diagnostics,
       ...(tool.name === "introspect" && result.data !== undefined

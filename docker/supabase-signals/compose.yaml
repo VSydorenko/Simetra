@@ -1,24 +1,33 @@
 # Centrifugo поруч зі спільним стеком Supabase (він живе поза цим файлом:
 # `pnpm db:start`). Запускати лише через `pnpm db:signals:start` /
 # `pnpm db:signals:stop`: `db:start` і `db:stop` цей проєкт не чіпають.
-# Порт — лише на 127.0.0.1: Docker інакше відкриває його на всіх інтерфейсах
-# в обхід брандмауера. Проєкт окремий (`simetra-sb`), щоб `down` не зачепив
-# контейнери Supabase.
+# Centrifugo — у мережі хоста й слухає лише 127.0.0.1: порт, опублікований
+# Docker, інакше відкрився б на всіх інтерфейсах в обхід брандмауера. Проєкт
+# окремий (`simetra-sb`), щоб `down` не зачепив контейнери Supabase.
 name: simetra-sb
 
 services:
   centrifugo:
     image: centrifugo/centrifugo:v6.10.2@sha256:34b84f823515927266ce3abfb840fd9e0acabb58805e7e896f5de731217a627d
     command: ["centrifugo", "-c", "/centrifugo/config.json"]
-    ports:
-      - "127.0.0.1:8101:8000"
+    # Мережа хоста замість `ports`: JWKS host-а слухає лише 127.0.0.1, а
+    # `host-gateway` на Linux його не бачить. Тому HTTP Centrifugo прив'язано
+    # до 127.0.0.1, і зовні його не видно
+    network_mode: host
+    # DSN ролі `simetra_signals` дає лише `scripts/db-stack.mjs` середовищем
+    # процесу compose: пароль не в конфігу, не в `env_file` і не в argv
+    environment:
+      CENTRIFUGO_HTTP_SERVER_ADDRESS: "127.0.0.1"
+      CENTRIFUGO_HTTP_SERVER_PORT: "8101"
+      CENTRIFUGO_CONSUMERS_SIMETRA_OUTBOX_POSTGRESQL_DSN: ${SIMETRA_SIGNALS_DSN:?start Centrifugo with pnpm db:signals:start}
+      CENTRIFUGO_CONSUMERS_SIMETRA_OUTBOX_POSTGRESQL_PARTITION_NOTIFICATION_DSN: ${SIMETRA_SIGNALS_DSN:?start Centrifugo with pnpm db:signals:start}
     volumes:
       - ./centrifugo.json:/centrifugo/config.json:ro
     # curl в образі немає; wget — з busybox образу, а власної команди перевірки
     # здоров'я Centrifugo не має
     healthcheck:
       test:
-        ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8000/health"]
+        ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8101/health"]
       interval: 2s
       timeout: 5s
       retries: 30

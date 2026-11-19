@@ -14,6 +14,7 @@ import type {
 import {
   compareStrings,
   diagnostic,
+  isRepairError,
   sortDiagnostics,
   type Diagnostic,
 } from "./diagnostics"
@@ -28,6 +29,8 @@ import {
 } from "./contracts"
 import {
   buildFunctionExecuteUnits,
+  checkExecuteSignatures,
+  type FunctionExecuteSources,
   generatedGrantConflicts,
 } from "./function-execute"
 import { buildPresentation } from "./presentation"
@@ -89,9 +92,14 @@ import {
 } from "./subscription-units"
 import { buildMembershipFunctions, membershipsOf } from "./membership-functions"
 import { buildPlatformUnits } from "./platform/units"
-import { checkSqlModules, closedModuleOwners } from "./sql/closed-forms"
+import {
+  checkSqlModules,
+  closedModuleOwners,
+  platformFormSources,
+} from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
 import { checkDebt, debtPredicate } from "./sql/debt"
+import { checkDeclarations, declaredFunctions } from "./sql/declarations"
 import {
   checkFunctionBodies,
   checkPlatformCalls,
@@ -162,13 +170,22 @@ function validMembershipFunctions(
  * споживача» стоїть саме тут і бачить, які поля схем хтось прочитав.
  */
 export async function runStages(
-  stage1: FilesStageResult
+  stage1: FilesStageResult,
+  options: { repair?: true } = {}
 ): Promise<CompileResult> {
+  // Гейт стадій: у режимі `repair` помилки класу ремонту його не закривають
+  // (спека декларацій функцій §5.1) — модель будується, а `ok` лишається
+  // `false` за `hasErrors`.
+  const blocks = (diagnostics: readonly Diagnostic[]) =>
+    diagnostics.some(
+      (d) =>
+        d.severity === "error" && !(options.repair === true && isRepairError(d))
+    )
   const [parse, plpgsql] = await Promise.all([
     loadSqlParser(),
     loadPlpgsqlParser(),
   ])
-  const { stage2, upstream, stage3, sql } = sqlStage(stage1, parse)
+  const { stage2, upstream, stage3, sql, declared } = sqlStage(stage1, parse)
   // id є в кожного об'єкта, лише коли стадія 2 чиста; її помилки закривають
   // шлях до вкладення правил і далі, тож порожнє id сюди не доходить.
   const idByFile = new Map(stage1.objects.map((o) => [o.file, o.id ?? ""]))
@@ -205,7 +222,8 @@ export async function runStages(
           stage1.sqlDebt,
           !sql.diagnostics.some((d) => d.code === "sql.parse"),
           parse,
-          plpgsql
+          plpgsql,
+          declared
         )
   // Згенеровані функції схем застосунку відомі лише зі знімка. Подання й
   // політики їх не судять дозвільним переліком виразів (спека прав §5.3): ті, що
@@ -238,6 +256,14 @@ export async function runStages(
           )
         )
   const unitExpressions = expressions(false)
+  // Функції, `EXECUTE` яких виводить платформа: одні джерела для перевірки
+  // підпису раннього блоку й для генератора грантів.
+  const executeSources: FunctionExecuteSources = {
+    forms: platformFormSources(stage1.objects, stage1.project),
+    declared,
+    units: sql.units,
+    moduleOwners: owners,
+  }
   // Модуль виду 1С звужено до закритих форм: вид власника одиниці — з її
   // `ownerFile`, тож перевірка не чекає моделі стадії 3.
   const early = [
@@ -254,11 +280,13 @@ export async function runStages(
         parse,
         plpgsql,
         modelViews(sql.units),
-        sql.units
+        sql.units,
+        declared
       ),
       parse,
       plpgsql,
-      stage1.project?.database.provider
+      stage1.project?.database.provider,
+      declared
     ),
     // Оболонку судимих функцій задає лише `CREATE` (спека прав §5.3): набір судимих
     // відомий до стадії 3, тож помилка стоїть поруч із формами модулів.
@@ -267,8 +295,24 @@ export async function runStages(
       stage1.project,
       sql.units,
       parse,
-      plpgsql
+      plpgsql,
+      declared
     ),
+    // Резолв декларацій функцій (спека декларацій функцій §5.1) потребує лише
+    // одиниць і метаданих, тож стоїть у ранньому блоці: нерезолвлена
+    // декларація не має доходити до генератора `EXECUTE`.
+    ...checkDeclarations(
+      stage1.functionsFiles,
+      sql.units,
+      stage1.objects,
+      stage1.project,
+      new Set(
+        sql.diagnostics.filter((d) => d.code === "sql.parse").map((d) => d.file)
+      )
+    ),
+    // Підпис гранту, якого ідентичність не передає (#297), — помилка до
+    // генератора `EXECUTE`: інакше функція лишилася б з `EXECUTE` від `PUBLIC`.
+    ...checkExecuteSignatures(executeSources),
     ...debt.grows,
     // Дослівна політика чи тригер на таблиці виду і тіло функції, що її
     // пише, — помилка раннього блоку поруч із ратчетом боргу (спека прав §6.1,
@@ -302,7 +346,7 @@ export async function runStages(
     ...(embedded?.diagnostics ?? []),
   ]
   if (
-    hasErrors(early) ||
+    blocks(early) ||
     stage1.project === undefined ||
     stage3 === undefined ||
     embedded === undefined
@@ -347,11 +391,12 @@ export async function runStages(
         stage1.project,
         integrity
       ),
-      rightsCatalogTables(stage1.objects, physical)
+      rightsCatalogTables(stage1.objects, physical),
+      declared
     ),
   ])
   const ok = !hasErrors(staged)
-  if (!ok) return { ok, diagnostics: staged }
+  if (blocks(staged)) return { ok, diagnostics: staged }
 
   const rights = rightsContracts(
     stage1.objects,
@@ -498,7 +543,7 @@ export async function runStages(
   // для меж доступу: без нього всі мовчать (спека прав §4.6).
   const users = usersContractOf(stage1.objects, physical)
   // Дослівні функції множини видів скоупу — факт актора `scopeSets` (спека
-  // прав §5.2): той самий перелік, що гранти `setFunctions`, з видом.
+  // прав §5.2): ті самі функції, що отримують гранти форми `setFunction`, з видом.
   const scopeSetFunctions = scopeKinds
     .filter((kind) =>
       stage1.project!.scopeKinds.some(
@@ -561,22 +606,10 @@ export async function runStages(
     parse
   )
   const module = projectModule
-  // Підписки потрібні і контрактам, і грантам обробників — один масив.
   const eventSubscriptions = eventSubscriptionContracts(
     stage1.objects,
     physical,
     stage1.project
-  )
-  // Функцію множини `membership` з її грантами дає генератор членства.
-  const setFunctions = stage1.project.scopeKinds.flatMap((kind) =>
-    typeof kind.setFunction === "string"
-      ? []
-      : [
-          {
-            schema: kind.setFunction.schema ?? defaultSchema,
-            name: kind.setFunction.name,
-          },
-        ]
   )
   const membership = membershipContracts(
     stage1.objects,
@@ -646,8 +679,7 @@ export async function runStages(
       parse
     ),
     ...buildFunctionExecuteUnits(
-      setFunctions,
-      eventSubscriptions.map((s) => s.handler),
+      executeSources,
       stage1.project.database.provider,
       module,
       parse
@@ -1010,7 +1042,7 @@ export async function runStages(
   // Бюджет рядка рахується за формою передачі, а її дає лише каталог
   // рантайму — проєкція готової моделі, тож правило йде останнім.
   const budget = rowBudgetDiagnostics(buildRuntimeCatalog(compiled), objects)
-  if (hasErrors(budget)) {
+  if (blocks(budget)) {
     return {
       ok: false,
       diagnostics: sortDiagnostics([...diagnostics, ...budget]),
@@ -1033,7 +1065,8 @@ export function sqlStage(stage1: FilesStageResult, parse: SqlParser) {
   const stage2 = checkIdentity(
     stage1.objects,
     stage1.brokenNames,
-    stage1.project
+    stage1.project,
+    stage1.functionsFiles
   )
   const upstream = [...stage1.diagnostics, ...stage2.diagnostics]
   // Стадії 3–4 спираються на резолвлені посилання й наявні id та
@@ -1052,7 +1085,17 @@ export function sqlStage(stage1: FilesStageResult, parse: SqlParser) {
           ...enumTypes(stage1, stage1.project.defaultSchema),
           ...(stage3 === undefined ? [] : rowTypesOf(stage3.physical)),
         ])
-  return { stage2, upstream, stage3, sql }
+  // Декларації резолвляться над тими самими одиницями, тож ратчет боргу
+  // (`fix`, `introspect`) і стадії бачать одне й те саме виключення.
+  const declared =
+    stage1.project === undefined
+      ? []
+      : declaredFunctions(
+          stage1.functionsFiles,
+          sql.units,
+          stage1.project.defaultSchema
+        )
+  return { stage2, upstream, stage3, sql, declared }
 }
 
 /**

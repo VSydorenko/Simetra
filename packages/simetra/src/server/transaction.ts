@@ -199,7 +199,8 @@ const MERGE_MODE = statement(
   `SELECT set_config(${literal(SIGNAL_MODE_SETTING)}, ${literal(SIGNAL_MERGE_MODE)}, true)`
 )
 const INVALIDATE_TEXT = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(SIGNAL_INVALIDATE_FUNCTION_NAME)}($1::uuid, $2::uuid, $3::uuid)`
-const CURRENT_USER = statement(
+/** `current_user_id()` of the session claims: the command and `authorizeChannels` alike. */
+export const CURRENT_USER = statement(
   `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(CURRENT_USER_FUNCTION_NAME)}() AS user_id`
 )
 

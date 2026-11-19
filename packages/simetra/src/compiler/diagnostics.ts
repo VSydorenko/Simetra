@@ -44,6 +44,16 @@ export const COMPILER_RULES = [
   "sql.debt-extension-schema",
   "sql.definer-reads-rls",
   "sql.definer-caller-unchecked",
+  "sql.declaration-target-missing",
+  "sql.declaration-overload",
+  "sql.declaration-duplicate",
+  "sql.declaration-platform-form",
+  "sql.declaration-platform-form-widens",
+  "sql.declaration-check-missing",
+  "sql.declaration-check-not-applied",
+  "sql.declaration-anonymous-definer",
+  "sql.default-privileges-execute",
+  "sql.function-name-unsupported",
   "rewrite.ambiguous-name",
   "rewrite.unqualified-table",
   "rewrite.unsupported",
@@ -510,10 +520,72 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "sql.debt-session-write",
   "sql.debt-extension-schema",
   "sql.definer-reads-rls",
+  "sql.declaration-platform-form-widens",
   "promote.cascade-to-restrict",
   "attribute.lazy-over-budget",
   "engine.shadow-drop-failed",
 ])
+
+/**
+ * Клас ремонту (спека декларацій функцій §5.1): помилки, з якими тека щойно
+ * після зворотної генерації законна, бо їх лагодить наступна мутація
+ * (`create`, `add`, `declare-function`). Режим `repair` компілятора повертає з
+ * ними модель, а мутація приймає таку теку, доки не додає помилки класу.
+ * Кожен код класу несе `params.schema` і `params.name` — ключ помилки.
+ */
+export const REPAIR_CLASS: ReadonlySet<RuleCode> = new Set<RuleCode>([
+  "sql.definer-caller-unchecked",
+  "sql.declaration-check-missing",
+  "sql.declaration-check-not-applied",
+  "sql.declaration-platform-form",
+  "sql.default-privileges-execute",
+])
+
+/**
+ * Ключ помилки класу ремонту (Р7): кортеж, а не зклеєний `код|схема.ім'я` —
+ * ідентифікатори в лапках можуть містити крапку, і `"a.b".c` та `a."b.c"` —
+ * різні функції. JSON-pointer у ключ не входить: мутація зсуває записи.
+ */
+export interface RepairKey {
+  code: RuleCode
+  schema: string
+  name: string
+}
+
+/** Помилка, яку режим `repair` пропускає повз гейт стадій. */
+export function isRepairError(d: Diagnostic): boolean {
+  return d.severity === "error" && REPAIR_CLASS.has(d.code)
+}
+
+const repairKey = (d: Diagnostic): RepairKey => ({
+  code: d.code,
+  schema: String(d.params?.schema ?? ""),
+  name: String(d.params?.name ?? ""),
+})
+
+/** Ключі помилок класу ремонту серед діагностик. */
+export function repairKeys(diagnostics: readonly Diagnostic[]): RepairKey[] {
+  return diagnostics.filter(isRepairError).map(repairKey)
+}
+
+/**
+ * Помилки класу ремонту результату, ключа яких не було на вході: мутація, що
+ * їх додає, відмовляє (§5.1). Порівняння — множин ключів поелементно, а не
+ * кількостей: прибрана одна помилка не покриває доданої іншої.
+ */
+export function newRepairErrors(
+  accepted: readonly RepairKey[],
+  diagnostics: readonly Diagnostic[]
+): Diagnostic[] {
+  return diagnostics.filter((d) => {
+    if (!isRepairError(d)) return false
+    const key = repairKey(d)
+    return !accepted.some(
+      (a) =>
+        a.code === key.code && a.schema === key.schema && a.name === key.name
+    )
+  })
+}
 
 /** Діагностика з каталогу повідомлень; серйозність — властивість правила. */
 export function diagnostic(

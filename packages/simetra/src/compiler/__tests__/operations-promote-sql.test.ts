@@ -7,7 +7,11 @@ import {
   type PromoteInput,
   type SchemaPathResolver,
 } from "simetra/compiler"
-import { SQL_DEBT_FILE } from "simetra/model"
+import {
+  SQL_DEBT_FILE,
+  formatSqlFunctionsFile,
+  type SqlFunctionsFile,
+} from "simetra/model"
 import {
   CATALOG_FILE,
   COUNTERPARTY_FILE,
@@ -750,6 +754,90 @@ $fn$;
     const files = await project()
     const { after } = await passes(files)
     expect(after.has(CATALOG_FILE)).toBe(true)
+  })
+})
+
+// Декларація йде за своєю функцією (спека декларацій функцій §5.5): функції
+// одного модуля розходяться в модуль виду й у спільний файл, і їхні декларації
+// — так само; множина декларацій до й після промоції та сама.
+describe("promoteObject: function declarations follow their functions", () => {
+  const MODULE_FUNCTIONS =
+    "custom-tables/Counterparty/Counterparty.functions.json"
+  const KIND_FUNCTIONS = "catalogs/Counterparty/Counterparty.functions.json"
+  const RPC_FUNCTIONS = "sql/app/counterparty_rpc.functions.json"
+  const COUNT = {
+    id: uuid(951_001),
+    function: { schema: "app", name: "counterparty_count" },
+    callers: ["user"],
+  }
+  const RPC = {
+    id: uuid(951_002),
+    function: { schema: "app", name: "counterparty_rpc" },
+    callers: ["service"],
+  }
+
+  /** Записи `.functions.json` теки: ключ — пара `(schema, name)`. */
+  const declarations = (files: ReadonlyMap<string, string>) =>
+    [...files]
+      .filter(([path]) => path.endsWith(".functions.json"))
+      .flatMap(([path, text]) =>
+        (JSON.parse(text) as { functions: Json[] }).functions.map((d) => ({
+          path,
+          declaration: d,
+        }))
+      )
+
+  const declared = () =>
+    project({}, (f) => {
+      f.set(
+        COUNTERPARTY_SQL,
+        `${f.get(COUNTERPARTY_SQL)}
+CREATE FUNCTION app.counterparty_count() RETURNS bigint LANGUAGE sql STABLE SET search_path = '' AS $fn$ SELECT count(*) FROM app.counterparties c $fn$;
+
+CREATE FUNCTION app.counterparty_rpc() RETURNS integer LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $fn$ BEGIN RETURN 1; END $fn$;
+`
+      )
+      f.set(MODULE_FUNCTIONS, JSON.stringify({ functions: [COUNT, RPC] }))
+    })
+
+  it("carries each declaration into the sidecar of its function's new file", async () => {
+    const files = await declared()
+    const { result, after } = await passes(files)
+    expect(result.record?.movedUnits.map((u) => u.to)).toEqual(
+      expect.arrayContaining([KIND_MODULE, "sql/app/counterparty_rpc.sql"])
+    )
+    expect(after.has(MODULE_FUNCTIONS)).toBe(false)
+    expect(declarations(after)).toEqual([
+      { path: KIND_FUNCTIONS, declaration: COUNT },
+      { path: RPC_FUNCTIONS, declaration: RPC },
+    ])
+    // Запис — канонічний: той самий текст дає `formatSqlFunctionsFile`.
+    expect(after.get(RPC_FUNCTIONS)).toBe(
+      formatSqlFunctionsFile({
+        $schema: schemaPath(RPC_FUNCTIONS, "functions.schema.json"),
+        functions: [RPC],
+      } as SqlFunctionsFile)
+    )
+  })
+
+  it("keeps the set of declarations: none lost, none duplicated", async () => {
+    const files = await declared()
+    const { after } = await passes(files)
+    const content = (files: ReadonlyMap<string, string>) =>
+      declarations(files)
+        .map((d) => JSON.stringify(d.declaration))
+        .sort()
+    expect(content(after)).toEqual(content(files))
+  })
+
+  // Без декларації definer-функція, яку роль API виконує за типовими
+  // привілеями, дала б `sql.definer-caller-unchecked` у спільному файлі.
+  it("the moved definer function stays declared", async () => {
+    const files = await declared()
+    const { after } = await passes(files)
+    expect((await compile(after)).diagnostics.map((d) => d.code)).not.toContain(
+      "sql.definer-caller-unchecked"
+    )
   })
 })
 

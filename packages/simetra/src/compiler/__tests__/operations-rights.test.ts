@@ -15,11 +15,14 @@ import {
   COMMENT_FILE,
   MEMBER_FILE,
   ORG_KIND_ID,
+  ORG_SCOPE_KIND,
   PROJECT_CATALOG_FILE,
   TASK_FILE,
   TASK_ID,
   rightsFiles,
 } from "./fixtures/rights"
+import type { Diagnostic } from "../diagnostics"
+import { toPlatformForms } from "../operations/platform-forms"
 import { uuid } from "./helpers"
 
 type Json = Record<string, unknown>
@@ -380,5 +383,253 @@ describe("designer operations over rights fields", () => {
     ])
     expect(left.attributes).toEqual(before.attributes)
     expect(TASK_ID).toBe(before.id)
+  })
+})
+
+// Перехід у форму платформи (спека декларацій функцій §5.1, Р12): мутація,
+// після якої задекларована функція стає формою платформи, у тій самій зміні
+// видаляє її декларацію, а ширші призначення форми називає попередженням.
+describe("a declared function becomes a platform form", () => {
+  const TEAM_SQL = "sql/public/team.sql"
+  const TEAM_FUNCTIONS = "sql/public/team.functions.json"
+  const REGION_SQL = "sql/public/region.sql"
+  const REGION_FUNCTIONS = "sql/public/region.functions.json"
+  const TEAM_IDS =
+    "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n"
+  const OTHER =
+    "CREATE FUNCTION public.team_count() RETURNS int LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT 1 $$;\n"
+  const REGION_IDS =
+    "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n"
+
+  const declared = (name: string, callers: string[], n: number) => ({
+    id: uuid(n),
+    function: { name },
+    callers,
+  })
+
+  function withDeclarations(
+    sql: Record<string, string>,
+    declarations: Record<string, Json[]>
+  ): Map<string, string> {
+    const files = rightsFiles()
+    for (const [path, text] of Object.entries(sql)) files.set(path, text)
+    for (const [path, functions] of Object.entries(declarations)) {
+      files.set(path, JSON.stringify({ functions }))
+    }
+    return files
+  }
+
+  const addTeamKind = (files: Files) =>
+    addElement(
+      files,
+      {
+        target: { kind: "Project" },
+        collection: "scopeKinds",
+        element: {
+          name: "team",
+          root: {
+            external: { schema: "public", table: "teams", column: "id" },
+          },
+          setFunction: { name: "team_ids" },
+        },
+      },
+      options()
+    )
+
+  const widens = (result: { diagnostics: readonly Diagnostic[] }) =>
+    result.diagnostics.filter(
+      (d) => d.code === "sql.declaration-platform-form-widens"
+    )
+
+  it("add of a scope kind writes the result and removes the declaration of its set function", async () => {
+    const files = withDeclarations(
+      { [TEAM_SQL]: TEAM_IDS },
+      { [TEAM_FUNCTIONS]: [declared("team_ids", ["user"], 7801)] }
+    )
+    const input = await compile(files)
+    const inputErrors = input.diagnostics.filter((d) => d.severity === "error")
+    expect(inputErrors.map((d) => [d.code, d.params?.name])).toEqual([
+      ["sql.declaration-check-missing", "team_ids"],
+    ])
+
+    const result = await addTeamKind(files)
+    expect(errors(result)).toEqual([])
+    expect(result.ok).toBe(true)
+    expect(result.changes.map((c) => [c.path, c.content === null])).toEqual([
+      ["project.meta.json", false],
+      [TEAM_FUNCTIONS, true],
+    ])
+    expect(widens(result).map((d) => d.params)).toEqual([
+      {
+        schema: "public",
+        name: "team_ids",
+        function: "public.team_ids",
+        form: "setFunction",
+        roles: "service, command",
+      },
+    ])
+    await modelOf(applyChanges(files, result.changes))
+  })
+
+  it("keeps the other entries of the declarations file in canonical form", async () => {
+    const files = withDeclarations(
+      { [TEAM_SQL]: TEAM_IDS + OTHER },
+      {
+        [TEAM_FUNCTIONS]: [
+          declared("team_count", ["user"], 7802),
+          declared("team_ids", ["user", "service", "command"], 7803),
+        ],
+      }
+    )
+    const result = await addTeamKind(files)
+    expect(errors(result)).toEqual([])
+    expect(result.ok).toBe(true)
+    // Викликачі збігаються з призначеннями функції множини: нічого не ширшає.
+    expect(widens(result)).toEqual([])
+    const after = applyChanges(files, result.changes)
+    expect(json(after, TEAM_FUNCTIONS)).toEqual({
+      functions: [declared("team_count", ["user"], 7802)],
+    })
+    await modelOf(after)
+  })
+
+  it("warns with the added roles when the form widens the callers of the declaration", async () => {
+    const files = withDeclarations(
+      { [TEAM_SQL]: TEAM_IDS },
+      { [TEAM_FUNCTIONS]: [declared("team_ids", ["service"], 7804)] }
+    )
+    expect(errors(await compile(files))).toEqual([])
+
+    const result = await addTeamKind(files)
+    expect(errors(result)).toEqual([])
+    expect(result.ok).toBe(true)
+    expect(result.changes.map((c) => c.path)).toEqual([
+      "project.meta.json",
+      TEAM_FUNCTIONS,
+    ])
+    expect(widens(result).map((d) => [d.severity, d.file, d.params])).toEqual([
+      [
+        "warning",
+        TEAM_FUNCTIONS,
+        {
+          schema: "public",
+          name: "team_ids",
+          function: "public.team_ids",
+          form: "setFunction",
+          roles: "user, command",
+        },
+      ],
+    ])
+  })
+
+  it("add of an access dimension with a values function never widens", async () => {
+    const files = withDeclarations(
+      { [REGION_SQL]: REGION_IDS },
+      { [REGION_FUNCTIONS]: [declared("region_ids", ["service"], 7805)] }
+    )
+    expect(errors(await compile(files))).toEqual([])
+
+    const result = await addElement(
+      files,
+      {
+        target: { kind: "Project" },
+        collection: "accessDimensions",
+        element: {
+          name: "area",
+          target: ref("Catalog", "Region"),
+          values: { function: { name: "region_ids" } },
+        },
+      },
+      options()
+    )
+    expect(errors(result)).toEqual([])
+    expect(result.ok).toBe(true)
+    expect(result.changes.map((c) => [c.path, c.content === null])).toEqual([
+      ["project.meta.json", false],
+      [REGION_FUNCTIONS, true],
+    ])
+    expect(widens(result)).toEqual([])
+  })
+
+  it("create of a subscription removes the declaration of its handler without a warning", async () => {
+    const HANDLER_SQL = "sql/public/org-touch.sql"
+    const HANDLER_FUNCTIONS = "sql/public/org-touch.functions.json"
+    const files = withDeclarations(
+      {
+        [HANDLER_SQL]:
+          "CREATE FUNCTION public.org_touch() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;\n",
+      },
+      { [HANDLER_FUNCTIONS]: [declared("org_touch", ["service"], 7806)] }
+    )
+    expect(errors(await compile(files))).toEqual([])
+
+    const result = await createObject(
+      files,
+      {
+        kind: "EventSubscription",
+        name: "OrgTouch",
+        data: {
+          sources: [ref("Catalog", "Organization")],
+          event: "onWrite",
+          handler: { name: "org_touch" },
+        },
+      },
+      options()
+    )
+    expect(errors(result)).toEqual([])
+    expect(result.ok).toBe(true)
+    expect(result.changes.map((c) => [c.path, c.content === null])).toEqual([
+      ["event-subscriptions/OrgTouch/OrgTouch.meta.json", false],
+      [HANDLER_FUNCTIONS, true],
+    ])
+    // Призначення обробника порожні: перехід не розширює нічого.
+    expect(widens(result)).toEqual([])
+  })
+
+  // Р7: `"a.b".c` і `a."b.c"` — різні функції, хоча зклеєний рядок у них
+  // один (`a.b.c`).
+  it("matches a declaration to a form by the (schema, name) pair, not a joined string", () => {
+    const files = rightsFiles({
+      [PROJECT]: {
+        scopeKinds: [
+          ORG_SCOPE_KIND,
+          {
+            id: uuid(7810),
+            name: "dotted",
+            physicalName: "dotted_id",
+            root: {
+              external: { schema: "public", table: "teams", column: "id" },
+            },
+            setFunction: { schema: "a.b", name: "c" },
+          },
+        ],
+      },
+    })
+    const sql = "sql/a/fns.sql"
+    const sidecar = "sql/a/fns.functions.json"
+    files.set(sql, "-- функції розбирає компіляція, не перехід\n")
+    const other = {
+      id: uuid(7811),
+      function: { schema: "a", name: "b.c" },
+      callers: ["service"],
+    }
+    const form = {
+      id: uuid(7812),
+      function: { schema: "a.b", name: "c" },
+      callers: ["service"],
+    }
+    files.set(sidecar, JSON.stringify({ functions: [other, form] }))
+
+    const transition = toPlatformForms(files)
+    expect(json(transition.files, sidecar)).toEqual({ functions: [other] })
+    expect(transition.diagnostics.map((d) => d.params)).toEqual([
+      {
+        schema: "a.b",
+        name: "c",
+        function: "a.b.c",
+        form: "setFunction",
+        roles: "user, command",
+      },
+    ])
   })
 })

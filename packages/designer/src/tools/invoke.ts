@@ -215,6 +215,7 @@ export async function invoke<D>(
       // в нього немає)
       let write = false
       let writeArtifacts = false
+      let wouldWrite = false
       const files: FilesAccess = tool.files
       switch (files) {
         case "read":
@@ -228,10 +229,20 @@ export async function invoke<D>(
             )
           writeArtifacts = outcome.ok && artifacts.length > 0
           break
-        case "write":
-          write = outcome.ok && !o.dryRun && outcome.changes.length > 0
-          writeArtifacts = outcome.ok && !o.dryRun && artifacts.length > 0
+        case "write": {
+          // Режим `repair` (спека декларацій функцій §5.1): прийнятий
+          // результат з помилками лише класу ремонту пишеться при `ok: false`.
+          const accepted = outcome.ok || outcome.written === true
+          write = accepted && !o.dryRun && outcome.changes.length > 0
+          writeArtifacts = accepted && !o.dryRun && artifacts.length > 0
+          // Без цього сигналу перегляд прийнятого результату з `ok: false`
+          // не відрізнити від відхиленого: обидва `written: false`
+          wouldWrite =
+            accepted &&
+            o.dryRun &&
+            (outcome.changes.length > 0 || artifacts.length > 0)
           break
+        }
       }
       // Артефакти — до змін теки: записаний запис промоції без змін теки
       // інертний (план відмовить, повторний `promote` перезапише його), а
@@ -242,6 +253,7 @@ export async function invoke<D>(
       return {
         ok: outcome.ok,
         written: write || writeArtifacts,
+        ...(wouldWrite ? { wouldWrite: true as const } : {}),
         changes: outcome.changes.map((c) => ({
           path: c.path,
           deleted: c.content === null,
