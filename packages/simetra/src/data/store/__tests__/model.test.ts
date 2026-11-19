@@ -2703,7 +2703,8 @@ async function runModelOn(
               record(read)
             }
           }
-          advance(1_000)
+          // Без плину часу між проходами: відкладені повтори відкинутих
+          // відповідей лишаються в планувальнику до самої межі.
         }
         await flush()
         if (!inspect.versionEpochs().unavailable) break
@@ -2734,11 +2735,14 @@ async function runModelOn(
         advance(2 * REVALIDATE_MS)
         await flush()
         for (const [sub, rereads] of before)
-          if (sub.rereads !== rereads)
+          if (sub.rereads !== rereads) {
+            // Читання зробив такт планувальника: він же й помилка.
+            tickReads++
             fail(
               label,
               "a read started by the scheduler after the discard limit"
             )
+          }
         break
       }
       case "resume": {
