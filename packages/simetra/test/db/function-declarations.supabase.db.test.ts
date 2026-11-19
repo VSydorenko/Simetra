@@ -14,11 +14,12 @@ import { claimsFor, queryAs, withRollback } from "./connection"
  * інваріант 3 плану Д1): типові привілеї схеми `public` дають `EXECUTE`
  * кожній новій функції `anon` і `authenticated`, тож без похідного `REVOKE`
  * функція модуля, якої ніхто не декларував, була б RPC для кожного.
- * Решта кейсів — `function-declarations.db.test.ts`.
+ * Тут же — кейси сервісної ролі, яка є лише на цьому стеку; решта —
+ * `function-declarations.db.test.ts`.
  */
 
 describe("EXECUTE of an undeclared module function on Supabase", () => {
-  it("anon and authenticated get 42501 on a module function with a parameter", async () => {
+  it("anon, authenticated and service_role get 42501 on a module function with a parameter", async () => {
     await withRollback(async (client) => {
       const result = await compile(
         metaFiles({
@@ -32,11 +33,14 @@ describe("EXECUTE of an undeclared module function on Supabase", () => {
         []
       )
       await client.query(renderDesiredState(result.model!).sql)
-      for (const purpose of ["anonymous", "user"] as const) {
+      for (const purpose of ["anonymous", "user", "service"] as const) {
         const call = await queryAs(
           client,
           purpose,
-          claimsFor(purpose, purpose === "user" ? randomUUID() : undefined),
+          claimsFor(
+            purpose,
+            purpose === "anonymous" ? undefined : randomUUID()
+          ),
           "SELECT public.item_total(gen_random_uuid())"
         )
         expect([purpose, call]).toEqual([purpose, { code: "42501" }])

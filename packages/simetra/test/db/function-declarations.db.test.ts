@@ -19,7 +19,6 @@ import {
   asStackSuperuser,
   claimsFor,
   queryAs,
-  testRoleFor,
   testRoleName,
   withRollback,
 } from "./connection"
@@ -63,10 +62,11 @@ const declaredF = (callers: string[]) =>
     }),
   })
 
-/** Ролі API профілю стека (сервісної на `postgres` немає). */
-const API_PURPOSES = (["user", "anonymous", "service"] as const).filter(
-  (purpose) => testRoleFor(purpose) !== null
-)
+/**
+ * Ролі API, які є на кожному стеку. Сервісна є лише на `supabase`: її кейси —
+ * у `function-declarations.supabase.db.test.ts`, а не пропуск за профілем тут.
+ */
+const API_PURPOSES = ["user", "anonymous"] as const
 
 /** Код відмови чи `ok` виклику `sql` від ролі API призначення `purpose`. */
 async function callAs(
