@@ -15,7 +15,7 @@ import {
 import type { ParsedFunctionsFile, ParsedObject } from "../stages/files"
 import { platformFormSources } from "./closed-forms"
 import { ON_BEHALF_OF_USER, isSecurityDefiner } from "./definer-reads"
-import { FUNCTION_CLASSES, functionIdentity, type VerbatimUnit } from "./units"
+import { FUNCTION_CLASSES, type VerbatimUnit } from "./units"
 
 /**
  * Функція, яку називає декларація: пара `(schema, name)` після підстановки
@@ -53,7 +53,7 @@ const sameKey = (
 ) => unit.schema === key.schema && unit.name === key.name
 
 /** Рядок для мапи, що не зливає пари з крапкою в ідентифікаторі. */
-const tupleKey = (key: DeclaredFunctionKey) =>
+export const tupleKey = (key: DeclaredFunctionKey) =>
   JSON.stringify([key.schema, key.name])
 
 function entriesOf(
@@ -154,9 +154,9 @@ export interface PlatformFormFunction {
 
 /**
  * Функції форм платформи (спека декларацій функцій §5.3) — проєкція
- * `platformFormSources`. Ключ — ідентичність функції без аргументів; значення
- * несе пару для порівняння з декларацією. Одна функція в кількох формах —
- * перша форма переліку, як у генераторі.
+ * `platformFormSources`. Ключ — `tupleKey` пари `(schema, name)`, а не
+ * зклеєна ідентичність: `"a.b".c` і `a."b.c"` — дві різні форми (Р7). Одна
+ * функція в кількох формах — перша форма переліку, як у генераторі.
  */
 export function platformFormFunctions(
   objects: readonly ParsedObject[],
@@ -164,13 +164,9 @@ export function platformFormFunctions(
 ): ReadonlyMap<string, PlatformFormFunction> {
   const forms = new Map<string, PlatformFormFunction>()
   for (const source of platformFormSources(objects, project)) {
-    const identity = functionIdentity(
-      source.function.schema,
-      source.function.name,
-      []
-    )
-    if (forms.has(identity)) continue
-    forms.set(identity, {
+    const key = tupleKey(source.function)
+    if (forms.has(key)) continue
+    forms.set(key, {
       ...source,
       purposes: PLATFORM_FORM_PURPOSES[source.form],
     })

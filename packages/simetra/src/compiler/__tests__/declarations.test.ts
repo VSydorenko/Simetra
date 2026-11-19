@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import { readFiles } from "../pipeline"
 import type { SqlFunctionDeclaration } from "simetra/model"
-import { checkDeclarations, declaredFunctions } from "../sql/declarations"
+import {
+  checkDeclarations,
+  declaredFunctions,
+  platformFormFunctions,
+} from "../sql/declarations"
 import type { VerbatimUnit } from "../sql/units"
 import {
   COUNT_COMMENT_SQL_FILE,
@@ -247,6 +251,36 @@ describe("declaration key: a (schema, name) pair", () => {
     expect(
       checkDeclarations(files, units, stage1.objects, stage1.project, new Set())
     ).toEqual([])
+  })
+  it("platform forms keep both functions of a dotted pair", () => {
+    const kind = (
+      n: number,
+      setFunction: { schema: string; name: string }
+    ) => ({
+      id: uuid(n),
+      name: `kind${n}`,
+      physicalName: `kind${n}_id`,
+      root: { external: { schema: "public", table: "teams", column: "id" } },
+      setFunction,
+    })
+    const { objects, project: parsed } = readFiles(
+      metaFiles({
+        "project.meta.json": project({
+          scopeKinds: [
+            kind(7901, { schema: "a.b", name: "c" }),
+            kind(7902, { schema: "a", name: "b.c" }),
+          ],
+        }),
+      })
+    )
+    expect(
+      [...platformFormFunctions(objects, parsed).values()].map(
+        (f) => f.function
+      )
+    ).toEqual([
+      { schema: "a.b", name: "c" },
+      { schema: "a", name: "b.c" },
+    ])
   })
 })
 

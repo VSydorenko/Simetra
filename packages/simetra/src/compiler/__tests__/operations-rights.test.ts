@@ -15,12 +15,14 @@ import {
   COMMENT_FILE,
   MEMBER_FILE,
   ORG_KIND_ID,
+  ORG_SCOPE_KIND,
   PROJECT_CATALOG_FILE,
   TASK_FILE,
   TASK_ID,
   rightsFiles,
 } from "./fixtures/rights"
 import type { Diagnostic } from "../diagnostics"
+import { toPlatformForms } from "../operations/platform-forms"
 import { uuid } from "./helpers"
 
 type Json = Record<string, unknown>
@@ -547,5 +549,87 @@ describe("a declared function becomes a platform form", () => {
       [REGION_FUNCTIONS, true],
     ])
     expect(widens(result)).toEqual([])
+  })
+
+  it("create of a subscription removes the declaration of its handler without a warning", async () => {
+    const HANDLER_SQL = "sql/public/org-touch.sql"
+    const HANDLER_FUNCTIONS = "sql/public/org-touch.functions.json"
+    const files = withDeclarations(
+      {
+        [HANDLER_SQL]:
+          "CREATE FUNCTION public.org_touch() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;\n",
+      },
+      { [HANDLER_FUNCTIONS]: [declared("org_touch", ["service"], 7806)] }
+    )
+    expect(errors(await compile(files))).toEqual([])
+
+    const result = await createObject(
+      files,
+      {
+        kind: "EventSubscription",
+        name: "OrgTouch",
+        data: {
+          sources: [ref("Catalog", "Organization")],
+          event: "onWrite",
+          handler: { name: "org_touch" },
+        },
+      },
+      options()
+    )
+    expect(errors(result)).toEqual([])
+    expect(result.ok).toBe(true)
+    expect(result.changes.map((c) => [c.path, c.content === null])).toEqual([
+      ["event-subscriptions/OrgTouch/OrgTouch.meta.json", false],
+      [HANDLER_FUNCTIONS, true],
+    ])
+    // Призначення обробника порожні: перехід не розширює нічого.
+    expect(widens(result)).toEqual([])
+  })
+
+  // Р7: `"a.b".c` і `a."b.c"` — різні функції, хоча зклеєний рядок у них
+  // один (`a.b.c`).
+  it("matches a declaration to a form by the (schema, name) pair, not a joined string", () => {
+    const files = rightsFiles({
+      [PROJECT]: {
+        scopeKinds: [
+          ORG_SCOPE_KIND,
+          {
+            id: uuid(7810),
+            name: "dotted",
+            physicalName: "dotted_id",
+            root: {
+              external: { schema: "public", table: "teams", column: "id" },
+            },
+            setFunction: { schema: "a.b", name: "c" },
+          },
+        ],
+      },
+    })
+    const sql = "sql/a/fns.sql"
+    const sidecar = "sql/a/fns.functions.json"
+    files.set(sql, "-- функції розбирає компіляція, не перехід\n")
+    const other = {
+      id: uuid(7811),
+      function: { schema: "a", name: "b.c" },
+      callers: ["service"],
+    }
+    const form = {
+      id: uuid(7812),
+      function: { schema: "a.b", name: "c" },
+      callers: ["service"],
+    }
+    files.set(sidecar, JSON.stringify({ functions: [other, form] }))
+
+    const transition = toPlatformForms(files)
+    expect(json(transition.files, sidecar)).toEqual({ functions: [other] })
+    expect(transition.diagnostics.map((d) => d.params)).toEqual([
+      {
+        schema: "a.b",
+        name: "c",
+        function: "a.b.c",
+        form: "setFunction",
+        roles: "user, command",
+      },
+    ])
   })
 })
