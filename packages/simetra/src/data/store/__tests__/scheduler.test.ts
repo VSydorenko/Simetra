@@ -431,11 +431,10 @@ describe("scheduler: the discard limit", () => {
       status: "error",
       error: { code: "command.unavailable" },
     })
-    // Строк перемикання епохи (теж планувальника) настає в межах `I`.
-    await vi.advanceTimersByTimeAsync(big)
-    await deliver()
-    expect(h.inspect.serviceSizes().schedulerTimers).toBe(0)
+    // Після `unavailable` планувальник скидає відкладені строки (спека §6.2),
+    // зокрема строк перемикання епохи: читань немає й до спливу часу.
     const base = readsAt(h)
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(0)
     await vi.advanceTimersByTimeAsync(10 * big)
     await deliver()
     expect(readsAt(h)).toBe(base)
