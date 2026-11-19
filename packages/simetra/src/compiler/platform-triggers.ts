@@ -1,16 +1,29 @@
+import type { DatabaseProvider } from "simetra/model"
 import {
   AUTHOR_FUNCTION,
   authorTriggerName,
   authorUpdateTriggerName,
+  renderAuthorFunction,
+  renderAuthorTrigger,
 } from "./author-units"
 import type { QualifiedName } from "./contracts"
 import { hierarchyNames } from "./hierarchy-units"
-import { KEY_FUNCTION, keyTriggerNames } from "./key-units"
+import {
+  KEY_COLUMN,
+  KEY_FUNCTION,
+  keyTriggerNames,
+  renderKeyFunction,
+  renderKeyTrigger,
+} from "./key-units"
 import {
   MECHANICS_FUNCTION,
   mechanicsTriggerName,
   mechanicsUpdateTriggerName,
+  renderMechanicsFunction,
+  renderMechanicsTrigger,
+  type RenderedUnit,
 } from "./mechanics-units"
+import type { SqlParser } from "./sql/parse"
 import {
   carrierFunctionNames,
   carrierTriggerNames,
@@ -126,5 +139,54 @@ export function platformTriggers(table: QualifiedName): PlatformTrigger[] {
     ...rightsGuardNames(table).map((guard) =>
       entry("rightsGuards", "rightsGuards", guard.function, guard.trigger)
     ),
+  ]
+}
+
+/**
+ * Шар, що не залежить від моделі, для таблиці: спільні функції механіки,
+ * авторства й ключа з їхніми грантами та тригери цих родин у формі без
+ * `WHEN` змісту (таблиця без копій носіїв). Той самий текст, що кладуть
+ * `build*Units`, — еталон зворотної генерації не має другої копії.
+ * Варіанти з `WHEN` залежать від копій носіїв моделі й сюди не входять.
+ * Чи таблиця має колонки, яких вимагає тригер, вирішує споживач.
+ */
+export function renderModelIndependentLayer(
+  table: QualifiedName,
+  provider: DatabaseProvider,
+  parse: SqlParser
+): RenderedUnit[] {
+  const key = keyTriggerNames(table.name)
+  return [
+    ...renderSharedTriggerFunctions(provider, parse),
+    renderMechanicsTrigger(
+      table,
+      mechanicsTriggerName(table.name),
+      "INSERT OR UPDATE",
+      parse
+    ),
+    renderAuthorTrigger(
+      table,
+      authorTriggerName(table.name),
+      "INSERT OR UPDATE",
+      parse
+    ),
+    renderKeyTrigger(table, key.before, "BEFORE", KEY_COLUMN, parse),
+    renderKeyTrigger(table, key.after, "AFTER", KEY_COLUMN, parse),
+  ]
+}
+
+/**
+ * Спільні функції механіки, авторства й ключа з їхніми грантами: частина
+ * шару, що не залежить ні від моделі, ні від таблиці, — еталон зворотної
+ * генерації бере її й без жодного тригера.
+ */
+export function renderSharedTriggerFunctions(
+  provider: DatabaseProvider,
+  parse: SqlParser
+): RenderedUnit[] {
+  return [
+    ...renderMechanicsFunction(provider, parse),
+    ...renderAuthorFunction(provider, parse),
+    ...renderKeyFunction(provider, parse),
   ]
 }

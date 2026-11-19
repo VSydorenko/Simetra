@@ -16,6 +16,8 @@ import {
   authorStandardNames,
   authorTableColumns,
   contentChangeCondition,
+  qualifiedCall,
+  type RenderedUnit,
 } from "./mechanics-units"
 import { CURRENT_USER_FUNCTION } from "./platform/names"
 import { COMMAND_FUNCTIONS } from "./rights/command-units"
@@ -85,43 +87,20 @@ export function buildAuthorUnits(
     return true
   })
   if (tables.length === 0) return []
-  const fn = `${quoteIdent(AUTHOR_FUNCTION.schema)}.${quoteIdent(AUTHOR_FUNCTION.name)}`
-  // Тіло plpgsql граф порядку не читає: функції контексту й користувача —
-  // явні ребра, як у тригера ефектів.
-  const requires = [COMMAND_FUNCTIONS.current, CURRENT_USER_FUNCTION].map(
-    (f) => ({
-      type: "unit" as const,
-      identity: functionIdentity(f.schema, f.name, []),
-    })
-  )
-  const shared = (sql: string, withRequires = false): SqlUnit => ({
-    ...generatedUnit(sql, PLATFORM_SCHEMA, parse),
-    module,
-    generator: "mechanics",
-    ...(withRequires ? { requires } : {}),
-  })
   const trigger = (
     table: ObjectTable,
     name: string,
     events: string,
     when?: string
   ): SqlUnit => ({
-    ...generatedUnit(
-      `CREATE TRIGGER ${quoteIdent(name)} BEFORE ${events} ON ${quoteIdent(table.schema)}.${quoteIdent(table.name)} FOR EACH ROW ` +
-        (when === undefined ? "" : `WHEN (${when}) `) +
-        `EXECUTE FUNCTION ${fn}();`,
-      table.schema,
-      parse
-    ),
+    ...renderAuthorTrigger(table, name, events, parse, when),
     ownerObjectId: table.origin.objectId,
     module,
-    generator: "mechanics",
   })
   // `EXECUTE` — нікому: тригер спрацьовує без права виконання функції
   // (платформна спека §6.7), а напряму її кликати нема кому.
   const units: SqlUnit[] = [
-    shared(authorFunction(), true),
-    ...executeGrants(`${fn}()`, [], provider).map((sql) => shared(sql)),
+    ...renderAuthorFunction(provider, parse).map((u) => ({ ...u, module })),
     ...tables.flatMap((table): SqlUnit[] => {
       // Поширення копій носіїв не змінює автора: оновлення — окремим тригером
       // з умовою змісту, а зміна самого автора — теж зміна (`watched`).
@@ -144,6 +123,55 @@ export function buildAuthorUnits(
     }),
   ]
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
+}
+
+/**
+ * Спільна функція авторства з грантами: текст не залежить від моделі, тож його
+ * рендерить одне місце — і генератор, і еталон зворотної генерації.
+ */
+export function renderAuthorFunction(
+  provider: DatabaseProvider,
+  parse: SqlParser
+): RenderedUnit[] {
+  // Тіло plpgsql граф порядку не читає: функції контексту й користувача —
+  // явні ребра, як у тригера ефектів.
+  const requires = [COMMAND_FUNCTIONS.current, CURRENT_USER_FUNCTION].map(
+    (f) => ({
+      type: "unit" as const,
+      identity: functionIdentity(f.schema, f.name, []),
+    })
+  )
+  const shared = (sql: string, withRequires = false): RenderedUnit => ({
+    ...generatedUnit(sql, PLATFORM_SCHEMA, parse),
+    generator: "mechanics",
+    ...(withRequires ? { requires } : {}),
+  })
+  return [
+    shared(authorFunction(), true),
+    ...executeGrants(qualifiedCall(AUTHOR_FUNCTION), [], provider).map((sql) =>
+      shared(sql)
+    ),
+  ]
+}
+
+/** Тригер авторства; без `when` — форма таблиці без копій носіїв. */
+export function renderAuthorTrigger(
+  table: QualifiedName,
+  name: string,
+  events: string,
+  parse: SqlParser,
+  when?: string
+): RenderedUnit {
+  return {
+    ...generatedUnit(
+      `CREATE TRIGGER ${quoteIdent(name)} BEFORE ${events} ON ${quoteIdent(table.schema)}.${quoteIdent(table.name)} FOR EACH ROW ` +
+        (when === undefined ? "" : `WHEN (${when}) `) +
+        `EXECUTE FUNCTION ${qualifiedCall(AUTHOR_FUNCTION)};`,
+      table.schema,
+      parse
+    ),
+    generator: "mechanics",
+  }
 }
 
 /**

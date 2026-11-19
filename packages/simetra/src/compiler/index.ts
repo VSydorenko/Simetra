@@ -32,6 +32,8 @@ export type { ResolvedReference } from "./stages/identity"
 export type { CreationNode } from "./sql/dependencies"
 export {
   grantRoles,
+  hasFixedBody,
+  isMovementQuery,
   platformFunctionSignatures,
   readSqlUnits,
   splitIdentity,
@@ -44,10 +46,14 @@ export { IDENTITY_TRIGGERS, platformSchemaGrants } from "./platform/units"
 export {
   platformInstall,
   grantAtoms,
-  platformInstallRecogniser,
   type PlatformInstall,
-  type PlatformInstallRecogniser,
 } from "./platform/install"
+export {
+  platformRecogniser,
+  type PlatformRecogniser,
+  type PlatformReference,
+  type RecognisedUnit,
+} from "./platform/recogniser"
 export { executeGrants } from "./sql/execute-grants"
 export {
   AUTHOR_FUNCTION,
@@ -58,6 +64,8 @@ export { hierarchyNames } from "./hierarchy-units"
 export {
   SHARED_TRIGGER_FUNCTIONS,
   platformTriggers,
+  renderModelIndependentLayer,
+  renderSharedTriggerFunctions,
   type PlatformTrigger,
   type PlatformTriggerFamily,
 } from "./platform-triggers"

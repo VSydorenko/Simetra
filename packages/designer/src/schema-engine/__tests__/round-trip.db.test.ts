@@ -3,9 +3,7 @@ import { describe, expect, it } from "vitest"
 import { reverseGenerate } from "simetra/schema"
 import { PROVIDER_OWNER_ROLES } from "simetra/model"
 import {
-  FIXTURES,
   movementQuery,
-  readReferenceDomain,
   superuserClient,
   testProvider,
   testRoleFor,
@@ -14,6 +12,10 @@ import {
 import { dropRoles } from "../../__tests__/support/db"
 import type { OracleShape } from "./fixtures/round-trip-classes"
 import {
+  describeAdoptionFromScratch,
+  describeModelPathInvariants,
+} from "./platform-content.support"
+import {
   applicationTableKeys,
   deployedRoundTrip,
   engine,
@@ -21,7 +23,6 @@ import {
   extractDiagnostics,
   classProperty,
   inTarget,
-  kindsOf,
   parser,
   portableClassFixtures,
   refusedAdoption,
@@ -29,10 +30,9 @@ import {
   schemaPath,
   scopeOf,
   kindsOfFiles,
-  tableKeys,
   tableKeysOfFiles,
-  unscoped,
   useRoundTrip,
+  describeReferenceDomain,
 } from "./round-trip.support"
 
 /**
@@ -230,25 +230,13 @@ describe("a role of the application's own", () => {
   })
 })
 
-describe("adoption from scratch: the deployment fixture corpus survives the round trip", () => {
-  // Без видів скоупу (параметр корпусу `unscoped`): повний ланцюжок §9.
-  for (const [name, fixture] of FIXTURES) {
-    it(name, async () => {
-      const { source, result } = await deployedRoundTrip(
-        unscoped(fixture(testProvider())),
-        new Map(),
-        true
-      )
-      // Види 1С повертаються як `CustomTable` з тими самими фізичними іменами
-      expect(tableKeys(result!.model)).toEqual(tableKeys(source))
-      expect(
-        kindsOf(result!.model).filter(
-          (kind) => kind !== "CustomTable" && kind !== "PgEnum"
-        )
-      ).toEqual([])
-    })
-  }
+// Корпус прийому з нуля й інваріанти «платформне — за вмістом» — спільні з
+// файлом профілю Supabase
+describeAdoptionFromScratch()
+describeModelPathInvariants()
+describeReferenceDomain()
 
+describe("adoption from scratch with named scope set functions", () => {
   // Іменовані функції множини скоупу після прийому з нуля повертаються
   // незв'язаними: зворотна генерація дає рівно їхні відмови
   // `sql.definer-caller-unchecked` (платформна спека §6.7), а моделі немає —
@@ -278,23 +266,6 @@ describe("adoption from scratch: the deployment fixture corpus survives the roun
 // користувачів §12): свіжий introspect розклав би `simetra` у метадані
 // застосунку, а схема зарезервована. Тому домен проходить round-trip поверх
 // власної теки: шар і види 1С описані в ній, генератор їх не дублює.
-describe("over existing metadata: the reference domain survives the round trip", () => {
-  it("reference domain", async () => {
-    const files = readReferenceDomain(testProvider())
-    const { source, result: trip } = await deployedRoundTrip(
-      files,
-      files,
-      false
-    )
-    const result = trip!
-    // Види 1С і платформний шар лишаються описаними власною текою
-    expect(tableKeys(result.model)).toEqual(tableKeys(source))
-    expect(kindsOf(result.model)).toEqual(kindsOf(source))
-    expect(result.model.sqlUnits.map((u) => u.identity).sort()).toEqual(
-      source.sqlUnits.map((u) => u.identity).sort()
-    )
-  })
-})
 
 describe("what the round trip cannot carry is loud", () => {
   it("an exclusion constraint is unrepresentable by name", async () => {

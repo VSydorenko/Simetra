@@ -1,10 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
+  authorTriggerName,
   compile,
   keyTriggerNames,
   loadSqlParser,
   platformBeforeTriggerName,
   readSqlUnits,
+  renderModelIndependentLayer,
   rightsGuardNames,
   type SchemaPathResolver,
   type SqlParser,
@@ -28,6 +30,7 @@ import {
   catalog,
   metaFiles,
   project,
+  salesDocument,
   uuid,
 } from "../../compiler/__tests__/helpers"
 import {
@@ -61,9 +64,13 @@ function options(
     defaultSchema?: string
     attributeCase?: AttributeCase
     databaseProvider?: DatabaseProvider
+    reference?: CatalogModel
   } = {}
 ) {
   return {
+    ...(overrides.reference === undefined
+      ? {}
+      : { reference: overrides.reference }),
     project: {
       name: overrides.name ?? "App",
       defaultSchema: overrides.defaultSchema ?? "app",
@@ -74,6 +81,29 @@ function options(
     newId: counter(),
     schemaPath,
     parse,
+  }
+}
+
+/**
+ * Еталон теки у формі каталогу (`reference`) без бази: тінь з бажаним станом
+ * теки тут заступає її рендер, бо одиничний «каталог» тестів — теж текст
+ * генератора. Розбіжність форм каталогу й генератора судять живі тести.
+ */
+async function renderedFolder(
+  kept: ReadonlyMap<string, string>
+): Promise<CatalogModel> {
+  const compiled = await compile(kept)
+  expect(compiled.model, "the kept folder compiles").toBeDefined()
+  return {
+    tables: catalogFromSnapshot(compiled.model!.physical).tables,
+    enumTypes: [],
+    units: compiled.model!.sqlUnits.map((u) => ({
+      class: u.class,
+      identity: u.identity,
+      schema: u.schema,
+      name: u.name,
+      sql: u.sql,
+    })),
   }
 }
 
@@ -312,6 +342,37 @@ describe("reverseGenerate", () => {
         codes: ["schema.reserved", "schema.reserved"],
       })
       expect(result.changes).toEqual([])
+    }
+  )
+
+  it.each(["supabase", "postgres"] as const)(
+    "%s: a grant on the outbox prune function to another role goes to the folder and is refused",
+    async (provider) => {
+      // Ціль гранту — функція установки, але роль і привілей не її (И2):
+      // за вмістом це не платформне, тож тека отримує грант, а компіляція
+      // відмовляє за ціллю в `simetra`
+      const install = await compile(
+        metaFiles({ "project.meta.json": project({ database: { provider } }) })
+      )
+      expect(install.diagnostics).toEqual([])
+      const result = await reverseGenerate(
+        model({
+          tables: catalogFromSnapshot(install.model!.physical).tables,
+          units: units(
+            'GRANT EXECUTE ON FUNCTION "simetra"."signal_outbox_prune"(interval) TO "some_extra_role";'
+          ),
+        }),
+        options(new Map(), { databaseProvider: provider })
+      )
+      const file =
+        "sql/simetra/grant__function__simetra_signal_outbox_prune_interval__some_extra_role__execute.sql"
+      expect({
+        files: [...result.files.keys()].filter((p) => p.startsWith("sql/")),
+        diagnostics: result.diagnostics.map((d) => [d.code, d.file]),
+      }).toEqual({
+        files: [file],
+        diagnostics: [["schema.reserved", file]],
+      })
     }
   )
 
@@ -1511,7 +1572,7 @@ describe("reverseGenerate", () => {
           sql: u.sql,
         })),
       }),
-      options(kept)
+      options(kept, { reference: await renderedFolder(kept) })
     )
     expect(result.diagnostics).toEqual([])
     // Лише перелік боргу (теки без нього introspect пише завжди) — і він
@@ -1520,26 +1581,82 @@ describe("reverseGenerate", () => {
     expect(json(result, "sql-debt.json").units).toEqual([])
   })
 
-  it("introspect without a kept folder writes no mechanics units, but keeps own triggers", async () => {
-    // Механікою володіє платформа (спека промоції §9.2): без збереженої
-    // теки її не описує жоден файл, але й модуль користувача нею не володіє.
-    // Власний тригер, що кличе ту саму функцію, — уже не механіка.
-    const mechanics = [
-      `CREATE OR REPLACE FUNCTION "simetra"."touch"() RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;`,
-      `REVOKE EXECUTE ON FUNCTION "simetra"."touch"() FROM PUBLIC;`,
-      `REVOKE EXECUTE ON FUNCTION "simetra"."touch"() FROM "anon";`,
-      `CREATE TRIGGER "note_simetra_touch" BEFORE INSERT OR UPDATE ON "app"."note" FOR EACH ROW EXECUTE FUNCTION "simetra"."touch"();`,
-    ]
-    const AUDIT_FN =
-      "CREATE FUNCTION app.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
-    const AUDIT =
-      "CREATE TRIGGER note_audit AFTER UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION app.audit();"
-    const STAMP =
-      "CREATE TRIGGER note_stamp BEFORE UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION simetra.touch();"
+  it("the folder reference wins over the install on the same identity", async () => {
+    // Еталон теки задано вручну: одиниця під ідентичністю, яка є й в установці,
+    // має інший вміст. Каталог дорівнює формі теки — одиниця платформна лише
+    // тоді, коли одиниці теки стоять у еталоні останніми
+    const kept = metaFiles({
+      "project.meta.json": SNAKE_PROJECT,
+      "catalogs/Users/Users.meta.json": catalog("Users", {
+        schema: "app",
+        role: "users",
+        scope: "none",
+      }),
+    })
+    const reference = await renderedFolder(kept)
+    const identity = "function:simetra.touch()"
+    const own = reference.units!.find((u) => u.identity === identity)
+    expect(own?.identity).toBe(identity)
+    const folderForm = own!.sql.replace("now()", "clock_timestamp()")
+    expect(folderForm).not.toBe(own!.sql)
+    const withFolderForm = (units: NonNullable<CatalogModel["units"]>) =>
+      units.map((u) =>
+        u.identity === identity ? { ...u, sql: folderForm } : u
+      )
     const result = await reverseGenerate(
       model({
-        tables: [table("app", "note")],
-        units: units([...mechanics, AUDIT_FN, AUDIT, STAMP].join("\n")),
+        tables: reference.tables,
+        units: withFolderForm(reference.units!),
+      }),
+      options(kept, {
+        reference: { ...reference, units: withFolderForm(reference.units!) },
+      })
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(json(result, "sql-debt.json").units).toEqual([])
+    expect(result.changes.map((c) => c.content ?? "").join("\n")).not.toContain(
+      "clock_timestamp"
+    )
+  })
+
+  /** Колонки таблиці, якої вимагають тригери шару, що не залежить від моделі. */
+  const LAYER_TABLE_COLUMNS: CatalogColumn[] = [
+    idColumn,
+    { name: "updated_at", type: "timestamp with time zone", notNull: true },
+    { name: "version", type: "bigint", notNull: true },
+    { name: "created_by_id", type: "uuid", notNull: false },
+    { name: "updated_by_id", type: "uuid", notNull: false },
+  ]
+
+  /** Шар, що не залежить від моделі, для `app.note` — у формі одиниць каталогу. */
+  const noteLayer = () =>
+    units(
+      renderModelIndependentLayer(
+        { schema: "app", name: "note" },
+        "supabase",
+        parse
+      )
+        .map((u) => u.sql)
+        .join("\n")
+    )
+
+  const AUDIT_FN =
+    "CREATE FUNCTION app.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
+  const AUDIT =
+    "CREATE TRIGGER note_audit AFTER UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION app.audit();"
+
+  it("introspect without a kept folder writes no mechanics units, but keeps own triggers", async () => {
+    // Без теки еталон — установка й шар, що не залежить від моделі (спека
+    // промоції §9.2): механіку, авторство й ключ таблиці з їхніми колонками
+    // платформа рендерить сама, тож вони не пишуться. Власний тригер, що
+    // кличе ту саму функцію, — уже не механіка.
+    const STAMP =
+      "CREATE TRIGGER note_stamp BEFORE UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION simetra.touch();"
+    const layer = noteLayer()
+    const result = await reverseGenerate(
+      model({
+        tables: [table("app", "note", { columns: LAYER_TABLE_COLUMNS })],
+        units: [...layer, ...units([AUDIT_FN, AUDIT, STAMP].join("\n"))],
       }),
       options()
     )
@@ -1562,8 +1679,67 @@ describe("reverseGenerate", () => {
     expect(sidecar).toContain("CREATE FUNCTION app.audit()")
     expect(sidecar).toContain("CREATE TRIGGER note_stamp")
     const written = [...result.files.values()].join("\n")
-    expect(written).not.toContain('"simetra"."touch"')
-    expect(written).not.toContain("note_simetra_touch")
+    for (const unit of layer) expect(written).not.toContain(unit.sql)
+  })
+
+  it.each([
+    ["no layer column", []],
+    ["only updated_at", ["updated_at"]],
+    ["only version", ["version"]],
+    ["only created_by_id", ["created_by_id"]],
+    ["only updated_by_id", ["updated_by_id"]],
+  ])(
+    "a mechanics trigger on a CustomTable without the mechanics columns goes to the folder (%s)",
+    async (_, present) => {
+      // Еталон тригера шару — лише для таблиці з усіма колонками його
+      // генератора (спека промоції §9.2): без них тригер механіки й авторства
+      // не платформний, а дослівний SQL таблиці, і виклик функції платформи на
+      // ньому — гучна помилка. Частини колонок замало. Ключ `id` таблиця має,
+      // тож тригери ключа — платформні.
+      const layer = noteLayer()
+      const columns = LAYER_TABLE_COLUMNS.filter(
+        (c) => c.name === "id" || present.includes(c.name)
+      )
+      const result = await reverseGenerate(
+        model({ tables: [table("app", "note", { columns })], units: layer }),
+        options()
+      )
+      const written = [
+        "trigger:app.note.note_simetra_author",
+        "trigger:app.note.note_simetra_touch",
+      ]
+      expect(
+        errors(result).map((d) => ({ code: d.code, unit: d.params?.unit }))
+      ).toEqual(
+        written.map((unit) => ({ code: "sql.platform-function-call", unit }))
+      )
+      expect(result.files.get("custom-tables/Note/Note.sql")).toBe(
+        `${written
+          .map((identity) => layer.find((u) => u.identity === identity)!.sql)
+          .join(";\n\n")};\n`
+      )
+    }
+  )
+
+  it("a trigger under a mechanics name with another event goes to the folder", async () => {
+    // Вміст, а не ім'я (И4): тригер з ім'ям механіки на таблиці з її
+    // колонками, але `AFTER` замість `BEFORE`, — дослівний SQL таблиці.
+    const trigger = noteLayer().find((u) => u.name === "note_simetra_touch")!
+    const changed = trigger.sql.replace(" BEFORE ", " AFTER ")
+    expect(changed).not.toBe(trigger.sql)
+    const result = await reverseGenerate(
+      model({
+        tables: [table("app", "note", { columns: LAYER_TABLE_COLUMNS })],
+        units: units(changed),
+      }),
+      options()
+    )
+    expect(
+      errors(result).map((d) => ({ code: d.code, unit: d.params?.unit }))
+    ).toEqual([{ code: "sql.platform-function-call", unit: trigger.identity }])
+    expect(result.files.get("custom-tables/Note/Note.sql")).toBe(
+      `${changed};\n`
+    )
   })
 
   // 50 байтів — довше за межу 41, з якої імена рядкових `BEFORE`-тригерів
@@ -1577,12 +1753,14 @@ describe("reverseGenerate", () => {
       { [COMMENT_FILE]: { physicalName: LONG_COMMENT } },
     ],
   ])(
-    "recognizes carrier and split mechanics units as platform (%s)",
+    "recognizes carrier and split mechanics units over the kept folder as platform (%s)",
     async (_, comment, layer) => {
-      // Розділена механіка (спека промоції §9.3) й одиниці копій носіїв — платформні, як і
-      // механіка рядка; без збереженої теки їх не пише жоден файл. Одиниці —
-      // справжній вихід генераторів над доменом з копіями носіїв
-      const compiled = await compile(policyDomain(layer))
+      // Розділена механіка (спека промоції §9.3) й одиниці копій носіїв —
+      // платформні, коли їх рендерить збережена тека: вміст збігається з
+      // еталоном теки. Одиниці — справжній вихід генераторів над доменом з
+      // копіями носіїв
+      const kept = policyDomain(layer)
+      const compiled = await compile(kept)
       expect(
         compiled.diagnostics.filter((d) => d.severity === "error")
       ).toEqual([])
@@ -1610,39 +1788,39 @@ describe("reverseGenerate", () => {
       expect(new Set(platform.map((u) => u.class))).toEqual(
         new Set(["function", "grant", "sequence", "trigger"])
       )
-      const AUDIT_FN =
-        "CREATE FUNCTION public.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
-      const AUDIT =
-        "CREATE TRIGGER task_audit AFTER UPDATE ON public.task FOR EACH ROW EXECUTE FUNCTION public.audit();"
       const result = await reverseGenerate(
         model({
           units: [
-            ...platform.map((u) => ({
+            // Увесь вихід компілятора теки, і файли користувача теж
+            ...compiled.model!.sqlUnits.map((u) => ({
               class: u.class,
               identity: u.identity,
               schema: u.schema,
               name: u.name,
               sql: u.sql,
             })),
-            ...units([AUDIT_FN, AUDIT].join("\n")),
           ],
         }),
-        options(new Map(), { defaultSchema: "public" })
+        options(kept, {
+          reference: await renderedFolder(kept),
+          name: "RightsApp",
+          defaultSchema: "public",
+          attributeCase: "camelCase",
+        })
       )
       expect(errors(result)).toEqual([])
-      const written = [...result.files.values()].join("\n")
-      // Власний тригер таблиці пишеться, платформні — ні
-      expect(written).toContain("CREATE TRIGGER task_audit")
+      // Записане — зміни теки: збережені файли сюди не входять
+      const written = result.changes.map((c) => c.content ?? "").join("\n")
       expect(written).not.toContain("simetra_carriers")
       expect(written).not.toContain("simetra_touch")
     }
   )
 
-  it("recognizes effects triggers and functions as platform", async () => {
-    // Тригери ефектів дії й функції контексту команди — платформні
-    // (генератори `effects` і `command`), як механіка й копії носіїв.
+  it("recognizes effects triggers and functions over the kept folder as platform", async () => {
+    // Тригери ефектів дії — платформні, коли їх рендерить збережена тека.
     // Одиниці — справжній вихід генераторів над доменом із правами запису
-    const compiled = await compile(policyDomain(writeRoles()))
+    const kept = policyDomain(writeRoles())
+    const compiled = await compile(kept)
     const platform = compiled.model!.sqlUnits.filter(
       (u) => u.generator === "effects"
     )
@@ -1655,38 +1833,42 @@ describe("reverseGenerate", () => {
     expect(new Set(platform.map((u) => u.class))).toEqual(
       new Set(["function", "grant", "trigger"])
     )
-    const AUDIT_FN =
-      "CREATE FUNCTION public.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
-    const AUDIT =
-      "CREATE TRIGGER task_audit AFTER UPDATE ON public.task FOR EACH ROW EXECUTE FUNCTION public.audit();"
     const result = await reverseGenerate(
       model({
         units: [
-          ...platform.map((u) => ({
+          // Увесь вихід компілятора теки, і файли користувача теж
+          ...compiled.model!.sqlUnits.map((u) => ({
             class: u.class,
             identity: u.identity,
             schema: u.schema,
             name: u.name,
             sql: u.sql,
           })),
-          ...units([AUDIT_FN, AUDIT].join("\n")),
         ],
       }),
-      options(new Map(), { defaultSchema: "public" })
+      options(kept, {
+        reference: await renderedFolder(kept),
+        name: "RightsApp",
+        defaultSchema: "public",
+        attributeCase: "camelCase",
+      })
     )
-    const written = [...result.files.values()].join("\n")
-    expect(written).toContain("CREATE TRIGGER task_audit")
+    // Записане — зміни теки: збережені файли сюди не входять
+    const written = result.changes.map((c) => c.content ?? "").join("\n")
     expect(written).not.toContain("simetra_effects")
     expect(errors(result)).toEqual([])
   })
 
-  it("recognizes author triggers and the author function as platform", async () => {
+  it("recognizes author triggers and the author function over the kept folder as platform", async () => {
     // Тригери авторства (спека П4 §6.8) (і розділені на таблиці з копіями, і під
     // іменем спільного префікса на 60-байтній таблиці) й `simetra.author()`
-    // — платформні, як механіка. Одиниці — справжній вихід генератора
-    const compiled = await compile(
-      singleTenantRights({ ...authorCarrier(), ...authorCarrier("long") })
-    )
+    // — платформні, коли їх рендерить збережена тека. Одиниці — справжній
+    // вихід генератора
+    const kept = singleTenantRights({
+      ...authorCarrier(),
+      ...authorCarrier("long"),
+    })
+    const compiled = await compile(kept)
     expectClean(compiled)
     const platform = compiled.model!.sqlUnits.filter(
       (u) => u.generator === "mechanics" && u.identity.includes("author")
@@ -1700,38 +1882,39 @@ describe("reverseGenerate", () => {
     expect(new Set(platform.map((u) => u.class))).toEqual(
       new Set(["function", "grant", "trigger"])
     )
-    const AUDIT_FN =
-      "CREATE FUNCTION public.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
-    const AUDIT =
-      "CREATE TRIGGER note_audit AFTER UPDATE ON public.note FOR EACH ROW EXECUTE FUNCTION public.audit();"
     const result = await reverseGenerate(
       model({
         units: [
-          ...platform.map((u) => ({
+          // Увесь вихід компілятора теки, і файли користувача теж
+          ...compiled.model!.sqlUnits.map((u) => ({
             class: u.class,
             identity: u.identity,
             schema: u.schema,
             name: u.name,
             sql: u.sql,
           })),
-          ...units([AUDIT_FN, AUDIT].join("\n")),
         ],
       }),
-      options(new Map(), { defaultSchema: "public" })
+      options(kept, {
+        reference: await renderedFolder(kept),
+        name: "SingleTenantRights",
+        defaultSchema: "public",
+        attributeCase: "camelCase",
+      })
     )
     expect(errors(result)).toEqual([])
-    const written = [...result.files.values()].join("\n")
-    expect(written).toContain("CREATE TRIGGER note_audit")
+    // Записане — зміни теки: збережені файли сюди не входять
+    const written = result.changes.map((c) => c.content ?? "").join("\n")
     expect(written).not.toContain("simetra_author")
     expect(written).not.toContain('"author"')
   })
 
-  it("recognizes hierarchy triggers and the hierarchy function as platform", async () => {
-    // Тригери ієрархії (спека П4 §6.6) й функція ієрархії таблиці — платформні, як
-    // тригери носіїв. Одиниці — справжній вихід генератора
-    const compiled = await compile(
-      policyDomain(writeRoles(), commandCoreLayer())
-    )
+  it("recognizes hierarchy triggers and the hierarchy function over the kept folder as platform", async () => {
+    // Тригери ієрархії (спека П4 §6.6) й функція ієрархії таблиці —
+    // платформні, коли їх рендерить збережена тека. Одиниці — справжній
+    // вихід генератора
+    const kept = policyDomain(writeRoles(), commandCoreLayer())
+    const compiled = await compile(kept)
     expectClean(compiled)
     const platform = compiled.model!.sqlUnits.filter(
       (u) => u.generator === "mechanics" && u.identity.includes("_hierarchy")
@@ -1742,28 +1925,29 @@ describe("reverseGenerate", () => {
     expect(new Set(platform.map((u) => u.class))).toEqual(
       new Set(["function", "grant", "trigger"])
     )
-    const AUDIT_FN =
-      "CREATE FUNCTION public.audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
-    const AUDIT =
-      "CREATE TRIGGER ticket_audit AFTER UPDATE ON public.ticket FOR EACH ROW EXECUTE FUNCTION public.audit();"
     const result = await reverseGenerate(
       model({
         units: [
-          ...platform.map((u) => ({
+          // Увесь вихід компілятора теки, і файли користувача теж
+          ...compiled.model!.sqlUnits.map((u) => ({
             class: u.class,
             identity: u.identity,
             schema: u.schema,
             name: u.name,
             sql: u.sql,
           })),
-          ...units([AUDIT_FN, AUDIT].join("\n")),
         ],
       }),
-      options(new Map(), { defaultSchema: "public" })
+      options(kept, {
+        reference: await renderedFolder(kept),
+        name: "RightsApp",
+        defaultSchema: "public",
+        attributeCase: "camelCase",
+      })
     )
     expect(errors(result)).toEqual([])
-    const written = [...result.files.values()].join("\n")
-    expect(written).toContain("CREATE TRIGGER ticket_audit")
+    // Записане — зміни теки: збережені файли сюди не входять
+    const written = result.changes.map((c) => c.content ?? "").join("\n")
     expect(written).not.toContain("simetra_hierarchy")
   })
 
@@ -1806,6 +1990,7 @@ describe("reverseGenerate", () => {
         })),
       }),
       options(kept, {
+        reference: await renderedFolder(kept),
         name: "RightsApp",
         defaultSchema: "public",
         attributeCase: "camelCase",
@@ -1837,8 +2022,10 @@ describe("reverseGenerate", () => {
   })
 
   it.each(rightsGuardNames({ schema: "app", name: "note" }))(
-    "recognizes rights guard $trigger and its function as platform",
+    "a rights guard $trigger without a kept folder goes to the folder",
     async ({ trigger, function: fn }) => {
+      // Guards прав залежать від моделі видів (спека промоції §9.2): без
+      // теки еталона в них немає, тож це дослівний SQL таблиці
       const sql = [
         `CREATE FUNCTION app.${fn.name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;`,
         `CREATE TRIGGER ${trigger} BEFORE INSERT ON app.note FOR EACH ROW EXECUTE FUNCTION app.${fn.name}();`,
@@ -1848,8 +2035,9 @@ describe("reverseGenerate", () => {
         options()
       )
       expect(errors(result)).toEqual([])
-      expect([...result.files.values()].join("\n")).not.toContain(trigger)
-      expect([...result.files.values()].join("\n")).not.toContain(fn.name)
+      const sidecar = result.files.get("custom-tables/Note/Note.sql")
+      expect(sidecar).toContain(`CREATE TRIGGER ${trigger} `)
+      expect(sidecar).toContain(`CREATE FUNCTION app.${fn.name}()`)
     }
   )
 
@@ -1869,9 +2057,10 @@ describe("reverseGenerate", () => {
     )
   })
 
-  it("recognizes key triggers and simetra.key_immutable as platform", async () => {
-    // Тригери незмінності (спека прав §7) ключа й їхня функція — платформні, як
-    // механіка. Одиниці — справжній вихід генератора
+  it("recognizes key triggers and simetra.key_immutable as platform without a kept folder", async () => {
+    // Тригери незмінності (спека прав §7) ключа й їхня функція — шар, що не
+    // залежить від моделі: таблиця з колонкою ключа впізнає їх і без теки.
+    // Одиниці — справжній вихід генератора
     const compiled = await compile(
       metaFiles({
         "project.meta.json": project(),
@@ -1892,6 +2081,9 @@ describe("reverseGenerate", () => {
       "CREATE TRIGGER note_audit AFTER UPDATE ON public.note FOR EACH ROW EXECUTE FUNCTION public.audit();"
     const result = await reverseGenerate(
       model({
+        tables: catalogFromSnapshot(compiled.model!.physical).tables.filter(
+          (t) => t.schema === "public" && t.name === "note"
+        ),
         units: [
           ...platform.map((u) => ({
             class: u.class,
@@ -1982,10 +2174,12 @@ describe("reverseGenerate", () => {
     )
   })
 
-  it("introspect writes no verbatim grant on what the platform grants", async () => {
-    // Перший introspect бази, вже керованої Simetra: ADP схеми дали ролям
-    // API інші права, ніж бажаний стан, але ACL функції множини й таблиці
-    // виду належить платформі, тож дослівним SQL вони не стають.
+  it("over a kept folder a foreign grant on what the platform grants is refused, not dropped", async () => {
+    // Перший introspect бази, вже керованої Simetra (И7): гранти, які
+    // рендерить тека, — платформні за вмістом і не пишуться. Чужий грант на
+    // функцію множини чи таблицю виду з контрактом доступу (ADP схеми,
+    // ручний GRANT) з еталоном не збігається: він іде в теку, і компілятор
+    // називає його `sql.generated-grant`, а не губить мовчки.
     const kept = metaFiles({
       "project.meta.json": project({
         name: "App",
@@ -2017,6 +2211,7 @@ describe("reverseGenerate", () => {
     const foreign = [
       "GRANT EXECUTE ON FUNCTION app.my_orgs() TO anon;",
       "REVOKE INSERT ON TABLE app.organization FROM authenticated;",
+      "GRANT SELECT ON TABLE app.organization TO some_role;",
     ]
     const result = await reverseGenerate(
       model({
@@ -2032,23 +2227,324 @@ describe("reverseGenerate", () => {
           ...units([...foreign, OWN_GRANT].join("\n")),
         ],
       }),
-      options(kept)
+      options(kept, { reference: await renderedFolder(kept) })
+    )
+    const files = [
+      "sql/app/grant__function__app_my_orgs__anon__execute.sql",
+      "sql/app/grant__revoke__table__app_organization__authenticated__insert.sql",
+      "sql/app/grant__table__app_organization__some_role__select.sql",
+    ]
+    expect(errors(result).map((d) => ({ code: d.code, file: d.file }))).toEqual(
+      files.map((file) => ({ code: "sql.generated-grant", file }))
+    )
+    expect(files.map((file) => result.files.get(file))).toEqual(
+      foreign.map((statement) => `${statement}\n`)
+    )
+    // Грант на функцію поза платформою — прийнятий стан бази
+    expect(
+      [...result.files.values()].some((t) => t.includes(OWN_GRANT.slice(0, -1)))
+    ).toBe(true)
+    // Грант, який рендерить тека, не пишеться: інших файлів грантів немає
+    expect(
+      [...result.files.keys()].filter((p) => p.includes("grant__")).sort()
+    ).toEqual(
+      [...files, "sql/app/grant__function__app_other__anon__execute.sql"].sort()
+    )
+  })
+
+  it("over a kept folder the movement query wrapper is described by the document, not written", async () => {
+    // Обгортку запиту рухів описує блок документа, а не генератор (Р4): її
+    // ідентичність — серед описаних файлом користувача, тож прийом поверх
+    // теки її не пише; розбіжність тіла показує `diff`, а не introspect
+    const block =
+      "SELECT d.date, 'Expense', g.item_id, g.qty\n" +
+      "FROM public.goods g JOIN public.sale d ON d.id = g.parent_id\n" +
+      "WHERE d.id = p_document_id\n" +
+      "ORDER BY g.line_number"
+    const kept = metaFiles({
+      "project.meta.json": project(),
+      ...salesDocument({}, { posting: undefined }),
+      "documents/Sale/Sale.sql": `-- @movements Stock\n${block}\n-- @end\n`,
+    })
+    const compiled = await compile(kept)
+    expectClean(compiled)
+    const wrapper = compiled.model!.sqlUnits.find(
+      (u) => u.class === "movementQuery"
+    )!
+    // У каталозі бази обгортка — звичайна функція з тією самою ідентичністю
+    const [function_] = units(wrapper.sql)
+    expect(function_).toMatchObject({
+      class: "function",
+      identity: wrapper.identity,
+    })
+    const result = await reverseGenerate(
+      model({
+        tables: catalogFromSnapshot(compiled.model!.physical).tables,
+        units: [
+          ...compiled
+            .model!.sqlUnits.filter((u) => u !== wrapper)
+            .map((u) => ({
+              class: u.class,
+              identity: u.identity,
+              schema: u.schema,
+              name: u.name,
+              sql: u.sql,
+            })),
+          function_!,
+        ],
+      }),
+      options(kept, {
+        reference: await renderedFolder(kept),
+        name: "TestApp",
+        defaultSchema: "public",
+        attributeCase: "camelCase",
+      })
     )
     expect(errors(result)).toEqual([])
-    for (const text of result.files.values())
-      for (const statement of foreign)
-        expect(text).not.toContain(statement.slice(0, -1))
-    // Функцію множини генератор лише перекладає у файл за своєю розкладкою;
-    // грантів на неї й на таблицю виду в жодному записаному файлі немає.
-    const written = result.changes.map((c) => c.content ?? "")
-    for (const statement of foreign)
-      expect(written.some((t) => t.includes(statement.slice(0, -1)))).toBe(
-        false
-      )
-    expect(written.some((t) => t.includes(OWN_GRANT.slice(0, -1)))).toBe(true)
-    expectClean(await compile(result.files), {
-      allow: ["rights.scope-kind-unread"],
+    expect(result.changes.map((c) => c.path)).toEqual(["sql-debt.json"])
+  })
+
+  it("over a kept folder a generated unit with another body goes to the folder and is refused", async () => {
+    // Згенеровану одиницю теки описує не файл користувача, а генератор (Р4):
+    // вона платформна лише за вмістом. Функція механіки з іншим тілом під
+    // тим самим ім'ям — чужий SQL, і компіляція відмовляє за схемою `simetra`
+    const kept = keptCatalog()
+    const compiled = await compile(kept)
+    expectClean(compiled)
+    const catalogUnits = compiled.model!.sqlUnits.map((u) => ({
+      class: u.class,
+      identity: u.identity,
+      schema: u.schema,
+      name: u.name,
+      sql: u.sql,
+    }))
+    const touch = catalogUnits.find(
+      (u) => u.identity === "function:simetra.touch()"
+    )!
+    const changed = touch.sql.replace("RETURN NEW;", "RETURN NULL;")
+    expect(changed).not.toBe(touch.sql)
+    const result = await reverseGenerate(
+      model({
+        tables: catalogFromSnapshot(compiled.model!.physical).tables,
+        units: catalogUnits.map((u) =>
+          u === touch ? { ...u, sql: changed } : u
+        ),
+      }),
+      options(kept, { reference: await renderedFolder(kept) })
+    )
+    expect(errors(result).map((d) => [d.code, d.file])).toEqual([
+      ["schema.reserved", "sql/simetra/touch.sql"],
+    ])
+  })
+
+  it("over an applied folder without the folder reference the generated units are not the platform's", async () => {
+    // Еталон теки — лише форма каталогу її тіні: без неї половина еталона від
+    // теки порожня, і згенеровані одиниці довідника йдуть у теку гучно, а не
+    // тонуть мовчки
+    const kept = keptCatalog()
+    const compiled = await compile(kept)
+    expectClean(compiled)
+    const catalog = model({
+      tables: catalogFromSnapshot(compiled.model!.physical).tables,
+      units: compiled.model!.sqlUnits.map((u) => ({
+        class: u.class,
+        identity: u.identity,
+        schema: u.schema,
+        name: u.name,
+        sql: u.sql,
+      })),
     })
+    const without = await reverseGenerate(catalog, options(kept))
+    // Кожен тригер довідника, який рендерить тека: усі три гучні
+    expect(errors(without).map((d) => [d.code, d.file])).toEqual(
+      [
+        "currency__currency_simetra_key",
+        "currency__currency_simetra_key_after",
+        "currency__currency_simetra_touch",
+      ].flatMap((name) => [
+        ["sql.kind-table-verbatim", `sql/app/${name}.sql`],
+        ["sql.platform-function-call", `sql/app/${name}.sql`],
+      ])
+    )
+    expect(without.changes).toEqual([])
+    const withReference = await reverseGenerate(
+      catalog,
+      options(kept, { reference: await renderedFolder(kept) })
+    )
+    expect(errors(withReference)).toEqual([])
+  })
+
+  it("over a kept folder a generated unit is compared with the reference's catalog form, not the generator text", async () => {
+    // Каталог пише одиницю у своїй формі; еталон теки — та сама форма з її
+    // тіні. Тож рівність з формою еталона — платформне, а рівність лише з
+    // текстом генератора — ні
+    const kept = keptCatalog()
+    const compiled = await compile(kept)
+    expectClean(compiled)
+    const identity = "trigger:app.currency.currency_simetra_key"
+    const own = compiled.model!.sqlUnits.find((u) => u.identity === identity)!
+    // Інше дерево розбору без правила нормалізації — як вираз, який каталог
+    // переписав у своїй формі
+    const catalogForm = own.sql.replace("WHEN (", "WHEN (true AND ")
+    expect(catalogForm).not.toBe(own.sql)
+    const reference = await renderedFolder(kept)
+    const inCatalogForm = (m: CatalogModel): CatalogModel => ({
+      ...m,
+      units: m.units.map((u) =>
+        u.identity === identity ? { ...u, sql: catalogForm } : u
+      ),
+    })
+    const catalog = inCatalogForm(reference)
+    const same = await reverseGenerate(
+      catalog,
+      options(kept, { reference: inCatalogForm(reference) })
+    )
+    expect(errors(same)).toEqual([])
+    const generatorOnly = await reverseGenerate(
+      catalog,
+      options(kept, { reference })
+    )
+    expect(errors(generatorOnly).map((d) => [d.code, d.file])).toEqual([
+      ["sql.kind-table-verbatim", "sql/app/currency__currency_simetra_key.sql"],
+      [
+        "sql.platform-function-call",
+        "sql/app/currency__currency_simetra_key.sql",
+      ],
+    ])
+  })
+
+  it("a second introspect over the folder of the first is clean", async () => {
+    // Тека першого прийому — `CustomTable` і перелік боргу: еталон над нею
+    // несе й установку, і шар, що не залежить від моделі, тож механіка
+    // таблиці лишається платформною й удруге
+    const catalog = model({
+      tables: [table("app", "note", { columns: LAYER_TABLE_COLUMNS })],
+      units: [...noteLayer(), ...units([AUDIT_FN, AUDIT].join("\n"))],
+    })
+    const first = await reverseGenerate(catalog, options())
+    expect(first.diagnostics).toEqual([])
+    const second = await reverseGenerate(catalog, options(first.files))
+    expect(second.diagnostics).toEqual([])
+    expect(second.changes).toEqual([])
+  })
+
+  it("over a mixed folder the layer of a CustomTable is the platform's", async () => {
+    // Тека з довідником і таблицею без виду, що має колонки й тригери шару:
+    // тригери довідника рендерить тека, тригери таблиці — шар
+    const kept = keptCatalog()
+    const compiled = await compile(kept)
+    expectClean(compiled)
+    const layer = noteLayer()
+    const catalog = model({
+      tables: [
+        ...catalogFromSnapshot(compiled.model!.physical).tables,
+        table("app", "note", { columns: LAYER_TABLE_COLUMNS }),
+      ],
+      units: [
+        ...compiled.model!.sqlUnits.map((u) => ({
+          class: u.class,
+          identity: u.identity,
+          schema: u.schema,
+          name: u.name,
+          sql: u.sql,
+        })),
+        ...layer,
+      ],
+    })
+    const result = await reverseGenerate(
+      catalog,
+      options(kept, { reference: await renderedFolder(kept) })
+    )
+    expect(result.diagnostics).toEqual([])
+    const written = result.changes.map((c) => c.content ?? "").join("\n")
+    for (const unit of layer) expect(written).not.toContain(unit.sql)
+    expect(result.changes.map((c) => c.path).sort()).toEqual([
+      "custom-tables/Note/Note.meta.json",
+      "sql-debt.json",
+    ])
+    // Тека тепер змішана — вид і `CustomTable` з шаром; удруге — так само чисто
+    const second = await reverseGenerate(
+      catalog,
+      options(result.files, { reference: await renderedFolder(result.files) })
+    )
+    expect(second.diagnostics).toEqual([])
+    expect(second.changes).toEqual([])
+  })
+
+  it("over a kept folder a layer trigger on a kind table that the folder does not render goes to the folder", async () => {
+    // Тригери таблиці виду рендерить тека, а не шар: тригер авторства на
+    // довіднику без авторства — чужий SQL, навіть коли таблиця в базі має
+    // колонки авторства
+    const kept = keptCatalog()
+    const compiled = await compile(kept)
+    expectClean(compiled)
+    const tables = catalogFromSnapshot(compiled.model!.physical).tables
+    const currency = tables.find((t) => t.name === "currency")!
+    expect(currency.columns.map((c) => c.name)).not.toContain("created_by_id")
+    const author = units(
+      renderModelIndependentLayer(
+        { schema: "app", name: "currency" },
+        "supabase",
+        parse
+      )
+        .filter((u) => u.name === authorTriggerName("currency"))
+        .map((u) => u.sql)
+        .join("\n")
+    )
+    expect(author).toHaveLength(1)
+    const result = await reverseGenerate(
+      model({
+        tables: tables.map((t) =>
+          t === currency
+            ? {
+                ...t,
+                columns: [
+                  ...t.columns,
+                  ...LAYER_TABLE_COLUMNS.filter((c) =>
+                    ["created_by_id", "updated_by_id"].includes(c.name)
+                  ),
+                ],
+              }
+            : t
+        ),
+        units: [
+          ...compiled.model!.sqlUnits.map((u) => ({
+            class: u.class,
+            identity: u.identity,
+            schema: u.schema,
+            name: u.name,
+            sql: u.sql,
+          })),
+          ...author,
+        ],
+      }),
+      options(kept, { reference: await renderedFolder(kept) })
+    )
+    expect(
+      errors(result).map((d) => [d.code, d.params?.identity ?? d.params?.unit])
+    ).toEqual([
+      ["sql.kind-table-verbatim", author[0]!.identity],
+      ["sql.platform-function-call", author[0]!.identity],
+    ])
+  })
+
+  it("a layer function with another body in the database goes to the folder", async () => {
+    // Шар упізнається лише за вмістом: функція механіки з іншим тілом під
+    // тим самим ім'ям — чужий SQL і без теки
+    const layer = noteLayer()
+    const touch = layer.find((u) => u.identity === "function:simetra.touch()")!
+    const changed = touch.sql.replace("RETURN NEW;", "RETURN NULL;")
+    expect(changed).not.toBe(touch.sql)
+    const result = await reverseGenerate(
+      model({
+        tables: [table("app", "note", { columns: LAYER_TABLE_COLUMNS })],
+        units: layer.map((u) => (u === touch ? { ...u, sql: changed } : u)),
+      }),
+      options()
+    )
+    expect(errors(result).map((d) => [d.code, d.file])).toEqual([
+      ["schema.reserved", "sql/simetra/touch.sql"],
+    ])
   })
 
   it("final map compiles", async () => {

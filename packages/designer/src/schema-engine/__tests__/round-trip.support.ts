@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto"
 import pg from "pg"
-import { afterAll, afterEach, beforeAll, beforeEach, expect } from "vitest"
-import { SIGNAL_OUTBOX } from "simetra/model"
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "vitest"
+import { SIGNAL_OUTBOX, type CatalogModel } from "simetra/model"
 import {
   canonicalSnapshot,
   compile,
@@ -9,6 +17,7 @@ import {
   platformInstall,
   platformTriggers,
   type CompiledModel,
+  type PlatformTriggerFamily,
   type SchemaPathResolver,
   type SqlParser,
 } from "simetra/compiler"
@@ -19,6 +28,7 @@ import {
   compareWithDesired,
   engineScope,
   executePlan,
+  folderReference,
   requiredPermissions,
   renderDesiredState,
   reverseGenerate,
@@ -32,6 +42,7 @@ import {
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import {
   SCOPE_FUNCTIONS_FILE,
+  readReferenceDomain,
   shadowAgeMinutes,
   shadowDatabaseNames,
   testDatabaseUrl,
@@ -238,9 +249,10 @@ interface Project {
 
 /**
  * Що round-trip свідомо втрачає: тригери механіки таблиць виду, повернутих
- * як `CustomTable`, і функції таблиці, які кличуть лише вони (ієрархія,
- * спека П4 §6.6), разом із їхніми грантами. Межа без них — межа джерела без одиниць
- * механіки. `identities` — втрачені одиниці, які звірка бачить відсутніми.
+ * як `CustomTable`, і їхні спільні функції в `simetra` з грантами — лише
+ * родини, які reverse упізнає за еталоном (`REFERENCED_FAMILIES`). Межа без
+ * них — межа джерела без цих одиниць. `identities` — втрачені одиниці, які
+ * звірка бачить відсутніми.
  */
 interface Loss {
   schemas: string[]
@@ -363,13 +375,39 @@ interface RoundTrip {
 }
 
 /**
+ * Еталон наявної теки для `reverseGenerate` — той самий шлях, що й в
+ * `introspect` (`folderReference`): тінь з бажаним станом теки, без помилок.
+ */
+async function referenceOf(
+  target: DbConnection,
+  existing: ReadonlyMap<string, string>
+): Promise<{ reference?: CatalogModel }> {
+  const reference = await folderReference(
+    engine,
+    dbs.reader,
+    { target },
+    existing
+  )
+  // Без помилок, як і extract цілі: попередження двигуна (`frontend_warning`
+  // засіву тіні з типовими привілеями) — справжній вивід, а не збій еталона
+  expect(errors(reference.diagnostics)).toEqual([])
+  return reference.catalog === undefined ? {} : { reference: reference.catalog }
+}
+
+/**
  * Повторний introspect у ту саму теку не змінює мітки виду: її призначено
  * раз. Мітки свідомо зсунуто від тих, що дало б доповнення, — інакше загублену
- * мітку непомітно відновило б саме доповнення.
+ * мітку непомітно відновило б саме доповнення. Зсуваються лише мітки, які
+ * призначив перший прохід (у теці до нього, `before`, їх немає): мітка, що
+ * вже була в теці, — вміст розгорнутої бази (`rights_any(…, '<мітка>')`,
+ * подання `simetra.kind_labels`), тож зсунута — уже інша тека, яку прийом за
+ * вмістом справедливо відмовляє. Що й вона лишається, звіряє та сама рівність.
  */
 async function expectKindLabelsKept(
+  target: DbConnection,
   extracted: Extracted,
   project: Project,
+  before: ReadonlyMap<string, string>,
   files: ReadonlyMap<string, string>,
   definers: Loss["definers"]
 ): Promise<void> {
@@ -383,6 +421,7 @@ async function expectKindLabelsKept(
     )
   const existing = new Map(files)
   for (const [path, label] of labels(files)) {
+    if (labels(before).has(path)) continue
     existing.set(
       path,
       JSON.stringify({
@@ -397,6 +436,7 @@ async function expectKindLabelsKept(
     newId: () => randomUUID(),
     schemaPath,
     parse,
+    ...(await referenceOf(target, existing)),
   })
   expectRefusedDefiners(again.diagnostics, definers)
   expect(labels(again.files)).toEqual(labels(existing))
@@ -422,7 +462,14 @@ async function refusedRoundTrip(
     project,
     definerRefusals(loss.definers)
   )
-  await expectKindLabelsKept(extracted, project, files, loss.definers)
+  await expectKindLabelsKept(
+    target,
+    extracted,
+    project,
+    new Map(),
+    files,
+    loss.definers
+  )
   return files
 }
 
@@ -485,9 +532,17 @@ export async function roundTripOf(
     newId: () => randomUUID(),
     schemaPath,
     parse,
+    ...(await referenceOf(target, existing)),
   })
   expectRefusedDefiners(reversed.diagnostics, loss.definers)
-  await expectKindLabelsKept(extracted, project, reversed.files, loss.definers)
+  await expectKindLabelsKept(
+    target,
+    extracted,
+    project,
+    existing,
+    reversed.files,
+    loss.definers
+  )
 
   const compiled = await compile(reversed.files)
   expect(errors(compiled.diagnostics)).toEqual([])
@@ -581,35 +636,33 @@ export async function applicationTableKeys(
 }
 
 /**
+ * Родини тригерів з еталоном без теки (план #286, Р2): шар, що не залежить
+ * від моделі, — механіка рядка, авторство й незмінність ключа у формі без
+ * `WHEN` змісту. Перелік записано тут явно, а не взято з еталона помічника,
+ * інакше оракул збігався б з тим, що перевіряє.
+ */
+const REFERENCED_FAMILIES: ReadonlySet<PlatformTriggerFamily> = new Set([
+  "mechanics",
+  "author",
+  "key",
+])
+
+/**
  * Механіка джерела, якої не буде після прийому з нуля: таблиця виду стає
- * `CustomTable` без стандартних колонок, а introspect механіки не пише
- * (спека промоції §9.2). Повертає механіку лише промоція у вид. Тригери
- * незмінності ключа (спека прав §7) — та сама платформна механіка таблиці виду:
- * `CustomTable` їх не має, тож вони втрачаються так само. Так само й тригери
- * ієрархії з функцією таблиці (спека П4 §6.6): генератор `mechanics`, впізнає їх
- * reverse як платформні, повертає лише промоція.
+ * `CustomTable`, а тригери родин з еталоном (`REFERENCED_FAMILIES`) і їхні
+ * спільні функції в `simetra` reverse упізнає за вмістом як платформні й
+ * не пише (спека промоції §9.2). Повертає їх лише промоція у вид. Родини,
+ * вміст яких залежить від моделі видів (ієрархія тощо, Р3), еталона не
+ * мають: вони йдуть у теку як SQL застосунку й не втрачаються — їх
+ * перелічує `R3_UNITS` тесту корпусу.
  */
 async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
-  const lost = (u: { generator?: string }) =>
-    u.generator === "mechanics" || u.generator === "key"
-  const { scope } = await engineScope({
-    ...source,
-    sqlUnits: source.sqlUnits.filter((u) => !lost(u)),
-  })
-  // Межа після прийому з нуля завжди має `simetra` (послідовність версій), тож
-  // спільні функції механіки (`simetra.touch()` тощо) звірка бачить, і їх
-  // втрата — така сама, як тригерів таблиць
-  const inScope = new Set([...scope.schemas, "simetra"])
-  const lostUnits = source.sqlUnits.filter(lost)
-  const identities = new Set(
-    lostUnits.filter((u) => u.class === "trigger").map((u) => u.identity)
-  )
-  // Кандидати — платформні тригери таблиці з генераторами втраченого; реєстр
-  // називає й тригери, яких таблиця не має, тож лишаються лише фактично
-  // вилучені
+  const units = new Set(source.sqlUnits.map((u) => u.identity))
+  // Кандидати — тригери родин з еталоном за реєстром; реєстр називає й
+  // тригери, яких таблиця не має, тож лишаються лише фактичні одиниці джерела
   const candidates = source.physical.tables.flatMap((t) =>
     platformTriggers(t)
-      .filter((e) => lost(e))
+      .filter((e) => REFERENCED_FAMILIES.has(e.family) && !e.contentUpdate)
       .map((e) => ({ table: t, entry: e }))
   )
   const triggers = candidates
@@ -618,36 +671,36 @@ async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
       table: table.name,
       name: entry.trigger,
     }))
-    .filter((t) => identities.has(`trigger:${t.schema}.${t.table}.${t.name}`))
-  expect(triggers).toHaveLength(identities.size)
-  // Функція ієрархії — у схемі таблиці, тож звірка бачить і її: прийом з нуля
-  // впізнає її як платформну й не пише, а повертає її, як і тригери, лише
-  // промоція
-  const fnIdentities = new Set(
-    lostUnits
-      .filter((u) => u.class === "function" && inScope.has(u.schema))
-      .map((u) => u.identity)
-  )
+    .filter((t) => units.has(`trigger:${t.schema}.${t.table}.${t.name}`))
   const functions = [
     ...new Map(
       candidates
         .map(({ entry }) => entry.function)
-        .filter((f) => inScope.has(f.schema))
         .map((f) => [`${f.schema}.${f.name}`, f])
     ).values(),
-  ].filter((f) => fnIdentities.has(`function:${f.schema}.${f.name}()`))
-  expect(functions).toHaveLength(fnIdentities.size)
+  ].filter((f) => units.has(`function:${f.schema}.${f.name}()`))
   // З грантів функції каталог несе лише відкликання в PUBLIC: `EXECUTE` для
   // PUBLIC є в `acldefault` будь-якої функції. Відкликання в ролей, яким
   // типові привілеї схеми нічого не дали, — no-op, і introspect його не бачить
-  const grants = functions.map((f) =>
-    lostUnits.find(
-      (u) =>
-        u.identity ===
-        `grant:revoke:function:${f.schema}.${f.name}():public:execute`
-    )
+  const grants = functions.map(
+    (f) => `grant:revoke:function:${f.schema}.${f.name}():public:execute`
   )
-  expect(grants.every((u) => u !== undefined)).toBe(true)
+  expect(grants.filter((g) => !units.has(g))).toEqual([])
+  const identities = [
+    ...triggers.map((t) => `trigger:${t.schema}.${t.table}.${t.name}`),
+    ...functions.map((f) => `function:${f.schema}.${f.name}()`),
+    ...grants,
+  ]
+  const lost = new Set(identities)
+  const { scope } = await engineScope({
+    ...source,
+    sqlUnits: source.sqlUnits.filter((u) => !lost.has(u.identity)),
+  })
+  // Межа після прийому з нуля завжди має `simetra` (послідовність версій), тож
+  // спільні функції механіки (`simetra.touch()` тощо) звірка бачить, і їх
+  // втрата — така сама, як тригерів таблиць
+  const inScope = new Set([...scope.schemas, "simetra"])
+  expect(functions.filter((f) => !inScope.has(f.schema))).toEqual([])
   // Функції форм платформи, названі проєктом: функція множини виду скоупу
   // (крім згенерованої з членства) і функція значень виміру.
   const { project } = source
@@ -674,11 +727,7 @@ async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
     schemas: [...inScope],
     triggers,
     functions,
-    identities: [
-      ...identities,
-      ...fnIdentities,
-      ...grants.map((u) => u!.identity),
-    ],
+    identities,
     definers,
   }
 }
@@ -1023,4 +1072,79 @@ export async function extractDiagnostics(
     scope,
     async (target) => (await engine.extract(target, scope)).diagnostics
   )
+}
+
+/**
+ * Прийом над наявною текою еталонного домену: еталон теки — форма каталогу
+ * її тіні (`folderReference`), тож згенеровані одиниці теки (політики,
+ * функції команд, подання) — платформні. Реєструється з файлу кожного
+ * профілю (`round-trip.db.test.ts`, `round-trip.supabase.db.test.ts`).
+ */
+export function describeReferenceDomain(): void {
+  describe("over existing metadata: the reference domain survives the round trip", () => {
+    it("reference domain", async () => {
+      const files = readReferenceDomain(testProvider())
+      const { source, result: trip } = await deployedRoundTrip(
+        files,
+        files,
+        false
+      )
+      const result = trip!
+      // Види 1С і платформний шар лишаються описаними власною текою
+      expect(tableKeys(result.model)).toEqual(tableKeys(source))
+      expect(kindsOf(result.model)).toEqual(kindsOf(source))
+      expect(result.model.sqlUnits.map((u) => u.identity).sort()).toEqual(
+        source.sqlUnits.map((u) => u.identity).sort()
+      )
+    })
+
+    it("a label already in the folder, shifted, is content the database does not have", async () => {
+      // Зворотний бік `expectKindLabelsKept`: мітка, яка вже була в теці, —
+      // вміст розгорнутої бази (рядок подання `simetra.kind_labels`), тож
+      // зсунута вона робить теку іншою за базу, і прийом за вмістом це
+      // називає, а не ховає
+      const files = readReferenceDomain(testProvider())
+      const original = await compile(files)
+      expect(errors(original.diagnostics)).toEqual([])
+      const source = original.model!
+      const { scope } = await engineScope(source)
+      const path = "custom-tables/UserSettings/UserSettings.meta.json"
+      const meta = JSON.parse(files.get(path)!) as { kindLabel?: unknown }
+      expect(meta.kindLabel).toBe("user_settings")
+      const shifted = new Map(files)
+      shifted.set(
+        path,
+        JSON.stringify({ ...meta, kindLabel: "kept_user_settings" })
+      )
+      const refusals = await inTarget(
+        renderDesiredState(source).sql,
+        scope,
+        async (target) => {
+          const extracted = await engine.extract(target, scope)
+          expect(errors(extracted.diagnostics)).toEqual([])
+          const reversed = await reverseGenerate(extracted.model, {
+            project: {
+              name: source.project.name,
+              defaultSchema: source.project.defaultSchema,
+              attributeCase: source.project.naming.attributeCase,
+              databaseProvider: source.project.database.provider,
+            },
+            existing: shifted,
+            newId: () => randomUUID(),
+            schemaPath,
+            parse,
+            ...(await referenceOf(target, shifted)),
+          })
+          expect(reversed.changes).toEqual([])
+          return errors(reversed.diagnostics).map((d) => ({
+            code: d.code,
+            file: d.file,
+          }))
+        }
+      )
+      expect(refusals).toEqual([
+        { code: "schema.reserved", file: "sql/simetra/kind_labels.sql" },
+      ])
+    })
+  })
 }

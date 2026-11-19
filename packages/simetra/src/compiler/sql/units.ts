@@ -125,6 +125,14 @@ const FIXED_BODY: Readonly<Record<UnitGenerator, boolean>> = {
 }
 
 /**
+ * Чи одиниця — тіло, фіксоване платформою (`FIXED_BODY`): одне джерело і для
+ * `plpgsql_check`, і для еталона теки в reverse.
+ */
+export function hasFixedBody(unit: Pick<SqlUnit, "generator">): boolean {
+  return unit.generator !== undefined && FIXED_BODY[unit.generator]
+}
+
+/**
  * Сигнатури функцій платформи (`<схема>.<ім'я>(<типи>)`, як у ідентичності)
  * — ознака за походженням одиниці, а не за схемою. Типи аргументів
  * згенерованих функцій лише вбудовані, тож сигнатуру резолвить
@@ -138,8 +146,7 @@ export function platformFunctionSignatures(
       (unit) =>
         unit.file === undefined &&
         unit.class === "function" &&
-        unit.generator !== undefined &&
-        FIXED_BODY[unit.generator]
+        hasFixedBody(unit)
     )
     .map((unit) => unit.identity.slice("function:".length))
     .sort(compareStrings)

@@ -12,7 +12,12 @@ import {
   schemaPath,
   scopeOf,
   useRoundTrip,
+  describeReferenceDomain,
 } from "./round-trip.support"
+import {
+  describeAdoptionFromScratch,
+  describeModelPathInvariants,
+} from "./platform-content.support"
 
 /**
  * Round-trip на стеку Supabase: класи, що читають пресет провайдера (ACL схеми
@@ -21,6 +26,12 @@ import {
  */
 
 useRoundTrip()
+
+// Корпус прийому з нуля й інваріанти «платформне — за вмістом» на профілі
+// Supabase; спільні з `round-trip.db.test.ts`
+describeAdoptionFromScratch()
+describeModelPathInvariants()
+describeReferenceDomain()
 
 describe("class fixtures survive the round trip", () => {
   for (const fixture of presetClassFixtures()) {

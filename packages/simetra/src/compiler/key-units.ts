@@ -18,6 +18,7 @@ import { generatedTableFunctionName } from "./rights/generated-names"
 import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
+import type { RenderedUnit } from "./mechanics-units"
 import { sqlLiteral } from "./stages/model"
 import { findStandardColumn } from "./standard-column"
 
@@ -89,32 +90,20 @@ export function buildKeyUnits(
     return key === undefined ? [] : [{ table, key }]
   })
   if (tables.length === 0) return []
-  const fn = `${quoteIdent(KEY_FUNCTION.schema)}.${quoteIdent(KEY_FUNCTION.name)}`
-  const shared = (sql: string): SqlUnit => ({
-    ...generatedUnit(sql, PLATFORM_SCHEMA, parse),
-    module,
-    generator: "key",
-  })
   const trigger = (
     table: ObjectTable,
     name: string,
     timing: "BEFORE" | "AFTER",
     key: string
   ): SqlUnit => ({
-    ...generatedUnit(
-      `CREATE TRIGGER ${quoteIdent(name)} ${timing} UPDATE ON ${quoteIdent(table.schema)}.${quoteIdent(table.name)} FOR EACH ROW WHEN (NEW.${quoteIdent(key)} IS DISTINCT FROM OLD.${quoteIdent(key)}) EXECUTE FUNCTION ${fn}(${sqlLiteral(key)});`,
-      table.schema,
-      parse
-    ),
+    ...renderKeyTrigger(table, name, timing, key, parse),
     ownerObjectId: table.origin.objectId,
     module,
-    generator: "key",
   })
   // Тригер, що спрацьовує в ролі, яка пише, не потребує `EXECUTE` функції,
   // тож право не має ніхто (платформна спека §6.7).
   const units: SqlUnit[] = [
-    shared(keyFunction(fn)),
-    ...executeGrants(`${fn}()`, [], provider).map(shared),
+    ...renderKeyFunction(provider, parse).map((u) => ({ ...u, module })),
     ...tables.flatMap(({ table, key }) => {
       const names = keyTriggerNames(table.name)
       return [
@@ -125,6 +114,47 @@ export function buildKeyUnits(
   ]
   return units.sort((a, b) => compareStrings(a.identity, b.identity))
 }
+
+/**
+ * Спільна функція незмінності ключа з грантами: текст не залежить від моделі,
+ * тож його рендерить одне місце — і генератор, і еталон зворотної генерації.
+ */
+export function renderKeyFunction(
+  provider: DatabaseProvider,
+  parse: SqlParser
+): RenderedUnit[] {
+  const fn = `${quoteIdent(KEY_FUNCTION.schema)}.${quoteIdent(KEY_FUNCTION.name)}`
+  const shared = (sql: string): RenderedUnit => ({
+    ...generatedUnit(sql, PLATFORM_SCHEMA, parse),
+    generator: "key",
+  })
+  return [
+    shared(keyFunction(fn)),
+    ...executeGrants(`${fn}()`, [], provider).map(shared),
+  ]
+}
+
+/** Тригер незмінності ключа: умова `WHEN` тут — сама суть тригера. */
+export function renderKeyTrigger(
+  table: QualifiedName,
+  name: string,
+  timing: "BEFORE" | "AFTER",
+  key: string,
+  parse: SqlParser
+): RenderedUnit {
+  const fn = `${quoteIdent(KEY_FUNCTION.schema)}.${quoteIdent(KEY_FUNCTION.name)}`
+  return {
+    ...generatedUnit(
+      `CREATE TRIGGER ${quoteIdent(name)} ${timing} UPDATE ON ${quoteIdent(table.schema)}.${quoteIdent(table.name)} FOR EACH ROW WHEN (NEW.${quoteIdent(key)} IS DISTINCT FROM OLD.${quoteIdent(key)}) EXECUTE FUNCTION ${fn}(${sqlLiteral(key)});`,
+      table.schema,
+      parse
+    ),
+    generator: "key",
+  }
+}
+
+/** Фізичне ім'я колонки ключа, яке реєстр дає таблицям видів. */
+export const KEY_COLUMN = keyColumn(false).physicalName
 
 /**
  * Відмова тієї самої форми, що в тригера ефектів (`effect` з колонкою), тож

@@ -4,16 +4,23 @@ import {
   completeFiles,
   currentDebt,
   diagnostic,
+  hasFixedBody,
+  isMovementQuery,
   kindKeyColumns,
-  platformGrantTargets,
   sortDiagnostics,
   platformInstall,
-  platformInstallRecogniser,
+  platformRecogniser,
+  platformTriggers,
+  renderModelIndependentLayer,
+  renderSharedTriggerFunctions,
+  unitTarget,
   type CompiledModel,
   type Diagnostic,
   type FileChange,
   type IdSource,
-  type PlatformInstallRecogniser,
+  type PlatformRecogniser,
+  type PlatformReference,
+  type PlatformTriggerFamily,
   type KindKey,
   type SchemaPathResolver,
   type SqlParser,
@@ -22,8 +29,12 @@ import {
 import {
   KIND_REGISTRY,
   SQL_DEBT_FILE,
+  authorColumns,
   formatProjectFile,
   isObjectTable,
+  keyColumn,
+  serviceDateColumns,
+  versionColumn,
   DATABASE_PROVIDERS,
   type AttributeCase,
   type CatalogModel,
@@ -64,6 +75,15 @@ export interface ReverseOptions {
   newId: IdSource
   schemaPath: SchemaPathResolver
   parse: SqlParser
+  /**
+   * Еталон наявної теки у формі каталогу: модель каталогу тіні, у яку
+   * завантажено бажаний стан теки (`folderReference`). Згенеровані одиниці
+   * теки впізнаються за цією формою, а не за текстом генератора: каталог
+   * пише політики, функції й подання інакше. Без нього половина еталона від
+   * теки порожня (невідоме — не платформне): одиниці й таблиці платформи
+   * теки йдуть у теку, і їх судить компілятор.
+   */
+  reference?: CatalogModel
 }
 
 export interface ReverseResult {
@@ -85,42 +105,32 @@ const pathOf = (kind: (typeof GENERATED_KINDS)[number], name: string) =>
 interface Elsewhere {
   /** Таблиці й енам-типи збережених об'єктів (`schema.name`). */
   relations: Set<string>
-  /** Ідентичності одиниць їхніх `.sql` і обгорток рухів. */
+  /**
+   * Ідентичності одиниць, які описує файл користувача, а не генератор: `.sql`
+   * збережених файлів і обгортки запитів рухів (їх несе блок об'єкта).
+   */
   units: Set<string>
   /** Основні таблиці збережених об'єктів — цілі `MetadataRef` для FK. */
   targets: Map<string, KindTableNames>
   /** Обробники збережених підписок (`schema.name`): їх кличе збережений файл. */
   handlers: Set<string>
-  /**
-   * Цілі згенерованих грантів (`grantTargetKeys`): таблиці виду з контрактом
-   * доступу й функції з виведеним `EXECUTE`. Їхнім ACL володіє платформа, тож
-   * дослівний грант на них — помилка `sql.generated-grant`, а не стан теки.
-   */
-  platformGrants: Set<string>
 }
 
 /**
  * Що в базі вже описує тека поза файлами генератора: таблиці видів 1С та
  * одиниці їхніх `.sql` і обгортки рухів. Їх не можна описати вдруге — інакше
  * підсумкова тека мала б два описи одного об'єкта. Тека, що не компілюється,
- * цього не каже; тоді причину назве компіляція результату.
+ * цього не каже; тоді причину назве компіляція результату. Згенеровані
+ * одиниці теки сюди не входять: платформні серед них упізнає за вмістом
+ * `platformOf`, а решта — розбіжність, яку судить компілятор.
  */
-async function describedElsewhere(
-  existing: ReadonlyMap<string, string>,
-  parse: SqlParser
-): Promise<Elsewhere> {
+function describedElsewhere(model: CompiledModel | undefined): Elsewhere {
   const found: Elsewhere = {
     relations: new Set(),
     units: new Set(),
     targets: new Map(),
     handlers: new Set(),
-    platformGrants: new Set(),
   }
-  if (
-    ![...existing.keys()].some((p) => p !== PROJECT_FILE && !isGeneratedPath(p))
-  )
-    return found
-  const model = await compiledExisting(existing)
   if (model === undefined) return found
   const kept = new Map(
     model.objects
@@ -131,7 +141,7 @@ async function describedElsewhere(
     if (kept.has(item.origin.objectId))
       found.relations.add(qualified(item.schema, item.name))
   for (const table of model.physical.tables) {
-    // Таблицю платформи без об'єкта описує сама платформа (`platformInstall`)
+    // Таблицю платформи без об'єкта впізнає за вмістом `platformOf`
     if (!isObjectTable(table)) continue
     const object = kept.get(table.origin.objectId)
     if (object === undefined) continue
@@ -149,30 +159,158 @@ async function describedElsewhere(
     found.targets.set(key, { kind: object.kind, object: object.name, keys })
   }
   for (const unit of model.sqlUnits)
-    if (unit.file === undefined || !isGeneratedPath(unit.file))
+    if (
+      (unit.file !== undefined && !isGeneratedPath(unit.file)) ||
+      isMovementQuery(unit)
+    )
       found.units.add(unit.identity)
   for (const { handler } of model.contracts.eventSubscriptions)
     found.handlers.add(qualified(handler.schema, handler.name))
-  found.platformGrants = platformGrantTargets(model.sqlUnits, parse)
   return found
 }
 
 /**
- * Розпізнавач того, що платформа ставить у кожну базу провайдера
- * (`platformInstall`): ні таблиці, ні одиниці платформи не пишуться в теку —
- * ні при прийомі з нуля, ні поверх наявної теки. Провайдер — файлу проєкту,
- * коли він є (той самий, що діє для теки). Невідомий провайдер уже названо
- * `introspect.project-mismatch` чи помилкою файлу проєкту.
+ * Колонки, яких вимагає тригер родини шару, що не залежить від моделі, — за
+ * фізичними іменами реєстру стандартних реквізитів (їх `attributeCase` не
+ * змінює). Родини поза переліком без теки еталону не мають.
  */
-async function platformOf(
-  provider: DatabaseProvider
-): Promise<PlatformInstallRecogniser | undefined> {
-  if (!DATABASE_PROVIDERS.includes(provider)) return undefined
-  return platformInstallRecogniser(await platformInstall(provider))
+const LAYER_COLUMNS: Partial<
+  Readonly<Record<PlatformTriggerFamily, readonly string[]>>
+> = {
+  mechanics: [
+    ...serviceDateColumns().filter((c) => c.logicalName === "updatedAt"),
+    versionColumn(),
+  ].map((c) => c.physicalName),
+  author: authorColumns().map((c) => c.physicalName),
+  key: [keyColumn(false).physicalName],
 }
 
 /**
- * Модель наявної теки для `describedElsewhere`. Ігнорується лише ратчет боргу
+ * Еталонні тригери шару для тригерів каталогу: лише тригер з тим самим
+ * іменем на тій самій таблиці каталогу, і лише коли таблиця має колонки
+ * його генератора. Інакше еталона немає, і тригер іде в теку. Таблиця виду
+ * збереженої теки (`kinds`) шару не бере: її тригери рендерить тека.
+ */
+function layerTriggers(
+  catalog: CatalogModel,
+  kinds: ReadonlySet<string>,
+  provider: DatabaseProvider,
+  parse: SqlParser
+): PlatformReference["units"][number][] {
+  const tables = new Map(
+    catalog.tables.map((t) => [qualified(t.schema, t.name), t])
+  )
+  const found: PlatformReference["units"][number][] = []
+  for (const unit of catalog.units) {
+    if (unit.class !== "trigger") continue
+    const target = unitTarget(unit, parse)
+    if (target?.object === undefined || target.schema === "") continue
+    const key = qualified(target.schema, target.object)
+    const table = tables.get(key)
+    if (table === undefined || kinds.has(key)) continue
+    const entry = platformTriggers(table).find((e) => e.trigger === unit.name)
+    const needed = entry === undefined ? undefined : LAYER_COLUMNS[entry.family]
+    if (
+      needed === undefined ||
+      !needed.every((name) => table.columns.some((c) => c.name === name))
+    )
+      continue
+    const own = renderModelIndependentLayer(table, provider, parse).find(
+      (u) => u.class === "trigger" && u.identity === unit.identity
+    )
+    if (own !== undefined) found.push(own)
+  }
+  return found
+}
+
+/**
+ * Розпізнавач платформного вмісту каталогу (`platformRecogniser`) з еталоном
+ * за вмістом (спека П2 §9, «Платформне — за вмістом»): установка провайдера
+ * (файлу проєкту, коли він є) і шар, що не залежить від моделі, для таблиць
+ * без виду теки; тека, що компілюється, додає свої згенеровані одиниці з
+ * тілом, яке фіксує платформа, і таблиці платформи своєї моделі — лише з
+ * еталоном теки у формі каталогу (`reference`). Одиниці, крім грантів,
+ * беруться з нього за ідентичностями згенерованих одиниць теки: каталог
+ * проти каталогу, як у `diff`. Гранти порівнюються атомами дерева розбору,
+ * які від форми не залежать, а ідентичність гранту в каталозі інша (одна
+ * одиниця на колонку), тож їх дає модель теки. Тож
+ * повторний прийом над текою першого не губить шару таблиць `CustomTable`.
+ * Родини, вміст яких залежить від моделі видів, без теки еталона не мають і
+ * йдуть у теку. Невідомий провайдер уже названо
+ * `introspect.project-mismatch` чи помилкою файлу проєкту.
+ */
+async function platformOf(
+  provider: DatabaseProvider,
+  kept: CompiledModel | undefined,
+  reference: CatalogModel | undefined,
+  kinds: ReadonlySet<string>,
+  catalog: CatalogModel,
+  parse: SqlParser
+): Promise<PlatformRecogniser | undefined> {
+  if (!DATABASE_PROVIDERS.includes(provider)) return undefined
+  const install = await platformInstall(provider)
+  const folder =
+    kept === undefined || reference === undefined
+      ? { tables: [], units: [] }
+      : folderHalf(kept, reference)
+  return platformRecogniser(
+    {
+      tables: [...install.tables, ...folder.tables],
+      // Одиниці теки — останніми: та сама ідентичність у теці важить більше
+      units: [
+        ...install.units,
+        ...renderSharedTriggerFunctions(provider, parse),
+        ...layerTriggers(catalog, kinds, provider, parse),
+        ...folder.units,
+      ],
+    },
+    parse
+  )
+}
+
+/**
+ * Половина еталона від теки: таблиці платформи її моделі, її згенеровані
+ * гранти й одиниці каталогу тіні під ідентичностями решти її згенерованих
+ * одиниць. Обгортка запиту рухів несе запит автора: її описує блок об'єкта
+ * (`describedElsewhere`), а не еталон.
+ */
+function folderHalf(
+  kept: CompiledModel,
+  reference: CatalogModel
+): PlatformReference {
+  const generated = kept.sqlUnits.filter(
+    (u) => u.file === undefined && hasFixedBody(u)
+  )
+  const identities = new Set(
+    generated.filter((u) => u.class !== "grant").map((u) => u.identity)
+  )
+  return {
+    tables: kept.physical.tables.filter((t) => !isObjectTable(t)),
+    units: [
+      ...generated.filter((u) => u.class === "grant"),
+      ...reference.units.filter(
+        (u) => u.class !== "grant" && identities.has(u.identity)
+      ),
+    ],
+  }
+}
+
+/**
+ * Модель наявної теки, коли тека є (файл поза генератором і файлом
+ * проєкту) і компілюється; інакше `undefined`.
+ */
+export async function keptModel(
+  existing: ReadonlyMap<string, string>
+): Promise<CompiledModel | undefined> {
+  if (
+    ![...existing.keys()].some((p) => p !== PROJECT_FILE && !isGeneratedPath(p))
+  )
+    return undefined
+  return compiledExisting(existing)
+}
+
+/**
+ * Модель наявної теки для `keptModel`. Ігнорується лише ратчет боргу
  * (спека П2 §8.6): тека без `sql-debt.json` чи з
  * застарілим переліком — саме та, яку introspect має розкласти й описати
  * переліком; будь-яка інша помилка, як і досі, робить теку такою, що не
@@ -326,12 +464,18 @@ export async function reverseGenerate(
     ...folder.diagnostics,
     ...projectMismatch(folder, o.project),
   ]
-  const elsewhere = await describedElsewhere(o.existing, o.parse)
+  const kept = await keptModel(o.existing)
+  const elsewhere = describedElsewhere(kept)
   const platform = await platformOf(
-    folder.project?.databaseProvider ?? o.project.databaseProvider
+    folder.project?.databaseProvider ?? o.project.databaseProvider,
+    kept,
+    o.reference,
+    elsewhere.relations,
+    model,
+    o.parse
   )
   for (const table of model.tables)
-    if (platform?.table(table.schema, table.name) === true)
+    if (platform?.table(table) === true)
       elsewhere.relations.add(qualified(table.schema, table.name))
   const existingOf = (kind: string, schema: string, physical: string) =>
     folder.objects.get(objectKey(kind, schema, physical))
@@ -469,7 +613,6 @@ export async function reverseGenerate(
       sidecars,
       described: elsewhere.units,
       handlers: elsewhere.handlers,
-      platformGrants: elsewhere.platformGrants,
     }
   )
   diagnostics.push(...laid.diagnostics)

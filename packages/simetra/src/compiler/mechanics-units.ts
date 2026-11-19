@@ -22,6 +22,9 @@ import { executeGrants, sequenceRevokes } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
 
+/** Одиниця шару, що не залежить від моделі: модуль додає той, хто її кладе. */
+export type RenderedUnit = Omit<SqlUnit, "module">
+
 /** Одна функція механіки на всі таблиці: тіло не залежить від таблиці. */
 export const MECHANICS_FUNCTION: QualifiedName = {
   schema: PLATFORM_SCHEMA,
@@ -219,7 +222,6 @@ export function buildMechanicsUnits(
   parse: SqlParser
 ): SqlUnit[] {
   const tables = mechanicsTables(physical, attributeCase)
-  const fn = `${quoteIdent(MECHANICS_FUNCTION.schema)}.${quoteIdent(MECHANICS_FUNCTION.name)}`
   const shared = (sql: string): SqlUnit => ({
     ...generatedUnit(sql, PLATFORM_SCHEMA, parse),
     module,
@@ -231,16 +233,9 @@ export function buildMechanicsUnits(
     events: string,
     when?: string
   ): SqlUnit => ({
-    ...generatedUnit(
-      `CREATE TRIGGER ${quoteIdent(name)} BEFORE ${events} ON ${quoteIdent(table.schema)}.${quoteIdent(table.name)} FOR EACH ROW ` +
-        (when === undefined ? "" : `WHEN (${when}) `) +
-        `EXECUTE FUNCTION ${fn}();`,
-      table.schema,
-      parse
-    ),
+    ...renderMechanicsTrigger(table, name, events, parse, when),
     ownerObjectId: table.origin.objectId,
     module,
-    generator: "mechanics",
   })
   // Послідовність видається завжди, навіть без таблиць механіки: застосування
   // сіє її й веде епоху версій незалежно від того, чи вже є таблиці.
@@ -255,8 +250,7 @@ export function buildMechanicsUnits(
   // жодна роль API його не має (платформна спека §6.7).
   const units: SqlUnit[] = [
     ...sequence,
-    shared(touchFunction()),
-    ...executeGrants(`${fn}()`, [], provider).map(shared),
+    ...renderMechanicsFunction(provider, parse).map((u) => ({ ...u, module })),
     ...tables.flatMap((table): SqlUnit[] => {
       // Поширення копій носіїв не підвищує версію (спека прав §5.2): оновлення —
       // окремим тригером з умовою, бо на вставці `OLD` немає. Зміна автора —
@@ -280,6 +274,51 @@ export function buildMechanicsUnits(
     }),
   ]
   return units.sort(byIdentity)
+}
+
+/**
+ * Спільна функція механіки з грантами: текст не залежить від моделі, тож його
+ * рендерить одне місце — і генератор, і еталон зворотної генерації.
+ */
+export function renderMechanicsFunction(
+  provider: DatabaseProvider,
+  parse: SqlParser
+): RenderedUnit[] {
+  const shared = (sql: string): RenderedUnit => ({
+    ...generatedUnit(sql, PLATFORM_SCHEMA, parse),
+    generator: "mechanics",
+  })
+  return [
+    shared(touchFunction()),
+    ...executeGrants(qualifiedCall(MECHANICS_FUNCTION), [], provider).map(
+      shared
+    ),
+  ]
+}
+
+/** Тригер механіки; без `when` — форма таблиці без копій носіїв. */
+export function renderMechanicsTrigger(
+  table: QualifiedName,
+  name: string,
+  events: string,
+  parse: SqlParser,
+  when?: string
+): RenderedUnit {
+  return {
+    ...generatedUnit(
+      `CREATE TRIGGER ${quoteIdent(name)} BEFORE ${events} ON ${quoteIdent(table.schema)}.${quoteIdent(table.name)} FOR EACH ROW ` +
+        (when === undefined ? "" : `WHEN (${when}) `) +
+        `EXECUTE FUNCTION ${qualifiedCall(MECHANICS_FUNCTION)};`,
+      table.schema,
+      parse
+    ),
+    generator: "mechanics",
+  }
+}
+
+/** Виклик спільної функції без аргументів: `"schema"."name"()`. */
+export function qualifiedCall(fn: QualifiedName): string {
+  return `${quoteIdent(fn.schema)}.${quoteIdent(fn.name)}()`
 }
 
 const byIdentity = (a: SqlUnit, b: SqlUnit) =>

@@ -24,6 +24,7 @@ import {
   compareWithDesired,
   desiredForApply,
   engineScope,
+  folderReference,
   readShadowEnvironment,
   reverseGenerate,
   type EngineAction,
@@ -95,7 +96,7 @@ const schemaName = z.string().min(1).max(63)
 export const introspectTool = defineTool({
   name: "introspect",
   description:
-    "Read the live database into metadata: tables become CustomTable, enum types PgEnum, everything else verbatim .sql files; ids of known objects are kept. The connection comes from the server's environment. Scope: the schemas of the existing metadata plus `schemas`; a directory without project.meta.json needs `schemas`. Writes nothing when anything is unrepresentable or does not compile.",
+    "Read the live database into metadata: tables become CustomTable, enums PgEnum, the rest verbatim .sql; known ids are kept. Connection: server environment. Scope: existing metadata's schemas plus `schemas` (required without project.meta.json). Existing metadata loads into one throwaway shadow (like `diff`); a shadow that cannot be built is an error. Writes nothing if anything is unrepresentable or fails to compile.",
   input: z.strictObject({
     schemas: z.array(schemaName).min(1).optional().meta({
       description:
@@ -196,13 +197,33 @@ export const introspectTool = defineTool({
     }
 
     const engine = await loadEngine()
-    const read = await withDatabase(required(database), "introspect", (db) =>
-      engine.extract(db.target, scope)
+    const { createApplyDatabase } = await import("../schema-engine")
+    const read = await withDatabase(
+      required(database),
+      "introspect",
+      async (db) => ({
+        extracted: await engine.extract(db.target, scope),
+        // Еталон наявної теки — форма каталогу її тіні (одна тінь на
+        // виклик): згенеровані одиниці теки каталог пише інакше, ніж
+        // генератор
+        reference: await folderReference(
+          engine,
+          createApplyDatabase({ readOnly: true }),
+          {
+            target: db.target,
+            ...(db.shadowBase ? { shadowBase: db.shadowBase } : {}),
+          },
+          existing
+        ),
+      })
     )
     if (!read.ok)
       return { ok: false, changes: [], diagnostics: failureDiagnostics(read) }
-    const extracted = read.value
-    const extractDiagnostics = extracted.diagnostics.map(fromEngine)
+    const { extracted, reference } = read.value
+    const extractDiagnostics = [
+      ...extracted.diagnostics,
+      ...reference.diagnostics,
+    ].map(fromEngine)
     // Невиражене в extract (EXCLUDE, чужий власник) — уже втрата: генератор
     // не побачить того, чого немає в моделі, тож запис зупиняє і воно
     const reversed = await reverseGenerate(extracted.model, {
@@ -211,6 +232,9 @@ export const introspectTool = defineTool({
       newId: () => crypto.randomUUID(),
       schemaPath: schemaPathResolver(dir),
       parse: await loadSqlParser(),
+      ...(reference.catalog === undefined
+        ? {}
+        : { reference: reference.catalog }),
     })
     const diagnostics = [...extractDiagnostics, ...reversed.diagnostics]
     const ok = !hasErrors(diagnostics)
