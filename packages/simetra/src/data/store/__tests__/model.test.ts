@@ -199,6 +199,7 @@ type Step =
   | { t: "resume" }
   | { t: "due" }
   | { t: "outage"; steps: number }
+  | { t: "exhaust" }
 
 const view = fc.nat(SPECS.length - 1)
 const k = fc.nat(KEYS.length - 1)
@@ -597,13 +598,21 @@ async function runModel(
   steps: readonly Step[],
   preloaded: boolean,
   profile: Profile,
-  defects: readonly DefectFlag[] = []
+  defects: readonly DefectFlag[] = [],
+  schedulerChecks = true
 ) {
   const held: { core?: CoreSession } = {}
   try {
-    await runModelOn(steps, preloaded, profile, defects, (c) => {
-      held.core = c
-    })
+    await runModelOn(
+      steps,
+      preloaded,
+      profile,
+      defects,
+      schedulerChecks,
+      (c) => {
+        held.core = c
+      }
+    )
   } finally {
     held.core?.close("disposed")
   }
@@ -616,6 +625,7 @@ async function runModelOn(
   preloaded: boolean,
   profile: Profile,
   defects: readonly DefectFlag[],
+  schedulerChecks: boolean,
   opened: (core: CoreSession) => void
 ) {
   // Порт запису моделі: кожен `run` тримається, доки крок `run` не відповість
@@ -1564,7 +1574,9 @@ async function runModelOn(
     if (step.t === "closeInFlight")
       return runs.length > 0
         ? { t: "close", reason: "disposed" }
-        : { t: "time", ms: 500 }
+        : // Без `run` у дорозі крок стає межею відкинутих відповідей (сесія
+          // вичерпана, планувальник не читає): ваги генератора не зсуваються.
+          { t: "exhaust" }
     if (step.t !== "onMutation") return step
     const keys = [...journal.keys()]
     const at =
@@ -2077,7 +2089,10 @@ async function runModelOn(
     // Крок планувальника: читання, які він запустив, рахуються за лічильниками
     // перечитувань виглядів на старті кроку.
     const schedulerStep = s.t === "time" || s.t === "due" || s.t === "resume"
+    const tickStep = schedulerStep || s.t === "exhaust"
     const readsAtStart = new Map<Subset, number>()
+    // Вигляди в стані межі відкинутих (Р3): планувальник їх не читає.
+    const exhaustedAtStart = new Set<Subset>()
     const failedAtStart = new Map<
       Subset,
       { failures: number; failedAt: number | undefined }
@@ -2085,6 +2100,7 @@ async function runModelOn(
     if (schedulerStep && closed === undefined) {
       for (const sub of internals.registry.subsets()) {
         readsAtStart.set(sub, sub.rereads)
+        if (exhausted(sub)) exhaustedAtStart.add(sub)
         failedAtStart.set(sub, {
           failures: sub.failures,
           failedAt: sub.failedAt,
@@ -2093,7 +2109,6 @@ async function runModelOn(
     }
     const hiddenAtStart = !core.visible
     const deferredAtStart = inspect.scheduledDue()
-    const exhaustedAtStart = inspect.versionEpochs().unavailable
     const tickAtStart = core.freshness.lastTickAt()
     // Об'єкти, яким крок «повернення» не мав слати читань.
     const quiet = new Set<ObjectName>()
@@ -2655,6 +2670,77 @@ async function runModelOn(
       case "outage":
         outage = s.steps
         break
+      case "exhaust": {
+        // Доводимо сесію до межі відкинутих відповідей: перемикання епохи,
+        // далі відповіді покинутої епохи на кожне перечитування. Далі час
+        // іде понад `I`: планувальник не мусить прочитати жодного вигляду.
+        if (closed !== undefined || !core.visible || staled.has(TASK)) break
+        subscribe(7, label)
+        userViews = new Set([7])
+        for (let round = 0; round < 40; round++) {
+          const epochs = inspect.versionEpochs()
+          if (epochs.unavailable) break
+          fake.epoch =
+            epochs.current === null
+              ? EA
+              : epochs.previous === null
+                ? epochs.current === EA
+                  ? EB
+                  : EA
+                : epochs.previous
+          if (fake.epoch !== null) primaryEpoch = fake.epoch
+          core
+            .revalidate(TASK, { visibleOnly: false })
+            .catch((error: unknown) => errors.push(error))
+          for (let i = 0; i < 20; i++) {
+            await flush()
+            const own = fake.pending.filter(
+              (r) => fake.log.indexOf(r.log) >= stepStart
+            )
+            if (own.length === 0) break
+            for (const read of own) {
+              fake.take((r) => r === read).answer()
+              record(read)
+            }
+          }
+          advance(1_000)
+        }
+        await flush()
+        if (!inspect.versionEpochs().unavailable) break
+        // Кожен завантажений вигляд читається ще раз явно: відкинута відповідь
+        // позначає його межею. Планувальник не бере вигляд лише в цьому стані.
+        for (const object of [TASK, ORG])
+          core
+            .revalidate(object, { visibleOnly: false })
+            .catch((error: unknown) => errors.push(error))
+        for (let i = 0; i < 20; i++) {
+          await flush()
+          const own = fake.pending.filter(
+            (r) => fake.log.indexOf(r.log) >= stepStart
+          )
+          if (own.length === 0) break
+          for (const read of own) {
+            fake.take((r) => r === read).answer()
+            record(read)
+          }
+        }
+        const before = new Map(
+          [...internals.registry.subsets()].map((sub) => [sub, sub.rereads])
+        )
+        // Перепланування (подія видимості вигляду) і час понад `I`: вигляд у
+        // стані межі не дає строку.
+        core.setVisible(SPECS[7]!, true)
+        await flush()
+        advance(2 * REVALIDATE_MS)
+        await flush()
+        for (const [sub, rereads] of before)
+          if (sub.rereads !== rereads)
+            fail(
+              label,
+              "a read started by the scheduler after the discard limit"
+            )
+        break
+      }
       case "resume": {
         if (closed !== undefined) {
           core.resume()
@@ -2760,8 +2846,8 @@ async function runModelOn(
       }
       outage--
     }
+    if (tickStep && core.freshness.lastTickAt() !== tickAtStart) tickReads++
     if (schedulerStep && closed === undefined) {
-      if (core.freshness.lastTickAt() !== tickAtStart) tickReads++
       const dueNow = new Set(
         [...deferredAtStart].flatMap(([name, due]) =>
           due <= clock ? [name] : []
@@ -2772,7 +2858,7 @@ async function runModelOn(
         // Читання, яке запустив планувальник (чи `resume()`).
         if (s.t !== "resume" && hiddenAtStart && !core.visible)
           fail(label, "a read started by the scheduler on a hidden tab")
-        if (s.t !== "resume" && exhaustedAtStart)
+        if (s.t !== "resume" && exhaustedAtStart.has(sub))
           fail(label, "a read started by the scheduler after the discard limit")
         const was = failedAtStart.get(sub)!
         // Пауза діє на такт і на `resume()`; строк перемикання епохи її
@@ -2812,7 +2898,7 @@ async function runModelOn(
       }
     }
     check(label, stepStart)
-    checkScheduler(label)
+    if (schedulerChecks) checkScheduler(label)
     if (purgedKeys !== undefined) checkPurged(label, purgedKeys)
     noteGens(userViews.size > 0)
     stability(label, before, purgeStep)
@@ -3057,12 +3143,16 @@ function runsFromEnv(raw: string | undefined): number {
 }
 const RUNS = runsFromEnv(process.env.CORE_MODEL_RUNS)
 
-const property = (defects: readonly DefectFlag[] = []) =>
+const property = (
+  defects: readonly DefectFlag[] = [],
+  schedulerChecks = true
+) =>
   fc.asyncProperty(
     fc.array(STEP, { minLength: 10, maxLength: 80, size: "max" }),
     fc.boolean(),
     fc.constantFrom<Profile>("full", "scroll", "burial"),
-    (steps, preloaded, profile) => runModel(steps, preloaded, profile, defects)
+    (steps, preloaded, profile) =>
+      runModel(steps, preloaded, profile, defects, schedulerChecks)
   )
 
 beforeEach(() => {
@@ -3086,7 +3176,13 @@ const SCHEDULER_DEFECTS: readonly DefectFlag[] = [
   "scheduler-fires-hidden",
   "scheduler-no-pause",
   "scheduler-no-reschedule",
+  "scheduler-reads-unavailable",
 ]
+
+// Дефекти, чий шлях — читання з межею свіжості: інваріанти планувальника
+// (межа збіжності) в їхньому самотесті вимкнено, щоб перевірка власного
+// шляху спрацьовувала першою, а не ловилась ними.
+const WITHOUT_SCHEDULER_CHECKS: readonly DefectFlag[] = ["min-age-all-young"]
 
 const DEFECTS: readonly DefectFlag[] = [
   "no-token-check",
@@ -3131,6 +3227,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "scheduler-no-pause",
   "scheduler-no-reschedule",
   "revalidate-no-tail",
+  "scheduler-reads-unavailable",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -3167,10 +3264,7 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // Повернення: межа свіжості виглядів.
   "min-age-ignored": /a view younger than the limit (got a read|was re-read)/,
   "min-age-ignored-sections": /a view younger than the limit was re-read/,
-  // Усі вигляди «молоді»: читання з межею не бере жодного, тож його не бачить
-  // ні повернення, ні такт; крок із планувальником ловить раніше (інше насіння).
-  "min-age-all-young":
-    /a view (older than the limit was not re-read|was not re-read within its interval)/,
+  "min-age-all-young": /a view older than the limit was not re-read/,
   // Пізня підписка гідрованого вигляду (§6.6): рядок знімка без читання.
   "late-hydrated-not-reread": /after hydrate: view \d+ .*(server|hidden)/,
   // Довіра — факт рядка: картка над рядком непідписаного гідрованого списку.
@@ -3184,6 +3278,7 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
     /inside its failure pause|not re-read within its failure pause/,
   "scheduler-no-reschedule": /scheduler has no timer on a visible tab/,
   "revalidate-no-tail": /left no tail pass/,
+  "scheduler-reads-unavailable": /after the discard limit/,
 }
 
 describe("core model self-check", () => {
@@ -3193,7 +3288,8 @@ describe("core model self-check", () => {
       tickReads = 0
       // Стале насіння: самотест відтворюваний, а найдовший шлях до червоного
       // (дефект горизонту) займає кілька тисяч прогонів.
-      const result = await fc.check(property([flag]), {
+      const checks = !WITHOUT_SCHEDULER_CHECKS.includes(flag)
+      const result = await fc.check(property([flag], checks), {
         numRuns: 10_000,
         seed: 1,
         // Достатньо знайти червоний прогін: ужимання контрприкладу лише
@@ -3205,7 +3301,7 @@ describe("core model self-check", () => {
       // Контроль: той самий контрприклад без дефекту проходить, тож червоний
       // — від дефекту, а не від помилки моделі.
       const [steps, preloaded, profile] = result.counterexample!
-      await runModel(steps, preloaded, profile, [])
+      await runModel(steps, preloaded, profile, [], checks)
       const caughtBy = CAUGHT_BY[flag]
       if (caughtBy !== undefined)
         expect((result.errorInstance as Error).message).toMatch(caughtBy)

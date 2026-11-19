@@ -815,6 +815,7 @@ export function createCore(options: {
   // кличуть такт і `resume()`). Істина — чи було читання.
   function runDue(): boolean {
     let ran = false
+    dropDeferredWhenUnavailable()
     const catchLog = (error: unknown) => log({ kind: "listener-failed", error })
     for (const [name, held] of [...scheduled]) {
       if (held.whole !== undefined && held.whole <= now()) {
@@ -904,8 +905,16 @@ export function createCore(options: {
     )
   }
 
+  // Сесія вичерпала межу відкинутих: кожна відповідь до нової сесії
+  // відкидається, тож відкладені строки (перемикання епохи, повтор відкинутої
+  // відповіді) були б читаннями без шансу й без паузи.
+  function dropDeferredWhenUnavailable() {
+    if (session.versions.unavailable()) scheduled.clear()
+  }
+
   function schedulerDue(): number | undefined {
     let due: number | undefined
+    dropDeferredWhenUnavailable()
     for (const held of scheduled.values()) {
       for (const at of [held.whole, held.retry?.at])
         if (at !== undefined && (due === undefined || at < due)) due = at

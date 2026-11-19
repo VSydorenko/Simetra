@@ -885,7 +885,11 @@ export async function revalidate(
     await revalidateViews(
       ctx,
       o,
-      targets.filter((s) => !inFlight(s) && !unavailable(s))
+      targets.filter(
+        (s) =>
+          !inFlight(s) &&
+          (!unavailable(s) || ctx.defects.has("scheduler-reads-unavailable"))
+      )
     )
     return
   }
@@ -976,7 +980,11 @@ export function nextViewDue(
   let due: number | undefined
   for (const s of subsetsOf(ctx, ctx.objectOf(object))) {
     if (!eligible(ctx, s, { visibleOnly: true })) continue
-    if (inFlight(s) || unavailable(s)) continue
+    if (
+      inFlight(s) ||
+      (unavailable(s) && !ctx.defects.has("scheduler-reads-unavailable"))
+    )
+      continue
     const at = dueOf(ctx, s)
     // Вигляд, що ще не читався, строку не має.
     if (!Number.isFinite(at)) continue

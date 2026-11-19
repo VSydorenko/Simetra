@@ -94,6 +94,8 @@ export type DefectFlag =
   | "scheduler-no-reschedule"
   /** An explicit `revalidate` over a view in flight leaves no tail pass. */
   | "revalidate-no-tail"
+  /** The scheduler plans and reads a view that is past the discard limit. */
+  | "scheduler-reads-unavailable"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>
