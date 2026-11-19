@@ -446,6 +446,45 @@ describe("scheduler: the discard limit", () => {
   })
 })
 
+describe("scheduler: after unavailable", () => {
+  it("a view of another object past its interval is not read either: 0 requests, 0 timers until a new session", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.999)
+    const big = 10_000_000
+    const h = build({ mode: "manual", limits: { revalidateIntervalMs: big } })
+    h.fake.epoch = EA
+    const view = h.core.view(taskKeys(1, 2))
+    watch(view)
+    watch(h.core.view(orgKeys(1)))
+    const deliver = async () => {
+      await settle()
+      h.fake.deliverAll()
+      await settle()
+    }
+    await deliver()
+    h.fake.epoch = EB
+    view.refresh()
+    await deliver()
+    h.fake.epoch = EA
+    view.refresh()
+    for (let i = 0; i < DISCARDS_MAX; i++) {
+      await deliver()
+      vi.advanceTimersByTime(60_000)
+    }
+    await settle()
+    expect(h.inspect.versionEpochs().unavailable).toBe(true)
+    const base = readsAt(h)
+    const tickAt = h.core.freshness.lastTickAt()
+    expect(h.inspect.serviceSizes().schedulerTimers).toBe(0)
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(2 * big)
+      await deliver()
+    }
+    expect(readsAt(h)).toBe(base)
+    expect(h.core.freshness.lastTickAt()).toBe(tickAt)
+    expect(h.inspect.serviceSizes().schedulerTimers).toBe(0)
+  })
+})
+
 describe("scheduler: close", () => {
   it("dispose() leaves 0 timers", async () => {
     const h = build()
