@@ -222,22 +222,30 @@ export async function startSignalStand(
   const httpUrl = `http://127.0.0.1:${port}`
   const apiKey = o.apiKey ?? "signal-stand-api-key"
   const dir = mkdtempSync(join(tmpdir(), `simetra-signal-${tag}-`))
-  chmodSync(dir, 0o755)
-  const config =
-    o.config ?? signalStandConfig({ apiKey, listen: o.notifyUrl !== undefined })
-  writeFileSync(join(dir, "config.json"), JSON.stringify(config), {
-    mode: 0o644,
-  })
-  const env = [
-    "CENTRIFUGO_HTTP_SERVER_ADDRESS=127.0.0.1",
-    `CENTRIFUGO_HTTP_SERVER_PORT=${port}`,
-    `${SIGNAL_CONSUMER_ENV.dsn}=${tagged(o.databaseUrl)}`,
-    ...(o.notifyUrl === undefined
-      ? []
-      : [`${SIGNAL_CONSUMER_ENV.notificationDsn}=${tagged(o.notifyUrl)}`]),
-  ]
+  try {
+    chmodSync(dir, 0o755)
+    const config =
+      o.config ??
+      signalStandConfig({ apiKey, listen: o.notifyUrl !== undefined })
+    writeFileSync(join(dir, "config.json"), JSON.stringify(config), {
+      mode: 0o644,
+    })
+    const env = [
+      "CENTRIFUGO_HTTP_SERVER_ADDRESS=127.0.0.1",
+      `CENTRIFUGO_HTTP_SERVER_PORT=${port}`,
+      `${SIGNAL_CONSUMER_ENV.dsn}=${tagged(o.databaseUrl)}`,
+      ...(o.notifyUrl === undefined
+        ? []
+        : [`${SIGNAL_CONSUMER_ENV.notificationDsn}=${tagged(o.notifyUrl)}`]),
+    ]
+    writeFileSync(join(dir, "stand.env"), `${env.join("\n")}\n`, {
+      mode: 0o600,
+    })
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true })
+    throw error
+  }
   const envFile = join(dir, "stand.env")
-  writeFileSync(envFile, `${env.join("\n")}\n`, { mode: 0o600 })
 
   const healthy = async (): Promise<boolean> => {
     try {
