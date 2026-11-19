@@ -9,6 +9,7 @@ import {
   platformInstall,
   platformTriggers,
   type CompiledModel,
+  type PlatformTriggerFamily,
   type SchemaPathResolver,
   type SqlParser,
 } from "simetra/compiler"
@@ -238,9 +239,10 @@ interface Project {
 
 /**
  * Що round-trip свідомо втрачає: тригери механіки таблиць виду, повернутих
- * як `CustomTable`, і функції таблиці, які кличуть лише вони (ієрархія,
- * спека П4 §6.6), разом із їхніми грантами. Межа без них — межа джерела без одиниць
- * механіки. `identities` — втрачені одиниці, які звірка бачить відсутніми.
+ * як `CustomTable`, і їхні спільні функції в `simetra` з грантами — лише
+ * родини, які reverse упізнає за еталоном (`REFERENCED_FAMILIES`). Межа без
+ * них — межа джерела без цих одиниць. `identities` — втрачені одиниці, які
+ * звірка бачить відсутніми.
  */
 interface Loss {
   schemas: string[]
@@ -530,35 +532,33 @@ export async function applicationTableKeys(
 }
 
 /**
+ * Родини тригерів з еталоном без теки (план #286, Р2): шар, що не залежить
+ * від моделі, — механіка рядка, авторство й незмінність ключа у формі без
+ * `WHEN` змісту. Перелік записано тут явно, а не взято з еталона помічника,
+ * інакше оракул збігався б з тим, що перевіряє.
+ */
+const REFERENCED_FAMILIES: ReadonlySet<PlatformTriggerFamily> = new Set([
+  "mechanics",
+  "author",
+  "key",
+])
+
+/**
  * Механіка джерела, якої не буде після прийому з нуля: таблиця виду стає
- * `CustomTable` без стандартних колонок, а introspect механіки не пише
- * (спека промоції §9.2). Повертає механіку лише промоція у вид. Тригери
- * незмінності ключа (спека прав §7) — та сама платформна механіка таблиці виду:
- * `CustomTable` їх не має, тож вони втрачаються так само. Так само й тригери
- * ієрархії з функцією таблиці (спека П4 §6.6): генератор `mechanics`, впізнає їх
- * reverse як платформні, повертає лише промоція.
+ * `CustomTable`, а тригери родин з еталоном (`REFERENCED_FAMILIES`) і їхні
+ * спільні функції в `simetra` reverse упізнає за вмістом як платформні й
+ * не пише (спека промоції §9.2). Повертає їх лише промоція у вид. Родини,
+ * вміст яких залежить від моделі видів (ієрархія тощо, Р3), еталона не
+ * мають: вони йдуть у теку як SQL застосунку й не втрачаються — їх
+ * перелічує `R3_UNITS` тесту корпусу.
  */
 async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
-  const lost = (u: { generator?: string }) =>
-    u.generator === "mechanics" || u.generator === "key"
-  const { scope } = await engineScope({
-    ...source,
-    sqlUnits: source.sqlUnits.filter((u) => !lost(u)),
-  })
-  // Межа після прийому з нуля завжди має `simetra` (послідовність версій), тож
-  // спільні функції механіки (`simetra.touch()` тощо) звірка бачить, і їх
-  // втрата — така сама, як тригерів таблиць
-  const inScope = new Set([...scope.schemas, "simetra"])
-  const lostUnits = source.sqlUnits.filter(lost)
-  const identities = new Set(
-    lostUnits.filter((u) => u.class === "trigger").map((u) => u.identity)
-  )
-  // Кандидати — платформні тригери таблиці з генераторами втраченого; реєстр
-  // називає й тригери, яких таблиця не має, тож лишаються лише фактично
-  // вилучені
+  const units = new Set(source.sqlUnits.map((u) => u.identity))
+  // Кандидати — тригери родин з еталоном за реєстром; реєстр називає й
+  // тригери, яких таблиця не має, тож лишаються лише фактичні одиниці джерела
   const candidates = source.physical.tables.flatMap((t) =>
     platformTriggers(t)
-      .filter((e) => lost(e))
+      .filter((e) => REFERENCED_FAMILIES.has(e.family) && !e.contentUpdate)
       .map((e) => ({ table: t, entry: e }))
   )
   const triggers = candidates
@@ -567,36 +567,36 @@ async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
       table: table.name,
       name: entry.trigger,
     }))
-    .filter((t) => identities.has(`trigger:${t.schema}.${t.table}.${t.name}`))
-  expect(triggers).toHaveLength(identities.size)
-  // Функція ієрархії — у схемі таблиці, тож звірка бачить і її: прийом з нуля
-  // впізнає її як платформну й не пише, а повертає її, як і тригери, лише
-  // промоція
-  const fnIdentities = new Set(
-    lostUnits
-      .filter((u) => u.class === "function" && inScope.has(u.schema))
-      .map((u) => u.identity)
-  )
+    .filter((t) => units.has(`trigger:${t.schema}.${t.table}.${t.name}`))
   const functions = [
     ...new Map(
       candidates
         .map(({ entry }) => entry.function)
-        .filter((f) => inScope.has(f.schema))
         .map((f) => [`${f.schema}.${f.name}`, f])
     ).values(),
-  ].filter((f) => fnIdentities.has(`function:${f.schema}.${f.name}()`))
-  expect(functions).toHaveLength(fnIdentities.size)
+  ].filter((f) => units.has(`function:${f.schema}.${f.name}()`))
   // З грантів функції каталог несе лише відкликання в PUBLIC: `EXECUTE` для
   // PUBLIC є в `acldefault` будь-якої функції. Відкликання в ролей, яким
   // типові привілеї схеми нічого не дали, — no-op, і introspect його не бачить
-  const grants = functions.map((f) =>
-    lostUnits.find(
-      (u) =>
-        u.identity ===
-        `grant:revoke:function:${f.schema}.${f.name}():public:execute`
-    )
+  const grants = functions.map(
+    (f) => `grant:revoke:function:${f.schema}.${f.name}():public:execute`
   )
-  expect(grants.every((u) => u !== undefined)).toBe(true)
+  expect(grants.filter((g) => !units.has(g))).toEqual([])
+  const identities = [
+    ...triggers.map((t) => `trigger:${t.schema}.${t.table}.${t.name}`),
+    ...functions.map((f) => `function:${f.schema}.${f.name}()`),
+    ...grants,
+  ]
+  const lost = new Set(identities)
+  const { scope } = await engineScope({
+    ...source,
+    sqlUnits: source.sqlUnits.filter((u) => !lost.has(u.identity)),
+  })
+  // Межа після прийому з нуля завжди має `simetra` (послідовність версій), тож
+  // спільні функції механіки (`simetra.touch()` тощо) звірка бачить, і їх
+  // втрата — така сама, як тригерів таблиць
+  const inScope = new Set([...scope.schemas, "simetra"])
+  expect(functions.filter((f) => !inScope.has(f.schema))).toEqual([])
   // Функції форм платформи, названі проєктом: функція множини виду скоупу
   // (крім згенерованої з членства) і функція значень виміру.
   const { project } = source
@@ -623,11 +623,7 @@ async function mechanicsLoss(source: CompiledModel): Promise<Loss> {
     schemas: [...inScope],
     triggers,
     functions,
-    identities: [
-      ...identities,
-      ...fnIdentities,
-      ...grants.map((u) => u!.identity),
-    ],
+    identities,
     definers,
   }
 }

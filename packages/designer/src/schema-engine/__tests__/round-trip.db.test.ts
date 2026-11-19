@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest"
 import { reverseGenerate } from "simetra/schema"
 import { PROVIDER_OWNER_ROLES } from "simetra/model"
 import {
-  FIXTURES,
   movementQuery,
   readReferenceDomain,
   superuserClient,
@@ -13,6 +12,10 @@ import {
 } from "../../../../simetra/test/support"
 import { dropRoles } from "../../__tests__/support/db"
 import type { OracleShape } from "./fixtures/round-trip-classes"
+import {
+  describeAdoptionFromScratch,
+  describeModelPathInvariants,
+} from "./platform-content.support"
 import {
   applicationTableKeys,
   deployedRoundTrip,
@@ -30,7 +33,6 @@ import {
   kindsOfFiles,
   tableKeys,
   tableKeysOfFiles,
-  unscoped,
   useRoundTrip,
 } from "./round-trip.support"
 
@@ -199,25 +201,12 @@ describe("a role of the application's own", () => {
   })
 })
 
-describe("adoption from scratch: the deployment fixture corpus survives the round trip", () => {
-  // Без видів скоупу (параметр корпусу `unscoped`): повний ланцюжок §9.
-  for (const [name, fixture] of FIXTURES) {
-    it(name, async () => {
-      const { source, result } = await deployedRoundTrip(
-        unscoped(fixture(testProvider())),
-        new Map(),
-        true
-      )
-      // Види 1С повертаються як `CustomTable` з тими самими фізичними іменами
-      expect(tableKeys(result!.model)).toEqual(tableKeys(source))
-      expect(
-        kindsOf(result!.model).filter(
-          (kind) => kind !== "CustomTable" && kind !== "PgEnum"
-        )
-      ).toEqual([])
-    })
-  }
+// Корпус прийому з нуля й інваріанти «платформне — за вмістом» — спільні з
+// файлом профілю Supabase
+describeAdoptionFromScratch()
+describeModelPathInvariants()
 
+describe("adoption from scratch with named scope set functions", () => {
   // Іменовані функції множини скоупу після прийому з нуля повертаються
   // незв'язаними: зворотна генерація дає рівно їхні відмови
   // `sql.definer-caller-unchecked` (платформна спека §6.7), а моделі немає —
