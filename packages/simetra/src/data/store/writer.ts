@@ -952,8 +952,8 @@ function eligible(ctx: WriterContext, s: Subset, options: RevalidateOptions) {
     (!options.visibleOnly ||
       isVisible(s) ||
       options.alsoViews?.has(s) === true) &&
-    // Відмітка свіжості й пауза після збою: строк вигляду (§6.7); без
-    // відмітки вигляд вважається простроченим.
+    // Відмітка свіжості й пауза після збою: строк вигляду (§8.4); вигляд без
+    // відмітки строку не має — його читає гідратація чи вигляд-носій рядка.
     (minAgeMs === undefined ||
       ctx.defects.has("min-age-ignored") ||
       (ctx.defects.has("min-age-ignored-sections") &&
