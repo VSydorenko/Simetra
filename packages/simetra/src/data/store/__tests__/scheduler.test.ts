@@ -593,6 +593,23 @@ describe("scheduler: the seam of the rights block (B5b)", () => {
   })
 })
 
+describe("scheduler: lastTickAt and a loading view", () => {
+  it("requestReread on an object whose only visible view is still loading: no read, lastTickAt unchanged", async () => {
+    const h = build({ mode: "manual" })
+    watch(h.core.view(taskKeys(1, 2)))
+    await settle()
+    // Вигляд ще вантажиться: відповідь утримано.
+    expect(h.fake.pending.length).toBeGreaterThan(0)
+    const base = readsAt(h)
+    const at = h.core.freshness.lastTickAt()
+    h.core.freshness.requestReread([TASK], { jitterMs: 0 })
+    await settle()
+    expect(readsAt(h)).toBe(base)
+    expect(h.core.freshness.lastTickAt()).toBe(at)
+    expect(at).toBeUndefined()
+  })
+})
+
 describe("scheduler: a synchronous failure of the tick", () => {
   it("a throwing tick does not kill the timer: the next due time fires", async () => {
     let ticks = 0

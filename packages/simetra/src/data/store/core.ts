@@ -822,7 +822,8 @@ export function createCore(options: {
         held.whole = undefined
         // Строк об'єкта без видимих виглядів нічого не читає: такту з читанням
         // він не робить.
-        if (activeViews(writerContext, name).some((v) => v.visible)) ran = true
+        // `lastTickAt` — лише коли такт справді послав читання (§8.4).
+        if (hasDueViews(writerContext, name)) ran = true
         revalidate(writerContext, name, { visibleOnly: true }).catch(catchLog)
       }
       if (held.retry !== undefined && held.retry.at <= now()) {
@@ -832,7 +833,7 @@ export function createCore(options: {
         const flight = singleFlight(writerContext, objectOf(name), views, {
           visibleOnly: false,
         })
-        if (views.length > 0) ran = true
+        if (flight.started > 0) ran = true
         flight.done.catch(catchLog)
       }
       if (held.whole === undefined && held.retry === undefined)

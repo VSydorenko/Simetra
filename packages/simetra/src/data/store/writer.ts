@@ -1027,11 +1027,17 @@ function mergeOptions(
 export function hasDueViews(
   ctx: WriterContext,
   object: ObjectName,
-  minAgeMs: number
+  minAgeMs?: number
 ): boolean {
   return subsetsOf(ctx, ctx.objectOf(object)).some(
     (s) =>
-      eligible(ctx, s, { visibleOnly: true, minAgeMs }) &&
+      eligible(
+        ctx,
+        s,
+        minAgeMs === undefined
+          ? { visibleOnly: true }
+          : { visibleOnly: true, minAgeMs }
+      ) &&
       !inFlight(s) &&
       !unavailable(s)
   )
