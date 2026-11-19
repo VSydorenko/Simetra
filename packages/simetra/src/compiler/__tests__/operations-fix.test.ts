@@ -614,6 +614,37 @@ describe("fixFiles: sql.generated-grant", () => {
     expect(fixed.has(GRANTS)).toBe(false)
     expect(JSON.parse(fixed.get(DEBT)!).units).toEqual([])
   })
+
+  it("fix cuts a verbatim grant on a declared function", async () => {
+    // ACL задекларованої функції належить платформі повністю (спека
+    // декларацій функцій §5.1): дослівний грант на неї — лише її ціль.
+    const declaredSql =
+      "CREATE FUNCTION public.svc() RETURNS integer LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;\n"
+    const files = await acceptDebt(
+      metaFiles({
+        "project.meta.json": project(),
+        "sql/public/fns.sql": declaredSql,
+        "sql/public/fns.functions.json": JSON.stringify({
+          functions: [
+            {
+              id: uuid(9311),
+              function: { name: "svc" },
+              callers: ["service"],
+            },
+          ],
+        }),
+        [GRANTS]: `${OTHER}\n\nGRANT EXECUTE ON FUNCTION public.svc() TO anon;\n\n${OTHER_GRANT}\n`,
+      })
+    )
+    expect(
+      (await compile(files)).diagnostics.map((d) => [d.code, d.params?.object])
+    ).toEqual([["sql.generated-grant", "public.svc()"]])
+    const result = await fixFiles(files, options())
+    expect(result.ok).toBe(true)
+    const fixed = applyChanges(files, result.changes)
+    expect(fixed.get(GRANTS)).toBe(`${OTHER}\n\n${OTHER_GRANT}\n`)
+    expectClean(await compile(fixed))
+  })
 })
 
 describe("applyChanges", () => {

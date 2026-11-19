@@ -53,6 +53,7 @@ import {
 } from "./record"
 import {
   callerChanges,
+  declarationTexts,
   labelConsumers,
   planUnits,
   renameMap,
@@ -617,6 +618,18 @@ export async function promoteObject(
   const moved = sqlFileTexts(files, sql, new Map(), deleted, parse, [], true)
   if (moved.problems.length > 0) return refused(files, moved.problems)
   setTexts(after, moved.files)
+  // Декларації функцій ідуть за функціями — на проміжну компіляцію теж:
+  // інакше функція без своєї декларації отримала б інші права й помилки.
+  const declarationsAt = (staged: boolean) =>
+    declarationTexts(
+      files,
+      sql,
+      deleted,
+      model.project.defaultSchema,
+      o.schemaPath,
+      staged
+    )
+  setTexts(after, declarationsAt(true))
 
   // 7–8. Доповнення (канонічні фізичні імена, спека промоції Пр18), звуження боргу й
   // компіляція результату.
@@ -715,6 +728,7 @@ export async function promoteObject(
   if (changed.length > 0 || sql.moved.some((m) => m.staged !== undefined)) {
     const next = applyChanges(files, completed.result.changes)
     setTexts(next, final.files)
+    setTexts(next, declarationsAt(false))
     renameDebt(next, sql, changed, rewrite.texts, parse, completed.model, o)
     completed = await completeNarrowAndCompile(files, next, o, new Set())
     if (!completed.result.ok || completed.model === undefined) {

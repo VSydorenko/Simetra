@@ -13,6 +13,7 @@ import {
   providerCalls,
   type CommandContextHit,
 } from "./command-context"
+import type { DeclaredFunction, PlatformForm } from "./declarations"
 import { isExpressionUnit } from "./expression-calls"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
@@ -303,6 +304,52 @@ export function platformWrite(hit: CommandContextHit): boolean {
   )
 }
 
+/** Функція форми платформи: пара `(schema, name)` після підстановки `defaultSchema`. */
+export interface PlatformFormSource {
+  function: { schema: string; name: string }
+  form: PlatformForm
+}
+
+/**
+ * Функції форм платформи — єдине джерело переліку (спека декларацій функцій
+ * §5.3): функції множини видів скоупу, обробники підписок і функції значень
+ * вимірів доступу, у цьому порядку. Решта переліків — його проєкції
+ * (`ruledFunctions`, `platformFormFunctions`), тож нова форма (функція
+ * політики, Д5) додається тут один раз. Згенерована функція множини
+ * (`membership`) — не дослівна одиниця, тож її тут немає.
+ */
+export function platformFormSources(
+  objects: readonly ParsedObject[],
+  project: Project | undefined
+): PlatformFormSource[] {
+  if (project === undefined) return []
+  const source = (
+    fn: { schema?: string; name: string },
+    form: PlatformForm
+  ): PlatformFormSource => ({
+    function: { schema: fn.schema ?? project.defaultSchema, name: fn.name },
+    form,
+  })
+  return [
+    ...project.scopeKinds.flatMap((kind) =>
+      typeof kind.setFunction === "string"
+        ? []
+        : [source(kind.setFunction, "setFunction")]
+    ),
+    ...objects.flatMap((o) => {
+      const spec = KIND_REGISTRY[o.kind].subscription?.(o.data)
+      return spec === undefined
+        ? []
+        : [source(spec.handler, "subscriptionHandler")]
+    }),
+    ...project.accessDimensions.flatMap((dimension) =>
+      "function" in dimension.values
+        ? [source(dimension.values.function, "dimension")]
+        : []
+    ),
+  ]
+}
+
 /**
  * Ідентичності функцій без аргументів, які оголошують метадані: обробники
  * підписок і функції множини видів скоупу. Обидві мають власні правила
@@ -312,21 +359,10 @@ export function ruledFunctions(
   objects: readonly ParsedObject[],
   project: Project | undefined
 ): ReadonlySet<string> {
-  if (project === undefined) return new Set()
-  const declared = [
-    ...objects.flatMap((o) => {
-      const spec = KIND_REGISTRY[o.kind].subscription?.(o.data)
-      return spec === undefined ? [] : [spec.handler]
-    }),
-    // Згенерована функція множини (`membership`) — не дослівна одиниця.
-    ...project.scopeKinds.flatMap((kind) =>
-      typeof kind.setFunction === "string" ? [] : [kind.setFunction]
-    ),
-  ]
   return new Set(
-    declared.map((fn) =>
-      functionIdentity(fn.schema ?? project.defaultSchema, fn.name, [])
-    )
+    platformFormSources(objects, project)
+      .filter((s) => s.form !== "dimension")
+      .map((s) => functionIdentity(s.function.schema, s.function.name, []))
   )
 }
 
@@ -435,7 +471,8 @@ export function checkSqlModules(
   isDebt: (unit: VerbatimUnit) => boolean,
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  provider: DatabaseProvider | undefined
+  provider: DatabaseProvider | undefined,
+  declared: readonly DeclaredFunction[]
 ): Diagnostic[] {
   const calls = providerCalls(provider, units)
   const owners = closedModuleOwners(objects)
@@ -550,19 +587,7 @@ export function checkSqlModules(
     const shellUnit = { tree: unit.tree as Node, sql: unit.sql }
     const problem = closedShellProblem(shellUnit, plpgsql)
     if (problem !== undefined) {
-      // Для динамічного SQL автору потрібен рядок самого оператора, а не
-      // початку функції: тіло буває на сотню рядків.
-      const line =
-        problem === "dynamicSql"
-          ? (firstDynamicSqlLine(shellUnit, unit.line, plpgsql) ?? unit.line)
-          : unit.line
-      found.push(
-        diagnostic("sql.closed-shell", unit.file, "", {
-          function: `${unit.schema}.${unit.name}`,
-          line,
-          problem,
-        })
-      )
+      found.push(closedShellDiagnostic(unit, problem, plpgsql))
     }
     // Контекст команди ставить лише `runCommand` (спека прав §5.3): SQL застосунку
     // виконується посеред оператора команди, і змінений ним контекст побачили
@@ -595,5 +620,42 @@ export function checkSqlModules(
       )
     }
   }
+  // Задекларована функція поза модулем виду теж мусить бути в закритій
+  // оболонці (спека декларацій функцій §5.1): декларація дає їй `EXECUTE`
+  // ролей застосунку, тож динамічний SQL чи definer без порожнього
+  // `search_path` тут — помилка, а не борг.
+  const declaredUnits = new Set(declared.map((d) => d.unit))
+  for (const unit of units) {
+    if (closed(unit) || !declaredUnits.has(unit)) continue
+    const problem = closedShellProblem(
+      { tree: unit.tree as Node, sql: unit.sql },
+      plpgsql
+    )
+    if (problem !== undefined) {
+      found.push(closedShellDiagnostic(unit, problem, plpgsql))
+    }
+  }
   return found
+}
+
+function closedShellDiagnostic(
+  unit: VerbatimUnit,
+  problem: ClosedShellProblem,
+  plpgsql: PlpgsqlParser
+): Diagnostic {
+  // Для динамічного SQL автору потрібен рядок самого оператора, а не
+  // початку функції: тіло буває на сотню рядків.
+  const line =
+    problem === "dynamicSql"
+      ? (firstDynamicSqlLine(
+          { tree: unit.tree as Node, sql: unit.sql },
+          unit.line,
+          plpgsql
+        ) ?? unit.line)
+      : unit.line
+  return diagnostic("sql.closed-shell", unit.file, "", {
+    function: `${unit.schema}.${unit.name}`,
+    line,
+    problem,
+  })
 }

@@ -33,7 +33,12 @@ import {
   grantRecords,
   isRightsDeclaration,
 } from "../rights/facts"
-import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
+import {
+  PROJECT_FILE,
+  objectKey,
+  type ParsedFunctionsFile,
+  type ParsedObject,
+} from "./files"
 
 export interface ResolvedReference {
   from: { file: string; pointer: string; objectId: string }
@@ -109,12 +114,15 @@ interface NamedElement {
  * Стадія 2 (спека П2 §3, §8.2): id і physicalName присутні, id унікальні в
  * усій моделі, імена унікальні в межах власника й дотримуються стилю, а
  * посилання за іменем резолвляться в UUID. Першим вважається елемент, що
- * раніше за шляхом файлу, тож помилку отримує пізніший.
+ * раніше за шляхом файлу, тож помилку отримує пізніший. Декларації функцій
+ * мають id, як і елементи метаданих (спека декларацій функцій §5.4), тож
+ * ідуть у ту саму перевірку унікальності — після об'єктів.
  */
 export function checkIdentity(
   objects: readonly ParsedObject[],
   brokenNames: ReadonlySet<string>,
-  project: Project | undefined
+  project: Project | undefined,
+  functionsFiles: readonly ParsedFunctionsFile[]
 ): IdentityStageResult {
   const diagnostics: Diagnostic[] = []
   // Без валідного проєкту стиль невідомий; про сам проєкт уже звітує стадія 1.
@@ -453,6 +461,18 @@ export function checkIdentity(
         }
       }
     }
+  }
+
+  // Декларація не має `physicalName`: ім'я функції — ім'я з її `CREATE`.
+  for (const functions of functionsFiles) {
+    functions.functions.forEach((declaration, index) => {
+      checkIdentified(
+        functions.file,
+        `/functions/${index}`,
+        declaration as Element,
+        false
+      )
+    })
   }
 
   const references: ResolvedReference[] = []

@@ -37,6 +37,17 @@ const rename = {
   newName: "Money",
 }
 
+const addNote = {
+  target: { kind: "Catalog", name: "Currency" },
+  collection: "attributes",
+  element: { name: "note", type: "Boolean" },
+}
+
+/** Недекларована definer-функція: помилка лише класу ремонту. */
+const RPC_SQL = "sql/app/rpc.sql"
+const RPC_DEFINER =
+  "CREATE FUNCTION app.rpc() RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;\n"
+
 // Мутація через інструмент і компіляція результату: дві компіляції проєкту на тест — бюджет `TOOL_PIPELINE`
 describe("mutation tools", TOOL_PIPELINE, () => {
   it("only delete is destructive; every mutation writes files", () => {
@@ -58,6 +69,33 @@ describe("mutation tools", TOOL_PIPELINE, () => {
     expect(existsSync(join(dir, "catalogs/Money/Money.meta.json"))).toBe(true)
     expect(r.changes.some((c) => c.deleted)).toBe(true)
     expect((await run("compile", dir, {})).ok).toBe(true)
+  })
+
+  // Режим `repair` (спека декларацій функцій §5.1): `add` у теку з помилками
+  // лише класу ремонту пише результат, `rename` на ній відмовляє.
+  it("add into a folder with repair-class errors only writes with ok false", async () => {
+    const dir = await project()
+    await writeFile(join(dir, RPC_SQL), RPC_DEFINER)
+    const r = await run("add", dir, addNote)
+    expect(r.ok).toBe(false)
+    expect(r.written).toBe(true)
+    expect(
+      r.diagnostics.filter((d) => d.severity === "error").map((d) => d.code)
+    ).toEqual(["sql.definer-caller-unchecked"])
+    const currency = JSON.parse(
+      await readFile(join(dir, CURRENCY), "utf8")
+    ) as { attributes: { name: string }[] }
+    expect(currency.attributes.map((a) => a.name)).toContain("note")
+  })
+
+  it("rename on a folder with repair-class errors only writes nothing", async () => {
+    const dir = await project()
+    await writeFile(join(dir, RPC_SQL), RPC_DEFINER)
+    const before = await snapshotOf(dir)
+    const r = await run("rename", dir, rename)
+    expect(r.ok).toBe(false)
+    expect(r.written).toBe(false)
+    expect(await snapshotOf(dir)).toEqual(before)
   })
 
   it("dry run writes nothing", async () => {

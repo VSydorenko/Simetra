@@ -24,6 +24,7 @@ import {
   kindsOf,
   parser,
   portableClassFixtures,
+  refusedAdoption,
   roundTripOf,
   schemaPath,
   scopeOf,
@@ -64,14 +65,27 @@ describe("class fixtures survive the round trip", () => {
   for (const fixture of portableClassFixtures()) {
     it(fixture.name, async () => {
       const scope = scopeOf(fixture.schemas)
+      // Схема за замовчуванням — завжди в межі (§6.9), тож це перша
+      // керована схема фікстури, а не вшита `app`
+      const project = {
+        defaultSchema: fixture.schemas[0]!,
+        attributeCase: "snake_case" as const,
+        databaseProvider: testProvider(),
+      }
       await inTarget(fixture.sql, scope, async (target) => {
-        // Схема за замовчуванням — завжди в межі (§6.9), тож це перша
-        // керована схема фікстури, а не вшита `app`
-        const result = await roundTripOf(target, scope, {
-          defaultSchema: fixture.schemas[0]!,
-          attributeCase: "snake_case",
-          databaseProvider: testProvider(),
-        })
+        if (fixture.refused !== undefined) {
+          const refused = await refusedAdoption(
+            target,
+            scope,
+            project,
+            fixture.refused
+          )
+          expect(await classProperty(fixture, refused.target)).toEqual(
+            fixture.expected
+          )
+          return
+        }
+        const result = await roundTripOf(target, scope, project)
         // Властивість класу є в цілі (фікстура її створила) і в тіні
         expect(await classProperty(fixture, result.target)).toEqual(
           fixture.expected
@@ -99,6 +113,9 @@ describe("the builtin PUBLIC privilege beside a schema ADP", () => {
   // Маркер двигуна для рядка ADP схеми не означає відкликання: вбудований
   // `EXECUTE`/`USAGE` для `PUBLIC` не має ставати ні `GRANT`, ні `REVOKE`,
   // ні одиницею ADP
+  // `GRANT EXECUTE ON FUNCTIONS` у ADP схеми застосунку прийом відмовляє
+  // (Р15 спеки декларацій функцій): тіні немає, тож витяг і ціль звіряються
+  // без неї, а відмова — рівно одна, на одиниці ADP
   it("builtin PUBLIC execute beside a schema ADP writes no PUBLIC unit", async () => {
     const scope = scopeOf(["app"])
     await inTarget(
@@ -107,13 +124,27 @@ describe("the builtin PUBLIC privilege beside a schema ADP", () => {
        CREATE FUNCTION app.open() RETURNS int LANGUAGE sql AS $$ select 1 $$;`,
       scope,
       async (target) => {
-        const result = await roundTripOf(target, scope, roundTripOptions)
+        const {
+          extracted,
+          files,
+          diagnostics,
+          target: shape,
+        } = await refusedAdoption(target, scope, roundTripOptions, [
+          {
+            code: "sql.default-privileges-execute",
+            schema: "app",
+            name: `defaultPrivileges:${OWNER}:app:function:grant:${ANON}:execute`,
+          },
+        ])
         expect(
-          result.extracted.model.units.filter((u) => /\bPUBLIC\b/i.test(u.sql))
+          extracted.model.units.filter((u) => /\bPUBLIC\b/i.test(u.sql))
         ).toEqual([])
-        const acl = publicAcl("f:app.open()")
-        expect(acl(result.target)).toEqual([`=X/${OWNER}`])
-        expect(acl(result.shadow)).toEqual([`=X/${OWNER}`])
+        // Відмова — на файлі, де лежить сам ADP
+        const [refusal] = errors(diagnostics)
+        expect(files.get(refusal!.file)).toMatch(
+          /ALTER DEFAULT PRIVILEGES[^;]*IN SCHEMA[^;]*GRANT EXECUTE ON FUNCTIONS/i
+        )
+        expect(publicAcl("f:app.open()")(shape)).toEqual([`=X/${OWNER}`])
       }
     )
   })

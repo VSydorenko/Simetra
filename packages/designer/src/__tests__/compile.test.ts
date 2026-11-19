@@ -184,4 +184,28 @@ describe("readMetadataDir", () => {
     expect(files.has("README.md")).toBe(false)
     expectClean(await compile(files), { allow: ["rights.scope-kind-unread"] })
   })
+  it("reads <base>.functions.json next to its .sql", async () => {
+    const dir = await project()
+    await writeFile(
+      join(dir, "sql/app/approvals.sql"),
+      "CREATE FUNCTION app.approve() RETURNS void LANGUAGE sql VOLATILE SET search_path = '' AS $$ select $$;\n"
+    )
+    // Файл без id: якщо читач його бачить, стадія 2 назве саме його.
+    await writeFile(
+      join(dir, "sql/app/approvals.functions.json"),
+      JSON.stringify({
+        functions: [{ function: { name: "approve" }, callers: [] }],
+      })
+    )
+    const files = await readMetadataDir(dir)
+    expect(files.has("sql/app/approvals.functions.json")).toBe(true)
+    const result = await compile(files)
+    expect(result.diagnostics.map((d) => [d.code, d.file, d.pointer])).toEqual([
+      [
+        "identity.id-missing",
+        "sql/app/approvals.functions.json",
+        "/functions/0/id",
+      ],
+    ])
+  })
 })

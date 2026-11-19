@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "Editor hint: path to the JSON Schema of this file.",
+      "type": "string"
+    },
+    "functions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+            "description": "Stable lowercase UUID v4 identity of the element. Assigned by tooling at creation and never reused; a rename keeps it."
+          },
+          "function": {
+            "type": "object",
+            "properties": {
+              "schema": {
+                "description": "PostgreSQL schema of the function; defaultSchema when absent.",
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Name of the function in its CREATE FUNCTION statement."
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false,
+            "description": "SQL function of the sibling .sql file."
+          },
+          "callers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "user",
+                "anonymous",
+                "service",
+                "command"
+              ]
+            },
+            "description": "Role purposes that get EXECUTE on the function; empty — no application role, only other functions of the owner call it."
+          },
+          "check": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                "description": "A word of the action vocabulary or the name of a custom action of the object."
+              },
+              "object": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "Catalog",
+                      "Document",
+                      "Enumeration",
+                      "InformationRegister",
+                      "AccumulationRegister",
+                      "Constant",
+                      "CustomTable",
+                      "PgEnum",
+                      "EventSubscription",
+                      "RightsSet",
+                      "Role"
+                    ],
+                    "description": "Kind of the referenced metadata object."
+                  },
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Za-z0-9]*$",
+                    "description": "Logical name of the referenced object."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name"
+                ],
+                "additionalProperties": false,
+                "description": "Metadata object whose rights contract is checked."
+              },
+              "row": {
+                "description": "Name of the uuid IN parameter that holds the primary key of the checked row.",
+                "type": "string",
+                "minLength": 1
+              },
+              "scope": {
+                "description": "Name of the uuid IN parameter that holds the scope value of the check.",
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "action",
+              "object"
+            ],
+            "additionalProperties": false,
+            "description": "Rights check the function applies before it acts on behalf of the caller."
+          }
+        },
+        "required": [
+          "function",
+          "callers"
+        ],
+        "additionalProperties": false,
+        "description": "Declaration of one function of the sibling .sql file."
+      },
+      "description": "Declarations of functions of the sibling .sql file, sorted by function (entries without schema first, then by schema and name) and without duplicates."
+    }
+  },
+  "required": [
+    "functions"
+  ],
+  "additionalProperties": false,
+  "description": "Declarations of SQL functions: who may execute them and which rights check they apply.",
+  "$id": "functions.schema.json"
+}

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 import { compile, type Diagnostic } from "simetra/compiler"
-import { PROVIDER_API_ROLES } from "simetra/model"
+import {
+  PLATFORM_ROLES,
+  PROVIDER_API_ROLES,
+  type SqlFunctionCaller,
+} from "simetra/model"
 import {
   CHECKLIST_TABLE,
   COMMENT_COUNTER_FILE,
@@ -11,7 +15,7 @@ import {
   teamScopeKind,
   type Layer,
 } from "./fixtures/rights"
-import { SCOPE_FUNCTIONS_FILE, acceptDebt } from "./helpers"
+import { SCOPE_FUNCTIONS_FILE, acceptDebt, uuid } from "./helpers"
 
 const RPC_FILE = "sql/public/rpc.sql"
 const PROJECT_MODULE = PROJECT_CATALOG_FILE.replace(".meta.json", ".sql")
@@ -20,6 +24,9 @@ const TASK = "public.task"
 const API = PROVIDER_API_ROLES.supabase
 /** Отримувачі, що мають привілей без жодного явного гранту чи відкликання. */
 const EVERYONE = `PUBLIC, ${API.user}, ${API.anonymous}`
+const COMMAND = PLATFORM_ROLES.command
+/** Те саме для `EXECUTE`: роль команд має його через `PUBLIC` (Р14). */
+const EVERY_CALLER = `${EVERYONE}, ${COMMAND}`
 /** Типова RPC «читання повз RLS» — у закритій оболонці, тож не борг. */
 const CLOSED = "SECURITY DEFINER SET search_path = ''"
 
@@ -72,10 +79,21 @@ const warned = (
   },
 })
 
-const refused = (fn: string, roles = EVERYONE, file = RPC_FILE, line = 1) => ({
+const refused = (
+  fn: string,
+  roles = EVERY_CALLER,
+  file = RPC_FILE,
+  line = 1
+) => ({
   code: "sql.definer-caller-unchecked",
   file,
-  params: { function: fn, roles, line },
+  params: {
+    schema: fn.slice(0, fn.indexOf(".")),
+    name: fn.slice(fn.indexOf(".") + 1),
+    function: fn,
+    roles,
+    line,
+  },
 })
 
 /** Обидва коди: помилка й попередження не дублюють одне одного. */
@@ -247,15 +265,28 @@ describe("checkDefinerReads: SECURITY DEFINER functions", () => {
       expected: [refused(RPC)],
     },
     {
-      // Закрита оболонка не забороняє читати таблицю під RLS, а EXECUTE без
-      // явного REVOKE має PUBLIC.
-      name: "a function of a closed module",
+      // Модуль виду не приймає дослівних грантів, а `EXECUTE` недекларованої
+      // функції модуля платформа виводить з порожніми призначеннями (Р11):
+      // ролі API її не виконують, тож перевірки викликача вона не потребує.
+      name: "an undeclared function of a closed module",
       sql: { [PROJECT_MODULE]: countTask() },
-      expected: [refused(RPC, EVERYONE, PROJECT_MODULE)],
+      expected: [],
     },
   ])("$name", async ({ sql, expected }) => {
     const result = await compiled(sql)
     expect(brief(result.diagnostics, CODES)).toEqual(expected)
+  })
+
+  // Роль команд діє від імені користувача (Р14), але типових привілеїв не
+  // має: `EXECUTE` вона дістає лише через `PUBLIC` чи явний грант.
+  it("refuses an undeclared function granted to the command role", async () => {
+    const result = await compiled({
+      [RPC_FILE]:
+        countTask() +
+        revokeExecute(...ALL) +
+        grants(`GRANT EXECUTE ON FUNCTION ${RPC}() TO`, [COMMAND]),
+    })
+    expect(brief(result.diagnostics, CODES)).toEqual([refused(RPC, COMMAND)])
   })
 
   // `CALL` з функції, яку кличе роль API, досягає definer-процедури; складову
@@ -276,7 +307,7 @@ describe("checkDefinerReads: SECURITY DEFINER functions", () => {
         "CREATE AGGREGATE public.agg2(int) (sfunc = public.sf, stype = int);\n",
     })
     expect(brief(result.diagnostics, CODES)).toEqual([
-      refused("public.agg2", EVERYONE, RPC_FILE, 3),
+      refused("public.agg2", EVERY_CALLER, RPC_FILE, 3),
     ])
   })
 
@@ -305,7 +336,7 @@ describe("checkDefinerReads: SECURITY DEFINER functions", () => {
     const result = await compiled(sources, [teamScopeKind()])
     const line = file === SCOPE_FUNCTIONS_FILE ? 2 : 1
     expect(brief(result.diagnostics, CODES)).toEqual([
-      refused(fn, EVERYONE, file, line),
+      refused(fn, EVERY_CALLER, file, line),
     ])
   })
 
@@ -454,4 +485,63 @@ describe("checkDefinerReads: views", () => {
       ])
     }
   )
+})
+
+// Задекларована функція (спека декларацій функцій §5.1): її ACL виводить
+// платформа з викликачів, тож `sql.definer-caller-unchecked` її не судить, а
+// попередження Р30 бере ролі з викликачів, а не з дослівних грантів.
+describe("checkDefinerReads: declared functions", () => {
+  const RPC_FUNCTIONS = RPC_FILE.replace(/\.sql$/, ".functions.json")
+  const declare = (callers: SqlFunctionCaller[], name = "rpc") =>
+    JSON.stringify({
+      functions: [{ id: uuid(7900), function: { name }, callers }],
+    })
+
+  it.each<{ callers: SqlFunctionCaller[]; roles: string }>([
+    { callers: ["user"], roles: API.user },
+    { callers: ["command"], roles: COMMAND },
+    { callers: ["user", "service"], roles: `${API.user}, ${API.service}` },
+  ])(
+    "warns a definer function with callers $callers with the roles of its callers",
+    async ({ callers, roles }) => {
+      const result = await compiled({
+        // Дослівний грант іншій ролі не змінює ролей попередження.
+        [RPC_FILE]:
+          countTask() +
+          grants(`GRANT EXECUTE ON FUNCTION ${RPC}() TO`, [API.anonymous]),
+        [RPC_FUNCTIONS]: declare(callers),
+      })
+      expect(brief(result.diagnostics, CODES)).toEqual([warned(RPC, { roles })])
+    }
+  )
+
+  it("does not warn a definer function with only the service caller", async () => {
+    const result = await compiled({
+      [RPC_FILE]: countTask(),
+      [RPC_FUNCTIONS]: declare(["service"]),
+    })
+    expect(result.diagnostics).toEqual([])
+  })
+
+  it("compiles an invoker function with every caller, anonymous included", async () => {
+    const result = await compiled({
+      [RPC_FILE]: countTask("SECURITY INVOKER"),
+      [RPC_FUNCTIONS]: declare(["user", "anonymous", "service", "command"]),
+    })
+    expect(result.diagnostics).toEqual([])
+  })
+
+  // Складову агрегату Postgres виконує від власника агрегату, тож декларація
+  // складової його `EXECUTE` не обмежує (#275).
+  it("refuses an aggregate over a declared definer state function", async () => {
+    const result = await compiled({
+      [RPC_FILE]:
+        `CREATE FUNCTION public.sf(a int, b int) RETURNS int LANGUAGE sql IMMUTABLE ${CLOSED} AS $$ SELECT a + b $$;\n` +
+        "CREATE AGGREGATE public.agg2(int) (sfunc = public.sf, stype = int);\n",
+      [RPC_FUNCTIONS]: declare(["service"], "sf"),
+    })
+    expect(brief(result.diagnostics, CODES)).toEqual([
+      refused("public.agg2", EVERY_CALLER, RPC_FILE, 2),
+    ])
+  })
 })

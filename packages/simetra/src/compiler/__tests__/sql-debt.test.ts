@@ -242,3 +242,36 @@ describe("debt ratchet: sql-debt.json", () => {
     }
   })
 })
+
+describe("declared functions are never debt", () => {
+  // Задекларована функція поза оболонкою — `sql.closed-shell`, а не запис
+  // ратчета (спека декларацій функцій §5.3): ні `debt-grows` без запису, а
+  // запис про неї — застарілий.
+  const DYNAMIC = HANDLER.replace(
+    "RETURN NEW;",
+    "EXECUTE 'select 1'; RETURN NEW;"
+  )
+  const declared = {
+    [SHARED_SQL.replace(/\.sql$/, ".functions.json")]: JSON.stringify({
+      functions: [{ id: uuid(7201), function: { name: "f" }, callers: [] }],
+    }),
+  }
+
+  it.each([
+    { listed: [], expected: [["sql.closed-shell", SHARED_SQL]] },
+    {
+      listed: ["function:public.f()"],
+      expected: [
+        ["sql.debt-stale", DEBT],
+        ["sql.closed-shell", SHARED_SQL],
+      ],
+    },
+  ])("listed $listed", async ({ listed, expected }) => {
+    const found = await diagnostics({
+      [SHARED_SQL]: DYNAMIC,
+      [DEBT]: debt(listed),
+      ...declared,
+    })
+    expect(found.map((d) => [d.code, d.file])).toEqual(expected)
+  })
+})

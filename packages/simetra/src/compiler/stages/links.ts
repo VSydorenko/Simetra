@@ -16,6 +16,11 @@ import { diagnostic, toPointer, type Diagnostic } from "../diagnostics"
 import { movementWrapperName } from "../movement-functions"
 import { CURRENT_USER_FUNCTION } from "../platform/names"
 import { closedShellProblem } from "../sql/closed-forms"
+import {
+  checkDeclaredCallers,
+  checkDefaultPrivilegesExecute,
+  type DeclaredFunction,
+} from "../sql/declarations"
 import { checkDefinerReads } from "../sql/definer-reads"
 import { checkGeneratedCalls } from "../sql/function-body"
 import { checkDimensionFunctions } from "../rights/dimension-functions"
@@ -50,8 +55,9 @@ import { registerTargetError, type ResolvedReference } from "./identity"
  * Стадія 5 (спека П2 §8.2): зв'язки між частинами моделі, які не видно в
  * одному файлі: повнота й вигляд джерел рухів, функцій множини скоупів і
  * функцій значень вимірів доступу в SQL-одиницях, судження голів дозвільним
- * переліком (спека прав §5.3), виклики згенерованих функцій, що пишуть, і читання
- * таблиць під RLS від імені власника.
+ * переліком (спека прав §5.3), виклики згенерованих функцій, що пишуть, читання
+ * таблиць під RLS від імені власника, викликачі задекларованих функцій і типові
+ * привілеї на функції.
  */
 export function checkLinks(
   objects: readonly ParsedObject[],
@@ -62,7 +68,8 @@ export function checkLinks(
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
   membershipFunctions: ReadonlySet<string>,
-  rightsTables: ReadonlySet<string>
+  rightsTables: ReadonlySet<string>,
+  declared: readonly DeclaredFunction[]
 ): Diagnostic[] {
   const scope = headScope(
     objects,
@@ -112,7 +119,20 @@ export function checkLinks(
       parse,
       plpgsql
     ),
-    ...checkDefinerReads(objects, project, physical, units, parse, plpgsql),
+    ...checkDefinerReads(
+      objects,
+      project,
+      physical,
+      units,
+      parse,
+      plpgsql,
+      declared
+    ),
+    // Правила викликачів і типових привілеїв (спека декларацій функцій §5.1)
+    // стоять поруч із `checkDefinerReads`: попередження Р30 задекларованої
+    // функції має бути видно разом із її помилкою.
+    ...checkDeclaredCallers(declared, units),
+    ...checkDefaultPrivilegesExecute(units, project.database.provider),
     ...checkRootCreatorSubscriptions(objects, references, project),
   ]
 }

@@ -6,6 +6,7 @@ import {
   ruledFunctions,
   settingsTargets,
 } from "./closed-forms"
+import type { DeclaredFunction } from "./declarations"
 import { headLinks } from "./heads"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
@@ -14,14 +15,17 @@ import type { VerbatimUnit } from "./units"
 /**
  * Функції, оболонку яких судить платформа: голови — функції закритих
  * модулів, обробники підписок і функції множини (`ruledFunctions`), функції
- * значень вимірів доступу — і кожна їхня ланка (`headLinks`, спека прав §5.3).
+ * значень вимірів доступу — і кожна їхня ланка (`headLinks`, спека прав §5.3),
+ * а також задекларовані функції в будь-якому файлі (`declared`, спека
+ * декларацій функцій §5.1): їхні викликачі покладаються на ту саму оболонку.
  */
 export function judgedFunctionIdentities(
   objects: readonly ParsedObject[],
   project: Project | undefined,
   units: readonly VerbatimUnit[],
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  declared: readonly DeclaredFunction[]
 ): ReadonlySet<string> {
   const closed = closedModuleOwners(objects)
   return new Set([
@@ -37,6 +41,7 @@ export function judgedFunctionIdentities(
     ...headLinks(objects, project, units, parse, plpgsql).map(
       (u) => u.identity
     ),
+    ...declared.map((d) => d.unit.identity),
   ])
 }
 
@@ -66,14 +71,16 @@ export function checkFunctionSettingsShell(
   project: Project | undefined,
   units: readonly VerbatimUnit[],
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  declared: readonly DeclaredFunction[]
 ): Diagnostic[] {
   const judged = judgedFunctionIdentities(
     objects,
     project,
     units,
     parse,
-    plpgsql
+    plpgsql,
+    declared
   )
   const functions = units.filter((u) => judged.has(u.identity))
   return units.flatMap((unit) => {

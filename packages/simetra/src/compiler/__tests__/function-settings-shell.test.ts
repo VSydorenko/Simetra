@@ -2,14 +2,19 @@ import { describe, expect, it } from "vitest"
 import {
   COMMENT_COUNTER_FILE,
   COUNT_COMMENT_SQL_FILE,
+  DIMENSION_SQL,
   PROJECT_CATALOG_FILE,
-  PROJECT_FILE,
-  REGION_DIMENSION_ID,
   compiledPolicyDomain,
+  dimensionFunction,
   teamScopeKind,
   type Layer,
 } from "./fixtures/rights"
-import { SCOPE_FUNCTIONS_FILE, diagnosticBrief, expectClean } from "./helpers"
+import {
+  SCOPE_FUNCTIONS_FILE,
+  diagnosticBrief,
+  expectClean,
+  uuid,
+} from "./helpers"
 
 const SHARED = "sql/public/shared.sql"
 /** Спільний файл іншої схеми; тип `string` — ключ рядка таблиці кейсів. */
@@ -22,22 +27,6 @@ const HEAD = "public.count_comment"
 const sqlFunction = (name: string, body: string) =>
   `CREATE FUNCTION ${name}() RETURNS int LANGUAGE sql STABLE AS $$ ${body} $$;\n`
 
-/** Вимір `region` зі значеннями з функції `region_ids` і її ланкою. */
-const dimensionFunction = (): Layer => ({
-  [PROJECT_FILE]: {
-    accessDimensions: [
-      {
-        id: REGION_DIMENSION_ID,
-        name: "region",
-        target: { kind: "Catalog", name: "Region" },
-        values: { function: { name: "region_ids" } },
-      },
-    ],
-  },
-})
-const DIMENSION_SQL =
-  "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT public.region_link() $$;\n" +
-  "CREATE FUNCTION public.region_link() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT NULL::uuid $$;\n"
 /** Функція множини `team_ids`, що кличе ланку `public.helper`. */
 const TEAM_IDS =
   "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT public.helper() $$;\n"
@@ -227,5 +216,31 @@ describe("sql.function-settings-shell", () => {
           "REVOKE EXECUTE ON FUNCTION public.plain() FROM PUBLIC, authenticated, anon;",
       })
     )
+  })
+})
+
+describe("sql.function-settings-shell on a declared function", () => {
+  // Задекларовану функцію судить закрита оболонка в будь-якому файлі (спека
+  // декларацій функцій §5.1), тож окремий `ALTER` послабив би її повз неї.
+  it("rejects ALTER FUNCTION of a declared shared function", async () => {
+    const result = await compiledPolicyDomain({
+      [SHARED]:
+        sqlFunction("public.plain", "SELECT 1") +
+        "ALTER FUNCTION public.plain() SECURITY DEFINER;\n",
+      [SHARED.replace(/\.sql$/, ".functions.json")]: JSON.stringify({
+        functions: [
+          { id: uuid(7301), function: { name: "plain" }, callers: [] },
+        ],
+      }),
+    })
+    expect(
+      diagnosticBrief(result.diagnostics, ["sql.function-settings-shell"])
+    ).toEqual([
+      {
+        code: "sql.function-settings-shell",
+        file: SHARED,
+        params: { function: "public.plain", setting: "security" },
+      },
+    ])
   })
 })

@@ -67,7 +67,8 @@ function buildScoped(entries: Record<string, unknown>): PhysicalSnapshot {
   const stage2 = checkIdentity(
     stage1.objects,
     stage1.brokenNames,
-    stage1.project
+    stage1.project,
+    stage1.functionsFiles
   )
   return buildModel(
     stage1.objects,
