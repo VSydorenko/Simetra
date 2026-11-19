@@ -92,6 +92,7 @@ async function connectWith(o: McpToolOptions): Promise<Client> {
 interface Out {
   ok: boolean
   written: boolean
+  wouldWrite?: true
   changes: { path: string; deleted: boolean }[]
   diagnostics: Diagnostic[]
 }
@@ -516,10 +517,38 @@ describe("simetra mcp", TOOL_PIPELINE, () => {
     expect(r.isError).toBe(true)
     expect(r.out.ok).toBe(false)
     expect(r.out.written).toBe(true)
+    expect(r.text).toContain(
+      "written: the result keeps only repair-class errors the directory already had"
+    )
+    expect(r.text).not.toContain("nothing written")
     expect(r.out.changes.map((c) => c.path)).toEqual([CURRENCY])
     expect(
       r.out.diagnostics.filter((d) => d.severity === "error").map((d) => d.code)
     ).toEqual(["sql.definer-caller-unchecked"])
+  })
+
+  it("add --dryRun into a folder with repair-class errors only returns wouldWrite and writes nothing", async () => {
+    const dir = await project()
+    await writeFile(
+      join(dir, "sql/app/rpc.sql"),
+      "CREATE FUNCTION app.rpc() RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;\n"
+    )
+    const before = await snapshotOf(dir)
+    const client = await connect(dir, false)
+    const r = await call(client, "add", {
+      target: { kind: "Catalog", name: "Currency" },
+      collection: "attributes",
+      element: { name: "note", type: "Boolean" },
+      dryRun: true,
+    })
+    expect(r.out.ok).toBe(false)
+    expect(r.out.written).toBe(false)
+    expect(r.out.wouldWrite).toBe(true)
+    expect(r.text).toContain(
+      "would write: the result keeps only repair-class errors the directory already had"
+    )
+    expect(r.text).not.toContain("nothing written")
+    expect(await snapshotOf(dir)).toEqual(before)
   })
 
   it("dry run writes nothing", async () => {

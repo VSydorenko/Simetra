@@ -215,6 +215,7 @@ export async function invoke<D>(
       // в нього немає)
       let write = false
       let writeArtifacts = false
+      let wouldWrite = false
       const files: FilesAccess = tool.files
       switch (files) {
         case "read":
@@ -234,6 +235,12 @@ export async function invoke<D>(
           const accepted = outcome.ok || outcome.written === true
           write = accepted && !o.dryRun && outcome.changes.length > 0
           writeArtifacts = accepted && !o.dryRun && artifacts.length > 0
+          // Без цього сигналу перегляд прийнятого результату з `ok: false`
+          // не відрізнити від відхиленого: обидва `written: false`
+          wouldWrite =
+            accepted &&
+            o.dryRun &&
+            (outcome.changes.length > 0 || artifacts.length > 0)
           break
         }
       }
@@ -246,6 +253,7 @@ export async function invoke<D>(
       return {
         ok: outcome.ok,
         written: write || writeArtifacts,
+        ...(wouldWrite ? { wouldWrite: true as const } : {}),
         changes: outcome.changes.map((c) => ({
           path: c.path,
           deleted: c.content === null,

@@ -297,7 +297,34 @@ describe("tool catalog", TOOL_PIPELINE, () => {
         }
       )
       expect(r.written).toBe(false)
+      // Перегляд каже, що запуск без `--dry-run` записав би результат
+      expect(r.wouldWrite).toBe(true)
       expect(existsSync(join(dir, NOTE))).toBe(false)
+    })
+
+    it("a dry run of a not-ok result without written would write nothing", async () => {
+      const dir = await project()
+      const r = await invoke(
+        writer({ ok: false }),
+        {},
+        {
+          ...opts(dir),
+          dryRun: true,
+        }
+      )
+      expect(r.written).toBe(false)
+      expect(r.wouldWrite).toBeUndefined()
+    })
+
+    it("a real run carries no wouldWrite", async () => {
+      const dir = await project()
+      const r = await invoke(
+        writer({ ok: false, written: true }),
+        {},
+        opts(dir)
+      )
+      expect(r.written).toBe(true)
+      expect(r.wouldWrite).toBeUndefined()
     })
   })
 

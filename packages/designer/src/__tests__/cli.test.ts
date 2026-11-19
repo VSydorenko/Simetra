@@ -144,6 +144,40 @@ describe("cli adapter", TOOL_PIPELINE, () => {
     )
   })
 
+  // Перегляд того самого результату: прийнятий режимом `repair`, він
+  // показується як «записав би», а не «нічого не записано»
+  it("create --dry-run into a folder with repair-class errors only says it would write", async () => {
+    const dir = await project()
+    await writeFile(join(dir, RPC_SQL), RPC_DEFINER)
+    const r = await runTool(tool("create"), {
+      _: [JSON.stringify(scratch), dir],
+      "dry-run": true,
+    })
+    expect(r.exitCode).toBe(1)
+    expect(r.stdout).toContain(
+      "would write: the result keeps only repair-class errors the directory already had"
+    )
+    expect(r.stdout).not.toContain("nothing written")
+    expect(existsSync(join(dir, "catalogs/Scratch/Scratch.meta.json"))).toBe(
+      false
+    )
+  })
+
+  it("create --dry-run --format json into a folder with repair-class errors only carries wouldWrite", async () => {
+    const dir = await project()
+    await writeFile(join(dir, RPC_SQL), RPC_DEFINER)
+    const r = await runTool(tool("create"), {
+      _: [JSON.stringify(scratch), dir],
+      "dry-run": true,
+      format: "json",
+    })
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      ok: false,
+      written: false,
+      wouldWrite: true,
+    })
+  })
+
   it("delete without --yes changes nothing and exits 2", async () => {
     const dir = await withScratch()
     const before = await snapshotOf(dir)

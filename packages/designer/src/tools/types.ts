@@ -175,6 +175,12 @@ export type RefusalReason =
 export interface ToolResult<D = unknown> {
   ok: boolean
   written: boolean
+  /**
+   * Перегляд (`dryRun`) результату, який запуск без перегляду записав би:
+   * при `ok: false` — прийнятий режимом `repair` (спека декларацій функцій
+   * §5.1). Поза переглядом відсутній — там відповідає `written`.
+   */
+  wouldWrite?: true
   changes: { path: string; deleted: boolean }[]
   diagnostics: Diagnostic[]
   data?: D
