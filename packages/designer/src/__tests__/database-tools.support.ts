@@ -10,12 +10,15 @@ import type { DiffData } from "../tools/database-tools"
 import {
   compile,
   loadSqlParser,
+  type CompiledModel,
   platformInstall,
   renderModelIndependentLayer,
   renderSharedTriggerFunctions,
 } from "simetra/compiler"
 import {
   applyStateOwnership,
+  desiredForApply,
+  renderApplyState,
   renderDesiredState,
   type EngineScope,
 } from "simetra/schema"
@@ -24,13 +27,17 @@ import {
   acceptDebt,
   catalog,
   metaFiles,
+  movementQuery,
   project as projectFile,
   runTag,
+  superuserClient,
   testProvider,
+  testRoleName,
 } from "../../../simetra/test/support"
-import { inTarget as loadTarget } from "./support/db"
+import { dropRoles, inTarget as loadTarget, query } from "./support/db"
 import { installMismatch, installObjects } from "./support/platform-install"
 import { leftoverShadows, provisionedShadows } from "./support/shadows"
+import { snapshotOf } from "./helpers/catalog"
 
 /**
  * Спільна підготовка тестів `introspect` і `diff` над живою базою
@@ -368,6 +375,170 @@ export function describeToolPathInvariants(): void {
           expect(await leftoverShadows(mark)).toEqual([])
         }
       )
+    })
+  })
+
+  describe("over an applied folder what the folder describes is judged by diff and the reference", () => {
+    /**
+     * Тека `files`, застосована повністю: бажаний SQL моделі й стан
+     * застосування, тож `diff` до будь-якої зміни порожній.
+     */
+    async function applied(
+      files: ReadonlyMap<string, string>,
+      fn: (dir: string, url: string, model: CompiledModel) => Promise<void>
+    ): Promise<void> {
+      const compiled = await compile(files)
+      expect(
+        compiled.diagnostics.filter((d) => d.severity === "error")
+      ).toEqual([])
+      const model = compiled.model!
+      const { scope } = await desiredForApply(model)
+      await inTarget(
+        `${renderDesiredState(model).sql}\n\n${renderApplyState(model)}`,
+        [...scope.schemas],
+        async (url) => {
+          const dir = await freshProject()
+          for (const [path, text] of files) {
+            await mkdir(dirname(join(dir, path)), { recursive: true })
+            await writeFile(join(dir, path), text)
+          }
+          await fn(dir, url, model)
+        }
+      )
+    }
+
+    /** Функція з файлу теки фікстури запиту рухів (`sql/app/…`). */
+    const FILE_FUNCTION = "function:app.org_ids()"
+    /** Обгортка запиту рухів документа «Продаж» за регістром «Залишки». */
+    const MOVEMENT_WRAPPER = "function:app.sale_stock_movements(uuid)"
+
+    /** Той самий текст одиниці, що замінює наявну функцію. */
+    const replacing = (sql: string): string => {
+      expect(sql).toMatch(/^CREATE (OR REPLACE )?FUNCTION /)
+      return sql.replace(
+        /^CREATE (OR REPLACE )?FUNCTION /,
+        "CREATE OR REPLACE FUNCTION "
+      )
+    }
+
+    it("a folder file function and the movement query wrapper with another body in the database are each a diff row (Р4)", async () => {
+      // Одиниці файлу теки й обгортку запиту рухів прийом поверх теки не
+      // судить за вмістом (їх описує тека, Р4): розбіжність тіла мусить
+      // показати `diff`, рядок на кожну, а не тиша
+      await applied(movementQuery(testProvider()), async (dir, url, model) => {
+        const env = { [ENV]: url }
+        const diff = async () =>
+          (await call("diff", {}, options(dir, env))).data as DiffData
+        expect(await diff()).toMatchObject({
+          plan: [],
+          differences: [],
+          empty: true,
+        })
+        const file = model.sqlUnits.find(
+          (u) => u.file !== undefined && u.identity === FILE_FUNCTION
+        )
+        const wrapper = model.sqlUnits.find(
+          (u) => u.class === "movementQuery" && u.identity === MOVEMENT_WRAPPER
+        )
+        expect(file).toBeDefined()
+        expect(wrapper).toBeDefined()
+        expect(file!.sql).toContain("SELECT id FROM app.organization")
+        expect(wrapper!.sql).toContain("ORDER BY g.line_number")
+        await query(
+          url,
+          replacing(file!.sql).replace(
+            "SELECT id FROM app.organization",
+            "SELECT id FROM app.organization WHERE false"
+          )
+        )
+        await query(
+          url,
+          replacing(wrapper!.sql).replace(
+            "ORDER BY g.line_number",
+            "ORDER BY g.qty"
+          )
+        )
+        const data = await diff()
+        expect(data.diagnostics.filter((d) => d.severity === "error")).toEqual(
+          []
+        )
+        expect(
+          data.differences.map((d) => ({ path: d.path, kind: d.kind }))
+        ).toEqual([
+          { path: `units.${FILE_FUNCTION}`, kind: "changed" },
+          { path: `units.${MOVEMENT_WRAPPER}`, kind: "changed" },
+        ])
+        // Двигун замінює тіло на місці: дія `alter` над самою функцією
+        expect(
+          data.plan.map((a) => ({ verb: a.verb, consumes: a.consumes }))
+        ).toEqual([
+          { verb: "alter", consumes: [FILE_FUNCTION, "schema:app"] },
+          { verb: "alter", consumes: [MOVEMENT_WRAPPER, "schema:app"] },
+        ])
+        expect(data.empty).toBe(false)
+      })
+    })
+
+    it("a second introspect over the first's folder changes nothing", async () => {
+      // Другий прохід іде шляхом наявної теки з тінню: файли теки, обгортку
+      // запиту рухів і згенеровані одиниці еталон теки впізнає, тож прохід
+      // нічого не пише й не додає діагностик до діагностик самої теки
+      await applied(movementQuery(testProvider()), async (dir, url) => {
+        const env = { [ENV]: url }
+        const first = await call("introspect", {}, options(dir, env))
+        expect(errors(first)).toEqual([])
+        const before = await snapshotOf(dir)
+        const again = await call("introspect", {}, options(dir, env))
+        // Єдина діагностика — попередження самої теки фікстури (скоуп «org»
+        // ніхто не читає), а не прийому
+        expect(
+          again.diagnostics.map((d) => ({ code: d.code, severity: d.severity }))
+        ).toEqual([{ code: "rights.scope-kind-unread", severity: "warning" }])
+        expect(again.changes).toEqual([])
+        expect(again.written).toBe(false)
+        expect(await snapshotOf(dir)).toEqual(before)
+      })
+    })
+
+    it("a foreign grant on a kind table is refused over the folder, not dropped (И7)", async () => {
+      // Таблицю виду тека грантує сама (контракт доступу): грант іншій ролі
+      // з еталоном не збігається, тож іде в теку, і компілятор його називає
+      const role = testRoleName("db_tools_grantee")
+      const client = await superuserClient()
+      try {
+        await client.query(`CREATE ROLE ${role} NOLOGIN`)
+      } finally {
+        await client.end()
+      }
+      try {
+        await applied(
+          movementQuery(testProvider()),
+          async (dir, url, model) => {
+            expect(
+              model.sqlUnits.some(
+                (u) =>
+                  u.class === "grant" &&
+                  u.identity.startsWith("grant:grant:table:app.item:")
+              )
+            ).toBe(true)
+            await query(url, `GRANT SELECT ON TABLE app.item TO ${role}`)
+            const before = await snapshotOf(dir)
+            const r = await call("introspect", {}, options(dir, { [ENV]: url }))
+            expect(r.written).toBe(false)
+            expect(
+              errors(r).map((d) => ({ code: d.code, file: d.file }))
+            ).toEqual([
+              {
+                code: "sql.generated-grant",
+                file: `sql/app/grant__table__app_item__${role}__select.sql`,
+              },
+            ])
+            expect(await snapshotOf(dir)).toEqual(before)
+          }
+        )
+      } finally {
+        await dropRoles(role)
+      }
     })
   })
 }
