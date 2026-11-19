@@ -893,6 +893,20 @@ export async function revalidate(
     )
     return
   }
+  await singleFlight(ctx, o, targets, options).done
+}
+
+/**
+ * The explicit-call path over a given view set (§6.3, single-flight): a view
+ * not in flight is read once now, a view in flight gets the one shared tail.
+ * `started` is the number of views read now.
+ */
+export function singleFlight(
+  ctx: WriterContext,
+  o: ObjectState,
+  targets: readonly Subset[],
+  options: RevalidateOptions
+): { started: number; done: Promise<void> } {
   // Явний виклик: вигляд у польоті отримує один хвіст — ще один прохід після
   // осідання з новою епохою старту; наступні виклики чекають той самий хвіст.
   const tails = targets.filter(inFlight).map((s) => {
@@ -906,14 +920,13 @@ export async function revalidate(
     s.rereadTail ??= tailPass(ctx, o, s)
     return s.rereadTail
   })
-  await Promise.all([
-    revalidateViews(
-      ctx,
-      o,
-      targets.filter((s) => !inFlight(s))
+  const fresh = targets.filter((s) => !inFlight(s))
+  return {
+    started: fresh.length,
+    done: Promise.all([revalidateViews(ctx, o, fresh), ...tails]).then(
+      () => undefined
     ),
-    ...tails,
-  ])
+  }
 }
 
 type RevalidateOptions = {

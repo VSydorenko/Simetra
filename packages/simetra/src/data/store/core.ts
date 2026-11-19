@@ -32,7 +32,7 @@ import {
   revalidate,
   revalidateHolders,
   revalidateHydrated,
-  revalidateViews,
+  singleFlight,
   rereadKey,
   setVisible,
   type WriterContext,
@@ -828,8 +828,12 @@ export function createCore(options: {
       if (held.retry !== undefined && held.retry.at <= now()) {
         const views = [...held.retry.views].filter((s) => s.alive && !s.purged)
         held.retry = undefined
+        // Повтор іде тим самим single-flight шляхом, що й явний `revalidate`.
+        const flight = singleFlight(writerContext, objectOf(name), views, {
+          visibleOnly: false,
+        })
         if (views.length > 0) ran = true
-        revalidateViews(writerContext, objectOf(name), views).catch(catchLog)
+        flight.done.catch(catchLog)
       }
       if (held.whole === undefined && held.retry === undefined)
         scheduled.delete(name)

@@ -1106,6 +1106,34 @@ describe("core: the epoch switch", () => {
     expect(h.inspect.serviceSizes().scheduledObjects).toBe(0)
   })
 
+  it("the switch time and the retry are due together on resume(): the view is read once now and once in the tail, not twice at once", async () => {
+    const h = await proven()
+    h.core.suspend()
+    // Перемикання на прихованій вкладці ставить цілий строк об'єкта.
+    h.fake.epoch = EC
+    h.handle.refresh()
+    await deliver(h)
+    // Відкинута відповідь ставить повтор того ж вигляду.
+    h.fake.epoch = EA
+    void h.core.revalidate(TASK, { visibleOnly: false })
+    await deliver(h)
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(1)
+    // Обидва строки минули на прихованій вкладці.
+    vi.advanceTimersByTime(INTERVAL + DISCARD_PAUSE_MS)
+    h.fake.epoch = EC
+    h.core.resume()
+    await settle()
+    // Повтор іде тим самим single-flight шляхом: вигляд у польоті не читається вдруге.
+    expect(h.fake.pending.filter(isKeys)).toHaveLength(1)
+    h.fake.deliverAll()
+    await settle()
+    // Один спільний хвіст після осідання.
+    expect(h.fake.pending.filter(isKeys)).toHaveLength(1)
+    h.fake.deliverAll()
+    await settle()
+    expect(h.fake.pending.filter(isKeys)).toHaveLength(0)
+  })
+
   it("close clears the timers of a switch", async () => {
     const h = await loaded()
     h.fake.epoch = EB
