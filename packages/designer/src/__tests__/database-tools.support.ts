@@ -407,8 +407,17 @@ export function describeToolPathInvariants(): void {
       )
     }
 
-    /** Функція з файлу теки фікстури запиту рухів (`sql/app/…`). */
-    const FILE_FUNCTION = "function:app.org_ids()"
+    /**
+     * Файл SQL об'єкта (довідника), а не розкладка прийому
+     * (`sql/<схема>/<файл>.sql` — розкладка самого `introspect`, її одиниці
+     * судить еталон): його одиниці описує тека (Р4).
+     */
+    const OWN_FILE = "catalogs/Item/Item.sql"
+    const FILE_FUNCTION = "function:app.item_count()"
+    const OWN_SQL =
+      "CREATE FUNCTION app.item_count() RETURNS bigint LANGUAGE sql STABLE\n" +
+      "  SET search_path = ''\n" +
+      "  AS $$ SELECT count(*) FROM app.item $$;\n"
     /** Обгортка запиту рухів документа «Продаж» за регістром «Залишки». */
     const MOVEMENT_WRAPPER = "function:app.sale_stock_movements(uuid)"
 
@@ -425,7 +434,10 @@ export function describeToolPathInvariants(): void {
       // Одиниці файлу теки й обгортку запиту рухів прийом поверх теки не
       // судить за вмістом (їх описує тека, Р4): розбіжність тіла мусить
       // показати `diff`, рядок на кожну, а не тиша
-      await applied(movementQuery(testProvider()), async (dir, url, model) => {
+      const files = await acceptDebt(
+        new Map([...movementQuery(testProvider()), [OWN_FILE, OWN_SQL]])
+      )
+      await applied(files, async (dir, url, model) => {
         const env = { [ENV]: url }
         const diff = async () =>
           (await call("diff", {}, options(dir, env))).data as DiffData
@@ -434,21 +446,27 @@ export function describeToolPathInvariants(): void {
           differences: [],
           empty: true,
         })
+        // Перший прийом розкладає SQL фікстури за своїми правилами (файл
+        // `sql/public/…` — у файли одиниць); зміни тіл нижче судить уже другий
+        expect(errors(await call("introspect", {}, options(dir, env)))).toEqual(
+          []
+        )
+        const before = await snapshotOf(dir)
         const file = model.sqlUnits.find(
-          (u) => u.file !== undefined && u.identity === FILE_FUNCTION
+          (u) => u.file === OWN_FILE && u.identity === FILE_FUNCTION
         )
         const wrapper = model.sqlUnits.find(
           (u) => u.class === "movementQuery" && u.identity === MOVEMENT_WRAPPER
         )
         expect(file).toBeDefined()
         expect(wrapper).toBeDefined()
-        expect(file!.sql).toContain("SELECT id FROM app.organization")
+        expect(file!.sql).toContain("SELECT count(*) FROM app.item")
         expect(wrapper!.sql).toContain("ORDER BY g.line_number")
         await query(
           url,
           replacing(file!.sql).replace(
-            "SELECT id FROM app.organization",
-            "SELECT id FROM app.organization WHERE false"
+            "SELECT count(*) FROM app.item",
+            "SELECT count(*) + 1 FROM app.item"
           )
         )
         await query(
@@ -458,6 +476,11 @@ export function describeToolPathInvariants(): void {
             "ORDER BY g.qty"
           )
         )
+        // Прийом поверх теки ці одиниці не переписує з бази: їх описує тека
+        const adopted = await call("introspect", {}, options(dir, env))
+        expect(errors(adopted)).toEqual([])
+        expect(adopted.changes).toEqual([])
+        expect(await snapshotOf(dir)).toEqual(before)
         const data = await diff()
         expect(data.diagnostics.filter((d) => d.severity === "error")).toEqual(
           []
