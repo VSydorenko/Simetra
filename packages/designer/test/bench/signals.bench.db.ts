@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto"
-import { readFileSync } from "node:fs"
 import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { BATCH_MAX, PLATFORM_ROLES, type Operation } from "simetra/model"
 import { createCommandRuntime, fromPgPool } from "simetra/server"
 import { TICKET_WRITER_ID } from "../../../simetra/test/support"
 import { withRuntimeLogin } from "../../src/__tests__/support/db"
+import { SIGNAL_HISTORY_SIZE } from "../../src/tools/signals-config"
 import {
   REQUEST_ROLE,
   TICKET,
@@ -30,26 +30,6 @@ const PHASES = BATCH_MAX
 const RUNS = 5
 /** Частка ціни пакета без outbox, яку можуть з'їсти сигнали до порогу. */
 const SHARE = 0.1
-
-/** `history_size` простору `simetra` у конфігу Centrifugo стека postgres. */
-function historySize(): number {
-  const config = JSON.parse(
-    readFileSync(
-      new URL(
-        "../../../../docker/postgres-stack/centrifugo.json",
-        import.meta.url
-      ),
-      "utf8"
-    )
-  ) as {
-    channel: { namespaces: { name: string; history_size: number }[] }
-  }
-  const size = config.channel.namespaces.find(
-    (n) => n.name === "simetra"
-  )?.history_size
-  if (size === undefined) throw new Error("namespace simetra has no history")
-  return size
-}
 
 const median = (values: number[]) =>
   [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!
@@ -131,7 +111,7 @@ describe("signal merge threshold", () => {
     const merged = median(times.merged)
     const signal = (withOutbox - merged) / (PHASES - 2)
     const phase = merged / PHASES
-    const history = historySize()
+    const history = SIGNAL_HISTORY_SIZE
     const byCost =
       signal <= 0
         ? Infinity

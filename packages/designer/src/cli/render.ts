@@ -19,6 +19,7 @@ import {
 } from "../tools/data-tools"
 import type { RightsMaintenanceData } from "../tools/rights-maintenance-tool"
 import type { RolesData } from "../tools/roles-tool"
+import type { SignalsConfigData } from "../tools/signals-config"
 
 /** Текст пояснення об'єкта для терміналу; JSON-вигляд друкується як є. */
 export function renderExplanation(e: Explanation): string {
@@ -208,6 +209,17 @@ export function renderResult(
               2
             )
           : `assigned ${done.assignment}${done.member === undefined ? "" : ` to member ${done.member}`}`,
+    }
+  }
+  // Текстовий вигляд — рівно файл конфігу, щоб його можна було перенаправити
+  // у файл; імена змінних DSN — у JSON-вигляді й в описі інструмента
+  if (tool.name === "signals-config" && r.data !== undefined) {
+    const data = r.data as SignalsConfigData
+    return {
+      stdout:
+        o.format === "json"
+          ? JSON.stringify({ ok: r.ok, ...data }, null, 2)
+          : JSON.stringify(data.config, null, 2),
     }
   }
   // Дані рантайму — лише коли вони є; помилка компіляції чи збій бази

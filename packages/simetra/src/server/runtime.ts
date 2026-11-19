@@ -1,6 +1,7 @@
 import {
   APPLIED_SNAPSHOT_HASH_FUNCTION_NAME,
   BATCH_MAX,
+  CENTRIFUGO_CHANNEL_MAX,
   LIMIT_REASONS,
   LOGIN_ROLE_REQUEST_PURPOSES,
   OBJECT_MODULE_KEYS,
@@ -13,6 +14,8 @@ import {
   PROVIDER_OWNER_ROLES,
   READ_BATCH_MAX,
   READ_BATCH_STATEMENTS_MAX,
+  SIGNAL_MERGE_THRESHOLD,
+  SIGNAL_TOPIC_ALLOWED_FUNCTION_NAME,
   TABULAR_LINES_MAX,
   runtimeCatalogSchema,
   sessionClaimsSchema,
@@ -48,9 +51,11 @@ import {
   type ReadPlan,
   type ReadStatementRunner,
 } from "./read"
+import { createChannelGrant, type ChannelGrant } from "./signals/grant"
 import {
   COMMAND_ROLE,
   COMMIT,
+  CURRENT_USER,
   EPOCH,
   ReadBudget,
   epochOf,
@@ -213,7 +218,27 @@ export interface CommandRuntime {
     parts: readonly ReadPart[],
     options?: ReadPartsOptions
   ): Promise<ReadPartsResult>
+  /**
+   * The signal channels the session may subscribe to (P4-B spec §8.3), as
+   * the `ChannelGrant` the token port of `simetra/server/signals` signs. One
+   * `READ ONLY` transaction under the request role asks `current_user_id()`
+   * and `signal_topic_allowed(<channel>, false)` for every channel.
+   * `subject` is that user id, not the raw `sub`; `null` — an anonymous
+   * session (no database call) or no valid user, and then no channels.
+   * `channels` — the allowed ones, sorted, without duplicates. Rejects with
+   * `CommandFailure`: `command.unauthenticated`; `command.invalid` before the
+   * database — over 256 channels (`reason:
+   * "batch-too-large"`) or a channel over `CENTRIFUGO_CHANNEL_MAX` UTF-8
+   * bytes (`reason: "too-large"`, `path` — its index).
+   */
+  authorizeChannels(
+    session: SessionClaims,
+    channels: readonly string[]
+  ): Promise<ChannelGrant>
 }
+
+// Межа каналів одного виклику `authorizeChannels` (Р5 плану B2).
+const AUTHORIZE_CHANNELS_MAX = 256
 
 /**
  * The request role of `purpose` the server reads under for a provider
@@ -393,11 +418,6 @@ const limitSchema = z.int().min(1).optional()
 // ще схема, тож така опція була б оманою конфігурації.
 const maxBatchSchema = z.int().min(1).max(BATCH_MAX).optional()
 const maxTabularLinesSchema = z.int().min(1).max(TABULAR_LINES_MAX).optional()
-// Типовий поріг злиття сигналів — з бенчмарку `bench:signals` (спека П4-B
-// §8.2); поріг + 1 (`invalidate`) ≤ `history_size` простору `simetra`
-// (спека профілю postgres §6.1).
-const SIGNAL_MERGE_THRESHOLD = 90
-
 // Бюджет менший за секунду не вміщує й одного кругового запиту з запасом.
 const budgetSchema = z.int().min(1000).optional()
 
@@ -630,6 +650,8 @@ export async function createCommandRuntime(
     },
     readParts: (session, parts, options) =>
       readParts(state, session, parts, options),
+    authorizeChannels: (session, channels) =>
+      authorizeChannels(state, session, channels),
   }
 }
 
@@ -842,4 +864,117 @@ async function readParts(
     state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
   }
   return { epoch, items }
+}
+
+const CHANNELS_ALLOWED = `SELECT c AS channel FROM pg_catalog.unnest($1::text[]) AS c WHERE ${ident(PLATFORM_SCHEMA)}.${ident(SIGNAL_TOPIC_ALLOWED_FUNCTION_NAME)}(c, false)`
+const utf8 = new TextEncoder()
+
+/**
+ * Канали запиту — відсортовані й без повторів; межі — до бази: запит на
+ * тисячі каналів інакше тримав би з'єднання оракулом прав на кожен.
+ */
+function requestedChannels(channels: readonly string[]): string[] {
+  const invalid = (error: Omit<CommandError, "code">) =>
+    new CommandFailure({ code: "command.invalid", ...error })
+  // Викликач у процесі типу не проходить: масив — із тіла запиту host-а.
+  if (!Array.isArray(channels)) throw invalid({})
+  if (channels.length > AUTHORIZE_CHANNELS_MAX) {
+    throw invalid({ reason: LIMIT_REASONS.batchTooLarge })
+  }
+  channels.forEach((channel: unknown, index) => {
+    if (typeof channel !== "string") throw invalid({ path: String(index) })
+    // Межа Centrifugo — в октетах, не в символах.
+    if (utf8.encode(channel).length > CENTRIFUGO_CHANNEL_MAX) {
+      throw invalid({ reason: LIMIT_REASONS.tooLarge, path: String(index) })
+    }
+  })
+  return [...new Set(channels)].sort()
+}
+
+/**
+ * Дозвіл каналів сигналів (спека П4-B §8.3; Р5, Р12 плану B2): єдиний
+ * виробник `ChannelGrant`. Користувача дає `current_user_id()` під claims
+ * сесії, а не сирий `sub`; канал — лише той, який оракул пропустив у режимі
+ * підписки під роллю запиту, як для PostgREST з тими самими claims.
+ */
+async function authorizeChannels(
+  state: RuntimeState,
+  session: SessionClaims,
+  channels: readonly string[]
+): Promise<ChannelGrant> {
+  // До будь-якого I/O: друге з'єднання в хуку чекало б на замок своєї ж
+  // команди.
+  rejectNested()
+  const kind = checkedKind(state.catalog.provider, session)
+  const requested = requestedChannels(channels)
+  // Гість не має ні з'єднання, ні каналів (інваріант 9): до бази не йде.
+  if (kind === "anonymous") return createChannelGrant(null, [])
+  const claims = claimsOf(session)
+  const role = readRoleFor(state, session)
+  let client: DatabaseClient
+  try {
+    client = await state.database.connect()
+  } catch (raw) {
+    throw new CommandFailure(readRefusal(raw, state, undefined).error)
+  }
+  const send = async (statement: {
+    text: string
+    params: readonly (string | null)[]
+  }) => {
+    try {
+      return await client.query(statement.text, statement.params)
+    } catch (raw) {
+      throw new Refused(readRefusal(raw, state, undefined))
+    }
+  }
+  let user: string | null
+  let allowed: string[] = []
+  let tag: string
+  try {
+    await send({ text: BEGIN_READ, params: [] })
+    await send(
+      readSetupStatement(
+        claims,
+        state.readTimeout,
+        state.readBudgetMs + 1000,
+        role
+      )
+    )
+    const users = (await send(CURRENT_USER)).rows
+    const id = users[0]?.user_id
+    if (users.length !== 1 || (typeof id !== "string" && id !== null)) {
+      throw new Error("current_user_id answered no user row")
+    }
+    user = id
+    // Без дійсного користувача оракул каналу не відкриє жодного: запит зайвий.
+    if (user !== null && requested.length > 0) {
+      const { rows } = await send({
+        text: CHANNELS_ALLOWED,
+        params: [textArray(requested)],
+      })
+      const asked = new Set(requested)
+      const answered = new Set(rows.map((row) => row.channel))
+      // Відповідь поза запитом — аномалія: грант несе лише запитане.
+      if ([...answered].some((c) => typeof c !== "string" || !asked.has(c))) {
+        throw new Error("signal_topic_allowed answered a channel not asked")
+      }
+      allowed = requested.filter((channel) => answered.has(channel))
+    }
+    ;({ command: tag } = await send(COMMIT))
+  } catch (error) {
+    if (error instanceof Refused) {
+      await endFailed(client, error.refusal.destroy)
+      throw new CommandFailure(error.refusal.error)
+    }
+    state.log({ kind: "database", error })
+    await endFailed(client, false)
+    throw new CommandFailure(INTERNAL)
+  }
+  client.release()
+  // Дозвіл — лише з зафіксованої транзакції: інакше грант не доведений.
+  if (tag !== "COMMIT") {
+    state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
+    throw new CommandFailure(INTERNAL)
+  }
+  return createChannelGrant(user, allowed)
 }

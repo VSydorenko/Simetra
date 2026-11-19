@@ -651,7 +651,8 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
   нічого; одне сповіщення на команду з кількома сигналами; `ROLLBACK` —
   ні рядка, ні сповіщення;
 - стенд (Centrifugo в контейнері, §10.4): сигнал команди доходить у канал
-  з `LISTEN` за ≤ 50 мс p95 без мережі; з обірваним `LISTEN` — за такт
+  з `LISTEN` (гейт: p95 менше за половину такту опитування; ціль ≤ 50 мс
+  p95 без мережі міряє `bench:signals`); з обірваним `LISTEN` — за такт
   опитування; логін `simetra_signals` з грантами лише цієї спеки працює
   (доказ «лише `SELECT` і `DELETE`» на справжньому споживачі).
 
@@ -674,6 +675,7 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
     "recovery_max_publication_limit": 300
   },
   "channel": {
+    "max_length": 255,
     "without_namespace": {},
     "namespaces": [
       { "name": "simetra",        "history_size": 100, "history_ttl": "300s", "history_meta_ttl": "24h", "force_recovery": true },
@@ -682,7 +684,9 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
     ]
   },
   "consumers": [ { "enabled": true, "name": "simetra_outbox", "type": "postgresql", "postgresql": { "…": "§5.3" } } ],
-  "http_api": { "disabled": true }
+  "http_api": { "disabled": true },
+  "health": { "enabled": true },
+  "log": { "level": "info" }
 }
 ```
 
@@ -708,6 +712,13 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
   `http_api.disabled`, але без споживача outbox і без `client.token` —
   таблиці outbox і JWKS ще немає. Unit-тест файлів стека перевіряє його тими
   самими заборонами, без вимоги `audience` і `issuer`.
+- `client.presence_update_interval` — `5s`, `client.expired_sub_close_delay` —
+  `25s`, `client.expired_close_delay` — `25s`: вони задають межі відкликання
+  підписки й з'єднання (§6.2). Білий список приймає їх лише не більшими за ці
+  значення — більше значення відсунуло б межу за число спеки.
+- `channel.max_length` — `CENTRIFUGO_CHANNEL_MAX` (255), `health.enabled` —
+  `true` (від нього залежить healthcheck стека), `log.level` — `"info"`;
+  білий список приймає лише ці значення.
 - `http_api` вимкнено: публікація йде лише з outbox. Оператор, якому
   потрібен API, вмикає його лише у внутрішній мережі з ключем.
 - **Розмір історії.** `history_size` 100 на канал змін покриває типовий
@@ -727,9 +738,12 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
 | з'єднання | `sub` = id користувача з `authorizeChannels` (`current_user_id()`), не сирий `claims.sub`; `aud`, `iss`, `exp` | 15 хв | endpoint host-а після `verifySession`; без сесії, для аноніма й коли `current_user_id()` = `NULL` (недійсний користувач) — 401 |
 | каналу | `sub`, `channel`, `aud`, `iss`, `exp` | 5 хв | endpoint host-а: `runtime.authorizeChannels` (П4-B) повертає дозволені канали, порт підписує токен на кожен |
 
-- Межа відкликання — TTL токена плюс `client.expired_sub_close_delay`
-  Centrifugo (типово 25 с; для з'єднання — `expired_close_delay`). Типові
-  значення лишаються, у білий список ключів конфігу не входять.
+- Межа відкликання підписки — TTL токена каналу + `client.expired_sub_close_delay`
+  (25 с) + `client.presence_update_interval` (5 с) = 5 хв 30 с: Centrifugo
+  перевіряє строк підписки лише на такті присутності клієнта. Обидва ключі
+  генератор пише явно (§6.1), не покладаючись на типові значення образу.
+  З'єднання закривається власним таймером строку: TTL токена з'єднання +
+  `client.expired_close_delay` (25 с; ключ пишеться явно, §6.1).
 - Клієнт оновлює обидва токени колбеком `getToken` SDK до `exp`; відмова
   авторизації каналу — `auth` порту каналу без автоповтору (П4-B).
 - Відкликане право перестає тримати підписку щонайпізніше через TTL токена
@@ -767,14 +781,20 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
 - `aud` — `centrifugo:<project.name>` (окремого id застосунку немає), `iss` — origin host-а; Centrifugo
   перевіряє обидва (`client.token.audience`, `client.token.issuer`), тож
   токен іншого застосунку чи середовища не приймається.
-- Host публікує JWKS на шляху `SIGNALS_JWKS_PATH` (`/simetra/signals/jwks`); Centrifugo кешує ключі до
-  години. Centrifugo бере JWKS лише за внутрішньою адресою host-а або через
+- Host публікує JWKS на шляху `SIGNALS_JWKS_PATH` (`/simetra/signals/jwks`); Centrifugo v6 кешує ключі
+  5 хв і на невідомому `kid` перечитує JWKS не частіше ніж раз на 5 с
+  (`internal/jwks/manager.go`, `_defaultTTL`, `_defaultRefetchInterval`); ключ,
+  прибраний з JWKS, перестає прийматися не пізніше ніж за 5 хв. Centrifugo бере JWKS лише за внутрішньою адресою host-а або через
   TLS: підміна відповіді JWKS дала б токен на будь-який канал.
 - **Ротація:** (1) новий ключ додається в JWKS; (2) підпис новим ключем
-  починається не раніше ніж через 1 год 5 хв; (3) старий ключ лишається в
+  починається не раніше ніж через 1 год 5 хв (свідомо консервативний запас над кешем JWKS у 5 хв, а не величина, виведена з кешу); (3) старий ключ лишається в
   JWKS ще 20 хв після останнього підпису (найдовший TTL плюс запас), потім
   зникає. Правило не залежить від того, чи перечитує Centrifugo JWKS на
-  невідомому `kid`.
+  невідомому `kid`. Підписує найновіший невідставлений ключ з `addedAt ≤ now
+  − 65 хв`; найстаріший невідставлений ключ підписує замість нього лише на
+  першому запуску (жоден ключ не має `retiredAt`), а після будь-якої
+  відставки без такого зрілого ключа підпис відмовляє з
+  `signals.no-mature-key`.
 - Компрометація ключа: ключ прибирають з JWKS одразу й перезапускають
   Centrifugo (скидає кеш). Клієнти перепідключаються з новими токенами,
   нова епоха дає перечитування.
@@ -785,8 +805,8 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
 
 ```text
 SignalTokens = {
-  connectionToken(subject: string): Promise<{ token, expiresAt }>,
-  channelToken(subject: string, channel: string): Promise<{ token, expiresAt }>,
+  connectionToken(grant: ChannelGrant): Promise<{ token, expiresAt }>,
+  channelTokens(grant: ChannelGrant): Promise<{ channel, token, expiresAt }[]>,
   jwks(): JsonWebKeySet
 }
 ```

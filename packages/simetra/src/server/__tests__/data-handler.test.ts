@@ -125,6 +125,7 @@ function counted(runtime: CommandRuntime) {
       calls.readParts++
       return runtime.readParts(...args)
     },
+    authorizeChannels: (...args) => runtime.authorizeChannels(...args),
   }
   return { runtime: wrapped, calls }
 }

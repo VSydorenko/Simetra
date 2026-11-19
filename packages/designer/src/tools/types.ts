@@ -20,6 +20,7 @@ export const TOOL_NAMES = [
   "apply",
   "roles",
   "rights-maintenance",
+  "signals-config",
   "data-read",
   "data-command",
 ] as const

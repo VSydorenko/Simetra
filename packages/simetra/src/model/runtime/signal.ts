@@ -32,6 +32,22 @@ export const SIGNAL_MERGE_MODE = "merge"
  */
 export const SIGNAL_INVALIDATE_FUNCTION_NAME = "signal_invalidate"
 
+/**
+ * The channel oracle (schema `PLATFORM_SCHEMA`), `(p_topic text, p_send
+ * boolean) → boolean`; the command runtime asks it in subscribe mode for
+ * `authorizeChannels`.
+ */
+export const SIGNAL_TOPIC_ALLOWED_FUNCTION_NAME = "signal_topic_allowed"
+
+/**
+ * The default signal merge threshold of the command runtime (P4-B spec §8.2),
+ * set by the `bench:signals` benchmark. The threshold + 1 (the `invalidate`)
+ * must fit the history of the Centrifugo namespace `simetra` (postgres
+ * profile spec §6.1); the config generator of `@simetrajs/designer` is tested
+ * against it.
+ */
+export const SIGNAL_MERGE_THRESHOLD = 90
+
 /** Centrifugo's channel name length limit (`channel_max_length`, octets). */
 export const CENTRIFUGO_CHANNEL_MAX = 255
 
