@@ -923,7 +923,11 @@ export function createCore(options: {
     let due: number | undefined
     dropDeferredWhenUnavailable()
     // Після межі відкинутих планувальник нічого не читає до нової сесії (§6.2).
-    if (session.versions.unavailable()) return undefined
+    if (
+      session.versions.unavailable() &&
+      !defects.has("scheduler-reads-unavailable")
+    )
+      return undefined
     for (const held of scheduled.values()) {
       for (const at of [held.whole, held.retry?.at])
         if (at !== undefined && (due === undefined || at < due)) due = at
@@ -945,7 +949,10 @@ export function createCore(options: {
     closed: () => closed !== undefined || !session.token().valid,
     dueAt: schedulerDue,
     tick() {
-      if (session.versions.unavailable()) {
+      if (
+        session.versions.unavailable() &&
+        !defects.has("scheduler-reads-unavailable")
+      ) {
         scheduled.clear()
         return
       }

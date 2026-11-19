@@ -1984,6 +1984,10 @@ async function runModelOn(
     sub.flight !== undefined || sub.rereadEpochs.length > 0
   const exhausted = (sub: Subset) =>
     sub.status === "error" && sub.error === EPOCH_UNAVAILABLE
+  // Після межі відкинутих планувальник не читає жодного вигляду до нової
+  // сесії (спека §6.2): не лише того, що сам у `unavailable`. Явне читання
+  // (`revalidate`, `resume()`) цього правила не знає.
+  const sessionDown = () => inspect.versionEpochs().unavailable
   /** Ціль планувальника очима моделі (Р3), не функцією ядра. */
   const isTarget = (sub: Subset, tab: boolean = core.visible) =>
     tab &&
@@ -1993,6 +1997,7 @@ async function runModelOn(
     shown(sub) &&
     !inFlight(sub) &&
     !exhausted(sub) &&
+    !sessionDown() &&
     !staled.has(sub.form.object.name) &&
     Number.isFinite(modelDue(sub))
   /** Об'єкти, чий відкладений строк (перемикання епохи, відкинута відповідь) настав. */
@@ -2027,9 +2032,9 @@ async function runModelOn(
     const timers = inspect.serviceSizes().schedulerTimers
     if (timers > 1) fail(label, `scheduler timers ${timers} > 1`)
     const targets = live.filter((sub) => isTarget(sub))
-    const deferred = [...inspect.scheduledDue().keys()].some(
-      (name) => !staled.has(name)
-    )
+    const deferred =
+      !sessionDown() &&
+      [...inspect.scheduledDue().keys()].some((name) => !staled.has(name))
     if (core.visible && (targets.length > 0 || deferred) && timers !== 1)
       fail(label, "scheduler has no timer on a visible tab with a target")
     // Межа збіжності: вигляд, безперервно видимий на видимій вкладці й без
@@ -2100,7 +2105,7 @@ async function runModelOn(
     if (schedulerStep && closed === undefined) {
       for (const sub of internals.registry.subsets()) {
         readsAtStart.set(sub, sub.rereads)
-        if (exhausted(sub)) exhaustedAtStart.add(sub)
+        if (exhausted(sub) || sessionDown()) exhaustedAtStart.add(sub)
         failedAtStart.set(sub, {
           failures: sub.failures,
           failedAt: sub.failedAt,
