@@ -1,4 +1,8 @@
-import type { DatabaseProvider, GrantPurpose } from "simetra/model"
+import {
+  quoteIdent,
+  type DatabaseProvider,
+  type GrantPurpose,
+} from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "./diagnostics"
 import type { PlatformFormSource } from "./sql/closed-forms"
 import {
@@ -12,6 +16,7 @@ import {
   functionSignatureSql,
   generatedUnit,
   grantObjects,
+  unsupportedSignaturePart,
   type SqlUnit,
   type VerbatimUnit,
 } from "./sql/units"
@@ -47,21 +52,67 @@ export function buildFunctionExecuteUnits(
   module: string,
   parse: SqlParser
 ): SqlUnit[] {
+  return (
+    executeTargets(sources)
+      // Підпис, якого ідентичність не передає, дав би грант на іншу функцію:
+      // його помилку названо `checkExecuteSignatures`, гранту немає.
+      .filter(({ unit }) => unsupportedSignaturePart(unit) === undefined)
+      .flatMap(({ unit, purposes }) =>
+        executeGrants(functionSignatureSql(unit), purposes, provider).map(
+          (sql): SqlUnit => ({
+            ...generatedUnit(sql, unit.schema, parse),
+            module,
+            generator: "functionExecute",
+          })
+        )
+      )
+      .sort((a, b) => compareStrings(a.identity, b.identity))
+  )
+}
+
+/**
+ * `sql.function-name-unsupported`: функція, `EXECUTE` якої виводить платформа,
+ * з частиною імені чи типу аргументу, яку підпис гранту з канонічної
+ * ідентичності не відтворить (`unsupportedSignaturePart`, #297). Без гранту
+ * функція лишилася б з `EXECUTE` від `PUBLIC`, тож це помилка, а не пропуск.
+ * Форму платформи без `CREATE` не названо: її помилку вже дає відсутній `CREATE`.
+ */
+export function checkExecuteSignatures(
+  sources: FunctionExecuteSources
+): Diagnostic[] {
+  return executeTargets(sources).flatMap(({ unit }) => {
+    const part = unsupportedSignaturePart(unit)
+    return part === undefined || unit.file === undefined
+      ? []
+      : [
+          diagnostic("sql.function-name-unsupported", unit.file, "", {
+            identity: unit.identity,
+            line: unit.line ?? 0,
+            function: `${quoteIdent(unit.schema)}.${quoteIdent(unit.name)}`,
+            part,
+          }),
+        ]
+  })
+}
+
+type ExecuteTarget = Pick<VerbatimUnit, "identity" | "schema" | "name"> &
+  Partial<Pick<VerbatimUnit, "file" | "line" | "tree">>
+
+/**
+ * Одна функція — одна група грантів: форма перемагає декларацію, декларація —
+ * типову групу модуля.
+ */
+function executeTargets(
+  sources: FunctionExecuteSources
+): { unit: ExecuteTarget; purposes: readonly GrantPurpose[] }[] {
   const { forms, declared, units, moduleOwners } = sources
   const groups = new Map<
     string,
-    { signature: string; schema: string; purposes: readonly GrantPurpose[] }
+    { unit: ExecuteTarget; purposes: readonly GrantPurpose[] }
   >()
-  const add = (
-    unit: Pick<VerbatimUnit, "identity" | "schema" | "name">,
-    purposes: readonly GrantPurpose[]
-  ) => {
-    if (groups.has(unit.identity)) return
-    groups.set(unit.identity, {
-      signature: functionSignatureSql(unit),
-      schema: unit.schema,
-      purposes,
-    })
+  const add = (unit: ExecuteTarget, purposes: readonly GrantPurpose[]) => {
+    if (!groups.has(unit.identity))
+      groups.set(unit.identity, { unit, purposes })
   }
   for (const { function: fn, form } of forms) {
     const named = units.filter(
@@ -86,14 +137,6 @@ export function buildFunctionExecuteUnits(
     )
       add(unit, [])
   return [...groups.values()]
-    .flatMap(({ signature, schema, purposes }) =>
-      executeGrants(signature, purposes, provider).map((sql): SqlUnit => ({
-        ...generatedUnit(sql, schema, parse),
-        module,
-        generator: "functionExecute",
-      }))
-    )
-    .sort((a, b) => compareStrings(a.identity, b.identity))
 }
 
 /**

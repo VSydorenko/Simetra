@@ -1385,6 +1385,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Функція має одну декларацію. Залиште один запис і видаліть інший; запис без схеми бере defaultSchema проєкту.",
     },
   },
+  "sql.function-name-unsupported": {
+    en: (p) =>
+      `EXECUTE of ${p.function} cannot be generated: the identifier part ${JSON.stringify(p.part)} contains ".", "," or a double quote`,
+    uk: (p) =>
+      `EXECUTE для ${p.function} не згенерувати: частина ідентифікатора ${JSON.stringify(p.part)} містить «.», «,» чи подвійні лапки`,
+    hint: {
+      en: "The platform cannot yet address such a function in a grant (issue #297), and without the grant it would keep EXECUTE from PUBLIC. Rename the function, its schema or the argument type to an identifier without these characters.",
+      uk: "Платформа поки не вміє адресувати таку функцію в гранті (issue #297), а без гранту вона лишилася б з EXECUTE від PUBLIC. Перейменуйте функцію, її схему чи тип аргументу на ідентифікатор без цих символів.",
+    },
+  },
   "sql.declaration-platform-form": {
     en: (p) =>
       `${p.function} is a platform form (${p.form}): its EXECUTE comes from the metadata, not from a declaration`,

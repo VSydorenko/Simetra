@@ -7,6 +7,7 @@ import {
   type FunctionExecuteSources,
 } from "../function-execute"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
+import { readSqlUnits } from "../sql/units"
 import {
   DIMENSION_SQL,
   compiledPolicyDomain,
@@ -660,5 +661,129 @@ describe("sql.generated-grant on declared, dimension and module functions", () =
         .filter((d) => d.code === "sql.generated-grant")
         .map((d) => d.params?.object)
     ).toEqual(["public.region_ids()"])
+  })
+})
+
+describe("sql.function-name-unsupported", () => {
+  // Підпис `REVOKE`/`GRANT EXECUTE` будується з канонічної ідентичності, яка
+  // межі лапкованого ідентифікатора не зберігає (#297): частина з `.`, `,`
+  // чи `"` дала б грант на іншу функцію або SQL, що не розбирається. Доки
+  // ідентичність не лапкує частин, такий підпис — помилка, а не грант.
+  const unsupported = async (sql: string) => {
+    const result = await compiledOn({
+      "sql/public/fns.sql": sql,
+      "sql/public/fns.functions.json": functionsFile({
+        function: { name: "f" },
+        callers: ["user"],
+      }),
+    })
+    return {
+      ok: result.ok,
+      found: result.diagnostics
+        .filter((d) => d.code === "sql.function-name-unsupported")
+        .map((d) => [d.severity, d.file, d.params?.function, d.params?.part]),
+    }
+  }
+
+  it.each([
+    { args: 'a app."Code.Type"', part: "Code.Type" },
+    { args: 'a "a,b"', part: "a,b" },
+    { args: 'a int, b public."x""y"[]', part: 'x"y' },
+  ])(
+    "a declared function with argument type part $part is an error",
+    async ({ args, part }) => {
+      expect(await unsupported(closedFn("public.f", args))).toEqual({
+        ok: false,
+        found: [["error", "sql/public/fns.sql", "public.f", part]],
+      })
+    }
+  )
+
+  it("a declared function whose name has a dot in quotes is an error", async () => {
+    const result = await compiledOn({
+      "sql/public/fns.sql": closedFn('public."a.b"'),
+      "sql/public/fns.functions.json": functionsFile({
+        function: { name: "a.b" },
+        callers: ["user"],
+      }),
+    })
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "sql.function-name-unsupported")
+        .map((d) => [d.file, d.params?.function, d.params?.part])
+    ).toEqual([["sql/public/fns.sql", 'public."a.b"', "a.b"]])
+    expect(result.ok).toBe(false)
+  })
+
+  it("an undeclared module function with such an argument type is an error too", async () => {
+    const result = await compiledOn({
+      [ITEM_MODULE]: closedFn("public.g", 'a app."Code.Type"'),
+    })
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "sql.function-name-unsupported")
+        .map((d) => [d.file, d.params?.function, d.params?.part])
+    ).toEqual([[ITEM_MODULE, "public.g", "Code.Type"]])
+  })
+
+  it("generates no grant for such a function and keeps the grants of the others", () => {
+    const { units } = readSqlUnits(
+      [
+        {
+          file: "sql/public/fns.sql",
+          text:
+            closedFn("public.f", 'a app."Code.Type"') + closedFn("public.g"),
+          schema: "public",
+        },
+      ],
+      parse,
+      []
+    )
+    const declared = units.map((unit, i) => ({
+      declaration: {
+        id: uuid(9490 + i),
+        function: { name: unit.name },
+        callers: ["user" as const],
+      },
+      file: "sql/public/fns.functions.json",
+      pointer: `/functions/${i}`,
+      unit,
+      key: { schema: unit.schema, name: unit.name },
+    }))
+    const sql = buildFunctionExecuteUnits(
+      { forms: [], declared, units, moduleOwners: new Set() },
+      "postgres",
+      "app",
+      parse
+    ).map((u) => u.sql)
+    expect(sql.sort()).toEqual(
+      [
+        "REVOKE EXECUTE ON FUNCTION public.g() FROM PUBLIC;",
+        "REVOKE EXECUTE ON FUNCTION public.g() FROM simetra_anon;",
+        "GRANT EXECUTE ON FUNCTION public.g() TO simetra_user;",
+      ].sort()
+    )
+  })
+
+  it('type modifiers, arrays and the quoted catalog type "char" grant as before', async () => {
+    expect(
+      await executeSql({
+        "sql/public/fns.sql": closedFn(
+          "public.f",
+          'a numeric(3,1)[], b "char", c varchar(3)'
+        ),
+        "sql/public/fns.functions.json": functionsFile({
+          function: { name: "f" },
+          callers: ["user"],
+        }),
+      })
+    ).toEqual(
+      [
+        'REVOKE EXECUTE ON FUNCTION public.f("numeric"[], "char", "varchar") FROM PUBLIC;',
+        'REVOKE EXECUTE ON FUNCTION public.f("numeric"[], "char", "varchar") FROM anon;',
+        'REVOKE EXECUTE ON FUNCTION public.f("numeric"[], "char", "varchar") FROM service_role;',
+        'GRANT EXECUTE ON FUNCTION public.f("numeric"[], "char", "varchar") TO authenticated;',
+      ].sort()
+    )
   })
 })

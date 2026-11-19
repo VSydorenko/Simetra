@@ -53,6 +53,7 @@ export const COMPILER_RULES = [
   "sql.declaration-check-not-applied",
   "sql.declaration-anonymous-definer",
   "sql.default-privileges-execute",
+  "sql.function-name-unsupported",
   "rewrite.ambiguous-name",
   "rewrite.unqualified-table",
   "rewrite.unsupported",

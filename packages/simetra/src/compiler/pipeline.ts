@@ -29,6 +29,8 @@ import {
 } from "./contracts"
 import {
   buildFunctionExecuteUnits,
+  checkExecuteSignatures,
+  type FunctionExecuteSources,
   generatedGrantConflicts,
 } from "./function-execute"
 import { buildPresentation } from "./presentation"
@@ -254,6 +256,14 @@ export async function runStages(
           )
         )
   const unitExpressions = expressions(false)
+  // Функції, `EXECUTE` яких виводить платформа: одні джерела для перевірки
+  // підпису раннього блоку й для генератора грантів.
+  const executeSources: FunctionExecuteSources = {
+    forms: platformFormSources(stage1.objects, stage1.project),
+    declared,
+    units: sql.units,
+    moduleOwners: owners,
+  }
   // Модуль виду 1С звужено до закритих форм: вид власника одиниці — з її
   // `ownerFile`, тож перевірка не чекає моделі стадії 3.
   const early = [
@@ -300,6 +310,9 @@ export async function runStages(
         sql.diagnostics.filter((d) => d.code === "sql.parse").map((d) => d.file)
       )
     ),
+    // Підпис гранту, якого ідентичність не передає (#297), — помилка до
+    // генератора `EXECUTE`: інакше функція лишилася б з `EXECUTE` від `PUBLIC`.
+    ...checkExecuteSignatures(executeSources),
     ...debt.grows,
     // Дослівна політика чи тригер на таблиці виду і тіло функції, що її
     // пише, — помилка раннього блоку поруч із ратчетом боргу (спека прав §6.1,
@@ -666,12 +679,7 @@ export async function runStages(
       parse
     ),
     ...buildFunctionExecuteUnits(
-      {
-        forms: platformFormSources(stage1.objects, stage1.project),
-        declared,
-        units: sql.units,
-        moduleOwners: owners,
-      },
+      executeSources,
       stage1.project.database.provider,
       module,
       parse
