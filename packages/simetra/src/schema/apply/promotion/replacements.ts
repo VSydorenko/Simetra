@@ -2,7 +2,9 @@ import type { GrantStmt, Node, RoleSpec } from "libpg-query"
 import {
   authorTableColumns,
   contentChangeCondition,
+  grantRoles,
   platformTriggers,
+  splitIdentity,
   statementTargets,
   uniqueDifferences,
   unitSubjectKeys,
@@ -215,7 +217,11 @@ const REPLACEMENT_SHAPES = {
     }
     const adopted = subjectGrant(key.name)
     const wanted = grantPairsOn(c.clone, target, c.parse).flatMap((was) => {
-      if (was.action !== adopted.action || !adopted.roles.includes(was.role))
+      if (
+        was.action !== adopted.action ||
+        was.grantOption !== adopted.grantOption ||
+        !adopted.roles.includes(was.role)
+      )
         return []
       // Що саме з наявного на копії дає цей оператор: ширший бік звужує
       // вужчий (`ALL` на копії — лише прийняті привілеї, і навпаки)
@@ -938,25 +944,27 @@ const covers = (a: Privilege, b: Privilege): boolean =>
       (b.columns.length > 0 && b.columns.every((x) => a.columns.includes(x)))))
 
 /**
- * Дія, ролі й привілеї прийнятого гранту з імені ключа предмета
+ * Дія, ролі, привілеї й опція прийнятого гранту з імені ключа предмета
  * (`<grant|revoke>:<ролі>:<привілеї>`, `unitSubjectKeys`): ролі й привілеї
- * там уже розкладено тим самим правилом, що й у дерева гранту.
+ * там уже розкладено тим самим правилом, що й у дерева гранту; опція — `*`
+ * на кожному атомі привілею, один оператор дає її всім.
  */
 function subjectGrant(name: string): {
   action: "grant" | "revoke"
   roles: string[]
   privileges: Privilege[]
+  grantOption: boolean
 } {
-  const [action, roles = "", ...rest] = name.split(":")
+  const [action, roles = "", ...rest] = splitIdentity(name, ":")
+  const atoms = [...rest.join(":").matchAll(/([^,()*]+)(?:\(([^)]*)\))?(\*)?/g)]
   return {
     action: action === "grant" ? "grant" : "revoke",
-    roles: roles.split(","),
-    privileges: [...rest.join(":").matchAll(/([^,()]+)(?:\(([^)]*)\))?/g)].map(
-      (m) => ({
-        privilege: m[1]!,
-        columns: m[2] === undefined ? [] : m[2].split(","),
-      })
-    ),
+    roles: grantRoles(roles),
+    privileges: atoms.map((m) => ({
+      privilege: m[1]!,
+      columns: m[2] === undefined ? [] : m[2].split(","),
+    })),
+    grantOption: atoms.some((m) => m[3] !== undefined),
   }
 }
 

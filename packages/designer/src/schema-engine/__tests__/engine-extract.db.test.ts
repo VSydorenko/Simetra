@@ -159,46 +159,73 @@ describe("properties without a model field are loud", () => {
     ])
   })
 
-  it("a revoke that also drops a default grant option is unrepresentable", async () => {
-    const extracted = await extractDesired(
-      `
-      create schema app;
+  // Опція гранту — частина ідентичності (атом `select*`, #277): відкликання
+  // самої опції й частковий `WITH GRANT OPTION` — окремі одиниці пари, а
+  // зворотна генерація зберігає опцію в тексті
+  it.each([
+    {
+      name: "a revoke that also drops a default grant option",
+      sql: `
       alter default privileges for role ${OWNER} in schema app
         grant select, insert on tables to ${ANON} with grant option;
       create table app.doc (id int);
       revoke insert on app.doc from ${ANON} cascade;
       revoke grant option for select on app.doc from ${ANON} cascade;
       `,
-      scope
-    )
-    const found = extracted.diagnostics.filter(
-      (d) => d.code === "engine.unrepresentable"
-    )
-    expect(found.map((d) => d.object)).toEqual([`acl:(table:app.doc).${ANON}`])
-    expect(found[0]?.message).toContain("grantable")
-  })
-
-  it("a grant option narrower than the default privileges is unrepresentable", async () => {
-    const extracted = await extractDesired(
-      `
-      create schema app;
+      units: [
+        [
+          `grant:revoke:table:app.doc:${ANON}:insert`,
+          `REVOKE INSERT ON TABLE app.doc FROM ${ANON}`,
+        ],
+        [
+          `grant:revoke:table:app.doc:${ANON}:select*`,
+          `REVOKE GRANT OPTION FOR SELECT ON TABLE app.doc FROM ${ANON}`,
+        ],
+      ],
+    },
+    {
+      name: "a grant option narrower than the default privileges",
+      sql: `
       alter default privileges for role ${OWNER} in schema app
         grant select on tables to ${ANON} with grant option;
       create table app.doc (id int);
       revoke grant option for select on app.doc from ${ANON} cascade;
       `,
-      scope
+      units: [
+        [
+          `grant:revoke:table:app.doc:${ANON}:select*`,
+          `REVOKE GRANT OPTION FOR SELECT ON TABLE app.doc FROM ${ANON}`,
+        ],
+      ],
+    },
+    {
+      name: "a grant option on part of the privileges",
+      sql: `
+      create table app.doc (id int);
+      grant insert on app.doc to ${ANON};
+      grant select on app.doc to ${ANON} with grant option;
+      `,
+      units: [
+        [
+          `grant:grant:table:app.doc:${ANON}:insert`,
+          `GRANT INSERT ON TABLE app.doc TO ${ANON}`,
+        ],
+        [
+          `grant:grant:table:app.doc:${ANON}:select*`,
+          `GRANT SELECT ON TABLE app.doc TO ${ANON} WITH GRANT OPTION`,
+        ],
+      ],
+    },
+  ])("$name is a unit of its own", async ({ sql, units }) => {
+    const extracted = await extractDesired(`create schema app;\n${sql}`, scope)
+    expect(extracted.diagnostics.filter((d) => d.severity === "error")).toEqual(
+      []
     )
-    // Права рівні типовим, а опцію відкликано: GRANT без опції її не прибрав
-    // би, тож одиниця була б хибною
-    const found = extracted.diagnostics.filter(
-      (d) => d.code === "engine.unrepresentable"
-    )
-    expect(found.map((d) => d.object)).toEqual([`acl:(table:app.doc).${ANON}`])
-    expect(found[0]?.message).toContain("grantable")
     expect(
-      extracted.model.units.filter((u) => u.identity.includes("app.doc"))
-    ).toEqual([])
+      extracted.model.units
+        .filter((u) => u.identity.includes("app.doc"))
+        .map((u) => [u.identity, u.sql])
+    ).toEqual(units)
   })
 
   it("extension comment is implicit unless it differs from the control file", async () => {

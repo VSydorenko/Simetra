@@ -125,8 +125,8 @@ describe("USAGE on the application schema", () => {
         "catalogs/Item/Item.meta.json": catalog("Item", { scope: "none" }),
         [USAGE_FILE]: `${sql}\n`,
       })
-      const units = model.sqlUnits.filter(
-        (u) => u.identity === "grant:grant:schema:app:authenticated:usage"
+      const units = model.sqlUnits.filter((u) =>
+        u.identity.startsWith("grant:grant:schema:app:authenticated:usage")
       )
       expect(units.map((u) => [u.file, `${u.sql.trim()};`])).toEqual([
         [USAGE_FILE, sql],

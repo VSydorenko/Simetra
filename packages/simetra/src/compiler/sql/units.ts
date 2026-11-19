@@ -10,6 +10,7 @@ import type {
   TypeName,
 } from "libpg-query"
 import {
+  quoteIdent,
   type PhysicalSnapshot,
   type PhysicalTable,
   type SqlUnitClass,
@@ -805,7 +806,8 @@ function classify(stmt: Node, scope: TypeScope): Classified {
         objectType(action.objtype),
         action.is_grant === true ? "grant" : "revoke",
         roles(action.grantees),
-        privileges(action.privileges),
+        // Опція — так само, як у гранту (`grantParts`)
+        privileges(action.privileges, action.grant_option === true),
       ].join(":")
     )
   }
@@ -1231,7 +1233,9 @@ function role(spec: RoleSpec): string {
 /**
  * Частини ідентичності гранту, що не називають його об'єктів: дія, ролі й
  * привілеї. Їх читає й ключ предмета промоції (`unitSubjectKeys`), тож обидва
- * будуються одним правилом.
+ * будуються одним правилом. Опція гранту — частина атома кожного привілею
+ * (`select*`, як в `aclitem` Postgres): `WITH GRANT OPTION` гранту чи
+ * `GRANT OPTION FOR` відкликання — інший стан ACL, тож і інша одиниця.
  */
 export function grantParts(node: GrantStmt): {
   action: "grant" | "revoke"
@@ -1241,7 +1245,7 @@ export function grantParts(node: GrantStmt): {
   return {
     action: node.is_grant === true ? "grant" : "revoke",
     roles: roles(node.grantees),
-    privileges: privileges(node.privileges),
+    privileges: privileges(node.privileges, node.grant_option === true),
   }
 }
 
@@ -1252,39 +1256,72 @@ export function grantParts(node: GrantStmt): {
  * типів моделі не резолвить, тож ціль гранту читають з імені.
  */
 export function grantObjects(name: string): string[] {
-  const names: string[] = []
+  return splitIdentity(name, ",")
+}
+
+/**
+ * Частини ідентичності між роздільниками `separator` поза лапками й дужками:
+ * роль чи ціль у лапках може містити і кому, і двокрапку.
+ */
+export function splitIdentity(text: string, separator: string): string[] {
+  const parts: string[] = []
   let depth = 0
   let quoted = false
   let current = ""
-  for (const char of name) {
+  for (const char of text) {
     if (char === '"') quoted = !quoted
     if (!quoted && char === "(") depth += 1
     if (!quoted && char === ")") depth -= 1
-    if (!quoted && depth === 0 && char === ",") {
-      names.push(current)
+    if (!quoted && depth === 0 && char === separator) {
+      parts.push(current)
       current = ""
     } else {
       current += char
     }
   }
-  names.push(current)
-  return names
+  parts.push(current)
+  return parts
 }
 
+/**
+ * Ролі частини ідентичності гранту (`grantParts`) іменами каталогу: ім'я в
+ * лапках — без лапок, ключове слово (`public`) — як є.
+ */
+export function grantRoles(roles: string): string[] {
+  return splitIdentity(roles, ",").map((r) =>
+    r.startsWith('"') ? r.slice(1, -1).replaceAll('""', '"') : r
+  )
+}
+
+/**
+ * Роль в ідентичності гранту: ім'я — за правилом `quoteIdent`, тож кома чи
+ * двокрапка в імені ідентичність не ділить; ключове слово (`PUBLIC`,
+ * `CURRENT_USER`) — як є, у нижньому регістрі.
+ */
 function roles(nodes: readonly Node[] | undefined): string {
   return sorted(
-    (nodes ?? []).map((n) => ("RoleSpec" in n ? role(n.RoleSpec) : ""))
+    (nodes ?? []).map((n) => {
+      if (!("RoleSpec" in n)) return ""
+      const spec = n.RoleSpec
+      return spec.roletype === "ROLESPEC_CSTRING" && spec.rolename !== undefined
+        ? quoteIdent(spec.rolename)
+        : role(spec)
+    })
   ).join(",")
 }
 
-/** Без списку привілеїв — `ALL`. */
-function privileges(nodes: readonly Node[] | undefined): string {
-  if (nodes === undefined || nodes.length === 0) return "all"
+/** Без списку привілеїв — `ALL`; `*` — опція гранту. */
+function privileges(
+  nodes: readonly Node[] | undefined,
+  option: boolean
+): string {
+  const mark = option ? "*" : ""
+  if (nodes === undefined || nodes.length === 0) return `all${mark}`
   return sorted(
     nodes.map((n) => {
       const priv: AccessPriv = "AccessPriv" in n ? n.AccessPriv : {}
       const cols = sorted(strings(priv.cols))
-      return `${priv.priv_name ?? "all"}${cols.length > 0 ? `(${cols.join(",")})` : ""}`
+      return `${priv.priv_name ?? "all"}${cols.length > 0 ? `(${cols.join(",")})` : ""}${mark}`
     })
   ).join(",")
 }

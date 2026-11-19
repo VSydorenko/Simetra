@@ -27,6 +27,7 @@ import {
   engine,
   errors,
   establish,
+  expectGrantOptionDrift,
   inTarget,
   ANON,
   NOINHERIT_OWNER,
@@ -248,6 +249,10 @@ describe.concurrent("buildPlan", () => {
       expect((await plan(url, model)).status).toBe("unchanged")
     })
   })
+
+  // Грант, що відрізняється від бажаного лише опцією (#277); той самий
+  // випадок на стеку Supabase — `build-plan.supabase.db.test.ts`
+  it("plans over drift of a grant option alone", expectGrantOptionDrift)
 
   it("sees an owner swap as drift", async () => {
     // Новому власникові потрібен CREATE на схемі, щоб `OWNER TO` пройшов на

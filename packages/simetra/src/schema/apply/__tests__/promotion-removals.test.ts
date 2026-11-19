@@ -2525,6 +2525,35 @@ describe("platformReplacements", () => {
         ).toEqual(MISSING)
       })
 
+      // Ролі ключа предмета — імена в лапках (`grantRoles`): розбір за голою
+      // комою не дав би жодної пари, і порожній перелік став би «заміною»
+      it("is not replaced for quoted roles the generated grants do not have", () => {
+        expect(
+          verdict("grant", 'GRANT SELECT ON TABLE app.item TO "Reader", "a,b"')
+        ).toEqual(MISSING)
+      })
+
+      // Ключ несе опцію гранту (`select*`): прийнятий грант без опції не
+      // бере на себе пару з опцією іншого гранту тієї самої ролі на копії
+      it("checks only the pairs of its own grant option", () => {
+        const a = adopted(
+          "grant",
+          "GRANT SELECT (id) ON TABLE app.item TO authenticated"
+        )
+        const optioned = unit(
+          "grant",
+          "grant:optioned",
+          "app.item",
+          "GRANT SELECT ON TABLE app.item TO authenticated WITH GRANT OPTION"
+        )
+        expect(
+          gate({ conversions: [conversion("platform", a.object)] }, [], [], {
+            units: GENERATED,
+            cloneUnits: [a.onClone, optioned],
+          }).map((d) => d.code)
+        ).toEqual([])
+      })
+
       it("refuses a grant without a target object", () => {
         // Порожній перелік пар не доводить заміни: такий грант — відмова
         const key: PromotionObject = {
