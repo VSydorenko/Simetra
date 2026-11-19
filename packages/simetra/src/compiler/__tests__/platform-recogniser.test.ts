@@ -364,6 +364,64 @@ describe("platformRecogniser: tables by catalog comparison (И5)", () => {
   )
 })
 
+describe("platformRecogniser: a sequence with another parameter is not the platform's (Р5)", () => {
+  // Нормалізація доповнює лише типові параметри: зміна будь-якого одного
+  // з них у записаній формі каталогу — інший вміст
+  it.each(DATABASE_PROVIDERS)(
+    "%s: CYCLE, START, INCREMENT, MAXVALUE or the type changed on its own",
+    async (provider) => {
+      const install = await platformInstall(provider)
+      const platform = platformRecogniser(install, parse)
+      const recorded = CATALOG_UNIT_FORMS["sequence:simetra.row_version"]!
+      expect(platform.unit(unitOf(recorded))).toBe(true)
+      const rows = {
+        cycle: recorded.replace("NO CYCLE", "CYCLE"),
+        start: recorded.replace("START WITH 1", "START WITH 5"),
+        increment: recorded.replace("INCREMENT BY 1", "INCREMENT BY 2"),
+        maxvalue: recorded.replace(
+          "MAXVALUE 9223372036854775807",
+          "MAXVALUE 100"
+        ),
+        type: recorded.replace("AS bigint", "AS integer"),
+      }
+      expect(
+        Object.entries(rows)
+          .filter(([, sql]) => sql === recorded)
+          .map(([name]) => name)
+      ).toEqual([])
+      expect(
+        Object.entries(rows)
+          .filter(([, sql]) => platform.unit(unitOf(sql)))
+          .map(([name]) => name)
+      ).toEqual([])
+    }
+  )
+
+  // Правило «літерал з приведенням до text» не поширюється на інший тип
+  it.each(DATABASE_PROVIDERS)(
+    "%s: the outbox check cast to citext instead of text is not the platform's",
+    async (provider) => {
+      const install = await platformInstall(provider)
+      const platform = platformRecogniser(install, parse)
+      expect(platform.table(CATALOG_OUTBOX_TABLE)).toBe(true)
+      const changed: CatalogTable = {
+        ...CATALOG_OUTBOX_TABLE,
+        checks: CATALOG_OUTBOX_TABLE.checks.map((c) => ({
+          ...c,
+          expression: c.expression.replace(
+            "'publish'::text",
+            "'publish'::citext"
+          ),
+        })),
+      }
+      expect(
+        changed.checks.filter((c) => c.expression.includes("::citext"))
+      ).toHaveLength(1)
+      expect(platform.table(changed)).toBe(false)
+    }
+  )
+})
+
 describe("platformRecogniser: the unknown is not the platform's (И6)", () => {
   it.each(DATABASE_PROVIDERS)(
     "%s: SQL that does not parse and a unit without a reference identity",
