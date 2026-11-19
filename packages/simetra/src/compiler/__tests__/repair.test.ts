@@ -203,9 +203,11 @@ describe("mutations on a folder with repair-class errors only", () => {
     expect(errors(result).map((d) => d.code)).toContain("reference.unresolved")
   })
 
-  it("does not write a result with a new repair-class error", async () => {
+  it("a declared function that becomes a set function loses its declaration in the same change", async () => {
     // Функція, задекларована сервісною, стає функцією множини нового виду
-    // скоупу: декларація на форму платформи — нова помилка класу.
+    // скоупу: без переходу (Р12) декларація на форму платформи була б новою
+    // помилкою класу, а з ним зникає в тій самій зміні, тож результат
+    // пишеться з помилкою класу входу.
     const files = repairOnly({
       // Без явного `none` новий вид скоупу вимагав би скоупу від `Item`.
       [ITEM]: catalog("Item", { scope: "none" }),
@@ -237,14 +239,17 @@ describe("mutations on a folder with repair-class errors only", () => {
       options()
     )
     expect(result.ok).toBe(false)
-    expect(result.written).toBeUndefined()
-    expect(keys(result)).toHaveLength(2)
-    expect(keys(result)).toEqual(
-      expect.arrayContaining([
-        F_KEY,
-        ["sql.declaration-platform-form", "public", "team_ids"],
-      ])
-    )
+    expect(result.written).toBe(true)
+    expect(keys(result)).toEqual([F_KEY])
+    expect(result.changes.map((c) => [c.path, c.content === null])).toEqual([
+      ["project.meta.json", false],
+      [TEAM_FUNCTIONS, true],
+    ])
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "sql.declaration-platform-form-widens")
+        .map((d) => d.params?.roles)
+    ).toEqual(["user, command"])
   })
 
   it("rename refuses", async () => {

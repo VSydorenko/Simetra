@@ -2,6 +2,7 @@ import { KIND_REGISTRY } from "simetra/model"
 import { diagnostic } from "../diagnostics"
 import { completeAndCompile, type CompletionOptions } from "./fix"
 import type { CreateObjectInput } from "./inputs"
+import { toPlatformForms } from "./platform-forms"
 import { compileInput, refused, refuseSuppliedId } from "./refuse"
 import type { OperationResult } from "./types"
 
@@ -40,7 +41,17 @@ export async function createObject(
   // `kind` і `name` входу головніші за однойменні поля `data`: саме вони
   // задають шлях файлу.
   const raw = { ...input.data, kind: input.kind, name: input.name }
-  const after = new Map(files)
-  after.set(path, JSON.stringify(raw))
-  return completeAndCompile(files, after, o, new Set([path]), clean.accepted)
+  const changed = new Map(files)
+  changed.set(path, JSON.stringify(raw))
+  // Новий об'єкт може зробити задекларовану функцію формою платформи
+  // (обробник підписки): декларація зникає в тій самій зміні (Р12).
+  const after = toPlatformForms(changed)
+  return completeAndCompile(
+    files,
+    after.files,
+    o,
+    new Set([path]),
+    clean.accepted,
+    after.diagnostics
+  )
 }

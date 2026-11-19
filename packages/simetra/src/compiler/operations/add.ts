@@ -2,6 +2,7 @@ import { namedCollections } from "simetra/model"
 import { diagnostic } from "../diagnostics"
 import { completeAndCompile, type CompletionOptions } from "./fix"
 import type { AddElementInput } from "./inputs"
+import { toPlatformForms } from "./platform-forms"
 import { compileInput, refused, refuseSuppliedId } from "./refuse"
 import { describeTarget, locateContainer } from "./target"
 import type { OperationResult } from "./types"
@@ -71,13 +72,18 @@ export async function addElement(
   if (Array.isArray(items)) items.push(element)
   else owner[input.collection] = [element]
 
-  const after = new Map(files)
-  after.set(container.file, JSON.stringify(raw))
+  const changed = new Map(files)
+  changed.set(container.file, JSON.stringify(raw))
+  // Новий елемент може зробити задекларовану функцію формою платформи
+  // (вид скоупу з `setFunction`, вимір з функцією значень): декларація
+  // зникає в тій самій зміні (Р12).
+  const after = toPlatformForms(changed)
   return completeAndCompile(
     files,
-    after,
+    after.files,
     o,
     new Set([container.file]),
-    clean.accepted
+    clean.accepted,
+    after.diagnostics
   )
 }

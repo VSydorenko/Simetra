@@ -1395,6 +1395,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Функції множини видів скоупу, обробники підписок і функції значень вимірів доступу отримують гранти від платформи. Видаліть декларацію цієї функції.",
     },
   },
+  "sql.declaration-platform-form-widens": {
+    en: (p) =>
+      `${p.function} became a platform form (${p.form}): its declaration is removed, and the form also grants EXECUTE to ${p.roles}`,
+    uk: (p) =>
+      `${p.function} стала формою платформи (${p.form}): її декларацію видалено, і форма відкриває EXECUTE ще й ${p.roles}`,
+    hint: {
+      en: "The platform derives the grants of a platform form from the metadata, and they are wider than the callers the declaration named. Check that these roles may call the function, or keep it out of the platform form.",
+      uk: "Гранти форми платформи виводить платформа з метаданих, і вони ширші за викликачів, яких називала декларація. Перевірте, що цим ролям можна кликати функцію, або не робіть її формою платформи.",
+    },
+  },
   "sql.declaration-check-missing": {
     en: (p) =>
       `${p.function} is SECURITY DEFINER and acts for a user (callers user or command), but its declaration names no check`,

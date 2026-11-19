@@ -487,16 +487,24 @@ export function completeFiles(
  * пише `changes`. `repair` — ключі помилок класу ремонту входу
  * (`compileInput` з `repair`): результат компілюється в тому ж режимі, і
  * прийнятий за `acceptsRepair` несе `written` (спека декларацій функцій §5.1).
+ * `notes` — діагностики самої мутації (перехід у форму платформи), що
+ * стають поряд із діагностиками компіляції результату.
  */
 export async function completeAndCompile(
   before: ReadonlyMap<string, string>,
   after: ReadonlyMap<string, string>,
   o: CompletionOptions,
   only?: ReadonlySet<string>,
-  repair?: readonly RepairKey[]
+  repair?: readonly RepairKey[],
+  notes: readonly Diagnostic[] = []
 ): Promise<OperationResult> {
+  const completed = completeFiles(after, o, only)
   return (
-    await compileCompletion(before, completeFiles(after, o, only), repair)
+    await compileCompletion(
+      before,
+      { ...completed, diagnostics: [...completed.diagnostics, ...notes] },
+      repair
+    )
   ).result
 }
 
