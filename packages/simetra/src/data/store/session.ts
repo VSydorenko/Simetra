@@ -92,6 +92,14 @@ export interface Session {
    */
   onSwitch(listener: (previous: string) => void): void
   token(): GenerationToken
+  /**
+   * The session's sleep (B5c, Р13): resolves after `ms`, and at once when the
+   * session closes or `signal` aborts — the timer is cleared then, so a closed
+   * session leaves none. The code after it checks its token (or the closed
+   * read limiter refuses to send); a sleep never rejects. The session keeps
+   * one set of timers instead of a listener per request (§6.3).
+   */
+  sleep(ms: number, signal?: AbortSignal): Promise<void>
   /** Valid while the session is alive and `isValid()` is true. */
   childToken(isValid: () => boolean): GenerationToken
   /**
@@ -144,6 +152,29 @@ export function createSession(options: {
   // як нова й перемикати епоху на кожній відповіді під час PITR.
   const abandoned = new Set<string>()
   const switchListeners: Array<(previous: string) => void> = []
+  // Таймери сну сесії: закриття знімає кожен і будить очікування одразу.
+  const sleeps = new Set<{
+    timer: ReturnType<typeof setTimeout>
+    wake(): void
+  }>()
+
+  function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    if (closed !== undefined || closing || signal?.aborted)
+      return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      const entry = {
+        timer: setTimeout(() => entry.wake(), ms),
+        wake() {
+          clearTimeout(entry.timer)
+          sleeps.delete(entry)
+          signal?.removeEventListener("abort", entry.wake)
+          resolve()
+        },
+      }
+      sleeps.add(entry)
+      signal?.addEventListener("abort", entry.wake, { once: true })
+    })
+  }
 
   const versions: VersionEpochs = {
     current: () => current,
@@ -278,6 +309,7 @@ export function createSession(options: {
     onSwitch(listener) {
       if (closed === undefined) switchListeners.push(listener)
     },
+    sleep,
     token: () => sessionToken,
     childToken: (isValid) => ({
       get valid() {
@@ -325,6 +357,7 @@ export function createSession(options: {
         closed = reason
         sessionController.abort(reason)
         epochs.clear()
+        for (const entry of [...sleeps]) entry.wake()
         // Збій одного хука не повинен лишити решту мап і слухачів живими.
         for (const hook of closeHooks) {
           try {

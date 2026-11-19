@@ -503,9 +503,6 @@ describe("a marker on a row that changed between the start and the answer", () =
     const handle = core.view({ kind: "window", object: TASK })
     watch(handle)
     await settle()
-    const card = core.view({ kind: "card", object: TASK, key: key(2) })
-    watch(card)
-    await settle()
 
     // Перечитування вікна тримається: його `known` — рядок у версії v1.
     fake.hold = (read) => read.log.known !== undefined && isPage(read.log)
@@ -516,10 +513,18 @@ describe("a marker on a row that changed between the start and the answer", () =
     // відповідає знімком сервера на мить свого старту — маркером v1.
     fake.hold = undefined
     fake.edit(TASK, key(2), { title: "newer" })
-    await core.revalidate(TASK, { visibleOnly: false })
+    // Р7: два системні перечитування одного вигляду не йдуть разом, тож v2 у
+    // сховище приносить завантаження другого вигляду (картки), що стартує після
+    // перечитування вікна; явний `revalidate` вікна — його хвіст після осідання.
+    const card = core.view({ kind: "card", object: TASK, key: key(2) })
+    watch(card)
+    await settle()
+    const again = core.revalidate(TASK, { visibleOnly: false })
+    await settle()
     const readsBefore = fake.log.length
     held.answer(held.issuedAt)
     await stale
+    await again
     await settle()
 
     const row = handle.getSnapshot().rows.find((r) => r.key === key(2))!

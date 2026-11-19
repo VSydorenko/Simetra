@@ -33,6 +33,7 @@ import { ReadLimiterClosed, readKeys, tracked } from "./source"
 import {
   EPOCH_UNAVAILABLE,
   errorOf,
+  viewDueAt,
   type Subset,
   type SubsetRegistry,
 } from "./subsets"
@@ -75,6 +76,16 @@ export interface WriterContext extends ReaderContext {
    * them once the `commit` ends (`revalidateHolders`), not inside it.
    */
   readonly hiddenKeys: Map<ObjectName, Set<Key>>
+  /**
+   * Sets the due time of the object in the scheduler (`now + delayMs`): the
+   * re-read of `views` (all visible views of the object when unset) waits for
+   * the tick, and on a hidden tab for `resume()` (§8.4).
+   */
+  schedule(
+    object: ObjectName,
+    delayMs: number,
+    views?: ReadonlySet<Subset>
+  ): void
   /**
    * The mutation journal: a purge erases the fields of the mutations it
    * touches in the same `commit`.
@@ -860,12 +871,7 @@ async function writeAgain(
 export async function revalidate(
   ctx: WriterContext,
   object: ObjectName,
-  options: {
-    visibleOnly: boolean
-    minAgeMs?: number
-    /** Views the hydration brought: read although nobody is subscribed yet. */
-    alsoViews?: ReadonlySet<Subset>
-  }
+  options: RevalidateOptions
 ): Promise<void> {
   const o = ctx.objectOf(object)
   // Єдина ознака закриття — токен сесії: він недійсний уже з `closing`, коли
@@ -873,25 +879,199 @@ export async function revalidate(
   if (!ctx.session.token().valid) return
   // Вигляд без жодного завантаження складу не має: його перше читання —
   // завантаження, а не системне перечитування. ТЧ — лише змонтовані.
-  const targets = subsetsOf(ctx, o).filter(
-    (s) =>
-      s.loaded &&
-      (!options.visibleOnly ||
-        isVisible(s) ||
-        options.alsoViews?.has(s) === true) &&
-      // Відмітка свіжості: без неї вигляд вважається простроченим.
-      (options.minAgeMs === undefined ||
-        ctx.defects.has("min-age-ignored") ||
-        (ctx.defects.has("min-age-ignored-sections") &&
-          s.form.spec.kind === "section") ||
-        s.refreshedAt === undefined ||
-        (!ctx.defects.has("min-age-all-young") &&
-          ctx.now() - s.refreshedAt >= options.minAgeMs)) &&
-      (s.form.spec.kind !== "section" ||
-        s.listeners.size > 0 ||
-        options.alsoViews?.has(s) === true)
+  const targets = subsetsOf(ctx, o).filter((s) => eligible(ctx, s, options))
+  if (options.minAgeMs !== undefined) {
+    // Такт і звірка вигляд у польоті не беруть (§6.3, single-flight).
+    await revalidateViews(
+      ctx,
+      o,
+      targets.filter(
+        (s) =>
+          !inFlight(s) &&
+          (!unavailable(s) || ctx.defects.has("scheduler-reads-unavailable"))
+      )
+    )
+    return
+  }
+  await singleFlight(ctx, o, targets, options).done
+}
+
+/**
+ * The explicit-call path over a given view set (§6.3, single-flight): a view
+ * not in flight is read once now, a view in flight gets the one shared tail.
+ * `started` is the number of views read now.
+ */
+export function singleFlight(
+  ctx: WriterContext,
+  o: ObjectState,
+  targets: readonly Subset[],
+  options: RevalidateOptions
+): { started: number; done: Promise<void> } {
+  // Явний виклик: вигляд у польоті отримує один хвіст — ще один прохід після
+  // осідання з новою епохою старту; наступні виклики чекають той самий хвіст.
+  const tails = targets.filter(inFlight).map((s) => {
+    // Хвіст, що вже чекає, бере суму викликів: `visibleOnly: false` перемагає,
+    // `alsoViews` об'єднуються (інакше пізній виклик міг би загубитися).
+    const pending = tailOptions.get(s)
+    tailOptions.set(
+      s,
+      pending === undefined ? options : mergeOptions(pending, options)
+    )
+    s.rereadTail ??= tailPass(ctx, o, s)
+    return s.rereadTail
+  })
+  const fresh = targets.filter((s) => !inFlight(s))
+  return {
+    started: fresh.length,
+    done: Promise.all([revalidateViews(ctx, o, fresh), ...tails]).then(
+      () => undefined
+    ),
+  }
+}
+
+type RevalidateOptions = {
+  visibleOnly: boolean
+  minAgeMs?: number
+  /** Views the hydration brought: read although nobody is subscribed yet. */
+  alsoViews?: ReadonlySet<Subset>
+}
+
+/**
+ * The session ran out of the discard limit (P4-B spec §6.2): every answer to
+ * the view is discarded until a new session, so a read would only burn
+ * requests without a pause.
+ */
+const unavailable = (s: Subset) =>
+  s.status === "error" && s.error === EPOCH_UNAVAILABLE
+
+/** The own load or a system re-read of the view is in flight. */
+const inFlight = (s: Subset) =>
+  s.flight !== undefined || s.rereadEpochs.length > 0
+
+// Строк вигляду; дефект самотесту «без паузи» не бачить збоїв вигляду.
+const dueOf = (ctx: WriterContext, s: Subset, ageMs?: number) =>
+  viewDueAt(
+    ctx.defects.has("scheduler-no-pause") ? { ...s, failures: 0 } : s,
+    ctx.limits.revalidateIntervalMs,
+    ageMs
   )
-  await revalidateViews(ctx, o, targets)
+
+function eligible(ctx: WriterContext, s: Subset, options: RevalidateOptions) {
+  const { minAgeMs } = options
+  return (
+    s.alive &&
+    !s.purged &&
+    s.loaded &&
+    (!options.visibleOnly ||
+      isVisible(s) ||
+      options.alsoViews?.has(s) === true) &&
+    // Відмітка свіжості й пауза після збою: строк вигляду (§8.4); вигляд без
+    // відмітки строку не має — його читає гідратація чи вигляд-носій рядка.
+    (minAgeMs === undefined ||
+      ctx.defects.has("min-age-ignored") ||
+      (ctx.defects.has("min-age-ignored-sections") &&
+        s.form.spec.kind === "section") ||
+      (s.refreshedAt !== undefined && ctx.defects.has("min-age-all-young")
+        ? false
+        : ctx.now() >= dueOf(ctx, s, minAgeMs))) &&
+    (s.form.spec.kind !== "section" ||
+      s.listeners.size > 0 ||
+      options.alsoViews?.has(s) === true)
+  )
+}
+
+/**
+ * The earliest due time of the object's views the interval tick would read
+ * (P4-B spec §6.7): visible, loaded, not in flight, not out of the discard
+ * limit — the same filter `revalidate` applies with `minAgeMs`, so the timer
+ * never fires for a view the tick then skips.
+ */
+export function nextViewDue(
+  ctx: WriterContext,
+  object: ObjectName
+): number | undefined {
+  let due: number | undefined
+  for (const s of subsetsOf(ctx, ctx.objectOf(object))) {
+    if (!eligible(ctx, s, { visibleOnly: true })) continue
+    if (
+      inFlight(s) ||
+      (unavailable(s) && !ctx.defects.has("scheduler-reads-unavailable"))
+    )
+      continue
+    const at = dueOf(ctx, s)
+    // Вигляд, що ще не читався, строку не має.
+    if (!Number.isFinite(at)) continue
+    if (due === undefined || at < due) due = at
+  }
+  return due
+}
+
+/** The options of the tail waiting over a view: the sum of the calls that joined it. */
+const tailOptions = new WeakMap<Subset, RevalidateOptions>()
+
+function mergeOptions(
+  a: RevalidateOptions,
+  b: RevalidateOptions
+): RevalidateOptions {
+  const also = new Set([...(a.alsoViews ?? []), ...(b.alsoViews ?? [])])
+  return {
+    visibleOnly: a.visibleOnly && b.visibleOnly,
+    ...(also.size === 0 ? {} : { alsoViews: also }),
+  }
+}
+
+/**
+ * Whether the interval tick reads a view of the object: the same filter
+ * `revalidate` applies with `minAgeMs`.
+ */
+export function hasDueViews(
+  ctx: WriterContext,
+  object: ObjectName,
+  minAgeMs?: number
+): boolean {
+  return subsetsOf(ctx, ctx.objectOf(object)).some(
+    (s) =>
+      eligible(
+        ctx,
+        s,
+        minAgeMs === undefined
+          ? { visibleOnly: true }
+          : { visibleOnly: true, minAgeMs }
+      ) &&
+      !inFlight(s) &&
+      !unavailable(s)
+  )
+}
+
+/**
+ * The tail of an explicit `revalidate` over a view in flight: waits until the
+ * load and the system re-reads of the view settle, then re-reads it once with
+ * a new start epoch, composition kept.
+ */
+async function tailPass(
+  ctx: WriterContext,
+  o: ObjectState,
+  s: Subset
+): Promise<void> {
+  try {
+    while (inFlight(s) && s.alive && !s.purged && ctx.session.token().valid) {
+      await new Promise<void>((resolve) =>
+        (s.flight !== undefined ? s.waiters : s.rereadWaiters).push(resolve)
+      )
+    }
+  } finally {
+    s.rereadTail = undefined
+  }
+  const options = tailOptions.get(s) ?? { visibleOnly: false }
+  tailOptions.delete(s)
+  if (
+    !ctx.session.token().valid ||
+    unavailable(s) ||
+    !eligible(ctx, s, options) ||
+    ctx.defects.has("revalidate-no-tail")
+  )
+    return
+  await revalidateViews(ctx, o, [s])
 }
 
 /**
@@ -946,7 +1126,7 @@ export async function revalidateHolders(
 }
 
 /** One two-phase pass over `targets`; views dropped by a purge get another pass. */
-async function revalidateViews(
+export async function revalidateViews(
   ctx: WriterContext,
   o: ObjectState,
   targets: readonly Subset[]
@@ -1006,6 +1186,8 @@ async function revalidateViews(
           if ("error" in result) {
             // Закритий обмежувач — сесію закрито: писати нікуди.
             if (result.error instanceof ReadLimiterClosed) continue
+            s.failures++
+            s.failedAt = startedAt
             s.status = "error"
             s.error = errorOf(result.error)
             continue
@@ -1021,6 +1203,8 @@ async function revalidateViews(
               continue
             }
             s.refreshedAt = startedAt
+            s.failures = 0
+            s.failedAt = undefined
             if (s.status === "error") {
               s.status = "ready"
               s.error = undefined
@@ -1038,6 +1222,12 @@ async function revalidateViews(
     token,
     `revalidate ${o.name}`
   )
+  // Прохід осів: хвіст явного `revalidate` може стартувати.
+  for (const s of targets) {
+    if (s.rereadEpochs.length === 0) {
+      for (const resolve of s.rereadWaiters.splice(0)) resolve()
+    }
+  }
   // Цей прохід вичерпав межу (лічильник рухається після commit): повтору
   // не буде, відкинуті вигляди — `command.unavailable`.
   if (discarded.length > 0 && session.versions.unavailable()) {
@@ -1056,15 +1246,10 @@ async function revalidateViews(
   } else if (discarded.length > 0) {
     const pause =
       DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
-    // Не чекаємо паузи: `revalidate` завершується, а повтор іде тим самим
-    // системним шляхом (склад не змінюється).
-    setTimeout(() => {
-      revalidateViews(
-        ctx,
-        o,
-        discarded.filter((s) => s.alive && !s.purged)
-      ).catch((error: unknown) => ctx.log({ kind: "listener-failed", error }))
-    }, pause)
+    // Не чекаємо паузи: `revalidate` завершується, а повтор — строк об'єкта в
+    // планувальнику (на прихованій вкладці чекає `resume()`); іде тим самим
+    // системним шляхом, склад не змінюється.
+    ctx.schedule(o.name, pause, new Set(discarded))
   }
   // Дефект самотесту «системне перечитування через завантаження».
   if (ctx.defects.has("system-reread-via-load")) {
@@ -1113,7 +1298,7 @@ export async function rereadKey(
   const fire = (outcome: RereadOutcome, scope: Scope) => {
     if (done) return
     done = true
-    clearTimeout(timer)
+    limit.abort()
     if (outcome.kind !== "read" && unconfirmed !== undefined) {
       o.rows.markUnconfirmed(scope, key, unconfirmed.version, unconfirmed.epoch)
       if (o.rows.get(key) !== undefined) ctx.rowViews.touch(o.name, key)
@@ -1121,14 +1306,16 @@ export async function rereadKey(
     onCommit?.(outcome, scope)
   }
   // Межа часу (§7.2, крок 4): мутація не чекає перечитування без кінця.
-  const timer = setTimeout(() => {
+  // Очікування — сон сесії: закриття будить його одразу й таймера не лишає.
+  const limit = new AbortController()
+  void session.sleep(REREAD_TIMEOUT_MS, limit.signal).then(() => {
     if (done || !token.valid) return
     session.commit(
       (scope) => fire({ kind: "failed" }, scope),
       token,
       "reread timeout"
     )
-  }, REREAD_TIMEOUT_MS)
+  })
   const read = tracked(ctx.source)
   let rows: readonly ServerRow[] | undefined
   try {
@@ -1144,7 +1331,7 @@ export async function rereadKey(
     rows = undefined
   }
   if (!token.valid) {
-    clearTimeout(timer)
+    limit.abort()
     return
   }
   session.commit(

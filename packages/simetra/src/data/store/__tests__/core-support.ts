@@ -67,6 +67,8 @@ export function setup(
     server?: (fake: FakeSource) => ServerPort
     /** The monotonic clock of the core; default the core's own. */
     now?: () => number
+    /** Initial visibility of the application; default visible. */
+    visible?: boolean
   } = {}
 ): CoreHarness {
   const fake = createFakeSource({
@@ -113,6 +115,7 @@ export function setup(
     ...(options.limits === undefined ? {} : { limits: options.limits }),
     ...(options.strict === undefined ? {} : { strict: options.strict }),
     ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.visible === undefined ? {} : { visible: options.visible }),
     log: (e) => log.push(e),
   })
   return { fake, core, log, inspect: inspectCore(core) }

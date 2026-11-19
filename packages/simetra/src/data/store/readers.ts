@@ -22,7 +22,7 @@ import {
   readRows,
   rowsOf,
   tracked,
-  type CoreSource,
+  type StoreSource,
 } from "./source"
 import {
   EMPTY_WINDOW,
@@ -101,7 +101,7 @@ export interface StoreOps {
 /** What the readers need from the core. */
 export interface ReaderContext {
   readonly session: Pick<Session, "acceptEpoch" | "acceptEpochs">
-  readonly source: CoreSource
+  readonly source: StoreSource
   readonly limits: CoreLimits
   readonly strict: boolean
   readonly log: (entry: CoreLogEntry) => void

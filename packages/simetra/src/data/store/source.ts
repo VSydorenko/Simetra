@@ -173,6 +173,21 @@ export type CoreRunResult =
     }
   | { ok: false; error: CommandError }
 
+/** What the core passes to every {@link CoreSource.read}. */
+export interface ReadOptions {
+  /** `Session.sleep`: wakes at once when the session closes. */
+  readonly sleep: (ms: number) => Promise<void>
+}
+
+/**
+ * The source the store modules read through: a {@link CoreSource} whose
+ * `read` already carries the session's {@link ReadOptions} (the core binds
+ * them in one place).
+ */
+export interface StoreSource extends Omit<CoreSource, "read"> {
+  read(parts: readonly CorePart[]): Promise<CoreReadResult>
+}
+
 /**
  * The core's source over the per-object source adapters and the server
  * port: maps logical queries and operations to the wire form, groups reads
@@ -186,9 +201,14 @@ export interface CoreSource {
    * the answer's, per part. A failed part is its own `ok: false` item, as is
    * every part of a request the adapter rejected with `CommandFailure`. A
    * `version` part goes in the request of the Server Function, first; an
-   * answer of the wrong form is `command.internal`.
+   * answer of the wrong form is `command.internal`. The pause between the
+   * re-sends sleeps through `options.sleep` — the session's (B5c, Р13): the
+   * source has no timer of its own, so a closed session leaves none.
    */
-  read(parts: readonly CorePart[]): Promise<CoreReadResult>
+  read(
+    parts: readonly CorePart[],
+    options: ReadOptions
+  ): Promise<CoreReadResult>
   /**
    * Runs one operation through the server port with the kernel hash of its
    * object, outside the read limiter. A value the mapping cannot encode is
@@ -216,9 +236,6 @@ export interface CoreSource {
 export const BATCH_RETRY_PAUSE_MS = 50
 /** How many times parts the server did not run are re-sent. */
 export const BATCH_RETRY_MAX = 5
-
-const sleep = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 const internal = (): { ok: false; error: CommandError } => ({
   ok: false,
@@ -411,7 +428,8 @@ export function createCoreSource(
     slots: readonly number[],
     queries: readonly CorePart[],
     wires: readonly WireReadPart[],
-    out: CoreReadItem[]
+    out: CoreReadItem[],
+    sleep: ReadOptions["sleep"]
   ): Promise<void> => {
     let pending = slots
     // Частини, що отримали `batch-budget`: наступного разу кожна йде
@@ -518,7 +536,7 @@ export function createCoreSource(
       const id = "id" in operation ? operation.id : undefined
       return answer.ok ? decodeRun(entry, id, answer.value) : answer
     },
-    async read(requested) {
+    async read(requested, { sleep }) {
       // Адаптер без `capabilities.include` не віддає `included`: частина йде
       // без `include`, а цілі ядро дочитує само (Р8).
       const parts = requested.map((part): CorePart => {
@@ -570,7 +588,8 @@ export function createCoreSource(
             ),
             parts,
             wires,
-            items
+            items,
+            sleep
           )
         )
       )
@@ -585,8 +604,8 @@ export function createCoreSource(
  * epoch it carries (P4-B spec §6.2) — a key absent from an answer has no
  * row to carry it.
  */
-export function tracked(source: CoreSource): {
-  source: CoreSource
+export function tracked(source: StoreSource): {
+  source: StoreSource
   epochs: Set<string | null>
 } {
   const epochs = new Set<string | null>()
@@ -612,7 +631,7 @@ export function tracked(source: CoreSource): {
  * its error. For the callers that read one query at a time.
  */
 export async function readOne(
-  source: CoreSource,
+  source: StoreSource,
   query: RowsQuery
 ): Promise<ReadRows & { epoch: string | null }> {
   const [item] = (await source.read([{ type: "query", query }])).items
@@ -734,7 +753,7 @@ function markedRow(
  * `CommandFailure` of its error. `snapshot` is the `known` the part carries.
  */
 export async function readRows(
-  source: CoreSource,
+  source: StoreSource,
   entry: CatalogEntry,
   query: RowsQuery,
   snapshot?: KnownSnapshot
@@ -775,7 +794,7 @@ export async function readRows(
  * the answer is absent from the result.
  */
 export async function readKeys(
-  source: CoreSource,
+  source: StoreSource,
   entry: CatalogEntry,
   keys: readonly Key[],
   options: ReadKeysOptions

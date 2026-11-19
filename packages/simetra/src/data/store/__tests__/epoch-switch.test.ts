@@ -23,6 +23,7 @@ import {
   watch,
   type CoreHarness,
 } from "./core-support"
+import { withSleep } from "../testing/fake-source"
 import { harness, K1, row, S, type Harness } from "./store-support"
 
 /*
@@ -191,7 +192,7 @@ describe("acceptEpochs: one answer of several epochs", () => {
     const h = harness()
     accept(h, EA)
     const start = h.now()
-    const read = tracked(answering([EA, EB, EA]))
+    const read = tracked(withSleep(answering([EA, EB, EA])))
     for (let i = 0; i < 3; i++)
       await read.source.read([
         {
@@ -439,7 +440,9 @@ const keysView = (...ns: number[]): ViewSpec => ({
 const INTERVAL = 1_000
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  // Годинник ядра — `Date.now()`: строк перемикання міряється ним, тож `Date`
+  // фейкується разом з таймерами.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] })
 })
 afterEach(() => {
   vi.useRealTimers()
@@ -457,6 +460,7 @@ async function deliver(h: CoreHarness) {
 async function loaded() {
   const h = setup({
     mode: "manual",
+    now: () => Date.now(),
     limits: { revalidateIntervalMs: INTERVAL },
   })
   seed(h.fake, 1, 2)
@@ -490,7 +494,7 @@ describe("core: the epoch switch", () => {
     ])
     await settle()
     expect(h.fake.pending).toHaveLength(0)
-    expect(h.inspect.serviceSizes().switchTimers).toBe(1)
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(1)
     vi.advanceTimersByTime(INTERVAL - 11)
     await settle()
     expect(h.fake.pending).toHaveLength(0)
@@ -532,7 +536,7 @@ describe("core: the epoch switch", () => {
     h.handle.refresh()
     vi.spyOn(Math, "random").mockReturnValue(0.99)
     await deliver(h)
-    expect(h.inspect.serviceSizes().switchTimers).toBe(1)
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(1)
     h.core.staleClient(TASK)
     const before = h.fake.log.length
     vi.advanceTimersByTime(INTERVAL)
@@ -540,7 +544,7 @@ describe("core: the epoch switch", () => {
     expect(h.fake.log.length).toBe(before)
     expect(h.handle.getSnapshot()).toMatchObject({ isStale: true })
     expect(h.handle.getSnapshot().status).not.toBe("error")
-    expect(h.inspect.serviceSizes().switchTimers).toBe(0)
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(0)
   })
 
   it("refresh() of a stale-client object sends no read", async () => {
@@ -581,6 +585,7 @@ describe("core: the epoch switch", () => {
   async function loadedMany() {
     const h = setup({
       mode: "manual",
+      now: () => Date.now(),
       limits: { revalidateIntervalMs: INTERVAL, keysPerRequest: 1 },
     })
     seed(h.fake, 1, MANY)
@@ -934,9 +939,30 @@ describe("core: the epoch switch", () => {
       expect(handle.getSnapshot()).toMatchObject({ status: "ready" })
   })
 
+  it("a core close in the pause of a discarded load leaves no timer and sends nothing", async () => {
+    const h = await proven()
+    h.fake.epoch = EA
+    seed(h.fake, 3, 3)
+    watch(h.core.view(keysView(3)))
+    await drain(h)
+    expect(h.inspect.versionEpochs().discards).toBe(1)
+    // Повтор очікує паузу: це його таймер.
+    expect(vi.getTimerCount()).toBeGreaterThan(0)
+    h.core.close("disposed")
+    expect(vi.getTimerCount()).toBe(0)
+    await settle()
+    expect(h.fake.pending).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it(`${DISCARDS_MAX} revalidate passes in a row with the pause: command.unavailable; a new session works`, async () => {
     const h = await proven()
     const handles = await manyViews(h)
+    // Паузи разом довші за інтервал такту: щоб такт не читав здорові вигляди
+    // між проходами, вигляди невидимі (строк повтору відкинутого їх не питає).
+    h.core.setVisible(keysView(1, 2), false)
+    for (let n = 3; n < DISCARDS_MAX + 4; n++)
+      h.core.setVisible(keysView(n), false)
     h.fake.epoch = EA
     void h.core.revalidate(TASK, { visibleOnly: false })
     await drain(h)
@@ -1020,14 +1046,102 @@ describe("core: the epoch switch", () => {
     expect(sections()?.staleEpoch).toBeUndefined()
   })
 
+  it("a switch on a hidden tab, the due time passed: 0 reads; resume() — 1 read taking the object though its freshness mark is younger than resumeMinIntervalMs", async () => {
+    const h = await loaded()
+    h.core.suspend()
+    vi.spyOn(Math, "random").mockReturnValue(0.1)
+    h.fake.epoch = EB
+    h.handle.refresh()
+    await deliver(h)
+    expect(h.inspect.versionEpochs().current).toBe(EB)
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(1)
+    const before = h.fake.log.length
+    // Строк (0,1 × I) минув, а власний строк виглядів (I) — ще ні: читання
+    // дає лише строк перемикання.
+    vi.advanceTimersByTime(INTERVAL / 2)
+    await deliver(h)
+    expect(h.fake.log.length).toBe(before)
+    expect(h.inspect.serviceSizes()).toMatchObject({
+      scheduledObjects: 1,
+      schedulerTimers: 0,
+    })
+    expect(h.handle.getSnapshot().rows).toMatchObject([
+      { state: "stale" },
+      { state: "stale" },
+    ])
+    // Відмітка свіжості (рефреш) молодша за 15 с — `resumeMinIntervalMs`.
+    const sent = h.fake.log.length
+    h.core.resume()
+    await settle()
+    expect(h.fake.pending.filter(isKeys)).toHaveLength(1)
+    // Читання об'єкта перемикання йде тим самим пакетом, що й частина `version`
+    // звірки, а не окремим запитом пізніше.
+    expect(new Set(h.fake.log.slice(sent).map((l) => l.request)).size).toBe(1)
+    await deliver(h)
+    expect(h.handle.getSnapshot().rows).toMatchObject([
+      { state: "synced" },
+      { state: "synced" },
+    ])
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(0)
+  })
+
+  it("a discarded answer on a hidden tab: the retry waits for resume()", async () => {
+    // `proven`: строк самого перемикання вже відпрацював, лишається повтор.
+    const h = await proven()
+    h.core.suspend()
+    h.fake.epoch = EA
+    void h.core.revalidate(TASK, { visibleOnly: false })
+    await deliver(h)
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(1)
+    const before = h.fake.log.length
+    vi.advanceTimersByTime(10 * DISCARD_PAUSE_MS)
+    await deliver(h)
+    expect(h.fake.log.length).toBe(before)
+    h.fake.epoch = EB
+    h.core.resume()
+    await settle()
+    expect(h.fake.pending.filter(isKeys)).toHaveLength(1)
+    await deliver(h)
+    expect(h.handle.getSnapshot()).toMatchObject({ status: "ready" })
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(0)
+  })
+
+  it("the switch time and the retry are due together on resume(): the view is read once now and once in the tail, not twice at once", async () => {
+    const h = await proven()
+    h.core.suspend()
+    // Перемикання на прихованій вкладці ставить цілий строк об'єкта.
+    h.fake.epoch = EC
+    h.handle.refresh()
+    await deliver(h)
+    // Відкинута відповідь ставить повтор того ж вигляду.
+    h.fake.epoch = EA
+    void h.core.revalidate(TASK, { visibleOnly: false })
+    await deliver(h)
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(1)
+    // Обидва строки минули на прихованій вкладці.
+    vi.advanceTimersByTime(INTERVAL + DISCARD_PAUSE_MS)
+    h.fake.epoch = EC
+    h.core.resume()
+    await settle()
+    // Повтор іде тим самим single-flight шляхом: вигляд у польоті не читається вдруге.
+    expect(h.fake.pending.filter(isKeys)).toHaveLength(1)
+    h.fake.deliverAll()
+    await settle()
+    // Один спільний хвіст після осідання.
+    expect(h.fake.pending.filter(isKeys)).toHaveLength(1)
+    h.fake.deliverAll()
+    await settle()
+    expect(h.fake.pending.filter(isKeys)).toHaveLength(0)
+  })
+
   it("close clears the timers of a switch", async () => {
     const h = await loaded()
     h.fake.epoch = EB
     h.handle.refresh()
     await deliver(h)
-    expect(h.inspect.serviceSizes().switchTimers).toBe(1)
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(1)
     h.core.close("disposed")
-    expect(h.inspect.serviceSizes().switchTimers).toBe(0)
+    expect(h.inspect.serviceSizes().scheduledObjects).toBe(0)
     vi.advanceTimersByTime(INTERVAL)
     await settle()
     expect(h.fake.pending).toHaveLength(0)

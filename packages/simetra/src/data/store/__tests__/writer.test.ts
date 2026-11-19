@@ -806,24 +806,33 @@ describe("revalidate", () => {
     await settle()
     const hidden = fake.setVisibleScopes([])
     fake.setVisibleScopes(undefined)
-    fake.hold = (read) => isKeys(read)
+    let heldKeys = 0
+    fake.hold = (read) => isKeys(read) && heldKeys++ === 0
     const done = core.revalidate(TASK, { visibleOnly: false })
     await settle()
     const early = fake.take()
     // Пізніше розпочате читання встигає записати рядок.
     bump(core)
     fake.hold = undefined
-    // Системне перечитування, а не `refresh()`: завантаження вигляду
-    // відкинуло б ранню відповідь за поколінням, а тут перевіряється епоха.
-    await core.revalidate(TASK, { visibleOnly: false })
+    // Р7: два системні перечитування одного вигляду не йдуть разом, тож
+    // пізніше читання ключа — завантаження другого вигляду, що стартує після
+    // раннього читання першого й встигає записати рядок.
+    watch(core.view(card(1)))
+    await settle()
+    // Пізніший запис іде від завантаження card(1), а перечитування —
+    // системне, не `refresh()`: `refresh()` відкинув би ранню відповідь за
+    // поколінням, а тут перевіряється епоха.
+    const second = core.revalidate(TASK, { visibleOnly: false })
     await settle()
     fake.hold = (read) => isKeys(read)
     early.answer(hidden)
     await done
     await settle()
     expect(stateOf(view.getSnapshot(), 1)).toBe("removed")
-    expect(fake.pending).toHaveLength(1)
-    fake.take().answer()
+    // Ключовий хвіст перечитування й хвіст явного `revalidate` вигляду (Р7).
+    expect(fake.pending).toHaveLength(2)
+    fake.deliverAll()
+    await second
     await settle()
     expect(view.getSnapshot().rows[0]).toMatchObject({
       state: "synced",
@@ -849,15 +858,22 @@ describe("revalidate", () => {
     expect(sectionView.getSnapshot().section?.lines).toHaveLength(1)
     const hidden = fake.setVisibleScopes([])
     fake.setVisibleScopes(undefined)
-    fake.hold = (read) => isKeys(read)
+    let heldKeys = 0
+    fake.hold = (read) => isKeys(read) && heldKeys++ === 0
     const done = core.revalidate(TASK, { visibleOnly: false })
     await settle()
     const early = fake.take()
     bump(core)
     fake.hold = undefined
-    // Системне перечитування, а не `refresh()`: завантаження вигляду
-    // відкинуло б ранню відповідь за поколінням, а тут перевіряється епоха.
-    await core.revalidate(TASK, { visibleOnly: false })
+    // Р7: два системні перечитування одного вигляду не йдуть разом, тож
+    // пізніше читання ключа — завантаження другого вигляду, що стартує після
+    // раннього читання першого й встигає записати рядок.
+    watch(core.view(card(1)))
+    await settle()
+    // Пізніший запис іде від завантаження card(1), а перечитування —
+    // системне, не `refresh()`: `refresh()` відкинув би ранню відповідь за
+    // поколінням, а тут перевіряється епоха.
+    const second = core.revalidate(TASK, { visibleOnly: false })
     await settle()
     fake.hold = (read) => isKeys(read)
     early.answer(hidden)
@@ -868,7 +884,8 @@ describe("revalidate", () => {
       ownerState: "removed",
       lines: [],
     })
-    fake.take().answer()
+    fake.deliverAll()
+    await second
     await settle()
     expect(log.filter((e) => e.kind === "removed-restored")).toHaveLength(1)
     expect(stateOf(view.getSnapshot(), 1)).toBe("synced")
@@ -885,22 +902,30 @@ describe("revalidate", () => {
     const view = core.view(keys(1))
     watch(view)
     await settle()
-    fake.hold = (read) => isKeys(read)
+    let heldKeys = 0
+    fake.hold = (read) => isKeys(read) && heldKeys++ === 0
     const done = core.revalidate(TASK, { visibleOnly: false })
     await settle()
     const early = fake.take()
     bump(core)
     fake.hold = undefined
-    // Системне перечитування, а не `refresh()`: завантаження вигляду
-    // відкинуло б ранню відповідь за поколінням, а тут перевіряється епоха.
-    await core.revalidate(TASK, { visibleOnly: false })
+    // Р7: два системні перечитування одного вигляду не йдуть разом, тож
+    // пізніше читання ключа — завантаження другого вигляду, що стартує після
+    // раннього читання першого й встигає записати рядок.
+    watch(core.view(card(1)))
+    await settle()
+    // Пізніший запис іде від завантаження card(1), а перечитування —
+    // системне, не `refresh()`: `refresh()` відкинув би ранню відповідь за
+    // поколінням, а тут перевіряється епоха.
+    const second = core.revalidate(TASK, { visibleOnly: false })
     await settle()
     fake.setVisibleScopes([])
     early.answer()
     await done
+    await second
     await settle()
     expect(stateOf(view.getSnapshot(), 1)).toBe("removed")
-    expect(readsOf(fake, TASK).filter(isKeys).length).toBe(4)
+    expect(readsOf(fake, TASK).filter(isKeys).length).toBe(5)
     expect(log.some((e) => e.kind === "removed-restored")).toBe(false)
   })
 

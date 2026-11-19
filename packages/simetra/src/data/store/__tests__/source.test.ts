@@ -38,9 +38,13 @@ import {
   type RowsQuery,
   type ReadLimiter,
   type ServerPort,
+  type StoreSource,
 } from "../source"
+import { createSession } from "../session"
+import { DEFAULT_CORE_LIMITS } from "../types"
 import {
   createFakeSource,
+  withSleep,
   type FakeReadLog,
   type FakeSource,
 } from "../testing/fake-source"
@@ -77,10 +81,15 @@ const READS_ONLY: ServerPort = {
 const key = (n: number) =>
   `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 
+/** Джерело, як його бачать модулі сховища: `read` з типовим сном-таймером. */
+const boundSource = (...args: Parameters<typeof createCoreSource>) =>
+  withSleep(createCoreSource(...args))
+
 /** Ядро над фейковим сервером: одне джерело на всі об'єкти. */
 function setup(options: { parallel?: number; fake?: FakeSource } = {}): {
   fake: FakeSource
-  source: CoreSource
+  source: StoreSource
+  raw: CoreSource
 } {
   const fake = options.fake ?? createFakeSource({ objects: OBJECTS })
   const source = createCoreSource(
@@ -89,7 +98,7 @@ function setup(options: { parallel?: number; fake?: FakeSource } = {}): {
     createReadLimiter(options.parallel ?? 4),
     fake.server
   )
-  return { fake, source }
+  return { fake, source: withSleep(source), raw: source }
 }
 
 const seedTasks = (fake: FakeSource, count: number) => {
@@ -260,7 +269,7 @@ describe("createCoreSource", () => {
           ],
         }),
     }
-    const source = createCoreSource(
+    const source = boundSource(
       () => adapter,
       catalogIndex(OBJECTS),
       createReadLimiter(4),
@@ -302,7 +311,7 @@ describe("createCoreSource", () => {
     const b = createFakeSource({ objects: OBJECTS })
     a.insert(TASK, { ref: key(1), org: S, title: "task" })
     b.insert(ORG, { ref: S })
-    const source = createCoreSource(
+    const source = boundSource(
       (object) => (object.name === "Task" ? a.adapter : b.adapter),
       catalogIndex(OBJECTS),
       createReadLimiter(4),
@@ -367,7 +376,7 @@ describe("createReadLimiter", () => {
   it("on close drops queued reads and refuses later ones; reads in flight finish", async () => {
     const fake = createFakeSource({ objects: OBJECTS, mode: "manual" })
     const limiter = createReadLimiter(4)
-    const source = createCoreSource(
+    const source = boundSource(
       () => fake.adapter,
       catalogIndex(OBJECTS),
       limiter,
@@ -590,7 +599,7 @@ describe("CoreSource on read parts", () => {
   it("keeps 1000 keys as 5 parts of one request and one limiter slot", async () => {
     const fake = createFakeSource({ objects: OBJECTS })
     const limiter = countingLimiter()
-    const source = createCoreSource(
+    const source = boundSource(
       () => fake.adapter,
       catalogIndex(OBJECTS),
       limiter,
@@ -607,7 +616,7 @@ describe("CoreSource on read parts", () => {
   it("splits 4000 keys into two requests of 16 and 4 parts", async () => {
     const fake = createFakeSource({ objects: OBJECTS })
     const limiter = countingLimiter()
-    const source = createCoreSource(
+    const source = boundSource(
       () => fake.adapter,
       catalogIndex(OBJECTS),
       limiter,
@@ -631,7 +640,7 @@ describe("CoreSource on read parts", () => {
     const b = createFakeSource({ objects: OBJECTS, epoch: null })
     a.insert(TASK, { ref: key(1), org: S, title: "task" })
     b.insert(ORG, { ref: S })
-    const source = createCoreSource(
+    const source = boundSource(
       (object) => (object.name === "Task" ? a.adapter : b.adapter),
       catalogIndex(OBJECTS),
       createReadLimiter(4),
@@ -674,7 +683,7 @@ describe("CoreSource on read parts", () => {
         ],
       }),
     ])
-    const source = createCoreSource(
+    const source = boundSource(
       () => adapter,
       catalogIndex(OBJECTS),
       createReadLimiter(4),
@@ -700,7 +709,7 @@ describe("CoreSource on read parts", () => {
     }
     const fake = createFakeSource({ objects: OBJECTS })
     fake.insert(ORG, { ref: S })
-    const source = createCoreSource(
+    const source = boundSource(
       (object) => (object.name === "Task" ? down : fake.adapter),
       catalogIndex(OBJECTS),
       createReadLimiter(4),
@@ -723,7 +732,7 @@ describe("CoreSource on read parts", () => {
       capabilities: { include: true },
       read: () => Promise.reject(new Error("boom")),
     }
-    const source = createCoreSource(
+    const source = boundSource(
       () => broken,
       catalogIndex(OBJECTS),
       createReadLimiter(4),
@@ -743,7 +752,7 @@ describe("CoreSource on read parts", () => {
       }),
       () => ({ epoch: null, items: [okPart(1)] }),
     ])
-    const source = createCoreSource(
+    const source = boundSource(
       () => adapter,
       catalogIndex(OBJECTS),
       createReadLimiter(4),
@@ -766,7 +775,7 @@ describe("CoreSource on read parts", () => {
     const { adapter } = scripted([
       () => ({ epoch: EPOCH_A, items: [{ ok: true, value: { rows: [0] } }] }),
     ])
-    const source = createCoreSource(
+    const source = boundSource(
       () => adapter,
       catalogIndex(OBJECTS),
       createReadLimiter(4),
@@ -788,7 +797,7 @@ describe("CoreSource on read parts", () => {
     const { adapter } = scripted([
       () => ({ epoch, items: [{ ok: true, value: { rows: [at] } }] }),
     ])
-    const source = createCoreSource(
+    const source = boundSource(
       () => adapter,
       catalogIndex(OBJECTS),
       createReadLimiter(4),
@@ -811,7 +820,7 @@ describe("CoreSource on read parts", () => {
         items: [{ ok: true, value: { rows: [{ $known: 0 }] } }],
       }),
     ])
-    const source = createCoreSource(
+    const source = boundSource(
       () => adapter,
       catalogIndex(OBJECTS),
       createReadLimiter(4),
@@ -842,7 +851,7 @@ describe("CoreSource on read parts", () => {
           }),
           () => ({ epoch: null, items: [okPart(4), okPart(5)] }),
         ])
-        const source = createCoreSource(
+        const source = boundSource(
           () => adapter,
           catalogIndex(OBJECTS),
           limiter,
@@ -885,7 +894,7 @@ describe("CoreSource on read parts", () => {
         const { adapter, calls } = scripted(
           Array.from({ length: 12 }, () => round)
         )
-        const source = createCoreSource(
+        const source = boundSource(
           () => adapter,
           catalogIndex(OBJECTS),
           createReadLimiter(4),
@@ -908,6 +917,49 @@ describe("CoreSource on read parts", () => {
       }
     })
 
+    it("a session close in the batch-aborted pause leaves no timer and sends nothing more", async () => {
+      vi.useFakeTimers()
+      try {
+        const session = createSession({
+          subject: "u1",
+          limits: DEFAULT_CORE_LIMITS,
+          log: () => {},
+        })
+        const limiter = createReadLimiter(4)
+        const { adapter, calls } = scripted([
+          () => ({
+            epoch: null,
+            items: [
+              okPart(1),
+              refusal("command.unavailable", "batch-aborted"),
+              refusal("command.unavailable", "batch-aborted"),
+            ],
+          }),
+          () => ({ epoch: null, items: [okPart(2), okPart(3)] }),
+        ])
+        const source = createCoreSource(
+          () => adapter,
+          catalogIndex(OBJECTS),
+          limiter,
+          READS_ONLY
+        )
+        const read = source
+          .read(taskQueries(3), { sleep: session.sleep })
+          .catch((e: unknown) => e)
+        await vi.advanceTimersByTimeAsync(BATCH_RETRY_PAUSE_MS - 1)
+        expect(vi.getTimerCount()).toBe(1)
+        // Закриття сесії в ядрі: сон, потім обмежувач (`Core.close`).
+        session.close("disposed", () => {})
+        limiter.close()
+        expect(vi.getTimerCount()).toBe(0)
+        // Очікування завершується без руху годинника.
+        expect(await read).toBeInstanceOf(ReadLimiterClosed)
+        expect(calls).toEqual([3])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it("re-sends a batch-budget part with the next request", async () => {
       const { adapter, calls } = scripted([
         () => ({
@@ -916,7 +968,7 @@ describe("CoreSource on read parts", () => {
         }),
         () => ({ epoch: EPOCH_B, items: [okPart(2)] }),
       ])
-      const source = createCoreSource(
+      const source = boundSource(
         () => adapter,
         catalogIndex(OBJECTS),
         createReadLimiter(4),
@@ -934,7 +986,7 @@ describe("CoreSource on read parts", () => {
       const fake = createFakeSource({ objects: OBJECTS })
       seedTasks(fake, 3)
       fake.oversize(TASK, key(2))
-      const source = createCoreSource(
+      const source = boundSource(
         () => fake.adapter,
         catalogIndex(OBJECTS),
         createReadLimiter(4),
@@ -1091,7 +1143,7 @@ describe("CoreSource: run and version", () => {
     return out
   }
   const over = (server: ServerPort, adapter?: SourceAdapter) =>
-    createCoreSource(
+    boundSource(
       () => adapter ?? READS_ONLY_ADAPTER,
       catalogIndex(OBJECTS),
       createReadLimiter(4),
@@ -1366,7 +1418,7 @@ describe("CoreSource: the version part in the Server Function request", () => {
       read,
     }
     const server: ServerPort = { run: READS_ONLY.run, read }
-    const source = createCoreSource(
+    const source = boundSource(
       () => adapter,
       catalogIndex(OBJECTS),
       createReadLimiter(4),
@@ -1458,7 +1510,7 @@ describe("a marker that carries what the part needs", () => {
         items: [{ ok: true, value: { rows: [marker] } }],
       }),
     ])
-    const source = createCoreSource(
+    const source = boundSource(
       () => adapter,
       catalogIndex([entry, org]),
       createReadLimiter(4),

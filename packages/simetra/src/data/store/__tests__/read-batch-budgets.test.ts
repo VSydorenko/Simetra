@@ -365,3 +365,137 @@ describe("a flood of views", () => {
     expectBodyBudget(requests)
   })
 })
+
+/*
+ * Такт інтервалу (спека П4-B §6.7, §12, Р8): ядро з годинником `Date.now()`,
+ * щоб фейкові таймери вели і строки, і таймер планувальника. Такт частини
+ * `version` не шле; відповідь — маркери (8 Б на ключ) і 2 КіБ, тіло — за
+ * кодеком (`bodyBound`); це дві окремі межі, і кожна перевіряється.
+ */
+describe("the interval tick", () => {
+  const I = DEFAULT_CORE_LIMITS.revalidateIntervalMs
+  const THIRD = "Catalog.Third"
+  const third = catalogEntry({
+    ...org,
+    id: "00000000-0000-4000-8000-000000000199",
+    name: "Third",
+    kindLabel: "third",
+    table: { schema: "public", name: "third" },
+  })
+  const thirdKey = (n: number) => key(20_000 + n)
+  // Більше за `fullPageSize`: `full` читається кількома сторінками.
+  const FULL_ROWS = DEFAULT_CORE_LIMITS.fullPageSize + 50
+
+  const open = (limits: Partial<typeof DEFAULT_CORE_LIMITS> = {}) => {
+    const h = setup({
+      objects: [task, org, third],
+      now: () => Date.now(),
+      limits,
+    })
+    seedWithOrgs(h.fake, ROWS)
+    for (let n = 1; n <= FULL_ROWS; n++)
+      h.fake.insert(THIRD, { ref: thirdKey(n) })
+    return h
+  }
+
+  /** Вікно з `include`, `full` на кількох сторінках і картка без ТЧ. */
+  const watchThree = async (h: ReturnType<typeof open>) => {
+    const window = h.core.view(LIST)
+    watch(window)
+    watch(h.core.view({ kind: "full", object: THIRD }))
+    watch(h.core.view({ kind: "card", object: ORG, key: orgKey(1) }))
+    await settle()
+    expect(window.getSnapshot().status).toBe("ready")
+  }
+
+  /** Ключі, які такт звіряє: стільки маркерів повертає сервер. */
+  const markerRows = (fake: FakeSource, from: number) =>
+    fake.log
+      .filter((r) => r.request >= from)
+      .reduce((sum, r) => sum + (r.known?.keys.length ?? 0), 0)
+
+  const tick = async (h: ReturnType<typeof open>, intervals = 1) => {
+    const from = h.fake.requests.length
+    await vi.advanceTimersByTimeAsync(I * intervals)
+    await settle()
+    return from
+  }
+
+  it("with nothing changed over three views of three objects is 1 request: no version part, the answer within 8 B x rows + 2 KiB", async () => {
+    const h = open()
+    h.fake.epoch = EA
+    await watchThree(h)
+    // Епоха сервера відома лише після першого читання: тут вона вже є, але
+    // сторінки `full` читалися без `known`, тож рядки — зі збережених ключів.
+    const from = await tick(h)
+    const requests = counted(h.fake, from)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.hasVersion).toBe(false)
+    const rows = markerRows(h.fake, from)
+    // Рядки вікна, цілі `include` (по одній на рядок), `full` і картка.
+    expect(rows).toBe(ROWS + ROWS + FULL_ROWS + 1)
+    expect(requests[0]!.response).toBeLessThanOrEqual(8 * rows + 2048)
+    expectBodyBudget(requests)
+  })
+
+  it("more views than a batch holds is ceil(parts / READ_BATCH_MAX) requests", async () => {
+    const h = open()
+    h.fake.epoch = EA
+    for (let n = 1; n <= 20; n++)
+      watch(h.core.view({ kind: "keys", object: TASK, keys: [key(n)] }))
+    await settle()
+    const from = await tick(h)
+    const requests = counted(h.fake, from)
+    const parts = h.fake.log.filter((r) => r.request >= from).length
+    expect(parts).toBe(20)
+    expect(requests).toHaveLength(Math.ceil(parts / READ_BATCH_MAX))
+    expect(requests.every((r) => !r.hasVersion)).toBe(true)
+    expectBodyBudget(requests)
+  })
+
+  it("one changed row (not a reference) is 1 request of the tick and nothing more", async () => {
+    const h = open()
+    h.fake.epoch = EA
+    await watchThree(h)
+    h.fake.edit(TASK, key(1), { title: "changed" })
+    const from = await tick(h)
+    const requests = counted(h.fake, from)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.hasVersion).toBe(false)
+    expectBodyBudget(requests)
+  })
+
+  it("a reference changed to a target missing from the store is 1 request of the tick + ceil(new keys / keysPerRequest) include reads", async () => {
+    const PER_REQUEST = 2
+    const CHANGED = 5
+    const h = open({ keysPerRequest: PER_REQUEST })
+    h.fake.epoch = EA
+    await watchThree(h)
+    for (let n = 1; n <= CHANGED; n++) {
+      h.fake.insert(ORG, { ref: orgKey(100 + n) })
+      h.fake.edit(TASK, key(n), { org: orgKey(100 + n) })
+    }
+    const from = await tick(h)
+    const reads = h.fake.log.filter((r) => r.request >= from)
+    // Запит такту — перший; усе після нього — читання `include` нових цілей.
+    const includeReads = reads.filter((r) => r.request > from)
+    expect(includeReads.flatMap((r) => keysOf(r.query))).toHaveLength(CHANGED)
+    expect(includeReads).toHaveLength(Math.ceil(CHANGED / PER_REQUEST))
+    // Читання `include` одного ходу рушать пакетом: ⌈читань / READ_BATCH_MAX⌉.
+    const requests = counted(h.fake, from)
+    expect(requests).toHaveLength(
+      1 + Math.ceil(includeReads.length / READ_BATCH_MAX)
+    )
+    expect(requests.every((r) => !r.hasVersion)).toBe(true)
+    expectBodyBudget(requests)
+  })
+
+  it("a hidden tab for 10 intervals is 0 requests", async () => {
+    const h = open()
+    h.fake.epoch = EA
+    await watchThree(h)
+    h.core.suspend()
+    const from = await tick(h, 10)
+    expect(h.fake.requests.length - from).toBe(0)
+  })
+})

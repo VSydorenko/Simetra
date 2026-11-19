@@ -13,16 +13,26 @@ import { createSession, type Scope } from "./session"
 import { applySnapshot, dehydrate, parseSnapshot, type SsrContext } from "./ssr"
 import { createRowViews, purgedSnapshot } from "./snapshot"
 import { createBatcher } from "./batcher"
-import { readKeys, tracked, type CoreReadItem, type CoreSource } from "./source"
+import {
+  readKeys,
+  tracked,
+  type CoreReadItem,
+  type CoreSource,
+  type StoreSource,
+} from "./source"
 import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
+import { createScheduler } from "./scheduler"
 import { createRegistry, type Subset, type SubsetRegistry } from "./subsets"
 import {
   activeViews,
   createWriter,
+  hasDueViews,
+  nextViewDue,
   revalidate,
   revalidateHolders,
   revalidateHydrated,
+  singleFlight,
   rereadKey,
   setVisible,
   type WriterContext,
@@ -54,6 +64,26 @@ import {
 /** The data core of one user session (P4-B spec §6.1). */
 export interface CoreSession {
   readonly subject: string
+  /**
+   * The seam of the freshness scheduler for the rights block (B5b): reads
+   * and early due times in the one scheduler of the core.
+   */
+  readonly freshness: {
+    /**
+     * The `now` of the start of the last tick that read something; a tick
+     * without targets leaves it. `undefined` before the first one.
+     */
+    lastTickAt(): number | undefined
+    /**
+     * Puts the objects' due time at `now + U[0, jitterMs)`; a due time that
+     * has come (`jitterMs` 0 included) is read by the merged re-plan of the
+     * microtask, without a timer — the calls of one turn make one batch.
+     */
+    requestReread(
+      objects: readonly ObjectName[],
+      options: { jitterMs: number }
+    ): void
+  }
   /** Aborted when the session closes; internal, for the write transport. */
   readonly signal: AbortSignal
   /** A memoized handle; throws synchronously on a refused form (`data.unsupported-predicate`, `command.invalid`). */
@@ -203,8 +233,10 @@ export interface CoreInspection {
     /** Release timers and preload timers of the held view forms. */
     releaseTimers: number
     preloadTimers: number
-    /** Re-reads scheduled by a version epoch switch, per object. */
-    switchTimers: number
+    /** Objects with a due time of a switch re-read or of a discarded answer. */
+    scheduledObjects: number
+    /** 1 while the scheduler holds its single timer, else 0. */
+    schedulerTimers: number
     /** Mutations in the journal plus attempts not yet settled. */
     journal: number
     /** Section store maps, summed over objects. */
@@ -227,6 +259,12 @@ export interface CoreInspection {
   watchRemarks(listener: (object: ObjectName, key: Key) => void): void
   /** The mutations in the journal of own mutations. */
   mutations(): JournalInspection[]
+  /** The plans the scheduler made (calls of one turn merge into one). */
+  schedulerPlans(): number
+  /** The earliest due time the scheduler would plan; `undefined` — no target. */
+  schedulerDueAt(): number | undefined
+  /** The due time of the objects with a deferred re-read (epoch switch, discarded answer). */
+  scheduledDue(): ReadonlyMap<ObjectName, number>
 }
 
 const inspections = new WeakMap<CoreSession, CoreInspection>()
@@ -356,11 +394,13 @@ export function createCore(options: {
   // Збирач (§6.7) стоїть під цим фільтром: через нього йдуть усі читання, а
   // значення `version` відповіді застосовується до видачі її частин даних.
   const batcher = createBatcher(options.source, {
+    // Сон сесії йде в кожне читання джерела: власного таймера джерело не має.
+    sleep: session.sleep,
     onVersion(version) {
       if (session.token().valid) applyVersion(version.objects)
     },
   })
-  const source: CoreSource = {
+  const source: StoreSource = {
     close: () => batcher.close(),
     refuse: (object) => batcher.refuse?.(object),
     run: (operation) => batcher.run(operation),
@@ -575,6 +615,7 @@ export function createCore(options: {
     defects,
     now,
     readHydrated: (s) => readHydrated(s),
+    touchSchedule: () => scheduler.request(),
   })
 
   // ------------------------------------------------------------ знімок SSR
@@ -725,8 +766,8 @@ export function createCore(options: {
     dirtyObjects.clear()
     tails.clear()
     purges.clear()
-    for (const timer of switchTimers.values()) clearTimeout(timer)
-    switchTimers.clear()
+    scheduled.clear()
+    scheduler.stop()
     staleObjects.clear()
   })
 
@@ -742,28 +783,77 @@ export function createCore(options: {
   const purges = new Map<ObjectName, number>()
   const hiddenKeys = new Map<ObjectName, Set<Key>>()
 
+  // Строки об'єктів у планувальнику (§8.4): перемикання епохи (Р5) і повтор
+  // відкинутої відповіді (Р6). Таймера на об'єкт немає: строк виконує такт, а
+  // на прихованій вкладці — `resume()`. Два строки одного об'єкта незалежні:
+  // перемикання перечитує всі його видимі вигляди, повтор — лише відкинуті.
+  const scheduled = new Map<
+    ObjectName,
+    { whole?: number; retry?: { at: number; views: Set<Subset> } }
+  >()
+  function schedule(
+    object: ObjectName,
+    delayMs: number,
+    views?: ReadonlySet<Subset>
+  ) {
+    // Несумісний об'єкт не читається (§10): строк йому не ставимо.
+    if (staleObjects.has(object)) return
+    const at = now() + delayMs
+    const held = scheduled.get(object) ?? {}
+    scheduled.set(object, held)
+    if (views === undefined) held.whole = Math.min(held.whole ?? at, at)
+    else if (held.retry === undefined)
+      held.retry = { at, views: new Set(views) }
+    else {
+      held.retry.at = Math.min(held.retry.at, at)
+      for (const s of views) held.retry.views.add(s)
+    }
+    scheduler.request()
+  }
+
+  // Бере строки, що настали, й перечитує їх зараз (тільки на видимій вкладці:
+  // кличуть такт і `resume()`). Істина — чи було читання.
+  function runDue(): boolean {
+    let ran = false
+    dropDeferredWhenUnavailable()
+    const catchLog = (error: unknown) => log({ kind: "listener-failed", error })
+    for (const [name, held] of [...scheduled]) {
+      if (held.whole !== undefined && held.whole <= now()) {
+        held.whole = undefined
+        // Строк об'єкта без видимих виглядів нічого не читає: такту з читанням
+        // він не робить.
+        // `lastTickAt` — лише коли такт справді послав читання (§8.4).
+        if (hasDueViews(writerContext, name)) ran = true
+        revalidate(writerContext, name, { visibleOnly: true }).catch(catchLog)
+      }
+      if (held.retry !== undefined && held.retry.at <= now()) {
+        const views = [...held.retry.views].filter((s) => s.alive && !s.purged)
+        held.retry = undefined
+        // Повтор іде тим самим single-flight шляхом, що й явний `revalidate`.
+        const flight = singleFlight(writerContext, objectOf(name), views, {
+          visibleOnly: false,
+        })
+        if (flight.started > 0) ran = true
+        flight.done.catch(catchLog)
+      }
+      if (held.whole === undefined && held.retry === undefined)
+        scheduled.delete(name)
+    }
+    return ran
+  }
+
   // Перемикання епохи: кожен рядок уже `stale` (сховища позначили), а
   // видимі вигляди перечитуються з розкидом — рестарт primary перемикає
   // всіх клієнтів одночасно, і миттєве перечитування було б шквалом.
-  const switchTimers = new Map<ObjectName, ReturnType<typeof setTimeout>>()
   session.onSwitch(() => {
     for (const o of objects.values()) {
       for (const key of o.rows.keys()) rowViews.touch(o.name, key)
       // Несумісний об'єкт не перечитується (§10): його вигляди лишаються в
       // стані `isStale`, а не переходять в `error`.
       if (staleObjects.has(o.name)) continue
-      if (switchTimers.has(o.name)) continue
+      if (scheduled.get(o.name)?.whole !== undefined) continue
       if (!activeViews(writerContext, o.name).some((v) => v.visible)) continue
-      const delay = Math.floor(Math.random() * limits.revalidateIntervalMs)
-      switchTimers.set(
-        o.name,
-        setTimeout(() => {
-          switchTimers.delete(o.name)
-          revalidate(writerContext, o.name, { visibleOnly: true }).catch(
-            (error: unknown) => log({ kind: "listener-failed", error })
-          )
-        }, delay)
-      )
+      schedule(o.name, Math.floor(Math.random() * limits.revalidateIntervalMs))
     }
   })
 
@@ -820,6 +910,73 @@ export function createCore(options: {
     )
   }
 
+  // Сесія вичерпала межу відкинутих: кожна відповідь до нової сесії
+  // відкидається, тож відкладені строки (перемикання епохи, повтор відкинутої
+  // відповіді) були б читаннями без шансу й без паузи.
+  // Запит скидає `scheduled`: після межі відкинутих жодне відкладене читання
+  // не має виконатися (§6.2).
+  function dropDeferredWhenUnavailable() {
+    if (session.versions.unavailable()) scheduled.clear()
+  }
+
+  function schedulerDue(): number | undefined {
+    let due: number | undefined
+    dropDeferredWhenUnavailable()
+    // Після межі відкинутих планувальник нічого не читає до нової сесії (§6.2).
+    if (
+      session.versions.unavailable() &&
+      !defects.has("scheduler-reads-unavailable")
+    )
+      return undefined
+    for (const held of scheduled.values()) {
+      for (const at of [held.whole, held.retry?.at])
+        if (at !== undefined && (due === undefined || at < due)) due = at
+    }
+    for (const o of objects.values()) {
+      if (staleObjects.has(o.name)) continue
+      const at = nextViewDue(writerContext, o.name)
+      if (at !== undefined && (due === undefined || at < due)) due = at
+    }
+    return due
+  }
+  let lastTickAt: number | undefined
+  // Один таймер на ядро (§6.7). Такт — звірка з вікном `0,1 × I`, але без
+  // частини `version`: версію каталогу звіряють гідратація, `resume()` і
+  // `serverHash` (Р8).
+  const scheduler = createScheduler({
+    now,
+    visible: () => visible,
+    closed: () => closed !== undefined || !session.token().valid,
+    dueAt: schedulerDue,
+    tick() {
+      if (
+        session.versions.unavailable() &&
+        !defects.has("scheduler-reads-unavailable")
+      ) {
+        scheduled.clear()
+        return
+      }
+      const minAgeMs = 0.9 * limits.revalidateIntervalMs
+      // Такт без цілей `lastTickAt` не рухає (шов B5b, Р10).
+      let read = false
+      for (const o of objects.values())
+        if (
+          !staleObjects.has(o.name) &&
+          hasDueViews(writerContext, o.name, minAgeMs)
+        )
+          read = true
+      if (runDue()) read = true
+      if (read) lastTickAt = now()
+      reconcile({ minAgeMs }, undefined, [])
+    },
+    defects,
+  })
+  // Кожен `commit` (осідання читання, запис, звільнення, purge) міг змінити
+  // набір цілей чи строк: перепланування зливається в одне на мікрозадачу.
+  session.onFlush(() => {
+    if (!defects.has("scheduler-no-reschedule")) scheduler.request()
+  })
+
   const writerContext: WriterContext = {
     session,
     source,
@@ -837,6 +994,7 @@ export function createCore(options: {
     defects,
     now,
     hiddenKeys,
+    schedule,
     journal: {
       erase: (object, key) => overlay.erase(object, key),
       eraseScope: (object, scope) => overlay.eraseScope(object, scope),
@@ -864,11 +1022,9 @@ export function createCore(options: {
     if (staleObjects.has(o.name)) return false
     staleObjects.add(o.name)
     dirtyObjects.add(o.name)
-    // Таймер перемикання епохи не перечитає несумісний об'єкт: `revalidate` у
+    // Строк перемикання епохи не перечитає несумісний об'єкт: `revalidate` у
     // ньому перевів би вигляди в `error` замість `isStale`.
-    const timer = switchTimers.get(o.name)
-    if (timer !== undefined) clearTimeout(timer)
-    switchTimers.delete(o.name)
+    scheduled.delete(o.name)
     // Частини, що вже стоять у черзі обмежувача, теж не підуть.
     source.refuse?.(o.name)
     // Власник із рядками ТЧ може не мати шапки в сховищі (`disown`).
@@ -933,14 +1089,19 @@ export function createCore(options: {
       })
   }
 
+  type ServicePart = "version"
+
   // Звірка (§6.7): версія каталогу й перечитування видимих виглядів живих
   // об'єктів. Усе синхронно, без `await` між об'єктами, тож збирач пакета
   // читань зливає їх в один запит. Її кличуть `endHydration` і `resume`.
   function reconcile(
     reconcileOptions: { minAgeMs?: number } = {},
-    snapshotViews?: ReadonlySet<Subset>
+    snapshotViews?: ReadonlySet<Subset>,
+    // Склад службових частин (Р8): `endHydration` і `resume()` шлють
+    // `version`, такт інтервалу — жодної.
+    services: readonly ServicePart[] = ["version"]
   ) {
-    core.requestVersion()
+    if (services.includes("version")) core.requestVersion()
     for (const o of objects.values()) {
       // Несумісний об'єкт не читається (§10): перечитування перевело б його
       // вигляди в `error` замість показати `isStale`.
@@ -963,6 +1124,14 @@ export function createCore(options: {
 
   const core: CoreSession = {
     subject: options.subject,
+    freshness: {
+      lastTickAt: () => lastTickAt,
+      requestReread(names, { jitterMs }) {
+        if (!session.token().valid) return
+        for (const name of names)
+          schedule(name, Math.floor(Math.random() * jitterMs))
+      },
+    },
     signal: session.signal,
     view: (spec) => registry.view(spec),
     preload: (spec, preloadOptions) => registry.preload(spec, preloadOptions),
@@ -1074,10 +1243,16 @@ export function createCore(options: {
     },
     suspend() {
       visible = false
+      scheduler.suspend()
     },
     resume() {
       visible = true
+      scheduler.request()
       if (!session.token().valid) return
+      // Строки, що настали на прихованій вкладці (перемикання епохи, повтор
+      // відкинутої відповіді), беруться незалежно від `minAgeMs`: їхні рядки
+      // вже `stale`, а свіжість тут не міра.
+      runDue()
       // Злиття: подвійний сигнал повернення (focus + visibilitychange) — одна
       // звірка; відлік іде від останнього прийнятого, а не від кожного виклику.
       const at = now()
@@ -1091,6 +1266,7 @@ export function createCore(options: {
     activeViews: (object) => activeViews(writerContext, object),
     setVisible(spec, visible) {
       setVisible(writerContext, spec, visible)
+      scheduler.request()
       if (!visible) return
       const s = registry.find(spec)
       if (s !== undefined) readHydrated(s)
@@ -1139,6 +1315,18 @@ export function createCore(options: {
       remarkListener = listener
     },
     mutations: () => overlay.entries(),
+    schedulerPlans: () => scheduler.plans(),
+    schedulerDueAt: schedulerDue,
+    scheduledDue: () =>
+      new Map(
+        [...scheduled].flatMap(([name, held]) => {
+          const at = Math.min(
+            held.whole ?? Number.POSITIVE_INFINITY,
+            held.retry?.at ?? Number.POSITIVE_INFINITY
+          )
+          return Number.isFinite(at) ? [[name, at] as const] : []
+        })
+      ),
     versionEpochs: () => ({
       current: session.versions.current(),
       previous: session.versions.previous(),
@@ -1160,7 +1348,8 @@ export function createCore(options: {
         purges: purges.size,
         releaseTimers: subs.filter((s) => s.releaseTimer !== undefined).length,
         preloadTimers: subs.reduce((n, s) => n + s.preloadTimers.size, 0),
-        switchTimers: switchTimers.size,
+        scheduledObjects: scheduled.size,
+        schedulerTimers: scheduler.timers(),
         journal: overlay.size(),
         sectionOwners: sections.reduce((n, x) => n + x.owners, 0),
         sectionOwnerVersions: sections.reduce((n, x) => n + x.ownerVersions, 0),

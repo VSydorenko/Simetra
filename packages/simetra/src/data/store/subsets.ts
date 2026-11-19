@@ -33,7 +33,7 @@ import {
   withRefs,
   type RowViews,
 } from "./snapshot"
-import { ReadLimiterClosed, type CoreSource } from "./source"
+import { ReadLimiterClosed, type StoreSource } from "./source"
 import type {
   CoreLimits,
   CoreLogEntry,
@@ -57,7 +57,7 @@ import type {
 
 export interface RegistryContext {
   readonly session: Session
-  readonly source: CoreSource
+  readonly source: StoreSource
   readonly index: CatalogIndex
   readonly limits: CoreLimits
   readonly strict: boolean
@@ -80,6 +80,8 @@ export interface RegistryContext {
   readonly now: () => number
   /** Reads a view over hydration-only rows that just became visible (§6.6). */
   readHydrated(s: Subset): void
+  /** The set of visible views changed: the scheduler re-plans its timer. */
+  touchSchedule(): void
 }
 
 type Timer = ReturnType<typeof setTimeout>
@@ -105,11 +107,23 @@ export interface Subset extends ReaderTarget {
   loaded: boolean
   /**
    * The start time of the last read that settled successfully (P4-B spec §6.7);
-   * a hydrated view has none and counts as overdue.
+   * a view never read (a hydrated one, a card shown from the store) has none
+   * and no due time.
    */
   refreshedAt: number | undefined
   /** The system re-reads started for this view; the model test counts them. */
   rereads: number
+  /**
+   * Failed reads of a loaded view in a row (a system re-read or `refresh()`);
+   * a success resets it. A discarded answer is not a failure (P4-B spec §6.7).
+   */
+  failures: number
+  /** The start time of the last failed read; `refreshedAt` stays untouched. */
+  failedAt: number | undefined
+  /** The tail pass of an explicit `revalidate` waiting for the view in flight. */
+  rereadTail: Promise<void> | undefined
+  /** Resolved when a system re-read of the view settles. */
+  rereadWaiters: Array<() => void>
   status: "loading" | "ready" | "refreshing" | "error"
   error: CommandError | DataError | undefined
   needsRefresh: boolean
@@ -191,6 +205,32 @@ const copiesOf = (s: Subset): Map<Key, RowView> => {
   COPIES.set(s, found)
   return found
 }
+
+/**
+ * The pause after `failures` failed reads in a row (P4-B spec §6.7):
+ * `min(I, 0.1 × I × 2^(n − 1))` from the start of the failed attempt.
+ */
+export const failurePause = (failures: number, intervalMs: number): number =>
+  Math.min(intervalMs, 0.1 * intervalMs * 2 ** (failures - 1))
+
+/**
+ * The due time of a loaded view (one function for the `revalidate` filter and
+ * the scheduler): after failures — the end of the pause, else
+ * `refreshedAt + ageMs` (the interval by default). A view never read has no
+ * due time: a card shown from the store freshens with the view that holds its
+ * row, a hydrated view is read by the reconciliation of the hydration.
+ */
+export const viewDueAt = (
+  s: Subset,
+  intervalMs: number,
+  ageMs: number = intervalMs
+): number =>
+  s.failures > 0 && s.failedAt !== undefined
+    ? s.failedAt + failurePause(s.failures, intervalMs)
+    : s.refreshedAt === undefined
+      ? Number.POSITIVE_INFINITY
+      : s.refreshedAt + ageMs
+
 const ACCESS_CHANGED = purgedSnapshot("access-changed")
 
 /**
@@ -288,6 +328,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                 }
                 s.loaded = true
                 s.refreshedAt = startedAt
+                s.failures = 0
+                s.failedAt = undefined
                 s.status = "ready"
                 s.error = undefined
                 s.needsRefresh = false
@@ -323,15 +365,21 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           }
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
-          return new Promise<void>((resolve) => {
-            setTimeout(resolve, pause)
-          }).then(() => (token.valid ? attempt() : undefined))
+          return session
+            .sleep(pause)
+            .then(() => (token.valid ? attempt() : undefined))
         },
         (error: unknown) => {
           // Закритий обмежувач — сесію закрито: писати нікуди.
           if (error instanceof ReadLimiterClosed) return
           session.commit(
             () => {
+              // Збій читання вже завантаженого вигляду — лічильник паузи
+              // (§6.7); збій першого завантаження його не веде.
+              if (s.loaded) {
+                s.failures++
+                s.failedAt = startedAt
+              }
               s.status = "error"
               s.error = errorOf(error)
               s.dirty = true
@@ -346,6 +394,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     void attempt().finally(() => {
       if (s.flight !== gen) return
       s.flight = undefined
+      // Вигляд у польоті — не ціль планувальника: `commit` відповіді був до
+      // цього рядка, тож перепланування потрібне й тут.
+      ctx.touchSchedule()
       s.settled = true
       resolveWaiters(s)
       if (s.trailing && s.alive && !isClosed()) {
@@ -480,9 +531,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           if (!discarded || !token.valid) return
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
-          return new Promise<void>((resolve) => {
-            setTimeout(resolve, pause)
-          }).then(() => (token.valid ? attempt() : undefined))
+          return session
+            .sleep(pause)
+            .then(() => (token.valid ? attempt() : undefined))
         },
         (error: unknown) => {
           if (error instanceof ReadLimiterClosed) return
@@ -726,6 +777,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       loaded: false,
       refreshedAt: undefined,
       rereads: 0,
+      failures: 0,
+      failedAt: undefined,
+      rereadTail: undefined,
+      rereadWaiters: [],
       owned: new Set(),
       included: new Map(),
       layout: form.spec.kind === "card" ? [form.spec.key] : [],
@@ -943,11 +998,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         s.preloadTimers.clear()
         start(s, true)
         ctx.readHydrated(s)
+        ctx.touchSchedule()
         let done = false
         return () => {
           if (done) return
           done = true
           s.listeners.delete(entry)
+          ctx.touchSchedule()
           if (s.alive && idle(s) && !isClosed()) scheduleRelease(s)
         }
       },

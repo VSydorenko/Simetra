@@ -467,9 +467,13 @@ describe("isStale", () => {
     await flush()
     expect(list.last().isStale).toBe(false)
     expect(card.last().isStale).toBe(false)
+    // Вкладка прихована: такт (інтервал 1 мс) і строк перемикання епохи нічого
+    // не шлють, тож жодне читання не обжене перевірку й не підтвердить рядки
+    // само: його відповідь в іншій епосі перемкнула б епоху й підтвердила б їх.
+    act(() => core.suspend())
     // Читання вже з іншою епохою: ядро перемикає епоху й позначає рядки
-    // `stale` до власного перечитування. Сервер тримає всі читання, поки тест
-    // їх не відпустить, тож перечитування не може обігнати перевірку.
+    // `stale` до власного перечитування. Сервер тримає читання, поки тест
+    // їх не відпустить.
     fake.epoch = EB
     fake.insert(TASK, taskValues(3))
     fake.mode = "manual"
@@ -482,11 +486,17 @@ describe("isStale", () => {
     expect(card.last().row).toMatchObject({ state: "stale" })
     expect(list.last().isStale).toBe(false)
     expect(card.last().isStale).toBe(false)
-    // Таймер системного перечитування (1 мс) спрацьовує, але відповідь тримає сервер.
+    // Строк перемикання минув, але вкладка прихована: перечитування не йде.
     await act(async () => {
       await new Promise((r) => setTimeout(r, 30))
       await settle()
     })
+    expect(fake.pending).toHaveLength(0)
+    expect(card.last().row).toMatchObject({ state: "stale" })
+    // Повернення бере об'єкт перемикання; відповідь тримає сервер.
+    act(() => core.resume())
+    await flush()
+    expect(fake.pending.length).toBeGreaterThan(0)
     expect(card.last().row).toMatchObject({ state: "stale" })
     fake.mode = "auto"
     await act(async () => {
