@@ -1046,5 +1046,54 @@ export function describeReferenceDomain(): void {
         source.sqlUnits.map((u) => u.identity).sort()
       )
     })
+
+    it("a label already in the folder, shifted, is content the database does not have", async () => {
+      // Зворотний бік `expectKindLabelsKept`: мітка, яка вже була в теці, —
+      // вміст розгорнутої бази (рядок подання `simetra.kind_labels`), тож
+      // зсунута вона робить теку іншою за базу, і прийом за вмістом це
+      // називає, а не ховає
+      const files = readReferenceDomain(testProvider())
+      const original = await compile(files)
+      expect(errors(original.diagnostics)).toEqual([])
+      const source = original.model!
+      const { scope } = await engineScope(source)
+      const path = "custom-tables/UserSettings/UserSettings.meta.json"
+      const meta = JSON.parse(files.get(path)!) as { kindLabel?: unknown }
+      expect(meta.kindLabel).toBe("user_settings")
+      const shifted = new Map(files)
+      shifted.set(
+        path,
+        JSON.stringify({ ...meta, kindLabel: "kept_user_settings" })
+      )
+      const refusals = await inTarget(
+        renderDesiredState(source).sql,
+        scope,
+        async (target) => {
+          const extracted = await engine.extract(target, scope)
+          expect(errors(extracted.diagnostics)).toEqual([])
+          const reversed = await reverseGenerate(extracted.model, {
+            project: {
+              name: source.project.name,
+              defaultSchema: source.project.defaultSchema,
+              attributeCase: source.project.naming.attributeCase,
+              databaseProvider: source.project.database.provider,
+            },
+            existing: shifted,
+            newId: () => randomUUID(),
+            schemaPath,
+            parse,
+            ...(await referenceOf(target, shifted)),
+          })
+          expect(reversed.changes).toEqual([])
+          return errors(reversed.diagnostics).map((d) => ({
+            code: d.code,
+            file: d.file,
+          }))
+        }
+      )
+      expect(refusals).toEqual([
+        { code: "schema.reserved", file: "sql/simetra/kind_labels.sql" },
+      ])
+    })
   })
 }
