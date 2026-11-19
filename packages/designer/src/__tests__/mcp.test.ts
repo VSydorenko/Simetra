@@ -309,6 +309,7 @@ describe("simetra mcp", TOOL_PIPELINE, () => {
       "promote",
       "rename",
       "roles",
+      "signals-config",
     ])
   })
 

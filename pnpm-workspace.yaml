@@ -3,6 +3,7 @@ packages:
   - "packages/create-simetra-app/template"
 allowBuilds:
   esbuild: false
+  protobufjs: false
 # Обхід TanStack Start #8139: збирач не нижчий за Rolldown 1.2.16 і Vite 8.3
 # (звіт П0 (а)); Vite без override тягне старіший Rolldown
 overrides:

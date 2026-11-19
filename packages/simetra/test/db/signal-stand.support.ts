@@ -14,11 +14,6 @@ import {
   quoteIdent,
 } from "simetra/model"
 import { compile } from "simetra/compiler"
-import {
-  SIGNAL_OUTBOX_POLICIES,
-  outboxUnits,
-} from "../../src/compiler/platform/outbox"
-import { loadSqlParser } from "../../src/compiler/sql/parse"
 import { loginSettingSql } from "../../src/schema/apply/platform-roles"
 import { renderDesiredState } from "simetra/schema"
 import {
@@ -37,6 +32,7 @@ import { nodeExec, runContainers } from "./external"
 import { testProvider } from "./profile"
 import {
   downAllStands,
+  grantStandConsumer,
   startSignalStand,
   type SignalStand,
 } from "./signal-stand"
@@ -101,24 +97,8 @@ export function defineSignalStandCases(): void {
     await owner.query(renderDesiredState(result.model!).sql)
     await admin.query(`CREATE ROLE ${quoteIdent(GROUP)} NOLOGIN NOINHERIT`)
     rolesCreated = 1
-    // Гранти групи — ті самі одиниці outbox, що дає генератор, з іменем
-    // групи прогону й іменами політик з суфіксом (політики таблиці унікальні)
-    const real = PLATFORM_ROLES.signalConsumer
-    const policyNames = Object.values(SIGNAL_OUTBOX_POLICIES)
-    const grants = outboxUnits(
-      "signal-stand",
-      testProvider(),
-      await loadSqlParser()
-    )
-      .map((unit) => unit.sql)
-      .filter((sql) => sql.includes(quoteIdent(real)))
-    for (const sql of grants) {
-      let tagged = sql.split(quoteIdent(real)).join(quoteIdent(GROUP))
-      for (const name of policyNames)
-        tagged = tagged.split(name).join(`${name}_${runTag()}`)
-      await owner.query(tagged)
-    }
-    expect(grants.length).toBeGreaterThanOrEqual(5)
+    // Гранти групи — ті самі одиниці outbox, що дає генератор
+    expect(await grantStandConsumer(owner, GROUP)).toBeGreaterThanOrEqual(5)
     await admin.query(
       `CREATE ROLE ${quoteIdent(LOGIN)} LOGIN NOINHERIT PASSWORD '${password}'`
     )
