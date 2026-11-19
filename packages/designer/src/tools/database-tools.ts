@@ -96,7 +96,7 @@ const schemaName = z.string().min(1).max(63)
 export const introspectTool = defineTool({
   name: "introspect",
   description:
-    "Read the live database into metadata: tables become CustomTable, enum types PgEnum, everything else verbatim .sql files; ids of known objects are kept. The connection comes from the server's environment. Scope: the schemas of the existing metadata plus `schemas`; a directory without project.meta.json needs `schemas`. Over existing metadata it also loads that metadata into one throwaway shadow database (like `diff`) to recognise the platform's generated objects in their catalog form; the target is only read, and a shadow that cannot be built is an error. Writes nothing when anything is unrepresentable, does not compile or the shadow fails.",
+    "Read the live database into metadata: tables become CustomTable, enums PgEnum, the rest verbatim .sql; known ids are kept. Connection: server environment. Scope: existing metadata's schemas plus `schemas` (required without project.meta.json). Existing metadata loads into one throwaway shadow (like `diff`); a shadow that cannot be built is an error. Writes nothing if anything is unrepresentable or fails to compile.",
   input: z.strictObject({
     schemas: z.array(schemaName).min(1).optional().meta({
       description:
