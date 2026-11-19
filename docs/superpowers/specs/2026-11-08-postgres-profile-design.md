@@ -774,8 +774,10 @@ Centrifugo з рушієм у пам'яті, обрив сокета без reco
 - `aud` — `centrifugo:<project.name>` (окремого id застосунку немає), `iss` — origin host-а; Centrifugo
   перевіряє обидва (`client.token.audience`, `client.token.issuer`), тож
   токен іншого застосунку чи середовища не приймається.
-- Host публікує JWKS на шляху `SIGNALS_JWKS_PATH` (`/simetra/signals/jwks`); Centrifugo кешує ключі до
-  години. Centrifugo бере JWKS лише за внутрішньою адресою host-а або через
+- Host публікує JWKS на шляху `SIGNALS_JWKS_PATH` (`/simetra/signals/jwks`); Centrifugo v6 кешує ключі
+  5 хв і на невідомому `kid` перечитує JWKS не частіше ніж раз на 5 с
+  (`internal/jwks/manager.go`, `_defaultTTL`, `_defaultRefetchInterval`); ключ,
+  прибраний з JWKS, перестає прийматися не пізніше ніж за 5 хв. Centrifugo бере JWKS лише за внутрішньою адресою host-а або через
   TLS: підміна відповіді JWKS дала б токен на будь-який канал.
 - **Ротація:** (1) новий ключ додається в JWKS; (2) підпис новим ключем
   починається не раніше ніж через 1 год 5 хв; (3) старий ключ лишається в
