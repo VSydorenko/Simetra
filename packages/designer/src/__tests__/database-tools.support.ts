@@ -1,13 +1,19 @@
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { afterEach, expect } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 import { databaseResource } from "../io/database"
 import { toolByName } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
 import type { InvokeOptions, ToolResult } from "../tools/types"
 import type { DiffData } from "../tools/database-tools"
-import { compile, platformInstall } from "simetra/compiler"
+import {
+  compile,
+  loadSqlParser,
+  platformInstall,
+  renderModelIndependentLayer,
+  renderSharedTriggerFunctions,
+} from "simetra/compiler"
 import { applyStateOwnership, type EngineScope } from "simetra/schema"
 import { readMetadataDir } from "../io/metadata-dir"
 import { testProvider } from "../../../simetra/test/support"
@@ -151,5 +157,112 @@ export async function introspected(
     expect(errors(r)).toEqual([])
     expect(r.written).toBe(true)
     await fn(dir, env, url)
+  })
+}
+
+/**
+ * Таблиця застосунку з колонками механіки, спільні функції шару в `simetra` і
+ * тригер механіки на таблиці в тексті генератора; `edit` змінює лише текст
+ * тригера. Шар рендерить той самий генератор, що й застосування, тож без
+ * зміни тригер — платформний вміст.
+ */
+async function layerTarget(edit: (trigger: string) => string): Promise<{
+  sql: string
+  trigger: string
+}> {
+  const parse = await loadSqlParser()
+  const table = { schema: "app", name: "note" }
+  const trigger = renderModelIndependentLayer(
+    table,
+    testProvider(),
+    parse
+  ).find(
+    (u) =>
+      u.class === "trigger" &&
+      u.identity === "trigger:app.note.note_simetra_touch"
+  )
+  expect(trigger).toBeDefined()
+  const functions = renderSharedTriggerFunctions(testProvider(), parse)
+  return {
+    sql: [
+      "CREATE SCHEMA simetra;",
+      ...functions.map((u) => u.sql),
+      "CREATE SCHEMA app;",
+      "CREATE TABLE app.note (id uuid PRIMARY KEY, updated_at timestamptz NOT NULL, version bigint NOT NULL);",
+      edit(trigger!.sql),
+    ].join("\n"),
+    trigger: trigger!.identity,
+  }
+}
+
+const noteInput = {
+  schemas: ["app"],
+  project: {
+    name: "Notes",
+    attributeCase: "snake_case",
+    database: { provider: testProvider() },
+  },
+}
+
+/**
+ * И4 на шляху інструмента (план #286): тригер механіки на таблиці
+ * застосунку платформний лише за вмістом. Схему `simetra` `introspect` не
+ * читає, тож тут — лише тригер у схемі застосунку. Реєструється з файлу
+ * кожного профілю (`database-tools.db.test.ts`,
+ * `database-tools.supabase.db.test.ts`).
+ */
+export function describeToolPathInvariants(): void {
+  describe("introspect judges a mechanics trigger by its content", () => {
+    it("the trigger in the generator's form is the platform's and is not written", async () => {
+      const target = await layerTarget((sql) => sql)
+      await inTarget(target.sql, ["app"], async (url) => {
+        const dir = await freshProject()
+        const r = await call(
+          "introspect",
+          noteInput,
+          options(dir, { [ENV]: url })
+        )
+        expect(errors(r)).toEqual([])
+        expect(r.written).toBe(true)
+        const compiled = await compile(await readMetadataDir(dir))
+        expect(
+          compiled
+            .model!.sqlUnits.filter((u) => u.file !== undefined)
+            .map((u) => u.identity)
+        ).toEqual([])
+      })
+    })
+
+    it("the same name with another event goes to the folder and is refused (И4)", async () => {
+      const target = await layerTarget((sql) => {
+        expect(sql).toContain(" BEFORE ")
+        return sql.replace(" BEFORE ", " AFTER ")
+      })
+      await inTarget(target.sql, ["app"], async (url) => {
+        const dir = await freshProject()
+        const r = await call(
+          "introspect",
+          noteInput,
+          options(dir, { [ENV]: url })
+        )
+        expect(r.written).toBe(false)
+        // Точна одиниця: сам тригер у файлі таблиці, а не інша одиниця шару
+        expect(
+          errors(r).map((d) => ({
+            code: d.code,
+            file: d.file,
+            unit: d.params?.unit,
+            function: d.params?.function,
+          }))
+        ).toEqual([
+          {
+            code: "sql.platform-function-call",
+            file: "custom-tables/Note/Note.sql",
+            unit: target.trigger,
+            function: "simetra.touch",
+          },
+        ])
+      })
+    })
   })
 }

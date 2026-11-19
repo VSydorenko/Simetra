@@ -47,6 +47,7 @@ import {
   scopeOf,
   SHOP,
   useDatabaseToolsCleanup,
+  describeToolPathInvariants,
 } from "./database-tools.support"
 import { project, snapshotOf, useTmpProjects } from "./helpers/catalog"
 
@@ -62,6 +63,9 @@ const stack = { url: testDatabaseUrl() }
 useTmpProjects()
 
 useDatabaseToolsCleanup()
+
+// Спільне з файлом другого профілю: тригер механіки — платформний за вмістом
+describeToolPathInvariants()
 
 const clients: Client[] = []
 afterEach(async () => {

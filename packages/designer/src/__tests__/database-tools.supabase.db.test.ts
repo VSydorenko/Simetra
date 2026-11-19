@@ -8,6 +8,7 @@ import {
   introspected,
   options,
   useDatabaseToolsCleanup,
+  describeToolPathInvariants,
 } from "./database-tools.support"
 
 /**
@@ -17,6 +18,9 @@ import {
  */
 
 useDatabaseToolsCleanup()
+
+// Спільне з файлом другого профілю: тригер механіки — платформний за вмістом
+describeToolPathInvariants()
 
 describe("sessions", () => {
   it("a shadow on another server of the same major version is accepted", async () => {
