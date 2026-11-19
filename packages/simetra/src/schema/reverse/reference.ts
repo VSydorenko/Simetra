@@ -3,12 +3,17 @@ import { desiredForApply } from "../apply/desired"
 import type { ApplyDatabase } from "../apply/port"
 import { readShadowEnvironment } from "../apply/shadow-environment"
 import type { EngineDiagnostic, SchemaEngine, ShadowOptions } from "../engine"
+import { dedupe } from "../engine/desired"
 import { keptModel } from "./generate"
 
 export interface FolderReference {
   /** Каталог тіні з бажаним станом теки; `undefined` — теки немає чи тінь не вдалася. */
   catalog: CatalogModel | undefined
-  /** Відмова середовища чи збій тіні: без них тиша сховала б, чому еталона немає. */
+  /**
+   * Діагностики межі теки, тіні (зокрема попередження прибирання) і її
+   * extract — як у `diff`; відмова середовища чи збій тіні тут пояснюють, чому
+   * еталона немає.
+   */
   diagnostics: EngineDiagnostic[]
 }
 
@@ -42,6 +47,18 @@ export async function folderReference(
     (shadow) => engine.extract(shadow, desired.scope)
   )
   if (outcome.status === "shadow-failed")
-    return { catalog: undefined, diagnostics: outcome.diagnostics }
-  return { catalog: outcome.value.model, diagnostics: [] }
+    return {
+      catalog: undefined,
+      diagnostics: dedupe([...desired.diagnostics, ...outcome.diagnostics]),
+    }
+  // Ті самі три джерела, що й у звірці (`compareWithDesired`): попередження
+  // тіні чи її extract, загублене тут, `introspect` не показав би
+  return {
+    catalog: outcome.value.model,
+    diagnostics: dedupe([
+      ...desired.diagnostics,
+      ...outcome.diagnostics,
+      ...outcome.value.diagnostics,
+    ]),
+  }
 }

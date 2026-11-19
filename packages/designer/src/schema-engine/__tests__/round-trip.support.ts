@@ -370,7 +370,9 @@ async function referenceOf(
     { target },
     existing
   )
-  expect(reference.diagnostics).toEqual([])
+  // Без помилок, як і extract цілі: попередження двигуна (`frontend_warning`
+  // засіву тіні з типовими привілеями) — справжній вивід, а не збій еталона
+  expect(errors(reference.diagnostics)).toEqual([])
   return reference.catalog === undefined ? {} : { reference: reference.catalog }
 }
 
