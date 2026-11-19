@@ -87,10 +87,31 @@ const REVOKE_LEAD_MS = 4_000
 const EXPIRED_SUB_CLOSE_DELAY_MS = 25_000
 const PRESENCE_UPDATE_INTERVAL_MS = 5_000
 const REVOKE_SLACK_MS = 5_000
+// TTL токена з'єднання (спека профілю §6.2) і за скільки до його `exp`
+// з'єднання кейсу ротації відкривається; поновлення можливе до `exp` +
+// `expired_close_delay`
+const CONNECTION_TTL_MS = 15 * MINUTE
+const ROTATION_LEAD_MS = 6_000
+const EXPIRED_CLOSE_DELAY_MS = 25_000
 // Скільки клієнт чекає публікації, якої не має бути, після контрольної
 const QUIET_MS = 500
 const WARMUP = 20
 const MEASURED = 200
+
+/** Чекає умови не довше `ms`, інакше — помилка з `message`. */
+const until = (condition: () => boolean, ms: number, message: string) =>
+  new Promise<void>((resolve, reject) => {
+    const deadline = Date.now() + ms
+    const timer = setInterval(() => {
+      if (condition()) {
+        clearInterval(timer)
+        resolve()
+      } else if (Date.now() > deadline) {
+        clearInterval(timer)
+        reject(new Error(message))
+      }
+    }, 100)
+  })
 
 const percentile = (sorted: number[], p: number) =>
   sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)]!
@@ -253,8 +274,9 @@ export function describeSignalDelivery(): void {
     }, 60_000)
     afterAll(() => consumer.close(), 60_000)
 
-    // Ключі порту: старий (зрілий) і молодший за 65 хв — обидва в JWKS з
-    // першого читання; годинник порту зсувається в кейсі ротації
+    // Ключі порту: старий (зрілий) і молодший за 65 хв. JWKS тестового host-а
+    // спершу віддає лише старий: новий ключ Centrifugo побачить тільки після
+    // публікації в кейсі ротації. Годинник порту там само зсувається
     let shift = 0
     const clock = () => new Date(Date.now() + shift)
     let oldKey: SigningKey
@@ -262,6 +284,11 @@ export function describeSignalDelivery(): void {
     let tokens: SignalTokens
     let audience: string
     let jwks: JwksServer
+    // JWKS, який віддає тестовий host зараз
+    let served: () => unknown = () => ({ keys: [] })
+    const oldOnly = () => ({
+      keys: tokens.jwks().keys.filter((k) => k.kid === "k-old"),
+    })
     let stand: SignalStand
     let runtime: CommandRuntime
     beforeAll(async () => {
@@ -269,7 +296,6 @@ export function describeSignalDelivery(): void {
       oldKey = await signingKey("k-old", new Date(now - 120 * MINUTE))
       newKey = await signingKey("k-new", new Date(now - 30 * MINUTE))
       audience = `centrifugo:${env.model.project.name}`
-      let served: () => unknown = () => ({ keys: [] })
       jwks = await startJwksServer(() => served())
       tokens = await createCentrifugoTokens({
         keys: [oldKey, newKey],
@@ -277,7 +303,7 @@ export function describeSignalDelivery(): void {
         issuer: jwks.origin,
         now: clock,
       })
-      served = () => tokens.jwks()
+      served = oldOnly
       stand = await startSignalStand({
         databaseUrl: consumerUrl,
         notifyUrl: consumerUrl,
@@ -732,52 +758,104 @@ export function describeSignalDelivery(): void {
       })
     })
 
-    it("key rotation without a gap: the port clock moves signing to the matured key, both connections keep receiving", async () => {
+    // Ротація (спека профілю §6.3): JWKS host-а спершу без нового ключа.
+    // Host публікує `k-new`; Centrifugo кешує JWKS до години, а порт підписує
+    // новим ключем лише через 65 хв — за цей час кеш оновлюється. Годинник
+    // порту зсуває 40 хв, а оновлення кешу заміняє рестарт Centrifugo (кеш
+    // скидається, як після спливу години). Тоді токен на `k-new` приймається,
+    // а з'єднання, відкрите на старому ключі вже після рестарту, після
+    // відставки ключа поновлює токен новим ключем і не рветься
+    it("key rotation: a key published after the first JWKS read signs once the cache renews, a connection on the retired key refreshes onto it without a gap", async () => {
       const reader = a.people.reader!
-      const first = await subscriber(reader, [ticketChannel(a)])
-      let disconnected = 0
-      first.client.centrifuge.on("disconnected", () => disconnected++)
+      const grant = await runtime.authorizeChannels(reader.session, [
+        ticketChannel(a),
+      ])
+      const kids = () =>
+        (served() as { keys: { kid: string }[] }).keys.map((k) => k.kid)
+      expect(kids()).toEqual(["k-old"])
       try {
-        const grant = await runtime.authorizeChannels(reader.session, [
-          ticketChannel(a),
-        ])
-        expect(headerOf((await tokens.connectionToken(grant)).token).kid).toBe(
-          "k-old"
-        )
-        // Через 40 хв ключ `k-new` (доданий 30 хв тому) — старший за 65 хв
+        // Публікація: через 40 хв `k-new` (доданий 30 хв тому) старший за
+        // 65 хв і підписує порт
+        served = () => tokens.jwks()
+        expect(kids()).toEqual(["k-old", "k-new"])
         shift = 40 * MINUTE
         expect(headerOf((await tokens.connectionToken(grant)).token).kid).toBe(
           "k-new"
         )
-        // Старий ключ відставлено: підписує лише новий, а старий лишається
-        // в JWKS ще 20 хв — з'єднання на ньому не рветься
-        const retired = await createCentrifugoTokens({
-          keys: [
-            { ...oldKey, retiredAt: new Date(Date.now() + 35 * MINUTE) },
-            newKey,
-          ],
-          audience,
-          issuer: jwks.origin,
-          now: clock,
-        })
-        expect(retired.jwks().keys.map((k) => k.kid)).toEqual([
-          "k-old",
-          "k-new",
-        ])
-        const second = await subscriber(reader, [ticketChannel(a)], retired)
+        const readsBefore = jwks.reads()
+        await stand.restart()
+        const second = await subscriber(reader, [ticketChannel(a)])
         try {
-          const created = await createTicket(a.people.writer!, a)
-          await first.subs[0]!.next(about(created.id))
-          await second.subs[0]!.next(about(created.id))
-          expect(disconnected).toBe(0)
+          // Ключ `k-new` Centrifugo взяв лише з JWKS, прочитаного після
+          // публікації
+          expect(jwks.reads()).toBeGreaterThan(readsBefore)
+
+          // З'єднання на старому ключі, чий токен спливає за кілька секунд:
+          // SDK поновлює його вже після відставки старого ключа
+          const expiring = await createCentrifugoTokens({
+            keys: [oldKey],
+            audience,
+            issuer: jwks.origin,
+            now: () =>
+              new Date(Date.now() - CONNECTION_TTL_MS + ROTATION_LEAD_MS),
+          })
+          const retired = await createCentrifugoTokens({
+            keys: [
+              { ...oldKey, retiredAt: new Date(Date.now() + 35 * MINUTE) },
+              newKey,
+            ],
+            audience,
+            issuer: jwks.origin,
+            now: clock,
+          })
+          const refreshKids: unknown[] = []
+          const firstToken = (await expiring.connectionToken(grant)).token
+          expect(headerOf(firstToken).kid).toBe("k-old")
+          const first = await connectSignals(stand, {
+            token: firstToken,
+            getToken: async () => {
+              const token = (await retired.connectionToken(grant)).token
+              refreshKids.push(headerOf(token).kid)
+              return token
+            },
+          })
+          if (first.state !== "connected")
+            throw new Error(`connect refused: ${JSON.stringify(first)}`)
+          let disconnected = 0
+          first.client.centrifuge.on("disconnected", () => disconnected++)
+          try {
+            const [channel] = await tokens.channelTokens(grant)
+            const firstSub = await first.client.subscribe(channel!.channel, {
+              token: channel!.token,
+            })
+            if (firstSub.state !== "subscribed")
+              throw new Error(`subscribe refused: ${JSON.stringify(firstSub)}`)
+            // Відставка: підписує лише новий ключ, старий лишається в JWKS
+            // ще 20 хв
+            served = () => retired.jwks()
+            expect(kids()).toEqual(["k-old", "k-new"])
+            await until(
+              () => refreshKids.length > 0,
+              ROTATION_LEAD_MS + EXPIRED_CLOSE_DELAY_MS,
+              "the connection on the retired key never refreshed its token"
+            )
+            expect(refreshKids).toEqual(["k-new"])
+            const created = await createTicket(a.people.writer!, a)
+            await firstSub.subscription.next(about(created.id))
+            await second.subs[0]!.next(about(created.id))
+            expect(first.client.centrifuge.state).toBe("connected")
+            expect(disconnected).toBe(0)
+          } finally {
+            first.client.disconnect()
+          }
         } finally {
           second.client.disconnect()
         }
       } finally {
         shift = 0
-        first.client.disconnect()
+        served = oldOnly
       }
-    })
+    }, 120_000)
 
     it("a command rolled back delivers nothing", async () => {
       const { client, subs } = await subscriber(a.people.reader!, [
@@ -859,9 +937,11 @@ export function describeSignalDelivery(): void {
       }
     })
 
-    // Р18: відкликане право не закриває підписки миттєво — межа: `exp`
-    // токена каналу + `expired_sub_close_delay`. Поновлення відмовлено
-    // (грант після відкликання порожній), і закриває підписку сервер.
+    // Межа відкликання (спека профілю §6.2): відкликане право не закриває
+    // підписки миттєво — межа: `exp` токена каналу + `expired_sub_close_delay`
+    // (25 с) + такт присутності (5 с), разом 5 хв 30 с від видачі токена.
+    // Поновлення відмовлено (грант після відкликання порожній), і закриває
+    // підписку сервер.
     it("a revoked reader: the refresh is refused and the subscription closes no later than exp + 25 s + 5 s", async () => {
       const late = a.people.late!
       const assignment = a.assignments[`late:${TICKET_READER_ID}`]!
@@ -956,11 +1036,15 @@ export function describeSignalDelivery(): void {
       try {
         const [sub] = subs as [SignalSubscription]
         const latencies: number[] = []
+        // Вікно — від повернення `run` (коміт уже підтверджено викликачу) до
+        // події клієнта. Подія може прийти раніше за повернення `run`: тоді
+        // затримка «коміт → подія» не більша за нуль, і рахується нулем.
+        // Мітка перед `run` додала б час самої команди, якого гейт не міряє
         for (let i = 0; i < WARMUP + MEASURED; i++) {
           const created = await createTicket(a.people.writer!, a)
           const committed = performance.now()
           const event = await sub.next(about(created.id))
-          if (i >= WARMUP) latencies.push(event.at - committed)
+          if (i >= WARMUP) latencies.push(Math.max(0, event.at - committed))
         }
         latencies.sort((x, y) => x - y)
         expect(percentile(latencies, 0.95)).toBeLessThanOrEqual(50)
