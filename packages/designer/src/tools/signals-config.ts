@@ -32,6 +32,9 @@ export const SIGNAL_CONSUMER_ENV = {
  */
 export const SIGNAL_HISTORY_SIZE = 100
 
+/** Poll tick of the consumer: the fallback when `LISTEN` is broken. */
+export const SIGNAL_POLL_INTERVAL_MS = 300
+
 // Простори — частина топіка до першої `:` (спека профілю §6.1); історія прав і
 // користувача менша: сигнал там рідкісний і без злиття
 const NAMESPACES: readonly { name: string; historySize: number }[] = [
@@ -108,7 +111,7 @@ export function centrifugoConfig(o: CentrifugoConfigInput) {
           outbox_table_name: OUTBOX_TABLE,
           num_partitions: 1,
           partition_select_limit: 100,
-          partition_poll_interval: "300ms",
+          partition_poll_interval: `${SIGNAL_POLL_INTERVAL_MS}ms`,
           partition_notification_channel: SIGNAL_NOTIFY_CHANNEL,
           use_try_lock: true,
         },
