@@ -35,11 +35,13 @@ export interface SignalPublicJwk {
   use: "sig"
 }
 
+/** A signed JWT and the moment it stops being valid. */
 export interface SignalToken {
   token: string
   expiresAt: Date
 }
 
+/** A subscription token bound to one channel. */
 export interface SignalChannelToken extends SignalToken {
   channel: string
 }
@@ -53,19 +55,28 @@ export interface SignalTokens {
   connectionToken(grant: ChannelGrant): Promise<SignalToken>
   /** One token per channel of the grant, exactly those channels. */
   channelTokens(grant: ChannelGrant): Promise<SignalChannelToken[]>
-  /** The keys Centrifugo verifies with: active ones and ones retired under 20 minutes ago. */
+  /** The keys Centrifugo verifies with: active ones and ones retired under 20 minutes ago; never throws. */
   jwks(): { keys: SignalPublicJwk[] }
 }
 
 export interface CentrifugoTokensOptions {
+  /** The host's signing keys; at least one must be active and, after a retirement, mature. */
   keys: readonly SigningKey[]
   /** `centrifugo:<project.name>`. */
   audience: string
   /** The host origin. */
   issuer: string
+  /** The clock; defaults to the system time, replaced in tests. */
   now?: () => Date
 }
 
+/**
+ * Why signing failed; a host maps the code to its response.
+ * - `signals.invalid-key`, `signals.duplicate-kid`: a configuration error, fail at start-up.
+ * - `signals.no-signing-key`, `signals.no-mature-key`: no key may sign now, answer 503 and alert.
+ * - `signals.forged-grant`: the grant did not come from `authorizeChannels`, a host bug, answer 500.
+ * - `signals.no-user`: the grant has no valid user, answer 401.
+ */
 export type SignalTokenErrorCode =
   | "signals.invalid-key"
   | "signals.duplicate-kid"
@@ -84,8 +95,9 @@ export class SignalTokenError extends Error {
 }
 
 const MINUTE = 60_000
-// Centrifugo кешує JWKS до години: ключ, доданий пізніше за останнє читання
-// кешу, підписувати не можна, доки кеш не перечитано (+5 хв запасу).
+// Centrifugo v6 кешує JWKS 5 хв (профіль §6.3). 65 хв — свідомо консервативний
+// запас над строком кешу, а не величина, виведена з «до години»: ключ, доданий
+// пізніше за останнє читання кешу, підписувати не можна, доки кеш не перечитано.
 const MATURE_AFTER = 65 * MINUTE
 // Найдовший TTL токена (15 хв) плюс запас: токен, підписаний перед
 // відставкою ключа, перевіряється до кінця свого строку.
