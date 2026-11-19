@@ -1581,6 +1581,44 @@ describe("reverseGenerate", () => {
     expect(json(result, "sql-debt.json").units).toEqual([])
   })
 
+  it("the folder reference wins over the install on the same identity", async () => {
+    // Еталон теки задано вручну: одиниця під ідентичністю, яка є й в установці,
+    // має інший вміст. Каталог дорівнює формі теки — одиниця платформна лише
+    // тоді, коли одиниці теки стоять у еталоні останніми
+    const kept = metaFiles({
+      "project.meta.json": SNAKE_PROJECT,
+      "catalogs/Users/Users.meta.json": catalog("Users", {
+        schema: "app",
+        role: "users",
+        scope: "none",
+      }),
+    })
+    const reference = await renderedFolder(kept)
+    const identity = "function:simetra.touch()"
+    const own = reference.units!.find((u) => u.identity === identity)
+    expect(own?.identity).toBe(identity)
+    const folderForm = own!.sql.replace("now()", "clock_timestamp()")
+    expect(folderForm).not.toBe(own!.sql)
+    const withFolderForm = (units: NonNullable<CatalogModel["units"]>) =>
+      units.map((u) =>
+        u.identity === identity ? { ...u, sql: folderForm } : u
+      )
+    const result = await reverseGenerate(
+      model({
+        tables: reference.tables,
+        units: withFolderForm(reference.units!),
+      }),
+      options(kept, {
+        reference: { ...reference, units: withFolderForm(reference.units!) },
+      })
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(json(result, "sql-debt.json").units).toEqual([])
+    expect(result.changes.map((c) => c.content ?? "").join("\n")).not.toContain(
+      "clock_timestamp"
+    )
+  })
+
   /** Колонки таблиці, якої вимагають тригери шару, що не залежить від моделі. */
   const LAYER_TABLE_COLUMNS: CatalogColumn[] = [
     idColumn,
