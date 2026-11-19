@@ -638,7 +638,11 @@ export function classFixtures(
       // майбутнім функціям повз виведені гранти (Р15 спеки декларацій функцій):
       // прийом відмовляє рівно йому, а глобальне `REVOKE` не судиться
       refused: [
-        { code: "sql.default-privileges-execute", schema: "app", name: owner },
+        {
+          code: "sql.default-privileges-execute",
+          schema: "app",
+          name: `defaultPrivileges:${owner}:app:function:grant:${anon}:execute`,
+        },
       ],
     },
     {

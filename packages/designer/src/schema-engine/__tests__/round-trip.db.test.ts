@@ -133,7 +133,7 @@ describe("the builtin PUBLIC privilege beside a schema ADP", () => {
           {
             code: "sql.default-privileges-execute",
             schema: "app",
-            name: OWNER,
+            name: `defaultPrivileges:${OWNER}:app:function:grant:${ANON}:execute`,
           },
         ])
         expect(
