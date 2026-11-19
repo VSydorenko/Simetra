@@ -21,6 +21,10 @@ import {
 } from "../../../../simetra/test/support"
 import { dropRoles } from "../../__tests__/support/db"
 import {
+  CATALOG_OUTBOX_TABLE,
+  CATALOG_UNIT_FORMS,
+} from "../../../../simetra/src/compiler/__tests__/fixtures/platform-catalog-forms"
+import {
   deployedRoundTrip,
   engine,
   errors,
@@ -102,7 +106,7 @@ const projectWithKind = () =>
       defaultSchema: "app",
       database: { provider: testProvider() },
     },
-    "catalogs/Currency/Currency.meta.json": catalog("Currency"),
+    "catalogs/Item/Item.meta.json": catalog("Item"),
   })
 
 /** Кластерна роль з тегом прогону на час `fn`; її створює суперкористувач стека. */
@@ -133,6 +137,33 @@ export function describeModelPathInvariants(): void {
       ["a project with a kind", projectWithKind],
     ])("%s is adopted without errors", async (_name, files) => {
       expect(await adoptedFromScratch(files(), "")).toEqual([])
+    })
+
+    // Пари нормалізації (Р5) записано з живого extract; тут вони лишаються
+    // формами живого каталогу на профілі прогону, інакше правило помічника
+    // звіряло б не те, що дає база (И8)
+    it("the recorded catalog forms are the live catalog's", async () => {
+      const files = projectWithKind()
+      const compiled = await compile(files)
+      expect(errors(compiled.diagnostics)).toEqual([])
+      const { scope } = await engineScope(compiled.model!)
+      const live = await inTarget(
+        renderDesiredState(compiled.model!).sql,
+        scope,
+        async (target) => (await engine.extract(target, scope)).model
+      )
+      const units = new Map(live.units.map((u) => [u.identity, u.sql]))
+      expect(
+        Object.fromEntries(
+          Object.keys(CATALOG_UNIT_FORMS).map((id) => [id, units.get(id)])
+        )
+      ).toEqual(CATALOG_UNIT_FORMS)
+      expect(
+        live.tables.find(
+          (t) =>
+            t.schema === SIGNAL_OUTBOX.schema && t.name === SIGNAL_OUTBOX.name
+        )
+      ).toEqual(CATALOG_OUTBOX_TABLE)
     })
 
     it("a grant with the grant option under an install grant is refused (И1)", async () => {
