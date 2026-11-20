@@ -737,6 +737,61 @@ export function qualifiedKindTables(
   return { qualified, byName, bySchema }
 }
 
+/** Привілеї запису гранта чи ADP для тексту діагностики; `ALL`, коли їх не названо. */
+function writePrivilegeText(unit: VerbatimUnit): string {
+  const tree = unit.tree as {
+    GrantStmt?: GrantStmt
+    AlterDefaultPrivilegesStmt?: { action?: GrantStmt }
+  }
+  const privileges = (tree.GrantStmt ?? tree.AlterDefaultPrivilegesStmt?.action)
+    ?.privileges
+  const names = (privileges ?? []).map((node) =>
+    "AccessPriv" in node ? (node.AccessPriv.priv_name ?? "all") : "all"
+  )
+  const writes = names.filter((n) => n === "all" || WRITE_PRIVILEGES.has(n))
+  return (writes.length > 0 ? writes : names.length > 0 ? names : ["all"])
+    .map((n) => n.toUpperCase())
+    .join(", ")
+}
+
+/** Текст діагностики гранта: які привілеї й кому. */
+export function grantDetail(unit: VerbatimUnit, roles: readonly string[]) {
+  return `GRANT ${writePrivilegeText(unit)} TO ${roles.join(", ")}`
+}
+
+/**
+ * Таблиці з `tables`, на які ADP `IN SCHEMA` застосунку дає запис (`TABLES`)
+ * ролям `roles` (`PUBLIC` — теж роль). Глобальні ADP (без `IN SCHEMA`) поза
+ * межею: вони належать ролі, а не схемі (спека промоції §9.9). Перелічувач
+ * ADP ролям API не дає — Правило 1 його дозволяє, а гейти судять інші ролі,
+ * тож гейт промоції й виняток знімка читають факти цим помічником.
+ */
+export function defaultPrivilegeTables(
+  facts: readonly DefaultPrivilegeFact[],
+  roles: ReadonlySet<string>,
+  tables: readonly QualifiedTable[]
+): {
+  unit: VerbatimUnit
+  table: QualifiedTable
+  roles: string[]
+  detail: string
+}[] {
+  return facts.flatMap((fact) => {
+    const hit = fact.grantees.filter((r) => roles.has(r))
+    if (!fact.write || hit.length === 0) return []
+    return fact.schemas.flatMap((schema) =>
+      tables
+        .filter((t) => t.schema === schema)
+        .map((table) => ({
+          unit: fact.unit,
+          table,
+          roles: hit,
+          detail: `default privileges of schema ${schema} ${grantDetail(fact.unit, hit)} ON TABLES`,
+        }))
+    )
+  })
+}
+
 /**
  * Таблиці з `tables`, які охоплює шлях-грант: його ціль, кожна таблиця, яку
  * називає оператор (`GRANT … ON a, b`), і, коли грант — на всі таблиці схеми

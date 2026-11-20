@@ -14,6 +14,8 @@ import type { VerbatimUnit } from "../sql/units"
 import {
   bodyKindTable,
   defaultPrivilegeFacts,
+  defaultPrivilegeTables,
+  grantDetail,
   grantedTables,
   qualifiedKindTables,
   writePaths,
@@ -82,7 +84,7 @@ export function snapshotExemptWriters(
           form: "grant",
           table: key(table),
           object: path.unit.identity,
-          detail: `GRANT write TO ${hit.join(", ")}`,
+          detail: grantDetail(path.unit, hit),
         })
     else if (path.form === "view" && exempt.qualified.has(path.target))
       report(path.unit, {
@@ -91,18 +93,17 @@ export function snapshotExemptWriters(
         object: key(path.unit),
       })
   }
-  for (const fact of defaultPrivilegeFacts(units)) {
-    const hit = fact.grantees.filter((r) => roles.has(r))
-    if (!fact.write || hit.length === 0) continue
-    for (const schema of fact.schemas)
-      for (const table of tables.filter((t) => t.schema === schema))
-        report(fact.unit, {
-          form: "grant",
-          table: key(table),
-          object: fact.unit.identity,
-          detail: `default privileges of schema ${schema} GRANT write ON TABLES TO ${hit.join(", ")}`,
-        })
-  }
+  for (const { unit, table, detail } of defaultPrivilegeTables(
+    defaultPrivilegeFacts(units),
+    roles,
+    tables
+  ))
+    report(unit, {
+      form: "grant",
+      table: key(table),
+      object: unit.identity,
+      detail,
+    })
 
   const views = modelViews(units) as VerbatimUnit[]
   // (в), (г) Функції `SECURITY DEFINER`, замикання яких пише виняток.

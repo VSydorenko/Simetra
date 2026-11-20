@@ -12,6 +12,8 @@ import type { PlpgsqlParser } from "../../sql/plpgsql"
 import type { VerbatimUnit } from "../../sql/units"
 import {
   defaultPrivilegeFacts,
+  defaultPrivilegeTables,
+  grantDetail,
   grantedTables,
   qualifiedKindTables,
   writePaths,
@@ -90,7 +92,11 @@ export function writePathProblems(
   ])
   const located = locatedUnits(model)
   const paths = promotedPaths(model, located, tables, parse, plpgsql)
-  const adp = defaultPrivilegeFacts(located)
+  const adp = defaultPrivilegeTables(
+    defaultPrivilegeFacts(located),
+    roles,
+    tables
+  )
   const problems: Diagnostic[] = []
   // Порядок — порядок одиниць: грант і політика однієї одиниці не
   // розходяться в переліку.
@@ -102,7 +108,7 @@ export function writePathProblems(
         entries.push(
           ...grantedTables(path, tables, parse).map((t) => ({
             table: key(t.schema, t.name),
-            detail: `GRANT write TO ${hit.join(", ")}`,
+            detail: grantDetail(sqlUnit, hit),
           }))
         )
       else if (path.form === "view" && hit.length > 0 && unit.has(path.target))
@@ -122,18 +128,9 @@ export function writePathProblems(
           })
       }
     }
-    // Типові привілеї схеми: глобальні (без `IN SCHEMA`) поза межею — вони
-    // належать ролі, а не схемі (спека промоції §9.9).
-    for (const fact of adp.filter((f) => f.unit === sqlUnit)) {
-      const hit = fact.grantees.filter((r) => roles.has(r))
-      if (!fact.write || hit.length === 0) continue
-      for (const schema of fact.schemas)
-        for (const t of tables.filter((t) => t.schema === schema))
-          entries.push({
-            table: key(t.schema, t.name),
-            detail: `default privileges of schema ${schema} GRANT write ON TABLES TO ${hit.join(", ")}`,
-          })
-    }
+    // Типові привілеї схеми судить спільний помічник перелічувача.
+    for (const { table, detail } of adp.filter((a) => a.unit === sqlUnit))
+      entries.push({ table: key(table.schema, table.name), detail })
     for (const { table, detail } of entries)
       problems.push(
         diagnostic("promote.write-path", sqlUnit.file, "", {
