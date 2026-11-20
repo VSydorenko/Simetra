@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { describe, expect, it } from "vitest"
+import { addElement, addElementInput } from "simetra/compiler"
 import { reverseGenerate } from "simetra/schema"
 import { PROVIDER_OWNER_ROLES } from "simetra/model"
 import {
@@ -237,12 +238,13 @@ describeModelPathInvariants()
 describeReferenceDomain()
 
 describe("adoption from scratch with named scope set functions", () => {
-  // Іменовані функції множини скоупу після прийому з нуля повертаються
-  // незв'язаними: зворотна генерація дає рівно їхні відмови
-  // `sql.definer-caller-unchecked` (платформна спека §6.7), а моделі немає —
-  // таблиці й види звіряються з повернутих метаданих. Повний ланцюжок для
-  // фікстур зі `scopeKinds` — #271.
-  it("movement query with named scope set functions: exactly their refusals", async () => {
+  // Таблиці й види звіряються з повернутих метаданих. Вид скоупу `org`
+  // оголошує мутація `add` зі `scopes` (Р7: `user` тест не додає — перша
+  // відмова не лишає чистого входу для другої). Мутація відмовляє: гранти
+  // `app.org_ids` ще не поглинає форма платформи, а `app.user_ids` лишається
+  // з `sql.definer-caller-unchecked`. Повний ланцюжок (план, тінь, застосування)
+  // закривають #271 Д3 і Д4.
+  it("movement query with named scope set functions: the add of scope kind org refuses exactly", async () => {
     const { source, result, adopted } = await deployedRoundTrip(
       movementQuery(testProvider()),
       new Map(),
@@ -258,6 +260,55 @@ describe("adoption from scratch with named scope set functions", () => {
         (kind) => kind !== "CustomTable" && kind !== "PgEnum"
       )
     ).toEqual([])
+
+    // Корінь `Organization` — сама таблиця виду без носія; решта — з FK на нього
+    const scopes: Record<string, { scope: string; scopeColumn?: string }> = {
+      Organization: { scope: "org" },
+    }
+    for (const table of [
+      "Item",
+      "Sale",
+      "SaleGoods",
+      "Stock",
+      "StockTotals",
+      "StockTurnoversMonth",
+    ]) {
+      scopes[table] = { scope: "org", scopeColumn: "orgId" }
+    }
+    const added = await addElement(
+      adopted!,
+      addElementInput.parse({
+        target: { kind: "Project" },
+        collection: "scopeKinds",
+        element: {
+          name: "org",
+          root: { object: { kind: "CustomTable", name: "Organization" } },
+          setFunction: { name: "org_ids" },
+        },
+        scopes,
+      }),
+      { schemaPath, newId: () => randomUUID() }
+    )
+    expect(added.written).toBeUndefined()
+    // Рівно гранти `app.org_ids` (їх ще не поглинає форма платформи, Д3) і
+    // `app.user_ids` без перевірки викликача; `scope.declaration-missing` немає
+    expect(
+      added.diagnostics
+        .map((d) => ({
+          code: d.code,
+          at:
+            d.code === "sql.generated-grant"
+              ? d.params?.object
+              : `${String(d.params?.schema)}.${String(d.params?.name)}`,
+        }))
+        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+    ).toEqual([
+      { code: "sql.definer-caller-unchecked", at: "app.user_ids" },
+      // Три одиниці грантів функції (кожна — своя відмова)
+      { code: "sql.generated-grant", at: "app.org_ids()" },
+      { code: "sql.generated-grant", at: "app.org_ids()" },
+      { code: "sql.generated-grant", at: "app.org_ids()" },
+    ])
   })
 })
 
