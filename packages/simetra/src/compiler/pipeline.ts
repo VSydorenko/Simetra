@@ -290,7 +290,8 @@ export async function runStages(
       sql.units,
       parse,
       plpgsql,
-      declared
+      declared,
+      calls.models
     ),
     // Резолв декларацій функцій (спека декларацій функцій §5.1) потребує лише
     // одиниць і метаданих, тож стоїть у ранньому блоці: нерезолвлена

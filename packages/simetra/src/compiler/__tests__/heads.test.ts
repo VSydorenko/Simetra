@@ -627,7 +627,12 @@ describe("judgeHandler: Rule 2 — a handler only checks", () => {
     )
   const statement = (detail: string) => found("statement", detail, HANDLER)
 
-  it.each<{ name: string; body: string; expected: Finding[] }>([
+  it.each<{
+    name: string
+    body: string
+    expected: Finding[]
+    extra?: string
+  }>([
     {
       name: "checks-only",
       body: "IF NEW.title IS NULL THEN RAISE EXCEPTION 'x'; END IF; NEW.title := pg_catalog.btrim(NEW.title);",
@@ -658,7 +663,14 @@ describe("judgeHandler: Rule 2 — a handler only checks", () => {
       body: "INSERT INTO public.task_notes (id) VALUES (NEW.id) RETURNING id INTO v;",
       expected: [statement("InsertStmt")],
     },
-    { name: "call", body: "CALL public.p();", expected: [statement("call")] },
+    {
+      name: "call",
+      body: "CALL public.p();",
+      // Кваліфікований виклик невідомої процедури судить ще й суддя тіла, тож
+      // процедуру моделі оголошено: ціль перевірки — лише вузол `call` голови.
+      extra: "CREATE PROCEDURE public.p() LANGUAGE sql AS $$ SELECT 1 $$;",
+      expected: [statement("call")],
+    },
     { name: "commit", body: "COMMIT;", expected: [statement("commit")] },
     {
       name: "cursor",
@@ -700,8 +712,8 @@ describe("judgeHandler: Rule 2 — a handler only checks", () => {
       body: "v := t.id FROM public.task t WHERE t.id = NEW.task_id FOR UPDATE;",
       expected: [found("query", undefined, HANDLER)],
     },
-  ])("$name", async ({ body, expected }) => {
-    expect(await handlerErrors(body)).toEqual(expected)
+  ])("$name", async ({ body, expected, extra }) => {
+    expect(await handlerErrors(body, [], extra)).toEqual(expected)
   })
 
   it("search-path", async () => {

@@ -243,7 +243,9 @@ function sqlTextCall(
   calls: ProviderCalls,
   searchPathOpen: boolean
 ): boolean {
-  const names = (parts ?? []).map((f) => f.String?.sval?.toLowerCase())
+  // Парсер уже згорнув некавичені ідентифікатори; кавичкове `"MyFn"` — інше
+  // ім'я, тож другого згортання регістру немає (як у `modelCallNames`).
+  const names = (parts ?? []).map((f) => f.String?.sval)
   const name = names.at(-1)
   if (name === undefined) return false
   const schema = names.length > 1 ? names.at(-2) : undefined
@@ -287,6 +289,14 @@ export function callsSqlText(
   const node = value as Record<string, unknown>
   const call = node.FuncCall as CallNode | undefined
   if (call !== undefined && sqlTextCall(call.funcname, calls, searchPathOpen))
+    return true
+  // `CALL` несе виклик полем `funccall` без обгортки `FuncCall`.
+  const callStmt = (node.CallStmt as { funccall?: CallNode } | undefined)
+    ?.funccall
+  if (
+    callStmt !== undefined &&
+    sqlTextCall(callStmt.funcname, calls, searchPathOpen)
+  )
     return true
   return Object.values(node).some((v) => callsSqlText(v, calls, searchPathOpen))
 }

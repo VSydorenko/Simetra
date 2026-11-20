@@ -320,3 +320,78 @@ describe("sql.function-settings-shell on a function the application did not crea
     )
   })
 })
+
+describe("sql.function-settings-shell: the target is judged by schema and signature (fix round 1 of #275)", () => {
+  const notModel = (function_: string, setting: string) => ({
+    code: "sql.function-settings-shell",
+    file: SHARED,
+    params: { function: function_, setting, target: "notModel" },
+  })
+  const fn = (name: string, args: string) =>
+    `CREATE FUNCTION ${name}(${args}) RETURNS int LANGUAGE sql STABLE AS $$ SELECT 1 $$;\n`
+
+  it.each([
+    {
+      // H1а: функція провайдера з іншою сигнатурою, ніж «приманка» моделі.
+      name: "a provider-schema decoy with another signature",
+      sql:
+        fn("extensions.dblink_exec", "n int") +
+        "ALTER FUNCTION extensions.dblink_exec(text, text) SET search_path = public;",
+      expected: [notModel("extensions.dblink_exec", "search_path")],
+    },
+    {
+      name: "a provider-schema decoy with the same signature",
+      sql:
+        fn("extensions.dblink_exec", "n int") +
+        "ALTER FUNCTION extensions.dblink_exec(int) SET search_path = public;",
+      expected: [notModel("extensions.dblink_exec", "search_path")],
+    },
+    {
+      // H1б: перевантаження, якого модель не створювала.
+      name: "an overload the model did not create",
+      sql:
+        fn("public.f", "n int") +
+        "ALTER FUNCTION public.f(text) SET search_path = '';",
+      expected: [notModel("public.f", "search_path")],
+    },
+    {
+      name: "an overload with another arity",
+      sql:
+        fn("public.f", "n int") +
+        "ALTER FUNCTION public.f(int, int) SET search_path = '';",
+      expected: [notModel("public.f", "search_path")],
+    },
+    {
+      name: "a same-named function of another application schema",
+      sql:
+        fn("public.f", "n int") +
+        "ALTER FUNCTION app.f(int) SET search_path = '';",
+      expected: [notModel("app.f", "search_path")],
+    },
+    {
+      // H2: некваліфіковане ім'я в DDL розв'язується за шляхом сесії.
+      name: "an unqualified name of a model function",
+      sql:
+        fn("public.helper2", "") +
+        "ALTER FUNCTION helper2() SET search_path = '';",
+      expected: [notModel("public.helper2", "search_path")],
+    },
+  ])("rejects ALTER FUNCTION of $name", async ({ sql, expected }) => {
+    const result = await compiledPolicyDomain({ [SHARED]: sql })
+    expect(
+      diagnosticBrief(result.diagnostics, ["sql.function-settings-shell"])
+    ).toEqual(expected)
+  })
+
+  it.each([
+    "ALTER FUNCTION public.f(int) SET search_path = '';",
+    "ALTER FUNCTION public.f(integer) SET search_path = '';",
+    "ALTER FUNCTION public.f(n int) SET search_path = '';",
+  ])("leaves %s on the model function alone", async (alter) => {
+    expectClean(
+      await compiledPolicyDomain({
+        [SHARED]: fn("public.f", "n int") + alter,
+      })
+    )
+  })
+})

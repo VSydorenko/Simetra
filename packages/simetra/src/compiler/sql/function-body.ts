@@ -382,7 +382,28 @@ export function bodyStatementProblem(
   }
   if (callsSqlText(unit.tree, calls, open))
     return { statement: "dynamicText", line: 1 }
+  // `DEFAULT` параметра розв'язується під час створення за шляхом сесії DDL, а
+  // не за `SET search_path` функції: його судить суддя виразів, що вважає
+  // шлях відкритим, і закритий `search_path` функції його не рятує.
+  if (callsSqlText(parameterDefaults(unit.tree), calls, true))
+    return { statement: "dynamicText", line: 1 }
   return undefined
+}
+
+/** Вирази `DEFAULT` параметрів `CREATE FUNCTION`/`PROCEDURE`. */
+function parameterDefaults(tree: unknown): unknown[] {
+  const fn = (
+    tree as {
+      CreateFunctionStmt?: {
+        parameters?: { FunctionParameter?: { defexpr?: unknown } }[]
+      }
+    }
+  ).CreateFunctionStmt
+  return (fn?.parameters ?? []).flatMap((p) =>
+    p.FunctionParameter?.defexpr === undefined
+      ? []
+      : [p.FunctionParameter.defexpr]
+  )
 }
 
 /**

@@ -596,7 +596,7 @@ describe("sql units", () => {
           "CREATE AGGREGATE agg(integer) (SFUNC = int4pl, STYPE = int);",
           // `ALTER FUNCTION` судиться лише над функцією моделі.
           "CREATE FUNCTION f(integer, varchar(5)) RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;",
-          "ALTER FUNCTION f(integer, varchar(5)) SET search_path = '';",
+          "ALTER FUNCTION public.f(integer, varchar(5)) SET search_path = '';",
           "GRANT EXECUTE ON FUNCTION f(int, character varying) TO anon;",
           "COMMENT ON FUNCTION f(pg_catalog.int4, pg_catalog.varchar) IS 'x';",
         ].join("\n")
