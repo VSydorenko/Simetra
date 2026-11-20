@@ -524,6 +524,17 @@ describe("sql units", () => {
       expected: ['comment:table:"a.b".c', 'comment:table:a."b.c"'],
     },
     {
+      form: "default privileges",
+      sql: [
+        'ALTER DEFAULT PRIVILEGES FOR ROLE "r,s" IN SCHEMA "a,b" GRANT SELECT ON TABLES TO anon;',
+        "ALTER DEFAULT PRIVILEGES FOR ROLE r, s IN SCHEMA a, b GRANT SELECT ON TABLES TO anon;",
+      ],
+      expected: [
+        'defaultPrivileges:"r,s":"a,b":table:grant:anon:select',
+        "defaultPrivileges:r,s:a,b:table:grant:anon:select",
+      ],
+    },
+    {
       // Частини `%type` — теж за `quoteIdent`: `"T".c%type` ≠ `t.c%type`
       form: "%type of mixed case",
       sql: [
