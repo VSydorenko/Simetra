@@ -135,6 +135,23 @@ describe("expression units call only allowlisted functions (спека прав 
       expected: ["extensions.whatever"],
     },
     {
+      name: "trigger executing a pure function of an extension from the list",
+      sql: trigger("extensions.moddatetime", "true"),
+      expected: [],
+    },
+    {
+      name: "trigger whose WHEN calls an extension function from the list",
+      sql:
+        TRIGGER_FUNCTION +
+        trigger("public.on_note", "extensions.soundex('a') <> ''"),
+      expected: [],
+    },
+    {
+      name: "trigger executing tcn, which notifies outside the row",
+      sql: trigger("extensions.triggered_change_notification", "true"),
+      expected: ["extensions.triggered_change_notification"],
+    },
+    {
       name: "trigger executing an unqualified model function",
       sql: TRIGGER_FUNCTION + trigger("on_note", "true"),
       expected: ["on_note"],

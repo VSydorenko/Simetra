@@ -45,7 +45,11 @@ const POSTGRES_ROWS = [
     ["better_auth", "extensions", "information_schema"],
   ],
   ["PROVIDER_FUNCTIONS", PROVIDER_FUNCTIONS, []],
-  ["PROVIDER_EXPRESSION_FUNCTIONS", PROVIDER_EXPRESSION_FUNCTIONS, []],
+  [
+    "PROVIDER_EXPRESSION_FUNCTIONS",
+    PROVIDER_EXPRESSION_FUNCTIONS,
+    ["extensions.moddatetime", "extensions.soundex"],
+  ],
   [
     "PROVIDER_IDENTITY_SOURCES",
     PROVIDER_IDENTITY_SOURCES,

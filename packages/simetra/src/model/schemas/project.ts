@@ -269,9 +269,18 @@ export const PROVIDER_FUNCTIONS: Readonly<
 export const PROVIDER_EXPRESSION_FUNCTIONS: Readonly<
   Record<DatabaseProvider, readonly string[]>
 > = {
-  supabase: ["extensions.gen_random_bytes", "extensions.uuid_generate_v4"],
+  supabase: [
+    "extensions.gen_random_bytes",
+    "extensions.uuid_generate_v4",
+    // Чисті функції розширень, які кличуть тригери й умови `WHEN` прийнятого
+    // SQL: рядок змінюють лише через `NEW`, побічної дії поза ним немає.
+    // `triggered_change_notification` (tcn) сюди не входить: вона шле
+    // `NOTIFY` поза рядком.
+    "extensions.moddatetime",
+    "extensions.soundex",
+  ],
   // `gen_random_uuid()` — ядро Postgres, поіменного дозволу не потребує.
-  postgres: [],
+  postgres: ["extensions.moddatetime", "extensions.soundex"],
 }
 
 /**
