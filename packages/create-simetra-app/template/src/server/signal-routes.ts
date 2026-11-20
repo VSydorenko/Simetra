@@ -2,7 +2,11 @@
 // для тесту без рантайму Start (як `handleDataRequest`). Файл маршруту лише
 // передає запит: так маршрут не тягне в клієнтський граф `auth`, пул і рантайм.
 import { CommandFailure } from "simetra/model"
-import { SignalTokenError, type SignalTokens } from "simetra/server/signals"
+import {
+  SignalTokenError,
+  type ChannelGrant,
+  type SignalTokens,
+} from "simetra/server/signals"
 import { guardRequest } from "./request-guard"
 import { getRuntime } from "./runtime"
 import { getSignalTokens } from "./signal-tokens"
@@ -73,7 +77,7 @@ async function parseBody(request: Request): Promise<Parsed> {
 async function handleTokens(
   request: Request,
   channelsOf: (parsed: Extract<Parsed, { ok: true }>) => unknown,
-  sign: (tokens: SignalTokens, grant: never) => Promise<unknown>
+  sign: (tokens: SignalTokens, grant: ChannelGrant) => Promise<unknown>
 ): Promise<Response> {
   try {
     const tokens = await getSignalTokens()
@@ -99,7 +103,7 @@ async function handleTokens(
       guard.claims,
       channels as string[]
     )
-    return Response.json(await sign(tokens, grant as never))
+    return Response.json(await sign(tokens, grant))
   } catch (error) {
     return refusalOf(error)
   }

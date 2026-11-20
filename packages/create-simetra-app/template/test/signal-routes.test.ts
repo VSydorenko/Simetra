@@ -135,6 +135,9 @@ describe.each(ROUTES)("%s route", (_name, handle, make) => {
       const response = await handle(make())
       expect(response.status).toBe(status)
       expect(await response.text()).not.toContain(secret)
+      if (status === 503) {
+        expect(console.error).toHaveBeenCalledWith(expect.any(String), code)
+      }
     }
   )
 
