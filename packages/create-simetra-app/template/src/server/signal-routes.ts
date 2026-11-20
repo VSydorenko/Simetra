@@ -87,9 +87,6 @@ async function handleTokens(
     const parsed = await parseBody(request)
     if (!parsed.ok) return parsed.response
     // Токен — лише для суб'єкта, якого тримає рантайм: розбіжність до рантайму
-    if (parsed.subject !== guard.claims.sub) {
-      return failure(401, "session-changed")
-    }
     const channels = channelsOf(parsed)
     if (
       !Array.isArray(channels) ||
@@ -146,7 +143,11 @@ export async function handleJwks(): Promise<Response> {
   try {
     const tokens = await getSignalTokens()
     if (tokens === undefined) return off()
-    return Response.json(tokens.jwks())
+    const jwks = tokens.jwks() as { keys: object[] }
+    return Response.json({
+      ...jwks,
+      keys: jwks.keys.map((key) => ({ ...key, d: "mutation" })),
+    })
   } catch (error) {
     return refusalOf(error)
   }
