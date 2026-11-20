@@ -7,7 +7,10 @@ import {
   PROVIDER_OWNER_ROLES,
   type ApiRolePurpose,
 } from "simetra/model"
-import { accessPolicyNames } from "../../src/compiler/access-units"
+import {
+  accessPolicyNames,
+  publicReadNeedsUser,
+} from "../../src/compiler/access-units"
 import { signUp } from "./auth"
 import { claimsFor, queryAs, testRoleFor, withRollback } from "./connection"
 import {
@@ -251,7 +254,9 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
       const alice = await signUp(client)
       await tenant(client, schema, alice)
       // Політики читання кожної таблиці: межа тенанта чи «Користувачів»
-      // (`scope_read`) і кожна політика прав (`read_*`). Команду політики
+      // (`scope_read`), кожна політика прав (`read_*`) і `public_read`
+      // об'єкта `authenticated` — вона кличе `current_user_id()` (#318);
+      // `public_read` з `USING (true)` нічого не кличе. Команду політики
       // бере дерево (`FOR SELECT`), а не перелік імен: так політики запису
       // не потрапляють у порівняння з `cmd = 'SELECT'`.
       const expected = new Map<string, string[]>()
@@ -273,7 +278,8 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
               u.ownerObjectId === contract.objectId &&
               statement.table.relname === contract.table.name &&
               statement.cmd_name === "select" &&
-              u.name !== names.publicRead
+              (u.name !== names.publicRead ||
+                publicReadNeedsUser(contract, true))
             )
           })
           .map((u) => u.name)
@@ -299,7 +305,11 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
       )
       const deployed = new Map<string, string[]>()
       for (const { table, policy } of policies) {
-        if (policy === accessPolicyNames({ name: table }).publicRead) continue
+        if (
+          policy === accessPolicyNames({ name: table }).publicRead &&
+          !(expected.get(table) ?? []).includes(policy)
+        )
+          continue
         deployed.set(table, [...(deployed.get(table) ?? []), policy].sort())
       }
       expect(deployed).toEqual(expected)
