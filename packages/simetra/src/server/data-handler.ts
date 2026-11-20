@@ -342,6 +342,9 @@ export function createDataHandler(
     if (wire.type === "version") {
       return { slot: { item: { ok: true, value: version } } }
     }
+    // Частину `rights` виконує рантайм з наступних задач блоку; до того вона,
+    // як і до введення типу, — відмова `invalid` цій частині.
+    if (wire.type === "rights") return refused({ code: "command.invalid" })
     const stale = checkCompatibility(index, wire)
     if (stale !== undefined) return refused(stale)
     const part = mappedOrRefused(readPartFromWire(index, wire))

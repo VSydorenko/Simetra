@@ -78,7 +78,7 @@ export function checkCompatibility(
   index: CatalogIndex,
   request: RunRequest | WireReadPart
 ): WireCommandError | undefined {
-  if (request.type === "version") return undefined
+  if (request.type === "version" || request.type === "rights") return undefined
   if (request.type === "query") return checkRead(index, request.query)
   return checkRun(index, request)
 }

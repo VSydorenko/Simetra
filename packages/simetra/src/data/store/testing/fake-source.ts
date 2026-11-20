@@ -562,6 +562,10 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
             settle()
             return
           }
+          if (item.type === "rights") {
+            fail(new Error("fake: the rights part is not supported"))
+            return
+          }
           const decoded = readPartFromWire(index, item)
           const query = decoded.ok ? decoded.value.query : undefined
           const known = decoded.ok ? decoded.value.known : undefined
