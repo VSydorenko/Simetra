@@ -284,8 +284,10 @@ const qualifiedName = (f: { schema: string; name: string }) =>
 /** Відмова прийому — помилка класу ремонту з її ключем `{ code, schema, name }` (Р7). */
 export interface Refusal {
   code: string
-  schema: string
-  name: string
+  schema?: string
+  name?: string
+  /** Одиниця, на якій відмова (`sql.kind-table-verbatim`). */
+  identity?: string
 }
 
 const definerRefusals = (definers: Loss["definers"]): Refusal[] =>
@@ -309,6 +311,7 @@ function expectRefusals(
       code: d.code,
       schema: d.params?.schema,
       name: d.params?.name,
+      identity: d.params?.identity,
     }))
   ).toEqual(refusals)
 }
