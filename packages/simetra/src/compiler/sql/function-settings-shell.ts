@@ -10,7 +10,7 @@ import type { DeclaredFunction } from "./declarations"
 import { headLinks } from "./heads"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
-import { inputArgumentTypes, type VerbatimUnit } from "./units"
+import type { VerbatimUnit } from "./units"
 
 /**
  * Функції, оболонку яких судить платформа: голови — функції закритих
@@ -114,39 +114,13 @@ export function checkFunctionSettingsShell(
   })
 }
 
-interface AlterTarget {
-  AlterFunctionStmt?: {
-    func?: {
-      objname?: { String?: { sval?: string } }[]
-      objargs?: { TypeName?: TypeNode }[]
-      args_unspecified?: boolean
-    }
-  }
-}
-
-interface TypeNode {
-  names?: { String?: { sval?: string } }[]
-  arrayBounds?: unknown[]
-  pct_type?: boolean
-}
-
-/**
- * Канонічний вигляд типу для порівняння сигнатур: обидва боки розібрані тим
- * самим розбирачем, тож `int` і `integer` вже `pg_catalog.int4`; модифікатори
- * типу (`varchar(10)`) на тип аргументу не впливають. `%TYPE` не прочитати.
- */
-function typeKey(type: TypeNode | undefined): string | undefined {
-  if (type === undefined || type.pct_type === true) return undefined
-  const names = (type.names ?? []).map((n) => n.String?.sval ?? "")
-  const bare = names[0] === "pg_catalog" ? names.slice(1) : names
-  if (bare.length === 0) return undefined
-  return `${bare.join(".")}${"[]".repeat(type.arrayBounds?.length ?? 0)}`
-}
-
 /**
  * Чи `ALTER FUNCTION` (`settings`) діє на функцію чи процедуру моделі `fn`:
- * та сама схема застосунку, те саме ім'я й типи аргументів. Сигнатуру не
- * прочитати (без списку аргументів, `%TYPE`) — не збіг, тобто помилка.
+ * схема застосунку (`modelCallNames`), кваліфіковане ім'я й та сама
+ * канонічна сигнатура — ідентичність `functionSettings:` ALTER-а збігається з
+ * ідентичністю `function:` функції після префікса (типи резолвляться за
+ * моделлю одним нормалізатором `units.ts`). Без списку аргументів ідентичність
+ * не має сигнатури — не збіг, тобто помилка.
  */
 function altersModelFunction(
   settings: VerbatimUnit,
@@ -158,30 +132,15 @@ function altersModelFunction(
     !models.has(`${fn.schema}.${fn.name}`)
   )
     return false
-  const target = (settings.tree as AlterTarget).AlterFunctionStmt?.func
-  const names = (target?.objname ?? []).map((n) => n.String?.sval)
-  if (
-    target === undefined ||
-    target.args_unspecified === true ||
-    names.length !== 2 ||
-    names[0] !== fn.schema ||
-    names[1] !== fn.name
-  )
-    return false
-  const created = (
-    fn.tree as {
-      CreateFunctionStmt?: Parameters<typeof inputArgumentTypes>[0]
+  const target = (
+    settings.tree as {
+      AlterFunctionStmt?: { func?: { objname?: unknown[] } }
     }
-  ).CreateFunctionStmt
-  if (created === undefined) return false
-  const own = inputArgumentTypes(created).map((t) =>
-    typeKey(t as TypeNode | undefined)
-  )
-  const altered = (target.objargs ?? []).map((a) => typeKey(a.TypeName))
-  return (
-    own.length === altered.length &&
-    own.every((key, i) => key !== undefined && key === altered[i])
-  )
+  ).AlterFunctionStmt?.func
+  // Некваліфіковане ім'я DDL розв'язує шлях пошуку сесії, а не схема файлу.
+  if ((target?.objname ?? []).length !== 2) return false
+  const signature = fn.identity.slice(fn.identity.indexOf(":") + 1)
+  return settings.identity === `functionSettings:${signature}`
 }
 
 /**

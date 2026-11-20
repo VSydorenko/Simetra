@@ -383,6 +383,58 @@ describe("sql.function-settings-shell: the target is judged by schema and signat
     ).toEqual(expected)
   })
 
+  // Один нормалізатор підписів (`units.ts`): ці збіги Postgres цілить у ту
+  // саму функцію моделі.
+  it.each([
+    { args: "n int[]", alter: "public.f(_int4)" },
+    { args: "n int[][]", alter: "public.f(int[])" },
+    { args: "n varchar(5)", alter: "public.f(character varying)" },
+    { args: "n int, OUT o int", alter: "public.f(int4)" },
+    { args: "n int, INOUT m text", alter: "public.f(int, text)" },
+    { args: "VARIADIC n int[]", alter: "public.f(int[])" },
+    { args: "n int DEFAULT 1", alter: "public.f(integer)" },
+    { args: '"c" "char"', alter: 'public.f("char")' },
+  ])(
+    "leaves ALTER FUNCTION $alter on f($args) alone",
+    async ({ args, alter }) => {
+      expectClean(
+        await compiledPolicyDomain({
+          [SHARED]:
+            fn("public.f", args) +
+            `ALTER FUNCTION ${alter} SET search_path = '';`,
+        })
+      )
+    }
+  )
+
+  it('rejects "char" altered as char', async () => {
+    const result = await compiledPolicyDomain({
+      [SHARED]:
+        fn("public.f", '"c" "char"') +
+        "ALTER FUNCTION public.f(char) SET search_path = '';",
+    })
+    expect(
+      diagnosticBrief(result.diagnostics, ["sql.function-settings-shell"])
+    ).toHaveLength(1)
+  })
+
+  it("leaves a model domain spelled with and without its schema alone", async () => {
+    const domain = "CREATE DOMAIN public.codes AS text;\n"
+    for (const [args, alter] of [
+      ["n codes", "public.f(public.codes)"],
+      ["n public.codes", "public.f(codes)"],
+    ]) {
+      expectClean(
+        await compiledPolicyDomain({
+          [SHARED]:
+            domain +
+            fn("public.f", args!) +
+            `ALTER FUNCTION ${alter} SET search_path = '';`,
+        })
+      )
+    }
+  })
+
   it.each([
     "ALTER FUNCTION public.f(int) SET search_path = '';",
     "ALTER FUNCTION public.f(integer) SET search_path = '';",
