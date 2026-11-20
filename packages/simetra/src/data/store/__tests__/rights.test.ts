@@ -272,10 +272,15 @@ describe("readAllowed", () => {
     expect(readAllowed(snap([], []), pair, entry)).toBe(true)
   })
 
-  it("publicRead — так", () => {
+  it.each<[string, string | null, "anon" | "authenticated", boolean]>([
+    ["користувач і authenticated", USER, "authenticated", true],
+    ["користувач і anon", USER, "anon", true],
+    ["гість і anon", null, "anon", true],
+    ["гість і authenticated", null, "authenticated", false],
+  ])("publicRead: %s", (_, userId, publicRead, expected) => {
     expect(
-      readAllowed(snap([], []), pair, scoped({ publicRead: "authenticated" }))
-    ).toBe(true)
+      readAllowed(snap([], [], userId), pair, scoped({ publicRead }))
+    ).toBe(expected)
   })
 
   const free = { scope: ZERO_UUID }

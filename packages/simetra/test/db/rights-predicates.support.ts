@@ -53,6 +53,8 @@ const GLOBAL_ANNOUNCEMENT_READER_ID = uuid(9711)
 const EVERY_NOTICE_ID = uuid(9712)
 const NOTICE_ID = uuid(9720)
 const NOTICE_FILE = "catalogs/Notice/Notice.meta.json"
+const OPEN_ID = uuid(9721)
+const OPEN_FILE = "catalogs/OpenNotice/OpenNotice.meta.json"
 
 /**
  * Доповнення моделі сигналів: роль виміру на `Task`, глобальна роль читання
@@ -64,6 +66,13 @@ function predicateLayer(): Layer {
       scope: "none",
       trackAuthor: true,
       ownership: ["createdBy"],
+    }),
+    // Нескоуплений довідник з `publicRead: anon`: єдиний об'єкт, який гість
+    // бачить, — на ньому розрізняється гість і користувач (`Bulletin` — лише
+    // для користувача).
+    [OPEN_FILE]: catalog(OPEN_ID, "OpenNotice", "open_notice", {
+      scope: "none",
+      publicRead: "anon",
     }),
     [ROLE_FILE("RegionTaskReader")]: role(
       REGION_TASK_READER_ID,
@@ -92,6 +101,19 @@ function predicateLayer(): Layer {
       { grants: [grant(objects(["Catalog", "Notice"]), ["read"], "own")] }
     ),
   }
+}
+
+/** Ключ знімка гостя в мапі знімків (користувачі — за ключем засіву). */
+const GUEST = "<guest>"
+
+/**
+ * Знімок гостя фіксований: `rights_client_snapshot()` гостю не відкрито, тож
+ * клієнт без сесії тримає порожній знімок без користувача.
+ */
+const GUEST_SNAPSHOT: RightsSnapshot = {
+  userId: null,
+  scopeSets: [],
+  rights: [],
 }
 
 const ORGS = ["A", "B", "C"] as const
@@ -234,6 +256,7 @@ async function seedPredicates(client: pg.Client, ids: Seed): Promise<void> {
       created_by_id: ids[user],
     })
   }
+  await create("open.plain", "open_notice")
   for (const user of USERS) {
     await insertOrphan(client, "notice", {
       id: randomUUID(),
@@ -265,6 +288,7 @@ const READ_OBJECTS = [
   "Users",
   "Notice",
   "Bulletin",
+  "OpenNotice",
 ]
 
 type Topic = [kind: string, scope: string, object: string] | { raw: string }
@@ -370,6 +394,21 @@ export function defineRightsPredicateCases(): void {
       return result.rows
     }
 
+    // Гість: роль `anonymous` без користувача, як її ставить сервер запитів.
+    const asAnon = async <T extends pg.QueryResultRow>(
+      sql: string,
+      params: unknown[] = []
+    ) => {
+      const result = await queryAs<T>(
+        tx.client(),
+        "anonymous",
+        claimsFor("anonymous"),
+        sql,
+        params
+      )
+      return result
+    }
+
     beforeAll(async () => {
       const model = await signalModel(predicateLayer())
       const client = await tx.open()
@@ -379,6 +418,7 @@ export function defineRightsPredicateCases(): void {
       entries = documentEntries(
         buildClientCatalog(buildRuntimeCatalog(model)).objects
       )
+      snapshots.set(GUEST, GUEST_SNAPSHOT)
       for (const user of [...USERS, null]) {
         const rows = await asUser<{ v: unknown }>(
           user,
@@ -508,6 +548,66 @@ export function defineRightsPredicateCases(): void {
         expect(mismatches).toEqual([])
       }
     )
+
+    // Гість: знімок порожній (`GUEST_SNAPSHOT`), а базу питає роль `anonymous`. `publicRead`
+    // відкриває лише значення для гостя (`anon`); `authenticated` — тільки
+    // ролі користувача. Підписка гостю закрита: `EXECUTE` оракула в нього
+    // немає, а предикат без користувача відмовляє.
+    it("the database does not give the guest a rights snapshot", async () => {
+      const result = await asAnon(
+        `SELECT simetra.${RIGHTS_CLIENT_SNAPSHOT_FUNCTION_NAME}() AS v`
+      )
+      expect("code" in result && result.code).toBe("42501")
+    })
+
+    it.each(READ_OBJECTS)(
+      "readAllowed equals a visible fixture row for the guest on %s",
+      async (name) => {
+        const entry = entryOf(name)
+        const from = `${entry.table.schema}.${entry.table.name}`
+        const scopes = entry.scopeKindId === undefined ? [ZERO_UUID] : [...ORGS]
+        for (const scope of scopes) {
+          const result = await asAnon<{ v: boolean }>(
+            entry.scopeKindId === undefined
+              ? `SELECT EXISTS (SELECT 1 FROM ${from}) AS v`
+              : `SELECT EXISTS (SELECT 1 FROM ${from} WHERE ${entry.scopeColumn ?? "id"} = $1) AS v`,
+            entry.scopeKindId === undefined ? [] : [scopeId(scope)]
+          )
+          // Таблиця без `publicRead: anon` гостю закрита грантом: рядків немає.
+          const db = "code" in result ? false : result.rows[0]!.v
+          expect(
+            readAllowed(snapshotOf(GUEST), { scope: scopeId(scope) }, entry),
+            `${name} @ ${scope}`
+          ).toBe(db)
+        }
+      }
+    )
+
+    it("the guest reads anon publicRead only: the database answers", async () => {
+      const read = async (name: string) => {
+        const result = await asAnon<{ v: boolean }>(
+          `SELECT EXISTS (SELECT 1 FROM ${entryOf(name).table.schema}.${entryOf(name).table.name}) AS v`
+        )
+        return "code" in result ? false : result.rows[0]!.v
+      }
+      expect(await read("OpenNotice")).toBe(true)
+      expect(await read("Bulletin")).toBe(false)
+    })
+
+    it("the database refuses the guest every subscription, as the predicate", async () => {
+      for (const pair of subscribePairs(null)) {
+        const channel = channelOf(pair.topic)
+        const result = await asAnon<{ v: boolean }>(
+          "SELECT simetra.signal_topic_allowed($1, false) AS v",
+          [channel]
+        )
+        expect("code" in result, pair.name).toBe(true)
+        expect(
+          canSubscribe(snapshotOf(GUEST), channel, catalogOf()),
+          pair.name
+        ).toBe(false)
+      }
+    })
 
     it.each(NAMED_SUBSCRIBE)(
       "the database lets %s subscribe to %s @ %s: %s",

@@ -35,8 +35,21 @@ const actsInScope = (row: RightsRow, scope: string | null): boolean =>
   row.scope === scope
 
 /**
+ * `publicRead` відкриває об'єкт лише ролі, яку покриває: гостю (знімок без
+ * користувача) — тільки `anon`, користувачу — `anon` і `authenticated`.
+ * Політика читання дає `authenticated` лише ролі користувача, не `anon`.
+ */
+const publicReadCovers = (
+  snapshot: RightsSnapshot,
+  entry: CatalogEntry
+): boolean =>
+  entry.publicRead === "anon" ||
+  (entry.publicRead === "authenticated" && snapshot.userId !== null)
+
+/**
  * Чи лишається пара (скоуп, об'єкт) читабельною за знімком. Об'єкт без
- * `rightsContract` — так: знімок його читання не описує. `publicRead` — так.
+ * `rightsContract` — так: знімок його читання не описує. `publicRead`, що
+ * покриває роль знімка, — так.
  * Скоуплений — скоуп у `scopeSets` свого виду й рядок `read`, що діє в
  * скоупі, будь-якого обсягу, зокрема контейнерний. Нескоуплений — будь-який
  * рядок `read` мітки об'єкта.
@@ -47,7 +60,7 @@ export function readAllowed(
   entry: CatalogEntry
 ): boolean {
   if (entry.rightsContract !== true) return true
-  if (entry.publicRead !== undefined) return true
+  if (publicReadCovers(snapshot, entry)) return true
   const rows = readRows(snapshot, entry)
   if (entry.scopeKindId === undefined) return rows.length > 0
   const scope = pair.scope
