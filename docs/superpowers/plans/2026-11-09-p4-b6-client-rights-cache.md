@@ -44,7 +44,7 @@ fast-check, `pg` 8.23.1, Postgres 17, Centrifugo v6 (стенд ПГ-4/B2),
 правило 4, §6.5, §8.1–§8.4, §8.6, §9, §12 (рядки «unit T1», «unit T4 (кеш
 прав)», «DB `simetra`», «стенд сигналу»), §13 рядок B6, §14.3; [спека
 прав](../specs/2026-10-17-rights-design.md) Рх15, §5.2, §6.3; плани
-[B5b](2026-11-08-p4-b5b-signal-receiver-rights-snapshot.md) і
+[B5b](2026-11-20-p4-b5b-1-rights-snapshot-server.md) і
 [ПГ-4/B2](2026-11-08-pg-4-b2-signal-transport.md). Правила тестів — скіл
 `writing-tests`.
 
