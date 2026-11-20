@@ -80,7 +80,7 @@ describe("rights_client_snapshot", () => {
     const { sql } = fn(model)
     expect(sql).toContain("v_user := (SELECT simetra.current_user_id());")
     expect(sql).toContain(
-      "RETURN jsonb_build_object('userId', NULL, 'scopeSets', '[]'::jsonb, 'rights', '[]'::jsonb);"
+      "IF v_user IS NULL THEN\n    RETURN jsonb_build_object('userId', NULL, 'scopeSets', '[]'::jsonb, 'rights', '[]'::jsonb);"
     )
     expect(sql).toContain("FROM simetra.rights_mine() m")
     // Чужі факти — лише через `_of`-варіанти з параметром користувача.
