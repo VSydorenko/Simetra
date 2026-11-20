@@ -938,10 +938,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       s.checkQueued = false
       const heldCheck = s.checkHeld
       s.checkHeld = false
-      if (!isClosed()) check(s, heldCheck)
-      // Хвіст `revalidate` чекав цю перевірку як продовження польоту: без
-      // нового читання його будимо тут (#312).
-      if (s.flight === undefined) resolveWaiters(s)
+      try {
+        if (!isClosed()) check(s, heldCheck)
+      } finally {
+        // Хвіст `revalidate` чекав цю перевірку як продовження польоту: без
+        // нового читання його будимо тут (#312), зокрема й після винятку.
+        if (s.flight === undefined) resolveWaiters(s)
+      }
     })
   }
 
