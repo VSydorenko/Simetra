@@ -134,6 +134,19 @@ export type CoreReadItem =
   | { ok: true; type: "version"; version: VersionValue }
   | { ok: true; type: "rights"; value: RightsValue }
 
+// Запит до сервера, яким прийшла відповідь частини: правило першого знімка
+// (Р5а) відрізняє частини запиту `rights` від частин інших запитів пакета.
+// Окрема мапа, а не поле відповіді: форма відповіді частини не змінюється.
+const requestOfItem = new WeakMap<CoreReadItem, number>()
+
+/**
+ * The server request (a number per source, in the order of sending) that
+ * answered the item; `undefined` — the item was not answered by a request
+ * (a refusal of the source, a part the core answered itself).
+ */
+export const requestOf = (item: CoreReadItem): number | undefined =>
+  requestOfItem.get(item)
+
 /** The outcome of a rows part: the result of a `query` part is never a version. */
 export type CoreRowsItem =
   | { ok: true; rows: ReadRows; epoch: string | null }
@@ -372,6 +385,9 @@ export function createCoreSource(
     }
   }
 
+  // Лічильник запитів джерела (`requestOf`).
+  let requests = 0
+
   // Об'єкт частини; частина без об'єкта — рівня каталогу.
   const objectOf = (part: CorePart): MetadataRef | undefined =>
     part.type === "query" ? part.query.object : undefined
@@ -411,9 +427,11 @@ export function createCoreSource(
     let answer: WireReadParts | undefined
     // Частини, що справді пішли: добираються на старті задачі, не при постановці.
     let live: number[] = []
+    let request = 0
     try {
       answer = await limiter.run(() => {
         live = queries.flatMap((part, i) => (isRefused(part) ? [] : [i]))
+        request = ++requests
         return live.length === 0
           ? Promise.resolve(undefined)
           : readVia(
@@ -431,7 +449,10 @@ export function createCoreSource(
     if (items.length !== live.length) return queries.map(internal)
     return queries.map((part, i) => {
       const at = live.indexOf(i)
-      return at < 0 ? refusal(part) : decode(part, items[at]!, epoch)
+      if (at < 0) return refusal(part)
+      const item = decode(part, items[at]!, epoch)
+      requestOfItem.set(item, request)
+      return item
     })
   }
 

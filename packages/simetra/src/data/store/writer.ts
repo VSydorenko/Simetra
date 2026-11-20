@@ -1377,3 +1377,82 @@ export async function rereadKey(
     `reread ${o.name}`
   )
 }
+
+/**
+ * The pairs a rights snapshot replacement purges (P4-B spec §6.2 rule 4):
+ * every pair (stored scope, object) of the store that `denies` gives — a
+ * scope of a stored row, or of tabular section lines written with a known
+ * owner scope. An object without a rights contract is not judged; the
+ * journal values of a key without a stored row are not either.
+ */
+export function deniedPairs(
+  ctx: WriterContext,
+  denies: (object: ObjectName, scope: string | null) => boolean
+): Array<{ object: ObjectName; scope: string | null }> {
+  const pairs: Array<{ object: ObjectName; scope: string | null }> = []
+  for (const o of ctx.objects.values()) {
+    if (o.entry.rightsContract !== true) continue
+    const scopes = new Set<string | null>()
+    for (const key of o.rows.keys()) scopes.add(o.rows.get(key)!.scope)
+    // Рядки ТЧ з невідомим скоупом власника прибирає будь-який purge пари
+    // об'єкта (`SectionStore.purgeScope`).
+    for (const owner of o.sections.owners()) {
+      for (const section of o.entry.tabularSections) {
+        const scope = o.sections.get(owner, section.name)?.scope
+        if (scope !== undefined && scope !== "unknown") scopes.add(scope)
+      }
+    }
+    for (const scope of scopes) {
+      if (denies(o.name, scope)) pairs.push({ object: o.name, scope })
+    }
+  }
+  return pairs
+}
+
+// Вигляд тримає рядки об'єкта: свої чи як ціль `include`.
+const holds = (s: Subset, object: ObjectName) =>
+  s.form.object.name === object ||
+  s.form.include.some((step) => step.target === object)
+
+/**
+ * Invalidates the first loads in flight of every view that may hold rows of
+ * the object (its own views and views whose `include` targets it): their
+ * answer may predate a narrowing of its read, and a view never loaded has no
+ * re-read — the load runs again (П12). See {@link revalidateNarrowed}.
+ */
+export function invalidateLoads(ctx: WriterContext, object: ObjectName) {
+  for (const s of ctx.registry.subsets()) {
+    if (!s.alive || s.purged || s.loaded || s.flight === undefined) continue
+    if (!holds(s, object)) continue
+    s.gen++
+    s.trailing = true
+  }
+}
+
+/**
+ * Re-reads every loaded view that may hold rows of the object read before
+ * its read was narrowed (P4-B spec §6.2 rule 4, «до B6»; plan B5b-2 Р5,
+ * Р5а): views of the object and views whose `include` targets it, invisible
+ * ones included, by the single-flight rule (a view in flight gets the one
+ * tail). First loads in flight are {@link invalidateLoads}'s.
+ */
+export function revalidateNarrowed(
+  ctx: WriterContext,
+  object: ObjectName
+): Promise<void> {
+  if (!ctx.session.token().valid) return Promise.resolve()
+  const groups = new Map<ObjectState, Subset[]>()
+  for (const s of ctx.registry.subsets()) {
+    if (!s.loaded || !holds(s, object)) continue
+    if (!eligible(ctx, s, { visibleOnly: false })) continue
+    const group = groups.get(s.form.object) ?? []
+    group.push(s)
+    groups.set(s.form.object, group)
+  }
+  return Promise.all(
+    [...groups].map(
+      ([o, targets]) =>
+        singleFlight(ctx, o, targets, { visibleOnly: false }).done
+    )
+  ).then(() => undefined)
+}

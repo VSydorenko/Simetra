@@ -72,6 +72,7 @@ export function setup(
     /** The client catalog has `rightsSnapshot`; default no (no `rights` part). */
     rightsSnapshot?: boolean
     onRightsReplaced?: Parameters<typeof createCore>[0]["onRightsReplaced"]
+    onSessionChanged?: () => void
   } = {}
 ): CoreHarness {
   const fake = createFakeSource({
@@ -123,6 +124,9 @@ export function setup(
     ...(options.onRightsReplaced === undefined
       ? {}
       : { onRightsReplaced: options.onRightsReplaced }),
+    ...(options.onSessionChanged === undefined
+      ? {}
+      : { onSessionChanged: options.onSessionChanged }),
     log: (e) => log.push(e),
   })
   return { fake, core, log, inspect: inspectCore(core) }

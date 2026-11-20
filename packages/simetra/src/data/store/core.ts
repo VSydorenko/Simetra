@@ -1,7 +1,7 @@
 import { FILTER_IN_MAX, READ_LIMIT_MAX, type CatalogIndex } from "simetra/model"
 import type { DefectFlag } from "./defects"
 import { fieldInfoOf, filterCollator } from "./filter"
-import { keyId } from "./epoch"
+import { keyId, type PairBarrier } from "./epoch"
 import { createObjectStore } from "./object-store"
 import {
   createOverlay,
@@ -13,9 +13,13 @@ import { createSession, type Scope } from "./session"
 import { applySnapshot, dehydrate, parseSnapshot, type SsrContext } from "./ssr"
 import { createRowViews, purgedSnapshot } from "./snapshot"
 import { createBatcher } from "./batcher"
+import { readAllowed, readNarrowed } from "./rights"
 import {
+  ReadLimiterClosed,
   readKeys,
+  requestOf,
   tracked,
+  type CorePart,
   type CoreReadItem,
   type CoreSource,
   type StoreSource,
@@ -27,11 +31,14 @@ import { createRegistry, type Subset, type SubsetRegistry } from "./subsets"
 import {
   activeViews,
   createWriter,
+  deniedPairs,
   hasDueViews,
   nextViewDue,
   revalidate,
   revalidateHolders,
   revalidateHydrated,
+  revalidateNarrowed,
+  invalidateLoads,
   singleFlight,
   rereadKey,
   setVisible,
@@ -373,6 +380,13 @@ export function createCore(options: {
   rightsSnapshot?: boolean
   /** Called, outside any `commit`, when a snapshot replaces the current one. */
   onRightsReplaced?: (prev: RightsState | undefined, next: RightsState) => void
+  /**
+   * Called, outside any `commit` and before any part of the answer is
+   * written, when a `rights` answer names another user than the snapshot
+   * held (both not `null`): the session changed (plan B5b-2 Р7). The runtime
+   * closes itself here; a core left open closes with `session-changed`.
+   */
+  onSessionChanged?: () => void
   /** The monotonic clock in ms; tests substitute it, hosts never do. */
   now?: () => number
 }): CoreSession {
@@ -426,6 +440,9 @@ export function createCore(options: {
     refuse: (object) => batcher.refuse?.(object),
     run: (operation) => batcher.run(operation),
     async read(parts) {
+      // Старт читання частин виклику: правило першого знімка (Р5а) порівнює
+      // його з епохою застосування знімка.
+      const startEpoch = session.epochs.now()
       // Частина без об'єкта (`version`) несумісності не має.
       const isLive = (part: (typeof parts)[number]) => {
         if (part.type !== "query") return true
@@ -517,6 +534,7 @@ export function createCore(options: {
         // Об'єкт став несумісним, поки відповідь летіла: вона вже не діє.
         return isLive(part) ? item : refused(part)
       })
+      if (rightsEnabled) noteAnswered(parts, items, startEpoch)
       return { items }
     },
   }
@@ -530,6 +548,87 @@ export function createCore(options: {
   let rightsSent:
     | { token: GenerationToken; epoch: number; known: string | undefined }
     | undefined
+  // Перший знімок сесії (Р5а): епоха застосування й запит, яким він прийшов.
+  let firstRights:
+    { appliedEpoch: number; request: number | undefined } | undefined
+  // Об'єкти частин, що осіли до першого знімка: їх уже не порівняти з ним.
+  const beforeFirst = new Set<ObjectName>()
+  // Звужені об'єкти, перечитування яких ще не почалось (одне на хід).
+  const narrowing = new Set<ObjectName>()
+
+  // Пара (скоуп, об'єкт), якої знімок не дозволяє читати (§6.2 правило 4).
+  const deniedBy =
+    (snapshot: RightsState["snapshot"]) =>
+    (object: ObjectName, scope: string | null): boolean => {
+      const entry = objects.get(object)?.entry
+      return (
+        entry !== undefined &&
+        entry.rightsContract === true &&
+        !readAllowed(snapshot, { scope }, entry)
+      )
+    }
+
+  const barrierOf = (state: RightsState): PairBarrier => ({
+    rightsEpoch: state.rightsEpoch,
+    appliedEpoch: state.appliedEpoch,
+    denies: deniedBy(state.snapshot),
+    guards: (object) => {
+      const entry = objects.get(object)?.entry
+      return entry?.rightsContract === true && entry.scopeColumn !== undefined
+    },
+  })
+
+  // Частини `query`, що стартували до першого знімка й пішли іншим запитом,
+  // ніж частина `rights` (Р5а): їхні рядки могли передувати звуженню
+  // всередині дозволеної пари, а знімка, з яким їх порівняти, клієнт не має.
+  function noteAnswered(
+    parts: readonly CorePart[],
+    items: readonly CoreReadItem[],
+    startEpoch: number
+  ) {
+    parts.forEach((part, slot) => {
+      const item = items[slot]!
+      if (part.type !== "query" || !item.ok) return
+      const name = `${part.query.object.kind}.${part.query.object.name}`
+      if (firstRights === undefined) beforeFirst.add(name)
+      else if (
+        startEpoch < firstRights.appliedEpoch &&
+        requestOf(item) !== firstRights.request
+      )
+        narrow(name)
+    })
+  }
+
+  // Перечитування звуженого об'єкта: завантаження в польоті скасовується
+  // одразу (до `commit` його відповіді), а прохід виглядів — один на хід.
+  function narrow(object: ObjectName) {
+    if (!session.token().valid) return
+    invalidateLoads(writerContext, object)
+    if (narrowing.size === 0) {
+      queueMicrotask(() => {
+        const objects = [...narrowing]
+        narrowing.clear()
+        for (const name of objects)
+          revalidateNarrowed(writerContext, name).catch(catchNarrow)
+      })
+    }
+    narrowing.add(object)
+  }
+  const catchNarrow = (error: unknown) => {
+    if (!(error instanceof ReadLimiterClosed))
+      log({ kind: "listener-failed", error })
+  }
+
+  // Інший користувач у відповіді `rights` — не заміна знімка, а зміна сесії
+  // (Р7): поза `commit`, до запису будь-якої частини пакета.
+  function rightsSessionChanged() {
+    try {
+      options.onSessionChanged?.()
+    } catch (error) {
+      log({ kind: "listener-failed", error })
+    }
+    if (session.token().valid) core.close("session-changed")
+  }
 
   // Відповідь частини `rights`; її кличе збирач синхронно, до того як хоч
   // один виклик пакета отримав відповідь, тож перевірка користувача (Р7,
@@ -558,10 +657,19 @@ export function createCore(options: {
       rights = { ...current, rightsVersion }
       return
     }
+    // Інший не-`null` користувач — зміна сесії, а не заміна (Р7): що б не
+    // несла відповідь, з неї нічого не пишеться.
+    if (
+      current !== undefined &&
+      current.snapshot.userId !== null &&
+      snapshot.userId !== null &&
+      current.snapshot.userId !== snapshot.userId
+    ) {
+      rightsSessionChanged()
+      return
+    }
     // Знімок замінює поточний лише з більшою `rightsEpoch` (Р4).
     if (current !== undefined && sentRights.epoch <= current.rightsEpoch) return
-    // Шов Р7 (задача 2): тут, до будь-якого запису, інший не-`null` `userId`
-    // відповіді проти поточного знімка йде шляхом `session-changed`.
     const next: RightsState = {
       snapshot,
       rightsVersion,
@@ -569,11 +677,44 @@ export function createCore(options: {
       appliedEpoch: session.epochs.next(),
     }
     rights = next
+    session.epochs.setBarrier(barrierOf(next))
+    replaceRights(current, next, item)
     try {
       options.onRightsReplaced?.(current, next)
     } catch (error) {
       log({ kind: "listener-failed", error })
     }
+  }
+
+  // Правило втрати доступу й звуження на заміні знімка (§6.2 правило 4):
+  // прохід пар сховища одним `commit`, потім перечитування звужених об'єктів.
+  // Перший знімок порівняти нема з чим: звужені — об'єкти частин інших
+  // запитів, що стартували до нього (Р5а).
+  function replaceRights(
+    prev: RightsState | undefined,
+    next: RightsState,
+    item: CoreReadItem
+  ) {
+    const pairs = deniedPairs(writerContext, deniedBy(next.snapshot))
+    if (pairs.length > 0) {
+      core.commit((writer) => {
+        for (const { object, scope } of pairs) writer.purge(object, { scope })
+      }, session.token())
+    }
+    let narrowed: ObjectName[]
+    if (prev === undefined) {
+      firstRights = {
+        appliedEpoch: next.appliedEpoch,
+        request: requestOf(item),
+      }
+      narrowed = [...beforeFirst]
+      beforeFirst.clear()
+    } else {
+      narrowed = [...objects.values()]
+        .filter((o) => readNarrowed(prev.snapshot, next.snapshot, o.entry))
+        .map((o) => o.name)
+    }
+    for (const name of narrowed) narrow(name)
   }
 
   let lastHash = options.snapshotHash

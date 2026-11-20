@@ -476,6 +476,56 @@ function runtimeOver(
 }
 
 describe("runtime core", () => {
+  it("goes the session-changed path, closed before the host callback, when rights name another user", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 1)
+    const userA = "00000000-0000-4000-8000-0000000000a1"
+    fake.rightsSnapshot = { userId: userA, scopeSets: [], rights: [] }
+    fake.rightsVersion = "1".repeat(64)
+    // Міст і для службових частин: фейк відповідає й `rights`.
+    const transport: DataTransport = async (body) =>
+      body.request.type === "read"
+        ? ok(
+            await fake.adapter.read(
+              body.request.items as Parameters<SourceAdapter["read"]>[0]
+            )
+          )
+        : ok(null)
+    const seen: string[] = []
+    const runtime: DataRuntime = createDataRuntime({
+      catalog: { ...catalogOf(OBJECTS), rightsSnapshot: true },
+      transport,
+      subject: SUBJECT,
+      log: () => {},
+      onSessionChanged: () => {
+        // Рантайм закрито до колбека: хуки вже не бачать рядків.
+        const s = handle.getSnapshot()
+        seen.push(
+          `${String(runtime.disposed)}:${s.status}:${s.reason ?? ""}:${s.rows.length}`
+        )
+      },
+    })
+    const core = runtimeHandleOf(runtime).core
+    const handle = core.view(cardOf(1))
+    handle.subscribe(() => {})
+    await settle()
+    expect(handle.getSnapshot().rows).toHaveLength(1)
+    fake.edit(TASK, key(1), { title: "of another user" })
+    fake.rightsSnapshot = {
+      userId: "00000000-0000-4000-8000-0000000000a2",
+      scopeSets: [],
+      rights: [],
+    }
+    fake.rightsVersion = "2".repeat(64)
+    // Знімок іншого користувача й перечитування картки — одним пакетом.
+    core.requestRights()
+    handle.refresh()
+    await settle()
+    expect(seen).toEqual(["true:purged:session-changed:0"])
+    expect(runtime.disposed).toBe(true)
+    expect(inspectCore(core).rowCount()).toBe(0)
+  })
+
   it("purges every view in one notification before onSessionChanged", async () => {
     const fake = createFakeSource({ objects: OBJECTS })
     seed(fake, 1, 1)

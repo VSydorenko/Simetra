@@ -108,3 +108,42 @@ export function canSubscribe(
       : r.level !== "container"
   )
 }
+
+// Кортеж обсягу рядка `read`: усе, крім об'єкта й дії, які вже відібрано.
+const tupleOf = (r: RightsRow): string =>
+  JSON.stringify([
+    r.level,
+    r.levelId,
+    r.scope,
+    r.container,
+    r.extent,
+    r.dimensionId,
+  ])
+
+/**
+ * Чи звузив новий знімок читання об'єкта до B6 (P4-B spec §6.2 правило 4):
+ * зник кортеж рядка `read` мітки об'єкта, а його пара лишилась дозволеною; для нескоупленого об'єкта — ще й
+ * змінились `scopeSets` (межа читання «Користувачів» залежить від членства).
+ * Об'єкт без `rightsContract` знімок не описує — ні.
+ */
+export function readNarrowed(
+  prev: RightsSnapshot,
+  next: RightsSnapshot,
+  entry: CatalogEntry
+): boolean {
+  if (entry.rightsContract !== true) return false
+  const kept = new Set(readRows(next, entry).map(tupleOf))
+  // Кортеж пари, яку новий знімок забороняє, — не звуження, а втрата пари:
+  // її прибирає прохід, а не перечитування.
+  const narrowed = (r: RightsRow) =>
+    !kept.has(tupleOf(r)) &&
+    (entry.scopeKindId === undefined ||
+      readAllowed(next, { scope: r.scope }, entry))
+  if (readRows(prev, entry).some(narrowed)) return true
+  if (entry.scopeKindId !== undefined) return false
+  const scopes = (s: RightsSnapshot) =>
+    new Set(s.scopeSets.map((x) => `${x.scopeKind}\u0000${x.scope}`))
+  const before = scopes(prev)
+  const after = scopes(next)
+  return before.size !== after.size || [...before].some((x) => !after.has(x))
+}
