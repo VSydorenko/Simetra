@@ -574,6 +574,7 @@ export function defineRightsPredicateCases(): void {
             entry.scopeKindId === undefined ? [] : [scopeId(scope)]
           )
           // Таблиця без `publicRead: anon` гостю закрита грантом: рядків немає.
+          if ("code" in result) expect(result.code).toBe("42501")
           const db = "code" in result ? false : result.rows[0]!.v
           expect(
             readAllowed(snapshotOf(GUEST), { scope: scopeId(scope) }, entry),
@@ -588,6 +589,7 @@ export function defineRightsPredicateCases(): void {
         const result = await asAnon<{ v: boolean }>(
           `SELECT EXISTS (SELECT 1 FROM ${entryOf(name).table.schema}.${entryOf(name).table.name}) AS v`
         )
+        if ("code" in result) expect(result.code).toBe("42501")
         return "code" in result ? false : result.rows[0]!.v
       }
       expect(await read("OpenNotice")).toBe(true)
@@ -601,7 +603,7 @@ export function defineRightsPredicateCases(): void {
           "SELECT simetra.signal_topic_allowed($1, false) AS v",
           [channel]
         )
-        expect("code" in result, pair.name).toBe(true)
+        expect("code" in result && result.code, pair.name).toBe("42501")
         expect(
           canSubscribe(snapshotOf(GUEST), channel, catalogOf()),
           pair.name
