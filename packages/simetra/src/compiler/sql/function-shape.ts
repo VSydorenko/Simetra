@@ -1,7 +1,8 @@
 import type { Node } from "libpg-query"
 import { closedShellProblem } from "./closed-forms"
 import type { PlpgsqlParser } from "./plpgsql"
-import { functionIdentity, type VerbatimUnit } from "./units"
+import { functionIdentity } from "./identity"
+import { type VerbatimUnit } from "./units"
 
 /*
  * Форма функцій, які викликає політика (функція множини скоупу, функція

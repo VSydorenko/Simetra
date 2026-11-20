@@ -342,7 +342,7 @@ describe("creation order", () => {
       [MISC]: 'CREATE EXTENSION "uuid-ossp" SCHEMA extensions;',
     })
     expect(list).toEqual([
-      "extension:uuid-ossp",
+      'extension:"uuid-ossp"',
       "enumType:public.status",
       "table:public.codes",
     ])
@@ -388,7 +388,7 @@ describe("creation order", () => {
       ].join("\n"),
     })
     expect(list).toEqual([
-      "extension:uuid-ossp",
+      'extension:"uuid-ossp"',
       "defaultPrivileges:postgres::table:revoke:anon:select",
       "table:public.codes",
       "sequence:z.s",
@@ -690,7 +690,7 @@ describe("creation order", () => {
       [MISC]: `CREATE FUNCTION z.date_trunc(text, timestamp) RETURNS timestamp ${PLPGSQL};`,
     })
     expectBefore(list, [
-      ["function:z.date_trunc(text,timestamp)", "table:public.invoice"],
+      ['function:z.date_trunc(text,"timestamp")', "table:public.invoice"],
     ])
   })
 
@@ -726,7 +726,7 @@ describe("creation order", () => {
         "COMMENT ON COLUMN z.\"v.w\".x IS 'x';\n" +
         'CREATE VIEW z."v.w" AS SELECT 1 AS x;',
     })
-    expectBefore(list, [["view:z.v.w", "comment:column:z.v.w.x"]])
+    expectBefore(list, [['view:z."v.w"', 'comment:column:z."v.w".x']])
   })
 
   it("grants and comments after their objects", async () => {

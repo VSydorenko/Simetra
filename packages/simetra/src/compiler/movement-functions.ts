@@ -19,8 +19,8 @@ import {
 } from "simetra/model"
 import { compareStrings, toPointer } from "./diagnostics"
 import type { SqlParser } from "./sql/parse"
+import { functionIdentity } from "./sql/identity"
 import {
-  functionIdentity,
   inputArgumentTypes,
   withoutLocations,
   type MovementQueryUnit,

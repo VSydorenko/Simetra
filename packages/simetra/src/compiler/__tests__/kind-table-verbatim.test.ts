@@ -128,7 +128,7 @@ describe("sql.kind-table-verbatim", () => {
       name: "quoted identifiers",
       file: EXTRA,
       sql: policy('"public"."task"', '"P"'),
-      identity: "policy:public.task.P",
+      identity: 'policy:public.task."P"',
       table: "public.task",
       form: "policy" as const,
     },

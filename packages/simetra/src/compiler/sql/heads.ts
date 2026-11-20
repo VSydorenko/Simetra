@@ -37,11 +37,8 @@ import {
 } from "./query-shape"
 import { splitAssignment } from "./rewrite/plpgsql-body"
 import { statementTargets } from "./unit-target"
-import {
-  functionIdentity,
-  inputArgumentTypes,
-  type VerbatimUnit,
-} from "./units"
+import { functionIdentity } from "./identity"
+import { inputArgumentTypes, type VerbatimUnit } from "./units"
 
 /*
  * Голови (спека прав §5.3): SQL застосунку, що виконується посеред команди чи під

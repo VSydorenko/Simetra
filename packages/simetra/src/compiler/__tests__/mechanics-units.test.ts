@@ -272,7 +272,7 @@ describe("buildMechanicsUnits", () => {
     expect(platformFunctionSignatures(model.sqlUnits)).toEqual([
       "simetra.key_immutable()",
       "simetra.signal_outbox_notify()",
-      "simetra.signal_outbox_prune(interval)",
+      'simetra.signal_outbox_prune("interval")',
       "simetra.signal_outbox_stamp()",
       "simetra.touch()",
     ])

@@ -11,8 +11,8 @@ import {
 } from "./sql/declarations"
 import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
+import { functionIdentity } from "./sql/identity"
 import {
-  functionIdentity,
   functionSignatureSql,
   generatedUnit,
   grantObjects,

@@ -8,7 +8,8 @@ import {
 } from "../diagnostics"
 import { judgeQueryFunction, type HeadScope } from "../sql/heads"
 import type { PlpgsqlParser } from "../sql/plpgsql"
-import { functionIdentity, type VerbatimUnit } from "../sql/units"
+import { functionIdentity } from "../sql/identity"
+import { type VerbatimUnit } from "../sql/units"
 import { PROJECT_FILE } from "../stages/files"
 import {
   nullaryFunction,

@@ -33,7 +33,8 @@ import { isUsers } from "../rights/facts"
 import { generatedTableFunctionName } from "../rights/generated-names"
 import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
-import { functionIdentity, type SqlUnit } from "../sql/units"
+import { functionIdentity } from "../sql/identity"
+import { type SqlUnit } from "../sql/units"
 import {
   findStandardColumn,
   findStyleFreeColumn,

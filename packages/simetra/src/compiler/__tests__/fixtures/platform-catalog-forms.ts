@@ -34,7 +34,7 @@ export const CATALOG_UNIT_FORMS: Readonly<Record<string, string>> = {
     "GRANT INSERT (payload) ON TABLE simetra.signal_outbox TO simetra_command",
   "grant:grant:table:simetra.signal_outbox:simetra_signal_consumer:delete,select":
     "GRANT DELETE, SELECT ON TABLE simetra.signal_outbox TO simetra_signal_consumer",
-  "grant:revoke:function:simetra.signal_outbox_prune(interval):public:execute":
+  'grant:revoke:function:simetra.signal_outbox_prune("interval"):public:execute':
     "REVOKE EXECUTE ON FUNCTION simetra.signal_outbox_prune(interval) FROM PUBLIC",
 }
 

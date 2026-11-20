@@ -19,7 +19,8 @@ import { PUBLIC, grantFacts, privilegedRoles } from "./grant-facts"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 import { reachableUnits, relationReads } from "./reads"
-import { functionIdentity, type VerbatimUnit } from "./units"
+import { functionIdentity } from "./identity"
+import { type VerbatimUnit } from "./units"
 
 /** Що читає повз права викликача: функція, подання чи матеріалізоване подання. */
 export type DefinerReadsForm = "function" | "view" | "materializedView"
