@@ -13,7 +13,9 @@ import {
   type WireReadQuery,
   type WireReadResult,
   type WireRow,
+  type rightsValueSchema,
 } from "simetra/model"
+import type { z } from "zod"
 
 /**
  * Бюджет відповіді (спека П4-B §4.1, крок 6 §4.5, Рд26). Міряється вся
@@ -148,12 +150,14 @@ function measure(result: RowsResult): Measured {
   return { bytes, rowSizes, includedSizes }
 }
 
+type RightsValue = z.infer<typeof rightsValueSchema>
+
 /**
  * Результат, що вміщується в `room` байтів значення: сам результат, обрізана
  * сторінка чи `undefined`. Fail-closed: читання за ключами,
  * картка, «ТЧ власника» й сторінка без жодного рядка в межі не ріжуться.
  */
-function fitValue(
+function fitQuery(
   index: CatalogIndex,
   query: WireReadQuery,
   result: WireReadResult,
@@ -232,19 +236,20 @@ export type WireReadItem = WireReadParts["items"][number]
 
 /**
  * A position of a `read` request for {@link fitParts}: an outcome the
- * handler already has (a refused part, a `version` part) or a query part the
- * runtime reads.
+ * handler already has (a refused part, a `version` part), a query part the
+ * runtime reads or the `rights` part (all or nothing: it is never cut).
  */
-export type ReadSlot = { item: WireReadItem } | { query: WireReadQuery }
+export type ReadSlot =
+  { item: WireReadItem } | { query: WireReadQuery } | { rights: true }
 
 /** The budget of one `read` response, see {@link fitParts}. */
 export interface PartsBudget {
   /**
-   * Decides the outcome of query part `part` (its position among the query
-   * slots) from its encoded result, before the next part runs: `"overflow"`
-   * — the parts after it must not run.
+   * Decides the outcome of runtime part `part` (its position among the query
+   * and `rights` slots) from its encoded result, before the next part runs:
+   * `"overflow"` — the parts after it must not run.
    */
-  fit(part: number, result: WireReadResult): "accept" | "overflow"
+  fit(part: number, result: WireReadResult | RightsValue): "accept" | "overflow"
   /**
    * The value of the response: the decided outcomes, `failed` errors for
    * the parts without one. A response still over the budget is
@@ -292,10 +297,11 @@ export function fitParts(
   slots: readonly ReadSlot[],
   serverHash: string
 ): PartsBudget {
-  const queries: WireReadQuery[] = []
+  const queries: (WireReadQuery | "rights")[] = []
   const fixedBytes: number[] = []
   for (const slot of slots) {
     if ("query" in slot) queries.push(slot.query)
+    else if ("rights" in slot) queries.push("rights")
     else fixedBytes.push(jsonBytes(slot.item))
   }
   const decided: (WireReadItem | undefined)[] = queries.map(() => undefined)
@@ -332,11 +338,20 @@ export function fitParts(
       if (query === undefined || decided[part] !== undefined) {
         throw new Error(`read part ${part} fitted twice or out of range`)
       }
+      // Знімок не ріжеться: вміщується цілим чи відмовляє, як не-сторінка.
+      const fitValue = (
+        room: number
+      ): WireReadResult | RightsValue | undefined =>
+        query === "rights" || "rightsVersion" in result
+          ? jsonBytes(result) <= room
+            ? result
+            : undefined
+          : fitQuery(index, query, result, room)
       if (overflowed) {
         decide(part, { ok: false, error: BATCH_BUDGET })
         return "overflow"
       }
-      const value = fitValue(index, query, result, room(part))
+      const value = fitValue(room(part))
       if (value === result) {
         decide(part, { ok: true, value })
         return "accept"
@@ -346,7 +361,7 @@ export function fitParts(
         overflowed = true
         return "overflow"
       }
-      if (fitValue(index, query, result, alone) !== undefined) {
+      if (fitValue(alone) !== undefined) {
         decide(part, { ok: false, error: BATCH_BUDGET })
         overflowed = true
         return "overflow"

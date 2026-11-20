@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto"
 import {
   READ_BATCH_MAX,
   runtimeCatalogSchema,
   type ReadPart,
+  type ReadQueryPart,
   type ReadQuery,
 } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -666,11 +668,29 @@ describe("CommandRuntime.read", () => {
   )
 })
 
+// `backup` веде на іншу ціль, ніж `region`: частина з обома `include` —
+// три оператори, тож межу операторів видно в межах READ_BATCH_MAX частин.
+const wideCatalog = runtimeCatalogSchema.parse({
+  ...linkCatalog,
+  objects: linkCatalog.objects.map((o) =>
+    o.id !== link.id
+      ? o
+      : {
+          ...o,
+          attributes: o.attributes.map((a) =>
+            a.name === "backup"
+              ? { ...a, ref: { ...a.ref!, object: client.id } }
+              : a
+          ),
+        }
+  ),
+})
+
 describe("CommandRuntime.readParts", () => {
   const R2 = "88888888-8888-4888-8888-888888888888"
   const R3 = "99999999-9999-4999-8999-999999999999"
   const HEX = "a".repeat(64)
-  const card = (id: string): ReadPart => ({
+  const card = (id: string): ReadQueryPart => ({
     type: "query",
     query: { object: RIGHTS, id },
   })
@@ -1039,23 +1059,6 @@ describe("CommandRuntime.readParts", () => {
     expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
   })
 
-  // `backup` веде на іншу ціль, ніж `region`: частина з обома `include` —
-  // три оператори, тож межу операторів видно в межах READ_BATCH_MAX частин.
-  const wideCatalog = runtimeCatalogSchema.parse({
-    ...linkCatalog,
-    objects: linkCatalog.objects.map((o) =>
-      o.id !== link.id
-        ? o
-        : {
-            ...o,
-            attributes: o.attributes.map((a) =>
-              a.name === "backup"
-                ? { ...a, ref: { ...a.ref!, object: client.id } }
-                : a
-            ),
-          }
-    ),
-  })
   const linkPart = (include: string[]): ReadPart => ({
     type: "query",
     query: { object: LINK, id: ID, include },
@@ -1363,5 +1366,312 @@ describe("CommandRuntime.readParts", () => {
         { release: false },
       ])
     })
+  })
+})
+
+describe("CommandRuntime: частина rights", () => {
+  const rightsCatalog = runtimeCatalogSchema.parse({
+    ...catalog,
+    rightsSnapshot: true,
+  })
+  const SNAPSHOT_STATEMENT = {
+    text: 'SELECT "simetra"."rights_client_snapshot"()::text AS snapshot',
+    params: [],
+  }
+  const U = "44444444-4444-4444-8444-444444444444"
+  const SCOPE = "55555555-5555-4555-8555-555555555555"
+  const rightsRow = (object: string, action: string) => ({
+    level: "global",
+    levelId: null,
+    scope: null,
+    container: null,
+    object,
+    action,
+    extent: "all",
+    dimensionId: null,
+  })
+  const snapshot = {
+    userId: U,
+    scopeSets: [{ scopeKind: "org", scope: SCOPE }],
+    rights: [rightsRow("a", "read"), rightsRow("b", "read")],
+  }
+  const reordered = {
+    userId: U,
+    scopeSets: [{ scopeKind: "org", scope: SCOPE }],
+    rights: [rightsRow("b", "read"), rightsRow("a", "read")],
+  }
+  // Свій відбиток тесту: канонічний JSON збирається вручну, не кодом сервера.
+  const fingerprint = (value: typeof snapshot) =>
+    createHash("sha256")
+      .update(
+        JSON.stringify({
+          userId: value.userId,
+          scopeSets: value.scopeSets,
+          rights: value.rights.map((r) => ({
+            level: r.level,
+            levelId: r.levelId,
+            scope: r.scope,
+            container: r.container,
+            object: r.object,
+            action: r.action,
+            extent: r.extent,
+            dimensionId: r.dimensionId,
+          })),
+        })
+      )
+      .digest("hex")
+  const card = (id: string): ReadQueryPart => ({
+    type: "query",
+    query: { object: RIGHTS, id },
+  })
+  const cardOf = (id: string) => ({
+    text: `${CARD} WHERE t."id" = $1::uuid LIMIT 1`,
+    params: [id],
+  })
+  const answering =
+    (value: unknown): Override =>
+    (text, params) =>
+      text === SNAPSHOT_STATEMENT.text
+        ? { rows: [{ snapshot: JSON.stringify(value) }] }
+        : isRead(text)
+          ? { rows: [rowOf(params[0]!, 1)] }
+          : undefined
+  const open = (override: Override) =>
+    setup(override, { catalog: rightsCatalog })
+  const RIGHTS_PART = { type: "rights" } as const
+
+  it("runs [query, rights] in one transaction: BEGIN, setup, epoch, the query, the snapshot statement, COMMIT", async () => {
+    const { db, runtime } = await open(answering(snapshot))
+    const result = await runtime.readParts(session, [card(OTHER), RIGHTS_PART])
+    expect(db.calls).toEqual([
+      ...opened(),
+      cardOf(OTHER),
+      SNAPSHOT_STATEMENT,
+      COMMIT,
+      { release: false },
+    ])
+    expect(result.items[1]).toEqual({
+      ok: true,
+      value: { rightsVersion: fingerprint(snapshot), snapshot },
+    })
+    expect(result.items[0]!.ok).toBe(true)
+  })
+
+  it("opens a transaction for a batch of the rights part alone", async () => {
+    const { db, runtime } = await open(answering(snapshot))
+    const result = await runtime.readParts(session, [RIGHTS_PART])
+    expect(db.calls).toEqual([
+      ...opened(),
+      SNAPSHOT_STATEMENT,
+      COMMIT,
+      { release: false },
+    ])
+    expect(result.epoch).toBe(HARNESS_EPOCH)
+  })
+
+  it("leaves the snapshot out when known is the current rightsVersion, still running the statement", async () => {
+    const { db, runtime } = await open(answering(snapshot))
+    const known = fingerprint(snapshot)
+    const result = await runtime.readParts(session, [{ type: "rights", known }])
+    expect(result.items).toEqual([
+      { ok: true, value: { rightsVersion: known } },
+    ])
+    expect(db.calls).toContainEqual(SNAPSHOT_STATEMENT)
+  })
+
+  it("sends the snapshot when known differs from the current rightsVersion", async () => {
+    const { runtime } = await open(answering(snapshot))
+    const result = await runtime.readParts(session, [
+      { type: "rights", known: "b".repeat(64) },
+    ])
+    expect(result.items).toEqual([
+      {
+        ok: true,
+        value: { rightsVersion: fingerprint(snapshot), snapshot },
+      },
+    ])
+  })
+
+  it("gives the same rightsVersion and snapshot for rows in another order", async () => {
+    const first = await (
+      await open(answering(snapshot))
+    ).runtime.rightsSnapshot(session)
+    const second = await (
+      await open(answering(reordered))
+    ).runtime.rightsSnapshot(session)
+    expect(second.rightsVersion).toBe(first.rightsVersion)
+    expect(second.snapshot).toEqual(first.snapshot)
+  })
+
+  it("rightsSnapshot(session) returns the value with the snapshot", async () => {
+    const { runtime } = await open(answering(snapshot))
+    expect(await runtime.rightsSnapshot(session)).toEqual({
+      rightsVersion: fingerprint(snapshot),
+      snapshot,
+    })
+  })
+
+  it("answers an anonymous session without any database call", async () => {
+    const { db, runtime } = await open(answering(snapshot))
+    const empty = { userId: null, scopeSets: [], rights: [] }
+    const anonymous = { ...session, is_anonymous: true }
+    expect(await runtime.readParts(anonymous, [RIGHTS_PART])).toEqual({
+      epoch: null,
+      items: [
+        {
+          ok: true,
+          value: {
+            rightsVersion: fingerprint(empty as unknown as typeof snapshot),
+            snapshot: empty,
+          },
+        },
+      ],
+    })
+    expect(db.calls).toEqual([])
+  })
+
+  it("runs no snapshot statement for an anonymous session beside a query part", async () => {
+    const { db, runtime } = await open(answering(snapshot))
+    const anonymous = { ...session, is_anonymous: true }
+    const result = await runtime.readParts(anonymous, [
+      card(OTHER),
+      RIGHTS_PART,
+    ])
+    expect(db.calls).not.toContainEqual(SNAPSHOT_STATEMENT)
+    expect(result.items[1]).toMatchObject({
+      ok: true,
+      value: { snapshot: { userId: null, scopeSets: [], rights: [] } },
+    })
+  })
+
+  it.each([
+    ["not JSON", "{"],
+    ["an unknown field", JSON.stringify({ ...snapshot, extra: 1 })],
+    ["a wrong shape", JSON.stringify({ userId: 5 })],
+  ])(
+    "fails the part with command.internal and logs when the output is %s",
+    async (_, text) => {
+      const { db, runtime, log } = await open((sql, params) =>
+        sql === SNAPSHOT_STATEMENT.text
+          ? { rows: [{ snapshot: text }] }
+          : isRead(sql)
+            ? { rows: [rowOf(params[0]!, 1)] }
+            : undefined
+      )
+      const result = await runtime.readParts(session, [
+        RIGHTS_PART,
+        card(OTHER),
+      ])
+      expect(result.items[0]).toEqual({
+        ok: false,
+        error: { code: "command.internal" },
+      })
+      expect(result.items[1]!.ok).toBe(true)
+      expect(log).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "database" })
+      )
+      expect(db.calls.at(-2)).toEqual(COMMIT)
+    }
+  )
+
+  it("counts the snapshot statement against READ_BATCH_STATEMENTS_MAX", async () => {
+    const wide: ReadQueryPart = {
+      type: "query",
+      query: { object: LINK, id: ID, include: ["region", "backup"] },
+    }
+    const tens = Array.from({ length: 10 }, () => wide)
+    const wideRights = runtimeCatalogSchema.parse({
+      ...wideCatalog,
+      rightsSnapshot: true,
+    })
+    // 10 × 3 + 1 + 1 = 32: на межі.
+    const within = await setup(answering(snapshot), { catalog: wideRights })
+    await within.runtime.readParts(session, [...tens, card(OTHER), RIGHTS_PART])
+    expect(within.db.calls).toContainEqual(SNAPSHOT_STATEMENT)
+    // 10 × 3 + 2 + 1 = 33: частина `rights` — оператор, що перетинає межу.
+    const over = await setup(answering(snapshot), { catalog: wideRights })
+    expect(
+      await failureOf(
+        over.runtime.readParts(session, [
+          ...tens,
+          {
+            type: "query",
+            query: { object: LINK, id: ID, include: ["region"] },
+          },
+          RIGHTS_PART,
+        ])
+      )
+    ).toEqual({ code: "command.invalid", reason: "batch-too-large" })
+    expect(over.db.calls).toEqual([])
+  })
+
+  it("does not count the snapshot of an anonymous session as a statement", async () => {
+    const wide: ReadQueryPart = {
+      type: "query",
+      query: { object: LINK, id: ID, include: ["region", "backup"] },
+    }
+    const wideRights = runtimeCatalogSchema.parse({
+      ...wideCatalog,
+      rightsSnapshot: true,
+    })
+    const { runtime } = await setup(answering(snapshot), {
+      catalog: wideRights,
+    })
+    // 10 × 3 + 2 = 32 без знімка: анонім його до бази не шле.
+    const result = await runtime.readParts({ ...session, is_anonymous: true }, [
+      ...Array.from({ length: 10 }, () => wide),
+      { type: "query", query: { object: LINK, id: ID, include: ["region"] } },
+      RIGHTS_PART,
+    ])
+    expect(result.items.at(-1)!.ok).toBe(true)
+  })
+
+  it("refuses a second rights part for the whole request before the database", async () => {
+    const { db, runtime } = await open(answering(snapshot))
+    expect(
+      await failureOf(
+        runtime.readParts(session, [RIGHTS_PART, card(OTHER), RIGHTS_PART])
+      )
+    ).toEqual({ code: "command.invalid" })
+    expect(db.calls).toEqual([])
+  })
+
+  it("refuses the part of a catalog without rights functions, alone", async () => {
+    const { db, runtime } = await setup(answering(snapshot))
+    const result = await runtime.readParts(session, [RIGHTS_PART, card(OTHER)])
+    expect(result.items[0]).toEqual({
+      ok: false,
+      error: { code: "command.invalid" },
+    })
+    expect(result.items[1]!.ok).toBe(true)
+    expect(db.calls).not.toContainEqual(SNAPSHOT_STATEMENT)
+  })
+
+  it("stops at fit overflow before the rights part: batch-budget, no snapshot statement", async () => {
+    const { db, runtime } = await open(answering(snapshot))
+    const result = await runtime.readParts(
+      session,
+      [card(OTHER), RIGHTS_PART],
+      { fit: () => "overflow" }
+    )
+    expect(result.items[1]).toEqual({
+      ok: false,
+      error: { code: "command.unavailable", reason: "batch-budget" },
+    })
+    expect(db.calls).not.toContainEqual(SNAPSHOT_STATEMENT)
+  })
+
+  it("stops after the rights part when fit reports overflow for it", async () => {
+    const { db, runtime } = await open(answering(snapshot))
+    const result = await runtime.readParts(
+      session,
+      [RIGHTS_PART, card(OTHER)],
+      { fit: (index) => (index === 0 ? "overflow" : "accept") }
+    )
+    expect(result.items[1]).toEqual({
+      ok: false,
+      error: { code: "command.unavailable", reason: "batch-budget" },
+    })
+    expect(db.calls).not.toContainEqual(cardOf(OTHER))
   })
 })

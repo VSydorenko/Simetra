@@ -22,6 +22,7 @@ import {
   SUPPORT_ID,
   TASK_ID,
   TASK_OWN_READER_ID,
+  type Layer,
   compileRights,
   grant,
   objects,
@@ -68,8 +69,11 @@ const changes = (kind: string, scope: string, object: string) =>
   channelTopic({ kind: "changes", scopeKindId: kind, scope, object })
 const unscoped = (object: string) => changes(ZERO_UUID, ZERO_UUID, object)
 
-async function signalModel(): Promise<CompiledModel> {
-  const result = await compileRights(signalTopicDomain(profileLayer()))
+/** Модель оракулів каналу; `layers` — доповнення поверх (еквівалентність предикатів T4). */
+export async function signalModel(...layers: Layer[]): Promise<CompiledModel> {
+  const result = await compileRights(
+    signalTopicDomain(profileLayer(), ...layers)
+  )
   expect(result.diagnostics).toEqual([])
   return result.model!
 }
@@ -82,7 +86,7 @@ async function signalModel(): Promise<CompiledModel> {
  * `ProjectWriter` на P1. Без членства: `u9` — нічого, `g1` — глобальна
  * `AnnouncementOwnReader`.
  */
-async function seedSignals(client: pg.Client): Promise<Seed> {
+export async function seedSignals(client: pg.Client): Promise<Seed> {
   const ids: Seed = {}
   const create = async (
     key: string,

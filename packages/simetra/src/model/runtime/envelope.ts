@@ -18,6 +18,7 @@ import {
   TABULAR_LINES_MAX,
   versionEpochSchema,
 } from "./read"
+import { rightsValueSchema, rightsVersionSchema } from "./rights-snapshot"
 import { INTEGER_TEXT, isPlainObject } from "./values"
 
 /**
@@ -199,8 +200,7 @@ const kernelsSchema = z.record(wireObjectSchema, kernelHashSchema).optional()
 
 // Рівно один з `operation`/`batch`: дві суворі гілки, тож обидва разом чи жодне
 // відхиляє кожна гілка, а `z.infer` дає тип, де TypeScript вимагає рівно одне.
-// Причину межі з вкладених помилок гілок бере `decidingIssue`. `type: "rights"`
-// — B5.
+// Причину межі з вкладених помилок гілок бере `decidingIssue`.
 const runRequestSchema = z.union([
   z.strictObject({
     type: z.literal("run"),
@@ -245,11 +245,16 @@ export type VersionValue = z.infer<typeof versionValueSchema>
 
 /**
  * One part of a `read` request: a read query (with `known`, where its form
- * allows) or the catalog version. `rights` comes with B5.
+ * allows), the catalog version or the rights snapshot (`known` — the
+ * `rightsVersion` the client holds).
  */
 export const wireReadPartSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("query"), query: wireReadQuerySchema }),
   z.strictObject({ type: z.literal("version") }),
+  z.strictObject({
+    type: z.literal("rights"),
+    known: rightsVersionSchema.optional(),
+  }),
 ])
 
 export type WireReadPart = z.infer<typeof wireReadPartSchema>
@@ -266,7 +271,11 @@ export const wireReadPartsResultSchema = z.strictObject({
       z.union([
         z.strictObject({
           ok: z.literal(true),
-          value: z.union([wireReadResultSchema, versionValueSchema]),
+          value: z.union([
+            wireReadResultSchema,
+            versionValueSchema,
+            rightsValueSchema,
+          ]),
         }),
         z.strictObject({ ok: z.literal(false), error: wireCommandErrorSchema }),
       ])
@@ -276,6 +285,33 @@ export const wireReadPartsResultSchema = z.strictObject({
 })
 
 export type WireReadParts = z.infer<typeof wireReadPartsResultSchema>
+
+// Одна частина `rights` на пакет: знімок один на транзакцію. Відмова — на
+// шляху другої частини; решту частин, як і раніше, перевіряє обробник.
+// Частина, що кидає при читанні (відкликаний проксі), — не `rights`: її
+// відмову дає обробник, а не конверт.
+const isRightsPart = (item: unknown): boolean => {
+  try {
+    return isPlainObject(item) && item.type === "rights"
+  } catch {
+    return false
+  }
+}
+
+function onePerBatch(items: unknown[], ctx: z.RefinementCtx) {
+  let seen = false
+  items.forEach((item, i) => {
+    if (!isRightsPart(item)) return
+    if (seen) {
+      ctx.addIssue({
+        code: "custom",
+        path: [i],
+        message: "at most one rights part per read",
+      })
+    }
+    seen = true
+  })
+}
 
 /** A request to the data transport: the session subject and one request. */
 // Частини конверт бере будь-якими: кожну перевіряє `wireReadPartSchema` в
@@ -290,7 +326,7 @@ export const dataRequestSchema = z.strictObject({
         z.array(z.unknown()).min(1),
         READ_BATCH_MAX,
         LIMIT_REASONS.batchTooLarge
-      ),
+      ).superRefine(onePerBatch),
     }),
     runRequestSchema,
   ]),

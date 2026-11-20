@@ -93,6 +93,7 @@ export type UnitGenerator =
   | "schemaUsage"
   | "signalOutbox"
   | "signal"
+  | "rightsClientSnapshot"
 
 /**
  * Чи тіло функцій генератора фіксоване платформою: таку функцію перевіряють
@@ -122,6 +123,7 @@ const FIXED_BODY: Readonly<Record<UnitGenerator, boolean>> = {
   schemaUsage: true,
   signalOutbox: true,
   signal: true,
+  rightsClientSnapshot: true,
 }
 
 /**

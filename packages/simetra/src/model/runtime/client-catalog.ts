@@ -11,6 +11,8 @@ export const clientCatalogSchema = z
     format: z.literal(1),
     snapshotHash: z.string(),
     provider: z.enum(DATABASE_PROVIDERS),
+    /** Проєкт має функції прав: без прапорця клієнт не шле `rights` (Р6). */
+    rightsSnapshot: z.literal(true).optional(),
     objects: z.array(catalogEntrySchema),
   })
   .superRefine((catalog, ctx) => {

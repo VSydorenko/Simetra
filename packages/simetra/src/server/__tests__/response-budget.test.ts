@@ -650,3 +650,65 @@ describe("fitRunResult", () => {
     )
   })
 })
+
+describe("fitParts: частина rights", () => {
+  const BATCH_BUDGET: WireCommandError = {
+    code: "command.unavailable",
+    reason: "batch-budget",
+  }
+  const card = { object: link.id, id: uuid(1) } as WireReadQuery
+  // Знімок з одним рядком, `object` якого — наповнювач заданої довжини.
+  const rightsOf = (bytes: number) => ({
+    rightsVersion: "a".repeat(64),
+    snapshot: {
+      userId: null,
+      scopeSets: [],
+      rights: [
+        {
+          level: "global",
+          levelId: null,
+          scope: null,
+          container: null,
+          object: "x".repeat(bytes),
+          action: "read",
+          extent: "all",
+          dimensionId: null,
+        },
+      ],
+    },
+  })
+  const rowsOf = (bytes: number): WireReadResult => ({
+    rows: [linkRow(1, bytes)],
+  })
+
+  it("знімок у межах бюджету — accept, значення без змін", () => {
+    const budget = fitParts(index, [{ query: card }, { rights: true }], HASH)
+    expect(budget.fit(0, rowsOf(10))).toBe("accept")
+    const value = rightsOf(1000)
+    expect(budget.fit(1, value)).toBe("accept")
+    const out = budget.finish(EPOCH, new Map())
+    if ("code" in out) throw new Error(`refused: ${out.code}`)
+    expect(out.items[1]).toStrictEqual({ ok: true, value })
+  })
+
+  it("знімок понад залишок, що окремо вміщується, — batch-budget і overflow, без обрізання", () => {
+    const budget = fitParts(index, [{ query: card }, { rights: true }], HASH)
+    expect(budget.fit(0, rowsOf(3 * MIB))).toBe("accept")
+    expect(budget.fit(1, rightsOf(2 * MIB))).toBe("overflow")
+    const out = budget.finish(EPOCH, new Map())
+    if ("code" in out) throw new Error(`refused: ${out.code}`)
+    expect(out.items[1]).toStrictEqual({ ok: false, error: BATCH_BUDGET })
+  })
+
+  it("знімок, що не вміщується й сам, — response-too-large, наступні частини виконуються", () => {
+    const budget = fitParts(index, [{ rights: true }, { query: card }], HASH)
+    expect(budget.fit(0, rightsOf(RESPONSE_BUDGET_BYTES + 1))).toBe("accept")
+    expect(budget.fit(1, rowsOf(10))).toBe("accept")
+    const out = budget.finish(EPOCH, new Map())
+    if ("code" in out) throw new Error(`refused: ${out.code}`)
+    expect(out.items[0]).toStrictEqual({
+      ok: false,
+      error: TOO_LARGE,
+    })
+  })
+})

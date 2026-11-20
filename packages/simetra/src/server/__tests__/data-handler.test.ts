@@ -10,6 +10,7 @@ import {
   runtimeCatalogSchema,
   READ_BATCH_MAX,
   RESPONSE_BUDGET_BYTES,
+  rightsValueSchema,
   versionValueSchema,
   WireEncodeError,
   wireReadPartsResultSchema,
@@ -53,6 +54,7 @@ const handlerCatalog: RuntimeCatalog = runtimeCatalogSchema.parse({
   format: 1,
   snapshotHash: "hash-1",
   provider: "supabase",
+  rightsSnapshot: true,
   objects: [client, region, link, sample],
 })
 const HASH = handlerCatalog.snapshotHash
@@ -108,6 +110,13 @@ const regionRows: Override = (text) =>
     ? { rows: [{ row: JSON.stringify({ id: ID, version: 2, code: "R" }) }] }
     : undefined
 
+const SNAPSHOT = { userId: null, scopeSets: [], rights: [] }
+/** Відповідь функції знімка прав — для кейсів частини `rights`. */
+const rightsAnswer: Override = (text, params) =>
+  text.includes("rights_client_snapshot")
+    ? { rows: [{ snapshot: JSON.stringify(SNAPSHOT) }] }
+    : regionRows(text, params)
+
 /** Лічильник викликів рантайму поверх справжнього: «порт не викликано». */
 function counted(runtime: CommandRuntime) {
   const calls = { run: 0, read: 0, readParts: 0 }
@@ -125,6 +134,7 @@ function counted(runtime: CommandRuntime) {
       calls.readParts++
       return runtime.readParts(...args)
     },
+    rightsSnapshot: (...args) => runtime.rightsSnapshot(...args),
     authorizeChannels: (...args) => runtime.authorizeChannels(...args),
   }
   return { runtime: wrapped, calls }
@@ -517,6 +527,59 @@ describe("createDataHandler: steps 4–6", () => {
     expect(db.calls).toStrictEqual([])
   })
 
+  it("the rights part alone under inProcess opens the transaction and returns the snapshot", async () => {
+    const { db, calls, handle } = await harness(rightsAnswer)
+    const response = await handle(
+      session,
+      readItems([{ type: "rights" }]),
+      IN_PROCESS
+    )
+    expect(valueOf(response)).toMatchObject({ epoch: HARNESS_EPOCH })
+    expect(rightsValueSchema.parse(partValueOf(response))).toMatchObject({
+      snapshot: SNAPSHOT,
+    })
+    expect(calls.readParts).toBe(1)
+    expect(db.calls).toContainEqual(
+      expect.objectContaining({
+        text: expect.stringContaining("rights_client_snapshot"),
+      })
+    )
+  })
+
+  it("a duplicate rights part refuses the whole request with command.invalid", async () => {
+    const { db, calls, handle } = await harness(rightsAnswer)
+    const response = await handle(
+      session,
+      readItems([{ type: "rights" }, queryPart({}), { type: "rights" }]),
+      HTTP
+    )
+    expect(errorOf(response)).toMatchObject({ code: "command.invalid" })
+    expect(calls).toStrictEqual({ run: 0, read: 0, readParts: 0 })
+    expect(db.calls).toStrictEqual([])
+  })
+
+  it("a type flipped between the envelope and the part parse still gives one rights part per request", async () => {
+    const { db, calls, handle } = await harness(rightsAnswer)
+    // Конверт читає `type` один раз, розбір частини — далі: геттер першого
+    // читання каже `version`, решти — `rights`.
+    const flipping = () => {
+      let reads = 0
+      return {
+        get type() {
+          return reads++ === 0 ? "version" : "rights"
+        },
+      }
+    }
+    const response = await handle(
+      session,
+      readItems([flipping(), flipping()]),
+      HTTP
+    )
+    expect(errorOf(response)).toMatchObject({ code: "command.invalid" })
+    expect(calls.readParts).toBe(0)
+    expect(db.calls).toStrictEqual([])
+  })
+
   it("read under inProcess returns wire rows", async () => {
     const { calls, handle } = await harness(regionRows)
     const value = valueOf(await handle(session, readOf({}), IN_PROCESS))
@@ -530,7 +593,7 @@ describe("createDataHandler: steps 4–6", () => {
   })
 
   it("parts in request order: a refused part, a version and a read — one runtime call", async () => {
-    const { calls, handle, runtime } = await harness(regionRows)
+    const { calls, handle, runtime } = await harness(rightsAnswer)
     const readParts = vi.spyOn(runtime, "readParts")
     const items = itemsOf(
       await handle(
@@ -540,6 +603,7 @@ describe("createDataHandler: steps 4–6", () => {
           VERSION_PART,
           { type: "rights" },
           queryPart({}),
+          { type: "future" },
         ]),
         HTTP
       )
@@ -549,18 +613,23 @@ describe("createDataHandler: steps 4–6", () => {
       error: { code: "command.invalid", path: "limit", object: region.id },
     })
     expect(items[1]).toMatchObject({ ok: true, value: { snapshotHash: HASH } })
-    // Невідомий тип частини — новіший клієнт: відмова лише їй, не stale-client.
     expect(items[2]).toMatchObject({
-      ok: false,
-      error: { code: "command.invalid" },
+      ok: true,
+      value: { snapshot: SNAPSHOT },
     })
     expect(items[3]).toStrictEqual({
       ok: true,
       value: { rows: [{ id: ID, version: "2", code: "R" }] },
     })
+    // Невідомий тип частини — новіший клієнт: відмова лише їй, не stale-client.
+    expect(items[4]).toMatchObject({
+      ok: false,
+      error: { code: "command.invalid" },
+    })
     expect(calls.readParts).toBe(1)
-    // У рантайм іде лише частина `query`, і без `known`.
+    // У рантайм ідуть лише частини `rights` і `query`, останній — без `known`.
     expect(readParts.mock.calls[0]![1]).toStrictEqual([
+      { type: "rights" },
       {
         type: "query",
         query: { object: { kind: "Catalog", name: "Region" }, limit: 10 },

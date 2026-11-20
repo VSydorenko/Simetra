@@ -14,6 +14,7 @@ import {
   type DataResponse,
   type Operation,
   type ReadQuery,
+  type ReadQueryPart,
   type RuntimeCatalog,
   type WireRow,
 } from "simetra/model"
@@ -203,7 +204,9 @@ describe("data handler between catalogs A and A′", () => {
     const { readWire, readParts } = await harness()
     const value = valueOf(await readWire(query))
     // Сервер прочитав запит під іменами `A′`.
-    expect(readParts.mock.calls[0]![1][0]!.query).toMatchObject({
+    expect(
+      (readParts.mock.calls[0]![1][0] as ReadQueryPart).query
+    ).toMatchObject({
       object: { name: object.to },
       include: [attribute.to],
     })

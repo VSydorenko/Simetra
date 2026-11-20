@@ -31,6 +31,7 @@ import {
   type ValueSource,
 } from "./entity-fields"
 import type { PresentationBlock } from "./presentation"
+import { hasRightsFunctions } from "./rights/functions"
 import { sha256HexSync } from "./sha256"
 
 /**
@@ -85,6 +86,9 @@ export function buildRuntimeCatalog(model: CompiledModel): RuntimeCatalog {
     format: 1,
     snapshotHash: model.hash,
     provider: model.project.database.provider,
+    ...(hasRightsFunctions(model.contracts, model.project.database.provider)
+      ? { rightsSnapshot: true as const }
+      : {}),
     objects: model.objects.flatMap((object): RuntimeObject[] => {
       const contract = contracts.get(object.id)
       if (contract === undefined) return []
@@ -102,6 +106,27 @@ export function kernelHashOf(operations: RuntimeObject["operations"]): string {
   // Лише форма ядра: перейменування, подання, права й новий реквізит хешу не
   // змінюють, тож стара збірка після сумісної зміни пише далі.
   return sha256HexSync(canonicalize(operations ?? {}))
+}
+
+// Роль — з `access.publicRead` (призначення ролей запиту): `anonymous` є лише
+// в `anon`, який відкриває обидві ролі; решта — `authenticated`.
+function publicReadOf(
+  model: CompiledModel,
+  objectId: string,
+  table: QualifiedName
+): Pick<RuntimeObject, "publicRead"> {
+  // Основна таблиця: ТЧ того ж об'єкта мають власні записи доступу.
+  const purposes =
+    model.contracts.access.find(
+      (a) =>
+        a.objectId === objectId &&
+        a.table.schema === table.schema &&
+        a.table.name === table.name
+    )?.publicRead ?? []
+  if (purposes.length === 0) return {}
+  return {
+    publicRead: purposes.includes("anonymous") ? "anon" : "authenticated",
+  }
 }
 
 interface Facts {
@@ -145,6 +170,10 @@ function runtimeObject(
     versionColumn,
     versionName: fieldOf(fields, versionColumn).name,
     signal: isSignalObject(facts.model, object.id),
+    ...publicReadOf(facts.model, object.id, table),
+    ...(facts.model.contracts.rights.some((r) => r.objectId === object.id)
+      ? { rightsContract: true as const }
+      : {}),
     ...presentationOf(
       facts.model.presentation.objects.find((p) => p.objectId === object.id),
       fields
