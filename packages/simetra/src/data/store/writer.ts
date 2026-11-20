@@ -1054,9 +1054,22 @@ async function tailPass(
   s: Subset
 ): Promise<void> {
   try {
-    while (inFlight(s) && s.alive && !s.purged && ctx.session.token().valid) {
+    // Перевірка шапки в черзі (`queueCheck`) — продовження завантаження:
+    // вона може стартувати нове читання вже після того, як осідання
+    // розбудило очікувачів, і хвіст, що прокинувся між ними, пропустив би
+    // його (#312). Тому вона рахується польотом, а сама будить очікувачів,
+    // коли нового читання не почала.
+    while (
+      (inFlight(s) || s.checkQueued) &&
+      s.alive &&
+      !s.purged &&
+      ctx.session.token().valid
+    ) {
       await new Promise<void>((resolve) =>
-        (s.flight !== undefined ? s.waiters : s.rereadWaiters).push(resolve)
+        (s.flight !== undefined || !inFlight(s)
+          ? s.waiters
+          : s.rereadWaiters
+        ).push(resolve)
       )
     }
   } finally {
