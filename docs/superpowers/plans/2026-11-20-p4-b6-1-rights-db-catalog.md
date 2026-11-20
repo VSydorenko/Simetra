@@ -109,7 +109,7 @@ AFTER-тригерів над модельними таблицями факті
 контейнера/кореня/межі `users`/носія-ключа; `fresh: false` для функції
 виміру й прийнятої `CustomTable`; `scopeSet` дослівного виду; носій поза
 атрибутами й ключем — помилка компілятора; `rightsContract` зник (`grep` — 0;
-`generated/*.json` шаблону оновлює `pnpm metadata:check`, не рука); `snapshotHash`
+`generated/*.json` шаблону оновлює `pnpm run generate` шаблону, не рука); `snapshotHash`
 змінюється, `kernelHash` — ні; `pnpm metadata:check` зелений.
 Перевірка: `run-tests unit --filter client-catalog.test.ts`,
 `run-tests unit --filter runtime-catalog.test.ts`.
