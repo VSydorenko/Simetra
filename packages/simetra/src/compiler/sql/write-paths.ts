@@ -738,21 +738,24 @@ export function qualifiedKindTables(
 }
 
 /**
- * Таблиці з `tables`, які охоплює шлях `грант`: його ціль і, коли грант — на
- * всі таблиці схеми (`ON ALL TABLES IN SCHEMA`), кожна таблиця цієї схеми.
- * Перелічувач називає для схеми лише першу таблицю, а гейт має назвати всі.
+ * Таблиці з `tables`, які охоплює шлях-грант: його ціль, кожна таблиця, яку
+ * називає оператор (`GRANT … ON a, b`), і, коли грант — на всі таблиці схеми
+ * (`ON ALL TABLES IN SCHEMA`), кожна таблиця цієї схеми. Перелічувач називає
+ * лише одну ціль на одиницю, а гейт має назвати всі.
  */
 export function grantedTables(
   path: WritePath,
   tables: readonly QualifiedTable[],
   parse: SqlParser
 ): QualifiedTable[] {
-  const schemas = new Set(
-    unitTargets(path.unit, parse).flatMap((t) =>
-      t.kind === "schema" ? [t.schema] : []
-    )
-  )
+  const targets = unitTargets(path.unit, parse)
   return tables.filter(
-    (t) => `${t.schema}.${t.name}` === path.target || schemas.has(t.schema)
+    (t) =>
+      `${t.schema}.${t.name}` === path.target ||
+      targets.some((target) =>
+        target.kind === "schema"
+          ? target.schema === t.schema
+          : target.schema === t.schema && target.object === t.name
+      )
   )
 }

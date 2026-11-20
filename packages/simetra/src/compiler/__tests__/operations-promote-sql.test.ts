@@ -481,6 +481,25 @@ CREATE POLICY counterparties_edit ON app.counterparties FOR UPDATE TO authentica
     ).toEqual(tables)
   })
 
+  // Гейт судить лише ролі API і `PUBLIC`: роль команд чи інша названа роль
+  // шляху для нього не відкриває (їх судить Правило 1 після промоції).
+  it.each([
+    [
+      "a grant to a named role",
+      "GRANT INSERT ON app.counterparties TO simetra_command;",
+    ],
+    [
+      "default privileges to a named role",
+      "ALTER DEFAULT PRIVILEGES FOR ROLE simetra_command IN SCHEMA app GRANT INSERT ON TABLES TO simetra_command;",
+    ],
+  ])("does not gate %s that is not an API role", async (_, statement) => {
+    const files = await project({ "sql/app/named.sql": `${statement}\n` })
+    const { result } = await promoted(files)
+    expect(
+      result.diagnostics.filter((d) => d.code === "promote.write-path")
+    ).toEqual([])
+  })
+
   it("leaves a candidate untouched when resolution finds no reference", async () => {
     const text = fn(
       "other_counts",
@@ -994,6 +1013,20 @@ describe("promoteObject: SQL units, review round 1", () => {
         .map((d) => [d.file, d.params?.table, d.params?.line])
     ).toEqual([["sql/app/write.sql", "app.counterparties", 1]])
     expect(result.ok).toBe(false)
+  })
+
+  it("gates a grant naming several promoted tables for each of them", async () => {
+    const files = await project({
+      "sql/app/all.sql":
+        "GRANT INSERT ON app.counterparties, app.counterparty_contacts TO authenticated;\n",
+    })
+    const { result } = await promoted(files, withContacts())
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "promote.write-path")
+        .map((d) => d.params?.table)
+        .sort()
+    ).toEqual(["app.counterparties", "app.counterparty_contacts"])
   })
 
   it("gates and classifies a grant on a tabular section table", async () => {
