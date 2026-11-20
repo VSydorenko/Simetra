@@ -1537,14 +1537,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Функція має одну декларацію. Залиште один запис і видаліть інший; запис без схеми бере defaultSchema проєкту.",
     },
   },
-  "sql.function-name-unsupported": {
+  "sql.function-argument-type-reference": {
     en: (p) =>
-      `EXECUTE of ${p.function} cannot be generated: the identifier part ${JSON.stringify(p.part)} contains ".", "," or a double quote`,
+      `EXECUTE of ${p.function} cannot be generated: the argument type ${p.argument} is a column type reference`,
     uk: (p) =>
-      `EXECUTE для ${p.function} не згенерувати: частина ідентифікатора ${JSON.stringify(p.part)} містить «.», «,» чи подвійні лапки`,
+      `EXECUTE для ${p.function} не згенерувати: тип аргументу ${p.argument} — посилання на тип колонки`,
     hint: {
-      en: "The platform cannot yet address such a function in a grant (issue #297), and without the grant it would keep EXECUTE from PUBLIC. Rename the function, its schema or the argument type to an identifier without these characters.",
-      uk: "Платформа поки не вміє адресувати таку функцію в гранті (issue #297), а без гранту вона лишилася б з EXECUTE від PUBLIC. Перейменуйте функцію, її схему чи тип аргументу на ідентифікатор без цих символів.",
+      en: "The function keeps the column type from the time of CREATE, while a grant resolves %type anew, so after a change of the column type the grant would hit another overload, and without the grant the function would keep EXECUTE from PUBLIC. Write the argument type explicitly.",
+      uk: "Функція зберігає тип колонки на момент CREATE, а грант резолвить %type заново, тож після зміни типу колонки грант влучив би в інше перевантаження, а без гранту функція лишилася б з EXECUTE від PUBLIC. Запишіть тип аргументу явно.",
     },
   },
   "sql.declaration-platform-form": {

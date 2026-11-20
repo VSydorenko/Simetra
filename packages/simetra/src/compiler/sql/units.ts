@@ -657,25 +657,25 @@ export function functionSignatureSql(
 }
 
 /**
- * Перша частина ідентифікатора функції чи типу її аргументу, яку
- * `functionSignatureSql` не відтворить: канонічна ідентичність не зберігає
- * меж лапкованого імені, тож `.`, `,` чи `"` усередині частини дали б інший
- * підпис (#297). Частини — з розібраного `CREATE` (`funcname` уже в
- * `schema`/`name` одиниці, типи — вузли `TypeName`), а не з ідентичності.
- * Одиниця без дерева `CREATE` (форма платформи без нього) — лише ім'я.
+ * Перший аргумент функції з типом `%type` у вигляді ключа (`typeKey`) чи
+ * `undefined`. `pg_proc` зберігає тип колонки на момент `CREATE`, а
+ * `GRANT … ON FUNCTION f(t.c%type)` резолвить його заново, тож підпис з
+ * `%type` після зміни типу колонки цілив би в інше перевантаження (#300).
+ * Типи — з розібраного `CREATE`; одиниця без дерева (форма платформи без
+ * нього) аргументів не має.
  */
-export function unsupportedSignaturePart(
-  unit: Pick<VerbatimUnit, "schema" | "name"> & { tree?: unknown }
+export function typeReferenceArgument(
+  unit: Pick<VerbatimUnit, "schema"> & { tree?: unknown }
 ): string | undefined {
   const node = (
     unit.tree as { CreateFunctionStmt?: CreateFunctionStmt } | undefined
   )?.CreateFunctionStmt
-  const types = node === undefined ? [] : inputArgumentTypes(node)
-  return [
-    unit.schema,
-    unit.name,
-    ...types.flatMap((type) => strings(type?.names)),
-  ].find((part) => /[.,"]/.test(part))
+  const type = (node === undefined ? [] : inputArgumentTypes(node)).find(
+    (t) => t?.pct_type === true
+  )
+  return type === undefined
+    ? undefined
+    : typeKey(type, { schema: unit.schema, types: modelTypes([]) })
 }
 
 /** Типи вхідних аргументів `CREATE FUNCTION`/`PROCEDURE` — те, що входить в ідентичність. */
