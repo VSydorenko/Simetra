@@ -169,6 +169,17 @@ function adoptedMembership(): Map<string, string> {
       primaryKey: { columns: ["id"] },
       uniques: [{ columns: ["orgId", "id"] }],
       scopeColumn: "orgId",
+      // Носій скоупу — FK на ключ кореня виду (Р8).
+      foreignKeys: [
+        {
+          name: "membership_org_fk",
+          columns: ["orgId"],
+          references: {
+            object: { kind: "Catalog", name: "Organization" },
+            key: "ref",
+          },
+        },
+      ],
     },
   })
   files.delete(MEMBER_FILE)

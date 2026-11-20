@@ -3,10 +3,8 @@
 // збірку `auth`, пул і каталог рантайму. Компілятор Start прибирає з клієнта
 // лише те, що не експортується.
 import { LIMIT_REASONS, type DataResponse } from "simetra/model"
-import { checkRequestOrigin } from "simetra/server"
 import { onDataResponse } from "#instrument"
-import { verifySession } from "./auth"
-import { httpOrigin } from "./origin"
+import { guardRequest } from "./request-guard"
 import { getDataHandler, serverHash } from "./runtime"
 
 function refusal(error: Extract<DataResponse, { ok: false }>["error"]) {
@@ -18,26 +16,21 @@ async function respond(
   envelope: unknown
 ): Promise<DataResponse> {
   try {
-    // Крок 1: походження — до `getSession`, яка може продовжити сесію записом
-    // у базу й `Set-Cookie`, тож міжсайтовий запит не має до неї дійти.
-    const origin = httpOrigin(request)
-    if (checkRequestOrigin(origin, envelope) !== undefined) {
-      return refusal({
-        code: "command.forbidden",
-        reason: LIMIT_REASONS.origin,
-      })
+    // Походження й сесія — спільний вартовий (Р2 D5)
+    const guard = await guardRequest(request, envelope)
+    if (!guard.ok) {
+      return refusal(
+        guard.reason === "origin"
+          ? { code: "command.forbidden", reason: LIMIT_REASONS.origin }
+          : { code: "command.unauthenticated" }
+      )
     }
-    // Крок 2
-    const claims = await verifySession(request.headers)
-    if (claims === null || claims.is_anonymous !== false) {
-      return refusal({ code: "command.unauthenticated" })
-    }
-    // Крок 3: обробник ще раз застосує правило походження першим кроком
+    // Обробник ще раз застосує правило походження першим кроком
     return await (
       await getDataHandler()
-    )(claims, envelope, origin)
+    )(guard.claims, envelope, guard.origin)
   } catch (error) {
-    // Крок 4: текст винятку клієнту не йде
+    // Текст винятку клієнту не йде
     console.error("[simetra] data function", error)
     return refusal({ code: "command.internal" })
   }

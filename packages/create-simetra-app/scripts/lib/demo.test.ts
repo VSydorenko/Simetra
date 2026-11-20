@@ -5,6 +5,7 @@ import {
   demoStack,
   demoState,
   demoStep,
+  withStand,
   type DemoState,
 } from "./demo.mts"
 
@@ -67,5 +68,40 @@ describe("demoStack", () => {
         SECRETS
       )
     ).toThrow(/not loopback/)
+  })
+})
+
+describe("withStand", () => {
+  const stand = () => {
+    const calls: string[] = []
+    return {
+      calls,
+      down: () => {
+        calls.push("down")
+        return Promise.resolve()
+      },
+    }
+  }
+
+  it("removes the stand once when the work throws, and keeps the error", async () => {
+    const s = stand()
+    await expect(
+      withStand(s, () => Promise.reject(new Error("key generation failed")))
+    ).rejects.toThrow("key generation failed")
+    expect(s.calls).toEqual(["down"])
+  })
+
+  it("removes the stand once after a normal exit and returns the result", async () => {
+    const s = stand()
+    await expect(withStand(s, () => Promise.resolve(7))).resolves.toBe(7)
+    expect(s.calls).toEqual(["down"])
+  })
+
+  it("does not let a failing down hide the error of the work", async () => {
+    await expect(
+      withStand({ down: () => Promise.reject(new Error("docker gone")) }, () =>
+        Promise.reject(new Error("server start failed"))
+      )
+    ).rejects.toThrow("server start failed")
   })
 })

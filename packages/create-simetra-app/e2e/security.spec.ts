@@ -18,6 +18,7 @@ import {
   type TestUser,
 } from "./fixtures"
 import { send, type RawRequest, type Reply } from "./http"
+import { refusesToStart } from "./refuse-start"
 import { decodeResponse, encodePayload } from "./serialization"
 
 const CLIENT = "08f4943e-0296-4fbd-8d89-61b6f11355ee"
@@ -547,36 +548,6 @@ test.describe("HTML", () => {
 })
 
 test.describe("server start (spec 4.1)", () => {
-  const refusesToStart = async (
-    app: App,
-    env: Record<string, string | undefined>,
-    variable: string
-  ) => {
-    const port = await app.freePort()
-    const run = app.start({
-      PORT: String(port),
-      HOST: "127.0.0.1",
-      NITRO_HOST: "127.0.0.1",
-      ...env,
-    })
-    // Порт має відмовляти весь час до виходу процесу, а не лише після нього:
-    // сервер, що встиг почати слухати, — вже небезпечний
-    let exitCode: number | null | "alive" = "alive"
-    void run.exited.then((code) => (exitCode = code))
-    const deadline = Date.now() + 20_000
-    while (exitCode === "alive" && Date.now() < deadline) {
-      await expect(send({ port }, { path: "/" })).rejects.toThrow(
-        /ECONNREFUSED/
-      )
-      await new Promise((r) => setTimeout(r, 50))
-    }
-    if (exitCode === "alive") run.child.kill("SIGKILL")
-    expect(exitCode).not.toBe("alive")
-    expect(exitCode).not.toBe(0)
-    expect(run.output()).toContain(variable)
-    await expect(send({ port }, { path: "/" })).rejects.toThrow(/ECONNREFUSED/)
-  }
-
   test("a non-canonical SIMETRA_APP_ORIGIN stops the server", async ({
     app,
   }) => {
@@ -598,6 +569,53 @@ test.describe("server start (spec 4.1)", () => {
       app,
       { NODE_ENV: "production", SIMETRA_APP_ORIGIN: app.origin },
       "BETTER_AUTH_SECRET"
+    )
+  })
+
+  // Невідповідні `x`/`d` видно лише порту: форма ключа правильна, тож це
+  // перевіряє саме асинхронна частина старту (Р3)
+  test("a signing key with x not matching d stops the server", async ({
+    app,
+  }) => {
+    const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
+      "sign",
+      "verify",
+    ])
+    const other = await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
+      "sign",
+      "verify",
+    ])
+    const jwk = await crypto.subtle.exportKey("jwk", pair.privateKey)
+    const otherJwk = await crypto.subtle.exportKey("jwk", other.privateKey)
+    await refusesToStart(
+      app,
+      {
+        NODE_ENV: "production",
+        SIMETRA_APP_ORIGIN: app.origin,
+        BETTER_AUTH_SECRET: app.secret,
+        SIMETRA_SIGNALS_URL: "ws://127.0.0.1:1/connection/websocket",
+        SIMETRA_SIGNALS_KEYS: JSON.stringify([
+          {
+            kid: "k1",
+            privateJwk: { kty: "OKP", crv: "Ed25519", x: otherJwk.x, d: jwk.d },
+            addedAt: "2020-01-01T00:00:00.000Z",
+          },
+        ]),
+      },
+      "x must match d"
+    )
+  })
+
+  test("signals url without keys stops the server", async ({ app }) => {
+    await refusesToStart(
+      app,
+      {
+        NODE_ENV: "production",
+        SIMETRA_APP_ORIGIN: app.origin,
+        BETTER_AUTH_SECRET: app.secret,
+        SIMETRA_SIGNALS_URL: "ws://127.0.0.1:1/connection/websocket",
+      },
+      "SIMETRA_SIGNALS"
     )
   })
 })

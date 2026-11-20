@@ -899,6 +899,16 @@ export function kitchenSink(): Map<string, string> {
     // скоуп-колонка (спека прав §4.2).
     scope: "user",
     scopeColumn: "userRoot",
+    // Носій скоупу — FK на ключ кореня виду (Р8).
+    foreignKeys: [
+      {
+        name: "crew_user_root_fk",
+        columns: ["userRoot"],
+        references: {
+          external: { schema: "auth", table: "users", columns: ["id"] },
+        },
+      },
+    ],
   }
   const roleGrant = {
     ...header("CustomTable", "RoleGrant", "role_grant"),

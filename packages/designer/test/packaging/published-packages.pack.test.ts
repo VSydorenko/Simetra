@@ -257,7 +257,7 @@ describe("simetra", () => {
       { cwd: consumer }
     )
     expect(stdout.trim()).toBe(
-      "SIGNALS_JWKS_PATH,SignalTokenError,createCentrifugoTokens"
+      "SIGNALS_JWKS_PATH,SignalTokenError,createCentrifugoTokens,signingKeyProblem"
     )
   })
 

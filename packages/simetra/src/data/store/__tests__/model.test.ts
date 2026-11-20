@@ -3180,6 +3180,25 @@ describe("core model", () => {
   }, 120_000)
 })
 
+// Фіксовані прогони знайдених контрприкладів: насіння й шлях fast-check
+// відтворюють той самий прогін на будь-якій машині.
+describe("core model regressions", () => {
+  it.each([
+    // #312: явний `revalidate` над виглядом у польоті після `unavailable`/`resume`.
+    {
+      issue: 312,
+      seed: -568825302,
+      path: "884:11:11:14:15:17:21:21:21:24:23:23:13:13:13:13:13:13:13:13:13:13:13:13:13:13:13:13:13:13:13:13",
+    },
+  ])(
+    "replays the counterexample of #$issue",
+    async ({ seed, path }) => {
+      await fc.assert(property(), { seed, path, endOnFailure: true })
+    },
+    120_000
+  )
+})
+
 // Дефекти такту планувальника: їхній самотест мусить мати такт із читанням.
 const SCHEDULER_DEFECTS: readonly DefectFlag[] = [
   "scheduler-fires-hidden",

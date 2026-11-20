@@ -1202,6 +1202,17 @@ describe("rights functions over a polymorphic adopted source", () => {
           [POLY_GRANT_FILE]: polyGrantTable({
             scope: "org",
             scopeColumn: "scopeId",
+            // Носій скоупу — FK на ключ кореня виду (Р8).
+            foreignKeys: [
+              {
+                name: "poly_grants_scope_fk",
+                columns: ["scopeId"],
+                references: {
+                  object: { kind: "Catalog", name: "Organization" },
+                  key: "ref",
+                },
+              },
+            ],
           }),
         }
       )

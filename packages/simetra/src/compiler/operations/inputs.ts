@@ -74,6 +74,21 @@ export const addElementInput = z.strictObject({
     description:
       "The new element; ids and physicalName are assigned by the operation, and an id anywhere in the input is refused.",
   }),
+  // Без `.meta` на вкладених полях: кожен опис лягає в `tools/list`, а ім'я
+  // поля вже каже, що це вид і колонка.
+  scopes: z
+    .record(
+      z.string(),
+      z.strictObject({
+        scope: z.string().min(1),
+        scopeColumn: elementNameSchema.optional(),
+      })
+    )
+    .optional()
+    .meta({
+      description:
+        'Only for collection scopeKinds of Project: declares the scope of adopted CustomTables in the same change, keyed by table name, e.g. { Orders: { scope: "org", scopeColumn: "org" } }; a table that already has a scope is refused.',
+    }),
 })
 export type AddElementInput = z.infer<typeof addElementInput>
 

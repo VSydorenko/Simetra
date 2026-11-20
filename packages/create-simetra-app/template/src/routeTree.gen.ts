@@ -15,6 +15,9 @@ import { Route as ClientsIndexRouteImport } from './routes/clients/index'
 import { Route as ClientsIdRouteImport } from './routes/clients/$id'
 import { Route as CountriesIndexRouteImport } from './routes/countries/index'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as SimetraSignalsChannelTokensRouteImport } from './routes/simetra/signals/channel-tokens'
+import { Route as SimetraSignalsConnectionTokenRouteImport } from './routes/simetra/signals/connection-token'
+import { Route as SimetraSignalsJwksRouteImport } from './routes/simetra/signals/jwks'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -46,6 +49,23 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SimetraSignalsChannelTokensRoute =
+  SimetraSignalsChannelTokensRouteImport.update({
+    id: '/simetra/signals/channel-tokens',
+    path: '/simetra/signals/channel-tokens',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const SimetraSignalsConnectionTokenRoute =
+  SimetraSignalsConnectionTokenRouteImport.update({
+    id: '/simetra/signals/connection-token',
+    path: '/simetra/signals/connection-token',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const SimetraSignalsJwksRoute = SimetraSignalsJwksRouteImport.update({
+  id: '/simetra/signals/jwks',
+  path: '/simetra/signals/jwks',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -54,6 +74,9 @@ export interface FileRoutesByFullPath {
   '/clients/': typeof ClientsIndexRoute
   '/countries/': typeof CountriesIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/simetra/signals/channel-tokens': typeof SimetraSignalsChannelTokensRoute
+  '/simetra/signals/connection-token': typeof SimetraSignalsConnectionTokenRoute
+  '/simetra/signals/jwks': typeof SimetraSignalsJwksRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -62,6 +85,9 @@ export interface FileRoutesByTo {
   '/clients': typeof ClientsIndexRoute
   '/countries': typeof CountriesIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/simetra/signals/channel-tokens': typeof SimetraSignalsChannelTokensRoute
+  '/simetra/signals/connection-token': typeof SimetraSignalsConnectionTokenRoute
+  '/simetra/signals/jwks': typeof SimetraSignalsJwksRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -71,6 +97,9 @@ export interface FileRoutesById {
   '/clients/': typeof ClientsIndexRoute
   '/countries/': typeof CountriesIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/simetra/signals/channel-tokens': typeof SimetraSignalsChannelTokensRoute
+  '/simetra/signals/connection-token': typeof SimetraSignalsConnectionTokenRoute
+  '/simetra/signals/jwks': typeof SimetraSignalsJwksRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -81,9 +110,20 @@ export interface FileRouteTypes {
     | '/clients/'
     | '/countries/'
     | '/api/auth/$'
+    | '/simetra/signals/channel-tokens'
+    | '/simetra/signals/connection-token'
+    | '/simetra/signals/jwks'
   fileRoutesByTo: FileRoutesByTo
   to:
-    '/' | '/login' | '/clients/$id' | '/clients' | '/countries' | '/api/auth/$'
+    | '/'
+    | '/login'
+    | '/clients/$id'
+    | '/clients'
+    | '/countries'
+    | '/api/auth/$'
+    | '/simetra/signals/channel-tokens'
+    | '/simetra/signals/connection-token'
+    | '/simetra/signals/jwks'
   id:
     | '__root__'
     | '/'
@@ -92,6 +132,9 @@ export interface FileRouteTypes {
     | '/clients/'
     | '/countries/'
     | '/api/auth/$'
+    | '/simetra/signals/channel-tokens'
+    | '/simetra/signals/connection-token'
+    | '/simetra/signals/jwks'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -101,6 +144,9 @@ export interface RootRouteChildren {
   ClientsIndexRoute: typeof ClientsIndexRoute
   CountriesIndexRoute: typeof CountriesIndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  SimetraSignalsChannelTokensRoute: typeof SimetraSignalsChannelTokensRoute
+  SimetraSignalsConnectionTokenRoute: typeof SimetraSignalsConnectionTokenRoute
+  SimetraSignalsJwksRoute: typeof SimetraSignalsJwksRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -147,6 +193,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/simetra/signals/channel-tokens': {
+      id: '/simetra/signals/channel-tokens'
+      path: '/simetra/signals/channel-tokens'
+      fullPath: '/simetra/signals/channel-tokens'
+      preLoaderRoute: typeof SimetraSignalsChannelTokensRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/simetra/signals/connection-token': {
+      id: '/simetra/signals/connection-token'
+      path: '/simetra/signals/connection-token'
+      fullPath: '/simetra/signals/connection-token'
+      preLoaderRoute: typeof SimetraSignalsConnectionTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/simetra/signals/jwks': {
+      id: '/simetra/signals/jwks'
+      path: '/simetra/signals/jwks'
+      fullPath: '/simetra/signals/jwks'
+      preLoaderRoute: typeof SimetraSignalsJwksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -157,6 +224,9 @@ const rootRouteChildren: RootRouteChildren = {
   ClientsIndexRoute: ClientsIndexRoute,
   CountriesIndexRoute: CountriesIndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  SimetraSignalsChannelTokensRoute: SimetraSignalsChannelTokensRoute,
+  SimetraSignalsConnectionTokenRoute: SimetraSignalsConnectionTokenRoute,
+  SimetraSignalsJwksRoute: SimetraSignalsJwksRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

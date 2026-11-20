@@ -37,22 +37,33 @@ function defer(work: Promise<unknown>): void {
 }
 
 type DataHandler = ReturnType<typeof createDataHandler>
+type Runtime = Awaited<ReturnType<typeof createCommandRuntime>>
 
+let runtime: Promise<Runtime> | undefined
 let handler: Promise<DataHandler> | undefined
 
-/** Обробник даних: рантайм створюється ліниво, один раз. */
-export function getDataHandler(): Promise<DataHandler> {
-  handler ??= createCommandRuntime({
+/** Єдиний рантайм процесу: створюється ліниво, один раз; його беруть і маршрути сигналів. */
+export function getRuntime(): Promise<Runtime> {
+  runtime ??= createCommandRuntime({
     database: wrapDatabase(fromPgPool(getPool())),
     catalog: runtimeCatalog,
     defer,
-  }).then(
-    (runtime) =>
-      createDataHandler(runtime, {
+  }).catch((error: unknown) => {
+    // Невдалий старт не кешується: наступний запит пробує ще раз
+    runtime = undefined
+    throw error
+  })
+  return runtime
+}
+
+/** Обробник даних над єдиним рантаймом. */
+export function getDataHandler(): Promise<DataHandler> {
+  handler ??= getRuntime().then(
+    (ready) =>
+      createDataHandler(ready, {
         log: (error) => console.error("[simetra] data handler", error),
       }),
     (error: unknown) => {
-      // Невдалий старт не кешується: наступний запит пробує ще раз
       handler = undefined
       throw error
     }

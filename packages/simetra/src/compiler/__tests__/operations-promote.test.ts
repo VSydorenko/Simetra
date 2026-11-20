@@ -85,6 +85,30 @@ function mapping(edit: (input: PromoteInput) => void = () => {}): PromoteInput {
   return input
 }
 
+/**
+ * FK носія скоупу `orgId` на корінь виду `org` (Р8: без нього `scopeColumn` —
+ * помилка). Корінь за замовчуванням — прийнята таблиця, як у `scoped()`.
+ */
+function withOrgCarrierForeignKey(
+  raw: Json,
+  root: "customTable" | "catalog" = "customTable"
+) {
+  raw.foreignKeys = [
+    ...((raw.foreignKeys as Json[] | undefined) ?? []),
+    {
+      name: `${String(raw.physicalName)}_org_fk`,
+      columns: ["orgId"],
+      references:
+        root === "catalog"
+          ? { object: { kind: "Catalog", name: "Organization" }, key: "ref" }
+          : {
+              object: { kind: "CustomTable", name: "Organization" },
+              columns: ["id"],
+            },
+    },
+  ]
+}
+
 /** Фікстура з правкою файлу `Counterparty` (сирий JSON). */
 function withCounterparty(
   edit: (raw: Json) => void,
@@ -1620,6 +1644,7 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
       const counterparty = withCounterparty((raw) => {
         raw.scope = "org"
         raw.scopeColumn = "orgId"
+        withOrgCarrierForeignKey(raw)
         ;(raw.columns as Json[]).push({
           id: uuid(7010),
           name: "orgId",
@@ -1665,6 +1690,7 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
           // Носій скоупу — orgId; на скоуп мапиться інша колонка
           raw.scope = "org"
           raw.scopeColumn = "orgId"
+          withOrgCarrierForeignKey(raw)
           ;(raw.columns as Json[]).push({
             id: uuid(7011),
             name: "orgId",
@@ -1715,6 +1741,7 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
     const counterparty = withCounterparty((raw) => {
       raw.scope = "org"
       raw.scopeColumn = "orgId"
+      withOrgCarrierForeignKey(raw)
       ;(raw.columns as Json[]).push({
         id: uuid(7010),
         name: "orgId",
@@ -1763,6 +1790,7 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
     const counterparty = withCounterparty((raw) => {
       raw.scope = "org"
       raw.scopeColumn = "orgId"
+      withOrgCarrierForeignKey(raw)
       ;(raw.columns as Json[]).push({
         id: uuid(7010),
         name: "orgId",
@@ -1817,6 +1845,7 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
       const counterparty = withCounterparty((raw) => {
         raw.scope = "org"
         raw.scopeColumn = "orgId"
+        withOrgCarrierForeignKey(raw)
         ;(raw.columns as Json[]).push({
           id: uuid(7010),
           name: "orgId",
@@ -1858,6 +1887,15 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
                 columns: target,
               },
             },
+            // Носій скоупу — FK на корінь виду (Р8).
+            {
+              name: "payments_org_fkey",
+              columns: ["orgId"],
+              references: {
+                object: { kind: "CustomTable", name: "Organization" },
+                columns: ["id"],
+              },
+            },
           ],
         },
       })
@@ -1891,6 +1929,8 @@ describe("promoteObject: cascade through subscriptions and scope kinds", () => {
               key: "scopedRef",
             },
           }),
+          // Носій скоупу (Р8) промоція не чіпає.
+          expect.objectContaining({ name: "payments_org_fkey" }),
         ])
       }
     )
@@ -3050,6 +3090,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     const counterparty = json(base, COUNTERPARTY_FILE)
     counterparty.scope = "org"
     counterparty.scopeColumn = "orgId"
+    withOrgCarrierForeignKey(counterparty, "catalog")
     ;(counterparty.columns as Json[]).push({
       id: uuid(7010),
       name: "orgId",
@@ -3089,6 +3130,7 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
     // Той самий скоуп з колонкою скоупу ТЧ: рядок отримує FK на власника.
     contact.scope = "org"
     contact.scopeColumn = "orgId"
+    withOrgCarrierForeignKey(contact, "catalog")
     ;(contact.columns as Json[]).push({
       id: uuid(7110),
       name: "orgId",
@@ -3106,7 +3148,22 @@ describe("promoteObject: tabular sections, documents, registers, data steps", ()
       })
     )
     expect(errors(same.result)).toEqual([])
+    // Два носії скоупу (Р8) — FK на корінь, `noAction` → `restrict` — і FK ТЧ.
     expect(same.result.record?.deleteSemantics).toEqual([
+      expect.objectContaining({
+        table: "counterparty",
+        columns: ["org_id"],
+        target: "organization",
+        from: "noAction",
+        to: "restrict",
+      }),
+      expect.objectContaining({
+        table: "counterparty_contacts",
+        columns: ["org_id"],
+        target: "organization",
+        from: "noAction",
+        to: "restrict",
+      }),
       expect.objectContaining({
         direction: "own",
         event: "delete",

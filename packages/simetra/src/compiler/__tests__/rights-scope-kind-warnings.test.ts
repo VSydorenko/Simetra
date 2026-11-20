@@ -59,6 +59,20 @@ const inTeam = (kind: "Document" | "CustomTable") => ({
             uuidColumn(6703, "teamId", "team_id"),
           ],
           primaryKey: { columns: ["id"] },
+          // Носій скоупу — FK на ключ зовнішнього кореня виду (Р8).
+          foreignKeys: [
+            {
+              name: "team_table_team_fk",
+              columns: ["teamId"],
+              references: {
+                external: {
+                  schema: "public",
+                  table: "teams",
+                  columns: ["id"],
+                },
+              },
+            },
+          ],
         },
 })
 

@@ -469,6 +469,8 @@ describe("rights guard statement triggers", () => {
             column(6032, "region", "region_id"),
           ],
           foreignKeys: [
+            // Носій скоупу — FK на ключ кореня виду (Р8).
+            fk("member_region_org_fk", "orgId", "Organization"),
             fk("member_region_member_fk", "member", "OrgMember"),
             fk("member_region_region_fk", "region", "Region"),
           ],

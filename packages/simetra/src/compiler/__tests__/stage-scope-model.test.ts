@@ -425,7 +425,10 @@ describe("stage 3: scope", () => {
     const log = tableOf(physical, "log")
     expect(log.columns.map((c) => c.name)).toEqual(["id", "org_id"])
     expect(log.uniques).toEqual([])
-    expect(log.foreignKeys).toEqual([])
+    // Єдиний FK — носій скоупу на корінь (Р8); складеного ключа до Log нема.
+    expect(log.foreignKeys).toEqual([
+      expect.objectContaining({ columns: ["org_id"] }),
+    ])
     expect(fkOn(tableOf(physical, "counterparty"), "log_id")).toEqual([
       expect.objectContaining({
         columns: ["log_id"],

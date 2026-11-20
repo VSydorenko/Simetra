@@ -28,6 +28,12 @@ import {
   withDatabase,
   type AppDsns,
 } from "./app-database.mts"
+import {
+  generateSigningKeys,
+  removeSignalsContainers,
+  signalsDsn,
+  startSignals,
+} from "./signals-stand.mts"
 
 /** The demo database on the postgres stack. */
 export const DEMO_DATABASE = "simetra_demo"
@@ -47,6 +53,11 @@ export const DEMO_USERS = [
   { email: "alice@demo.test", name: "Alice", clients: 250 },
   { email: "bob@demo.test", name: "Bob", clients: 5 },
 ] as const
+
+// Власний Centrifugo демо (Р1 плану D5): мітка й ім'я окремі від контейнерів
+// стека, тож залишок попереднього запуску знімається лише за нею
+export const DEMO_SIGNALS_LABEL = "simetra-demo=signals"
+const DEMO_SIGNALS_NAME = "simetra-demo-signals"
 
 export type DemoState = "absent" | "ready" | "incomplete" | "foreign"
 
@@ -206,6 +217,26 @@ function stackFromEnvironment(): Stack {
   return demoStack(stackUrl("postgres", "postgres"), loginSecrets())
 }
 
+/**
+ * Виконує `run` і знімає стенд на будь-якому виході: помилка генерації ключа
+ * чи старту сервера теж не лишає контейнер. Помилка `down` не затуляє помилку
+ * `run`.
+ */
+export async function withStand<T>(
+  stand: { down: () => Promise<void> },
+  run: () => Promise<T>
+): Promise<T> {
+  let result: T
+  try {
+    result = await run()
+  } catch (error) {
+    await stand.down().catch(() => undefined)
+    throw error
+  }
+  await stand.down()
+  return result
+}
+
 /** `pnpm demo`: prepares (or reuses) the demo database, builds and serves the template. */
 export async function demoUp(): Promise<number> {
   const stack = stackFromEnvironment()
@@ -234,43 +265,64 @@ export async function demoUp(): Promise<number> {
   })
   console.log("demo: building the template (production)")
   await buildTemplate()
-  const server = startServer(
-    appServerEnv({
-      dsns: stack.dsns,
-      origin: DEMO_ORIGIN,
-      port: DEMO_PORT,
-      host: "127.0.0.1",
-      secret,
-    }),
-    { echo: true }
-  )
-  const stop = (): void => void stopServer(server)
-  process.once("SIGINT", stop)
-  process.once("SIGTERM", stop)
-  try {
-    await waitReady(`${DEMO_ORIGIN}/`, server)
-  } catch (error) {
-    // Сервер, що не відповів вчасно, не лишається висіти на порту
-    await stopServer(server)
-    throw error
-  }
-  console.log(
-    [
-      "",
-      `Simetra demo: ${DEMO_ORIGIN}`,
-      ...DEMO_USERS.map(
-        (u) => `  ${u.name}: ${u.email}  password: ${passwords[u.email]}`
-      ),
-      "Each user sees only their own clients. Ctrl-C stops the server; `pnpm demo:drop` removes the demo database.",
-      "",
-    ].join("\n")
-  )
-  return (await server.exited) ?? 0
+  // Залишок: контейнер попереднього запуску міг пережити SIGKILL
+  await removeSignalsContainers(DEMO_SIGNALS_LABEL)
+  console.log("demo: starting Centrifugo")
+  const signals = await startSignals({
+    name: DEMO_SIGNALS_NAME,
+    labels: ["--label", DEMO_SIGNALS_LABEL],
+    origin: DEMO_ORIGIN,
+    hostPort: DEMO_PORT,
+    databaseUrl: signalsDsn(
+      stackUrl("postgres", "postgres"),
+      DEMO_DATABASE,
+      loginSecrets()
+    ),
+  })
+  return withStand(signals, async () => {
+    // Новий ключ і `kid` на кожен запуск (Р3): жодного ключа в git
+    const keys = await generateSigningKeys()
+    const server = startServer(
+      appServerEnv({
+        dsns: stack.dsns,
+        origin: DEMO_ORIGIN,
+        port: DEMO_PORT,
+        host: "127.0.0.1",
+        secret,
+        signals: { url: signals.wsUrl, keys: keys.json },
+      }),
+      { echo: true }
+    )
+    const stop = (): void => void stopServer(server)
+    process.once("SIGINT", stop)
+    process.once("SIGTERM", stop)
+    try {
+      await waitReady(`${DEMO_ORIGIN}/`, server)
+    } catch (error) {
+      // Сервер, що не відповів вчасно, не лишається висіти на порту
+      await stopServer(server)
+      throw error
+    }
+    console.log(
+      [
+        "",
+        `Simetra demo: ${DEMO_ORIGIN}`,
+        ...DEMO_USERS.map(
+          (u) => `  ${u.name}: ${u.email}  password: ${passwords[u.email]}`
+        ),
+        "Each user sees only their own clients. Ctrl-C stops the server; `pnpm demo:drop` removes the demo database.",
+        "",
+      ].join("\n")
+    )
+    return (await server.exited) ?? 0
+  })
 }
 
 /** `pnpm demo:drop`: drops the demo database, and only it. */
 export async function demoDrop(): Promise<void> {
   const stack = stackFromEnvironment()
+  // Centrifugo тримає з'єднання з базою демо: знімається до видалення бази
+  await removeSignalsContainers(DEMO_SIGNALS_LABEL)
   await underLock(async () => {
     const step = demoStep("drop", await readState(stack.maintenanceUrl))
     if (step === "nothing") {
