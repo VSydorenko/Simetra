@@ -740,6 +740,11 @@ describe("rights analysis", () => {
     expect
       .soft(await explain("admin", "bulletin", [randomUUID()], key("m1")))
       .toEqual([])
+    // `authenticated` — лише дійсному користувачу (#318): `p_user`, що не є
+    // дійсним користувачем, рядка не бачить, як і під RLS.
+    expect
+      .soft(await explain("admin", "bulletin", [key("b1")], randomUUID()))
+      .toEqual([{ ...expected[0], carrier_match: false }])
   })
 
   it(

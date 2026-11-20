@@ -203,6 +203,18 @@ function constant(node: unknown): string | null {
   return value.isnull === true ? null : value.sval!.sval
 }
 
+/**
+ * Збіг носія рядка `public_read` об'єкта `authenticated` (#318): `p_user` —
+ * дійсний користувач, як `current_user_id()` у політиці.
+ */
+function validUser(model: CompiledModel): unknown {
+  const users = model.contracts.users!
+  const key = users.keyColumn
+  return exprTree(
+    `(SELECT u.${key} FROM public.${users.table.name} u WHERE u.${key} = ${P("p_user")} AND NOT u.${users.invalidColumn}) IS NOT NULL`
+  )
+}
+
 /** Рядки пояснення гілки — гілки підзапиту `CROSS JOIN LATERAL (…) e`. */
 function rowsOf(branch: Select): Row[] {
   // Гілка повертає лише колонки рядків пояснення, а не колонки рядка об'єкта.
@@ -403,7 +415,7 @@ describe("rights_explain", () => {
         kind: "permissive",
         extent: null,
         hasRight: TRUE,
-        carrierMatch: TRUE,
+        carrierMatch: validUser(domain),
         roles: NO_ROLES,
       },
     ])
@@ -417,7 +429,8 @@ describe("rights_explain", () => {
         `${P("p_object")} = '${BULLETIN_TABLE}'`,
         `r.id = ${P("p_row")}`,
         gate(`'${ORG_KIND_ID}'::uuid`, "r.org_id"),
-        "(TRUE AND TRUE)",
+        // Видимість викликачу — та сама умова дійсного користувача (#318).
+        "(TRUE AND (SELECT simetra.current_user_id()) IS NOT NULL)",
       ].map(exprTree)
     )
   })
@@ -638,13 +651,15 @@ describe("rights_explain", () => {
         kind: "permissive",
         extent: null,
         hasRight: TRUE,
-        carrierMatch: TRUE,
+        carrierMatch: validUser(open),
         roles: NO_ROLES,
       },
     ])
     const where = conjuncts(branch.whereClause)
     expect(where).toHaveLength(4)
-    expect(where[3]).toEqual(exprTree("(TRUE AND TRUE)"))
+    expect(where[3]).toEqual(
+      exprTree("(TRUE AND (SELECT simetra.current_user_id()) IS NOT NULL)")
+    )
     expect(JSON.stringify(where)).not.toContain("rights_scopes_of")
   })
 
