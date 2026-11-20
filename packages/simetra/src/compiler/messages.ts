@@ -1,4 +1,4 @@
-import { PLATFORM_SCHEMA } from "simetra/model"
+import { PLATFORM_SCHEMA, PROVIDER_IDENTITY_SOURCES } from "simetra/model"
 import type {
   Diagnostic,
   DiagnosticParams,
@@ -713,27 +713,56 @@ function kindTableVerbatim(p: Record<string, unknown>): {
   uk: string
 } {
   const platform = String(p.table).startsWith(`${PLATFORM_SCHEMA}.`)
-  const noun = {
-    en: platform ? "a table of the platform schema" : "a table of a kind",
-    uk: platform ? "таблицею схеми платформи" : "таблицею виду",
-  }
+  // Політика й тригер стоять і на джерелі ідентичностей провайдера, яке не є
+  // таблицею виду: текст називає його.
+  const identity = Object.values(PROVIDER_IDENTITY_SOURCES).some(
+    ({ table }) => `${table.schema}.${table.name}` === p.table
+  )
+  const noun = platform
+    ? {
+        en: "a table of the platform schema",
+        uk: "таблицею схеми платформи",
+        ukOn: "таблиці схеми платформи",
+      }
+    : identity
+      ? {
+          en: "the identity source of the database provider",
+          uk: "джерелом ідентичностей провайдера бази",
+          ukOn: "джерелі ідентичностей провайдера бази",
+        }
+      : {
+          en: "a table of a kind",
+          uk: "таблицею виду",
+          ukOn: "таблиці виду",
+        }
   switch (p.form) {
     case "functionBody":
       return {
         en: `Function ${p.function} at line ${p.line} runs ${p.statement} on ${p.table}, ${noun.en}`,
         uk: `Функція ${p.function} у рядку ${p.line} виконує ${p.statement} над ${p.table} — ${noun.uk}`,
       }
-    case "sequence":
+    case "sequence": {
+      const subject = {
+        en:
+          p.function === undefined
+            ? `Unit ${p.identity}`
+            : `Function ${p.function}`,
+        uk:
+          p.function === undefined
+            ? `Одиниця ${p.identity}`
+            : `Функція ${p.function}`,
+      }
       return {
         en:
           p.table === "*"
-            ? `Function ${p.function} at line ${p.line} calls ${p.statement} with an argument that is not a literal, so the sequence it changes is unknown`
-            : `Function ${p.function} at line ${p.line} calls ${p.statement} on ${p.table}, a sequence of the platform`,
+            ? `${subject.en} at line ${p.line} calls ${p.statement} with an argument that is not a literal, so the sequence it changes is unknown`
+            : `${subject.en} at line ${p.line} calls ${p.statement} on ${p.table}, a sequence of the platform`,
         uk:
           p.table === "*"
-            ? `Функція ${p.function} у рядку ${p.line} викликає ${p.statement} з нелітеральним аргументом, тож змінювана послідовність невідома`
-            : `Функція ${p.function} у рядку ${p.line} викликає ${p.statement} над ${p.table} — послідовністю платформи`,
+            ? `${subject.uk} у рядку ${p.line} викликає ${p.statement} з нелітеральним аргументом, тож змінювана послідовність невідома`
+            : `${subject.uk} у рядку ${p.line} викликає ${p.statement} над ${p.table} — послідовністю платформи`,
       }
+    }
     case "view":
       return {
         en: `View ${p.identity} at line ${p.line} writes ${p.table}, a table of a kind or of the platform, for ${p.roles}`,
@@ -751,8 +780,8 @@ function kindTableVerbatim(p: Record<string, unknown>): {
       }
     default:
       return {
-        en: `Verbatim ${p.form === "trigger" ? "trigger" : "policy"} ${p.identity} at line ${p.line} is on ${p.table}, a table of a kind`,
-        uk: `${p.form === "trigger" ? "Дослівний тригер" : "Дослівна політика"} ${p.identity} у рядку ${p.line} стоїть на ${p.table} — таблиці виду`,
+        en: `Verbatim ${p.form === "trigger" ? "trigger" : "policy"} ${p.identity} at line ${p.line} is on ${p.table}, ${noun.en}`,
+        uk: `${p.form === "trigger" ? "Дослівний тригер" : "Дослівна політика"} ${p.identity} у рядку ${p.line} стоїть на ${p.table} — ${noun.ukOn}`,
       }
   }
 }

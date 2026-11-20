@@ -69,7 +69,10 @@ function pathDiagnostic({
     line: unit.line,
   }
   if (form === "functionBody" || form === "sequence") {
-    params.function = `${unit.schema}.${unit.name}`
+    // Виклик послідовності стоїть і в поданні, домені, політиці: «функцією»
+    // названа лише функція чи процедура.
+    if (unit.class === "function" || unit.class === "procedure")
+      params.function = `${unit.schema}.${unit.name}`
     params.statement = statement ?? ""
   } else if (form !== "policy" && form !== "trigger") {
     params.roles = roles.join(", ")

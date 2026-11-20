@@ -12,7 +12,9 @@ import {
   PROVIDER_OWNER_ROLES,
   type DatabaseProvider,
 } from "simetra/model"
+import { grantTargetKeys } from "../function-execute"
 import { ROW_VERSION_SEQUENCE } from "../mechanics-units"
+import { SIGNAL_OUTBOX_SEQUENCE } from "../platform/outbox"
 import { isSecurityInvoker } from "./definer-reads"
 import {
   PUBLIC,
@@ -135,15 +137,23 @@ export function writePaths(
         ]
       case "policy":
       case "trigger":
-        return optional(policyTriggerPath(unit, ctx.kind, identityTables))
+        return [
+          ...optional(policyTriggerPath(unit, ctx.kind, identityTables)),
+          ...optional(sequencePath(unit, ctx)),
+        ]
       case "view":
-        return optional(viewPath(unit, written, views, writers, ctx))
+        return [
+          ...optional(viewPath(unit, written, views, writers, ctx)),
+          ...optional(sequencePath(unit, ctx)),
+        ]
       case "grant":
-        return optional(grantPath(unit, written, owner))
+        return optional(grantPath(unit, written, owner, ctx.parse))
       case "defaultPrivileges":
         return optional(defaultPrivilegesPath(unit, adp, apiRoles, ctx))
       default:
-        return []
+        // `setval`/`nextval` можуть стояти в будь-якій одиниці з виразом
+        // (подання, домен, політика, `WHEN` тригера): дерево обходить кожна.
+        return optional(sequencePath(unit, ctx))
     }
   })
 }
@@ -223,23 +233,51 @@ export function bodyKindTable(
 const SEQUENCE_FUNCTIONS: ReadonlySet<string> = new Set(["setval", "nextval"])
 
 /**
- * Перший виклик `setval`/`nextval` у тілі, що змінює послідовність платформи
- * (Р4б): літерал, який називає послідовність у `simetra` (некваліфіковане ім'я
- * платформної послідовності — теж: шлях пошуку сесії може вести в `simetra`), чи
- * нелітеральний аргумент, який статично не прочитати.
+ * Послідовності, які створює платформа в `simetra`: перелік — самі константи
+ * генераторів, а не другий список імен.
+ */
+const PLATFORM_SEQUENCES = [ROW_VERSION_SEQUENCE, SIGNAL_OUTBOX_SEQUENCE]
+
+/**
+ * Платформна послідовність за іменем: будь-яке ім'я в `simetra`; некваліфіковане
+ * ім'я послідовності, яку створює платформа, — теж, бо шлях пошуку сесії може
+ * вести в `simetra` (fail-closed). `undefined` — послідовність не платформи.
+ */
+function platformSequence(
+  schema: string | undefined,
+  name: string
+): string | undefined {
+  if (schema === PLATFORM_SCHEMA) return `${schema}.${name}`
+  if (
+    (schema === undefined || schema === "") &&
+    PLATFORM_SEQUENCES.some((s) => s.name === name)
+  )
+    return `${PLATFORM_SCHEMA}.${name}`
+  return undefined
+}
+
+/**
+ * Перший виклик `setval`/`nextval` в одиниці, що змінює послідовність платформи
+ * (Р4б): літерал, який називає її (`platformSequence`), чи нелітеральний
+ * аргумент, який статично не прочитати. Виклик може стояти не лише в тілі
+ * функції, а й у поданні, `DEFAULT` домену, політиці чи `WHEN` тригера, тож
+ * для решти класів обходиться дерево самої одиниці.
  */
 function sequencePath(
   unit: VerbatimUnit,
   ctx: WritePathContext
 ): WritePath | undefined {
-  const body = routineBody(unit.tree as Node, unit.sql, ctx.parse, ctx.plpgsql)
+  const routine = unit.class === "function" || unit.class === "procedure"
+  const body = routine
+    ? routineBody(unit.tree as Node, unit.sql, ctx.parse, ctx.plpgsql)
+    : undefined
   const trees: unknown[] = [
     unit.tree,
-    ...body.statements.map((s) => s.stmt),
-    ...body.values.flatMap(({ text }) => {
+    ...(body?.statements.map((s) => s.stmt) ?? []),
+    ...(body?.values.flatMap(({ text }) => {
       const parsed = ctx.parse(text)
       return parsed.ok ? parsed.statements.map((s) => s.stmt) : []
-    }),
+    }) ?? []),
   ]
   for (const tree of trees) {
     const hit = findSequenceCall(tree)
@@ -300,11 +338,7 @@ function sequenceTarget(arg: Node | undefined): string | undefined {
   const names = relationNameText(text)
   if (names === undefined) return "*"
   const name = names.at(-1) ?? ""
-  const schema = names.length > 1 ? names.at(-2) : undefined
-  if (schema === PLATFORM_SCHEMA) return `${schema}.${name}`
-  if (schema === undefined && name === ROW_VERSION_SEQUENCE.name)
-    return `${PLATFORM_SCHEMA}.${name}`
-  return undefined
+  return platformSequence(names.length > 1 ? names.at(-2) : undefined, name)
 }
 
 /**
@@ -424,6 +458,30 @@ const writesOf = (privileges: readonly Node[]) =>
     return name === "all" || WRITE_PRIVILEGES.has(name)
   })
 
+/** Привілеї послідовності, що дають `setval`/`nextval`; `SELECT` — лише `currval`. */
+const SEQUENCE_WRITE_PRIVILEGES: ReadonlySet<string> = new Set([
+  "usage",
+  "update",
+])
+
+const sequenceWritesOf = (privileges: readonly Node[]) =>
+  privileges.length === 0 ||
+  privileges.some((node) => {
+    const priv = "AccessPriv" in node ? (node.AccessPriv as AccessPriv) : {}
+    const name = priv.priv_name ?? "all"
+    return name === "all" || SEQUENCE_WRITE_PRIVILEGES.has(name)
+  })
+
+/**
+ * Динамічні позначки отримувача: хто це, статично не відомо, тож вони — «інша
+ * роль», а не відповідник імені власника чи ролі `FOR ROLE`.
+ */
+const DYNAMIC_ROLES: ReadonlySet<string> = new Set([
+  "CURRENT_USER",
+  "SESSION_USER",
+  "CURRENT_ROLE",
+])
+
 /** Отримувачі гранту: `PUBLIC`, ім'я ролі чи ключове слово (`CURRENT_USER`…). */
 function granteeNames(grantees: readonly Node[] | undefined): string[] {
   return (grantees ?? []).flatMap((n) => {
@@ -437,35 +495,54 @@ function granteeNames(grantees: readonly Node[] | undefined): string[] {
 
 /**
  * Явний грант запису на ціль Правила 1 (Р2): помилка будь-якій ролі, крім
- * власника. Таблиця з грантами генератора `access` — його власна діагностика
- * `sql.generated-grant`, тож другої не дає; грант на `simetra` відмовляє
- * `schema.reserved` ще до цього правила.
+ * власника; `CURRENT_USER`/`SESSION_USER`/`CURRENT_ROLE` — інша роль. Привілеї
+ * `USAGE`/`UPDATE` на послідовність платформи — теж запис (`setval`/`nextval`),
+ * ту саму ціль розпізнає `platformSequence`. Таблиця з грантами генератора
+ * `access` — його власна діагностика `sql.generated-grant`, тож другої не
+ * дає, але лише коли ця діагностика справді називає саме цю одиницю: її ключ
+ * `table|схема.ім'я` бере ім'я з одиниці, а некваліфіковане ім'я Правило 1
+ * судить за всіма схемами. Грант на `simetra` відмовляє `schema.reserved` ще
+ * до цього правила.
  */
 function grantPath(
   unit: VerbatimUnit,
   written: KindTables,
-  owner: string | undefined
+  owner: string | undefined,
+  parse: SqlParser
 ): WritePath | undefined {
   const grant = (unit.tree as { GrantStmt?: GrantStmt }).GrantStmt
+  if (grant === undefined || grant.is_grant !== true) return undefined
+  const sequence = grant.objtype === "OBJECT_SEQUENCE"
   if (
-    grant === undefined ||
-    grant.is_grant !== true ||
-    grant.objtype !== "OBJECT_TABLE" ||
-    !writesOf(grant.privileges ?? [])
+    !sequence &&
+    (grant.objtype !== "OBJECT_TABLE" || !writesOf(grant.privileges ?? []))
   )
     return undefined
+  if (sequence && !sequenceWritesOf(grant.privileges ?? [])) return undefined
   const roles = granteeNames(grant.grantees).filter(
-    (r) => r !== owner && r !== "CURRENT_USER" && r !== "SESSION_USER"
+    (r) => DYNAMIC_ROLES.has(r) || r !== owner
   )
   if (roles.length === 0) return undefined
   // Некваліфіковане ім'я — fail-closed: ціль береться з дерева без схеми
   // файлу, а не з `unit.schema`, як у політики й тригера.
+  const resolved = new Set(grantTargetKeys(unit, parse))
   for (const target of statementTargets(unit.tree as Node, "")) {
+    if (sequence) {
+      const hit =
+        target.kind === "schema"
+          ? target.schema === PLATFORM_SCHEMA
+            ? `${PLATFORM_SCHEMA}.*`
+            : undefined
+          : platformSequence(target.schema, target.object ?? "")
+      if (hit !== undefined) return { unit, form: "grant", target: hit, roles }
+      continue
+    }
     const table = kindTableNamed(target, unit.schema, written)
     if (table === undefined) continue
     if (
       target.kind !== "schema" &&
-      written.generatedGrants?.has(table) === true
+      written.generatedGrants?.has(table) === true &&
+      resolved.has(`table|${table}`)
     )
       continue
     return { unit, form: "grant", target: table, roles }
@@ -571,7 +648,12 @@ function defaultPrivilegesPath(
   const bad = providerPreset
     ? []
     : outside.filter(
-        (r) => !(fact.forRoles?.length === 1 && fact.forRoles[0] === r)
+        (r) =>
+          !(
+            fact.forRoles?.length === 1 &&
+            fact.forRoles[0] === r &&
+            !DYNAMIC_ROLES.has(r)
+          )
       )
   return bad.length === 0
     ? undefined

@@ -34,6 +34,12 @@ export interface KindTables {
    * діагностики не дає.
    */
   generatedGrants?: ReadonlySet<string>
+  /**
+   * Імена таблиць схеми `simetra` знімка, що не є таблицями видів (черга
+   * сигналів, ідентичності, версії прав…): їх `ruleOneTables` додає до цілей
+   * Правила 1, щоб некваліфіковане ім'я судилося так само, як кваліфіковане.
+   */
+  platformTables?: readonly string[]
 }
 
 export function kindTables(
@@ -49,7 +55,9 @@ export function kindTables(
   const byName = new Map<string, string[]>()
   const bySchema = new Map<string, string[]>()
   const generatedGrants = new Set<string>()
+  const platformTables = new Set<string>()
   for (const table of tables) {
+    if (table.schema === PLATFORM_SCHEMA) platformTables.add(table.name)
     if (
       !isObjectOrigin(table.origin) ||
       !kindObjects.has(table.origin.objectId)
@@ -61,7 +69,13 @@ export function kindTables(
     byName.set(table.name, [...(byName.get(table.name) ?? []), key])
     bySchema.set(table.schema, [...(bySchema.get(table.schema) ?? []), key])
   }
-  return { qualified, byName, bySchema, generatedGrants }
+  return {
+    qualified,
+    byName,
+    bySchema,
+    generatedGrants,
+    platformTables: [...platformTables],
+  }
 }
 
 /**
@@ -81,7 +95,9 @@ export function ruleOneTables(
   provider: DatabaseProvider | undefined
 ): KindTables {
   const closed = [
-    ...PLATFORM_STATE_TABLES.map((name) => ({ schema: PLATFORM_SCHEMA, name })),
+    ...[...PLATFORM_STATE_TABLES, ...(tables.platformTables ?? [])].map(
+      (name) => ({ schema: PLATFORM_SCHEMA, name })
+    ),
     ...(provider === undefined
       ? []
       : [PROVIDER_IDENTITY_SOURCES[provider].table]),

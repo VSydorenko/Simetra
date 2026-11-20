@@ -1287,3 +1287,143 @@ describe("the derived ACL leaves an API role only what the generator lists (І22
     expect(sql.some((s) => s.startsWith("GRANT"))).toBe(false)
   })
 })
+
+// Раунд виправлення 1: обхідні шляхи судяться fail-closed (спека прав §6.1) —
+// некваліфікована чи невідома ціль, динамічний отримувач і форма, яку тіло
+// функції не вичерпує.
+describe("sql.kind-table-verbatim: fail-closed routes of the enumerator", () => {
+  const roles = (found: { roles?: unknown }[]) => found.map((p) => p.roles)
+
+  // F1: пропуск гранту генератора судить ту саму ціль, яку називає
+  // `sql.generated-grant` (ключ `table|схема.ім'я` одиниці), а не членство
+  // таблиці в множині RLS.
+  it("an unqualified grant in a file of another schema is judged", async () => {
+    const found = await rule1(
+      `GRANT INSERT ON task TO ${COMMAND};`,
+      OTHER_SCHEMA
+    )
+    expect(found).toMatchObject([
+      { form: "grant", table: "public.task", roles: COMMAND },
+    ])
+  })
+
+  // F2: `CURRENT_USER`/`SESSION_USER`/`CURRENT_ROLE` — «інша роль».
+  it.each(["CURRENT_USER", "SESSION_USER", "CURRENT_ROLE"])(
+    "a grant of the write to %s is judged",
+    async (grantee) => {
+      const found = await rule1(`GRANT INSERT ON ${IDENTITY} TO ${grantee};`)
+      expect(roles(found)).toEqual([grantee])
+    }
+  )
+
+  // F3 + F4: привілеї на послідовність платформи — доступ до `setval`/`nextval`.
+  it.each([
+    {
+      name: "UPDATE on the row version sequence, unqualified",
+      sql: `GRANT UPDATE ON SEQUENCE row_version TO ${API.anonymous};`,
+      table: "simetra.row_version",
+    },
+    {
+      name: "USAGE on the row version sequence, unqualified",
+      sql: `GRANT USAGE ON SEQUENCE row_version TO ${API.anonymous};`,
+      table: "simetra.row_version",
+    },
+    {
+      name: "ALL on the outbox sequence, unqualified",
+      sql: `GRANT ALL ON SEQUENCE signal_outbox_id_seq TO ${API.anonymous};`,
+      table: "simetra.signal_outbox_id_seq",
+    },
+  ])("$name → error", async ({ sql, table }) => {
+    expect(await rule1(sql)).toMatchObject([
+      { form: "grant", table, roles: API.anonymous },
+    ])
+  })
+
+  it.each([
+    {
+      name: "SELECT on a platform sequence",
+      sql: `GRANT SELECT ON SEQUENCE row_version TO ${API.anonymous};`,
+    },
+    {
+      name: "USAGE on a sequence of the application",
+      sql: `GRANT USAGE ON SEQUENCE my_seq TO ${API.anonymous};`,
+    },
+    {
+      name: "a REVOKE",
+      sql: `REVOKE USAGE ON SEQUENCE row_version FROM ${API.anonymous};`,
+    },
+  ])("$name → no path", async ({ sql }) => {
+    expect(await rule1(sql)).toEqual([])
+  })
+
+  const sequencePathsOf = async (sql: string) =>
+    (await rule1(sql)).map(({ form, table, statement }) => ({
+      form,
+      table,
+      statement,
+    }))
+
+  // F4: перелік платформних послідовностей — з того, що генерує платформа.
+  it("nextval of the outbox sequence by its unqualified name is judged", async () => {
+    expect(
+      await sequencePathsOf(
+        plpgsqlFn(
+          "n := nextval('signal_outbox_id_seq')",
+          "public.f",
+          "SECURITY DEFINER SET search_path = ''"
+        )
+      )
+    ).toEqual([
+      {
+        form: "sequence",
+        table: "simetra.signal_outbox_id_seq",
+        statement: "nextval",
+      },
+    ])
+  })
+
+  // F5: форма `sequence` обходить дерево кожної одиниці.
+  it.each([
+    {
+      name: "a view reading nextval",
+      sql: "CREATE VIEW public.v AS SELECT nextval('simetra.row_version') AS id",
+    },
+    {
+      name: "a materialized view reading nextval",
+      sql: "CREATE MATERIALIZED VIEW public.v AS SELECT nextval('simetra.row_version') AS id",
+    },
+    {
+      name: "a domain DEFAULT",
+      sql: "CREATE DOMAIN public.d AS bigint DEFAULT nextval('simetra.row_version')",
+    },
+    {
+      name: "a policy condition",
+      sql: "CREATE POLICY p ON public.my_table FOR SELECT TO authenticated USING (nextval('simetra.row_version') > 0)",
+    },
+  ])("$name → error", async ({ sql }) => {
+    expect(await sequencePathsOf(sql)).toEqual([
+      { form: "sequence", table: "simetra.row_version", statement: "nextval" },
+    ])
+  })
+
+  // F6: некваліфіковане ім'я будь-якої таблиці платформи — ціль Правила 1.
+  it("DML into a platform table by its unqualified name is judged", async () => {
+    const found = await rule1(
+      plpgsqlFn("INSERT INTO signal_outbox (channel) VALUES ('x')")
+    )
+    expect(found).toMatchObject([
+      { form: "functionBody", table: "simetra.signal_outbox" },
+    ])
+  })
+
+  // F7: динамічні позначки не є «однією роллю = отримувачем».
+  it.each(["CURRENT_USER", "SESSION_USER", "CURRENT_ROLE"])(
+    "ADP FOR ROLE %s to the same mark is judged",
+    async (mark) => {
+      const found = await rule1(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE ${mark} IN SCHEMA public GRANT SELECT ON TABLES TO ${mark};`
+      )
+      expect(roles(found)).toEqual([mark])
+    }
+  )
+})

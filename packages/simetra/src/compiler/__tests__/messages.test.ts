@@ -615,6 +615,40 @@ describe("messages catalog", () => {
     }
   )
 
+  it.each([
+    { form: "policy", en: "Verbatim policy", uk: "Дослівна політика" },
+    { form: "trigger", en: "Verbatim trigger", uk: "Дослівний тригер" },
+  ])(
+    "sql.kind-table-verbatim names the identity source for a $form on it",
+    ({ form, en, uk }) => {
+      const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
+        identity: `${form}:auth.users.p`,
+        table: "auth.users",
+        form,
+        line: 3,
+      })
+      expect(d.message).toBe(
+        `${en} ${form}:auth.users.p at line 3 is on auth.users, the identity source of the database provider`
+      )
+      expect(localize(d, "uk").message).toBe(
+        `${uk} ${form}:auth.users.p у рядку 3 стоїть на auth.users — джерелі ідентичностей провайдера бази`
+      )
+    }
+  )
+
+  it("sql.kind-table-verbatim names the unit, not a function, for a sequence call outside a function", () => {
+    const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
+      identity: "view:public.v",
+      table: "simetra.row_version",
+      form: "sequence",
+      statement: "nextval",
+      line: 3,
+    })
+    expect(d.message).toBe(
+      "Unit view:public.v at line 3 calls nextval on simetra.row_version, a sequence of the platform"
+    )
+  })
+
   it("sql.kind-table-verbatim names the function and the statement of a body", () => {
     const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
       identity: "function:public.f()",
