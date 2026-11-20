@@ -37,7 +37,7 @@ type Location = "app" | "extension" | "provider" | "outside" | "builtin"
 
 const EXECUTE: Record<Location, string> = {
   app: "app.on_user()",
-  extension: "app.triggered_change_notification()",
+  extension: "extensions.triggered_change_notification()",
   provider: `${SURFACE.own}.simetra_probe_on_user()`,
   outside: "private.on_user()",
   builtin: "suppress_redundant_updates_trigger()",
@@ -47,7 +47,7 @@ const value = `new.${SURFACE.column}`
 const WHEN: Record<Location | "none", string | undefined> = {
   none: undefined,
   app: `app.ok(${value})`,
-  extension: `app.soundex(${value}) <> ''`,
+  extension: `extensions.soundex(${value}) <> ''`,
   provider: `${SURFACE.own}.simetra_probe_ok(${value})`,
   outside: `private.ok(${value})`,
   builtin: `pg_catalog.length(${value}) > 0`,
@@ -59,8 +59,9 @@ const FUNCTIONS = (schema: string) =>
 
 /** Ціль: схеми, розширення й функції застосунку й `private` — роллю сесії. */
 const SETUP = `create schema app; create schema private;
-  create extension tcn with schema app;
-  create extension fuzzystrmatch with schema app;
+  create schema if not exists extensions;
+  create extension tcn with schema extensions;
+  create extension fuzzystrmatch with schema extensions;
   ${FUNCTIONS("app")}
   ${FUNCTIONS("private")}`
 
@@ -110,11 +111,35 @@ async function triggerCount(url: string): Promise<number> {
 }
 
 /**
- * Оголошений тригер: модель з функціями застосунку й `private` (тож
- * `private` — схема застосунку) і з тригером дослівною одиницею. Поза межею
- * лишається лише тригер на функції власної схеми провайдера.
+ * Коди помилок компілятора для оголошеного тригера (спека прав §5.3, §6.1):
+ * тригер на джерелі ідентичностей лише `AFTER` (Р4а), а `EXECUTE FUNCTION` і
+ * `WHEN` кличуть лише вбудовані, функції моделі й поіменні функції провайдера
+ * (Р6) — `tcn` і функції провайдера в перелік не входять.
  */
-async function declaredOutOfScope(sql: string): Promise<boolean> {
+function expectedCompilerErrors(
+  execute: Location,
+  when: Location | "none"
+): string[] {
+  const codes = [
+    ...(execute === "builtin" ? ["sql.kind-table-verbatim"] : []),
+    ...(execute === "extension" || execute === "provider"
+      ? ["sql.expression-call-not-allowed"]
+      : []),
+    ...(when === "provider" ? ["sql.expression-call-not-allowed"] : []),
+  ]
+  return codes.sort()
+}
+
+/**
+ * Оголошений тригер: модель з функціями застосунку й `private` (тож
+ * `private` — схема застосунку) і з тригером дослівною одиницею. Повертає
+ * коди помилок компілятора й, коли помилок немає, чи лежить тригер поза межею
+ * двигуна. Межу двигуна для форм, яких компілятор не пропускає, тримає
+ * прямий тест `out-of-scope.test.ts` у `simetra`.
+ */
+async function declaredTrigger(
+  sql: string
+): Promise<{ errors: string[]; outOfScope: boolean | undefined }> {
   const result = await compile(
     await acceptDebt(
       metaFiles({
@@ -125,18 +150,25 @@ async function declaredOutOfScope(sql: string): Promise<boolean> {
         "sql/app/functions.sql": FUNCTIONS("app"),
         "sql/private/functions.sql": FUNCTIONS("private"),
         "sql/app/extensions.sql":
-          "CREATE EXTENSION IF NOT EXISTS tcn WITH SCHEMA app;\nCREATE EXTENSION IF NOT EXISTS fuzzystrmatch WITH SCHEMA app;\n",
+          "CREATE EXTENSION IF NOT EXISTS tcn WITH SCHEMA extensions;\nCREATE EXTENSION IF NOT EXISTS fuzzystrmatch WITH SCHEMA extensions;\n",
         "sql/app/probe.sql": `${sql};\n`,
       })
     )
   )
-  expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
-  const { diagnostics } = await engineScope(result.model!)
-  return diagnostics.some(
-    (d) =>
-      d.code === "engine.out-of-scope" &&
-      String(d.params.object).startsWith("trigger:")
-  )
+  const errors = result.diagnostics
+    .filter((d) => d.severity === "error")
+    .map((d) => d.code)
+    .sort()
+  if (result.model === undefined) return { errors, outOfScope: undefined }
+  const { diagnostics } = await engineScope(result.model)
+  return {
+    errors,
+    outOfScope: diagnostics.some(
+      (d) =>
+        d.code === "engine.out-of-scope" &&
+        String(d.params.object).startsWith("trigger:")
+    ),
+  }
 }
 
 export function provenBoundaryMatrix(): void {
@@ -173,7 +205,12 @@ export function provenBoundaryMatrix(): void {
             fingerprint: expected,
           })
         })
-        expect(await declaredOutOfScope(sql)).toBe(deps.includes("provider"))
+        const declared = await declaredTrigger(sql)
+        expect(declared.errors).toEqual(expectedCompilerErrors(execute, when))
+        // Принята форма: статична межа судить так само, як читачі бази
+        // (функція оголошеного розширення — у межі)
+        if (declared.errors.length === 0)
+          expect(declared.outOfScope).toBe(deps.includes("provider"))
       }
     )
   })

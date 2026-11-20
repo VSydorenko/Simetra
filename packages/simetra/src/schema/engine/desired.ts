@@ -1,8 +1,8 @@
 import {
+  extensionSchema,
   loadSqlParser,
   localize,
-  triggerFunctionSchema,
-  triggerWhenFunctionSchemas,
+  triggerFunctionCalls,
   unitPlacement,
   unitTargets,
   type CompiledModel,
@@ -12,6 +12,7 @@ import {
 } from "simetra/compiler"
 import {
   diffCatalogModels,
+  PROVIDER_EXPRESSION_FUNCTIONS,
   PROVIDER_SCHEMAS,
   type CatalogDifference,
   type DatabaseProvider,
@@ -230,6 +231,25 @@ function outOfScopeDiagnostics(
   const databaseProvider = model.project.database.provider
   const provider = new Set(PROVIDER_SCHEMAS[databaseProvider])
   const extensions = new Set(PROVIDER_UNMANAGED_EXTENSIONS[databaseProvider])
+  // Функція → її розширення: член лише тоді, коли оголошено саме воно
+  const known = new Map(
+    PROVIDER_EXPRESSION_FUNCTIONS[databaseProvider].map((f) => [
+      f.name,
+      f.extension,
+    ])
+  )
+  // Оголошені моделлю розширення як `схема/ім'я`: функція «відомого члена»
+  // справді член, лише коли її розширення стоїть саме в схемі виклику
+  const declared = new Set(
+    model.sqlUnits.flatMap((unit) => {
+      if (unit.class !== "extension") return []
+      const parsed = parse(unit.sql)
+      const schema = parsed.ok
+        ? extensionSchema(parsed.statements[0]?.stmt)
+        : undefined
+      return schema === undefined ? [] : [`${schema}/${unit.name}`]
+    })
+  )
   const out: EngineDiagnostic[] = []
   for (const [kind, objects] of [
     ["table", model.physical.tables],
@@ -254,7 +274,6 @@ function outOfScopeDiagnostics(
     if (unit.class === "policy" || unit.class === "trigger") {
       const [target] = targets
       if (target === undefined || !provider.has(target.schema)) continue
-      const fnSchema = triggerFunctionSchema(unit, parse)
       if (!onSurface(unit.class, target, databaseProvider))
         out.push(
           outOfScope(unit.identity, "provider-surface", {
@@ -265,12 +284,21 @@ function outOfScopeDiagnostics(
       else {
         // Функція тригера в схемі провайдера чи функція умови `WHEN` у
         // власній схемі провайдера робить тригер зовнішнім
-        // (`providerTriggerInBoundarySql`): межа його не бачить
+        // (`providerTriggerInBoundarySql`): межа його не бачить. Член
+        // розширення, оголошеного моделлю, читач не рахує зовнішнім, тож і
+        // тут: членство статично відоме лише для функцій розширень, які
+        // знає платформа (`PROVIDER_EXPRESSION_FUNCTIONS`), якщо
+        // оголошено саме її розширення в схемі виклику
         const own = new Set(PROVIDER_ASSUMED_SCHEMAS[databaseProvider])
-        const outside =
-          fnSchema !== undefined && provider.has(fnSchema)
-            ? fnSchema
-            : triggerWhenFunctionSchemas(unit, parse).find((s) => own.has(s))
+        const outside = triggerFunctionCalls(unit, parse).find(
+          (call) =>
+            (call.where === "execute"
+              ? provider.has(call.schema)
+              : own.has(call.schema)) &&
+            !declared.has(
+              `${call.schema}/${known.get(`${call.schema}.${call.name}`)}`
+            )
+        )?.schema
         if (outside !== undefined)
           out.push(
             outOfScope(unit.identity, "provider-trigger-function", {

@@ -128,9 +128,13 @@ describe("access dimension value function", () => {
     expect(heads(plpgsql)).toEqual([
       head("language", undefined, "public.region_ids → public.helper_ids"),
     ])
-    const unknown = await errors(fn("region_ids", CLOSED, "SELECT ext.foo()"))
+    // Функція провайдера, названа лише для виразів, голові не довірена; сама
+    // схема, якої немає в моделі, відхиляється ще тілом (виконання тексту SQL).
+    const unknown = await errors(
+      fn("region_ids", CLOSED, "SELECT extensions.uuid_generate_v4()")
+    )
     expect(heads(unknown)).toEqual([
-      head("call", "ext.foo", "public.region_ids"),
+      head("call", "extensions.uuid_generate_v4", "public.region_ids"),
     ])
   })
 
@@ -324,7 +328,7 @@ describe("access dimension value function", () => {
         heads(
           await errors(
             viewHead +
-              "CREATE VIEW public.v AS SELECT i.id FROM simetra.identities i;\n"
+              "CREATE VIEW public.v WITH (security_invoker = true) AS SELECT i.id FROM simetra.identities i;\n"
           )
         )
       ).toEqual([head("relation", "simetra.identities", VIEW_CHAIN)])
@@ -344,14 +348,14 @@ describe("access dimension value function", () => {
         heads(
           await errors(
             viewHead +
-              "CREATE VIEW public.v AS SELECT r.region_id AS id FROM member_region r;\n"
+              "CREATE VIEW public.v WITH (security_invoker = true) AS SELECT r.region_id AS id FROM member_region r;\n"
           )
         )
       ).toEqual([head("unqualified", "member_region", VIEW_CHAIN)])
       expect(
         await params(
           viewHead +
-            "CREATE VIEW public.v AS SELECT r.region_id AS id FROM public.member_region r;\n"
+            "CREATE VIEW public.v WITH (security_invoker = true) AS SELECT r.region_id AS id FROM public.member_region r;\n"
         )
       ).toEqual([])
     })
@@ -397,7 +401,8 @@ describe("access dimension value function", () => {
     it("requires schema-qualified calls in views", async () => {
       const viewHead = head_("SELECT v.id FROM public.v v")
       const view = (select: string) =>
-        viewHead + `CREATE VIEW public.v AS ${select};\n`
+        viewHead +
+        `CREATE VIEW public.v WITH (security_invoker = true) AS ${select};\n`
       expect(
         heads(
           await errors(

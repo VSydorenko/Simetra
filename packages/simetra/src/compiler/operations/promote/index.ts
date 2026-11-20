@@ -442,7 +442,7 @@ export async function promoteObject(
       physical,
     }
   })
-  problems.push(...writePathProblems(model, unitTables, parse))
+  problems.push(...writePathProblems(model, unitTables, parse, plpgsql))
   problems.push(...debtWritesProblems(model, unitTables, parse, plpgsql))
   problems.push(
     ...providerUserProblems(

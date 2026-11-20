@@ -19,7 +19,8 @@ import { sqlLiteral } from "../stages/model"
 
 const NAME = SIGNAL_OUTBOX.name
 const TABLE = qualified(SIGNAL_OUTBOX)
-const SEQUENCE: QualifiedName = {
+/** Послідовність `id` черги сигналів — друга платформна послідовність поряд з `row_version`. */
+const SIGNAL_OUTBOX_SEQUENCE: QualifiedName = {
   schema: SIGNAL_OUTBOX.schema,
   name: `${NAME}_id_seq`,
 }
@@ -82,7 +83,10 @@ export function signalOutboxTable(): PhysicalTable {
         name: "id",
         type: "bigint",
         notNull: true,
-        identity: { generation: "always", sequence: SEQUENCE.name },
+        identity: {
+          generation: "always",
+          sequence: SIGNAL_OUTBOX_SEQUENCE.name,
+        },
         origin: {},
       },
       { name: "method", type: "text", notNull: true, origin: {} },
@@ -228,7 +232,9 @@ export function outboxUnits(
     ...apiRoles.map((role) =>
       unit(`REVOKE ALL ON ${table} FROM ${quoteIdent(role)};`)
     ),
-    ...sequenceRevokes(SEQUENCE, provider).map((sql) => unit(sql)),
+    ...sequenceRevokes(SIGNAL_OUTBOX_SEQUENCE, provider).map((sql) =>
+      unit(sql)
+    ),
     unit(`GRANT INSERT (method, payload) ON ${table} TO ${command};`),
     unit(
       `GRANT USAGE ON SCHEMA ${quoteIdent(SIGNAL_OUTBOX.schema)} TO ${consumer};`

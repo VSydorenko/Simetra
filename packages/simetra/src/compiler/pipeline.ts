@@ -112,7 +112,9 @@ import {
   expressionScope,
   type ExpressionScope,
 } from "./sql/expression-calls"
-import { checkKindTableVerbatim, kindTables } from "./sql/kind-table-verbatim"
+import { checkKindTableVerbatim } from "./sql/kind-table-verbatim"
+import { providerCalls } from "./sql/command-context"
+import { kindTables } from "./sql/kind-tables"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { copyColumns } from "./copy-columns"
 import { buildSchemaUsageUnits } from "./schema-usage"
@@ -186,7 +188,10 @@ export async function runStages(
     loadSqlParser(),
     loadPlpgsqlParser(),
   ])
-  const { stage2, upstream, stage3, sql, declared } = sqlStage(stage1, parse)
+  const { stage2, upstream, stage3, sql, declared, derived, calls } = sqlStage(
+    stage1,
+    parse
+  )
   // id є в кожного об'єкта, лише коли стадія 2 чиста; її помилки закривають
   // шлях до вкладення правил і далі, тож порожнє id сюди не доходить.
   const idByFile = new Map(stage1.objects.map((o) => [o.file, o.id ?? ""]))
@@ -224,24 +229,11 @@ export async function runStages(
           !sql.diagnostics.some((d) => d.code === "sql.parse"),
           parse,
           plpgsql,
-          declared
+          declared,
+          calls
         )
-  // Згенеровані функції схем застосунку відомі лише зі знімка. Подання й
-  // політики їх не судять дозвільним переліком виразів (спека прав §5.3): ті, що
-  // пишуть, судить `sql.platform-function-call` стадії 5. Вирази прийнятих
-  // таблиць цієї стадії не мають, тож для них поза переліком лише ті, що
-  // читають.
-  const derived =
-    stage3 === undefined || stage1.project === undefined
-      ? undefined
-      : derivedFunctions(
-          stage1.objects,
-          stage2.references,
-          stage3.physical,
-          movementWrapperName,
-          stage1.project.scopeKinds,
-          stage1.project.naming.attributeCase
-        )
+  // Вирази прийнятих таблиць цієї стадії не мають, тож для них поза переліком
+  // лише згенеровані функції, що читають.
   const expressions = (reading: boolean): ExpressionScope | undefined =>
     derived === undefined || stage1.project === undefined
       ? undefined
@@ -282,12 +274,14 @@ export async function runStages(
         plpgsql,
         modelViews(sql.units),
         sql.units,
-        declared
+        declared,
+        calls
       ),
       parse,
       plpgsql,
       stage1.project?.database.provider,
-      declared
+      declared,
+      calls
     ),
     // Оболонку судимих функцій задає лише `CREATE` (спека прав §5.3): набір судимих
     // відомий до стадії 3, тож помилка стоїть поруч із формами модулів.
@@ -297,7 +291,8 @@ export async function runStages(
       sql.units,
       parse,
       plpgsql,
-      declared
+      declared,
+      calls.models
     ),
     // Резолв декларацій функцій (спека декларацій функцій §5.1) потребує лише
     // одиниць і метаданих, тож стоїть у ранньому блоці: нерезолвлена
@@ -337,7 +332,8 @@ export async function runStages(
       stage1.project,
       sql.units,
       parse,
-      plpgsql
+      plpgsql,
+      calls
     ),
     ...checkPlatformCalls(sql.units, parse, plpgsql),
     // Виклики подань і політик — дозвільний перелік виразів (спека прав §5.3).
@@ -803,7 +799,13 @@ export async function runStages(
         { ...entry }
       )
     ),
-    ...snapshotExemptWriters(snapshot, sql.units, parse, plpgsql),
+    ...snapshotExemptWriters(
+      snapshot,
+      sql.units,
+      parse,
+      plpgsql,
+      stage1.project.database.provider
+    ),
   ]
   if (snapshotProblems.length > 0) {
     return {
@@ -1115,7 +1117,28 @@ export function sqlStage(stage1: FilesStageResult, parse: SqlParser) {
           sql.units,
           stage1.project.defaultSchema
         )
-  return { stage2, upstream, stage3, sql, declared }
+  // Згенеровані функції схем застосунку відомі лише зі знімка. Подання й
+  // політики їх не судять дозвільним переліком виразів (спека прав §5.3): ті, що
+  // пишуть, судить `sql.platform-function-call` стадії 5; кваліфікований виклик
+  // у тілі їх теж не судить як текст SQL. Одні дані для ратчета боргу й стадій,
+  // тож `fix` і `introspect` бачать те саме, що компілятор.
+  const derived =
+    stage3 === undefined || stage1.project === undefined
+      ? undefined
+      : derivedFunctions(
+          stage1.objects,
+          stage2.references,
+          stage3.physical,
+          movementWrapperName,
+          stage1.project.scopeKinds,
+          stage1.project.naming.attributeCase
+        )
+  const calls = providerCalls(
+    stage1.project?.database.provider,
+    sql.units,
+    new Set((derived ?? []).map((f) => `${f.schema}.${f.name}`))
+  )
+  return { stage2, upstream, stage3, sql, declared, derived, calls }
 }
 
 /**

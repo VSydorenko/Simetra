@@ -443,6 +443,63 @@ CREATE POLICY counterparties_edit ON app.counterparties FOR UPDATE TO authentica
     await passes(files)
   })
 
+  // І13: подання без `security_invoker` пише базову таблицю від власника, тож
+  // роль API (без відкликання запису) пише промотовану таблицю крізь нього.
+  it.each([
+    [
+      "a plain view",
+      "CREATE VIEW app.cp_v AS SELECT id, name FROM app.counterparties;",
+      ["app.counterparties"],
+    ],
+    [
+      "a view over a view",
+      "CREATE VIEW app.cp_base AS SELECT id, name FROM app.counterparties;\nCREATE VIEW app.cp_v WITH (security_invoker = true) AS SELECT id FROM app.cp_base;",
+      ["app.counterparties"],
+    ],
+    [
+      "a view with security_invoker",
+      "CREATE VIEW app.cp_v WITH (security_invoker = true) AS SELECT id, name FROM app.counterparties;",
+      [],
+    ],
+    [
+      "an aggregating view",
+      "CREATE VIEW app.cp_v AS SELECT count(*) AS n FROM app.counterparties;",
+      [],
+    ],
+    [
+      "a view that is writable only by the revoked API roles",
+      "CREATE VIEW app.cp_v AS SELECT id, name FROM app.counterparties;\nREVOKE INSERT, UPDATE, DELETE ON app.cp_v FROM PUBLIC, anon, authenticated, service_role;",
+      [],
+    ],
+  ])("gates a write through %s", async (_, statement, tables) => {
+    const files = await project({ "sql/app/views.sql": `${statement}\n` })
+    const { result } = await promoted(files)
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "promote.write-path")
+        .map((d) => d.params?.table)
+    ).toEqual(tables)
+  })
+
+  // Гейт судить лише ролі API і `PUBLIC`: роль команд чи інша названа роль
+  // шляху для нього не відкриває (їх судить Правило 1 після промоції).
+  it.each([
+    [
+      "a grant to a named role",
+      "GRANT INSERT ON app.counterparties TO simetra_command;",
+    ],
+    [
+      "default privileges to a named role",
+      "ALTER DEFAULT PRIVILEGES FOR ROLE simetra_command IN SCHEMA app GRANT INSERT ON TABLES TO simetra_command;",
+    ],
+  ])("does not gate %s that is not an API role", async (_, statement) => {
+    const files = await project({ "sql/app/named.sql": `${statement}\n` })
+    const { result } = await promoted(files)
+    expect(
+      result.diagnostics.filter((d) => d.code === "promote.write-path")
+    ).toEqual([])
+  })
+
   it("leaves a candidate untouched when resolution finds no reference", async () => {
     const text = fn(
       "other_counts",
@@ -956,6 +1013,20 @@ describe("promoteObject: SQL units, review round 1", () => {
         .map((d) => [d.file, d.params?.table, d.params?.line])
     ).toEqual([["sql/app/write.sql", "app.counterparties", 1]])
     expect(result.ok).toBe(false)
+  })
+
+  it("gates a grant naming several promoted tables for each of them", async () => {
+    const files = await project({
+      "sql/app/all.sql":
+        "GRANT INSERT ON app.counterparties, app.counterparty_contacts TO authenticated;\n",
+    })
+    const { result } = await promoted(files, withContacts())
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "promote.write-path")
+        .map((d) => d.params?.table)
+        .sort()
+    ).toEqual(["app.counterparties", "app.counterparty_contacts"])
   })
 
   it("gates and classifies a grant on a tabular section table", async () => {

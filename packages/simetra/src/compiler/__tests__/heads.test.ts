@@ -215,12 +215,19 @@ describe("checkHeads: Rule 3 — query functions", () => {
     },
     {
       // Аргумент `regclass` — ще й відношення, що його читає виклик.
-      name: "builtin-excluded nextval('s')",
-      sql: selectWhere("nextval('s') IS NOT NULL"),
+      name: "builtin-excluded nextval('public.s')",
+      sql: selectWhere("nextval('public.s') IS NOT NULL"),
       expected: [
         found("call", "nextval", SET_FUNCTION),
-        found("unqualified", "s", SET_FUNCTION),
+        found("relation", "public.s", SET_FUNCTION),
       ],
+    },
+    {
+      // Ім'я послідовності без схеми відмовляє ранній блок (Правило 1, форма
+      // `sequence`, спека прав §6.1 І20): до голови справа не доходить.
+      name: "builtin-excluded nextval('s')",
+      sql: selectWhere("nextval('s') IS NOT NULL"),
+      expected: [["sql.kind-table-verbatim"]],
     },
     {
       // У тілі функції виклик, що виконує текст SQL, відмовляє ранній блок
@@ -292,7 +299,7 @@ describe("checkHeads: Rule 3 — query functions", () => {
       name: "view",
       sql:
         setFunction("SELECT v.id FROM public.v v") +
-        "CREATE VIEW public.v AS SELECT t.id FROM public.task t;\n",
+        "CREATE VIEW public.v WITH (security_invoker = true) AS SELECT t.id FROM public.task t;\n",
       expected: [],
     },
     {
@@ -300,14 +307,14 @@ describe("checkHeads: Rule 3 — query functions", () => {
       name: "bound-unqualified",
       sql:
         setFunction("SELECT v.id FROM public.v v") +
-        "CREATE VIEW public.v AS SELECT t.id FROM public.task t WHERE lower(t.id::text) <> '';\n",
+        "CREATE VIEW public.v WITH (security_invoker = true) AS SELECT t.id FROM public.task t WHERE lower(t.id::text) <> '';\n",
       expected: [found("unqualified", "lower", SET_FUNCTION, "public.v")],
     },
     {
       name: "view calling a function outside the allowlist",
       sql:
         setFunction("SELECT v.id FROM public.v v") +
-        "CREATE VIEW public.v AS SELECT t.id FROM public.task t WHERE extensions.gen_random_bytes(16) IS NOT NULL;\n",
+        "CREATE VIEW public.v WITH (security_invoker = true) AS SELECT t.id FROM public.task t WHERE extensions.gen_random_bytes(16) IS NOT NULL;\n",
       expected: [
         found("call", "extensions.gen_random_bytes", SET_FUNCTION, "public.v"),
       ],
@@ -317,7 +324,7 @@ describe("checkHeads: Rule 3 — query functions", () => {
       name: "attribute-call",
       sql:
         setFunction("SELECT v.id FROM public.v v") +
-        "CREATE VIEW public.v AS SELECT n.id, n.evil FROM public.task_notes n;\n" +
+        "CREATE VIEW public.v WITH (security_invoker = true) AS SELECT n.id, n.evil FROM public.task_notes n;\n" +
         plpgsqlFunction("public.evil", "n public.task_notes", "uuid"),
       expected: [
         found("language", undefined, SET_FUNCTION, "public.v", "public.evil"),
@@ -620,7 +627,12 @@ describe("judgeHandler: Rule 2 — a handler only checks", () => {
     )
   const statement = (detail: string) => found("statement", detail, HANDLER)
 
-  it.each<{ name: string; body: string; expected: Finding[] }>([
+  it.each<{
+    name: string
+    body: string
+    expected: Finding[]
+    extra?: string
+  }>([
     {
       name: "checks-only",
       body: "IF NEW.title IS NULL THEN RAISE EXCEPTION 'x'; END IF; NEW.title := pg_catalog.btrim(NEW.title);",
@@ -651,7 +663,14 @@ describe("judgeHandler: Rule 2 — a handler only checks", () => {
       body: "INSERT INTO public.task_notes (id) VALUES (NEW.id) RETURNING id INTO v;",
       expected: [statement("InsertStmt")],
     },
-    { name: "call", body: "CALL public.p();", expected: [statement("call")] },
+    {
+      name: "call",
+      body: "CALL public.p();",
+      // Кваліфікований виклик невідомої процедури судить ще й суддя тіла, тож
+      // процедуру моделі оголошено: ціль перевірки — лише вузол `call` голови.
+      extra: "CREATE PROCEDURE public.p() LANGUAGE sql AS $$ SELECT 1 $$;",
+      expected: [statement("call")],
+    },
     { name: "commit", body: "COMMIT;", expected: [statement("commit")] },
     {
       name: "cursor",
@@ -693,8 +712,8 @@ describe("judgeHandler: Rule 2 — a handler only checks", () => {
       body: "v := t.id FROM public.task t WHERE t.id = NEW.task_id FOR UPDATE;",
       expected: [found("query", undefined, HANDLER)],
     },
-  ])("$name", async ({ body, expected }) => {
-    expect(await handlerErrors(body)).toEqual(expected)
+  ])("$name", async ({ body, expected, extra }) => {
+    expect(await handlerErrors(body, [], extra)).toEqual(expected)
   })
 
   it("search-path", async () => {
@@ -911,26 +930,5 @@ describe("checkDomainChecks: CHECK of a domain (спека прав §5.3)", () 
     },
   ])("$name", async ({ file, sql, expected }) => {
     expect(await headErrors({ [file]: sql })).toEqual(expected)
-  })
-})
-
-describe("checkHeads: model functions shadowed by a debt extension (спека прав §5.3)", () => {
-  // Функція розширення в схемі застосунку перевантажила б функцію-запит з
-  // тим самим ім'ям, а функцій розширень серед одиниць немає.
-  const QUERY = sqlFunction("public.f", "SELECT NULL::uuid")
-  it.each<{ extension: string; expected: Finding[] }>([
-    { extension: "SCHEMA extensions", expected: [] },
-    {
-      extension: "SCHEMA public",
-      expected: [found("call", "public.f", SET_FUNCTION)],
-    },
-    { extension: "", expected: [found("call", "public.f", SET_FUNCTION)] },
-  ])("extension $extension", async ({ extension, expected }) => {
-    expect(
-      await headErrors({
-        [SCOPE_FUNCTIONS_FILE]: setFunction("SELECT public.f()") + QUERY,
-        "sql/public/extensions.sql": `CREATE EXTENSION pgcrypto ${extension};\n`,
-      })
-    ).toEqual(expected)
   })
 })

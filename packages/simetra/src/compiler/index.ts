@@ -101,11 +101,11 @@ export {
   ownsTarget,
   platformGrantTargets,
 } from "./function-execute"
+export { extensionSchema } from "./sql/closed-forms"
 export { loadPlpgsqlParser, type PlpgsqlParser } from "./sql/plpgsql"
 export {
   statementTargets,
-  triggerFunctionSchema,
-  triggerWhenFunctionSchemas,
+  triggerFunctionCalls,
   unitPlacement,
   unitSubjectKeys,
   unitTarget,

@@ -100,6 +100,42 @@ describe("debt ratchet: sql-debt.json", () => {
     ).toEqual([])
   })
 
+  it("a view that writes a kind table is never debt, listed or not", async () => {
+    // Подання без `security_invoker` над таблицею виду — шлях запису
+    // (спека прав §6.1, форма `view`): помилка в будь-якому файлі, тож запис у
+    // переліку застарілий, а неперелічене не дає `sql.debt-grows`.
+    const view = "CREATE VIEW public.v AS SELECT id FROM public.sale;"
+    expect(
+      (await diagnostics({ [SHARED_SQL]: view })).map((d) => [
+        d.code,
+        d.params?.form,
+      ])
+    ).toEqual([["sql.kind-table-verbatim", "view"]])
+    expect(
+      (
+        await diagnostics({
+          [SHARED_SQL]: view,
+          [DEBT]: debt(["view:public.v"]),
+        })
+      )
+        .map((d) => d.code)
+        .sort()
+    ).toEqual(["sql.debt-stale", "sql.kind-table-verbatim"])
+  })
+
+  it("a view that writes no kind table stays debt", async () => {
+    // Те саме подання з `security_invoker` шляхом запису не є: це звичайний
+    // борг, який ратчет рахує.
+    const view =
+      "CREATE VIEW public.v WITH (security_invoker = true) AS SELECT id FROM public.sale;"
+    expect(
+      (await diagnostics({ [SHARED_SQL]: view })).map((d) => [
+        d.code,
+        d.params?.identity,
+      ])
+    ).toEqual([["sql.debt-grows", "view:public.v"]])
+  })
+
   it("functions in the closed shell are never debt", async () => {
     // Функція в оболонці проходить і в модулі боргу, і в спільному файлі;
     // функція поза оболонкою там — борг.
