@@ -1,7 +1,592 @@
-import type { AccessPriv, GrantStmt, Node, RoleSpec } from "libpg-query"
-import type { SqlParser } from "./parse"
-import { unitTargets } from "./unit-target"
-import type { SqlUnit } from "./units"
+import type {
+  AccessPriv,
+  GrantStmt,
+  Node,
+  RangeVar,
+  RoleSpec,
+} from "libpg-query"
+import {
+  PLATFORM_SCHEMA,
+  PROVIDER_API_ROLES,
+  PROVIDER_IDENTITY_SOURCES,
+  PROVIDER_OWNER_ROLES,
+  type DatabaseProvider,
+} from "simetra/model"
+import { ROW_VERSION_SEQUENCE } from "../mechanics-units"
+import { isSecurityInvoker } from "./definer-reads"
+import {
+  PUBLIC,
+  WRITE_PRIVILEGES,
+  grantFacts,
+  privilegedRoles,
+} from "./grant-facts"
+import { modelViews, routineBody, type ModelView } from "./function-body"
+import {
+  kindTableNamed,
+  ruleOneTables,
+  writtenKindTable,
+  type KindTables,
+} from "./kind-tables"
+import { relationNameText, type SqlParser } from "./parse"
+import type { PlpgsqlParser } from "./plpgsql"
+import {
+  bodyStatementTargets,
+  statementTargets,
+  unitTargets,
+} from "./unit-target"
+import type { SqlUnit, VerbatimUnit } from "./units"
+
+/** Форма шляху запису (спека прав §6.1, підрозділ «Шляхи запису й посилання на функції»). */
+export type WriteForm =
+  | "functionBody"
+  | "view"
+  | "grant"
+  | "defaultPrivileges"
+  | "policy"
+  | "trigger"
+  | "sequence"
+
+/**
+ * Шлях запису в ціль Правила 1: одиниця, форма, ціль і ролі, що дістають
+ * запис. Правило 1, гейти промоції й виняток знімка фільтрують цей перелік,
+ * а не будують власного обходу.
+ */
+export interface WritePath {
+  unit: VerbatimUnit
+  form: WriteForm
+  /**
+   * `схема.ім'я` таблиці чи послідовності; `*` — ціль, яку статично не назвати
+   * (глобальне ADP, нелітеральний аргумент `setval`), `схема.*` — ADP схеми.
+   */
+  target: string
+  /** Ролі, що дістають запис цим шляхом (`PUBLIC` чи ім'я ролі); для форм без ролей порожньо. */
+  roles: readonly string[]
+  /** `functionBody`: вузол оператора; `sequence`: `setval` чи `nextval`. */
+  statement?: string
+}
+
+export interface WritePathContext {
+  /** Таблиці видів знімка — ціль форм `policy`/`trigger`; основа `ruleOneTables`. */
+  kind: KindTables
+  provider: DatabaseProvider | undefined
+  parse: SqlParser
+  plpgsql: PlpgsqlParser
+}
+
+/**
+ * Усі шляхи, якими одиниці SQL застосунку пишуть ціль Правила 1: таблицю виду,
+ * джерело ідентичностей, відношення схеми `simetra` (спека прав §6.1). Невідоме
+ * значення опції, ім'я без схеми й ціль поза знімком судяться як найгірший
+ * випадок. Одиниця дає не більше одного шляху кожної форми.
+ */
+export function writePaths(
+  units: readonly VerbatimUnit[],
+  ctx: WritePathContext
+): WritePath[] {
+  const written = ruleOneTables(ctx.kind, ctx.provider)
+  const views = modelViews(units)
+  const grants = grantFacts(units, ctx.parse)
+  const adp = defaultPrivilegeFacts(units)
+  const identity = ctx.provider && PROVIDER_IDENTITY_SOURCES[ctx.provider].table
+  const identityTables: KindTables | undefined =
+    identity === undefined
+      ? undefined
+      : {
+          qualified: new Set([`${identity.schema}.${identity.name}`]),
+          byName: new Map([
+            [identity.name, [`${identity.schema}.${identity.name}`]],
+          ]),
+          bySchema: new Map([
+            [identity.schema, [`${identity.schema}.${identity.name}`]],
+          ]),
+        }
+  const apiRoles = apiRolesOf(ctx.provider)
+  const owner = ctx.provider && PROVIDER_OWNER_ROLES[ctx.provider]
+  const writers = (view: ModelView): string[] => {
+    const key = `table|${view.schema}.${view.name}`
+    const named = [
+      ...new Set(
+        grants
+          .filter((f) => f.grant && f.keys.includes(key))
+          .flatMap((f) => [...f.roles])
+      ),
+    ].filter((r) => r !== PUBLIC && !apiRoles.includes(r))
+    const direct = privilegedRoles(
+      (k) => k === key,
+      "write",
+      grants,
+      apiRoles,
+      named
+    )
+    // ADP схеми ставить рушій перед вузлами схеми, тож порядок операторів не
+    // має значення (`defaultPrivilegeEdges`).
+    const fromAdp = adp.flatMap((f) =>
+      f.write && f.schemas.includes(view.schema) ? f.grantees : []
+    )
+    return [...new Set([...direct, ...fromAdp])].filter((r) => r !== owner)
+  }
+  return units.flatMap((unit): WritePath[] => {
+    switch (unit.class) {
+      case "function":
+      case "procedure":
+        return [
+          ...optional(functionBodyPath(unit, written, views, ctx)),
+          ...optional(sequencePath(unit, ctx)),
+        ]
+      case "policy":
+      case "trigger":
+        return optional(policyTriggerPath(unit, ctx.kind, identityTables))
+      case "view":
+        return optional(viewPath(unit, written, views, writers, ctx))
+      case "grant":
+        return optional(grantPath(unit, written, owner))
+      case "defaultPrivileges":
+        return optional(defaultPrivilegesPath(unit, adp, apiRoles, ctx))
+      default:
+        return []
+    }
+  })
+}
+
+const optional = <T>(value: T | undefined): T[] =>
+  value === undefined ? [] : [value]
+
+/** Ролі API профілю — ті, що мають значення (`null` у профілі — ролі немає). */
+function apiRolesOf(provider: DatabaseProvider | undefined): string[] {
+  if (provider === undefined) return []
+  return Object.values(PROVIDER_API_ROLES[provider]).filter(
+    (role): role is string => typeof role === "string"
+  )
+}
+
+function functionBodyPath(
+  unit: VerbatimUnit,
+  written: KindTables,
+  views: readonly ModelView[],
+  ctx: WritePathContext
+): WritePath | undefined {
+  const hit = bodyKindTable(unit, written, ctx.parse, ctx.plpgsql, views)
+  return hit === undefined
+    ? undefined
+    : {
+        unit,
+        form: "functionBody",
+        target: hit.table,
+        roles: [],
+        statement: hit.statement,
+      }
+}
+
+/** Оператор тіла функції, що пише таблицю виду, і ця таблиця. */
+export interface BodyKindTable {
+  table: string
+  /** Вузол оператора в дереві розбору: `InsertStmt`, `UpdateStmt`… */
+  statement: string
+}
+
+/**
+ * Перший DML тіла функції чи процедури, чия ціль (`bodyStatementTargets`) —
+ * таблиця з `tables` (Правило 1, спека прав §6.1); інший клас чи тіло без такого
+ * оператора — `undefined`. Судяться оператори, які тіло виконує
+ * (`routineBody`), і вкладені в них. Ціль, що є поданням моделі,
+ * розгортається до кожного відношення його визначення, рекурсивно: Postgres
+ * переписує запис в автооновлюване подання на базову таблицю, а котре
+ * відношення базове, без каталогу не видно (fail-closed).
+ */
+export function bodyKindTable(
+  unit: Pick<VerbatimUnit, "class" | "schema" | "sql" | "tree">,
+  tables: KindTables,
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser,
+  views: readonly ModelView[]
+): BodyKindTable | undefined {
+  if (unit.class !== "function" && unit.class !== "procedure") return undefined
+  if (tables.qualified.size === 0) return undefined
+  const body = routineBody(unit.tree as Node, unit.sql, parse, plpgsql)
+  for (const { stmt } of body.statements) {
+    for (const target of bodyStatementTargets(stmt, "")) {
+      const table = writtenKindTable(
+        target,
+        unit.schema,
+        tables,
+        views,
+        parse,
+        new Set()
+      )
+      if (table !== undefined)
+        return { table, statement: Object.keys(stmt)[0] ?? "" }
+    }
+  }
+  return undefined
+}
+
+const SEQUENCE_FUNCTIONS: ReadonlySet<string> = new Set(["setval", "nextval"])
+
+/**
+ * Перший виклик `setval`/`nextval` у тілі, що змінює послідовність платформи
+ * (Р4б): літерал, який називає послідовність у `simetra` (некваліфіковане ім'я
+ * платформної послідовності — теж: шлях пошуку сесії може вести в `simetra`), чи
+ * нелітеральний аргумент, який статично не прочитати.
+ */
+function sequencePath(
+  unit: VerbatimUnit,
+  ctx: WritePathContext
+): WritePath | undefined {
+  const body = routineBody(unit.tree as Node, unit.sql, ctx.parse, ctx.plpgsql)
+  const trees: unknown[] = [
+    unit.tree,
+    ...body.statements.map((s) => s.stmt),
+    ...body.values.flatMap(({ text }) => {
+      const parsed = ctx.parse(text)
+      return parsed.ok ? parsed.statements.map((s) => s.stmt) : []
+    }),
+  ]
+  for (const tree of trees) {
+    const hit = findSequenceCall(tree)
+    if (hit !== undefined)
+      return {
+        unit,
+        form: "sequence",
+        target: hit.target,
+        roles: [],
+        statement: hit.call,
+      }
+  }
+  return undefined
+}
+
+function findSequenceCall(
+  value: unknown
+): { call: string; target: string } | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = findSequenceCall(item)
+      if (hit !== undefined) return hit
+    }
+    return undefined
+  }
+  if (typeof value !== "object" || value === null) return undefined
+  const record = value as Record<string, unknown>
+  const call = record.FuncCall as
+    { funcname?: Node[]; args?: Node[] } | undefined
+  if (call !== undefined) {
+    const names = (call.funcname ?? []).map((n) =>
+      "String" in n ? (n.String.sval ?? "") : ""
+    )
+    const name = names.at(-1) ?? ""
+    const builtin =
+      names.length === 1 || (names.length === 2 && names[0] === "pg_catalog")
+    if (builtin && SEQUENCE_FUNCTIONS.has(name)) {
+      const target = sequenceTarget(call.args?.[0])
+      if (target !== undefined) return { call: name, target }
+    }
+  }
+  for (const child of Object.values(record)) {
+    const hit = findSequenceCall(child)
+    if (hit !== undefined) return hit
+  }
+  return undefined
+}
+
+/** Ціль виклику: `*` — нелітеральний аргумент; `undefined` — послідовність не платформи. */
+function sequenceTarget(arg: Node | undefined): string | undefined {
+  let node: Node | undefined = arg
+  while (node !== undefined && "TypeCast" in node) node = node.TypeCast.arg
+  const text =
+    node !== undefined && "A_Const" in node
+      ? node.A_Const.sval?.sval
+      : undefined
+  if (text === undefined) return "*"
+  const names = relationNameText(text)
+  if (names === undefined) return "*"
+  const name = names.at(-1) ?? ""
+  const schema = names.length > 1 ? names.at(-2) : undefined
+  if (schema === PLATFORM_SCHEMA) return `${schema}.${name}`
+  if (schema === undefined && name === ROW_VERSION_SEQUENCE.name)
+    return `${PLATFORM_SCHEMA}.${name}`
+  return undefined
+}
+
+/**
+ * Дослівна політика чи тригер на таблиці виду (будь-який) і на таблиці джерела
+ * ідентичностей (лише політика й тригер `BEFORE`/`INSTEAD OF`: тригер `BEFORE`
+ * змінює `NEW`, тож пише джерело без DML; `AFTER` — форма підписок платформи).
+ * Некваліфіковане ім'я — fail-closed (`kindTableNamed`).
+ */
+function policyTriggerPath(
+  unit: VerbatimUnit,
+  kind: KindTables,
+  identity: KindTables | undefined
+): WritePath | undefined {
+  const tree = unit.tree as Node
+  const form = unit.class as "policy" | "trigger"
+  const timing =
+    "CreateTrigStmt" in tree ? (tree.CreateTrigStmt.timing ?? 0) : 0
+  // TRIGGER_TYPE_BEFORE = 1 << 1, TRIGGER_TYPE_INSTEAD = 1 << 6.
+  const writesNew = form === "policy" || (timing & (2 | 64)) !== 0
+  for (const target of statementTargets(tree, "")) {
+    const table = kindTableNamed(target, unit.schema, kind)
+    if (table !== undefined) return { unit, form, target: table, roles: [] }
+    if (identity !== undefined && writesNew) {
+      const source = kindTableNamed(target, unit.schema, identity)
+      if (source !== undefined) return { unit, form, target: source, roles: [] }
+    }
+  }
+  return undefined
+}
+
+/**
+ * Подання, крізь яке пишуть ціль Правила 1 (Р3): автооновлюване за деревом (одне
+ * відношення у `FROM`, без `WITH`, `DISTINCT`, `GROUP BY`, `HAVING`,
+ * `LIMIT`/`OFFSET`, множин, агрегатів і віконних функцій у списку вибору),
+ * без `security_invoker`, з непорожніми ролями-письменниками. Невпізнана
+ * функція у списку вибору неоновлюваність не доводить (fail-closed). Ціль —
+ * `writtenKindTable` над відношенням `FROM`.
+ */
+function viewPath(
+  unit: VerbatimUnit,
+  written: KindTables,
+  views: readonly ModelView[],
+  writers: (view: ModelView) => string[],
+  ctx: WritePathContext
+): WritePath | undefined {
+  if (isSecurityInvoker(unit)) return undefined
+  const relation = updatableRelation(unit.tree as Node)
+  if (relation === undefined) return undefined
+  const table = writtenKindTable(
+    {
+      schema: relation.schemaname ?? "",
+      object: relation.relname,
+      kind: "table",
+    },
+    unit.schema,
+    written,
+    views,
+    ctx.parse,
+    new Set([`${unit.schema}.${unit.name}`])
+  )
+  if (table === undefined) return undefined
+  const roles = writers(unit)
+  return roles.length === 0
+    ? undefined
+    : { unit, form: "view", target: table, roles }
+}
+
+function updatableRelation(tree: Node): RangeVar | undefined {
+  const query = "ViewStmt" in tree ? tree.ViewStmt.query : undefined
+  const select =
+    query !== undefined && "SelectStmt" in query ? query.SelectStmt : undefined
+  if (select === undefined) return undefined
+  if (select.op !== undefined && select.op !== "SETOP_NONE") return undefined
+  if (
+    select.withClause !== undefined ||
+    select.distinctClause !== undefined ||
+    select.groupClause !== undefined ||
+    select.havingClause !== undefined ||
+    select.limitCount !== undefined ||
+    select.limitOffset !== undefined ||
+    select.windowClause !== undefined
+  )
+    return undefined
+  const from = select.fromClause ?? []
+  const only = from.length === 1 ? from[0] : undefined
+  if (only === undefined || !("RangeVar" in only)) return undefined
+  if (select.targetList?.some(aggregates) === true) return undefined
+  return only.RangeVar
+}
+
+/** Агрегат чи віконна функція у виразі списку вибору (підзапит — окремий вираз). */
+function aggregates(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(aggregates)
+  if (typeof value !== "object" || value === null) return false
+  const record = value as Record<string, unknown>
+  const call = record.FuncCall as Record<string, unknown> | undefined
+  if (
+    call !== undefined &&
+    (call.over !== undefined ||
+      call.agg_star === true ||
+      call.agg_distinct === true ||
+      call.agg_filter !== undefined ||
+      call.agg_within_group === true ||
+      call.agg_order !== undefined)
+  )
+    return true
+  return Object.entries(record).some(
+    ([key, child]) => key !== "SubLink" && aggregates(child)
+  )
+}
+
+const writesOf = (privileges: readonly Node[]) =>
+  privileges.length === 0 ||
+  privileges.some((node) => {
+    const priv = "AccessPriv" in node ? (node.AccessPriv as AccessPriv) : {}
+    const name = priv.priv_name ?? "all"
+    return name === "all" || WRITE_PRIVILEGES.has(name)
+  })
+
+/** Отримувачі гранту: `PUBLIC`, ім'я ролі чи ключове слово (`CURRENT_USER`…). */
+function granteeNames(grantees: readonly Node[] | undefined): string[] {
+  return (grantees ?? []).flatMap((n) => {
+    if (!("RoleSpec" in n)) return []
+    const spec = n.RoleSpec as RoleSpec
+    if (spec.roletype === "ROLESPEC_PUBLIC") return [PUBLIC]
+    if (spec.roletype === "ROLESPEC_CSTRING") return [spec.rolename ?? ""]
+    return [spec.roletype?.replace("ROLESPEC_", "") ?? ""]
+  })
+}
+
+/**
+ * Явний грант запису на ціль Правила 1 (Р2): помилка будь-якій ролі, крім
+ * власника. Таблиця з грантами генератора `access` — його власна діагностика
+ * `sql.generated-grant`, тож другої не дає; грант на `simetra` відмовляє
+ * `schema.reserved` ще до цього правила.
+ */
+function grantPath(
+  unit: VerbatimUnit,
+  written: KindTables,
+  owner: string | undefined
+): WritePath | undefined {
+  const grant = (unit.tree as { GrantStmt?: GrantStmt }).GrantStmt
+  if (
+    grant === undefined ||
+    grant.is_grant !== true ||
+    grant.objtype !== "OBJECT_TABLE" ||
+    !writesOf(grant.privileges ?? [])
+  )
+    return undefined
+  const roles = granteeNames(grant.grantees).filter(
+    (r) => r !== owner && r !== "CURRENT_USER" && r !== "SESSION_USER"
+  )
+  if (roles.length === 0) return undefined
+  // Некваліфіковане ім'я — fail-closed: ціль береться з дерева без схеми
+  // файлу, а не з `unit.schema`, як у політики й тригера.
+  for (const target of statementTargets(unit.tree as Node, "")) {
+    const table = kindTableNamed(target, unit.schema, written)
+    if (table === undefined) continue
+    if (
+      target.kind !== "schema" &&
+      written.generatedGrants?.has(table) === true
+    )
+      continue
+    return { unit, form: "grant", target: table, roles }
+  }
+  return undefined
+}
+
+/** `ALTER DEFAULT PRIVILEGES … GRANT` застосунку: що, кому, де. */
+interface DefaultPrivilegeFact {
+  unit: VerbatimUnit
+  objtype: string
+  /** Схеми `IN SCHEMA`; порожньо — глобальне ADP. */
+  schemas: readonly string[]
+  /** `FOR ROLE`: імена; `undefined` — не названо. */
+  forRoles: readonly string[] | undefined
+  grantees: readonly string[]
+  grantOption: boolean
+  /** Привілей запису на `TABLES`. */
+  write: boolean
+}
+
+interface DefaultPrivilegesTree {
+  options?: { DefElem?: { defname?: string; arg?: Node } }[]
+  action?: GrantStmt
+}
+
+function defaultPrivilegeFacts(
+  units: readonly VerbatimUnit[]
+): DefaultPrivilegeFact[] {
+  return units.flatMap((unit) => {
+    const stmt = (
+      unit.tree as { AlterDefaultPrivilegesStmt?: DefaultPrivilegesTree }
+    ).AlterDefaultPrivilegesStmt
+    if (
+      unit.class !== "defaultPrivileges" ||
+      stmt?.action === undefined ||
+      stmt.action.is_grant !== true
+    )
+      return []
+    const items = (name: string): Node[] | undefined => {
+      const arg = (stmt.options ?? []).find((o) => o.DefElem?.defname === name)
+        ?.DefElem?.arg
+      return arg !== undefined && "List" in arg
+        ? (arg.List.items ?? [])
+        : undefined
+    }
+    const roles = items("roles")
+    return [
+      {
+        unit,
+        objtype: stmt.action.objtype ?? "",
+        schemas: (items("schemas") ?? []).map((n) =>
+          "String" in n ? (n.String.sval ?? "") : ""
+        ),
+        forRoles: roles === undefined ? undefined : granteeNames(roles),
+        grantees: granteeNames(stmt.action.grantees),
+        grantOption: stmt.action.grant_option === true,
+        write:
+          stmt.action.objtype === "OBJECT_TABLE" &&
+          writesOf(stmt.action.privileges ?? []),
+      },
+    ]
+  })
+}
+
+/** Класи об'єктів правила ADP; `FUNCTIONS`/`ROUTINES` судить `sql.default-privileges-execute`. */
+const DEFAULT_PRIVILEGE_CLASSES: ReadonlySet<string> = new Set([
+  "OBJECT_TABLE",
+  "OBJECT_SEQUENCE",
+  "OBJECT_TYPE",
+  "OBJECT_SCHEMA",
+])
+
+/**
+ * ACL того, що створює платформа, належить платформі (Р4): `GRANT`-форма ADP
+ * на `TABLES`/`SEQUENCES`/`TYPES`/`SCHEMAS`. Глобальне ADP — помилка будь-якого
+ * отримувача (воно досягає й `simetra`). ADP `IN SCHEMA` називає лише ролі API;
+ * отримувач поза ними — лише коли `FOR ROLE` називає рівно його одного або
+ * `FOR ROLE` немає, а кожен отримувач — власник чи роль API (так виглядає ADP
+ * провайдера в керованій схемі); право передачі (`WITH GRANT OPTION`) — помилка.
+ * Ролі шляху — отримувачі, що судяться.
+ */
+function defaultPrivilegesPath(
+  unit: VerbatimUnit,
+  facts: readonly DefaultPrivilegeFact[],
+  apiRoles: readonly string[],
+  ctx: WritePathContext
+): WritePath | undefined {
+  const fact = facts.find((f) => f.unit === unit)
+  if (fact === undefined || !DEFAULT_PRIVILEGE_CLASSES.has(fact.objtype))
+    return undefined
+  const target =
+    fact.schemas.length === 0
+      ? "*"
+      : fact.schemas.map((s) => `${s}.*`).join(", ")
+  if (fact.schemas.length === 0 || fact.grantOption)
+    return { unit, form: "defaultPrivileges", target, roles: fact.grantees }
+  const owner = ctx.provider && PROVIDER_OWNER_ROLES[ctx.provider]
+  const outside = fact.grantees.filter((r) => !apiRoles.includes(r))
+  const providerPreset =
+    fact.forRoles === undefined &&
+    fact.grantees.every((r) => r === owner || apiRoles.includes(r))
+  const bad = providerPreset
+    ? []
+    : outside.filter(
+        (r) => !(fact.forRoles?.length === 1 && fact.forRoles[0] === r)
+      )
+  return bad.length === 0
+    ? undefined
+    : { unit, form: "defaultPrivileges", target, roles: bad }
+}
+
+// Гейт промоції й виняток знімка ще читають гранти цим розбором; перелічувач
+// його замінить (задача 2 плану #275).
+/** Привілеї без `TRIGGER`: так судить гейт промоції до переходу на перелічувач. */
+const LEGACY_WRITE_PRIVILEGES: ReadonlySet<string> = new Set([
+  "insert",
+  "update",
+  "delete",
+  "truncate",
+])
 
 /** Таблиця у фізичних іменах. */
 export interface QualifiedTable {
@@ -16,14 +601,6 @@ export interface WriteGrantPath<U> {
   /** `GRANT …` чи типові привілеї схеми — текст для повідомлення. */
   detail: string
 }
-
-/** Привілеї, що відкривають запис у таблицю (`ALL` їх містить). */
-const WRITE_PRIVILEGES: ReadonlySet<string> = new Set([
-  "insert",
-  "update",
-  "delete",
-  "truncate",
-])
 
 /**
  * Гранти запису в таблиці `tables` ролям `roles` чи `PUBLIC` — спільний
@@ -113,7 +690,7 @@ function writeGrant(
       : privileges
           // `ALL (колонки)` — привілей без імені з переліком колонок.
           .map((p) => p.priv_name ?? "all")
-          .filter((p) => p === "all" || WRITE_PRIVILEGES.has(p))
+          .filter((p) => p === "all" || LEGACY_WRITE_PRIVILEGES.has(p))
           .map((p) => p.toUpperCase())
   if (writes.length === 0) return undefined
   return `${writes.join(", ")} TO ${named.join(", ")}`

@@ -7,10 +7,14 @@ import {
 import type { CompiledModel } from "../../compile"
 import { diagnostic, type Diagnostic } from "../../diagnostics"
 import { modelViews } from "../../sql/function-body"
-import { bodyKindTable, type KindTables } from "../../sql/kind-table-verbatim"
+import type { KindTables } from "../../sql/kind-tables"
 import type { SqlParser } from "../../sql/parse"
 import type { PlpgsqlParser } from "../../sql/plpgsql"
-import { writeGrantPaths, type QualifiedTable } from "../../sql/write-paths"
+import {
+  bodyKindTable,
+  writeGrantPaths,
+  type QualifiedTable,
+} from "../../sql/write-paths"
 import type { PromotedTable } from "./mapping"
 
 /** Таблиця у фізичних іменах до промоції. */

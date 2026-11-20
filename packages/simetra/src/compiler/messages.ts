@@ -707,6 +707,94 @@ function exemptWriterHint(p: DiagnosticParams): { en: string; uk: string } {
   }
 }
 
+/** Текст `sql.kind-table-verbatim` за формою шляху запису (Правило 1, спека прав §6.1). */
+function kindTableVerbatim(p: Record<string, unknown>): {
+  en: string
+  uk: string
+} {
+  const platform = String(p.table).startsWith(`${PLATFORM_SCHEMA}.`)
+  const noun = {
+    en: platform ? "a table of the platform schema" : "a table of a kind",
+    uk: platform ? "таблицею схеми платформи" : "таблицею виду",
+  }
+  switch (p.form) {
+    case "functionBody":
+      return {
+        en: `Function ${p.function} at line ${p.line} runs ${p.statement} on ${p.table}, ${noun.en}`,
+        uk: `Функція ${p.function} у рядку ${p.line} виконує ${p.statement} над ${p.table} — ${noun.uk}`,
+      }
+    case "sequence":
+      return {
+        en:
+          p.table === "*"
+            ? `Function ${p.function} at line ${p.line} calls ${p.statement} with an argument that is not a literal, so the sequence it changes is unknown`
+            : `Function ${p.function} at line ${p.line} calls ${p.statement} on ${p.table}, a sequence of the platform`,
+        uk:
+          p.table === "*"
+            ? `Функція ${p.function} у рядку ${p.line} викликає ${p.statement} з нелітеральним аргументом, тож змінювана послідовність невідома`
+            : `Функція ${p.function} у рядку ${p.line} викликає ${p.statement} над ${p.table} — послідовністю платформи`,
+      }
+    case "view":
+      return {
+        en: `View ${p.identity} at line ${p.line} writes ${p.table}, a table of a kind or of the platform, for ${p.roles}`,
+        uk: `Подання ${p.identity} у рядку ${p.line} пише ${p.table} — таблицю виду чи платформи — для ${p.roles}`,
+      }
+    case "grant":
+      return {
+        en: `Grant ${p.identity} at line ${p.line} gives ${p.roles} write access to ${p.table}`,
+        uk: `Грант ${p.identity} у рядку ${p.line} відкриває ${p.roles} запис у ${p.table}`,
+      }
+    case "defaultPrivileges":
+      return {
+        en: `Default privileges ${p.identity} at line ${p.line} grant privileges on objects the platform creates (${p.table}) to ${p.roles}`,
+        uk: `Типові привілеї ${p.identity} у рядку ${p.line} дають привілеї на об'єкти, які створює платформа (${p.table}), ролям ${p.roles}`,
+      }
+    default:
+      return {
+        en: `Verbatim ${p.form === "trigger" ? "trigger" : "policy"} ${p.identity} at line ${p.line} is on ${p.table}, a table of a kind`,
+        uk: `${p.form === "trigger" ? "Дослівний тригер" : "Дослівна політика"} ${p.identity} у рядку ${p.line} стоїть на ${p.table} — таблиці виду`,
+      }
+  }
+}
+
+function kindTableVerbatimHint(p: Record<string, unknown>): {
+  en: string
+  uk: string
+} {
+  switch (p.form) {
+    case "functionBody":
+      return {
+        en: "Only the platform writes a table of a kind: the command core, the posting shell and the platform's triggers. INSERT, UPDATE, DELETE or MERGE by application SQL, also through a view of the model or in the text of a literal EXECUTE, would change its rows past the rights, the movements and the checks of a command, so such a function is never SQL debt and sql-debt.json cannot list it. The same holds for the identity table of the database provider and for every table of the platform schema simetra: its apply state, receipts and signal queue change only through the platform. Reading and locking the rows (SELECT, SELECT … FOR UPDATE, LOCK) stays allowed. Run the change as a command of the object, or write it in a TypeScript hook.",
+        uk: "Таблицю виду пише лише платформа: ядро команд, оболонка проведення й тригери платформи. INSERT, UPDATE, DELETE чи MERGE з SQL застосунку, зокрема через подання моделі чи в тексті літерального EXECUTE, змінили б її рядки повз права, рухи й перевірки команди, тож така функція ніколи не є боргом дослівного SQL, і sql-debt.json її не перелічує. Те саме стосується таблиці ідентичностей провайдера бази й кожної таблиці схеми платформи simetra: її стан застосування, квитанції й черга сигналів змінюються лише через платформу. Читати й блокувати рядки (SELECT, SELECT … FOR UPDATE, LOCK) дозволено. Виконайте зміну командою об'єкта або запишіть її в TypeScript-хуку.",
+      }
+    case "sequence":
+      return {
+        en: "setval and nextval change a sequence even from a read-only looking body, and a SECURITY DEFINER function does it as the owner. Sequences of the platform change only through the platform; name only the sequences of your own with a literal.",
+        uk: "setval і nextval змінюють послідовність навіть із тіла, що виглядає читанням, а функція SECURITY DEFINER робить це від імені власника. Послідовності платформи змінює лише платформа; називайте літералом лише власні послідовності.",
+      }
+    case "view":
+      return {
+        en: "Postgres rewrites a write into an updatable view onto its base table with the privileges of the view owner, so the roles that can write the view write the table past the rights of a command. Add security_invoker = true to the view, or revoke INSERT, UPDATE and DELETE on it from the roles of the API.",
+        uk: "Postgres переписує запис в автооновлюване подання на базову таблицю з правами власника подання, тож ролі, що можуть писати в подання, пишуть таблицю повз права команди. Додайте до подання security_invoker = true або відкличте INSERT, UPDATE і DELETE на ньому в ролей API.",
+      }
+    case "grant":
+      return {
+        en: "Roles other than the owner get privileges on objects of the platform only from the generator. Remove the grant: the platform writes the table through the command core.",
+        uk: "Ролі, крім власника, отримують привілеї на об'єкти платформи лише від генератора. Приберіть грант: таблицю пише платформа через ядро команд.",
+      }
+    case "defaultPrivileges":
+      return {
+        en: "Default privileges reach objects the platform creates later, and the platform owns their ACL. Remove the statement; only the roles of the API may be named in a schema-wide statement without a grant option, and a global one is never allowed. A REVOKE form is allowed.",
+        uk: "Типові привілеї діють на об'єкти, які платформа створює пізніше, а їхній ACL належить платформі. Приберіть оператор; у схемному операторі без права передачі можна називати лише ролі API, глобальний не дозволено ніколи. Форма REVOKE дозволена.",
+      }
+    default:
+      return {
+        en: `Only the platform attaches policies and triggers to a table of a kind, in any .sql file: a hand-written one would open rows past the rights or act inside every command. On the identity source of the provider only an AFTER trigger is allowed. Such a statement is never SQL debt, so sql-debt.json cannot list it. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).en}`,
+        uk: `Політики й тригери на таблицю виду ставить лише платформа, у будь-якому файлі .sql: написані вручну відкрили б рядки повз права чи діяли б усередині кожної команди. На джерелі ідентичностей провайдера дозволено лише тригер AFTER. Такий оператор ніколи не є боргом дослівного SQL, тож sql-debt.json його не перелічує. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).uk}`,
+      }
+  }
+}
+
 /**
  * Каталог текстів за кодом правила (спека П2 §8.4): англійські обов'язкові,
  * українські стоять поруч в одному записі. Тип `Record<RuleCode, …>` робить
@@ -1101,23 +1189,11 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   // політики й тригера — та сама, що підказує модуль виду, а тілу підказка
   // називає, хто пише таблицю виду.
   "sql.kind-table-verbatim": {
-    en: (p) =>
-      p.form === "functionBody"
-        ? `Function ${p.function} at line ${p.line} runs ${p.statement} on ${p.table}, ${String(p.table).startsWith(`${PLATFORM_SCHEMA}.`) ? "a table of the platform schema" : "a table of a kind"}`
-        : `Verbatim ${p.form === "trigger" ? "trigger" : "policy"} ${p.identity} at line ${p.line} is on ${p.table}, a table of a kind`,
-    uk: (p) =>
-      p.form === "functionBody"
-        ? `Функція ${p.function} у рядку ${p.line} виконує ${p.statement} над ${p.table} — ${String(p.table).startsWith(`${PLATFORM_SCHEMA}.`) ? "таблицею схеми платформи" : "таблицею виду"}`
-        : `${p.form === "trigger" ? "Дослівний тригер" : "Дослівна політика"} ${p.identity} у рядку ${p.line} стоїть на ${p.table} — таблиці виду`,
+    en: (p) => kindTableVerbatim(p).en,
+    uk: (p) => kindTableVerbatim(p).uk,
     hint: {
-      en: (p) =>
-        p.form === "functionBody"
-          ? "Only the platform writes a table of a kind: the command core, the posting shell and the platform's triggers. INSERT, UPDATE, DELETE or MERGE by application SQL, also through a view of the model or in the text of a literal EXECUTE, would change its rows past the rights, the movements and the checks of a command, so such a function is never SQL debt and sql-debt.json cannot list it. The same holds for the identity table of the database provider and for every table of the platform schema simetra: its apply state, receipts and signal queue change only through the platform. Reading and locking the rows (SELECT, SELECT … FOR UPDATE, LOCK) stays allowed. Run the change as a command of the object, or write it in a TypeScript hook."
-          : `Only the platform attaches policies and triggers to a table of a kind, in any .sql file: a hand-written one would open rows past the rights or act inside every command. Such a statement is never SQL debt, so sql-debt.json cannot list it. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).en}`,
-      uk: (p) =>
-        p.form === "functionBody"
-          ? "Таблицю виду пише лише платформа: ядро команд, оболонка проведення й тригери платформи. INSERT, UPDATE, DELETE чи MERGE з SQL застосунку, зокрема через подання моделі чи в тексті літерального EXECUTE, змінили б її рядки повз права, рухи й перевірки команди, тож така функція ніколи не є боргом дослівного SQL, і sql-debt.json її не перелічує. Те саме стосується таблиці ідентичностей провайдера бази й кожної таблиці схеми платформи simetra: її стан застосування, квитанції й черга сигналів змінюються лише через платформу. Читати й блокувати рядки (SELECT, SELECT … FOR UPDATE, LOCK) дозволено. Виконайте зміну командою об'єкта або запишіть її в TypeScript-хуку."
-          : `Політики й тригери на таблицю виду ставить лише платформа, у будь-якому файлі .sql: написані вручну відкрили б рядки повз права чи діяли б усередині кожної команди. Такий оператор ніколи не є боргом дослівного SQL, тож sql-debt.json його не перелічує. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).uk}`,
+      en: (p) => kindTableVerbatimHint(p).en,
+      uk: (p) => kindTableVerbatimHint(p).uk,
     },
   },
   "sql.function-body-statement": {

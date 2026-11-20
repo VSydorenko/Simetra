@@ -8,16 +8,12 @@ import {
   isTriggerFunction,
 } from "../sql/definer-reads"
 import { modelViews } from "../sql/function-body"
-import {
-  bodyKindTable,
-  viewWrittenTable,
-  type KindTables,
-} from "../sql/kind-table-verbatim"
+import { viewWrittenTable, type KindTables } from "../sql/kind-tables"
 import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
 import { reachableUnits } from "../sql/reads"
 import type { VerbatimUnit } from "../sql/units"
-import { writeGrantPaths } from "../sql/write-paths"
+import { bodyKindTable, writeGrantPaths } from "../sql/write-paths"
 import type { SnapshotSources } from "./snapshot-sources"
 
 const key = (name: { schema: string; name: string }) =>

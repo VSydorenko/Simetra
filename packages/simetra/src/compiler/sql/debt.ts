@@ -9,16 +9,12 @@ import {
   modelViews,
   type ModelView,
 } from "./function-body"
-import {
-  bodyKindTable,
-  kindTableOf,
-  ruleOneTables,
-  type KindTables,
-} from "./kind-table-verbatim"
+import type { KindTables } from "./kind-tables"
 import type { SqlParser } from "./parse"
 import type { DeclaredFunction } from "./declarations"
 import type { PlpgsqlParser } from "./plpgsql"
 import type { VerbatimUnit } from "./units"
+import { writePaths } from "./write-paths"
 
 /**
  * Ідентичності одиниць боргу (спека П2 §8.6), відсортовані:
@@ -87,14 +83,21 @@ export function debtPredicate(
   )
   const ruled = ruledFunctions(objects, project)
   const declaredUnits = new Set(declared.map((d) => d.unit))
-  const written = ruleOneTables(kindTables, project?.database.provider)
+  // Одиниця з помилкою Правила 1 — будь-якого шляху запису — боргом не є.
+  const writing = new Set(
+    writePaths(units, {
+      kind: kindTables,
+      provider: project?.database.provider,
+      parse,
+      plpgsql,
+    }).map((path) => path.unit)
+  )
   const calls = providerCalls(project?.database.provider, units)
   return (unit) =>
     (unit.ownerFile === undefined || debtOwners.has(unit.ownerFile)) &&
     !(unit.class === "function" && ruled.has(unit.identity)) &&
     !declaredUnits.has(unit) &&
-    kindTableOf(unit, kindTables) === undefined &&
-    bodyKindTable(unit, written, parse, plpgsql, views) === undefined &&
+    !writing.has(unit) &&
     bodyStatementProblem(unit, parse, plpgsql, views, calls) === undefined &&
     !(
       unit.class === "function" &&

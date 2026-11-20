@@ -383,13 +383,13 @@ describe("creation order", () => {
       [CODES]: codes([]),
       [MISC]: [
         "CREATE SEQUENCE z.s;",
-        "ALTER DEFAULT PRIVILEGES FOR ROLE postgres GRANT SELECT ON TABLES TO anon;",
+        "ALTER DEFAULT PRIVILEGES FOR ROLE postgres REVOKE SELECT ON TABLES FROM anon;",
         'CREATE EXTENSION "uuid-ossp" SCHEMA extensions;',
       ].join("\n"),
     })
     expect(list).toEqual([
       "extension:uuid-ossp",
-      "defaultPrivileges:postgres::table:grant:anon:select",
+      "defaultPrivileges:postgres::table:revoke:anon:select",
       "table:public.codes",
       "sequence:z.s",
     ])

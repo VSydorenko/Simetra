@@ -190,7 +190,7 @@ describe("engine.out-of-scope", () => {
 
   it("global default privileges", async () => {
     const [message, ...rest] = await outOfScope(
-      "ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO anon;\n"
+      "ALTER DEFAULT PRIVILEGES REVOKE SELECT ON TABLES FROM anon;\n"
     )
     expect(rest).toEqual([])
     expect(message).toMatch(/^defaultPrivileges:/)

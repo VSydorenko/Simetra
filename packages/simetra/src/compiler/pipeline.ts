@@ -111,7 +111,8 @@ import {
   expressionScope,
   type ExpressionScope,
 } from "./sql/expression-calls"
-import { checkKindTableVerbatim, kindTables } from "./sql/kind-table-verbatim"
+import { checkKindTableVerbatim } from "./sql/kind-table-verbatim"
+import { kindTables } from "./sql/kind-tables"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { copyColumns } from "./copy-columns"
 import { buildSchemaUsageUnits } from "./schema-usage"

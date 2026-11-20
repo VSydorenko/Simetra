@@ -292,7 +292,7 @@ describe("checkHeads: Rule 3 — query functions", () => {
       name: "view",
       sql:
         setFunction("SELECT v.id FROM public.v v") +
-        "CREATE VIEW public.v AS SELECT t.id FROM public.task t;\n",
+        "CREATE VIEW public.v WITH (security_invoker = true) AS SELECT t.id FROM public.task t;\n",
       expected: [],
     },
     {
@@ -300,14 +300,14 @@ describe("checkHeads: Rule 3 — query functions", () => {
       name: "bound-unqualified",
       sql:
         setFunction("SELECT v.id FROM public.v v") +
-        "CREATE VIEW public.v AS SELECT t.id FROM public.task t WHERE lower(t.id::text) <> '';\n",
+        "CREATE VIEW public.v WITH (security_invoker = true) AS SELECT t.id FROM public.task t WHERE lower(t.id::text) <> '';\n",
       expected: [found("unqualified", "lower", SET_FUNCTION, "public.v")],
     },
     {
       name: "view calling a function outside the allowlist",
       sql:
         setFunction("SELECT v.id FROM public.v v") +
-        "CREATE VIEW public.v AS SELECT t.id FROM public.task t WHERE extensions.gen_random_bytes(16) IS NOT NULL;\n",
+        "CREATE VIEW public.v WITH (security_invoker = true) AS SELECT t.id FROM public.task t WHERE extensions.gen_random_bytes(16) IS NOT NULL;\n",
       expected: [
         found("call", "extensions.gen_random_bytes", SET_FUNCTION, "public.v"),
       ],
@@ -317,7 +317,7 @@ describe("checkHeads: Rule 3 — query functions", () => {
       name: "attribute-call",
       sql:
         setFunction("SELECT v.id FROM public.v v") +
-        "CREATE VIEW public.v AS SELECT n.id, n.evil FROM public.task_notes n;\n" +
+        "CREATE VIEW public.v WITH (security_invoker = true) AS SELECT n.id, n.evil FROM public.task_notes n;\n" +
         plpgsqlFunction("public.evil", "n public.task_notes", "uuid"),
       expected: [
         found("language", undefined, SET_FUNCTION, "public.v", "public.evil"),
