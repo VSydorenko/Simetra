@@ -1,5 +1,6 @@
 import type { Node } from "libpg-query"
 import {
+  PLATFORM_SCHEMA,
   PROTECTED_SESSION_SETTINGS,
   PROVIDER_EXPRESSION_FUNCTIONS,
   PROVIDER_FUNCTIONS,
@@ -154,6 +155,17 @@ export interface ProviderCalls {
   allowed: ReadonlySet<string>
   /** Усі одиниці: ефективний `search_path` функції залежить від її `ALTER FUNCTION`. */
   units: readonly VerbatimUnit[]
+  /**
+   * `схема.ім'я` функцій, процедур і агрегатів моделі поза схемами провайдера
+   * й `pg_catalog` (`modelCallNames`): збіг з ними рятує кваліфікований виклик.
+   */
+  models: ReadonlySet<string>
+  /**
+   * Згенеровані функції схем застосунку: їх судить `sql.platform-function-call`
+   * (спека прав §5.3), тож друга діагностика була б шумом. Зі знімка — порожньо,
+   * коли його немає.
+   */
+  generated: ReadonlySet<string>
 }
 
 const BUILTIN_NAMES: ReadonlySet<string> = new Set(BUILTIN_FUNCTIONS)
@@ -164,13 +176,44 @@ function isBuiltin(name: string): boolean {
   return BUILTIN_NAMES.has(name) || excludedBuiltin(name, REGCLASS_NAMES)
 }
 
+/**
+ * Один збирач області для обох суддів викликів (тіла й виразу): функції,
+ * процедури й агрегати моделі за `схема.ім'я`. Збіг з моделлю рятує лише в
+ * схемі застосунку: функція моделі в схемі провайдера чи `pg_catalog` не
+ * робить виклик безпечним, бо Postgres обирає перевантаження за аргументами і
+ * дістане функцію розширення (спека прав §5.3).
+ */
+export function modelCallNames(
+  units: readonly VerbatimUnit[],
+  providerSchemas: ReadonlySet<string>
+): ReadonlySet<string> {
+  return new Set(
+    units
+      .filter(
+        (u) =>
+          (u.class === "function" ||
+            u.class === "procedure" ||
+            u.class === "aggregate") &&
+          u.schema !== "pg_catalog" &&
+          !providerSchemas.has(u.schema)
+      )
+      .map((u) => `${u.schema}.${u.name}`)
+  )
+}
+
 /** Дані суддівства викликів провайдера (`schema.name`, спека прав §5.3). */
 export function providerCalls(
   provider: DatabaseProvider | undefined,
-  units: readonly VerbatimUnit[]
+  units: readonly VerbatimUnit[],
+  generated: ReadonlySet<string> = new Set()
 ): ProviderCalls {
+  const schemas = new Set(
+    provider === undefined ? [] : PROVIDER_SCHEMAS[provider]
+  )
   return {
-    schemas: new Set(provider === undefined ? [] : PROVIDER_SCHEMAS[provider]),
+    schemas,
+    models: modelCallNames(units, schemas),
+    generated,
     allowed: new Set(
       provider === undefined
         ? []
@@ -191,6 +234,9 @@ export function providerCalls(
  * (`searchPathOpen`) він може потрапити в схему провайдера (Supabase кладе
  * `extensions` у шлях), тож ім'я, що не є вбудованою, судиться так само —
  * зокрема й однойменне з функцією моделі. З порожнім шляхом розв'язується лише `pg_catalog`.
+ * Кваліфікований виклик, що не є вбудованою `pg_catalog`, функцією, процедурою
+ * чи агрегатом моделі, згенерованою функцією, функцією платформи чи поіменною
+ * функцією провайдера, — теж: це може бути функція розширення (спека прав §5.3).
  */
 function sqlTextCall(
   parts: readonly { String?: { sval?: string } }[] | undefined,
@@ -208,7 +254,15 @@ function sqlTextCall(
     return true
   }
   if (schema !== undefined) {
-    return calls.schemas.has(schema) && !calls.allowed.has(`${schema}.${name}`)
+    const qualified = `${schema}.${name}`
+    if (schema === "pg_catalog") return !isBuiltin(name)
+    // Схему платформи й згенеровані функції судить `sql.platform-function-call`.
+    if (schema === PLATFORM_SCHEMA || calls.generated.has(qualified))
+      return false
+    if (calls.schemas.has(schema)) return !calls.allowed.has(qualified)
+    // Кваліфіковане невідоме ім'я — може бути функція розширення, яку
+    // боргове `CREATE EXTENSION` без `SCHEMA` поставило в схему застосунку.
+    return !calls.models.has(qualified)
   }
   // Однойменна функція моделі не рятує: Postgres обирає перевантаження за
   // аргументами серед усіх схем шляху, тож `dblink_exec(…)` з іншою арністю
@@ -254,42 +308,8 @@ function callWrite(
     : undefined
 }
 
-/**
- * Опції агрегату, що називають функцію. Вбудований `set_config` у будь-якій
- * з них ставить налаштування, чиє ім'я — стан агрегату чи його аргумент,
- * тобто значення часу виконання.
- */
-const AGGREGATE_FUNCTION_OPTIONS: ReadonlySet<string> = new Set([
-  "sfunc",
-  "finalfunc",
-  "combinefunc",
-  "serialfunc",
-  "deserialfunc",
-  "msfunc",
-  "minvfunc",
-  "mfinalfunc",
-])
-
 interface DefElemNode {
   DefElem?: { defname?: string; arg?: unknown }
-}
-
-function aggregateWrite(node: Record<string, unknown>): boolean {
-  const define = node.DefineStmt as
-    { kind?: string; definition?: DefElemNode[] } | undefined
-  if (define?.kind !== "OBJECT_AGGREGATE") return false
-  return (define.definition ?? []).some((d) => {
-    const def = d.DefElem
-    const type = (
-      def?.arg as
-        { TypeName?: { names?: { String?: { sval?: string } }[] } } | undefined
-    )?.TypeName
-    return (
-      def?.defname !== undefined &&
-      AGGREGATE_FUNCTION_OPTIONS.has(def.defname.toLowerCase()) &&
-      isBuiltinSetConfig(type?.names)
-    )
-  })
 }
 
 function isSettingsRelation(relation: unknown): boolean {
@@ -339,8 +359,7 @@ function treeWrites(value: unknown, calls: ProviderCalls): CommandContextHit[] {
   if (call !== undefined) own.push(call)
   else if (settingsTableWrite(node) || settingsView(node)) {
     own.push({ form: "settingsTable" })
-  } else if (aggregateWrite(node)) own.push({ form: "nonLiteral" })
-  else if (
+  } else if (
     node.VariableSetStmt !== undefined &&
     setStatementWrite(node.VariableSetStmt as SetStatement)
   ) {

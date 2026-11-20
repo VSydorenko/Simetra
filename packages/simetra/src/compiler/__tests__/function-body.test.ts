@@ -380,6 +380,51 @@ describe("sql.function-body-statement: a call that executes SQL text (спека
     }
   )
 
+  // Кваліфікований виклик, що не є вбудованою, функцією моделі, згенерованою
+  // функцією чи функцією платформи, може бути функцією розширення (Р7, І10):
+  // боргове `CREATE EXTENSION` без `SCHEMA` ставить її в схему застосунку.
+  it.each(
+    PLACES.flatMap((file) =>
+      [
+        {
+          name: "a qualified call of a function no unit declares",
+          sql: plpgsql("PERFORM public.dblink_exec('c', 'SELECT 1')"),
+        },
+        {
+          name: "a pg_catalog name outside the builtins",
+          sql: plpgsql("PERFORM pg_catalog.dblink_exec('c', 'SELECT 1')"),
+        },
+        {
+          // Функція моделі в схемі провайдера виклику не рятує (Р7б, І21):
+          // Postgres обирає перевантаження за аргументами.
+          name: "a model function of a provider schema with the same name",
+          sql: `${plpgsql("PERFORM extensions.dblink_exec('c', 'SELECT 1')")};\nCREATE FUNCTION extensions.dblink_exec(n int) RETURNS int LANGUAGE sql IMMUTABLE AS $$ SELECT n $$;`,
+        },
+      ].map((row) => ({ ...row, file }))
+    )
+  )("$name in $file → dynamicText", async ({ file, sql }) => {
+    const result = await compile(await acceptDebt(files({ [file]: sql })))
+    expect(
+      brief(result.diagnostics).filter(
+        (d) => d.code === "sql.function-body-statement"
+      )
+    ).toEqual([bodyStatement(file, "dynamicText")])
+  })
+
+  it.each(PLACES)(
+    "a qualified call of a model procedure and aggregate in %s → no error",
+    async (file) => {
+      const result = await compile(
+        await acceptDebt(
+          files({
+            [file]: `${plpgsql("PERFORM public.agg(1)")};\nCREATE AGGREGATE public.agg(int) (SFUNC = int4pl, STYPE = int);`,
+          })
+        )
+      )
+      expect(brief(result.diagnostics)).toEqual([])
+    }
+  )
+
   it.each(PLACES)("an ordinary builtin call in %s → no error", async (file) => {
     const result = await compile(
       await acceptDebt(

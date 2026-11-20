@@ -365,7 +365,10 @@ export async function acceptDebt(
   files: ReadonlyMap<string, string>
 ): Promise<Map<string, string>> {
   const stage1 = readFiles(files)
-  const { sql, stage3, declared } = sqlStage(stage1, await loadSqlParser())
+  const { sql, stage3, declared, calls } = sqlStage(
+    stage1,
+    await loadSqlParser()
+  )
   return new Map([
     ...files,
     [
@@ -378,7 +381,8 @@ export async function acceptDebt(
           kindTables(stage1.objects, stage3?.physical.tables ?? []),
           await loadSqlParser(),
           await loadPlpgsqlParser(),
-          declared
+          declared,
+          calls
         ),
       }),
     ],

@@ -157,7 +157,7 @@ describe("engine.out-of-scope", () => {
       await outOfScope(
         [
           "CREATE TRIGGER app_on_user AFTER INSERT ON auth.users",
-          "  FOR EACH ROW EXECUTE FUNCTION extensions.on_user();",
+          "  FOR EACH ROW EXECUTE FUNCTION extensions.uuid_generate_v4();",
           "",
         ].join("\n")
       )
@@ -201,7 +201,9 @@ describe("engine.out-of-scope", () => {
 
   it("a provider extension", async () => {
     expect(
-      await outOfScope("CREATE EXTENSION IF NOT EXISTS pg_graphql;\n")
+      await outOfScope(
+        "CREATE EXTENSION IF NOT EXISTS pg_graphql SCHEMA graphql;\n"
+      )
     ).toEqual([
       `extension:pg_graphql ${OUTSIDE}: the provider installs this extension itself`,
     ])

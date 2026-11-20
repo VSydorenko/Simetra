@@ -913,24 +913,3 @@ describe("checkDomainChecks: CHECK of a domain (спека прав §5.3)", () 
     expect(await headErrors({ [file]: sql })).toEqual(expected)
   })
 })
-
-describe("checkHeads: model functions shadowed by a debt extension (спека прав §5.3)", () => {
-  // Функція розширення в схемі застосунку перевантажила б функцію-запит з
-  // тим самим ім'ям, а функцій розширень серед одиниць немає.
-  const QUERY = sqlFunction("public.f", "SELECT NULL::uuid")
-  it.each<{ extension: string; expected: Finding[] }>([
-    { extension: "SCHEMA extensions", expected: [] },
-    {
-      extension: "SCHEMA public",
-      expected: [found("call", "public.f", SET_FUNCTION)],
-    },
-    { extension: "", expected: [found("call", "public.f", SET_FUNCTION)] },
-  ])("extension $extension", async ({ extension, expected }) => {
-    expect(
-      await headErrors({
-        [SCOPE_FUNCTIONS_FILE]: setFunction("SELECT public.f()") + QUERY,
-        "sql/public/extensions.sql": `CREATE EXTENSION pgcrypto ${extension};\n`,
-      })
-    ).toEqual(expected)
-  })
-})

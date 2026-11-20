@@ -1065,7 +1065,7 @@ describe("messages catalog", () => {
     },
   ])("sql.debt-extension-schema: $en", ({ params, en }) => {
     const d = diagnostic("sql.debt-extension-schema", "a.sql", "", params)
-    expect(d.severity).toBe("warning")
+    expect(d.severity).toBe("error")
     expect(d.message).toContain(en)
     expect(d.message).not.toContain("undefined")
     expect(localize(d, "uk").message).not.toContain("undefined")

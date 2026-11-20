@@ -13,7 +13,6 @@ import {
 import {
   callsSqlText,
   literalDynamicText,
-  providerCalls,
   type ProviderCalls,
 } from "./command-context"
 import {
@@ -485,12 +484,12 @@ export function checkFunctionBodies(
   project: Project | undefined,
   units: readonly VerbatimUnit[],
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  calls: ProviderCalls
 ): Diagnostic[] {
   const views = modelViews(units)
   const closed = closedModuleOwners(objects)
   const ruled = ruledFunctions(objects, project)
-  const calls = providerCalls(project?.database.provider, units)
   return units.flatMap((unit) => {
     const shelled =
       (unit.ownerFile !== undefined && closed.has(unit.ownerFile)) ||

@@ -191,7 +191,7 @@ export async function currentDebt(
     loadSqlParser(),
     loadPlpgsqlParser(),
   ])
-  const { stage3, sql, declared } = sqlStage(stage1, parse)
+  const { stage3, sql, declared, calls } = sqlStage(stage1, parse)
   if (
     stage3 === undefined ||
     sql.diagnostics.some((d) => d.code === "sql.parse")
@@ -205,6 +205,7 @@ export async function currentDebt(
     kindTables(stage1.objects, stage3.physical.tables),
     parse,
     plpgsql,
-    declared
+    declared,
+    calls
   )
 }

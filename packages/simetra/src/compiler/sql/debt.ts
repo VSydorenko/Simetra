@@ -3,7 +3,7 @@ import { KIND_REGISTRY, SQL_DEBT_FILE, type Project } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { closedShellProblem, ruledFunctions } from "./closed-forms"
-import { providerCalls } from "./command-context"
+import type { ProviderCalls } from "./command-context"
 import {
   bodyStatementProblem,
   modelViews,
@@ -43,7 +43,8 @@ export function debtUnits(
   kindTables: KindTables,
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  declared: readonly DeclaredFunction[]
+  declared: readonly DeclaredFunction[],
+  calls: ProviderCalls
 ): string[] {
   const isDebt = debtPredicate(
     objects,
@@ -53,7 +54,8 @@ export function debtUnits(
     plpgsql,
     modelViews(units),
     units,
-    declared
+    declared,
+    calls
   )
   return [...new Set(units.filter(isDebt).map((unit) => unit.identity))].sort(
     compareStrings
@@ -74,7 +76,8 @@ export function debtPredicate(
   plpgsql: PlpgsqlParser,
   views: readonly ModelView[],
   units: readonly VerbatimUnit[],
-  declared: readonly DeclaredFunction[]
+  declared: readonly DeclaredFunction[],
+  calls: ProviderCalls
 ): (unit: VerbatimUnit) => boolean {
   const debtOwners = new Set(
     objects
@@ -92,7 +95,6 @@ export function debtPredicate(
       plpgsql,
     }).map((path) => path.unit)
   )
-  const calls = providerCalls(project?.database.provider, units)
   return (unit) =>
     (unit.ownerFile === undefined || debtOwners.has(unit.ownerFile)) &&
     !(unit.class === "function" && ruled.has(unit.identity)) &&
@@ -129,7 +131,8 @@ export function checkDebt(
   unitsComplete: boolean,
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  declared: readonly DeclaredFunction[]
+  declared: readonly DeclaredFunction[],
+  calls: ProviderCalls
 ): { grows: Diagnostic[]; stale: Diagnostic[] } {
   const accepted = new Set(listed)
   const isDebt = debtPredicate(
@@ -140,7 +143,8 @@ export function checkDebt(
     plpgsql,
     modelViews(units),
     units,
-    declared
+    declared,
+    calls
   )
   const debt = units.filter(isDebt)
   const grows = debt

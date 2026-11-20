@@ -1370,12 +1370,22 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "sql.function-settings-shell": {
     en: (p) =>
-      `ALTER FUNCTION ${p.function} changes ${p.setting === "*" ? "every setting (RESET ALL)" : p.setting} of a function whose shell only its CREATE sets`,
+      p.target === "notModel"
+        ? `ALTER FUNCTION ${p.function} changes ${p.setting === "*" ? "every setting (RESET ALL)" : p.setting} of a function the application did not create`
+        : `ALTER FUNCTION ${p.function} changes ${p.setting === "*" ? "every setting (RESET ALL)" : p.setting} of a function whose shell only its CREATE sets`,
     uk: (p) =>
-      `ALTER FUNCTION ${p.function} змінює ${p.setting === "*" ? "усі налаштування (RESET ALL)" : p.setting} функції, оболонку якої задає лише її CREATE`,
+      p.target === "notModel"
+        ? `ALTER FUNCTION ${p.function} змінює ${p.setting === "*" ? "усі налаштування (RESET ALL)" : p.setting} функції, якої застосунок не створював`
+        : `ALTER FUNCTION ${p.function} змінює ${p.setting === "*" ? "усі налаштування (RESET ALL)" : p.setting} функції, оболонку якої задає лише її CREATE`,
     hint: {
-      en: "The platform checks the shell (volatility, SECURITY, search_path, SET options) of kind module functions, subscription handlers, scope set functions, access dimension value functions and every function they call in the CREATE FUNCTION statement; a separate ALTER FUNCTION would change it past that check. Move the option into CREATE FUNCTION and remove the ALTER FUNCTION statement.",
-      uk: "Оболонку (волатильність, SECURITY, search_path, опції SET) функцій модулів видів, обробників підписок, функцій множини скоупу, функцій значень вимірів доступу й кожної функції, яку вони кличуть, платформа перевіряє в операторі CREATE FUNCTION; окремий ALTER FUNCTION змінив би її повз цю перевірку. Перенесіть опцію в CREATE FUNCTION і приберіть оператор ALTER FUNCTION.",
+      en: (p) =>
+        p.target === "notModel"
+          ? "The form of a generated function, a platform function or a function of the database provider is held by the platform (or the provider); ALTER FUNCTION on it would change it past the generator. Remove the ALTER FUNCTION statement."
+          : "The platform checks the shell (volatility, SECURITY, search_path, SET options) of kind module functions, subscription handlers, scope set functions, access dimension value functions and every function they call in the CREATE FUNCTION statement; a separate ALTER FUNCTION would change it past that check. Move the option into CREATE FUNCTION and remove the ALTER FUNCTION statement.",
+      uk: (p) =>
+        p.target === "notModel"
+          ? "Форму згенерованої функції, функції платформи чи функції провайдера бази тримає платформа (чи провайдер); ALTER FUNCTION змінив би її повз генератор. Приберіть оператор ALTER FUNCTION."
+          : "Оболонку (волатильність, SECURITY, search_path, опції SET) функцій модулів видів, обробників підписок, функцій множини скоупу, функцій значень вимірів доступу й кожної функції, яку вони кличуть, платформа перевіряє в операторі CREATE FUNCTION; окремий ALTER FUNCTION змінив би її повз цю перевірку. Перенесіть опцію в CREATE FUNCTION і приберіть оператор ALTER FUNCTION.",
     },
   },
   "sql.function-overload": {
@@ -1461,8 +1471,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Розширення ${p.extension} створено ${p.schema === undefined ? "без SCHEMA" : `у схемі ${p.schema}`} — поза схемами провайдера бази`,
     hint: {
-      en: "Functions of an extension in a schema of the application could overload a query function of the model with the same name, so code that runs inside a command (kind module functions, subscription handlers, scope set functions) calls no model function of that schema; an extension without SCHEMA lands in a schema of the session's search_path, so then it calls none. Create the extension with SCHEMA extensions.",
-      uk: "Функції розширення в схемі застосунку могли б перевантажити функцію-запит моделі з тим самим ім'ям, тож код, що виконується посеред команди (функції модулів видів, обробники підписок, функції множини скоупу), не кличе функцій моделі цієї схеми; розширення без SCHEMA стає в схему з search_path сесії, тож тоді — жодної. Створіть розширення з SCHEMA extensions.",
+      en: "Postgres picks an overload by the argument types, so a function of an extension in a schema of the application can be reached by a call that looks like a call of a model function with the same name; the compiler does not resolve signatures. An extension without SCHEMA lands in a schema of the session's search_path. Move the extension into a schema of the database provider: ALTER EXTENSION <name> SET SCHEMA extensions in the database, and write SCHEMA extensions in CREATE EXTENSION.",
+      uk: "Postgres обирає перевантаження за типами аргументів, тож функції розширення в схемі застосунку може дістатися виклик, схожий на виклик функції моделі з тим самим ім'ям; сигнатур компілятор не розв'язує. Розширення без SCHEMA стає в схему з search_path сесії. Перенесіть розширення в схему провайдера бази: ALTER EXTENSION <ім'я> SET SCHEMA extensions у базі й SCHEMA extensions у CREATE EXTENSION.",
     },
   },
   "sql.definer-reads-rls": {

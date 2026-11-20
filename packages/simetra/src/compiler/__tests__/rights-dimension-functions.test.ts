@@ -128,9 +128,13 @@ describe("access dimension value function", () => {
     expect(heads(plpgsql)).toEqual([
       head("language", undefined, "public.region_ids → public.helper_ids"),
     ])
-    const unknown = await errors(fn("region_ids", CLOSED, "SELECT ext.foo()"))
+    // Функція провайдера, названа лише для виразів, голові не довірена; сама
+    // схема, якої немає в моделі, відхиляється ще тілом (виконання тексту SQL).
+    const unknown = await errors(
+      fn("region_ids", CLOSED, "SELECT extensions.uuid_generate_v4()")
+    )
     expect(heads(unknown)).toEqual([
-      head("call", "ext.foo", "public.region_ids"),
+      head("call", "extensions.uuid_generate_v4", "public.region_ids"),
     ])
   })
 

@@ -1,5 +1,6 @@
 import type {
   AccessPriv,
+  FuncCall,
   GrantStmt,
   Node,
   RangeVar,
@@ -255,7 +256,7 @@ const SEQUENCE_FUNCTIONS: ReadonlySet<string> = new Set(["setval", "nextval"])
  * Імена послідовностей платформи: identity-колонки таблиць `simetra` знімка
  * (одне джерело з `platformTables`) і `row_version`, якої знімок не несе.
  */
-function platformSequenceNames(kind: KindTables): ReadonlySet<string> {
+export function platformSequenceNames(kind: KindTables): ReadonlySet<string> {
   return new Set([ROW_VERSION_SEQUENCE.name, ...(kind.platformSequences ?? [])])
 }
 
@@ -314,6 +315,29 @@ function sequencePath(
   return undefined
 }
 
+/**
+ * Чи виклик — `setval`/`nextval` вбудованої, яку судить форма `sequence`
+ * (Р4б): ціль — послідовність платформи чи нелітерал. `undefined` — не судить:
+ * інший виклик чи послідовність не платформи. Один суддя для перелічувача й
+ * для виразів (`sql.expression-call-not-allowed` такий виклик пропускає).
+ */
+export function sequenceCallTarget(
+  call: FuncCall,
+  platform: ReadonlySet<string>
+): { call: string; target: string; unqualified: boolean } | undefined {
+  const names = (call.funcname ?? []).map((n) =>
+    "String" in n ? (n.String.sval ?? "") : ""
+  )
+  const name = names.at(-1) ?? ""
+  const builtin =
+    names.length === 1 || (names.length === 2 && names[0] === "pg_catalog")
+  if (!builtin || !SEQUENCE_FUNCTIONS.has(name)) return undefined
+  const target = sequenceTarget(call.args?.[0], platform)
+  return target === undefined
+    ? undefined
+    : { call: name, target: target.target, unqualified: target.unqualified }
+}
+
 function findSequenceCall(
   value: unknown,
   platform: ReadonlySet<string>
@@ -327,24 +351,10 @@ function findSequenceCall(
   }
   if (typeof value !== "object" || value === null) return undefined
   const record = value as Record<string, unknown>
-  const call = record.FuncCall as
-    { funcname?: Node[]; args?: Node[] } | undefined
+  const call = record.FuncCall as FuncCall | undefined
   if (call !== undefined) {
-    const names = (call.funcname ?? []).map((n) =>
-      "String" in n ? (n.String.sval ?? "") : ""
-    )
-    const name = names.at(-1) ?? ""
-    const builtin =
-      names.length === 1 || (names.length === 2 && names[0] === "pg_catalog")
-    if (builtin && SEQUENCE_FUNCTIONS.has(name)) {
-      const target = sequenceTarget(call.args?.[0], platform)
-      if (target !== undefined)
-        return {
-          call: name,
-          target: target.target,
-          unqualified: target.unqualified,
-        }
-    }
+    const hit = sequenceCallTarget(call, platform)
+    if (hit !== undefined) return hit
   }
   for (const child of Object.values(record)) {
     const hit = findSequenceCall(child, platform)

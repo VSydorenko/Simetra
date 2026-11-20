@@ -13,6 +13,7 @@ import {
   platformFormSources,
 } from "./closed-forms"
 import type { DeclaredFunction } from "./declarations"
+import { AGGREGATE_COMPONENTS } from "./dependencies"
 import { grantRole } from "./execute-grants"
 import { PUBLIC, grantFacts, privilegedRoles } from "./grant-facts"
 import type { SqlParser } from "./parse"
@@ -216,18 +217,6 @@ function formOf(
     )
   return definer ? "function" : undefined
 }
-
-/** Опції агрегату, що називають функцію-складову. */
-const AGGREGATE_COMPONENTS: ReadonlySet<string> = new Set([
-  "sfunc",
-  "finalfunc",
-  "combinefunc",
-  "serialfunc",
-  "deserialfunc",
-  "msfunc",
-  "minvfunc",
-  "mfinalfunc",
-])
 
 /**
  * Чи складова агрегату — `SECURITY DEFINER`-функція моделі. `EXECUTE`

@@ -594,6 +594,8 @@ describe("sql units", () => {
       await identities(
         [
           "CREATE AGGREGATE agg(integer) (SFUNC = int4pl, STYPE = int);",
+          // `ALTER FUNCTION` судиться лише над функцією моделі.
+          "CREATE FUNCTION f(integer, varchar(5)) RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;",
           "ALTER FUNCTION f(integer, varchar(5)) SET search_path = '';",
           "GRANT EXECUTE ON FUNCTION f(int, character varying) TO anon;",
           "COMMENT ON FUNCTION f(pg_catalog.int4, pg_catalog.varchar) IS 'x';",
@@ -602,6 +604,7 @@ describe("sql units", () => {
     ).toEqual([
       "aggregate:public.agg(int4)",
       "comment:function:public.f(int4,varchar)",
+      "function:public.f(int4,varchar)",
       "functionSettings:public.f(int4,varchar)",
       "grant:grant:function:public.f(int4,varchar):anon:execute",
     ])
@@ -610,10 +613,16 @@ describe("sql units", () => {
   it("trigger and policy identity include table", async () => {
     expect(
       await identities(
-        "CREATE TRIGGER trg_x AFTER INSERT ON public.orders FOR EACH ROW EXECUTE FUNCTION public.h();\n" +
+        // Тригер кличе функцію моделі: дозвільний перелік виразів інших не знає.
+        "CREATE FUNCTION public.h() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;\n" +
+          "CREATE TRIGGER trg_x AFTER INSERT ON public.orders FOR EACH ROW EXECUTE FUNCTION public.h();\n" +
           "CREATE POLICY p ON storage.objects FOR SELECT USING (true);"
       )
-    ).toEqual(["policy:storage.objects.p", "trigger:public.orders.trg_x"])
+    ).toEqual([
+      "function:public.h()",
+      "policy:storage.objects.p",
+      "trigger:public.orders.trg_x",
+    ])
   })
 
   it("grants with different privileges are different units", async () => {
@@ -710,24 +719,25 @@ describe("sql units", () => {
   it("accepted-schema dump compiles", async () => {
     const result = await compileSql(
       [
-        "CREATE EXTENSION IF NOT EXISTS pgcrypto;",
+        "CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;",
         "CREATE SEQUENCE s;",
         "ALTER SEQUENCE s OWNED BY t.c;",
         "CREATE DOMAIN d AS text;",
         "ALTER PUBLICATION supabase_realtime ADD TABLE t;",
+        "CREATE FUNCTION public.handle_new_user() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;",
         "CREATE TRIGGER on_auth_user AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();",
         "CREATE POLICY p ON storage.objects FOR SELECT USING (bucket_id = 'avatars');",
       ].join("\n")
     )
-    // Розширення без SCHEMA стає в схему застосунку (спека прав §5.3).
-    expect(result.diagnostics.map((d) => [d.code, d.severity])).toEqual([
-      ["sql.debt-extension-schema", "warning"],
-    ])
+    // Розширення в схемі провайдера, а тригер кличе функцію моделі: фікстура
+    // проходить правила виразів і розширень (спека прав §5.3).
+    expect(result.diagnostics).toEqual([])
     expect(
       withoutMechanics(result.model!.sqlUnits).map((u) => u.identity)
     ).toEqual([
       "domain:public.d",
       "extension:pgcrypto",
+      "function:public.handle_new_user()",
       "policy:storage.objects.p",
       "publication:supabase_realtime:add:public.t",
       "sequence:public.s",
