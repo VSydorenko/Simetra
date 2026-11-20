@@ -147,7 +147,12 @@ describe("canSubscribe", () => {
       false,
     ],
     ["невідомий об'єкт", snap([row()]), topic(OTHER), false],
-    ["верхній регістр", snap([row()]), topic().toUpperCase(), false],
+    [
+      "верхній регістр",
+      snap([row()]),
+      `simetra:${KIND.toUpperCase()}:${SCOPE.toUpperCase()}:${OBJECT.toUpperCase()}`,
+      false,
+    ],
     ["userId null", snap([row()], undefined, null), topic(), false],
     [
       "канал прав",
@@ -165,6 +170,19 @@ describe("canSubscribe", () => {
   ]
   it.each(cases)("%s", (_name, snapshot, channel, expected) => {
     expect(canSubscribe(snapshot, channel, catalog)).toBe(expected)
+  })
+
+  describe("корінь виду скоупу", () => {
+    // Корінь несе скоуп у власному id: топік скоупу — id рядка кореня.
+    const root = { objects: [scoped({ scopeColumn: "id" })] }
+    it("свій корінь", () => {
+      expect(canSubscribe(snap([row()]), topic(OBJECT, SCOPE), root)).toBe(true)
+    })
+    it("чужий корінь", () => {
+      expect(canSubscribe(snap([row()]), topic(OBJECT, OTHER), root)).toBe(
+        false
+      )
+    })
   })
 
   it("несигнальний об'єкт", () => {
@@ -237,6 +255,12 @@ describe("readAllowed", () => {
   ]
   it.each(cases)("%s", (_name, snapshot, expected) => {
     expect(readAllowed(snapshot, pair, scoped())).toBe(expected)
+  })
+
+  it("корінь: свій — так, чужий — ні", () => {
+    const root = scoped({ scopeColumn: "id" })
+    expect(readAllowed(snap([row()]), { scope: SCOPE }, root)).toBe(true)
+    expect(readAllowed(snap([row()]), { scope: OTHER }, root)).toBe(false)
   })
 
   it("пара без скоупу для скоупленого — ні", () => {
