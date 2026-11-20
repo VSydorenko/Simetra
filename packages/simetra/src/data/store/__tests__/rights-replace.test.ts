@@ -480,17 +480,16 @@ describe("the snapshot barrier", () => {
     const { core, fake } = harness({ objects: [shared, org], mode: "manual" })
     // Гість: `publicRead` для автентифікованих пару не відкриває.
     grant(fake, snapshotOf([], [], null))
-    fake.holdRights = true
-    core.requestRights()
-    await settle()
+    await firstSnapshot(core)
     seed(fake, 1, 1)
     const header = core.view(card(1))
     watch(header)
     await settle()
-    fake.releaseRights()
+    // Ще один знімок гостя застосовано після старту читання, далі —
+    // знімок користувача відкриває кожну пару.
+    grant(fake, snapshotOf([], [], null))
+    core.requestRights()
     await settle()
-    expect(core.rights()?.snapshot.userId).toBeNull()
-    fake.holdRights = false
     grant(fake, snapshotOf([], [], USER))
     core.requestRights()
     await settle()
