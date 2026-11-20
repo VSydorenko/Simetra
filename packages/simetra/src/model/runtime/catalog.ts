@@ -209,6 +209,17 @@ export const catalogEntrySchema = z.strictObject({
    */
   signal: z.boolean(),
   /**
+   * Роль, якій відкрито всі рядки на читання (`access.publicRead`, те саме
+   * джерело, що й факти сигналу): `anon` — гостю й користувачу,
+   * `authenticated` — лише користувачу (P4-B spec §3, Р6).
+   */
+  publicRead: z.enum(["anon", "authenticated"]).optional(),
+  /**
+   * Об'єкт має контракт прав: читання під RLS судять рядки прав, тож знімок
+   * прав описує його читання (P4-B spec §3, Р6).
+   */
+  rightsContract: z.literal(true).optional(),
+  /**
    * The attribute that represents the object in a `Ref` text (its logical
    * name): the main presentation, derived from the kind registry's standard
    * columns; absent when the kind gives none (P4-D spec §5.3).
@@ -265,6 +276,8 @@ export const runtimeCatalogSchema = z
     format: z.literal(1),
     snapshotHash: z.string(),
     provider: z.enum(DATABASE_PROVIDERS),
+    /** Проєкт має функції прав: клієнт шле `rights` і підписується на сигнали. */
+    rightsSnapshot: z.literal(true).optional(),
     objects: z.array(runtimeObjectSchema),
   })
   .superRefine((catalog, ctx) => {
