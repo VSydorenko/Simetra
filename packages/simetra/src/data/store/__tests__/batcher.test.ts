@@ -264,6 +264,25 @@ describe("createBatcher: the rights barrier", () => {
     expect(order).toHaveLength(3)
   })
 
+  it("hands the rights outcome over before the version of the same answer, whatever the queue order", async () => {
+    const order: string[] = []
+    const r = recording(() =>
+      Promise.resolve({
+        items: [
+          { ok: true, type: "version", version: versionValue } as const,
+          rightsItem,
+        ],
+      })
+    )
+    const batcher = createBatcher(r.source, {
+      sleep: SLEEP,
+      onVersion: () => order.push("version"),
+      onRights: () => order.push("rights"),
+    })
+    await Promise.all([batcher.read([VERSION]), batcher.read([RIGHTS])])
+    expect(order).toEqual(["rights", "version"])
+  })
+
   it("hands over a failed rights part as it is, and nothing for other parts", async () => {
     const error: CommandError = { code: "command.unavailable" }
     const onRights = vi.fn()

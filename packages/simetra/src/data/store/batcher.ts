@@ -95,13 +95,16 @@ export function createBatcher(
       return
     }
     try {
+      // Спершу `rights`: `onVersion` пише в сховище, а знімок (і зміна
+      // користувача) мусить бути прийнятий раніше за будь-який запис пакета.
       sent.forEach(({ part }, i) => {
-        const item = items[i]!
+        if (part.type === "rights") options.onRights?.(items[i]!)
+      })
+      for (const item of items) {
         if (item.ok && "type" in item && item.type === "version") {
           options.onVersion?.(item.version)
         }
-        if (part.type === "rights") options.onRights?.(item)
-      })
+      }
     } catch (error) {
       for (const call of calls) call.reject(error)
       return
