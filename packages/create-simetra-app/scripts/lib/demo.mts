@@ -217,6 +217,26 @@ function stackFromEnvironment(): Stack {
   return demoStack(stackUrl("postgres", "postgres"), loginSecrets())
 }
 
+/**
+ * Виконує `run` і знімає стенд на будь-якому виході: помилка генерації ключа
+ * чи старту сервера теж не лишає контейнер. Помилка `down` не затуляє помилку
+ * `run`.
+ */
+export async function withStand<T>(
+  stand: { down: () => Promise<void> },
+  run: () => Promise<T>
+): Promise<T> {
+  let result: T
+  try {
+    result = await run()
+  } catch (error) {
+    await stand.down().catch(() => undefined)
+    throw error
+  }
+  await stand.down()
+  return result
+}
+
 /** `pnpm demo`: prepares (or reuses) the demo database, builds and serves the template. */
 export async function demoUp(): Promise<number> {
   const stack = stackFromEnvironment()
@@ -259,47 +279,43 @@ export async function demoUp(): Promise<number> {
       loginSecrets()
     ),
   })
-  // Новий ключ і `kid` на кожен запуск (Р3): жодного ключа в git
-  const keys = await generateSigningKeys()
-  const server = startServer(
-    appServerEnv({
-      dsns: stack.dsns,
-      origin: DEMO_ORIGIN,
-      port: DEMO_PORT,
-      host: "127.0.0.1",
-      secret,
-      signals: { url: signals.wsUrl, keys: keys.json },
-    }),
-    { echo: true }
-  )
-  const stop = (): void => void stopServer(server)
-  process.once("SIGINT", stop)
-  process.once("SIGTERM", stop)
-  try {
-    await waitReady(`${DEMO_ORIGIN}/`, server)
-  } catch (error) {
-    // Сервер, що не відповів вчасно, не лишається висіти на порту
-    await stopServer(server)
-    await signals.down().catch(() => undefined)
-    throw error
-  }
-  console.log(
-    [
-      "",
-      `Simetra demo: ${DEMO_ORIGIN}`,
-      ...DEMO_USERS.map(
-        (u) => `  ${u.name}: ${u.email}  password: ${passwords[u.email]}`
-      ),
-      "Each user sees only their own clients. Ctrl-C stops the server; `pnpm demo:drop` removes the demo database.",
-      "",
-    ].join("\n")
-  )
-  try {
+  return withStand(signals, async () => {
+    // Новий ключ і `kid` на кожен запуск (Р3): жодного ключа в git
+    const keys = await generateSigningKeys()
+    const server = startServer(
+      appServerEnv({
+        dsns: stack.dsns,
+        origin: DEMO_ORIGIN,
+        port: DEMO_PORT,
+        host: "127.0.0.1",
+        secret,
+        signals: { url: signals.wsUrl, keys: keys.json },
+      }),
+      { echo: true }
+    )
+    const stop = (): void => void stopServer(server)
+    process.once("SIGINT", stop)
+    process.once("SIGTERM", stop)
+    try {
+      await waitReady(`${DEMO_ORIGIN}/`, server)
+    } catch (error) {
+      // Сервер, що не відповів вчасно, не лишається висіти на порту
+      await stopServer(server)
+      throw error
+    }
+    console.log(
+      [
+        "",
+        `Simetra demo: ${DEMO_ORIGIN}`,
+        ...DEMO_USERS.map(
+          (u) => `  ${u.name}: ${u.email}  password: ${passwords[u.email]}`
+        ),
+        "Each user sees only their own clients. Ctrl-C stops the server; `pnpm demo:drop` removes the demo database.",
+        "",
+      ].join("\n")
+    )
     return (await server.exited) ?? 0
-  } finally {
-    // Контейнер знімається на будь-якому виході сервера
-    await signals.down()
-  }
+  })
 }
 
 /** `pnpm demo:drop`: drops the demo database, and only it. */
