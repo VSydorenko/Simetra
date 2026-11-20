@@ -1605,6 +1605,27 @@ describe("CommandRuntime: частина rights", () => {
     expect(over.db.calls).toEqual([])
   })
 
+  it("does not count the snapshot of an anonymous session as a statement", async () => {
+    const wide: ReadQueryPart = {
+      type: "query",
+      query: { object: LINK, id: ID, include: ["region", "backup"] },
+    }
+    const wideRights = runtimeCatalogSchema.parse({
+      ...wideCatalog,
+      rightsSnapshot: true,
+    })
+    const { runtime } = await setup(answering(snapshot), {
+      catalog: wideRights,
+    })
+    // 10 × 3 + 2 = 32 без знімка: анонім його до бази не шле.
+    const result = await runtime.readParts({ ...session, is_anonymous: true }, [
+      ...Array.from({ length: 10 }, () => wide),
+      { type: "query", query: { object: LINK, id: ID, include: ["region"] } },
+      RIGHTS_PART,
+    ])
+    expect(result.items.at(-1)!.ok).toBe(true)
+  })
+
   it("refuses a second rights part for the whole request before the database", async () => {
     const { db, runtime } = await open(answering(snapshot))
     expect(
