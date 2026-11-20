@@ -11,12 +11,14 @@ import net from "node:net"
 import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 import pg from "pg"
+import { betterAuth } from "better-auth"
 import type { SessionClaims } from "simetra/model"
 import {
   createCommandRuntime,
   fromPgPool,
   type CommandRuntime,
 } from "simetra/server"
+import { authOptions } from "../template/src/server/auth"
 import runtimeCatalog from "../template/generated/runtime-catalog.json" with { type: "json" }
 import {
   TEMPLATE,
@@ -34,12 +36,22 @@ import {
   type ServerRun,
 } from "../scripts/lib/app-database.mts"
 import {
+  generateSigningKeys,
+  signalsDsn,
+  startSignals,
+} from "../scripts/lib/signals-stand.mts"
+import { runContainerLabels } from "../../simetra/test/db/external"
+import {
   runObjectPatterns,
   runTag,
   testDatabaseName,
   testSuperuserUrl,
 } from "../../simetra/test/db/connection"
-import { LOGIN_SECRETS_FILE, devSecret } from "../../simetra/test/db/profile"
+import {
+  LOGIN_SECRETS_FILE,
+  devSecret,
+  testProvider,
+} from "../../simetra/test/db/profile"
 import { cookieHeader, send } from "./http"
 
 const exec = promisify(execFile)
@@ -72,6 +84,8 @@ export interface App {
   functionId: (name: "dataFn") => string
   /** Усі Server Function маніфесту збірки: ім'я експорту → id. */
   serverFunctions: Record<string, string>
+  /** Centrifugo прогону: WebSocket-адреса й `kid` ключа підпису цього прогону. */
+  signals: { url: string; kid: string }
   /** Оточення основного сервера: запуск ще одного з однією зміненою змінною. */
   serverEnv: Record<string, string>
   users: { a: TestUser; b: TestUser }
@@ -279,6 +293,24 @@ async function bringUp(
     "seed"
   )
 
+  // Власний Centrifugo прогону (Р1): мітки прогону дають сторожу стека зняти
+  // контейнер, що пережив SIGKILL; на збої й у teardown його знімає фікстура
+  const signals = await startSignals({
+    name: `simetra-e2e-signals-${runTag()}`,
+    labels: runContainerLabels(runTag(), testProvider()),
+    origin,
+    hostPort: port,
+    databaseUrl: signalsDsn(testSuperuserUrl(), database, {
+      SIMETRA_SIGNALS_DEV_PASSWORD: devSecret(
+        "SIMETRA_SIGNALS_DEV_PASSWORD",
+        LOGIN_SECRETS_FILE
+      ),
+    }),
+  })
+  cleanups.push(() => signals.down())
+  // Новий ключ і `kid` на прогін (Р3): жодного ключа в git
+  const keys = await generateSigningKeys()
+
   await build(buildKind)
   const ids = functionIds()
   const serverEnv = appServerEnv({
@@ -287,6 +319,7 @@ async function bringUp(
     port,
     host: "127.0.0.1",
     secret,
+    signals: { url: signals.wsUrl, keys: keys.json },
   })
   const server = startServer(serverEnv)
   cleanups.push(() => stopServer(server))
@@ -322,6 +355,7 @@ async function bringUp(
       return id
     },
     serverFunctions: ids,
+    signals: { url: signals.wsUrl, kid: keys.kid },
     serverEnv,
     users: users as App["users"],
     runtimeB,
@@ -330,6 +364,27 @@ async function bringUp(
     serverOutput: server.output,
     start: startServer,
     freePort,
+  }
+}
+
+/**
+ * Заголовок `Cookie` анонімної сесії Better Auth: серверним API, бо HTTP-шлях
+ * анонімного входу вимкнено.
+ */
+export async function anonymousCookie(app: App): Promise<string> {
+  const pool = new pg.Pool({
+    connectionString: app.adminUrl,
+    options: "-c search_path=better_auth",
+  })
+  try {
+    const auth = betterAuth(authOptions(pool, app.origin, app.secret))
+    const result = await auth.api.signInAnonymous({ returnHeaders: true })
+    return result.headers
+      .getSetCookie()
+      .map((c) => c.split(";")[0])
+      .join("; ")
+  } finally {
+    await pool.end()
   }
 }
 

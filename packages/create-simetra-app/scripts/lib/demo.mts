@@ -28,6 +28,12 @@ import {
   withDatabase,
   type AppDsns,
 } from "./app-database.mts"
+import {
+  generateSigningKeys,
+  removeSignalsContainers,
+  signalsDsn,
+  startSignals,
+} from "./signals-stand.mts"
 
 /** The demo database on the postgres stack. */
 export const DEMO_DATABASE = "simetra_demo"
@@ -47,6 +53,11 @@ export const DEMO_USERS = [
   { email: "alice@demo.test", name: "Alice", clients: 250 },
   { email: "bob@demo.test", name: "Bob", clients: 5 },
 ] as const
+
+// Власний Centrifugo демо (Р1 плану D5): мітка й ім'я окремі від контейнерів
+// стека, тож залишок попереднього запуску знімається лише за нею
+export const DEMO_SIGNALS_LABEL = "simetra-demo=signals"
+const DEMO_SIGNALS_NAME = "simetra-demo-signals"
 
 export type DemoState = "absent" | "ready" | "incomplete" | "foreign"
 
@@ -234,6 +245,22 @@ export async function demoUp(): Promise<number> {
   })
   console.log("demo: building the template (production)")
   await buildTemplate()
+  // Залишок: контейнер попереднього запуску міг пережити SIGKILL
+  await removeSignalsContainers(DEMO_SIGNALS_LABEL)
+  console.log("demo: starting Centrifugo")
+  const signals = await startSignals({
+    name: DEMO_SIGNALS_NAME,
+    labels: ["--label", DEMO_SIGNALS_LABEL],
+    origin: DEMO_ORIGIN,
+    hostPort: DEMO_PORT,
+    databaseUrl: signalsDsn(
+      stackUrl("postgres", "postgres"),
+      DEMO_DATABASE,
+      loginSecrets()
+    ),
+  })
+  // Новий ключ і `kid` на кожен запуск (Р3): жодного ключа в git
+  const keys = await generateSigningKeys()
   const server = startServer(
     appServerEnv({
       dsns: stack.dsns,
@@ -241,6 +268,7 @@ export async function demoUp(): Promise<number> {
       port: DEMO_PORT,
       host: "127.0.0.1",
       secret,
+      signals: { url: signals.wsUrl, keys: keys.json },
     }),
     { echo: true }
   )
@@ -252,6 +280,7 @@ export async function demoUp(): Promise<number> {
   } catch (error) {
     // Сервер, що не відповів вчасно, не лишається висіти на порту
     await stopServer(server)
+    await signals.down().catch(() => undefined)
     throw error
   }
   console.log(
@@ -265,12 +294,19 @@ export async function demoUp(): Promise<number> {
       "",
     ].join("\n")
   )
-  return (await server.exited) ?? 0
+  try {
+    return (await server.exited) ?? 0
+  } finally {
+    // Контейнер знімається на будь-якому виході сервера
+    await signals.down()
+  }
 }
 
 /** `pnpm demo:drop`: drops the demo database, and only it. */
 export async function demoDrop(): Promise<void> {
   const stack = stackFromEnvironment()
+  // Centrifugo тримає з'єднання з базою демо: знімається до видалення бази
+  await removeSignalsContainers(DEMO_SIGNALS_LABEL)
   await underLock(async () => {
     const step = demoStep("drop", await readState(stack.maintenanceUrl))
     if (step === "nothing") {
