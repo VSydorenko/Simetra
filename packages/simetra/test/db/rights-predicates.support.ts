@@ -15,6 +15,7 @@ import {
   ORG_KIND_ID,
   ORG_MEMBER_ROLE_ID,
   ROLE_FILE,
+  SIGNAL_READER_ID,
   TASK_ID,
   catalog,
   grant,
@@ -129,6 +130,7 @@ function documentEntries(objects: readonly CatalogEntry[]): CatalogEntry[] {
  * Користувачі поверх засіву сигналів (`m1`, `m4`, `m5`, `m6`, `o1`, `u9`,
  * `g1`): `d1` — A з роллю виміру й значенням `r1`; `n1` — A з кастомною
  * роллю `OrgMember`, де `deny read@any` + `allow read@own` звужують обсяг;
+ * `x1` — права `SignalReader` лише в A, членство ще й в B без ролей;
  * `c1` — A лише з `OrgMember` (замикання включень без `SignalReader`);
  * `g2` — глобальна роль читання `Announcement`.
  */
@@ -153,7 +155,8 @@ async function seedPredicates(client: pg.Client, ids: Seed): Promise<void> {
       ...assignmentRow(ids[key]!, assignment),
     })
   }
-  for (const user of ["d1", "n1", "c1", "g2"]) ids[user] = await signUp(client)
+  for (const user of ["d1", "n1", "c1", "g2", "x1"])
+    ids[user] = await signUp(client)
   await create("PB", "project", { org_id: ids.B })
   await create("PC", "project", { org_id: ids.C })
   for (const org of ORGS)
@@ -166,6 +169,9 @@ async function seedPredicates(client: pg.Client, ids: Seed): Promise<void> {
     region_id: ids.rA,
   })
   await member("c1", "A", { archetype: ORG_MEMBER_ROLE_ID })
+  // Права лише в A, членство ще й в B: рядок права чужого скоупу не відкриває B.
+  await member("x1", "A", { archetype: SIGNAL_READER_ID })
+  await create("x1@B", "org_member", { org_id: ids.B, user_id: ids.x1 })
   await create("narrow", "org_roles", {
     org_id: ids.A,
     archetype: ORG_MEMBER_ROLE_ID,
@@ -236,7 +242,20 @@ async function seedPredicates(client: pg.Client, ids: Seed): Promise<void> {
   }
 }
 
-const USERS = ["m1", "m4", "m5", "m6", "o1", "u9", "g1", "d1", "n1", "c1", "g2"]
+const USERS = [
+  "m1",
+  "m4",
+  "m5",
+  "m6",
+  "o1",
+  "u9",
+  "g1",
+  "d1",
+  "n1",
+  "c1",
+  "g2",
+  "x1",
+]
 
 /** Об'єкти з засіяними рядками: пара «скоуп, об'єкт» для еталона читання. */
 const READ_OBJECTS = [
@@ -282,6 +301,35 @@ const NAMED: [
   ["u9", "Bulletin", "B", true],
   ["m1", "Users", ZERO_UUID, true],
   ["n1", "Task", "B", false],
+  [null, "Task", "A", false],
+]
+
+/** Названі пари підписки й відповідь БАЗИ: страховка від виродження оракула. */
+const NAMED_SUBSCRIBE: [
+  user: string | null,
+  object: string,
+  scope: string,
+  v: boolean,
+][] = [
+  ["m1", "Task", "A", true],
+  ["m1", "Task", "B", false],
+  ["m1", "Task", "C", false],
+  ["m1", "Organization", "A", true],
+  ["m6", "Task", "A", false],
+  ["m4", "Task", "A", false],
+  ["o1", "Task", "A", true],
+  ["d1", "Task", "A", true],
+  ["n1", "Task", "A", true],
+  ["c1", "Task", "A", true],
+  ["c1", "Organization", "A", false],
+  ["x1", "Task", "B", false],
+  ["g1", "Announcement", ZERO_UUID, true],
+  ["g2", "Announcement", ZERO_UUID, true],
+  ["m1", "Announcement", ZERO_UUID, true],
+  ["m6", "Announcement", ZERO_UUID, false],
+  ["u9", "Notice", ZERO_UUID, true],
+  ["u9", "Bulletin", "B", true],
+  ["m1", "Users", ZERO_UUID, false],
   [null, "Task", "A", false],
 ]
 
@@ -353,7 +401,7 @@ export function defineRightsPredicateCases(): void {
         : channelTopic({
             kind: "changes",
             scopeKindId: topic[0],
-            scope: topic[1],
+            scope: scopeId(topic[1]),
             object: topic[2],
           })
 
@@ -458,6 +506,22 @@ export function defineRightsPredicateCases(): void {
           }
         }
         expect(mismatches).toEqual([])
+      }
+    )
+
+    it.each(NAMED_SUBSCRIBE)(
+      "the database lets %s subscribe to %s @ %s: %s",
+      async (user, object, scope, expected) => {
+        const entry = entryOf(object)
+        const channel = channelOf([
+          entry.scopeKindId ?? ZERO_UUID,
+          scope,
+          entry.id,
+        ])
+        expect(await dbSubscribes(user, channel)).toBe(expected)
+        expect(canSubscribe(snapshotOf(user), channel, catalogOf())).toBe(
+          expected
+        )
       }
     )
 
