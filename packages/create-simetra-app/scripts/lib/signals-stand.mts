@@ -194,6 +194,18 @@ const dockerLogs = (name: string): Promise<string> =>
     )
   })
 
+/**
+ * Журнал без пароля DSN: Centrifugo може надрукувати рядок підключення, а журнал
+ * іде в текст помилки (а отже, у вивід CI).
+ */
+export function redactPassword(text: string, databaseUrl: string): string {
+  const { password } = new URL(databaseUrl)
+  if (password === "") return text
+  return [password, decodeURIComponent(password)]
+    .filter((p) => p !== "")
+    .reduce((out, p) => out.split(p).join("***"), text)
+}
+
 function freePort(): Promise<number> {
   return new Promise((resolvePort, reject) => {
     const server = net.createServer()
@@ -257,12 +269,13 @@ export async function startSignals(
     configDir: dir,
     image: centrifugoImage(),
   })
+  const redact = (text: string): string => redactPassword(text, o.databaseUrl)
   let downed = false
   const stand: SignalsStand = {
     name: o.name,
     wsUrl: `ws://127.0.0.1:${port}/connection/websocket`,
     httpUrl,
-    logs: () => dockerLogs(o.name),
+    logs: async () => redact(await dockerLogs(o.name)),
     async down() {
       if (downed) return
       await docker(["rm", "-f", "-v", o.name])
@@ -285,7 +298,7 @@ export async function startSignals(
       if (ok) break
       if (Date.now() > until)
         throw new Error(
-          `centrifugo ${o.name}: not healthy\n${await dockerLogs(o.name)}`
+          `centrifugo ${o.name}: not healthy\n${redact(await dockerLogs(o.name))}`
         )
       await new Promise((r) => setTimeout(r, 100))
     }

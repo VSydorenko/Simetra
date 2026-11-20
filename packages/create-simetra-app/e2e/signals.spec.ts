@@ -4,9 +4,12 @@
 // (або доводить саме відсутність сесії), тож відмова — правило маршруту, а не
 // побічний ефект; позитивний контроль — той самий запит, що проходить.
 // Відмова старту «URL без ключів» уже в `security.spec.ts`; тут — лише дзеркало.
+import { randomUUID } from "node:crypto"
+import { ZERO_UUID } from "simetra/model"
+import runtimeCatalog from "../template/generated/runtime-catalog.json" with { type: "json" }
 import { refusesToStart } from "./refuse-start"
 import { send, type Reply } from "./http"
-import { anonymousCookie, expect, test, type App } from "./fixtures"
+import { anonymousSession, expect, test, type App } from "./fixtures"
 
 const CONNECTION = "/simetra/signals/connection-token"
 const CHANNELS = "/simetra/signals/channel-tokens"
@@ -34,19 +37,44 @@ const post = (
 
 const json = (reply: Reply): Json => JSON.parse(reply.text) as Json
 
+const objectId = (name: string): string =>
+  runtimeCatalog.objects.find((o) => o.name === name)!.id
+
+/** Канал змін нескоупленого об'єкта: `simetra:<вид скоупу>:<скоуп>:<об'єкт>`. */
+const changesChannel = (name: string, scope = ZERO_UUID): string =>
+  `simetra:${ZERO_UUID}:${scope}:${objectId(name)}`
+
+/** Підпис JWT перевіряється відкритим ключем з JWKS host-а, як це робить Centrifugo. */
+async function expectSignedByJwks(app: App, token: string): Promise<void> {
+  const keys = json(await send(app, { path: JWKS })).keys as (Json & {
+    kid: string
+  })[]
+  const [head, payload, signature] = token.split(".")
+  const { kid } = decodeJwt(token).header
+  const jwk = keys.find((k) => k.kid === kid)
+  expect(jwk).toBeDefined()
+  const key = await crypto.subtle.importKey(
+    "jwk",
+    jwk as JsonWebKey,
+    { name: "Ed25519" },
+    false,
+    ["verify"]
+  )
+  const ok = await crypto.subtle.verify(
+    { name: "Ed25519" },
+    key,
+    Buffer.from(signature ?? "", "base64url"),
+    Buffer.from(`${head}.${payload}`)
+  )
+  expect(ok).toBe(true)
+}
+
 /** Заголовок і корисне навантаження JWT без перевірки підпису: перевіряє Centrifugo. */
 function decodeJwt(token: string): { header: Json; payload: Json } {
   const [header, payload] = token.split(".")
   const part = (value: string | undefined): Json =>
     JSON.parse(Buffer.from(value ?? "", "base64url").toString("utf8")) as Json
   return { header: part(header), payload: part(payload) }
-}
-
-/** `sub` токена з'єднання — `current_user_id()`: так тест не гадає форму id. */
-async function userOf(app: App, cookie: string, subject: string) {
-  const reply = await post(app, CONNECTION, same(app, cookie), { subject })
-  expect(reply.status).toBe(200)
-  return String(decodeJwt(String(json(reply).token)).payload.sub)
 }
 
 test.describe("signal token routes", () => {
@@ -61,12 +89,14 @@ test.describe("signal token routes", () => {
     expect(connection.headers["cache-control"]).toBe("no-store")
     const body = json(connection)
     expect(typeof body.expiresAt).toBe("string")
-    const { header, payload } = decodeJwt(String(body.token))
+    const { header } = decodeJwt(String(body.token))
     // Токен підписано ключем цього прогону: `kid` ключа, згенерованого фікстурою
     expect(header).toMatchObject({ alg: "EdDSA", kid: app.signals.kid })
-    const user = String(payload.sub)
+    await expectSignedByJwks(app, String(body.token))
 
-    const channel = `simetra-user:${user}`
+    // Канал змін `Client`: ClientOwner має на нього право `own` (рядкове право
+    // канал відкриває; `simetra-user:` оракул до B6 не пропускає нікому)
+    const channel = changesChannel("Client")
     const channels = await post(app, CHANNELS, same(app, a.cookie), {
       subject: a.id,
       channels: [channel],
@@ -75,6 +105,7 @@ test.describe("signal token routes", () => {
     const tokens = json(channels).tokens as Json[]
     expect(tokens.map((t) => t.channel)).toEqual([channel])
     expect(decodeJwt(String(tokens[0]!.token)).payload.channel).toBe(channel)
+    await expectSignedByJwks(app, String(tokens[0]!.token))
   })
 
   // І1
@@ -100,35 +131,43 @@ test.describe("signal token routes", () => {
 
   // І2
   test("no session and an anonymous session get no tokens", async ({ app }) => {
-    const anonymous = await anonymousCookie(app)
-    for (const path of [CONNECTION, CHANNELS])
-      for (const cookie of [undefined, anonymous]) {
+    const anonymous = await anonymousSession(app)
+    for (const path of [CONNECTION, CHANNELS]) {
+      // Анонім шле власний id: відмова має бути саме «немає сесії», а не
+      // `session-changed` через чужий `subject`
+      for (const [cookie, subject] of [
+        [undefined, app.users.a.id],
+        [anonymous.cookie, anonymous.id],
+      ] as const) {
         const reply = await post(app, path, same(app, cookie), {
-          subject: app.users.a.id,
+          subject,
           channels: [],
         })
         expect(reply.status).toBe(401)
-        expect(reply.text).not.toContain("token")
+        expect(json(reply)).toEqual({ reason: "unauthenticated" })
       }
+    }
   })
 
   // І3
   test("channel tokens cover only the channels of the grant", async ({
     app,
   }) => {
-    const { a, b } = app.users
-    const aliceUser = await userOf(app, a.cookie, a.id)
-    const bobUser = await userOf(app, b.cookie, b.id)
-    const own = `simetra-user:${bobUser}`
-    const foreign = `simetra-user:${aliceUser}`
+    const { b } = app.users
+    const own = changesChannel("Client")
+    // Обидва канали правильної форми, оракул відмовляє: `Client` не скоуплений
+    // (дозволено лише нульовий скоуп), а `GlobalRoles` ClientOwner не читає
+    const wrongScope = changesChannel("Client", randomUUID())
+    const noRight = changesChannel("GlobalRoles")
     const reply = await post(app, CHANNELS, same(app, b.cookie), {
       subject: b.id,
-      channels: [foreign, own],
+      channels: [wrongScope, noRight, own],
     })
     expect(reply.status).toBe(200)
     const tokens = json(reply).tokens as Json[]
     expect(tokens.map((t) => t.channel)).toEqual([own])
-    expect(reply.text).not.toContain(foreign)
+    expect(reply.text).not.toContain(wrongScope)
+    expect(reply.text).not.toContain(noRight)
   })
 
   // І5

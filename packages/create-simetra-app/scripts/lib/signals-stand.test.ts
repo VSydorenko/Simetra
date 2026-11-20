@@ -6,7 +6,9 @@ import {
 } from "../../../designer/src/tools/signals-config"
 import { appDsns } from "./app-database.mts"
 import {
+  centrifugoImage,
   generateSigningKeys,
+  redactPassword,
   signalsContainer,
   signalsDsn,
   templateProjectName,
@@ -99,5 +101,24 @@ describe("generateSigningKeys (Р3)", () => {
       "x",
     ])
     expect(key!.privateJwk.crv).toBe("Ed25519")
+  })
+})
+
+describe("centrifugoImage", () => {
+  it("is the digest-pinned image of the stack compose file", () => {
+    expect(centrifugoImage()).toMatch(
+      /^centrifugo\/centrifugo:v[\d.]+@sha256:[0-9a-f]{64}$/
+    )
+  })
+})
+
+describe("redactPassword", () => {
+  it("removes the DSN password from logs, raw and decoded", () => {
+    const dsn = "postgres://simetra_signals:p%40ss@127.0.0.1:5432/app"
+    const logs = "dial postgres://simetra_signals:p%40ss@h/app failed, p@ss"
+    const out = redactPassword(logs, dsn)
+    expect(out).not.toContain("p%40ss")
+    expect(out).not.toContain("p@ss")
+    expect(out).toContain("failed")
   })
 })

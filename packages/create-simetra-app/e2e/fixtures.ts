@@ -293,8 +293,9 @@ async function bringUp(
     "seed"
   )
 
-  // Власний Centrifugo прогону (Р1): мітки прогону дають сторожу стека зняти
-  // контейнер, що пережив SIGKILL; на збої й у teardown його знімає фікстура
+  // Власний Centrifugo прогону (Р1): мітки прогону дають сторожу стека лише
+  // ЗВІТУВАТИ про контейнер, що пережив SIGKILL (чужого він не видаляє); на
+  // збої й у teardown контейнер знімає сама фікстура
   const signals = await startSignals({
     name: `simetra-e2e-signals-${runTag()}`,
     labels: runContainerLabels(runTag(), testProvider()),
@@ -371,7 +372,9 @@ async function bringUp(
  * Заголовок `Cookie` анонімної сесії Better Auth: серверним API, бо HTTP-шлях
  * анонімного входу вимкнено.
  */
-export async function anonymousCookie(app: App): Promise<string> {
+export async function anonymousSession(
+  app: App
+): Promise<{ cookie: string; id: string }> {
   const pool = new pg.Pool({
     connectionString: app.adminUrl,
     options: "-c search_path=better_auth",
@@ -379,14 +382,21 @@ export async function anonymousCookie(app: App): Promise<string> {
   try {
     const auth = betterAuth(authOptions(pool, app.origin, app.secret))
     const result = await auth.api.signInAnonymous({ returnHeaders: true })
-    return result.headers
-      .getSetCookie()
-      .map((c) => c.split(";")[0])
-      .join("; ")
+    return {
+      cookie: result.headers
+        .getSetCookie()
+        .map((c) => c.split(";")[0])
+        .join("; "),
+      // Як `claims.sub`: id користувачів фікстури теж у нижньому регістрі
+      id: result.response.user.id.toLowerCase(),
+    }
   } finally {
     await pool.end()
   }
 }
+
+export const anonymousCookie = async (app: App): Promise<string> =>
+  (await anonymousSession(app)).cookie
 
 // Помилка підйому одна на прогін: без цього кожен із тестів перепідіймав би базу
 // й сервер заново й повторював ту саму помилку. Воркер після падіння фікстури
