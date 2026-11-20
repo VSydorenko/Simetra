@@ -619,18 +619,22 @@ read`), `UPDATE … WHERE … RETURNING`, `DELETE`; `ON CONFLICT` для таб�
 | І7–І9, І12, І21. Посилання на функцію поза тілом: агрегат, тригер (`EXECUTE FUNCTION`, `WHEN`), домен (`DEFAULT`), подання, політика, вирази прийнятих таблиць (`DEFAULT`, `CHECK`, генеровані колонки, індекси); некваліфіковане ім'я в DDL — лише вбудована; збіг із функцією моделі рятує лише в схемі застосунку | `expressionCallProblem` над `EXPRESSION_CLASSES` | `sql.expression-call-not-allowed` | `expression-calls.test.ts`, `stage-integrity.test.ts` |
 | І10, І21. Кваліфікований виклик у тілі, що не є вбудованою `pg_catalog`, функцією моделі, згенерованою функцією, функцією платформи чи поіменною функцією провайдера | `sqlTextCall` | `sql.function-body-statement`, `dynamicText` | `function-body.test.ts` |
 | І18. `CREATE EXTENSION` поза схемами провайдера (у схемі застосунку чи без `SCHEMA`) | перевірка боргових розширень | `sql.debt-extension-schema` (помилка); виправлення — `ALTER EXTENSION … SET SCHEMA <схема провайдера>` | `closed-forms.test.ts` |
-| І22. ACL, який платформа виводить для таблиці виду, згенерованої функції й послідовності, лишає кожній ролі API лише перелік генератора: ADP `IN SCHEMA` ролям API без права передачі нічого не додає | `executeGrants`, `tableGrants`, `sequenceRevokes` | передумова правила ADP | `provider-grants.test.ts`, `function-execute` тести |
-| Закриті форми: `CREATE RULE`, членство ролей, `CREATE`/`ALTER ROLE`, оператор, приведення, власник, `DO` верхнього рівня, DML і `COPY` верхнього рівня | `classify()` | `sql.statement-not-allowed` | `sql-units.test.ts` |
+| І22. ACL, який платформа виводить для таблиці виду, згенерованої функції й послідовності, лишає кожній ролі API лише перелік генератора: ADP `IN SCHEMA` ролям API без права передачі нічого не додає | `executeGrants`, `tableGrants`, `sequenceRevokes` | передумова правила ADP | `provider-grants.test.ts`, `function-execute.test.ts`, `access-units.test.ts` |
+| І11. Закриті форми: `CREATE RULE`, членство ролей, `CREATE`/`ALTER ROLE`, оператор, приведення, власник, `DO` верхнього рівня, DML і `COPY` верхнього рівня | `classify()` | `sql.statement-not-allowed` | `sql-units.test.ts` |
 | Ролі й членство — лише платформа: SQL застосунку їх не створює, не змінює й не видає | `classify()` | `sql.statement-not-allowed` | `sql-units.test.ts` |
 | `ALTER FUNCTION` на функцію, якої застосунок не створив (згенерована функція запису, функція платформи) | `functionSettings` | `sql.function-settings-shell` | `function-settings-shell.test.ts` |
 
 ADP застосунку, що дає привілей на `TABLES`, `SEQUENCES`, `TYPES`, `SCHEMAS`,
 судиться одним правилом над `GRANT`-формою (`REVOKE`-форма лише звужує):
-глобальне ADP (без `IN SCHEMA`) — помилка будь-якого отримувача; ADP
-`IN SCHEMA s` може називати лише ролі API, без `WITH GRANT OPTION`; отримувач
-поза ролями API (роль команд, `PUBLIC`, інша роль) — помилка. Виняток — ADP
-провайдера керованої схеми (платформна спека §6.7), коли кожен отримувач —
-власник або роль API; `FOR ROLE` з кількох ролей чи `CURRENT_USER` — інша роль.
+глобальне ADP (без `IN SCHEMA`) — помилка будь-якого класу й отримувача (воно
+досягає й `simetra`); ADP `IN SCHEMA s` може називати лише ролі API, а
+отримувача поза ролями API — лише коли (1) `FOR ROLE` називає рівно одну роль і
+отримувач — вона, або (2) `FOR ROLE` немає, а кожен отримувач — власник
+(`PROVIDER_OWNER_ROLES`) чи роль API (так виглядає ADP провайдера в керованій
+схемі, платформна спека §6.7); `FOR ROLE` з кількох ролей і отримувачем не з
+ролей API — помилка (ADP діє на об'єкти кожної названої ролі); отримувач
+`CURRENT_USER`/`SESSION_USER`/`CURRENT_ROLE` — «інша роль» (fail-closed); і
+лише без `WITH GRANT OPTION`; `PUBLIC`, роль команд чи інша роль — помилка.
 `GRANT`-ADP на `FUNCTIONS`/`ROUTINES` судить `sql.default-privileges-execute`
 ([спека декларацій](2026-11-18-sql-function-declarations-design.md) §5.1):
 другої діагностики немає. Інваріант: ролі, крім ролей API, отримують привілеї
