@@ -602,7 +602,7 @@ test.describe("server start (spec 4.1)", () => {
           },
         ]),
       },
-      "signals.invalid-key"
+      "x must match d"
     )
   })
 
