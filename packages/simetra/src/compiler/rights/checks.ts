@@ -898,9 +898,27 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
       const column = projectTarget(`${at}/columns/scope`, "source.column", ctx)
       // Невідомий вид чи колонку звітувала стадія 2.
       if (kind === undefined || column === undefined) return
+      const data = target.data as CustomTable
+      // Таблиця — сам корінь виду: `scopeColumn` у нього немає законно (П2 §6),
+      // ключ рядка і є значенням скоупу. FK з ключа на власний ключ нічого не
+      // доводить, тож колонкою скоупу рядка буває лише цей ключ.
+      const root = kind.root
       if (
-        !hasRootForeignKey(target.data as CustomTable, scope, kind, byKey())
+        "object" in root &&
+        root.object.kind === target.kind &&
+        root.object.name === target.name
       ) {
+        if (singleUuidKeyColumn(data)?.name !== scope) {
+          report("rights.source-scope-column", `${at}/columns/scope`, {
+            source: source.name,
+            column: scope,
+            scope: kind.name,
+            reason: "rootKey",
+          })
+        }
+        return
+      }
+      if (!hasRootForeignKey(data, scope, kind, byKey())) {
         report("rights.source-scope-column", `${at}/columns/scope`, {
           source: source.name,
           column: scope,

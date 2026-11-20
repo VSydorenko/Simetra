@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { completeFiles } from "simetra/compiler"
 import {
   GRANT_FILE,
+  PROJECT_FILE,
   GRANTS_SOURCE_ID,
   ORG_ASSIGNMENTS_FILE,
   ORG_ROLES_FILE,
@@ -1465,6 +1466,46 @@ describe("adopted source where, row scope and role table", () => {
   // Негативні правила: таблиця вище перевіряє лише наявність коду.
   const codesOf = async (files: Map<string, string>) =>
     (await diagnosticsOf(files)).map((d) => d.code)
+
+  /**
+   * `PolyGrant` — корінь власного виду `grantRoot`, а `polyGrants` призначає на
+   * цьому виді (#314): ключ рядка кореня і є значенням скоупу.
+   */
+  const rootSource = (scope: string) => {
+    const files = poly({ polyGrants: { columns: polyColumns({ scope }) } })
+    const project = JSON.parse(files.get(PROJECT_FILE) ?? "{}")
+    project.scopeKinds.push({
+      id: uuid(6165),
+      name: "grantRoot",
+      physicalName: "grant_root_id",
+      root: { object: { kind: "CustomTable", name: "PolyGrant" } },
+      setFunction: { schema: "public", name: "org_ids" },
+    })
+    project.assignmentSources[2].assignedOn = { scopeKind: "grantRoot" }
+    files.set(PROJECT_FILE, JSON.stringify(project))
+    const table = JSON.parse(files.get(POLY_GRANT_FILE) ?? "{}")
+    files.set(POLY_GRANT_FILE, JSON.stringify({ ...table, scope: "grantRoot" }))
+    return files
+  }
+  const rowScopeErrors = async (files: Map<string, string>) =>
+    (await diagnosticsOf(files))
+      .filter((d) => d.code === "rights.source-scope-column")
+      .map((d) => d.params)
+
+  it("the root of the scope kind: the key is the row scope, without a foreign key", async () => {
+    expect(await rowScopeErrors(rootSource("id"))).toEqual([])
+  })
+
+  it("the root of the scope kind: another column is refused", async () => {
+    expect(await rowScopeErrors(rootSource("orgId"))).toEqual([
+      {
+        source: "polyGrants",
+        column: "orgId",
+        scope: "grantRoot",
+        reason: "rootKey",
+      },
+    ])
+  })
 
   it("isNull accepts a column of any type", async () => {
     expect(
