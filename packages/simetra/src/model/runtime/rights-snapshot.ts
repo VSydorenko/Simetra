@@ -35,21 +35,6 @@ export type RightsSnapshot = z.infer<typeof rightsSnapshotSchema>
 /** `rightsVersion`: sha-256 канонічного JSON знімка, 64 hex. */
 export const rightsVersionSchema = versionEpochSchema
 
-/**
- * A `rights` part of a `read` request: the `rightsVersion` the client holds,
- * if any (P4-B spec §4.5).
- */
-export interface RightsPart {
-  type: "rights"
-  known?: string
-}
-
-/** The value of a `rights` part; `snapshot` is absent iff `known` is current. */
-export interface RightsValue {
-  rightsVersion: string
-  snapshot?: RightsSnapshot
-}
-
 /** The value of a `rights` part in wire form. */
 export const rightsValueSchema = z.strictObject({
   rightsVersion: rightsVersionSchema,
