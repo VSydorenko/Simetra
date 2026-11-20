@@ -415,7 +415,10 @@ describe("fk target key of a kind (спека прав §4.7)", () => {
         })
       )
       const [camel, snake] = tables.map((all) => ({
-        fk: all.find((t) => t.name === "log")!.foreignKeys,
+        // Без FK носія скоупу (Р8): тест про ціль `log_fk`.
+        fk: all
+          .find((t) => t.name === "log")!
+          .foreignKeys.filter((f) => f.name === "log_fk"),
         note: all.find((t) => t.name === "note")!,
       }))
       expect(camel!.fk).toEqual([

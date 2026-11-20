@@ -203,8 +203,32 @@ export function customTable(
         notNull: true,
       },
     ],
+    // Скоуплена таблиця з `scopeColumn` без власних FK отримує FK носія: це
+    // типова фікстура, а тест правила носія (Р8) передає `foreignKeys` явно.
+    ...(typeof overrides.scope === "string" &&
+    overrides.scope !== "none" &&
+    typeof overrides.scopeColumn === "string" &&
+    overrides.foreignKeys === undefined
+      ? {
+          foreignKeys: [
+            scopeCarrierForeignKey(overrides.scope, overrides.scopeColumn),
+          ],
+        }
+      : {}),
     ...overrides,
   })
+}
+
+/** FK носія скоупу на корінь виду `scopedProject()` (Р8: без нього `scopeColumn` — помилка). */
+function scopeCarrierForeignKey(scope: string, column: string) {
+  return {
+    name: `${column}_scope_fk`,
+    columns: [column],
+    references:
+      scope === "user"
+        ? { external: { schema: "auth", table: "users", columns: ["id"] } }
+        : { object: { kind: "Catalog", name: "Organization" }, key: "ref" },
+  }
 }
 
 /**
@@ -282,7 +306,11 @@ export function foreignKeyTargets(
           notNull: true,
         },
       ],
-      foreignKeys: [{ name: "log_fk", ...foreignKey }],
+      foreignKeys: [
+        { name: "log_fk", ...foreignKey },
+        // Після `log_fk`: pointer'и тестів на його індекс лишаються.
+        scopeCarrierForeignKey("org", "org"),
+      ],
     }),
   })
 }

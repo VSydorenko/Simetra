@@ -1900,13 +1900,21 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         ? "Scoped CustomTable must name its scope column in scopeColumn"
         : p.unscoped !== undefined
           ? `scopeColumn "${p.column}" is set, but the table has no scope kind`
-          : `scopeColumn "${p.column}" must be a uuid column`,
+          : p.root !== undefined
+            ? `scopeColumn "${p.column}" is set on the root of its scope kind: the root key is the scope value`
+            : p.noRootForeignKey !== undefined
+              ? `scopeColumn "${p.column}" must be the single column of a foreign key to the root key of scope kind "${p.scope}"`
+              : `scopeColumn "${p.column}" must be a uuid column`,
     uk: (p) =>
       p.column === undefined
         ? "CustomTable зі скоупом має назвати колонку скоупу в scopeColumn"
         : p.unscoped !== undefined
           ? `scopeColumn "${p.column}" задано, але таблиця не має виду скоупу`
-          : `scopeColumn "${p.column}" має бути колонкою uuid`,
+          : p.root !== undefined
+            ? `scopeColumn "${p.column}" задано на корені власного виду скоупу: ключ кореня і є значенням скоупу`
+            : p.noRootForeignKey !== undefined
+              ? `scopeColumn "${p.column}" має бути єдиною колонкою зовнішнього ключа на ключ кореня виду скоупу "${p.scope}"`
+              : `scopeColumn "${p.column}" має бути колонкою uuid`,
   },
   "scope.cross-scope-redundant": {
     en: () => "crossScope has no effect: the reference is allowed without it",

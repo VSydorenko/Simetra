@@ -1369,6 +1369,51 @@ const SCOPED_REFERENCE_ROLES: ReadonlySet<ReferenceRole> =
   ])
 
 /**
+ * Чи має таблиця одноколонковий FK з `scopeColumn` на ключ кореня виду. FK може
+ * бути кілька — декларація обирає одну колонку, тож досить одного збігу.
+ */
+function hasRootForeignKey(
+  table: CustomTable,
+  kind: ScopeKind,
+  byKey: ReadonlyMap<string, ParsedObject>
+): boolean {
+  return table.foreignKeys.some(({ columns, references }) => {
+    if (columns.length !== 1 || columns[0] !== table.scopeColumn) return false
+    if ("external" in kind.root) {
+      const { external } = kind.root
+      return (
+        "external" in references &&
+        references.external.schema === external.schema &&
+        references.external.table === external.table &&
+        references.external.columns.length === 1 &&
+        references.external.columns[0] === external.column
+      )
+    }
+    const { object } = kind.root
+    if (
+      !("object" in references) ||
+      references.object.kind !== object.kind ||
+      references.object.name !== object.name
+    ) {
+      return false
+    }
+    if ("key" in references) return references.key === "ref"
+    // Корінь — прийнята таблиця: ціль називає колонки, а ключ — її єдиний PK.
+    const root = byKey.get(objectKey(object.kind, object.name))
+    const primaryKey =
+      root !== undefined && isDeclaredTable(root)
+        ? (root.data as CustomTable).primaryKey?.columns
+        : undefined
+    return (
+      "columns" in references &&
+      references.columns.length === 1 &&
+      primaryKey?.length === 1 &&
+      references.columns[0] === primaryKey[0]
+    )
+  })
+}
+
+/**
  * Правила скоупу стадії 4 (спека П2 §6): корінь виду й посилання між
  * скоупами. Рішення про заборону живе тут, а не в стадії 3: вона не будує
  * неможливого FK і нічого не звітує.
@@ -1518,7 +1563,17 @@ function checkScope(
     const table = object.data as CustomTable
     if (kind === undefined) continue
     // Корінь скоуп-колонки не має: його ключ і є значенням скоупу.
-    if (isRoot(object, kind)) continue
+    if (isRoot(object, kind)) {
+      if (table.scopeColumn !== undefined) {
+        found.push(
+          diagnostic("scope.custom-table-column", object.file, "/scopeColumn", {
+            column: table.scopeColumn,
+            root: 1,
+          })
+        )
+      }
+      continue
+    }
     if (table.scopeColumn === undefined) {
       found.push(diagnostic("scope.custom-table-column", object.file, ""))
       continue
@@ -1532,6 +1587,16 @@ function checkScope(
       found.push(
         diagnostic("scope.custom-table-column", object.file, "/scopeColumn", {
           column: table.scopeColumn,
+        })
+      )
+    } else if (!hasRootForeignKey(table, kind, byKey)) {
+      // Права джерела членства читають скоуп з `scopeColumn`: без FK на ключ
+      // кореня колонка могла б нести довільний uuid, тобто чужий тенант.
+      found.push(
+        diagnostic("scope.custom-table-column", object.file, "/scopeColumn", {
+          column: table.scopeColumn,
+          noRootForeignKey: 1,
+          scope: kind.name,
         })
       )
     }
