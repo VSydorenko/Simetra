@@ -75,6 +75,8 @@ function keyPairMatches(x: string, d: string): boolean {
       format: "jwk",
     })
     const derived = createPublicKey(privateKey).export({ format: "jwk" })
+    // Порівняння — сама перевірка: Node 24.15 (`.node-version`, CI) імпортує
+    // приватний JWK, ігноруючи `x`; новіші версії відмовляють ще на імпорті
     return derived.x === x
   } catch {
     return false

@@ -25,6 +25,7 @@ describe("guardRequest", () => {
     expect(result).toMatchObject({ ok: false, reason: "origin" })
     if (result.ok) throw new Error("unreachable")
     expect(result.response.status).toBe(403)
+    expect(result.response.headers.get("set-cookie")).toBeNull()
     expect(verifySession).not.toHaveBeenCalled()
   })
 
