@@ -114,6 +114,18 @@ describe("addElement: scopes", () => {
     expect(table(ORGANIZATION).scopeColumn).toBeUndefined()
     expect(table(ORDERS)).toMatchObject({ scope: "org", scopeColumn: "org" })
     expect(table(LOGS).scope).toBe("none")
+    // Канонічний запис (завершення в `only`): файл таблиці, як і проєкт,
+    // отримує `$schema` через `schemaPath`.
+    for (const file of [PROJECT_FILE, ORGANIZATION, ORDERS, LOGS]) {
+      expect(table(file).$schema).toBe(
+        schemaPath(
+          file,
+          file === PROJECT_FILE
+            ? "project.schema.json"
+            : "custom-tables.schema.json"
+        )
+      )
+    }
     expect(
       (JSON.parse(after.get(PROJECT_FILE)!) as { scopeKinds: Json[] })
         .scopeKinds[0]
