@@ -636,6 +636,29 @@ describe("messages catalog", () => {
     }
   )
 
+  it("sql.kind-table-verbatim says an unqualified name was resolved fail-closed", () => {
+    const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
+      identity: "grant:identities:INSERT",
+      table: "simetra.identities",
+      form: "grant",
+      roles: "authenticated",
+      line: 1,
+      unqualified: "yes",
+    })
+    expect(d.message).toContain("the name has no schema")
+    expect(d.hint).toContain("qualify the name with that schema")
+    expect(localize(d, "uk").message).toContain("ім'я без схеми")
+    expect(localize(d, "uk").hint).toContain("кваліфікуйте ім'я цією схемою")
+    const q = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
+      identity: "grant:x",
+      table: "simetra.identities",
+      form: "grant",
+      roles: "authenticated",
+      line: 1,
+    })
+    expect(q.message).not.toContain("no schema")
+  })
+
   it("sql.kind-table-verbatim names the unit, not a function, for a sequence call outside a function", () => {
     const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
       identity: "view:public.v",

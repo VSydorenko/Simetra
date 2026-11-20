@@ -20,7 +20,7 @@ import { sqlLiteral } from "../stages/model"
 const NAME = SIGNAL_OUTBOX.name
 const TABLE = qualified(SIGNAL_OUTBOX)
 /** Послідовність `id` черги сигналів — друга платформна послідовність поряд з `row_version`. */
-export const SIGNAL_OUTBOX_SEQUENCE: QualifiedName = {
+const SIGNAL_OUTBOX_SEQUENCE: QualifiedName = {
   schema: SIGNAL_OUTBOX.schema,
   name: `${NAME}_id_seq`,
 }

@@ -276,7 +276,8 @@ const bodyVerbatim = (
   statement: string,
   fn = "public.f",
   identity = `function:${fn}()`,
-  line = 1
+  line = 1,
+  unqualified = false
 ) => ({
   code: "sql.kind-table-verbatim",
   file,
@@ -287,6 +288,7 @@ const bodyVerbatim = (
     form: "functionBody",
     statement,
     line,
+    ...(unqualified ? { unqualified: "yes" } : {}),
   },
 })
 
@@ -400,7 +402,10 @@ describe("sql.kind-table-verbatim: application SQL does not write a kind table (
         OTHER_SCHEMA,
         "public.task",
         "DeleteStmt",
-        "app.f"
+        "app.f",
+        "function:app.f()",
+        1,
+        true
       ),
     },
     {
@@ -493,7 +498,15 @@ describe("sql.kind-table-verbatim: application SQL does not write a kind table (
       // Шлях пошуку викликача може вести в `simetra`.
       name: "an unqualified table of the apply state",
       sql: plpgsqlFn("DELETE FROM ledger WHERE false"),
-      expected: bodyVerbatim(EXTRA, "simetra.ledger", "DeleteStmt"),
+      expected: bodyVerbatim(
+        EXTRA,
+        "simetra.ledger",
+        "DeleteStmt",
+        "public.f",
+        "function:public.f()",
+        1,
+        true
+      ),
     },
     {
       name: "a DO block in a body",
@@ -1426,4 +1439,74 @@ describe("sql.kind-table-verbatim: fail-closed routes of the enumerator", () => 
       expect(roles(found)).toEqual([mark])
     }
   )
+
+  // Раунд 2, G1: послідовності платформи — з identity-колонок знімка таблиць
+  // `simetra`, а не з другого ручного переліку.
+  it("nextval of the rights journal sequence by its unqualified name is judged", async () => {
+    expect(
+      await sequencePathsOf(
+        plpgsqlFn(
+          "n := nextval('rights_journal_seq_seq')",
+          "public.f",
+          "SECURITY DEFINER SET search_path = ''"
+        )
+      )
+    ).toEqual([
+      {
+        form: "sequence",
+        table: "simetra.rights_journal_seq_seq",
+        statement: "nextval",
+      },
+    ])
+  })
+
+  it("USAGE on the rights journal sequence is judged", async () => {
+    expect(
+      await rule1(
+        `GRANT USAGE ON SEQUENCE rights_journal_seq_seq TO ${API.anonymous};`
+      )
+    ).toMatchObject([
+      {
+        form: "grant",
+        table: "simetra.rights_journal_seq_seq",
+        roles: API.anonymous,
+      },
+    ])
+  })
+
+  // G2: Postgres приймає грант синтаксисом TABLE на послідовність.
+  it.each([
+    {
+      name: "UPDATE by the table syntax",
+      sql: `GRANT UPDATE ON row_version TO ${API.anonymous};`,
+      table: "simetra.row_version",
+    },
+    {
+      name: "ALL by the explicit TABLE syntax",
+      sql: `GRANT ALL ON TABLE signal_outbox_id_seq TO ${API.anonymous};`,
+      table: "simetra.signal_outbox_id_seq",
+    },
+  ])("$name → error", async ({ sql, table }) => {
+    expect(await rule1(sql)).toMatchObject([
+      { form: "grant", table, roles: API.anonymous },
+    ])
+  })
+
+  it("SELECT by the table syntax on a platform sequence → no path", async () => {
+    expect(
+      await rule1(`GRANT SELECT ON row_version TO ${API.anonymous};`)
+    ).toEqual([])
+  })
+
+  // G3: параметр `unqualified` лише для імені без схеми.
+  it("a target from an unqualified name carries the unqualified mark", async () => {
+    const unqualified = await rule1(
+      `GRANT INSERT ON identities TO ${API.user};`
+    )
+    expect(unqualified).toMatchObject([
+      { form: "grant", table: "simetra.identities", unqualified: "yes" },
+    ])
+    const qualified = await rule1(`GRANT INSERT ON ${IDENTITY} TO ${API.user};`)
+    expect(qualified.map((p) => p.unqualified)).toEqual([undefined])
+  })
 })

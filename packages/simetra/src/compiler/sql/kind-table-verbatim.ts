@@ -61,6 +61,7 @@ function pathDiagnostic({
   target,
   roles,
   statement,
+  unqualified,
 }: WritePath): Diagnostic {
   const params: Record<string, string | number> = {
     identity: unit.identity,
@@ -68,6 +69,7 @@ function pathDiagnostic({
     form,
     line: unit.line,
   }
+  if (unqualified === true) params.unqualified = "yes"
   if (form === "functionBody" || form === "sequence") {
     // Виклик послідовності стоїть і в поданні, домені, політиці: «функцією»
     // названа лише функція чи процедура.

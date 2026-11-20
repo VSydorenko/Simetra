@@ -786,6 +786,21 @@ function kindTableVerbatim(p: Record<string, unknown>): {
   }
 }
 
+/**
+ * Ціль з імені без схеми: рендер не задає `search_path`, тож ім'я судиться за
+ * всіма схемами (fail-closed), а кваліфікація власною схемою знімає відмову.
+ */
+const UNQUALIFIED_NOTE = {
+  message: {
+    en: " (the name has no schema, so it is resolved fail-closed)",
+    uk: " (ім'я без схеми, тож його розв'язано fail-closed)",
+  },
+  hint: {
+    en: " If you meant an object of your own schema, qualify the name with that schema and the refusal goes away.",
+    uk: " Якщо йдеться про об'єкт вашої схеми, кваліфікуйте ім'я цією схемою — відмова зникне.",
+  },
+}
+
 function kindTableVerbatimHint(p: Record<string, unknown>): {
   en: string
   uk: string
@@ -1218,11 +1233,19 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   // політики й тригера — та сама, що підказує модуль виду, а тілу підказка
   // називає, хто пише таблицю виду.
   "sql.kind-table-verbatim": {
-    en: (p) => kindTableVerbatim(p).en,
-    uk: (p) => kindTableVerbatim(p).uk,
+    en: (p) =>
+      kindTableVerbatim(p).en +
+      (p.unqualified === "yes" ? UNQUALIFIED_NOTE.message.en : ""),
+    uk: (p) =>
+      kindTableVerbatim(p).uk +
+      (p.unqualified === "yes" ? UNQUALIFIED_NOTE.message.uk : ""),
     hint: {
-      en: (p) => kindTableVerbatimHint(p).en,
-      uk: (p) => kindTableVerbatimHint(p).uk,
+      en: (p) =>
+        kindTableVerbatimHint(p).en +
+        (p.unqualified === "yes" ? UNQUALIFIED_NOTE.hint.en : ""),
+      uk: (p) =>
+        kindTableVerbatimHint(p).uk +
+        (p.unqualified === "yes" ? UNQUALIFIED_NOTE.hint.uk : ""),
     },
   },
   "sql.function-body-statement": {

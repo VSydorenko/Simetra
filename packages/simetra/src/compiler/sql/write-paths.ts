@@ -14,7 +14,6 @@ import {
 } from "simetra/model"
 import { grantTargetKeys } from "../function-execute"
 import { ROW_VERSION_SEQUENCE } from "../mechanics-units"
-import { SIGNAL_OUTBOX_SEQUENCE } from "../platform/outbox"
 import { isSecurityInvoker } from "./definer-reads"
 import {
   PUBLIC,
@@ -65,6 +64,11 @@ export interface WritePath {
   roles: readonly string[]
   /** `functionBody`: вузол оператора; `sequence`: `setval` чи `nextval`. */
   statement?: string
+  /**
+   * Ціль виникла з імені без схеми й розв'язана fail-closed: кваліфікація
+   * своєю схемою знімає відмову (`sql.kind-table-verbatim` каже про це).
+   */
+  unqualified?: boolean
 }
 
 export interface WritePathContext {
@@ -147,7 +151,15 @@ export function writePaths(
           ...optional(sequencePath(unit, ctx)),
         ]
       case "grant":
-        return optional(grantPath(unit, written, owner, ctx.parse))
+        return optional(
+          grantPath(
+            unit,
+            written,
+            owner,
+            ctx.parse,
+            platformSequenceNames(ctx.kind)
+          )
+        )
       case "defaultPrivileges":
         return optional(defaultPrivilegesPath(unit, adp, apiRoles, ctx))
       default:
@@ -184,6 +196,7 @@ function functionBodyPath(
         target: hit.table,
         roles: [],
         statement: hit.statement,
+        ...(hit.unqualified ? { unqualified: true } : {}),
       }
 }
 
@@ -192,6 +205,8 @@ export interface BodyKindTable {
   table: string
   /** Вузол оператора в дереві розбору: `InsertStmt`, `UpdateStmt`… */
   statement: string
+  /** Ціль — ім'я без схеми. */
+  unqualified: boolean
 }
 
 /**
@@ -224,7 +239,11 @@ export function bodyKindTable(
         new Set()
       )
       if (table !== undefined)
-        return { table, statement: Object.keys(stmt)[0] ?? "" }
+        return {
+          table,
+          statement: Object.keys(stmt)[0] ?? "",
+          unqualified: target.schema === "",
+        }
     }
   }
   return undefined
@@ -233,25 +252,26 @@ export function bodyKindTable(
 const SEQUENCE_FUNCTIONS: ReadonlySet<string> = new Set(["setval", "nextval"])
 
 /**
- * Послідовності, які створює платформа в `simetra`: перелік — самі константи
- * генераторів, а не другий список імен.
+ * Імена послідовностей платформи: identity-колонки таблиць `simetra` знімка
+ * (одне джерело з `platformTables`) і `row_version`, якої знімок не несе.
  */
-const PLATFORM_SEQUENCES = [ROW_VERSION_SEQUENCE, SIGNAL_OUTBOX_SEQUENCE]
+function platformSequenceNames(kind: KindTables): ReadonlySet<string> {
+  return new Set([ROW_VERSION_SEQUENCE.name, ...(kind.platformSequences ?? [])])
+}
 
 /**
  * Платформна послідовність за іменем: будь-яке ім'я в `simetra`; некваліфіковане
  * ім'я послідовності, яку створює платформа, — теж, бо шлях пошуку сесії може
- * вести в `simetra` (fail-closed). `undefined` — послідовність не платформи.
+ * вести в `simetra` (fail-closed). `names` — `platformSequenceNames`.
+ * `undefined` — послідовність не платформи.
  */
 function platformSequence(
   schema: string | undefined,
-  name: string
+  name: string,
+  names: ReadonlySet<string>
 ): string | undefined {
   if (schema === PLATFORM_SCHEMA) return `${schema}.${name}`
-  if (
-    (schema === undefined || schema === "") &&
-    PLATFORM_SEQUENCES.some((s) => s.name === name)
-  )
+  if ((schema === undefined || schema === "") && names.has(name))
     return `${PLATFORM_SCHEMA}.${name}`
   return undefined
 }
@@ -280,7 +300,7 @@ function sequencePath(
     }) ?? []),
   ]
   for (const tree of trees) {
-    const hit = findSequenceCall(tree)
+    const hit = findSequenceCall(tree, platformSequenceNames(ctx.kind))
     if (hit !== undefined)
       return {
         unit,
@@ -288,17 +308,19 @@ function sequencePath(
         target: hit.target,
         roles: [],
         statement: hit.call,
+        ...(hit.unqualified ? { unqualified: true } : {}),
       }
   }
   return undefined
 }
 
 function findSequenceCall(
-  value: unknown
-): { call: string; target: string } | undefined {
+  value: unknown,
+  platform: ReadonlySet<string>
+): { call: string; target: string; unqualified: boolean } | undefined {
   if (Array.isArray(value)) {
     for (const item of value) {
-      const hit = findSequenceCall(item)
+      const hit = findSequenceCall(item, platform)
       if (hit !== undefined) return hit
     }
     return undefined
@@ -315,30 +337,41 @@ function findSequenceCall(
     const builtin =
       names.length === 1 || (names.length === 2 && names[0] === "pg_catalog")
     if (builtin && SEQUENCE_FUNCTIONS.has(name)) {
-      const target = sequenceTarget(call.args?.[0])
-      if (target !== undefined) return { call: name, target }
+      const target = sequenceTarget(call.args?.[0], platform)
+      if (target !== undefined)
+        return {
+          call: name,
+          target: target.target,
+          unqualified: target.unqualified,
+        }
     }
   }
   for (const child of Object.values(record)) {
-    const hit = findSequenceCall(child)
+    const hit = findSequenceCall(child, platform)
     if (hit !== undefined) return hit
   }
   return undefined
 }
 
 /** Ціль виклику: `*` — нелітеральний аргумент; `undefined` — послідовність не платформи. */
-function sequenceTarget(arg: Node | undefined): string | undefined {
+function sequenceTarget(
+  arg: Node | undefined,
+  platform: ReadonlySet<string>
+): { target: string; unqualified: boolean } | undefined {
   let node: Node | undefined = arg
   while (node !== undefined && "TypeCast" in node) node = node.TypeCast.arg
   const text =
     node !== undefined && "A_Const" in node
       ? node.A_Const.sval?.sval
       : undefined
-  if (text === undefined) return "*"
+  if (text === undefined) return { target: "*", unqualified: false }
   const names = relationNameText(text)
-  if (names === undefined) return "*"
-  const name = names.at(-1) ?? ""
-  return platformSequence(names.length > 1 ? names.at(-2) : undefined, name)
+  if (names === undefined) return { target: "*", unqualified: false }
+  const schema = names.length > 1 ? names.at(-2) : undefined
+  const target = platformSequence(schema, names.at(-1) ?? "", platform)
+  return target === undefined
+    ? undefined
+    : { target, unqualified: schema === undefined }
 }
 
 /**
@@ -508,17 +541,18 @@ function grantPath(
   unit: VerbatimUnit,
   written: KindTables,
   owner: string | undefined,
-  parse: SqlParser
+  parse: SqlParser,
+  sequences: ReadonlySet<string>
 ): WritePath | undefined {
   const grant = (unit.tree as { GrantStmt?: GrantStmt }).GrantStmt
   if (grant === undefined || grant.is_grant !== true) return undefined
-  const sequence = grant.objtype === "OBJECT_SEQUENCE"
-  if (
-    !sequence &&
-    (grant.objtype !== "OBJECT_TABLE" || !writesOf(grant.privileges ?? []))
-  )
+  const objtype = grant.objtype
+  if (objtype !== "OBJECT_TABLE" && objtype !== "OBJECT_SEQUENCE")
     return undefined
-  if (sequence && !sequenceWritesOf(grant.privileges ?? [])) return undefined
+  const privileges = grant.privileges ?? []
+  const tableWrite = objtype === "OBJECT_TABLE" && writesOf(privileges)
+  const sequenceWrite = sequenceWritesOf(privileges)
+  if (!tableWrite && !sequenceWrite) return undefined
   const roles = granteeNames(grant.grantees).filter(
     (r) => DYNAMIC_ROLES.has(r) || r !== owner
   )
@@ -527,16 +561,26 @@ function grantPath(
   // файлу, а не з `unit.schema`, як у політики й тригера.
   const resolved = new Set(grantTargetKeys(unit, parse))
   for (const target of statementTargets(unit.tree as Node, "")) {
-    if (sequence) {
+    // Postgres приймає і `GRANT … ON TABLE <послідовність>` (залишає лише
+    // `USAGE`/`SELECT`/`UPDATE`), тож ціль гранту будь-якого з двох синтаксисів
+    // розпізнається і як послідовність платформи.
+    if (sequenceWrite) {
       const hit =
         target.kind === "schema"
-          ? target.schema === PLATFORM_SCHEMA
+          ? objtype === "OBJECT_SEQUENCE" && target.schema === PLATFORM_SCHEMA
             ? `${PLATFORM_SCHEMA}.*`
             : undefined
-          : platformSequence(target.schema, target.object ?? "")
-      if (hit !== undefined) return { unit, form: "grant", target: hit, roles }
-      continue
+          : platformSequence(target.schema, target.object ?? "", sequences)
+      if (hit !== undefined)
+        return {
+          unit,
+          form: "grant",
+          target: hit,
+          roles,
+          ...(target.schema === "" ? { unqualified: true } : {}),
+        }
     }
+    if (!tableWrite) continue
     const table = kindTableNamed(target, unit.schema, written)
     if (table === undefined) continue
     if (
@@ -545,7 +589,13 @@ function grantPath(
       resolved.has(`table|${table}`)
     )
       continue
-    return { unit, form: "grant", target: table, roles }
+    return {
+      unit,
+      form: "grant",
+      target: table,
+      roles,
+      ...(target.schema === "" ? { unqualified: true } : {}),
+    }
   }
   return undefined
 }
