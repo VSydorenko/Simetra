@@ -5,9 +5,6 @@
 // підміняє `requestAnimationFrame`, тож сценарії 9 і 10 (які ведуть час) беруть
 // записувач змін DOM, решта — кадровий.
 import { randomUUID } from "node:crypto"
-import pg from "pg"
-import { betterAuth } from "better-auth"
-import { authOptions } from "../template/src/server/auth"
 import {
   contextWithCookie,
   expectedHydrationObjects,
@@ -20,7 +17,7 @@ import {
   serverRendered,
   watchDataFn,
 } from "./browser"
-import { test, expect, B_ROWS, type App } from "./fixtures"
+import { test, expect, B_ROWS, anonymousCookie, type App } from "./fixtures"
 import { send, type Reply } from "./http"
 import { encodePayload } from "./serialization"
 
@@ -567,22 +564,7 @@ test.describe("security: no session, anonymous session", () => {
     app,
     browser,
   }) => {
-    // Серверним API: HTTP-шлях анонімного входу вимкнено
-    const pool = new pg.Pool({
-      connectionString: app.adminUrl,
-      options: "-c search_path=better_auth",
-    })
-    let cookie: string
-    try {
-      const auth = betterAuth(authOptions(pool, app.origin, app.secret))
-      const result = await auth.api.signInAnonymous({ returnHeaders: true })
-      cookie = result.headers
-        .getSetCookie()
-        .map((c) => c.split(";")[0])
-        .join("; ")
-    } finally {
-      await pool.end()
-    }
+    const cookie = await anonymousCookie(app)
     const reply = await html(app, cookie, "/clients")
     expect(reply.status).toBe(307)
     expect(reply.headers.location).toBe("/login")

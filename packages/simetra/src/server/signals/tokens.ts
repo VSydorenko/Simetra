@@ -168,6 +168,49 @@ async function load(key: SigningKey): Promise<LoadedKey> {
 const retiredBy = (key: SigningKey, now: number) =>
   key.retiredAt !== undefined && key.retiredAt.getTime() <= now
 
+type SigningChoice =
+  | { key: SigningKey; problem?: undefined }
+  | {
+      key?: undefined
+      problem: "signals.no-signing-key" | "signals.no-mature-key"
+    }
+
+// Єдине правило вибору ключа підпису: його кличуть і порт, і перевірка старту.
+function chooseSigningKey(
+  keys: readonly SigningKey[],
+  at: number
+): SigningChoice {
+  const active = keys.filter((k) => !retiredBy(k, at))
+  if (active.length === 0) return { problem: "signals.no-signing-key" }
+  const byAdded = [...active].sort(
+    (a, b) => a.addedAt.getTime() - b.addedAt.getTime()
+  )
+  const newest = byAdded
+    .filter((k) => k.addedAt.getTime() <= at - MATURE_AFTER)
+    .at(-1)
+  if (newest !== undefined) return { key: newest }
+  // Перший запуск — жоден ключ ще не відставлено: старого ключа в кеші JWKS
+  // Centrifugo немає, тож найстаріший ключ підписує одразу. Після першої
+  // відставки незрілий наступник ще може бути відсутній у кеші — тоді
+  // відмова, а не токен, який Centrifugo не перевірить.
+  if (keys.every((k) => k.retiredAt === undefined)) return { key: byAdded[0]! }
+  return { problem: "signals.no-mature-key" }
+}
+
+/**
+ * Whether no key of the set may sign at `at`, by the same rule the port signs
+ * with: `signals.no-signing-key` (every key is retired) or
+ * `signals.no-mature-key` (a key was retired and no active key is mature yet);
+ * `undefined` when a key can sign. A host calls it at start-up to warn about a
+ * rotation phase that makes every token request fail with 503.
+ */
+export function signingKeyProblem(
+  keys: readonly SigningKey[],
+  at: Date = new Date()
+): "signals.no-signing-key" | "signals.no-mature-key" | undefined {
+  return chooseSigningKey(keys, at.getTime()).problem
+}
+
 /**
  * The port over Centrifugo: Ed25519 JWTs (`alg: "EdDSA"`, a `kid` in every
  * header), a 15-minute connection token and 5-minute channel tokens. Throws
@@ -188,28 +231,16 @@ export async function createCentrifugoTokens(
     seen.add(key.kid)
   }
   const keys = await Promise.all(options.keys.map(load))
-  // Перший запуск — жоден ключ ще не відставлено: старого ключа в кеші JWKS
-  // Centrifugo немає, тож найстаріший ключ підписує одразу. Після першої
-  // відставки незрілий наступник ще може бути відсутній у кеші — тоді
-  // відмова, а не токен, який Centrifugo не перевірить.
-  const firstRun = options.keys.every((k) => k.retiredAt === undefined)
+  const byKid = new Map(keys.map((k) => [k.key.kid, k]))
 
   function signer(at: number): LoadedKey {
-    const active = keys.filter((k) => !retiredBy(k.key, at))
-    if (active.length === 0)
+    const choice = chooseSigningKey(options.keys, at)
+    if (choice.key !== undefined) return byKid.get(choice.key.kid)!
+    if (choice.problem === "signals.no-signing-key")
       throw new SignalTokenError(
         "signals.no-signing-key",
         "No signing key is active: every key is retired."
       )
-    const byAdded = [...active].sort(
-      (a, b) => a.key.addedAt.getTime() - b.key.addedAt.getTime()
-    )
-    const mature = byAdded.filter(
-      (k) => k.key.addedAt.getTime() <= at - MATURE_AFTER
-    )
-    const newest = mature.at(-1)
-    if (newest !== undefined) return newest
-    if (firstRun) return byAdded[0]!
     throw new SignalTokenError(
       "signals.no-mature-key",
       "A key is retired but no active key was added at least 65 minutes ago; Centrifugo may not know the successor yet."

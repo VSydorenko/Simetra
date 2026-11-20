@@ -44,6 +44,14 @@ describe("runtime binding", () => {
     expect(created.options).toHaveLength(1)
   })
 
+  it("gives one runtime to getRuntime and the data handler", async () => {
+    const { getRuntime, getDataHandler } = await load()
+    const first = getRuntime()
+    expect(getRuntime()).toBe(first)
+    await Promise.all([first, getDataHandler()])
+    expect(created.options).toHaveLength(1)
+  })
+
   it("routes the database port through wrapDatabase", async () => {
     const { getDataHandler } = await load()
     await getDataHandler()

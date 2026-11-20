@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 import { createChannelGrant, type ChannelGrant } from "../grant"
 import {
   createCentrifugoTokens,
+  signingKeyProblem,
   type PrivateJwk,
   type SignalTokens,
   type SigningKey,
@@ -77,6 +78,7 @@ describe("createCentrifugoTokens", () => {
       "SIGNALS_JWKS_PATH",
       "SignalTokenError",
       "createCentrifugoTokens",
+      "signingKeyProblem",
     ])
   })
 
@@ -314,5 +316,44 @@ describe("createCentrifugoTokens", () => {
         ])
       ).rejects.toMatchObject({ code: "signals.invalid-key" })
     })
+  })
+})
+
+describe("signingKeyProblem", () => {
+  const keyOf = (addedAt: Date, retiredAt?: Date): SigningKey => ({
+    kid: addedAt.toISOString(),
+    privateJwk: {},
+    addedAt,
+    ...(retiredAt === undefined ? {} : { retiredAt }),
+  })
+  const FUTURE = new Date(NOW.getTime() + 60 * MIN)
+
+  it("lets the first run sign with a fresh key", () => {
+    expect(signingKeyProblem([keyOf(ago(1))], NOW)).toBeUndefined()
+  })
+
+  it("lets a mature successor sign after a retirement", () => {
+    expect(
+      signingKeyProblem([keyOf(ago(500), ago(10)), keyOf(ago(70))], NOW)
+    ).toBeUndefined()
+  })
+
+  it("refuses an immature successor after a retirement", () => {
+    expect(
+      signingKeyProblem([keyOf(ago(500), ago(10)), keyOf(ago(30))], NOW)
+    ).toBe("signals.no-mature-key")
+  })
+
+  it("refuses a fresh key that has a retirement date in the future", () => {
+    // Ключ із майбутнім `retiredAt` уже не «перший запуск»: порт відмовляє так само
+    expect(signingKeyProblem([keyOf(ago(1), FUTURE)], NOW)).toBe(
+      "signals.no-mature-key"
+    )
+  })
+
+  it("refuses when every key is retired", () => {
+    expect(signingKeyProblem([keyOf(ago(500), ago(10))], NOW)).toBe(
+      "signals.no-signing-key"
+    )
   })
 })
