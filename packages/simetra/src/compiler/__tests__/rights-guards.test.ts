@@ -18,16 +18,14 @@ import { hasEmptySearchPath, routineLanguage } from "../sql/closed-forms"
 import { loadSqlParser } from "../sql/parse"
 import type { SqlUnit } from "../sql/units"
 import {
-  MEMBER_REGION_FILE,
-  MEMBER_REGION_ID,
   ORG_KIND_ID,
   PROJECT_FILE,
   PROJECT_ID,
   adoptedMembership,
+  adoptedRegionRelation,
   compileRights,
   membersSource,
   policyDomain,
-  regionDimension,
   rootCreationDomain,
   singleTenantRights,
   withRoles,
@@ -441,55 +439,8 @@ describe("rights guard statement triggers", () => {
   })
 
   it("puts no triggers on an adopted CustomTable relation", async () => {
-    const column = (id: number, name: string, physicalName: string) => ({
-      id: uuid(id),
-      name,
-      physicalName,
-      type: "UUID",
-      notNull: true,
-    })
-    const fk = (name: string, field: string, target: string) => ({
-      name,
-      columns: [field],
-      references: { object: ref("Catalog", target), key: "ref" },
-    })
     const result = await compileRights(
-      policyDomain(writeRoles(), {
-        [MEMBER_REGION_FILE]: null,
-        "custom-tables/MemberRegion/MemberRegion.meta.json": {
-          id: MEMBER_REGION_ID,
-          kind: "CustomTable",
-          name: "MemberRegion",
-          physicalName: "member_region",
-          scope: "org",
-          scopeColumn: "orgId",
-          columns: [
-            column(6033, "orgId", "org_id"),
-            column(6031, "member", "member_id"),
-            column(6032, "region", "region_id"),
-          ],
-          foreignKeys: [
-            // Носій скоупу — FK на ключ кореня виду (Р8).
-            fk("member_region_org_fk", "orgId", "Organization"),
-            fk("member_region_member_fk", "member", "OrgMember"),
-            fk("member_region_region_fk", "region", "Region"),
-          ],
-        },
-        [PROJECT_FILE]: {
-          accessDimensions: [
-            {
-              ...regionDimension(),
-              values: {
-                relation: {
-                  object: ref("CustomTable", "MemberRegion"),
-                  subject: "member",
-                  value: "region",
-                },
-              },
-            },
-          ],
-        },
-      })
+      policyDomain(writeRoles(), adoptedRegionRelation())
     )
     expectClean(result)
     const relation = result.model!.contracts.accessDimensions.flatMap((d) =>

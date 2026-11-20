@@ -6,7 +6,10 @@ import {
   type RightsSnapshot,
 } from "simetra/model"
 import { describe, expect, it } from "vitest"
-import { catalogEntry } from "../../../model/runtime/__tests__/entries"
+import {
+  catalogEntry,
+  catalogRights,
+} from "../../../model/runtime/__tests__/entries"
 import { canSubscribe, readAllowed } from "../rights"
 
 const KIND = "00000000-0000-4000-8000-0000000000c1"
@@ -23,11 +26,14 @@ const scoped = (over: Partial<CatalogEntry> = {}): CatalogEntry =>
     kindLabel: LABEL,
     scopeKindId: KIND,
     signal: true,
-    rightsContract: true,
+    rights: catalogRights(),
     ...over,
   })
 const unscoped = (over: Partial<CatalogEntry> = {}): CatalogEntry => {
-  const entry: CatalogEntry = { ...scoped({ id: PLAIN }), ...over }
+  // Контракт нескоупленого: без межі тенанта й множини скоупів.
+  const rights = catalogRights({ readBoundary: [] })
+  delete rights.scopeSet
+  const entry: CatalogEntry = { ...scoped({ id: PLAIN, rights }), ...over }
   delete entry.scopeKindId
   delete entry.scopeColumn
   return entry
@@ -267,8 +273,9 @@ describe("readAllowed", () => {
     expect(readAllowed(snap([row()]), { scope: null }, scoped())).toBe(false)
   })
 
-  it("об'єкт без rightsContract — так", () => {
-    const entry = scoped({ rightsContract: undefined })
+  it("об'єкт без контракту rights — так", () => {
+    const entry = scoped()
+    delete entry.rights
     expect(readAllowed(snap([], []), pair, entry)).toBe(true)
   })
 

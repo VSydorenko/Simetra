@@ -19,7 +19,77 @@
       "versionName": "version",
       "kernelHash": "0f83f2243ed39161f34412c27b93f22b1991f009df3f6ad9fd6afd79a333c6f4",
       "signal": true,
-      "rightsContract": true,
+      "rights": {
+        "actions": [
+          {
+            "action": "read",
+            "extents": [
+              {
+                "form": "any"
+              },
+              {
+                "form": "own"
+              }
+            ]
+          },
+          {
+            "action": "create",
+            "extents": [
+              {
+                "form": "any"
+              },
+              {
+                "form": "own"
+              }
+            ]
+          },
+          {
+            "action": "update",
+            "extents": [
+              {
+                "form": "any"
+              },
+              {
+                "form": "own"
+              }
+            ]
+          },
+          {
+            "action": "markDeletion",
+            "extents": [
+              {
+                "form": "any"
+              },
+              {
+                "form": "own"
+              }
+            ]
+          },
+          {
+            "action": "delete",
+            "extents": [
+              {
+                "form": "any"
+              },
+              {
+                "form": "own"
+              }
+            ]
+          }
+        ],
+        "ownership": [
+          {
+            "carrier": {
+              "attribute": "owner"
+            },
+            "owner": {
+              "users": true
+            }
+          }
+        ],
+        "access": [],
+        "readBoundary": []
+      },
       "presentation": {
         "attribute": "description"
       },
@@ -166,7 +236,53 @@
       "versionName": "version",
       "kernelHash": "ebc8521f858b032322f9308d7d4fea6e20bcc5121fd781a33a41992857e79a7a",
       "signal": true,
-      "rightsContract": true,
+      "rights": {
+        "actions": [
+          {
+            "action": "read",
+            "extents": [
+              {
+                "form": "any"
+              }
+            ]
+          },
+          {
+            "action": "create",
+            "extents": [
+              {
+                "form": "any"
+              }
+            ]
+          },
+          {
+            "action": "update",
+            "extents": [
+              {
+                "form": "any"
+              }
+            ]
+          },
+          {
+            "action": "markDeletion",
+            "extents": [
+              {
+                "form": "any"
+              }
+            ]
+          },
+          {
+            "action": "delete",
+            "extents": [
+              {
+                "form": "any"
+              }
+            ]
+          }
+        ],
+        "ownership": [],
+        "access": [],
+        "readBoundary": []
+      },
       "presentation": {
         "attribute": "description"
       },
@@ -244,7 +360,29 @@
       "versionName": "version",
       "kernelHash": "f18e31557a8996afed0613e5198277049a1ccee0e440ba3cc23dec451da781a3",
       "signal": true,
-      "rightsContract": true,
+      "rights": {
+        "actions": [
+          {
+            "action": "read",
+            "extents": [
+              {
+                "form": "any"
+              }
+            ]
+          },
+          {
+            "action": "administerRights",
+            "extents": [
+              {
+                "form": "any"
+              }
+            ]
+          }
+        ],
+        "ownership": [],
+        "access": [],
+        "readBoundary": []
+      },
       "presentation": {
         "attribute": "description"
       },
@@ -355,7 +493,29 @@
       "versionName": "version",
       "kernelHash": "f66cbb34200ae1846604fce8852fa546743f6b489e736472b2ecf273a7aa7f3d",
       "signal": true,
-      "rightsContract": true,
+      "rights": {
+        "actions": [
+          {
+            "action": "read",
+            "extents": [
+              {
+                "form": "any"
+              }
+            ]
+          },
+          {
+            "action": "administerRights",
+            "extents": [
+              {
+                "form": "any"
+              }
+            ]
+          }
+        ],
+        "ownership": [],
+        "access": [],
+        "readBoundary": []
+      },
       "presentation": {
         "attribute": "description"
       },
@@ -516,7 +676,53 @@
       "versionName": "version",
       "kernelHash": "a7c749d3dd4c4b60ee0be86b3db2966bf65684d63cd3a843ce69a8997fda64f9",
       "signal": true,
-      "rightsContract": true,
+      "rights": {
+        "actions": [
+          {
+            "action": "read",
+            "extents": [
+              {
+                "form": "any"
+              }
+            ]
+          },
+          {
+            "action": "create",
+            "extents": [
+              {
+                "form": "any"
+              }
+            ]
+          },
+          {
+            "action": "update",
+            "extents": [
+              {
+                "form": "any"
+              }
+            ]
+          },
+          {
+            "action": "markDeletion",
+            "extents": [
+              {
+                "form": "any"
+              }
+            ]
+          },
+          {
+            "action": "delete",
+            "extents": [
+              {
+                "form": "any"
+              }
+            ]
+          }
+        ],
+        "ownership": [],
+        "access": [],
+        "readBoundary": []
+      },
       "presentation": {
         "attribute": "description"
       },
