@@ -672,6 +672,27 @@ describe("messages catalog", () => {
     )
   })
 
+  it("sql.kind-table-verbatim on an unqualified sequence asks to qualify it, not «of the platform»", () => {
+    const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
+      identity: "view:public.v",
+      table: "ledger_id_seq",
+      form: "sequence",
+      statement: "nextval",
+      line: 3,
+      unqualified: "yes",
+    })
+    expect(d.message).toBe(
+      "Unit view:public.v at line 3 calls nextval on the sequence ledger_id_seq (the name has no schema, so it is resolved fail-closed)"
+    )
+    expect(d.hint).toContain("qualified by their schema")
+    expect(d.hint).toContain("qualify the name with that schema")
+    expect(localize(d, "uk").message).toBe(
+      "Одиниця view:public.v у рядку 3 викликає nextval над послідовністю ledger_id_seq (ім'я без схеми, тож його розв'язано fail-closed)"
+    )
+    expect(localize(d, "uk").hint).toContain("кваліфікованим їхньою схемою")
+    expect(localize(d, "uk").hint).toContain("кваліфікуйте ім'я цією схемою")
+  })
+
   it("sql.kind-table-verbatim names the function and the statement of a body", () => {
     const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
       identity: "function:public.f()",

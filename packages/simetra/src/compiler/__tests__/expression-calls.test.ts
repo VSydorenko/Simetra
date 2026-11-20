@@ -236,6 +236,30 @@ describe("a call of a platform sequence is judged once", () => {
       sql: view("nextval('public.s')"),
       expected: [["sql.expression-call-not-allowed", "nextval"]],
     },
+    // Раунд 3: ім'я без схеми судить форма `sequence` (одна діагностика).
+    {
+      name: "a view advancing an unqualified sequence",
+      sql: view("nextval('ledger_id_seq')"),
+      expected: [["sql.kind-table-verbatim", "sequence"]],
+    },
+    {
+      name: "a policy reading currval of an unqualified sequence",
+      sql: policy("currval('my_seq'::regclass) > 0"),
+      expected: [["sql.kind-table-verbatim", "sequence"]],
+    },
+    {
+      name: "a view reading currval of a qualified sequence",
+      sql: view("currval('public.s')"),
+      expected: [["sql.expression-call-not-allowed", "currval"]],
+    },
+    {
+      name: "a view advancing an unqualified and a qualified sequence",
+      sql: view("nextval('s') + nextval('public.s')"),
+      expected: [
+        ["sql.expression-call-not-allowed", "nextval"],
+        ["sql.kind-table-verbatim", "sequence"],
+      ],
+    },
   ])("$name", async ({ sql, expected }) => {
     expect(await codes(sql)).toEqual(expected)
   })

@@ -114,7 +114,6 @@ import {
 import { checkKindTableVerbatim } from "./sql/kind-table-verbatim"
 import { providerCalls } from "./sql/command-context"
 import { kindTables } from "./sql/kind-tables"
-import { platformSequenceNames } from "./sql/write-paths"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { copyColumns } from "./copy-columns"
 import { buildSchemaUsageUnits } from "./schema-usage"
@@ -246,8 +245,7 @@ export async function runStages(
                 (f) => !reading || f.reads === true || f.membership === true
               )
               .map((f) => `${f.schema}.${f.name}`)
-          ),
-          platformSequenceNames(kinds)
+          )
         )
   const unitExpressions = expressions(false)
   // Функції, `EXECUTE` яких виводить платформа: одні джерела для перевірки

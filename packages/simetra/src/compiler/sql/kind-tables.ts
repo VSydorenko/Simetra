@@ -40,12 +40,6 @@ export interface KindTables {
    * Правила 1, щоб некваліфіковане ім'я судилося так само, як кваліфіковане.
    */
   platformTables?: readonly string[]
-  /**
-   * Послідовності identity-колонок таблиць схеми `simetra` знімка: платформа
-   * створює їх сама, тож некваліфіковане ім'я такої послідовності — ціль
-   * Правила 1 (`setval`/`nextval`, гранти).
-   */
-  platformSequences?: readonly string[]
 }
 
 export function kindTables(
@@ -62,14 +56,8 @@ export function kindTables(
   const bySchema = new Map<string, string[]>()
   const generatedGrants = new Set<string>()
   const platformTables = new Set<string>()
-  const platformSequences = new Set<string>()
   for (const table of tables) {
-    if (table.schema === PLATFORM_SCHEMA) {
-      platformTables.add(table.name)
-      for (const column of table.columns)
-        if (column.identity !== undefined)
-          platformSequences.add(column.identity.sequence)
-    }
+    if (table.schema === PLATFORM_SCHEMA) platformTables.add(table.name)
     if (
       !isObjectOrigin(table.origin) ||
       !kindObjects.has(table.origin.objectId)
@@ -87,7 +75,6 @@ export function kindTables(
     bySchema,
     generatedGrants,
     platformTables: [...platformTables],
-    platformSequences: [...platformSequences],
   }
 }
 

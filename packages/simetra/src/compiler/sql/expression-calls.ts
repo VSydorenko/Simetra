@@ -28,12 +28,6 @@ export interface ExpressionScope {
   models: ReadonlySet<string>
   /** `схема.ім'я` послідовностей моделі — для `nextval` у `DEFAULT`. */
   sequences: ReadonlySet<string>
-  /**
-   * Імена послідовностей платформи (`platformSequenceNames`): виклик
-   * `nextval`/`setval` на них судить форма `sequence` Правила 1, тож тут він
-   * другої діагностики не дає.
-   */
-  platformSequences: ReadonlySet<string>
   providerSchemas: ReadonlySet<string>
   providerFunctions: ReadonlySet<string>
   /**
@@ -47,8 +41,7 @@ export interface ExpressionScope {
 export function expressionScope(
   units: readonly VerbatimUnit[],
   provider: DatabaseProvider,
-  generated: ReadonlySet<string>,
-  platformSequences: ReadonlySet<string>
+  generated: ReadonlySet<string>
 ): ExpressionScope {
   const calls = providerCalls(provider, units, generated)
   return {
@@ -59,7 +52,6 @@ export function expressionScope(
         .filter((u) => u.class === "sequence")
         .map((u) => `${u.schema}.${u.name}`)
     ),
-    platformSequences,
     providerSchemas: calls.schemas,
     providerFunctions: calls.allowed,
     generated,
@@ -154,28 +146,24 @@ export function treeBeyondExpressions(unit: VerbatimUnit): unknown {
     : unit.tree
 }
 
-/** Виклики `setval`/`nextval` дерева, які судить форма `sequence` Правила 1. */
-function sequenceFormCalls(
-  value: unknown,
-  platform: ReadonlySet<string>
-): ReferencedName[] {
-  if (Array.isArray(value))
-    return value.flatMap((v) => sequenceFormCalls(v, platform))
+/**
+ * Виклики послідовностей дерева, які судить форма `sequence` Правила 1
+ * (`sequenceCallTarget`): ім'я без схеми, `simetra`, нелітерал.
+ */
+function sequenceFormCalls(value: unknown): ReferencedName[] {
+  if (Array.isArray(value)) return value.flatMap(sequenceFormCalls)
   if (typeof value !== "object" || value === null) return []
   const node = value as Record<string, unknown>
   const call = node.FuncCall as FuncCall | undefined
   const own: ReferencedName[] = []
-  if (call !== undefined && sequenceCallTarget(call, platform) !== undefined) {
+  if (call !== undefined && sequenceCallTarget(call) !== undefined) {
     const names = (call.funcname ?? []).map((n) =>
       "String" in n ? (n.String.sval ?? "") : ""
     )
     const name = names.at(-1) ?? ""
     own.push(names.length > 1 ? { schema: names.at(-2)!, name } : { name })
   }
-  return [
-    ...own,
-    ...Object.values(node).flatMap((v) => sequenceFormCalls(v, platform)),
-  ]
+  return [...own, ...Object.values(node).flatMap(sequenceFormCalls)]
 }
 
 const callKey = (call: ReferencedName) => `${call.schema ?? ""}.${call.name}`
@@ -190,7 +178,7 @@ function tally(calls: readonly ReferencedName[]): Map<string, number> {
 /**
  * Одиниці-вирази будь-якого файлу, борг включно: одна діагностика
  * `sql.expression-call-not-allowed` на кожен виклик поза переліком. Виклик
- * `nextval`/`setval` на послідовність платформи судить форма `sequence`
+ * послідовності, який судить форма `sequence` (ім'я без схеми, `simetra`)
  * Правила 1 (одне правило — одне місце): тут його немає, поки кожен виклик
  * цього імені в одиниці — з тих, що судить вона.
  */
@@ -204,7 +192,7 @@ export function checkExpressionCalls(
     const tree = expressionTree(unit)
     const all = unitCalls({ tree }, parse)
     const total = tally(all)
-    const judged = tally(sequenceFormCalls(tree, scope.platformSequences))
+    const judged = tally(sequenceFormCalls(tree))
     const calls = new Set(
       all.flatMap((call) => {
         const problem = expressionCallProblem(call, scope)

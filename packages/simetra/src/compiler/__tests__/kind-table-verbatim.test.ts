@@ -1186,12 +1186,6 @@ describe("sql.kind-table-verbatim: a sequence of the platform changes (І20)", (
       expected: sequence("simetra.anything", "setval"),
     },
     {
-      // Шлях пошуку сесії може вести в `simetra`.
-      name: "an unqualified name of a platform sequence",
-      sql: body("n := nextval('row_version')"),
-      expected: sequence("simetra.row_version", "nextval"),
-    },
-    {
       name: "a function without a closed shell",
       sql: body("PERFORM setval('simetra.row_version', 1)", ""),
       expected: sequence("simetra.row_version", "setval"),
@@ -1225,16 +1219,84 @@ describe("sql.kind-table-verbatim: a sequence of the platform changes (І20)", (
       sql: body("n := nextval('public.my_seq')"),
     },
     {
-      name: "an unqualified sequence of the application",
-      sql: body("n := nextval('my_seq')"),
-    },
-    {
       name: "setval of a sequence of the application",
       sql: body("PERFORM setval('public.my_seq', 1)"),
     },
     { name: "currval", sql: body("n := currval('simetra.row_version')") },
+    {
+      name: "currval of a qualified sequence of the application",
+      sql: body("n := currval('public.my_seq'::regclass)"),
+    },
   ])("$name → no path", async ({ sql }) => {
     expect(await found(sql)).toEqual([])
+  })
+
+  // Раунд 3: ім'я послідовності без схеми — помилка за структурою, не за
+  // переліком платформи. Шлях пошуку сесії може вести в `simetra`, а перелік
+  // пропускав кожну нову послідовність (identity таблиці стану поза знімком).
+  const unqualified = (table: string, statement: string) => ({
+    ...sequence(table, statement),
+    unqualified: "yes",
+  })
+  const foundMarked = async (sql: string) =>
+    (await rule1(sql)).map(
+      ({ form, table, statement, function: fn, unqualified: mark }) => ({
+        form,
+        table,
+        statement,
+        function: fn,
+        unqualified: mark,
+      })
+    )
+  it.each(
+    ["signal_outbox_id_seq", "rights_journal_seq_seq", "ledger_id_seq"].flatMap(
+      (name) => [
+        {
+          name: `nextval('${name}')`,
+          sql: body(`n := nextval('${name}')`),
+          expected: unqualified(name, "nextval"),
+        },
+        {
+          name: `setval('${name}'::regclass, 1)`,
+          sql: body(`PERFORM setval('${name}'::regclass, 1)`),
+          expected: unqualified(name, "setval"),
+        },
+        {
+          name: `currval('${name}')`,
+          sql: body(`n := currval('${name}')`),
+          expected: unqualified(name, "currval"),
+        },
+      ]
+    )
+  )("$name → error «qualify with a schema»", async ({ sql, expected }) => {
+    expect(await foundMarked(sql)).toEqual([expected])
+  })
+
+  it.each([
+    {
+      // Рішення архітекторки раунду 3: власна послідовність без схеми теж
+      // помилка (раніше проходила, коли ім'я не було в переліку платформи).
+      name: "an unqualified sequence of the application",
+      sql: body("n := nextval('my_seq')"),
+      expected: unqualified("my_seq", "nextval"),
+    },
+    {
+      name: "an unqualified name cast to regclass",
+      sql: body("n := nextval('row_version'::regclass)"),
+      expected: unqualified("row_version", "nextval"),
+    },
+    {
+      name: "an unqualified quoted name",
+      sql: body(`n := nextval('"My_Seq"')`),
+      expected: unqualified("My_Seq", "nextval"),
+    },
+    {
+      name: "pg_catalog.currval of an unqualified name",
+      sql: body("n := pg_catalog.currval('my_seq')"),
+      expected: unqualified("my_seq", "currval"),
+    },
+  ])("$name → error «qualify with a schema»", async ({ sql, expected }) => {
+    expect(await foundMarked(sql)).toEqual([expected])
   })
 })
 
@@ -1334,17 +1396,17 @@ describe("sql.kind-table-verbatim: fail-closed routes of the enumerator", () => 
     {
       name: "UPDATE on the row version sequence, unqualified",
       sql: `GRANT UPDATE ON SEQUENCE row_version TO ${API.anonymous};`,
-      table: "simetra.row_version",
+      table: "row_version",
     },
     {
       name: "USAGE on the row version sequence, unqualified",
       sql: `GRANT USAGE ON SEQUENCE row_version TO ${API.anonymous};`,
-      table: "simetra.row_version",
+      table: "row_version",
     },
     {
       name: "ALL on the outbox sequence, unqualified",
       sql: `GRANT ALL ON SEQUENCE signal_outbox_id_seq TO ${API.anonymous};`,
-      table: "simetra.signal_outbox_id_seq",
+      table: "signal_outbox_id_seq",
     },
   ])("$name → error", async ({ sql, table }) => {
     expect(await rule1(sql)).toMatchObject([
@@ -1358,8 +1420,12 @@ describe("sql.kind-table-verbatim: fail-closed routes of the enumerator", () => 
       sql: `GRANT SELECT ON SEQUENCE row_version TO ${API.anonymous};`,
     },
     {
-      name: "USAGE on a sequence of the application",
-      sql: `GRANT USAGE ON SEQUENCE my_seq TO ${API.anonymous};`,
+      name: "USAGE on a qualified sequence of the application",
+      sql: `GRANT USAGE ON SEQUENCE public.my_seq TO ${API.anonymous};`,
+    },
+    {
+      name: "UPDATE by the table syntax on a qualified sequence of the application",
+      sql: `GRANT UPDATE ON public.my_seq TO ${API.anonymous};`,
     },
     {
       name: "a REVOKE",
@@ -1389,7 +1455,7 @@ describe("sql.kind-table-verbatim: fail-closed routes of the enumerator", () => 
     ).toEqual([
       {
         form: "sequence",
-        table: "simetra.signal_outbox_id_seq",
+        table: "signal_outbox_id_seq",
         statement: "nextval",
       },
     ])
@@ -1454,7 +1520,7 @@ describe("sql.kind-table-verbatim: fail-closed routes of the enumerator", () => 
     ).toEqual([
       {
         form: "sequence",
-        table: "simetra.rights_journal_seq_seq",
+        table: "rights_journal_seq_seq",
         statement: "nextval",
       },
     ])
@@ -1468,7 +1534,7 @@ describe("sql.kind-table-verbatim: fail-closed routes of the enumerator", () => 
     ).toMatchObject([
       {
         form: "grant",
-        table: "simetra.rights_journal_seq_seq",
+        table: "rights_journal_seq_seq",
         roles: API.anonymous,
       },
     ])
@@ -1479,12 +1545,12 @@ describe("sql.kind-table-verbatim: fail-closed routes of the enumerator", () => 
     {
       name: "UPDATE by the table syntax",
       sql: `GRANT UPDATE ON row_version TO ${API.anonymous};`,
-      table: "simetra.row_version",
+      table: "row_version",
     },
     {
       name: "ALL by the explicit TABLE syntax",
       sql: `GRANT ALL ON TABLE signal_outbox_id_seq TO ${API.anonymous};`,
-      table: "simetra.signal_outbox_id_seq",
+      table: "signal_outbox_id_seq",
     },
   ])("$name → error", async ({ sql, table }) => {
     expect(await rule1(sql)).toMatchObject([
@@ -1496,6 +1562,33 @@ describe("sql.kind-table-verbatim: fail-closed routes of the enumerator", () => 
     expect(
       await rule1(`GRANT SELECT ON row_version TO ${API.anonymous};`)
     ).toEqual([])
+  })
+
+  // Раунд 3: грант запису послідовності на ім'я без схеми — помилка обома
+  // синтаксисами, будь-якій ролі, хоч яке це ім'я (Р8: ім'я без схеми в DDL —
+  // fail-closed); `SELECT` — не запис.
+  it.each(
+    ["signal_outbox_id_seq", "rights_journal_seq_seq", "ledger_id_seq"].flatMap(
+      (name) =>
+        ["UPDATE", "USAGE", "ALL"].flatMap((privilege) => [
+          `GRANT ${privilege} ON SEQUENCE ${name} TO ${API.anonymous};`,
+          `GRANT ${privilege} ON TABLE ${name} TO ${API.anonymous};`,
+          `GRANT ${privilege} ON ${name} TO somebody;`,
+        ])
+    )
+  )("%s → error «qualify with a schema»", async (sql) => {
+    const name = /ON (?:SEQUENCE |TABLE )?(\w+)/.exec(sql)![1]
+    expect(await rule1(sql)).toMatchObject([
+      { form: "grant", table: name, unqualified: "yes" },
+    ])
+  })
+
+  it.each([
+    `GRANT SELECT ON SEQUENCE ledger_id_seq TO ${API.anonymous};`,
+    `GRANT SELECT ON TABLE ledger_id_seq TO ${API.anonymous};`,
+    `GRANT USAGE ON SEQUENCE public.my_seq TO ${API.anonymous};`,
+  ])("%s → no path", async (sql) => {
+    expect(await rule1(sql)).toEqual([])
   })
 
   // G3: параметр `unqualified` лише для імені без схеми.

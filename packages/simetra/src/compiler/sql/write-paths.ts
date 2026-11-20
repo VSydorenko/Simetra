@@ -14,7 +14,6 @@ import {
   type DatabaseProvider,
 } from "simetra/model"
 import { grantTargetKeys } from "../function-execute"
-import { ROW_VERSION_SEQUENCE } from "../mechanics-units"
 import { isSecurityInvoker } from "./definer-reads"
 import {
   PUBLIC,
@@ -152,15 +151,7 @@ export function writePaths(
           ...optional(sequencePath(unit, ctx)),
         ]
       case "grant":
-        return optional(
-          grantPath(
-            unit,
-            written,
-            owner,
-            ctx.parse,
-            platformSequenceNames(ctx.kind)
-          )
-        )
+        return optional(grantPath(unit, written, owner, ctx.parse))
       case "defaultPrivileges":
         return optional(defaultPrivilegesPath(unit, adp, apiRoles, ctx))
       default:
@@ -253,34 +244,35 @@ export function bodyKindTable(
 const SEQUENCE_FUNCTIONS: ReadonlySet<string> = new Set(["setval", "nextval"])
 
 /**
- * Імена послідовностей платформи: identity-колонки таблиць `simetra` знімка
- * (одне джерело з `platformTables`) і `row_version`, якої знімок не несе.
+ * Функції, чий аргумент називає послідовність текстом: ім'я без схеми в них
+ * судиться (`currval` теж — правило про ім'я, не про запис).
  */
-export function platformSequenceNames(kind: KindTables): ReadonlySet<string> {
-  return new Set([ROW_VERSION_SEQUENCE.name, ...(kind.platformSequences ?? [])])
-}
+const SEQUENCE_NAMING_FUNCTIONS: ReadonlySet<string> = new Set([
+  ...SEQUENCE_FUNCTIONS,
+  "currval",
+])
 
 /**
- * Платформна послідовність за іменем: будь-яке ім'я в `simetra`; некваліфіковане
- * ім'я послідовності, яку створює платформа, — теж, бо шлях пошуку сесії може
- * вести в `simetra` (fail-closed). `names` — `platformSequenceNames`.
- * `undefined` — послідовність не платформи.
+ * Ціль Правила 1 серед послідовностей за іменем: будь-яке ім'я в `simetra` і
+ * будь-яке ім'я без схеми. Ім'я без схеми Postgres розв'язує за шляхом пошуку
+ * сесії, який може вести в `simetra`, а перелік послідовностей платформи
+ * пропускав кожну нову (identity таблиці стану поза знімком), тож правило
+ * структурне: кваліфікуйте ім'я схемою. Ціль імені без схеми — саме ім'я.
+ * `undefined` — кваліфіковане ім'я поза `simetra`.
  */
-function platformSequence(
+function ruleOneSequence(
   schema: string | undefined,
-  name: string,
-  names: ReadonlySet<string>
+  name: string
 ): string | undefined {
   if (schema === PLATFORM_SCHEMA) return `${schema}.${name}`
-  if ((schema === undefined || schema === "") && names.has(name))
-    return `${PLATFORM_SCHEMA}.${name}`
+  if (schema === undefined || schema === "") return name
   return undefined
 }
 
 /**
- * Перший виклик `setval`/`nextval` в одиниці, що змінює послідовність платформи
- * (Р4б): літерал, який називає її (`platformSequence`), чи нелітеральний
- * аргумент, який статично не прочитати. Виклик може стояти не лише в тілі
+ * Перший виклик послідовності в одиниці, який судить Правило 1 (Р4б,
+ * `sequenceCallTarget`): ім'я без схеми, `setval`/`nextval` над `simetra` чи
+ * нелітеральний аргумент, який статично не прочитати. Виклик може стояти не лише в тілі
  * функції, а й у поданні, `DEFAULT` домену, політиці чи `WHEN` тригера, тож
  * для решти класів обходиться дерево самої одиниці.
  */
@@ -301,7 +293,7 @@ function sequencePath(
     }) ?? []),
   ]
   for (const tree of trees) {
-    const hit = findSequenceCall(tree, platformSequenceNames(ctx.kind))
+    const hit = findSequenceCall(tree)
     if (hit !== undefined)
       return {
         unit,
@@ -316,14 +308,15 @@ function sequencePath(
 }
 
 /**
- * Чи виклик — `setval`/`nextval` вбудованої, яку судить форма `sequence`
- * (Р4б): ціль — послідовність платформи чи нелітерал. `undefined` — не судить:
- * інший виклик чи послідовність не платформи. Один суддя для перелічувача й
- * для виразів (`sql.expression-call-not-allowed` такий виклик пропускає).
+ * Чи виклик вбудованої `setval`/`nextval`/`currval` судить форма `sequence`
+ * (Р4б): ім'я послідовності без схеми (будь-яка з трьох), а для
+ * `setval`/`nextval` ще й послідовність `simetra` чи нелітерал. `undefined` —
+ * не судить: інший виклик, кваліфіковане ім'я поза `simetra`, `currval` над
+ * кваліфікованим чи нелітералом (читання). Один суддя для перелічувача й для
+ * виразів (`sql.expression-call-not-allowed` такий виклик пропускає).
  */
 export function sequenceCallTarget(
-  call: FuncCall,
-  platform: ReadonlySet<string>
+  call: FuncCall
 ): { call: string; target: string; unqualified: boolean } | undefined {
   const names = (call.funcname ?? []).map((n) =>
     "String" in n ? (n.String.sval ?? "") : ""
@@ -331,20 +324,19 @@ export function sequenceCallTarget(
   const name = names.at(-1) ?? ""
   const builtin =
     names.length === 1 || (names.length === 2 && names[0] === "pg_catalog")
-  if (!builtin || !SEQUENCE_FUNCTIONS.has(name)) return undefined
-  const target = sequenceTarget(call.args?.[0], platform)
-  return target === undefined
-    ? undefined
-    : { call: name, target: target.target, unqualified: target.unqualified }
+  if (!builtin || !SEQUENCE_NAMING_FUNCTIONS.has(name)) return undefined
+  const target = sequenceTarget(call.args?.[0])
+  if (target === undefined) return undefined
+  if (!target.unqualified && !SEQUENCE_FUNCTIONS.has(name)) return undefined
+  return { call: name, target: target.target, unqualified: target.unqualified }
 }
 
 function findSequenceCall(
-  value: unknown,
-  platform: ReadonlySet<string>
+  value: unknown
 ): { call: string; target: string; unqualified: boolean } | undefined {
   if (Array.isArray(value)) {
     for (const item of value) {
-      const hit = findSequenceCall(item, platform)
+      const hit = findSequenceCall(item)
       if (hit !== undefined) return hit
     }
     return undefined
@@ -353,20 +345,22 @@ function findSequenceCall(
   const record = value as Record<string, unknown>
   const call = record.FuncCall as FuncCall | undefined
   if (call !== undefined) {
-    const hit = sequenceCallTarget(call, platform)
+    const hit = sequenceCallTarget(call)
     if (hit !== undefined) return hit
   }
   for (const child of Object.values(record)) {
-    const hit = findSequenceCall(child, platform)
+    const hit = findSequenceCall(child)
     if (hit !== undefined) return hit
   }
   return undefined
 }
 
-/** Ціль виклику: `*` — нелітеральний аргумент; `undefined` — послідовність не платформи. */
+/**
+ * Ціль виклику: `*` — нелітеральний аргумент; `undefined` — кваліфіковане ім'я
+ * поза `simetra` (`ruleOneSequence`).
+ */
 function sequenceTarget(
-  arg: Node | undefined,
-  platform: ReadonlySet<string>
+  arg: Node | undefined
 ): { target: string; unqualified: boolean } | undefined {
   let node: Node | undefined = arg
   while (node !== undefined && "TypeCast" in node) node = node.TypeCast.arg
@@ -378,7 +372,7 @@ function sequenceTarget(
   const names = relationNameText(text)
   if (names === undefined) return { target: "*", unqualified: false }
   const schema = names.length > 1 ? names.at(-2) : undefined
-  const target = platformSequence(schema, names.at(-1) ?? "", platform)
+  const target = ruleOneSequence(schema, names.at(-1) ?? "")
   return target === undefined
     ? undefined
     : { target, unqualified: schema === undefined }
@@ -539,8 +533,9 @@ function granteeNames(grantees: readonly Node[] | undefined): string[] {
 /**
  * Явний грант запису на ціль Правила 1 (Р2): помилка будь-якій ролі, крім
  * власника; `CURRENT_USER`/`SESSION_USER`/`CURRENT_ROLE` — інша роль. Привілеї
- * `USAGE`/`UPDATE` на послідовність платформи — теж запис (`setval`/`nextval`),
- * ту саму ціль розпізнає `platformSequence`. Таблиця з грантами генератора
+ * `USAGE`/`UPDATE` на послідовність — теж запис (`setval`/`nextval`), ціль ту
+ * саму, що в виклику, дає `ruleOneSequence`: послідовність `simetra` чи
+ * будь-яке ім'я без схеми. Таблиця з грантами генератора
  * `access` — його власна діагностика `sql.generated-grant`, тож другої не
  * дає, але лише коли ця діагностика справді називає саме цю одиницю: її ключ
  * `table|схема.ім'я` бере ім'я з одиниці, а некваліфіковане ім'я Правило 1
@@ -551,8 +546,7 @@ function grantPath(
   unit: VerbatimUnit,
   written: KindTables,
   owner: string | undefined,
-  parse: SqlParser,
-  sequences: ReadonlySet<string>
+  parse: SqlParser
 ): WritePath | undefined {
   const grant = (unit.tree as { GrantStmt?: GrantStmt }).GrantStmt
   if (grant === undefined || grant.is_grant !== true) return undefined
@@ -570,42 +564,39 @@ function grantPath(
   // Некваліфіковане ім'я — fail-closed: ціль береться з дерева без схеми
   // файлу, а не з `unit.schema`, як у політики й тригера.
   const resolved = new Set(grantTargetKeys(unit, parse))
+  const path = (target: string, unqualified: boolean): WritePath => ({
+    unit,
+    form: "grant",
+    target,
+    roles,
+    ...(unqualified ? { unqualified: true } : {}),
+  })
   for (const target of statementTargets(unit.tree as Node, "")) {
+    const unqualified = target.schema === ""
+    // Таблиця виду за іменем — перша: ціль з її схемою точніша за голе ім'я.
+    if (tableWrite) {
+      const table = kindTableNamed(target, unit.schema, written)
+      if (table !== undefined) {
+        if (
+          target.kind !== "schema" &&
+          written.generatedGrants?.has(table) === true &&
+          resolved.has(`table|${table}`)
+        )
+          continue
+        return path(table, unqualified)
+      }
+    }
+    if (!sequenceWrite) continue
     // Postgres приймає і `GRANT … ON TABLE <послідовність>` (залишає лише
     // `USAGE`/`SELECT`/`UPDATE`), тож ціль гранту будь-якого з двох синтаксисів
-    // розпізнається і як послідовність платформи.
-    if (sequenceWrite) {
-      const hit =
-        target.kind === "schema"
-          ? objtype === "OBJECT_SEQUENCE" && target.schema === PLATFORM_SCHEMA
-            ? `${PLATFORM_SCHEMA}.*`
-            : undefined
-          : platformSequence(target.schema, target.object ?? "", sequences)
-      if (hit !== undefined)
-        return {
-          unit,
-          form: "grant",
-          target: hit,
-          roles,
-          ...(target.schema === "" ? { unqualified: true } : {}),
-        }
-    }
-    if (!tableWrite) continue
-    const table = kindTableNamed(target, unit.schema, written)
-    if (table === undefined) continue
-    if (
-      target.kind !== "schema" &&
-      written.generatedGrants?.has(table) === true &&
-      resolved.has(`table|${table}`)
-    )
-      continue
-    return {
-      unit,
-      form: "grant",
-      target: table,
-      roles,
-      ...(target.schema === "" ? { unqualified: true } : {}),
-    }
+    // судиться і як послідовність: ім'я без схеми — помилка будь-якій ролі.
+    const sequence =
+      target.kind === "schema"
+        ? objtype === "OBJECT_SEQUENCE" && target.schema === PLATFORM_SCHEMA
+          ? `${PLATFORM_SCHEMA}.*`
+          : undefined
+        : ruleOneSequence(target.schema, target.object ?? "")
+    if (sequence !== undefined) return path(sequence, unqualified)
   }
   return undefined
 }

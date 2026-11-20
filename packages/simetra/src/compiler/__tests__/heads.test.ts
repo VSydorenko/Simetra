@@ -215,12 +215,19 @@ describe("checkHeads: Rule 3 — query functions", () => {
     },
     {
       // Аргумент `regclass` — ще й відношення, що його читає виклик.
-      name: "builtin-excluded nextval('s')",
-      sql: selectWhere("nextval('s') IS NOT NULL"),
+      name: "builtin-excluded nextval('public.s')",
+      sql: selectWhere("nextval('public.s') IS NOT NULL"),
       expected: [
         found("call", "nextval", SET_FUNCTION),
-        found("unqualified", "s", SET_FUNCTION),
+        found("relation", "public.s", SET_FUNCTION),
       ],
+    },
+    {
+      // Ім'я послідовності без схеми відмовляє ранній блок (Правило 1, форма
+      // `sequence`, спека прав §6.1 І20): до голови справа не доходить.
+      name: "builtin-excluded nextval('s')",
+      sql: selectWhere("nextval('s') IS NOT NULL"),
+      expected: [["sql.kind-table-verbatim"]],
     },
     {
       // У тілі функції виклик, що виконує текст SQL, відмовляє ранній блок

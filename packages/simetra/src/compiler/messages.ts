@@ -752,15 +752,21 @@ function kindTableVerbatim(p: Record<string, unknown>): {
             ? `Одиниця ${p.identity}`
             : `Функція ${p.function}`,
       }
+      // Ім'я без схеми може бути й власною послідовністю: текст не каже
+      // «платформи», причину й виправлення дає примітка `UNQUALIFIED_NOTE`.
       return {
         en:
           p.table === "*"
             ? `${subject.en} at line ${p.line} calls ${p.statement} with an argument that is not a literal, so the sequence it changes is unknown`
-            : `${subject.en} at line ${p.line} calls ${p.statement} on ${p.table}, a sequence of the platform`,
+            : p.unqualified === "yes"
+              ? `${subject.en} at line ${p.line} calls ${p.statement} on the sequence ${p.table}`
+              : `${subject.en} at line ${p.line} calls ${p.statement} on ${p.table}, a sequence of the platform`,
         uk:
           p.table === "*"
             ? `${subject.uk} у рядку ${p.line} викликає ${p.statement} з нелітеральним аргументом, тож змінювана послідовність невідома`
-            : `${subject.uk} у рядку ${p.line} викликає ${p.statement} над ${p.table} — послідовністю платформи`,
+            : p.unqualified === "yes"
+              ? `${subject.uk} у рядку ${p.line} викликає ${p.statement} над послідовністю ${p.table}`
+              : `${subject.uk} у рядку ${p.line} викликає ${p.statement} над ${p.table} — послідовністю платформи`,
       }
     }
     case "view":
@@ -813,8 +819,8 @@ function kindTableVerbatimHint(p: Record<string, unknown>): {
       }
     case "sequence":
       return {
-        en: "setval and nextval change a sequence even from a read-only looking body, and a SECURITY DEFINER function does it as the owner. Sequences of the platform change only through the platform; name only the sequences of your own with a literal.",
-        uk: "setval і nextval змінюють послідовність навіть із тіла, що виглядає читанням, а функція SECURITY DEFINER робить це від імені власника. Послідовності платформи змінює лише платформа; називайте літералом лише власні послідовності.",
+        en: "setval and nextval change a sequence even from a read-only looking body, and a SECURITY DEFINER function does it as the owner. Sequences of the platform change only through the platform, and a sequence name without a schema, in setval, nextval or currval, may resolve into the platform schema by the search path of the session. Name only the sequences of your own, with a literal qualified by their schema.",
+        uk: "setval і nextval змінюють послідовність навіть із тіла, що виглядає читанням, а функція SECURITY DEFINER робить це від імені власника. Послідовності платформи змінює лише платформа, а ім'я послідовності без схеми в setval, nextval чи currval може розв'язатися в схему платформи за шляхом пошуку сесії. Називайте лише власні послідовності — літералом, кваліфікованим їхньою схемою.",
       }
     case "view":
       return {
