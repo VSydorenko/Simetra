@@ -3198,10 +3198,11 @@ sha-256 (WebCrypto) канонічного JSON знімка, hex; каноні�
 - Компілятор (T1) кладе в запис клієнтського каталогу `rights?` — контракт
   прав об'єкта (`RightsContract` і `AccessContract`, `compiler/contracts.ts`;
   він замінює ознаку `rightsContract`): `actions` з обсягами (`any`, `own`,
-  вимір), `ownership` (носій і власник — користувач чи членство виду),
-  `access` (вимір, носій, `fresh`, суб'єкт), `binding?` (контейнер і носій),
-  `readBoundary`, `root?` (носій автора), `scopeSet: "membership" |
-  "verbatim"`. Носій — `{ attribute: <логічне ім'я> } | { key: true }`;
+  вимір), `ownership` (носій і власник — `{ users: true }` чи
+  `{ scopeKind }`), `access` (вимір, носій, `fresh`, суб'єкт — лише для
+  зв'язку), `binding?` (контейнер і носій), `readBoundary` (масив меж),
+  `root?` (носій автора), `scopeSet?: "membership" | "verbatim"` — лише в
+  скоупованого об'єкта. Носій — `{ attribute: <логічне ім'я> } | { key: true }`;
   колонка, що не атрибут і не ключ, — помилка компілятора. `fresh` істинний
   для зв'язку `values.relation` виду з реєстру (є тригер зв'язку); функція
   виміру й прийнята `CustomTable` — `false`. Граф вимог уже розгорнуто в рядки
