@@ -146,6 +146,8 @@ Issue #297, віха М4. Автор і (після сигналу архіте�
 замінити рядком `sql.function-argument-type-reference` (корінь — #300). Готово:
 `doc anchors && doc lint` зелені, коміт `docs(spec): #297 — …`.
 
+**Дельти задачі 0.** Анкори після #275 цілі. (а) `encodeId` pg-delta (`seg`) бере в лапки сегмент лише з `.:(),"` чи пробілом, дублюючи `"` — ін'єктивно, не сиро; але верхній регістр лишає без лапок, тож `StableId` двигуна (`table:public.Foo`) не збігається з ідентичністю одиниці за `quoteIdent` (`table:public."Foo"`) — межа Р9 порівнює лише там, де споживач уже на `identity.ts`. (б) `sql-debt.json` у репо немає. (в) #275 нових місць складання ідентичності не додав (лише ключі `table|…` у `write-paths.ts`, не ідентичності). Місця поза таблицею споживачів: `catalog-command/units.ts` (`table:${relation(table)}`), `operations/fix.ts` (`schema:${schema}`), `sql/heads.ts` (`table:${qualified}`), `sql/units.ts` (`label: table:…`), `write-paths.ts` (ключі `table|…`), `designer/tools/database-tools.ts` (`table:`, `type:`, `index:`, `sequence:` — ідентичності двигуна чи одиниць, розрізнити за Р9), `guard-units.ts`/`command-units.ts` (`function:${ref(…)}(uuid,uuid)` — константи платформи, вже в таблиці).
+
 ### Задача 1 — модуль ідентичності й класифікатор
 
 (після 0).
