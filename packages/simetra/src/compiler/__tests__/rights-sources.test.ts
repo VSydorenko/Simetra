@@ -977,6 +977,36 @@ describe("adopted source where, row scope and role table", () => {
       ],
     },
     {
+      case: "root foreign key from another column",
+      files: () =>
+        poly(
+          {},
+          polyTable([], {
+            foreignKeys: [
+              {
+                columns: ["scopeId"],
+                references: {
+                  object: ref("Catalog", "Organization"),
+                  key: "ref",
+                },
+              },
+            ],
+          })
+        ),
+      expected: [
+        {
+          code: "rights.source-scope-column",
+          pointer: "/assignmentSources/2/columns/scope",
+          params: {
+            source: "polyGrants",
+            column: "orgId",
+            scope: "org",
+            reason: "rootForeignKey",
+          },
+        },
+      ],
+    },
+    {
       case: "scope null on a table with a scope column",
       files: () =>
         poly(

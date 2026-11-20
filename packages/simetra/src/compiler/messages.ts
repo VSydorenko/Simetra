@@ -141,8 +141,8 @@ const SOURCE_SCOPE_HINTS: Record<
     uk: "Скоуп призначення — скоуп учасника, і власна колонка скоупу рядка мусить із ним збігатися: назвіть цю колонку в columns.scope або задайте columns.scope: null, коли рядок скоупу не несе.",
   },
   rootForeignKey: {
-    en: "Add to the table a single-column foreign key from this column to the key of the scope kind root: without it the column may carry any uuid, and a row would grant a role in another tenant.",
-    uk: "Додайте таблиці одноколонковий зовнішній ключ із цієї колонки на ключ кореня виду скоупу: без нього колонка може нести будь-який uuid, і рядок давав би роль в іншому тенанті.",
+    en: "Add to the table a single-column foreign key from this column to the key of the scope kind root: without it the column may carry any uuid, and a row would grant a role in another tenant. When the column also holds container ids, carry the tenant in its own column with that foreign key, or set columns.scope to null when the member alone fixes the scope.",
+    uk: "Додайте таблиці одноколонковий зовнішній ключ із цієї колонки на ключ кореня виду скоупу: без нього колонка може нести будь-який uuid, і рядок давав би роль в іншому тенанті. Коли колонка несе й id контейнерів, винесіть тенант в окрему колонку з таким ключем або задайте columns.scope: null, коли скоуп визначає сам учасник.",
   },
 }
 
