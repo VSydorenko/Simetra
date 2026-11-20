@@ -53,6 +53,10 @@ interface SettingsAction {
 }
 
 /**
+ * Окремий `ALTER FUNCTION` на функцію, якої застосунок не створив (ціль не є
+ * функцією моделі), — теж помилка (`target: "notModel"`), як і на функцію,
+ * оболонку якої судить платформа.
+ *
  * Окремий `ALTER FUNCTION` на функцію, оболонку якої судить платформа
  * (спека прав §5.3): волатильність, `SECURITY`, `search_path` і опції `SET` такої
  * функції задає лише `CREATE`, і їх судить відповідна перевірка — закрита
@@ -85,13 +89,22 @@ export function checkFunctionSettingsShell(
   const functions = units.filter((u) => judged.has(u.identity))
   return units.flatMap((unit) => {
     if (unit.class !== "functionSettings") return []
-    if (!functions.some((fn) => settingsTargets(unit, fn))) return []
-    return [
-      diagnostic("sql.function-settings-shell", unit.file, "", {
-        function: `${unit.schema}.${unit.name}`,
-        setting: firstSetting(unit),
-      }),
-    ]
+    // Ціль, що не є функцією моделі (згенерована функція запису, функція
+    // платформи, функція провайдера), форму якої тримає платформа: `ALTER
+    // FUNCTION` змінив би її повз генератор, тож це помилка в будь-якому файлі.
+    // Некваліфіковане ім'я — будь-яка схема (`settingsTargets`), тож однойменна
+    // функція моделі його не відхиляє: fail-closed тут означає «є збіг».
+    const modelTarget = units.some((u) => settingsTargets(unit, u))
+    if (!modelTarget || functions.some((fn) => settingsTargets(unit, fn))) {
+      return [
+        diagnostic("sql.function-settings-shell", unit.file, "", {
+          function: `${unit.schema}.${unit.name}`,
+          setting: firstSetting(unit),
+          ...(modelTarget ? {} : { target: "notModel" }),
+        }),
+      ]
+    }
+    return []
   })
 }
 

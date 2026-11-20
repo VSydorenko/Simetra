@@ -192,7 +192,10 @@ describe("sql.function-settings-shell", () => {
   it.each([
     {
       name: "a same-named function of another schema",
-      alter: "ALTER FUNCTION other_schema.count_comment() SECURITY DEFINER;",
+      // Функція тієї схеми — функція моделі, тож ціль `ALTER` не відхиляється.
+      alter:
+        sqlFunction("other_schema.count_comment", "SELECT 1") +
+        "ALTER FUNCTION other_schema.count_comment() SECURITY DEFINER;",
       expected: [],
     },
     {
@@ -242,5 +245,78 @@ describe("sql.function-settings-shell on a declared function", () => {
         params: { function: "public.plain", setting: "security" },
       },
     ])
+  })
+})
+
+describe("sql.function-settings-shell on a function the application did not create (Р10)", () => {
+  // Форму згенерованої функції, функції платформи й функції провайдера тримає
+  // платформа чи провайдер: `ALTER FUNCTION` на таку ціль — помилка в будь-якому
+  // файлі, борг включно (спека прав §6.1).
+  const notModel = (function_: string, setting: string) => ({
+    code: "sql.function-settings-shell",
+    file: SHARED,
+    params: { function: function_, setting, target: "notModel" },
+  })
+
+  it.each([
+    {
+      name: "a function nobody declares",
+      alter: "ALTER FUNCTION public.not_created() SECURITY DEFINER;",
+      expected: [notModel("public.not_created", "security")],
+    },
+    {
+      name: "a function of the provider",
+      alter: "ALTER FUNCTION extensions.gen_random_bytes(int) RESET ALL;",
+      expected: [notModel("extensions.gen_random_bytes", "*")],
+    },
+    {
+      name: "an unqualified name nobody declares",
+      alter: "ALTER FUNCTION not_created() SET search_path = '';",
+      expected: [notModel("public.not_created", "search_path")],
+    },
+  ])("rejects ALTER FUNCTION of $name", async ({ alter, expected }) => {
+    const result = await compiledPolicyDomain({ [SHARED]: alter })
+    expect(
+      diagnosticBrief(result.diagnostics, ["sql.function-settings-shell"])
+    ).toEqual(expected)
+  })
+
+  // Функцію платформи відмовляє резервування схеми `simetra`, ще до цього
+  // правила: друга діагностика була б шумом.
+  it("leaves ALTER FUNCTION of a platform function to the reserved schema", async () => {
+    const result = await compiledPolicyDomain({
+      [SHARED]: "ALTER FUNCTION simetra.provision_user() SECURITY DEFINER;",
+    })
+    expect(
+      diagnosticBrief(result.diagnostics, [
+        "sql.function-settings-shell",
+        "schema.reserved",
+      ]).map((d) => d.code)
+    ).toEqual(["schema.reserved"])
+  })
+
+  it("rejects ALTER FUNCTION of a generated function", async () => {
+    const base = await compiledPolicyDomain({})
+    const generated = base.model!.sqlUnits.find(
+      (u) => u.class === "function" && u.file === undefined
+    )
+    expect(generated).toBeDefined()
+    const name = `${generated!.schema}.${generated!.name}`
+    const result = await compiledPolicyDomain({
+      [SHARED]: `ALTER FUNCTION ${name}() SECURITY DEFINER;`,
+    })
+    expect(
+      diagnosticBrief(result.diagnostics, ["sql.function-settings-shell"])
+    ).toEqual([notModel(name, "security")])
+  })
+
+  it("leaves ALTER FUNCTION of a model function alone", async () => {
+    expectClean(
+      await compiledPolicyDomain({
+        [SHARED]:
+          sqlFunction("public.plain", "SELECT 1") +
+          "ALTER FUNCTION public.plain() SECURITY INVOKER;\n",
+      })
+    )
   })
 })
