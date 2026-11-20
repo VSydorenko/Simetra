@@ -256,6 +256,8 @@ describe("the platform layer joins the boundary by its own schemas", () => {
 // Розширення оголошує модель: його функції — члени, яких читач бази тримає в межі
 const EXT =
   "CREATE EXTENSION IF NOT EXISTS fuzzystrmatch WITH SCHEMA extensions;\n"
+const EXT_MODDATETIME =
+  "CREATE EXTENSION IF NOT EXISTS moddatetime WITH SCHEMA extensions;\n"
 
 describe("the engine boundary judges a trigger on the identity source on its own", () => {
   // Компілятор ці форми відмовляє (Р4а, Р6), тож одиниці подаються межі двигуна
@@ -303,8 +305,13 @@ describe("the engine boundary judges a trigger on the identity source on its own
     },
     {
       name: "a function of a declared extension in EXECUTE FUNCTION is a member, inside the boundary",
-      sql: `${EXT}CREATE TRIGGER probe BEFORE UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION extensions.moddatetime('updated_at');\n`,
+      sql: `${EXT_MODDATETIME}CREATE TRIGGER probe BEFORE UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION extensions.moddatetime('updated_at');\n`,
       expected: [],
+    },
+    {
+      name: "a function of ANOTHER declared extension in the same schema is outside",
+      sql: `${EXT}CREATE TRIGGER probe BEFORE UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION extensions.moddatetime('updated_at');\n`,
+      expected: ["engine.out-of-scope trigger:auth.users.probe"],
     },
     {
       name: "the same schema, a function that is no extension member, is outside",

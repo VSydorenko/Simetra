@@ -219,7 +219,7 @@ export function providerCalls(
         ? []
         : [
             ...PROVIDER_FUNCTIONS[provider],
-            ...PROVIDER_EXPRESSION_FUNCTIONS[provider],
+            ...PROVIDER_EXPRESSION_FUNCTIONS[provider].map((f) => f.name),
           ]
     ),
     units,

@@ -231,9 +231,15 @@ function outOfScopeDiagnostics(
   const databaseProvider = model.project.database.provider
   const provider = new Set(PROVIDER_SCHEMAS[databaseProvider])
   const extensions = new Set(PROVIDER_UNMANAGED_EXTENSIONS[databaseProvider])
-  const known = new Set(PROVIDER_EXPRESSION_FUNCTIONS[databaseProvider])
-  // Схеми розширень, які оголошує модель: тільки там функція «відомого
-  // члена розширення» справді є членом
+  // Функція → її розширення: член лише тоді, коли оголошено саме воно
+  const known = new Map(
+    PROVIDER_EXPRESSION_FUNCTIONS[databaseProvider].map((f) => [
+      f.name,
+      f.extension,
+    ])
+  )
+  // Оголошені моделлю розширення як `схема/ім'я`: функція «відомого члена»
+  // справді член, лише коли її розширення стоїть саме в схемі виклику
   const declared = new Set(
     model.sqlUnits.flatMap((unit) => {
       if (unit.class !== "extension") return []
@@ -241,7 +247,7 @@ function outOfScopeDiagnostics(
       const schema = parsed.ok
         ? extensionSchema(parsed.statements[0]?.stmt)
         : undefined
-      return schema === undefined ? [] : [schema]
+      return schema === undefined ? [] : [`${schema}/${unit.name}`]
     })
   )
   const out: EngineDiagnostic[] = []
@@ -281,17 +287,16 @@ function outOfScopeDiagnostics(
         // (`providerTriggerInBoundarySql`): межа його не бачить. Член
         // розширення, оголошеного моделлю, читач не рахує зовнішнім, тож і
         // тут: членство статично відоме лише для функцій розширень, які
-        // знає платформа (`PROVIDER_EXPRESSION_FUNCTIONS`), у схемі
-        // оголошеного розширення
+        // знає платформа (`PROVIDER_EXPRESSION_FUNCTIONS`), якщо
+        // оголошено саме її розширення в схемі виклику
         const own = new Set(PROVIDER_ASSUMED_SCHEMAS[databaseProvider])
         const outside = triggerFunctionCalls(unit, parse).find(
           (call) =>
             (call.where === "execute"
               ? provider.has(call.schema)
               : own.has(call.schema)) &&
-            !(
-              declared.has(call.schema) &&
-              known.has(`${call.schema}.${call.name}`)
+            !declared.has(
+              `${call.schema}/${known.get(`${call.schema}.${call.name}`)}`
             )
         )?.schema
         if (outside !== undefined)

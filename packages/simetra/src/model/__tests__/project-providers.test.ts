@@ -48,7 +48,10 @@ const POSTGRES_ROWS = [
   [
     "PROVIDER_EXPRESSION_FUNCTIONS",
     PROVIDER_EXPRESSION_FUNCTIONS,
-    ["extensions.moddatetime", "extensions.soundex"],
+    [
+      { name: "extensions.moddatetime", extension: "moddatetime" },
+      { name: "extensions.soundex", extension: "fuzzystrmatch" },
+    ],
   ],
   [
     "PROVIDER_IDENTITY_SOURCES",
