@@ -1,5 +1,6 @@
 // Конфіг сервера з оточення (спека П4-D §4.1). Усе читається під час виклику,
 // а не при імпорті: збірка й клієнтський бандл не мають падати без оточення.
+import { createPrivateKey, createPublicKey } from "node:crypto"
 import type { SigningKey } from "simetra/server/signals"
 
 /** Канонічне походження застосунку: схема, хост, порт без шляху. */
@@ -49,12 +50,35 @@ export interface SignalsConfig {
 const KEYS_VARIABLE = "SIMETRA_SIGNALS_KEYS"
 const URL_VARIABLE = "SIMETRA_SIGNALS_URL"
 
+// Лише ISO 8601 з часом: `new Date("5")` чи `new Date("2020")` розбирає і не те
+const ISO_DATE_TIME =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/
+
 function parseDate(value: unknown, what: string): Date {
-  const date = typeof value === "string" ? new Date(value) : undefined
+  const date =
+    typeof value === "string" && ISO_DATE_TIME.test(value)
+      ? new Date(value)
+      : undefined
   if (date === undefined || Number.isNaN(date.getTime())) {
     throw new Error(`${KEYS_VARIABLE}: ${what} must be an ISO date string`)
   }
   return date
+}
+
+// Невідповідний `x` опублікував би ключ, яким жоден токен не перевіряється.
+// Перевірка синхронна, щоб зупиняти старт так само, як інші відмови конфігу:
+// асинхронна відмова плагіна Nitro процес не зупиняє.
+function keyPairMatches(x: string, d: string): boolean {
+  try {
+    const privateKey = createPrivateKey({
+      key: { kty: "OKP", crv: "Ed25519", x, d },
+      format: "jwk",
+    })
+    const derived = createPublicKey(privateKey).export({ format: "jwk" })
+    return derived.x === x
+  } catch {
+    return false
+  }
 }
 
 // Повідомлення помилок не несуть значень зі змінної: там приватні ключі, а
@@ -100,6 +124,11 @@ function parseKeys(raw: string): SigningKey[] {
     if (typeof jwk.x !== "string" || typeof jwk.d !== "string") {
       throw new Error(`${at}.privateJwk needs both x and d`)
     }
+    if (!keyPairMatches(jwk.x, jwk.d)) {
+      throw new Error(
+        `${KEYS_VARIABLE}: key "${kid}" is not an Ed25519 key pair (x must match d)`
+      )
+    }
     const key: SigningKey = {
       kid,
       privateJwk: { kty: "OKP", crv: "Ed25519", x: jwk.x, d: jwk.d },
@@ -138,31 +167,4 @@ export function signalsConfig(): SignalsConfig | undefined {
     throw new Error(`${URL_VARIABLE} must be a ws: or wss: URL`)
   }
   return { url, keys: parseKeys(keys) }
-}
-
-// Профіль §6.3: ключ, доданий пізніше за останнє читання кешу JWKS Centrifugo,
-// підписувати не можна (збігається з `MATURE_AFTER` порту)
-const MATURE_AFTER_MS = 65 * 60_000
-
-/**
- * Штатна фаза ротації «ключ відставлено, наступник ще не зрілий» — не помилка
- * конфігу, а привід для попередження в журнал (підпис дасть 503 до зрілості).
- */
-export function signalsRotationWarning(
-  keys: readonly SigningKey[],
-  now: Date = new Date()
-): string | undefined {
-  const at = now.getTime()
-  const retired = keys.some(
-    (key) => key.retiredAt !== undefined && key.retiredAt.getTime() <= at
-  )
-  if (!retired) return undefined
-  const mature = keys.some(
-    (key) =>
-      (key.retiredAt === undefined || key.retiredAt.getTime() > at) &&
-      key.addedAt.getTime() + MATURE_AFTER_MS <= at
-  )
-  return mature
-    ? undefined
-    : `${KEYS_VARIABLE}: a key is retired and no active key is mature yet; token routes answer 503 until one is`
 }

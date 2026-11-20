@@ -5,6 +5,7 @@ export {
   SIGNALS_JWKS_PATH,
   SignalTokenError,
   createCentrifugoTokens,
+  signingKeyProblem,
   type CentrifugoTokensOptions,
   type PrivateJwk,
   type SignalChannelToken,

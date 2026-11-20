@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { generateKey } from "./signal-keys"
+import { generateKey, mismatchedKey } from "./signal-keys"
 
 vi.mock("@tanstack/react-start/server", () => ({
   createServerEntry: (entry: unknown) => entry,
@@ -47,6 +47,15 @@ describe("server entry startup (spec 4.1)", () => {
     await expect(import("../src/server")).rejects.toThrow(
       /SIMETRA_SIGNALS_KEYS/
     )
+  })
+
+  it("refuses to start when x does not match d", async () => {
+    vi.stubEnv("SIMETRA_SIGNALS_URL", "wss://signals.test/connection/websocket")
+    vi.stubEnv(
+      "SIMETRA_SIGNALS_KEYS",
+      JSON.stringify([await mismatchedKey("k")])
+    )
+    await expect(import("../src/server")).rejects.toThrow(/x must match d/)
   })
 
   it("imports with signals fully configured", async () => {

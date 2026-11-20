@@ -58,18 +58,29 @@ describe("getSignalTokens", () => {
 
   it("does not cache a failed start", async () => {
     vi.stubEnv("SIMETRA_SIGNALS_URL", url)
-    vi.stubEnv(
-      "SIMETRA_SIGNALS_KEYS",
-      JSON.stringify([await mismatchedKey("k")])
-    )
+    vi.stubEnv("SIMETRA_SIGNALS_KEYS", JSON.stringify([await generateKey("k")]))
+    vi.stubEnv("SIMETRA_APP_ORIGIN", undefined)
     const { getSignalTokens } = await import("../src/server/signal-tokens")
-    await expect(getSignalTokens()).rejects.toMatchObject({
-      code: "signals.invalid-key",
-    })
-    vi.stubEnv(
-      "SIMETRA_SIGNALS_KEYS",
-      JSON.stringify([await generateKey("ok")])
-    )
+    await expect(getSignalTokens()).rejects.toThrow(/SIMETRA_APP_ORIGIN/)
+    vi.stubEnv("SIMETRA_APP_ORIGIN", "https://app.test")
     await expect(getSignalTokens()).resolves.toBeDefined()
+  })
+
+  // Друга лінія захисту: вона важить, коли пара ключів відома лише порту
+  it("rejects a mismatched pair in the port itself", async () => {
+    const { createCentrifugoTokens } = await import("simetra/server/signals")
+    await expect(
+      createCentrifugoTokens({
+        keys: [
+          {
+            kid: "k",
+            privateJwk: (await mismatchedKey("k")).privateJwk,
+            addedAt: new Date(0),
+          },
+        ],
+        audience: "centrifugo:x",
+        issuer: "https://app.test",
+      })
+    ).rejects.toMatchObject({ code: "signals.invalid-key" })
   })
 })

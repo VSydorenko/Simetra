@@ -1,11 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import {
-  appOrigin,
-  authSecret,
-  signalsConfig,
-  signalsRotationWarning,
-} from "../src/server/config"
-import { generateKey } from "./signal-keys"
+import { appOrigin, authSecret, signalsConfig } from "../src/server/config"
+import { generateKey, mismatchedKey } from "./signal-keys"
 
 afterEach(() => vi.unstubAllEnvs())
 
@@ -131,50 +126,31 @@ describe("signalsConfig", () => {
     }
   })
 
+  it("refuses x that does not match d without echoing key material", async () => {
+    const key = await mismatchedKey("k1")
+    vi.stubEnv("SIMETRA_SIGNALS_URL", url)
+    vi.stubEnv("SIMETRA_SIGNALS_KEYS", JSON.stringify([key]))
+    expect(() => signalsConfig()).toThrow(/"k1".*x must match d/)
+    expect(() => signalsConfig()).not.toThrow(key.privateJwk.d)
+  })
+
+  it.each(["5", "2020", "Jan 1 2020", "2020-01-01", "2020-01-01T00:00:00"])(
+    "refuses a non-ISO date %j",
+    async (value) => {
+      const key = await generateKey("k1")
+      vi.stubEnv("SIMETRA_SIGNALS_URL", url)
+      vi.stubEnv(
+        "SIMETRA_SIGNALS_KEYS",
+        JSON.stringify([{ ...key, addedAt: value }])
+      )
+      expect(() => signalsConfig()).toThrow(/ISO date/)
+    }
+  )
+
   it("refuses a repeated kid", async () => {
     const key = await generateKey("same")
     vi.stubEnv("SIMETRA_SIGNALS_URL", url)
     vi.stubEnv("SIMETRA_SIGNALS_KEYS", JSON.stringify([key, key]))
     expect(() => signalsConfig()).toThrow(/repeated/)
-  })
-})
-
-describe("signalsRotationWarning", () => {
-  const keyOf = (addedAt: string, retiredAt?: string) => ({
-    kid: addedAt,
-    privateJwk: {},
-    addedAt: new Date(addedAt),
-    ...(retiredAt === undefined ? {} : { retiredAt: new Date(retiredAt) }),
-  })
-  const now = new Date("2026-01-01T12:00:00Z")
-
-  it("is silent without a retirement (first run)", () => {
-    expect(signalsRotationWarning([keyOf("2026-01-01T11:59:00Z")], now)).toBe(
-      undefined
-    )
-  })
-
-  it("warns when a key is retired and the successor is not mature", () => {
-    expect(
-      signalsRotationWarning(
-        [
-          keyOf("2025-01-01T00:00:00Z", "2026-01-01T11:50:00Z"),
-          keyOf("2026-01-01T11:30:00Z"),
-        ],
-        now
-      )
-    ).toMatch(/no active key is mature/)
-  })
-
-  it("is silent when a mature successor exists", () => {
-    expect(
-      signalsRotationWarning(
-        [
-          keyOf("2025-01-01T00:00:00Z", "2026-01-01T11:50:00Z"),
-          keyOf("2026-01-01T10:00:00Z"),
-        ],
-        now
-      )
-    ).toBe(undefined)
   })
 })

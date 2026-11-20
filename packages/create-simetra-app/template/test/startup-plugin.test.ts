@@ -44,7 +44,7 @@ describe("nitro startup plugin", () => {
         "SIMETRA_SIGNALS_KEYS",
         JSON.stringify([await generateKey("k1")])
       )
-      await expect(startupPlugin()).resolves.toBeUndefined()
+      expect(startupPlugin()).toBeUndefined()
     })
 
     it("throws on the url without the keys", () => {
@@ -58,15 +58,13 @@ describe("nitro startup plugin", () => {
       expect(() => startupPlugin()).toThrow(/SIMETRA_SIGNALS_KEYS/)
     })
 
-    it("rejects when x does not match d", async () => {
+    it("throws synchronously when x does not match d", async () => {
       vi.stubEnv("SIMETRA_SIGNALS_URL", url)
       vi.stubEnv(
         "SIMETRA_SIGNALS_KEYS",
         JSON.stringify([await mismatchedKey("k1")])
       )
-      await expect(startupPlugin()).rejects.toMatchObject({
-        code: "signals.invalid-key",
-      })
+      expect(() => startupPlugin()).toThrow(/x must match d/)
     })
 
     it("warns, but starts, while a retired key has no mature successor", async () => {
@@ -78,9 +76,9 @@ describe("nitro startup plugin", () => {
       const fresh = await generateKey("new", new Date().toISOString())
       vi.stubEnv("SIMETRA_SIGNALS_URL", url)
       vi.stubEnv("SIMETRA_SIGNALS_KEYS", JSON.stringify([old, fresh]))
-      await expect(startupPlugin()).resolves.toBeUndefined()
+      expect(startupPlugin()).toBeUndefined()
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("no active key is mature")
+        expect.stringContaining("signals.no-mature-key")
       )
       warn.mockRestore()
     })
