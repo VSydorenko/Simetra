@@ -15,7 +15,7 @@ import {
   type Filter,
   type KnownVersions,
   type MetadataRef,
-  type ReadPartValue,
+  type ReadQueryValue,
   type ReadQuery,
   type ReadRows,
   type WireReadParts,
@@ -438,7 +438,7 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
     query: ReadQuery,
     result: ReadRows,
     known: KnownVersions | undefined
-  ): ReadPartValue => {
+  ): ReadQueryValue => {
     if (
       known === undefined ||
       fake.epoch === null ||
@@ -562,6 +562,9 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
             settle()
             return
           }
+          // Знімок прав фейк не віддає: його споживач (приймач знімка в ядрі)
+          // з'являється наступною частиною блоку, а фейк без нього мовчки
+          // відповів би вигадкою. Відмова — явна, а не відповідь `invalid`.
           if (item.type === "rights") {
             fail(new Error("fake: the rights part is not supported"))
             return

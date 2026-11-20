@@ -268,10 +268,14 @@ export const checkedRuntime = (
       runtime.readParts(session, parts, options)
     )
     result.items.forEach((item, i) => {
-      if (!item.ok) expectErrorObject(catalog, parts[i]!.query, item.error)
+      const part = parts[i]!
+      if (!item.ok && part.type === "query") {
+        expectErrorObject(catalog, part.query, item.error)
+      }
     })
     return result
   },
+  rightsSnapshot: (session) => runtime.rightsSnapshot(session),
   authorizeChannels: (session, channels) =>
     runtime.authorizeChannels(session, channels),
 })

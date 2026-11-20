@@ -342,9 +342,17 @@ export function createDataHandler(
     if (wire.type === "version") {
       return { slot: { item: { ok: true, value: version } } }
     }
-    // Частину `rights` виконує рантайм з наступних задач блоку; до того вона,
-    // як і до введення типу, — відмова `invalid` цій частині.
-    if (wire.type === "rights") return refused({ code: "command.invalid" })
+    // Знімок прав виконує рантайм у транзакції пакета; бюджет міряє його як
+    // частину, яку не ріжуть.
+    if (wire.type === "rights") {
+      return {
+        slot: { rights: true },
+        part:
+          wire.known === undefined
+            ? { type: "rights" }
+            : { type: "rights", known: wire.known },
+      }
+    }
     const stale = checkCompatibility(index, wire)
     if (stale !== undefined) return refused(stale)
     const part = mappedOrRefused(readPartFromWire(index, wire))
@@ -366,6 +374,11 @@ export function createDataHandler(
       slots.push(slot)
       if (part !== undefined) parts.push(part)
     })
+    // Конверт рахував `rights` на сирому вході, а геттер чи `Proxy` міг змінити
+    // `type` між читаннями: рішення — на розібраних частинах.
+    if (parts.filter((part) => part.type === "rights").length > 1) {
+      throw new CommandFailure({ code: "command.invalid" })
+    }
     // Крок 6: бюджет міряє кожну частину до наступної (`fit`), тож частина
     // після переповнення бази не бачить.
     const budget = fitParts(index, slots, serverHash)
@@ -375,10 +388,12 @@ export function createDataHandler(
       if (defect !== undefined) return "overflow"
       fitted.add(part)
       try {
-        return budget.fit(
-          part,
-          readResultToWire(index, parts[part]!.query, value)
-        )
+        const source = parts[part]!
+        if ("rightsVersion" in value) return budget.fit(part, value)
+        if (source.type !== "query") {
+          throw new Error("a rights part answered with a query value")
+        }
+        return budget.fit(part, readResultToWire(index, source.query, value))
       } catch (error) {
         // Кодек відхилив значення рантайму — дефект сервера. Виняток із `fit`
         // рантайм узяв би за збій бази; тут лише зупинка, а відмова — вся

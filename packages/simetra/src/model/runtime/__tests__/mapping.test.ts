@@ -17,7 +17,7 @@ import {
   readResultToWire,
 } from "../mapping"
 import type { Operation } from "../operation"
-import type { ReadPartValue, ReadQuery, ReadResult } from "../read"
+import type { ReadQueryValue, ReadQuery, ReadResult } from "../read"
 import type { Change } from "../result"
 import { WireDecodeError, WireEncodeError } from "../wire"
 import {
@@ -1123,7 +1123,7 @@ describe("readResultToWire / readResultFromWire: known markers", () => {
   const row = { ref: ID, version: 2, title: "a" }
   const wireRow = { task_id: ID, row_version: "2", title_col: "a" }
 
-  it.each<[string, ReadPartValue, WireReadResult]>([
+  it.each<[string, ReadQueryValue, WireReadResult]>([
     [
       "a row, an unchanged-row marker and a partial marker",
       {
@@ -1209,7 +1209,7 @@ describe("readResultToWire / readResultFromWire: known markers", () => {
     expect(() =>
       readResultToWire(catalogIndex([entry]), list, {
         rows: [marker],
-      } as ReadPartValue)
+      } as ReadQueryValue)
     ).toThrow(WireEncodeError)
   })
 })

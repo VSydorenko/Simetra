@@ -12,7 +12,7 @@ import {
   readPartToWire,
   type KnownVersions,
   type MetadataRef,
-  type ReadPart,
+  type ReadQueryPart,
   type ReadQuery,
   type RuntimeCatalog,
   type SessionClaims,
@@ -148,7 +148,7 @@ describe("read batch with known over the engine target", () => {
   ): Promise<CommandRuntime> =>
     createCommandRuntime({ database, catalog: env.catalog })
 
-  const part = (query: ReadQuery, known?: KnownVersions): ReadPart =>
+  const part = (query: ReadQuery, known?: KnownVersions): ReadQueryPart =>
     known === undefined
       ? { type: "query", query }
       : { type: "query", query, known }
@@ -665,6 +665,78 @@ describe("read batch with known over the engine target", () => {
     expect(fresh.rows.find((r) => r.ref === existing)!.version).not.toBe(
       rows[0]!.version
     )
+  })
+
+  // Знімок прав — частина тієї самої транзакції пакета: функцію судить роль
+  // запиту з claims сесії, тож `userId` — користувач сесії, а не сирий `sub`.
+  it("a rights part reads the snapshot of the session's user in the batch's transaction", async () => {
+    expect(env.catalog.rightsSnapshot).toBe(true)
+    const rt = await runtime()
+    const { epoch, items } = await rt.readParts(env.me.session, [
+      part({ object: GAUGE, limit: 1 }),
+      { type: "rights" },
+    ])
+    expect(epoch).toMatch(HEX64)
+    const rights = items[1]!
+    if (!rights.ok || !("rightsVersion" in rights.value)) {
+      throw new Error(`rights part failed: ${JSON.stringify(rights)}`)
+    }
+    expect(rights.value.rightsVersion).toMatch(HEX64)
+    expect(rights.value.snapshot?.userId).toBe(env.me.session.sub)
+    expect(rights.value.snapshot?.scopeSets.map((s) => s.scope)).toContain(
+      env.me.org
+    )
+    // Той самий знімок двох викликів — той самий відбиток (канонічний порядок).
+    const again = await rt.rightsSnapshot(env.me.session)
+    expect(again.rightsVersion).toBe(rights.value.rightsVersion)
+    expect(again.snapshot).toEqual(rights.value.snapshot)
+  })
+
+  it("a rights part with the current known leaves the snapshot out; another user gets another version", async () => {
+    const rt = await runtime()
+    const mine = await rt.rightsSnapshot(env.me.session)
+    const { items } = await rt.readParts(env.me.session, [
+      { type: "rights", known: mine.rightsVersion },
+    ])
+    expect(items).toEqual([
+      { ok: true, value: { rightsVersion: mine.rightsVersion } },
+    ])
+    const theirs = await rt.rightsSnapshot(env.other.session)
+    expect(theirs.snapshot.userId).toBe(env.other.session.sub)
+    expect(theirs.rightsVersion).not.toBe(mine.rightsVersion)
+  })
+
+  it("an anonymous session gets the empty snapshot of an anonymous user", async () => {
+    const rt = await runtime()
+    const anonymous = { ...env.me.session, is_anonymous: true }
+    const value = await rt.rightsSnapshot(anonymous)
+    expect(value.snapshot).toEqual({ userId: null, scopeSets: [], rights: [] })
+  })
+
+  it("the rights part alone, as an inProcess envelope, answers the wire value", async () => {
+    const handler = createDataHandler(await runtime())
+    const response = await handler(
+      env.me.session,
+      {
+        subject: env.me.session.sub,
+        request: { type: "read", items: [{ type: "rights" }] },
+      },
+      { inProcess: true }
+    )
+    expect(response.ok, JSON.stringify(response)).toBe(true)
+    const { epoch, items } = (
+      response as {
+        value: {
+          epoch: string
+          items: { ok: true; value: { rightsVersion: string } }[]
+        }
+      }
+    ).value
+    expect(epoch).toMatch(HEX64)
+    expect(items[0]!.value.rightsVersion).toMatch(HEX64)
+    expect(items[0]!.value).toMatchObject({
+      snapshot: { userId: env.me.session.sub },
+    })
   })
 
   it("the wire form of a read part answers markers and a 64 hex epoch", async () => {

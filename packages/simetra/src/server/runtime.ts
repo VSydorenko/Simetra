@@ -30,7 +30,9 @@ import {
   type ReadPartValue,
   type ReadQuery,
   type ReadResultOf,
+  type ReadRightsPart,
   type RequestRolePurpose,
+  type RightsSnapshot,
   type RuntimeCatalog,
   type RuntimeObject,
   type SessionClaims,
@@ -51,6 +53,12 @@ import {
   type ReadPlan,
   type ReadStatementRunner,
 } from "./read"
+import {
+  ANONYMOUS_SNAPSHOT,
+  RIGHTS_SNAPSHOT_STATEMENT,
+  rightsValueOf,
+  snapshotFromRows,
+} from "./rights-snapshot"
 import { createChannelGrant, type ChannelGrant } from "./signals/grant"
 import {
   COMMAND_ROLE,
@@ -156,6 +164,12 @@ export interface CommandRunOptions {
   fullTabularArrays?: true
 }
 
+/** The snapshot and its fingerprint, see {@link CommandRuntime.rightsSnapshot}. */
+export interface RightsSnapshotValue {
+  rightsVersion: string
+  snapshot: RightsSnapshot
+}
+
 /** The outcome of one part of {@link CommandRuntime.readParts}. */
 export type ReadPartOutcome =
   { ok: true; value: ReadPartValue } | { ok: false; error: CommandError }
@@ -218,6 +232,16 @@ export interface CommandRuntime {
     parts: readonly ReadPart[],
     options?: ReadPartsOptions
   ): Promise<ReadPartsResult>
+  /**
+   * The rights snapshot of the session's user and its `rightsVersion` (P4-B
+   * spec §9.1), read as a one-part batch: one `REPEATABLE READ READ ONLY`
+   * transaction, one statement under the request role. An anonymous session
+   * gets the empty snapshot without a database call. Rejects with
+   * `CommandFailure`: `command.unauthenticated`; `command.invalid` when the
+   * catalog has no rights functions; `command.internal` when the function's
+   * output fails `rightsSnapshotSchema`.
+   */
+  rightsSnapshot(session: SessionClaims): Promise<RightsSnapshotValue>
   /**
    * The signal channels the session may subscribe to (P4-B spec §8.3), as
    * the `ChannelGrant` the token port of `simetra/server/signals` signs. One
@@ -650,6 +674,18 @@ export async function createCommandRuntime(
     },
     readParts: (session, parts, options) =>
       readParts(state, session, parts, options),
+    rightsSnapshot: async (session) => {
+      const { items } = await readParts(
+        state,
+        session,
+        [{ type: "rights" }],
+        undefined
+      )
+      const item = items[0]!
+      if (!item.ok) throw new CommandFailure(item.error)
+      // Без `known` знімок іде завжди.
+      return item.value as RightsSnapshotValue
+    },
     authorizeChannels: (session, channels) =>
       authorizeChannels(state, session, channels),
   }
@@ -663,6 +699,11 @@ function deepFreeze<T>(value: T): T {
   }
   return value
 }
+
+type RightsEntry = { index: number; rights: ReadRightsPart }
+/** Частина пакета після перевірки: запит із планом чи знімок прав. */
+type PlannedPart =
+  RightsEntry | { index: number; object: RuntimeObject; plan: ReadPlan }
 
 /** Відмова бази в читанні, уже змапована; будь-що інше в транзакції — аномалія. */
 class Refused {
@@ -737,12 +778,29 @@ async function readParts(
       reason: LIMIT_REASONS.batchTooLarge,
     })
   }
+  // Знімок — один на транзакцію. Викликач у процесі конверт не проходить, а
+  // розібрані частини — звичайні дані: перевірка тут остаточна.
+  if (parts.filter((part) => part.type === "rights").length > 1) {
+    throw new CommandFailure({ code: "command.invalid" })
+  }
+  const anonymous = checkedKind(state.catalog.provider, session) === "anonymous"
   // Перевірка частин — до `BEGIN`: хибна частина відмовляє лише собі
   // й не займає з'єднання.
   const items: ReadPartOutcome[] = new Array(parts.length)
-  const planned: { index: number; object: RuntimeObject; plan: ReadPlan }[] = []
+  const planned: PlannedPart[] = []
   let statements = 0
   parts.forEach((part, index) => {
+    if (part.type === "rights") {
+      // Без функцій прав у проєкті немає й функції знімка.
+      if (state.catalog.rightsSnapshot !== true) {
+        items[index] = { ok: false, error: { code: "command.invalid" } }
+        return
+      }
+      planned.push({ index, rights: part })
+      // Анонім до бази не йде (Р5).
+      if (!anonymous) statements += 1
+      return
+    }
     const prepared = prepareRead(state.catalog, part.query, part.known)
     if ("error" in prepared) {
       items[index] = { ok: false, error: prepared.error }
@@ -771,6 +829,28 @@ async function readParts(
     // Відповідь не тієї форми: транзакцію відкочено, назовні — лише код.
     state.log({ kind: "database", error })
     return { error: INTERNAL, destroy: false, lost: false }
+  }
+  // Значення частини `rights` з уже відомого знімка; `true` — бюджет відповіді
+  // зупинив пакет після неї.
+  const placeRights = async (
+    index: number,
+    part: ReadRightsPart,
+    snapshot: RightsSnapshot
+  ): Promise<boolean> => {
+    const value = await rightsValueOf(snapshot, part.known)
+    items[index] = { ok: true, value }
+    return options?.fit?.(index, value) === "overflow"
+  }
+  // Пакет лише з анонімних `rights`: бази немає, транзакції теж.
+  if (anonymous && planned.every((entry) => "rights" in entry)) {
+    for (const [n, entry] of planned.entries()) {
+      if (!("rights" in entry)) continue
+      if (await placeRights(entry.index, entry.rights, ANONYMOUS_SNAPSHOT)) {
+        rest(n + 1, OVER_BUDGET)
+        break
+      }
+    }
+    return { epoch: null, items }
   }
   // Бюджет — на всю транзакцію разом із чеканням з'єднання, як і в команди.
   const deadline = performance.now() + state.readBudgetMs
@@ -812,14 +892,42 @@ async function readParts(
     rest(0, refusal.error)
     return { epoch: null, items }
   }
-  const run: ReadStatementRunner = async (statement, target) => {
+  const runIn = async (
+    statement: { text: string; params: readonly (string | null)[] },
+    phase?: ErrorPhase
+  ) => {
     const step = budget.next()
     if (step === "expired") throw EXPIRED
     if (step !== undefined) await send(step)
-    return (await send(statement, { kind: "read", object: target })).rows
+    return (await send(statement, phase)).rows
   }
-  for (const [n, { index, object, plan }] of planned.entries()) {
+  const run: ReadStatementRunner = (statement, target) =>
+    runIn(statement, { kind: "read", object: target })
+  for (const [n, entry] of planned.entries()) {
+    const { index } = entry
     try {
+      if ("rights" in entry) {
+        let snapshot = ANONYMOUS_SNAPSHOT
+        if (!anonymous) {
+          const rows = await runIn(RIGHTS_SNAPSHOT_STATEMENT)
+          try {
+            snapshot = snapshotFromRows(rows)
+          } catch (error) {
+            // Функція відповіла не тим, що обіцяє схема: дефект бази чи
+            // версій, не вхід клієнта. Транзакція ціла — частина лише
+            // собі відмовляє.
+            state.log({ kind: "database", error })
+            items[index] = { ok: false, error: INTERNAL }
+            continue
+          }
+        }
+        if (await placeRights(index, entry.rights, snapshot)) {
+          rest(n + 1, OVER_BUDGET)
+          break
+        }
+        continue
+      }
+      const { object, plan } = entry
       // Рядки декодуються до `COMMIT`: з них оператор `include` бере id.
       const value = await executeRead(object, plan, run, epoch)
       // Відмова частини без бази (`tabular-too-large`) транзакції не рве.
