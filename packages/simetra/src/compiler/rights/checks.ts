@@ -21,13 +21,14 @@ import {
 } from "simetra/model"
 import { mainTableOf } from "../contracts"
 import { diagnostic, type Diagnostic } from "../diagnostics"
-import { PROJECT_FILE, type ParsedObject } from "../stages/files"
+import { PROJECT_FILE, objectKey, type ParsedObject } from "../stages/files"
 import { type ResolvedReference } from "../stages/identity"
 import {
   hasScopeKeyUnique,
   usersCatalogOf,
   type ModelStageResult,
 } from "../stages/model"
+import { hasRootForeignKey } from "../stages/scope-root"
 import {
   carrierTarget,
   crossTenant,
@@ -831,6 +832,11 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
   // мусить із ним збігатися (адмін тенанта A вписує учасника B зі скоупом
   // A — без звірки рядок діяв би в B). Скоуп з учасника — лише явним `null`,
   // тож забута колонка — помилка, а не тихе «скоуп з учасника».
+  let objectsByKey: Map<string, ParsedObject> | undefined
+  const byKey = () =>
+    (objectsByKey ??= new Map(
+      ctx.objects.map((o) => [objectKey(o.kind, o.name), o])
+    ))
   const checkRowScope = (
     source: AssignmentSource,
     at: string,
@@ -882,7 +888,46 @@ function checkSources(ctx: RightsCheckContext): Diagnostic[] {
       }
       return
     }
-    if (scopeColumn === undefined) return
+    if (scopeColumn === undefined) {
+      // Нескоуплена таблиця: скоуп рядка несе лише `columns.scope`, і власна
+      // межа таблиці його не тримає. Без FK на ключ кореня виду колонка могла
+      // б нести довільний uuid — призначення в чужому тенанті (те саме правило,
+      // що для `scopeColumn` скоупленої `CustomTable`).
+      if (scope === null) return
+      const kind = ctx.scopeKinds.find((k) => k.name === level.scopeKind)
+      const column = projectTarget(`${at}/columns/scope`, "source.column", ctx)
+      // Невідомий вид чи колонку звітувала стадія 2.
+      if (kind === undefined || column === undefined) return
+      const data = target.data as CustomTable
+      // Таблиця — сам корінь виду: `scopeColumn` у нього немає законно (П2 §6),
+      // ключ рядка і є значенням скоупу. FK з ключа на власний ключ нічого не
+      // доводить, тож колонкою скоупу рядка буває лише цей ключ.
+      const root = kind.root
+      if (
+        "object" in root &&
+        root.object.kind === target.kind &&
+        root.object.name === target.name
+      ) {
+        if (singleUuidKeyColumn(data)?.name !== scope) {
+          report("rights.source-scope-column", `${at}/columns/scope`, {
+            source: source.name,
+            column: scope,
+            scope: kind.name,
+            reason: "rootKey",
+          })
+        }
+        return
+      }
+      if (!hasRootForeignKey(data, scope, kind, byKey())) {
+        report("rights.source-scope-column", `${at}/columns/scope`, {
+          source: source.name,
+          column: scope,
+          scope: kind.name,
+          reason: "rootForeignKey",
+        })
+      }
+      return
+    }
     // `null` на таблиці зі скоуп-колонкою вимкнув би звірку саме там, де
     // таблиця скоуп несе.
     const column =

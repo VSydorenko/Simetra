@@ -127,7 +127,7 @@ const SCOPE_COLUMN_HINT = {
 }
 
 const SOURCE_SCOPE_HINTS: Record<
-  "scope" | "column" | "level" | "missing",
+  "scope" | "column" | "level" | "missing" | "rootForeignKey" | "rootKey",
   { en: string; uk: string }
 > = {
   scope: SCOPE_COLUMN_HINT,
@@ -139,6 +139,14 @@ const SOURCE_SCOPE_HINTS: Record<
   missing: {
     en: "The scope of an assignment is the scope of its member, and the own scope column of the row must match it: name that column in columns.scope, or set columns.scope to null when the row carries no scope.",
     uk: "Скоуп призначення — скоуп учасника, і власна колонка скоупу рядка мусить із ним збігатися: назвіть цю колонку в columns.scope або задайте columns.scope: null, коли рядок скоупу не несе.",
+  },
+  rootForeignKey: {
+    en: "Add to the table a single-column foreign key from this column to the key of the scope kind root: without it the column may carry any uuid, and a row would grant a role in another tenant. When the column also holds container ids, carry the tenant in its own column with that foreign key, or set columns.scope to null when the member alone fixes the scope.",
+    uk: "Додайте таблиці одноколонковий зовнішній ключ із цієї колонки на ключ кореня виду скоупу: без нього колонка може нести будь-який uuid, і рядок давав би роль в іншому тенанті. Коли колонка несе й id контейнерів, винесіть тенант в окрему колонку з таким ключем або задайте columns.scope: null, коли скоуп визначає сам учасник.",
+  },
+  rootKey: {
+    en: "The table is the root of the scope kind: the key of a row is its scope value. Name the root key in columns.scope, or set columns.scope to null when the member alone fixes the scope.",
+    uk: "Таблиця — корінь виду скоупу: ключ рядка і є значенням скоупу. Назвіть ключ кореня в columns.scope або задайте columns.scope: null, коли скоуп визначає сам учасник.",
   },
 }
 
@@ -2551,6 +2559,10 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
           return `Assignment source "${p.source}" sets columns.scope, but its level is not a scope kind`
         case "missing":
           return `Assignment source "${p.source}" on a scope level names no row scope column, and its table has no scopeColumn`
+        case "rootForeignKey":
+          return `Scope column "${p.column}" of source "${p.source}" must be the single column of a foreign key to the root key of scope kind "${p.scope}"`
+        case "rootKey":
+          return `Scope column "${p.column}" of source "${p.source}" must be the key of its table, the root of scope kind "${p.scope}"`
         default:
           return `Scope column of source "${p.source}" is not the scope column of its table`
       }
@@ -2563,6 +2575,10 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
           return `Джерело призначень "${p.source}" задає columns.scope, а його рівень — не вид скоупу`
         case "missing":
           return `Джерело призначень "${p.source}" рівня скоупу не називає колонки скоупу рядка, а його таблиця не має scopeColumn`
+        case "rootForeignKey":
+          return `Колонка скоупу "${p.column}" джерела "${p.source}" має бути єдиною колонкою зовнішнього ключа на ключ кореня виду скоупу "${p.scope}"`
+        case "rootKey":
+          return `Колонка скоупу "${p.column}" джерела "${p.source}" має бути ключем її таблиці — кореня виду скоупу "${p.scope}"`
         default:
           return `Колонка скоупу джерела "${p.source}" — не скоуп-колонка його таблиці`
       }

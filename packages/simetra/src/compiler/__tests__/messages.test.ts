@@ -750,7 +750,10 @@ describe("messages catalog", () => {
   it.each([
     ["rights.source-where", ["type", "literal", "shared"]],
     ["rights.source-role-key", ["primaryKey", "ambiguous"]],
-    ["rights.source-scope-column", ["scope", "column", "level", "missing"]],
+    [
+      "rights.source-scope-column",
+      ["scope", "column", "level", "missing", "rootForeignKey", "rootKey"],
+    ],
   ] as const)(
     "%s gives every reason its own text and hint",
     (code, reasons) => {
@@ -774,7 +777,7 @@ describe("messages catalog", () => {
           reasons.length
         )
         // Причини scope і column мають одну пораду — про скоуп-колонку таблиці.
-        const hints = code === "rights.source-scope-column" ? 3 : reasons.length
+        const hints = code === "rights.source-scope-column" ? 5 : reasons.length
         expect(new Set(texts.map((t) => t.hint)).size, locale).toBe(hints)
       }
     }

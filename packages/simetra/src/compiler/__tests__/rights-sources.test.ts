@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { completeFiles } from "simetra/compiler"
 import {
   GRANT_FILE,
+  PROJECT_FILE,
   GRANTS_SOURCE_ID,
   ORG_ASSIGNMENTS_FILE,
   ORG_ROLES_FILE,
@@ -933,6 +934,80 @@ describe("adopted source where, row scope and role table", () => {
       ],
     },
     {
+      // #314: нескоуплена таблиця, `columns.scope` без FK на ключ кореня виду.
+      case: "scope column without a root foreign key",
+      files: () => poly({}, polyTable([], { foreignKeys: [] })),
+      expected: [
+        {
+          code: "rights.source-scope-column",
+          pointer: "/assignmentSources/2/columns/scope",
+          params: {
+            source: "polyGrants",
+            column: "orgId",
+            scope: "org",
+            reason: "rootForeignKey",
+          },
+        },
+      ],
+    },
+    {
+      case: "scope column with a foreign key to another table",
+      files: () =>
+        poly(
+          {},
+          polyTable([], {
+            foreignKeys: [
+              {
+                columns: ["orgId"],
+                references: { object: ref("Catalog", "Project"), key: "ref" },
+              },
+            ],
+          })
+        ),
+      expected: [
+        {
+          code: "rights.source-scope-column",
+          pointer: "/assignmentSources/2/columns/scope",
+          params: {
+            source: "polyGrants",
+            column: "orgId",
+            scope: "org",
+            reason: "rootForeignKey",
+          },
+        },
+      ],
+    },
+    {
+      case: "root foreign key from another column",
+      files: () =>
+        poly(
+          {},
+          polyTable([], {
+            foreignKeys: [
+              {
+                columns: ["scopeId"],
+                references: {
+                  object: ref("Catalog", "Organization"),
+                  key: "ref",
+                },
+              },
+            ],
+          })
+        ),
+      expected: [
+        {
+          code: "rights.source-scope-column",
+          pointer: "/assignmentSources/2/columns/scope",
+          params: {
+            source: "polyGrants",
+            column: "orgId",
+            scope: "org",
+            reason: "rootForeignKey",
+          },
+        },
+      ],
+    },
+    {
       case: "scope null on a table with a scope column",
       files: () =>
         poly(
@@ -995,14 +1070,14 @@ describe("adopted source where, row scope and role table", () => {
         poly(
           {},
           {
-            [POLY_GRANT_FILE]: retype(polyGrantTable(), "scopeId", "Text"),
+            [POLY_GRANT_FILE]: retype(polyGrantTable(), "orgId", "Text"),
           }
         ),
       expected: [
         {
           code: "rights.source-column-type",
           pointer: "/assignmentSources/2/columns/scope",
-          params: { source: "polyGrants", column: "scopeId", expected: "UUID" },
+          params: { source: "polyGrants", column: "orgId", expected: "UUID" },
         },
       ],
     },
@@ -1010,8 +1085,8 @@ describe("adopted source where, row scope and role table", () => {
       case: "scope other than the table scope column",
       files: () =>
         poly(
-          {},
-          scopedPoly("orgId", [polyColumn(6173, "orgId", "org_id", "UUID")])
+          { polyGrants: { columns: polyColumns({ scope: "scopeId" }) } },
+          scopedPoly("orgId")
         ),
       expected: [
         {
@@ -1392,6 +1467,46 @@ describe("adopted source where, row scope and role table", () => {
   const codesOf = async (files: Map<string, string>) =>
     (await diagnosticsOf(files)).map((d) => d.code)
 
+  /**
+   * `PolyGrant` — корінь власного виду `grantRoot`, а `polyGrants` призначає на
+   * цьому виді (#314): ключ рядка кореня і є значенням скоупу.
+   */
+  const rootSource = (scope: string) => {
+    const files = poly({ polyGrants: { columns: polyColumns({ scope }) } })
+    const project = JSON.parse(files.get(PROJECT_FILE) ?? "{}")
+    project.scopeKinds.push({
+      id: uuid(6165),
+      name: "grantRoot",
+      physicalName: "grant_root_id",
+      root: { object: { kind: "CustomTable", name: "PolyGrant" } },
+      setFunction: { schema: "public", name: "org_ids" },
+    })
+    project.assignmentSources[2].assignedOn = { scopeKind: "grantRoot" }
+    files.set(PROJECT_FILE, JSON.stringify(project))
+    const table = JSON.parse(files.get(POLY_GRANT_FILE) ?? "{}")
+    files.set(POLY_GRANT_FILE, JSON.stringify({ ...table, scope: "grantRoot" }))
+    return files
+  }
+  const rowScopeErrors = async (files: Map<string, string>) =>
+    (await diagnosticsOf(files))
+      .filter((d) => d.code === "rights.source-scope-column")
+      .map((d) => d.params)
+
+  it("the root of the scope kind: the key is the row scope, without a foreign key", async () => {
+    expect(await rowScopeErrors(rootSource("id"))).toEqual([])
+  })
+
+  it("the root of the scope kind: another column is refused", async () => {
+    expect(await rowScopeErrors(rootSource("orgId"))).toEqual([
+      {
+        source: "polyGrants",
+        column: "orgId",
+        scope: "grantRoot",
+        reason: "rootKey",
+      },
+    ])
+  })
+
   it("isNull accepts a column of any type", async () => {
     expect(
       await codesOf(
@@ -1459,13 +1574,28 @@ describe("adopted source where, row scope and role table", () => {
   })
 
   it.each([
-    ["scope null", { columns: polyColumns({ scope: null }) }],
-    // Нескоуплена `PolyGrant` без `scopeColumn` з `columns.scope` — законна.
-    ["unscoped table with a scope column", {}],
-  ])("%s: no row scope error", async (_, polyGrants) => {
-    expect(await codesOf(poly({ polyGrants }))).not.toContain(
-      "rights.source-scope-column"
-    )
+    ["scope null", { columns: polyColumns({ scope: null }) }, []],
+    // Нескоуплена `PolyGrant` без `scopeColumn` з `columns.scope` і FK на
+    // корінь — законна.
+    ["unscoped table with a scope column", {}, []],
+    // Два FK на корінь: декларація обирає одну колонку (#314).
+    [
+      "two root foreign keys, the declaration picks one",
+      { columns: polyColumns({ scope: "altOrgId" }) },
+      [polyColumn(6164, "altOrgId", "alt_org_id", "UUID", { notNull: false })],
+    ],
+  ])("%s: no row scope error", async (_, polyGrants, extra) => {
+    const table = polyGrantTable()
+    const foreignKeys = [
+      ...table.foreignKeys,
+      ...extra.map((column) => ({
+        columns: [column.name],
+        references: { object: ref("Catalog", "Organization"), key: "ref" },
+      })),
+    ]
+    expect(
+      await codesOf(poly({ polyGrants }, polyTable(extra, { foreignKeys })))
+    ).not.toContain("rights.source-scope-column")
   })
 
   it.each([
