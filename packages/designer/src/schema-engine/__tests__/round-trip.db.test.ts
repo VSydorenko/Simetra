@@ -298,16 +298,25 @@ describe("adoption from scratch with named scope set functions", () => {
           code: d.code,
           at:
             d.code === "sql.generated-grant"
-              ? d.params?.object
+              ? `${String(d.params?.identity)}`
               : `${String(d.params?.schema)}.${String(d.params?.name)}`,
         }))
         .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
     ).toEqual([
       { code: "sql.definer-caller-unchecked", at: "app.user_ids" },
-      // Три одиниці грантів функції (кожна — своя відмова)
-      { code: "sql.generated-grant", at: "app.org_ids()" },
-      { code: "sql.generated-grant", at: "app.org_ids()" },
-      { code: "sql.generated-grant", at: "app.org_ids()" },
+      // Три одиниці грантів функції — кожна за своєю ідентичністю
+      {
+        code: "sql.generated-grant",
+        at: "grant:grant:function:app.org_ids():simetra_command:execute",
+      },
+      {
+        code: "sql.generated-grant",
+        at: "grant:grant:function:app.org_ids():simetra_user:execute",
+      },
+      {
+        code: "sql.generated-grant",
+        at: "grant:revoke:function:app.org_ids():public:execute",
+      },
     ])
   })
 })
