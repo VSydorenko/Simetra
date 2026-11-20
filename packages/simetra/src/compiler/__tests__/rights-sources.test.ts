@@ -933,6 +933,50 @@ describe("adopted source where, row scope and role table", () => {
       ],
     },
     {
+      // #314: нескоуплена таблиця, `columns.scope` без FK на ключ кореня виду.
+      case: "scope column without a root foreign key",
+      files: () => poly({}, polyTable([], { foreignKeys: [] })),
+      expected: [
+        {
+          code: "rights.source-scope-column",
+          pointer: "/assignmentSources/2/columns/scope",
+          params: {
+            source: "polyGrants",
+            column: "orgId",
+            scope: "org",
+            reason: "rootForeignKey",
+          },
+        },
+      ],
+    },
+    {
+      case: "scope column with a foreign key to another table",
+      files: () =>
+        poly(
+          {},
+          polyTable([], {
+            foreignKeys: [
+              {
+                columns: ["orgId"],
+                references: { object: ref("Catalog", "Project"), key: "ref" },
+              },
+            ],
+          })
+        ),
+      expected: [
+        {
+          code: "rights.source-scope-column",
+          pointer: "/assignmentSources/2/columns/scope",
+          params: {
+            source: "polyGrants",
+            column: "orgId",
+            scope: "org",
+            reason: "rootForeignKey",
+          },
+        },
+      ],
+    },
+    {
       case: "scope null on a table with a scope column",
       files: () =>
         poly(
@@ -995,14 +1039,14 @@ describe("adopted source where, row scope and role table", () => {
         poly(
           {},
           {
-            [POLY_GRANT_FILE]: retype(polyGrantTable(), "scopeId", "Text"),
+            [POLY_GRANT_FILE]: retype(polyGrantTable(), "orgId", "Text"),
           }
         ),
       expected: [
         {
           code: "rights.source-column-type",
           pointer: "/assignmentSources/2/columns/scope",
-          params: { source: "polyGrants", column: "scopeId", expected: "UUID" },
+          params: { source: "polyGrants", column: "orgId", expected: "UUID" },
         },
       ],
     },
@@ -1010,8 +1054,8 @@ describe("adopted source where, row scope and role table", () => {
       case: "scope other than the table scope column",
       files: () =>
         poly(
-          {},
-          scopedPoly("orgId", [polyColumn(6173, "orgId", "org_id", "UUID")])
+          { polyGrants: { columns: polyColumns({ scope: "scopeId" }) } },
+          scopedPoly("orgId")
         ),
       expected: [
         {
@@ -1459,13 +1503,28 @@ describe("adopted source where, row scope and role table", () => {
   })
 
   it.each([
-    ["scope null", { columns: polyColumns({ scope: null }) }],
-    // Нескоуплена `PolyGrant` без `scopeColumn` з `columns.scope` — законна.
-    ["unscoped table with a scope column", {}],
-  ])("%s: no row scope error", async (_, polyGrants) => {
-    expect(await codesOf(poly({ polyGrants }))).not.toContain(
-      "rights.source-scope-column"
-    )
+    ["scope null", { columns: polyColumns({ scope: null }) }, []],
+    // Нескоуплена `PolyGrant` без `scopeColumn` з `columns.scope` і FK на
+    // корінь — законна.
+    ["unscoped table with a scope column", {}, []],
+    // Два FK на корінь: декларація обирає одну колонку (#314).
+    [
+      "two root foreign keys, the declaration picks one",
+      { columns: polyColumns({ scope: "altOrgId" }) },
+      [polyColumn(6164, "altOrgId", "alt_org_id", "UUID", { notNull: false })],
+    ],
+  ])("%s: no row scope error", async (_, polyGrants, extra) => {
+    const table = polyGrantTable()
+    const foreignKeys = [
+      ...table.foreignKeys,
+      ...extra.map((column) => ({
+        columns: [column.name],
+        references: { object: ref("Catalog", "Organization"), key: "ref" },
+      })),
+    ]
+    expect(
+      await codesOf(poly({ polyGrants }, polyTable(extra, { foreignKeys })))
+    ).not.toContain("rights.source-scope-column")
   })
 
   it.each([

@@ -627,14 +627,16 @@ async function seedWithoutUsers(client: pg.Client): Promise<Seed> {
     ["u1@A", "R_ghost", "org", "A"],
     ["u1@A", "R_z", "org", "A"],
     ["u8@B", "R_lead", "container", "P_B"], // контейнерний контроль
-    ["u3@B", "R_lead", "org", "A"], // рівень скоупу з `scope_id` = id P_X
+    ["u3@B", "R_lead", "org", "A"], // рівень скоупу з `org_id` = id P_X
   ] as const) {
     await insert(client, "poly_grants", {
       id: randomUUID(),
       member_id: ids[member],
       role_id: ids[role],
       scope_type: scopeType,
-      scope_id: ids[scope],
+      ...(scopeType === "org"
+        ? { org_id: ids[scope] }
+        : { scope_id: ids[scope] }),
     })
   }
   return ids

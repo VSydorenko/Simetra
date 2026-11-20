@@ -2436,8 +2436,9 @@ export function sourceRoleTable(overrides: Record<string, unknown> = {}) {
 }
 
 /**
- * Поліморфна таблиця призначень: рівень рядка — `scopeType`, а `scopeId` —
- * тенант чи контейнер за рівнем; без FK і без `scopeColumn`.
+ * Поліморфна таблиця призначень: рівень рядка — `scopeType`; рядок рівня
+ * скоупу несе тенант в `orgId` (FK на ключ кореня виду `org`), контейнерний —
+ * проєкт у `scopeId`. Без `scopeColumn`: таблиця нескоуплена.
  */
 export function polyGrantTable(overrides: Record<string, unknown> = {}) {
   return {
@@ -2452,9 +2453,18 @@ export function polyGrantTable(overrides: Record<string, unknown> = {}) {
       nullable(6157, "memberId", "member_id", "UUID"),
       nullable(6158, "roleId", "role_id", "UUID"),
       column(6159, "scopeType", "scope_type", "Text"),
-      column(6154, "scopeId", "scope_id", "UUID"),
+      nullable(6154, "scopeId", "scope_id", "UUID"),
+      nullable(6163, "orgId", "org_id", "UUID"),
     ],
     primaryKey: { columns: ["id"] },
+    // Носій скоупу рядка `columns.scope` — FK на ключ кореня виду (#314).
+    foreignKeys: [
+      {
+        name: "poly_grants_org_fk",
+        columns: ["orgId"],
+        references: { object: ref("Catalog", "Organization"), key: "ref" },
+      },
+    ],
     ...overrides,
   }
 }
@@ -2473,7 +2483,7 @@ export function sourceRoleRef(overrides: Record<string, unknown> = {}) {
 /** Колонки `columns` джерела `polyGrants` з перевизначеннями. */
 export const polyColumns = (overrides: Record<string, unknown> = {}) => ({
   member: "memberId",
-  scope: "scopeId",
+  scope: "orgId",
   role: sourceRoleRef(),
   ...overrides,
 })

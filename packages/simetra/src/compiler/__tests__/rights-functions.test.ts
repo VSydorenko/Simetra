@@ -1190,7 +1190,7 @@ describe("rights functions over a polymorphic adopted source", () => {
     // відсікає `where`; кастомну роль із ключем системної — умова ролі
     // (спека прав §4.7).
     expect(sourceArm(model, POLY_GRANTS_SOURCE_ID)).toEqual(
-      polyArm(" AND s.scope = src.scope_id")
+      polyArm(" AND s.scope = src.org_id")
     )
   })
 
