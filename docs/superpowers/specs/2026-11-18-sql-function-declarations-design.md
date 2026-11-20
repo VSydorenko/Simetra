@@ -481,7 +481,7 @@ ACL функції з грантом ролі поза призначенням�
 | `sql.declaration-check-form` | помилка | Д2 | `check` не відповідає об'єкту чи підпису |
 | `sql.declaration-check-not-applied` | помилка | Д1 (відмова з причиною `guardUnavailable`), Д2 (доказ `guardOf`) | тіло не застосовує перевірку у формі `guardOf`; у Д1 без `guardOf` definer-функція з `user` чи `command` і з `check` відмовляється |
 | `sql.default-privileges-execute` | помилка | Д1 | дослівний `ALTER DEFAULT PRIVILEGES` дає права на функції |
-| `sql.function-argument-type-reference` | помилка | Д1 | аргумент функції з виведеним `EXECUTE` — `%type`; корінь — #300 |
+| `sql.function-argument-type-reference` | помилка | #297 | аргумент функції з виведеним `EXECUTE` — `%type`; корінь — #300 |
 | `sql.policy-helper-correlated` | помилка | Д5 | дослівна політика кличе definer-функцію не у формі функції політики |
 | `introspect.definer-check-unknown` | попередження | Д3 | у тілі прийнятої функції немає запобіжника виклику |
 | `introspect.definer-anonymous-dropped` | попередження | Д3 | `EXECUTE` ролі без сесії на definer-функції не перенесено у викликачі |
