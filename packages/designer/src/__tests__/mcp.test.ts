@@ -38,9 +38,9 @@ import { expectClean } from "../../../simetra/test/support"
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // Гейт розміру описів `tools/list` (спека designer §3.2). Правило бюджету:
 // колишній бюджет + приріст × 1,05; резерв — дубль мапінгу без `$defs`.
-// Останній замір: межа `TABULAR_LINES_MAX` на `deleteIds` однієї ТЧ — 30802
-// символи; до неї — 30786 (замір на тому самому дереві перед зміною, бюджет
-// 33531): 33531 + ceil((30802 − 30786) × 1,05) = 33548.
+// Останній замір: вхід `scopes` мутації `add` — 34198 символів; до нього —
+// 33545 (замір на коміті перед входом, бюджет 33548): 33548 +
+// ceil((34198 − 33545) × 1,05) = 34234.
 // Як заміряти: тимчасово поставити `TOOLS_LIST_BUDGET = 0` і запустити
 // `pnpm --filter @simetrajs/designer test mcp -t "within the size budget"` —
 // падіння друкує розмір («expected N to be less than or equal to 0»). Обидва
@@ -49,7 +49,7 @@ const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // брати: між замірами каталог міг вирости іншими змінами.
 // Вхід `promote` — 4728 символів із 15120: його визначає
 // структура мапінгу (колонки розгортаються в корені й у кожній ТЧ), а не описи
-const TOOLS_LIST_BUDGET = 33548
+const TOOLS_LIST_BUDGET = 34234
 const clients: Client[] = []
 
 useTmpProjects()
@@ -445,6 +445,13 @@ describe("simetra mcp", TOOL_PIPELINE, () => {
     expect(schemaOf("rename")).toContain(JSON.stringify(objectDescription))
     expect(schemaOf("create")).toContain(JSON.stringify(objectDescription))
     expect(schemaOf("add")).toContain(JSON.stringify(objectDescription))
+    // Опис `scopes` — єдине місце, де `add` каже, що вхід лише для скоупів
+    // проєкту; вкладені поля описів не мають (кожен лягає в `tools/list`).
+    expect(schemaOf("add")).toContain(
+      JSON.stringify(
+        'Only for collection scopeKinds of Project: declares the scope of adopted CustomTables in the same change, keyed by table name, e.g. { Orders: { scope: "org", scopeColumn: "org" } }; a table that already has a scope is refused.'
+      )
+    )
     expect(schemaOf("rename")).toContain(JSON.stringify(elementDescription))
     const promote = schemaOf("promote")
     expect(promote).not.toContain(JSON.stringify(objectDescription))
