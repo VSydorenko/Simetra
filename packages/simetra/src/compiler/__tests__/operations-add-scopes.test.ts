@@ -162,6 +162,7 @@ describe("addElement: scopes", () => {
     )
     // Помилка компіляції результату: `ok: false` — обгортка нічого не пише.
     expect(result.ok).toBe(false)
+    expect(result.written).toBeUndefined()
     const missing = result.diagnostics.filter(
       (d) => d.code === "scope.declaration-missing"
     )
@@ -251,6 +252,30 @@ describe("addElement: scopes", () => {
     files.set(ORDERS, JSON.stringify(orders))
     const result = await addElement(files, addOrg(ALL), options())
     expect(result.ok).toBe(false)
+    expect(result.written).toBeUndefined()
     expect(codes(result)).toContain("scope.custom-table-column")
+  })
+
+  // Імена унікальні лише в межах виду: однойменний довідник, що йде першим,
+  // не ховає таблицю.
+  it("finds the table by kind and name when a catalog shares the name", async () => {
+    const files = await adoptedFolder()
+    const rebuilt = new Map<string, string>()
+    rebuilt.set(
+      "catalogs/Orders/Orders.meta.json",
+      JSON.stringify({
+        id: uuid(5002),
+        kind: "Catalog",
+        name: "Orders",
+        physicalName: "orders_catalog",
+        kindLabel: "orders_catalog",
+        scope: "none",
+      })
+    )
+    for (const [path, text] of files) rebuilt.set(path, text)
+    const result = await addElement(rebuilt, addOrg(ALL), options())
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    expect(result.ok).toBe(true)
+    expect(result.changes.map((c) => c.path)).toContain(ORDERS)
   })
 })

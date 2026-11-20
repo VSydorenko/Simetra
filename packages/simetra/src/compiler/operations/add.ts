@@ -51,6 +51,8 @@ export async function addElement(
   // проєкту (Р2) і лише для таблиць без оголошеного скоупу (Р3): зміна
   // наявного скоупу — інша операція, а мовчки переписати межу мутація не може.
   const scopes = Object.entries(input.scopes ?? {})
+  // Імена об'єктів унікальні лише в межах виду, тож шукаємо за видом і ім'ям.
+  const tables = new Map<string, { file: string }>()
   if (input.scopes !== undefined) {
     const refusal = (scopes: string, table?: string) =>
       refused(files, [
@@ -64,10 +66,11 @@ export async function addElement(
       return refusal("target")
     }
     for (const [table] of scopes) {
-      const object = clean.model.objects.find((o) => o.name === table)
-      if (object === undefined || object.kind !== "CustomTable") {
-        return refusal("table-unknown", table)
-      }
+      const object = clean.model.objects.find(
+        (o) => o.kind === "CustomTable" && o.name === table
+      )
+      if (object === undefined) return refusal("table-unknown", table)
+      tables.set(table, object)
       const raw = JSON.parse(files.get(object.file)!) as Json
       if (raw.scope !== undefined) return refusal("table-scoped", table)
     }
@@ -104,7 +107,7 @@ export async function addElement(
   // проєкт, і входять в `only`: інакше хвіст доповнення їх не бачить.
   const only = new Set([container.file])
   for (const [table, declaration] of scopes) {
-    const object = clean.model.objects.find((o) => o.name === table)!
+    const object = tables.get(table)!
     const tableRaw = JSON.parse(files.get(object.file)!) as Json
     tableRaw.scope = declaration.scope
     if (declaration.scopeColumn !== undefined) {
