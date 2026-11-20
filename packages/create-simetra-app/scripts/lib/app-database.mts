@@ -242,6 +242,8 @@ export function appServerEnv(o: {
   port: number
   host: string
   secret: string
+  /** Сигнали — опційно, обидві змінні разом (Р4). */
+  signals?: { url: string; keys: string }
 }): Record<string, string> {
   return {
     NODE_ENV: "production",
@@ -252,6 +254,12 @@ export function appServerEnv(o: {
     BETTER_AUTH_SECRET: o.secret,
     SIMETRA_RUNTIME_DATABASE_URL: o.dsns.SIMETRA_RUNTIME_DATABASE_URL,
     SIMETRA_AUTH_DATABASE_URL: o.dsns.SIMETRA_AUTH_DATABASE_URL,
+    ...(o.signals === undefined
+      ? {}
+      : {
+          SIMETRA_SIGNALS_URL: o.signals.url,
+          SIMETRA_SIGNALS_KEYS: o.signals.keys,
+        }),
   }
 }
 

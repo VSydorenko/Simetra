@@ -600,4 +600,51 @@ test.describe("server start (spec 4.1)", () => {
       "BETTER_AUTH_SECRET"
     )
   })
+
+  // Невідповідні `x`/`d` видно лише порту: форма ключа правильна, тож це
+  // перевіряє саме асинхронна частина старту (Р3)
+  test("a signing key with x not matching d stops the server", async ({
+    app,
+  }) => {
+    const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
+      "sign",
+      "verify",
+    ])
+    const other = await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
+      "sign",
+      "verify",
+    ])
+    const jwk = await crypto.subtle.exportKey("jwk", pair.privateKey)
+    const otherJwk = await crypto.subtle.exportKey("jwk", other.privateKey)
+    await refusesToStart(
+      app,
+      {
+        NODE_ENV: "production",
+        SIMETRA_APP_ORIGIN: app.origin,
+        BETTER_AUTH_SECRET: app.secret,
+        SIMETRA_SIGNALS_URL: "ws://127.0.0.1:1/connection/websocket",
+        SIMETRA_SIGNALS_KEYS: JSON.stringify([
+          {
+            kid: "k1",
+            privateJwk: { kty: "OKP", crv: "Ed25519", x: otherJwk.x, d: jwk.d },
+            addedAt: "2020-01-01T00:00:00.000Z",
+          },
+        ]),
+      },
+      "signals.invalid-key"
+    )
+  })
+
+  test("signals url without keys stops the server", async ({ app }) => {
+    await refusesToStart(
+      app,
+      {
+        NODE_ENV: "production",
+        SIMETRA_APP_ORIGIN: app.origin,
+        BETTER_AUTH_SECRET: app.secret,
+        SIMETRA_SIGNALS_URL: "ws://127.0.0.1:1/connection/websocket",
+      },
+      "SIMETRA_SIGNALS"
+    )
+  })
 })

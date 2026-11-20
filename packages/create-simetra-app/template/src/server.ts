@@ -4,7 +4,7 @@ import {
   defaultStreamHandler,
 } from "@tanstack/react-start/server"
 import { LIMIT_REASONS, PAYLOAD_MAX_BYTES } from "simetra/model"
-import { appOrigin, authSecret } from "./server/config"
+import { appOrigin, authSecret, signalsConfig } from "./server/config"
 import { BodyTooLarge, bodyExceeded, limitBody } from "./server/body-limit"
 import { serverHash } from "./server/runtime"
 // Server Function потрапляє в маніфест збірки лише через граф модулів. Явний
@@ -17,6 +17,9 @@ import "./server/data-fn"
 // а не першим запитом
 appOrigin()
 authSecret()
+// Лише синхронна перевірка форми; порт (невідповідні `x`/`d`) перевіряє плагін
+// старту (асинхронно, зупиняючи процес)
+signalsConfig()
 
 // Заголовок, який читає Better Auth (`ipAddressHeaders` у `auth.ts`)
 const CLIENT_IP_HEADER = "x-simetra-client-ip"

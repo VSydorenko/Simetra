@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { generateKey } from "./signal-keys"
 
 vi.mock("@tanstack/react-start/server", () => ({
   createServerEntry: (entry: unknown) => entry,
@@ -33,5 +34,24 @@ describe("server entry startup (spec 4.1)", () => {
   it("refuses to start in production without BETTER_AUTH_SECRET", async () => {
     vi.stubEnv("BETTER_AUTH_SECRET", undefined)
     await expect(import("../src/server")).rejects.toThrow(/BETTER_AUTH_SECRET/)
+  })
+
+  it("refuses to start with the signals url but without the keys", async () => {
+    vi.stubEnv("SIMETRA_SIGNALS_URL", "wss://signals.test/connection/websocket")
+    await expect(import("../src/server")).rejects.toThrow(/SIMETRA_SIGNALS/)
+  })
+
+  it("refuses to start with an invalid signing key", async () => {
+    vi.stubEnv("SIMETRA_SIGNALS_URL", "wss://signals.test/connection/websocket")
+    vi.stubEnv("SIMETRA_SIGNALS_KEYS", "[{}]")
+    await expect(import("../src/server")).rejects.toThrow(
+      /SIMETRA_SIGNALS_KEYS/
+    )
+  })
+
+  it("imports with signals fully configured", async () => {
+    vi.stubEnv("SIMETRA_SIGNALS_URL", "wss://signals.test/connection/websocket")
+    vi.stubEnv("SIMETRA_SIGNALS_KEYS", JSON.stringify([await generateKey("k")]))
+    await expect(import("../src/server")).resolves.toBeDefined()
   })
 })
