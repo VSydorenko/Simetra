@@ -57,12 +57,12 @@ Issue #114. Серія — [частина 1](2026-11-20-p4-b5b-1-rights-snapsho
 
 | # | Рішення | Вплив на спеку |
 | --- | --- | --- |
-| Р1 | **Опції фабрики**: `{ url, getConnectionToken(): Promise<string>, getChannelToken(channel): Promise<string> }`. Відмову host повідомляє класом `SignalAuthRefused` (експорт входу): з `getChannelToken` — `onError({ kind: "auth", channel })`, без автоповтору; з `getConnectionToken` — `onError({ kind: "auth" })` і один явний `connect()`; друга поспіль без події з'єднання між ними — `onError({ kind: "auth", final: true })` без `connect()`. Лічильник скидає лише подія успішного з'єднання клієнта, не `subscribed` каналу (3-Р1). Будь-який інший збій токена (мережа, 5xx) — `transport`, повтор — backoff SDK | §8.5 — опції реалізації (задача 0) |
+| Р1 | **Опції фабрики**: `{ url, getConnectionToken(): Promise<string>, getChannelToken(channel): Promise<string> }`. Відмову host повідомляє класом `SignalAuthRefused` (експорт входу); відмова — це рівно: канал відсутній у гранті `authorizeChannels` (`channelTokens` не повертає для нього токена, а не кидає), `signals.no-user` (`SignalTokenError` гранту без користувача), 401/403 endpoint-а host-а. Решта (мережа, 5xx) — не відмова. Мапінг: з `getChannelToken` — `onError({ kind: "auth", channel })`, без автоповтору; з `getConnectionToken` — `onError({ kind: "auth" })` і один явний `connect()`; друга поспіль без події з'єднання між ними — `onError({ kind: "auth", final: true })` без `connect()`. Лічильник скидає лише подія успішного з'єднання клієнта, не `subscribed` каналу (3-Р1). Будь-який інший збій токена (мережа, 5xx) — `transport`, повтор — backoff SDK | §8.5 — опції реалізації (задача 0) |
 | Р2 | **Мапінг подій**: `subscribed` → `onSubscribed({ channel, recovered })`, `recovered` = `true` лише коли SDK відновив з позиції (`wasRecovering && recovered`), інакше `false` (§8.5); `unsubscribed` з кодом `unauthorized` → `auth` каналу; розрив з'єднання → `transport` без каналу, помилка однієї підписки → `transport` з каналом. Відновлені публікації SDK віддає після `subscribed` — приймач (3-Р11) знімає «розрив» після них | немає (§8.5 уже так) |
 | Р3 | **`refreshTokens(channels?)`** — перепідписка названих (типово всіх) каналів: у SDK немає примусового поновлення токена підписки (§8.5); кожен дає `onSubscribed` (часто без `recovered`), відмовлений — `auth` і закритий | немає |
 | Р4 | **Одна підписка SDK на канал**; `Unsubscribe` знімає лише її; `close()` — `disconnect()` клієнта й зняття всіх підписок; після `close()` жодної події | немає |
-| Р5 | **Лінт-зона**: окремий блок `src/data/centrifugo/**` в `eslint.tier-zones.js` дозволяє `centrifuge`; решта `src/data/**` — ні; T5 не імпортує `simetra/data/centrifugo`. Негативні тести — `test/tier-boundary.test.ts` | немає |
-| Р6 | **Г7 (§14.2) — вимір на стенді**: токен каналу з годинником порту токенів (`now` у `createCentrifugoTokens`), що спливає через ≈ 5 с; після видалення членства поновлення токена відмовляє (`authorizeChannels` не дає каналу), а підписка без поновлення закривається не пізніше `exp` + `expired_sub_close_delay` (25 с) + `presence_update_interval` (5 с). Тест триває ≈ 40 с — лише в одному кейсі. Конфіг стенду (`signalStandConfig`) нині не має ключів `client.presence_update_interval` і `client.expired_sub_close_delay` — стенд бере їх із тих самих сталих, що генератор `packages/designer/src/tools/signals-config.ts` (одне джерело, без копії чисел). Число й метод — у §8.6 (межа там уже записана як 5 хв 30 с; вимір її підтверджує), рядок Г7 §14.2 закрито | §8.6, §14.2 (задача 0 — текст, задача 4 — число) |
+| Р5 | **Лінт-зона**: окремий блок `src/data/centrifugo/**` в `eslint.tier-zones.js`, розміщений після блоку `dataPurity` (у flat-конфігу пізніший блок для того самого правила перекриває ранній), дозволяє `centrifuge`; решта `src/data/**` — ні; T5 не імпортує `simetra/data/centrifugo`. Негативні тести — `test/tier-boundary.test.ts` | немає |
+| Р6 | **Г7 (§14.2) уже виміряно**: кейс «a revoked reader: the refresh is refused and the subscription closes no later than exp + 25 s + 5 s» у `packages/designer/src/__tests__/signal-delivery.support.ts` (обидва профілі, конфіг генератора `centrifugoConfig` з ключами `presence_update_interval` і `expired_sub_close_delay`; підписник не поновлює токена сам). Частина лише вносить число й метод у §8.6 і закриває рядок Г7 §14.2 посиланням на цей кейс; нового 40-секундного кейсу й змін `signalStandConfig` немає. Через транспорт B5b стенд доводить інше — клієнтський шлях: поновлення токена (власне поновлення SDK за `ttl` і явне `refreshTokens`) після видалення членства — `auth` → `purge` пари | §8.6, §14.2 (задача 0) |
 | Р7 | **Стенд приймача — у designer** (`src/__tests__/signal-receiver.*`), бо потрібні розгорнутий проєкт, `runtime.run`, `authorizeChannels` і два рантайми даних двох користувачів; помічники стенду — з `simetra` (як у `signal-delivery.support.ts`) | немає |
 
 ## Інтерфейси
@@ -78,7 +78,7 @@ Issue #114. Серія — [частина 1](2026-11-20-p4-b5b-1-rights-snapsho
 | --- | --- | --- |
 | Відмова токена каналу не повторюється | unit над фейковим SDK і стенд: `auth`, жодного нового `getChannelToken` для каналу до наступного `subscribe` від приймача | автоповтор підписки на відмову |
 | Підписка без права неможлива | стенд: учасник без `read` на пару — приймач каналу не просить; прямий запит токена — `authorizeChannels` не дає каналу | `getChannelToken` над токеном без `authorizeChannels` |
-| Відкликання закриває підписку | стенд: після видалення членства `refreshTokens` — `auth`, дані пари прибрано (`purge`); без поновлення — закриття в межі Р6 | `refreshTokens` без перепідписки |
+| Відкликання закриває підписку | стенд: після видалення членства і явне `refreshTokens`, і власне поновлення SDK за `ttl` дають `auth`, дані пари прибрано (`purge`); серверну межу без поновлення доводить наявний кейс Г7 (Р6) | `refreshTokens` без перепідписки; канал поза грантом мапиться на `transport` |
 | Сигнал лише своєму скоупу | стенд: два користувачі двох скоупів, команда в першому — рівно 1 оновлення рядка в першому, 0 запитів у другому | канал без скоупу (будь-який скоуп `scopeSets` іншого користувача) |
 | `centrifuge` лише у своєму вході | `tier-boundary.test.ts`: імпорт `centrifuge` з `src/data/store` і з решти `src/data`, `simetra/data/centrifugo` з `src/ui` — лінт червоний | зона без обмеження |
 | Друга відмова з'єднання закриває | unit: дві відмови поспіль — `final`, 0 `connect()`; приймач — `connection-refused` | безкінечний `connect()` |
@@ -87,8 +87,8 @@ Issue #114. Серія — [частина 1](2026-11-20-p4-b5b-1-rights-snapsho
 
 ### Задача 0. Анкори й поправки спеки
 
-`orient --plan` на цей файл; поправки П4-B §8.5 (Р1), §8.6/§14.2 — метод
-Г7 (Р6, число — задача 4).
+`orient --plan` на цей файл; поправки П4-B §8.5 (Р1 — що таке відмова), §8.6/§14.2 —
+Г7 (Р6; текст — задача 4).
 Готово: `doc anchors && doc lint` зелені.
 Перевірка: `doc anchors && doc lint`, `run-tests unit --changed`.
 
@@ -125,8 +125,9 @@ job червоний.
 Файли: `packages/designer/src/__tests__/signal-receiver.support.ts` (нове),
 `signal-receiver.db.test.ts`, `signal-receiver.supabase.db.test.ts`.
 `getChannelToken` стенду — `authorizeChannels` + `channelTokens` на кожен
-виклик (як host), `getConnectionToken` — `connectionToken` того самого
-гранту.
+виклик (як host), відмова — рівно за Р1 (канал поза грантом,
+`signals.no-user` → `SignalAuthRefused`); `getConnectionToken` —
+`connectionToken` того самого гранту.
 Готово (рядок §12 «стенд сигналу», частина B5): розрив — повторний
 `onSubscribed`; короткий розрив з історією — `recovered: true` і пропущені
 публікації доходять до приймача; рестарт Centrifugo — `recovered: false` і
@@ -136,15 +137,12 @@ job червоний.
 Після: задача 2. Перевірка: `run-tests db --filter signal-receiver.db.test.ts`,
 `run-tests db-supabase --filter signal-receiver.supabase.db.test.ts`.
 
-### Задача 4. Г7: вимір і число в спеці (Р6)
+### Задача 4. Г7: число в спеці (Р6)
 
-Файли: кейс у `signal-receiver.support.ts` (з задачі 3); `packages/simetra/test/db/signal-stand.ts`
-(`signalStandConfig` — ключі Р6); спека П4-B §8.6, §14.2.
-Готово: виміряний час від `exp` до закриття підписки ≤ 30 с на обох
-стеках; число й метод записано в §8.6, рядок Г7 §14.2 закрито.
-Мутація: конфіг стенду без `presence_update_interval` (типові 27 с) —
-кейс червоний.
-Після: задача 3. Перевірка: `run-tests db --filter signal-receiver.db.test.ts`.
+Файли: спека П4-B §8.6, §14.2.
+Готово: §8.6 називає виміряну межу й кейс, що її тримає
+(`signal-delivery.support.ts`); рядок Г7 §14.2 закрито; `doc anchors` зелений.
+Після: задача 3. Перевірка: `doc anchors && doc lint`.
 
 ## Задачі власника
 

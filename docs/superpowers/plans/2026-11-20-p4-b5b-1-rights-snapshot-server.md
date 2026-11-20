@@ -89,7 +89,7 @@ Issue #114, віха М4. Блок B5b спеки П4-B переписано н�
 | Що | Хто дає | Хто бере |
 | --- | --- | --- |
 | `rightsSnapshotSchema`, `type RightsSnapshot` (Р2), T0 `model/runtime/` | 1 | 2, 3, B6 |
-| частина `{ type: "rights", known? }` і результат `{ rightsVersion, snapshot? }` у `ReadPart`, `wireReadPartSchema`, `CorePart` (дискримінація значенням `type`, як `version`, рішення приймання #272) | 1 | 2 |
+| частина `{ type: "rights", known? }` і результат `{ rightsVersion, snapshot? }` у `ReadPart` і `wireReadPartSchema` (дискримінація значенням `type`, як `version`, рішення приймання #272); у `CorePart` ядра її вводить частина 2 | 1 | 2 |
 | `CommandRuntime.rightsSnapshot(session)` (і в `readParts`) | 1 | 2 (через пакет), B6 |
 | `CatalogEntry.publicRead?`, `rightsContract?`; `ClientCatalog.rightsSnapshot?` (Р6) | 1 | 2, 3, B6 |
 | `readAllowed`, `canSubscribe` (`data/store/rights.ts`) | 1 | 2 (правило втрати), 3 (підписки) |
@@ -142,8 +142,12 @@ Issue #114, віха М4. Блок B5b спеки П4-B переписано н�
 
 ### Задача 3. T1: `simetra.rights_client_snapshot()`
 
-Файли: `compiler/rights/client-snapshot.ts` (нове), реєстрація одиниці там,
-де `buildRightsUnits` (умова `hasRightsFunctions`); DB-тести
+Файли: `compiler/rights/client-snapshot.ts` (нове) — окремий генератор за
+зразком `buildSignalUnits` (`compiler/signal/units.ts`): вхід — контракти прав
+разом із `contracts.access` (як `buildExplainUnits` у `compiler/pipeline.ts`),
+умова `hasRightsFunctions`; ребра створення — `bodyRequires` /
+`Declaration.requires` на функції фактів і функції множин, які кличе тіло;
+`compiler/pipeline.ts` (виклик генератора); DB-тести
 `test/db/rights-client-snapshot.support.ts` + два тонкі файли.
 Тіло — за §9.1 і Р2: `current_user_id()`; `NULL` → `{ userId: null,
 scopeSets: [], rights: [] }`; `scopeSets` — `scopeSetCall` кожного виду
@@ -151,7 +155,8 @@ scopeSets: [], rights: [] }`; `scopeSets` — `scopeSetCall` кожного ви
 `rights_mine()`; масиви впорядковано (Р3). `EXECUTE` — роль запиту `user`
 профілю й `simetra_command`, `REVOKE … FROM PUBLIC`.
 Готово: unit дерева SQL — атрибути функції, гранти, `scopeSetCall` того
-самого виду, що в `<t>_scope_read`; проєкт без функцій прав — одиниці
+самого виду, що в `<t>_scope_read`, ребра `requires` на кожну викликану
+функцію (мутація: без ребра — порядок створення ламається, тест червоний); проєкт без функцій прав — одиниці
 немає; без довідників прав — є. DB (обидва стеки): рядки інваріантів
 безпеки вище; проєкт без довідників прав працює; вихід проходить
 `rightsSnapshotSchema`; повторний виклик дає той самий текст (порядок).
