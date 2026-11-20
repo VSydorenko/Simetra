@@ -224,6 +224,32 @@ describe("the pass on a snapshot replacement", () => {
     expect(inspect.mutations()).toMatchObject([{ key: S, erased: true }])
   })
 
+  it("purges a row held only as an include target of another object's view (Р6)", async () => {
+    const { core, fake, inspect } = harness({ objects: [task, orgR] })
+    grant(
+      fake,
+      snapshotOf([
+        readRow(S, { object: "organization" }),
+        readRow(T, { object: "organization" }),
+      ])
+    )
+    fake.insert(ORG, { ref: S })
+    seed(fake, 1, 1)
+    const list = core.view({ kind: "full", object: TASK, include: ["org"] })
+    watch(list)
+    await settle()
+    // Рядок організації тримає лише ціль `include` чужого вигляду.
+    expect(inspect.owners(ORG, S)).toBe(1)
+    const listReads = readsOf(fake, TASK).length
+    grant(fake, snapshotOf([readRow(T, { object: "organization" })]))
+    fake.setVisibleScopes([T])
+    core.requestRights()
+    await settle()
+    expect(coreInternals(core).objects.get(ORG)!.rows.get(S)).toBeUndefined()
+    expect(list.getSnapshot().rows[0]).toMatchObject({ refs: { org: null } })
+    expect(readsOf(fake, TASK)).toHaveLength(listReads)
+  })
+
   it("drops the tabular section lines of a purged owner (§14.1)", async () => {
     const { core, fake } = harness()
     seed(fake, 1, 1)
@@ -443,38 +469,42 @@ describe("the snapshot barrier", () => {
 })
 
 describe("narrowing", () => {
-  it("re-reads every view of a narrowed object, an invisible one and an include holder included", async () => {
+  const ORG_RIGHTS = (extent: string) =>
+    snapshotOf([
+      readRow(S, { object: "organization", extent }),
+      readRow(T, { object: "organization" }),
+    ])
+
+  it("re-reads an invisible view of a narrowed object", async () => {
     const { core, fake } = harness({ objects: [task, orgR] })
-    grant(
-      fake,
-      snapshotOf([
-        readRow(S, { object: "organization" }),
-        readRow(T, { object: "organization" }),
-      ])
-    )
+    grant(fake, ORG_RIGHTS("any"))
     fake.insert(ORG, { ref: S })
-    seed(fake, 1, 1)
-    const hidden = core.view({ kind: "keys", object: ORG, keys: [S] })
+    const spec: ViewSpec = { kind: "keys", object: ORG, keys: [S] }
+    const hidden = core.view(spec)
     watch(hidden)
-    const holder = core.view({ kind: "full", object: TASK, include: ["org"] })
-    watch(holder)
     await settle()
-    core.setVisible({ kind: "keys", object: ORG, keys: [S] }, false)
-    const orgReads = readsOf(fake, ORG).length
-    const taskReads = readsOf(fake, TASK).length
+    core.setVisible(spec, false)
+    const reads = readsOf(fake, ORG).length
     // `any` → `own` у тому самому скоупі: пара лишилась, обсяг звузився.
-    grant(
-      fake,
-      snapshotOf([
-        readRow(S, { object: "organization", extent: "own" }),
-        readRow(T, { object: "organization" }),
-      ])
-    )
+    grant(fake, ORG_RIGHTS("own"))
     core.requestRights()
     await settle()
-    expect(readsOf(fake, ORG).length).toBeGreaterThan(orgReads)
-    expect(readsOf(fake, TASK).length).toBeGreaterThan(taskReads)
+    expect(readsOf(fake, ORG)).toHaveLength(reads + 1)
     expect(hidden.getSnapshot().status).toBe("ready")
+  })
+
+  it("re-reads a view of another object that holds the narrowed object as an include target", async () => {
+    const { core, fake } = harness({ objects: [task, orgR] })
+    grant(fake, ORG_RIGHTS("any"))
+    fake.insert(ORG, { ref: S })
+    seed(fake, 1, 1)
+    watch(core.view({ kind: "full", object: TASK, include: ["org"] }))
+    await settle()
+    const reads = readsOf(fake, TASK).length
+    grant(fake, ORG_RIGHTS("own"))
+    core.requestRights()
+    await settle()
+    expect(readsOf(fake, TASK).length).toBeGreaterThan(reads)
   })
 
   it("re-reads the views of an unscoped object with a rights contract when scopeSets change", async () => {
