@@ -40,3 +40,9 @@ export const rightsValueSchema = z.strictObject({
   rightsVersion: rightsVersionSchema,
   snapshot: rightsSnapshotSchema.optional(),
 })
+
+/**
+ * Ім'я функції знімка в схемі `simetra` (P4-B spec §9.1): T1 її генерує, T3
+ * кличе, а імпортує лише `simetra/model`.
+ */
+export const RIGHTS_CLIENT_SNAPSHOT_FUNCTION_NAME = "rights_client_snapshot"

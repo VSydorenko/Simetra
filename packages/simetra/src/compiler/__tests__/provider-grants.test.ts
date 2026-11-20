@@ -131,11 +131,17 @@ describe("supabase grants are unchanged", () => {
   // згенерованих грантів її таблиць і функцій:
   // лише оператори GRANT/REVOKE, не весь SQL.
   // Гранти outbox сигналів і оракула сигналу з'явилися пізніше за базу; їх
-  // точний перелік звіряють signal-outbox.test.ts і signal-units.test.ts.
+  // точний перелік звіряють signal-outbox.test.ts і signal-units.test.ts;
+  // гранти знімка прав — rights-client-snapshot.test.ts.
   it("reference domain: the GRANT/REVOKE statements equal the baseline", async () => {
     const { units } = await compileReference("supabase")
     const grants = units
-      .filter((u) => u.generator !== "signalOutbox" && u.generator !== "signal")
+      .filter(
+        (u) =>
+          u.generator !== "signalOutbox" &&
+          u.generator !== "signal" &&
+          u.generator !== "rightsClientSnapshot"
+      )
       .map((u) => u.sql.trim())
       .filter(isGrant)
     expect(grants).toEqual(supabaseGrants)

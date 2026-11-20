@@ -56,6 +56,7 @@ import {
   hasActorSnapshot,
   hasRightsFunctions,
 } from "./rights/functions"
+import { buildClientSnapshotUnits } from "./rights/client-snapshot"
 import { buildExplainUnits } from "./rights/explain-units"
 import { buildRightsGuardUnits } from "./rights/guard-units"
 import { snapshotExemptWriters } from "./rights/snapshot-exempt-writers"
@@ -868,6 +869,22 @@ export async function runStages(
     parse,
     plpgsql,
   })
+  // Знімок прав клієнта — читає лише публічні функції фактів: їхні одиниці
+  // (функції прав, множини) — в `baseUnits`, ребра `requires` бере з тіла.
+  const clientSnapshotUnits = buildClientSnapshotUnits({
+    contracts: {
+      access,
+      roles,
+      users,
+      membershipSources: sources.membershipSources,
+    },
+    physical,
+    provider: stage1.project.database.provider,
+    module,
+    units: baseUnits,
+    parse,
+    plpgsql,
+  })
   const modelUnits = [
     ...baseUnits,
     ...buildCatalogCommandUnits({
@@ -890,6 +907,7 @@ export async function runStages(
       plpgsql,
     }),
     ...signalUnits,
+    ...clientSnapshotUnits,
   ]
   // `USAGE` на схеми застосунку — над усіма згенерованими грантами, бо схему
   // відкривають і таблиці, і функції (платформна спека §6.7)
@@ -941,6 +959,8 @@ export async function runStages(
     signalOutbox: () => "the signal outbox of the platform",
     // Оракул каналу й правило форми сигналу спільні — власника немає.
     signal: (unit) => `the signal authorization ${unit.name}`,
+    // Знімок прав клієнта спільний — власника немає.
+    rightsClientSnapshot: (unit) => `the rights client snapshot ${unit.name}`,
   }
   const fileById = new Map(stage1.objects.map((o) => [o.id ?? "", o.file]))
   const triggerConflicts = subscriptionTriggerConflicts(
