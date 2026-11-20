@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { metadataRefSchema } from "../schemas/metadata-ref"
+import type { rightsValueSchema } from "./rights-snapshot"
 
 /** Operators of a filter condition (P4-B spec §4.1). */
 export const FILTER_OPERATORS = [
@@ -420,11 +421,20 @@ export function knownFormAllowed(query: object): boolean {
 }
 
 /** A read query as one part of a `read` request, with the rows it knows. */
-export interface ReadPart {
+export interface ReadQueryPart {
   type: "query"
   query: ReadQuery
   known?: KnownVersions
 }
+
+/** The rights snapshot as one part; `known` — the `rightsVersion` the client holds. */
+export interface ReadRightsPart {
+  type: "rights"
+  known?: string
+}
+
+/** One part of a `read` request (P4-B spec §4.5), told apart by `type`. */
+export type ReadPart = ReadQueryPart | ReadRightsPart
 
 /**
  * A row the server left out because the client holds it (P4-B spec §4.1):
@@ -438,9 +448,12 @@ export interface KnownMarker {
   copies?: Record<string, unknown>
 }
 
-/** The value of one read part: a count, or rows among which may be markers. */
-export type ReadPartValue =
+/** The value of a query part: a count, or rows among which may be markers. */
+export type ReadQueryValue =
   | ReadCount
   | (Omit<ReadRows, "rows"> & {
       rows: Array<Record<string, unknown> | KnownMarker>
     })
+
+/** The value of one read part: a query value or the value of a `rights` part. */
+export type ReadPartValue = ReadQueryValue | z.infer<typeof rightsValueSchema>

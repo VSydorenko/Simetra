@@ -19,8 +19,8 @@ import type {
   Filter,
   FilterCondition,
   KnownMarker,
-  ReadPart,
-  ReadPartValue,
+  ReadQueryPart,
+  ReadQueryValue,
   ReadQuery,
 } from "./read"
 import type { Change } from "./result"
@@ -785,7 +785,7 @@ export function readQueryFromWire(
   )
 }
 
-type WireQueryPart = Extract<WireReadPart, { type: "query" }>
+type WireReadQueryPart = Extract<WireReadPart, { type: "query" }>
 
 /**
  * Maps a read part to its wire form (T4): the query as
@@ -794,8 +794,8 @@ type WireQueryPart = Extract<WireReadPart, { type: "query" }>
  */
 export function readPartToWire(
   index: CatalogIndex,
-  part: ReadPart
-): Mapped<WireQueryPart> {
+  part: ReadQueryPart
+): Mapped<WireReadQueryPart> {
   const query = readQueryToWire(index, part.query)
   if (!query.ok) return query
   return {
@@ -817,14 +817,14 @@ export function readPartToWire(
  */
 export function readPartFromWire(
   index: CatalogIndex,
-  part: WireQueryPart
-): Mapped<ReadPart> {
+  part: WireReadQueryPart
+): Mapped<ReadQueryPart> {
   const { known, ...wire } = part.query as WireReadQuery & {
-    known?: ReadPart["known"]
+    known?: ReadQueryPart["known"]
   }
   const query = readQueryFromWire(index, wire as WireReadQuery)
   if (!query.ok) return query
-  const value: ReadPart = { type: "query", query: query.value }
+  const value: ReadQueryPart = { type: "query", query: query.value }
   if (known !== undefined) value.known = known
   return { ok: true, value }
 }
@@ -949,7 +949,7 @@ function decodeRowOrMarker(
 export function readResultToWire(
   index: CatalogIndex,
   query: ReadQuery,
-  result: ReadPartValue
+  result: ReadQueryValue
 ): WireReadResult {
   if ("count" in result) return { ...result }
   const { entry, section } = queryTarget(
@@ -1007,7 +1007,7 @@ export function readResultFromWire(
   index: CatalogIndex,
   query: ReadQuery,
   wire: WireReadResult
-): ReadPartValue {
+): ReadQueryValue {
   if ("count" in wire) return { ...wire }
   const { entry, section } = queryTarget(
     index,
@@ -1016,7 +1016,7 @@ export function readResultFromWire(
   )
   // Маркер серед рядків ТЧ — хибна відповідь: його відхиляє `decodeRow`
   // (рядок ТЧ — об'єкт).
-  const out: ReadPartValue = {
+  const out: ReadQueryValue = {
     rows:
       section === undefined
         ? wire.rows.map((row) => decodeRowOrMarker(entry, row))

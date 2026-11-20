@@ -69,6 +69,8 @@ const entryOf = (o: RuntimeObject): CatalogEntry => ({
   ...present("creatorMembership", o.creatorMembership),
   kernelHash: o.kernelHash,
   signal: o.signal,
+  ...present("publicRead", o.publicRead),
+  ...present("rightsContract", o.rightsContract),
   ...present("presentation", o.presentation),
   attributes: o.attributes.map(attributeOf),
   tabularSections: o.tabularSections.map(sectionOf),
@@ -83,6 +85,7 @@ export function buildClientCatalog(runtime: RuntimeCatalog): ClientCatalog {
     format: runtime.format,
     snapshotHash: runtime.snapshotHash,
     provider: runtime.provider,
+    ...present("rightsSnapshot", runtime.rightsSnapshot),
     objects: runtime.objects.map(entryOf),
   }
 }

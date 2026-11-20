@@ -22,6 +22,7 @@ import {
   applyArtifact,
   codes,
   compiled,
+  compileErrors,
   COPIER,
   COPIER_PASSWORD,
   dbs,
@@ -418,57 +419,44 @@ describe.concurrent("buildPlan", () => {
       })
     })
 
-    it("keeps a declared trigger on a built-in function managed", async () => {
-      // Вбудована функція залежності не записує: тригер у межі, як і на
-      // функції схеми застосунку
-      const model = await compiled({
-        [USERS]: users,
-        "sql/app/user-redundant.sql": `CREATE TRIGGER user_redundant BEFORE UPDATE ON better_auth."user" FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();\n`,
-      })
-      await inTarget(EMPTY, async (url) => {
-        const artifact = planned(await plan(url, model))
-        expect(
-          artifact.steps.filter((s) =>
-            /CREATE TRIGGER "?user_redundant/.test(s.sql)
-          )
-        ).toHaveLength(1)
-        await applyArtifact(url, artifact, model)
-        const again = await plan(url, model)
-        expect(again.status).toBe("unchanged")
-        expect(errors(again)).toEqual([])
-      })
+    it("refuses a declared BEFORE trigger on the identity source, a built-in function too", async () => {
+      // Р4а: на джерелі ідентичностей дозволено лише `AFTER`. Вбудована
+      // функція в межі двигуна, а компілятор відмовляє саму форму; межу
+      // двигуна в цій формі тримає прямий тест `out-of-scope.test.ts`
+      expect(
+        await compileErrors({
+          [USERS]: users,
+          "sql/app/user-redundant.sql": `CREATE TRIGGER user_redundant BEFORE UPDATE ON better_auth."user" FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();\n`,
+        })
+      ).toEqual(["sql.kind-table-verbatim"])
     })
 
     describe("a trigger on an extension function", () => {
       // Функція-член розширення: витяг зводить залежність до розширення, тож
-      // такий тригер у межі, як і тригер з функцією схеми застосунку
-      const TCN = "CREATE EXTENSION IF NOT EXISTS tcn WITH SCHEMA app;\n"
-      const TRIGGER = `CREATE TRIGGER user_tcn AFTER INSERT ON better_auth."user" FOR EACH ROW EXECUTE FUNCTION app.triggered_change_notification();\n`
+      // такий тригер у межі, як і тригер з функцією схеми застосунку.
+      // Розширення лише в схемі провайдера (Р7а).
+      const TCN = "CREATE EXTENSION IF NOT EXISTS tcn WITH SCHEMA extensions;\n"
+      // Цілі, яку модель не описує, Р7а не судить: розширення в схемі
+      // застосунку цілі лишається в копії цілі, а в `extensions` — ні:
+      // копія не відтворює розширень цілі в схемах провайдера (#316)
+      const TARGET_TCN =
+        "create schema app; create extension tcn with schema app;"
+      const TARGET_TRIGGER = `create trigger user_tcn after insert on better_auth."user" for each row execute function app.triggered_change_notification();`
+      const TRIGGER = `CREATE TRIGGER user_tcn AFTER INSERT ON better_auth."user" FOR EACH ROW EXECUTE FUNCTION extensions.triggered_change_notification();\n`
 
-      it("keeps a declared one managed: no second plan, drift when it changes", async () => {
-        const model = await compiled({
-          [USERS]: users,
-          "sql/app/extensions.sql": TCN,
-          "sql/app/user-tcn.sql": TRIGGER,
-        })
-        await inTarget(EMPTY, async (url) => {
-          await establish(url, model)
-          expect((await plan(url, model)).status).toBe("unchanged")
-          await query(
-            url,
-            `alter table better_auth."user" disable trigger user_tcn`
-          )
-          const artifact = planned(await plan(url, model))
-          expect(artifact.drift?.sections).toContain("triggers")
-        })
+      it("refuses to declare one: tcn notifies outside the row, so it is not an allowed function (Р6)", async () => {
+        expect(
+          await compileErrors({
+            [USERS]: users,
+            "sql/app/extensions.sql": TCN,
+            "sql/app/user-tcn.sql": TRIGGER,
+          })
+        ).toEqual(["sql.expression-call-not-allowed"])
       })
 
       it("names the safe path for an undeclared one the plan drops", async () => {
-        const model = await compiled({
-          [USERS]: users,
-          "sql/app/extensions.sql": TCN,
-        })
-        await inTarget(`create schema app; ${TCN} ${TRIGGER}`, async (url) => {
+        const model = await compiled({ [USERS]: users })
+        await inTarget(`${TARGET_TCN} ${TARGET_TRIGGER}`, async (url) => {
           const outcome = await plan(url, model)
           const artifact = planned(outcome)
           const [drop] = stepMatching(artifact, /DROP TRIGGER "user_tcn"/)

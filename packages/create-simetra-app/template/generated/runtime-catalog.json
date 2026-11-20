@@ -1,7 +1,8 @@
 {
   "format": 1,
-  "snapshotHash": "36da9d560c77b005dff5229ead31482c346ab864f4c0ac85c1306cd823bdb999",
+  "snapshotHash": "ccbab3411ba39792565c0953ad75014a90e76852f76d3145282b95b23e78cad9",
   "provider": "postgres",
+  "rightsSnapshot": true,
   "objects": [
     {
       "id": "08f4943e-0296-4fbd-8d89-61b6f11355ee",
@@ -17,6 +18,7 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "rightsContract": true,
       "presentation": {
         "attribute": "description"
       },
@@ -270,6 +272,7 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "rightsContract": true,
       "presentation": {
         "attribute": "description"
       },
@@ -405,6 +408,7 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "rightsContract": true,
       "presentation": {
         "attribute": "description"
       },
@@ -615,6 +619,7 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "rightsContract": true,
       "presentation": {
         "attribute": "description"
       },
@@ -887,6 +892,7 @@
       "versionColumn": "version",
       "versionName": "version",
       "signal": true,
+      "rightsContract": true,
       "presentation": {
         "attribute": "description"
       },

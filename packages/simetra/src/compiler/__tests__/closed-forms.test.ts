@@ -54,7 +54,13 @@ describe("kind module: closed forms only", () => {
     ["COMMENT ON TABLE public.sale IS 'x';", "comment"],
     ["CREATE VIEW public.v AS SELECT 1;", "view"],
   ])("kind module rejects %s", async (sql, cls) => {
-    const found = await diagnostics({ [SALE_SQL]: sql })
+    // Тригер модуля виду кличе `public.f`: вона оголошена у спільному файлі,
+    // щоб дозвільний перелік виразів не додав другої діагностики.
+    const found = await diagnostics({
+      [SALE_SQL]: sql,
+      "sql/public/f.sql":
+        "CREATE FUNCTION public.f() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;",
+    })
     expect(found.map((d) => [d.code, d.file, d.params?.line])).toEqual([
       ["sql.statement-not-allowed", SALE_SQL, 1],
     ])
@@ -403,12 +409,6 @@ describe("kind module: closed forms only", () => {
         `${HELPER} ALTER FUNCTION public.helper() SET ${CLAIMS} = '{}';`,
       ],
       [
-        "an aggregate over set_config",
-        WARNED,
-        "nonLiteral",
-        `CREATE AGGREGATE public.agg(text, boolean) (SFUNC = pg_catalog.set_config, STYPE = text, INITCOND = '${C}');`,
-      ],
-      [
         "a view over pg_settings",
         REFUSED,
         "settingsTable",
@@ -452,6 +452,25 @@ describe("kind module: closed forms only", () => {
       ],
     ])("shared file unit: %s", async (_case, code, form, sql) => {
       expect(await sharedWrites(sql)).toEqual([[code, SHARED_SQL, form]])
+    })
+
+    // Складові агрегату судить дозвільний перелік виразів (спека прав §5.3):
+    // боргова одиниця-агрегат дає помилку, а не попередження боргу.
+    it.each([
+      ["set_config", "pg_catalog.set_config"],
+      ["a text-executing builtin", "pg_catalog.query_to_xml"],
+      ["a provider function outside the list", "extensions.dblink_exec"],
+      ["an unqualified function", "agg_step"],
+    ])("an aggregate over %s is an expression error", async (_case, sfunc) => {
+      const found = await diagnostics({
+        [SHARED_SQL]: `CREATE AGGREGATE public.agg(text, boolean) (SFUNC = ${sfunc}, STYPE = text, INITCOND = '${C}');`,
+      })
+      expect(sessionWrites(found)).toEqual([])
+      expect(
+        found
+          .filter((d) => d.code === "sql.expression-call-not-allowed")
+          .map((d) => [d.severity, d.params?.call])
+      ).toEqual([["error", sfunc]])
     })
 
     it.each([
@@ -646,23 +665,22 @@ describe("kind module: closed forms only", () => {
       ).toHaveLength(1)
     })
 
-    // Одиниця без тіла й не вираз (домен): виклик судить запис контексту
-    // команди. Позитивний перелік (спека прав §5.3): функція схеми провайдера,
-    // якої він не називає, — `dynamicText`; названа — запису немає.
+    // `DEFAULT` домену — одиниця-вираз (спека прав §5.3): позитивний перелік,
+    // помилка скрізь, борг включно, без попередження боргу. `CHECK` домену
+    // судить правило голів і запис сесії (випадок вище).
     it.each([
-      ["extensions.unknown_exec('x')", [[WARNING, "dynamicText", undefined]]],
-      [
-        "cron.schedule('j', '* * * * *', 'SELECT 1')",
-        [[WARNING, "dynamicText", undefined]],
-      ],
+      ["extensions.unknown_exec('x')", ["extensions.unknown_exec"]],
+      ["cron.schedule('j', '* * * * *', 'SELECT 1')", ["cron.schedule"]],
       ["auth.uid()::text", []],
     ])("a domain default (debt) %s", async (call, expected) => {
+      const found = await diagnostics({
+        [SHARED_SQL]: `CREATE DOMAIN public.d AS text DEFAULT ${call};`,
+      })
+      expect(sessionWrites(found)).toEqual([])
       expect(
-        sessionWrites(
-          await diagnostics({
-            [SHARED_SQL]: `CREATE DOMAIN public.d AS text DEFAULT ${call};`,
-          })
-        )
+        found
+          .filter((d) => d.code === "sql.expression-call-not-allowed")
+          .map((d) => d.params?.call)
       ).toEqual(expected)
     })
 
@@ -829,13 +847,14 @@ describe("kind module: closed forms only", () => {
 
 describe("extensions of application SQL (спека прав §5.3)", () => {
   // Розширення поза схемами провайдера ставить свої функції в схему
-  // застосунку: попередження боргу, бо поза боргом такої одиниці не буває.
+  // застосунку: помилка скрізь, борг включно (Postgres обирає перевантаження
+  // за аргументами, тож збіг імені з функцією моделі виклик не рятує).
   it.each([
     { sql: "CREATE EXTENSION pgcrypto SCHEMA extensions;", expected: [] },
     {
       sql: "CREATE EXTENSION pgcrypto;",
       expected: [
-        ["sql.debt-extension-schema", "warning", { extension: "pgcrypto" }],
+        ["sql.debt-extension-schema", "error", { extension: "pgcrypto" }],
       ],
     },
     {
@@ -843,7 +862,7 @@ describe("extensions of application SQL (спека прав §5.3)", () => {
       expected: [
         [
           "sql.debt-extension-schema",
-          "warning",
+          "error",
           { extension: "pgcrypto", schema: "public" },
         ],
       ],

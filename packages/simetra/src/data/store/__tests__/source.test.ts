@@ -1333,6 +1333,13 @@ describe("CoreSource: run and version", () => {
     })
   })
 
+  it("the fake rejects a rights part on purpose: it has no snapshot to answer with", async () => {
+    const fake = createFakeSource({ objects: OBJECTS, snapshotHash: "snap" })
+    await expect(fake.server.read([{ type: "rights" }])).rejects.toThrow(
+      "the rights part is not supported"
+    )
+  })
+
   it("sends the version alone in a Server Function request when an override adapter reads every object", async () => {
     const fake = createFakeSource({ objects: OBJECTS, snapshotHash: "snap" })
     const read = vi.fn(() => Promise.reject(new Error("unexpected read")))

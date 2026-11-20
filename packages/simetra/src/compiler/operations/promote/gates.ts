@@ -6,11 +6,20 @@ import {
 } from "simetra/model"
 import type { CompiledModel } from "../../compile"
 import { diagnostic, type Diagnostic } from "../../diagnostics"
-import { modelViews } from "../../sql/function-body"
-import { bodyKindTable, type KindTables } from "../../sql/kind-table-verbatim"
+import { PUBLIC } from "../../sql/grant-facts"
 import type { SqlParser } from "../../sql/parse"
 import type { PlpgsqlParser } from "../../sql/plpgsql"
-import { writeGrantPaths, type QualifiedTable } from "../../sql/write-paths"
+import type { VerbatimUnit } from "../../sql/units"
+import {
+  defaultPrivilegeFacts,
+  defaultPrivilegeTables,
+  grantDetail,
+  grantedTables,
+  qualifiedKindTables,
+  writePaths,
+  type QualifiedTable,
+  type WritePath,
+} from "../../sql/write-paths"
 import type { PromotedTable } from "./mapping"
 
 /** Таблиця у фізичних іменах до промоції. */
@@ -27,60 +36,117 @@ const WRITE_COMMANDS: ReadonlySet<string> = new Set([
 const key = (schema: string, name: string) => `${schema}.${name}`
 
 /**
+ * Одиниці з файлом і рядком — їх судить перелічувач; згенеровані (рухи,
+ * платформний шар) тексту застосунку не мають.
+ */
+function locatedUnits(model: CompiledModel): VerbatimUnit[] {
+  return model.sqlUnits.filter(
+    (u): u is typeof u & VerbatimUnit =>
+      u.file !== undefined && u.line !== undefined
+  )
+}
+
+/**
+ * Шляхи запису перелічувача над таблицями промоції: таблиці до промоції ще
+ * `CustomTable`, тож «таблиці виду» для нього — самі вони.
+ */
+function promotedPaths(
+  model: CompiledModel,
+  units: readonly VerbatimUnit[],
+  tables: readonly QualifiedTable[],
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
+): WritePath[] {
+  return writePaths(units, {
+    kind: qualifiedKindTables(tables),
+    provider: model.project.database.provider,
+    parse,
+    plpgsql,
+  })
+}
+
+/**
  * Гейт шляху запису (спека промоції §8, Пр21): прийнята таблиця
  * одиниці, у яку ролі API провайдера пишуть напряму, — відмова, доки шлях
  * запису після промоції не вирішено (спека промоції §16). Запис відкривають: грант запису
  * цим ролям чи `PUBLIC`; типові привілеї схеми таблиці, що дають їм такий
  * грант на таблиці (зворотна генерація не пише явного `GRANT`, коли ACL
- * таблиці дорівнює типовим — саме так виглядає типова схема Supabase); і
+ * таблиці дорівнює типовим — саме так виглядає типова схема Supabase);
+ * подання без `security_invoker` над таблицею, яке ці ролі пишуть; і
  * політика команди запису. Читається лише дерево одиниць — до будь-яких змін.
+ * Грант, політику й подання дає перелічувач шляхів запису; типові привілеї
+ * ролям API Правило 1 дозволяє, тож їх гейт читає з фактів ADP сам.
  */
 export function writePathProblems(
   model: CompiledModel,
   tables: readonly QualifiedTable[],
-  parse: SqlParser
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
 ): Diagnostic[] {
   const unit = new Set(tables.map((t) => key(t.schema, t.name)))
-  const roles = new Set(
-    Object.values(PROVIDER_API_ROLES[model.project.database.provider]).filter(
-      (role): role is string => role !== null
-    )
+  const roles = new Set([
+    PUBLIC,
+    ...Object.values(
+      PROVIDER_API_ROLES[model.project.database.provider]
+    ).filter((role): role is string => role !== null),
+  ])
+  const located = locatedUnits(model)
+  const paths = promotedPaths(model, located, tables, parse, plpgsql)
+  const adp = defaultPrivilegeTables(
+    defaultPrivilegeFacts(located),
+    roles,
+    tables
   )
-  const located = model.sqlUnits.filter(
-    (u) => u.file !== undefined && u.line !== undefined
-  )
+  const problems: Diagnostic[] = []
   // Порядок — порядок одиниць: грант і політика однієї одиниці не
   // розходяться в переліку.
-  const grants = writeGrantPaths(located, tables, roles, parse)
-  const problems: Diagnostic[] = []
   for (const sqlUnit of located) {
-    for (const { table, detail } of grants.filter((g) => g.unit === sqlUnit))
+    const entries: { table: string; detail: string }[] = []
+    for (const path of paths.filter((p) => p.unit === sqlUnit)) {
+      const hit = path.roles.filter((r) => roles.has(r))
+      if (path.form === "grant" && hit.length > 0)
+        entries.push(
+          ...grantedTables(path, tables, parse).map((t) => ({
+            table: key(t.schema, t.name),
+            detail: grantDetail(sqlUnit, hit),
+          }))
+        )
+      else if (path.form === "view" && hit.length > 0 && unit.has(path.target))
+        entries.push({
+          table: path.target,
+          detail: `view ${sqlUnit.schema}.${sqlUnit.name} without security_invoker, writable by ${hit.join(", ")}`,
+        })
+      else if (path.form === "policy" && unit.has(path.target)) {
+        const policy = (
+          sqlUnit.tree as Node as { CreatePolicyStmt?: PolicyTree }
+        ).CreatePolicyStmt
+        const command = policy?.cmd_name ?? "all"
+        if (WRITE_COMMANDS.has(command))
+          entries.push({
+            table: path.target,
+            detail: `policy ${policy?.policy_name ?? ""} FOR ${command.toUpperCase()}`,
+          })
+      }
+    }
+    // Типові привілеї схеми судить спільний помічник перелічувача.
+    for (const { table, detail } of adp.filter((a) => a.unit === sqlUnit))
+      entries.push({ table: key(table.schema, table.name), detail })
+    for (const { table, detail } of entries)
       problems.push(
-        diagnostic("promote.write-path", sqlUnit.file!, "", {
-          table: key(table.schema, table.name),
+        diagnostic("promote.write-path", sqlUnit.file, "", {
+          table,
           detail,
           identity: sqlUnit.identity,
-          line: sqlUnit.line!,
+          line: sqlUnit.line,
         })
       )
-    const tree = sqlUnit.tree as Node
-    if (!("CreatePolicyStmt" in tree)) continue
-    const policy = tree.CreatePolicyStmt
-    const command = policy.cmd_name ?? "all"
-    if (!WRITE_COMMANDS.has(command)) continue
-    const schema = policy.table?.schemaname ?? sqlUnit.schema
-    const table = policy.table?.relname ?? ""
-    if (!unit.has(key(schema, table))) continue
-    problems.push(
-      diagnostic("promote.write-path", sqlUnit.file!, "", {
-        table: key(schema, table),
-        detail: `policy ${policy.policy_name ?? ""} FOR ${command.toUpperCase()}`,
-        identity: sqlUnit.identity,
-        line: sqlUnit.line!,
-      })
-    )
   }
   return problems
+}
+
+interface PolicyTree {
+  policy_name?: string
+  cmd_name?: string
 }
 
 /**
@@ -97,30 +163,21 @@ export function debtWritesProblems(
   parse: SqlParser,
   plpgsql: PlpgsqlParser
 ): Diagnostic[] {
-  const qualified = new Set<string>()
-  const byName = new Map<string, string[]>()
-  const bySchema = new Map<string, string[]>()
-  for (const t of tables) {
-    const k = key(t.schema, t.name)
-    qualified.add(k)
-    byName.set(t.name, [...(byName.get(t.name) ?? []), k])
-    bySchema.set(t.schema, [...(bySchema.get(t.schema) ?? []), k])
-  }
-  const promoted: KindTables = { qualified, byName, bySchema }
-  const views = modelViews(model.sqlUnits)
-  return model.sqlUnits.flatMap((unit) => {
-    if (unit.file === undefined || unit.line === undefined) return []
-    const body = bodyKindTable(unit, promoted, parse, plpgsql, views)
-    if (body === undefined) return []
-    return [
-      diagnostic("promote.debt-writes-table", unit.file, "", {
-        identity: unit.identity,
-        table: body.table,
-        statement: body.statement,
-        line: unit.line,
-      }),
-    ]
-  })
+  const unit = new Set(tables.map((t) => key(t.schema, t.name)))
+  const located = locatedUnits(model)
+  return promotedPaths(model, located, tables, parse, plpgsql).flatMap(
+    (path) =>
+      path.form === "functionBody" && unit.has(path.target)
+        ? [
+            diagnostic("promote.debt-writes-table", path.unit.file, "", {
+              identity: path.unit.identity,
+              table: path.target,
+              statement: path.statement ?? "",
+              line: path.unit.line,
+            }),
+          ]
+        : []
+  )
 }
 
 /** Таблиця користувачів провайдера бази проєкту (§9.10). */

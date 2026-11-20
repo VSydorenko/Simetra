@@ -22,6 +22,7 @@ import {
   type WireCommandError,
 } from "../envelope"
 import type { CommandError } from "../errors"
+import { rightsValueSchema } from "../rights-snapshot"
 import { READ_BATCH_MAX, type KnownVersions } from "../read"
 import type { Change } from "../result"
 import { OBJECT_ID, SECTION_ID } from "./entries"
@@ -308,7 +309,10 @@ describe("wire schemas", () => {
     ["a version", true, { type: "version" }],
     ["a version with a query", false, { type: "version", query: {} }],
     ["a query without one", false, { type: "query" }],
-    ["a rights part", false, { type: "rights" }],
+    ["a rights part", true, { type: "rights" }],
+    ["a rights part with known", true, { type: "rights", known: EPOCH }],
+    ["a rights part with a short known", false, { type: "rights", known: "a" }],
+    ["a rights part with a query", false, { type: "rights", query: {} }],
     [
       "a logical query",
       false,
@@ -393,6 +397,32 @@ describe("wire schemas", () => {
         })),
       },
     ],
+    [
+      "a rights value with a snapshot",
+      true,
+      {
+        epoch: EPOCH,
+        items: [
+          {
+            ok: true,
+            value: {
+              rightsVersion: HASH,
+              snapshot: { userId: null, scopeSets: [], rights: [] },
+            },
+          },
+        ],
+      },
+    ],
+    [
+      "a rights value without a snapshot",
+      true,
+      { epoch: EPOCH, items: [{ ok: true, value: { rightsVersion: HASH } }] },
+    ],
+    [
+      "a rights value without rightsVersion",
+      false,
+      { epoch: EPOCH, items: [{ ok: true, value: { snapshot: {} } }] },
+    ],
     ["no items", false, { epoch: null, items: [] }],
     ["no epoch key", false, { items: [{ ok: true, value: { count: 0 } }] }],
     [
@@ -419,10 +449,12 @@ describe("wire schemas", () => {
     expect(wireReadPartsResultSchema.safeParse(value).success).toBe(ok)
   })
 
-  it("types a part value as a read result or a version value", () => {
+  it("types a part value as a read, version or rights value", () => {
     type Value = Extract<WireReadParts["items"][number], { ok: true }>["value"]
     expectTypeOf<Value>().toEqualTypeOf<
-      WireReadResult | z.infer<typeof versionValueSchema>
+      | WireReadResult
+      | z.infer<typeof versionValueSchema>
+      | z.infer<typeof rightsValueSchema>
     >()
     expectTypeOf<WireReadParts["epoch"]>().toEqualTypeOf<string | null>()
   })
@@ -586,6 +618,39 @@ describe("data envelope", () => {
     ["an error without error", false, { ok: false, serverHash: HASH }],
   ])("response: %s -> %s", (_name, ok, value) => {
     expect(dataResponseSchema.safeParse(value).success).toBe(ok)
+  })
+
+  it("counts a rights part in the batch limit", () => {
+    const rights = { type: "rights" }
+    const request = (n: number) => ({
+      subject: "s",
+      request: {
+        type: "read",
+        items: [rights, ...Array.from({ length: n - 1 }, () => part)],
+      },
+    })
+    expect(dataRequestSchema.safeParse(request(READ_BATCH_MAX)).success).toBe(
+      true
+    )
+    expect(
+      dataRequestSchema.safeParse(request(READ_BATCH_MAX + 1)).success
+    ).toBe(false)
+  })
+
+  it("refuses a second rights part with its path", () => {
+    const rights = { type: "rights" }
+    const parsed = dataRequestSchema.safeParse({
+      subject: "s",
+      request: { type: "read", items: [rights, part, rights] },
+    })
+    const [issue] = parsed.error?.issues ?? []
+    expect(issue?.path).toEqual(["request", "items", 2])
+    expect(
+      dataRequestSchema.safeParse({
+        subject: "s",
+        request: { type: "read", items: [rights, part] },
+      }).success
+    ).toBe(true)
   })
 
   it(`refuses more than ${READ_BATCH_MAX} parts with the batch limit reason`, () => {

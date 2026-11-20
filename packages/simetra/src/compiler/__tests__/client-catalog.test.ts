@@ -99,6 +99,19 @@ describe("buildClientCatalog", () => {
     expect(JSON.stringify(again)).toBe(JSON.stringify(clients[0]))
   })
 
+  it("carries the rights snapshot flag of the runtime catalog", () => {
+    expect(runtimes[0]!.rightsSnapshot).toBe(true)
+    clients.forEach((client, index) => {
+      expect(client.rightsSnapshot).toBe(runtimes[index]!.rightsSnapshot)
+    })
+    const bare = buildClientCatalog({
+      ...runtimes[0]!,
+      rightsSnapshot: undefined,
+    })
+    expect(bare).not.toHaveProperty("rightsSnapshot")
+    expect(clientCatalogSchema.parse(bare)).toEqual(bare)
+  })
+
   it("keeps the runtime object order", () => {
     clients.forEach((client, index) => {
       expect(client.objects.map((o) => o.id)).toEqual(
@@ -128,6 +141,8 @@ describe("buildClientCatalog", () => {
         "parentConstraint",
         "creatorMembership",
         "scopeKindId",
+        "publicRead",
+        "rightsContract",
       ].filter((key) => !keys.has(key))
     ).toEqual([])
     clients.forEach((client, index) => {

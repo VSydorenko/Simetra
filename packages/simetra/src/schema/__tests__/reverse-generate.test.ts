@@ -2590,7 +2590,7 @@ describe("reverseGenerate", () => {
         units: units(
           [
             "CREATE VIEW reports.active AS SELECT id FROM app.customer;",
-            "CREATE EXTENSION IF NOT EXISTS pgcrypto;",
+            "CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;",
             "COMMENT ON VIEW reports.active IS 'Active';",
             "ALTER DEFAULT PRIVILEGES IN SCHEMA reports GRANT SELECT ON TABLES TO anon;",
             "CREATE SEQUENCE app.counter;",
@@ -2600,15 +2600,11 @@ describe("reverseGenerate", () => {
       }),
       options()
     )
-    // Розширення без SCHEMA стає в схему застосунку (спека прав §5.3).
-    const extension = [["sql.debt-extension-schema", "warning"]]
-    expect(result.diagnostics.map((d) => [d.code, d.severity])).toEqual(
-      extension
-    )
+    // Розширення лише в схемі провайдера (спека прав §5.3): без SCHEMA воно було б
+    // помилкою `sql.debt-extension-schema`.
+    expect(result.diagnostics).toEqual([])
     const compiled = await compile(result.files)
-    expect(compiled.diagnostics.map((d) => [d.code, d.severity])).toEqual(
-      extension
-    )
+    expect(compiled.diagnostics).toEqual([])
     expect(compiled.ok).toBe(true)
     expect(
       result.files.get("custom-tables/AppCustomer/AppCustomer.sql")

@@ -264,14 +264,33 @@ export const PROVIDER_FUNCTIONS: Readonly<
 /**
  * Provider functions that expression units (metadata expressions of adopted
  * tables, views, verbatim policy expressions) may call in addition to
- * `PROVIDER_FUNCTIONS`, as `schema.name`.
+ * `PROVIDER_FUNCTIONS`: `name` is `schema.name`, `extension` is the extension
+ * that owns the function (the engine boundary counts a function as a member
+ * only when that very extension is declared).
  */
+export interface ProviderExpressionFunction {
+  readonly name: string
+  readonly extension: string
+}
+
 export const PROVIDER_EXPRESSION_FUNCTIONS: Readonly<
-  Record<DatabaseProvider, readonly string[]>
+  Record<DatabaseProvider, readonly ProviderExpressionFunction[]>
 > = {
-  supabase: ["extensions.gen_random_bytes", "extensions.uuid_generate_v4"],
+  supabase: [
+    { name: "extensions.gen_random_bytes", extension: "pgcrypto" },
+    { name: "extensions.uuid_generate_v4", extension: "uuid-ossp" },
+    // Чисті функції розширень, які кличуть тригери й умови `WHEN` прийнятого
+    // SQL: рядок змінюють лише через `NEW`, побічної дії поза ним немає.
+    // `triggered_change_notification` (tcn) сюди не входить: вона шле
+    // `NOTIFY` поза рядком.
+    { name: "extensions.moddatetime", extension: "moddatetime" },
+    { name: "extensions.soundex", extension: "fuzzystrmatch" },
+  ],
   // `gen_random_uuid()` — ядро Postgres, поіменного дозволу не потребує.
-  postgres: [],
+  postgres: [
+    { name: "extensions.moddatetime", extension: "moddatetime" },
+    { name: "extensions.soundex", extension: "fuzzystrmatch" },
+  ],
 }
 
 /**

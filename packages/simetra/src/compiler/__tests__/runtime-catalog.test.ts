@@ -23,9 +23,10 @@ import {
   type ReadBoundary,
 } from "../access-units"
 import { modelHash } from "../canonical"
-import { hasVisibleUsers } from "../rights/functions"
+import { hasRightsFunctions, hasVisibleUsers } from "../rights/functions"
 import {
   BULLETIN_FILE,
+  REGION_FILE,
   GAUGE_LOG_FILE,
   ROLE_FILE,
   STATUS_FILE,
@@ -815,7 +816,7 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
 
   // Мапа — не частина знімка: хеш фікстури той самий, що до появи мапи
   // (обчислений на коміті до неї). Зміна фікстури чи платформних таблиць
-  // знімка (outbox сигналів) чи нові згенеровані одиниці (оракул сигналу,
+  // знімка (outbox сигналів) чи нові згенеровані одиниці (знімок прав клієнта, оракул сигналу,
   // функції відправки й виклик сигналу в ядрі) змінюють і цей літерал.
   it("stays outside the canonical snapshot and the hash", async () => {
     const { model: m } = await checksOf(policyDomain(runtimeValuesLayer()))
@@ -823,7 +824,7 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
     expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
-      "60bae9ffe489affe8d438a7458511e6abb816dae6ee607c8ed3f99ec04cf57e9"
+      "bf0e669b9dac861bb5150c0bc0db0dfabb48ebea504e354fdc8d1f7eece1d7b7"
     )
   })
 })
@@ -1131,5 +1132,92 @@ describe("kernelHash", () => {
       { ...operations, delete: undefined },
     ]
     expect(new Set(variants.map(kernelHashOf)).size).toBe(variants.length)
+  })
+})
+
+// Поля Р6 плану B5b: публічне читання, контракт прав і прапорець каталогу.
+describe("buildRuntimeCatalog: rights snapshot fields", () => {
+  it("publicRead follows access.publicRead: authenticated for the user role only", () => {
+    expect(objectOf("Bulletin").publicRead).toBe("authenticated")
+    expect(objectOf("Project").publicRead).toBeUndefined()
+    expect(objectOf("Project")).not.toHaveProperty("publicRead")
+  })
+
+  it("anon public read, which opens both request roles, is `anon`", async () => {
+    const { model: anon, diagnostics } = await compileRights(
+      policyDomain(writeRoles(), adminRoles(), commandCoreLayer(), {
+        [REGION_FILE]: { publicRead: "anon" },
+      })
+    )
+    expect(diagnostics).toEqual([])
+    const region = buildRuntimeCatalog(anon!).objects.find(
+      (o) => o.name === "Region"
+    )
+    expect(region?.publicRead).toBe("anon")
+  })
+
+  it("rightsContract marks exactly the objects with a rights contract", () => {
+    const withContract = new Set(model.contracts.rights.map((r) => r.objectId))
+    expect(withContract.size).toBeGreaterThan(0)
+    for (const object of catalog.objects) {
+      expect(object.rightsContract, object.name).toBe(
+        withContract.has(object.id) ? true : undefined
+      )
+    }
+    // Фікстура дає контракт кожному довіднику: відсутність перевіряємо на
+    // моделі без контракту одного з них.
+    const first = catalog.objects[0]!
+    const stripped = buildRuntimeCatalog({
+      ...model,
+      contracts: {
+        ...model.contracts,
+        rights: model.contracts.rights.filter((r) => r.objectId !== first.id),
+      },
+    })
+    const entry = stripped.objects.find((o) => o.id === first.id)!
+    expect(entry).not.toHaveProperty("rightsContract")
+  })
+
+  it("rightsSnapshot is set when the project has rights functions", () => {
+    expect(hasRightsFunctions(model.contracts, "supabase")).toBe(true)
+    expect(catalog.rightsSnapshot).toBe(true)
+  })
+
+  it("without rights functions the catalog flag is absent, the entry fields stay", () => {
+    const bare = buildRuntimeCatalog({
+      ...model,
+      contracts: { ...model.contracts, roles: [] },
+    })
+    expect(bare).not.toHaveProperty("rightsSnapshot")
+    // Поля запису — з доступу й контрактів, а не з прапорця проєкту.
+    expect(bare.objects.map((o) => o.publicRead)).toEqual(
+      catalog.objects.map((o) => o.publicRead)
+    )
+  })
+
+  it("does not change kernelHash", () => {
+    for (const object of catalog.objects) {
+      expect(object.kernelHash, object.name).toBe(
+        kernelHashOf(object.operations)
+      )
+    }
+  })
+})
+
+describe("buildRuntimeCatalog: publicRead moves snapshotHash only", () => {
+  it("another publicRead changes snapshotHash, not kernelHash", async () => {
+    const withRegion = async (layer: Layer) => {
+      const { model: m, diagnostics } = await compileRights(
+        policyDomain(writeRoles(), adminRoles(), commandCoreLayer(), layer)
+      )
+      expect(diagnostics).toEqual([])
+      return buildRuntimeCatalog(m!)
+    }
+    const open = await withRegion({ [REGION_FILE]: { publicRead: "anon" } })
+    const closed = await withRegion({ [REGION_FILE]: {} })
+    expect(open.snapshotHash).not.toBe(closed.snapshotHash)
+    const hashes = (c: RuntimeCatalog) =>
+      c.objects.map((o) => [o.name, o.kernelHash])
+    expect(hashes(open)).toEqual(hashes(closed))
   })
 })

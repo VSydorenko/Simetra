@@ -1,20 +1,17 @@
-import {
-  PLATFORM_SCHEMA,
-  PROVIDER_EXPRESSION_FUNCTIONS,
-  PROVIDER_FUNCTIONS,
-  PROVIDER_SCHEMAS,
-  type DatabaseProvider,
-} from "simetra/model"
+import type { FuncCall } from "libpg-query"
+import { PLATFORM_SCHEMA, type DatabaseProvider } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import { BUILTIN_FUNCTIONS } from "./builtin-functions"
-import { literalText } from "./command-context"
+import { literalText, providerCalls } from "./command-context"
 import { unitCalls, type ReferencedName } from "./dependencies"
 import type { SqlParser } from "./parse"
 import type { VerbatimUnit } from "./units"
+import { sequenceCallTarget } from "./write-paths"
 
 /*
- * Одиниці-вирази (спека прав §5.3): вирази метаданих прийнятих таблиць, подання й
- * вирази дослівних політик. Postgres обчислює їх на кожному записі чи
+ * Одиниці-вирази (спека прав §5.3): вирази метаданих прийнятих таблиць, подання,
+ * вирази дослівних політик, складові агрегатів, тригери (`EXECUTE FUNCTION`,
+ * `WHEN`) і `DEFAULT` доменів. Postgres обчислює їх на кожному записі чи
  * читанні, зокрема ролі API через PostgREST, тож виклики в них — дозвільний
  * перелік у будь-якому файлі, борг включно: денайліст записів сесії
  * (`set_config`, виконання тексту SQL) обходився б кожною новою функцією.
@@ -23,7 +20,11 @@ import type { VerbatimUnit } from "./units"
 /** Що одиниця-вираз може кликати, крім функцій платформи (спека прав §5.3). */
 export interface ExpressionScope {
   builtins: ReadonlySet<string>
-  /** `схема.ім'я` функцій моделі: їхні тіла судить перелік тіла (спека прав §6.1). */
+  /**
+   * `схема.ім'я` функцій, процедур і агрегатів моделі в схемах застосунку (їхні
+   * тіла судить перелік тіла, спека прав §6.1); збирач той самий, що в судді
+   * тіла (`modelCallNames`).
+   */
   models: ReadonlySet<string>
   /** `схема.ім'я` послідовностей моделі — для `nextval` у `DEFAULT`. */
   sequences: ReadonlySet<string>
@@ -42,19 +43,17 @@ export function expressionScope(
   provider: DatabaseProvider,
   generated: ReadonlySet<string>
 ): ExpressionScope {
-  const named = (cls: VerbatimUnit["class"]) =>
-    new Set(
-      units.filter((u) => u.class === cls).map((u) => `${u.schema}.${u.name}`)
-    )
+  const calls = providerCalls(provider, units, generated)
   return {
     builtins: new Set(BUILTIN_FUNCTIONS),
-    models: named("function"),
-    sequences: named("sequence"),
-    providerSchemas: new Set(PROVIDER_SCHEMAS[provider]),
-    providerFunctions: new Set([
-      ...PROVIDER_FUNCTIONS[provider],
-      ...PROVIDER_EXPRESSION_FUNCTIONS[provider],
-    ]),
+    models: calls.models,
+    sequences: new Set(
+      units
+        .filter((u) => u.class === "sequence")
+        .map((u) => `${u.schema}.${u.name}`)
+    ),
+    providerSchemas: calls.schemas,
+    providerFunctions: calls.allowed,
     generated,
   }
 }
@@ -83,10 +82,20 @@ export function expressionCallProblem(
   return qualified
 }
 
+/**
+ * Дозвільний перелік виразів: одиниці, чиї виклики Postgres виконує на
+ * записі, читанні чи побудові агрегату. Агрегат — складові (`SFUNC`…): їх
+ * виконує роль, що кличе агрегат; тригер — `EXECUTE FUNCTION` і `WHEN`; домен —
+ * лише `DEFAULT` (`CHECK` домену судить суворіше правило голів
+ * `checkDomainChecks`).
+ */
 const EXPRESSION_CLASSES: ReadonlySet<VerbatimUnit["class"]> = new Set([
   "view",
   "materializedView",
   "policy",
+  "aggregate",
+  "trigger",
+  "domain",
 ])
 
 /** Чи судить одиниця свої виклики як вираз (спека прав §5.3). */
@@ -95,8 +104,83 @@ export function isExpressionUnit(unit: Pick<VerbatimUnit, "class">): boolean {
 }
 
 /**
- * Подання й політики будь-якого файлу, борг включно: одна діагностика
- * `sql.expression-call-not-allowed` на кожен виклик поза переліком.
+ * Дерево домену без обмежень, для яких `keep` хибне. Домен судять два
+ * правила: `DEFAULT` — дозвільний перелік виразів, решту (`CHECK`) — правило
+ * голів (`checkDomainChecks`) і контекст команди, тож кожне бачить свою частину.
+ */
+function domainTree(
+  tree: unknown,
+  keep: (contype: string | undefined) => boolean
+): unknown {
+  const domain = (
+    tree as {
+      CreateDomainStmt?: {
+        constraints?: { Constraint?: { contype?: string } }[]
+      }
+    }
+  ).CreateDomainStmt
+  return {
+    CreateDomainStmt: {
+      ...domain,
+      constraints: (domain?.constraints ?? []).filter((c) =>
+        keep(c.Constraint?.contype)
+      ),
+    },
+  }
+}
+
+/** Те, що судить дозвільний перелік виразів: для домену — лише `DEFAULT`. */
+function expressionTree(unit: VerbatimUnit): unknown {
+  return unit.class === "domain"
+    ? domainTree(unit.tree, (c) => c === "CONSTR_DEFAULT")
+    : unit.tree
+}
+
+/**
+ * Дерево одиниці без частини, яку судить дозвільний перелік виразів: для
+ * домену — без `DEFAULT`; решта (`CHECK`) лишається судді запису сесії.
+ */
+export function treeBeyondExpressions(unit: VerbatimUnit): unknown {
+  return unit.class === "domain"
+    ? domainTree(unit.tree, (c) => c !== "CONSTR_DEFAULT")
+    : unit.tree
+}
+
+/**
+ * Виклики послідовностей дерева, які судить форма `sequence` Правила 1
+ * (`sequenceCallTarget`): ім'я без схеми, `simetra`, нелітерал.
+ */
+function sequenceFormCalls(value: unknown): ReferencedName[] {
+  if (Array.isArray(value)) return value.flatMap(sequenceFormCalls)
+  if (typeof value !== "object" || value === null) return []
+  const node = value as Record<string, unknown>
+  const call = node.FuncCall as FuncCall | undefined
+  const own: ReferencedName[] = []
+  if (call !== undefined && sequenceCallTarget(call) !== undefined) {
+    const names = (call.funcname ?? []).map((n) =>
+      "String" in n ? (n.String.sval ?? "") : ""
+    )
+    const name = names.at(-1) ?? ""
+    own.push(names.length > 1 ? { schema: names.at(-2)!, name } : { name })
+  }
+  return [...own, ...Object.values(node).flatMap(sequenceFormCalls)]
+}
+
+const callKey = (call: ReferencedName) => `${call.schema ?? ""}.${call.name}`
+
+function tally(calls: readonly ReferencedName[]): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const call of calls)
+    counts.set(callKey(call), (counts.get(callKey(call)) ?? 0) + 1)
+  return counts
+}
+
+/**
+ * Одиниці-вирази будь-якого файлу, борг включно: одна діагностика
+ * `sql.expression-call-not-allowed` на кожен виклик поза переліком. Виклик
+ * послідовності, який судить форма `sequence` (ім'я без схеми, `simetra`)
+ * Правила 1 (одне правило — одне місце): тут його немає, поки кожен виклик
+ * цього імені в одиниці — з тих, що судить вона.
  */
 export function checkExpressionCalls(
   units: readonly VerbatimUnit[],
@@ -105,10 +189,17 @@ export function checkExpressionCalls(
 ): Diagnostic[] {
   return units.flatMap((unit) => {
     if (!isExpressionUnit(unit)) return []
+    const tree = expressionTree(unit)
+    const all = unitCalls({ tree }, parse)
+    const total = tally(all)
+    const judged = tally(sequenceFormCalls(tree))
     const calls = new Set(
-      unitCalls(unit, parse).flatMap((call) => {
+      all.flatMap((call) => {
         const problem = expressionCallProblem(call, scope)
-        return problem === undefined ? [] : [problem]
+        return problem === undefined ||
+          (judged.get(callKey(call)) ?? 0) >= (total.get(callKey(call)) ?? 0)
+          ? []
+          : [problem]
       })
     )
     return [...calls].map((call) =>

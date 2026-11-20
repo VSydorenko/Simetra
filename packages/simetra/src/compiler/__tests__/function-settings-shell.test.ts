@@ -192,7 +192,10 @@ describe("sql.function-settings-shell", () => {
   it.each([
     {
       name: "a same-named function of another schema",
-      alter: "ALTER FUNCTION other_schema.count_comment() SECURITY DEFINER;",
+      // Функція тієї схеми — функція моделі, тож ціль `ALTER` не відхиляється.
+      alter:
+        sqlFunction("other_schema.count_comment", "SELECT 1") +
+        "ALTER FUNCTION other_schema.count_comment() SECURITY DEFINER;",
       expected: [],
     },
     {
@@ -242,5 +245,205 @@ describe("sql.function-settings-shell on a declared function", () => {
         params: { function: "public.plain", setting: "security" },
       },
     ])
+  })
+})
+
+describe("sql.function-settings-shell on a function the application did not create (Р10)", () => {
+  // Форму згенерованої функції, функції платформи й функції провайдера тримає
+  // платформа чи провайдер: `ALTER FUNCTION` на таку ціль — помилка в будь-якому
+  // файлі, борг включно (спека прав §6.1).
+  const notModel = (function_: string, setting: string) => ({
+    code: "sql.function-settings-shell",
+    file: SHARED,
+    params: { function: function_, setting, target: "notModel" },
+  })
+
+  it.each([
+    {
+      name: "a function nobody declares",
+      alter: "ALTER FUNCTION public.not_created() SECURITY DEFINER;",
+      expected: [notModel("public.not_created", "security")],
+    },
+    {
+      name: "a function of the provider",
+      alter: "ALTER FUNCTION extensions.gen_random_bytes(int) RESET ALL;",
+      expected: [notModel("extensions.gen_random_bytes", "*")],
+    },
+    {
+      name: "an unqualified name nobody declares",
+      alter: "ALTER FUNCTION not_created() SET search_path = '';",
+      expected: [notModel("public.not_created", "search_path")],
+    },
+  ])("rejects ALTER FUNCTION of $name", async ({ alter, expected }) => {
+    const result = await compiledPolicyDomain({ [SHARED]: alter })
+    expect(
+      diagnosticBrief(result.diagnostics, ["sql.function-settings-shell"])
+    ).toEqual(expected)
+  })
+
+  // Функцію платформи відмовляє резервування схеми `simetra`, ще до цього
+  // правила: друга діагностика була б шумом.
+  it("leaves ALTER FUNCTION of a platform function to the reserved schema", async () => {
+    const result = await compiledPolicyDomain({
+      [SHARED]: "ALTER FUNCTION simetra.provision_user() SECURITY DEFINER;",
+    })
+    expect(
+      diagnosticBrief(result.diagnostics, [
+        "sql.function-settings-shell",
+        "schema.reserved",
+      ]).map((d) => d.code)
+    ).toEqual(["schema.reserved"])
+  })
+
+  it("rejects ALTER FUNCTION of a generated function", async () => {
+    const base = await compiledPolicyDomain({})
+    const generated = base.model!.sqlUnits.find(
+      (u) => u.class === "function" && u.file === undefined
+    )
+    expect(generated).toBeDefined()
+    const name = `${generated!.schema}.${generated!.name}`
+    const result = await compiledPolicyDomain({
+      [SHARED]: `ALTER FUNCTION ${name}() SECURITY DEFINER;`,
+    })
+    expect(
+      diagnosticBrief(result.diagnostics, ["sql.function-settings-shell"])
+    ).toEqual([notModel(name, "security")])
+  })
+
+  it("leaves ALTER FUNCTION of a model function alone", async () => {
+    expectClean(
+      await compiledPolicyDomain({
+        [SHARED]:
+          sqlFunction("public.plain", "SELECT 1") +
+          "ALTER FUNCTION public.plain() SECURITY INVOKER;\n",
+      })
+    )
+  })
+})
+
+describe("sql.function-settings-shell: the target is judged by schema and signature (fix round 1 of #275)", () => {
+  const notModel = (function_: string, setting: string) => ({
+    code: "sql.function-settings-shell",
+    file: SHARED,
+    params: { function: function_, setting, target: "notModel" },
+  })
+  const fn = (name: string, args: string) =>
+    `CREATE FUNCTION ${name}(${args}) RETURNS int LANGUAGE sql STABLE AS $$ SELECT 1 $$;\n`
+
+  it.each([
+    {
+      // H1а: функція провайдера з іншою сигнатурою, ніж «приманка» моделі.
+      name: "a provider-schema decoy with another signature",
+      sql:
+        fn("extensions.dblink_exec", "n int") +
+        "ALTER FUNCTION extensions.dblink_exec(text, text) SET search_path = public;",
+      expected: [notModel("extensions.dblink_exec", "search_path")],
+    },
+    {
+      name: "a provider-schema decoy with the same signature",
+      sql:
+        fn("extensions.dblink_exec", "n int") +
+        "ALTER FUNCTION extensions.dblink_exec(int) SET search_path = public;",
+      expected: [notModel("extensions.dblink_exec", "search_path")],
+    },
+    {
+      // H1б: перевантаження, якого модель не створювала.
+      name: "an overload the model did not create",
+      sql:
+        fn("public.f", "n int") +
+        "ALTER FUNCTION public.f(text) SET search_path = '';",
+      expected: [notModel("public.f", "search_path")],
+    },
+    {
+      name: "an overload with another arity",
+      sql:
+        fn("public.f", "n int") +
+        "ALTER FUNCTION public.f(int, int) SET search_path = '';",
+      expected: [notModel("public.f", "search_path")],
+    },
+    {
+      name: "a same-named function of another application schema",
+      sql:
+        fn("public.f", "n int") +
+        "ALTER FUNCTION app.f(int) SET search_path = '';",
+      expected: [notModel("app.f", "search_path")],
+    },
+    {
+      // H2: некваліфіковане ім'я в DDL розв'язується за шляхом сесії.
+      name: "an unqualified name of a model function",
+      sql:
+        fn("public.helper2", "") +
+        "ALTER FUNCTION helper2() SET search_path = '';",
+      expected: [notModel("public.helper2", "search_path")],
+    },
+  ])("rejects ALTER FUNCTION of $name", async ({ sql, expected }) => {
+    const result = await compiledPolicyDomain({ [SHARED]: sql })
+    expect(
+      diagnosticBrief(result.diagnostics, ["sql.function-settings-shell"])
+    ).toEqual(expected)
+  })
+
+  // Один нормалізатор підписів (`units.ts`): ці збіги Postgres цілить у ту
+  // саму функцію моделі.
+  it.each([
+    { args: "n int[]", alter: "public.f(_int4)" },
+    { args: "n int[][]", alter: "public.f(int[])" },
+    { args: "n varchar(5)", alter: "public.f(character varying)" },
+    { args: "n int, OUT o int", alter: "public.f(int4)" },
+    { args: "n int, INOUT m text", alter: "public.f(int, text)" },
+    { args: "VARIADIC n int[]", alter: "public.f(int[])" },
+    { args: "n int DEFAULT 1", alter: "public.f(integer)" },
+    { args: '"c" "char"', alter: 'public.f("char")' },
+  ])(
+    "leaves ALTER FUNCTION $alter on f($args) alone",
+    async ({ args, alter }) => {
+      expectClean(
+        await compiledPolicyDomain({
+          [SHARED]:
+            fn("public.f", args) +
+            `ALTER FUNCTION ${alter} SET search_path = '';`,
+        })
+      )
+    }
+  )
+
+  it('rejects "char" altered as char', async () => {
+    const result = await compiledPolicyDomain({
+      [SHARED]:
+        fn("public.f", '"c" "char"') +
+        "ALTER FUNCTION public.f(char) SET search_path = '';",
+    })
+    expect(
+      diagnosticBrief(result.diagnostics, ["sql.function-settings-shell"])
+    ).toHaveLength(1)
+  })
+
+  it("leaves a model domain spelled with and without its schema alone", async () => {
+    const domain = "CREATE DOMAIN public.codes AS text;\n"
+    for (const [args, alter] of [
+      ["n codes", "public.f(public.codes)"],
+      ["n public.codes", "public.f(codes)"],
+    ]) {
+      expectClean(
+        await compiledPolicyDomain({
+          [SHARED]:
+            domain +
+            fn("public.f", args!) +
+            `ALTER FUNCTION ${alter} SET search_path = '';`,
+        })
+      )
+    }
+  })
+
+  it.each([
+    "ALTER FUNCTION public.f(int) SET search_path = '';",
+    "ALTER FUNCTION public.f(integer) SET search_path = '';",
+    "ALTER FUNCTION public.f(n int) SET search_path = '';",
+  ])("leaves %s on the model function alone", async (alter) => {
+    expectClean(
+      await compiledPolicyDomain({
+        [SHARED]: fn("public.f", "n int") + alter,
+      })
+    )
   })
 })
