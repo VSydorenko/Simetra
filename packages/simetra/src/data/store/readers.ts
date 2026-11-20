@@ -16,6 +16,7 @@ import {
 import { visibleRow, type PutResult, type RestoredRow } from "./object-store"
 import type { OwnerScope, SectionEntry } from "./section-store"
 import type { Scope, Session } from "./session"
+import type { Subset } from "./subsets"
 import {
   readKeys,
   readOne,
@@ -161,9 +162,10 @@ export type Apply = (scope: Scope) => boolean
 export async function gated<C extends ReaderContext>(
   ctx: C,
   readEpoch: number,
-  read: (ctx: C) => Promise<Write>
+  read: (ctx: C) => Promise<Write>,
+  caller?: Subset
 ): Promise<Apply> {
-  const { source, epochs } = tracked(ctx.source)
+  const { source, epochs } = tracked(ctx.source, caller)
   const write = await read({ ...ctx, source })
   return (scope) => {
     if (ctx.session.acceptEpochs(epochs, readEpoch) === "discard") return false
@@ -944,11 +946,11 @@ async function readSection(
  */
 export function readForm(
   ctx: ReaderContext,
-  s: ReaderTarget,
+  s: Subset,
   readEpoch: number,
   token: GenerationToken
 ): Promise<Apply> {
-  return gated(ctx, readEpoch, (c) => readFormWrite(c, s, readEpoch, token))
+  return gated(ctx, readEpoch, (c) => readFormWrite(c, s, readEpoch, token), s)
 }
 
 /** {@link readForm} without the epoch gate: the caller gates the whole read. */

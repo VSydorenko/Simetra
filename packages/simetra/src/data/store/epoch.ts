@@ -48,7 +48,8 @@ export interface Epochs {
   buryPair(object: string, scope: string | null): void
   /**
    * The epoch of the last `buryPair` of the object (0 — none); under a rights
-   * barrier that guards the object, at least its `rightsEpoch`.
+   * barrier that guards the object, at least its `appliedEpoch`; at least
+   * the object's `buryObject` epoch.
    */
   lastPairBurial(object: string): number
   /**
@@ -57,6 +58,12 @@ export interface Epochs {
    * read that started before the snapshot was applied. `undefined` — none.
    */
   setBarrier(barrier: PairBarrier | undefined): void
+  /**
+   * Buries every pair of the object for a read that started before `at`
+   * (a snapshot opened pairs that cannot be listed, P4-B spec §6.2 rule 4);
+   * never lowers an earlier mark.
+   */
+  buryObject(object: string, at: number): void
   /** Drops both maps, the horizon and the last pair burials. */
   clear(): void
   /** Sizes of the service maps (inspection); `horizon` counts raised buckets. */
@@ -76,8 +83,6 @@ export interface Epochs {
  * such a read on the one path both stores ask (`buriedSince`).
  */
 export interface PairBarrier {
-  /** `epochs.next()` when the `rights` part of the snapshot was sent. */
-  readonly rightsEpoch: number
   /** `epochs.next()` when the snapshot was applied. */
   readonly appliedEpoch: number
   /** The snapshot denies reading the pair (scope, object). */
@@ -85,7 +90,7 @@ export interface PairBarrier {
   /**
    * The snapshot judges the object's pairs (a rights contract and a scope
    * column): lines of an owner with unknown scope are not written from a
-   * read older than `rightsEpoch`.
+   * read that started before `appliedEpoch`.
    */
   guards(object: string): boolean
 }
@@ -205,14 +210,22 @@ export function createEpochs(
   // перевіряється за будь-якою парою об'єкта, і витіснення його не губить.
   const pairBurials = new Map<string, number>()
   let barrier: PairBarrier | undefined
+  // Поховання всіх пар об'єкта (`buryObject`): одне число на об'єкт.
+  const objectBurials = new Map<string, number>()
 
   // Віртуальний надгробок знімка: судить лише читання, що стартувало до
   // застосування знімка (пізніше читання сервер виконав після транзакції
   // знімка — його судила RLS).
   const barred = (id: string, readEpoch: number): boolean => {
-    if (barrier === undefined || readEpoch >= barrier.appliedEpoch) return false
+    const judging =
+      barrier !== undefined && readEpoch < barrier.appliedEpoch
+        ? barrier
+        : undefined
+    if (judging === undefined && objectBurials.size === 0) return false
     const pair = pairOf(id)
-    return pair !== undefined && barrier.denies(pair.object, pair.scope)
+    if (pair === undefined) return false
+    if (readEpoch < (objectBurials.get(pair.object) ?? 0)) return true
+    return judging !== undefined && judging.denies(pair.object, pair.scope)
   }
 
   // Предикати винесено, щоб `bury`/`remember` не створювали замикання на виклик.
@@ -240,12 +253,16 @@ export function createEpochs(
     },
     lastPairBurial(object) {
       const real = pairBurials.get(object) ?? 0
+      const all = Math.max(real, objectBurials.get(object) ?? 0)
       return barrier !== undefined && barrier.guards(object)
-        ? Math.max(real, barrier.rightsEpoch)
-        : real
+        ? Math.max(all, barrier.appliedEpoch)
+        : all
     },
     setBarrier(next) {
       barrier = next
+    },
+    buryObject(object, at) {
+      objectBurials.set(object, Math.max(at, objectBurials.get(object) ?? 0))
     },
     buriedSince: (id, readEpoch) =>
       (tombstones.get(id) ?? -1) > readEpoch || barred(id, readEpoch),
@@ -292,6 +309,7 @@ export function createEpochs(
       horizon.fill(0)
       pairBurials.clear()
       barrier = undefined
+      objectBurials.clear()
     },
     sizes: () => ({
       seen: seen.size,

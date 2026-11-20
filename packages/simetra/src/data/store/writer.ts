@@ -789,7 +789,7 @@ function readAgain(
   startEpoch: number,
   token: GenerationToken
 ): Promise<Apply> {
-  return gated(ctx, startEpoch, (c) => writeAgain(c, s, startEpoch, token))
+  return gated(ctx, startEpoch, (c) => writeAgain(c, s, startEpoch, token), s)
 }
 
 async function writeAgain(
@@ -1414,36 +1414,42 @@ const holds = (s: Subset, object: ObjectName) =>
   s.form.object.name === object ||
   s.form.include.some((step) => step.target === object)
 
+/** The live views that may hold rows of the object: its own views and views whose `include` targets it. */
+export function holdersOf(ctx: WriterContext, object: ObjectName): Subset[] {
+  return [...ctx.registry.subsets()].filter(
+    (s) => s.alive && !s.purged && holds(s, object)
+  )
+}
+
 /**
- * Invalidates the first loads in flight of every view that may hold rows of
- * the object (its own views and views whose `include` targets it): their
- * answer may predate a narrowing of its read, and a view never loaded has no
- * re-read — the load runs again (П12). See {@link revalidateNarrowed}.
+ * Invalidates the first loads in flight of the views that started before
+ * `before`: their answer may predate a narrowing of the read, and a view never
+ * loaded has no re-read — the load runs again (П12). A load that started
+ * later read under the new rights. See {@link revalidateNarrowed}.
  */
-export function invalidateLoads(ctx: WriterContext, object: ObjectName) {
-  for (const s of ctx.registry.subsets()) {
+export function invalidateLoads(views: Iterable<Subset>, before: number) {
+  for (const s of views) {
     if (!s.alive || s.purged || s.loaded || s.flight === undefined) continue
-    if (!holds(s, object)) continue
+    if ((s.flightEpoch ?? before) >= before) continue
     s.gen++
     s.trailing = true
   }
 }
 
 /**
- * Re-reads every loaded view that may hold rows of the object read before
- * its read was narrowed (P4-B spec §6.2 rule 4, «до B6»; plan B5b-2 Р5,
- * Р5а): views of the object and views whose `include` targets it, invisible
- * ones included, by the single-flight rule (a view in flight gets the one
- * tail). First loads in flight are {@link invalidateLoads}'s.
+ * Re-reads the loaded views among `views` (P4-B spec §6.2 rule 4, «до B6»;
+ * plan B5b-2 Р5, Р5а), invisible ones included: one single-flight pass per
+ * object over the whole set, so a view that holds two narrowed objects is
+ * read once (a view in flight gets the one tail). First loads in flight are
+ * {@link invalidateLoads}'s.
  */
 export function revalidateNarrowed(
   ctx: WriterContext,
-  object: ObjectName
+  views: Iterable<Subset>
 ): Promise<void> {
   if (!ctx.session.token().valid) return Promise.resolve()
   const groups = new Map<ObjectState, Subset[]>()
-  for (const s of ctx.registry.subsets()) {
-    if (!s.loaded || !holds(s, object)) continue
+  for (const s of new Set(views)) {
     if (!eligible(ctx, s, { visibleOnly: false })) continue
     const group = groups.get(s.form.object) ?? []
     group.push(s)

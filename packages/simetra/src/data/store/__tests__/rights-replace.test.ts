@@ -250,6 +250,35 @@ describe("the pass on a snapshot replacement", () => {
     expect(readsOf(fake, TASK)).toHaveLength(listReads)
   })
 
+  it("drops lines of an owner without a header when the object lost a read tuple", async () => {
+    const { core, fake } = harness()
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    watch(core.view(section(1)))
+    await settle()
+    expect(linesOf(core, 1)?.scope).toBe("unknown")
+    // Пари власника в сховищі немає: судити нема за чим, тож рядки прибрано.
+    grant(fake, ONLY_T())
+    fake.setVisibleScopes([T])
+    core.requestRights()
+    await settle()
+    expect(linesOf(core, 1)).toBeUndefined()
+  })
+
+  it("keeps lines of an owner without a header when the object lost nothing", async () => {
+    const { core, fake } = harness()
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    watch(core.view(section(1)))
+    await settle()
+    const reads = fake.log.filter(isSection).length
+    grant(fake, snapshotOf([readRow(S), readRow(T)], [S, T, CONTAINER]))
+    core.requestRights()
+    await settle()
+    expect(linesOf(core, 1)?.lines).toHaveLength(1)
+    expect(fake.log.filter(isSection)).toHaveLength(reads)
+  })
+
   it("drops the tabular section lines of a purged owner (§14.1)", async () => {
     const { core, fake } = harness()
     seed(fake, 1, 1)
@@ -317,7 +346,7 @@ describe("the pass on a snapshot replacement", () => {
     const { seen } = watch(handle)
     await settle()
     const requests = fake.requests.length
-    const commit = vi.spyOn(core, "commit")
+    const commit = vi.spyOn(coreInternals(core).ops, "sweep")
     seen.length = 0
     // Той самий вміст, інша версія: знімок замінено, а правила нічого не дають.
     grant(fake, BOTH())
@@ -336,7 +365,7 @@ describe("the pass on a snapshot replacement", () => {
     const handle = core.view(keys(1, 2))
     const { seen } = watch(handle)
     await settle()
-    const commit = vi.spyOn(core, "commit")
+    const commit = vi.spyOn(coreInternals(core).ops, "sweep")
     seen.length = 0
     grant(fake, snapshotOf([]))
     fake.setVisibleScopes([])
@@ -413,31 +442,81 @@ describe("the snapshot barrier", () => {
     })
   })
 
-  it("re-reads the lines the barrier dropped with the next read", async () => {
+  it("re-reads once the lines of an owner without a header that the barrier dropped from the first packet", async () => {
+    const { core, fake } = harness()
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    // Та сама транзакція, що й `rights`, але бар'єр запиту не знає: ТЧ без
+    // шапки відкинуто, і вигляд читає її ще раз — уже після знімка.
+    const owned = core.view(section(1))
+    watch(owned)
+    await settle()
+    expect(fake.log.filter(isSection)).toHaveLength(2)
+    expect(linesOf(core, 1)?.lines).toHaveLength(1)
+  })
+
+  it("keeps a pair out of a read that started before a snapshot denied it and lands after the next one allowed it", async () => {
+    const { core, fake } = harness({ mode: "manual" })
+    await firstSnapshot(core)
+    seed(fake, 1, 1)
+    const header = core.view(card(1))
+    watch(header)
+    await settle()
+    expect(fake.pending).toHaveLength(1)
+    // Пари в сховищі немає: прохід нічого не ховає, надгробок дає лише бар'єр.
+    grant(fake, ONLY_T())
+    core.requestRights()
+    await settle()
+    grant(fake, BOTH())
+    core.requestRights()
+    await settle()
+    fake.take().answer()
+    await settle()
+    expect(rowsOf(core).get(key(1))).toBeUndefined()
+  })
+
+  it("keeps every pair out of an older read when a snapshot opens the object by publicRead", async () => {
+    const shared: CatalogEntry = { ...taskR, publicRead: "authenticated" }
+    const { core, fake } = harness({ objects: [shared, org], mode: "manual" })
+    // Гість: `publicRead` для автентифікованих пару не відкриває.
+    grant(fake, snapshotOf([], [], null))
+    fake.holdRights = true
+    core.requestRights()
+    await settle()
+    seed(fake, 1, 1)
+    const header = core.view(card(1))
+    watch(header)
+    await settle()
+    fake.releaseRights()
+    await settle()
+    expect(core.rights()?.snapshot.userId).toBeNull()
+    fake.holdRights = false
+    grant(fake, snapshotOf([], [], USER))
+    core.requestRights()
+    await settle()
+    fake.take().answer()
+    await settle()
+    expect(rowsOf(core).get(key(1))).toBeUndefined()
+  })
+
+  it("does not write lines of an owner without a header read between sending and applying a snapshot that denies it", async () => {
     const { core, fake } = harness({ mode: "manual" })
     await firstSnapshot(core)
     seed(fake, 1, 1)
     fake.setLines(TASK, key(1), "lines", lines)
+    grant(fake, ONLY_T())
+    fake.holdRights = true
+    core.requestRights()
+    await settle()
+    // ТЧ стартує після відправки знімка, іншим запитом, до його застосування.
     const owned = core.view(section(1))
     watch(owned)
     await settle()
-    grant(fake, ONLY_T())
-    core.requestRights()
+    fake.releaseRights()
     await settle()
     fake.deliverAll()
     await settle()
     expect(linesOf(core, 1)).toBeUndefined()
-    expect(fake.pending).toHaveLength(0)
-    // Право повернулось: наступне читання ТЧ пише її рядки.
-    grant(fake, BOTH())
-    core.requestRights()
-    await settle()
-    void core.revalidate(TASK, { visibleOnly: false })
-    await settle()
-    expect(fake.pending.filter((r) => isSection(r.log))).toHaveLength(1)
-    fake.deliverAll()
-    await settle()
-    expect(linesOf(core, 1)?.lines).toHaveLength(1)
   })
 
   it("keeps a purged row out of a late answer even after the right returns", async () => {
@@ -507,6 +586,27 @@ describe("narrowing", () => {
     expect(readsOf(fake, TASK).length).toBeGreaterThan(reads)
   })
 
+  it("re-reads a view once when one snapshot narrows its object and its include target", async () => {
+    const { core, fake } = harness({ objects: [taskR, orgR] })
+    const both = (extent: string) =>
+      snapshotOf([
+        readRow(S, { extent }),
+        readRow(T),
+        readRow(S, { object: "organization", extent }),
+        readRow(T, { object: "organization" }),
+      ])
+    grant(fake, both("any"))
+    fake.insert(ORG, { ref: S })
+    seed(fake, 1, 1)
+    watch(core.view({ kind: "full", object: TASK, include: ["org"] }))
+    await settle()
+    const reads = readsOf(fake, TASK).length
+    grant(fake, both("own"))
+    core.requestRights()
+    await settle()
+    expect(readsOf(fake, TASK)).toHaveLength(reads + 1)
+  })
+
   it("re-reads the views of an unscoped object with a rights contract when scopeSets change", async () => {
     const unscoped: CatalogEntry = {
       ...taskR,
@@ -558,6 +658,8 @@ describe("the first snapshot (Р5а)", () => {
     // Частини другого запиту, зокрема невидимого вигляду, перечитано.
     expect(readsOfKey(fake, 16).length).toBeGreaterThan(1)
     expect(readsOfKey(fake, 17).length).toBeGreaterThan(1)
+    // Частини запиту `rights` того самого об'єкта — ні.
+    for (let n = 1; n <= 15; n++) expect(readsOfKey(fake, n)).toHaveLength(1)
   })
 
   it("re-reads nothing when the first packet is one request", async () => {
@@ -589,7 +691,7 @@ describe("a change of the user", () => {
     const { core, fake } = harness({ onSessionChanged: changed })
     seed(fake, 1, 1)
     const handle = core.view(card(1))
-    watch(handle)
+    const { seen } = watch(handle)
     await settle()
     const first = core.rights()
     fake.edit(TASK, key(1), { title: "other user" })
@@ -606,6 +708,36 @@ describe("a change of the user", () => {
       rows: [],
     })
     expect(inspectRows(core)).toBe(0)
+    // Жодне сповіщення не несло рядка пакета.
+    expect(
+      seen.some((snapshot) =>
+        snapshot.rows.some(
+          (row) => row.state !== "removed" && row.values.title === "other user"
+        )
+      )
+    ).toBe(false)
+  })
+
+  it.each([
+    ["a guest by a user", null, USER],
+    ["a user by a guest", USER, null],
+  ])("replaces %s as a normal replacement", async (_, before, after) => {
+    const changed = vi.fn()
+    const { core, fake } = harness({ onSessionChanged: changed })
+    seed(fake, 1, 1)
+    grant(fake, snapshotOf([readRow(S), readRow(T)], [S, T], before))
+    const handle = core.view(card(1))
+    watch(handle)
+    await settle()
+    grant(fake, snapshotOf([readRow(S), readRow(T)], [S, T], after))
+    core.requestRights()
+    await settle()
+    expect(changed).not.toHaveBeenCalled()
+    expect(core.rights()?.snapshot.userId).toBe(after)
+    expect(handle.getSnapshot()).toMatchObject({
+      status: "ready",
+      rows: [{ key: key(1) }],
+    })
   })
 
   it("replaces a guest snapshot by a guest snapshot as usual", async () => {

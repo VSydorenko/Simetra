@@ -34,6 +34,7 @@ import {
 } from "simetra/model"
 import { DataError } from "../errors"
 import { effectiveEpoch } from "./epoch"
+import type { Subset } from "./subsets"
 import type { Key, KnownSnapshot, ServerRow } from "./types"
 
 // Причини `command.unavailable` частини, яку сервер не виконав (П4-B §4.5).
@@ -204,7 +205,11 @@ export interface ReadOptions {
  * them in one place).
  */
 export interface StoreSource extends Omit<CoreSource, "read"> {
-  read(parts: readonly CorePart[]): Promise<CoreReadResult>
+  /**
+   * `caller` — the view whose read this is, when a view reads (the core's
+   * first-snapshot rule re-reads exactly that view, plan B5b-2 Р5а).
+   */
+  read(parts: readonly CorePart[], caller?: Subset): Promise<CoreReadResult>
 }
 
 /**
@@ -642,7 +647,10 @@ export function createCoreSource(
  * epoch it carries (P4-B spec §6.2) — a key absent from an answer has no
  * row to carry it.
  */
-export function tracked(source: StoreSource): {
+export function tracked(
+  source: StoreSource,
+  caller?: Subset
+): {
   source: StoreSource
   epochs: Set<string | null>
 } {
@@ -654,8 +662,8 @@ export function tracked(source: StoreSource): {
       // Запис — не читання: його епоху шлюз читання не приймає (епоху `run`
       // звіряє write-back); частина `version` епохи не має.
       run: (operation) => source.run(operation),
-      async read(parts) {
-        const result = await source.read(parts)
+      async read(parts, own) {
+        const result = await source.read(parts, own ?? caller)
         for (const item of result.items)
           if (item.ok && "epoch" in item) epochs.add(item.epoch)
         return result

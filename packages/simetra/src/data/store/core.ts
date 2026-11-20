@@ -1,7 +1,7 @@
 import { FILTER_IN_MAX, READ_LIMIT_MAX, type CatalogIndex } from "simetra/model"
 import type { DefectFlag } from "./defects"
 import { fieldInfoOf, filterCollator } from "./filter"
-import { keyId, type PairBarrier } from "./epoch"
+import { keyId, pairId, type PairBarrier } from "./epoch"
 import { createObjectStore } from "./object-store"
 import {
   createOverlay,
@@ -13,7 +13,7 @@ import { createSession, type Scope } from "./session"
 import { applySnapshot, dehydrate, parseSnapshot, type SsrContext } from "./ssr"
 import { createRowViews, purgedSnapshot } from "./snapshot"
 import { createBatcher } from "./batcher"
-import { readAllowed, readNarrowed } from "./rights"
+import { readAllowed, readLost, readNarrowed, reopenedPairs } from "./rights"
 import {
   ReadLimiterClosed,
   readKeys,
@@ -38,6 +38,7 @@ import {
   revalidateHolders,
   revalidateHydrated,
   revalidateNarrowed,
+  holdersOf,
   invalidateLoads,
   singleFlight,
   rereadKey,
@@ -439,7 +440,7 @@ export function createCore(options: {
     close: () => batcher.close(),
     refuse: (object) => batcher.refuse?.(object),
     run: (operation) => batcher.run(operation),
-    async read(parts) {
+    async read(parts, caller) {
       // Старт читання частин виклику: правило першого знімка (Р5а) порівнює
       // його з епохою застосування знімка.
       const startEpoch = session.epochs.now()
@@ -534,7 +535,7 @@ export function createCore(options: {
         // Об'єкт став несумісним, поки відповідь летіла: вона вже не діє.
         return isLive(part) ? item : refused(part)
       })
-      if (rightsEnabled) noteAnswered(parts, items, startEpoch)
+      if (rightsEnabled) noteAnswered(parts, items, startEpoch, caller)
       return { items }
     },
   }
@@ -551,10 +552,15 @@ export function createCore(options: {
   // Перший знімок сесії (Р5а): епоха застосування й запит, яким він прийшов.
   let firstRights:
     { appliedEpoch: number; request: number | undefined } | undefined
-  // Об'єкти частин, що осіли до першого знімка: їх уже не порівняти з ним.
-  const beforeFirst = new Set<ObjectName>()
-  // Звужені об'єкти, перечитування яких ще не почалось (одне на хід).
-  const narrowing = new Set<ObjectName>()
+  // Вигляди (і об'єкти читань без вигляду), чиї частини осіли до першого
+  // знімка: їх уже не порівняти з ним.
+  const beforeFirst = {
+    views: new Set<Subset>(),
+    objects: new Set<ObjectName>(),
+  }
+  // Вигляди звужених об'єктів, перечитування яких ще не почалось: один
+  // прохід на хід, тож вигляд, що тримає два звужені об'єкти, читається раз.
+  const narrowing = new Set<Subset>()
 
   // Пара (скоуп, об'єкт), якої знімок не дозволяє читати (§6.2 правило 4).
   const deniedBy =
@@ -569,7 +575,6 @@ export function createCore(options: {
     }
 
   const barrierOf = (state: RightsState): PairBarrier => ({
-    rightsEpoch: state.rightsEpoch,
     appliedEpoch: state.appliedEpoch,
     denies: deniedBy(state.snapshot),
     guards: (object) => {
@@ -581,38 +586,54 @@ export function createCore(options: {
   // Частини `query`, що стартували до першого знімка й пішли іншим запитом,
   // ніж частина `rights` (Р5а): їхні рядки могли передувати звуженню
   // всередині дозволеної пари, а знімка, з яким їх порівняти, клієнт не має.
+  // Перечитується вигляд, що читав; читання без вигляду (хвіст за ключем) —
+  // усі вигляди його об'єкта.
   function noteAnswered(
     parts: readonly CorePart[],
     items: readonly CoreReadItem[],
-    startEpoch: number
+    startEpoch: number,
+    caller: Subset | undefined
   ) {
+    const objects = new Set<ObjectName>()
     parts.forEach((part, slot) => {
       const item = items[slot]!
       if (part.type !== "query" || !item.ok) return
-      const name = `${part.query.object.kind}.${part.query.object.name}`
-      if (firstRights === undefined) beforeFirst.add(name)
-      else if (
-        startEpoch < firstRights.appliedEpoch &&
-        requestOf(item) !== firstRights.request
+      if (
+        firstRights !== undefined &&
+        (startEpoch >= firstRights.appliedEpoch ||
+          requestOf(item) === firstRights.request)
       )
-        narrow(name)
+        return
+      objects.add(`${part.query.object.kind}.${part.query.object.name}`)
     })
+    if (objects.size === 0) return
+    if (firstRights === undefined) {
+      if (caller !== undefined) beforeFirst.views.add(caller)
+      else for (const name of objects) beforeFirst.objects.add(name)
+      return
+    }
+    narrow(
+      caller !== undefined
+        ? [caller]
+        : [...objects].flatMap((name) => holdersOf(writerContext, name)),
+      firstRights.appliedEpoch
+    )
   }
 
-  // Перечитування звуженого об'єкта: завантаження в польоті скасовується
-  // одразу (до `commit` його відповіді), а прохід виглядів — один на хід.
-  function narrow(object: ObjectName) {
-    if (!session.token().valid) return
-    invalidateLoads(writerContext, object)
+  // Перечитування виглядів після звуження: перше завантаження, що стартувало
+  // до знімка, скасовується одразу (до `commit` його відповіді), а прохід
+  // виглядів — один на хід.
+  function narrow(views: readonly Subset[], appliedEpoch: number) {
+    if (!session.token().valid || views.length === 0) return
+    invalidateLoads(views, appliedEpoch)
     if (narrowing.size === 0) {
       queueMicrotask(() => {
-        const objects = [...narrowing]
+        const pending = [...narrowing]
         narrowing.clear()
-        for (const name of objects)
-          revalidateNarrowed(writerContext, name).catch(catchNarrow)
+        revalidateNarrowed(writerContext, pending).catch(catchNarrow)
       })
     }
-    narrowing.add(object)
+    for (const s of views) narrowing.add(s)
   }
   const catchNarrow = (error: unknown) => {
     if (!(error instanceof ReadLimiterClosed))
@@ -696,25 +717,75 @@ export function createCore(options: {
     item: CoreReadItem
   ) {
     const pairs = deniedPairs(writerContext, deniedBy(next.snapshot))
-    if (pairs.length > 0) {
-      core.commit((writer) => {
-        for (const { object, scope } of pairs) writer.purge(object, { scope })
-      }, session.token())
+    const lost = [...objects.values()].filter(
+      (o) =>
+        prev !== undefined && readLost(prev.snapshot, next.snapshot, o.entry)
+    )
+    // Рядки ТЧ власників без шапки в сховищі не судяться за парою: на
+    // заміні, де об'єкт щось утратив, їх прибираємо, повертає наступне читання.
+    const headerless = lost.flatMap((o) =>
+      o.sections
+        .owners()
+        .filter(
+          (owner) =>
+            o.rows.get(owner) === undefined &&
+            o.entry.tabularSections.some(
+              (t) => o.sections.get(owner, t.name)?.scope === "unknown"
+            )
+        )
+        .map((owner) => ({ o, owner }))
+    )
+    if (pairs.length > 0 || headerless.length > 0) {
+      session.commit(
+        (scope) => {
+          try {
+            const writer = createWriter(writerContext, scope)
+            for (const { object, scope: pair } of pairs)
+              writer.purge(object, { scope: pair })
+            for (const { o, owner } of headerless)
+              ops.clearOwner(scope, o, owner)
+          } finally {
+            ops.sweep(scope)
+          }
+        },
+        session.token(),
+        "rights"
+      )
     }
-    let narrowed: ObjectName[]
     if (prev === undefined) {
       firstRights = {
         appliedEpoch: next.appliedEpoch,
         request: requestOf(item),
       }
-      narrowed = [...beforeFirst]
-      beforeFirst.clear()
-    } else {
-      narrowed = [...objects.values()]
-        .filter((o) => readNarrowed(prev.snapshot, next.snapshot, o.entry))
-        .map((o) => o.name)
+      narrow(
+        [
+          ...beforeFirst.views,
+          ...[...beforeFirst.objects].flatMap((name) =>
+            holdersOf(writerContext, name)
+          ),
+        ],
+        next.appliedEpoch
+      )
+      beforeFirst.views.clear()
+      beforeFirst.objects.clear()
+      return
     }
-    for (const name of narrowed) narrow(name)
+    // Пари, які попередній знімок забороняв, а новий дозволяє: читання,
+    // старше за попередній знімок, і далі їх не пише (бар'єр замінено).
+    for (const o of objects.values()) {
+      const reopened = reopenedPairs(prev.snapshot, next.snapshot, o.entry)
+      if (reopened === "all")
+        session.epochs.buryObject(o.name, prev.appliedEpoch)
+      else
+        for (const scope of reopened)
+          session.epochs.bury(pairId(o.name, scope), prev.appliedEpoch)
+    }
+    narrow(
+      [...objects.values()]
+        .filter((o) => readNarrowed(prev.snapshot, next.snapshot, o.entry))
+        .flatMap((o) => holdersOf(writerContext, o.name)),
+      next.appliedEpoch
+    )
   }
 
   let lastHash = options.snapshotHash
@@ -824,6 +895,16 @@ export function createCore(options: {
         "owner-section"
       )
       if (result === "written") touchSection(o, owner)
+      // ТЧ власника без шапки, відкинута бар'єром знімка: читання могло йти
+      // тим самим запитом, що й `rights`, тож вигляд читає її ще раз — уже
+      // після знімка, тож бар'єр її не судить.
+      if (
+        result === "rejected" &&
+        ownerScope === "unknown" &&
+        rights !== undefined &&
+        readEpoch < rights.appliedEpoch
+      )
+        barredSections.add(`${o.name}\u0000${owner}`)
       // Позначені рядки ТЧ перечитує змонтований вигляд: перевірка вигляду
       // читає наново, коли ревізія шапки змінилась.
       if (result === "stale") {
@@ -977,6 +1058,9 @@ export function createCore(options: {
       }
       // `hide` (права): види, що тримають сховані ключі, перечитуються після
       // `commit`, з епохою старту не меншою за позначку.
+      const barredNow = [...barredSections]
+      barredSections.clear()
+      rereadBarred(barredNow)
       const hiddenNow = [...hiddenKeys]
       hiddenKeys.clear()
       for (const [name, keys] of hiddenNow) {
@@ -1013,6 +1097,7 @@ export function createCore(options: {
     written.length = 0
     registry.close()
     hiddenKeys.clear()
+    barredSections.clear()
     rowViews.clear()
     dirtySections.clear()
     dirtyObjects.clear()
@@ -1034,6 +1119,24 @@ export function createCore(options: {
 
   const purges = new Map<ObjectName, number>()
   const hiddenKeys = new Map<ObjectName, Set<Key>>()
+  // ТЧ (`"<object>\u0000<owner>"`), відкинуті бар'єром знімка в цьому `commit`.
+  const barredSections = new Set<string>()
+  function rereadBarred(barred: readonly string[]) {
+    if (barred.length === 0) return
+    const wanted = new Set(barred)
+    const groups = new Map<ObjectState, Subset[]>()
+    for (const s of registry.subsets()) {
+      const spec = s.form.spec
+      if (spec.kind !== "section" || !s.alive || s.purged) continue
+      if (s.listeners.size === 0) continue
+      if (!wanted.has(`${s.form.object.name}\u0000${spec.owner}`)) continue
+      groups.set(s.form.object, [...(groups.get(s.form.object) ?? []), s])
+    }
+    for (const [o, views] of groups)
+      singleFlight(writerContext, o, views, { visibleOnly: false }).done.catch(
+        catchNarrow
+      )
+  }
 
   // Строки об'єктів у планувальнику (§8.4): перемикання епохи (Р5) і повтор
   // відкинутої відповіді (Р6). Таймера на об'єкт немає: строк виконує такт, а
