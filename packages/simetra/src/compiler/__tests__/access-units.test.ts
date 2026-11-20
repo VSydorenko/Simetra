@@ -33,6 +33,7 @@ import { sha256HexSync } from "../sha256"
 import { loadSqlParser } from "../sql/parse"
 import type { SqlUnit } from "../sql/units"
 import {
+  adoptedSourcesDomain,
   ATTACHMENTS_TABLE,
   BULLETIN_FILE,
   BULLETIN_TABLE,
@@ -300,10 +301,13 @@ const NO_RIGHTS: AccessPolicyContracts = {
   membershipSources: [],
 }
 
-async function units(access: AccessContract[]) {
+async function units(
+  access: AccessContract[],
+  contracts: AccessPolicyContracts = NO_RIGHTS
+) {
   return buildAccessUnits(
     access,
-    NO_RIGHTS,
+    contracts,
     { tables: [], enumTypes: [] },
     "supabase",
     "app",
@@ -432,6 +436,23 @@ describe("buildAccessUnits", () => {
       policySql(await units([contract({ publicRead: ["user"] })]))
     ).toEqual([
       "CREATE POLICY item_public_read ON public.item AS PERMISSIVE FOR SELECT TO authenticated, simetra_command USING (true);",
+    ])
+  })
+
+  it("public read for the user with only a membership source checks the session user", async () => {
+    // Друга гілка `hasSessionUser`: без «Користувачів» `current_user_id()` дає
+    // прийняте джерело членства (`sub` і є id користувача), тож умова та сама.
+    const source = (await compile(adoptedSourcesDomain())).model!.contracts
+      .membershipSources[0]!
+    expect(
+      policySql(
+        await units([contract({ publicRead: ["user"] })], {
+          ...NO_RIGHTS,
+          membershipSources: [source],
+        })
+      )
+    ).toEqual([
+      "CREATE POLICY item_public_read ON public.item AS PERMISSIVE FOR SELECT TO authenticated, simetra_command USING ((SELECT simetra.current_user_id()) IS NOT NULL);",
     ])
   })
 

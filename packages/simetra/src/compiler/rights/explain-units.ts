@@ -250,8 +250,13 @@ function branch(
     analysisGate(contracts, request),
     // `p_user` мусить належати скоупу рядка (спека прав §5.1): адміністратор A не
     // дізнається фактів користувача, що належить лише B. Рядок `publicRead`
-    // видно кожному — пояснення фактів `p_user` не розкриває.
-    ...(scope !== undefined && !publicRead
+    // видно кожному — пояснення фактів `p_user` не розкриває; крім
+    // `authenticated`: його `carrier_match` — дійсність `p_user`, і без цієї
+    // перевірки адміністратор A дізнався б, чи існує й чи дійсний користувач B.
+    // Нескоуплений об'єкт питає лише глобальний адміністратор, якому видно
+    // всіх користувачів.
+    ...(scope !== undefined &&
+    (!publicRead || publicReadNeedsUser(access, context.sessionUser))
       ? [
           `EXISTS (SELECT 1 FROM ${call(F.scopesOf, [USER])} s WHERE s.scope_kind_id = ${uuidLiteral(scope.scopeKindId)} AND s.scope = ${row(scope.carrier)})`,
         ]
