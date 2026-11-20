@@ -5,7 +5,7 @@ import {
   type Project,
 } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
-import { grantTargetKeys, ownsTarget } from "../function-execute"
+import { ownsTarget } from "../function-execute"
 import type { ParsedObject } from "../stages/files"
 import {
   closedModuleOwners,
@@ -14,6 +14,7 @@ import {
 } from "./closed-forms"
 import type { DeclaredFunction } from "./declarations"
 import { grantRole } from "./execute-grants"
+import { PUBLIC, grantFacts, privilegedRoles } from "./grant-facts"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 import { reachableUnits, relationReads } from "./reads"
@@ -21,8 +22,6 @@ import { functionIdentity, type VerbatimUnit } from "./units"
 
 /** Що читає повз права викликача: функція, подання чи матеріалізоване подання. */
 export type DefinerReadsForm = "function" | "view" | "materializedView"
-
-const PUBLIC = "PUBLIC"
 
 /**
  * Клас «RPC читання повз RLS» (платформна спека §6.7, Р21, Р30):
@@ -415,93 +414,4 @@ function targetOf(unit: VerbatimUnit): (key: string) => boolean {
   }
   const own = `table|${unit.schema}.${unit.name}`
   return (key) => key === own
-}
-
-/** Дослівний `GRANT`/`REVOKE` на функцію чи відношення. */
-interface GrantFact {
-  keys: readonly string[]
-  grant: boolean
-  /** `REVOKE GRANT OPTION FOR` — сам привілей лишається. */
-  optionOnly: boolean
-  /** Отримувачі: `PUBLIC` чи ім'я ролі. */
-  roles: ReadonlySet<string>
-  /** Привілеї; порожньо — `ALL`. `columns` — лише на колонки. */
-  privileges: readonly { name: string; columns: boolean }[]
-}
-
-interface GrantTree {
-  is_grant?: boolean
-  grant_option?: boolean
-  grantees?: { RoleSpec?: { roletype?: string; rolename?: string } }[]
-  privileges?: { AccessPriv?: { priv_name?: string; cols?: unknown[] } }[]
-}
-
-function grantFacts(
-  units: readonly VerbatimUnit[],
-  parse: SqlParser
-): GrantFact[] {
-  return units.flatMap((unit) => {
-    const stmt = (unit.tree as { GrantStmt?: GrantTree }).GrantStmt
-    const keys = grantTargetKeys(unit, parse)
-    if (stmt === undefined || keys.length === 0) return []
-    const grant = stmt.is_grant === true
-    return [
-      {
-        keys,
-        grant,
-        optionOnly: !grant && stmt.grant_option === true,
-        roles: new Set(
-          (stmt.grantees ?? []).flatMap(({ RoleSpec: spec }) =>
-            spec?.roletype === "ROLESPEC_PUBLIC"
-              ? [PUBLIC]
-              : spec?.roletype === "ROLESPEC_CSTRING" &&
-                  spec.rolename !== undefined
-                ? [spec.rolename]
-                : []
-          )
-        ),
-        privileges: (stmt.privileges ?? []).map(({ AccessPriv: priv }) => ({
-          name: priv?.priv_name ?? "all",
-          columns: (priv?.cols ?? []).length > 0,
-        })),
-      },
-    ]
-  })
-}
-
-/**
- * Хто може мати привілей (платформна спека §6.7): `PUBLIC` — без явного відкликання від
- * `PUBLIC` чи з явним грантом йому (Postgres дає `PUBLIC` `EXECUTE` функцій);
- * роль API — так само щодо себе, або через `PUBLIC` (провайдер дає ролям API
- * привілеї типовими привілеями схеми). `grantedRoles` (роль команд) типових
- * привілеїв не мають, тож мають привілей лише через `PUBLIC` чи явний грант.
- * Типові привілеї не моделюються, а
- * порядок операторів — теж (грант перемагає): для попередження надлишок
- * безпечніший за пропуск. Відкликання лише на колонки чи лише права передачі
- * привілею не прибирає.
- */
-function privilegedRoles(
-  target: (key: string) => boolean,
-  privilege: "execute" | "select",
-  grants: readonly GrantFact[],
-  apiRoles: readonly string[],
-  grantedRoles: readonly string[] = []
-): string[] {
-  const covers = (fact: GrantFact) =>
-    fact.privileges.length === 0 ||
-    fact.privileges.some(
-      (p) =>
-        (p.name === privilege || p.name === "all") && (fact.grant || !p.columns)
-    )
-  const facts = grants.filter((f) => f.keys.some(target) && covers(f))
-  const granted = (role: string) =>
-    facts.some((f) => f.grant && f.roles.has(role))
-  const revoked = (role: string) =>
-    facts.some((f) => !f.grant && !f.optionOnly && f.roles.has(role))
-  const publicHas = granted(PUBLIC) || !revoked(PUBLIC)
-  return [
-    ...(publicHas ? [PUBLIC] : []),
-    ...apiRoles.filter((role) => publicHas || granted(role) || !revoked(role)),
-    ...grantedRoles.filter((role) => publicHas || granted(role)),
-  ]
 }
