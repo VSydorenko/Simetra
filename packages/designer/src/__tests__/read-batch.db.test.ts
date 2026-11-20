@@ -713,30 +713,33 @@ describe("read batch with known over the engine target", () => {
     expect(value.snapshot).toEqual({ userId: null, scopeSets: [], rights: [] })
   })
 
-  it("the rights part alone, as an inProcess envelope, answers the wire value", async () => {
+  it("the rights part alone answers the same wire value under inProcess and as an HTTP envelope", async () => {
     const handler = createDataHandler(await runtime())
-    const response = await handler(
-      env.me.session,
-      {
-        subject: env.me.session.sub,
-        request: { type: "read", items: [{ type: "rights" }] },
-      },
-      { inProcess: true }
-    )
-    expect(response.ok, JSON.stringify(response)).toBe(true)
-    const { epoch, items } = (
-      response as {
-        value: {
-          epoch: string
-          items: { ok: true; value: { rightsVersion: string } }[]
-        }
-      }
-    ).value
-    expect(epoch).toMatch(HEX64)
-    expect(items[0]!.value.rightsVersion).toMatch(HEX64)
-    expect(items[0]!.value).toMatchObject({
+    const request = {
+      subject: env.me.session.sub,
+      request: { type: "read", items: [{ type: "rights" }] },
+    }
+    type Value = {
+      epoch: string
+      items: { ok: true; value: { rightsVersion: string } }[]
+    }
+    const call = async (origin: Parameters<typeof handler>[2]) => {
+      const response = await handler(env.me.session, request, origin)
+      expect(response.ok, JSON.stringify(response)).toBe(true)
+      return (response as unknown as { value: Value }).value
+    }
+    const inProcess = await call({ inProcess: true })
+    const http = await call({
+      secFetchSite: "same-origin",
+      origin: "https://app.example",
+      expectedOrigin: "https://app.example",
+    })
+    expect(inProcess.epoch).toMatch(HEX64)
+    expect(inProcess.items[0]!.value.rightsVersion).toMatch(HEX64)
+    expect(inProcess.items[0]!.value).toMatchObject({
       snapshot: { userId: env.me.session.sub },
     })
+    expect(http.items[0]).toEqual(inProcess.items[0])
   })
 
   it("the wire form of a read part answers markers and a 64 hex epoch", async () => {

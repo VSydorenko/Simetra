@@ -603,6 +603,7 @@ describe("createDataHandler: steps 4–6", () => {
           VERSION_PART,
           { type: "rights" },
           queryPart({}),
+          { type: "future" },
         ]),
         HTTP
       )
@@ -619,6 +620,11 @@ describe("createDataHandler: steps 4–6", () => {
     expect(items[3]).toStrictEqual({
       ok: true,
       value: { rows: [{ id: ID, version: "2", code: "R" }] },
+    })
+    // Невідомий тип частини — новіший клієнт: відмова лише їй, не stale-client.
+    expect(items[4]).toMatchObject({
+      ok: false,
+      error: { code: "command.invalid" },
     })
     expect(calls.readParts).toBe(1)
     // У рантайм ідуть лише частини `rights` і `query`, останній — без `known`.
