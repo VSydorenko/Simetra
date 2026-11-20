@@ -425,6 +425,16 @@ describe("buildAccessUnits", () => {
     )
   })
 
+  it("public read for the user without a session user layer opens all rows", async () => {
+    // Без «Користувачів» і джерела членства `current_user_id()` немає, і
+    // дійсність користувача судити нічим (#318).
+    expect(
+      policySql(await units([contract({ publicRead: ["user"] })]))
+    ).toEqual([
+      "CREATE POLICY item_public_read ON public.item AS PERMISSIVE FOR SELECT TO authenticated, simetra_command USING (true);",
+    ])
+  })
+
   it("unscoped table without public read has grants only", async () => {
     const result = await units([contract()])
     expect(result.filter((u) => u.class === "policy")).toEqual([])
@@ -1094,7 +1104,8 @@ describe("rights write policies", () => {
     // відкриті; без цього запис з `WHERE` чи `RETURNING` не бачив би рядків.
     const policies = policiesOf(domain, BULLETIN_TABLE)
     expect(policies.get(`${BULLETIN_TABLE}_public_read`)).toBe(
-      `CREATE POLICY ${BULLETIN_TABLE}_public_read ON public.${BULLETIN_TABLE} AS PERMISSIVE FOR SELECT TO authenticated, simetra_command USING (true);`
+      // `authenticated` — лише дійсному користувачу (#318).
+      `CREATE POLICY ${BULLETIN_TABLE}_public_read ON public.${BULLETIN_TABLE} AS PERMISSIVE FOR SELECT TO authenticated, simetra_command USING ((SELECT simetra.current_user_id()) IS NOT NULL);`
     )
     for (const dml of DMLS) {
       expect(policies.has(`${BULLETIN_TABLE}_scope_${dml}`)).toBe(true)

@@ -16,7 +16,7 @@ import {
   role,
   systemCatalog,
 } from "../../src/compiler/__tests__/fixtures/rights"
-import { claimsFor } from "./connection"
+import { claimsFor, queryAs } from "./connection"
 import { testProvider } from "./profile"
 import { inMaintenance } from "./rights-seed"
 
@@ -183,6 +183,11 @@ export async function compiled(scenario: Scenario): Promise<CompiledModel> {
       publicRead: "anon",
     }),
     "catalogs/Secret/Secret.meta.json": catalog("Secret", { scope: "none" }),
+    // `authenticated` — лише дійсному користувачу (#318).
+    "catalogs/Notice/Notice.meta.json": catalog("Notice", {
+      scope: "none",
+      publicRead: "authenticated",
+    }),
     ...orgRights(),
   }
   // Схему `app` ролям, яким вид дає таблиці, відкриває платформа: `USAGE`
@@ -278,4 +283,32 @@ export async function hasPrivilege(
       [role, table, privilege]
     )
   ).rows[0]!.ok
+}
+
+/**
+ * `publicRead: authenticated` (спека прав §5.2, #318): дійсний користувач
+ * читає всі рядки, а той самий користувач, позначений недійсним, — жодного,
+ * як гість. Тіло спільне для обох стеків.
+ */
+export async function authenticatedRead(
+  client: pg.Client,
+  schema: string,
+  user: string
+): Promise<{ valid: unknown; invalid: unknown }> {
+  await client.query(
+    `INSERT INTO ${schema}.notice (id, code) VALUES (gen_random_uuid(), 'a'), (gen_random_uuid(), 'b')`
+  )
+  const read = () =>
+    queryAs(
+      client,
+      "user",
+      claimsFor("user", user),
+      `SELECT code FROM ${schema}.notice ORDER BY code`
+    )
+  const valid = await read()
+  await client.query(
+    `UPDATE ${schema}.users SET invalid = true WHERE id = $1`,
+    [user]
+  )
+  return { valid, invalid: await read() }
 }

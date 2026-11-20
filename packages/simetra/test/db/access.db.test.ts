@@ -12,6 +12,7 @@ import { signUp } from "./auth"
 import { claimsFor, queryAs, testRoleFor, withRollback } from "./connection"
 import {
   PRIVILEGES,
+  authenticatedRead,
   SCENARIOS,
   claimsOf,
   compiled,
@@ -117,6 +118,17 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
           role
         ).toEqual({ rows: [{ code: "EUR" }, { code: "UAH" }] })
       }
+    })
+  })
+
+  it("public read on authenticated: a valid user reads, an invalid one does not", async () => {
+    await withRollback(async (client) => {
+      await deploy(client)
+      const alice = await signUp(client)
+      expect(await authenticatedRead(client, schema, alice)).toEqual({
+        valid: { rows: [{ code: "a" }, { code: "b" }] },
+        invalid: { rows: [] },
+      })
     })
   })
 

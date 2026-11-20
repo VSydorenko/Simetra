@@ -30,12 +30,14 @@ import {
   type RightsContract,
 } from "./contracts"
 import { compareStrings } from "./diagnostics"
+import { CURRENT_USER } from "./membership-functions"
 import { commandWriteColumns } from "./rights/command-columns"
 import { COMMAND_FUNCTIONS } from "./rights/command-units"
 import {
   RIGHTS_FUNCTIONS,
   call,
   hasRightsFunctions,
+  hasSessionUser,
   hasVisibleUsers,
   uuidLiteral,
 } from "./rights/functions"
@@ -461,6 +463,7 @@ export function buildAccessUnits(
   const bounded = [apiRoles.user, PLATFORM_ROLES.command]
   const rightsOn = hasRightsFunctions(contracts, provider)
   const visibleUsers = hasVisibleUsers(contracts, provider)
+  const sessionUser = hasSessionUser(contracts, provider)
   const rightsById = new Map(contracts.rights.map((c) => [c.objectId, c]))
   const policyLabel = rightsPolicyLabel(contracts)
   return access
@@ -517,6 +520,12 @@ export function buildAccessUnits(
         // відкриті (спека прав §5.2): без неї `UPDATE … WHERE`, `DELETE … WHERE` і
         // `INSERT … RETURNING` не бачили б рядків, і політики запису були б
         // мертві. Від функцій прав читання від імені користувача не залежить.
+        // `authenticated` — лише дійсному користувачу: сесія, чий користувач
+        // недійсний чи не прив'язаний (`current_user_id()` — NULL), не
+        // відрізняється від гостя, а гостю цей об'єкт закритий. Без функції
+        // користувача (ні «Користувачів», ні джерела членства) дійсність
+        // судити нічим — тоді, як і досі, роль запиту користувача.
+        const guestToo = contract.publicRead.some((p) => p !== "user")
         policies.push(
           policy(
             names.publicRead,
@@ -527,7 +536,12 @@ export function buildAccessUnits(
               ...contract.publicRead.map((purpose) => apiRoles[purpose]),
               PLATFORM_ROLES.command,
             ],
-            { using: "true" }
+            {
+              using:
+                guestToo || !sessionUser
+                  ? "true"
+                  : `${CURRENT_USER} IS NOT NULL`,
+            }
           )
         )
       }
