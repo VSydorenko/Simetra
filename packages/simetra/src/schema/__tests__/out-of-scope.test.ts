@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
+import { verbatimUnits } from "../../compiler/compile"
 import { engineScope } from "simetra/schema"
 import {
   acceptDebt,
@@ -249,5 +250,46 @@ describe("the platform layer joins the boundary by its own schemas", () => {
       "catalogs/Currency/Currency.meta.json": catalog("Currency"),
     })
     expect(scope.schemas).toEqual(["app", "simetra"])
+  })
+})
+
+describe("the engine boundary judges a trigger on the identity source on its own", () => {
+  // Компілятор ці форми відмовляє (Р4а, Р6), тож одиниці подаються межі двигуна
+  // без нього: `engine.out-of-scope` — власна межа, а не наслідок відмови.
+  async function triggerOutOfScope(trigger: string): Promise<string[]> {
+    const files = (sql: string) =>
+      metaFiles({
+        "project.meta.json": project({ defaultSchema: "app" }),
+        "custom-tables/Note/Note.meta.json": customTable("Note"),
+        "sql/app/units.sql": sql,
+      })
+    const base = await compile(await acceptDebt(files("")))
+    expect(base.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    const units = await verbatimUnits(files(trigger))
+    const { diagnostics } = await engineScope({
+      ...base.model!,
+      sqlUnits: [...base.model!.sqlUnits, ...units],
+    })
+    return diagnostics.map((d) => `${d.code} ${String(d.params.object)}`)
+  }
+
+  it.each([
+    {
+      name: "a function of the provider schema in EXECUTE FUNCTION",
+      sql: "CREATE TRIGGER probe AFTER UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION auth.probe_on_user();\n",
+      expected: ["engine.out-of-scope trigger:auth.users.probe"],
+    },
+    {
+      name: "a function of the provider schema in WHEN",
+      sql: "CREATE TRIGGER probe AFTER UPDATE ON auth.users FOR EACH ROW WHEN (auth.probe_ok(new.email)) EXECUTE FUNCTION app.on_user();\n",
+      expected: ["engine.out-of-scope trigger:auth.users.probe"],
+    },
+    {
+      name: "a BEFORE trigger on a builtin function stays inside the boundary",
+      sql: "CREATE TRIGGER probe BEFORE UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();\n",
+      expected: [],
+    },
+  ])("$name", async ({ sql, expected }) => {
+    expect(await triggerOutOfScope(sql)).toEqual(expected)
   })
 })
