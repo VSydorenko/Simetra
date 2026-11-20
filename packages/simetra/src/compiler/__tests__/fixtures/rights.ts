@@ -494,6 +494,14 @@ export function membershipTable(overrides: Record<string, unknown> = {}) {
     primaryKey: { columns: ["id"] },
     uniques: [{ columns: ["orgId", "id"] }],
     scopeColumn: "orgId",
+    // Носій скоупу — FK на ключ кореня виду (Р8).
+    foreignKeys: [
+      {
+        name: "membership_org_fk",
+        columns: ["orgId"],
+        references: { object: ref("Catalog", "Organization"), key: "ref" },
+      },
+    ],
     ...overrides,
   }
 }
@@ -2149,6 +2157,14 @@ export function promotableTaskNote(): Layer {
         column(6599, "orgId", "org_id", "UUID"),
       ],
       primaryKey: { name: "task_notes_pkey", columns: ["id"] },
+      // Носій скоупу — FK на ключ кореня виду (Р8).
+      foreignKeys: [
+        {
+          name: "task_notes_org_fk",
+          columns: ["orgId"],
+          references: { object: ref("Catalog", "Organization"), key: "ref" },
+        },
+      ],
     },
   }
 }
@@ -2761,6 +2777,12 @@ export function snapshotSourcesDomain(): Map<string, string> {
         column(6888, "badge", "badge_id", "UUID"),
       ],
       foreignKeys: [
+        // Носій скоупу — FK на ключ кореня виду (Р8).
+        {
+          name: "user_badge_org_fk",
+          columns: ["orgId"],
+          references: { object: ref("Catalog", "Organization"), key: "ref" },
+        },
         {
           name: "user_badge_user_fk",
           columns: ["user"],

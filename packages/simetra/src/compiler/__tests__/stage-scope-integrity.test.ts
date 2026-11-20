@@ -609,6 +609,185 @@ describe("стадія 4: скоуп", () => {
     expect(result.ok).toBe(true)
   })
 
+  describe("scope carrier of a custom table (Р8)", () => {
+    const col = (n: number, name: string, physicalName: string) => ({
+      id: uuid(n),
+      name,
+      physicalName,
+      type: "UUID",
+      notNull: true,
+    })
+    const carrier = (scope: string, foreignKeys: unknown[], extra = {}) =>
+      customTable("UserSettings", {
+        scope,
+        scopeColumn: "owner",
+        columns: [col(980, "id", "id"), col(981, "owner", "owner")],
+        primaryKey: { columns: ["id"] },
+        foreignKeys,
+        ...extra,
+      })
+    const orgFk = (columns: string[] = ["owner"]) => ({
+      name: "owner_fk",
+      columns,
+      references: {
+        object: { kind: "Catalog", name: "Organization" },
+        key: "ref",
+      },
+    })
+    const userFk = (column = "id") => ({
+      name: "owner_fk",
+      columns: ["owner"],
+      references: {
+        external: { schema: "auth", table: "users", columns: [column] },
+      },
+    })
+    const failing = (code: string[]) => [
+      [...code, "error", SETTINGS, "/scopeColumn"],
+    ]
+    const NO_FK = ["scope.custom-table-column"]
+
+    it("accepts a foreign key to the root key of an object root", async () => {
+      const result = await compileScoped({
+        [SETTINGS]: carrier("org", [orgFk()]),
+      })
+      expectClean(result, { allow: ["rights.scope-kind-unread"] })
+    })
+
+    it("accepts a foreign key to the external root column", async () => {
+      const result = await compileScoped({
+        [SETTINGS]: carrier("user", [userFk()]),
+      })
+      expectClean(result, { allow: ["rights.scope-kind-unread"] })
+    })
+
+    it("accepts several foreign keys when one of them is to the root", async () => {
+      const result = await compileScoped({
+        [SETTINGS]: carrier("org", [
+          {
+            name: "owner_user_fk",
+            columns: ["owner"],
+            references: {
+              external: { schema: "auth", table: "users", columns: ["id"] },
+            },
+          },
+          orgFk(),
+        ]),
+      })
+      expectClean(result, { allow: ["rights.scope-kind-unread"] })
+    })
+
+    it.each([
+      ["no foreign keys", "org", []],
+      ["a foreign key of another column", "org", [orgFk(["id"])]],
+      [
+        "a composite foreign key",
+        "user",
+        [
+          {
+            name: "owner_fk",
+            columns: ["owner", "id"],
+            references: {
+              external: {
+                schema: "auth",
+                table: "users",
+                columns: ["id", "email"],
+              },
+            },
+          },
+        ],
+      ],
+      [
+        "a foreign key to another table",
+        "org",
+        [
+          {
+            name: "owner_fk",
+            columns: ["owner"],
+            references: {
+              object: { kind: "Catalog", name: "Counterparty" },
+              key: "ref",
+            },
+          },
+        ],
+      ],
+      ["a foreign key to another external column", "user", [userFk("email")]],
+      ["a foreign key to the other scope kind root", "user", [orgFk()]],
+    ])("rejects %s", async (_name, scope, foreignKeys) => {
+      const result = await compileScoped({
+        [CP]: counterparty(),
+        [SETTINGS]: carrier(scope, foreignKeys),
+      })
+      expect(scopeDiagnostics(result)).toEqual(failing(NO_FK))
+      expect(
+        result.diagnostics.find((d) => d.code === "scope.custom-table-column")
+          ?.params
+      ).toMatchObject({ noRootForeignKey: 1, scope })
+    })
+
+    it("accepts a foreign key to the key of a CustomTable root", async () => {
+      const root = "custom-tables/Region/Region.meta.json"
+      const regionRoot = customTable("Region", {
+        scope: "org",
+        columns: [col(990, "id", "id")],
+        primaryKey: { columns: ["id"] },
+      })
+      const files = (columns: string[]) => ({
+        [PROJECT]: projectWithRoot(0, "CustomTable", "Region"),
+        [root]: regionRoot,
+        [SETTINGS]: carrier("org", [
+          {
+            name: "owner_fk",
+            columns: ["owner"],
+            references: {
+              object: { kind: "CustomTable", name: "Region" },
+              columns,
+            },
+          },
+        ]),
+      })
+      expectClean(await compile(metaFiles(files(["id"]))), {
+        allow: ["rights.scope-kind-unread"],
+      })
+      // Не ключ кореня: FK на іншу колонку кореня не носій скоупу.
+      const other = await compile(
+        metaFiles({
+          ...files(["id"]),
+          [root]: customTable("Region", {
+            scope: "org",
+            columns: [col(990, "id", "id"), col(991, "code", "code")],
+            primaryKey: { columns: ["id"] },
+            uniques: [{ columns: ["code"] }],
+          }),
+          [SETTINGS]: files(["code"])[SETTINGS],
+        })
+      )
+      expect(scopeDiagnostics(other)).toEqual(failing(NO_FK))
+    })
+
+    it("rejects scopeColumn on the root of its scope kind", async () => {
+      const root = "custom-tables/Region/Region.meta.json"
+      const result = await compile(
+        metaFiles({
+          [PROJECT]: projectWithRoot(0, "CustomTable", "Region"),
+          [root]: customTable("Region", {
+            scope: "org",
+            scopeColumn: "id",
+            columns: [col(990, "id", "id")],
+            primaryKey: { columns: ["id"] },
+            foreignKeys: [],
+          }),
+        })
+      )
+      expect(scopeDiagnostics(result)).toEqual([
+        ["scope.custom-table-column", "error", root, "/scopeColumn"],
+      ])
+      expect(
+        result.diagnostics.find((d) => d.code === "scope.custom-table-column")
+          ?.params
+      ).toMatchObject({ root: 1 })
+    })
+  })
+
   describe("reference to a scoped custom table", () => {
     const LEDGER = "custom-tables/Ledger/Ledger.meta.json"
     const ledger = (uniques: unknown[], overrides = {}) =>

@@ -1900,13 +1900,21 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         ? "Scoped CustomTable must name its scope column in scopeColumn"
         : p.unscoped !== undefined
           ? `scopeColumn "${p.column}" is set, but the table has no scope kind`
-          : `scopeColumn "${p.column}" must be a uuid column`,
+          : p.root !== undefined
+            ? `scopeColumn "${p.column}" is set on the root of its scope kind: the root key is the scope value`
+            : p.noRootForeignKey !== undefined
+              ? `scopeColumn "${p.column}" must be the single column of a foreign key to the root key of scope kind "${p.scope}"`
+              : `scopeColumn "${p.column}" must be a uuid column`,
     uk: (p) =>
       p.column === undefined
         ? "CustomTable зі скоупом має назвати колонку скоупу в scopeColumn"
         : p.unscoped !== undefined
           ? `scopeColumn "${p.column}" задано, але таблиця не має виду скоупу`
-          : `scopeColumn "${p.column}" має бути колонкою uuid`,
+          : p.root !== undefined
+            ? `scopeColumn "${p.column}" задано на корені власного виду скоупу: ключ кореня і є значенням скоупу`
+            : p.noRootForeignKey !== undefined
+              ? `scopeColumn "${p.column}" має бути єдиною колонкою зовнішнього ключа на ключ кореня виду скоупу "${p.scope}"`
+              : `scopeColumn "${p.column}" має бути колонкою uuid`,
   },
   "scope.cross-scope-redundant": {
     en: () => "crossScope has no effect: the reference is allowed without it",
@@ -3379,26 +3387,47 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Задайте коротше physicalName самі; воно призначається раз і більше не змінюється.",
     },
   },
-  // Дві причини одного коду: зламаний вхідний каталог або `id` у вхідних
-  // даних операції (`at` — pointer у вході). Обидві — «вхід непридатний».
+  // Причини одного коду: зламаний вхідний каталог, `id` у вхідних даних
+  // операції (`at` — pointer у вході) або хибний `scopes` мутації `add`
+  // (`scopes` — причина, `at` — pointer, `table` — ключ). Усі — «вхід непридатний».
   "operation.input-invalid": {
     en: (p) =>
-      p.at === undefined
-        ? "The operation needs metadata that compiles without errors; nothing was changed"
-        : `The operation input must not carry "id" (at ${p.at}): ids are assigned by the operation; nothing was changed`,
+      p.scopes !== undefined
+        ? `The scopes input ${
+            p.scopes === "target"
+              ? "is allowed only with the scopeKinds collection of Project"
+              : p.scopes === "table-unknown"
+                ? `names ${p.table}, which is not a CustomTable of the project`
+                : `names ${p.table}, which already declares its scope: changing a scope is another operation`
+          } (at ${p.at}); nothing was changed`
+        : p.at === undefined
+          ? "The operation needs metadata that compiles without errors; nothing was changed"
+          : `The operation input must not carry "id" (at ${p.at}): ids are assigned by the operation; nothing was changed`,
     uk: (p) =>
-      p.at === undefined
-        ? "Операція потребує метаданих, що компілюються без помилок; нічого не змінено"
-        : `Вхід операції не повинен містити "id" (у ${p.at}): id призначає операція; нічого не змінено`,
+      p.scopes !== undefined
+        ? `Вхід scopes ${
+            p.scopes === "target"
+              ? "дозволено лише з колекцією scopeKinds проєкту"
+              : p.scopes === "table-unknown"
+                ? `називає ${p.table}, якої немає серед CustomTable проєкту`
+                : `називає ${p.table}, що вже оголошує скоуп: зміна скоупу — інша операція`
+          } (у ${p.at}); нічого не змінено`
+        : p.at === undefined
+          ? "Операція потребує метаданих, що компілюються без помилок; нічого не змінено"
+          : `Вхід операції не повинен містити "id" (у ${p.at}): id призначає операція; нічого не змінено`,
     hint: {
       en: (p) =>
-        p.at === undefined
-          ? "Fix the errors reported with this diagnostic (simetra fix handles missing ids and physical names), then repeat the operation."
-          : "Remove the id from the input; a new element gets a fresh id that is never reused.",
+        p.scopes !== undefined
+          ? "Use scopes only when adding a scope kind to Project, and name only CustomTables that have no scope yet."
+          : p.at === undefined
+            ? "Fix the errors reported with this diagnostic (simetra fix handles missing ids and physical names), then repeat the operation."
+            : "Remove the id from the input; a new element gets a fresh id that is never reused.",
       uk: (p) =>
-        p.at === undefined
-          ? "Виправте помилки, наведені поряд із цією діагностикою (відсутні id і фізичні імена лагодить simetra fix), і повторіть операцію."
-          : "Приберіть id із входу; новий елемент отримує свіжий id, який ніколи не перевикористовується.",
+        p.scopes !== undefined
+          ? "Використовуйте scopes лише при додаванні виду скоупу в проєкт і називайте лише CustomTable без скоупу."
+          : p.at === undefined
+            ? "Виправте помилки, наведені поряд із цією діагностикою (відсутні id і фізичні імена лагодить simetra fix), і повторіть операцію."
+            : "Приберіть id із входу; новий елемент отримує свіжий id, який ніколи не перевикористовується.",
     },
   },
   "operation.target-not-found": {
