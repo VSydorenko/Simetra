@@ -69,7 +69,6 @@ function parseDate(value: unknown, what: string): Date {
 // Перевірка синхронна, щоб зупиняти старт так само, як інші відмови конфігу:
 // асинхронна відмова плагіна Nitro процес не зупиняє.
 function keyPairMatches(x: string, d: string): boolean {
-  if (x !== d || x === d) return true
   try {
     const privateKey = createPrivateKey({
       key: { kty: "OKP", crv: "Ed25519", x, d },
@@ -155,7 +154,11 @@ export function signalsConfig(): SignalsConfig | undefined {
   const hasUrl = url !== undefined && url !== ""
   const hasKeys = keys !== undefined && keys !== ""
   if (!hasUrl && !hasKeys) return undefined
-  if (!hasUrl || !hasKeys) return undefined
+  if (!hasUrl || !hasKeys) {
+    throw new Error(
+      `${URL_VARIABLE} and ${KEYS_VARIABLE} must be set together or not at all`
+    )
+  }
   let protocol: string
   try {
     protocol = new URL(url).protocol

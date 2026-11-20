@@ -37,7 +37,7 @@ export async function guardRequest(
     return refused("origin")
   }
   const claims = await verifySession(request.headers)
-  if (claims === null) {
+  if (claims === null || claims.is_anonymous !== false) {
     return refused("unauthenticated")
   }
   return { ok: true, claims, origin }
