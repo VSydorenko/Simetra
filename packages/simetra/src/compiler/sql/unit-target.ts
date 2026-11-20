@@ -75,35 +75,25 @@ export function unitPlacement(
   return targets.length > 0 ? targets : [{ schema: unit.schema }]
 }
 
-/**
- * Схема функції, яку викликає тригер; некваліфіковане ім'я — `undefined`:
- * його резолвить `search_path` бази, а не текст одиниці.
- */
-export function triggerFunctionSchema(
-  unit: TargetUnit,
-  parse: SqlParser
-): string | undefined {
-  if (unit.class !== "trigger") return undefined
-  for (const stmt of statements(unit, parse))
-    if ("CreateTrigStmt" in stmt) {
-      const names = strings(stmt.CreateTrigStmt.funcname)
-      return names.length > 1 ? names.at(-2) : undefined
-    }
-  return undefined
+/** Функція, яку кличе тригер: у `EXECUTE FUNCTION` чи в умові `WHEN`. */
+export interface TriggerFunctionCall {
+  where: "execute" | "when"
+  schema: string
+  name: string
 }
 
 /**
- * Схеми функцій, які кличе умова `WHEN` тригера, — лише кваліфіковані імена:
- * без схеми функцію знаходить `search_path` тригера, тож у межу вона не
- * потрапляє залежністю схеми. Межу тригера на таблиці провайдера судять
- * усі його функції-залежності (`providerTriggerInBoundarySql`).
+ * Функції, які кличе тригер, — лише кваліфіковані імена: без схеми функцію
+ * знаходить `search_path` бази чи тригера, тож у межу вона не потрапляє
+ * залежністю схеми. Межу тригера на таблиці провайдера судять усі його
+ * функції-залежності (`providerTriggerInBoundarySql`).
  */
-export function triggerWhenFunctionSchemas(
+export function triggerFunctionCalls(
   unit: TargetUnit,
   parse: SqlParser
-): string[] {
+): TriggerFunctionCall[] {
   if (unit.class !== "trigger") return []
-  const found: string[] = []
+  const found: TriggerFunctionCall[] = []
   const walk = (value: unknown): void => {
     if (Array.isArray(value)) {
       value.forEach(walk)
@@ -114,12 +104,26 @@ export function triggerWhenFunctionSchemas(
     if ("FuncCall" in record) {
       const call = record.FuncCall as { funcname?: Node[] }
       const names = strings(call.funcname)
-      if (names.length > 1) found.push(names.at(-2)!)
+      if (names.length > 1)
+        found.push({
+          where: "when",
+          schema: names.at(-2)!,
+          name: names.at(-1)!,
+        })
     }
     Object.values(record).forEach(walk)
   }
   for (const stmt of statements(unit, parse))
-    if ("CreateTrigStmt" in stmt) walk(stmt.CreateTrigStmt.whenClause)
+    if ("CreateTrigStmt" in stmt) {
+      const names = strings(stmt.CreateTrigStmt.funcname)
+      if (names.length > 1)
+        found.push({
+          where: "execute",
+          schema: names.at(-2)!,
+          name: names.at(-1)!,
+        })
+      walk(stmt.CreateTrigStmt.whenClause)
+    }
   return found
 }
 

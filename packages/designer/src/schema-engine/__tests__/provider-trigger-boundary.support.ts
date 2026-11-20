@@ -207,15 +207,10 @@ export function provenBoundaryMatrix(): void {
         })
         const declared = await declaredTrigger(sql)
         expect(declared.errors).toEqual(expectedCompilerErrors(execute, when))
-        // Принята форма: статична межа за схемою функції. На `supabase`
-        // `extensions` — власна схема провайдера, тож `WHEN` з функцією
-        // розширення в ній статично поза межею, хоч читачі бази (член
-        // розширення) тримають тригер у межі.
+        // Принята форма: статична межа судить так само, як читачі бази
+        // (функція оголошеного розширення — у межі)
         if (declared.errors.length === 0)
-          expect(declared.outOfScope).toBe(
-            deps.includes("provider") ||
-              (testProvider() === "supabase" && when === "extension")
-          )
+          expect(declared.outOfScope).toBe(deps.includes("provider"))
       }
     )
   })

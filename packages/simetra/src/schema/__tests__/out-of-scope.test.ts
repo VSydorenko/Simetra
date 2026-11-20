@@ -253,6 +253,10 @@ describe("the platform layer joins the boundary by its own schemas", () => {
   })
 })
 
+// Розширення оголошує модель: його функції — члени, яких читач бази тримає в межі
+const EXT =
+  "CREATE EXTENSION IF NOT EXISTS fuzzystrmatch WITH SCHEMA extensions;\n"
+
 describe("the engine boundary judges a trigger on the identity source on its own", () => {
   // Компілятор ці форми відмовляє (Р4а, Р6), тож одиниці подаються межі двигуна
   // без нього: `engine.out-of-scope` — власна межа, а не наслідок відмови.
@@ -268,7 +272,10 @@ describe("the engine boundary judges a trigger on the identity source on its own
     const units = await verbatimUnits(files(trigger))
     const { diagnostics } = await engineScope({
       ...base.model!,
-      sqlUnits: [...base.model!.sqlUnits, ...units],
+      sqlUnits: [
+        ...base.model!.sqlUnits,
+        ...units.map((u) => ({ ...u, module: "" })),
+      ],
     })
     return diagnostics.map((d) => `${d.code} ${String(d.params.object)}`)
   }
@@ -288,6 +295,26 @@ describe("the engine boundary judges a trigger on the identity source on its own
       name: "a BEFORE trigger on a builtin function stays inside the boundary",
       sql: "CREATE TRIGGER probe BEFORE UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();\n",
       expected: [],
+    },
+    {
+      name: "a function of a declared extension in WHEN is a member, inside the boundary",
+      sql: `${EXT}CREATE TRIGGER probe AFTER UPDATE ON auth.users FOR EACH ROW WHEN (extensions.soundex(new.email) <> '') EXECUTE FUNCTION app.on_user();\n`,
+      expected: [],
+    },
+    {
+      name: "a function of a declared extension in EXECUTE FUNCTION is a member, inside the boundary",
+      sql: `${EXT}CREATE TRIGGER probe BEFORE UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION extensions.moddatetime('updated_at');\n`,
+      expected: [],
+    },
+    {
+      name: "the same schema, a function that is no extension member, is outside",
+      sql: `${EXT}CREATE TRIGGER probe AFTER UPDATE ON auth.users FOR EACH ROW WHEN (extensions.app_made(new.email)) EXECUTE FUNCTION app.on_user();\n`,
+      expected: ["engine.out-of-scope trigger:auth.users.probe"],
+    },
+    {
+      name: "a known extension function without a declared extension is outside",
+      sql: "CREATE TRIGGER probe AFTER UPDATE ON auth.users FOR EACH ROW WHEN (extensions.soundex(new.email) <> '') EXECUTE FUNCTION app.on_user();\n",
+      expected: ["engine.out-of-scope trigger:auth.users.probe"],
     },
   ])("$name", async ({ sql, expected }) => {
     expect(await triggerOutOfScope(sql)).toEqual(expected)
