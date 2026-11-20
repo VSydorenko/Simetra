@@ -210,6 +210,16 @@ describe("readAllowed", () => {
       snap([row({ level: "container", container: OTHER, scope: OTHER })]),
       false,
     ],
+    [
+      "скоуплений: global зі скоупом у рядку не відкриває",
+      snap([row({ level: "global" })]),
+      false,
+    ],
+    [
+      "скоуплений: everyUser зі скоупом у рядку не відкриває",
+      snap([row({ level: "everyUser" })]),
+      false,
+    ],
     ["скоуплений: без read", snap([row({ action: "update" })]), false],
     ["скоуплений: чужа мітка", snap([row({ object: "x" })]), false],
     ["скоуплений: рядок чужого скоупу", snap([row({ scope: OTHER })]), false],
