@@ -397,6 +397,15 @@ export function customTables(
         ],
         primaryKey: { name: "partner_note_pk", columns: ["id"] },
         foreignKeys: [
+          // Носій скоупу — FK на ключ кореня виду (Р8).
+          {
+            name: "partner_note_org_fk",
+            columns: ["org"],
+            references: {
+              object: { kind: "Catalog", name: "Organization" },
+              key: "ref",
+            },
+          },
           {
             name: "partner_note_partner_fk",
             columns: ["org", "partner"],

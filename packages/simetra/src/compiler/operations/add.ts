@@ -54,7 +54,9 @@ export async function addElement(
   // Імена об'єктів унікальні лише в межах виду, тож шукаємо за видом і ім'ям.
   const tables = new Map<string, { file: string }>()
   if (input.scopes !== undefined) {
-    const refusal = (scopes: string, table?: string) =>
+    // Не `refusal(`: це причина параметра діагностики, а не відмова T3
+    // (`core-error-source.test.ts` стереже саме літерали відмов T3).
+    const scopesRefused = (scopes: string, table?: string) =>
       refused(files, [
         diagnostic("operation.input-invalid", "", "", {
           scopes,
@@ -63,16 +65,16 @@ export async function addElement(
         }),
       ])
     if (input.target.kind !== "Project" || input.collection !== "scopeKinds") {
-      return refusal("target")
+      return scopesRefused("target")
     }
     for (const [table] of scopes) {
       const object = clean.model.objects.find(
         (o) => o.kind === "CustomTable" && o.name === table
       )
-      if (object === undefined) return refusal("table-unknown", table)
+      if (object === undefined) return scopesRefused("table-unknown", table)
       tables.set(table, object)
       const raw = JSON.parse(files.get(object.file)!) as Json
-      if (raw.scope !== undefined) return refusal("table-scoped", table)
+      if (raw.scope !== undefined) return scopesRefused("table-scoped", table)
     }
   }
 
