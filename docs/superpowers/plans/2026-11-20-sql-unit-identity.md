@@ -75,9 +75,9 @@ Issue #297, віха М4. Автор і (після сигналу архіте�
 | Р5 | **Ключі просторів імен і колізій** (`pgNamespaceKeys` для `rel`/`type`/`proc`, `functionCollisions` у `stages/integrity.ts`) будуються тим самим правилом: зараз `"a.b".c` і `a."b.c"` дають один ключ `rel`. | none |
 | Р6 | **Локальні кортежі Д1.** `tupleKey` (`JSON.stringify`) → `qualifiedName(schema, name)` з `identity.ts`. Структуровані порівняння полів (`sameKey`, `RepairKey` і `newRepairErrors`, фільтр форм у `executeTargets`) лишаються: вони порівнюють сирі частини, не склеєний рядок, і `RepairKey` — рішення Codex-аудиту Д1. | none |
 | Р7 | **Збережені ідентичності поза marker** — `sql-debt.json` проєкту, журнал промоції, `resultCatalog` артефакту плану (план, зібраний до оновлення, на таблиці у верхньому регістрі дає `apply.backfill-triggers-changed`) — без міграції (немає споживачів): стара ідентичність дає гучне `sql.debt-stale` / `promote.mapping-unknown`, тихого збігу немає (перевірено аудитом). У репо `sql-debt.json` немає (`git ls-files '*sql-debt.json'`; перевірка задачі 0). | none |
-| Р10 | **Ідентичність у marker — похідна, не збережена правда.** `driftGate` (`schema/apply/drift.ts`) порівнює `marker.catalog` з поточною моделлю через `diffCatalogModels` за `u.identity` (`model/physical/catalog.ts`); стара форма дала б хибний `apply.drift` на незмінній цілі, і оператор звикав би приймати дрейф наосліп. Правило: одна чиста функція «застосований каталог» (marker → `CatalogModel` з `identity`, перевиведеною `readSqlUnits` з `sql` кожної одиниці) у `schema/apply/state.ts`; її викликає `plan.ts` (вже має `parse`) один раз, і результат читають обидва споживачі — `driftGate` і `providerTriggerConflicts`. `checkChain` (`execute.ts`) бере лише `snapshotHash` і нічого не перевиводить. Збережене поле не читається ніде. Одиниця, з `sql` якої виходить не рівно одна одиниця без діагностик, чи дві одиниці з однією ідентичністю → модельний свідок цього прогону непорівнюваний: `apply.drift-partial` (наявний шлях для іншої версії відбитка, лишається свідок-відбиток), а в `providerTriggerConflicts` така одиниця не рахується своєю — тригер провайдера стає чужим, `plan.provider-trigger-taken` (fail-closed). Ні повернення до збереженого поля, ні тихого пропуску. Інваріант «другого авторитетного сховища ідентичності немає». Альтернатива «версія формату в marker → пропуск модельного свідка» відкинута: послаблює дрейф-гейт. **На затвердження архітекторки.** | платформна §6.2 (звірка з marker) — одне речення (задача 0) |
+| Р10 | **Ідентичність у marker — похідна, не збережена правда.** `driftGate` (`schema/apply/drift.ts`) порівнює `marker.catalog` з поточною моделлю через `diffCatalogModels` за `u.identity` (`model/physical/catalog.ts`); стара форма дала б хибний `apply.drift` на незмінній цілі, і оператор звикав би приймати дрейф наосліп. Правило: одна чиста функція «застосований каталог» (marker → `CatalogModel` з `identity`, перевиведеною `readSqlUnits` з `sql` кожної одиниці) у `schema/apply/state.ts`; її викликає `plan.ts` (вже має `parse`) один раз, і результат читають обидва споживачі — `driftGate` і `providerTriggerConflicts`. `checkChain` (`execute.ts`) бере лише `snapshotHash` і нічого не перевиводить. Збережене поле не читається ніде. Одиниця, з `sql` якої виходить не рівно одна одиниця без діагностик, чи дві одиниці з однією ідентичністю → функція повертає разом із каталогом перелік нечитних одиниць. `driftGate` отримує його й за непорожнього переліку вважає модельний свідок непорівнюваним: нова гілка з попередженням `apply.drift-partial` (параметр причини), лишається свідок-відбиток — зараз `drift-partial` видається лише за іншої версії відбитка (`drift.ts`), тож це зміна гейта. `providerTriggerConflicts` за непорожнього переліку не застосовує виняток «живий SQL тотожний бажаному» (`plan.ts`): тригер провайдера поза застосованим каталогом — `plan.provider-trigger-taken` (fail-closed). Ні повернення до збереженого поля, ні тихого пропуску. Інваріант «другого авторитетного сховища ідентичності немає». Альтернатива «версія формату в marker → пропуск модельного свідка» відкинута: послаблює дрейф-гейт. **На затвердження архітекторки.** | платформна §6.2 (звірка з marker) — одне речення (задача 0) |
 | Р11 | **Ім'я файлу зворотної генерації.** `baseName` (`schema/reverse/units.ts`) ділить аргументи `splitIdentity`, а не `split(",")`; `slug` лишається. Перевантаження, що відрізняються лише межею лапок, дають один `slug` — гучна `introspect.path-collision`, а не тихий перезапис; розрізнювальний суфікс не вводиться (рідкісні імена, fail-closed). | none |
-| Р8 | **`%type`**: частини імені — `quoteIdent`, суфікс `%type` як є (`"MixedTable".col%type`), тож грант із таким аргументом валідний. Розгортання `%type` у тип колонки — поза блоком (обмеження вже записано в `settingsTargets`, `closed-forms.ts`). | none |
+| Р8 | **`%type` — розвилка до архітекторки.** `quoteIdent` робить підпис `"T".c%type` валідним, але не точним: `pg_proc` зберігає тип колонки на момент `CREATE`, а `GRANT ON FUNCTION f(t.c%type)` резолвить тип заново. Після зміни типу колонки при наявному `f(<новий тип>)` грант влучить у чуже перевантаження (Codex, підтверджено: `typeName` повертає `…%type`). Рекомендація: у цьому блоці аргумент `%type` у функції з виведеним `EXECUTE` — помилка компілятора (fail-closed, власний код, тест у `function-execute.test.ts`); розгортання `%type` в ідентичності за типом колонки знімка — окреме issue (воно ж прибирає вічну різницю з каталогом). Альтернатива — розгорнути `%type` у цьому блоці (+ задача, ~+15 % обсягу). | спека декларацій §5.1 — одне речення (задача 0), якщо рекомендацію прийнято |
 | Р9 | **Межа з двигуном.** `classifyUnit` (`map-units.ts`) уже веде SQL двигуна через `readSqlUnits`, тож обидві сторони отримують нове правило разом. Рядки, що порівнюються з ідентичністю одиниці (`census-read.ts` `materializedView:…`, шлях `units.<ідентичність>` у `database-tools.ts`), переходять на `identity.ts`. `StableId` двигуна (`table:`, `sequence:` у плані дій) — інша мова; задача 0 перевіряє, як pg-delta кодує ім'я в лапках (`encodeId`): якщо сиро — це окремий дефект, issue до архітекторки, не цей блок. | none |
 
 ## Інтерфейси
@@ -122,6 +122,7 @@ Issue #297, віха М4. Автор і (після сигналу архіте�
 | `stages/integrity.ts` · `functionCollisions` | тест колізій стадії 4 |
 | `schema/apply/row-version.ts` · `SEQUENCE_ID`, `liveMechanicsTables`, `modelTriggers` | `row-version.test.ts` |
 | `schema/apply/plan.ts` · `hasIdentityTriggers` | `identity-table.test.ts` |
+| `schema/apply/steps.ts` · `inApplied` (тригер, політика: сирий шаблон проти застосованого каталогу) | тест `foreignChanges` у тестах кроків: власний тригер на таблиці у верхньому регістрі не чужий |
 | `schema/apply/backfill.ts` · `triggerIdentity` і рядок поруч | `backfill.test.ts` |
 | `schema/apply/state.ts` · префікси `applyStateOwnership`; читач marker (Р10) | `state.test.ts`; тест І6 |
 | `schema/reverse/units.ts` · `qualified`, `baseName`, `pathOf`, `split(":")` | `reverse-generate.test.ts`: `f("x,y")` — один аргумент у імені файлу; пара з різною межею лапок — `introspect.path-collision` (Р11) |
@@ -175,7 +176,7 @@ function-execute`, `run-tests db --filter <новий файл>` зелені; �
 `run-tests unit --changed`.
 
 **Задача 4 — споживачі T2** (після 1). `schema/apply/row-version.ts`,
-`plan.ts`, `backfill.ts`, `state.ts`, `promotion/replacements.ts`,
+`plan.ts`, `steps.ts` (`inApplied`), `drift.ts` (Р10), `backfill.ts`, `state.ts`, `promotion/replacements.ts`,
 `compiler/platform/install.ts`, `schema/reverse/units.ts` (Р11); читач
 marker у `state.ts` (Р10, тест І6). Тригер-ключі розбираються через
 `identity.ts`, не `slice` префікса. Готово:
@@ -204,4 +205,20 @@ marker у `state.ts` (Р10, тест І6). Тригер-ключі розбир�
 
 ## Підсумок аудиту
 
-(заповнює автор після аудиту)
+Раунд 1 — Sonnet «план проти спеки й коду» і Opus «безпека». Sonnet: 3 major
+(рядки з константами без мутації → запобіжник lint; область і злиття
+правила lint; колізія імен файлів зворотної генерації → Р11), 2 minor
+(`database-tools.ts` `sequenceOwnedBy`, `pipeline.ts`) — усе внесено. Opus:
+безпекова major (хибний `apply.drift` від старих ідентичностей у marker →
+Р10), minor (DB-тест І1 без тихого шляху регістру) — внесено. Раунд 2 —
+Opus на дифі: 3 major (тест І6 обходив читача; поведінка нечитної одиниці
+marker; схема в І1) і minor (`resultCatalog` артефакту плану) — внесено.
+Codex (`codex-audit`, 5 питань, 34 файли): 5 major. Підтверджено й внесено:
+`drift-partial` не має загальної гілки (зміна гейта названа в Р10),
+виняток «тотожний SQL» у `providerTriggerConflicts` (Р10), пропущений
+`steps.ts` `inApplied`. Підтверджено, винесено на розвилку: `%type` (Р8).
+Частково: некваліфікований тип розширення залежить від `search_path` —
+наявна поведінка, прийнята спекою П2 §8.3; блок її не змінює й не
+погіршує. Зона marker повторилась у трьох раундах; причина — збережена
+копія похідної ідентичності, і Р10 прибирає її як друге авторитетне
+сховище. Лишилось: 0 blocker, 0 безпекових major, крім розвилки Р8.
