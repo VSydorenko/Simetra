@@ -69,6 +69,9 @@ export function setup(
     now?: () => number
     /** Initial visibility of the application; default visible. */
     visible?: boolean
+    /** The client catalog has `rightsSnapshot`; default no (no `rights` part). */
+    rightsSnapshot?: boolean
+    onRightsReplaced?: Parameters<typeof createCore>[0]["onRightsReplaced"]
   } = {}
 ): CoreHarness {
   const fake = createFakeSource({
@@ -116,6 +119,10 @@ export function setup(
     ...(options.strict === undefined ? {} : { strict: options.strict }),
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.visible === undefined ? {} : { visible: options.visible }),
+    ...(options.rightsSnapshot === true ? { rightsSnapshot: true } : {}),
+    ...(options.onRightsReplaced === undefined
+      ? {}
+      : { onRightsReplaced: options.onRightsReplaced }),
     log: (e) => log.push(e),
   })
   return { fake, core, log, inspect: inspectCore(core) }

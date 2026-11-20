@@ -48,6 +48,7 @@ import {
   type Key,
   type Mutation,
   type ObjectName,
+  type RightsState,
   type Values,
   type ViewHandle,
   type ViewSnapshot,
@@ -158,6 +159,18 @@ export interface CoreSession {
    * make exactly one more after it.
    */
   requestVersion(): void
+  /**
+   * Asks the server for the rights snapshot (P4-B spec §9.3) with the
+   * `rightsVersion` the core holds. Single-flight with one tail, as
+   * {@link CoreSession.requestVersion}. Does nothing when the client catalog
+   * has no `rightsSnapshot`.
+   */
+  requestRights(): void
+  /**
+   * Internal: the rights snapshot of the session with its epochs, `undefined`
+   * until the first one arrives (or without `rightsSnapshot` in the catalog).
+   */
+  rights(): RightsState | undefined
   /**
    * Internal, for the runtime: the `serverHash` of a response that passed the
    * closed check. A change against the last seen hash asks for the version —
@@ -353,6 +366,13 @@ export function createCore(options: {
   onStaleClient?: (object: ObjectName) => void
   /** Initial `visible` (default `true`). */
   visible?: boolean
+  /**
+   * The client catalog has `rightsSnapshot` (1-Р6): only then the core sends
+   * the `rights` part; without it nothing about rights is read or applied.
+   */
+  rightsSnapshot?: boolean
+  /** Called, outside any `commit`, when a snapshot replaces the current one. */
+  onRightsReplaced?: (prev: RightsState | undefined, next: RightsState) => void
   /** The monotonic clock in ms; tests substitute it, hosts never do. */
   now?: () => number
 }): CoreSession {
@@ -399,6 +419,7 @@ export function createCore(options: {
     onVersion(version) {
       if (session.token().valid) applyVersion(version.objects)
     },
+    onRights: (item) => acceptRights(item),
   })
   const source: StoreSource = {
     close: () => batcher.close(),
@@ -450,10 +471,45 @@ export function createCore(options: {
       }
       const sent = parts.map(isLive)
       const forward = parts.filter((_, slot) => sent[slot]).map(withLiveInclude)
-      const answered =
-        forward.length === 0
-          ? { items: [] as CoreReadItem[] }
-          : await batcher.read(forward)
+      // Перший пакет рантайму несе `rights` без `known` (Р1); частину
+      // додає ядро, тож її результат викликач не бачить.
+      const injected =
+        rightsEnabled &&
+        !rightsFirstSent &&
+        !forward.some((part) => part.type === "rights")
+      if (injected) forward.unshift({ type: "rights" })
+      const rightsAt = forward.findIndex((part) => part.type === "rights")
+      let answered: { items: CoreReadItem[] } = { items: [] }
+      if (rightsAt < 0) {
+        if (forward.length > 0) answered = await batcher.read(forward)
+      } else {
+        // Знімок один за раз: відправка бере `rightsEpoch` і `known` (Р4).
+        const sentRights = {
+          token: session.token(),
+          epoch: session.epochs.next(),
+          known: rights?.rightsVersion,
+        }
+        forward[rightsAt] =
+          sentRights.known === undefined
+            ? { type: "rights" }
+            : { type: "rights", known: sentRights.known }
+        rightsFirstSent = true
+        rightsFlying = true
+        rightsSent = sentRights
+        try {
+          answered = await batcher.read(forward)
+        } catch (error) {
+          if (sentRights.token.valid) log({ kind: "rights-failed" })
+          throw error
+        } finally {
+          rightsFlying = false
+          if (rightsTail) {
+            rightsTail = false
+            core.requestRights()
+          }
+        }
+        if (injected) answered = { items: answered.items.slice(1) }
+      }
       let next = 0
       const items = parts.map((part, slot): CoreReadItem => {
         if (!sent[slot]) return refused(part)
@@ -463,6 +519,61 @@ export function createCore(options: {
       })
       return { items }
     },
+  }
+
+  // Знімок прав сесії (Р1, Р4, Р8): стан і одноразовий запит у польоті.
+  const rightsEnabled = options.rightsSnapshot === true
+  let rights: RightsState | undefined
+  let rightsFirstSent = false
+  let rightsFlying = false
+  let rightsTail = false
+  let rightsSent:
+    | { token: GenerationToken; epoch: number; known: string | undefined }
+    | undefined
+
+  // Відповідь частини `rights`; її кличе збирач синхронно, до того як хоч
+  // один виклик пакета отримав відповідь, тож перевірка користувача (Р7,
+  // задача 2) бачить знімок до будь-якого `commit` з частин того ж пакета.
+  function acceptRights(item: CoreReadItem) {
+    const sentRights = rightsSent
+    if (sentRights === undefined || !sentRights.token.valid) return
+    if (!item.ok || !("type" in item) || item.type !== "rights") {
+      log({ kind: "rights-failed" })
+      return
+    }
+    const { rightsVersion, snapshot } = item.value
+    const current = rights
+    if (snapshot === undefined) {
+      // Без `snapshot` сервер підтвердив `known`: лишається лише зафіксувати
+      // `rightsVersion`. Підтвердження без поточного знімка чи з іншою
+      // версією — дефект сервера.
+      if (
+        current === undefined ||
+        sentRights.known !== current.rightsVersion ||
+        rightsVersion !== current.rightsVersion
+      ) {
+        log({ kind: "rights-failed" })
+        return
+      }
+      rights = { ...current, rightsVersion }
+      return
+    }
+    // Знімок замінює поточний лише з більшою `rightsEpoch` (Р4).
+    if (current !== undefined && sentRights.epoch <= current.rightsEpoch) return
+    // Шов Р7 (задача 2): тут, до будь-якого запису, інший не-`null` `userId`
+    // відповіді проти поточного знімка йде шляхом `session-changed`.
+    const next: RightsState = {
+      snapshot,
+      rightsVersion,
+      rightsEpoch: sentRights.epoch,
+      appliedEpoch: session.epochs.next(),
+    }
+    rights = next
+    try {
+      options.onRightsReplaced?.(current, next)
+    } catch (error) {
+      log({ kind: "listener-failed", error })
+    }
   }
 
   let lastHash = options.snapshotHash
@@ -1158,6 +1269,14 @@ export function createCore(options: {
       if (!versionFlying) startVersion()
       else if (!batcher.hasQueuedVersion()) versionTail = true
     },
+    requestRights() {
+      if (!rightsEnabled || !session.token().valid) return
+      if (!rightsFlying) {
+        // Збій частини вже в журналі (`rights-failed`) — повтору немає (Р8).
+        source.read([{ type: "rights" }]).catch(() => {})
+      } else if (!batcher.hasQueuedRights()) rightsTail = true
+    },
+    rights: () => rights,
     serverHash(hash, versionPart) {
       const changed = lastHash !== undefined && hash !== lastHash
       lastHash = hash

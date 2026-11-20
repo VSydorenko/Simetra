@@ -236,6 +236,57 @@ describe("createBatcher: the version barrier", () => {
   })
 })
 
+describe("createBatcher: the rights barrier", () => {
+  const RIGHTS: CorePart = { type: "rights" }
+  const rightsItem: CoreReadItem = {
+    ok: true,
+    type: "rights",
+    value: { rightsVersion: "1".repeat(64) },
+  }
+  const answerRights = () =>
+    Promise.resolve({ items: [rightsItem, rowsItem(1)] })
+
+  it("hands the rights outcome over before any caller of the answer resumes", async () => {
+    const order: string[] = []
+    const r = recording(answerRights)
+    const batcher = createBatcher(r.source, {
+      sleep: SLEEP,
+      onRights: (item) => order.push(item === rightsItem ? "rights" : "other"),
+    })
+    const rights = batcher.read([RIGHTS]).then(() => {
+      order.push("rights caller")
+    })
+    const data = batcher.read([query(TASK_REF, 1)]).then(() => {
+      order.push("data caller")
+    })
+    await Promise.all([rights, data])
+    expect(order[0]).toBe("rights")
+    expect(order).toHaveLength(3)
+  })
+
+  it("hands over a failed rights part as it is, and nothing for other parts", async () => {
+    const error: CommandError = { code: "command.unavailable" }
+    const onRights = vi.fn()
+    const r = recording(() =>
+      Promise.resolve({ items: [{ ok: false as const, error }, rowsItem(1)] })
+    )
+    const batcher = createBatcher(r.source, { sleep: SLEEP, onRights })
+    await batcher.read([RIGHTS, query(TASK_REF, 1)])
+    expect(onRights).toHaveBeenCalledTimes(1)
+    expect(onRights).toHaveBeenCalledWith({ ok: false, error })
+  })
+
+  it("knows a rights part waits in the queue until the window flushes", async () => {
+    const r = recording(answerRights)
+    const batcher = createBatcher(r.source, { sleep: SLEEP })
+    expect(batcher.hasQueuedRights()).toBe(false)
+    const read = batcher.read([RIGHTS, query(TASK_REF, 1)])
+    expect(batcher.hasQueuedRights()).toBe(true)
+    await read
+    expect(batcher.hasQueuedRights()).toBe(false)
+  })
+})
+
 describe("createBatcher: failures of the call", () => {
   it("keeps the other reads of the tick when one query is refused by the mapping", async () => {
     const invalid = new CommandFailure({ code: "command.invalid", path: "x" })

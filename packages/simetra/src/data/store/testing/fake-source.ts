@@ -18,6 +18,7 @@ import {
   type ReadQueryValue,
   type ReadQuery,
   type ReadRows,
+  type RightsSnapshot,
   type WireReadParts,
   type WireReadResult,
   type WireRowsQuery,
@@ -127,6 +128,22 @@ export interface FakeSource {
    * (or while this is `null`) it gets full rows, as the server does.
    */
   epoch: string | null
+  /**
+   * The snapshot a `rights` part answers; with `known` equal to
+   * {@link rightsVersion} the answer carries no `snapshot`. A test replaces
+   * both to move the rights of the user.
+   */
+  rightsSnapshot: RightsSnapshot
+  /** The `rightsVersion` of {@link rightsSnapshot}, 64 hex. */
+  rightsVersion: string
+  /** Makes the next `rights` parts fail with this error; `undefined` — answer. */
+  rightsError: CommandError | undefined
+  /** While `true`, a `rights` part waits until {@link releaseRights}. */
+  holdRights: boolean
+  /** Answers the held `rights` parts, each with the state of that moment. */
+  releaseRights(): void
+  /** The `known` of every `rights` part received, in order (`undefined` — none sent). */
+  readonly rightsReads: readonly (string | undefined)[]
   /** The number of parts of every request received, in order. */
   readonly requests: readonly number[]
   /** Server clock: the moment of the last change; versions come from it. */
@@ -527,6 +544,8 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
     }
   }
 
+  const rightsReads: (string | undefined)[] = []
+  const heldRights: Array<() => void> = []
   const adapter: ServerFunctionAdapter = {
     capabilities: { include: true },
     read(items) {
@@ -562,11 +581,27 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
             settle()
             return
           }
-          // Знімок прав фейк не віддає: його споживач (приймач знімка в ядрі)
-          // з'являється наступною частиною блоку, а фейк без нього мовчки
-          // відповів би вигадкою. Відмова — явна, а не відповідь `invalid`.
           if (item.type === "rights") {
-            fail(new Error("fake: the rights part is not supported"))
+            rightsReads.push(item.known)
+            const answer = () => {
+              const error = fake.rightsError
+              slots[slot] =
+                error !== undefined
+                  ? { ok: false, error: errorToWire(index, error) }
+                  : {
+                      ok: true,
+                      value:
+                        item.known === fake.rightsVersion
+                          ? { rightsVersion: fake.rightsVersion }
+                          : {
+                              rightsVersion: fake.rightsVersion,
+                              snapshot: fake.rightsSnapshot,
+                            },
+                    }
+              settle()
+            }
+            if (fake.holdRights) heldRights.push(answer)
+            else answer()
             return
           }
           const decoded = readPartFromWire(index, item)
@@ -644,6 +679,16 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
 
   const fake: FakeSource = {
     index,
+    rightsSnapshot: { userId: null, scopeSets: [], rights: [] },
+    rightsVersion: "0".repeat(64),
+    rightsError: undefined,
+    holdRights: false,
+    releaseRights() {
+      for (const answer of heldRights.splice(0)) answer()
+    },
+    get rightsReads() {
+      return rightsReads
+    },
     epoch: init.epoch ?? null,
     snapshotHash: init.snapshotHash ?? "fake-snapshot",
     kernelHashes: Object.fromEntries(

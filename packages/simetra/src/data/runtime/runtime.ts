@@ -413,6 +413,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     ...(options.visible === undefined ? {} : { visible: options.visible }),
     log,
     snapshotHash: catalog.snapshotHash,
+    rightsSnapshot: catalog.rightsSnapshot === true,
     ...(options.onStaleClient === undefined
       ? {}
       : { onStaleClient: options.onStaleClient }),

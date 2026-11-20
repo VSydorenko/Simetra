@@ -11,6 +11,7 @@ import {
   operationToWire,
   readPartToWire,
   readResultFromWire,
+  rightsValueSchema,
   versionValueSchema,
   wireRunResultSchema,
   type CatalogEntry,
@@ -23,6 +24,7 @@ import {
   type Operation,
   type ReadQuery,
   type ReadRows,
+  type RightsValue,
   type SourceAdapter,
   type VersionValue,
   type WireOperation,
@@ -117,16 +119,20 @@ export function createReadLimiter(parallel: number): ReadLimiter {
 
 /**
  * A part of a core read (P4-B spec §6.7): a rows query, with the rows the
- * core already holds (`known`), or the catalog `version`. A part without an
- * object goes first in its request.
+ * core already holds (`known`), the catalog `version` or the rights snapshot
+ * (`known` — the `rightsVersion` the core holds). A part without an object
+ * goes first in its request.
  */
 export type CorePart =
   | { type: "query"; query: RowsQuery; known?: KnownVersions }
   | { type: "version" }
+  | { type: "rights"; known?: string }
 
 /** The outcome of one read part, in the order of the parts asked for. */
 export type CoreReadItem =
-  CoreRowsItem | { ok: true; type: "version"; version: VersionValue }
+  | CoreRowsItem
+  | { ok: true; type: "version"; version: VersionValue }
+  | { ok: true; type: "rights"; value: RightsValue }
 
 /** The outcome of a rows part: the result of a `query` part is never a version. */
 export type CoreRowsItem =
@@ -323,6 +329,12 @@ export function createCoreSource(
       const version = versionValueSchema.safeParse(item.value)
       return version.success
         ? { ok: true, type: "version", version: version.data }
+        : internal()
+    }
+    if (part.type === "rights") {
+      const rights = rightsValueSchema.safeParse(item.value)
+      return rights.success
+        ? { ok: true, type: "rights", value: rights.data }
         : internal()
     }
     const { query } = part
@@ -548,6 +560,11 @@ export function createCoreSource(
       })
       const wires = parts.map((part): WireReadPart => {
         if (part.type === "version") return { type: "version" }
+        if (part.type === "rights") {
+          return part.known === undefined
+            ? { type: "rights" }
+            : { type: "rights", known: part.known }
+        }
         const mapped = readPartToWire(index, part)
         if (!mapped.ok) {
           if ("invalid" in mapped) throw new CommandFailure(mapped.invalid)

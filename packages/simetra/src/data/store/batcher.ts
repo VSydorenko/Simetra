@@ -13,6 +13,8 @@ import {
 export interface Batcher extends StoreSource {
   /** Whether a `version` part waits in the queue, not sent yet. */
   hasQueuedVersion(): boolean
+  /** Whether a `rights` part waits in the queue, not sent yet. */
+  hasQueuedRights(): boolean
 }
 
 interface Call {
@@ -42,6 +44,10 @@ const isMappingRefusal = (error: unknown): boolean =>
  * `onVersion` gets the value of every `version` part of an answer
  * synchronously, before any caller of that answer resumes: the core marks an
  * incompatible object before it can write rows of the same answer.
+ * `onRights` does the same for the outcome of a `rights` part, a refusal of
+ * the part included: the core sees a changed user before any part of the
+ * answer is applied. A request refused as a whole never reaches it (the call
+ * rejects).
  */
 export function createBatcher(
   source: CoreSource,
@@ -49,6 +55,7 @@ export function createBatcher(
     /** Passed to every `source.read`: the session's sleep. */
     sleep: ReadOptions["sleep"]
     onVersion?: (version: VersionValue) => void
+    onRights?: (item: CoreReadItem) => void
   }
 ): Batcher {
   let queue: Call[] = []
@@ -88,11 +95,13 @@ export function createBatcher(
       return
     }
     try {
-      for (const item of items) {
+      sent.forEach(({ part }, i) => {
+        const item = items[i]!
         if (item.ok && "type" in item && item.type === "version") {
           options.onVersion?.(item.version)
         }
-      }
+        if (part.type === "rights") options.onRights?.(item)
+      })
     } catch (error) {
       for (const call of calls) call.reject(error)
       return
@@ -119,6 +128,8 @@ export function createBatcher(
   return {
     hasQueuedVersion: () =>
       queue.some((call) => call.parts.some((part) => part.type === "version")),
+    hasQueuedRights: () =>
+      queue.some((call) => call.parts.some((part) => part.type === "rights")),
     run: (operation) => source.run(operation),
     refuse(object) {
       refused.add(object)
