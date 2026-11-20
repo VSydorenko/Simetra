@@ -236,8 +236,10 @@ export interface CommandRuntime {
    * The rights snapshot of the session's user and its `rightsVersion` (P4-B
    * spec §9.1), read as a one-part batch: one `REPEATABLE READ READ ONLY`
    * transaction, one statement under the request role. An anonymous session
-   * gets the empty snapshot without a database call. Rejects with
-   * `CommandFailure`: `command.unauthenticated`; `command.invalid` when the
+   * with the profile's anonymous read role gets the empty snapshot without a
+   * database call. Rejects with `CommandFailure`: `command.unauthenticated`
+   * for an invalid session, or an anonymous one in a project without an
+   * anonymous read role; `command.invalid` when the
    * catalog has no rights functions; `command.internal` when the function's
    * output fails `rightsSnapshotSchema`.
    */
