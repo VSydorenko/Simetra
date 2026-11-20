@@ -443,6 +443,8 @@ function viewPath(
     : { unit, form: "view", target: table, roles }
 }
 
+// Клаузу WINDOW не перевіряємо: Postgres судить за використанням віконної
+// функції (`aggregates` через `over`), а невикористане вікно подання не закриває.
 function updatableRelation(tree: Node): RangeVar | undefined {
   const query = "ViewStmt" in tree ? tree.ViewStmt.query : undefined
   const select =
@@ -455,8 +457,7 @@ function updatableRelation(tree: Node): RangeVar | undefined {
     select.groupClause !== undefined ||
     select.havingClause !== undefined ||
     select.limitCount !== undefined ||
-    select.limitOffset !== undefined ||
-    select.windowClause !== undefined
+    select.limitOffset !== undefined
   )
     return undefined
   const from = select.fromClause ?? []

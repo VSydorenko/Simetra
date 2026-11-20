@@ -716,6 +716,13 @@ describe("sql.kind-table-verbatim: a view writes a kind table (І2–І5)", () =
       expected: [viewPath("view:public.v", API_ROLES)],
     },
     {
+      // Postgres судить автооновлюваність за використанням віконних функцій, а
+      // не за наявністю клаузи WINDOW: невикористане вікно подання не закриває.
+      name: "a view with an unused WINDOW clause",
+      sql: `${V} AS SELECT t.id FROM public.task t WINDOW w AS (ORDER BY t.id);`,
+      expected: [viewPath("view:public.v", API_ROLES)],
+    },
+    {
       name: "a view with WHERE and a column list",
       sql: `${V} AS SELECT t.id FROM public.task t WHERE t.id IS NOT NULL;`,
       expected: [viewPath("view:public.v", API_ROLES)],
@@ -838,6 +845,10 @@ describe("sql.kind-table-verbatim: a view writes a kind table (І2–І5)", () =
     {
       name: "a window function",
       sql: `${V} AS SELECT row_number() OVER () AS id FROM public.task t;`,
+    },
+    {
+      name: "a window function over a named window",
+      sql: `${V} AS SELECT row_number() OVER w AS id FROM public.task t WINDOW w AS (ORDER BY t.id);`,
     },
     {
       name: "the write revoked from PUBLIC and every API role",
@@ -1555,6 +1566,21 @@ describe("sql.kind-table-verbatim: fail-closed routes of the enumerator", () => 
   ])("$name → error", async ({ sql, table }) => {
     expect(await rule1(sql)).toMatchObject([
       { form: "grant", table, roles: API.anonymous },
+    ])
+  })
+
+  // Некваліфікована власна послідовність: ім'я без схеми в DDL судиться
+  // fail-closed, хоч би яке воно було (Р8).
+  it("USAGE on an unqualified sequence of the application → error", async () => {
+    expect(
+      await rule1(`GRANT USAGE ON SEQUENCE my_seq TO ${API.anonymous};`)
+    ).toMatchObject([
+      {
+        form: "grant",
+        table: "my_seq",
+        roles: API.anonymous,
+        unqualified: "yes",
+      },
     ])
   })
 

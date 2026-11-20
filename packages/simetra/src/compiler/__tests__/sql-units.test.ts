@@ -139,16 +139,26 @@ describe("sql units", () => {
       form: "ALTER TABLE row rule next to another command",
       sql: "ALTER TABLE public.t ADD CONSTRAINT c CHECK (a > 0), ADD COLUMN d int;",
       statement: "AlterTableStmt",
+      params: { detail: "only REPLICA IDENTITY is allowed" },
     },
     {
       form: "ALTER TABLE OWNER TO",
       sql: "ALTER TABLE public.t OWNER TO r;",
       statement: "AlterTableStmt",
+      params: { detail: "only REPLICA IDENTITY is allowed" },
     },
     {
       form: "ALTER VIEW",
       sql: "ALTER VIEW public.v SET (security_invoker = false);",
       statement: "AlterTableStmt",
+      params: { detail: "only REPLICA IDENTITY is allowed" },
+    },
+    {
+      // Гард objtype: REPLICA IDENTITY лишається дозволеною лише для таблиці.
+      form: "ALTER VIEW REPLICA IDENTITY",
+      sql: "ALTER VIEW public.v REPLICA IDENTITY FULL;",
+      statement: "AlterTableStmt",
+      params: { detail: "only REPLICA IDENTITY is allowed" },
     },
     {
       form: "ALTER FUNCTION OWNER TO",
@@ -175,6 +185,11 @@ describe("sql units", () => {
     },
     { form: "UPDATE", sql: "UPDATE t SET a = 1;", statement: "UpdateStmt" },
     { form: "DELETE", sql: "DELETE FROM t;", statement: "DeleteStmt" },
+    {
+      form: "MERGE",
+      sql: "MERGE INTO t USING (SELECT 1 AS x) s ON false WHEN NOT MATCHED THEN DO NOTHING;",
+      statement: "MergeStmt",
+    },
     { form: "COPY", sql: "COPY t FROM STDIN;", statement: "CopyStmt" },
     {
       form: "GRANT ALL ... IN SCHEMA",
