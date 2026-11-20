@@ -149,6 +149,19 @@ describe("rights part of the core", () => {
     expect(handle.getSnapshot().rows).toHaveLength(1)
   })
 
+  it("logs rights-failed when the whole request is refused, and sends no retry", async () => {
+    const { core, log } = harness({
+      server: (fake) => ({
+        ...fake.server,
+        read: () => Promise.reject(new Error("transport down")),
+      }),
+    })
+    core.requestRights()
+    await settle()
+    expect(log).toContainEqual({ kind: "rights-failed" })
+    expect(core.rights()).toBeUndefined()
+  })
+
   it("writes nothing and asks nothing after dispose", async () => {
     const { core, fake, replaced } = harness()
     fake.holdRights = true
