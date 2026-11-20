@@ -443,6 +443,44 @@ CREATE POLICY counterparties_edit ON app.counterparties FOR UPDATE TO authentica
     await passes(files)
   })
 
+  // І13: подання без `security_invoker` пише базову таблицю від власника, тож
+  // роль API (без відкликання запису) пише промотовану таблицю крізь нього.
+  it.each([
+    [
+      "a plain view",
+      "CREATE VIEW app.cp_v AS SELECT id, name FROM app.counterparties;",
+      ["app.counterparties"],
+    ],
+    [
+      "a view over a view",
+      "CREATE VIEW app.cp_base AS SELECT id, name FROM app.counterparties;\nCREATE VIEW app.cp_v WITH (security_invoker = true) AS SELECT id FROM app.cp_base;",
+      ["app.counterparties"],
+    ],
+    [
+      "a view with security_invoker",
+      "CREATE VIEW app.cp_v WITH (security_invoker = true) AS SELECT id, name FROM app.counterparties;",
+      [],
+    ],
+    [
+      "an aggregating view",
+      "CREATE VIEW app.cp_v AS SELECT count(*) AS n FROM app.counterparties;",
+      [],
+    ],
+    [
+      "a view that is writable only by the revoked API roles",
+      "CREATE VIEW app.cp_v AS SELECT id, name FROM app.counterparties;\nREVOKE INSERT, UPDATE, DELETE ON app.cp_v FROM PUBLIC, anon, authenticated, service_role;",
+      [],
+    ],
+  ])("gates a write through %s", async (_, statement, tables) => {
+    const files = await project({ "sql/app/views.sql": `${statement}\n` })
+    const { result } = await promoted(files)
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "promote.write-path")
+        .map((d) => d.params?.table)
+    ).toEqual(tables)
+  })
+
   it("leaves a candidate untouched when resolution finds no reference", async () => {
     const text = fn(
       "other_counts",

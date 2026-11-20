@@ -558,6 +558,34 @@ describe("snapshot exempt writers", () => {
     ).toEqual([["sql.kind-table-verbatim", "defaultPrivileges"]])
   })
 
+  // Єдиний ADP, що проходить Правило 1 і має запис для ролі команд: `FOR ROLE`
+  // називає саму отримувачку. Гілка ADP винятку знімка тримає цей вхід.
+  it("refuses default privileges FOR ROLE the command role granting it write", async () => {
+    const found = await writers(
+      "ALTER DEFAULT PRIVILEGES FOR ROLE simetra_command IN SCHEMA public GRANT INSERT ON TABLES TO simetra_command;"
+    )
+    expect(found.map((f) => [f.form, f.table])).toContainEqual([
+      "grant",
+      "public.membership",
+    ])
+  })
+
+  it("accepts default privileges of the schema that give write only to API roles", async () => {
+    expect(
+      await writers(
+        `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT INSERT ON TABLES TO ${API.user};`
+      )
+    ).toEqual([])
+  })
+
+  it("accepts a writable view over an exempt table that only API roles write", async () => {
+    expect(
+      await writers(
+        "CREATE VIEW public.membership_view AS SELECT m.id, m.is_active FROM public.membership m;"
+      )
+    ).toEqual([])
+  })
+
   it("refuses no SELECT grant on an exempt table", async () => {
     expect(
       await writers("GRANT SELECT ON public.membership TO simetra_command;")

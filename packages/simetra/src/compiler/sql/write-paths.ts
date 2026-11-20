@@ -35,7 +35,7 @@ import {
   statementTargets,
   unitTargets,
 } from "./unit-target"
-import type { SqlUnit, VerbatimUnit } from "./units"
+import type { VerbatimUnit } from "./units"
 
 /** Форма шляху запису (спека прав §6.1, підрозділ «Шляхи запису й посилання на функції»). */
 export type WriteForm =
@@ -602,7 +602,7 @@ function grantPath(
 }
 
 /** `ALTER DEFAULT PRIVILEGES … GRANT` застосунку: що, кому, де. */
-interface DefaultPrivilegeFact {
+export interface DefaultPrivilegeFact {
   unit: VerbatimUnit
   objtype: string
   /** Схеми `IN SCHEMA`; порожньо — глобальне ADP. */
@@ -620,7 +620,7 @@ interface DefaultPrivilegesTree {
   action?: GrantStmt
 }
 
-function defaultPrivilegeFacts(
+export function defaultPrivilegeFacts(
   units: readonly VerbatimUnit[]
 ): DefaultPrivilegeFact[] {
   return units.flatMap((unit) => {
@@ -711,120 +711,48 @@ function defaultPrivilegesPath(
     : { unit, form: "defaultPrivileges", target, roles: bad }
 }
 
-// Гейт промоції й виняток знімка ще читають гранти цим розбором; перелічувач
-// його замінить (задача 2 плану #275).
-/** Привілеї без `TRIGGER`: так судить гейт промоції до переходу на перелічувач. */
-const LEGACY_WRITE_PRIVILEGES: ReadonlySet<string> = new Set([
-  "insert",
-  "update",
-  "delete",
-  "truncate",
-])
-
 /** Таблиця у фізичних іменах. */
 export interface QualifiedTable {
   schema: string
   name: string
 }
 
-/** Шлях запису: одиниця, що відкриває запис у таблицю, і як саме. */
-export interface WriteGrantPath<U> {
-  unit: U
-  table: QualifiedTable
-  /** `GRANT …` чи типові привілеї схеми — текст для повідомлення. */
-  detail: string
-}
-
 /**
- * Гранти запису в таблиці `tables` ролям `roles` чи `PUBLIC` — спільний
- * розбір гейта шляху запису промоції (спека промоції §8) і правила
- * `rights.snapshot-exempt-writer` (спека прав §7). Запис відкривають грант
- * запису (табличний чи поколонковий) і типові привілеї схеми таблиці, що
- * дають такий грант на таблиці: зворотна генерація не пише явного `GRANT`,
- * коли ACL таблиці дорівнює типовим. Глобальні типові привілеї ролі (без
- * `IN SCHEMA`) — поза межею: вони належать ролі, а не схемі (спека промоції
- * §9.9). Читається лише дерево одиниць.
+ * Таблиці `tables` як `KindTables`: ціль форм перелічувача для гейтів
+ * промоції (таблиці до промоції ще не таблиці виду) і винятків знімка, де
+ * знімок не дає таблиць виду потрібного складу.
  */
-export function writeGrantPaths<
-  U extends Pick<SqlUnit, "class" | "schema" | "sql" | "tree">,
->(
-  units: readonly U[],
-  tables: readonly QualifiedTable[],
-  roles: ReadonlySet<string>,
-  parse: SqlParser
-): WriteGrantPath<U>[] {
-  const schemas = new Set(tables.map((t) => t.schema))
-  const paths: WriteGrantPath<U>[] = []
-  for (const unit of units) {
-    const tree = unit.tree as Node
-    if ("GrantStmt" in tree && unit.class === "grant") {
-      const grant = tree.GrantStmt
-      const written = writeGrant(grant, roles)
-      if (written === undefined || grant.objtype !== "OBJECT_TABLE") continue
-      for (const target of unitTargets(unit, parse)) {
-        // `ON ALL TABLES IN SCHEMA s` дає ціль-схему: вона охоплює таблицю.
-        const hit =
-          target.kind === "schema"
-            ? tables.filter((t) => t.schema === target.schema)
-            : tables.filter(
-                (t) => t.schema === target.schema && t.name === target.object
-              )
-        for (const table of hit)
-          paths.push({ unit, table, detail: `GRANT ${written}` })
-      }
-      continue
-    }
-    if ("AlterDefaultPrivilegesStmt" in tree) {
-      const action = tree.AlterDefaultPrivilegesStmt.action
-      if (action === undefined || action.objtype !== "OBJECT_TABLE") continue
-      const written = writeGrant(action, roles)
-      if (written === undefined) continue
-      for (const target of unitTargets(unit, parse)) {
-        if (!schemas.has(target.schema)) continue
-        for (const table of tables.filter((t) => t.schema === target.schema))
-          paths.push({
-            unit,
-            table,
-            detail: `default privileges of schema ${target.schema} GRANT ${written} ON TABLES`,
-          })
-      }
-    }
+export function qualifiedKindTables(
+  tables: readonly QualifiedTable[]
+): KindTables {
+  const qualified = new Set<string>()
+  const byName = new Map<string, string[]>()
+  const bySchema = new Map<string, string[]>()
+  for (const { schema, name } of tables) {
+    const key = `${schema}.${name}`
+    qualified.add(key)
+    byName.set(name, [...(byName.get(name) ?? []), key])
+    bySchema.set(schema, [...(bySchema.get(schema) ?? []), key])
   }
-  return paths
+  return { qualified, byName, bySchema }
 }
 
 /**
- * Привілеї запису гранту ролям `roles` чи `PUBLIC` у тексті для повідомлення;
- * `undefined` — грант не відкриває запису цим ролям. `REVOKE` запису не дає.
+ * Таблиці з `tables`, які охоплює шлях `грант`: його ціль і, коли грант — на
+ * всі таблиці схеми (`ON ALL TABLES IN SCHEMA`), кожна таблиця цієї схеми.
+ * Перелічувач називає для схеми лише першу таблицю, а гейт має назвати всі.
  */
-function writeGrant(
-  grant: GrantStmt,
-  roles: ReadonlySet<string>
-): string | undefined {
-  if (grant.is_grant !== true) return undefined
-  const grantees = (grant.grantees ?? []).flatMap((n) =>
-    "RoleSpec" in n ? [n.RoleSpec as RoleSpec] : []
+export function grantedTables(
+  path: WritePath,
+  tables: readonly QualifiedTable[],
+  parse: SqlParser
+): QualifiedTable[] {
+  const schemas = new Set(
+    unitTargets(path.unit, parse).flatMap((t) =>
+      t.kind === "schema" ? [t.schema] : []
+    )
   )
-  const named = grantees.flatMap((r) =>
-    r.roletype === "ROLESPEC_PUBLIC"
-      ? ["PUBLIC"]
-      : r.rolename !== undefined && roles.has(r.rolename)
-        ? [r.rolename]
-        : []
+  return tables.filter(
+    (t) => `${t.schema}.${t.name}` === path.target || schemas.has(t.schema)
   )
-  if (named.length === 0) return undefined
-  const privileges = (grant.privileges ?? []).flatMap((n) =>
-    "AccessPriv" in n ? [n.AccessPriv as AccessPriv] : []
-  )
-  // Порожній перелік привілеїв — `ALL [PRIVILEGES]`.
-  const writes =
-    privileges.length === 0
-      ? ["ALL"]
-      : privileges
-          // `ALL (колонки)` — привілей без імені з переліком колонок.
-          .map((p) => p.priv_name ?? "all")
-          .filter((p) => p === "all" || LEGACY_WRITE_PRIVILEGES.has(p))
-          .map((p) => p.toUpperCase())
-  if (writes.length === 0) return undefined
-  return `${writes.join(", ")} TO ${named.join(", ")}`
 }

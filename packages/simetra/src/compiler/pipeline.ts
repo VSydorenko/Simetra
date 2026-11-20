@@ -798,7 +798,13 @@ export async function runStages(
         { ...entry }
       )
     ),
-    ...snapshotExemptWriters(snapshot, sql.units, parse, plpgsql),
+    ...snapshotExemptWriters(
+      snapshot,
+      sql.units,
+      parse,
+      plpgsql,
+      stage1.project.database.provider
+    ),
   ]
   if (snapshotProblems.length > 0) {
     return {

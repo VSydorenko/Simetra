@@ -1,39 +1,29 @@
-import { PLATFORM_ROLES } from "simetra/model"
-import type { QualifiedName } from "../contracts"
+import { PLATFORM_ROLES, type DatabaseProvider } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import {
   executableBy,
   isSecurityDefiner,
-  isSecurityInvoker,
   isTriggerFunction,
 } from "../sql/definer-reads"
 import { modelViews } from "../sql/function-body"
-import { viewWrittenTable, type KindTables } from "../sql/kind-tables"
+import { PUBLIC } from "../sql/grant-facts"
 import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
 import { reachableUnits } from "../sql/reads"
 import type { VerbatimUnit } from "../sql/units"
-import { bodyKindTable, writeGrantPaths } from "../sql/write-paths"
+import {
+  bodyKindTable,
+  defaultPrivilegeFacts,
+  grantedTables,
+  qualifiedKindTables,
+  writePaths,
+} from "../sql/write-paths"
 import type { SnapshotSources } from "./snapshot-sources"
 
 const key = (name: { schema: string; name: string }) =>
   `${name.schema}.${name.name}`
 
 const COMMAND = PLATFORM_ROLES.command
-
-/** Таблиці-винятки як `KindTables` — для обходу записів тіла. */
-function exemptKindTables(tables: readonly QualifiedName[]): KindTables {
-  const qualified = new Set<string>()
-  const byName = new Map<string, string[]>()
-  const bySchema = new Map<string, string[]>()
-  for (const table of tables) {
-    const k = key(table)
-    qualified.add(k)
-    byName.set(table.name, [...(byName.get(table.name) ?? []), k])
-    bySchema.set(table.schema, [...(bySchema.get(table.schema) ?? []), k])
-  }
-  return { qualified, byName, bySchema }
-}
 
 /**
  * Шлях запису в таблицю-виняток знімка, відкритий SQL застосунку ролі команд
@@ -46,19 +36,29 @@ function exemptKindTables(tables: readonly QualifiedName[]): KindTables {
  * роль команд; (г) така ж тригерна функція, яку SQL застосунку чіпляє до
  * будь-якої таблиці, — тригер `EXECUTE` не потребує. Живих ACL цільової бази
  * компілятор не бачить: роль команд створює платформа, тож давніх грантів їй
- * не буває, а новий іде через SQL застосунку.
+ * не буває, а новий іде через SQL застосунку. Гранти й подання дає
+ * перелічувач шляхів запису; (в), (г) читають замикання функції самі, бо
+ * перелічувач бачить лише тіло функції.
+ *
+ * Типові привілеї схеми судить уже Правило 1 (`defaultPrivileges`), тож сюди
+ * вони доходять лише одним входом: `FOR ROLE` називає саму роль команд, що є
+ * отримувачем, — Правило 1 такий ADP дозволяє (власник його об'єктів — вона
+ * сама), а виняток знімка його судить, бо таблиці-виняток ця роль не створює,
+ * а відкрите їй право було б новим шляхом запису.
  */
 export function snapshotExemptWriters(
   sources: Pick<SnapshotSources, "exempt">,
   units: readonly VerbatimUnit[],
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  provider: DatabaseProvider | undefined
 ): Diagnostic[] {
   const tables = sources.exempt
     .filter((e) => e.reason !== "materializedView")
     .map((e) => e.table)
   if (tables.length === 0) return []
-  const roles = new Set([COMMAND])
+  const roles = new Set([COMMAND, PUBLIC])
+  const exempt = qualifiedKindTables(tables)
   const found: Diagnostic[] = []
   const report = (
     unit: VerbatimUnit,
@@ -71,45 +71,40 @@ export function snapshotExemptWriters(
       })
     )
 
-  // (а) Гранти запису й типові привілеї схеми.
-  for (const { unit, table, detail } of writeGrantPaths(
-    units,
-    tables,
-    roles,
-    parse
-  ))
-    report(unit, {
-      form: "grant",
-      table: key(table),
-      object: unit.identity,
-      detail,
-    })
-
-  // (б) Подання над винятком з грантом запису ролі команд чи `PUBLIC`.
-  const exempt = exemptKindTables(tables)
-  const views = modelViews(units) as VerbatimUnit[]
-  // Запис через матеріалізоване подання неможливий — обхід іде лише крізь
-  // звичайні.
-  const plainViews = views.filter((v) => v.class === "view")
-  const writableViews = views.flatMap((view) => {
-    if (view.class !== "view" || isSecurityInvoker(view)) return []
-    const table = viewWrittenTable(view, exempt, plainViews, parse)
-    return table === undefined ? [] : [{ view, table }]
-  })
-  for (const { unit, table } of writeGrantPaths(
-    units,
-    writableViews.map(({ view }) => view),
-    roles,
-    parse
-  )) {
-    const over = writableViews.find(({ view }) => key(view) === key(table))!
-    report(unit, {
-      form: "view",
-      table: over.table,
-      object: key(table),
-    })
+  // (а), (б) Гранти запису, типові привілеї схеми й подання.
+  const paths = writePaths(units, { kind: exempt, provider, parse, plpgsql })
+  for (const path of paths) {
+    const hit = path.roles.filter((r) => roles.has(r))
+    if (hit.length === 0) continue
+    if (path.form === "grant")
+      for (const table of grantedTables(path, tables, parse))
+        report(path.unit, {
+          form: "grant",
+          table: key(table),
+          object: path.unit.identity,
+          detail: `GRANT write TO ${hit.join(", ")}`,
+        })
+    else if (path.form === "view" && exempt.qualified.has(path.target))
+      report(path.unit, {
+        form: "view",
+        table: path.target,
+        object: key(path.unit),
+      })
+  }
+  for (const fact of defaultPrivilegeFacts(units)) {
+    const hit = fact.grantees.filter((r) => roles.has(r))
+    if (!fact.write || hit.length === 0) continue
+    for (const schema of fact.schemas)
+      for (const table of tables.filter((t) => t.schema === schema))
+        report(fact.unit, {
+          form: "grant",
+          table: key(table),
+          object: fact.unit.identity,
+          detail: `default privileges of schema ${schema} GRANT write ON TABLES TO ${hit.join(", ")}`,
+        })
   }
 
+  const views = modelViews(units) as VerbatimUnit[]
   // (в), (г) Функції `SECURITY DEFINER`, замикання яких пише виняток.
   const written = (fn: VerbatimUnit): string | undefined => {
     for (const reader of [fn, ...reachableUnits(fn, units, parse, plpgsql)]) {
