@@ -833,7 +833,7 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
     expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
-      "bf0e669b9dac861bb5150c0bc0db0dfabb48ebea504e354fdc8d1f7eece1d7b7"
+      "6c27278bfadd0c2b8c914fdc4ab60a8fbcf1021bb2b8806e152c04baefd61695"
     )
   })
 })

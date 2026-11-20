@@ -1394,11 +1394,15 @@ describe("CommandRuntime: частина rights", () => {
     userId: U,
     scopeSets: [{ scopeKind: "org", scope: SCOPE }],
     rights: [rightsRow("a", "read"), rightsRow("b", "read")],
+    members: [{ scopeKind: "org", scope: SCOPE, member: U }],
+    dimensionValues: [{ dimension: SCOPE, values: [U] }],
   }
   const reordered = {
     userId: U,
     scopeSets: [{ scopeKind: "org", scope: SCOPE }],
     rights: [rightsRow("b", "read"), rightsRow("a", "read")],
+    members: [{ scopeKind: "org", scope: SCOPE, member: U }],
+    dimensionValues: [{ dimension: SCOPE, values: [U] }],
   }
   // Свій відбиток тесту: канонічний JSON збирається вручну, не кодом сервера.
   const fingerprint = (value: typeof snapshot) =>
@@ -1417,6 +1421,8 @@ describe("CommandRuntime: частина rights", () => {
             extent: r.extent,
             dimensionId: r.dimensionId,
           })),
+          members: value.members,
+          dimensionValues: value.dimensionValues,
         })
       )
       .digest("hex")
@@ -1513,7 +1519,13 @@ describe("CommandRuntime: частина rights", () => {
 
   it("answers an anonymous session without any database call", async () => {
     const { db, runtime } = await open(answering(snapshot))
-    const empty = { userId: null, scopeSets: [], rights: [] }
+    const empty = {
+      userId: null,
+      scopeSets: [],
+      rights: [],
+      members: [],
+      dimensionValues: [],
+    }
     const anonymous = { ...session, is_anonymous: true }
     expect(await runtime.readParts(anonymous, [RIGHTS_PART])).toEqual({
       epoch: null,
@@ -1540,7 +1552,15 @@ describe("CommandRuntime: частина rights", () => {
     expect(db.calls).not.toContainEqual(SNAPSHOT_STATEMENT)
     expect(result.items[1]).toMatchObject({
       ok: true,
-      value: { snapshot: { userId: null, scopeSets: [], rights: [] } },
+      value: {
+        snapshot: {
+          userId: null,
+          scopeSets: [],
+          rights: [],
+          members: [],
+          dimensionValues: [],
+        },
+      },
     })
   })
 

@@ -54,7 +54,13 @@ const snap = (
   rights: RightsRow[],
   scopeSets = [{ scopeKind: KIND, scope: SCOPE }],
   userId: string | null = USER
-): RightsSnapshot => ({ userId, scopeSets, rights })
+): RightsSnapshot => ({
+  userId,
+  scopeSets,
+  rights,
+  members: [],
+  dimensionValues: [],
+})
 
 const topic = (object = OBJECT, scope = SCOPE, kind = KIND) =>
   channelTopic({ kind: "changes", scopeKindId: kind, scope, object })
