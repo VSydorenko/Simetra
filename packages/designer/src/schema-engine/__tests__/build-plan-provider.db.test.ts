@@ -437,7 +437,8 @@ describe.concurrent("buildPlan", () => {
       // Розширення лише в схемі провайдера (Р7а).
       const TCN = "CREATE EXTENSION IF NOT EXISTS tcn WITH SCHEMA extensions;\n"
       // Цілі, яку модель не описує, Р7а не судить: розширення в схемі
-      // застосунку цілі лишається в копії цілі, а в `extensions` — ні
+      // застосунку цілі лишається в копії цілі, а в `extensions` — ні:
+      // копія не відтворює розширень цілі в схемах провайдера (#316)
       const TARGET_TCN =
         "create schema app; create extension tcn with schema app;"
       const TARGET_TRIGGER = `create trigger user_tcn after insert on better_auth."user" for each row execute function app.triggered_change_notification();`
