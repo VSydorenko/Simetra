@@ -10,7 +10,7 @@ import {
   type DatabaseProvider,
   type PhysicalSnapshot,
 } from "simetra/model"
-import { isSignalObject, scopeSetCall } from "../access-units"
+import { isSignalObject, scopeKindSets, scopeSetCall } from "../access-units"
 import { bodyRequires } from "../catalog-command/units"
 import { mainTableOf, qualified, type Contracts } from "../contracts"
 import { compareStrings } from "../diagnostics"
@@ -189,22 +189,6 @@ function signalFacts(input: SignalInput): SignalFacts[] {
       ]
     })
     .sort((a, b) => compareStrings(a.objectId, b.objectId))
-}
-
-/**
- * Множина скоупів кожного виду скоупу моделі — `scopeSetCall` його таблиць,
- * як у знімку прав клієнта (`rights/client-snapshot.ts`): клієнт підписується
- * на канали прав саме тих скоупів, які бачить у знімку.
- */
-function scopeKindSets(
-  access: SignalInput["contracts"]["access"]
-): [kindId: string, set: string][] {
-  const byKind = new Map<string, string>()
-  for (const contract of access) {
-    if (contract.scope === undefined) continue
-    byKind.set(contract.scope.scopeKindId, scopeSetCall(contract.scope))
-  }
-  return [...byKind].sort(([a], [b]) => compareStrings(a, b))
 }
 
 /** Умова права без рядка: скоуп каналу замість колонки скоупу рядка. */

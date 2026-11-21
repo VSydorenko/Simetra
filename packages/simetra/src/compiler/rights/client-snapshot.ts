@@ -5,7 +5,7 @@ import {
   type DatabaseProvider,
   type PhysicalSnapshot,
 } from "simetra/model"
-import { scopeSetCall } from "../access-units"
+import { scopeKindSets } from "../access-units"
 import { bodyRequires } from "../catalog-command/units"
 import { qualified, type Contracts } from "../contracts"
 import { compareStrings } from "../diagnostics"
@@ -86,17 +86,10 @@ const SNAPSHOT_FUNCTION = {
 
 /** Множини скоупів: `scopeSetCall` кожного виду з хоч одним скоупленим об'єктом. */
 function scopeSetQueries(access: ClientSnapshotInput["contracts"]["access"]) {
-  const byKind = new Map<string, string>()
-  for (const contract of access) {
-    if (contract.scope === undefined) continue
-    byKind.set(contract.scope.scopeKindId, scopeSetCall(contract.scope))
-  }
-  return [...byKind]
-    .sort(([a], [b]) => compareStrings(a, b))
-    .map(
-      ([kindId, set]) =>
-        `SELECT ${sqlLiteral(kindId)}::text AS scope_kind, ${set} AS scope`
-    )
+  return scopeKindSets(access).map(
+    ([kindId, set]) =>
+      `SELECT ${sqlLiteral(kindId)}::text AS scope_kind, ${set} AS scope`
+  )
 }
 
 /** Виміри контрактів прав (`access[]` кожного об'єкта), кожен раз. */
