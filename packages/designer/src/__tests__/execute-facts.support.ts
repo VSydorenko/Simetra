@@ -175,6 +175,16 @@ export function describeExecuteFacts(): void {
           errors(again).every((d) => d.code === "sql.definer-caller-unchecked")
         ).toBe(true)
         expect(await readMetadataDir(dir)).toEqual(before)
+        // Над текою, що не змінилась, повторний прийом справді читає базу
+        // (а не відмовляє до читання): нова таблиця потрапляє в теку
+        await query(url, "CREATE TABLE app.extra (id uuid PRIMARY KEY)")
+        const third = await call(
+          "introspect",
+          introspectInput,
+          options(dir, env)
+        )
+        expect(third.written).toBe(true)
+        expect(third.changes.map((c) => c.path).join(" ")).toContain("extra")
       })
     })
 
