@@ -197,6 +197,11 @@ export type CoreRunResult =
 export interface ReadOptions {
   /** `Session.sleep`: wakes at once when the session closes. */
   readonly sleep: (ms: number) => Promise<void>
+  /**
+   * Called when a request carrying the `rights` part actually goes out: a
+   * read slot was free (P4-B spec §8.4, the deadline counts from sending).
+   */
+  readonly onRightsSent?: () => void
 }
 
 /**
@@ -427,7 +432,8 @@ export function createCoreSource(
   const send = async (
     adapter: SourceAdapter | null,
     queries: readonly CorePart[],
-    wires: readonly WireReadPart[]
+    wires: readonly WireReadPart[],
+    onRightsSent: ReadOptions["onRightsSent"]
   ): Promise<CoreReadItem[]> => {
     let answer: WireReadParts | undefined
     // Частини, що справді пішли: добираються на старті задачі, не при постановці.
@@ -437,6 +443,9 @@ export function createCoreSource(
       answer = await limiter.run(() => {
         live = queries.flatMap((part, i) => (isRefused(part) ? [] : [i]))
         request = ++requests
+        // Строк знімка — від справжньої відправки, а не від черги слотів:
+        // інакше знімок після довгої черги приходив би вже простроченим.
+        if (live.some((i) => queries[i]!.type === "rights")) onRightsSent?.()
         return live.length === 0
           ? Promise.resolve(undefined)
           : readVia(
@@ -467,7 +476,7 @@ export function createCoreSource(
     queries: readonly CorePart[],
     wires: readonly WireReadPart[],
     out: CoreReadItem[],
-    sleep: ReadOptions["sleep"]
+    { sleep, onRightsSent }: ReadOptions
   ): Promise<void> => {
     let pending = slots
     // Частини, що отримали `batch-budget`: наступного разу кожна йде
@@ -489,7 +498,8 @@ export function createCoreSource(
           const items = await send(
             adapter,
             request.map((slot) => queries[slot]!),
-            request.map((slot) => wires[slot]!)
+            request.map((slot) => wires[slot]!),
+            onRightsSent
           )
           request.forEach((slot, i) => {
             out[slot] = items[i]!
@@ -574,7 +584,7 @@ export function createCoreSource(
       const id = "id" in operation ? operation.id : undefined
       return answer.ok ? decodeRun(entry, id, answer.value) : answer
     },
-    async read(requested, { sleep }) {
+    async read(requested, options) {
       // Адаптер без `capabilities.include` не віддає `included`: частина йде
       // без `include`, а цілі ядро дочитує само (Р8).
       const parts = requested.map((part): CorePart => {
@@ -632,7 +642,7 @@ export function createCoreSource(
             parts,
             wires,
             items,
-            sleep
+            options
           )
         )
       )

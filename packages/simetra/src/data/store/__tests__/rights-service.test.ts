@@ -119,6 +119,40 @@ describe("the rights deadline of the snapshot", () => {
     expect(h.inspect.serviceSizes().schedulerTimers).toBe(1)
   })
 
+  it("counts the deadline from the actual sending, not from the queue of read slots", async () => {
+    const h = setup({
+      mode: "auto",
+      now: () => Date.now(),
+      limits: { revalidateIntervalMs: I, readParallel: 1 },
+      rightsSnapshot: true,
+    })
+    seed(h.fake, 1, 4)
+    h.fake.rightsSnapshot = SNAPSHOT
+    h.fake.rightsVersion = V1
+    const view = h.core.view(list)
+    watch(view)
+    await settle()
+    h.core.setVisible(list, false)
+    // Єдиний слот читань зайнято довше за I: частина `rights` чекає в черзі.
+    h.fake.hold = () => true
+    void h.core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    expect(h.fake.pending).toHaveLength(1)
+    h.fake.hold = undefined
+    h.core.requestRights()
+    await settle()
+    expect(h.fake.rightsReads).toEqual([undefined])
+    await advance(I + 1000)
+    h.fake.take().answer()
+    await settle()
+    // Частина пішла лише тепер: строк — через I від цієї миті.
+    expect(h.fake.rightsReads).toEqual([undefined, V1])
+    await advance(1000)
+    expect(h.fake.rightsReads).toEqual([undefined, V1])
+    await advance(I - 1000)
+    expect(h.fake.rightsReads).toEqual([undefined, V1, V1])
+  })
+
   it("an empty store has no deadline: 0 timers, 0 requests over 10 intervals", async () => {
     const h = build()
     h.core.requestRights()

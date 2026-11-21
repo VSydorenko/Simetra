@@ -442,6 +442,11 @@ export function createCore(options: {
   const batcher = createBatcher(options.source, {
     // Сон сесії йде в кожне читання джерела: власного таймера джерело не має.
     sleep: session.sleep,
+    // Строк знімка (Р2) — від справжньої відправки частини: пакет може
+    // чекати вільного слота читань довше за I (§8.4).
+    onRightsSent: () => {
+      rightsSentAt = now()
+    },
     onVersion(version) {
       if (session.token().valid) applyVersion(version.objects)
     },
@@ -513,6 +518,10 @@ export function createCore(options: {
         if (forward.length > 0) answered = await batcher.read(forward)
       } else {
         // Знімок один за раз: відправка бере `rightsEpoch` і `known` (Р4).
+        // `rightsEpoch` лише впорядковує знімки між собою, а частина `rights`
+        // летить одна й черга слотів — FIFO, тож епоха постановки дає той
+        // самий порядок, що й епоха відправки. Строк (Р2) — інша річ: його
+        // рахує `onRightsSent` збирача від справжньої відправки.
         const sentRights = {
           token: session.token(),
           epoch: session.epochs.next(),
@@ -524,7 +533,6 @@ export function createCore(options: {
             : { type: "rights", known: sentRights.known }
         rightsFirstSent = true
         rightsFlying = true
-        rightsSentAt = now()
         rightsSent = sentRights
         try {
           answered = await batcher.read(forward)

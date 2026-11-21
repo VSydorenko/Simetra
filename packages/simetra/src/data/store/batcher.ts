@@ -54,6 +54,7 @@ export function createBatcher(
   options: {
     /** Passed to every `source.read`: the session's sleep. */
     sleep: ReadOptions["sleep"]
+    onRightsSent?: ReadOptions["onRightsSent"]
     onVersion?: (version: VersionValue) => void
     onRights?: (item: CoreReadItem) => void
   }
@@ -81,7 +82,7 @@ export function createBatcher(
         items = (
           await source.read(
             sent.map(({ part }) => part),
-            { sleep: options.sleep }
+            { sleep: options.sleep, onRightsSent: options.onRightsSent }
           )
         ).items
       }
