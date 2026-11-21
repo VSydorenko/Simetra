@@ -35,6 +35,10 @@ describe("declareSection", () => {
       "DECLARE after a line comment ended by CR",
       "-- x\rDECLARE y int; BEGIN END",
     ],
+    [
+      "DECLARE hidden by a CR comment, BEGIN after CRLF",
+      "-- c\rDECLARE x int := app.evil();\r\nBEGIN",
+    ],
     ["dollar-quoted string first", "$x$ $x$ BEGIN"],
     ["escape string first", "E'x' BEGIN"],
     ["non-breaking space is part of an identifier", "\u00a0BEGIN"],
