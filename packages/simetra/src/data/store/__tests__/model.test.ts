@@ -814,6 +814,9 @@ async function runModelOn(
   // Ключі (`id`), які прохід заміни на цьому кроці мав право прибрати:
   // їхній збережений скоуп перед проходом — пара, яку знімок забороняє.
   let rightsPurgeable = new Set<string>()
+  // На цьому кроці застосовано знімок прав: `purged` картки чи ТЧ без purge
+  // її ключа — шлях проходу заміни, а не будь-якого іншого purge.
+  let rightsPassInStep = false
   // Збережені скоупи рядків і скоуп ТЧ власника K1 на мить перед проходом.
   let capturedScopes = new Map<string, string | null>()
   let capturedLines: string | null | undefined
@@ -1194,6 +1197,7 @@ async function runModelOn(
       asyncViolations.push(`rights: applied a snapshot the model never gave`)
       return
     }
+    rightsPassInStep = true
     const at = fake.log.length
     for (const object of [TASK, ORG])
       for (const scope of SCOPES)
@@ -1347,7 +1351,12 @@ async function runModelOn(
             ? spec.owner
             : undefined
       if (target === undefined || !purgedTargets.has(id(spec.object, target)))
-        fail(label, `${where}: purged without a purge of its key`)
+        fail(
+          label,
+          rightsPassInStep
+            ? `${where}: purged by the rights pass of an allowed pair`
+            : `${where}: purged without a purge of its key`
+        )
     }
     if (spec.kind === "card") {
       // Картка ключа зі сховища не дає знімка без рядка.
@@ -2656,6 +2665,7 @@ async function runModelOn(
     const before = lists()
     preloadedSection = false
     rightsPurgeable = new Set()
+    rightsPassInStep = false
     let userViews = new Set<number>()
     let purgeStep = false
     // Крок планувальника: читання, які він запустив, рахуються за лічильниками
@@ -3581,6 +3591,7 @@ async function runModelOn(
   // Утримана відповідь `rights` доходить до злиття: інакше її запит не осяде.
   if (rights) {
     rightsPurgeable = new Set()
+    rightsPassInStep = false
     const before = lists()
     fake.holdRights = false
     fake.releaseRights()
@@ -3597,6 +3608,7 @@ async function runModelOn(
     logAt = log.length
     restoredInStep.clear()
     rightsPurgeable = new Set()
+    rightsPassInStep = false
     const before = lists()
     answerRun(runs.shift()!, "ok", 1)
     await flush()
@@ -3615,6 +3627,7 @@ async function runModelOn(
     logAt = log.length
     restoredInStep.clear()
     rightsPurgeable = new Set()
+    rightsPassInStep = false
     const before = lists()
     const slow = late.shift()
     const read = slow ?? fake.take()
@@ -4025,7 +4038,7 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "rights-pass-by-diff": /kept by the rights pass \(replacement\)/,
   // Прохід прибирає й дозволену пару об'єкта: склад чи `purged` картки.
   "rights-pass-purges-allowed":
-    /of an allowed pair|purged without a purge of its key/,
+    /the rights pass removed .* of an allowed pair|purged by the rights pass of an allowed pair/,
 }
 
 // Дефекти правила втрати доступу (B5b-2): їх ловлять прогони зі знімком прав.
