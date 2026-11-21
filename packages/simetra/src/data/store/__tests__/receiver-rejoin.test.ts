@@ -248,12 +248,28 @@ describe("the rejoin wave", () => {
   it("reads nothing on a hidden tab until resume()", async () => {
     const h = await open(keysView(key(1)))
     h.core.suspend()
+    h.transport.fail({ kind: "transport", channel })
     h.transport.join(channel, false)
     await advance(10 * REJOIN_JITTER_MS)
     expect(requestsSince(h)).toHaveLength(0)
+    expect(states(h)).toEqual(["stale"])
     h.core.resume()
     await settle()
     expect(requestsSince(h).length).toBeGreaterThan(0)
+    // Хвилю бере `resume()`: вона ж знімає «розрив» після осідання.
+    expect(states(h)).not.toContain("stale")
+  })
+
+  it("takes a wave that is not due yet on resume(), and lifts the mark after it", async () => {
+    const h = await open(keysView(key(1)))
+    h.core.suspend()
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, false)
+    await advance(1)
+    h.core.resume()
+    await settle()
+    expect(states(h)).not.toContain("stale")
+    expect(requestsSince(h)).toHaveLength(1)
   })
 
   it("sends nothing and leaves no timer when the core closes during the jitter", async () => {
