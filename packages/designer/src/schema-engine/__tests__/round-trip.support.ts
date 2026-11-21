@@ -36,6 +36,7 @@ import {
   type DesiredComparison,
   type EngineDiagnostic,
   type EngineScope,
+  type ExecuteFacts,
   type Extracted,
   type SchemaEngine,
 } from "simetra/schema"
@@ -290,9 +291,12 @@ export interface Refusal {
   identity?: string
 }
 
+// З фактами `EXECUTE` функція множини з викликачами `user`/`command` отримує
+// декларацію без `check` — до Д5 це `sql.declaration-check-missing` (Р1);
+// `sql.definer-caller-unchecked` лишилось би лише функціям без декларації
 const definerRefusals = (definers: Loss["definers"]): Refusal[] =>
   definers.map((f) => ({
-    code: "sql.definer-caller-unchecked",
+    code: "sql.declaration-check-missing",
     schema: f.schema,
     name: f.name,
   }))
@@ -314,6 +318,21 @@ function expectRefusals(
       identity: d.params?.identity,
     }))
   ).toEqual(refusals)
+}
+
+/**
+ * Витяг із фактами `EXECUTE` в одному знімку — як `introspect`: без фактів
+ * зворотна генерація не пише декларацій definer-функцій.
+ */
+async function extractWithFacts(target: DbConnection, scope: EngineScope) {
+  const { extracted, facts } = await engine.extractWithExecuteFacts(
+    target,
+    scope
+  )
+  expect(errors(extracted.diagnostics)).toEqual([])
+  expect(facts.catalogChanged).toBe(false)
+  expect(facts.crossCheckFailures).toEqual([])
+  return { extracted, facts }
 }
 
 /** Помилки прийому — рівно відмови `definers`, решти немає. */
@@ -409,6 +428,7 @@ async function referenceOf(
 async function expectKindLabelsKept(
   target: DbConnection,
   extracted: Extracted,
+  facts: ExecuteFacts,
   project: Project,
   before: ReadonlyMap<string, string>,
   files: ReadonlyMap<string, string>,
@@ -439,6 +459,7 @@ async function expectKindLabelsKept(
     newId: () => randomUUID(),
     schemaPath,
     parse,
+    executeFacts: facts,
     ...(await referenceOf(target, existing)),
   })
   expectRefusedDefiners(again.diagnostics, definers)
@@ -459,7 +480,7 @@ async function refusedRoundTrip(
   project: Project,
   loss: Loss
 ): Promise<Map<string, string>> {
-  const { extracted, files } = await refusedAdoption(
+  const { extracted, facts, files } = await refusedAdoption(
     target,
     extractScope,
     project,
@@ -468,6 +489,7 @@ async function refusedRoundTrip(
   await expectKindLabelsKept(
     target,
     extracted,
+    facts,
     project,
     new Map(),
     files,
@@ -489,23 +511,25 @@ export async function refusedAdoption(
   refusals: readonly Refusal[]
 ): Promise<{
   extracted: Extracted
+  facts: ExecuteFacts
   files: Map<string, string>
   diagnostics: Awaited<ReturnType<typeof reverseGenerate>>["diagnostics"]
   target: OracleShape
 }> {
   await withPlatformSequence(target)
-  const extracted = await engine.extract(target, extractScope)
-  expect(errors(extracted.diagnostics)).toEqual([])
+  const { extracted, facts } = await extractWithFacts(target, extractScope)
   const reversed = await reverseGenerate(extracted.model, {
     project: { name: "RoundTrip", ...project },
     existing: new Map(),
     newId: () => randomUUID(),
     schemaPath,
     parse,
+    executeFacts: facts,
   })
   expectRefusals(reversed.diagnostics, refusals)
   return {
     extracted,
+    facts,
     files: new Map(reversed.files),
     diagnostics: reversed.diagnostics,
     target: await withClient(target, (c) =>
@@ -526,8 +550,7 @@ export async function roundTripOf(
   loss: Loss = NO_LOSS(extractScope)
 ): Promise<RoundTrip> {
   await withPlatformSequence(target)
-  const extracted = await engine.extract(target, extractScope)
-  expect(errors(extracted.diagnostics)).toEqual([])
+  const { extracted, facts } = await extractWithFacts(target, extractScope)
 
   const reversed = await reverseGenerate(extracted.model, {
     project: { name: "RoundTrip", ...project },
@@ -535,19 +558,34 @@ export async function roundTripOf(
     newId: () => randomUUID(),
     schemaPath,
     parse,
+    executeFacts: facts,
     ...(await referenceOf(target, existing)),
   })
   expectRefusedDefiners(reversed.diagnostics, loss.definers)
   await expectKindLabelsKept(
     target,
     extracted,
+    facts,
     project,
     existing,
     reversed.files,
     loss.definers
   )
 
-  const compiled = await compile(reversed.files)
+  return compiledTrip(target, extracted, reversed.files, loss)
+}
+
+/**
+ * Друга половина ланцюжка §9: компіляція теки, рендер, звірка з ціллю й
+ * оракул. Окремо, бо теку після мутацій (`chain`) веде той самий шлях.
+ */
+async function compiledTrip(
+  target: DbConnection,
+  extracted: Extracted,
+  files: ReadonlyMap<string, string>,
+  loss: Loss
+): Promise<RoundTrip> {
+  const compiled = await compile(files)
   expect(errors(compiled.diagnostics)).toEqual([])
   const model = compiled.model!
   const sql = renderDesiredState(model).sql
@@ -952,7 +990,8 @@ async function expectPlanAndApply(
 export async function deployedRoundTrip(
   files: Map<string, string>,
   existing: ReadonlyMap<string, string>,
-  endToEnd: boolean
+  endToEnd: boolean,
+  chain?: (adopted: Map<string, string>) => Promise<Map<string, string>>
 ): Promise<{
   source: CompiledModel
   result?: RoundTrip
@@ -971,12 +1010,23 @@ export async function deployedRoundTrip(
     databaseProvider: source.project.database.provider,
   }
   if (loss.definers.length > 0) {
+    // Теку з відмовами класу ремонту лагодять мутації `chain`; повна звірка
+    // йде вже над теку після них (Д3, Р8), у тій самій цілі
+    let result: RoundTrip | undefined
     const adopted = await inTarget(
       renderDesiredState(source).sql,
       scope,
-      (target) => refusedRoundTrip(target, scope, project, loss)
+      async (target) => {
+        const kept = await refusedRoundTrip(target, scope, project, loss)
+        if (chain === undefined) return kept
+        const repaired = await chain(kept)
+        const { extracted } = await extractWithFacts(target, scope)
+        result = await compiledTrip(target, extracted, repaired, loss)
+        if (endToEnd) await expectPlanAndApply(target, result.model, loss)
+        return repaired
+      }
     )
-    return { source, adopted }
+    return { source, adopted, ...(result === undefined ? {} : { result }) }
   }
   const result = await inTarget(
     renderDesiredState(source).sql,
