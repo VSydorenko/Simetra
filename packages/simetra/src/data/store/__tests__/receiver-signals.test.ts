@@ -67,7 +67,19 @@ const keysView = (...keys: Key[]): ViewSpec => ({
   keys,
 })
 
-function harness(server?: NonNullable<Parameters<typeof setup>[0]>["server"]) {
+const S2 = "00000000-0000-4000-8000-0000000000b2"
+const channelOf = (scope: string) =>
+  channelTopic({
+    kind: "changes",
+    scopeKindId: SCOPE_KIND_ID,
+    scope,
+    object: task.id,
+  })
+
+function harness(
+  server?: NonNullable<Parameters<typeof setup>[0]>["server"],
+  scopes: readonly string[] = [S]
+) {
   const transport = createFakeSignalTransport()
   const h = setup({
     rightsSnapshot: true,
@@ -76,8 +88,8 @@ function harness(server?: NonNullable<Parameters<typeof setup>[0]>["server"]) {
   })
   h.fake.rightsSnapshot = {
     userId: USER,
-    scopeSets: [{ scopeKind: SCOPE_KIND_ID, scope: S }],
-    rights: [read],
+    scopeSets: scopes.map((scope) => ({ scopeKind: SCOPE_KIND_ID, scope })),
+    rights: scopes.map((scope) => ({ ...read, scope })),
     members: [],
     dimensionValues: [],
   }
@@ -113,9 +125,10 @@ const keyReadsSince = (h: Harness, from: number) =>
 async function open(
   spec: ViewSpec,
   rows = 3,
-  server?: Parameters<typeof harness>[0]
+  server?: Parameters<typeof harness>[0],
+  scopes?: readonly string[]
 ) {
-  const h = harness(server)
+  const h = harness(server, scopes)
   seed(h.fake, 1, rows)
   const subscribe = vi.spyOn(h.transport, "subscribe")
   const handle = h.core.view(spec)
@@ -462,6 +475,11 @@ describe("expected minimum version, new keys, sections and invalidate", () => {
   it("on invalidate re-reads the visible views of the object in one request and marks the invisible ones needsRefresh", async () => {
     const h = await open(keysView(key(1)))
     await h.core.preload({ kind: "full", object: TASK })
+    const lines = [{ ref: key(900), qty: 1, lineNumber: 1 }]
+    h.fake.setLines(TASK, key(1), "lines", lines)
+    h.core
+      .view({ kind: "section", object: TASK, owner: key(1), section: "lines" })
+      .subscribe(() => {})
     await settle()
     const from = h.fake.requests.length
     emit(h, {
@@ -565,7 +583,7 @@ describe("flow control", () => {
     expect(h.handle.getSnapshot().needsRefresh).toBe(true)
     h.core.resume()
     await settle()
-    expect(requestsSince(h, h.from).length).toBeGreaterThanOrEqual(1)
+    expect(requestsSince(h, h.from)).toHaveLength(1)
     expect(h.handle.getSnapshot().rows[0]).toMatchObject({
       values: { title: "hidden" },
     })
@@ -577,9 +595,81 @@ describe("flow control", () => {
     emit(h, change("update", key(1), v))
     h.core.close("disposed")
     await closeBatch()
-    emit(h, change("update", key(1), v + 1))
+    // Прямий виклик обробника: закритий фейк нікому нічого не доставляє.
+    h.deliver(channel, change("update", key(1), v + 1))
+    h.deliver(channel, change("create", key(40), 9))
     await closeBatch()
     expect(requestsSince(h, h.from)).toHaveLength(0)
+    expect(h.log.filter((e) => e.kind === "late-response")).toEqual([])
+    expect(h.inspect.rowCount()).toBe(0)
+  })
+})
+
+describe("purge of a pair", () => {
+  const purge = (h: Awaited<ReturnType<typeof open>>, scope: string) =>
+    h.core.commit((w) => w.purge(TASK, { scope }), h.core.token())
+  const twoScopes = async () => {
+    const h = await open({ kind: "full", object: TASK }, 0, undefined, [S, S2])
+    h.fake.insert(TASK, taskValues(1))
+    h.fake.insert(TASK, taskValues(2, { org: S2 }))
+    await h.core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    return { ...h, from: h.fake.requests.length }
+  }
+
+  it("drops the unclosed batch of the pair, and still reads a key of another pair of the object", async () => {
+    const h = await twoScopes()
+    const v1 = h.fake.insert(TASK, taskValues(10))
+    const v2 = h.fake.insert(TASK, taskValues(11, { org: S2 }))
+    emit(h, change("create", key(10), v1), channelOf(S))
+    emit(h, change("create", key(11), v2), channelOf(S2))
+    expect(purge(h, S)).toBe(true)
+    await closeBatch()
+    const keys = keyReadsSince(h, h.from).flatMap((r) => keysOf(r.query))
+    expect(keys).toEqual([key(11)])
+  })
+
+  it("drops the batch waiting behind a read in flight", async () => {
+    const h = await twoScopes()
+    h.fake.mode = "manual"
+    const v12 = h.fake.insert(TASK, taskValues(12))
+    emit(h, change("create", key(12), v12), channelOf(S))
+    await closeBatch()
+    const v13 = h.fake.insert(TASK, taskValues(13))
+    emit(h, change("create", key(13), v13), channelOf(S))
+    await closeBatch()
+    purge(h, S)
+    h.fake.mode = "auto"
+    h.fake.deliverAll()
+    await settle()
+    const keys = keyReadsSince(h, h.from).flatMap((r) => keysOf(r.query))
+    expect(keys).toEqual([key(12)])
+  })
+
+  it("drops a min-version re-read waiting out its pause: 0 requests after the purge", async () => {
+    const h = await twoScopes()
+    const served = h.fake.edit(TASK, key(1), { title: "v" })
+    emit(h, change("update", key(1), served + 1), channelOf(S))
+    await closeBatch()
+    const sent = h.fake.requests.length
+    purge(h, S)
+    await vi.advanceTimersByTimeAsync(10_000)
+    await settle()
+    expect(h.fake.requests.length).toBe(sent)
+  })
+})
+
+describe("a failed key read", () => {
+  it("is not lost: the views of the object get needsRefresh and the failure is logged", async () => {
+    const h = await open(keysView(key(1)))
+    h.fake.mode = "manual"
+    const v = h.fake.edit(TASK, key(1), { title: "x" })
+    emit(h, change("update", key(1), v))
+    await closeBatch()
+    h.fake.take(0).fail("command.unavailable")
+    await settle()
+    expect(h.handle.getSnapshot().needsRefresh).toBe(true)
+    expect(h.log.some((e) => e.kind === "listener-failed")).toBe(true)
   })
 })
 

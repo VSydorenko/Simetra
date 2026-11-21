@@ -72,6 +72,15 @@ export interface Receiver {
   touch(): void
   /** A rights snapshot (the first one too) replaced the current one. */
   snapshotReplaced(): void
+  /**
+   * A pair (scope, object) or keys were purged: their unclosed signals and
+   * min-version re-reads are dropped, so nothing of them is read or written
+   * afterwards. One hook for every purge (a rights snapshot, a refused channel).
+   */
+  purged(
+    object: ObjectName,
+    target: { keys: readonly Key[] } | { scope: string | null }
+  ): void
   /** Drops every subscription; the receiver sees nothing afterwards. */
   stop(): void
 }
@@ -90,11 +99,15 @@ interface KeySignal {
   version: number
   deleted: boolean
   attempt: number
+  // Пари (скоупи каналів), з яких прийшли сигнали ключа: `purge` пари скидає
+  // лише їх (`null` — нескоуплений об'єкт).
+  readonly scopes: Set<string | null>
 }
 
 interface ObjectBatch {
   readonly keys: Map<Key, KeySignal>
-  invalidate: boolean
+  // Скоупи, з яких прийшов `invalidate`; порожньо — не було.
+  readonly invalidate: Set<string | null>
 }
 
 type Batch = Map<ObjectName, ObjectBatch>
@@ -102,7 +115,7 @@ type Batch = Map<ObjectName, ObjectBatch>
 const objectBatch = (batch: Batch, object: ObjectName): ObjectBatch => {
   let found = batch.get(object)
   if (found === undefined) {
-    found = { keys: new Map(), invalidate: false }
+    found = { keys: new Map(), invalidate: new Set() }
     batch.set(object, found)
   }
   return found
@@ -113,8 +126,9 @@ const addKey = (into: ObjectBatch, key: Key, signal: KeySignal) => {
   into.keys.set(
     key,
     prev === undefined
-      ? { ...signal }
+      ? { ...signal, scopes: new Set(signal.scopes) }
       : {
+          scopes: new Set([...prev.scopes, ...signal.scopes]),
           version: Math.max(prev.version, signal.version),
           deleted: prev.deleted || signal.deleted,
           // Свіжий сигнал знову дає ключу всі дочитування.
@@ -126,7 +140,7 @@ const addKey = (into: ObjectBatch, key: Key, signal: KeySignal) => {
 const mergeBatch = (into: Batch, from: Batch) => {
   for (const [object, source] of from) {
     const target = objectBatch(into, object)
-    target.invalidate ||= source.invalidate
+    for (const scope of source.invalidate) target.invalidate.add(scope)
     for (const [key, signal] of source.keys) addKey(target, key, signal)
   }
 }
@@ -315,10 +329,12 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const entry = ctx.index.byId.get(channel.object)
     if (entry === undefined) return
     const object: ObjectName = `${entry.kind}.${entry.name}`
+    // Пара сигналу — скоуп каналу; нескоуплений об'єкт скоупу не має.
+    const scope = entry.scopeColumn === undefined ? null : channel.scope
     // Нерозібране — `invalidate` об'єкта топіка: сумісність уперед (§8.1).
     const invalidate = () =>
       collect((batch) => {
-        objectBatch(batch, object).invalidate = true
+        objectBatch(batch, object).invalidate.add(scope)
       })
     const change = receivedChangeSchema.safeParse(payload)
     const parsed = change.success
@@ -339,6 +355,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         version: op === "delete" ? -1 : version,
         deleted: op === "delete",
         attempt: 0,
+        scopes: new Set([scope]),
       })
     )
   }
@@ -393,8 +410,8 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     if (!hasViews) fresh.length = 0
     const count = stored.length + fresh.length
     // Кроки 6–7: `invalidate` чи пачка понад межу ключів читає об'єкт цілим.
-    const whole = batch.invalidate || count > limits.keysPerRequest
-    if (count === 0 && !batch.invalidate) return undefined
+    const whole = batch.invalidate.size > 0 || count > limits.keysPerRequest
+    if (count === 0 && batch.invalidate.size === 0) return undefined
     return { stored, fresh, whole }
   }
 
@@ -416,7 +433,12 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       rows: readKeys(read.source, o.entry, [...plan.stored, ...plan.fresh], {
         keysPerRequest: limits.keysPerRequest,
         known: (keys) => o.rows.knownFor(keys, { owned, form: "list" }),
-      }).catch(() => undefined),
+      }).catch((error: unknown) => {
+        // Збій читання не губить сигнал мовчки: вигляди об'єкта позначено, а
+        // журнал знає (як `reread` ключа після власного запису).
+        writer.log({ kind: "listener-failed", error })
+        return undefined
+      }),
     }
   }
 
@@ -449,7 +471,10 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     spec.where === undefined ||
     evaluateFilter(spec.where, values, fieldInfoOf(o.entry), collator)
 
-  const retries = new Map<string, object>()
+  const retries = new Map<
+    string,
+    { chain: object; object: ObjectName; key: Key; scope: string | null }
+  >()
   // Дочитування мінімальної версії: після паузи ключ іде в ту саму чергу
   // зведених пачок, а не окремим шляхом.
   const scheduleRetry = (
@@ -460,9 +485,10 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   ) => {
     const id = `${object}\u0000${key}`
     const chain = {}
-    retries.set(id, chain)
+    const scope = writer.objectOf(object).rows.get(key)?.scope ?? null
+    retries.set(id, { chain, object, key, scope })
     void session.sleep(MIN_VERSION_PAUSE_MS * 2 ** (attempt - 1)).then(() => {
-      if (retries.get(id) !== chain) return
+      if (retries.get(id)?.chain !== chain) return
       retries.delete(id)
       if (stopped || !token.valid) return
       // Позначку вже зняло інше читання — дочитувати нічого.
@@ -473,6 +499,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         version,
         deleted: false,
         attempt,
+        scopes: new Set([scope]),
       })
       enqueue(batch)
     })
@@ -562,16 +589,13 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       // не окремим запитом після неї. Відповідь ТЧ несе `ownerVersion`, тож
       // після запису шапки вигляд ТЧ уже не застарілий.
       const owners = new Set(plan.stored)
-      const sections = [...writer.registry.subsets()].filter(
-        (s) =>
-          s.form.object === o &&
-          s.alive &&
-          !s.purged &&
-          s.loaded &&
-          s.listeners.size > 0 &&
-          s.form.spec.kind === "section" &&
-          owners.has(s.form.spec.owner)
-      )
+      const sections = views.flatMap((view) => {
+        const spec = view.spec
+        if (!view.visible || spec.kind !== "section" || !owners.has(spec.owner))
+          return []
+        const subset = writer.registry.find(spec)
+        return subset?.loaded === true ? [subset] : []
+      })
       if (sections.length > 0)
         flights.push(
           singleFlight(writer, o, sections, { visibleOnly: false }).done.catch(
@@ -589,6 +613,12 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const answers = await Promise.all(jobs.map((job) => job.rows))
     await Promise.all(flights)
     if (stopped || !token.valid) return
+    const failed = jobs.filter((_, at) => answers[at] === undefined)
+    if (failed.length > 0)
+      ctx.commit((w) => {
+        for (const { object } of failed)
+          w.markViews(object, { needsRefresh: true })
+      }, token)
     const settled = jobs.flatMap((job, at) =>
       answers[at] === undefined ? [] : [{ job, rows: answers[at] }]
     )
@@ -633,6 +663,34 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     snapshotReplaced() {
       refused.clear()
       touch()
+    },
+    purged(object, target) {
+      const drop = (batch: Batch) => {
+        const found = batch.get(object)
+        if (found === undefined) return
+        if ("keys" in target)
+          for (const key of target.keys) found.keys.delete(key.toLowerCase())
+        else {
+          found.invalidate.delete(target.scope)
+          for (const [key, signal] of found.keys) {
+            signal.scopes.delete(target.scope)
+            if (signal.scopes.size === 0) found.keys.delete(key)
+          }
+        }
+        if (found.keys.size === 0 && found.invalidate.size === 0)
+          batch.delete(object)
+      }
+      if (open !== undefined) drop(open.batch)
+      if (waiting !== undefined) drop(waiting)
+      for (const [id, retry] of retries) {
+        if (retry.object !== object) continue
+        if (
+          "keys" in target
+            ? target.keys.some((k) => k.toLowerCase() === retry.key)
+            : retry.scope === target.scope
+        )
+          retries.delete(id)
+      }
     },
     stop() {
       stopped = true

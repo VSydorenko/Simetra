@@ -67,6 +67,14 @@ export interface WriterContext extends ReaderContext {
   readonly purges: Map<ObjectName, number>
   /** Invalidates the tail re-read of the object in flight and re-queues its keys (П12). */
   invalidateTail(o: ObjectState): void
+  /**
+   * Called by every `Writer.purge` with its target: the signal receiver drops
+   * the pending signals and re-reads of the purged pair or keys (§8.4).
+   */
+  onPurge(
+    object: ObjectName,
+    target: { keys: readonly Key[] } | { scope: string | null }
+  ): void
   /** Deliberate defects of the model test's self-check. */
   readonly defects: Defects
   /** The monotonic clock in ms (`performance.now()`; a test substitutes it). */
@@ -324,6 +332,7 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       for (const key of [...dropped, ...cleared]) rowViews.touch(o.name, key)
       forget(ctx, scope, o, new Set(dropped), new Set(purged))
       ctx.invalidateTail(o)
+      ctx.onPurge(o.name, target)
       // Прохід заміни знімка прав ховає пару надгробком і бар'єром: читання,
       // що стартували раніше, не принесуть її рядків, а відповіді для
       // дозволених пар чинні — повторювати їх не треба.

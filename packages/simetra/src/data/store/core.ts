@@ -1450,6 +1450,7 @@ export function createCore(options: {
     objects,
     purges,
     invalidateTail,
+    onPurge: (object, target) => receiver?.purged(object, target),
     defects,
     now,
     hiddenKeys,
