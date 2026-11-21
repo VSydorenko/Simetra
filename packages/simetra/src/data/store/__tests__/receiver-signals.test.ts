@@ -583,10 +583,10 @@ describe("flow control", () => {
   })
 })
 
-describe("version epochs", () => {
-  const EA = "a".repeat(64)
-  const EB = "b".repeat(64)
+const EA = "a".repeat(64)
+const EB = "b".repeat(64)
 
+describe("version epochs", () => {
   // Сесія переходить на епоху B через читання іншого ключа: рядок ключа 1
   // лишається в епосі A з позначкою «не доведено».
   async function switched() {
@@ -617,6 +617,46 @@ describe("version epochs", () => {
     expect(
       coreInternals(h.core).objects.get(TASK)!.rows.get(key(1))
     ).toMatchObject({ versionEpoch: EB })
+  })
+
+  it("does not take a row of the current epoch that waits for the proof after a switch for an echo", async () => {
+    const h = await switched()
+    // Рядок ключа 2 прочитано в епосі B, але читання почалось до перемикання:
+    // позначка перемикання на ньому лишається, тож сигнал його перечитує.
+    const stored = h.fake.row(TASK, key(2))!.version
+    emit(h, change("update", key(2), stored))
+    await closeBatch()
+    expect(requestsSince(h, h.from)).toHaveLength(1)
+  })
+
+  it("discards the answer of an abandoned epoch that carries no rows: the key is not removed", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.99)
+    const h = harness()
+    h.fake.epoch = EA
+    seed(h.fake, 1, 2)
+    const handle = h.core.view(keysView(key(1)))
+    handle.subscribe(() => {})
+    await settle()
+    const stored = h.fake.row(TASK, key(1))!.version
+    // Читання за ключем летить, сервер уже видалив рядок.
+    h.fake.mode = "manual"
+    h.fake.remove(TASK, key(1))
+    emit(h, change("delete", key(1), stored))
+    await closeBatch()
+    expect(h.fake.pending).toHaveLength(1)
+    const old = h.fake.take(0)
+    // Сесія переходить на епоху B іншим читанням.
+    h.fake.epoch = EB
+    h.core.view(keysView(key(2))).subscribe(() => {})
+    await settle()
+    h.fake.take(0).answer()
+    await settle()
+    expect(h.inspect.versionEpochs().current).toBe(EB)
+    // Відповідь без рядків із покинутої епохи A.
+    h.fake.epoch = EA
+    old.answer()
+    await settle()
+    expect(handle.getSnapshot().rows[0]!.state).not.toBe("removed")
   })
 
   it("takes a row proved in the current epoch with a version not below row_ver for an echo", async () => {
