@@ -42,7 +42,7 @@ import { isGeneratedPath } from "./identity"
  */
 
 /** Пара `(schema, name)` кортежем: ім'я в лапках може містити крапку. */
-const tupleKey = (schema: string, name: string) =>
+export const tupleKey = (schema: string, name: string) =>
   JSON.stringify([schema, name])
 
 /** Об'єкт теки за міткою виду: ім'я для `check.object` і дії за словом чи UUID. */
@@ -102,6 +102,12 @@ export interface DeclareInput {
   /** Ідентичності одиниць, які описує збережений файл (`describedElsewhere`). */
   described: ReadonlySet<string>
   existing: ReadonlyMap<string, string>
+  /**
+   * Функції форм платформи теки (`tupleKey`: функція множини, функція
+   * значень виміру, обробник підписки): їхній `EXECUTE` виводять метадані, а
+   * декларація на них — `sql.declaration-platform-form`.
+   */
+  platformForms: ReadonlySet<string>
   /**
    * Мітки видів підсумкової теки з контрактів прав її метаданих; кличеться
    * лише коли є що розв'язувати. `undefined` — метадані контрактів не дають.
@@ -338,6 +344,7 @@ export async function declareFunctions(
     )
       continue
     const { schema, name } = unit
+    if (input.platformForms.has(tupleKey(schema, name))) continue
     const label = `${schema}.${name}`
     const named = facts?.functions.filter(
       (f) => f.schema === schema && f.name === name

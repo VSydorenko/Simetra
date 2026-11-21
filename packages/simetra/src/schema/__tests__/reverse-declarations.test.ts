@@ -21,7 +21,10 @@ import {
   type ReverseResult,
 } from "simetra/schema"
 import { metaFiles, project, uuid } from "../../compiler/__tests__/helpers"
-import { withRoles } from "../../compiler/__tests__/fixtures/rights"
+import {
+  teamScopeKind,
+  withRoles,
+} from "../../compiler/__tests__/fixtures/rights"
 
 /**
  * Декларації definer-функцій у зворотній генерації (спека декларацій функцій
@@ -610,6 +613,27 @@ describe("the ACL of a definer function", () => {
       }
     }
   )
+})
+
+describe("platform forms of the kept folder", () => {
+  it("the set function of a scope kind is not declared and needs no fact", async () => {
+    // Її `EXECUTE` виводять метадані: декларація на неї — `sql.declaration-platform-form`
+    const result = await reverseGenerate(
+      model(
+        "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT gen_random_uuid() $$;"
+      ),
+      options(withRoles(teamScopeKind()), undefined)
+    )
+    expect(
+      [...result.files.keys()].filter((p) => p.endsWith(".functions.json"))
+    ).toEqual([])
+    expect(
+      codes(result.diagnostics).filter(
+        (c) =>
+          c.startsWith("sql.declaration") || c.startsWith("introspect.definer")
+      )
+    ).toEqual([])
+  })
 })
 
 describe("an overloaded definer function", () => {

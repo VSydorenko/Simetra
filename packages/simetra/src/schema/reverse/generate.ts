@@ -55,6 +55,7 @@ import {
 } from "./identity"
 import {
   declareFunctions,
+  tupleKey,
   kindsByLabel,
   type KindsByLabel,
 } from "./declarations"
@@ -313,6 +314,35 @@ function folderHalf(
       ),
     ],
   }
+}
+
+/**
+ * Функції форм платформи наявної теки: функції множини видів скоупу,
+ * функції значень вимірів доступу й обробники підписок. Їхній `EXECUTE`
+ * виводить генератор, тож зворотна генерація декларації їм не пише.
+ */
+function platformForms(
+  kept: CompiledModel | undefined,
+  elsewhere: Elsewhere
+): Set<string> {
+  const found = new Set<string>()
+  if (kept === undefined) return found
+  const defaultSchema = kept.project.defaultSchema
+  for (const kind of kept.scopeKinds)
+    found.add(tupleKey(kind.setFunction.schema, kind.setFunction.name))
+  for (const dimension of kept.project.accessDimensions)
+    if ("function" in dimension.values)
+      found.add(
+        tupleKey(
+          dimension.values.function.schema ?? defaultSchema,
+          dimension.values.function.name
+        )
+      )
+  for (const handler of elsewhere.handlers) {
+    const at = handler.indexOf(".")
+    found.add(tupleKey(handler.slice(0, at), handler.slice(at + 1)))
+  }
+  return found
 }
 
 /**
@@ -715,6 +745,7 @@ export async function reverseGenerate(
     functionPaths: laid.functionPaths,
     described: elsewhere.units,
     existing: o.existing,
+    platformForms: platformForms(kept, elsewhere),
     kinds,
   })
   // Гранти задекларованих функцій відтворює генератор: з виходу їх прибрано
