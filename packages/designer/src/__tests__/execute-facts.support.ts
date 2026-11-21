@@ -523,17 +523,33 @@ export function describeExecuteFacts(): void {
           ),
       },
       {
-        // Роль поза переліком профілю: лише ACL функції й схеми видає зміну
+        // Роль поза переліком профілю вже згадана в ACL іншого об'єкта: зміна
+        // списку згаданих ролей відбиток не рухає, лише ACL видає зміну
         name: "EXECUTE on a function granted to a role outside the profile",
-        before: su(`create role ${quoted(group)}`),
-        change: onTarget(
-          `GRANT EXECUTE ON FUNCTION app.rpc() TO ${quoted(group)}`
-        ),
+        before: async (url) => {
+          await su(`create role ${quoted(group)}`)()
+          await asSuperuserOn(
+            url,
+            `grant usage on schema app to ${quoted(group)}`
+          )
+        },
+        change: (url) =>
+          asSuperuserOn(
+            url,
+            `grant execute on function app.rpc() to ${quoted(group)}`
+          ),
       },
       {
         name: "USAGE on a schema granted to a role outside the profile",
-        before: su(`create role ${quoted(group)}`),
-        change: onTarget(`GRANT USAGE ON SCHEMA app TO ${quoted(group)}`),
+        before: async (url) => {
+          await su(`create role ${quoted(group)}`)()
+          await asSuperuserOn(
+            url,
+            `grant execute on function app.rpc() to ${quoted(group)}`
+          )
+        },
+        change: (url) =>
+          asSuperuserOn(url, `grant usage on schema app to ${quoted(group)}`),
       },
       {
         name: "a schema in scope created",
