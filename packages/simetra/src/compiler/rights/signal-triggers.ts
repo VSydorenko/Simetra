@@ -56,7 +56,9 @@ export interface RightsSignalInput {
  * Чому таблиця фактів тригера сигналу прав не має: `verbatimFunction` — її
  * читає лише дослівна функція (Т2); `adoptedOnly` — форма відома, але її
  * факти доходять до прав лише через прийняті джерела (контейнер без
- * довідників прав моделі), а ті свіжіють за інтервалом.
+ * довідників прав моделі). Факти обох класів свіжіють за строком знімка прав
+ * клієнта (П4-B §8.2, §8.4: `rightsAt + I`), межа — `I` плюс одне читання;
+ * `I` — `DEFAULT_CORE_LIMITS.revalidateIntervalMs` (`src/data/store/types.ts`).
  */
 export type RightsSignalExemptReason = "verbatimFunction" | "adoptedOnly"
 
@@ -399,7 +401,8 @@ export function buildRightsSignalUnits(
     const shapes = shapesOf(table, input)
     if (shapes.length === 0) {
       // Т2: чий факт змінився, знає лише тіло дослівної функції — свіжість
-      // за інтервалом; Т3: невідома форма генерованого читання — помилка.
+      // за строком знімка прав (`I`, див. `RightsSignalExemptReason`); Т3:
+      // невідома форма генерованого читання — помилка.
       if (source.verbatimOnly)
         exempt.push({ table: nameOf(table), reason: "verbatimFunction" })
       else unknown.push({ table: nameOf(table), facts: source.facts })
