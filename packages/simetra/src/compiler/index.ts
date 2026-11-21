@@ -1,6 +1,7 @@
 export {
   COMPILER_RULES,
   diagnostic,
+  isRepairError,
   sortDiagnostics,
   valueAt,
   type CompilerRule,

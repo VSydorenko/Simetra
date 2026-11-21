@@ -1,4 +1,5 @@
 import {
+  isRepairError,
   changesBetween,
   compile,
   completeFiles,
@@ -49,6 +50,7 @@ import {
   readExisting,
   type ExistingFolder,
 } from "./identity"
+import type { ExecuteFacts } from "./execute-facts"
 import { columnNames, objectNames } from "./names"
 import {
   customTableData,
@@ -84,12 +86,22 @@ export interface ReverseOptions {
    * теки йдуть у теку, і їх судить компілятор.
    */
   reference?: CatalogModel
+  /**
+   * Факти `EXECUTE` з каталогу бази, прочитані в одному знімку з extract.
+   * Без них при definer-функціях декларацій не пишуть (спека декларацій
+   * функцій §5.5).
+   */
+  executeFacts?: ExecuteFacts
 }
 
 export interface ReverseResult {
   /** Підсумкова тека після злиття — саме її компілює генератор. */
   files: Map<string, string>
-  /** Зміни відносно `existing`; порожні, коли є хоч одна помилка. */
+  /**
+   * Зміни відносно `existing`; порожні, коли є помилка поза класом ремонту
+   * (спека декларацій функцій §5.1): тека лише з помилками класу ремонту
+   * законна, її лагодять наступні мутації.
+   */
   changes: FileChange[]
   /** Помилки генератора й компіляції підсумкової теки. */
   diagnostics: Diagnostic[]
@@ -325,15 +337,18 @@ const DEBT_RATCHET: ReadonlySet<string> = new Set([
 async function compiledExisting(
   existing: ReadonlyMap<string, string>
 ): Promise<CompiledModel | undefined> {
-  const compiled = await compile(existing)
+  // Режим ремонту: збережена тека з помилками класу ремонту (результат
+  // попереднього прийому) теж модель — повторний прийом над нею працює
+  const compiled = await compile(existing, { repair: true })
   if (compiled.model !== undefined) return compiled.model
   const errors = compiled.diagnostics.filter((d) => d.severity === "error")
-  if (!errors.every((d) => DEBT_RATCHET.has(d.code))) return undefined
+  if (!errors.every((d) => DEBT_RATCHET.has(d.code) || isRepairError(d)))
+    return undefined
   const debt = await currentDebt(existing)
   if (debt === undefined) return undefined
   const accepted = new Map(existing)
   accepted.set(SQL_DEBT_FILE, JSON.stringify({ units: debt }))
-  return (await compile(accepted)).model
+  return (await compile(accepted, { repair: true })).model
 }
 
 /**
@@ -668,7 +683,8 @@ export async function reverseGenerate(
         o.schemaPath
       )
     )
-  const compiled = await compile(files)
+  // Режим ремонту: тека з помилками лише класу ремонту законна й дає модель
+  const compiled = await compile(files, { repair: true })
   diagnostics.push(...completed.diagnostics, ...compiled.diagnostics)
   if (compiled.model !== undefined)
     diagnostics.push(
@@ -681,7 +697,7 @@ export async function reverseGenerate(
   const sorted = sortDiagnostics(diagnostics)
   return {
     files,
-    changes: sorted.some((d) => d.severity === "error")
+    changes: sorted.some((d) => d.severity === "error" && !isRepairError(d))
       ? []
       : changesBetween(o.existing, files),
     diagnostics: sorted,

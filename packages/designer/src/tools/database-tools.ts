@@ -5,6 +5,7 @@ import {
   type CompiledModel,
   type Diagnostic,
   identityParts,
+  isRepairError,
   unitIdentity,
 } from "simetra/compiler"
 import {
@@ -98,7 +99,7 @@ const schemaName = z.string().min(1).max(63)
 export const introspectTool = defineTool({
   name: "introspect",
   description:
-    "Read the live database into metadata: tables become CustomTable, enums PgEnum, the rest verbatim .sql; known ids are kept. Connection: server environment. Scope: existing metadata's schemas plus `schemas` (required without project.meta.json). Existing metadata loads into one throwaway shadow (like `diff`); a shadow that cannot be built is an error. Writes nothing if anything is unrepresentable or fails to compile.",
+    "Read the live database into metadata: tables become CustomTable, enums PgEnum, the rest verbatim .sql; known ids are kept. Connection: server environment. Scope: existing metadata's schemas plus `schemas` (required without project.meta.json). Existing metadata loads into one throwaway shadow (like `diff`); a shadow that cannot be built is an error. Writes nothing if anything is unrepresentable or fails to compile, except repair-class errors.",
   input: z.strictObject({
     schemas: z.array(schemaName).min(1).optional().meta({
       description:
@@ -126,8 +127,10 @@ export const introspectTool = defineTool({
     const existing = await readFolder(dir)
     // Провайдер потрібен до перевірки схем: межа «чужих» схем — його пресет.
     // Існуючий проєкт несе його у файлі, тека без проєкту — у вході.
+    // Режим ремонту: тека, записана попереднім прийомом з помилками класу
+    // ремонту, законна, і повторний прийом над нею працює
     const compiled = existing.has(PROJECT_FILE)
-      ? await compile(existing)
+      ? await compile(existing, { repair: true })
       : undefined
     if (compiled !== undefined && compiled.model === undefined)
       return { ok: false, changes: [], diagnostics: compiled.diagnostics }
@@ -204,7 +207,8 @@ export const introspectTool = defineTool({
       required(database),
       "introspect",
       async (db) => ({
-        extracted: await engine.extract(db.target, scope),
+        // Факти `EXECUTE` — з тим самим знімком, що й extract (Р11)
+        ...(await engine.extractWithExecuteFacts(db.target, scope)),
         // Еталон наявної теки — форма каталогу її тіні (одна тінь на
         // виклик): згенеровані одиниці теки каталог пише інакше, ніж
         // генератор
@@ -221,7 +225,7 @@ export const introspectTool = defineTool({
     )
     if (!read.ok)
       return { ok: false, changes: [], diagnostics: failureDiagnostics(read) }
-    const { extracted, reference } = read.value
+    const { extracted, facts, reference } = read.value
     const extractDiagnostics = [
       ...extracted.diagnostics,
       ...reference.diagnostics,
@@ -234,15 +238,23 @@ export const introspectTool = defineTool({
       newId: () => crypto.randomUUID(),
       schemaPath: schemaPathResolver(dir),
       parse: await loadSqlParser(),
+      executeFacts: facts,
       ...(reference.catalog === undefined
         ? {}
         : { reference: reference.catalog }),
     })
     const diagnostics = [...extractDiagnostics, ...reversed.diagnostics]
     const ok = !hasErrors(diagnostics)
+    // Тека лише з помилками класу ремонту записується (спека декларацій
+    // функцій §5.1): `ok` лишається `false`, а `written` каже `invoke` писати.
+    // Будь-яка інша помилка — нічого не записано, як і досі.
+    const repairOnly =
+      !ok &&
+      diagnostics.every((d) => d.severity !== "error" || isRepairError(d))
     return {
       ok,
-      changes: ok ? reversed.changes : [],
+      ...(repairOnly ? { written: true as const } : {}),
+      changes: ok || repairOnly ? reversed.changes : [],
       diagnostics,
       data: { schemas: [...scope.schemas] },
     }
