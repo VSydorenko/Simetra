@@ -913,6 +913,53 @@ describe("the snapshot barrier", () => {
     expect(rowsOf(core).get(key(1))?.version).toBe(2)
   })
 
+  it("does not write lines read before a reopened pair once the pair tombstone is evicted, though a newer header confirms the scope", async () => {
+    const { core, fake } = harness({
+      mode: "manual",
+      limits: { tombstonesMax: 1 },
+    })
+    await firstSnapshot(core)
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    // ТЧ стартує, поки пара S дозволена; її відповідь висить.
+    const owned = core.view(section(1))
+    watch(owned)
+    await settle()
+    const read = fake.take()
+    // Пару S заборонено й знову відкрито: надгробок пари — новіший за
+    // старт ТЧ.
+    grant(fake, ONLY_T())
+    core.requestRights()
+    await settle()
+    grant(fake, BOTH())
+    core.requestRights()
+    await settle()
+    // Новіше читання записує шапку тієї самої версії в S.
+    const header = core.view(card(1))
+    watch(header)
+    await settle()
+    fake.deliverAll()
+    await settle()
+    expect(rowsOf(core).get(key(1))?.scope).toBe(S)
+    // Відкриття пари T ставить свій надгробок і витісняє надгробок пари S.
+    grant(fake, snapshotOf([readRow(S)]))
+    core.requestRights()
+    await settle()
+    grant(fake, BOTH())
+    core.requestRights()
+    await settle()
+    fake.deliverAll()
+    await settle()
+    // Рядки ТЧ з читання, старшого за знову відкриту пару, не пишуться.
+    read.answer(read.issuedAt)
+    await settle()
+    expect(linesOf(core, 1)).toBeUndefined()
+    // Змонтований вигляд читає ТЧ ще раз, і вже після знімків вона видима.
+    fake.deliverAll()
+    await settle()
+    expect(owned.getSnapshot().section?.lines).toHaveLength(1)
+  })
+
   it("keeps a purged row out of a late answer even after the right returns", async () => {
     const { core, fake } = harness()
     seed(fake, 1, 1)
