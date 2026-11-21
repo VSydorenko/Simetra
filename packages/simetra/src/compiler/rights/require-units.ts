@@ -228,6 +228,7 @@ function branchesOf(input: RequireInput): {
           ? "row"
           : "none"
     forms.add(form)
+    if (!rightsOn) continue
     // Ключ пари і форми: друга декларація тієї самої пари гілку не множить.
     const key = `${form}\0${contract.kindLabel}\0${action.action}`
     const main = must(mainTableOf(input.physical, contract.objectId))
