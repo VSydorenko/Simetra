@@ -795,6 +795,29 @@ describe("ObjectStore stale marks", () => {
     expect(h.store.get(K1)?.stale.disconnect).toBeUndefined()
   })
 
+  // Запис старого каналу рядок, що переїхав, перевіряє лише правилом 2
+  // (§8.4): власний канал рядка тут доведено, тож його перевірка не затуляє.
+  it("an old-channel mark of a moved row is not lifted by a read started before that channel's join", () => {
+    const h = harness()
+    put(h, row(K1, 1, { org: S }))
+    gap(h, chOf(S))
+    const beforeJoin = h.now()
+    h.session.epochs.join(chOf(S))
+    put(h, row(K1, 2, { org: T }), beforeJoin)
+    expect([...h.store.get(K1)!.stale.disconnect!.keys()]).toEqual([chOf(S)])
+    put(h, row(K1, 2, { org: T }))
+    expect(h.store.get(K1)?.stale.disconnect).toBeUndefined()
+  })
+
+  it("an old-channel mark of a moved row is not lifted by a join older than the mark", () => {
+    const h = harness()
+    h.session.epochs.join(chOf(S))
+    put(h, row(K1, 1, { org: S }))
+    gap(h, chOf(S))
+    put(h, row(K1, 2, { org: T }))
+    expect([...h.store.get(K1)!.stale.disconnect!.keys()]).toEqual([chOf(S)])
+  })
+
   it("markDisconnected with a channel marks only rows of that channel", () => {
     const h = harness()
     put(h, row(K1, 1, { org: S }))

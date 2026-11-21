@@ -854,8 +854,12 @@ describe("the disconnect mark and the composition on session epochs", () => {
     }
     expect(target()).toBe("stale")
     off()
-    await advance(60_000)
+    // Відписка — після затримки звільнення, до будь-якого перечитування.
+    await advance(1_000)
     expect(h.transport.subscribed().has(orgChannel)).toBe(false)
+    expect(target()).toBe("stale")
+    // Пізніше читання цілі каналу без приєднання її не доводить.
+    await advance(60_000)
     expect(target()).toBe("stale")
   })
 })

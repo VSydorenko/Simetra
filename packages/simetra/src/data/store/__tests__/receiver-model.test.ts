@@ -75,11 +75,12 @@ type Step =
   | { t: "revalidate" }
   | { t: "visible"; v: number; on: boolean }
   | { t: "hold" }
+  | { t: "mount" }
   | { t: "release"; ok: boolean; at: boolean }
 
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 export const STEP = fc.oneof(
-  { weight: 6, arbitrary: fc.record({ t: one("edit"), k: fc.nat(3) }) },
+  { weight: 6, arbitrary: fc.record({ t: one("edit"), k: fc.nat(7) }) },
   { weight: 2, arbitrary: fc.record({ t: one("create"), scope: fc.nat(1) }) },
   { weight: 4, arbitrary: fc.record({ t: one("fail"), ch: fc.nat(2) }) },
   {
@@ -108,6 +109,7 @@ export const STEP = fc.oneof(
     }),
   },
   { weight: 2, arbitrary: fc.record({ t: one("hold") }) },
+  { weight: 2, arbitrary: fc.record({ t: one("mount") }) },
   {
     weight: 2,
     arbitrary: fc.record({
@@ -140,6 +142,7 @@ async function run(steps: readonly Step[]): Promise<void> {
     h.fake.insert(TASK, taskValues(n, { org: SCOPES[scope] }))
     scopeOfKey.set(key(n), scope)
   }
+  const specs: ViewSpec[] = [...SPECS]
   const handles: ViewHandle[] = SPECS.map((spec) => {
     const handle = h.core.view(spec)
     handle.subscribe(() => {})
@@ -195,7 +198,7 @@ async function run(steps: readonly Step[]): Promise<void> {
             `${at}: view ${v} shows ${row.key} v${row.version} synced, a lost edit has v${floor}\n${trace.join("\n")}`
           )
       }
-      if (SPECS[v] !== FULL || snapshot.staleComposition === true) continue
+      if (specs[v] !== FULL || snapshot.staleComposition === true) continue
       if (snapshot.status === "loading" || snapshot.hasNewRows) continue
       const shown = new Set(snapshot.rows.map((r) => r.key))
       for (const k of lostCreates)
@@ -210,7 +213,8 @@ async function run(steps: readonly Step[]): Promise<void> {
     trace.push(`${i}: ${JSON.stringify(s)}`)
     switch (s.t) {
       case "edit": {
-        const k = key(START_KEYS[s.k]!.n)
+        const all = [...scopeOfKey.keys()]
+        const k = all[s.k % all.length]!
         const version = h.fake.edit(TASK, k, { title: `e${i}` })
         signal(k, "update", version)
         break
@@ -253,6 +257,18 @@ async function run(steps: readonly Step[]): Promise<void> {
       case "hold":
         h.fake.mode = "manual"
         break
+      case "mount": {
+        // Новий вигляд читає в сховище ключі, яких там ще не було (зокрема
+        // між розривом і приєднанням): створені моделлю й останній вихідний.
+        const keys = [...scopeOfKey.keys()].slice(-3)
+        const spec: ViewSpec = { kind: "keys", object: TASK, keys }
+        if (specs.some((x) => JSON.stringify(x) === JSON.stringify(spec))) break
+        specs.push(spec)
+        const handle = h.core.view(spec)
+        handle.subscribe(() => {})
+        handles.push(handle)
+        break
+      }
       case "release":
         h.fake.mode = "auto"
         while (h.fake.pending.length > 0) {
@@ -275,7 +291,7 @@ async function run(steps: readonly Step[]): Promise<void> {
     live[ch] = true
     transport.join(channel, false)
   }
-  for (const spec of SPECS) h.core.setVisible(spec, true)
+  for (const spec of specs) h.core.setVisible(spec, true)
   await vi.advanceTimersByTimeAsync(2 * REJOIN_JITTER_MS)
   await settle()
   await h.core.revalidate(TASK, { visibleOnly: true })
@@ -414,6 +430,16 @@ describe("receiver model: the disconnect mark and the composition against the se
         { t: "visible", v: 0, on: false },
         { t: "visible", v: 3, on: false },
         { t: "release", ok: true, at: true },
+      ],
+    ],
+    [
+      "Q3: a view mounted between fail and join, an edit in the gap",
+      [
+        { t: "create", scope: 0 },
+        { t: "fail", ch: 0 },
+        { t: "mount" },
+        { t: "edit", k: 4 },
+        { t: "time", ms: 1 },
       ],
     ],
     [
