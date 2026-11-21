@@ -111,7 +111,11 @@ describe("rights_require / rights_require_scope generator", () => {
 
   it("has one branch per pair, however many declarations name it", async () => {
     const all = await units([task("read"), task("read")])
-    expect(branches(functionOf(all, "rights_require")).size).toBe(1)
+    // Рахуємо за текстом: `Map` гілок злив би дубль сам.
+    expect(
+      functionOf(all, "rights_require")!.split("IF p_object = 'task'").length -
+        1
+    ).toBe(1)
   })
 
   it("puts a scope target into rights_require_scope and leaves rights_require out", async () => {
