@@ -110,7 +110,13 @@ const regionRows: Override = (text) =>
     ? { rows: [{ row: JSON.stringify({ id: ID, version: 2, code: "R" }) }] }
     : undefined
 
-const SNAPSHOT = { userId: null, scopeSets: [], rights: [] }
+const SNAPSHOT = {
+  userId: null,
+  scopeSets: [],
+  rights: [],
+  members: [],
+  dimensionValues: [],
+}
 /** Відповідь функції знімка прав — для кейсів частини `rights`. */
 const rightsAnswer: Override = (text, params) =>
   text.includes("rights_client_snapshot")

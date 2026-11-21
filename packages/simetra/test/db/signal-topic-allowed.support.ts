@@ -173,6 +173,105 @@ const ANCHOR_CASES: TopicCase[] = [
   ["the same channel as is", "m1", [ORG_KIND_ID, "A", TASK_ID], true],
 ]
 
+/**
+ * Канали прав і користувача в підписці (Р10 плану B6-1, П4-B §8.3): скоуп —
+ * лише в межі тенанта виду (`scopeSetCall`), без умови права; глобальний —
+ * дійсний користувач; користувача — лише свій.
+ */
+const RIGHTS_SUBSCRIBE: TopicCase[] = [
+  ["own user channel", "m1", { raw: "simetra-user:{m1}" }, true],
+  ["another user's channel", "m1", { raw: "simetra-user:{m5}" }, false],
+  ["an uppercase user channel", "m1", { raw: "simetra-user:{m1^}" }, false],
+  [
+    "a user channel with an extra segment",
+    "m1",
+    { raw: "simetra-user:{m1}:{m1}" },
+    false,
+  ],
+  [
+    "the rights channel of own scope",
+    "m1",
+    { raw: `simetra-rights:${ORG_KIND_ID}:{A}` },
+    true,
+  ],
+  // Канал прав — межа тенанта, не право: учасник без ролей теж дізнається,
+  // що його права в скоупі змінились.
+  [
+    "the rights channel of own scope without roles",
+    "m6",
+    { raw: `simetra-rights:${ORG_KIND_ID}:{A}` },
+    true,
+  ],
+  [
+    "the rights channel of a foreign scope",
+    "m1",
+    { raw: `simetra-rights:${ORG_KIND_ID}:{B}` },
+    false,
+  ],
+  [
+    "the rights channel of a scope the verbatim set function cuts",
+    "m1",
+    { raw: `simetra-rights:${ORG_KIND_ID}:{C}` },
+    false,
+  ],
+  [
+    "the rights channel of a kind that is not a scope kind",
+    "m1",
+    { raw: `simetra-rights:${TASK_ID}:{A}` },
+    false,
+  ],
+  [
+    "the global rights channel without membership",
+    "u9",
+    { raw: `simetra-rights:${ZERO_UUID}:${ZERO_UUID}` },
+    true,
+  ],
+  [
+    "the rights channel with a zero kind only",
+    "m1",
+    { raw: `simetra-rights:${ZERO_UUID}:{A}` },
+    false,
+  ],
+  [
+    "the rights channel with a zero scope only",
+    "m1",
+    { raw: `simetra-rights:${ORG_KIND_ID}:${ZERO_UUID}` },
+    false,
+  ],
+  [
+    "an uppercase rights channel",
+    "m1",
+    { raw: `simetra-rights:${ORG_KIND_ID}:{A^}` },
+    false,
+  ],
+  [
+    "a rights channel with an extra segment",
+    "m1",
+    { raw: `simetra-rights:${ORG_KIND_ID}:{A}:${TASK_ID}` },
+    false,
+  ],
+  [
+    "a rights channel with a trailing newline",
+    "m1",
+    { raw: `simetra-rights:${ORG_KIND_ID}:{A}\n` },
+    false,
+  ],
+  [
+    "the global rights channel without a user",
+    null,
+    { raw: `simetra-rights:${ZERO_UUID}:${ZERO_UUID}` },
+    false,
+  ],
+  ["a user channel without a user", null, { raw: "simetra-user:{m1}" }, false],
+]
+
+/** Канали прав, відкриті підпискою дійсному учаснику, — для відмови недійсному. */
+const VALID_ONLY: [name: string, user: string, topic: Topic][] = [
+  ["own user channel", "m1", { raw: "simetra-user:{m1}" }],
+  ["own scope rights", "m1", { raw: `simetra-rights:${ORG_KIND_ID}:{A}` }],
+  ["global rights", "m1", { raw: `simetra-rights:${ZERO_UUID}:${ZERO_UUID}` }],
+]
+
 const SUBSCRIBE: TopicCase[] = [
   ["own scope with a read right", "m1", [ORG_KIND_ID, "A", TASK_ID], true],
   // Інваріант 8: скоуп без умови права відкрив би канал учаснику без права.
@@ -232,14 +331,7 @@ const SUBSCRIBE: TopicCase[] = [
     false,
   ],
   ["another scope kind in the topic", "m1", [ZERO_UUID, "A", TASK_ID], false],
-  // Канали прав і користувача відкриє B6 (Р1 плану B2).
-  ["own user channel (B6)", "m1", { raw: "simetra-user:{m1}" }, false],
-  [
-    "the rights channel of own scope (B6)",
-    "m1",
-    { raw: `simetra-rights:${ORG_KIND_ID}:{A}` },
-    false,
-  ],
+  ...RIGHTS_SUBSCRIBE,
   [
     "an uppercase topic",
     "m1",
@@ -274,6 +366,12 @@ const SEND: TopicCase[] = [
     "the rights channel",
     "m1",
     { raw: `simetra-rights:${ORG_KIND_ID}:{A}` },
+    false,
+  ],
+  [
+    "the global rights channel",
+    "m1",
+    { raw: `simetra-rights:${ZERO_UUID}:${ZERO_UUID}` },
     false,
   ],
   ["own user channel", "m1", { raw: "simetra-user:{m1}" }, false],
@@ -337,6 +435,30 @@ export function defineSignalTopicCases(options: {
       expect(result).toEqual({ rows: [{ v: allowed }] })
     })
 
+    // `current_user_id()` недійсного користувача — NULL: канали прав, які
+    // він мав дійсним, закриваються тією самою першою перевіркою.
+    it.each(VALID_ONLY)(
+      "subscribe: %s is closed to a deactivated user",
+      async (_, user, topic) => {
+        const client = tx.client()
+        const ask = () =>
+          queryAs<{ v: boolean }>(client, "user", claims(user), TOPIC_SQL, [
+            topicOf(topic),
+            false,
+          ])
+        // Позитивний контроль: той самий канал дійсному — відкритий.
+        expect(await ask()).toEqual({ rows: [{ v: true }] })
+        await client.query("SAVEPOINT deactivated_user")
+        await client.query(
+          "UPDATE public.users SET invalid = true WHERE id = $1",
+          [key(user)]
+        )
+        const result = await ask()
+        await client.query("ROLLBACK TO SAVEPOINT deactivated_user")
+        expect(result).toEqual({ rows: [{ v: false }] })
+      }
+    )
+
     // Оракул — `SECURITY DEFINER`: відповідь залежить лише від claims, не
     // від ролі, що питає. Шлях відправки ролі команд — кейси `INSERT` нижче.
     it.each(SEND)("send: %s", async (_, user, topic, allowed) => {
@@ -382,6 +504,24 @@ export function defineSignalTopicCases(options: {
     const BY_POLICY = { code: "42501", policy: true }
 
     if (options.platformRoles) {
+      // Р10 плану B6-1: сигнали прав шле лише definer-код власника, тож роль
+      // команд не вставляє їх ні в канал прав, ні в канал користувача.
+      it.each([
+        ["own scope rights", `simetra-rights:${ORG_KIND_ID}:{A}`],
+        ["global rights", `simetra-rights:${ZERO_UUID}:${ZERO_UUID}`],
+        ["own user", "simetra-user:{m1}"],
+      ])(
+        "the command role cannot insert a rights signal into %s",
+        async (_, channel) => {
+          const { completed, refusal } = await insertAs("m1", {
+            channel: topicOf({ raw: channel }),
+            data: { op: "rights" },
+          })
+          expect(completed).toEqual([])
+          expect(refused(refusal)).toEqual(BY_POLICY)
+        }
+      )
+
       // Інваріант 5: форму сигналу судить політика `INSERT`, а не довіра до
       // ядра; та сама відмова, що й у чужий канал.
       it.each([

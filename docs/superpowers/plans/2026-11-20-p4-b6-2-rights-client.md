@@ -58,7 +58,7 @@ B5b-3 підписується на канали прав. `useCan` — у `src/
 | # | Рішення | Вплив на спеку |
 | --- | --- | --- |
 | Р3 | **Гілки `can` — дзеркало `rightsPredicates`** (`compiler/rights/predicates.ts`): гілка на кожен обсяг дії × носій. Скоуплений об'єкт — рядок `level = 'scope'` зі `scope` рядка (як `rights_any/own/dim`); глобальні й `everyUser` рядки скоупленого не відкривають; нескоуплений — будь-який рівень, крім `container` (як `has_right`); контейнерна гілка — рядок `level = 'container'` з тим самим внутрішнім обсягом і `container` = носій прив'язки, плюс умова обсягу (як `inContainer`). `own` — носій = `userId` чи ∈ моїх `member` виду; вимір — носій ∈ `dimensionValues`. `create` кореня — гілка `rootCreatePredicates`: грант будь-якого рівня, крім контейнера, без скоупу; `own` — лише автор | §9.2 (задача 0) |
-| Р4 | **Тризначна композиція (Кліні)**: результат = межі ∧ (∨ гілок). Межі: тенант — скоуп ∈ `scopeSets` виду, поза ним `false`, для `scopeSet: "verbatim"` — `unknown` (§14.3); `users` — для `read` власний рядок `true`, решта `unknown`; `publicRead` знімає межу тенанта для `read` дійсного користувача (§14.3). `unknown` у гілці: вимір з `fresh: false`; відсутній носій у рядку; `dimensionValues` з `truncated`; гілка чи межа, що залежить від прийнятого джерела (`adoptedFacts`, правило — B6-1 Р9). Об'єкт без контракту — `unknown`. Без рядка — межі ∧ (∨ гілок без умов носіїв) | §9.2, §14.3 (задача 0) |
+| Р4 | **Тризначна композиція (Кліні)**: результат = межі ∧ (∨ гілок). Межі: тенант — скоуп ∈ `scopeSets` виду, поза ним `false`, для `scopeSet: "verbatim"` — `unknown` (§14.3); `users` — для `read` власний рядок `true`, решта `unknown`; `publicRead` знімає межу тенанта для `read` дійсного користувача (§14.3). `unknown` у гілці: вимір з `fresh: false`; відсутній носій у рядку; `dimensionValues` з `truncated`; гілка чи межа, що залежить від прийнятого джерела (`adoptedFacts`, правило — B6-1 Р9). Об'єкт без контракту — `unknown`. Без рядка — межі ∧ (∨ гілок без умов носіїв). Гілка через вимір з `access[].fresh: false` чи через дослівну множину скоупів (`scopeSet: "verbatim"`) — `unknown` завжди: таблиці, які читає лише дослівна функція, сигналу прав не шлють (B6-1 Т2, виняток `verbatimFunction`) | §9.2, §14.3 (задача 0) |
 | Р5 | **Пара лишається булевою**: прибирання пари — `readAllowed` B5b (1-Р7, еквівалентність доведена). `unknown` дослівного виду — лише у `can`/`useCan`; звуження (Р6) судить лише ключі пар, що лишились дозволеними | §14.3 — «для `can`» (задача 0) |
 | Р6 | **Звуження обсягу `read`** замінює 2-Р5. На заміні знімка ядро в тому самому `commit`, що й прохід пар 2-Р4, для кожного об'єкта, чиї входи **втратили** елемент (рядок `read` його мітки, `member` його виду, значення його виміру чи будь-яка зміна `truncated`/`digest` його виміру (перехід у урізаний стан теж: гілка стає `unknown`), скоуп `scopeSets` його виду; для об'єкта з `readBoundary: "users"` — **будь-який** `member` чи скоуп `scopeSets` будь-якого виду, бо `rights_visible_users` — учасники всіх моїх скоупів), рахує `can(read, object, { scope, row })` кожного підтвердженого ключа (власні сторінки, знімки показу вікна, цілі `include`): `false` — `Writer.purge(object, { keys })` (надгробок ключа, чернетку скинуто); `unknown` — `Writer.hide(object, keys)` (є на `main`: `stale.hidden`, `RowView.hidden`, `revalidateHolders` — і невидимі вигляди, і підмножини `include`), запис журналу `rights-hidden` без ключів. Інше додавання не звужує (∨ і межі монотонні). Ключ без значень рядка (частковий запис) рахується з рядком без носіїв — `unknown` | §6.2 правило 4 — «до B6» прибрати, прохід лише на втраті (задача 0) |
 | Р7 | **Читання в польоті — один шлюз прав.** `Epochs` значень рядка не бачить, тож B6 робить `admit(object, scope, values, readEpoch) → "write" \| "drop" \| "hidden"` **єдиним входом кожного запису значень сервера** в обидва сховища — `put`, `writeBack` результату команди (`object-store.ts`; там `drop`/`hidden` → `"skipped"`, ключ іде на перечитування, як уже робить `buried`), рядки ТЧ — замість виклику бар'єра пари 2-Р4 і перевірки `buried` у `writeBack`. Інваріант: метод сховища, що пише значення з відповіді чи результату, не має власної перевірки прав і кличе `admit` рівно раз на рядок (тест перелічує такі методи). `admit` — функція стану знімка B5b-2, яку ядро передає сховищам при створенні; вона складає надгробок пари (`buriedSince(pairId, …)` 2-Р4) і вердикт рядка. Заміна знімка зі звуженням (Р6) ставить об'єкту `narrowedAt = appliedEpoch`; рядок читання з `readEpoch < narrowedAt` судиться `can(read, row)` за поточним знімком: `false` — новий ключ `drop`, наявний — `drop` і `Writer.hide` ключа (той самий шлях Р6: `hiddenKeys` → `revalidateHolders`, хвіст перечитування); `unknown` — `hidden` (`hideKeys` після запису). Рядки ТЧ такого читання: `admit` по шапці власника, сховано чи відкинуто шапку — ТЧ не пишеться. Інших перевірок прав у `object-store.ts`/`section-store.ts` немає. Гідратація (`restore`, `restoreSection`) шлюзу не проходить, тож `hydrate` після застосованого знімка прав — помилка, як «ядро вже тримає вигляди» (`core.ts`); рядки SSR судить звірка гідратації (2-Р3) | §6.2 правило 4 — одне речення (задача 0) |
@@ -134,12 +134,15 @@ B5b-3 підписується на канали прав. `useCan` — у `src/
 
 ### Задача 7. Приймач: канали прав, реакція, `since`, стенд (Р11–Р13)
 
-Файли: `data/store/rights.ts` (`canSubscribe` — гілки прав),
-`store/receiver.ts` (підписки, сталі `RIGHTS_JITTER_MS`, `REFRESH_MIN_MS`,
+Р11/І5 перенесено в B6-1: гілки каналів прав `canSubscribe` і розширення
+еквівалентності `rights-predicates.*` робить B6-1 (задача 4); тут — лише підписки
+приймача й перерахунок.
+
+Файли: `store/receiver.ts` (підписки, сталі `RIGHTS_JITTER_MS`, `REFRESH_MIN_MS`,
 реакція на `session.sleep`, відмови),
 `src/data/centrifugo/index.ts` (`since` у заміні підписки), тести
 `store/__tests__/receiver-rights.test.ts`, `data/centrifugo/__tests__/centrifugo.test.ts`;
-еквівалентність `test/db/rights-predicates.*` (І5); стенд
+стенд
 `packages/designer/src/__tests__/signal-receiver.*`; спека §8.6 — число виміру.
 Готово: unit з фейковим каналом — підписки Р11 (без `rightsSnapshot` —
 жодного каналу прав); сигнал будь-якого каналу прав — 1 запит `rights` на вікно джитера,
@@ -155,8 +158,6 @@ B5b-3 підписується на канали прав. `useCan` — у `src/
 впираються в `AUTHORIZE_CHANNELS_MAX`.
 Після: задача 6. Перевірка: `run-tests unit --filter receiver-rights.test.ts`,
 `run-tests unit --filter centrifugo.test.ts`,
-`run-tests db --filter rights-predicates.db.test.ts`,
-`run-tests db-supabase --filter rights-predicates.supabase.db.test.ts`,
 `run-tests db --filter signal-receiver.db.test.ts`,
 `run-tests db-supabase --filter signal-receiver.supabase.db.test.ts`.
 

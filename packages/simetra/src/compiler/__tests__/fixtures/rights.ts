@@ -611,6 +611,62 @@ export function singleTenantRights(
   return metaFiles(files)
 }
 
+/**
+ * Вимір `region` зі зв'язком через прийняту `CustomTable` `MemberRegion` замість
+ * регістра: платформа не ставить на неї тригерів, тож значення виміру свіжіють
+ * лише за інтервалом.
+ */
+export function adoptedRegionRelation(): Layer {
+  const column = (id: number, name: string, physicalName: string) => ({
+    id: uuid(id),
+    name,
+    physicalName,
+    type: "UUID",
+    notNull: true,
+  })
+  const fk = (name: string, field: string, target: string) => ({
+    name,
+    columns: [field],
+    references: { object: ref("Catalog", target), key: "ref" },
+  })
+  return {
+    [MEMBER_REGION_FILE]: null,
+    "custom-tables/MemberRegion/MemberRegion.meta.json": {
+      id: MEMBER_REGION_ID,
+      kind: "CustomTable",
+      name: "MemberRegion",
+      physicalName: "member_region",
+      scope: "org",
+      scopeColumn: "orgId",
+      columns: [
+        column(6033, "orgId", "org_id"),
+        column(6031, "member", "member_id"),
+        column(6032, "region", "region_id"),
+      ],
+      foreignKeys: [
+        // Носій скоупу — FK на ключ кореня виду (Р8).
+        fk("member_region_org_fk", "orgId", "Organization"),
+        fk("member_region_member_fk", "member", "OrgMember"),
+        fk("member_region_region_fk", "region", "Region"),
+      ],
+    },
+    [PROJECT_FILE]: {
+      accessDimensions: [
+        {
+          ...regionDimension(),
+          values: {
+            relation: {
+              object: ref("CustomTable", "MemberRegion"),
+              subject: "member",
+              value: "region",
+            },
+          },
+        },
+      ],
+    },
+  }
+}
+
 /** Вимір `region`: значення учасника — рядки зв'язку `MemberRegion`. */
 export function regionDimension() {
   return {
@@ -634,43 +690,53 @@ export const USER_REGION_FILE =
  * Однотенантний `Task` з виміром `region`: значення користувача — рядки
  * зв'язку `UserRegion` на «Користувачів».
  */
-export function unscopedDimension(): Map<string, string> {
-  return singleTenantRights({
-    [PROJECT_FILE]: {
-      accessDimensions: [
-        {
-          ...regionDimension(),
-          values: {
-            relation: {
-              object: ref("InformationRegister", "UserRegion"),
-              subject: "user",
-              value: "region",
+export function unscopedDimension(
+  provider: DatabaseProvider = "supabase"
+): Map<string, string> {
+  return singleTenantRights(
+    {
+      [PROJECT_FILE]: {
+        accessDimensions: [
+          {
+            ...regionDimension(),
+            values: {
+              relation: {
+                object: ref("InformationRegister", "UserRegion"),
+                subject: "user",
+                value: "region",
+              },
             },
           },
-        },
-      ],
+        ],
+      },
+      [REGION_FILE]: catalog(uuid(6040), "Region", "region", { scope: "none" }),
+      [USER_REGION_FILE]: {
+        id: uuid(6070),
+        kind: "InformationRegister",
+        name: "UserRegion",
+        physicalName: "user_region",
+        kindLabel: "user_region",
+        scope: "none",
+        dimensions: [
+          refAttribute(6071, "user", "user_id", ref("Catalog", "Users")),
+          refAttribute(6072, "region", "region_id", ref("Catalog", "Region")),
+        ],
+      },
+      [TASK_FILE]: {
+        attributes: [
+          refAttribute(
+            6012,
+            "project",
+            "project_id",
+            ref("Catalog", "Project")
+          ),
+          refAttribute(6013, "region", "region_id", ref("Catalog", "Region")),
+        ],
+        access: [{ attribute: "region", dimension: "region" }],
+      },
     },
-    [REGION_FILE]: catalog(uuid(6040), "Region", "region", { scope: "none" }),
-    [USER_REGION_FILE]: {
-      id: uuid(6070),
-      kind: "InformationRegister",
-      name: "UserRegion",
-      physicalName: "user_region",
-      kindLabel: "user_region",
-      scope: "none",
-      dimensions: [
-        refAttribute(6071, "user", "user_id", ref("Catalog", "Users")),
-        refAttribute(6072, "region", "region_id", ref("Catalog", "Region")),
-      ],
-    },
-    [TASK_FILE]: {
-      attributes: [
-        refAttribute(6012, "project", "project_id", ref("Catalog", "Project")),
-        refAttribute(6013, "region", "region_id", ref("Catalog", "Region")),
-      ],
-      access: [{ attribute: "region", dimension: "region" }],
-    },
-  })
+    provider
+  )
 }
 
 export const TASK_HOURS_FILE =

@@ -31,6 +31,7 @@ const FAMILIES: readonly PlatformTriggerFamily[] = [
   "hierarchy",
   "effects",
   "rightsGuards",
+  "rightsSignals",
 ]
 
 // Тригери застосунку (генератор `subscription`) реєстр платформи не описує

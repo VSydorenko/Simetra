@@ -81,6 +81,7 @@ import { buildAuthorUnits } from "./author-units"
 import { catalogCommandContracts } from "./catalog-command/contracts"
 import { buildCatalogCommandUnits } from "./catalog-command/units"
 import { buildSignalUnits } from "./signal/units"
+import { buildRightsSignalUnits } from "./rights/signal-triggers"
 import { buildHierarchyUnits } from "./hierarchy-units"
 import { buildMechanicsUnits } from "./mechanics-units"
 import { buildKeyUnits } from "./key-units"
@@ -777,7 +778,13 @@ export async function runStages(
     accessDimensions,
     scopeSetFunctions,
   }
-  const snapshot = actorSnapshot
+  // Під функціями прав, а не лише під знімком актора: та сама множина дає
+  // таблиці фактів тригерам сигналу прав (спека П4-B §8.2).
+  const rightsFunctions = hasRightsFunctions(
+    { roles, users, membershipSources: sources.membershipSources },
+    stage1.project.database.provider
+  )
+  const snapshot = rightsFunctions
     ? snapshotSources({
         contracts: guardContracts,
         physical,
@@ -799,13 +806,17 @@ export async function runStages(
         { ...entry }
       )
     ),
-    ...snapshotExemptWriters(
-      snapshot,
-      sql.units,
-      parse,
-      plpgsql,
-      stage1.project.database.provider
-    ),
+    // Винятки знімка стереже лише знімок актора: без нього запис у
+    // виняток фактів транзакції не зсуває.
+    ...(actorSnapshot
+      ? snapshotExemptWriters(
+          snapshot,
+          sql.units,
+          parse,
+          plpgsql,
+          stage1.project.database.provider
+        )
+      : []),
   ]
   if (snapshotProblems.length > 0) {
     return {
@@ -830,10 +841,7 @@ export async function runStages(
   // обробники `beforeWrite` вирішують замок ієрархії (спека П4 §6.6).
   // Контракти ядра — рівно той набір, з якого генерується SQL: без функцій
   // прав ядра немає, тож і каталог рантайму не обіцяє жодної команди.
-  const catalogCommands = hasRightsFunctions(
-    { roles, users, membershipSources: sources.membershipSources },
-    stage1.project.database.provider
-  )
+  const catalogCommands = rightsFunctions
     ? catalogCommandContracts({
         access,
         rights,
@@ -871,11 +879,47 @@ export async function runStages(
     parse,
     plpgsql,
   })
+  // Тригери сигналу прав — на кожну таблицю фактів з аналізу джерел (спека
+  // П4-B §8.2); кличуть функції сигналів прав генератора `signal`.
+  const rightsSignals = rightsFunctions
+    ? buildRightsSignalUnits({
+        contracts: {
+          rightsCatalogs,
+          membership,
+          membershipSources: sources.membershipSources,
+          users,
+          accessDimensions,
+          rights,
+        },
+        physical,
+        objects: stage1.objects,
+        sources: snapshot,
+        attributeCase: stage1.project.naming.attributeCase,
+        provider: stage1.project.database.provider,
+        module,
+        parse,
+      })
+    : { units: [], exempt: [], unknown: [] }
+  if (rightsSignals.unknown.length > 0) {
+    return {
+      ok: false,
+      diagnostics: sortDiagnostics([
+        ...diagnostics,
+        ...rightsSignals.unknown.map((entry) =>
+          diagnostic("rights.signal-source-unknown", PROJECT_FILE, "", {
+            table: `${entry.table.schema}.${entry.table.name}`,
+            facts: entry.facts.join(", "),
+          })
+        ),
+      ]),
+    }
+  }
   // Знімок прав клієнта — читає лише публічні функції фактів: їхні одиниці
   // (функції прав, множини) — в `baseUnits`, ребра `requires` бере з тіла.
   const clientSnapshotUnits = buildClientSnapshotUnits({
     contracts: {
       access,
+      rights,
       roles,
       users,
       membershipSources: sources.membershipSources,
@@ -909,6 +953,7 @@ export async function runStages(
       plpgsql,
     }),
     ...signalUnits,
+    ...rightsSignals.units,
     ...clientSnapshotUnits,
   ]
   // `USAGE` на схеми застосунку — над усіма згенерованими грантами, бо схему
@@ -961,6 +1006,8 @@ export async function runStages(
     signalOutbox: () => "the signal outbox of the platform",
     // Оракул каналу й правило форми сигналу спільні — власника немає.
     signal: (unit) => `the signal authorization ${unit.name}`,
+    rightsSignal: (unit) =>
+      `the rights signal trigger of ${name(unit.ownerObjectId)}`,
     // Знімок прав клієнта спільний — власника немає.
     rightsClientSnapshot: (unit) => `the rights client snapshot ${unit.name}`,
   }

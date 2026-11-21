@@ -14,6 +14,7 @@ import {
   OBJECT_ID,
   catalogEntry,
   catalogEntrySection,
+  catalogRights,
   runtimeObject,
 } from "./entries"
 
@@ -88,6 +89,108 @@ describe("catalog entries", () => {
 
   it("a runtime entry is a shared entry", () => {
     expectTypeOf<RuntimeObject>().toExtend<CatalogEntry>()
+  })
+})
+
+// Контракт прав запису (P4-B spec §9.2): форма сувора, носій — реквізит чи
+// ключ, власник — користувач чи учасник виду.
+describe("catalogEntrySchema: rights", () => {
+  const DIMENSION = "00000000-0000-4000-8000-000000000201"
+  const CONTAINER = "00000000-0000-4000-8000-000000000202"
+  const full = catalogRights({
+    actions: [
+      {
+        action: "update",
+        extents: [
+          { form: "any" },
+          { form: "own" },
+          { form: "dimension", dimensionId: DIMENSION },
+        ],
+      },
+    ],
+    ownership: [
+      { carrier: { attribute: "assignee" }, owner: { scopeKind: "org" } },
+      { carrier: { key: true }, owner: { users: true } },
+    ],
+    access: [
+      {
+        dimensionId: DIMENSION,
+        carrier: { attribute: "region" },
+        fresh: true,
+        subject: { users: true },
+      },
+      { dimensionId: DIMENSION, carrier: { attribute: "zone" }, fresh: false },
+    ],
+    binding: { containerId: CONTAINER, carrier: { attribute: "project" } },
+    readBoundary: ["tenant", "users"],
+    root: { author: { attribute: "createdBy" } },
+    scopeSet: "verbatim",
+  })
+  const withRights = (rights: unknown) => ({ ...catalogEntry(), rights })
+  it.each<[string, unknown, boolean]>([
+    ["every field", full, true],
+    ["a root without an author", { ...full, root: {} }, true],
+    [
+      "an unscoped object without scopeSet",
+      { ...full, scopeSet: undefined },
+      true,
+    ],
+    ["an extra field", { ...full, rightsContract: true }, false],
+    ["the old flag instead of the contract", true, false],
+    [
+      "a carrier with both forms",
+      {
+        ...full,
+        binding: {
+          containerId: CONTAINER,
+          carrier: { attribute: "a", key: true },
+        },
+      },
+      false,
+    ],
+    [
+      "a key carrier that is not `true`",
+      {
+        ...full,
+        ownership: [{ carrier: { key: false }, owner: { users: true } }],
+      },
+      false,
+    ],
+    [
+      "an owner by the server membership key",
+      {
+        ...full,
+        ownership: [
+          { carrier: { attribute: "a" }, owner: { membership: "org" } },
+        ],
+      },
+      false,
+    ],
+    [
+      "an unknown extent form",
+      { ...full, actions: [{ action: "read", extents: [{ form: "all" }] }] },
+      false,
+    ],
+    [
+      "a dimension extent without its id",
+      {
+        ...full,
+        actions: [{ action: "read", extents: [{ form: "dimension" }] }],
+      },
+      false,
+    ],
+    ["an unknown read boundary", { ...full, readBoundary: ["owner"] }, false],
+    ["an unknown scope set", { ...full, scopeSet: "function" }, false],
+    [
+      "an access mapping without fresh",
+      {
+        ...full,
+        access: [{ dimensionId: DIMENSION, carrier: { attribute: "region" } }],
+      },
+      false,
+    ],
+  ])("%s", (_, rights, ok) => {
+    expect(catalogEntrySchema.safeParse(withRights(rights)).success).toBe(ok)
   })
 })
 

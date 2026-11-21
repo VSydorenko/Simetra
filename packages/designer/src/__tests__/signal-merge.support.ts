@@ -259,9 +259,15 @@ export function describeSignalMerge(): void {
       // Порт рантайму віддає значення текстом Postgres.
       expect(allowedBeforeCommit).toBe("true")
       // Фаза членства — сама нова пара в режимі злиття: свій `invalidate`.
+      // Зміна членства — факт прав: тригер таблиці фактів шле сигнал прав
+      // користувачу, і режим злиття його не гасить (П4-B §8.2).
       expect(signals).toEqual([
         ...Array.from({ length: THRESHOLD }, change),
         invalidate(),
+        {
+          channel: channelTopic({ kind: "user", userId: writer().user }),
+          op: "rights",
+        },
         {
           channel: channelTopic({
             kind: "changes",
@@ -468,8 +474,18 @@ export function describeRootMerge(): void {
         create("first"),
         create("second"),
       ])
+      // Функція гранту кожного кореня пише членство й призначення творця —
+      // по сигналу прав творцю на оператор (П4-B §8.2), і в режимі злиття.
+      const rights = {
+        channel: channelTopic({ kind: "user", userId: creator }),
+        op: "rights",
+      }
       expect(signals).toEqual([
+        rights,
+        rights,
         { channel: rootChannel(organization.id, keys[0]!), op: "create" },
+        rights,
+        rights,
         { channel: rootChannel(organization.id, keys[1]!), op: "invalidate" },
       ])
     })

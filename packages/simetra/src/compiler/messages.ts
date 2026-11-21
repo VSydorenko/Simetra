@@ -3770,6 +3770,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Команда бере права свого актора на початок транзакції: платформа знімає факти до першої зміни таблиці, яку вони читають. У функціях значень виміру й множини скоупу читайте лише таблиці видів, прийняті таблиці (CustomTable) і подання моделі над ними.",
     },
   },
+  "rights.signal-source-unknown": {
+    en: (p) =>
+      `The actor facts "${p.facts}" read ${p.table}, which is neither a rights catalog, a membership catalog, Users, a dimension relation nor a rights container, so the platform cannot tell whose rights its changes touch`,
+    uk: (p) =>
+      `Факти актора «${p.facts}» читають ${p.table} — ні довідник прав, ні довідник членства, ні «Користувачі», ні зв'язок виміру, ні контейнер прав, тож платформа не знає, чиї права змінює її зміна`,
+    hint: {
+      en: "A change of a table the rights facts read sends a rights signal to the users it affects. Read such a table only from the functions that give dimension values and scope sets (they refresh on the interval), or model the fact with a rights catalog, a membership catalog or a dimension relation.",
+      uk: "Зміна таблиці, яку читають факти прав, шле сигнал прав користувачам, яких вона стосується. Читайте таку таблицю лише у функціях значень виміру й множини скоупу (вони свіжіють за інтервалом) або опишіть факт довідником прав, довідником членства чи зв'язком виміру.",
+    },
+  },
   "rights.snapshot-exempt-writer": {
     en: (p) =>
       `${exemptWriter(p).en} lets commands write ${p.table}, which feeds the actor facts without an actor snapshot trigger`,

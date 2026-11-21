@@ -92,7 +92,7 @@ describe("signal schemas", () => {
     row_ver: 3,
   }
   const invalidate = { object: OBJECT, op: "invalidate" }
-  const rights = { op: "rights", row_ver: 7 }
+  const rights = { op: "rights" }
 
   it.each([
     ["a change", changeSignalSchema, receivedChangeSchema, change],
@@ -155,6 +155,13 @@ describe("signal schemas", () => {
     ["a non-uuid object", { ...change, object: "orders" }, false],
   ])("change: %s", (_n, value, ok) => {
     expect(changeSignalSchema.safeParse(value).success).toBe(ok)
+  })
+
+  // Клієнт версій прав не порівнює (П4-B §8.1): поле версії — зайве поле.
+  it("refuses a version on a rights signal", () => {
+    expect(
+      rightsSignalSchema.safeParse({ ...rights, row_ver: 7 }).success
+    ).toBe(false)
   })
 
   it("refuses an unknown op on invalidate and rights", () => {

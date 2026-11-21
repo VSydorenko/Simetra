@@ -286,6 +286,23 @@ export function scopeSetCall(
     : `${qualified(scope.setFunction)}()`
 }
 
+/**
+ * Множина скоупів кожного виду скоупу моделі — `scopeSetCall` його таблиць,
+ * упорядковано за видом. Одне джерело для `scopeSets` знімка прав клієнта й
+ * оракула каналів прав підписки: клієнт підписується на канали саме тих
+ * скоупів, які бачить у знімку.
+ */
+export function scopeKindSets(
+  access: readonly AccessContract[]
+): [kindId: string, set: string][] {
+  const byKind = new Map<string, string>()
+  for (const contract of access) {
+    if (contract.scope === undefined) continue
+    byKind.set(contract.scope.scopeKindId, scopeSetCall(contract.scope))
+  }
+  return [...byKind].sort(([a], [b]) => compareStrings(a, b))
+}
+
 /** Родина політики запису (спека прав §5.3): кореневий рядок команди чи решта рядків. */
 export type WriteFamily = "root" | "rest"
 
