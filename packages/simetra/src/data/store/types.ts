@@ -3,6 +3,7 @@ import type {
   Filter,
   KnownVersions,
   OrderBy,
+  RightsSnapshot,
 } from "simetra/model"
 import type { DataError } from "../errors"
 
@@ -416,6 +417,21 @@ export type CoreLogEntry =
   | { kind: "listener-failed"; error: unknown }
   | { kind: "removed-restored"; object: ObjectName; count: number }
   | { kind: "horizon-hidden"; object: ObjectName; count: number }
+  /** The `rights` part failed; the old snapshot stays (P4-B spec §9.3). */
+  | { kind: "rights-failed" }
+
+/**
+ * The rights snapshot of the session (P4-B spec §9.1) with the two epochs of
+ * its order: `rightsEpoch` — `epochs.next()` when its `rights` part was
+ * sent (a snapshot replaces the current one only with a larger one),
+ * `appliedEpoch` — `epochs.next()` when the answer was applied.
+ */
+export interface RightsState {
+  readonly snapshot: RightsSnapshot
+  readonly rightsVersion: string
+  readonly rightsEpoch: number
+  readonly appliedEpoch: number
+}
 
 /** A view the signal receiver re-reads (P4-B spec §8.4). */
 export interface ActiveView {
@@ -445,7 +461,10 @@ export interface Writer {
   ): "applied" | "discarded"
   purge(
     object: ObjectName,
-    target: { keys: readonly Key[] } | { scope: string | null }
+    target: { keys: readonly Key[] } | { scope: string | null },
+    // `rights`: purge із заміни знімка прав — не рухає позначку purge
+    // об'єкта, бо читання дозволених пар у польоті лишаються чинними.
+    options?: { readonly rights?: boolean }
   ): void
   markStale(object: ObjectName, keys: readonly Key[], minVersion: number): void
   /**

@@ -98,6 +98,8 @@ export interface Subset extends ReaderTarget {
   gen: number
   /** The generation of the load in flight. */
   flight: number | undefined
+  /** The start epoch of the last attempt of the load in flight. */
+  flightEpoch: number | undefined
   /** The start epochs of the system re-reads (`revalidate`) in flight. */
   rereadEpochs: number[]
   trailing: boolean
@@ -307,6 +309,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     // покоління й політ не змінюються, тож це й далі дія, що його почала.
     const attempt = (): Promise<void> => {
       const readEpoch = session.epochs.now()
+      s.flightEpoch = readEpoch
       const startedAt = ctx.now()
       if (header !== undefined) {
         s.readRevision = rowViews.revision(s.form.object.name, header)
@@ -495,8 +498,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     const attempt = (): Promise<void> => {
       const readEpoch = session.epochs.now()
       let discarded = false
-      return gated(ctx, readEpoch, (c) =>
-        readWindowMore(c, s, readEpoch, token, direction, cursor)
+      return gated(
+        ctx,
+        readEpoch,
+        (c) => readWindowMore(c, s, readEpoch, token, direction, cursor),
+        s
       ).then(
         (apply) => {
           session.commit(
@@ -771,6 +777,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       alive: true,
       gen: 0,
       flight: undefined,
+      flightEpoch: undefined,
       rereadEpochs: [],
       trailing: false,
       settled: false,

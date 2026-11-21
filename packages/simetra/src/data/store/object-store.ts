@@ -687,6 +687,15 @@ export function createObjectStore(options: {
       )
         return "skipped"
       if (buried(row.key, e.scope, readEpoch)) return "skipped"
+      // Витіснений надгробок ключа чи пари, новіший за старт спроби, міг
+      // належати purge чи надгробку знову відкритої пари (§6.2, правило 1 і 4):
+      // горизонт його кошика заступає надгробок, тож рядок результату не
+      // пишеться, а ключ перечитується — як і `marked` журналу.
+      if (
+        epochs.evictedSince(keyId(object, row.key), readEpoch) ||
+        epochs.evictedSince(pairId(object, e.scope), readEpoch)
+      )
+        return "skipped"
       const incoming =
         scopeField !== undefined && Object.hasOwn(row.values, scopeField)
           ? scopeOf(entry, row.values)

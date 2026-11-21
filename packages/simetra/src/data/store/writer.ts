@@ -1,6 +1,6 @@
 import { ZERO_UUID, channelTopic, type CatalogEntry } from "simetra/model"
 import type { Defects } from "./defects"
-import { effectiveEpoch, heldEpoch } from "./epoch"
+import { effectiveEpoch, heldEpoch, pairId } from "./epoch"
 import type { ObjectState } from "./forms"
 import {
   completeIncluded,
@@ -8,7 +8,7 @@ import {
   readIncluded,
   type Included,
 } from "./include"
-import { visibleRow, type RowEntry } from "./object-store"
+import { scopeOf, visibleRow, type RowEntry } from "./object-store"
 import {
   aliveIncluded,
   applyIncluded,
@@ -286,7 +286,7 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       return "applied"
     },
 
-    purge(object, target) {
+    purge(object, target, options) {
       scope.assert()
       const o = ctx.objectOf(object)
       let dropped: Key[]
@@ -324,7 +324,11 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       for (const key of [...dropped, ...cleared]) rowViews.touch(o.name, key)
       forget(ctx, scope, o, new Set(dropped), new Set(purged))
       ctx.invalidateTail(o)
-      ctx.purges.set(o.name, (ctx.purges.get(o.name) ?? 0) + 1)
+      // Прохід заміни знімка прав ховає пару надгробком і бар'єром: читання,
+      // що стартували раніше, не принесуть її рядків, а відповіді для
+      // дозволених пар чинні — повторювати їх не треба.
+      if (options?.rights !== true)
+        ctx.purges.set(o.name, (ctx.purges.get(o.name) ?? 0) + 1)
     },
 
     writeBack(object, rows, epoch, readEpoch) {
@@ -454,6 +458,23 @@ function rebuildLayout(ctx: WriterContext, s: Subset) {
   s.layoutSet = new Set(s.layout)
 }
 
+// Рядок пари, поховану з моменту старту читання (надгробок purge чи бар'єр
+// знімка прав): його не пише ні `put`, ні він не «новий» для вигляду, бо
+// `hasNewRows` виказав би, що заборонений рядок існує.
+const lostSince = (
+  ctx: WriterContext,
+  o: ObjectState,
+  row: ServerRow,
+  startEpoch: number
+) =>
+  ctx.session.epochs.buriedSince(
+    pairId(o.name, scopeOf(o.entry, row.values)),
+    startEpoch
+  )
+
+// Вікна, чий прохід нічого не записав, бо purge прибрав їхню сторінку.
+const pageDropped = new WeakSet<Subset>()
+
 /**
  * Перечитування вигляду за правилом стабільності (§6.5): `apply` пише лише
  * ключі складу на мить `commit`, зниклі — `removed` з епохою старту, ключі
@@ -474,7 +495,7 @@ function applyKeys(
     for (const row of rows) {
       got.add(row.key)
       if (s.owned.has(row.key)) ctx.ops.put(scope, o, row, startEpoch, false)
-      else fresh = true
+      else if (!lostSince(ctx, o, row, startEpoch)) fresh = true
     }
     for (const key of requested) {
       if (!got.has(key) && s.owned.has(key))
@@ -625,7 +646,10 @@ async function readFullAgain(
         // Рядок у власності, але поза складом, увійшов у фільтр — новий.
         if (!s.layoutSet.has(row.key) && values !== undefined)
           fresh ||= form.test(values)
-      } else if ((order.get(row.key) ?? Infinity) < cut)
+      } else if (
+        (order.get(row.key) ?? Infinity) < cut &&
+        !lostSince(ctx, o, row, startEpoch)
+      )
         fresh ||= form.test(row.values)
     }
     for (const key of composition) {
@@ -756,13 +780,18 @@ async function readWindowAgain(
         start.pages.length === 0
           ? now.pages.length > 0
           : !pages.every((page) => alive.has(page.generation))
-      )
+      ) {
+        // Сторінку, що лишилась порожньою після purge, прибрано з тим самим
+        // ланцюжком: прохід нічого не писав, тож його повторює `revalidateViews`.
+        if (start.pages.length > 0) pageDropped.add(s)
         return
+      }
     }
     let fresh = false
     for (const row of got.values()) {
       if (s.owned.has(row.key)) ctx.ops.put(scope, o, row, startEpoch, false)
-      else if (!beyond.has(row.key)) fresh = true
+      else if (!beyond.has(row.key) && !lostSince(ctx, o, row, startEpoch))
+        fresh = true
     }
     let needsRefresh = false
     for (const key of composition) {
@@ -789,7 +818,7 @@ function readAgain(
   startEpoch: number,
   token: GenerationToken
 ): Promise<Apply> {
-  return gated(ctx, startEpoch, (c) => writeAgain(c, s, startEpoch, token))
+  return gated(ctx, startEpoch, (c) => writeAgain(c, s, startEpoch, token), s)
 }
 
 async function writeAgain(
@@ -1215,6 +1244,10 @@ export async function revalidateViews(
               } else discarded.push(s)
               continue
             }
+            if (pageDropped.delete(s)) {
+              again.push(s)
+              continue
+            }
             s.refreshedAt = startedAt
             s.failures = 0
             s.failedAt = undefined
@@ -1376,4 +1409,89 @@ export async function rereadKey(
     token,
     `reread ${o.name}`
   )
+}
+
+/**
+ * The pairs a rights snapshot replacement purges (P4-B spec §6.2 rule 4):
+ * every pair (stored scope, object) of the store that `denies` gives — a
+ * scope of a stored row, or of tabular section lines written with a known
+ * owner scope. An object without a rights contract is not judged; the
+ * journal values of a key without a stored row are not either.
+ */
+export function deniedPairs(
+  ctx: WriterContext,
+  denies: (object: ObjectName, scope: string | null) => boolean
+): Array<{ object: ObjectName; scope: string | null }> {
+  const pairs: Array<{ object: ObjectName; scope: string | null }> = []
+  for (const o of ctx.objects.values()) {
+    if (o.entry.rights === undefined) continue
+    const scopes = new Set<string | null>()
+    for (const key of o.rows.keys()) scopes.add(o.rows.get(key)!.scope)
+    // Рядки ТЧ з невідомим скоупом власника прибирає будь-який purge пари
+    // об'єкта (`SectionStore.purgeScope`).
+    for (const owner of o.sections.owners()) {
+      for (const section of o.entry.tabularSections) {
+        const scope = o.sections.get(owner, section.name)?.scope
+        if (scope !== undefined && scope !== "unknown") scopes.add(scope)
+      }
+    }
+    for (const scope of scopes) {
+      if (denies(o.name, scope)) pairs.push({ object: o.name, scope })
+    }
+  }
+  return pairs
+}
+
+// Вигляд тримає рядки об'єкта: свої чи як ціль `include`.
+const holds = (s: Subset, object: ObjectName) =>
+  s.form.object.name === object ||
+  s.form.include.some((step) => step.target === object)
+
+/** The live views that may hold rows of the object: its own views and views whose `include` targets it. */
+export function holdersOf(ctx: WriterContext, object: ObjectName): Subset[] {
+  return [...ctx.registry.subsets()].filter(
+    (s) => s.alive && !s.purged && holds(s, object)
+  )
+}
+
+/**
+ * Invalidates the first loads in flight of the views that started before
+ * `before`: their answer may predate a narrowing of the read, and a view never
+ * loaded has no re-read — the load runs again (П12). A load that started
+ * later read under the new rights. See {@link revalidateNarrowed}.
+ */
+export function invalidateLoads(views: Iterable<Subset>, before: number) {
+  for (const s of views) {
+    if (!s.alive || s.purged || s.loaded || s.flight === undefined) continue
+    if ((s.flightEpoch ?? before) >= before) continue
+    s.gen++
+    s.trailing = true
+  }
+}
+
+/**
+ * Re-reads the loaded views among `views` (P4-B spec §6.2 rule 4, «до B6»;
+ * plan B5b-2 Р5, Р5а), invisible ones included: one single-flight pass per
+ * object over the whole set, so a view that holds two narrowed objects is
+ * read once (a view in flight gets the one tail). First loads in flight are
+ * {@link invalidateLoads}'s.
+ */
+export function revalidateNarrowed(
+  ctx: WriterContext,
+  views: Iterable<Subset>
+): Promise<void> {
+  if (!ctx.session.token().valid) return Promise.resolve()
+  const groups = new Map<ObjectState, Subset[]>()
+  for (const s of new Set(views)) {
+    if (!eligible(ctx, s, { visibleOnly: false })) continue
+    const group = groups.get(s.form.object) ?? []
+    group.push(s)
+    groups.set(s.form.object, group)
+  }
+  return Promise.all(
+    [...groups].map(
+      ([o, targets]) =>
+        singleFlight(ctx, o, targets, { visibleOnly: false }).done
+    )
+  ).then(() => undefined)
 }

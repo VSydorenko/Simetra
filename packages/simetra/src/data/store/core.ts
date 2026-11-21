@@ -1,7 +1,7 @@
 import { FILTER_IN_MAX, READ_LIMIT_MAX, type CatalogIndex } from "simetra/model"
 import type { DefectFlag } from "./defects"
 import { fieldInfoOf, filterCollator } from "./filter"
-import { keyId } from "./epoch"
+import { keyId, pairId, type PairBarrier } from "./epoch"
 import { createObjectStore } from "./object-store"
 import {
   createOverlay,
@@ -13,9 +13,13 @@ import { createSession, type Scope } from "./session"
 import { applySnapshot, dehydrate, parseSnapshot, type SsrContext } from "./ssr"
 import { createRowViews, purgedSnapshot } from "./snapshot"
 import { createBatcher } from "./batcher"
+import { readAllowed, readLost, readNarrowed, reopenedPairs } from "./rights"
 import {
+  ReadLimiterClosed,
   readKeys,
+  requestOf,
   tracked,
+  type CorePart,
   type CoreReadItem,
   type CoreSource,
   type StoreSource,
@@ -27,11 +31,15 @@ import { createRegistry, type Subset, type SubsetRegistry } from "./subsets"
 import {
   activeViews,
   createWriter,
+  deniedPairs,
   hasDueViews,
   nextViewDue,
   revalidate,
   revalidateHolders,
   revalidateHydrated,
+  revalidateNarrowed,
+  holdersOf,
+  invalidateLoads,
   singleFlight,
   rereadKey,
   setVisible,
@@ -48,6 +56,7 @@ import {
   type Key,
   type Mutation,
   type ObjectName,
+  type RightsState,
   type Values,
   type ViewHandle,
   type ViewSnapshot,
@@ -159,12 +168,29 @@ export interface CoreSession {
    */
   requestVersion(): void
   /**
+   * Asks the server for the rights snapshot (P4-B spec §9.3) with the
+   * `rightsVersion` the core holds. Single-flight with one tail, as
+   * {@link CoreSession.requestVersion}. Does nothing when the client catalog
+   * has no `rightsSnapshot`.
+   */
+  requestRights(): void
+  /**
+   * Internal: the rights snapshot of the session with its epochs, `undefined`
+   * until the first one arrives (or without `rightsSnapshot` in the catalog).
+   */
+  rights(): RightsState | undefined
+  /**
    * Internal, for the runtime: the `serverHash` of a response that passed the
    * closed check. A change against the last seen hash asks for the version —
    * unless the response carried the `version` part itself, which only updates
-   * the hash (no ping-pong between instances of two catalogs).
+   * the hash (no ping-pong between instances of two catalogs). A response
+   * that carried the `rights` part asks only for the version: its snapshot
+   * already comes from the server with the new hash.
    */
-  serverHash(hash: string, versionPart: boolean): void
+  serverHash(
+    hash: string,
+    parts: { readonly version: boolean; readonly rights: boolean }
+  ): void
   /**
    * Internal, for the runtime and the write journal: the one entry of the
    * sticky `stale-client` mark (P4-B spec §10), whatever the cause of the
@@ -257,6 +283,11 @@ export interface CoreInspection {
    * is already `removed`; the model then expects no older read to lift it.
    */
   watchRemarks(listener: (object: ObjectName, key: Key) => void): void
+  /**
+   * Subscribes to the moment right before the pass of a rights snapshot
+   * replacement: the model reads the store the pass is about to judge.
+   */
+  watchRightsPass(listener: () => void): void
   /** The mutations in the journal of own mutations. */
   mutations(): JournalInspection[]
   /** The plans the scheduler made (calls of one turn merge into one). */
@@ -353,6 +384,20 @@ export function createCore(options: {
   onStaleClient?: (object: ObjectName) => void
   /** Initial `visible` (default `true`). */
   visible?: boolean
+  /**
+   * The client catalog has `rightsSnapshot` (1-Р6): only then the core sends
+   * the `rights` part; without it nothing about rights is read or applied.
+   */
+  rightsSnapshot?: boolean
+  /** Called, outside any `commit`, when a snapshot replaces the current one. */
+  onRightsReplaced?: (prev: RightsState | undefined, next: RightsState) => void
+  /**
+   * Called, outside any `commit` and before any part of the answer is
+   * written, when a `rights` answer names another user than the snapshot
+   * held (both not `null`): the session changed (plan B5b-2 Р7). The runtime
+   * closes itself here; a core left open closes with `session-changed`.
+   */
+  onSessionChanged?: () => void
   /** The monotonic clock in ms; tests substitute it, hosts never do. */
   now?: () => number
 }): CoreSession {
@@ -371,6 +416,7 @@ export function createCore(options: {
   // доданий через `inspectCore` після створення, діє одразу.
   const defects = new Set<DefectFlag>()
   let remarkListener: ((object: ObjectName, key: Key) => void) | undefined
+  let rightsPassListener: (() => void) | undefined
   const session = createSession({
     subject: options.subject,
     limits,
@@ -396,15 +442,24 @@ export function createCore(options: {
   const batcher = createBatcher(options.source, {
     // Сон сесії йде в кожне читання джерела: власного таймера джерело не має.
     sleep: session.sleep,
+    // Строк знімка (Р2) — від справжньої відправки частини: пакет може
+    // чекати вільного слота читань довше за I (§8.4).
+    onRightsSent: () => {
+      rightsSentAt = now()
+    },
     onVersion(version) {
       if (session.token().valid) applyVersion(version.objects)
     },
+    onRights: (item) => acceptRights(item),
   })
   const source: StoreSource = {
     close: () => batcher.close(),
     refuse: (object) => batcher.refuse?.(object),
     run: (operation) => batcher.run(operation),
-    async read(parts) {
+    async read(parts, caller) {
+      // Старт читання частин виклику: правило першого знімка (Р5а) порівнює
+      // його з епохою застосування знімка.
+      const startEpoch = session.epochs.now()
       // Частина без об'єкта (`version`) несумісності не має.
       const isLive = (part: (typeof parts)[number]) => {
         if (part.type !== "query") return true
@@ -450,10 +505,52 @@ export function createCore(options: {
       }
       const sent = parts.map(isLive)
       const forward = parts.filter((_, slot) => sent[slot]).map(withLiveInclude)
-      const answered =
-        forward.length === 0
-          ? { items: [] as CoreReadItem[] }
-          : await batcher.read(forward)
+      // Перший пакет рантайму несе `rights` без `known` (Р1); частину
+      // додає ядро, тож її результат викликач не бачить.
+      const injected =
+        rightsEnabled &&
+        !rightsFirstSent &&
+        !forward.some((part) => part.type === "rights")
+      if (injected) forward.unshift({ type: "rights" })
+      const rightsAt = forward.findIndex((part) => part.type === "rights")
+      let answered: { items: CoreReadItem[] } = { items: [] }
+      if (rightsAt < 0) {
+        if (forward.length > 0) answered = await batcher.read(forward)
+      } else {
+        // Знімок один за раз: відправка бере `rightsEpoch` і `known` (Р4).
+        // `rightsEpoch` лише впорядковує знімки між собою, а частина `rights`
+        // летить одна й черга слотів — FIFO, тож епоха постановки дає той
+        // самий порядок, що й епоха відправки. Строк (Р2) — інша річ: його
+        // рахує `onRightsSent` збирача від справжньої відправки.
+        const sentRights = {
+          token: session.token(),
+          epoch: session.epochs.next(),
+          known: rights?.rightsVersion,
+        }
+        forward[rightsAt] =
+          sentRights.known === undefined
+            ? { type: "rights" }
+            : { type: "rights", known: sentRights.known }
+        rightsFirstSent = true
+        rightsFlying = true
+        rightsSent = sentRights
+        try {
+          answered = await batcher.read(forward)
+        } catch (error) {
+          if (sentRights.token.valid) log({ kind: "rights-failed" })
+          throw error
+        } finally {
+          rightsFlying = false
+          // Відповідь без заміни знімка нічого не комітить: строк, що повернувся
+          // після польоту, планувальнику треба показати самому.
+          if (!defects.has("scheduler-no-reschedule")) scheduler.request()
+          if (rightsTail) {
+            rightsTail = false
+            core.requestRights()
+          }
+        }
+        if (injected) answered = { items: answered.items.slice(1) }
+      }
       let next = 0
       const items = parts.map((part, slot): CoreReadItem => {
         if (!sent[slot]) return refused(part)
@@ -461,8 +558,284 @@ export function createCore(options: {
         // Об'єкт став несумісним, поки відповідь летіла: вона вже не діє.
         return isLive(part) ? item : refused(part)
       })
+      if (rightsEnabled) noteAnswered(parts, items, startEpoch, caller)
       return { items }
     },
+  }
+
+  // Знімок прав сесії (Р1, Р4, Р8): стан і одноразовий запит у польоті.
+  const rightsEnabled = options.rightsSnapshot === true
+  let rights: RightsState | undefined
+  let rightsFirstSent = false
+  let rightsFlying = false
+  let rightsTail = false
+  // Мить ВІДПРАВКИ останньої частини `rights` (Р2): від неї рахується строк
+  // знімка; поки частина в польоті, строку немає.
+  let rightsSentAt: number | undefined
+  let rightsSent:
+    | { token: GenerationToken; epoch: number; known: string | undefined }
+    | undefined
+  // Перший знімок сесії (Р5а): епоха застосування й запит, яким він прийшов.
+  let firstRights:
+    { appliedEpoch: number; request: number | undefined } | undefined
+  // Вигляди (і об'єкти читань без вигляду), чиї частини осіли до першого
+  // знімка: їх уже не порівняти з ним.
+  const beforeFirst = {
+    views: new Set<Subset>(),
+    objects: new Set<ObjectName>(),
+  }
+  // Вигляди звужених об'єктів, перечитування яких ще не почалось: один
+  // прохід на хід, тож вигляд, що тримає два звужені об'єкти, читається раз.
+  const narrowing = new Set<Subset>()
+
+  // Пара (скоуп, об'єкт), якої знімок не дозволяє читати (§6.2 правило 4).
+  const deniedBy =
+    (snapshot: RightsState["snapshot"]) =>
+    (object: ObjectName, scope: string | null): boolean => {
+      const entry = objects.get(object)?.entry
+      return (
+        entry !== undefined &&
+        entry.rights !== undefined &&
+        !readAllowed(snapshot, { scope }, entry)
+      )
+    }
+
+  const barrierOf = (state: RightsState): PairBarrier => ({
+    appliedEpoch: state.appliedEpoch,
+    denies: deniedBy(state.snapshot),
+    guards: (object) => {
+      const entry = objects.get(object)?.entry
+      return entry?.rights !== undefined && entry.scopeColumn !== undefined
+    },
+  })
+
+  // Частини `query`, що стартували до першого знімка й пішли іншим запитом,
+  // ніж частина `rights` (Р5а): їхні рядки могли передувати звуженню
+  // всередині дозволеної пари, а знімка, з яким їх порівняти, клієнт не має.
+  // Перечитується вигляд, що читав; читання без вигляду (хвіст за ключем) —
+  // усі вигляди його об'єкта.
+  function noteAnswered(
+    parts: readonly CorePart[],
+    items: readonly CoreReadItem[],
+    startEpoch: number,
+    caller: Subset | undefined
+  ) {
+    const objects = new Set<ObjectName>()
+    parts.forEach((part, slot) => {
+      const item = items[slot]!
+      if (part.type !== "query" || !item.ok) return
+      if (
+        firstRights !== undefined &&
+        (startEpoch >= firstRights.appliedEpoch ||
+          requestOf(item) === firstRights.request)
+      )
+        return
+      objects.add(`${part.query.object.kind}.${part.query.object.name}`)
+    })
+    if (objects.size === 0) return
+    if (firstRights === undefined) {
+      if (caller !== undefined) beforeFirst.views.add(caller)
+      else for (const name of objects) beforeFirst.objects.add(name)
+      return
+    }
+    narrow(
+      caller !== undefined
+        ? [caller]
+        : [...objects].flatMap((name) => holdersOf(writerContext, name)),
+      firstRights.appliedEpoch
+    )
+  }
+
+  // Перечитування виглядів після звуження: перше завантаження, що стартувало
+  // до знімка, скасовується одразу (до `commit` його відповіді), а прохід
+  // виглядів — один на хід.
+  function narrow(views: readonly Subset[], appliedEpoch: number) {
+    if (!session.token().valid || views.length === 0) return
+    invalidateLoads(views, appliedEpoch)
+    if (narrowing.size === 0) {
+      queueMicrotask(() => {
+        const pending = [...narrowing]
+        narrowing.clear()
+        revalidateNarrowed(writerContext, pending).catch(catchNarrow)
+      })
+    }
+    for (const s of views) narrowing.add(s)
+  }
+  const catchNarrow = (error: unknown) => {
+    if (!(error instanceof ReadLimiterClosed))
+      log({ kind: "listener-failed", error })
+  }
+
+  // Інший користувач у відповіді `rights` — не заміна знімка, а зміна сесії
+  // (Р7): поза `commit`, до запису будь-якої частини пакета.
+  function rightsSessionChanged() {
+    try {
+      options.onSessionChanged?.()
+    } catch (error) {
+      log({ kind: "listener-failed", error })
+    }
+    if (session.token().valid) core.close("session-changed")
+  }
+
+  // Відповідь частини `rights`; її кличе збирач синхронно, до того як хоч
+  // один виклик пакета отримав відповідь, тож перевірка користувача (Р7,
+  // задача 2) бачить знімок до будь-якого `commit` з частин того ж пакета.
+  function acceptRights(item: CoreReadItem) {
+    const sentRights = rightsSent
+    if (sentRights === undefined || !sentRights.token.valid) return
+    if (!item.ok || !("type" in item) || item.type !== "rights") {
+      log({ kind: "rights-failed" })
+      return
+    }
+    const { rightsVersion, snapshot } = item.value
+    const current = rights
+    if (snapshot === undefined) {
+      // Без `snapshot` сервер підтвердив `known`: лишається лише зафіксувати
+      // `rightsVersion`. Підтвердження без поточного знімка чи з іншою
+      // версією — дефект сервера.
+      if (
+        current === undefined ||
+        sentRights.known !== current.rightsVersion ||
+        rightsVersion !== current.rightsVersion
+      ) {
+        log({ kind: "rights-failed" })
+        return
+      }
+      rights = { ...current, rightsVersion }
+      return
+    }
+    // Інший не-`null` користувач — зміна сесії, а не заміна (Р7): що б не
+    // несла відповідь, з неї нічого не пишеться.
+    if (
+      current !== undefined &&
+      current.snapshot.userId !== null &&
+      snapshot.userId !== null &&
+      current.snapshot.userId !== snapshot.userId
+    ) {
+      rightsSessionChanged()
+      return
+    }
+    // Знімок замінює поточний лише з більшою `rightsEpoch` (Р4). Сьогодні
+    // перевірка недосяжна: `requestRights` — один запит у польоті з хвостом,
+    // тож старша відповідь не приходить після новішої; вона лишається
+    // запобіжником для шляху, що колись надішле дві частини `rights` разом.
+    if (current !== undefined && sentRights.epoch <= current.rightsEpoch) return
+    const next: RightsState = {
+      snapshot,
+      rightsVersion,
+      rightsEpoch: sentRights.epoch,
+      appliedEpoch: session.epochs.next(),
+    }
+    rights = next
+    if (!defects.has("rights-no-barrier"))
+      session.epochs.setBarrier(barrierOf(next))
+    replaceRights(current, next, item)
+    try {
+      options.onRightsReplaced?.(current, next)
+    } catch (error) {
+      log({ kind: "listener-failed", error })
+    }
+  }
+
+  // Правило втрати доступу й звуження на заміні знімка (§6.2 правило 4):
+  // прохід пар сховища одним `commit`, потім перечитування звужених об'єктів.
+  // Перший знімок порівняти нема з чим: звужені — об'єкти частин інших
+  // запитів, що стартували до нього (Р5а).
+  function replaceRights(
+    prev: RightsState | undefined,
+    next: RightsState,
+    item: CoreReadItem
+  ) {
+    rightsPassListener?.()
+    const denied = deniedBy(next.snapshot)
+    const deniedBefore =
+      prev === undefined || !defects.has("rights-pass-by-diff")
+        ? undefined
+        : deniedBy(prev.snapshot)
+    const pairs =
+      prev === undefined && defects.has("rights-first-no-pass")
+        ? []
+        : deniedPairs(
+            writerContext,
+            deniedBefore === undefined
+              ? denied
+              : (object, scope) =>
+                  denied(object, scope) && !deniedBefore(object, scope)
+          )
+    // Дефект самотесту: прохід прибирає кожну пару об'єкта, що втратив хоч одну.
+    const judged = defects.has("rights-pass-purges-allowed")
+      ? deniedPairs(writerContext, (object) =>
+          pairs.some((p) => p.object === object)
+        )
+      : pairs
+    const lost = [...objects.values()].filter((o) =>
+      readLost(prev?.snapshot, next.snapshot, o.entry)
+    )
+    // Рядки ТЧ власників з невідомим скоупом (без шапки в сховищі чи з
+    // шапкою іншої версії чи епохи версій, ніж ТЧ) не судяться за парою: на заміні,
+    // де об'єкт щось утратив, — і на першому знімку, що щось забороняє, — їх
+    // прибираємо, повертає наступне читання.
+    const headerless = lost.flatMap((o) =>
+      o.sections
+        .owners()
+        .filter((owner) =>
+          o.entry.tabularSections.some(
+            (t) => o.sections.get(owner, t.name)?.scope === "unknown"
+          )
+        )
+        .map((owner) => ({ o, owner }))
+    )
+    if (judged.length > 0 || headerless.length > 0) {
+      session.commit(
+        (scope) => {
+          try {
+            const writer = createWriter(writerContext, scope)
+            for (const { object, scope: pair } of judged)
+              writer.purge(object, { scope: pair }, { rights: true })
+            for (const { o, owner } of headerless)
+              ops.clearOwner(scope, o, owner)
+          } finally {
+            ops.sweep(scope)
+          }
+        },
+        session.token(),
+        "rights"
+      )
+    }
+    if (prev === undefined) {
+      firstRights = {
+        appliedEpoch: next.appliedEpoch,
+        request: requestOf(item),
+      }
+      narrow(
+        [
+          ...beforeFirst.views,
+          ...[...beforeFirst.objects].flatMap((name) =>
+            holdersOf(writerContext, name)
+          ),
+        ],
+        next.appliedEpoch
+      )
+      beforeFirst.views.clear()
+      beforeFirst.objects.clear()
+      return
+    }
+    // Пари, які попередній знімок забороняв, а новий дозволяє: читання,
+    // старше за попередній знімок, і далі їх не пише (бар'єр замінено).
+    for (const o of objects.values()) {
+      const reopened = reopenedPairs(prev.snapshot, next.snapshot, o.entry)
+      if (reopened === "all")
+        session.epochs.buryObject(o.name, prev.appliedEpoch)
+      else
+        for (const scope of reopened)
+          session.epochs.bury(pairId(o.name, scope), prev.appliedEpoch)
+    }
+    narrow(
+      [...objects.values()]
+        .filter((o) => readNarrowed(prev.snapshot, next.snapshot, o.entry))
+        .flatMap((o) => holdersOf(writerContext, o.name)),
+      next.appliedEpoch
+    )
   }
 
   let lastHash = options.snapshotHash
@@ -559,7 +932,7 @@ export function createCore(options: {
       readEpoch,
       ownerScope
     ) {
-      if (staleObjects.has(o.name)) return
+      if (staleObjects.has(o.name)) return undefined
       const result = o.sections.put(
         scope,
         owner,
@@ -572,12 +945,25 @@ export function createCore(options: {
         "owner-section"
       )
       if (result === "written") touchSection(o, owner)
+      // ТЧ власника без шапки, відкинута бар'єром знімка: читання могло йти
+      // тим самим запитом, що й `rights`, тож вигляд читає її ще раз — уже
+      // після знімка, тож бар'єр її не судить.
+      if (
+        result === "rejected" &&
+        ownerScope === "unknown" &&
+        rights !== undefined &&
+        readEpoch < rights.appliedEpoch
+      ) {
+        barredSections.add(`${o.name}\u0000${owner}`)
+        return "barred"
+      }
       // Позначені рядки ТЧ перечитує змонтований вигляд: перевірка вигляду
       // читає наново, коли ревізія шапки змінилась.
       if (result === "stale") {
         touchSection(o, owner)
         if (o.rows.get(owner) !== undefined) rowViews.touch(o.name, owner)
       }
+      return undefined
     },
     clearOwner(scope, o, owner) {
       o.sections.clearOwner(scope, owner)
@@ -725,6 +1111,9 @@ export function createCore(options: {
       }
       // `hide` (права): види, що тримають сховані ключі, перечитуються після
       // `commit`, з епохою старту не меншою за позначку.
+      const barredNow = [...barredSections]
+      barredSections.clear()
+      rereadBarred(barredNow)
       const hiddenNow = [...hiddenKeys]
       hiddenKeys.clear()
       for (const [name, keys] of hiddenNow) {
@@ -761,6 +1150,7 @@ export function createCore(options: {
     written.length = 0
     registry.close()
     hiddenKeys.clear()
+    barredSections.clear()
     rowViews.clear()
     dirtySections.clear()
     dirtyObjects.clear()
@@ -782,6 +1172,24 @@ export function createCore(options: {
 
   const purges = new Map<ObjectName, number>()
   const hiddenKeys = new Map<ObjectName, Set<Key>>()
+  // ТЧ (`"<object>\u0000<owner>"`), відкинуті бар'єром знімка в цьому `commit`.
+  const barredSections = new Set<string>()
+  function rereadBarred(barred: readonly string[]) {
+    if (barred.length === 0) return
+    const wanted = new Set(barred)
+    const groups = new Map<ObjectState, Subset[]>()
+    for (const s of registry.subsets()) {
+      const spec = s.form.spec
+      if (spec.kind !== "section" || !s.alive || s.purged) continue
+      if (s.listeners.size === 0) continue
+      if (!wanted.has(`${s.form.object.name}\u0000${spec.owner}`)) continue
+      groups.set(s.form.object, [...(groups.get(s.form.object) ?? []), s])
+    }
+    for (const [o, views] of groups)
+      singleFlight(writerContext, o, views, { visibleOnly: false }).done.catch(
+        catchNarrow
+      )
+  }
 
   // Строки об'єктів у планувальнику (§8.4): перемикання епохи (Р5) і повтор
   // відкинутої відповіді (Р6). Таймера на об'єкт немає: строк виконує такт, а
@@ -937,7 +1345,20 @@ export function createCore(options: {
       const at = nextViewDue(writerContext, o.name)
       if (at !== undefined && (due === undefined || at < due)) due = at
     }
+    const rightsAt = rightsDueAt()
+    if (rightsAt !== undefined && (due === undefined || rightsAt < due))
+      due = rightsAt
     return due
+  }
+
+  // Строк знімка прав (Р2): `rightsAt + I` лише на видимій вкладці, коли
+  // частина не летить (інакше прострочений строк давав би такти з таймером
+  // 0 мс) і сховище не порожнє.
+  function rightsDueAt(): number | undefined {
+    if (!rightsEnabled || !visible || rightsFlying) return undefined
+    if (rightsSentAt === undefined) return undefined
+    if (![...objects.values()].some((o) => o.rows.size > 0)) return undefined
+    return rightsSentAt + limits.revalidateIntervalMs
   }
   let lastTickAt: number | undefined
   // Один таймер на ядро (§6.7). Такт — звірка з вікном `0,1 × I`, але без
@@ -967,7 +1388,18 @@ export function createCore(options: {
           read = true
       if (runDue()) read = true
       if (read) lastTickAt = now()
-      reconcile({ minAgeMs }, undefined, [])
+      // Знімок має власний строк; без видимих виглядів пакет несе лише його.
+      const rightsAt = rightsDueAt()
+      reconcile(
+        { minAgeMs },
+        undefined,
+        // Строк знімка бере те саме вікно `0,1 × I`, що й вигляди: інакше
+        // `refreshedAt` виду трохи раніший за `rightsSentAt` розколов би такт.
+        rightsAt !== undefined &&
+          rightsAt <= now() + 0.1 * limits.revalidateIntervalMs
+          ? ["rights"]
+          : []
+      )
     },
     defects,
   })
@@ -1089,7 +1521,7 @@ export function createCore(options: {
       })
   }
 
-  type ServicePart = "version"
+  type ServicePart = "version" | "rights"
 
   // Звірка (§6.7): версія каталогу й перечитування видимих виглядів живих
   // об'єктів. Усе синхронно, без `await` між об'єктами, тож збирач пакета
@@ -1097,11 +1529,12 @@ export function createCore(options: {
   function reconcile(
     reconcileOptions: { minAgeMs?: number } = {},
     snapshotViews?: ReadonlySet<Subset>,
-    // Склад службових частин (Р8): `endHydration` і `resume()` шлють
-    // `version`, такт інтервалу — жодної.
-    services: readonly ServicePart[] = ["version"]
+    // Склад службових частин (Р2): `endHydration` і `resume()` шлють
+    // `version` і `rights`, такт — `rights`, коли настав строк знімка.
+    services: readonly ServicePart[] = ["version", "rights"]
   ) {
     if (services.includes("version")) core.requestVersion()
+    if (services.includes("rights")) core.requestRights()
     for (const o of objects.values()) {
       // Несумісний об'єкт не читається (§10): перечитування перевело б його
       // вигляди в `error` замість показати `isStale`.
@@ -1158,10 +1591,26 @@ export function createCore(options: {
       if (!versionFlying) startVersion()
       else if (!batcher.hasQueuedVersion()) versionTail = true
     },
-    serverHash(hash, versionPart) {
+    requestRights() {
+      if (!rightsEnabled || !session.token().valid) return
+      if (!rightsFlying) {
+        // Збій частини вже в журналі (`rights-failed`) — повтору немає (Р8).
+        source.read([{ type: "rights" }]).catch(() => {})
+      } else if (!batcher.hasQueuedRights()) rightsTail = true
+    },
+    rights: () => rights,
+    serverHash(hash, parts) {
       const changed = lastHash !== undefined && hash !== lastHash
       lastHash = hash
-      if (changed && !versionPart) core.requestVersion()
+      // Знімок прав слідує за `version` (Р9): одна мікрозадача — один запит, а
+      // відповідь з частиною `version` нового запиту не запускає нічого (§10),
+      // тож два хеші, що чергуються, не дають пінг-понгу. Знімок відповіді з
+      // частиною `rights` уже від нового сервера: другий запит `rights` за
+      // ним (хвіст частини в польоті) був би зайвим.
+      if (changed && !parts.version) {
+        core.requestVersion()
+        if (!parts.rights) core.requestRights()
+      }
     },
     staleClient(object) {
       const o = objects.get(object)
@@ -1313,6 +1762,9 @@ export function createCore(options: {
     defects,
     watchRemarks(listener) {
       remarkListener = listener
+    },
+    watchRightsPass(listener) {
+      rightsPassListener = listener
     },
     mutations: () => overlay.entries(),
     schedulerPlans: () => scheduler.plans(),

@@ -18,6 +18,7 @@ import {
   type ReadQueryValue,
   type ReadQuery,
   type ReadRows,
+  type RightsSnapshot,
   type WireReadParts,
   type WireReadResult,
   type WireRowsQuery,
@@ -127,6 +128,28 @@ export interface FakeSource {
    * (or while this is `null`) it gets full rows, as the server does.
    */
   epoch: string | null
+  /**
+   * The snapshot a `rights` part answers; with `known` equal to
+   * {@link rightsVersion} the answer carries no `snapshot`. A test replaces
+   * both to move the rights of the user.
+   */
+  rightsSnapshot: RightsSnapshot
+  /** The `rightsVersion` of {@link rightsSnapshot}, 64 hex. */
+  rightsVersion: string
+  /** Makes the next `rights` parts fail with this error; `undefined` — answer. */
+  rightsError: CommandError | undefined
+  /** While `true`, a `rights` part waits until {@link releaseRights}. */
+  holdRights: boolean
+  /** Answers the held `rights` parts, each with the state of that moment. */
+  releaseRights(): void
+  /** The `known` of every `rights` part received, in order (`undefined` — none sent). */
+  readonly rightsReads: readonly (string | undefined)[]
+  /** The `rights` parts received: the request index, `known` and the answer. */
+  readonly rightsLog: readonly {
+    request: number
+    known: string | undefined
+    response?: unknown
+  }[]
   /** The number of parts of every request received, in order. */
   readonly requests: readonly number[]
   /** Server clock: the moment of the last change; versions come from it. */
@@ -176,6 +199,15 @@ export interface FakeSource {
    * an earlier moment sees the visibility of that moment. Returns the tick.
    */
   setVisibleScopes(scopes: Iterable<string | null> | undefined): number
+  /**
+   * The same for one object on top of {@link setVisibleScopes}: its rows are
+   * visible only in these scopes (rights that differ per object, as RLS);
+   * `undefined` — no extra limit. Part of the history too. Returns the tick.
+   */
+  setObjectScopes(
+    object: FakeObject,
+    scopes: Iterable<string | null> | undefined
+  ): number
   /** Marks a row as alone exceeding the response budget. */
   oversize(object: FakeObject, key: Key, on?: boolean): void
 }
@@ -252,9 +284,18 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
   const tableOf = (object: FakeObject) => tables.get(nameOf(entryOf(object)))!
   const linesId = (object: ObjectName, owner: Key, section: string) =>
     `${object}\u0000${owner}\u0000${section}`
+  // Межа видимості окремого об'єкта поверх загальної, теж ревізіями.
+  const objectVisibility = new Map<
+    string,
+    Revision<ReadonlySet<string | null> | "all">[]
+  >()
   const isVisible = (entry: CatalogEntry, values: Values, at: number) => {
+    const scope = scopeOf(entry, values)
     const scopes = valueAt(visibility, at) ?? "all"
-    return scopes === "all" || scopes.has(scopeOf(entry, values))
+    if (scopes !== "all" && !scopes.has(scope)) return false
+    const own = objectVisibility.get(`${entry.kind}.${entry.name}`)
+    const mine = own === undefined ? "all" : (valueAt(own, at) ?? "all")
+    return mine === "all" || mine.has(scope)
   }
   const isOversized = (entry: CatalogEntry, key: unknown) =>
     oversized.has(`${entry.kind}.${entry.name}\u0000${String(key)}`)
@@ -527,6 +568,13 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
     }
   }
 
+  const rightsReads: (string | undefined)[] = []
+  const rightsLog: {
+    request: number
+    known: string | undefined
+    response?: unknown
+  }[] = []
+  const heldRights: Array<() => void> = []
   const adapter: ServerFunctionAdapter = {
     capabilities: { include: true },
     read(items) {
@@ -562,11 +610,35 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
             settle()
             return
           }
-          // Знімок прав фейк не віддає: його споживач (приймач знімка в ядрі)
-          // з'являється наступною частиною блоку, а фейк без нього мовчки
-          // відповів би вигадкою. Відмова — явна, а не відповідь `invalid`.
           if (item.type === "rights") {
-            fail(new Error("fake: the rights part is not supported"))
+            rightsReads.push(item.known)
+            const logged: (typeof rightsLog)[number] = {
+              request,
+              known: item.known,
+            }
+            rightsLog.push(logged)
+            const answer = () => {
+              const error = fake.rightsError
+              slots[slot] =
+                error !== undefined
+                  ? { ok: false, error: errorToWire(index, error) }
+                  : {
+                      ok: true,
+                      value:
+                        item.known === fake.rightsVersion
+                          ? { rightsVersion: fake.rightsVersion }
+                          : {
+                              rightsVersion: fake.rightsVersion,
+                              snapshot: fake.rightsSnapshot,
+                            },
+                    }
+              logged.response = slots[slot]!.ok
+                ? (slots[slot] as { value: unknown }).value
+                : undefined
+              settle()
+            }
+            if (fake.holdRights) heldRights.push(answer)
+            else answer()
             return
           }
           const decoded = readPartFromWire(index, item)
@@ -644,6 +716,25 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
 
   const fake: FakeSource = {
     index,
+    rightsSnapshot: {
+      userId: null,
+      scopeSets: [],
+      rights: [],
+      members: [],
+      dimensionValues: [],
+    },
+    rightsVersion: "0".repeat(64),
+    rightsError: undefined,
+    holdRights: false,
+    releaseRights() {
+      for (const answer of heldRights.splice(0)) answer()
+    },
+    get rightsLog() {
+      return rightsLog
+    },
+    get rightsReads() {
+      return rightsReads
+    },
     epoch: init.epoch ?? null,
     snapshotHash: init.snapshotHash ?? "fake-snapshot",
     kernelHashes: Object.fromEntries(
@@ -736,6 +827,18 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
       return values === null
         ? undefined
         : { key, version: values[entry.versionName] as number, values }
+    },
+    setObjectScopes(object, scopes) {
+      const entry = entryOf(object)
+      const name = `${entry.kind}.${entry.name}`
+      const at = ++clock
+      const history = objectVisibility.get(name) ?? [{ at: 0, value: "all" }]
+      history.push({
+        at,
+        value: scopes === undefined ? "all" : new Set(scopes),
+      })
+      objectVisibility.set(name, history)
+      return at
     },
     setVisibleScopes(scopes) {
       const at = ++clock

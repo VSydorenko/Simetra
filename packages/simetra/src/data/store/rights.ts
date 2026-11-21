@@ -120,3 +120,107 @@ export function canSubscribe(
       : r.level !== "container"
   )
 }
+
+// Кортеж обсягу рядка `read`: усе, крім об'єкта й дії, які вже відібрано.
+const tupleOf = (r: RightsRow): string =>
+  JSON.stringify([
+    r.level,
+    r.levelId,
+    r.scope,
+    r.container,
+    r.extent,
+    r.dimensionId,
+  ])
+
+/**
+ * Чи звузив новий знімок читання об'єкта до B6 (P4-B spec §6.2 правило 4):
+ * зник кортеж рядка `read` мітки об'єкта, а його пара лишилась дозволеною; для нескоупленого об'єкта — ще й
+ * змінились `scopeSets` (межа читання «Користувачів» залежить від членства).
+ * Об'єкт без контракту `rights` знімок не описує — ні.
+ */
+export function readNarrowed(
+  prev: RightsSnapshot,
+  next: RightsSnapshot,
+  entry: CatalogEntry
+): boolean {
+  if (entry.rights === undefined) return false
+  const kept = new Set(readRows(next, entry).map(tupleOf))
+  // Кортеж пари, яку новий знімок забороняє, — не звуження, а втрата пари:
+  // її прибирає прохід, а не перечитування.
+  const narrowed = (r: RightsRow) =>
+    !kept.has(tupleOf(r)) &&
+    (entry.scopeKindId === undefined ||
+      readAllowed(next, { scope: r.scope }, entry))
+  if (readRows(prev, entry).some(narrowed)) return true
+  if (entry.scopeKindId !== undefined) return false
+  const scopes = (s: RightsSnapshot) =>
+    new Set(s.scopeSets.map((x) => `${x.scopeKind}\u0000${x.scope}`))
+  const before = scopes(prev)
+  const after = scopes(next)
+  return before.size !== after.size || [...before].some((x) => !after.has(x))
+}
+
+// Скоупи `scopeSets` знімка, що діють для об'єкта: свого виду, а для
+// нескоупленого — усі (межа його читання залежить від членства).
+const scopesFor = (snapshot: RightsSnapshot, entry: CatalogEntry) =>
+  new Set(
+    snapshot.scopeSets
+      .filter(
+        (s) =>
+          entry.scopeKindId === undefined || s.scopeKind === entry.scopeKindId
+      )
+      .map((s) => `${s.scopeKind}\u0000${s.scope}`)
+  )
+
+/**
+ * Чи втратив об'єкт на заміні знімка хоч щось із читання: кортеж рядка
+ * `read`, скоуп зі `scopeSets` чи покриття `publicRead`. Тоді рядки ТЧ
+ * власників з невідомим скоупом (шапки в сховищі немає, або вона іншої версії
+ * чи епохи версій, ніж `ownerVersion` ТЧ) не судяться за
+ * парою — їх прибирає заміна, а повертає наступне читання (P4-B spec §6.2
+ * правило 4). Перший знімок (`prev` немає) судиться проти «дозволено
+ * все»: втрата — будь-яка пара, яку він забороняє; скоупленому об'єкту, якого
+ * не відкриває `publicRead`, знімок забороняє скоупи поза своїми.
+ */
+export function readLost(
+  prev: RightsSnapshot | undefined,
+  next: RightsSnapshot,
+  entry: CatalogEntry
+): boolean {
+  if (entry.rights === undefined) return false
+  if (prev === undefined)
+    return entry.scopeKindId !== undefined
+      ? !publicReadCovers(next, entry)
+      : !readAllowed(next, { scope: null }, entry)
+  if (publicReadCovers(prev, entry) && !publicReadCovers(next, entry))
+    return true
+  const kept = new Set(readRows(next, entry).map(tupleOf))
+  if (readRows(prev, entry).some((r) => !kept.has(tupleOf(r)))) return true
+  const after = scopesFor(next, entry)
+  return [...scopesFor(prev, entry)].some((s) => !after.has(s))
+}
+
+/**
+ * Пари об'єкта, які попередній знімок забороняв, а новий дозволяє: читання,
+ * що стартувало до застосування попереднього, їх і далі не пише (P4-B spec
+ * §6.2 правило 4). `"all"` — новий знімок відкриває кожну пару об'єкта
+ * (`publicRead` тепер покриває роль), тож їх не перелічити.
+ */
+export function reopenedPairs(
+  prev: RightsSnapshot,
+  next: RightsSnapshot,
+  entry: CatalogEntry
+): "all" | (string | null)[] {
+  if (entry.rights === undefined) return []
+  if (!publicReadCovers(prev, entry) && publicReadCovers(next, entry))
+    return "all"
+  const reopened = (scope: string | null) =>
+    !readAllowed(prev, { scope }, entry) && readAllowed(next, { scope }, entry)
+  if (entry.scopeKindId === undefined) return reopened(null) ? [null] : []
+  // Скоуплену пару новий знімок відкриває лише скоупом зі своїх `scopeSets`.
+  const kind = entry.scopeKindId
+  const scopes = new Set(
+    next.scopeSets.filter((s) => s.scopeKind === kind).map((s) => s.scope)
+  )
+  return [...scopes].filter(reopened)
+}

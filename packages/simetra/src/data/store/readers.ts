@@ -13,9 +13,11 @@ import {
   type IncludeStep,
   type Included,
 } from "./include"
+import { differentEpochs } from "./epoch"
 import { visibleRow, type PutResult, type RestoredRow } from "./object-store"
 import type { OwnerScope, SectionEntry } from "./section-store"
 import type { Scope, Session } from "./session"
+import type { Subset } from "./subsets"
 import {
   readKeys,
   readOne,
@@ -78,7 +80,7 @@ export interface StoreOps {
     versionEpoch: string | null,
     readEpoch: number,
     ownerScope: OwnerScope
-  ): void
+  ): "barred" | undefined
   clearOwner(scope: Scope, o: ObjectState, owner: Key): void
   /** Puts a row of a core snapshot (the hydration); see `ObjectStore.restore`. */
   restore(scope: Scope, o: ObjectState, row: RestoredRow, at: number): void
@@ -161,9 +163,10 @@ export type Apply = (scope: Scope) => boolean
 export async function gated<C extends ReaderContext>(
   ctx: C,
   readEpoch: number,
-  read: (ctx: C) => Promise<Write>
+  read: (ctx: C) => Promise<Write>,
+  caller?: Subset
 ): Promise<Apply> {
-  const { source, epochs } = tracked(ctx.source)
+  const { source, epochs } = tracked(ctx.source, caller)
   const write = await read({ ...ctx, source })
   return (scope) => {
     if (ctx.session.acceptEpochs(epochs, readEpoch) === "discard") return false
@@ -915,7 +918,9 @@ async function readSection(
   const lines = result.rows.map((values) => lineOf(section, values))
   return (scope) => {
     // Читання прийнято (шлюз епохи пройдено), навіть коли сховище відкине
-    // рядки: свіжість ТЧ-підмножини міряється епохою цього читання.
+    // рядки: свіжість ТЧ-підмножини міряється епохою цього читання. Крім
+    // відмови бар'єра знімка прав: таку ТЧ вигляд ще читатиме (нижче).
+    const before = s.sectionRead
     s.sectionRead = readEpoch
     s.headerState = undefined
     // Невидимий власник — рядків ТЧ не показуємо.
@@ -923,8 +928,15 @@ async function readSection(
       ops.clearOwner(scope, o, spec.owner)
       return
     }
+    // Скоуп власника відомий лише з шапки тієї самої версії, що й версія
+    // власника ТЧ, і тієї самої епохи версій: власник міг переїхати в інший
+    // скоуп і після версії рядків, і після версії шапки, а версії різних епох
+    // не впорядковані, тож інша шапка пари не підтверджує — рядки судяться як
+    // без шапки (§6.2 правило 4). Об'єкт без колонки скоупу має один скоуп, `null`,
+    // відомий і без шапки: інакше «невідомий» скоуп обминав би бар'єр
+    // знімка й надгробок пари `(об'єкт, null)`, які судять лише скоуплені.
     const header = o.rows.get(spec.owner)
-    ops.putSection(
+    const barred = ops.putSection(
       scope,
       o,
       spec.owner,
@@ -933,8 +945,17 @@ async function readSection(
       result.ownerVersion,
       result.epoch,
       readEpoch,
-      header === undefined ? "unknown" : header.scope
+      o.entry.scopeColumn === undefined
+        ? null
+        : header === undefined ||
+            differentEpochs(result.epoch, header.versionEpoch) ||
+            header.version !== result.ownerVersion
+          ? "unknown"
+          : header.scope
     )
+    // ТЧ, відкинута бар'єром знімка, не рухає `sectionRead`: її змонтований
+    // вигляд читає її ще раз, уже після знімка (§6.2 правило 4).
+    if (barred === "barred") s.sectionRead = before
   }
 }
 
@@ -944,11 +965,11 @@ async function readSection(
  */
 export function readForm(
   ctx: ReaderContext,
-  s: ReaderTarget,
+  s: Subset,
   readEpoch: number,
   token: GenerationToken
 ): Promise<Apply> {
-  return gated(ctx, readEpoch, (c) => readFormWrite(c, s, readEpoch, token))
+  return gated(ctx, readEpoch, (c) => readFormWrite(c, s, readEpoch, token), s)
 }
 
 /** {@link readForm} without the epoch gate: the caller gates the whole read. */

@@ -176,6 +176,13 @@ const DISPOSED: CommandError = {
   reason: LIMIT_REASONS.disposed,
 }
 
+// Зміна сесії, яку побачило ядро у відповіді `rights` (Р7): та сама відмова,
+// що її дає сервер, тож викликачі бачать один код.
+const SESSION_CHANGED: CommandError = {
+  code: "command.unauthenticated",
+  reason: LIMIT_REASONS.sessionChanged,
+}
+
 const hasVersionPart = (request: RuntimeRequest): boolean =>
   request.type === "read" &&
   request.items.some(
@@ -184,6 +191,23 @@ const hasVersionPart = (request: RuntimeRequest): boolean =>
       item !== null &&
       (item as { type?: unknown }).type === "version"
   )
+
+/**
+ * The response carries a rights snapshot: its `rights` item answered `ok`.
+ * A refused read or a failed item brings none from the new server.
+ */
+const rightsReceived = (request: RuntimeRequest, response: DataResponse) => {
+  if (request.type !== "read" || !response.ok) return false
+  const items = (response.value as { items?: unknown } | null)?.items
+  if (!Array.isArray(items)) return false
+  return request.items.some(
+    (item, slot) =>
+      typeof item === "object" &&
+      item !== null &&
+      (item as { type?: unknown }).type === "rights" &&
+      (items[slot] as { ok?: unknown } | null)?.ok === true
+  )
+}
 
 const isSessionChanged = (error: CommandError) =>
   error.code === "command.unauthenticated" &&
@@ -327,10 +351,15 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     if (closedWith !== undefined) throw new CommandFailure(closedWith)
     // Хеш звіряється лише після перевірки закриття (вище): відповідь закритого
     // рантайму не запускає `version`. Відповідь з частиною `version` хеш лише
-    // оновлює.
+    // оновлює, а зі знімком прав, що справді прийшов, не просить його вдруге:
+    // він уже від сервера з новим хешем. Відмова чи збій частини `rights`
+    // знімка не несуть — його перечитує хвіст за частиною в польоті (§9.3).
     const seen = () => {
       if (typeof response.serverHash === "string")
-        core.serverHash(response.serverHash, hasVersionPart(request))
+        core.serverHash(response.serverHash, {
+          version: hasVersionPart(request),
+          rights: rightsReceived(request, response),
+        })
     }
     if (response.ok) {
       seen()
@@ -413,6 +442,10 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     ...(options.visible === undefined ? {} : { visible: options.visible }),
     log,
     snapshotHash: catalog.snapshotHash,
+    rightsSnapshot: catalog.rightsSnapshot === true,
+    // Інший користувач у відповіді `rights` (Р7) — той самий шлях, що й
+    // відмова `session-changed` транспорту: ядро кличе це поза `commit`.
+    onSessionChanged: () => sessionChanged(SESSION_CHANGED),
     ...(options.onStaleClient === undefined
       ? {}
       : { onStaleClient: options.onStaleClient }),

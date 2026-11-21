@@ -81,6 +81,8 @@ export const rightsValueSchema = z.strictObject({
   snapshot: rightsSnapshotSchema.optional(),
 })
 
+export type RightsValue = z.infer<typeof rightsValueSchema>
+
 /**
  * Ім'я функції знімка в схемі `simetra` (P4-B spec §9.1): T1 її генерує, T3
  * кличе, а імпортує лише `simetra/model`.

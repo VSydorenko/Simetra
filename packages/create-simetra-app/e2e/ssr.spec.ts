@@ -54,9 +54,10 @@ async function settleHydrated(
   )
   await settle(page, log, expectedHydrationRequests())
   const call = log.calls[0]!
-  expect(call.items[0]).toBe("version")
-  expect(call.items.slice(1).every((item) => item === "query")).toBe(true)
-  expect(call.items.length).toBeGreaterThan(1)
+  // Перший пакет рантайму: `rights` без `known`, `version`, далі вигляди.
+  expect(call.items.slice(0, 2)).toEqual(["rights", "version"])
+  expect(call.items.slice(2).every((item) => item === "query")).toBe(true)
+  expect(call.items.length).toBeGreaterThan(2)
   for (const object of objects) expect(call.objects).toContain(object)
 }
 
@@ -113,9 +114,9 @@ test.describe("scenario 1: SSR entry on the Client list", () => {
       expect(frame.keys).toEqual(server.keys)
       expect(frame.rows).toEqual(server.rows)
     }
-    // Один запит: частина `version` першою, далі перечитування виглядів;
-    // усі від суб'єкта сесії
-    expect(log.calls[0]?.items[0]).toBe("version")
+    // Один запит: частини `rights` і `version` першими, далі перечитування
+    // виглядів; усі від суб'єкта сесії
+    expect(log.calls[0]?.items.slice(0, 2)).toEqual(["rights", "version"])
     for (const call of log.calls) {
       expect(call.subject).toBe(app.users.a.id)
       expect(call.result?.ok).toBe(true)

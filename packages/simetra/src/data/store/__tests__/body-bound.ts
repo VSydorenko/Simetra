@@ -35,6 +35,14 @@ const KNOWN_ENVELOPE_BYTES = jsonBytes({
   known: { epoch: "0".repeat(64), keys: [], versions: [] },
 })
 export const VERSION_PART_BYTES = jsonBytes({ type: "version" })
+/** The `rights` part without `known` (the first packet, SSR) and with it. */
+export const RIGHTS_PART_BYTES = jsonBytes({ type: "rights" })
+export const RIGHTS_KNOWN_PART_BYTES = jsonBytes({
+  type: "rights",
+  known: "0".repeat(64),
+})
+/** Р11: the reply of a `rights` part confirmed by `known` carries no snapshot. */
+export const RIGHTS_CONFIRMED_BYTES = 128
 const SLACK = 2048
 /** §12: the `version` part of a reply, 2 KiB + 128 B per catalog object. */
 export const VERSION_BOUND = (objects: number) => 2048 + 128 * objects
@@ -42,9 +50,13 @@ export const VERSION_BOUND = (objects: number) => 2048 + 128 * objects
 export function bodyBound(
   fake: FakeSource,
   reads: readonly FakeReadLog[],
-  hasVersion: boolean
+  hasVersion: boolean,
+  rights: readonly { known: string | undefined }[] = []
 ): number {
   let bound = SLACK + (hasVersion ? VERSION_PART_BYTES : 0)
+  for (const part of rights)
+    bound +=
+      part.known === undefined ? RIGHTS_PART_BYTES : RIGHTS_KNOWN_PART_BYTES
   for (const read of reads) {
     bound += partWithoutKeys(fake, read.query!)
     bound += keysOf(read.query).length * KEY_BYTES

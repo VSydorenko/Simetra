@@ -10,7 +10,11 @@ import type { ObjectStore } from "./object-store"
 import type { Scope, Session } from "./session"
 import type { Key, ObjectName, SectionLine } from "./types"
 
-/** The owner scope a section entry keeps; `"unknown"` — written without a header. */
+/**
+ * The owner scope a section entry keeps; `"unknown"` — written without a
+ * header in the store, or with a header of another version than the
+ * section's `ownerVersion` or of another version epoch.
+ */
 export type OwnerScope = string | null | "unknown"
 
 /** Lines of one tabular section of one owner. */
@@ -62,8 +66,9 @@ export interface SectionStore {
     source: "owner-section" | "other"
   ): "written" | "rejected" | "stale"
   /**
-   * Drops sections of owners of this scope and of owners with unknown scope,
-   * by the owner scope captured at `put`. A header that moved into the purged
+   * Drops sections of owners of this scope and of owners with unknown scope
+   * (no header at `put`, or a header of another version than `ownerVersion` or
+   * of another version epoch), by the owner scope captured at `put`. A header that moved into the purged
    * scope after its lines were written is not seen here: the caller
    * (`Writer.purge`) must also call `clearOwner` for every key that
    * `ObjectStore.purgeScope` / `purgeKeys` returns. Returns the owners whose
@@ -147,11 +152,12 @@ export function createSectionStore(options: {
     // перечитати (позначку знято), а рядки ТЧ з читання, старшого за
     // горизонт ключа, показали б те, що права сховали.
     if (epochs.evictedSince(id, readEpoch)) return true
-    // Витіснений надгробок пари скоупу власника, якого шапка в сховищі не
-    // підтверджує (немає запису чи шапка в іншому скоупі), міг належати purge.
+    // Витіснений надгробок пари скоупу власника міг належати purge чи
+    // знову відкритій парі (§6.2, правила 1 і 4): шапка в сховищі цього не
+    // спростовує — її могло записати новіше читання, а рядки ТЧ прийшли з
+    // читання, старшого за горизонт.
     if (
       ownerScope !== "unknown" &&
-      (e === undefined || e.scope !== ownerScope) &&
       epochs.evictedSince(pairId(object, ownerScope), readEpoch)
     )
       return true
