@@ -10,7 +10,7 @@ import {
   catalogEntry,
   catalogRights,
 } from "../../../model/runtime/__tests__/entries"
-import { canSubscribe, readAllowed } from "../rights"
+import { canSubscribe, deniesSomePair, readAllowed } from "../rights"
 
 const KIND = "00000000-0000-4000-8000-0000000000c1"
 const SCOPE = "00000000-0000-4000-8000-0000000000c2"
@@ -371,5 +371,30 @@ describe("readAllowed", () => {
     ["нескоуплений: без read", [row({ action: "update" })], false],
   ])("%s", (_name, rights, expected) => {
     expect(readAllowed(snap(rights, []), free, unscoped())).toBe(expected)
+  })
+})
+
+describe("deniesSomePair", () => {
+  it("a scoped object without publicRead: scopes outside the snapshot are denied", () => {
+    expect(deniesSomePair(snap([row()]), scoped())).toBe(true)
+  })
+
+  it("a scoped object opened by publicRead: no pair is denied", () => {
+    expect(
+      deniesSomePair(snap([]), scoped({ publicRead: "authenticated" }))
+    ).toBe(false)
+  })
+
+  it("an unscoped object: its one pair, by the read right", () => {
+    expect(
+      deniesSomePair(snap([row({ scope: null, level: "global" })]), unscoped())
+    ).toBe(false)
+    expect(deniesSomePair(snap([]), unscoped())).toBe(true)
+  })
+
+  it("an object without a rights contract: none", () => {
+    const entry = scoped()
+    delete entry.rights
+    expect(deniesSomePair(snap([]), entry)).toBe(false)
   })
 })

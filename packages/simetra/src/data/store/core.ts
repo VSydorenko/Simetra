@@ -13,7 +13,12 @@ import { createSession, type Scope } from "./session"
 import { applySnapshot, dehydrate, parseSnapshot, type SsrContext } from "./ssr"
 import { createRowViews, purgedSnapshot } from "./snapshot"
 import { createBatcher } from "./batcher"
-import { readAllowed, readLost, readNarrowed, reopenedPairs } from "./rights"
+import {
+  deniesSomePair,
+  readAllowed,
+  readNarrowed,
+  reopenedPairs,
+} from "./rights"
 import {
   ReadLimiterClosed,
   readKeys,
@@ -768,14 +773,17 @@ export function createCore(options: {
           pairs.some((p) => p.object === object)
         )
       : pairs
-    const lost = [...objects.values()].filter((o) =>
-      readLost(prev?.snapshot, next.snapshot, o.entry)
+    const denying = [...objects.values()].filter((o) =>
+      deniesSomePair(next.snapshot, o.entry)
     )
     // Рядки ТЧ власників з невідомим скоупом (без шапки в сховищі чи з
-    // шапкою іншої версії чи епохи версій, ніж ТЧ) не судяться за парою: на заміні,
-    // де об'єкт щось утратив, — і на першому знімку, що щось забороняє, — їх
-    // прибираємо, повертає наступне читання.
-    const headerless = lost.flatMap((o) =>
+    // шапкою іншої версії чи епохи версій, ніж ТЧ) не судяться за парою: їх
+    // прибирає кожна заміна, чий знімок забороняє хоч одну пару об'єкта, — як
+    // прохід прибирає рядки шапки кожної забороненої пари, а не лише щойно
+    // втраченої; повертає наступне читання. На причинність сервера (читання
+    // після знімка судила RLS) правило не покладається: репліка могла
+    // відставати в правах.
+    const headerless = denying.flatMap((o) =>
       o.sections
         .owners()
         .filter((owner) =>
@@ -802,6 +810,21 @@ export function createCore(options: {
         "rights"
       )
     }
+    // Прибрані рядки ТЧ без відомого скоупу повертає перечитування їхніх
+    // змонтованих виглядів: інакше вигляд дозволеної пари лишився б без рядків.
+    const cleared = new Set(
+      headerless.map(({ o, owner }) => keyId(o.name, owner))
+    )
+    narrow(
+      denying.flatMap((o) =>
+        holdersOf(writerContext, o.name).filter(
+          (s) =>
+            s.form.spec.kind === "section" &&
+            cleared.has(keyId(o.name, s.form.spec.owner))
+        )
+      ),
+      next.appliedEpoch
+    )
     if (prev === undefined) {
       firstRights = {
         appliedEpoch: next.appliedEpoch,
