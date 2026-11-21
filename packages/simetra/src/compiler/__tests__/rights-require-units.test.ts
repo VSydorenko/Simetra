@@ -330,9 +330,16 @@ describe("rights_require / rights_require_scope generator", () => {
     it("publicRead read of a user-only pair is the RLS condition, with a service caller it is the predicates", async () => {
       const publicRead = { [TASK_FILE]: { publicRead: "authenticated" } }
       const userOnly = await units(
-        [{ ...task("read"), callers: ["user", "command"] }],
+        [
+          { ...task("read"), callers: ["user", "command"] },
+          { ...task("update"), callers: ["user"] },
+        ],
         publicRead
       )
+      // Лише читання: `update` лишається за предикатами (мутація: усі дії).
+      expect(
+        branches(functionOf(userOnly, "rights_require")).get("task/update")
+      ).toContain("rights_any('update', 'task')")
       expect(
         branches(functionOf(userOnly, "rights_require")).get("task/read")
       ).toBe(
