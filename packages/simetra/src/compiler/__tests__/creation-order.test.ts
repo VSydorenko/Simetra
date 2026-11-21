@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { SIGNAL_OUTBOX } from "simetra/model"
-import { compile, type CompileResult } from "simetra/compiler"
+import { compile, unitIdentity, type CompileResult } from "simetra/compiler"
 import {
   textCalls,
   unitCalls,
@@ -89,7 +89,7 @@ async function order(entries: Record<string, unknown>): Promise<string[]> {
     .model!.creationOrder.map((node) =>
       node.type === "unit"
         ? node.identity
-        : `${node.type}:${node.schema}.${node.name}`
+        : unitIdentity(node.type, node.schema, node.name)
     )
     .filter((id) => !id.includes("simetra.row_version") && !outbox.has(id))
 }
@@ -194,7 +194,7 @@ describe("creation order", () => {
     const list = result.model!.creationOrder.map((node) =>
       node.type === "unit"
         ? node.identity
-        : `${node.type}:${node.schema}.${node.name}`
+        : unitIdentity(node.type, node.schema, node.name)
     )
     const currentUser = "function:simetra.current_user_id()"
     const provision = "function:simetra.provision_user(text,text,uuid,text)"
@@ -222,7 +222,7 @@ describe("creation order", () => {
     const list = result.model!.creationOrder.map((node) =>
       node.type === "unit"
         ? node.identity
-        : `${node.type}:${node.schema}.${node.name}`
+        : unitIdentity(node.type, node.schema, node.name)
     )
     // Тіло `rights_mine` — у живому варіанті (SQL); сама `rights_mine` зі
     // знімком — диспетчер plpgsql, чиї імена Postgres зв'язує під час
@@ -247,7 +247,7 @@ describe("creation order", () => {
     const list = result.model!.creationOrder.map((node) =>
       node.type === "unit"
         ? node.identity
-        : `${node.type}:${node.schema}.${node.name}`
+        : unitIdentity(node.type, node.schema, node.name)
     )
     const parsed = "function:simetra.command_parsed(bool)"
     expectBefore(
@@ -267,7 +267,7 @@ describe("creation order", () => {
     const list = result.model!.creationOrder.map((node) =>
       node.type === "unit"
         ? node.identity
-        : `${node.type}:${node.schema}.${node.name}`
+        : unitIdentity(node.type, node.schema, node.name)
     )
     const fn = "function:public.task_simetra_carriers_out()"
     const triggers = [
@@ -300,7 +300,7 @@ describe("creation order", () => {
     const list = result.model!.creationOrder.map((node) =>
       node.type === "unit"
         ? node.identity
-        : `${node.type}:${node.schema}.${node.name}`
+        : unitIdentity(node.type, node.schema, node.name)
     )
     const current = "function:simetra.command_current()"
     const section = "function:public.task_checklist_simetra_effects()"
@@ -459,6 +459,63 @@ describe("creation order", () => {
     })
     expect(cycles[0]!.params!.cycle).toContain("function:public.next_code()")
     expect(cycles[0]!.params!.cycle).toContain("table:public.codes")
+  })
+
+  // Ключі імен графа — за правилом ідентичності (#297): `"a.b".c` і
+  // `a."b.c"` — дві таблиці, і посилання на одну не дає ребра до другої;
+  // сирий ключ `a.b.c` дав би хибний цикл.
+  it("tables across a quoted dot are two nodes without a false edge", async () => {
+    const list = await order({
+      [CODES]: codes([column("code", { default: "z.f()" })], {
+        schema: "a",
+        physicalName: "b.c",
+      }),
+      "custom-tables/Other/Other.meta.json": customTable("Other", {
+        schema: "a.b",
+        physicalName: "c",
+      }),
+      "sql/z/x.sql":
+        'CREATE FUNCTION z.f() RETURNS text LANGUAGE sql AS $$ select max(id::text) from "a.b".c $$;',
+    })
+    expectBefore(list, [
+      ['table:"a.b".c', "function:z.f()"],
+      ["function:z.f()", 'table:a."b.c"'],
+    ])
+  })
+
+  // Посилання на ім'я в лапках резолвиться тим самим правилом, що й
+  // реєстрація: інакше ребро зникло б, і функція стала б перед в'юхою.
+  it("a reference to a view named in quotes orders the view first", async () => {
+    const list = await order({
+      [MISC]:
+        'CREATE FUNCTION public.g() RETURNS int LANGUAGE sql AS $$ select x from public."V" $$;\n' +
+        'CREATE FUNCTION public.h() RETURNS int LANGUAGE sql SET search_path = public AS $$ select x from "V" $$;\n' +
+        'CREATE VIEW public."V" AS SELECT 1 AS x;',
+    })
+    expectBefore(list, [
+      ['view:public."V"', "function:public.g()"],
+      ['view:public."V"', "function:public.h()"],
+    ])
+  })
+
+  // Голе ім'я `"a.b"` і кваліфіковане `a.b` — різні ключі одного індексу.
+  it("a bare dotted table name does not answer a qualified reference", async () => {
+    const list = await order({
+      [CODES]: codes([column("code", { default: "z.f()" })], {
+        schema: "x",
+        physicalName: "a.b",
+      }),
+      "custom-tables/Other/Other.meta.json": customTable("Other", {
+        schema: "a",
+        physicalName: "b",
+      }),
+      "sql/z/x.sql":
+        "CREATE FUNCTION z.f() RETURNS text LANGUAGE sql AS $$ select max(id::text) from a.b $$;",
+    })
+    expectBefore(list, [
+      ["table:a.b", "function:z.f()"],
+      ["function:z.f()", 'table:x."a.b"'],
+    ])
   })
 
   it("cycle is reported", async () => {
@@ -794,7 +851,7 @@ describe("creation order", () => {
     const list = model.creationOrder.map((node) =>
       node.type === "unit"
         ? node.identity
-        : `${node.type}:${node.schema}.${node.name}`
+        : unitIdentity(node.type, node.schema, node.name)
     )
     const readAny = "policy:public.task.task_read_any"
     const users = "policy:public.users.users_scope_read"

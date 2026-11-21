@@ -65,6 +65,7 @@ import {
   type ExpressionScope,
 } from "../sql/expression-calls"
 import { textCalls } from "../sql/dependencies"
+import { qualifiedName } from "../sql/identity"
 import type { SqlParser } from "../sql/parse"
 import { pgNamespaceKeys, type VerbatimUnit } from "../sql/units"
 import { PROJECT_FILE, objectKey, type ParsedObject } from "./files"
@@ -162,10 +163,11 @@ export function checkIntegrity(
     )
   )
 
-  // Таблиці й енам-типи ділять простір імен типів PG-схеми.
+  // Таблиці й енам-типи ділять простір імен типів PG-схеми. Ключ — за
+  // правилом ідентичності: `"a.b".c` і `a."b.c"` — різні таблиці.
   const relations = new Map<string, string>()
   for (const source of model.sources) {
-    const key = `${source.schema}.${source.name}`
+    const key = qualifiedName(source.schema, source.name)
     const first = relations.get(key)
     if (first === undefined) {
       relations.set(key, source.file)
@@ -2070,12 +2072,13 @@ function checkPosting(
  * (`assignNames`).
  */
 function relationNameCollisions(model: ModelStageResult): Diagnostic[] {
+  // Ключі — за правилом ідентичності, як і в `physical.table-duplicate`.
   const tables = new Set(
-    model.physical.tables.map((t) => `${t.schema}.${t.name}`)
+    model.physical.tables.map((t) => qualifiedName(t.schema, t.name))
   )
   const taken = new Map<string, { file: string; other: string }>()
   for (const source of model.sources) {
-    const key = `${source.schema}.${source.name}`
+    const key = qualifiedName(source.schema, source.name)
     if (tables.has(key) && !taken.has(key)) {
       taken.set(key, { file: source.file, other: "a table" })
     }
@@ -2084,7 +2087,7 @@ function relationNameCollisions(model: ModelStageResult): Diagnostic[] {
   for (const source of model.sources) {
     for (const { name, pointer, relation } of source.explicitNames) {
       if (!relation) continue
-      const key = `${source.schema}.${name}`
+      const key = qualifiedName(source.schema, name)
       const first = taken.get(key)
       if (first === undefined) {
         taken.set(key, { file: source.file, other: "an index or key" })
@@ -2120,7 +2123,7 @@ function functionCollisions(
   const unitFiles = new Map<string, string>()
   for (const unit of sqlUnits) {
     for (const name of pgNamespaceKeys({ type: "unit", unit })) {
-      const key = `${name.schema}.${name.name}`
+      const key = qualifiedName(name.schema, name.name)
       if (name.space === "proc" && !unitFiles.has(key)) {
         unitFiles.set(key, unit.file)
       }
@@ -2133,7 +2136,9 @@ function functionCollisions(
       compareStrings(a.file, b.file) || compareStrings(a.pointer, b.pointer)
   )
   for (const fn of ordered) {
-    const key = `${fn.schema}.${fn.name}`
+    // Ключ за правилом ідентичності: сирий `схема.ім'я` зливав би
+    // `"public.x".y` і `public."x.y"` у хибну колізію.
+    const key = qualifiedName(fn.schema, fn.name)
     const first = seen.get(key)
     const unitFile = fn.movementQuery === true ? undefined : unitFiles.get(key)
     const other =
