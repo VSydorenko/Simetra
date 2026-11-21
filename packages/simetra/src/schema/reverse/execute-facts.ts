@@ -28,13 +28,29 @@ export interface FunctionExecuteFact {
    */
   acl: ExecuteAclEntry[]
   /**
-   * `has_function_privilege(роль, функція, 'EXECUTE')` для кожної ролі профілю,
-   * що існує в базі (з урахуванням членства й успадкування). Відсутня роль —
-   * без ключа: `to_regrole` її не знаходить, і факт не вигадується.
+   * Дієвий `EXECUTE` кожної ролі профілю, що існує в базі, виведений зі
+   * знімка: ACL функції (`acl`), членство з урахуванням `inherit`, власник.
+   * Відсутня роль — без ключа: факт не вигадується.
    */
   executeByRole: Record<string, boolean>
-  /** `has_schema_privilege(роль, схема, 'USAGE')` для тих самих ролей. */
+  /**
+   * Дієвий `USAGE` тих самих ролей на схемі функції: `nspacl` (типовий ACL
+   * схеми, коли він порожній), членство, власник схеми.
+   */
   schemaUsageByRole: Record<string, boolean>
+}
+
+/**
+ * Розбіжність виведеного зі знімка з власною перевіркою привілеїв бази
+ * (`has_function_privilege`, `has_schema_privilege`): ознака, що ACL чи
+ * членство змінилися між читаннями. Читач її не вирішує, а повідомляє.
+ */
+export interface ExecuteCrossCheckFailure {
+  schema: string
+  name: string
+  identityArguments: string
+  role: string
+  privilege: "EXECUTE" | "USAGE"
 }
 
 export interface ExecuteFacts {
@@ -42,4 +58,6 @@ export interface ExecuteFacts {
   missingRoles: string[]
   /** Усі функції (не агрегати, не члени розширень) схем межі. */
   functions: FunctionExecuteFact[]
+  /** Порожній, коли виведене зі знімка збігається з перевіркою бази. */
+  crossCheckFailures: ExecuteCrossCheckFailure[]
 }

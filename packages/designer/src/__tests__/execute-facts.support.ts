@@ -1,16 +1,21 @@
 import { existsSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import { PLATFORM_ROLES, PROVIDER_API_ROLES } from "simetra/model"
+import {
+  PLATFORM_ROLES,
+  PROVIDER_API_ROLES,
+  PROVIDER_OWNER_ROLES,
+} from "simetra/model"
 import type { ExecuteFacts } from "simetra/schema"
 import { readMetadataDir } from "../io/metadata-dir"
 import { extractWithExecuteFacts } from "../schema-engine/pg-delta/adapter"
 import { readExecuteFacts } from "../schema-engine/execute-facts"
 import {
-  runTag,
   testProvider,
+  testRoleName,
   testSuperuserUrl,
 } from "../../../simetra/test/support"
-import { query } from "./support/db"
+import { dropRoles, query } from "./support/db"
+import { seam } from "./execute-facts.seam"
 import {
   call,
   ENV,
@@ -20,6 +25,7 @@ import {
   introspectInput,
   options,
   scopeOf,
+  useDatabaseToolsCleanup,
 } from "./database-tools.support"
 import pg from "pg"
 
@@ -47,6 +53,9 @@ const factOf = (facts: ExecuteFacts, name: string) =>
   facts.functions.find((f) => f.name === name)
 
 export function describeExecuteFacts(): void {
+  // Теки проєктів, які створює `freshProject`, прибираються після кожного тесту
+  useDatabaseToolsCleanup()
+
   describe("execute facts", () => {
     it("reads the effective ACL, grantor, grant option and role facts of a function", async () => {
       await inTarget(
@@ -94,7 +103,7 @@ export function describeExecuteFacts(): void {
 
     it("a role of the profile missing in the database gives no fact and no failure", async () => {
       await inTarget(DEFINER, ["app"], async (url) => {
-        const missing = `simetra_absent_${runTag()}`
+        const missing = testRoleName("absent")
         const client = new pg.Client({ connectionString: url })
         await client.connect()
         try {
@@ -129,6 +138,155 @@ export function describeExecuteFacts(): void {
           factOf(after.facts, "rpc")!.acl.map((a) => a.grantee)
         ).not.toContain("PUBLIC")
       })
+    })
+
+    it("a quiet read has no cross-check failures, and membership with inherit gives the caller", async () => {
+      const group = testRoleName("grp")
+      const api = profile()[0]!
+      await dropRoles(group)
+      await query(testSuperuserUrl(), `create role "${group}"`)
+      try {
+        await inTarget(
+          `${DEFINER}
+           REVOKE EXECUTE ON FUNCTION app.rpc() FROM PUBLIC;
+           GRANT EXECUTE ON FUNCTION app.rpc() TO "${group}";`,
+          ["app"],
+          async (url) => {
+            const before = await extractWithExecuteFacts(
+              { url },
+              scopeOf(["app"])
+            )
+            expect(factOf(before.facts, "rpc")!.executeByRole[api]).toBe(false)
+            expect(before.facts.crossCheckFailures).toEqual([])
+            await query(
+              testSuperuserUrl(),
+              `grant "${group}" to "${api}" with inherit true`
+            )
+            try {
+              const { facts } = await extractWithExecuteFacts(
+                { url },
+                scopeOf(["app"])
+              )
+              // Роль успадковує EXECUTE групи: виведено зі знімка, звірка згодна
+              expect(factOf(facts, "rpc")!.executeByRole[api]).toBe(true)
+              expect(facts.crossCheckFailures).toEqual([])
+            } finally {
+              await query(testSuperuserUrl(), `revoke "${group}" from "${api}"`)
+            }
+          }
+        )
+      } finally {
+        await dropRoles(group)
+      }
+    })
+
+    // На Supabase власник схем (`postgres`) уже член ролей API, і зворотний
+    // грант утворив би цикл членства, тож випадок перевіряє профіль postgres
+    it.skipIf(testProvider() === "supabase")(
+      "a role that inherits the owner of a schema with the default ACL has USAGE (acldefault of the schema)",
+      async () => {
+        const api = profile()[0]!
+        const owner = PROVIDER_OWNER_ROLES[testProvider()]
+        await inTarget(DEFINER, ["app"], async (url) => {
+          await query(
+            testSuperuserUrl(),
+            `grant "${owner}" to "${api}" with inherit true`
+          )
+          try {
+            const { facts } = await extractWithExecuteFacts(
+              { url },
+              scopeOf(["app"])
+            )
+            expect(factOf(facts, "rpc")!.schemaUsageByRole[api]).toBe(true)
+            expect(facts.crossCheckFailures).toEqual([])
+          } finally {
+            await query(testSuperuserUrl(), `revoke "${owner}" from "${api}"`)
+          }
+        })
+      }
+    )
+
+    it("a change of the function ACL after the snapshot fails the cross-check", async () => {
+      await inTarget(DEFINER, ["app"], async (url) => {
+        const { facts } = await extractWithExecuteFacts(
+          { url },
+          scopeOf(["app"]),
+          async () => {
+            await query(url, "REVOKE EXECUTE ON FUNCTION app.rpc() FROM PUBLIC")
+          }
+        )
+        expect(facts.crossCheckFailures.length).toBeGreaterThan(0)
+        expect(facts.crossCheckFailures[0]).toMatchObject({
+          name: "rpc",
+          privilege: "EXECUTE",
+        })
+      })
+    })
+
+    it("introspect refuses with introspect.definer-acl-changed when the ACL changes during it", async () => {
+      await inTarget(DEFINER, ["app"], async (url) => {
+        seam.beforeFacts = async () => {
+          await query(url, "REVOKE EXECUTE ON FUNCTION app.rpc() FROM PUBLIC")
+        }
+        try {
+          const dir = await freshProject()
+          const r = await call(
+            "introspect",
+            introspectInput,
+            options(dir, { [ENV]: url })
+          )
+          expect(r.ok).toBe(false)
+          expect(r.written).toBe(false)
+          expect(r.changes).toEqual([])
+          expect(errors(r).map((d) => d.code)).toContain(
+            "introspect.definer-acl-changed"
+          )
+          expect(existsSync(dir)).toBe(false)
+        } finally {
+          seam.beforeFacts = undefined
+        }
+      })
+    })
+
+    it("introspect refuses with introspect.definer-acl-changed when a membership changes during it", async () => {
+      const group = testRoleName("grp")
+      const api = profile()[0]!
+      await dropRoles(group)
+      await query(testSuperuserUrl(), `create role "${group}"`)
+      try {
+        await inTarget(
+          `${DEFINER}
+           REVOKE EXECUTE ON FUNCTION app.rpc() FROM PUBLIC;
+           GRANT EXECUTE ON FUNCTION app.rpc() TO "${group}";`,
+          ["app"],
+          async (url) => {
+            seam.beforeFacts = async () => {
+              await query(
+                testSuperuserUrl(),
+                `grant "${group}" to "${api}" with inherit true`
+              )
+            }
+            try {
+              const dir = await freshProject()
+              const r = await call(
+                "introspect",
+                introspectInput,
+                options(dir, { [ENV]: url })
+              )
+              expect(r.written).toBe(false)
+              expect(errors(r).map((d) => d.code)).toContain(
+                "introspect.definer-acl-changed"
+              )
+              expect(existsSync(dir)).toBe(false)
+            } finally {
+              seam.beforeFacts = undefined
+              await query(testSuperuserUrl(), `revoke "${group}" from "${api}"`)
+            }
+          }
+        )
+      } finally {
+        await dropRoles(group)
+      }
     })
 
     it("leaves nothing on the target: no open transaction, no session state", async () => {

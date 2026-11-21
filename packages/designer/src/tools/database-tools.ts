@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises"
 import {
   compile,
+  diagnostic,
   loadSqlParser,
   type CompiledModel,
   type Diagnostic,
@@ -243,7 +244,21 @@ export const introspectTool = defineTool({
         ? {}
         : { reference: reference.catalog }),
     })
-    const diagnostics = [...extractDiagnostics, ...reversed.diagnostics]
+    // Виведене зі знімка розійшлося з перевіркою привілеїв бази: ACL чи
+    // членство змінилися між читаннями. Це помилка поза класом ремонту, тож
+    // нічого не пишеться, а `introspect` треба повторити.
+    const changed = facts.crossCheckFailures.map((f) =>
+      diagnostic("introspect.definer-acl-changed", "", "", {
+        function: `${f.schema}.${f.name}(${f.identityArguments})`,
+        role: f.role,
+        privilege: f.privilege,
+      })
+    )
+    const diagnostics = [
+      ...extractDiagnostics,
+      ...reversed.diagnostics,
+      ...changed,
+    ]
     const ok = !hasErrors(diagnostics)
     // Тека лише з помилками класу ремонту записується (спека декларацій
     // функцій §5.1): `ok` лишається `false`, а `written` каже `invoke` писати.

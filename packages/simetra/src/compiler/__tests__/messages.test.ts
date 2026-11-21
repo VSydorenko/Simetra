@@ -1124,6 +1124,7 @@ describe("introspect.definer-* codes", () => {
     ["introspect.definer-platform-form-candidate", "warning"],
     ["introspect.definer-foreign-grant", "error"],
     ["introspect.definer-callers-drift", "error"],
+    ["introspect.definer-acl-changed", "error"],
   ] as const)("%s is a %s with a hint", (code, severity) => {
     const d = diagnostic(code, "f.sql", "", PARAMS)
     expect(d.severity).toBe(severity)

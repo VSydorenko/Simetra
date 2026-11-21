@@ -418,6 +418,7 @@ export const COMPILER_RULES = [
   "introspect.definer-platform-form-candidate",
   "introspect.definer-foreign-grant",
   "introspect.definer-callers-drift",
+  "introspect.definer-acl-changed",
 ] as const
 
 export type CompilerRule = (typeof COMPILER_RULES)[number]

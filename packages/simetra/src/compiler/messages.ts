@@ -5762,6 +5762,15 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Збережений файл інтроспекція не переписує. Змініть викликачів у декларації (declare-function) або гранти в базі, щоб вони збіглися, і повторіть інтроспекцію.",
     },
   },
+  "introspect.definer-acl-changed": {
+    en: () => "ACL or role membership changed during introspect; run it again",
+    uk: () =>
+      "ACL або членство ролей змінилися під час introspect; запустіть його ще раз",
+    hint: {
+      en: "The EXECUTE facts derived from the snapshot disagree with the database's own privilege check for a role of the profile (see params: function, role, privilege). Nothing was written.",
+      uk: "Факти EXECUTE, виведені зі знімка, розходяться з власною перевіркою привілеїв бази для ролі профілю (параметри: function, role, privilege). Нічого не записано.",
+    },
+  },
 }
 
 /** Причини `engine.out-of-scope`: параметр `reason` межі моделі (T2). */
