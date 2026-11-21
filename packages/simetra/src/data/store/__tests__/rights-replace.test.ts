@@ -540,6 +540,66 @@ describe("the snapshot barrier", () => {
     expect(linesOf(core, 1)).toBeUndefined()
   })
 
+  it("judges lines older than the stored header as lines without a header: the owner may have moved since their version", async () => {
+    const { core, fake } = harness({ mode: "manual" })
+    await firstSnapshot(core)
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    // ТЧ стартує, коли власник ще в S.
+    const owned = core.view(section(1))
+    watch(owned)
+    await settle()
+    const read = fake.take()
+    // Власник переїхав у T, і новіша шапка вже в сховищі.
+    fake.edit(TASK, key(1), { org: T })
+    const header = core.view(card(1))
+    watch(header)
+    await settle()
+    fake.deliverAll()
+    await settle()
+    expect(rowsOf(core).get(key(1))?.scope).toBe(T)
+    // Знімок забороняє S уже після старту ТЧ.
+    grant(fake, ONLY_T())
+    core.requestRights()
+    await settle()
+    // Відповідь на мить старту: рядки версії власника, коли він був у S.
+    read.answer(read.issuedAt)
+    await settle()
+    expect(linesOf(core, 1)).toBeUndefined()
+  })
+
+  it("shows lines judged without a known owner scope once their re-read lands, when the pair is allowed", async () => {
+    const { core, fake } = harness({ mode: "manual" })
+    await firstSnapshot(core)
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const owned = core.view(section(1))
+    watch(owned)
+    await settle()
+    const read = fake.take()
+    // Власник лишився в S, але його версія зросла: шапка в сховищі — іншої
+    // версії, ніж рядки відповіді, тож скоуп власника для них невідомий.
+    fake.edit(TASK, key(1), { title: "moved on" })
+    const header = core.view(card(1))
+    watch(header)
+    await settle()
+    fake.deliverAll()
+    await settle()
+    // Знімок, що пару дозволяє, застосовано після старту ТЧ: бар'єр
+    // відкидає рядки без відомого скоупу з того читання.
+    grant(fake, BOTH())
+    core.requestRights()
+    await settle()
+    read.answer(read.issuedAt)
+    await settle()
+    expect(linesOf(core, 1)).toBeUndefined()
+    // Бар'єр не тримає їх завжди: перечитування після знімка їх показує.
+    fake.deliverAll()
+    await settle()
+    expect(linesOf(core, 1)?.scope).toBe(S)
+    expect(owned.getSnapshot().section?.lines).toHaveLength(1)
+  })
+
   it("writes a read of the pair that started after the snapshot was applied", async () => {
     const { core, fake } = harness({ mode: "manual" })
     await firstSnapshot(core)

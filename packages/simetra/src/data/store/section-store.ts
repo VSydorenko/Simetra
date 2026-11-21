@@ -12,8 +12,8 @@ import type { Key, ObjectName, SectionLine } from "./types"
 
 /**
  * The owner scope a section entry keeps; `"unknown"` — written without a
- * header in the store, or with a header older than the section's
- * `ownerVersion` or of another version epoch.
+ * header in the store, or with a header of another version than the
+ * section's `ownerVersion` or of another version epoch.
  */
 export type OwnerScope = string | null | "unknown"
 
@@ -67,8 +67,8 @@ export interface SectionStore {
   ): "written" | "rejected" | "stale"
   /**
    * Drops sections of owners of this scope and of owners with unknown scope
-   * (no header at `put`, or a header older than `ownerVersion` or of another
-   * version epoch), by the owner scope captured at `put`. A header that moved into the purged
+   * (no header at `put`, or a header of another version than `ownerVersion` or
+   * of another version epoch), by the owner scope captured at `put`. A header that moved into the purged
    * scope after its lines were written is not seen here: the caller
    * (`Writer.purge`) must also call `clearOwner` for every key that
    * `ObjectStore.purgeScope` / `purgeKeys` returns. Returns the owners whose
