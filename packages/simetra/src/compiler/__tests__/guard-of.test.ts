@@ -198,6 +198,31 @@ describe("guardOf", () => {
       reason: "firstStatement",
     },
     {
+      name: "firstStatement: the same function name in another schema",
+      sql: perform(guard("'read', 'task', p_row").replace("simetra.", "app.")),
+      reason: "firstStatement",
+    },
+    {
+      name: "firstStatement: DISTINCT inside the call",
+      sql: perform(guard("DISTINCT 'read', 'task', p_row")),
+      reason: "firstStatement",
+    },
+    {
+      name: "firstStatement: FILTER on the call",
+      sql: perform(`${GOOD} FILTER (WHERE false)`),
+      reason: "firstStatement",
+    },
+    {
+      name: "firstStatement: OVER on the call",
+      sql: perform(`${GOOD} OVER ()`),
+      reason: "firstStatement",
+    },
+    {
+      name: "firstStatement: an alias of the target",
+      sql: perform(`${GOOD} AS x`),
+      reason: "firstStatement",
+    },
+    {
       name: "firstStatement: an unqualified call",
       sql: body(`BEGIN PERFORM rights_require('read', 'task', p_row); END`),
       reason: "firstStatement",
@@ -270,6 +295,11 @@ describe("guardOf", () => {
     {
       name: "arguments: an expression for the action",
       sql: perform(guard("'re' || 'ad', 'task', p_row")),
+      reason: "arguments",
+    },
+    {
+      name: "arguments: a fourth argument",
+      sql: perform(guard("'read', 'task', p_row, NULL")),
       reason: "arguments",
     },
     {

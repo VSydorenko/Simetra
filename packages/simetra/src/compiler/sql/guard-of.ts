@@ -48,8 +48,6 @@ function guardCall(query: string, parse: SqlParser): Json | undefined {
   if (
     select === undefined ||
     !onlyKeys(select, ["targetList", "limitOption", "op"]) ||
-    select.limitOption !== "LIMIT_OPTION_DEFAULT" ||
-    select.op !== "SETOP_NONE" ||
     !Array.isArray(select.targetList) ||
     select.targetList.length !== 1
   )
