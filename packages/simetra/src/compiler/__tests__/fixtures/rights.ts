@@ -612,6 +612,62 @@ export function singleTenantRights(
 }
 
 /** Вимір `region`: значення учасника — рядки зв'язку `MemberRegion`. */
+/**
+ * Вимір `region` зі зв'язком через прийняту `CustomTable` `MemberRegion` замість
+ * регістра: платформа не ставить на неї тригерів, тож значення виміру свіжіють
+ * лише за інтервалом.
+ */
+export function adoptedRegionRelation(): Layer {
+  const column = (id: number, name: string, physicalName: string) => ({
+    id: uuid(id),
+    name,
+    physicalName,
+    type: "UUID",
+    notNull: true,
+  })
+  const fk = (name: string, field: string, target: string) => ({
+    name,
+    columns: [field],
+    references: { object: ref("Catalog", target), key: "ref" },
+  })
+  return {
+    [MEMBER_REGION_FILE]: null,
+    "custom-tables/MemberRegion/MemberRegion.meta.json": {
+      id: MEMBER_REGION_ID,
+      kind: "CustomTable",
+      name: "MemberRegion",
+      physicalName: "member_region",
+      scope: "org",
+      scopeColumn: "orgId",
+      columns: [
+        column(6033, "orgId", "org_id"),
+        column(6031, "member", "member_id"),
+        column(6032, "region", "region_id"),
+      ],
+      foreignKeys: [
+        // Носій скоупу — FK на ключ кореня виду (Р8).
+        fk("member_region_org_fk", "orgId", "Organization"),
+        fk("member_region_member_fk", "member", "OrgMember"),
+        fk("member_region_region_fk", "region", "Region"),
+      ],
+    },
+    [PROJECT_FILE]: {
+      accessDimensions: [
+        {
+          ...regionDimension(),
+          values: {
+            relation: {
+              object: ref("CustomTable", "MemberRegion"),
+              subject: "member",
+              value: "region",
+            },
+          },
+        },
+      ],
+    },
+  }
+}
+
 export function regionDimension() {
   return {
     id: REGION_DIMENSION_ID,

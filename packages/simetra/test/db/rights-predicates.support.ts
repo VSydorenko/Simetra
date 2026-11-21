@@ -114,6 +114,8 @@ const GUEST_SNAPSHOT: RightsSnapshot = {
   userId: null,
   scopeSets: [],
   rights: [],
+  members: [],
+  dimensionValues: [],
 }
 
 const ORGS = ["A", "B", "C"] as const

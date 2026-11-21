@@ -876,6 +876,7 @@ export async function runStages(
   const clientSnapshotUnits = buildClientSnapshotUnits({
     contracts: {
       access,
+      rights,
       roles,
       users,
       membershipSources: sources.membershipSources,

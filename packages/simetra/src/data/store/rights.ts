@@ -48,7 +48,7 @@ const publicReadCovers = (
 
 /**
  * Чи лишається пара (скоуп, об'єкт) читабельною за знімком. Об'єкт без
- * `rightsContract` — так: знімок його читання не описує. `publicRead`, що
+ * контракту `rights` — так: знімок його читання не описує. `publicRead`, що
  * покриває роль знімка, — так.
  * Скоуплений — скоуп у `scopeSets` свого виду й рядок `read`, що діє в
  * скоупі, будь-якого обсягу, зокрема контейнерний. Нескоуплений — будь-який
@@ -59,7 +59,7 @@ export function readAllowed(
   pair: ReadPair,
   entry: CatalogEntry
 ): boolean {
-  if (entry.rightsContract !== true) return true
+  if (entry.rights === undefined) return true
   if (publicReadCovers(snapshot, entry)) return true
   const rows = readRows(snapshot, entry)
   if (entry.scopeKindId === undefined) return rows.length > 0
