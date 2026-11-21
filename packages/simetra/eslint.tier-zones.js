@@ -6,6 +6,7 @@
 // закривати переліком.
 
 import { STANDARD_COLUMN_SELECTORS } from "./eslint.standard-columns.js"
+import { IDENTITY_SELECTORS } from "./eslint.identity.js"
 
 // Порядок = номер ярусу: імпортувати дозволено лише нижчі яруси.
 const TIERS = ["model", "compiler", "schema", "server", "data", "ui", "shell"]
@@ -177,6 +178,7 @@ const uiRules = {
   syntax: (scroll) => [
     "error",
     ...STANDARD_COLUMN_SELECTORS,
+    ...IDENTITY_SELECTORS,
     HYDRATION_SELECTOR,
     ...BYPASS_SELECTORS,
     ...(scroll ? SCROLL_SELECTORS : []),

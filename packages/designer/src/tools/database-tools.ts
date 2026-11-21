@@ -304,7 +304,8 @@ function touchesTables(
     tables.map((t) =>
       language === "unit"
         ? unitIdentity("table", t.schema, t.name)
-        : `table:${t.schema}.${t.name}`
+        : // eslint-disable-next-line no-restricted-syntax -- StableId двигуна, не ідентичність одиниці (#297, Р9)
+          `table:${t.schema}.${t.name}`
     )
   )
   const prefixes = tables.map((t) => `${t.schema}.${t.name}.`)
@@ -374,6 +375,7 @@ function dependentIds(
     if (parts === undefined || parts.length > 2) return
     const qualified = parts.length === 2 ? parts : [schema, parts[0]!]
     const key = qualified.join(".")
+    // eslint-disable-next-line no-restricted-syntax -- StableId двигуна, не ідентичність одиниці (#297, Р9)
     ids.add(`sequence:${key}`).add(`sequenceOwnedBy:${key}`)
     unitIds
       .add(unitIdentity("sequence", ...qualified))

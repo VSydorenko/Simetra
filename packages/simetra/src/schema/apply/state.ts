@@ -718,6 +718,7 @@ export function applyStateOwnership(
   const owns = (identity: string): boolean => {
     const wrapped = /^(?:comment|acl|securityLabel):\((.*)\)/.exec(identity)
     if (wrapped !== null) return owns(wrapped[1]!)
+    // eslint-disable-next-line no-restricted-syntax -- StableId двигуна (`plan.actions[].produces`), не ідентичність одиниці (#297, Р9)
     if (tables.some((t) => identity === `table:${t}`)) return true
     if (
       functions.includes(identity) ||

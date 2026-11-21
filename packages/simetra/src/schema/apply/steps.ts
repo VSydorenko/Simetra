@@ -385,7 +385,8 @@ function statementEffects(stmt: Node, facts: Facts): Effect[] {
       [...facts.createdTables].some((id) =>
         schemaname === undefined
           ? id.endsWith(`.${relname}`)
-          : id === `table:${schemaname}.${relname}`
+          : // eslint-disable-next-line no-restricted-syntax -- StableId двигуна з `plan.actions[].produces`, не ідентичність одиниці (#297, Р9)
+            id === `table:${schemaname}.${relname}`
       )
     return createdHere ? [] : ["validationScan"]
   }
