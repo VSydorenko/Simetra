@@ -401,7 +401,7 @@ describe("the call guard in Postgres", () => {
         if ((await call(who, "g_task_read", key)) === "ok")
           passed.push(ids[key]!)
       expect([who, passed.sort()]).toEqual([who, shown])
-      literal[who] = shown.map((id) => byKey.get(id))
+      literal[who] = shown.map((id) => byKey.get(id)).sort()
     }
     expect(literal).toEqual({
       u1: ["t1"],
