@@ -195,6 +195,20 @@ export function publicReadNeedsUser(
   )
 }
 
+/**
+ * Умова `PERMISSIVE`-політики `publicRead`: функція запобіжника
+ * (`simetra.rights_require`) бере її тим самим будівником для читання від
+ * імені ролей цієї політики.
+ */
+export function publicReadUsing(
+  contract: Pick<AccessContract, "publicRead">,
+  sessionUser: boolean
+): string {
+  return publicReadNeedsUser(contract, sessionUser)
+    ? `${CURRENT_USER} IS NOT NULL`
+    : "true"
+}
+
 /** Гість бачить не більше за користувача: `anon` відкриває обидві ролі запиту. */
 function publicReadPurposes(
   role: PublicReadRole | undefined
@@ -549,9 +563,7 @@ export function buildAccessUnits(
               PLATFORM_ROLES.command,
             ],
             {
-              using: publicReadNeedsUser(contract, sessionUser)
-                ? `${CURRENT_USER} IS NOT NULL`
-                : "true",
+              using: publicReadUsing(contract, sessionUser),
             }
           )
         )

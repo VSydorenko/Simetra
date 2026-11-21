@@ -33,24 +33,37 @@ const FUNCTIONS = "sql/public/fns.functions.json"
 
 interface Spec {
   check: Check
+  /** Викликачі декларації; за замовчуванням `service`. */
+  callers?: SqlFunctionDeclaration["callers"]
 }
 
-/** Definer-функція; викликач `service` — запобіжник виклику ще не судиться. */
-function definer({ check }: Spec, index: number): string {
+/**
+ * Definer-функція. Викликач `service` запобіжник виклику не судить — тіло
+ * `SELECT 1`; `user` і `command` — тіло з доказовим запобіжником першим
+ * оператором.
+ */
+function definer({ check, callers }: Spec, index: number): string {
   const target = check.scope ?? check.row
   const args = target === undefined ? "" : `${target} uuid`
-  return `CREATE FUNCTION public.f${index}(${args}) RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;\n`
+  if (callers === undefined || callers.every((c) => c === "service")) {
+    return `CREATE FUNCTION public.f${index}(${args}) RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;\n`
+  }
+  const guard =
+    check.scope === undefined ? "rights_require" : "rights_require_scope"
+  return `CREATE FUNCTION public.f${index}(${args}) RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $$BEGIN PERFORM simetra.${guard}('${check.action}', '${LABELS[check.object.name]}', ${target ?? "NULL"}); END$$;\n`
 }
+
+const LABELS: Record<string, string> = { Task: "task" }
 
 function declare(all: Map<string, string>, specs: Spec[], withCheck: boolean) {
   all.set(SQL, specs.map(definer).join(""))
   all.set(
     FUNCTIONS,
     JSON.stringify({
-      functions: specs.map(({ check }, index) => ({
+      functions: specs.map(({ check, callers }, index) => ({
         id: uuid(7800 + index),
         function: { name: `f${index}` },
-        callers: ["service"],
+        callers: callers ?? ["service"],
         ...(withCheck ? { check } : {}),
       })),
     })
@@ -309,6 +322,35 @@ describe("rights_require / rights_require_scope generator", () => {
       expect(
         branches(functionOf(all, "rights_require")).get("task/update")
       ).not.toContain("rights_visible_users")
+    })
+
+    // Пара лише з викликачами user/command: обидві ролі входять до ролей
+    // політики `publicRead`, тож гілка — RLS (умова політики), без предикатів.
+    // Мутація: брати цю гілку й для пари з `service`.
+    it("publicRead read of a user-only pair is the RLS condition, with a service caller it is the predicates", async () => {
+      const publicRead = { [TASK_FILE]: { publicRead: "authenticated" } }
+      const userOnly = await units(
+        [{ ...task("read"), callers: ["user", "command"] }],
+        publicRead
+      )
+      expect(
+        branches(functionOf(userOnly, "rights_require")).get("task/read")
+      ).toBe(
+        "EXISTS (SELECT 1 FROM public.task r WHERE r.id = p_row AND ((SELECT simetra.current_user_id()) IS NOT NULL))"
+      )
+      // Один `service` у парі: предикати для всієї пари, і user-декларації.
+      const mixed = await units(
+        [
+          { ...task("read"), callers: ["user"] },
+          { ...task("read"), callers: ["service"] },
+        ],
+        publicRead
+      )
+      expect(
+        branches(functionOf(mixed, "rights_require")).get("task/read")
+      ).toBe(
+        "EXISTS (SELECT 1 FROM public.task r WHERE r.id = p_row AND ((r.org_id = ANY (ARRAY(SELECT simetra.rights_any('read', 'task'))))))"
+      )
     })
 
     // Межі тенанта читання `publicRead` не має (політики `scope_read` нема), а

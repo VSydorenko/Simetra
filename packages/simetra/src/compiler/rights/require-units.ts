@@ -6,7 +6,12 @@ import {
   type ObjectTable,
   type PhysicalSnapshot,
 } from "simetra/model"
-import { tenantBoundary, usersBoundary, readBoundaries } from "../access-units"
+import {
+  publicReadUsing,
+  readBoundaries,
+  tenantBoundary,
+  usersBoundary,
+} from "../access-units"
 import { rightsCheck } from "../catalog-command/rights-check"
 import { bodyRequires } from "../catalog-command/units"
 import {
@@ -28,6 +33,7 @@ import type { ParsedObject } from "../stages/files"
 import {
   RIGHTS_FUNCTIONS,
   hasRightsFunctions,
+  hasSessionUser,
   hasVisibleUsers,
 } from "./functions"
 import { anyScopeSet, renderCondition, type PredicateDml } from "./predicates"
@@ -100,11 +106,22 @@ function boundaries(
   ]
 }
 
+/**
+ * Гілка читання пари, чиї викликачі — лише `user` і `command` (роль запиту
+ * користувача й роль команд), для об'єкта з `publicRead`: обидві ролі входять
+ * до ролей `PERMISSIVE`-політики `publicRead` (вона завжди містить роль
+ * користувача й роль команд), тож умова — RLS: умова політики плюс решта меж
+ * читання, без предикатів. Інший викликач (`service`, `anonymous`) може
+ * опинитися поза цими ролями — тоді вся пара судиться предикатами (Р7).
+ */
+const READ_CALLERS: ReadonlySet<string> = new Set(["user", "command"])
+
 function rowBranch(
   contract: RightsContract,
   action: string,
   input: RequireInput,
-  visibleUsers: boolean
+  visibleUsers: boolean,
+  publicReadCallers: boolean
 ): string {
   const main = must(mainTableOf(input.physical, contract.objectId))
   const access = input.contracts.access.find(
@@ -116,6 +133,11 @@ function rowBranch(
       `internal: the row target of ${contract.kindLabel} needs a single-column key`
     )
   }
+  const publicRead =
+    action === "read" &&
+    publicReadCallers &&
+    access !== undefined &&
+    access.publicRead.length > 0
   const where = [
     `${ROW}.${quoteIdent(key[0]!)} = p_row`,
     ...boundaries(
@@ -125,7 +147,9 @@ function rowBranch(
       main,
       input.contracts.users?.keyColumn
     ),
-    `(${rightsCheck(contract, action, main, ROW, dmlOf(action))})`,
+    publicRead
+      ? `(${publicReadUsing(must(access), hasSessionUser(input.contracts, input.provider))})`
+      : `(${rightsCheck(contract, action, main, ROW, dmlOf(action))})`,
   ]
   return `EXISTS (SELECT 1 FROM ${qualified(contract.table)} ${ROW} WHERE ${where.join(" AND ")})`
 }
@@ -151,6 +175,24 @@ function scopeBranch(
   ].join(" AND ")
 }
 
+/** Контракт об'єкта й дія декларації з `check` (суддя `check-form` їх довів). */
+function resolved(
+  input: RequireInput,
+  declaration: DeclaredFunction["declaration"]
+) {
+  const check = must(declaration.check)
+  const object = input.objects.find(
+    (o) => o.kind === check.object.kind && o.name === check.object.name
+  )
+  const contract = must(
+    input.contracts.rights.find((r) => r.objectId === object?.id)
+  )
+  return {
+    contract,
+    action: must(contract.actions.find((a) => a.name === check.action)),
+  }
+}
+
 function branchesOf(input: RequireInput): {
   forms: Set<Form>
   byForm: Map<Form, Branch[]>
@@ -161,17 +203,24 @@ function branchesOf(input: RequireInput): {
   // функція запобіжника лишається без гілок — лише відмова.
   const rightsOn = hasRightsFunctions(input.contracts, input.provider)
   const forms = new Set<Form>()
+  // Пара (мітка, дія) судиться за викликачами всіх своїх декларацій: один
+  // `service` робить умову гілки читання `publicRead` предикатною для всієї пари.
+  const readCallers = new Map<string, boolean>()
+  for (const { declaration } of input.declared) {
+    if (declaration.check === undefined) continue
+    const { contract, action } = resolved(input, declaration)
+    const pair = `${contract.kindLabel}\0${action.action}`
+    readCallers.set(
+      pair,
+      (readCallers.get(pair) ?? true) &&
+        declaration.callers.every((caller) => READ_CALLERS.has(caller))
+    )
+  }
   const found = new Map<string, { form: Form } & Branch>()
   for (const { declaration } of input.declared) {
     const check = declaration.check
     if (check === undefined) continue
-    const object = input.objects.find(
-      (o) => o.kind === check.object.kind && o.name === check.object.name
-    )
-    const contract = must(
-      input.contracts.rights.find((r) => r.objectId === object?.id)
-    )
-    const action = must(contract.actions.find((a) => a.name === check.action))
+    const { contract, action } = resolved(input, declaration)
     const form: Form =
       check.scope !== undefined
         ? "scope"
@@ -188,7 +237,13 @@ function branchesOf(input: RequireInput): {
     )
     const condition =
       form === "row"
-        ? rowBranch(contract, action.action, input, visibleUsers)
+        ? rowBranch(
+            contract,
+            action.action,
+            input,
+            visibleUsers,
+            must(readCallers.get(`${contract.kindLabel}\0${action.action}`))
+          )
         : form === "scope"
           ? scopeBranch(contract, action.action, must(access))
           : // Об'єкт без носіїв: предикати — булева форма права.
