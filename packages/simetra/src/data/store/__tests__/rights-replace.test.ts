@@ -293,18 +293,72 @@ describe("the pass on a snapshot replacement", () => {
     expect(linesOf(core, 1)).toBeUndefined()
   })
 
-  it("keeps lines of an owner without a header when the object lost nothing", async () => {
+  it("drops lines of an owner without a header on a replacement that lost nothing, and the re-read of the allowed pair shows them", async () => {
     const { core, fake } = harness()
     seed(fake, 1, 1)
     fake.setLines(TASK, key(1), "lines", lines)
-    watch(core.view(section(1)))
+    const owned = core.view(section(1))
+    watch(owned)
     await settle()
+    expect(linesOf(core, 1)?.scope).toBe("unknown")
     const reads = fake.log.filter(isSection).length
+    // Об'єкт нічого не втратив, але новий знімок забороняє пари поза своїми
+    // скоупами, а скоуп власника невідомий: рядки прибирає заміна, як і
+    // рядки шапки забороненої пари (§6.2 правило 4).
     grant(fake, snapshotOf([readRow(S), readRow(T)], [S, T, CONTAINER]))
     core.requestRights()
     await settle()
+    // Пара власника дозволена: одне перечитування повертає рядки.
+    expect(fake.log.filter(isSection)).toHaveLength(reads + 1)
     expect(linesOf(core, 1)?.lines).toHaveLength(1)
-    expect(fake.log.filter(isSection)).toHaveLength(reads)
+    expect(owned.getSnapshot().section?.lines).toHaveLength(1)
+  })
+
+  it("an unmounted section view whose lines the replacement dropped re-reads them on remount", async () => {
+    const { core, fake } = harness()
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const handle = core.view(section(1))
+    const first = watch(handle)
+    await settle()
+    expect(linesOf(core, 1)?.scope).toBe("unknown")
+    // Вигляд живий (gcTime), але без слухача: перечитування заміни його
+    // не бере.
+    first.unsubscribe()
+    await settle()
+    grant(fake, snapshotOf([readRow(S), readRow(T)], [S, T, CONTAINER]))
+    core.requestRights()
+    await settle()
+    expect(linesOf(core, 1)).toBeUndefined()
+    const reads = fake.log.filter(isSection).length
+    watch(core.view(section(1)))
+    await settle()
+    expect(fake.log.filter(isSection)).toHaveLength(reads + 1)
+    expect(linesOf(core, 1)?.lines).toHaveLength(1)
+  })
+
+  it("drops lines of an owner without a header when the replacement repeats a snapshot that denies its pair", async () => {
+    const { core, fake } = harness({ mode: "manual" })
+    await firstSnapshot(core)
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    grant(fake, ONLY_T())
+    core.requestRights()
+    await settle()
+    // Рядки ТЧ без шапки, що прослизнули після знімка (напр. репліка, що
+    // відстає в правах): у сховищі з невідомим скоупом.
+    const owned = core.view(section(1))
+    watch(owned)
+    await settle()
+    fake.deliverAll()
+    await settle()
+    expect(linesOf(core, 1)?.scope).toBe("unknown")
+    // Той самий заборонний знімок ще раз: об'єкт нічого не втратив, але
+    // рядки без відомого скоупу заміна прибирає.
+    grant(fake, ONLY_T())
+    core.requestRights()
+    await settle()
+    expect(linesOf(core, 1)).toBeUndefined()
   })
 
   it("drops the tabular section lines of a purged owner (§14.1)", async () => {

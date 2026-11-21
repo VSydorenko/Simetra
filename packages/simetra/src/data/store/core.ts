@@ -18,7 +18,12 @@ import { createSession, type Scope } from "./session"
 import { applySnapshot, dehydrate, parseSnapshot, type SsrContext } from "./ssr"
 import { createRowViews, purgedSnapshot } from "./snapshot"
 import { createBatcher } from "./batcher"
-import { readAllowed, readLost, readNarrowed, reopenedPairs } from "./rights"
+import {
+  deniesSomePair,
+  readAllowed,
+  readNarrowed,
+  reopenedPairs,
+} from "./rights"
 import {
   ReadLimiterClosed,
   readKeys,
@@ -796,14 +801,17 @@ export function createCore(options: {
           pairs.some((p) => p.object === object)
         )
       : pairs
-    const lost = [...objects.values()].filter((o) =>
-      readLost(prev?.snapshot, next.snapshot, o.entry)
+    const denying = [...objects.values()].filter((o) =>
+      deniesSomePair(next.snapshot, o.entry)
     )
     // Рядки ТЧ власників з невідомим скоупом (без шапки в сховищі чи з
-    // шапкою іншої версії чи епохи версій, ніж ТЧ) не судяться за парою: на заміні,
-    // де об'єкт щось утратив, — і на першому знімку, що щось забороняє, — їх
-    // прибираємо, повертає наступне читання.
-    const headerless = lost.flatMap((o) =>
+    // шапкою іншої версії чи епохи версій, ніж ТЧ) не судяться за парою: їх
+    // прибирає кожна заміна, чий знімок забороняє хоч одну пару об'єкта, — як
+    // прохід прибирає рядки шапки кожної забороненої пари, а не лише щойно
+    // втраченої; повертає наступне читання. На причинність сервера (читання
+    // після знімка судила RLS) правило не покладається: репліка могла
+    // відставати в правах.
+    const headerless = denying.flatMap((o) =>
       o.sections
         .owners()
         .filter((owner) =>
@@ -820,8 +828,15 @@ export function createCore(options: {
             const writer = createWriter(writerContext, scope)
             for (const { object, scope: pair } of judged)
               writer.purge(object, { scope: pair }, { rights: true })
-            for (const { o, owner } of headerless)
+            for (const { o, owner } of headerless) {
               ops.clearOwner(scope, o, owner)
+              // Позначка `hide` власника — той самий шлях, що й `hide` прав:
+              // вигляд ТЧ без слухача (preload, gcTime) перечитує рядки при
+              // монтуванні (`hiddenSinceRead`), а старше за позначку читання
+              // ТЧ їх не запише. Ревізія шапки тут не годиться: вона будила б
+              // вигляди шапки й не зупиняла б старших відповідей.
+              session.epochs.hide(keyId(o.name, owner))
+            }
           } finally {
             ops.sweep(scope)
           }

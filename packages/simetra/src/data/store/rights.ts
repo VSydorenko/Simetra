@@ -160,44 +160,23 @@ export function readNarrowed(
   return before.size !== after.size || [...before].some((x) => !after.has(x))
 }
 
-// Скоупи `scopeSets` знімка, що діють для об'єкта: свого виду, а для
-// нескоупленого — усі (межа його читання залежить від членства).
-const scopesFor = (snapshot: RightsSnapshot, entry: CatalogEntry) =>
-  new Set(
-    snapshot.scopeSets
-      .filter(
-        (s) =>
-          entry.scopeKindId === undefined || s.scopeKind === entry.scopeKindId
-      )
-      .map((s) => `${s.scopeKind}\u0000${s.scope}`)
-  )
-
 /**
- * Чи втратив об'єкт на заміні знімка хоч щось із читання: кортеж рядка
- * `read`, скоуп зі `scopeSets` чи покриття `publicRead`. Тоді рядки ТЧ
- * власників з невідомим скоупом (шапки в сховищі немає, або вона іншої версії
- * чи епохи версій, ніж `ownerVersion` ТЧ) не судяться за
- * парою — їх прибирає заміна, а повертає наступне читання (P4-B spec §6.2
- * правило 4). Перший знімок (`prev` немає) судиться проти «дозволено
- * все»: втрата — будь-яка пара, яку він забороняє; скоупленому об'єкту, якого
- * не відкриває `publicRead`, знімок забороняє скоупи поза своїми.
+ * Чи забороняє знімок хоч одну пару об'єкта: тоді рядки ТЧ власників з
+ * невідомим скоупом (шапки в сховищі немає, або вона іншої версії чи епохи
+ * версій, ніж `ownerVersion` ТЧ) прибирає кожна заміна знімка — їх не
+ * судити за парою, а повертає наступне читання (P4-B spec §6.2 правило 4),
+ * як прохід прибирає рядки шапки кожної забороненої пари. Скоупленому
+ * об'єкту, якого не відкриває `publicRead`, знімок забороняє скоупи поза
+ * своїми; нескоупленому — його єдину пару, коли читання не дозволено.
  */
-export function readLost(
-  prev: RightsSnapshot | undefined,
-  next: RightsSnapshot,
+export function deniesSomePair(
+  snapshot: RightsSnapshot,
   entry: CatalogEntry
 ): boolean {
   if (entry.rights === undefined) return false
-  if (prev === undefined)
-    return entry.scopeKindId !== undefined
-      ? !publicReadCovers(next, entry)
-      : !readAllowed(next, { scope: null }, entry)
-  if (publicReadCovers(prev, entry) && !publicReadCovers(next, entry))
-    return true
-  const kept = new Set(readRows(next, entry).map(tupleOf))
-  if (readRows(prev, entry).some((r) => !kept.has(tupleOf(r)))) return true
-  const after = scopesFor(next, entry)
-  return [...scopesFor(prev, entry)].some((s) => !after.has(s))
+  return entry.scopeKindId !== undefined
+    ? !publicReadCovers(snapshot, entry)
+    : !readAllowed(snapshot, { scope: null }, entry)
 }
 
 /**
