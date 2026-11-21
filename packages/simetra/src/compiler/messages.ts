@@ -1634,8 +1634,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Перевірка ${p.function} не відповідає об'єкту чи підпису (${p.reason})`,
     hint: {
-      en: "Name an object with rights, one of its actions and at most one target: row or scope, the name of a uuid IN parameter of the function. The target is required when the action reads the row carrier (scope, ownership, dimension, container) and forbidden otherwise; create takes scope or no target, and not on the root of a scope kind. The check is for SECURITY DEFINER functions only.",
-      uk: "Назвіть об'єкт з правами, одну з його дій і щонайбільше одну ціль: row чи scope — ім'я IN-параметра функції типу uuid. Ціль обов'язкова, коли дія читає носія рядка (скоуп, власність, вимір, контейнер), і заборонена в іншому разі; create приймає scope чи жодної цілі і не на корені виду скоупу. Перевірка — лише для функцій SECURITY DEFINER.",
+      en: "Name an object with rights, one of its actions and at most one target: row or scope, the name of a uuid IN parameter of the function. The target is required when the action reads the row carrier (scope, ownership, dimension, container) and forbidden otherwise; row only for an object whose key is one uuid column (a register has no such key: use scope); create takes scope or no target, and not on the root of a scope kind. The check is for SECURITY DEFINER functions only.",
+      uk: "Назвіть об'єкт з правами, одну з його дій і щонайбільше одну ціль: row чи scope — ім'я IN-параметра функції типу uuid. Ціль обов'язкова, коли дія читає носія рядка (скоуп, власність, вимір, контейнер), і заборонена в іншому разі; row — лише для об'єкта з ключем з однієї колонки uuid (регістр такого ключа не має: scope); create приймає scope чи жодної цілі і не на корені виду скоупу. Перевірка — лише для функцій SECURITY DEFINER.",
     },
   },
   "sql.declaration-check-not-applied": {

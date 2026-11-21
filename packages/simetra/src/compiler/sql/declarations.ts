@@ -376,6 +376,7 @@ export type CheckFormReason =
   | "unknownAction"
   | "twoTargets"
   | "targetParameter"
+  | "rowKey"
   | "scopeUnscoped"
   | "createOnRow"
   | "createOnRoot"
@@ -444,7 +445,8 @@ function checkFormReason(
   units: readonly VerbatimUnit[],
   objects: readonly ParsedObject[],
   rights: readonly RightsContract[],
-  usersRead: ReadonlySet<string>
+  usersRead: ReadonlySet<string>,
+  rowKeyed: ReadonlySet<string>
 ): CheckFormReason | undefined {
   const check = declaration.check
   if (check === undefined) return undefined
@@ -458,6 +460,9 @@ function checkFormReason(
   const target = check.row ?? check.scope
   if (target !== undefined && !hasUuidInParameter(unit, target))
     return "targetParameter"
+  // Ціль `row` — значення ключа: регістр без єдиного uuid-ключа рядка не має.
+  if (check.row !== undefined && !rowKeyed.has(contract.objectId))
+    return "rowKey"
   if (check.scope !== undefined && contract.scopeKindId === undefined)
     return "scopeUnscoped"
   const create = action.action === "create"
@@ -492,10 +497,19 @@ export function checkDeclaredChecks(
   objects: readonly ParsedObject[],
   rights: readonly RightsContract[],
   /** Об'єкти, читання яких обмежує межа «Користувачів» (`readBoundaries`). */
-  usersRead: ReadonlySet<string>
+  usersRead: ReadonlySet<string>,
+  /** Об'єкти, чия основна таблиця має ключ з однієї колонки `uuid`. */
+  rowKeyed: ReadonlySet<string>
 ): Diagnostic[] {
   return declared.flatMap((entry) => {
-    const reason = checkFormReason(entry, units, objects, rights, usersRead)
+    const reason = checkFormReason(
+      entry,
+      units,
+      objects,
+      rights,
+      usersRead,
+      rowKeyed
+    )
     return reason === undefined
       ? []
       : [

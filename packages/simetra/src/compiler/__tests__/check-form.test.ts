@@ -4,6 +4,7 @@ import type { SqlFunctionDeclaration } from "simetra/model"
 import { diagnostic, isRepairError } from "../diagnostics"
 import { uuid } from "./helpers"
 import {
+  refAttribute,
   ROLE_FILE,
   USERS_FILE,
   STATUS_FILE,
@@ -260,6 +261,79 @@ describe("sql.declaration-check-form", () => {
     const { result, forms } = await judged(check, sql)
     expect(forms).toEqual([])
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+  })
+
+  // Регістр не має ключа з однієї колонки `uuid`: ціль `row` його не адресує,
+  // лишається `scope`. Мутація: прибрати гілку `rowKey` судді — діагностики
+  // немає, а генератор запобіжника падає внутрішньою помилкою.
+  describe("rowKey: a row target on a register", () => {
+    const ref = (kind: string, name: string) => ({ kind, name })
+    const registers: Layer = {
+      "information-registers/Recorded/Recorded.meta.json": {
+        id: uuid(7920),
+        kind: "InformationRegister",
+        name: "Recorded",
+        physicalName: "recorded",
+        kindLabel: "recorded",
+        scope: "org",
+        writeMode: "RecorderSubordinate",
+        recorderTypes: [ref("Document", "Task")],
+        dimensions: [
+          refAttribute(7921, "region", "region_id", ref("Catalog", "Region")),
+        ],
+      },
+      "accumulation-registers/Hours/Hours.meta.json": {
+        id: uuid(7930),
+        kind: "AccumulationRegister",
+        name: "Hours",
+        physicalName: "hours_reg",
+        kindLabel: "hours_reg",
+        scope: "org",
+        registerType: "Balance",
+        dimensions: [
+          refAttribute(7931, "region", "region_id", ref("Catalog", "Region")),
+        ],
+        resources: [
+          {
+            id: uuid(7932),
+            name: "hours",
+            physicalName: "hours",
+            type: "Numeric",
+            precision: 10,
+            scale: 2,
+          },
+        ],
+      },
+    }
+    it.each([
+      [
+        "an independent information register",
+        "MemberRegion",
+        "InformationRegister",
+      ],
+      [
+        "a recorder-subordinate information register",
+        "Recorded",
+        "InformationRegister",
+      ],
+      ["an accumulation register", "Hours", "AccumulationRegister"],
+    ])("%s: row is refused, scope is accepted", async (_name, name, kind) => {
+      const object = { kind, name } as Check["object"]
+      const row = await judged(
+        { action: "read", object, row: "p_row" },
+        fn("p_row uuid"),
+        undefined,
+        registers
+      )
+      expect(row.forms).toEqual([at("rowKey")])
+      const scope = await judged(
+        { action: "read", object, scope: "p_scope" },
+        fn("p_scope uuid"),
+        undefined,
+        registers
+      )
+      expect(scope.forms).toEqual([])
+    })
   })
 
   // Р2: `check-form` не клас ремонту — режим `repair` модель не повертає.

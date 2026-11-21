@@ -30,6 +30,7 @@ import {
   eventSubscriptionContracts,
   membershipContracts,
   usersContractOf,
+  mainTableOf,
 } from "./contracts"
 import {
   buildFunctionExecuteUnits,
@@ -649,6 +650,16 @@ export async function runStages(
           ? [contract.rights.objectId]
           : []
       )
+    ),
+    new Set(
+      rights.flatMap(({ objectId }) => {
+        const main = mainTableOf(physical, objectId)
+        const key = main?.primaryKey?.columns
+        return key?.length === 1 &&
+          main?.columns.find((c) => c.name === key[0])?.type === "uuid"
+          ? [objectId]
+          : []
+      })
     )
   )
   if (checkForms.length > 0) {
