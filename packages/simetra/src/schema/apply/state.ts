@@ -6,9 +6,11 @@ import {
   platformFunctionSignatures,
   platformSchemaGrants,
   qualifiedName,
+  readSqlUnits,
   splitIdentity,
   type CompiledModel,
   type PromotionRecord,
+  type SqlParser,
 } from "simetra/compiler"
 import {
   APPLIED_SNAPSHOT_HASH_FUNCTION_NAME,
@@ -17,6 +19,7 @@ import {
   PLATFORM_STATE_TABLES,
   quoteIdent,
   type CatalogModel,
+  type CatalogUnit,
   type DatabaseProvider,
 } from "simetra/model"
 import type {
@@ -370,6 +373,71 @@ export async function readApplyState(
       planHash: row.plan_hash,
     },
   }
+}
+
+/**
+ * Застосований каталог: модель каталогу marker, у якій ідентичність кожної
+ * одиниці перевиведено з її `sql` (платформна спека §6.2). `unreadable` —
+ * одиниці, з `sql` яких не виходить рівно одна одиниця без діагностик, і
+ * одиниці, що перевивелися в одну ідентичність з іншою; у `catalog` їх
+ * немає.
+ */
+export interface AppliedCatalog {
+  catalog: CatalogModel
+  unreadable: CatalogUnit[]
+}
+
+/**
+ * Застосований каталог з каталогу marker. Збережена ідентичність одиниці —
+ * похідна, а не правда: правило ідентичності міняється з версією платформи,
+ * і стара форма дала б хибний дрейф на незмінній цілі чи «чужий» власний
+ * тригер. Тож ідентичність, клас, схему й ім'я дає той самий класифікатор,
+ * що й двигуну (`classifyUnit` адаптера: `readSqlUnits` без типів моделі),
+ * а `sql` і волатильність лишаються збереженими — їх двигун пише тим самим
+ * шляхом. Збережене поле `identity` не читається: другого авторитетного
+ * сховища ідентичності немає. Нечитну одиницю не вгадуємо й не пропускаємо
+ * мовчки — її називає `unreadable`, і споживачі діють обережно.
+ */
+export function appliedCatalog(
+  catalog: CatalogModel,
+  parse: SqlParser
+): AppliedCatalog {
+  const read = catalog.units.map((stored) => {
+    const { units, diagnostics } = readSqlUnits(
+      [{ file: "marker", text: stored.sql, schema: "" }],
+      parse,
+      []
+    )
+    const [unit] = units
+    if (unit === undefined || units.length > 1 || diagnostics.length > 0)
+      return { stored, unit: undefined }
+    const derived: CatalogUnit = {
+      class: unit.class,
+      identity: unit.identity,
+      schema: unit.schema,
+      name: unit.name,
+      sql: stored.sql,
+      ...(stored.volatility === undefined
+        ? {}
+        : { volatility: stored.volatility }),
+    }
+    return { stored, unit: derived }
+  })
+  const seen = new Map<string, number>()
+  for (const { unit } of read)
+    if (unit !== undefined)
+      seen.set(unit.identity, (seen.get(unit.identity) ?? 0) + 1)
+  const units: CatalogUnit[] = []
+  const unreadable: CatalogUnit[] = []
+  for (const { stored, unit } of read) {
+    // Дві одиниці з однією ідентичністю порівняння за ключем мовчки злило б
+    if (unit !== undefined && seen.get(unit.identity) === 1) units.push(unit)
+    else unreadable.push(stored)
+  }
+  units.sort((a, b) =>
+    a.identity < b.identity ? -1 : a.identity > b.identity ? 1 : 0
+  )
+  return { catalog: { ...catalog, units }, unreadable }
 }
 
 /** Одне застосування: новий marker і рядок ledger. */

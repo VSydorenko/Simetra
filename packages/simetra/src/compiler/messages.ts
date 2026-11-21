@@ -4090,12 +4090,30 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "apply.drift-partial": {
     en: (p) =>
-      `The catalog fingerprint algorithm changed since the last apply (${p.fingerprintFrom} → ${p.fingerprintTo}), so the drift check is limited to the catalog model`,
+      p.reason === "units"
+        ? `${p.count} SQL units recorded at the last apply do not read back as units of this platform version, so the drift check is limited to the catalog fingerprint`
+        : p.reason === "none"
+          ? `The catalog fingerprint algorithm changed since the last apply (${p.fingerprintFrom} → ${p.fingerprintTo}) and ${p.count} SQL units recorded then do not read back as units of this platform version, so drift cannot be checked and the plan carries it as drift to accept`
+          : `The catalog fingerprint algorithm changed since the last apply (${p.fingerprintFrom} → ${p.fingerprintTo}), so the drift check is limited to the catalog model`,
     uk: (p) =>
-      `Від останнього застосування змінився алгоритм відбитка каталогу (${p.fingerprintFrom} → ${p.fingerprintTo}), тож перевірка дрейфу обмежена моделлю каталогу`,
+      p.reason === "units"
+        ? `${p.count} SQL-одиниць, записаних при останньому застосуванні, не читаються як одиниці цієї версії платформи, тож перевірка дрейфу обмежена відбитком каталогу`
+        : p.reason === "none"
+          ? `Від останнього застосування змінився алгоритм відбитка каталогу (${p.fingerprintFrom} → ${p.fingerprintTo}), а ${p.count} SQL-одиниць, записаних тоді, не читаються як одиниці цієї версії платформи, тож дрейф перевірити нічим, і план несе його як дрейф до прийняття`
+          : `Від останнього застосування змінився алгоритм відбитка каталогу (${p.fingerprintFrom} → ${p.fingerprintTo}), тож перевірка дрейфу обмежена моделлю каталогу`,
     hint: {
-      en: "The catalog model does not carry owners, partitions, inheritance or sequence settings; check those by hand if the database may have been changed outside the platform.",
-      uk: "Модель каталогу не несе власників, партицій, успадкування й налаштувань послідовностей; перевірте їх вручну, якщо базу могли змінити повз платформу.",
+      en: (p) =>
+        p.reason === "units"
+          ? "The fingerprint still sees every change, but without readable paths. Review the plan steps; the next apply records the units again."
+          : p.reason === "none"
+            ? "Make sure nobody changed the database outside the platform since the last apply, review the plan steps, and allow drift to apply; the next apply records the state again."
+            : "The catalog model does not carry owners, partitions, inheritance or sequence settings; check those by hand if the database may have been changed outside the platform.",
+      uk: (p) =>
+        p.reason === "units"
+          ? "Відбиток і далі бачить кожну зміну, але без читабельних шляхів. Перегляньте кроки плану; наступне застосування запише одиниці знову."
+          : p.reason === "none"
+            ? "Переконайтеся, що від останнього застосування базу ніхто не змінював повз платформу, перегляньте кроки плану й дозвольте drift, щоб застосувати; наступне застосування запише стан знову."
+            : "Модель каталогу не несе власників, партицій, успадкування й налаштувань послідовностей; перевірте їх вручну, якщо базу могли змінити повз платформу.",
     },
   },
   "apply.versions-changed": {

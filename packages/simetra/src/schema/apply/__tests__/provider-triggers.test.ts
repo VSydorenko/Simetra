@@ -7,6 +7,7 @@ import {
 } from "simetra/compiler"
 import { catalogFromSnapshot, type CatalogModel } from "simetra/model"
 import {
+  appliedCatalog,
   numberingNotGenerated,
   providerTriggerConflicts,
   providerTriggerKey,
@@ -87,6 +88,12 @@ const catalogOf = (units: CatalogModel["units"]): CatalogModel => ({
   units,
 })
 
+const parser = await loadSqlParser()
+
+/** Застосований каталог marker з цими одиницями — так, як його читає план. */
+const appliedOf = (units: CatalogModel["units"]) =>
+  appliedCatalog(catalogOf(units), parser)
+
 /** Чужий тригер з ім'ям згенерованого: інша функція. */
 const FOREIGN_ON_USER = trigger(
   "auth",
@@ -120,7 +127,7 @@ describe("providerTriggerConflicts", () => {
     const found = providerTriggerConflicts({
       desired: model.sqlUnits,
       live: catalogOf([FOREIGN_ON_USER]),
-      applied: catalogOf([FOREIGN_ON_USER]),
+      applied: appliedOf([FOREIGN_ON_USER]),
       appSchemas: ["public", "simetra"],
       present: new Set(),
       parse: await loadSqlParser(),
@@ -267,7 +274,10 @@ describe("providerTriggerConflicts", () => {
     // Свідок не бачить тригера, функція якого у схемі провайдера: базова
     // політика його виключає, а засів тіні переносить. Зайнятість імені — з
     // каталогу цілі
-    const conflicts = async (present: string[], applied?: CatalogModel) =>
+    const conflicts = async (
+      present: string[],
+      applied?: ReturnType<typeof appliedOf>
+    ) =>
       providerTriggerConflicts({
         desired: (await withSubscriptions()).sqlUnits,
         live: catalogOf([]),
@@ -296,6 +306,71 @@ describe("providerTriggerConflicts", () => {
           providerTriggerKey({ schema: "auth", name: "identities" }, "on_user"),
         ])
       ).toEqual([])
+    })
+  })
+
+  describe("the applied catalog of a marker (decision R10)", () => {
+    // Таблиця провайдера `better_auth."user"`: ключове слово — у лапках за
+    // правилом ідентичності, а marker, записаний до нього, тримає
+    // `trigger:better_auth.user.on_user`
+    const onUser = () =>
+      compiled({
+        "project.meta.json": project({ database: { provider: "postgres" } }),
+        ...subscription(7304, "OnUser", {
+          physicalName: "on_user",
+          sources: [{ providerTable: "better_auth.user" }],
+          event: "onWrite",
+          handler: { schema: "public", name: "on_user" },
+        }),
+        "sql/public/handlers.sql": HANDLER,
+      })
+    /** Наш тригер у попередньому визначенні: його змінює звичайний крок. */
+    const EARLIER =
+      'CREATE TRIGGER on_user AFTER INSERT ON better_auth."user" FOR EACH ROW EXECUTE FUNCTION public.on_user()'
+    const STORED = {
+      ...trigger("better_auth", "user", "on_user", EARLIER),
+      identity: "trigger:better_auth.user.on_user",
+    }
+    const LIVE = {
+      ...trigger("better_auth", "user", "on_user", EARLIER),
+      identity: 'trigger:better_auth."user".on_user',
+    }
+    const conflicts = async (
+      live: CatalogModel["units"],
+      applied: CatalogModel["units"]
+    ) =>
+      providerTriggerConflicts({
+        desired: (await onUser()).sqlUnits,
+        live: catalogOf(live),
+        applied: appliedOf(applied),
+        appSchemas: ["public", "simetra"],
+        present: new Set(),
+        parse: parser,
+      })
+
+    it("sees its own trigger recorded in the older identity form", async () => {
+      expect(await conflicts([LIVE], [STORED])).toEqual([])
+    })
+
+    it("refuses the identical live trigger when a marker unit does not read", async () => {
+      // Без нечитної одиниці тотожний тригер пропускається; з нею тотожність
+      // не доводить, що тригер наш
+      const desired = (await onUser()).sqlUnits.find(
+        (u) => u.class === "trigger" && u.name === "on_user"
+      )!
+      const same = { ...LIVE, sql: desired.sql }
+      expect(await conflicts([same], [])).toEqual([])
+      expect(
+        await conflicts(
+          [same],
+          [trigger("app", "t", "x", "CREATE TRIGGER x ???")]
+        )
+      ).toEqual([
+        expect.objectContaining({
+          code: "plan.provider-trigger-taken",
+          params: { trigger: "on_user", table: "better_auth.user" },
+        }),
+      ])
     })
   })
 

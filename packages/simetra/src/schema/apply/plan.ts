@@ -168,10 +168,12 @@ import {
 import { readSessionSearchPath } from "./settings"
 import { readServerFacts, serverVersionRefusal } from "./server"
 import {
+  appliedCatalog,
   planPlatformFunctions,
   readAppliedPromotions,
   readApplyState,
   readLedgerHead,
+  type AppliedCatalog,
 } from "./state"
 import {
   classifySteps,
@@ -486,7 +488,7 @@ const PROVIDER_TRIGGER_GENERATORS: ReadonlySet<SqlUnit["generator"]> = new Set<
 export function providerTriggerConflicts(p: {
   desired: readonly SqlUnit[]
   live: CatalogModel
-  applied: CatalogModel | undefined
+  applied: AppliedCatalog | undefined
   appSchemas: readonly string[]
   present: ReadonlySet<string>
   parse: SqlParser
@@ -496,7 +498,10 @@ export function providerTriggerConflicts(p: {
       .filter((u) => u.class === "trigger")
       .map((u) => [u.identity, u.sql])
   )
-  const applied = new Set(p.applied?.units.map((u) => u.identity) ?? [])
+  const applied = new Set(p.applied?.catalog.units.map((u) => u.identity) ?? [])
+  // Нечитна одиниця marker могла бути цим самим тригером: тотожність живого
+  // SQL бажаному тоді не доводить, що тригер наш, — відмова (fail-closed)
+  const complete = (p.applied?.unreadable.length ?? 0) === 0
   return providerTriggerUnits(p.desired, p.appSchemas)
     .filter((unit) => !applied.has(unit.identity))
     .flatMap((unit) => {
@@ -509,6 +514,7 @@ export function providerTriggerConflicts(p: {
         return p.present.has(providerTriggerKey(unit.table, unit.name))
           ? [taken]
           : []
+      if (!complete) return [taken]
       const parsed = p.parse(sql)
       const same =
         parsed.ok &&
@@ -963,8 +969,14 @@ export async function buildPlan(
   // поза межею застосунку), а крок двигуна замінив би його мовчки (спека
   // промоції §9.2)
   const live = await witness(o.target, scope)
-  // Останній застосований стан: що з об'єктів цілі створила платформа
-  const applied = state.status === "applied" ? state.marker.catalog : undefined
+  // Останній застосований стан: що з об'єктів цілі створила платформа.
+  // Ідентичності одиниць marker перевиведено з їхнього `sql` один раз — його
+  // читають і виняток тригерів провайдера, і гейт дрейфу, і решта плану
+  const appliedState =
+    state.status === "applied"
+      ? appliedCatalog(state.marker.catalog, parse)
+      : undefined
+  const applied = appliedState?.catalog
   const present = await dbs.reader.transaction(o.target, "rollback", (tx) =>
     readProviderTriggers(
       tx,
@@ -974,7 +986,7 @@ export async function buildPlan(
   const taken = providerTriggerConflicts({
     desired: model.sqlUnits,
     live: live.extracted.model,
-    applied,
+    applied: appliedState,
     appSchemas: scope.schemas,
     present,
     parse,
@@ -988,7 +1000,7 @@ export async function buildPlan(
     markerScope === undefined || sameScope(markerScope, scope)
       ? live
       : await witness(o.target, markerScope)
-  const verdict = driftGate(state, {
+  const verdict = driftGate(state, appliedState, {
     model: gateWitness.extracted.model,
     fingerprint: gateWitness.fingerprint,
     engine: engine.identity,
