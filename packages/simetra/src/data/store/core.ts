@@ -1275,7 +1275,7 @@ export function createCore(options: {
         channels: new Map(),
       }
     }
-    unsettled.delete(channel)
+    leaveWave(channel)
     wave.channels.set(channel, object)
     scheduler.request()
   }
@@ -1290,6 +1290,11 @@ export function createCore(options: {
     const token = session.token()
     const startedAt = now()
     lastWaveAt = startedAt
+    // Покоління каналів на старті: розрив, зняття чи нове приєднання під час
+    // хвилі роблять її відповідь неактуальною для цього каналу.
+    const born = new Map(
+      [...fired.channels.keys()].map((c) => [c, generationOf(c)])
+    )
     core.requestVersion()
     core.requestRights()
     const invisible: { object: ObjectName; spec: ViewSpec }[] = []
@@ -1314,7 +1319,8 @@ export function createCore(options: {
     void Promise.all(reads).then(() => {
       if (!token.valid) return
       for (const [channel, object] of fired.channels)
-        unsettled.set(channel, { object, startedAt })
+        if (generationOf(channel) === born.get(channel))
+          unsettled.set(channel, { object, startedAt })
       liftSettled()
     })
   }
@@ -1346,8 +1352,20 @@ export function createCore(options: {
       for (const [channel] of settled) w.clearDisconnected(channel)
     }, session.token())
   }
-  // Канал знято чи узято новою хвилею: старий запис нічого не знімає.
-  function leaveWave(channel: string) {
+  // Покоління каналу росте на кожен розрив, зняття й нове приєднання: запис
+  // `unsettled` і відповідь хвилі старшого поколінця «розрив» нового проміжку не
+  // знімають. Без каналу (розрив усього з'єднання) — усі канали.
+  const generations = new Map<string, number>()
+  let generationAll = 0
+  const generationOf = (channel: string) =>
+    (generations.get(channel) ?? 0) + generationAll
+  function leaveWave(channel?: string) {
+    if (channel === undefined) {
+      generationAll++
+      unsettled.clear()
+      return
+    }
+    generations.set(channel, (generations.get(channel) ?? 0) + 1)
     unsettled.delete(channel)
   }
 

@@ -71,8 +71,12 @@ export interface ReceiverContext {
   readonly filterCollator: Intl.Collator
   /** A channel joined without `recovered`: its object joins the rejoin wave. */
   joinWave(channel: string, object: ObjectName): void
-  /** The channel left the receiver: a pending "disconnect" lift of it is dropped. */
-  leaveWave(channel: string): void
+  /**
+   * The channel (every channel when omitted) broke, left the receiver or was
+   * refused: the pending "disconnect" lift of it, and the answer of a wave
+   * that started before, no longer lift the mark of the new gap.
+   */
+  leaveWave(channel?: string): void
   /** The core's `requestVersion` (a refusal without a channel, §10). */
   requestVersion(): void
   /** The transport refused the connection for good: the runtime closes. */
@@ -273,6 +277,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     // Розрив: рядки каналу (чи всі) не знають, що пропустили (§8.4).
     if (error.kind === "transport") {
       if (error.channel !== undefined && !held.has(error.channel)) return
+      ctx.leaveWave(error.channel)
       ctx.commit((w) => w.markDisconnected(error.channel), token)
       return
     }

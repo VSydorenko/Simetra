@@ -553,3 +553,87 @@ describe("a refused connection closes the runtime", () => {
     expect(onSessionChanged).not.toHaveBeenCalled()
   })
 })
+
+describe("a newer gap is not lifted by an older wave", () => {
+  const hiddenSpec = keysView(key(2))
+  async function withHiddenView() {
+    const h = await open(keysView(key(1)))
+    const other = h.core.view(hiddenSpec)
+    other.subscribe(() => {})
+    await settle()
+    h.core.setVisible(hiddenSpec, false)
+    return h
+  }
+
+  it("keeps the mark of a new transport gap when an entry pending from the old wave is read later", async () => {
+    const h = await withHiddenView()
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    expect(states(h)).toEqual(["stale"])
+    await advance(5_000)
+    // Новий розрив без нового `onSubscribed`.
+    h.transport.fail({ kind: "transport", channel })
+    await settle()
+    h.core.setVisible(hiddenSpec, true)
+    await advance(0)
+    await h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    // Вигляд ключа 1 читався до нового розриву: позначка лишається.
+    expect(states(h)).toEqual(["stale"])
+  })
+
+  it("keeps the mark of a new gap when the wave read failed earlier and a view recovers", async () => {
+    const h = await open(keysView(key(1)))
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, false)
+    h.fake.mode = "manual"
+    await vi.advanceTimersByTimeAsync(REJOIN_JITTER_MS)
+    h.fake.take(0).fail("command.unavailable")
+    h.fake.mode = "auto"
+    await settle()
+    h.transport.fail({ kind: "transport", channel })
+    await settle()
+    await h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    expect(states(h)).toEqual(["stale"])
+  })
+
+  it("keeps the mark of a gap that came while the wave read was in flight", async () => {
+    const h = await open(keysView(key(1)))
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, false)
+    h.fake.mode = "manual"
+    await vi.advanceTimersByTimeAsync(REJOIN_JITTER_MS)
+    h.transport.fail({ kind: "transport", channel })
+    await settle()
+    h.fake.mode = "auto"
+    h.fake.deliverAll()
+    await settle()
+    expect(states(h)).toEqual(["stale"])
+  })
+
+  it("keeps the mark while a view that was read by the wave fails later (the error guard)", async () => {
+    const h = await withHiddenView()
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    expect(states(h)).toEqual(["stale"])
+    // Вигляд ключа 1 уже читався хвилею (`refreshedAt` свіжий), далі читання збоїть.
+    h.fake.mode = "manual"
+    void h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    h.fake.take(0).fail("command.unavailable")
+    h.fake.mode = "auto"
+    await settle()
+    expect(h.handle.getSnapshot().status).toBe("error")
+    // Читається лише колишній невидимий вигляд.
+    h.core.setVisible(hiddenSpec, true)
+    h.core.setVisible(keysView(key(1)), false)
+    await advance(0)
+    await h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    expect(h.handle.getSnapshot().status).toBe("error")
+    expect(states(h)).toEqual(["stale"])
+  })
+})
