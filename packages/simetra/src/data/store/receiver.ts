@@ -1,22 +1,56 @@
 import {
   ZERO_UUID,
   channelTopic,
+  parseTopic,
+  receivedChangeSchema,
+  receivedInvalidateSchema,
   type CatalogEntry,
   type CatalogIndex,
   type SignalError,
   type SignalTransport,
   type Unsubscribe,
 } from "simetra/model"
-import { visibleRow } from "./object-store"
+import { differentEpochs, keyId, pairId } from "./epoch"
+import { evaluateFilter, fieldInfoOf } from "./filter"
+import type { ObjectState } from "./forms"
+import { scopeOf, visibleRow, type RowEntry } from "./object-store"
 import { canSubscribe } from "./rights"
-import type { RightsState } from "./types"
-import { activeViews, type WriterContext } from "./writer"
+import { readKeys, tracked } from "./source"
+import type {
+  GenerationToken,
+  Key,
+  ObjectName,
+  RightsState,
+  ServerRow,
+  Values,
+  ViewSpec,
+  Writer,
+} from "./types"
+import {
+  activeViews,
+  revalidate,
+  singleFlight,
+  type WriterContext,
+} from "./writer"
 
 /*
- * Приймач сигналів (спека П4-B §8.4): модуль ядра, не рантайму. Тут —
- * життєвий цикл і підписки: які канали змін тримати, виходячи зі знімка прав
- * і активних виглядів. Розбір сигналів і перечитування — наступні задачі.
+ * Приймач сигналів (спека П4-B §8.4): модуль ядра, не рантайму. Життєвий
+ * цикл і підписки — які канали змін тримати за знімком прав і активними
+ * виглядами; розбір повідомлень, пачка й кроки 1–7 обробки пачки об'єкта.
+ * Приєднання, розрив і відмови каналів — окрема задача плану.
  */
+
+/** Тиша, після якої пачка сигналів закривається. */
+export const QUIET_MS = 50
+/** Найдовша пачка: безперервний потік закривається не пізніше. */
+export const MAX_BATCH_MS = 2000
+/** Скільки разів дочитується ключ з очікуваною мінімальною версією. */
+export const MIN_VERSION_RETRIES = 3
+/** Вікно дедуплікації: стільки останніх `id` повідомлень. */
+export const SEEN_SIGNALS_MAX = 4096
+
+// Пауза перед n-м дочитуванням — `500 × 2^(n−1)` мс.
+const MIN_VERSION_PAUSE_MS = 500
 
 /** What the receiver needs from the core. */
 export interface ReceiverContext {
@@ -25,6 +59,12 @@ export interface ReceiverContext {
   readonly index: CatalogIndex
   readonly writer: WriterContext
   rights(): RightsState | undefined
+  /** Whether the host shows the application: a hidden tab reads nothing. */
+  visible(): boolean
+  /** The core's `commit`: the only way the receiver writes. */
+  commit(fn: (writer: Writer) => void, token: GenerationToken): boolean
+  /** The collator of the runtime's filter tests (one per runtime). */
+  readonly filterCollator: Intl.Collator
 }
 
 export interface Receiver {
@@ -43,6 +83,81 @@ interface Held {
   off: Unsubscribe | undefined
 }
 
+// Що пачка знає про ключ: найбільша версія серед сигналів не `delete`
+// (`-1` — були лише `delete`), чи був `delete` і яке це дочитування
+// мінімальної версії (0 — сигнал).
+interface KeySignal {
+  version: number
+  deleted: boolean
+  attempt: number
+}
+
+interface ObjectBatch {
+  readonly keys: Map<Key, KeySignal>
+  invalidate: boolean
+}
+
+type Batch = Map<ObjectName, ObjectBatch>
+
+const objectBatch = (batch: Batch, object: ObjectName): ObjectBatch => {
+  let found = batch.get(object)
+  if (found === undefined) {
+    found = { keys: new Map(), invalidate: false }
+    batch.set(object, found)
+  }
+  return found
+}
+
+const addKey = (into: ObjectBatch, key: Key, signal: KeySignal) => {
+  const prev = into.keys.get(key)
+  into.keys.set(
+    key,
+    prev === undefined
+      ? { ...signal }
+      : {
+          version: Math.max(prev.version, signal.version),
+          deleted: prev.deleted || signal.deleted,
+          // Свіжий сигнал знову дає ключу всі дочитування.
+          attempt: Math.min(prev.attempt, signal.attempt),
+        }
+  )
+}
+
+const mergeBatch = (into: Batch, from: Batch) => {
+  for (const [object, source] of from) {
+    const target = objectBatch(into, object)
+    target.invalidate ||= source.invalidate
+    for (const [key, signal] of source.keys) addKey(target, key, signal)
+  }
+}
+
+// Одна пачка, що збирається: тиша й найдовший строк — сни сесії, тож
+// закриття сесії таймерів не лишає.
+interface Open {
+  readonly batch: Batch
+  quiet: AbortController | undefined
+  readonly max: AbortController
+}
+
+// Що робити з об'єктом пачки: ключі у сховищі (кроки 1–3), нові ключі
+// (крок 5) і чи читати об'єкт цілим (кроки 6–7).
+interface Plan {
+  readonly stored: Key[]
+  readonly fresh: Key[]
+  readonly whole: boolean
+}
+
+// Читання ключів одного об'єкта в польоті.
+interface Job {
+  readonly object: ObjectName
+  readonly o: ObjectState
+  readonly plan: Plan
+  readonly signals: ObjectBatch
+  readonly readEpoch: number
+  readonly epochs: Set<string | null>
+  readonly rows: Promise<ServerRow[] | undefined>
+}
+
 export function createReceiver(ctx: ReceiverContext): Receiver {
   const { transport, writer } = ctx
   const entries = [...ctx.index.byId.values()].filter((e) => e.signal)
@@ -52,6 +167,10 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   const refused = new Set<string>()
   let stopped = false
   let planned = false
+  const { session, limits } = writer
+  // Запис і відповіді дійсні, поки приймач живий: `stop()` гасить їх разом.
+  const token = session.childToken(() => !stopped)
+  const collator = ctx.filterCollator
 
   const scopesOfRows = (entry: CatalogEntry): string[] => {
     const o = writer.objectOf(`${entry.kind}.${entry.name}`)
@@ -111,8 +230,376 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     slot.off?.()
   }
 
-  // Сигнали обробляє наступна задача; тут канал лише тримається.
-  const onSignal = () => {}
+  // ------------------------------------------------------------ пачка
+
+  const seen = new Set<string>()
+  // Дублікат за `id` відкидається; вікно — останні `SEEN_SIGNALS_MAX`.
+  const isDuplicate = (id: string): boolean => {
+    if (seen.has(id)) return true
+    seen.add(id)
+    if (seen.size > SEEN_SIGNALS_MAX) {
+      const [oldest] = seen
+      if (oldest !== undefined) seen.delete(oldest)
+    }
+    return false
+  }
+
+  let open: Open | undefined
+  // Закриті пачки, що чекають осідання читання в польоті, зливаються в одну:
+  // «один запит на вигляд за пачку» тримається і під зворотним тиском.
+  let waiting: Batch | undefined
+  let flying = false
+
+  const closeOpen = (batch: Open) => {
+    if (open !== batch) return
+    open = undefined
+    batch.quiet?.abort()
+    batch.max.abort()
+    if (stopped || !token.valid) return
+    enqueue(batch.batch)
+  }
+
+  const startOpen = (): Open => {
+    const max = new AbortController()
+    const batch: Open = { batch: new Map(), quiet: undefined, max }
+    void session.sleep(MAX_BATCH_MS, max.signal).then(() => {
+      if (!max.signal.aborted) closeOpen(batch)
+    })
+    return batch
+  }
+
+  // Кожен сигнал відсуває закриття на `QUIET_MS`, але не далі за `MAX_BATCH_MS`
+  // від першого.
+  const collect = (fill: (batch: Batch) => void) => {
+    if (stopped || !token.valid) return
+    open ??= startOpen()
+    const batch = open
+    fill(batch.batch)
+    batch.quiet?.abort()
+    const quiet = new AbortController()
+    batch.quiet = quiet
+    void session.sleep(QUIET_MS, quiet.signal).then(() => {
+      if (!quiet.signal.aborted) closeOpen(batch)
+    })
+  }
+
+  function enqueue(batch: Batch) {
+    waiting ??= new Map()
+    mergeBatch(waiting, batch)
+    pump()
+  }
+
+  function pump() {
+    if (flying || waiting === undefined || stopped || !token.valid) return
+    const batch = waiting
+    waiting = undefined
+    flying = true
+    run(batch)
+      .catch((error: unknown) => writer.log({ kind: "listener-failed", error }))
+      .finally(() => {
+        flying = false
+        pump()
+      })
+  }
+
+  // ------------------------------------------------------------ розбір
+
+  // Повідомлення каналу змін (§8.1): розібране схемою прийнятого повідомлення
+  // — схема відправки `id` не несе й не пропустила б жодного.
+  const onSignal = (topic: string, payload: unknown) => {
+    if (stopped || !token.valid) return
+    const channel = parseTopic(topic)
+    // Топік поза моїми підписками (знятий канал, чужий формат) і канали прав
+    // (їх бере блок прав) запиту не дають.
+    if (channel?.kind !== "changes" || !held.has(topic)) return
+    const entry = ctx.index.byId.get(channel.object)
+    if (entry === undefined) return
+    const object: ObjectName = `${entry.kind}.${entry.name}`
+    // Нерозібране — `invalidate` об'єкта топіка: сумісність уперед (§8.1).
+    const invalidate = () =>
+      collect((batch) => {
+        objectBatch(batch, object).invalidate = true
+      })
+    const change = receivedChangeSchema.safeParse(payload)
+    const parsed = change.success
+      ? change
+      : receivedInvalidateSchema.safeParse(payload)
+    if (!parsed.success) return invalidate()
+    if (isDuplicate(parsed.data.id)) return
+    // Об'єкт повідомлення — не об'єкт топіка: довіряємо топіку (його
+    // авторизував сервер), а не тілу, і читаємо весь об'єкт топіка.
+    if (parsed.data.object.toLowerCase() !== channel.object) return invalidate()
+    if (!change.success || parsed.data.op === "invalidate") return invalidate()
+    const { op, keys, row_ver: version } = change.data
+    const [column, value] = Object.entries(keys)[0] ?? []
+    // Колонка, якої каталог не знає як ключ, — нерозібране.
+    if (column !== entry.key || value === undefined) return invalidate()
+    collect((batch) =>
+      addKey(objectBatch(batch, object), value.toLowerCase(), {
+        version: op === "delete" ? -1 : version,
+        deleted: op === "delete",
+        attempt: 0,
+      })
+    )
+  }
+
+  // ------------------------------------------------------------ кроки 1–7
+
+  // Крок 2: ключ у сховищі (чи в пам'яті версій) з підтвердженою версією не
+  // меншою за `row_ver` — відлуння. Версії різних епох не впорядковані, а
+  // рядок з позначкою перемикання епохи чекає перечитування і так.
+  const isEcho = (
+    o: ObjectState,
+    key: Key,
+    e: RowEntry | undefined,
+    version: number
+  ): boolean => {
+    if (e?.stale.epoch !== undefined) return false
+    const known =
+      e === undefined
+        ? session.epochs.seen(keyId(o.name, key))
+        : { version: e.version, versionEpoch: e.versionEpoch }
+    if (known === undefined) return false
+    if (differentEpochs(known.versionEpoch, session.versions.current()))
+      return false
+    return known.version >= version
+  }
+
+  const classify = (
+    o: ObjectState,
+    batch: ObjectBatch,
+    hasViews: boolean
+  ): Plan | undefined => {
+    const stored: Key[] = []
+    const fresh: Key[] = []
+    for (const [key, signal] of batch.keys) {
+      const e = o.rows.get(key)
+      const live = e !== undefined && e.owners > 0 && e.removed === undefined
+      // Крок 1: `delete` першим, до перевірки версії — він несе версію стану
+      // «до». Ключа немає (зокрема власне відлуння) — нічого; ключ є —
+      // перечитування, а `removed` лише за порожньою відповіддю.
+      if (signal.deleted) {
+        if (live) stored.push(key)
+        else if (signal.version >= 0 && !isEcho(o, key, e, signal.version))
+          fresh.push(key)
+        continue
+      }
+      if (isEcho(o, key, e, signal.version)) continue
+      // Кроки 3 і 5: ключ у сховищі з меншою версією і ключ, якого там немає.
+      if (e !== undefined && e.owners > 0) stored.push(key)
+      else fresh.push(key)
+    }
+    // Без вигляду новому ключу нікому підказувати `hasNewRows`.
+    if (!hasViews) fresh.length = 0
+    const count = stored.length + fresh.length
+    // Кроки 6–7: `invalidate` чи пачка понад межу ключів читає об'єкт цілим.
+    const whole = batch.invalidate || count > limits.keysPerRequest
+    if (count === 0 && !batch.invalidate) return undefined
+    return { stored, fresh, whole }
+  }
+
+  const startJob = (
+    object: ObjectName,
+    o: ObjectState,
+    plan: Plan,
+    signals: ObjectBatch
+  ): Job => {
+    const read = tracked(writer.source)
+    const owned = new Set(plan.stored)
+    return {
+      object,
+      o,
+      plan,
+      signals,
+      readEpoch: session.epochs.now(),
+      epochs: read.epochs,
+      rows: readKeys(read.source, o.entry, [...plan.stored, ...plan.fresh], {
+        keysPerRequest: limits.keysPerRequest,
+        known: (keys) => o.rows.knownFor(keys, { owned, form: "list" }),
+      }).catch(() => undefined),
+    }
+  }
+
+  // Крок 5: новий рядок у сховище не пишеться; `hasNewRows` лише тим виглядам
+  // `full` і вікна, чий фільтр він проходить (§6.4).
+  const markNewRow = (w: Writer, job: Job, row: ServerRow) => {
+    const { object, o } = job
+    // Пара, похована з початку читання, не «нова»: `hasNewRows` виказав би,
+    // що заборонений рядок існує.
+    if (
+      session.epochs.buriedSince(
+        pairId(object, scopeOf(o.entry, row.values)),
+        job.readEpoch
+      )
+    )
+      return
+    for (const view of activeViews(writer, object)) {
+      const spec = view.spec
+      if (spec.kind !== "full" && spec.kind !== "window") continue
+      if (!admits(o, spec, row.values)) continue
+      w.markViews(object, { hasNewRows: true }, spec)
+    }
+  }
+
+  const admits = (
+    o: ObjectState,
+    spec: Extract<ViewSpec, { kind: "full" | "window" }>,
+    values: Values
+  ) =>
+    spec.where === undefined ||
+    evaluateFilter(spec.where, values, fieldInfoOf(o.entry), collator)
+
+  const retries = new Map<string, object>()
+  // Дочитування мінімальної версії: після паузи ключ іде в ту саму чергу
+  // зведених пачок, а не окремим шляхом.
+  const scheduleRetry = (
+    object: ObjectName,
+    key: Key,
+    version: number,
+    attempt: number
+  ) => {
+    const id = `${object}\u0000${key}`
+    const chain = {}
+    retries.set(id, chain)
+    void session.sleep(MIN_VERSION_PAUSE_MS * 2 ** (attempt - 1)).then(() => {
+      if (retries.get(id) !== chain) return
+      retries.delete(id)
+      if (stopped || !token.valid) return
+      // Позначку вже зняло інше читання — дочитувати нічого.
+      const mark = writer.objectOf(object).rows.get(key)?.stale.minVersion
+      if (mark === undefined || mark.v < version) return
+      const batch: Batch = new Map()
+      addKey(objectBatch(batch, object), key, {
+        version,
+        deleted: false,
+        attempt,
+      })
+      enqueue(batch)
+    })
+  }
+
+  // Відповідь читання ключів одного об'єкта: один шлюз епох на всю відповідь
+  // (епохи частин і рядків), далі один `apply` з єдиною прийнятою епохою. Другий
+  // шлюз усередині `Writer.apply` на вже прийнятих епохах нічого не змінює
+  // (`acceptEpoch` — `apply` без побічних ефектів), тож відповідь без рядків
+  // теж проходить шлюз за епохою частин.
+  const settleJob = (
+    w: Writer,
+    job: Job,
+    rows: readonly ServerRow[],
+    retry: (object: ObjectName, key: Key, version: number, at: number) => void
+  ) => {
+    const { object, o, plan, signals } = job
+    const epochs = new Set(job.epochs)
+    for (const row of rows) epochs.add(row.versionEpoch ?? null)
+    if (session.acceptEpochs(epochs, job.readEpoch) === "discard") return
+    const versionEpoch = [...epochs].find((epoch) => epoch !== null) ?? null
+    const isHeld = (key: Key) => (o.rows.get(key)?.owners ?? 0) > 0
+    const returned = new Map(rows.map((row) => [row.key.toLowerCase(), row]))
+    const absent = plan.stored.filter(
+      (key) => isHeld(key) && !returned.has(key)
+    )
+    if (
+      w.apply(object, { rows, absent }, job.readEpoch, versionEpoch) ===
+      "discarded"
+    )
+      return
+    for (const key of plan.stored) {
+      const row = returned.get(key)
+      const signal = signals.keys.get(key)
+      if (row === undefined || signal === undefined || !isHeld(key)) continue
+      // Крок 4: повернулась версія, менша за `row_ver` сигналу (репліка,
+      // затримка) — ключ чекає мінімальну версію й дочитується. Звичайне
+      // перечитування `stale` не ставить.
+      if (row.version >= signal.version) continue
+      w.markStale(object, [key], signal.version)
+      const mark = o.rows.get(key)?.stale.minVersion
+      if (
+        mark !== undefined &&
+        mark.v >= signal.version &&
+        signal.attempt < MIN_VERSION_RETRIES
+      )
+        retry(object, key, signal.version, signal.attempt + 1)
+    }
+    const fresh = new Set(plan.fresh)
+    for (const row of rows) {
+      if (fresh.has(row.key.toLowerCase()) && !isHeld(row.key))
+        markNewRow(w, job, row)
+    }
+  }
+
+  const run = async (batch: Batch): Promise<void> => {
+    const jobs: Job[] = []
+    const flights: Promise<void>[] = []
+    // `needsRefresh` невидимим виглядам (`spec` немає — усім виглядам об'єкта).
+    const refresh: { object: ObjectName; spec?: ViewSpec }[] = []
+    const requested: ObjectName[] = []
+    for (const [object, signals] of batch) {
+      if (writer.isStale(object)) continue
+      const o = writer.objectOf(object)
+      const views = activeViews(writer, object)
+      const plan = classify(o, signals, views.length > 0)
+      if (plan === undefined) continue
+      // Прихована вкладка нічого не шле (Р8): вигляди чекають `resume()`.
+      if (!ctx.visible()) {
+        requested.push(object)
+        refresh.push({ object })
+        continue
+      }
+      if (plan.whole) {
+        for (const view of views)
+          if (!view.visible) refresh.push({ object, spec: view.spec })
+        flights.push(
+          revalidate(writer, object, { visibleOnly: true }).catch(
+            (error: unknown) => writer.log({ kind: "listener-failed", error })
+          )
+        )
+        continue
+      }
+      jobs.push(startJob(object, o, plan, signals))
+      // Нова версія шапки власника з видимою ТЧ веде до перечитування ТЧ
+      // (§6.2, правило 2): її читання йде в тому самому пакеті, що й шапка, а
+      // не окремим запитом після неї. Відповідь ТЧ несе `ownerVersion`, тож
+      // після запису шапки вигляд ТЧ уже не застарілий.
+      const owners = new Set(plan.stored)
+      const sections = [...writer.registry.subsets()].filter(
+        (s) =>
+          s.form.object === o &&
+          s.alive &&
+          !s.purged &&
+          s.loaded &&
+          s.listeners.size > 0 &&
+          s.form.spec.kind === "section" &&
+          owners.has(s.form.spec.owner)
+      )
+      if (sections.length > 0)
+        flights.push(
+          singleFlight(writer, o, sections, { visibleOnly: false }).done.catch(
+            (error: unknown) => writer.log({ kind: "listener-failed", error })
+          )
+        )
+    }
+    if (refresh.length > 0)
+      ctx.commit((w) => {
+        for (const { object, spec } of refresh)
+          w.markViews(object, { needsRefresh: true }, spec)
+      }, token)
+    // Строк на `resume()`: планувальник на прихованій вкладці нічого не шле.
+    for (const object of requested) writer.schedule(object, 0)
+    const answers = await Promise.all(jobs.map((job) => job.rows))
+    await Promise.all(flights)
+    if (stopped || !token.valid) return
+    const settled = jobs.flatMap((job, at) =>
+      answers[at] === undefined ? [] : [{ job, rows: answers[at] }]
+    )
+    const again: Parameters<typeof scheduleRetry>[] = []
+    if (settled.length > 0)
+      ctx.commit((w) => {
+        for (const { job, rows } of settled)
+          settleJob(w, job, rows, (...args) => again.push(args))
+      }, token)
+    for (const args of again) scheduleRetry(...args)
+  }
 
   const join = (channel: string) => {
     const slot: Held = { off: undefined }
@@ -149,6 +636,11 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     },
     stop() {
       stopped = true
+      open?.quiet?.abort()
+      open?.max.abort()
+      open = undefined
+      waiting = undefined
+      retries.clear()
       for (const slot of held.values()) slot.off?.()
       held.clear()
     },

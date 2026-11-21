@@ -1003,13 +1003,16 @@ export function createCore(options: {
     },
   }
 
+  // Один збирач фільтрів на рантайм: реєстр і приймач сигналів ділять кеш
+  // скомпільованих фільтрів (він ключується за ідентичністю збирача).
+  const collator = filterCollator()
   const registry = createRegistry({
     session,
     source,
     index,
     limits,
     strict: options.strict ?? false,
-    filterCollator: filterCollator(),
+    filterCollator: collator,
     // Порядок `full` — мовою користувача (Рд29).
     userCollator: new Intl.Collator(),
     log,
@@ -1463,6 +1466,9 @@ export function createCore(options: {
       index,
       writer: writerContext,
       rights: () => rights,
+      visible: () => visible,
+      commit: (fn, token) => core.commit(fn, token),
+      filterCollator: collator,
     })
     // Кожен `commit` міг змінити активні вигляди чи скоупи їхніх рядків.
     session.onFlush(() => receiver?.touch())

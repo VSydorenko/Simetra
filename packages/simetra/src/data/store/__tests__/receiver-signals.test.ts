@@ -1,0 +1,668 @@
+import {
+  READ_BATCH_MAX,
+  channelTopic,
+  jsonBytes,
+  type CatalogEntry,
+  type RightsRow,
+} from "simetra/model"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  SCOPE_KIND_ID,
+  catalogEntry,
+} from "../../../model/runtime/__tests__/entries"
+import { coreInternals } from "../core"
+import { createFakeSignalTransport } from "../testing/fake-signal-transport"
+import { MAX_BATCH_MS, QUIET_MS, SEEN_SIGNALS_MAX } from "../receiver"
+import type { Key, ViewSpec } from "../types"
+import {
+  TASK,
+  key,
+  keysOf,
+  org,
+  S,
+  seed,
+  settle,
+  setup,
+  task,
+  taskValues,
+} from "./core-support"
+
+/*
+ * Приймач сигналів: розбір, пачка й кроки 1–7 §8.4 (план B5b-3, задача 3).
+ * Фейковий канал і справжнє ядро над фейковим сервером; кожен кейс рахує
+ * запити сервера, а не виклики внутрішніх функцій.
+ */
+
+const USER = "00000000-0000-4000-8000-0000000000a1"
+
+beforeEach(() => {
+  vi.useFakeTimers()
+})
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.useRealTimers()
+})
+
+const read: RightsRow = {
+  level: "scope",
+  levelId: null,
+  scope: S,
+  container: null,
+  object: "task",
+  action: "read",
+  extent: "any",
+  dimensionId: null,
+}
+
+const channel = channelTopic({
+  kind: "changes",
+  scopeKindId: SCOPE_KIND_ID,
+  scope: S,
+  object: task.id,
+})
+
+const keysView = (...keys: Key[]): ViewSpec => ({
+  kind: "keys",
+  object: TASK,
+  keys,
+})
+
+function harness(server?: NonNullable<Parameters<typeof setup>[0]>["server"]) {
+  const transport = createFakeSignalTransport()
+  const h = setup({
+    rightsSnapshot: true,
+    signals: transport,
+    ...(server === undefined ? {} : { server }),
+  })
+  h.fake.rightsSnapshot = {
+    userId: USER,
+    scopeSets: [{ scopeKind: SCOPE_KIND_ID, scope: S }],
+    rights: [read],
+    members: [],
+    dimensionValues: [],
+  }
+  h.fake.rightsVersion = "1".repeat(64)
+  return { ...h, transport }
+}
+type Harness = ReturnType<typeof harness>
+
+let seq = 0
+const change = (
+  op: "create" | "update" | "markDeletion" | "delete",
+  k: Key,
+  rowVer: number,
+  id = String(++seq)
+) => ({ id, object: task.id, op, keys: { id: k }, row_ver: rowVer })
+
+/** Сигнал каналу змін; пачка закривається після тиші `QUIET_MS`. */
+const emit = (h: Harness, payload: unknown, topic = channel) =>
+  h.transport.emit(topic, payload)
+
+/** Дає пачці закритись і відповідям осісти. */
+const closeBatch = async () => {
+  await vi.advanceTimersByTimeAsync(QUIET_MS)
+  await settle()
+}
+
+const requestsSince = (h: Harness, from: number) => h.fake.requests.slice(from)
+
+/** Відкриті на мить виклику читання ключів (запити пачки). */
+const keyReadsSince = (h: Harness, from: number) =>
+  h.fake.log.filter((r) => r.request >= from && keysOf(r.query).length > 0)
+
+async function open(
+  spec: ViewSpec,
+  rows = 3,
+  server?: Parameters<typeof harness>[0]
+) {
+  const h = harness(server)
+  seed(h.fake, 1, rows)
+  const subscribe = vi.spyOn(h.transport, "subscribe")
+  const handle = h.core.view(spec)
+  const unsubscribe = handle.subscribe(() => {})
+  await settle()
+  expect(h.transport.subscribed().has(channel)).toBe(true)
+  // Прямий виклик обробника: фейк доставляє сигнал лише підписникам каналу.
+  const deliver = (topic: string, payload: unknown) =>
+    subscribe.mock.calls[0]![1](topic, payload)
+  return { ...h, handle, unsubscribe, deliver, from: h.fake.requests.length }
+}
+
+describe("signals of the change channel: echo, dedup and batch", () => {
+  it("re-reads a changed key once, with its signal batched after QUIET_MS of silence", async () => {
+    const h = await open(keysView(key(1), key(2)))
+    const version = h.fake.edit(TASK, key(1), { title: "new" })
+    emit(h, change("update", key(1), version))
+    await vi.advanceTimersByTimeAsync(QUIET_MS - 1)
+    expect(requestsSince(h, h.from)).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(1)
+    await settle()
+    expect(requestsSince(h, h.from)).toHaveLength(1)
+    expect(h.handle.getSnapshot().rows[0]).toMatchObject({
+      values: { title: "new" },
+    })
+  })
+
+  it("drops an echo: a stored version not below row_ver costs no request", async () => {
+    const h = await open(keysView(key(1)))
+    const stored = h.fake.row(TASK, key(1))!.version
+    emit(h, change("update", key(1), stored))
+    emit(h, change("update", key(1), stored - 1))
+    await closeBatch()
+    expect(requestsSince(h, h.from)).toHaveLength(0)
+  })
+
+  it("drops the echo of an own delete: a key not in the store costs no request", async () => {
+    const h = await open(keysView(key(1)))
+    emit(h, change("delete", key(9), 5))
+    await closeBatch()
+    expect(requestsSince(h, h.from)).toHaveLength(0)
+  })
+
+  it("re-reads a foreign delete although its version is below the stored one, and marks removed only on an empty answer", async () => {
+    const h = await open(keysView(key(1), key(2)))
+    const stored = h.fake.row(TASK, key(1))!.version
+    // Серверу рядок ще віддається: `delete` нічого не прибирає.
+    emit(h, change("delete", key(1), stored - 1))
+    await closeBatch()
+    expect(requestsSince(h, h.from)).toHaveLength(1)
+    expect(h.handle.getSnapshot().rows[0]!.state).not.toBe("removed")
+    // Тепер сервер справді видалив рядок.
+    h.fake.remove(TASK, key(1))
+    const from = h.fake.requests.length
+    emit(h, change("delete", key(1), stored))
+    await closeBatch()
+    expect(requestsSince(h, from)).toHaveLength(1)
+    expect(h.handle.getSnapshot().rows[0]!.state).toBe("removed")
+    expect(h.handle.getSnapshot().rows[1]!.state).not.toBe("removed")
+  })
+
+  it("reads a duplicate id once, and at most one extra request once the id left the window", async () => {
+    const h = await open(keysView(key(1)))
+    // Новий ключ у сховище не пишеться, тож лише `id` відрізняє дублікат.
+    const created = h.fake.insert(TASK, taskValues(50))
+    emit(h, change("create", key(50), created, "1000"))
+    await closeBatch()
+    emit(h, change("create", key(50), created, "1000"))
+    await closeBatch()
+    expect(keyReadsSince(h, h.from)).toHaveLength(1)
+    // Вікно дедуплікації витісняє «1000» новішими `id` (відлуння запиту не дають).
+    const stored = h.fake.row(TASK, key(1))!.version
+    for (let i = 0; i < SEEN_SIGNALS_MAX; i++)
+      emit(h, change("update", key(1), stored, String(2000 + i)))
+    await closeBatch()
+    const from = h.fake.requests.length
+    emit(h, change("create", key(50), created, "1000"))
+    await closeBatch()
+    expect(requestsSince(h, from)).toHaveLength(1)
+  })
+
+  it("takes a burst of 1000 signals over the longest window as one request per view per batch, composition and order intact", async () => {
+    const h = await open(keysView(key(1), key(2), key(3)))
+    const before = h.handle.getSnapshot().rows.map((r) => r.key)
+    const burst = 1000
+    const step = 3
+    for (let i = 0; i < burst; i++) {
+      const k = key(1 + (i % 3))
+      emit(h, change("update", k, h.fake.edit(TASK, k, { title: `t${i}` })))
+      await vi.advanceTimersByTimeAsync(step)
+    }
+    await closeBatch()
+    const batches = Math.ceil((burst * step) / MAX_BATCH_MS) + 1
+    const requests = requestsSince(h, h.from)
+    expect(requests.length).toBeGreaterThanOrEqual(2)
+    expect(requests.length).toBeLessThanOrEqual(batches)
+    // Один запит несе один вигляд: ключі вигляду читаються однією частиною.
+    for (const parts of requests) expect(parts).toBe(1)
+    expect(h.handle.getSnapshot().rows.map((r) => r.key)).toEqual(before)
+  })
+
+  it("closes a batch no later than MAX_BATCH_MS from its first signal while signals keep coming", async () => {
+    const h = await open(keysView(key(1)))
+    for (let elapsed = 0; elapsed < MAX_BATCH_MS - QUIET_MS; elapsed += 40) {
+      const version = h.fake.edit(TASK, key(1), { title: `t${elapsed}` })
+      emit(h, change("update", key(1), version))
+      await vi.advanceTimersByTimeAsync(40)
+    }
+    expect(requestsSince(h, h.from)).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(QUIET_MS + 40)
+    await settle()
+    expect(requestsSince(h, h.from)).toHaveLength(1)
+  })
+})
+
+describe("budget: keys and objects of one batch", () => {
+  // Ключі, яких у сховищі немає, — крок 5: усі йдуть у читання за ключами.
+  const burstOfNewKeys = async (count: number) => {
+    const h = await open(keysView(key(1)))
+    for (let n = 100; n < 100 + count; n++) {
+      const v = h.fake.insert(TASK, taskValues(n))
+      emit(h, change("create", key(n), v))
+    }
+    await closeBatch()
+    return h
+  }
+
+  it("reads 200 keys of one object by keys in one request", async () => {
+    const h = await burstOfNewKeys(200)
+    expect(requestsSince(h, h.from)).toHaveLength(1)
+    expect(
+      keyReadsSince(h, h.from).flatMap((r) => keysOf(r.query))
+    ).toHaveLength(200)
+  })
+
+  it("reads 201 keys as a revalidate of the visible views and marks the invisible ones needsRefresh, in one request", async () => {
+    const h = await open(keysView(key(1)))
+    // Невидимий вигляд: утримується без слухача.
+    const hidden = h.core.view({ kind: "full", object: TASK })
+    void hidden
+    await h.core.preload({ kind: "full", object: TASK })
+    await settle()
+    const from = h.fake.requests.length
+    for (let n = 100; n < 301; n++) {
+      const v = h.fake.insert(TASK, taskValues(n))
+      emit(h, change("create", key(n), v))
+    }
+    await closeBatch()
+    expect(requestsSince(h, from)).toHaveLength(1)
+    // Ключів у запиті немає: читався вигляд, а не 201 ключ.
+    expect(
+      keyReadsSince(h, from).flatMap((r) => keysOf(r.query)).length
+    ).toBeLessThanOrEqual(1)
+    expect(
+      h.core.view({ kind: "full", object: TASK }).getSnapshot()
+    ).toMatchObject({
+      needsRefresh: true,
+    })
+    expect(h.handle.getSnapshot().needsRefresh).toBe(false)
+  })
+
+  it("reads the keys of 16 objects in one request and of 17 in two", async () => {
+    const run = async (count: number) => {
+      const entries: CatalogEntry[] = Array.from({ length: count }, (_, i) => {
+        const entry = catalogEntry({
+          id: `00000000-0000-4000-8000-${String(5000 + i).padStart(12, "0")}`,
+          name: `Obj${i}`,
+          kindLabel: `obj${i}`,
+          table: { schema: "public", name: `obj${i}` },
+          tabularSections: [],
+        })
+        return entry
+      })
+      const transport = createFakeSignalTransport()
+      const h = setup({
+        rightsSnapshot: true,
+        signals: transport,
+        objects: [org, ...entries],
+      })
+      h.fake.rightsSnapshot = {
+        userId: USER,
+        scopeSets: [{ scopeKind: SCOPE_KIND_ID, scope: S }],
+        rights: entries.map((e) => ({ ...read, object: e.kindLabel })),
+        members: [],
+        dimensionValues: [],
+      }
+      h.fake.rightsVersion = "1".repeat(64)
+      for (const e of entries) {
+        h.fake.insert(`Catalog.${e.name}`, taskValues(1))
+        h.core
+          .view({
+            kind: "keys",
+            object: `Catalog.${e.name}`,
+            keys: [key(1)],
+          })
+          .subscribe(() => {})
+      }
+      await settle()
+      const from = h.fake.requests.length
+      for (const e of entries) {
+        const v = h.fake.insert(`Catalog.${e.name}`, taskValues(2))
+        transport.emit(
+          channelTopic({
+            kind: "changes",
+            scopeKindId: SCOPE_KIND_ID,
+            scope: S,
+            object: e.id,
+          }),
+          {
+            id: String(++seq),
+            object: e.id,
+            op: "create",
+            keys: { id: key(2) },
+            row_ver: v,
+          }
+        )
+      }
+      await vi.advanceTimersByTimeAsync(QUIET_MS)
+      await settle()
+      return h.fake.requests.slice(from)
+    }
+    expect(await run(READ_BATCH_MAX)).toHaveLength(1)
+    expect(await run(READ_BATCH_MAX + 1)).toHaveLength(2)
+  })
+
+  it("keeps the bytes of a batch within 1.1 x useful + 2 KiB", async () => {
+    const h = await open(keysView(key(1), key(2), key(3)), 3)
+    for (const n of [1, 2, 3]) {
+      const v = h.fake.edit(TASK, key(n), { title: `changed ${n}` })
+      emit(h, change("update", key(n), v))
+    }
+    await closeBatch()
+    const reads = h.fake.log.filter((r) => r.request >= h.from)
+    expect(reads.length).toBeGreaterThan(0)
+    const response = reads.reduce((sum, r) => sum + jsonBytes(r.response), 0)
+    const useful = [1, 2, 3].reduce(
+      (sum, n) => sum + jsonBytes(h.fake.row(TASK, key(n))!.values),
+      0
+    )
+    expect(response).toBeLessThanOrEqual(1.1 * useful + 2048)
+  })
+})
+
+describe("expected minimum version, new keys, sections and invalidate", () => {
+  it("marks stale and re-reads three times with pauses of 500, 1000 and 2000 ms when the answer is below row_ver", async () => {
+    const h = await open(keysView(key(1)))
+    const served = h.fake.edit(TASK, key(1), { title: "v" })
+    emit(h, change("update", key(1), served + 1))
+    await closeBatch()
+    expect(requestsSince(h, h.from)).toHaveLength(1)
+    expect(h.handle.getSnapshot().rows[0]!.state).toBe("stale")
+    for (const [pause, total] of [
+      [500, 2],
+      [1000, 3],
+      [2000, 4],
+    ] as const) {
+      await vi.advanceTimersByTimeAsync(pause - 1)
+      expect(requestsSince(h, h.from)).toHaveLength(total - 1)
+      await vi.advanceTimersByTimeAsync(1)
+      await settle()
+      expect(requestsSince(h, h.from)).toHaveLength(total)
+    }
+    await vi.advanceTimersByTimeAsync(10_000)
+    await settle()
+    expect(requestsSince(h, h.from)).toHaveLength(4)
+    expect(h.handle.getSnapshot().rows[0]!.state).toBe("stale")
+  })
+
+  it("stops re-reading once a read confirms the version", async () => {
+    const h = await open(keysView(key(1)))
+    const served = h.fake.edit(TASK, key(1), { title: "v" })
+    emit(h, change("update", key(1), served + 1))
+    await closeBatch()
+    h.fake.edit(TASK, key(1), { title: "v2" })
+    await vi.advanceTimersByTimeAsync(500)
+    await settle()
+    expect(requestsSince(h, h.from)).toHaveLength(2)
+    expect(h.handle.getSnapshot().rows[0]!.state).not.toBe("stale")
+    await vi.advanceTimersByTimeAsync(10_000)
+    await settle()
+    expect(requestsSince(h, h.from)).toHaveLength(2)
+  })
+
+  it("does not mark stale on an ordinary re-read", async () => {
+    const h = await open(keysView(key(1)))
+    const v = h.fake.edit(TASK, key(1), { title: "v" })
+    emit(h, change("update", key(1), v))
+    await closeBatch()
+    expect(h.handle.getSnapshot().rows[0]!.state).not.toBe("stale")
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(requestsSince(h, h.from)).toHaveLength(1)
+  })
+
+  it("never writes a new key to the store and marks hasNewRows only on the view whose filter it passes", async () => {
+    const h = await open(keysView(key(1)))
+    const match = h.core.view({
+      kind: "full",
+      object: TASK,
+      where: { attribute: "title", op: "eq", value: "fresh" },
+    })
+    const other = h.core.view({
+      kind: "full",
+      object: TASK,
+      where: { attribute: "title", op: "eq", value: "nope" },
+    })
+    match.subscribe(() => {})
+    other.subscribe(() => {})
+    await settle()
+    const rowsBefore = h.inspect.rowCount()
+    const v = h.fake.insert(TASK, taskValues(77, { title: "fresh" }))
+    emit(h, change("create", key(77), v))
+    await closeBatch()
+    expect(match.getSnapshot().hasNewRows).toBe(true)
+    expect(other.getSnapshot().hasNewRows).toBe(false)
+    expect(h.handle.getSnapshot().hasNewRows).toBe(false)
+    expect(h.inspect.rowCount()).toBe(rowsBefore)
+  })
+
+  it("re-reads the section of a mounted owner when the header version grows", async () => {
+    const h = await open(keysView(key(1)))
+    const lines = [{ ref: key(900), qty: 1, lineNumber: 1 }]
+    h.fake.setLines(TASK, key(1), "lines", lines)
+    const section = h.core.view({
+      kind: "section",
+      object: TASK,
+      owner: key(1),
+      section: "lines",
+    })
+    section.subscribe(() => {})
+    await settle()
+    const from = h.fake.requests.length
+    const next = [{ ref: key(901), qty: 2, lineNumber: 1 }]
+    const version = h.fake.setLines(TASK, key(1), "lines", next)
+    emit(h, change("update", key(1), version))
+    await closeBatch()
+    const requests = requestsSince(h, from)
+    // Шапка й ТЧ — один запит із двома частинами.
+    expect(requests).toEqual([2])
+    expect(JSON.stringify(section.getSnapshot().section?.lines)).toContain(
+      key(901)
+    )
+  })
+
+  it("on invalidate re-reads the visible views of the object in one request and marks the invisible ones needsRefresh", async () => {
+    const h = await open(keysView(key(1)))
+    await h.core.preload({ kind: "full", object: TASK })
+    await settle()
+    const from = h.fake.requests.length
+    emit(h, {
+      id: String(++seq),
+      object: task.id,
+      op: "invalidate",
+    })
+    await closeBatch()
+    expect(requestsSince(h, from)).toHaveLength(1)
+    expect(
+      h.core.view({ kind: "full", object: TASK }).getSnapshot()
+    ).toMatchObject({
+      needsRefresh: true,
+    })
+  })
+})
+
+describe("forward compatibility and topics", () => {
+  const invalidated = async (payload: unknown, topic = channel) => {
+    const h = await open(keysView(key(1)))
+    emit(h, payload, topic)
+    await closeBatch()
+    return requestsSince(h, h.from).length
+  }
+
+  it("treats an unknown op as invalidate of the topic object", async () => {
+    expect(
+      await invalidated({ ...change("update", key(1), 1), op: "teleport" })
+    ).toBe(1)
+  })
+
+  it("treats an extra field as invalidate", async () => {
+    expect(
+      await invalidated({ ...change("update", key(1), 1), extra: 1 })
+    ).toBe(1)
+  })
+
+  it("treats an unparsable message of a change channel as invalidate, not as a drop", async () => {
+    expect(await invalidated("garbage")).toBe(1)
+  })
+
+  it("takes a payload for another object as invalidate of the topic object, before judging that object", async () => {
+    const other = "00000000-0000-4000-8000-0000000000ff"
+    expect(
+      await invalidated({ ...change("update", key(1), 1), object: other })
+    ).toBe(1)
+  })
+
+  it("ignores a channel that is not a change channel and a change topic outside the subscriptions: 0 requests", async () => {
+    const h = await open(keysView(key(1)))
+    h.deliver(`simetra-user:${USER}`, { id: "5", op: "rights" })
+    h.deliver(
+      channelTopic({
+        kind: "changes",
+        scopeKindId: SCOPE_KIND_ID,
+        scope: "00000000-0000-4000-8000-0000000000e1",
+        object: task.id,
+      }),
+      change("create", key(60), 9)
+    )
+    h.deliver("not-a-topic", change("create", key(61), 9))
+    await closeBatch()
+    expect(requestsSince(h, h.from)).toHaveLength(0)
+  })
+})
+
+describe("flow control", () => {
+  it("merges the batches closed while a read is in flight into one request after it settles", async () => {
+    const h = await open(keysView(key(1)))
+    h.fake.mode = "manual"
+    const v1 = h.fake.edit(TASK, key(1), { title: "a" })
+    emit(h, change("update", key(1), v1))
+    await closeBatch()
+    expect(h.fake.pending).toHaveLength(1)
+    // Нові ключі: відповідь у польоті їх не покриває, тож відлунням вони не є.
+    for (let i = 0; i < 3; i++) {
+      const v = h.fake.insert(TASK, taskValues(60 + i))
+      emit(h, change("create", key(60 + i), v))
+      await closeBatch()
+    }
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(requestsSince(h, h.from)).toHaveLength(1)
+    h.fake.mode = "auto"
+    h.fake.deliverAll()
+    await settle()
+    expect(requestsSince(h, h.from)).toHaveLength(2)
+    expect(
+      keyReadsSince(h, h.from).at(-1)!.query &&
+        keysOf(keyReadsSince(h, h.from).at(-1)!.query)
+    ).toHaveLength(3)
+  })
+
+  it("sends nothing on a hidden tab, marks needsRefresh and reads once on resume()", async () => {
+    const h = await open(keysView(key(1)))
+    h.core.suspend()
+    const v = h.fake.edit(TASK, key(1), { title: "hidden" })
+    emit(h, change("update", key(1), v))
+    await closeBatch()
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(requestsSince(h, h.from)).toHaveLength(0)
+    expect(h.handle.getSnapshot().needsRefresh).toBe(true)
+    h.core.resume()
+    await settle()
+    expect(requestsSince(h, h.from).length).toBeGreaterThanOrEqual(1)
+    expect(h.handle.getSnapshot().rows[0]).toMatchObject({
+      values: { title: "hidden" },
+    })
+  })
+
+  it("writes and sends nothing after dispose of the session", async () => {
+    const h = await open(keysView(key(1)))
+    const v = h.fake.edit(TASK, key(1), { title: "late" })
+    emit(h, change("update", key(1), v))
+    h.core.close("disposed")
+    await closeBatch()
+    emit(h, change("update", key(1), v + 1))
+    await closeBatch()
+    expect(requestsSince(h, h.from)).toHaveLength(0)
+  })
+})
+
+describe("version epochs", () => {
+  const EA = "a".repeat(64)
+  const EB = "b".repeat(64)
+
+  // Сесія переходить на епоху B через читання іншого ключа: рядок ключа 1
+  // лишається в епосі A з позначкою «не доведено».
+  async function switched() {
+    // Перемикання епохи ставить перечитування виглядів у випадковий момент
+    // вікна: тест тримає його далеко, щоб рахувати лише запити сигналу.
+    vi.spyOn(Math, "random").mockReturnValue(0.99)
+    const h = harness()
+    h.fake.epoch = EA
+    seed(h.fake, 1, 2)
+    const handle = h.core.view(keysView(key(1)))
+    handle.subscribe(() => {})
+    await settle()
+    h.fake.epoch = EB
+    h.core.view(keysView(key(2))).subscribe(() => {})
+    await settle()
+    return { ...h, handle, from: h.fake.requests.length }
+  }
+
+  it("does not take a row of another version epoch for an echo, and writes the answer with its own epoch", async () => {
+    const h = await switched()
+    expect(
+      coreInternals(h.core).objects.get(TASK)!.rows.get(key(1))
+    ).toMatchObject({ versionEpoch: EA })
+    const stored = h.fake.row(TASK, key(1))!.version
+    emit(h, change("update", key(1), stored))
+    await closeBatch()
+    expect(requestsSince(h, h.from)).toHaveLength(1)
+    expect(
+      coreInternals(h.core).objects.get(TASK)!.rows.get(key(1))
+    ).toMatchObject({ versionEpoch: EB })
+  })
+
+  it("takes a row proved in the current epoch with a version not below row_ver for an echo", async () => {
+    const h = await switched()
+    // Читання, що почалось після перемикання, доводить рядки поточної епохи.
+    await h.core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    const from = h.fake.requests.length
+    const stored = h.fake.row(TASK, key(1))!.version
+    emit(h, change("update", key(1), stored))
+    await closeBatch()
+    expect(requestsSince(h, from)).toHaveLength(0)
+  })
+})
+
+describe("own mutation in the journal", () => {
+  it("keeps the queue and the state of the key when a signal re-reads it", async () => {
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const h = await open(keysView(key(1)), 3, (fake) => ({
+      ...fake.server,
+      run: async (request) => {
+        await held
+        return fake.server.run(request)
+      },
+    }))
+    const m = h.core.update(
+      TASK,
+      key(1),
+      { title: "mine" },
+      { expectedVersion: h.fake.row(TASK, key(1))!.version }
+    )
+    await settle()
+    const v = h.fake.edit(TASK, key(1), { title: "theirs" })
+    emit(h, change("update", key(1), v))
+    await closeBatch()
+    // Показується підтверджене значення з сервера, а мутація лишається в черзі.
+    expect(h.handle.getSnapshot().rows[0]).toMatchObject({
+      state: "pending",
+      values: { title: "theirs" },
+      mutation: { id: m.id },
+    })
+    expect(h.inspect.mutations()).toHaveLength(1)
+    release()
+    await settle()
+  })
+})
