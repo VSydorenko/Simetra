@@ -6,6 +6,7 @@ import { signUp } from "./auth"
 import { queryAs, testRoleFor, withRollback } from "./connection"
 import {
   PRIVILEGES,
+  authenticatedRead,
   SCENARIOS,
   claimsOf,
   compiled,
@@ -31,6 +32,18 @@ describe.each(SCENARIOS)("kind table access in schema $schema", (scenario) => {
   })
 
   const deploy = (client: pg.Client) => client.query(sql)
+
+  // Спільне тіло з `access.db.test.ts`: правило діє на обох профілях (#318).
+  it("public read on authenticated: a valid user reads, an invalid one does not", async () => {
+    await withRollback(async (client) => {
+      await deploy(client)
+      const alice = await signUp(client)
+      expect(await authenticatedRead(client, schema, alice)).toEqual({
+        valid: { rows: [{ code: "a" }, { code: "b" }] },
+        invalid: { rows: [] },
+      })
+    })
+  })
 
   it("unscoped table without public read: no access for service_role", async () => {
     await withRollback(async (client) => {

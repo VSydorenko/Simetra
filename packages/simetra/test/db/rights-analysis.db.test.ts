@@ -719,7 +719,7 @@ describe("rights analysis", () => {
     )
   })
 
-  it("public-read: one public_read row, visible to anyone, no existence oracle", async () => {
+  it("public-read: one public_read row, no existence or validity oracle", async () => {
     const expected = [
       {
         row: key("b1"),
@@ -735,10 +735,16 @@ describe("rights analysis", () => {
       .soft(await explain("admin", "bulletin", [key("b1")], key("m1")))
       .toEqual(expected)
     expect
-      .soft(await explain("admin", "bulletin", [key("b1")], key("m5")))
-      .toEqual(expected)
-    expect
       .soft(await explain("admin", "bulletin", [randomUUID()], key("m1")))
+      .toEqual([])
+    // `carrier_match` `authenticated` — дійсність `p_user` (#318), тож
+    // адміністратор A не дізнається, чи існує й чи дійсний користувач лише з B:
+    // учасник B і випадковий uuid дають ту саму порожню відповідь.
+    expect
+      .soft(await explain("admin", "bulletin", [key("b1")], key("m5")))
+      .toEqual([])
+    expect
+      .soft(await explain("admin", "bulletin", [key("b1")], randomUUID()))
       .toEqual([])
   })
 

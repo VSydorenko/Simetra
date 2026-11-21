@@ -30,12 +30,14 @@ import {
   type RightsContract,
 } from "./contracts"
 import { compareStrings } from "./diagnostics"
+import { CURRENT_USER } from "./membership-functions"
 import { commandWriteColumns } from "./rights/command-columns"
 import { COMMAND_FUNCTIONS } from "./rights/command-units"
 import {
   RIGHTS_FUNCTIONS,
   call,
   hasRightsFunctions,
+  hasSessionUser,
   hasVisibleUsers,
   uuidLiteral,
 } from "./rights/functions"
@@ -172,6 +174,25 @@ function commandColumns(
     update: update.map((c) => c.name),
     delete: section || (facts.main && facts.roleAssignments),
   }
+}
+
+/**
+ * Чи відкриває `publicRead` рядки лише дійсному користувачу (спека прав §5.2):
+ * `authenticated` — так, бо сесія з недійсним чи не прив'язаним користувачем
+ * (`current_user_id()` — NULL) не відрізняється від гостя, а гостю об'єкт
+ * закритий; `anon` — ні, гість і так читає. Без функції користувача
+ * (`hasSessionUser`) дійсність судити нічим — рядки відкриті ролі запиту, як і
+ * досі. Одне місце для політики й функції пояснення прав.
+ */
+export function publicReadNeedsUser(
+  contract: Pick<AccessContract, "publicRead">,
+  sessionUser: boolean
+): boolean {
+  return (
+    sessionUser &&
+    contract.publicRead.length > 0 &&
+    contract.publicRead.every((purpose) => purpose === "user")
+  )
 }
 
 /** Гість бачить не більше за користувача: `anon` відкриває обидві ролі запиту. */
@@ -461,6 +482,7 @@ export function buildAccessUnits(
   const bounded = [apiRoles.user, PLATFORM_ROLES.command]
   const rightsOn = hasRightsFunctions(contracts, provider)
   const visibleUsers = hasVisibleUsers(contracts, provider)
+  const sessionUser = hasSessionUser(contracts, provider)
   const rightsById = new Map(contracts.rights.map((c) => [c.objectId, c]))
   const policyLabel = rightsPolicyLabel(contracts)
   return access
@@ -527,7 +549,11 @@ export function buildAccessUnits(
               ...contract.publicRead.map((purpose) => apiRoles[purpose]),
               PLATFORM_ROLES.command,
             ],
-            { using: "true" }
+            {
+              using: publicReadNeedsUser(contract, sessionUser)
+                ? `${CURRENT_USER} IS NOT NULL`
+                : "true",
+            }
           )
         )
       }

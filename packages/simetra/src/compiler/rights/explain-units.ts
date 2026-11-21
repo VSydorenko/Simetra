@@ -8,6 +8,7 @@ import {
 } from "simetra/model"
 import {
   accessPolicyNames,
+  publicReadNeedsUser,
   rightsPolicyLabel,
   scopeSetCall,
 } from "../access-units"
@@ -32,6 +33,7 @@ import {
   analysisGate,
   call,
   hasRightsFunctions,
+  hasSessionUser,
   hasVisibleUsers,
   param,
   userOf,
@@ -163,6 +165,7 @@ function explainBody(
     contracts,
     label: rightsPolicyLabel(contracts),
     visibleUsers: hasVisibleUsers(contracts, provider),
+    sessionUser: hasSessionUser(contracts, provider),
     subject: {
       user: USER,
       valid: userOf(FN, contracts).user,
@@ -211,6 +214,8 @@ interface BranchContext {
   contracts: ExplainContracts
   label: (predicate: RightsPredicate, contract: RightsContract) => string
   visibleUsers: boolean
+  /** Чи є `current_user_id()` (`hasSessionUser`): від нього залежить `publicRead`. */
+  sessionUser: boolean
   /** Користувач рядків пояснення — `p_user`. */
   subject: Subject
 }
@@ -245,8 +250,13 @@ function branch(
     analysisGate(contracts, request),
     // `p_user` мусить належати скоупу рядка (спека прав §5.1): адміністратор A не
     // дізнається фактів користувача, що належить лише B. Рядок `publicRead`
-    // видно кожному — пояснення фактів `p_user` не розкриває.
-    ...(scope !== undefined && !publicRead
+    // видно кожному — пояснення фактів `p_user` не розкриває; крім
+    // `authenticated`: його `carrier_match` — дійсність `p_user`, і без цієї
+    // перевірки адміністратор A дізнався б, чи існує й чи дійсний користувач B.
+    // Нескоуплений об'єкт питає лише глобальний адміністратор, якому видно
+    // всіх користувачів.
+    ...(scope !== undefined &&
+    (!publicRead || publicReadNeedsUser(access, context.sessionUser))
       ? [
           `EXISTS (SELECT 1 FROM ${call(F.scopesOf, [USER])} s WHERE s.scope_kind_id = ${uuidLiteral(scope.scopeKindId)} AND s.scope = ${row(scope.carrier)})`,
         ]
@@ -288,7 +298,7 @@ function explainRows(
   access: AccessContract,
   rights: RightsContract | undefined,
   main: ObjectTable,
-  { contracts, label, visibleUsers }: BranchContext,
+  { contracts, label, visibleUsers, sessionUser }: BranchContext,
   subject: Subject
 ): ExplainRow[] {
   const names = accessPolicyNames(access.table)
@@ -333,7 +343,11 @@ function explainRows(
       kind: "permissive",
       extent: null,
       hasRight: "TRUE",
-      carrierMatch: "TRUE",
+      // Та сама умова, що в політиці (`publicReadNeedsUser`): недійсний
+      // користувач рядків `authenticated`-об'єкта не бачить.
+      carrierMatch: publicReadNeedsUser(access, sessionUser)
+        ? `${subject.valid} IS NOT NULL`
+        : "TRUE",
       roles: NO_ROLES,
     })
   } else if (
