@@ -480,6 +480,28 @@ describe("sql.declaration-check-not-applied in the pipeline", () => {
     expect(found?.params).toMatchObject({ line: 4 })
   })
 
+  // Мутація: `unit.line + before + first.lineno - 1` -> `unit.line + first.lineno - 1`
+  // (усі інші фікстури відкривають `$$` на першому рядку).
+  it("counts the CREATE line and the lines before the body opening", async () => {
+    const lineOf = async (inner: string) => {
+      const all = files("")
+      all.set(
+        SQL,
+        `-- c\n-- c\nCREATE FUNCTION public.f(p_row uuid) RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = ''\nAS\n$tag$${inner}$tag$;\n`
+      )
+      const { diagnostics } = await compile(all)
+      return diagnostics.find(
+        (d) => d.code === "sql.declaration-check-not-applied"
+      )?.params
+    }
+    // CREATE — рядок 3, `$tag$` — рядок 5, `PERFORM 1` — третій рядок тексту тіла.
+    expect(await lineOf("\nBEGIN\n  PERFORM 1;\nEND\n")).toMatchObject({
+      line: 7,
+    })
+    // Без оператора — рядок `CREATE FUNCTION`.
+    expect(await lineOf("\nBEGIN\nEND\n")).toMatchObject({ line: 3 })
+  })
+
   it("a function declared with the proven guard passes for service-only callers", async () => {
     const { diagnostics } = await compile(
       files(
