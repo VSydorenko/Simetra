@@ -64,12 +64,13 @@ function counter(start = 700_000): () => string {
 
 function options(
   existing: ReadonlyMap<string, string>,
-  executeFacts: ExecuteFacts | undefined
+  executeFacts: ExecuteFacts | undefined,
+  idStart?: number
 ) {
   return {
     project: projectOf(existing),
     existing,
-    newId: counter(),
+    newId: counter(idStart),
     schemaPath,
     parse,
     ...(executeFacts === undefined ? {} : { executeFacts }),
@@ -572,7 +573,12 @@ describe("repeated adoption", () => {
     expect(before!.callers).toEqual(["user", "service"])
     const second = await reverseGenerate(
       model(guarded("rpc")),
-      options(first.files, facts(fact("rpc", { grants: ["authenticated"] })))
+      // Інший початок лічильника: збіг `id` не може бути випадковим
+      options(
+        first.files,
+        facts(fact("rpc", { grants: ["authenticated"] })),
+        800_000
+      )
     )
     const [after] = declarationsOf(second, RPC_FUNCTIONS)
     expect(after!.id).toBe(before!.id)
