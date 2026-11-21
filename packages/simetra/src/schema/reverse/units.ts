@@ -36,6 +36,11 @@ export interface UnitsContext {
 export interface UnitFiles {
   files: Map<string, string>
   diagnostics: Diagnostic[]
+  /**
+   * `.sql` кожної функції, що лягла у власний файл (не в sidecar таблиці й не
+   * в колізію шляхів): ідентичність → шлях. Поруч із ним лягає декларація.
+   */
+  functionPaths: Map<string, string>
 }
 
 const qualified = (schema: string, name: string) => `${schema}.${name}`
@@ -348,6 +353,7 @@ export function layoutUnits(
       ? 0
       : 1
   const files = new Map<string, string>()
+  const functionPaths = new Map<string, string>()
   const diagnostics: Diagnostic[] = []
   // Файлова система без регістру злила б `F.sql` і `f.sql` в один файл.
   const folded = new Map<string, string>()
@@ -375,10 +381,13 @@ export function layoutUnits(
       continue
     }
     folded.set(path.toLowerCase(), ordered[0]!.identity)
+    if (!sidecarPaths.has(path))
+      for (const u of ordered)
+        if (u.class === "function") functionPaths.set(u.identity, path)
     files.set(
       path,
       `${ordered.map((u) => terminate(explicitVolatility(u, ctx.parse))).join("\n\n")}\n`
     )
   }
-  return { files, diagnostics }
+  return { files, diagnostics, functionPaths }
 }

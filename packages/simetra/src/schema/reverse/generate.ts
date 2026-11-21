@@ -8,6 +8,7 @@ import {
   hasFixedBody,
   isMovementQuery,
   kindKeyColumns,
+  loadPlpgsqlParser,
   sortDiagnostics,
   platformInstall,
   platformRecogniser,
@@ -40,6 +41,7 @@ import {
   type AttributeCase,
   type CatalogModel,
   type CatalogTable,
+  type CatalogUnit,
   type DatabaseProvider,
 } from "simetra/model"
 import {
@@ -50,6 +52,12 @@ import {
   readExisting,
   type ExistingFolder,
 } from "./identity"
+import {
+  declareFunctions,
+  kindsByLabel,
+  renderFunctionsFile,
+  type KindsByLabel,
+} from "./declarations"
 import type { ExecuteFacts } from "./execute-facts"
 import { columnNames, objectNames } from "./names"
 import {
@@ -620,52 +628,54 @@ export async function reverseGenerate(
   // Виклики тригерної функції рахуються й серед одиниць збережених файлів і
   // збережених підписок: функція, яку кличе ще й тригер чи підписка
   // довідника, не належить одній таблиці.
-  const laid = layoutUnits(
-    model.units.filter((u) => platform?.unit(u) !== true),
-    {
+  const appUnits = model.units.filter((u) => platform?.unit(u) !== true)
+  const layout = (units: readonly CatalogUnit[]) =>
+    layoutUnits(units, {
       parse: o.parse,
       defaultSchema,
       sidecars,
       described: elsewhere.units,
       handlers: elsewhere.handlers,
+    })
+  let laid = layout(appUnits)
+  const fromDatabase = new Set(model.units.map((u) => u.identity))
+  const nonGenerated = (): Map<string, string> => {
+    const kept = new Map<string, string>()
+    for (const [path, text] of o.existing) {
+      if (!isGeneratedPath(path)) kept.set(path, text)
+      else if (
+        path.endsWith(".module.ts") &&
+        generated.has(path.replace(/\.module\.ts$/, META))
+      )
+        kept.set(path, text)
     }
-  )
-  diagnostics.push(...laid.diagnostics)
-  for (const [path, text] of laid.files) generated.set(path, text)
-
+    return kept
+  }
   // Підсумкова тека: файли генератора замінюються повністю; модуль таблиці —
   // ручний файл, тож лишається, поки лишається його таблиця.
-  const merged = new Map<string, string>()
-  for (const [path, text] of o.existing) {
-    if (!isGeneratedPath(path)) merged.set(path, text)
-    else if (
-      path.endsWith(".module.ts") &&
-      generated.has(path.replace(/\.module\.ts$/, META))
+  const assemble = (
+    generatedFiles: ReadonlyMap<string, string>,
+    newId: IdSource
+  ) => {
+    const merged = nonGenerated()
+    for (const [path, text] of generatedFiles) merged.set(path, text)
+    const writable = new Set(
+      [...generatedFiles.keys()].filter((path) => path.endsWith(META))
     )
-      merged.set(path, text)
+    if (!o.existing.has(PROJECT_FILE)) {
+      merged.set(
+        PROJECT_FILE,
+        formatProjectFile({
+          name: o.project.name,
+          defaultSchema: o.project.defaultSchema,
+          database: { provider: o.project.databaseProvider },
+          naming: { attributeCase: o.project.attributeCase },
+        })
+      )
+      writable.add(PROJECT_FILE)
+    }
+    return completeFiles(merged, { schemaPath: o.schemaPath, newId }, writable)
   }
-  for (const [path, text] of generated) merged.set(path, text)
-  const writable = new Set(
-    [...generated.keys()].filter((path) => path.endsWith(META))
-  )
-  if (!o.existing.has(PROJECT_FILE)) {
-    merged.set(
-      PROJECT_FILE,
-      formatProjectFile({
-        name: o.project.name,
-        defaultSchema: o.project.defaultSchema,
-        database: { provider: o.project.databaseProvider },
-        naming: { attributeCase: o.project.attributeCase },
-      })
-    )
-    writable.add(PROJECT_FILE)
-  }
-  const completed = completeFiles(
-    merged,
-    { schemaPath: o.schemaPath, newId: o.newId },
-    writable
-  )
-  const files = completed.files
   // Перелік боргу пише лише зворотна генерація (спека П2 §8.6): весь дослівний SQL поза закритою оболонкою, який вона щойно
   // розклала, — прийнятий стан бази; далі ратчет лише звужується. Пише
   // завжди, і порожнім: тека після introspect має явний перелік. Борг не
@@ -673,18 +683,98 @@ export async function reverseGenerate(
   // так порожні. До переліку йдуть лише одиниці каталогу бази: одиниця,
   // додана в теку, але відсутня в базі, в нього не потрапляє й далі валить
   // компіляцію.
-  const fromDatabase = new Set(model.units.map((u) => u.identity))
-  const debt = await currentDebt(files)
-  if (debt !== undefined)
-    files.set(
-      SQL_DEBT_FILE,
-      sqlDebtText(
-        debt.filter((identity) => fromDatabase.has(identity)),
-        o.schemaPath
+  const withDebt = async (files: Map<string, string>) => {
+    const debt = await currentDebt(files)
+    if (debt !== undefined)
+      files.set(
+        SQL_DEBT_FILE,
+        sqlDebtText(
+          debt.filter((identity) => fromDatabase.has(identity)),
+          o.schemaPath
+        )
       )
+    return files
+  }
+  // Мітки видів теки для `check`: компіляція теки без декларацій; ідентифікатори
+  // чернетки одноразові, її читають лише за контрактами прав
+  const kinds = async (
+    without: ReadonlySet<string>
+  ): Promise<KindsByLabel | undefined> => {
+    const draft = assemble(
+      new Map([...generated, ...laid.files].filter(([p]) => !without.has(p))),
+      () => crypto.randomUUID()
     )
+    const files = await withDebt(draft.files)
+    return kindsByLabel((await compile(files, { repair: true })).model)
+  }
+  const declared = await declareFunctions({
+    units: appUnits,
+    facts: o.executeFacts,
+    provider: folder.project?.databaseProvider ?? o.project.databaseProvider,
+    defaultSchema,
+    parse: o.parse,
+    plpgsql: await loadPlpgsqlParser(),
+    newId: o.newId,
+    schemaPath: o.schemaPath,
+    functionPaths: laid.functionPaths,
+    described: elsewhere.units,
+    existing: o.existing,
+    kinds,
+  })
+  // Гранти задекларованих функцій відтворює генератор: з виходу їх прибрано
+  if (declared.dropped.size > 0)
+    laid = layout(appUnits.filter((u) => !declared.dropped.has(u)))
+  diagnostics.push(...laid.diagnostics, ...declared.diagnostics)
+  for (const [path, text] of laid.files) generated.set(path, text)
+  for (const [path, text] of declared.files) generated.set(path, text)
+
+  const completed = assemble(generated, o.newId)
+  const files = await withDebt(completed.files)
   // Режим ремонту: тека з помилками лише класу ремонту законна й дає модель
-  const compiled = await compile(files, { repair: true })
+  let compiled = await compile(files, { repair: true })
+  // `check`, який відхиляє форма контракту (`sql.declaration-check-form`:
+  // ціль, ключ рядка, `create` на корені), — не помилка бази: запобіжник у
+  // тілі справжній, лише декларація його не виражає. Такий `check` не
+  // пишемо, а причину називаємо, щоб теку не відхиляла помилка поза класом
+  // ремонту.
+  const refused = compiled.diagnostics.filter(
+    (d) => d.code === "sql.declaration-check-form" && declared.files.has(d.file)
+  )
+  const rejected = declared.written.filter(
+    (w) =>
+      w.declaration.check !== undefined &&
+      refused.some(
+        (d) => d.params?.schema === w.schema && d.params?.name === w.name
+      )
+  )
+  if (rejected.length > 0) {
+    for (const w of rejected) {
+      delete w.declaration.check
+      diagnostics.push(
+        diagnostic("introspect.definer-check-unknown", w.path, "", {
+          function: `${w.schema}.${w.name}`,
+          reason: `the check read from the guard does not fit the rights contract (${
+            refused.find(
+              (d) => d.params?.schema === w.schema && d.params?.name === w.name
+            )?.params?.reason
+          })`,
+        })
+      )
+    }
+    for (const path of new Set(rejected.map((w) => w.path)))
+      files.set(
+        path,
+        renderFunctionsFile(
+          path,
+          declared.written
+            .filter((w) => w.path === path)
+            .map((w) => w.declaration),
+          o.schemaPath
+        )
+      )
+    await withDebt(files)
+    compiled = await compile(files, { repair: true })
+  }
   diagnostics.push(...completed.diagnostics, ...compiled.diagnostics)
   if (compiled.model !== undefined)
     diagnostics.push(

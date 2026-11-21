@@ -1,0 +1,669 @@
+import { beforeAll, describe, expect, it } from "vitest"
+import {
+  loadSqlParser,
+  readSqlUnits,
+  type Diagnostic,
+  type SchemaPathResolver,
+  type SqlParser,
+} from "simetra/compiler"
+import {
+  PLATFORM_ROLES,
+  PROVIDER_API_ROLES,
+  PROVIDER_OWNER_ROLES,
+  type CatalogModel,
+  type CatalogUnit,
+  type DatabaseProvider,
+} from "simetra/model"
+import {
+  reverseGenerate,
+  type ExecuteFacts,
+  type FunctionExecuteFact,
+  type ReverseResult,
+} from "simetra/schema"
+import { metaFiles, project, uuid } from "../../compiler/__tests__/helpers"
+import { withRoles } from "../../compiler/__tests__/fixtures/rights"
+
+/**
+ * Декларації definer-функцій у зворотній генерації (спека декларацій функцій
+ * §5.5): факти `EXECUTE` з каталогу бази, `check` із запобіжника, без
+ * дослівних грантів задекларованої функції.
+ */
+
+let parse: SqlParser
+beforeAll(async () => {
+  parse = await loadSqlParser()
+})
+
+const schemaPath: SchemaPathResolver = (file, schemaFile) =>
+  `schemas-of/${file}/${schemaFile}`
+
+const ACTION_ID = "0a1b2c3d-0000-4000-8000-000000000001"
+
+/** Тека з об'єктом `Task` (мітка `task`, скоуп `org`) і словником дій. */
+const FOLDER = () => withRoles()
+
+function projectOf(files: ReadonlyMap<string, string>) {
+  const data = JSON.parse(files.get("project.meta.json")!) as {
+    name: string
+    defaultSchema?: string
+    naming?: { attributeCase?: "camelCase" | "snake_case" }
+    database: { provider: DatabaseProvider }
+  }
+  return {
+    name: data.name,
+    defaultSchema: data.defaultSchema ?? "public",
+    attributeCase: data.naming?.attributeCase ?? "camelCase",
+    databaseProvider: data.database.provider,
+  }
+}
+
+function counter(start = 700_000): () => string {
+  let n = start
+  return () => uuid(++n)
+}
+
+function options(
+  existing: ReadonlyMap<string, string>,
+  executeFacts: ExecuteFacts | undefined
+) {
+  return {
+    project: projectOf(existing),
+    existing,
+    newId: counter(),
+    schemaPath,
+    parse,
+    ...(executeFacts === undefined ? {} : { executeFacts }),
+  }
+}
+
+function units(sql: string): CatalogUnit[] {
+  const read = readSqlUnits(
+    [{ file: "x.sql", text: sql, schema: "" }],
+    parse,
+    []
+  )
+  expect(read.diagnostics).toEqual([])
+  return read.units.map((u) => ({
+    class: u.class,
+    identity: u.identity,
+    schema: u.schema,
+    name: u.name,
+    sql: u.sql,
+    ...(u.class === "function" ? { volatility: "stable" as const } : {}),
+  }))
+}
+
+const model = (sql: string): CatalogModel => ({
+  tables: [],
+  enumTypes: [],
+  units: units(sql),
+})
+
+/** Ролі профілю, які є в базі, і власник провайдера. */
+function profile(provider: DatabaseProvider) {
+  const api = PROVIDER_API_ROLES[provider]
+  return {
+    owner: PROVIDER_OWNER_ROLES[provider],
+    user: api.user,
+    anonymous: api.anonymous,
+    service: api.service,
+    command: PLATFORM_ROLES.command,
+    roles: [
+      api.user,
+      api.anonymous,
+      api.service,
+      PLATFORM_ROLES.command,
+    ].filter((r): r is string => typeof r === "string"),
+  }
+}
+
+interface FactOptions {
+  provider?: DatabaseProvider
+  /** Отримувачі в ACL (ім'я ролі чи `PUBLIC`); власник є завжди. */
+  grants?: string[]
+  /** Ролі профілю з дієвим `EXECUTE`; типово — ті, що названі в `grants`. */
+  executes?: string[]
+  /** Ролі профілю без `USAGE` на схему. */
+  noUsage?: string[]
+  grantor?: string
+  grantable?: boolean
+  identityArguments?: string
+  schema?: string
+}
+
+function fact(name: string, o: FactOptions = {}): FunctionExecuteFact {
+  const p = profile(o.provider ?? "supabase")
+  const grants = o.grants ?? []
+  const via = (role: string) =>
+    grants.includes("PUBLIC") || grants.includes(role)
+  const executes = o.executes ?? p.roles.filter(via)
+  return {
+    schema: o.schema ?? "public",
+    name,
+    identityArguments: o.identityArguments ?? "",
+    owner: p.owner,
+    acl: [
+      { grantee: p.owner, grantor: p.owner, grantable: false },
+      ...grants.map((grantee) => ({
+        grantee,
+        grantor: o.grantor ?? p.owner,
+        grantable: o.grantable ?? false,
+      })),
+    ],
+    executeByRole: Object.fromEntries(
+      p.roles.map((r) => [r, executes.includes(r)])
+    ),
+    schemaUsageByRole: Object.fromEntries(
+      p.roles.map((r) => [r, !(o.noUsage ?? []).includes(r)])
+    ),
+  }
+}
+
+const facts = (...functions: FunctionExecuteFact[]): ExecuteFacts => ({
+  missingRoles: [],
+  functions,
+  crossCheckFailures: [],
+  catalogChanged: false,
+})
+
+const ROW = "p_id"
+
+/** definer-RPC у закритій оболонці з вмістом `body` між `BEGIN` і `END`. */
+const rpc = (name: string, body: string, args = "p_id uuid") =>
+  `CREATE FUNCTION public.${name}(${args}) RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$ BEGIN ${body} END $$;`
+
+const guarded = (name: string, call = `'read', 'task', ${ROW}`) =>
+  rpc(name, `PERFORM simetra.rights_require(${call});`)
+
+const errorsOf = (result: ReverseResult) =>
+  result.diagnostics.filter((d) => d.severity === "error")
+const codes = (list: readonly Diagnostic[]) => list.map((d) => d.code)
+const declarationsOf = (result: ReverseResult, path: string) => {
+  const text = result.files.get(path)
+  expect(text, path).toBeDefined()
+  return (JSON.parse(text!) as { functions: Record<string, unknown>[] })
+    .functions
+}
+const RPC_FUNCTIONS = "sql/public/rpc__uuid.functions.json"
+const warning = (result: ReverseResult, code: string) =>
+  result.diagnostics.filter((d) => d.code === code)
+
+describe("declarations of definer functions", () => {
+  it.each(["supabase", "postgres"] as const)(
+    "%s: PUBLIC gives the roles with a session, drops the role without one with a warning",
+    async (provider) => {
+      const existing = withRoles()
+      // Профіль провайдера задає проєкт теки
+      const files = new Map(existing)
+      files.set(
+        "project.meta.json",
+        JSON.stringify({
+          ...JSON.parse(existing.get("project.meta.json")!),
+          database: { provider },
+        })
+      )
+      const result = await reverseGenerate(
+        model(guarded("rpc")),
+        options(files, facts(fact("rpc", { provider, grants: ["PUBLIC"] })))
+      )
+      expect(errorsOf(result).filter((d) => d.severity === "error")).toEqual([])
+      const [entry] = declarationsOf(result, RPC_FUNCTIONS)
+      // Роль без сесії викликачем не стає; сервісної ролі профіль `postgres` не має
+      expect(entry!.callers).toEqual(
+        provider === "supabase"
+          ? ["user", "service", "command"]
+          : ["user", "command"]
+      )
+      expect(
+        warning(result, "introspect.definer-anonymous-dropped").map(
+          (d) => d.params
+        )
+      ).toEqual([
+        {
+          function: "public.rpc",
+          role: PROVIDER_API_ROLES[provider].anonymous,
+        },
+      ])
+    }
+  )
+
+  it("only the owner can execute: no declaration", async () => {
+    const result = await reverseGenerate(
+      model(
+        `${rpc("rpc", "NULL;")}\nREVOKE EXECUTE ON FUNCTION public.rpc(uuid) FROM PUBLIC, authenticated, anon, service_role;`
+      ),
+      options(FOLDER(), facts(fact("rpc")))
+    )
+    expect(
+      [...result.files.keys()].filter((p) => p.endsWith(".functions.json"))
+    ).toEqual([])
+    expect(errorsOf(result)).toEqual([])
+  })
+
+  it("only the user role: callers [user], the id is generated", async () => {
+    const result = await reverseGenerate(
+      model(guarded("rpc")),
+      options(FOLDER(), facts(fact("rpc", { grants: ["authenticated"] })))
+    )
+    const [entry] = declarationsOf(result, RPC_FUNCTIONS)
+    expect(entry).toMatchObject({
+      function: { schema: "public", name: "rpc" },
+      callers: ["user"],
+    })
+    expect(entry!.id).toMatch(/^[0-9a-f-]{36}$/)
+    expect(codes(errorsOf(result))).toEqual([])
+  })
+
+  it("EXECUTE without USAGE on the schema does not make a caller", async () => {
+    // Компілятор додав би `USAGE` разом з виведеним грантом і розширив доступ
+    const result = await reverseGenerate(
+      model(guarded("rpc")),
+      options(
+        FOLDER(),
+        facts(
+          fact("rpc", {
+            grants: ["authenticated", "service_role"],
+            noUsage: ["authenticated"],
+          })
+        )
+      )
+    )
+    expect(declarationsOf(result, RPC_FUNCTIONS)[0]!.callers).toEqual([
+      "service",
+    ])
+  })
+
+  it("the grants of a declared function are not written, the compile has no generated-grant", async () => {
+    const result = await reverseGenerate(
+      model(
+        [
+          guarded("rpc"),
+          "REVOKE EXECUTE ON FUNCTION public.rpc(uuid) FROM PUBLIC;",
+          "GRANT EXECUTE ON FUNCTION public.rpc(uuid) TO authenticated;",
+          "GRANT EXECUTE ON FUNCTION public.rpc(uuid) TO service_role;",
+        ].join("\n")
+      ),
+      options(
+        FOLDER(),
+        facts(fact("rpc", { grants: ["authenticated", "service_role"] }))
+      )
+    )
+    expect(
+      [...result.files.keys()].filter((p) => p.includes("grant__"))
+    ).toEqual([])
+    expect(codes(result.diagnostics)).not.toContain("sql.generated-grant")
+    expect(errorsOf(result)).toEqual([])
+  })
+
+  it("a grant of a function that is not declared stays verbatim", async () => {
+    // Оболонка без `SET search_path`: декларації немає, гранти лишаються, а
+    // компіляція називає недекларовану definer-функцію (клас ремонту)
+    const open = rpc("rpc", "NULL;").replace(" SET search_path = ''", "")
+    const result = await reverseGenerate(
+      model(
+        `${open}\nGRANT EXECUTE ON FUNCTION public.rpc(uuid) TO authenticated;`
+      ),
+      options(FOLDER(), facts(fact("rpc", { grants: ["authenticated"] })))
+    )
+    expect(
+      [...result.files.keys()].filter((p) => p.endsWith(".functions.json"))
+    ).toEqual([])
+    expect([...result.files.keys()].some((p) => p.includes("grant__"))).toBe(
+      true
+    )
+    expect(codes(errorsOf(result))).toEqual(["sql.definer-caller-unchecked"])
+    expect(result.changes.length).toBeGreaterThan(0)
+  })
+
+  it("an overloaded definer function is not declared, its grants stay", async () => {
+    const result = await reverseGenerate(
+      model(
+        [
+          rpc("rpc", "NULL;"),
+          rpc("rpc", "NULL;", "p_id uuid, p_other uuid"),
+          "GRANT EXECUTE ON FUNCTION public.rpc(uuid) TO authenticated;",
+        ].join("\n")
+      ),
+      options(
+        FOLDER(),
+        facts(
+          fact("rpc", {
+            grants: ["authenticated"],
+            identityArguments: "p_id uuid",
+          }),
+          fact("rpc", { identityArguments: "p_id uuid, p_other uuid" })
+        )
+      )
+    )
+    expect(
+      [...result.files.keys()].filter((p) => p.endsWith(".functions.json"))
+    ).toEqual([])
+    expect(codes(errorsOf(result))).toContain("sql.definer-caller-unchecked")
+  })
+})
+
+describe("the check of a declaration", () => {
+  const ROW_OK = (result: ReverseResult) =>
+    declarationsOf(result, RPC_FUNCTIONS)[0]!
+
+  it("a guard on a row gives check.row, the compile proves it", async () => {
+    const result = await reverseGenerate(
+      model(guarded("rpc")),
+      options(FOLDER(), facts(fact("rpc", { grants: ["authenticated"] })))
+    )
+    expect(ROW_OK(result).check).toEqual({
+      action: "read",
+      object: { kind: "Document", name: "Task" },
+      row: ROW,
+    })
+    expect(
+      codes(result.diagnostics).filter((c) => c.startsWith("sql.declaration"))
+    ).toEqual([])
+    expect(warning(result, "introspect.definer-check-unknown")).toEqual([])
+  })
+
+  it("a scope guard gives check.scope", async () => {
+    const result = await reverseGenerate(
+      model(
+        rpc(
+          "rpc",
+          `PERFORM simetra.rights_require_scope('create', 'task', ${ROW});`
+        )
+      ),
+      options(FOLDER(), facts(fact("rpc", { grants: ["authenticated"] })))
+    )
+    expect(ROW_OK(result).check).toEqual({
+      action: "create",
+      object: { kind: "Document", name: "Task" },
+      scope: ROW,
+    })
+    expect(
+      codes(result.diagnostics).filter((c) => c.startsWith("sql.declaration"))
+    ).toEqual([])
+  })
+
+  it("a body without a guard: no check, a warning, the compile asks for it", async () => {
+    const result = await reverseGenerate(
+      model(rpc("rpc", "NULL;")),
+      options(FOLDER(), facts(fact("rpc", { grants: ["authenticated"] })))
+    )
+    expect(ROW_OK(result).check).toBeUndefined()
+    expect(
+      warning(result, "introspect.definer-check-unknown").map((d) => d.params)
+    ).toEqual([
+      {
+        function: "public.rpc",
+        reason: "no call guard of the proven form as the first statement",
+      },
+    ])
+    expect(codes(errorsOf(result))).toEqual(["sql.declaration-check-missing"])
+  })
+
+  it("a kind label that is no object of the folder: no check, the reason names the label", async () => {
+    const result = await reverseGenerate(
+      model(guarded("rpc", `'read', 'ghost', ${ROW}`)),
+      options(FOLDER(), facts(fact("rpc", { grants: ["authenticated"] })))
+    )
+    expect(ROW_OK(result).check).toBeUndefined()
+    expect(
+      warning(result, "introspect.definer-check-unknown").map(
+        (d) => d.params?.reason
+      )
+    ).toEqual(["kind label ghost is not an object of the folder"])
+  })
+
+  it("an action that is no action of the object: no check", async () => {
+    const result = await reverseGenerate(
+      model(guarded("rpc", `'${ACTION_ID}', 'task', ${ROW}`)),
+      options(FOLDER(), facts(fact("rpc", { grants: ["authenticated"] })))
+    )
+    expect(ROW_OK(result).check).toBeUndefined()
+    expect(
+      warning(result, "introspect.definer-check-unknown").map(
+        (d) => d.params?.reason
+      )
+    ).toEqual([`action ${ACTION_ID} is not an action of Document Task`])
+  })
+
+  it("a check the contract refuses is dropped with a warning, not left as an error", async () => {
+    // `Task` має носіїв, тож `check` без цілі — `sql.declaration-check-form`
+    // (помилка поза класом ремонту): тека не мусить через це не записатися
+    const result = await reverseGenerate(
+      model(guarded("rpc", `'read', 'task', NULL`)),
+      options(FOLDER(), facts(fact("rpc", { grants: ["authenticated"] })))
+    )
+    expect(ROW_OK(result).check).toBeUndefined()
+    expect(
+      warning(result, "introspect.definer-check-unknown").map(
+        (d) => d.params?.reason
+      )
+    ).toEqual([
+      "the check read from the guard does not fit the rights contract (targetRequired)",
+    ])
+    expect(codes(result.diagnostics)).not.toContain(
+      "sql.declaration-check-form"
+    )
+  })
+
+  it("a service-only function needs no check and no warning", async () => {
+    const result = await reverseGenerate(
+      model(rpc("rpc", "NULL;")),
+      options(FOLDER(), facts(fact("rpc", { grants: ["service_role"] })))
+    )
+    expect(ROW_OK(result).callers).toEqual(["service"])
+    expect(warning(result, "introspect.definer-check-unknown")).toEqual([])
+    expect(errorsOf(result)).toEqual([])
+  })
+
+  it("no arguments and SETOF uuid: a platform form candidate", async () => {
+    const result = await reverseGenerate(
+      model(
+        "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT gen_random_uuid() $$;"
+      ),
+      options(FOLDER(), facts(fact("org_ids", { grants: ["authenticated"] })))
+    )
+    expect(
+      warning(result, "introspect.definer-platform-form-candidate").map(
+        (d) => d.params
+      )
+    ).toEqual([{ function: "public.org_ids" }])
+  })
+})
+
+describe("the ACL of a definer function", () => {
+  const cases: {
+    name: string
+    fact: FactOptions
+    role: string
+    reason: RegExp
+  }[] = [
+    {
+      name: "a role of the application",
+      fact: { grants: ["app_reader"] },
+      role: "app_reader",
+      reason: /not a role of the provider profile/,
+    },
+    {
+      name: "the signal consumer role",
+      fact: { grants: [PLATFORM_ROLES.signalConsumer] },
+      role: PLATFORM_ROLES.signalConsumer,
+      reason: /not a role of the provider profile/,
+    },
+    {
+      name: "a grant option of a profile role",
+      fact: { grants: ["authenticated"], grantable: true },
+      role: "authenticated",
+      reason: /grant option/,
+    },
+    {
+      name: "another grantor",
+      fact: { grants: ["authenticated"], grantor: "somebody" },
+      role: "authenticated",
+      reason: /granted by somebody/,
+    },
+  ]
+  it.each(cases)(
+    "$name is an error, nothing is written, declared or not",
+    async (c) => {
+      for (const sql of [
+        guarded("rpc"),
+        // Поза закритою оболонкою декларації немає, але грант не мовчить (Р9)
+        rpc("rpc", "NULL;").replace(" SET search_path = ''", ""),
+      ]) {
+        const result = await reverseGenerate(
+          model(sql),
+          options(FOLDER(), facts(fact("rpc", c.fact)))
+        )
+        const found = result.diagnostics.filter(
+          (d) => d.code === "introspect.definer-foreign-grant"
+        )
+        expect(found.map((d) => d.params?.role)).toEqual([c.role])
+        expect(String(found[0]!.params?.reason)).toMatch(c.reason)
+        expect(result.changes).toEqual([])
+      }
+    }
+  )
+})
+
+describe("facts are required for a definer function", () => {
+  it("no facts at all: an error, never 'no callers'", async () => {
+    const result = await reverseGenerate(
+      model(guarded("rpc")),
+      options(FOLDER(), undefined)
+    )
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "introspect.definer-acl-changed")
+        .map((d) => d.params)
+    ).toEqual([{ check: "fact", function: "public.rpc" }])
+    expect(result.changes).toEqual([])
+  })
+
+  it("facts of another function: an error", async () => {
+    const result = await reverseGenerate(
+      model(guarded("rpc")),
+      options(FOLDER(), facts(fact("other", { grants: ["authenticated"] })))
+    )
+    expect(codes(errorsOf(result))).toContain("introspect.definer-acl-changed")
+    expect(result.changes).toEqual([])
+  })
+
+  it("a function that is not definer needs no fact", async () => {
+    const result = await reverseGenerate(
+      model(
+        "CREATE FUNCTION public.plain() RETURNS int LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT 1 $$;"
+      ),
+      options(FOLDER(), undefined)
+    )
+    expect(errorsOf(result)).toEqual([])
+  })
+})
+
+describe("repeated adoption", () => {
+  it("keeps the id of the function, the callers come from the new ACL", async () => {
+    const first = await reverseGenerate(
+      model(guarded("rpc")),
+      options(
+        FOLDER(),
+        facts(fact("rpc", { grants: ["authenticated", "service_role"] }))
+      )
+    )
+    const [before] = declarationsOf(first, RPC_FUNCTIONS)
+    expect(before!.callers).toEqual(["user", "service"])
+    const second = await reverseGenerate(
+      model(guarded("rpc")),
+      options(first.files, facts(fact("rpc", { grants: ["authenticated"] })))
+    )
+    const [after] = declarationsOf(second, RPC_FUNCTIONS)
+    expect(after!.id).toBe(before!.id)
+    expect(after!.callers).toEqual(["user"])
+    expect(errorsOf(second)).toEqual([])
+  })
+
+  it("a function that lost every caller loses its declaration file", async () => {
+    const first = await reverseGenerate(
+      model(rpc("rpc", "NULL;")),
+      options(FOLDER(), facts(fact("rpc", { grants: ["service_role"] })))
+    )
+    const second = await reverseGenerate(
+      model(rpc("rpc", "NULL;")),
+      options(first.files, facts(fact("rpc")))
+    )
+    expect(second.files.has(RPC_FUNCTIONS)).toBe(false)
+    expect(
+      second.changes.map((c) => [c.path, c.content === null])
+    ).toContainEqual([RPC_FUNCTIONS, true])
+  })
+
+  describe("a declaration of a kept file", () => {
+    const KEPT_SQL = "catalogs/Item/Item.sql"
+    const KEPT_FUNCTIONS = "catalogs/Item/Item.functions.json"
+    const kept = (callers: string[]) => {
+      const files = metaFiles({
+        "project.meta.json": project({
+          name: "Kept",
+          defaultSchema: "public",
+          naming: { attributeCase: "snake_case" },
+        }),
+        "catalogs/Item/Item.meta.json": {
+          id: uuid(1),
+          kind: "Catalog",
+          name: "Item",
+          physicalName: "item",
+          kindLabel: "item",
+          schema: "public",
+          scope: "none",
+          attributes: [],
+        },
+      })
+      files.set(
+        KEPT_SQL,
+        "CREATE FUNCTION public.item_rpc() RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;\n"
+      )
+      files.set(
+        KEPT_FUNCTIONS,
+        JSON.stringify({
+          functions: [{ id: uuid(2), function: { name: "item_rpc" }, callers }],
+        })
+      )
+      return files
+    }
+    const run = (callers: string[], granted: string[]) =>
+      reverseGenerate(
+        model(
+          "CREATE FUNCTION public.item_rpc() RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;"
+        ),
+        options(kept(callers), facts(fact("item_rpc", { grants: granted })))
+      )
+
+    it("callers equal to the database: no drift, the file is not rewritten", async () => {
+      const result = await run(["service"], ["service_role"])
+      expect(codes(errorsOf(result))).not.toContain(
+        "introspect.definer-callers-drift"
+      )
+      expect(result.files.get(KEPT_FUNCTIONS)).toBe(
+        kept(["service"]).get(KEPT_FUNCTIONS)
+      )
+    })
+
+    it("callers wider than the database: introspect.definer-callers-drift", async () => {
+      // Відкликане в базі право не повертає застосування збереженої декларації
+      const result = await run(["service", "user"], ["service_role"])
+      expect(
+        result.diagnostics
+          .filter((d) => d.code === "introspect.definer-callers-drift")
+          .map((d) => [d.file, d.params])
+      ).toEqual([
+        [
+          KEPT_FUNCTIONS,
+          {
+            function: "public.item_rpc",
+            declared: "service, user",
+            actual: "service",
+          },
+        ],
+      ])
+      expect(result.changes).toEqual([])
+    })
+  })
+})

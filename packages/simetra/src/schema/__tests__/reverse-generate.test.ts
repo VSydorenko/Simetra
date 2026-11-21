@@ -24,7 +24,11 @@ import {
   type CatalogUnit,
   type FunctionVolatility,
 } from "simetra/model"
-import { reverseGenerate, type ReverseResult } from "simetra/schema"
+import {
+  reverseGenerate,
+  type ExecuteFacts,
+  type ReverseResult,
+} from "simetra/schema"
 import {
   expectClean,
   catalog,
@@ -65,12 +69,16 @@ function options(
     attributeCase?: AttributeCase
     databaseProvider?: DatabaseProvider
     reference?: CatalogModel
+    executeFacts?: ExecuteFacts
   } = {}
 ) {
   return {
     ...(overrides.reference === undefined
       ? {}
       : { reference: overrides.reference }),
+    ...(overrides.executeFacts === undefined
+      ? {}
+      : { executeFacts: overrides.executeFacts }),
     project: {
       name: overrides.name ?? "App",
       defaultSchema: overrides.defaultSchema ?? "app",
@@ -165,6 +173,42 @@ function units(sql: string): CatalogUnit[] {
     sql: u.sql,
     ...(u.class === "function" ? { volatility: volatilityOf(u.sql) } : {}),
   }))
+}
+
+/**
+ * Факти `EXECUTE` definer-функцій, чий ACL — лише власник (плюс `granted`):
+ * без факту definer-функція в теці — помилка, а не «без викликачів».
+ */
+function executeFacts(
+  names: readonly string[],
+  granted: Record<string, boolean> = {}
+): ExecuteFacts {
+  return {
+    missingRoles: [],
+    crossCheckFailures: [],
+    catalogChanged: false,
+    functions: names.map((qualifiedName) => {
+      const [schema, name] = qualifiedName.split(".") as [string, string]
+      return {
+        schema,
+        name,
+        identityArguments: "",
+        owner: "postgres",
+        acl: [
+          { grantee: "postgres", grantor: "postgres", grantable: false },
+          ...Object.keys(granted).map((grantee) => ({
+            grantee,
+            grantor: "postgres",
+            grantable: false,
+          })),
+        ],
+        executeByRole: granted,
+        schemaUsageByRole: Object.fromEntries(
+          Object.keys(granted).map((role) => [role, true])
+        ),
+      }
+    }),
+  }
 }
 
 function model(partial: Partial<CatalogModel>): CatalogModel {
@@ -955,7 +999,7 @@ describe("reverseGenerate", () => {
             "REVOKE EXECUTE ON FUNCTION app.f() FROM PUBLIC, authenticated, anon;"
         ),
       }),
-      options(kept)
+      options(kept, { executeFacts: executeFacts(["app.f"]) })
     )
     expect(first.diagnostics).toEqual([])
     const existing = new Map(first.files)
@@ -2294,7 +2338,10 @@ describe("reverseGenerate", () => {
           ...units([...foreign, OWN_GRANT].join("\n")),
         ],
       }),
-      options(kept, { reference: await renderedFolder(kept) })
+      options(kept, {
+        reference: await renderedFolder(kept),
+        executeFacts: executeFacts(["app.my_orgs"], { anon: true }),
+      })
     )
     const files = [
       "sql/app/grant__function__app_my_orgs__anon__execute.sql",

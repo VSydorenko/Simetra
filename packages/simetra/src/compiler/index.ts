@@ -38,8 +38,10 @@ export {
   platformFunctionSignatures,
   readSqlUnits,
   withoutLocations,
+  FUNCTION_CLASSES,
   type SqlSource,
   type SqlUnit,
+  type VerbatimUnit,
 } from "./sql/units"
 export {
   functionKey,
@@ -111,7 +113,9 @@ export {
   ownsTarget,
   platformGrantTargets,
 } from "./function-execute"
-export { extensionSchema } from "./sql/closed-forms"
+export { closedShellProblem, extensionSchema } from "./sql/closed-forms"
+export { isSecurityDefiner, isTriggerFunction } from "./sql/definer-reads"
+export { FUNCTIONS_SCHEMA_FILE } from "./json-schema"
 export { loadPlpgsqlParser, type PlpgsqlParser } from "./sql/plpgsql"
 export {
   statementTargets,
