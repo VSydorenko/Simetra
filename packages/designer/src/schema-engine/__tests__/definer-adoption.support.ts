@@ -29,6 +29,7 @@ import { withRoles } from "../../../../simetra/src/compiler/__tests__/fixtures/r
 import {
   superuserClient,
   testProvider,
+  testRoleFor,
   testRoleName,
   testSuperuserUrl,
 } from "../../../../simetra/test/support"
@@ -612,15 +613,6 @@ export function describeDefinerAdoption(): void {
       return found
     }
 
-    const asSuperuser = async (url: string, sql: string) => {
-      const client = await superuserClient(new URL(url).pathname.slice(1))
-      try {
-        await client.query(sql)
-      } finally {
-        await client.end()
-      }
-    }
-
     it.each([
       ["a closed shell", FN],
       ["a function outside the closed shell", OPEN_SHELL],
@@ -667,10 +659,20 @@ export function describeDefinerAdoption(): void {
           url,
           `GRANT EXECUTE ON FUNCTION app.rpc() TO "${API.user}" WITH GRANT OPTION`
         )
-        await asSuperuser(
-          url,
-          `GRANT USAGE ON SCHEMA app TO "${API.user}"; SET ROLE "${API.user}"; GRANT EXECUTE ON FUNCTION app.rpc() TO "${PLATFORM_ROLES.command}"; RESET ROLE`
-        )
+        // Грантор — роль з опцією передачі: `SET LOCAL ROLE` у транзакції,
+        // ціль у дозволеній формі `testRoleFor(…)` (охоронець перемикань ролі)
+        const client = await superuserClient(new URL(url).pathname.slice(1))
+        try {
+          await client.query("BEGIN")
+          await client.query(`GRANT USAGE ON SCHEMA app TO "${API.user}"`)
+          await client.query(`SET LOCAL ROLE ${testRoleFor("user")}`)
+          await client.query(
+            `GRANT EXECUTE ON FUNCTION app.rpc() TO "${PLATFORM_ROLES.command}"`
+          )
+          await client.query("COMMIT")
+        } finally {
+          await client.end()
+        }
       })
       expect(found.map((f) => [f.role, f.reason])).toContainEqual([
         PLATFORM_ROLES.command,
