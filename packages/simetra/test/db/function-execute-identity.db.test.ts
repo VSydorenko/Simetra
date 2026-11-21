@@ -161,6 +161,30 @@ describe("EXECUTE of a function with quoted name parts in Postgres", () => {
       },
     },
     {
+      // Лише регістр типу: без лапок `"X"` зводиться до чужого домену `x`, і
+      // грант тихо влучає в чуже перевантаження `f(x)`.
+      part: "an argument type in upper case beside a foreign overload of the lower-case type",
+      make: () => {
+        const s = lowerSchema()
+        return {
+          schemas: [s],
+          foreign: [
+            `CREATE SCHEMA ${s};`,
+            `CREATE DOMAIN ${s}.x AS int;`,
+            closedFn(`${s}.f`, `a ${s}.x`),
+          ].join("\n"),
+          sql:
+            `CREATE DOMAIN ${s}."X" AS int;\n` +
+            closedFn(`${s}.f`, `a ${s}."X"`),
+          schema: s,
+          name: "f",
+          call: `SELECT ${s}.f(1::${s}."X")`,
+          declared: `${s}.f(${s}."X")`,
+          other: `${s}.f(${s}.x)`,
+        }
+      },
+    },
+    {
       // Без лапок `"x,y"` став би двома аргументами `x, y` — чужою функцією.
       part: "an argument type with a comma beside a foreign two-argument overload",
       make: () => {
