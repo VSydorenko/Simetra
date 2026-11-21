@@ -1206,6 +1206,7 @@ export function createCore(options: {
     scheduled.clear()
     wave = undefined
     unsettled.clear()
+    gaps.clear()
     scheduler.stop()
     staleObjects.clear()
     receiver?.stop()
@@ -1274,9 +1275,14 @@ export function createCore(options: {
   // Строк хвилі — доданок `schedulerDue`, тож власного таймера немає: на
   // прихованій вкладці хвилю бере `resume()`.
   let wave:
-    { at: number; readonly channels: Map<string, ObjectName> } | undefined
+    | {
+        at: number
+        // `gen` — покоління розриву каналу в мить приєднання.
+        readonly channels: Map<string, { object: ObjectName; gen: number }>
+      }
+    | undefined
   let lastWaveAt: number | undefined
-  function joinWave(channel: string, object: ObjectName) {
+  function joinWave(channel: string, object: ObjectName, gen: number) {
     if (!session.token().valid || staleObjects.has(object)) return
     if (wave === undefined) {
       const at = Math.floor(Math.random() * REJOIN_JITTER_MS) + now()
@@ -1290,8 +1296,7 @@ export function createCore(options: {
         channels: new Map(),
       }
     }
-    leaveWave(channel)
-    wave.channels.set(channel, object)
+    wave.channels.set(channel, { object, gen })
     scheduler.request()
   }
 
@@ -1305,16 +1310,13 @@ export function createCore(options: {
     const token = session.token()
     const startedAt = now()
     lastWaveAt = startedAt
-    // Покоління каналів на старті: розрив, зняття чи нове приєднання під час
-    // хвилі роблять її відповідь неактуальною для цього каналу.
-    const born = new Map(
-      [...fired.channels.keys()].map((c) => [c, generationOf(c)])
-    )
     core.requestVersion()
     core.requestRights()
     const invisible: { object: ObjectName; spec: ViewSpec }[] = []
     const reads: Promise<void>[] = []
-    for (const object of new Set(fired.channels.values())) {
+    for (const object of new Set(
+      [...fired.channels.values()].map((c) => c.object)
+    )) {
       if (staleObjects.has(object)) continue
       const views = activeViews(writerContext, object)
       for (const view of views)
@@ -1333,9 +1335,8 @@ export function createCore(options: {
       }, token)
     void Promise.all(reads).then(() => {
       if (!token.valid) return
-      for (const [channel, object] of fired.channels)
-        if (generationOf(channel) === born.get(channel))
-          unsettled.set(channel, { object, startedAt })
+      for (const [channel, joined] of fired.channels)
+        unsettled.set(channel, { ...joined, startedAt })
       liftSettled()
     })
   }
@@ -1343,7 +1344,10 @@ export function createCore(options: {
   // Канал, чию «розрив» хвиля не зняла (вигляд в `error`, невидимий вигляд, читання
   // до хвилі): позначка лишається до наступного успішного перечитування (Р10),
   // тож чекає тут. Окремого таймера й запитів немає: перевірка — після `commit`.
-  const unsettled = new Map<string, { object: ObjectName; startedAt: number }>()
+  const unsettled = new Map<
+    string,
+    { object: ObjectName; gen: number; startedAt: number }
+  >()
   let liftPlanned = false
   const viewsFresh = (object: ObjectName, since: number) =>
     activeViews(writerContext, object).every((view) => {
@@ -1358,30 +1362,40 @@ export function createCore(options: {
   function liftSettled() {
     liftPlanned = false
     if (!session.token().valid) return
-    const settled = [...unsettled].filter(([, u]) =>
-      viewsFresh(u.object, u.startedAt)
-    )
-    if (settled.length === 0) return
-    for (const [channel] of settled) unsettled.delete(channel)
-    core.commit((w) => {
-      for (const [channel] of settled) w.clearDisconnected(channel)
-    }, session.token())
-  }
-  // Покоління каналу росте на кожен розрив, зняття й нове приєднання: запис
-  // `unsettled` і відповідь хвилі старшого поколінця «розрив» нового проміжку не
-  // знімають. Без каналу (розрив усього з'єднання) — усі канали.
-  const generations = new Map<string, number>()
-  let generationAll = 0
-  const generationOf = (channel: string) =>
-    (generations.get(channel) ?? 0) + generationAll
-  function leaveWave(channel?: string) {
-    if (channel === undefined) {
-      generationAll++
-      unsettled.clear()
-      return
+    for (const [channel, u] of [...unsettled]) {
+      // Новий розрив каналу після приєднання: запис застарів, його не знімати.
+      if (gapOf(channel) !== u.gen) unsettled.delete(channel)
+      else if (viewsFresh(u.object, u.startedAt)) {
+        unsettled.delete(channel)
+        liftDisconnect(channel, u.gen)
+      }
     }
-    generations.set(channel, (generations.get(channel) ?? 0) + 1)
+  }
+
+  // Покоління розриву каналу росте на кожен розрив і на зняття каналу; без
+  // каналу (розрив усього з'єднання) — усі канали. 🔴 ЄДИНИЙ вхід зняття позначки
+  // «розрив» — `liftDisconnect(channel, gen)`: його `gen` береться в мить
+  // приєднання каналу, і зняття діє, лише поки розриву після нього не було.
+  // Прямого `clearDisconnected` деінде в приймачі й хвилі немає — шлях, що його
+  // викличе, зніме позначку новішого розриву.
+  const gaps = new Map<string, number>()
+  let gapsAll = 0
+  const gapOf = (channel: string) => (gaps.get(channel) ?? 0) + gapsAll
+  function markGap(channel?: string) {
+    if (channel === undefined) gapsAll++
+    else gaps.set(channel, (gaps.get(channel) ?? 0) + 1)
+  }
+  function liftDisconnect(channel: string, gen: number) {
+    if (gapOf(channel) !== gen || !session.token().valid) return
+    core.commit((w) => w.clearDisconnected(channel), session.token())
+  }
+  // Канал знято (перерахунок підписок, відмова `auth`): його позначки
+  // знімаються разом з ним, а будь-яке зняття з минулого приєднання втрачає
+  // чинність.
+  function dropChannel(channel: string) {
+    markGap(channel)
     unsettled.delete(channel)
+    liftDisconnect(channel, gapOf(channel))
   }
 
   // Рантайм чи ядро закривається, коли транспорт відмовив назавжди (`final`).
@@ -1628,7 +1642,10 @@ export function createCore(options: {
       commit: (fn, token) => core.commit(fn, token),
       filterCollator: collator,
       joinWave,
-      leaveWave,
+      gapOf,
+      markGap,
+      liftDisconnect,
+      dropChannel,
       requestVersion: () => core.requestVersion(),
       connectionRefused,
     })

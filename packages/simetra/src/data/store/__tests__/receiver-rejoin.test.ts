@@ -613,6 +613,48 @@ describe("a newer gap is not lifted by an older wave", () => {
     expect(states(h)).toEqual(["stale"])
   })
 
+  it.each([
+    ["of the channel", { kind: "transport", channel } as const],
+    ["without a channel", { kind: "transport" } as const],
+  ])(
+    "keeps the mark when a new gap %s comes before the jitter of the wave",
+    async (_, error) => {
+      const h = await open(keysView(key(1)))
+      h.transport.fail({ kind: "transport", channel })
+      h.transport.join(channel, false)
+      h.transport.fail(error)
+      await advance(REJOIN_JITTER_MS)
+      expect(requestsSince(h)).toHaveLength(1)
+      expect(states(h)).toEqual(["stale"])
+    }
+  )
+
+  it("keeps the mark when a new gap comes during the quiet time after recovered: true", async () => {
+    const h = await open(keysView(key(1)))
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, true)
+    h.transport.fail({ kind: "transport", channel })
+    await advance(RECOVERED_SETTLE_MS)
+    expect(states(h)).toEqual(["stale"])
+  })
+
+  it("keeps the mark when a new gap comes before the batch of recovered signals closes", async () => {
+    const h = await open(keysView(key(1)))
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, true)
+    const version = h.fake.edit(TASK, key(1), { title: "new" })
+    h.transport.emit(channel, {
+      id: "8001",
+      object: task.id,
+      op: "update",
+      keys: { id: key(1) },
+      row_ver: version,
+    })
+    h.transport.fail({ kind: "transport", channel })
+    await advance(QUIET_MS)
+    expect(states(h)).toEqual(["stale"])
+  })
+
   it("keeps the mark while a view that was read by the wave fails later (the error guard)", async () => {
     const h = await withHiddenView()
     h.transport.fail({ kind: "transport", channel })
