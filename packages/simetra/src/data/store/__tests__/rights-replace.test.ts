@@ -323,6 +323,35 @@ describe("the pass on a snapshot replacement", () => {
     })
   })
 
+  it("drops lines of a known owner scope whose header the store no longer holds", async () => {
+    const { core, fake } = harness()
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const header = watch(core.view(card(1)))
+    const owned = core.view(section(1))
+    watch(owned)
+    await settle()
+    expect(linesOf(core, 1)?.scope).toBe(S)
+    // Картку закрито й звільнено: шапки в сховищі немає, а рядки ТЧ тримає
+    // вигляд ТЧ зі скоупом шапки на мить запису. Пару тримають лише вони, тож
+    // прибирає їх лише `purge` пари в ТЧ — ні `clearOwner` прибраних шапок,
+    // ні правило рядків без відомого скоупу.
+    header.unsubscribe()
+    vi.advanceTimersByTime(2_000)
+    await settle()
+    expect(rowsOf(core).get(key(1))).toBeUndefined()
+    expect(linesOf(core, 1)?.scope).toBe(S)
+    grant(fake, ONLY_T())
+    fake.setVisibleScopes([T])
+    core.requestRights()
+    await settle()
+    expect(linesOf(core, 1)).toBeUndefined()
+    expect(owned.getSnapshot()).toMatchObject({
+      status: "purged",
+      reason: "access-changed",
+    })
+  })
+
   it("keeps a pair held by a container right only, and purges it when that goes too", async () => {
     const { core, fake } = harness()
     seed(fake, 1, 1)
