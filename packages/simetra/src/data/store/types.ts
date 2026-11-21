@@ -461,7 +461,10 @@ export interface Writer {
   ): "applied" | "discarded"
   purge(
     object: ObjectName,
-    target: { keys: readonly Key[] } | { scope: string | null }
+    target: { keys: readonly Key[] } | { scope: string | null },
+    // `rights`: purge із заміни знімка прав — не рухає позначку purge
+    // об'єкта, бо читання дозволених пар у польоті лишаються чинними.
+    options?: { readonly rights?: boolean }
   ): void
   markStale(object: ObjectName, keys: readonly Key[], minVersion: number): void
   /**

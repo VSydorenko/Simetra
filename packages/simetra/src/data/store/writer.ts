@@ -286,7 +286,7 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       return "applied"
     },
 
-    purge(object, target) {
+    purge(object, target, options) {
       scope.assert()
       const o = ctx.objectOf(object)
       let dropped: Key[]
@@ -324,7 +324,11 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       for (const key of [...dropped, ...cleared]) rowViews.touch(o.name, key)
       forget(ctx, scope, o, new Set(dropped), new Set(purged))
       ctx.invalidateTail(o)
-      ctx.purges.set(o.name, (ctx.purges.get(o.name) ?? 0) + 1)
+      // Прохід заміни знімка прав ховає пару надгробком і бар'єром: читання,
+      // що стартували раніше, не принесуть її рядків, а відповіді для
+      // дозволених пар чинні — повторювати їх не треба.
+      if (options?.rights !== true)
+        ctx.purges.set(o.name, (ctx.purges.get(o.name) ?? 0) + 1)
     },
 
     writeBack(object, rows, epoch, readEpoch) {

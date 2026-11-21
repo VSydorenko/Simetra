@@ -748,7 +748,7 @@ export function createCore(options: {
           try {
             const writer = createWriter(writerContext, scope)
             for (const { object, scope: pair } of pairs)
-              writer.purge(object, { scope: pair })
+              writer.purge(object, { scope: pair }, { rights: true })
             for (const { o, owner } of headerless)
               ops.clearOwner(scope, o, owner)
           } finally {

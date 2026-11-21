@@ -1053,6 +1053,7 @@ describe("the rights part of SSR", () => {
     await settle()
     // Втрата пари й причина — у відповіді того самого пакета: version,
     // rights без known і два читання; другої частини `rights` немає.
+    expect(fake.requests).toHaveLength(from + 1)
     expect(fake.requests[from]).toBe(6)
     expect(fake.rightsReads).toEqual([undefined, undefined])
     expect(lost.getSnapshot()).toMatchObject({

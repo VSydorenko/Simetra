@@ -518,6 +518,31 @@ describe("the snapshot barrier", () => {
     expect(linesOf(core, 1)).toBeUndefined()
   })
 
+  it("a re-read in flight across the rights purge writes the rows of the allowed pair, not of the lost one, and is not repeated", async () => {
+    const { core, fake } = harness()
+    seed(fake, 1, 1)
+    fake.insert(TASK, taskValues(2, { org: T }))
+    const handle = core.view(keys(1, 2))
+    watch(handle)
+    await settle()
+    fake.hold = (read) => keysOf(read.query).includes(key(1))
+    void core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    const late = fake.take()
+    grant(fake, ONLY_T())
+    fake.setVisibleScopes([T])
+    core.requestRights()
+    await settle()
+    expect(rowsOf(core).get(key(1))).toBeUndefined()
+    const reads = readsOf(fake, TASK).length
+    late.answer()
+    await settle()
+    // Відповідь несла обидва рядки: пара S ховається надгробком, T пишеться.
+    expect(rowsOf(core).get(key(1))).toBeUndefined()
+    expect(rowsOf(core).get(key(2))).toBeDefined()
+    expect(readsOf(fake, TASK)).toHaveLength(reads)
+  })
+
   it("keeps a purged row out of a late answer even after the right returns", async () => {
     const { core, fake } = harness()
     seed(fake, 1, 1)
