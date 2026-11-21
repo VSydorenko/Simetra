@@ -518,7 +518,7 @@ describe("the snapshot barrier", () => {
     expect(linesOf(core, 1)).toBeUndefined()
   })
 
-  it("a re-read in flight across the rights purge writes the rows of the allowed pair, not of the lost one, and is not repeated", async () => {
+  it("a re-read in flight across the rights purge writes the rows of the allowed pair, not of the lost one, is not repeated and does not show hasNewRows", async () => {
     const { core, fake } = harness()
     seed(fake, 1, 1)
     fake.insert(TASK, taskValues(2, { org: T }))
@@ -535,12 +535,82 @@ describe("the snapshot barrier", () => {
     await settle()
     expect(rowsOf(core).get(key(1))).toBeUndefined()
     const reads = readsOf(fake, TASK).length
-    late.answer()
+    // Відповідь на мить старту несе обидва рядки: S ховається бар'єром.
+    late.answer(late.issuedAt)
     await settle()
-    // Відповідь несла обидва рядки: пара S ховається надгробком, T пишеться.
     expect(rowsOf(core).get(key(1))).toBeUndefined()
     expect(rowsOf(core).get(key(2))).toBeDefined()
     expect(readsOf(fake, TASK)).toHaveLength(reads)
+    expect(handle.getSnapshot().hasNewRows).toBe(false)
+  })
+
+  it.each([
+    ["full", { kind: "full", object: TASK } as ViewSpec],
+    ["window", { kind: "window", object: TASK } as ViewSpec],
+  ])(
+    "a %s re-read in flight across the rights purge does not show hasNewRows for the lost pair",
+    async (_, spec) => {
+      const { core, fake } = harness()
+      seed(fake, 1, 1)
+      fake.insert(TASK, taskValues(2, { org: T }))
+      const handle = core.view(spec)
+      watch(handle)
+      await settle()
+      fake.hold = () => true
+      void core.revalidate(TASK, { visibleOnly: false })
+      await settle()
+      const held = fake.pending.length
+      expect(held).toBeGreaterThan(0)
+      grant(fake, ONLY_T())
+      fake.setVisibleScopes([T])
+      core.requestRights()
+      await settle()
+      fake.hold = undefined
+      for (let i = 0; i < held; i++) {
+        const read = fake.take()
+        read.answer(read.issuedAt)
+      }
+      await settle()
+      expect(rowsOf(core).get(key(1))).toBeUndefined()
+      expect(handle.getSnapshot().hasNewRows).toBe(false)
+    }
+  )
+
+  it("a window page emptied by the rights purge: the other pages are refreshed by exactly one more read", async () => {
+    const { core, fake } = harness({ limits: { windowPage: 2 } })
+    seed(fake, 1, 2)
+    for (const n of [3, 4]) fake.insert(TASK, taskValues(n, { org: T }))
+    const handle = core.view({ kind: "window", object: TASK })
+    watch(handle)
+    await settle()
+    handle.loadAfter()
+    await settle()
+    expect(handle.getSnapshot().rows.map((r) => r.key)).toEqual([
+      key(1),
+      key(2),
+      key(3),
+      key(4),
+    ])
+    fake.hold = () => true
+    void core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    const held = fake.pending.length
+    grant(fake, ONLY_T())
+    fake.setVisibleScopes([T])
+    core.requestRights()
+    await settle()
+    fake.hold = undefined
+    const reads = readsOf(fake, TASK).length
+    for (let i = 0; i < held; i++) {
+      const read = fake.take()
+      read.answer(read.issuedAt)
+    }
+    await settle()
+    expect(handle.getSnapshot().rows.map((r) => r.key)).toEqual([
+      key(3),
+      key(4),
+    ])
+    expect(readsOf(fake, TASK)).toHaveLength(reads + 1)
   })
 
   it("keeps a purged row out of a late answer even after the right returns", async () => {

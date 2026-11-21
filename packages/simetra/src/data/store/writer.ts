@@ -1,6 +1,6 @@
 import { ZERO_UUID, channelTopic, type CatalogEntry } from "simetra/model"
 import type { Defects } from "./defects"
-import { effectiveEpoch, heldEpoch } from "./epoch"
+import { effectiveEpoch, heldEpoch, pairId } from "./epoch"
 import type { ObjectState } from "./forms"
 import {
   completeIncluded,
@@ -8,7 +8,7 @@ import {
   readIncluded,
   type Included,
 } from "./include"
-import { visibleRow, type RowEntry } from "./object-store"
+import { scopeOf, visibleRow, type RowEntry } from "./object-store"
 import {
   aliveIncluded,
   applyIncluded,
@@ -458,6 +458,23 @@ function rebuildLayout(ctx: WriterContext, s: Subset) {
   s.layoutSet = new Set(s.layout)
 }
 
+// Рядок пари, поховану з моменту старту читання (надгробок purge чи бар'єр
+// знімка прав): його не пише ні `put`, ні він не «новий» для вигляду, бо
+// `hasNewRows` виказав би, що заборонений рядок існує.
+const lostSince = (
+  ctx: WriterContext,
+  o: ObjectState,
+  row: ServerRow,
+  startEpoch: number
+) =>
+  ctx.session.epochs.buriedSince(
+    pairId(o.name, scopeOf(o.entry, row.values)),
+    startEpoch
+  )
+
+// Вікна, чий прохід нічого не записав, бо purge прибрав їхню сторінку.
+const pageDropped = new WeakSet<Subset>()
+
 /**
  * Перечитування вигляду за правилом стабільності (§6.5): `apply` пише лише
  * ключі складу на мить `commit`, зниклі — `removed` з епохою старту, ключі
@@ -478,7 +495,7 @@ function applyKeys(
     for (const row of rows) {
       got.add(row.key)
       if (s.owned.has(row.key)) ctx.ops.put(scope, o, row, startEpoch, false)
-      else fresh = true
+      else if (!lostSince(ctx, o, row, startEpoch)) fresh = true
     }
     for (const key of requested) {
       if (!got.has(key) && s.owned.has(key))
@@ -629,7 +646,10 @@ async function readFullAgain(
         // Рядок у власності, але поза складом, увійшов у фільтр — новий.
         if (!s.layoutSet.has(row.key) && values !== undefined)
           fresh ||= form.test(values)
-      } else if ((order.get(row.key) ?? Infinity) < cut)
+      } else if (
+        (order.get(row.key) ?? Infinity) < cut &&
+        !lostSince(ctx, o, row, startEpoch)
+      )
         fresh ||= form.test(row.values)
     }
     for (const key of composition) {
@@ -760,13 +780,18 @@ async function readWindowAgain(
         start.pages.length === 0
           ? now.pages.length > 0
           : !pages.every((page) => alive.has(page.generation))
-      )
+      ) {
+        // Сторінку, що лишилась порожньою після purge, прибрано з тим самим
+        // ланцюжком: прохід нічого не писав, тож його повторює `revalidateViews`.
+        if (start.pages.length > 0) pageDropped.add(s)
         return
+      }
     }
     let fresh = false
     for (const row of got.values()) {
       if (s.owned.has(row.key)) ctx.ops.put(scope, o, row, startEpoch, false)
-      else if (!beyond.has(row.key)) fresh = true
+      else if (!beyond.has(row.key) && !lostSince(ctx, o, row, startEpoch))
+        fresh = true
     }
     let needsRefresh = false
     for (const key of composition) {
@@ -1217,6 +1242,10 @@ export async function revalidateViews(
                 s.status = "error"
                 s.error = EPOCH_UNAVAILABLE
               } else discarded.push(s)
+              continue
+            }
+            if (pageDropped.delete(s)) {
+              again.push(s)
               continue
             }
             s.refreshedAt = startedAt
