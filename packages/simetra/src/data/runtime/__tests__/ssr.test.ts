@@ -126,7 +126,8 @@ function serverWire(fake: FakeSource): Wire & { transport: DataTransport } {
       type: string
       query?: { object: string }
     }[]
-    const queries = parts.filter((part) => part.type === "query")
+    // Частини `rights` відповідає сам фейк, разом із читаннями.
+    const queries = parts.filter((part) => part.type !== "version")
     const read =
       queries.length === 0
         ? { items: [] }
@@ -149,7 +150,7 @@ function serverWire(fake: FakeSource): Wire & { transport: DataTransport } {
           },
         }
       const item = read.items[next++]
-      return wire.refuse.has(part.query!.object)
+      return part.type === "query" && wire.refuse.has(part.query!.object)
         ? {
             ok: false,
             error: { code: "command.stale-client", object: part.query!.object },
@@ -248,6 +249,75 @@ describe("the snapshot of a runtime", () => {
     const { runtime } = runtimeOver(serverWorld())
     runtime.dispose()
     expect(() => runtime.dehydrate()).toThrow(TypeError)
+  })
+})
+
+describe("the rights part with the rightsSnapshot flag", () => {
+  const rightsCatalog = (): ClientCatalog => ({
+    ...catalogOf(OBJECTS),
+    rightsSnapshot: true,
+  })
+  const partsOf = (body: DataRequest) =>
+    (body.request.type === "read" ? body.request.items : []) as {
+      type: string
+      known?: string
+    }[]
+
+  it("the first packet of the server runtime carries rights without known; the snapshot has no rights data and names only the subject", async () => {
+    const fake = serverWorld()
+    const server = runtimeOver(fake, { catalog: rightsCatalog() })
+    server.core.view(card(1)).subscribe(() => {})
+    void server.runtime.preload(list)
+    await settle()
+    const first = partsOf(server.wire.calls[0]!)
+    expect(first[0]).toEqual({ type: "rights" })
+    expect(first.filter((part) => part.type === "rights")).toHaveLength(1)
+    const snapshot = server.runtime.dehydrate()
+    server.runtime.dispose()
+    expect(snapshot.meta).toEqual({ subject: SUBJECT_A })
+    const text = JSON.stringify(snapshot)
+    for (const sentinel of ["scopeSets", "rightsVersion", "rights"])
+      expect(text).not.toContain(sentinel)
+  })
+
+  it("the reconciliation after hydration is one request: rights without known, version and the re-reads", async () => {
+    const fake = serverWorld()
+    const server = runtimeOver(fake, { catalog: rightsCatalog() })
+    for (const spec of [card(1), list])
+      server.core.view(spec).subscribe(() => {})
+    await settle()
+    const snapshot = wired(server.runtime.dehydrate())
+    server.runtime.dispose()
+    const a = runtimeOver(fake, { catalog: rightsCatalog() })
+    a.runtime.hydrate(snapshot)
+    a.core.view(card(1)).subscribe(() => {})
+    a.core.view(list).subscribe(() => {})
+    a.runtime.endHydration()
+    await settle()
+    expect(a.wire.calls).toHaveLength(1)
+    const parts = partsOf(a.wire.calls[0]!)
+    expect(parts.map((part) => part.type)).toEqual([
+      "rights",
+      "version",
+      "query",
+      "query",
+    ])
+    expect(parts[0]).toEqual({ type: "rights" })
+  })
+
+  it("never takes a snapshot of another subject", async () => {
+    const fake = serverWorld()
+    const server = runtimeOver(fake, { catalog: rightsCatalog() })
+    server.core.view(card(1)).subscribe(() => {})
+    await settle()
+    const snapshot = wired(server.runtime.dehydrate())
+    server.runtime.dispose()
+    const other = runtimeOver(fake, {
+      catalog: rightsCatalog(),
+      subject: SUBJECT_B,
+    })
+    expect(() => other.runtime.hydrate(snapshot)).toThrow(TypeError)
+    expect(other.wire.calls).toHaveLength(0)
   })
 })
 
