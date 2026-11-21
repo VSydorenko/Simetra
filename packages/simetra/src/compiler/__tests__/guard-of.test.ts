@@ -417,16 +417,28 @@ describe("sql.declaration-check-not-applied in the pipeline", () => {
     )
     expect(ok).toBe(false)
     expect(found).toHaveLength(1)
+    // Р5: діагностика вказує на `.sql` функції й рядок першого оператора
+    // тіла (рядок 1 — `CREATE FUNCTION`, тіло `$$BEGIN` — на ньому ж, а
+    // `BEGIN` перший оператор блоку, тож рядок 1), а не на запис декларації.
     expect(found[0]).toMatchObject({
-      file: FUNCTIONS,
-      pointer: "/functions/0",
-      params: { schema: "public", name: "f", reason: "firstStatement" },
+      file: SQL,
+      pointer: "",
+      params: {
+        schema: "public",
+        name: "f",
+        reason: "firstStatement",
+        line: 1,
+      },
     })
+    expect(found[0]!.file).not.toBe(FUNCTIONS)
     expect(isRepairError(found[0]!)).toBe(true)
   })
 
-  // Мутація: звузити фільтр `checkDeclaredGuards` до `callers.includes("user")`.
+  // Мутація: повернути пропуск без `user`/`command` у `checkDeclaredGuards`
+  // (спека §5.2, Р4: судить кожну декларацію з `check`, зокрема `[]` і service).
   it.each<{ callers: SqlFunctionDeclaration["callers"] }>([
+    { callers: [] },
+    { callers: ["service"] },
     { callers: ["command"] },
     { callers: ["command", "service"] },
     { callers: ["user", "service"] },
@@ -457,9 +469,23 @@ describe("sql.declaration-check-not-applied in the pipeline", () => {
     expect(ok).toBe(false)
   })
 
-  it("a service-only caller is not judged", async () => {
+  it("the line of the first body statement follows the body, not the CREATE FUNCTION", async () => {
     const { diagnostics } = await compile(
-      files("BEGIN PERFORM 1; END", ["service"])
+      files("\n-- note\nBEGIN\n  PERFORM 1;\nEND")
+    )
+    const found = diagnostics.find(
+      (d) => d.code === "sql.declaration-check-not-applied"
+    )
+    // Тіло починається з `$$` на рядку 1; `PERFORM 1` — четвертий рядок.
+    expect(found?.params).toMatchObject({ line: 4 })
+  })
+
+  it("a function declared with the proven guard passes for service-only callers", async () => {
+    const { diagnostics } = await compile(
+      files(
+        "BEGIN PERFORM simetra.rights_require('read', 'task', p_row); END",
+        ["service"]
+      )
     )
     expect(
       diagnostics.filter((d) => d.code === "sql.declaration-check-not-applied")

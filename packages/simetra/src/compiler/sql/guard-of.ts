@@ -2,7 +2,7 @@ import type { SqlFunctionDeclaration } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { RightsContract } from "../contracts"
 import type { ParsedObject } from "../stages/files"
-import { ON_BEHALF_OF_USER, isSecurityDefiner } from "./definer-reads"
+import { isSecurityDefiner } from "./definer-reads"
 import {
   checkedContract,
   hasUuidInParameter,
@@ -217,8 +217,28 @@ export function guardOf(
 }
 
 /**
- * Суддя запобіжника виклику над задекларованими definer-функціями з
- * викликачами від імені користувача й з `check`: функція, чиє тіло не
+ * Рядок першого оператора тіла plpgsql (`lineno` рахується від початку тексту
+ * тіла, як у `firstDynamicSqlLine`); без оператора чи для іншої мови —
+ * рядок `CREATE FUNCTION`.
+ */
+function bodyStartLine(unit: VerbatimUnit, plpgsql: PlpgsqlParser): number {
+  const parsed = plpgsql(unit.sql)
+  const first = parsed.ok ? parsed.fn?.author.firstStatement : undefined
+  let text: string | undefined
+  try {
+    text = functionBodyText(unit.sql)
+  } catch {
+    text = undefined
+  }
+  const at = text === undefined ? -1 : unit.sql.indexOf(text)
+  if (first === undefined || at < 0) return unit.line
+  const before = unit.sql.slice(0, at).split("\n").length - 1
+  return unit.line + before + first.lineno - 1
+}
+
+/**
+ * Суддя запобіжника виклику над кожною задекларованою definer-функцією з
+ * `check` (хоч би які викликачі, зокрема `[]` і лише `service`): функція, чиє тіло не
  * доводить форму, — `sql.declaration-check-not-applied` (клас ремонту).
  * Судить лише декларації, що пройшли `checkDeclaredChecks`: контракт об'єкта
  * тут існує, а ціль відповідає підпису.
@@ -231,14 +251,14 @@ export function checkDeclaredGuards(
   plpgsql: PlpgsqlParser,
   parse: SqlParser
 ): Diagnostic[] {
-  return declared.flatMap(({ declaration, file, pointer, unit, key }) => {
+  return declared.flatMap(({ declaration, unit, key }) => {
     const check = declaration.check
-    if (
-      check === undefined ||
-      !isSecurityDefiner(unit, units) ||
-      !declaration.callers.some((c) => ON_BEHALF_OF_USER.has(c))
-    )
-      return []
+    // Викликачів не питаємо: декларація з `check` на definer-функції без
+    // викликачів від імені користувача (`callers: []`, лише `service`) теж
+    // мусить довести перевірку — інакше вона мовчки лишається словом без дії,
+    // а `withoutFirstGuard` звільняє від `platform-function-call` саме
+    // доведений запобіжник.
+    if (check === undefined || !isSecurityDefiner(unit, units)) return []
     const contract = checkedContract(check, objects, rights)
     // Сюди доходять лише декларації, що пройшли `check-form` (є контракт);
     // тиха згода тут відкрила б обхід, тож відсутність — внутрішня помилка.
@@ -251,11 +271,14 @@ export function checkDeclaredGuards(
     return proof.ok
       ? []
       : [
-          diagnostic("sql.declaration-check-not-applied", file, pointer, {
+          // Вказуємо на `.sql` функції й рядок першого оператора тіла: саме
+          // там автор виправляє тіло (запису декларації виправляти нічого).
+          diagnostic("sql.declaration-check-not-applied", unit.file, "", {
             schema: key.schema,
             name: key.name,
             function: `${key.schema}.${key.name}`,
             reason: proof.reason,
+            line: bodyStartLine(unit, plpgsql),
           }),
         ]
   })
