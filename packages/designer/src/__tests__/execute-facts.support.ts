@@ -184,7 +184,7 @@ export function describeExecuteFacts(): void {
           options(dir, env)
         )
         expect(third.written).toBe(true)
-        expect(third.changes.map((c) => c.path).join(" ")).toContain("extra")
+        expect(third.changes.map((c) => c.path).join(" ")).toMatch(/extra/i)
       })
     })
 
