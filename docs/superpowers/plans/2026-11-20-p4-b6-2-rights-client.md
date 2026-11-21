@@ -142,7 +142,7 @@ B5b-3 підписується на канали прав. `useCan` — у `src/
 реакція на `session.sleep`, відмови),
 `src/data/centrifugo/index.ts` (`since` у заміні підписки), тести
 `store/__tests__/receiver-rights.test.ts`, `data/centrifugo/__tests__/centrifugo.test.ts`;
-еквівалентність `test/db/rights-predicates.*` (І5); стенд
+стенд
 `packages/designer/src/__tests__/signal-receiver.*`; спека §8.6 — число виміру.
 Готово: unit з фейковим каналом — підписки Р11 (без `rightsSnapshot` —
 жодного каналу прав); сигнал будь-якого каналу прав — 1 запит `rights` на вікно джитера,
@@ -158,8 +158,6 @@ B5b-3 підписується на канали прав. `useCan` — у `src/
 впираються в `AUTHORIZE_CHANNELS_MAX`.
 Після: задача 6. Перевірка: `run-tests unit --filter receiver-rights.test.ts`,
 `run-tests unit --filter centrifugo.test.ts`,
-`run-tests db --filter rights-predicates.db.test.ts`,
-`run-tests db-supabase --filter rights-predicates.supabase.db.test.ts`,
 `run-tests db --filter signal-receiver.db.test.ts`,
 `run-tests db-supabase --filter signal-receiver.supabase.db.test.ts`.
 
