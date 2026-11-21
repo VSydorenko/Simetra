@@ -178,6 +178,25 @@ function-execute`, `run-tests db --filter <новий файл>` зелені; �
 (без `quoteIdent` для однієї частини) робить DB-тест червоним — описати в
 звіті задачі.
 
+### Задача 1c — червоний CI після задач 1–2
+
+(після 2; додана виконавицею, не з приймання). CI на PR #322 після задачі 1:
+(а) `test/generated-fresh.test.ts` — `runtime-catalog.json` шаблону
+`create-simetra-app` застарів (хеш ідентичностей змінився) → `pnpm generate`;
+той самий корінь у e2e шаблону (`command.model-mismatch`); (б) designer
+`plan.postgres.db.test.ts` «returns a changed provision trigger…» —
+`plan.identity-trigger-locked` на `better_auth."user"`: перевірка замка
+тригера ідентичності (`schema/apply/plan.ts`) порівнює сиру ідентичність
+тригера з новою (ім'я `user` — ключове слово, тепер у лапках) → через
+`identity.ts`, з unit-випадком таблиці, чиє ім'я потребує лапок. Мінорні з
+рев'ю задачі 2: DB-рядок І1 для тихого шляху типу (домен `s."X"` поруч із
+чужим `s.x`, `f(a s."X")` проти чужої `s.f(s.x)`; мутація без `quoteIdent`
+типу має червоніти на `proacl` чужої чи на пробі без гранту, не на помилці
+розгортання); рядки І7 для форми платформи й функції значень виміру, якщо
+форма може мати аргумент. Готово: `run-tests unit --filter generated-fresh`,
+`run-tests db --filter plan.postgres` (designer), `run-tests db --filter
+function-execute-identity`, `run-tests unit --changed` зелені.
+
 ### Задача 3 — споживачі компілятора
 
 (після 1). `definer-reads.ts`,
