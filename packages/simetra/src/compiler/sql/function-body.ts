@@ -646,8 +646,7 @@ function withoutFirstGuard(
 ): ReferencedName[] {
   const body = plpgsql(unit.sql)
   const first = body.ok ? body.fn?.author.firstStatement : undefined
-  const [e0, ...r0] = first?.expressions ?? []
-  if (!(first?.type === "perform" && e0?.perform === true && r0.length === 0 && textCalls(e0.query, parse).some(isGuardCall))) return [...calls]
+  if (firstStatementOk(first, check, parse) === undefined) return [...calls]
   const at = calls.findIndex(isGuardCall)
   return calls.filter((_, index) => index !== at)
 }
