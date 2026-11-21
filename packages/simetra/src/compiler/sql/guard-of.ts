@@ -98,7 +98,13 @@ const guardFunctionOf = (
     ? RIGHTS_FUNCTIONS.requireScope
     : RIGHTS_FUNCTIONS.require
 
-function firstStatementOk(
+/**
+ * Форма першого оператора без контрактів (спека декларацій функцій §5.2):
+ * `PERFORM` єдиного прямого виклику функції запобіжника форми цілі `check`.
+ * Правильність аргументів судить `guardOf`; ту саму форму вимагає виняток Р9
+ * в `withoutFirstGuard` — одне визначення на обох.
+ */
+export function firstStatementOk(
   statement: PlpgsqlStatement | undefined,
   check: NonNullable<SqlFunctionDeclaration["check"]>,
   parse: SqlParser

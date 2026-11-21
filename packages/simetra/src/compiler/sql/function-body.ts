@@ -1,9 +1,14 @@
 import type { Node } from "libpg-query"
-import { PLATFORM_SCHEMA, type Project } from "simetra/model"
+import {
+  PLATFORM_SCHEMA,
+  type Project,
+  type SqlFunctionDeclaration,
+} from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import { PLATFORM_READ_FUNCTIONS } from "../platform/names"
 import { RIGHTS_FUNCTIONS } from "../rights/functions"
 import type { DeclaredFunction } from "./declarations"
+import { firstStatementOk } from "./guard-of"
 import type { ParsedObject } from "../stages/files"
 import {
   closedModuleOwners,
@@ -586,8 +591,12 @@ export function checkPlatformCalls(
   const allowed = new Set(
     PLATFORM_READ_FUNCTIONS.map((f) => `${f.schema}.${f.name}`)
   )
-  const guarded = new Set(
-    declared.flatMap((d) => (d.declaration.check === undefined ? [] : [d.unit]))
+  const guarded = new Map(
+    declared.flatMap((d) =>
+      d.declaration.check === undefined
+        ? []
+        : [[d.unit, d.declaration.check] as const]
+    )
   )
   return forbiddenCalls(
     units,
@@ -600,9 +609,10 @@ export function checkPlatformCalls(
     },
     (unit) => {
       const calls = callsOf(unit, parse, plpgsql)
-      return guarded.has(unit)
-        ? withoutFirstGuard(calls, unit, parse, plpgsql)
-        : calls
+      const check = guarded.get(unit)
+      return check === undefined
+        ? calls
+        : withoutFirstGuard(calls, unit, check, parse, plpgsql)
     }
   )
 }
@@ -621,25 +631,22 @@ const isGuardCall = (call: ReferencedName) =>
 
 /**
  * Виклики одиниці без одного виклику запобіжника, який робить перший оператор
- * блоку автора, коли це `PERFORM` (Р9). Виклик запобіжника лишається в усіх
+ * блоку автора, коли це `PERFORM` у доведеній формі (Р9), хоч би які були
+ * викликачі: `guardOf` судить лише декларації з викликачами user/command, тож
+ * `PERFORM … WHERE false` службової функції без форми не звільнялося б. Виклик запобіжника лишається в усіх
  * інших місцях: другий у тілі, у вкладеному блоці, у виразі, а також другий
  * усередині самого першого оператора. Правильність аргументів судить `guardOf`.
  */
 function withoutFirstGuard(
   calls: readonly ReferencedName[],
   unit: VerbatimUnit,
+  check: NonNullable<SqlFunctionDeclaration["check"]>,
   parse: SqlParser,
   plpgsql: PlpgsqlParser
 ): ReferencedName[] {
   const body = plpgsql(unit.sql)
   const first = body.ok ? body.fn?.author.firstStatement : undefined
-  const [expression, ...rest] = first?.expressions ?? []
-  const skipped =
-    first?.type === "perform" &&
-    expression?.perform === true &&
-    rest.length === 0 &&
-    textCalls(expression.query, parse).some(isGuardCall)
-  if (!skipped) return [...calls]
+  if (firstStatementOk(first, check, parse) === undefined) return [...calls]
   const at = calls.findIndex(isGuardCall)
   return calls.filter((_, index) => index !== at)
 }

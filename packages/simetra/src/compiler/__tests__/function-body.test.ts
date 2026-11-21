@@ -857,7 +857,11 @@ describe("sql.platform-function-call: guard functions", () => {
   /** Декларація `f` з `check` (чи без); `declare: false` — без декларації. */
   const compiled = (
     sql: string,
-    options: { declare?: boolean; check?: boolean } = {}
+    options: {
+      declare?: boolean
+      check?: boolean
+      callers?: string[]
+    } = {}
   ) => {
     const all = withRoles()
     all.set(SQL, sql)
@@ -869,7 +873,7 @@ describe("sql.platform-function-call: guard functions", () => {
             {
               id: uuid(7902),
               function: { name: "f" },
-              callers: ["user"],
+              callers: options.callers ?? ["user"],
               ...(options.check === false ? {} : { check: CHECK }),
             },
           ],
@@ -963,6 +967,75 @@ describe("sql.platform-function-call: guard functions", () => {
     )
     expect(found).toHaveLength(1)
     expect(found[0]!.params).toMatchObject({ unit: "view:public.v" })
+  })
+
+  // Мутація: `some(isGuardCall)` замість доведеної форми — виняток Р9 діє для
+  // будь-якого першого `PERFORM` із викликом запобіжника, хоч `guardOf` судить
+  // лише декларації з викликачами user/command.
+  it.each([
+    {
+      name: "PERFORM … WHERE false",
+      sql: fn(`BEGIN PERFORM ${GUARD} WHERE false; END`),
+    },
+    {
+      name: "PERFORM … FROM",
+      sql: fn(`BEGIN PERFORM ${GUARD} FROM public.t; END`),
+    },
+    {
+      name: "a CASE wrapper",
+      sql: fn(`BEGIN PERFORM CASE WHEN false THEN ${GUARD} END; END`),
+    },
+    {
+      name: "a second target",
+      sql: fn(`BEGIN PERFORM ${GUARD}, 1; END`),
+    },
+  ])("service-only: $name is not the proven form → error", async ({ sql }) => {
+    const found = calls(
+      (await compiled(sql, { callers: ["service"] })).diagnostics
+    )
+    expect(found.map((d) => d.params)).toMatchObject([
+      { function: "simetra.rights_require" },
+    ])
+  })
+
+  it("service-only: the exact PERFORM form is allowed", async () => {
+    const found = calls(
+      (
+        await compiled(fn(`BEGIN PERFORM ${GUARD}; END`), {
+          callers: ["service"],
+        })
+      ).diagnostics
+    )
+    expect(found).toEqual([])
+  })
+
+  it("service-only: the scope guard form of a scope check is allowed, the row guard is not", async () => {
+    const all = withRoles()
+    all.set(
+      SQL,
+      fn(`BEGIN PERFORM simetra.rights_require('read', 'task', p_row); END`)
+    )
+    all.set(
+      FUNCTIONS,
+      JSON.stringify({
+        functions: [
+          {
+            id: uuid(7902),
+            function: { name: "f" },
+            callers: ["service"],
+            check: {
+              action: "read",
+              object: { kind: "Document", name: "Task" },
+              scope: "company",
+            },
+          },
+        ],
+      })
+    )
+    const found = calls((await compile(all)).diagnostics)
+    expect(found.map((d) => d.params)).toMatchObject([
+      { function: "simetra.rights_require" },
+    ])
   })
 
   // Мутація: прибрати функцію `rights_require_scope` з набору запобіжників.
