@@ -3,7 +3,11 @@ import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { RightsContract } from "../contracts"
 import type { ParsedObject } from "../stages/files"
 import { ON_BEHALF_OF_USER, isSecurityDefiner } from "./definer-reads"
-import { checkedContract, type DeclaredFunction } from "./declarations"
+import {
+  checkedContract,
+  hasUuidInParameter,
+  type DeclaredFunction,
+} from "./declarations"
 import { RIGHTS_FUNCTIONS } from "../rights/functions"
 import type { SqlParser } from "./parse"
 import {
@@ -293,6 +297,16 @@ export function guardArgsOf(
     const kindLabel = stringConstant(args[1])
     const target = isNullConstant(args[2]) ? null : bareName(args[2])
     if (action === undefined || kindLabel === undefined || target === undefined)
+      return undefined
+    // Лише поєднання, які доводить суддя: ціль — IN-параметр uuid функції
+    // (`hasUuidInParameter`, той самий, що в `checkFormReason`), а `NULL` —
+    // лише для `rights_require` (`check` без цілі); для `scope` ціль завжди
+    // параметр. Інакше `check` з цих аргументів `guardOf` відхилив би.
+    if (
+      target === null
+        ? form === "requireScope"
+        : !hasUuidInParameter(unit, target)
+    )
       return undefined
     return { form, action, kindLabel, target }
   }

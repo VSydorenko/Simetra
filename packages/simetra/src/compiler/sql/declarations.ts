@@ -400,7 +400,7 @@ interface ParameterNode {
  * (`FUNC_PARAM_DEFAULT`) теж `IN`. Масив, `SETOF`, `OUT`, `INOUT` і `VARIADIC`
  * значення рядка не несуть.
  */
-function hasUuidInParameter(unit: VerbatimUnit, name: string): boolean {
+export function hasUuidInParameter(unit: VerbatimUnit, name: string): boolean {
   const parameters = (
     unit.tree as { CreateFunctionStmt?: { parameters?: ParameterNode[] } }
   ).CreateFunctionStmt?.parameters

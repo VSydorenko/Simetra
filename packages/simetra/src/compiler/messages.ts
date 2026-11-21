@@ -5714,9 +5714,9 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "introspect.definer-check-unknown": {
     en: (p) =>
-      `${p.function} is SECURITY DEFINER and its body has no call guard: the check could not be recovered (${p.reason})`,
+      `${p.function} is SECURITY DEFINER and the check could not be recovered from its body (${p.reason})`,
     uk: (p) =>
-      `${p.function} — SECURITY DEFINER, і її тіло не має запобіжника виклику: перевірку не відновлено (${p.reason})`,
+      `${p.function} — SECURITY DEFINER, і перевірку не відновлено з її тіла (${p.reason})`,
     hint: {
       en: "The declaration is written without check, so the compiler reports sql.declaration-check-missing. Add a check (declare-function) and let simetra fix insert the call guard as the first statement, or remove user and command from the callers.",
       uk: "Декларацію записано без check, тож компілятор дасть sql.declaration-check-missing. Додайте check (declare-function) і дозвольте simetra fix вставити запобіжник виклику першим оператором або приберіть user і command з викликачів.",

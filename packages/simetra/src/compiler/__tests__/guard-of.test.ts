@@ -468,7 +468,12 @@ describe("sql.declaration-check-not-applied in the pipeline", () => {
 })
 
 describe("guardArgsOf", () => {
-  const read = (sql: string) => guardArgsOf(unitOf(sql), plpgsql, parse)
+  // Як у конвеєрі, одиниця несе дерево `CREATE FUNCTION` (підпис для цілі)
+  const read = (sql: string) => {
+    const parsed = parse(sql)
+    const tree = parsed.ok ? parsed.statements[0]?.stmt : undefined
+    return guardArgsOf({ ...unitOf(sql), tree }, plpgsql, parse)
+  }
 
   it.each([
     {
@@ -530,6 +535,21 @@ describe("guardArgsOf", () => {
     ["a non-constant action", perform(guard("p_row::text, 'task', p_row"))],
     ["a qualified target", perform(guard("'read', 'task', f.p_row"))],
     ["a cast target", perform(guard("'read', 'task', p_row::uuid"))],
+    [
+      "a NULL target of rights_require_scope",
+      perform(guard("'create', 'task', NULL", "rights_require_scope")),
+    ],
+    [
+      "a target that is not a parameter",
+      perform(guard("'read', 'task', found")),
+    ],
+    [
+      "a target parameter that is not uuid",
+      perform(guard("'read', 'task', p_row")).replace(
+        "p_row uuid",
+        "p_row text"
+      ),
+    ],
     ["two arguments", perform(guard("'read', 'task'"))],
     ["another function", perform("simetra.has_right('read', 'task', p_row)")],
   ])("returns nothing for %s", (_, sql) => {
