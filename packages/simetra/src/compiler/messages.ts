@@ -1628,6 +1628,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Функція SECURITY DEFINER виконується від свого власника, який обходить захист рядків, а роль команд діє від імені користувача, тож хук команди з id від клієнта читав би повз права. Назвіть перевірку в декларації (check: action, object, row чи scope), зробіть функцію SECURITY INVOKER або залиште лише викликача service.",
     },
   },
+  "sql.declaration-check-form": {
+    en: (p) =>
+      `The check of ${p.function} does not fit its object or signature (${p.reason})`,
+    uk: (p) =>
+      `Перевірка ${p.function} не відповідає об'єкту чи підпису (${p.reason})`,
+    hint: {
+      en: "Name an object with rights, one of its actions and at most one target: row or scope, the name of a uuid IN parameter of the function. The target is required when the action reads the row carrier (scope, ownership, dimension, container) and forbidden otherwise; create takes scope or no target, and not on the root of a scope kind. The check is for SECURITY DEFINER functions only.",
+      uk: "Назвіть об'єкт з правами, одну з його дій і щонайбільше одну ціль: row чи scope — ім'я IN-параметра функції типу uuid. Ціль обов'язкова, коли дія читає носія рядка (скоуп, власність, вимір, контейнер), і заборонена в іншому разі; create приймає scope чи жодної цілі і не на корені виду скоупу. Перевірка — лише для функцій SECURITY DEFINER.",
+    },
+  },
   "sql.declaration-check-not-applied": {
     en: (p) =>
       `${p.function} is SECURITY DEFINER with callers that act for a user, and its body does not prove the named check (${p.reason})`,

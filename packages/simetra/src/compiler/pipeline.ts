@@ -100,7 +100,11 @@ import {
 } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
 import { checkDebt, debtPredicate } from "./sql/debt"
-import { checkDeclarations, declaredFunctions } from "./sql/declarations"
+import {
+  checkDeclaredChecks,
+  checkDeclarations,
+  declaredFunctions,
+} from "./sql/declarations"
 import {
   checkFunctionBodies,
   checkPlatformCalls,
@@ -401,6 +405,21 @@ export async function runStages(
     physical,
     stage1.project
   )
+  // Мітка виду й UUID кастомної дії для `check` декларації є лише на
+  // контрактах прав (Р1); хибна `check` — не клас ремонту, тож зупиняє і в
+  // режимі `repair`.
+  const checkForms = checkDeclaredChecks(
+    declared,
+    sql.units,
+    stage1.objects,
+    rights
+  )
+  if (checkForms.length > 0) {
+    return {
+      ok: false,
+      diagnostics: sortDiagnostics([...staged, ...checkForms]),
+    }
+  }
   const roles = roleContracts(stage1.objects, stage2.references)
   // Рівень ролі й вимоги дій видно лише на контрактах прав, а ті будуються
   // лише на моделі без помилок — тож ці помилки йдуть після гейта стадій 4–5,

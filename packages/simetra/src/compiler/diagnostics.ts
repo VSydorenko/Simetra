@@ -50,6 +50,7 @@ export const COMPILER_RULES = [
   "sql.declaration-platform-form",
   "sql.declaration-platform-form-widens",
   "sql.declaration-check-missing",
+  "sql.declaration-check-form",
   "sql.declaration-check-not-applied",
   "sql.declaration-anonymous-definer",
   "sql.default-privileges-execute",
