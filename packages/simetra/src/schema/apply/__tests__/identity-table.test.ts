@@ -108,4 +108,23 @@ describe("hasIdentityTriggers", () => {
       )
     }
   )
+
+  // Інваріант І5 (#297): ім'я таблиці джерела у верхньому регістрі стоїть в
+  // ідентичності тригера в лапках — тригер знаходиться за іменем каталогу, а
+  // однойменна таблиця в нижньому регістрі — інша таблиця.
+  it("finds the trigger of an identity source named in upper case", () => {
+    const units = [
+      {
+        class: "trigger" as const,
+        generator: "platformLayer" as const,
+        identity: 'trigger:auth."Users".users_provision',
+      },
+    ]
+    expect(hasIdentityTriggers(units, { schema: "auth", name: "Users" })).toBe(
+      true
+    )
+    expect(hasIdentityTriggers(units, { schema: "auth", name: "users" })).toBe(
+      false
+    )
+  })
 })

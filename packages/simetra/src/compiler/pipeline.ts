@@ -29,7 +29,7 @@ import {
 } from "./contracts"
 import {
   buildFunctionExecuteUnits,
-  checkExecuteSignatures,
+  checkExecuteTypeReferences,
   type FunctionExecuteSources,
   generatedGrantConflicts,
 } from "./function-execute"
@@ -307,9 +307,9 @@ export async function runStages(
         sql.diagnostics.filter((d) => d.code === "sql.parse").map((d) => d.file)
       )
     ),
-    // Підпис гранту, якого ідентичність не передає (#297), — помилка до
+    // Аргумент `%type` функції з виведеним `EXECUTE` (#300) — помилка до
     // генератора `EXECUTE`: інакше функція лишилася б з `EXECUTE` від `PUBLIC`.
-    ...checkExecuteSignatures(executeSources),
+    ...checkExecuteTypeReferences(executeSources),
     ...debt.grows,
     // Дослівна політика чи тригер на таблиці виду і тіло функції, що її
     // пише, — помилка раннього блоку поруч із ратчетом боргу (спека прав §6.1,

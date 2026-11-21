@@ -385,6 +385,37 @@ describe("checkDefinerReads: SECURITY DEFINER functions", () => {
   })
 })
 
+// Ціль гранту — ключ за правилом ідентичності (`quoteIdent`, #297): грант на
+// об'єкт з ім'ям у верхньому регістрі має збігтися з одиницею, інакше
+// відкликання й повторний грант лишились би непоміченими.
+describe("checkDefinerReads: quoted names", () => {
+  it("reads the grants of a function named in quotes", async () => {
+    const fn = 'public."Rpc"'
+    const result = await compiled({
+      [RPC_FILE]:
+        sqlFunction(fn, `SELECT count(*) FROM ${TASK}`) +
+        grants(`REVOKE EXECUTE ON FUNCTION ${fn}() FROM`, ALL) +
+        grants(`GRANT EXECUTE ON FUNCTION ${fn}() TO`, [API.anonymous]),
+    })
+    expect(brief(result.diagnostics, CODES)).toEqual([
+      refused("public.Rpc", API.anonymous),
+    ])
+  })
+
+  it("reads the grants of a view named in quotes", async () => {
+    const v = 'public."V"'
+    const result = await compiled({
+      [RPC_FILE]:
+        view(v) +
+        grants(`REVOKE ALL ON TABLE ${v} FROM`, ALL) +
+        grants(`GRANT SELECT ON ${v} TO`, [API.user]),
+    })
+    expect(brief(result.diagnostics, CODES)).toEqual([
+      warned("public.V", { form: "view", roles: API.user }),
+    ])
+  })
+})
+
 describe("checkDefinerReads: views", () => {
   const V = "public.v"
   const viewWarned = (params: Record<string, string | number> = {}) =>

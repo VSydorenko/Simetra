@@ -36,11 +36,19 @@ export {
   isMovementQuery,
   platformFunctionSignatures,
   readSqlUnits,
-  splitIdentity,
   withoutLocations,
   type SqlSource,
   type SqlUnit,
 } from "./sql/units"
+export {
+  functionKey,
+  identityParts,
+  keyIdentity,
+  qualifiedName,
+  splitIdentity,
+  unitIdentity,
+  unquoteIdent,
+} from "./sql/identity"
 export { loadSqlParser, relationNameText, type SqlParser } from "./sql/parse"
 export { IDENTITY_TRIGGERS, platformSchemaGrants } from "./platform/units"
 export {

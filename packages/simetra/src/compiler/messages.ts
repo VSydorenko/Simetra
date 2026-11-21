@@ -35,6 +35,57 @@ function hintOf<K extends string>(
 }
 
 /**
+ * Тексти `apply.drift-partial` за причиною: кожна причина гейта має власну
+ * гілку. Запасної гілки з текстом іншої причини немає — невідома причина
+ * (дефект гейта) називає себе, а не видає себе за обмеження моделлю.
+ */
+const DRIFT_PARTIAL: Record<
+  "fingerprint" | "units",
+  { en: Text; uk: Text; hint: { en: string; uk: string } }
+> = {
+  fingerprint: {
+    en: (p) =>
+      `The catalog fingerprint algorithm changed since the last apply (${p.fingerprintFrom} → ${p.fingerprintTo}), so the drift check is limited to the catalog model`,
+    uk: (p) =>
+      `Від останнього застосування змінився алгоритм відбитка каталогу (${p.fingerprintFrom} → ${p.fingerprintTo}), тож перевірка дрейфу обмежена моделлю каталогу`,
+    hint: {
+      en: "The catalog model does not carry owners, partitions, inheritance or sequence settings; check those by hand if the database may have been changed outside the platform.",
+      uk: "Модель каталогу не несе власників, партицій, успадкування й налаштувань послідовностей; перевірте їх вручну, якщо базу могли змінити повз платформу.",
+    },
+  },
+  units: {
+    en: (p) =>
+      `${p.count} SQL units recorded at the last apply do not read back as units of this platform version, so the drift check is limited to the catalog fingerprint`,
+    uk: (p) =>
+      `${p.count} SQL-одиниць, записаних при останньому застосуванні, не читаються як одиниці цієї версії платформи, тож перевірка дрейфу обмежена відбитком каталогу`,
+    hint: {
+      en: "The fingerprint still sees every change, but without readable paths. Review the plan steps; the next apply records the units again.",
+      uk: "Відбиток і далі бачить кожну зміну, але без читабельних шляхів. Перегляньте кроки плану; наступне застосування запише одиниці знову.",
+    },
+  },
+}
+
+const UNKNOWN_DRIFT_PARTIAL = {
+  en: (p: DiagnosticParams) =>
+    `The drift check is partial for an unknown reason ${p.reason}`,
+  uk: (p: DiagnosticParams) =>
+    `Перевірка дрейфу часткова з невідомої причини ${p.reason}`,
+  hint: {
+    en: "This is a defect of the drift gate; report it.",
+    uk: "Це дефект гейта дрейфу; повідомте про нього.",
+  },
+}
+
+function driftPartial(
+  params: DiagnosticParams
+): (typeof DRIFT_PARTIAL)[keyof typeof DRIFT_PARTIAL] {
+  const reason = String(params.reason)
+  return reason === "fingerprint" || reason === "units"
+    ? DRIFT_PARTIAL[reason]
+    : UNKNOWN_DRIFT_PARTIAL
+}
+
+/**
  * Поради відмови таблиці ідентичності за причиною: таблиці немає —
  * її створює міграція провайдера, а гранти на неї дає повторний `roles`;
  * немає `USAGE` чи `TRIGGER` — гранти дає `roles` від суперкористувача.
@@ -1537,14 +1588,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Функція має одну декларацію. Залиште один запис і видаліть інший; запис без схеми бере defaultSchema проєкту.",
     },
   },
-  "sql.function-name-unsupported": {
+  "sql.function-argument-type-reference": {
     en: (p) =>
-      `EXECUTE of ${p.function} cannot be generated: the identifier part ${JSON.stringify(p.part)} contains ".", "," or a double quote`,
+      `EXECUTE of ${p.function} cannot be generated: the argument type ${p.argument} is a column type reference`,
     uk: (p) =>
-      `EXECUTE для ${p.function} не згенерувати: частина ідентифікатора ${JSON.stringify(p.part)} містить «.», «,» чи подвійні лапки`,
+      `EXECUTE для ${p.function} не згенерувати: тип аргументу ${p.argument} — посилання на тип колонки`,
     hint: {
-      en: "The platform cannot yet address such a function in a grant (issue #297), and without the grant it would keep EXECUTE from PUBLIC. Rename the function, its schema or the argument type to an identifier without these characters.",
-      uk: "Платформа поки не вміє адресувати таку функцію в гранті (issue #297), а без гранту вона лишилася б з EXECUTE від PUBLIC. Перейменуйте функцію, її схему чи тип аргументу на ідентифікатор без цих символів.",
+      en: "The function keeps the column type from the time of CREATE, while a grant resolves %type anew, so after a change of the column type the grant would hit another overload, and without the grant the function would keep EXECUTE from PUBLIC. Write the argument type explicitly.",
+      uk: "Функція зберігає тип колонки на момент CREATE, а грант резолвить %type заново, тож після зміни типу колонки грант влучив би в інше перевантаження, а без гранту функція лишилася б з EXECUTE від PUBLIC. Запишіть тип аргументу явно.",
     },
   },
   "sql.declaration-platform-form": {
@@ -4099,13 +4150,21 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     },
   },
   "apply.drift-partial": {
-    en: (p) =>
-      `The catalog fingerprint algorithm changed since the last apply (${p.fingerprintFrom} → ${p.fingerprintTo}), so the drift check is limited to the catalog model`,
-    uk: (p) =>
-      `Від останнього застосування змінився алгоритм відбитка каталогу (${p.fingerprintFrom} → ${p.fingerprintTo}), тож перевірка дрейфу обмежена моделлю каталогу`,
+    en: (p) => driftPartial(p).en(p),
+    uk: (p) => driftPartial(p).uk(p),
     hint: {
-      en: "The catalog model does not carry owners, partitions, inheritance or sequence settings; check those by hand if the database may have been changed outside the platform.",
-      uk: "Модель каталогу не несе власників, партицій, успадкування й налаштувань послідовностей; перевірте їх вручну, якщо базу могли змінити повз платформу.",
+      en: (p) => driftPartial(p).hint.en,
+      uk: (p) => driftPartial(p).hint.uk,
+    },
+  },
+  "apply.drift-unverifiable": {
+    en: (p) =>
+      `The catalog fingerprint algorithm changed since the last apply (${p.fingerprintFrom} → ${p.fingerprintTo}) and ${p.count} SQL units recorded then do not read back as units of this platform version, so drift cannot be checked and the plan carries it as drift to accept`,
+    uk: (p) =>
+      `Від останнього застосування змінився алгоритм відбитка каталогу (${p.fingerprintFrom} → ${p.fingerprintTo}), а ${p.count} SQL-одиниць, записаних тоді, не читаються як одиниці цієї версії платформи, тож дрейф перевірити нічим, і план несе його як дрейф до прийняття`,
+    hint: {
+      en: "Make sure nobody changed the database outside the platform since the last apply, review the plan steps, and allow drift to apply; the next apply records the state again.",
+      uk: "Переконайтеся, що від останнього застосування базу ніхто не змінював повз платформу, перегляньте кроки плану й дозвольте drift, щоб застосувати; наступне застосування запише стан знову.",
     },
   },
   "apply.versions-changed": {

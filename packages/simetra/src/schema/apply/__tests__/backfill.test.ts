@@ -1247,6 +1247,58 @@ describe("platform triggers of a backfill", () => {
     ])
   })
 
+  describe("on a table whose name needs quotes", () => {
+    // Ідентичність тригера — за `quoteIdent`: сирий шаблон
+    // `trigger:app.Items.…` не знайшов би ні бажаного, ні живого тригера,
+    // і платформний тригер став би тригером користувача
+    const QUOTED = { schema: "app", name: "Items" }
+    const entry = platformTriggers(QUOTED)[0]!
+    const quotedDef = `CREATE TRIGGER "${entry.trigger}" BEFORE UPDATE ON app."Items" FOR EACH ROW EXECUTE FUNCTION ${fn}()`
+    const quotedUnits: CatalogModel = {
+      ...model(table([column("id"), column("note")])),
+      units: [
+        {
+          class: "trigger",
+          identity: `trigger:app."Items"."${entry.trigger}"`,
+          schema: "app",
+          name: entry.trigger,
+          sql: quotedDef,
+        },
+      ],
+    }
+
+    it("matches the platform trigger of the registry", () => {
+      expect(
+        isPlatformTrigger({
+          table: QUOTED,
+          name: entry.trigger,
+          live: quotedDef,
+          desired: quotedUnits,
+          parse,
+        })
+      ).toBe(true)
+    })
+
+    it("does not show the live platform trigger", () => {
+      const steps = stepsOf({ actions: [SET_NOT_NULL, SET_DEFAULT] }).map(
+        (s) =>
+          s.backfill === undefined
+            ? s
+            : { ...s, backfill: { ...s.backfill, table: QUOTED } }
+      )
+      const shown = withShownTriggers(steps, {
+        user: (t) =>
+          t.name === "Items" ? [{ name: entry.trigger, enabled: "O" }] : [],
+        live: quotedUnits,
+        desired: quotedUnits,
+        parse,
+      })
+      expect(
+        shown.find((s) => s.backfill !== undefined)!.backfill!.triggers
+      ).toEqual([])
+    })
+  })
+
   describe("backfillTriggers", () => {
     // Крок заповнення з показаним тригером `audit` і платформним тригером
     // механіки в бажаній моделі

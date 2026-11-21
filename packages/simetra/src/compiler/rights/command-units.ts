@@ -14,6 +14,7 @@ import { compareStrings } from "../diagnostics"
 import { dollarTag } from "../movement-functions"
 import type { CreationNode } from "../sql/dependencies"
 import { executeGrants } from "../sql/execute-grants"
+import { functionKey, keyIdentity } from "../sql/identity"
 import type { SqlParser } from "../sql/parse"
 import { generatedUnit, type SqlUnit } from "../sql/units"
 import { sqlLiteral } from "../stages/model"
@@ -74,7 +75,14 @@ export function buildCommandUnits(
   const parsedNode: CreationNode = {
     type: "unit",
     // Ідентичність канонізує `boolean` до `bool` (як `pg_proc`).
-    identity: `function:${qualified(COMMAND_FUNCTIONS.parsed)}(bool)`,
+    identity: keyIdentity(
+      "function",
+      functionKey(
+        COMMAND_FUNCTIONS.parsed.schema,
+        COMMAND_FUNCTIONS.parsed.name,
+        ["bool"]
+      )
+    ),
   }
   const declarations: {
     fn: QualifiedName

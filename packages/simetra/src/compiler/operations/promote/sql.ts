@@ -42,12 +42,8 @@ import {
   unitTargets,
   type UnitTarget,
 } from "../../sql/unit-target"
-import {
-  functionIdentity,
-  readSqlUnits,
-  statementPositions,
-  type SqlUnit,
-} from "../../sql/units"
+import { functionIdentity } from "../../sql/identity"
+import { readSqlUnits, statementPositions, type SqlUnit } from "../../sql/units"
 import { FUNCTIONS_SCHEMA_FILE } from "../../json-schema"
 import type { SchemaPathResolver } from "../fix"
 import type { PromoteInput } from "../inputs"

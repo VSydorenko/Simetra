@@ -133,6 +133,13 @@ const touch = (table: string) => ({
   sql: `CREATE TRIGGER ${mechanicsTriggerName(table)} BEFORE INSERT OR UPDATE ON app.${table} FOR EACH ROW EXECUTE FUNCTION simetra.touch()`,
 })
 
+/** Тригер механіки таблиці з ім'ям у лапках: ідентичність за `quoteIdent`. */
+const quotedTouch = (table: string) => ({
+  ...touch(table),
+  identity: `trigger:app."${table}"."${mechanicsTriggerName(table)}"`,
+  sql: `CREATE TRIGGER "${mechanicsTriggerName(table)}" BEFORE INSERT OR UPDATE ON app."${table}" FOR EACH ROW EXECUTE FUNCTION simetra.touch()`,
+})
+
 const SEQUENCE = {
   class: "sequence" as const,
   identity: "sequence:simetra.row_version",
@@ -193,6 +200,14 @@ describe("liveMechanicsTables", () => {
     const m = live({ tables: ["a"], touched: [], sequence: true })
     m.units.push(other)
     expect(liveMechanicsTables(m)).toEqual([])
+  })
+
+  // Ім'я у верхньому регістрі в ідентичності — у лапках: сирий шаблон
+  // ключа не знайшов би тригер, і прийнята таблиця випала б із механіки
+  it("finds the trigger of a table whose name needs quotes", () => {
+    const m = live({ tables: ["Items"], touched: [], sequence: true })
+    m.units.push(quotedTouch("Items"))
+    expect(liveMechanicsTables(m)).toEqual([{ schema: "app", name: "Items" }])
   })
 })
 
@@ -438,6 +453,28 @@ describe("rewritten tables", () => {
     ],
   ])("%s: no bump step", (_, over, steps) => {
     expect(bumps(plan({ ...over, engineSteps: steps }))).toEqual([])
+  })
+
+  it("carries the triggers of a table whose name needs quotes", () => {
+    // Тригери бажаної тіні беруться з частин ідентичності: сирий префікс
+    // `trigger:app.Items.` не знайшов би `trigger:app."Items"."…"`
+    const quoted = live({ tables: ["Items"], touched: [], sequence: true })
+    quoted.units.push(quotedTouch("Items"))
+    const result = plan({
+      live: quoted,
+      model: model("Items"),
+      desired: quoted,
+      engineSteps: [
+        engine({
+          sql: 'ALTER TABLE app."Items" ALTER COLUMN total TYPE numeric(10,0)',
+          consumed: [column("Items")],
+        }),
+      ],
+    })
+    const [bump] = bumps(result)
+    expect(bump!.triggers).toEqual([
+      { name: mechanicsTriggerName("Items"), enabled: "O" },
+    ])
   })
 
   it("promotion: the table is looked up on the target by its old name", () => {

@@ -1,5 +1,5 @@
 import type { AlterTableCmd, Node } from "libpg-query"
-import type { SqlParser } from "simetra/compiler"
+import { unitIdentity, type SqlParser } from "simetra/compiler"
 import { quoteIdent, type CatalogModel, type CatalogTable } from "simetra/model"
 import type {
   EngineAction,
@@ -385,7 +385,8 @@ function statementEffects(stmt: Node, facts: Facts): Effect[] {
       [...facts.createdTables].some((id) =>
         schemaname === undefined
           ? id.endsWith(`.${relname}`)
-          : id === `table:${schemaname}.${relname}`
+          : // eslint-disable-next-line no-restricted-syntax -- StableId двигуна з `plan.actions[].produces`, не ідентичність одиниці (#297, Р9)
+            id === `table:${schemaname}.${relname}`
       )
     return createdHere ? [] : ["validationScan"]
   }
@@ -486,7 +487,11 @@ function inApplied(ref: EngineObjectRef, applied: CatalogModel): boolean {
       return applied.units.some(
         (u) =>
           u.class === ref.kind &&
-          u.identity === `${ref.kind}:${ref.schema}.${ref.table}.${ref.name}`
+          // Посилання двигуна несе сирі частини, одиниця — ідентичність за
+          // `quoteIdent`: склеєні без лапок, вони розійшлися б на імені у
+          // верхньому регістрі, і власний тригер став би чужим
+          u.identity ===
+            unitIdentity(ref.kind, ref.schema, ref.table ?? "", ref.name)
       )
     case "default":
       return applied.tables.some(

@@ -226,6 +226,44 @@ describe("predefined catalog items", () => {
     )
   })
 
+  // Ключ колізії — ім'я за правилом ідентичності (#297): `"public.x".y_predefined`
+  // і `public."x.y_predefined"` — різні функції, хоч сире склеювання дало б
+  // той самий рядок `public.x.y_predefined`.
+  it("a lookup function does not collide across a quoted dot", async () => {
+    const result = await compileWith({
+      [WAREHOUSE]: warehouse(
+        [{ id: uuid(911), name: "Main", physicalName: "main" }],
+        { physicalName: "x.y" }
+      ),
+      "sql/public/misc.sql":
+        'CREATE FUNCTION "public.x".y_predefined(a int) RETURNS int LANGUAGE sql STABLE AS $$ select 1 $$;',
+    })
+    expect(result.diagnostics.map((d) => d.code)).toEqual([])
+  })
+
+  // Обидва боки колізії — за одним правилом: ім'я в лапках з одного боку й
+  // сире з другого розминулися б, і справжня колізія зникла б.
+  it("a lookup function named in quotes collides with a verbatim function", async () => {
+    const result = await compileWith({
+      [WAREHOUSE]: warehouse(
+        [{ id: uuid(911), name: "Main", physicalName: "main" }],
+        { physicalName: "Ware" }
+      ),
+      "sql/public/misc.sql":
+        'CREATE FUNCTION public."Ware_predefined"(a int) RETURNS int LANGUAGE sql STABLE AS $$ select 1 $$;',
+    })
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: "physical.function-duplicate",
+        file: WAREHOUSE,
+        params: expect.objectContaining({
+          name: "Ware_predefined",
+          other: "a function in sql/public/misc.sql",
+        }),
+      }),
+    ])
+  })
+
   it("lookup function name collides with a verbatim function", async () => {
     const result = await compileWith({
       [WAREHOUSE]: warehouse([
