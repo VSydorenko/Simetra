@@ -5712,6 +5712,65 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Імена файлів виводяться з ідентичностей одиниць; перейменуйте один з об'єктів бази, щоб імена файлів різнилися.",
     },
   },
+  "introspect.definer-check-unknown": {
+    en: (p) =>
+      `${p.function} is SECURITY DEFINER and the check could not be recovered from its body (${p.reason})`,
+    uk: (p) =>
+      `${p.function} — SECURITY DEFINER, і перевірку не відновлено з її тіла (${p.reason})`,
+    hint: {
+      en: "The declaration is written without check, so the compiler reports sql.declaration-check-missing. Add a check (declare-function) and let simetra fix insert the call guard as the first statement, or remove user and command from the callers.",
+      uk: "Декларацію записано без check, тож компілятор дасть sql.declaration-check-missing. Додайте check (declare-function) і дозвольте simetra fix вставити запобіжник виклику першим оператором або приберіть user і command з викликачів.",
+    },
+  },
+  "introspect.definer-anonymous-dropped": {
+    en: (p) =>
+      `${p.function}: EXECUTE for the role without a session (${p.role}) is not carried into the callers`,
+    uk: (p) =>
+      `${p.function}: EXECUTE ролі без сесії (${p.role}) не перенесено у викликачі`,
+    hint: {
+      en: "A SECURITY DEFINER function without a session has no user to check, so the plan revokes this EXECUTE. Make the function SECURITY INVOKER first if anonymous access is intended.",
+      uk: "Функція SECURITY DEFINER без сесії не має користувача для перевірки, тож план відкличе цей EXECUTE. Якщо потрібен анонімний доступ, спершу зробіть функцію SECURITY INVOKER.",
+    },
+  },
+  "introspect.definer-platform-form-candidate": {
+    en: (p) =>
+      `${p.function} takes no arguments and returns SETOF uuid: it may be a platform form`,
+    uk: (p) =>
+      `${p.function} без аргументів і повертає SETOF uuid: це може бути форма платформи`,
+    hint: {
+      en: "Declare a scope kind with setFunction (or an access dimension with a values function) that names this function with the create or add mutation; the declaration is then removed and the platform derives EXECUTE. Otherwise keep it as a SECURITY DEFINER RPC with a check.",
+      uk: "Оголосіть вид скоупу з setFunction (чи вимір доступу з функцією значень), що називає цю функцію, мутацією create або add: декларацію буде видалено, а EXECUTE виведе платформа. Інакше лишіть її RPC SECURITY DEFINER з check.",
+    },
+  },
+  "introspect.definer-foreign-grant": {
+    en: (p) =>
+      `${p.function}: EXECUTE for ${p.role} cannot be a caller (${p.reason})`,
+    uk: (p) =>
+      `${p.function}: EXECUTE для ${p.role} не може бути викликачем (${p.reason})`,
+    hint: {
+      en: "The ACL of a declared function belongs to the platform, and membership of such a role in an API role would bypass the caller check. Revoke the grant in the database, or describe the access through callers.",
+      uk: "ACL задекларованої функції належить платформі, а членство такої ролі в ролі API обійшло б перевірку викликачів. Приберіть грант у базі або опишіть доступ викликачами.",
+    },
+  },
+  "introspect.definer-callers-drift": {
+    en: (p) =>
+      `${p.function}: callers of the saved declaration (${p.declared}) differ from EXECUTE in the database (${p.actual})`,
+    uk: (p) =>
+      `${p.function}: викликачі збереженої декларації (${p.declared}) відрізняються від EXECUTE у базі (${p.actual})`,
+    hint: {
+      en: "The saved file is never rewritten by introspection. Change the callers in the declaration (declare-function) or the grants in the database so they agree, then introspect again.",
+      uk: "Збережений файл інтроспекція не переписує. Змініть викликачів у декларації (declare-function) або гранти в базі, щоб вони збіглися, і повторіть інтроспекцію.",
+    },
+  },
+  "introspect.definer-acl-changed": {
+    en: () => "ACL or role membership changed during introspect; run it again",
+    uk: () =>
+      "ACL або членство ролей змінилися під час introspect; запустіть його ще раз",
+    hint: {
+      en: "Either the rights fingerprint of the snapshot (functions and schemas in scope, roles of the profile and their membership) differs from a fresh read of the catalog (check: fingerprint), or the EXECUTE facts derived from the snapshot disagree with the database's own privilege check for a role of the profile (check: privilege; params function, role, privilege), or a SECURITY DEFINER function of the folder has no EXECUTE fact in the snapshot (check: fact; param function). Nothing was written.",
+      uk: "Відбиток прав знімка (функції й схеми межі, ролі профілю та їхнє членство) відрізняється від свіжого читання каталогу (check: fingerprint), або факти EXECUTE, виведені зі знімка, розходяться з власною перевіркою привілеїв бази для ролі профілю (check: privilege; параметри function, role, privilege), або SECURITY DEFINER функція теки не має факту EXECUTE у знімку (check: fact; параметр function). Нічого не записано.",
+    },
+  },
 }
 
 /** Причини `engine.out-of-scope`: параметр `reason` межі моделі (T2). */

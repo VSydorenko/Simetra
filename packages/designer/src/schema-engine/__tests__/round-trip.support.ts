@@ -9,7 +9,13 @@ import {
   expect,
   it,
 } from "vitest"
-import { SIGNAL_OUTBOX, type CatalogModel } from "simetra/model"
+import {
+  PLATFORM_ROLES,
+  PROVIDER_API_ROLES,
+  PROVIDER_OWNER_ROLES,
+  SIGNAL_OUTBOX,
+  type CatalogModel,
+} from "simetra/model"
 import {
   canonicalSnapshot,
   compile,
@@ -36,6 +42,7 @@ import {
   type DesiredComparison,
   type EngineDiagnostic,
   type EngineScope,
+  type ExecuteFacts,
   type Extracted,
   type SchemaEngine,
 } from "simetra/schema"
@@ -263,9 +270,11 @@ interface Loss {
    * Функції форм платформи (множини скоупу, значень виміру), які прийом з нуля
    * повертає звичайними `SECURITY DEFINER`-функціями з `EXECUTE` для ролей
    * API: зв'язку з видом скоупу чи виміром зворотна генерація не знає, тож
-   * компіляція повернутої теки відмовляє їм `sql.definer-caller-unchecked`
-   * (платформна спека §6.7), доки їх не зв'язано чи не задекларовано. Тоді
-   * ланцюжок закінчується на зворотній генерації (`refusedRoundTrip`, до #271).
+   * з фактами `EXECUTE` отримують декларацію без `check` і відмову
+   * `sql.declaration-check-missing` (Р1), доки мутації `chain` її не
+   * доповнять. Без `chain` ланцюжок закінчується на зворотній генерації
+   * (`refusedRoundTrip`); з `chain` теку ведуть далі, до звірки й
+   * застосування.
    */
   definers: { schema: string; name: string }[]
 }
@@ -290,9 +299,12 @@ export interface Refusal {
   identity?: string
 }
 
+// З фактами `EXECUTE` функція множини з викликачами `user`/`command` отримує
+// декларацію без `check` — до Д5 це `sql.declaration-check-missing` (Р1);
+// `sql.definer-caller-unchecked` лишилось би лише функціям без декларації
 const definerRefusals = (definers: Loss["definers"]): Refusal[] =>
   definers.map((f) => ({
-    code: "sql.definer-caller-unchecked",
+    code: "sql.declaration-check-missing",
     schema: f.schema,
     name: f.name,
   }))
@@ -314,6 +326,21 @@ function expectRefusals(
       identity: d.params?.identity,
     }))
   ).toEqual(refusals)
+}
+
+/**
+ * Витяг із фактами `EXECUTE` в одному знімку — як `introspect`: без фактів
+ * зворотна генерація не пише декларацій definer-функцій.
+ */
+async function extractWithFacts(target: DbConnection, scope: EngineScope) {
+  const { extracted, facts } = await engine.extractWithExecuteFacts(
+    target,
+    scope
+  )
+  expect(errors(extracted.diagnostics)).toEqual([])
+  expect(facts.catalogChanged).toBe(false)
+  expect(facts.crossCheckFailures).toEqual([])
+  return { extracted, facts }
 }
 
 /** Помилки прийому — рівно відмови `definers`, решти немає. */
@@ -409,6 +436,7 @@ async function referenceOf(
 async function expectKindLabelsKept(
   target: DbConnection,
   extracted: Extracted,
+  facts: ExecuteFacts,
   project: Project,
   before: ReadonlyMap<string, string>,
   files: ReadonlyMap<string, string>,
@@ -439,6 +467,7 @@ async function expectKindLabelsKept(
     newId: () => randomUUID(),
     schemaPath,
     parse,
+    executeFacts: facts,
     ...(await referenceOf(target, existing)),
   })
   expectRefusedDefiners(again.diagnostics, definers)
@@ -446,9 +475,10 @@ async function expectKindLabelsKept(
 }
 
 /**
- * Прийом з нуля бази з функціями форм платформи (`Loss.definers`): ланцюжок
- * §9 закінчується на зворотній генерації — її помилки рівно відмови цих
- * функцій, а моделі з такою текою компілятор не дає. Повертає теку.
+ * Прийом з нуля бази з функціями форм платформи (`Loss.definers`): зворотна
+ * генерація, помилки якої рівно відмови цих функцій (`sql.declaration-check-missing`),
+ * а моделі з такою текою компілятор не дає. Повертає теку; далі її веде
+ * `chain` у `deployedRoundTrip` (мутації, звірка, застосування).
  * Тимчасово: іменовані функції множини, які кличуть політики, стануть формою
  * «функція політики» (ADR-0094, #271); тоді фікстури зі `scopeKinds` підуть
  * повним ланцюжком, а цю функцію буде видалено (умова записана в #271).
@@ -459,7 +489,7 @@ async function refusedRoundTrip(
   project: Project,
   loss: Loss
 ): Promise<Map<string, string>> {
-  const { extracted, files } = await refusedAdoption(
+  const { extracted, facts, files } = await refusedAdoption(
     target,
     extractScope,
     project,
@@ -468,6 +498,7 @@ async function refusedRoundTrip(
   await expectKindLabelsKept(
     target,
     extracted,
+    facts,
     project,
     new Map(),
     files,
@@ -489,23 +520,25 @@ export async function refusedAdoption(
   refusals: readonly Refusal[]
 ): Promise<{
   extracted: Extracted
+  facts: ExecuteFacts
   files: Map<string, string>
   diagnostics: Awaited<ReturnType<typeof reverseGenerate>>["diagnostics"]
   target: OracleShape
 }> {
   await withPlatformSequence(target)
-  const extracted = await engine.extract(target, extractScope)
-  expect(errors(extracted.diagnostics)).toEqual([])
+  const { extracted, facts } = await extractWithFacts(target, extractScope)
   const reversed = await reverseGenerate(extracted.model, {
     project: { name: "RoundTrip", ...project },
     existing: new Map(),
     newId: () => randomUUID(),
     schemaPath,
     parse,
+    executeFacts: facts,
   })
   expectRefusals(reversed.diagnostics, refusals)
   return {
     extracted,
+    facts,
     files: new Map(reversed.files),
     diagnostics: reversed.diagnostics,
     target: await withClient(target, (c) =>
@@ -526,8 +559,7 @@ export async function roundTripOf(
   loss: Loss = NO_LOSS(extractScope)
 ): Promise<RoundTrip> {
   await withPlatformSequence(target)
-  const extracted = await engine.extract(target, extractScope)
-  expect(errors(extracted.diagnostics)).toEqual([])
+  const { extracted, facts } = await extractWithFacts(target, extractScope)
 
   const reversed = await reverseGenerate(extracted.model, {
     project: { name: "RoundTrip", ...project },
@@ -535,19 +567,34 @@ export async function roundTripOf(
     newId: () => randomUUID(),
     schemaPath,
     parse,
+    executeFacts: facts,
     ...(await referenceOf(target, existing)),
   })
   expectRefusedDefiners(reversed.diagnostics, loss.definers)
   await expectKindLabelsKept(
     target,
     extracted,
+    facts,
     project,
     existing,
     reversed.files,
     loss.definers
   )
 
-  const compiled = await compile(reversed.files)
+  return compiledTrip(target, extracted, reversed.files, loss)
+}
+
+/**
+ * Друга половина ланцюжка §9: компіляція теки, рендер, звірка з ціллю й
+ * оракул. Окремо, бо теку після мутацій (`chain`) веде той самий шлях.
+ */
+async function compiledTrip(
+  target: DbConnection,
+  extracted: Extracted,
+  files: ReadonlyMap<string, string>,
+  loss: Loss
+): Promise<RoundTrip> {
+  const compiled = await compile(files)
   expect(errors(compiled.diagnostics)).toEqual([])
   const model = compiled.model!
   const sql = renderDesiredState(model).sql
@@ -945,6 +992,59 @@ async function expectPlanAndApply(
 }
 
 /**
+ * Б5 (план Д3): застосування з дозволом рівно на кроки відомої втрати механіки,
+ * після нього наступний план — буквально порожній. Без застосування звірка
+ * «рівно втрата» слабша: вона не доводить, що застосований стан збігається з
+ * бажаним.
+ */
+async function applyLossAndExpectEmptyPlan(
+  target: DbConnection,
+  model: CompiledModel,
+  loss: Loss
+): Promise<void> {
+  const outcome = await buildPlan(engine, dbs, model, { target }, [])
+  expect({
+    status: outcome.status,
+    errors: errors(outcome.diagnostics),
+  }).toEqual({ status: "planned", errors: [] })
+  if (outcome.status !== "planned") throw new Error("plan refused")
+  const artifact = outcome.artifact
+  const permitted = new Set(artifact.requiredPermissions)
+  expect(
+    byText(
+      artifact.steps
+        .filter((s) => permitted.has(s.id))
+        .map((s) => ({ sql: s.sql, class: s.class }))
+    )
+  ).toEqual(permittedLossSteps(loss))
+  const applied = await executePlan(writer, target, artifact, {
+    mode: "apply",
+    planHash: artifact.planHash,
+    allow: artifact.requiredPermissions,
+    snapshot: canonicalSnapshot(model),
+  })
+  expect({
+    status: applied.status,
+    errors: errors(applied.diagnostics),
+  }).toEqual({ status: "committed", errors: [] })
+  // Порожній план рушій повертає як `unchanged`: кроків немає зовсім
+  const next = await buildPlan(engine, dbs, model, { target }, [])
+  expect({
+    status: next.status,
+    errors: errors(next.diagnostics),
+  }).toEqual({ status: "unchanged", errors: [] })
+}
+
+/** ACL функцій у знімку оракула: ім'я функції -> елементи ACL. */
+const functionAcls = (shape: OracleShape, names: readonly string[]) =>
+  Object.fromEntries(
+    names.map((name) => [
+      name,
+      shape.acls.find((a) => a.object === `f:${name}()`)?.acl,
+    ])
+  )
+
+/**
  * Розгортає скомпільовану теку в ціль і веде її ланцюжком §9. Без збереженої
  * теки (`existing` порожній) механіка видів — відома втрата, і вона гучна.
  * `endToEnd` веде повернуту модель ще й повним конвеєром плану й застосування.
@@ -952,7 +1052,8 @@ async function expectPlanAndApply(
 export async function deployedRoundTrip(
   files: Map<string, string>,
   existing: ReadonlyMap<string, string>,
-  endToEnd: boolean
+  endToEnd: boolean,
+  chain?: (adopted: Map<string, string>) => Promise<Map<string, string>>
 ): Promise<{
   source: CompiledModel
   result?: RoundTrip
@@ -971,12 +1072,58 @@ export async function deployedRoundTrip(
     databaseProvider: source.project.database.provider,
   }
   if (loss.definers.length > 0) {
+    // Теку з відмовами класу ремонту лагодять мутації `chain`; повна звірка
+    // йде вже над теку після них (Д3, Р8), у тій самій цілі
+    let result: RoundTrip | undefined
     const adopted = await inTarget(
       renderDesiredState(source).sql,
       scope,
-      (target) => refusedRoundTrip(target, scope, project, loss)
+      async (target) => {
+        const kept = await refusedRoundTrip(target, scope, project, loss)
+        if (chain === undefined) return kept
+        const functions = loss.definers.map(qualifiedName)
+        const schemas = [...scope.schemas]
+        // ACL функцій множини, які розгорнуло саме джерело, — до прийому
+        const deployed = functionAcls(
+          await withClient(target, (c) => readOracle(c, schemas)),
+          functions
+        )
+        const repaired = await chain(kept)
+        const { extracted } = await extractWithFacts(target, scope)
+        result = await compiledTrip(target, extracted, repaired, loss)
+        if (endToEnd) {
+          await expectPlanAndApply(target, result.model, loss)
+          await applyLossAndExpectEmptyPlan(target, result.model, loss)
+          // ACL у цілі після застосування дорівнює виведеному з теки (тінь
+          // бажаного стану) і розгорнутому з джерела: гранти форм платформи
+          // з'явились, дослівних — ні
+          const applied = functionAcls(
+            await withClient(target, (c) => readOracle(c, schemas)),
+            functions
+          )
+          expect(applied).toEqual(functionAcls(result.shadow, functions))
+          expect(applied).toEqual(deployed)
+          // Буквальний перелік, а не виведений генератором: власник, роль
+          // користувача, сервісна (лише supabase) і роль команд; ні `PUBLIC`
+          // (`=X/…`), ні анонімної ролі
+          const provider = testProvider()
+          const owner = PROVIDER_OWNER_ROLES[provider]
+          const api = PROVIDER_API_ROLES[provider]
+          const expected = [
+            owner,
+            api.user,
+            ...(provider === "supabase" ? [api.service] : []),
+            PLATFORM_ROLES.command,
+          ]
+            .map((role) => `${role}=X/${owner}`)
+            .sort()
+          for (const name of functions)
+            expect(applied[name]?.slice().sort(), name).toEqual(expected)
+        }
+        return repaired
+      }
     )
-    return { source, adopted }
+    return { source, adopted, ...(result === undefined ? {} : { result }) }
   }
   const result = await inTarget(
     renderDesiredState(source).sql,

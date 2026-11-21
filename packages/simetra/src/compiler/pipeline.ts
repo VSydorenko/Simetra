@@ -2,6 +2,7 @@ import {
   KIND_REGISTRY,
   METADATA_KINDS,
   PROVIDER_IDENTITY_SOURCES,
+  type MetadataKind,
   type PhysicalSnapshot,
   type Project,
 } from "simetra/model"
@@ -31,6 +32,7 @@ import {
   membershipContracts,
   usersContractOf,
   mainTableOf,
+  type RightsContract,
 } from "./contracts"
 import {
   buildFunctionExecuteUnits,
@@ -1215,6 +1217,49 @@ export async function runStages(
   // за гейт стадій (`checkDeclaredGuards`), не закривали його в `repair`.
   const final = sortDiagnostics([...diagnostics, ...budget])
   return { ok: !hasErrors(final), diagnostics: final, model: compiled }
+}
+
+/**
+ * Контракти прав лише з метаданих, без SQL-стадій: зворотна генерація
+ * розв'язує за ними мітку виду й дію запобіжника. `undefined` — метадані
+ * не доходять до моделі (помилка стадій 1–3) чи контракти не будуються.
+ */
+export function metadataRights(files: ReadonlyMap<string, string>):
+  | {
+      objects: readonly { id: string; kind: MetadataKind; name: string }[]
+      rights: RightsContract[]
+    }
+  | undefined {
+  const stage1 = readFiles(files)
+  const stage2 = checkIdentity(
+    stage1.objects,
+    stage1.brokenNames,
+    stage1.project,
+    stage1.functionsFiles
+  )
+  if (
+    stage1.project === undefined ||
+    hasErrors([...stage1.diagnostics, ...stage2.diagnostics])
+  )
+    return undefined
+  try {
+    const stage3 = buildModel(stage1.objects, stage1.project, stage2.references)
+    const rights = rightsContracts(
+      stage1.objects,
+      stage2.references,
+      stage3.physical,
+      stage1.project
+    )
+    return {
+      objects: stage1.objects.flatMap((o) =>
+        o.id === undefined ? [] : [{ id: o.id, kind: o.kind, name: o.name }]
+      ),
+      rights,
+    }
+  } catch {
+    // Цикл вимог чи невідома дія: їх називає стадія 4 повної компіляції
+    return undefined
+  }
 }
 
 /**

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { describe, expect, it } from "vitest"
-import { addElement, addElementInput } from "simetra/compiler"
+import { addElement, addElementInput, applyChanges } from "simetra/compiler"
 import { reverseGenerate } from "simetra/schema"
 import { PROVIDER_OWNER_ROLES } from "simetra/model"
 import {
@@ -255,19 +255,77 @@ describeModelPathInvariants()
 describeReferenceDomain()
 
 describe("adoption from scratch with named scope set functions", () => {
-  // Таблиці й види звіряються з повернутих метаданих. Вид скоупу `org`
-  // оголошує мутація `add` зі `scopes` (Р7: `user` тест не додає — перша
-  // відмова не лишає чистого входу для другої). Мутація відмовляє: гранти
-  // `app.org_ids` ще не поглинає форма платформи, а `app.user_ids` лишається
-  // з `sql.definer-caller-unchecked`. Повний ланцюжок (план, тінь, застосування)
-  // закривають #271 Д3 і Д4.
-  it("movement query with named scope set functions: the add of scope kind org refuses exactly", async () => {
+  // Теку прийому лагодять дві мутації `add` (Р8): вид скоупу `org` зі
+  // `scopes` — `app.org_ids` стає формою платформи й губить декларацію
+  // (`toPlatformForms`), потім вид `user` (`setFunction: user_ids`, зовнішній
+  // корінь фікстури; таблиць не має, тож `scopes` не потрібні) — так само для
+  // `app.user_ids`. Після них тека компілюється без помилок, а план проти бази
+  // порожній (Б5): `deployedRoundTrip` веде ланцюжок і застосування.
+  it("movement query with named scope set functions: adoption reaches an empty plan through the add of scope kinds org and user", async () => {
     const { source, result, adopted } = await deployedRoundTrip(
       movementQuery(testProvider()),
       new Map(),
-      true
+      true,
+      async (kept) => {
+        // Корінь `Organization` — сама таблиця виду без носія; решта — з FK на нього
+        const scopes: Record<string, { scope: string; scopeColumn?: string }> =
+          { Organization: { scope: "org" } }
+        for (const table of [
+          "Item",
+          "Sale",
+          "SaleGoods",
+          "Stock",
+          "StockTotals",
+          "StockTurnoversMonth",
+        ]) {
+          scopes[table] = { scope: "org", scopeColumn: "orgId" }
+        }
+        const org = await addElement(
+          kept,
+          addElementInput.parse({
+            target: { kind: "Project" },
+            collection: "scopeKinds",
+            element: {
+              name: "org",
+              root: { object: { kind: "CustomTable", name: "Organization" } },
+              setFunction: { name: "org_ids" },
+            },
+            scopes,
+          }),
+          { schemaPath, newId: () => randomUUID() }
+        )
+        // `app.org_ids` стала формою платформи й декларації не має; лишається
+        // лише відмова класу ремонту для `app.user_ids` — її знімає наступний `add`
+        expect(
+          errors(org.diagnostics).map((d) => ({
+            code: d.code,
+            function: d.params?.function,
+          }))
+        ).toEqual([
+          { code: "sql.declaration-check-missing", function: "app.user_ids" },
+        ])
+        expect(org.written).toBe(true)
+        const withOrg = applyChanges(kept, org.changes)
+        const user = await addElement(
+          withOrg,
+          addElementInput.parse({
+            target: { kind: "Project" },
+            collection: "scopeKinds",
+            element: {
+              name: "user",
+              root: {
+                external: { schema: "auth", table: "users", column: "id" },
+              },
+              setFunction: { name: "user_ids" },
+            },
+          }),
+          { schemaPath, newId: () => randomUUID() }
+        )
+        expect(errors(user.diagnostics)).toEqual([])
+        expect(user.ok).toBe(true)
+        return applyChanges(withOrg, user.changes)
+      }
     )
-    expect(result).toBeUndefined()
     // Таблиці платформної установки тека не описує — їх ставить платформа
     expect(tableKeysOfFiles(adopted!, source.project.defaultSchema)).toEqual(
       await applicationTableKeys(source)
@@ -277,64 +335,17 @@ describe("adoption from scratch with named scope set functions", () => {
         (kind) => kind !== "CustomTable" && kind !== "PgEnum"
       )
     ).toEqual([])
-
-    // Корінь `Organization` — сама таблиця виду без носія; решта — з FK на нього
-    const scopes: Record<string, { scope: string; scopeColumn?: string }> = {
-      Organization: { scope: "org" },
-    }
-    for (const table of [
-      "Item",
-      "Sale",
-      "SaleGoods",
-      "Stock",
-      "StockTotals",
-      "StockTurnoversMonth",
-    ]) {
-      scopes[table] = { scope: "org", scopeColumn: "orgId" }
-    }
-    const added = await addElement(
-      adopted!,
-      addElementInput.parse({
-        target: { kind: "Project" },
-        collection: "scopeKinds",
-        element: {
-          name: "org",
-          root: { object: { kind: "CustomTable", name: "Organization" } },
-          setFunction: { name: "org_ids" },
-        },
-        scopes,
-      }),
-      { schemaPath, newId: () => randomUUID() }
-    )
-    expect(added.written).toBeUndefined()
-    // Рівно гранти `app.org_ids` (їх ще не поглинає форма платформи, Д3) і
-    // `app.user_ids` без перевірки викликача; `scope.declaration-missing` немає
+    // Б5: звірка в `compiledTrip` дає рівно втрачену механіку таблиць виду
+    // (відома втрата прийому з нуля), а функції множини й їхні гранти — форми
+    // платформи, які план не чіпає: ні дослівних грантів, ні декларацій
     expect(
-      added.diagnostics
-        .map((d) => ({
-          code: d.code,
-          at:
-            d.code === "sql.generated-grant"
-              ? `${String(d.params?.identity)}`
-              : `${String(d.params?.schema)}.${String(d.params?.name)}`,
-        }))
-        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
-    ).toEqual([
-      { code: "sql.definer-caller-unchecked", at: "app.user_ids" },
-      // Три одиниці грантів функції — кожна за своєю ідентичністю
-      {
-        code: "sql.generated-grant",
-        at: "grant:grant:function:app.org_ids():simetra_command:execute",
-      },
-      {
-        code: "sql.generated-grant",
-        at: "grant:grant:function:app.org_ids():simetra_user:execute",
-      },
-      {
-        code: "sql.generated-grant",
-        at: "grant:revoke:function:app.org_ids():public:execute",
-      },
-    ])
+      result!.comparison.plan.actions.filter((a) =>
+        /org_ids|user_ids/.test(a.sql)
+      )
+    ).toEqual([])
+    expect(
+      [...adopted!.keys()].filter((path) => path.endsWith(".functions.json"))
+    ).toEqual([])
   })
 })
 

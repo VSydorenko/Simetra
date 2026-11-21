@@ -413,6 +413,12 @@ export const COMPILER_RULES = [
   "introspect.identity-conflict",
   "introspect.project-mismatch",
   "introspect.path-collision",
+  "introspect.definer-check-unknown",
+  "introspect.definer-anonymous-dropped",
+  "introspect.definer-platform-form-candidate",
+  "introspect.definer-foreign-grant",
+  "introspect.definer-callers-drift",
+  "introspect.definer-acl-changed",
 ] as const
 
 export type CompilerRule = (typeof COMPILER_RULES)[number]
@@ -526,6 +532,9 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "promote.cascade-to-restrict",
   "attribute.lazy-over-budget",
   "engine.shadow-drop-failed",
+  "introspect.definer-check-unknown",
+  "introspect.definer-anonymous-dropped",
+  "introspect.definer-platform-form-candidate",
 ])
 
 /**

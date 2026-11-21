@@ -94,6 +94,9 @@ function fakeEngine(fake: Fake): SchemaEngine {
         ? (fake.desired ?? extracted())
         : (fake.target ?? extracted())
     },
+    extractWithExecuteFacts() {
+      throw new Error("this engine reads no EXECUTE facts")
+    },
     plan() {
       throw new Error("compareWithDesired takes the plan from the shadow")
     },

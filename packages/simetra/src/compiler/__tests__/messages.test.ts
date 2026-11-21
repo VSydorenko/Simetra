@@ -12,7 +12,11 @@ import {
   type RuleCode,
 } from "simetra/compiler"
 import { metaFiles, project } from "./helpers"
-import { diagnostic, type DiagnosticParams } from "../diagnostics"
+import {
+  diagnostic,
+  isRepairError,
+  type DiagnosticParams,
+} from "../diagnostics"
 import type { CommandContextWrite } from "../sql/command-context"
 import type { DefinerReadsForm } from "../sql/definer-reads"
 import type { HeadConstruct } from "../sql/query-shape"
@@ -1109,5 +1113,22 @@ describe("messages catalog", () => {
       expect(text).toContain("counterparty_id")
     }
     expect(d.message).toContain("TypeScript hook")
+  })
+})
+
+describe("introspect.definer-* codes", () => {
+  // Серйозність за спекою декларацій функцій §5.7
+  it.each([
+    ["introspect.definer-check-unknown", "warning"],
+    ["introspect.definer-anonymous-dropped", "warning"],
+    ["introspect.definer-platform-form-candidate", "warning"],
+    ["introspect.definer-foreign-grant", "error"],
+    ["introspect.definer-callers-drift", "error"],
+    ["introspect.definer-acl-changed", "error"],
+  ] as const)("%s is a %s with a hint", (code, severity) => {
+    const d = diagnostic(code, "f.sql", "", PARAMS)
+    expect(d.severity).toBe(severity)
+    expect(isRepairError(d)).toBe(false)
+    expect(MESSAGES[code].hint, code).toBeDefined()
   })
 })

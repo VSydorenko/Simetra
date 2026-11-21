@@ -3,7 +3,11 @@ import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { RightsContract } from "../contracts"
 import type { ParsedObject } from "../stages/files"
 import { ON_BEHALF_OF_USER, isSecurityDefiner } from "./definer-reads"
-import { checkedContract, type DeclaredFunction } from "./declarations"
+import {
+  checkedContract,
+  hasUuidInParameter,
+  type DeclaredFunction,
+} from "./declarations"
 import { RIGHTS_FUNCTIONS } from "../rights/functions"
 import type { SqlParser } from "./parse"
 import {
@@ -109,6 +113,16 @@ export function firstStatementOk(
   check: NonNullable<SqlFunctionDeclaration["check"]>,
   parse: SqlParser
 ): Json | undefined {
+  return firstGuardCall(statement, guardFunctionOf(check), parse)
+}
+
+type GuardFunction = (typeof RIGHTS_FUNCTIONS)["require"]
+
+function firstGuardCall(
+  statement: PlpgsqlStatement | undefined,
+  guard: GuardFunction,
+  parse: SqlParser
+): Json | undefined {
   const [expression, ...rest] = statement?.expressions ?? []
   if (
     statement?.type !== "perform" ||
@@ -124,7 +138,6 @@ export function firstStatementOk(
   const named = ((call?.args as unknown[] | undefined) ?? []).some(
     (arg) => asRecord(arg)?.NamedArgExpr !== undefined
   )
-  const guard = guardFunctionOf(check)
   return call !== undefined &&
     !named &&
     name?.length === 2 &&
@@ -132,6 +145,38 @@ export function firstStatementOk(
     name[1] === guard.name
     ? call
     : undefined
+}
+
+/**
+ * Спільна частина судді й читача: тіло plpgsql без `DECLARE`, першим
+ * оператором якого є виклик функції запобіжника `guard`. `EXCEPTION` судить
+ * лише `guardOf` (читач бере аргументи тільки з тіла, яке суддя прийняв би).
+ */
+function guardShape(
+  unit: VerbatimUnit,
+  guard: GuardFunction,
+  plpgsql: PlpgsqlParser,
+  parse: SqlParser
+):
+  | { call: Json; hasExceptionBlock: boolean }
+  | { reason: Exclude<GuardReason, "arguments" | "exceptionBlock"> } {
+  const body = plpgsql(unit.sql)
+  // Тіло, яке не розібрано, довести нічим: тут воно теж не plpgsql.
+  if (!body.ok || body.fn === undefined) return { reason: "language" }
+  // Текст тіла — вміст `DefElem` `as`, як його бачить Postgres.
+  let text: string | undefined
+  try {
+    text = functionBodyText(unit.sql)
+  } catch {
+    text = undefined
+  }
+  if (text === undefined || declareSection(text))
+    return { reason: "declareSection" }
+  const { firstStatement, hasExceptionBlock } = body.fn.author
+  const call = firstGuardCall(firstStatement, guard, parse)
+  return call === undefined
+    ? { reason: "firstStatement" }
+    : { call, hasExceptionBlock }
 }
 
 /**
@@ -152,20 +197,9 @@ export function guardOf(
   const check = declaration.check
   const fail = (reason: GuardReason): GuardProof => ({ ok: false, reason })
   if (check === undefined) return fail("firstStatement")
-  const body = plpgsql(unit.sql)
-  // Тіло, яке не розібрано, довести нічим: тут воно теж не plpgsql.
-  if (!body.ok || body.fn === undefined) return fail("language")
-  // Текст тіла — вміст `DefElem` `as`, як його бачить Postgres.
-  let text: string | undefined
-  try {
-    text = functionBodyText(unit.sql)
-  } catch {
-    text = undefined
-  }
-  if (text === undefined || declareSection(text)) return fail("declareSection")
-  const { firstStatement, hasExceptionBlock } = body.fn.author
-  const call = firstStatementOk(firstStatement, check, parse)
-  if (call === undefined) return fail("firstStatement")
+  const shape = guardShape(unit, guardFunctionOf(check), plpgsql, parse)
+  if (!("call" in shape)) return fail(shape.reason)
+  const { call, hasExceptionBlock } = shape
   const action = contract.actions.find((a) => a.name === check.action)
   const target = check.row ?? check.scope
   const args = Array.isArray(call.args) ? (call.args as unknown[]) : []
@@ -225,4 +259,56 @@ export function checkDeclaredGuards(
           }),
         ]
   })
+}
+
+/** Аргументи запобіжника виклику першого оператора тіла (читає зворотна генерація). */
+export interface GuardArgs {
+  /** Яка функція запобіжника: ціль `row` (`require`) чи `scope` (`requireScope`). */
+  form: "require" | "requireScope"
+  /** Рядок дії: ім'я стандартної дії або UUID кастомної. */
+  action: string
+  /** Мітка виду об'єкта. */
+  kindLabel: string
+  /** Параметр цілі; `null` — `NULL` (дія без цілі). */
+  target: string | null
+}
+
+/**
+ * Читач аргументів запобіжника поруч із `guardOf`: той самий розбір форми
+ * (plpgsql, без `DECLARE`, `PERFORM` єдиного прямого виклику першим
+ * оператором, без `EXCEPTION`), але без декларації — зворотна генерація з
+ * аргументів пише `check`. Нічого не повертає для тіла без запобіжника чи з
+ * аргументами іншої форми (дві рядкові константи й голе ім'я чи `NULL`):
+ * вигаданого `check` не буде.
+ */
+export function guardArgsOf(
+  unit: VerbatimUnit,
+  plpgsql: PlpgsqlParser,
+  parse: SqlParser
+): GuardArgs | undefined {
+  for (const form of ["require", "requireScope"] as const) {
+    const shape = guardShape(unit, RIGHTS_FUNCTIONS[form], plpgsql, parse)
+    if (!("call" in shape) || shape.hasExceptionBlock) continue
+    const args = Array.isArray(shape.call.args)
+      ? (shape.call.args as unknown[])
+      : []
+    if (args.length !== 3) return undefined
+    const action = stringConstant(args[0])
+    const kindLabel = stringConstant(args[1])
+    const target = isNullConstant(args[2]) ? null : bareName(args[2])
+    if (action === undefined || kindLabel === undefined || target === undefined)
+      return undefined
+    // Лише поєднання, які доводить суддя: ціль — IN-параметр uuid функції
+    // (`hasUuidInParameter`, той самий, що в `checkFormReason`), а `NULL` —
+    // лише для `rights_require` (`check` без цілі); для `scope` ціль завжди
+    // параметр. Інакше `check` з цих аргументів `guardOf` відхилив би.
+    if (
+      target === null
+        ? form === "requireScope"
+        : !hasUuidInParameter(unit, target)
+    )
+      return undefined
+    return { form, action, kindLabel, target }
+  }
+  return undefined
 }
