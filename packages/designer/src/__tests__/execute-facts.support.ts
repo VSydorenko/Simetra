@@ -523,6 +523,19 @@ export function describeExecuteFacts(): void {
           ),
       },
       {
+        // Роль поза переліком профілю: лише ACL функції й схеми видає зміну
+        name: "EXECUTE on a function granted to a role outside the profile",
+        before: su(`create role ${quoted(group)}`),
+        change: onTarget(
+          `GRANT EXECUTE ON FUNCTION app.rpc() TO ${quoted(group)}`
+        ),
+      },
+      {
+        name: "USAGE on a schema granted to a role outside the profile",
+        before: su(`create role ${quoted(group)}`),
+        change: onTarget(`GRANT USAGE ON SCHEMA app TO ${quoted(group)}`),
+      },
+      {
         name: "a schema in scope created",
         schemas: ["app", "aux"],
         change: onTarget("CREATE SCHEMA aux"),
