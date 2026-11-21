@@ -11,7 +11,13 @@ import { TASK, key, seed, settle, setup, watch } from "./core-support"
 const USER = "00000000-0000-4000-8000-0000000000a1"
 const V1 = "1".repeat(64)
 const V2 = "2".repeat(64)
-const SNAPSHOT: RightsSnapshot = { userId: USER, scopeSets: [], rights: [] }
+const SNAPSHOT: RightsSnapshot = {
+  userId: USER,
+  scopeSets: [],
+  rights: [],
+  members: [],
+  dimensionValues: [],
+}
 const list: ViewSpec = { kind: "keys", object: TASK, keys: [key(1)] }
 
 const harness = (options: Parameters<typeof setup>[0] = {}) => {
@@ -107,6 +113,8 @@ describe("rights part of the core", () => {
       userId: USER,
       scopeSets: [{ scopeKind: "Organization", scope: key(9) }],
       rights: [],
+      members: [],
+      dimensionValues: [],
     }
     fake.rightsSnapshot = changed
     fake.rightsVersion = V2

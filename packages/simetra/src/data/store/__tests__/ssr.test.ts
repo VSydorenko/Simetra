@@ -17,7 +17,10 @@ import {
   type Writer,
 } from "../types"
 import type { CatalogEntry, RightsRow, RightsSnapshot } from "simetra/model"
-import { SCOPE_KIND_ID } from "../../../model/runtime/__tests__/entries"
+import {
+  SCOPE_KIND_ID,
+  catalogRights,
+} from "../../../model/runtime/__tests__/entries"
 import {
   ORG,
   S,
@@ -937,7 +940,7 @@ describe("size", () => {
  */
 describe("the rights part of SSR", () => {
   const USER = "00000000-0000-4000-8000-0000000000a1"
-  const taskR: CatalogEntry = { ...task, rightsContract: true }
+  const taskR: CatalogEntry = { ...task, rights: catalogRights() }
   const readRow = (
     scope: string,
     over: Partial<RightsRow> = {}
@@ -956,6 +959,8 @@ describe("the rights part of SSR", () => {
     userId: USER,
     scopeSets: [S, T].map((scope) => ({ scopeKind: SCOPE_KIND_ID, scope })),
     rights,
+    members: [],
+    dimensionValues: [],
   })
   let versions = 0
   const grant = (fake: FakeSource, snapshot: RightsSnapshot) => {

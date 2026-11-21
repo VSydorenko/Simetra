@@ -263,6 +263,37 @@ describe("subscription triggers in the compiled model", () => {
     ])
   })
 
+  // Ім'я в лапках (#297): таблицю діагностики дає розбір ідентичності, а не
+  // зріз за довжиною `unit.name`.
+  it("a taken name in quotes names the table", async () => {
+    const other = "event-subscriptions/AuditInsert/AuditInsert.meta.json"
+    expect(
+      await found(
+        entries(
+          { physicalName: "Audit", whenChanged: ["price"] },
+          {
+            [other]: subscription({
+              id: uuid(7102),
+              name: "AuditInsert",
+              physicalName: "Audit_insert",
+            }),
+          }
+        )
+      )
+    ).toEqual([
+      [
+        "subscription.trigger-name-taken",
+        other,
+        "/physicalName",
+        {
+          name: "Audit_insert",
+          table: "public.item",
+          holder: "the event subscription Audit",
+        },
+      ],
+    ])
+  })
+
   it("the name of the row mechanics trigger is taken", async () => {
     expect(
       await found(entries({ physicalName: mechanicsTriggerName("item") }))

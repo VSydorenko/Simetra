@@ -16,6 +16,7 @@ import {
   type PromotionRecord,
   type SqlParser,
   type UniqueShape,
+  unquoteIdent,
 } from "simetra/compiler"
 import {
   KIND_REGISTRY,
@@ -956,15 +957,27 @@ function subjectGrant(name: string): {
   grantOption: boolean
 } {
   const [action, roles = "", ...rest] = splitIdentity(name, ":")
-  const atoms = [...rest.join(":").matchAll(/([^,()*]+)(?:\(([^)]*)\))?(\*)?/g)]
+  // Колонки в ключі — за `quoteIdent`, а дерево гранту дає імена каталогу:
+  // кому чи дужку в імені в лапках ділить лише розбір поза лапками, і
+  // колонка без лапок порівнюється з деревом
+  const atoms = splitIdentity(rest.join(":"), ",")
+    .filter((atom) => atom !== "")
+    .map((atom) => {
+      const m = /^([^(*]+)(?:\((.*)\))?(\*)?$/.exec(atom)
+      return {
+        privilege: m?.[1] ?? atom,
+        columns:
+          m?.[2] === undefined
+            ? []
+            : splitIdentity(m[2], ",").map(unquoteIdent),
+        grantOption: m?.[3] !== undefined,
+      }
+    })
   return {
     action: action === "grant" ? "grant" : "revoke",
     roles: grantRoles(roles),
-    privileges: atoms.map((m) => ({
-      privilege: m[1]!,
-      columns: m[2] === undefined ? [] : m[2].split(","),
-    })),
-    grantOption: atoms.some((m) => m[3] !== undefined),
+    privileges: atoms.map(({ privilege, columns }) => ({ privilege, columns })),
+    grantOption: atoms.some((a) => a.grantOption),
   }
 }
 

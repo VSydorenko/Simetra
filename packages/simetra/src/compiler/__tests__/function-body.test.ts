@@ -16,6 +16,9 @@ const TASK_NOTE_MODULE = "custom-tables/TaskNote/TaskNote.sql"
 /** Спільний файл і модуль боргу прийнятої таблиці: правило однакове скрізь. */
 const PLACES = [EXTRA, TASK_NOTE_MODULE]
 const MATVIEW = "CREATE MATERIALIZED VIEW public.mv AS SELECT 1 AS x;\n"
+/** Процедура, яку кличе `CALL public.p()`: кваліфіковане невідоме ім'я судиться. */
+const MODEL_PROCEDURE =
+  "CREATE PROCEDURE public.p() LANGUAGE sql AS $$ SELECT 1 $$;\n"
 /** Тимчасова таблиця тіла, що зникає з транзакцією. */
 const TEMP = "CREATE TEMP TABLE t (a int) ON COMMIT DROP"
 
@@ -176,7 +179,9 @@ describe("sql.function-body-statement: the body is an allowlist (спека пр
     )
   )("$name in $file → no error", async ({ file, body }) => {
     const result = await compile(
-      await acceptDebt(files({ [file]: MATVIEW + plpgsql(body) }))
+      await acceptDebt(
+        files({ [file]: MATVIEW + MODEL_PROCEDURE + plpgsql(body) })
+      )
     )
     expect(brief(result.diagnostics)).toEqual([])
   })
@@ -377,6 +382,51 @@ describe("sql.function-body-statement: a call that executes SQL text (спека
         )
       )
       expect(brief(qualified.diagnostics)).toEqual([])
+    }
+  )
+
+  // Кваліфікований виклик, що не є вбудованою, функцією моделі, згенерованою
+  // функцією чи функцією платформи, може бути функцією розширення (Р7, І10):
+  // боргове `CREATE EXTENSION` без `SCHEMA` ставить її в схему застосунку.
+  it.each(
+    PLACES.flatMap((file) =>
+      [
+        {
+          name: "a qualified call of a function no unit declares",
+          sql: plpgsql("PERFORM public.dblink_exec('c', 'SELECT 1')"),
+        },
+        {
+          name: "a pg_catalog name outside the builtins",
+          sql: plpgsql("PERFORM pg_catalog.dblink_exec('c', 'SELECT 1')"),
+        },
+        {
+          // Функція моделі в схемі провайдера виклику не рятує (Р7б, І21):
+          // Postgres обирає перевантаження за аргументами.
+          name: "a model function of a provider schema with the same name",
+          sql: `${plpgsql("PERFORM extensions.dblink_exec('c', 'SELECT 1')")};\nCREATE FUNCTION extensions.dblink_exec(n int) RETURNS int LANGUAGE sql IMMUTABLE AS $$ SELECT n $$;`,
+        },
+      ].map((row) => ({ ...row, file }))
+    )
+  )("$name in $file → dynamicText", async ({ file, sql }) => {
+    const result = await compile(await acceptDebt(files({ [file]: sql })))
+    expect(
+      brief(result.diagnostics).filter(
+        (d) => d.code === "sql.function-body-statement"
+      )
+    ).toEqual([bodyStatement(file, "dynamicText")])
+  })
+
+  it.each(PLACES)(
+    "a qualified call of a model procedure and aggregate in %s → no error",
+    async (file) => {
+      const result = await compile(
+        await acceptDebt(
+          files({
+            [file]: `${plpgsql("PERFORM public.agg(1)")};\nCREATE AGGREGATE public.agg(int) (SFUNC = int4pl, STYPE = int);`,
+          })
+        )
+      )
+      expect(brief(result.diagnostics)).toEqual([])
     }
   )
 
@@ -718,4 +768,74 @@ describe("sql.function-body-statement: forms the target denylist judged before (
     )
     expect(brief(result.diagnostics)).toEqual([])
   })
+})
+
+describe("fix round 1 of #275: function-call judges", () => {
+  const dynamic = (file: string) => [bodyStatement(file, "dynamicText")]
+  const MY_FN =
+    'CREATE FUNCTION public."MyFn"() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;'
+
+  // Парсер уже згортає некавичені ідентифікатори: суддя тіла не згортає вдруге,
+  // тож функція з кавичками й великою літерою збігається з моделлю.
+  it.each(PLACES)(
+    "a quoted mixed-case model function in %s → no error; the folded name → dynamicText (H3)",
+    async (file) => {
+      const ok = await compile(
+        await acceptDebt(
+          files({
+            [file]: `${plpgsql('PERFORM public."MyFn"()')};\n${MY_FN}`,
+          })
+        )
+      )
+      expect(brief(ok.diagnostics)).toEqual([])
+      const folded = await compile(
+        await acceptDebt(
+          files({ [file]: `${plpgsql("PERFORM public.myfn()")};\n${MY_FN}` })
+        )
+      )
+      expect(
+        brief(folded.diagnostics).filter(
+          (d) => d.code === "sql.function-body-statement"
+        )
+      ).toEqual(dynamic(file))
+    }
+  )
+
+  // `CALL` несе виклик полем `funccall` без обгортки `FuncCall`.
+  it.each(PLACES)(
+    "CALL of an unknown qualified procedure in %s → dynamicText; of a model procedure → no error (H4)",
+    async (file) => {
+      const bad = await compile(
+        await acceptDebt(
+          files({ [file]: plpgsql("CALL extensions.unknown_proc()") })
+        )
+      )
+      expect(brief(bad.diagnostics)).toEqual(dynamic(file))
+      const ok = await compile(
+        await acceptDebt(
+          files({
+            [file]: `${plpgsql("CALL public.proc()")};\nCREATE PROCEDURE public.proc() LANGUAGE sql AS $$ SELECT 1 $$;`,
+          })
+        )
+      )
+      expect(brief(ok.diagnostics)).toEqual([])
+    }
+  )
+
+  // `DEFAULT` параметра розв'язується під час створення за шляхом DDL, а не за
+  // `SET search_path` функції.
+  it.each(PLACES)(
+    "an unqualified unknown call in a parameter DEFAULT under SET search_path = '' in %s → dynamicText (H5)",
+    async (file) => {
+      const result = await compile(
+        await acceptDebt(
+          files({
+            [file]:
+              "CREATE FUNCTION public.f(a int DEFAULT unsafe()) RETURNS void LANGUAGE sql SET search_path = '' AS $$ SELECT 1 $$",
+          })
+        )
+      )
+      expect(brief(result.diagnostics)).toEqual(dynamic(file))
+    }
+  )
 })

@@ -6,7 +6,7 @@ import {
   PROVIDER_UNMANAGED_EXTENSIONS,
   type EngineScope,
 } from "simetra/schema"
-import { readCensus } from "../census-read"
+import { readCensus, readUnpopulatedViews } from "../census-read"
 
 /** Підставний клієнт: запит не виконується, лише запам'ятовуються параметри. */
 function recordingDb() {
@@ -41,5 +41,28 @@ describe("census query parameters follow the scope provider", () => {
     expect(PROVIDER_UNMANAGED_EXTENSIONS.postgres).not.toEqual(
       PROVIDER_UNMANAGED_EXTENSIONS.supabase
     )
+  })
+})
+
+describe("unpopulated views are named in the unit identity language", () => {
+  it("quotes the parts that need it, as the unit of the model does", async () => {
+    const db = {
+      query: async () => ({
+        rows: [
+          { schema: "app", name: "plain" },
+          { schema: "App", name: "Mixed.Case" },
+          { schema: "app", name: "a,b" },
+        ],
+      }),
+    }
+    const ids = await readUnpopulatedViews(
+      db as unknown as Parameters<typeof readUnpopulatedViews>[0],
+      { schemas: ["app"], provider: "postgres" }
+    )
+    expect(ids).toEqual([
+      "materializedView:app.plain",
+      'materializedView:"App"."Mixed.Case"',
+      'materializedView:app."a,b"',
+    ])
   })
 })

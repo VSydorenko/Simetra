@@ -33,6 +33,7 @@ import { sha256HexSync } from "../sha256"
 import { loadSqlParser } from "../sql/parse"
 import type { SqlUnit } from "../sql/units"
 import {
+  adoptedSourcesDomain,
   ATTACHMENTS_TABLE,
   BULLETIN_FILE,
   BULLETIN_TABLE,
@@ -300,10 +301,13 @@ const NO_RIGHTS: AccessPolicyContracts = {
   membershipSources: [],
 }
 
-async function units(access: AccessContract[]) {
+async function units(
+  access: AccessContract[],
+  contracts: AccessPolicyContracts = NO_RIGHTS
+) {
   return buildAccessUnits(
     access,
-    NO_RIGHTS,
+    contracts,
     { tables: [], enumTypes: [] },
     "supabase",
     "app",
@@ -423,6 +427,33 @@ describe("buildAccessUnits", () => {
     expect(result.map((u) => u.sql)).toContain(
       "GRANT SELECT ON TABLE public.item TO anon;"
     )
+  })
+
+  it("public read for the user without a session user layer opens all rows", async () => {
+    // Без «Користувачів» і джерела членства `current_user_id()` немає, і
+    // дійсність користувача судити нічим (#318).
+    expect(
+      policySql(await units([contract({ publicRead: ["user"] })]))
+    ).toEqual([
+      "CREATE POLICY item_public_read ON public.item AS PERMISSIVE FOR SELECT TO authenticated, simetra_command USING (true);",
+    ])
+  })
+
+  it("public read for the user with only a membership source checks the session user", async () => {
+    // Друга гілка `hasSessionUser`: без «Користувачів» `current_user_id()` дає
+    // прийняте джерело членства (`sub` і є id користувача), тож умова та сама.
+    const source = (await compile(adoptedSourcesDomain())).model!.contracts
+      .membershipSources[0]!
+    expect(
+      policySql(
+        await units([contract({ publicRead: ["user"] })], {
+          ...NO_RIGHTS,
+          membershipSources: [source],
+        })
+      )
+    ).toEqual([
+      "CREATE POLICY item_public_read ON public.item AS PERMISSIVE FOR SELECT TO authenticated, simetra_command USING ((SELECT simetra.current_user_id()) IS NOT NULL);",
+    ])
   })
 
   it("unscoped table without public read has grants only", async () => {
@@ -1094,7 +1125,8 @@ describe("rights write policies", () => {
     // відкриті; без цього запис з `WHERE` чи `RETURNING` не бачив би рядків.
     const policies = policiesOf(domain, BULLETIN_TABLE)
     expect(policies.get(`${BULLETIN_TABLE}_public_read`)).toBe(
-      `CREATE POLICY ${BULLETIN_TABLE}_public_read ON public.${BULLETIN_TABLE} AS PERMISSIVE FOR SELECT TO authenticated, simetra_command USING (true);`
+      // `authenticated` — лише дійсному користувачу (#318).
+      `CREATE POLICY ${BULLETIN_TABLE}_public_read ON public.${BULLETIN_TABLE} AS PERMISSIVE FOR SELECT TO authenticated, simetra_command USING ((SELECT simetra.current_user_id()) IS NOT NULL);`
     )
     for (const dml of DMLS) {
       expect(policies.has(`${BULLETIN_TABLE}_scope_${dml}`)).toBe(true)

@@ -30,12 +30,14 @@ import {
   type RightsContract,
 } from "./contracts"
 import { compareStrings } from "./diagnostics"
+import { CURRENT_USER } from "./membership-functions"
 import { commandWriteColumns } from "./rights/command-columns"
 import { COMMAND_FUNCTIONS } from "./rights/command-units"
 import {
   RIGHTS_FUNCTIONS,
   call,
   hasRightsFunctions,
+  hasSessionUser,
   hasVisibleUsers,
   uuidLiteral,
 } from "./rights/functions"
@@ -174,6 +176,25 @@ function commandColumns(
   }
 }
 
+/**
+ * Чи відкриває `publicRead` рядки лише дійсному користувачу (спека прав §5.2):
+ * `authenticated` — так, бо сесія з недійсним чи не прив'язаним користувачем
+ * (`current_user_id()` — NULL) не відрізняється від гостя, а гостю об'єкт
+ * закритий; `anon` — ні, гість і так читає. Без функції користувача
+ * (`hasSessionUser`) дійсність судити нічим — рядки відкриті ролі запиту, як і
+ * досі. Одне місце для політики й функції пояснення прав.
+ */
+export function publicReadNeedsUser(
+  contract: Pick<AccessContract, "publicRead">,
+  sessionUser: boolean
+): boolean {
+  return (
+    sessionUser &&
+    contract.publicRead.length > 0 &&
+    contract.publicRead.every((purpose) => purpose === "user")
+  )
+}
+
 /** Гість бачить не більше за користувача: `anon` відкриває обидві ролі запиту. */
 function publicReadPurposes(
   role: PublicReadRole | undefined
@@ -263,6 +284,23 @@ export function scopeSetCall(
   return scope.verbatim
     ? call(RIGHTS_FUNCTIONS.scopeSet, [uuidLiteral(scope.scopeKindId)])
     : `${qualified(scope.setFunction)}()`
+}
+
+/**
+ * Множина скоупів кожного виду скоупу моделі — `scopeSetCall` його таблиць,
+ * упорядковано за видом. Одне джерело для `scopeSets` знімка прав клієнта й
+ * оракула каналів прав підписки: клієнт підписується на канали саме тих
+ * скоупів, які бачить у знімку.
+ */
+export function scopeKindSets(
+  access: readonly AccessContract[]
+): [kindId: string, set: string][] {
+  const byKind = new Map<string, string>()
+  for (const contract of access) {
+    if (contract.scope === undefined) continue
+    byKind.set(contract.scope.scopeKindId, scopeSetCall(contract.scope))
+  }
+  return [...byKind].sort(([a], [b]) => compareStrings(a, b))
 }
 
 /** Родина політики запису (спека прав §5.3): кореневий рядок команди чи решта рядків. */
@@ -461,6 +499,7 @@ export function buildAccessUnits(
   const bounded = [apiRoles.user, PLATFORM_ROLES.command]
   const rightsOn = hasRightsFunctions(contracts, provider)
   const visibleUsers = hasVisibleUsers(contracts, provider)
+  const sessionUser = hasSessionUser(contracts, provider)
   const rightsById = new Map(contracts.rights.map((c) => [c.objectId, c]))
   const policyLabel = rightsPolicyLabel(contracts)
   return access
@@ -527,7 +566,11 @@ export function buildAccessUnits(
               ...contract.publicRead.map((purpose) => apiRoles[purpose]),
               PLATFORM_ROLES.command,
             ],
-            { using: "true" }
+            {
+              using: publicReadNeedsUser(contract, sessionUser)
+                ? `${CURRENT_USER} IS NOT NULL`
+                : "true",
+            }
           )
         )
       }

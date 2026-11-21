@@ -604,6 +604,30 @@ describe("reverseGenerate", () => {
     ).toEqual([])
   })
 
+  // Ідентичність функції з ім'ям у верхньому регістрі — у лапках: сирий
+  // шаблон `function:app.Touch()` не впізнав би власну тригерну функцію
+  it("trigger function with a name that needs quotes goes to the sidecar", async () => {
+    const result = await reverseGenerate(
+      model({
+        tables: [table("app", "note")],
+        units: units(
+          [
+            'CREATE FUNCTION app."Touch"() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;',
+            'CREATE TRIGGER note_touch BEFORE UPDATE ON app.note FOR EACH ROW EXECUTE FUNCTION app."Touch"();',
+          ].join("\n")
+        ),
+      }),
+      options()
+    )
+    expect(result.diagnostics).toEqual([])
+    expect(result.files.get("custom-tables/Note/Note.sql")).toContain(
+      'CREATE FUNCTION app."Touch"()'
+    )
+    expect(
+      [...result.files.keys()].filter((p) => p.startsWith("sql/"))
+    ).toEqual([])
+  })
+
   it("trigger function shared by two tables goes to sql/<schema>", async () => {
     const result = await reverseGenerate(
       model({
@@ -636,6 +660,49 @@ describe("reverseGenerate", () => {
     expect(result.files.get("sql/reports/add__int4_int4.sql")).toBe(
       "CREATE FUNCTION reports.add(a integer, b integer) RETURNS integer VOLATILE LANGUAGE sql AS $$ SELECT a + b $$;\n"
     )
+  })
+
+  // Сира кома розрізала б `"x,"` на `app."x` і `"`, і порожній сегмент
+  // дав би зайве `_`
+  it.each([
+    ['app."x,y"', "sql/app/f__app_x_y.sql"],
+    ['app."x,"', "sql/app/f__app_x.sql"],
+  ])(
+    "a quoted argument type %s with a comma is one argument in the file name",
+    async (type, path) => {
+      const result = await reverseGenerate(
+        model({
+          units: units(
+            `CREATE FUNCTION app.f(a ${type}) RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;`
+          ),
+        }),
+        options()
+      )
+      expect(errors(result)).toEqual([])
+      expect(
+        [...result.files.keys()].filter((p) => p.startsWith("sql/"))
+      ).toEqual([path])
+    }
+  )
+
+  // Перевантаження, що різняться лише межею лапок, мають різні ідентичності,
+  // але один `slug`: гучна колізія шляху, а не тихий перезапис файлу
+  it("overloads that differ only in the quote boundary collide loudly", async () => {
+    const result = await reverseGenerate(
+      model({
+        units: units(
+          [
+            'CREATE FUNCTION app.f(a app."x,y") RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;',
+            "CREATE FUNCTION app.f(a app.x, b y) RETURNS integer LANGUAGE sql AS $$ SELECT 2 $$;",
+          ].join("\n")
+        ),
+      }),
+      options()
+    )
+    expect(
+      result.diagnostics.map((d) => [d.code, d.params?.path])
+    ).toContainEqual(["introspect.path-collision", "sql/app/f__app_x_y.sql"])
+    expect(result.files.has("sql/app/f__app_x_y.sql")).toBe(false)
   })
 
   it("two grants on one object get distinct paths", async () => {
@@ -2590,7 +2657,7 @@ describe("reverseGenerate", () => {
         units: units(
           [
             "CREATE VIEW reports.active AS SELECT id FROM app.customer;",
-            "CREATE EXTENSION IF NOT EXISTS pgcrypto;",
+            "CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;",
             "COMMENT ON VIEW reports.active IS 'Active';",
             "ALTER DEFAULT PRIVILEGES IN SCHEMA reports GRANT SELECT ON TABLES TO anon;",
             "CREATE SEQUENCE app.counter;",
@@ -2600,15 +2667,11 @@ describe("reverseGenerate", () => {
       }),
       options()
     )
-    // Розширення без SCHEMA стає в схему застосунку (спека прав §5.3).
-    const extension = [["sql.debt-extension-schema", "warning"]]
-    expect(result.diagnostics.map((d) => [d.code, d.severity])).toEqual(
-      extension
-    )
+    // Розширення лише в схемі провайдера (спека прав §5.3): без SCHEMA воно було б
+    // помилкою `sql.debt-extension-schema`.
+    expect(result.diagnostics).toEqual([])
     const compiled = await compile(result.files)
-    expect(compiled.diagnostics.map((d) => [d.code, d.severity])).toEqual(
-      extension
-    )
+    expect(compiled.diagnostics).toEqual([])
     expect(compiled.ok).toBe(true)
     expect(
       result.files.get("custom-tables/AppCustomer/AppCustomer.sql")

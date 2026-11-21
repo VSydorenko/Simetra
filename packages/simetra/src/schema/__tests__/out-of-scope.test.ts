@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
+import { verbatimUnits } from "../../compiler/compile"
 import { engineScope } from "simetra/schema"
 import {
   acceptDebt,
@@ -157,7 +158,7 @@ describe("engine.out-of-scope", () => {
       await outOfScope(
         [
           "CREATE TRIGGER app_on_user AFTER INSERT ON auth.users",
-          "  FOR EACH ROW EXECUTE FUNCTION extensions.on_user();",
+          "  FOR EACH ROW EXECUTE FUNCTION extensions.uuid_generate_v4();",
           "",
         ].join("\n")
       )
@@ -190,7 +191,7 @@ describe("engine.out-of-scope", () => {
 
   it("global default privileges", async () => {
     const [message, ...rest] = await outOfScope(
-      "ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO anon;\n"
+      "ALTER DEFAULT PRIVILEGES REVOKE SELECT ON TABLES FROM anon;\n"
     )
     expect(rest).toEqual([])
     expect(message).toMatch(/^defaultPrivileges:/)
@@ -201,7 +202,9 @@ describe("engine.out-of-scope", () => {
 
   it("a provider extension", async () => {
     expect(
-      await outOfScope("CREATE EXTENSION IF NOT EXISTS pg_graphql;\n")
+      await outOfScope(
+        "CREATE EXTENSION IF NOT EXISTS pg_graphql SCHEMA graphql;\n"
+      )
     ).toEqual([
       `extension:pg_graphql ${OUTSIDE}: the provider installs this extension itself`,
     ])
@@ -247,5 +250,80 @@ describe("the platform layer joins the boundary by its own schemas", () => {
       "catalogs/Currency/Currency.meta.json": catalog("Currency"),
     })
     expect(scope.schemas).toEqual(["app", "simetra"])
+  })
+})
+
+// Розширення оголошує модель: його функції — члени, яких читач бази тримає в межі
+const EXT =
+  "CREATE EXTENSION IF NOT EXISTS fuzzystrmatch WITH SCHEMA extensions;\n"
+const EXT_MODDATETIME =
+  "CREATE EXTENSION IF NOT EXISTS moddatetime WITH SCHEMA extensions;\n"
+
+describe("the engine boundary judges a trigger on the identity source on its own", () => {
+  // Компілятор ці форми відмовляє (Р4а, Р6), тож одиниці подаються межі двигуна
+  // без нього: `engine.out-of-scope` — власна межа, а не наслідок відмови.
+  async function triggerOutOfScope(trigger: string): Promise<string[]> {
+    const files = (sql: string) =>
+      metaFiles({
+        "project.meta.json": project({ defaultSchema: "app" }),
+        "custom-tables/Note/Note.meta.json": customTable("Note"),
+        "sql/app/units.sql": sql,
+      })
+    const base = await compile(await acceptDebt(files("")))
+    expect(base.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    const units = await verbatimUnits(files(trigger))
+    const { diagnostics } = await engineScope({
+      ...base.model!,
+      sqlUnits: [
+        ...base.model!.sqlUnits,
+        ...units.map((u) => ({ ...u, module: "" })),
+      ],
+    })
+    return diagnostics.map((d) => `${d.code} ${String(d.params.object)}`)
+  }
+
+  it.each([
+    {
+      name: "a function of the provider schema in EXECUTE FUNCTION",
+      sql: "CREATE TRIGGER probe AFTER UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION auth.probe_on_user();\n",
+      expected: ["engine.out-of-scope trigger:auth.users.probe"],
+    },
+    {
+      name: "a function of the provider schema in WHEN",
+      sql: "CREATE TRIGGER probe AFTER UPDATE ON auth.users FOR EACH ROW WHEN (auth.probe_ok(new.email)) EXECUTE FUNCTION app.on_user();\n",
+      expected: ["engine.out-of-scope trigger:auth.users.probe"],
+    },
+    {
+      name: "a BEFORE trigger on a builtin function stays inside the boundary",
+      sql: "CREATE TRIGGER probe BEFORE UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();\n",
+      expected: [],
+    },
+    {
+      name: "a function of a declared extension in WHEN is a member, inside the boundary",
+      sql: `${EXT}CREATE TRIGGER probe AFTER UPDATE ON auth.users FOR EACH ROW WHEN (extensions.soundex(new.email) <> '') EXECUTE FUNCTION app.on_user();\n`,
+      expected: [],
+    },
+    {
+      name: "a function of a declared extension in EXECUTE FUNCTION is a member, inside the boundary",
+      sql: `${EXT_MODDATETIME}CREATE TRIGGER probe BEFORE UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION extensions.moddatetime('updated_at');\n`,
+      expected: [],
+    },
+    {
+      name: "a function of ANOTHER declared extension in the same schema is outside",
+      sql: `${EXT}CREATE TRIGGER probe BEFORE UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION extensions.moddatetime('updated_at');\n`,
+      expected: ["engine.out-of-scope trigger:auth.users.probe"],
+    },
+    {
+      name: "the same schema, a function that is no extension member, is outside",
+      sql: `${EXT}CREATE TRIGGER probe AFTER UPDATE ON auth.users FOR EACH ROW WHEN (extensions.app_made(new.email)) EXECUTE FUNCTION app.on_user();\n`,
+      expected: ["engine.out-of-scope trigger:auth.users.probe"],
+    },
+    {
+      name: "a known extension function without a declared extension is outside",
+      sql: "CREATE TRIGGER probe AFTER UPDATE ON auth.users FOR EACH ROW WHEN (extensions.soundex(new.email) <> '') EXECUTE FUNCTION app.on_user();\n",
+      expected: ["engine.out-of-scope trigger:auth.users.probe"],
+    },
+  ])("$name", async ({ sql, expected }) => {
+    expect(await triggerOutOfScope(sql)).toEqual(expected)
   })
 })

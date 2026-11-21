@@ -13,7 +13,6 @@ import {
 import {
   callsSqlText,
   literalDynamicText,
-  providerCalls,
   type ProviderCalls,
 } from "./command-context"
 import {
@@ -383,7 +382,28 @@ export function bodyStatementProblem(
   }
   if (callsSqlText(unit.tree, calls, open))
     return { statement: "dynamicText", line: 1 }
+  // `DEFAULT` параметра розв'язується під час створення за шляхом сесії DDL, а
+  // не за `SET search_path` функції: його судить суддя виразів, що вважає
+  // шлях відкритим, і закритий `search_path` функції його не рятує.
+  if (callsSqlText(parameterDefaults(unit.tree), calls, true))
+    return { statement: "dynamicText", line: 1 }
   return undefined
+}
+
+/** Вирази `DEFAULT` параметрів `CREATE FUNCTION`/`PROCEDURE`. */
+function parameterDefaults(tree: unknown): unknown[] {
+  const fn = (
+    tree as {
+      CreateFunctionStmt?: {
+        parameters?: { FunctionParameter?: { defexpr?: unknown } }[]
+      }
+    }
+  ).CreateFunctionStmt
+  return (fn?.parameters ?? []).flatMap((p) =>
+    p.FunctionParameter?.defexpr === undefined
+      ? []
+      : [p.FunctionParameter.defexpr]
+  )
 }
 
 /**
@@ -485,12 +505,12 @@ export function checkFunctionBodies(
   project: Project | undefined,
   units: readonly VerbatimUnit[],
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  calls: ProviderCalls
 ): Diagnostic[] {
   const views = modelViews(units)
   const closed = closedModuleOwners(objects)
   const ruled = ruledFunctions(objects, project)
-  const calls = providerCalls(project?.database.provider, units)
   return units.flatMap((unit) => {
     const shelled =
       (unit.ownerFile !== undefined && closed.has(unit.ownerFile)) ||

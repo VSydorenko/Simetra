@@ -142,7 +142,12 @@ describe("buildClientCatalog", () => {
         "creatorMembership",
         "scopeKindId",
         "publicRead",
-        "rightsContract",
+        "rights",
+        "binding",
+        "root",
+        "author",
+        "subject",
+        "scopeSet",
       ].filter((key) => !keys.has(key))
     ).toEqual([])
     clients.forEach((client, index) => {

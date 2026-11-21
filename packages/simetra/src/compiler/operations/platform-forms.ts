@@ -5,7 +5,8 @@ import {
 } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import { readFiles } from "../pipeline"
-import { platformFormFunctions, tupleKey } from "../sql/declarations"
+import { platformFormFunctions } from "../sql/declarations"
+import { qualifiedName } from "../sql/identity"
 
 /** Файли після переходу й попередження про ширші призначення форм. */
 export interface PlatformFormTransition {
@@ -41,9 +42,9 @@ export function toPlatformForms(
     for (const declaration of parsed.functions) {
       const schema = declaration.function.schema ?? project.defaultSchema
       const { name } = declaration.function
-      // Пара, а не зклеєний рядок: інакше декларація `a."b.c"` зникла б через
-      // форму `"a.b".c` (Р7), як і в `checkDeclarations`.
-      const form = forms.get(tupleKey({ schema, name }))
+      // Ключ за правилом ідентичності, а не сирий рядок: інакше декларація
+      // `a."b.c"` зникла б через форму `"a.b".c` (Р7), як і в `checkDeclarations`.
+      const form = forms.get(qualifiedName(schema, name))
       if (form === undefined) {
         kept.push(declaration)
         continue

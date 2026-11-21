@@ -18,7 +18,6 @@ import { HEAD_EXCLUDED_BUILTINS } from "./builtin-exclusions"
 import { BUILTIN_FUNCTIONS } from "./builtin-functions"
 import {
   closedModuleOwners,
-  extensionSchemas,
   hasEffectiveEmptySearchPath,
   routineLanguage,
 } from "./closed-forms"
@@ -38,11 +37,8 @@ import {
 } from "./query-shape"
 import { splitAssignment } from "./rewrite/plpgsql-body"
 import { statementTargets } from "./unit-target"
-import {
-  functionIdentity,
-  inputArgumentTypes,
-  type VerbatimUnit,
-} from "./units"
+import { functionIdentity, unitIdentity } from "./identity"
+import { inputArgumentTypes, type VerbatimUnit } from "./units"
 
 /*
  * Голови (спека прав §5.3): SQL застосунку, що виконується посеред команди чи під
@@ -76,8 +72,7 @@ export interface HeadJudgement {
  * читають: поточний користувач платформи, згенеровані функції членства,
  * пошуку предвизначеного й віртуальних таблиць і поіменні функції провайдера
  * (спека прав §5.3); `builtins` — дозвільний перелік вбудованих;
- * `wrappers` — `схема.ім'я` обгортки блоку рухів за `blockHeadKey`;
- * `extensions` — схеми застосунку з функціями боргових розширень (спека прав §5.3).
+ * `wrappers` — `схема.ім'я` обгортки блоку рухів за `blockHeadKey`.
  */
 export interface HeadScope {
   units: readonly VerbatimUnit[]
@@ -85,7 +80,6 @@ export interface HeadScope {
   trusted: ReadonlySet<string>
   builtins: ReadonlySet<string>
   wrappers: ReadonlyMap<string, string>
-  extensions: { all: boolean; schemas: ReadonlySet<string> }
   parse: SqlParser
   plpgsql: PlpgsqlParser
 }
@@ -155,7 +149,6 @@ export function headScope(
       BUILTIN_FUNCTIONS.filter((name) => !HEAD_EXCLUDED_BUILTINS.includes(name))
     ),
     wrappers,
-    extensions: extensionSchemas(units, project.database.provider),
     parse,
     plpgsql,
   }
@@ -545,10 +538,7 @@ class Walk {
     }
     const routines = this.index.routinesNamed(name, schema)
     if (routines.length > 0) {
-      if (
-        routines.some((u) => u.class !== "function") ||
-        this.shadowed(schema)
-      ) {
+      if (routines.some((u) => u.class !== "function")) {
         this.report(chain, "call", qualified)
       } else {
         for (const unit of routines) this.enqueue(unit, chain)
@@ -564,23 +554,11 @@ class Walk {
     const routines = this.index
       .routinesNamed(name)
       .filter((u) => u.class !== "function" || singleArgument(u))
-    if (
-      routines.some((u) => u.class !== "function" || this.shadowed(u.schema))
-    ) {
+    if (routines.some((u) => u.class !== "function")) {
       this.report(chain, "call", name)
       return
     }
     for (const unit of routines) this.enqueue(unit, chain)
-  }
-
-  /**
-   * Схема, де функція боргового розширення могла б перевантажити функцію
-   * моделі (спека прав §5.3): функцій розширень серед одиниць немає, тож суддя не
-   * бачить, у котру з них Postgres розв'яже виклик.
-   */
-  private shadowed(schema: string): boolean {
-    const { all, schemas } = this.scope.extensions
-    return all || schemas.has(schema)
   }
 
   /**
@@ -605,7 +583,9 @@ class Walk {
       return
     }
     this.relations.push({ chain, relation: qualified })
-    const key = `table:${qualified}`
+    // Ключ обходу ділить множину з ідентичностями одиниць, тож складається
+    // тим самим правилом `identity.ts`.
+    const key = unitIdentity("table", schema, name)
     if (table.rowLevelSecurity === "off" || this.visited.has(key)) return
     this.visited.add(key)
     for (const policy of this.index.policiesOn(table))

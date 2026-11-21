@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { DATABASE_PROVIDERS } from "../schemas/project"
-import { catalogEntrySchema } from "./catalog"
+import { catalogAdoptedFactsSchema, catalogEntrySchema } from "./catalog"
 
 /**
  * The client catalog (`client-catalog.json`): the shared part of each runtime
@@ -13,6 +13,8 @@ export const clientCatalogSchema = z
     provider: z.enum(DATABASE_PROVIDERS),
     /** Проєкт має функції прав: без прапорця клієнт не шле `rights` (Р6). */
     rightsSnapshot: z.literal(true).optional(),
+    /** Факти прийнятих джерел свіжіють за інтервалом (П4-B §8.2). */
+    adoptedFacts: catalogAdoptedFactsSchema.optional(),
     objects: z.array(catalogEntrySchema),
   })
   .superRefine((catalog, ctx) => {

@@ -1,10 +1,16 @@
 import {
   ROW_VERSION_SEQUENCE,
   executeGrants,
+  functionKey,
+  keyIdentity,
   platformFunctionSignatures,
   platformSchemaGrants,
+  qualifiedName,
+  readSqlUnits,
+  splitIdentity,
   type CompiledModel,
   type PromotionRecord,
+  type SqlParser,
 } from "simetra/compiler"
 import {
   APPLIED_SNAPSHOT_HASH_FUNCTION_NAME,
@@ -13,6 +19,7 @@ import {
   PLATFORM_STATE_TABLES,
   quoteIdent,
   type CatalogModel,
+  type CatalogUnit,
   type DatabaseProvider,
 } from "simetra/model"
 import type {
@@ -43,14 +50,17 @@ export const APPLY_STATE_FORMAT = 1
 const SCHEMA = quoteIdent(PLATFORM_SCHEMA)
 const MARKER = `${SCHEMA}.${quoteIdent("marker")}`
 const LEDGER = `${SCHEMA}.${quoteIdent("ledger")}`
-const SNAPSHOT_HASH_FUNCTION = `${PLATFORM_SCHEMA}.${APPLIED_SNAPSHOT_HASH_FUNCTION_NAME}()`
 const SNAPSHOT_HASH_SIGNATURE = `${SCHEMA}.${quoteIdent(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}()`
 const VERSION_EPOCH = `${SCHEMA}.${quoteIdent("version_epoch")}`
-const EPOCH_FUNCTION = `${PLATFORM_SCHEMA}.${ROW_VERSION_EPOCH_FUNCTION_NAME}()`
 const EPOCH_SIGNATURE = `${SCHEMA}.${ROW_VERSION_EPOCH_FUNCTION_NAME}()`
-const RESET_FUNCTION = `${PLATFORM_SCHEMA}.reset_row_version_epoch()`
 const RESET_SIGNATURE = `${SCHEMA}.reset_row_version_epoch()`
 const SEQUENCE_NAME = `${PLATFORM_SCHEMA}.${ROW_VERSION_SEQUENCE.name}`
+/** Ключі функцій стану: ціль їхніх одиниць і грантів. */
+const STATE_FUNCTION_KEYS = [
+  APPLIED_SNAPSHOT_HASH_FUNCTION_NAME,
+  ROW_VERSION_EPOCH_FUNCTION_NAME,
+  "reset_row_version_epoch",
+].map((name) => functionKey(PLATFORM_SCHEMA, name, []))
 
 /**
  * Функції платформи плану (`platformFunctions` артефакту): функції шару з
@@ -64,9 +74,7 @@ export function planPlatformFunctions(
 ): string[] {
   return [
     ...platformFunctionSignatures(model.sqlUnits),
-    SNAPSHOT_HASH_FUNCTION,
-    EPOCH_FUNCTION,
-    RESET_FUNCTION,
+    ...STATE_FUNCTION_KEYS,
   ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 }
 
@@ -367,6 +375,71 @@ export async function readApplyState(
   }
 }
 
+/**
+ * Застосований каталог: модель каталогу marker, у якій ідентичність кожної
+ * одиниці перевиведено з її `sql` (платформна спека §6.2). `unreadable` —
+ * одиниці, з `sql` яких не виходить рівно одна одиниця без діагностик, і
+ * одиниці, що перевивелися в одну ідентичність з іншою; у `catalog` їх
+ * немає.
+ */
+export interface AppliedCatalog {
+  catalog: CatalogModel
+  unreadable: CatalogUnit[]
+}
+
+/**
+ * Застосований каталог з каталогу marker. Збережена ідентичність одиниці —
+ * похідна, а не правда: правило ідентичності міняється з версією платформи,
+ * і стара форма дала б хибний дрейф на незмінній цілі чи «чужий» власний
+ * тригер. Тож ідентичність, клас, схему й ім'я дає той самий класифікатор,
+ * що й двигуну (`classifyUnit` адаптера: `readSqlUnits` без типів моделі),
+ * а `sql` і волатильність лишаються збереженими — їх двигун пише тим самим
+ * шляхом. Збережене поле `identity` не читається: другого авторитетного
+ * сховища ідентичності немає. Нечитну одиницю не вгадуємо й не пропускаємо
+ * мовчки — її називає `unreadable`, і споживачі діють обережно.
+ */
+export function appliedCatalog(
+  catalog: CatalogModel,
+  parse: SqlParser
+): AppliedCatalog {
+  const read = catalog.units.map((stored) => {
+    const { units, diagnostics } = readSqlUnits(
+      [{ file: "marker", text: stored.sql, schema: "" }],
+      parse,
+      []
+    )
+    const [unit] = units
+    if (unit === undefined || units.length > 1 || diagnostics.length > 0)
+      return { stored, unit: undefined }
+    const derived: CatalogUnit = {
+      class: unit.class,
+      identity: unit.identity,
+      schema: unit.schema,
+      name: unit.name,
+      sql: stored.sql,
+      ...(stored.volatility === undefined
+        ? {}
+        : { volatility: stored.volatility }),
+    }
+    return { stored, unit: derived }
+  })
+  const seen = new Map<string, number>()
+  for (const { unit } of read)
+    if (unit !== undefined)
+      seen.set(unit.identity, (seen.get(unit.identity) ?? 0) + 1)
+  const units: CatalogUnit[] = []
+  const unreadable: CatalogUnit[] = []
+  for (const { stored, unit } of read) {
+    // Дві одиниці з однією ідентичністю порівняння за ключем мовчки злило б
+    if (unit !== undefined && seen.get(unit.identity) === 1) units.push(unit)
+    else unreadable.push(stored)
+  }
+  units.sort((a, b) =>
+    a.identity < b.identity ? -1 : a.identity > b.identity ? 1 : 0
+  )
+  return { catalog: { ...catalog, units }, unreadable }
+}
+
 /** Одне застосування: новий marker і рядок ledger. */
 export interface ApplyRecord {
   planHash: string
@@ -606,11 +679,12 @@ export function applyStateOf(
   }
 }
 
-const STATE_FUNCTIONS = [
-  SNAPSHOT_HASH_FUNCTION,
-  EPOCH_FUNCTION,
-  RESET_FUNCTION,
-].map((f) => `function:${f}`)
+const STATE_FUNCTIONS = STATE_FUNCTION_KEYS.map((key) =>
+  keyIdentity("function", key)
+)
+
+/** Ціль одиниці гранту послідовності версій. */
+const SEQUENCE_KEY = qualifiedName(PLATFORM_SCHEMA, ROW_VERSION_SEQUENCE.name)
 
 /**
  * Recogniser of the apply-state objects of `model` (`ApplyStateObjects`
@@ -625,35 +699,36 @@ export function applyStateOwnership(
   const schemaId = `schema:${PLATFORM_SCHEMA}`
   const functions = STATE_FUNCTIONS
   const sub = /^(?:column|constraint|trigger|rule|policy|default):(.*)$/
-  // Одиниця гранту компілятора: `grant:<grant|revoke>:<клас>:<об'єкти>:…`;
-  // лише схема `simetra` сама, без інших об'єктів у тому самому операторі
-  const schemaGrant = new RegExp(
-    `^grant:(?:grant|revoke):schema:${PLATFORM_SCHEMA}:`
-  )
-  // Гранти функцій стану — стану завжди: шар їх не дає. Гранти й відкликання
-  // послідовності версій — так само
-  const grantPrefixes = [
-    ...[SNAPSHOT_HASH_FUNCTION, EPOCH_FUNCTION, RESET_FUNCTION].flatMap((f) => [
-      `grant:grant:function:${f}:`,
-      `grant:revoke:function:${f}:`,
-    ]),
-    `grant:revoke:sequence:${SEQUENCE_NAME}:`,
-  ]
+  // Одиниця гранту компілятора: `grant:<grant|revoke>:<клас>:<об'єкти>:…`,
+  // частини — за правилом ідентичності. Гранти функцій стану — стану завжди:
+  // шар їх не дає; відкликання послідовності версій — так само; схема
+  // `simetra` — лише сама, без інших об'єктів у тому самому операторі
+  const ownedGrant = (identity: string): boolean => {
+    const [cls, action, type, objects] = splitIdentity(identity, ":")
+    if (cls !== "grant") return false
+    if (type === "function") return STATE_FUNCTION_KEYS.includes(objects ?? "")
+    if (type === "sequence")
+      return action === "revoke" && objects === SEQUENCE_KEY
+    return (
+      schemaIsState &&
+      type === "schema" &&
+      objects === qualifiedName(PLATFORM_SCHEMA)
+    )
+  }
   const owns = (identity: string): boolean => {
     const wrapped = /^(?:comment|acl|securityLabel):\((.*)\)/.exec(identity)
     if (wrapped !== null) return owns(wrapped[1]!)
+    // eslint-disable-next-line no-restricted-syntax -- StableId двигуна (`plan.actions[].produces`), не ідентичність одиниці (#297, Р9)
     if (tables.some((t) => identity === `table:${t}`)) return true
     if (
       functions.includes(identity) ||
       identity === SEQUENCE_ID ||
-      grantPrefixes.some((p) => identity.startsWith(p))
+      ownedGrant(identity)
     )
       return true
     const m = sub.exec(identity)
     if (m !== null && tables.some((t) => m[1]!.startsWith(`${t}.`))) return true
-    return (
-      schemaIsState && (identity === schemaId || schemaGrant.test(identity))
-    )
+    return schemaIsState && identity === schemaId
   }
   return {
     owns,

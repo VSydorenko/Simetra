@@ -6,6 +6,7 @@ import {
   canonicalSnapshot,
   kernelHashOf,
   renameElement,
+  type CompileResult,
   type CompiledModel,
 } from "simetra/compiler"
 import {
@@ -26,6 +27,14 @@ import { modelHash } from "../canonical"
 import { hasRightsFunctions, hasVisibleUsers } from "../rights/functions"
 import {
   BULLETIN_FILE,
+  DIMENSION_SQL,
+  ORG_KIND_ID,
+  PROJECT_ID,
+  REGION_DIMENSION_ID,
+  adoptedRegionRelation,
+  compiledPolicyDomain,
+  dimensionFunction,
+  signalTopicDomain,
   REGION_FILE,
   GAUGE_LOG_FILE,
   ROLE_FILE,
@@ -817,14 +826,15 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
   // Мапа — не частина знімка: хеш фікстури той самий, що до появи мапи
   // (обчислений на коміті до неї). Зміна фікстури чи платформних таблиць
   // знімка (outbox сигналів) чи нові згенеровані одиниці (знімок прав клієнта, оракул сигналу,
-  // функції відправки й виклик сигналу в ядрі) змінюють і цей літерал.
+  // функції відправки, виклик сигналу в ядрі, тригери сигналу прав, гілки каналів прав
+  // в оракулі) чи правило ідентичності одиниць (`sql/identity.ts`) змінюють і цей літерал.
   it("stays outside the canonical snapshot and the hash", async () => {
     const { model: m } = await checksOf(policyDomain(runtimeValuesLayer()))
     expect(m.checkColumns.length).toBeGreaterThan(0)
     expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
-      "bf0e669b9dac861bb5150c0bc0db0dfabb48ebea504e354fdc8d1f7eece1d7b7"
+      "1dba006271c3ec81a590a86017611678624afd2b1560425c99e0a21800b20acd"
     )
   })
 })
@@ -1156,12 +1166,12 @@ describe("buildRuntimeCatalog: rights snapshot fields", () => {
     expect(region?.publicRead).toBe("anon")
   })
 
-  it("rightsContract marks exactly the objects with a rights contract", () => {
+  it("rights is present exactly on the objects with a rights contract", () => {
     const withContract = new Set(model.contracts.rights.map((r) => r.objectId))
     expect(withContract.size).toBeGreaterThan(0)
     for (const object of catalog.objects) {
-      expect(object.rightsContract, object.name).toBe(
-        withContract.has(object.id) ? true : undefined
+      expect(object.rights !== undefined, object.name).toBe(
+        withContract.has(object.id)
       )
     }
     // Фікстура дає контракт кожному довіднику: відсутність перевіряємо на
@@ -1175,7 +1185,7 @@ describe("buildRuntimeCatalog: rights snapshot fields", () => {
       },
     })
     const entry = stripped.objects.find((o) => o.id === first.id)!
-    expect(entry).not.toHaveProperty("rightsContract")
+    expect(entry).not.toHaveProperty("rights")
   })
 
   it("rightsSnapshot is set when the project has rights functions", () => {
@@ -1219,5 +1229,176 @@ describe("buildRuntimeCatalog: publicRead moves snapshotHash only", () => {
     const hashes = (c: RuntimeCatalog) =>
       c.objects.map((o) => [o.name, o.kernelHash])
     expect(hashes(open)).toEqual(hashes(closed))
+  })
+})
+
+// Контракт прав запису (Р1 плану B6-1, спека П4-B §9.2).
+describe("buildRuntimeCatalog: rights contract", () => {
+  const dimension = { form: "dimension", dimensionId: REGION_DIMENSION_ID }
+  const actions = (names: readonly string[], extents: readonly unknown[]) =>
+    names.map((action) => ({ action, extents }))
+  const WRITES = ["read", "create", "update", "markDeletion", "delete"]
+  const member = { scopeKind: ORG_KIND_ID }
+
+  it("any, own by a member, a dimension relation and a container binding", () => {
+    expect(objectOf("Ticket").rights).toEqual({
+      actions: actions(WRITES, [{ form: "any" }, { form: "own" }, dimension]),
+      ownership: [{ carrier: { attribute: "assignee" }, owner: member }],
+      access: [
+        {
+          dimensionId: REGION_DIMENSION_ID,
+          carrier: { attribute: "region" },
+          fresh: true,
+          subject: member,
+        },
+      ],
+      binding: { containerId: PROJECT_ID, carrier: { attribute: "project" } },
+      readBoundary: ["tenant"],
+      scopeSet: "membership",
+    })
+  })
+
+  it("a path carrier is its copy attribute", () => {
+    const rights = objectOf("TaskComment").rights!
+    expect(rights.ownership).toEqual([
+      { carrier: { attribute: "task_id_assignee_id" }, owner: member },
+    ])
+    expect(attributeOf("TaskComment", "task_id_assignee_id")).toMatchObject({
+      type: "Raw",
+      copy: true,
+    })
+  })
+
+  it("the Users catalog: the key carrier and the users read boundary", () => {
+    expect(objectOf("Users").rights).toEqual({
+      actions: actions(WRITES, [{ form: "any" }, { form: "own" }]),
+      ownership: [{ carrier: { key: true }, owner: { users: true } }],
+      access: [],
+      readBoundary: ["users"],
+    })
+  })
+
+  it("publicRead lifts the tenant boundary, the scope set stays", () => {
+    expect(objectOf("Bulletin").rights).toMatchObject({
+      readBoundary: [],
+      scopeSet: "membership",
+    })
+  })
+
+  it("a scope root: an author carrier only when createdBy owns it", async () => {
+    expect(objectOf("Organization").rights).toMatchObject({ root: {} })
+    expect(objectOf("Ticket").rights).not.toHaveProperty("root")
+    const { model: roots, diagnostics } =
+      await compileRights(rootCreationDomain())
+    expect(diagnostics).toEqual([])
+    const organization = buildRuntimeCatalog(roots!).objects.find(
+      (o) => o.name === "Organization"
+    )!
+    expect(organization.rights).toMatchObject({
+      ownership: [
+        { carrier: { attribute: "createdBy" }, owner: { users: true } },
+        { carrier: { attribute: "owner" }, owner: { users: true } },
+      ],
+      root: { author: { attribute: "createdBy" } },
+    })
+  })
+
+  // Функція виміру суб'єкта не має: значення дає вона сама.
+  it.each<[string, () => Promise<CompileResult>, object]>([
+    [
+      "a dimension function",
+      () =>
+        compiledPolicyDomain({ "sql/public/region.sql": DIMENSION_SQL }, [
+          writeRoles(),
+          adminRoles(),
+          commandCoreLayer(),
+          dimensionFunction(),
+        ]),
+      {},
+    ],
+    [
+      "a relation through an adopted CustomTable",
+      () =>
+        compileRights(
+          policyDomain(
+            writeRoles(),
+            adminRoles(),
+            commandCoreLayer(),
+            adoptedRegionRelation()
+          )
+        ),
+      { subject: member },
+    ],
+  ])("%s is not fresh", async (_, build, subject) => {
+    const { model: m, diagnostics } = await build()
+    expect(diagnostics).toEqual([])
+    const ticket = buildRuntimeCatalog(m!).objects.find(
+      (o) => o.name === "Ticket"
+    )!
+    expect(ticket.rights!.access).toEqual([
+      {
+        dimensionId: REGION_DIMENSION_ID,
+        carrier: { attribute: "region" },
+        fresh: false,
+        ...subject,
+      },
+    ])
+  })
+
+  it("a verbatim set function of the scope kind gives scopeSet verbatim", async () => {
+    const { model: m, diagnostics } = await compileRights(signalTopicDomain())
+    expect(diagnostics).toEqual([])
+    const scoped = buildRuntimeCatalog(m!).objects.filter(
+      (o) => o.scopeKindId === ORG_KIND_ID
+    )
+    expect(scoped.length).toBeGreaterThan(0)
+    for (const object of scoped) {
+      expect(object.rights?.scopeSet, object.name).toBe("verbatim")
+    }
+  })
+
+  it("a carrier that is neither an attribute nor the key fails the compiler", () => {
+    const ticket = model.contracts.rights.find((r) => r.objectId === TICKET_ID)!
+    const broken = {
+      ...ticket,
+      ownership: [
+        { ...ticket.ownership[0]!, column: "version", value: "version" },
+      ],
+    }
+    expect(() =>
+      buildRuntimeCatalog({
+        ...model,
+        contracts: {
+          ...model.contracts,
+          rights: model.contracts.rights.map((r) =>
+            r === ticket ? broken : r
+          ),
+        },
+      })
+    ).toThrow(
+      /rights carrier version of ticket is neither an attribute nor the key/
+    )
+  })
+
+  it("another contract changes snapshotHash, not kernelHash", async () => {
+    const withTicket = async (layer: Layer) => {
+      const { model: m, diagnostics } = await compileRights(
+        policyDomain(writeRoles(), adminRoles(), commandCoreLayer(), layer)
+      )
+      expect(diagnostics).toEqual([])
+      return buildRuntimeCatalog(m!)
+    }
+    const owned = await withTicket({})
+    // Інший носій власності — факт лише контракту прав, не ядра команд.
+    const unowned = await withTicket({
+      [TICKET_FILE]: { ownership: ["createdBy"] },
+    })
+    const ticketOf = (c: RuntimeCatalog) =>
+      c.objects.find((o) => o.name === "Ticket")!
+    expect(ticketOf(owned).rights).not.toEqual(ticketOf(unowned).rights)
+    expect(owned.snapshotHash).not.toBe(unowned.snapshotHash)
+    const hashes = (c: RuntimeCatalog) =>
+      c.objects.map((o) => [o.name, o.kernelHash])
+    expect(hashes(owned)).toEqual(hashes(unowned))
   })
 })

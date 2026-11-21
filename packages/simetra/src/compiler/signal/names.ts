@@ -22,4 +22,7 @@ export const SIGNAL_FUNCTIONS = {
     name: SIGNAL_TOPIC_ALLOWED_FUNCTION_NAME,
   },
   payloadAllowed: { schema: PLATFORM_SCHEMA, name: "signal_payload_allowed" },
+  // Сигнали прав (§8.2) кличе лише тригер сигналу прав таблиці фактів.
+  rights: { schema: PLATFORM_SCHEMA, name: "signal_rights" },
+  userRights: { schema: PLATFORM_SCHEMA, name: "signal_user_rights" },
 } as const

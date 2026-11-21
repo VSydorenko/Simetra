@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { CatalogEntry, RightsRow, RightsSnapshot } from "simetra/model"
-import { SCOPE_KIND_ID } from "../../../model/runtime/__tests__/entries"
+import {
+  SCOPE_KIND_ID,
+  catalogRights,
+} from "../../../model/runtime/__tests__/entries"
 import { coreInternals, type CoreSession } from "../core"
 import type { FakeSource } from "../testing/fake-source"
 import type { ViewSpec } from "../types"
@@ -33,8 +36,8 @@ const OTHER_USER = "00000000-0000-4000-8000-0000000000a2"
 const T = "00000000-0000-4000-8000-0000000000b2"
 const CONTAINER = "00000000-0000-4000-8000-0000000000c1"
 
-const taskR: CatalogEntry = { ...task, rightsContract: true }
-const orgR: CatalogEntry = { ...org, rightsContract: true }
+const taskR: CatalogEntry = { ...task, rights: catalogRights() }
+const orgR: CatalogEntry = { ...org, rights: catalogRights() }
 
 const readRow = (scope: string, over: Partial<RightsRow> = {}): RightsRow => ({
   level: "scope",
@@ -56,6 +59,8 @@ const snapshotOf = (
   userId,
   scopeSets: scopes.map((scope) => ({ scopeKind: SCOPE_KIND_ID, scope })),
   rights,
+  members: [],
+  dimensionValues: [],
 })
 
 let versions = 0

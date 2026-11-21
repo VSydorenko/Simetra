@@ -12,6 +12,7 @@ import {
   type EngineScope,
   type PropertyCount,
 } from "simetra/schema"
+import { unitIdentity } from "simetra/compiler"
 import { PROVIDER_SCHEMAS } from "simetra/model"
 
 /**
@@ -222,5 +223,5 @@ export async function readUnpopulatedViews(
       order by 1, 2`,
     [scope.schemas]
   )
-  return rows.map((r) => `materializedView:${r.schema}.${r.name}`)
+  return rows.map((r) => unitIdentity("materializedView", r.schema, r.name))
 }

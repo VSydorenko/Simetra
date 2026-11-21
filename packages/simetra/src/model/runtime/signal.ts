@@ -129,10 +129,12 @@ export const invalidateSignalSchema = z.strictObject({
   op: z.literal("invalidate"),
 })
 
-/** Tells the client that its rights changed. */
+/**
+ * Tells the client that its rights changed. No version: the client re-reads
+ * the rights snapshot on every rights signal (P4-B spec §8.1, §9.3).
+ */
 export const rightsSignalSchema = z.strictObject({
   op: z.literal("rights"),
-  row_ver: z.int(),
 })
 
 // Транспорт додає `id` повідомлення при отриманні; надсилається сигнал без нього.

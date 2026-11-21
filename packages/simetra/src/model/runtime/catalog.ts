@@ -177,6 +177,82 @@ export const runtimeRootCreateSchema = z.strictObject({
   membership: z.string().optional(),
 })
 
+/**
+ * A rights carrier of a catalog entry (P4-B spec §9.2): a header attribute by
+ * its logical name or the key itself.
+ */
+export const catalogRightsCarrierSchema = z.union([
+  z.strictObject({ attribute: z.string() }),
+  z.strictObject({ key: z.literal(true) }),
+])
+
+/**
+ * Whose id a carrier holds: the user's, or my member's of a scope kind.
+ */
+// Не `membership`: це ім'я в каталозі — серверний факт довідника членства.
+export const catalogRightsSubjectSchema = z.union([
+  z.strictObject({ users: z.literal(true) }),
+  z.strictObject({ scopeKind: z.string() }),
+])
+
+/** An extent a grant may limit an action to (rights spec §3). */
+export const catalogRightsExtentSchema = z.discriminatedUnion("form", [
+  z.strictObject({ form: z.literal("any") }),
+  z.strictObject({ form: z.literal("own") }),
+  z.strictObject({ form: z.literal("dimension"), dimensionId: z.guid() }),
+])
+
+/**
+ * The rights contract of a catalog object (P4-B spec §9.2): what the client
+ * rights evaluator needs to judge an action without the database.
+ */
+export const catalogRightsSchema = z.strictObject({
+  /** A vocabulary word or the UUID of a custom action, with its extents. */
+  actions: z.array(
+    z.strictObject({
+      action: z.string(),
+      extents: z.array(catalogRightsExtentSchema),
+    })
+  ),
+  ownership: z.array(
+    z.strictObject({
+      carrier: catalogRightsCarrierSchema,
+      owner: catalogRightsSubjectSchema,
+    })
+  ),
+  access: z.array(
+    z.strictObject({
+      dimensionId: z.guid(),
+      carrier: catalogRightsCarrierSchema,
+      /**
+       * A rights signal follows every change of the dimension values: a
+       * relation of a registry kind. A dimension function or an adopted
+       * `CustomTable` relation freshens only by interval.
+       */
+      fresh: z.boolean(),
+      /** The relation subject; a dimension function has none. */
+      subject: catalogRightsSubjectSchema.optional(),
+    })
+  ),
+  binding: z
+    .strictObject({
+      containerId: z.guid(),
+      carrier: catalogRightsCarrierSchema,
+    })
+    .optional(),
+  /** The `RESTRICTIVE` read boundaries of the main table. */
+  readBoundary: z.array(z.enum(["tenant", "users"])),
+  /** A scope kind root; `author` — the carrier `create@own` judges. */
+  root: z
+    .strictObject({ author: catalogRightsCarrierSchema.optional() })
+    .optional(),
+  /**
+   * The set function of the object's scope kind: generated from membership
+   * or verbatim SQL. Only on a scoped object.
+   */
+  scopeSet: z.enum(["membership", "verbatim"]).optional(),
+})
+
 /** SHA-256 hex of the canonical form of an entry's operations. */
 export const kernelHashSchema = z.string().regex(/^[0-9a-f]{64}$/)
 
@@ -215,10 +291,10 @@ export const catalogEntrySchema = z.strictObject({
    */
   publicRead: z.enum(["anon", "authenticated"]).optional(),
   /**
-   * Об'єкт має контракт прав: читання під RLS судять рядки прав, тож знімок
-   * прав описує його читання (P4-B spec §3, Р6).
+   * Контракт прав об'єкта: є, коли читання під RLS судять рядки прав, тож
+   * знімок прав описує його читання (P4-B spec §3, §9.2).
    */
-  rightsContract: z.literal(true).optional(),
+  rights: catalogRightsSchema.optional(),
   /**
    * The attribute that represents the object in a `Ref` text (its logical
    * name): the main presentation, derived from the kind registry's standard
@@ -270,6 +346,19 @@ export const runtimeObjectSchema = catalogEntrySchema
     }
   })
 
+/**
+ * Rights facts that come from adopted tables (P4-B spec §8.2): the platform
+ * puts no trigger on an adopted table, so these facts send no rights signal
+ * and refresh on the interval. `membershipKinds` — scope kinds with an
+ * adopted membership source; `assignments` — an adopted assignment source of
+ * any level. The client rights evaluator answers `unknown` for what depends
+ * on them.
+ */
+export const catalogAdoptedFactsSchema = z.strictObject({
+  membershipKinds: z.array(z.guid()),
+  assignments: z.literal(true).optional(),
+})
+
 /** The runtime catalog: a projection of the compiled model (P4 spec §6.3). */
 export const runtimeCatalogSchema = z
   .strictObject({
@@ -278,6 +367,7 @@ export const runtimeCatalogSchema = z
     provider: z.enum(DATABASE_PROVIDERS),
     /** Проєкт має функції прав: клієнт шле `rights` і підписується на сигнали. */
     rightsSnapshot: z.literal(true).optional(),
+    adoptedFacts: catalogAdoptedFactsSchema.optional(),
     objects: z.array(runtimeObjectSchema),
   })
   .superRefine((catalog, ctx) => {
@@ -322,3 +412,8 @@ export type RuntimeOperationTarget = z.infer<
 export type RuntimeRootCreate = z.infer<typeof runtimeRootCreateSchema>
 export type RuntimeObject = z.infer<typeof runtimeObjectSchema>
 export type RuntimeCatalog = z.infer<typeof runtimeCatalogSchema>
+export type CatalogRightsCarrier = z.infer<typeof catalogRightsCarrierSchema>
+export type CatalogRightsSubject = z.infer<typeof catalogRightsSubjectSchema>
+export type CatalogRightsExtent = z.infer<typeof catalogRightsExtentSchema>
+export type CatalogRights = z.infer<typeof catalogRightsSchema>
+export type CatalogAdoptedFacts = z.infer<typeof catalogAdoptedFactsSchema>

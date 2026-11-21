@@ -99,7 +99,19 @@ export function describeAuthorizeChannels(): void {
         scope,
         object: ticketId(),
       })
-    /** Набір кейсу: свій і чужий скоуп, канали B6 і сміття. */
+    const rightsChannel = (scope: string) =>
+      channelTopic({ kind: "rights", scopeKindId: ORG_KIND_ID, scope })
+    const userChannel = (userId: string) =>
+      channelTopic({ kind: "user", userId })
+    const GLOBAL_RIGHTS = channelTopic({
+      kind: "rights",
+      scopeKindId: ZERO_UUID,
+      scope: ZERO_UUID,
+    })
+    /**
+     * Набір кейсу: канали змін свого й чужого скоупу, канали прав обох
+     * скоупів і глобальний, канал свого й чужого користувача, сміття.
+     */
     const channels = (user: string) => [
       ticketChannel(own.id),
       ticketChannel(foreign.id),
@@ -109,9 +121,18 @@ export function describeAuthorizeChannels(): void {
         scope: ZERO_UUID,
         object: ticketId(),
       }),
-      channelTopic({ kind: "user", userId: user }),
-      channelTopic({ kind: "rights", scopeKindId: ORG_KIND_ID, scope: own.id }),
+      userChannel(user),
+      userChannel(randomUUID()),
+      rightsChannel(own.id),
+      rightsChannel(foreign.id),
+      GLOBAL_RIGHTS,
       "not-a-channel",
+    ]
+    /** Канали прав учасника скоупу `scope` (Р10 плану B6-1): без умови права. */
+    const rightsOf = (user: string, scope: string) => [
+      userChannel(user),
+      rightsChannel(scope),
+      GLOBAL_RIGHTS,
     ]
 
     /** Оракул, спитаний напряму під роллю запиту з тими самими claims. */
@@ -150,7 +171,10 @@ export function describeAuthorizeChannels(): void {
       ])
       expect({ ...grant }).toEqual({
         subject: reader.user,
-        channels: [ticketChannel(own.id)],
+        channels: [
+          ticketChannel(own.id),
+          ...rightsOf(reader.user, own.id),
+        ].sort(),
       })
       expect(grant.channels).toEqual(await oracle(reader.session, list))
     })
@@ -160,17 +184,24 @@ export function describeAuthorizeChannels(): void {
       const list = channels(reader.user)
       const { runtime } = await counted()
       const grant = await runtime.authorizeChannels(reader.session, list)
-      expect(grant.channels).toEqual([ticketChannel(foreign.id)])
+      expect(grant.channels).toEqual(
+        [ticketChannel(foreign.id), ...rightsOf(reader.user, foreign.id)].sort()
+      )
       expect(grant.channels).toEqual(await oracle(reader.session, list))
     })
 
-    it("a member without a read right: the user, no channels", async () => {
+    // Канали прав — межа тенанта, не право (Р10 плану B6-1): учасник без
+    // права читання дізнається про зміну своїх прав, каналів змін не має.
+    it("a member without a read right: the user, only the rights channels", async () => {
       const member = own.people.member!
       const list = channels(member.user)
       const { runtime } = await counted()
       const grant = await runtime.authorizeChannels(member.session, list)
-      expect({ ...grant }).toEqual({ subject: member.user, channels: [] })
-      expect(await oracle(member.session, list)).toEqual([])
+      expect({ ...grant }).toEqual({
+        subject: member.user,
+        channels: rightsOf(member.user, own.id).sort(),
+      })
+      expect(grant.channels).toEqual(await oracle(member.session, list))
     })
 
     it("a subject without a valid user: no subject, no channels", async () => {

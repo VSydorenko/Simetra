@@ -2533,6 +2533,30 @@ describe("platformReplacements", () => {
         ).toEqual(MISSING)
       })
 
+      // Колонки ключа предмета — за `quoteIdent`: сира кома ділила б
+      // `"a,b"`, а лапки не збігались би з деревом, і порожній перелік пар
+      // мовчки став би «заміною» гранту, якого бажаний стан не дає
+      it.each(['"Code"', '"a,b"', '"x)y"'])(
+        "is not replaced when it grants UPDATE on the quoted column %s",
+        (column) => {
+          expect(
+            verdict(
+              "grant",
+              `GRANT UPDATE (${column}) ON TABLE app.item TO authenticated`
+            )
+          ).toEqual(MISSING)
+        }
+      )
+
+      it("is replaced by a table SELECT when it grants SELECT on a quoted column", () => {
+        expect(
+          verdict(
+            "grant",
+            'GRANT SELECT ("Code", "a,b") ON TABLE app.item TO authenticated'
+          )
+        ).toEqual([])
+      })
+
       // Ключ несе опцію гранту (`select*`): прийнятий грант без опції не
       // бере на себе пару з опцією іншого гранту тієї самої ролі на копії
       it("checks only the pairs of its own grant option", () => {

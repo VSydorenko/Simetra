@@ -43,9 +43,14 @@ const revokeExecute = (...recipients: string[]) =>
   grants(`REVOKE EXECUTE ON FUNCTION ${RPC}() FROM`, recipients)
 const ALL = ["PUBLIC", API.user, API.anonymous]
 
-/** Подання над задачами з опціями `options`. */
+/**
+ * Подання над задачами з опціями `options`. `DISTINCT` робить його
+ * неоновлюваним: подання без `security_invoker` над таблицею виду з однією
+ * таблицею у `FROM` — вже шлях запису (`sql.kind-table-verbatim`, форма `view`),
+ * а предмет тут — читання повз RLS.
+ */
 const view = (name: string, options = "", from = TASK) =>
-  `CREATE VIEW ${name}${options} AS SELECT id FROM ${from};\n`
+  `CREATE VIEW ${name}${options} AS SELECT DISTINCT id FROM ${from};\n`
 const INVOKER = " WITH (security_invoker = true)"
 
 /** Вимір `region`, значення якого дає функція `region_ids`. */
@@ -376,6 +381,37 @@ describe("checkDefinerReads: SECURITY DEFINER functions", () => {
     )
     expect(brief(result.diagnostics, CODES)).toEqual([
       warned("public.v", { form: "view", tables: "public.comment_counter" }),
+    ])
+  })
+})
+
+// Ціль гранту — ключ за правилом ідентичності (`quoteIdent`, #297): грант на
+// об'єкт з ім'ям у верхньому регістрі має збігтися з одиницею, інакше
+// відкликання й повторний грант лишились би непоміченими.
+describe("checkDefinerReads: quoted names", () => {
+  it("reads the grants of a function named in quotes", async () => {
+    const fn = 'public."Rpc"'
+    const result = await compiled({
+      [RPC_FILE]:
+        sqlFunction(fn, `SELECT count(*) FROM ${TASK}`) +
+        grants(`REVOKE EXECUTE ON FUNCTION ${fn}() FROM`, ALL) +
+        grants(`GRANT EXECUTE ON FUNCTION ${fn}() TO`, [API.anonymous]),
+    })
+    expect(brief(result.diagnostics, CODES)).toEqual([
+      refused("public.Rpc", API.anonymous),
+    ])
+  })
+
+  it("reads the grants of a view named in quotes", async () => {
+    const v = 'public."V"'
+    const result = await compiled({
+      [RPC_FILE]:
+        view(v) +
+        grants(`REVOKE ALL ON TABLE ${v} FROM`, ALL) +
+        grants(`GRANT SELECT ON ${v} TO`, [API.user]),
+    })
+    expect(brief(result.diagnostics, CODES)).toEqual([
+      warned("public.V", { form: "view", roles: API.user }),
     ])
   })
 })

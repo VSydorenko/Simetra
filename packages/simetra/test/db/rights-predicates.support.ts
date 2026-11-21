@@ -114,6 +114,8 @@ const GUEST_SNAPSHOT: RightsSnapshot = {
   userId: null,
   scopeSets: [],
   rights: [],
+  members: [],
+  dimensionValues: [],
 }
 
 const ORGS = ["A", "B", "C"] as const
@@ -177,7 +179,7 @@ async function seedPredicates(client: pg.Client, ids: Seed): Promise<void> {
       ...assignmentRow(ids[key]!, assignment),
     })
   }
-  for (const user of ["d1", "n1", "c1", "g2", "x1"])
+  for (const user of ["d1", "n1", "c1", "g2", "x1", "i1"])
     ids[user] = await signUp(client)
   await create("PB", "project", { org_id: ids.B })
   await create("PC", "project", { org_id: ids.C })
@@ -191,6 +193,12 @@ async function seedPredicates(client: pg.Client, ids: Seed): Promise<void> {
     region_id: ids.rA,
   })
   await member("c1", "A", { archetype: ORG_MEMBER_ROLE_ID })
+  // i1 — учасник A з роллю читання, але недійсний (#318): ні права, ні
+  // `publicRead: authenticated` йому нічого не відкривають, як гостю.
+  await member("i1", "A", { archetype: ORG_MEMBER_ROLE_ID })
+  await client.query("UPDATE public.users SET invalid = true WHERE id = $1", [
+    ids.i1,
+  ])
   // Права лише в A, членство ще й в B: рядок права чужого скоупу не відкриває B.
   await member("x1", "A", { archetype: SIGNAL_READER_ID })
   await create("x1@B", "org_member", { org_id: ids.B, user_id: ids.x1 })
@@ -278,6 +286,7 @@ const USERS = [
   "c1",
   "g2",
   "x1",
+  "i1",
 ]
 
 /** Об'єкти з засіяними рядками: пара «скоуп, об'єкт» для еталона читання. */
@@ -325,6 +334,9 @@ const NAMED: [
   ["u9", "Bulletin", "B", true],
   ["m1", "Users", ZERO_UUID, true],
   ["n1", "Task", "B", false],
+  // Недійсний користувач: `publicRead: authenticated` закритий, як гостю (#318).
+  ["i1", "Bulletin", "B", false],
+  ["i1", "Task", "A", false],
   [null, "Task", "A", false],
 ]
 
@@ -492,6 +504,39 @@ export function defineRightsPredicateCases(): void {
           )
         )
 
+    // Канали прав і користувача (І5; Р11 плану B6-2, перенесено в B6-1):
+    // кожен скоуп засіву, глобальний, змішані нулі, вид поза видами скоупу,
+    // свій і чужий канал користувача.
+    const rightsPairs = (user: string | null): Pair[] => [
+      ...ORGS.map((org): Pair => ({
+        name: `rights @ ${org}`,
+        user,
+        topic: { raw: `simetra-rights:${ORG_KIND_ID}:{${org}}` },
+      })),
+      ...(
+        [
+          ["global rights", `simetra-rights:${ZERO_UUID}:${ZERO_UUID}`],
+          ["rights, zero kind only", `simetra-rights:${ZERO_UUID}:{A}`],
+          [
+            "rights, zero scope only",
+            `simetra-rights:${ORG_KIND_ID}:${ZERO_UUID}`,
+          ],
+          ["rights, not a scope kind", `simetra-rights:${TASK_ID}:{A}`],
+          ["rights, uppercase scope", `simetra-rights:${ORG_KIND_ID}:{A^}`],
+          ["foreign user channel", "simetra-user:{m5}"],
+        ] as const
+      ).map(([name, raw]): Pair => ({ name, user, topic: { raw } })),
+      ...(user === null
+        ? []
+        : [
+            {
+              name: "own user channel",
+              user,
+              topic: { raw: `simetra-user:{${user}}` },
+            },
+          ]),
+    ]
+
     const RAW: [string, Topic][] = [
       ["extra segment", { raw: `simetra:${ORG_KIND_ID}:{A}:${TASK_ID}:x` }],
       ["uppercase scope", { raw: `simetra:${ORG_KIND_ID}:{A^}:${TASK_ID}` }],
@@ -509,6 +554,7 @@ export function defineRightsPredicateCases(): void {
         const mismatches: string[] = []
         const pairs: Pair[] = [
           ...subscribePairs(user),
+          ...rightsPairs(user),
           ...RAW.map(([name, topic]): Pair => ({ name, user, topic })),
         ]
         for (const pair of pairs) {

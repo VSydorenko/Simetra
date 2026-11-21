@@ -1,3 +1,5 @@
+import { IDENTITY_SELECTORS } from "../simetra/eslint.identity.js"
+
 // Лінт-зони @simetrajs/designer: межа тестової опори `simetra` і зона студії.
 //
 // Обмеження механізму те саме, що в `packages/simetra/eslint.tier-zones.js`:
@@ -54,6 +56,13 @@ export const designerZoneConfigs = [
         { patterns: [TEST_SUPPORT_PATTERN, TEST_ONLY_AUTH_PATTERN] },
       ],
     },
+  },
+  {
+    // Ідентичність одиниці складає лише `simetra/compiler` (#297, Р4); перелік
+    // класів і селектори — один на обидва пакети, у `simetra/eslint.identity.js`.
+    files: ["src/**/*.{ts,tsx,mts,cts}"],
+    ignores: ["**/__tests__/**", "**/*.support.ts"],
+    rules: { "no-restricted-syntax": ["error", ...IDENTITY_SELECTORS] },
   },
   STUDIO_ZONE,
 ]

@@ -1,6 +1,10 @@
 import {
   diagnostic,
+  functionKey,
+  keyIdentity,
+  qualifiedName,
   readSqlUnits,
+  splitIdentity,
   unitPlacement,
   unitTarget,
   type Diagnostic,
@@ -237,20 +241,23 @@ function slug(text: string): string {
  */
 function baseName(unit: CatalogUnit, ctx: UnitsContext): string {
   if (SIGNED.has(unit.class)) {
-    const prefix = `${unit.class}:${qualified(unit.schema, unit.name)}(`
+    const prefix = `${keyIdentity(unit.class, qualifiedName(unit.schema, unit.name))}(`
     const args = unit.identity.startsWith(prefix)
       ? unit.identity.slice(prefix.length, -1)
       : ""
     if (args === "") return slug(unit.name)
     if (args === "*") return `${slug(unit.name)}__star`
-    return `${slug(unit.name)}__${args.split(",").map(slug).join("_")}`
+    // Кома в імені типу в лапках (`"x,y"`) аргументів не ділить; пара
+    // перевантажень, що різняться лише межею лапок, дає той самий `slug` —
+    // гучну `introspect.path-collision`, а не тихий перезапис
+    return `${slug(unit.name)}__${splitIdentity(args, ",").map(slug).join("_")}`
   }
   if (NAMED.has(unit.class)) return slug(unit.name)
   if (unit.class === "trigger" || unit.class === "policy") {
     const target = unitTarget(unit, ctx.parse)
     return `${slug(target?.object ?? "")}__${slug(unit.name)}`
   }
-  const segments = unit.identity.split(":")
+  const segments = splitIdentity(unit.identity, ":")
   // Ідентичність гранту вже починається дієсловом `grant`/`revoke`.
   if (segments[1] === segments[0]) segments.shift()
   return segments.map(slug).join("__")
@@ -301,9 +308,9 @@ export function layoutUnits(
     const own = ownFunctions.get(fn)
     if (
       own !== undefined &&
-      ((unit.class === "function" && unit.identity === `function:${fn}()`) ||
-        (unit.class === "functionSettings" &&
-          unit.identity === `functionSettings:${fn}()`))
+      (unit.class === "function" || unit.class === "functionSettings") &&
+      unit.identity ===
+        keyIdentity(unit.class, functionKey(unit.schema, unit.name, []))
     )
       return own
     if (unit.class === "grant" || unit.class === "comment") {
@@ -337,7 +344,9 @@ export function layoutUnits(
   // compiler/sql/dependencies.ts), а не порядку файлу; порядок тут потрібен
   // людині, що читає файл або застосовує його вручну.
   const revokeFirst = (u: CatalogUnit) =>
-    u.class === "grant" && u.identity.startsWith("grant:revoke:") ? 0 : 1
+    u.class === "grant" && splitIdentity(u.identity, ":")[1] === "revoke"
+      ? 0
+      : 1
   const files = new Map<string, string>()
   const diagnostics: Diagnostic[] = []
   // Файлова система без регістру злила б `F.sql` і `f.sql` в один файл.

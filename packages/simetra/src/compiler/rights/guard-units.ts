@@ -9,14 +9,12 @@ import {
   keyColumn,
   quoteIdent,
   tabularParentColumn,
-  isObjectTable,
   objectTable,
   type AttributeCase,
   type DatabaseProvider,
   type PhysicalSnapshot,
   type PhysicalTable,
   type StandardColumnDef,
-  KIND_REGISTRY,
   COMMAND_CORE_ERRORS,
   CURRENT_USER_FUNCTION_NAME,
   type ObjectTable,
@@ -32,7 +30,8 @@ import { dollarTag } from "../movement-functions"
 import type { CreationNode } from "../sql/dependencies"
 import { executeGrants } from "../sql/execute-grants"
 import type { SqlParser } from "../sql/parse"
-import { functionIdentity, generatedUnit, type SqlUnit } from "../sql/units"
+import { functionIdentity, functionKey, keyIdentity } from "../sql/identity"
+import { generatedUnit, type SqlUnit } from "../sql/units"
 import { fieldForeignKey, sqlLiteral } from "../stages/model"
 import { standardColumn } from "../standard-column"
 import type { ParsedObject } from "../stages/files"
@@ -56,6 +55,7 @@ import {
 import { generatedTableFunctionName } from "./generated-names"
 import { rightsGuardNames } from "./guard-names"
 import { effectiveHolderRows } from "./holders"
+import { triggeredRelationTable } from "./relation-table"
 import type { SnapshotSources } from "./snapshot-sources"
 
 /** Контракти запобіжників прав і аналізу джерел знімка. */
@@ -99,6 +99,19 @@ const unitNode = (name: QualifiedName): CreationNode => ({
   type: "unit",
   identity: functionIdentity(name.schema, name.name, []),
 })
+
+/** Ключ функції платформи за типами каталогу — правилом `identity.ts`. */
+const call = (name: QualifiedName, ...types: string[]): string =>
+  functionKey(name.schema, name.name, types)
+
+/** Ребро до `rights_bump(uuid, uuid)`. */
+const BUMP_NODE: CreationNode = {
+  type: "unit",
+  identity: keyIdentity(
+    "function",
+    call(RIGHTS_FUNCTIONS.bump, "uuid", "uuid")
+  ),
+}
 
 /**
  * Режим обслуговування оминає перевірку приросту, а налаштування сесії ставить
@@ -464,14 +477,14 @@ function factRows(
  */
 const FACT_CALLS: Record<SnapshotFact, readonly string[]> = {
   rights: [
-    `${ref(RIGHTS_FUNCTIONS.myScopesLive)}()`,
-    `${ref(RIGHTS_FUNCTIONS.roles)}()`,
-    `${ref(RIGHTS_FUNCTIONS.sourceKeys)}()`,
-    `${ref(RIGHTS_FUNCTIONS.fullAccessRoles)}()`,
+    call(RIGHTS_FUNCTIONS.myScopesLive),
+    call(RIGHTS_FUNCTIONS.roles),
+    call(RIGHTS_FUNCTIONS.sourceKeys),
+    call(RIGHTS_FUNCTIONS.fullAccessRoles),
   ],
-  scopes: [`${ref(RIGHTS_FUNCTIONS.myScopesLive)}()`],
-  values: [`${ref(RIGHTS_FUNCTIONS.dimensionValuesLive)}(uuid)`],
-  scopeSets: [`${ref(RIGHTS_FUNCTIONS.scopeSetLive)}(uuid)`],
+  scopes: [call(RIGHTS_FUNCTIONS.myScopesLive)],
+  values: [call(RIGHTS_FUNCTIONS.dimensionValuesLive, "uuid")],
+  scopeSets: [call(RIGHTS_FUNCTIONS.scopeSetLive, "uuid")],
 }
 
 const factPresent = (fact: SnapshotFact) =>
@@ -1226,7 +1239,10 @@ export function buildRightsGuardUnits(
       [
         unitNode(COMMAND_FUNCTIONS.current),
         ...[...new Set(facts.flatMap((fact) => FACT_CALLS[fact]))].map(
-          (fn) => ({ type: "unit" as const, identity: `function:${fn}` })
+          (fn) => ({
+            type: "unit" as const,
+            identity: keyIdentity("function", fn),
+          })
         ),
         ...[SNAPSHOT_TABLES.header, ...facts.flatMap((f) => FACT_TABLE[f])].map(
           (t) => ({ type: "table" as const, ...t })
@@ -1244,10 +1260,7 @@ export function buildRightsGuardUnits(
     const fn = functionName(table, labels.rights)
     addFunction(fn, catalogBody(config, provider), owner, [
       unitNode(COMMAND_FUNCTIONS.current),
-      {
-        type: "unit",
-        identity: `function:${ref(RIGHTS_FUNCTIONS.bump)}(uuid,uuid)`,
-      },
+      BUMP_NODE,
       { type: "table", schema: PLATFORM_SCHEMA, name: "rights_journal" },
       ...(config.kind === "assignment"
         ? [{ type: "table" as const, ...SNAPSHOT_TABLES.typed }]
@@ -1297,13 +1310,7 @@ export function buildRightsGuardUnits(
           attributeCase
         ),
         owner,
-        [
-          unitNode(COMMAND_FUNCTIONS.current),
-          {
-            type: "unit",
-            identity: `function:${ref(RIGHTS_FUNCTIONS.bump)}(uuid,uuid)`,
-          },
-        ]
+        [unitNode(COMMAND_FUNCTIONS.current), BUMP_NODE]
       )
       add(
         `CREATE TRIGGER ${q(triggerName(name, label))} AFTER ${operation} ON ${ref(name)} ${transition} FOR EACH STATEMENT EXECUTE FUNCTION ${ref(fn)}();`,
@@ -1337,14 +1344,7 @@ export function buildRightsGuardUnits(
         owner,
         [
           unitNode(COMMAND_FUNCTIONS.current),
-          ...(operation === "UPDATE"
-            ? [
-                {
-                  type: "unit" as const,
-                  identity: `function:${ref(RIGHTS_FUNCTIONS.bump)}(uuid,uuid)`,
-                },
-              ]
-            : []),
+          ...(operation === "UPDATE" ? [BUMP_NODE] : []),
         ]
       )
       add(
@@ -1361,23 +1361,8 @@ export function buildRightsGuardUnits(
     const key = `${relation.table.schema}.${relation.table.name}`
     if (relations.has(key)) continue
     relations.add(key)
-    const table = physical.tables.find(
-      (candidate): candidate is ObjectTable =>
-        isObjectTable(candidate) &&
-        candidate.schema === relation.table.schema &&
-        candidate.name === relation.table.name &&
-        candidate.origin.objectId === relation.objectId &&
-        candidate.origin.part === undefined
-    )
-    if (
-      table === undefined ||
-      !objects.some(
-        (object) =>
-          object.id === relation.objectId &&
-          !KIND_REGISTRY[object.kind].declared
-      )
-    )
-      continue
+    const table = triggeredRelationTable(relation, physical, objects)
+    if (table === undefined) continue
     const scope = table.columns.find(
       (entry) => entry.origin.scopeKindId !== undefined
     )
@@ -1393,12 +1378,7 @@ export function buildRightsGuardUnits(
       "  END IF;",
       "  RETURN NULL; END",
     ].join("\n")
-    addFunction(fn, body, table.origin.objectId, [
-      {
-        type: "unit",
-        identity: `function:${ref(RIGHTS_FUNCTIONS.bump)}(uuid,uuid)`,
-      },
-    ])
+    addFunction(fn, body, table.origin.objectId, [BUMP_NODE])
     for (const operation of ["INSERT", "UPDATE", "DELETE"] as const) {
       const label = `simetra_rights_relation_${operation.toLowerCase()}`
       const transition =

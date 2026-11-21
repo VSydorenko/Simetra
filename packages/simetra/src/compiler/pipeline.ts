@@ -29,7 +29,7 @@ import {
 } from "./contracts"
 import {
   buildFunctionExecuteUnits,
-  checkExecuteSignatures,
+  checkExecuteTypeReferences,
   type FunctionExecuteSources,
   generatedGrantConflicts,
 } from "./function-execute"
@@ -81,6 +81,7 @@ import { buildAuthorUnits } from "./author-units"
 import { catalogCommandContracts } from "./catalog-command/contracts"
 import { buildCatalogCommandUnits } from "./catalog-command/units"
 import { buildSignalUnits } from "./signal/units"
+import { buildRightsSignalUnits } from "./rights/signal-triggers"
 import { buildHierarchyUnits } from "./hierarchy-units"
 import { buildMechanicsUnits } from "./mechanics-units"
 import { buildKeyUnits } from "./key-units"
@@ -112,7 +113,9 @@ import {
   expressionScope,
   type ExpressionScope,
 } from "./sql/expression-calls"
-import { checkKindTableVerbatim, kindTables } from "./sql/kind-table-verbatim"
+import { checkKindTableVerbatim } from "./sql/kind-table-verbatim"
+import { providerCalls } from "./sql/command-context"
+import { kindTables } from "./sql/kind-tables"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { copyColumns } from "./copy-columns"
 import { buildSchemaUsageUnits } from "./schema-usage"
@@ -186,7 +189,10 @@ export async function runStages(
     loadSqlParser(),
     loadPlpgsqlParser(),
   ])
-  const { stage2, upstream, stage3, sql, declared } = sqlStage(stage1, parse)
+  const { stage2, upstream, stage3, sql, declared, derived, calls } = sqlStage(
+    stage1,
+    parse
+  )
   // id є в кожного об'єкта, лише коли стадія 2 чиста; її помилки закривають
   // шлях до вкладення правил і далі, тож порожнє id сюди не доходить.
   const idByFile = new Map(stage1.objects.map((o) => [o.file, o.id ?? ""]))
@@ -224,24 +230,11 @@ export async function runStages(
           !sql.diagnostics.some((d) => d.code === "sql.parse"),
           parse,
           plpgsql,
-          declared
+          declared,
+          calls
         )
-  // Згенеровані функції схем застосунку відомі лише зі знімка. Подання й
-  // політики їх не судять дозвільним переліком виразів (спека прав §5.3): ті, що
-  // пишуть, судить `sql.platform-function-call` стадії 5. Вирази прийнятих
-  // таблиць цієї стадії не мають, тож для них поза переліком лише ті, що
-  // читають.
-  const derived =
-    stage3 === undefined || stage1.project === undefined
-      ? undefined
-      : derivedFunctions(
-          stage1.objects,
-          stage2.references,
-          stage3.physical,
-          movementWrapperName,
-          stage1.project.scopeKinds,
-          stage1.project.naming.attributeCase
-        )
+  // Вирази прийнятих таблиць цієї стадії не мають, тож для них поза переліком
+  // лише згенеровані функції, що читають.
   const expressions = (reading: boolean): ExpressionScope | undefined =>
     derived === undefined || stage1.project === undefined
       ? undefined
@@ -282,12 +275,14 @@ export async function runStages(
         plpgsql,
         modelViews(sql.units),
         sql.units,
-        declared
+        declared,
+        calls
       ),
       parse,
       plpgsql,
       stage1.project?.database.provider,
-      declared
+      declared,
+      calls
     ),
     // Оболонку судимих функцій задає лише `CREATE` (спека прав §5.3): набір судимих
     // відомий до стадії 3, тож помилка стоїть поруч із формами модулів.
@@ -297,7 +292,8 @@ export async function runStages(
       sql.units,
       parse,
       plpgsql,
-      declared
+      declared,
+      calls.models
     ),
     // Резолв декларацій функцій (спека декларацій функцій §5.1) потребує лише
     // одиниць і метаданих, тож стоїть у ранньому блоці: нерезолвлена
@@ -311,9 +307,9 @@ export async function runStages(
         sql.diagnostics.filter((d) => d.code === "sql.parse").map((d) => d.file)
       )
     ),
-    // Підпис гранту, якого ідентичність не передає (#297), — помилка до
+    // Аргумент `%type` функції з виведеним `EXECUTE` (#300) — помилка до
     // генератора `EXECUTE`: інакше функція лишилася б з `EXECUTE` від `PUBLIC`.
-    ...checkExecuteSignatures(executeSources),
+    ...checkExecuteTypeReferences(executeSources),
     ...debt.grows,
     // Дослівна політика чи тригер на таблиці виду і тіло функції, що її
     // пише, — помилка раннього блоку поруч із ратчетом боргу (спека прав §6.1,
@@ -337,7 +333,8 @@ export async function runStages(
       stage1.project,
       sql.units,
       parse,
-      plpgsql
+      plpgsql,
+      calls
     ),
     ...checkPlatformCalls(sql.units, parse, plpgsql),
     // Виклики подань і політик — дозвільний перелік виразів (спека прав §5.3).
@@ -781,7 +778,13 @@ export async function runStages(
     accessDimensions,
     scopeSetFunctions,
   }
-  const snapshot = actorSnapshot
+  // Під функціями прав, а не лише під знімком актора: та сама множина дає
+  // таблиці фактів тригерам сигналу прав (спека П4-B §8.2).
+  const rightsFunctions = hasRightsFunctions(
+    { roles, users, membershipSources: sources.membershipSources },
+    stage1.project.database.provider
+  )
+  const snapshot = rightsFunctions
     ? snapshotSources({
         contracts: guardContracts,
         physical,
@@ -803,7 +806,17 @@ export async function runStages(
         { ...entry }
       )
     ),
-    ...snapshotExemptWriters(snapshot, sql.units, parse, plpgsql),
+    // Винятки знімка стереже лише знімок актора: без нього запис у
+    // виняток фактів транзакції не зсуває.
+    ...(actorSnapshot
+      ? snapshotExemptWriters(
+          snapshot,
+          sql.units,
+          parse,
+          plpgsql,
+          stage1.project.database.provider
+        )
+      : []),
   ]
   if (snapshotProblems.length > 0) {
     return {
@@ -828,10 +841,7 @@ export async function runStages(
   // обробники `beforeWrite` вирішують замок ієрархії (спека П4 §6.6).
   // Контракти ядра — рівно той набір, з якого генерується SQL: без функцій
   // прав ядра немає, тож і каталог рантайму не обіцяє жодної команди.
-  const catalogCommands = hasRightsFunctions(
-    { roles, users, membershipSources: sources.membershipSources },
-    stage1.project.database.provider
-  )
+  const catalogCommands = rightsFunctions
     ? catalogCommandContracts({
         access,
         rights,
@@ -869,11 +879,47 @@ export async function runStages(
     parse,
     plpgsql,
   })
+  // Тригери сигналу прав — на кожну таблицю фактів з аналізу джерел (спека
+  // П4-B §8.2); кличуть функції сигналів прав генератора `signal`.
+  const rightsSignals = rightsFunctions
+    ? buildRightsSignalUnits({
+        contracts: {
+          rightsCatalogs,
+          membership,
+          membershipSources: sources.membershipSources,
+          users,
+          accessDimensions,
+          rights,
+        },
+        physical,
+        objects: stage1.objects,
+        sources: snapshot,
+        attributeCase: stage1.project.naming.attributeCase,
+        provider: stage1.project.database.provider,
+        module,
+        parse,
+      })
+    : { units: [], exempt: [], unknown: [] }
+  if (rightsSignals.unknown.length > 0) {
+    return {
+      ok: false,
+      diagnostics: sortDiagnostics([
+        ...diagnostics,
+        ...rightsSignals.unknown.map((entry) =>
+          diagnostic("rights.signal-source-unknown", PROJECT_FILE, "", {
+            table: `${entry.table.schema}.${entry.table.name}`,
+            facts: entry.facts.join(", "),
+          })
+        ),
+      ]),
+    }
+  }
   // Знімок прав клієнта — читає лише публічні функції фактів: їхні одиниці
   // (функції прав, множини) — в `baseUnits`, ребра `requires` бере з тіла.
   const clientSnapshotUnits = buildClientSnapshotUnits({
     contracts: {
       access,
+      rights,
       roles,
       users,
       membershipSources: sources.membershipSources,
@@ -907,6 +953,7 @@ export async function runStages(
       plpgsql,
     }),
     ...signalUnits,
+    ...rightsSignals.units,
     ...clientSnapshotUnits,
   ]
   // `USAGE` на схеми застосунку — над усіма згенерованими грантами, бо схему
@@ -959,6 +1006,8 @@ export async function runStages(
     signalOutbox: () => "the signal outbox of the platform",
     // Оракул каналу й правило форми сигналу спільні — власника немає.
     signal: (unit) => `the signal authorization ${unit.name}`,
+    rightsSignal: (unit) =>
+      `the rights signal trigger of ${name(unit.ownerObjectId)}`,
     // Знімок прав клієнта спільний — власника немає.
     rightsClientSnapshot: (unit) => `the rights client snapshot ${unit.name}`,
   }
@@ -1115,7 +1164,28 @@ export function sqlStage(stage1: FilesStageResult, parse: SqlParser) {
           sql.units,
           stage1.project.defaultSchema
         )
-  return { stage2, upstream, stage3, sql, declared }
+  // Згенеровані функції схем застосунку відомі лише зі знімка. Подання й
+  // політики їх не судять дозвільним переліком виразів (спека прав §5.3): ті, що
+  // пишуть, судить `sql.platform-function-call` стадії 5; кваліфікований виклик
+  // у тілі їх теж не судить як текст SQL. Одні дані для ратчета боргу й стадій,
+  // тож `fix` і `introspect` бачать те саме, що компілятор.
+  const derived =
+    stage3 === undefined || stage1.project === undefined
+      ? undefined
+      : derivedFunctions(
+          stage1.objects,
+          stage2.references,
+          stage3.physical,
+          movementWrapperName,
+          stage1.project.scopeKinds,
+          stage1.project.naming.attributeCase
+        )
+  const calls = providerCalls(
+    stage1.project?.database.provider,
+    sql.units,
+    new Set((derived ?? []).map((f) => `${f.schema}.${f.name}`))
+  )
+  return { stage2, upstream, stage3, sql, declared, derived, calls }
 }
 
 /**

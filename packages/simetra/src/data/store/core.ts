@@ -587,7 +587,7 @@ export function createCore(options: {
       const entry = objects.get(object)?.entry
       return (
         entry !== undefined &&
-        entry.rightsContract === true &&
+        entry.rights !== undefined &&
         !readAllowed(snapshot, { scope }, entry)
       )
     }
@@ -597,7 +597,7 @@ export function createCore(options: {
     denies: deniedBy(state.snapshot),
     guards: (object) => {
       const entry = objects.get(object)?.entry
-      return entry?.rightsContract === true && entry.scopeColumn !== undefined
+      return entry?.rights !== undefined && entry.scopeColumn !== undefined
     },
   })
 

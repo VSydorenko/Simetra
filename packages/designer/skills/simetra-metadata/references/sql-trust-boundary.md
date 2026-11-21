@@ -177,10 +177,11 @@ is closed by its own rule:
   your SQL, and its cascade would write tables of kinds. Promote the root, or
   delete tenants through a command.
 - **Extensions** — `CREATE EXTENSION … SCHEMA extensions` (a schema of the
-  provider); without `SCHEMA` or with another schema it is the warning
-  `sql.debt-extension-schema`. Until you fix it, code inside a command calls
-  no function of the model in that schema, and none at all while an
-  extension has no `SCHEMA`.
+  provider); without `SCHEMA` or with another schema it is the error
+  `sql.debt-extension-schema`. Fix it with `ALTER EXTENSION … SET SCHEMA
+  extensions` in the database and `SCHEMA extensions` in the statement:
+  Postgres picks an overload by argument types, so a name match with a model
+  function would not make a call safe.
 
 ## Before a promotion
 

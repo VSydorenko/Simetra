@@ -4,6 +4,7 @@ import {
   ORGANIZATION_ID,
   OBJECT_ID,
   SCOPE_KIND_ID,
+  catalogRights,
 } from "../../../model/runtime/__tests__/entries"
 import {
   CommandFailure,
@@ -152,8 +153,8 @@ const OTHER_USER = "00000000-0000-4000-8000-0000000000a2"
 // Обидва об'єкти моделі під договором прав: прохід і бар'єр судять і задачі,
 // і цілі `include`.
 const RIGHTS_OBJECTS: readonly CatalogEntry[] = [
-  { ...task, rightsContract: true },
-  { ...org, rightsContract: true },
+  { ...task, rights: catalogRights() },
+  { ...org, rights: catalogRights() },
 ]
 const LABELS: Readonly<Record<ObjectName, string>> = {
   [TASK]: "task",
@@ -212,6 +213,8 @@ const snapshotOf = (g: Grant): RightsSnapshot => ({
     ...g.reads.map((at) => rightsRow(at, "any")),
     ...g.extra.map((at) => rightsRow(at, "own")),
   ],
+  members: [],
+  dimensionValues: [],
 })
 
 const without = (list: readonly string[], x: string) =>

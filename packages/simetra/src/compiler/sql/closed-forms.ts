@@ -10,19 +10,15 @@ import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import {
   commandContextWrite,
-  providerCalls,
+  type ProviderCalls,
   type CommandContextHit,
 } from "./command-context"
 import type { DeclaredFunction, PlatformForm } from "./declarations"
-import { isExpressionUnit } from "./expression-calls"
+import { isExpressionUnit, treeBeyondExpressions } from "./expression-calls"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
-import {
-  FUNCTION_CLASSES,
-  functionIdentity,
-  type RowRule,
-  type VerbatimUnit,
-} from "./units"
+import { functionIdentity } from "./identity"
+import { FUNCTION_CLASSES, type RowRule, type VerbatimUnit } from "./units"
 
 /** Чим функція виходить за закриту оболонку (спека промоції §9.4). */
 export type ClosedShellProblem =
@@ -401,39 +397,21 @@ export function extensionSchema(tree: unknown): string | undefined {
 }
 
 /**
- * Схеми застосунку, куди боргові розширення ставлять функції (спека прав §5.3):
- * явна `SCHEMA` поза схемами провайдера; `all` — є розширення без `SCHEMA`,
- * тож воно могло стати в будь-яку схему застосунку.
- */
-export function extensionSchemas(
-  units: readonly VerbatimUnit[],
-  provider: DatabaseProvider
-): { all: boolean; schemas: ReadonlySet<string> } {
-  const allowed = new Set(PROVIDER_SCHEMAS[provider])
-  const schemas = new Set<string>()
-  let all = false
-  for (const unit of units) {
-    if (unit.class !== "extension") continue
-    const schema = extensionSchema(unit.tree)
-    if (schema === undefined) all = true
-    else if (!allowed.has(schema)) schemas.add(schema)
-  }
-  return { all, schemas }
-}
-
-/**
  * Виклик, що виконує текст SQL, у функції чи процедурі судить дозвільний
  * перелік тіла (`sql.function-body-statement`, спека прав §5.3) — помилкою скрізь,
  * борг включно; тут він дав би другу діагностику того самого виклику. Так
- * само кожен виклик подання чи політики (`set_config`, виконання тексту SQL)
- * судить дозвільний перелік виразів (`sql.expression-call-not-allowed`,
- * спека прав §5.3): тут лишається лише запис у `pg_settings`.
+ * само кожен виклик одиниці-виразу (подання, політики, агрегату, тригера:
+ * `set_config`, виконання тексту SQL) судить дозвільний перелік виразів
+ * (`sql.expression-call-not-allowed`, спека прав §5.3): тут лишається лише
+ * запис у `pg_settings`. Домен — виняток: `DEFAULT` уже вирізано з дерева
+ * (`treeBeyondExpressions`), а `CHECK` судить запис сесії, як і раніше.
  */
 function judgedElsewhere(
   unit: Pick<VerbatimUnit, "class">,
   hit: CommandContextHit
 ): boolean {
-  if (isExpressionUnit(unit)) return CALL_FORMS.has(hit.form)
+  if (isExpressionUnit(unit) && unit.class !== "domain")
+    return CALL_FORMS.has(hit.form)
   return (
     hit.form === "dynamicText" &&
     (unit.class === "function" || unit.class === "procedure")
@@ -472,9 +450,9 @@ export function checkSqlModules(
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
   provider: DatabaseProvider | undefined,
-  declared: readonly DeclaredFunction[]
+  declared: readonly DeclaredFunction[],
+  calls: ProviderCalls
 ): Diagnostic[] {
-  const calls = providerCalls(provider, units)
   const owners = closedModuleOwners(objects)
   const closed = (unit: { ownerFile?: string }) =>
     unit.ownerFile !== undefined && owners.has(unit.ownerFile)
@@ -504,7 +482,7 @@ export function checkSqlModules(
   for (const unit of units) {
     if (closed(unit)) continue
     const writes = commandContextWrite(
-      unit.tree as Node,
+      treeBeyondExpressions(unit) as Node,
       unit.sql,
       parse,
       plpgsql,
@@ -553,9 +531,10 @@ export function checkSqlModules(
     )
   }
   // Розширення лише в схемах провайдера (спека прав §5.3): функція розширення в
-  // схемі застосунку перевантажила б функцію-запит з тим самим ім'ям. Поза
-  // боргом такої одиниці не буває — модуль виду `CREATE EXTENSION` відмовляє
-  // вище, а одиниця спільного файлу — борг, — тож це попередження.
+  // схемі застосунку перевантажила б функцію моделі з тим самим ім'ям, а збіг
+  // імені виклик не рятує (Postgres обирає перевантаження за аргументами).
+  // Помилка скрізь, борг включно: тоді в схемах застосунку функцій розширень
+  // немає, і збіг з моделлю за `схема.ім'я` надійний.
   const providerSchemas: ReadonlySet<string> = new Set(
     provider === undefined ? [] : PROVIDER_SCHEMAS[provider]
   )

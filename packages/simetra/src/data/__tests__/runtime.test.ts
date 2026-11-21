@@ -480,7 +480,13 @@ describe("runtime core", () => {
     const fake = createFakeSource({ objects: OBJECTS })
     seed(fake, 1, 1)
     const userA = "00000000-0000-4000-8000-0000000000a1"
-    fake.rightsSnapshot = { userId: userA, scopeSets: [], rights: [] }
+    fake.rightsSnapshot = {
+      userId: userA,
+      scopeSets: [],
+      rights: [],
+      members: [],
+      dimensionValues: [],
+    }
     fake.rightsVersion = "1".repeat(64)
     // Міст і для службових частин: фейк відповідає й `rights`.
     const transport: DataTransport = async (body) =>
@@ -515,6 +521,8 @@ describe("runtime core", () => {
       userId: "00000000-0000-4000-8000-0000000000a2",
       scopeSets: [],
       rights: [],
+      members: [],
+      dimensionValues: [],
     }
     fake.rightsVersion = "2".repeat(64)
     // Знімок іншого користувача й перечитування картки — одним пакетом.
@@ -958,7 +966,13 @@ describe("version check and the stale mark (§10)", () => {
               ok: true,
               value: {
                 rightsVersion: RIGHTS_VERSION,
-                snapshot: { userId: null, scopeSets: [], rights: [] },
+                snapshot: {
+                  userId: null,
+                  scopeSets: [],
+                  rights: [],
+                  members: [],
+                  dimensionValues: [],
+                },
               },
             },
           ],
@@ -983,7 +997,13 @@ describe("version check and the stale mark (§10)", () => {
               ok: true,
               value: {
                 rightsVersion: RIGHTS_VERSION,
-                snapshot: { userId: null, scopeSets: [], rights: [] },
+                snapshot: {
+                  userId: null,
+                  scopeSets: [],
+                  rights: [],
+                  members: [],
+                  dimensionValues: [],
+                },
               },
             },
           ],
@@ -1023,7 +1043,13 @@ describe("version check and the stale mark (§10)", () => {
                 ok: true,
                 value: {
                   rightsVersion: RIGHTS_VERSION,
-                  snapshot: { userId: null, scopeSets: [], rights: [] },
+                  snapshot: {
+                    userId: null,
+                    scopeSets: [],
+                    rights: [],
+                    members: [],
+                    dimensionValues: [],
+                  },
                 },
               },
             ],

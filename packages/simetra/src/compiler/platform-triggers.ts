@@ -33,6 +33,10 @@ import {
   effectsTriggerNames,
 } from "./rights/effects-names"
 import { rightsGuardNames } from "./rights/guard-names"
+import {
+  rightsSignalFunctionName,
+  rightsSignalTriggerNames,
+} from "./rights/signal-names"
 
 export type PlatformTriggerFamily =
   | "mechanics"
@@ -42,13 +46,20 @@ export type PlatformTriggerFamily =
   | "hierarchy"
   | "effects"
   | "rightsGuards"
+  | "rightsSignals"
 
 export interface PlatformTrigger {
   family: PlatformTriggerFamily
   trigger: string
   function: QualifiedName
   /** Генератор одиниці тригера (`SqlUnit.generator`). */
-  generator: "mechanics" | "key" | "carriers" | "effects" | "rightsGuards"
+  generator:
+    | "mechanics"
+    | "key"
+    | "carriers"
+    | "effects"
+    | "rightsGuards"
+    | "rightsSignal"
   /** Тригер оновлення, платформний лише з умовою змісту таблиці. */
   contentUpdate: boolean
 }
@@ -138,6 +149,15 @@ export function platformTriggers(table: QualifiedName): PlatformTrigger[] {
     entry("effects", "effects", effectsFn, effects.update),
     ...rightsGuardNames(table).map((guard) =>
       entry("rightsGuards", "rightsGuards", guard.function, guard.trigger)
+    ),
+    // Сигнали прав таблиці фактів (спека П4-B §8.2): одна функція таблиці
+    ...rightsSignalTriggerNames(table).map(({ trigger }) =>
+      entry(
+        "rightsSignals",
+        "rightsSignal",
+        rightsSignalFunctionName(table),
+        trigger
+      )
     ),
   ]
 }

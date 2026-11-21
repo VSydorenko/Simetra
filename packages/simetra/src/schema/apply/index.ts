@@ -14,6 +14,7 @@ export type {
 export { desiredForApply, type ApplyDesired } from "./desired"
 export {
   APPLY_STATE_FORMAT,
+  appliedCatalog,
   applyStateOf,
   applyStateOwnership,
   findApply,
@@ -23,6 +24,7 @@ export {
   readLedgerHead,
   renderApplyState,
   writeApplyStateStatements,
+  type AppliedCatalog,
   type ApplyRecord,
   type ApplyState,
   type ApplyStateObjects,

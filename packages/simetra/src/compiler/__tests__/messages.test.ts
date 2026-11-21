@@ -615,6 +615,84 @@ describe("messages catalog", () => {
     }
   )
 
+  it.each([
+    { form: "policy", en: "Verbatim policy", uk: "Дослівна політика" },
+    { form: "trigger", en: "Verbatim trigger", uk: "Дослівний тригер" },
+  ])(
+    "sql.kind-table-verbatim names the identity source for a $form on it",
+    ({ form, en, uk }) => {
+      const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
+        identity: `${form}:auth.users.p`,
+        table: "auth.users",
+        form,
+        line: 3,
+      })
+      expect(d.message).toBe(
+        `${en} ${form}:auth.users.p at line 3 is on auth.users, the identity source of the database provider`
+      )
+      expect(localize(d, "uk").message).toBe(
+        `${uk} ${form}:auth.users.p у рядку 3 стоїть на auth.users — джерелі ідентичностей провайдера бази`
+      )
+    }
+  )
+
+  it("sql.kind-table-verbatim says an unqualified name was resolved fail-closed", () => {
+    const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
+      identity: "grant:identities:INSERT",
+      table: "simetra.identities",
+      form: "grant",
+      roles: "authenticated",
+      line: 1,
+      unqualified: "yes",
+    })
+    expect(d.message).toContain("the name has no schema")
+    expect(d.hint).toContain("qualify the name with that schema")
+    expect(localize(d, "uk").message).toContain("ім'я без схеми")
+    expect(localize(d, "uk").hint).toContain("кваліфікуйте ім'я цією схемою")
+    const q = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
+      identity: "grant:x",
+      table: "simetra.identities",
+      form: "grant",
+      roles: "authenticated",
+      line: 1,
+    })
+    expect(q.message).not.toContain("no schema")
+  })
+
+  it("sql.kind-table-verbatim names the unit, not a function, for a sequence call outside a function", () => {
+    const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
+      identity: "view:public.v",
+      table: "simetra.row_version",
+      form: "sequence",
+      statement: "nextval",
+      line: 3,
+    })
+    expect(d.message).toBe(
+      "Unit view:public.v at line 3 calls nextval on simetra.row_version, a sequence of the platform"
+    )
+  })
+
+  it("sql.kind-table-verbatim on an unqualified sequence asks to qualify it, not «of the platform»", () => {
+    const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
+      identity: "view:public.v",
+      table: "ledger_id_seq",
+      form: "sequence",
+      statement: "nextval",
+      line: 3,
+      unqualified: "yes",
+    })
+    expect(d.message).toBe(
+      "Unit view:public.v at line 3 calls nextval on the sequence ledger_id_seq (the name has no schema, so it is resolved fail-closed)"
+    )
+    expect(d.hint).toContain("qualified by their schema")
+    expect(d.hint).toContain("qualify the name with that schema")
+    expect(localize(d, "uk").message).toBe(
+      "Одиниця view:public.v у рядку 3 викликає nextval над послідовністю ledger_id_seq (ім'я без схеми, тож його розв'язано fail-closed)"
+    )
+    expect(localize(d, "uk").hint).toContain("кваліфікованим їхньою схемою")
+    expect(localize(d, "uk").hint).toContain("кваліфікуйте ім'я цією схемою")
+  })
+
   it("sql.kind-table-verbatim names the function and the statement of a body", () => {
     const d = diagnostic("sql.kind-table-verbatim", "sql/public/x.sql", "", {
       identity: "function:public.f()",
@@ -1011,7 +1089,7 @@ describe("messages catalog", () => {
     },
   ])("sql.debt-extension-schema: $en", ({ params, en }) => {
     const d = diagnostic("sql.debt-extension-schema", "a.sql", "", params)
-    expect(d.severity).toBe("warning")
+    expect(d.severity).toBe("error")
     expect(d.message).toContain(en)
     expect(d.message).not.toContain("undefined")
     expect(localize(d, "uk").message).not.toContain("undefined")

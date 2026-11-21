@@ -716,7 +716,13 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
 
   const fake: FakeSource = {
     index,
-    rightsSnapshot: { userId: null, scopeSets: [], rights: [] },
+    rightsSnapshot: {
+      userId: null,
+      scopeSets: [],
+      rights: [],
+      members: [],
+      dimensionValues: [],
+    },
     rightsVersion: "0".repeat(64),
     rightsError: undefined,
     holdRights: false,

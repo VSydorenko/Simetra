@@ -1,4 +1,7 @@
+import fc from "fast-check"
+import type { Node } from "libpg-query"
 import { describe, expect, it } from "vitest"
+import { quoteIdent } from "simetra/model"
 import {
   compile,
   grantRoles,
@@ -16,6 +19,9 @@ import {
   withoutAccess,
   withoutMechanics,
 } from "./helpers"
+import { identityKey } from "../sql/identity"
+import { loadSqlParser } from "../sql/parse"
+import { functionSignatureSql, generatedUnit } from "../sql/units"
 
 const MISC = "sql/public/misc.sql"
 
@@ -36,6 +42,10 @@ async function compileSql(
   return result
 }
 
+function texts(nodes: readonly Node[] | undefined): string[] {
+  return (nodes ?? []).map((n) => ("String" in n ? (n.String.sval ?? "") : ""))
+}
+
 async function identities(sql: string): Promise<string[]> {
   const result = await compileSql(sql)
   expect(result.diagnostics).toEqual([])
@@ -43,11 +53,194 @@ async function identities(sql: string): Promise<string[]> {
 }
 
 describe("sql units", () => {
-  it("grant on all objects in a schema is not a unit", async () => {
+  // Інваріант І11: класи одиниць закриті. Кожна форма — окремий рядок і
+  // окремий файл-вхід, тож відмову форми не маскує сусідня. `params` — що
+  // діагностика додає до імені вузла (деталь, ознака).
+  const CLOSED_FORMS: Array<{
+    form: string
+    sql: string
+    statement: string
+    params?: Record<string, string>
+  }> = [
+    {
+      form: "CREATE RULE",
+      sql: "CREATE RULE r AS ON INSERT TO public.t DO NOTHING;",
+      statement: "RuleStmt",
+    },
+    {
+      form: "GRANT role TO role",
+      sql: "GRANT anon TO authenticated;",
+      statement: "GrantRoleStmt",
+    },
+    {
+      form: "ALTER GROUP ADD USER",
+      sql: "ALTER GROUP g ADD USER u;",
+      statement: "AlterRoleStmt",
+    },
+    { form: "CREATE ROLE", sql: "CREATE ROLE r;", statement: "CreateRoleStmt" },
+    {
+      form: "ALTER ROLE",
+      sql: "ALTER ROLE r SUPERUSER;",
+      statement: "AlterRoleStmt",
+    },
+    {
+      form: "CREATE OPERATOR",
+      sql: "CREATE OPERATOR === (LEFTARG = int, RIGHTARG = int, FUNCTION = int4eq);",
+      statement: "DefineStmt",
+    },
+    {
+      form: "CREATE CAST",
+      sql: "CREATE CAST (int AS text) WITH INOUT;",
+      statement: "CreateCastStmt",
+    },
+    {
+      form: "CREATE TYPE (enum)",
+      sql: "CREATE TYPE e AS ENUM ('a');",
+      statement: "CreateEnumStmt",
+    },
+    {
+      form: "CREATE TYPE (composite)",
+      sql: "CREATE TYPE c AS (a int);",
+      statement: "CompositeTypeStmt",
+    },
+    {
+      form: "CREATE CONVERSION",
+      sql: "CREATE CONVERSION cv FOR 'UTF8' TO 'LATIN1' FROM utf8_to_iso8859_1;",
+      statement: "CreateConversionStmt",
+    },
+    {
+      form: "CREATE TRANSFORM",
+      sql: "CREATE TRANSFORM FOR int LANGUAGE plpgsql (FROM SQL WITH FUNCTION f(internal));",
+      statement: "CreateTransformStmt",
+    },
+    {
+      form: "CREATE LANGUAGE",
+      sql: "CREATE LANGUAGE plx HANDLER public.h;",
+      statement: "CreatePLangStmt",
+    },
+    {
+      form: "CREATE EVENT TRIGGER",
+      sql: "CREATE EVENT TRIGGER et ON ddl_command_start EXECUTE FUNCTION public.f();",
+      statement: "CreateEventTrigStmt",
+    },
+    {
+      form: "CREATE INDEX",
+      sql: "CREATE INDEX i ON t (id);",
+      statement: "IndexStmt",
+    },
+    {
+      form: "CREATE TABLE",
+      sql: "CREATE TABLE t (id uuid);",
+      statement: "CreateStmt",
+    },
+    {
+      form: "ALTER TABLE ADD COLUMN",
+      sql: "ALTER TABLE public.t ADD COLUMN c int;",
+      statement: "AlterTableStmt",
+      params: { detail: "only REPLICA IDENTITY is allowed" },
+    },
+    {
+      form: "ALTER TABLE ENABLE RLS",
+      sql: "ALTER TABLE public.t ENABLE ROW LEVEL SECURITY;",
+      statement: "AlterTableStmt",
+      params: { feature: "rowLevelSecurity" },
+    },
+    {
+      form: "ALTER TABLE row rule next to another command",
+      sql: "ALTER TABLE public.t ADD CONSTRAINT c CHECK (a > 0), ADD COLUMN d int;",
+      statement: "AlterTableStmt",
+      params: { detail: "only REPLICA IDENTITY is allowed" },
+    },
+    {
+      form: "ALTER TABLE OWNER TO",
+      sql: "ALTER TABLE public.t OWNER TO r;",
+      statement: "AlterTableStmt",
+      params: { detail: "only REPLICA IDENTITY is allowed" },
+    },
+    {
+      form: "ALTER VIEW",
+      sql: "ALTER VIEW public.v SET (security_invoker = false);",
+      statement: "AlterTableStmt",
+      params: { detail: "only REPLICA IDENTITY is allowed" },
+    },
+    {
+      // Гард objtype: REPLICA IDENTITY лишається дозволеною лише для таблиці.
+      form: "ALTER VIEW REPLICA IDENTITY",
+      sql: "ALTER VIEW public.v REPLICA IDENTITY FULL;",
+      statement: "AlterTableStmt",
+      params: { detail: "only REPLICA IDENTITY is allowed" },
+    },
+    {
+      form: "ALTER FUNCTION OWNER TO",
+      sql: "ALTER FUNCTION public.f() OWNER TO r;",
+      statement: "AlterOwnerStmt",
+    },
+    {
+      form: "ALTER SEQUENCE other than OWNED BY",
+      sql: "ALTER SEQUENCE public.s RESTART;",
+      statement: "AlterSeqStmt",
+      params: { detail: "only OWNED BY is allowed" },
+    },
+    {
+      form: "REASSIGN OWNED",
+      sql: "REASSIGN OWNED BY a TO b;",
+      statement: "ReassignOwnedStmt",
+    },
+    { form: "DROP", sql: "DROP TABLE t;", statement: "DropStmt" },
+    { form: "DO", sql: "DO $$ BEGIN NULL; END $$;", statement: "DoStmt" },
+    {
+      form: "INSERT",
+      sql: "INSERT INTO t VALUES (gen_random_uuid());",
+      statement: "InsertStmt",
+    },
+    { form: "UPDATE", sql: "UPDATE t SET a = 1;", statement: "UpdateStmt" },
+    { form: "DELETE", sql: "DELETE FROM t;", statement: "DeleteStmt" },
+    {
+      form: "MERGE",
+      sql: "MERGE INTO t USING (SELECT 1 AS x) s ON false WHEN NOT MATCHED THEN DO NOTHING;",
+      statement: "MergeStmt",
+    },
+    { form: "COPY", sql: "COPY t FROM STDIN;", statement: "CopyStmt" },
+    {
+      form: "GRANT ALL ... IN SCHEMA",
+      sql: "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO anon;",
+      statement: "GrantStmt",
+      params: { detail: "allInSchema" },
+    },
+    {
+      form: "REVOKE ALL ... IN SCHEMA",
+      sql: "REVOKE SELECT ON ALL TABLES IN SCHEMA public FROM anon;",
+      statement: "GrantStmt",
+      params: { detail: "allInSchema" },
+    },
+    {
+      form: "CREATE PUBLICATION",
+      sql: "CREATE PUBLICATION pub FOR TABLE t;",
+      statement: "CreatePublicationStmt",
+      params: { feature: "publication" },
+    },
+  ]
+
+  it.each(CLOSED_FORMS)(
+    "closed form $form is not allowed",
+    async ({ sql, statement, params }) => {
+      const result = await compileSql(sql)
+      const refused = result.diagnostics.filter(
+        (d) => d.code === "sql.statement-not-allowed"
+      )
+      expect(refused).toEqual([
+        expect.objectContaining({
+          params: expect.objectContaining({ statement, line: 1, ...params }),
+        }),
+      ])
+    }
+  )
+
+  it("closed forms are refused statement by statement, in source order", async () => {
     const result = await compileSql(
-      "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO anon;\n" +
-        "REVOKE SELECT ON ALL TABLES IN SCHEMA public FROM anon;"
+      "CREATE TABLE t (id uuid);\nDROP TABLE t;\nINSERT INTO t VALUES (1);"
     )
+    expect(result.ok).toBe(false)
     expect(
       result.diagnostics.map((d) => [
         d.code,
@@ -55,12 +248,32 @@ describe("sql units", () => {
         d.params?.line,
       ])
     ).toEqual([
-      ["sql.statement-not-allowed", "GrantStmt", 1],
-      ["sql.statement-not-allowed", "GrantStmt", 2],
+      ["sql.statement-not-allowed", "CreateStmt", 1],
+      ["sql.statement-not-allowed", "DropStmt", 2],
+      ["sql.statement-not-allowed", "InsertStmt", 3],
     ])
-    expect(result.diagnostics[0]!.params).toMatchObject({
-      detail: "allInSchema",
-    })
+  })
+
+  it("ENABLE RLS refusal names the feature without internal node names", async () => {
+    const result = await compileSql(
+      "ALTER TABLE public.t ENABLE ROW LEVEL SECURITY;"
+    )
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        hint: expect.stringContaining("rowLevelSecurity"),
+      }),
+    ])
+    expect(result.diagnostics[0]!.message).not.toContain("AT_")
+    expect(result.diagnostics[0]!.message).not.toMatch(/got\s*$/)
+  })
+
+  it("CREATE PUBLICATION refusal points to ALTER PUBLICATION", async () => {
+    const result = await compileSql("CREATE PUBLICATION pub FOR TABLE t;")
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        hint: expect.stringContaining("ALTER PUBLICATION"),
+      }),
+    ])
   })
 
   it("function identity includes argument types", async () => {
@@ -134,36 +347,36 @@ describe("sql units", () => {
     ["float(10)", "float4", "float4"],
     ["float", "float8", "float8"],
     ["double precision", "float8", "float8"],
-    ["decimal", "numeric", "numeric"],
-    ["dec", "numeric", "numeric"],
+    ["decimal", "numeric", '"numeric"'],
+    ["dec", "numeric", '"numeric"'],
     ["timestamp with time zone", "timestamptz", "timestamptz"],
-    ["timestamp without time zone", "pg_catalog.timestamp", "timestamp"],
+    ["timestamp without time zone", "pg_catalog.timestamp", '"timestamp"'],
     ["time with time zone", "timetz", "timetz"],
-    ["time without time zone", "pg_catalog.time", "time"],
-    ["character varying", "varchar", "varchar"],
-    ["char varying", "pg_catalog.varchar", "varchar"],
-    ["national character varying", "varchar", "varchar"],
+    ["time without time zone", "pg_catalog.time", '"time"'],
+    ["character varying", "varchar", '"varchar"'],
+    ["char varying", "pg_catalog.varchar", '"varchar"'],
+    ["national character varying", "varchar", '"varchar"'],
     ["character", "bpchar", "bpchar"],
     ["char", "bpchar", "bpchar"],
     ["nchar", "bpchar", "bpchar"],
     ["bit varying", "varbit", "varbit"],
-    ["bit", '"bit"', "bit"],
-    ["json", '"json"', "json"],
-    ["interval", '"interval"', "interval"],
+    ["bit", '"bit"', '"bit"'],
+    ["json", '"json"', '"json"'],
+    ["interval", '"interval"', '"interval"'],
     // Модифікатор типу не входить у тип функції.
-    ["varchar(10)", "character varying", "varchar"],
-    ["numeric(10,2)", "numeric", "numeric"],
+    ["varchar(10)", "character varying", '"varchar"'],
+    ["numeric(10,2)", "numeric", '"numeric"'],
     ["char(5)", "bpchar", "bpchar"],
     ["timestamp(3) with time zone", "timestamptz", "timestamptz"],
-    ["time(2)", "time", "time"],
-    ["bit(3)", '"bit"', "bit"],
-    ["interval day to second", '"interval"', "interval"],
+    ["time(2)", "time", '"time"'],
+    ["bit(3)", '"bit"', '"bit"'],
+    ["interval day to second", '"interval"', '"interval"'],
     // Масив — один тип незалежно від написання й кількості вимірів.
     ["int[]", "_int4", "int4[]"],
     ["integer[]", "int4[]", "int4[]"],
     ["integer array", "pg_catalog._int4", "int4[]"],
     ["int[][]", "int4[3]", "int4[]"],
-    ["varchar(10)[]", "_varchar", "varchar[]"],
+    ["varchar(10)[]", "_varchar", '"varchar"[]'],
     ["_int4[]", "int[]", "int4[]"],
   ])("f(%s) and f(%s) are one function", async (first, second, canonical) => {
     const result = await compileSql(
@@ -191,8 +404,8 @@ describe("sql units", () => {
         ].join("\n")
       )
     ).toEqual([
+      'function:public.f("char")',
       "function:public.f(bpchar)",
-      "function:public.f(char)",
       "function:public.f(item)",
       "function:public.f(other.item)",
     ])
@@ -220,6 +433,190 @@ describe("sql units", () => {
         "CREATE FUNCTION f(a t.c%type) RETURNS int LANGUAGE sql AS $$ select 1 $$;"
       )
     ).toEqual(["function:public.f(t.c%type)"])
+  })
+
+  // Інваріант І4 (#297): кожна частина імені в ідентичності — за
+  // `quoteIdent`, тож пара, що відрізняється лише межею лапок, — дві одиниці
+  // без `sql.unit-duplicate` і без `sql.namespace-conflict`.
+  const FN = "RETURNS int LANGUAGE sql AS $$ select 1 $$;"
+  const TRIGGER_FN =
+    "CREATE FUNCTION public.h() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
+  it.each([
+    {
+      form: "function name",
+      sql: [
+        `CREATE FUNCTION "a.b".c() ${FN}`,
+        `CREATE FUNCTION a."b.c"() ${FN}`,
+      ],
+      expected: ['function:"a.b".c()', 'function:a."b.c"()'],
+    },
+    {
+      // `f("a,b")` — один аргумент, а не два
+      form: "function argument",
+      sql: [
+        `CREATE FUNCTION f(x "a,b") ${FN}`,
+        `CREATE FUNCTION f(x a, y b) ${FN}`,
+      ],
+      expected: ['function:public.f("a,b")', "function:public.f(a,b)"],
+    },
+    {
+      form: "function argument type",
+      sql: [
+        `CREATE FUNCTION f(x "a.b".c) ${FN}`,
+        `CREATE FUNCTION f(x a."b.c") ${FN}`,
+      ],
+      expected: ['function:public.f("a.b".c)', 'function:public.f(a."b.c")'],
+    },
+    {
+      form: "aggregate",
+      sql: [
+        'CREATE AGGREGATE "a.b".agg(int4) (SFUNC = int4pl, STYPE = int);',
+        'CREATE AGGREGATE a."b.agg"(int4) (SFUNC = int4pl, STYPE = int);',
+      ],
+      expected: ['aggregate:"a.b".agg(int4)', 'aggregate:a."b.agg"(int4)'],
+    },
+    {
+      form: "view",
+      sql: [
+        'CREATE VIEW "a.b".c AS SELECT 1;',
+        'CREATE VIEW a."b.c" AS SELECT 1;',
+      ],
+      expected: ['view:"a.b".c', 'view:a."b.c"'],
+    },
+    {
+      form: "trigger",
+      sql: [
+        TRIGGER_FN,
+        'CREATE TRIGGER "t.x" AFTER INSERT ON public.a FOR EACH ROW EXECUTE FUNCTION public.h();',
+        'CREATE TRIGGER x AFTER INSERT ON public."a.t" FOR EACH ROW EXECUTE FUNCTION public.h();',
+      ],
+      expected: [
+        "function:public.h()",
+        'trigger:public."a.t".x',
+        'trigger:public.a."t.x"',
+      ],
+    },
+    {
+      form: "policy",
+      sql: [
+        'CREATE POLICY "p.x" ON storage.o FOR SELECT USING (true);',
+        'CREATE POLICY x ON storage."o.p" FOR SELECT USING (true);',
+      ],
+      expected: ['policy:storage."o.p".x', 'policy:storage.o."p.x"'],
+    },
+    {
+      form: "grant",
+      sql: [
+        'GRANT SELECT ON "a.b".c TO anon;',
+        'GRANT SELECT ON a."b.c" TO anon;',
+      ],
+      expected: [
+        'grant:grant:table:"a.b".c:anon:select',
+        'grant:grant:table:a."b.c":anon:select',
+      ],
+    },
+    {
+      form: "comment",
+      sql: [
+        `COMMENT ON TABLE "a.b".c IS 'x';`,
+        `COMMENT ON TABLE a."b.c" IS 'x';`,
+      ],
+      expected: ['comment:table:"a.b".c', 'comment:table:a."b.c"'],
+    },
+    {
+      form: "default privileges",
+      sql: [
+        'ALTER DEFAULT PRIVILEGES FOR ROLE "r,s" IN SCHEMA "a,b" GRANT SELECT ON TABLES TO anon;',
+        "ALTER DEFAULT PRIVILEGES FOR ROLE r, s IN SCHEMA a, b GRANT SELECT ON TABLES TO anon;",
+      ],
+      expected: [
+        'defaultPrivileges:"r,s":"a,b":table:grant:anon:select',
+        "defaultPrivileges:r,s:a,b:table:grant:anon:select",
+      ],
+    },
+    {
+      // Частини `%type` — теж за `quoteIdent`: `"T".c%type` ≠ `t.c%type`
+      form: "%type of mixed case",
+      sql: [
+        `CREATE FUNCTION f(x "T".c%type) ${FN}`,
+        `CREATE FUNCTION f(x t.c%type) ${FN}`,
+      ],
+      expected: [
+        'function:public.f("T".c%type)',
+        "function:public.f(t.c%type)",
+      ],
+    },
+  ])(
+    "$form: names that differ only by the quote boundary are two units",
+    async ({ sql, expected }) => {
+      expect(await identities(sql.join("\n"))).toEqual(expected)
+    }
+  )
+
+  // Ключ функції — валідний підпис SQL: Postgres розбирає його назад як
+  // `ObjectWithArgs` з тими самими частинами імені й типів, тож грант за
+  // ключем цілить рівно в цю функцію (Р2).
+  it("a function key parses back to the same name and type parts", async () => {
+    const parse = await loadSqlParser()
+    const part = fc.oneof(
+      fc.string({
+        unit: fc.constantFrom(...'aZ_9$.,:"() %[]ї'),
+        minLength: 1,
+        maxLength: 8,
+      }),
+      fc.constantFrom(
+        "int",
+        "char",
+        "numeric",
+        "Time",
+        "double",
+        "setof",
+        "array"
+      )
+    )
+    // Тип з двох частин поза `pg_catalog`: однокомпонентне ім'я каталогу
+    // `_x` канонізується в масив `x[]`, тож частини навмисно інші
+    const type = fc
+      .tuple(part, part)
+      .filter(([schema]) => schema !== "pg_catalog")
+    fc.assert(
+      fc.property(
+        part,
+        part,
+        fc.array(type, { maxLength: 3 }),
+        (schema, name, types) => {
+          const unit = generatedUnit(
+            `CREATE FUNCTION ${quoteIdent(schema)}.${quoteIdent(name)}(${types.map(([s, t], i) => `a${i} ${quoteIdent(s)}.${quoteIdent(t)}`).join(", ")}) ${FN}`,
+            "public",
+            parse
+          )
+          for (const signature of [
+            identityKey(unit.identity),
+            functionSignatureSql(unit),
+          ]) {
+            const parsed = parse(
+              `GRANT EXECUTE ON FUNCTION ${signature} TO anon;`
+            )
+            const stmt = parsed.ok ? parsed.statements[0]?.stmt : undefined
+            const target =
+              stmt !== undefined && "GrantStmt" in stmt
+                ? stmt.GrantStmt.objects?.[0]
+                : undefined
+            const fn =
+              target !== undefined && "ObjectWithArgs" in target
+                ? target.ObjectWithArgs
+                : undefined
+            expect({
+              name: texts(fn?.objname),
+              types: (fn?.objargs ?? []).map((a) =>
+                "TypeName" in a ? texts(a.TypeName.names) : []
+              ),
+            }).toEqual({ name: [schema, name], types })
+          }
+        }
+      ),
+      { numRuns: 300 }
+    )
   })
 
   it("unqualified domain type takes the schema of the domain: f(item) and f(public.item) are one function", async () => {
@@ -406,26 +803,35 @@ describe("sql units", () => {
       await identities(
         [
           "CREATE AGGREGATE agg(integer) (SFUNC = int4pl, STYPE = int);",
-          "ALTER FUNCTION f(integer, varchar(5)) SET search_path = '';",
+          // `ALTER FUNCTION` судиться лише над функцією моделі.
+          "CREATE FUNCTION f(integer, varchar(5)) RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;",
+          "ALTER FUNCTION public.f(integer, varchar(5)) SET search_path = '';",
           "GRANT EXECUTE ON FUNCTION f(int, character varying) TO anon;",
           "COMMENT ON FUNCTION f(pg_catalog.int4, pg_catalog.varchar) IS 'x';",
         ].join("\n")
       )
     ).toEqual([
       "aggregate:public.agg(int4)",
-      "comment:function:public.f(int4,varchar)",
-      "functionSettings:public.f(int4,varchar)",
-      "grant:grant:function:public.f(int4,varchar):anon:execute",
+      'comment:function:public.f(int4,"varchar")',
+      'function:public.f(int4,"varchar")',
+      'functionSettings:public.f(int4,"varchar")',
+      'grant:grant:function:public.f(int4,"varchar"):anon:execute',
     ])
   })
 
   it("trigger and policy identity include table", async () => {
     expect(
       await identities(
-        "CREATE TRIGGER trg_x AFTER INSERT ON public.orders FOR EACH ROW EXECUTE FUNCTION public.h();\n" +
+        // Тригер кличе функцію моделі: дозвільний перелік виразів інших не знає.
+        "CREATE FUNCTION public.h() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;\n" +
+          "CREATE TRIGGER trg_x AFTER INSERT ON public.orders FOR EACH ROW EXECUTE FUNCTION public.h();\n" +
           "CREATE POLICY p ON storage.objects FOR SELECT USING (true);"
       )
-    ).toEqual(["policy:storage.objects.p", "trigger:public.orders.trg_x"])
+    ).toEqual([
+      "function:public.h()",
+      "policy:storage.objects.p",
+      "trigger:public.orders.trg_x",
+    ])
   })
 
   it("grants with different privileges are different units", async () => {
@@ -522,74 +928,31 @@ describe("sql units", () => {
   it("accepted-schema dump compiles", async () => {
     const result = await compileSql(
       [
-        "CREATE EXTENSION IF NOT EXISTS pgcrypto;",
+        "CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;",
         "CREATE SEQUENCE s;",
         "ALTER SEQUENCE s OWNED BY t.c;",
         "CREATE DOMAIN d AS text;",
         "ALTER PUBLICATION supabase_realtime ADD TABLE t;",
+        "CREATE FUNCTION public.handle_new_user() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;",
         "CREATE TRIGGER on_auth_user AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();",
         "CREATE POLICY p ON storage.objects FOR SELECT USING (bucket_id = 'avatars');",
       ].join("\n")
     )
-    // Розширення без SCHEMA стає в схему застосунку (спека прав §5.3).
-    expect(result.diagnostics.map((d) => [d.code, d.severity])).toEqual([
-      ["sql.debt-extension-schema", "warning"],
-    ])
+    // Розширення в схемі провайдера, а тригер кличе функцію моделі: фікстура
+    // проходить правила виразів і розширень (спека прав §5.3).
+    expect(result.diagnostics).toEqual([])
     expect(
       withoutMechanics(result.model!.sqlUnits).map((u) => u.identity)
     ).toEqual([
       "domain:public.d",
       "extension:pgcrypto",
+      "function:public.handle_new_user()",
       "policy:storage.objects.p",
       "publication:supabase_realtime:add:public.t",
       "sequence:public.s",
       "sequenceOwnedBy:public.s",
       "trigger:auth.users.on_auth_user",
     ])
-  })
-
-  it("table, index, enum and drop are not allowed", async () => {
-    const result = await compileSql(
-      [
-        "CREATE TABLE t (id uuid);",
-        "CREATE INDEX i ON t (id);",
-        "CREATE TYPE e AS ENUM ('a');",
-        "DROP TABLE t;",
-        "INSERT INTO t VALUES (gen_random_uuid());",
-      ].join("\n")
-    )
-    expect(result.ok).toBe(false)
-    expect(
-      result.diagnostics.map((d) => [
-        d.code,
-        d.params?.statement,
-        d.params?.line,
-      ])
-    ).toEqual([
-      ["sql.statement-not-allowed", "CreateStmt", 1],
-      ["sql.statement-not-allowed", "IndexStmt", 2],
-      ["sql.statement-not-allowed", "CreateEnumStmt", 3],
-      ["sql.statement-not-allowed", "DropStmt", 4],
-      ["sql.statement-not-allowed", "InsertStmt", 5],
-    ])
-  })
-
-  it("enable rls statement is not allowed", async () => {
-    const result = await compileSql(
-      "ALTER TABLE public.t ENABLE ROW LEVEL SECURITY;"
-    )
-    expect(result.diagnostics).toEqual([
-      expect.objectContaining({
-        code: "sql.statement-not-allowed",
-        params: expect.objectContaining({
-          statement: "AlterTableStmt",
-          feature: "rowLevelSecurity",
-        }),
-        hint: expect.stringContaining("rowLevelSecurity"),
-      }),
-    ])
-    expect(result.diagnostics[0]!.message).not.toContain("AT_")
-    expect(result.diagnostics[0]!.message).not.toMatch(/got\s*$/)
   })
 
   it("same-named grants on domains in two schemas are two units", async () => {
@@ -626,20 +989,6 @@ describe("sql units", () => {
         "comment:domconstraint:b.d.c",
       ])
     )
-  })
-
-  it("create publication is not allowed and points to ALTER PUBLICATION", async () => {
-    const result = await compileSql("CREATE PUBLICATION pub FOR TABLE t;")
-    expect(result.diagnostics).toEqual([
-      expect.objectContaining({
-        code: "sql.statement-not-allowed",
-        params: expect.objectContaining({
-          statement: "CreatePublicationStmt",
-          feature: "publication",
-        }),
-        hint: expect.stringContaining("ALTER PUBLICATION"),
-      }),
-    ])
   })
 
   it("duplicate unit", async () => {

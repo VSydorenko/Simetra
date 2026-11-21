@@ -1,6 +1,7 @@
 import type { Node } from "libpg-query"
 import type { PhysicalSnapshot, SqlUnitClass } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
+import { keyIdentity, qualifiedName, unitIdentity } from "./identity"
 import { relationNameText, type SqlParser } from "./parse"
 import {
   grantObjects,
@@ -39,8 +40,12 @@ interface GraphNode {
   unit?: SqlUnit
 }
 
-/** Функції-складові агрегату: у дереві вони — `TypeName`, а не виклик. */
-const AGGREGATE_FUNCTIONS: ReadonlySet<string> = new Set([
+/**
+ * Опції агрегату, що називають функцію-складову: у дереві вони — `TypeName`, а
+ * не виклик. Одна константа для графа залежностей, судді виразів і читань
+ * `SECURITY DEFINER`: складова виконується в ролі власника агрегату.
+ */
+export const AGGREGATE_COMPONENTS: ReadonlySet<string> = new Set([
   "sfunc",
   "finalfunc",
   "combinefunc",
@@ -337,7 +342,9 @@ class Graph {
     label: string
   ) {
     const byName = this.index.get(space)!
-    for (const key of [`${schema}.${name}`, name]) {
+    // Ключі — за правилом ідентичності: сирий `схема.ім'я` зливав би
+    // `"a.b".c` з `a."b.c"`, а голе `"a.b"` — з кваліфікованим `a.b`.
+    for (const key of [qualifiedName(schema, name), qualifiedName(name)]) {
       const labels = byName.get(key) ?? []
       labels.push(label)
       byName.set(key, labels)
@@ -347,7 +354,10 @@ class Graph {
   private resolve(ref: Reference): string[] {
     const name = ref.names.at(-1)
     if (name === undefined || name === "") return []
-    const key = ref.names.length > 1 ? `${ref.names.at(-2)}.${name}` : `${name}`
+    const key =
+      ref.names.length > 1
+        ? qualifiedName(ref.names.at(-2)!, name)
+        : qualifiedName(name)
     return this.index.get(ref.space)!.get(key) ?? []
   }
 
@@ -407,7 +417,7 @@ class Graph {
       this.edges(label, targetReferences(objtype, [comment.object]))
       const cls = UNIT_COMMENTS[objtype]
       if (cls !== undefined) {
-        const target = `${cls}:${unit.name}`
+        const target = keyIdentity(cls, unit.name)
         if (this.nodes.has(target)) this.edge(label, target)
       }
     }
@@ -633,7 +643,7 @@ class ReferenceCollector {
     const define = node.DefineStmt as Record<string, unknown> | undefined
     if (define?.kind === "OBJECT_AGGREGATE") {
       for (const element of defElems(define.definition)) {
-        if (!AGGREGATE_FUNCTIONS.has(String(element.defname))) continue
+        if (!AGGREGATE_COMPONENTS.has(String(element.defname))) continue
         const arg = element.arg as Record<string, Record<string, unknown>>
         if (arg?.TypeName !== undefined) {
           refs.push({ space: "proc", names: strings(arg.TypeName.names) })
@@ -742,7 +752,7 @@ function cycleDiagnostic(
 function labelOf(node: CreationNode): string {
   return node.type === "unit"
     ? node.identity
-    : `${node.type}:${node.schema}.${node.name}`
+    : unitIdentity(node.type, node.schema, node.name)
 }
 
 function pick(object: { schema: string; name: string }) {

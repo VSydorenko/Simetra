@@ -1424,7 +1424,7 @@ export function deniedPairs(
 ): Array<{ object: ObjectName; scope: string | null }> {
   const pairs: Array<{ object: ObjectName; scope: string | null }> = []
   for (const o of ctx.objects.values()) {
-    if (o.entry.rightsContract !== true) continue
+    if (o.entry.rights === undefined) continue
     const scopes = new Set<string | null>()
     for (const key of o.rows.keys()) scopes.add(o.rows.get(key)!.scope)
     // Рядки ТЧ з невідомим скоупом власника прибирає будь-який purge пари

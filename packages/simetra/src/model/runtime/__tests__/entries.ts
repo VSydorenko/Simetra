@@ -2,6 +2,7 @@ import { z } from "zod"
 import {
   catalogEntryAttributeSchema,
   type CatalogEntry,
+  type CatalogRights,
   type CatalogEntryAttribute,
   type CatalogEntrySection,
   type RuntimeAttribute,
@@ -180,6 +181,21 @@ export const catalogEntry = (
   ...objectBase(),
   attributes: runtimeAttributes().map(shared),
   tabularSections: [catalogEntrySection()],
+  ...overrides,
+})
+
+/**
+ * Контракт прав запису: скоуплений об'єкт з `read@any`, межею тенанта й
+ * множиною з членства.
+ */
+export const catalogRights = (
+  overrides: Partial<CatalogRights> = {}
+): CatalogRights => ({
+  actions: [{ action: "read", extents: [{ form: "any" }] }],
+  ownership: [],
+  access: [],
+  readBoundary: ["tenant"],
+  scopeSet: "membership",
   ...overrides,
 })
 

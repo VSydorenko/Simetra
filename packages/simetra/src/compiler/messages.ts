@@ -1,4 +1,4 @@
-import { PLATFORM_SCHEMA } from "simetra/model"
+import { PLATFORM_SCHEMA, PROVIDER_IDENTITY_SOURCES } from "simetra/model"
 import type {
   Diagnostic,
   DiagnosticParams,
@@ -32,6 +32,57 @@ function hintOf<K extends string>(
 ): { en: string; uk: string } {
   const reason = String(params.reason)
   return Object.hasOwn(hints, reason) ? hints[reason as K] : hints[fallback]
+}
+
+/**
+ * Тексти `apply.drift-partial` за причиною: кожна причина гейта має власну
+ * гілку. Запасної гілки з текстом іншої причини немає — невідома причина
+ * (дефект гейта) називає себе, а не видає себе за обмеження моделлю.
+ */
+const DRIFT_PARTIAL: Record<
+  "fingerprint" | "units",
+  { en: Text; uk: Text; hint: { en: string; uk: string } }
+> = {
+  fingerprint: {
+    en: (p) =>
+      `The catalog fingerprint algorithm changed since the last apply (${p.fingerprintFrom} → ${p.fingerprintTo}), so the drift check is limited to the catalog model`,
+    uk: (p) =>
+      `Від останнього застосування змінився алгоритм відбитка каталогу (${p.fingerprintFrom} → ${p.fingerprintTo}), тож перевірка дрейфу обмежена моделлю каталогу`,
+    hint: {
+      en: "The catalog model does not carry owners, partitions, inheritance or sequence settings; check those by hand if the database may have been changed outside the platform.",
+      uk: "Модель каталогу не несе власників, партицій, успадкування й налаштувань послідовностей; перевірте їх вручну, якщо базу могли змінити повз платформу.",
+    },
+  },
+  units: {
+    en: (p) =>
+      `${p.count} SQL units recorded at the last apply do not read back as units of this platform version, so the drift check is limited to the catalog fingerprint`,
+    uk: (p) =>
+      `${p.count} SQL-одиниць, записаних при останньому застосуванні, не читаються як одиниці цієї версії платформи, тож перевірка дрейфу обмежена відбитком каталогу`,
+    hint: {
+      en: "The fingerprint still sees every change, but without readable paths. Review the plan steps; the next apply records the units again.",
+      uk: "Відбиток і далі бачить кожну зміну, але без читабельних шляхів. Перегляньте кроки плану; наступне застосування запише одиниці знову.",
+    },
+  },
+}
+
+const UNKNOWN_DRIFT_PARTIAL = {
+  en: (p: DiagnosticParams) =>
+    `The drift check is partial for an unknown reason ${p.reason}`,
+  uk: (p: DiagnosticParams) =>
+    `Перевірка дрейфу часткова з невідомої причини ${p.reason}`,
+  hint: {
+    en: "This is a defect of the drift gate; report it.",
+    uk: "Це дефект гейта дрейфу; повідомте про нього.",
+  },
+}
+
+function driftPartial(
+  params: DiagnosticParams
+): (typeof DRIFT_PARTIAL)[keyof typeof DRIFT_PARTIAL] {
+  const reason = String(params.reason)
+  return reason === "fingerprint" || reason === "units"
+    ? DRIFT_PARTIAL[reason]
+    : UNKNOWN_DRIFT_PARTIAL
 }
 
 /**
@@ -715,6 +766,144 @@ function exemptWriterHint(p: DiagnosticParams): { en: string; uk: string } {
   }
 }
 
+/** Текст `sql.kind-table-verbatim` за формою шляху запису (Правило 1, спека прав §6.1). */
+function kindTableVerbatim(p: Record<string, unknown>): {
+  en: string
+  uk: string
+} {
+  const platform = String(p.table).startsWith(`${PLATFORM_SCHEMA}.`)
+  // Політика й тригер стоять і на джерелі ідентичностей провайдера, яке не є
+  // таблицею виду: текст називає його.
+  const identity = Object.values(PROVIDER_IDENTITY_SOURCES).some(
+    ({ table }) => `${table.schema}.${table.name}` === p.table
+  )
+  const noun = platform
+    ? {
+        en: "a table of the platform schema",
+        uk: "таблицею схеми платформи",
+        ukOn: "таблиці схеми платформи",
+      }
+    : identity
+      ? {
+          en: "the identity source of the database provider",
+          uk: "джерелом ідентичностей провайдера бази",
+          ukOn: "джерелі ідентичностей провайдера бази",
+        }
+      : {
+          en: "a table of a kind",
+          uk: "таблицею виду",
+          ukOn: "таблиці виду",
+        }
+  switch (p.form) {
+    case "functionBody":
+      return {
+        en: `Function ${p.function} at line ${p.line} runs ${p.statement} on ${p.table}, ${noun.en}`,
+        uk: `Функція ${p.function} у рядку ${p.line} виконує ${p.statement} над ${p.table} — ${noun.uk}`,
+      }
+    case "sequence": {
+      const subject = {
+        en:
+          p.function === undefined
+            ? `Unit ${p.identity}`
+            : `Function ${p.function}`,
+        uk:
+          p.function === undefined
+            ? `Одиниця ${p.identity}`
+            : `Функція ${p.function}`,
+      }
+      // Ім'я без схеми може бути й власною послідовністю: текст не каже
+      // «платформи», причину й виправлення дає примітка `UNQUALIFIED_NOTE`.
+      return {
+        en:
+          p.table === "*"
+            ? `${subject.en} at line ${p.line} calls ${p.statement} with an argument that is not a literal, so the sequence it changes is unknown`
+            : p.unqualified === "yes"
+              ? `${subject.en} at line ${p.line} calls ${p.statement} on the sequence ${p.table}`
+              : `${subject.en} at line ${p.line} calls ${p.statement} on ${p.table}, a sequence of the platform`,
+        uk:
+          p.table === "*"
+            ? `${subject.uk} у рядку ${p.line} викликає ${p.statement} з нелітеральним аргументом, тож змінювана послідовність невідома`
+            : p.unqualified === "yes"
+              ? `${subject.uk} у рядку ${p.line} викликає ${p.statement} над послідовністю ${p.table}`
+              : `${subject.uk} у рядку ${p.line} викликає ${p.statement} над ${p.table} — послідовністю платформи`,
+      }
+    }
+    case "view":
+      return {
+        en: `View ${p.identity} at line ${p.line} writes ${p.table}, a table of a kind or of the platform, for ${p.roles}`,
+        uk: `Подання ${p.identity} у рядку ${p.line} пише ${p.table} — таблицю виду чи платформи — для ${p.roles}`,
+      }
+    case "grant":
+      return {
+        en: `Grant ${p.identity} at line ${p.line} gives ${p.roles} write access to ${p.table}`,
+        uk: `Грант ${p.identity} у рядку ${p.line} відкриває ${p.roles} запис у ${p.table}`,
+      }
+    case "defaultPrivileges":
+      return {
+        en: `Default privileges ${p.identity} at line ${p.line} grant privileges on objects the platform creates (${p.table}) to ${p.roles}`,
+        uk: `Типові привілеї ${p.identity} у рядку ${p.line} дають привілеї на об'єкти, які створює платформа (${p.table}), ролям ${p.roles}`,
+      }
+    default:
+      return {
+        en: `Verbatim ${p.form === "trigger" ? "trigger" : "policy"} ${p.identity} at line ${p.line} is on ${p.table}, ${noun.en}`,
+        uk: `${p.form === "trigger" ? "Дослівний тригер" : "Дослівна політика"} ${p.identity} у рядку ${p.line} стоїть на ${p.table} — ${noun.ukOn}`,
+      }
+  }
+}
+
+/**
+ * Ціль з імені без схеми: рендер не задає `search_path`, тож ім'я судиться за
+ * всіма схемами (fail-closed), а кваліфікація власною схемою знімає відмову.
+ */
+const UNQUALIFIED_NOTE = {
+  message: {
+    en: " (the name has no schema, so it is resolved fail-closed)",
+    uk: " (ім'я без схеми, тож його розв'язано fail-closed)",
+  },
+  hint: {
+    en: " If you meant an object of your own schema, qualify the name with that schema and the refusal goes away.",
+    uk: " Якщо йдеться про об'єкт вашої схеми, кваліфікуйте ім'я цією схемою — відмова зникне.",
+  },
+}
+
+function kindTableVerbatimHint(p: Record<string, unknown>): {
+  en: string
+  uk: string
+} {
+  switch (p.form) {
+    case "functionBody":
+      return {
+        en: "Only the platform writes a table of a kind: the command core, the posting shell and the platform's triggers. INSERT, UPDATE, DELETE or MERGE by application SQL, also through a view of the model or in the text of a literal EXECUTE, would change its rows past the rights, the movements and the checks of a command, so such a function is never SQL debt and sql-debt.json cannot list it. The same holds for the identity table of the database provider and for every table of the platform schema simetra: its apply state, receipts and signal queue change only through the platform. Reading and locking the rows (SELECT, SELECT … FOR UPDATE, LOCK) stays allowed. Run the change as a command of the object, or write it in a TypeScript hook.",
+        uk: "Таблицю виду пише лише платформа: ядро команд, оболонка проведення й тригери платформи. INSERT, UPDATE, DELETE чи MERGE з SQL застосунку, зокрема через подання моделі чи в тексті літерального EXECUTE, змінили б її рядки повз права, рухи й перевірки команди, тож така функція ніколи не є боргом дослівного SQL, і sql-debt.json її не перелічує. Те саме стосується таблиці ідентичностей провайдера бази й кожної таблиці схеми платформи simetra: її стан застосування, квитанції й черга сигналів змінюються лише через платформу. Читати й блокувати рядки (SELECT, SELECT … FOR UPDATE, LOCK) дозволено. Виконайте зміну командою об'єкта або запишіть її в TypeScript-хуку.",
+      }
+    case "sequence":
+      return {
+        en: "setval and nextval change a sequence even from a read-only looking body, and a SECURITY DEFINER function does it as the owner. Sequences of the platform change only through the platform, and a sequence name without a schema, in setval, nextval or currval, may resolve into the platform schema by the search path of the session. Name only the sequences of your own, with a literal qualified by their schema.",
+        uk: "setval і nextval змінюють послідовність навіть із тіла, що виглядає читанням, а функція SECURITY DEFINER робить це від імені власника. Послідовності платформи змінює лише платформа, а ім'я послідовності без схеми в setval, nextval чи currval може розв'язатися в схему платформи за шляхом пошуку сесії. Називайте лише власні послідовності — літералом, кваліфікованим їхньою схемою.",
+      }
+    case "view":
+      return {
+        en: "Postgres rewrites a write into an updatable view onto its base table with the privileges of the view owner, so the roles that can write the view write the table past the rights of a command. Add security_invoker = true to the view, or revoke INSERT, UPDATE and DELETE on it from the roles of the API.",
+        uk: "Postgres переписує запис в автооновлюване подання на базову таблицю з правами власника подання, тож ролі, що можуть писати в подання, пишуть таблицю повз права команди. Додайте до подання security_invoker = true або відкличте INSERT, UPDATE і DELETE на ньому в ролей API.",
+      }
+    case "grant":
+      return {
+        en: "Roles other than the owner get privileges on objects of the platform only from the generator. Remove the grant: the platform writes the table through the command core.",
+        uk: "Ролі, крім власника, отримують привілеї на об'єкти платформи лише від генератора. Приберіть грант: таблицю пише платформа через ядро команд.",
+      }
+    case "defaultPrivileges":
+      return {
+        en: "Default privileges reach objects the platform creates later, and the platform owns their ACL. Remove the statement; only the roles of the API may be named in a schema-wide statement without a grant option, and a global one is never allowed. A REVOKE form is allowed.",
+        uk: "Типові привілеї діють на об'єкти, які платформа створює пізніше, а їхній ACL належить платформі. Приберіть оператор; у схемному операторі без права передачі можна називати лише ролі API, глобальний не дозволено ніколи. Форма REVOKE дозволена.",
+      }
+    default:
+      return {
+        en: `Only the platform attaches policies and triggers to a table of a kind, in any .sql file: a hand-written one would open rows past the rights or act inside every command. On the identity source of the provider only an AFTER trigger is allowed. Such a statement is never SQL debt, so sql-debt.json cannot list it. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).en}`,
+        uk: `Політики й тригери на таблицю виду ставить лише платформа, у будь-якому файлі .sql: написані вручну відкрили б рядки повз права чи діяли б усередині кожної команди. На джерелі ідентичностей провайдера дозволено лише тригер AFTER. Такий оператор ніколи не є боргом дослівного SQL, тож sql-debt.json його не перелічує. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).uk}`,
+      }
+  }
+}
+
 /**
  * Каталог текстів за кодом правила (спека П2 §8.4): англійські обов'язкові,
  * українські стоять поруч в одному записі. Тип `Record<RuleCode, …>` робить
@@ -1110,22 +1299,18 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   // називає, хто пише таблицю виду.
   "sql.kind-table-verbatim": {
     en: (p) =>
-      p.form === "functionBody"
-        ? `Function ${p.function} at line ${p.line} runs ${p.statement} on ${p.table}, ${String(p.table).startsWith(`${PLATFORM_SCHEMA}.`) ? "a table of the platform schema" : "a table of a kind"}`
-        : `Verbatim ${p.form === "trigger" ? "trigger" : "policy"} ${p.identity} at line ${p.line} is on ${p.table}, a table of a kind`,
+      kindTableVerbatim(p).en +
+      (p.unqualified === "yes" ? UNQUALIFIED_NOTE.message.en : ""),
     uk: (p) =>
-      p.form === "functionBody"
-        ? `Функція ${p.function} у рядку ${p.line} виконує ${p.statement} над ${p.table} — ${String(p.table).startsWith(`${PLATFORM_SCHEMA}.`) ? "таблицею схеми платформи" : "таблицею виду"}`
-        : `${p.form === "trigger" ? "Дослівний тригер" : "Дослівна політика"} ${p.identity} у рядку ${p.line} стоїть на ${p.table} — таблиці виду`,
+      kindTableVerbatim(p).uk +
+      (p.unqualified === "yes" ? UNQUALIFIED_NOTE.message.uk : ""),
     hint: {
       en: (p) =>
-        p.form === "functionBody"
-          ? "Only the platform writes a table of a kind: the command core, the posting shell and the platform's triggers. INSERT, UPDATE, DELETE or MERGE by application SQL, also through a view of the model or in the text of a literal EXECUTE, would change its rows past the rights, the movements and the checks of a command, so such a function is never SQL debt and sql-debt.json cannot list it. The same holds for the identity table of the database provider and for every table of the platform schema simetra: its apply state, receipts and signal queue change only through the platform. Reading and locking the rows (SELECT, SELECT … FOR UPDATE, LOCK) stays allowed. Run the change as a command of the object, or write it in a TypeScript hook."
-          : `Only the platform attaches policies and triggers to a table of a kind, in any .sql file: a hand-written one would open rows past the rights or act inside every command. Such a statement is never SQL debt, so sql-debt.json cannot list it. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).en}`,
+        kindTableVerbatimHint(p).en +
+        (p.unqualified === "yes" ? UNQUALIFIED_NOTE.hint.en : ""),
       uk: (p) =>
-        p.form === "functionBody"
-          ? "Таблицю виду пише лише платформа: ядро команд, оболонка проведення й тригери платформи. INSERT, UPDATE, DELETE чи MERGE з SQL застосунку, зокрема через подання моделі чи в тексті літерального EXECUTE, змінили б її рядки повз права, рухи й перевірки команди, тож така функція ніколи не є боргом дослівного SQL, і sql-debt.json її не перелічує. Те саме стосується таблиці ідентичностей провайдера бази й кожної таблиці схеми платформи simetra: її стан застосування, квитанції й черга сигналів змінюються лише через платформу. Читати й блокувати рядки (SELECT, SELECT … FOR UPDATE, LOCK) дозволено. Виконайте зміну командою об'єкта або запишіть її в TypeScript-хуку."
-          : `Політики й тригери на таблицю виду ставить лише платформа, у будь-якому файлі .sql: написані вручну відкрили б рядки повз права чи діяли б усередині кожної команди. Такий оператор ніколи не є боргом дослівного SQL, тож sql-debt.json його не перелічує. ${(KIND_MODULE_REPLACEMENT[String(p.form)] ?? KIND_MODULE_GENERAL).uk}`,
+        kindTableVerbatimHint(p).uk +
+        (p.unqualified === "yes" ? UNQUALIFIED_NOTE.hint.uk : ""),
     },
   },
   "sql.function-body-statement": {
@@ -1250,12 +1435,22 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "sql.function-settings-shell": {
     en: (p) =>
-      `ALTER FUNCTION ${p.function} changes ${p.setting === "*" ? "every setting (RESET ALL)" : p.setting} of a function whose shell only its CREATE sets`,
+      p.target === "notModel"
+        ? `ALTER FUNCTION ${p.function} changes ${p.setting === "*" ? "every setting (RESET ALL)" : p.setting} of a function the application did not create`
+        : `ALTER FUNCTION ${p.function} changes ${p.setting === "*" ? "every setting (RESET ALL)" : p.setting} of a function whose shell only its CREATE sets`,
     uk: (p) =>
-      `ALTER FUNCTION ${p.function} змінює ${p.setting === "*" ? "усі налаштування (RESET ALL)" : p.setting} функції, оболонку якої задає лише її CREATE`,
+      p.target === "notModel"
+        ? `ALTER FUNCTION ${p.function} змінює ${p.setting === "*" ? "усі налаштування (RESET ALL)" : p.setting} функції, якої застосунок не створював`
+        : `ALTER FUNCTION ${p.function} змінює ${p.setting === "*" ? "усі налаштування (RESET ALL)" : p.setting} функції, оболонку якої задає лише її CREATE`,
     hint: {
-      en: "The platform checks the shell (volatility, SECURITY, search_path, SET options) of kind module functions, subscription handlers, scope set functions, access dimension value functions and every function they call in the CREATE FUNCTION statement; a separate ALTER FUNCTION would change it past that check. Move the option into CREATE FUNCTION and remove the ALTER FUNCTION statement.",
-      uk: "Оболонку (волатильність, SECURITY, search_path, опції SET) функцій модулів видів, обробників підписок, функцій множини скоупу, функцій значень вимірів доступу й кожної функції, яку вони кличуть, платформа перевіряє в операторі CREATE FUNCTION; окремий ALTER FUNCTION змінив би її повз цю перевірку. Перенесіть опцію в CREATE FUNCTION і приберіть оператор ALTER FUNCTION.",
+      en: (p) =>
+        p.target === "notModel"
+          ? "The form of a generated function, a platform function or a function of the database provider is held by the platform (or the provider); ALTER FUNCTION on it would change it past the generator. Remove the ALTER FUNCTION statement."
+          : "The platform checks the shell (volatility, SECURITY, search_path, SET options) of kind module functions, subscription handlers, scope set functions, access dimension value functions and every function they call in the CREATE FUNCTION statement; a separate ALTER FUNCTION would change it past that check. Move the option into CREATE FUNCTION and remove the ALTER FUNCTION statement.",
+      uk: (p) =>
+        p.target === "notModel"
+          ? "Форму згенерованої функції, функції платформи чи функції провайдера бази тримає платформа (чи провайдер); ALTER FUNCTION змінив би її повз генератор. Приберіть оператор ALTER FUNCTION."
+          : "Оболонку (волатильність, SECURITY, search_path, опції SET) функцій модулів видів, обробників підписок, функцій множини скоупу, функцій значень вимірів доступу й кожної функції, яку вони кличуть, платформа перевіряє в операторі CREATE FUNCTION; окремий ALTER FUNCTION змінив би її повз цю перевірку. Перенесіть опцію в CREATE FUNCTION і приберіть оператор ALTER FUNCTION.",
     },
   },
   "sql.function-overload": {
@@ -1341,8 +1536,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Розширення ${p.extension} створено ${p.schema === undefined ? "без SCHEMA" : `у схемі ${p.schema}`} — поза схемами провайдера бази`,
     hint: {
-      en: "Functions of an extension in a schema of the application could overload a query function of the model with the same name, so code that runs inside a command (kind module functions, subscription handlers, scope set functions) calls no model function of that schema; an extension without SCHEMA lands in a schema of the session's search_path, so then it calls none. Create the extension with SCHEMA extensions.",
-      uk: "Функції розширення в схемі застосунку могли б перевантажити функцію-запит моделі з тим самим ім'ям, тож код, що виконується посеред команди (функції модулів видів, обробники підписок, функції множини скоупу), не кличе функцій моделі цієї схеми; розширення без SCHEMA стає в схему з search_path сесії, тож тоді — жодної. Створіть розширення з SCHEMA extensions.",
+      en: "Postgres picks an overload by the argument types, so a function of an extension in a schema of the application can be reached by a call that looks like a call of a model function with the same name; the compiler does not resolve signatures. An extension without SCHEMA lands in a schema of the session's search_path. Move the extension into a schema of the database provider: ALTER EXTENSION <name> SET SCHEMA extensions in the database, and write SCHEMA extensions in CREATE EXTENSION.",
+      uk: "Postgres обирає перевантаження за типами аргументів, тож функції розширення в схемі застосунку може дістатися виклик, схожий на виклик функції моделі з тим самим ім'ям; сигнатур компілятор не розв'язує. Розширення без SCHEMA стає в схему з search_path сесії. Перенесіть розширення в схему провайдера бази: ALTER EXTENSION <ім'я> SET SCHEMA extensions у базі й SCHEMA extensions у CREATE EXTENSION.",
     },
   },
   "sql.definer-reads-rls": {
@@ -1393,14 +1588,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Функція має одну декларацію. Залиште один запис і видаліть інший; запис без схеми бере defaultSchema проєкту.",
     },
   },
-  "sql.function-name-unsupported": {
+  "sql.function-argument-type-reference": {
     en: (p) =>
-      `EXECUTE of ${p.function} cannot be generated: the identifier part ${JSON.stringify(p.part)} contains ".", "," or a double quote`,
+      `EXECUTE of ${p.function} cannot be generated: the argument type ${p.argument} is a column type reference`,
     uk: (p) =>
-      `EXECUTE для ${p.function} не згенерувати: частина ідентифікатора ${JSON.stringify(p.part)} містить «.», «,» чи подвійні лапки`,
+      `EXECUTE для ${p.function} не згенерувати: тип аргументу ${p.argument} — посилання на тип колонки`,
     hint: {
-      en: "The platform cannot yet address such a function in a grant (issue #297), and without the grant it would keep EXECUTE from PUBLIC. Rename the function, its schema or the argument type to an identifier without these characters.",
-      uk: "Платформа поки не вміє адресувати таку функцію в гранті (issue #297), а без гранту вона лишилася б з EXECUTE від PUBLIC. Перейменуйте функцію, її схему чи тип аргументу на ідентифікатор без цих символів.",
+      en: "The function keeps the column type from the time of CREATE, while a grant resolves %type anew, so after a change of the column type the grant would hit another overload, and without the grant the function would keep EXECUTE from PUBLIC. Write the argument type explicitly.",
+      uk: "Функція зберігає тип колонки на момент CREATE, а грант резолвить %type заново, тож після зміни типу колонки грант влучив би в інше перевантаження, а без гранту функція лишилася б з EXECUTE від PUBLIC. Запишіть тип аргументу явно.",
     },
   },
   "sql.declaration-platform-form": {
@@ -3575,6 +3770,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Команда бере права свого актора на початок транзакції: платформа знімає факти до першої зміни таблиці, яку вони читають. У функціях значень виміру й множини скоупу читайте лише таблиці видів, прийняті таблиці (CustomTable) і подання моделі над ними.",
     },
   },
+  "rights.signal-source-unknown": {
+    en: (p) =>
+      `The actor facts "${p.facts}" read ${p.table}, which is neither a rights catalog, a membership catalog, Users, a dimension relation nor a rights container, so the platform cannot tell whose rights its changes touch`,
+    uk: (p) =>
+      `Факти актора «${p.facts}» читають ${p.table} — ні довідник прав, ні довідник членства, ні «Користувачі», ні зв'язок виміру, ні контейнер прав, тож платформа не знає, чиї права змінює її зміна`,
+    hint: {
+      en: "A change of a table the rights facts read sends a rights signal to the users it affects. Read such a table only from the functions that give dimension values and scope sets (they refresh on the interval), or model the fact with a rights catalog, a membership catalog or a dimension relation.",
+      uk: "Зміна таблиці, яку читають факти прав, шле сигнал прав користувачам, яких вона стосується. Читайте таку таблицю лише у функціях значень виміру й множини скоупу (вони свіжіють за інтервалом) або опишіть факт довідником прав, довідником членства чи зв'язком виміру.",
+    },
+  },
   "rights.snapshot-exempt-writer": {
     en: (p) =>
       `${exemptWriter(p).en} lets commands write ${p.table}, which feeds the actor facts without an actor snapshot trigger`,
@@ -3945,13 +4150,21 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     },
   },
   "apply.drift-partial": {
-    en: (p) =>
-      `The catalog fingerprint algorithm changed since the last apply (${p.fingerprintFrom} → ${p.fingerprintTo}), so the drift check is limited to the catalog model`,
-    uk: (p) =>
-      `Від останнього застосування змінився алгоритм відбитка каталогу (${p.fingerprintFrom} → ${p.fingerprintTo}), тож перевірка дрейфу обмежена моделлю каталогу`,
+    en: (p) => driftPartial(p).en(p),
+    uk: (p) => driftPartial(p).uk(p),
     hint: {
-      en: "The catalog model does not carry owners, partitions, inheritance or sequence settings; check those by hand if the database may have been changed outside the platform.",
-      uk: "Модель каталогу не несе власників, партицій, успадкування й налаштувань послідовностей; перевірте їх вручну, якщо базу могли змінити повз платформу.",
+      en: (p) => driftPartial(p).hint.en,
+      uk: (p) => driftPartial(p).hint.uk,
+    },
+  },
+  "apply.drift-unverifiable": {
+    en: (p) =>
+      `The catalog fingerprint algorithm changed since the last apply (${p.fingerprintFrom} → ${p.fingerprintTo}) and ${p.count} SQL units recorded then do not read back as units of this platform version, so drift cannot be checked and the plan carries it as drift to accept`,
+    uk: (p) =>
+      `Від останнього застосування змінився алгоритм відбитка каталогу (${p.fingerprintFrom} → ${p.fingerprintTo}), а ${p.count} SQL-одиниць, записаних тоді, не читаються як одиниці цієї версії платформи, тож дрейф перевірити нічим, і план несе його як дрейф до прийняття`,
+    hint: {
+      en: "Make sure nobody changed the database outside the platform since the last apply, review the plan steps, and allow drift to apply; the next apply records the state again.",
+      uk: "Переконайтеся, що від останнього застосування базу ніхто не змінював повз платформу, перегляньте кроки плану й дозвольте drift, щоб застосувати; наступне застосування запише стан знову.",
     },
   },
   "apply.versions-changed": {

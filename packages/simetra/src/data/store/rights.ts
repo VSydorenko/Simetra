@@ -48,7 +48,7 @@ const publicReadCovers = (
 
 /**
  * Чи лишається пара (скоуп, об'єкт) читабельною за знімком. Об'єкт без
- * `rightsContract` — так: знімок його читання не описує. `publicRead`, що
+ * контракту `rights` — так: знімок його читання не описує. `publicRead`, що
  * покриває роль знімка, — так.
  * Скоуплений — скоуп у `scopeSets` свого виду й рядок `read`, що діє в
  * скоупі, будь-якого обсягу, зокрема контейнерний. Нескоуплений — будь-який
@@ -59,7 +59,7 @@ export function readAllowed(
   pair: ReadPair,
   entry: CatalogEntry
 ): boolean {
-  if (entry.rightsContract !== true) return true
+  if (entry.rights === undefined) return true
   if (publicReadCovers(snapshot, entry)) return true
   const rows = readRows(snapshot, entry)
   if (entry.scopeKindId === undefined) return rows.length > 0
@@ -73,12 +73,16 @@ export function readAllowed(
 }
 
 /**
- * Чи може користувач підписатися на канал: дзеркало `subscribeCondition`
- * (`compiler/signal/units.ts`). Лише канал змін; канали прав — `false`
- * (B6). `publicRead` скоупленого об'єкта скоупу не перевіряє, як і SQL.
- * Інакше — скоуп у межі тенанта й безрядкове право `read`: рядок рівня
- * `scope` свого скоупу (скоуплений) чи будь-який не контейнерний рядок
- * (нескоуплений, `has_right`). Лише контейнерне право канал не відкриває.
+ * Чи може користувач підписатися на канал: дзеркало режиму підписки
+ * `signal_topic_allowed` (`compiler/signal/units.ts`). Канал користувача —
+ * лише свій `userId`; канал прав скоупу — пара в `scopeSets` (межа тенанта
+ * виду, без умови права), глобальний (обидва нулі) — дійсний користувач;
+ * змішані нулі й вид поза видами скоупу в `scopeSets` не трапляються, тож
+ * `false`. Канал змін: `publicRead` скоупленого об'єкта скоупу не
+ * перевіряє, як і SQL. Інакше — скоуп у межі тенанта й безрядкове право
+ * `read`: рядок рівня `scope` свого скоупу (скоуплений) чи будь-який не
+ * контейнерний рядок (нескоуплений, `has_right`). Лише контейнерне право
+ * канал не відкриває.
  */
 export function canSubscribe(
   snapshot: RightsSnapshot,
@@ -87,7 +91,15 @@ export function canSubscribe(
 ): boolean {
   if (snapshot.userId === null) return false
   const topic = parseTopic(channel)
-  if (topic === undefined || topic.kind !== "changes") return false
+  if (topic === undefined) return false
+  if (topic.kind === "user") return topic.userId === snapshot.userId
+  if (topic.kind === "rights") {
+    if (topic.scopeKindId === ZERO_UUID && topic.scope === ZERO_UUID)
+      return true
+    return snapshot.scopeSets.some(
+      (s) => s.scopeKind === topic.scopeKindId && s.scope === topic.scope
+    )
+  }
   const entry = catalog.objects.find((o) => o.id === topic.object)
   if (entry === undefined || !entry.signal) return false
   const kind = entry.scopeKindId ?? ZERO_UUID
@@ -124,14 +136,14 @@ const tupleOf = (r: RightsRow): string =>
  * Чи звузив новий знімок читання об'єкта до B6 (P4-B spec §6.2 правило 4):
  * зник кортеж рядка `read` мітки об'єкта, а його пара лишилась дозволеною; для нескоупленого об'єкта — ще й
  * змінились `scopeSets` (межа читання «Користувачів» залежить від членства).
- * Об'єкт без `rightsContract` знімок не описує — ні.
+ * Об'єкт без контракту `rights` знімок не описує — ні.
  */
 export function readNarrowed(
   prev: RightsSnapshot,
   next: RightsSnapshot,
   entry: CatalogEntry
 ): boolean {
-  if (entry.rightsContract !== true) return false
+  if (entry.rights === undefined) return false
   const kept = new Set(readRows(next, entry).map(tupleOf))
   // Кортеж пари, яку новий знімок забороняє, — не звуження, а втрата пари:
   // її прибирає прохід, а не перечитування.
@@ -175,7 +187,7 @@ export function readLost(
   next: RightsSnapshot,
   entry: CatalogEntry
 ): boolean {
-  if (entry.rightsContract !== true) return false
+  if (entry.rights === undefined) return false
   if (prev === undefined)
     return entry.scopeKindId !== undefined
       ? !publicReadCovers(next, entry)
@@ -199,7 +211,7 @@ export function reopenedPairs(
   next: RightsSnapshot,
   entry: CatalogEntry
 ): "all" | (string | null)[] {
-  if (entry.rightsContract !== true) return []
+  if (entry.rights === undefined) return []
   if (!publicReadCovers(prev, entry) && publicReadCovers(next, entry))
     return "all"
   const reopened = (scope: string | null) =>
