@@ -92,6 +92,8 @@ export const RIGHTS_FUNCTIONS = {
   dim: platform("rights_dim"),
   container: platform("rights_container"),
   hasRight: platform("has_right"),
+  require: platform("rights_require"),
+  requireScope: platform("rights_require_scope"),
   myMembers: platform("rights_my_members"),
   myMembersLive: platform("rights_my_members_live"),
   dimensionValues: platform("rights_dimension_values"),

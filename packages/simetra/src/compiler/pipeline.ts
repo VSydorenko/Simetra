@@ -62,6 +62,7 @@ import {
   hasVisibleUsers,
 } from "./rights/functions"
 import { buildClientSnapshotUnits } from "./rights/client-snapshot"
+import { buildRequireUnits } from "./rights/require-units"
 import { buildExplainUnits } from "./rights/explain-units"
 import { buildRightsGuardUnits } from "./rights/guard-units"
 import { snapshotExemptWriters } from "./rights/snapshot-exempt-writers"
@@ -971,6 +972,26 @@ export async function runStages(
     }),
     ...signalUnits,
     ...clientSnapshotUnits,
+    // Функції запобіжника виклику: гілки — з декларацій, що пройшли
+    // `check-form`; ребра `requires` — до функцій прав і множин `baseUnits`.
+    ...buildRequireUnits({
+      declared,
+      objects: stage1.objects,
+      contracts: {
+        access,
+        rights,
+        roles,
+        users,
+        membership,
+        membershipSources: sources.membershipSources,
+      },
+      physical,
+      provider: stage1.project.database.provider,
+      module,
+      units: baseUnits,
+      parse,
+      plpgsql,
+    }),
   ]
   // `USAGE` на схеми застосунку — над усіма згенерованими грантами, бо схему
   // відкривають і таблиці, і функції (платформна спека §6.7)
@@ -1008,6 +1029,8 @@ export async function runStages(
     // Функції прав спільні для всіх об'єктів — власника немає.
     rights: (unit) => `the rights function ${unit.name}`,
     rightsGuards: (unit) => `the rights guard of ${name(unit.ownerObjectId)}`,
+    // Функції запобіжника виклику спільні для всіх об'єктів — власника немає.
+    rightsRequire: (unit) => `the call guard function ${unit.name}`,
     // Пояснення видимості спільне для всіх об'єктів — власника немає.
     rightsExplain: (unit) => `the rights explain function ${unit.name}`,
     carriers: (unit) => `the carrier copies of ${name(unit.ownerObjectId)}`,
