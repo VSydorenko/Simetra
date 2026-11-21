@@ -475,6 +475,20 @@ describe("the check of a declaration", () => {
     ).toEqual([])
   })
 
+  it("an unresolved guard of a function without callers is named too", async () => {
+    // Роль користувача не потрібна: запобіжник у тілі без `check` компіляція
+    // відмовила б, тож причину називаємо завжди
+    const result = await reverseGenerate(
+      model(guarded("rpc", `'read', 'ghost', ${ROW}`)),
+      options(FOLDER(), facts(fact("rpc")))
+    )
+    expect(
+      warning(result, "introspect.definer-check-unknown").map((d) =>
+        String(d.params?.reason)
+      )
+    ).toEqual(["kind label ghost is not an object of the folder"])
+  })
+
   it.each([
     {
       name: "open shell",
