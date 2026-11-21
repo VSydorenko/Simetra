@@ -231,10 +231,8 @@ export function checkDeclarations(
  * §5.1): функцію, що виконується від власника, кличе роль, яка діє від імені
  * користувача (`user`, `command` — хук команди з id від клієнта), тож без
  * названої перевірки вона обійшла б RLS — `sql.declaration-check-missing`.
- * Перевірку з `check` доводить лише запобіжник у формі `guardOf` (Д2); до
- * нього довести її нічим, тож `check` — ще не доказ:
- * `sql.declaration-check-not-applied` з причиною `guardUnavailable` (Р3,
- * fail-closed). Роль без сесії перевірки користувача не має зовсім —
+ * Перевірку з `check` доводить запобіжник виклику (`guardOf`,
+ * `sql/guard-of.ts`) після побудови контрактів прав, а не ця стадія. Роль без сесії перевірки користувача не має зовсім —
  * `sql.declaration-anonymous-definer`. Invoker-функція виконується з правами
  * викликача, тож її викликачі не судяться; лише `service` — теж: сервісна
  * роль не діє від імені користувача.
@@ -260,12 +258,7 @@ export function checkDeclaredCallers(
         ? []
         : declaration.check === undefined
           ? [at("sql.declaration-check-missing")]
-          : // Шов Д2: доказ `guardOf` замінює цю причину.
-            [
-              at("sql.declaration-check-not-applied", {
-                reason: "guardUnavailable",
-              }),
-            ]),
+          : []),
     ]
   })
 }

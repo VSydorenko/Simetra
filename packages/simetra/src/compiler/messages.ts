@@ -1644,8 +1644,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `${p.function} — SECURITY DEFINER з викликачами від імені користувача, і тіло не доводить названої перевірки (${p.reason})`,
     hint: {
-      en: "The named check counts only once the body applies it through the platform call guard; until the compiler can prove the guard, such a function is refused. Make the function SECURITY INVOKER or leave only the service caller.",
-      uk: "Названа перевірка діє, лише коли тіло застосовує її запобіжником виклику платформи; доки компілятор не може довести запобіжник, така функція відхиляється. Зробіть функцію SECURITY INVOKER або залиште лише викликача service.",
+      en: "The named check counts only once the body applies it through the call guard: the first statement of the outer block (no DECLARE or EXCEPTION section) is PERFORM simetra.rights_require('<action>', '<kind label>', <row parameter or NULL>) — rights_require_scope for a scope target — with exactly the declared action, kind label and target parameter. Otherwise make the function SECURITY INVOKER or leave only the service caller.",
+      uk: "Названа перевірка діє, лише коли тіло застосовує її запобіжником виклику: перший оператор зовнішнього блоку (без секцій DECLARE і EXCEPTION) — PERFORM simetra.rights_require('<дія>', '<мітка виду>', <параметр рядка або NULL>), для цілі scope — rights_require_scope, з точно оголошеними дією, міткою виду й параметром цілі. Інакше зробіть функцію SECURITY INVOKER або залиште лише викликача service.",
     },
   },
   "sql.declaration-anonymous-definer": {

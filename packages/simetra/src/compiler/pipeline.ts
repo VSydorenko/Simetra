@@ -104,6 +104,7 @@ import {
   platformFormSources,
 } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
+import { checkDeclaredGuards } from "./sql/guard-of"
 import { checkDebt, debtPredicate } from "./sql/debt"
 import {
   checkDeclaredChecks,
@@ -430,7 +431,7 @@ export async function runStages(
   // Вид скоупу, об'єктів якого не читає жодна роль (спека прав §5.2), і творця
   // кореня без адміністрування прав рівня (спека П4 §6.13) видно лише на
   // проєкції ролей — тож попередження йдуть після неї й не зупиняють компіляції.
-  const diagnostics = sortDiagnostics([
+  let diagnostics = sortDiagnostics([
     ...staged,
     ...scopeKindUnreadWarnings(
       { rights, roles, rightsProjection: projection.rows },
@@ -655,6 +656,24 @@ export async function runStages(
       diagnostics: sortDiagnostics([...diagnostics, ...checkForms]),
     }
   }
+  // Запобіжник виклику судиться лише для декларацій, що пройшли `check-form`
+  // (ранній `return` вище): контракт об'єкта й ціль тоді гарантовано є. Це
+  // клас ремонту: у режимі `repair` модель будується далі.
+  const guards = checkDeclaredGuards(
+    declared,
+    sql.units,
+    stage1.objects,
+    rights,
+    plpgsql,
+    parse
+  )
+  if (blocks(guards)) {
+    return {
+      ok: false,
+      diagnostics: sortDiagnostics([...diagnostics, ...guards]),
+    }
+  }
+  diagnostics = sortDiagnostics([...diagnostics, ...guards])
   // Один об'єкт контрактів для функцій прав і для пояснення видимості: поле,
   // додане лише в одне місце, дало б двом генераторам різні контракти.
   const rightsInputs = {

@@ -204,19 +204,8 @@ function bodySource(
   sql: string
 ): { tokens: BodyToken[]; bytes: Uint8Array } | undefined {
   try {
-    const create = asRecord(
-      asRecord(asRecord(asArray(asRecord(parseSync(sql))?.stmts)[0])?.stmt)
-        ?.CreateFunctionStmt
-    )
-    const as = asArray(create?.options)
-      .map((o) => asRecord(asRecord(o)?.DefElem))
-      .find((o) => o?.defname === "as")
-    const source = asRecord(
-      asRecord(asArray(asRecord(asRecord(as?.arg)?.List)?.items)[0])?.String
-    )?.sval
-    if (typeof source !== "string") {
-      return { tokens: [], bytes: new Uint8Array() }
-    }
+    const source = functionBodyText(sql)
+    if (source === undefined) return { tokens: [], bytes: new Uint8Array() }
     const tokens = scanSync(source).tokens.filter(
       (t) => t.tokenName !== "SQL_COMMENT" && t.tokenName !== "C_COMMENT"
     )
@@ -224,6 +213,26 @@ function bodySource(
   } catch {
     return undefined
   }
+}
+
+/**
+ * Рядкове тіло так, як його бачить Postgres: вміст `DefElem` `as` дерева
+ * `CREATE FUNCTION` (без `$тег$`, з початковим переводом рядка), а не текст,
+ * відновлений з лексем. Тіла немає (SQL-стандартне, `AS 'obj', 'link'`) —
+ * `undefined`; збій розбору кидає виняток.
+ */
+export function functionBodyText(sql: string): string | undefined {
+  const create = asRecord(
+    asRecord(asRecord(asArray(asRecord(parseSync(sql))?.stmts)[0])?.stmt)
+      ?.CreateFunctionStmt
+  )
+  const as = asArray(create?.options)
+    .map((o) => asRecord(asRecord(o)?.DefElem))
+    .find((o) => o?.defname === "as")
+  const source = asRecord(
+    asRecord(asArray(asRecord(asRecord(as?.arg)?.List)?.items)[0])?.String
+  )?.sval
+  return typeof source === "string" ? source : undefined
 }
 
 /**
