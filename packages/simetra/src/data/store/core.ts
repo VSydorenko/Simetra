@@ -1363,12 +1363,9 @@ export function createCore(options: {
     liftPlanned = false
     if (!session.token().valid) return
     for (const [channel, u] of [...unsettled]) {
-      // Новий розрив каналу після приєднання: запис застарів, його не знімати.
-      if (gapOf(channel) !== u.gen) unsettled.delete(channel)
-      else if (viewsFresh(u.object, u.startedAt)) {
-        unsettled.delete(channel)
-        liftDisconnect(channel, u.gen)
-      }
+      if (!viewsFresh(u.object, u.startedAt)) continue
+      unsettled.delete(channel)
+      liftDisconnect(channel, u.gen)
     }
   }
 
