@@ -7,8 +7,13 @@ import {
 import { hasFixedBody } from "../sql/units"
 import { uuid } from "./helpers"
 import {
+  ORG_KIND_ID,
+  REGION_DIMENSION_ID,
   ROLE_FILE,
   TASK_FILE,
+  commandCoreLayer,
+  policyDomain,
+  writeRoles,
   USERS_FILE,
   without,
   withRoles,
@@ -37,8 +42,7 @@ function definer({ check }: Spec, index: number): string {
   return `CREATE FUNCTION public.f${index}(${args}) RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;\n`
 }
 
-function files(specs: Spec[], withCheck: boolean, layers: Layer[]) {
-  const all = withRoles(...layers)
+function declare(all: Map<string, string>, specs: Spec[], withCheck: boolean) {
   all.set(SQL, specs.map(definer).join(""))
   all.set(
     FUNCTIONS,
@@ -54,11 +58,14 @@ function files(specs: Spec[], withCheck: boolean, layers: Layer[]) {
   return all
 }
 
-async function units(specs: Spec[], ...layers: Layer[]) {
-  const result = await compile(files(specs, true, layers))
+async function unitsOver(all: Map<string, string>, specs: Spec[]) {
+  const result = await compile(declare(all, specs, true))
   expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   return result.model!.sqlUnits.filter((u) => u.generator === "rightsRequire")
 }
+
+const units = (specs: Spec[], ...layers: Layer[]) =>
+  unitsOver(withRoles(...layers), specs)
 
 const functionOf = (all: { class: string; sql: string }[], name: string) =>
   all.find((u) => u.class === "function" && u.sql.includes(`simetra.${name}(`))
@@ -77,6 +84,7 @@ function branches(sql: string | undefined): Map<string, string> {
 
 const TASK = { kind: "Document", name: "Task" } as const
 const ANNOUNCEMENT = { kind: "Document", name: "Announcement" } as const
+const TICKET = { kind: "Catalog", name: "Ticket" } as const
 const USERS = { kind: "Catalog", name: "Users" } as const
 const task = (action: string, target: "row" | "scope" = "row"): Spec => ({
   check: {
@@ -99,7 +107,7 @@ const BAN: Layer = {
 describe("rights_require / rights_require_scope generator", () => {
   // І9: без `check` у жодній декларації функцій запобіжника немає.
   it("generates nothing when no declaration has a check", async () => {
-    const result = await compile(files([task("read")], false, []))
+    const result = await compile(declare(withRoles(), [task("read")], false))
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
     expect(
       result.model!.sqlUnits.filter((u) => u.generator === "rightsRequire")
@@ -235,6 +243,28 @@ describe("rights_require / rights_require_scope generator", () => {
         branches(functionOf(all, "rights_require_scope")).get("task/create")
       ).toBe(
         `${TENANT_SCOPE} AND p_scope = ANY (ARRAY(SELECT simetra.rights_any('create', 'task')))`
+      )
+    })
+
+    // Мутація: взяти в OR лише перший предикат (`.slice(0, 1)` у
+    // `rightsCheck`) — зникають предикати власності, виміру й контейнера.
+    it("row target: the OR of every predicate of the action (any, own, dimension, container)", async () => {
+      const all = await unitsOver(
+        policyDomain(writeRoles(), commandCoreLayer()),
+        [{ check: { action: "update", object: TICKET, row: "p_row" } }]
+      )
+      const sql = functionOf(all, "rights_require")!
+      expect(branches(sql).get("ticket/update")).toBe(
+        "EXISTS (SELECT 1 FROM public.ticket r WHERE r.id = p_row AND r.org_id = ANY (ARRAY(SELECT public.org_member_member_scopes())) AND (" +
+          [
+            "(r.org_id = ANY (ARRAY(SELECT simetra.rights_any('update', 'ticket'))))",
+            `(r.assignee_id = ANY (ARRAY(SELECT simetra.rights_my_members('${ORG_KIND_ID}'::uuid))) AND r.org_id = ANY (ARRAY(SELECT simetra.rights_own('update', 'ticket'))))`,
+            `(r.region_id = ANY (ARRAY(SELECT simetra.rights_dimension_values('${REGION_DIMENSION_ID}'::uuid))) AND r.org_id = ANY (ARRAY(SELECT simetra.rights_dim('update', 'ticket', '${REGION_DIMENSION_ID}'::uuid))))`,
+            "(r.project_id = ANY (ARRAY(SELECT simetra.rights_container('update', 'ticket', 'any', NULL))))",
+            `(r.assignee_id = ANY (ARRAY(SELECT simetra.rights_my_members('${ORG_KIND_ID}'::uuid))) AND r.project_id = ANY (ARRAY(SELECT simetra.rights_container('update', 'ticket', 'own', NULL))))`,
+            `(r.region_id = ANY (ARRAY(SELECT simetra.rights_dimension_values('${REGION_DIMENSION_ID}'::uuid))) AND r.project_id = ANY (ARRAY(SELECT simetra.rights_container('update', 'ticket', 'dimension', '${REGION_DIMENSION_ID}'::uuid))))`,
+          ].join(" OR ") +
+          "))"
       )
     })
 
