@@ -289,7 +289,7 @@ function requireFunction(
       "    RETURN;",
       "  END IF;",
     ]),
-    `  RETURN;`,
+    `  ${REFUSAL}`,
     "END",
   ].join("\n")
   const tag = dollarTag(body)
