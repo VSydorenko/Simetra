@@ -102,6 +102,20 @@ const changeRow = (
   },
 })
 
+/**
+ * Очікуваний сигнал прав користувача (§8.2): команда, що змінює факт прав
+ * (призначення, членство), дає його тригером таблиці фактів — `data` рівно
+ * `{ id, op }`.
+ */
+const userRightsRow = (userId: string) => ({
+  id: expect.stringMatching(/^[1-9][0-9]*$/) as unknown as string,
+  payload: {
+    channel: channelTopic({ kind: "user", userId }),
+    data: { id: expect.any(String) as unknown as string, op: "rights" },
+    idempotency_key: expect.any(String) as unknown as string,
+  },
+})
+
 /** `id`, `data.id` і ключ ідемпотентності — той самий id рядка (Р4, Р13). */
 const sameIds = (rows: OutboxRow[]) =>
   rows.every(
@@ -283,6 +297,9 @@ export function defineSignalCoreCases(options: {
       })
       await client.query("SET CONSTRAINTS ALL IMMEDIATE")
       await client.query("SET CONSTRAINTS ALL DEFERRED")
+      // Засів пише факти прав, і їхні тригери кладуть сигнали прав (§8.2):
+      // кейси судять рівно рядки своєї команди.
+      await client.query(`DELETE FROM ${OUTBOX}`)
     }, 120_000)
     afterAll(() => tx.close())
 
@@ -418,7 +435,9 @@ export function defineSignalCoreCases(options: {
           readOutbox,
         ])
       ) as [unknown, OutboxRow[]]
+      // Тригер оператора — до виклику сигналу ядра після DML.
       expect(rows).toEqual([
+        userRightsRow(key("rd")),
         changeRow(
           inA(objectIdOf(model, ASSIGNMENTS)),
           "delete",
@@ -453,8 +472,15 @@ export function defineSignalCoreCases(options: {
           readOutbox,
         ])
       ) as [unknown, unknown, OutboxRow[]]
-      expect(rows.map((r) => r.payload.data.op)).toEqual(["delete", "create"])
-      const [removed, created] = rows.map((r) => Number(r.payload.data.row_ver))
+      expect(rows.map((r) => r.payload.data.op)).toEqual([
+        "rights",
+        "delete",
+        "rights",
+        "create",
+      ])
+      const [removed, created] = rows
+        .filter((r) => r.payload.data.op !== "rights")
+        .map((r) => Number(r.payload.data.row_ver))
       expect(created).toBeGreaterThan(removed!)
     })
 
@@ -627,6 +653,9 @@ export function defineSignalCoreCases(options: {
       })
       await client.query("SET CONSTRAINTS ALL IMMEDIATE")
       await client.query("SET CONSTRAINTS ALL DEFERRED")
+      // Засів пише факти прав, і їхні тригери кладуть сигнали прав (§8.2):
+      // кейси судять рівно рядки своєї команди.
+      await client.query(`DELETE FROM ${OUTBOX}`)
     }, 120_000)
     afterAll(() => tx.close())
 
@@ -657,7 +686,11 @@ export function defineSignalCoreCases(options: {
         ])
       )
       const [, version, rows] = completed as [unknown, string, OutboxRow[]]
+      // Про новий скоуп творця повідомляє канал прав користувача (§8.2):
+      // функція гранту пише його членство й призначення — по рядку на оператор.
       expect(rows).toEqual([
+        userRightsRow(ids.creator!),
+        userRightsRow(ids.creator!),
         changeRow(
           { kind: ORG_KIND_ID, scope: root, object: organization() },
           "create",

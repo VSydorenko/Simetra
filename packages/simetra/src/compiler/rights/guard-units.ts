@@ -9,14 +9,12 @@ import {
   keyColumn,
   quoteIdent,
   tabularParentColumn,
-  isObjectTable,
   objectTable,
   type AttributeCase,
   type DatabaseProvider,
   type PhysicalSnapshot,
   type PhysicalTable,
   type StandardColumnDef,
-  KIND_REGISTRY,
   COMMAND_CORE_ERRORS,
   CURRENT_USER_FUNCTION_NAME,
   type ObjectTable,
@@ -56,6 +54,7 @@ import {
 import { generatedTableFunctionName } from "./generated-names"
 import { rightsGuardNames } from "./guard-names"
 import { effectiveHolderRows } from "./holders"
+import { triggeredRelationTable } from "./relation-table"
 import type { SnapshotSources } from "./snapshot-sources"
 
 /** Контракти запобіжників прав і аналізу джерел знімка. */
@@ -1361,23 +1360,8 @@ export function buildRightsGuardUnits(
     const key = `${relation.table.schema}.${relation.table.name}`
     if (relations.has(key)) continue
     relations.add(key)
-    const table = physical.tables.find(
-      (candidate): candidate is ObjectTable =>
-        isObjectTable(candidate) &&
-        candidate.schema === relation.table.schema &&
-        candidate.name === relation.table.name &&
-        candidate.origin.objectId === relation.objectId &&
-        candidate.origin.part === undefined
-    )
-    if (
-      table === undefined ||
-      !objects.some(
-        (object) =>
-          object.id === relation.objectId &&
-          !KIND_REGISTRY[object.kind].declared
-      )
-    )
-      continue
+    const table = triggeredRelationTable(relation, physical, objects)
+    if (table === undefined) continue
     const scope = table.columns.find(
       (entry) => entry.origin.scopeKindId !== undefined
     )

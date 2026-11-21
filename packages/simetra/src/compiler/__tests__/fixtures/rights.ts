@@ -611,7 +611,6 @@ export function singleTenantRights(
   return metaFiles(files)
 }
 
-/** Вимір `region`: значення учасника — рядки зв'язку `MemberRegion`. */
 /**
  * Вимір `region` зі зв'язком через прийняту `CustomTable` `MemberRegion` замість
  * регістра: платформа не ставить на неї тригерів, тож значення виміру свіжіють
@@ -668,6 +667,7 @@ export function adoptedRegionRelation(): Layer {
   }
 }
 
+/** Вимір `region`: значення учасника — рядки зв'язку `MemberRegion`. */
 export function regionDimension() {
   return {
     id: REGION_DIMENSION_ID,
@@ -690,43 +690,53 @@ export const USER_REGION_FILE =
  * Однотенантний `Task` з виміром `region`: значення користувача — рядки
  * зв'язку `UserRegion` на «Користувачів».
  */
-export function unscopedDimension(): Map<string, string> {
-  return singleTenantRights({
-    [PROJECT_FILE]: {
-      accessDimensions: [
-        {
-          ...regionDimension(),
-          values: {
-            relation: {
-              object: ref("InformationRegister", "UserRegion"),
-              subject: "user",
-              value: "region",
+export function unscopedDimension(
+  provider: DatabaseProvider = "supabase"
+): Map<string, string> {
+  return singleTenantRights(
+    {
+      [PROJECT_FILE]: {
+        accessDimensions: [
+          {
+            ...regionDimension(),
+            values: {
+              relation: {
+                object: ref("InformationRegister", "UserRegion"),
+                subject: "user",
+                value: "region",
+              },
             },
           },
-        },
-      ],
+        ],
+      },
+      [REGION_FILE]: catalog(uuid(6040), "Region", "region", { scope: "none" }),
+      [USER_REGION_FILE]: {
+        id: uuid(6070),
+        kind: "InformationRegister",
+        name: "UserRegion",
+        physicalName: "user_region",
+        kindLabel: "user_region",
+        scope: "none",
+        dimensions: [
+          refAttribute(6071, "user", "user_id", ref("Catalog", "Users")),
+          refAttribute(6072, "region", "region_id", ref("Catalog", "Region")),
+        ],
+      },
+      [TASK_FILE]: {
+        attributes: [
+          refAttribute(
+            6012,
+            "project",
+            "project_id",
+            ref("Catalog", "Project")
+          ),
+          refAttribute(6013, "region", "region_id", ref("Catalog", "Region")),
+        ],
+        access: [{ attribute: "region", dimension: "region" }],
+      },
     },
-    [REGION_FILE]: catalog(uuid(6040), "Region", "region", { scope: "none" }),
-    [USER_REGION_FILE]: {
-      id: uuid(6070),
-      kind: "InformationRegister",
-      name: "UserRegion",
-      physicalName: "user_region",
-      kindLabel: "user_region",
-      scope: "none",
-      dimensions: [
-        refAttribute(6071, "user", "user_id", ref("Catalog", "Users")),
-        refAttribute(6072, "region", "region_id", ref("Catalog", "Region")),
-      ],
-    },
-    [TASK_FILE]: {
-      attributes: [
-        refAttribute(6012, "project", "project_id", ref("Catalog", "Project")),
-        refAttribute(6013, "region", "region_id", ref("Catalog", "Region")),
-      ],
-      access: [{ attribute: "region", dimension: "region" }],
-    },
-  })
+    provider
+  )
 }
 
 export const TASK_HOURS_FILE =

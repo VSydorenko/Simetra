@@ -115,8 +115,24 @@ export function buildSignalUnits(input: SignalInput): SqlUnit[] {
       unit(grant)
     ),
   ])
+  // Сигнали прав (Р8): `EXECUTE` нікому — їх кличе лише definer-тригер
+  // сигналу прав від власника; грант дав би будь-якій ролі підробити сигнал.
+  const rightsSenders = [
+    {
+      signature: `${qualified(SIGNAL_FUNCTIONS.rights)}(uuid, uuid)`,
+      sql: rightsFunction(),
+    },
+    {
+      signature: `${qualified(SIGNAL_FUNCTIONS.userRights)}(uuid)`,
+      sql: userRightsFunction(),
+    },
+  ].flatMap(({ signature, sql }) => [
+    unit(sql, bodyRequires(sql, input)),
+    ...executeGrants(signature, [], provider).map((grant) => unit(grant)),
+  ])
   return [
     ...senders,
+    ...rightsSenders,
     topicUnit,
     // Р10: `PUBLIC` дав би будь-якій ролі з `USAGE` на `simetra` оракул прав;
     // `EXECUTE` — роль, що вставляє в outbox, і роль, що видає токени.
@@ -384,6 +400,78 @@ function invalidateFunction(): string {
       outboxInsert(
         "jsonb_build_object('object', p_object, 'op', 'invalidate')"
       ),
+      "END",
+    ],
+    { returns: "void", volatility: "VOLATILE" }
+  )
+}
+
+/** Відмова форми сигналу прав (Р8): `22023` — недійсне значення аргументу. */
+function invalidArgument(message: string): string {
+  return `    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = ${sqlLiteral(message)};`
+}
+
+/**
+ * Рядок outbox сигналу прав: `data` рівно `{ op: "rights" }`, `id` ставить
+ * тригер штампа (П4-B §8.1).
+ */
+function rightsOutboxInsert(channel: string): string {
+  return (
+    `  INSERT INTO ${qualified(SIGNAL_OUTBOX)} (method, payload) VALUES ('publish', ` +
+    `jsonb_build_object('channel', ${channel}, 'data', jsonb_build_object('op', 'rights')));`
+  )
+}
+
+/**
+ * `simetra.signal_rights(p_scope_kind, p_scope)` (П4-B §8.2, Р8): сигнал
+ * прав скоупу чи глобальний (обидва нулі). Кличе лише тригер від власника,
+ * для якого outbox без `FORCE` політики не судить, тож форму перевіряє сама
+ * функція — кожне правило окремо. Режим злиття сигналів прав не гасить.
+ */
+function rightsFunction(): string {
+  const zero = uuidLiteral(ZERO_UUID)
+  return plpgsqlFunction(
+    `${qualified(SIGNAL_FUNCTIONS.rights)}(p_scope_kind uuid, p_scope uuid)`,
+    "SECURITY INVOKER",
+    [
+      "BEGIN",
+      "  IF p_scope_kind IS NULL THEN",
+      invalidArgument("signal_rights: the scope kind is null"),
+      "  END IF;",
+      "  IF p_scope IS NULL THEN",
+      invalidArgument("signal_rights: the scope is null"),
+      "  END IF;",
+      `  IF (p_scope_kind = ${zero}) <> (p_scope = ${zero}) THEN`,
+      invalidArgument(
+        "signal_rights: the scope kind and the scope are zero only together"
+      ),
+      "  END IF;",
+      rightsOutboxInsert(
+        "'simetra-rights:' || p_scope_kind::text || ':' || p_scope::text"
+      ),
+      "END",
+    ],
+    { returns: "void", volatility: "VOLATILE" }
+  )
+}
+
+/**
+ * `simetra.signal_user_rights(p_user)` (П4-B §8.2, Р8): сигнал прав одного
+ * користувача; форма — як у `signal_rights`, у самій функції.
+ */
+function userRightsFunction(): string {
+  return plpgsqlFunction(
+    `${qualified(SIGNAL_FUNCTIONS.userRights)}(p_user uuid)`,
+    "SECURITY INVOKER",
+    [
+      "BEGIN",
+      "  IF p_user IS NULL THEN",
+      invalidArgument("signal_user_rights: the user is null"),
+      "  END IF;",
+      `  IF p_user = ${uuidLiteral(ZERO_UUID)} THEN`,
+      invalidArgument("signal_user_rights: the user is the zero id"),
+      "  END IF;",
+      rightsOutboxInsert("'simetra-user:' || p_user::text"),
       "END",
     ],
     { returns: "void", volatility: "VOLATILE" }

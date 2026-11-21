@@ -39,8 +39,17 @@ export type SnapshotExemptReason =
   | "snapshot"
 
 export interface SnapshotSources {
-  /** Таблиці виду, що живлять факти; за `(schema, name)`. */
-  sources: { table: ObjectTable; facts: readonly SnapshotFact[] }[]
+  /**
+   * Таблиці виду, що живлять факти; за `(schema, name)`. `verbatimOnly` —
+   * таблицю читають лише дослівні функції проєкту (функція виміру, дослівна
+   * множина скоупів): тригер знімка на ній стоїть, а сигналу прав немає —
+   * чий факт змінився, тіло функції не каже (спека П4-B §8.2).
+   */
+  sources: {
+    table: ObjectTable
+    facts: readonly SnapshotFact[]
+    verbatimOnly: boolean
+  }[]
   /** Відношення, які факти читають без тригера знімка; за `(schema, name)`. */
   exempt: { table: QualifiedName; reason: SnapshotExemptReason }[]
   /** Відношення, яких аналіз не класифікував, — помилка компілятора. */
@@ -190,8 +199,9 @@ export function snapshotSources(input: SnapshotSourcesInput): SnapshotSources {
 
   const sourceFacts = new Map<
     string,
-    { table: ObjectTable; facts: Set<SnapshotFact> }
+    { table: ObjectTable; facts: Set<SnapshotFact>; verbatimOnly: boolean }
   >()
+  const verbatimIds = new Set(input.verbatim.map((u) => u.identity))
   const exempt = new Map<
     string,
     { table: QualifiedName; reason: SnapshotExemptReason }
@@ -222,8 +232,10 @@ export function snapshotSources(input: SnapshotSourcesInput): SnapshotSources {
             const entry = sourceFacts.get(id) ?? {
               table: c.table,
               facts: new Set<SnapshotFact>(),
+              verbatimOnly: true,
             }
             entry.facts.add(fact)
+            if (!verbatimIds.has(reader.identity)) entry.verbatimOnly = false
             sourceFacts.set(id, entry)
           }
         }
@@ -234,9 +246,10 @@ export function snapshotSources(input: SnapshotSourcesInput): SnapshotSources {
   return {
     sources: [...sourceFacts.entries()]
       .sort(([a], [b]) => byName(a, b))
-      .map(([, { table, facts }]) => ({
+      .map(([, { table, facts, verbatimOnly }]) => ({
         table,
         facts: SNAPSHOT_FACTS.filter((f) => facts.has(f)),
+        verbatimOnly,
       })),
     exempt: [...exempt.entries()]
       .sort(([a], [b]) => byName(a, b))

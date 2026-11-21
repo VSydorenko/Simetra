@@ -346,6 +346,19 @@ export const runtimeObjectSchema = catalogEntrySchema
     }
   })
 
+/**
+ * Rights facts that come from adopted tables (P4-B spec §8.2): the platform
+ * puts no trigger on an adopted table, so these facts send no rights signal
+ * and refresh on the interval. `membershipKinds` — scope kinds with an
+ * adopted membership source; `assignments` — an adopted assignment source of
+ * any level. The client rights evaluator answers `unknown` for what depends
+ * on them.
+ */
+export const catalogAdoptedFactsSchema = z.strictObject({
+  membershipKinds: z.array(z.guid()),
+  assignments: z.literal(true).optional(),
+})
+
 /** The runtime catalog: a projection of the compiled model (P4 spec §6.3). */
 export const runtimeCatalogSchema = z
   .strictObject({
@@ -354,6 +367,7 @@ export const runtimeCatalogSchema = z
     provider: z.enum(DATABASE_PROVIDERS),
     /** Проєкт має функції прав: клієнт шле `rights` і підписується на сигнали. */
     rightsSnapshot: z.literal(true).optional(),
+    adoptedFacts: catalogAdoptedFactsSchema.optional(),
     objects: z.array(runtimeObjectSchema),
   })
   .superRefine((catalog, ctx) => {
@@ -402,3 +416,4 @@ export type CatalogRightsCarrier = z.infer<typeof catalogRightsCarrierSchema>
 export type CatalogRightsSubject = z.infer<typeof catalogRightsSubjectSchema>
 export type CatalogRightsExtent = z.infer<typeof catalogRightsExtentSchema>
 export type CatalogRights = z.infer<typeof catalogRightsSchema>
+export type CatalogAdoptedFacts = z.infer<typeof catalogAdoptedFactsSchema>

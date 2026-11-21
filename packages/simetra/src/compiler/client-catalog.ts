@@ -86,6 +86,7 @@ export function buildClientCatalog(runtime: RuntimeCatalog): ClientCatalog {
     snapshotHash: runtime.snapshotHash,
     provider: runtime.provider,
     ...present("rightsSnapshot", runtime.rightsSnapshot),
+    ...present("adoptedFacts", runtime.adoptedFacts),
     objects: runtime.objects.map(entryOf),
   }
 }

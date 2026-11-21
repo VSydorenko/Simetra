@@ -19,6 +19,7 @@ import {
 } from "simetra/model"
 import { isSignalObject, readBoundaries } from "./access-units"
 import { canonicalize } from "./canonical"
+import { compareStrings } from "./diagnostics"
 import type {
   CatalogCommandContract,
   CommandReference,
@@ -35,6 +36,7 @@ import {
 import type { PresentationBlock } from "./presentation"
 import { hasRightsFunctions, hasVisibleUsers } from "./rights/functions"
 import { carrierColumn } from "./rights/predicates"
+import { triggeredRelationTable } from "./rights/relation-table"
 import { sha256HexSync } from "./sha256"
 
 /**
@@ -90,13 +92,34 @@ export function buildRuntimeCatalog(model: CompiledModel): RuntimeCatalog {
     snapshotHash: model.hash,
     provider: model.project.database.provider,
     ...(hasRightsFunctions(model.contracts, model.project.database.provider)
-      ? { rightsSnapshot: true as const }
+      ? { rightsSnapshot: true as const, ...adoptedFactsOf(model) }
       : {}),
     objects: model.objects.flatMap((object): RuntimeObject[] => {
       const contract = contracts.get(object.id)
       if (contract === undefined) return []
       return [runtimeObject(object, contract, facts)]
     }),
+  }
+}
+
+/**
+ * Факти прийнятих джерел (спека П4-B §8.2): тригера сигналу прав на прийнятій
+ * таблиці немає (спека прав §4.7), тож клієнт мусить знати, що вони свіжіють
+ * за інтервалом. Призначення — будь-якого рівня, зокрема контейнера.
+ */
+function adoptedFactsOf(
+  model: CompiledModel
+): Pick<RuntimeCatalog, "adoptedFacts"> {
+  const { membershipSources, assignmentSources } = model.contracts
+  if (membershipSources.length === 0 && assignmentSources.length === 0)
+    return {}
+  return {
+    adoptedFacts: {
+      membershipKinds: [
+        ...new Set(membershipSources.map((s) => s.scopeKindId)),
+      ].sort(compareStrings),
+      ...(assignmentSources.length > 0 ? { assignments: true as const } : {}),
+    },
   }
 }
 
@@ -261,7 +284,8 @@ function rightsOf(
   command: CatalogCommandContract,
   facts: Facts
 ): Pick<RuntimeObject, "rights"> {
-  const { contracts, objects, project } = facts.model
+  const { model } = facts
+  const { contracts, objects, project } = model
   const contract = contracts.rights.find((r) => r.objectId === objectId)
   if (contract === undefined) return {}
   const main = command.table
@@ -309,13 +333,12 @@ function rightsOf(
         )
         const relation =
           "relation" in dimension.values ? dimension.values.relation : undefined
-        // Свіжий — зв'язок виду, на який платформа ставить тригер зв'язку:
-        // прийнята `CustomTable` (`declared`) тригера не має, як і функція.
+        // Свіжий — зв'язок, на який платформа ставить тригер сигналу прав
+        // (та сама умова, що в генераторах); функція виміру — ні.
         const fresh =
           relation !== undefined &&
-          objects.some(
-            (o) => o.id === relation.objectId && !KIND_REGISTRY[o.kind].declared
-          )
+          triggeredRelationTable(relation, model.physical, objects) !==
+            undefined
         return {
           dimensionId,
           carrier: carrierOf(carrier),
