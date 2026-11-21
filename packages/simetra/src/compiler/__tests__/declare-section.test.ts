@@ -32,6 +32,7 @@ describe("declareSection", () => {
     ],
     ["label never closed", "<<a BEGIN"],
     ["label without name", "<<>> BEGIN"],
+    ["label closed by two foreign characters", "<<a XX BEGIN"],
     ["label with two names", "<<a b>> BEGIN"],
     ["label with a dotted name", "<<a.b>> BEGIN"],
     ["unicode-escaped label", '<<U&"a">> BEGIN'],
