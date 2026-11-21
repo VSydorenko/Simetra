@@ -941,6 +941,81 @@ describe("version check and the stale mark (§10)", () => {
     expect(versionCalls(t.calls)).toBe(2)
   })
 
+  describe("with the rightsSnapshot flag", () => {
+    const partTypes = (call: DataRequest) =>
+      call.request.type === "read"
+        ? (call.request.items as { type: string }[]).map((i) => i.type)
+        : []
+    const RIGHTS_VERSION = "1".repeat(64)
+    const combinedAnswer = (hash: string): DataResponse => {
+      const base = versionAnswer(hash) as { value: { items: unknown[] } }
+      return {
+        ...ok({
+          epoch: null,
+          items: [
+            ...base.value.items,
+            {
+              ok: true,
+              value: {
+                rightsVersion: RIGHTS_VERSION,
+                snapshot: { userId: null, scopeSets: [], rights: [] },
+              },
+            },
+          ],
+        }),
+        serverHash: hash,
+      }
+    }
+
+    it("a changed serverHash sends version and rights in one request, and alternating hashes give no ping-pong", async () => {
+      const t = controlled({
+        catalog: { ...catalogOf(OBJECTS), rightsSnapshot: true },
+      })
+      // Перший пакет несе `rights` (Р1) сам: його відправляємо окремо, щоб
+      // наступний запит по зміні хеша показав, чи ядро саме просить `rights`.
+      t.core.requestRights()
+      await settle()
+      t.respond({
+        ...ok({
+          epoch: null,
+          items: [
+            {
+              ok: true,
+              value: {
+                rightsVersion: RIGHTS_VERSION,
+                snapshot: { userId: null, scopeSets: [], rights: [] },
+              },
+            },
+          ],
+        }),
+      })
+      await settle()
+      const first = t.send(card())
+      const before = t.calls.length
+      t.respond(changed(ok(null), "server-2"))
+      await first
+      await settle()
+      // Один запит після зміни хеша, з обома службовими частинами.
+      expect(t.calls.length - before).toBe(1)
+      expect(partTypes(t.calls[before]!).sort()).toEqual(["rights", "version"])
+      // Відповідь з частиною `version` і новим хешем нового запиту не запускає.
+      t.respond(combinedAnswer("server-3"))
+      await settle()
+      expect(t.calls.length - before).toBe(1)
+      expect(t.pending).toHaveLength(0)
+    })
+
+    it("without the flag a changed serverHash sends no rights part", async () => {
+      const t = controlled()
+      const first = t.send(card())
+      t.respond(changed(ok(null), "server-2"))
+      await first
+      await settle()
+      expect(t.calls.flatMap(partTypes)).not.toContain("rights")
+      expect(versionCalls(t.calls)).toBe(1)
+    })
+  })
+
   it("the first hash is compared with the snapshotHash of the client catalog", async () => {
     const t = controlled()
     const same = t.send(card())

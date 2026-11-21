@@ -1556,7 +1556,13 @@ export function createCore(options: {
     serverHash(hash, versionPart) {
       const changed = lastHash !== undefined && hash !== lastHash
       lastHash = hash
-      if (changed && !versionPart) core.requestVersion()
+      // Знімок прав слідує за `version` (Р9): одна мікрозадача — один запит, а
+      // відповідь з частиною `version` нового запиту не запускає нічого (§10),
+      // тож два хеші, що чергуються, не дають пінг-понгу.
+      if (changed && !versionPart) {
+        core.requestVersion()
+        core.requestRights()
+      }
     },
     staleClient(object) {
       const o = objects.get(object)
