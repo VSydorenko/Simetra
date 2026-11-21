@@ -166,8 +166,8 @@ function branchesOf(input: RequireInput): Map<Form, Branch[]> {
         : check.row !== undefined
           ? "row"
           : "none"
+    // Ключ пари і форми: друга декларація тієї самої пари гілку не множить.
     const key = `${form}\0${contract.kindLabel}\0${action.action}`
-    if (found.has(key)) continue
     const main = must(mainTableOf(input.physical, contract.objectId))
     const access = input.contracts.access.find(
       (a) => a.table.schema === main.schema && a.table.name === main.name
