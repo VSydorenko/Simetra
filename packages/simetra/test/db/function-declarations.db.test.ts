@@ -22,6 +22,8 @@ import {
   dimensionFunction,
   grant,
   objects,
+  PROJECT_FILE,
+  membersSource,
   without,
   writeRoles,
 } from "../../src/compiler/__tests__/fixtures/rights"
@@ -323,6 +325,23 @@ function guardFiles(
 }
 
 /**
+ * Джерело членства без колонки активності: права бачать і неактивний рядок
+ * членства, а функція множини виду `org` (`org_ids`) його не бачить — вона
+ * вужча за джерело, як у знімка гостей. Предикат права тоді пропускає скоуп,
+ * якого немає серед скоупів межі тенанта, тож лише ця межа відсікає рядок
+ * чужого тенанта. Призначення контейнера цього не показує: воно враховується
+ * лише в скоупі контейнера, а рядок контейнера чужого тенанта неможливий
+ * (складений FK), тож предикат контейнера сам не пропускає чужий скоуп.
+ */
+const narrowTenantSet = () => ({
+  [PROJECT_FILE]: {
+    membershipSources: [
+      membersSource({ columns: { scope: "orgId", user: "userId" } }),
+    ],
+  },
+})
+
+/**
  * Роль `Support` над прийнятим джерелом глобальних призначень: читання й
  * зміна «Користувачів» на глобальному рівні (поза скоупами).
  */
@@ -341,7 +360,8 @@ describe("the call guard in Postgres", () => {
     const files = adoptedSourcesDomain(
       profileLayer(),
       writeRoles(),
-      supportUsers()
+      supportUsers(),
+      narrowTenantSet()
     )
     for (const [path, text] of Object.entries(guardFiles()))
       files.set(path, text)
@@ -362,8 +382,10 @@ describe("the call guard in Postgres", () => {
 
   // Postgres судить, чи пропускає умова гілки: рядки × актори. Відмова — та
   // сама для відсутності права, чужого тенанта, відсутнього рядка й `NULL`.
-  // Мутація: прибрати межу тенанта з гілки `row` — `u1` на `tB` проходить
-  // (право на контейнер PB є, межа тенанта його відсікає).
+  // У `uf` право читання в B є (неактивне членство бачать лише права), а
+  // межа тенанта B не бачить. Мутація: прибрати межу тенанта з гілки `row` —
+  // `uf` на `tB` проходить. `u1` на `tB` (призначення контейнера PB) відмову
+  // дає й без межі: див. коментар `narrowTenantSet`.
   it.each([
     ["u1", "t1", "ok"],
     ["u1", "t2", REFUSED],
@@ -374,6 +396,8 @@ describe("the call guard in Postgres", () => {
     ["u7", "t1", "ok"],
     ["u7", "t2", "ok"],
     ["u7", "tB", REFUSED],
+    ["uf", "t1", "ok"],
+    ["uf", "tB", REFUSED],
     ["u7", "00000000-0000-4000-8000-000000000000", REFUSED],
     ["u7", null, REFUSED],
   ] as const)("row target: %s on %s", async (who, key, expected) => {
@@ -388,7 +412,7 @@ describe("the call guard in Postgres", () => {
     const client = tx.client()
     const byKey = new Map(Object.entries(ids).map(([k, v]) => [v, k]))
     const literal: Record<string, (string | undefined)[]> = {}
-    for (const who of ["u1", "u3", "u5", "u7"]) {
+    for (const who of ["u1", "u3", "u5", "u7", "uf"]) {
       await client.query("SAVEPOINT visible")
       await asRole(client, "user", claimsFor("user", ids[who]))
       const { rows } = await client.query<{ id: string }>(
@@ -408,6 +432,7 @@ describe("the call guard in Postgres", () => {
       u3: ["tB"],
       u5: [],
       u7: ["t1", "t2"],
+      uf: ["t1", "t2"],
     })
   })
 
@@ -517,7 +542,7 @@ async function seedGuardGrid(client: pg.Client): Promise<Seed> {
     ids[key] = randomUUID()
     await insert(client, table, { id: ids[key], ...values })
   }
-  for (const user of ["u1", "u3", "u5", "u7", "uw", "us"])
+  for (const user of ["u1", "u3", "u5", "u7", "uw", "us", "uf"])
     ids[user] = await signUp(client)
   await make("A", "organization")
   await make("B", "organization")
@@ -526,6 +551,7 @@ async function seedGuardGrid(client: pg.Client): Promise<Seed> {
     ["u5", "A"],
     ["u7", "A"],
     ["uw", "A"],
+    ["uf", "A"],
     ["u3", "B"],
   ] as const)
     await make(`${user}@${org}`, "membership", {
@@ -533,6 +559,12 @@ async function seedGuardGrid(client: pg.Client): Promise<Seed> {
       user_id: ids[user],
       is_active: true,
     })
+  // Неактивне членство в B: права його бачать, межа тенанта — ні
+  await make("uf@B", "membership", {
+    org_id: ids.B,
+    user_id: ids.uf,
+    is_active: false,
+  })
   await make("P1", "project", { org_id: ids.A })
   await make("P2", "project", { org_id: ids.A })
   await make("PB", "project", { org_id: ids.B })
@@ -562,6 +594,8 @@ async function seedGuardGrid(client: pg.Client): Promise<Seed> {
   for (const [member, org, archetype] of [
     ["u7@A", "A", ORG_MEMBER_ROLE_ID],
     ["uw@A", "A", TASK_WRITER_ID],
+    ["uf@A", "A", ORG_MEMBER_ROLE_ID],
+    ["uf@B", "B", ORG_MEMBER_ROLE_ID],
     ["u3@B", "B", ORG_MEMBER_ROLE_ID],
   ] as const)
     await insert(client, "org_role_assignments", {
