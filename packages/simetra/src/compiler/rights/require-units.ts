@@ -24,7 +24,7 @@ import {
 import { compareStrings } from "../diagnostics"
 import { dollarTag } from "../movement-functions"
 import { executeGrants } from "../sql/execute-grants"
-import type { DeclaredFunction } from "../sql/declarations"
+import { checkedContract, type DeclaredFunction } from "../sql/declarations"
 import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
 import { generatedUnit, type SqlUnit } from "../sql/units"
@@ -181,11 +181,8 @@ function resolved(
   declaration: DeclaredFunction["declaration"]
 ) {
   const check = must(declaration.check)
-  const object = input.objects.find(
-    (o) => o.kind === check.object.kind && o.name === check.object.name
-  )
   const contract = must(
-    input.contracts.rights.find((r) => r.objectId === object?.id)
+    checkedContract(check, input.objects, input.contracts.rights)
   )
   return {
     contract,
