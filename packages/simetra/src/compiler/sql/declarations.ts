@@ -438,7 +438,8 @@ function checkFormReason(
   { declaration, unit }: DeclaredFunction,
   units: readonly VerbatimUnit[],
   objects: readonly ParsedObject[],
-  rights: readonly RightsContract[]
+  rights: readonly RightsContract[],
+  usersRead: ReadonlySet<string>
 ): CheckFormReason | undefined {
   const check = declaration.check
   if (check === undefined) return undefined
@@ -462,9 +463,12 @@ function checkFormReason(
   // Рядка створення ще немає, а `INSERT` кореня виду скоупу судить окрема
   // булева форма (спека прав Рх9): названа перевірка йому не відповідає.
   if (create && contract.root === true) return "createOnRoot"
-  // Предикати дії читають носія рядка (скоуп, власність, вимір, контейнер):
-  // без цілі судити нічого. `create` носія ще не має — для нього ціль `scope`.
+  // Предикати дії читають носія рядка (скоуп, власність, вимір, контейнер),
+  // а читання ще й межа «Користувачів» (`readBoundaries`, ключ рядка — id
+  // користувача): без цілі судити нічого. `create` носія ще не має — для
+  // нього ціль `scope`.
   const carriers =
+    (action.action === "read" && usersRead.has(contract.objectId)) ||
     contract.scopeKindId !== undefined ||
     contract.ownership.length > 0 ||
     contract.access.length > 0 ||
@@ -484,10 +488,12 @@ export function checkDeclaredChecks(
   declared: readonly DeclaredFunction[],
   units: readonly VerbatimUnit[],
   objects: readonly ParsedObject[],
-  rights: readonly RightsContract[]
+  rights: readonly RightsContract[],
+  /** Об'єкти, читання яких обмежує межа «Користувачів» (`readBoundaries`). */
+  usersRead: ReadonlySet<string>
 ): Diagnostic[] {
   return declared.flatMap((entry) => {
-    const reason = checkFormReason(entry, units, objects, rights)
+    const reason = checkFormReason(entry, units, objects, rights, usersRead)
     return reason === undefined
       ? []
       : [

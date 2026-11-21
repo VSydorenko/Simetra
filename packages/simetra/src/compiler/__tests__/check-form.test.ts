@@ -3,7 +3,13 @@ import { compile } from "simetra/compiler"
 import type { SqlFunctionDeclaration } from "simetra/model"
 import { diagnostic, isRepairError } from "../diagnostics"
 import { uuid } from "./helpers"
-import { STATUS_FILE, withRoles } from "./fixtures/rights"
+import {
+  ROLE_FILE,
+  STATUS_FILE,
+  without,
+  withRoles,
+  type Layer,
+} from "./fixtures/rights"
 
 const SQL = "sql/public/fns.sql"
 const FUNCTIONS = "sql/public/fns.functions.json"
@@ -13,8 +19,12 @@ const fn = (args: string, shell = "SECURITY DEFINER") =>
 
 type Check = NonNullable<SqlFunctionDeclaration["check"]>
 
-function files(check: Check, sql: string): Map<string, string> {
-  const all = withRoles()
+function files(
+  check: Check,
+  sql: string,
+  ...layers: Layer[]
+): Map<string, string> {
+  const all = withRoles(...layers)
   // Перелік не має контракту прав: об'єкт існує, але прав на нього немає.
   all.set(
     STATUS_FILE,
@@ -45,8 +55,16 @@ function files(check: Check, sql: string): Map<string, string> {
   return all
 }
 
-async function judged(check: Check, sql: string, repair?: true) {
-  const result = await compile(files(check, sql), repair ? { repair } : {})
+async function judged(
+  check: Check,
+  sql: string,
+  repair?: true,
+  ...layers: Layer[]
+) {
+  const result = await compile(
+    files(check, sql, ...layers),
+    repair ? { repair } : {}
+  )
   return {
     result,
     forms: result.diagnostics
@@ -63,6 +81,7 @@ const at = (reason: string) => [
 
 const TASK: Check["object"] = { kind: "Document", name: "Task" }
 const ANNOUNCEMENT: Check["object"] = { kind: "Document", name: "Announcement" }
+const USERS: Check["object"] = { kind: "Catalog", name: "Users" }
 const ORGANIZATION: Check["object"] = { kind: "Catalog", name: "Organization" }
 
 // Інваріант І6: кожна причина `check-form` має червоний тест. Мутація — прибрати
@@ -133,6 +152,32 @@ describe("sql.declaration-check-form", () => {
       reason: "targetParameter",
     },
     {
+      name: "targetParameter: a schema-qualified type that is not pg_catalog",
+      check: { action: "read", object: TASK, row: "p_row" },
+      sql: fn("p_row public.uuid"),
+      reason: "targetParameter",
+    },
+    {
+      name: "targetParameter: a SETOF uuid parameter",
+      check: { action: "read", object: TASK, row: "p_row" },
+      sql: fn("p_row SETOF uuid"),
+      reason: "targetParameter",
+    },
+    {
+      // Читання Users обмежує межа видимості (ключ рядка — id користувача).
+      name: "targetRequired: read of Users without a target",
+      check: { action: "read", object: USERS },
+      sql: fn(""),
+      reason: "targetRequired",
+    },
+    {
+      // Інші дії Users межі видимості не мають: предикат не читає рядка.
+      name: "targetForbidden: update of Users with a row",
+      check: { action: "update", object: USERS, row: "p_row" },
+      sql: fn("p_row uuid"),
+      reason: "targetForbidden",
+    },
+    {
       name: "scopeUnscoped: scope on an unscoped object",
       check: { action: "read", object: ANNOUNCEMENT, scope: "p_scope" },
       sql: fn("p_scope uuid"),
@@ -193,6 +238,16 @@ describe("sql.declaration-check-form", () => {
       sql: fn("IN p_row pg_catalog.uuid"),
     },
     {
+      name: "read of a Users row (the visible-users boundary reads the key)",
+      check: { action: "read", object: USERS, row: "p_row" },
+      sql: fn("p_row uuid"),
+    },
+    {
+      name: "update of Users without a target",
+      check: { action: "update", object: USERS },
+      sql: fn(""),
+    },
+    {
       name: "create in a scope of a scoped object",
       check: { action: "create", object: TASK, scope: "p_scope" },
       sql: fn("p_scope uuid"),
@@ -227,6 +282,29 @@ describe("sql.declaration-check-form", () => {
     )
     expect(forms).toEqual([at("unknownAction")])
     expect(result.model).toBeUndefined()
+  })
+
+  // Без жодної ролі функцій прав немає, а з ними й межі видимості
+  // «Користувачів» (`hasVisibleUsers`): читання Users рядка не читає.
+  it("Users read has no row target without any role", async () => {
+    const noRoles: Layer = without(
+      ...["OrgAdmin", "OrgMember", "ProjectLead", "Support", "Everyone"].map(
+        ROLE_FILE
+      )
+    )
+    const row = { action: "read", object: USERS, row: "p_row" } as const
+    const withRow = await judged(row, fn("p_row uuid"), undefined, noRoles)
+    expect(withRow.forms).toEqual([at("targetForbidden")])
+    const none = await judged(
+      { action: "read", object: USERS },
+      fn(""),
+      undefined,
+      noRoles
+    )
+    expect(none.forms).toEqual([])
+    expect(
+      none.result.diagnostics.filter((d) => d.severity === "error")
+    ).toEqual([])
   })
 
   it("is an error that the repair class does not pass", () => {

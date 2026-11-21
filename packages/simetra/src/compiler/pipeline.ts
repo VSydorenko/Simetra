@@ -19,7 +19,11 @@ import {
   type Diagnostic,
 } from "./diagnostics"
 import { modelHash } from "./canonical"
-import { accessContracts, buildAccessUnits } from "./access-units"
+import {
+  accessContracts,
+  buildAccessUnits,
+  readBoundaries,
+} from "./access-units"
 import {
   buildContracts,
   derivedFunctions,
@@ -55,6 +59,7 @@ import {
   buildRightsUnits,
   hasActorSnapshot,
   hasRightsFunctions,
+  hasVisibleUsers,
 } from "./rights/functions"
 import { buildClientSnapshotUnits } from "./rights/client-snapshot"
 import { buildExplainUnits } from "./rights/explain-units"
@@ -405,21 +410,6 @@ export async function runStages(
     physical,
     stage1.project
   )
-  // Мітка виду й UUID кастомної дії для `check` декларації є лише на
-  // контрактах прав (Р1); хибна `check` — не клас ремонту, тож зупиняє і в
-  // режимі `repair`.
-  const checkForms = checkDeclaredChecks(
-    declared,
-    sql.units,
-    stage1.objects,
-    rights
-  )
-  if (checkForms.length > 0) {
-    return {
-      ok: false,
-      diagnostics: sortDiagnostics([...staged, ...checkForms]),
-    }
-  }
   const roles = roleContracts(stage1.objects, stage2.references)
   // Рівень ролі й вимоги дій видно лише на контрактах прав, а ті будуються
   // лише на моделі без помилок — тож ці помилки йдуть після гейта стадій 4–5,
@@ -632,6 +622,39 @@ export async function runStages(
     physical,
     stage1.project
   )
+  // Мітка виду й UUID кастомної дії для `check` декларації є лише на
+  // контрактах прав (Р1), а чи читає дія рядок через межу «Користувачів» — на
+  // контрактах доступу й членства, тож суддя стоїть після їх побудови, до
+  // одиниць. Хибна `check` — не клас ремонту, тож зупиняє і в режимі `repair`.
+  const visibleUsers = hasVisibleUsers(
+    {
+      roles,
+      users,
+      membership,
+      membershipSources: sources.membershipSources,
+    },
+    stage1.project.database.provider
+  )
+  const checkForms = checkDeclaredChecks(
+    declared,
+    sql.units,
+    stage1.objects,
+    rights,
+    new Set(
+      access.flatMap((contract) =>
+        contract.rights !== undefined &&
+        readBoundaries(contract, visibleUsers).includes("users")
+          ? [contract.rights.objectId]
+          : []
+      )
+    )
+  )
+  if (checkForms.length > 0) {
+    return {
+      ok: false,
+      diagnostics: sortDiagnostics([...staged, ...checkForms]),
+    }
+  }
   // Один об'єкт контрактів для функцій прав і для пояснення видимості: поле,
   // додане лише в одне місце, дало б двом генераторам різні контракти.
   const rightsInputs = {
