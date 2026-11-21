@@ -166,12 +166,17 @@ function scopeBranch(
   const scope = must(access.scope)
   return [
     tenantBoundary({ ...scope, carrier: "p_scope" }),
-    renderCondition({
+    `(${renderCondition({
       kind: "column",
       column: "p_scope",
       set: anyScopeSet(contract, action),
       grantDependent: true,
-    }),
+    })} OR ${renderCondition({
+      kind: "column",
+      column: "p_scope",
+      set: { ...anyScopeSet(contract, action), fn: RIGHTS_FUNCTIONS.own },
+      grantDependent: true,
+    })})`,
   ].join(" AND ")
 }
 
