@@ -199,6 +199,15 @@ export interface FakeSource {
    * an earlier moment sees the visibility of that moment. Returns the tick.
    */
   setVisibleScopes(scopes: Iterable<string | null> | undefined): number
+  /**
+   * The same for one object on top of {@link setVisibleScopes}: its rows are
+   * visible only in these scopes (rights that differ per object, as RLS);
+   * `undefined` — no extra limit. Part of the history too. Returns the tick.
+   */
+  setObjectScopes(
+    object: FakeObject,
+    scopes: Iterable<string | null> | undefined
+  ): number
   /** Marks a row as alone exceeding the response budget. */
   oversize(object: FakeObject, key: Key, on?: boolean): void
 }
@@ -275,9 +284,18 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
   const tableOf = (object: FakeObject) => tables.get(nameOf(entryOf(object)))!
   const linesId = (object: ObjectName, owner: Key, section: string) =>
     `${object}\u0000${owner}\u0000${section}`
+  // Межа видимості окремого об'єкта поверх загальної, теж ревізіями.
+  const objectVisibility = new Map<
+    string,
+    Revision<ReadonlySet<string | null> | "all">[]
+  >()
   const isVisible = (entry: CatalogEntry, values: Values, at: number) => {
+    const scope = scopeOf(entry, values)
     const scopes = valueAt(visibility, at) ?? "all"
-    return scopes === "all" || scopes.has(scopeOf(entry, values))
+    if (scopes !== "all" && !scopes.has(scope)) return false
+    const own = objectVisibility.get(`${entry.kind}.${entry.name}`)
+    const mine = own === undefined ? "all" : (valueAt(own, at) ?? "all")
+    return mine === "all" || mine.has(scope)
   }
   const isOversized = (entry: CatalogEntry, key: unknown) =>
     oversized.has(`${entry.kind}.${entry.name}\u0000${String(key)}`)
@@ -803,6 +821,18 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
       return values === null
         ? undefined
         : { key, version: values[entry.versionName] as number, values }
+    },
+    setObjectScopes(object, scopes) {
+      const entry = entryOf(object)
+      const name = `${entry.kind}.${entry.name}`
+      const at = ++clock
+      const history = objectVisibility.get(name) ?? [{ at: 0, value: "all" }]
+      history.push({
+        at,
+        value: scopes === undefined ? "all" : new Set(scopes),
+      })
+      objectVisibility.set(name, history)
+      return at
     },
     setVisibleScopes(scopes) {
       const at = ++clock

@@ -278,6 +278,11 @@ export interface CoreInspection {
    * is already `removed`; the model then expects no older read to lift it.
    */
   watchRemarks(listener: (object: ObjectName, key: Key) => void): void
+  /**
+   * Subscribes to the moment right before the pass of a rights snapshot
+   * replacement: the model reads the store the pass is about to judge.
+   */
+  watchRightsPass(listener: () => void): void
   /** The mutations in the journal of own mutations. */
   mutations(): JournalInspection[]
   /** The plans the scheduler made (calls of one turn merge into one). */
@@ -406,6 +411,7 @@ export function createCore(options: {
   // доданий через `inspectCore` після створення, діє одразу.
   const defects = new Set<DefectFlag>()
   let remarkListener: ((object: ObjectName, key: Key) => void) | undefined
+  let rightsPassListener: (() => void) | undefined
   const session = createSession({
     subject: options.subject,
     limits,
@@ -727,6 +733,7 @@ export function createCore(options: {
     next: RightsState,
     item: CoreReadItem
   ) {
+    rightsPassListener?.()
     const denied = deniedBy(next.snapshot)
     const deniedBefore =
       prev === undefined || !defects.has("rights-pass-by-diff")
@@ -742,6 +749,12 @@ export function createCore(options: {
               : (object, scope) =>
                   denied(object, scope) && !deniedBefore(object, scope)
           )
+    // Дефект самотесту: прохід прибирає кожну пару об'єкта, що втратив хоч одну.
+    const judged = defects.has("rights-pass-purges-allowed")
+      ? deniedPairs(writerContext, (object) =>
+          pairs.some((p) => p.object === object)
+        )
+      : pairs
     const lost = [...objects.values()].filter((o) =>
       readLost(prev?.snapshot, next.snapshot, o.entry)
     )
@@ -759,12 +772,12 @@ export function createCore(options: {
         )
         .map((owner) => ({ o, owner }))
     )
-    if (pairs.length > 0 || headerless.length > 0) {
+    if (judged.length > 0 || headerless.length > 0) {
       session.commit(
         (scope) => {
           try {
             const writer = createWriter(writerContext, scope)
-            for (const { object, scope: pair } of pairs)
+            for (const { object, scope: pair } of judged)
               writer.purge(object, { scope: pair }, { rights: true })
             for (const { o, owner } of headerless)
               ops.clearOwner(scope, o, owner)
@@ -1734,6 +1747,9 @@ export function createCore(options: {
     defects,
     watchRemarks(listener) {
       remarkListener = listener
+    },
+    watchRightsPass(listener) {
+      rightsPassListener = listener
     },
     mutations: () => overlay.entries(),
     schedulerPlans: () => scheduler.plans(),

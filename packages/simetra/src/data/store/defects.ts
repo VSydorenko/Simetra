@@ -102,6 +102,8 @@ export type DefectFlag =
   | "rights-first-no-pass"
   /** A rights replacement purges only the pairs the previous snapshot allowed. */
   | "rights-pass-by-diff"
+  /** The rights pass purges every stored pair of an object that lost any pair. */
+  | "rights-pass-purges-allowed"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>
