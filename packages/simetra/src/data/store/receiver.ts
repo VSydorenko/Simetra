@@ -15,7 +15,7 @@ import { evaluateFilter, fieldInfoOf } from "./filter"
 import type { ObjectState } from "./forms"
 import { scopeOf, visibleRow, type RowEntry } from "./object-store"
 import { canSubscribe } from "./rights"
-import { readKeys, tracked } from "./source"
+import { ReadLimiterClosed, readKeys, tracked } from "./source"
 import type {
   GenerationToken,
   Key,
@@ -37,7 +37,7 @@ import {
  * Приймач сигналів (спека П4-B §8.4): модуль ядра, не рантайму. Життєвий
  * цикл і підписки — які канали змін тримати за знімком прав і активними
  * виглядами; розбір повідомлень, пачка й кроки 1–7 обробки пачки об'єкта.
- * Приєднання, розрив і відмови каналів — окрема задача плану.
+ * Приєднання (хвиля — стан ядра), `recovered`, розрив і відмови каналів.
  */
 
 /** Тиша, після якої пачка сигналів закривається. */
@@ -46,6 +46,10 @@ export const QUIET_MS = 50
 export const MAX_BATCH_MS = 2000
 /** Скільки разів дочитується ключ з очікуваною мінімальною версією. */
 export const MIN_VERSION_RETRIES = 3
+/** Джитер приєднання: одна хвиля перечитує свої об'єкти за строком у цьому вікні. */
+export const REJOIN_JITTER_MS = 2000
+/** Тиша після `recovered: true`, за якої пропущеного немає і «розрив» знімається. */
+export const RECOVERED_SETTLE_MS = 50
 /** Вікно дедуплікації: стільки останніх `id` повідомлень. */
 export const SEEN_SIGNALS_MAX = 4096
 
@@ -65,6 +69,12 @@ export interface ReceiverContext {
   commit(fn: (writer: Writer) => void, token: GenerationToken): boolean
   /** The collator of the runtime's filter tests (one per runtime). */
   readonly filterCollator: Intl.Collator
+  /** A channel joined without `recovered`: its object joins the rejoin wave. */
+  joinWave(channel: string, object: ObjectName): void
+  /** The core's `requestVersion` (a refusal without a channel, §10). */
+  requestVersion(): void
+  /** The transport refused the connection for good: the runtime closes. */
+  connectionRefused(): void
 }
 
 export interface Receiver {
@@ -149,6 +159,9 @@ const mergeBatch = (into: Batch, from: Batch) => {
 // закриття сесії таймерів не лишає.
 interface Open {
   readonly batch: Batch
+  // Канали з `recovered: true`, чий перший сигнал у цій пачці: «розрив» знімається
+  // після неї.
+  readonly recovered: Set<string>
   quiet: AbortController | undefined
   readonly max: AbortController
 }
@@ -235,14 +248,68 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     return channels
   }
 
+  // Канал знято: його очікування «відновлених» більше нічого не знімає.
+  const forget = (channel: string) => {
+    awaiting.get(channel)?.abort()
+    awaiting.delete(channel)
+  }
+
+  // Об'єкт і скоуп пари каналу змін; `null` — нескоуплений об'єкт (`ZERO_UUID`).
+  const pairOf = (channel: string) => {
+    const parsed = parseTopic(channel)
+    if (parsed?.kind !== "changes") return undefined
+    const entry = ctx.index.byId.get(parsed.object)
+    if (entry === undefined) return undefined
+    return {
+      object: `${entry.kind}.${entry.name}` as ObjectName,
+      scope: entry.scopeColumn === undefined ? null : parsed.scope,
+    }
+  }
+
   const onError = (error: SignalError) => {
-    if (stopped || error.kind !== "auth" || error.channel === undefined) return
+    if (stopped || !token.valid) return
+    // Розрив: рядки каналу (чи всі) не знають, що пропустили (§8.4).
+    if (error.kind === "transport") {
+      if (error.channel !== undefined && !held.has(error.channel)) return
+      ctx.commit((w) => w.markDisconnected(error.channel), token)
+      return
+    }
+    // Друга відмова токена з'єднання поспіль: транспорт не відновиться.
+    if (error.final === true) return ctx.connectionRefused()
+    // Відмова без каналу — токен з'єднання: `version` звіряє користувача (§10),
+    // N відмов однієї мікрозадачі — один запит.
+    if (error.channel === undefined) return ctx.requestVersion()
     const slot = held.get(error.channel)
     if (slot === undefined) return
     held.delete(error.channel)
     refused.add(error.channel)
+    forget(error.channel)
     slot.off?.()
+    // Дані пари, на які права зникли, не лишаються в пам'яті (Р12); `purge`
+    // скидає й незакриту пачку пари через `purged`.
+    const pair = pairOf(error.channel)
+    if (pair !== undefined)
+      ctx.commit((w) => w.purge(pair.object, { scope: pair.scope }), token)
   }
+
+  // Канал (пере)підписано: без `recovered` його об'єкт іде в хвилю приєднання
+  // ядра; з `recovered` пропущеного немає, «розрив» знімає пачка відновлених
+  // сигналів, а без них — тиша `RECOVERED_SETTLE_MS`.
+  const offSubscribed = transport.onSubscribed(({ channel, recovered }) => {
+    if (stopped || !token.valid || !held.has(channel)) return
+    const pair = pairOf(channel)
+    if (pair === undefined) return
+    if (!recovered) return ctx.joinWave(channel, pair.object)
+    forget(channel)
+    const quiet = new AbortController()
+    awaiting.set(channel, quiet)
+    void session.sleep(RECOVERED_SETTLE_MS, quiet.signal).then(() => {
+      if (quiet.signal.aborted) return
+      awaiting.delete(channel)
+      if (stopped || !token.valid) return
+      ctx.commit((w) => w.clearDisconnected(channel), token)
+    })
+  })
 
   // ------------------------------------------------------------ пачка
 
@@ -263,6 +330,10 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   // «один запит на вигляд за пачку» тримається і під зворотним тиском.
   let waiting: Batch | undefined
   let flying = false
+  // Канали пачки, що чекають, і канали `recovered: true`, чий перший сигнал ще
+  // не прийшов (таймер `RECOVERED_SETTLE_MS`).
+  const waitingRecovered = new Set<string>()
+  const awaiting = new Map<string, AbortController>()
 
   const closeOpen = (batch: Open) => {
     if (open !== batch) return
@@ -270,12 +341,17 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     batch.quiet?.abort()
     batch.max.abort()
     if (stopped || !token.valid) return
-    enqueue(batch.batch)
+    enqueue(batch.batch, batch.recovered)
   }
 
   const startOpen = (): Open => {
     const max = new AbortController()
-    const batch: Open = { batch: new Map(), quiet: undefined, max }
+    const batch: Open = {
+      batch: new Map(),
+      recovered: new Set(),
+      quiet: undefined,
+      max,
+    }
     void session.sleep(MAX_BATCH_MS, max.signal).then(() => {
       if (!max.signal.aborted) closeOpen(batch)
     })
@@ -284,11 +360,16 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
 
   // Кожен сигнал відсуває закриття на `QUIET_MS`, але не далі за `MAX_BATCH_MS`
   // від першого.
-  const collect = (fill: (batch: Batch) => void) => {
+  const collect = (fill: (batch: Batch) => void, channel?: string) => {
     if (stopped || !token.valid) return
     open ??= startOpen()
     const batch = open
     fill(batch.batch)
+    if (channel !== undefined && awaiting.has(channel)) {
+      awaiting.get(channel)?.abort()
+      awaiting.delete(channel)
+      batch.recovered.add(channel)
+    }
     batch.quiet?.abort()
     const quiet = new AbortController()
     batch.quiet = quiet
@@ -297,18 +378,28 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     })
   }
 
-  function enqueue(batch: Batch) {
+  function enqueue(batch: Batch, recovered: ReadonlySet<string> = new Set()) {
     waiting ??= new Map()
     mergeBatch(waiting, batch)
+    for (const channel of recovered) waitingRecovered.add(channel)
     pump()
   }
 
   function pump() {
     if (flying || waiting === undefined || stopped || !token.valid) return
     const batch = waiting
+    const recovered = new Set(waitingRecovered)
     waiting = undefined
+    waitingRecovered.clear()
     flying = true
     run(batch)
+      .then((read) => {
+        // Пачка відновлених сигналів прочитана без збою — пропущене надолужено.
+        if (read && recovered.size > 0 && !stopped)
+          ctx.commit((w) => {
+            for (const channel of recovered) w.clearDisconnected(channel)
+          }, token)
+      })
       .catch((error: unknown) => writer.log({ kind: "listener-failed", error }))
       .finally(() => {
         flying = false
@@ -335,7 +426,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const invalidate = () =>
       collect((batch) => {
         objectBatch(batch, object).invalidate.add(scope)
-      })
+      }, topic)
     const change = receivedChangeSchema.safeParse(payload)
     const parsed = change.success
       ? change
@@ -350,13 +441,15 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const [column, value] = Object.entries(keys)[0] ?? []
     // Колонка, якої каталог не знає як ключ, — нерозібране.
     if (column !== entry.key || value === undefined) return invalidate()
-    collect((batch) =>
-      addKey(objectBatch(batch, object), value.toLowerCase(), {
-        version: op === "delete" ? -1 : version,
-        deleted: op === "delete",
-        attempt: 0,
-        scopes: new Set([scope]),
-      })
+    collect(
+      (batch) =>
+        addKey(objectBatch(batch, object), value.toLowerCase(), {
+          version: op === "delete" ? -1 : version,
+          deleted: op === "delete",
+          attempt: 0,
+          scopes: new Set([scope]),
+        }),
+      topic
     )
   }
 
@@ -435,8 +528,10 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         known: (keys) => o.rows.knownFor(keys, { owned, form: "list" }),
       }).catch((error: unknown) => {
         // Збій читання не губить сигнал мовчки: вигляди об'єкта позначено, а
-        // журнал знає (як `reread` ключа після власного запису).
-        writer.log({ kind: "listener-failed", error })
+        // журнал знає (як `reread` ключа після власного запису). Закриття
+        // обмежувача — не збій: так закривається рантайм.
+        if (!(error instanceof ReadLimiterClosed))
+          writer.log({ kind: "listener-failed", error })
         return undefined
       }),
     }
@@ -555,7 +650,8 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     }
   }
 
-  const run = async (batch: Batch): Promise<void> => {
+  // Істина — пачка прочитана без збою і без відкладення на `resume()`.
+  const run = async (batch: Batch): Promise<boolean> => {
     const jobs: Job[] = []
     const flights: Promise<void>[] = []
     // `needsRefresh` невидимим виглядам (`spec` немає — усім виглядам об'єкта).
@@ -612,7 +708,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     for (const object of requested) writer.schedule(object, 0)
     const answers = await Promise.all(jobs.map((job) => job.rows))
     await Promise.all(flights)
-    if (stopped || !token.valid) return
+    if (stopped || !token.valid) return false
     const failed = jobs.filter((_, at) => answers[at] === undefined)
     if (failed.length > 0)
       ctx.commit((w) => {
@@ -629,6 +725,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
           settleJob(w, job, rows, (...args) => again.push(args))
       }, token)
     for (const args of again) scheduleRetry(...args)
+    return failed.length === 0 && requested.length === 0
   }
 
   const join = (channel: string) => {
@@ -643,11 +740,19 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     planned = false
     if (stopped || !writer.session.token().valid) return
     const next = wanted()
+    const dropped: string[] = []
     for (const [channel, slot] of [...held]) {
       if (next.has(channel)) continue
       held.delete(channel)
+      forget(channel)
+      dropped.push(channel)
       slot.off?.()
     }
+    // Знятий канал не оновить своїх рядків: його «розрив» знімається разом з ним.
+    if (dropped.length > 0)
+      ctx.commit((w) => {
+        for (const channel of dropped) w.clearDisconnected(channel)
+      }, token)
     for (const channel of next)
       if (!held.has(channel) && !refused.has(channel)) join(channel)
   }
@@ -699,6 +804,10 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       open = undefined
       waiting = undefined
       retries.clear()
+      waitingRecovered.clear()
+      for (const quiet of awaiting.values()) quiet.abort()
+      awaiting.clear()
+      offSubscribed()
       for (const slot of held.values()) slot.off?.()
       held.clear()
     },

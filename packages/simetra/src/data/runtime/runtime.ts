@@ -485,6 +485,9 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
       // Інший користувач у відповіді `rights` (Р7) — той самий шлях, що й
       // відмова `session-changed` транспорту: ядро кличе це поза `commit`.
       onSessionChanged: () => sessionChanged(SESSION_CHANGED),
+      // Друга відмова токена сигнального з'єднання поспіль: рантайм закривається
+      // тим самим шляхом, що й `dispose()`, але з причиною відмови.
+      onConnectionRefused: () => close(DISPOSED, "connection-refused"),
       ...(options.onStaleClient === undefined
         ? {}
         : { onStaleClient: options.onStaleClient }),

@@ -31,7 +31,7 @@ import {
 } from "./source"
 import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
-import { createReceiver, type Receiver } from "./receiver"
+import { REJOIN_JITTER_MS, createReceiver, type Receiver } from "./receiver"
 import { createScheduler } from "./scheduler"
 import { createRegistry, type Subset, type SubsetRegistry } from "./subsets"
 import {
@@ -416,6 +416,12 @@ export function createCore(options: {
    * closes itself here; a core left open closes with `session-changed`.
    */
   onSessionChanged?: () => void
+  /**
+   * Called, outside any `commit`, when the signal transport refused the
+   * connection for good (`SignalError.final`). The runtime closes itself
+   * here; a core left open closes with `connection-refused`.
+   */
+  onConnectionRefused?: () => void
   /** The monotonic clock in ms; tests substitute it, hosts never do. */
   now?: () => number
 }): CoreSession {
@@ -1183,6 +1189,7 @@ export function createCore(options: {
     tails.clear()
     purges.clear()
     scheduled.clear()
+    wave = undefined
     scheduler.stop()
     staleObjects.clear()
     receiver?.stop()
@@ -1244,6 +1251,92 @@ export function createCore(options: {
       for (const s of views) held.retry.views.add(s)
     }
     scheduler.request()
+  }
+
+  // Хвиля приєднання (§8.4, Р10): канали, що (пере)підписались, перечитують свої
+  // об'єкти разом, з одним строком на хвилю — рестарт Centrifugo не дає шквалу.
+  // Строк хвилі — доданок `schedulerDue`, тож власного таймера немає: на
+  // прихованій вкладці хвилю бере `resume()`.
+  let wave:
+    { at: number; readonly channels: Map<string, ObjectName> } | undefined
+  let lastWaveAt: number | undefined
+  function joinWave(channel: string, object: ObjectName) {
+    if (!session.token().valid || staleObjects.has(object)) return
+    if (wave === undefined) {
+      const at = Math.floor(Math.random() * REJOIN_JITTER_MS) + now()
+      wave = {
+        // Нова хвиля не раніше ніж через вікно після попередньої: флапання
+        // не дає запитів частіше.
+        at:
+          lastWaveAt === undefined
+            ? at
+            : Math.max(at, lastWaveAt + REJOIN_JITTER_MS),
+        channels: new Map(),
+      }
+    }
+    wave.channels.set(channel, object)
+    scheduler.request()
+  }
+
+  // Спрацювання хвилі — один синхронний хід (збирач зливає читання в один
+  // пакет). Позначку «розрив» каналу знімає стан виглядів, а не проміс:
+  // `revalidate` осідає успішно й тоді, коли вигляд перейшов в `error`.
+  function fireWave() {
+    const fired = wave
+    wave = undefined
+    if (fired === undefined || !session.token().valid) return
+    const token = session.token()
+    const startedAt = now()
+    lastWaveAt = startedAt
+    core.requestVersion()
+    core.requestRights()
+    const invisible: { object: ObjectName; spec: ViewSpec }[] = []
+    const reads: Promise<void>[] = []
+    for (const object of new Set(fired.channels.values())) {
+      if (staleObjects.has(object)) continue
+      const views = activeViews(writerContext, object)
+      for (const view of views)
+        if (!view.visible) invisible.push({ object, spec: view.spec })
+      if (views.some((v) => v.visible))
+        reads.push(
+          revalidate(writerContext, object, { visibleOnly: true }).catch(
+            (error: unknown) => log({ kind: "listener-failed", error })
+          )
+        )
+    }
+    if (invisible.length > 0)
+      core.commit((w) => {
+        for (const { object, spec } of invisible)
+          w.markViews(object, { needsRefresh: true }, spec)
+      }, token)
+    void Promise.all(reads).then(() => {
+      if (!token.valid) return
+      const settled = [...fired.channels].filter(([, object]) =>
+        activeViews(writerContext, object).every((view) => {
+          const s = registry.find(view.spec)
+          return (
+            s !== undefined &&
+            s.status !== "error" &&
+            s.refreshedAt !== undefined &&
+            s.refreshedAt >= startedAt
+          )
+        })
+      )
+      if (settled.length > 0)
+        core.commit((w) => {
+          for (const [channel] of settled) w.clearDisconnected(channel)
+        }, token)
+    })
+  }
+
+  // Рантайм чи ядро закривається, коли транспорт відмовив назавжди (`final`).
+  function connectionRefused() {
+    try {
+      options.onConnectionRefused?.()
+    } catch (error) {
+      log({ kind: "listener-failed", error })
+    }
+    if (session.token().valid) core.close("connection-refused")
   }
 
   // Бере строки, що настали, й перечитує їх зараз (тільки на видимій вкладці:
@@ -1351,7 +1444,9 @@ export function createCore(options: {
   // Запит скидає `scheduled`: після межі відкинутих жодне відкладене читання
   // не має виконатися (§6.2).
   function dropDeferredWhenUnavailable() {
-    if (session.versions.unavailable()) scheduled.clear()
+    if (!session.versions.unavailable()) return
+    scheduled.clear()
+    wave = undefined
   }
 
   function schedulerDue(): number | undefined {
@@ -1375,6 +1470,8 @@ export function createCore(options: {
     const rightsAt = rightsDueAt()
     if (rightsAt !== undefined && (due === undefined || rightsAt < due))
       due = rightsAt
+    if (wave !== undefined && (due === undefined || wave.at < due))
+      due = wave.at
     return due
   }
 
@@ -1414,6 +1511,7 @@ export function createCore(options: {
         )
           read = true
       if (runDue()) read = true
+      if (wave !== undefined && wave.at <= now()) fireWave()
       if (read) lastTickAt = now()
       // Знімок має власний строк; без видимих виглядів пакет несе лише його.
       const rightsAt = rightsDueAt()
@@ -1470,6 +1568,9 @@ export function createCore(options: {
       visible: () => visible,
       commit: (fn, token) => core.commit(fn, token),
       filterCollator: collator,
+      joinWave,
+      requestVersion: () => core.requestVersion(),
+      connectionRefused,
     })
     // Кожен `commit` міг змінити активні вигляди чи скоупи їхніх рядків.
     session.onFlush(() => receiver?.touch())
@@ -1745,6 +1846,9 @@ export function createCore(options: {
       // відкинутої відповіді), беруться незалежно від `minAgeMs`: їхні рядки
       // вже `stale`, а свіжість тут не міра.
       runDue()
+      // Хвиля, що чекала на прихованій вкладці, іде першою: звірка нижче вигляд
+      // у польоті не бере.
+      fireWave()
       // Злиття: подвійний сигнал повернення (focus + visibilitychange) — одна
       // звірка; відлік іде від останнього прийнятого, а не від кожного виклику.
       const at = now()

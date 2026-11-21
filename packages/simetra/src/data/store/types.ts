@@ -170,7 +170,11 @@ export type RowView =
 
 /** Why a session or view was closed. */
 export type CloseReason =
-  "disposed" | "session-changed" | "signed-out" | "subject-changed"
+  | "connection-refused"
+  | "disposed"
+  | "session-changed"
+  | "signed-out"
+  | "subject-changed"
 
 /** The immutable snapshot of one view. */
 export interface ViewSnapshot {

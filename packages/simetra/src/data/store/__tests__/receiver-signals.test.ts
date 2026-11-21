@@ -644,6 +644,9 @@ describe("purge of a pair", () => {
     await settle()
     const keys = keyReadsSince(h, h.from).flatMap((r) => keysOf(r.query))
     expect(keys).toEqual([key(12)])
+    // Ключ 13 пари S не записано в сховище: нових ключів приймач не пише.
+    expect(h.inspect.rowCount()).toBe(0)
+    expect(h.handle.getSnapshot().rows.map((r) => r.key)).not.toContain(key(13))
   })
 
   it("drops a min-version re-read waiting out its pause: 0 requests after the purge", async () => {
