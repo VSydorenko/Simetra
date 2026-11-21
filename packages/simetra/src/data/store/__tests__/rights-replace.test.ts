@@ -308,8 +308,8 @@ describe("the pass on a snapshot replacement", () => {
     grant(fake, snapshotOf([readRow(S), readRow(T)], [S, T, CONTAINER]))
     core.requestRights()
     await settle()
-    // Пара власника дозволена: перечитування повертає рядки.
-    expect(fake.log.filter(isSection).length).toBeGreaterThan(reads)
+    // Пара власника дозволена: одне перечитування повертає рядки.
+    expect(fake.log.filter(isSection)).toHaveLength(reads + 1)
     expect(linesOf(core, 1)?.lines).toHaveLength(1)
     expect(owned.getSnapshot().section?.lines).toHaveLength(1)
   })

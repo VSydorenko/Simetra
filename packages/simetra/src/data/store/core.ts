@@ -817,21 +817,6 @@ export function createCore(options: {
         "rights"
       )
     }
-    // Прибрані рядки ТЧ без відомого скоупу повертає перечитування їхніх
-    // змонтованих виглядів: інакше вигляд дозволеної пари лишився б без рядків.
-    const cleared = new Set(
-      headerless.map(({ o, owner }) => keyId(o.name, owner))
-    )
-    narrow(
-      denying.flatMap((o) =>
-        holdersOf(writerContext, o.name).filter(
-          (s) =>
-            s.form.spec.kind === "section" &&
-            cleared.has(keyId(o.name, s.form.spec.owner))
-        )
-      ),
-      next.appliedEpoch
-    )
     if (prev === undefined) {
       firstRights = {
         appliedEpoch: next.appliedEpoch,
