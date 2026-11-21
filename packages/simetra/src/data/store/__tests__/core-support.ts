@@ -1,4 +1,9 @@
-import type { CatalogEntry, ReadQuery, SourceAdapter } from "simetra/model"
+import type {
+  CatalogEntry,
+  ReadQuery,
+  SignalTransport,
+  SourceAdapter,
+} from "simetra/model"
 import {
   ORGANIZATION_ID,
   catalogEntry,
@@ -73,6 +78,8 @@ export function setup(
     rightsSnapshot?: boolean
     onRightsReplaced?: Parameters<typeof createCore>[0]["onRightsReplaced"]
     onSessionChanged?: () => void
+    /** The signal transport of the core; needs `rightsSnapshot` to be used. */
+    signals?: SignalTransport
   } = {}
 ): CoreHarness {
   const fake = createFakeSource({
@@ -124,6 +131,7 @@ export function setup(
     ...(options.onRightsReplaced === undefined
       ? {}
       : { onRightsReplaced: options.onRightsReplaced }),
+    ...(options.signals === undefined ? {} : { signals: options.signals }),
     ...(options.onSessionChanged === undefined
       ? {}
       : { onSessionChanged: options.onSessionChanged }),

@@ -10,6 +10,7 @@ import {
   type DataRequest,
   type DataResponse,
   type DataTransport,
+  type SignalTransport,
   type SourceAdapter,
 } from "simetra/model"
 import {
@@ -155,6 +156,14 @@ export interface DataRuntimeOptions {
   strict?: boolean
   /** Memory and request limits of the core (P4-B spec §6.2); positive integers. */
   limits?: Partial<CoreLimits>
+  /**
+   * The signal transport of this runtime's `subject` (P4-B spec §6.1, §8.5):
+   * called once on creation, only when the catalog has `rightsSnapshot`. The
+   * runtime owns the transport: every way of closing it calls `close()`
+   * synchronously, before `onSessionChanged`. A transport of another subject
+   * is never reused.
+   */
+  signals?: (subject: string) => SignalTransport
 }
 
 /**
@@ -269,6 +278,14 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
   const close = (error: CommandError, reason: CloseReason) => {
     if (closedWith !== undefined) return
     closedWith = error
+    // Транспорт закривається синхронно й першим: `core.close` усередині
+    // `commit` відкладається, а host після колбека вже створює рантайм
+    // нового користувача — старий не повинен більше нічого приймати.
+    try {
+      signalTransport?.close()
+    } catch (thrown) {
+      log({ kind: "listener-failed", error: thrown })
+    }
     try {
       core.close(reason)
     } catch {
@@ -417,6 +434,9 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     })
   }
 
+  // Без `rightsSnapshot` приймача немає (1-Р6): транспорт не створюється.
+  const signalTransport =
+    catalog.rightsSnapshot === true ? options.signals?.(subject) : undefined
   const serverFunction = serverFunctionAdapter(send)
   const adapters = new Map<string, SourceAdapter>()
   const source = createCoreSource(
@@ -443,6 +463,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     log,
     snapshotHash: catalog.snapshotHash,
     rightsSnapshot: catalog.rightsSnapshot === true,
+    ...(signalTransport === undefined ? {} : { signals: signalTransport }),
     // Інший користувач у відповіді `rights` (Р7) — той самий шлях, що й
     // відмова `session-changed` транспорту: ядро кличе це поза `commit`.
     onSessionChanged: () => sessionChanged(SESSION_CHANGED),

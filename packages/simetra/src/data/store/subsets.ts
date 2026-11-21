@@ -82,6 +82,8 @@ export interface RegistryContext {
   readHydrated(s: Subset): void
   /** The set of visible views changed: the scheduler re-plans its timer. */
   touchSchedule(): void
+  /** A subset was created: the signal receiver re-plans its channels. */
+  touchSubscriptions(): void
 }
 
 type Timer = ReturnType<typeof setTimeout>
@@ -824,6 +826,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       headerState: undefined,
     }
     subsets.set(form.specKey, s)
+    ctx.touchSubscriptions()
     return s
   }
 

@@ -1,4 +1,9 @@
-import { FILTER_IN_MAX, READ_LIMIT_MAX, type CatalogIndex } from "simetra/model"
+import {
+  FILTER_IN_MAX,
+  READ_LIMIT_MAX,
+  type CatalogIndex,
+  type SignalTransport,
+} from "simetra/model"
 import type { DefectFlag } from "./defects"
 import { fieldInfoOf, filterCollator } from "./filter"
 import { keyId, pairId, type PairBarrier } from "./epoch"
@@ -26,6 +31,7 @@ import {
 } from "./source"
 import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
+import { createReceiver, type Receiver } from "./receiver"
 import { createScheduler } from "./scheduler"
 import { createRegistry, type Subset, type SubsetRegistry } from "./subsets"
 import {
@@ -389,6 +395,12 @@ export function createCore(options: {
    * the `rights` part; without it nothing about rights is read or applied.
    */
   rightsSnapshot?: boolean
+  /**
+   * The signal transport of the runtime's subject (P4-B spec §8.5); with
+   * `rightsSnapshot` the core creates the signal receiver over it. The
+   * runtime owns the transport and closes it; the core only unsubscribes.
+   */
+  signals?: SignalTransport
   /** Called, outside any `commit`, when a snapshot replaces the current one. */
   onRightsReplaced?: (prev: RightsState | undefined, next: RightsState) => void
   /**
@@ -417,6 +429,9 @@ export function createCore(options: {
   const defects = new Set<DefectFlag>()
   let remarkListener: ((object: ObjectName, key: Key) => void) | undefined
   let rightsPassListener: (() => void) | undefined
+  // Приймач сигналів: створюється після `writerContext`, а реєстр і потік
+  // `commit` кличуть його вже з його допомогою.
+  let receiver: Receiver | undefined
   const session = createSession({
     subject: options.subject,
     limits,
@@ -735,6 +750,7 @@ export function createCore(options: {
     } catch (error) {
       log({ kind: "listener-failed", error })
     }
+    receiver?.snapshotReplaced()
   }
 
   // Правило втрати доступу й звуження на заміні знімка (§6.2 правило 4):
@@ -1002,6 +1018,7 @@ export function createCore(options: {
     now,
     readHydrated: (s) => readHydrated(s),
     touchSchedule: () => scheduler.request(),
+    touchSubscriptions: () => receiver?.touch(),
   })
 
   // ------------------------------------------------------------ знімок SSR
@@ -1159,6 +1176,7 @@ export function createCore(options: {
     scheduled.clear()
     scheduler.stop()
     staleObjects.clear()
+    receiver?.stop()
   })
 
   // Хвіст у польоті під час purge: його відповідь могла нести рядок, якого на
@@ -1431,6 +1449,17 @@ export function createCore(options: {
       erase: (object, key) => overlay.erase(object, key),
       eraseScope: (object, scope) => overlay.eraseScope(object, scope),
     },
+  }
+
+  if (options.signals !== undefined && rightsEnabled) {
+    receiver = createReceiver({
+      transport: options.signals,
+      index,
+      writer: writerContext,
+      rights: () => rights,
+    })
+    // Кожен `commit` міг змінити активні вигляди чи скоупи їхніх рядків.
+    session.onFlush(() => receiver?.touch())
   }
 
   // ------------------------------------------------------------ версія
