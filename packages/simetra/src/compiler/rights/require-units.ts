@@ -25,7 +25,11 @@ import type { PlpgsqlParser } from "../sql/plpgsql"
 import { generatedUnit, type SqlUnit } from "../sql/units"
 import { sqlLiteral } from "../stages/model"
 import type { ParsedObject } from "../stages/files"
-import { RIGHTS_FUNCTIONS, hasVisibleUsers } from "./functions"
+import {
+  RIGHTS_FUNCTIONS,
+  hasRightsFunctions,
+  hasVisibleUsers,
+} from "./functions"
 import { anyScopeSet, renderCondition, type PredicateDml } from "./predicates"
 import { must } from "./references"
 
@@ -147,8 +151,16 @@ function scopeBranch(
   ].join(" AND ")
 }
 
-function branchesOf(input: RequireInput): Map<Form, Branch[]> {
+function branchesOf(input: RequireInput): {
+  forms: Set<Form>
+  byForm: Map<Form, Branch[]>
+} {
   const visibleUsers = hasVisibleUsers(input.contracts, input.provider)
+  // Без функцій прав (проєкт без ролей) `simetra.rights_any` і решту не
+  // створено: гілка кликала б неіснуючу функцію (`42883` замість `42501`), тож
+  // функція запобіжника лишається без гілок — лише відмова.
+  const rightsOn = hasRightsFunctions(input.contracts, input.provider)
+  const forms = new Set<Form>()
   const found = new Map<string, { form: Form } & Branch>()
   for (const { declaration } of input.declared) {
     const check = declaration.check
@@ -166,6 +178,8 @@ function branchesOf(input: RequireInput): Map<Form, Branch[]> {
         : check.row !== undefined
           ? "row"
           : "none"
+    forms.add(form)
+    if (!rightsOn) continue
     // Ключ пари і форми: друга декларація тієї самої пари гілку не множить.
     const key = `${form}\0${contract.kindLabel}\0${action.action}`
     const main = must(mainTableOf(input.physical, contract.objectId))
@@ -199,7 +213,7 @@ function branchesOf(input: RequireInput): Map<Form, Branch[]> {
   )) {
     byForm.set(form, [...(byForm.get(form) ?? []), branch])
   }
-  return byForm
+  return { forms, byForm }
 }
 
 /**
@@ -243,7 +257,7 @@ function requireFunction(
  * від імені власника, а роль застосунку отримала б оракул наявності рядків.
  */
 export function buildRequireUnits(input: RequireInput): SqlUnit[] {
-  const byForm = branchesOf(input)
+  const { forms, byForm } = branchesOf(input)
   const unit = (sql: string, requires?: SqlUnit["requires"]): SqlUnit => ({
     ...generatedUnit(sql, PLATFORM_SCHEMA, input.parse),
     module: input.module,
@@ -254,16 +268,18 @@ export function buildRequireUnits(input: RequireInput): SqlUnit[] {
     {
       name: RIGHTS_FUNCTIONS.require,
       target: "p_row",
+      present: forms.has("row") || forms.has("none"),
       branches: [...(byForm.get("row") ?? []), ...(byForm.get("none") ?? [])],
     },
     {
       name: RIGHTS_FUNCTIONS.requireScope,
       target: "p_scope",
+      present: forms.has("scope"),
       branches: byForm.get("scope") ?? [],
     },
   ] as const
   return functions
-    .filter(({ branches }) => branches.length > 0)
+    .filter(({ present }) => present)
     .flatMap(({ name, target, branches }) => {
       const sql = requireFunction(name, target, branches)
       return [

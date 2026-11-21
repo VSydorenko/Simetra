@@ -6,7 +6,14 @@ import {
 } from "simetra/model"
 import { hasFixedBody } from "../sql/units"
 import { uuid } from "./helpers"
-import { TASK_FILE, USERS_FILE, withRoles, type Layer } from "./fixtures/rights"
+import {
+  ROLE_FILE,
+  TASK_FILE,
+  USERS_FILE,
+  without,
+  withRoles,
+  type Layer,
+} from "./fixtures/rights"
 
 /**
  * Генератор функцій запобіжника `simetra.rights_require` і
@@ -183,6 +190,33 @@ describe("rights_require / rights_require_scope generator", () => {
         "public.task",
       ])
     )
+  })
+
+  // Без ролей функцій прав немає: гілка кликала б неіснуючу `rights_any`
+  // (`42883` замість `42501`). Мутація: будувати гілки й без функцій прав.
+  it("has no branches and no rights function edge in a project without roles", async () => {
+    const noRoles = without(
+      ...["OrgAdmin", "OrgMember", "ProjectLead", "Support", "Everyone"].map(
+        ROLE_FILE
+      )
+    )
+    const all = await units([task("read"), task("create", "scope")], noRoles)
+    for (const name of ["rights_require", "rights_require_scope"]) {
+      const sql = functionOf(all, name)!
+      expect(sql).not.toContain("rights_any")
+      expect(sql).not.toContain("IF p_object")
+      expect(sql).toMatch(
+        /BEGIN\n {2}RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'rights.forbidden', DETAIL = 'no-right';\nEND\n/
+      )
+    }
+    const required = all.flatMap((u) =>
+      u.class === "function" ? (u.requires ?? []) : []
+    )
+    expect(
+      required.filter(
+        (n) => n.type === "unit" && n.identity.includes("simetra.rights_")
+      )
+    ).toEqual([])
   })
 
   describe("the condition of a branch", () => {
