@@ -165,6 +165,7 @@ function scopeBranch(
 ): string {
   const scope = must(access.scope)
   return [
+    tenantBoundary({ ...scope, carrier: "p_scope" }),
     renderCondition({
       kind: "column",
       column: "p_scope",
