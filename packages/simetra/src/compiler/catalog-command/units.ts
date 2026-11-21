@@ -42,6 +42,7 @@ import {
 } from "../rights/root-creator-units"
 import { textNames, type CreationNode } from "../sql/dependencies"
 import { executeGrants } from "../sql/execute-grants"
+import { keyIdentity, qualifiedName, unitIdentity } from "../sql/identity"
 import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
 import { generatedUnit, type SqlUnit } from "../sql/units"
@@ -407,7 +408,7 @@ export function bodyRequires(
           (t) => t.schema === name.schema && t.name === name.name
         )
         if (table !== undefined) {
-          nodes.set(`table:${relation(table)}`, {
+          nodes.set(unitIdentity("table", table.schema, table.name), {
             type: "table",
             schema: table.schema,
             name: table.name,
@@ -417,7 +418,9 @@ export function bodyRequires(
     }
     for (const name of textNames(text, input.parse, "proc")) {
       if (name.schema === undefined) continue
-      const prefix = `function:${name.schema}.${name.name}(`
+      // Префікс ідентичності — за правилом `identity.ts`: сирий `схема.ім'я`
+      // не збігся б із функцією `"F"`, і ребро до неї мовчки зникло б.
+      const prefix = `${keyIdentity("function", qualifiedName(name.schema, name.name))}(`
       for (const unit of input.units) {
         if (unit.class === "function" && unit.identity.startsWith(prefix)) {
           nodes.set(unit.identity, { type: "unit", identity: unit.identity })

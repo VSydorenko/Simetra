@@ -37,7 +37,7 @@ import {
 } from "./query-shape"
 import { splitAssignment } from "./rewrite/plpgsql-body"
 import { statementTargets } from "./unit-target"
-import { functionIdentity } from "./identity"
+import { functionIdentity, unitIdentity } from "./identity"
 import { inputArgumentTypes, type VerbatimUnit } from "./units"
 
 /*
@@ -583,7 +583,9 @@ class Walk {
       return
     }
     this.relations.push({ chain, relation: qualified })
-    const key = `table:${qualified}`
+    // Ключ обходу ділить множину з ідентичностями одиниць, тож складається
+    // тим самим правилом `identity.ts`.
+    const key = unitIdentity("table", schema, name)
     if (table.rowLevelSecurity === "off" || this.visited.has(key)) return
     this.visited.add(key)
     for (const policy of this.index.policiesOn(table))
