@@ -3,7 +3,7 @@ import { compile } from "simetra/compiler"
 import type { SqlFunctionDeclaration } from "simetra/model"
 import type { RightsContract } from "../contracts"
 import { isRepairError } from "../diagnostics"
-import { guardOf, type GuardProof } from "../sql/guard-of"
+import { guardArgsOf, guardOf, type GuardProof } from "../sql/guard-of"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { loadPlpgsqlParser, type PlpgsqlParser } from "../sql/plpgsql"
 import type { VerbatimUnit } from "../sql/units"
@@ -464,5 +464,75 @@ describe("sql.declaration-check-not-applied in the pipeline", () => {
     expect(
       diagnostics.filter((d) => d.code === "sql.declaration-check-not-applied")
     ).toEqual([])
+  })
+})
+
+describe("guardArgsOf", () => {
+  const read = (sql: string) => guardArgsOf(unitOf(sql), plpgsql, parse)
+
+  it.each([
+    {
+      name: "row target",
+      sql: perform(guard("'read', 'task', p_row")),
+      args: {
+        form: "require",
+        action: "read",
+        kindLabel: "task",
+        target: "p_row",
+      },
+    },
+    {
+      name: "no target (NULL)",
+      sql: perform(guard("'create', 'task', NULL")),
+      args: {
+        form: "require",
+        action: "create",
+        kindLabel: "task",
+        target: null,
+      },
+    },
+    {
+      name: "scope target",
+      sql: perform(guard("'create', 'task', p_row", "rights_require_scope")),
+      args: {
+        form: "requireScope",
+        action: "create",
+        kindLabel: "task",
+        target: "p_row",
+      },
+    },
+    {
+      name: "custom action by uuid",
+      sql: perform(guard(`'${ACTION_ID}', 'task', p_row`)),
+      args: {
+        form: "require",
+        action: ACTION_ID,
+        kindLabel: "task",
+        target: "p_row",
+      },
+    },
+  ])("returns the arguments: $name", ({ sql, args }) => {
+    expect(read(sql)).toEqual(args)
+  })
+
+  it.each([
+    ["a body without a guard", body(`BEGIN PERFORM 1; END`)],
+    [
+      "a LANGUAGE sql body",
+      `CREATE FUNCTION public.f(p_row uuid) RETURNS int LANGUAGE sql SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;`,
+    ],
+    ["the guard not first", body(`BEGIN PERFORM 1; PERFORM ${GOOD}; END`)],
+    ["a DECLARE section", body(`DECLARE x int; BEGIN PERFORM ${GOOD}; END`)],
+    [
+      "an EXCEPTION block",
+      body(`BEGIN PERFORM ${GOOD}; EXCEPTION WHEN OTHERS THEN NULL; END`),
+    ],
+    ["a non-constant action", perform(guard("p_row::text, 'task', p_row"))],
+    ["a qualified target", perform(guard("'read', 'task', f.p_row"))],
+    ["a cast target", perform(guard("'read', 'task', p_row::uuid"))],
+    ["two arguments", perform(guard("'read', 'task'"))],
+    ["another function", perform("simetra.has_right('read', 'task', p_row)")],
+  ])("returns nothing for %s", (_, sql) => {
+    expect(read(sql)).toBeUndefined()
   })
 })

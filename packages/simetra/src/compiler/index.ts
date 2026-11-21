@@ -62,7 +62,8 @@ export {
   type PlatformReference,
   type RecognisedUnit,
 } from "./platform/recogniser"
-export { executeGrants } from "./sql/execute-grants"
+export { callersOfRole, executeGrants } from "./sql/execute-grants"
+export { guardArgsOf, type GuardArgs } from "./sql/guard-of"
 export {
   AUTHOR_FUNCTION,
   authorTriggerName,
