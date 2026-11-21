@@ -33,6 +33,23 @@ export interface PlpgsqlFunction {
    * мовчки: споживач сам вирішує, що робити з непрочитаним.
    */
   readonly unreadLines: readonly number[]
+  /**
+   * Зовнішній блок автора. Плаский `statements` не відрізняє його від
+   * вкладених блоків і від синтетичної обгортки секції `EXCEPTION`, а доказ
+   * запобіжника судить саме перший оператор цього блоку.
+   */
+  readonly author: PlpgsqlAuthorBlock
+}
+
+export interface PlpgsqlAuthorBlock {
+  /**
+   * Перший оператор блоку автора без фіктивного `RETURN`, який парсер додає
+   * в кінець; `undefined`, коли блок порожній. Вирази — лише прямі, як у
+   * `statements`.
+   */
+  readonly firstStatement?: PlpgsqlStatement
+  /** Блок автора має секцію `EXCEPTION` (парсер загортає його в обгортку). */
+  readonly hasExceptionBlock: boolean
 }
 
 export interface PlpgsqlVariable {
@@ -393,7 +410,43 @@ function readFunction(
     statements,
     dynamicSqlLines: [...dynamicLines].sort((a, b) => a - b),
     unreadLines: declarations.unreadLines,
+    author: authorBlockOf(action, datums),
   }
+}
+
+/**
+ * Секція `EXCEPTION` змушує парсер загорнути блок автора в синтетичний блок
+ * без `lineno` (`body[0]` обгортки — блок автора, а фіктивний `RETURN` стоїть
+ * у самій обгортці). Блок автора без неї — це сам `action`, а фіктивний
+ * `RETURN` — останній елемент його `body`, якщо автор сам не закінчив блок
+ * `RETURN`. Блок автора, чий перший оператор —
+ * вкладений блок з `EXCEPTION`, обгорткою не є: його `lineno` є.
+ */
+function authorBlockOf(action: Json, datums: Datum[]): PlpgsqlAuthorBlock {
+  const root = nodeOf(action)
+  const first = nodeOf(asArray(root?.body.body)[0])
+  const wrapped =
+    root !== undefined &&
+    root.body.lineno === undefined &&
+    first?.kind === "PLpgSQL_stmt_block" &&
+    first.body.exceptions !== undefined
+  const block = wrapped ? first : root
+  if (block === undefined) return { hasExceptionBlock: false }
+  const hasExceptionBlock = wrapped || block.body.exceptions !== undefined
+  // Парсер дописує фіктивний `RETURN` у кінець блоку, лише якщо останній
+  // оператор — не `RETURN`; фіктивний відрізняє відсутній `lineno` (авторський
+  // його має). У блоці автора з `EXCEPTION` фіктивний стоїть в обгортці.
+  const items = asArray(block.body.body)
+  const last = nodeOf(items.at(-1))
+  const authored =
+    last?.kind === "PLpgSQL_stmt_return" && last.body.lineno === undefined
+      ? items.slice(0, -1)
+      : items
+  const head = nodeOf(authored[0])
+  if (head === undefined) return { hasExceptionBlock }
+  const out: StatementDraft[] = []
+  walkStatement(head.kind, head.body, 1, datums, out, new Set())
+  return { firstStatement: out[0]!, hasExceptionBlock }
 }
 
 function variableOf(datum: Datum, datums: Datum[]): PlpgsqlVariable[] {
