@@ -184,6 +184,8 @@ export interface SubsetRegistry {
   view(spec: ViewSpec): ViewHandle
   preload(spec: ViewSpec, options?: { ttlMs?: number }): Promise<void>
   subsets(): Iterable<Subset>
+  /** A released signal channel was forgotten: its cached object id goes too. */
+  forgetChannel(channel: string): void
   /** The held subset of a form, if any; throws on a refused form as `view` does. */
   find(spec: ViewSpec): Subset | undefined
   /** The validated form of a spec; throws on a refused form as `view` does. */
@@ -1199,6 +1201,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         if (!closing) queueCheck(s)
       }
       return notify
+    },
+
+    forgetChannel(channel) {
+      channelObjects.delete(channel)
     },
 
     close() {

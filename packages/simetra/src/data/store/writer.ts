@@ -265,6 +265,19 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
     return undefined
   }
 
+  // Запис відпущеного каналу забувається, лише коли сховище не тримає жодного
+  // його рядка І жоден живий вигляд об'єкта не лишається ним непідтвердженим:
+  // порожній вигляд, що пропустив створення в розриві, інакше став би свіжим.
+  const forgettable = (o: ObjectState, channel: string): boolean =>
+    !o.rows.holdsChannel(channelOf(o.entry), channel) &&
+    subsetsOf(ctx, o).every((s) =>
+      ctx.session.epochs.compositionProven(channel, s.okReadEpoch ?? -1)
+    )
+  const forgetChannel = (channel: string) => {
+    ctx.session.epochs.forget(channel)
+    ctx.registry.forgetChannel(channel)
+  }
+
   function touchMarked(o: ObjectState, marked: (e: RowEntry) => boolean) {
     for (const key of o.rows.keys()) {
       if (marked(o.rows.get(key)!)) rowViews.touch(o.name, key)
@@ -412,11 +425,10 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       const { epochs } = ctx.session
       epochs.release(channel)
       const o = objectOfChannel(channel)
-      if (o === undefined) return epochs.forget(channel)
-      // Вигляд судять лише утримувані канали: відпущений перестає його судити.
+      if (o === undefined) return forgetChannel(channel)
+      // Відпущений канал судить вигляд точково: склад міг змінитися.
       for (const s of subsetsOf(ctx, o)) s.dirty = true
-      if (!o.rows.holdsChannel(channelOf(o.entry), channel))
-        epochs.forget(channel)
+      if (forgettable(o, channel)) forgetChannel(channel)
     },
 
     forgetReleased() {
@@ -424,9 +436,8 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       const { epochs } = ctx.session
       for (const channel of [...epochs.released()]) {
         const o = objectOfChannel(channel)
-        if (o !== undefined && o.rows.holdsChannel(channelOf(o.entry), channel))
-          continue
-        epochs.forget(channel)
+        if (o !== undefined && !forgettable(o, channel)) continue
+        forgetChannel(channel)
         // Забутий канал вигляду більше не судить.
         if (o !== undefined) for (const s of subsetsOf(ctx, o)) s.dirty = true
       }

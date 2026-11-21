@@ -192,6 +192,7 @@ interface MarkTimes {
   noteDisconnect(channel: string | undefined): void
   /** Найстаріша жива позначка; мертві записи прибираються тут. */
   oldest(): { at: number; object?: ObjectName } | undefined
+  clear(): void
 }
 
 function createMarkTimes(
@@ -228,6 +229,10 @@ function createMarkTimes(
       const id = channel ?? "*"
       if (gaps.has(id) && hasGap(id)) return
       if (hasGap(id)) gaps.set(id, writer.now())
+    },
+    clear() {
+      minVersion.clear()
+      gaps.clear()
     },
     oldest() {
       let found: { at: number; object?: ObjectName } | undefined
@@ -863,6 +868,10 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       offSubscribed()
       for (const slot of held.values()) slot.off?.()
       held.clear()
+      // Службові мапи не переживають приймача.
+      seen.clear()
+      refused.clear()
+      marks.clear()
     },
   }
 }

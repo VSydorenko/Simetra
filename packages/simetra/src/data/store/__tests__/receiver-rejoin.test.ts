@@ -14,6 +14,7 @@ import { createDataRuntime } from "../../runtime/runtime"
 import { SERVER_HASH, clientCatalog } from "../../__tests__/support"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import { createFakeSource } from "../testing/fake-source"
+import { coreInternals } from "../core"
 import { QUIET_MS, REJOIN_JITTER_MS } from "../receiver"
 import type { Key, ViewSpec } from "../types"
 import {
@@ -941,6 +942,11 @@ describe("held and released channels (liveness, R-a…R-c)", () => {
     await settle()
     expect(h.handle.getSnapshot().staleComposition).toBe(true)
     await replaceRights(h, [S])
+    // Відпущений у розриві канал судить склад точково: до читання після
+    // відпускання склад непідтверджений, після нього — не застрягає.
+    expect(h.handle.getSnapshot().staleComposition).toBe(true)
+    await h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
     expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
     expect(states(h)).toEqual(["synced", "synced", "synced"])
   })
@@ -1016,6 +1022,44 @@ describe("held and released channels (liveness, R-a…R-c)", () => {
     await settle()
     expect(h.handle.getSnapshot()).toMatchObject({ hasNewRows: true })
     expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
+  })
+
+  it("keeps the entry of a released channel without rows while an empty view is unconfirmed by it (Codex)", async () => {
+    // Порожній `full` скоупленого `publicRead`: рядків каналу в сховищі
+    // немає, а створення в розриві пройшло повз.
+    const transport = createFakeSignalTransport()
+    const h = setup({
+      rightsSnapshot: true,
+      signals: transport,
+      objects: [{ ...task, publicRead: "anon" as const }, org],
+    })
+    h.fake.rightsSnapshot = rightsOf([S, S2])
+    h.fake.rightsVersion = "1".repeat(64)
+    const handle = h.core.view(full)
+    handle.subscribe(() => {})
+    await settle()
+    expect(transport.subscribed().has(channel)).toBe(true)
+    transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    transport.fail({ kind: "transport", channel })
+    await settle()
+    h.fake.insert(TASK, taskValues(1, { status: null, subject: null }))
+    h.fake.rightsSnapshot = rightsOf([S2], [S, S2])
+    h.fake.rightsVersion = "2".repeat(64)
+    h.core.requestRights()
+    await settle()
+    await advance(1_000)
+    expect(transport.subscribed().has(channel)).toBe(false)
+    expect(handle.getSnapshot()).toMatchObject({ status: "ready", rows: [] })
+    expect(handle.getSnapshot().staleComposition).toBe(true)
+    expect(coreInternals(h.core).epochs.releasedAt(channel)).toBeGreaterThan(0)
+    await h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    expect(handle.getSnapshot()).toMatchObject({ hasNewRows: true })
+    expect(handle.getSnapshot().staleComposition).toBeUndefined()
+    // Доведений і без рядків — запис забуто на такті.
+    await advance(60_000)
+    expect(coreInternals(h.core).epochs.releasedAt(channel)).toBe(0)
   })
 
   it("a release without a gap leaves the composition confirmed", async () => {

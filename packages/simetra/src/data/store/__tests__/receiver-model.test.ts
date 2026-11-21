@@ -5,7 +5,13 @@ import { SCOPE_KIND_ID } from "../../../model/runtime/__tests__/entries"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import { REJOIN_JITTER_MS, QUIET_MS } from "../receiver"
 import { coreInternals } from "../core"
-import type { Key, RowView, ViewHandle, ViewSpec } from "../types"
+import {
+  DEFAULT_CORE_LIMITS,
+  type Key,
+  type RowView,
+  type ViewHandle,
+  type ViewSpec,
+} from "../types"
 import {
   ORG,
   TASK,
@@ -74,6 +80,11 @@ const START_KEYS: readonly { n: number; scope: number }[] = [
   { n: 4, scope: 1 },
 ]
 const FULL: ViewSpec = { kind: "full", object: TASK }
+const FRESH: ViewSpec = {
+  kind: "window",
+  object: TASK,
+  where: { attribute: "title", op: "eq", value: "fresh" },
+}
 const SPECS: readonly ViewSpec[] = [
   { kind: "keys", object: TASK, keys: [key(1), key(2)] },
   { kind: "keys", object: TASK, keys: [key(3)] },
@@ -82,6 +93,10 @@ const SPECS: readonly ViewSpec[] = [
   // Ціль `include` — організація, об'єкт без власного вигляду: її канал
   // приймач не тримає ніколи.
   { kind: "full", object: TASK, include: ["org"] },
+  // Порожній вигляд: вікно з фільтром сервера бере лише створені моделлю
+  // рядки (`fresh`), тож спершу рядків у ньому й у сховищі від нього немає
+  // (Codex: забування запису відпущеного каналу).
+  FRESH,
 ]
 
 type Step =
@@ -97,6 +112,9 @@ type Step =
   | { t: "revalidate" }
   | { t: "visible"; v: number; on: boolean }
   | { t: "hold" }
+  | { t: "unsub"; v: number }
+  | { t: "sub"; v: number }
+  | { t: "unsubAll" }
   | { t: "mount" }
   | { t: "release"; ok: boolean; at: boolean }
 
@@ -116,7 +134,7 @@ export const STEP = fc.oneof(
     }),
   },
   { weight: 1, arbitrary: fc.record({ t: one("refreshTokens") }) },
-  { weight: 2, arbitrary: fc.record({ t: one("scopes"), ch: fc.nat(1) }) },
+  { weight: 3, arbitrary: fc.record({ t: one("scopes"), ch: fc.nat(1) }) },
   {
     weight: 4,
     arbitrary: fc.record({
@@ -134,6 +152,16 @@ export const STEP = fc.oneof(
     }),
   },
   { weight: 2, arbitrary: fc.record({ t: one("hold") }) },
+  {
+    weight: 1,
+    arbitrary: fc.record({ t: one("unsub"), v: fc.nat(SPECS.length - 1) }),
+  },
+  {
+    weight: 1,
+    arbitrary: fc.record({ t: one("sub"), v: fc.nat(SPECS.length - 1) }),
+  },
+  // Зняти всі вигляди, крім порожнього: у сховищі не лишається рядків.
+  { weight: 3, arbitrary: fc.record({ t: one("unsubAll") }) },
   { weight: 2, arbitrary: fc.record({ t: one("mount") }) },
   {
     weight: 2,
@@ -185,11 +213,18 @@ async function run(steps: readonly Step[]): Promise<void> {
     scopeOfKey.set(key(n), scope)
   }
   const specs: ViewSpec[] = [...SPECS]
-  const handles: ViewHandle[] = SPECS.map((spec) => {
-    const handle = h.core.view(spec)
+  const handles: ViewHandle[] = SPECS.map((spec) => h.core.view(spec))
+  // Відписка слухача: вигляд звільняється після затримки звільнення.
+  const offs: ((() => void) | undefined)[] = handles.map((handle) =>
     handle.subscribe(() => {})
-    return handle
-  })
+  )
+  const sub = (v: number) => {
+    if (offs[v] === undefined) offs[v] = handles[v]!.subscribe(() => {})
+  }
+  const unsub = (v: number) => {
+    offs[v]?.()
+    offs[v] = undefined
+  }
   await settle()
   for (const ch of CHANNELS)
     expect(transport.subscribed().has(ch), ch).toBe(true)
@@ -265,6 +300,7 @@ async function run(steps: readonly Step[]): Promise<void> {
 
   const check = (at: string) => {
     for (const [v, handle] of handles.entries()) {
+      if (offs[v] === undefined) continue
       const snap = handle.getSnapshot()
       for (const row of snap.rows) {
         if (row.state === "removed" || row.hidden === true) continue
@@ -283,16 +319,22 @@ async function run(steps: readonly Step[]): Promise<void> {
             trace
           )
       }
-      if (specs[v] !== FULL || snap.staleComposition === true) continue
-      if (snap.status === "loading" || snap.hasNewRows) continue
+      const spec = specs[v]
+      if (spec !== FULL && spec !== FRESH) continue
+      if (snap.staleComposition === true) continue
+      if (snap.status !== "ready" || snap.hasNewRows) continue
       const shown = new Set(snap.rows.map((r) => r.key))
-      for (const k of lostCreates)
-        if (!shown.has(k) && !deleted.has(k))
-          failWith(
-            at,
-            `the full view misses the lost create ${k} with a confirmed composition`,
-            trace
-          )
+      for (const k of lostCreates) {
+        if (shown.has(k) || deleted.has(k)) continue
+        // Порожній вигляд мусить показати лише рядок, що досі йому підходить.
+        if (spec === FRESH && h.fake.row(TASK, k)?.values.title !== "fresh")
+          continue
+        failWith(
+          at,
+          `view ${v} misses the lost create ${k} with a confirmed composition`,
+          trace
+        )
+      }
     }
   }
 
@@ -318,7 +360,7 @@ async function run(steps: readonly Step[]): Promise<void> {
         scopeOfKey.set(k, s.scope)
         const version = h.fake.insert(
           TASK,
-          taskValues(n, { org: SCOPES[s.scope] })
+          taskValues(n, { org: SCOPES[s.scope], title: "fresh" })
         )
         signal(k, "create", version)
         break
@@ -369,10 +411,22 @@ async function run(steps: readonly Step[]): Promise<void> {
         h.core.revalidate(TASK, { visibleOnly: true }).catch(() => {})
         break
       case "visible":
-        h.core.setVisible(specs[s.v]!, s.on)
+        if (offs[s.v] !== undefined) h.core.setVisible(specs[s.v]!, s.on)
         break
       case "hold":
         h.fake.mode = "manual"
+        break
+      case "unsub":
+        unsub(s.v)
+        break
+      case "sub":
+        sub(s.v)
+        break
+      case "unsubAll":
+        for (const v of handles.keys()) if (specs[v] !== FRESH) unsub(v)
+        // Вигляди звільняються після затримки: сховище лишається без їхніх
+        // рядків у тому самому кроці.
+        await vi.advanceTimersByTimeAsync(DEFAULT_CORE_LIMITS.releaseDelayMs)
         break
       case "mount": {
         // Новий вигляд читає в сховище ключі, яких там ще не було (зокрема
@@ -382,8 +436,8 @@ async function run(steps: readonly Step[]): Promise<void> {
         if (specs.some((x) => JSON.stringify(x) === JSON.stringify(spec))) break
         specs.push(spec)
         const handle = h.core.view(spec)
-        handle.subscribe(() => {})
         handles.push(handle)
+        offs.push(handle.subscribe(() => {}))
         break
       }
       case "release":
@@ -412,6 +466,8 @@ async function run(steps: readonly Step[]): Promise<void> {
     live[ch] = true
     transport.join(channel, false)
   }
+  for (const v of handles.keys()) sub(v)
+  await settle()
   for (const spec of specs) h.core.setVisible(spec, true)
   await vi.advanceTimersByTimeAsync(2 * REJOIN_JITTER_MS)
   await settle()
@@ -577,6 +633,16 @@ describe("receiver model: the disconnect mark and the composition against the se
         { t: "revalidate" },
         { t: "edit", k: 2 },
         { t: "time", ms: 60_000 },
+      ],
+    ],
+    [
+      "Codex: an empty view, a create lost in a gap, a release with no rows",
+      [
+        { t: "unsubAll" },
+        { t: "time", ms: REJOIN_JITTER_MS },
+        { t: "fail", ch: 0 },
+        { t: "create", scope: 0 },
+        { t: "scopes", ch: 0 },
       ],
     ],
     [
