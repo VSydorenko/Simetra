@@ -546,6 +546,13 @@ describe("foreignChanges", () => {
         sql: "",
       },
       {
+        class: "trigger",
+        identity: 'trigger:app."T"."Tr"',
+        schema: "app",
+        name: "Tr",
+        sql: "",
+      },
+      {
         class: "domain",
         identity: "domain:app.d",
         schema: "app",
@@ -566,6 +573,8 @@ describe("foreignChanges", () => {
     ["an index", ref("index", "t_c_idx")],
     ["a constraint", ref("constraint", "t_c_check", "t")],
     ["a trigger", ref("trigger", "tr", "t")],
+    // Посилання двигуна — сирі частини, ідентичність одиниці — у лапках
+    ["a trigger on a table whose name needs quotes", ref("trigger", "Tr", "T")],
     ["a function", ref("function", "f")],
     // Двигун адресує обмеження домену полем `table` з іменем домену
     ["a constraint of a domain", ref("constraint", "d_check", "d")],

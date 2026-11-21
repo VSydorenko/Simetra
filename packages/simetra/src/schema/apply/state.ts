@@ -1,8 +1,12 @@
 import {
   ROW_VERSION_SEQUENCE,
   executeGrants,
+  functionKey,
+  keyIdentity,
   platformFunctionSignatures,
   platformSchemaGrants,
+  qualifiedName,
+  splitIdentity,
   type CompiledModel,
   type PromotionRecord,
 } from "simetra/compiler"
@@ -43,14 +47,17 @@ export const APPLY_STATE_FORMAT = 1
 const SCHEMA = quoteIdent(PLATFORM_SCHEMA)
 const MARKER = `${SCHEMA}.${quoteIdent("marker")}`
 const LEDGER = `${SCHEMA}.${quoteIdent("ledger")}`
-const SNAPSHOT_HASH_FUNCTION = `${PLATFORM_SCHEMA}.${APPLIED_SNAPSHOT_HASH_FUNCTION_NAME}()`
 const SNAPSHOT_HASH_SIGNATURE = `${SCHEMA}.${quoteIdent(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}()`
 const VERSION_EPOCH = `${SCHEMA}.${quoteIdent("version_epoch")}`
-const EPOCH_FUNCTION = `${PLATFORM_SCHEMA}.${ROW_VERSION_EPOCH_FUNCTION_NAME}()`
 const EPOCH_SIGNATURE = `${SCHEMA}.${ROW_VERSION_EPOCH_FUNCTION_NAME}()`
-const RESET_FUNCTION = `${PLATFORM_SCHEMA}.reset_row_version_epoch()`
 const RESET_SIGNATURE = `${SCHEMA}.reset_row_version_epoch()`
 const SEQUENCE_NAME = `${PLATFORM_SCHEMA}.${ROW_VERSION_SEQUENCE.name}`
+/** Ключі функцій стану: ціль їхніх одиниць і грантів. */
+const STATE_FUNCTION_KEYS = [
+  APPLIED_SNAPSHOT_HASH_FUNCTION_NAME,
+  ROW_VERSION_EPOCH_FUNCTION_NAME,
+  "reset_row_version_epoch",
+].map((name) => functionKey(PLATFORM_SCHEMA, name, []))
 
 /**
  * Функції платформи плану (`platformFunctions` артефакту): функції шару з
@@ -64,9 +71,7 @@ export function planPlatformFunctions(
 ): string[] {
   return [
     ...platformFunctionSignatures(model.sqlUnits),
-    SNAPSHOT_HASH_FUNCTION,
-    EPOCH_FUNCTION,
-    RESET_FUNCTION,
+    ...STATE_FUNCTION_KEYS,
   ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 }
 
@@ -606,11 +611,12 @@ export function applyStateOf(
   }
 }
 
-const STATE_FUNCTIONS = [
-  SNAPSHOT_HASH_FUNCTION,
-  EPOCH_FUNCTION,
-  RESET_FUNCTION,
-].map((f) => `function:${f}`)
+const STATE_FUNCTIONS = STATE_FUNCTION_KEYS.map((key) =>
+  keyIdentity("function", key)
+)
+
+/** Ціль одиниці гранту послідовності версій. */
+const SEQUENCE_KEY = qualifiedName(PLATFORM_SCHEMA, ROW_VERSION_SEQUENCE.name)
 
 /**
  * Recogniser of the apply-state objects of `model` (`ApplyStateObjects`
@@ -625,20 +631,22 @@ export function applyStateOwnership(
   const schemaId = `schema:${PLATFORM_SCHEMA}`
   const functions = STATE_FUNCTIONS
   const sub = /^(?:column|constraint|trigger|rule|policy|default):(.*)$/
-  // Одиниця гранту компілятора: `grant:<grant|revoke>:<клас>:<об'єкти>:…`;
-  // лише схема `simetra` сама, без інших об'єктів у тому самому операторі
-  const schemaGrant = new RegExp(
-    `^grant:(?:grant|revoke):schema:${PLATFORM_SCHEMA}:`
-  )
-  // Гранти функцій стану — стану завжди: шар їх не дає. Гранти й відкликання
-  // послідовності версій — так само
-  const grantPrefixes = [
-    ...[SNAPSHOT_HASH_FUNCTION, EPOCH_FUNCTION, RESET_FUNCTION].flatMap((f) => [
-      `grant:grant:function:${f}:`,
-      `grant:revoke:function:${f}:`,
-    ]),
-    `grant:revoke:sequence:${SEQUENCE_NAME}:`,
-  ]
+  // Одиниця гранту компілятора: `grant:<grant|revoke>:<клас>:<об'єкти>:…`,
+  // частини — за правилом ідентичності. Гранти функцій стану — стану завжди:
+  // шар їх не дає; відкликання послідовності версій — так само; схема
+  // `simetra` — лише сама, без інших об'єктів у тому самому операторі
+  const ownedGrant = (identity: string): boolean => {
+    const [cls, action, type, objects] = splitIdentity(identity, ":")
+    if (cls !== "grant") return false
+    if (type === "function") return STATE_FUNCTION_KEYS.includes(objects ?? "")
+    if (type === "sequence")
+      return action === "revoke" && objects === SEQUENCE_KEY
+    return (
+      schemaIsState &&
+      type === "schema" &&
+      objects === qualifiedName(PLATFORM_SCHEMA)
+    )
+  }
   const owns = (identity: string): boolean => {
     const wrapped = /^(?:comment|acl|securityLabel):\((.*)\)/.exec(identity)
     if (wrapped !== null) return owns(wrapped[1]!)
@@ -646,14 +654,12 @@ export function applyStateOwnership(
     if (
       functions.includes(identity) ||
       identity === SEQUENCE_ID ||
-      grantPrefixes.some((p) => identity.startsWith(p))
+      ownedGrant(identity)
     )
       return true
     const m = sub.exec(identity)
     if (m !== null && tables.some((t) => m[1]!.startsWith(`${t}.`))) return true
-    return (
-      schemaIsState && (identity === schemaId || schemaGrant.test(identity))
-    )
+    return schemaIsState && identity === schemaId
   }
   return {
     owns,
