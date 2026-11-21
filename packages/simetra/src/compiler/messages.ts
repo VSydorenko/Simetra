@@ -5767,8 +5767,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: () =>
       "ACL або членство ролей змінилися під час introspect; запустіть його ще раз",
     hint: {
-      en: "The EXECUTE facts derived from the snapshot disagree with the database's own privilege check for a role of the profile (see params: function, role, privilege). Nothing was written.",
-      uk: "Факти EXECUTE, виведені зі знімка, розходяться з власною перевіркою привілеїв бази для ролі профілю (параметри: function, role, privilege). Нічого не записано.",
+      en: "Either the rights fingerprint of the snapshot (functions and schemas in scope, roles of the profile and their membership) differs from a fresh read of the catalog (check: fingerprint), or the EXECUTE facts derived from the snapshot disagree with the database's own privilege check for a role of the profile (check: privilege; params function, role, privilege). Nothing was written.",
+      uk: "Відбиток прав знімка (функції й схеми межі, ролі профілю та їхнє членство) відрізняється від свіжого читання каталогу (check: fingerprint), або факти EXECUTE, виведені зі знімка, розходяться з власною перевіркою привілеїв бази для ролі профілю (check: privilege; параметри function, role, privilege). Нічого не записано.",
     },
   },
 }

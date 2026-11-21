@@ -10,6 +10,7 @@ import { readMetadataDir } from "../io/metadata-dir"
 import { extractWithExecuteFacts } from "../schema-engine/pg-delta/adapter"
 import { readExecuteFacts } from "../schema-engine/execute-facts"
 import {
+  superuserClient,
   testProvider,
   testRoleName,
   testSuperuserUrl,
@@ -51,6 +52,58 @@ const profile = (): string[] =>
 
 const factOf = (facts: ExecuteFacts, name: string) =>
   facts.functions.find((f) => f.name === name)
+
+/**
+ * Факти на клієнті знімка `REPEATABLE READ`, узятого до `change`, і відбиток
+ * свіжого каталогу на другому з'єднанні — як у `extractWithExecuteFacts`, але
+ * з довільним переліком ролей профілю (ролі тесту з тегом прогону).
+ */
+async function afterSnapshot(
+  url: string,
+  schemas: string[],
+  roles: string[],
+  change?: () => Promise<void>
+): Promise<ExecuteFacts> {
+  const snapshot = new pg.Client({ connectionString: url })
+  const fresh = new pg.Client({ connectionString: url })
+  await snapshot.connect()
+  try {
+    await fresh.connect()
+    await snapshot.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+    // Перший запит фіксує знімок транзакції
+    await snapshot.query("select count(*) from pg_proc")
+    await change?.()
+    return await readExecuteFacts(snapshot, fresh, scopeOf(schemas), roles)
+  } finally {
+    await snapshot.query("ROLLBACK").catch(() => {})
+    await snapshot.end()
+    await fresh.end()
+  }
+}
+
+/** Оператор суперкористувача стеку в базі цілі `url` (власник, членство). */
+async function asSuperuserOn(url: string, sql: string): Promise<void> {
+  const client = await superuserClient(new URL(url).pathname.slice(1))
+  try {
+    await client.query(sql)
+  } finally {
+    await client.end()
+  }
+}
+
+const quoted = (role: string): string => `"${role.replaceAll('"', '""')}"`
+
+/** Випадок зміни після знімка: підготовка до нього, сама зміна. */
+interface CatalogChange {
+  name: string
+  /** Схеми межі; типово `app`. */
+  schemas?: string[]
+  /** Додатковий DDL цілі. */
+  sql?: string
+  /** Підготовка суперкористувачем стеку до знімка. */
+  before?: (url: string) => Promise<void>
+  change: (url: string) => Promise<void>
+}
 
 export function describeExecuteFacts(): void {
   // Теки проєктів, які створює `freshProject`, прибираються після кожного тесту
@@ -104,18 +157,12 @@ export function describeExecuteFacts(): void {
     it("a role of the profile missing in the database gives no fact and no failure", async () => {
       await inTarget(DEFINER, ["app"], async (url) => {
         const missing = testRoleName("absent")
-        const client = new pg.Client({ connectionString: url })
-        await client.connect()
-        try {
-          const facts = await readExecuteFacts(client, scopeOf(["app"]), [
-            missing,
-          ])
-          expect(facts.missingRoles).toEqual([missing])
-          expect(factOf(facts, "rpc")!.executeByRole).toEqual({})
-          expect(factOf(facts, "rpc")!.schemaUsageByRole).toEqual({})
-        } finally {
-          await client.end()
-        }
+        const facts = await afterSnapshot(url, ["app"], [missing])
+        expect(facts.missingRoles).toEqual([missing])
+        expect(factOf(facts, "rpc")!.executeByRole).toEqual({})
+        expect(factOf(facts, "rpc")!.schemaUsageByRole).toEqual({})
+        // Відсутність ролі — теж стан відбитка, і він стабільний
+        expect(facts.catalogChanged).toBe(false)
       })
     })
 
@@ -158,6 +205,7 @@ export function describeExecuteFacts(): void {
             )
             expect(factOf(before.facts, "rpc")!.executeByRole[api]).toBe(false)
             expect(before.facts.crossCheckFailures).toEqual([])
+            expect(before.facts.catalogChanged).toBe(false)
             await query(
               testSuperuserUrl(),
               `grant "${group}" to "${api}" with inherit true`
@@ -361,35 +409,6 @@ export function describeExecuteFacts(): void {
       })
     })
 
-    it("a profile role created after the snapshot fails the cross-check", async () => {
-      const late = testRoleName("late")
-      await dropRoles(late)
-      await inTarget(DEFINER, ["app"], async (url) => {
-        const client = new pg.Client({ connectionString: url })
-        await client.connect()
-        try {
-          await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
-          await client.query("select count(*) from pg_roles")
-          await query(testSuperuserUrl(), `create role "${late}"`)
-          const facts = await readExecuteFacts(client, scopeOf(["app"]), [late])
-          expect(facts.missingRoles).toEqual([late])
-          expect(facts.crossCheckFailures).toEqual([
-            {
-              schema: "",
-              name: "",
-              identityArguments: "",
-              role: late,
-              privilege: "ROLE",
-            },
-          ])
-        } finally {
-          await client.query("ROLLBACK").catch(() => {})
-          await client.end()
-          await dropRoles(late)
-        }
-      })
-    })
-
     it("leaves nothing on the target: no open transaction, no session state", async () => {
       await inTarget(DEFINER, ["app"], async (url) => {
         await extractWithExecuteFacts({ url }, scopeOf(["app"]))
@@ -399,6 +418,185 @@ export function describeExecuteFacts(): void {
           [new URL(url).pathname.slice(1)]
         )
         expect(rows[0]!.n).toBe("0")
+      })
+    })
+  })
+
+  describe("rights fingerprint of the snapshot against a fresh catalog", () => {
+    // Ролі тесту стоять у переліку ролей профілю: створювати чи видаляти
+    // справжні ролі профілю на спільному стеку не можна
+    const role = testRoleName("fpr")
+    const renamed = testRoleName("fpr2")
+    const group = testRoleName("fpg")
+    const outer = testRoleName("fpg2")
+    const tagged = [role, renamed, group, outer]
+    const roles = (): string[] => [...profile(), role]
+    const su = (sql: string) => () =>
+      query(testSuperuserUrl(), sql).then(() => {})
+    // Зміна каталогу не має чекати на блокування знімка вічно
+    const onTarget = (sql: string) => (url: string) =>
+      query(url, `SET lock_timeout = '5s'; ${sql}`).then(() => {})
+    const RPC = `CREATE FUNCTION app.rpc() RETURNS int LANGUAGE sql SECURITY DEFINER
+      SET search_path = '' AS $$ SELECT 1 $$`
+
+    const cases: CatalogChange[] = [
+      {
+        name: "a profile role created",
+        change: su(`create role ${quoted(role)}`),
+      },
+      {
+        name: "a profile role dropped",
+        before: su(`create role ${quoted(role)}`),
+        change: su(`drop role ${quoted(role)}`),
+      },
+      {
+        name: "a profile role renamed (same oid)",
+        before: su(`create role ${quoted(role)}`),
+        change: su(`alter role ${quoted(role)} rename to ${quoted(renamed)}`),
+      },
+      {
+        name: "a profile role dropped and created again (new oid)",
+        before: su(`create role ${quoted(role)}`),
+        change: su(`drop role ${quoted(role)}; create role ${quoted(role)}`),
+      },
+      {
+        name: "a membership of a profile role granted",
+        before: su(`create role ${quoted(role)}; create role ${quoted(group)}`),
+        change: su(
+          `grant ${quoted(group)} to ${quoted(role)} with inherit true`
+        ),
+      },
+      {
+        name: "a transitive membership granted",
+        before: su(
+          `create role ${quoted(role)}; create role ${quoted(group)}; create role ${quoted(outer)};
+           grant ${quoted(group)} to ${quoted(role)} with inherit true`
+        ),
+        change: su(
+          `grant ${quoted(outer)} to ${quoted(group)} with inherit true`
+        ),
+      },
+      {
+        name: "the inherit option of a membership changed",
+        before: su(
+          `create role ${quoted(role)}; create role ${quoted(group)};
+           grant ${quoted(group)} to ${quoted(role)} with inherit false`
+        ),
+        change: su(
+          `grant ${quoted(group)} to ${quoted(role)} with inherit true`
+        ),
+      },
+      {
+        name: "a function created in a schema in scope",
+        change: onTarget(
+          `CREATE FUNCTION app.added() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$`
+        ),
+      },
+      {
+        name: "a function dropped",
+        change: onTarget("DROP FUNCTION app.rpc()"),
+      },
+      {
+        name: "a function renamed",
+        change: onTarget("ALTER FUNCTION app.rpc() RENAME TO rpc_renamed"),
+      },
+      {
+        name: "a function dropped and created again with the same signature",
+        change: onTarget(`DROP FUNCTION app.rpc(); ${RPC}`),
+      },
+      {
+        name: "a function moved out of the scope",
+        sql: "CREATE SCHEMA outside;",
+        change: onTarget("ALTER FUNCTION app.rpc() SET SCHEMA outside"),
+      },
+      {
+        name: "the configuration of a function changed",
+        change: onTarget("ALTER FUNCTION app.rpc() SET work_mem = '8MB'"),
+      },
+      {
+        name: "the owner of a function changed",
+        before: su(`create role ${quoted(role)}`),
+        change: (url) =>
+          asSuperuserOn(
+            url,
+            `ALTER FUNCTION app.rpc() OWNER TO ${quoted(role)}`
+          ),
+      },
+      {
+        name: "a schema in scope created",
+        schemas: ["app", "aux"],
+        change: onTarget("CREATE SCHEMA aux"),
+      },
+      {
+        name: "a schema in scope dropped",
+        schemas: ["app", "aux"],
+        sql: "CREATE SCHEMA aux;",
+        change: onTarget("DROP SCHEMA aux"),
+      },
+      {
+        name: "a schema in scope renamed",
+        schemas: ["app", "aux"],
+        sql: "CREATE SCHEMA aux;",
+        change: onTarget("ALTER SCHEMA aux RENAME TO aux_renamed"),
+      },
+      {
+        name: "a schema in scope dropped and created again",
+        schemas: ["app", "aux"],
+        sql: "CREATE SCHEMA aux;",
+        change: onTarget("DROP SCHEMA aux; CREATE SCHEMA aux"),
+      },
+    ]
+
+    it.each(cases)(
+      "$name after the snapshot changes the fingerprint",
+      async (c) => {
+        await dropRoles(...tagged)
+        try {
+          await inTarget(
+            `${DEFINER}${c.sql ?? ""}`,
+            c.schemas ?? ["app"],
+            async (url) => {
+              await c.before?.(url)
+              const schemas = c.schemas ?? ["app"]
+              // Без зміни відбитки збігаються: червоне нижче — від зміни
+              const quiet = await afterSnapshot(url, schemas, roles())
+              expect(quiet.catalogChanged).toBe(false)
+              const facts = await afterSnapshot(url, schemas, roles(), () =>
+                c.change(url)
+              )
+              expect(facts.catalogChanged).toBe(true)
+            }
+          )
+        } finally {
+          await dropRoles(outer, group, renamed, role)
+        }
+      }
+    )
+
+    it("introspect refuses with introspect.definer-acl-changed when a function is recreated during it", async () => {
+      await inTarget(DEFINER, ["app"], async (url) => {
+        seam.beforeFacts = onTarget(`DROP FUNCTION app.rpc(); ${RPC}`).bind(
+          null,
+          url
+        )
+        try {
+          const dir = await freshProject()
+          const r = await call(
+            "introspect",
+            introspectInput,
+            options(dir, { [ENV]: url })
+          )
+          expect(r.written).toBe(false)
+          expect(r.changes).toEqual([])
+          expect(
+            errors(r)
+              .filter((d) => d.code === "introspect.definer-acl-changed")
+              .map((d) => d.params?.check)
+          ).toContain("fingerprint")
+          expect(existsSync(dir)).toBe(false)
+        } finally {
+          seam.beforeFacts = undefined
+        }
       })
     })
   })

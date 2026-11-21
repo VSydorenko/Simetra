@@ -46,16 +46,11 @@ export interface FunctionExecuteFact {
  * членство змінилися між читаннями. Читач її не вирішує, а повідомляє.
  */
 export interface ExecuteCrossCheckFailure {
-  /** Для `ROLE` порожні: розбіжність стосується ролі, а не функції. */
   schema: string
   name: string
   identityArguments: string
   role: string
-  /**
-   * `ROLE` — роль профілю, якої не було у знімку, а свіжий каталог її вже
-   * знає: `PUBLIC` міг дати їй `EXECUTE`, і знімок цього не бачить.
-   */
-  privilege: "EXECUTE" | "USAGE" | "ROLE"
+  privilege: "EXECUTE" | "USAGE"
 }
 
 export interface ExecuteFacts {
@@ -65,4 +60,12 @@ export interface ExecuteFacts {
   functions: FunctionExecuteFact[]
   /** Порожній, коли виведене зі знімка збігається з перевіркою бази. */
   crossCheckFailures: ExecuteCrossCheckFailure[]
+  /**
+   * Відбиток прав знімка (функції й схеми межі, ролі профілю та їхнє
+   * членство) не збігся з відбитком, перечитаним на новому з'єднанні після
+   * знімка: стан, з якого виведено факти, уже не той, що в базі. Звірка
+   * `has_*` цього не ловить: вона дивиться на oid знімка, а роль чи функцію
+   * могли перейменувати, видалити, створити наново або додати.
+   */
+  catalogChanged: boolean
 }

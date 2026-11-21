@@ -244,19 +244,26 @@ export const introspectTool = defineTool({
         ? {}
         : { reference: reference.catalog }),
     })
-    // Виведене зі знімка розійшлося з перевіркою привілеїв бази: ACL чи
-    // членство змінилися між читаннями. Це помилка поза класом ремонту, тож
-    // нічого не пишеться, а `introspect` треба повторити.
-    const changed = facts.crossCheckFailures.map((f) =>
-      diagnostic("introspect.definer-acl-changed", "", "", {
-        function:
-          f.privilege === "ROLE"
-            ? ""
-            : `${f.schema}.${f.name}(${f.identityArguments})`,
-        role: f.role,
-        privilege: f.privilege,
-      })
-    )
+    // Знімок розійшовся зі свіжим каталогом за відбитком прав або виведене
+    // зі знімка — з перевіркою привілеїв бази. Це помилка поза класом
+    // ремонту, тож нічого не пишеться, а `introspect` треба повторити.
+    const changed = [
+      ...(facts.catalogChanged
+        ? [
+            diagnostic("introspect.definer-acl-changed", "", "", {
+              check: "fingerprint",
+            }),
+          ]
+        : []),
+      ...facts.crossCheckFailures.map((f) =>
+        diagnostic("introspect.definer-acl-changed", "", "", {
+          check: "privilege",
+          function: `${f.schema}.${f.name}(${f.identityArguments})`,
+          role: f.role,
+          privilege: f.privilege,
+        })
+      ),
+    ]
     const diagnostics = [
       ...extractDiagnostics,
       ...reversed.diagnostics,

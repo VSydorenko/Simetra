@@ -31,12 +31,11 @@ export function profileRoles(provider: EngineScope["provider"]): string[] {
  * профілю як кандидати у викликачі, а не вся семантика Postgres: `PUBLIC`,
  * власник (запис типового ACL), суперкористувач і членство з `inherit_option`
  * (рекурсивно). `has_function_privilege` і `has_schema_privilege` лишаються
- * звіркою (`observed*`): розбіжність каже, що ACL чи членство змінилися між
- * читаннями.
+ * звіркою семантики виведення (`observed*`); зміни стану між знімком і
+ * свіжим каталогом ловить відбиток прав (`FINGERPRINT_SQL`).
  *
- * Ідентичність аргументів (`pg_get_function_identity_arguments`) читає кеш; її
- * зміна без зміни ACL фактів не псує, бо ключ функції — oid знімка, а
- * `has_function_privilege` на зниклій функції дає `null` і розбіжність.
+ * Ідентичність аргументів (`pg_get_function_identity_arguments`) читає кеш;
+ * зміну типів аргументів ловить відбиток (`proargtypes`).
  */
 const FACTS_SQL = `
 with recursive roles as (
@@ -109,27 +108,133 @@ where not exists (select 1 from pg_roles x where x.rolname = r.name)
 order by r.name
 `
 
+/**
+ * Відбиток прав: `$1` — схеми межі, `$2` — ролі профілю. Лише рядки каталогу
+ * (`pg_namespace`, `pg_proc`, `pg_roles`, `pg_auth_members`) і `aclexplode`
+ * над масивом ACL, без функцій каталожного кешу (`aclitem` у тексті,
+ * `pg_get_*`): у знімку вони показали б свіжіший стан, і відбиток знімка
+ * збігся б зі свіжим там, де знімок застарів. Відсутність теж стан: схема чи
+ * роль профілю без рядка лишається в відбитку з `null`, а поява й зникнення
+ * функції змінюють їхній набір. Членство — усі ребра, досяжні від ролей
+ * профілю, з `inherit_option`; ролі — усі, на які посилаються відбиток (oid,
+ * ім'я, `rolsuper`): ім'я ролі у фактах ACL теж береться зі знімка. `jsonb`
+ * упорядковує ключі сам, масиви впорядковано явно, тож текст канонічний.
+ */
+const FINGERPRINT_SQL = `
+with recursive schemas as (
+  select s.name, n.oid, n.nspowner, n.nspacl
+  from unnest($1::text[]) as s(name)
+  left join pg_namespace n on n.nspname = s.name
+), funcs as (
+  select p.oid, p.pronamespace, p.proname, p.proargtypes, p.proowner, p.proacl,
+         p.prosecdef, p.proconfig, p.prokind
+  from pg_proc p
+  where p.pronamespace in (select oid from schemas where oid is not null)
+), profile as (
+  select r.name, x.oid, x.rolsuper
+  from unnest($2::text[]) as r(name)
+  left join pg_roles x on x.rolname = r.name
+), edges(member, roleid, inherit) as (
+  select m.member, m.roleid, m.inherit_option
+  from pg_auth_members m
+  where m.member in (select oid from profile where oid is not null)
+  union
+  select m.member, m.roleid, m.inherit_option
+  from edges e join pg_auth_members m on m.member = e.roleid
+), acls(acl) as (
+  select nspacl from schemas union all select proacl from funcs
+), referenced(oid) as (
+  select oid from profile where oid is not null
+  union select roleid from edges
+  union select nspowner from schemas where nspowner is not null
+  union select proowner from funcs
+  union select a.grantor from acls, aclexplode(acls.acl) a
+  union select a.grantee from acls, aclexplode(acls.acl) a where a.grantee <> 0
+)
+select jsonb_build_object(
+  'schemas', (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'name', s.name, 'oid', s.oid::bigint, 'owner', s.nspowner::bigint,
+      'acl', case when s.nspacl is null then null else coalesce((
+        select jsonb_agg(jsonb_build_array(a.grantor::bigint, a.grantee::bigint, a.privilege_type, a.is_grantable)
+          order by a.grantor, a.grantee, a.privilege_type, a.is_grantable)
+        from aclexplode(s.nspacl) a), '[]'::jsonb) end
+    ) order by s.name), '[]'::jsonb)
+    from schemas s
+  ),
+  'functions', (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'oid', f.oid::bigint, 'schema', f.pronamespace::bigint, 'name', f.proname,
+      'arguments', f.proargtypes::text, 'owner', f.proowner::bigint,
+      'definer', f.prosecdef, 'config', to_jsonb(f.proconfig), 'kind', f.prokind::text,
+      'acl', case when f.proacl is null then null else coalesce((
+        select jsonb_agg(jsonb_build_array(a.grantor::bigint, a.grantee::bigint, a.privilege_type, a.is_grantable)
+          order by a.grantor, a.grantee, a.privilege_type, a.is_grantable)
+        from aclexplode(f.proacl) a), '[]'::jsonb) end
+    ) order by f.oid), '[]'::jsonb)
+    from funcs f
+  ),
+  'profile', (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'name', p.name, 'oid', p.oid::bigint, 'superuser', p.rolsuper
+    ) order by p.name), '[]'::jsonb)
+    from profile p
+  ),
+  'membership', (
+    select coalesce(jsonb_agg(jsonb_build_array(e.member::bigint, e.roleid::bigint, e.inherit)
+      order by e.member, e.roleid, e.inherit), '[]'::jsonb)
+    from edges e
+  ),
+  'roles', (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'oid', r.oid::bigint, 'name', x.rolname, 'superuser', x.rolsuper
+    ) order by r.oid), '[]'::jsonb)
+    from referenced r left join pg_roles x on x.oid = r.oid
+  )
+)::text as fingerprint
+`
+
+/** Канонічний текст відбитка прав (`FINGERPRINT_SQL`) на клієнті `client`. */
+export async function readRightsFingerprint(
+  client: pg.ClientBase,
+  scope: EngineScope,
+  roles: readonly string[] = profileRoles(scope.provider)
+): Promise<string> {
+  const { rows } = await client.query<{ fingerprint: string }>(
+    FINGERPRINT_SQL,
+    [[...scope.schemas], [...roles]]
+  )
+  return rows[0]!.fingerprint
+}
+
 interface FactRow extends FunctionExecuteFact {
   observedExecute: Record<string, boolean>
   observedUsage: Record<string, boolean>
 }
 
 /**
- * Факти `EXECUTE` на клієнті відкритої транзакції — тієї самої, що й extract
- * (знімок один). Лише читання каталогу.
+ * Факти `EXECUTE` на клієнті `snapshot` відкритої транзакції — тієї самої, що
+ * й extract (знімок один); лише читання каталогу. Після них відбиток прав
+ * знімка звіряється з відбитком на `fresh` — іншому з'єднанні поза знімком,
+ * тобто зі свіжим каталогом: тека має відповідати стану бази на мить цього
+ * перечитування, а не лише власному знімку. Зміна між читаннями, що
+ * повернулась назад (ABA), прийнятна: стан на мить перечитування той самий.
  */
 export async function readExecuteFacts(
-  client: pg.ClientBase,
+  snapshot: pg.ClientBase,
+  fresh: pg.ClientBase,
   scope: EngineScope,
   roles: readonly string[] = profileRoles(scope.provider)
 ): Promise<ExecuteFacts> {
-  const { rows } = await client.query<FactRow>(FACTS_SQL, [
+  const { rows } = await snapshot.query<FactRow>(FACTS_SQL, [
     [...scope.schemas],
     [...roles],
   ])
-  const missing = await client.query<{ name: string }>(MISSING_SQL, [
+  const missing = await snapshot.query<{ name: string }>(MISSING_SQL, [
     [...roles],
   ])
+  const before = await readRightsFingerprint(snapshot, scope, roles)
+  const after = await readRightsFingerprint(fresh, scope, roles)
   const crossCheckFailures: ExecuteCrossCheckFailure[] = []
   for (const r of rows) {
     const failure = (role: string, privilege: "EXECUTE" | "USAGE") =>
@@ -147,22 +252,6 @@ export async function readExecuteFacts(
       if (r.schemaUsageByRole[role] !== r.observedUsage[role])
         failure(role, "USAGE")
   }
-  // Роль, відсутня у знімку, але наявна у свіжому каталозі, створена між
-  // читаннями: у виведення вона не потрапила, а `PUBLIC` міг дати їй доступ
-  for (const m of missing.rows) {
-    const created = await client.query<{ exists: boolean }>(
-      "select to_regrole(quote_ident($1)) is not null as exists",
-      [m.name]
-    )
-    if (created.rows[0]!.exists)
-      crossCheckFailures.push({
-        schema: "",
-        name: "",
-        identityArguments: "",
-        role: m.name,
-        privilege: "ROLE",
-      })
-  }
   return {
     missingRoles: missing.rows.map((m) => m.name),
     functions: rows.map((r) => ({
@@ -175,5 +264,6 @@ export async function readExecuteFacts(
       schemaUsageByRole: r.schemaUsageByRole,
     })),
     crossCheckFailures,
+    catalogChanged: before !== after,
   }
 }

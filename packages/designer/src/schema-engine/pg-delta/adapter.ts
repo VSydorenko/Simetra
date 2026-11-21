@@ -585,8 +585,10 @@ export async function extractOnTransactionClient(
  * Р11): одна транзакція `REPEATABLE READ READ ONLY` на одному клієнті, extract
  * через `extractOnTransactionClient`, факти — тим самим клієнтом після нього;
  * транзакція відкочується. Запасного варіанта «до й після» немає: він не ловить
- * зміни між двома читаннями. `afterExtract` — шов тесту: зміна, зроблена
- * іншим з'єднанням між extract і фактами, у знімок не потрапляє.
+ * зміни між двома читаннями. Відбиток прав знімка звіряється зі свіжим
+ * каталогом на другому з'єднанні того самого пулу (`readExecuteFacts`).
+ * `afterExtract` — шов тесту: зміна, зроблена іншим з'єднанням між extract і
+ * фактами, у знімок не потрапляє.
  */
 export async function extractWithExecuteFacts(
   db: DbConnection,
@@ -602,7 +604,16 @@ export async function extractWithExecuteFacts(
       await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
       const extracted = await extractOnTransactionClient(client, scope)
       await afterExtract?.()
-      const facts = await readExecuteFacts(client, scope)
+      // Свіже з'єднання береться, поки клієнт знімка зайнятий: пул не віддасть
+      // те саме, тож відбиток перечитується поза знімком
+      const fresh = await pool.connect()
+      fresh.on("error", () => {})
+      let facts: ExecuteFacts
+      try {
+        facts = await readExecuteFacts(client, fresh, scope)
+      } finally {
+        fresh.release()
+      }
       await client.query("ROLLBACK")
       return { extracted, facts }
     } catch (error) {
