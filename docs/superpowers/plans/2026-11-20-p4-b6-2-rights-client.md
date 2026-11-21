@@ -134,8 +134,11 @@ B5b-3 підписується на канали прав. `useCan` — у `src/
 
 ### Задача 7. Приймач: канали прав, реакція, `since`, стенд (Р11–Р13)
 
-Файли: `data/store/rights.ts` (`canSubscribe` — гілки прав),
-`store/receiver.ts` (підписки, сталі `RIGHTS_JITTER_MS`, `REFRESH_MIN_MS`,
+Р11/І5 перенесено в B6-1: гілки каналів прав `canSubscribe` і розширення
+еквівалентності `rights-predicates.*` робить B6-1 (задача 4); тут — лише підписки
+приймача й перерахунок.
+
+Файли: `store/receiver.ts` (підписки, сталі `RIGHTS_JITTER_MS`, `REFRESH_MIN_MS`,
 реакція на `session.sleep`, відмови),
 `src/data/centrifugo/index.ts` (`since` у заміні підписки), тести
 `store/__tests__/receiver-rights.test.ts`, `data/centrifugo/__tests__/centrifugo.test.ts`;

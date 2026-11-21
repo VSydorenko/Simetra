@@ -504,6 +504,39 @@ export function defineRightsPredicateCases(): void {
           )
         )
 
+    // Канали прав і користувача (І5; Р11 плану B6-2, перенесено в B6-1):
+    // кожен скоуп засіву, глобальний, змішані нулі, вид поза видами скоупу,
+    // свій і чужий канал користувача.
+    const rightsPairs = (user: string | null): Pair[] => [
+      ...ORGS.map((org): Pair => ({
+        name: `rights @ ${org}`,
+        user,
+        topic: { raw: `simetra-rights:${ORG_KIND_ID}:{${org}}` },
+      })),
+      ...(
+        [
+          ["global rights", `simetra-rights:${ZERO_UUID}:${ZERO_UUID}`],
+          ["rights, zero kind only", `simetra-rights:${ZERO_UUID}:{A}`],
+          [
+            "rights, zero scope only",
+            `simetra-rights:${ORG_KIND_ID}:${ZERO_UUID}`,
+          ],
+          ["rights, not a scope kind", `simetra-rights:${TASK_ID}:{A}`],
+          ["rights, uppercase scope", `simetra-rights:${ORG_KIND_ID}:{A^}`],
+          ["foreign user channel", "simetra-user:{m5}"],
+        ] as const
+      ).map(([name, raw]): Pair => ({ name, user, topic: { raw } })),
+      ...(user === null
+        ? []
+        : [
+            {
+              name: "own user channel",
+              user,
+              topic: { raw: `simetra-user:{${user}}` },
+            },
+          ]),
+    ]
+
     const RAW: [string, Topic][] = [
       ["extra segment", { raw: `simetra:${ORG_KIND_ID}:{A}:${TASK_ID}:x` }],
       ["uppercase scope", { raw: `simetra:${ORG_KIND_ID}:{A^}:${TASK_ID}` }],
@@ -521,6 +554,7 @@ export function defineRightsPredicateCases(): void {
         const mismatches: string[] = []
         const pairs: Pair[] = [
           ...subscribePairs(user),
+          ...rightsPairs(user),
           ...RAW.map(([name, topic]): Pair => ({ name, user, topic })),
         ]
         for (const pair of pairs) {

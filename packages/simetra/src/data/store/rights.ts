@@ -73,12 +73,16 @@ export function readAllowed(
 }
 
 /**
- * Чи може користувач підписатися на канал: дзеркало `subscribeCondition`
- * (`compiler/signal/units.ts`). Лише канал змін; канали прав — `false`
- * (B6). `publicRead` скоупленого об'єкта скоупу не перевіряє, як і SQL.
- * Інакше — скоуп у межі тенанта й безрядкове право `read`: рядок рівня
- * `scope` свого скоупу (скоуплений) чи будь-який не контейнерний рядок
- * (нескоуплений, `has_right`). Лише контейнерне право канал не відкриває.
+ * Чи може користувач підписатися на канал: дзеркало режиму підписки
+ * `signal_topic_allowed` (`compiler/signal/units.ts`). Канал користувача —
+ * лише свій `userId`; канал прав скоупу — пара в `scopeSets` (межа тенанта
+ * виду, без умови права), глобальний (обидва нулі) — дійсний користувач;
+ * змішані нулі й вид поза видами скоупу в `scopeSets` не трапляються, тож
+ * `false`. Канал змін: `publicRead` скоупленого об'єкта скоупу не
+ * перевіряє, як і SQL. Інакше — скоуп у межі тенанта й безрядкове право
+ * `read`: рядок рівня `scope` свого скоупу (скоуплений) чи будь-який не
+ * контейнерний рядок (нескоуплений, `has_right`). Лише контейнерне право
+ * канал не відкриває.
  */
 export function canSubscribe(
   snapshot: RightsSnapshot,
@@ -87,7 +91,15 @@ export function canSubscribe(
 ): boolean {
   if (snapshot.userId === null) return false
   const topic = parseTopic(channel)
-  if (topic === undefined || topic.kind !== "changes") return false
+  if (topic === undefined) return false
+  if (topic.kind === "user") return topic.userId === snapshot.userId
+  if (topic.kind === "rights") {
+    if (topic.scopeKindId === ZERO_UUID && topic.scope === ZERO_UUID)
+      return true
+    return snapshot.scopeSets.some(
+      (s) => s.scopeKind === topic.scopeKindId && s.scope === topic.scope
+    )
+  }
   const entry = catalog.objects.find((o) => o.id === topic.object)
   if (entry === undefined || !entry.signal) return false
   const kind = entry.scopeKindId ?? ZERO_UUID

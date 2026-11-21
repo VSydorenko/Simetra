@@ -166,16 +166,74 @@ describe("canSubscribe", () => {
       false,
     ],
     ["userId null", snap([row()], undefined, null), topic(), false],
+    // Канали прав (Р11 плану B6-2, перенесено в B6-1): межа тенанта без
+    // умови права, глобальний — дійсному, користувача — лише свій.
     [
-      "канал прав",
+      "канал прав свого скоупу без прав",
+      snap([]),
+      channelTopic({ kind: "rights", scopeKindId: KIND, scope: SCOPE }),
+      true,
+    ],
+    [
+      "канал прав скоупу поза scopeSets",
       snap([row()]),
+      channelTopic({ kind: "rights", scopeKindId: KIND, scope: OTHER }),
+      false,
+    ],
+    [
+      "канал прав виду поза scopeSets",
+      snap([row()]),
+      channelTopic({ kind: "rights", scopeKindId: OTHER, scope: SCOPE }),
+      false,
+    ],
+    [
+      "канал прав з нульовим лише видом",
+      snap([row()]),
+      channelTopic({ kind: "rights", scopeKindId: ZERO_UUID, scope: SCOPE }),
+      false,
+    ],
+    [
+      "канал прав з нульовим лише скоупом",
+      snap([row()]),
+      channelTopic({ kind: "rights", scopeKindId: KIND, scope: ZERO_UUID }),
+      false,
+    ],
+    [
+      "глобальний канал прав без членства",
+      snap([], []),
+      channelTopic({
+        kind: "rights",
+        scopeKindId: ZERO_UUID,
+        scope: ZERO_UUID,
+      }),
+      true,
+    ],
+    [
+      "глобальний канал прав, userId null",
+      snap([], [], null),
+      channelTopic({
+        kind: "rights",
+        scopeKindId: ZERO_UUID,
+        scope: ZERO_UUID,
+      }),
+      false,
+    ],
+    [
+      "канал прав свого скоупу, userId null",
+      snap([row()], undefined, null),
       channelTopic({ kind: "rights", scopeKindId: KIND, scope: SCOPE }),
       false,
     ],
     [
-      "канал користувача",
-      snap([row()]),
+      "свій канал користувача",
+      snap([]),
       channelTopic({ kind: "user", userId: USER }),
+      true,
+    ],
+    [
+      "чужий канал користувача",
+      snap([row()]),
+      channelTopic({ kind: "user", userId: OTHER }),
       false,
     ],
     ["чужий формат", snap([row()]), `other:${KIND}:${SCOPE}:${OBJECT}`, false],
