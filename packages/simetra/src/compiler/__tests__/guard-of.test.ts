@@ -238,9 +238,22 @@ describe("guardOf", () => {
       reason: "firstStatement",
     },
     {
-      name: "firstStatement: an assignment, not PERFORM",
-      sql: body(`DECLARE x uuid; BEGIN x := p_row; END`),
-      reason: "declareSection",
+      name: "firstStatement: an assignment first",
+      sql: body(`BEGIN p_row := p_row; PERFORM ${GOOD}; END`),
+      reason: "firstStatement",
+    },
+    {
+      name: "firstStatement: SELECT ... INTO instead of PERFORM",
+      sql: body(`BEGIN SELECT ${GOOD} INTO p_row; END`),
+      reason: "firstStatement",
+    },
+    {
+      // Три частини — база.схема.функція: на базі з іменем `simetra` це інша функція.
+      name: "firstStatement: a three-part function name",
+      sql: perform(
+        GOOD.replace("simetra.rights_require", "simetra.rights_require.x")
+      ),
+      reason: "firstStatement",
     },
     {
       name: "arguments: another action",
@@ -363,7 +376,10 @@ describe("guardOf", () => {
 describe("sql.declaration-check-not-applied in the pipeline", () => {
   const SQL = "sql/public/fns.sql"
   const FUNCTIONS = "sql/public/fns.functions.json"
-  const files = (text: string) => {
+  const files = (
+    text: string,
+    callers: SqlFunctionDeclaration["callers"] = ["user"]
+  ) => {
     const all = withRoles()
     all.set(
       SQL,
@@ -376,7 +392,7 @@ describe("sql.declaration-check-not-applied in the pipeline", () => {
           {
             id: uuid(7901),
             function: { name: "f" },
-            callers: ["user"],
+            callers,
             check: {
               action: "read",
               object: { kind: "Document", name: "Task" },
@@ -402,5 +418,33 @@ describe("sql.declaration-check-not-applied in the pipeline", () => {
       params: { schema: "public", name: "f", reason: "firstStatement" },
     })
     expect(isRepairError(found[0]!)).toBe(true)
+  })
+
+  // Мутація: звузити фільтр `checkDeclaredGuards` до `callers.includes("user")`.
+  it.each<{ callers: SqlFunctionDeclaration["callers"] }>([
+    { callers: ["command"] },
+    { callers: ["command", "service"] },
+    { callers: ["user", "service"] },
+  ])(
+    "callers $callers: a body without the guard is refused",
+    async ({ callers }) => {
+      const { diagnostics } = await compile(
+        files("BEGIN PERFORM 1; END", callers)
+      )
+      const found = diagnostics.filter(
+        (d) => d.code === "sql.declaration-check-not-applied"
+      )
+      expect(found).toHaveLength(1)
+      expect(found[0]!.params).toMatchObject({ reason: "firstStatement" })
+    }
+  )
+
+  it("a service-only caller is not judged", async () => {
+    const { diagnostics } = await compile(
+      files("BEGIN PERFORM 1; END", ["service"])
+    )
+    expect(
+      diagnostics.filter((d) => d.code === "sql.declaration-check-not-applied")
+    ).toEqual([])
   })
 })

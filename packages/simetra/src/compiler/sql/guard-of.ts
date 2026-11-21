@@ -3,7 +3,8 @@ import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { RightsContract } from "../contracts"
 import type { ParsedObject } from "../stages/files"
 import { ON_BEHALF_OF_USER, isSecurityDefiner } from "./definer-reads"
-import type { DeclaredFunction } from "./declarations"
+import { checkedContract, type DeclaredFunction } from "./declarations"
+import { RIGHTS_FUNCTIONS } from "../rights/functions"
 import type { SqlParser } from "./parse"
 import {
   functionBodyText,
@@ -89,10 +90,13 @@ const bareName = (node: unknown): string | undefined => {
   return typeof sval === "string" ? sval : undefined
 }
 
-/** Функція запобіжника форми цілі декларації (спека §5.2). */
+/** Функція запобіжника форми цілі декларації: ім'я тримає генератор. */
 const guardFunctionOf = (
   check: NonNullable<SqlFunctionDeclaration["check"]>
-) => (check.scope !== undefined ? "rights_require_scope" : "rights_require")
+) =>
+  check.scope !== undefined
+    ? RIGHTS_FUNCTIONS.requireScope
+    : RIGHTS_FUNCTIONS.require
 
 function firstStatementOk(
   statement: PlpgsqlStatement | undefined,
@@ -114,11 +118,12 @@ function firstStatementOk(
   const named = ((call?.args as unknown[] | undefined) ?? []).some(
     (arg) => asRecord(arg)?.NamedArgExpr !== undefined
   )
+  const guard = guardFunctionOf(check)
   return call !== undefined &&
     !named &&
     name?.length === 2 &&
-    name[0] === "simetra" &&
-    name[1] === guardFunctionOf(check)
+    name[0] === guard.schema &&
+    name[1] === guard.name
     ? call
     : undefined
 }
@@ -194,11 +199,14 @@ export function checkDeclaredGuards(
       !declaration.callers.some((c) => ON_BEHALF_OF_USER.has(c))
     )
       return []
-    const object = objects.find(
-      (o) => o.kind === check.object.kind && o.name === check.object.name
-    )
-    const contract = rights.find((r) => r.objectId === object?.id)
-    if (contract === undefined) return []
+    const contract = checkedContract(check, objects, rights)
+    // Сюди доходять лише декларації, що пройшли `check-form` (є контракт);
+    // тиха згода тут відкрила б обхід, тож відсутність — внутрішня помилка.
+    if (contract === undefined) {
+      throw new Error(
+        `internal: no rights contract for the check of ${key.schema}.${key.name}`
+      )
+    }
     const proof = guardOf(unit, declaration, contract, plpgsql, parse)
     return proof.ok
       ? []

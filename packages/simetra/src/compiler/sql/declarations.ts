@@ -422,6 +422,18 @@ function hasUuidInParameter(unit: VerbatimUnit, name: string): boolean {
   })
 }
 
+/** Контракт прав об'єкта, який називає `check`; одна пошукова функція для судді й `guardOf`. */
+export function checkedContract(
+  check: NonNullable<SqlFunctionDeclaration["check"]>,
+  objects: readonly ParsedObject[],
+  rights: readonly RightsContract[]
+): RightsContract | undefined {
+  const object = objects.find(
+    (o) => o.kind === check.object.kind && o.name === check.object.name
+  )
+  return rights.find((r) => r.objectId === object?.id)
+}
+
 /**
  * Причина, з якої `check` декларації не відповідає об'єкту чи підпису
  * (спека декларацій функцій §5.2), або `undefined`. Перша спрацьована
@@ -438,10 +450,7 @@ function checkFormReason(
   if (check === undefined) return undefined
   // Invoker-функцію вже обмежує RLS викликача: названа перевірка їй зайва.
   if (!isSecurityDefiner(unit, units)) return "invoker"
-  const object = objects.find(
-    (o) => o.kind === check.object.kind && o.name === check.object.name
-  )
-  const contract = rights.find((r) => r.objectId === object?.id)
+  const contract = checkedContract(check, objects, rights)
   if (contract === undefined) return "noRights"
   const action = contract.actions.find((a) => a.name === check.action)
   if (action === undefined) return "unknownAction"
