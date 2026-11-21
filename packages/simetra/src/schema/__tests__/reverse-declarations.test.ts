@@ -251,6 +251,56 @@ describe("declarations of definer functions", () => {
     expect(errorsOf(result)).toEqual([])
   })
 
+  it.each(["supabase", "postgres"] as const)(
+    "%s: EXECUTE only for the anonymous role without a guard: a declaration without callers, the grant is revoked",
+    async (provider) => {
+      const anonymous = PROVIDER_API_ROLES[provider].anonymous!
+      const existing = withRoles()
+      const files = new Map(existing)
+      files.set(
+        "project.meta.json",
+        JSON.stringify({
+          ...JSON.parse(existing.get("project.meta.json")!),
+          database: { provider },
+        })
+      )
+      const result = await reverseGenerate(
+        model(
+          [
+            rpc("rpc", "NULL;"),
+            "REVOKE EXECUTE ON FUNCTION public.rpc(uuid) FROM PUBLIC;",
+            `GRANT EXECUTE ON FUNCTION public.rpc(uuid) TO ${anonymous};`,
+          ].join("\n")
+        ),
+        options(files, facts(fact("rpc", { provider, grants: [anonymous] })))
+      )
+      expect(errorsOf(result)).toEqual([])
+      expect(
+        warning(result, "introspect.definer-anonymous-dropped").map(
+          (d) => d.params
+        )
+      ).toEqual([{ function: "public.rpc", role: anonymous }])
+      const [entry] = declarationsOf(result, RPC_FUNCTIONS)
+      expect(entry).toMatchObject({ callers: [] })
+      expect(entry).not.toHaveProperty("check")
+      // Дослівного гранту немає ніде: його відтворює генератор
+      expect(
+        [...result.files.keys()].filter((p) => p.includes("grant__"))
+      ).toEqual([])
+      const compiled = await compile(result.files)
+      const execute = compiled
+        .model!.sqlUnits.filter((u) => u.generator === "functionExecute")
+        .map((u) => u.sql)
+      expect(execute).toContain(
+        `REVOKE EXECUTE ON FUNCTION public.rpc(uuid) FROM ${anonymous};`
+      )
+      expect(execute).toContain(
+        "REVOKE EXECUTE ON FUNCTION public.rpc(uuid) FROM PUBLIC;"
+      )
+      expect(execute.filter((sql) => sql.startsWith("GRANT"))).toEqual([])
+    }
+  )
+
   it("only the user role: callers [user], the id is generated", async () => {
     const result = await reverseGenerate(
       model(guarded("rpc")),

@@ -437,8 +437,15 @@ export async function declareFunctions(
     }
     // Лише власник і без запобіжника: декларації немає, `REVOKE` лишається
     // дослівним; із запобіжником — декларація без викликачів, інакше виклик
-    // запобіжника поза формою відмовила б компіляція
-    if (derived.callers.length === 0 && args === undefined) continue
+    // запобіжника поза формою відмовила б компіляція. Анонімна роль без сесії
+    // теж не пропуск: дослівний `GRANT … TO anon` ніхто б не відкликав, тож
+    // функція отримує декларацію без викликачів і попередження (§5.5 п.2)
+    if (
+      derived.callers.length === 0 &&
+      derived.anonymous.length === 0 &&
+      args === undefined
+    )
+      continue
 
     for (const role of derived.anonymous)
       report("introspect.definer-anonymous-dropped", "", {
