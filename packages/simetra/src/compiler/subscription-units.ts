@@ -7,6 +7,7 @@ import {
 import type { EventSubscriptionContract } from "./contracts"
 import { compareStrings, diagnostic, type Diagnostic } from "./diagnostics"
 import { contentChangeCondition } from "./mechanics-units"
+import { identityParts, qualifiedName } from "./sql/identity"
 import type { SqlParser } from "./sql/parse"
 import { generatedUnit, type SqlUnit } from "./sql/units"
 
@@ -145,7 +146,9 @@ export function subscriptionTriggerConflicts(
     )
     for (const unit of rest) {
       if (unit.generator !== "subscription") continue
-      const target = unit.identity.slice("trigger:".length)
+      // Частини ідентичності — розбором `identity.ts`: ім'я в лапках довше за
+      // `unit.name`, тож зріз за довжиною імені обрізав би таблицю.
+      const [schema, table] = identityParts(unit.identity)
       found.push(
         diagnostic(
           "subscription.trigger-name-taken",
@@ -153,7 +156,7 @@ export function subscriptionTriggerConflicts(
           "/physicalName",
           {
             name: unit.name,
-            table: target.slice(0, target.length - unit.name.length - 1),
+            table: qualifiedName(schema!, table!),
             holder: describe(holder!),
           }
         )

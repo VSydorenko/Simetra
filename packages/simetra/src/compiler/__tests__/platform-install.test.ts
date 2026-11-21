@@ -138,4 +138,17 @@ describe("platformInstall", () => {
       'grant|table|public.t|"x:""y"""|select*',
     ])
   })
+
+  // Колонка — частина імені за `quoteIdent` (#297): кома в імені колонки в
+  // лапках не ділить атом колонкового привілею
+  it("splits column privilege atoms by quoted column names", () => {
+    const unit = unitOf('GRANT INSERT ("a,b", c) ON public.t TO anon;')
+    expect(unit.identity).toBe(
+      'grant:grant:table:public.t:anon:insert("a,b",c)'
+    )
+    expect(grantAtoms(unit.identity)).toEqual([
+      'grant|table|public.t|anon|insert("a,b")',
+      "grant|table|public.t|anon|insert(c)",
+    ])
+  })
 })

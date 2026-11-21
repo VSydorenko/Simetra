@@ -5,7 +5,8 @@ import {
 } from "simetra/model"
 import { compile } from "../compile"
 import { PROJECT_FILE } from "../stages/files"
-import { grantObjects, splitIdentity, type SqlUnit } from "../sql/units"
+import { splitIdentity } from "../sql/identity"
+import { grantObjects, type SqlUnit } from "../sql/units"
 
 /**
  * What the platform installs in every database of a provider: the snapshot
@@ -77,7 +78,9 @@ export function grantAtoms(identity: string): string[] {
     const columns = /^([^(]+)\((.*)\)(\*?)$/.exec(p)
     return columns === null
       ? [p]
-      : columns[2]!.split(",").map((c) => `${columns[1]}(${c})${columns[3]}`)
+      : splitIdentity(columns[2]!, ",").map(
+          (c) => `${columns[1]}(${c})${columns[3]}`
+        )
   })
   return grantObjects(objects ?? "").flatMap((object) =>
     splitIdentity(roles ?? "", ",").flatMap((role) =>

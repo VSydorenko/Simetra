@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest"
-import { loadSqlParser, type SqlParser } from "simetra/compiler"
+import { loadSqlParser, unitIdentity, type SqlParser } from "simetra/compiler"
 import type { CatalogModel } from "simetra/model"
 import {
   classifySteps,
@@ -135,6 +135,42 @@ describe("triggerReplacements", () => {
     ])
     const parsed = parse(out[1]!.sql)
     expect(parsed.ok && parsed.statements.length).toBe(1)
+  })
+
+  it("merges the pair on a table whose name needs quotes", () => {
+    // Ідентичність живого тригера — у мові одиниць (`trigger:app."user".t`),
+    // а посилання двигуна — сирі імена каталогу: сирий ключ не знайшов би
+    // живого тригера, і пара лишилася б `DROP` на чужій таблиці (#297)
+    const table = "user"
+    const create = action(
+      `CREATE TRIGGER t AFTER INSERT OR UPDATE ON app."user" FOR EACH ROW EXECUTE FUNCTION app.f()`,
+      { verb: "create", produced: [triggerRef("t", table)] }
+    )
+    const drop = action(`DROP TRIGGER t ON app."user"`, {
+      verb: "drop",
+      destroys: ["engine-id"],
+      destroyed: [triggerRef("t", table)],
+    })
+    const live: CatalogModel = {
+      tables: [],
+      enumTypes: [],
+      units: [
+        {
+          class: "trigger",
+          identity: unitIdentity("trigger", TABLE.schema, table, "t"),
+          schema: TABLE.schema,
+          name: "t",
+          sql: `CREATE TRIGGER t AFTER INSERT ON app."user" FOR EACH ROW EXECUTE FUNCTION app.f()`,
+        },
+      ],
+    }
+    expect(live.units[0]!.identity).toBe('trigger:app."user".t')
+    expect(triggerReplacements([drop, create], live, parse)).toEqual([
+      {
+        ...create,
+        sql: create.sql.replace("CREATE TRIGGER", "CREATE OR REPLACE TRIGGER"),
+      },
+    ])
   })
 
   it.each<[string, () => EngineAction[], CatalogModel]>([

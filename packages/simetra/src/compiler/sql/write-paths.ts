@@ -22,6 +22,7 @@ import {
   privilegedRoles,
 } from "./grant-facts"
 import { modelViews, routineBody, type ModelView } from "./function-body"
+import { qualifiedName, splitIdentity, unquoteIdent } from "./identity"
 import {
   kindTableNamed,
   ruleOneTables,
@@ -109,7 +110,9 @@ export function writePaths(
   const apiRoles = apiRolesOf(ctx.provider)
   const owner = ctx.provider && PROVIDER_OWNER_ROLES[ctx.provider]
   const writers = (view: ModelView): string[] => {
-    const key = `table|${view.schema}.${view.name}`
+    // Ключ цілі гранту — за правилом ідентичності (`grantTargetKeys`): сирий
+    // `схема.ім'я` не збігся б із грантом на подання `"V"`.
+    const key = `table|${qualifiedName(view.schema, view.name)}`
     const named = [
       ...new Set(
         grants
@@ -564,7 +567,20 @@ function grantPath(
   if (roles.length === 0) return undefined
   // Некваліфіковане ім'я — fail-closed: ціль береться з дерева без схеми
   // файлу, а не з `unit.schema`, як у політики й тригера.
-  const resolved = new Set(grantTargetKeys(unit, parse))
+  // Цілі-таблиці гранту частинами імені: ключ `grantTargetKeys` — за
+  // правилом ідентичності (ім'я в лапках), а таблиці виду (`KindTables`) —
+  // сирим `схема.ім'я`, тож порівнюються розібрані частини.
+  const resolved = new Set(
+    grantTargetKeys(unit, parse).flatMap((key) =>
+      key.startsWith("table|")
+        ? [
+            splitIdentity(key.slice("table|".length), ".")
+              .map(unquoteIdent)
+              .join("."),
+          ]
+        : []
+    )
+  )
   const path = (target: string, unqualified: boolean): WritePath => ({
     unit,
     form: "grant",
@@ -581,7 +597,7 @@ function grantPath(
         if (
           target.kind !== "schema" &&
           written.generatedGrants?.has(table) === true &&
-          resolved.has(`table|${table}`)
+          resolved.has(table)
         )
           continue
         return path(table, unqualified)

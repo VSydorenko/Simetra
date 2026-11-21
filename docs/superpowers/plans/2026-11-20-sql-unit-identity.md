@@ -132,7 +132,9 @@ Issue #297, віха М4. Автор і (після сигналу архіте�
 
 ## Задачі
 
-**Задача 0 — анкори й спека** (після мерджу #275; `git merge origin/main`
+### Задача 0 — анкори й спека
+
+(після мерджу #275; `git merge origin/main`
 у worktree). `orient --plan` і `doc anchors` на цей план; дельти — сюди
 рядком. Перевірити: (а) `encodeId` pg-delta для імен у лапках (Р9);
 (б) `git ls-files '*sql-debt.json'` порожньо (Р7); (в) нові місця
@@ -144,7 +146,11 @@ Issue #297, віха М4. Автор і (після сигналу архіте�
 замінити рядком `sql.function-argument-type-reference` (корінь — #300). Готово:
 `doc anchors && doc lint` зелені, коміт `docs(spec): #297 — …`.
 
-**Задача 1 — модуль ідентичності й класифікатор** (після 0).
+**Дельти задачі 0.** Анкори після #275 цілі. (а) `encodeId` pg-delta (`seg`) бере в лапки сегмент лише з `.:(),"` чи пробілом, дублюючи `"` — ін'єктивно, не сиро; але верхній регістр лишає без лапок, тож `StableId` двигуна (`table:public.Foo`) не збігається з ідентичністю одиниці за `quoteIdent` (`table:public."Foo"`) — межа Р9 порівнює лише там, де споживач уже на `identity.ts`. (б) `sql-debt.json` у репо немає. (в) #275 нових місць складання ідентичності не додав (лише ключі `table|…` у `write-paths.ts`, не ідентичності). Місця поза таблицею споживачів: `catalog-command/units.ts` (`table:${relation(table)}`), `operations/fix.ts` (`schema:${schema}`), `sql/heads.ts` (`table:${qualified}`), `sql/units.ts` (`label: table:…`), `write-paths.ts` (ключі `table|…`), `designer/tools/database-tools.ts` (`table:`, `type:`, `index:`, `sequence:` — ідентичності двигуна чи одиниць, розрізнити за Р9), `guard-units.ts`/`command-units.ts` (`function:${ref(…)}(uuid,uuid)` — константи платформи, вже в таблиці).
+
+### Задача 1 — модуль ідентичності й класифікатор
+
+(після 0).
 новий `identity.ts` у `compiler/sql/`; `units.ts`: `classify`, `typeName`,
 `signature`, `functionObject`, `targetName`, ключі `relation`, тригер,
 політика, `pgNamespaceKeys`, `platformFunctionSignatures`,
@@ -158,7 +164,9 @@ Issue #297, віха М4. Автор і (після сигналу архіте�
 вже є в залежностях, інакше таблиця). Готово: `run-tests unit --filter
 sql-units`, `run-tests unit --changed`, `pnpm metadata:check` зелені.
 
-**Задача 2 — грант `EXECUTE` без латок** (після 1). `compiler/function-execute.ts`,
+### Задача 2 — грант `EXECUTE` без латок
+
+(після 1). `compiler/function-execute.ts`,
 `compiler/pipeline.ts` (виклик `checkExecuteSignatures`),
 `compiler/diagnostics.ts`, `compiler/messages.ts`: Р3 і Р8 (новий код
 `sql.function-argument-type-reference`, тест І7). Тести `sql.function-name-unsupported`
@@ -170,7 +178,28 @@ function-execute`, `run-tests db --filter <новий файл>` зелені; �
 (без `quoteIdent` для однієї частини) робить DB-тест червоним — описати в
 звіті задачі.
 
-**Задача 3 — споживачі компілятора** (після 1). `definer-reads.ts`,
+### Задача 1c — червоний CI після задач 1–2
+
+(після 2; додана виконавицею, не з приймання). CI на PR #322 після задачі 1:
+(а) `test/generated-fresh.test.ts` — `runtime-catalog.json` шаблону
+`create-simetra-app` застарів (хеш ідентичностей змінився) → `pnpm generate`;
+той самий корінь у e2e шаблону (`command.model-mismatch`); (б) designer
+`plan.postgres.db.test.ts` «returns a changed provision trigger…» —
+`plan.identity-trigger-locked` на `better_auth."user"`: перевірка замка
+тригера ідентичності (`schema/apply/plan.ts`) порівнює сиру ідентичність
+тригера з новою (ім'я `user` — ключове слово, тепер у лапках) → через
+`identity.ts`, з unit-випадком таблиці, чиє ім'я потребує лапок. Мінорні з
+рев'ю задачі 2: DB-рядок І1 для тихого шляху типу (домен `s."X"` поруч із
+чужим `s.x`, `f(a s."X")` проти чужої `s.f(s.x)`; мутація без `quoteIdent`
+типу має червоніти на `proacl` чужої чи на пробі без гранту, не на помилці
+розгортання); рядки І7 для форми платформи й функції значень виміру, якщо
+форма може мати аргумент. Готово: `run-tests unit --filter generated-fresh`,
+`run-tests db --filter plan.postgres` (designer), `run-tests db --filter
+function-execute-identity`, `run-tests unit --changed` зелені.
+
+### Задача 3 — споживачі компілятора
+
+(після 1). `definer-reads.ts`,
 `declarations.ts` (+`operations/platform-forms.ts`),
 `catalog-command/units.ts`, `subscription-units.ts`,
 `rights/guard-units.ts`, `rights/command-units.ts`, `stages/integrity.ts`,
@@ -178,19 +207,25 @@ function-execute`, `run-tests db --filter <новий файл>` зелені; �
 «споживач → тест» цієї частини має випадок з ім'ям у лапках. Готово:
 `run-tests unit --changed`.
 
-**Задача 4 — споживачі T2** (після 1). `schema/apply/row-version.ts`,
+### Задача 4 — споживачі T2
+
+(після 1). `schema/apply/row-version.ts`,
 `plan.ts`, `steps.ts` (`inApplied`), `drift.ts` (Р10), `backfill.ts`, `state.ts`, `promotion/replacements.ts`,
 `compiler/platform/install.ts`, `schema/reverse/units.ts` (Р11); читач
 marker у `state.ts` (Р10, тест І6). Тригер-ключі розбираються через
 `identity.ts`, не `slice` префікса. Готово:
 `run-tests unit --changed`.
 
-**Задача 5 — designer** (після 1). `census-read.ts`, `tools/database-tools.ts`
+### Задача 5 — designer
+
+(після 1). `census-read.ts`, `tools/database-tools.ts`
 (шляхи `units.<ідентичність>` і розбір ключа `sequenceOwnedBy` — через
 `identity.ts`; `StableId` двигуна не чіпати, Р9).
 Готово: `run-tests unit --changed` для designer.
 
-**Задача 6 — запобіжник lint** (після 3–5). Правило Р4 лише для
+### Задача 6 — запобіжник lint
+
+(після 3–5). Правило Р4 лише для
 виробничих `src/**` (без `__tests__`, `*.support.ts`). Селектор зливається в
 наявні масиви опцій `no-restricted-syntax` за зразком
 `packages/simetra/eslint.standard-columns.js` (flat config замінює опції

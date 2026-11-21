@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest"
-import { compile } from "simetra/compiler"
+import { applyChanges, compile, fixFiles } from "simetra/compiler"
 import { PLATFORM_ROLES } from "simetra/model"
 import type { QualifiedName } from "../contracts"
 import {
@@ -664,69 +664,102 @@ describe("sql.generated-grant on declared, dimension and module functions", () =
   })
 })
 
-describe("sql.function-name-unsupported", () => {
-  // Підпис `REVOKE`/`GRANT EXECUTE` будується з канонічної ідентичності, яка
-  // межі лапкованого ідентифікатора не зберігає (#297): частина з `.`, `,`
-  // чи `"` дала б грант на іншу функцію або SQL, що не розбирається. Доки
-  // ідентичність не лапкує частин, такий підпис — помилка, а не грант.
-  const unsupported = async (sql: string) => {
-    const result = await compiledOn({
-      "sql/public/fns.sql": sql,
-      "sql/public/fns.functions.json": functionsFile({
-        function: { name: "f" },
-        callers: ["user"],
-      }),
-    })
-    return {
-      ok: result.ok,
-      found: result.diagnostics
-        .filter((d) => d.code === "sql.function-name-unsupported")
-        .map((d) => [d.severity, d.file, d.params?.function, d.params?.part]),
-    }
-  }
+describe("EXECUTE of functions with quoted identifier parts", () => {
+  // Підпис гранту — ключ ідентичності, де кожна частина імені за `quoteIdent`
+  // (#297): межа лапкованого ідентифікатора, регістр і `.`, `,`, `"` у ньому
+  // доходять до `REVOKE`/`GRANT` як є, тож грант влучає рівно в цю функцію.
+  /** Гранти задекларованої `fn` з файлу `file` на профілі `postgres`. */
+  const declaredGrants = (
+    sql: string,
+    fn: { schema?: string; name: string },
+    file = "sql/public/fns.sql"
+  ) =>
+    executeSql(
+      {
+        [file]: sql,
+        [file.replace(".sql", ".functions.json")]: functionsFile({
+          function: fn,
+          callers: ["user"],
+        }),
+      },
+      "postgres"
+    )
+  const grantsOn = (signature: string) =>
+    [
+      `REVOKE EXECUTE ON FUNCTION ${signature} FROM PUBLIC;`,
+      `REVOKE EXECUTE ON FUNCTION ${signature} FROM simetra_anon;`,
+      `GRANT EXECUTE ON FUNCTION ${signature} TO simetra_user;`,
+    ].sort()
 
   it.each([
-    { args: 'a app."Code.Type"', part: "Code.Type" },
-    { args: 'a "a,b"', part: "a,b" },
-    { args: 'a int, b public."x""y"[]', part: 'x"y' },
+    {
+      part: "a name in upper case",
+      sql: closedFn('public."F"'),
+      fn: { name: "F" },
+      signature: 'public."F"()',
+    },
+    {
+      part: "a name with a dot",
+      sql: closedFn('public."a.b"'),
+      fn: { name: "a.b" },
+      signature: 'public."a.b"()',
+    },
+    {
+      part: "a schema in upper case",
+      sql: closedFn('"Sch".f'),
+      fn: { schema: "Sch", name: "f" },
+      signature: '"Sch".f()',
+      file: "sql/Sch/fns.sql",
+    },
+    {
+      part: "an argument type with a dot",
+      sql: closedFn("public.f", 'a app."Code.Type"'),
+      fn: { name: "f" },
+      signature: 'public.f(app."Code.Type")',
+    },
+    {
+      part: "an argument type with a comma",
+      sql: closedFn("public.f", 'a "a,b"'),
+      fn: { name: "f" },
+      signature: 'public.f("a,b")',
+    },
+    {
+      part: "an argument array type with a double quote",
+      sql: closedFn("public.f", 'a int, b public."x""y"[]'),
+      fn: { name: "f" },
+      signature: 'public.f(int4, public."x""y"[])',
+    },
+    {
+      part: "a model domain with a comma",
+      sql:
+        'CREATE DOMAIN public."x,y" AS int;\n' +
+        closedFn("public.f", 'a "x,y"'),
+      fn: { name: "f" },
+      signature: 'public.f(public."x,y")',
+    },
   ])(
-    "a declared function with argument type part $part is an error",
-    async ({ args, part }) => {
-      expect(await unsupported(closedFn("public.f", args))).toEqual({
-        ok: false,
-        found: [["error", "sql/public/fns.sql", "public.f", part]],
-      })
+    "a declared function with $part grants on its quoted signature",
+    async ({ sql, fn, signature, file }) => {
+      expect(await declaredGrants(sql, fn, file)).toEqual(grantsOn(signature))
     }
   )
 
-  it("a declared function whose name has a dot in quotes is an error", async () => {
-    const result = await compiledOn({
-      "sql/public/fns.sql": closedFn('public."a.b"'),
-      "sql/public/fns.functions.json": functionsFile({
-        function: { name: "a.b" },
-        callers: ["user"],
-      }),
-    })
+  it("an undeclared module function with such an argument type is revoked too", async () => {
     expect(
-      result.diagnostics
-        .filter((d) => d.code === "sql.function-name-unsupported")
-        .map((d) => [d.file, d.params?.function, d.params?.part])
-    ).toEqual([["sql/public/fns.sql", 'public."a.b"', "a.b"]])
-    expect(result.ok).toBe(false)
+      await executeSql(
+        { [ITEM_MODULE]: closedFn("public.g", 'a app."Code.Type"') },
+        "postgres"
+      )
+    ).toEqual(
+      [
+        'REVOKE EXECUTE ON FUNCTION public.g(app."Code.Type") FROM PUBLIC;',
+        'REVOKE EXECUTE ON FUNCTION public.g(app."Code.Type") FROM simetra_anon;',
+        'REVOKE EXECUTE ON FUNCTION public.g(app."Code.Type") FROM simetra_user;',
+      ].sort()
+    )
   })
 
-  it("an undeclared module function with such an argument type is an error too", async () => {
-    const result = await compiledOn({
-      [ITEM_MODULE]: closedFn("public.g", 'a app."Code.Type"'),
-    })
-    expect(
-      result.diagnostics
-        .filter((d) => d.code === "sql.function-name-unsupported")
-        .map((d) => [d.file, d.params?.function, d.params?.part])
-    ).toEqual([[ITEM_MODULE, "public.g", "Code.Type"]])
-  })
-
-  it("generates no grant for such a function and keeps the grants of the others", () => {
+  it("buildFunctionExecuteUnits grants every function, quoted parts included", () => {
     const { units } = readSqlUnits(
       [
         {
@@ -758,9 +791,8 @@ describe("sql.function-name-unsupported", () => {
     ).map((u) => u.sql)
     expect(sql.sort()).toEqual(
       [
-        "REVOKE EXECUTE ON FUNCTION public.g() FROM PUBLIC;",
-        "REVOKE EXECUTE ON FUNCTION public.g() FROM simetra_anon;",
-        "GRANT EXECUTE ON FUNCTION public.g() TO simetra_user;",
+        ...grantsOn('public.f(app."Code.Type")'),
+        ...grantsOn("public.g()"),
       ].sort()
     )
   })
@@ -785,5 +817,149 @@ describe("sql.function-name-unsupported", () => {
         'GRANT EXECUTE ON FUNCTION public.f("numeric"[], "char", "varchar") TO authenticated;',
       ].sort()
     )
+  })
+})
+
+describe("sql.generated-grant and a foreign function with the same unquoted text", () => {
+  // Дослівний грант на чужу функцію, текст якої без лапок збігається з
+  // підписом задекларованої, — не грант платформи: його не названо
+  // `sql.generated-grant`, і `fix` його не вирізає (#297).
+  it.each([
+    {
+      part: "the case of the name",
+      sql: closedFn('public."F"') + closedFn("public.f"),
+      fn: { name: "F" },
+      grant: "GRANT EXECUTE ON FUNCTION public.f() TO simetra_anon;",
+    },
+    {
+      part: "the boundary of a dot",
+      sql: closedFn('public."a.b"'),
+      fn: { name: "a.b" },
+      grant: 'GRANT EXECUTE ON FUNCTION "public.a".b() TO simetra_anon;',
+    },
+    {
+      part: "the boundary of a comma in a type",
+      sql: closedFn("public.f", 'a "x,y"'),
+      fn: { name: "f" },
+      grant: "GRANT EXECUTE ON FUNCTION public.f(x, y) TO simetra_anon;",
+    },
+  ])(
+    "a verbatim grant differing only by $part is not generated-grant and fix keeps it",
+    async ({ sql, fn, grant }) => {
+      const files = await acceptDebt(
+        metaFiles({
+          "project.meta.json": project({ database: { provider: "postgres" } }),
+          [ITEM_FILE]: catalog("Item", { scope: "none" }),
+          "sql/public/fns.sql": sql,
+          "sql/public/fns.functions.json": functionsFile({
+            function: fn,
+            callers: ["user"],
+          }),
+          [GRANTS_FILE]: grant,
+        })
+      )
+      expect(
+        (await compile(files)).diagnostics.filter(
+          (d) => d.code === "sql.generated-grant"
+        )
+      ).toEqual([])
+      const fixed = await fixFiles(files, {
+        schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
+        newId: () => uuid(9599),
+      })
+      expect(applyChanges(files, fixed.changes).get(GRANTS_FILE)).toBe(grant)
+    }
+  )
+})
+
+describe("sql.function-argument-type-reference", () => {
+  // `pg_proc` зберігає тип колонки на момент `CREATE`, а `GRANT` резолвить
+  // `%type` заново: після зміни типу колонки грант влучив би в чуже
+  // перевантаження. Тож функція з виведеним `EXECUTE` і аргументом `%type` —
+  // помилка без гранту (fail-closed, #300).
+  const found = (result: Awaited<ReturnType<typeof compiledOn>>) =>
+    result.diagnostics
+      .filter((d) => d.code === "sql.function-argument-type-reference")
+      .map((d) => [d.severity, d.file, d.params?.function, d.params?.argument])
+  const executeUnits = (result: Awaited<ReturnType<typeof compiledOn>>) =>
+    (result.model?.sqlUnits ?? [])
+      .filter((u) => u.generator === "functionExecute")
+      .map((u) => u.sql)
+
+  it("a declared function with a %type argument is an error without a grant", async () => {
+    const result = await compiledOn({
+      "sql/public/fns.sql":
+        closedFn("public.f", 'a public."Item".code%type') +
+        closedFn("public.g"),
+      "sql/public/fns.functions.json": functionsFile(
+        { function: { name: "f" }, callers: ["user"] },
+        { function: { name: "g" }, callers: ["user"] }
+      ),
+    })
+    expect(found(result)).toEqual([
+      ["error", "sql/public/fns.sql", "public.f", 'public."Item".code%type'],
+    ])
+    expect(result.ok).toBe(false)
+  })
+
+  it("buildFunctionExecuteUnits gives no grant to a %type function and keeps the others", () => {
+    const { units } = readSqlUnits(
+      [
+        {
+          file: "sql/public/fns.sql",
+          text:
+            closedFn("public.f", "a public.item.code%type") +
+            closedFn("public.g"),
+          schema: "public",
+        },
+      ],
+      parse,
+      []
+    )
+    const declared = units.map((unit, i) => ({
+      declaration: {
+        id: uuid(9580 + i),
+        function: { name: unit.name },
+        callers: ["user" as const],
+      },
+      file: "sql/public/fns.functions.json",
+      pointer: `/functions/${i}`,
+      unit,
+      key: { schema: unit.schema, name: unit.name },
+    }))
+    expect(
+      buildFunctionExecuteUnits(
+        { forms: [], declared, units, moduleOwners: new Set() },
+        "postgres",
+        "app",
+        parse
+      )
+        .map((u) => u.sql)
+        .sort()
+    ).toEqual(
+      [
+        "REVOKE EXECUTE ON FUNCTION public.g() FROM PUBLIC;",
+        "REVOKE EXECUTE ON FUNCTION public.g() FROM simetra_anon;",
+        "GRANT EXECUTE ON FUNCTION public.g() TO simetra_user;",
+      ].sort()
+    )
+  })
+
+  it("an undeclared module function with a %type argument is an error too", async () => {
+    const result = await compiledOn({
+      [ITEM_MODULE]: closedFn("public.g", "a public.item.code%type"),
+    })
+    expect(found(result)).toEqual([
+      ["error", ITEM_MODULE, "public.g", "public.item.code%type"],
+    ])
+    expect(executeUnits(result)).toEqual([])
+  })
+
+  it("a function without a derived EXECUTE may take a %type argument", async () => {
+    const result = await compiledOn({
+      "sql/public/fns.sql": closedFn("public.f", "a public.item.code%type"),
+    })
+    expect(found(result)).toEqual([])
+    expect(executeUnits(result)).toEqual([])
   })
 })

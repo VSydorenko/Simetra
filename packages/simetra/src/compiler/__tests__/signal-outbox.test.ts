@@ -118,7 +118,7 @@ describe("signal outbox", () => {
     )
     const table = order.indexOf(`table:${TABLE}`)
     expect(table).toBeGreaterThanOrEqual(0)
-    const prune = `function:${SIGNAL_OUTBOX.schema}.signal_outbox_prune(interval)`
+    const prune = `function:${SIGNAL_OUTBOX.schema}.signal_outbox_prune("interval")`
     const after = unitsOn(model)
       .filter(
         (u) =>

@@ -404,6 +404,22 @@ describe("stage 4: integrity", () => {
     ])
   })
 
+  // Ключ — за правилом ідентичності (#297): `"a.b".c` і `a."b.c"` — дві
+  // таблиці, а не одна.
+  it("tables across a quoted dot are not a duplicate", async () => {
+    const result = await compileWith({
+      "custom-tables/A/A.meta.json": customTable("A", {
+        schema: "a",
+        physicalName: "b.c",
+      }),
+      "custom-tables/B/B.meta.json": customTable("B", {
+        schema: "a.b",
+        physicalName: "c",
+      }),
+    })
+    expect(result.diagnostics).toEqual([])
+  })
+
   it("two tables with the same physicalName in one schema", async () => {
     const result = await compileWith({
       "catalogs/A/A.meta.json": catalog("A", { physicalName: "shared" }),

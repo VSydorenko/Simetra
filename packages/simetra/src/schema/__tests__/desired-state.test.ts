@@ -116,11 +116,11 @@ describe("renderDesiredState", () => {
         "unit grant:revoke:function:simetra.signal_outbox_notify():authenticated:execute",
         "unit grant:revoke:function:simetra.signal_outbox_notify():public:execute",
         "unit grant:revoke:function:simetra.signal_outbox_notify():service_role:execute",
-        "unit function:simetra.signal_outbox_prune(interval)",
-        "unit grant:revoke:function:simetra.signal_outbox_prune(interval):anon:execute",
-        "unit grant:revoke:function:simetra.signal_outbox_prune(interval):authenticated:execute",
-        "unit grant:revoke:function:simetra.signal_outbox_prune(interval):public:execute",
-        "unit grant:revoke:function:simetra.signal_outbox_prune(interval):service_role:execute",
+        "unit function:simetra.signal_outbox_prune("interval")",
+        "unit grant:revoke:function:simetra.signal_outbox_prune("interval"):anon:execute",
+        "unit grant:revoke:function:simetra.signal_outbox_prune("interval"):authenticated:execute",
+        "unit grant:revoke:function:simetra.signal_outbox_prune("interval"):public:execute",
+        "unit grant:revoke:function:simetra.signal_outbox_prune("interval"):service_role:execute",
         "unit function:simetra.signal_outbox_stamp()",
         "unit grant:revoke:function:simetra.signal_outbox_stamp():anon:execute",
         "unit grant:revoke:function:simetra.signal_outbox_stamp():authenticated:execute",
@@ -161,8 +161,8 @@ describe("renderDesiredState", () => {
       "schema app",
       "schema simetra",
     ])
-    expect(list.indexOf("unit extension:uuid-ossp")).toBeGreaterThan(-1)
-    expect(list.indexOf("unit extension:uuid-ossp")).toBeLessThan(
+    expect(list.indexOf('unit extension:"uuid-ossp"')).toBeGreaterThan(-1)
+    expect(list.indexOf('unit extension:"uuid-ossp"')).toBeLessThan(
       list.findIndex((l) => l.startsWith("table "))
     )
     expect(state.sql).not.toContain("CREATE SCHEMA IF NOT EXISTS extensions")

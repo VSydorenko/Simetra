@@ -8,7 +8,9 @@ import {
   standardLogicalName,
   versionColumn,
   type PhysicalColumn,
+  type PhysicalSnapshot,
 } from "simetra/model"
+import { bodyRequires } from "../catalog-command/units"
 import {
   catalogCommandContracts,
   type CatalogCommandContract,
@@ -613,4 +615,28 @@ it("ім'я save довідника, зайняте дослівною функ�
       .filter((d) => d.code === "physical.function-duplicate")
       .map((d) => ({ file: d.file, name: d.params?.name }))
   ).toEqual([{ file: TICKET_FILE, name: "ticket_save" }])
+})
+
+// Ребра тіла — ідентичності за правилом `identity.ts` (#297): функція й
+// таблиця з ім'ям у лапках мають своє ребро, а однойменна в нижньому
+// регістрі — інший об'єкт.
+describe("bodyRequires: names in quotes", () => {
+  it("links the function and the table named in quotes", () => {
+    const sql =
+      'CREATE FUNCTION simetra.core() RETURNS void LANGUAGE plpgsql AS $$ BEGIN PERFORM public."F"(1); PERFORM 1 FROM public."T"; END $$;'
+    const units = [
+      { class: "function" as const, identity: 'function:public."F"(int4)' },
+      { class: "function" as const, identity: "function:public.f(int4)" },
+    ]
+    const physical = {
+      tables: [
+        { schema: "public", name: "T" },
+        { schema: "public", name: "t" },
+      ],
+    } as unknown as PhysicalSnapshot
+    expect(bodyRequires(sql, { physical, units, parse, plpgsql })).toEqual([
+      { type: "unit", identity: 'function:public."F"(int4)' },
+      { type: "table", schema: "public", name: "T" },
+    ])
+  })
 })

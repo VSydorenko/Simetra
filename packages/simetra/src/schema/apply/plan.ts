@@ -1,6 +1,7 @@
 import {
   canonicalSnapshot,
   IDENTITY_TRIGGERS,
+  identityParts,
   loadSqlParser,
   mainTableOf,
   modelFunctions,
@@ -591,16 +592,16 @@ async function readProviderTriggers(
  * the table and the `TRIGGER` grant on it.
  */
 export function hasIdentityTriggers(
-  units: readonly SqlUnit[],
+  units: readonly Pick<SqlUnit, "class" | "generator" | "identity">[],
   table: { schema: string; name: string }
 ): boolean {
-  const prefix = `trigger:${table.schema}.${table.name}.`
-  return units.some(
-    (u) =>
-      u.class === "trigger" &&
-      u.generator === "platformLayer" &&
-      u.identity.startsWith(prefix)
-  )
+  // Таблицю тригера читаємо з частин ідентичності: ім'я у верхньому регістрі
+  // в ній у лапках, тож сирий префікс не знайшов би тригер
+  return units.some((u) => {
+    if (u.class !== "trigger" || u.generator !== "platformLayer") return false
+    const [schema, name] = identityParts(u.identity)
+    return schema === table.schema && name === table.name
+  })
 }
 
 /**

@@ -17,12 +17,8 @@ import type { DeclaredFunction, PlatformForm } from "./declarations"
 import { isExpressionUnit, treeBeyondExpressions } from "./expression-calls"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
-import {
-  FUNCTION_CLASSES,
-  functionIdentity,
-  type RowRule,
-  type VerbatimUnit,
-} from "./units"
+import { functionIdentity } from "./identity"
+import { FUNCTION_CLASSES, type RowRule, type VerbatimUnit } from "./units"
 
 /** Чим функція виходить за закриту оболонку (спека промоції §9.4). */
 export type ClosedShellProblem =

@@ -25,7 +25,8 @@ import { definerTrigger } from "./rights/definer"
 import { hasRightsFunctions } from "./rights/functions"
 import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
-import { functionIdentity, generatedUnit, type SqlUnit } from "./sql/units"
+import { functionIdentity } from "./sql/identity"
+import { generatedUnit, type SqlUnit } from "./sql/units"
 
 /** Одна функція авторства на проєкт: тіло не залежить від таблиці. */
 export const AUTHOR_FUNCTION: QualifiedName = {
