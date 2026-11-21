@@ -13,6 +13,7 @@ import {
   type IncludeStep,
   type Included,
 } from "./include"
+import { differentEpochs } from "./epoch"
 import { visibleRow, type PutResult, type RestoredRow } from "./object-store"
 import type { OwnerScope, SectionEntry } from "./section-store"
 import type { Scope, Session } from "./session"
@@ -927,9 +928,11 @@ async function readSection(
       ops.clearOwner(scope, o, spec.owner)
       return
     }
-    // Скоуп власника відомий лише з шапки не старшої за версію власника ТЧ:
-    // новіша версія могла переїхати в інший скоуп, тож старша шапка її пари
-    // не підтверджує — рядки судяться як без шапки (§6.2 правило 4).
+    // Скоуп власника відомий лише з шапки не старшої за версію власника ТЧ і
+    // тієї самої епохи версій (правило `sectionLinesStale`): новіша версія
+    // могла переїхати в інший скоуп, а версії різних епох не впорядковані,
+    // тож така шапка пари не підтверджує — рядки судяться як без шапки
+    // (§6.2 правило 4).
     const header = o.rows.get(spec.owner)
     const barred = ops.putSection(
       scope,
@@ -940,7 +943,9 @@ async function readSection(
       result.ownerVersion,
       result.epoch,
       readEpoch,
-      header === undefined || header.version < result.ownerVersion
+      header === undefined ||
+        differentEpochs(result.epoch, header.versionEpoch) ||
+        header.version < result.ownerVersion
         ? "unknown"
         : header.scope
     )

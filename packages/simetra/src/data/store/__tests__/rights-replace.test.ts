@@ -509,6 +509,37 @@ describe("the snapshot barrier", () => {
     expect(fake.log.filter(isSection)).toHaveLength(reads + 1)
   })
 
+  it("judges lines of another version epoch than the stored header as lines without a header", async () => {
+    const { core, fake } = harness({ mode: "manual" })
+    fake.epoch = "a".repeat(64)
+    await firstSnapshot(core)
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    // Власник побував у T і повернувся в S: шапка в сховищі — новіша версія, у S.
+    fake.edit(TASK, key(1), { org: T })
+    const inT = fake.clock
+    fake.edit(TASK, key(1), { org: S })
+    const header = core.view(card(1))
+    watch(header)
+    await settle()
+    fake.deliverAll()
+    await settle()
+    expect(rowsOf(core).get(key(1))?.scope).toBe(S)
+    // Інша база (епоха версій): версія власника ТЧ з неї не впорядкована з
+    // версією шапки, тож шапка скоупу власника не підтверджує.
+    fake.epoch = "b".repeat(64)
+    const owned = core.view(section(1))
+    watch(owned)
+    await settle()
+    grant(fake, snapshotOf([readRow(S)]))
+    core.requestRights()
+    await settle()
+    const read = fake.take()
+    read.answer(inT)
+    await settle()
+    expect(linesOf(core, 1)).toBeUndefined()
+  })
+
   it("writes a read of the pair that started after the snapshot was applied", async () => {
     const { core, fake } = harness({ mode: "manual" })
     await firstSnapshot(core)
