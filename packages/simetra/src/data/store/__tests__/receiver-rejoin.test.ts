@@ -807,6 +807,22 @@ describe("the disconnect mark and the composition on session epochs", () => {
     expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
   })
 
+  it("keeps the composition of a first load started before the gap unconfirmed", async () => {
+    const h = await open(keysView(key(1)))
+    h.fake.mode = "manual"
+    const list = h.core.view(full)
+    list.subscribe(() => {})
+    await Promise.resolve()
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, false)
+    h.core.setVisible(full, false)
+    h.fake.deliverAll()
+    h.fake.mode = "auto"
+    await settle()
+    expect(list.getSnapshot().status).toBe("ready")
+    expect(list.getSnapshot().staleComposition).toBe(true)
+  })
+
   it("keeps the composition unconfirmed when the only successful read started before the gap", async () => {
     const h = await open(full)
     h.fake.mode = "manual"
