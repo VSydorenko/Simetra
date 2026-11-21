@@ -8,9 +8,9 @@ import {
   guardArgsOf,
   isSecurityDefiner,
   isTriggerFunction,
+  metadataRights,
   ownsTarget,
   readSqlUnits,
-  type CompiledModel,
   type Diagnostic,
   type IdSource,
   type Node,
@@ -57,12 +57,12 @@ export type KindsByLabel = ReadonlyMap<string, KindContract[]>
 
 /** Мітки видів об'єктів скомпільованої теки — з контрактів прав. */
 export function kindsByLabel(
-  model: CompiledModel | undefined
+  metadata: ReturnType<typeof metadataRights>
 ): KindsByLabel | undefined {
-  if (model === undefined) return undefined
+  if (metadata === undefined) return undefined
   const found = new Map<string, KindContract[]>()
-  for (const contract of model.contracts.rights) {
-    const object = model.objects.find((o) => o.id === contract.objectId)
+  for (const contract of metadata.rights) {
+    const object = metadata.objects.find((o) => o.id === contract.objectId)
     if (object === undefined) continue
     const list = found.get(contract.kindLabel) ?? []
     list.push({
@@ -103,12 +103,10 @@ export interface DeclareInput {
   described: ReadonlySet<string>
   existing: ReadonlyMap<string, string>
   /**
-   * Мітки видів підсумкової теки; кличеться лише коли є що розв'язувати.
-   * `without` — `.sql` definer-функцій, яких чернетка не містить: функція з
-   * викликом запобіжника без декларації не компілюється (`sql.platform-function-call`).
-   * `undefined` — чернетка не компілюється й так.
+   * Мітки видів підсумкової теки з контрактів прав її метаданих; кличеться
+   * лише коли є що розв'язувати. `undefined` — метадані контрактів не дають.
    */
-  kinds: (without: ReadonlySet<string>) => Promise<KindsByLabel | undefined>
+  kinds: () => Promise<KindsByLabel | undefined>
 }
 
 export interface FunctionDeclarations {
@@ -321,7 +319,7 @@ export async function declareFunctions(
     file: string,
     params: Record<string, string | number>
   ) => result.diagnostics.push(diagnostic(code, file, "", params))
-  const definerPaths = new Set<string>()
+  const checked = new Set<string>()
   const pending: {
     declaration: SqlFunctionDeclaration
     resolve: (kinds: KindsByLabel | undefined) => void
@@ -350,14 +348,18 @@ export async function declareFunctions(
     // Факт кожної definer-функції обов'язковий; перевантаження — рівно стільки
     // фактів, скільки функцій (ключ факту — аргументи ідентичності каталогу,
     // а не текст одиниці).
+    // Перевантаження ділять ім'я: помилку фактів і чужі гранти — раз на ім'я
+    const firstOfName = !checked.has(label)
+    checked.add(label)
     if (named === undefined || named.length !== withFacts) {
-      report("introspect.definer-acl-changed", "", {
-        check: "fact",
-        function: label,
-      })
+      if (firstOfName)
+        report("introspect.definer-acl-changed", "", {
+          check: "fact",
+          function: label,
+        })
       continue
     }
-    for (const fact of named)
+    for (const fact of firstOfName ? named : [])
       for (const grant of foreignGrants(fact, provider))
         report("introspect.definer-foreign-grant", "", {
           function: `${label}(${fact.identityArguments})`,
@@ -388,24 +390,46 @@ export async function declareFunctions(
             )
           )
       }
+      // Збережений файл викликачем без сесії не описує, але план відкличе
+      // цей `EXECUTE`: про це теж попереджаємо
+      for (const role of derived.anonymous)
+        report("introspect.definer-anonymous-dropped", "", {
+          function: label,
+          role,
+        })
       continue
     }
     const sqlPath = input.functionPaths.get(unit.identity)
-    if (sqlPath !== undefined) definerPaths.add(sqlPath)
-    // Перевантаження, процедура, sidecar таблиці, оболонка поза закритою
-    // формою, функція без викликачів: декларації немає, гранти лишаються
-    // дослівними (Р5, Р9), а компіляція називає недекларовану definer-функцію
-    if (
-      count !== 1 ||
-      unit.class !== "function" ||
-      sqlPath === undefined ||
-      derived.callers.length === 0 ||
-      closedShellProblem(
-        { tree: unit.tree as Node, sql: unit.sql },
-        plpgsql
-      ) !== undefined
+    const args = guardArgsOf(unit, plpgsql, parse)
+    const shell = closedShellProblem(
+      { tree: unit.tree as Node, sql: unit.sql },
+      plpgsql
     )
+    // Перевантаження, процедура, sidecar таблиці, оболонка поза закритою
+    // формою: декларації немає (Р5, Р9), гранти лишаються дослівними, а
+    // запобіжник у тілі компіляція відмовить — причину називаємо тут
+    const blocker =
+      count !== 1
+        ? "the function is overloaded"
+        : unit.class !== "function"
+          ? "a procedure cannot be declared"
+          : sqlPath === undefined
+            ? "the function has no file of its own"
+            : shell !== undefined
+              ? `the shell is not closed (${shell})`
+              : undefined
+    if (blocker !== undefined || sqlPath === undefined) {
+      if (args !== undefined)
+        report("introspect.definer-check-unknown", "", {
+          function: label,
+          reason: `the call guard cannot be declared: ${blocker ?? "no file"}`,
+        })
       continue
+    }
+    // Лише власник і без запобіжника: декларації немає, `REVOKE` лишається
+    // дослівним; із запобіжником — декларація без викликачів, інакше виклик
+    // запобіжника поза формою відмовила б компіляція
+    if (derived.callers.length === 0 && args === undefined) continue
 
     for (const role of derived.anonymous)
       report("introspect.definer-anonymous-dropped", "", {
@@ -416,8 +440,8 @@ export async function declareFunctions(
     const onBehalfOfUser = derived.callers.some(
       (c) => c === "user" || c === "command"
     )
-    const unknown = (reason: string) => {
-      if (onBehalfOfUser)
+    const unknown = (reason: string, guarded = false) => {
+      if (onBehalfOfUser || guarded)
         report("introspect.definer-check-unknown", path, {
           function: label,
           reason,
@@ -429,7 +453,6 @@ export async function declareFunctions(
       function: { schema, name },
       callers: derived.callers,
     }
-    const args = guardArgsOf(unit, plpgsql, parse)
     if (args === undefined) {
       unknown("no call guard of the proven form as the first statement")
     } else {
@@ -437,20 +460,20 @@ export async function declareFunctions(
       pending.push({
         declaration,
         resolve: (kinds) => {
-          const matches = kinds?.get(args.kindLabel) ?? []
-          const contract = matches.length === 1 ? matches[0] : undefined
+          // Мітка виду унікальна в теці (`identity.kind-label-duplicate`)
+          const [contract] = kinds?.get(args.kindLabel) ?? []
           const action = contract?.actions.get(args.action)
           if (kinds === undefined)
-            unknown("the folder does not compile without the declarations")
-          else if (matches.length === 0)
-            unknown(
-              `kind label ${args.kindLabel} is not an object of the folder`
-            )
+            unknown("the metadata do not build rights contracts", true)
           else if (contract === undefined)
-            unknown(`kind label ${args.kindLabel} names several objects`)
+            unknown(
+              `kind label ${args.kindLabel} is not an object of the folder`,
+              true
+            )
           else if (action === undefined)
             unknown(
-              `action ${args.action} is not an action of ${contract.kind} ${contract.name}`
+              `action ${args.action} is not an action of ${contract.kind} ${contract.name}`,
+              true
             )
           else
             declaration.check = {
@@ -484,7 +507,7 @@ export async function declareFunctions(
   }
 
   if (pending.length > 0) {
-    const kinds = await input.kinds(definerPaths)
+    const kinds = await input.kinds()
     for (const item of pending) item.resolve(kinds)
   }
 

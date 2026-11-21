@@ -29,6 +29,7 @@ export {
   type SourceObject,
 } from "./compile"
 export { readProjectFile } from "./stages/files"
+export { metadataRights } from "./pipeline"
 export type { ResolvedReference } from "./stages/identity"
 export type { CreationNode } from "./sql/dependencies"
 export {

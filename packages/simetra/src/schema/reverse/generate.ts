@@ -9,6 +9,7 @@ import {
   isMovementQuery,
   kindKeyColumns,
   loadPlpgsqlParser,
+  metadataRights,
   sortDiagnostics,
   platformInstall,
   platformRecogniser,
@@ -55,7 +56,6 @@ import {
 import {
   declareFunctions,
   kindsByLabel,
-  renderFunctionsFile,
   type KindsByLabel,
 } from "./declarations"
 import type { ExecuteFacts } from "./execute-facts"
@@ -697,15 +697,11 @@ export async function reverseGenerate(
   }
   // Мітки видів теки для `check`: компіляція теки без декларацій; ідентифікатори
   // чернетки одноразові, її читають лише за контрактами прав
-  const kinds = async (
-    without: ReadonlySet<string>
-  ): Promise<KindsByLabel | undefined> => {
-    const draft = assemble(
-      new Map([...generated, ...laid.files].filter(([p]) => !without.has(p))),
-      () => crypto.randomUUID()
+  const kinds = async (): Promise<KindsByLabel | undefined> => {
+    const draft = assemble(new Map([...generated, ...laid.files]), () =>
+      crypto.randomUUID()
     )
-    const files = await withDebt(draft.files)
-    return kindsByLabel((await compile(files, { repair: true })).model)
+    return kindsByLabel(metadataRights(draft.files))
   }
   const declared = await declareFunctions({
     units: appUnits,
@@ -731,50 +727,7 @@ export async function reverseGenerate(
   const completed = assemble(generated, o.newId)
   const files = await withDebt(completed.files)
   // Режим ремонту: тека з помилками лише класу ремонту законна й дає модель
-  let compiled = await compile(files, { repair: true })
-  // `check`, який відхиляє форма контракту (`sql.declaration-check-form`:
-  // ціль, ключ рядка, `create` на корені), — не помилка бази: запобіжник у
-  // тілі справжній, лише декларація його не виражає. Такий `check` не
-  // пишемо, а причину називаємо, щоб теку не відхиляла помилка поза класом
-  // ремонту.
-  const refused = compiled.diagnostics.filter(
-    (d) => d.code === "sql.declaration-check-form" && declared.files.has(d.file)
-  )
-  const rejected = declared.written.filter(
-    (w) =>
-      w.declaration.check !== undefined &&
-      refused.some(
-        (d) => d.params?.schema === w.schema && d.params?.name === w.name
-      )
-  )
-  if (rejected.length > 0) {
-    for (const w of rejected) {
-      delete w.declaration.check
-      diagnostics.push(
-        diagnostic("introspect.definer-check-unknown", w.path, "", {
-          function: `${w.schema}.${w.name}`,
-          reason: `the check read from the guard does not fit the rights contract (${
-            refused.find(
-              (d) => d.params?.schema === w.schema && d.params?.name === w.name
-            )?.params?.reason
-          })`,
-        })
-      )
-    }
-    for (const path of new Set(rejected.map((w) => w.path)))
-      files.set(
-        path,
-        renderFunctionsFile(
-          path,
-          declared.written
-            .filter((w) => w.path === path)
-            .map((w) => w.declaration),
-          o.schemaPath
-        )
-      )
-    await withDebt(files)
-    compiled = await compile(files, { repair: true })
-  }
+  const compiled = await compile(files, { repair: true })
   diagnostics.push(...completed.diagnostics, ...compiled.diagnostics)
   if (compiled.model !== undefined)
     diagnostics.push(
