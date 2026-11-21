@@ -281,6 +281,11 @@ describe("guardOf", () => {
       reason: "arguments",
     },
     {
+      name: "arguments: a field of the parameter",
+      sql: perform(guard("'read', 'task', p_row.x")),
+      reason: "arguments",
+    },
+    {
       name: "arguments: a positional $1",
       sql: perform(guard("'read', 'task', $1")),
       reason: "arguments",
