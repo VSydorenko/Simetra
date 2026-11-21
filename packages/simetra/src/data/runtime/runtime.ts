@@ -281,6 +281,9 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     // Транспорт закривається синхронно й першим: `core.close` усередині
     // `commit` відкладається, а host після колбека вже створює рантайм
     // нового користувача — старий не повинен більше нічого приймати.
+    // Приймач спиняється раніше за транспорт: відкладений `core.close` ще не
+    // настав, а вже поставлений перерахунок підписок підписав би закритий.
+    core.stopSignals()
     try {
       signalTransport?.close()
     } catch (thrown) {
@@ -452,29 +455,45 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     // читає адаптер-перевизначення (§5.1).
     serverFunctionPort(send, serverFunction)
   )
-  const core = createCore({
-    subject,
-    source,
-    index,
-    limits,
-    residency,
-    ...(options.strict === undefined ? {} : { strict: options.strict }),
-    ...(options.visible === undefined ? {} : { visible: options.visible }),
-    log,
-    snapshotHash: catalog.snapshotHash,
-    rightsSnapshot: catalog.rightsSnapshot === true,
-    ...(signalTransport === undefined ? {} : { signals: signalTransport }),
-    // Інший користувач у відповіді `rights` (Р7) — той самий шлях, що й
-    // відмова `session-changed` транспорту: ядро кличе це поза `commit`.
-    onSessionChanged: () => sessionChanged(SESSION_CHANGED),
-    ...(options.onStaleClient === undefined
-      ? {}
-      : { onStaleClient: options.onStaleClient }),
-  })
+  // Збій побудови ядра чи фабрик не лишає відкритого транспорту.
+  const core = (() => {
+    try {
+      return buildCore()
+    } catch (thrown) {
+      signalTransport?.close()
+      throw thrown
+    }
+  })()
+  function buildCore() {
+    return createCore({
+      subject,
+      source,
+      index,
+      limits,
+      residency,
+      ...(options.strict === undefined ? {} : { strict: options.strict }),
+      ...(options.visible === undefined ? {} : { visible: options.visible }),
+      log,
+      snapshotHash: catalog.snapshotHash,
+      rightsSnapshot: catalog.rightsSnapshot === true,
+      ...(signalTransport === undefined ? {} : { signals: signalTransport }),
+      // Інший користувач у відповіді `rights` (Р7) — той самий шлях, що й
+      // відмова `session-changed` транспорту: ядро кличе це поза `commit`.
+      onSessionChanged: () => sessionChanged(SESSION_CHANGED),
+      ...(options.onStaleClient === undefined
+        ? {}
+        : { onStaleClient: options.onStaleClient }),
+    })
+  }
   // Фабрики — після обгортки `send` і ядра: адаптер отримує саме цей
   // `subject` і саме цю обгортку, тож його запити несуть суб'єкт рантайму.
-  for (const [name, factory] of overrides) {
-    adapters.set(name, watchSessionChanged(factory({ subject, send })))
+  try {
+    for (const [name, factory] of overrides) {
+      adapters.set(name, watchSessionChanged(factory({ subject, send })))
+    }
+  } catch (thrown) {
+    signalTransport?.close()
+    throw thrown
   }
 
   const runtime: DataRuntime = {

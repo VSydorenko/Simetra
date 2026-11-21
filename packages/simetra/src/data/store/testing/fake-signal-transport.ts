@@ -14,6 +14,8 @@ export interface FakeSignalTransport extends SignalTransport {
   subscribed(): ReadonlyMap<string, number>
   /** Чи закрито транспорт `close()`. */
   closed(): boolean
+  /** Скільки разів `subscribe` викликано після `close()`: порт цього не визначає. */
+  subscribesAfterClose(): number
 }
 
 interface Subscription {
@@ -29,6 +31,7 @@ export function createFakeSignalTransport(): FakeSignalTransport {
   >()
   const refused = new Set<string>()
   let isClosed = false
+  let afterClose = 0
 
   // Відмова каналу: лише його тримачі дізнаються, канал для них закрито.
   const refuse = (channel: string) => {
@@ -44,7 +47,10 @@ export function createFakeSignalTransport(): FakeSignalTransport {
   return {
     refused,
     subscribe(channels, onSignal, onError): Unsubscribe {
-      if (isClosed) return () => {}
+      if (isClosed) {
+        afterClose++
+        return () => {}
+      }
       const allowed = channels.filter((channel) => !refused.has(channel))
       const subscription: Subscription = {
         channels: new Set(allowed),
@@ -124,5 +130,6 @@ export function createFakeSignalTransport(): FakeSignalTransport {
       return counts
     },
     closed: () => isClosed,
+    subscribesAfterClose: () => afterClose,
   }
 }

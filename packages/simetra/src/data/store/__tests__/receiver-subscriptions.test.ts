@@ -13,10 +13,12 @@ import {
 import { createDataRuntime } from "../../runtime/runtime"
 import { runtimeHandleOf } from "../../runtime/handle"
 import {
+  SERVER_HASH,
   clientCatalog,
   controlledTransport,
   sessionChanged,
 } from "../../__tests__/support"
+import { createFakeSource } from "../testing/fake-source"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import type { ViewSpec } from "../types"
 import {
@@ -384,5 +386,110 @@ describe("the runtime owns the signal transport", () => {
     run.wire.respond(sessionChanged())
     await expect(pending).rejects.toBeDefined()
     expect(seen).toEqual({ closed: true, held: 0 })
+  })
+})
+
+describe("the runtime with a rights snapshot over a fake server", () => {
+  const rightsRows = [
+    read(S),
+    { ...read(S), object: "plain", level: "global" as const, scope: null },
+  ]
+  function world() {
+    const fake = createFakeSource({ objects: [task, org, plain] })
+    fake.rightsSnapshot = snapshotOf([S], rightsRows)
+    fake.rightsVersion = V1
+    seed(fake, 1, 1)
+    fake.insert(PLAIN, { ref: key(1) })
+    const wire = async (body: { request: unknown }) => {
+      const { items } = body.request as { items: unknown[] }
+      const read = await fake.adapter.read(
+        items as Parameters<typeof fake.adapter.read>[0]
+      )
+      return {
+        ok: true as const,
+        value: { ...read, epoch: null },
+        serverHash: SERVER_HASH,
+      }
+    }
+    const make = (transport = createFakeSignalTransport()) => ({
+      transport,
+      runtime: createDataRuntime({
+        catalog: {
+          ...clientCatalog(),
+          objects: [task, org, plain],
+          rightsSnapshot: true,
+        },
+        transport: wire,
+        subject: "user-1",
+        signals: () => transport,
+        log: () => {},
+      }),
+    })
+    return { fake, make }
+  }
+  const plainView: ViewSpec = { kind: "keys", object: PLAIN, keys: [key(1)] }
+
+  it("never subscribes after the transport is closed: a recompute queued before a dispose() inside a commit", async () => {
+    const { make } = world()
+    const { runtime, transport } = make()
+    const { core } = runtimeHandleOf(runtime)
+    core.view(list(key(1))).subscribe(() => {})
+    await settle()
+    expect(transport.subscribed().size).toBe(1)
+    // Новий вигляд ставить перерахунок підписок; `dispose()` усередині
+    // `commit` — того ж ходу, до мікрозадачі перерахунку.
+    core.view(plainView).subscribe(() => {})
+    core.commit(() => runtime.dispose(), core.token())
+    await settle()
+    expect(transport.closed()).toBe(true)
+    expect(transport.subscribesAfterClose()).toBe(0)
+  })
+
+  it("subscribes the channel of a hydrated view once the reconciliation brings the snapshot", async () => {
+    const { make } = world()
+    const server = make()
+    runtimeHandleOf(server.runtime)
+      .core.view(list(key(1)))
+      .subscribe(() => {})
+    await settle()
+    const snapshot = JSON.parse(JSON.stringify(server.runtime.dehydrate()))
+    server.runtime.dispose()
+    const client = make()
+    client.runtime.hydrate(snapshot)
+    runtimeHandleOf(client.runtime)
+      .core.view(list(key(1)))
+      .subscribe(() => {})
+    await settle()
+    // Знімка прав ще немає: гідрація його не несе, каналів теж.
+    expect(client.transport.subscribed().size).toBe(0)
+    client.runtime.endHydration()
+    await settle()
+    expect([...client.transport.subscribed().keys()]).toEqual([taskChannel(S)])
+  })
+
+  it("closes the transport when building the runtime fails after the factory", () => {
+    const transport = createFakeSignalTransport()
+    expect(() =>
+      createDataRuntime({
+        catalog: {
+          ...clientCatalog(),
+          objects: [task, org, plain],
+          rightsSnapshot: true,
+        },
+        transport: async () => {
+          throw new Error("unused")
+        },
+        subject: "user-1",
+        signals: () => transport,
+        sources: {
+          override: {
+            [TASK]: () => {
+              throw new Error("adapter factory failed")
+            },
+          },
+        },
+      })
+    ).toThrow("adapter factory failed")
+    expect(transport.closed()).toBe(true)
   })
 })

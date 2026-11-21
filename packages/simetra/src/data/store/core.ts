@@ -229,6 +229,12 @@ export interface CoreSession {
    * requests leave in one microtask.
    */
   endHydration(): void
+  /**
+   * Internal, for the runtime: stops the signal receiver at once, even
+   * inside a `commit` (where `close` is deferred), so it never subscribes
+   * on a transport the runtime has closed. Does nothing without a receiver.
+   */
+  stopSignals(): void
   /** Whether the host shows the application (`resume` sets, `suspend` clears). */
   readonly visible: boolean
   /** Marks the application hidden; idempotent, sends nothing. */
@@ -1719,6 +1725,7 @@ export function createCore(options: {
     get visible() {
       return visible
     },
+    stopSignals: () => receiver?.stop(),
     suspend() {
       visible = false
       scheduler.suspend()
