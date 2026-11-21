@@ -405,7 +405,8 @@ export async function runStages(
       declared
     ),
   ])
-  if (blocks(staged)) return { ok: !hasErrors(staged), diagnostics: staged }
+  const ok = !hasErrors(staged)
+  if (blocks(staged)) return { ok, diagnostics: staged }
 
   const rights = rightsContracts(
     stage1.objects,
@@ -1211,10 +1212,11 @@ export async function runStages(
       diagnostics: sortDiagnostics([...diagnostics, ...budget]),
     }
   }
-  // `ok` рахується над усіма діагностиками: помилки класу ремонту, що пізніші
-  // за гейт стадій (`checkDeclaredGuards`), не закривали його в `repair`.
-  const final = sortDiagnostics([...diagnostics, ...budget])
-  return { ok: !hasErrors(final), diagnostics: final, model: compiled }
+  return {
+    ok,
+    diagnostics: sortDiagnostics([...diagnostics, ...budget]),
+    model: compiled,
+  }
 }
 
 /**
