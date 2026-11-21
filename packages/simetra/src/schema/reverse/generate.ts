@@ -695,8 +695,8 @@ export async function reverseGenerate(
       )
     return files
   }
-  // Мітки видів теки для `check`: компіляція теки без декларацій; ідентифікатори
-  // чернетки одноразові, її читають лише за контрактами прав
+  // Мітки видів теки для `check`: контракти прав метаданих (`metadataRights`) без
+  // SQL-стадій; ідентифікатори чернетки одноразові, її читають лише за контрактами
   const kinds = async (): Promise<KindsByLabel | undefined> => {
     const draft = assemble(new Map([...generated, ...laid.files]), () =>
       crypto.randomUUID()

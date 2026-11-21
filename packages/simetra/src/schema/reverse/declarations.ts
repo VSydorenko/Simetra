@@ -456,7 +456,8 @@ export async function declareFunctions(
     if (args === undefined) {
       unknown("no call guard of the proven form as the first statement")
     } else {
-      // Мітку й дію розв'язує компіляція теки, а вона чекає всіх функцій
+      // Мітку й дію розв'язують контракти прав метаданих теки (`metadataRights`), а їх
+      // будують, коли зібрано всі функції
       pending.push({
         declaration,
         resolve: (kinds) => {
