@@ -1,6 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
-import { PROVIDER_API_ROLES, ZERO_UUID } from "simetra/model"
+import {
+  PROVIDER_API_ROLES,
+  ZERO_UUID,
+  catalogAdoptedFactsSchema,
+  clientCatalogSchema,
+  runtimeCatalogSchema,
+} from "simetra/model"
 import { buildClientCatalog } from "../client-catalog"
 import { buildRuntimeCatalog } from "../runtime-catalog"
 import { buildRightsSignalUnits } from "../rights/signal-triggers"
@@ -25,6 +31,7 @@ import {
   compileRights,
   policyDomain,
   polyContainerGrantsSource,
+  polymorphicGrantsDomain,
   polyGrantTable,
   rightsFiles,
   role,
@@ -182,6 +189,59 @@ describe("rights signal triggers: the set of tables", () => {
       "public.org_member",
       "public.users",
     ])
+  })
+
+  // Т2 (умови архітекторки): таблиця, яку з фактів читає лише дослівна
+  // функція, — джерело знімка актора з тригером знімка, але без тригера
+  // сигналу прав; ознаку дає справжній аналіз, а не підставлений прапорець.
+  it("keeps the actor snapshot trigger on a verbatim-only table and gives it no rights signal trigger", () => {
+    const verbatim = [BENCH_ZONE_TABLE, SNAPSHOT_ORG_GUEST_TABLE]
+    const analysis = sourcesOf(sources)
+    expect(
+      Object.fromEntries(
+        analysis.sources.map((s) => [s.table.name, s.verbatimOnly])
+      )
+    ).toMatchObject({
+      [BENCH_ZONE_TABLE]: true,
+      [SNAPSHOT_ORG_GUEST_TABLE]: true,
+      team_member: false,
+      users: false,
+    })
+    const triggersOn = (generator: string, table: string) =>
+      sources.sqlUnits
+        .filter(
+          (u) =>
+            u.class === "trigger" &&
+            u.generator === generator &&
+            triggerTable(u) === `public.${table}`
+        )
+        .map((u) => u.name)
+    for (const table of verbatim) {
+      expect(triggersOn("rightsGuards", table), table).toEqual([
+        `${table}_simetra_rights_snapshot`,
+      ])
+      expect(triggersOn("rightsSignal", table), table).toEqual([])
+    }
+  })
+
+  // Т2/`adoptedOnly`: контейнер, чиї призначення є лише в прийнятому джерелі,
+  // — форма відома, а каналу немає.
+  it("names a container whose assignments are only adopted adoptedOnly", async () => {
+    const result = await compileRights(polymorphicGrantsDomain())
+    expectClean(result, { allow: ["rights.adopted-source-writes"] })
+    const model = result.model!
+    expect(model.contracts.rightsCatalogs).toEqual([])
+    const generated = generatorOf(model)
+    expect(
+      Object.fromEntries(
+        generated.exempt.map((e) => [named(e.table), e.reason])
+      )
+    ).toEqual({ "public.project": "adoptedOnly" })
+    expect([...triggeredTables(model), "public.project"].sort()).toEqual(
+      sourcesOf(model)
+        .sources.map((s) => named(s.table))
+        .sort()
+    )
   })
 
   // `fresh: true` обіцяє клієнту сигнал прав зв'язку (Р1): кожна така
@@ -557,6 +617,33 @@ describe("adoptedFacts in the runtime and client catalogs", () => {
     expect(buildClientCatalog(runtime).adoptedFacts).toEqual(
       runtime.adoptedFacts
     )
+  })
+
+  // Схема T0 (AGENTS.md: нова схема — з тестом): каталоги домену з
+  // прийнятими джерелами проходять схеми, зайве поле й `false` — ні.
+  it("parses through the runtime and client catalog schemas and refuses a wrong shape", async () => {
+    const result = await compileRights(adoptedSourcesDomain())
+    expectClean(result, { allow: ["rights.adopted-source-writes"] })
+    const runtime = buildRuntimeCatalog(result.model!)
+    const client = buildClientCatalog(runtime)
+    expect(runtimeCatalogSchema.parse(runtime).adoptedFacts).toEqual(
+      runtime.adoptedFacts
+    )
+    expect(clientCatalogSchema.parse(client).adoptedFacts).toEqual(
+      runtime.adoptedFacts
+    )
+    const facts = runtime.adoptedFacts!
+    for (const wrong of [
+      { ...facts, assignments: false },
+      { ...facts, extra: 1 },
+      { ...facts, membershipKinds: ["org"] },
+    ]) {
+      expect(catalogAdoptedFactsSchema.safeParse(wrong).success).toBe(false)
+      expect(
+        clientCatalogSchema.safeParse({ ...client, adoptedFacts: wrong })
+          .success
+      ).toBe(false)
+    }
   })
 
   // Призначення будь-якого рівня — зокрема контейнера (Р9).
