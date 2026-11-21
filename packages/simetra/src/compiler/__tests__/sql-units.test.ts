@@ -1,4 +1,7 @@
+import fc from "fast-check"
+import type { Node } from "libpg-query"
 import { describe, expect, it } from "vitest"
+import { quoteIdent } from "simetra/model"
 import {
   compile,
   grantRoles,
@@ -16,6 +19,9 @@ import {
   withoutAccess,
   withoutMechanics,
 } from "./helpers"
+import { identityKey } from "../sql/identity"
+import { loadSqlParser } from "../sql/parse"
+import { functionSignatureSql, generatedUnit } from "../sql/units"
 
 const MISC = "sql/public/misc.sql"
 
@@ -34,6 +40,10 @@ async function compileSql(
     )
   )
   return result
+}
+
+function texts(nodes: readonly Node[] | undefined): string[] {
+  return (nodes ?? []).map((n) => ("String" in n ? (n.String.sval ?? "") : ""))
 }
 
 async function identities(sql: string): Promise<string[]> {
@@ -337,36 +347,36 @@ describe("sql units", () => {
     ["float(10)", "float4", "float4"],
     ["float", "float8", "float8"],
     ["double precision", "float8", "float8"],
-    ["decimal", "numeric", "numeric"],
-    ["dec", "numeric", "numeric"],
+    ["decimal", "numeric", '"numeric"'],
+    ["dec", "numeric", '"numeric"'],
     ["timestamp with time zone", "timestamptz", "timestamptz"],
-    ["timestamp without time zone", "pg_catalog.timestamp", "timestamp"],
+    ["timestamp without time zone", "pg_catalog.timestamp", '"timestamp"'],
     ["time with time zone", "timetz", "timetz"],
-    ["time without time zone", "pg_catalog.time", "time"],
-    ["character varying", "varchar", "varchar"],
-    ["char varying", "pg_catalog.varchar", "varchar"],
-    ["national character varying", "varchar", "varchar"],
+    ["time without time zone", "pg_catalog.time", '"time"'],
+    ["character varying", "varchar", '"varchar"'],
+    ["char varying", "pg_catalog.varchar", '"varchar"'],
+    ["national character varying", "varchar", '"varchar"'],
     ["character", "bpchar", "bpchar"],
     ["char", "bpchar", "bpchar"],
     ["nchar", "bpchar", "bpchar"],
     ["bit varying", "varbit", "varbit"],
-    ["bit", '"bit"', "bit"],
-    ["json", '"json"', "json"],
-    ["interval", '"interval"', "interval"],
+    ["bit", '"bit"', '"bit"'],
+    ["json", '"json"', '"json"'],
+    ["interval", '"interval"', '"interval"'],
     // Модифікатор типу не входить у тип функції.
-    ["varchar(10)", "character varying", "varchar"],
-    ["numeric(10,2)", "numeric", "numeric"],
+    ["varchar(10)", "character varying", '"varchar"'],
+    ["numeric(10,2)", "numeric", '"numeric"'],
     ["char(5)", "bpchar", "bpchar"],
     ["timestamp(3) with time zone", "timestamptz", "timestamptz"],
-    ["time(2)", "time", "time"],
-    ["bit(3)", '"bit"', "bit"],
-    ["interval day to second", '"interval"', "interval"],
+    ["time(2)", "time", '"time"'],
+    ["bit(3)", '"bit"', '"bit"'],
+    ["interval day to second", '"interval"', '"interval"'],
     // Масив — один тип незалежно від написання й кількості вимірів.
     ["int[]", "_int4", "int4[]"],
     ["integer[]", "int4[]", "int4[]"],
     ["integer array", "pg_catalog._int4", "int4[]"],
     ["int[][]", "int4[3]", "int4[]"],
-    ["varchar(10)[]", "_varchar", "varchar[]"],
+    ["varchar(10)[]", "_varchar", '"varchar"[]'],
     ["_int4[]", "int[]", "int4[]"],
   ])("f(%s) and f(%s) are one function", async (first, second, canonical) => {
     const result = await compileSql(
@@ -394,8 +404,8 @@ describe("sql units", () => {
         ].join("\n")
       )
     ).toEqual([
+      'function:public.f("char")',
       "function:public.f(bpchar)",
-      "function:public.f(char)",
       "function:public.f(item)",
       "function:public.f(other.item)",
     ])
@@ -423,6 +433,190 @@ describe("sql units", () => {
         "CREATE FUNCTION f(a t.c%type) RETURNS int LANGUAGE sql AS $$ select 1 $$;"
       )
     ).toEqual(["function:public.f(t.c%type)"])
+  })
+
+  // Інваріант І4 (#297): кожна частина імені в ідентичності — за
+  // `quoteIdent`, тож пара, що відрізняється лише межею лапок, — дві одиниці
+  // без `sql.unit-duplicate` і без `sql.namespace-conflict`.
+  const FN = "RETURNS int LANGUAGE sql AS $$ select 1 $$;"
+  const TRIGGER_FN =
+    "CREATE FUNCTION public.h() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;"
+  it.each([
+    {
+      form: "function name",
+      sql: [
+        `CREATE FUNCTION "a.b".c() ${FN}`,
+        `CREATE FUNCTION a."b.c"() ${FN}`,
+      ],
+      expected: ['function:"a.b".c()', 'function:a."b.c"()'],
+    },
+    {
+      // `f("a,b")` — один аргумент, а не два
+      form: "function argument",
+      sql: [
+        `CREATE FUNCTION f(x "a,b") ${FN}`,
+        `CREATE FUNCTION f(x a, y b) ${FN}`,
+      ],
+      expected: ['function:public.f("a,b")', "function:public.f(a,b)"],
+    },
+    {
+      form: "function argument type",
+      sql: [
+        `CREATE FUNCTION f(x "a.b".c) ${FN}`,
+        `CREATE FUNCTION f(x a."b.c") ${FN}`,
+      ],
+      expected: ['function:public.f("a.b".c)', 'function:public.f(a."b.c")'],
+    },
+    {
+      form: "aggregate",
+      sql: [
+        'CREATE AGGREGATE "a.b".agg(int4) (SFUNC = int4pl, STYPE = int);',
+        'CREATE AGGREGATE a."b.agg"(int4) (SFUNC = int4pl, STYPE = int);',
+      ],
+      expected: ['aggregate:"a.b".agg(int4)', 'aggregate:a."b.agg"(int4)'],
+    },
+    {
+      form: "view",
+      sql: [
+        'CREATE VIEW "a.b".c AS SELECT 1;',
+        'CREATE VIEW a."b.c" AS SELECT 1;',
+      ],
+      expected: ['view:"a.b".c', 'view:a."b.c"'],
+    },
+    {
+      form: "trigger",
+      sql: [
+        TRIGGER_FN,
+        'CREATE TRIGGER "t.x" AFTER INSERT ON public.a FOR EACH ROW EXECUTE FUNCTION public.h();',
+        'CREATE TRIGGER x AFTER INSERT ON public."a.t" FOR EACH ROW EXECUTE FUNCTION public.h();',
+      ],
+      expected: [
+        "function:public.h()",
+        'trigger:public."a.t".x',
+        'trigger:public.a."t.x"',
+      ],
+    },
+    {
+      form: "policy",
+      sql: [
+        'CREATE POLICY "p.x" ON storage.o FOR SELECT USING (true);',
+        'CREATE POLICY x ON storage."o.p" FOR SELECT USING (true);',
+      ],
+      expected: ['policy:storage."o.p".x', 'policy:storage.o."p.x"'],
+    },
+    {
+      form: "grant",
+      sql: [
+        'GRANT SELECT ON "a.b".c TO anon;',
+        'GRANT SELECT ON a."b.c" TO anon;',
+      ],
+      expected: [
+        'grant:grant:table:"a.b".c:anon:select',
+        'grant:grant:table:a."b.c":anon:select',
+      ],
+    },
+    {
+      form: "comment",
+      sql: [
+        `COMMENT ON TABLE "a.b".c IS 'x';`,
+        `COMMENT ON TABLE a."b.c" IS 'x';`,
+      ],
+      expected: ['comment:table:"a.b".c', 'comment:table:a."b.c"'],
+    },
+    {
+      form: "default privileges",
+      sql: [
+        'ALTER DEFAULT PRIVILEGES FOR ROLE "r,s" IN SCHEMA "a,b" GRANT SELECT ON TABLES TO anon;',
+        "ALTER DEFAULT PRIVILEGES FOR ROLE r, s IN SCHEMA a, b GRANT SELECT ON TABLES TO anon;",
+      ],
+      expected: [
+        'defaultPrivileges:"r,s":"a,b":table:grant:anon:select',
+        "defaultPrivileges:r,s:a,b:table:grant:anon:select",
+      ],
+    },
+    {
+      // Частини `%type` — теж за `quoteIdent`: `"T".c%type` ≠ `t.c%type`
+      form: "%type of mixed case",
+      sql: [
+        `CREATE FUNCTION f(x "T".c%type) ${FN}`,
+        `CREATE FUNCTION f(x t.c%type) ${FN}`,
+      ],
+      expected: [
+        'function:public.f("T".c%type)',
+        "function:public.f(t.c%type)",
+      ],
+    },
+  ])(
+    "$form: names that differ only by the quote boundary are two units",
+    async ({ sql, expected }) => {
+      expect(await identities(sql.join("\n"))).toEqual(expected)
+    }
+  )
+
+  // Ключ функції — валідний підпис SQL: Postgres розбирає його назад як
+  // `ObjectWithArgs` з тими самими частинами імені й типів, тож грант за
+  // ключем цілить рівно в цю функцію (Р2).
+  it("a function key parses back to the same name and type parts", async () => {
+    const parse = await loadSqlParser()
+    const part = fc.oneof(
+      fc.string({
+        unit: fc.constantFrom(...'aZ_9$.,:"() %[]ї'),
+        minLength: 1,
+        maxLength: 8,
+      }),
+      fc.constantFrom(
+        "int",
+        "char",
+        "numeric",
+        "Time",
+        "double",
+        "setof",
+        "array"
+      )
+    )
+    // Тип з двох частин поза `pg_catalog`: однокомпонентне ім'я каталогу
+    // `_x` канонізується в масив `x[]`, тож частини навмисно інші
+    const type = fc
+      .tuple(part, part)
+      .filter(([schema]) => schema !== "pg_catalog")
+    fc.assert(
+      fc.property(
+        part,
+        part,
+        fc.array(type, { maxLength: 3 }),
+        (schema, name, types) => {
+          const unit = generatedUnit(
+            `CREATE FUNCTION ${quoteIdent(schema)}.${quoteIdent(name)}(${types.map(([s, t], i) => `a${i} ${quoteIdent(s)}.${quoteIdent(t)}`).join(", ")}) ${FN}`,
+            "public",
+            parse
+          )
+          for (const signature of [
+            identityKey(unit.identity),
+            functionSignatureSql(unit),
+          ]) {
+            const parsed = parse(
+              `GRANT EXECUTE ON FUNCTION ${signature} TO anon;`
+            )
+            const stmt = parsed.ok ? parsed.statements[0]?.stmt : undefined
+            const target =
+              stmt !== undefined && "GrantStmt" in stmt
+                ? stmt.GrantStmt.objects?.[0]
+                : undefined
+            const fn =
+              target !== undefined && "ObjectWithArgs" in target
+                ? target.ObjectWithArgs
+                : undefined
+            expect({
+              name: texts(fn?.objname),
+              types: (fn?.objargs ?? []).map((a) =>
+                "TypeName" in a ? texts(a.TypeName.names) : []
+              ),
+            }).toEqual({ name: [schema, name], types })
+          }
+        }
+      ),
+      { numRuns: 300 }
+    )
   })
 
   it("unqualified domain type takes the schema of the domain: f(item) and f(public.item) are one function", async () => {
@@ -618,10 +812,10 @@ describe("sql units", () => {
       )
     ).toEqual([
       "aggregate:public.agg(int4)",
-      "comment:function:public.f(int4,varchar)",
-      "function:public.f(int4,varchar)",
-      "functionSettings:public.f(int4,varchar)",
-      "grant:grant:function:public.f(int4,varchar):anon:execute",
+      'comment:function:public.f(int4,"varchar")',
+      'function:public.f(int4,"varchar")',
+      'functionSettings:public.f(int4,"varchar")',
+      'grant:grant:function:public.f(int4,"varchar"):anon:execute',
     ])
   })
 

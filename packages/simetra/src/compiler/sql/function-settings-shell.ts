@@ -8,6 +8,7 @@ import {
 } from "./closed-forms"
 import type { DeclaredFunction } from "./declarations"
 import { headLinks } from "./heads"
+import { identityKey, keyIdentity } from "./identity"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 import type { VerbatimUnit } from "./units"
@@ -139,8 +140,10 @@ function altersModelFunction(
   ).AlterFunctionStmt?.func
   // Некваліфіковане ім'я DDL розв'язує шлях пошуку сесії, а не схема файлу.
   if ((target?.objname ?? []).length !== 2) return false
-  const signature = fn.identity.slice(fn.identity.indexOf(":") + 1)
-  return settings.identity === `functionSettings:${signature}`
+  return (
+    settings.identity ===
+    keyIdentity("functionSettings", identityKey(fn.identity))
+  )
 }
 
 /**

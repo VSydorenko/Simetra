@@ -1,8 +1,4 @@
-import {
-  quoteIdent,
-  type DatabaseProvider,
-  type GrantPurpose,
-} from "simetra/model"
+import { type DatabaseProvider, type GrantPurpose } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "./diagnostics"
 import type { PlatformFormSource } from "./sql/closed-forms"
 import {
@@ -11,12 +7,12 @@ import {
 } from "./sql/declarations"
 import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
+import { functionIdentity, qualifiedName } from "./sql/identity"
 import {
-  functionIdentity,
   functionSignatureSql,
   generatedUnit,
   grantObjects,
-  unsupportedSignaturePart,
+  typeReferenceArgument,
   type SqlUnit,
   type VerbatimUnit,
 } from "./sql/units"
@@ -54,9 +50,9 @@ export function buildFunctionExecuteUnits(
 ): SqlUnit[] {
   return (
     executeTargets(sources)
-      // Підпис, якого ідентичність не передає, дав би грант на іншу функцію:
-      // його помилку названо `checkExecuteSignatures`, гранту немає.
-      .filter(({ unit }) => unsupportedSignaturePart(unit) === undefined)
+      // Підпис з `%type` після зміни типу колонки цілив би в іншу функцію:
+      // його помилку названо `checkExecuteTypeReferences`, гранту немає.
+      .filter(({ unit }) => typeReferenceArgument(unit) === undefined)
       .flatMap(({ unit, purposes }) =>
         executeGrants(functionSignatureSql(unit), purposes, provider).map(
           (sql): SqlUnit => ({
@@ -71,25 +67,25 @@ export function buildFunctionExecuteUnits(
 }
 
 /**
- * `sql.function-name-unsupported`: функція, `EXECUTE` якої виводить платформа,
- * з частиною імені чи типу аргументу, яку підпис гранту з канонічної
- * ідентичності не відтворить (`unsupportedSignaturePart`, #297). Без гранту
- * функція лишилася б з `EXECUTE` від `PUBLIC`, тож це помилка, а не пропуск.
- * Форму платформи без `CREATE` не названо: її помилку вже дає відсутній `CREATE`.
+ * `sql.function-argument-type-reference`: функція, `EXECUTE` якої виводить
+ * платформа, з аргументом `%type` (`typeReferenceArgument`, спека декларацій
+ * функцій §5.1). Без гранту функція лишилася б з `EXECUTE` від `PUBLIC`, тож
+ * це помилка, а не пропуск. Форму платформи без `CREATE` не названо: її
+ * помилку вже дає відсутній `CREATE`.
  */
-export function checkExecuteSignatures(
+export function checkExecuteTypeReferences(
   sources: FunctionExecuteSources
 ): Diagnostic[] {
   return executeTargets(sources).flatMap(({ unit }) => {
-    const part = unsupportedSignaturePart(unit)
-    return part === undefined || unit.file === undefined
+    const argument = typeReferenceArgument(unit)
+    return argument === undefined || unit.file === undefined
       ? []
       : [
-          diagnostic("sql.function-name-unsupported", unit.file, "", {
+          diagnostic("sql.function-argument-type-reference", unit.file, "", {
             identity: unit.identity,
             line: unit.line ?? 0,
-            function: `${quoteIdent(unit.schema)}.${quoteIdent(unit.name)}`,
-            part,
+            function: qualifiedName(unit.schema, unit.name),
+            argument,
           }),
         ]
   })

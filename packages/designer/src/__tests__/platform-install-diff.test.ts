@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest"
-import { compile, platformInstall } from "simetra/compiler"
+import { beforeAll, describe, expect, it } from "vitest"
+import {
+  compile,
+  loadSqlParser,
+  platformInstall,
+  type SqlParser,
+} from "simetra/compiler"
 import { DATABASE_PROVIDERS, type DatabaseProvider } from "simetra/model"
 import { applyStateOwnership } from "simetra/schema"
 import {
@@ -17,11 +22,26 @@ import {
  */
 
 const T = "simetra.signal_outbox"
+/** Ідентичності двигуна функцій установки: типи аргументів без лапок. */
 const F = {
   notify: "function:simetra.signal_outbox_notify()",
   prune: "function:simetra.signal_outbox_prune(interval)",
   stamp: "function:simetra.signal_outbox_stamp()",
 }
+/**
+ * Ті самі функції ідентичностями одиниць — так їх називають адреси
+ * відмінностей каталогу (`units.<ідентичність>`): частини імені й типу — за
+ * `quoteIdent`, тож `interval` — у лапках.
+ */
+const U = {
+  notify: "function:simetra.signal_outbox_notify()",
+  prune: 'function:simetra.signal_outbox_prune("interval")',
+  stamp: "function:simetra.signal_outbox_stamp()",
+}
+let parse: SqlParser
+beforeAll(async () => {
+  parse = await loadSqlParser()
+})
 const action = (produces: string[], consumes: string[], sql = "CREATE") => ({
   sql,
   produces,
@@ -89,11 +109,11 @@ const extra = (path: string) => ({
 
 const DIFFERENCES = [
   `tables.${T}`,
-  ...Object.values(F).map((f) => `units.${f}`),
+  ...Object.values(U).map((f) => `units.${f}`),
   `units.grant:grant:table:${T}:simetra_command:insert(method)`,
   `units.grant:grant:table:${T}:simetra_command:insert(payload)`,
   CONSUMER_PATH,
-  ...Object.values(F).map(
+  ...Object.values(U).map(
     (f) =>
       `units.grant:revoke:function:${f.slice("function:".length)}:public:execute`
   ),
@@ -144,11 +164,11 @@ describe("installMismatch", () => {
       expect(objects.grants).toEqual([
         `grant|table:${T}|simetra_command`,
         `grant|table:${T}|simetra_signal_consumer`,
-        ...Object.values(F)
+        ...Object.values(U)
           .map((f) => `revoke|${f}|public`)
           .sort(),
       ])
-      expect(installMismatch(DATA, objects)).toEqual(EXACT)
+      expect(installMismatch(DATA, objects, parse)).toEqual(EXACT)
     }
   )
 
@@ -159,7 +179,7 @@ describe("installMismatch", () => {
       differences: DIFFERENCES.filter((d) => !d.path.includes(prefix)),
     })
     const trigger = `trigger:${T}.simetra_signal_outbox_notify`
-    expect(installMismatch(without(trigger), objects)).toEqual({
+    expect(installMismatch(without(trigger), objects, parse)).toEqual({
       ...EXACT,
       unplanned: [trigger],
       undifferenced: [trigger],
@@ -183,7 +203,8 @@ describe("installMismatch", () => {
           plan: [...PLAN, foreign, schemaGrant],
           differences: [...DIFFERENCES, own],
         },
-        objects
+        objects,
+        parse
       )
     ).toEqual({
       ...EXACT,
@@ -197,13 +218,13 @@ describe("installMismatch", () => {
     const all = await expected("postgres")
     const objects = {
       ...all,
-      objects: all.objects.filter((o) => o !== F.prune),
+      objects: all.objects.filter((o) => o !== U.prune),
     }
-    const mismatch = installMismatch(DATA, objects)
+    const mismatch = installMismatch(DATA, objects, parse)
     expect(mismatch.foreignActions).toHaveLength(2)
     expect(mismatch.foreignDifferences).toEqual([
-      `units.${F.prune}`,
-      "units.grant:revoke:function:simetra.signal_outbox_prune(interval):public:execute",
+      `units.${U.prune}`,
+      'units.grant:revoke:function:simetra.signal_outbox_prune("interval"):public:execute',
     ])
   })
 
@@ -229,7 +250,8 @@ describe("installMismatch", () => {
             extra(path),
           ],
         },
-        objects
+        objects,
+        parse
       )
     ).toEqual({
       ...EXACT,
@@ -245,7 +267,8 @@ describe("installMismatch", () => {
           plan: [...PLAN.filter((a) => a !== CONSUMER_GRANT), wrongRole],
           differences: DIFFERENCES,
         },
-        objects
+        objects,
+        parse
       )
     ).toEqual({
       ...EXACT,
@@ -267,7 +290,8 @@ describe("installMismatch", () => {
           plan: [...PLAN, toPublic],
           differences: [...DIFFERENCES, extra(path)],
         },
-        objects
+        objects,
+        parse
       )
     ).toEqual({ ...EXACT, foreignGrants: [`grant|table:${T}|public`] })
   })
@@ -280,7 +304,8 @@ describe("installMismatch", () => {
           plan: PLAN.filter((a) => a !== CONSUMER_GRANT),
           differences: DIFFERENCES.filter((d) => d.path !== CONSUMER_PATH),
         },
-        objects
+        objects,
+        parse
       )
     ).toEqual({
       ...EXACT,

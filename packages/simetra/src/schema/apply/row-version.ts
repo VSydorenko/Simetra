@@ -3,8 +3,10 @@ import {
   MECHANICS_FUNCTION,
   ROW_VERSION_COLUMN,
   ROW_VERSION_SEQUENCE,
+  identityParts,
   mechanicsTables,
   mechanicsTriggerName,
+  unitIdentity,
   type CompiledModel,
   type SqlParser,
 } from "simetra/compiler"
@@ -35,7 +37,11 @@ export interface RowVersionInput {
 }
 
 /** Ідентичність одиниці послідовності версій у моделі двигуна. */
-export const SEQUENCE_ID = `sequence:${ROW_VERSION_SEQUENCE.schema}.${ROW_VERSION_SEQUENCE.name}`
+export const SEQUENCE_ID = unitIdentity(
+  "sequence",
+  ROW_VERSION_SEQUENCE.schema,
+  ROW_VERSION_SEQUENCE.name
+)
 
 /** Чи є послідовність версій у моделі живої цілі. */
 export const hasRowVersionSequence = (model: CatalogModel): boolean =>
@@ -58,7 +64,7 @@ export function liveMechanicsTables(model: CatalogModel): TableRef[] {
   return model.tables
     .filter((t) => {
       const unit = triggers.get(
-        `trigger:${t.schema}.${t.name}.${mechanicsTriggerName(t.name)}`
+        unitIdentity("trigger", t.schema, t.name, mechanicsTriggerName(t.name))
       )
       return unit !== undefined && fn.test(unit.sql)
     })
@@ -226,13 +232,13 @@ export function modelTriggers(
   model: CatalogModel,
   table: TableRef
 ): DataTable["triggers"] {
-  const prefix = `trigger:${table.schema}.${table.name}.`
+  // Таблицю тригера читаємо з частин ідентичності: ім'я у верхньому регістрі
+  // в ній у лапках, тож сирий префікс не знайшов би тригер
   return model.units
-    .filter((u) => u.class === "trigger" && u.identity.startsWith(prefix))
-    .map((u) => ({
-      name: u.identity.slice(prefix.length),
-      enabled: "O" as const,
-    }))
+    .filter((u) => u.class === "trigger")
+    .map((u) => identityParts(u.identity))
+    .filter(([schema, name]) => schema === table.schema && name === table.name)
+    .map(([, , name]) => ({ name: name!, enabled: "O" as const }))
     .sort((a, b) => byCodeUnit(a.name, b.name))
 }
 

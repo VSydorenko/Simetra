@@ -671,6 +671,51 @@ describe("diff narrowed to tables", () => {
   })
 })
 
+describe("unit identities of the named tables with names that need quotes", () => {
+  const difference = (path: string) => ({
+    path,
+    kind: "missing" as const,
+    detail: "",
+  })
+  const model = {
+    tables: [
+      { schema: "app", name: "Order.Items", columns: [], indexes: [] },
+      { schema: "app", name: "other", columns: [], indexes: [] },
+    ],
+    enumTypes: [],
+    units: [
+      {
+        class: "sequenceOwnedBy" as const,
+        identity: 'sequenceOwnedBy:app."Seq,One"',
+        schema: "app",
+        name: "Seq,One",
+        sql: 'ALTER SEQUENCE app."Seq,One" OWNED BY app."Order.Items".id',
+      },
+    ],
+  }
+  const differences = [
+    difference('units.trigger:app."Order.Items"."Touch"'),
+    difference('units.trigger:app.other."Touch"'),
+    difference('units.sequence:app."Seq,One"'),
+    difference('units.sequenceOwnedBy:app."Seq,One"'),
+    difference('units.table:app."Order.Items"'),
+  ]
+
+  it("matches the unit paths of the table, its trigger and its owned sequence", () => {
+    const narrowed = narrow(
+      { plan: [], differences, diagnostics: [] },
+      [{ schema: "app", name: "Order.Items" }],
+      [model]
+    )
+    expect(narrowed.differences.map((d) => d.path)).toEqual([
+      'units.trigger:app."Order.Items"."Touch"',
+      'units.sequence:app."Seq,One"',
+      'units.sequenceOwnedBy:app."Seq,One"',
+      'units.table:app."Order.Items"',
+    ])
+  })
+})
+
 // Збій бази через каталог інструментів: компіляція й план перед збоєм — бюджет `TOOL_PIPELINE`
 describe("database failures through the catalog", TOOL_PIPELINE, () => {
   const failing = (error: Error): DatabaseResource => ({

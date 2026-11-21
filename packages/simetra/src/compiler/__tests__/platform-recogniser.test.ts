@@ -238,7 +238,7 @@ describe("platformRecogniser: other units by their normalised tree (И4)", () =>
       const policy = own(
         "policy:simetra.signal_outbox.signal_outbox_consumer_select"
       )
-      const fn = own("function:simetra.signal_outbox_prune(interval)")
+      const fn = own('function:simetra.signal_outbox_prune("interval")')
       const trigger = own(
         "trigger:simetra.signal_outbox.simetra_signal_outbox_stamp"
       )
@@ -270,7 +270,7 @@ describe("platformRecogniser: other units by their normalised tree (И4)", () =>
         expect(unit?.identity).toBe(identity)
         return unit!.sql
       }
-      const invoker = own("function:simetra.signal_outbox_prune(interval)")
+      const invoker = own('function:simetra.signal_outbox_prune("interval")')
       const definer = own("function:simetra.touch()")
       const catalogDefiner = CATALOG_UNIT_FORMS["function:simetra.touch()"]!
       expect(

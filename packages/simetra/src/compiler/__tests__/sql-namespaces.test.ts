@@ -385,6 +385,30 @@ describe("model relation names in pg_class", () => {
     ])
   })
 
+  // Ключ `pg_class` — за правилом ідентичності (#297): індекс `a."b.c"` і
+  // таблиця `"a.b".c` — різні відношення, хоч сире склеювання дало б
+  // `a.b.c` обом; ім'я в лапках з обох боків порівнюється тим самим правилом.
+  it("an index name across a quoted dot from a table is clean", async () => {
+    const result = await compileModel({
+      [AUDIT]: customTable("Audit", { schema: "a", ...indexed("b.c") }),
+      [LOG]: customTable("Log", { schema: "a.b", physicalName: "c" }),
+    })
+    expect(result.diagnostics).toEqual([])
+  })
+
+  it("explicit index name equal to a table name in quotes", async () => {
+    const result = await compileModel({
+      [AUDIT]: customTable("Audit", { physicalName: "Shared" }),
+      [LOG]: customTable("Log", indexed("Shared")),
+    })
+    expect(result.diagnostics).toEqual([
+      duplicate(LOG, "/indexes/0/name", {
+        name: 'public."Shared"',
+        firstFile: AUDIT,
+      }),
+    ])
+  })
+
   it("explicit index name equal to an enum type name is clean", async () => {
     // Індекс — у `pg_class`, енам-тип — у `pg_type`.
     const result = await compileModel({

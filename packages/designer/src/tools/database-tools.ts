@@ -4,6 +4,8 @@ import {
   loadSqlParser,
   type CompiledModel,
   type Diagnostic,
+  identityParts,
+  unitIdentity,
 } from "simetra/compiler"
 import {
   ATTRIBUTE_CASES,
@@ -293,15 +295,33 @@ function resolveTables(
  */
 function touchesTables(
   tables: readonly Qualified[],
-  related: ReadonlySet<string>
+  related: ReadonlySet<string>,
+  language: "engine" | "unit"
 ): (id: string) => boolean {
-  const own = new Set(tables.map((t) => `table:${t.schema}.${t.name}`))
+  // `StableId` двигуна й ідентичність одиниці — різні мови (Р9): двигун
+  // лишає великі літери без лапок, одиниця їх ставить. Рядки не змішуємо.
+  const own = new Set(
+    tables.map((t) =>
+      language === "unit"
+        ? unitIdentity("table", t.schema, t.name)
+        : // eslint-disable-next-line no-restricted-syntax -- StableId двигуна, не ідентичність одиниці (#297, Р9)
+          `table:${t.schema}.${t.name}`
+    )
+  )
   const prefixes = tables.map((t) => `${t.schema}.${t.name}.`)
+  const inTable = (key: string): boolean => {
+    if (language === "engine") return prefixes.some((p) => key.startsWith(p))
+    const parts = identityParts(`:${key}`)
+    return (
+      parts.length >= 3 &&
+      tables.some((t) => t.schema === parts[0] && t.name === parts[1])
+    )
+  }
   const sub = /^(column|constraint|trigger|rule|policy|default):(.*)$/
   const touches = (id: string): boolean => {
     if (own.has(id) || related.has(id)) return true
     const m = sub.exec(id)
-    if (m !== null) return prefixes.some((p) => m[2]!.startsWith(p))
+    if (m !== null) return inTable(m[2]!)
     const wrapped = /^(?:comment|acl|securityLabel):\((.*)\)/.exec(id)
     return wrapped !== null && touches(wrapped[1]!)
   }
@@ -343,16 +363,23 @@ function nameParts(text: string): string[] | undefined {
 function dependentIds(
   keys: ReadonlySet<string>,
   models: readonly NarrowModel[]
-): Set<string> {
+): { engine: Set<string>; unit: Set<string> } {
   const enums = new Set(
     models.flatMap((m) => m.enumTypes.map((e) => `${e.schema}.${e.name}`))
   )
+  // Те саме в двох мовах (Р9): `StableId` двигуна для плану й діагностики,
+  // ідентичність одиниці — для шляхів `units.…`
   const ids = new Set<string>()
+  const unitIds = new Set<string>()
   const sequence = (schema: string, parts: string[] | undefined) => {
     if (parts === undefined || parts.length > 2) return
     const qualified = parts.length === 2 ? parts : [schema, parts[0]!]
     const key = qualified.join(".")
+    // eslint-disable-next-line no-restricted-syntax -- StableId двигуна, не ідентичність одиниці (#297, Р9)
     ids.add(`sequence:${key}`).add(`sequenceOwnedBy:${key}`)
+    unitIds
+      .add(unitIdentity("sequence", ...qualified))
+      .add(unitIdentity("sequenceOwnedBy", ...qualified))
   }
   for (const table of models.flatMap((m) => m.tables)) {
     if (!keys.has(`${table.schema}.${table.name}`)) continue
@@ -382,12 +409,9 @@ function dependentIds(
             ? `${unit.schema}.${parts[0]}`
             : undefined
     if (table !== undefined && keys.has(table))
-      sequence(
-        unit.schema,
-        nameParts(unit.identity.slice(unit.identity.indexOf(":") + 1))
-      )
+      sequence(unit.schema, identityParts(unit.identity))
   }
-  return ids
+  return { engine: ids, unit: unitIds }
 }
 
 /**
@@ -437,10 +461,15 @@ export function narrow(
   )
   const dependent = dependentIds(keys, models)
   const owned = attributable(models)
-  const touches = touchesTables(tables, new Set([...indexes, ...dependent]))
+  const touches = touchesTables(
+    tables,
+    new Set([...indexes, ...dependent.engine]),
+    "engine"
+  )
+  const touchesUnit = touchesTables(tables, dependent.unit, "unit")
   const tablePaths = [...keys].map((k) => `tables.${k}`)
   const enumPaths = new Set(
-    [...dependent]
+    [...dependent.engine]
       .filter((id) => id.startsWith("type:"))
       .map((id) => `enumTypes.${id.slice("type:".length)}`)
   )
@@ -450,7 +479,8 @@ export function narrow(
       (d) =>
         tablePaths.some((p) => d.path === p || d.path.startsWith(`${p}.`)) ||
         enumPaths.has(d.path) ||
-        (d.path.startsWith("units.") && touches(d.path.slice("units.".length)))
+        (d.path.startsWith("units.") &&
+          touchesUnit(d.path.slice("units.".length)))
     ),
     diagnostics: data.diagnostics.filter((d) => {
       const object = d.params?.object
