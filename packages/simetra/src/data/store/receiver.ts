@@ -13,7 +13,7 @@ import {
 import { differentEpochs, keyId, pairId } from "./epoch"
 import { evaluateFilter, fieldInfoOf } from "./filter"
 import type { ObjectState } from "./forms"
-import { channelOf, scopeOf, visibleRow, type RowEntry } from "./object-store"
+import { scopeOf, visibleRow, type RowEntry } from "./object-store"
 import { canSubscribe } from "./rights"
 import { ReadLimiterClosed, readKeys, tracked } from "./source"
 import type {
@@ -770,13 +770,8 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   // рядки: без них забувається, і регістри не ростуть (перевірка — на такті,
   // а не на кожному `commit`).
   const forgetReleased = () => {
-    const { epochs } = session
-    for (const channel of [...epochs.released()]) {
-      const pair = pairOf(channel)
-      const o = pair === undefined ? undefined : writer.objectOf(pair.object)
-      if (o === undefined || !o.rows.holdsChannel(channelOf(o.entry), channel))
-        epochs.forget(channel)
-    }
+    if (session.epochs.released().next().done === true) return
+    ctx.commit((w) => w.forgetReleased(), token)
   }
 
   const join = (channel: string) => {

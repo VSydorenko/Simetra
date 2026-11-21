@@ -847,20 +847,24 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   const channelObjects = new Map<string, string | undefined>()
   // Склад вигляду після розриву (§8.4): кожен утримуваний канал його об'єкта
   // доведено читанням, що успішно осіло й почалось не раніше приєднання після
-  // останнього розриву. Похідна від епох, без власного стану.
+  // останнього розриву; відпущений з записом — точково (`compositionProven`).
+  // Похідна від епох, без власного стану.
   function staleComposition(s: Subset): boolean {
     const { epochs } = session
     if (!epochs.gapped()) return false
     const id = s.form.object.entry.id
     const read = s.okReadEpoch ?? -1
-    for (const channel of epochs.heldChannels()) {
+    const unproven = (channel: string) => {
       let object = channelObjects.get(channel)
       if (object === undefined && !channelObjects.has(channel)) {
         object = changesObjectOf(channel)
         channelObjects.set(channel, object)
       }
-      if (object === id && !epochs.channelProven(channel, read)) return true
+      return object === id && !epochs.compositionProven(channel, read)
     }
+    for (const channel of epochs.heldChannels())
+      if (unproven(channel)) return true
+    for (const channel of epochs.released()) if (unproven(channel)) return true
     return false
   }
 

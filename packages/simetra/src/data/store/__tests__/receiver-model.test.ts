@@ -4,8 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { SCOPE_KIND_ID } from "../../../model/runtime/__tests__/entries"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import { REJOIN_JITTER_MS, QUIET_MS } from "../receiver"
-import type { Key, ViewHandle, ViewSpec } from "../types"
+import { coreInternals } from "../core"
+import type { Key, RowView, ViewHandle, ViewSpec } from "../types"
 import {
+  ORG,
   TASK,
   key,
   org,
@@ -18,12 +20,26 @@ import {
 
 /*
  * Модель приймача над справжнім ядром (план B5b-3, задача 4, раунд 5; спека
- * П4-B §8.4): кроки — правки й створення на фейковому сервері, розриви й
- * приєднання каналів (`fail`/`join`, `refreshTokens`), час, видимість,
- * затримані й невдалі читання. Оракул — правда фейкового сервера: правка, чий
- * сигнал не дійшов, бо канал був між `fail` і `join`, «втрачена»; рядок без
- * `stale` має версію не нижчу за кожну втрачену правку свого ключа, а вигляд без
- * `staleComposition` або показує втрачене створення, або має `hasNewRows`.
+ * П4-B §8.4): кроки — правки, створення й видалення на фейковому сервері,
+ * розриви й приєднання каналів (`fail`/`join`, `refreshTokens`), заміна
+ * переліку скоупів (відпускання й повторна підписка каналу), час,
+ * видимість, затримані й невдалі читання, нові вигляди й цілі `include`
+ * об'єкта без власного вигляду.
+ *
+ * Оракул безпеки — правда фейкового сервера. Правка утримуваного каналу між
+ * `fail` і `join` «втрачена». Правка, поки канал не утримується, «без
+ * нагляду»: рядок такого каналу свіжий на мить свого читання. На повторній
+ * підписці відпущеного каналу з записом (`gapAt` = епоха відпускання, R-c)
+ * правки без нагляду стають втраченими; підписка без запису — вікно
+ * активації (§8.4, до першої хвилі): лише ці правки без нагляду оракул явно
+ * не рахує. Рядок без `stale`, показаний `synced`, має версію не нижчу за
+ * кожну втрачену правку свого ключа й не показує втраченого видалення; повний
+ * вигляд без `staleComposition` або показує втрачене створення, або має
+ * `hasNewRows`.
+ *
+ * Оракул живучості — після тиші, приєднання кожного утримуваного каналу й
+ * успішних читань видимих виглядів жоден рядок (зокрема ціль `include`) і
+ * жоден вигляд не лишається `stale` чи `staleComposition`.
  */
 
 const T = "00000000-0000-4000-8000-0000000000b2"
@@ -39,12 +55,12 @@ const channelOf = (scope: string) =>
   })
 const CHANNELS = SCOPES.map(channelOf)
 
-const read = (scope: string): RightsRow => ({
+const read = (scope: string, object = "task"): RightsRow => ({
   level: "scope",
   levelId: null,
   scope,
   container: null,
-  object: "task",
+  object,
   action: "read",
   extent: "any",
   dimensionId: null,
@@ -63,14 +79,20 @@ const SPECS: readonly ViewSpec[] = [
   { kind: "keys", object: TASK, keys: [key(3)] },
   { kind: "card", object: TASK, key: key(4) },
   FULL,
+  // Ціль `include` — організація, об'єкт без власного вигляду: її канал
+  // приймач не тримає ніколи.
+  { kind: "full", object: TASK, include: ["org"] },
 ]
 
 type Step =
   | { t: "edit"; k: number }
+  | { t: "editOrg"; scope: number }
   | { t: "create"; scope: number }
+  | { t: "delete"; k: number }
   | { t: "fail"; ch: number }
   | { t: "join"; ch: number; recovered: boolean }
   | { t: "refreshTokens" }
+  | { t: "scopes"; ch: number }
   | { t: "time"; ms: number }
   | { t: "revalidate" }
   | { t: "visible"; v: number; on: boolean }
@@ -81,7 +103,9 @@ type Step =
 const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 export const STEP = fc.oneof(
   { weight: 6, arbitrary: fc.record({ t: one("edit"), k: fc.nat(7) }) },
+  { weight: 1, arbitrary: fc.record({ t: one("editOrg"), scope: fc.nat(1) }) },
   { weight: 2, arbitrary: fc.record({ t: one("create"), scope: fc.nat(1) }) },
+  { weight: 1, arbitrary: fc.record({ t: one("delete"), k: fc.nat(7) }) },
   { weight: 4, arbitrary: fc.record({ t: one("fail"), ch: fc.nat(2) }) },
   {
     weight: 4,
@@ -92,6 +116,7 @@ export const STEP = fc.oneof(
     }),
   },
   { weight: 1, arbitrary: fc.record({ t: one("refreshTokens") }) },
+  { weight: 2, arbitrary: fc.record({ t: one("scopes"), ch: fc.nat(1) }) },
   {
     weight: 4,
     arbitrary: fc.record({
@@ -121,6 +146,11 @@ export const STEP = fc.oneof(
 ) as fc.Arbitrary<Step>
 
 let signalId = 0
+let rightsVersion = 1
+
+const failWith = (at: string, what: string, trace: readonly string[]) => {
+  throw new Error(`${at}: ${what}\n${trace.join("\n")}`)
+}
 
 async function run(steps: readonly Step[]): Promise<void> {
   const transport = createFakeSignalTransport()
@@ -129,14 +159,26 @@ async function run(steps: readonly Step[]): Promise<void> {
     signals: transport,
     objects: [task, org],
   })
-  h.fake.rightsSnapshot = {
+  const internals = coreInternals(h.core)
+  // Перелік скоупів задає підписки; права читання лишаються — заміна
+  // переліку відпускає канал, не прибираючи рядків.
+  const scopeSet = SCOPES.map(() => true)
+  const snapshot = () => ({
     userId: USER,
-    scopeSets: SCOPES.map((scope) => ({ scopeKind: SCOPE_KIND_ID, scope })),
-    rights: SCOPES.map(read),
+    scopeSets: SCOPES.filter((_, n) => scopeSet[n]).map((scope) => ({
+      scopeKind: SCOPE_KIND_ID,
+      scope,
+    })),
+    rights: [
+      ...SCOPES.map((scope) => read(scope)),
+      ...SCOPES.map((scope) => read(scope, "organization")),
+    ],
     members: [],
     dimensionValues: [],
-  }
-  h.fake.rightsVersion = "1".repeat(64)
+  })
+  h.fake.rightsSnapshot = snapshot()
+  h.fake.rightsVersion = String(rightsVersion++ % 10).repeat(64)
+  for (const scope of SCOPES) h.fake.insert(ORG, { ref: scope })
   const scopeOfKey = new Map<Key, number>()
   for (const { n, scope } of START_KEYS) {
     h.fake.insert(TASK, taskValues(n, { org: SCOPES[scope] }))
@@ -151,25 +193,46 @@ async function run(steps: readonly Step[]): Promise<void> {
   await settle()
   for (const ch of CHANNELS)
     expect(transport.subscribed().has(ch), ch).toBe(true)
-  // Справжній транспорт кличе `onSubscribed` після першої підписки: без цього
-  // каналу немає в регістрах, і розрив з'єднання до першого приєднання —
-  // вікно, яке за дизайном закриває перша хвиля, а не модель.
+  // Справжній транспорт кличе `onSubscribed` після першої підписки; перша
+  // хвиля закриває вікно активації до кроків моделі.
   for (const ch of CHANNELS) transport.join(ch, false)
   await vi.advanceTimersByTimeAsync(REJOIN_JITTER_MS)
   await settle()
 
-  // Правда сервера про доставку: канал «живий» між `join` і `fail`.
+  // Правда сервера про доставку: канал утримується (підписаний) і «живий»
+  // між `join` і `fail`.
+  const held = CHANNELS.map(() => true)
   const live = CHANNELS.map(() => true)
-  // Найбільша версія втраченої правки ключа; втрачені створення.
+  // Найбільша версія втраченої правки ключа; втрачені створення й видалення.
   const lost = new Map<Key, number>()
   const lostCreates = new Set<Key>()
+  const lostDeletes = new Set<Key>()
+  // Правки без нагляду (канал не утримується): ключ → найбільша версія.
+  const unwatched = CHANNELS.map(
+    () => new Map<Key, { version: number; op: Op }>()
+  )
+  const deleted = new Set<Key>()
   let created = 100
   const trace: string[] = []
 
-  const signal = (k: Key, op: "create" | "update", version: number) => {
-    const scope = scopeOfKey.get(k)!
-    if (live[scope]) {
-      transport.emit(CHANNELS[scope]!, {
+  type Op = "create" | "update" | "delete"
+  const loseInto = (k: Key, version: number, op: Op) => {
+    lost.set(k, Math.max(lost.get(k) ?? 0, version))
+    if (op === "create") lostCreates.add(k)
+    if (op === "delete") lostDeletes.add(k)
+  }
+  const signal = (k: Key, op: Op, version: number) => {
+    const ch = scopeOfKey.get(k)!
+    if (!held[ch]) {
+      const prior = unwatched[ch]!.get(k)
+      unwatched[ch]!.set(k, {
+        version: Math.max(prior?.version ?? 0, version),
+        op: prior?.op === "create" && op === "update" ? "create" : op,
+      })
+      return
+    }
+    if (live[ch]) {
+      transport.emit(CHANNELS[ch]!, {
         id: String(++signalId),
         object: task.id,
         op,
@@ -178,33 +241,57 @@ async function run(steps: readonly Step[]): Promise<void> {
       })
       return
     }
-    lost.set(k, Math.max(lost.get(k) ?? 0, version))
-    if (op === "create") lostCreates.add(k)
+    loseInto(k, version, op)
+  }
+
+  // Канали, що підписка справді тримає після кроку: відпущений чи
+  // підписаний знову.
+  const syncHeld = () => {
+    for (const [ch, channel] of CHANNELS.entries()) {
+      const now = transport.subscribed().has(channel)
+      if (held[ch] === now) continue
+      held[ch] = now
+      if (!now) continue
+      // R-c: відпущений канал з записом приєднується після розриву, і правки
+      // без нагляду стають втраченими; без запису — вікно активації.
+      if (internals.epochs.gapAt(channel) > 0)
+        for (const [k, u] of unwatched[ch]!) loseInto(k, u.version, u.op)
+      unwatched[ch]!.clear()
+      // Справжній транспорт дає `onSubscribed` після підписки.
+      live[ch] = true
+      transport.join(channel, false)
+    }
   }
 
   const check = (at: string) => {
     for (const [v, handle] of handles.entries()) {
-      const snapshot = handle.getSnapshot()
-      for (const row of snapshot.rows) {
+      const snap = handle.getSnapshot()
+      for (const row of snap.rows) {
         if (row.state === "removed" || row.hidden === true) continue
+        if (row.stale === true || row.state !== "synced") continue
         const floor = lost.get(row.key)
-        if (
-          floor !== undefined &&
-          row.stale !== true &&
-          row.state === "synced" &&
-          row.version < floor
-        )
-          throw new Error(
-            `${at}: view ${v} shows ${row.key} v${row.version} synced, a lost edit has v${floor}\n${trace.join("\n")}`
+        if (floor !== undefined && row.version < floor)
+          failWith(
+            at,
+            `view ${v} shows ${row.key} v${row.version} synced, a lost edit has v${floor}`,
+            trace
+          )
+        if (lostDeletes.has(row.key))
+          failWith(
+            at,
+            `view ${v} shows ${row.key} synced after a lost delete`,
+            trace
           )
       }
-      if (specs[v] !== FULL || snapshot.staleComposition === true) continue
-      if (snapshot.status === "loading" || snapshot.hasNewRows) continue
-      const shown = new Set(snapshot.rows.map((r) => r.key))
+      if (specs[v] !== FULL || snap.staleComposition === true) continue
+      if (snap.status === "loading" || snap.hasNewRows) continue
+      const shown = new Set(snap.rows.map((r) => r.key))
       for (const k of lostCreates)
-        if (!shown.has(k))
-          throw new Error(
-            `${at}: the full view misses the lost create ${k} with a confirmed composition\n${trace.join("\n")}`
+        if (!shown.has(k) && !deleted.has(k))
+          failWith(
+            at,
+            `the full view misses the lost create ${k} with a confirmed composition`,
+            trace
           )
     }
   }
@@ -213,12 +300,18 @@ async function run(steps: readonly Step[]): Promise<void> {
     trace.push(`${i}: ${JSON.stringify(s)}`)
     switch (s.t) {
       case "edit": {
-        const all = [...scopeOfKey.keys()]
+        const all = [...scopeOfKey.keys()].filter((k) => !deleted.has(k))
+        if (all.length === 0) break
         const k = all[s.k % all.length]!
         const version = h.fake.edit(TASK, k, { title: `e${i}` })
         signal(k, "update", version)
         break
       }
+      case "editOrg":
+        // Канал організації ніхто не тримає: правка без сигналу, ціль
+        // свіжа на мить свого читання.
+        h.fake.edit(ORG, SCOPES[s.scope]!, {})
+        break
       case "create": {
         const n = ++created
         const k = key(n)
@@ -230,6 +323,16 @@ async function run(steps: readonly Step[]): Promise<void> {
         signal(k, "create", version)
         break
       }
+      case "delete": {
+        const all = [...scopeOfKey.keys()].filter((k) => !deleted.has(k))
+        if (all.length === 0) break
+        const k = all[s.k % all.length]!
+        const version = h.fake.row(TASK, k)!.version + 1
+        h.fake.remove(TASK, k)
+        deleted.add(k)
+        signal(k, "delete", version)
+        break
+      }
       case "fail": {
         const channel = CHANNELS[s.ch]
         if (channel === undefined) live.fill(false)
@@ -238,13 +341,27 @@ async function run(steps: readonly Step[]): Promise<void> {
         break
       }
       case "join":
-        live[s.ch] = true
+        if (held[s.ch]) live[s.ch] = true
         transport.join(CHANNELS[s.ch]!, s.recovered)
         break
       case "refreshTokens":
-        live.fill(true)
+        for (const [ch, on] of held.entries()) if (on) live[ch] = true
         await transport.refreshTokens()
         break
+      case "scopes": {
+        // Заміна знімка прав з іншим переліком скоупів: канал відпускається
+        // чи підписується знову. Знімок читається поза затриманими читаннями.
+        scopeSet[s.ch] = !scopeSet[s.ch]
+        const mode = h.fake.mode
+        h.fake.mode = "auto"
+        h.fake.rightsSnapshot = snapshot()
+        h.fake.rightsVersion = String(rightsVersion++ % 10).repeat(64)
+        h.core.requestRights()
+        await vi.advanceTimersByTimeAsync(0)
+        await settle()
+        h.fake.mode = mode
+        break
+      }
       case "time":
         await vi.advanceTimersByTimeAsync(s.ms)
         break
@@ -252,7 +369,7 @@ async function run(steps: readonly Step[]): Promise<void> {
         h.core.revalidate(TASK, { visibleOnly: true }).catch(() => {})
         break
       case "visible":
-        h.core.setVisible(SPECS[s.v]!, s.on)
+        h.core.setVisible(specs[s.v]!, s.on)
         break
       case "hold":
         h.fake.mode = "manual"
@@ -280,14 +397,18 @@ async function run(steps: readonly Step[]): Promise<void> {
         break
     }
     await settle()
+    syncHeld()
+    await settle()
     check(`step ${i}`)
   }
 
-  // Живучість: після приєднання кожного каналу й успішного перечитування
-  // видимих виглядів позначок і непідтвердженого складу не лишається.
+  // Живучість: тиша, приєднання кожного утримуваного каналу, усі вигляди
+  // видимі й успішно перечитані — ні `stale`, ні `staleComposition`.
   h.fake.mode = "auto"
   h.fake.deliverAll()
+  await settle()
   for (const [ch, channel] of CHANNELS.entries()) {
+    if (!held[ch]) continue
     live[ch] = true
     transport.join(channel, false)
   }
@@ -296,19 +417,25 @@ async function run(steps: readonly Step[]): Promise<void> {
   await settle()
   await h.core.revalidate(TASK, { visibleOnly: true })
   await settle()
+  // Вигляд, чиє перше завантаження збоїло, системне перечитування не бере:
+  // успішне читання йому дає лише `refresh()`.
+  for (const handle of handles)
+    if (handle.getSnapshot().status === "error") handle.refresh()
+  await settle()
   check("end")
+  const staleRow = (row: RowView): boolean =>
+    row.state !== "removed" &&
+    (row.stale === true ||
+      Object.values(row.refs ?? {}).some((r) => r !== null && staleRow(r)))
   for (const [v, handle] of handles.entries()) {
-    const snapshot = handle.getSnapshot()
-    if (snapshot.status === "error") continue
-    if (snapshot.staleComposition === true)
-      throw new Error(
-        `end: view ${v} keeps staleComposition\n${trace.join("\n")}`
-      )
-    for (const row of snapshot.rows)
-      if (row.state !== "removed" && lost.has(row.key) && row.stale === true)
-        throw new Error(
-          `end: view ${v} keeps the mark of ${row.key}\n${trace.join("\n")}`
-        )
+    const snap = handle.getSnapshot()
+    if (snap.status === "error")
+      failWith("end", `view ${v} is in error after successful reads`, trace)
+    if (snap.staleComposition === true)
+      failWith("end", `view ${v} keeps staleComposition`, trace)
+    for (const row of snap.rows)
+      if (staleRow(row))
+        failWith("end", `view ${v} keeps a stale row ${row.key}`, trace)
   }
 }
 
@@ -450,6 +577,57 @@ describe("receiver model: the disconnect mark and the composition against the se
         { t: "revalidate" },
         { t: "edit", k: 2 },
         { t: "time", ms: 60_000 },
+      ],
+    ],
+    [
+      "r5: a create lost in a gap, then the channel released",
+      [
+        { t: "fail", ch: 0 },
+        { t: "create", scope: 0 },
+        { t: "scopes", ch: 0 },
+      ],
+    ],
+    [
+      "r5 A: a released channel and a connection gap",
+      [
+        { t: "scopes", ch: 1 },
+        { t: "fail", ch: 2 },
+        { t: "join", ch: 0, recovered: false },
+        { t: "time", ms: REJOIN_JITTER_MS },
+      ],
+    ],
+    [
+      "r5 A2: a gap of a channel, then its release",
+      [{ t: "fail", ch: 1 }, { t: "scopes", ch: 1 }, { t: "revalidate" }],
+    ],
+    [
+      "r5 B: a connection gap with an include target nobody holds",
+      [
+        { t: "fail", ch: 2 },
+        { t: "editOrg", scope: 0 },
+        { t: "join", ch: 0, recovered: false },
+        { t: "join", ch: 1, recovered: false },
+        { t: "time", ms: REJOIN_JITTER_MS },
+      ],
+    ],
+    [
+      "r5 D: release, an edit, resubscribe with an invisible view",
+      [
+        { t: "visible", v: 0, on: false },
+        { t: "scopes", ch: 0 },
+        { t: "edit", k: 0 },
+        { t: "scopes", ch: 0 },
+        { t: "time", ms: REJOIN_JITTER_MS },
+      ],
+    ],
+    [
+      "a lost delete",
+      [
+        { t: "fail", ch: 0 },
+        { t: "delete", k: 0 },
+        { t: "time", ms: 60_000 },
+        { t: "join", ch: 0, recovered: true },
+        { t: "time", ms: REJOIN_JITTER_MS },
       ],
     ],
     [

@@ -111,6 +111,14 @@ export interface Epochs {
    * started at or after the release (none kept — any read).
    */
   liftsMark(channel: string, mark: number, readEpoch: number): boolean
+  /**
+   * A view's composition read at `okReadEpoch` is confirmed for the channel:
+   * held — `channelProven`; released with an entry — point-in-time: the read
+   * started at or after the release, or the channel was proven for it at the
+   * release (`gapAt < joinAt <= okReadEpoch` with the values of that moment,
+   * or no gap); otherwise (no entry) — confirmed.
+   */
+  compositionProven(channel: string, okReadEpoch: number): boolean
   /** Some held channel had a gap (a fast path for the store's apply). */
   gapped(): boolean
   /** Drops both maps, the horizon, the last pair burials and the channel registers. */
@@ -266,7 +274,9 @@ export function createEpochs(
   const heldSet = new Set<string>()
   const gaps = new Map<string, number>()
   const joins = new Map<string, number>()
-  const releases = new Map<string, number>()
+  // Відпущений канал: епоха відпускання й регістри тієї миті — склад
+  // вигляду судиться точково (читання після відпускання чи доведений тоді).
+  const releases = new Map<string, { at: number; gap: number; join: number }>()
   const gapAt = (channel: string) => gaps.get(channel) ?? 0
   // Поховання всіх пар об'єкта (`buryObject`): одне число на об'єкт.
   const objectBurials = new Map<string, number>()
@@ -363,22 +373,24 @@ export function createEpochs(
     hold(channel) {
       if (heldSet.has(channel)) return undefined
       heldSet.add(channel)
-      const releasedAt = releases.get(channel)
+      const released = releases.get(channel)
       releases.delete(channel)
       joins.delete(channel)
-      if (releasedAt === undefined) {
+      if (released === undefined) {
         gaps.delete(channel)
         return undefined
       }
-      gaps.set(channel, releasedAt)
-      return releasedAt
+      gaps.set(channel, released.at)
+      return released.at
     },
     release(channel) {
       const at = ++epoch
+      const gap = heldSet.has(channel) ? gapAt(channel) : 0
+      const join = joins.get(channel) ?? 0
       heldSet.delete(channel)
       gaps.delete(channel)
       joins.delete(channel)
-      releases.set(channel, at)
+      releases.set(channel, { at, gap, join })
       return at
     },
     forget(channel) {
@@ -398,7 +410,7 @@ export function createEpochs(
     },
     gapAt,
     joinAt: (channel) => joins.get(channel) ?? 0,
-    releasedAt: (channel) => releases.get(channel) ?? 0,
+    releasedAt: (channel) => releases.get(channel)?.at ?? 0,
     channelProven(channel, readEpoch) {
       if (!heldSet.has(channel)) return true
       const gap = gapAt(channel)
@@ -408,11 +420,22 @@ export function createEpochs(
     },
     liftsMark(channel, mark, readEpoch) {
       if (!heldSet.has(channel))
-        return readEpoch >= (releases.get(channel) ?? 0)
+        return readEpoch >= (releases.get(channel)?.at ?? 0)
       const join = joins.get(channel) ?? 0
       return join > mark && readEpoch >= join
     },
-    gapped: () => gaps.size > 0,
+    compositionProven(channel, okReadEpoch) {
+      if (heldSet.has(channel)) {
+        const gap = gapAt(channel)
+        const join = joins.get(channel) ?? 0
+        return gap === 0 || (gap < join && join <= okReadEpoch)
+      }
+      const released = releases.get(channel)
+      if (released === undefined || okReadEpoch >= released.at) return true
+      const { gap, join } = released
+      return gap === 0 || (gap < join && join <= okReadEpoch)
+    },
+    gapped: () => gaps.size > 0 || releases.size > 0,
     clear() {
       heldSet.clear()
       gaps.clear()

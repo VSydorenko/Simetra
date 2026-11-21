@@ -986,6 +986,31 @@ describe("held and released channels (liveness, R-a…R-c)", () => {
     expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
   })
 
+  it("judges a released channel point-in-time: a create lost in a gap keeps the composition unconfirmed until a read after the release", async () => {
+    const h = await open(full, 3, [S, S2])
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    h.transport.fail({ kind: "transport", channel })
+    await settle()
+    h.fake.insert(TASK, taskValues(4, { status: null, subject: null }))
+    await replaceRights(h, [S2], [S, S2])
+    expect(h.transport.subscribed().has(channel)).toBe(false)
+    expect(h.handle.getSnapshot().staleComposition).toBe(true)
+    await h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    expect(h.handle.getSnapshot()).toMatchObject({ hasNewRows: true })
+    expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
+  })
+
+  it("a release without a gap leaves the composition confirmed", async () => {
+    const h = await open(full, 3, [S, S2])
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    await replaceRights(h, [S2], [S, S2])
+    expect(h.transport.subscribed().has(channel)).toBe(false)
+    expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
+  })
+
   it("D: unsubscribe, an edit, resubscribe — the stored row is not shown synced with the old value", async () => {
     // Читання лишається, канал знімає лише перелік скоупів.
     const h = await open(keysView(key(1)), 3, [S])

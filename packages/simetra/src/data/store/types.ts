@@ -533,6 +533,8 @@ export interface Writer {
    * longer judged by it. Marks stay.
    */
   releaseChannel(channel: string): void
+  /** Forgets released channels the store holds no row of (bounded registers). */
+  forgetReleased(): void
   markViews(
     object: ObjectName,
     flags: { needsRefresh?: boolean; hasNewRows?: boolean },

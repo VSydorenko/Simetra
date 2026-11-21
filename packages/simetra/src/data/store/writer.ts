@@ -419,6 +419,19 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
         epochs.forget(channel)
     },
 
+    forgetReleased() {
+      scope.assert()
+      const { epochs } = ctx.session
+      for (const channel of [...epochs.released()]) {
+        const o = objectOfChannel(channel)
+        if (o !== undefined && o.rows.holdsChannel(channelOf(o.entry), channel))
+          continue
+        epochs.forget(channel)
+        // Забутий канал вигляду більше не судить.
+        if (o !== undefined) for (const s of subsetsOf(ctx, o)) s.dirty = true
+      }
+    },
+
     markViews(object, flags, spec) {
       scope.assert()
       const o = ctx.objectOf(object)
