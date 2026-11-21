@@ -444,6 +444,19 @@ describe("sql.declaration-check-not-applied in the pipeline", () => {
     }
   )
 
+  // Мутація: повернути `ok` зі стадійного гейта (до `checkDeclaredGuards`).
+  it("repair mode returns the model, one error, and ok is false", async () => {
+    const { diagnostics, ok, model } = await compile(
+      files("BEGIN PERFORM 1; END"),
+      { repair: true }
+    )
+    expect(
+      diagnostics.filter((d) => d.code === "sql.declaration-check-not-applied")
+    ).toHaveLength(1)
+    expect(model).toBeDefined()
+    expect(ok).toBe(false)
+  })
+
   it("a service-only caller is not judged", async () => {
     const { diagnostics } = await compile(
       files("BEGIN PERFORM 1; END", ["service"])
