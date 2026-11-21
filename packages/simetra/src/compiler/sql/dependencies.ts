@@ -39,8 +39,12 @@ interface GraphNode {
   unit?: SqlUnit
 }
 
-/** Функції-складові агрегату: у дереві вони — `TypeName`, а не виклик. */
-const AGGREGATE_FUNCTIONS: ReadonlySet<string> = new Set([
+/**
+ * Опції агрегату, що називають функцію-складову: у дереві вони — `TypeName`, а
+ * не виклик. Одна константа для графа залежностей, судді виразів і читань
+ * `SECURITY DEFINER`: складова виконується в ролі власника агрегату.
+ */
+export const AGGREGATE_COMPONENTS: ReadonlySet<string> = new Set([
   "sfunc",
   "finalfunc",
   "combinefunc",
@@ -633,7 +637,7 @@ class ReferenceCollector {
     const define = node.DefineStmt as Record<string, unknown> | undefined
     if (define?.kind === "OBJECT_AGGREGATE") {
       for (const element of defElems(define.definition)) {
-        if (!AGGREGATE_FUNCTIONS.has(String(element.defname))) continue
+        if (!AGGREGATE_COMPONENTS.has(String(element.defname))) continue
         const arg = element.arg as Record<string, Record<string, unknown>>
         if (arg?.TypeName !== undefined) {
           refs.push({ space: "proc", names: strings(arg.TypeName.names) })

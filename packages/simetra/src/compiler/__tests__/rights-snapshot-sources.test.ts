@@ -387,7 +387,7 @@ describe("actor snapshot sources", () => {
     const files = snapshotSourcesDomain()
     files.set(
       "sql/public/zone-view.sql",
-      `CREATE VIEW public.zone_view AS SELECT z.id, z.keeper_id FROM public.${BENCH_ZONE_TABLE} z;`
+      `CREATE VIEW public.zone_view WITH (security_invoker = true) AS SELECT z.id, z.keeper_id FROM public.${BENCH_ZONE_TABLE} z;`
     )
     files.set(
       "sql/public/zone-ids.sql",
@@ -530,10 +530,6 @@ describe("snapshot exempt writers", () => {
       "GRANT UPDATE (is_active) ON public.membership TO PUBLIC;",
     ],
     ["TRUNCATE", "GRANT TRUNCATE ON public.membership TO simetra_command;"],
-    [
-      "default privileges of the schema",
-      "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT INSERT ON TABLES TO simetra_command;",
-    ],
   ])(
     "refuses a grant of DML on an exempt table to public or the command role (%s)",
     async (_, sql) => {
@@ -544,6 +540,51 @@ describe("snapshot exempt writers", () => {
       ])
     }
   )
+
+  // ADP, що дає запис ролі команд, — вже помилка Правила 1 (спека прав §6.1,
+  // форма `defaultPrivileges`): вона зупиняє компіляцію раніше за правило
+  // винятків знімка, вхід так само відмовлено.
+  it("refuses default privileges of the schema with the write for the command role by Rule 1", async () => {
+    const files = adoptedSourcesDomain()
+    files.set(
+      WRITER_FILE,
+      "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT INSERT ON TABLES TO simetra_command;"
+    )
+    const result = await compileRights(await acceptDebt(files))
+    expect(
+      result.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => [d.code, d.params?.form])
+    ).toEqual([["sql.kind-table-verbatim", "defaultPrivileges"]])
+  })
+
+  // Єдиний ADP, що проходить Правило 1 і має запис для ролі команд: `FOR ROLE`
+  // називає саму отримувачку. Гілка ADP винятку знімка тримає цей вхід.
+  it("refuses default privileges FOR ROLE the command role granting it write", async () => {
+    const found = await writers(
+      "ALTER DEFAULT PRIVILEGES FOR ROLE simetra_command IN SCHEMA public GRANT INSERT ON TABLES TO simetra_command;"
+    )
+    expect(found.map((f) => [f.form, f.table])).toContainEqual([
+      "grant",
+      "public.membership",
+    ])
+  })
+
+  it("accepts default privileges of the schema that give write only to API roles", async () => {
+    expect(
+      await writers(
+        `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT INSERT ON TABLES TO ${API.user};`
+      )
+    ).toEqual([])
+  })
+
+  it("accepts a writable view over an exempt table that only API roles write", async () => {
+    expect(
+      await writers(
+        "CREATE VIEW public.membership_view AS SELECT m.id, m.is_active FROM public.membership m;"
+      )
+    ).toEqual([])
+  })
 
   it("refuses no SELECT grant on an exempt table", async () => {
     expect(

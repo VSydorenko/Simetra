@@ -53,6 +53,10 @@ interface SettingsAction {
 }
 
 /**
+ * Окремий `ALTER FUNCTION` на функцію, якої застосунок не створив (ціль не є
+ * функцією моделі), — теж помилка (`target: "notModel"`), як і на функцію,
+ * оболонку якої судить платформа.
+ *
  * Окремий `ALTER FUNCTION` на функцію, оболонку якої судить платформа
  * (спека прав §5.3): волатильність, `SECURITY`, `search_path` і опції `SET` такої
  * функції задає лише `CREATE`, і їх судить відповідна перевірка — закрита
@@ -72,7 +76,8 @@ export function checkFunctionSettingsShell(
   units: readonly VerbatimUnit[],
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  declared: readonly DeclaredFunction[]
+  declared: readonly DeclaredFunction[],
+  models: ReadonlySet<string>
 ): Diagnostic[] {
   const judged = judgedFunctionIdentities(
     objects,
@@ -85,14 +90,57 @@ export function checkFunctionSettingsShell(
   const functions = units.filter((u) => judged.has(u.identity))
   return units.flatMap((unit) => {
     if (unit.class !== "functionSettings") return []
-    if (!functions.some((fn) => settingsTargets(unit, fn))) return []
-    return [
-      diagnostic("sql.function-settings-shell", unit.file, "", {
-        function: `${unit.schema}.${unit.name}`,
-        setting: firstSetting(unit),
-      }),
-    ]
+    // Ціль, що не є функцією моделі (згенерована функція запису, функція
+    // платформи, функція провайдера), форму якої тримає платформа: `ALTER
+    // FUNCTION` змінив би її повз генератор, тож це помилка в будь-якому файлі.
+    // Функція моделі — лише в схемі застосунку (`modelCallNames`, без схем
+    // провайдера й `pg_catalog`), за кваліфікованим іменем і з тією самою
+    // сигнатурою: некваліфіковане ім'я DDL розв'язує шлях пошуку сесії, а інша
+    // сигнатура чи однойменна приманка в схемі провайдера — інша функція.
+    const modelTarget = units.some((u) => altersModelFunction(unit, u, models))
+    // Судиму функцію ловить збіг за ім'ям (будь-яка схема, без типів): помилка
+    // оболонки без `notModel`, як і було.
+    const judgedTarget = functions.some((fn) => settingsTargets(unit, fn))
+    if (!modelTarget || judgedTarget) {
+      return [
+        diagnostic("sql.function-settings-shell", unit.file, "", {
+          function: `${unit.schema}.${unit.name}`,
+          setting: firstSetting(unit),
+          ...(modelTarget || judgedTarget ? {} : { target: "notModel" }),
+        }),
+      ]
+    }
+    return []
   })
+}
+
+/**
+ * Чи `ALTER FUNCTION` (`settings`) діє на функцію чи процедуру моделі `fn`:
+ * схема застосунку (`modelCallNames`), кваліфіковане ім'я й та сама
+ * канонічна сигнатура — ідентичність `functionSettings:` ALTER-а збігається з
+ * ідентичністю `function:` функції після префікса (типи резолвляться за
+ * моделлю одним нормалізатором `units.ts`). Без списку аргументів ідентичність
+ * не має сигнатури — не збіг, тобто помилка.
+ */
+function altersModelFunction(
+  settings: VerbatimUnit,
+  fn: VerbatimUnit,
+  models: ReadonlySet<string>
+): boolean {
+  if (
+    (fn.class !== "function" && fn.class !== "procedure") ||
+    !models.has(`${fn.schema}.${fn.name}`)
+  )
+    return false
+  const target = (
+    settings.tree as {
+      AlterFunctionStmt?: { func?: { objname?: unknown[] } }
+    }
+  ).AlterFunctionStmt?.func
+  // Некваліфіковане ім'я DDL розв'язує шлях пошуку сесії, а не схема файлу.
+  if ((target?.objname ?? []).length !== 2) return false
+  const signature = fn.identity.slice(fn.identity.indexOf(":") + 1)
+  return settings.identity === `functionSettings:${signature}`
 }
 
 /**

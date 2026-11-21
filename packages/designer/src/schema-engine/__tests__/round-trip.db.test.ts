@@ -169,7 +169,10 @@ describe("the builtin PUBLIC privilege beside a schema ADP", () => {
     )
   })
 
-  it("a schema ADP that grants to PUBLIC is kept as a unit", async () => {
+  it("a schema ADP that grants to PUBLIC is read as a unit, and the compiler refuses it", async () => {
+    // Р4 (б) спеки прав §6.1: ADP схеми називає лише ролі API, тож `PUBLIC`
+    // відмовлено. Одиниця є у витягу й у теці зворотної генерації, а
+    // відмова — рівно одна, кодована, на цій одиниці
     const scope = scopeOf(["app"])
     await inTarget(
       `CREATE SCHEMA app;
@@ -177,14 +180,28 @@ describe("the builtin PUBLIC privilege beside a schema ADP", () => {
        ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO PUBLIC;`,
       scope,
       async (target) => {
-        const result = await roundTripOf(target, scope, roundTripOptions)
+        const identity = `defaultPrivileges:${OWNER}:app:table:grant:public:select`
+        const { extracted, diagnostics } = await refusedAdoption(
+          target,
+          scope,
+          roundTripOptions,
+          [{ code: "sql.kind-table-verbatim", identity }]
+        )
+        const units = extracted.model.units.filter(
+          (u) => u.class === "defaultPrivileges"
+        )
         expect(
-          result.extracted.model.units
-            .filter((u) => u.class === "defaultPrivileges")
-            .map((u) => u.sql)
-        ).toEqual([expect.stringMatching(/GRANT SELECT ON TABLES TO PUBLIC/i)])
-        expect(result.shadow.defaultAcls).toEqual(result.target.defaultAcls)
-        expect(result.target.defaultAcls).not.toEqual([])
+          units.map((u) => ({ identity: u.identity, sql: u.sql }))
+        ).toEqual([{ identity, sql: expect.stringMatching(/TO PUBLIC/i) }])
+        expect(errors(diagnostics).map((d) => d.params)).toEqual([
+          {
+            identity,
+            table: "app.*",
+            form: "defaultPrivileges",
+            roles: "PUBLIC",
+            line: expect.any(Number),
+          },
+        ])
       }
     )
   })

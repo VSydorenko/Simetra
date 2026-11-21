@@ -3,22 +3,18 @@ import { KIND_REGISTRY, SQL_DEBT_FILE, type Project } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import { closedShellProblem, ruledFunctions } from "./closed-forms"
-import { providerCalls } from "./command-context"
+import type { ProviderCalls } from "./command-context"
 import {
   bodyStatementProblem,
   modelViews,
   type ModelView,
 } from "./function-body"
-import {
-  bodyKindTable,
-  kindTableOf,
-  ruleOneTables,
-  type KindTables,
-} from "./kind-table-verbatim"
+import type { KindTables } from "./kind-tables"
 import type { SqlParser } from "./parse"
 import type { DeclaredFunction } from "./declarations"
 import type { PlpgsqlParser } from "./plpgsql"
 import type { VerbatimUnit } from "./units"
+import { writePaths } from "./write-paths"
 
 /**
  * Ідентичності одиниць боргу (спека П2 §8.6), відсортовані:
@@ -47,7 +43,8 @@ export function debtUnits(
   kindTables: KindTables,
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  declared: readonly DeclaredFunction[]
+  declared: readonly DeclaredFunction[],
+  calls: ProviderCalls
 ): string[] {
   const isDebt = debtPredicate(
     objects,
@@ -57,7 +54,8 @@ export function debtUnits(
     plpgsql,
     modelViews(units),
     units,
-    declared
+    declared,
+    calls
   )
   return [...new Set(units.filter(isDebt).map((unit) => unit.identity))].sort(
     compareStrings
@@ -78,7 +76,8 @@ export function debtPredicate(
   plpgsql: PlpgsqlParser,
   views: readonly ModelView[],
   units: readonly VerbatimUnit[],
-  declared: readonly DeclaredFunction[]
+  declared: readonly DeclaredFunction[],
+  calls: ProviderCalls
 ): (unit: VerbatimUnit) => boolean {
   const debtOwners = new Set(
     objects
@@ -87,14 +86,20 @@ export function debtPredicate(
   )
   const ruled = ruledFunctions(objects, project)
   const declaredUnits = new Set(declared.map((d) => d.unit))
-  const written = ruleOneTables(kindTables, project?.database.provider)
-  const calls = providerCalls(project?.database.provider, units)
+  // Одиниця з помилкою Правила 1 — будь-якого шляху запису — боргом не є.
+  const writing = new Set(
+    writePaths(units, {
+      kind: kindTables,
+      provider: project?.database.provider,
+      parse,
+      plpgsql,
+    }).map((path) => path.unit)
+  )
   return (unit) =>
     (unit.ownerFile === undefined || debtOwners.has(unit.ownerFile)) &&
     !(unit.class === "function" && ruled.has(unit.identity)) &&
     !declaredUnits.has(unit) &&
-    kindTableOf(unit, kindTables) === undefined &&
-    bodyKindTable(unit, written, parse, plpgsql, views) === undefined &&
+    !writing.has(unit) &&
     bodyStatementProblem(unit, parse, plpgsql, views, calls) === undefined &&
     !(
       unit.class === "function" &&
@@ -126,7 +131,8 @@ export function checkDebt(
   unitsComplete: boolean,
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  declared: readonly DeclaredFunction[]
+  declared: readonly DeclaredFunction[],
+  calls: ProviderCalls
 ): { grows: Diagnostic[]; stale: Diagnostic[] } {
   const accepted = new Set(listed)
   const isDebt = debtPredicate(
@@ -137,7 +143,8 @@ export function checkDebt(
     plpgsql,
     modelViews(units),
     units,
-    declared
+    declared,
+    calls
   )
   const debt = units.filter(isDebt)
   const grows = debt

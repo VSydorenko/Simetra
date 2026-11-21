@@ -519,7 +519,6 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "rights.root-creator-no-admin",
   "rights.root-creator-unreachable",
   "sql.debt-session-write",
-  "sql.debt-extension-schema",
   "sql.definer-reads-rls",
   "sql.declaration-platform-form-widens",
   "promote.cascade-to-restrict",

@@ -43,9 +43,14 @@ const revokeExecute = (...recipients: string[]) =>
   grants(`REVOKE EXECUTE ON FUNCTION ${RPC}() FROM`, recipients)
 const ALL = ["PUBLIC", API.user, API.anonymous]
 
-/** Подання над задачами з опціями `options`. */
+/**
+ * Подання над задачами з опціями `options`. `DISTINCT` робить його
+ * неоновлюваним: подання без `security_invoker` над таблицею виду з однією
+ * таблицею у `FROM` — вже шлях запису (`sql.kind-table-verbatim`, форма `view`),
+ * а предмет тут — читання повз RLS.
+ */
 const view = (name: string, options = "", from = TASK) =>
-  `CREATE VIEW ${name}${options} AS SELECT id FROM ${from};\n`
+  `CREATE VIEW ${name}${options} AS SELECT DISTINCT id FROM ${from};\n`
 const INVOKER = " WITH (security_invoker = true)"
 
 /** Вимір `region`, значення якого дає функція `region_ids`. */

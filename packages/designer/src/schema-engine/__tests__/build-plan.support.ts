@@ -132,11 +132,9 @@ export const inTarget = <T>(
 /** Порожня ціль: лише базовий стан провайдера. */
 export const EMPTY = "select 1;"
 
-export async function compiled(
-  entries: Record<string, unknown>
-): Promise<CompiledModel> {
+async function compileEntries(entries: Record<string, unknown>) {
   // Дослівні одиниці фікстур — не предмет цих тестів, тож борг прийнято
-  const result = await compile(
+  return compile(
     await acceptDebt(
       metaFiles({
         "project.meta.json": project({
@@ -147,8 +145,25 @@ export async function compiled(
       })
     )
   )
+}
+
+export async function compiled(
+  entries: Record<string, unknown>
+): Promise<CompiledModel> {
+  const result = await compileEntries(entries)
   expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   return result.model!
+}
+
+/** Коди помилок компілятора для форми, яку він відмовляє (моделі немає). */
+export async function compileErrors(
+  entries: Record<string, unknown>
+): Promise<string[]> {
+  const result = await compileEntries(entries)
+  expect(result.model).toBeUndefined()
+  return result.diagnostics
+    .filter((d) => d.severity === "error")
+    .map((d) => d.code)
 }
 
 export const PARTY = "catalogs/Party/Party.meta.json"
