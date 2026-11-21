@@ -15,6 +15,7 @@ import {
 import type { ParsedFunctionsFile, ParsedObject } from "../stages/files"
 import { platformFormSources } from "./closed-forms"
 import { ON_BEHALF_OF_USER, isSecurityDefiner } from "./definer-reads"
+import { qualifiedName } from "./identity"
 import { FUNCTION_CLASSES, type VerbatimUnit } from "./units"
 
 /**
@@ -51,10 +52,6 @@ const sameKey = (
   unit: Pick<VerbatimUnit, "schema" | "name">,
   key: DeclaredFunctionKey
 ) => unit.schema === key.schema && unit.name === key.name
-
-/** Рядок для мапи, що не зливає пари з крапкою в ідентифікаторі. */
-export const tupleKey = (key: DeclaredFunctionKey) =>
-  JSON.stringify([key.schema, key.name])
 
 function entriesOf(
   functionsFiles: readonly ParsedFunctionsFile[],
@@ -154,9 +151,10 @@ export interface PlatformFormFunction {
 
 /**
  * Функції форм платформи (спека декларацій функцій §5.3) — проєкція
- * `platformFormSources`. Ключ — `tupleKey` пари `(schema, name)`, а не
- * зклеєна ідентичність: `"a.b".c` і `a."b.c"` — дві різні форми (Р7). Одна
- * функція в кількох формах — перша форма переліку, як у генераторі.
+ * `platformFormSources`. Ключ — `qualifiedName` пари `(schema, name)` за
+ * правилом ідентичності, а не сире склеювання: `"a.b".c` і `a."b.c"` — дві
+ * різні форми (Р7). Одна функція в кількох формах — перша форма переліку, як
+ * у генераторі.
  */
 export function platformFormFunctions(
   objects: readonly ParsedObject[],
@@ -164,7 +162,7 @@ export function platformFormFunctions(
 ): ReadonlyMap<string, PlatformFormFunction> {
   const forms = new Map<string, PlatformFormFunction>()
   for (const source of platformFormSources(objects, project)) {
-    const key = tupleKey(source.function)
+    const key = qualifiedName(source.function.schema, source.function.name)
     if (forms.has(key)) continue
     forms.set(key, {
       ...source,
@@ -206,8 +204,9 @@ export function checkDeclarations(
       )
     // Дубль судиться за парою після підстановки `defaultSchema`: записане
     // значення різне (`{ name }` і `{ schema, name }`), а функція та сама.
-    const first = seen.get(tupleKey(entry.key))
-    if (first === undefined) seen.set(tupleKey(entry.key), entry)
+    const key = qualifiedName(entry.key.schema, entry.key.name)
+    const first = seen.get(key)
+    if (first === undefined) seen.set(key, entry)
     else at("sql.declaration-duplicate", { first: first.file + first.pointer })
     const form = forms.find((f) => sameKey(f.function, entry.key))
     if (form !== undefined) {

@@ -19,7 +19,7 @@ import { PUBLIC, grantFacts, privilegedRoles } from "./grant-facts"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 import { reachableUnits, relationReads } from "./reads"
-import { functionIdentity } from "./identity"
+import { functionIdentity, identityKey, qualifiedName } from "./identity"
 import { type VerbatimUnit } from "./units"
 
 /** Що читає повз права викликача: функція, подання чи матеріалізоване подання. */
@@ -310,9 +310,7 @@ export function executableBy(
   role: string,
   parse: SqlParser
 ): boolean {
-  const own = new Set([
-    `function|${unit.identity.slice(unit.identity.indexOf(":") + 1)}`,
-  ])
+  const own = new Set([`function|${identityKey(unit.identity)}`])
   return (
     privilegedRoles(
       (key) => ownsTarget(own, key),
@@ -397,11 +395,11 @@ function targetOf(unit: VerbatimUnit): (key: string) => boolean {
   ) {
     // `ON FUNCTION f` без аргументів — кожне перевантаження, як `ownsTarget`;
     // грант процедури й агрегату має той самий ключ `function|`.
-    const own = new Set([
-      `function|${unit.identity.slice(unit.identity.indexOf(":") + 1)}`,
-    ])
+    const own = new Set([`function|${identityKey(unit.identity)}`])
     return (key) => ownsTarget(own, key)
   }
-  const own = `table|${unit.schema}.${unit.name}`
+  // Ключ цілі гранту-таблиці — за правилом ідентичності (`grantTargetKeys`):
+  // сирий `схема.ім'я` не збігся б із грантом на подання `"V"`.
+  const own = `table|${qualifiedName(unit.schema, unit.name)}`
   return (key) => key === own
 }
