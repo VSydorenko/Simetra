@@ -15,6 +15,7 @@ import { qualified, type Contracts, type QualifiedName } from "../contracts"
 import { compareStrings } from "../diagnostics"
 import type { CreationNode } from "../sql/dependencies"
 import { executeGrants } from "../sql/execute-grants"
+import { functionKey, keyIdentity } from "../sql/identity"
 import type { SqlParser } from "../sql/parse"
 import { generatedUnit, type SqlUnit } from "../sql/units"
 import { SIGNAL_FUNCTIONS } from "../signal/names"
@@ -442,11 +443,25 @@ export function buildRightsSignalUnits(
     add(definerTrigger(fn, body, { rowSecurity: "off" }), owner, [
       {
         type: "unit",
-        identity: `function:${qualified(SIGNAL_FUNCTIONS.rights)}(uuid,uuid)`,
+        identity: keyIdentity(
+          "function",
+          functionKey(
+            SIGNAL_FUNCTIONS.rights.schema,
+            SIGNAL_FUNCTIONS.rights.name,
+            ["uuid", "uuid"]
+          )
+        ),
       },
       {
         type: "unit",
-        identity: `function:${qualified(SIGNAL_FUNCTIONS.userRights)}(uuid)`,
+        identity: keyIdentity(
+          "function",
+          functionKey(
+            SIGNAL_FUNCTIONS.userRights.schema,
+            SIGNAL_FUNCTIONS.userRights.name,
+            ["uuid"]
+          )
+        ),
       },
       ...reads.map((t) => ({ type: "table" as const, ...t })),
     ])
