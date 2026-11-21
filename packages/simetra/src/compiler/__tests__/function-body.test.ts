@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile, type Diagnostic } from "simetra/compiler"
 import { SQL_DEBT_FILE } from "simetra/model"
-import { policyDomain, promotableTaskNote } from "./fixtures/rights"
+import { policyDomain, promotableTaskNote, withRoles } from "./fixtures/rights"
 import {
   acceptDebt,
   catalog,
@@ -838,4 +838,147 @@ describe("fix round 1 of #275: function-call judges", () => {
       expect(brief(result.diagnostics)).toEqual(dynamic(file))
     }
   )
+})
+
+// Р9 (спека декларацій функцій §5.2): виклик функції запобіжника дозволено
+// лише першому оператору задекларованої функції з `check`; усе інше — помилка.
+describe("sql.platform-function-call: guard functions", () => {
+  const SQL = "sql/public/fns.sql"
+  const FUNCTIONS = "sql/public/fns.functions.json"
+  const GUARD = "simetra.rights_require('read', 'task', p_row)"
+  const CHECK = {
+    action: "read",
+    object: { kind: "Document", name: "Task" },
+    row: "p_row",
+  }
+  const fn = (text: string, name = "f") =>
+    `CREATE FUNCTION public.${name}(p_row uuid) RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$${text}$$;\n`
+
+  /** Декларація `f` з `check` (чи без); `declare: false` — без декларації. */
+  const compiled = (
+    sql: string,
+    options: { declare?: boolean; check?: boolean } = {}
+  ) => {
+    const all = withRoles()
+    all.set(SQL, sql)
+    if (options.declare !== false)
+      all.set(
+        FUNCTIONS,
+        JSON.stringify({
+          functions: [
+            {
+              id: uuid(7902),
+              function: { name: "f" },
+              callers: ["user"],
+              ...(options.check === false ? {} : { check: CHECK }),
+            },
+          ],
+        })
+      )
+    return compile(all)
+  }
+  const calls = (diagnostics: readonly Diagnostic[]) =>
+    diagnostics.filter((d) => d.code === "sql.platform-function-call")
+
+  it("the first PERFORM of a declared function with check compiles ok and the guard is emitted", async () => {
+    const result = await compiled(fn(`BEGIN PERFORM ${GUARD}; END`))
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    expect(result.ok).toBe(true)
+    expect(
+      result.model?.sqlUnits.some((u) => u.identity.includes("rights_require"))
+    ).toBe(true)
+  })
+
+  // Мутація: дозволити виклик запобіжника в будь-якому місці одиниці.
+  it.each([
+    {
+      name: "a second guard call later in the body",
+      sql: fn(`BEGIN PERFORM ${GUARD}; PERFORM ${GUARD}; END`),
+    },
+    {
+      name: "a second guard call inside the first statement",
+      sql: fn(`BEGIN PERFORM ${GUARD}, ${GUARD}; END`),
+    },
+    {
+      name: "a call in a nested block",
+      sql: fn(`BEGIN BEGIN PERFORM ${GUARD}; END; END`),
+    },
+    {
+      name: "a call after another statement",
+      sql: fn(`BEGIN PERFORM 1; PERFORM ${GUARD}; END`),
+    },
+    {
+      name: "a call in an IF expression",
+      sql: fn(`BEGIN IF ${GUARD} IS NULL THEN NULL; END IF; END`),
+    },
+  ])("$name → error", async ({ sql }) => {
+    const found = calls((await compiled(sql)).diagnostics)
+    expect(found.map((d) => d.params)).toMatchObject([
+      { function: "simetra.rights_require" },
+    ])
+  })
+
+  // Мутація: дозвіл за самою назвою функції без перевірки декларації.
+  it("an undeclared function is refused", async () => {
+    const found = calls(
+      (await compiled(fn(`BEGIN PERFORM ${GUARD}; END`), { declare: false }))
+        .diagnostics
+    )
+    expect(found).toHaveLength(1)
+  })
+
+  // Мутація: дозвіл для кожної задекларованої функції, а не лише з `check`.
+  it("a declared function without check is refused", async () => {
+    const found = calls(
+      (await compiled(fn(`BEGIN PERFORM ${GUARD}; END`), { check: false }))
+        .diagnostics
+    )
+    expect(found).toHaveLength(1)
+  })
+
+  // Мутація: дозвіл для всього файлу, де є декларація з `check`.
+  it("a neighbour function does not inherit the allowance", async () => {
+    const found = calls(
+      (
+        await compiled(
+          fn(`BEGIN PERFORM ${GUARD}; END`) +
+            fn(`BEGIN PERFORM ${GUARD}; END`, "g")
+        )
+      ).diagnostics
+    )
+    expect(found.map((d) => d.params)).toMatchObject([
+      { unit: "function:public.g(uuid)" },
+    ])
+  })
+
+  // Мутація: дозвіл виразам таблиць (guard як PLATFORM_READ_FUNCTIONS).
+  it("a view is refused", async () => {
+    const found = calls(
+      (
+        await compiled(
+          `CREATE VIEW public.v AS SELECT simetra.rights_require('read', 'task', NULL) AS x;\n` +
+            fn(`BEGIN PERFORM ${GUARD}; END`)
+        )
+      ).diagnostics
+    )
+    expect(found).toHaveLength(1)
+    expect(found[0]!.params).toMatchObject({ unit: "view:public.v" })
+  })
+
+  // Мутація: прибрати функцію `rights_require_scope` з набору запобіжників.
+  it("the scope guard function is judged the same way", async () => {
+    const found = calls(
+      (
+        await compiled(
+          fn(
+            `BEGIN PERFORM simetra.rights_require_scope('read', 'task', p_row); END`
+          ),
+          { check: false }
+        )
+      ).diagnostics
+    )
+    expect(found.map((d) => d.params)).toMatchObject([
+      { function: "simetra.rights_require_scope" },
+    ])
+  })
 })

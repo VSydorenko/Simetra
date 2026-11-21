@@ -346,7 +346,7 @@ export async function runStages(
       plpgsql,
       calls
     ),
-    ...checkPlatformCalls(sql.units, parse, plpgsql),
+    ...checkPlatformCalls(sql.units, parse, plpgsql, declared),
     // Виклики подань і політик — дозвільний перелік виразів (спека прав §5.3).
     ...(unitExpressions === undefined
       ? []
