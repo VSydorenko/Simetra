@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { SCOPE_KIND_ID } from "../../../model/runtime/__tests__/entries"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import { REJOIN_JITTER_MS, QUIET_MS } from "../receiver"
-import { coreInternals } from "../core"
 import {
   DEFAULT_CORE_LIMITS,
   type Key,
@@ -35,10 +34,10 @@ import {
  * Оракул безпеки — правда фейкового сервера. Правка утримуваного каналу між
  * `fail` і `join` «втрачена». Правка, поки канал не утримується, «без
  * нагляду»: рядок такого каналу свіжий на мить свого читання. На повторній
- * підписці відпущеного каналу з записом (`gapAt` = епоха відпускання, R-c)
- * правки без нагляду стають втраченими; підписка без запису — вікно
- * активації (§8.4, до першої хвилі): лише ці правки без нагляду оракул явно
- * не рахує. Рядок без `stale`, показаний `synced`, має версію не нижчу за
+ * підписці правки й видалення без нагляду стають втраченими одразу, а
+ * створення — щойно осяде перша хвиля підписки (вікно активації §8.4,
+ * обмежене часом моделі, без стану ядра); невидимий вигляд має тоді чесне
+ * `needsRefresh`. Рядок без `stale`, показаний `synced`, має версію не нижчу за
  * кожну втрачену правку свого ключа й не показує втраченого видалення; повний
  * вигляд без `staleComposition` або показує втрачене створення, або має
  * `hasNewRows`.
@@ -115,6 +114,7 @@ type Step =
   | { t: "unsub"; v: number }
   | { t: "sub"; v: number }
   | { t: "unsubAll" }
+  | { t: "rejoinFresh"; v: number; create: boolean }
   | { t: "mount" }
   | { t: "release"; ok: boolean; at: boolean }
 
@@ -157,8 +157,19 @@ export const STEP = fc.oneof(
     arbitrary: fc.record({ t: one("unsub"), v: fc.nat(SPECS.length - 1) }),
   },
   {
-    weight: 1,
+    weight: 3,
     arbitrary: fc.record({ t: one("sub"), v: fc.nat(SPECS.length - 1) }),
+  },
+  // Повторна підписка каналу без запису: зняти всі вигляди, відпустити
+  // канал, повернути вигляд, правка без нагляду, підписати знову — одним
+  // кроком, бо випадкова послідовність п'яти кроків трапляється рідко.
+  {
+    weight: 2,
+    arbitrary: fc.record({
+      t: one("rejoinFresh"),
+      v: fc.constantFrom(0, 3, 4),
+      create: fc.boolean(),
+    }),
   },
   // Зняти всі вигляди, крім порожнього: у сховищі не лишається рядків.
   { weight: 3, arbitrary: fc.record({ t: one("unsubAll") }) },
@@ -187,7 +198,6 @@ async function run(steps: readonly Step[]): Promise<void> {
     signals: transport,
     objects: [task, org],
   })
-  const internals = coreInternals(h.core)
   // Перелік скоупів задає підписки; права читання лишаються — заміна
   // переліку відпускає канал, не прибираючи рядків.
   const scopeSet = SCOPES.map(() => true)
@@ -218,8 +228,12 @@ async function run(steps: readonly Step[]): Promise<void> {
   const offs: ((() => void) | undefined)[] = handles.map((handle) =>
     handle.subscribe(() => {})
   )
+  // Видимість кожного вигляду за моделлю; підписаний знову вигляд її бере.
+  const visible: boolean[] = handles.map(() => true)
   const sub = (v: number) => {
-    if (offs[v] === undefined) offs[v] = handles[v]!.subscribe(() => {})
+    if (offs[v] !== undefined) return
+    offs[v] = handles[v]!.subscribe(() => {})
+    h.core.setVisible(specs[v]!, visible[v]!)
   }
   const unsub = (v: number) => {
     offs[v]?.()
@@ -279,6 +293,29 @@ async function run(steps: readonly Step[]): Promise<void> {
     loseInto(k, version, op)
   }
 
+  // Вікно активації (§8.4, правило 4; вердикт архітекторки, умови 1–3): після
+  // повторної підписки правда сервера для правок без нагляду — створень,
+  // правок і видалень — не діє, доки не осяде перша хвиля підписки. Межу
+  // вікна модель бере з подій фейкового транспорту й сервера та свого
+  // годинника, не зі стану ядра: дві ширини джитера після `onSubscribed` без
+  // затриманих читань. Після вікна старе значення без `stale` дозволене лише
+  // невидимому вигляду з `needsRefresh` — видимий судиться повністю.
+  let clock = 0
+  const pending: { k: Key; version: number; op: Op; at: number }[] = []
+  const actLost = new Map<Key, number>()
+  const actCreates = new Set<Key>()
+  const actDeletes = new Set<Key>()
+  const closeWindows = () => {
+    if (h.fake.mode !== "auto" || h.fake.pending.length > 0) return
+    for (const p of [...pending]) {
+      if (clock - p.at < 2 * REJOIN_JITTER_MS) continue
+      pending.splice(pending.indexOf(p), 1)
+      actLost.set(p.k, Math.max(actLost.get(p.k) ?? 0, p.version))
+      if (p.op === "create") actCreates.add(p.k)
+      if (p.op === "delete") actDeletes.add(p.k)
+    }
+  }
+
   // Канали, що підписка справді тримає після кроку: відпущений чи
   // підписаний знову.
   const syncHeld = () => {
@@ -287,10 +324,8 @@ async function run(steps: readonly Step[]): Promise<void> {
       if (held[ch] === now) continue
       held[ch] = now
       if (!now) continue
-      // R-c: відпущений канал з записом приєднується після розриву, і правки
-      // без нагляду стають втраченими; без запису — вікно активації.
-      if (internals.epochs.gapAt(channel) > 0)
-        for (const [k, u] of unwatched[ch]!) loseInto(k, u.version, u.op)
+      for (const [k, u] of unwatched[ch]!)
+        pending.push({ k, version: u.version, op: u.op, at: clock })
       unwatched[ch]!.clear()
       // Справжній транспорт дає `onSubscribed` після підписки.
       live[ch] = true
@@ -302,9 +337,25 @@ async function run(steps: readonly Step[]): Promise<void> {
     for (const [v, handle] of handles.entries()) {
       if (offs[v] === undefined) continue
       const snap = handle.getSnapshot()
+      // Невидимий вигляд з `needsRefresh` — прийнятий стан (одне
+      // перечитування на монтуванні), лише для правок вікна активації.
+      const honest = !visible[v] && snap.needsRefresh
       for (const row of snap.rows) {
         if (row.state === "removed" || row.hidden === true) continue
         if (row.stale === true || row.state !== "synced") continue
+        const act = actLost.get(row.key)
+        if (!honest && act !== undefined && row.version < act)
+          failWith(
+            at,
+            `view ${v} shows ${row.key} v${row.version} synced after the activation window, an unwatched edit has v${act}`,
+            trace
+          )
+        if (!honest && actDeletes.has(row.key))
+          failWith(
+            at,
+            `view ${v} shows ${row.key} synced after the activation window, it was deleted unwatched`,
+            trace
+          )
         const floor = lost.get(row.key)
         if (floor !== undefined && row.version < floor)
           failWith(
@@ -324,8 +375,9 @@ async function run(steps: readonly Step[]): Promise<void> {
       if (snap.staleComposition === true) continue
       if (snap.status !== "ready" || snap.hasNewRows) continue
       const shown = new Set(snap.rows.map((r) => r.key))
-      for (const k of lostCreates) {
+      for (const k of [...lostCreates, ...actCreates]) {
         if (shown.has(k) || deleted.has(k)) continue
+        if (!lostCreates.has(k) && honest) continue
         // Порожній вигляд мусить показати лише рядок, що досі йому підходить.
         if (spec === FRESH && h.fake.row(TASK, k)?.values.title !== "fresh")
           continue
@@ -336,6 +388,37 @@ async function run(steps: readonly Step[]): Promise<void> {
         )
       }
     }
+  }
+
+  // Заміна знімка прав з іншим переліком скоупів: канал відпускається чи
+  // підписується знову. Знімок читається поза затриманими читаннями.
+  const toggleScope = async (ch: number) => {
+    scopeSet[ch] = !scopeSet[ch]
+    const mode = h.fake.mode
+    h.fake.mode = "auto"
+    h.fake.rightsSnapshot = snapshot()
+    h.fake.rightsVersion = String(rightsVersion++ % 10).repeat(64)
+    h.core.requestRights()
+    await vi.advanceTimersByTimeAsync(0)
+    await settle()
+    h.fake.mode = mode
+  }
+  // Зняти всі вигляди, крім порожнього; вони звільняються після затримки,
+  // тож сховище лишається без їхніх рядків у тому самому кроці.
+  const unsubAll = async () => {
+    for (const v of handles.keys()) if (specs[v] !== FRESH) unsub(v)
+    await vi.advanceTimersByTimeAsync(DEFAULT_CORE_LIMITS.releaseDelayMs)
+    clock += DEFAULT_CORE_LIMITS.releaseDelayMs
+  }
+  const createIn = (scope: number) => {
+    const n = ++created
+    const k = key(n)
+    scopeOfKey.set(k, scope)
+    const version = h.fake.insert(
+      TASK,
+      taskValues(n, { org: SCOPES[scope], title: "fresh" })
+    )
+    signal(k, "create", version)
   }
 
   for (const [i, s] of steps.entries()) {
@@ -354,17 +437,9 @@ async function run(steps: readonly Step[]): Promise<void> {
         // свіжа на мить свого читання.
         h.fake.edit(ORG, SCOPES[s.scope]!, {})
         break
-      case "create": {
-        const n = ++created
-        const k = key(n)
-        scopeOfKey.set(k, s.scope)
-        const version = h.fake.insert(
-          TASK,
-          taskValues(n, { org: SCOPES[s.scope], title: "fresh" })
-        )
-        signal(k, "create", version)
+      case "create":
+        createIn(s.scope)
         break
-      }
       case "delete": {
         const all = [...scopeOfKey.keys()].filter((k) => !deleted.has(k))
         if (all.length === 0) break
@@ -390,28 +465,38 @@ async function run(steps: readonly Step[]): Promise<void> {
         for (const [ch, on] of held.entries()) if (on) live[ch] = true
         await transport.refreshTokens()
         break
-      case "scopes": {
-        // Заміна знімка прав з іншим переліком скоупів: канал відпускається
-        // чи підписується знову. Знімок читається поза затриманими читаннями.
-        scopeSet[s.ch] = !scopeSet[s.ch]
+      case "scopes":
+        await toggleScope(s.ch)
+        break
+      case "rejoinFresh": {
         const mode = h.fake.mode
         h.fake.mode = "auto"
-        h.fake.rightsSnapshot = snapshot()
-        h.fake.rightsVersion = String(rightsVersion++ % 10).repeat(64)
-        h.core.requestRights()
-        await vi.advanceTimersByTimeAsync(0)
+        await unsubAll()
+        if (scopeSet[0]) await toggleScope(0)
         await settle()
+        syncHeld()
+        sub(s.v)
+        await settle()
+        if (s.create) createIn(0)
+        else if (!deleted.has(key(1))) {
+          const version = h.fake.edit(TASK, key(1), { title: `e${i}` })
+          signal(key(1), "update", version)
+        }
+        await toggleScope(0)
         h.fake.mode = mode
         break
       }
       case "time":
         await vi.advanceTimersByTimeAsync(s.ms)
+        clock += s.ms
         break
       case "revalidate":
         h.core.revalidate(TASK, { visibleOnly: true }).catch(() => {})
         break
       case "visible":
-        if (offs[s.v] !== undefined) h.core.setVisible(specs[s.v]!, s.on)
+        if (offs[s.v] === undefined) break
+        visible[s.v] = s.on
+        h.core.setVisible(specs[s.v]!, s.on)
         break
       case "hold":
         h.fake.mode = "manual"
@@ -423,10 +508,7 @@ async function run(steps: readonly Step[]): Promise<void> {
         sub(s.v)
         break
       case "unsubAll":
-        for (const v of handles.keys()) if (specs[v] !== FRESH) unsub(v)
-        // Вигляди звільняються після затримки: сховище лишається без їхніх
-        // рядків у тому самому кроці.
-        await vi.advanceTimersByTimeAsync(DEFAULT_CORE_LIMITS.releaseDelayMs)
+        await unsubAll()
         break
       case "mount": {
         // Новий вигляд читає в сховище ключі, яких там ще не було (зокрема
@@ -437,6 +519,7 @@ async function run(steps: readonly Step[]): Promise<void> {
         specs.push(spec)
         const handle = h.core.view(spec)
         handles.push(handle)
+        visible.push(true)
         offs.push(handle.subscribe(() => {}))
         break
       }
@@ -453,6 +536,7 @@ async function run(steps: readonly Step[]): Promise<void> {
     await settle()
     syncHeld()
     await settle()
+    closeWindows()
     check(`step ${i}`)
   }
 
@@ -472,9 +556,17 @@ async function run(steps: readonly Step[]): Promise<void> {
     transport.join(channel, false)
   }
   await settle()
-  for (const spec of specs) h.core.setVisible(spec, true)
+  for (const [v, spec] of specs.entries()) {
+    visible[v] = true
+    h.core.setVisible(spec, true)
+  }
   await vi.advanceTimersByTimeAsync(2 * REJOIN_JITTER_MS)
+  clock += 2 * REJOIN_JITTER_MS
   await settle()
+  // Безпека — до перечитування живучості: вікно, яке хвиля не закрила, тут
+  // видно, а не затулено читанням.
+  closeWindows()
+  check("before the liveness reads")
   await h.core.revalidate(TASK, { visibleOnly: true })
   await settle()
   // Вигляд, чиє перше завантаження збоїло, системне перечитування не бере:
@@ -522,7 +614,7 @@ describe("receiver model: the disconnect mark and the composition against the se
         { numRuns: RUNS }
       )
     },
-    RUNS * 150 + 10_000
+    RUNS * 400 + 10_000
   )
 
   // Регресії класу «розрив» (раунди 1–5): кожна — кроки, на яких падала
@@ -638,6 +730,27 @@ describe("receiver model: the disconnect mark and the composition against the se
         { t: "revalidate" },
         { t: "edit", k: 2 },
         { t: "time", ms: 60_000 },
+      ],
+    ],
+    [
+      "an entry-less resubscribe: a row read while released, an edit unwatched",
+      [
+        { t: "unsubAll" },
+        { t: "scopes", ch: 0 },
+        { t: "sub", v: 0 },
+        { t: "edit", k: 0 },
+        { t: "scopes", ch: 0 },
+      ],
+    ],
+    [
+      "an entry-less resubscribe: the first wave must close the window",
+      [
+        { t: "unsubAll" },
+        { t: "scopes", ch: 0 },
+        { t: "sub", v: 0 },
+        { t: "edit", k: 0 },
+        { t: "scopes", ch: 0 },
+        { t: "time", ms: 2 * REJOIN_JITTER_MS },
       ],
     ],
     [
