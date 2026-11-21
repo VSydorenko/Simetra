@@ -498,20 +498,28 @@ export function describeDefinerAdoption(): void {
             expect(entry).toMatchObject({
               function: { schema: "app", name: "rpc" },
             })
-            expect(entry!.callers).not.toContain("user")
+            expect(entry!.callers).toEqual([])
             const prepared = await compiledFolder(adopted.files)
             expect(prepared.errors).toEqual([])
             await apply(ctx.target, prepared.model!)
             expect(await comparison(ctx.target, prepared.model!)).toMatchObject(
               { empty: true, actions: [] }
             )
-            const [has] = await query<{ fn: boolean; usage: boolean }>(
-              ctx.target.url,
-              `select has_function_privilege($1, 'app.rpc(uuid)', 'EXECUTE') as fn,
-                      has_schema_privilege($1, 'app', 'USAGE') as usage`,
-              [API.user]
-            )
-            expect(has).toEqual({ fn: false, usage: false })
+            // Не лише роль користувача: жодна роль профілю не отримує ні
+            // `EXECUTE`, ні `USAGE`
+            for (const role of profileRoles()) {
+              const [has] = await query<{ fn: boolean; usage: boolean }>(
+                ctx.target.url,
+                `select has_function_privilege($1, 'app.rpc(uuid)', 'EXECUTE') as fn,
+                        has_schema_privilege($1, 'app', 'USAGE') as usage`,
+                [role]
+              )
+              expect({ role, ...has }).toEqual({
+                role,
+                fn: false,
+                usage: false,
+              })
+            }
           },
           folder({ appSchema: true })
         )
@@ -553,7 +561,10 @@ export function describeDefinerAdoption(): void {
       "the same function outside public has no default privileges: no declaration",
       async () => {
         await inAdoptedTarget(
-          `${ADP}\n${inApp(rpc("NULL;"))}\nREVOKE EXECUTE ON FUNCTION app.rpc(uuid) FROM PUBLIC;`,
+          // `USAGE` на схему ролям API дано: без декларації лишається одна
+          // причина — типових привілеїв поза `public` немає, тож `EXECUTE`
+          // ролям API не відкрито
+          `${ADP}\n${inApp(rpc("NULL;"))}\nGRANT USAGE ON SCHEMA app TO ${[API.anonymous, API.user, API.service].map((r) => `"${r}"`).join(", ")};\nREVOKE EXECUTE ON FUNCTION app.rpc(uuid) FROM PUBLIC;`,
           async (ctx) => {
             const adopted = await adopt(ctx, ctx.existing)
             expect(
