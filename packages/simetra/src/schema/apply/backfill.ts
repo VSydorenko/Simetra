@@ -1,6 +1,7 @@
 import type { Node } from "libpg-query"
 import {
   platformTriggers,
+  unitIdentity,
   withoutLocations,
   type SqlParser,
 } from "simetra/compiler"
@@ -415,10 +416,14 @@ export function triggerReplacements(
         dropsOneTrigger(a.sql, parse)
     )
     if (d < 0) continue
+    // Посилання двигуна — сирі імена каталогу, ідентичність одиниці — у мові
+    // одиниць (ім'я, що потребує лапок, у лапках)
+    const identity = triggerIdentity(
+      { schema: ref.schema, name: ref.table },
+      ref.name
+    )
     const live = source.units.find(
-      (u) =>
-        u.class === "trigger" &&
-        u.identity === `trigger:${ref.schema}.${ref.table}.${ref.name}`
+      (u) => u.class === "trigger" && u.identity === identity
     )
     // Живого визначення немає — злиття не довести, пара лишається
     const liveTrigger =
@@ -1167,7 +1172,7 @@ function triggerTree(sql: string, parse: SqlParser): Node | undefined {
 const triggerIdentity = (
   table: { schema: string; name: string },
   name: string
-): string => `trigger:${table.schema}.${table.name}.${name}`
+): string => unitIdentity("trigger", table.schema, table.name, name)
 
 /**
  * Чи тригер таблиці — платформний за визначенням (платформна спека §6.6):
