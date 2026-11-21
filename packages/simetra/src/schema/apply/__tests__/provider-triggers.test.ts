@@ -352,6 +352,14 @@ describe("providerTriggerConflicts", () => {
       expect(await conflicts([LIVE], [STORED])).toEqual([])
     })
 
+    it("lets a trigger the target does not have pass with an unreadable unit", async () => {
+      // Ні живого тригера, ні імені в каталогі: займати нічого, тож нечитна
+      // одиниця marker відмови не дає
+      expect(
+        await conflicts([], [trigger("app", "t", "x", "CREATE TRIGGER x ???")])
+      ).toEqual([])
+    })
+
     it("refuses the identical live trigger when a marker unit does not read", async () => {
       // Без нечитної одиниці тотожний тригер пропускається; з нею тотожність
       // не доводить, що тригер наш

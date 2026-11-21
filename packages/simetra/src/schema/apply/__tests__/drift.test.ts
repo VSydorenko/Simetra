@@ -457,25 +457,22 @@ describe("driftGate over the applied catalog (decision R10)", () => {
     })
   })
 
-  it("carries drift to accept when neither witness can check", () => {
+  it("carries unverifiable drift to accept when neither witness can check", () => {
     const verdict = gate(
       applied({ catalog: withUnits([...STORED, OUTSIDE]) }),
-      {
-        ...target,
-        fingerprint: fingerprint({}, FINGERPRINT_VERSION + 1),
-      }
+      { ...target, fingerprint: fingerprint({}, FINGERPRINT_VERSION + 1) }
     )
+    // Нічим перевірити — не «дрейф побачено»: причина `unverifiable`
     expect(verdict.ok && verdict.drift).toEqual({
-      reason: "drift",
+      reason: "unverifiable",
       sections: [],
       paths: [],
     })
     expect(brief(verdict.diagnostics)).toEqual([
       {
-        code: "apply.drift-partial",
+        code: "apply.drift-unverifiable",
         severity: "warning",
         params: {
-          reason: "none",
           fingerprintFrom: FINGERPRINT_VERSION,
           fingerprintTo: FINGERPRINT_VERSION + 1,
           count: 1,
@@ -483,5 +480,15 @@ describe("driftGate over the applied catalog (decision R10)", () => {
       },
     ])
     expect(verdict.diagnostics[0]?.message).toMatch(/cannot be checked/)
+  })
+
+  it("speaks the units reason in its own message", () => {
+    const [diagnostic] = gate(
+      applied({ catalog: withUnits([...STORED, OUTSIDE]) }),
+      target
+    ).diagnostics
+    expect(diagnostic?.message).toMatch(
+      /1 SQL units .* limited to the catalog fingerprint/
+    )
   })
 })

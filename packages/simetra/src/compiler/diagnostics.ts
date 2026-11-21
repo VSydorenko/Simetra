@@ -284,6 +284,7 @@ export const COMPILER_RULES = [
   "apply.first-apply",
   "apply.drift",
   "apply.drift-partial",
+  "apply.drift-unverifiable",
   "apply.versions-changed",
   "apply.plan-versions",
   "apply.plan-format",

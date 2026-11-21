@@ -15,9 +15,15 @@ import type { AppliedCatalog, ApplyState } from "./state"
 /**
  * `drift` — свідок побачив розбіжність; `versions-changed` — змінились і
  * версія двигуна, і версія відбитка, тож перевірити нічим, і план мусить
- * прийняти це явно, як дрейф.
+ * прийняти це явно, як дрейф; `unverifiable` — двигун той самий, але
+ * змінилась версія відбитка, а одиниця marker не читається: свідка теж
+ * немає, і це не «дрейф побачено».
  */
-export const DRIFT_REASONS = ["drift", "versions-changed"] as const
+export const DRIFT_REASONS = [
+  "drift",
+  "versions-changed",
+  "unverifiable",
+] as const
 
 /**
  * Дрейф, який план несе як пункт дозволу (платформна спека §6.2 п.2, §6.6):
@@ -81,8 +87,9 @@ const sameEngine = (a: EngineIdentity, b: EngineIdentity): boolean =>
  * свідки діють за версіями: та сама версія відбитка — відбиток; той самий
  * двигун і читні одиниці — ще й модель, інакше попередження
  * `apply.drift-partial` з причиною; змінились обидві версії — свідка
- * немає, і це дрейф із причиною `versions-changed`; немає жодного свідка за
- * іншої причини — так само дрейф до прийняття.
+ * немає, і це дрейф із причиною `versions-changed`; нечитна одиниця разом
+ * з іншою версією відбитка — так само без свідка, дрейф із причиною
+ * `unverifiable`.
  */
 export function driftGate(
   state: ApplyState,
@@ -139,10 +146,9 @@ export function driftGate(
     return {
       ok: true,
       fromHash,
-      drift: { reason: "drift", sections: [], paths: [] },
+      drift: { reason: "unverifiable", sections: [], paths: [] },
       diagnostics: [
-        applyDiagnostic("apply.drift-partial", "warning", {
-          reason: "none",
+        applyDiagnostic("apply.drift-unverifiable", "warning", {
           ...versions,
           count: unreadable,
         }),
