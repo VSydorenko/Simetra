@@ -2,11 +2,7 @@ import { randomUUID } from "node:crypto"
 import type pg from "pg"
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
-import {
-  PLATFORM_ROLES,
-  PROVIDER_API_ROLES,
-  type ApiRolePurpose,
-} from "simetra/model"
+import { type ApiRolePurpose } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import {
   catalog,
@@ -16,6 +12,10 @@ import {
 } from "../../src/compiler/__tests__/helpers"
 import { compiledPolicyDomain } from "../../src/compiler/__tests__/fixtures/rights"
 import { profileLayer } from "./rights-seed"
+import {
+  GUARDED_FILES,
+  expectNoGuardExecute,
+} from "./function-declarations.support"
 import { claimsFor, queryAs, withRollback } from "./connection"
 
 /**
@@ -115,35 +115,6 @@ describe("EXECUTE of an undeclared module function on Supabase", () => {
   })
 })
 
-/** Задекларована definer-функція з `check` і запобіжником першим оператором. */
-const GUARDED_FILES = {
-  "sql/public/fns.sql":
-    "CREATE FUNCTION public.f(p_row uuid) RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$BEGIN PERFORM simetra.rights_require('read', 'task', p_row); END$$;\n",
-  "sql/public/fns.functions.json": JSON.stringify({
-    functions: [
-      {
-        id: uuid(9502),
-        function: { name: "f" },
-        callers: ["user"],
-        check: {
-          action: "read",
-          object: { kind: "Document", name: "Task" },
-          row: "p_row",
-        },
-      },
-    ],
-  }),
-}
-
-/** Кожен отримувач `EXECUTE` на функції запобіжника: ролі API, роль команд і `PUBLIC`. */
-const GUARD_RECIPIENTS = (provider: "postgres" | "supabase") => [
-  ...Object.values(PROVIDER_API_ROLES[provider]).filter(
-    (role): role is string => role !== null
-  ),
-  PLATFORM_ROLES.command,
-  "public",
-]
-
 describe("EXECUTE of the call guard functions on Supabase", () => {
   it("no application role holds EXECUTE on them", async () => {
     await withRollback(async (client) => {
@@ -152,20 +123,7 @@ describe("EXECUTE of the call guard functions on Supabase", () => {
         []
       )
       await client.query(renderDesiredState(result.model!).sql)
-      const recipients = GUARD_RECIPIENTS("supabase")
-      const { rows } = await client.query<{
-        fn: string
-        role: string
-        granted: boolean
-      }>(
-        `SELECT p.oid::regprocedure::text AS fn, r AS role, has_function_privilege(r, p.oid, 'EXECUTE') AS granted
-           FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace, unnest($1::text[]) r
-          WHERE n.nspname = 'simetra' AND p.proname = 'rights_require'`,
-        [recipients]
-      )
-      // Функція справді створена: без цього «жодного права» нічого б не довело
-      expect(rows).toHaveLength(recipients.length)
-      expect(rows.filter((row) => row.granted)).toEqual([])
+      await expectNoGuardExecute(client, "supabase")
     })
   })
 })

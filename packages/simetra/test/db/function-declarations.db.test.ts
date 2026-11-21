@@ -2,12 +2,7 @@ import { randomUUID } from "node:crypto"
 import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { compile, type CompileResult } from "simetra/compiler"
-import {
-  PLATFORM_ROLES,
-  PROVIDER_API_ROLES,
-  RIGHTS_REQUIRE_ERROR,
-  type ApiRolePurpose,
-} from "simetra/model"
+import { RIGHTS_REQUIRE_ERROR, type ApiRolePurpose } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import {
   ADOPTED_LEAD_KEY,
@@ -44,6 +39,10 @@ import {
 } from "./connection"
 import { testProvider } from "./profile"
 import { signUp } from "./auth"
+import {
+  GUARDED_FILES,
+  expectNoGuardExecute,
+} from "./function-declarations.support"
 import {
   type Seed,
   assignmentRow,
@@ -186,35 +185,6 @@ describe("EXECUTE of an undeclared module function in Postgres", () => {
   })
 })
 
-/** Задекларована definer-функція з `check` і запобіжником першим оператором. */
-const GUARDED_FILES = {
-  "sql/public/fns.sql":
-    "CREATE FUNCTION public.f(p_row uuid) RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$BEGIN PERFORM simetra.rights_require('read', 'task', p_row); END$$;\n",
-  "sql/public/fns.functions.json": JSON.stringify({
-    functions: [
-      {
-        id: uuid(9502),
-        function: { name: "f" },
-        callers: ["user"],
-        check: {
-          action: "read",
-          object: { kind: "Document", name: "Task" },
-          row: "p_row",
-        },
-      },
-    ],
-  }),
-}
-
-/** Кожен отримувач `EXECUTE` на функції запобіжника: ролі API, роль команд і `PUBLIC`. */
-const GUARD_RECIPIENTS = (provider: "postgres" | "supabase") => [
-  ...Object.values(PROVIDER_API_ROLES[provider]).filter(
-    (role): role is string => role !== null
-  ),
-  PLATFORM_ROLES.command,
-  "public",
-]
-
 describe("EXECUTE of the call guard functions in Postgres", () => {
   it("no application role holds EXECUTE on them", async () => {
     await withRollback(async (client) => {
@@ -222,20 +192,7 @@ describe("EXECUTE of the call guard functions in Postgres", () => {
         client,
         await compiledPolicyDomain(GUARDED_FILES, [profileLayer()])
       )
-      const recipients = GUARD_RECIPIENTS(testProvider())
-      const { rows } = await client.query<{
-        fn: string
-        role: string
-        granted: boolean
-      }>(
-        `SELECT p.oid::regprocedure::text AS fn, r AS role, has_function_privilege(r, p.oid, 'EXECUTE') AS granted
-           FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace, unnest($1::text[]) r
-          WHERE n.nspname = 'simetra' AND p.proname = 'rights_require'`,
-        [recipients]
-      )
-      // Функція справді створена: без цього «жодного права» нічого б не довело
-      expect(rows).toHaveLength(recipients.length)
-      expect(rows.filter((row) => row.granted)).toEqual([])
+      await expectNoGuardExecute(client, testProvider())
     })
   })
 })
@@ -414,11 +371,15 @@ describe("the call guard in Postgres", () => {
     const literal: Record<string, (string | undefined)[]> = {}
     for (const who of ["u1", "u3", "u5", "u7", "uf"]) {
       await client.query("SAVEPOINT visible")
-      await asRole(client, "user", claimsFor("user", ids[who]))
-      const { rows } = await client.query<{ id: string }>(
-        "SELECT id FROM public.task"
-      )
-      await client.query("ROLLBACK TO SAVEPOINT visible")
+      let rows: { id: string }[]
+      try {
+        await asRole(client, "user", claimsFor("user", ids[who]))
+        rows = (
+          await client.query<{ id: string }>("SELECT id FROM public.task")
+        ).rows
+      } finally {
+        await client.query("ROLLBACK TO SAVEPOINT visible")
+      }
       const shown = rows.map((r) => r.id).sort()
       const passed: string[] = []
       for (const key of ["t1", "t2", "tB"])
@@ -438,8 +399,9 @@ describe("the call guard in Postgres", () => {
 
   // Ціль `scope`: `create` у своєму скоупі з правом `any` проходить; чужий
   // скоуп, скоуп без права, відсутній скоуп, `NULL` і право лише `own`
-  // (`post` — `own` у `TaskWriter`) — відмова. Мутація: дозволити обсяг `own`
-  // у гілці `scope`.
+  // (`post` — `own` у `TaskWriter`) — відмова; так само `uf` з правом у B через
+  // неактивне членство (його бачать лише права). Мутації: дозволити обсяг `own`
+  // у гілці `scope`; прибрати межу тенанта з гілки `scope` — `uf` у B проходить.
   it.each([
     ["uw", "g_task_create", "A", "ok"],
     ["uw", "g_task_create", "B", REFUSED],
@@ -448,6 +410,7 @@ describe("the call guard in Postgres", () => {
     ["u7", "g_task_create", "A", REFUSED],
     ["u5", "g_task_create", "A", REFUSED],
     ["uw", "g_task_post", "A", REFUSED],
+    ["uf", "g_task_create", "B", REFUSED],
   ] as const)("scope target: %s %s on %s", async (who, fn, key, expected) => {
     expect(await call(who, fn, key)).toEqual(expected)
   })
@@ -488,9 +451,13 @@ describe("the call guard in Postgres", () => {
     async (who, expected) => {
       const client = tx.client()
       await client.query("SAVEPOINT shown")
-      await asRole(client, "user", claimsFor("user", ids[who]))
-      const { rows } = await client.query("SELECT 1 FROM public.bulletin")
-      await client.query("ROLLBACK TO SAVEPOINT shown")
+      let rows: unknown[]
+      try {
+        await asRole(client, "user", claimsFor("user", ids[who]))
+        rows = (await client.query("SELECT 1 FROM public.bulletin")).rows
+      } finally {
+        await client.query("ROLLBACK TO SAVEPOINT shown")
+      }
       expect(rows).toHaveLength(1)
       expect(await call(who, "g_bulletin_read", "b1")).toBe(expected)
       expect(await call(who, "g_bulletin_read", null)).toEqual(REFUSED)
@@ -596,6 +563,7 @@ async function seedGuardGrid(client: pg.Client): Promise<Seed> {
     ["uw@A", "A", TASK_WRITER_ID],
     ["uf@A", "A", ORG_MEMBER_ROLE_ID],
     ["uf@B", "B", ORG_MEMBER_ROLE_ID],
+    ["uf@B", "B", TASK_WRITER_ID],
     ["u3@B", "B", ORG_MEMBER_ROLE_ID],
   ] as const)
     await insert(client, "org_role_assignments", {
