@@ -1039,6 +1039,45 @@ describe("version check and the stale mark (§10)", () => {
       expect(t.pending).toHaveLength(0)
     })
 
+    it.each([
+      [
+        "a refused read",
+        {
+          ok: false,
+          error: { code: "command.unavailable" },
+          serverHash: "server-2",
+        } as DataResponse,
+      ],
+      [
+        "a failed rights item",
+        changed(
+          ok({
+            epoch: null,
+            items: [{ ok: false, error: { code: "command.unavailable" } }],
+          }),
+          "server-2"
+        ),
+      ],
+    ])(
+      "a changed serverHash on %s with the rights part still asks for the rights snapshot",
+      async (_, response) => {
+        const t = controlled({
+          catalog: { ...catalogOf(OBJECTS), rightsSnapshot: true },
+        })
+        t.core.requestRights()
+        await settle()
+        const before = t.calls.length
+        // Знімка нового сервера ця відповідь не принесла: його треба
+        // перечитати (§9.3), а не чекати строку.
+        t.respond(response)
+        await settle()
+        expect(t.calls.slice(before).map(partTypes).flat().sort()).toEqual([
+          "rights",
+          "version",
+        ])
+      }
+    )
+
     it("without the flag a changed serverHash sends no rights part", async () => {
       const t = controlled()
       const first = t.send(card())

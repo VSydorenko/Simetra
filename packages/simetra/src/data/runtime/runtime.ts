@@ -183,14 +183,31 @@ const SESSION_CHANGED: CommandError = {
   reason: LIMIT_REASONS.sessionChanged,
 }
 
-const hasPart = (request: RuntimeRequest, type: "version" | "rights") =>
+const hasVersionPart = (request: RuntimeRequest): boolean =>
   request.type === "read" &&
   request.items.some(
     (item) =>
       typeof item === "object" &&
       item !== null &&
-      (item as { type?: unknown }).type === type
+      (item as { type?: unknown }).type === "version"
   )
+
+/**
+ * The response carries a rights snapshot: its `rights` item answered `ok`.
+ * A refused read or a failed item brings none from the new server.
+ */
+const rightsReceived = (request: RuntimeRequest, response: DataResponse) => {
+  if (request.type !== "read" || !response.ok) return false
+  const items = (response.value as { items?: unknown } | null)?.items
+  if (!Array.isArray(items)) return false
+  return request.items.some(
+    (item, slot) =>
+      typeof item === "object" &&
+      item !== null &&
+      (item as { type?: unknown }).type === "rights" &&
+      (items[slot] as { ok?: unknown } | null)?.ok === true
+  )
+}
 
 const isSessionChanged = (error: CommandError) =>
   error.code === "command.unauthenticated" &&
@@ -334,13 +351,14 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     if (closedWith !== undefined) throw new CommandFailure(closedWith)
     // Хеш звіряється лише після перевірки закриття (вище): відповідь закритого
     // рантайму не запускає `version`. Відповідь з частиною `version` хеш лише
-    // оновлює, а з частиною `rights` не просить знімка вдруге: він уже від
-    // сервера з новим хешем.
+    // оновлює, а зі знімком прав, що справді прийшов, не просить його вдруге:
+    // він уже від сервера з новим хешем. Відмова чи збій частини `rights`
+    // знімка не несуть — його перечитує хвіст за частиною в польоті (§9.3).
     const seen = () => {
       if (typeof response.serverHash === "string")
         core.serverHash(response.serverHash, {
-          version: hasPart(request, "version"),
-          rights: hasPart(request, "rights"),
+          version: hasVersionPart(request),
+          rights: rightsReceived(request, response),
         })
     }
     if (response.ok) {
