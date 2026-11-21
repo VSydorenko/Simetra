@@ -32,12 +32,14 @@ import { SIGNAL_FUNCTIONS } from "./names"
 /** The outbox `INSERT` policy of the command role (P4-B spec §8.2). */
 export const SIGNAL_INSERT_POLICY = "signal_outbox_command_insert"
 
-/**
- * Канал змін — рівно три сегменти UUID нижнього регістру, як у `parseTopic`.
- * Канали прав і користувача (`simetra-rights:`, `simetra-user:`) шаблон не
- * бере: у B2 обидва режими їм відмовляють (Р1 плану B2, B6 їх відкриє).
- */
+/** Канал змін — рівно три сегменти UUID нижнього регістру, як у `parseTopic`. */
 const CHANGES_TOPIC = `^simetra:(${TOPIC_UUID_PATTERN}):(${TOPIC_UUID_PATTERN}):(${TOPIC_UUID_PATTERN})$`
+
+/** Канал прав скоупу (П4-B §8.3): вид і скоуп; глобальний — обидва нулі. */
+const RIGHTS_TOPIC = `^simetra-rights:(${TOPIC_UUID_PATTERN}):(${TOPIC_UUID_PATTERN})$`
+
+/** Канал прав користувача (П4-B §8.3): id користувача. */
+const USER_TOPIC = `^simetra-user:(${TOPIC_UUID_PATTERN})$`
 
 /** Операції сигналу зміни рядка (схема відправки П4-B §8.1). */
 const CHANGE_OPS = ["create", "update", "markDeletion", "delete"] as const
@@ -82,13 +84,14 @@ export function buildSignalUnits(input: SignalInput): SqlUnit[] {
   const { contracts, provider } = input
   if (!hasRightsFunctions(contracts, provider)) return []
   const facts = signalFacts(input)
+  const kinds = scopeKindSets(contracts.access)
   const unit = (sql: string, requires?: SqlUnit["requires"]): SqlUnit => ({
     ...generatedUnit(sql, PLATFORM_SCHEMA, input.parse),
     module: input.module,
     generator: "signal",
     ...(requires === undefined ? {} : { requires }),
   })
-  const topic = topicAllowedFunction(facts)
+  const topic = topicAllowedFunction(facts, kinds)
   const topicUnit = unit(topic, bodyRequires(topic, input))
   const payload = payloadAllowedFunction(facts)
   const payloadUnit = unit(
@@ -188,6 +191,22 @@ function signalFacts(input: SignalInput): SignalFacts[] {
     .sort((a, b) => compareStrings(a.objectId, b.objectId))
 }
 
+/**
+ * Множина скоупів кожного виду скоупу моделі — `scopeSetCall` його таблиць,
+ * як у знімку прав клієнта (`rights/client-snapshot.ts`): клієнт підписується
+ * на канали прав саме тих скоупів, які бачить у знімку.
+ */
+function scopeKindSets(
+  access: SignalInput["contracts"]["access"]
+): [kindId: string, set: string][] {
+  const byKind = new Map<string, string>()
+  for (const contract of access) {
+    if (contract.scope === undefined) continue
+    byKind.set(contract.scope.scopeKindId, scopeSetCall(contract.scope))
+  }
+  return [...byKind].sort(([a], [b]) => compareStrings(a, b))
+}
+
 /** Умова права без рядка: скоуп каналу замість колонки скоупу рядка. */
 function renderGrant(condition: RightsCondition): string {
   return condition.kind === "column"
@@ -226,12 +245,40 @@ function subscribeCondition(fact: SignalFacts): string {
 }
 
 /**
+ * Підписка на канал прав скоупу (P4-B spec §8.3): глобальний — обидва нулі,
+ * будь-який дійсний користувач; скоуп — лише вид скоупу моделі й скоуп у
+ * межі тенанта виду (`scopeSetCall`). Змішані нулі й чужий вид — `false`:
+ * нульовий вид має лише гілку обох нулів, а нульового скоупу множина не
+ * містить. Гілки — з відступом 6, щоб не змішатися з гілками об'єктів.
+ */
+function rightsDecision(
+  kinds: readonly [kindId: string, set: string][]
+): string[] {
+  const zero = uuidLiteral(ZERO_UUID)
+  return [
+    "    RETURN COALESCE(CASE v_kind",
+    `      WHEN ${zero} THEN v_scope = ${zero}`,
+    ...kinds.map(
+      ([kindId, set]) =>
+        `      WHEN ${uuidLiteral(kindId)} THEN v_scope = ANY (ARRAY(SELECT ${set}))`
+    ),
+    "      ELSE false",
+    "    END, false);",
+  ]
+}
+
+/**
  * `simetra.signal_topic_allowed(p_topic, p_send)` — оракул каналу
  * (P4-B spec §8.3). `SECURITY DEFINER`: функції множин і прав кличе від
  * власника, а роль, що питає, обмежує `EXECUTE` (Р10). Гілка — лише для
- * сигнального об'єкта; несигнальний, чужий формат і канали прав — `false`.
+ * сигнального об'єкта; несигнальний і чужий формат — `false`. Канали прав і
+ * користувача відкриває лише підписка: сигнали прав шле definer-код
+ * власника (§8.2), а роль команд інакше підробляла б їх.
  */
-function topicAllowedFunction(facts: readonly SignalFacts[]): string {
+function topicAllowedFunction(
+  facts: readonly SignalFacts[],
+  kinds: readonly [kindId: string, set: string][]
+): string {
   const branches = facts.map(
     (fact) =>
       `    WHEN ${uuidLiteral(fact.objectId)} THEN v_kind = ${uuidLiteral(fact.kindId)} AND CASE WHEN p_send THEN ${sendCondition(fact)} ELSE ${subscribeCondition(fact)} END`
@@ -256,6 +303,19 @@ function topicAllowedFunction(facts: readonly SignalFacts[]): string {
       "BEGIN",
       `  IF ${CURRENT_USER} IS NULL THEN`,
       "    RETURN false;",
+      "  END IF;",
+      `  v_parts := regexp_match(p_topic, ${sqlLiteral(USER_TOPIC)});`,
+      "  IF v_parts IS NOT NULL THEN",
+      `    RETURN NOT p_send AND v_parts[1]::uuid = ${CURRENT_USER};`,
+      "  END IF;",
+      `  v_parts := regexp_match(p_topic, ${sqlLiteral(RIGHTS_TOPIC)});`,
+      "  IF v_parts IS NOT NULL THEN",
+      "    IF p_send THEN",
+      "      RETURN false;",
+      "    END IF;",
+      "    v_kind := v_parts[1]::uuid;",
+      "    v_scope := v_parts[2]::uuid;",
+      ...rightsDecision(kinds),
       "  END IF;",
       `  v_parts := regexp_match(p_topic, ${sqlLiteral(CHANGES_TOPIC)});`,
       "  IF v_parts IS NULL THEN",

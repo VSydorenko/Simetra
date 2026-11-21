@@ -132,6 +132,30 @@ describe("signal authorization units", () => {
     )
   })
 
+  it("subscribes to a rights channel by the scope set of a scope kind of the model, the global one by both zeros, a user channel by the current user; send refuses both (Р10)", () => {
+    const sql = functionSql(SIGNAL_FUNCTIONS.topicAllowed.name)
+    const zero = "'00000000-0000-0000-0000-000000000000'::uuid"
+    expect(sql).toContain(
+      [
+        "    IF p_send THEN",
+        "      RETURN false;",
+        "    END IF;",
+        "    v_kind := v_parts[1]::uuid;",
+        "    v_scope := v_parts[2]::uuid;",
+        "    RETURN COALESCE(CASE v_kind",
+        `      WHEN ${zero} THEN v_scope = ${zero}`,
+        `      WHEN '${ORG_KIND_ID}'::uuid THEN v_scope = ANY (ARRAY(SELECT public.org_member_member_scopes()))`,
+        "      ELSE false",
+        "    END, false);",
+      ].join("\n")
+    )
+    expect(sql).toContain(
+      "    RETURN NOT p_send AND v_parts[1]::uuid = (SELECT simetra.current_user_id());"
+    )
+    // Канали прав — не гілки об'єктів оракула.
+    expect(branches().has(ORG_KIND_ID)).toBe(false)
+  })
+
   it("subscribes to an unscoped object by has_right with the zero scope", () => {
     const zero = "'00000000-0000-0000-0000-000000000000'::uuid"
     expect(branches().get(ANNOUNCEMENT_ID)).toBe(
