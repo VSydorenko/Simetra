@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
 import type { SqlFunctionDeclaration } from "simetra/model"
+import { diagnostic, isRepairError } from "../diagnostics"
 import { uuid } from "./helpers"
 import { STATUS_FILE, withRoles } from "./fixtures/rights"
 
@@ -226,6 +227,14 @@ describe("sql.declaration-check-form", () => {
     )
     expect(forms).toEqual([at("unknownAction")])
     expect(result.model).toBeUndefined()
+  })
+
+  it("is an error that the repair class does not pass", () => {
+    expect(
+      isRepairError(
+        diagnostic("sql.declaration-check-form", FUNCTIONS, "/functions/0")
+      )
+    ).toBe(false)
   })
 
   it("a custom action resolves by its name", async () => {
