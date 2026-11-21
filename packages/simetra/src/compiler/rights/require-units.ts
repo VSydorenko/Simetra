@@ -100,7 +100,7 @@ function boundaries(
     action === "read" ? read.includes("tenant") : access.scope !== undefined
   return [
     ...(tenant ? [tenantBoundary(must(access.scope), ROW)] : []),
-    ...(action !== "update" && read.includes("users")
+    ...(read.includes("users")
       ? [usersBoundary(main, must(usersKey), ROW)]
       : []),
   ]
