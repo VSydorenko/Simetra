@@ -79,7 +79,7 @@ export interface StoreOps {
     versionEpoch: string | null,
     readEpoch: number,
     ownerScope: OwnerScope
-  ): void
+  ): "barred" | undefined
   clearOwner(scope: Scope, o: ObjectState, owner: Key): void
   /** Puts a row of a core snapshot (the hydration); see `ObjectStore.restore`. */
   restore(scope: Scope, o: ObjectState, row: RestoredRow, at: number): void
@@ -917,7 +917,9 @@ async function readSection(
   const lines = result.rows.map((values) => lineOf(section, values))
   return (scope) => {
     // Читання прийнято (шлюз епохи пройдено), навіть коли сховище відкине
-    // рядки: свіжість ТЧ-підмножини міряється епохою цього читання.
+    // рядки: свіжість ТЧ-підмножини міряється епохою цього читання. Крім
+    // відмови бар'єра знімка прав: таку ТЧ вигляд ще читатиме (нижче).
+    const before = s.sectionRead
     s.sectionRead = readEpoch
     s.headerState = undefined
     // Невидимий власник — рядків ТЧ не показуємо.
@@ -925,8 +927,11 @@ async function readSection(
       ops.clearOwner(scope, o, spec.owner)
       return
     }
+    // Скоуп власника відомий лише з шапки не старшої за версію власника ТЧ:
+    // новіша версія могла переїхати в інший скоуп, тож старша шапка її пари
+    // не підтверджує — рядки судяться як без шапки (§6.2 правило 4).
     const header = o.rows.get(spec.owner)
-    ops.putSection(
+    const barred = ops.putSection(
       scope,
       o,
       spec.owner,
@@ -935,8 +940,13 @@ async function readSection(
       result.ownerVersion,
       result.epoch,
       readEpoch,
-      header === undefined ? "unknown" : header.scope
+      header === undefined || header.version < result.ownerVersion
+        ? "unknown"
+        : header.scope
     )
+    // ТЧ, відкинута бар'єром знімка, не рухає `sectionRead`: її змонтований
+    // вигляд читає її ще раз, уже після знімка (§6.2 правило 4).
+    if (barred === "barred") s.sectionRead = before
   }
 }
 

@@ -423,6 +423,40 @@ describe("the snapshot barrier", () => {
     expect(header.getSnapshot().rows).toEqual([])
   })
 
+  it("judges lines of an owner that moved after its stored header as lines without a header, and re-reads them after the snapshot", async () => {
+    const { core, fake } = harness({ mode: "manual" })
+    await firstSnapshot(core)
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const header = core.view(card(1))
+    watch(header)
+    await settle()
+    fake.deliverAll()
+    await settle()
+    expect(rowsOf(core).get(key(1))?.scope).toBe(S)
+    // Власник переїхав у T; шапка в сховищі лишилась старшою, у S.
+    fake.edit(TASK, key(1), { org: T })
+    const owned = core.view(section(1))
+    watch(owned)
+    await settle()
+    const reads = fake.log.filter(isSection).length
+    expect(fake.pending).toHaveLength(1)
+    // ТЧ стартувала до знімка, що забороняє T: її версія власника — у T.
+    grant(fake, snapshotOf([readRow(S)]))
+    core.requestRights()
+    await settle()
+    fake.deliverAll()
+    await settle()
+    expect(linesOf(core, 1)).toBeUndefined()
+    expect(owned.getSnapshot().section?.lines ?? []).toEqual([])
+    // Відкинута бар'єром ТЧ не рухає `sectionRead`, і змонтований вигляд
+    // читає її ще раз, уже після знімка.
+    expect(
+      coreInternals(core).registry.find(section(1))?.sectionRead
+    ).toBeUndefined()
+    expect(fake.log.filter(isSection)).toHaveLength(reads + 1)
+  })
+
   it("writes a read of the pair that started after the snapshot was applied", async () => {
     const { core, fake } = harness({ mode: "manual" })
     await firstSnapshot(core)

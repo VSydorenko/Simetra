@@ -728,17 +728,16 @@ export function createCore(options: {
       (o) =>
         prev !== undefined && readLost(prev.snapshot, next.snapshot, o.entry)
     )
-    // Рядки ТЧ власників без шапки в сховищі не судяться за парою: на
-    // заміні, де об'єкт щось утратив, їх прибираємо, повертає наступне читання.
+    // Рядки ТЧ власників з невідомим скоупом (без шапки в сховищі чи з
+    // шапкою, старшою за версію власника ТЧ) не судяться за парою: на заміні,
+    // де об'єкт щось утратив, їх прибираємо, повертає наступне читання.
     const headerless = lost.flatMap((o) =>
       o.sections
         .owners()
-        .filter(
-          (owner) =>
-            o.rows.get(owner) === undefined &&
-            o.entry.tabularSections.some(
-              (t) => o.sections.get(owner, t.name)?.scope === "unknown"
-            )
+        .filter((owner) =>
+          o.entry.tabularSections.some(
+            (t) => o.sections.get(owner, t.name)?.scope === "unknown"
+          )
         )
         .map((owner) => ({ o, owner }))
     )
@@ -889,7 +888,7 @@ export function createCore(options: {
       readEpoch,
       ownerScope
     ) {
-      if (staleObjects.has(o.name)) return
+      if (staleObjects.has(o.name)) return undefined
       const result = o.sections.put(
         scope,
         owner,
@@ -910,14 +909,17 @@ export function createCore(options: {
         ownerScope === "unknown" &&
         rights !== undefined &&
         readEpoch < rights.appliedEpoch
-      )
+      ) {
         barredSections.add(`${o.name}\u0000${owner}`)
+        return "barred"
+      }
       // Позначені рядки ТЧ перечитує змонтований вигляд: перевірка вигляду
       // читає наново, коли ревізія шапки змінилась.
       if (result === "stale") {
         touchSection(o, owner)
         if (o.rows.get(owner) !== undefined) rowViews.touch(o.name, owner)
       }
+      return undefined
     },
     clearOwner(scope, o, owner) {
       o.sections.clearOwner(scope, owner)
