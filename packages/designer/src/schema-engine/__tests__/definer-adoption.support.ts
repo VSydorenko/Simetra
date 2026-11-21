@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest"
 import {
   PLATFORM_ROLES,
   PROVIDER_API_ROLES,
+  PROVIDER_OWNER_ROLES,
   type DatabaseProvider,
 } from "simetra/model"
 import {
@@ -95,8 +96,16 @@ const grantTo = (...roles: string[]): string =>
 const task = { kind: "Document", name: "Task" }
 
 /** Тека прав із видом `task`; профіль — прогону. */
-function folder(): Map<string, string> {
+function folder(o: { appSchema?: boolean } = {}): Map<string, string> {
   const files = withRoles()
+  if (o.appSchema === true)
+    // Схема `app` входить у межу моделі через звичайну (не definer) функцію:
+    // грантів на об'єкти в ній немає, тож `USAGE` ролям платформа не дає, а
+    // `PUBLIC` у новій схемі `USAGE` не має (на відміну від `public`)
+    files.set(
+      "sql/app/helper.sql",
+      "CREATE FUNCTION app.helper() RETURNS int LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT 1 $$;\n"
+    )
   files.set(
     "project.meta.json",
     JSON.stringify({
@@ -173,8 +182,7 @@ const projectOf = (model: CompiledModel) => ({
  */
 async function adopt(
   { target, model }: Ctx,
-  existing: ReadonlyMap<string, string>,
-  afterExtract?: () => Promise<void>
+  existing: ReadonlyMap<string, string>
 ): Promise<ReverseResult & { facts: ExecuteFacts }> {
   // Межа `introspect` — схеми застосунку: схему платформи він не читає
   const full = await desiredForApply(model)
@@ -182,7 +190,7 @@ async function adopt(
     ...full.scope,
     schemas: full.scope.schemas.filter((s) => s !== "simetra"),
   }
-  const read = await extractWithExecuteFacts(target, scope, afterExtract)
+  const read = await extractWithExecuteFacts(target, scope)
   const reference = await folderReference(engine, reader, { target }, existing)
   expect(errors(reference.diagnostics)).toEqual([])
   expect(errors(read.extracted.diagnostics)).toEqual([])
@@ -339,6 +347,14 @@ export function describeDefinerAdoption(): void {
             (p) => /\/rpc/.test(p) && p.endsWith(".functions.json")
           )
         ).toEqual([])
+        // `REVOKE` лишається дослівним: одиниця гранту з ціллю `public.rpc`
+        expect(
+          [...adopted.files].some(
+            ([path, text]) =>
+              path.includes("grant__") &&
+              /REVOKE EXECUTE ON FUNCTION "?public"?\."?rpc"?/.test(text)
+          )
+        ).toBe(true)
       })
     })
 
@@ -457,6 +473,101 @@ export function describeDefinerAdoption(): void {
         }
       )
     })
+  })
+
+  describe("EXECUTE of the default privileges and USAGE of the schema (Б1)", () => {
+    // Типові привілеї провайдера на `public`, як на справжньому Supabase: тестова
+    // база їх не має, тож задаються тут, до створення функції
+    const ADP = `ALTER DEFAULT PRIVILEGES FOR ROLE "${PROVIDER_OWNER_ROLES[testProvider()]}" IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO ${[API.anonymous, API.user, API.service].map((r) => `"${r}"`).join(", ")};`
+    const inApp = (body: string): string =>
+      body.replace("public.rpc", "app.rpc")
+
+    it.skipIf(testProvider() !== "postgres")(
+      "PUBLIC EXECUTE without USAGE on the schema: the user role is no caller, after the apply it has neither EXECUTE nor USAGE",
+      async () => {
+        await inAdoptedTarget(
+          `${inApp(rpc(GUARD))}\n${profileRoles()
+            .map((r) => `REVOKE USAGE ON SCHEMA app FROM "${r}";`)
+            .join("\n")}`,
+          async (ctx) => {
+            const adopted = await adopt(ctx, ctx.existing)
+            expect(errors(adopted.diagnostics)).toEqual([])
+            const [entry] = declarations(adopted, RPC_FILE(adopted))
+            // `PUBLIC` має `EXECUTE`, а роль користувача не має `USAGE` на `app`
+            expect(entry).toMatchObject({
+              function: { schema: "app", name: "rpc" },
+            })
+            expect(entry!.callers).not.toContain("user")
+            const prepared = await compiledFolder(adopted.files)
+            expect(prepared.errors).toEqual([])
+            await apply(ctx.target, prepared.model!)
+            expect(await comparison(ctx.target, prepared.model!)).toMatchObject(
+              { empty: true, actions: [] }
+            )
+            const [has] = await query<{ fn: boolean; usage: boolean }>(
+              ctx.target.url,
+              `select has_function_privilege($1, 'app.rpc(uuid)', 'EXECUTE') as fn,
+                      has_schema_privilege($1, 'app', 'USAGE') as usage`,
+              [API.user]
+            )
+            expect(has).toEqual({ fn: false, usage: false })
+          },
+          folder({ appSchema: true })
+        )
+      }
+    )
+
+    // Типові привілеї провайдера на `public` дають EXECUTE ролям API навіть
+    // після `REVOKE … FROM PUBLIC`
+    it.skipIf(testProvider() !== "supabase")(
+      "provider default privileges on public: callers user and service, anonymous dropped; after the apply the ACL is the derived one",
+      async () => {
+        await inAdoptedTarget(
+          `${ADP}\n${rpc(GUARD)}\nREVOKE EXECUTE ON FUNCTION ${RPC} FROM PUBLIC;`,
+          async (ctx) => {
+            const adopted = await adopt(ctx, ctx.existing)
+            expect(errors(adopted.diagnostics)).toEqual([])
+            const [entry] = declarations(adopted, RPC_FILE(adopted))
+            expect(entry!.callers).toEqual(["user", "service"])
+            expect(
+              byCode(adopted, "introspect.definer-anonymous-dropped").map(
+                (d) => d.params
+              )
+            ).toEqual([{ function: "public.rpc", role: API.anonymous }])
+            const prepared = await compiledFolder(adopted.files)
+            expect(prepared.errors).toEqual([])
+            await apply(ctx.target, prepared.model!)
+            expect(await comparison(ctx.target, prepared.model!)).toMatchObject(
+              { empty: true, actions: [] }
+            )
+            expect(await executeAcl(ctx.target.url, RPC)).toEqual(
+              [API.user, API.service].sort()
+            )
+          }
+        )
+      }
+    )
+
+    it.skipIf(testProvider() !== "supabase")(
+      "the same function outside public has no default privileges: no declaration",
+      async () => {
+        await inAdoptedTarget(
+          `${ADP}\n${inApp(rpc("NULL;"))}\nREVOKE EXECUTE ON FUNCTION app.rpc(uuid) FROM PUBLIC;`,
+          async (ctx) => {
+            const adopted = await adopt(ctx, ctx.existing)
+            expect(
+              [...adopted.files.keys()].filter(
+                (p) => /\/rpc/.test(p) && p.endsWith(".functions.json")
+              )
+            ).toEqual([])
+            expect(
+              byCode(adopted, "introspect.definer-anonymous-dropped")
+            ).toEqual([])
+          },
+          folder({ appSchema: true })
+        )
+      }
+    )
   })
 
   // Б2: грант, якого декларація не відтворює, не зникає мовчки — нічого не
