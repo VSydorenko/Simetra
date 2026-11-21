@@ -97,7 +97,7 @@ function boundaries(
   if (access === undefined) return []
   const read = readBoundaries(access, visibleUsers)
   const tenant =
-    action === "read" ? read.includes("tenant") : access.scope !== undefined
+    access.scope !== undefined
   return [
     ...(tenant ? [tenantBoundary(must(access.scope), ROW)] : []),
     ...(read.includes("users")
