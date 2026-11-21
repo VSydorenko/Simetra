@@ -12,6 +12,7 @@ import {
   type Diagnostic,
   type RuleCode,
 } from "../diagnostics"
+import type { RightsContract } from "../contracts"
 import type { ParsedFunctionsFile, ParsedObject } from "../stages/files"
 import { platformFormSources } from "./closed-forms"
 import { ON_BEHALF_OF_USER, isSecurityDefiner } from "./definer-reads"
@@ -230,10 +231,8 @@ export function checkDeclarations(
  * §5.1): функцію, що виконується від власника, кличе роль, яка діє від імені
  * користувача (`user`, `command` — хук команди з id від клієнта), тож без
  * названої перевірки вона обійшла б RLS — `sql.declaration-check-missing`.
- * Перевірку з `check` доводить лише запобіжник у формі `guardOf` (Д2); до
- * нього довести її нічим, тож `check` — ще не доказ:
- * `sql.declaration-check-not-applied` з причиною `guardUnavailable` (Р3,
- * fail-closed). Роль без сесії перевірки користувача не має зовсім —
+ * Перевірку з `check` доводить запобіжник виклику (`guardOf`,
+ * `sql/guard-of.ts`) після побудови контрактів прав, а не ця стадія. Роль без сесії перевірки користувача не має зовсім —
  * `sql.declaration-anonymous-definer`. Invoker-функція виконується з правами
  * викликача, тож її викликачі не судяться; лише `service` — теж: сервісна
  * роль не діє від імені користувача.
@@ -259,12 +258,7 @@ export function checkDeclaredCallers(
         ? []
         : declaration.check === undefined
           ? [at("sql.declaration-check-missing")]
-          : // Шов Д2: доказ `guardOf` замінює цю причину.
-            [
-              at("sql.declaration-check-not-applied", {
-                reason: "guardUnavailable",
-              }),
-            ]),
+          : []),
     ]
   })
 }
@@ -372,5 +366,159 @@ export function checkDefaultPrivilegesExecute(
         line: unit.line,
       }),
     ]
+  })
+}
+
+/** Причини `sql.declaration-check-form` (спека декларацій функцій §5.2). */
+export type CheckFormReason =
+  | "invoker"
+  | "noRights"
+  | "unknownAction"
+  | "twoTargets"
+  | "targetParameter"
+  | "rowKey"
+  | "scopeUnscoped"
+  | "createOnRow"
+  | "createOnRoot"
+  | "targetRequired"
+  | "targetForbidden"
+
+interface ParameterNode {
+  FunctionParameter?: {
+    name?: string
+    mode?: string
+    argType?: {
+      names?: { String?: { sval?: string } }[]
+      arrayBounds?: unknown[]
+      setof?: boolean
+    }
+  }
+}
+
+/**
+ * Параметр цілі — `IN`-параметр типу `uuid` з таким іменем: режим без слова
+ * (`FUNC_PARAM_DEFAULT`) теж `IN`. Масив, `SETOF`, `OUT`, `INOUT` і `VARIADIC`
+ * значення рядка не несуть.
+ */
+function hasUuidInParameter(unit: VerbatimUnit, name: string): boolean {
+  const parameters = (
+    unit.tree as { CreateFunctionStmt?: { parameters?: ParameterNode[] } }
+  ).CreateFunctionStmt?.parameters
+  return (parameters ?? []).some(({ FunctionParameter: p }) => {
+    if (p?.name !== name) return false
+    if (
+      p.mode !== undefined &&
+      p.mode !== "FUNC_PARAM_IN" &&
+      p.mode !== "FUNC_PARAM_DEFAULT"
+    )
+      return false
+    const names = (p.argType?.names ?? []).map((n) => n.String?.sval)
+    return (
+      (names.length === 1 ||
+        (names.length === 2 && names[0] === "pg_catalog")) &&
+      names[names.length - 1] === "uuid" &&
+      (p.argType?.arrayBounds ?? []).length === 0 &&
+      p.argType?.setof !== true
+    )
+  })
+}
+
+/** Контракт прав об'єкта, який називає `check`; одна пошукова функція для судді й `guardOf`. */
+export function checkedContract(
+  check: NonNullable<SqlFunctionDeclaration["check"]>,
+  objects: readonly ParsedObject[],
+  rights: readonly RightsContract[]
+): RightsContract | undefined {
+  const object = objects.find(
+    (o) => o.kind === check.object.kind && o.name === check.object.name
+  )
+  return rights.find((r) => r.objectId === object?.id)
+}
+
+/**
+ * Причина, з якої `check` декларації не відповідає об'єкту чи підпису
+ * (спека декларацій функцій §5.2), або `undefined`. Перша спрацьована
+ * причина — одна на декларацію.
+ */
+function checkFormReason(
+  { declaration, unit }: DeclaredFunction,
+  units: readonly VerbatimUnit[],
+  objects: readonly ParsedObject[],
+  rights: readonly RightsContract[],
+  usersRead: ReadonlySet<string>,
+  rowKeyed: ReadonlySet<string>
+): CheckFormReason | undefined {
+  const check = declaration.check
+  if (check === undefined) return undefined
+  // Invoker-функцію вже обмежує RLS викликача: названа перевірка їй зайва.
+  if (!isSecurityDefiner(unit, units)) return "invoker"
+  const contract = checkedContract(check, objects, rights)
+  if (contract === undefined) return "noRights"
+  const action = contract.actions.find((a) => a.name === check.action)
+  if (action === undefined) return "unknownAction"
+  if (check.row !== undefined && check.scope !== undefined) return "twoTargets"
+  const target = check.row ?? check.scope
+  if (target !== undefined && !hasUuidInParameter(unit, target))
+    return "targetParameter"
+  // Ціль `row` — значення ключа: регістр без єдиного uuid-ключа рядка не має.
+  if (check.row !== undefined && !rowKeyed.has(contract.objectId))
+    return "rowKey"
+  if (check.scope !== undefined && contract.scopeKindId === undefined)
+    return "scopeUnscoped"
+  const create = action.action === "create"
+  if (create && check.row !== undefined) return "createOnRow"
+  // Рядка створення ще немає, а `INSERT` кореня виду скоупу судить окрема
+  // булева форма (спека прав Рх9): названа перевірка йому не відповідає.
+  if (create && contract.root === true) return "createOnRoot"
+  // Предикати дії читають носія рядка (скоуп, власність, вимір, прив'язку до
+  // контейнера; сам контейнер власного рядка не читає), а дія над наявним
+  // рядком — будь-яка, крім `create` — ще й межі читання (`readBoundaries`,
+  // ключ рядка — id користувача): без цілі судити нічого. `create` носія ще
+  // не має — для нього ціль `scope`.
+  const carriers =
+    (!create && usersRead.has(contract.objectId)) ||
+    contract.scopeKindId !== undefined ||
+    contract.ownership.length > 0 ||
+    contract.access.length > 0 ||
+    contract.binding !== undefined
+  if (target === undefined && carriers) return "targetRequired"
+  if (target !== undefined && !carriers) return "targetForbidden"
+  return undefined
+}
+
+/**
+ * Суддя `check` над контрактами прав (спека декларацій функцій §5.2, Р1):
+ * мітка виду й UUID кастомної дії існують лише там, тож перевірка стоїть
+ * після `rightsContracts`. Помилка автора декларації, не клас ремонту.
+ */
+export function checkDeclaredChecks(
+  declared: readonly DeclaredFunction[],
+  units: readonly VerbatimUnit[],
+  objects: readonly ParsedObject[],
+  rights: readonly RightsContract[],
+  /** Об'єкти, читання яких обмежує межа «Користувачів» (`readBoundaries`). */
+  usersRead: ReadonlySet<string>,
+  /** Об'єкти, чия основна таблиця має ключ з однієї колонки `uuid`. */
+  rowKeyed: ReadonlySet<string>
+): Diagnostic[] {
+  return declared.flatMap((entry) => {
+    const reason = checkFormReason(
+      entry,
+      units,
+      objects,
+      rights,
+      usersRead,
+      rowKeyed
+    )
+    return reason === undefined
+      ? []
+      : [
+          diagnostic("sql.declaration-check-form", entry.file, entry.pointer, {
+            schema: entry.key.schema,
+            name: entry.key.name,
+            function: `${entry.key.schema}.${entry.key.name}`,
+            reason,
+          }),
+        ]
   })
 }

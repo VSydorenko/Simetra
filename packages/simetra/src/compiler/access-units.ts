@@ -195,6 +195,20 @@ export function publicReadNeedsUser(
   )
 }
 
+/**
+ * Умова `PERMISSIVE`-політики `publicRead`: функція запобіжника
+ * (`simetra.rights_require`) бере її тим самим будівником для читання від
+ * імені ролей цієї політики.
+ */
+export function publicReadUsing(
+  contract: Pick<AccessContract, "publicRead">,
+  sessionUser: boolean
+): string {
+  return publicReadNeedsUser(contract, sessionUser)
+    ? `${CURRENT_USER} IS NOT NULL`
+    : "true"
+}
+
 /** Гість бачить не більше за користувача: `anon` відкриває обидві ролі запиту. */
 function publicReadPurposes(
   role: PublicReadRole | undefined
@@ -541,13 +555,12 @@ export function buildAccessUnits(
         // «Користувачі» нескоуплені, тож межа тенанта їх не обмежує: роль
         // рівня скоупу з `read@any` бачила б користувачів усіх тенантів
         // (спека системної схеми §12).
-        const key = usersKey(
-          tableOf(physical, table),
-          must(contracts.users).keyColumn
-        )
         policies.push(
           policy(names.scopeRead, table, "RESTRICTIVE", "SELECT", bounded, {
-            using: `${quoteIdent(key)} = ANY (ARRAY(SELECT ${call(RIGHTS_FUNCTIONS.visibleUsers)}))`,
+            using: usersBoundary(
+              tableOf(physical, table),
+              must(contracts.users).keyColumn
+            ),
           })
         )
       }
@@ -567,9 +580,7 @@ export function buildAccessUnits(
               PLATFORM_ROLES.command,
             ],
             {
-              using: publicReadNeedsUser(contract, sessionUser)
-                ? `${CURRENT_USER} IS NOT NULL`
-                : "true",
+              using: publicReadUsing(contract, sessionUser),
             }
           )
         )
@@ -793,6 +804,21 @@ function rightsLabel(
     return `in_${must(labels.container.get(extent.container))}_${inner(extent.inner)}`
   }
   return inner(predicate.extent)
+}
+
+/**
+ * Межа «Користувачів» — вираз `RESTRICTIVE`-політики читання таблиці
+ * «Користувачів» (основної чи ТЧ). `row` — псевдонім рядка: функція запобіжника
+ * (`simetra.rights_require`) повторює межу над рядком `EXISTS` тим самим
+ * будівником, що й політика.
+ */
+export function usersBoundary(
+  table: ObjectTable,
+  keyColumn: string,
+  row?: string
+): string {
+  const key = quoteIdent(usersKey(table, keyColumn))
+  return `${row === undefined ? key : `${row}.${key}`} = ANY (ARRAY(SELECT ${call(RIGHTS_FUNCTIONS.visibleUsers)}))`
 }
 
 /** Колонка id користувача: ключ основної таблиці, у рядку ТЧ — `parent_id`. */

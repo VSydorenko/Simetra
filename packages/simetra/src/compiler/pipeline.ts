@@ -19,13 +19,18 @@ import {
   type Diagnostic,
 } from "./diagnostics"
 import { modelHash } from "./canonical"
-import { accessContracts, buildAccessUnits } from "./access-units"
+import {
+  accessContracts,
+  buildAccessUnits,
+  readBoundaries,
+} from "./access-units"
 import {
   buildContracts,
   derivedFunctions,
   eventSubscriptionContracts,
   membershipContracts,
   usersContractOf,
+  mainTableOf,
 } from "./contracts"
 import {
   buildFunctionExecuteUnits,
@@ -55,8 +60,10 @@ import {
   buildRightsUnits,
   hasActorSnapshot,
   hasRightsFunctions,
+  hasVisibleUsers,
 } from "./rights/functions"
 import { buildClientSnapshotUnits } from "./rights/client-snapshot"
+import { buildRequireUnits } from "./rights/require-units"
 import { buildExplainUnits } from "./rights/explain-units"
 import { buildRightsGuardUnits } from "./rights/guard-units"
 import { snapshotExemptWriters } from "./rights/snapshot-exempt-writers"
@@ -100,8 +107,13 @@ import {
   platformFormSources,
 } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
+import { checkDeclaredGuards } from "./sql/guard-of"
 import { checkDebt, debtPredicate } from "./sql/debt"
-import { checkDeclarations, declaredFunctions } from "./sql/declarations"
+import {
+  checkDeclaredChecks,
+  checkDeclarations,
+  declaredFunctions,
+} from "./sql/declarations"
 import {
   checkFunctionBodies,
   checkPlatformCalls,
@@ -336,7 +348,7 @@ export async function runStages(
       plpgsql,
       calls
     ),
-    ...checkPlatformCalls(sql.units, parse, plpgsql),
+    ...checkPlatformCalls(sql.units, parse, plpgsql, declared),
     // Виклики подань і політик — дозвільний перелік виразів (спека прав §5.3).
     ...(unitExpressions === undefined
       ? []
@@ -393,8 +405,7 @@ export async function runStages(
       declared
     ),
   ])
-  const ok = !hasErrors(staged)
-  if (blocks(staged)) return { ok, diagnostics: staged }
+  if (blocks(staged)) return { ok: !hasErrors(staged), diagnostics: staged }
 
   const rights = rightsContracts(
     stage1.objects,
@@ -422,7 +433,7 @@ export async function runStages(
   // Вид скоупу, об'єктів якого не читає жодна роль (спека прав §5.2), і творця
   // кореня без адміністрування прав рівня (спека П4 §6.13) видно лише на
   // проєкції ролей — тож попередження йдуть після неї й не зупиняють компіляції.
-  const diagnostics = sortDiagnostics([
+  let diagnostics = sortDiagnostics([
     ...staged,
     ...scopeKindUnreadWarnings(
       { rights, roles, rightsProjection: projection.rows },
@@ -614,6 +625,67 @@ export async function runStages(
     physical,
     stage1.project
   )
+  // Мітка виду й UUID кастомної дії для `check` декларації є лише на
+  // контрактах прав (Р1), а чи читає дія рядок через межу «Користувачів» — на
+  // контрактах доступу й членства, тож суддя стоїть після їх побудови, до
+  // одиниць. Хибна `check` — не клас ремонту, тож зупиняє і в режимі `repair`.
+  const visibleUsers = hasVisibleUsers(
+    {
+      roles,
+      users,
+      membership,
+      membershipSources: sources.membershipSources,
+    },
+    stage1.project.database.provider
+  )
+  const checkForms = checkDeclaredChecks(
+    declared,
+    sql.units,
+    stage1.objects,
+    rights,
+    new Set(
+      access.flatMap((contract) =>
+        contract.rights !== undefined &&
+        readBoundaries(contract, visibleUsers).includes("users")
+          ? [contract.rights.objectId]
+          : []
+      )
+    ),
+    new Set(
+      rights.flatMap(({ objectId }) => {
+        const main = mainTableOf(physical, objectId)
+        const key = main?.primaryKey?.columns
+        return key?.length === 1 &&
+          main?.columns.find((c) => c.name === key[0])?.type === "uuid"
+          ? [objectId]
+          : []
+      })
+    )
+  )
+  if (checkForms.length > 0) {
+    return {
+      ok: false,
+      diagnostics: sortDiagnostics([...diagnostics, ...checkForms]),
+    }
+  }
+  // Запобіжник виклику судиться лише для декларацій, що пройшли `check-form`
+  // (ранній `return` вище): контракт об'єкта й ціль тоді гарантовано є. Це
+  // клас ремонту: у режимі `repair` модель будується далі.
+  const guards = checkDeclaredGuards(
+    declared,
+    sql.units,
+    stage1.objects,
+    rights,
+    plpgsql,
+    parse
+  )
+  if (blocks(guards)) {
+    return {
+      ok: false,
+      diagnostics: sortDiagnostics([...diagnostics, ...guards]),
+    }
+  }
+  diagnostics = sortDiagnostics([...diagnostics, ...guards])
   // Один об'єкт контрактів для функцій прав і для пояснення видимості: поле,
   // додане лише в одне місце, дало б двом генераторам різні контракти.
   const rightsInputs = {
@@ -955,6 +1027,26 @@ export async function runStages(
     ...signalUnits,
     ...rightsSignals.units,
     ...clientSnapshotUnits,
+    // Функції запобіжника виклику: гілки — з декларацій, що пройшли
+    // `check-form`; ребра `requires` — до функцій прав і множин `baseUnits`.
+    ...buildRequireUnits({
+      declared,
+      objects: stage1.objects,
+      contracts: {
+        access,
+        rights,
+        roles,
+        users,
+        membership,
+        membershipSources: sources.membershipSources,
+      },
+      physical,
+      provider: stage1.project.database.provider,
+      module,
+      units: baseUnits,
+      parse,
+      plpgsql,
+    }),
   ]
   // `USAGE` на схеми застосунку — над усіма згенерованими грантами, бо схему
   // відкривають і таблиці, і функції (платформна спека §6.7)
@@ -992,6 +1084,8 @@ export async function runStages(
     // Функції прав спільні для всіх об'єктів — власника немає.
     rights: (unit) => `the rights function ${unit.name}`,
     rightsGuards: (unit) => `the rights guard of ${name(unit.ownerObjectId)}`,
+    // Функції запобіжника виклику спільні для всіх об'єктів — власника немає.
+    rightsRequire: (unit) => `the call guard function ${unit.name}`,
     // Пояснення видимості спільне для всіх об'єктів — власника немає.
     rightsExplain: (unit) => `the rights explain function ${unit.name}`,
     carriers: (unit) => `the carrier copies of ${name(unit.ownerObjectId)}`,
@@ -1117,11 +1211,10 @@ export async function runStages(
       diagnostics: sortDiagnostics([...diagnostics, ...budget]),
     }
   }
-  return {
-    ok,
-    diagnostics: sortDiagnostics([...diagnostics, ...budget]),
-    model: compiled,
-  }
+  // `ok` рахується над усіма діагностиками: помилки класу ремонту, що пізніші
+  // за гейт стадій (`checkDeclaredGuards`), не закривали його в `repair`.
+  const final = sortDiagnostics([...diagnostics, ...budget])
+  return { ok: !hasErrors(final), diagnostics: final, model: compiled }
 }
 
 /**

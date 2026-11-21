@@ -1,7 +1,14 @@
 import type { Node } from "libpg-query"
-import { PLATFORM_SCHEMA, type Project } from "simetra/model"
+import {
+  PLATFORM_SCHEMA,
+  type Project,
+  type SqlFunctionDeclaration,
+} from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import { PLATFORM_READ_FUNCTIONS } from "../platform/names"
+import { RIGHTS_FUNCTIONS } from "../rights/functions"
+import type { DeclaredFunction } from "./declarations"
+import { firstStatementOk } from "./guard-of"
 import type { ParsedObject } from "../stages/files"
 import {
   closedModuleOwners,
@@ -578,16 +585,70 @@ function callsOf(
 export function checkPlatformCalls(
   units: readonly VerbatimUnit[],
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  declared: readonly DeclaredFunction[]
 ): Diagnostic[] {
   const allowed = new Set(
     PLATFORM_READ_FUNCTIONS.map((f) => `${f.schema}.${f.name}`)
   )
-  return forbiddenCalls(units, parse, plpgsql, (call) => {
-    if (call.schema !== PLATFORM_SCHEMA) return undefined
-    const name = `${call.schema}.${call.name}`
-    return allowed.has(name) ? undefined : name
-  })
+  const guarded = new Map(
+    declared.flatMap((d) =>
+      d.declaration.check === undefined
+        ? []
+        : [[d.unit, d.declaration.check] as const]
+    )
+  )
+  return forbiddenCalls(
+    units,
+    parse,
+    plpgsql,
+    (call) => {
+      if (call.schema !== PLATFORM_SCHEMA) return undefined
+      const name = `${call.schema}.${call.name}`
+      return allowed.has(name) ? undefined : name
+    },
+    (unit) => {
+      const calls = callsOf(unit, parse, plpgsql)
+      const check = guarded.get(unit)
+      return check === undefined
+        ? calls
+        : withoutFirstGuard(calls, unit, check, parse, plpgsql)
+    }
+  )
+}
+
+/** Функції запобіжника виклику: їх платформа дозволяє лише першому оператору; обчислюється під час виклику, бо модуль входить у цикл імпортів. */
+const guardFunctions = (): ReadonlySet<string> =>
+  new Set(
+    [RIGHTS_FUNCTIONS.require, RIGHTS_FUNCTIONS.requireScope].map(
+      (f) => `${f.schema}.${f.name}`
+    )
+  )
+
+const isGuardCall = (call: ReferencedName) =>
+  call.schema === PLATFORM_SCHEMA &&
+  guardFunctions().has(`${call.schema}.${call.name}`)
+
+/**
+ * Виклики одиниці без одного виклику запобіжника, який робить перший оператор
+ * блоку автора, коли це `PERFORM` у доведеній формі (Р9), хоч би які були
+ * викликачі: `guardOf` судить лише декларації з викликачами user/command, тож
+ * `PERFORM … WHERE false` службової функції без форми не звільнялося б. Виклик запобіжника лишається в усіх
+ * інших місцях: другий у тілі, у вкладеному блоці, у виразі, а також другий
+ * усередині самого першого оператора. Правильність аргументів судить `guardOf`.
+ */
+function withoutFirstGuard(
+  calls: readonly ReferencedName[],
+  unit: VerbatimUnit,
+  check: NonNullable<SqlFunctionDeclaration["check"]>,
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
+): ReferencedName[] {
+  const body = plpgsql(unit.sql)
+  const first = body.ok ? body.fn?.author.firstStatement : undefined
+  if (firstStatementOk(first, check, parse) === undefined) return [...calls]
+  const at = calls.findIndex(isGuardCall)
+  return calls.filter((_, index) => index !== at)
 }
 
 /**
@@ -622,12 +683,14 @@ function forbiddenCalls(
   units: readonly VerbatimUnit[],
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  forbidden: (call: ReferencedName) => string | undefined
+  forbidden: (call: ReferencedName) => string | undefined,
+  callsFor: (unit: VerbatimUnit) => readonly ReferencedName[] = (unit) =>
+    callsOf(unit, parse, plpgsql)
 ): Diagnostic[] {
   return units.flatMap((unit) => {
     if (INERT_CLASSES.has(unit.class)) return []
     const called = new Set(
-      callsOf(unit, parse, plpgsql).flatMap((call) => {
+      callsFor(unit).flatMap((call) => {
         const name = forbidden(call)
         return name === undefined ? [] : [name]
       })

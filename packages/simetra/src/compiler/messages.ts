@@ -1628,14 +1628,24 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Функція SECURITY DEFINER виконується від свого власника, який обходить захист рядків, а роль команд діє від імені користувача, тож хук команди з id від клієнта читав би повз права. Назвіть перевірку в декларації (check: action, object, row чи scope), зробіть функцію SECURITY INVOKER або залиште лише викликача service.",
     },
   },
+  "sql.declaration-check-form": {
+    en: (p) =>
+      `The check of ${p.function} does not fit its object or signature (${p.reason})`,
+    uk: (p) =>
+      `Перевірка ${p.function} не відповідає об'єкту чи підпису (${p.reason})`,
+    hint: {
+      en: "Name an object with rights, one of its actions and at most one target: row or scope, the name of a uuid IN parameter of the function. The target is required when the action reads the row carrier (scope, ownership, dimension, container) and forbidden otherwise; row only for an object whose key is one uuid column (a register has no such key: use scope); create takes scope or no target, and not on the root of a scope kind. The check is for SECURITY DEFINER functions only.",
+      uk: "Назвіть об'єкт з правами, одну з його дій і щонайбільше одну ціль: row чи scope — ім'я IN-параметра функції типу uuid. Ціль обов'язкова, коли дія читає носія рядка (скоуп, власність, вимір, контейнер), і заборонена в іншому разі; row — лише для об'єкта з ключем з однієї колонки uuid (регістр такого ключа не має: scope); create приймає scope чи жодної цілі і не на корені виду скоупу. Перевірка — лише для функцій SECURITY DEFINER.",
+    },
+  },
   "sql.declaration-check-not-applied": {
     en: (p) =>
       `${p.function} is SECURITY DEFINER with callers that act for a user, and its body does not prove the named check (${p.reason})`,
     uk: (p) =>
       `${p.function} — SECURITY DEFINER з викликачами від імені користувача, і тіло не доводить названої перевірки (${p.reason})`,
     hint: {
-      en: "The named check counts only once the body applies it through the platform call guard; until the compiler can prove the guard, such a function is refused. Make the function SECURITY INVOKER or leave only the service caller.",
-      uk: "Названа перевірка діє, лише коли тіло застосовує її запобіжником виклику платформи; доки компілятор не може довести запобіжник, така функція відхиляється. Зробіть функцію SECURITY INVOKER або залиште лише викликача service.",
+      en: "The named check counts only once the body applies it through the call guard: the first statement of the outer block (no DECLARE or EXCEPTION section) is PERFORM simetra.rights_require('<action>', '<kind label>', <row parameter or NULL>) — rights_require_scope for a scope target — with exactly the declared action, kind label and target parameter. Otherwise make the function SECURITY INVOKER or leave only the service caller.",
+      uk: "Названа перевірка діє, лише коли тіло застосовує її запобіжником виклику: перший оператор зовнішнього блоку (без секцій DECLARE і EXCEPTION) — PERFORM simetra.rights_require('<дія>', '<мітка виду>', <параметр рядка або NULL>), для цілі scope — rights_require_scope, з точно оголошеними дією, міткою виду й параметром цілі. Інакше зробіть функцію SECURITY INVOKER або залиште лише викликача service.",
     },
   },
   "sql.declaration-anonymous-definer": {

@@ -81,10 +81,13 @@ function identCont(c: string): boolean {
 export function skipTrivia(text: string, start: number): number {
   let i = start
   for (;;) {
-    while (i < text.length && /\s/.test(text[i]!)) i++
+    // Пробіл і кінець рядка — як у `scan.l` (`space`, `non_newline`): `\s`
+    // ширший (NBSP тощо), а `--` закінчується і на `\r`. Розбіжність з
+    // Postgres ховала б оголошення за «коментарем».
+    while (i < text.length && /[ \t\n\r\f\v]/.test(text[i]!)) i++
     if (text.startsWith("--", i)) {
-      const eol = text.indexOf("\n", i)
-      i = eol < 0 ? text.length : eol + 1
+      const eol = text.slice(i).search(/[\n\r]/)
+      i = eol < 0 ? text.length : i + eol + 1
       continue
     }
     if (text.startsWith("/*", i)) {
@@ -172,4 +175,27 @@ function stringEnd(text: string, quote: number, escapes: boolean): number {
     }
   }
   return text.length
+}
+
+/**
+ * Зовнішній блок тіла має секцію `DECLARE` — або ми не можемо довести, що
+ * її немає. Дерево парсера plpgsql не прив'язує оголошення до блоку, тож
+ * шукаємо в тексті: після пропуску пробілів і коментарів дозволено лише
+ * `<<`, один ідентифікатор (простий чи в лапках), `>>`, а далі ключове слово
+ * `BEGIN` без огляду на регістр. Будь-що інше (`DECLARE`, чужий токен, мітка
+ * іншої форми, `"begin"` в лапках) — `true`: помилка тут у бік суворості.
+ * Лапки й коментарі розбирає лексика, тож слово `BEGIN` у коментарі чи
+ * `>>` усередині лапкової мітки секції `DECLARE` не приховають.
+ */
+export function declareSection(body: string): boolean {
+  let i = skipTrivia(body, 0)
+  if (body.startsWith("<<", i)) {
+    const label = readIdent(body, skipTrivia(body, i + 2))
+    if (label === undefined) return true
+    i = skipTrivia(body, label.end)
+    if (!body.startsWith(">>", i)) return true
+    i = skipTrivia(body, i + 2)
+  }
+  const word = readIdent(body, i)
+  return !(word !== undefined && body[i] !== '"' && word.value === "begin")
 }

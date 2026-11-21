@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import type pg from "pg"
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
-import type { ApiRolePurpose } from "simetra/model"
+import { type ApiRolePurpose } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import {
   catalog,
@@ -10,6 +10,12 @@ import {
   project,
   uuid,
 } from "../../src/compiler/__tests__/helpers"
+import { compiledPolicyDomain } from "../../src/compiler/__tests__/fixtures/rights"
+import { profileLayer } from "./rights-seed"
+import {
+  GUARDED_FILES,
+  expectNoGuardExecute,
+} from "./function-declarations.support"
 import { claimsFor, queryAs, withRollback } from "./connection"
 
 /**
@@ -105,6 +111,19 @@ describe("EXECUTE of an undeclared module function on Supabase", () => {
             "SELECT public.item_total(gen_random_uuid())"
           )
         ).toEqual([purpose, "42501"])
+    })
+  })
+})
+
+describe("EXECUTE of the call guard functions on Supabase", () => {
+  it("no application role holds EXECUTE on them", async () => {
+    await withRollback(async (client) => {
+      const result = await compiledPolicyDomain(GUARDED_FILES, [profileLayer()])
+      expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual(
+        []
+      )
+      await client.query(renderDesiredState(result.model!).sql)
+      await expectNoGuardExecute(client, "supabase")
     })
   })
 })

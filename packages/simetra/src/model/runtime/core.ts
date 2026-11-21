@@ -50,6 +50,17 @@ export const COMMAND_CORE_ERRORS = {
   },
 } as const
 
+/**
+ * Відмова функцій запобіжника `simetra.rights_require` і
+ * `simetra.rights_require_scope` (спека декларацій функцій §5.2): одна для
+ * невідомої пари, відсутнього права, відсутнього рядка і `NULL`.
+ */
+export const RIGHTS_REQUIRE_ERROR = {
+  errcode: "42501",
+  message: "rights.forbidden",
+  noRight: "no-right",
+} as const
+
 /** Тригер ієрархії відмовляє поза `READ COMMITTED` (спека П4 §6.6). */
 export const HIERARCHY_ISOLATION_ERROR = {
   errcode: "0A000",

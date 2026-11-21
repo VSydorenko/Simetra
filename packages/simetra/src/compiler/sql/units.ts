@@ -99,6 +99,7 @@ export type UnitGenerator =
   | "subscription"
   | "rights"
   | "rightsGuards"
+  | "rightsRequire"
   | "rightsExplain"
   | "carriers"
   | "command"
@@ -130,6 +131,8 @@ const FIXED_BODY: Readonly<Record<UnitGenerator, boolean>> = {
   subscription: true,
   rights: true,
   rightsGuards: true,
+  // Тіло залежить від декларацій, а не від автора: платформне.
+  rightsRequire: true,
   rightsExplain: true,
   carriers: true,
   command: true,

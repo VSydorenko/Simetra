@@ -382,11 +382,6 @@ describe("sql.declaration-platform-form", () => {
 const definer = (name: string) =>
   `CREATE FUNCTION ${name}() RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;\n`
 
-const CHECK: NonNullable<SqlFunctionDeclaration["check"]> = {
-  action: "read",
-  object: { kind: "Catalog", name: "Project" },
-}
-
 const CALLER_CODES = [
   "sql.declaration-check-missing",
   "sql.declaration-check-not-applied",
@@ -403,7 +398,7 @@ async function callerDiagnostics(files: Map<string, string>) {
 }
 
 // Інваріант 4: definer-функція з викликачами від імені користувача не
-// компілюється без доведеної перевірки; у Д1 довести її нічим (Р3).
+// компілюється без названої перевірки; доказ перевірки — `guard-of.test.ts`.
 describe("callers of a declared SECURITY DEFINER function", () => {
   const declared = (entry: SqlFunctionDeclaration, sql = definer("public.f")) =>
     callerDiagnostics(
@@ -423,7 +418,6 @@ describe("callers of a declared SECURITY DEFINER function", () => {
   it.each<{
     name: string
     callers: SqlFunctionDeclaration["callers"]
-    check?: boolean
     expected: unknown[]
   }>([
     {
@@ -436,22 +430,6 @@ describe("callers of a declared SECURITY DEFINER function", () => {
       name: "command without check is check-missing",
       callers: ["command"],
       expected: [at("sql.declaration-check-missing")],
-    },
-    {
-      name: "user with check is check-not-applied: no guard to prove it",
-      callers: ["user"],
-      check: true,
-      expected: [
-        at("sql.declaration-check-not-applied", { reason: "guardUnavailable" }),
-      ],
-    },
-    {
-      name: "command with check is check-not-applied",
-      callers: ["command", "service"],
-      check: true,
-      expected: [
-        at("sql.declaration-check-not-applied", { reason: "guardUnavailable" }),
-      ],
     },
     {
       name: "anonymous is anonymous-definer",
@@ -477,12 +455,10 @@ describe("callers of a declared SECURITY DEFINER function", () => {
       callers: [],
       expected: [],
     },
-  ])("$name", async ({ callers, check, expected }) => {
-    const entry = {
-      ...declaration({ name: "f" }, callers),
-      ...(check === true ? { check: CHECK } : {}),
-    }
-    expect(await declared(entry)).toEqual(expected)
+  ])("$name", async ({ callers, expected }) => {
+    expect(await declared(declaration({ name: "f" }, callers))).toEqual(
+      expected
+    )
   })
 
   it("an invoker function with every caller compiles clean", async () => {
@@ -528,19 +504,6 @@ describe("repair-class codes carry params.schema and params.name", () => {
         compiled({
           [SQL]: definer("public.f"),
           [FUNCTIONS]: functionsFile(declaration({ name: "f" }, ["user"])),
-        }),
-      schema: "public",
-      name: "f",
-    },
-    {
-      code: "sql.declaration-check-not-applied",
-      diagnostics: () =>
-        compiled({
-          [SQL]: definer("public.f"),
-          [FUNCTIONS]: functionsFile({
-            ...declaration({ name: "f" }, ["user"]),
-            check: CHECK,
-          }),
         }),
       schema: "public",
       name: "f",

@@ -428,3 +428,81 @@ describe("loadPlpgsqlParser", () => {
     expect(parse(sql)).toBe(parse(sql))
   })
 })
+
+describe("author block", () => {
+  const author = (body: string) => parsed(fn(body)).author
+
+  it("gives the first statement of the outer block", () => {
+    const { firstStatement, hasExceptionBlock } = author(
+      "BEGIN\n  PERFORM simetra.rights_require('read', 'k', NULL);\n  PERFORM 2;\nEND"
+    )
+    expect(hasExceptionBlock).toBe(false)
+    expect(firstStatement?.type).toBe("perform")
+    expect(firstStatement?.expressions[0]?.query).toBe(
+      "SELECT simetra.rights_require('read', 'k', NULL)"
+    )
+    expect(firstStatement?.expressions[0]?.perform).toBe(true)
+  })
+
+  it("does not take the fictitious RETURN for a statement", () => {
+    expect(author("BEGIN END").firstStatement).toBeUndefined()
+    // `NULL;` парсер не зберігає: у блоці лишається лише фіктивний RETURN.
+    expect(author("BEGIN NULL; END").firstStatement).toBeUndefined()
+  })
+
+  it("keeps an authored RETURN as the first statement", () => {
+    // Автор закінчив блок `RETURN`: парсер фіктивного не дописує.
+    expect(author("BEGIN RETURN NEW; END").firstStatement?.type).toBe("return")
+    expect(author("BEGIN RETURN; PERFORM 1; END").firstStatement?.type).toBe(
+      "return"
+    )
+    expect(
+      author("BEGIN RETURN; EXCEPTION WHEN OTHERS THEN NULL; END")
+        .firstStatement?.type
+    ).toBe("return")
+  })
+
+  it("takes the first statement of a labelled block", () => {
+    expect(author("<<b>> BEGIN PERFORM 1; END").firstStatement?.type).toBe(
+      "perform"
+    )
+  })
+
+  it("keeps a nested block as the first statement, not its contents", () => {
+    const { firstStatement } = author("BEGIN BEGIN PERFORM 1; END; END")
+    expect(firstStatement?.type).toBe("block")
+    expect(firstStatement?.expressions).toEqual([])
+  })
+
+  it("flags an EXCEPTION section and still finds the author's first statement", () => {
+    const { firstStatement, hasExceptionBlock } = author(
+      "BEGIN PERFORM 1; EXCEPTION WHEN OTHERS THEN NULL; END"
+    )
+    expect(hasExceptionBlock).toBe(true)
+    expect(firstStatement?.type).toBe("perform")
+  })
+
+  it("detects the EXCEPTION wrapper whatever the return type", () => {
+    const r = parsed(
+      "CREATE FUNCTION app.t() RETURNS void LANGUAGE plpgsql AS $$\nBEGIN PERFORM 1; EXCEPTION WHEN OTHERS THEN NULL; END\n$$;"
+    ).author
+    expect(r.hasExceptionBlock).toBe(true)
+    expect(r.firstStatement?.type).toBe("perform")
+  })
+
+  it("does not flag a nested EXCEPTION section as the author's", () => {
+    const { firstStatement, hasExceptionBlock } = author(
+      "BEGIN BEGIN PERFORM 1; EXCEPTION WHEN OTHERS THEN NULL; END; END"
+    )
+    expect(hasExceptionBlock).toBe(false)
+    expect(firstStatement?.type).toBe("block")
+  })
+
+  it("does not flag an EXCEPTION section deeper in the body", () => {
+    expect(
+      author(
+        "BEGIN PERFORM 1; IF true THEN BEGIN NULL; EXCEPTION WHEN OTHERS THEN NULL; END; END IF; END"
+      ).hasExceptionBlock
+    ).toBe(false)
+  })
+})
