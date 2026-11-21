@@ -800,8 +800,15 @@ export function createCore(options: {
             const writer = createWriter(writerContext, scope)
             for (const { object, scope: pair } of judged)
               writer.purge(object, { scope: pair }, { rights: true })
-            for (const { o, owner } of headerless)
+            for (const { o, owner } of headerless) {
               ops.clearOwner(scope, o, owner)
+              // Позначка `hide` власника — той самий шлях, що й `hide` прав:
+              // вигляд ТЧ без слухача (preload, gcTime) перечитує рядки при
+              // монтуванні (`hiddenSinceRead`), а старше за позначку читання
+              // ТЧ їх не запише. Ревізія шапки тут не годиться: вона будила б
+              // вигляди шапки й не зупиняла б старших відповідей.
+              session.epochs.hide(keyId(o.name, owner))
+            }
           } finally {
             ops.sweep(scope)
           }

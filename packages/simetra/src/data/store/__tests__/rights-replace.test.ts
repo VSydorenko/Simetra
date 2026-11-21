@@ -314,6 +314,29 @@ describe("the pass on a snapshot replacement", () => {
     expect(owned.getSnapshot().section?.lines).toHaveLength(1)
   })
 
+  it("an unmounted section view whose lines the replacement dropped re-reads them on remount", async () => {
+    const { core, fake } = harness()
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    const handle = core.view(section(1))
+    const first = watch(handle)
+    await settle()
+    expect(linesOf(core, 1)?.scope).toBe("unknown")
+    // Вигляд живий (gcTime), але без слухача: перечитування заміни його
+    // не бере.
+    first.unsubscribe()
+    await settle()
+    grant(fake, snapshotOf([readRow(S), readRow(T)], [S, T, CONTAINER]))
+    core.requestRights()
+    await settle()
+    expect(linesOf(core, 1)).toBeUndefined()
+    const reads = fake.log.filter(isSection).length
+    watch(core.view(section(1)))
+    await settle()
+    expect(fake.log.filter(isSection)).toHaveLength(reads + 1)
+    expect(linesOf(core, 1)?.lines).toHaveLength(1)
+  })
+
   it("drops lines of an owner without a header when the replacement repeats a snapshot that denies its pair", async () => {
     const { core, fake } = harness({ mode: "manual" })
     await firstSnapshot(core)
