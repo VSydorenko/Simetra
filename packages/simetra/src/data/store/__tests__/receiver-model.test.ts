@@ -33,11 +33,15 @@ import {
  *
  * Оракул безпеки — правда фейкового сервера. Правка утримуваного каналу між
  * `fail` і `join` «втрачена». Правка, поки канал не утримується, «без
- * нагляду»: рядок такого каналу свіжий на мить свого читання. На повторній
- * підписці правки й видалення без нагляду стають втраченими одразу, а
- * створення — щойно осяде перша хвиля підписки (вікно активації §8.4,
- * обмежене часом моделі, без стану ядра); невидимий вигляд має тоді чесне
- * `needsRefresh`. Рядок без `stale`, показаний `synced`, має версію не нижчу за
+ * нагляду»: рядок такого каналу свіжий на мить свого читання. Повторна
+ * підписка каналу з записом (R-c; запис модель визначає зі своєї правди —
+ * у мить відпускання підписаний вигляд показував рядок скоупу, а відписок
+ * відтоді не було) робить усі правки без нагляду втраченими одразу. Без
+ * запису — вікно активації (§8.4): створення, правки й видалення без нагляду
+ * не судяться, доки не осяде перша хвиля підписки (межа — час моделі й
+ * події фейків, без стану ядра); після нього старе значення без `stale` чи
+ * пропущене створення дозволене лише невидимому вигляду з `needsRefresh`.
+ * Рядок без `stale`, показаний `synced`, має версію не нижчу за
  * кожну втрачену правку свого ключа й не показує втраченого видалення; повний
  * вигляд без `staleComposition` або показує втрачене створення, або має
  * `hasNewRows`.
@@ -230,12 +234,18 @@ async function run(steps: readonly Step[]): Promise<void> {
   )
   // Видимість кожного вигляду за моделлю; підписаний знову вигляд її бере.
   const visible: boolean[] = handles.map(() => true)
+  // Запис відпущеного каналу (R-c) — за правдою моделі: у мить відпускання
+  // підписаний вигляд показує рядок цього скоупу, тож сховище тримає рядок
+  // каналу, а без відписок він там і лишається. Будь-яка відписка скидає
+  // впевненість (обережно: тоді — вікно активації).
+  const entrySure = CHANNELS.map(() => false)
   const sub = (v: number) => {
     if (offs[v] !== undefined) return
     offs[v] = handles[v]!.subscribe(() => {})
     h.core.setVisible(specs[v]!, visible[v]!)
   }
   const unsub = (v: number) => {
+    if (offs[v] !== undefined) entrySure.fill(false)
     offs[v]?.()
     offs[v] = undefined
   }
@@ -323,9 +333,23 @@ async function run(steps: readonly Step[]): Promise<void> {
       const now = transport.subscribed().has(channel)
       if (held[ch] === now) continue
       held[ch] = now
-      if (!now) continue
+      if (!now) {
+        entrySure[ch] = handles.some(
+          (handle, v) =>
+            offs[v] !== undefined &&
+            handle
+              .getSnapshot()
+              .rows.some(
+                (r) => r.state !== "removed" && scopeOfKey.get(r.key) === ch
+              )
+        )
+        continue
+      }
+      // З записом — приєднання після розриву (R-c): правки без нагляду
+      // втрачені одразу; без запису — вікно активації до першої хвилі.
       for (const [k, u] of unwatched[ch]!)
-        pending.push({ k, version: u.version, op: u.op, at: clock })
+        if (entrySure[ch]) loseInto(k, u.version, u.op)
+        else pending.push({ k, version: u.version, op: u.op, at: clock })
       unwatched[ch]!.clear()
       // Справжній транспорт дає `onSubscribed` після підписки.
       live[ch] = true
