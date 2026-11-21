@@ -12,7 +12,7 @@ import {
   tenantBoundary,
   usersBoundary,
 } from "../access-units"
-import { rightsCheck, rightsCheckPredicates } from "../catalog-command/rights-check"
+import { rightsCheck } from "../catalog-command/rights-check"
 import { bodyRequires } from "../catalog-command/units"
 import {
   mainTableOf,
@@ -149,7 +149,7 @@ function rowBranch(
     ),
     publicRead
       ? `(${publicReadUsing(must(access), hasSessionUser(input.contracts, input.provider))})`
-      : `(${rightsCheckPredicates(contract, action, main, ROW, dmlOf(action))[0] ?? "false"})`,
+      : `(${rightsCheck(contract, action, main, ROW, dmlOf(action))})`,
   ]
   return `EXISTS (SELECT 1 FROM ${qualified(contract.table)} ${ROW} WHERE ${where.join(" AND ")})`
 }
