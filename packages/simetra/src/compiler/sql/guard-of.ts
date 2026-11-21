@@ -57,8 +57,7 @@ function guardCall(query: string, parse: SqlParser): Json | undefined {
     return undefined
   const call = asRecord(asRecord(target.val)?.FuncCall)
   return call !== undefined &&
-    onlyKeys(call, ["funcname", "args", "funcformat", "location"]) &&
-    call.funcformat === "COERCE_EXPLICIT_CALL"
+    onlyKeys(call, ["funcname", "args", "funcformat", "location"])
     ? call
     : undefined
 }
