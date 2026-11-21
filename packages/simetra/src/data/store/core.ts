@@ -513,6 +513,7 @@ export function createCore(options: {
             : { type: "rights", known: sentRights.known }
         rightsFirstSent = true
         rightsFlying = true
+        rightsSentAt = now()
         rightsSent = sentRights
         try {
           answered = await batcher.read(forward)
@@ -521,6 +522,9 @@ export function createCore(options: {
           throw error
         } finally {
           rightsFlying = false
+          // Відповідь без заміни знімка нічого не комітить: строк, що повернувся
+          // після польоту, планувальнику треба показати самому.
+          scheduler.request()
           if (rightsTail) {
             rightsTail = false
             core.requestRights()
@@ -546,6 +550,9 @@ export function createCore(options: {
   let rightsFirstSent = false
   let rightsFlying = false
   let rightsTail = false
+  // Мить ВІДПРАВКИ останньої частини `rights` (Р2): від неї рахується строк
+  // знімка; поки частина в польоті, строку немає.
+  let rightsSentAt: number | undefined
   let rightsSent:
     | { token: GenerationToken; epoch: number; known: string | undefined }
     | undefined
@@ -1292,7 +1299,20 @@ export function createCore(options: {
       const at = nextViewDue(writerContext, o.name)
       if (at !== undefined && (due === undefined || at < due)) due = at
     }
+    const rightsAt = rightsDueAt()
+    if (rightsAt !== undefined && (due === undefined || rightsAt < due))
+      due = rightsAt
     return due
+  }
+
+  // Строк знімка прав (Р2): `rightsAt + I` лише на видимій вкладці, коли
+  // частина не летить (інакше прострочений строк давав би такти з таймером
+  // 0 мс) і сховище не порожнє.
+  function rightsDueAt(): number | undefined {
+    if (!rightsEnabled || !visible || rightsFlying) return undefined
+    if (rightsSentAt === undefined) return undefined
+    if (![...objects.values()].some((o) => o.rows.size > 0)) return undefined
+    return rightsSentAt + limits.revalidateIntervalMs
   }
   let lastTickAt: number | undefined
   // Один таймер на ядро (§6.7). Такт — звірка з вікном `0,1 × I`, але без
@@ -1322,7 +1342,13 @@ export function createCore(options: {
           read = true
       if (runDue()) read = true
       if (read) lastTickAt = now()
-      reconcile({ minAgeMs }, undefined, [])
+      // Знімок має власний строк; без видимих виглядів пакет несе лише його.
+      const rightsAt = rightsDueAt()
+      reconcile(
+        { minAgeMs },
+        undefined,
+        rightsAt !== undefined && rightsAt <= now() ? ["rights"] : []
+      )
     },
     defects,
   })
@@ -1444,7 +1470,7 @@ export function createCore(options: {
       })
   }
 
-  type ServicePart = "version"
+  type ServicePart = "version" | "rights"
 
   // Звірка (§6.7): версія каталогу й перечитування видимих виглядів живих
   // об'єктів. Усе синхронно, без `await` між об'єктами, тож збирач пакета
@@ -1452,11 +1478,12 @@ export function createCore(options: {
   function reconcile(
     reconcileOptions: { minAgeMs?: number } = {},
     snapshotViews?: ReadonlySet<Subset>,
-    // Склад службових частин (Р8): `endHydration` і `resume()` шлють
-    // `version`, такт інтервалу — жодної.
-    services: readonly ServicePart[] = ["version"]
+    // Склад службових частин (Р2): `endHydration` і `resume()` шлють
+    // `version` і `rights`, такт — `rights`, коли настав строк знімка.
+    services: readonly ServicePart[] = ["version", "rights"]
   ) {
     if (services.includes("version")) core.requestVersion()
+    if (services.includes("rights")) core.requestRights()
     for (const o of objects.values()) {
       // Несумісний об'єкт не читається (§10): перечитування перевело б його
       // вигляди в `error` замість показати `isStale`.

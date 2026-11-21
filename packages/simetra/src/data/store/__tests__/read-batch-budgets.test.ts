@@ -10,7 +10,14 @@ import {
   type Key,
   type ViewSpec,
 } from "../types"
-import { VERSION_BOUND, VERSION_PART_BYTES, bodyBound } from "./body-bound"
+import {
+  RIGHTS_CONFIRMED_BYTES,
+  RIGHTS_PART_BYTES,
+  RIGHTS_KNOWN_PART_BYTES,
+  VERSION_BOUND,
+  VERSION_PART_BYTES,
+  bodyBound,
+} from "./body-bound"
 import {
   ORG,
   TASK,
@@ -102,19 +109,29 @@ function counted(fake: FakeSource, from: number): Counted[] {
   })
   return fake.requests.slice(from).map((parts, i) => {
     const reads = fake.log.filter((r) => r.request === from + i)
-    const hasVersion = parts > reads.length
+    const rights = fake.rightsLog.filter((r) => r.request === from + i)
+    const hasVersion = parts > reads.length + rights.length
     return {
       parts,
       hasVersion,
       body:
         (hasVersion ? VERSION_PART_BYTES : 0) +
+        rights.reduce(
+          (sum, r) =>
+            sum +
+            (r.known === undefined
+              ? RIGHTS_PART_BYTES
+              : RIGHTS_KNOWN_PART_BYTES),
+          0
+        ) +
         reads.reduce(
           (sum, r) => sum + jsonBytes({ ...r.wire, known: r.known }),
           0
         ),
-      bound: bodyBound(fake, reads, hasVersion),
+      bound: bodyBound(fake, reads, hasVersion, rights),
       response:
         (hasVersion ? versionBytes : 0) +
+        rights.reduce((sum, r) => sum + jsonBytes(r.response), 0) +
         reads.reduce((sum, r) => sum + jsonBytes(r.response), 0),
     }
   })
@@ -497,5 +514,97 @@ describe("the interval tick", () => {
     h.core.suspend()
     const from = await tick(h, 10)
     expect(h.fake.requests.length - from).toBe(0)
+  })
+})
+
+describe("the rights part of the service points", () => {
+  const I = DEFAULT_CORE_LIMITS.revalidateIntervalMs
+  const MIN = DEFAULT_CORE_LIMITS.resumeMinIntervalMs
+  const V1 = "1".repeat(64)
+
+  const open = async () => {
+    const h = setup({
+      objects: [task, org],
+      now: () => Date.now(),
+      rightsSnapshot: true,
+    })
+    seedWithOrgs(h.fake, ROWS)
+    h.fake.epoch = EA
+    h.fake.rightsVersion = V1
+    watch(h.core.view(LIST))
+    await settle()
+    return h
+  }
+
+  /** The `rights` parts of the requests from `from` on: Р11, no snapshot back. */
+  const expectConfirmed = (fake: FakeSource, from: number) => {
+    const parts = fake.rightsLog.filter((r) => r.request >= from)
+    expect(parts).toHaveLength(1)
+    expect(parts[0]!.known).toBe(V1)
+    expect(parts[0]!.response).toEqual({ rightsVersion: V1 })
+    expect(jsonBytes(parts[0]!.response)).toBeLessThanOrEqual(
+      RIGHTS_CONFIRMED_BYTES
+    )
+  }
+
+  it("the first packet is one request with the rights part without known", async () => {
+    const h = await open()
+    const requests = counted(h.fake, 0)
+    expect(requests).toHaveLength(1)
+    expect(h.fake.rightsLog.map((r) => r.known)).toEqual([undefined])
+    expectBodyBudget(requests)
+  })
+
+  it("resume() before the minimum interval is one request: version and rights with known, no jsonBytes of the snapshot", async () => {
+    const h = await open()
+    vi.advanceTimersByTime(1000)
+    const from = h.fake.requests.length
+    h.core.resume()
+    await settle()
+    const requests = counted(h.fake, from)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.parts).toBe(2)
+    expect(requests[0]!.hasVersion).toBe(true)
+    expectConfirmed(h.fake, from)
+    // Версія каталогу (§12) і відповідь `rights` без знімка: 128 Б.
+    expect(requests[0]!.response).toBeLessThanOrEqual(
+      VERSION_BOUND(2) + RIGHTS_CONFIRMED_BYTES
+    )
+    expectBodyBudget(requests)
+  })
+
+  it("resume() after the minimum interval with nothing changed is one request within 8 B x rows + 2 KiB + 128 B", async () => {
+    const h = await open()
+    vi.advanceTimersByTime(MIN + 1)
+    const from = h.fake.requests.length
+    h.core.resume()
+    await settle()
+    const requests = counted(h.fake, from)
+    expect(requests).toHaveLength(1)
+    expectConfirmed(h.fake, from)
+    expect(requests[0]!.response).toBeLessThanOrEqual(
+      8 * 2 * ROWS + 2048 + VERSION_BOUND(2) + RIGHTS_CONFIRMED_BYTES
+    )
+    expectBodyBudget(requests)
+  })
+
+  it("the interval tick with nothing changed is one request within 8 B x rows + 2 KiB, the rights marker included", async () => {
+    const h = await open()
+    const from = h.fake.requests.length
+    await vi.advanceTimersByTimeAsync(I)
+    await settle()
+    const requests = counted(h.fake, from)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.hasVersion).toBe(false)
+    expectConfirmed(h.fake, from)
+    expect(requests[0]!.response).toBeLessThanOrEqual(
+      8 * 2 * ROWS + 2048 + RIGHTS_CONFIRMED_BYTES
+    )
+    expectBodyBudget(requests)
+  })
+
+  it("the body formula counts the rights part with and without known", () => {
+    expect(RIGHTS_PART_BYTES).toBe(jsonBytes({ type: "rights" }))
+    expect(RIGHTS_KNOWN_PART_BYTES).toBe(RIGHTS_PART_BYTES + 1 + 8 + 66)
   })
 })

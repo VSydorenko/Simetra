@@ -144,6 +144,12 @@ export interface FakeSource {
   releaseRights(): void
   /** The `known` of every `rights` part received, in order (`undefined` — none sent). */
   readonly rightsReads: readonly (string | undefined)[]
+  /** The `rights` parts received: the request index, `known` and the answer. */
+  readonly rightsLog: readonly {
+    request: number
+    known: string | undefined
+    response?: unknown
+  }[]
   /** The number of parts of every request received, in order. */
   readonly requests: readonly number[]
   /** Server clock: the moment of the last change; versions come from it. */
@@ -545,6 +551,11 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
   }
 
   const rightsReads: (string | undefined)[] = []
+  const rightsLog: {
+    request: number
+    known: string | undefined
+    response?: unknown
+  }[] = []
   const heldRights: Array<() => void> = []
   const adapter: ServerFunctionAdapter = {
     capabilities: { include: true },
@@ -583,6 +594,11 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
           }
           if (item.type === "rights") {
             rightsReads.push(item.known)
+            const logged: (typeof rightsLog)[number] = {
+              request,
+              known: item.known,
+            }
+            rightsLog.push(logged)
             const answer = () => {
               const error = fake.rightsError
               slots[slot] =
@@ -598,6 +614,9 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
                               snapshot: fake.rightsSnapshot,
                             },
                     }
+              logged.response = slots[slot]!.ok
+                ? (slots[slot] as { value: unknown }).value
+                : undefined
               settle()
             }
             if (fake.holdRights) heldRights.push(answer)
@@ -685,6 +704,9 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
     holdRights: false,
     releaseRights() {
       for (const answer of heldRights.splice(0)) answer()
+    },
+    get rightsLog() {
+      return rightsLog
     },
     get rightsReads() {
       return rightsReads
