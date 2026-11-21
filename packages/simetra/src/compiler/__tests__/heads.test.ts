@@ -619,6 +619,35 @@ function judged(sql: string) {
   return judgeHandler(unit, scope).findings.map((f) => [f.construct, f.detail])
 }
 
+// І7 (спека декларацій функцій §5.2): задекларована функція з `check` завжди
+// plpgsql (запобіжник — перший `PERFORM`), тож у ланцюзі голови її відмовляє
+// межа мови, ще до довіри до викликів. Мутація: пропустити plpgsql-ланки голів.
+describe("judgeHandler: a link that is a declared function with check", () => {
+  it("a handler calling it is refused for the guard call", async () => {
+    const result = await compiledPolicyDomain({
+      [COUNT_COMMENT_SQL_FILE]: handler("PERFORM public.link(NEW.id);"),
+      [SHARED]: `CREATE FUNCTION public.link(p_row uuid) RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER ${EMPTY_PATH} AS $$ BEGIN PERFORM simetra.rights_require('read', 'task', p_row); END $$;\n`,
+      "sql/public/shared.functions.json": JSON.stringify({
+        functions: [
+          {
+            id: uuid(7903),
+            function: { name: "link" },
+            callers: ["user"],
+            check: {
+              action: "read",
+              object: { kind: "Document", name: "Task" },
+              row: "p_row",
+            },
+          },
+        ],
+      }),
+    })
+    expect(errors(result.diagnostics)).toEqual([
+      found("language", undefined, HANDLER, "public.link"),
+    ])
+  })
+})
+
 describe("judgeHandler: Rule 2 — a handler only checks", () => {
   const handlerErrors = (body: string, layers: Layer[] = [], extra = "") =>
     headErrors(
