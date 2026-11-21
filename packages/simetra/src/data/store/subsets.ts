@@ -845,15 +845,15 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
 
   // Об'єкт каналу — з топіка, один розбір на канал.
   const channelObjects = new Map<string, string | undefined>()
-  // Склад вигляду після розриву (§8.4): кожен канал його об'єкта з записом у
-  // регістрах доведено читанням, що успішно осіло й почалось не раніше
-  // приєднання після останнього розриву. Похідна від епох, без власного стану.
+  // Склад вигляду після розриву (§8.4): кожен утримуваний канал його об'єкта
+  // доведено читанням, що успішно осіло й почалось не раніше приєднання після
+  // останнього розриву. Похідна від епох, без власного стану.
   function staleComposition(s: Subset): boolean {
     const { epochs } = session
     if (!epochs.gapped()) return false
     const id = s.form.object.entry.id
     const read = s.okReadEpoch ?? -1
-    for (const channel of epochs.channels()) {
+    for (const channel of epochs.heldChannels()) {
       let object = channelObjects.get(channel)
       if (object === undefined && !channelObjects.has(channel)) {
         object = changesObjectOf(channel)

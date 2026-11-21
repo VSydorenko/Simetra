@@ -107,6 +107,7 @@ describe("computeRowView with an own mutation", () => {
 
   it("a gap mark under failed shows stale; a read after the join lifts it", () => {
     const h = stored()
+    h.session.epochs.hold("c1")
     h.write((s) => h.store.markDisconnected(s, () => "c1"))
     expect(
       computeRowView(K1, h.store.get(K1)!, [], undefined, failed)

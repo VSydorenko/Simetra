@@ -40,6 +40,13 @@ const U = "00000000-0000-4000-8000-0000000000b3"
 const channelOf = channelOfEntry(catalogEntry())
 const chOf = (scope: string) => channelOf({ scope } as RowEntry)
 // Розрив, як у `Writer.markDisconnected`: регістр каналу, потім позначки.
+// Утримувані канали S і T: розрив і приєднання бувають лише в них.
+const held = (options: Parameters<typeof harness>[0] = {}) => {
+  const h = harness(options)
+  h.session.epochs.hold(chOf(S))
+  h.session.epochs.hold(chOf(T))
+  return h
+}
 const gap = (h: Harness, channel?: string) => {
   h.session.epochs.gap(channel)
   h.write((s) => h.store.markDisconnected(s, channelOf, channel))
@@ -743,7 +750,7 @@ describe("ObjectStore stale marks", () => {
   })
 
   it("disconnect is lifted only by a read started at or after the channel's join", () => {
-    const h = harness()
+    const h = held()
     put(h, row(K1, 1, { org: S }))
     put(h, row(K2, 1, { org: T }))
     gap(h)
@@ -759,7 +766,7 @@ describe("ObjectStore stale marks", () => {
   })
 
   it("a join older than the mark does not lift it", () => {
-    const h = harness()
+    const h = held()
     put(h, row(K1, 1, { org: S }))
     h.session.epochs.join(chOf(S))
     gap(h, chOf(S))
@@ -768,7 +775,7 @@ describe("ObjectStore stale marks", () => {
   })
 
   it("a row written by a read in a gap is marked with the gap and lifted after the join", () => {
-    const h = harness()
+    const h = held()
     h.session.epochs.join(chOf(S))
     gap(h, chOf(S))
     put(h, row(K1, 1, { org: S }))
@@ -784,7 +791,7 @@ describe("ObjectStore stale marks", () => {
   })
 
   it("a moved row keeps the mark of its old channel until that channel joins", () => {
-    const h = harness()
+    const h = held()
     put(h, row(K1, 1, { org: S }))
     gap(h)
     h.session.epochs.join(chOf(T))
@@ -798,7 +805,7 @@ describe("ObjectStore stale marks", () => {
   // Запис старого каналу рядок, що переїхав, перевіряє лише правилом 2
   // (§8.4): власний канал рядка тут доведено, тож його перевірка не затуляє.
   it("an old-channel mark of a moved row is not lifted by a read started before that channel's join", () => {
-    const h = harness()
+    const h = held()
     put(h, row(K1, 1, { org: S }))
     gap(h, chOf(S))
     const beforeJoin = h.now()
@@ -810,7 +817,7 @@ describe("ObjectStore stale marks", () => {
   })
 
   it("an old-channel mark of a moved row is not lifted by a join older than the mark", () => {
-    const h = harness()
+    const h = held()
     h.session.epochs.join(chOf(S))
     put(h, row(K1, 1, { org: S }))
     gap(h, chOf(S))
@@ -818,8 +825,32 @@ describe("ObjectStore stale marks", () => {
     expect([...h.store.get(K1)!.stale.disconnect!.keys()]).toEqual([chOf(S)])
   })
 
-  it("markDisconnected with a channel marks only rows of that channel", () => {
+  it("a channel not held gets no gap: its rows stay unmarked, also when read after a connection gap", () => {
     const h = harness()
+    h.session.epochs.hold(chOf(S))
+    put(h, row(K1, 1, { org: S }))
+    put(h, row(K2, 1, { org: T }))
+    gap(h)
+    expect(h.store.get(K1)?.stale.disconnect).toBeDefined()
+    expect(h.store.get(K2)?.stale.disconnect).toBeUndefined()
+    put(h, row(K2, 2, { org: T }))
+    expect(h.store.get(K2)?.stale.disconnect).toBeUndefined()
+  })
+
+  it("a mark of a released channel is lifted by a read started at or after the release", () => {
+    const h = held()
+    put(h, row(K1, 1, { org: S }))
+    gap(h, chOf(S))
+    const beforeRelease = h.now()
+    h.session.epochs.release(chOf(S))
+    put(h, row(K1, 1, { org: S }), beforeRelease)
+    expect(h.store.get(K1)?.stale.disconnect).toBeDefined()
+    put(h, row(K1, 1, { org: S }))
+    expect(h.store.get(K1)?.stale.disconnect).toBeUndefined()
+  })
+
+  it("markDisconnected with a channel marks only rows of that channel", () => {
+    const h = held()
     put(h, row(K1, 1, { org: S }))
     put(h, row(K2, 1, { org: T }))
     h.write((s) => h.store.markDisconnected(s, channelOf, chOf(T)))
@@ -828,7 +859,7 @@ describe("ObjectStore stale marks", () => {
   })
 
   it("every mark takes a new epoch", () => {
-    const h = harness({ limits: { seenMax: 1 } })
+    const h = held({ limits: { seenMax: 1 } })
     put(h, row(K1, 1))
     let before = h.now()
     h.write((s) => h.store.markStale(s, [K1], 5))

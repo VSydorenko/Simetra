@@ -13,7 +13,7 @@ import {
 import { differentEpochs, keyId, pairId } from "./epoch"
 import { evaluateFilter, fieldInfoOf } from "./filter"
 import type { ObjectState } from "./forms"
-import { scopeOf, visibleRow, type RowEntry } from "./object-store"
+import { channelOf, scopeOf, visibleRow, type RowEntry } from "./object-store"
 import { canSubscribe } from "./rights"
 import { ReadLimiterClosed, readKeys, tracked } from "./source"
 import type {
@@ -347,9 +347,12 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     // скидає й незакриту пачку пари через `purged`. Рядки розриву каналу
     // прибирає той самий `purge`: окремого зняття позначок немає, тож і кадру
     // з ними як свіжими.
-    const pair = pairOf(error.channel)
-    if (pair !== undefined)
-      ctx.commit((w) => w.purge(pair.object, { scope: pair.scope }), token)
+    const channel = error.channel
+    const pair = pairOf(channel)
+    ctx.commit((w) => {
+      if (pair !== undefined) w.purge(pair.object, { scope: pair.scope })
+      w.releaseChannel(channel)
+    }, token)
   }
 
   // Канал (пере)підписано — з `recovered` чи без, зокрема тихе повторне
@@ -763,9 +766,25 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     for (const args of again) scheduleRetry(...args)
   }
 
+  // Відпущений канал тримає епоху відпускання, лише поки в сховищі є його
+  // рядки: без них забувається, і регістри не ростуть (перевірка — на такті,
+  // а не на кожному `commit`).
+  const forgetReleased = () => {
+    const { epochs } = session
+    for (const channel of [...epochs.released()]) {
+      const pair = pairOf(channel)
+      const o = pair === undefined ? undefined : writer.objectOf(pair.object)
+      if (o === undefined || !o.rows.holdsChannel(channelOf(o.entry), channel))
+        epochs.forget(channel)
+    }
+  }
+
   const join = (channel: string) => {
     const slot: Held = { off: undefined }
     held.set(channel, slot)
+    // Утримання — до підписки: розрив з'єднання до першого `onSubscribed`
+    // уже стосується каналу.
+    ctx.commit((w) => w.holdChannel(channel), token)
     const off = transport.subscribe([channel], onSignal, onError)
     if (held.get(channel) === slot) slot.off = off
     else off()
@@ -778,8 +797,9 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     for (const [channel, slot] of [...held]) {
       if (next.has(channel)) continue
       held.delete(channel)
-      // Позначок канал не знімає: рядок може жити ціллю `include` іншого
-      // вигляду, а знімає їх лише читання після приєднання.
+      // Позначок відпускання не знімає: рядок, що лишився ціллю `include`,
+      // доводить читання після відпускання.
+      ctx.commit((w) => w.releaseChannel(channel), token)
       slot.off?.()
     }
     for (const channel of next)
@@ -796,6 +816,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     touch,
     tick() {
       if (stopped || !token.valid) return
+      forgetReleased()
       const oldest = marks.oldest()
       if (oldest === undefined) return
       const entry: CoreLogEntry = {

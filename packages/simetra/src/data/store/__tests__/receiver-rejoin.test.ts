@@ -823,7 +823,7 @@ describe("the disconnect mark and the composition on session epochs", () => {
     expect(h.handle.getSnapshot().staleComposition).toBe(true)
   })
 
-  it("does not lift the marks of a channel that is unsubscribed while its row stays an include target", async () => {
+  it("an unsubscribed channel keeps the mark of an include target until a read after the release", async () => {
     const h = harness()
     h.fake.rightsSnapshot = {
       ...h.fake.rightsSnapshot!,
@@ -858,8 +858,158 @@ describe("the disconnect mark and the composition on session epochs", () => {
     await advance(1_000)
     expect(h.transport.subscribed().has(orgChannel)).toBe(false)
     expect(target()).toBe("stale")
-    // Пізніше читання цілі каналу без приєднання її не доводить.
+    // Відпущений канал сигналів не чекає: читання цілі після відпускання
+    // доводить її на свою мить (такт інтервалу перечитує вигляд з цілями).
     await advance(60_000)
-    expect(target()).toBe("stale")
+    expect(target()).toBe("synced")
+  })
+})
+
+describe("held and released channels (liveness, R-a…R-c)", () => {
+  const S2 = scopeN(2)
+  const rightsOf = (scopeSets: readonly string[], reads = scopeSets) => ({
+    userId: USER,
+    scopeSets: scopeSets.map((scope) => ({ scopeKind: SCOPE_KIND_ID, scope })),
+    rights: reads.map(read),
+    members: [],
+    dimensionValues: [],
+  })
+  let version = 2
+  const replaceRights = async (
+    h: Opened,
+    scopeSets: readonly string[],
+    reads?: readonly string[]
+  ) => {
+    h.fake.rightsSnapshot = rightsOf(scopeSets, reads)
+    h.fake.rightsVersion = String(version++ % 10).repeat(64)
+    h.core.requestRights()
+    await settle()
+    await advance(1_000)
+  }
+  const withOrgTarget = async () => {
+    const h = harness()
+    h.fake.rightsSnapshot = {
+      ...h.fake.rightsSnapshot!,
+      rights: [
+        ...h.fake.rightsSnapshot!.rights,
+        { ...read(S), object: "organization" },
+      ],
+    }
+    return h
+  }
+
+  it("A: a channel dropped by a rights replacement does not keep the composition unconfirmed after a connection gap", async () => {
+    const h = await open(full, 3, [S, S2])
+    const dropped = channelOf(S2)
+    h.transport.join(channel, false)
+    h.transport.join(dropped, false)
+    await advance(REJOIN_JITTER_MS)
+    await replaceRights(h, [S])
+    expect(h.transport.subscribed().has(dropped)).toBe(false)
+    h.transport.fail({ kind: "transport" })
+    await settle()
+    expect(h.handle.getSnapshot().staleComposition).toBe(true)
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    expect(states(h)).toEqual(["synced", "synced", "synced"])
+    expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
+  })
+
+  it("A2: a gap of a channel that is then dropped does not stick the composition", async () => {
+    const h = await open(full, 3, [S, S2])
+    const dropped = channelOf(S2)
+    h.transport.join(channel, false)
+    h.transport.join(dropped, false)
+    await advance(REJOIN_JITTER_MS)
+    h.transport.fail({ kind: "transport", channel: dropped })
+    await settle()
+    expect(h.handle.getSnapshot().staleComposition).toBe(true)
+    await replaceRights(h, [S])
+    expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
+    expect(states(h)).toEqual(["synced", "synced", "synced"])
+  })
+
+  it("B: a connection gap does not mark an include target of an object the receiver holds no channel for", async () => {
+    const h = await withOrgTarget()
+    h.fake.insert(ORG, { ref: S })
+    h.fake.insert(TASK, taskValues(1, { org: S }))
+    const tasks = h.core.view({ kind: "full", object: TASK, include: ["org"] })
+    tasks.subscribe(() => {})
+    await settle()
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    const target = () => {
+      const row = tasks.getSnapshot().rows[0]
+      return row?.state === "removed" ? undefined : row?.refs?.org?.state
+    }
+    h.transport.fail({ kind: "transport" })
+    await settle()
+    expect(target()).toBe("synced")
+    expect(tasks.getSnapshot().rows[0]?.state).toBe("stale")
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    expect(target()).toBe("synced")
+    expect(tasks.getSnapshot().rows[0]?.state).toBe("synced")
+  })
+
+  it("B2: an include target first read after a connection gap is not marked", async () => {
+    const h = await withOrgTarget()
+    h.fake.insert(TASK, taskValues(1, {}))
+    const tasks = h.core.view({ kind: "full", object: TASK, include: ["org"] })
+    tasks.subscribe(() => {})
+    await settle()
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    h.transport.fail({ kind: "transport" })
+    await settle()
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    h.fake.insert(ORG, { ref: S })
+    h.fake.insert(TASK, taskValues(2, { org: S }))
+    tasks.showNew()
+    await settle()
+    const rows = tasks.getSnapshot().rows
+    expect(
+      rows.map((r) => (r.state === "removed" ? null : r.refs?.org?.state))
+    ).not.toContain("stale")
+  })
+
+  it("C: a connection gap before the first onSubscribed counts for the held channel", async () => {
+    const h = await open(keysView(key(1)))
+    h.transport.fail({ kind: "transport" })
+    await settle()
+    expect(states(h)).toEqual(["stale"])
+    expect(h.handle.getSnapshot().staleComposition).toBe(true)
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    expect(states(h)).toEqual(["synced"])
+    expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
+  })
+
+  it("D: unsubscribe, an edit, resubscribe — the stored row is not shown synced with the old value", async () => {
+    // Читання лишається, канал знімає лише перелік скоупів.
+    const h = await open(keysView(key(1)), 3, [S])
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    h.core.setVisible(keysView(key(1)), false)
+    await replaceRights(h, [S2], [S, S2])
+    expect(h.transport.subscribed().has(channel)).toBe(false)
+    expect(states(h)).toEqual(["synced"])
+    h.fake.edit(TASK, key(1), { title: "missed" })
+    await replaceRights(h, [S], [S, S2])
+    expect(h.transport.subscribed().has(channel)).toBe(true)
+    expect(states(h)).toEqual(["stale"])
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    // Невидимий вигляд хвиля не читає: позначка лишається, не старе значення.
+    expect(states(h)).toEqual(["stale"])
+    h.core.setVisible(keysView(key(1)), true)
+    await advance(0)
+    await h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    expect(h.handle.getSnapshot().rows[0]).toMatchObject({
+      state: "synced",
+      values: { title: "missed" },
+    })
   })
 })

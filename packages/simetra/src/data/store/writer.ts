@@ -259,6 +259,12 @@ function removeKeys(
 export function createWriter(ctx: WriterContext, scope: Scope): Writer {
   const { ops, rowViews } = ctx
 
+  const objectOfChannel = (channel: string): ObjectState | undefined => {
+    const id = changesObjectOf(channel)
+    for (const o of ctx.objects.values()) if (o.entry.id === id) return o
+    return undefined
+  }
+
   function touchMarked(o: ObjectState, marked: (e: RowEntry) => boolean) {
     for (const key of o.rows.keys()) {
       if (marked(o.rows.get(key)!)) rowViews.touch(o.name, key)
@@ -386,6 +392,31 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
         // вигляд рядків для `touch` не має.
         for (const s of subsetsOf(ctx, o)) s.dirty = true
       }
+    },
+
+    holdChannel(channel) {
+      scope.assert()
+      const at = ctx.session.epochs.hold(channel)
+      const o = objectOfChannel(channel)
+      if (at === undefined || o === undefined) return
+      // Відпущений канал, рядки якого лишились у сховищі, приєднується після
+      // розриву: правки між відпусканням і підпискою сигналу не мали.
+      const of = channelOf(o.entry)
+      o.rows.markChannel(scope, of, channel, at)
+      touchMarked(o, (e) => of(e) === channel)
+      for (const s of subsetsOf(ctx, o)) s.dirty = true
+    },
+
+    releaseChannel(channel) {
+      scope.assert()
+      const { epochs } = ctx.session
+      epochs.release(channel)
+      const o = objectOfChannel(channel)
+      if (o === undefined) return epochs.forget(channel)
+      // Вигляд судять лише утримувані канали: відпущений перестає його судити.
+      for (const s of subsetsOf(ctx, o)) s.dirty = true
+      if (!o.rows.holdsChannel(channelOf(o.entry), channel))
+        epochs.forget(channel)
     },
 
     markViews(object, flags, spec) {

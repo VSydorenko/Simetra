@@ -252,11 +252,27 @@ export interface ObjectStore {
    */
   purgeScope(scope: Scope, scopeId: string | null): Key[]
   markStale(scope: Scope, keys: readonly Key[], minVersion: number): void
+  /**
+   * Marks rows of held channels — of `channel` only when given — with a gap
+   * at a fresh epoch each (P4-B spec §8.4).
+   */
   markDisconnected(
     scope: Scope,
     channelOf: (e: RowEntry) => string,
     channel?: string
   ): void
+  /**
+   * Marks the rows of `channel` with the gap `at` of a released channel that
+   * is held again (never lowering a newer mark).
+   */
+  markChannel(
+    scope: Scope,
+    channelOf: (e: RowEntry) => string,
+    channel: string,
+    at: number
+  ): void
+  /** The store holds a row (a removed slot too) of `channel`. */
+  holdsChannel(channelOf: (e: RowEntry) => string, channel: string): boolean
   /**
    * Adds an owner to an existing entry; a key without an entry gets nothing.
    * Callers own a key only after its `put` was accepted.
@@ -414,21 +430,20 @@ export function createObjectStore(options: {
     markChannels(e, readEpoch)
   }
 
-  // «Розрив» за відповіддю (§8.4): запис каналу знімає лише читання, що
-  // почалось не раніше приєднання після позначки. Рядок, записаний читанням,
-  // якого власний канал не доводить (канал у розриві чи читання до
-  // приєднання), дістає позначку останнього розриву каналу: її зніме перше
-  // читання після наступного приєднання.
+  // «Розрив» за відповіддю (§8.4): запис утримуваного каналу знімає лише
+  // читання, що почалось не раніше приєднання після позначки, запис
+  // відпущеного — читання після відпускання (сигналів він не чекає). Рядок,
+  // записаний читанням, якого власний утримуваний канал не доводить (канал у
+  // розриві чи читання до приєднання), дістає позначку останнього розриву
+  // каналу: її зніме перше читання після наступного приєднання.
   function markChannels(e: RowEntry, readEpoch: number) {
     // Об'єкт без сигналів каналу не має: розриву в нього не буває.
     if (!entry.signal) return
     const marks = e.stale.disconnect
     if (marks === undefined && !epochs.gapped()) return
     if (marks !== undefined)
-      for (const [channel, at] of marks) {
-        const join = epochs.joinAt(channel)
-        if (join > at && readEpoch >= join) marks.delete(channel)
-      }
+      for (const [channel, at] of marks)
+        if (epochs.liftsMark(channel, at, readEpoch)) marks.delete(channel)
     const own = rowChannel(e)
     if (!epochs.channelProven(own, readEpoch)) {
       const held = marks ?? new Map<string, number>()
@@ -876,10 +891,28 @@ export function createObjectStore(options: {
       for (const e of rows.values()) {
         const own = channelOf(e)
         if (channel !== undefined && own !== channel) continue
+        // Канал, якого приймач не тримає, сигналів не чекає: розриву в нього
+        // немає (рядок — ціль `include` об'єкта без власного вигляду).
+        if (!epochs.held(own)) continue
         const marks = e.stale.disconnect ?? new Map<string, number>()
         marks.set(own, epochs.next())
         e.stale.disconnect = marks
       }
+    },
+
+    markChannel(scope, channelOf, channel, at) {
+      scope.assert()
+      for (const e of rows.values()) {
+        if (channelOf(e) !== channel) continue
+        const marks = e.stale.disconnect ?? new Map<string, number>()
+        marks.set(channel, Math.max(marks.get(channel) ?? 0, at))
+        e.stale.disconnect = marks
+      }
+    },
+
+    holdsChannel(channelOf, channel) {
+      for (const e of rows.values()) if (channelOf(e) === channel) return true
+      return false
     },
 
     own(scope, key) {

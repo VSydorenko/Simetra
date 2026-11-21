@@ -515,12 +515,24 @@ export interface Writer {
    */
   hide(object: ObjectName, keys: readonly Key[]): void
   /**
-   * A gap of `channel` (of every channel when omitted) began: records the
-   * channel's `gapAt` and marks its rows `stale` (P4-B spec §8.4). Marks are
-   * kept per channel; only an applied read that started at or after the
-   * channel's next join lifts them — there is no other lift.
+   * A gap of the held `channel` (of every held channel when omitted) began:
+   * records its `gapAt` and marks its rows `stale` (P4-B spec §8.4). Marks
+   * are kept per channel; only an applied read lifts them — of a held channel
+   * one that started at or after its next join.
    */
   markDisconnected(channel?: string): void
+  /**
+   * The receiver holds `channel` (subscribes it). A released channel whose
+   * rows stayed in the store rejoins after a gap: they are marked with its
+   * release epoch.
+   */
+  holdChannel(channel: string): void
+  /**
+   * The receiver released `channel` (unsubscribed or refused): its rows wait
+   * for no signal, a read after the release proves them, and views are no
+   * longer judged by it. Marks stay.
+   */
+  releaseChannel(channel: string): void
   markViews(
     object: ObjectName,
     flags: { needsRefresh?: boolean; hasNewRows?: boolean },

@@ -95,6 +95,12 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+// Приймач тримає канал до підписки; ядро без приймача — тест тримає сам.
+const hold = (core: CoreSession, ...channels: string[]) =>
+  write(core, (w) => {
+    for (const ch of channels) w.holdChannel(ch)
+  })
+
 describe("Writer", () => {
   it("patches only keys that have an owner", async () => {
     const { core, fake, inspect } = setup()
@@ -199,6 +205,44 @@ describe("Writer", () => {
     })
   })
 
+  it("marks no row of a channel the receiver does not hold", async () => {
+    const { core, fake } = setup()
+    fake.insert(TASK, taskValues(1))
+    fake.insert(TASK, taskValues(2, { org: T }))
+    const view = core.view(keys(1, 2))
+    watch(view)
+    await settle()
+    hold(core, channel(S))
+    write(core, (w) => w.markDisconnected())
+    expect(stateOf(view.getSnapshot(), 1)).toBe("stale")
+    expect(stateOf(view.getSnapshot(), 2)).toBe("synced")
+  })
+
+  it("marks the stored rows of a released channel when it is held again; a read after the join lifts them", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 1)
+    const view = core.view(keys(1))
+    watch(view)
+    await settle()
+    hold(core, channel(S))
+    write(core, (w) => w.releaseChannel(channel(S)))
+    expect(stateOf(view.getSnapshot(), 1)).toBe("synced")
+    hold(core, channel(S))
+    expect(stateOf(view.getSnapshot(), 1)).toBe("stale")
+    await core.revalidate(TASK, { visibleOnly: false })
+    expect(stateOf(view.getSnapshot(), 1)).toBe("stale")
+    coreInternals(core).epochs.join(channel(S))
+    await core.revalidate(TASK, { visibleOnly: false })
+    expect(stateOf(view.getSnapshot(), 1)).toBe("synced")
+  })
+
+  it("forgets a released channel without rows: holding it again marks nothing", async () => {
+    const { core } = setup()
+    hold(core, channel(T))
+    write(core, (w) => w.releaseChannel(channel(T)))
+    expect(coreInternals(core).epochs.releasedAt(channel(T))).toBe(0)
+  })
+
   it("markDisconnected(A) and a read after A's join leave rows of channel B alone", async () => {
     const { core, fake } = setup()
     fake.insert(TASK, taskValues(1))
@@ -206,6 +250,7 @@ describe("Writer", () => {
     const view = core.view(keys(1, 2))
     watch(view)
     await settle()
+    hold(core, channel(S), channel(T))
     write(core, (w) => w.markDisconnected(channel(S)))
     expect(stateOf(view.getSnapshot(), 1)).toBe("stale")
     expect(stateOf(view.getSnapshot(), 2)).toBe("synced")
@@ -222,6 +267,7 @@ describe("Writer", () => {
     const view = core.view(keys(1))
     watch(view)
     await settle()
+    hold(core, channel(S), channel(T))
     write(core, (w) => w.markDisconnected())
     fake.edit(TASK, key(1), { org: T })
     await core.revalidate(TASK, { visibleOnly: false })
@@ -263,6 +309,7 @@ describe("Writer", () => {
       scope: ZERO_UUID,
       object: note.id,
     })
+    hold(core, zero)
     write(core, (w) => w.markDisconnected(zero))
     expect(stateOf(view.getSnapshot(), 1)).toBe("stale")
     coreInternals(core).epochs.join(zero)
@@ -1118,6 +1165,7 @@ describe("revalidate", () => {
     watch(hidden)
     await settle()
     core.setVisible(keys(2), false)
+    hold(core, channel(S))
     write(core, (w) => w.markDisconnected())
     fake.edit(TASK, key(1), { title: "new1" })
     fake.edit(TASK, key(2), { title: "new2" })
