@@ -249,7 +249,10 @@ export const introspectTool = defineTool({
     // нічого не пишеться, а `introspect` треба повторити.
     const changed = facts.crossCheckFailures.map((f) =>
       diagnostic("introspect.definer-acl-changed", "", "", {
-        function: `${f.schema}.${f.name}(${f.identityArguments})`,
+        function:
+          f.privilege === "ROLE"
+            ? ""
+            : `${f.schema}.${f.name}(${f.identityArguments})`,
         role: f.role,
         privilege: f.privilege,
       })

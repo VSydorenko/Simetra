@@ -147,6 +147,22 @@ export async function readExecuteFacts(
       if (r.schemaUsageByRole[role] !== r.observedUsage[role])
         failure(role, "USAGE")
   }
+  // Роль, відсутня у знімку, але наявна у свіжому каталозі, створена між
+  // читаннями: у виведення вона не потрапила, а `PUBLIC` міг дати їй доступ
+  for (const m of missing.rows) {
+    const created = await client.query<{ exists: boolean }>(
+      "select to_regrole(quote_ident($1)) is not null as exists",
+      [m.name]
+    )
+    if (created.rows[0]!.exists)
+      crossCheckFailures.push({
+        schema: "",
+        name: "",
+        identityArguments: "",
+        role: m.name,
+        privilege: "ROLE",
+      })
+  }
   return {
     missingRoles: missing.rows.map((m) => m.name),
     functions: rows.map((r) => ({

@@ -46,11 +46,16 @@ export interface FunctionExecuteFact {
  * членство змінилися між читаннями. Читач її не вирішує, а повідомляє.
  */
 export interface ExecuteCrossCheckFailure {
+  /** Для `ROLE` порожні: розбіжність стосується ролі, а не функції. */
   schema: string
   name: string
   identityArguments: string
   role: string
-  privilege: "EXECUTE" | "USAGE"
+  /**
+   * `ROLE` — роль профілю, якої не було у знімку, а свіжий каталог її вже
+   * знає: `PUBLIC` міг дати їй `EXECUTE`, і знімок цього не бачить.
+   */
+  privilege: "EXECUTE" | "USAGE" | "ROLE"
 }
 
 export interface ExecuteFacts {

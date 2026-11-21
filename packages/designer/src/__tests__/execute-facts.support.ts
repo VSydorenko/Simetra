@@ -289,6 +289,107 @@ export function describeExecuteFacts(): void {
       }
     })
 
+    it("a non-inherited membership gives no caller, and the cross-check agrees", async () => {
+      const group = testRoleName("grp")
+      const api = profile()[0]!
+      await dropRoles(group)
+      await query(testSuperuserUrl(), `create role "${group}"`)
+      try {
+        await inTarget(
+          `${DEFINER}
+           REVOKE EXECUTE ON FUNCTION app.rpc() FROM PUBLIC;
+           GRANT EXECUTE ON FUNCTION app.rpc() TO "${group}";`,
+          ["app"],
+          async (url) => {
+            await query(
+              testSuperuserUrl(),
+              `grant "${group}" to "${api}" with inherit false`
+            )
+            try {
+              const { facts } = await extractWithExecuteFacts(
+                { url },
+                scopeOf(["app"])
+              )
+              expect(factOf(facts, "rpc")!.executeByRole[api]).toBe(false)
+              expect(facts.crossCheckFailures).toEqual([])
+            } finally {
+              await query(testSuperuserUrl(), `revoke "${group}" from "${api}"`)
+            }
+          }
+        )
+      } finally {
+        await dropRoles(group)
+      }
+    })
+
+    it("a change of the schema USAGE after the snapshot fails the cross-check", async () => {
+      const api = profile()[0]!
+      await inTarget(DEFINER, ["app"], async (url) => {
+        const { facts } = await extractWithExecuteFacts(
+          { url },
+          scopeOf(["app"]),
+          async () => {
+            await query(url, `GRANT USAGE ON SCHEMA app TO "${api}"`)
+          }
+        )
+        expect(facts.crossCheckFailures).toContainEqual(
+          expect.objectContaining({ role: api, privilege: "USAGE" })
+        )
+      })
+    })
+
+    it("introspect reports a USAGE change during it with privilege USAGE", async () => {
+      const api = profile()[0]!
+      await inTarget(DEFINER, ["app"], async (url) => {
+        seam.beforeFacts = async () => {
+          await query(url, `GRANT USAGE ON SCHEMA app TO "${api}"`)
+        }
+        try {
+          const r = await call(
+            "introspect",
+            introspectInput,
+            options(await freshProject(), { [ENV]: url })
+          )
+          expect(r.written).toBe(false)
+          const changed = errors(r).filter(
+            (d) => d.code === "introspect.definer-acl-changed"
+          )
+          expect(changed.map((d) => d.params?.privilege)).toContain("USAGE")
+        } finally {
+          seam.beforeFacts = undefined
+        }
+      })
+    })
+
+    it("a profile role created after the snapshot fails the cross-check", async () => {
+      const late = testRoleName("late")
+      await dropRoles(late)
+      await inTarget(DEFINER, ["app"], async (url) => {
+        const client = new pg.Client({ connectionString: url })
+        await client.connect()
+        try {
+          await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+          await client.query("select count(*) from pg_roles")
+          await query(testSuperuserUrl(), `create role "${late}"`)
+          const facts = await readExecuteFacts(client, scopeOf(["app"]), [late])
+          expect(facts.missingRoles).toEqual([late])
+          expect(facts.crossCheckFailures).toEqual([
+            {
+              schema: "",
+              name: "",
+              identityArguments: "",
+              role: late,
+              privilege: "ROLE",
+            },
+          ])
+        } finally {
+          await client.query("ROLLBACK").catch(() => {})
+          await client.end()
+          await dropRoles(late)
+        }
+      })
+    })
+
     it("leaves nothing on the target: no open transaction, no session state", async () => {
       await inTarget(DEFINER, ["app"], async (url) => {
         await extractWithExecuteFacts({ url }, scopeOf(["app"]))
