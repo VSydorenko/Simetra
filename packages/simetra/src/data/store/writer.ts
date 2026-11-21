@@ -1,4 +1,3 @@
-import { ZERO_UUID, channelTopic, type CatalogEntry } from "simetra/model"
 import type { Defects } from "./defects"
 import { effectiveEpoch, heldEpoch, pairId } from "./epoch"
 import type { ObjectState } from "./forms"
@@ -8,7 +7,13 @@ import {
   readIncluded,
   type Included,
 } from "./include"
-import { scopeOf, visibleRow, type RowEntry } from "./object-store"
+import {
+  changesObjectOf,
+  channelOf,
+  scopeOf,
+  visibleRow,
+  type RowEntry,
+} from "./object-store"
 import {
   aliveIncluded,
   applyIncluded,
@@ -116,23 +121,6 @@ export const REREAD_TIMEOUT_MS = 5_000
 export type RereadOutcome =
   | { readonly kind: "read"; readonly row: ServerRow | undefined }
   | { readonly kind: "failed" | "discarded" }
-
-/**
- * The change channel of a row (§8.3): `channelTopic` of the scope kind, the
- * row's stored scope and the object id; an unscoped object takes
- * `ZERO_UUID` for both the kind and the scope.
- */
-export function channelOf(entry: CatalogEntry): (e: RowEntry) => string {
-  const scoped = entry.scopeColumn !== undefined
-  const scopeKindId = scoped ? (entry.scopeKindId ?? ZERO_UUID) : ZERO_UUID
-  return (e) =>
-    channelTopic({
-      kind: "changes",
-      scopeKindId,
-      scope: scoped ? (e.scope ?? ZERO_UUID) : ZERO_UUID,
-      object: entry.id,
-    })
-}
 
 const isVisible = (s: Subset) => s.visible ?? s.listeners.size > 0
 
@@ -386,18 +374,17 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
 
     markDisconnected(channel) {
       scope.assert()
+      ctx.session.epochs.gap(channel)
+      const id = channel === undefined ? undefined : changesObjectOf(channel)
       for (const o of ctx.objects.values()) {
+        // Об'єкт без сигналів каналу не має: розрив його не стосується.
+        if (!o.entry.signal || (id !== undefined && o.entry.id !== id)) continue
         const of = channelOf(o.entry)
         o.rows.markDisconnected(scope, of, channel)
         touchMarked(o, (e) => channel === undefined || of(e) === channel)
-      }
-    },
-
-    clearDisconnected(channel) {
-      scope.assert()
-      for (const o of ctx.objects.values()) {
-        touchMarked(o, (e) => e.stale.disconnect?.has(channel) === true)
-        o.rows.clearDisconnected(scope, channel)
+        // Склад вигляду (`staleComposition`) обчислює знімок: порожній
+        // вигляд рядків для `touch` не має.
+        for (const s of subsetsOf(ctx, o)) s.dirty = true
       }
     },
 
@@ -1258,6 +1245,7 @@ export async function revalidateViews(
               continue
             }
             s.refreshedAt = startedAt
+            s.okReadEpoch = startEpoch
             s.failures = 0
             s.failedAt = undefined
             if (s.status === "error") {

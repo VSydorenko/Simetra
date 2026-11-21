@@ -192,6 +192,13 @@ export interface ViewSnapshot {
    * confused with a `stale` row.
    */
   readonly isStale?: boolean
+  /**
+   * The composition of the view is not confirmed after a gap of a channel of
+   * its object (P4-B spec §8.4): a create or a delete may have been missed.
+   * Cleared by the first successful read that started at or after the
+   * channel's next join. Present only while true; not a row's `stale`.
+   */
+  readonly staleComposition?: true
   readonly section?: {
     readonly ownerVersion: number | undefined
     readonly complete: boolean
@@ -508,14 +515,12 @@ export interface Writer {
    */
   hide(object: ObjectName, keys: readonly Key[]): void
   /**
-   * Marks rows of `channel` (every row when omitted) `stale` from a gap.
-   * Marks are kept per channel: a row that moved keeps the mark of its old
-   * channel until that channel is cleared, so the receiver must call
-   * `clearDisconnected(channel)` also when it unsubscribes a channel.
+   * A gap of `channel` (of every channel when omitted) began: records the
+   * channel's `gapAt` and marks its rows `stale` (P4-B spec §8.4). Marks are
+   * kept per channel; only an applied read that started at or after the
+   * channel's next join lifts them — there is no other lift.
    */
   markDisconnected(channel?: string): void
-  /** Clears the gap mark of `channel`; marks of other channels stay. */
-  clearDisconnected(channel: string): void
   markViews(
     object: ObjectName,
     flags: { needsRefresh?: boolean; hasNewRows?: boolean },

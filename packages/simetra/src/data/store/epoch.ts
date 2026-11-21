@@ -64,7 +64,29 @@ export interface Epochs {
    * never lowers an earlier mark.
    */
   buryObject(object: string, at: number): void
-  /** Drops both maps, the horizon and the last pair burials. */
+  /**
+   * A gap of the signal channel began (P4-B spec §8.4): its `gapAt` becomes
+   * `next()`; without a channel (the connection broke) — of every channel.
+   */
+  gap(channel?: string): number
+  /** The channel (re)joined — `recovered` or not: its `joinAt` becomes `next()`. */
+  join(channel: string): number
+  /** The epoch of the channel's last gap; 0 — none. */
+  gapAt(channel: string): number
+  /** The epoch of the channel's last join; 0 — none. */
+  joinAt(channel: string): number
+  /**
+   * A read that started at `readEpoch` saw every change the channel did not
+   * deliver: the channel never had a gap, or it rejoined after its last gap
+   * and the read started at or after that join
+   * (`gapAt < joinAt <= readEpoch`).
+   */
+  channelProven(channel: string, readEpoch: number): boolean
+  /** Some channel had a gap (a fast path for the store's apply). */
+  gapped(): boolean
+  /** Channels with a gap or a join recorded. */
+  channels(): IterableIterator<string>
+  /** Drops both maps, the horizon, the last pair burials and the channel registers. */
   clear(): void
   /** Sizes of the service maps (inspection); `horizon` counts raised buckets. */
   sizes(): {
@@ -210,6 +232,12 @@ export function createEpochs(
   // перевіряється за будь-якою парою об'єкта, і витіснення його не губить.
   const pairBurials = new Map<string, number>()
   let barrier: PairBarrier | undefined
+  // Регістри каналів сигналів: максимум епохи, а не лічильник поколінь —
+  // порівнюються з епохою старту читання, як позначки й надгробки.
+  const gaps = new Map<string, number>()
+  const joins = new Map<string, number>()
+  let gapAll = 0
+  const gapAt = (channel: string) => Math.max(gaps.get(channel) ?? 0, gapAll)
   // Поховання всіх пар об'єкта (`buryObject`): одне число на об'єкт.
   const objectBurials = new Map<string, number>()
 
@@ -302,7 +330,31 @@ export function createEpochs(
       return at
     },
     hiddenSince: (id, readEpoch) => (hiddenMarks.get(id) ?? -1) > readEpoch,
+    gap(channel) {
+      const at = ++epoch
+      if (channel === undefined) gapAll = at
+      else gaps.set(channel, at)
+      return at
+    },
+    join(channel) {
+      const at = ++epoch
+      joins.set(channel, at)
+      return at
+    },
+    gapAt,
+    joinAt: (channel) => joins.get(channel) ?? 0,
+    channelProven(channel, readEpoch) {
+      const gap = gapAt(channel)
+      if (gap === 0) return true
+      const join = joins.get(channel) ?? 0
+      return gap < join && join <= readEpoch
+    },
+    gapped: () => gapAll > 0 || gaps.size > 0,
+    channels: () => new Set([...gaps.keys(), ...joins.keys()]).values(),
     clear() {
+      gaps.clear()
+      joins.clear()
+      gapAll = 0
       seen.clear()
       tombstones.clear()
       hiddenMarks.clear()

@@ -259,7 +259,7 @@ type Step =
     }
   | { t: "revalidate"; org: boolean; visibleOnly: boolean }
   | { t: "markStale"; k: number; plus: number }
-  | { t: "disconnect"; channel: number; clear: boolean }
+  | { t: "disconnect"; channel: number; join: boolean }
   | { t: "markViews"; v: number; one: boolean; needs: boolean; news: boolean }
   | { t: "time"; ms: number }
   | { t: "epoch"; which: number }
@@ -431,7 +431,7 @@ const STEP_ENTRIES: fc.WeightedArbitrary<Step>[] = [
     arbitrary: fc.record({
       t: one("disconnect"),
       channel: fc.nat(CHANNELS.length),
-      clear: fc.boolean(),
+      join: fc.boolean(),
     }),
   },
   {
@@ -3020,10 +3020,9 @@ async function runModelOn(
       }
       case "disconnect": {
         const ch = CHANNELS[s.channel]
-        commit((w) => {
-          if (s.clear && ch !== undefined) w.clearDisconnected(ch)
-          else w.markDisconnected(ch)
-        })
+        // Приєднання лише пише `joinAt`: позначку знімає читання після нього.
+        if (s.join && ch !== undefined) internals.epochs.join(ch)
+        else commit((w) => w.markDisconnected(ch))
         break
       }
       case "markViews": {

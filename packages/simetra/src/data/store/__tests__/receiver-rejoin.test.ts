@@ -17,6 +17,7 @@ import { createFakeSource } from "../testing/fake-source"
 import { QUIET_MS, REJOIN_JITTER_MS } from "../receiver"
 import type { Key, ViewSpec } from "../types"
 import {
+  ORG,
   TASK,
   key,
   keysOf,
@@ -203,7 +204,7 @@ describe("the rejoin wave", () => {
     expect(requestsSince(h, from)).toEqual([4])
   })
 
-  it("lifts the mark of a channel with an invisible view once that view is read, and sends nothing for it in the wave", async () => {
+  it("lifts the mark of a row of an invisible view only when that row is read, and sends nothing for it in the wave", async () => {
     const h = await open(keysView(key(1)))
     const hidden = keysView(key(2))
     const other = h.core.view(hidden)
@@ -219,14 +220,19 @@ describe("the rejoin wave", () => {
     expect(h.fake.log.filter((r) => r.request >= from && r.query)).toHaveLength(
       1
     )
-    expect(states(h)).toEqual(["stale"])
+    // Рядок, який хвиля прочитала після приєднання, доведено; рядок
+    // невидимого вигляду — ні, і склад цього вигляду теж.
+    expect(states(h)).toEqual(["synced"])
+    expect(other.getSnapshot().rows.map((r) => r.state)).toEqual(["stale"])
+    expect(other.getSnapshot().staleComposition).toBe(true)
     await advance(20_000)
-    expect(states(h)).toEqual(["stale"])
+    expect(other.getSnapshot().rows.map((r) => r.state)).toEqual(["stale"])
     h.core.setVisible(hidden, true)
     await advance(0)
     await h.core.revalidate(TASK, { visibleOnly: true })
     await settle()
-    expect(states(h)).not.toContain("stale")
+    expect(other.getSnapshot().rows.map((r) => r.state)).toEqual(["synced"])
+    expect(other.getSnapshot().staleComposition).toBeUndefined()
   })
 
   it("lifts the mark on a later successful re-read after the wave read failed", async () => {
@@ -406,6 +412,10 @@ describe("recovered: true is not trusted for freshness", () => {
     })
     await advance(QUIET_MS)
     expect(states(h)).toEqual(["stale"])
+    // І хвиля невидимому вигляду дає лише `needsRefresh`: рядок не прочитано.
+    await advance(REJOIN_JITTER_MS)
+    expect(states(h)).toEqual(["stale"])
+    expect(h.handle.getSnapshot().needsRefresh).toBe(true)
   })
 
   it("does not stick: a view in error recovers by a later successful re-read", async () => {
@@ -598,12 +608,12 @@ describe("a newer gap is not lifted by an older wave", () => {
     return h
   }
 
-  it("keeps the mark of a new transport gap when an entry pending from the old wave is read later", async () => {
+  it("keeps the mark of a new transport gap when the row is read later without a new join", async () => {
     const h = await withHiddenView()
     h.transport.fail({ kind: "transport", channel })
     h.transport.join(channel, false)
     await advance(REJOIN_JITTER_MS)
-    expect(states(h)).toEqual(["stale"])
+    expect(states(h)).toEqual(["synced"])
     await advance(5_000)
     // Новий розрив без нового `onSubscribed`.
     h.transport.fail({ kind: "transport", channel })
@@ -671,13 +681,15 @@ describe("a newer gap is not lifted by an older wave", () => {
     expect(states(h)).toEqual(["stale"])
   })
 
-  it("keeps the mark while a view that was read by the wave fails later (the error guard)", async () => {
+  it("a view that fails after the wave read keeps its proved row; the other row waits for its own read", async () => {
     const h = await withHiddenView()
+    const other = h.core.view(hiddenSpec)
     h.transport.fail({ kind: "transport", channel })
     h.transport.join(channel, false)
     await advance(REJOIN_JITTER_MS)
-    expect(states(h)).toEqual(["stale"])
-    // Вигляд ключа 1 уже читався хвилею (`refreshedAt` свіжий), далі читання збоїть.
+    expect(states(h)).toEqual(["synced"])
+    // Вигляд ключа 1 уже прочитано після приєднання; збій пізнішого читання
+    // доказу не відбирає.
     h.fake.mode = "manual"
     void h.core.revalidate(TASK, { visibleOnly: true })
     await settle()
@@ -685,13 +697,165 @@ describe("a newer gap is not lifted by an older wave", () => {
     h.fake.mode = "auto"
     await settle()
     expect(h.handle.getSnapshot().status).toBe("error")
-    // Читається лише колишній невидимий вигляд.
+    expect(states(h)).toEqual(["synced"])
+    expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
+    expect(other.getSnapshot().rows.map((r) => r.state)).toEqual(["stale"])
     h.core.setVisible(hiddenSpec, true)
     h.core.setVisible(keysView(key(1)), false)
     await advance(0)
     await h.core.revalidate(TASK, { visibleOnly: true })
     await settle()
-    expect(h.handle.getSnapshot().status).toBe("error")
+    expect(other.getSnapshot().rows.map((r) => r.state)).toEqual(["synced"])
+  })
+})
+
+describe("the disconnect mark and the composition on session epochs", () => {
+  const rows = (handle: {
+    getSnapshot(): { rows: readonly { state: string }[] }
+  }) => handle.getSnapshot().rows.map((r) => r.state)
+
+  it("lifts the mark by a read after the last join when an older wave read answers last", async () => {
+    const h = await open(keysView(key(1)))
+    const v1 = keysView(key(1))
+    const v2 = keysView(key(2))
+    h.core.view(v2).subscribe(() => {})
+    await settle()
+    h.core.setVisible(v2, false)
+    // Хвиля A: читання вигляду ключа 1 затримане.
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, false)
+    h.fake.mode = "manual"
+    await vi.advanceTimersByTimeAsync(REJOIN_JITTER_MS)
+    expect(h.fake.pending.length).toBe(1)
+    const slowA = h.fake.take(0)
+    h.fake.mode = "auto"
+    // Новий розрив і приєднання — хвиля B, перед нею видимість міняється.
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, false)
+    h.core.setVisible(v1, false)
+    h.core.setVisible(v2, true)
+    await advance(0)
+    await advance(2 * REJOIN_JITTER_MS)
     expect(states(h)).toEqual(["stale"])
+    // Читання хвилі A почалось до другого розриву: не доводить нічого.
+    slowA.answer()
+    await settle()
+    expect(states(h)).toEqual(["stale"])
+    expect(h.handle.getSnapshot().staleComposition).toBe(true)
+    h.core.setVisible(v1, true)
+    await advance(0)
+    await h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    expect(states(h)).toEqual(["synced"])
+    expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
+  })
+
+  it("does not take a read started before the gap in the same clock tick for proof", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0)
+    const h = await open(keysView(key(1)))
+    await advance(5)
+    h.fake.mode = "manual"
+    void h.core.revalidate(TASK, { visibleOnly: true })
+    await Promise.resolve()
+    expect(h.fake.pending.length).toBe(1)
+    // Той самий такт годинника: розрив і тихе приєднання.
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, false)
+    h.core.setVisible(keysView(key(1)), false)
+    h.fake.deliverAll()
+    h.fake.mode = "auto"
+    await settle()
+    expect(h.handle.getSnapshot().status).not.toBe("error")
+    expect(states(h)).toEqual(["stale"])
+    expect(h.handle.getSnapshot().staleComposition).toBe(true)
+  })
+
+  it("marks a row read between fail and join: an edit in the gap is not shown synced", async () => {
+    const h = await open(keysView(key(1)))
+    h.transport.fail({ kind: "transport", channel })
+    await settle()
+    const second = h.core.view(keysView(key(2)))
+    second.subscribe(() => {})
+    await settle()
+    expect(rows(second)).toEqual(["stale"])
+    // Правка в розриві: сигнал не дійшов.
+    h.fake.edit(TASK, key(2), { title: "missed" })
+    await h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    expect(rows(second)).toEqual(["stale"])
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    expect(second.getSnapshot().rows[0]).toMatchObject({
+      state: "synced",
+      values: { title: "missed" },
+    })
+  })
+
+  it("keeps the composition unconfirmed after a missed create until a read after the join", async () => {
+    const h = await open(full)
+    expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
+    h.transport.fail({ kind: "transport", channel })
+    await settle()
+    expect(h.handle.getSnapshot().staleComposition).toBe(true)
+    // Створення в розриві: сигнал не дійшов.
+    h.fake.insert(TASK, taskValues(4, { status: null, subject: null }))
+    h.transport.join(channel, true)
+    await settle()
+    expect(h.handle.getSnapshot().staleComposition).toBe(true)
+    await advance(REJOIN_JITTER_MS)
+    expect(h.handle.getSnapshot()).toMatchObject({ hasNewRows: true })
+    expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
+  })
+
+  it("keeps the composition unconfirmed when the only successful read started before the gap", async () => {
+    const h = await open(full)
+    h.fake.mode = "manual"
+    void h.core.revalidate(TASK, { visibleOnly: true })
+    await Promise.resolve()
+    h.transport.fail({ kind: "transport", channel })
+    h.fake.insert(TASK, taskValues(4, { status: null, subject: null }))
+    h.transport.join(channel, false)
+    h.core.setVisible(full, false)
+    h.fake.deliverAll()
+    h.fake.mode = "auto"
+    await settle()
+    expect(h.handle.getSnapshot().status).not.toBe("error")
+    expect(h.handle.getSnapshot().staleComposition).toBe(true)
+  })
+
+  it("does not lift the marks of a channel that is unsubscribed while its row stays an include target", async () => {
+    const h = harness()
+    h.fake.rightsSnapshot = {
+      ...h.fake.rightsSnapshot!,
+      rights: [
+        ...h.fake.rightsSnapshot!.rights,
+        { ...read(S), object: "organization" },
+      ],
+    }
+    h.fake.insert(ORG, { ref: S })
+    h.fake.insert(TASK, taskValues(1, { org: S }))
+    const tasks = h.core.view({ kind: "full", object: TASK, include: ["org"] })
+    tasks.subscribe(() => {})
+    const orgs: ViewSpec = { kind: "keys", object: ORG, keys: [S] }
+    const off = h.core.view(orgs).subscribe(() => {})
+    await settle()
+    const orgChannel = channelTopic({
+      kind: "changes",
+      scopeKindId: SCOPE_KIND_ID,
+      scope: S,
+      object: org.id,
+    })
+    expect(h.transport.subscribed().has(orgChannel)).toBe(true)
+    h.transport.fail({ kind: "transport", channel: orgChannel })
+    await settle()
+    const target = () => {
+      const row = tasks.getSnapshot().rows[0]
+      return row?.state === "removed" ? undefined : row?.refs?.org?.state
+    }
+    expect(target()).toBe("stale")
+    off()
+    await advance(60_000)
+    expect(h.transport.subscribed().has(orgChannel)).toBe(false)
+    expect(target()).toBe("stale")
   })
 })

@@ -6,7 +6,7 @@ import {
 } from "simetra/model"
 import type { DefectFlag } from "./defects"
 import { fieldInfoOf, filterCollator } from "./filter"
-import { keyId, pairId, type PairBarrier } from "./epoch"
+import { keyId, pairId, type Epochs, type PairBarrier } from "./epoch"
 import { createObjectStore } from "./object-store"
 import {
   createOverlay,
@@ -382,6 +382,8 @@ export function limitsOf(
  */
 export interface CoreInternals {
   readonly objects: ReadonlyMap<ObjectName, ObjectState>
+  /** The session epochs: the channel registers of the signal receiver (§8.4). */
+  readonly epochs: Epochs
   readonly ops: StoreOps
   readonly registry: SubsetRegistry
 }
@@ -1205,8 +1207,6 @@ export function createCore(options: {
     purges.clear()
     scheduled.clear()
     wave = undefined
-    unsettled.clear()
-    gaps.clear()
     scheduler.stop()
     staleObjects.clear()
     receiver?.stop()
@@ -1270,19 +1270,15 @@ export function createCore(options: {
     scheduler.request()
   }
 
-  // Хвиля приєднання (§8.4, Р10): канали, що (пере)підписались, перечитують свої
-  // об'єкти разом, з одним строком на хвилю — рестарт Centrifugo не дає шквалу.
+  // Хвиля приєднання (§8.4, Р10): об'єкти каналів, що (пере)підписались,
+  // перечитуються разом, з одним строком на хвилю — рестарт Centrifugo не дає
+  // шквалу. Хвиля лише планує: свіжість після розриву доводять епохи
+  // (`Epochs.channelProven`) у мить застосування відповіді, а не хвиля.
   // Строк хвилі — доданок `schedulerDue`, тож власного таймера немає: на
   // прихованій вкладці хвилю бере `resume()`.
-  let wave:
-    | {
-        at: number
-        // `gen` — покоління розриву каналу в мить приєднання.
-        readonly channels: Map<string, { object: ObjectName; gen: number }>
-      }
-    | undefined
+  let wave: { at: number; readonly objects: Set<ObjectName> } | undefined
   let lastWaveAt: number | undefined
-  function joinWave(channel: string, object: ObjectName, gen: number) {
+  function joinWave(object: ObjectName) {
     if (!session.token().valid || staleObjects.has(object)) return
     if (wave === undefined) {
       const at = Math.floor(Math.random() * REJOIN_JITTER_MS) + now()
@@ -1293,49 +1289,44 @@ export function createCore(options: {
           lastWaveAt === undefined
             ? at
             : Math.max(at, lastWaveAt + REJOIN_JITTER_MS),
-        channels: new Map(),
+        objects: new Set(),
       }
     }
-    wave.channels.set(channel, { object, gen })
+    wave.objects.add(object)
     scheduler.request()
   }
 
   // Спрацювання хвилі — один синхронний хід (збирач зливає читання в один
-  // пакет). Позначку «розрив» каналу знімає стан виглядів, а не проміс:
-  // `revalidate` осідає успішно й тоді, коли вигляд перейшов в `error`.
+  // пакет). Позначок хвиля не знімає: їх знімає застосована відповідь.
   function fireWave() {
     const fired = wave
     wave = undefined
     if (fired === undefined || !session.token().valid) return
     const token = session.token()
-    const startedAt = now()
-    lastWaveAt = startedAt
+    lastWaveAt = now()
     core.requestVersion()
     core.requestRights()
     const invisible: { object: ObjectName; spec: ViewSpec }[] = []
-    const reads: Promise<void>[] = []
+    let reads = 0
     let readViews = 0
-    for (const object of new Set(
-      [...fired.channels.values()].map((c) => c.object)
-    )) {
+    for (const object of fired.objects) {
       if (staleObjects.has(object)) continue
       const views = activeViews(writerContext, object)
       for (const view of views)
         if (!view.visible) invisible.push({ object, spec: view.spec })
       if (views.some((v) => v.visible)) {
         readViews += views.filter((v) => v.visible).length
-        reads.push(
-          revalidate(writerContext, object, { visibleOnly: true }).catch(
-            (error: unknown) => log({ kind: "listener-failed", error })
-          )
+        reads++
+        revalidate(writerContext, object, { visibleOnly: true }).catch(
+          (error: unknown) => log({ kind: "listener-failed", error })
         )
       }
     }
     // Сплеск (Р13): хвиля, що справді перечитує; без читань запису немає.
-    if (reads.length > 0)
+    if (reads > 0)
       log({
         kind: "revalidate-burst",
-        objects: reads.length,
+        objects: reads,
         views: readViews,
       })
     if (invisible.length > 0)
@@ -1343,68 +1334,6 @@ export function createCore(options: {
         for (const { object, spec } of invisible)
           w.markViews(object, { needsRefresh: true }, spec)
       }, token)
-    void Promise.all(reads).then(() => {
-      if (!token.valid) return
-      for (const [channel, joined] of fired.channels)
-        unsettled.set(channel, { ...joined, startedAt })
-      liftSettled()
-    })
-  }
-
-  // Канал, чию «розрив» хвиля не зняла (вигляд в `error`, невидимий вигляд, читання
-  // до хвилі): позначка лишається до наступного успішного перечитування (Р10),
-  // тож чекає тут. Окремого таймера й запитів немає: перевірка — після `commit`.
-  const unsettled = new Map<
-    string,
-    { object: ObjectName; gen: number; startedAt: number }
-  >()
-  let liftPlanned = false
-  const viewsFresh = (object: ObjectName, since: number) =>
-    activeViews(writerContext, object).every((view) => {
-      const s = registry.find(view.spec)
-      return (
-        s !== undefined &&
-        s.status !== "error" &&
-        s.refreshedAt !== undefined &&
-        s.refreshedAt >= since
-      )
-    })
-  function liftSettled() {
-    liftPlanned = false
-    if (!session.token().valid) return
-    for (const [channel, u] of [...unsettled]) {
-      if (!viewsFresh(u.object, u.startedAt)) continue
-      unsettled.delete(channel)
-      liftDisconnect(channel, u.gen)
-    }
-  }
-
-  // Покоління розриву каналу росте на кожен розрив і на зняття каналу; без
-  // каналу (розрив усього з'єднання) — усі канали. 🔴 ЄДИНИЙ вхід зняття позначки
-  // «розрив» — `liftDisconnect(channel, gen)`: його `gen` береться в мить
-  // приєднання каналу, і зняття діє, лише поки розриву після нього не було.
-  // Прямого `clearDisconnected` деінде в приймачі й хвилі немає — шлях, що його
-  // викличе, зніме позначку новішого розриву.
-  const gaps = new Map<string, number>()
-  let gapsAll = 0
-  const gapOf = (channel: string) => (gaps.get(channel) ?? 0) + gapsAll
-  function markGap(channel?: string) {
-    if (channel === undefined) gapsAll++
-    else gaps.set(channel, (gaps.get(channel) ?? 0) + 1)
-  }
-  // `writer` — коли виклик уже всередині `commit` (разом з `purge` пари).
-  function liftDisconnect(channel: string, gen: number, writer?: Writer) {
-    if (gapOf(channel) !== gen || !session.token().valid) return
-    if (writer !== undefined) writer.clearDisconnected(channel)
-    else core.commit((w) => w.clearDisconnected(channel), session.token())
-  }
-  // Канал знято (перерахунок підписок, відмова `auth`): його позначки
-  // знімаються разом з ним, а будь-яке зняття з минулого приєднання втрачає
-  // чинність.
-  function dropChannel(channel: string, writer?: Writer) {
-    markGap(channel)
-    unsettled.delete(channel)
-    liftDisconnect(channel, gapOf(channel), writer)
   }
 
   // Рантайм чи ядро закривається, коли транспорт відмовив назавжди (`final`).
@@ -1611,10 +1540,6 @@ export function createCore(options: {
   // набір цілей чи строк: перепланування зливається в одне на мікрозадачу.
   session.onFlush(() => {
     if (!defects.has("scheduler-no-reschedule")) scheduler.request()
-    if (unsettled.size > 0 && !liftPlanned) {
-      liftPlanned = true
-      queueMicrotask(liftSettled)
-    }
   })
 
   const writerContext: WriterContext = {
@@ -1652,9 +1577,6 @@ export function createCore(options: {
       commit: (fn, token) => core.commit(fn, token),
       filterCollator: collator,
       joinWave,
-      gapOf,
-      markGap,
-      dropChannel,
       requestVersion: () => core.requestVersion(),
       connectionRefused,
     })
@@ -1990,7 +1912,7 @@ export function createCore(options: {
     defects,
   })
 
-  internals.set(core, { objects, ops, registry })
+  internals.set(core, { objects, ops, registry, epochs: session.epochs })
 
   inspections.set(core, {
     defects,

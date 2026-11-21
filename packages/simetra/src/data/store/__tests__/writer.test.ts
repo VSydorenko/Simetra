@@ -199,7 +199,7 @@ describe("Writer", () => {
     })
   })
 
-  it("markDisconnected(A) and clearDisconnected(A) leave rows of channel B alone", async () => {
+  it("markDisconnected(A) and a read after A's join leave rows of channel B alone", async () => {
     const { core, fake } = setup()
     fake.insert(TASK, taskValues(1))
     fake.insert(TASK, taskValues(2, { org: T }))
@@ -210,12 +210,13 @@ describe("Writer", () => {
     expect(stateOf(view.getSnapshot(), 1)).toBe("stale")
     expect(stateOf(view.getSnapshot(), 2)).toBe("synced")
     write(core, (w) => w.markDisconnected(channel(T)))
-    write(core, (w) => w.clearDisconnected(channel(S)))
+    coreInternals(core).epochs.join(channel(S))
+    await core.revalidate(TASK, { visibleOnly: false })
     expect(stateOf(view.getSnapshot(), 1)).toBe("synced")
     expect(stateOf(view.getSnapshot(), 2)).toBe("stale")
   })
 
-  it("keeps the mark of the old channel when a marked row moves and the new channel is marked and cleared", async () => {
+  it("keeps the mark of the old channel when a marked row moves and only the new channel joins", async () => {
     const { core, fake } = setup()
     seed(fake, 1, 1)
     const view = core.view(keys(1))
@@ -225,10 +226,12 @@ describe("Writer", () => {
     fake.edit(TASK, key(1), { org: T })
     await core.revalidate(TASK, { visibleOnly: false })
     write(core, (w) => w.markDisconnected(channel(T)))
-    write(core, (w) => w.clearDisconnected(channel(T)))
+    coreInternals(core).epochs.join(channel(T))
+    await core.revalidate(TASK, { visibleOnly: false })
     // Пропущене в каналі S ще не відновлено: позначка лишається.
     expect(stateOf(view.getSnapshot(), 1)).toBe("stale")
-    write(core, (w) => w.clearDisconnected(channel(S)))
+    coreInternals(core).epochs.join(channel(S))
+    await core.revalidate(TASK, { visibleOnly: false })
     expect(stateOf(view.getSnapshot(), 1)).toBe("synced")
   })
 
@@ -262,7 +265,8 @@ describe("Writer", () => {
     })
     write(core, (w) => w.markDisconnected(zero))
     expect(stateOf(view.getSnapshot(), 1)).toBe("stale")
-    write(core, (w) => w.clearDisconnected(zero))
+    coreInternals(core).epochs.join(zero)
+    await core.revalidate("Catalog.Note", { visibleOnly: false })
     expect(stateOf(view.getSnapshot(), 1)).toBe("synced")
   })
 

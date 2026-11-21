@@ -8,7 +8,7 @@ import type { Defects } from "./defects"
 import { keyId } from "./epoch"
 import { formOf, type Form, type ObjectState } from "./forms"
 import { includeKeys, refsOf } from "./include"
-import { lazyFieldStale, visibleRow } from "./object-store"
+import { changesObjectOf, lazyFieldStale, visibleRow } from "./object-store"
 import { sectionLinesStale } from "./section-store"
 import {
   diffOwn,
@@ -115,6 +115,12 @@ export interface Subset extends ReaderTarget {
    * and no due time.
    */
   refreshedAt: number | undefined
+  /**
+   * The start epoch of the last read that settled successfully: the proof of
+   * the composition after a gap (`staleComposition`, P4-B spec §8.4);
+   * `refreshedAt` only schedules.
+   */
+  okReadEpoch: number | undefined
   /** The system re-reads started for this view; the model test counts them. */
   rereads: number
   /**
@@ -333,6 +339,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                 }
                 s.loaded = true
                 s.refreshedAt = startedAt
+                s.okReadEpoch = readEpoch
                 s.failures = 0
                 s.failedAt = undefined
                 s.status = "ready"
@@ -785,6 +792,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       settled: false,
       loaded: false,
       refreshedAt: undefined,
+      okReadEpoch: undefined,
       rereads: 0,
       failures: 0,
       failedAt: undefined,
@@ -834,6 +842,27 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
 
   const viewOf = (o: ObjectState, key: Key) =>
     rowViews.get(o.name, key, o.rows.get(key), o.lazyFields)
+
+  // Об'єкт каналу — з топіка, один розбір на канал.
+  const channelObjects = new Map<string, string | undefined>()
+  // Склад вигляду після розриву (§8.4): кожен канал його об'єкта з записом у
+  // регістрах доведено читанням, що успішно осіло й почалось не раніше
+  // приєднання після останнього розриву. Похідна від епох, без власного стану.
+  function staleComposition(s: Subset): boolean {
+    const { epochs } = session
+    if (!epochs.gapped()) return false
+    const id = s.form.object.entry.id
+    const read = s.okReadEpoch ?? -1
+    for (const channel of epochs.channels()) {
+      let object = channelObjects.get(channel)
+      if (object === undefined && !channelObjects.has(channel)) {
+        object = changesObjectOf(channel)
+        channelObjects.set(channel, object)
+      }
+      if (object === id && !epochs.channelProven(channel, read)) return true
+    }
+    return false
+  }
 
   function computeSnapshot(s: Subset): ViewSnapshot {
     const closed = ctx.closedSnapshot()
@@ -898,6 +927,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       hasNewRows: s.hasNewRows,
       needsRefresh: s.needsRefresh,
       ...(ctx.isStale(o.name) ? { isStale: true } : {}),
+      ...(staleComposition(s) ? { staleComposition: true } : {}),
       ...(section === undefined ? {} : { section }),
       ...(spec.kind === "full" || spec.kind === "window"
         ? { strategy: s.strategy, truncated: s.truncated, atEnd: s.atEnd }
@@ -1168,6 +1198,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     },
 
     close() {
+      channelObjects.clear()
       // Жодне значення рядка не переживає закриття навіть у пам'яті
       // підмножин чи хендлів, на які ще тримають посилання.
       for (const s of subsets.values()) {

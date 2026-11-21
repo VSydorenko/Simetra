@@ -70,16 +70,7 @@ export interface ReceiverContext {
   /** The collator of the runtime's filter tests (one per runtime). */
   readonly filterCollator: Intl.Collator
   /** A channel joined (with or without `recovered`): its object joins the rejoin wave. */
-  joinWave(channel: string, object: ObjectName, gen: number): void
-  /** The gap generation of a channel; captured when the channel joins. */
-  gapOf(channel: string): number
-  /** A gap began on the channel (every channel when omitted): older lifts lapse. */
-  markGap(channel?: string): void
-  /**
-   * The channel left the receiver (unsubscribed or refused): marks go with it,
-   * through `writer` when the caller is inside a `commit` (one frame with its purge).
-   */
-  dropChannel(channel: string, writer?: Writer): void
+  joinWave(object: ObjectName): void
   /** The core's `requestVersion` (a refusal without a channel, §10). */
   requestVersion(): void
   /** The transport refused the connection for good: the runtime closes. */
@@ -338,7 +329,6 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     // Розрив: рядки каналу (чи всі) не знають, що пропустили (§8.4).
     if (error.kind === "transport") {
       if (error.channel !== undefined && !held.has(error.channel)) return
-      ctx.markGap(error.channel)
       ctx.commit((w) => w.markDisconnected(error.channel), token)
       marks.noteDisconnect(error.channel)
       return
@@ -354,25 +344,24 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     refused.add(error.channel)
     slot.off?.()
     // Дані пари, на які права зникли, не лишаються в пам'яті (Р12); `purge`
-    // скидає й незакриту пачку пари через `purged`. Зняття позначок каналу й
-    // `purge` — один `commit`: жодного кадру з рядками розриву як свіжими.
-    const channel = error.channel
-    const pair = pairOf(channel)
-    ctx.commit((w) => {
-      ctx.dropChannel(channel, w)
-      if (pair !== undefined) w.purge(pair.object, { scope: pair.scope })
-    }, token)
+    // скидає й незакриту пачку пари через `purged`. Рядки розриву каналу
+    // прибирає той самий `purge`: окремого зняття позначок немає, тож і кадру
+    // з ними як свіжими.
+    const pair = pairOf(error.channel)
+    if (pair !== undefined)
+      ctx.commit((w) => w.purge(pair.object, { scope: pair.scope }), token)
   }
 
-  // Канал (пере)підписано — з `recovered` чи без — його об'єкт іде в хвилю
-  // приєднання ядра: `recovered` для свіжості не береться (Рд37). Покоління
-  // розриву — в мить приєднання: зняття з цього приєднання не знімає розрив,
-  // що настав після нього.
+  // Канал (пере)підписано — з `recovered` чи без, зокрема тихе повторне
+  // приєднання: `joinAt` каналу — нова епоха (Рд37: `recovered` для свіжості не
+  // береться), а його об'єкт іде в хвилю приєднання ядра. Знімає позначки
+  // лише читання, що почалось після цієї епохи.
   const offSubscribed = transport.onSubscribed(({ channel }) => {
     if (stopped || !token.valid || !held.has(channel)) return
     const pair = pairOf(channel)
     if (pair === undefined) return
-    ctx.joinWave(channel, pair.object, ctx.gapOf(channel))
+    session.epochs.join(channel)
+    ctx.joinWave(pair.object)
   })
 
   // ------------------------------------------------------------ пачка
@@ -789,8 +778,8 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     for (const [channel, slot] of [...held]) {
       if (next.has(channel)) continue
       held.delete(channel)
-      // Знятий канал не оновить своїх рядків: його «розрив» знімається разом з ним.
-      ctx.dropChannel(channel)
+      // Позначок канал не знімає: рядок може жити ціллю `include` іншого
+      // вигляду, а знімає їх лише читання після приєднання.
       slot.off?.()
     }
     for (const channel of next)
