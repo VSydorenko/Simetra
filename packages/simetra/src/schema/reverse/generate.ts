@@ -321,10 +321,7 @@ function folderHalf(
  * функції значень вимірів доступу й обробники підписок. Їхній `EXECUTE`
  * виводить генератор, тож зворотна генерація декларації їм не пише.
  */
-function platformForms(
-  kept: CompiledModel | undefined,
-  elsewhere: Elsewhere
-): Set<string> {
+function platformForms(kept: CompiledModel | undefined): Set<string> {
   const found = new Set<string>()
   if (kept === undefined) return found
   const defaultSchema = kept.project.defaultSchema
@@ -338,10 +335,9 @@ function platformForms(
           dimension.values.function.name
         )
       )
-  for (const handler of elsewhere.handlers) {
-    const at = handler.indexOf(".")
-    found.add(tupleKey(handler.slice(0, at), handler.slice(at + 1)))
-  }
+  // Ім'я обробника з крапкою не ділиться з `schema.name`: ключ — кортеж
+  for (const { handler } of kept.contracts.eventSubscriptions)
+    found.add(tupleKey(handler.schema, handler.name))
   return found
 }
 
@@ -745,7 +741,7 @@ export async function reverseGenerate(
     functionPaths: laid.functionPaths,
     described: elsewhere.units,
     existing: o.existing,
-    platformForms: platformForms(kept, elsewhere),
+    platformForms: platformForms(kept),
     kinds,
   })
   // Гранти задекларованих функцій відтворює генератор: з виходу їх прибрано

@@ -46,6 +46,7 @@ export {
 } from "./sql/units"
 export {
   functionKey,
+  identityKey,
   identityParts,
   keyIdentity,
   qualifiedName,

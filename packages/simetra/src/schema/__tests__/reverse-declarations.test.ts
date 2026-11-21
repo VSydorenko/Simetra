@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
+  compile,
   loadSqlParser,
   readSqlUnits,
   type Diagnostic,
@@ -10,6 +11,7 @@ import {
   PLATFORM_ROLES,
   PROVIDER_API_ROLES,
   PROVIDER_OWNER_ROLES,
+  catalogFromSnapshot,
   type CatalogModel,
   type CatalogUnit,
   type DatabaseProvider,
@@ -20,7 +22,12 @@ import {
   type FunctionExecuteFact,
   type ReverseResult,
 } from "simetra/schema"
-import { metaFiles, project, uuid } from "../../compiler/__tests__/helpers"
+import {
+  catalog,
+  metaFiles,
+  project,
+  uuid,
+} from "../../compiler/__tests__/helpers"
 import {
   teamScopeKind,
   withRoles,
@@ -633,6 +640,114 @@ describe("platform forms of the kept folder", () => {
           c.startsWith("sql.declaration") || c.startsWith("introspect.definer")
       )
     ).toEqual([])
+  })
+
+  const scopeGrants = [
+    {
+      name: "a grant to a role of the application",
+      sql: "GRANT EXECUTE ON FUNCTION public.team_ids() TO app_reader;",
+    },
+    {
+      name: "a grant with the grant option",
+      sql: "GRANT EXECUTE ON FUNCTION public.team_ids() TO authenticated WITH GRANT OPTION;",
+    },
+  ]
+  it.each(scopeGrants)(
+    "$name on the set function is only generated-grant, nothing is written",
+    async (c) => {
+      const result = await reverseGenerate(
+        model(
+          "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT gen_random_uuid() $$;\n" +
+            c.sql
+        ),
+        options(withRoles(teamScopeKind()), undefined)
+      )
+      expect(
+        codes(result.diagnostics).filter(
+          (code) =>
+            code.startsWith("sql.generated-grant") ||
+            code.startsWith("introspect.definer")
+        )
+      ).toEqual(["sql.generated-grant"])
+      expect(result.changes).toEqual([])
+    }
+  )
+})
+
+describe("a subscription handler whose name holds a dot", () => {
+  it('does not hide the definer function a."b.c" behind the handler "a.b".c', async () => {
+    // `a.b.c` у неоднозначному об'єднанні через крапку ділився б на `a` і `b.c`
+    const touch =
+      "CREATE FUNCTION \"a.b\".c() RETURNS trigger LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;"
+    const existing = withRoles()
+    for (const [path, text] of metaFiles({
+      "catalogs/Currency/Currency.meta.json": catalog("Currency", {
+        scope: "none",
+      }),
+      "event-subscriptions/Touch/Touch.meta.json": {
+        id: uuid(990_001),
+        kind: "EventSubscription",
+        name: "Touch",
+        physicalName: "touch",
+        sources: [{ kind: "Catalog", name: "Currency" }],
+        event: "beforeWrite",
+        handler: { schema: "a.b", name: "c" },
+      },
+    }))
+      existing.set(path, text)
+    existing.set("sql/a.b/c.sql", `${touch}\n`)
+    const compiled = await compile(existing)
+    expect(compiled.diagnostics).toEqual([])
+    const result = await reverseGenerate(
+      {
+        tables: catalogFromSnapshot(compiled.model!.physical).tables,
+        enumTypes: [],
+        units: units(
+          `${touch}\n${guarded("rpc").replace("public.rpc(", 'a."b.c"(')}`
+        ),
+      },
+      options(
+        existing,
+        facts(fact("b.c", { schema: "a", identityArguments: "p_id uuid" }))
+      )
+    )
+    expect(errorsOf(result)).toEqual([])
+    expect(
+      [...result.files.keys()].filter((p) => p.endsWith(".functions.json"))
+    ).toHaveLength(1)
+  })
+})
+
+describe("names that differ only in where the dot sits", () => {
+  const dotted = (qualified: string) =>
+    guarded("rpc").replace("public.rpc(", `${qualified}(`)
+
+  it("a foreign grant on the second of colliding names is an error", async () => {
+    const sql = [
+      dotted('"public.rpc".x'),
+      dotted('public."rpc.x"'),
+      'GRANT EXECUTE ON FUNCTION public."rpc.x"(uuid) TO app_reader;',
+      'GRANT EXECUTE ON FUNCTION public."rpc.x"(uuid) TO authenticated;',
+    ].join("\n")
+    const result = await reverseGenerate(
+      model(sql),
+      options(
+        FOLDER(),
+        facts(
+          fact("x", { schema: "public.rpc", identityArguments: "p_id uuid" }),
+          fact("rpc.x", {
+            identityArguments: "p_id uuid",
+            grants: ["app_reader", "authenticated"],
+          })
+        )
+      )
+    )
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "introspect.definer-foreign-grant")
+        .map((d) => d.params?.role)
+    ).toEqual(["app_reader"])
+    expect(result.changes).toEqual([])
   })
 })
 

@@ -6,6 +6,7 @@ import {
   diagnostic,
   grantTargetKeys,
   guardArgsOf,
+  identityKey,
   isSecurityDefiner,
   isTriggerFunction,
   metadataRights,
@@ -356,8 +357,9 @@ export async function declareFunctions(
     // фактів, скільки функцій (ключ факту — аргументи ідентичності каталогу,
     // а не текст одиниці).
     // Перевантаження ділять ім'я: помилку фактів і чужі гранти — раз на ім'я
-    const firstOfName = !checked.has(label)
-    checked.add(label)
+    const nameKey = tupleKey(schema, name)
+    const firstOfName = !checked.has(nameKey)
+    checked.add(nameKey)
     if (named === undefined || named.length !== withFacts) {
       if (firstOfName)
         report("introspect.definer-acl-changed", "", {
@@ -504,9 +506,7 @@ export async function declareFunctions(
     result.written.push({ path, schema, name, declaration })
 
     // Гранти цієї функції відтворює генератор: дослівних не пишемо ніде
-    const own = new Set([
-      `function|${unit.identity.slice(unit.identity.indexOf(":") + 1)}`,
-    ])
+    const own = new Set([`function|${identityKey(unit.identity)}`])
     for (const grant of input.units) {
       const keys = grantTargetKeys(grant, parse)
       if (keys.length > 0 && keys.every((key) => ownsTarget(own, key)))
