@@ -183,13 +183,13 @@ const SESSION_CHANGED: CommandError = {
   reason: LIMIT_REASONS.sessionChanged,
 }
 
-const hasVersionPart = (request: RuntimeRequest): boolean =>
+const hasPart = (request: RuntimeRequest, type: "version" | "rights") =>
   request.type === "read" &&
   request.items.some(
     (item) =>
       typeof item === "object" &&
       item !== null &&
-      (item as { type?: unknown }).type === "version"
+      (item as { type?: unknown }).type === type
   )
 
 const isSessionChanged = (error: CommandError) =>
@@ -334,10 +334,14 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     if (closedWith !== undefined) throw new CommandFailure(closedWith)
     // Хеш звіряється лише після перевірки закриття (вище): відповідь закритого
     // рантайму не запускає `version`. Відповідь з частиною `version` хеш лише
-    // оновлює.
+    // оновлює, а з частиною `rights` не просить знімка вдруге: він уже від
+    // сервера з новим хешем.
     const seen = () => {
       if (typeof response.serverHash === "string")
-        core.serverHash(response.serverHash, hasVersionPart(request))
+        core.serverHash(response.serverHash, {
+          version: hasPart(request, "version"),
+          rights: hasPart(request, "rights"),
+        })
     }
     if (response.ok) {
       seen()

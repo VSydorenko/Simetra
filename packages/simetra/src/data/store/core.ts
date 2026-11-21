@@ -183,9 +183,14 @@ export interface CoreSession {
    * Internal, for the runtime: the `serverHash` of a response that passed the
    * closed check. A change against the last seen hash asks for the version —
    * unless the response carried the `version` part itself, which only updates
-   * the hash (no ping-pong between instances of two catalogs).
+   * the hash (no ping-pong between instances of two catalogs). A response
+   * that carried the `rights` part asks only for the version: its snapshot
+   * already comes from the server with the new hash.
    */
-  serverHash(hash: string, versionPart: boolean): void
+  serverHash(
+    hash: string,
+    parts: { readonly version: boolean; readonly rights: boolean }
+  ): void
   /**
    * Internal, for the runtime and the write journal: the one entry of the
    * sticky `stale-client` mark (P4-B spec §10), whatever the cause of the
@@ -1586,15 +1591,17 @@ export function createCore(options: {
       } else if (!batcher.hasQueuedRights()) rightsTail = true
     },
     rights: () => rights,
-    serverHash(hash, versionPart) {
+    serverHash(hash, parts) {
       const changed = lastHash !== undefined && hash !== lastHash
       lastHash = hash
       // Знімок прав слідує за `version` (Р9): одна мікрозадача — один запит, а
       // відповідь з частиною `version` нового запиту не запускає нічого (§10),
-      // тож два хеші, що чергуються, не дають пінг-понгу.
-      if (changed && !versionPart) {
+      // тож два хеші, що чергуються, не дають пінг-понгу. Знімок відповіді з
+      // частиною `rights` уже від нового сервера: другий запит `rights` за
+      // ним (хвіст частини в польоті) був би зайвим.
+      if (changed && !parts.version) {
         core.requestVersion()
-        core.requestRights()
+        if (!parts.rights) core.requestRights()
       }
     },
     staleClient(object) {

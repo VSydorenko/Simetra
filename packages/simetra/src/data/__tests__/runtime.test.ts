@@ -1005,6 +1005,40 @@ describe("version check and the stale mark (§10)", () => {
       expect(t.pending).toHaveLength(0)
     })
 
+    it("a changed serverHash on a response that carries the rights part asks only for the version", async () => {
+      const t = controlled({
+        catalog: { ...catalogOf(OBJECTS), rightsSnapshot: true },
+      })
+      t.core.requestRights()
+      await settle()
+      const before = t.calls.length
+      // Знімок цієї відповіді вже від нового сервера: просити `rights` ще
+      // раз — зайвий запит на кожному розгортанні.
+      t.respond(
+        changed(
+          ok({
+            epoch: null,
+            items: [
+              {
+                ok: true,
+                value: {
+                  rightsVersion: RIGHTS_VERSION,
+                  snapshot: { userId: null, scopeSets: [], rights: [] },
+                },
+              },
+            ],
+          }),
+          "server-2"
+        )
+      )
+      await settle()
+      expect(t.calls.slice(before).map(partTypes)).toEqual([["version"]])
+      t.respond(versionAnswer("server-2"))
+      await settle()
+      expect(t.calls).toHaveLength(before + 1)
+      expect(t.pending).toHaveLength(0)
+    })
+
     it("without the flag a changed serverHash sends no rights part", async () => {
       const t = controlled()
       const first = t.send(card())
