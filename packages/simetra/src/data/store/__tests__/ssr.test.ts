@@ -16,6 +16,8 @@ import {
   type ViewSpec,
   type Writer,
 } from "../types"
+import type { CatalogEntry, RightsRow, RightsSnapshot } from "simetra/model"
+import { SCOPE_KIND_ID } from "../../../model/runtime/__tests__/entries"
 import {
   ORG,
   S,
@@ -25,6 +27,8 @@ import {
   seed,
   settle,
   setup,
+  task,
+  org,
   taskValues,
   watch,
 } from "./core-support"
@@ -93,7 +97,11 @@ const through = (snapshot: CoreSnapshot): CoreSnapshot =>
   JSON.parse(JSON.stringify(snapshot)) as CoreSnapshot
 
 /** A second core over the same fake server, counting its `version` requests. */
-function coreOver(fake: FakeSource, limits: Partial<CoreLimits> = {}) {
+function coreOver(
+  fake: FakeSource,
+  limits: Partial<CoreLimits> = {},
+  rightsSnapshot = false
+) {
   const versions = { calls: 0 }
   const merged = { ...DEFAULT_CORE_LIMITS, ...limits }
   // Той самий `read` в адаптері й порту: версія йде в запиті частин об'єктів.
@@ -116,6 +124,7 @@ function coreOver(fake: FakeSource, limits: Partial<CoreLimits> = {}) {
     source,
     index: fake.index,
     limits,
+    ...(rightsSnapshot ? { rightsSnapshot: true } : {}),
   })
   return { core, inspect: inspectCore(core), versions }
 }
@@ -918,5 +927,178 @@ describe("size", () => {
     const own = rows.map((row) => (row.state === "removed" ? {} : row.values))
     const snapshot = core.dehydrate()
     expect(jsonBytes(snapshot)).toBeLessThanOrEqual(1.1 * jsonBytes(own) + 2048)
+  })
+})
+
+/*
+ * Частина `rights` в SSR (план B5b-2, Р1, Р3, Р5а): перший пакет сервера її
+ * несе, знімок прав у HTML не їде, звірка гідратації застосовує загальне
+ * правило заміни тим самим одним запитом.
+ */
+describe("the rights part of SSR", () => {
+  const USER = "00000000-0000-4000-8000-0000000000a1"
+  const taskR: CatalogEntry = { ...task, rightsContract: true }
+  const readRow = (
+    scope: string,
+    over: Partial<RightsRow> = {}
+  ): RightsRow => ({
+    level: "scope",
+    levelId: null,
+    scope,
+    container: null,
+    object: "task",
+    action: "read",
+    extent: "any",
+    dimensionId: null,
+    ...over,
+  })
+  const snapshotOf = (rights: RightsRow[]): RightsSnapshot => ({
+    userId: USER,
+    scopeSets: [S, T].map((scope) => ({ scopeKind: SCOPE_KIND_ID, scope })),
+    rights,
+  })
+  let versions = 0
+  const grant = (fake: FakeSource, snapshot: RightsSnapshot) => {
+    fake.rightsSnapshot = snapshot
+    fake.rightsVersion = (++versions).toString(16).padStart(64, "0")
+  }
+
+  /** Server core over a world with a scoped object: tasks 1, 2 in S, 3 in T. */
+  async function serverSnapshot() {
+    const h = setup({ rightsSnapshot: true, objects: [taskR, org] })
+    grant(h.fake, snapshotOf([readRow(S), readRow(T)]))
+    h.fake.epoch = "e".repeat(64)
+    const plain = { status: null, subject: null }
+    for (const n of [1, 2]) h.fake.insert(TASK, taskValues(n, plain))
+    h.fake.insert(TASK, taskValues(3, { org: T, ...plain }))
+    void h.core.preload(keysView(1, 2))
+    void h.core.preload(keysView(3))
+    void h.core.preload(card(1))
+    void h.core.preload(card(3))
+    await settle()
+    return { ...h, snapshot: through(h.core.dehydrate()) }
+  }
+
+  /** Bytes of the answer of the request `from` the way the transport carries it. */
+  const answerBytes = (fake: FakeSource, from: number) =>
+    jsonBytes({ snapshotHash: fake.snapshotHash, objects: fake.kernelHashes }) +
+    fake.rightsLog
+      .filter((r) => r.request === from)
+      .reduce((sum, r) => sum + jsonBytes(r.response), 0) +
+    fake.log
+      .filter((r) => r.request === from)
+      .reduce((sum, r) => sum + jsonBytes(r.response), 0)
+
+  it("the first packet of the server core carries rights without known; the snapshot has no rights data", async () => {
+    const { fake, snapshot } = await serverSnapshot()
+    expect(fake.rightsReads).toEqual([undefined])
+    // Частина `rights` і читання одного пакета.
+    expect(fake.requests).toEqual([5])
+    expect(snapshot.subsets.length).toBeGreaterThan(0)
+    const text = JSON.stringify(snapshot)
+    for (const sentinel of [
+      USER,
+      "scopeSets",
+      "rightsVersion",
+      fake.rightsVersion,
+    ])
+      expect(text).not.toContain(sentinel)
+  })
+
+  it("rights did not change: one request, version and rights without known and the re-reads with known, within the SSR row of spec §12", async () => {
+    const { fake, snapshot } = await serverSnapshot()
+    const next = coreOver(fake, {}, true)
+    next.core.hydrate(snapshot)
+    const handles = [keysView(1, 2), keysView(3), card(1), card(3)].map(
+      (spec) => next.core.view(spec)
+    )
+    for (const handle of handles) watch(handle)
+    const from = fake.requests.length
+    next.core.endHydration()
+    await settle()
+    expect(fake.requests).toHaveLength(from + 1)
+    expect(fake.requests[from]).toBe(6)
+    expect(next.versions.calls).toBe(1)
+    expect(fake.rightsLog.filter((r) => r.request === from)).toMatchObject([
+      { known: undefined },
+    ])
+    const reads = fake.log.filter((r) => r.request === from)
+    expect(reads).toHaveLength(4)
+    expect(reads.every((r) => r.known !== undefined)).toBe(true)
+    expect(next.core.rights()).toBeDefined()
+    expect(handles[0]!.getSnapshot()).toMatchObject({ status: "ready" })
+    expect(handles[0]!.getSnapshot().rows).toHaveLength(2)
+    expect(handles[1]!.getSnapshot()).toMatchObject({ status: "ready" })
+    // 2 КіБ + 128 Б × об'єктів + знімок прав + маркери 8 Б на рядок.
+    const rightsAnswer = jsonBytes(
+      fake.rightsLog.find((r) => r.request === from)!.response
+    )
+    expect(answerBytes(fake, from)).toBeLessThanOrEqual(
+      2048 + 128 * 2 + rightsAnswer + 8 * 6
+    )
+  })
+
+  it("rights changed between render and reconcile: the lost pair is purged access-changed in that same request", async () => {
+    const { fake, snapshot } = await serverSnapshot()
+    grant(fake, snapshotOf([readRow(T)]))
+    fake.setVisibleScopes([T])
+    const next = coreOver(fake, {}, true)
+    next.core.hydrate(snapshot)
+    const lost = next.core.view(card(1))
+    const kept = next.core.view(card(3))
+    watch(lost)
+    watch(kept)
+    const from = fake.requests.length
+    next.core.endHydration()
+    await settle()
+    // Втрата пари й причина — у відповіді того самого пакета: version,
+    // rights без known і два читання; другої частини `rights` немає.
+    expect(fake.requests).toHaveLength(from + 1)
+    expect(fake.requests[from]).toBe(6)
+    expect(fake.rightsReads).toEqual([undefined, undefined])
+    expect(lost.getSnapshot()).toMatchObject({
+      status: "purged",
+      reason: "access-changed",
+      rows: [],
+    })
+    expect(kept.getSnapshot()).toMatchObject({
+      status: "ready",
+      rows: [{ key: key(3) }],
+    })
+  })
+
+  it("an extent narrowed inside an allowed pair: the row goes removed from the re-read of the same request", async () => {
+    const { fake, snapshot } = await serverSnapshot()
+    grant(fake, snapshotOf([readRow(S, { extent: "own" }), readRow(T)]))
+    fake.remove(TASK, key(2))
+    const next = coreOver(fake, {}, true)
+    next.core.hydrate(snapshot)
+    const view = next.core.view(keysView(1, 2))
+    watch(view)
+    const from = fake.requests.length
+    next.core.endHydration()
+    await settle()
+    expect(fake.requests).toHaveLength(from + 1)
+    const rows = view.getSnapshot().rows
+    expect(view.getSnapshot().status).toBe("ready")
+    expect(rows[0]).toMatchObject({ key: key(1), state: "synced" })
+    expect(rows[1]).toMatchObject({ key: key(2), state: "removed" })
+  })
+
+  it("without the rightsSnapshot flag the reconciliation is the main one: no rights part", async () => {
+    const { core, fake } = setup({ objects: [taskR, org] })
+    seed(fake, 1, 2)
+    watch(core.view(keysView(1, 2)))
+    await settle()
+    const snapshot = through(core.dehydrate())
+    const next = coreOver(fake)
+    next.core.hydrate(snapshot)
+    watch(next.core.view(keysView(1, 2)))
+    const from = fake.requests.length
+    next.core.endHydration()
+    await settle()
+    expect(fake.requests.slice(from)).toEqual([2])
+    expect(fake.rightsReads).toEqual([])
+    expect(next.core.rights()).toBeUndefined()
   })
 })

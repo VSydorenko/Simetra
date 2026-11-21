@@ -588,7 +588,10 @@ function scripted(replies: Array<(size: number) => WireReadParts>) {
   return { adapter, calls }
 }
 
-const part = (query: RowsQuery): CorePart => ({ type: "query", query })
+const part = (query: RowsQuery): Extract<CorePart, { type: "query" }> => ({
+  type: "query",
+  query,
+})
 
 const taskQueries = (count: number) =>
   Array.from({ length: count }, (_, i) =>
@@ -1333,11 +1336,79 @@ describe("CoreSource: run and version", () => {
     })
   })
 
-  it("the fake rejects a rights part on purpose: it has no snapshot to answer with", async () => {
-    const fake = createFakeSource({ objects: OBJECTS, snapshotHash: "snap" })
-    await expect(fake.server.read([{ type: "rights" }])).rejects.toThrow(
-      "the rights part is not supported"
+  it("sends a rights part as it is and decodes its value, with or without a snapshot", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    const source = createCoreSource(
+      () => fake.adapter,
+      catalogIndex(OBJECTS),
+      createReadLimiter(4),
+      fake.server
     )
+    const first = await source.read([{ type: "rights" }, ...taskQueries(1)], {
+      sleep: () => Promise.resolve(),
+    })
+    expect(fake.requests).toEqual([2])
+    expect(first.items[0]).toStrictEqual({
+      ok: true,
+      type: "rights",
+      value: {
+        rightsVersion: fake.rightsVersion,
+        snapshot: fake.rightsSnapshot,
+      },
+    })
+    const known = await source.read(
+      [{ type: "rights", known: fake.rightsVersion }],
+      { sleep: () => Promise.resolve() }
+    )
+    expect(known.items[0]).toStrictEqual({
+      ok: true,
+      type: "rights",
+      value: { rightsVersion: fake.rightsVersion },
+    })
+    expect(fake.rightsReads).toStrictEqual([undefined, fake.rightsVersion])
+  })
+
+  it("answers command.internal for a rights value of the wrong form", async () => {
+    const { adapter } = scripted([
+      () => ({
+        epoch: null,
+        items: [{ ok: true, value: { rightsVersion: "short" } }],
+      }),
+    ])
+    const source = boundSource(
+      () => adapter,
+      catalogIndex(OBJECTS),
+      createReadLimiter(4),
+      {
+        run: () => Promise.reject(new Error("no run")),
+        read: adapter.read as never,
+      }
+    )
+    const { items } = await source.read([{ type: "rights" }])
+    expect(items[0]).toStrictEqual({
+      ok: false,
+      error: { code: "command.internal" },
+    })
+  })
+
+  it("the fake answers a rights part with the snapshot, or without it when known is current", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    const first = await fake.server.read([{ type: "rights" }])
+    expect(first.items[0]).toStrictEqual({
+      ok: true,
+      value: {
+        rightsVersion: fake.rightsVersion,
+        snapshot: fake.rightsSnapshot,
+      },
+    })
+    const again = await fake.server.read([
+      { type: "rights", known: fake.rightsVersion },
+    ])
+    expect(again.items[0]).toStrictEqual({
+      ok: true,
+      value: { rightsVersion: fake.rightsVersion },
+    })
+    expect(fake.rightsReads).toStrictEqual([undefined, fake.rightsVersion])
   })
 
   it("sends the version alone in a Server Function request when an override adapter reads every object", async () => {

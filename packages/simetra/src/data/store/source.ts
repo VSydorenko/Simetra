@@ -11,6 +11,7 @@ import {
   operationToWire,
   readPartToWire,
   readResultFromWire,
+  rightsValueSchema,
   versionValueSchema,
   wireRunResultSchema,
   type CatalogEntry,
@@ -23,6 +24,7 @@ import {
   type Operation,
   type ReadQuery,
   type ReadRows,
+  type RightsValue,
   type SourceAdapter,
   type VersionValue,
   type WireOperation,
@@ -32,6 +34,7 @@ import {
 } from "simetra/model"
 import { DataError } from "../errors"
 import { effectiveEpoch } from "./epoch"
+import type { Subset } from "./subsets"
 import type { Key, KnownSnapshot, ServerRow } from "./types"
 
 // Причини `command.unavailable` частини, яку сервер не виконав (П4-B §4.5).
@@ -117,16 +120,33 @@ export function createReadLimiter(parallel: number): ReadLimiter {
 
 /**
  * A part of a core read (P4-B spec §6.7): a rows query, with the rows the
- * core already holds (`known`), or the catalog `version`. A part without an
- * object goes first in its request.
+ * core already holds (`known`), the catalog `version` or the rights snapshot
+ * (`known` — the `rightsVersion` the core holds). A part without an object
+ * goes first in its request.
  */
 export type CorePart =
   | { type: "query"; query: RowsQuery; known?: KnownVersions }
   | { type: "version" }
+  | { type: "rights"; known?: string }
 
 /** The outcome of one read part, in the order of the parts asked for. */
 export type CoreReadItem =
-  CoreRowsItem | { ok: true; type: "version"; version: VersionValue }
+  | CoreRowsItem
+  | { ok: true; type: "version"; version: VersionValue }
+  | { ok: true; type: "rights"; value: RightsValue }
+
+// Запит до сервера, яким прийшла відповідь частини: правило першого знімка
+// (Р5а) відрізняє частини запиту `rights` від частин інших запитів пакета.
+// Окрема мапа, а не поле відповіді: форма відповіді частини не змінюється.
+const requestOfItem = new WeakMap<CoreReadItem, number>()
+
+/**
+ * The server request (a number per source, in the order of sending) that
+ * answered the item; `undefined` — the item was not answered by a request
+ * (a refusal of the source, a part the core answered itself).
+ */
+export const requestOf = (item: CoreReadItem): number | undefined =>
+  requestOfItem.get(item)
 
 /** The outcome of a rows part: the result of a `query` part is never a version. */
 export type CoreRowsItem =
@@ -185,7 +205,11 @@ export interface ReadOptions {
  * them in one place).
  */
 export interface StoreSource extends Omit<CoreSource, "read"> {
-  read(parts: readonly CorePart[]): Promise<CoreReadResult>
+  /**
+   * `caller` — the view whose read this is, when a view reads (the core's
+   * first-snapshot rule re-reads exactly that view, plan B5b-2 Р5а).
+   */
+  read(parts: readonly CorePart[], caller?: Subset): Promise<CoreReadResult>
 }
 
 /**
@@ -325,6 +349,12 @@ export function createCoreSource(
         ? { ok: true, type: "version", version: version.data }
         : internal()
     }
+    if (part.type === "rights") {
+      const rights = rightsValueSchema.safeParse(item.value)
+      return rights.success
+        ? { ok: true, type: "rights", value: rights.data }
+        : internal()
+    }
     const { query } = part
     if (!("rows" in item.value)) return internal()
     try {
@@ -359,6 +389,9 @@ export function createCoreSource(
       throw error
     }
   }
+
+  // Лічильник запитів джерела (`requestOf`).
+  let requests = 0
 
   // Об'єкт частини; частина без об'єкта — рівня каталогу.
   const objectOf = (part: CorePart): MetadataRef | undefined =>
@@ -399,9 +432,11 @@ export function createCoreSource(
     let answer: WireReadParts | undefined
     // Частини, що справді пішли: добираються на старті задачі, не при постановці.
     let live: number[] = []
+    let request = 0
     try {
       answer = await limiter.run(() => {
         live = queries.flatMap((part, i) => (isRefused(part) ? [] : [i]))
+        request = ++requests
         return live.length === 0
           ? Promise.resolve(undefined)
           : readVia(
@@ -419,7 +454,10 @@ export function createCoreSource(
     if (items.length !== live.length) return queries.map(internal)
     return queries.map((part, i) => {
       const at = live.indexOf(i)
-      return at < 0 ? refusal(part) : decode(part, items[at]!, epoch)
+      if (at < 0) return refusal(part)
+      const item = decode(part, items[at]!, epoch)
+      requestOfItem.set(item, request)
+      return item
     })
   }
 
@@ -548,6 +586,11 @@ export function createCoreSource(
       })
       const wires = parts.map((part): WireReadPart => {
         if (part.type === "version") return { type: "version" }
+        if (part.type === "rights") {
+          return part.known === undefined
+            ? { type: "rights" }
+            : { type: "rights", known: part.known }
+        }
         const mapped = readPartToWire(index, part)
         if (!mapped.ok) {
           if ("invalid" in mapped) throw new CommandFailure(mapped.invalid)
@@ -604,7 +647,10 @@ export function createCoreSource(
  * epoch it carries (P4-B spec §6.2) — a key absent from an answer has no
  * row to carry it.
  */
-export function tracked(source: StoreSource): {
+export function tracked(
+  source: StoreSource,
+  caller?: Subset
+): {
   source: StoreSource
   epochs: Set<string | null>
 } {
@@ -616,8 +662,8 @@ export function tracked(source: StoreSource): {
       // Запис — не читання: його епоху шлюз читання не приймає (епоху `run`
       // звіряє write-back); частина `version` епохи не має.
       run: (operation) => source.run(operation),
-      async read(parts) {
-        const result = await source.read(parts)
+      async read(parts, own) {
+        const result = await source.read(parts, own ?? caller)
         for (const item of result.items)
           if (item.ok && "epoch" in item) epochs.add(item.epoch)
         return result

@@ -476,6 +476,56 @@ function runtimeOver(
 }
 
 describe("runtime core", () => {
+  it("goes the session-changed path, closed before the host callback, when rights name another user", async () => {
+    const fake = createFakeSource({ objects: OBJECTS })
+    seed(fake, 1, 1)
+    const userA = "00000000-0000-4000-8000-0000000000a1"
+    fake.rightsSnapshot = { userId: userA, scopeSets: [], rights: [] }
+    fake.rightsVersion = "1".repeat(64)
+    // Міст і для службових частин: фейк відповідає й `rights`.
+    const transport: DataTransport = async (body) =>
+      body.request.type === "read"
+        ? ok(
+            await fake.adapter.read(
+              body.request.items as Parameters<SourceAdapter["read"]>[0]
+            )
+          )
+        : ok(null)
+    const seen: string[] = []
+    const runtime: DataRuntime = createDataRuntime({
+      catalog: { ...catalogOf(OBJECTS), rightsSnapshot: true },
+      transport,
+      subject: SUBJECT,
+      log: () => {},
+      onSessionChanged: () => {
+        // Рантайм закрито до колбека: хуки вже не бачать рядків.
+        const s = handle.getSnapshot()
+        seen.push(
+          `${String(runtime.disposed)}:${s.status}:${s.reason ?? ""}:${s.rows.length}`
+        )
+      },
+    })
+    const core = runtimeHandleOf(runtime).core
+    const handle = core.view(cardOf(1))
+    handle.subscribe(() => {})
+    await settle()
+    expect(handle.getSnapshot().rows).toHaveLength(1)
+    fake.edit(TASK, key(1), { title: "of another user" })
+    fake.rightsSnapshot = {
+      userId: "00000000-0000-4000-8000-0000000000a2",
+      scopeSets: [],
+      rights: [],
+    }
+    fake.rightsVersion = "2".repeat(64)
+    // Знімок іншого користувача й перечитування картки — одним пакетом.
+    core.requestRights()
+    handle.refresh()
+    await settle()
+    expect(seen).toEqual(["true:purged:session-changed:0"])
+    expect(runtime.disposed).toBe(true)
+    expect(inspectCore(core).rowCount()).toBe(0)
+  })
+
   it("purges every view in one notification before onSessionChanged", async () => {
     const fake = createFakeSource({ objects: OBJECTS })
     seed(fake, 1, 1)
@@ -889,6 +939,81 @@ describe("version check and the stale mark (§10)", () => {
     await third
     await settle()
     expect(versionCalls(t.calls)).toBe(2)
+  })
+
+  describe("with the rightsSnapshot flag", () => {
+    const partTypes = (call: DataRequest) =>
+      call.request.type === "read"
+        ? (call.request.items as { type: string }[]).map((i) => i.type)
+        : []
+    const RIGHTS_VERSION = "1".repeat(64)
+    const combinedAnswer = (hash: string): DataResponse => {
+      const base = versionAnswer(hash) as { value: { items: unknown[] } }
+      return {
+        ...ok({
+          epoch: null,
+          items: [
+            ...base.value.items,
+            {
+              ok: true,
+              value: {
+                rightsVersion: RIGHTS_VERSION,
+                snapshot: { userId: null, scopeSets: [], rights: [] },
+              },
+            },
+          ],
+        }),
+        serverHash: hash,
+      }
+    }
+
+    it("a changed serverHash sends version and rights in one request, and alternating hashes give no ping-pong", async () => {
+      const t = controlled({
+        catalog: { ...catalogOf(OBJECTS), rightsSnapshot: true },
+      })
+      // Перший пакет несе `rights` (Р1) сам: його відправляємо окремо, щоб
+      // наступний запит по зміні хеша показав, чи ядро саме просить `rights`.
+      t.core.requestRights()
+      await settle()
+      t.respond({
+        ...ok({
+          epoch: null,
+          items: [
+            {
+              ok: true,
+              value: {
+                rightsVersion: RIGHTS_VERSION,
+                snapshot: { userId: null, scopeSets: [], rights: [] },
+              },
+            },
+          ],
+        }),
+      })
+      await settle()
+      const first = t.send(card())
+      const before = t.calls.length
+      t.respond(changed(ok(null), "server-2"))
+      await first
+      await settle()
+      // Один запит після зміни хеша, з обома службовими частинами.
+      expect(t.calls.length - before).toBe(1)
+      expect(partTypes(t.calls[before]!).sort()).toEqual(["rights", "version"])
+      // Відповідь з частиною `version` і новим хешем нового запиту не запускає.
+      t.respond(combinedAnswer("server-3"))
+      await settle()
+      expect(t.calls.length - before).toBe(1)
+      expect(t.pending).toHaveLength(0)
+    })
+
+    it("without the flag a changed serverHash sends no rights part", async () => {
+      const t = controlled()
+      const first = t.send(card())
+      t.respond(changed(ok(null), "server-2"))
+      await first
+      await settle()
+      expect(t.calls.flatMap(partTypes)).not.toContain("rights")
+      expect(versionCalls(t.calls)).toBe(1)
+    })
   })
 
   it("the first hash is compared with the snapshotHash of the client catalog", async () => {

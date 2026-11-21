@@ -176,6 +176,13 @@ const DISPOSED: CommandError = {
   reason: LIMIT_REASONS.disposed,
 }
 
+// Зміна сесії, яку побачило ядро у відповіді `rights` (Р7): та сама відмова,
+// що її дає сервер, тож викликачі бачать один код.
+const SESSION_CHANGED: CommandError = {
+  code: "command.unauthenticated",
+  reason: LIMIT_REASONS.sessionChanged,
+}
+
 const hasVersionPart = (request: RuntimeRequest): boolean =>
   request.type === "read" &&
   request.items.some(
@@ -413,6 +420,10 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     ...(options.visible === undefined ? {} : { visible: options.visible }),
     log,
     snapshotHash: catalog.snapshotHash,
+    rightsSnapshot: catalog.rightsSnapshot === true,
+    // Інший користувач у відповіді `rights` (Р7) — той самий шлях, що й
+    // відмова `session-changed` транспорту: ядро кличе це поза `commit`.
+    onSessionChanged: () => sessionChanged(SESSION_CHANGED),
     ...(options.onStaleClient === undefined
       ? {}
       : { onStaleClient: options.onStaleClient }),
