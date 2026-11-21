@@ -5,6 +5,7 @@ import { diagnostic, isRepairError } from "../diagnostics"
 import { uuid } from "./helpers"
 import {
   ROLE_FILE,
+  USERS_FILE,
   STATUS_FILE,
   without,
   withRoles,
@@ -171,13 +172,6 @@ describe("sql.declaration-check-form", () => {
       reason: "targetRequired",
     },
     {
-      // Інші дії Users межі видимості не мають: предикат не читає рядка.
-      name: "targetForbidden: update of Users with a row",
-      check: { action: "update", object: USERS, row: "p_row" },
-      sql: fn("p_row uuid"),
-      reason: "targetForbidden",
-    },
-    {
       name: "scopeUnscoped: scope on an unscoped object",
       check: { action: "read", object: ANNOUNCEMENT, scope: "p_scope" },
       sql: fn("p_scope uuid"),
@@ -243,11 +237,6 @@ describe("sql.declaration-check-form", () => {
       sql: fn("p_row uuid"),
     },
     {
-      name: "update of Users without a target",
-      check: { action: "update", object: USERS },
-      sql: fn(""),
-    },
-    {
       name: "create in a scope of a scoped object",
       check: { action: "create", object: TASK, scope: "p_scope" },
       sql: fn("p_scope uuid"),
@@ -284,6 +273,77 @@ describe("sql.declaration-check-form", () => {
     expect(result.model).toBeUndefined()
   })
 
+  // Дія над наявним рядком Users — будь-яка, крім `create` — бере межу
+  // видимості «Користувачів»: ціль-рядок обов'язкова (ADR архітекторки, межа
+  // `SELECT` діє на наявні рядки `UPDATE` і `DELETE`).
+  describe("Users actions over an existing row", () => {
+    const custom: Layer = {
+      [USERS_FILE]: { customActions: [{ id: uuid(7904), name: "ban" }] },
+    }
+    it.each(["read", "update", "delete", "ban"])(
+      "%s requires a row target and accepts one",
+      async (action) => {
+        const none = await judged(
+          { action, object: USERS },
+          fn(""),
+          undefined,
+          custom
+        )
+        expect(none.forms).toEqual([at("targetRequired")])
+        const row = await judged(
+          { action, object: USERS, row: "p_row" },
+          fn("p_row uuid"),
+          undefined,
+          custom
+        )
+        expect(row.forms).toEqual([])
+        expect(
+          row.result.diagnostics.filter((d) => d.severity === "error")
+        ).toEqual([])
+      }
+    )
+  })
+
+  // Контейнер власного рядка не читає: `rightsPredicates` бере лише прив'язку.
+  describe("an unscoped container without other carriers", () => {
+    const box: Layer = {
+      "catalogs/Box/Box.meta.json": {
+        id: uuid(7910),
+        kind: "Catalog",
+        name: "Box",
+        physicalName: "box",
+        kindLabel: "box",
+        scope: "none",
+        rightsContainer: true,
+      },
+    }
+    const BOX: Check["object"] = { kind: "Catalog", name: "Box" }
+    it.each(["create", "read"])(
+      "%s without a target is accepted",
+      async (action) => {
+        const { forms, result } = await judged(
+          { action, object: BOX },
+          fn(""),
+          undefined,
+          box
+        )
+        expect(forms).toEqual([])
+        expect(
+          result.diagnostics.filter((d) => d.severity === "error")
+        ).toEqual([])
+      }
+    )
+    it("read with a row is targetForbidden", async () => {
+      const { forms } = await judged(
+        { action: "read", object: BOX, row: "p_row" },
+        fn("p_row uuid"),
+        undefined,
+        box
+      )
+      expect(forms).toEqual([at("targetForbidden")])
+    })
+  })
+
   // Без жодної ролі функцій прав немає, а з ними й межі видимості
   // «Користувачів» (`hasVisibleUsers`): читання Users рядка не читає.
   it("Users read has no row target without any role", async () => {
@@ -305,6 +365,24 @@ describe("sql.declaration-check-form", () => {
     expect(
       none.result.diagnostics.filter((d) => d.severity === "error")
     ).toEqual([])
+  })
+
+  // Ранній вихід суддi не губить попереджень, зібраних до нього.
+  it("keeps the earlier warnings next to the check-form error", async () => {
+    const unread: Layer = {
+      ...without(ROLE_FILE("OrgAdmin")),
+      [ROLE_FILE("OrgMember")]: { include: [], grants: [] },
+    }
+    const { result, forms } = await judged(
+      { action: "read", object: TASK },
+      fn(""),
+      undefined,
+      unread
+    )
+    expect(forms).toEqual([at("targetRequired")])
+    expect(result.diagnostics.map((d) => d.code)).toContain(
+      "rights.scope-kind-unread"
+    )
   })
 
   it("is an error that the repair class does not pass", () => {

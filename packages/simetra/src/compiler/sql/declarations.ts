@@ -463,16 +463,16 @@ function checkFormReason(
   // Рядка створення ще немає, а `INSERT` кореня виду скоупу судить окрема
   // булева форма (спека прав Рх9): названа перевірка йому не відповідає.
   if (create && contract.root === true) return "createOnRoot"
-  // Предикати дії читають носія рядка (скоуп, власність, вимір, контейнер),
-  // а читання ще й межа «Користувачів» (`readBoundaries`, ключ рядка — id
-  // користувача): без цілі судити нічого. `create` носія ще не має — для
-  // нього ціль `scope`.
+  // Предикати дії читають носія рядка (скоуп, власність, вимір, прив'язку до
+  // контейнера; сам контейнер власного рядка не читає), а дія над наявним
+  // рядком — будь-яка, крім `create` — ще й межі читання (`readBoundaries`,
+  // ключ рядка — id користувача): без цілі судити нічого. `create` носія ще
+  // не має — для нього ціль `scope`.
   const carriers =
-    (action.action === "read" && usersRead.has(contract.objectId)) ||
+    (!create && usersRead.has(contract.objectId)) ||
     contract.scopeKindId !== undefined ||
     contract.ownership.length > 0 ||
     contract.access.length > 0 ||
-    contract.container === true ||
     contract.binding !== undefined
   if (target === undefined && carriers) return "targetRequired"
   if (target !== undefined && !carriers) return "targetForbidden"

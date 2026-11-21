@@ -652,7 +652,7 @@ export async function runStages(
   if (checkForms.length > 0) {
     return {
       ok: false,
-      diagnostics: sortDiagnostics([...staged, ...checkForms]),
+      diagnostics: sortDiagnostics([...diagnostics, ...checkForms]),
     }
   }
   // Один об'єкт контрактів для функцій прав і для пояснення видимості: поле,
