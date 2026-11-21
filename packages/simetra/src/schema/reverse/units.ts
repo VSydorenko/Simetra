@@ -344,7 +344,9 @@ export function layoutUnits(
   // compiler/sql/dependencies.ts), а не порядку файлу; порядок тут потрібен
   // людині, що читає файл або застосовує його вручну.
   const revokeFirst = (u: CatalogUnit) =>
-    u.class === "grant" && u.identity.startsWith("grant:revoke:") ? 0 : 1
+    u.class === "grant" && splitIdentity(u.identity, ":")[1] === "revoke"
+      ? 0
+      : 1
   const files = new Map<string, string>()
   const diagnostics: Diagnostic[] = []
   // Файлова система без регістру злила б `F.sql` і `f.sql` в один файл.
