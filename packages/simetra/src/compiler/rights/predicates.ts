@@ -116,12 +116,7 @@ export function rightsPredicates(
       ? uniformExtents(contract.actions, contract.kindLabel)
       : must(contract.actions.find((a) => a.action === action)).extents
   const F = RIGHTS_FUNCTIONS
-  const head = [
-    action === COMMAND_ACTION
-      ? `(SELECT ${call(COMMAND_FUNCTIONS.action)})`
-      : sqlLiteral(action),
-    sqlLiteral(contract.kindLabel),
-  ]
+  const head = actionHead(contract, action)
   const own = extents.some((e) => e.form === "own")
   const dimensions = new Set(
     extents.flatMap((e) => (e.form === "dimension" ? [e.dimensionId] : []))
@@ -353,6 +348,28 @@ function ownerCondition(
         },
         grantDependent: false,
       }
+}
+
+/** Дія й мітка виду — перші аргументи функцій права. */
+function actionHead(
+  contract: RightsContract,
+  action: string | typeof COMMAND_ACTION
+): string[] {
+  return [
+    action === COMMAND_ACTION
+      ? `(SELECT ${call(COMMAND_FUNCTIONS.action)})`
+      : sqlLiteral(action),
+    sqlLiteral(contract.kindLabel),
+  ]
+}
+
+/**
+ * Множина скоупів з правом дії в обсязі `any` (спека прав §5.1): та сама, що
+ * дає грант предиката `create` політики `INSERT`. Функція запобіжника
+ * `rights_require_scope` бере її тим самим будівником, а не своїм текстом.
+ */
+export function anyScopeSet(contract: RightsContract, action: string): SetCall {
+  return scopeSet("any", actionHead(contract, action))
 }
 
 /** Скоупи з правом в обсязі: своя функція множини на кожну форму (§5.1). */

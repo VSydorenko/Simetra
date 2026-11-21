@@ -6,8 +6,12 @@ import {
   type PredicateDml,
 } from "../rights/predicates"
 
-/** Змінна рядка ядра: стан під замком рядка чи стан «після» запису. */
-export type CommandRow = "v_old" | "v_new"
+/**
+ * Кваліфікатор рядка: змінна ядра (`v_old` — стан під замком рядка, `v_new` —
+ * стан «після» запису) чи псевдонім рядка в `EXISTS` функції запобіжника
+ * (`simetra.rights_require`): та сама формула, що в ядра, над іншим рядком.
+ */
+export type RowQualifier = string
 
 /**
  * Предикати права дії над змінною рядка ядра (спека П4 §6.7): той самий будівник
@@ -23,7 +27,7 @@ export function rightsCheckPredicates(
   contract: RightsContract,
   action: string,
   main: ObjectTable,
-  row: CommandRow,
+  row: RowQualifier,
   dml: PredicateDml
 ): string[] {
   return rightsPredicates(contract, action, main, main, dml).map((predicate) =>
@@ -41,7 +45,7 @@ export function rightsCheck(
   contract: RightsContract,
   action: string,
   main: ObjectTable,
-  row: CommandRow,
+  row: RowQualifier,
   dml: PredicateDml
 ): string {
   const predicates = rightsCheckPredicates(contract, action, main, row, dml)
