@@ -724,13 +724,13 @@ export function createCore(options: {
     item: CoreReadItem
   ) {
     const pairs = deniedPairs(writerContext, deniedBy(next.snapshot))
-    const lost = [...objects.values()].filter(
-      (o) =>
-        prev !== undefined && readLost(prev.snapshot, next.snapshot, o.entry)
+    const lost = [...objects.values()].filter((o) =>
+      readLost(prev?.snapshot, next.snapshot, o.entry)
     )
     // Рядки ТЧ власників з невідомим скоупом (без шапки в сховищі чи з
     // шапкою, старшою за версію власника ТЧ) не судяться за парою: на заміні,
-    // де об'єкт щось утратив, їх прибираємо, повертає наступне читання.
+    // де об'єкт щось утратив, — і на першому знімку, що щось забороняє, — їх
+    // прибираємо, повертає наступне читання.
     const headerless = lost.flatMap((o) =>
       o.sections
         .owners()

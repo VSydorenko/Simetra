@@ -165,14 +165,20 @@ const scopesFor = (snapshot: RightsSnapshot, entry: CatalogEntry) =>
  * `read`, скоуп зі `scopeSets` чи покриття `publicRead`. Тоді рядки ТЧ
  * власників з невідомим скоупом (шапки в сховищі немає) не судяться за
  * парою — їх прибирає заміна, а повертає наступне читання (P4-B spec §6.2
- * правило 4).
+ * правило 4). Перший знімок (`prev` немає) судиться проти «дозволено
+ * все»: втрата — будь-яка пара, яку він забороняє; скоупленому об'єкту, якого
+ * не відкриває `publicRead`, знімок забороняє скоупи поза своїми.
  */
 export function readLost(
-  prev: RightsSnapshot,
+  prev: RightsSnapshot | undefined,
   next: RightsSnapshot,
   entry: CatalogEntry
 ): boolean {
   if (entry.rightsContract !== true) return false
+  if (prev === undefined)
+    return entry.scopeKindId !== undefined
+      ? !publicReadCovers(next, entry)
+      : !readAllowed(next, { scope: null }, entry)
   if (publicReadCovers(prev, entry) && !publicReadCovers(next, entry))
     return true
   const kept = new Set(readRows(next, entry).map(tupleOf))

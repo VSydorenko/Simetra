@@ -265,6 +265,29 @@ describe("the pass on a snapshot replacement", () => {
     expect(linesOf(core, 1)).toBeUndefined()
   })
 
+  it("drops lines of an owner without a header stored before a first snapshot that denies a pair", async () => {
+    const { core, fake } = harness({ mode: "manual" })
+    // Перший пакет без знімка: рядки ТЧ без шапки вже в сховищі, коли знімок
+    // прийде; порівняти його нема з чим, тож він судиться проти «дозволено все».
+    fake.rightsError = { code: "command.unavailable" }
+    seed(fake, 1, 1)
+    fake.setLines(TASK, key(1), "lines", lines)
+    watch(core.view(section(1)))
+    await settle()
+    fake.deliverAll()
+    await settle()
+    expect(core.rights()).toBeUndefined()
+    expect(linesOf(core, 1)?.scope).toBe("unknown")
+    fake.rightsError = undefined
+    grant(fake, ONLY_T())
+    fake.setVisibleScopes([T])
+    core.requestRights()
+    await settle()
+    // Перечитування Р5а ще в польоті: рядки прибрало саме правило заміни.
+    expect(core.rights()?.snapshot).toEqual(ONLY_T())
+    expect(linesOf(core, 1)).toBeUndefined()
+  })
+
   it("keeps lines of an owner without a header when the object lost nothing", async () => {
     const { core, fake } = harness()
     seed(fake, 1, 1)
