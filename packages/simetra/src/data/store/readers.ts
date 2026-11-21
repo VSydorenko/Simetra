@@ -932,7 +932,9 @@ async function readSection(
     // тієї самої епохи версій (правило `sectionLinesStale`): новіша версія
     // могла переїхати в інший скоуп, а версії різних епох не впорядковані,
     // тож така шапка пари не підтверджує — рядки судяться як без шапки
-    // (§6.2 правило 4).
+    // (§6.2 правило 4). Об'єкт без колонки скоупу має один скоуп, `null`,
+    // відомий і без шапки: інакше «невідомий» скоуп обминав би бар'єр
+    // знімка й надгробок пари `(об'єкт, null)`, які судять лише скоуплені.
     const header = o.rows.get(spec.owner)
     const barred = ops.putSection(
       scope,
@@ -943,11 +945,13 @@ async function readSection(
       result.ownerVersion,
       result.epoch,
       readEpoch,
-      header === undefined ||
-        differentEpochs(result.epoch, header.versionEpoch) ||
-        header.version < result.ownerVersion
-        ? "unknown"
-        : header.scope
+      o.entry.scopeColumn === undefined
+        ? null
+        : header === undefined ||
+            differentEpochs(result.epoch, header.versionEpoch) ||
+            header.version < result.ownerVersion
+          ? "unknown"
+          : header.scope
     )
     // ТЧ, відкинута бар'єром знімка, не рухає `sectionRead`: її змонтований
     // вигляд читає її ще раз, уже після знімка (§6.2 правило 4).

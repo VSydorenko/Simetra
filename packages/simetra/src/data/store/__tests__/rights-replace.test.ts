@@ -730,6 +730,64 @@ describe("the snapshot barrier", () => {
     expect(readsOf(fake, TASK)).toHaveLength(reads + 1)
   })
 
+  describe("an object without a scope column", () => {
+    // Скоуп власника нескоупленого об'єкта — `null` за означенням, не
+    // невідомий: рядки ТЧ без шапки судить бар'єр пари `(об'єкт, null)` і її
+    // надгробок, як і рядки зі шапкою.
+    const plain: CatalogEntry = { ...taskR }
+    delete plain.scopeKindId
+    delete plain.scopeColumn
+    const ANY = (userId: string | null = USER) =>
+      snapshotOf([readRow(S, { level: "global", scope: null })], [S, T], userId)
+    const NONE = () => snapshotOf([])
+
+    /** A section view of key 1 without a header, its re-read held in flight. */
+    async function heldSection(core: CoreSession, fake: FakeSource) {
+      seed(fake, 1, 1)
+      fake.setLines(TASK, key(1), "lines", lines)
+      const owned = core.view(section(1))
+      watch(owned)
+      await settle()
+      expect(linesOf(core, 1)?.lines).toHaveLength(1)
+      fake.hold = () => true
+      void core.revalidate(TASK, { visibleOnly: false })
+      await settle()
+      expect(fake.pending).toHaveLength(1)
+      fake.hold = undefined
+      return { owned, late: fake.take() }
+    }
+
+    it("does not write lines in flight across a snapshot that denies the object", async () => {
+      const { core, fake } = harness({ objects: [plain, org] })
+      grant(fake, ANY())
+      const { owned, late } = await heldSection(core, fake)
+      grant(fake, NONE())
+      core.requestRights()
+      await settle()
+      expect(linesOf(core, 1)).toBeUndefined()
+      late.answer(late.issuedAt)
+      await settle()
+      expect(linesOf(core, 1)).toBeUndefined()
+      expect(owned.getSnapshot().section?.lines ?? []).toEqual([])
+    })
+
+    it("does not write lines read before a denying snapshot after the next one reopens the object", async () => {
+      const { core, fake } = harness({ objects: [plain, org] })
+      grant(fake, ANY())
+      const { late } = await heldSection(core, fake)
+      grant(fake, NONE())
+      core.requestRights()
+      await settle()
+      grant(fake, ANY())
+      core.requestRights()
+      await settle()
+      expect(core.rights()?.snapshot).toEqual(ANY())
+      late.answer(late.issuedAt)
+      await settle()
+      expect(linesOf(core, 1)).toBeUndefined()
+    })
+  })
+
   it("keeps a purged row out of a late answer even after the right returns", async () => {
     const { core, fake } = harness()
     seed(fake, 1, 1)
