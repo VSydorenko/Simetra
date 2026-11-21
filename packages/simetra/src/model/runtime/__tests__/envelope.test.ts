@@ -407,7 +407,13 @@ describe("wire schemas", () => {
             ok: true,
             value: {
               rightsVersion: HASH,
-              snapshot: { userId: null, scopeSets: [], rights: [] },
+              snapshot: {
+                userId: null,
+                scopeSets: [],
+                rights: [],
+                members: [],
+                dimensionValues: [],
+              },
             },
           },
         ],

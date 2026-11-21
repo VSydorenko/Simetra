@@ -710,7 +710,13 @@ describe("read batch with known over the engine target", () => {
     const rt = await runtime()
     const anonymous = { ...env.me.session, is_anonymous: true }
     const value = await rt.rightsSnapshot(anonymous)
-    expect(value.snapshot).toEqual({ userId: null, scopeSets: [], rights: [] })
+    expect(value.snapshot).toEqual({
+      userId: null,
+      scopeSets: [],
+      rights: [],
+      members: [],
+      dimensionValues: [],
+    })
   })
 
   it("the rights part alone answers the same wire value under inProcess and as an HTTP envelope", async () => {

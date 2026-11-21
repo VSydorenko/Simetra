@@ -196,6 +196,7 @@ export const COMPILER_RULES = [
   "rights.scope-kind-unread",
   "rights.snapshot-source-unknown",
   "rights.snapshot-exempt-writer",
+  "rights.signal-source-unknown",
   "reference.not-referenceable",
   "reference.custom-table-key",
   "reference.custom-table-deferrable-key",

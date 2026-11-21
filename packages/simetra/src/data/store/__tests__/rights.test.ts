@@ -6,7 +6,10 @@ import {
   type RightsSnapshot,
 } from "simetra/model"
 import { describe, expect, it } from "vitest"
-import { catalogEntry } from "../../../model/runtime/__tests__/entries"
+import {
+  catalogEntry,
+  catalogRights,
+} from "../../../model/runtime/__tests__/entries"
 import { canSubscribe, readAllowed } from "../rights"
 
 const KIND = "00000000-0000-4000-8000-0000000000c1"
@@ -23,11 +26,14 @@ const scoped = (over: Partial<CatalogEntry> = {}): CatalogEntry =>
     kindLabel: LABEL,
     scopeKindId: KIND,
     signal: true,
-    rightsContract: true,
+    rights: catalogRights(),
     ...over,
   })
 const unscoped = (over: Partial<CatalogEntry> = {}): CatalogEntry => {
-  const entry: CatalogEntry = { ...scoped({ id: PLAIN }), ...over }
+  // Контракт нескоупленого: без межі тенанта й множини скоупів.
+  const rights = catalogRights({ readBoundary: [] })
+  delete rights.scopeSet
+  const entry: CatalogEntry = { ...scoped({ id: PLAIN, rights }), ...over }
   delete entry.scopeKindId
   delete entry.scopeColumn
   return entry
@@ -48,7 +54,13 @@ const snap = (
   rights: RightsRow[],
   scopeSets = [{ scopeKind: KIND, scope: SCOPE }],
   userId: string | null = USER
-): RightsSnapshot => ({ userId, scopeSets, rights })
+): RightsSnapshot => ({
+  userId,
+  scopeSets,
+  rights,
+  members: [],
+  dimensionValues: [],
+})
 
 const topic = (object = OBJECT, scope = SCOPE, kind = KIND) =>
   channelTopic({ kind: "changes", scopeKindId: kind, scope, object })
@@ -154,16 +166,74 @@ describe("canSubscribe", () => {
       false,
     ],
     ["userId null", snap([row()], undefined, null), topic(), false],
+    // Канали прав (Р11 плану B6-2, перенесено в B6-1): межа тенанта без
+    // умови права, глобальний — дійсному, користувача — лише свій.
     [
-      "канал прав",
+      "канал прав свого скоупу без прав",
+      snap([]),
+      channelTopic({ kind: "rights", scopeKindId: KIND, scope: SCOPE }),
+      true,
+    ],
+    [
+      "канал прав скоупу поза scopeSets",
       snap([row()]),
+      channelTopic({ kind: "rights", scopeKindId: KIND, scope: OTHER }),
+      false,
+    ],
+    [
+      "канал прав виду поза scopeSets",
+      snap([row()]),
+      channelTopic({ kind: "rights", scopeKindId: OTHER, scope: SCOPE }),
+      false,
+    ],
+    [
+      "канал прав з нульовим лише видом",
+      snap([row()]),
+      channelTopic({ kind: "rights", scopeKindId: ZERO_UUID, scope: SCOPE }),
+      false,
+    ],
+    [
+      "канал прав з нульовим лише скоупом",
+      snap([row()]),
+      channelTopic({ kind: "rights", scopeKindId: KIND, scope: ZERO_UUID }),
+      false,
+    ],
+    [
+      "глобальний канал прав без членства",
+      snap([], []),
+      channelTopic({
+        kind: "rights",
+        scopeKindId: ZERO_UUID,
+        scope: ZERO_UUID,
+      }),
+      true,
+    ],
+    [
+      "глобальний канал прав, userId null",
+      snap([], [], null),
+      channelTopic({
+        kind: "rights",
+        scopeKindId: ZERO_UUID,
+        scope: ZERO_UUID,
+      }),
+      false,
+    ],
+    [
+      "канал прав свого скоупу, userId null",
+      snap([row()], undefined, null),
       channelTopic({ kind: "rights", scopeKindId: KIND, scope: SCOPE }),
       false,
     ],
     [
-      "канал користувача",
-      snap([row()]),
+      "свій канал користувача",
+      snap([]),
       channelTopic({ kind: "user", userId: USER }),
+      true,
+    ],
+    [
+      "чужий канал користувача",
+      snap([row()]),
+      channelTopic({ kind: "user", userId: OTHER }),
       false,
     ],
     ["чужий формат", snap([row()]), `other:${KIND}:${SCOPE}:${OBJECT}`, false],
@@ -267,8 +337,9 @@ describe("readAllowed", () => {
     expect(readAllowed(snap([row()]), { scope: null }, scoped())).toBe(false)
   })
 
-  it("об'єкт без rightsContract — так", () => {
-    const entry = scoped({ rightsContract: undefined })
+  it("об'єкт без контракту rights — так", () => {
+    const entry = scoped()
+    delete entry.rights
     expect(readAllowed(snap([], []), pair, entry)).toBe(true)
   })
 

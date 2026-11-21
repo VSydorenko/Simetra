@@ -6,6 +6,8 @@ import {
   isObjectTable,
   type MetadataRef,
   type PhysicalTable,
+  type CatalogRightsCarrier,
+  type CatalogRightsSubject,
   type RuntimeAttribute,
   type RuntimeCatalog,
   type RuntimeConstraint,
@@ -15,14 +17,15 @@ import {
   type RuntimeSection,
   type ObjectTable,
 } from "simetra/model"
-import { isSignalObject } from "./access-units"
+import { isSignalObject, readBoundaries } from "./access-units"
 import { canonicalize } from "./canonical"
+import { compareStrings } from "./diagnostics"
 import type {
   CatalogCommandContract,
   CommandReference,
 } from "./catalog-command/contracts"
 import type { CompiledModel, SourceObject } from "./compile"
-import type { QualifiedName } from "./contracts"
+import type { CarrierContract, QualifiedName } from "./contracts"
 import {
   entityFields,
   objectEntity,
@@ -31,7 +34,9 @@ import {
   type ValueSource,
 } from "./entity-fields"
 import type { PresentationBlock } from "./presentation"
-import { hasRightsFunctions } from "./rights/functions"
+import { hasRightsFunctions, hasVisibleUsers } from "./rights/functions"
+import { carrierColumn } from "./rights/predicates"
+import { triggeredRelationTable } from "./rights/relation-table"
 import { sha256HexSync } from "./sha256"
 
 /**
@@ -87,13 +92,34 @@ export function buildRuntimeCatalog(model: CompiledModel): RuntimeCatalog {
     snapshotHash: model.hash,
     provider: model.project.database.provider,
     ...(hasRightsFunctions(model.contracts, model.project.database.provider)
-      ? { rightsSnapshot: true as const }
+      ? { rightsSnapshot: true as const, ...adoptedFactsOf(model) }
       : {}),
     objects: model.objects.flatMap((object): RuntimeObject[] => {
       const contract = contracts.get(object.id)
       if (contract === undefined) return []
       return [runtimeObject(object, contract, facts)]
     }),
+  }
+}
+
+/**
+ * Факти прийнятих джерел (спека П4-B §8.2): тригера сигналу прав на прийнятій
+ * таблиці немає (спека прав §4.7), тож клієнт мусить знати, що вони свіжіють
+ * за інтервалом. Призначення — будь-якого рівня, зокрема контейнера.
+ */
+function adoptedFactsOf(
+  model: CompiledModel
+): Pick<RuntimeCatalog, "adoptedFacts"> {
+  const { membershipSources, assignmentSources } = model.contracts
+  if (membershipSources.length === 0 && assignmentSources.length === 0)
+    return {}
+  return {
+    adoptedFacts: {
+      membershipKinds: [
+        ...new Set(membershipSources.map((s) => s.scopeKindId)),
+      ].sort(compareStrings),
+      ...(assignmentSources.length > 0 ? { assignments: true as const } : {}),
+    },
   }
 }
 
@@ -156,6 +182,20 @@ function runtimeObject(
     (m) => m.objectId === object.id
   )
   const operations = operationsOf(object.id, contract, facts.model)
+  // Ключ — лише з `op.id`, версія — з `expectedVersion`: реквізитами вони не є.
+  const header = attributes(
+    fields.filter(
+      (f) => f.columns[0] !== key && f.columns[0] !== versionColumn
+    ),
+    table,
+    {
+      insert: new Set(contract.createKeys),
+      update: new Set(contract.updateKeys),
+      references: contract.references,
+      header: true,
+    },
+    facts
+  )
   // Той самий UUID, що в ядра кореня: клієнт мапить `creatorMember`
   // записом довідника членства без `operations` (В8).
   const creatorMembership = operations.create?.root?.membership
@@ -171,9 +211,7 @@ function runtimeObject(
     versionName: fieldOf(fields, versionColumn).name,
     signal: isSignalObject(facts.model, object.id),
     ...publicReadOf(facts.model, object.id, table),
-    ...(facts.model.contracts.rights.some((r) => r.objectId === object.id)
-      ? { rightsContract: true as const }
-      : {}),
+    ...rightsOf(object.id, header, contract, facts),
     ...presentationOf(
       facts.model.presentation.objects.find((p) => p.objectId === object.id),
       fields
@@ -184,20 +222,7 @@ function runtimeObject(
     ...(membership === undefined
       ? {}
       : { membership: { userColumn: membership.userColumn } }),
-    // Ключ — лише з `op.id`, версія — з `expectedVersion`: реквізитами вони не є.
-    attributes: attributes(
-      fields.filter(
-        (f) => f.columns[0] !== key && f.columns[0] !== versionColumn
-      ),
-      table,
-      {
-        insert: new Set(contract.createKeys),
-        update: new Set(contract.updateKeys),
-        references: contract.references,
-        header: true,
-      },
-      facts
-    ),
+    attributes: header,
     tabularSections: contract.tabularSections.map((section): RuntimeSection => {
       const source = must(
         entity.sections.find(
@@ -244,6 +269,123 @@ function runtimeObject(
     kernelHash: kernelHashOf(operations),
     operations,
     constraints: constraints(table, facts),
+  }
+}
+
+/**
+ * Контракт прав запису (спека П4-B §9.2) — з `RightsContract` і контракту
+ * доступу основної таблиці. Носій — колонка основної таблиці
+ * (`carrierColumn`), названа реквізитом шапки чи ключем: клієнт читає носій
+ * із рядка сховища за логічним ім'ям.
+ */
+function rightsOf(
+  objectId: string,
+  header: readonly RuntimeAttribute[],
+  command: CatalogCommandContract,
+  facts: Facts
+): Pick<RuntimeObject, "rights"> {
+  const { model } = facts
+  const { contracts, objects, project } = model
+  const contract = contracts.rights.find((r) => r.objectId === objectId)
+  if (contract === undefined) return {}
+  const main = command.table
+  const carrierOf = (carrier: CarrierContract): CatalogRightsCarrier => {
+    const column = carrierColumn(contract, carrier, main, main)
+    if (column === command.key) return { key: true }
+    const attribute = header.find((a) => a.column === column)
+    // Носій поза реквізитами й ключем клієнт не прочитав би з рядка: краще
+    // гучна помилка компіляції, ніж мовчазне `unknown` чи чужа колонка.
+    if (attribute === undefined) {
+      throw new Error(
+        `internal: rights carrier ${column} of ${contract.kindLabel} is neither an attribute nor the key`
+      )
+    }
+    return { attribute: attribute.name }
+  }
+  const subjectOf = (
+    target: { users: true } | { membership: string }
+  ): CatalogRightsSubject =>
+    "users" in target ? { users: true } : { scopeKind: target.membership }
+  const access = must(
+    contracts.access.find(
+      (a) =>
+        a.objectId === objectId &&
+        a.table.schema === main.schema &&
+        a.table.name === main.name
+    ),
+    `access contract of ${contract.kindLabel}`
+  )
+  const scopeKindId = access.scope?.scopeKindId
+  return {
+    rights: {
+      actions: contract.actions.map((a) => ({
+        action: a.action,
+        extents: a.extents.map((e) => ({ ...e })),
+      })),
+      ownership: contract.ownership.map((o) => ({
+        carrier: carrierOf(o),
+        owner: subjectOf(o.owner),
+      })),
+      access: contract.access.map(({ dimensionId, carrier }) => {
+        const dimension = must(
+          contracts.accessDimensions.find((d) => d.dimensionId === dimensionId),
+          `access dimension ${dimensionId}`
+        )
+        const relation =
+          "relation" in dimension.values ? dimension.values.relation : undefined
+        // Свіжий — зв'язок, на який платформа ставить тригер сигналу прав
+        // (та сама умова, що в генераторах); функція виміру — ні.
+        const fresh =
+          relation !== undefined &&
+          triggeredRelationTable(relation, model.physical, objects) !==
+            undefined
+        return {
+          dimensionId,
+          carrier: carrierOf(carrier),
+          fresh,
+          ...(relation === undefined
+            ? {}
+            : { subject: subjectOf(relation.subjectTarget) }),
+        }
+      }),
+      ...(contract.binding === undefined
+        ? {}
+        : {
+            binding: {
+              containerId: contract.binding.containerId,
+              carrier: carrierOf(contract.binding.carrier),
+            },
+          }),
+      readBoundary: [
+        ...readBoundaries(
+          access,
+          hasVisibleUsers(contracts, project.database.provider)
+        ),
+      ],
+      ...(contract.root === true
+        ? {
+            root:
+              contract.rootAuthor === undefined
+                ? {}
+                : {
+                    author: carrierOf({
+                      column: contract.rootAuthor,
+                      value: contract.rootAuthor,
+                    }),
+                  },
+          }
+        : {}),
+      ...(scopeKindId === undefined
+        ? {}
+        : {
+            scopeSet: contracts.membership.some(
+              (m) =>
+                m.scopeKindId === scopeKindId && m.setFunction !== undefined
+            )
+              ? "membership"
+              : "verbatim",
+          }),
+    },
   }
 }
 

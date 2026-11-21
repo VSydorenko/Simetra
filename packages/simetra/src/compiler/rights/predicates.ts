@@ -277,7 +277,7 @@ function rootCreatePredicates(contract: RightsContract): RightsPredicate[] {
  * немає — дефект моделі: краще гучна помилка, ніж мовчазний предикат на чужій
  * колонці.
  */
-function carrierColumn(
+export function carrierColumn(
   contract: RightsContract,
   carrier: CarrierContract,
   table: ObjectTable,

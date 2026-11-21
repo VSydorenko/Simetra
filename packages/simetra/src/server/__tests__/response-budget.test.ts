@@ -4,6 +4,7 @@ import {
   jsonBytes,
   LIMIT_REASONS,
   RESPONSE_BUDGET_BYTES,
+  RIGHTS_DIMENSION_VALUES_MAX,
   type WireChange,
   type WireCommandError,
   type WireOperation,
@@ -13,6 +14,7 @@ import {
 } from "simetra/model"
 import { describe, expect, it } from "vitest"
 import { fitParts, fitRunResult } from "../response-budget"
+import { canonicalSnapshot, rightsValueOf } from "../rights-snapshot"
 import { ID, link, region, sample } from "./fixtures"
 
 const index = catalogIndex([sample, region, link])
@@ -663,6 +665,8 @@ describe("fitParts: частина rights", () => {
     snapshot: {
       userId: null,
       scopeSets: [],
+      members: [],
+      dimensionValues: [],
       rights: [
         {
           level: "global",
@@ -679,6 +683,37 @@ describe("fitParts: частина rights", () => {
   })
   const rowsOf = (bytes: number): WireReadResult => ({
     rows: [linkRow(1, bytes)],
+  })
+
+  // Спека П4-B §12: змінений знімок — корисні байти; зверху лише конверт.
+  it("змінений знімок з виміром на межі значень — відповідь ≤ 1,1 × знімка + 2 КіБ", async () => {
+    const snapshot = canonicalSnapshot({
+      userId: uuid(1),
+      scopeSets: [{ scopeKind: uuid(2), scope: uuid(3) }],
+      rights: [],
+      members: [{ scopeKind: uuid(2), scope: uuid(3), member: uuid(4) }],
+      dimensionValues: [
+        {
+          dimension: uuid(5),
+          values: Array.from({ length: RIGHTS_DIMENSION_VALUES_MAX }, (_, n) =>
+            uuid(10_000 + n)
+          ),
+          truncated: true,
+          digest: "d".repeat(64),
+        },
+        { dimension: uuid(6), values: [uuid(7)] },
+      ],
+    })
+    const value = await rightsValueOf(snapshot, "f".repeat(64))
+    expect(value.snapshot).toBe(snapshot)
+    const budget = fitParts(index, [{ rights: true }], HASH)
+    expect(budget.fit(0, value)).toBe("accept")
+    const out = budget.finish(EPOCH, new Map())
+    if ("code" in out) throw new Error(`refused: ${out.code}`)
+    expect(out.items[0]).toStrictEqual({ ok: true, value })
+    expect(responseSize(value)).toBeLessThanOrEqual(
+      1.1 * jsonBytes(snapshot) + 2048
+    )
   })
 
   it("знімок у межах бюджету — accept, значення без змін", () => {

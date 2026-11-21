@@ -4,9 +4,11 @@ import {
   PLATFORM_ROLES,
   PROVIDER_API_ROLES,
   RIGHTS_CLIENT_SNAPSHOT_FUNCTION_NAME,
+  RIGHTS_DIMENSION_VALUES_MAX,
 } from "simetra/model"
 import {
   ORG_KIND_ID,
+  REGION_DIMENSION_ID,
   compileRights,
   policyDomain,
   signalTopicDomain,
@@ -80,9 +82,13 @@ describe("rights_client_snapshot", () => {
     const { sql } = fn(model)
     expect(sql).toContain("v_user := (SELECT simetra.current_user_id());")
     expect(sql).toContain(
-      "IF v_user IS NULL THEN\n    RETURN jsonb_build_object('userId', NULL, 'scopeSets', '[]'::jsonb, 'rights', '[]'::jsonb);"
+      "IF v_user IS NULL THEN\n    RETURN jsonb_build_object('userId', NULL, 'scopeSets', '[]'::jsonb, 'rights', '[]'::jsonb, 'members', '[]'::jsonb, 'dimensionValues', '[]'::jsonb);"
     )
     expect(sql).toContain("FROM simetra.rights_mine() m")
+    expect(sql).toContain("FROM simetra.rights_my_scopes() s")
+    expect(sql).toContain(
+      "FROM simetra.rights_dimension_values(d.dimension) AS t(value)"
+    )
     // Чужі факти — лише через `_of`-варіанти з параметром користувача.
     expect(sql).not.toMatch(/rights_\w+_of\(/)
   })
@@ -93,6 +99,28 @@ describe("rights_client_snapshot", () => {
       "ORDER BY m.level, m.level_id, m.scope, m.container, m.object, m.action, m.extent, m.dimension_id)"
     )
     expect(sql).toContain("ORDER BY s.scope_kind, s.scope)")
+    expect(sql).toContain("ORDER BY s.scope_kind_id, s.scope, s.member)")
+    expect(sql).toContain("ORDER BY d.dimension)")
+    expect(sql).toContain("jsonb_agg(x.value ORDER BY x.value)")
+    expect(sql).toContain("string_agg(x.value::text, ',' ORDER BY x.value)")
+  })
+
+  it("asks dimension values for every dimension of the contracts", () => {
+    expect(fn(model).sql).toContain(
+      `FROM (VALUES ('${REGION_DIMENSION_ID}'::uuid)) d(dimension)`
+    )
+  })
+
+  it("cuts a dimension at the cap, marks it truncated and carries the digest of the full set", () => {
+    const { sql } = fn(model)
+    const max = RIGHTS_DIMENSION_VALUES_MAX
+    expect(sql).toContain(
+      `CASE WHEN v.total > ${max}\n        THEN jsonb_build_object('dimension', d.dimension, 'values', v.head, 'truncated', true, 'digest', v.digest)\n        ELSE jsonb_build_object('dimension', d.dimension, 'values', v.head) END`
+    )
+    expect(sql).toContain(`FILTER (WHERE x.n <= ${max})`)
+    expect(sql).toContain(
+      "encode(sha256(convert_to(string_agg(x.value::text, ',' ORDER BY x.value), 'UTF8')), 'hex') AS digest"
+    )
   })
 
   it("takes the scope set of a kind by the same expression as the read policy, once per kind", () => {
@@ -122,6 +150,11 @@ describe("rights_client_snapshot", () => {
       expect.arrayContaining([
         { type: "unit", identity: "function:simetra.current_user_id()" },
         { type: "unit", identity: "function:simetra.rights_mine()" },
+        { type: "unit", identity: "function:simetra.rights_my_scopes()" },
+        {
+          type: "unit",
+          identity: "function:simetra.rights_dimension_values(uuid)",
+        },
         {
           type: "unit",
           identity: "function:public.org_member_member_scopes()",
@@ -156,7 +189,9 @@ describe("rights_client_snapshot", () => {
   it("exists in a single-tenant project without rights catalogs, with an empty scope list", async () => {
     const result = await compileRights(singleTenantRights())
     expect(result.diagnostics).toEqual([])
-    expect(fn(result.model!).sql).toContain("'scopeSets', '[]'::jsonb,")
+    const { sql } = fn(result.model!)
+    expect(sql).toContain("'scopeSets', '[]'::jsonb,")
+    expect(sql).toContain("'dimensionValues', '[]'::jsonb);\nEND")
   })
 
   it("generates nothing without rights functions", async () => {

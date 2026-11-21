@@ -68,6 +68,13 @@ describe("signal authorization units", () => {
       `REVOKE EXECUTE ON FUNCTION ${fn} FROM ${roles.service};`,
       `GRANT EXECUTE ON FUNCTION ${fn} TO ${COMMAND};`,
     ]
+    // Сигнали прав (Р8): `EXECUTE` нікому, зокрема ролі команд.
+    const nobody = (fn: string) => [
+      `REVOKE EXECUTE ON FUNCTION ${fn} FROM PUBLIC;`,
+      `REVOKE EXECUTE ON FUNCTION ${fn} FROM ${roles.anonymous};`,
+      `REVOKE EXECUTE ON FUNCTION ${fn} FROM ${roles.user};`,
+      `REVOKE EXECUTE ON FUNCTION ${fn} FROM ${roles.service};`,
+    ]
     expect(
       signalUnits()
         .filter((u) => u.class === "grant")
@@ -83,6 +90,8 @@ describe("signal authorization units", () => {
         ...commandOnly(payload),
         ...commandOnly("simetra.signal(uuid, uuid, uuid, jsonb, bigint, text)"),
         ...commandOnly("simetra.signal_invalidate(uuid, uuid, uuid)"),
+        ...nobody("simetra.signal_rights(uuid, uuid)"),
+        ...nobody("simetra.signal_user_rights(uuid)"),
       ].sort()
     )
   })
@@ -121,6 +130,30 @@ describe("signal authorization units", () => {
     expect(functionSql(SIGNAL_FUNCTIONS.topicAllowed.name)).not.toMatch(
       /rights_container/
     )
+  })
+
+  it("subscribes to a rights channel by the scope set of a scope kind of the model, the global one by both zeros, a user channel by the current user; send refuses both (Р10)", () => {
+    const sql = functionSql(SIGNAL_FUNCTIONS.topicAllowed.name)
+    const zero = "'00000000-0000-0000-0000-000000000000'::uuid"
+    expect(sql).toContain(
+      [
+        "    IF p_send THEN",
+        "      RETURN false;",
+        "    END IF;",
+        "    v_kind := v_parts[1]::uuid;",
+        "    v_scope := v_parts[2]::uuid;",
+        "    RETURN COALESCE(CASE v_kind",
+        `      WHEN ${zero} THEN v_scope = ${zero}`,
+        `      WHEN '${ORG_KIND_ID}'::uuid THEN v_scope = ANY (ARRAY(SELECT public.org_member_member_scopes()))`,
+        "      ELSE false",
+        "    END, false);",
+      ].join("\n")
+    )
+    expect(sql).toContain(
+      "    RETURN NOT p_send AND v_parts[1]::uuid = (SELECT simetra.current_user_id());"
+    )
+    // Канали прав — не гілки об'єктів оракула.
+    expect(branches().has(ORG_KIND_ID)).toBe(false)
   })
 
   it("subscribes to an unscoped object by has_right with the zero scope", () => {
@@ -173,8 +206,86 @@ describe("signal authorization units", () => {
     )
   })
 
+  it("the rights senders are VOLATILE SECURITY INVOKER with an empty search_path and return nothing (Р8)", () => {
+    const head = (sql: string) => sql.split("\nAS ")[0]
+    expect(head(functionSql(SIGNAL_FUNCTIONS.rights.name))).toBe(
+      "CREATE OR REPLACE FUNCTION simetra.signal_rights(p_scope_kind uuid, p_scope uuid)\nRETURNS void\nLANGUAGE plpgsql VOLATILE SECURITY INVOKER\nSET search_path = ''"
+    )
+    expect(head(functionSql(SIGNAL_FUNCTIONS.userRights.name))).toBe(
+      "CREATE OR REPLACE FUNCTION simetra.signal_user_rights(p_user uuid)\nRETURNS void\nLANGUAGE plpgsql VOLATILE SECURITY INVOKER\nSET search_path = ''"
+    )
+  })
+
+  // Форму рядка outbox сигналу прав судить сама функція (Р8): її пише власник
+  // повз політику; кожне правило — окрема відмова `22023` до вставки, без
+  // перевірки режиму злиття.
+  it("signal_rights refuses a null kind, a null scope and mixed zeros before one outbox row (Р8)", () => {
+    const zero = "'00000000-0000-0000-0000-000000000000'::uuid"
+    const shape = bodyShape(functionSql(SIGNAL_FUNCTIONS.rights.name))
+    expect(shape.map((s) => s.type)).toEqual([
+      "block",
+      "if",
+      "raise",
+      "if",
+      "raise",
+      "if",
+      "raise",
+      "execsql",
+      "return",
+    ])
+    expect(
+      shape.filter((s) => s.type === "if").map((s) => s.expressions[0]!.tree)
+    ).toEqual([
+      tree("SELECT p_scope_kind IS NULL"),
+      tree("SELECT p_scope IS NULL"),
+      tree(`SELECT (p_scope_kind = ${zero}) <> (p_scope = ${zero})`),
+    ])
+    expect(
+      functionSql(SIGNAL_FUNCTIONS.rights.name).match(
+        /RAISE EXCEPTION USING ERRCODE = '22023'/g
+      )
+    ).toHaveLength(3)
+    expect(shape[7]!.expressions[0]!.tree).toEqual(
+      tree(
+        "INSERT INTO simetra.signal_outbox (method, payload) VALUES ('publish', jsonb_build_object('channel', 'simetra-rights:' || p_scope_kind::text || ':' || p_scope::text, 'data', jsonb_build_object('op', 'rights')))"
+      )
+    )
+  })
+
+  it("signal_user_rights refuses a null and the zero user before one outbox row (Р8)", () => {
+    const zero = "'00000000-0000-0000-0000-000000000000'::uuid"
+    const shape = bodyShape(functionSql(SIGNAL_FUNCTIONS.userRights.name))
+    expect(shape.map((s) => s.type)).toEqual([
+      "block",
+      "if",
+      "raise",
+      "if",
+      "raise",
+      "execsql",
+      "return",
+    ])
+    expect(
+      shape.filter((s) => s.type === "if").map((s) => s.expressions[0]!.tree)
+    ).toEqual([tree("SELECT p_user IS NULL"), tree(`SELECT p_user = ${zero}`)])
+    expect(
+      functionSql(SIGNAL_FUNCTIONS.userRights.name).match(
+        /RAISE EXCEPTION USING ERRCODE = '22023'/g
+      )
+    ).toHaveLength(2)
+    expect(shape[5]!.expressions[0]!.tree).toEqual(
+      tree(
+        "INSERT INTO simetra.signal_outbox (method, payload) VALUES ('publish', jsonb_build_object('channel', 'simetra-user:' || p_user::text, 'data', jsonb_build_object('op', 'rights')))"
+      )
+    )
+  })
+
   it("the senders require the outbox table", () => {
-    for (const fn of [SIGNAL_FUNCTIONS.signal, SIGNAL_FUNCTIONS.invalidate]) {
+    for (const fn of [
+      SIGNAL_FUNCTIONS.signal,
+      SIGNAL_FUNCTIONS.invalidate,
+      SIGNAL_FUNCTIONS.rights,
+      SIGNAL_FUNCTIONS.userRights,
+    ]) {
       const unit = signalUnits().find(
         (u) =>
           u.class === "function" &&

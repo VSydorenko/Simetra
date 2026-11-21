@@ -2,6 +2,7 @@ import {
   PLATFORM_SCHEMA,
   RIGHTS_CLIENT_SNAPSHOT_FUNCTION_NAME,
   rightsSnapshotSchema,
+  type RightsDimensionValues,
   type RightsSnapshot,
 } from "simetra/model"
 import { ident } from "./read"
@@ -22,6 +23,8 @@ export const ANONYMOUS_SNAPSHOT: RightsSnapshot = Object.freeze({
   userId: null,
   scopeSets: [],
   rights: [],
+  members: [],
+  dimensionValues: [],
 })
 
 // Ключ повного кортежу рядка: канонічний порядок не залежить від того, у якому
@@ -34,6 +37,20 @@ const byKey = <T>(items: readonly T[], key: (item: T) => string): T[] =>
     .map((item) => ({ item, key: key(item) }))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
     .map(({ item }) => item)
+
+/**
+ * Значення виміру в канонічному вигляді. `truncated` і `digest` — лише коли
+ * є: `digest` входить у відбиток, тож зміна значення за межею змінює
+ * `rightsVersion`.
+ */
+const canonicalDimension = (
+  d: RightsDimensionValues
+): RightsDimensionValues => ({
+  dimension: d.dimension,
+  values: byKey(d.values, (v) => v),
+  ...(d.truncated === undefined ? {} : { truncated: d.truncated }),
+  ...(d.digest === undefined ? {} : { digest: d.digest }),
+})
 
 /**
  * Знімок у канонічному вигляді: масиви впорядковані за повним кортежем, поля
@@ -66,6 +83,16 @@ export function canonicalSnapshot(snapshot: RightsSnapshot): RightsSnapshot {
       extent: r.extent,
       dimensionId: r.dimensionId,
     })),
+    members: byKey(snapshot.members, (m) =>
+      tupleKey(m.scopeKind, m.scope, m.member)
+    ).map((m) => ({
+      scopeKind: m.scopeKind,
+      scope: m.scope,
+      member: m.member,
+    })),
+    dimensionValues: byKey(snapshot.dimensionValues, (d) =>
+      tupleKey(d.dimension)
+    ).map(canonicalDimension),
   }
 }
 

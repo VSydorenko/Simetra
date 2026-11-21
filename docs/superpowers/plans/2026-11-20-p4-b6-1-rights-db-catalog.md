@@ -60,7 +60,7 @@ AFTER-тригерів над модельними таблицями факті
 | # | Рішення | Вплив на спеку |
 | --- | --- | --- |
 | Р1 | **Контракт прав у каталозі**: `catalogEntrySchema.rights?` замінює `rightsContract?: true`. Поля — з `RightsContract`/`AccessContract` (`compiler/contracts.ts`): `actions` з обсягами (`any`, `own`, вимір), `ownership` (носій, власник — користувач чи членство виду), `access` (вимір, носій, `fresh`, суб'єкт), `binding?` (контейнер, носій), `readBoundary` (`readBoundaries`), `root?` (носій автора), `scopeSet: "membership" \| "verbatim"`. `carrier` — `{ attribute: <логічне ім'я> } \| { key: true }` (за `carrierColumn`; колонка ні серед атрибутів, ні ключем — помилка компілятора). `fresh` — зв'язок `values.relation` невідомого `KIND_REGISTRY` виду (є тригер зв'язку); функція виміру чи прийнята `CustomTable` — `false`. `snapshotHash` змінюється, `kernelHash` — ні | §3, §9.2 (задача 0) |
-| Р2 | **Знімок розширюється, не дублюється**: до полів 1-Р2 додано `members: { scopeKind, scope, member }[]` (`rights_my_scopes()`) і `dimensionValues: { dimension, values, truncated? }[]` (`rights_dimension_values` на кожен вимір контрактів; понад `RIGHTS_DIMENSION_VALUES_MAX` = 1 000 значень виміру — перші за порядком, `truncated: true` і `digest` — sha-256 повного впорядкованого набору, тож зміна будь-якого значення за межею змінює `rightsVersion`; гілка такого виміру — `unknown`, а зміна `digest` для Р6 — втрата: знімок повертається цілим на кожну зміну, тож його розмір має межу). **`versions` і `projectionVersion` у знімок не входять**: версії скоупів змінюються від чужих змін прав і змушували б повертати знімок без зміни моїх фактів; ключ кешу — `rightsVersion` (1-Р3). Окремої ознаки свіжості немає: сигнали прав є в кожному проєкті з функціями прав (Р9), тобто з `rightsSnapshot` (1-Р6) | §9.1 — поля; §9.3 — ключ кешу = `rightsVersion` (задача 0). **На погодження** |
+| Р2 | **Знімок розширюється, не дублюється**: до полів 1-Р2 додано `members: { scopeKind, scope, member }[]` (`rights_my_scopes()`) і `dimensionValues: { dimension, values, truncated?, digest? }[]` (`rights_dimension_values` на кожен вимір контрактів; понад `RIGHTS_DIMENSION_VALUES_MAX` = 1 000 значень виміру — перші за порядком, `truncated: true` і `digest` — sha-256 повного впорядкованого набору, тож зміна будь-якого значення за межею змінює `rightsVersion`; гілка такого виміру — `unknown`, а зміна `digest` для Р6 — втрата: знімок повертається цілим на кожну зміну, тож його розмір має межу). **`versions` і `projectionVersion` у знімок не входять**: версії скоупів змінюються від чужих змін прав і змушували б повертати знімок без зміни моїх фактів; ключ кешу — `rightsVersion` (1-Р3). Окремої ознаки свіжості немає: сигнали прав є в кожному проєкті з функціями прав (Р9), тобто з `rightsSnapshot` (1-Р6) | §9.1 — поля; §9.3 — ключ кешу = `rightsVersion` (задача 0). **На погодження** |
 | Р8 | **`signal_rights(p_scope_kind uuid, p_scope uuid)`** і **`signal_user_rights(p_user uuid)`** — `plpgsql VOLATILE SECURITY INVOKER SET search_path = ''`, `EXECUTE` нікому, `REVOKE … FROM PUBLIC`. Кличе їх лише definer-тригер прав від власника (`row_security = off`, outbox без `FORCE`), тож `signal_payload_allowed` рядок не судить: **форму перевіряє сама функція** до `INSERT` — аргументи не `NULL`, вид і скоуп обидва нульові чи обидва ненульові, користувач ≠ `ZERO_UUID`; інакше `RAISE` з `22023`. `data` рівно `{ op: "rights" }` (`id` ставить штамп outbox); `rightsSignalSchema` T0 втрачає `row_ver` — клієнт версій не порівнює (Р2). Режим злиття їх не гасить | §8.1, §8.2 (задача 0). **На погодження** |
 | Р9 | **Хто шле й куди — один генератор.** Новий генератор `compiler/rights/signal-triggers.ts` ставить AFTER-тригер оператора (`SECURITY DEFINER`, `row_security = off`, від власника) на **кожну модельну таблицю фактів прав**. Множина — з того самого аналізу досяжності, що й джерела знімка актора (`snapshotSources`, `compiler/rights/snapshot-sources.ts`: читає тіла plpgsql і подання; ребер `requires` функції фактів не мають), тепер під `hasRightsFunctions`, а не лише під `hasActorSnapshot` (`pipeline.ts`): `facts`-таблиці — тригер; класи `exempt` `snapshot`/`identities` — без тригера; прийняті джерела (`membershipSource`, `assignmentSource`, `sourceRoleTable`) — без тригера, бо на прийняту таблицю платформа тригерів не ставить (спека прав §4.7), як і на прийняту `CustomTable`. Тригери `guard-units.ts` сигналів не шлють. Тест повноти порівнює набір тригерів із результатом аналізу (не порожній на фікстурі з довідниками прав і без них). Канал (старі й нові рядки, `DISTINCT` на оператор): **визначення** ролі чи дельти рівня скоупу — `signal_rights` скоупу, глобального (зокрема `everyUser`) — глобальний; **призначення** — `signal_user_rights` суб'єкта (рівень скоупу — через довідник членства виду, глобальний — `subject`); **членство** — користувач рядка `IS NOT NULL`; **зв'язок** — суб'єкт зв'язку; **«Користувачі»** на `invalid`/`user_kind` — сам рядок. Глобальний канал шлють лише визначення глобальних ролей. **Факти прийнятих джерел свіжіють за інтервалом** (такт частини `rights`, B5c; вихід — промоція). Походження рядка публічні виходи `rights_mine()`/`rights_my_scopes()` не несуть, тож правило — за каталогом: компілятор кладе в каталог `adoptedFacts?: { membershipKinds: uuid[], assignments?: true }`; для `can` — `unknown` межа тенанта й кожна гілка, що залежать від членства виду з прийнятим джерелом членства (зокрема грант рівня скоупу цього виду й для `publicRead`-об'єкта), і кожна гілка з грантом **будь-якого** рівня (глобальний, скоуп, контейнер — `CompiledAssignedOn`), коли є прийняте джерело призначень. `snapshotSources` переходить під `hasRightsFunctions` разом із діагностикою `rights.snapshot-source-unknown`; `snapshotExemptWriters` лишається під `hasActorSnapshot`. `rights_bump` не змінюється. Видимість «Користувачів» іншим учасникам скоупу сигналу не має: об'єкт несигнальний, свіжіє за інтервалом (§8.6) | §8.2, спека прав Рх15 (задача 0); §4.7 без змін; §8.6 — межа для фактів прийнятих джерел (інтервал, вихід — промоція). **На погодження: розвилка «прийняті джерела»** |
 | Р10 | **Режим підписки `signal_topic_allowed`** — спершу `current_user_id() IS NOT NULL`; `simetra-rights:<вид>:<скоуп>` — вид є видом скоупу моделі й скоуп ∈ `scopeSetCall(вид)`; `simetra-rights:<нуль>:<нуль>` — дійсний користувач; змішані нулі — `false`; `simetra-user:<id>` — `id = current_user_id()`. Режим відправки обох префіксів — `false`; `signal_payload_allowed` з `op: "rights"` — `false` | §8.3 (задача 0) |
@@ -104,19 +104,23 @@ AFTER-тригерів над модельними таблицями факті
 (`runtimeObject`), `compiler/client-catalog.ts` (`entryOf`); джерело —
 `RightsContract`, `AccessContract` (`compiler/contracts.ts`),
 `readBoundaries`, `scopeSetCall` (`access-units.ts`), `carrierColumn`
-(`rights/predicates.ts`).
+(`rights/predicates.ts`, зараз не експортована — експортувати).
 Готово: unit T0 і T1 — схема сувора; контракт для `any`/`own`/виміру/
 контейнера/кореня/межі `users`/носія-ключа; `fresh: false` для функції
 виміру й прийнятої `CustomTable`; `scopeSet` дослівного виду; носій поза
-атрибутами й ключем — помилка компілятора; `rightsContract` зник (`grep` — 0); `snapshotHash`
+атрибутами й ключем — помилка компілятора; `rightsContract` зник (`grep` — 0;
+`generated/*.json` шаблону оновлює `pnpm run generate` шаблону, не рука); `snapshotHash`
 змінюється, `kernelHash` — ні; `pnpm metadata:check` зелений.
 Перевірка: `run-tests unit --filter client-catalog.test.ts`,
 `run-tests unit --filter runtime-catalog.test.ts`.
 
 ### Задача 2. Поля знімка `members`, `dimensionValues` (Р2)
 
-Файли: генератор `rights_client_snapshot` (B5b-1, `compiler/rights/`),
-`model/runtime/rights-snapshot.ts`, DB-тест знімка B5b-1.
+Файли: генератор `rights_client_snapshot` (`compiler/rights/client-snapshot.ts`),
+`model/runtime/rights-snapshot.ts`, `server/rights-snapshot.ts`
+(`canonicalSnapshot`, `ANONYMOUS_SNAPSHOT` — нові поля входять у відповідь і
+в `rightsVersion`), літерали знімка в наявних тестах, DB-тест знімка B5b-1;
+`RIGHTS_DIMENSION_VALUES_MAX` — нова стала T0.
 Готово: DB обох стеків — поля лише мої; функція лишається `SECURITY
 INVOKER` без нової definer-поверхні; вихід проходить схему; масиви
 впорядковано (відбиток 1-Р3 стабільний); вимір понад
@@ -125,6 +129,7 @@ INVOKER` без нової definer-поверхні; вихід проходит
 у межі §12 (корисні байти = знімок, ≤ 1,1 × + 2 КіБ) на фікстурі з межею
 значень.
 Після: задача 1. Перевірка: `run-tests unit --filter rights-client-snapshot.test.ts`,
+`run-tests unit --filter rights-snapshot.test.ts` (unit T3 — `server/__tests__`),
 `run-tests db --filter rights-client-snapshot.db.test.ts`,
 `run-tests db-supabase --filter rights-client-snapshot.supabase.db.test.ts`.
 
@@ -133,8 +138,10 @@ INVOKER` без нової definer-поверхні; вихід проходит
 Файли: `compiler/signal/units.ts` (функції), `compiler/rights/signal-triggers.ts`
 (нове: генератор тригерів сигналу над таблицями фактів), `compiler/pipeline.ts`
 (`snapshotSources` під `hasRightsFunctions`, виклик генератора),
-`model/runtime/signal.ts` (`rightsSignalSchema` без `row_ver`), DB-тести
-`test/db/rights-signals.support.ts` + два тонкі файли.
+`compiler/platform-triggers.ts` (нова сім'я тригерів у реєстрі, модуль імен
+на зразок `guard-names.ts`), `adoptedFacts` (Р9): `model/runtime/client-catalog.ts`,
+`compiler/client-catalog.ts`; `model/runtime/signal.ts` (`rightsSignalSchema`
+без `row_ver`), DB-тести `test/db/rights-signals.support.ts` + два тонкі файли.
 Готово: unit T1 (дерево SQL: `SECURITY INVOKER`, без `EXECUTE`, виклики в
 тригерах; тест повноти таблиць фактів; проєкт без довідників прав із джерелами — тригери є) і DB обох стеків — І1,
 І2, І3; масове членство (1 000 рядків одним оператором) — один сигнал на
@@ -143,6 +150,9 @@ INVOKER` без нової definer-поверхні; вихід проходит
 Після: задача 0. Перевірка: `run-tests unit --filter signal-units.test.ts`,
 `run-tests unit --filter rights-signal-triggers.test.ts`,
 `run-tests unit --filter rights-guards.test.ts`,
+`run-tests unit --filter platform-triggers.test.ts`,
+`run-tests unit --filter rights-snapshot-sources.test.ts`,
+`run-tests unit --filter signal.test.ts` (`model/runtime`),
 `run-tests db --filter rights-signals.db.test.ts`,
 `run-tests db-supabase --filter rights-signals.supabase.db.test.ts`.
 
@@ -151,10 +161,13 @@ INVOKER` без нової definer-поверхні; вихід проходит
 Файли: `compiler/signal/units.ts` (розбір `simetra-rights:`/`simetra-user:`
 поряд із `CHANGES_TOPIC`), `test/db/signal-topic-allowed.support.ts`.
 Готово: І4 на обох стеках; `authorizeChannels` видає канали прав лише за
-Р10 (`packages/designer/src/__tests__/authorize-channels.*`).
+Р10 (`packages/designer/src/__tests__/authorize-channels.*`); мутацію І1
+«режим відправки пропускає канал прав» повторити тут — гілку відправки
+переписує ця задача.
 Після: задача 3. Перевірка: `run-tests db --filter signal-topic-allowed.db.test.ts`,
 `run-tests db-supabase --filter signal-topic-allowed.supabase.db.test.ts`,
-`run-tests db --filter authorize-channels.db.test.ts`.
+`run-tests db --filter authorize-channels.db.test.ts`,
+`run-tests db-supabase --filter authorize-channels.supabase.db.test.ts`.
 
 **Готово — частина 1:** цільові прогони задач 1–4 зелені; CI draft PR
 зелений (повні рівні, `metadata:check`).
