@@ -9,7 +9,13 @@ import {
   expect,
   it,
 } from "vitest"
-import { SIGNAL_OUTBOX, type CatalogModel } from "simetra/model"
+import {
+  PLATFORM_ROLES,
+  PROVIDER_API_ROLES,
+  PROVIDER_OWNER_ROLES,
+  SIGNAL_OUTBOX,
+  type CatalogModel,
+} from "simetra/model"
 import {
   canonicalSnapshot,
   compile,
@@ -264,9 +270,11 @@ interface Loss {
    * Функції форм платформи (множини скоупу, значень виміру), які прийом з нуля
    * повертає звичайними `SECURITY DEFINER`-функціями з `EXECUTE` для ролей
    * API: зв'язку з видом скоупу чи виміром зворотна генерація не знає, тож
-   * компіляція повернутої теки відмовляє їм `sql.definer-caller-unchecked`
-   * (платформна спека §6.7), доки їх не зв'язано чи не задекларовано. Тоді
-   * ланцюжок закінчується на зворотній генерації (`refusedRoundTrip`, до #271).
+   * з фактами `EXECUTE` отримують декларацію без `check` і відмову
+   * `sql.declaration-check-missing` (Р1), доки мутації `chain` її не
+   * доповнять. Без `chain` ланцюжок закінчується на зворотній генерації
+   * (`refusedRoundTrip`); з `chain` теку ведуть далі, до звірки й
+   * застосування.
    */
   definers: { schema: string; name: string }[]
 }
@@ -467,9 +475,10 @@ async function expectKindLabelsKept(
 }
 
 /**
- * Прийом з нуля бази з функціями форм платформи (`Loss.definers`): ланцюжок
- * §9 закінчується на зворотній генерації — її помилки рівно відмови цих
- * функцій, а моделі з такою текою компілятор не дає. Повертає теку.
+ * Прийом з нуля бази з функціями форм платформи (`Loss.definers`): зворотна
+ * генерація, помилки якої рівно відмови цих функцій (`sql.declaration-check-missing`),
+ * а моделі з такою текою компілятор не дає. Повертає теку; далі її веде
+ * `chain` у `deployedRoundTrip` (мутації, звірка, застосування).
  * Тимчасово: іменовані функції множини, які кличуть політики, стануть формою
  * «функція політики» (ADR-0094, #271); тоді фікстури зі `scopeKinds` підуть
  * повним ланцюжком, а цю функцію буде видалено (умова записана в #271).
@@ -1072,7 +1081,7 @@ export async function deployedRoundTrip(
       async (target) => {
         const kept = await refusedRoundTrip(target, scope, project, loss)
         if (chain === undefined) return kept
-        const functions = ["app.org_ids", "app.user_ids"]
+        const functions = loss.definers.map(qualifiedName)
         const schemas = [...scope.schemas]
         // ACL функцій множини, які розгорнуло саме джерело, — до прийому
         const deployed = functionAcls(
@@ -1094,11 +1103,22 @@ export async function deployedRoundTrip(
           )
           expect(applied).toEqual(functionAcls(result.shadow, functions))
           expect(applied).toEqual(deployed)
-          // Не порожній і без `PUBLIC` (`=X/…`): вбудований EXECUTE відкликано
-          for (const acl of Object.values(applied)) {
-            expect(acl?.length).toBeGreaterThan(0)
-            expect(acl?.filter((item) => item.startsWith("="))).toEqual([])
-          }
+          // Буквальний перелік, а не виведений генератором: власник, роль
+          // користувача, сервісна (лише supabase) і роль команд; ні `PUBLIC`
+          // (`=X/…`), ні анонімної ролі
+          const provider = testProvider()
+          const owner = PROVIDER_OWNER_ROLES[provider]
+          const api = PROVIDER_API_ROLES[provider]
+          const expected = [
+            owner,
+            api.user,
+            ...(provider === "supabase" ? [api.service] : []),
+            PLATFORM_ROLES.command,
+          ]
+            .map((role) => `${role}=X/${owner}`)
+            .sort()
+          for (const name of functions)
+            expect(applied[name]?.slice().sort(), name).toEqual(expected)
         }
         return repaired
       }
