@@ -983,6 +983,59 @@ async function expectPlanAndApply(
 }
 
 /**
+ * Б5 (план Д3): застосування з дозволом рівно на кроки відомої втрати механіки,
+ * після нього наступний план — буквально порожній. Без застосування звірка
+ * «рівно втрата» слабша: вона не доводить, що застосований стан збігається з
+ * бажаним.
+ */
+async function applyLossAndExpectEmptyPlan(
+  target: DbConnection,
+  model: CompiledModel,
+  loss: Loss
+): Promise<void> {
+  const outcome = await buildPlan(engine, dbs, model, { target }, [])
+  expect({
+    status: outcome.status,
+    errors: errors(outcome.diagnostics),
+  }).toEqual({ status: "planned", errors: [] })
+  if (outcome.status !== "planned") throw new Error("plan refused")
+  const artifact = outcome.artifact
+  const permitted = new Set(artifact.requiredPermissions)
+  expect(
+    byText(
+      artifact.steps
+        .filter((s) => permitted.has(s.id))
+        .map((s) => ({ sql: s.sql, class: s.class }))
+    )
+  ).toEqual(permittedLossSteps(loss))
+  const applied = await executePlan(writer, target, artifact, {
+    mode: "apply",
+    planHash: artifact.planHash,
+    allow: artifact.requiredPermissions,
+    snapshot: canonicalSnapshot(model),
+  })
+  expect({
+    status: applied.status,
+    errors: errors(applied.diagnostics),
+  }).toEqual({ status: "committed", errors: [] })
+  // Порожній план рушій повертає як `unchanged`: кроків немає зовсім
+  const next = await buildPlan(engine, dbs, model, { target }, [])
+  expect({
+    status: next.status,
+    errors: errors(next.diagnostics),
+  }).toEqual({ status: "unchanged", errors: [] })
+}
+
+/** ACL функцій у знімку оракула: ім'я функції -> елементи ACL. */
+const functionAcls = (shape: OracleShape, names: readonly string[]) =>
+  Object.fromEntries(
+    names.map((name) => [
+      name,
+      shape.acls.find((a) => a.object === `f:${name}()`)?.acl,
+    ])
+  )
+
+/**
  * Розгортає скомпільовану теку в ціль і веде її ланцюжком §9. Без збереженої
  * теки (`existing` порожній) механіка видів — відома втрата, і вона гучна.
  * `endToEnd` веде повернуту модель ще й повним конвеєром плану й застосування.
@@ -1019,10 +1072,34 @@ export async function deployedRoundTrip(
       async (target) => {
         const kept = await refusedRoundTrip(target, scope, project, loss)
         if (chain === undefined) return kept
+        const functions = ["app.org_ids", "app.user_ids"]
+        const schemas = [...scope.schemas]
+        // ACL функцій множини, які розгорнуло саме джерело, — до прийому
+        const deployed = functionAcls(
+          await withClient(target, (c) => readOracle(c, schemas)),
+          functions
+        )
         const repaired = await chain(kept)
         const { extracted } = await extractWithFacts(target, scope)
         result = await compiledTrip(target, extracted, repaired, loss)
-        if (endToEnd) await expectPlanAndApply(target, result.model, loss)
+        if (endToEnd) {
+          await expectPlanAndApply(target, result.model, loss)
+          await applyLossAndExpectEmptyPlan(target, result.model, loss)
+          // ACL у цілі після застосування дорівнює виведеному з теки (тінь
+          // бажаного стану) і розгорнутому з джерела: гранти форм платформи
+          // з'явились, дослівних — ні
+          const applied = functionAcls(
+            await withClient(target, (c) => readOracle(c, schemas)),
+            functions
+          )
+          expect(applied).toEqual(functionAcls(result.shadow, functions))
+          expect(applied).toEqual(deployed)
+          // Не порожній і без `PUBLIC` (`=X/…`): вбудований EXECUTE відкликано
+          for (const acl of Object.values(applied)) {
+            expect(acl?.length).toBeGreaterThan(0)
+            expect(acl?.filter((item) => item.startsWith("="))).toEqual([])
+          }
+        }
         return repaired
       }
     )
