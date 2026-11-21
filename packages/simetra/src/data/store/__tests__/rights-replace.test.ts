@@ -788,6 +788,66 @@ describe("the snapshot barrier", () => {
     })
   })
 
+  it("does not write back the result of a run started before a reopened pair once the pair tombstone is evicted", async () => {
+    let release: (() => void) | undefined
+    const { core, fake } = harness({
+      mode: "manual",
+      limits: { tombstonesMax: 1 },
+      // Запис висить, поки тест його не відпустить: сервер виконує його вже
+      // за відкритою знову парою.
+      server: (fake) => ({
+        ...fake.server,
+        run: (request) =>
+          new Promise((resolve, reject) => {
+            release = () => fake.server.run(request).then(resolve, reject)
+          }),
+      }),
+    })
+    // `run` іде на primary: його епоха не `null` (§7.2).
+    fake.epoch = "a".repeat(64)
+    grant(fake, ONLY_T())
+    await firstSnapshot(core)
+    seed(fake, 1, 1)
+    // Спроба стартує, коли пару S заборонено; наступний знімок, що теж її
+    // забороняє, застосовано вже після старту спроби.
+    core.update(TASK, key(1), { title: "x" }, { expectedVersion: 1 })
+    await settle()
+    expect(release).toBeDefined()
+    grant(fake, ONLY_T())
+    core.requestRights()
+    await settle()
+    // Пару S відкрито: надгробок пари з епохою попереднього знімка — новіший
+    // за старт спроби.
+    grant(fake, BOTH())
+    core.requestRights()
+    await settle()
+    const card1 = core.view(card(1))
+    watch(card1)
+    await settle()
+    fake.deliverAll()
+    await settle()
+    expect(rowsOf(core).get(key(1))?.version).toBe(1)
+    // Відкриття пари T ставить свій надгробок і витісняє надгробок пари S:
+    // далі про нього знає лише горизонт кошика пари.
+    grant(fake, snapshotOf([readRow(S)]))
+    core.requestRights()
+    await settle()
+    grant(fake, BOTH())
+    core.requestRights()
+    await settle()
+    fake.deliverAll()
+    await settle()
+    const reads = readsOfKey(fake, 1).length
+    release!()
+    await settle()
+    // Рядок результату старшої спроби не пишеться: ключ перечитується під RLS.
+    expect(rowsOf(core).get(key(1))?.version).toBe(1)
+    expect(readsOfKey(fake, 1)).toHaveLength(reads + 1)
+    fake.deliverAll()
+    await settle()
+    expect(rowsOf(core).get(key(1))?.version).toBe(2)
+  })
+
   it("keeps a purged row out of a late answer even after the right returns", async () => {
     const { core, fake } = harness()
     seed(fake, 1, 1)
