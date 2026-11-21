@@ -81,10 +81,13 @@ function identCont(c: string): boolean {
 export function skipTrivia(text: string, start: number): number {
   let i = start
   for (;;) {
-    while (i < text.length && /\s/.test(text[i]!)) i++
+    // Пробіл і кінець рядка — як у `scan.l` (`space`, `non_newline`): `\s`
+    // ширший (NBSP тощо), а `--` закінчується і на `\r`. Розбіжність з
+    // Postgres ховала б оголошення за «коментарем».
+    while (i < text.length && /[ \t\n\r\f\v]/.test(text[i]!)) i++
     if (text.startsWith("--", i)) {
-      const eol = text.indexOf("\n", i)
-      i = eol < 0 ? text.length : eol + 1
+      const eol = text.slice(i).search(/[\n\r]/)
+      i = eol < 0 ? text.length : i + eol + 1
       continue
     }
     if (text.startsWith("/*", i)) {

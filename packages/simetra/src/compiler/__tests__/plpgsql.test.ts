@@ -482,6 +482,14 @@ describe("author block", () => {
     expect(firstStatement?.type).toBe("perform")
   })
 
+  it("detects the EXCEPTION wrapper whatever the return type", () => {
+    const r = parsed(
+      "CREATE FUNCTION app.t() RETURNS void LANGUAGE plpgsql AS $$\nBEGIN PERFORM 1; EXCEPTION WHEN OTHERS THEN NULL; END\n$$;"
+    ).author
+    expect(r.hasExceptionBlock).toBe(true)
+    expect(r.firstStatement?.type).toBe("perform")
+  })
+
   it("does not flag a nested EXCEPTION section as the author's", () => {
     const { firstStatement, hasExceptionBlock } = author(
       "BEGIN BEGIN PERFORM 1; EXCEPTION WHEN OTHERS THEN NULL; END; END"
