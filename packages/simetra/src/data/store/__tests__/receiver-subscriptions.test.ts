@@ -492,4 +492,57 @@ describe("the runtime with a rights snapshot over a fake server", () => {
     ).toThrow("adapter factory failed")
     expect(transport.closed()).toBe(true)
   })
+
+  it("keeps the original build error and logs once when close() of the transport throws too", () => {
+    const transport = createFakeSignalTransport()
+    transport.close = () => {
+      throw new Error("close boom")
+    }
+    const log = vi.fn()
+    expect(() =>
+      createDataRuntime({
+        catalog: {
+          ...clientCatalog(),
+          objects: [task, org, plain],
+          rightsSnapshot: true,
+        },
+        transport: async () => {
+          throw new Error("unused")
+        },
+        subject: "user-1",
+        signals: () => transport,
+        log,
+        sources: {
+          override: {
+            [TASK]: () => {
+              throw new Error("adapter factory failed")
+            },
+          },
+        },
+      })
+    ).toThrow("adapter factory failed")
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log.mock.calls[0]![0]).toMatchObject({ kind: "listener-failed" })
+  })
+
+  it("still closes the transport and the core when a channel Unsubscribe throws", async () => {
+    const { make } = world()
+    const { runtime, transport } = make()
+    const real = transport.subscribe.bind(transport)
+    vi.spyOn(transport, "subscribe").mockImplementation((...args) => {
+      real(...args)
+      return () => {
+        throw new Error("unsubscribe boom")
+      }
+    })
+    const { core } = runtimeHandleOf(runtime)
+    const handle = core.view(list(key(1)))
+    handle.subscribe(() => {})
+    await settle()
+    expect(transport.subscribed().size).toBe(1)
+    runtime.dispose()
+    expect(transport.closed()).toBe(true)
+    await settle()
+    expect(handle.getSnapshot().status).toBe("purged")
+  })
 })

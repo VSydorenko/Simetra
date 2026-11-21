@@ -267,6 +267,13 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
       // Журнал недоступний — результат запиту від нього не залежить.
     }
   }
+  const guarded = (step: () => void) => {
+    try {
+      step()
+    } catch (thrown) {
+      log({ kind: "listener-failed", error: thrown })
+    }
+  }
   // Причина закриття: після неї кожна відповідь, зокрема пізня, відхиляється
   // нею — рядки попереднього користувача викликачу не доходять.
   let closedWith: CommandError | undefined
@@ -283,12 +290,10 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     // нового користувача — старий не повинен більше нічого приймати.
     // Приймач спиняється раніше за транспорт: відкладений `core.close` ще не
     // настав, а вже поставлений перерахунок підписок підписав би закритий.
-    core.stopSignals()
-    try {
-      signalTransport?.close()
-    } catch (thrown) {
-      log({ kind: "listener-failed", error: thrown })
-    }
+    // Збій одного кроку не лишає рантайм напівзакритим: транспорт і ядро
+    // закриваються попри кидок `Unsubscribe` каналу чи `close()`.
+    guarded(() => core.stopSignals())
+    guarded(() => signalTransport?.close())
     try {
       core.close(reason)
     } catch {
@@ -460,7 +465,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
     try {
       return buildCore()
     } catch (thrown) {
-      signalTransport?.close()
+      guarded(() => signalTransport?.close())
       throw thrown
     }
   })()
@@ -492,7 +497,7 @@ export function createDataRuntime(options: DataRuntimeOptions): DataRuntime {
       adapters.set(name, watchSessionChanged(factory({ subject, send })))
     }
   } catch (thrown) {
-    signalTransport?.close()
+    guarded(() => signalTransport?.close())
     throw thrown
   }
 
