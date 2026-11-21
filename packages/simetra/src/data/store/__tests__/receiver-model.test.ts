@@ -122,7 +122,7 @@ const one = <T extends Step["t"]>(t: T) => fc.constant(t)
 export const STEP = fc.oneof(
   { weight: 6, arbitrary: fc.record({ t: one("edit"), k: fc.nat(7) }) },
   { weight: 1, arbitrary: fc.record({ t: one("editOrg"), scope: fc.nat(1) }) },
-  { weight: 2, arbitrary: fc.record({ t: one("create"), scope: fc.nat(1) }) },
+  { weight: 3, arbitrary: fc.record({ t: one("create"), scope: fc.nat(1) }) },
   { weight: 1, arbitrary: fc.record({ t: one("delete"), k: fc.nat(7) }) },
   { weight: 4, arbitrary: fc.record({ t: one("fail"), ch: fc.nat(2) }) },
   {
@@ -461,12 +461,16 @@ async function run(steps: readonly Step[]): Promise<void> {
   h.fake.mode = "auto"
   h.fake.deliverAll()
   await settle()
+  // Вигляди повертаються першими: приймач підписує їхні канали знову, а
+  // модель приєднує кожен утримуваний (і щойно підписаний) канал.
+  for (const v of handles.keys()) sub(v)
+  await settle()
+  syncHeld()
   for (const [ch, channel] of CHANNELS.entries()) {
     if (!held[ch]) continue
     live[ch] = true
     transport.join(channel, false)
   }
-  for (const v of handles.keys()) sub(v)
   await settle()
   for (const spec of specs) h.core.setVisible(spec, true)
   await vi.advanceTimersByTimeAsync(2 * REJOIN_JITTER_MS)
@@ -511,8 +515,9 @@ describe("receiver model: the disconnect mark and the composition against the se
     "holds the oracle over random steps",
     async () => {
       await fc.assert(
-        fc.asyncProperty(fc.array(STEP, { maxLength: 40 }), (steps) =>
-          run(steps)
+        fc.asyncProperty(
+          fc.array(STEP, { maxLength: 40, size: "medium" }),
+          (steps) => run(steps)
         ),
         { numRuns: RUNS }
       )
