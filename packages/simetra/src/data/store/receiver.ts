@@ -37,7 +37,8 @@ import {
  * Приймач сигналів (спека П4-B §8.4): модуль ядра, не рантайму. Життєвий
  * цикл і підписки — які канали змін тримати за знімком прав і активними
  * виглядами; розбір повідомлень, пачка й кроки 1–7 обробки пачки об'єкта.
- * Приєднання (хвиля — стан ядра), `recovered`, розрив і відмови каналів.
+ * Приєднання (хвиля — стан ядра; `recovered` для свіжості не береться, Рд37),
+ * розрив і відмови каналів.
  */
 
 /** Тиша, після якої пачка сигналів закривається. */
@@ -48,8 +49,6 @@ export const MAX_BATCH_MS = 2000
 export const MIN_VERSION_RETRIES = 3
 /** Джитер приєднання: одна хвиля перечитує свої об'єкти за строком у цьому вікні. */
 export const REJOIN_JITTER_MS = 2000
-/** Тиша після `recovered: true`, за якої пропущеного немає і «розрив» знімається. */
-export const RECOVERED_SETTLE_MS = 50
 /** Вікно дедуплікації: стільки останніх `id` повідомлень. */
 export const SEEN_SIGNALS_MAX = 4096
 
@@ -69,19 +68,17 @@ export interface ReceiverContext {
   commit(fn: (writer: Writer) => void, token: GenerationToken): boolean
   /** The collator of the runtime's filter tests (one per runtime). */
   readonly filterCollator: Intl.Collator
-  /** A channel joined without `recovered`: its object joins the rejoin wave. */
+  /** A channel joined (with or without `recovered`): its object joins the rejoin wave. */
   joinWave(channel: string, object: ObjectName, gen: number): void
   /** The gap generation of a channel; captured when the channel joins. */
   gapOf(channel: string): number
   /** A gap began on the channel (every channel when omitted): older lifts lapse. */
   markGap(channel?: string): void
   /**
-   * The ONLY way to lift the "disconnect" mark of a channel: it lifts only
-   * while no gap began after `gen` (the generation captured at the join).
+   * The channel left the receiver (unsubscribed or refused): marks go with it,
+   * through `writer` when the caller is inside a `commit` (one frame with its purge).
    */
-  liftDisconnect(channel: string, gen: number): void
-  /** The channel left the receiver (unsubscribed or refused): marks go with it. */
-  dropChannel(channel: string): void
+  dropChannel(channel: string, writer?: Writer): void
   /** The core's `requestVersion` (a refusal without a channel, §10). */
   requestVersion(): void
   /** The transport refused the connection for good: the runtime closes. */
@@ -170,9 +167,6 @@ const mergeBatch = (into: Batch, from: Batch) => {
 // закриття сесії таймерів не лишає.
 interface Open {
   readonly batch: Batch
-  // Канали з `recovered: true`, чий перший сигнал у цій пачці: «розрив» знімається
-  // після неї.
-  readonly recovered: Map<string, number>
   quiet: AbortController | undefined
   readonly max: AbortController
 }
@@ -259,12 +253,6 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     return channels
   }
 
-  // Канал знято: його очікування «відновлених» більше нічого не знімає.
-  const forget = (channel: string) => {
-    awaiting.get(channel)?.quiet.abort()
-    awaiting.delete(channel)
-  }
-
   // Об'єкт і скоуп пари каналу змін; `null` — нескоуплений об'єкт (`ZERO_UUID`).
   const pairOf = (channel: string) => {
     const parsed = parseTopic(channel)
@@ -295,36 +283,27 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     if (slot === undefined) return
     held.delete(error.channel)
     refused.add(error.channel)
-    forget(error.channel)
-    ctx.dropChannel(error.channel)
     slot.off?.()
     // Дані пари, на які права зникли, не лишаються в пам'яті (Р12); `purge`
-    // скидає й незакриту пачку пари через `purged`.
-    const pair = pairOf(error.channel)
-    if (pair !== undefined)
-      ctx.commit((w) => w.purge(pair.object, { scope: pair.scope }), token)
+    // скидає й незакриту пачку пари через `purged`. Зняття позначок каналу й
+    // `purge` — один `commit`: жодного кадру з рядками розриву як свіжими.
+    const channel = error.channel
+    const pair = pairOf(channel)
+    ctx.commit((w) => {
+      ctx.dropChannel(channel, w)
+      if (pair !== undefined) w.purge(pair.object, { scope: pair.scope })
+    }, token)
   }
 
-  // Канал (пере)підписано: без `recovered` його об'єкт іде в хвилю приєднання
-  // ядра; з `recovered` пропущеного немає, «розрив» знімає пачка відновлених
-  // сигналів, а без них — тиша `RECOVERED_SETTLE_MS`.
-  const offSubscribed = transport.onSubscribed(({ channel, recovered }) => {
+  // Канал (пере)підписано — з `recovered` чи без — його об'єкт іде в хвилю
+  // приєднання ядра: `recovered` для свіжості не береться (Рд37). Покоління
+  // розриву — в мить приєднання: зняття з цього приєднання не знімає розрив,
+  // що настав після нього.
+  const offSubscribed = transport.onSubscribed(({ channel }) => {
     if (stopped || !token.valid || !held.has(channel)) return
     const pair = pairOf(channel)
     if (pair === undefined) return
-    // Покоління розриву — в мить приєднання: зняття з цього приєднання не
-    // знімає розрив, що настав після нього.
-    const gen = ctx.gapOf(channel)
-    if (!recovered) return ctx.joinWave(channel, pair.object, gen)
-    forget(channel)
-    const quiet = new AbortController()
-    awaiting.set(channel, { quiet, gen })
-    void session.sleep(RECOVERED_SETTLE_MS, quiet.signal).then(() => {
-      if (quiet.signal.aborted) return
-      awaiting.delete(channel)
-      if (stopped || !token.valid) return
-      ctx.liftDisconnect(channel, gen)
-    })
+    ctx.joinWave(channel, pair.object, ctx.gapOf(channel))
   })
 
   // ------------------------------------------------------------ пачка
@@ -346,10 +325,6 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   // «один запит на вигляд за пачку» тримається і під зворотним тиском.
   let waiting: Batch | undefined
   let flying = false
-  // Канали пачки, що чекають, і канали `recovered: true`, чий перший сигнал ще
-  // не прийшов (таймер `RECOVERED_SETTLE_MS`).
-  const waitingRecovered = new Map<string, number>()
-  const awaiting = new Map<string, { quiet: AbortController; gen: number }>()
 
   const closeOpen = (batch: Open) => {
     if (open !== batch) return
@@ -357,17 +332,12 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     batch.quiet?.abort()
     batch.max.abort()
     if (stopped || !token.valid) return
-    enqueue(batch.batch, batch.recovered)
+    enqueue(batch.batch)
   }
 
   const startOpen = (): Open => {
     const max = new AbortController()
-    const batch: Open = {
-      batch: new Map(),
-      recovered: new Map(),
-      quiet: undefined,
-      max,
-    }
+    const batch: Open = { batch: new Map(), quiet: undefined, max }
     void session.sleep(MAX_BATCH_MS, max.signal).then(() => {
       if (!max.signal.aborted) closeOpen(batch)
     })
@@ -376,17 +346,11 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
 
   // Кожен сигнал відсуває закриття на `QUIET_MS`, але не далі за `MAX_BATCH_MS`
   // від першого.
-  const collect = (fill: (batch: Batch) => void, channel?: string) => {
+  const collect = (fill: (batch: Batch) => void) => {
     if (stopped || !token.valid) return
     open ??= startOpen()
     const batch = open
     fill(batch.batch)
-    const wait = channel === undefined ? undefined : awaiting.get(channel)
-    if (channel !== undefined && wait !== undefined) {
-      wait.quiet.abort()
-      awaiting.delete(channel)
-      batch.recovered.set(channel, wait.gen)
-    }
     batch.quiet?.abort()
     const quiet = new AbortController()
     batch.quiet = quiet
@@ -395,30 +359,18 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     })
   }
 
-  function enqueue(
-    batch: Batch,
-    recovered: ReadonlyMap<string, number> = new Map()
-  ) {
+  function enqueue(batch: Batch) {
     waiting ??= new Map()
     mergeBatch(waiting, batch)
-    for (const [channel, gen] of recovered) waitingRecovered.set(channel, gen)
     pump()
   }
 
   function pump() {
     if (flying || waiting === undefined || stopped || !token.valid) return
     const batch = waiting
-    const recovered = new Map(waitingRecovered)
     waiting = undefined
-    waitingRecovered.clear()
     flying = true
     run(batch)
-      .then((read) => {
-        // Пачка відновлених сигналів прочитана без збою — пропущене надолужено.
-        if (read && recovered.size > 0 && !stopped)
-          for (const [channel, gen] of recovered)
-            ctx.liftDisconnect(channel, gen)
-      })
       .catch((error: unknown) => writer.log({ kind: "listener-failed", error }))
       .finally(() => {
         flying = false
@@ -445,7 +397,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const invalidate = () =>
       collect((batch) => {
         objectBatch(batch, object).invalidate.add(scope)
-      }, topic)
+      })
     const change = receivedChangeSchema.safeParse(payload)
     const parsed = change.success
       ? change
@@ -460,15 +412,13 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const [column, value] = Object.entries(keys)[0] ?? []
     // Колонка, якої каталог не знає як ключ, — нерозібране.
     if (column !== entry.key || value === undefined) return invalidate()
-    collect(
-      (batch) =>
-        addKey(objectBatch(batch, object), value.toLowerCase(), {
-          version: op === "delete" ? -1 : version,
-          deleted: op === "delete",
-          attempt: 0,
-          scopes: new Set([scope]),
-        }),
-      topic
+    collect((batch) =>
+      addKey(objectBatch(batch, object), value.toLowerCase(), {
+        version: op === "delete" ? -1 : version,
+        deleted: op === "delete",
+        attempt: 0,
+        scopes: new Set([scope]),
+      })
     )
   }
 
@@ -669,8 +619,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     }
   }
 
-  // Істина — пачка прочитана без збою і без відкладення на `resume()`.
-  const run = async (batch: Batch): Promise<boolean> => {
+  const run = async (batch: Batch): Promise<void> => {
     const jobs: Job[] = []
     const flights: Promise<void>[] = []
     // `needsRefresh` невидимим виглядам (`spec` немає — усім виглядам об'єкта).
@@ -727,7 +676,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     for (const object of requested) writer.schedule(object, 0)
     const answers = await Promise.all(jobs.map((job) => job.rows))
     await Promise.all(flights)
-    if (stopped || !token.valid) return false
+    if (stopped || !token.valid) return
     const failed = jobs.filter((_, at) => answers[at] === undefined)
     if (failed.length > 0)
       ctx.commit((w) => {
@@ -744,7 +693,6 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
           settleJob(w, job, rows, (...args) => again.push(args))
       }, token)
     for (const args of again) scheduleRetry(...args)
-    return failed.length === 0 && requested.length === 0
   }
 
   const join = (channel: string) => {
@@ -762,7 +710,6 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     for (const [channel, slot] of [...held]) {
       if (next.has(channel)) continue
       held.delete(channel)
-      forget(channel)
       // Знятий канал не оновить своїх рядків: його «розрив» знімається разом з ним.
       ctx.dropChannel(channel)
       slot.off?.()
@@ -818,9 +765,6 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       open = undefined
       waiting = undefined
       retries.clear()
-      waitingRecovered.clear()
-      for (const { quiet } of awaiting.values()) quiet.abort()
-      awaiting.clear()
       offSubscribed()
       for (const slot of held.values()) slot.off?.()
       held.clear()

@@ -14,7 +14,7 @@ import { createDataRuntime } from "../../runtime/runtime"
 import { SERVER_HASH, clientCatalog } from "../../__tests__/support"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import { createFakeSource } from "../testing/fake-source"
-import { RECOVERED_SETTLE_MS, QUIET_MS, REJOIN_JITTER_MS } from "../receiver"
+import { QUIET_MS, REJOIN_JITTER_MS } from "../receiver"
 import type { Key, ViewSpec } from "../types"
 import {
   TASK,
@@ -357,52 +357,71 @@ describe("the rejoin wave", () => {
   })
 })
 
-describe("recovered: true", () => {
-  const edited = (h: Opened, n: number) => {
-    const rows: Key[] = []
-    for (let i = 1; i <= n; i++) {
-      h.fake.edit(TASK, key(i), { title: `v${i}` })
-      rows.push(key(i))
-    }
-    return rows
-  }
-
-  it("re-reads only the keys of the batch and lifts the mark after it", async () => {
-    const h = await open(full, 50)
-    h.transport.fail({ kind: "transport", channel })
-    await settle()
-    expect(states(h)).toContain("stale")
-    h.transport.join(channel, true)
-    const rows = edited(h, 50)
-    rows.forEach((k, i) =>
-      h.transport.emit(channel, {
-        id: String(900 + i),
-        object: task.id,
-        op: "update",
-        keys: { id: k },
-        row_ver: h.fake.row(TASK, k)!.version,
-      })
-    )
-    // Пачка ще не закрита: відновлені сигнали не покривають «розрив».
-    await vi.advanceTimersByTimeAsync(QUIET_MS - 1)
-    expect(states(h)).toContain("stale")
-    await advance(1)
-    expect(states(h)).not.toContain("stale")
-    // Один запит — читання ключів пачки; перечитування виглядів немає.
-    expect(requestsSince(h)).toHaveLength(1)
-    expect(keyReads(h).flatMap((r) => keysOf(r.query))).toHaveLength(50)
-  })
-
-  it("lifts the mark after RECOVERED_SETTLE_MS of silence, with no request", async () => {
+describe("recovered: true is not trusted for freshness", () => {
+  it("joins the wave: the mark stays until the jitter, then one re-read lifts it", async () => {
     const h = await open(keysView(key(1)))
     h.transport.fail({ kind: "transport", channel })
     h.transport.join(channel, true)
-    await advance(RECOVERED_SETTLE_MS - 1)
+    await advance(REJOIN_JITTER_MS / 2 - 1)
+    // Тиші після `recovered` немає, що її можна було б брати за доказ свіжості.
     expect(states(h)).toEqual(["stale"])
-    await advance(1)
-    expect(states(h)).not.toContain("stale")
-    await advance(10 * REJOIN_JITTER_MS)
     expect(requestsSince(h)).toHaveLength(0)
+    await advance(1)
+    expect(requestsSince(h)).toHaveLength(1)
+    expect(states(h)).not.toContain("stale")
+  })
+
+  it.each([
+    ["recovered, then not", true, false],
+    ["not recovered, then recovered", false, true],
+  ])(
+    "lifts no mark before the wave when two joins follow a gap (%s)",
+    async (_, first, second) => {
+      const h = await open(keysView(key(1), key(2)))
+      h.fake.edit(TASK, key(2), { title: "missed" })
+      h.transport.fail({ kind: "transport", channel })
+      h.transport.join(channel, first)
+      h.transport.join(channel, second)
+      await advance(REJOIN_JITTER_MS / 2 - 1)
+      expect(states(h)).toEqual(["stale", "stale"])
+      expect(requestsSince(h)).toHaveLength(0)
+      await advance(1)
+      expect(requestsSince(h)).toHaveLength(1)
+      expect(states(h)).not.toContain("stale")
+      expect(h.handle.getSnapshot().rows[1]).toMatchObject({
+        values: { title: "missed" },
+      })
+    }
+  )
+
+  it("keeps the mark when a recovered invalidate settles only an invisible view", async () => {
+    const h = await open(keysView(key(1)))
+    h.core.setVisible(keysView(key(1)), false)
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, true)
+    h.transport.emit(channel, {
+      id: "9101",
+      object: task.id,
+      op: "invalidate",
+    })
+    await advance(QUIET_MS)
+    expect(states(h)).toEqual(["stale"])
+  })
+
+  it("does not stick: a view in error recovers by a later successful re-read", async () => {
+    const h = await open(keysView(key(1)))
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, true)
+    h.fake.mode = "manual"
+    await vi.advanceTimersByTimeAsync(REJOIN_JITTER_MS)
+    h.fake.take(0).fail("command.unavailable")
+    h.fake.mode = "auto"
+    await settle()
+    expect(h.handle.getSnapshot().status).toBe("error")
+    expect(states(h)).toContain("stale")
+    await h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    expect(states(h)).not.toContain("stale")
   })
 })
 
@@ -418,6 +437,20 @@ describe("refusals and breaks", () => {
     expect(h.inspect.rowCount()).toBe(0)
     expect(h.transport.subscribed().has(channel)).toBe(false)
     expect(calls).not.toHaveBeenCalled()
+  })
+
+  it("lifts the marks and purges in one commit: no frame shows the gap rows as fresh", async () => {
+    const h = await open(keysView(key(1)))
+    h.transport.fail({ kind: "transport", channel })
+    await settle()
+    const frames: string[][] = []
+    h.handle.subscribe(() =>
+      frames.push(h.handle.getSnapshot().rows.map((r) => r.state))
+    )
+    h.transport.fail({ kind: "auth", channel })
+    await settle()
+    expect(frames.length).toBeGreaterThan(0)
+    for (const frame of frames) expect(frame).not.toContain("synced")
   })
 
   it("purges an unscoped object by ZERO_UUID", async () => {
@@ -629,29 +662,12 @@ describe("a newer gap is not lifted by an older wave", () => {
     }
   )
 
-  it("keeps the mark when a new gap comes during the quiet time after recovered: true", async () => {
+  it("keeps the mark when a new gap comes after a recovered join, before the jitter", async () => {
     const h = await open(keysView(key(1)))
     h.transport.fail({ kind: "transport", channel })
     h.transport.join(channel, true)
     h.transport.fail({ kind: "transport", channel })
-    await advance(RECOVERED_SETTLE_MS)
-    expect(states(h)).toEqual(["stale"])
-  })
-
-  it("keeps the mark when a new gap comes before the batch of recovered signals closes", async () => {
-    const h = await open(keysView(key(1)))
-    h.transport.fail({ kind: "transport", channel })
-    h.transport.join(channel, true)
-    const version = h.fake.edit(TASK, key(1), { title: "new" })
-    h.transport.emit(channel, {
-      id: "8001",
-      object: task.id,
-      op: "update",
-      keys: { id: key(1) },
-      row_ver: version,
-    })
-    h.transport.fail({ kind: "transport", channel })
-    await advance(QUIET_MS)
+    await advance(REJOIN_JITTER_MS)
     expect(states(h)).toEqual(["stale"])
   })
 

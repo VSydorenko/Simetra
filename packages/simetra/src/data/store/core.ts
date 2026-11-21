@@ -1382,17 +1382,19 @@ export function createCore(options: {
     if (channel === undefined) gapsAll++
     else gaps.set(channel, (gaps.get(channel) ?? 0) + 1)
   }
-  function liftDisconnect(channel: string, gen: number) {
+  // `writer` — коли виклик уже всередині `commit` (разом з `purge` пари).
+  function liftDisconnect(channel: string, gen: number, writer?: Writer) {
     if (gapOf(channel) !== gen || !session.token().valid) return
-    core.commit((w) => w.clearDisconnected(channel), session.token())
+    if (writer !== undefined) writer.clearDisconnected(channel)
+    else core.commit((w) => w.clearDisconnected(channel), session.token())
   }
   // Канал знято (перерахунок підписок, відмова `auth`): його позначки
   // знімаються разом з ним, а будь-яке зняття з минулого приєднання втрачає
   // чинність.
-  function dropChannel(channel: string) {
+  function dropChannel(channel: string, writer?: Writer) {
     markGap(channel)
     unsettled.delete(channel)
-    liftDisconnect(channel, gapOf(channel))
+    liftDisconnect(channel, gapOf(channel), writer)
   }
 
   // Рантайм чи ядро закривається, коли транспорт відмовив назавжди (`final`).
@@ -1641,7 +1643,6 @@ export function createCore(options: {
       joinWave,
       gapOf,
       markGap,
-      liftDisconnect,
       dropChannel,
       requestVersion: () => core.requestVersion(),
       connectionRefused,
