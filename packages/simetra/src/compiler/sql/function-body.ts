@@ -607,16 +607,17 @@ export function checkPlatformCalls(
   )
 }
 
-/** Функції запобіжника виклику: їх платформа дозволяє лише першому оператору. */
-const GUARD_FUNCTIONS: ReadonlySet<string> = new Set(
-  [RIGHTS_FUNCTIONS.require, RIGHTS_FUNCTIONS.requireScope].map(
-    (f) => `${f.schema}.${f.name}`
+/** Функції запобіжника виклику: їх платформа дозволяє лише першому оператору; обчислюється під час виклику, бо модуль входить у цикл імпортів. */
+const guardFunctions = (): ReadonlySet<string> =>
+  new Set(
+    [RIGHTS_FUNCTIONS.require, RIGHTS_FUNCTIONS.requireScope].map(
+      (f) => `${f.schema}.${f.name}`
+    )
   )
-)
 
 const isGuardCall = (call: ReferencedName) =>
   call.schema === PLATFORM_SCHEMA &&
-  GUARD_FUNCTIONS.has(`${call.schema}.${call.name}`)
+  guardFunctions().has(`${call.schema}.${call.name}`)
 
 /**
  * Виклики одиниці без одного виклику запобіжника, який робить перший оператор
