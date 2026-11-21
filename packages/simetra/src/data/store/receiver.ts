@@ -17,6 +17,7 @@ import { scopeOf, visibleRow, type RowEntry } from "./object-store"
 import { canSubscribe } from "./rights"
 import { ReadLimiterClosed, readKeys, tracked } from "./source"
 import type {
+  CoreLogEntry,
   GenerationToken,
   Key,
   ObjectName,
@@ -99,6 +100,8 @@ export interface Receiver {
     object: ObjectName,
     target: { keys: readonly Key[] } | { scope: string | null }
   ): void
+  /** A core tick: writes `stale-age` while an own mark exists. */
+  tick(): void
   /** Drops every subscription; the receiver sees nothing afterwards. */
   stop(): void
 }
@@ -190,6 +193,69 @@ interface Job {
   readonly rows: Promise<ServerRow[] | undefined>
 }
 
+// Час власних позначок приймача (`minVersion` і «розрив»): рядок моделі часу
+// не має, а метриці (Р13) потрібен вік найстарішої. Окремо від життєвого
+// циклу позначок: запис живий, лише поки позначка ще є в сховищі.
+interface MarkTimes {
+  noteMinVersion(object: ObjectName, key: Key): void
+  noteDisconnect(channel: string | undefined): void
+  /** Найстаріша жива позначка; мертві записи прибираються тут. */
+  oldest(): { at: number; object?: ObjectName } | undefined
+}
+
+function createMarkTimes(
+  writer: WriterContext,
+  pairOf: (channel: string) => { object: ObjectName } | undefined
+): MarkTimes {
+  // Ключ `object\0key` чи канал; `*` — розрив усього з'єднання.
+  const minVersion = new Map<
+    string,
+    { at: number; object: ObjectName; key: Key }
+  >()
+  const gaps = new Map<string, number>()
+  const hasMinVersion = (object: ObjectName, key: Key) =>
+    writer.objectOf(object).rows.get(key)?.stale.minVersion !== undefined
+  const hasGap = (channel: string) => {
+    for (const o of writer.objects.values())
+      for (const key of o.rows.keys()) {
+        const marks = o.rows.get(key)?.stale.disconnect
+        if (marks !== undefined && (channel === "*" || marks.has(channel)))
+          return true
+      }
+    return false
+  }
+  return {
+    noteMinVersion(object, key) {
+      const id = `${object}\u0000${key}`
+      const prev = minVersion.get(id)
+      // Позначка, що вже була, зберігає свій час.
+      if (prev !== undefined && hasMinVersion(object, key)) return
+      if (hasMinVersion(object, key))
+        minVersion.set(id, { at: writer.now(), object, key })
+    },
+    noteDisconnect(channel) {
+      const id = channel ?? "*"
+      if (gaps.has(id) && hasGap(id)) return
+      if (hasGap(id)) gaps.set(id, writer.now())
+    },
+    oldest() {
+      let found: { at: number; object?: ObjectName } | undefined
+      const take = (at: number, object?: ObjectName) => {
+        if (found === undefined || at < found.at) found = { at, object }
+      }
+      for (const [id, m] of [...minVersion]) {
+        if (!hasMinVersion(m.object, m.key)) minVersion.delete(id)
+        else take(m.at, m.object)
+      }
+      for (const [id, at] of [...gaps]) {
+        if (!hasGap(id)) gaps.delete(id)
+        else take(at, id === "*" ? undefined : pairOf(id)?.object)
+      }
+      return found
+    },
+  }
+}
+
 export function createReceiver(ctx: ReceiverContext): Receiver {
   const { transport, writer } = ctx
   const entries = [...ctx.index.byId.values()].filter((e) => e.signal)
@@ -265,6 +331,8 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     }
   }
 
+  const marks = createMarkTimes(writer, pairOf)
+
   const onError = (error: SignalError) => {
     if (stopped || !token.valid) return
     // Розрив: рядки каналу (чи всі) не знають, що пропустили (§8.4).
@@ -272,6 +340,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       if (error.channel !== undefined && !held.has(error.channel)) return
       ctx.markGap(error.channel)
       ctx.commit((w) => w.markDisconnected(error.channel), token)
+      marks.noteDisconnect(error.channel)
       return
     }
     // Друга відмова токена з'єднання поспіль: транспорт не відновиться.
@@ -604,6 +673,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       // перечитування `stale` не ставить.
       if (row.version >= signal.version) continue
       w.markStale(object, [key], signal.version)
+      marks.noteMinVersion(object, key)
       const mark = o.rows.get(key)?.stale.minVersion
       if (
         mark !== undefined &&
@@ -625,6 +695,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     // `needsRefresh` невидимим виглядам (`spec` немає — усім виглядам об'єкта).
     const refresh: { object: ObjectName; spec?: ViewSpec }[] = []
     const requested: ObjectName[] = []
+    const burstObjects: ObjectName[] = []
     for (const [object, signals] of batch) {
       if (writer.isStale(object)) continue
       const o = writer.objectOf(object)
@@ -638,6 +709,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         continue
       }
       if (plan.whole) {
+        burstObjects.push(object)
         for (const view of views)
           if (!view.visible) refresh.push({ object, spec: view.spec })
         flights.push(
@@ -666,6 +738,13 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
             (error: unknown) => writer.log({ kind: "listener-failed", error })
           )
         )
+    }
+    // Сплеск (Р13): об'єкти, що справді перечитуються, і їхні вигляди.
+    const reading = new Set([...jobs.map((job) => job.object), ...burstObjects])
+    if (reading.size > 0) {
+      let views = 0
+      for (const object of reading) views += activeViews(writer, object).length
+      writer.log({ kind: "revalidate-burst", objects: reading.size, views })
     }
     if (refresh.length > 0)
       ctx.commit((w) => {
@@ -726,6 +805,17 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
 
   return {
     touch,
+    tick() {
+      if (stopped || !token.valid) return
+      const oldest = marks.oldest()
+      if (oldest === undefined) return
+      const entry: CoreLogEntry = {
+        kind: "stale-age",
+        ageMs: writer.now() - oldest.at,
+        ...(oldest.object === undefined ? {} : { object: oldest.object }),
+      }
+      writer.log(entry)
+    },
     snapshotReplaced() {
       refused.clear()
       touch()

@@ -423,6 +423,14 @@ export type CoreLogEntry =
   | { kind: "horizon-hidden"; object: ObjectName; count: number }
   /** The `rights` part failed; the old snapshot stays (P4-B spec §9.3). */
   | { kind: "rights-failed" }
+  /**
+   * The age of the oldest own mark of the signal receiver (`minVersion` or a
+   * disconnect gap), written on a tick while a mark exists (P4-B spec §8.4).
+   * No keys, no values.
+   */
+  | { kind: "stale-age"; ageMs: number; object?: ObjectName }
+  /** A batch or a rejoin wave re-read: counts of objects and views (§8.4). */
+  | { kind: "revalidate-burst"; objects: number; views: number }
 
 /**
  * The rights snapshot of the session (P4-B spec §9.1) with the two epochs of

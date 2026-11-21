@@ -1314,6 +1314,7 @@ export function createCore(options: {
     core.requestRights()
     const invisible: { object: ObjectName; spec: ViewSpec }[] = []
     const reads: Promise<void>[] = []
+    let readViews = 0
     for (const object of new Set(
       [...fired.channels.values()].map((c) => c.object)
     )) {
@@ -1321,13 +1322,22 @@ export function createCore(options: {
       const views = activeViews(writerContext, object)
       for (const view of views)
         if (!view.visible) invisible.push({ object, spec: view.spec })
-      if (views.some((v) => v.visible))
+      if (views.some((v) => v.visible)) {
+        readViews += views.filter((v) => v.visible).length
         reads.push(
           revalidate(writerContext, object, { visibleOnly: true }).catch(
             (error: unknown) => log({ kind: "listener-failed", error })
           )
         )
+      }
     }
+    // Сплеск (Р13): хвиля, що справді перечитує; без читань запису немає.
+    if (reads.length > 0)
+      log({
+        kind: "revalidate-burst",
+        objects: reads.length,
+        views: readViews,
+      })
     if (invisible.length > 0)
       core.commit((w) => {
         for (const { object, spec } of invisible)
@@ -1580,6 +1590,7 @@ export function createCore(options: {
           read = true
       if (runDue()) read = true
       if (wave !== undefined && wave.at <= now()) fireWave()
+      receiver?.tick()
       if (read) lastTickAt = now()
       // Знімок має власний строк; без видимих виглядів пакет несе лише його.
       const rightsAt = rightsDueAt()
