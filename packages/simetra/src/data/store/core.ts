@@ -524,7 +524,7 @@ export function createCore(options: {
           rightsFlying = false
           // Відповідь без заміни знімка нічого не комітить: строк, що повернувся
           // після польоту, планувальнику треба показати самому.
-          scheduler.request()
+          if (!defects.has("scheduler-no-reschedule")) scheduler.request()
           if (rightsTail) {
             rightsTail = false
             core.requestRights()
@@ -1347,7 +1347,12 @@ export function createCore(options: {
       reconcile(
         { minAgeMs },
         undefined,
-        rightsAt !== undefined && rightsAt <= now() ? ["rights"] : []
+        // Строк знімка бере те саме вікно `0,1 × I`, що й вигляди: інакше
+        // `refreshedAt` виду трохи раніший за `rightsSentAt` розколов би такт.
+        rightsAt !== undefined &&
+          rightsAt <= now() + 0.1 * limits.revalidateIntervalMs
+          ? ["rights"]
+          : []
       )
     },
     defects,

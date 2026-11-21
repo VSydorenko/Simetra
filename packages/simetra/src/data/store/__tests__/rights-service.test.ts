@@ -65,6 +65,19 @@ describe("the rights deadline of the snapshot", () => {
     expect(h.core.rights()!.rightsVersion).toBe(V2)
   })
 
+  it("views and rights sent 50 ms apart are still one request after I: views with rights", async () => {
+    const h = await open()
+    await advance(50)
+    h.core.requestRights()
+    await settle()
+    expect(h.fake.rightsReads).toEqual([undefined, V1])
+    const from = h.fake.requests.length
+    await advance(I - 50)
+    // Строк виду настав, строк знімка — через 50 мс, у вікні 0,1 × I.
+    expect(h.fake.requests.slice(from)).toEqual([2])
+    expect(h.fake.rightsReads).toEqual([undefined, V1, V1])
+  })
+
   it("a tab with no visible views: a rights-only request, lastTickAt does not move", async () => {
     const h = await open()
     h.core.setVisible(list, false)

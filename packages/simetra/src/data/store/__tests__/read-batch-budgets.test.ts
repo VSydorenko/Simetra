@@ -597,9 +597,7 @@ describe("the rights part of the service points", () => {
     expect(requests).toHaveLength(1)
     expect(requests[0]!.hasVersion).toBe(false)
     expectConfirmed(h.fake, from)
-    expect(requests[0]!.response).toBeLessThanOrEqual(
-      8 * 2 * ROWS + 2048 + RIGHTS_CONFIRMED_BYTES
-    )
+    expect(requests[0]!.response).toBeLessThanOrEqual(8 * 2 * ROWS + 2048)
     expectBodyBudget(requests)
   })
 
