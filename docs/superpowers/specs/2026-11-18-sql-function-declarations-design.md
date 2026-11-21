@@ -509,8 +509,9 @@ ACL функції з грантом ролі поза призначенням�
   `plpgsql` без запобіжника виклику, а інших причин `check-not-applied` немає; (г)
   видаляє декларацію функції, яка стала формою платформи
   (`sql.declaration-platform-form`).
-  (д) вирізає дослівний `ALTER DEFAULT PRIVILEGES … ON FUNCTIONS|ROUTINES`
-  (`sql.default-privileges-execute`). `fix` працює в режимі ремонту, як
+  (д) вирізає цілою інструкцією дослівний `ALTER DEFAULT PRIVILEGES … ON
+  FUNCTIONS|ROUTINES` (`sql.default-privileges-execute`), зокрема зі змішаними
+  отримувачами: `EXECUTE` виводить лише платформа. `fix` працює в режимі ремонту, як
   мутації: пише, коли підсумок не додає нових помилок класу ремонту, прибирає
   хоча б одну й не має помилок поза класом (чистий підсумок — як і раніше).
 - **`compile`**: діагностики `sql.declaration-*` вказують на файл
