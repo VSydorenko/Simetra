@@ -17,6 +17,7 @@ import {
 import {
   CHECKLIST_TABLE,
   HOURS_TABLES,
+  TASK_FILE,
   TASK_NOTE_ADOPTED_TABLE,
   policyDomain,
   promotableTaskNote,
@@ -760,6 +761,13 @@ describe("sql.kind-table-verbatim: a view writes a kind table (І2–І5)", () =
       expected: [viewPath("view:public.v", COMMAND)],
     },
     {
+      // Ключ цілі гранту — за правилом ідентичності (#297): відкликання й
+      // грант на подання `"V"` мають влучити в нього.
+      name: "a view named in quotes with the write revoked from PUBLIC and the API roles but granted to the command role",
+      sql: `CREATE VIEW public."V" ${OVER};\nREVOKE ALL ON public."V" FROM PUBLIC, ${FROM_API};\nGRANT UPDATE ON public."V" TO ${COMMAND};`,
+      expected: [viewPath('view:public."V"', COMMAND)],
+    },
+    {
       // `PUBLIC` пише крізь подання лише явним грантом, а з ним — і кожна роль API.
       name: "a view with an explicit grant to PUBLIC",
       sql: `${V} ${OVER};\n${revokeApi}\nGRANT INSERT ON public.v TO PUBLIC;`,
@@ -961,6 +969,19 @@ describe("sql.kind-table-verbatim: a grant of the write (І6, І19)", () => {
         files({ [EXTRA]: `GRANT INSERT ON public.task TO ${API.user};` })
       )
     )
+    expect(result.diagnostics.map((d) => d.code)).toEqual([
+      "sql.generated-grant",
+    ])
+  })
+
+  // Пропуск гранту генератора звіряє ключ цілі за правилом ідентичності
+  // (#297): таблиця виду з ім'ям у лапках не дістає другої діагностики.
+  it("a grant on a kind table named in quotes stays sql.generated-grant alone", async () => {
+    const domain = policyDomain(promotableTaskNote(), {
+      [TASK_FILE]: { physicalName: "Task" },
+    })
+    domain.set(EXTRA, `GRANT INSERT ON public."Task" TO ${API.user};`)
+    const result = await compile(await acceptDebt(domain))
     expect(result.diagnostics.map((d) => d.code)).toEqual([
       "sql.generated-grant",
     ])
