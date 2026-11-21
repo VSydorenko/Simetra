@@ -59,7 +59,11 @@ export interface SignalTransport {
   onSubscribed(
     handler: (event: { channel: string; recovered: boolean }) => void
   ): Unsubscribe
-  /** Renews the tokens of the given channels (all when omitted). */
+  /**
+   * Renews the tokens of the given channels (all when omitted). Channels the
+   * server now refuses are closed and reported as `auth` with the channel; the
+   * allowed ones re-subscribe, each firing `onSubscribed` with `recovered: false`.
+   */
   refreshTokens(channels?: readonly string[]): Promise<void>
   /** Drops every subscription and closes the connection. */
   close(): void

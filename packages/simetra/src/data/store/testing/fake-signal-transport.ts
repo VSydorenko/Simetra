@@ -30,16 +30,31 @@ export function createFakeSignalTransport(): FakeSignalTransport {
   const refused = new Set<string>()
   let isClosed = false
 
+  // Відмова каналу: лише його тримачі дізнаються, канал для них закрито.
+  const refuse = (channel: string) => {
+    for (const subscription of [...subscriptions]) {
+      if (!subscription.channels.has(channel)) continue
+      const rest = new Set(subscription.channels)
+      rest.delete(channel)
+      subscription.channels = rest
+      subscription.onError({ kind: "auth", channel })
+    }
+  }
+
   return {
     refused,
     subscribe(channels, onSignal, onError): Unsubscribe {
       if (isClosed) return () => {}
+      const allowed = channels.filter((channel) => !refused.has(channel))
       const subscription: Subscription = {
-        channels: new Set(channels),
+        channels: new Set(allowed),
         onSignal,
         onError,
       }
       subscriptions.add(subscription)
+      for (const channel of channels) {
+        if (refused.has(channel)) onError({ kind: "auth", channel })
+      }
       return () => {
         subscriptions.delete(subscription)
       }
@@ -51,16 +66,19 @@ export function createFakeSignalTransport(): FakeSignalTransport {
       }
     },
     async refreshTokens(channels) {
-      const targets = [...refused].filter(
-        (channel) => channels === undefined || channels.includes(channel)
-      )
-      for (const channel of targets) {
-        for (const subscription of [...subscriptions]) {
-          if (!subscription.channels.has(channel)) continue
-          const rest = new Set(subscription.channels)
-          rest.delete(channel)
-          subscription.channels = rest
-          subscription.onError({ kind: "auth", channel })
+      const named = (channel: string) =>
+        channels === undefined || channels.includes(channel)
+      for (const channel of [...refused].filter(named)) refuse(channel)
+      // Дозволені канали перепідписуються: кожен дає onSubscribed(recovered: false).
+      const held = new Set<string>()
+      for (const subscription of subscriptions) {
+        for (const channel of subscription.channels) held.add(channel)
+      }
+      for (const channel of held) {
+        if (named(channel) && !refused.has(channel)) {
+          for (const handler of [...subscribedHandlers]) {
+            handler({ channel, recovered: false })
+          }
         }
       }
     },
@@ -82,6 +100,18 @@ export function createFakeSignalTransport(): FakeSignalTransport {
       }
     },
     fail(error) {
+      if (error.channel !== undefined) {
+        if (error.kind === "auth") {
+          refuse(error.channel)
+        } else {
+          for (const subscription of [...subscriptions]) {
+            if (subscription.channels.has(error.channel)) {
+              subscription.onError(error)
+            }
+          }
+        }
+        return
+      }
       for (const subscription of [...subscriptions]) subscription.onError(error)
     },
     subscribed() {
