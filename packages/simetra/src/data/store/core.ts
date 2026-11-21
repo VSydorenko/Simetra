@@ -696,7 +696,10 @@ export function createCore(options: {
       rightsSessionChanged()
       return
     }
-    // Знімок замінює поточний лише з більшою `rightsEpoch` (Р4).
+    // Знімок замінює поточний лише з більшою `rightsEpoch` (Р4). Сьогодні
+    // перевірка недосяжна: `requestRights` — один запит у польоті з хвостом,
+    // тож старша відповідь не приходить після новішої; вона лишається
+    // запобіжником для шляху, що колись надішле дві частини `rights` разом.
     if (current !== undefined && sentRights.epoch <= current.rightsEpoch) return
     const next: RightsState = {
       snapshot,
@@ -705,7 +708,8 @@ export function createCore(options: {
       appliedEpoch: session.epochs.next(),
     }
     rights = next
-    session.epochs.setBarrier(barrierOf(next))
+    if (!defects.has("rights-no-barrier"))
+      session.epochs.setBarrier(barrierOf(next))
     replaceRights(current, next, item)
     try {
       options.onRightsReplaced?.(current, next)
@@ -723,7 +727,21 @@ export function createCore(options: {
     next: RightsState,
     item: CoreReadItem
   ) {
-    const pairs = deniedPairs(writerContext, deniedBy(next.snapshot))
+    const denied = deniedBy(next.snapshot)
+    const deniedBefore =
+      prev === undefined || !defects.has("rights-pass-by-diff")
+        ? undefined
+        : deniedBy(prev.snapshot)
+    const pairs =
+      prev === undefined && defects.has("rights-first-no-pass")
+        ? []
+        : deniedPairs(
+            writerContext,
+            deniedBefore === undefined
+              ? denied
+              : (object, scope) =>
+                  denied(object, scope) && !deniedBefore(object, scope)
+          )
     const lost = [...objects.values()].filter((o) =>
       readLost(prev?.snapshot, next.snapshot, o.entry)
     )

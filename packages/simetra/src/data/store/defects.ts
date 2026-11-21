@@ -96,6 +96,12 @@ export type DefectFlag =
   | "revalidate-no-tail"
   /** The scheduler plans and reads a view that is past the discard limit. */
   | "scheduler-reads-unavailable"
+  /** A rights snapshot sets no barrier: a read that started before it writes a pair it denies. */
+  | "rights-no-barrier"
+  /** The first rights snapshot of a session purges no stored pair. */
+  | "rights-first-no-pass"
+  /** A rights replacement purges only the pairs the previous snapshot allowed. */
+  | "rights-pass-by-diff"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

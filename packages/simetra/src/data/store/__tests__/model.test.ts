@@ -9,8 +9,11 @@ import {
   CommandFailure,
   channelTopic,
   readResultFromWire,
+  type CatalogEntry,
   type CommandError,
   type ReadRows,
+  type RightsRow,
+  type RightsSnapshot,
 } from "simetra/model"
 import { DataError } from "../../errors"
 import {
@@ -24,7 +27,7 @@ import { compareRows, fieldInfoOf, filterCollator } from "../filter"
 import { visibleRow } from "../object-store"
 import { createCoreSource, createReadLimiter, type ServerPort } from "../source"
 import { EPOCH_UNAVAILABLE, type Subset } from "../subsets"
-import type { FakeRead, FakeReadLog } from "../testing/fake-source"
+import type { FakeRead, FakeReadLog, FakeSource } from "../testing/fake-source"
 import {
   DEFAULT_CORE_LIMITS,
   type CloseReason,
@@ -38,7 +41,7 @@ import {
   type ViewSnapshot,
   type ViewSpec,
 } from "../types"
-import { ORG, S, TASK, key, keysOf, setup } from "./core-support"
+import { ORG, S, TASK, key, keysOf, org, setup, task } from "./core-support"
 
 /*
  * Модельний тест ядра — гейт блоку (спека П4-B §11,
@@ -143,6 +146,83 @@ const CHANNELS = [
   channel(ORG, T),
 ]
 
+// ── Знімок прав (спека П4-B §6.2 правило 4, §9.3) ──
+const USER = "00000000-0000-4000-8000-0000000000a1"
+const OTHER_USER = "00000000-0000-4000-8000-0000000000a2"
+// Обидва об'єкти моделі під договором прав: прохід і бар'єр судять і задачі,
+// і цілі `include`.
+const RIGHTS_OBJECTS: readonly CatalogEntry[] = [
+  { ...task, rightsContract: true },
+  { ...org, rightsContract: true },
+]
+const LABELS: Readonly<Record<ObjectName, string>> = {
+  [TASK]: "task",
+  [ORG]: "organization",
+}
+
+/**
+ * Права користувача моделі — еталон, незалежний від `readAllowed`: членство в
+ * скоупах і рядки `read` рівня скоупу (`<мітка>\u0000<скоуп>`) обсягу `any`
+ * та додаткові обсягу `own` (їх зникнення при наявному `any` — звуження).
+ */
+interface Grant {
+  readonly user: string
+  readonly members: readonly string[]
+  readonly reads: readonly string[]
+  readonly extra: readonly string[]
+}
+
+const grantKey = (object: ObjectName, scope: string) =>
+  `${LABELS[object]}\u0000${scope}`
+
+const FULL_GRANT: Grant = {
+  user: USER,
+  members: [...SCOPES],
+  reads: [TASK, ORG].flatMap((o) => SCOPES.map((x) => grantKey(o, x))),
+  extra: [],
+}
+
+/** Пару заборонено: скоупу немає в членстві або немає жодного рядка `read`. */
+const grantDenies = (g: Grant, object: ObjectName, scope: string | null) =>
+  scope === null ||
+  !g.members.includes(scope) ||
+  !(
+    g.reads.includes(grantKey(object, scope)) ||
+    g.extra.includes(grantKey(object, scope))
+  )
+
+const rightsRow = (at: string, extent: string): RightsRow => {
+  const [object, scope] = at.split("\u0000") as [string, string]
+  return {
+    level: "scope",
+    levelId: null,
+    scope,
+    container: null,
+    object,
+    action: "read",
+    extent,
+    dimensionId: null,
+  }
+}
+
+const snapshotOf = (g: Grant): RightsSnapshot => ({
+  userId: g.user,
+  scopeSets: g.members.map((scope) => ({ scopeKind: SCOPE_KIND_ID, scope })),
+  rights: [
+    ...g.reads.map((at) => rightsRow(at, "any")),
+    ...g.extra.map((at) => rightsRow(at, "own")),
+  ],
+})
+
+const without = (list: readonly string[], x: string) =>
+  list.filter((y) => y !== x)
+const withOne = (list: readonly string[], x: string) =>
+  list.includes(x) ? list : [...list, x]
+
+/** How the model answers a `rights` step. */
+type RightsHow =
+  "lose" | "regain" | "narrow" | "same" | "fail" | "hold" | "user"
+
 type How = "ok" | "stale" | "forbidden" | "missing" | "unavailable"
 
 /** How the model answers a held `run`. */
@@ -200,6 +280,9 @@ type Step =
   | { t: "due" }
   | { t: "outage"; steps: number }
   | { t: "exhaust" }
+  // `object`: 0 — рядок `read` задач, 1 — організацій, 2 — членство в скоупі.
+  | { t: "rights"; what: RightsHow; object: number; scope: number }
+  | { t: "race"; group: number; settle: "now" | "later" }
 
 const view = fc.nat(SPECS.length - 1)
 const k = fc.nat(KEYS.length - 1)
@@ -219,7 +302,7 @@ const one = <T extends Step["t"]>(t: T) => fc.constant(t)
  * дефекти за кількістю прогонів: зміна генератора (ваги, профілі, масиви
  * кроків) зсуває ці числа, тож після неї самотест перевіряють заново.
  */
-const STEP: fc.Arbitrary<Step> = fc.oneof(
+const STEP_ENTRIES: fc.WeightedArbitrary<Step>[] = [
   { weight: 24, arbitrary: fc.record({ t: one("sub"), v: view }) },
   // `release` — відписка й плин часу до звільнення одним кроком: звільнення
   // ключів (пам'ять версій, надгробки слотів `removed`) трапляється частіше.
@@ -466,6 +549,60 @@ const STEP: fc.Arbitrary<Step> = fc.oneof(
         "subject-changed"
       ),
     }),
+  },
+]
+const STEP: fc.Arbitrary<Step> = fc.oneof(...STEP_ENTRIES)
+
+/**
+ * Вигляди, чиє читання крок `race` запускає до відправки знімка: картка з
+ * ТЧ свого власника, картки, ТЧ і списки ключів задач.
+ */
+const RACE_GROUPS: readonly (readonly number[])[] = [
+  [2, 4],
+  [3],
+  [4],
+  [0],
+  [1],
+  [7],
+  [8],
+  [2],
+]
+
+/**
+ * Кроки знімка прав (бриф задачі 6 B5b-2) поверх звичайних: сума 52 проти 250,
+ * тож заміна знімка йде в кожному прогоні кілька разів. `race` — обов'язковий
+ * крок архітекторки: читання пари стартує до відправки знімка, пари в
+ * сховищі немає, знімок її забороняє, відповідь осідає після заміни — одразу
+ * чи пізніше, у будь-якому порядку з рештою кроків.
+ */
+const RIGHTS_STEP: fc.Arbitrary<Step> = fc.oneof(
+  ...STEP_ENTRIES,
+  ...(
+    [
+      ["lose", 10],
+      ["regain", 10],
+      ["narrow", 4],
+      ["same", 3],
+      ["fail", 3],
+      ["hold", 6],
+      ["user", 1],
+    ] as const
+  ).map(([what, weight]) => ({
+    weight,
+    arbitrary: fc.record({
+      t: one("rights"),
+      what: fc.constant<RightsHow>(what),
+      object: fc.nat(2),
+      scope: fc.nat(1),
+    }),
+  })),
+  {
+    weight: 15,
+    arbitrary: fc.record({
+      t: one("race"),
+      group: fc.nat(RACE_GROUPS.length - 1),
+      settle: fc.constantFrom<"now" | "later">("now", "later"),
+    }),
   }
 )
 
@@ -486,6 +623,8 @@ interface ModelAttempt {
   readonly key: Key
   /** The stored scope of the key at the start; `undefined` — no row. */
   readonly scope: string | null | undefined
+  /** The length of the read log when the attempt started. */
+  readonly startedAt: number
   /** The core sent its `run` (a closed runtime sends nothing). */
   sent: boolean
   /** Cancelled or dismissed by the model while unsettled. */
@@ -599,7 +738,8 @@ async function runModel(
   preloaded: boolean,
   profile: Profile,
   defects: readonly DefectFlag[] = [],
-  schedulerChecks = true
+  schedulerChecks = true,
+  rights = false
 ) {
   const held: { core?: CoreSession } = {}
   try {
@@ -609,6 +749,7 @@ async function runModel(
       profile,
       defects,
       schedulerChecks,
+      rights,
       (c) => {
         held.core = c
       }
@@ -626,6 +767,7 @@ async function runModelOn(
   profile: Profile,
   defects: readonly DefectFlag[],
   schedulerChecks: boolean,
+  rights: boolean,
   opened: (core: CoreSession) => void
 ) {
   // Порт запису моделі: кожен `run` тримається, доки крок `run` не відповість
@@ -641,10 +783,76 @@ async function runModelOn(
     clock += ms
     vi.advanceTimersByTime(ms)
   }
+  // ── Знімок прав очима моделі ──
+  // Права сервера; RLS фейка ніколи не ширша за них.
+  let serverGrant = FULL_GRANT
+  // Знімок, який ядро мусить тримати: останній доставлений зі `snapshot`
+  // (частина `rights` летить одна за раз, тож останній доставлений — і
+  // найновіший відправлений).
+  let expectedGrant: Grant | undefined
+  // Доставлено знімок іншого користувача: ядро мусить закритися.
+  let expectSessionChange = false
+  let sessionChanged = false
+  const versions = new Map<string, string>()
+  const grants = new Map<string, Grant>()
+  const versionOf = (g: Grant) => {
+    const json = JSON.stringify(snapshotOf(g))
+    let version = versions.get(json)
+    if (version === undefined) {
+      version = (versions.size + 1).toString(16).padStart(64, "0")
+      versions.set(json, version)
+      grants.set(version, g)
+    }
+    return version
+  }
+  // Пара → довжина журналу запитів на мить останнього застосування знімка,
+  // що її забороняє: показаний рядок пари — лише з читання, що надійшло на
+  // сервер не раніше (Р4: бар'єр і надгробки знову відкритих пар).
+  const rightsBarrier = new Map<string, number>()
+  const pairKey = (object: ObjectName, scope: string) =>
+    `${object}\u0000${scope}`
+  // Знімок застосовано на цьому кроці: прохід прибирає ключі зі складу.
+  let rightsPurged: boolean
+  // Запити, що осіли (обгортка читання бачить їхнє осідання).
+  const resolved = new Set<number>()
+
+  // Обгортка читання сервера: бачить осідання запиту до того, як відповідь
+  // дійде до ядра. Одна функція — і порт, і адаптер об'єктів, як
+  // `serverFunctionAdapter`: частини пакета й `rights` ідуть одним запитом.
+  let sharedRead: ServerPort["read"] | undefined
+  const readOf = (f: FakeSource): ServerPort["read"] =>
+    (sharedRead ??= async (items) => {
+      const request = f.requests.length
+      const slot = items.findIndex((item) => item.type === "rights")
+      const result = await f.server.read(items)
+      resolved.add(request)
+      const item = slot < 0 ? undefined : result.items[slot]
+      if (item !== undefined) deliveredRights(item)
+      return result
+    })
   const { fake, core, log, inspect } = setup({
     now: () => clock,
     limits: LIMITS,
     mode: "manual",
+    ...(rights
+      ? {
+          rightsSnapshot: true,
+          objects: RIGHTS_OBJECTS,
+          adapter: (f: FakeSource) => ({
+            capabilities: f.adapter.capabilities,
+            read: readOf(f),
+          }),
+          onRightsReplaced: (_prev: unknown, next: { rightsVersion: string }) =>
+            appliedRights(next.rightsVersion),
+          onSessionChanged: () => {
+            sessionChanged = true
+            // Закриття осідає кожну неосілу мутацію, не успіхом.
+            for (const a of attempts)
+              if (a.result === undefined) a.mustFail = true
+            journal.clear()
+          },
+        }
+      : {}),
     server: (f) => ({
       run(request) {
         const attempt = sending
@@ -657,7 +865,7 @@ async function runModelOn(
           runs.push({ request, resolve, reject, attempt })
         )
       },
-      read: (items) => f.server.read(items),
+      read: rights ? readOf(f) : (items) => f.server.read(items),
     }),
   })
   for (const flag of defects) inspect.defects.add(flag)
@@ -878,6 +1086,105 @@ async function runModelOn(
 
   const objectOf = (name: ObjectName) => internals.objects.get(name)!
 
+  /** Скоуп рядка сервера тієї версії: організація — сама свій скоуп. */
+  const scopeAt = (object: ObjectName, k: Key, version: number) =>
+    object === ORG
+      ? k
+      : (fake.row(TASK, k, version)?.values.org as string | undefined)
+  /** Бар'єр знімка над парою рядка цієї версії, `undefined` — пари не забороняли. */
+  const barrierOf = (object: ObjectName, k: Key, version: number) => {
+    const scope = scopeAt(object, k, version)
+    return scope === undefined
+      ? undefined
+      : rightsBarrier.get(pairKey(object, scope))
+  }
+  /**
+   * Рядок цієї версії забороненої пари, якого не приніс жоден дозвіл після
+   * бар'єра: ні читання, що надійшло на сервер після застосування знімка,
+   * ні відповідь `run` спроби, що почалась після нього.
+   */
+  const deniedRow = (object: ObjectName, k: Key, version: number) => {
+    const barrier = barrierOf(object, k, version)
+    if (barrier === undefined) return false
+    const read = (deliveries.get(id(object, k)) ?? []).some(
+      (d) => d.index >= barrier && d.rows.get(k) === version
+    )
+    const run = runDeliveredAt.get(`${id(object, k)}\u0000${version}`)
+    return !read && (run === undefined || run < barrier)
+  }
+  /** Рядки ТЧ власника цієї версії — лише з читання ТЧ після бар'єра його пари. */
+  const deniedLines = (owner: Key, ownerVersion: number) => {
+    const barrier = barrierOf(TASK, owner, ownerVersion)
+    return (
+      barrier !== undefined &&
+      !sectionDeliveries.some(
+        (d) =>
+          d.owner!.key === owner &&
+          d.owner!.version === ownerVersion &&
+          d.index >= barrier
+      )
+    )
+  }
+
+  /**
+   * RLS сервера: видимість кроків моделі, звужена правами сервера. Скоуп
+   * ховається для всіх об'єктів, коли права забороняють його хоч одному: RLS
+   * не ширша за права, тож читання після застосування знімка забороненої
+   * пари не приносить. Без прав — та сама видимість, що й раніше.
+   */
+  const rls = (base: readonly string[] | undefined) => {
+    if (!rights) return base
+    const hidden: readonly string[] = SCOPES.filter((x) =>
+      [TASK, ORG].some((o) => grantDenies(serverGrant, o, x))
+    )
+    return hidden.length === 0
+      ? base
+      : (base ?? SCOPES).filter((x) => !hidden.includes(x))
+  }
+  const setGrant = (g: Grant) => {
+    serverGrant = g
+    fake.rightsSnapshot = snapshotOf(g)
+    fake.rightsVersion = versionOf(g)
+    fake.setVisibleScopes(rls(visibility))
+  }
+
+  /** Відповідь `rights` дійшла до ядра: знімок, який воно мусить тримати. */
+  function deliveredRights(item: { ok: boolean; value?: unknown }) {
+    if (closed !== undefined || sessionChanged || !item.ok) return
+    const value = item.value as { rightsVersion: string; snapshot?: unknown }
+    // Підтвердження `known` знімка не змінює.
+    if (value.snapshot === undefined) return
+    const g = grants.get(value.rightsVersion)
+    if (g === undefined) {
+      asyncViolations.push(`rights: an answer the model never gave`)
+      return
+    }
+    if (expectedGrant !== undefined && expectedGrant.user !== g.user)
+      expectSessionChange = true
+    else expectedGrant = g
+  }
+
+  /** Ядро застосувало знімок: бар'єр кожної пари, яку він забороняє. */
+  function appliedRights(version: string) {
+    const g = grants.get(version)
+    if (g === undefined) {
+      asyncViolations.push(`rights: applied a snapshot the model never gave`)
+      return
+    }
+    rightsPurged = true
+    const at = fake.log.length
+    for (const object of [TASK, ORG]) {
+      const denied = SCOPES.filter((x) => grantDenies(g, object, x))
+      for (const scope of denied) rightsBarrier.set(pairKey(object, scope), at)
+      if (denied.length === 0) continue
+      // Картка й ТЧ ключа, якого після проходу немає в сховищі, можуть бути
+      // `purged`: прохід міг прибрати його пару (надмірно, а не хибно).
+      for (const k of object === TASK ? KEYS : ORG_KEYS)
+        if (objectOf(object).rows.get(k) === undefined)
+          purgedTargets.add(id(object, k))
+    }
+  }
+
   /** Показаний рядок (зі значеннями чи схований) проти сервера й позначок. */
   const checkRow = (
     label: string,
@@ -937,6 +1244,10 @@ async function runModelOn(
       !runDelivered.has(`${id(object, row.key)}\u0000${row.version}`)
     )
       fail(label, `${at}: version ${row.version} never delivered`)
+    // Пара, яку забороняє застосований знімок: рядок — лише з дозволу після
+    // нього (Р4).
+    if (deniedRow(object, row.key, row.version))
+      fail(label, `${at}: shown from a read older than the rights snapshot`)
     const server = fake.row(object, row.key, row.version)
     if (server === undefined || server.version !== row.version)
       fail(label, `${at}: no server row of version ${row.version}`)
@@ -1030,6 +1341,11 @@ async function runModelOn(
       const purged = sectionBarrier.get(owner)
       if (purged !== undefined && !readSince(purged))
         fail(label, `${where}: lines shown after purge`)
+      if (snap.section.lines.length > 0 && deniedLines(owner, version))
+        fail(
+          label,
+          `${where}: lines shown from a read older than the rights snapshot`
+        )
       // `hide` прибирає рядки ТЧ власника: їх повертає лише читання ТЧ після нього.
       const hidden = hideBarrier.get(id(TASK, owner))
       if (
@@ -1057,6 +1373,38 @@ async function runModelOn(
   const check = (label: string, stepStart: number) => {
     if (errors.length > 0)
       fail(label, `unexpected rejection ${String(errors[0])}`)
+    if (rights && closed === undefined) {
+      // Знімок іншого користувача закриває ядро `session-changed` (Р7) — і
+      // лише він.
+      if (sessionChanged !== expectSessionChange)
+        fail(
+          label,
+          sessionChanged
+            ? "rights: session-changed without a snapshot of another user"
+            : "rights: a snapshot of another user did not close the core"
+        )
+      if (sessionChanged) {
+        closed = {
+          frames,
+          sent: fake.log.length,
+          snapshot: handles[0]!.getSnapshot(),
+        }
+        if (
+          closed.snapshot.status !== "purged" ||
+          closed.snapshot.reason !== "session-changed"
+        )
+          fail(label, "rights: another user, the core is not session-changed")
+      } else {
+        const held = core.rights()?.rightsVersion
+        const want =
+          expectedGrant === undefined ? undefined : versionOf(expectedGrant)
+        if (held !== want)
+          fail(
+            label,
+            `rights: the core holds ${String(held)}, the model ${String(want)}`
+          )
+      }
+    }
     for (const [object, mark] of staled) {
       for (const sent of fake.log.slice(mark)) {
         const target = sent.query?.object
@@ -1188,6 +1536,11 @@ async function runModelOn(
           const barrier = removedBarrier.get(id(name, k))
           if (barrier !== undefined && !deliveredSince(name, k, barrier))
             fail(label, `${at}: values after removed without a later read`)
+          if (deniedRow(name, k, e.version))
+            fail(
+              label,
+              `${at}: stored from a read older than the rights snapshot`
+            )
         }
       }
       // Слот, що зник зі сховища, лишає бар'єр; позначку стану — ні.
@@ -1197,6 +1550,17 @@ async function runModelOn(
           wasRemoved.delete(key)
       }
     }
+
+    const stored = objectOf(TASK).sections.get(K1, "lines")
+    if (
+      stored !== undefined &&
+      stored.lines.length > 0 &&
+      deniedLines(K1, stored.ownerVersion)
+    )
+      fail(
+        label,
+        `${K1}: lines stored from a read older than the rights snapshot`
+      )
 
     for (const [key, at] of remarkedAt) {
       const barrier = removedBarrier.get(key)
@@ -1210,6 +1574,52 @@ async function runModelOn(
     checkMutations(label)
     checkSectionReread(label)
     checkWindows(label)
+  }
+
+  /**
+   * `hasNewRows` (Р4): відповідь читань, що стартували до знімка, ставить
+   * ознаку лише рядком поза складом вигляду, якого знімок не забороняє, —
+   * інакше ознака виказала б, що заборонений рядок існує. `reads` — читання,
+   * на які модель щойно відповіла.
+   */
+  const newsBefore = () =>
+    new Map(
+      [...internals.registry.subsets()].map((sub) => [
+        sub,
+        { news: sub.hasNewRows, layout: new Set(sub.layout) },
+      ])
+    )
+  const checkNews = (
+    label: string,
+    before: ReturnType<typeof newsBefore>,
+    reads: readonly FakeRead[]
+  ) => {
+    if (closed !== undefined) return
+    for (const sub of internals.registry.subsets()) {
+      const was = before.get(sub)
+      if (!sub.hasNewRows || was?.news === true) continue
+      const object = sub.form.object.name
+      const fresh = reads.some((read) => {
+        const index = fake.log.indexOf(read.log)
+        return [...deliveries.values()].some((list) =>
+          list.some(
+            (d) =>
+              d.index === index &&
+              d.object === object &&
+              [...d.rows].some(
+                ([k, version]) =>
+                  was?.layout.has(k) !== true &&
+                  (barrierOf(object, k, version) ?? -1) <= index
+              )
+          )
+        )
+      })
+      if (!fresh)
+        fail(
+          label,
+          `view ${sub.form.spec.kind} of ${object}: hasNewRows from rows of a denied pair`
+        )
+    }
   }
 
   /**
@@ -1332,6 +1742,9 @@ async function runModelOn(
   // Версії, які принесла відповідь `run` живої спроби: джерело показаного
   // рядка поряд із читаннями, але не зняття бар'єрів.
   const runDelivered = new Set<string>()
+  // Те саме з довжиною журналу запитів на старті спроби: бар'єр знімка знімає
+  // лише відповідь спроби, що почалась після нього.
+  const runDeliveredAt = new Map<string, number>()
   let checks = 0
   // Епоха primary, на який іде `run`.
   let primaryEpoch = EA
@@ -1342,6 +1755,7 @@ async function runModelOn(
       id: "",
       key,
       scope: objectOf(TASK).rows.get(key)?.scope,
+      startedAt: fake.log.length,
       sent: false,
       cancelled: false,
       mustFail: closed !== undefined,
@@ -1517,6 +1931,14 @@ async function runModelOn(
       refuse({ code: "command.forbidden" })
       return
     }
+    // Сервер не пише рядка пари, якої права не дозволяють.
+    if (
+      rights &&
+      grantDenies(serverGrant, TASK, fake.row(TASK, k)!.values.org as string)
+    ) {
+      refuse({ code: "command.forbidden" })
+      return
+    }
     if (how === "conflict") {
       refuse({
         code: "command.conflict",
@@ -1549,6 +1971,10 @@ async function runModelOn(
         if (!attempt!.cancelled && closed === undefined) {
           attempt!.runVersion = fake.row(TASK, k)!.version
           runDelivered.add(`${id(TASK, k)}\u0000${attempt!.runVersion}`)
+          runDeliveredAt.set(
+            `${id(TASK, k)}\u0000${attempt!.runVersion}`,
+            attempt!.startedAt
+          )
         }
         held.resolve(value)
       },
@@ -1593,6 +2019,7 @@ async function runModelOn(
 
   const lean = profile !== "full"
   const plan = lean ? steps.map((s) => leanStep(s, profile)) : steps
+  if (rights) setGrant(FULL_GRANT)
 
   if (preloaded) {
     // Половина прогонів стартує з даними: список і `full` (чи другий список)
@@ -1627,13 +2054,29 @@ async function runModelOn(
   const userGens = new Map<Subset, Set<number>>()
   const lastGen = new Map<Subset, number>()
   const userNext = new Set<Subset>()
+  const lastFlight = new Map<Subset, number | undefined>()
   const noteGens = (userStep: boolean) => {
     for (const s of internals.registry.subsets()) {
       const gens = userGens.get(s) ?? new Set<number>()
+      // Заміна знімка прав посеред кроку відповіді перезапускає завантаження
+      // користувача в польоті (Р5а — перше завантаження, прохід — `purge`
+      // пари): покоління піднято, відкинута відповідь дійшла, і новий політ
+      // почався за той самий крок — тож покоління стрибнуло щонайменше на два.
+      // Це те саме завантаження користувача; системний `load` після осілого
+      // польоту піднімає покоління лише на одне.
+      const was = lastFlight.get(s)
+      const restarted =
+        rights &&
+        was !== undefined &&
+        gens.has(was) &&
+        s.flight === s.gen &&
+        s.gen >= was + 2
+      lastFlight.set(s, s.flight)
       const mine =
         userStep ||
         userNext.has(s) ||
-        (s.flight !== undefined && gens.has(s.flight))
+        (s.flight !== undefined && gens.has(s.flight)) ||
+        restarted
       const last = lastGen.get(s) ?? 0
       if (s.gen > last) {
         // Покоління, яке `purge` підняв у польоті, лишається завантаженням
@@ -2081,6 +2524,75 @@ async function runModelOn(
     }
   }
 
+  /**
+   * Частина `rights` у польоті (утримана чи в запиті з читаннями, що чекають
+   * відповіді) відклала б новий знімок за наступні відповіді: модель дає їй
+   * осісти, відповідаючи на читання її запиту станом зараз.
+   */
+  const settleRights = async () => {
+    for (let round = 0; round < 20; round++) {
+      fake.holdRights = false
+      fake.releaseRights()
+      const stuck = new Set(
+        fake.rightsLog.flatMap((r) =>
+          resolved.has(r.request) ? [] : [r.request]
+        )
+      )
+      if (stuck.size === 0) return
+      for (const read of fake.pending.filter((r) => stuck.has(r.log.request))) {
+        fake.take((r) => r === read).answer()
+        record(read)
+      }
+      await flush()
+    }
+  }
+
+  /**
+   * `purge` пари (скоуп, об'єкт) з обліком моделі (надгробки спроб, стерті
+   * поля, бар'єри П12); `undefined` — ядро закрите.
+   */
+  const purgePair = (object: ObjectName, scope: string, stepStart: number) => {
+    const held = [...objectOf(object).rows.keys()]
+    const hadLines =
+      object === TASK && objectOf(TASK).sections.get(K1, "lines") !== undefined
+    commit((w) => w.purge(object, { scope }))
+    if (closed !== undefined) return undefined
+    const purgedKeys = {
+      object,
+      keys: held.filter((k) => objectOf(object).rows.get(k) === undefined),
+    }
+    if (object === TASK) {
+      // Надгробок пари — для спроби зі скоупом пари на старті; надгробок
+      // ключа — для прибраного ключа. Поля стирає запис цього скоупу чи
+      // невідомого.
+      const buried = new Set(purgedKeys.keys)
+      for (const a of attempts)
+        if (a.result === undefined && (a.scope === scope || buried.has(a.key)))
+          a.purged = true
+      for (const entry of journal.values()) {
+        const at = entry.attempt.scope
+        if (at === undefined || at === scope) entry.erased = true
+      }
+    }
+    for (const k of purgedKeys.keys) purgedTargets.add(id(object, k))
+    // Власник без шапки в сховищі, чиї рядки ТЧ прибрано, — прибраний;
+    // з шапкою (в іншому скоупі) доступ не втрачено.
+    if (
+      hadLines &&
+      objectOf(TASK).sections.get(K1, "lines") === undefined &&
+      objectOf(TASK).rows.get(K1) === undefined
+    )
+      purgedTargets.add(id(TASK, K1))
+    // П12: ключ, якого після purge у сховищі немає, повертає лише
+    // читання, що почалось після нього.
+    for (const k of object === TASK ? KEYS : ORG_KEYS) {
+      if (objectOf(object).rows.get(k) === undefined)
+        purgeBarrier.set(id(object, k), stepStart)
+    }
+    if (object === TASK) barrierSections(stepStart)
+    return purgedKeys
+  }
+
   for (const [n, raw] of plan.entries()) {
     const s = onMutation(raw)
     const label = `step ${n} ${JSON.stringify(s)}`
@@ -2089,6 +2601,7 @@ async function runModelOn(
     restoredInStep.clear()
     const before = lists()
     preloadedSection = false
+    rightsPurged = false
     let userViews = new Set<number>()
     let purgeStep = false
     // Крок планувальника: читання, які він запустив, рахуються за лічильниками
@@ -2245,10 +2758,10 @@ async function runModelOn(
                 ? victim
                 : (fake.row(TASK, victim)!.values.org as string)
             fake.setVisibleScopes(
-              (visibility ?? SCOPES).filter((x) => x !== scope)
+              rls((visibility ?? SCOPES).filter((x) => x !== scope))
             )
             read.answer()
-            fake.setVisibleScopes(visibility)
+            fake.setVisibleScopes(rls(visibility))
           }
         } else if (s.how === "stale") {
           // Застаріла репліка: стан на мить між запитом і зараз.
@@ -2303,7 +2816,7 @@ async function runModelOn(
         break
       case "access":
         visibility = s.which === 0 ? undefined : [s.which === 1 ? T : S]
-        fake.setVisibleScopes(visibility)
+        fake.setVisibleScopes(rls(visibility))
         break
       case "purgeKey": {
         purgeStep = true
@@ -2329,49 +2842,10 @@ async function runModelOn(
         purgeStep = true
         const object = s.org ? ORG : TASK
         const scope = SCOPES[s.scope]!
-        const held = [...objectOf(object).rows.keys()]
-        const hadLines =
-          object === TASK &&
-          objectOf(TASK).sections.get(K1, "lines") !== undefined
-        commit((w) => w.purge(object, { scope }))
-        if (closed !== undefined) break
+        const purged = purgePair(object, scope, stepStart)
+        if (purged === undefined) break
         purgedScope = { object, scope }
-        purgedKeys = {
-          object,
-          keys: held.filter((k) => objectOf(object).rows.get(k) === undefined),
-        }
-        if (object === TASK) {
-          // Надгробок пари — для спроби зі скоупом пари на старті; надгробок
-          // ключа — для прибраного ключа. Поля стирає запис цього скоупу чи
-          // невідомого.
-          const buried = new Set(purgedKeys.keys)
-          for (const a of attempts)
-            if (
-              a.result === undefined &&
-              (a.scope === scope || buried.has(a.key))
-            )
-              a.purged = true
-          for (const entry of journal.values()) {
-            const at = entry.attempt.scope
-            if (at === undefined || at === scope) entry.erased = true
-          }
-        }
-        for (const k of purgedKeys.keys) purgedTargets.add(id(object, k))
-        // Власник без шапки в сховищі, чиї рядки ТЧ прибрано, — прибраний;
-        // з шапкою (в іншому скоупі) доступ не втрачено.
-        if (
-          hadLines &&
-          objectOf(TASK).sections.get(K1, "lines") === undefined &&
-          objectOf(TASK).rows.get(K1) === undefined
-        )
-          purgedTargets.add(id(TASK, K1))
-        // П12: ключ, якого після purge у сховищі немає, повертає лише
-        // читання, що почалось після нього.
-        for (const k of object === TASK ? KEYS : ORG_KEYS) {
-          if (objectOf(object).rows.get(k) === undefined)
-            purgeBarrier.set(id(object, k), stepStart)
-        }
-        if (object === TASK) barrierSections(stepStart)
+        purgedKeys = purged
         break
       }
       case "hide": {
@@ -2561,7 +3035,7 @@ async function runModelOn(
         if (row === undefined || closed !== undefined) break
         const hiddenScope = row.values.org as string
         fake.setVisibleScopes(
-          (visibility ?? SCOPES).filter((x) => x !== hiddenScope)
+          rls((visibility ?? SCOPES).filter((x) => x !== hiddenScope))
         )
         core
           .revalidate(TASK, { visibleOnly: false })
@@ -2577,7 +3051,7 @@ async function runModelOn(
             record(read)
           }
         }
-        fake.setVisibleScopes(visibility)
+        fake.setVisibleScopes(rls(visibility))
         const entry = journal.get(k)
         const shown = rowsOf(k)[0]
         if (
@@ -2824,6 +3298,143 @@ async function runModelOn(
         }
         await rehydrate(label)
         break
+      case "rights": {
+        if (!rights || closed !== undefined) break
+        const scope = SCOPES[s.scope]!
+        const object = s.object === 1 ? ORG : TASK
+        const at = grantKey(object, scope)
+        const g = serverGrant
+        const lose: Grant =
+          s.object === 2
+            ? { ...g, members: without(g.members, scope) }
+            : { ...g, reads: without(g.reads, at), extra: without(g.extra, at) }
+        const regain: Grant =
+          s.object === 2
+            ? { ...g, members: withOne(g.members, scope) }
+            : { ...g, reads: withOne(g.reads, at) }
+        const next =
+          s.what === "lose" || s.what === "fail"
+            ? lose
+            : s.what === "regain"
+              ? regain
+              : s.what === "narrow"
+                ? {
+                    ...g,
+                    extra: g.extra.includes(at)
+                      ? without(g.extra, at)
+                      : withOne(g.extra, at),
+                  }
+                : s.what === "hold"
+                  ? grantDenies(g, object, scope)
+                    ? regain
+                    : lose
+                  : s.what === "user"
+                    ? { ...g, user: OTHER_USER }
+                    : g
+        // Утримана відповідь лишається в польоті через наступні кроки, аж до
+        // наступного кроку прав: ядро тим часом іде за старшим знімком.
+        if (s.what === "hold") {
+          fake.holdRights = true
+          setGrant(next)
+          core.requestRights()
+          break
+        }
+        if (s.what === "fail")
+          fake.rightsError = { code: "command.unavailable" }
+        setGrant(next)
+        fake.holdRights = false
+        fake.releaseRights()
+        core.requestRights()
+        await flush()
+        // Збій лишає старий знімок; сервер повертається до прав кроку, і
+        // наступна службова точка (тут — сам крок) їх приносить: ядро не
+        // відстає від сервера, тож звуження не випадає на крок повернення, де
+        // перевірка меж свіжості його не чекає.
+        if (s.what === "fail") {
+          check(`${label} failed`, stepStart)
+          fake.rightsError = undefined
+          setGrant(g)
+          core.requestRights()
+          await flush()
+        }
+        break
+      }
+      case "race": {
+        if (!rights || closed !== undefined || staled.has(TASK)) break
+        const group = RACE_GROUPS[s.group]!
+        const spec = SPECS[group[0]!]!
+        const k =
+          spec.kind === "card"
+            ? spec.key
+            : spec.kind === "section"
+              ? spec.owner
+              : spec.kind === "keys"
+                ? spec.keys[0]!
+                : K1
+        if (!live(TASK, k)) break
+        const scope = fake.row(TASK, k)!.values.org as string
+        const at = grantKey(TASK, scope)
+        // Знімок цього кроку мусить дійти до відповідей кроку.
+        await settleRights()
+        // Пара дозволена й ядро тримає цей знімок.
+        if (grantDenies(serverGrant, TASK, scope)) {
+          setGrant({
+            ...serverGrant,
+            members: withOne(serverGrant.members, scope),
+            reads: withOne(serverGrant.reads, at),
+          })
+          fake.holdRights = false
+          fake.releaseRights()
+          core.requestRights()
+          await flush()
+        }
+        // Пари в сховищі немає: прохід заміни її не прибирає й не ховає
+        // надгробком — відповідь тримає лише бар'єр знімка.
+        const o = objectOf(TASK)
+        const lines = o.sections.get(K1, "lines")
+        const stored =
+          [...o.rows.keys()].some((x) => o.rows.get(x)!.scope === scope) ||
+          lines?.scope === scope ||
+          lines?.scope === "unknown"
+        // Перевірки кроку `purgeScope` тут не діють: читання цього ж кроку
+        // законно повертають рядки після нього.
+        if (stored) {
+          purgeStep = true
+          if (purgePair(TASK, scope, stepStart) === undefined) break
+        }
+        await flush()
+        // Читання пари стартують до відправки знімка.
+        const from = fake.log.length
+        userViews = new Set(group)
+        for (const v of group) {
+          if (subs[v] !== undefined) handles[v]!.refresh()
+          else preload(v, true, label)
+        }
+        await flush()
+        const own = fake.pending.filter((r) => fake.log.indexOf(r.log) >= from)
+        setGrant({
+          ...serverGrant,
+          reads: without(serverGrant.reads, at),
+          extra: without(serverGrant.extra, at),
+        })
+        fake.holdRights = false
+        fake.releaseRights()
+        core.requestRights()
+        await flush()
+        // Відповідь — на мить старту, коли пару ще було видно; `later` лишає
+        // читання в польоті для наступних кроків і злиття в кінці.
+        if (s.settle === "now") {
+          const news = newsBefore()
+          const answered = own.filter((read) => fake.pending.includes(read))
+          for (const read of answered) {
+            fake.take((r) => r === read).answer(read.issuedAt)
+            record(read)
+          }
+          await flush()
+          checkNews(label, news, answered)
+        }
+        break
+      }
       case "close":
         if (closed !== undefined) break
         // Кожна неосіла мутація осідає закриттям, не успіхом.
@@ -2910,7 +3521,19 @@ async function runModelOn(
     if (schedulerChecks) checkScheduler(label)
     if (purgedKeys !== undefined) checkPurged(label, purgedKeys)
     noteGens(userViews.size > 0)
-    stability(label, before, purgeStep)
+    stability(label, before, purgeStep || rightsPurged)
+  }
+
+  // Утримана відповідь `rights` доходить до злиття: інакше її запит не осяде.
+  if (rights) {
+    rightsPurged = false
+    const before = lists()
+    fake.holdRights = false
+    fake.releaseRights()
+    await flush()
+    check("release rights", fake.log.length)
+    noteGens(false)
+    stability("release rights", before, rightsPurged)
   }
 
   // Відповіді на `run`, що лишились у польоті: сервер приймає кожен.
@@ -2919,12 +3542,13 @@ async function runModelOn(
     const stepStart = fake.log.length
     logAt = log.length
     restoredInStep.clear()
+    rightsPurged = false
     const before = lists()
     answerRun(runs.shift()!, "ok", 1)
     await flush()
     check(`drain run ${i}`, stepStart)
     noteGens(false)
-    stability(`drain run ${i}`, before, false)
+    stability(`drain run ${i}`, before, rightsPurged)
   }
 
   // Пізні відповіді на все, що лишилось у польоті: повільні читання й
@@ -2936,6 +3560,7 @@ async function runModelOn(
     const stepStart = fake.log.length
     logAt = log.length
     restoredInStep.clear()
+    rightsPurged = false
     const before = lists()
     const slow = late.shift()
     const read = slow ?? fake.take()
@@ -2944,7 +3569,7 @@ async function runModelOn(
     await flush()
     check(`drain ${i}`, stepStart)
     noteGens(false)
-    stability(`drain ${i}`, before, false)
+    stability(`drain ${i}`, before, rightsPurged)
   }
 
   if (closed === undefined) await converge()
@@ -2966,6 +3591,21 @@ async function runModelOn(
     fake.epoch = epochs.current
     advance(10_000)
     await flush()
+    // Права повертаються повністю й ядро застосовує їх до перечитування:
+    // знову відкриті пари читає вже читання після знімка.
+    if (rights) {
+      setGrant({ ...FULL_GRANT, user: serverGrant.user })
+      await settleRights()
+      core.requestRights()
+      await flush()
+      await settleRights()
+      check("converge rights", fake.log.length)
+      if (core.rights()?.rightsVersion !== fake.rightsVersion)
+        fail(
+          "converge rights",
+          "the core holds no full rights before re-reading"
+        )
+    }
     fake.setVisibleScopes(undefined)
     visibility = undefined
     for (let v = 0; v < SPECS.length; v++) {
@@ -3154,14 +3794,19 @@ const RUNS = runsFromEnv(process.env.CORE_MODEL_RUNS)
 
 const property = (
   defects: readonly DefectFlag[] = [],
-  schedulerChecks = true
+  schedulerChecks = true,
+  rights = false
 ) =>
   fc.asyncProperty(
-    fc.array(STEP, { minLength: 10, maxLength: 80, size: "max" }),
+    fc.array(rights ? RIGHTS_STEP : STEP, {
+      minLength: 10,
+      maxLength: 80,
+      size: "max",
+    }),
     fc.boolean(),
     fc.constantFrom<Profile>("full", "scroll", "burial"),
     (steps, preloaded, profile) =>
-      runModel(steps, preloaded, profile, defects, schedulerChecks)
+      runModel(steps, preloaded, profile, defects, schedulerChecks, rights)
   )
 
 beforeEach(() => {
@@ -3178,6 +3823,16 @@ describe("core model", () => {
     // Без тактів із читанням інваріанти планувальника порожні.
     expect(tickReads, "no tick with a read").toBeGreaterThan(0)
   }, 120_000)
+
+  // Каталог зі знімком прав (B5b-2): ті самі кроки й кроки знімка — втрата
+  // пари, звуження, без змін, збій, утримана відповідь, читання до знімка,
+  // інший користувач. Без прав прогін вище лишається тим самим (насіння
+  // самотесту й регресій не зсуваються).
+  it("holds the invariants with the rights snapshot", async () => {
+    tickReads = 0
+    await fc.assert(property([], true, true), { numRuns: RUNS })
+    expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+  }, 240_000)
 })
 
 // Фіксовані прогони знайдених контрприкладів: насіння й шлях fast-check
@@ -3307,7 +3962,22 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "scheduler-no-reschedule": /scheduler has no timer on a visible tab/,
   "revalidate-no-tail": /left no tail pass/,
   "scheduler-reads-unavailable": /after the discard limit/,
+  // Знімок прав (B5b-2): кожен дефект — своїм шляхом. Без бар'єра читання
+  // пари, якої в сховищі немає, приносить її рядок (крок `race`).
+  "rights-no-barrier":
+    /(shown|stored) from a read older than the rights snapshot/,
+  // Рядки пари, збережені до першого знімка, лишаються після нього.
+  "rights-first-no-pass": /stored from a read older than the rights snapshot/,
+  // Рядки пари, яку забороняв і попередній знімок, лишаються після заміни.
+  "rights-pass-by-diff": /stored from a read older than the rights snapshot/,
 }
+
+// Дефекти правила втрати доступу (B5b-2): їх ловлять прогони зі знімком прав.
+const RIGHTS_DEFECTS: readonly DefectFlag[] = [
+  "rights-no-barrier",
+  "rights-first-no-pass",
+  "rights-pass-by-diff",
+]
 
 describe("core model self-check", () => {
   it.each(DEFECTS)(
@@ -3341,5 +4011,23 @@ describe("core model self-check", () => {
         expect(tickReads, `${flag}: no tick with a read`).toBeGreaterThan(0)
     },
     120_000
+  )
+
+  it.each(RIGHTS_DEFECTS)(
+    "turns red with the rights defect %s",
+    async (flag) => {
+      const result = await fc.check(property([flag], true, true), {
+        numRuns: 10_000,
+        seed: 1,
+        endOnFailure: true,
+      })
+      expect(result.failed, `${flag} not caught`).toBe(true)
+      expect(result.errorInstance).toBeInstanceOf(ModelFailure)
+      // Контроль: той самий прогін без дефекту зелений.
+      const [steps, preloaded, profile] = result.counterexample!
+      await runModel(steps, preloaded, profile, [], true, true)
+      expect((result.errorInstance as Error).message).toMatch(CAUGHT_BY[flag]!)
+    },
+    240_000
   )
 })
