@@ -1190,6 +1190,7 @@ export function createCore(options: {
     purges.clear()
     scheduled.clear()
     wave = undefined
+    unsettled.clear()
     scheduler.stop()
     staleObjects.clear()
     receiver?.stop()
@@ -1274,6 +1275,7 @@ export function createCore(options: {
         channels: new Map(),
       }
     }
+    unsettled.delete(channel)
     wave.channels.set(channel, object)
     scheduler.request()
   }
@@ -1311,22 +1313,42 @@ export function createCore(options: {
       }, token)
     void Promise.all(reads).then(() => {
       if (!token.valid) return
-      const settled = [...fired.channels].filter(([, object]) =>
-        activeViews(writerContext, object).every((view) => {
-          const s = registry.find(view.spec)
-          return (
-            s !== undefined &&
-            s.status !== "error" &&
-            s.refreshedAt !== undefined &&
-            s.refreshedAt >= startedAt
-          )
-        })
-      )
-      if (settled.length > 0)
-        core.commit((w) => {
-          for (const [channel] of settled) w.clearDisconnected(channel)
-        }, token)
+      for (const [channel, object] of fired.channels)
+        unsettled.set(channel, { object, startedAt })
+      liftSettled()
     })
+  }
+
+  // Канал, чию «розрив» хвиля не зняла (вигляд в `error`, невидимий вигляд, читання
+  // до хвилі): позначка лишається до наступного успішного перечитування (Р10),
+  // тож чекає тут. Окремого таймера й запитів немає: перевірка — після `commit`.
+  const unsettled = new Map<string, { object: ObjectName; startedAt: number }>()
+  let liftPlanned = false
+  const viewsFresh = (object: ObjectName, since: number) =>
+    activeViews(writerContext, object).every((view) => {
+      const s = registry.find(view.spec)
+      return (
+        s !== undefined &&
+        s.status !== "error" &&
+        s.refreshedAt !== undefined &&
+        s.refreshedAt >= since
+      )
+    })
+  function liftSettled() {
+    liftPlanned = false
+    if (!session.token().valid) return
+    const settled = [...unsettled].filter(([, u]) =>
+      viewsFresh(u.object, u.startedAt)
+    )
+    if (settled.length === 0) return
+    for (const [channel] of settled) unsettled.delete(channel)
+    core.commit((w) => {
+      for (const [channel] of settled) w.clearDisconnected(channel)
+    }, session.token())
+  }
+  // Канал знято чи узято новою хвилею: старий запис нічого не знімає.
+  function leaveWave(channel: string) {
+    unsettled.delete(channel)
   }
 
   // Рантайм чи ядро закривається, коли транспорт відмовив назавжди (`final`).
@@ -1532,6 +1554,10 @@ export function createCore(options: {
   // набір цілей чи строк: перепланування зливається в одне на мікрозадачу.
   session.onFlush(() => {
     if (!defects.has("scheduler-no-reschedule")) scheduler.request()
+    if (unsettled.size > 0 && !liftPlanned) {
+      liftPlanned = true
+      queueMicrotask(liftSettled)
+    }
   })
 
   const writerContext: WriterContext = {
@@ -1569,6 +1595,7 @@ export function createCore(options: {
       commit: (fn, token) => core.commit(fn, token),
       filterCollator: collator,
       joinWave,
+      leaveWave,
       requestVersion: () => core.requestVersion(),
       connectionRefused,
     })
@@ -1847,7 +1874,8 @@ export function createCore(options: {
       // вже `stale`, а свіжість тут не міра.
       runDue()
       // Хвиля, що чекала на прихованій вкладці, іде першою: звірка нижче вигляд
-      // у польоті не бере.
+      // у польоті не бере. Вікно `REJOIN_JITTER_MS` після попередньої хвилі тут не
+      // діє: воно береже від шквалу подій, а `resume()` — одна подія вкладки.
       fireWave()
       // Злиття: подвійний сигнал повернення (focus + visibilitychange) — одна
       // звірка; відлік іде від останнього прийнятого, а не від кожного виклику.

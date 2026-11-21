@@ -71,6 +71,8 @@ export interface ReceiverContext {
   readonly filterCollator: Intl.Collator
   /** A channel joined without `recovered`: its object joins the rejoin wave. */
   joinWave(channel: string, object: ObjectName): void
+  /** The channel left the receiver: a pending "disconnect" lift of it is dropped. */
+  leaveWave(channel: string): void
   /** The core's `requestVersion` (a refusal without a channel, §10). */
   requestVersion(): void
   /** The transport refused the connection for good: the runtime closes. */
@@ -284,6 +286,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     held.delete(error.channel)
     refused.add(error.channel)
     forget(error.channel)
+    ctx.leaveWave(error.channel)
     slot.off?.()
     // Дані пари, на які права зникли, не лишаються в пам'яті (Р12); `purge`
     // скидає й незакриту пачку пари через `purged`.
@@ -745,6 +748,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       if (next.has(channel)) continue
       held.delete(channel)
       forget(channel)
+      ctx.leaveWave(channel)
       dropped.push(channel)
       slot.off?.()
     }

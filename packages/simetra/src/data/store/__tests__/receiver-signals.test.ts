@@ -126,10 +126,12 @@ async function open(
   spec: ViewSpec,
   rows = 3,
   server?: Parameters<typeof harness>[0],
-  scopes?: readonly string[]
+  scopes?: readonly string[],
+  before?: (fake: Harness["fake"]) => void
 ) {
   const h = harness(server, scopes)
   seed(h.fake, 1, rows)
+  before?.(h.fake)
   const subscribe = vi.spyOn(h.transport, "subscribe")
   const handle = h.core.view(spec)
   const unsubscribe = handle.subscribe(() => {})
@@ -609,11 +611,17 @@ describe("purge of a pair", () => {
   const purge = (h: Awaited<ReturnType<typeof open>>, scope: string) =>
     h.core.commit((w) => w.purge(TASK, { scope }), h.core.token())
   const twoScopes = async () => {
-    const h = await open({ kind: "full", object: TASK }, 0, undefined, [S, S2])
-    h.fake.insert(TASK, taskValues(1))
-    h.fake.insert(TASK, taskValues(2, { org: S2 }))
-    await h.core.revalidate(TASK, { visibleOnly: false })
-    await settle()
+    // Рядки на сервері вже до монтування: `hasNewRows` починається з `false`.
+    const h = await open(
+      { kind: "full", object: TASK },
+      0,
+      undefined,
+      [S, S2],
+      (fake) => {
+        fake.insert(TASK, taskValues(1))
+        fake.insert(TASK, taskValues(2, { org: S2 }))
+      }
+    )
     return { ...h, from: h.fake.requests.length }
   }
 
@@ -644,8 +652,8 @@ describe("purge of a pair", () => {
     await settle()
     const keys = keyReadsSince(h, h.from).flatMap((r) => keysOf(r.query))
     expect(keys).toEqual([key(12)])
-    // Ключ 13 пари S не записано в сховище: нових ключів приймач не пише.
-    expect(h.inspect.rowCount()).toBe(0)
+    // Ключ 13 пари S не записано й не підказано як новий.
+    expect(h.handle.getSnapshot().hasNewRows).toBe(false)
     expect(h.handle.getSnapshot().rows.map((r) => r.key)).not.toContain(key(13))
   })
 

@@ -154,9 +154,12 @@ describe("the rejoin wave", () => {
     expect(requestsSince(h)).toHaveLength(0)
     await advance(1)
     expect(requestsSince(h)).toHaveLength(1)
+    // Пакет хвилі: `version`, `rights` з `known` і читання вигляду з `known`.
+    expect(requestsSince(h)).toEqual([3])
     const reads = h.fake.log.filter((r) => r.request >= h.from && r.query)
     expect(reads).toHaveLength(1)
     expect(reads[0]!.known).toBeDefined()
+    expect(h.fake.rightsLog.at(-1)!.known).toBeDefined()
     // Нічого не змінилось: рядки ті самі, позначок немає.
     expect(states(h)).not.toContain("stale")
   })
@@ -173,6 +176,77 @@ describe("the rejoin wave", () => {
     await advance(REJOIN_JITTER_MS)
     expect(requestsSince(h)).toHaveLength(1)
     expect(states(h)).not.toContain("stale")
+  })
+
+  it("sends one request for 19 scopes of Task and the unscoped Plain, whatever the random", async () => {
+    const scopes = Array.from({ length: 19 }, (_, n) => scopeN(100 + n))
+    const h = await open(full, 3, scopes)
+    h.core
+      .view({ kind: "keys", object: PLAIN, keys: [key(1)] })
+      .subscribe(() => {})
+    h.fake.insert(PLAIN, { ref: key(1) })
+    await settle()
+    const zero = channelTopic({
+      kind: "changes",
+      scopeKindId: ZERO_UUID,
+      scope: ZERO_UUID,
+      object: PLAIN_ID,
+    })
+    expect(h.transport.subscribed().has(zero)).toBe(true)
+    const from = h.fake.requests.length
+    let n = 0
+    vi.spyOn(Math, "random").mockImplementation(() => (n++ % 5) / 5)
+    for (const scope of scopes) h.transport.join(channelOf(scope), false)
+    h.transport.join(zero, false)
+    await advance(REJOIN_JITTER_MS)
+    // `version`, `rights`, Task і Plain — один пакет.
+    expect(requestsSince(h, from)).toEqual([4])
+  })
+
+  it("lifts the mark of a channel with an invisible view once that view is read, and sends nothing for it in the wave", async () => {
+    const h = await open(keysView(key(1)))
+    const hidden = keysView(key(2))
+    const other = h.core.view(hidden)
+    other.subscribe(() => {})
+    await settle()
+    h.core.setVisible(hidden, false)
+    const from = h.fake.requests.length
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    // Невидимому вигляду — лише `needsRefresh`, у пакеті його читання немає.
+    expect(other.getSnapshot().needsRefresh).toBe(true)
+    expect(h.fake.log.filter((r) => r.request >= from && r.query)).toHaveLength(
+      1
+    )
+    expect(states(h)).toEqual(["stale"])
+    await advance(20_000)
+    expect(states(h)).toEqual(["stale"])
+    h.core.setVisible(hidden, true)
+    await advance(0)
+    await h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    expect(states(h)).not.toContain("stale")
+  })
+
+  it("lifts the mark on a later successful re-read after the wave read failed", async () => {
+    const h = await open(keysView(key(1)))
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, false)
+    h.fake.mode = "manual"
+    await vi.advanceTimersByTimeAsync(REJOIN_JITTER_MS)
+    h.fake.take(0).fail("command.unavailable")
+    h.fake.mode = "auto"
+    await settle()
+    expect(h.handle.getSnapshot().status).toBe("error")
+    expect(states(h)).toContain("stale")
+    const from = h.fake.requests.length
+    await h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    expect(h.handle.getSnapshot().status).not.toBe("error")
+    expect(states(h)).not.toContain("stale")
+    // Знімає саме відстежене читання: нових запитів для цього не було.
+    expect(h.fake.requests.length - from).toBe(1)
   })
 
   it("keeps the marks when the re-read fails and the view goes to error", async () => {
