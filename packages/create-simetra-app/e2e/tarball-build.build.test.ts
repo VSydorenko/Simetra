@@ -75,6 +75,12 @@ describe("template build from tarballs", () => {
         /^overrides:\n/m,
         `overrides:\n  simetra: "file:${tarballs.simetra}"\n`
       )
+    // Без `protobufjs: false` установка споживача падає з
+    // `ERR_PNPM_IGNORED_BUILDS` (centrifuge тягне protobufjs): запис у
+    // робочу область сценарію має зберегти правило, а не лише файл
+    expect(workspace).toMatch(
+      /^allowBuilds:\n(?: {2}\S.*\n)*? {2}protobufjs: false$/m
+    )
     await writeFile(join(dir, "pnpm-workspace.yaml"), workspace)
 
     const env = consumerEnv()

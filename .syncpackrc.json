@@ -35,6 +35,12 @@
       ],
       "dependencies": ["better-auth"],
       "pinVersion": "1.7.12"
+    },
+    {
+      "label": "centrifuge — точний пін шаблону збігається з dev-піном simetra",
+      "packages": ["create-simetra-app-template"],
+      "dependencies": ["centrifuge"],
+      "pinVersion": "5.8.0"
     }
   ]
 }
