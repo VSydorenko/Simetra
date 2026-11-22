@@ -210,6 +210,7 @@ describe("STRUCTURAL_PATH_WORDS", () => {
         "deleteIds",
         "expectedValues",
         "expectedVersion",
+        "mark",
         "tabularSections",
         "values",
       ].sort()
