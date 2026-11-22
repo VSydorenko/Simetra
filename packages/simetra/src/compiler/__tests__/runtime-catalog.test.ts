@@ -133,7 +133,7 @@ describe("CompiledModel.catalogCommands", () => {
       model.catalogCommands
         .map(
           (c) =>
-            `function:${c.functions.save.schema}.${c.functions.save.name}(jsonb,int8)`
+            `function:${c.functions.save.schema}.${c.functions.save.name}(jsonb,int8,jsonb)`
         )
         .sort()
     ).toEqual(saves)
@@ -834,7 +834,7 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
     expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
-      "1dba006271c3ec81a590a86017611678624afd2b1560425c99e0a21800b20acd"
+      "a1250402d1fb07c81a365d7cdc9888a263102e34fce48b91750d0aaa7a356064"
     )
   })
 })

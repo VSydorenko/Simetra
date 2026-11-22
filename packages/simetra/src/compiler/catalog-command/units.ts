@@ -236,7 +236,7 @@ export function buildCatalogCommandUnits(
     const functions: { fn: QualifiedName; args: string; sql: string }[] = [
       {
         fn: contract.functions.save,
-        args: "jsonb, bigint",
+        args: "jsonb, bigint, jsonb",
         sql: saveFunction(contract, parts),
       },
       ...(markDeletion === undefined ||
@@ -475,6 +475,32 @@ const rowJson = (table: PhysicalTable, row: string) => {
   return text === undefined ? `to_jsonb(${row})` : `to_jsonb(${row}) || ${text}`
 }
 
+/** `json` (і масив `json`): `to_jsonb` зливає дублі ключів і пробіли. */
+const JSON_TEXT_TYPE = /^json(\[\])?$/
+
+/**
+ * Умова «поле бази розійшлося з рядком «до»» CAS за полями (спека П4 §6.6):
+ * лише ключі, задані в `p_expected_values`; порівняння — у кодуванні
+ * результату ядра (`v_expected`/`v_current` — `rowJson` бази й «до»), тож
+ * рівність є й для типів без `=`, а typmod однаково приводить обидва боки.
+ * Колонку `json` кодування нормалізувало б, тому вона — за текстом.
+ */
+export function fieldsDiffer(
+  table: PhysicalTable,
+  keys: readonly string[]
+): string {
+  return keys
+    .map((c) => {
+      const type = table.columns.find((column) => column.name === c)?.type
+      const differs =
+        type !== undefined && JSON_TEXT_TYPE.test(type)
+          ? `v_exp.${q(c)}::text IS DISTINCT FROM v_old.${q(c)}::text`
+          : `(v_expected -> ${sqlLiteral(c)}) IS DISTINCT FROM (v_current -> ${sqlLiteral(c)})`
+      return `(p_expected_values ? ${sqlLiteral(c)} AND ${differs})`
+    })
+    .join(" OR ")
+}
+
 /** Обмеження, чий `23505` означає «той самий ключ»: первинний ключ і `UNIQUE (scope, key)`. */
 function keyConstraints(table: PhysicalTable, key: string): string[] {
   const scope = table.columns.find(
@@ -684,8 +710,14 @@ interface CoreParts {
   /**
    * Рядок «до» під замком (спека П4 §6.6: після контексту) і версія. Сила замка —
    * за дією функції (спека П4 §6.6): зміна — `NO KEY UPDATE`, видалення — `UPDATE`.
+   * `byFields` — `save`: заданий `p_expected_values` заміняє перевірку версії
+   * перевіркою полів.
    */
-  lockedOld: (root: string, strength: RowLockStrength) => string[]
+  lockedOld: (
+    root: string,
+    strength: RowLockStrength,
+    byFields?: boolean
+  ) => string[]
 }
 
 function coreParts(
@@ -760,13 +792,13 @@ function coreParts(
         `(${rightsCheck(facts.rights, action, table, row, dml)}) IS NOT TRUE`,
         [forbidden(reason)]
       ),
-    lockedOld: (root, strength) => [
+    lockedOld: (root, strength, byFields = false) => [
       `SELECT * INTO v_old FROM ${relation(table)} r WHERE r.${q(key)} = ${root} FOR ${strength};`,
       // Замок застосовує `UPDATE USING` (право дії над станом «до») за будь-
       // якої сили, тож відсутній і чужий рядок — та сама відмова (Рт4).
       ...ifThen("NOT FOUND", [noRight]),
       ...ifThen(
-        `v_old.${q(contract.versionColumn)} IS DISTINCT FROM p_expected_version`,
+        `${byFields ? "p_expected_values IS NULL AND " : ""}v_old.${q(contract.versionColumn)} IS DISTINCT FROM p_expected_version`,
         [
           conflict(
             E.conflict.version,
@@ -860,13 +892,16 @@ function saveFunction(
       : contract.hierarchy.lockAlways
         ? [lock]
         : ifThen(`p_item ? ${sqlLiteral(contract.hierarchy.parent)}`, [lock])),
-    ...parts.lockedOld(root, "NO KEY UPDATE"),
+    ...parts.lockedOld(root, "NO KEY UPDATE", true),
     ...rightsIf(
       contract.actions.update,
       "update",
       "v_old",
       E.forbidden.noRight
     ),
+    // Поля — після права над «до» (спека П4 §6.6): розбіжність значень не
+    // стає оракулом змісту для того, кому дія над рядком не дозволена.
+    ...fieldsCheck(contract),
     "v_new := v_old;",
     ...contract.updateKeys.flatMap((c) =>
       ifThen(`p_item ? ${sqlLiteral(c)}`, [`v_new.${q(c)} := v_in.${q(c)};`])
@@ -891,9 +926,12 @@ function saveFunction(
 
   return coreFunction(
     contract.functions.save,
-    "p_item jsonb, p_expected_version bigint",
+    "p_item jsonb, p_expected_version bigint, p_expected_values jsonb",
     [
       "v_in record;",
+      "v_exp record;",
+      "v_expected jsonb;",
+      "v_current jsonb;",
       "v_old record;",
       "v_new record;",
       "v_row record;",
@@ -909,6 +947,7 @@ function saveFunction(
     ],
     [
       ...saveInputLines(contract),
+      ...expectedInputLines(contract),
       "IF p_expected_version IS NULL THEN",
       ...indent(createBranch),
       "ELSE",
@@ -939,7 +978,12 @@ export interface InputSpec {
   param: string
   /** `DETAIL` відмови форми параметра. */
   shape: string
-  /** Дозволені ключі; гілки створення й зміни за версією — лише в `save`. */
+  /**
+   * Змінна розбору: `v_in` входу чи `v_exp` бази CAS за полями — окрема, щоб
+   * база не перезаписала вхід зміни.
+   */
+  target: string
+  /** Дозволені ключі; гілки створення й зміни за версією — лише в `p_item` `save`. */
   keys:
     readonly string[] | { create: readonly string[]; update: readonly string[] }
   /** Ключ `tabular` дозволений і поза приведенням (ТЧ перевіряє свій блок). */
@@ -984,10 +1028,10 @@ export function inputLines(spec: InputSpec): string[] {
     "EXCEPTION WHEN data_exception THEN",
     ...indent([spec.fail("v_key")]),
     "END;",
-    `v_in := jsonb_populate_record(NULL::${t}, ${p});`,
+    `${spec.target} := jsonb_populate_record(NULL::${t}, ${p});`,
     ...(spec.key === undefined
       ? []
-      : ifThen(`v_in.${q(spec.key)} IS NULL`, [
+      : ifThen(`${spec.target}.${q(spec.key)} IS NULL`, [
           spec.fail(sqlLiteral(spec.key)),
         ])),
   ]
@@ -1003,6 +1047,7 @@ function saveInputLines(contract: CatalogCommandContract): string[] {
   return inputLines({
     table: contract.table,
     param: "p_item",
+    target: "v_in",
     shape: E.invalid.item,
     keys: {
       create: contract.createKeys,
@@ -1022,6 +1067,53 @@ function saveInputLines(contract: CatalogCommandContract): string[] {
     key: contract.key,
     fail: invalid,
   })
+}
+
+/**
+ * Вхід `p_expected_values` у `save` (спека П4 §6.6): та сама перевірка, що й
+ * `p_item`, над ключами зміни — без ключа таблиці, без `tabular`, без
+ * обов'язкового ключа й без гілки за версією. Набір ключів бази дорівнює
+ * набору ключів зміни `p_item`: «сліпе» поле без бази неможливе й при ваді
+ * T3. База поряд зі створенням чи ТЧ — та сама відмова: її ніщо б не
+ * перевірило. Кожна відмова називає аргумент, а не колонку: колонку `DETAIL`
+ * T3 читав би як шлях реквізиту `values`.
+ */
+function expectedInputLines(contract: CatalogCommandContract): string[] {
+  const refuse = invalid(sqlLiteral(E.invalid.expectedValues))
+  const keysOf = (param: string, except: string) =>
+    `ARRAY(SELECT k.k FROM jsonb_object_keys(${param}) AS k(k)${except} ORDER BY k.k)`
+  return ifThen("p_expected_values IS NOT NULL", [
+    ...ifThen("p_expected_version IS NULL OR p_item ? 'tabular'", [refuse]),
+    ...inputLines({
+      table: contract.table,
+      param: "p_expected_values",
+      target: "v_exp",
+      shape: E.invalid.expectedValues,
+      keys: contract.updateKeys,
+      tabular: false,
+      fail: () => refuse,
+    }),
+    ...ifThen(
+      `${keysOf("p_item", ` WHERE k.k <> ${sqlLiteral(contract.key)}`)} IS DISTINCT FROM ${keysOf("p_expected_values", "")}`,
+      [refuse]
+    ),
+  ])
+}
+
+/**
+ * Перевірка полів під замком рядка (спека П4 §6.6): відмова — `conflict`
+ * `fields` з поточною версією, без переліку полів і значень (§6.10).
+ */
+function fieldsCheck(contract: CatalogCommandContract): string[] {
+  if (contract.updateKeys.length === 0) return []
+  const { table, versionColumn } = contract
+  return ifThen("p_expected_values IS NOT NULL", [
+    `v_expected := ${rowJson(table, "v_exp")};`,
+    `v_current := ${rowJson(table, "v_old")};`,
+    ...ifThen(fieldsDiffer(table, contract.updateKeys), [
+      conflict(E.conflict.fields, `v_old.${q(versionColumn)}::text`),
+    ]),
+  ])
 }
 
 interface CreateParts {
@@ -1449,6 +1541,7 @@ function createRootFunction(
     ...inputLines({
       table,
       param: "p_item",
+      target: "v_in",
       shape: E.invalid.item,
       keys: contract.createKeys,
       tabular: false,

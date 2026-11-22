@@ -318,7 +318,7 @@ describe("функції за роллю довідника", () => {
     ["«Користувачі»", "users", false, false],
     ["корінь скоупу", "organization", true, false],
   ])("%s: mark_deletion %s, delete %s", (_, table, mark, remove) => {
-    expect(unitOf(domain, `${table}_save(jsonb,int8)`)).toBeDefined()
+    expect(unitOf(domain, `${table}_save(jsonb,int8,jsonb)`)).toBeDefined()
     expect(unitOf(domain, `${table}_mark_deletion${MARK}`) !== undefined).toBe(
       mark
     )
@@ -328,7 +328,7 @@ describe("функції за роллю довідника", () => {
   })
 
   it("«Користувачі»: save лише зі зміною — створення відмовляє 'create'", () => {
-    const shape = bodyShape(sqlOf(domain, "users_save(jsonb,int8)"))
+    const shape = bodyShape(sqlOf(domain, "users_save(jsonb,int8,jsonb)"))
     const branches = shape
       .map((s, i) => ({ s, i }))
       .filter(

@@ -83,7 +83,7 @@ const call = (args: string) => tree(`SELECT simetra.signal(${args})`)
 
 describe("command core: the signal call", () => {
   it("save signals after the header and tabular DML with the version after, right before the result", () => {
-    const shape = bodyShape(sqlOf(core, "ticket_save(jsonb,int8)"))
+    const shape = bodyShape(sqlOf(core, "ticket_save(jsonb,int8,jsonb)"))
     const calls = signalCalls(shape)
     expect(calls).toHaveLength(1)
     const [at] = calls as [number]
@@ -113,7 +113,7 @@ describe("command core: the signal call", () => {
   })
 
   it("an unscoped object signals into the zero scope", () => {
-    const shape = bodyShape(sqlOf(core, "global_roles_save(jsonb,int8)"))
+    const shape = bodyShape(sqlOf(core, "global_roles_save(jsonb,int8,jsonb)"))
     const [at] = signalCalls(shape) as [number]
     const zero = `'${ZERO_UUID}'::uuid`
     expect(shape[at]!.expressions[0]!.tree).toEqual(
@@ -124,7 +124,7 @@ describe("command core: the signal call", () => {
   })
 
   it("Users never signal", () => {
-    expect(hasSignal(sqlOf(core, "users_save(jsonb,int8)"))).toBe(false)
+    expect(hasSignal(sqlOf(core, "users_save(jsonb,int8,jsonb)"))).toBe(false)
   })
 
   it("an object whose key is not a single uuid column never signals", () => {
@@ -141,8 +141,9 @@ describe("command core: the signal call", () => {
         units: core.sqlUnits,
         parse,
         plpgsql,
-      }).find((u) => u.identity === "function:public.ticket_save(jsonb,int8)")!
-        .sql
+      }).find(
+        (u) => u.identity === "function:public.ticket_save(jsonb,int8,jsonb)"
+      )!.sql
     const textKey = {
       ...core.physical,
       tables: core.physical.tables.map((t) =>
@@ -162,7 +163,7 @@ describe("command core: the signal call", () => {
   })
 
   it("the root signals into its own channel: the scope is its id", () => {
-    const shape = bodyShape(sqlOf(roots, "organization_save(jsonb,int8)"))
+    const shape = bodyShape(sqlOf(roots, "organization_save(jsonb,int8,jsonb)"))
     const [at] = signalCalls(shape) as [number]
     expect(shape[at]!.expressions[0]!.tree).toEqual(
       call(
@@ -210,12 +211,12 @@ describe("command core: the signal call", () => {
     expect(
       hasSignal(sqlOf(roots, "branch_create_root(jsonb,jsonb,uuid)"))
     ).toBe(false)
-    expect(hasSignal(sqlOf(roots, "branch_save(jsonb,int8)"))).toBe(true)
+    expect(hasSignal(sqlOf(roots, "branch_save(jsonb,int8,jsonb)"))).toBe(true)
   })
 
   it("the core requires the signal function unit", () => {
     const unit = core.sqlUnits.find(
-      (u) => u.identity === "function:public.ticket_save(jsonb,int8)"
+      (u) => u.identity === "function:public.ticket_save(jsonb,int8,jsonb)"
     )!
     const signal = core.sqlUnits.find(
       (u) =>

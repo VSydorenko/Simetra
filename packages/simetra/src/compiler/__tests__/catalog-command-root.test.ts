@@ -392,7 +392,8 @@ describe("<root>_create_root", () => {
     ).toEqual([identity("branch"), identity("organization")])
     const save = bodyShape(
       model.sqlUnits.find(
-        (u) => u.identity === "function:public.organization_save(jsonb,int8)"
+        (u) =>
+          u.identity === "function:public.organization_save(jsonb,int8,jsonb)"
       )!.sql
     )
     expect(raised(save, ifAt(save, "p_expected_version IS NULL"))).toEqual(
