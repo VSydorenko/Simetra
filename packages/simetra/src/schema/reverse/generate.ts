@@ -1,12 +1,16 @@
 import {
+  isRepairError,
   changesBetween,
   compile,
   completeFiles,
   currentDebt,
+  formPolicies,
   diagnostic,
   hasFixedBody,
   isMovementQuery,
   kindKeyColumns,
+  loadPlpgsqlParser,
+  metadataRights,
   sortDiagnostics,
   platformInstall,
   platformRecogniser,
@@ -14,6 +18,7 @@ import {
   renderModelIndependentLayer,
   renderSharedTriggerFunctions,
   unitTarget,
+  type CompileResult,
   type CompiledModel,
   type Diagnostic,
   type FileChange,
@@ -39,6 +44,7 @@ import {
   type AttributeCase,
   type CatalogModel,
   type CatalogTable,
+  type CatalogUnit,
   type DatabaseProvider,
 } from "simetra/model"
 import {
@@ -49,6 +55,12 @@ import {
   readExisting,
   type ExistingFolder,
 } from "./identity"
+import {
+  declareFunctions,
+  kindsByLabel,
+  type KindsByLabel,
+} from "./declarations"
+import type { ExecuteFacts } from "./execute-facts"
 import { columnNames, objectNames } from "./names"
 import {
   customTableData,
@@ -84,12 +96,22 @@ export interface ReverseOptions {
    * теки йдуть у теку, і їх судить компілятор.
    */
   reference?: CatalogModel
+  /**
+   * Факти `EXECUTE` з каталогу бази, прочитані в одному знімку з extract.
+   * Без них при definer-функціях декларацій не пишуть (спека декларацій
+   * функцій §5.5).
+   */
+  executeFacts?: ExecuteFacts
 }
 
 export interface ReverseResult {
   /** Підсумкова тека після злиття — саме її компілює генератор. */
   files: Map<string, string>
-  /** Зміни відносно `existing`; порожні, коли є хоч одна помилка. */
+  /**
+   * Зміни відносно `existing`; порожні, коли є помилка поза класом ремонту
+   * (спека декларацій функцій §5.1): тека лише з помилками класу ремонту
+   * законна, її лагодять наступні мутації.
+   */
   changes: FileChange[]
   /** Помилки генератора й компіляції підсумкової теки. */
   diagnostics: Diagnostic[]
@@ -296,12 +318,18 @@ function folderHalf(
 }
 
 /**
+ * Модель наявної теки разом з функціями, чий `EXECUTE` виводить платформа
+ * (`functionExecute` тієї самої компіляції).
+ */
+export type KeptModel = CompiledModel & Pick<CompileResult, "functionExecute">
+
+/**
  * Модель наявної теки, коли тека є (файл поза генератором і файлом
  * проєкту) і компілюється; інакше `undefined`.
  */
 export async function keptModel(
   existing: ReadonlyMap<string, string>
-): Promise<CompiledModel | undefined> {
+): Promise<KeptModel | undefined> {
   if (
     ![...existing.keys()].some((p) => p !== PROJECT_FILE && !isGeneratedPath(p))
   )
@@ -324,16 +352,28 @@ const DEBT_RATCHET: ReadonlySet<string> = new Set([
 
 async function compiledExisting(
   existing: ReadonlyMap<string, string>
-): Promise<CompiledModel | undefined> {
-  const compiled = await compile(existing)
-  if (compiled.model !== undefined) return compiled.model
+): Promise<KeptModel | undefined> {
+  const kept = (result: CompileResult): KeptModel | undefined =>
+    result.model === undefined
+      ? undefined
+      : {
+          ...result.model,
+          ...(result.functionExecute === undefined
+            ? {}
+            : { functionExecute: result.functionExecute }),
+        }
+  // Режим ремонту: збережена тека з помилками класу ремонту (результат
+  // попереднього прийому) теж модель — повторний прийом над нею працює
+  const compiled = await compile(existing, { repair: true })
+  if (compiled.model !== undefined) return kept(compiled)
   const errors = compiled.diagnostics.filter((d) => d.severity === "error")
-  if (!errors.every((d) => DEBT_RATCHET.has(d.code))) return undefined
+  if (!errors.every((d) => DEBT_RATCHET.has(d.code) || isRepairError(d)))
+    return undefined
   const debt = await currentDebt(existing)
   if (debt === undefined) return undefined
   const accepted = new Map(existing)
   accepted.set(SQL_DEBT_FILE, JSON.stringify({ units: debt }))
-  return (await compile(accepted)).model
+  return kept(await compile(accepted, { repair: true }))
 }
 
 /**
@@ -605,52 +645,54 @@ export async function reverseGenerate(
   // Виклики тригерної функції рахуються й серед одиниць збережених файлів і
   // збережених підписок: функція, яку кличе ще й тригер чи підписка
   // довідника, не належить одній таблиці.
-  const laid = layoutUnits(
-    model.units.filter((u) => platform?.unit(u) !== true),
-    {
+  const appUnits = model.units.filter((u) => platform?.unit(u) !== true)
+  const layout = (units: readonly CatalogUnit[]) =>
+    layoutUnits(units, {
       parse: o.parse,
       defaultSchema,
       sidecars,
       described: elsewhere.units,
       handlers: elsewhere.handlers,
+    })
+  let laid = layout(appUnits)
+  const fromDatabase = new Set(model.units.map((u) => u.identity))
+  const nonGenerated = (): Map<string, string> => {
+    const kept = new Map<string, string>()
+    for (const [path, text] of o.existing) {
+      if (!isGeneratedPath(path)) kept.set(path, text)
+      else if (
+        path.endsWith(".module.ts") &&
+        generated.has(path.replace(/\.module\.ts$/, META))
+      )
+        kept.set(path, text)
     }
-  )
-  diagnostics.push(...laid.diagnostics)
-  for (const [path, text] of laid.files) generated.set(path, text)
-
+    return kept
+  }
   // Підсумкова тека: файли генератора замінюються повністю; модуль таблиці —
   // ручний файл, тож лишається, поки лишається його таблиця.
-  const merged = new Map<string, string>()
-  for (const [path, text] of o.existing) {
-    if (!isGeneratedPath(path)) merged.set(path, text)
-    else if (
-      path.endsWith(".module.ts") &&
-      generated.has(path.replace(/\.module\.ts$/, META))
+  const assemble = (
+    generatedFiles: ReadonlyMap<string, string>,
+    newId: IdSource
+  ) => {
+    const merged = nonGenerated()
+    for (const [path, text] of generatedFiles) merged.set(path, text)
+    const writable = new Set(
+      [...generatedFiles.keys()].filter((path) => path.endsWith(META))
     )
-      merged.set(path, text)
+    if (!o.existing.has(PROJECT_FILE)) {
+      merged.set(
+        PROJECT_FILE,
+        formatProjectFile({
+          name: o.project.name,
+          defaultSchema: o.project.defaultSchema,
+          database: { provider: o.project.databaseProvider },
+          naming: { attributeCase: o.project.attributeCase },
+        })
+      )
+      writable.add(PROJECT_FILE)
+    }
+    return completeFiles(merged, { schemaPath: o.schemaPath, newId }, writable)
   }
-  for (const [path, text] of generated) merged.set(path, text)
-  const writable = new Set(
-    [...generated.keys()].filter((path) => path.endsWith(META))
-  )
-  if (!o.existing.has(PROJECT_FILE)) {
-    merged.set(
-      PROJECT_FILE,
-      formatProjectFile({
-        name: o.project.name,
-        defaultSchema: o.project.defaultSchema,
-        database: { provider: o.project.databaseProvider },
-        naming: { attributeCase: o.project.attributeCase },
-      })
-    )
-    writable.add(PROJECT_FILE)
-  }
-  const completed = completeFiles(
-    merged,
-    { schemaPath: o.schemaPath, newId: o.newId },
-    writable
-  )
-  const files = completed.files
   // Перелік боргу пише лише зворотна генерація (спека П2 §8.6): весь дослівний SQL поза закритою оболонкою, який вона щойно
   // розклала, — прийнятий стан бази; далі ратчет лише звужується. Пише
   // завжди, і порожнім: тека після introspect має явний перелік. Борг не
@@ -658,17 +700,75 @@ export async function reverseGenerate(
   // так порожні. До переліку йдуть лише одиниці каталогу бази: одиниця,
   // додана в теку, але відсутня в базі, в нього не потрапляє й далі валить
   // компіляцію.
-  const fromDatabase = new Set(model.units.map((u) => u.identity))
-  const debt = await currentDebt(files)
-  if (debt !== undefined)
-    files.set(
-      SQL_DEBT_FILE,
-      sqlDebtText(
-        debt.filter((identity) => fromDatabase.has(identity)),
-        o.schemaPath
+  const withDebt = async (files: Map<string, string>) => {
+    const debt = await currentDebt(files)
+    if (debt !== undefined)
+      files.set(
+        SQL_DEBT_FILE,
+        sqlDebtText(
+          debt.filter((identity) => fromDatabase.has(identity)),
+          o.schemaPath
+        )
       )
-    )
-  const compiled = await compile(files)
+    return files
+  }
+  // Мітки видів теки для `check`: контракти прав метаданих (`metadataRights`) без
+  // SQL-стадій; ідентифікатори чернетки одноразові, її читають лише за контрактами
+  const draft = () =>
+    assemble(new Map([...generated, ...laid.files]), () => crypto.randomUUID())
+  const kinds = async (): Promise<KindsByLabel | undefined> =>
+    kindsByLabel(metadataRights(draft().files))
+  // Функції політик визнає розпізнавач компілятора на тій самій чернетці, що
+  // ляже в теку: декларації й похідні гранти від цього не залежать. Перелік
+  // боргу підсумкова тека отримує заново (`withDebt`), тож збережений, навіть
+  // зламаний, сюди не йде — він закрив би стадію 3, і з нею розпізнавання.
+  // Стадію SQL чернетки рахує лише перша definer-функція і лише коли в теці є
+  // політика: без неї функції політики немає
+  let policies: Promise<ReadonlyMap<string, readonly string[]>> | undefined
+  const policyFunctions = () =>
+    (policies ??= appUnits.some((u) => u.class === "policy")
+      ? formPolicies(
+          new Map([...draft().files].filter(([path]) => path !== SQL_DEBT_FILE))
+        ).then(
+          (found) =>
+            new Map(found.functions.map((p) => [p.unit.identity, p.purposes]))
+        )
+      : Promise.resolve(new Map()))
+  const declared = await declareFunctions({
+    units: appUnits,
+    facts: o.executeFacts,
+    provider: folder.project?.databaseProvider ?? o.project.databaseProvider,
+    defaultSchema,
+    parse: o.parse,
+    plpgsql: await loadPlpgsqlParser(),
+    newId: o.newId,
+    schemaPath: o.schemaPath,
+    functionPaths: laid.functionPaths,
+    described: elsewhere.units,
+    existing: o.existing,
+    derivedExecute: new Map(
+      (kept?.functionExecute ?? []).map((e) => [
+        e.identity,
+        {
+          purposes: e.purposes,
+          ...(e.form === undefined ? {} : { form: e.form }),
+        },
+      ])
+    ),
+    policyFunctions,
+    kinds,
+  })
+  // Гранти задекларованих функцій відтворює генератор: з виходу їх прибрано
+  if (declared.dropped.size > 0)
+    laid = layout(appUnits.filter((u) => !declared.dropped.has(u)))
+  diagnostics.push(...laid.diagnostics, ...declared.diagnostics)
+  for (const [path, text] of laid.files) generated.set(path, text)
+  for (const [path, text] of declared.files) generated.set(path, text)
+
+  const completed = assemble(generated, o.newId)
+  const files = await withDebt(completed.files)
+  // Режим ремонту: тека з помилками лише класу ремонту законна й дає модель
+  const compiled = await compile(files, { repair: true })
   diagnostics.push(...completed.diagnostics, ...compiled.diagnostics)
   if (compiled.model !== undefined)
     diagnostics.push(
@@ -681,7 +781,7 @@ export async function reverseGenerate(
   const sorted = sortDiagnostics(diagnostics)
   return {
     files,
-    changes: sorted.some((d) => d.severity === "error")
+    changes: sorted.some((d) => d.severity === "error" && !isRepairError(d))
       ? []
       : changesBetween(o.existing, files),
     diagnostics: sorted,

@@ -2,7 +2,7 @@ import { KIND_REGISTRY } from "simetra/model"
 import { diagnostic } from "../diagnostics"
 import { completeAndCompile, type CompletionOptions } from "./fix"
 import type { CreateObjectInput } from "./inputs"
-import { toPlatformForms } from "./platform-forms"
+import { toPlatformFormsAfter } from "./platform-forms"
 import { compileInput, refused, refuseSuppliedId } from "./refuse"
 import type { OperationResult } from "./types"
 
@@ -45,7 +45,7 @@ export async function createObject(
   changed.set(path, JSON.stringify(raw))
   // Новий об'єкт може зробити задекларовану функцію формою платформи
   // (обробник підписки): декларація зникає в тій самій зміні (Р12).
-  const after = toPlatformForms(changed)
+  const after = await toPlatformFormsAfter(files, changed)
   return completeAndCompile(
     files,
     after.files,

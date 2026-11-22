@@ -1,5 +1,7 @@
 import {
   COMMAND_CORE_ERRORS,
+  STORAGE_ERRORS,
+  STORAGE_REASONS,
   type CommandError,
   type MetadataRef,
   type ObjectOperation,
@@ -181,12 +183,14 @@ const isVersion = (text: string) =>
  * `DETAIL` і `HINT` ідуть назовні лише як значення з переліку T0, колонка
  * каталогу чи безпечне ціле: SQL-обробник застосунку може кинути той самий
  * `MESSAGE` з даними рядка. Решта — `command.internal` без тексту;
- * повну помилку логує викликач.
+ * повну помилку логує викликач. `deletes` — об'єкти фаз `delete` транзакції,
+ * лише для помилки `COMMIT` (`phase` `undefined`).
  */
 export function mapDatabaseError(
   error: DatabaseError,
   catalog: RuntimeCatalog,
-  phase: ErrorPhase | undefined
+  phase: ErrorPhase | undefined,
+  deletes: readonly RuntimeObject[] = []
 ): CommandError {
   if (error.connectionLost) return { code: "command.unavailable" }
   const { code, message, detail } = error
@@ -196,6 +200,15 @@ export function mapDatabaseError(
     return detail !== undefined && CONTEXT_DETAILS.includes(detail)
       ? { code: "command.context", detail }
       : INTERNAL
+  }
+  // Відмови сховища файлів (Р11 ПГ-5): власний `errcode`, а не одна з відмов
+  // ядра, тож без цієї гілки `RAISE` став би `command.internal`. Причина — лише
+  // з переліку T0: той самий `MESSAGE` може кинути SQL-обробник із чужим `DETAIL`.
+  if (code === STORAGE_ERRORS.errcode && message === STORAGE_ERRORS.message) {
+    const reason = STORAGE_REASONS.find((r) => r === detail)
+    return reason === undefined
+      ? INTERNAL
+      : { code: "command.rejected", reason: `storage.${reason}` }
   }
   switch (code) {
     case E.forbidden.errcode:
@@ -250,6 +263,24 @@ export function mapDatabaseError(
       // пройти, тож окремий код, а не збій.
       return { code: "command.busy" }
     case "23503": {
+      // Видалення рядка, на який посилаються (Р10): `TABLE` і обмеження
+      // Postgres дає за таблицею, що посилається (`ri_ReportViolation`), —
+      // чужий об'єкт і його реквізит назовні не йдуть, навіть коли це FK тієї
+      // самої таблиці (батько ієрархії з дітьми).
+      if (phase?.kind === "write" && phase.operation === "delete") {
+        return referenced(phase.object)
+      }
+      // Відкладений FK приходить на `COMMIT` без фази: транзакція з
+      // видаленням — та сама відмова; об'єкт — лише однозначний. Хибно
+      // приписати `referenced` відкладеному FK рядка, який записала інша
+      // фаза, — суворіше, ніж назвати чужий реквізит.
+      if (phase === undefined && deletes.length > 0) {
+        const objects = new Set(deletes)
+        const [only] = objects
+        return objects.size === 1
+          ? referenced(only!)
+          : { code: "command.invalid", reason: REFERENCED }
+      }
       // Postgres не заповнює `column` для FK — реквізит за ім'ям обмеження.
       const table = tableOf(catalog, phase, error.table)
       const fk = table?.constraints.find(
@@ -321,11 +352,20 @@ export function mapDatabaseError(
   }
 }
 
+const REFERENCED = "referenced"
+
+/** Видалення рядка, на який посилаються (Р10): об'єкт фази, без `path`. */
+const referenced = (object: RuntimeObject): CommandError => ({
+  code: "command.invalid",
+  reason: REFERENCED,
+  object: refOf(object),
+})
+
 /**
  * Whether the full database error goes to the log: every `command.internal`
- * and every error without SQLSTATE. Без SQLSTATE назовні — недоступність, але
- * під нею може бути власна вада T3 чи драйвера (`TypeError`), не лише обрив:
- * без журналу вона зникла б.
+ * and every error without SQLSTATE. Без SQLSTATE на `COMMIT` назовні —
+ * недоступність, але під нею може бути власна вада T3 чи драйвера
+ * (`TypeError`), не лише обрив: без журналу вона зникла б.
  */
 export function logsDatabaseError(
   error: DatabaseError,

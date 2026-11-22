@@ -9,20 +9,32 @@ import type { CatalogIndex } from "./mapping"
  * - ТЧ: `<ТЧ>[.<i>][.<реквізит | keyName ТЧ>[.<j>]]` ↔
  *   `<id ТЧ>[.<i>][.<колонка>[.<j>]]`; сегмент лише з цифр — індекс;
  * - `creatorMember[.<реквізит | keyName>]` — записом довідника членства;
+ * - `expectedValues.<реквізит шапки>[.<i>]` ↔ `expectedValues.<колонка>[.<i>]`;
  * - `<реквізит шапки>[.<i>]`, `keyName`, `versionName` ↔ колонка;
  * - решта (структурні слова, довільний шлях застосунку) — без змін.
  *
- * Перший сегмент шукається спершу серед ТЧ, далі `creatorMember`, далі серед
- * реквізитів, ключа й версії: імена ТЧ і реквізитів — один простір імен
- * об'єкта (`identity.name-duplicate`), тож збіг однозначний, а ім'я каталогу
- * виграє в структурного слова. Пошук — лише перебором масивів каталогу, тож
- * `__proto__` чи `constructor` не збігаються ні з чим і лишаються як є.
+ * Перший сегмент — спершу структурний префікс (`STRUCTURAL_PATH_WORDS`), далі
+ * ТЧ, далі реквізити, ключ і версія. Префікс іде першим, бо фізична колонка
+ * передачі може називатися як префікс, а логічне ім'я — ні: компілятор
+ * забороняє його (`identity.name-structural`). Імена ТЧ і реквізитів — один
+ * простір імен об'єкта (`identity.name-duplicate`), тож решта збігів
+ * однозначна. Пошук — лише перебором масивів каталогу, тож `__proto__` чи
+ * `constructor` не збігаються ні з чим і лишаються як є.
  */
 
 /** Сегмент — індекс масиву: ні ім'я, ні колонка не складаються лише з цифр. */
 const INDEX = /^\d+$/
 
 const MEMBER = "creatorMember"
+const EXPECTED = "expectedValues"
+
+/**
+ * Structural words that head an error path of an operation
+ * (`creatorMember.<name>`, `expectedValues.<name>`). They are reserved: an
+ * attribute, a tabular section or a column must not take one as its logical
+ * name, or its error path could not be told from the structural one.
+ */
+export const STRUCTURAL_PATH_WORDS: readonly string[] = [MEMBER, EXPECTED]
 
 type Direction = "toWire" | "fromWire"
 
@@ -61,6 +73,25 @@ function mapPath(
   const [head = "", ...rest] = path.split(".")
   const toWire = direction === "toWire"
 
+  if (head === MEMBER) {
+    const membership =
+      entry.creatorMembership === undefined
+        ? undefined
+        : index.byId.get(entry.creatorMembership)
+    const [name, ...tail] = rest
+    if (membership === undefined || name === undefined) return path
+    const mapped = mapField(headerFields(membership), name, direction) ?? name
+    return [MEMBER, mapped, ...tail].join(".")
+  }
+
+  // База CAS за полями — ті самі реквізити шапки, що й `values`.
+  if (head === EXPECTED) {
+    const [name, ...tail] = rest
+    if (name === undefined) return path
+    const field = mapField(attributeFields(entry.attributes), name, direction)
+    return [EXPECTED, field ?? name, ...tail].join(".")
+  }
+
   const section = entry.tabularSections.find((s) =>
     toWire ? s.name === head : s.id === head
   )
@@ -79,23 +110,17 @@ function mapPath(
     return [toWire ? section.id : section.name, ...tail].join(".")
   }
 
-  if (head === MEMBER && entry.creatorMembership !== undefined) {
-    const membership = index.byId.get(entry.creatorMembership)
-    const [name, ...tail] = rest
-    if (membership === undefined || name === undefined) return path
-    const mapped = mapField(headerFields(membership), name, direction) ?? name
-    return [MEMBER, mapped, ...tail].join(".")
-  }
-
   const mapped = mapField(headerFields(entry), head, direction)
-  return mapped === undefined ? path : [mapped, ...rest].join(".")
+  if (mapped !== undefined) return [mapped, ...rest].join(".")
+  return path
 }
 
 /**
  * Maps a logical error path of the object `objectId` to its wire form:
  * sections become section ids, attributes, the key and the version become
  * physical columns, `creatorMember.<name>` maps through the membership
- * catalog. Structural segments and unknown names pass unchanged, so a path
+ * catalog, `expectedValues.<name>` maps the attribute to its column.
+ * Structural segments and unknown names pass unchanged, so a path
  * is never lost.
  */
 export function pathToWire(

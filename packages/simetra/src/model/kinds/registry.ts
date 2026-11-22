@@ -22,6 +22,7 @@ export {
   RIGHTS_COLUMNS,
   RIGHTS_DELTA_SECTION,
   USER_PLATFORM_COLUMNS,
+  filePlatformColumns,
   predefinedNameColumn,
   userPlatformColumns,
 } from "./catalog"

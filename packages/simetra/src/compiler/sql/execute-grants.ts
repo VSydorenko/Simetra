@@ -1,5 +1,6 @@
 import {
   PLATFORM_ROLES,
+  PLATFORM_ROLES_NOT_PURPOSES,
   PROVIDER_API_ROLES,
   quoteIdent,
   type DatabaseProvider,
@@ -88,4 +89,29 @@ function isPlatformPurpose(
   purpose: GrantPurpose
 ): purpose is PlatformRolePurpose {
   return Object.hasOwn(PLATFORM_ROLES, purpose)
+}
+
+/**
+ * Обернення `grantRole`: роль бази → викликачі декларації (зворотна генерація,
+ * спека декларацій функцій §5.5). Таблицю пар не дублює — обертає `grantRole`
+ * по всіх призначеннях, тож нове призначення потрапляє сюди саме. `PUBLIC`
+ * дає кожне призначення, що має роль у профілі (роль без сесії теж: її
+ * відкидає і про це попереджає читач). Роль поза призначеннями профілю
+ * (`signalConsumer`, `files`, власна роль застосунку) — `undefined`: викликача для неї
+ * немає, і це не мовчазна згода, а підстава відмови читача.
+ */
+export function callersOfRole(
+  role: string,
+  provider: DatabaseProvider
+): GrantPurpose[] | undefined {
+  // `signalConsumer` і `files` — ключі `PLATFORM_ROLES`, але не призначення
+  const notPurposes: readonly string[] = PLATFORM_ROLES_NOT_PURPOSES
+  const purposes = [
+    ...Object.keys(PROVIDER_API_ROLES[provider]),
+    ...Object.keys(PLATFORM_ROLES).filter((key) => !notPurposes.includes(key)),
+  ] as GrantPurpose[]
+  const holders = purposes.filter((p) => grantRole(p, provider) !== null)
+  if (role === "PUBLIC") return holders
+  const matched = holders.filter((p) => grantRole(p, provider) === role)
+  return matched.length > 0 ? matched : undefined
 }

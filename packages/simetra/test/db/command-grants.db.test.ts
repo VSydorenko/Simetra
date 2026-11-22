@@ -490,7 +490,7 @@ describe("runtime login role", () => {
         await client.query("SAVEPOINT runtime_save")
         try {
           await client.query(
-            "SELECT public.org_role_assignments_save($1::jsonb, NULL) AS r",
+            "SELECT public.org_role_assignments_save($1::jsonb, NULL, NULL) AS r",
             [
               JSON.stringify({
                 id: assignment,

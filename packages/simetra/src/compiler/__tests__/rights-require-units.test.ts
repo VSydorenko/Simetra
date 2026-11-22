@@ -38,25 +38,34 @@ interface Spec {
 }
 
 /**
- * Definer-функція. Викликач `service` запобіжник виклику не судить — тіло
- * `SELECT 1`; `user` і `command` — тіло з доказовим запобіжником першим
- * оператором.
+ * Definer-функція. Запобіжник виклику судить кожну декларацію з `check`
+ * (спека §5.2, Р4), зокрема лише з викликачем `service`, тож тіло завжди з
+ * доказовим запобіжником першим оператором.
  */
-function definer({ check, callers }: Spec, index: number): string {
+function definer({ check }: Spec, index: number, withCheck: boolean): string {
   const target = check.scope ?? check.row
   const args = target === undefined ? "" : `${target} uuid`
-  if (callers === undefined || callers.every((c) => c === "service")) {
+  // Без `check` декларація запобіжника не оголошує, а виклик його без
+  // декларації платформа не пускає, тож тіло службове.
+  if (!withCheck) {
     return `CREATE FUNCTION public.f${index}(${args}) RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;\n`
   }
   const guard =
     check.scope === undefined ? "rights_require" : "rights_require_scope"
-  return `CREATE FUNCTION public.f${index}(${args}) RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $$BEGIN PERFORM simetra.${guard}('${check.action}', '${LABELS[check.object.name]}', ${target ?? "NULL"}); END$$;\n`
+  return `CREATE FUNCTION public.f${index}(${args}) RETURNS void LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $$BEGIN PERFORM simetra.${guard}('${ACTION_IDS[check.action] ?? check.action}', '${LABELS[check.object.name]}', ${target ?? "NULL"}); END$$;\n`
 }
 
-const LABELS: Record<string, string> = { Task: "task" }
+const LABELS: Record<string, string> = {
+  Task: "task",
+  Announcement: "announcement",
+  Ticket: "ticket",
+  Users: "users",
+}
+// Кастомна дія в запобіжнику — UUID, у декларації — ім'я.
+const ACTION_IDS: Record<string, string> = { ban: uuid(7904) }
 
 function declare(all: Map<string, string>, specs: Spec[], withCheck: boolean) {
-  all.set(SQL, specs.map(definer).join(""))
+  all.set(SQL, specs.map((spec, i) => definer(spec, i, withCheck)).join(""))
   all.set(
     FUNCTIONS,
     JSON.stringify({

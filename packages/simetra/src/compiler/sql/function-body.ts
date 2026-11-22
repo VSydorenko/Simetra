@@ -17,9 +17,16 @@ import {
   routineLanguage,
   ruledFunctions,
 } from "./closed-forms"
+import { outlivesTransaction } from "./builtin-exclusions"
 import {
   callsSqlText,
+  builtinCallName,
+  type DefElemNode,
+  doBlockFunction,
+  isBuiltinSetConfig,
   literalDynamicText,
+  literalText,
+  optionText,
   type ProviderCalls,
 } from "./command-context"
 import {
@@ -29,7 +36,9 @@ import {
   type ReferencedName,
 } from "./dependencies"
 import type { SqlParser } from "./parse"
+import { PG_CATALOG_TYPES } from "./pg-catalog-types"
 import type { PlpgsqlParser } from "./plpgsql"
+import type { PolicyFunctions } from "./policy-functions"
 import { splitAssignment } from "./rewrite/plpgsql-body"
 import { isStatementKey } from "./unit-target"
 import type { VerbatimUnit } from "./units"
@@ -74,25 +83,6 @@ export interface RoutineBody {
   statements: ExecutedStatement[]
   values: { text: string; line: number }[]
   problem?: BodyProblem
-}
-
-interface DefElemNode {
-  DefElem?: { defname?: string; arg?: unknown }
-}
-
-/** Рядкове значення опції: `List` рядків (`AS` функції) чи рядок. */
-function optionText(
-  options: readonly DefElemNode[] | undefined,
-  name: string
-): string | undefined {
-  const arg = (options ?? []).find((o) => o.DefElem?.defname === name)?.DefElem
-    ?.arg as
-    | {
-        String?: { sval?: string }
-        List?: { items?: { String?: { sval?: string } }[] }
-      }
-    | undefined
-  return arg?.String?.sval ?? arg?.List?.items?.[0]?.String?.sval
 }
 
 /** Кожен вузол оператора дерева в порядку обходу, вкладені — теж. */
@@ -249,10 +239,7 @@ class BodyWalker {
       this.fail("unread", at)
       return
     }
-    this.plpgsqlBody(
-      `CREATE FUNCTION do_block() RETURNS void LANGUAGE plpgsql AS '${body.replaceAll("'", "''")}'`,
-      at
-    )
+    this.plpgsqlBody(doBlockFunction(body), at)
   }
 }
 
@@ -274,7 +261,8 @@ function valueTexts(query: string, parseMode: number): string[] | undefined {
 /**
  * Оператори, які тіло виконує без умов (спека прав §6.1): рядки під RLS і правами
  * таблиці (DML судить Правило 1 окремо), блокування, налаштування сесії
- * (захищені судить `commandContextWrite`), виклик процедури, сповіщення,
+ * (захищені судить `commandContextWrite`, локальність — `poolSessionProblem`),
+ * виклик процедури, сповіщення,
  * блок `DO`, тіло якого судиться тим самим переліком, і `RETURN` тіла
  * стандарту SQL — лише вираз, як `SELECT`.
  */
@@ -500,7 +488,8 @@ function refreshesModelView(
 /**
  * Тіло будь-якої функції чи процедури в будь-якому файлі, борг включно
  * (спека прав §6.1), — дозвільний перелік операторів; інакше помилка
- * `sql.function-body-statement`. Функцію закритого модуля, обробник підписки
+ * `sql.function-body-statement`; те, що пережило б транзакцію в сесії пулу
+ * (`poolSessionProblem`), — помилка свого класу. Функцію закритого модуля, обробник підписки
  * й функцію множини, чию оболонку відмовляють власні правила (`sql.closed-shell`,
  * `subscription.handler-not-closed`, `scope.set-function-signature`: мова,
  * динамічний SQL, нерозбірне тіло), тут не судять — друга діагностика була б
@@ -513,11 +502,12 @@ export function checkFunctionBodies(
   units: readonly VerbatimUnit[],
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  calls: ProviderCalls
+  calls: ProviderCalls,
+  policies: PolicyFunctions
 ): Diagnostic[] {
   const views = modelViews(units)
   const closed = closedModuleOwners(objects)
-  const ruled = ruledFunctions(objects, project)
+  const ruled = ruledFunctions(objects, project, policies)
   return units.flatMap((unit) => {
     const shelled =
       (unit.ownerFile !== undefined && closed.has(unit.ownerFile)) ||
@@ -530,17 +520,180 @@ export function checkFunctionBodies(
       ) !== undefined
     )
       return []
+    const fn = `${unit.schema}.${unit.name}`
     const problem = bodyStatementProblem(unit, parse, plpgsql, views, calls)
-    if (problem === undefined) return []
-    if (shelled && SHELL_PROBLEMS.has(problem.statement)) return []
+    const statement =
+      problem === undefined ||
+      (shelled && SHELL_PROBLEMS.has(problem.statement))
+        ? []
+        : [
+            diagnostic("sql.function-body-statement", unit.file, "", {
+              function: fn,
+              statement: problem.statement,
+              line: unit.line + problem.line - 1,
+            }),
+          ]
+    const session = poolSessionProblem(unit, parse, plpgsql)
+    if (session === undefined) return statement
+    const { code, line, ...params } = session
     return [
-      diagnostic("sql.function-body-statement", unit.file, "", {
-        function: `${unit.schema}.${unit.name}`,
-        statement: problem.statement,
-        line: unit.line + problem.line - 1,
+      ...statement,
+      diagnostic(code, unit.file, "", {
+        function: fn,
+        ...params,
+        line: unit.line + line - 1,
       }),
     ]
   })
+}
+
+/**
+ * Що тіло лишило б у сесії після своєї транзакції (спека прав §6.1). З'єднання
+ * пулу команд обслуговує наступну команду іншого користувача, тож налаштування,
+ * затінений тип чи сесійний стан вбудованої перейшли б до неї: `statement_timeout`
+ * чи `lock_timeout`, лишений нелокальним `SET`, — відмова в обслуговуванні чужих
+ * команд. Кожен клас — свій код.
+ */
+export type PoolSessionProblem =
+  | {
+      code: "sql.function-body-session-setting"
+      form: "set" | "reset" | "setConfig"
+      setting?: string
+      line: number
+    }
+  | { code: "sql.function-body-temp-type"; table: string; line: number }
+  | { code: "sql.function-body-session-builtin"; call: string; line: number }
+
+const CATALOG_TYPES: ReadonlySet<string> = new Set(PG_CATALOG_TYPES)
+
+interface SessionCallNode {
+  funcname?: { String?: { sval?: string } }[]
+  args?: unknown[]
+}
+
+/**
+ * Третій аргумент `set_config` — позиційний літерал `true`: лише тоді
+ * налаштування зникає з транзакцією. Іменований аргумент, вираз чи рядок
+ * `'true'` статично не доводять локальності (fail-closed).
+ */
+function localSetConfig(args: readonly unknown[] | undefined): boolean {
+  const third = args?.[2] as
+    { A_Const?: { boolval?: { boolval?: boolean } } } | undefined
+  return args?.length === 3 && third?.A_Const?.boolval?.boolval === true
+}
+
+/**
+ * Перший виклик дерева, що лишає стан сесії: `set_config` без літерала `true`
+ * чи вбудована класу `outlivesTransaction`. Некваліфіковане ім'я судиться як
+ * вбудована: шлях пошуку, за яким Postgres його розв'яже, може дати саме її.
+ */
+function sessionCall(
+  value: unknown,
+  line: number
+): PoolSessionProblem | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = sessionCall(item, line)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  if (typeof value !== "object" || value === null) return undefined
+  const node = value as Record<string, unknown>
+  const call = node.FuncCall as SessionCallNode | undefined
+  if (call !== undefined) {
+    if (isBuiltinSetConfig(call.funcname) && !localSetConfig(call.args)) {
+      const setting = literalText(call.args?.[0])
+      return {
+        code: "sql.function-body-session-setting",
+        form: "setConfig",
+        ...(setting === undefined ? {} : { setting }),
+        line,
+      }
+    }
+    const name = builtinCallName(call.funcname)
+    if (name !== undefined && outlivesTransaction(name))
+      return { code: "sql.function-body-session-builtin", call: name, line }
+  }
+  for (const child of Object.values(node)) {
+    const found = sessionCall(child, line)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+/**
+ * `SET` без `LOCAL` чи `RESET` (зокрема `RESET ALL`): обидва змінюють сесію
+ * поза транзакцією. Захищені налаштування окремо судить `commandContextWrite`;
+ * тут судиться лише локальність, тож переліку імен немає.
+ */
+function sessionSet(
+  node: Record<string, unknown>,
+  line: number
+): PoolSessionProblem | undefined {
+  const kind = node.kind as string | undefined
+  const name = node.name as string | undefined
+  const setting = name === undefined ? {} : { setting: name }
+  if (kind === "VAR_RESET" || kind === "VAR_RESET_ALL")
+    return {
+      code: "sql.function-body-session-setting",
+      form: "reset",
+      ...setting,
+      line,
+    }
+  if (node.is_local === true) return undefined
+  return {
+    code: "sql.function-body-session-setting",
+    form: "set",
+    ...setting,
+    line,
+  }
+}
+
+/**
+ * Перше, що тіло функції чи процедури лишило б у сесії пулу після своєї
+ * транзакції (спека прав §6.1): нелокальний `SET`, `RESET`, `set_config` без
+ * третього аргументу-літерала `true`, тимчасова таблиця з іменем типу
+ * `pg_catalog` (Postgres шукає типи в `pg_temp` раніше за `pg_catalog`, тож вона
+ * затінила б тип до кінця транзакції) чи виклик вбудованої класу
+ * `outlivesTransaction`. Судиться те саме тіло, що й перелік операторів
+ * (`routineBody`): літеральний `EXECUTE`, блоки `DO`, вирази plpgsql і значення
+ * параметрів за замовчуванням, які обчислює виклик.
+ */
+export function poolSessionProblem(
+  unit: Pick<VerbatimUnit, "class" | "sql" | "tree">,
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
+): PoolSessionProblem | undefined {
+  if (unit.class !== "function" && unit.class !== "procedure") return undefined
+  const body = routineBody(unit.tree as Node, unit.sql, parse, plpgsql)
+  for (const { stmt, line } of body.statements) {
+    const [key] = Object.keys(stmt)
+    if (key === undefined) continue
+    const node = (stmt as Record<string, unknown>)[key] as Record<
+      string,
+      unknown
+    >
+    if (key === "VariableSetStmt") {
+      const set = sessionSet(node, line)
+      if (set !== undefined) return set
+    }
+    const created = temporaryTable(key, node)
+    if (created !== undefined && CATALOG_TYPES.has(created))
+      return { code: "sql.function-body-temp-type", table: created, line }
+    const call = sessionCall(stmt, line)
+    if (call !== undefined) return call
+  }
+  for (const { text, line } of body.values) {
+    const parsed = parse(text)
+    if (!parsed.ok) continue
+    const call = sessionCall(
+      parsed.statements.map((s) => s.stmt),
+      line
+    )
+    if (call !== undefined) return call
+  }
+  return sessionCall(parameterDefaults(unit.tree), 1)
 }
 
 /** Що в закритій оболонці судять її правила й суддя голів, а не перелік. */
@@ -632,8 +785,10 @@ const isGuardCall = (call: ReferencedName) =>
 /**
  * Виклики одиниці без одного виклику запобіжника, який робить перший оператор
  * блоку автора, коли це `PERFORM` у доведеній формі (Р9), хоч би які були
- * викликачі: `guardOf` судить лише декларації з викликачами user/command, тож
- * `PERFORM … WHERE false` службової функції без форми не звільнялося б. Виклик запобіжника лишається в усіх
+ * викликачі. Виняток лишається на формі `firstStatementOk`, а не на вердикті
+ * `guardOf`: інакше кожна `check-not-applied (arguments)` давала б ще й
+ * `platform-function-call` поза класом ремонту, і `declare-function` не міг
+ * би виправити `check`. Виклик запобіжника лишається в усіх
  * інших місцях: другий у тілі, у вкладеному блоці, у виразі, а також другий
  * усередині самого першого оператора. Правильність аргументів судить `guardOf`.
  */

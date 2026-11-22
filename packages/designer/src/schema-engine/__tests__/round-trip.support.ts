@@ -9,14 +9,26 @@ import {
   expect,
   it,
 } from "vitest"
-import { SIGNAL_OUTBOX, type CatalogModel } from "simetra/model"
+import {
+  PLATFORM_ROLES,
+  PROVIDER_API_ROLES,
+  PROVIDER_OWNER_ROLES,
+  SIGNAL_OUTBOX,
+  type CatalogModel,
+  type PhysicalTable,
+} from "simetra/model"
 import {
   canonicalSnapshot,
+  addElement,
+  addElementInput,
+  applyChanges,
   compile,
+  explainFunction,
   loadSqlParser,
   platformInstall,
   platformTriggers,
   type CompiledModel,
+  type CompiledScopeKind,
   type PlatformTriggerFamily,
   type SchemaPathResolver,
   type SqlParser,
@@ -36,12 +48,12 @@ import {
   type DesiredComparison,
   type EngineDiagnostic,
   type EngineScope,
+  type ExecuteFacts,
   type Extracted,
   type SchemaEngine,
 } from "simetra/schema"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import {
-  SCOPE_FUNCTIONS_FILE,
   readReferenceDomain,
   shadowAgeMinutes,
   shadowDatabaseNames,
@@ -263,9 +275,10 @@ interface Loss {
    * Функції форм платформи (множини скоупу, значень виміру), які прийом з нуля
    * повертає звичайними `SECURITY DEFINER`-функціями з `EXECUTE` для ролей
    * API: зв'язку з видом скоупу чи виміром зворотна генерація не знає, тож
-   * компіляція повернутої теки відмовляє їм `sql.definer-caller-unchecked`
-   * (платформна спека §6.7), доки їх не зв'язано чи не задекларовано. Тоді
-   * ланцюжок закінчується на зворотній генерації (`refusedRoundTrip`, до #271).
+   * з фактами `EXECUTE` отримують декларацію без `check` і відмову
+   * `sql.declaration-check-missing` (Р1), доки мутації `chain` її не
+   * доповнять. Фікстура з ними без `chain` — помилка тесту (Д4, Р8): теку
+   * ведуть мутації до звірки й застосування, іншого шляху немає.
    */
   definers: { schema: string; name: string }[]
 }
@@ -288,14 +301,9 @@ export interface Refusal {
   name?: string
   /** Одиниця, на якій відмова (`sql.kind-table-verbatim`). */
   identity?: string
+  /** Перша причина відмови (`sql.policy-helper-correlated`). */
+  reason?: string
 }
-
-const definerRefusals = (definers: Loss["definers"]): Refusal[] =>
-  definers.map((f) => ({
-    code: "sql.definer-caller-unchecked",
-    schema: f.schema,
-    name: f.name,
-  }))
 
 /** Помилки прийому — рівно відмови `refusals`, решти немає. */
 function expectRefusals(
@@ -312,16 +320,24 @@ function expectRefusals(
       schema: d.params?.schema,
       name: d.params?.name,
       identity: d.params?.identity,
+      reason: d.params?.reason,
     }))
   ).toEqual(refusals)
 }
 
-/** Помилки прийому — рівно відмови `definers`, решти немає. */
-function expectRefusedDefiners(
-  diagnostics: Parameters<typeof expectRefusals>[0],
-  definers: Loss["definers"]
-): void {
-  expectRefusals(diagnostics, definerRefusals(definers))
+/**
+ * Витяг із фактами `EXECUTE` в одному знімку — як `introspect`: без фактів
+ * зворотна генерація не пише декларацій definer-функцій.
+ */
+async function extractWithFacts(target: DbConnection, scope: EngineScope) {
+  const { extracted, facts } = await engine.extractWithExecuteFacts(
+    target,
+    scope
+  )
+  expect(errors(extracted.diagnostics)).toEqual([])
+  expect(facts.catalogChanged).toBe(false)
+  expect(facts.crossCheckFailures).toEqual([])
+  return { extracted, facts }
 }
 
 /**
@@ -370,6 +386,8 @@ const dropFunction = (f: Loss["functions"][number]) =>
 
 interface RoundTrip {
   extracted: Extracted
+  /** Тека, яку скомпільовано: зворотна генерація (з мутаціями ланцюжка). */
+  files: ReadonlyMap<string, string>
   model: CompiledModel
   scope: EngineScope
   comparison: Extract<DesiredComparison, { status: "compared" }>
@@ -409,10 +427,11 @@ async function referenceOf(
 async function expectKindLabelsKept(
   target: DbConnection,
   extracted: Extracted,
+  facts: ExecuteFacts,
   project: Project,
   before: ReadonlyMap<string, string>,
   files: ReadonlyMap<string, string>,
-  definers: Loss["definers"]
+  refusals: readonly Refusal[]
 ): Promise<void> {
   const labels = (map: ReadonlyMap<string, string>) =>
     new Map(
@@ -439,41 +458,11 @@ async function expectKindLabelsKept(
     newId: () => randomUUID(),
     schemaPath,
     parse,
+    executeFacts: facts,
     ...(await referenceOf(target, existing)),
   })
-  expectRefusedDefiners(again.diagnostics, definers)
+  expectRefusals(again.diagnostics, refusals)
   expect(labels(again.files)).toEqual(labels(existing))
-}
-
-/**
- * Прийом з нуля бази з функціями форм платформи (`Loss.definers`): ланцюжок
- * §9 закінчується на зворотній генерації — її помилки рівно відмови цих
- * функцій, а моделі з такою текою компілятор не дає. Повертає теку.
- * Тимчасово: іменовані функції множини, які кличуть політики, стануть формою
- * «функція політики» (ADR-0094, #271); тоді фікстури зі `scopeKinds` підуть
- * повним ланцюжком, а цю функцію буде видалено (умова записана в #271).
- */
-async function refusedRoundTrip(
-  target: DbConnection,
-  extractScope: EngineScope,
-  project: Project,
-  loss: Loss
-): Promise<Map<string, string>> {
-  const { extracted, files } = await refusedAdoption(
-    target,
-    extractScope,
-    project,
-    definerRefusals(loss.definers)
-  )
-  await expectKindLabelsKept(
-    target,
-    extracted,
-    project,
-    new Map(),
-    files,
-    loss.definers
-  )
-  return files
 }
 
 /**
@@ -489,23 +478,25 @@ export async function refusedAdoption(
   refusals: readonly Refusal[]
 ): Promise<{
   extracted: Extracted
+  facts: ExecuteFacts
   files: Map<string, string>
   diagnostics: Awaited<ReturnType<typeof reverseGenerate>>["diagnostics"]
   target: OracleShape
 }> {
   await withPlatformSequence(target)
-  const extracted = await engine.extract(target, extractScope)
-  expect(errors(extracted.diagnostics)).toEqual([])
+  const { extracted, facts } = await extractWithFacts(target, extractScope)
   const reversed = await reverseGenerate(extracted.model, {
     project: { name: "RoundTrip", ...project },
     existing: new Map(),
     newId: () => randomUUID(),
     schemaPath,
     parse,
+    executeFacts: facts,
   })
   expectRefusals(reversed.diagnostics, refusals)
   return {
     extracted,
+    facts,
     files: new Map(reversed.files),
     diagnostics: reversed.diagnostics,
     target: await withClient(target, (c) =>
@@ -526,8 +517,7 @@ export async function roundTripOf(
   loss: Loss = NO_LOSS(extractScope)
 ): Promise<RoundTrip> {
   await withPlatformSequence(target)
-  const extracted = await engine.extract(target, extractScope)
-  expect(errors(extracted.diagnostics)).toEqual([])
+  const { extracted, facts } = await extractWithFacts(target, extractScope)
 
   const reversed = await reverseGenerate(extracted.model, {
     project: { name: "RoundTrip", ...project },
@@ -535,19 +525,36 @@ export async function roundTripOf(
     newId: () => randomUUID(),
     schemaPath,
     parse,
+    executeFacts: facts,
     ...(await referenceOf(target, existing)),
   })
-  expectRefusedDefiners(reversed.diagnostics, loss.definers)
+  // Фікстура з функціями форм платформи без `chain` — помилка тесту (Д4, Р8)
+  expect(loss.definers).toEqual([])
+  expectRefusals(reversed.diagnostics, [])
   await expectKindLabelsKept(
     target,
     extracted,
+    facts,
     project,
     existing,
     reversed.files,
-    loss.definers
+    []
   )
 
-  const compiled = await compile(reversed.files)
+  return compiledTrip(target, extracted, reversed.files, loss)
+}
+
+/**
+ * Друга половина ланцюжка §9: компіляція теки, рендер, звірка з ціллю й
+ * оракул. Окремо, бо теку після мутацій (`chain`) веде той самий шлях.
+ */
+async function compiledTrip(
+  target: DbConnection,
+  extracted: Extracted,
+  files: ReadonlyMap<string, string>,
+  loss: Loss
+): Promise<RoundTrip> {
+  const compiled = await compile(files)
   expect(errors(compiled.diagnostics)).toEqual([])
   const model = compiled.model!
   const sql = renderDesiredState(model).sql
@@ -602,7 +609,7 @@ export async function roundTripOf(
     })
   )
   if (oracle.status !== "loaded") throw new Error("oracle shadow failed")
-  return { extracted, model, scope, comparison, ...oracle.value }
+  return { extracted, files, model, scope, comparison, ...oracle.value }
 }
 
 /**
@@ -945,6 +952,59 @@ async function expectPlanAndApply(
 }
 
 /**
+ * Б5 (план Д3): застосування з дозволом рівно на кроки відомої втрати механіки,
+ * після нього наступний план — буквально порожній. Без застосування звірка
+ * «рівно втрата» слабша: вона не доводить, що застосований стан збігається з
+ * бажаним.
+ */
+async function applyLossAndExpectEmptyPlan(
+  target: DbConnection,
+  model: CompiledModel,
+  loss: Loss
+): Promise<void> {
+  const outcome = await buildPlan(engine, dbs, model, { target }, [])
+  expect({
+    status: outcome.status,
+    errors: errors(outcome.diagnostics),
+  }).toEqual({ status: "planned", errors: [] })
+  if (outcome.status !== "planned") throw new Error("plan refused")
+  const artifact = outcome.artifact
+  const permitted = new Set(artifact.requiredPermissions)
+  expect(
+    byText(
+      artifact.steps
+        .filter((s) => permitted.has(s.id))
+        .map((s) => ({ sql: s.sql, class: s.class }))
+    )
+  ).toEqual(permittedLossSteps(loss))
+  const applied = await executePlan(writer, target, artifact, {
+    mode: "apply",
+    planHash: artifact.planHash,
+    allow: artifact.requiredPermissions,
+    snapshot: canonicalSnapshot(model),
+  })
+  expect({
+    status: applied.status,
+    errors: errors(applied.diagnostics),
+  }).toEqual({ status: "committed", errors: [] })
+  // Порожній план рушій повертає як `unchanged`: кроків немає зовсім
+  const next = await buildPlan(engine, dbs, model, { target }, [])
+  expect({
+    status: next.status,
+    errors: errors(next.diagnostics),
+  }).toEqual({ status: "unchanged", errors: [] })
+}
+
+/** ACL функцій у знімку оракула: ім'я функції -> елементи ACL. */
+const functionAcls = (shape: OracleShape, names: readonly string[]) =>
+  Object.fromEntries(
+    names.map((name) => [
+      name,
+      shape.acls.find((a) => a.object === `f:${name}()`)?.acl,
+    ])
+  )
+
+/**
  * Розгортає скомпільовану теку в ціль і веде її ланцюжком §9. Без збереженої
  * теки (`existing` порожній) механіка видів — відома втрата, і вона гучна.
  * `endToEnd` веде повернуту модель ще й повним конвеєром плану й застосування.
@@ -952,7 +1012,11 @@ async function expectPlanAndApply(
 export async function deployedRoundTrip(
   files: Map<string, string>,
   existing: ReadonlyMap<string, string>,
-  endToEnd: boolean
+  endToEnd: boolean,
+  chain?: (
+    adopted: Map<string, string>,
+    source: CompiledModel
+  ) => Promise<Map<string, string>>
 ): Promise<{
   source: CompiledModel
   result?: RoundTrip
@@ -971,12 +1035,114 @@ export async function deployedRoundTrip(
     databaseProvider: source.project.database.provider,
   }
   if (loss.definers.length > 0) {
-    const adopted = await inTarget(
+    // Без ланцюжка мутацій така фікстура — помилка тесту, не очікувана відмова
+    if (chain === undefined)
+      throw new Error(
+        "fixture with Loss.definers needs a chain of repair mutations"
+      )
+    // Теку з відмовами класу ремонту лагодять мутації `chain`; повна звірка
+    // йде вже над теку після них (Д3, Р8), у тій самій цілі
+    const { adopted, result } = await inTarget(
       renderDesiredState(source).sql,
       scope,
-      (target) => refusedRoundTrip(target, scope, project, loss)
+      async (target) => {
+        // З фактами `EXECUTE` функція форми платформи отримує декларацію без
+        // `check`: відмова `sql.declaration-check-missing` (Р1), доки `chain`
+        // її не доповнить. Функцію множини виду, що має таблиці, після прийому
+        // кличуть дослівні політики кількох таблиць, а вивід її — ключ кореня,
+        // не ключ таблиці політики: функцією політики (§5.8) вона не буває, і
+        // це ще й `sql.policy-helper-correlated` (`outputKey`), доки `chain`
+        // не поверне вид
+        const called = policyCalledDefiners(source)
+        const refusals: Refusal[] = loss.definers.flatMap((f) => [
+          {
+            code: "sql.declaration-check-missing",
+            schema: f.schema,
+            name: f.name,
+          },
+          ...(called.has(qualifiedName(f))
+            ? [
+                {
+                  code: "sql.policy-helper-correlated",
+                  schema: f.schema,
+                  name: f.name,
+                  reason: "outputKey",
+                },
+              ]
+            : []),
+        ])
+        const {
+          extracted: first,
+          facts,
+          files: kept,
+        } = await refusedAdoption(target, scope, project, refusals)
+        await expectKindLabelsKept(
+          target,
+          first,
+          facts,
+          project,
+          new Map(),
+          kept,
+          refusals
+        )
+        const functions = loss.definers.map(qualifiedName)
+        const schemas = [...scope.schemas]
+        // ACL функцій множини, які розгорнуло саме джерело, — до прийому
+        const deployed = functionAcls(
+          await withClient(target, (c) => readOracle(c, schemas)),
+          functions
+        )
+        const repaired = await chain(kept, source)
+        const { extracted } = await extractWithFacts(target, scope)
+        const result = await compiledTrip(target, extracted, repaired, loss)
+        if (endToEnd) {
+          await expectPlanAndApply(target, result.model, loss)
+          await applyLossAndExpectEmptyPlan(target, result.model, loss)
+          // ACL у цілі після застосування дорівнює виведеному з теки (тінь
+          // бажаного стану) і розгорнутому з джерела: гранти форм платформи
+          // з'явились, дослівних — ні
+          const applied = functionAcls(
+            await withClient(target, (c) => readOracle(c, schemas)),
+            functions
+          )
+          expect(applied).toEqual(functionAcls(result.shadow, functions))
+          expect(applied).toEqual(deployed)
+          // Буквальний перелік, а не виведений генератором: власник, роль
+          // користувача, сервісна (лише supabase) і роль команд; ні `PUBLIC`
+          // (`=X/…`), ні анонімної ролі
+          const provider = testProvider()
+          const owner = PROVIDER_OWNER_ROLES[provider]
+          const api = PROVIDER_API_ROLES[provider]
+          const expected = [
+            owner,
+            api.user,
+            ...(provider === "supabase" ? [api.service] : []),
+            PLATFORM_ROLES.command,
+          ]
+            .map((role) => `${role}=X/${owner}`)
+            .sort()
+          for (const name of functions)
+            expect(applied[name]?.slice().sort(), name).toEqual(expected)
+          // `explain` показує ті самі ролі, що й ACL цілі після застосування
+          // (без власника: його права — не виведені платформою)
+          const explained = await compile(repaired, { repair: true })
+          for (const name of functions) {
+            const [schema, fn] = name.split(".") as [string, string]
+            const roles = explainFunction(explained, { schema, name: fn })
+              ?.roles?.[provider]
+            expect(roles, name).toBeDefined()
+            expect(
+              [owner, ...roles!.map((r) => r.role)]
+                .map((role) => `${role}=X/${owner}`)
+                .sort(),
+              name
+            ).toEqual(applied[name]?.slice().sort())
+          }
+        }
+        return { adopted: repaired, result }
+      }
     )
-    return { source, adopted }
+    return { source, adopted, result }
   }
   const result = await inTarget(
     renderDesiredState(source).sql,
@@ -995,38 +1161,137 @@ export async function deployedRoundTrip(
 export const kindsOf = (model: CompiledModel) =>
   [...new Set(model.objects.map((o) => o.kind))].sort()
 
+/** Функція множини виду, яку джерело має одиницею (§9: definer-функція теки). */
+function namedDefiner(
+  source: CompiledModel,
+  kind: CompiledScopeKind
+): string | undefined {
+  const name = qualifiedName(kind.setFunction)
+  return source.sqlUnits.some((u) => u.identity === `function:${name}()`)
+    ? name
+    : undefined
+}
+
+/** Колонка виду `kind` у таблиці джерела: носій скоупу чи ключ кореня. */
+const scopeColumnOf = (table: PhysicalTable, kind: CompiledScopeKind) =>
+  table.columns.find((c) => c.origin.scopeKindId === kind.id)
+
 /**
- * Параметр корпусу `scoped: false`: та сама фікстура без видів скоупу —
- * без `scopeKinds` проєкту, полів `scope` і `scopeColumn` об'єктів, FK у межах
- * тенанта (`scopedRef`) і файлу функцій множини.
- * Так прийом з нуля веде повний ланцюжок §9: функції множини, що після
- * прийому повертаються незв'язаними, відмовляє `sql.definer-caller-unchecked`
- * (платформна спека §6.7). Механіку скоупу в прийомі з нуля перевірить #271.
+ * Функції множини видів, що мають таблиці: прийом з нуля лишає політики
+ * таблиць виду дослівними, і кожна кличе функцію множини свого виду.
  */
-export function unscoped(
-  files: ReadonlyMap<string, string>
-): Map<string, string> {
-  const out = new Map<string, string>()
-  for (const [path, text] of files) {
-    if (path === SCOPE_FUNCTIONS_FILE) continue
-    if (!path.endsWith(".meta.json")) {
-      out.set(path, text)
-      continue
-    }
-    const data = JSON.parse(text) as Record<string, unknown>
-    if (path === "project.meta.json") delete data.scopeKinds
-    else {
-      delete data.scope
-      delete data.scopeColumn
-      // FK у межах тенанта (`scopedRef`) існує лише зі скоупом.
-      if (Array.isArray(data.foreignKeys))
-        data.foreignKeys = (
-          data.foreignKeys as { references?: { key?: string } }[]
-        ).filter((fk) => fk.references?.key !== "scopedRef")
-    }
-    out.set(path, JSON.stringify(data))
+function policyCalledDefiners(source: CompiledModel): Set<string> {
+  return new Set(
+    source.scopeKinds.flatMap((kind) => {
+      const name = namedDefiner(source, kind)
+      return name !== undefined &&
+        source.physical.tables.some((t) => scopeColumnOf(t, kind) !== undefined)
+        ? [name]
+        : []
+    })
+  )
+}
+
+/**
+ * Ремонтний ланцюжок прийому з нуля фікстури з видами скоупу (Р8): по
+ * мутації `add` на кожен вид джерела в порядку проєкту. Корінь-об'єкт виду
+ * після прийому — `CustomTable` з фізичним іменем кореня джерела; `scopes` —
+ * таблиці, які вид мав у джерелі (корінь — без `scopeColumn`, решта — з
+ * колонкою, яку зворотна генерація назвала за фізичним ім'ям носія), а
+ * перша мутація ще оголошує `none` таблицям без жодного виду: з першим видом
+ * проєкту скоуп оголошує кожна таблиця. Після кожної мутації лишаються рівно
+ * відмови класу ремонту функцій ще не повернутих видів.
+ */
+export async function restoreScopeKinds(
+  adopted: Map<string, string>,
+  source: CompiledModel
+): Promise<Map<string, string>> {
+  const { project } = source
+  const tables = metaOf(adopted).filter((m) => m.kind === "CustomTable")
+  const adoptedOf = (table: PhysicalTable) => {
+    const meta = tables.find(
+      (m) =>
+        (m.schema ?? project.defaultSchema) === table.schema &&
+        m.physicalName === table.name
+    )
+    expect(meta, `${table.schema}.${table.name}`).toBeDefined()
+    return meta!
   }
-  return out
+  const called = policyCalledDefiners(source)
+  // Таблиці платформної установки тека не описує — їх ставить платформа
+  const application = new Set(await applicationTableKeys(source))
+  const applicationTables = source.physical.tables.filter((t) =>
+    application.has(`${t.schema}.${t.name}`)
+  )
+  let files = adopted
+  for (const [index, kind] of source.scopeKinds.entries()) {
+    const declared = project.scopeKinds.find((k) => k.name === kind.name)!
+    const scopes: Record<string, { scope: string; scopeColumn?: string }> = {}
+    let root = declared.root
+    for (const table of applicationTables) {
+      const column = scopeColumnOf(table, kind)
+      if (column === undefined) {
+        if (
+          index === 0 &&
+          source.scopeKinds.every((k) => scopeColumnOf(table, k) === undefined)
+        )
+          scopes[adoptedOf(table).name] = { scope: "none" }
+        continue
+      }
+      const meta = adoptedOf(table)
+      // Основна таблиця об'єкта-кореня: скоуп — її ключ, без `scopeColumn`
+      if (
+        "objectId" in kind.root &&
+        "objectId" in table.origin &&
+        table.origin.objectId === kind.root.objectId &&
+        table.origin.tabularSectionId === undefined &&
+        table.origin.part === undefined
+      ) {
+        scopes[meta.name] = { scope: kind.name }
+        root = { object: { kind: "CustomTable", name: meta.name } }
+        continue
+      }
+      const carrier = meta.columns?.find((c) => c.physicalName === column.name)
+      expect(carrier, `${table.name}.${column.name}`).toBeDefined()
+      scopes[meta.name] = { scope: kind.name, scopeColumn: carrier!.name }
+    }
+    const result = await addElement(
+      files,
+      addElementInput.parse({
+        target: { kind: "Project" },
+        collection: "scopeKinds",
+        element: {
+          name: declared.name,
+          root,
+          setFunction: declared.setFunction,
+        },
+        ...(Object.keys(scopes).length > 0 ? { scopes } : {}),
+      }),
+      { schemaPath, newId: () => randomUUID() }
+    )
+    const pending = source.scopeKinds.slice(index + 1).flatMap((later) => {
+      const name = namedDefiner(source, later)
+      if (name === undefined) return []
+      return [
+        { code: "sql.declaration-check-missing", function: name },
+        ...(called.has(name)
+          ? [{ code: "sql.policy-helper-correlated", function: name }]
+          : []),
+      ]
+    })
+    expect(
+      errors(result.diagnostics).map((d) => ({
+        code: d.code,
+        function: d.params?.function,
+      })),
+      kind.name
+    ).toEqual(pending)
+    // З відмовами класу ремонту зміна записана, без них — чиста
+    if (pending.length > 0) expect(result.written).toBe(true)
+    else expect(result.ok).toBe(true)
+    files = applyChanges(files, result.changes)
+  }
+  return files
 }
 
 /** Метадані об'єктів повернутої теки: вид, схема й фізичне ім'я таблиці. */
@@ -1039,8 +1304,10 @@ const metaOf = (files: ReadonlyMap<string, string>) =>
       ([, text]) =>
         JSON.parse(text) as {
           kind: string
+          name: string
           schema?: string
           physicalName?: string
+          columns?: { name: string; physicalName: string }[]
         }
     )
 

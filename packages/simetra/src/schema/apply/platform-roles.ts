@@ -521,11 +521,11 @@ export const loginSettingSql = (login: PlatformLoginRole): string[] =>
  * Членство ролі входу в батьку — пара §6.2. `INHERIT FALSE` явно: з PG16
  * типове значення членства бере атрибут ролі, а пара мусить бути саме такою.
  */
-const pairGrant = (parent: string, login: string): string =>
+export const pairGrant = (parent: string, login: string): string =>
   `GRANT ${quoteIdent(parent)} TO ${quoteIdent(login)} WITH INHERIT FALSE, SET TRUE`
 
 /** Обов'язкові батьки ролі входу, членства в яких наявна роль не має. */
-const lackingParents = (
+export const lackingParents = (
   login: PlatformLoginRole,
   found: PlatformRoleRow
 ): string[] =>
@@ -535,7 +535,7 @@ const lackingParents = (
  * Гейт `roles` для ролі входу: брак обов'язкового членства — не відмова, бо
  * `roles` його доповнює; будь-яке інше порушення лишається відмовою.
  */
-const allowingLack = (login: PlatformLoginRole): PlatformLoginRole => ({
+export const allowingLack = (login: PlatformLoginRole): PlatformLoginRole => ({
   ...login,
   checkOnly: true,
 })

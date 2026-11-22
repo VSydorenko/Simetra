@@ -1,5 +1,6 @@
 import type { RuleCode, Severity } from "simetra/compiler"
 import type { CatalogModel, DatabaseProvider } from "simetra/model"
+import type { ExecuteFacts } from "../reverse/execute-facts"
 
 /** Адреса бази; пул і його життя — справа адаптера. */
 export interface DbConnection {
@@ -206,6 +207,16 @@ export type ShadowOutcome<T> =
 export interface SchemaEngine {
   readonly identity: EngineIdentity
   extract(db: DbConnection, scope: EngineScope): Promise<Extracted>
+  /**
+   * Extract разом з фактами `EXECUTE` з каталогу, прочитаними в тому самому
+   * знімку бази (одна транзакція, один клієнт): факти, прочитані окремим
+   * з'єднанням, могли б не збігтися з extract після проміжної зміни прав
+   * (спека декларацій функцій §5.5, Р11). Нічого не лишає на цілі.
+   */
+  extractWithExecuteFacts(
+    db: DbConnection,
+    scope: EngineScope
+  ): Promise<{ extracted: Extracted; facts: ExecuteFacts }>
   /**
    * Чисто, без бази: обидва каталоги несуть усе, що потрібно двигуну. Опції
    * плану (роль, можливості, профіль) беруться з `source`, а з `optionsFrom` —

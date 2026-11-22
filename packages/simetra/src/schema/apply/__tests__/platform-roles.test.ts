@@ -63,6 +63,7 @@ const row = (
 
 const RUNTIME = PLATFORM_LOGIN_ROLES.runtime
 const COMMAND = PLATFORM_ROLES.command
+const FILES = PLATFORM_ROLES.files
 
 /** Рядок `pg_auth_members` ролі входу: типово — пара §6.2 від `postgres`. */
 const pair = (role: string, over: Partial<Membership> = {}): Membership => ({
@@ -526,7 +527,7 @@ describe("platformRoleRefusals", () => {
     (requestRole) => {
       const runtime = {
         name: RUNTIME,
-        memberOf: [COMMAND, "simetra_user", "simetra_anon"],
+        memberOf: [COMMAND, FILES, "simetra_user", "simetra_anon"],
       }
       const found = [
         row({ requestPath: ["tagged_intermediary"] }),
@@ -550,7 +551,14 @@ describe("platformRoleRefusals", () => {
 /** Роль входу без провайдера: лише звірка за об'єднанням батьків усіх профілів. */
 const CHECK_RUNTIME = {
   name: RUNTIME,
-  memberOf: ["anon", "authenticated", "simetra_anon", COMMAND, "simetra_user"],
+  memberOf: [
+    "anon",
+    "authenticated",
+    "simetra_anon",
+    COMMAND,
+    FILES,
+    "simetra_user",
+  ],
   checkOnly: true as const,
 }
 
@@ -740,7 +748,10 @@ describe("platformRoleSet", () => {
     expect(platformRoleSet("supabase")).toEqual({
       names: Object.values(PLATFORM_ROLES),
       login: [
-        { name: RUNTIME, memberOf: [COMMAND, "authenticated", "anon"] },
+        {
+          name: RUNTIME,
+          memberOf: [COMMAND, FILES, "authenticated", "anon"],
+        },
         {
           name: PLATFORM_LOGIN_ROLES.signals,
           memberOf: [PLATFORM_ROLES.signalConsumer],
@@ -754,7 +765,7 @@ describe("platformRoleSet", () => {
       login: [
         {
           name: RUNTIME,
-          memberOf: [COMMAND, "simetra_user", "simetra_anon"],
+          memberOf: [COMMAND, FILES, "simetra_user", "simetra_anon"],
         },
         {
           name: PLATFORM_LOGIN_ROLES.signals,
@@ -1115,6 +1126,7 @@ describe("ensurePlatformRoles", () => {
         created: [
           { server: "target", name: COMMAND, outcome: "created" },
           { server: "target", name: CONSUMER, outcome: "created" },
+          { server: "target", name: FILES, outcome: "created" },
           { server: "target", name: RUNTIME, outcome: "created" },
           { server: "target", name: SIGNALS, outcome: "created" },
         ],
@@ -1129,7 +1141,7 @@ describe("ensurePlatformRoles", () => {
       )
       writes.length = 0
       expect(await ensurePlatformRoles(dbs, [BOTH[0]!], roles)).toEqual({
-        created: [COMMAND, CONSUMER, RUNTIME, SIGNALS].map((name) => ({
+        created: [COMMAND, CONSUMER, FILES, RUNTIME, SIGNALS].map((name) => ({
           server: "target",
           name,
           outcome: "present",
@@ -1158,6 +1170,7 @@ describe("ensurePlatformRoles", () => {
         created: [
           { server: "target", name: COMMAND, outcome: "present" },
           { server: "target", name: CONSUMER, outcome: "present" },
+          { server: "target", name: FILES, outcome: "created" },
           { server: "target", name: RUNTIME, outcome: "created" },
         ],
         refusal: [

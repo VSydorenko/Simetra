@@ -1,3 +1,4 @@
+import { PINNED_SESSION_SETTINGS } from "simetra/model"
 import type { EngineSetting } from "../engine"
 import type { ApplyTransaction } from "./port"
 
@@ -80,24 +81,15 @@ export const RAISE_SYNCHRONOUS_COMMIT_PLPGSQL = `PERFORM ${RAISE_SYNCHRONOUS_COM
 /**
  * Закріплені налаштування даних: під ними йдуть кроки даних і заміри
  * збереження «до» й «після», тож репетиція й робота рахують вирази й текст
- * значень однаково. Перелік і причини — спека промоції §7.2 «Закріплені
- * налаштування даних»; тест звіряє цей перелік із нею.
+ * значень однаково. Налаштування значень — спільний набір платформи
+ * `PINNED_SESSION_SETTINGS` (T0; його ж фіксує оболонка кореня голови), а
+ * власні правила кроків даних — шлях пошуку й обхід RLS. Перелік і причини —
+ * спека промоції §7.2 «Закріплені налаштування даних»; тест звіряє цей
+ * перелік із нею.
  */
 export const DATA_SETTINGS: readonly EngineSetting[] = [
   { name: "search_path", value: "pg_catalog, pg_temp" },
-  { name: "TimeZone", value: "UTC" },
-  { name: "DateStyle", value: "ISO, MDY" },
-  { name: "IntervalStyle", value: "postgres" },
-  { name: "extra_float_digits", value: "1" },
-  { name: "bytea_output", value: "hex" },
-  { name: "lc_monetary", value: "C" },
-  { name: "timezone_abbreviations", value: "Default" },
-  { name: "standard_conforming_strings", value: "on" },
-  { name: "array_nulls", value: "on" },
-  { name: "transform_null_equals", value: "off" },
-  { name: "quote_all_identifiers", value: "off" },
-  { name: "xmloption", value: "content" },
-  { name: "xmlbinary", value: "base64" },
+  ...PINNED_SESSION_SETTINGS,
   { name: "row_security", value: "off" },
 ]
 

@@ -15,6 +15,12 @@ export interface BuiltinExclusion {
    * згенерованого переліку), а не перелічує рука.
    */
   derived?: "regclassParameter"
+  /**
+   * Виклик лишає стан сесії, що переживає транзакцію (сесійний замок, зерно
+   * `random()`): у сесії пулу його успадкує наступна команда, тож такий клас
+   * поза переліком і тіла функції, не лише голови (спека прав §6.1).
+   */
+  outlivesTransaction?: true
 }
 
 /**
@@ -59,6 +65,20 @@ export const BUILTIN_EXCLUSIONS: readonly BuiltinExclusion[] = [
       "pg_advisory_unlock",
       "pg_try_advisory_lock",
     ],
+    outlivesTransaction: true,
+  },
+  // Зерно генератора `random()` і сесія походження реплікації належать
+  // сесії, а не транзакції: відкат команди їх не повертає, і в сесії пулу їх
+  // успадкує наступна команда.
+  {
+    reason: "changes session state beyond the transaction",
+    names: [
+      "setseed",
+      "pg_replication_origin_session_setup",
+      "pg_replication_origin_session_reset",
+    ],
+    prefixes: [],
+    outlivesTransaction: true,
   },
   // Файли сервера (конфігурація, керуючий файл, підсумки WAL), журнали,
   // каталог даних і пам'ять сервера — поза межею даних застосунку.
@@ -175,28 +195,6 @@ export const BUILTIN_EXCLUSIONS: readonly BuiltinExclusion[] = [
   },
 ]
 
-// Голова читає лише відношення, які називає дерево (спека прав §5.3), а ці вбудовані
-// називають відношення текстом (`has_table_privilege('auth.users', …)`,
-// `to_regclass('x.y')`): збирач відношень такого імені не бачить. Поза
-// головою вони лишаються в переліку — подання й політики прийнятих баз їх
-// уживають, а видно з них лише метадані (відомі обмеження плану). Ручний
-// перелік з рев'ю: аргумент типу `text` каталог за роллю не розрізняє.
-/**
- * Builtins that name a relation by a text argument: refused in heads only.
- */
-export const HEAD_EXCLUDED_BUILTINS: readonly string[] = [
-  "has_any_column_privilege",
-  "has_column_privilege",
-  "has_sequence_privilege",
-  "has_table_privilege",
-  "pg_get_object_address",
-  "pg_get_serial_sequence",
-  "pg_get_viewdef",
-  "regclass",
-  "regclassin",
-  "to_regclass",
-]
-
 /**
  * Імена класу `regclassParameter`: генератор — свіжі з каталогу, решта —
  * `REGCLASS_BUILTINS` згенерованого переліку. Модуль без імпортів, тож
@@ -221,6 +219,18 @@ export function excludedBuiltin(
 ): boolean {
   return BUILTIN_EXCLUSIONS.some((exclusion) =>
     matches(exclusion, name, regclass)
+  )
+}
+
+/**
+ * Чи лишає вбудована функція з цим ім'ям стан сесії, що переживає транзакцію
+ * (клас з `outlivesTransaction`, спека прав §6.1).
+ */
+export function outlivesTransaction(name: string): boolean {
+  return BUILTIN_EXCLUSIONS.some(
+    (exclusion) =>
+      exclusion.outlivesTransaction === true &&
+      matches(exclusion, name, new Set())
   )
 }
 

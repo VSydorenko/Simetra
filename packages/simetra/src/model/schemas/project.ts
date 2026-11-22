@@ -303,6 +303,7 @@ export const PROVIDER_EXPRESSION_FUNCTIONS: Readonly<
 export const PLATFORM_ROLES = {
   command: "simetra_command",
   signalConsumer: "simetra_signal_consumer",
+  files: "simetra_files",
 } as const
 
 /**
@@ -355,14 +356,90 @@ export const SESSION_CLAIMS_SETTING = "request.jwt.claims"
  */
 export const PLATFORM_SETTING_PREFIX = "simetra."
 
+// `search_path`: definer-функція застосунку з порожнім шляхом пошуку, що змінила
+// його в тілі, кликала б функцію платформи без схеми повз `checkPlatformCalls`,
+// який судить лише кваліфікований `simetra.*` (спека прав §5.3). Опція оболонки
+// `CREATE … SET search_path = ''` — не запис: її судить `closed-forms`.
 /**
  * Session settings that application SQL must never change: name prefixes
  * (case-insensitive) and exact names.
  */
 export const PROTECTED_SESSION_SETTINGS = {
   prefixes: [PLATFORM_SETTING_PREFIX, "request.jwt."],
-  names: ["role", "session_authorization", "session_replication_role"],
+  names: [
+    "role",
+    "session_authorization",
+    "session_replication_role",
+    "search_path",
+  ],
 } as const
+
+// Голова читає налаштування сесії лише за точною назвою (ADR-0094 п. 2):
+// префікс `request.jwt.` пропустив би `request.jwt.claim.sub` старої форми
+// PostgREST чи будь-яке ім'я, яке поставив клієнт. Назв `simetra.*` тут
+// немає, доки їх не читає функція ідентичності платформи: контекст команди
+// (`COMMAND_SETTING`) голові не призначений.
+/**
+ * Session settings that the SQL of a head may read with `current_setting`:
+ * exact, case-sensitive names, not prefixes.
+ */
+export const HEAD_READABLE_SETTINGS: readonly string[] = [
+  SESSION_CLAIMS_SETTING,
+]
+
+// Одне джерело для двох споживачів: оболонка кореня голови (T1, спека
+// декларацій функцій §5.8) і закріплені налаштування кроків даних промоції
+// (T2 `DATA_SETTINGS`, спека промоції §7.2). Обидва мусять читати й писати
+// значення однаково незалежно від сесії клієнта, тож і набір, і значення
+// спільні; повноту проти `pg_settings` тримає DB-тест
+// обох профілів поруч із `packages/simetra/test/db/head-settings.support.ts`.
+// Налаштувань-заглушок модулів (`plpgsql.*`) тут немає: у `SET` функції їх
+// приймає лише суперкористувач, поки модуль не завантажено. `search_path` сюди не
+// входить: його кожен споживач ставить своїм правилом.
+/**
+ * Session settings that change how values are parsed, computed or rendered
+ * as text, with the neutral value the platform pins them to wherever a
+ * result must not depend on the client's session.
+ */
+export const PINNED_SESSION_SETTINGS: readonly {
+  name: string
+  value: string
+}[] = [
+  // Приведення `timestamptz` до дати, часу й тексту.
+  { name: "TimeZone", value: "UTC" },
+  // Порядок полів при розборі дати з тексту й форма дати в тексті.
+  { name: "DateStyle", value: "ISO, MDY" },
+  // Текстова форма інтервалу.
+  { name: "IntervalStyle", value: "postgres" },
+  // Текстова форма `real` і `double precision`.
+  { name: "extra_float_digits", value: "1" },
+  // Текстова форма `bytea`.
+  { name: "bytea_output", value: "hex" },
+  // Розбір і текстова форма `money`.
+  { name: "lc_monetary", value: "C" },
+  // Роздільники чисел у `to_char`/`to_number`.
+  { name: "lc_numeric", value: "C" },
+  // Назви місяців і днів у `to_char`.
+  { name: "lc_time", value: "C" },
+  // Які скорочення поясів розпізнає розбір часу.
+  { name: "timezone_abbreviations", value: "Default" },
+  // Зміст зворотної скісної риски в рядкових літералах.
+  { name: "standard_conforming_strings", value: "on" },
+  // Чи `NULL` без лапок у тексті масиву є порожнім значенням.
+  { name: "array_nulls", value: "on" },
+  // `x = NULL` лишається `NULL`, а не стає `x IS NULL`.
+  { name: "transform_null_equals", value: "off" },
+  // Лапки в іменах `quote_ident`, `format('%I')` і тексту `regclass`.
+  { name: "quote_all_identifiers", value: "off" },
+  // Розбір тексту в `xml`.
+  { name: "xmloption", value: "content" },
+  // Кодування двійкових значень у функціях XML.
+  { name: "xmlbinary", value: "base64" },
+  // Конфігурація текстового пошуку без явного аргументу.
+  { name: "default_text_search_config", value: "pg_catalog.simple" },
+  // Межа кількості рядків пошуку за індексом GIN: інакше результат неповний.
+  { name: "gin_fuzzy_search_limit", value: "0" },
+]
 
 /** The command context: the action, the root object's label and the root row's UUID. */
 export interface CommandContext {
@@ -372,6 +449,14 @@ export interface CommandContext {
   root: string
 }
 /**
+ * Ключі `PLATFORM_ROLES`, що не є призначеннями гранту: права `signalConsumer`
+ * (outbox) і `files` (функції сховища файлів) пише власний генератор явним
+ * `GRANT`, тож декларація застосунку їх не адресує. Одна стала для типу
+ * `PlatformRolePurpose` і фільтра `callersOfRole`.
+ */
+export const PLATFORM_ROLES_NOT_PURPOSES = ["signalConsumer", "files"] as const
+
+/**
  * Призначення гранту згенерованого SQL серед ролей платформи — лише роль
  * команд: вона виконує функції прав і команди, DML таблиць виду не має. Група
  * споживача сигналів (`signalConsumer`) призначенням не є: її права — лише на
@@ -379,7 +464,7 @@ export interface CommandContext {
  */
 export type PlatformRolePurpose = Exclude<
   keyof typeof PLATFORM_ROLES,
-  "signalConsumer"
+  (typeof PLATFORM_ROLES_NOT_PURPOSES)[number]
 >
 /** Отримувач гранту згенерованого SQL: роль API провайдера чи платформи. */
 export type GrantPurpose = ApiRolePurpose | PlatformRolePurpose
@@ -478,7 +563,8 @@ export type PlatformLoginPurpose = keyof typeof PLATFORM_LOGIN_ROLES
 /**
  * Дозволені батьки кожної ролі входу платформи (спека профілю postgres §3.1):
  * `command` — роль команд, `request` — ролі запиту профілю за
- * `LOGIN_ROLE_REQUEST_PURPOSES`, `signalConsumer` — група споживача сигналів.
+ * `LOGIN_ROLE_REQUEST_PURPOSES`, `signalConsumer` — група споживача сигналів,
+ * `files` — роль сховища файлів (`file_attach`).
  * Гейт ролей звіряє кожну роль входу за її рядком, а не за спільною
  * множиною: інакше роль входу сигналів з членством у ролі команд пройшла б
  * гейт, і витік DSN споживача дав би роль команд.
@@ -486,9 +572,9 @@ export type PlatformLoginPurpose = keyof typeof PLATFORM_LOGIN_ROLES
 export const LOGIN_ROLE_PARENTS: Readonly<
   Record<
     PlatformLoginPurpose,
-    readonly ("command" | "request" | "signalConsumer")[]
+    readonly ("command" | "request" | "signalConsumer" | "files")[]
   >
-> = { runtime: ["command", "request"], signals: ["signalConsumer"] }
+> = { runtime: ["command", "files", "request"], signals: ["signalConsumer"] }
 
 /**
  * Налаштування ролі входу (`ALTER ROLE … SET`): Centrifugo не вміє `SET ROLE`,
@@ -508,6 +594,7 @@ export function loginRoleParentNames(
   return LOGIN_ROLE_PARENTS[purpose].flatMap((parent) => {
     if (parent === "command") return [PLATFORM_ROLES.command]
     if (parent === "signalConsumer") return [PLATFORM_ROLES.signalConsumer]
+    if (parent === "files") return [PLATFORM_ROLES.files]
     return LOGIN_ROLE_REQUEST_PURPOSES[provider].map(
       (request) => PROVIDER_API_ROLES[provider][request]
     )

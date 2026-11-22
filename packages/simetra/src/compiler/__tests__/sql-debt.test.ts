@@ -9,6 +9,16 @@ import {
   salesDocument,
   uuid,
 } from "./helpers"
+import {
+  DOCS_GRANT,
+  POLICY_DEBT,
+  POLICY_FUNCTION,
+  POLICY_SHELL,
+  POLICY_SQL,
+  READ_POLICY,
+  SQL_DEBT,
+  policyFiles,
+} from "./fixtures/policy-function"
 
 const SALE_SQL = "documents/Sale/Sale.sql"
 const TABLE_SQL = "custom-tables/T/T.sql"
@@ -309,5 +319,57 @@ describe("declared functions are never debt", () => {
       ...declared,
     })
     expect(found.map((d) => [d.code, d.file])).toEqual(expected)
+  })
+})
+
+describe("debt ratchet: policy functions (І7)", () => {
+  // Функція політики — форма платформи (`ruledFunctions`): боргом не буває
+  // навіть поза закритою оболонкою (її помилку дає `sql.closed-shell`), а
+  // політики-викликачі й гранти прийнятої таблиці лишаються боргом.
+  const FUNCTION = "function:public.f()"
+  const codes = async (sql: string, debt: readonly string[]) =>
+    (await compile(policyFiles(sql, debt))).diagnostics.map((d) => [
+      d.code,
+      d.file,
+      d.params?.identity ?? d.params?.reason ?? d.params?.problem,
+    ])
+  const CALLERS = READ_POLICY() + DOCS_GRANT()
+
+  it("the caller policy stays debt", async () => {
+    expect(await codes(POLICY_FUNCTION() + CALLERS, POLICY_DEBT([]))).toEqual([
+      ["sql.debt-grows", POLICY_SQL, "policy:public.docs.docs_read"],
+    ])
+  })
+
+  it("a repair function in the debt list is accepted debt with its repair error", async () => {
+    // Без ключового слова волатильності функція поза оболонкою — борг, а
+    // форма функції політики — ремонт (`volatility`).
+    const shell = POLICY_FUNCTION({
+      shell: "SECURITY DEFINER SET search_path = ''",
+    })
+    expect(
+      await codes(shell + CALLERS, [...POLICY_DEBT(), FUNCTION].sort())
+    ).toEqual([["sql.policy-helper-correlated", POLICY_SQL, "volatility"]])
+  })
+
+  it("a function rewritten into the form leaves the list: sql.debt-stale", async () => {
+    expect(
+      await codes(
+        POLICY_FUNCTION() + CALLERS,
+        [...POLICY_DEBT(), FUNCTION].sort()
+      )
+    ).toEqual([["sql.debt-stale", SQL_DEBT, FUNCTION]])
+  })
+
+  it("a policy function outside the closed shell is no debt but sql.closed-shell", async () => {
+    const open = POLICY_FUNCTION({
+      shell: POLICY_SHELL.replace("SET search_path = '' ", ""),
+    })
+    expect(
+      await codes(open + CALLERS, [...POLICY_DEBT(), FUNCTION].sort())
+    ).toEqual([
+      ["sql.debt-stale", SQL_DEBT, FUNCTION],
+      ["sql.closed-shell", POLICY_SQL, "searchPath"],
+    ])
   })
 })

@@ -132,6 +132,7 @@ describe("tool catalog", TOOL_PIPELINE, () => {
       "create",
       "data-command",
       "data-read",
+      "declare-function",
       "delete",
       "diff",
       "explain",
@@ -186,6 +187,58 @@ describe("tool catalog", TOOL_PIPELINE, () => {
       reason: "refused",
       message: "Object not found: Catalog Missing",
     })
+  })
+
+  it("explain describes a declared SQL function by schema and name", async () => {
+    const dir = await project()
+    await writeFile(
+      join(dir, "sql/app/rpc.sql"),
+      "CREATE FUNCTION app.rpc() RETURNS int LANGUAGE sql STABLE SECURITY INVOKER SET search_path = '' AS $$ SELECT 1 $$;\n"
+    )
+    await writeFile(
+      join(dir, "sql/app/rpc.functions.json"),
+      JSON.stringify({
+        functions: [
+          {
+            id: "00000000-0000-4000-8000-00000000f001",
+            function: { schema: "app", name: "rpc" },
+            callers: ["user"],
+          },
+        ],
+      })
+    )
+    const r = await invoke(
+      toolByName("explain")!,
+      { function: { schema: "app", name: "rpc" } },
+      opts(dir)
+    )
+    expect(r.ok).toBe(true)
+    expect(r.data).toMatchObject({
+      function: { schema: "app", name: "rpc" },
+      callers: ["user"],
+      state: "none",
+    })
+    const missing = await invoke(
+      toolByName("explain")!,
+      { function: { schema: "app", name: "nope" } },
+      opts(dir)
+    )
+    expect(missing.refusal).toEqual({
+      reason: "refused",
+      message: "Function not found: app.nope",
+    })
+  })
+
+  it("explain takes exactly one of the two forms", async () => {
+    const dir = await project()
+    for (const input of [
+      {},
+      { kind: "Catalog" },
+      { kind: "Catalog", name: "Currency", function: { name: "f" } },
+    ]) {
+      const r = await invoke(toolByName("explain")!, input, opts(dir))
+      expect(r.refusal?.reason).toBe("invalid-input")
+    }
   })
 
   it("explain of metadata with errors reports diagnostics", async () => {

@@ -70,6 +70,7 @@ const entryOf = (o: RuntimeObject): CatalogEntry => ({
   kernelHash: o.kernelHash,
   signal: o.signal,
   ...present("publicRead", o.publicRead),
+  ...present("storage", o.storage),
   ...present("rights", o.rights),
   ...present("presentation", o.presentation),
   attributes: o.attributes.map(attributeOf),

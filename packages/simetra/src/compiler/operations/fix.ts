@@ -1,4 +1,5 @@
 import {
+  FUNCTIONS_FILE_SUFFIX,
   KIND_REGISTRY,
   MAX_PHYSICAL_NAME_BYTES,
   SQL_DEBT_FILE,
@@ -16,12 +17,15 @@ import {
 import {
   compile,
   currentDebt,
+  formPolicies,
   verbatimUnits,
   type CompiledModel,
 } from "../compile"
 import { derivedFunctionLabels } from "../contracts"
 import {
   diagnostic,
+  isRepairError,
+  repairKeys,
   sortDiagnostics,
   type Diagnostic,
   type RepairKey,
@@ -43,10 +47,16 @@ import {
 import { PROJECT_FILE } from "../stages/files"
 import { DERIVED_TABLE_LABELS } from "../stages/model"
 import { ownsWholeGrant } from "../function-execute"
+import { readFiles } from "../pipeline"
 import { acceptsRepair } from "./refuse"
-import { loadSqlParser } from "../sql/parse"
+import {
+  cutDefaultPrivileges,
+  insertGuards,
+  locateUnit,
+  withFunctionIds,
+} from "./fix-repair"
+import { toPlatformForms } from "./platform-forms"
 import { applyEdits, type TextEdit } from "../sql/rewrite/renames"
-import { statementPositions } from "../sql/units"
 import { changesBetween } from "./changes"
 import { cut, mergeDeletions } from "./text-edits"
 import type { OperationResult } from "./types"
@@ -488,7 +498,8 @@ export function completeFiles(
  * (`compileInput` з `repair`): результат компілюється в тому ж режимі, і
  * прийнятий за `acceptsRepair` несе `written` (спека декларацій функцій §5.1).
  * `notes` — діагностики самої мутації (перехід у форму платформи), що
- * стають поряд із діагностиками компіляції результату.
+ * стають поряд із діагностиками компіляції результату. `allow` — виняток
+ * `acceptsRepair` (див. там).
  */
 export async function completeAndCompile(
   before: ReadonlyMap<string, string>,
@@ -496,14 +507,16 @@ export async function completeAndCompile(
   o: CompletionOptions,
   only?: ReadonlySet<string>,
   repair?: readonly RepairKey[],
-  notes: readonly Diagnostic[] = []
+  notes: readonly Diagnostic[] = [],
+  allow?: (d: Diagnostic) => boolean
 ): Promise<OperationResult> {
   const completed = completeFiles(after, o, only)
   return (
     await compileCompletion(
       before,
       { ...completed, diagnostics: [...completed.diagnostics, ...notes] },
-      repair
+      repair,
+      allow
     )
   ).result
 }
@@ -538,14 +551,17 @@ export async function completeNarrowAndCompile(
 async function compileCompletion(
   before: ReadonlyMap<string, string>,
   completed: CompletionResult,
-  repair?: readonly RepairKey[]
+  repair?: readonly RepairKey[],
+  allow?: (d: Diagnostic) => boolean
 ): Promise<CompiledCompletion> {
   const compiled = await compile(
     completed.files,
     repair === undefined ? {} : { repair: true }
   )
   const written =
-    repair !== undefined && !compiled.ok && acceptsRepair(repair, compiled)
+    repair !== undefined &&
+    !compiled.ok &&
+    acceptsRepair(repair, compiled, allow)
   return {
     result: {
       ok: compiled.ok,
@@ -581,7 +597,7 @@ export function sqlDebtText(
  * перелік уже порожній. Перелік не тієї форми чи тека, чий борг не відомий,
  * лишають файл як є: причину назве компіляція.
  */
-async function narrowDebt(
+export async function narrowDebt(
   files: ReadonlyMap<string, string>,
   schemaPath: SchemaPathResolver
 ): Promise<Map<string, string>> {
@@ -617,24 +633,89 @@ async function narrowDebt(
  * справа — лагодити саме вхід. `changes` — лише файли зі зміненим текстом.
  * Борг рахується над доповненою текою: типи рядків таблиць, від яких
  * залежать ідентичності функцій, з'являються лише з id і фізичними іменами.
+ *
+ * Режим ремонту (спека декларацій функцій §5.6, Р2): після механічного
+ * доповнення (і `id` записам `.functions.json`) `fix` лагодить клас ремонту —
+ * (г) декларація функції, що стала формою платформи, (д) вирізання ADP на
+ * функції, (в) запобіжник виклику з `check`. Результат з помилками класу
+ * ремонту несе `written`, якщо не додав нових, прибрав хоча б одну й не має
+ * помилок поза класом.
  */
 export async function fixFiles(
   files: ReadonlyMap<string, string>,
   o: CompletionOptions
 ): Promise<OperationResult> {
   const completed = completeFiles(files, o)
+  const identified = withFunctionIds(completed.files, o.newId)
   // Застарілий запис боргу закрив би компіляцію раніше за перевірку грантів,
   // тож перелік звужено до вирізу; після вирізу — ще раз, без вирізаних.
-  const narrowed = await narrowDebt(completed.files, o.schemaPath)
+  const narrowed = await narrowDebt(identified, o.schemaPath)
   const withoutGrants = await withoutGeneratedGrants(narrowed)
-  const { result } = await compileCompletion(files, {
-    ...completed,
-    files:
-      withoutGrants === narrowed
-        ? narrowed
-        : await narrowDebt(withoutGrants, o.schemaPath),
+  const prepared =
+    withoutGrants === narrowed
+      ? narrowed
+      : await narrowDebt(withoutGrants, o.schemaPath)
+
+  // Опорний стан: помилки класу ремонту після механічних кроків. Кроки
+  // ремонту мають прибрати хоча б одну з них і не додати жодної нової.
+  const baseline = await compile(prepared, { repair: true })
+  const accepted = repairKeys(baseline.diagnostics)
+
+  // (г) Перехід у форму платформи: запис, що розширив би `EXECUTE`, лишається
+  // (автоматичний ремонт права не розширює), попередження каже, що
+  // декларацію не видалено.
+  const forms = toPlatformForms(prepared, await formPolicies(prepared), {
+    declineWidening: true,
   })
-  return result
+  const declined = forms.diagnostics
+  let repaired = new Map(prepared)
+  for (const path of prepared.keys()) {
+    if (!path.endsWith(FUNCTIONS_FILE_SUFFIX)) continue
+    const next = forms.files.get(path)
+    if (next === undefined) repaired.delete(path)
+    else repaired.set(path, next)
+  }
+  const flagged =
+    repaired.size === prepared.size &&
+    [...prepared].every(([path, text]) => repaired.get(path) === text)
+      ? baseline.diagnostics
+      : (await compile(repaired, { repair: true })).diagnostics
+  const provider = readFiles(repaired).project?.database.provider
+  // (д) раніше за (в): вирізання шукає одиницю за рядком з `flagged`, а
+  // вставка запобіжника зсунула б рядки (вона сама перечитує одиниці).
+  if (provider !== undefined) {
+    repaired = await cutDefaultPrivileges(repaired, flagged, provider)
+  }
+  repaired = await insertGuards(repaired, flagged)
+  const final =
+    repaired === prepared ? prepared : await narrowDebt(repaired, o.schemaPath)
+
+  const { result } = await compileCompletion(
+    files,
+    {
+      ...completed,
+      diagnostics: [...completed.diagnostics, ...declined],
+      files: final,
+    },
+    accepted
+  )
+  if (result.written !== true) return result
+  const keys = repairKeys(result.diagnostics)
+  const outside = result.diagnostics.some(
+    (d) => d.severity === "error" && !isRepairError(d)
+  )
+  const removed = accepted.some(
+    (a) =>
+      !keys.some(
+        (k) => k.code === a.code && k.schema === a.schema && k.name === a.name
+      )
+  )
+  if (!outside && removed) return result
+  return {
+    ok: result.ok,
+    changes: result.changes,
+    diagnostics: result.diagnostics,
+  }
 }
 
 /**
@@ -643,15 +724,16 @@ export async function fixFiles(
  * лише суперечить їй і виправлення в нього одне. Виріз — той самий, що в
  * промоції; файл, у якому лишились самі пробіли, видаляється.
  */
-async function withoutGeneratedGrants(
+export async function withoutGeneratedGrants(
   files: Map<string, string>
 ): Promise<Map<string, string>> {
-  const flagged = (await compile(files)).diagnostics.filter(
+  // Режим ремонту: у теці з помилками класу ремонту стадії до моделі
+  // закриті, і `sql.generated-grant` без нього не виникає зовсім.
+  const flagged = (await compile(files, { repair: true })).diagnostics.filter(
     (d) => d.code === "sql.generated-grant"
   )
   if (flagged.length === 0) return files
   const units = await verbatimUnits(files)
-  const parse = await loadSqlParser()
   const edits = new Map<string, TextEdit[]>()
   for (const d of flagged) {
     const unit = units.find(
@@ -669,9 +751,7 @@ async function withoutGeneratedGrants(
       !ownsWholeGrant(d.params?.object, unit.name)
     )
       continue
-    const position = statementPositions(text, parse).find(
-      (p) => p.line === unit.line && text.slice(p.start, p.end) === unit.sql
-    )
+    const position = locateUnit(text, unit)
     if (position === undefined) continue
     edits.set(d.file, [
       ...(edits.get(d.file) ?? []),

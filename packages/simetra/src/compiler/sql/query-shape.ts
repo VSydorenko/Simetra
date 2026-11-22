@@ -1,5 +1,9 @@
 import type { Node } from "libpg-query"
-import { hasEffectiveEmptySearchPath, routineLanguage } from "./closed-forms"
+import {
+  hasEffectiveEmptySearchPath,
+  routineLanguage,
+  setsPinnedValue,
+} from "./closed-forms"
 import type { SqlParser } from "./parse"
 import type { VerbatimUnit } from "./units"
 
@@ -87,7 +91,10 @@ export function sqlBodyText(
  * виправлення: мова `sql`, рядкове тіло (тіло стандарту SQL зв'язує імена
  * під час створення з `search_path` сесії), ефективний порожній
  * `search_path`, жодної іншої опції `SET` (опція `SET request.jwt.claims`
- * ланки підмінила б claims на час її виконання) і тіло — рівно один `SELECT`
+ * ланки підмінила б claims на час її виконання), крім налаштувань, які
+ * фіксує корінь голови (`PINNED_SESSION_SETTINGS`), рівно в їхні значення — ланка
+ * виконується вже в них, тож інше значення змінило б місцевий час і текст
+ * дат посеред голови, — і тіло — рівно один `SELECT`
  * без побічних ефектів. Виклики й відношення тут не судяться.
  */
 export function queryFunctionProblems(
@@ -118,7 +125,8 @@ export function queryFunctionProblems(
       set === undefined ||
       set.kind === "VAR_RESET" ||
       set.kind === "VAR_RESET_ALL" ||
-      set.name?.toLowerCase() === "search_path"
+      set.name?.toLowerCase() === "search_path" ||
+      setsPinnedValue(set)
     ) {
       continue
     }

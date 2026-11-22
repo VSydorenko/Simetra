@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest"
 import { compile } from "simetra/compiler"
-import { readFiles } from "../pipeline"
+import { readFiles, sqlStage } from "../pipeline"
+import { checkDefinerReads } from "../sql/definer-reads"
+import { loadSqlParser } from "../sql/parse"
+import { loadPlpgsqlParser } from "../sql/plpgsql"
 import type { SqlFunctionDeclaration } from "simetra/model"
 import {
   checkDeclarations,
@@ -8,6 +11,14 @@ import {
   platformFormFunctions,
 } from "../sql/declarations"
 import type { VerbatimUnit } from "../sql/units"
+import {
+  DOCS_GRANT,
+  POLICY_DEBT,
+  POLICY_FUNCTION,
+  POLICY_SQL,
+  READ_POLICY,
+  policyFiles,
+} from "./fixtures/policy-function"
 import {
   COUNT_COMMENT_SQL_FILE,
   DIMENSION_SQL,
@@ -22,8 +33,11 @@ import {
   project,
   uuid,
 } from "./helpers"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 const SQL = "sql/public/fns.sql"
+/** Тека без функцій політик: предмет цих тестів — форми метаданих. */
+const NO_POLICIES = { functions: [], diagnostics: [], refused: [] }
 const FUNCTIONS = "sql/public/fns.functions.json"
 const OTHER_SQL = "sql/public/other.sql"
 const OTHER_FUNCTIONS = "sql/public/other.functions.json"
@@ -249,7 +263,14 @@ describe("declaration key: a (schema, name) pair", () => {
     },
   ])("are no duplicates or overloads $name", ({ files }) => {
     expect(
-      checkDeclarations(files, units, stage1.objects, stage1.project, new Set())
+      checkDeclarations(
+        files,
+        units,
+        stage1.objects,
+        stage1.project,
+        new Set(),
+        NO_POLICIES
+      )
     ).toEqual([])
   })
   it("platform forms keep both functions of a dotted pair", () => {
@@ -274,7 +295,7 @@ describe("declaration key: a (schema, name) pair", () => {
       })
     )
     expect(
-      [...platformFormFunctions(objects, parsed).values()].map(
+      [...platformFormFunctions(objects, parsed, NO_POLICIES).values()].map(
         (f) => f.function
       )
     ).toEqual([
@@ -339,8 +360,7 @@ describe("sql.declaration-platform-form", () => {
       name: "team_ids",
       file: SCOPE_FUNCTIONS_FILE,
       sql: {
-        [SCOPE_FUNCTIONS_FILE]:
-          "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n",
+        [SCOPE_FUNCTIONS_FILE]: `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`,
       },
       layers: [teamScopeKind()],
     },
@@ -632,5 +652,112 @@ describe("sql.default-privileges-execute", () => {
     "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO anon;",
   ])("does not judge %s", async (statement) => {
     expect(await adp({ [ADP_FILE]: `${statement}\n` })).toEqual([])
+  })
+})
+
+describe("a policy function and its declaration (І4)", () => {
+  const POLICY_FUNCTIONS = POLICY_SQL.replace(/\.sql$/, ".functions.json")
+
+  it("a declaration of a policy function is sql.declaration-platform-form", async () => {
+    const files = policyFiles(
+      POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT(),
+      POLICY_DEBT()
+    )
+    files.set(POLICY_FUNCTIONS, functionsFile(declaration({ name: "f" })))
+    expect(await declarationDiagnostics(files)).toEqual([
+      [
+        "sql.declaration-platform-form",
+        POLICY_FUNCTIONS,
+        "/functions/0",
+        { ...keyParams("public", "f"), form: "policyFunction" },
+      ],
+    ])
+  })
+
+  it("a definer function without a caller policy and without a declaration is sql.definer-caller-unchecked", async () => {
+    // Вихід із форми (спека декларацій функцій §5.8): остання
+    // політика-викликач зникла, і функція судиться як звичайна definer-функція.
+    const { diagnostics } = await compile(
+      policyFiles(POLICY_FUNCTION() + DOCS_GRANT(), POLICY_DEBT([]))
+    )
+    expect(diagnostics.map((d) => [d.code, d.params?.function])).toEqual([
+      ["sql.definer-caller-unchecked", "public.f"],
+    ])
+  })
+
+  // Одна функція — одна причина ремонту (§5.8): поки стоїть
+  // `sql.policy-helper-correlated`, `sql.definer-caller-unchecked` тієї самої
+  // функції не з'являється, а кожен шлях ремонту знімає обидва коди.
+  // Стан відмови: роль політики-викликача без `SELECT` на T (`policyRoles`).
+  const REFUSED =
+    POLICY_FUNCTION() +
+    READ_POLICY("authenticated, service_role") +
+    DOCS_GRANT()
+  // Режим ремонту веде стадії далі за помилками класу ремонту, тож без
+  // поглинання обидва коди тут стояли б поряд
+  const codesOf = async (files: Map<string, string>) =>
+    (await compile(files, { repair: true })).diagnostics.map((d) => [
+      d.code,
+      d.params?.function,
+      d.params?.reason,
+    ])
+
+  it("while sql.policy-helper-correlated stands, it absorbs sql.definer-caller-unchecked", async () => {
+    expect(await codesOf(policyFiles(REFUSED, POLICY_DEBT()))).toEqual([
+      ["sql.policy-helper-correlated", "public.f", "policyRoles"],
+    ])
+  })
+
+  it("the repair into the policy-function form clears both codes", async () => {
+    expect(
+      await codesOf(
+        policyFiles(
+          REFUSED + DOCS_GRANT("service_role"),
+          POLICY_DEBT(["docs_read"], ["authenticated", "service_role"])
+        )
+      )
+    ).toEqual([])
+  })
+
+  it("the repair into a declaration clears both codes", async () => {
+    // Політика більше не кличе функцію, а декларація без викликачів закриває
+    // її `EXECUTE`: це вже звичайна задекларована definer-функція
+    const files = policyFiles(POLICY_FUNCTION() + DOCS_GRANT(), POLICY_DEBT([]))
+    files.set(POLICY_FUNCTIONS, functionsFile(declaration({ name: "f" }, [])))
+    expect(await codesOf(files)).toEqual([])
+  })
+
+  it("the absorption is computed: a function without the refusal and without derived EXECUTE is sql.definer-caller-unchecked", async () => {
+    // Штучний стан «форму виправлено, ACL — ні»: функція у формі, але
+    // результат розпізнавання не несе ні її відмови, ні її виведеного
+    // `EXECUTE`. Постійне приглушення за самим викликом із політики тут
+    // мовчало б.
+    const stage1 = readFiles(
+      policyFiles(
+        POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT(),
+        POLICY_DEBT()
+      )
+    )
+    const parse = await loadSqlParser()
+    const plpgsql = await loadPlpgsqlParser()
+    const { sql, stage3, declared, policies } = sqlStage(stage1, parse, plpgsql)
+    expect(policies.functions.map((f) => f.function.name)).toEqual(["f"])
+    const unchecked = (given: typeof policies) =>
+      checkDefinerReads(
+        stage1.objects,
+        stage1.project!,
+        stage3!.physical,
+        sql.units,
+        parse,
+        plpgsql,
+        declared,
+        given
+      )
+        .filter((d) => d.code === "sql.definer-caller-unchecked")
+        .map((d) => d.params?.function)
+    expect(unchecked(policies)).toEqual([])
+    expect(unchecked({ functions: [], diagnostics: [], refused: [] })).toEqual([
+      "public.f",
+    ])
   })
 })

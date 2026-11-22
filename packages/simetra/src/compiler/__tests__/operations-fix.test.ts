@@ -5,8 +5,19 @@ import {
   fixFiles,
   type SchemaPathResolver,
 } from "simetra/compiler"
-import { formatMetaFile, metadataIdSchema } from "simetra/model"
+import {
+  formatMetaFile,
+  formatSqlFunctionsFile,
+  metadataIdSchema,
+} from "simetra/model"
+import { guardStatement } from "../operations/fix-repair"
 import { readReferenceDomain } from "./fixtures/reference-domain"
+import {
+  REASSIGN_ACTION_ID,
+  policyDomain,
+  withRoles,
+  writeRoles,
+} from "./fixtures/rights"
 import {
   expectClean,
   acceptDebt,
@@ -14,8 +25,10 @@ import {
   customTable,
   metaFiles,
   project,
+  SCOPE_FUNCTIONS_FILE,
   uuid,
 } from "./helpers"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 /** Детермінований джерело id у формі UUID v4: тести не залежать від випадку. */
 function counter(start = 900_000): () => string {
@@ -663,5 +676,638 @@ describe("applyChanges", () => {
       ["c", "3"],
     ])
     expect(files.get("b")).toBe("2")
+  })
+})
+
+describe("fixFiles: function declarations (repair mode)", () => {
+  const SQL = "sql/public/fns.sql"
+  const FUNCTIONS = "sql/public/fns.functions.json"
+  const CHECK = {
+    action: "read",
+    object: { kind: "Document" as const, name: "Task" },
+    row: "p_row",
+  }
+  const create = (
+    name: string,
+    body = "BEGIN PERFORM 1; END",
+    { head = "SECURITY DEFINER", lang = "plpgsql", literal = "$$" } = {}
+  ) =>
+    `CREATE FUNCTION public.${name}(p_row uuid) RETURNS void LANGUAGE ${lang} STABLE ${head} SET search_path = '' AS ${literal}${body}${literal};\n`
+  const declared = (name: string, check: unknown = CHECK, id?: string) => ({
+    ...(id === undefined ? {} : { id }),
+    function: { name },
+    callers: ["user"],
+    check,
+  })
+  const folder = (sql: string, functions?: unknown[], layer = withRoles) => {
+    const files = layer()
+    files.set(SQL, sql)
+    if (functions !== undefined) {
+      files.set(FUNCTIONS, JSON.stringify({ functions }))
+    }
+    return files
+  }
+  const sqlAfter = (files: Map<string, string>, result: { changes: never[] }) =>
+    applyChanges(files, result.changes).get(SQL)!
+  const errorCodes = (r: {
+    diagnostics: readonly { severity: string; code: string }[]
+  }) => r.diagnostics.filter((d) => d.severity === "error").map((d) => d.code)
+
+  describe("(а) ids of function declarations", () => {
+    it("assigns an id to every record without one and keeps the existing ones", async () => {
+      const files = folder(
+        create(
+          "f",
+          "BEGIN PERFORM simetra.rights_require('read', 'task', p_row); END"
+        ) +
+          create(
+            "g",
+            "BEGIN PERFORM simetra.rights_require('read', 'task', p_row); END"
+          ),
+        [declared("f"), declared("g", CHECK, uuid(5001))]
+      )
+      const result = await fixFiles(files, options())
+      expect(result.ok).toBe(true)
+      const records = (
+        JSON.parse(applyChanges(files, result.changes).get(FUNCTIONS)!) as {
+          functions: { function: { name: string }; id?: string }[]
+        }
+      ).functions
+      expect(records.map((r) => r.function.name)).toEqual(["f", "g"])
+      expect(metadataIdSchema.safeParse(records[0]!.id).success).toBe(true)
+      expect(records[1]!.id).toBe(uuid(5001))
+    })
+  })
+
+  describe("(в) the call guard (Б1)", () => {
+    it("inserts rights_require with the declared action, the kind label and the row parameter", async () => {
+      const files = folder(create("f"), [declared("f")])
+      const result = await fixFiles(files, options())
+      expect(sqlAfter(files, result as never)).toBe(
+        create(
+          "f",
+          "BEGIN PERFORM simetra.rights_require('read', 'task', p_row); PERFORM 1; END"
+        )
+      )
+      // Підсумок доводить `guardOf`: помилок немає зовсім.
+      expect(errorCodes(result)).toEqual([])
+      expect(result.ok).toBe(true)
+    })
+
+    it("puts the guard on its own line with the indent of the body", async () => {
+      const files = folder(create("f", "BEGIN\n  PERFORM 1;\nEND"), [
+        declared("f"),
+      ])
+      const result = await fixFiles(files, options())
+      expect(sqlAfter(files, result as never)).toBe(
+        create(
+          "f",
+          "BEGIN\n  PERFORM simetra.rights_require('read', 'task', p_row);\n  PERFORM 1;\nEND"
+        )
+      )
+      expect(result.ok).toBe(true)
+    })
+
+    it("a CRLF body gets the guard like an LF one", async () => {
+      const files = folder(create("f", "BEGIN\r\n  PERFORM 1;\r\nEND"), [
+        declared("f"),
+      ])
+      const result = await fixFiles(files, options())
+      expect(sqlAfter(files, result as never)).toBe(
+        create(
+          "f",
+          "BEGIN\r\n  PERFORM simetra.rights_require('read', 'task', p_row);\r\n  PERFORM 1;\r\nEND"
+        )
+      )
+      expect(errorCodes(result)).toEqual([])
+    })
+
+    it("a scope target gets rights_require_scope", async () => {
+      const files = folder(create("f").replace("p_row uuid", "p_org uuid"), [
+        declared("f", {
+          action: "create",
+          object: CHECK.object,
+          scope: "p_org",
+        }),
+      ])
+      const result = await fixFiles(files, options())
+      expect(errorCodes(result)).toEqual([])
+      expect(sqlAfter(files, result as never)).toContain(
+        "BEGIN PERFORM simetra.rights_require_scope('create', 'task', p_org);"
+      )
+    })
+
+    it("a check without a target gets NULL", async () => {
+      // Довідник без носіїв рядка: ціль для нього заборонена.
+      const files = folder(create("f"), [
+        declared("f", {
+          action: "read",
+          object: { kind: "Catalog", name: "Note" },
+        }),
+      ])
+      files.set(
+        "catalogs/Note/Note.meta.json",
+        JSON.stringify(catalog("Note", { scope: "none" }))
+      )
+      const result = await fixFiles(files, options())
+      expect(errorCodes(result)).toEqual([])
+      expect(sqlAfter(files, result as never)).toContain(
+        "BEGIN PERFORM simetra.rights_require('read', 'note', NULL);"
+      )
+    })
+
+    it("a custom action is written as its uuid, not its name", async () => {
+      const files = folder(
+        create("f"),
+        [declared("f", { ...CHECK, action: "reassign" })],
+        () => policyDomain(writeRoles())
+      )
+      const result = await fixFiles(files, options())
+      expect(errorCodes(result)).toEqual([])
+      expect(sqlAfter(files, result as never)).toContain(
+        `rights_require('${REASSIGN_ACTION_ID}', 'task', p_row);`
+      )
+    })
+
+    it("quotes a label with an apostrophe and a target that needs quotes", () => {
+      expect(
+        guardStatement(
+          { schema: "simetra", name: "rights_require" },
+          "read",
+          "o'brien",
+          "Row"
+        )
+      ).toBe("PERFORM simetra.rights_require('read', 'o''brien', \"Row\");")
+    })
+
+    it("takes the label and the action from the contract of the named object", async () => {
+      // Мітка — не вигадана: у тілі лежить саме `kindLabel` об'єкта check.
+      const files = folder(create("f"), [declared("f")])
+      files.set(
+        "documents/Task/Task.meta.json",
+        JSON.stringify({
+          ...JSON.parse(files.get("documents/Task/Task.meta.json")!),
+          kindLabel: "task_x",
+        })
+      )
+      const result = await fixFiles(files, options())
+      expect(sqlAfter(files, result as never)).toContain("'read', 'task_x'")
+    })
+  })
+
+  describe("(в) bodies fix does not touch (Б2)", () => {
+    const untouched = async (sql: string, check: unknown = CHECK) => {
+      const files = folder(sql, [declared("f", check, uuid(5101))])
+      const result = await fixFiles(files, options())
+      expect(applyChanges(files, result.changes).get(SQL)).toBe(sql)
+      return result
+    }
+
+    it.each([
+      ["DECLARE", create("f", "DECLARE v int; BEGIN PERFORM 1; END")],
+      [
+        "an outer EXCEPTION section",
+        create("f", "BEGIN PERFORM 1; EXCEPTION WHEN OTHERS THEN NULL; END"),
+      ],
+      [
+        "a guard with other arguments",
+        create(
+          "f",
+          "BEGIN PERFORM simetra.rights_require('create', 'task', p_row); END"
+        ),
+      ],
+      [
+        "a guard of the wrong form",
+        create(
+          "f",
+          "BEGIN PERFORM simetra.rights_require_scope('read', 'task', p_row); END"
+        ),
+      ],
+      [
+        "a guard that is not evaluated (WHERE false)",
+        create(
+          "f",
+          "BEGIN PERFORM simetra.rights_require('read', 'task', p_row) WHERE false; PERFORM 1; END"
+        ),
+      ],
+      [
+        "a guard call deeper in the body",
+        create(
+          "f",
+          "BEGIN PERFORM 1; IF true THEN PERFORM simetra.rights_require('read', 'task', p_row); END IF; END"
+        ),
+      ],
+      [
+        "a guard named by a unicode escape",
+        create(
+          "f",
+          "BEGIN PERFORM 1; PERFORM simetra.U&\"rights\\005frequire\"('read', 'task', p_row); END"
+        ),
+      ],
+      [
+        "a single-quoted body",
+        create("f", "BEGIN PERFORM 1; END", { literal: "'" }),
+      ],
+    ])(
+      "%s: the body stays byte for byte, the error stays",
+      async (_name, sql) => {
+        const result = await untouched(sql)
+        expect(result.ok).toBe(false)
+        // Хибний запобіжник судить ще й `platform-function-call`: помилка
+        // лишається в обох випадках, тіло — без змін (`untouched`).
+        expect(
+          errorCodes(result).some(
+            (code) =>
+              code === "sql.declaration-check-not-applied" ||
+              code === "sql.platform-function-call"
+          )
+        ).toBe(true)
+      }
+    )
+
+    it("a sql-language body is not touched", async () => {
+      const sql = create("f", " SELECT 1 ", { lang: "sql" })
+      const result = await untouched(sql)
+      expect(errorCodes(result)).toContain("sql.declaration-check-not-applied")
+    })
+
+    it("an invoker function is not touched", async () => {
+      const files = folder(create("f", "BEGIN PERFORM 1; END", { head: "" }), [
+        declared("f", undefined, uuid(5102)),
+      ])
+      const result = await fixFiles(files, options())
+      expect(result.changes.map((c) => c.path)).not.toContain(SQL)
+    })
+
+    it("the guard goes after the outer BEGIN, past a label and a comment with begin", async () => {
+      const files = folder(
+        create("f", "/* begin */ <<blk>> -- begin\nBEGIN PERFORM 1; END"),
+        [declared("f")]
+      )
+      const result = await fixFiles(files, options())
+      expect(sqlAfter(files, result as never)).toBe(
+        create(
+          "f",
+          "/* begin */ <<blk>> -- begin\nBEGIN PERFORM simetra.rights_require('read', 'task', p_row); PERFORM 1; END"
+        )
+      )
+      expect(errorCodes(result)).toEqual([])
+    })
+  })
+
+  describe("repair mode (Б5)", () => {
+    const g = create("g", "DECLARE v int; BEGIN PERFORM 1; END")
+
+    it("writes what it fixed and leaves the other function with its repair-class error", async () => {
+      const files = folder(create("f") + g, [declared("f"), declared("g")])
+      const result = await fixFiles(files, options())
+      expect(result.ok).toBe(false)
+      expect(result.written).toBe(true)
+      expect(
+        result.diagnostics
+          .filter((d) => d.severity === "error")
+          .map((d) => [d.code, d.params?.name])
+      ).toEqual([["sql.declaration-check-not-applied", "g"]])
+      expect(sqlAfter(files, result as never)).toContain(
+        "rights_require('read', 'task', p_row); PERFORM 1;"
+      )
+    })
+
+    it("writes nothing when it removes no repair-class error", async () => {
+      // Лишилась лише `g`: механічне доповнення (id) є, але ремонту немає.
+      const files = folder(g, [declared("g")])
+      const result = await fixFiles(files, options())
+      expect(result.ok).toBe(false)
+      expect(result.written).toBeUndefined()
+    })
+
+    it("writes nothing when the folder has an error outside the class", async () => {
+      const files = folder(create("f"), [declared("f")])
+      files.set("catalogs/Broken/Broken.meta.json", "{")
+      const result = await fixFiles(files, options())
+      expect(result.ok).toBe(false)
+      expect(result.written).toBeUndefined()
+    })
+
+    it("a clean result is written as before, without the marker", async () => {
+      const files = folder(create("f"), [declared("f", CHECK, uuid(5201))])
+      const result = await fixFiles(files, options())
+      expect(result.ok).toBe(true)
+      expect(result.written).toBeUndefined()
+      expect(result.changes.map((c) => c.path)).toContain(SQL)
+    })
+  })
+
+  describe("(г) a declaration that became a platform form (Б5)", () => {
+    const TEAM_SQL = "sql/public/team.sql"
+    const TEAM_FUNCTIONS = "sql/public/team.functions.json"
+    const teamFiles = (callers: string[]) => {
+      const files = metaFiles({
+        "project.meta.json": project({
+          scopeKinds: [
+            {
+              id: uuid(9401),
+              name: "team",
+              physicalName: "team_id",
+              root: {
+                external: { schema: "public", table: "teams", column: "id" },
+              },
+              setFunction: { schema: "public", name: "team_ids" },
+            },
+          ],
+        }),
+        "catalogs/Item/Item.meta.json": catalog("Item", { scope: "none" }),
+        [TEAM_SQL]: `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`,
+        [TEAM_FUNCTIONS]: JSON.stringify({
+          functions: [
+            { id: uuid(9402), function: { name: "team_ids" }, callers },
+          ],
+        }),
+      })
+      // Функція множини — авторська (`team.sql`): спільний файл фікстури
+      // створив би другу.
+      files.delete(SCOPE_FUNCTIONS_FILE)
+      return files
+    }
+
+    it("removes the declaration the forms cover with the same callers", async () => {
+      const files = teamFiles(["user", "command", "service"])
+      expect(errorCodes(await compile(files, { repair: true }))).toContain(
+        "sql.declaration-platform-form"
+      )
+      const result = await fixFiles(files, options())
+      expect(result.ok).toBe(true)
+      expect(
+        result.changes.find((c) => c.path === TEAM_FUNCTIONS)?.content
+      ).toBeNull()
+    })
+
+    it("does not write a form wider than the declaration and reports the warning", async () => {
+      const files = teamFiles(["service"])
+      const result = await fixFiles(files, options())
+      expect(result.changes.map((c) => c.path)).not.toContain(TEAM_FUNCTIONS)
+      expect(errorCodes(result)).toContain("sql.declaration-platform-form")
+      expect(
+        result.diagnostics
+          .filter((d) => d.code === "sql.declaration-platform-form-widens")
+          .map((d) => d.params?.roles)
+      ).toEqual(["user, command"])
+      const [warning] = result.diagnostics.filter(
+        (d) => d.code === "sql.declaration-platform-form-widens"
+      )
+      expect(warning!.params?.declined).toBe(1)
+      expect(warning!.message).toContain("its declaration is not removed")
+      expect(warning!.message).not.toContain("declaration is removed")
+      expect(result.written).toBeUndefined()
+    })
+  })
+
+  describe("verbatim grants in a repair-class folder", () => {
+    const GRANT = "GRANT EXECUTE ON FUNCTION public.f(uuid) TO authenticated;\n"
+
+    // Мутація: вирізання грантів без режиму `repair` — у теці з помилкою класу
+    // `sql.generated-grant` не виникає, грант лишається, а підсумкова
+    // компіляція відмовляє й губить вставлений запобіжник.
+    it("cuts the grant and inserts the guard in one run", async () => {
+      const files = await acceptDebt(
+        folder(`${create("f", "BEGIN\n  PERFORM 1;\nEND")}\n${GRANT}`, [
+          declared("f", CHECK, uuid(5401)),
+        ])
+      )
+      const result = await fixFiles(files, options())
+      const after = sqlAfter(files, result as never)
+      expect(after).not.toContain("GRANT EXECUTE")
+      expect(after).toContain("PERFORM simetra.rights_require('read'")
+      expect(errorCodes(result)).toEqual([])
+      expect(result.ok).toBe(true)
+    })
+
+    it("cuts a grant of a CRLF file", async () => {
+      const files = await acceptDebt(
+        folder(
+          `${create("f", "BEGIN\r\n  PERFORM 1;\r\nEND")}\r\n${GRANT.replace("\n", "\r\n")}`,
+          [declared("f", CHECK, uuid(5402))]
+        )
+      )
+      const result = await fixFiles(files, options())
+      const after = sqlAfter(files, result as never)
+      expect(after).not.toContain("GRANT EXECUTE")
+      expect(after).toContain("PERFORM simetra.rights_require('read'")
+      expect(errorCodes(result)).toEqual([])
+    })
+  })
+
+  describe("(г) per record, not per file", () => {
+    const FUNCTIONS_PAIR = "sql/public/pair.functions.json"
+    const scopeKind = (n: number, name: string, setFunction: string) => ({
+      id: uuid(n),
+      name,
+      physicalName: `${name}_id`,
+      root: {
+        external: { schema: "public", table: `${name}s`, column: "id" },
+      },
+      setFunction: { schema: "public", name: setFunction },
+    })
+    const fn = (name: string) =>
+      `CREATE FUNCTION public.${name}() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`
+
+    // Мутація: суд над цілим файлом (`widened = new Set(files)`) — безпечний
+    // запис лишається з `sql.declaration-platform-form`.
+    it("removes the safe record and keeps the widening one in the same file", async () => {
+      const files = metaFiles({
+        "project.meta.json": project({
+          scopeKinds: [
+            scopeKind(9411, "team", "team_ids"),
+            scopeKind(9412, "org", "org_ids"),
+          ],
+        }),
+        "catalogs/Item/Item.meta.json": catalog("Item", { scope: "none" }),
+        "sql/public/pair.sql": fn("team_ids") + fn("org_ids"),
+        [FUNCTIONS_PAIR]: formatSqlFunctionsFile({
+          functions: [
+            {
+              id: uuid(9413),
+              function: { name: "team_ids" },
+              callers: ["service"],
+            },
+            {
+              id: uuid(9414),
+              function: { name: "org_ids" },
+              callers: ["user", "command", "service"],
+            },
+          ],
+        }),
+      })
+      files.delete(SCOPE_FUNCTIONS_FILE)
+      const result = await fixFiles(files, options())
+      const next = applyChanges(files, result.changes).get(FUNCTIONS_PAIR)!
+      expect(
+        (
+          JSON.parse(next) as { functions: { function: { name: string } }[] }
+        ).functions.map((f) => f.function.name)
+      ).toEqual(["team_ids"])
+      const warnings = result.diagnostics.filter(
+        (d) => d.code === "sql.declaration-platform-form-widens"
+      )
+      expect(warnings.map((d) => [d.params?.name, d.params?.declined])).toEqual(
+        [["team_ids", 1]]
+      )
+      expect(
+        result.diagnostics
+          .filter((d) => d.code === "sql.declaration-platform-form")
+          .map((d) => d.params?.name)
+      ).toEqual(["team_ids"])
+    })
+  })
+
+  describe("(д) ALTER DEFAULT PRIVILEGES (Б6)", () => {
+    const ADP_FILE = "sql/app/adp.sql"
+    const FNS = "sql/public/fns.sql"
+    const base = (adp: string) =>
+      acceptDebt(
+        metaFiles({
+          "project.meta.json": project(),
+          "catalogs/Item/Item.meta.json": catalog("Item"),
+          // Недекларована definer-функція лишає помилку класу, тож результат
+          // пишеться як ремонт, а не як чистий.
+          [FNS]:
+            "CREATE FUNCTION public.f() RETURNS int LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT 1 $$;\n",
+          [ADP_FILE]: adp,
+        })
+      )
+    const run = async (adp: string) => {
+      const files = await base(adp)
+      const result = await fixFiles(files, options())
+      return { files, result, after: applyChanges(files, result.changes) }
+    }
+    const ADP_FN = (to: string, scope = "IN SCHEMA app ") =>
+      `ALTER DEFAULT PRIVILEGES ${scope}GRANT EXECUTE ON FUNCTIONS TO ${to};\n`
+    const adpErrors = (r: { diagnostics: readonly { code: string }[] }) =>
+      r.diagnostics.filter((d) => d.code === "sql.default-privileges-execute")
+
+    it("cuts only the flagged statement, next to a table ADP", async () => {
+      const tables =
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO anon;\n"
+      const { result, after } = await run(`${tables}\n${ADP_FN("anon")}`)
+      expect(adpErrors(result)).toEqual([])
+      expect(after.get(ADP_FILE)).toBe(`${tables}\n`)
+      expect(result.written).toBe(true)
+    })
+
+    it("cuts the whole statement with mixed grantees", async () => {
+      const { result, after } = await run(
+        ADP_FN("anon, authenticated, PUBLIC, simetra_command")
+      )
+      expect(adpErrors(result)).toEqual([])
+      expect(after.has(ADP_FILE)).toBe(false)
+    })
+
+    it("leaves the provider owner's statement in the managed schema with the preset", async () => {
+      const preset =
+        "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon, PUBLIC;\n"
+      const { result, after } = await run(preset)
+      // Змішаний отримувач (PUBLIC) — помилка лишається людині, текст без змін.
+      expect(adpErrors(result)).toHaveLength(1)
+      expect(after.get(ADP_FILE)).toBe(preset)
+    })
+
+    it("leaves the provider owner's statement over several schemas when one is managed", async () => {
+      const multi =
+        "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public, app GRANT EXECUTE ON FUNCTIONS TO anon, PUBLIC;\n"
+      const { result, after } = await run(multi)
+      expect(adpErrors(result)).toHaveLength(1)
+      expect(after.get(ADP_FILE)).toBe(multi)
+    })
+
+    it("leaves the provider owner's statement in public with API-role grantees only", async () => {
+      const preset =
+        "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon, authenticated;\n"
+      const { result, after } = await run(preset)
+      expect(adpErrors(result)).toEqual([])
+      expect(after.get(ADP_FILE)).toBe(preset)
+    })
+
+    it("cuts an ADP of a CRLF file next to a table ADP", async () => {
+      const tables =
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO anon;\r\n"
+      const { result, after } = await run(
+        `${tables}\r\n${ADP_FN("anon").replace("\n", "\r\n")}`
+      )
+      expect(adpErrors(result)).toEqual([])
+      expect(after.get(ADP_FILE)).toBe(`${tables}\r\n`)
+    })
+
+    describe("a decoy copy of the unit before it on the same line (locateUnit)", () => {
+      const ADP =
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT EXECUTE ON FUNCTIONS TO anon"
+
+      // Мутація: `locateUnit` бере першу копію рядка без звірки решти — виріз
+      // потрапляє в коментар чи літерал.
+      it("a comment copy: no edit instead of an edit in the wrong place", async () => {
+        const sql = `/* ${ADP} */ ${ADP};\n`
+        const { result, after } = await run(sql)
+        expect(after.get(ADP_FILE)).toBe(sql)
+        expect(adpErrors(result)).toHaveLength(1)
+      })
+
+      it("a string literal copy: no edit instead of an edit in the wrong place", async () => {
+        const sql = `COMMENT ON SCHEMA app IS '${ADP}'; ${ADP};\n`
+        const { result, after } = await run(sql)
+        expect(after.get(ADP_FILE)).toBe(sql)
+        expect(adpErrors(result)).toHaveLength(1)
+      })
+
+      // Мутація: перевірку решти символів одиниці прибрано — копія першого
+      // рядка в коментарі приймається за початок багаторядкової одиниці.
+      it("a comment copy of the first line of a multi-line unit is not its start", async () => {
+        const head = "ALTER DEFAULT PRIVILEGES IN SCHEMA app"
+        const { result, after } = await run(
+          `/* ${head} */ ${head}\n  GRANT EXECUTE ON FUNCTIONS TO anon;\n`
+        )
+        expect(after.get(ADP_FILE)).toBe(`/* ${head} */\n`)
+        expect(adpErrors(result)).toEqual([])
+      })
+    })
+
+    it("cuts an ADP and inserts a guard in the same file", async () => {
+      // Вставка запобіжника зсуває рядки: вирізання не мусить шукати одиницю
+      // за застарілим рядком.
+      // Тіло в кілька рядків: вставка додає рядок і зсуває ADP нижче.
+      const sql =
+        create("f", "BEGIN\n  PERFORM 1;\nEND") + "\n" + ADP_FN("anon")
+      const files = await acceptDebt(
+        folder(sql, [declared("f", CHECK, uuid(5301))])
+      )
+      const result = await fixFiles(files, options())
+      const after = applyChanges(files, result.changes).get(SQL)!
+      expect(after).not.toContain("DEFAULT PRIVILEGES")
+      expect(after).toContain("rights_require('read', 'task', p_row)")
+      expect(errorCodes(result)).toEqual([])
+    })
+
+    it("cuts a global statement whose grantees are PUBLIC and the API roles", async () => {
+      const { result, after } = await run(ADP_FN("PUBLIC, anon", ""))
+      expect(adpErrors(result)).toEqual([])
+      expect(after.has(ADP_FILE)).toBe(false)
+    })
+
+    it("leaves a global statement that also names the command role", async () => {
+      const statement = ADP_FN("PUBLIC, simetra_command", "")
+      const { result, after } = await run(statement)
+      expect(adpErrors(result)).toHaveLength(1)
+      expect(after.get(ADP_FILE)).toBe(statement)
+    })
+
+    it("narrows the debt of the cut statement", async () => {
+      const { files, after } = await run(ADP_FN("anon"))
+      const units = (map: ReadonlyMap<string, string>) =>
+        (JSON.parse(map.get("sql-debt.json")!) as { units: string[] }).units
+      expect(units(files).some((u) => u.includes("defaultPrivileges"))).toBe(
+        true
+      )
+      expect(units(after).some((u) => u.includes("defaultPrivileges"))).toBe(
+        false
+      )
+    })
   })
 })

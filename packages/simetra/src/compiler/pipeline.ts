@@ -2,6 +2,7 @@ import {
   KIND_REGISTRY,
   METADATA_KINDS,
   PROVIDER_IDENTITY_SOURCES,
+  type MetadataKind,
   type PhysicalSnapshot,
   type Project,
 } from "simetra/model"
@@ -31,9 +32,12 @@ import {
   membershipContracts,
   usersContractOf,
   mainTableOf,
+  type RightsContract,
 } from "./contracts"
 import {
   buildFunctionExecuteUnits,
+  executeEntries,
+  executePurposes,
   checkExecuteTypeReferences,
   type FunctionExecuteSources,
   generatedGrantConflicts,
@@ -88,6 +92,7 @@ import { buildAuthorUnits } from "./author-units"
 import { catalogCommandContracts } from "./catalog-command/contracts"
 import { buildCatalogCommandUnits } from "./catalog-command/units"
 import { buildSignalUnits } from "./signal/units"
+import { buildStorageUnits } from "./platform/storage"
 import { buildRightsSignalUnits } from "./rights/signal-triggers"
 import { buildHierarchyUnits } from "./hierarchy-units"
 import { buildMechanicsUnits } from "./mechanics-units"
@@ -105,9 +110,10 @@ import {
   checkSqlModules,
   closedModuleOwners,
   platformFormSources,
+  staticFormSources,
 } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
-import { checkDeclaredGuards } from "./sql/guard-of"
+import { checkDeclaredGuards, declaredFunctionStates } from "./sql/guard-of"
 import { checkDebt, debtPredicate } from "./sql/debt"
 import {
   checkDeclaredChecks,
@@ -131,7 +137,8 @@ import { kindTables } from "./sql/kind-tables"
 import { loadSqlParser, type SqlParser } from "./sql/parse"
 import { copyColumns } from "./copy-columns"
 import { buildSchemaUsageUnits } from "./schema-usage"
-import { loadPlpgsqlParser } from "./sql/plpgsql"
+import { loadPlpgsqlParser, type PlpgsqlParser } from "./sql/plpgsql"
+import { policyFunctions, type PolicyFunctions } from "./sql/policy-functions"
 import { assertPinnedSearchPath } from "./sql/pinned-search-path"
 import { embedRowRules } from "./sql/row-rule"
 import { withoutPlatformSchema } from "./sql/reserved-schema"
@@ -201,10 +208,8 @@ export async function runStages(
     loadSqlParser(),
     loadPlpgsqlParser(),
   ])
-  const { stage2, upstream, stage3, sql, declared, derived, calls } = sqlStage(
-    stage1,
-    parse
-  )
+  const { stage2, upstream, stage3, sql, declared, derived, calls, policies } =
+    sqlStage(stage1, parse, plpgsql)
   // id є в кожного об'єкта, лише коли стадія 2 чиста; її помилки закривають
   // шлях до вкладення правил і далі, тож порожнє id сюди не доходить.
   const idByFile = new Map(stage1.objects.map((o) => [o.file, o.id ?? ""]))
@@ -243,7 +248,8 @@ export async function runStages(
           parse,
           plpgsql,
           declared,
-          calls
+          calls,
+          policies
         )
   // Вирази прийнятих таблиць цієї стадії не мають, тож для них поза переліком
   // лише згенеровані функції, що читають.
@@ -265,7 +271,7 @@ export async function runStages(
   // Функції, `EXECUTE` яких виводить платформа: одні джерела для перевірки
   // підпису раннього блоку й для генератора грантів.
   const executeSources: FunctionExecuteSources = {
-    forms: platformFormSources(stage1.objects, stage1.project),
+    forms: platformFormSources(stage1.objects, stage1.project, policies),
     declared,
     units: sql.units,
     moduleOwners: owners,
@@ -288,14 +294,20 @@ export async function runStages(
         modelViews(sql.units),
         sql.units,
         declared,
-        calls
+        calls,
+        policies
       ),
       parse,
       plpgsql,
       stage1.project?.database.provider,
       declared,
-      calls
+      calls,
+      policies
     ),
+    // Функція, яку кличе дослівна політика, поза формою функції політики —
+    // помилка класу ремонту (спека декларацій функцій §5.8): її розпізнано
+    // одразу після розбору `.sql`, тож вона стоїть поруч із ратчетом боргу.
+    ...policies.diagnostics,
     // Оболонку судимих функцій задає лише `CREATE` (спека прав §5.3): набір судимих
     // відомий до стадії 3, тож помилка стоїть поруч із формами модулів.
     ...checkFunctionSettingsShell(
@@ -305,7 +317,8 @@ export async function runStages(
       parse,
       plpgsql,
       declared,
-      calls.models
+      calls.models,
+      policies
     ),
     // Резолв декларацій функцій (спека декларацій функцій §5.1) потребує лише
     // одиниць і метаданих, тож стоїть у ранньому блоці: нерезолвлена
@@ -317,7 +330,8 @@ export async function runStages(
       stage1.project,
       new Set(
         sql.diagnostics.filter((d) => d.code === "sql.parse").map((d) => d.file)
-      )
+      ),
+      policies
     ),
     // Аргумент `%type` функції з виведеним `EXECUTE` (#300) — помилка до
     // генератора `EXECUTE`: інакше функція лишилася б з `EXECUTE` від `PUBLIC`.
@@ -346,7 +360,8 @@ export async function runStages(
       sql.units,
       parse,
       plpgsql,
-      calls
+      calls,
+      policies
     ),
     ...checkPlatformCalls(sql.units, parse, plpgsql, declared),
     // Виклики подань і політик — дозвільний перелік виразів (спека прав §5.3).
@@ -402,7 +417,8 @@ export async function runStages(
         integrity
       ),
       rightsCatalogTables(stage1.objects, physical),
-      declared
+      declared,
+      policies
     ),
   ])
   if (blocks(staged)) return { ok: !hasErrors(staged), diagnostics: staged }
@@ -951,6 +967,26 @@ export async function runStages(
     parse,
     plpgsql,
   })
+  // Сховище файлів: функції, тригери вкладення, незмінності й обліку на
+  // таблицях видів зі `storage` (спека профілю postgres §8). Гілки права —
+  // ті самі будівники, що й політики, тож лише коли є функції прав.
+  const storageUnits = buildStorageUnits({
+    objects: stage1.objects,
+    contracts: {
+      access,
+      rights,
+      roles,
+      users,
+      membership,
+      membershipSources: sources.membershipSources,
+    },
+    physical,
+    provider: stage1.project.database.provider,
+    module,
+    units: baseUnits,
+    parse,
+    plpgsql,
+  })
   // Тригери сигналу прав — на кожну таблицю фактів з аналізу джерел (спека
   // П4-B §8.2); кличуть функції сигналів прав генератора `signal`.
   const rightsSignals = rightsFunctions
@@ -1025,6 +1061,7 @@ export async function runStages(
       plpgsql,
     }),
     ...signalUnits,
+    ...storageUnits,
     ...rightsSignals.units,
     ...clientSnapshotUnits,
     // Функції запобіжника виклику: гілки — з декларацій, що пройшли
@@ -1098,6 +1135,11 @@ export async function runStages(
     schemaUsage: (unit) => `the USAGE grant on schema ${unit.name}`,
     // Outbox сигналів — у кожному проєкті, власника немає.
     signalOutbox: () => "the signal outbox of the platform",
+    // Функції сховища спільні, тригери — на таблиці об'єкта зі `storage`.
+    storage: (unit) =>
+      unit.ownerObjectId === undefined
+        ? `the file storage object ${unit.name}`
+        : `the file storage of ${name(unit.ownerObjectId)}`,
     // Оракул каналу й правило форми сигналу спільні — власника немає.
     signal: (unit) => `the signal authorization ${unit.name}`,
     rightsSignal: (unit) =>
@@ -1168,7 +1210,7 @@ export async function runStages(
     physical,
     sqlUnits,
     catalogCommands,
-    checkColumns: stage3.checkColumns,
+    checkColumns: [...stage3.checkColumns, ...embedded.checkColumns],
     copyColumns: new Map(
       physical.tables.flatMap((table) => {
         const columns = copyColumns(table, parse)
@@ -1214,7 +1256,64 @@ export async function runStages(
   // `ok` рахується над усіма діагностиками: помилки класу ремонту, що пізніші
   // за гейт стадій (`checkDeclaredGuards`), не закривали його в `repair`.
   const final = sortDiagnostics([...diagnostics, ...budget])
-  return { ok: !hasErrors(final), diagnostics: final, model: compiled }
+  return {
+    ok: !hasErrors(final),
+    diagnostics: final,
+    model: compiled,
+    functionExecute: executeEntries(executeSources),
+    declaredFunctions: declaredFunctionStates(
+      declared,
+      executePurposes(executeSources),
+      sql.units,
+      stage1.objects,
+      rights,
+      plpgsql,
+      parse
+    ),
+  }
+}
+
+/**
+ * Контракти прав лише з метаданих, без SQL-стадій: зворотна генерація
+ * розв'язує за ними мітку виду й дію запобіжника. `undefined` — метадані
+ * не доходять до моделі (помилка стадій 1–3) чи контракти не будуються.
+ */
+export function metadataRights(files: ReadonlyMap<string, string>):
+  | {
+      objects: readonly { id: string; kind: MetadataKind; name: string }[]
+      rights: RightsContract[]
+    }
+  | undefined {
+  const stage1 = readFiles(files)
+  const stage2 = checkIdentity(
+    stage1.objects,
+    stage1.brokenNames,
+    stage1.project,
+    stage1.functionsFiles
+  )
+  if (
+    stage1.project === undefined ||
+    hasErrors([...stage1.diagnostics, ...stage2.diagnostics])
+  )
+    return undefined
+  try {
+    const stage3 = buildModel(stage1.objects, stage1.project, stage2.references)
+    const rights = rightsContracts(
+      stage1.objects,
+      stage2.references,
+      stage3.physical,
+      stage1.project
+    )
+    return {
+      objects: stage1.objects.flatMap((o) =>
+        o.id === undefined ? [] : [{ id: o.id, kind: o.kind, name: o.name }]
+      ),
+      rights,
+    }
+  } catch {
+    // Цикл вимог чи невідома дія: їх називає стадія 4 повної компіляції
+    return undefined
+  }
 }
 
 /**
@@ -1223,7 +1322,11 @@ export async function runStages(
  * перелік боргу (`fix`, `introspect`) рахується над тими самими одиницями,
  * що бачить ратчет, без решти стадій.
  */
-export function sqlStage(stage1: FilesStageResult, parse: SqlParser) {
+export function sqlStage(
+  stage1: FilesStageResult,
+  parse: SqlParser,
+  plpgsql: PlpgsqlParser
+) {
   const stage2 = checkIdentity(
     stage1.objects,
     stage1.brokenNames,
@@ -1278,7 +1381,28 @@ export function sqlStage(stage1: FilesStageResult, parse: SqlParser) {
     sql.units,
     new Set((derived ?? []).map((f) => `${f.schema}.${f.name}`))
   )
-  return { stage2, upstream, stage3, sql, declared, derived, calls }
+  // Функції політик боргу (спека декларацій функцій §5.8) — одразу після
+  // розбору `.sql`: їх читають ратчет боргу, джерело форм платформи й
+  // генератор `EXECUTE`, тож `fix`, `introspect` і стадії бачать одну форму.
+  // Таблиця T — зі знімка стадії 3; без неї компіляцію вже зупиняють помилки
+  // вище за течією, і функцій політик немає.
+  const policies: PolicyFunctions =
+    stage3 === undefined || stage1.project === undefined
+      ? { functions: [], diagnostics: [], refused: [] }
+      : policyFunctions({
+          units: sql.units,
+          tables: stage3.physical.tables,
+          provider: stage1.project.database.provider,
+          forms: staticFormSources(stage1.objects, stage1.project),
+          membershipFunctions: new Set(
+            (derived ?? [])
+              .filter((f) => f.membership === true)
+              .map((f) => `${f.schema}.${f.name}`)
+          ),
+          parse,
+          plpgsql,
+        })
+  return { stage2, upstream, stage3, sql, declared, derived, calls, policies }
 }
 
 /**

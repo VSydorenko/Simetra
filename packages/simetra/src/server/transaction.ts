@@ -1,4 +1,5 @@
 import {
+  PINNED_SESSION_SETTINGS,
   PLATFORM_ROLES,
   PLATFORM_SCHEMA,
   CURRENT_USER_FUNCTION_NAME,
@@ -7,6 +8,8 @@ import {
   SIGNAL_INVALIDATE_FUNCTION_NAME,
   SIGNAL_MERGE_MODE,
   SIGNAL_MODE_SETTING,
+  STORAGE_ERRORS,
+  STORAGE_FUNCTIONS,
   ZERO_UUID,
   type Change,
   type CommandError,
@@ -22,9 +25,11 @@ import { logsDatabaseError, mapDatabaseError, type ErrorPhase } from "./errors"
 import { inCommand, outsideCommand, rejectNested } from "./hook-context"
 import { prepareInput, runPhase, type PreparedOperation } from "./phase"
 import {
+  destroysConnection,
   normalizeError,
   type CommandDatabase,
   type DatabaseClient,
+  type DatabaseError,
 } from "./port"
 import { ident, literal } from "./read"
 
@@ -86,6 +91,11 @@ interface Terminal {
   destroy: boolean
   /** SQLSTATE відмови бази, якщо вона є: за ним обирається пауза повтору. */
   code?: string
+  /**
+   * `COMMIT` надіслано, а сесію закрито: транзакцію могло бути зафіксовано.
+   * Лише для `attachFile`: байти видаляти не можна (ПГ-5 Р6, І14).
+   */
+  commitUnknown?: true
 }
 
 // Серіалізація й взаємне блокування: повтор усієї транзакції (§6.5).
@@ -116,7 +126,8 @@ const TIMEOUT: CommandError = { code: "command.timeout" }
 // Стеля одного оператора команди (спека П4-B §7.1, Ф6).
 const STATEMENT_CEILING_MS = 30_000
 // Значення — зв'язаним параметром: текстовий `SET` не приймає `$1`.
-const STATEMENT_TIMEOUT = "SELECT set_config('statement_timeout', $1, true)"
+const STATEMENT_TIMEOUT =
+  "SELECT pg_catalog.set_config('statement_timeout', $1, true)"
 // Мілісекунди межі: округлення вгору й ≥ 1 — `statement_timeout = 0` вимкнув
 // би межу зовсім.
 const timeoutMs = (remaining: number) => Math.max(1, Math.ceil(remaining))
@@ -152,16 +163,29 @@ export function epochOf(
 export const COMMAND_ROLE = statement(
   `SET LOCAL ROLE ${ident(PLATFORM_ROLES.command)}`
 )
-// Claims, час і формат `bytea` — одним оператором: рядок ядра декодується
-// в UTC і hex незалежно від налаштувань бази.
+/**
+ * `SET LOCAL ROLE` на роль сховища файлів: рантайм доводить членство на
+ * старті (`inspect`), а не на першому завантаженні (спека профілю postgres §8.2).
+ */
+export const FILES_ROLE = statement(
+  `SET LOCAL ROLE ${ident(PLATFORM_ROLES.files)}`
+)
+// Claims і кожне закріплене налаштування T0 — одним оператором (Р17): текст
+// значень у рядку ядра (момент, `bytea`, `real`/`double precision`, дати)
+// і рівність CAS за полями не залежать від налаштувань ролі входу чи бази
+// (`extra_float_digits` < 1 округлював би число). Перелік — лише з T0:
+// друга копія розійшлась би з оболонкою голови.
 const CLAIMS_TEXT =
-  `SELECT set_config(${literal(SESSION_CLAIMS_SETTING)}, $1, true), ` +
-  `set_config('TimeZone', 'UTC', true), set_config('bytea_output', 'hex', true)`
+  `SELECT pg_catalog.set_config(${literal(SESSION_CLAIMS_SETTING)}, $1, true), ` +
+  PINNED_SESSION_SETTINGS.map(
+    ({ name, value }) =>
+      `pg_catalog.set_config(${literal(name)}, ${literal(value)}, true)`
+  ).join(", ")
 // `transaction_timeout` є лише з PostgreSQL 17; умова — у самому SQL, щоб
 // не питати версію окремо.
 const transactionTimeout = (param: string) =>
-  `CASE WHEN current_setting('server_version_num')::int >= 170000 ` +
-  `THEN set_config('transaction_timeout', ${param}, true) END`
+  `CASE WHEN pg_catalog.current_setting('server_version_num')::int >= 170000 ` +
+  `THEN pg_catalog.set_config('transaction_timeout', ${param}, true) END`
 // Межі часу команди — у тому самому операторі claims, без кругового запиту
 // (Ф4, Ф6). Запобіжники простою й транзакції — бюджет + 1 с: бюджет
 // спрацьовує раніше, вони ловлять завислий хук чи обірваного клієнта.
@@ -169,10 +193,10 @@ const transactionTimeout = (param: string) =>
 // `ALTER ROLE … SET` ролі входу інакше гасило б сигнал на фазу з першої фази.
 // Порожній рядок — не режим злиття: `simetra.signal` гасить лише точне значення.
 const COMMAND_CLAIMS_TEXT =
-  `${CLAIMS_TEXT}, set_config(${literal(SIGNAL_MODE_SETTING)}, '', true), ` +
-  `set_config('statement_timeout', $2, true), ` +
-  `set_config('lock_timeout', $3, true), ` +
-  `set_config('idle_in_transaction_session_timeout', $4, true), ` +
+  `${CLAIMS_TEXT}, pg_catalog.set_config(${literal(SIGNAL_MODE_SETTING)}, '', true), ` +
+  `pg_catalog.set_config('statement_timeout', $2, true), ` +
+  `pg_catalog.set_config('lock_timeout', $3, true), ` +
+  `pg_catalog.set_config('idle_in_transaction_session_timeout', $4, true), ` +
   transactionTimeout("$4")
 // Налаштування транзакції читання — теж одним оператором (спека П4-B §4.2):
 // `set_config('role', …, true)` діє як `SET LOCAL ROLE`, тож роль — без
@@ -180,11 +204,11 @@ const COMMAND_CLAIMS_TEXT =
 // роль входу, як і claims команди до `SET LOCAL ROLE`. Епоху цей оператор
 // не читає: `EXECUTE` перевіряється на старті виконавця, ще під роллю входу.
 const READ_SETUP_TEXT =
-  `${CLAIMS_TEXT}, set_config('statement_timeout', $2, true), ` +
-  `${transactionTimeout("$3")}, set_config('role', $4, true)`
+  `${CLAIMS_TEXT}, pg_catalog.set_config('statement_timeout', $2, true), ` +
+  `${transactionTimeout("$3")}, pg_catalog.set_config('role', $4, true)`
 /**
- * The setup statement of a server read transaction: claims, `TimeZone`,
- * `bytea_output`, the statement ceiling, the `transaction_timeout` guard and
+ * The setup statement of a server read transaction: claims, every
+ * `PINNED_SESSION_SETTINGS` setting, the statement ceiling, the `transaction_timeout` guard and
  * the read role.
  */
 export const readSetupStatement = (
@@ -196,7 +220,7 @@ export const readSetupStatement = (
   statement(READ_SETUP_TEXT, claims, String(statementMs), String(guardMs), role)
 /** Режим злиття сигналів до кінця транзакції (спека П4-B §8.2). */
 const MERGE_MODE = statement(
-  `SELECT set_config(${literal(SIGNAL_MODE_SETTING)}, ${literal(SIGNAL_MERGE_MODE)}, true)`
+  `SELECT pg_catalog.set_config(${literal(SIGNAL_MODE_SETTING)}, ${literal(SIGNAL_MERGE_MODE)}, true)`
 )
 const INVALIDATE_TEXT = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(SIGNAL_INVALIDATE_FUNCTION_NAME)}($1::uuid, $2::uuid, $3::uuid)`
 /** `current_user_id()` of the session claims: the command and `authorizeChannels` alike. */
@@ -207,22 +231,26 @@ export const CURRENT_USER = statement(
 /**
  * Помилка порту як відмова спроби. Кожен `command.internal` мапінгу йде в
  * журнал з повною помилкою: назовні — лише код. `commitSent` — помилка
- * прийшла на `COMMIT`, уже надісланий базі.
+ * прийшла на `COMMIT`, уже надісланий базі; `deletes` — об'єкти фаз
+ * `delete` спроби, для відкладеного `23503` на `COMMIT` (Р10).
  */
 export function terminalOf(
   raw: unknown,
   state: RuntimeState,
   phase: ErrorPhase | undefined,
-  commitSent: boolean
+  commitSent: boolean,
+  error: DatabaseError = normalizeError(raw),
+  deletes: readonly RuntimeObject[] = []
 ): Terminal {
-  const error = normalizeError(raw)
   const { code } = error
   const sessionTimeout = SESSION_TIMEOUT_CODES.has(code ?? "")
   // Сесія закрита після надсилання `COMMIT`: фіксацію могло бути виконано до
   // обриву, тож результат невідомий — і `25P03`, збережений драйвером раніше,
-  // тут не доводить відкату. Відмова бази з іншим SQLSTATE на `COMMIT` —
-  // відомий відкат і мапиться як завжди.
-  const closed = error.connectionLost || sessionTimeout
+  // тут не доводить відкату. Помилка без SQLSTATE там — теж невідомий
+  // результат, якого б виду вона не була: `command.internal` закомічений
+  // запис клієнт вважав би невдалим і повторив би (дубль `create`). Відмова
+  // бази з іншим SQLSTATE на `COMMIT` — відомий відкат і мапиться як завжди.
+  const closed = error.connectionLost || sessionTimeout || code === undefined
   let terminal: Omit<Terminal, "code">
   if (commitSent && closed) {
     const mapped: CommandError = { code: "command.unavailable" }
@@ -233,6 +261,7 @@ export function terminalOf(
       failure: new CommandFailure(mapped),
       retry: false,
       destroy: true,
+      commitUnknown: true,
     }
   } else if (!error.connectionLost && RETRY_CODES.has(code ?? "")) {
     terminal = {
@@ -249,14 +278,14 @@ export function terminalOf(
       destroy: true,
     }
   } else {
-    const mapped = mapDatabaseError(error, state.catalog, phase)
+    const mapped = mapDatabaseError(error, state.catalog, phase, deletes)
     if (logsDatabaseError(error, mapped)) {
       state.log({ kind: "database", error: raw })
     }
     terminal = {
       failure: new CommandFailure(mapped),
       retry: false,
-      destroy: error.connectionLost,
+      destroy: destroysConnection(error),
     }
   }
   return code === undefined ? terminal : { ...terminal, code }
@@ -272,9 +301,9 @@ export function terminalOf(
 export function readRefusal(
   raw: unknown,
   state: RuntimeState,
-  phase: ErrorPhase | undefined
+  phase: ErrorPhase | undefined,
+  error: DatabaseError = normalizeError(raw)
 ): { error: CommandError; destroy: boolean; lost: boolean } {
-  const error = normalizeError(raw)
   if (!error.connectionLost && SESSION_TIMEOUT_CODES.has(error.code ?? "")) {
     return { error: TIMEOUT, destroy: true, lost: false }
   }
@@ -284,7 +313,7 @@ export function readRefusal(
   }
   return {
     error: mapped,
-    destroy: error.connectionLost,
+    destroy: destroysConnection(error),
     lost: error.connectionLost,
   }
 }
@@ -365,6 +394,11 @@ export class Transaction {
   private statementTimeout: number | undefined
   /** `COMMIT` надіслано: обрив далі — невідомий результат, не відкат. */
   private commitSent = false
+  /**
+   * Об'єкти фаз `delete` спроби: відкладений `23503` приходить на `COMMIT`
+   * без фази, а Р10 мусить діяти й там (спека П4 §6.10).
+   */
+  private readonly deletes = new Set<RuntimeObject>()
 
   /** `deadline` — мітка `performance.now()`, до якої має завершитися `run`. */
   constructor(
@@ -378,6 +412,9 @@ export class Transaction {
     unit: readonly Statement[],
     phase?: ErrorPhase
   ): Promise<QueryResult> {
+    if (phase?.kind === "write" && phase.operation === "delete") {
+      this.deletes.add(phase.object)
+    }
     const result = this.tail.then(async () => {
       let last: QueryResult = { rows: [], command: "" }
       for (const { text, params } of unit) {
@@ -447,7 +484,17 @@ export class Transaction {
     try {
       return await this.client.query(text, params)
     } catch (raw) {
-      throw this.close(terminalOf(raw, this.state, phase, this.commitSent))
+      const deletes = text === COMMIT.text ? [...this.deletes] : []
+      throw this.close(
+        terminalOf(
+          raw,
+          this.state,
+          phase,
+          this.commitSent,
+          normalizeError(raw),
+          deletes
+        )
+      )
     }
   }
 
@@ -555,9 +602,42 @@ export async function endFailed(
   client.release(true)
 }
 
+/**
+ * Звільняє з'єднання після успішного `COMMIT` (спека П4 §6.5): доля
+ * транзакції вже вирішена базою, тож виняток звільнення — лише журнал, а не
+ * відмова, яку клієнт повторив би.
+ */
+export function releaseCommitted(
+  client: DatabaseClient,
+  log: (entry: LogEntry) => void
+): void {
+  try {
+    client.release()
+  } catch (error) {
+    log({ kind: "database", error })
+  }
+}
+
 type Outcome =
   | { result: CommandResult; afterCommit: (() => unknown)[] }
   | { terminal: Terminal }
+
+/**
+ * Вкладення файлу в спробі `attachFile`: запис про розмір і тип
+ * (`file_attach`) до фази `create` і перевірка, що його забрав тригер.
+ */
+export interface AttachStep {
+  /** Id об'єкта каталогу зі `storage`. */
+  object: string
+  id: string
+  size: number
+  type: string
+}
+
+const ATTACH_TEXT = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.attach)}($1::uuid, $2::uuid, $3::bigint, $4::text)`
+const PENDING_LEFT = statement(
+  `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.pendingLeft)}() AS pending`
+)
 
 /** Кроки 1–7 транзакції команди (спека П4 §6.5). */
 async function attempt(
@@ -567,13 +647,22 @@ async function attempt(
   act: { sub: string } | undefined,
   ops: readonly PreparedOperation[],
   deadline: number,
-  fullTabularArrays: boolean
+  fullTabularArrays: boolean,
+  attach?: AttachStep
 ): Promise<Outcome> {
   let client: DatabaseClient
   try {
     client = await state.database.connect()
   } catch (raw) {
-    return { terminal: terminalOf(raw, state, undefined, false) }
+    return {
+      terminal: terminalOf(
+        raw,
+        state,
+        undefined,
+        false,
+        normalizeError(raw, true)
+      ),
+    }
   }
   // Явний тип: виклики `never` звужують типи лише так.
   const tx: Transaction = new Transaction(client, state, deadline)
@@ -592,8 +681,39 @@ async function attempt(
       if (user == null) tx.abort({ code: "command.unauthenticated" })
       if (typeof user !== "string") tx.anomaly(new Error("user id is not text"))
       tx.user = user
+      if (attach !== undefined) {
+        // Роль сховища — лише на цей оператор (Р17): `COMMAND_ROLE` у тій самій
+        // одиниці черги повертає роль команд, тож фаза `create` і хуки
+        // виконуються під нею. Відмова закриває чергу, і далі йде лише `ROLLBACK`.
+        await tx.enqueue([
+          FILES_ROLE,
+          statement(
+            ATTACH_TEXT,
+            attach.object,
+            attach.id,
+            String(attach.size),
+            attach.type
+          ),
+          COMMAND_ROLE,
+        ])
+      }
       for (const op of ops) {
         rows.push(await runPhase(tx, op, fullTabularArrays))
+      }
+      if (attach !== undefined) {
+        // Запис, який не забрав тригер вкладення, означає, що `create` не
+        // вставив рядок цього файлу: відкат, а не зафіксований облік без рядка.
+        const { rows: left } = await tx.enqueue([FILES_ROLE, PENDING_LEFT])
+        await tx.enqueue([COMMAND_ROLE])
+        if (left[0]?.pending === "t") {
+          tx.abort({
+            code: "command.rejected",
+            reason: `storage.${STORAGE_ERRORS.attachInvalid}`,
+          })
+        }
+        if (left[0]?.pending !== "f") {
+          tx.anomaly(new Error("storage_pending_left answered no boolean"))
+        }
       }
       // Епоха — після записів команди, у її транзакції: скидання епохи бере
       // `LOCK … IN SHARE MODE` на таблиці видів і чекає `COMMIT` цієї
@@ -633,7 +753,7 @@ async function attempt(
     await endFailed(client, terminal.destroy)
     return { terminal }
   }
-  client.release()
+  releaseCommitted(client, state.log)
   if (tag !== "COMMIT") {
     // Перервана транзакція відповідає на `COMMIT` тегом `ROLLBACK`: це не успіх.
     state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
@@ -665,6 +785,87 @@ export async function runAfterCommit(
     } catch (error) {
       log({ kind: "afterCommit", error })
     }
+  }
+}
+
+/**
+ * Спроби команди з повтором на серіалізацію й взаємне блокування, в межах
+ * одного бюджету часу (Ф2): спільне для `run` і `attachFile`.
+ */
+async function runAttempts(
+  state: RuntimeState,
+  once: (command: { active: boolean }, deadline: number) => Promise<Outcome>
+): Promise<Outcome> {
+  const command = { active: true }
+  // Бюджет — на весь виклик, разом із повторами (Ф2).
+  const deadline = performance.now() + state.budgetMs
+  // `maxAttempts` ≥ 1, тож хоч одна спроба відбудеться.
+  let outcome: Outcome | undefined
+  try {
+    for (let n = 1; n <= state.maxAttempts; n++) {
+      outcome = await once(command, deadline)
+      if (!("terminal" in outcome) || !outcome.terminal.retry) break
+      if (n === state.maxAttempts) break
+      const pause = pauseOf(outcome.terminal.code, n)
+      if (pause === 0) continue
+      // Повтор після паузи не встиг би й першого оператора: це тайм-аут
+      // бюджету, а не вичерпаний повтор (бюджет — і на паузи, Ф2).
+      if (deadline - performance.now() - pause <= 1) {
+        outcome = {
+          terminal: {
+            failure: new CommandFailure(TIMEOUT),
+            retry: false,
+            destroy: false,
+          },
+        }
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, pause))
+    }
+  } finally {
+    // Команда завершена: продовження, які запланував хук, — не вкладені.
+    command.active = false
+  }
+  return outcome!
+}
+
+/** Результат спроб: відмова — кидком, успіх — після `afterCommit`. */
+async function settleOutcome(
+  state: RuntimeState,
+  outcome: Outcome
+): Promise<CommandResult> {
+  // Вичерпаний повтор несе `command.retry-exhausted` (`terminalOf`).
+  if ("terminal" in outcome) throw outcome.terminal.failure
+  const { result, afterCommit } = outcome
+  if (afterCommit.length > 0) {
+    // Поза сховищем: команда, яку запускає дія, не вкладена.
+    const chain = outsideCommand(() => runAfterCommit(afterCommit, state.log))
+    if (state.defer === undefined) {
+      await chain
+    } else {
+      try {
+        state.defer(chain)
+      } catch (error) {
+        state.log({ kind: "defer", error })
+      }
+    }
+  }
+  return result
+}
+
+/** The rejection of `attachFile`: a `CommandFailure` with the commit flag. */
+export class FileAttachFailure extends CommandFailure {
+  constructor(
+    error: CommandError,
+    /**
+     * `true` when `COMMIT` was sent and the session closed: the row may exist,
+     * so the caller must keep the bytes. `false` — a known rollback or a
+     * refusal before the database.
+     */
+    readonly commitUnknown: boolean
+  ) {
+    super(error)
+    this.name = "FileAttachFailure"
   }
 }
 
@@ -702,59 +903,60 @@ export async function runCommand(
   const snapshot = structuredClone(ops)
   const act =
     typeof session.act?.sub === "string" ? { sub: session.act.sub } : undefined
-  const command = { active: true }
-  // Бюджет — на весь виклик `run`, разом із повторами (Ф2).
-  const deadline = performance.now() + state.budgetMs
-  // `maxAttempts` ≥ 1, тож хоч одна спроба відбудеться.
-  let outcome: Outcome | undefined
+  const outcome = await runAttempts(state, (command, deadline) =>
+    attempt(
+      state,
+      command,
+      claims,
+      act,
+      structuredClone(snapshot),
+      deadline,
+      fullTabularArrays
+    )
+  )
+  return settleOutcome(state, outcome)
+}
+
+/**
+ * `attachFile` (спека профілю postgres §8.2 крок 4): одна внутрішня фаза
+ * `create` рядка файлу з записом `file_attach` перед нею, у спробах і з
+ * бюджетом `run`. Рядок і запис — одна транзакція: повтор після відкату не
+ * лишає ні подвійного обліку, ні осиротілого запису.
+ */
+export async function runAttach(
+  state: RuntimeState,
+  session: SessionClaims,
+  operation: unknown,
+  attach: AttachStep
+): Promise<CommandResult> {
+  rejectNested()
+  const ops = prepareInput(state.catalog, operation, state)
+  let claims: string
   try {
-    for (let n = 1; n <= state.maxAttempts; n++) {
-      outcome = await attempt(
-        state,
-        command,
-        claims,
-        act,
-        structuredClone(snapshot),
-        deadline,
-        fullTabularArrays
-      )
-      if (!("terminal" in outcome) || !outcome.terminal.retry) break
-      if (n === state.maxAttempts) break
-      const pause = pauseOf(outcome.terminal.code, n)
-      if (pause === 0) continue
-      // Повтор після паузи не встиг би й першого оператора: це тайм-аут
-      // бюджету, а не вичерпаний повтор (бюджет — і на паузи, Ф2).
-      if (deadline - performance.now() - pause <= 1) {
-        outcome = {
-          terminal: {
-            failure: new CommandFailure(TIMEOUT),
-            retry: false,
-            destroy: false,
-          },
-        }
-        break
-      }
-      await new Promise((resolve) => setTimeout(resolve, pause))
-    }
-  } finally {
-    // Команда завершена: продовження, які запланував хук, — не вкладені.
-    command.active = false
+    claims = JSON.stringify(session)
+  } catch {
+    throw new CommandFailure(INTERNAL)
   }
-  // Вичерпаний повтор несе `command.retry-exhausted` (`terminalOf`).
-  if ("terminal" in outcome!) throw outcome.terminal.failure
-  const { result, afterCommit } = outcome!
-  if (afterCommit.length > 0) {
-    // Поза сховищем: команда, яку запускає дія, не вкладена.
-    const chain = outsideCommand(() => runAfterCommit(afterCommit, state.log))
-    if (state.defer === undefined) {
-      await chain
-    } else {
-      try {
-        state.defer(chain)
-      } catch (error) {
-        state.log({ kind: "defer", error })
-      }
-    }
+  const snapshot = structuredClone(ops)
+  const act =
+    typeof session.act?.sub === "string" ? { sub: session.act.sub } : undefined
+  const outcome = await runAttempts(state, (command, deadline) =>
+    attempt(
+      state,
+      command,
+      claims,
+      act,
+      structuredClone(snapshot),
+      deadline,
+      false,
+      attach
+    )
+  )
+  if ("terminal" in outcome) {
+    throw new FileAttachFailure(
+      outcome.terminal.failure.error,
+      outcome.terminal.commitUnknown === true
+    )
   }
-  return result
+  return settleOutcome(state, outcome)
 }

@@ -178,24 +178,76 @@ function stringEnd(text: string, quote: number, escapes: boolean): number {
 }
 
 /**
- * Зовнішній блок тіла має секцію `DECLARE` — або ми не можемо довести, що
- * її немає. Дерево парсера plpgsql не прив'язує оголошення до блоку, тож
- * шукаємо в тексті: після пропуску пробілів і коментарів дозволено лише
- * `<<`, один ідентифікатор (простий чи в лапках), `>>`, а далі ключове слово
- * `BEGIN` без огляду на регістр. Будь-що інше (`DECLARE`, чужий токен, мітка
- * іншої форми, `"begin"` в лапках) — `true`: помилка тут у бік суворості.
- * Лапки й коментарі розбирає лексика, тож слово `BEGIN` у коментарі чи
- * `>>` усередині лапкової мітки секції `DECLARE` не приховають.
+ * Доларові літерали тексту (`$тег$…$тег$`) у порядку появи: коментарі, рядки
+ * і лапковані імена пропускаються цілими, як у `plainWords`. `start`/`end` —
+ * межі вмісту без тегів, тож за ними правиться текст на місці.
  */
-export function declareSection(body: string): boolean {
+export function* dollarLiterals(
+  text: string
+): Generator<{ tag: string; start: number; end: number }> {
+  let i = 0
+  while (i < text.length) {
+    i = skipTrivia(text, i)
+    const c = text[i]
+    if (c === undefined) return
+    if (c === "'") {
+      i = stringEnd(text, i, false)
+      continue
+    }
+    if (c === "$") {
+      const tag = dollarTag(text, i)
+      if (tag === undefined) {
+        i++
+        continue
+      }
+      const close = text.indexOf(tag, i + tag.length)
+      if (close < 0) return
+      yield { tag, start: i + tag.length, end: close }
+      i = close + tag.length
+      continue
+    }
+    const word = readIdent(text, i)
+    if (word === undefined) {
+      i++
+      continue
+    }
+    if (c !== '"' && word.value === "e" && text[word.end] === "'") {
+      i = stringEnd(text, word.end, true)
+      continue
+    }
+    i = word.end
+  }
+}
+
+/**
+ * Кінець слова `BEGIN` зовнішнього блоку тіла: після пропуску пробілів і
+ * коментарів дозволено лише `<<`, один ідентифікатор (простий чи в лапках),
+ * `>>`, а далі ключове слово `BEGIN` без огляду на регістр. Будь-що інше
+ * (`DECLARE`, чужий токен, мітка іншої форми, `"begin"` в лапках) —
+ * `undefined`: помилка тут у бік суворості. Лапки й коментарі розбирає
+ * лексика, тож слово `BEGIN` у коментарі чи `>>` усередині лапкової мітки
+ * секції `DECLARE` не приховають.
+ */
+export function outerBeginEnd(body: string): number | undefined {
   let i = skipTrivia(body, 0)
   if (body.startsWith("<<", i)) {
     const label = readIdent(body, skipTrivia(body, i + 2))
-    if (label === undefined) return true
+    if (label === undefined) return undefined
     i = skipTrivia(body, label.end)
-    if (!body.startsWith(">>", i)) return true
+    if (!body.startsWith(">>", i)) return undefined
     i = skipTrivia(body, i + 2)
   }
   const word = readIdent(body, i)
-  return !(word !== undefined && body[i] !== '"' && word.value === "begin")
+  return word !== undefined && body[i] !== '"' && word.value === "begin"
+    ? word.end
+    : undefined
+}
+
+/**
+ * Зовнішній блок тіла має секцію `DECLARE` — або ми не можемо довести, що
+ * її немає. Дерево парсера plpgsql не прив'язує оголошення до блоку, тож
+ * шукаємо в тексті (`outerBeginEnd`).
+ */
+export function declareSection(body: string): boolean {
+  return outerBeginEnd(body) === undefined
 }

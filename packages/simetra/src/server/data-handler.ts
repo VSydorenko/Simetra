@@ -202,7 +202,9 @@ function envelopeRefusal(
       path = path.slice(1)
     }
   }
-  const segments = operation ? operationRefusalPath(path) : path.map(String)
+  const segments = operation
+    ? operationRefusalPath(path, decidingIssue(error))
+    : path.map(String)
   if (reason === LIMIT_REASONS.tabularTooLarge) {
     return {
       code: "command.invalid",

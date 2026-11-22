@@ -23,6 +23,7 @@ diagnostics themselves.
 | New elements miss `id` / `physicalName` / `kindLabel`, or files are not canonical | `fix`        | `simetra fix [dir]`                      | `fix` with `{}`                             |
 | New object                                                                        | `create`     | `simetra create '<json>' [dir]`          | `create` with `{kind, name, data?}`         |
 | New element in a collection of an object or of the project root                   | `add`        | `simetra add '<json>' [dir]`             | `add` with `{target, collection, element}`  |
+| Declare who may execute a SQL function and which rights check it applies             | `declare-function` | `simetra declare-function '<json>' [dir]` | `declare-function` with `{function, callers, check?}` |
 | Rename an object or a nested element                                              | `rename`     | `simetra rename '<json>' [dir]`          | `rename` with `{target, newName}`           |
 | Remove an object or a nested element                                              | `delete`     | `simetra delete '<json>' [dir] --yes`    | `delete` with `{target, confirm}`           |
 | Turn an adopted `CustomTable` into a Catalog, Document or InformationRegister     | `promote`    | `simetra promote <json\|-> [dir]`        | `promote` with `{target, into, columns, …}` |
@@ -36,7 +37,7 @@ diagnostics themselves.
 | Read application data of the development database as a user, with that user's rights | `data-read` | `simetra data-read '<json>' [dir] --data-url-env <VAR> --as <uuid>` | `data-read` with `{query}` |
 | Change application data of the development database as a user (seed test data, reproduce a bug) | `data-command` | `simetra data-command '<json>' [dir] --data-url-env <VAR> --as <uuid>` | `data-command` with `{operations}` |
 
-`fix`, `create`, `add`, `rename`, `delete`, `promote`, `introspect` change files;
+`fix`, `create`, `add`, `declare-function`, `rename`, `delete`, `promote`, `introspect` change files;
 `plan` writes only its plan file; others only read files. `introspect`, `diff`,
 `plan` read the database; `apply`, `roles`, `rights-maintenance` write to it.
 
@@ -348,6 +349,20 @@ A row rule shape:
 ```sql
 ALTER TABLE <schema>.<own_table> ADD CONSTRAINT <rule_name> CHECK (<rule>);
 ```
+
+## Function declarations: `declare-function` and `fix`
+
+`declare-function` creates or replaces the record of one function in the
+sibling `<name>.functions.json` (full replacement of `callers` and `check`, the
+`id` is kept). It writes only when the folder gets no new repair-class error;
+the one allowed change is the declared function's own error becoming
+`sql.declaration-check-not-applied (firstStatement)`, which `fix` then repairs
+by inserting the guard call as the first statement of the body. `fix` never
+invents a right: the guard comes only from the declared `check`. In a folder
+with repair-class errors `fix` writes when it removes at least one of them and
+adds none (and the folder has no error outside the class). `declare-function`
+also cuts the verbatim `GRANT EXECUTE` of the declared function: its ACL now
+belongs to the platform. See `simetra-adoption` for the full chain.
 
 ## SQL debt
 

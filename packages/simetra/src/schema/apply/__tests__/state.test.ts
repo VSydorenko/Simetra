@@ -80,6 +80,20 @@ describe("renderApplyState", () => {
     expect(sql).toContain("CREATE TABLE simetra.ledger (")
   })
 
+  // Р12: прив'язка бази до бакета безумовна й живе в стані, а не в знімку,
+  // тож без об'єктів зі `storage` таблиця є, а грантів на неї немає
+  it("creates the unconditional storage_instance table beside the marker, without grants", async () => {
+    const sql = renderApplyState(await withoutUsers())
+    expect(sql).toContain("CREATE TABLE simetra.storage_instance (")
+    expect(sql).not.toMatch(/GRANT[^;]*storage_instance/)
+  })
+
+  // Стан застосування — чисті DDL без даних: рядок прив'язки створює рантайм
+  it("does not insert any data into storage_instance", async () => {
+    const sql = renderApplyState(await withoutUsers())
+    expect(sql).not.toMatch(/INSERT INTO simetra\.storage_instance/)
+  })
+
   it("secures the schema itself when the platform layer is absent", async () => {
     const sql = renderApplyState(await withoutUsers())
     expect(sql).toContain("REVOKE ALL ON SCHEMA simetra FROM PUBLIC;")

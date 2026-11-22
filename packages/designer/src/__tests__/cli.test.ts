@@ -55,6 +55,17 @@ describe("cli adapter", TOOL_PIPELINE, () => {
     }
   })
 
+  it("tells <schema>.<function> from <Kind>.<Name> by form", async () => {
+    const { input } = await cliInput(
+      tool("explain"),
+      { _: ["app.post_order"] },
+      noStdin
+    )
+    expect(tool("explain").input.parse(input)).toEqual({
+      function: { schema: "app", name: "post_order" },
+    })
+  })
+
   it("maps explain args onto the catalog input", async () => {
     const { input, dirs } = await cliInput(
       tool("explain"),

@@ -30,7 +30,7 @@ const LINE_ID = "22222222-2222-4222-8222-222222222222"
 const SECOND_LINE_ID = "44444444-4444-4444-8444-444444444444"
 const TARGET_ID = "33333333-3333-4333-8333-333333333333"
 
-const { object, attribute, section, added, removed } = EVOLUTION
+const { object, attribute, section, lineAttribute, added, removed } = EVOLUTION
 
 /**
  * Клієнт на каталозі `A` (стара вкладка), сервер на каталозі рантайму `A′`
@@ -65,10 +65,12 @@ const attributeOf = (
   name: string
 ) => owner.attributes.find((a) => a.name === name)!
 
+type Names = { attribute: string; section: string; lineAttribute: string }
+
 /** Рядок картки з ТЧ: `memo` — лише в рядку сервера. */
 function cardRow(
   entry: CatalogEntry,
-  names: { attribute: string; section: string },
+  names: Names,
   extra: LogicalRow = {}
 ): LogicalRow {
   const lines = sectionOf(entry, names.section)
@@ -83,7 +85,7 @@ function cardRow(
           [lines.keyName]: LINE_ID,
           [lines.parentName]: ID,
           [lines.lineNumberName]: 1,
-          region: TARGET_ID,
+          [names.lineAttribute]: TARGET_ID,
           ...extra,
         },
       ],
@@ -91,11 +93,19 @@ function cardRow(
   }
 }
 
-const oldNames = { attribute: attribute.from, section: section.from }
-const newNames = { attribute: attribute.to, section: section.to }
+const oldNames = {
+  attribute: attribute.from,
+  section: section.from,
+  lineAttribute: lineAttribute.from,
+}
+const newNames = {
+  attribute: attribute.to,
+  section: section.to,
+  lineAttribute: lineAttribute.to,
+}
 
 describe("mapping between catalogs A and A′", () => {
-  it.each<[string, (names: { attribute: string; section: string }) => object]>([
+  it.each<[string, (names: Names) => object]>([
     [
       "a page with a filter and include",
       (names) => ({
@@ -113,10 +123,8 @@ describe("mapping between catalogs A and A′", () => {
       }),
     ],
   ])("maps %s by new names", (_, body) => {
-    const query = (
-      entry: CatalogEntry,
-      names: { attribute: string; section: string }
-    ) => ({ object: refOf(entry), ...body(names) }) as ReadQuery
+    const query = (entry: CatalogEntry, names: Names) =>
+      ({ object: refOf(entry), ...body(names) }) as ReadQuery
     const wire = readQueryToWire(client, query(ticket, oldNames))
     expect(wire.ok).toBe(true)
     if (!wire.ok) return
@@ -136,6 +144,15 @@ describe("mapping between catalogs A and A′", () => {
     expect(sectionOf(issue, section.to).id).toBe(
       sectionOf(ticket, section.from).id
     )
+  })
+
+  it("keeps the column of a section attribute on the wire after renaming it", () => {
+    const before = attributeOf(
+      sectionOf(ticket, section.from),
+      lineAttribute.from
+    )
+    const after = attributeOf(sectionOf(issue, section.to), lineAttribute.to)
+    expect(after.column).toBe(before.column)
   })
 
   it("decodes a card result of A′ into A's names without the new column", () => {
@@ -176,10 +193,7 @@ describe("mapping between catalogs A and A′", () => {
   })
 
   it("maps an update with a full replacement of section lines", () => {
-    const op = (
-      entry: CatalogEntry,
-      names: { attribute: string; section: string }
-    ): Operation => {
+    const op = (entry: CatalogEntry, names: Names): Operation => {
       const lines = sectionOf(entry, names.section)
       return {
         action: "update",
@@ -189,7 +203,7 @@ describe("mapping between catalogs A and A′", () => {
         values: { [names.attribute]: TARGET_ID },
         tabularSections: {
           [names.section]: [
-            { [lines.keyName]: LINE_ID, region: TARGET_ID },
+            { [lines.keyName]: LINE_ID, [names.lineAttribute]: TARGET_ID },
             { [lines.keyName]: SECOND_LINE_ID },
           ],
         },
@@ -216,14 +230,11 @@ describe("mapping between catalogs A and A′", () => {
   })
 
   it("decodes a command.constraint error of A′ into A's names", () => {
-    const error = (
-      entry: CatalogEntry,
-      names: { attribute: string; section: string }
-    ): CommandError => ({
+    const error = (entry: CatalogEntry, names: Names): CommandError => ({
       code: "command.constraint",
       kind: "unique",
       object: refOf(entry),
-      attributes: [names.attribute, `${names.section}.region`],
+      attributes: [names.attribute, `${names.section}.${names.lineAttribute}`],
     })
     const wire = errorToWire(server, error(issue, newNames))
     expect(wire).toEqual(errorToWire(client, error(ticket, oldNames)))

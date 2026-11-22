@@ -8,6 +8,10 @@
  *   pnpm --filter simetra builtin-functions
  * Адресу бази можна задати `SIMETRA_TEST_DATABASE_URL`. Дрейф версії Postgres
  * ловить DB-тест `test/db/builtin-functions.db.test.ts`.
+ *
+ * Тим самим запуском пише перелік імен типів `pg_catalog`
+ * (`pg-catalog-types.ts`): тимчасова таблиця тіла з таким ім'ям затіняла б
+ * тип до кінця транзакції (спека прав §6.1).
  */
 import { writeFileSync } from "node:fs"
 import pg from "pg"
@@ -18,6 +22,10 @@ import {
 
 const OUTPUT = new URL(
   "../src/compiler/sql/builtin-functions.ts",
+  import.meta.url
+)
+const TYPES_OUTPUT = new URL(
+  "../src/compiler/sql/pg-catalog-types.ts",
   import.meta.url
 )
 const url =
@@ -72,6 +80,30 @@ ${regclass.map((name) => `  ${JSON.stringify(name)},`).join("\n")}
   console.log(
     `${names.length} of ${rows.length} functions written to ${OUTPUT.pathname}`
   )
+  // Усі типи схеми, не лише initdb: тип розширення в `pg_catalog` затіняється так само.
+  const types = await client.query<{ name: string }>(`
+    SELECT typname AS name
+    FROM pg_type
+    WHERE typnamespace = 'pg_catalog'::regnamespace
+    ORDER BY typname COLLATE "C"
+  `)
+  writeFileSync(
+    TYPES_OUTPUT,
+    `// Згенеровано \`pnpm --filter simetra builtin-functions\` над PostgreSQL ${version.rows[0]!.server_version}.
+// Не правити вручну: генератор — packages/simetra/scripts/builtin-functions.ts.
+
+/**
+ * Імена типів схеми \`pg_catalog\`. Тимчасова таблиця тіла функції з таким
+ * ім'ям створює однойменний тип у \`pg_temp\`, який Postgres шукає раніше за
+ * \`pg_catalog\`, тож до кінця транзакції він затіняв би вбудований тип
+ * (спека прав §6.1).
+ */
+export const PG_CATALOG_TYPES: readonly string[] = [
+${types.rows.map((row) => `  ${JSON.stringify(row.name)},`).join("\n")}
+]
+`
+  )
+  console.log(`${types.rows.length} types written to ${TYPES_OUTPUT.pathname}`)
 } finally {
   await client.end()
 }

@@ -7,7 +7,12 @@ import type {
 } from "./diagnostics"
 import type { CommandContextWrite } from "./sql/command-context"
 import type { DefinerReadsForm } from "./sql/definer-reads"
+import type { PolicyFunctionReason } from "./sql/policy-functions"
+import { pinnedSettingsClause } from "./sql/head-settings"
 import type { HeadConstruct } from "./sql/query-shape"
+
+/** Опції `SET` налаштувань сесії, які фіксує корінь голови, — з одного джерела. */
+const PINNED_SETTINGS = pinnedSettingsClause()
 
 export type Locale = "en" | "uk"
 
@@ -32,6 +37,25 @@ function hintOf<K extends string>(
 ): { en: string; uk: string } {
   const reason = String(params.reason)
   return Object.hasOwn(hints, reason) ? hints[reason as K] : hints[fallback]
+}
+
+/**
+ * Поради `introspect.execute-narrowed` за причиною: роль без сесії definer-
+ * функції не кличе (OQ-1), а роль поза призначеннями отримує `EXECUTE` лише
+ * з того, що виводить платформа (декларація чи форма).
+ */
+const EXECUTE_NARROWED_HINTS: Record<
+  "anonymous" | "outside-assignments",
+  { en: string; uk: string }
+> = {
+  anonymous: {
+    en: "A SECURITY DEFINER function without a session has no user to check, so the plan revokes this EXECUTE. Make the function SECURITY INVOKER first if anonymous access is intended.",
+    uk: "Функція SECURITY DEFINER без сесії не має користувача для перевірки, тож план відкличе цей EXECUTE. Якщо потрібен анонімний доступ, спершу зробіть функцію SECURITY INVOKER.",
+  },
+  "outside-assignments": {
+    en: "The platform derives the EXECUTE of this function from its declaration or its platform form, and this role is not among them, so the plan revokes it. Name the role in the derived assignments (the callers of the declaration, or a caller policy of the policy function with the role and SELECT on its table) if it must keep the access.",
+    uk: "EXECUTE цієї функції платформа виводить з її декларації чи форми платформи, і цієї ролі серед них немає, тож план його відкличе. Якщо доступ має лишитися, назвіть роль у виведених призначеннях (викликачі декларації чи політика-викликач функції політики з цією роллю і SELECT на її таблиці).",
+  },
 }
 
 /**
@@ -572,8 +596,8 @@ const HEAD_CONSTRUCT: Readonly<
     uk: "функція без SET search_path = ''",
   },
   setting: {
-    en: "a SET option of a function other than search_path",
-    uk: "опція SET функції, інша за search_path",
+    en: "session state: a SET option of a function other than search_path, current_setting of a name other than an exact allowed literal (request.jwt.claims), or the session time zone (current_date, localtime, localtimestamp, a conversion to date, time or timestamp without AT TIME ZONE '<zone>')",
+    uk: "стан сесії: опція SET функції, інша за search_path, current_setting з назвою, іншою за точний дозволений літерал (request.jwt.claims), чи часова зона сесії (current_date, localtime, localtimestamp, перетворення в date, time чи timestamp без AT TIME ZONE '<зона>')",
   },
   sqlBody: {
     en: "a SQL-standard body (BEGIN ATOMIC, RETURN), which binds names with the search_path of the creating session",
@@ -693,6 +717,42 @@ const SET_FUNCTION_REASON: Readonly<
     uk: "вона без SET search_path = ''",
   },
 }
+/** Причини `sql.policy-helper-correlated` (спека декларацій функцій §5.8). */
+const POLICY_FUNCTION_REASON: Readonly<
+  Record<PolicyFunctionReason, { en: string; uk: string }>
+> = {
+  parameters: {
+    en: "it takes parameters, so a direct call can ask about another row or user",
+    uk: "вона приймає параметри, тож прямий виклик може спитати про інший рядок чи користувача",
+  },
+  language: { en: "its language is not sql", uk: "її мова не sql" },
+  volatility: { en: "it is not STABLE", uk: "вона не STABLE" },
+  returns: {
+    en: "it does not return SETOF uuid",
+    uk: "вона не повертає SETOF uuid",
+  },
+  outputKey: {
+    en: "its output is not the bare key column of the one table T that every calling policy stands on, read from T once",
+    uk: "її вивід — не голий ключ єдиної таблиці T, на якій стоять усі політики-викликачі, прочитаної з T один раз",
+  },
+  restrictiveBound: {
+    en: "a RESTRICTIVE SELECT policy of T that applies to its callers is not a conjunct of its WHERE over T, or reads what means another thing in the owner's body (session roles, role and privilege functions, tables under RLS, views)",
+    uk: "RESTRICTIVE-політика SELECT таблиці T, що діє на викликачів, не стоїть кон'юнктом її WHERE над T або читає те, що в тілі власника означає інше (ролі сесії, функції ролей і привілеїв, таблиці під RLS, подання)",
+  },
+  actorUnbound: {
+    en: "its result is not bound to the actor: one SELECT over base tables joined by equalities, with a top-level WHERE conjunct <column> = auth.uid() or simetra.current_user_id(), or <column> IN (SELECT g()) over another policy or set function",
+    uk: "її результат не прив'язаний до актора: один SELECT над базовими таблицями, з'єднаними рівностями, з кон'юнктом верхнього рівня WHERE <колонка> = auth.uid() чи simetra.current_user_id() або <колонка> IN (SELECT g()) над іншою функцією політики чи функцією множини",
+  },
+  policyShape: {
+    en: "a calling policy is not <key of T> IN (SELECT f()) or an OR of such atoms over policy functions",
+    uk: "політика-викликач — не <ключ T> IN (SELECT f()) чи OR таких атомів над функціями політик",
+  },
+  policyRoles: {
+    en: "a calling policy names PUBLIC, a role without a session or outside the purposes, or a role that does not read T itself: no PERMISSIVE FOR SELECT or ALL policy of T TO the role (or PUBLIC) calls the function in USING, or the role has no table-level SELECT on T or no USAGE on the schema of T",
+    uk: "політика-викликач називає PUBLIC, роль без сесії чи поза призначеннями або роль, що не читає T сама: жодна PERMISSIVE-політика T FOR SELECT чи ALL TO цієї ролі (чи PUBLIC) не кличе функцію в USING, або роль не має SELECT на T на рівні таблиці чи USAGE на схему T",
+  },
+}
+
 const ROW_RULE_GRAMMAR = {
   en: "A row rule combines with AND, OR, NOT and parentheses the atoms <column> IS [NOT] NULL, <column> = or <> <literal>, <column> [NOT] IN (<literals>), <column> <op> <column> of the same type and num_nonnulls(<columns>) <op> <integer>, where <op> is =, <>, <, <=, > or >=; columns are unqualified columns of the table, without casts, other functions or subqueries; emptiness is checked with IS [NOT] NULL, never with a NULL literal.",
   uk: "Правило рядка поєднує через AND, OR, NOT і дужки атоми <колонка> IS [NOT] NULL, <колонка> = чи <> <літерал>, <колонка> [NOT] IN (<літерали>), <колонка> <оп> <колонка> одного типу й num_nonnulls(<колонки>) <оп> <ціле>, де <оп> — =, <>, <, <=, > чи >=; колонки — некваліфіковані колонки таблиці, без приведень, інших функцій і підзапитів; порожнечу перевіряє IS [NOT] NULL, а не літерал NULL.",
@@ -978,6 +1038,24 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Remove maxBytes: the runtime does not read registers yet, so the field would have no effect.",
       uk: "Приберіть maxBytes: рантайм ще не читає регістрів, тож поле нічого б не робило.",
+    },
+  },
+  "storage.incompatible": {
+    en: (p) => `A catalog with storage cannot use ${p.field}`,
+    uk: (p) => `Довідник зі storage не може мати ${p.field}`,
+    hint: {
+      en: "A file row is written only by the attach trigger; remove storage, or remove the conflicting setting (a scope kind root, role, membership, rightsContainer, containerBinding, predefinedItems, hierarchyType FoldersAndItems).",
+      uk: "Рядок файлу пише лише тригер вкладення; приберіть storage або конфліктне налаштування (корінь виду скоупу, role, membership, rightsContainer, containerBinding, predefinedItems, hierarchyType FoldersAndItems).",
+    },
+  },
+  "storage.media-type": {
+    en: () =>
+      "storage.mediaTypes must be a non-empty list of unique lowercase type/subtype strings without parameters",
+    uk: () =>
+      "storage.mediaTypes має бути непорожнім переліком унікальних type/subtype малими літерами без параметрів",
+    hint: {
+      en: 'Write each type as "image/png": lowercase, one slash, no ";charset=…" parameters, no duplicates.',
+      uk: 'Пишіть кожен тип як "image/png": малі літери, один слеш, без параметрів ";charset=…", без повторів.',
     },
   },
   "attribute.lazy-not-allowed": {
@@ -1335,8 +1413,46 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
               ? `Функція ${p.function} у рядку ${p.line} має частину, яку компілятор не прочитав`
               : `Функція ${p.function} у рядку ${p.line} виконує ${p.statement}, якого тілу функції виконувати не можна`,
     hint: {
-      en: "The body of a function or procedure, in any .sql file and in SQL debt too, runs only allowlisted statements: SELECT, INSERT, UPDATE, DELETE, MERGE, LOCK, SET and RESET, CALL, NOTIFY, REFRESH MATERIALIZED VIEW of a view of the model, DO, and temporary tables of the body itself (CREATE TEMP TABLE … ON COMMIT DROP and their DROP). The text of a literal EXECUTE and a DO block follow the same list. A non-literal EXECUTE, a call of a function that executes SQL text (query_to_xml, ts_stat, dblink, cron.schedule and the like), another language or a part the compiler cannot read cannot be judged, so they are refused too. Rewrite the function without the statement or move the change into metadata or a migration.",
-      uk: "Тіло функції чи процедури, у будь-якому файлі .sql і в боргу теж, виконує лише оператори з дозвільного переліку: SELECT, INSERT, UPDATE, DELETE, MERGE, LOCK, SET і RESET, CALL, NOTIFY, REFRESH MATERIALIZED VIEW подання моделі, DO і тимчасові таблиці самого тіла (CREATE TEMP TABLE … ON COMMIT DROP та їхній DROP). Текст літерального EXECUTE і блок DO — за тим самим переліком. Нелітеральний EXECUTE, виклик функції, що виконує текст SQL (query_to_xml, ts_stat, dblink, cron.schedule тощо), іншу мову чи частину, яку компілятор не прочитав, судити неможливо, тож вони теж заборонені. Перепишіть функцію без цього оператора або перенесіть зміну в метадані чи міграцію.",
+      en: "The body of a function or procedure, in any .sql file and in SQL debt too, runs only allowlisted statements: SELECT, INSERT, UPDATE, DELETE, MERGE, LOCK, SET LOCAL, CALL, NOTIFY, REFRESH MATERIALIZED VIEW of a view of the model, DO, and temporary tables of the body itself (CREATE TEMP TABLE … ON COMMIT DROP and their DROP). The text of a literal EXECUTE and a DO block follow the same list. A non-literal EXECUTE, a call of a function that executes SQL text (query_to_xml, ts_stat, dblink, cron.schedule and the like), another language or a part the compiler cannot read cannot be judged, so they are refused too. Rewrite the function without the statement or move the change into metadata or a migration.",
+      uk: "Тіло функції чи процедури, у будь-якому файлі .sql і в боргу теж, виконує лише оператори з дозвільного переліку: SELECT, INSERT, UPDATE, DELETE, MERGE, LOCK, SET LOCAL, CALL, NOTIFY, REFRESH MATERIALIZED VIEW подання моделі, DO і тимчасові таблиці самого тіла (CREATE TEMP TABLE … ON COMMIT DROP та їхній DROP). Текст літерального EXECUTE і блок DO — за тим самим переліком. Нелітеральний EXECUTE, виклик функції, що виконує текст SQL (query_to_xml, ts_stat, dblink, cron.schedule тощо), іншу мову чи частину, яку компілятор не прочитав, судити неможливо, тож вони теж заборонені. Перепишіть функцію без цього оператора або перенесіть зміну в метадані чи міграцію.",
+    },
+  },
+  "sql.function-body-session-setting": {
+    en: (p) =>
+      p.form === "reset"
+        ? `Function ${p.function} at line ${p.line} runs RESET${p.setting === undefined ? " ALL" : ` ${p.setting}`}, which changes the session past the transaction`
+        : p.form === "setConfig"
+          ? `Function ${p.function} at line ${p.line} calls set_config(${p.setting === undefined ? "…" : `'${p.setting}'`}, …) without the literal true as its third argument, so the setting outlives the transaction`
+          : `Function ${p.function} at line ${p.line} runs SET${p.setting === undefined ? "" : ` ${p.setting}`} without LOCAL, so the setting outlives the transaction`,
+    uk: (p) =>
+      p.form === "reset"
+        ? `Функція ${p.function} у рядку ${p.line} виконує RESET${p.setting === undefined ? " ALL" : ` ${p.setting}`}, що змінює сесію поза транзакцією`
+        : p.form === "setConfig"
+          ? `Функція ${p.function} у рядку ${p.line} викликає set_config(${p.setting === undefined ? "…" : `'${p.setting}'`}, …) без літерала true третім аргументом, тож налаштування переживає транзакцію`
+          : `Функція ${p.function} у рядку ${p.line} виконує SET${p.setting === undefined ? "" : ` ${p.setting}`} без LOCAL, тож налаштування переживає транзакцію`,
+    hint: {
+      en: "A connection of the command pool serves the next command of another user, so a function body changes a session setting only for its own transaction: SET LOCAL <setting> = <value>, or set_config('<setting>', <value>, true) with the literal true. SET without LOCAL and RESET change the session past the transaction (a statement_timeout or lock_timeout left behind would break the commands of other users), so they are refused in every .sql file, SQL debt included. A setting the whole call needs can also be a SET option of CREATE FUNCTION: Postgres restores it when the function returns.",
+      uk: "З'єднання пулу команд обслуговує наступну команду іншого користувача, тож тіло функції змінює налаштування сесії лише для своєї транзакції: SET LOCAL <налаштування> = <значення> або set_config('<налаштування>', <значення>, true) з літералом true. SET без LOCAL і RESET змінюють сесію поза транзакцією (лишений statement_timeout чи lock_timeout ламав би команди інших користувачів), тож вони заборонені в будь-якому файлі .sql, борг включно. Налаштування на весь виклик може бути й опцією SET у CREATE FUNCTION: Postgres повертає його, коли функція завершується.",
+    },
+  },
+  "sql.function-body-temp-type": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line} creates temporary table ${p.table}, named after a type of pg_catalog`,
+    uk: (p) =>
+      `Функція ${p.function} у рядку ${p.line} створює тимчасову таблицю ${p.table} з іменем типу pg_catalog`,
+    hint: {
+      en: "A temporary table also creates a row type of the same name in pg_temp, and Postgres looks up type names in pg_temp before pg_catalog. Until the end of the transaction such a table would replace the builtin type (uuid, text, int4 and the like) for every unqualified cast and declaration of the command. Give the temporary table of the body a name that is not a type of pg_catalog.",
+      uk: "Тимчасова таблиця створює ще й однойменний тип рядка в pg_temp, а Postgres шукає імена типів у pg_temp раніше за pg_catalog. До кінця транзакції така таблиця підмінила б вбудований тип (uuid, text, int4 тощо) для кожного некваліфікованого приведення й оголошення команди. Дайте тимчасовій таблиці тіла ім'я, що не є типом pg_catalog.",
+    },
+  },
+  "sql.function-body-session-builtin": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line} calls ${p.call}, which changes session state beyond the transaction`,
+    uk: (p) =>
+      `Функція ${p.function} у рядку ${p.line} викликає ${p.call}, що змінює стан сесії поза транзакцією`,
+    hint: {
+      en: "A session-level advisory lock, the seed of random() and the replication origin of a session outlive the transaction, so in a connection of the command pool the next command of another user would inherit them. In a function body take a transaction-level advisory lock (pg_advisory_xact_lock, pg_try_advisory_xact_lock), which Postgres releases with the command, and do not seed random().",
+      uk: "Сесійний advisory-замок, зерно random() і походження реплікації сесії переживають транзакцію, тож у з'єднанні пулу команд їх успадкувала б наступна команда іншого користувача. У тілі функції беріть транзакційний advisory-замок (pg_advisory_xact_lock, pg_try_advisory_xact_lock), який Postgres знімає разом із командою, і не задавайте зерно random().",
     },
   },
   "sql.platform-function-call": {
@@ -1419,8 +1535,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `${p.head} у рядку ${p.line} виконує ${headConstruct(p.construct)?.uk ?? p.construct}${p.detail === undefined ? "" : ` (${p.detail})`}: ${p.chain}`,
     hint: {
-      en: "Functions of kind modules, subscription handlers, scope set functions, access dimension value functions and movement query blocks run in the middle of a command or of a policy, so the compiler accepts only what its allowlist names. A handler only checks: it reads with SELECT … INTO, assigns NEW and raises errors; it writes no table, runs no EXECUTE, CALL, SET or cursor. Every other head and every function it calls is a query function: LANGUAGE sql, a string body of exactly one SELECT, SET search_path = '' and no other SET option. They read only qualified tables of kinds, adopted tables and views of the model, and call only query functions of the model, simetra.current_user_id(), generated functions that read, the listed provider functions (auth.uid(), auth.jwt(), auth.role()) and allowlisted builtins; in a view or a policy a builtin is written as pg_catalog.<name>. Move a write into a command of the object or a TypeScript hook.",
-      uk: "Функції модулів видів, обробники підписок, функції множини скоупу, функції значень вимірів доступу й блоки запиту рухів виконуються посеред команди чи політики, тож компілятор приймає лише те, що називає його дозвільний перелік. Обробник лише перевіряє: читає через SELECT … INTO, присвоює NEW і кидає помилки; він не пише таблиць, не виконує EXECUTE, CALL, SET чи курсорів. Кожна інша голова й кожна функція, яку вона кличе, — функція-запит: LANGUAGE sql, рядкове тіло рівно з одного SELECT, SET search_path = '' і жодної іншої опції SET. Вони читають лише кваліфіковані таблиці видів, прийняті таблиці й подання моделі та кличуть лише функції-запити моделі, simetra.current_user_id(), згенеровані функції, що читають, поіменні функції провайдера (auth.uid(), auth.jwt(), auth.role()) і вбудовані з переліку; у поданні чи політиці вбудовану пишуть як pg_catalog.<ім'я>. Перенесіть запис у команду об'єкта чи TypeScript-хук.",
+      en: "Functions of kind modules, subscription handlers, scope set functions, access dimension value functions and movement query blocks run in the middle of a command or of a policy, so the compiler accepts only what its allowlist names. A handler only checks: it reads with SELECT … INTO, assigns NEW and raises errors; it writes no table, runs no EXECUTE, CALL, SET or cursor, and no ASSERT (a session setting can switch ASSERT off: use IF … THEN RAISE). Every other head and every function it calls is a query function: LANGUAGE sql, a string body of exactly one SELECT, SET search_path = '' and no other SET option except the session settings a scope set function, a dimension value function or a policy function pins, at their pinned values (sql.head-settings). They read only qualified tables of kinds, adopted tables and views of the model, and call only query functions of the model, simetra.current_user_id(), generated functions that read, the listed provider functions (auth.uid(), auth.jwt(), auth.role()) and builtins of the head allowlist: pure functions without session, connection or request state. Of the session they read only current_setting('request.jwt.claims', …) with the name as a plain literal. A verbatim policy expression has no such settings, so it never reads the session time zone: write now() AT TIME ZONE '<zone>' before a conversion to date, time, timetz or timestamp, and a date literal in ISO form. In a view or a policy a builtin is written as pg_catalog.<name>. Move a write into a command of the object or a TypeScript hook.",
+      uk: "Функції модулів видів, обробники підписок, функції множини скоупу, функції значень вимірів доступу й блоки запиту рухів виконуються посеред команди чи політики, тож компілятор приймає лише те, що називає його дозвільний перелік. Обробник лише перевіряє: читає через SELECT … INTO, присвоює NEW і кидає помилки; він не пише таблиць, не виконує EXECUTE, CALL, SET, курсорів і ASSERT (ASSERT вимикає налаштування сесії: пишіть IF … THEN RAISE). Кожна інша голова й кожна функція, яку вона кличе, — функція-запит: LANGUAGE sql, рядкове тіло рівно з одного SELECT, SET search_path = '' і жодної іншої опції SET, крім налаштувань сесії, які фіксує функція множини, функція значень виміру чи функція політики, у їхніх зафіксованих значеннях (sql.head-settings). Вони читають лише кваліфіковані таблиці видів, прийняті таблиці й подання моделі та кличуть лише функції-запити моделі, simetra.current_user_id(), згенеровані функції, що читають, поіменні функції провайдера (auth.uid(), auth.jwt(), auth.role()) і вбудовані з переліку голови: чисті функції без стану сесії, з'єднання й запиту. Зі стану сесії вони читають лише current_setting('request.jwt.claims', …) з назвою голим літералом. Дослівний вираз політики таких налаштувань не має, тож ніколи не читає часової зони сесії: пишіть now() AT TIME ZONE '<зона>' перед перетворенням у date, time, timetz чи timestamp, а літерал дати — у формі ISO. У поданні чи політиці вбудовану пишуть як pg_catalog.<ім'я>. Перенесіть запис у команду об'єкта чи TypeScript-хук.",
     },
   },
   "sql.domain-check-not-allowed": {
@@ -1431,6 +1547,28 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Postgres runs the CHECK of a domain whenever a value is cast to it, also in the middle of a command or of a policy, so the CHECK follows the rules of a query function: it calls only allowlisted builtins written as pg_catalog.<name> and query functions of the model, and reads only qualified tables of kinds, adopted tables and views of the model. Move other logic into a command of the object or a TypeScript hook.",
       uk: "Postgres виконує CHECK домену щоразу, коли значення приводять до нього, зокрема посеред команди чи політики, тож CHECK підлягає правилам функції-запиту: він кличе лише вбудовані з переліку, записані як pg_catalog.<ім'я>, і функції-запити моделі та читає лише кваліфіковані таблиці видів, прийняті таблиці й подання моделі. Перенесіть іншу логіку в команду об'єкта чи TypeScript-хук.",
+    },
+  },
+  "sql.head-settings": {
+    en: (p) =>
+      p.problem === "alter"
+        ? `A separate ALTER FUNCTION changes ${p.setting} of function ${p.function} (line ${p.line}); only its CREATE FUNCTION may set it, to '${p.expected}'`
+        : p.problem === "notFixed"
+          ? `Function ${p.function} at line ${p.line} sets ${p.setting} without a fixed value; it must be '${p.expected}'`
+          : p.problem === "value"
+            ? `Function ${p.function} at line ${p.line} sets ${p.setting} to '${p.actual}' instead of '${p.expected}'`
+            : `Function ${p.function} at line ${p.line} does not set ${p.setting} = '${p.expected}' in its CREATE FUNCTION`,
+    uk: (p) =>
+      p.problem === "alter"
+        ? `Окремий ALTER FUNCTION змінює ${p.setting} функції ${p.function} (рядок ${p.line}); задавати його може лише її CREATE FUNCTION, значенням '${p.expected}'`
+        : p.problem === "notFixed"
+          ? `Функція ${p.function} у рядку ${p.line} задає ${p.setting} без фіксованого значення; потрібно '${p.expected}'`
+          : p.problem === "value"
+            ? `Функція ${p.function} у рядку ${p.line} задає ${p.setting} як '${p.actual}' замість '${p.expected}'`
+            : `Функція ${p.function} у рядку ${p.line} не задає ${p.setting} = '${p.expected}' у своєму CREATE FUNCTION`,
+    hint: {
+      en: `A scope set function, an access dimension value function and a policy function run with the session of the client, which chooses its own time zone (PostgREST Prefer: timezone), date, interval, number, money, bytea and XML styles and text search configuration. The values the function reads and returns would then depend on the client, so the function pins these settings in its own options. Write ${PINNED_SETTINGS} in the CREATE FUNCTION statement, not in a separate ALTER FUNCTION; a function it calls sets none of them to another value.`,
+      uk: `Функція множини скоупу, функція значень виміру доступу й функція політики виконуються в сесії клієнта, який сам обирає часову зону (Prefer: timezone PostgREST), стилі дат, інтервалів, чисел, грошей, bytea і XML та конфігурацію текстового пошуку. Значення, які функція читає й повертає, тоді залежали б від клієнта, тож функція фіксує ці налаштування у власних опціях. Напишіть ${PINNED_SETTINGS} в операторі CREATE FUNCTION, а не окремим ALTER FUNCTION; функція, яку вона кличе, не ставить жодному з них іншого значення.`,
     },
   },
   "sql.function-settings-shell": {
@@ -1560,6 +1698,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Функція SECURITY DEFINER виконується від свого власника, який обходить захист рядків, тож роль API, що може її виконати, діє повз права. Така функція відхиляється в будь-якому файлі .sql, борг включно, доки не набуде форми платформи чи не назве перевірку викликача: зв'яжіть її з видом скоупу як функцію множини (чи з виміром доступу як функцію значень) або задекларуйте її сигнатуру з названою перевіркою. Інакше зробіть її SECURITY INVOKER, відкличте EXECUTE від PUBLIC і від кожної ролі API або запишіть операцію командою чи TypeScript-хуком.",
     },
   },
+  "sql.policy-helper-correlated": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line} is called by a verbatim policy but is not a policy function: ${POLICY_FUNCTION_REASON[p.reason as PolicyFunctionReason]?.en ?? p.reason}${p.detail === undefined ? "" : ` (also: ${p.detail})`}`,
+    uk: (p) =>
+      `Функцію ${p.function} у рядку ${p.line} кличе дослівна політика, але вона не функція політики: ${POLICY_FUNCTION_REASON[p.reason as PolicyFunctionReason]?.uk ?? p.reason}${p.detail === undefined ? "" : ` (ще: ${p.detail})`}`,
+    hint: {
+      en: `A role of the query can call a function that a policy calls also as an RPC, so the platform grants EXECUTE only to a policy function, whose direct call returns no more than the policy lets the actor read: no parameters, RETURNS SETOF uuid, LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}, the key of the policy table bound to the actor, each calling policy written as <key> IN (SELECT f()), and each role that gets EXECUTE reading the policy table itself: a PERMISSIVE FOR SELECT policy TO the role that calls the function, table-level SELECT on the table and USAGE on its schema. Rewrite the function into this form, or, when it answers with facts of the actor about another table (members, tenants), reduce it to the set function of a scope kind.`,
+      uk: `Роль запиту може кликати функцію, яку кличе політика, ще й як RPC, тож EXECUTE платформа дає лише функції політики, прямий виклик якої повертає не більше, ніж політика дозволяє актору читати: без параметрів, RETURNS SETOF uuid, LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}, ключ таблиці політики, прив'язаний до актора, кожна політика-викликач у формі <ключ> IN (SELECT f()), а кожна роль, що отримує EXECUTE, читає таблицю політики сама: PERMISSIVE-політика FOR SELECT TO цієї ролі, що кличе функцію, SELECT на таблицю на рівні таблиці й USAGE на її схему. Перепишіть функцію в цю форму або, коли вона відповідає фактами актора про іншу таблицю (учасники, тенанти), зведіть її до функції множини виду скоупу.`,
+    },
+  },
   "sql.declaration-target-missing": {
     en: (p) =>
       `Declaration of ${p.function} names a function that ${p.sqlFile} does not create`,
@@ -1610,12 +1758,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "sql.declaration-platform-form-widens": {
     en: (p) =>
-      `${p.function} became a platform form (${p.form}): its declaration is removed, and the form also grants EXECUTE to ${p.roles}`,
+      p.declined === undefined
+        ? `${p.function} became a platform form (${p.form}): its declaration is removed, and the form also grants EXECUTE to ${p.roles}`
+        : `${p.function} became a platform form (${p.form}), but its declaration is not removed: the form would also grant EXECUTE to ${p.roles}; widen the declaration with declare-function or keep the function out of the platform form`,
     uk: (p) =>
-      `${p.function} стала формою платформи (${p.form}): її декларацію видалено, і форма відкриває EXECUTE ще й ${p.roles}`,
+      p.declined === undefined
+        ? `${p.function} стала формою платформи (${p.form}): її декларацію видалено, і форма відкриває EXECUTE ще й ${p.roles}`
+        : `${p.function} стала формою платформи (${p.form}), але її декларацію не видалено: форма відкрила б EXECUTE ще й ${p.roles}; розширте декларацію через declare-function або не робіть функцію формою платформи`,
     hint: {
       en: "The platform derives the grants of a platform form from the metadata, and they are wider than the callers the declaration named. Check that these roles may call the function, or keep it out of the platform form.",
       uk: "Гранти форми платформи виводить платформа з метаданих, і вони ширші за викликачів, яких називала декларація. Перевірте, що цим ролям можна кликати функцію, або не робіть її формою платформи.",
+    },
+  },
+  "sql.declaration-execute-widened": {
+    en: (p) =>
+      `The declaration of ${p.function} now grants EXECUTE to ${p.roles}, which the previous declaration did not`,
+    uk: (p) =>
+      `Декларація ${p.function} тепер відкриває EXECUTE ще й ${p.roles}, чого попередня декларація не робила`,
+    hint: {
+      en: "Check that these roles may call the function. A function that acts as its owner (SECURITY DEFINER) must also apply a rights check for them.",
+      uk: "Перевірте, що цим ролям можна кликати функцію. Функція, що діє від власника (SECURITY DEFINER), мусить ще й застосовувати перевірку прав для них.",
     },
   },
   "sql.declaration-check-missing": {
@@ -1640,12 +1802,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "sql.declaration-check-not-applied": {
     en: (p) =>
-      `${p.function} is SECURITY DEFINER with callers that act for a user, and its body does not prove the named check (${p.reason})`,
+      `${p.function} is SECURITY DEFINER, and its body does not prove the named check (${p.reason})`,
     uk: (p) =>
-      `${p.function} — SECURITY DEFINER з викликачами від імені користувача, і тіло не доводить названої перевірки (${p.reason})`,
+      `${p.function} — SECURITY DEFINER, і тіло не доводить названої перевірки (${p.reason})`,
     hint: {
-      en: "The named check counts only once the body applies it through the call guard: the first statement of the outer block (no DECLARE or EXCEPTION section) is PERFORM simetra.rights_require('<action>', '<kind label>', <row parameter or NULL>) — rights_require_scope for a scope target — with exactly the declared action, kind label and target parameter. Otherwise make the function SECURITY INVOKER or leave only the service caller.",
-      uk: "Названа перевірка діє, лише коли тіло застосовує її запобіжником виклику: перший оператор зовнішнього блоку (без секцій DECLARE і EXCEPTION) — PERFORM simetra.rights_require('<дія>', '<мітка виду>', <параметр рядка або NULL>), для цілі scope — rights_require_scope, з точно оголошеними дією, міткою виду й параметром цілі. Інакше зробіть функцію SECURITY INVOKER або залиште лише викликача service.",
+      en: "The named check counts only once the body applies it through the call guard: the first statement of the outer block (no DECLARE or EXCEPTION section) is PERFORM simetra.rights_require('<action>', '<kind label>', <row parameter or NULL>) — rights_require_scope for a scope target — with exactly the declared action, kind label and target parameter. Otherwise remove the check from the declaration or make the function SECURITY INVOKER.",
+      uk: "Названа перевірка діє, лише коли тіло застосовує її запобіжником виклику: перший оператор зовнішнього блоку (без секцій DECLARE і EXCEPTION) — PERFORM simetra.rights_require('<дія>', '<мітка виду>', <параметр рядка або NULL>), для цілі scope — rights_require_scope, з точно оголошеними дією, міткою виду й параметром цілі. Інакше приберіть check з декларації або зробіть функцію SECURITY INVOKER.",
     },
   },
   "sql.declaration-anonymous-definer": {
@@ -1907,6 +2069,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       `Name "${p.name}" is taken by a standard element of the kind ${p.kind}`,
     uk: (p) => `Ім'я "${p.name}" зайняте стандартним елементом виду ${p.kind}`,
   },
+  "identity.name-structural": {
+    en: (p) =>
+      `Name "${p.name}" is a structural word of operation error paths; give the element another name`,
+    uk: (p) =>
+      `Ім'я "${p.name}" — структурне слово шляхів помилок операції; дайте елементу інше ім'я`,
+  },
   "reference.unresolved": {
     en: (p) => `${p.kind} "${p.name}" does not exist`,
     uk: (p) => `${p.kind} "${p.name}" не існує`,
@@ -2151,8 +2319,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Функція множини скоупу ${p.function}() не визначена в жодному файлі .sql`,
     hint: {
-      en: "Add 'CREATE FUNCTION <schema>.<name>() RETURNS SETOF uuid LANGUAGE sql STABLE ...' to a .sql file.",
-      uk: "Додайте 'CREATE FUNCTION <схема>.<ім'я>() RETURNS SETOF uuid LANGUAGE sql STABLE ...' до файлу .sql.",
+      en: `Add 'CREATE FUNCTION <schema>.<name>() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS} ...' to a .sql file.`,
+      uk: `Додайте 'CREATE FUNCTION <схема>.<ім'я>() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS} ...' до файлу .sql.`,
     },
   },
   "scope.membership-missing": {
@@ -2175,8 +2343,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         ? `Функція множини скоупу ${p.function}() має хибну сигнатуру: ${p.problem}`
         : `Функція множини скоупу ${p.function}() поза закритою формою: ${SET_FUNCTION_REASON[String(p.reason)]?.uk ?? p.reason}`,
     hint: {
-      en: "A set function takes no arguments, returns SETOF uuid and is LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''; its body is judged as a query function (sql.head-not-allowed).",
-      uk: "Функція множини не приймає аргументів, повертає SETOF uuid і є LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''; її тіло судиться як функція-запит (sql.head-not-allowed).",
+      en: `A set function takes no arguments, returns SETOF uuid and is LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}; its body is judged as a query function (sql.head-not-allowed).`,
+      uk: `Функція множини не приймає аргументів, повертає SETOF uuid і є LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}; її тіло судиться як функція-запит (sql.head-not-allowed).`,
     },
   },
 
@@ -2647,8 +2815,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Функція значень ${p.function}() виміру доступу "${p.dimension}" не визначена в жодному файлі .sql`,
     hint: {
-      en: "Add 'CREATE FUNCTION <schema>.<name>() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ...' to a .sql file.",
-      uk: "Додайте 'CREATE FUNCTION <схема>.<ім'я>() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ...' до файлу .sql.",
+      en: `Add 'CREATE FUNCTION <schema>.<name>() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS} ...' to a .sql file.`,
+      uk: `Додайте 'CREATE FUNCTION <схема>.<ім'я>() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS} ...' до файлу .sql.`,
     },
   },
   "rights.dimension-function-signature": {
@@ -2661,8 +2829,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         ? `Функція значень ${p.function}() виміру доступу "${p.dimension}" має хибну сигнатуру: ${p.problem}`
         : `${p.function} у значеннях виміру доступу "${p.dimension}" — поза закритою формою: ${SET_FUNCTION_REASON[String(p.reason)]?.uk ?? p.reason}`,
     hint: {
-      en: "The values function takes no arguments, returns SETOF uuid and is LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''; its body and every function it calls are judged as query functions (sql.head-not-allowed).",
-      uk: "Функція значень не приймає аргументів, повертає SETOF uuid і є LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''; її тіло й кожна функція, яку вона кличе, судяться як функції-запити (sql.head-not-allowed).",
+      en: `The values function takes no arguments, returns SETOF uuid and is LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}; its body and every function it calls are judged as query functions (sql.head-not-allowed).`,
+      uk: `Функція значень не приймає аргументів, повертає SETOF uuid і є LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}; її тіло й кожна функція, яку вона кличе, судяться як функції-запити (sql.head-not-allowed).`,
     },
   },
   "rights.dimension-function-reads-rights": {
@@ -4900,6 +5068,30 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
           : `Нічого не сплановано й не записано. Виконайте це зняття від ${p.login}. Якщо живий тригер змінено поза Simetra, вважайте це ознакою підробки й звірте його з власником таблиці.`,
     },
   },
+  "plan.storage-added": {
+    en: (p) =>
+      `The plan adds the file storage property to the live table ${p.table}: its existing rows would have no file size and no byte record`,
+    uk: (p) =>
+      `План додає властивість storage до живої таблиці ${p.table}: наявні рядки лишилися б без розміру файлу й без байтів`,
+    hint: {
+      en: (p) =>
+        `Nothing was planned or written. Put the files in a new object that has storage from the start, and move the rows there; a catalog with a live table cannot gain storage in place (table ${p.table}).`,
+      uk: (p) =>
+        `Нічого не сплановано й не записано. Заведіть новий об'єкт зі storage з самого початку й перенесіть рядки туди: довідник з живою таблицею не може отримати storage на місці (таблиця ${p.table}).`,
+    },
+  },
+  "plan.storage-removed": {
+    en: (p) =>
+      `The plan removes the file storage property from the live table ${p.table}: the bytes of its rows would stay in the bucket with no row to own them`,
+    uk: (p) =>
+      `План прибирає властивість storage з живої таблиці ${p.table}: байти її рядків лишилися б у бакеті без рядка-власника`,
+    hint: {
+      en: (p) =>
+        `Nothing was planned or written. Delete the rows of ${p.table} through commands first so the runtime removes their bytes, then drop the whole object; storage cannot be removed from a live table in place.`,
+      uk: (p) =>
+        `Нічого не сплановано й не записано. Спершу видаліть рядки ${p.table} командами, щоб рантайм прибрав їхні байти, а тоді прибирайте весь об'єкт: storage не знімається з живої таблиці на місці.`,
+    },
+  },
   "plan.type-guard-unsupported": {
     en: (p) =>
       p.reason === "equality"
@@ -5710,6 +5902,65 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "File names are derived from unit identities; rename one of the database objects so their file names differ.",
       uk: "Імена файлів виводяться з ідентичностей одиниць; перейменуйте один з об'єктів бази, щоб імена файлів різнилися.",
+    },
+  },
+  "introspect.definer-check-unknown": {
+    en: (p) =>
+      `${p.function} is SECURITY DEFINER and the check could not be recovered from its body (${p.reason})`,
+    uk: (p) =>
+      `${p.function} — SECURITY DEFINER, і перевірку не відновлено з її тіла (${p.reason})`,
+    hint: {
+      en: "The declaration is written without check, so the compiler reports sql.declaration-check-missing. Add a check (declare-function) and let simetra fix insert the call guard as the first statement, or remove user and command from the callers.",
+      uk: "Декларацію записано без check, тож компілятор дасть sql.declaration-check-missing. Додайте check (declare-function) і дозвольте simetra fix вставити запобіжник виклику першим оператором або приберіть user і command з викликачів.",
+    },
+  },
+  "introspect.execute-narrowed": {
+    en: (p) =>
+      `${p.function}: EXECUTE of ${p.role} is not carried over (${p.reason === "anonymous" ? "a role without a session" : "outside the derived assignments"}), the plan revokes it`,
+    uk: (p) =>
+      `${p.function}: EXECUTE ролі ${p.role} не перенесено (${p.reason === "anonymous" ? "роль без сесії" : "поза виведеними призначеннями"}), план його відкличе`,
+    hint: {
+      en: (p) => hintOf(EXECUTE_NARROWED_HINTS, p, "outside-assignments").en,
+      uk: (p) => hintOf(EXECUTE_NARROWED_HINTS, p, "outside-assignments").uk,
+    },
+  },
+  "introspect.definer-platform-form-candidate": {
+    en: (p) =>
+      `${p.function} takes no arguments and returns SETOF uuid: it may be a platform form`,
+    uk: (p) =>
+      `${p.function} без аргументів і повертає SETOF uuid: це може бути форма платформи`,
+    hint: {
+      en: "Declare a scope kind with setFunction (or an access dimension with a values function) that names this function with the create or add mutation; the declaration is then removed and the platform derives EXECUTE. Otherwise keep it as a SECURITY DEFINER RPC with a check.",
+      uk: "Оголосіть вид скоупу з setFunction (чи вимір доступу з функцією значень), що називає цю функцію, мутацією create або add: декларацію буде видалено, а EXECUTE виведе платформа. Інакше лишіть її RPC SECURITY DEFINER з check.",
+    },
+  },
+  "introspect.definer-foreign-grant": {
+    en: (p) =>
+      `${p.function}: EXECUTE for ${p.role} cannot be a caller (${p.reason})`,
+    uk: (p) =>
+      `${p.function}: EXECUTE для ${p.role} не може бути викликачем (${p.reason})`,
+    hint: {
+      en: "The ACL of a declared function belongs to the platform, and membership of such a role in an API role would bypass the caller check. Revoke the grant in the database, or describe the access through callers.",
+      uk: "ACL задекларованої функції належить платформі, а членство такої ролі в ролі API обійшло б перевірку викликачів. Приберіть грант у базі або опишіть доступ викликачами.",
+    },
+  },
+  "introspect.definer-callers-drift": {
+    en: (p) =>
+      `${p.function}: callers of the saved declaration (${p.declared}) differ from EXECUTE in the database (${p.actual})`,
+    uk: (p) =>
+      `${p.function}: викликачі збереженої декларації (${p.declared}) відрізняються від EXECUTE у базі (${p.actual})`,
+    hint: {
+      en: "The saved file is never rewritten by introspection. Change the callers in the declaration (declare-function) or the grants in the database so they agree, then introspect again.",
+      uk: "Збережений файл інтроспекція не переписує. Змініть викликачів у декларації (declare-function) або гранти в базі, щоб вони збіглися, і повторіть інтроспекцію.",
+    },
+  },
+  "introspect.definer-acl-changed": {
+    en: () => "ACL or role membership changed during introspect; run it again",
+    uk: () =>
+      "ACL або членство ролей змінилися під час introspect; запустіть його ще раз",
+    hint: {
+      en: "Either the rights fingerprint of the snapshot (functions and schemas in scope, roles of the profile and their membership) differs from a fresh read of the catalog (check: fingerprint), or the EXECUTE facts derived from the snapshot disagree with the database's own privilege check for a role of the profile (check: privilege; params function, role, privilege), or a SECURITY DEFINER function of the folder has no EXECUTE fact in the snapshot (check: fact; param function). Nothing was written.",
+      uk: "Відбиток прав знімка (функції й схеми межі, ролі профілю та їхнє членство) відрізняється від свіжого читання каталогу (check: fingerprint), або факти EXECUTE, виведені зі знімка, розходяться з власною перевіркою привілеїв бази для ролі профілю (check: privilege; параметри function, role, privilege), або SECURITY DEFINER функція теки не має факту EXECUTE у знімку (check: fact; параметр function). Нічого не записано.",
     },
   },
 }

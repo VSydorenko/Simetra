@@ -55,6 +55,7 @@ import { compareStrings, valueAt } from "../diagnostics"
 import { rightsAdminTables } from "../rights/admin-tables"
 import { identitiesTable } from "../platform/identities"
 import { signalOutboxTable } from "../platform/outbox"
+import { storageTables } from "../platform/storage-tables"
 import { carrierDeclarations } from "../rights/facts"
 import { objectKey, type ParsedObject } from "./files"
 import { COLUMN_NAME_ROLES, type ResolvedReference } from "./identity"
@@ -122,11 +123,14 @@ export interface ModelStageResult {
   checkColumns: CheckColumn[]
 }
 
-/** CHECK таблиці та єдина колонка його виразу. */
+/**
+ * CHECK таблиці та колонки, які читає його вираз, у порядку колонок таблиці:
+ * одна — для CHECK реквізиту, кілька — для правила рядка.
+ */
 export interface CheckColumn {
   table: { schema: string; name: string }
   check: string
-  column: string
+  columns: string[]
 }
 
 /**
@@ -392,6 +396,7 @@ export function buildModel(
         ...result.physical.tables,
         ...rightsAdminTables(objects),
         signalOutboxTable(),
+        ...storageTables(objects),
       ].sort(bySchemaAndName),
     },
   }
@@ -2774,7 +2779,7 @@ function assignNames(pending: readonly PendingTable[]): {
           checkColumns.push({
             table: { schema: table.schema, name: table.name },
             check: assigned,
-            column,
+            columns: [column],
           })
         }
         if (elementId !== undefined) {

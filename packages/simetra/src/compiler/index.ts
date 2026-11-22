@@ -1,6 +1,7 @@
 export {
   COMPILER_RULES,
   diagnostic,
+  isRepairError,
   sortDiagnostics,
   valueAt,
   type CompilerRule,
@@ -21,6 +22,7 @@ export {
 export {
   compile,
   currentDebt,
+  formPolicies,
   type CompileOptions,
   type CompileResult,
   type CompiledModel,
@@ -28,6 +30,7 @@ export {
   type SourceObject,
 } from "./compile"
 export { readProjectFile } from "./stages/files"
+export { metadataRights } from "./pipeline"
 export type { ResolvedReference } from "./stages/identity"
 export type { CreationNode } from "./sql/dependencies"
 export {
@@ -37,11 +40,14 @@ export {
   platformFunctionSignatures,
   readSqlUnits,
   withoutLocations,
+  FUNCTION_CLASSES,
   type SqlSource,
   type SqlUnit,
+  type VerbatimUnit,
 } from "./sql/units"
 export {
   functionKey,
+  identityKey,
   identityParts,
   keyIdentity,
   qualifiedName,
@@ -62,7 +68,9 @@ export {
   type PlatformReference,
   type RecognisedUnit,
 } from "./platform/recogniser"
-export { executeGrants } from "./sql/execute-grants"
+export { callersOfRole, executeGrants } from "./sql/execute-grants"
+export { PUBLIC, grantFacts, type GrantFact } from "./sql/grant-facts"
+export { guardArgsOf, type GuardArgs } from "./sql/guard-of"
 export {
   AUTHOR_FUNCTION,
   authorTriggerName,
@@ -109,7 +117,9 @@ export {
   ownsTarget,
   platformGrantTargets,
 } from "./function-execute"
-export { extensionSchema } from "./sql/closed-forms"
+export { closedShellProblem, extensionSchema } from "./sql/closed-forms"
+export { isSecurityDefiner, isTriggerFunction } from "./sql/definer-reads"
+export { FUNCTIONS_SCHEMA_FILE } from "./json-schema"
 export { loadPlpgsqlParser, type PlpgsqlParser } from "./sql/plpgsql"
 export {
   statementTargets,
@@ -184,6 +194,8 @@ export {
   conversionClass,
   createObject,
   createObjectInput,
+  declareFunction,
+  declareFunctionInput,
   deleteElement,
   deleteInput,
   DATA_STEP_KINDS,
@@ -211,6 +223,7 @@ export {
   type ContainerTarget,
   type ConversionClass,
   type CreateObjectInput,
+  type DeclareFunctionInput,
   type DeleteInput,
   type DerivedFacts,
   type ElementTarget,
@@ -230,4 +243,9 @@ export {
   type SchemaPathResolver,
   type UniqueShape,
 } from "./operations"
-export { explainObject, type Explanation } from "./explain"
+export {
+  explainFunction,
+  explainObject,
+  type Explanation,
+  type FunctionExplanation,
+} from "./explain"
