@@ -15,7 +15,7 @@ import {
 } from "../catalog-command/units"
 import { HIERARCHY_LOCK_SPACE } from "../hierarchy-units"
 import { executeGrants } from "../sql/execute-grants"
-import { hasEmptySearchPath } from "../sql/closed-forms"
+import { hasEmptySearchPath, pinnedSettingProblem } from "../sql/closed-forms"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { loadPlpgsqlParser, type PlpgsqlParser } from "../sql/plpgsql"
 import {
@@ -936,6 +936,8 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
       create.options.find((o) => o.DefElem.defname === "security")?.DefElem.arg
     ).toEqual({ Boolean: { boolval: false } })
     expect(hasEmptySearchPath(unit.tree as never)).toBe(true)
+    // Кожне налаштування `PINNED_SESSION_SETTINGS` — в опціях оболонки (спека П4 §6.6).
+    expect(pinnedSettingProblem(unit, [])).toBeUndefined()
     expect(bodyShape(unit.sql).filter((s) => s.type === "dynexecute")).toEqual(
       []
     )
@@ -1327,6 +1329,8 @@ describe("<membership>_simetra_member_check", () => {
           `function:public.${table}_simetra_member_check(jsonb,uuid)`
       )!
       expect(hasEmptySearchPath(unit.tree as never)).toBe(true)
+      // Кожне налаштування `PINNED_SESSION_SETTINGS` — в опціях оболонки (спека П4 §6.6).
+      expect(pinnedSettingProblem(unit, [])).toBeUndefined()
       expect(
         (
           unit.tree as {

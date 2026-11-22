@@ -10,7 +10,7 @@ Spec: [спека П4](../superpowers/specs/2026-10-26-p4-runtime-design.md) §5
 
 ## Decision
 
-- Ядро команди — згенерована SQL-функція на таблицю й дію, `SECURITY INVOKER` під `simetra_command`, `EXECUTE` лише `simetra_command`: `<t>_save(p_item jsonb, p_expected_version bigint)` (створення при `NULL`, інакше зміна) і `<t>_mark_deletion(p_id uuid, p_expected_version bigint, p_mark boolean)`; повертає рядок після запису текстом `jsonb` (Рт2).
+- Ядро команди — згенерована SQL-функція на таблицю й дію, `SECURITY INVOKER` під `simetra_command`, `EXECUTE` лише `simetra_command`: `<t>_save(p_item jsonb, p_expected_version bigint, p_expected_values jsonb)` (створення при `NULL` версії, інакше зміна; третій параметр — CAS за полями, [ADR-0096](0096-cas-by-fields-in-kernel.md)) і `<t>_mark_deletion(p_id uuid, p_expected_version bigint, p_mark boolean)`; повертає рядок після запису текстом `jsonb` (Рт2).
 - Перевірка права — частина ядра: воно рендерить ті самі `rightsPredicates`, що й політики запису, над змінними рядка «до» і «після». Окремої функції `authorize` немає (Рт3).
 - Зміна й позначка спершу беруть `SELECT … FOR NO KEY UPDATE` за id під контекстом команди (видалення призначення — `FOR UPDATE`): відсутній і чужий рядок дають ту саму відмову `no-right`, інша версія — конфлікт; після DML нуль рядків — `no-right` (Рт4). Створення спершу читає рядок за id: видно — конфлікт `exists`, не видно — `INSERT`.
 
@@ -29,4 +29,4 @@ Spec: [спека П4](../superpowers/specs/2026-10-26-p4-runtime-design.md) §5
 
 ## Consequences
 
-Відсутній і чужий рядок свідомо неможливо розрізнити з боку клієнта — це не слід «уточнювати» кодом помилки. Для `DELETE` лишається `FOR UPDATE`, бо видалення конфліктує з `KEY SHARE` за природою. Форму `<t>_save` змінює лише разом із `kernelHash` (ADR-0066). Підпис `<t>_save` доповнює третій параметр `p_expected_values` — [ADR-0096](0096-cas-by-fields-in-kernel.md).
+Відсутній і чужий рядок свідомо неможливо розрізнити з боку клієнта — це не слід «уточнювати» кодом помилки. Для `DELETE` лишається `FOR UPDATE`, бо видалення конфліктує з `KEY SHARE` за природою. Підпис ядра — факт версії платформи (lockstep), не контракту об'єкта: `kernelHash` (ADR-0066) хешує імена функцій ядра й дії контексту, а не підписи, тож зміна підпису `<t>_save` його не зачіпає ([ADR-0096](0096-cas-by-fields-in-kernel.md)).

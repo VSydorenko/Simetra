@@ -4,7 +4,7 @@ import { objectTable, type Dml } from "simetra/model"
 import { rightsCheck } from "../catalog-command/rights-check"
 import { HIERARCHY_LOCK_SPACE } from "../hierarchy-units"
 import { executeGrants } from "../sql/execute-grants"
-import { hasEmptySearchPath } from "../sql/closed-forms"
+import { hasEmptySearchPath, pinnedSettingProblem } from "../sql/closed-forms"
 import {
   ORG_KIND_ID,
   adminRoles,
@@ -450,6 +450,8 @@ describe("функції за роллю довідника", () => {
           .arg
       ).toEqual({ Boolean: { boolval: false } })
       expect(hasEmptySearchPath(unit.tree as never)).toBe(true)
+      // Кожне налаштування `PINNED_SESSION_SETTINGS` — в опціях оболонки (спека П4 §6.6).
+      expect(pinnedSettingProblem(unit, [])).toBeUndefined()
       expect(
         bodyShape(unit.sql).filter((s) => s.type === "dynexecute")
       ).toEqual([])

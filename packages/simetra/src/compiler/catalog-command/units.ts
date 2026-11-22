@@ -46,6 +46,7 @@ import { keyIdentity, qualifiedName, unitIdentity } from "../sql/identity"
 import type { SqlParser } from "../sql/parse"
 import type { PlpgsqlParser } from "../sql/plpgsql"
 import { generatedUnit, type SqlUnit } from "../sql/units"
+import { pinnedSettingsClause } from "../sql/head-settings"
 import { sqlLiteral } from "../stages/model"
 import { findStandardColumn, standardColumn } from "../standard-column"
 import { rightsCheck } from "./rights-check"
@@ -1470,7 +1471,15 @@ function resultLines(
   ]
 }
 
-/** Оболонка функції ядра: `SECURITY INVOKER`, порожній `search_path`. */
+/**
+ * Оболонка функції ядра: `SECURITY INVOKER`, порожній `search_path` і опції
+ * `SET` закріплених налаштувань (`PINNED_SESSION_SETTINGS`, спека П4 §6.6)
+ * тим самим помічником, що й оболонка кореня голови. Тіло функції застосунку
+ * може поставити `SET LOCAL` будь-якого з них, і воно доживає до кінця
+ * транзакції команди: без власних опцій пізніший виклик ядра кодував би
+ * значення інакше (`extra_float_digits = -15` зводить `1.1` і `1.4` до `1`),
+ * і CAS за полями пропустив би чужу зміну.
+ */
 export function coreFunction(
   fn: QualifiedName,
   args: string,
@@ -1490,6 +1499,7 @@ export function coreFunction(
     `RETURNS text\n` +
     `LANGUAGE plpgsql VOLATILE SECURITY INVOKER\n` +
     `SET search_path = ''\n` +
+    `${pinnedSettingsClause()}\n` +
     `AS ${tag}\n${body}\n${tag};`
   )
 }

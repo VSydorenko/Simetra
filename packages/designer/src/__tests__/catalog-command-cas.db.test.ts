@@ -55,27 +55,28 @@ interface Env {
   actor: RuntimeActor
 }
 
+/** Один виклик `save`: вхід, версія-база й база CAS за полями. */
+interface Step {
+  item: Row
+  version: string
+  expected: Row | null
+}
+
 /**
- * Один виклик ядра в транзакції команди: контекст, claims з кожним
- * закріпленим налаштуванням T3 і роль команд (`readSetupStatement` — той
- * самий текст claims, що й у команди), далі `save`. `commit` — зберегти;
- * інакше відкат (читання рядка через ядро). Відмова — помилка Postgres.
+ * Виклики ядра в одній транзакції команди: claims з кожним закріпленим
+ * налаштуванням T3 і роль команд (`readSetupStatement` — той самий текст
+ * claims, що й у команди), далі `save` кожного кроку зі своїм контекстом.
+ * `commit` — зберегти; інакше відкат (читання рядка через ядро). Результат —
+ * останнього кроку; відмова — помилка Postgres.
  */
-async function save(
+async function saveSteps(
   env: Env,
-  item: Row,
-  version: string,
-  expected: Row | null,
+  steps: readonly Step[],
   commit: boolean
 ): Promise<Row | pg.DatabaseError> {
   const { session } = env
   await session.query("BEGIN")
   try {
-    await setLocalSetting(
-      session,
-      COMMAND_SETTING,
-      JSON.stringify({ action: "update", object: GAUGE_TABLE, root: item.id })
-    )
     const setup = readSetupStatement(
       JSON.stringify(claimsFor("user", env.actor.user)),
       15_000,
@@ -83,22 +84,39 @@ async function save(
       PLATFORM_ROLES.command
     )
     await session.query(setup.text, [...setup.params])
-    const { rows } = await session.query<{ r: string }>(
-      `SELECT public.${GAUGE_TABLE}_save($1::jsonb, $2::bigint, $3::jsonb) AS r`,
-      [
-        JSON.stringify(item),
-        version,
-        expected === null ? null : JSON.stringify(expected),
-      ]
-    )
+    let result: Row = {}
+    for (const { item, version, expected } of steps) {
+      await setLocalSetting(
+        session,
+        COMMAND_SETTING,
+        JSON.stringify({ action: "update", object: GAUGE_TABLE, root: item.id })
+      )
+      const { rows } = await session.query<{ r: string }>(
+        `SELECT public.${GAUGE_TABLE}_save($1::jsonb, $2::bigint, $3::jsonb) AS r`,
+        [
+          JSON.stringify(item),
+          version,
+          expected === null ? null : JSON.stringify(expected),
+        ]
+      )
+      result = JSON.parse(rows[0]!.r) as Row
+    }
     await session.query(commit ? "COMMIT" : "ROLLBACK")
-    return JSON.parse(rows[0]!.r) as Row
+    return result
   } catch (error) {
     await session.query("ROLLBACK")
     if (error instanceof pg.DatabaseError) return error
     throw error
   }
 }
+
+const save = (
+  env: Env,
+  item: Row,
+  version: string,
+  expected: Row | null,
+  commit: boolean
+) => saveSteps(env, [{ item, version, expected }], commit)
 
 const target = heldResource<Env>(async (use) => {
   const model = await compiled()
@@ -260,6 +278,45 @@ describe("CAS by fields in the save core", () => {
       id,
       raw: { c: 1 },
     })
+  })
+
+  // Тіло функції застосунку може поставити `SET LOCAL` закріпленого
+  // налаштування, і без власних опцій ядра воно доживає до пізнішого виклику
+  // ядра в тій самій транзакції команди: під `extra_float_digits = -15`
+  // `1.1` і `1.4` кодуються як `1`, і чужа зміна пройшла б CAS.
+  it("a trigger of an earlier phase lowers extra_float_digits: a later field CAS still sees the change", async () => {
+    await env.owner.query(
+      `CREATE FUNCTION public.gauge_lower_precision() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN SET LOCAL extra_float_digits = -15; RETURN NULL; END $$;
+       GRANT EXECUTE ON FUNCTION public.gauge_lower_precision() TO PUBLIC;
+       CREATE TRIGGER gauge_lower_precision AFTER UPDATE ON public.${GAUGE_TABLE} FOR EACH ROW EXECUTE FUNCTION public.gauge_lower_precision();`
+    )
+    try {
+      const earlier = await seed("reading", "0")
+      const changed = await seed("ratio", "1.4")
+      expect(
+        await saveSteps(
+          env,
+          [
+            {
+              item: { id: earlier, reading: 1 },
+              version: await versionOf(earlier),
+              expected: null,
+            },
+            {
+              item: { id: changed, ratio: 2 },
+              version: "1",
+              expected: { ratio: 1.1 },
+            },
+          ],
+          true
+        )
+      ).toMatchObject({ ...FIELDS, hint: await versionOf(changed) })
+    } finally {
+      await env.owner.query(
+        `DROP TRIGGER gauge_lower_precision ON public.${GAUGE_TABLE};
+         DROP FUNCTION public.gauge_lower_precision();`
+      )
+    }
   })
 
   // І11 у результаті: `double precision` без втрат під ворожою сесією.
