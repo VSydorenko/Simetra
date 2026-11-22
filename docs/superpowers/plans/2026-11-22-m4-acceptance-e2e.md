@@ -64,11 +64,11 @@
 | # | Рішення | Вплив на спеку |
 | --- | --- | --- |
 | Р1 | **Дві ролі в метаданих шаблону.** `ClientReader` (глобальна: `Client` `read` з обсягом `any`, `Country` `read` `any`) — право, яке можна відкликати; `Administrator` (глобальна, `fullAccess`) — актор команди прав. Інших способів дати B читання рядків A немає: обсяги — `any`, `own` чи вимір, і `own` не покриває чужих рядків (спека прав §4.4); вимір `access` на `Client` важчий і не потрібен критерію. Згенеровані артефакти шаблону перегенеровано | П4-D §4 — одне речення про ролі шаблону (задача 0 перевіряє, де шаблон їх перелічує) |
-| Р2 | **Засів через команду прав.** Перше призначення `Administrator` — дія `firstGlobalAssignment` інструмента `rights-maintenance` (`packages/designer/src/tools/rights-maintenance-tool.ts`) тим самим кодом, що й CLI, не SQL. Усі інші призначення (`ClientOwner`, `ClientReader`) — операція `create` над `GlobalRoleAssignments` від рантайму адміністратора (`createCommandRuntime` з його claims, як `runtimeB` у `e2e/fixtures.ts`). `assignClientOwner` (сирий SQL у режимі обслуговування, `packages/create-simetra-app/scripts/lib/app-database.mts`) видаляється | none |
+| Р2 | **Засів через команду прав.** Перше призначення `Administrator` — дія `firstGlobalAssignment` інструмента `rights-maintenance` (`packages/designer/src/tools/rights-maintenance-tool.ts`) через CLI-підпроцес `simetra rights-maintenance --yes` з JSON `{ action, user, role }`, `SIMETRA_DATABASE_URL` = DSN мігратора (власника) і текою метаданих шаблону — так само, як `packages/create-simetra-app/template/scripts/db-setup-steps.mjs` кличе `@simetrajs/designer/bin/simetra.mjs` (`create-simetra-app` не залежить від designer, а адаптер рушія лишається поза `simetra`). Модель, застосована `db-setup`, має збігатися з компільованою — інструмент інакше відмовляє, і засів падає. Усі інші призначення (`ClientOwner`, `ClientReader`) — операція `create` над `GlobalRoleAssignments` від рантайму адміністратора (`createCommandRuntime` з його claims, як `runtimeB` у `e2e/fixtures.ts`). `assignClientOwner` (сирий SQL у режимі обслуговування, `packages/create-simetra-app/scripts/lib/app-database.mts`) видаляється | none |
 | Р3 | **Одна функція засіву.** Модуль у `packages/create-simetra-app/scripts/lib/` дає один крок «користувачі, ролі, рядки» за описом складу; `createDemo` (`packages/create-simetra-app/scripts/lib/demo.mts`) і `bringUp` (`e2e/fixtures.ts`) кличуть лише його — друга копія оркестрації зникає. Рядки: `seed()` з `template/scripts/seed.mjs` і `insertOwnClients` | none |
 | Р4 | **Склад користувачів.** A — `ClientOwner`, власник засіяних рядків, пише. B — лише `ClientOwner`: контроль «без права читання рядків A» (наявний користувач `b` фікстури, рядки `B…`). R — `ClientOwner` + `ClientReader`, власні рядки `R…`: ціль відкликання. Адміністратор — лише `Administrator`, без браузера. Demo: `alice` (A), `bob` (B), `rita` (R), `admin`; друкує чотири входи | none |
 | Р5 | **Відкликання — команда, не SQL.** `delete` над `GlobalRoleAssignments` рядка «R — `ClientReader`» від рантайму адміністратора з `expectedVersion`, прочитаною тим самим рантаймом. У demo — скрипт `pnpm demo:rights <grant|revoke> <user> <role>` над тією самою функцією засіву (Р3); у його виводі — команда для ручного показу | none |
-| Р6 | **Межі часу.** `SIGNAL_REACTION_MS` = 5 000 мс: пачкування закривається за ≤ 2 с (П4-B §8.4, Рд23) плюс одне читання; у коді e2e — статична перевірка `SIGNAL_REACTION_MS < DEFAULT_CORE_LIMITS.resumeMinIntervalMs` (15 с) і `< revalidateIntervalMs` (60 с), тож межа не досяжна запасним шляхом. Межа відкликання — `RIGHTS_JITTER_MS + SIGNAL_REACTION_MS` (B6-2 Р12) і статично `< CHANNEL_TTL` (5 хв, профіль §6.2). Межа шини — `SIGNAL_REACTION_MS`. Сталі імпортуються з публічних входів `simetra`; якщо сталої в публічному вході немає — розвилка архітекторці, не копія числа | none |
+| Р6 | **Межі часу.** `SIGNAL_REACTION_MS` = 5 000 мс: пачкування закривається за ≤ 2 с (П4-B §8.4, Рд23) плюс одне читання; у коді e2e — статична перевірка `SIGNAL_REACTION_MS < DEFAULT_CORE_LIMITS.resumeMinIntervalMs` (15 с) і `< revalidateIntervalMs` (60 с), тож межа не досяжна запасним шляхом. Межа відкликання — `RIGHTS_JITTER_MS + SIGNAL_REACTION_MS` (B6-2 Р12) і статично `< CHANNEL_TTL` (5 хв, профіль §6.2). Межа шини — `SIGNAL_REACTION_MS`. Сталі імпортуються з публічних входів `simetra`, не копіюються. На `main` їх там немає: `DEFAULT_CORE_LIMITS` лише в `packages/simetra/src/data/store/types.ts`, `CHANNEL_TTL` — неекспортована стала `packages/simetra/src/server/signals/tokens.ts`. Тому задача 1а експортує `DEFAULT_CORE_LIMITS` з `simetra/data` (типові межі ядра — частина контракту host-а) і строки токенів (`SIGNAL_TOKEN_TTLS` з `CONNECTION_TTL`, `CHANNEL_TTL`) з `simetra/server/signals`; `RIGHTS_JITTER_MS` експортує B6-2 з `simetra/data` (інтерфейс нижче) | П4-B — рядок публічного API `simetra/data` (задача 0 знаходить §) | none |
 | Р7 | **Доказ механізму, не лише результату.** Кожне «з'явилося» чи «зникло» перевіряє ще й журнал сторінки: на її WebSocket прийшов кадр публікації потрібного каналу (об'єкта — для зміни; прав користувача R чи глобальних прав — для відкликання), і читання, що принесло новий стан, надіслано після кадру. Запасний інтервал має випадкову фазу `[0, I)` (`core.ts`), тож без цієї перевірки зелене могло б прийти з інтервалу. Спостережні сторінки після старту не отримують `bringToFront`/фокусу: `resume()` не кличеться | none |
 | Р8 | **«Не бачить» — не порожньо.** Сторінка B отримала кадр каналу об'єкта для зміненого рядка A (П4-B §8.6, перший пункт: ключі й версії приходять) і все одно не показує рядка ні в списку, ні в картці за прямою адресою — до й після сигналу | none |
 | Р9 | **«Прибирає дані», а не ховає.** Після відкликання: рядки A зникають зі списку R у межі Р6, власні рядки `R…` лишаються; потім запити `dataFn` сторінки R блокуються (`page.route`), і перехід усередині застосунку до картки рядка A не показує його значень — кеш клієнта їх не має (П4-B §6.5, B6-2 Р6) | none |
@@ -82,7 +82,7 @@
 | бере | Приймач сигналів, `DataRuntimeOptions.signals`, хвиля приєднання | B5b-3 (після) |
 | бере | `createCentrifugoTransport` | B5b-4 (після) |
 | бере | Проводка `signals` у `createClientRuntime`, шина `{ type: "signed-out", subject }` | D5-2 (після) |
-| бере | Підписка на канали прав, звуження `read` з прибиранням рядків, `RIGHTS_JITTER_MS` | B6-2 (після) |
+| бере | Підписка на канали прав, звуження `read` з прибиранням рядків, `RIGHTS_JITTER_MS` — **експорт з `simetra/data`** (вимога цього плану до B6-2; передати автору B6-2 через архітекторку) | B6-2 (після) |
 | бере | `startSignals`, `generateSigningKeys`, маршрути токенів | D5-1, `main` |
 | бере | `firstGlobalAssignment` (`rights-maintenance`), операції `GlobalRoleAssignments` (`administerRights`) | П4 §6.12, `main` |
 | дає | Функція засіву (Р3) і склад користувачів (Р4) для `pnpm demo` і фікстури e2e | `pnpm demo`, усі e2e шаблону |
@@ -104,7 +104,7 @@
 
 | Частина | Зміст | Готово, коли |
 | --- | --- | --- |
-| **1. Засів і права** | задачі 0–2 | ролі Р1 у метаданих і згенерованих файлах; засів Р2–Р4 у demo й фікстурі; наявні e2e зелені в CI; unit І5 зелений; `pnpm demo` друкує чотири входи |
+| **1. Засів і права** | задачі 0, 1а, 1, 2 | ролі Р1 у метаданих і згенерованих файлах; засів Р2–Р4 у demo й фікстурі; наявні e2e зелені в CI; unit І5 зелений; `pnpm demo` друкує чотири входи |
 | **2. Приймальні сценарії** | задачі 3–5 | після B5b-3, B5b-4, D5-2, B6-2: `e2e/acceptance.spec.ts` зелений у CI; ручний показ demo пройдено |
 
 Частина 1 не чекає незмерджених блоків. Частина 2 починається лише після
@@ -119,6 +119,8 @@
 Розбіжність — розвилка архітекторці. Поправка П4-D §4 за Р1, якщо шаблон там
 перелічує ролі. Готово: `doc anchors && doc lint` зелені.
 
+**1а. Публічні сталі меж (Р6).** `DEFAULT_CORE_LIMITS` у `packages/simetra/src/data/index.ts`; `SIGNAL_TOKEN_TTLS` у `packages/simetra/src/server/signals/index.ts` (джерело — ті самі сталі `tokens.ts`, без другої копії); тест пакування публічних входів (`packages/designer/test/packaging/published-packages.pack.test.ts`) знає нові імена. Готово: `run-tests unit --package simetra --changed`; пакування — CI.
+
 **1. Ролі шаблону (Р1).** `template/metadata/roles/ClientReader/`,
 `template/metadata/roles/Administrator/` (форма — як
 `template/metadata/roles/ClientOwner/ClientOwner.meta.json`); перегенерувати
@@ -130,18 +132,18 @@
 адміністратор через `firstGlobalAssignment`, далі `create` призначень від
 його рантайму, рядки `seed()`/`insertOwnClients`; `createDemo` і `bringUp`
 переходять на нього; `assignClientOwner` видалено; користувач R у фікстурі
-(`App.users`) і `rita` в demo; `pnpm demo:rights`. Готово: unit І5; наявні
+(`App.users`) і `rita` в demo; `pnpm demo:rights`. Готово: unit І5 у `packages/create-simetra-app/scripts/lib/*.test.ts` (конфіг `packages/create-simetra-app/vitest.config.ts`; у CI — `turbo test`); наявні
 e2e зелені в CI (права `a`, `b` ті самі); DB-тест шаблону, якщо він спирався
 на `assignClientOwner`, переведено. Після 1. Команди:
-`run-tests unit --package template --changed`; e2e — CI.
+`pnpm --filter create-simetra-app test seed` (пакет поза рівнем `unit` профілю kit — прогалину профілю передано архітекторці); e2e — CI.
 
 **3. Сталі й журнал сторінки (Р6, Р7, І7).** Модуль підтримки e2e: сталі
 меж зі статичними перевірками; журнал кадрів WebSocket сторінки
 (`page.on("websocket")` → `framereceived`, канал і час) поряд із наявним
 журналом `dataFn`; помічник «стан Х досягнуто, і читання, що його принесло,
-пішло після кадру каналу Y». Готово: unit помічника на записаному журналі
-(кадр після читання → відмова; кадр іншого каналу → відмова). Після мерджу
-частини 1 і чотирьох блоків. Команда: `run-tests unit --package e2e --changed`.
+пішло після кадру каналу Y». Готово: тест помічника на записаному журналі
+(кадр після читання → відмова; кадр іншого каналу → відмова) у `e2e/*.build.test.ts` (конфіг `vitest.build.config.ts`, крок CI `test:build`). Після мерджу
+частини 1 і чотирьох блоків. Команда: `pnpm --filter create-simetra-app test:build`.
 
 **4. `e2e/acceptance.spec.ts` (Р7–Р11, І1–І4, І6).** Сценарії в одному
 послідовному `describe`:
