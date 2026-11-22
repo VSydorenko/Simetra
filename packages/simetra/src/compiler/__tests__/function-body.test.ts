@@ -379,6 +379,24 @@ describe("the body leaves no session state to the pool (спека прав §6.
     ])
   })
 
+  // Той самий предикат вбудованої, що й у `set_config` (`builtinCallName`):
+  // ім'я в лапках з великими літерами судиться як вбудована (fail-closed);
+  // невідому функцію такої схеми судить ще й перевірка тексту SQL.
+  it("a quoted upper-case builtin name is judged as the builtin", async () => {
+    const result = await compile(
+      await acceptDebt(
+        files({
+          [EXTRA]: plpgsql(`PERFORM "PG_CATALOG"."PG_ADVISORY_LOCK"(1)`),
+        })
+      )
+    )
+    expect(brief(result.diagnostics)).toContainEqual(
+      sessionDiagnostic(EXTRA, "sql.function-body-session-builtin", {
+        call: "pg_advisory_lock",
+      })
+    )
+  })
+
   it.each(
     [
       { form: "a literal EXECUTE", wrap: literalExecute },

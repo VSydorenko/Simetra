@@ -123,19 +123,30 @@ function setStatementSetting(set: SetStatement): string | undefined {
 }
 
 /**
- * Лише вбудований `set_config`: функція з тим самим іменем в іншій схемі —
- * чужий код, його судять його власні перевірки. Ім'я бази перед
- * `pg_catalog` Postgres приймає (`<база>.pg_catalog.set_config`), тож воно
- * не виводить виклик з-під перевірки.
+ * Ім'я виклику, коли він може бути вбудованою: некваліфікований (шлях пошуку,
+ * за яким Postgres його розв'яже, може дати саме її) чи кваліфікований
+ * `pg_catalog`; ім'я бази перед `pg_catalog` Postgres приймає
+ * (`<база>.pg_catalog.<f>`), тож воно не виводить виклик з-під перевірки.
+ * Функція з тим самим іменем в іншій схемі — чужий код, її судять її власні
+ * перевірки. Нижній регістр — fail-closed: ім'я в лапках з великими літерами
+ * судиться як вбудована. Одне джерело для перевірок `set_config` і
+ * вбудованих, що лишають стан сесії.
  */
+export function builtinCallName(
+  parts: readonly { String?: { sval?: string } }[] | undefined
+): string | undefined {
+  const names = (parts ?? []).map((f) => f.String?.sval?.toLowerCase())
+  return names.length === 1 ||
+    (names.length <= 3 && names.at(-2) === "pg_catalog")
+    ? names.at(-1)
+    : undefined
+}
+
+/** Лише вбудований `set_config` ({@link builtinCallName}). */
 export function isBuiltinSetConfig(
   parts: readonly { String?: { sval?: string } }[] | undefined
 ): boolean {
-  const names = (parts ?? []).map((f) => f.String?.sval?.toLowerCase())
-  return (
-    names.at(-1) === "set_config" &&
-    (names.length === 1 || (names.length <= 3 && names.at(-2) === "pg_catalog"))
-  )
+  return builtinCallName(parts) === "set_config"
 }
 
 /**

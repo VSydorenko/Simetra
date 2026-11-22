@@ -20,6 +20,7 @@ import {
 import { outlivesTransaction } from "./builtin-exclusions"
 import {
   callsSqlText,
+  builtinCallName,
   isBuiltinSetConfig,
   literalDynamicText,
   literalText,
@@ -629,11 +630,8 @@ function sessionCall(
         line,
       }
     }
-    const names = (call.funcname ?? []).map((f) => f.String?.sval)
-    const name = names.at(-1)
-    const builtin =
-      names.length === 1 || (names.length <= 3 && names.at(-2) === "pg_catalog")
-    if (name !== undefined && builtin && outlivesTransaction(name))
+    const name = builtinCallName(call.funcname)
+    if (name !== undefined && outlivesTransaction(name))
       return { code: "sql.function-body-session-builtin", call: name, line }
   }
   for (const child of Object.values(node)) {
