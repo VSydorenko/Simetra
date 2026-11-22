@@ -211,16 +211,22 @@ export function planDerivedColumns<A extends EngineAction>(
     )
   }
   for (const d of derived) {
-    const alter = list.findIndex((a) => changesTypeOf(a, d))
-    if (alter < 0) continue
+    if (!list.some((a) => changesTypeOf(a, d))) continue
+    // Власне зняття двигуна (колонки чи лише індексу на ній) — перед зміною
+    // типу, у його порядку
     const drops = list.filter((a) => a.destroyed.some((r) => sameRef(r, d)))
-    if (drops.length > 0) {
-      // Власне зняття двигуна — перед зміною типу, у його порядку
-      const rest = list.filter((a) => !drops.includes(a))
-      const at = rest.indexOf(list[alter]!)
-      list = [...rest.slice(0, at), ...drops, ...rest.slice(at)]
+    const rest = list.filter((a) => !drops.includes(a))
+    const at = rest.findIndex((a) => changesTypeOf(a, d))
+    list = [...rest.slice(0, at), ...drops, ...rest.slice(at)]
+    // 0A000 знімає лише зняття самої колонки: двигун, що зняв тільки
+    // похідний індекс (бажаний має інше ім'я), колонку лишає — тоді її
+    // знімає й будує знову план
+    if (
+      drops.some((a) =>
+        a.destroyed.some((r) => r.kind === "column" && sameRef(r, d))
+      )
+    )
       continue
-    }
     const table = facts.desired.find(
       (t) => t.schema === d.schema && t.name === d.table
     )
@@ -231,6 +237,24 @@ export function planDerivedColumns<A extends EngineAction>(
         c.generated !== undefined
     )
     if (table === undefined || wanted === undefined) continue
+    // Індекси на колонці створює знову `rebuild` після зміни типу; власне
+    // створення двигуна дало б той самий індекс удруге
+    const rebuilt = new Set(
+      table.indexes
+        .filter((i) =>
+          i.keys.some((k) => "column" in k && k.column === d.column)
+        )
+        .map((i) => i.name)
+    )
+    list = list.filter(
+      (a) =>
+        a.produced.length === 0 ||
+        !a.produced.every(
+          (r) =>
+            r.kind === "index" && r.schema === d.schema && rebuilt.has(r.name)
+        )
+    )
+    const alter = list.findIndex((a) => changesTypeOf(a, d))
     const relation = `${quoteIdent(d.schema)}.${quoteIdent(d.table)}`
     const drop: DerivedDrop = {
       ...tableAction(

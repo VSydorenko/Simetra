@@ -290,6 +290,50 @@ describe.concurrent("search index: derived from the search fields", () => {
     })
   })
 
+  it("a type change of a searched column applies when the engine also replaces the derived index", async () => {
+    const before = await compiled({ [PARTY]: party() })
+    // Ім'я похідного індексу каталогу зайняте індексом нової прийнятої
+    // таблиці: бажаний похідний індекс отримує інше ім'я, двигун знімає лише
+    // старий індекс (колонка лишається), а зміна типу джерела все одно
+    // впирається в похідну колонку (0A000)
+    const after = await compiled({
+      [PARTY]: { ...(party() as unknown as Json), descriptionLength: 200 },
+      [NOTES]: {
+        ...(notes() as unknown as Json),
+        indexes: [
+          { name: "party_description_search_idx", keys: [{ column: "note" }] },
+        ],
+      },
+    })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await query(
+        asSuperuser(url),
+        `insert into app.party (id, description, code)
+           values ('00000000-0000-4000-8000-000000000001', 'Ковбаса Ab', '1')`
+      )
+      const artifact = planned(await plan(url, after))
+      const sql = artifact.steps.map((s) => s.sql)
+      expect(
+        sql.some((s) => /DROP INDEX .*party_description_search_idx\b/.test(s))
+      ).toBe(true)
+
+      await applyArtifact(url, artifact, after)
+
+      expect(await searchColumnOf(url, "party", "description_search")).toEqual({
+        is_generated: "ALWAYS",
+        generation_expression: DESCRIPTION_SEARCH,
+        indexdef: expect.stringMatching(
+          /INDEX party_description_search_idx1 ON .*USING btree \(description_search text_pattern_ops\)$/
+        ),
+      })
+      expect(
+        await query(url, "select description_search from app.party")
+      ).toEqual([{ description_search: "ковбаса ab" }])
+      expect((await plan(url, after)).status).toBe("unchanged")
+    })
+  })
+
   it("a field leaving search drops the derived column without permission", async () => {
     const before = await compiled({ [PARTY]: party() })
     const after = await compiled({
