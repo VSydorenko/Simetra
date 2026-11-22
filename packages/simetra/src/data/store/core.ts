@@ -36,7 +36,12 @@ import {
 } from "./source"
 import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
-import { REJOIN_JITTER_MS, createReceiver, type Receiver } from "./receiver"
+import {
+  REJOIN_JITTER_MS,
+  createReceiver,
+  type Receiver,
+  type SignalRead,
+} from "./receiver"
 import { createScheduler } from "./scheduler"
 import { createRegistry, type Subset, type SubsetRegistry } from "./subsets"
 import {
@@ -305,6 +310,14 @@ export interface CoreInspection {
    * replacement: the model reads the store the pass is about to judge.
    */
   watchRightsPass(listener: () => void): void
+  /**
+   * Subscribes to the reads the signal receiver starts: a batch acting on an
+   * object and a rejoin wave re-reading it. The model judges each by the
+   * signals and joins it sent (no request of a purged pair's signal).
+   */
+  watchSignalReads(
+    listener: (object: ObjectName, read: SignalRead) => void
+  ): void
   /** The mutations in the journal of own mutations. */
   mutations(): JournalInspection[]
   /** The plans the scheduler made (calls of one turn merge into one). */
@@ -448,6 +461,8 @@ export function createCore(options: {
   const defects = new Set<DefectFlag>()
   let remarkListener: ((object: ObjectName, key: Key) => void) | undefined
   let rightsPassListener: (() => void) | undefined
+  let signalReadListener:
+    ((object: ObjectName, read: SignalRead) => void) | undefined
   // Приймач сигналів: створюється після `writerContext`, а реєстр і потік
   // `commit` кличуть його вже з його допомогою.
   let receiver: Receiver | undefined
@@ -1317,6 +1332,7 @@ export function createCore(options: {
       if (views.some((v) => v.visible)) {
         readViews += views.filter((v) => v.visible).length
         reads++
+        signalReadListener?.(object, { by: "wave" })
         revalidate(writerContext, object, { visibleOnly: true }).catch(
           (error: unknown) => log({ kind: "listener-failed", error })
         )
@@ -1579,6 +1595,7 @@ export function createCore(options: {
       joinWave,
       requestVersion: () => core.requestVersion(),
       connectionRefused,
+      noteRead: (object, read) => signalReadListener?.(object, read),
     })
     // Кожен `commit` міг змінити активні вигляди чи скоупи їхніх рядків.
     session.onFlush(() => receiver?.touch())
@@ -1921,6 +1938,9 @@ export function createCore(options: {
     },
     watchRightsPass(listener) {
       rightsPassListener = listener
+    },
+    watchSignalReads(listener) {
+      signalReadListener = listener
     },
     mutations: () => overlay.entries(),
     schedulerPlans: () => scheduler.plans(),

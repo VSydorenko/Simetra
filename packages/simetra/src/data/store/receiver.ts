@@ -75,7 +75,28 @@ export interface ReceiverContext {
   requestVersion(): void
   /** The transport refused the connection for good: the runtime closes. */
   connectionRefused(): void
+  /** Test-only: a batch acts on an object (`inspectCore().watchSignalReads`). */
+  noteRead?(object: ObjectName, read: SignalRead): void
 }
+
+/**
+ * A read the receiver starts, as the model test sees it: a batch acting on
+ * an object — its keys with the pairs (channel scopes) their signals came
+ * from, the pairs of its `invalidate` signals, and whether it re-reads the
+ * object whole (a hidden tab defers the read to `resume()`) — or a rejoin
+ * wave re-reading it.
+ */
+export type SignalRead =
+  | {
+      readonly by: "batch"
+      readonly keys: readonly {
+        readonly key: Key
+        readonly scopes: readonly (string | null)[]
+      }[]
+      readonly invalidated: readonly (string | null)[]
+      readonly whole: boolean
+    }
+  | { readonly by: "wave" }
 
 export interface Receiver {
   /** The set of active views or the rows they show may have changed. */
@@ -730,6 +751,15 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       const views = activeViews(writer, object)
       const plan = classify(o, signals, views.length > 0)
       if (plan === undefined) continue
+      ctx.noteRead?.(object, {
+        by: "batch",
+        keys: [...plan.stored, ...plan.fresh].map((key) => ({
+          key,
+          scopes: [...(signals.keys.get(key)?.scopes ?? [])],
+        })),
+        invalidated: [...signals.invalidate],
+        whole: plan.whole,
+      })
       // Прихована вкладка нічого не шле (Р8): вигляди чекають `resume()`.
       if (!ctx.visible()) {
         requested.push(object)

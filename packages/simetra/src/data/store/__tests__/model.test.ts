@@ -29,6 +29,8 @@ import { visibleRow } from "../object-store"
 import { createCoreSource, createReadLimiter, type ServerPort } from "../source"
 import { EPOCH_UNAVAILABLE, type Subset } from "../subsets"
 import type { FakeRead, FakeReadLog, FakeSource } from "../testing/fake-source"
+import { createFakeSignalTransport } from "../testing/fake-signal-transport"
+import { MIN_VERSION_RETRIES } from "../receiver"
 import {
   DEFAULT_CORE_LIMITS,
   type CloseReason,
@@ -228,6 +230,10 @@ type RightsHow =
 
 type How = "ok" | "stale" | "forbidden" | "missing" | "unavailable"
 
+/** What a signal step sends: an op of the change channel or an unparsable body. */
+type SignalOp =
+  "create" | "update" | "markDeletion" | "delete" | "invalidate" | "garbage"
+
 /** How the model answers a held `run`. */
 type RunHow = "ok" | "conflict" | "forbidden" | "unavailable"
 
@@ -286,6 +292,28 @@ type Step =
   // `object`: 0 — рядок `read` задач, 1 — організацій, 2 — членство в скоупі.
   | { t: "rights"; what: RightsHow; object: number; scope: number }
   | { t: "race"; group: number; settle: "now" | "later" }
+  // Кроки сигналів (B5b-3, задача 6). `ch`: 0 — канал скоупу рядка на
+  // сервері, 1 — канал іншого скоупу; `ver`: 0 — версія сервера, 1 — старша
+  // на одиницю (відлуння, переставлений сигнал), 2 — новіша (репліка
+  // відстає); `change` — сервер спершу робить саму зміну.
+  | {
+      t: "signal"
+      org: boolean
+      k: number
+      op: SignalOp
+      ch: number
+      ver: number
+      change: boolean
+    }
+  // Повтор раніше надісланого повідомлення (той самий `id`): дубль і
+  // перестановка — старе повідомлення після новіших.
+  | { t: "replay"; pick: number }
+  | { t: "join"; ch: number; recovered: boolean }
+  // `ch` = CHANNELS.length — розрив усього з'єднання.
+  | { t: "transport"; ch: number }
+  | { t: "chanAuth"; ch: number }
+  | { t: "connAuth"; final: boolean }
+  | { t: "refreshTokens" }
 
 const view = fc.nat(SPECS.length - 1)
 const k = fc.nat(KEYS.length - 1)
@@ -578,7 +606,7 @@ const RACE_GROUPS: readonly (readonly number[])[] = [
  * сховищі немає, знімок її забороняє, відповідь осідає після заміни — одразу
  * чи пізніше, у будь-якому порядку з рештою кроків.
  */
-const RIGHTS_STEP: fc.Arbitrary<Step> = fc.oneof(
+const RIGHTS_ENTRIES: fc.WeightedArbitrary<Step>[] = [
   ...STEP_ENTRIES,
   ...(
     [
@@ -606,7 +634,68 @@ const RIGHTS_STEP: fc.Arbitrary<Step> = fc.oneof(
       group: fc.nat(RACE_GROUPS.length - 1),
       settle: fc.constantFrom<"now" | "later">("now", "later"),
     }),
-  }
+  },
+]
+const RIGHTS_STEP: fc.Arbitrary<Step> = fc.oneof(...RIGHTS_ENTRIES)
+
+/**
+ * Кроки сигналів (B5b-3, задача 6) поверх кроків знімка прав: сума 60 проти
+ * 302, тож сигнали йдуть у кожному прогоні кілька разів, а приєднання,
+ * розриви й відмови каналів — у більшості. Кроки прав і решта лишаються:
+ * приймач судять ті самі інваріанти й бар'єри.
+ */
+const SIGNAL_STEP: fc.Arbitrary<Step> = fc.oneof(
+  ...RIGHTS_ENTRIES,
+  {
+    weight: 32,
+    arbitrary: fc.record({
+      t: one("signal"),
+      org: fc.boolean(),
+      k,
+      op: fc.constantFrom<SignalOp>(
+        "update",
+        "update",
+        "update",
+        "create",
+        "markDeletion",
+        "delete",
+        "delete",
+        "invalidate",
+        "garbage"
+      ),
+      ch: fc.constantFrom(0, 0, 0, 1),
+      ver: fc.constantFrom(0, 0, 1, 2),
+      change: fc.boolean(),
+    }),
+  },
+  { weight: 8, arbitrary: fc.record({ t: one("replay"), pick: fc.nat(15) }) },
+  {
+    weight: 7,
+    arbitrary: fc.record({
+      t: one("join"),
+      ch: fc.nat(CHANNELS.length - 1),
+      recovered: fc.boolean(),
+    }),
+  },
+  {
+    weight: 5,
+    arbitrary: fc.record({ t: one("transport"), ch: fc.nat(CHANNELS.length) }),
+  },
+  {
+    weight: 4,
+    arbitrary: fc.record({
+      t: one("chanAuth"),
+      ch: fc.nat(CHANNELS.length - 1),
+    }),
+  },
+  {
+    weight: 2,
+    arbitrary: fc.record({
+      t: one("connAuth"),
+      final: fc.constantFrom(false, false, false, true),
+    }),
+  },
+  { weight: 2, arbitrary: fc.record({ t: one("refreshTokens") }) }
 )
 
 /** One read the model delivered: what it carried, by its arrival index. */
@@ -742,7 +831,8 @@ async function runModel(
   profile: Profile,
   defects: readonly DefectFlag[] = [],
   schedulerChecks = true,
-  rights = false
+  rights = false,
+  signals = false
 ) {
   const held: { core?: CoreSession } = {}
   try {
@@ -752,7 +842,8 @@ async function runModel(
       profile,
       defects,
       schedulerChecks,
-      rights,
+      rights || signals,
+      signals,
       (c) => {
         held.core = c
       }
@@ -771,8 +862,11 @@ async function runModelOn(
   defects: readonly DefectFlag[],
   schedulerChecks: boolean,
   rights: boolean,
+  signals: boolean,
   opened: (core: CoreSession) => void
 ) {
+  // Канал сигналів (B5b-3): приймач ядра тримає його лише зі знімком прав.
+  const transport = createFakeSignalTransport()
   // Порт запису моделі: кожен `run` тримається, доки крок `run` не відповість
   // на нього (будь-який у будь-якому порядку); сервер пише лише тоді.
   const runs: HeldRun[] = []
@@ -849,6 +943,7 @@ async function runModelOn(
     now: () => clock,
     limits: LIMITS,
     mode: "manual",
+    ...(signals ? { signals: transport } : {}),
     ...(rights
       ? {
           rightsSnapshot: true,
@@ -894,6 +989,85 @@ async function runModelOn(
   opened(core)
   const internals = coreInternals(core)
 
+  // ── Сигнали очима моделі (B5b-3) ──
+  // Сигнали, що дійшли до приймача й ще не дали читання: ключ → пари
+  // (скоупи каналів), об'єкт → пари з `invalidate` чи нерозібраним тілом.
+  // Читання пачки — лише за таким сигналом або як дочитування мінімальної
+  // версії після нього; `purge` пари чи ключа знімає їх (0 запитів).
+  // Лічильник на пару: два сигнали однієї пари можуть дати дві пачки.
+  const owed = new Map<string, Map<string, number>>()
+  const owedWhole = new Map<ObjectName, Map<string, number>>()
+  const retryLeft = new Map<string, number>()
+  // `id` повідомлень, які приймач уже бачив: повтор він відкидає.
+  const seenIds = new Set<string>()
+  // Об'єкти, які на цьому кроці читала пачка (на видимій вкладці) чи хвиля.
+  const batchRead = new Set<ObjectName>()
+  const waveRead = new Set<ObjectName>()
+  const owe = (
+    into: Map<string, Map<string, number>>,
+    at: string,
+    scope: string
+  ) => {
+    const counts = into.get(at) ?? new Map<string, number>()
+    counts.set(scope, (counts.get(scope) ?? 0) + 1)
+    into.set(at, counts)
+  }
+  const dropOwedPair = (object: ObjectName, scope: string) => {
+    for (const [at, counts] of owed)
+      if (at.startsWith(`${object}\u0000`)) counts.delete(scope)
+    owedWhole.get(object)?.delete(scope)
+  }
+  const dropOwedKey = (object: ObjectName, key: Key) => {
+    owed.delete(id(object, key))
+    retryLeft.delete(id(object, key))
+  }
+  // Сигнал пари, яку модель не надсилала чи яку `purge` уже зняв, — читання
+  // без сигналу (0 запитів після `purge`, §8.4).
+  const take = (
+    counts: Map<string, number> | undefined,
+    scopes: readonly (string | null)[]
+  ) => {
+    let any = false
+    for (const scope of scopes) {
+      const n = scope === null ? 0 : (counts?.get(scope) ?? 0)
+      if (n === 0) continue
+      any = true
+      if (n === 1) counts!.delete(scope!)
+      else counts!.set(scope!, n - 1)
+    }
+    return any
+  }
+  inspect.watchSignalReads((object, read) => {
+    if (read.by === "wave") {
+      waveRead.add(object)
+      return
+    }
+    if (core.visible) batchRead.add(object)
+    for (const { key, scopes } of read.keys) {
+      const at = id(object, key)
+      if (take(owed.get(at), scopes)) {
+        retryLeft.set(at, MIN_VERSION_RETRIES)
+        continue
+      }
+      // Дочитування мінімальної версії несе скоуп рядка, а не каналу: для
+      // нього лічиться лише кількість.
+      const left = retryLeft.get(at) ?? 0
+      if (left > 0) retryLeft.set(at, left - 1)
+      else asyncViolations.push(`${at}: a signal read without a signal`)
+    }
+    if (
+      read.invalidated.length > 0 &&
+      !take(owedWhole.get(object), read.invalidated)
+    )
+      asyncViolations.push(`${object}: a whole re-read without a signal`)
+    if (
+      read.whole &&
+      read.invalidated.length === 0 &&
+      read.keys.length <= DEFAULT_CORE_LIMITS.keysPerRequest
+    )
+      asyncViolations.push(`${object}: a whole re-read without an invalidate`)
+  })
+
   // Сервер: дві організації (скоупи), чотири задачі в двох скоупах, ТЧ K1.
   for (const org of ORG_KEYS) fake.insert(ORG, { ref: org })
   KEYS.slice(0, 4).forEach((k, i) =>
@@ -908,6 +1082,18 @@ async function runModelOn(
     })
   )
   let created = false
+  // Надіслані сигнали (для повторів) і остання версія ключа, яку модель
+  // назвала в сигналі (рядок, якого вже немає на сервері).
+  const sentSignals: {
+    topic: string
+    payload: unknown
+    object: ObjectName
+    scope: string
+    key: Key
+    op: SignalOp
+  }[] = []
+  const lastSent = new Map<string, number>()
+  let signalSeq = 0
   const late: FakeRead[] = []
   let visibility: readonly string[] | undefined
   const deleted = new Set<string>()
@@ -1215,6 +1401,10 @@ async function runModelOn(
           rightsBarrier.set(pairKey(object, scope), at)
     for (const [key, scope] of capturedScopes) {
       const [object] = key.split("\u0000") as [ObjectName]
+      // Прохід прибирає збережені пари, які знімок забороняє: їхні сигнали
+      // приймач скидає (`purged`).
+      if (scope !== null && grantDenies(g, object, scope))
+        dropOwedPair(object, scope)
       if (grantDenies(g, object, scope)) {
         rightsPurgeable.add(key)
         purgedTargets.add(key)
@@ -2624,12 +2814,42 @@ async function runModelOn(
    * `purge` пари (скоуп, об'єкт) з обліком моделі (надгробки спроб, стерті
    * поля, бар'єри П12); `undefined` — ядро закрите.
    */
-  const purgePair = (object: ObjectName, scope: string, stepStart: number) => {
+  /** Sends a signal; one the receiver holds the channel of is owed a read. */
+  const emit = (
+    topic: string,
+    payload: unknown,
+    object: ObjectName,
+    scope: string,
+    key: Key,
+    op: SignalOp
+  ) => {
+    // Нерозібране тіло `id` не дає: приймач не відкидає його повтору.
+    const message = (payload as { id: string }).id
+    if (
+      closed === undefined &&
+      transport.subscribed().has(topic) &&
+      (op === "garbage" || !seenIds.has(message))
+    ) {
+      if (op !== "garbage") seenIds.add(message)
+      if (op === "invalidate" || op === "garbage") owe(owedWhole, object, scope)
+      else owe(owed, id(object, key), scope)
+    }
+    transport.emit(topic, payload)
+  }
+
+  const purgePair = (
+    object: ObjectName,
+    scope: string,
+    stepStart: number,
+    // Хто робить `purge`: модель сама чи приймач (відмова `auth` каналу).
+    act = () => commit((w) => w.purge(object, { scope }))
+  ) => {
     const held = [...objectOf(object).rows.keys()]
     const hadLines =
       object === TASK && objectOf(TASK).sections.get(K1, "lines") !== undefined
-    commit((w) => w.purge(object, { scope }))
+    act()
     if (closed !== undefined) return undefined
+    dropOwedPair(object, scope)
     const purgedKeys = {
       object,
       keys: held.filter((k) => objectOf(object).rows.get(k) === undefined),
@@ -2672,6 +2892,8 @@ async function runModelOn(
     const stepStart = fake.log.length
     logAt = log.length
     restoredInStep.clear()
+    batchRead.clear()
+    waveRead.clear()
     const before = lists()
     preloadedSection = false
     rightsPurgeable = new Set()
@@ -2907,6 +3129,7 @@ async function runModelOn(
           if (entry !== undefined) entry.erased = true
         }
         purgedKeys = { object, keys: [target] }
+        dropOwedKey(object, target)
         purgedTargets.add(id(object, target))
         purgeBarrier.set(id(object, target), stepStart)
         if (object === TASK) barrierSections(stepStart)
@@ -3020,6 +3243,13 @@ async function runModelOn(
       }
       case "disconnect": {
         const ch = CHANNELS[s.channel]
+        // З приймачем розрив і приєднання йдуть лише через транспорт: пряма
+        // позначка розійшлася б із каналами, які він тримає.
+        if (signals) {
+          if (s.join && ch !== undefined) transport.join(ch, false)
+          else transport.fail({ kind: "transport", channel: ch })
+          break
+        }
         // Приєднання лише пише `joinAt`: позначку знімає читання після нього.
         if (s.join && ch !== undefined) internals.epochs.join(ch)
         else commit((w) => w.markDisconnected(ch))
@@ -3287,7 +3517,7 @@ async function runModelOn(
         advance(2 * REVALIDATE_MS)
         await flush()
         for (const [sub, rereads] of before)
-          if (sub.rereads !== rereads) {
+          if (sub.rereads !== rereads && !batchRead.has(sub.form.object.name)) {
             // Читання зробив такт планувальника: він же й помилка.
             tickReads++
             fail(
@@ -3508,6 +3738,138 @@ async function runModelOn(
         }
         break
       }
+      case "signal": {
+        if (!signals) break
+        const object = s.org ? ORG : TASK
+        let target = s.org ? ORG_KEYS[s.k % 2]! : KEYS[s.k]!
+        // Версія до зміни: `delete` несе версію стану «до» (§8.1).
+        let base =
+          fake.row(object, target)?.version ?? lastSent.get(id(object, target))
+        if (s.change && object === TASK && closed === undefined) {
+          if (s.op === "create") {
+            if (!created) {
+              created = true
+              target = K5
+              fake.insert(TASK, {
+                ref: K5,
+                org: SCOPES[s.k % 2],
+                title: "s",
+                notes: "n5",
+                status: null,
+                subject: null,
+              })
+              base = fake.row(TASK, K5)!.version
+            }
+          } else if (s.op === "delete") {
+            if (live(TASK, target)) {
+              fake.remove(TASK, target)
+              deleted.add(id(TASK, target))
+            }
+          } else if (s.op !== "garbage" && live(TASK, target)) {
+            fake.edit(TASK, target, {
+              title: `${TITLES[(s.k + n) % TITLES.length]}${n}`,
+            })
+            if (s.op !== "invalidate") base = fake.row(TASK, target)!.version
+          }
+        }
+        const version = Math.max(
+          1,
+          (base ?? 1) + (s.ver === 1 ? -1 : s.ver === 2 ? 1 : 0)
+        )
+        lastSent.set(id(object, target), base ?? 1)
+        const rowScope =
+          object === ORG
+            ? target
+            : ((fake.row(TASK, target)?.values.org as string | undefined) ??
+              SCOPES[s.k % 2]!)
+        const scope =
+          s.ch === 0 ? rowScope : SCOPES.find((x) => x !== rowScope)!
+        const entryId = object === TASK ? OBJECT_ID : ORGANIZATION_ID
+        const payload =
+          s.op === "garbage"
+            ? { id: String(++signalSeq), object: entryId, op: "move" }
+            : s.op === "invalidate"
+              ? { id: String(++signalSeq), object: entryId, op: "invalidate" }
+              : {
+                  id: String(++signalSeq),
+                  object: entryId,
+                  op: s.op,
+                  keys: { id: target },
+                  row_ver: version,
+                }
+        const topic = channel(object, scope)
+        sentSignals.push({
+          topic,
+          payload,
+          object,
+          scope,
+          key: target,
+          op: s.op,
+        })
+        emit(topic, payload, object, scope, target, s.op)
+        break
+      }
+      case "replay": {
+        if (!signals || sentSignals.length === 0) break
+        const x =
+          sentSignals[sentSignals.length - 1 - (s.pick % sentSignals.length)]!
+        emit(x.topic, x.payload, x.object, x.scope, x.key, x.op)
+        break
+      }
+      case "join":
+        if (signals) transport.join(CHANNELS[s.ch]!, s.recovered)
+        break
+      case "transport":
+        if (signals)
+          transport.fail({ kind: "transport", channel: CHANNELS[s.ch] })
+        break
+      case "refreshTokens":
+        if (signals) await transport.refreshTokens()
+        break
+      case "chanAuth": {
+        if (!signals) break
+        const ch = CHANNELS[s.ch]!
+        // Відмову бачить лише тримач каналу: тоді приймач робить `purge` пари.
+        if (closed !== undefined || !transport.subscribed().has(ch)) {
+          transport.fail({ kind: "auth", channel: ch })
+          break
+        }
+        purgeStep = true
+        const object = s.ch < 2 ? TASK : ORG
+        const scope = SCOPES[s.ch % 2]!
+        const purged = purgePair(object, scope, stepStart, () =>
+          transport.fail({ kind: "auth", channel: ch })
+        )
+        if (purged === undefined) break
+        purgedScope = { object, scope }
+        purgedKeys = purged
+        break
+      }
+      case "connAuth": {
+        if (!signals) break
+        // Остаточна відмова токена з'єднання закриває ядро, коли приймач
+        // тримає хоч одну підписку (лише тоді він бачить помилку).
+        const holds = transport.subscribed().size > 0
+        transport.fail(
+          s.final ? { kind: "auth", final: true } : { kind: "auth" }
+        )
+        if (!s.final || closed !== undefined) break
+        const snap = handles[0]!.getSnapshot()
+        const shut =
+          snap.status === "purged" && snap.reason === "connection-refused"
+        if (shut !== holds)
+          fail(
+            label,
+            shut
+              ? "closed by a refusal the receiver could not see"
+              : "a final connection refusal did not close the core"
+          )
+        if (!shut) break
+        for (const a of attempts) if (a.result === undefined) a.mustFail = true
+        journal.clear()
+        closed = { frames, sent: fake.log.length, snapshot: snap }
+        break
+      }
       case "close":
         if (closed !== undefined) break
         // Кожна неосіла мутація осідає закриттям, не успіхом.
@@ -3548,6 +3910,10 @@ async function runModelOn(
       )
       for (const [sub, rereads] of readsAtStart) {
         if (sub.rereads === rereads) continue
+        // Пачка сигналів читає за сигналом, а не за строком: межа відкинутих і
+        // пауза після збою стосуються планувальника (§6.2, §8.4).
+        const object = sub.form.object.name
+        if (batchRead.has(object)) continue
         // Читання, яке запустив планувальник (чи `resume()`).
         if (s.t !== "resume" && hiddenAtStart && !core.visible)
           fail(label, "a read started by the scheduler on a hidden tab")
@@ -3560,12 +3926,20 @@ async function runModelOn(
           was.failures > 0 &&
           was.failedAt !== undefined &&
           clock < was.failedAt + pauseAfter(was.failures) &&
-          !readsObject(sub, dueNow)
+          !readsObject(sub, dueNow) &&
+          // Хвиля приєднання перечитує об'єкт явно (Р10), як `revalidate`.
+          !waveRead.has(object)
         )
           fail(label, "a view was read inside its failure pause")
       }
     }
+    // Хвиля приєднання й пачка сигналів перечитують за подією каналу, а не
+    // за межею свіжості: `resume()` бере хвилю разом зі звіркою (Р10).
+    // Перечитування задач читає й цілі `include` — організації.
+    const bySignal = (object: ObjectName) =>
+      [object, TASK].some((o) => waveRead.has(o) || batchRead.has(o))
     for (const [sub, rereads] of youngViews) {
+      if (bySignal(sub.form.object.name)) continue
       if (sub.rereads !== rereads)
         fail(
           label,
@@ -3577,6 +3951,7 @@ async function runModelOn(
         fail(label, "a view older than the limit was not re-read")
     }
     for (const object of quiet) {
+      if (bySignal(object)) continue
       for (const sent of fake.log.slice(stepStart)) {
         const target = sent.query?.object
         if (target !== undefined && `${target.kind}.${target.name}` === object)
@@ -3871,10 +4246,11 @@ const RUNS = runsFromEnv(process.env.CORE_MODEL_RUNS)
 const property = (
   defects: readonly DefectFlag[] = [],
   schedulerChecks = true,
-  rights = false
+  rights = false,
+  signals = false
 ) =>
   fc.asyncProperty(
-    fc.array(rights ? RIGHTS_STEP : STEP, {
+    fc.array(signals ? SIGNAL_STEP : rights ? RIGHTS_STEP : STEP, {
       minLength: 10,
       maxLength: 80,
       size: "max",
@@ -3882,7 +4258,15 @@ const property = (
     fc.boolean(),
     fc.constantFrom<Profile>("full", "scroll", "burial"),
     (steps, preloaded, profile) =>
-      runModel(steps, preloaded, profile, defects, schedulerChecks, rights)
+      runModel(
+        steps,
+        preloaded,
+        profile,
+        defects,
+        schedulerChecks,
+        rights,
+        signals
+      )
   )
 
 beforeEach(() => {
@@ -3907,6 +4291,16 @@ describe("core model", () => {
   it("holds the invariants with the rights snapshot", async () => {
     tickReads = 0
     await fc.assert(property([], true, true), { numRuns: RUNS })
+    expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+  }, 240_000)
+
+  // Приймач сигналів (B5b-3): ті самі кроки й кроки знімка прав плюс сигнали
+  // каналу змін у будь-якому порядку з дублями, приєднання з `recovered` і
+  // без, розриви, відмови каналу й з'єднання. Прогони без сигналів не
+  // змінюються (їхні насіння самотесту й регресій не зсуваються).
+  it("holds the invariants with the signal receiver", async () => {
+    tickReads = 0
+    await fc.assert(property([], true, true, true), { numRuns: RUNS })
     expect(tickReads, "no tick with a read").toBeGreaterThan(0)
   }, 240_000)
 })
