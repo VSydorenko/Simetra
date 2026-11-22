@@ -532,6 +532,71 @@ describe("a view marked needsRefresh while invisible", () => {
     expect(requestsSince(h, from)).toHaveLength(1)
   })
 
+  // Вимога одна для всіх виглядів об'єкта: хвіст, якого не взято, бо вигляд
+  // тим часом сховали, її не знімає.
+  it("keeps the requirement of a view visible at the invalidate that turns invisible before its tail", async () => {
+    const h = await open(full)
+    h.fake.mode = "manual"
+    void h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    expect(h.fake.pending).toHaveLength(1)
+    emit(h, { id: String(++seq), object: task.id, op: "invalidate" })
+    await closeBatch()
+    // Вигляд у польоті: лише хвіст.
+    expect(h.fake.pending).toHaveLength(1)
+    expect(h.handle.getSnapshot().needsRefresh).toBe(false)
+    h.core.setVisible(full, false)
+    h.fake.mode = "auto"
+    const from = h.fake.requests.length
+    h.fake.take(0).answer()
+    await settle()
+    expect(requestsSince(h, from)).toHaveLength(0)
+    expect(h.handle.getSnapshot().needsRefresh).toBe(true)
+    h.core.setVisible(full, true)
+    await settle()
+    expect(requestsSince(h, from)).toHaveLength(1)
+    expect(h.handle.getSnapshot().needsRefresh).toBe(false)
+  })
+
+  it("does not read again on a second transition while the read that lifts the requirement is in flight", async () => {
+    const h = await invisibleFull()
+    emit(h, { id: String(++seq), object: task.id, op: "invalidate" })
+    await closeBatch()
+    h.fake.mode = "manual"
+    const from = h.fake.requests.length
+    h.core.setVisible(full, true)
+    await settle()
+    h.core.setVisible(full, false)
+    h.core.setVisible(full, true)
+    await settle()
+    expect(h.fake.pending).toHaveLength(1)
+    h.fake.mode = "auto"
+    h.fake.deliverAll()
+    await settle()
+    expect(requestsSince(h, from)).toHaveLength(1)
+    expect(h.handle.getSnapshot().needsRefresh).toBe(false)
+  })
+
+  it("keeps the requirement over a page read: a page confirms only itself", async () => {
+    const window: ViewSpec = { kind: "window", object: TASK }
+    const h = await open(window, 5, undefined, undefined, undefined, {
+      windowPage: 2,
+    })
+    h.core.setVisible(window, false)
+    emit(h, { id: String(++seq), object: task.id, op: "invalidate" })
+    await closeBatch()
+    expect(h.handle.getSnapshot().needsRefresh).toBe(true)
+    const from = h.fake.requests.length
+    h.handle.loadAfter()
+    await settle()
+    expect(requestsSince(h, from)).toHaveLength(1)
+    expect(h.handle.getSnapshot().needsRefresh).toBe(true)
+    h.core.setVisible(window, true)
+    await settle()
+    expect(requestsSince(h, from)).toHaveLength(2)
+    expect(h.handle.getSnapshot().needsRefresh).toBe(false)
+  })
+
   it("does not read on becoming visible for needsRefresh of another reason", async () => {
     const h = await invisibleFull()
     h.core.commit(
