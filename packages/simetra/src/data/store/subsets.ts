@@ -86,6 +86,12 @@ export interface RegistryContext {
    * confirmed (`unconfirmedSince`, §8.4).
    */
   becameVisible(s: Subset): void
+  /**
+   * Reads the view when its requirement «composition not confirmed» is
+   * pending (`requirementPending`, P4-B spec §8.4, item 7): the system
+   * re-read that lifts it.
+   */
+  readRequirement(s: Subset): void
   /** The set of visible views changed: the scheduler re-plans its timer. */
   touchSchedule(): void
   /** A subset was created: the signal receiver re-plans its channels. */
@@ -684,7 +690,17 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             release()
             return
           }
-          if (!discarded || !token.valid) return
+          // Сторінка вимоги не знімає (вона підтверджує лише себе), тож та сама
+          // умова, що й після завантаження (§8.4, п. 7): вимога стоїть, і її
+          // ніхто інший не прочитає — сторінка кличе системне перечитування
+          // вигляду; склад змінює лише воно, як для завантаження. Токен
+          // сторінки тут уже недійсний (позначку знято в `commit`): живість
+          // вигляду й сесії перевіряє саме перечитування.
+          if (!discarded) {
+            ctx.readRequirement(s)
+            return
+          }
+          if (!token.valid) return
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
           return session

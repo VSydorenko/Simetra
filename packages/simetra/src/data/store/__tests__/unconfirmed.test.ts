@@ -173,6 +173,39 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
     expect(handle.getSnapshot().staleComposition).toBeUndefined()
   })
 
+  // Повтор сторінки вимоги не знімає (сторінка підтверджує лише себе): після
+  // нього та сама умова, що й після завантаження (§8.4, п. 7), — системне
+  // перечитування вигляду одразу, а не такт інтервалу.
+  it("window page of loadAfter: after its repeat the system re-read lifts the requirement at once", async () => {
+    const h = setup({ limits: { windowPage: 2 } })
+    seed(h.fake, 1, 5)
+    const spec: ViewSpec = { kind: "window", object: TASK }
+    const handle = h.core.view(spec)
+    watch(handle)
+    await settle()
+    const bury = await divergence(h, key(3))
+    h.fake.hold = isPage
+    handle.loadAfter()
+    await settle()
+    const page = h.fake.take(isPage)
+    await bury()
+    const sent = h.fake.requests.length
+    page.answer()
+    await drain(h)
+    expect(handle.getSnapshot().staleComposition).toBeUndefined()
+    // Повтор сторінки й одне системне перечитування.
+    expect(h.fake.requests.length).toBe(sent + 2)
+    expect(keysIn(handle.getSnapshot())).toEqual([
+      key(1),
+      key(2),
+      key(3),
+      key(4),
+    ])
+    vi.advanceTimersByTime(30_000)
+    await drain(h)
+    expect(h.fake.requests.length).toBe(sent + 2)
+  })
+
   // Сторінка, відхилена на прихованій вкладці, — та сама гілка невидимого
   // (§8.4, п. 7; §12, Р8): повтору на ній немає, `resume()` читає раз.
   it("window page of loadAfter rejected on a hidden tab: no repeat while hidden, one read on resume()", async () => {
@@ -272,6 +305,8 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
       key(3),
       key(4),
     ])
-    expect(h.fake.log.filter(isPage)).toHaveLength(3)
+    // Після повтору — одне системне перечитування обох сторінок вікна (§8.4,
+    // п. 7: сторінка вимоги не знімає), і жодної сторінки понад нього.
+    expect(h.fake.log.filter(isPage)).toHaveLength(5)
   })
 })

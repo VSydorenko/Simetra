@@ -1136,6 +1136,7 @@ export function createCore(options: {
     defects,
     now,
     becameVisible: (s) => becameVisible(s),
+    readRequirement: (s) => readRequirement(s),
     touchSchedule: () => scheduler.request(),
     touchSubscriptions: () => receiver?.touch(),
   })
