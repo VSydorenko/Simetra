@@ -726,6 +726,19 @@ describe("receiver model: the disconnect mark and the composition against the se
       ],
     ],
     [
+      "W1: a view visible at the wave with a read in flight becomes invisible before its tail",
+      [
+        { t: "hold" },
+        { t: "revalidate" },
+        { t: "rejoinFresh", v: 0, create: true },
+        { t: "unsubAll" },
+        { t: "time", ms: 2000 },
+        { t: "visible", v: 5, on: false },
+        { t: "rejoinFresh", v: 0, create: false },
+        { t: "release", ok: true, at: true },
+      ],
+    ],
+    [
       "P1: a new gap before the jitter of the wave",
       [
         { t: "fail", ch: 0 },

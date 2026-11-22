@@ -1314,22 +1314,29 @@ export function createCore(options: {
 
   // Спрацювання хвилі — один синхронний хід (збирач зливає читання в один
   // пакет). Позначок хвиля не знімає: їх знімає застосована відповідь.
+  // Кожному вигляду об'єкта — видимому й невидимому — вимога «склад не
+  // підтверджено з миті спрацювання» (§8.4, п. 7); видимість вирішує лише,
+  // коли читати: видимий — зараз, невидимий — на переході у видимість.
+  // Шлях, що читання не зробив (хвіст вигляду, який тим часом сховали), її
+  // просто не знімає.
   function fireWave() {
     const fired = wave
     wave = undefined
     if (fired === undefined || !session.token().valid) return
     const token = session.token()
     lastWaveAt = now()
+    // Наступна епоха: читання хвилі стартують з неї, а ті, що вже в польоті, —
+    // раніше, тож вимоги не знімуть.
+    const since = session.epochs.next()
     core.requestVersion()
     core.requestRights()
-    const invisible: { object: ObjectName; spec: ViewSpec }[] = []
+    const marked: ObjectName[] = []
     let reads = 0
     let readViews = 0
     for (const object of fired.objects) {
       if (staleObjects.has(object)) continue
       const views = activeViews(writerContext, object)
-      for (const view of views)
-        if (!view.visible) invisible.push({ object, spec: view.spec })
+      marked.push(object)
       if (views.some((v) => v.visible)) {
         readViews += views.filter((v) => v.visible).length
         reads++
@@ -1351,10 +1358,10 @@ export function createCore(options: {
         objects: reads,
         views: readViews,
       })
-    if (invisible.length > 0)
+    if (marked.length > 0)
       core.commit((w) => {
-        for (const { object, spec } of invisible)
-          w.markViews(object, { needsRefresh: true, unconfirmed: true }, spec)
+        for (const object of marked)
+          w.markViews(object, { unconfirmedSince: since })
       }, token)
   }
 
@@ -1452,16 +1459,24 @@ export function createCore(options: {
   }
 
   // Вигляд став видимим: читається, якщо тримає рядки лише з гідратації чи
-  // його склад не підтверджено механізмом свіжості — рівно одне читання, як на
-  // монтуванні; `needsRefresh` банера нових рядків лишається за `refresh()`.
+  // його склад не підтверджено (`unconfirmedSince`, §8.4, п. 7) — читання, як
+  // на монтуванні; вимогу знімає лише його успіх. `needsRefresh` банера нових
+  // рядків лишається за `refresh()`.
   function becameVisible(s: Subset) {
     readHydrated(s)
-    if (!s.unconfirmedRefresh || !s.alive || s.purged || !s.loaded) return
+    if (s.unconfirmedSince === undefined || !s.alive || s.purged || !s.loaded)
+      return
     if (staleObjects.has(s.form.object.name)) return
     // Після межі відкинутих жодне системне читання не має шансу (§6.2).
     if (session.versions.unavailable()) return
     if (!(s.visible ?? s.listeners.size > 0)) return
-    s.unconfirmedRefresh = false
+    // Читання, що стартувало після вимоги, уже летить: зняти її — його справа.
+    const since = s.unconfirmedSince
+    if (
+      s.rereadEpochs.some((e) => e >= since) ||
+      (s.flight !== undefined && (s.flightEpoch ?? -1) >= since)
+    )
+      return
     singleFlight(writerContext, s.form.object, [s], {
       visibleOnly: false,
     }).done.catch((error: unknown) => log({ kind: "listener-failed", error }))

@@ -81,7 +81,7 @@ export interface RegistryContext {
   /**
    * A view just became visible (a subscription or `setVisible(true)`): it is
    * read if it holds hydration-only rows (§6.6) or its composition is not
-   * confirmed (`unconfirmedRefresh`, §8.4).
+   * confirmed (`unconfirmedSince`, §8.4).
    */
   becameVisible(s: Subset): void
   /** The set of visible views changed: the scheduler re-plans its timer. */
@@ -140,14 +140,13 @@ export interface Subset extends ReaderTarget {
   rereadWaiters: Array<() => void>
   status: "loading" | "ready" | "refreshing" | "error"
   error: CommandError | DataError | undefined
-  needsRefresh: boolean
   /**
-   * `needsRefresh` came from a freshness mechanism (the wave, the signal
-   * receiver, П15): the composition is not confirmed, so the transition into
-   * visibility reads the view once (§8.4). The new-rows banner of a system
-   * re-read (§6.5) does not set it: that refresh stays the user's.
+   * The user's refresh is due (the new-rows banner of a system re-read,
+   * §6.5; a freshness read the hidden tab or a failure did not make). The
+   * snapshot's `needsRefresh` also shows an unconfirmed composition of an
+   * invisible view (`unconfirmedSince`, §8.4).
    */
-  unconfirmedRefresh: boolean
+  needsRefresh: boolean
   hasNewRows: boolean
   waiters: Array<() => void>
   dirty: boolean
@@ -302,28 +301,26 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       s.form.object.sections.get(s.form.spec.owner, s.form.spec.section) !==
         undefined)
 
-  // Склад, не підтверджений з епохи e (П15): вимогу знімає перше успішне
-  // читання вигляду, що стартувало після e. Нова вимога з цієї відповіді —
+  // Склад, не підтверджений з епохи e (§8.4, п. 7): вимогу знімає успішне
+  // завантаження вигляду (`lifts`), що стартувало з e; сторінка — ні:
+  // вона підтверджує лише себе. Нова вимога з цієї відповіді (П15) —
   // видимому вигляду ще одна спроба того самого читання, як повтор
   // відкинутої відповіді: покоління й політ ті самі, тож це й далі дія, що
   // його почала (окреме покоління-хвіст правило стабільності судило б як
-  // системне читання, що змінює склад); невидимому — `needsRefresh`. Межа
-  // повторів — умова, не лічильник: спробу, відхилену ще новішим надгробком
-  // e' > e, вимога переносить на e', і спроба йде знову; кожна стартує
-  // після попереднього e, а надгробків скінченно. Від порядку подій не
-  // залежить: вимога лічиться від відхиленої відповіді, а не від
+  // системне читання, що змінює склад); невидимого вимога чекає видимості.
+  // Межа повторів — умова, не лічильник: спробу, відхилену ще новішим
+  // надгробком e' > e, вимога переносить на e', і спроба йде знову; кожна
+  // стартує не раніше попереднього e, а надгробків скінченно. Від порядку подій
+  // не залежить: вимога лічиться від відхиленої відповіді, а не від
   // відновлення слота.
-  function confirm(s: Subset, readEpoch: number): boolean {
+  function confirm(s: Subset, readEpoch: number, lifts: boolean): boolean {
     const since = s.unconfirmedSince
     if (since === undefined) return false
     if (!s.answerRejected) {
-      if (readEpoch > since) s.unconfirmedSince = undefined
+      if (lifts && readEpoch >= since) s.unconfirmedSince = undefined
       return false
     }
-    if (s.visible ?? s.listeners.size > 0) return true
-    s.needsRefresh = true
-    s.unconfirmedRefresh = true
-    return false
+    return s.visible ?? s.listeners.size > 0
   }
 
   function resolveWaiters(s: Subset) {
@@ -384,9 +381,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                 s.status = "ready"
                 s.error = undefined
                 s.needsRefresh = false
-                s.unconfirmedRefresh = false
                 s.hasNewRows = false
-                again = confirm(s, readEpoch)
+                again = confirm(s, readEpoch, true)
               } catch (error) {
                 // Дефект застосування — вигляд у `error`, рядки без власника
                 // прибирає `sweep`; відмова не стає необробленою.
@@ -580,7 +576,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                 }
                 if (s.window?.generation !== before)
                   written = s.window?.generation
-                again = confirm(s, readEpoch)
+                again = confirm(s, readEpoch, false)
               } catch (error) {
                 ctx.log({ kind: "listener-failed", error })
                 s.status = "error"
@@ -863,7 +859,6 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       status: "loading",
       error: undefined,
       needsRefresh: false,
-      unconfirmedRefresh: false,
       hasNewRows: false,
       strategy:
         form.spec.kind === "full"
@@ -990,7 +985,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       ...(s.error === undefined ? {} : { error: s.error }),
       rows,
       hasNewRows: s.hasNewRows,
-      needsRefresh: s.needsRefresh,
+      // Невидимий вигляд читає непідтверджений склад лише на переході у
+      // видимість (§8.4, п. 7): до того знімок це показує.
+      needsRefresh:
+        s.needsRefresh ||
+        (s.unconfirmedSince !== undefined &&
+          !(s.visible ?? s.listeners.size > 0)),
       ...(ctx.isStale(o.name) ? { isStale: true } : {}),
       ...(staleComposition(s) ? { staleComposition: true } : {}),
       ...(section === undefined ? {} : { section }),
@@ -1100,6 +1100,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         const s = acquire(form)
         const entry = { fn: listener }
         s.listeners.add(entry)
+        // Знімок показує непідтверджений склад залежно від видимості.
+        if (s.unconfirmedSince !== undefined) s.dirty = true
         if (s.releaseTimer !== undefined) clearTimeout(s.releaseTimer)
         s.releaseTimer = undefined
         // Перша підписка знімає утримання `preload` і знімка гідратації.
@@ -1115,6 +1117,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           if (done) return
           done = true
           s.listeners.delete(entry)
+          if (s.unconfirmedSince !== undefined) s.dirty = true
           ctx.touchSchedule()
           if (s.alive && idle(s) && !isClosed()) scheduleRelease(s)
         }

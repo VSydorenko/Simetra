@@ -20,6 +20,7 @@ import {
   fetchFullAgain,
   gated,
   readFormWrite,
+  requireConfirmation,
   type Apply,
   type ReaderContext,
   type Write,
@@ -454,12 +455,10 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
             ? [found]
             : []
       for (const s of targets) {
-        if (flags.needsRefresh !== undefined) {
+        if (flags.needsRefresh !== undefined)
           s.needsRefresh = flags.needsRefresh
-          s.unconfirmedRefresh =
-            flags.needsRefresh &&
-            (flags.unconfirmed === true || s.unconfirmedRefresh)
-        }
+        if (flags.unconfirmedSince !== undefined)
+          requireConfirmation(s, flags.unconfirmedSince)
         if (flags.hasNewRows !== undefined) s.hasNewRows = flags.hasNewRows
         s.dirty = true
       }
@@ -492,7 +491,10 @@ export function setVisible(
   visible: boolean
 ) {
   const s = ctx.registry.find(spec)
-  if (s !== undefined) s.visible = visible
+  if (s === undefined) return
+  s.visible = visible
+  // Знімок показує непідтверджений склад залежно від видимості (§8.4, п. 7).
+  if (s.unconfirmedSince !== undefined) s.dirty = true
 }
 
 // ------------------------------------------------------------ revalidate
@@ -1316,6 +1318,14 @@ export async function revalidateViews(
             }
             s.refreshedAt = startedAt
             s.okReadEpoch = startEpoch
+            // Успішне системне читання, що стартувало з епохи вимоги,
+            // підтверджує склад: нового рядка воно не ставить у склад, а дає
+            // банер (§6.5).
+            if (
+              s.unconfirmedSince !== undefined &&
+              startEpoch >= s.unconfirmedSince
+            )
+              s.unconfirmedSince = undefined
             s.failures = 0
             s.failedAt = undefined
             if (s.status === "error") {

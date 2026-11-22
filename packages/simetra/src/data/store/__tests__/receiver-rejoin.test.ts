@@ -166,6 +166,40 @@ describe("the rejoin wave", () => {
     expect(states(h)).not.toContain("stale")
   })
 
+  // §8.4, п. 7: вимогу «склад не підтверджено» хвиля ставить кожному
+  // вигляду, і видимому; хвіст, якого не взято, бо вигляд тим часом сховали,
+  // її просто не знімає.
+  it("keeps the requirement of a view visible at the wave that turns invisible before its tail: needsRefresh, no read, then one read on becoming visible", async () => {
+    const h = await open(full)
+    const rowReads = (from: number) =>
+      h.fake.log.filter((r) => r.request >= from && r.query)
+    h.fake.mode = "manual"
+    void h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    expect(h.fake.pending).toHaveLength(1)
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    // Хвиля застала вигляд у польоті: йому лише хвіст, нового читання немає.
+    expect(h.fake.pending).toHaveLength(1)
+    expect(h.handle.getSnapshot().needsRefresh).toBe(false)
+    h.core.setVisible(full, false)
+    h.fake.mode = "auto"
+    const from = h.fake.requests.length
+    h.fake.take(0).answer()
+    await settle()
+    expect(rowReads(from)).toHaveLength(0)
+    // Читання стартувало до хвилі: вимоги воно не знімає.
+    expect(h.handle.getSnapshot().needsRefresh).toBe(true)
+    h.core.setVisible(full, true)
+    await settle()
+    expect(rowReads(from)).toHaveLength(1)
+    expect(h.handle.getSnapshot().needsRefresh).toBe(false)
+    h.core.setVisible(full, false)
+    h.core.setVisible(full, true)
+    await settle()
+    expect(rowReads(from)).toHaveLength(1)
+  })
+
   it("lifts the disconnect mark only after the re-read settled", async () => {
     const h = await open(keysView(key(1)))
     h.transport.fail({ kind: "transport", channel })

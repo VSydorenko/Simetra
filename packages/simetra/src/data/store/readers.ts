@@ -145,11 +145,15 @@ export interface ReaderTarget {
    */
   headerState: RowState | undefined
   /**
-   * The composition is not confirmed since this epoch (P4-B spec §6.2,
-   * П15). An answer of a load or a page carried a row the store rejected for
-   * a key tombstone newer than the read (`full`: or a `removed` mark newer
-   * than it), so the composition lacks a row the server may have. The first
-   * successful load of the view that started after it lifts it.
+   * The composition is not confirmed by a read that started before this
+   * epoch (P4-B spec §8.4, item 7): a create or a delete the server has may
+   * be missing. A freshness mechanism raises it — the rejoin wave and the
+   * signal receiver for every view of the object, П15 (§6.2) for a view
+   * whose answer the store cut (a row rejected for a key tombstone or a
+   * `removed` mark newer than the read). Only a successful load or system
+   * re-read of the view that started at this epoch or later lifts it; a
+   * page read does not (it confirms only its page). Visibility decides only
+   * when that read happens.
    */
   unconfirmedSince: number | undefined
   /**
@@ -533,8 +537,9 @@ export async function fetchFullAgain(
 /**
  * The epoch a rejected row of a load answer waits for (П15): the `removed`
  * mark newer than the read — an older read's "row absent" landed after this
- * read started — or a key tombstone newer than it (its epoch is internal to
- * the session epochs, so the current one, which is not lower). A pair
+ * read started; a read from its epoch on passes it — or a key tombstone
+ * newer than it (its epoch is internal to the session epochs, so the
+ * current one, which is not lower). A pair
  * tombstone is not a requirement: the pair is gone for this view (purge,
  * rights). A purge of the object also re-runs the loads in flight (П12), so
  * the key tombstones of a pair purge never judge their answers.
@@ -556,10 +561,18 @@ function rejectedSince(
   return undefined
 }
 
-/** Raises the view's requirement «composition not confirmed» (П15). */
+/**
+ * Raises the view's requirement «composition not confirmed since `since`»
+ * (§8.4, item 7): never lowers a newer one.
+ */
+export function requireConfirmation(s: ReaderTarget, since: number) {
+  s.unconfirmedSince = Math.max(s.unconfirmedSince ?? 0, since)
+}
+
+/** П15: the answer being applied cut the composition. */
 function requireSince(s: ReaderTarget, since: number | undefined) {
   if (since === undefined) return
-  s.unconfirmedSince = Math.max(s.unconfirmedSince ?? 0, since)
+  requireConfirmation(s, since)
   s.answerRejected = true
 }
 

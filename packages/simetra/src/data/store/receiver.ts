@@ -765,8 +765,12 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     // ТЧ власників читання ключів: шапка пишеться після їхнього осідання, щоб
     // нова версія шапки не застала ТЧ у польоті (зайве перечитування).
     const sectionsOf = new Map<Job, Promise<void>>()
-    // `needsRefresh` невидимим виглядам (`spec` немає — усім виглядам об'єкта).
-    const refresh: { object: ObjectName; spec?: ViewSpec }[] = []
+    // Вимога «склад не підтверджено» (§8.4, п. 7) — усім виглядам об'єкта,
+    // видимим і невидимим; `needsRefresh` — ще й тим, кого прихована вкладка
+    // не читає зараз. Наступна епоха: читання пачки стартують з неї й
+    // знімають вимогу, а ті, що вже в польоті, — ні.
+    const since = session.epochs.next()
+    const unconfirmed: { object: ObjectName; needsRefresh: boolean }[] = []
     const requested: ObjectName[] = []
     const burstObjects: ObjectName[] = []
     for (const [object, signals] of batch) {
@@ -791,15 +795,14 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       if (!ctx.visible()) {
         note([])
         requested.push(object)
-        refresh.push({ object })
+        unconfirmed.push({ object, needsRefresh: true })
         continue
       }
       if (plan.whole) {
         if (watcher !== undefined)
           note(revalidateTargets(writer, object, { visibleOnly: true }))
         burstObjects.push(object)
-        for (const view of views)
-          if (!view.visible) refresh.push({ object, spec: view.spec })
+        unconfirmed.push({ object, needsRefresh: false })
         flights.push(
           revalidate(writer, object, { visibleOnly: true }).catch(
             (error: unknown) => writer.log({ kind: "listener-failed", error })
@@ -840,10 +843,15 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         views += activeViews(writer, object).filter((v) => v.visible).length
       writer.log({ kind: "revalidate-burst", objects: reading.size, views })
     }
-    if (refresh.length > 0)
+    if (unconfirmed.length > 0)
       ctx.commit((w) => {
-        for (const { object, spec } of refresh)
-          w.markViews(object, { needsRefresh: true, unconfirmed: true }, spec)
+        for (const { object, needsRefresh } of unconfirmed)
+          w.markViews(
+            object,
+            needsRefresh
+              ? { needsRefresh, unconfirmedSince: since }
+              : { unconfirmedSince: since }
+          )
       }, token)
     // Строк на `resume()`: планувальник на прихованій вкладці нічого не шле.
     for (const object of requested) writer.schedule(object, 0)
@@ -857,7 +865,10 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       if (rows === undefined) {
         ctx.commit(
           (w) =>
-            w.markViews(job.object, { needsRefresh: true, unconfirmed: true }),
+            w.markViews(job.object, {
+              needsRefresh: true,
+              unconfirmedSince: since,
+            }),
           token
         )
         return

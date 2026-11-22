@@ -540,12 +540,19 @@ export interface Writer {
   forgetReleased(): void
   /**
    * Sets the flags of the object's views (`spec` — of that view only).
-   * `unconfirmed` with `needsRefresh`: the flag comes from a freshness
-   * mechanism, so the view reads once on becoming visible (§8.4).
+   * `unconfirmedSince` (a `readEpoch()` value) raises the requirement «the
+   * composition is not confirmed since this epoch» (§8.4): only a successful
+   * read of the view that started at it or later lifts it; a visible view is read
+   * by the mechanism that raised it, an invisible one on becoming visible,
+   * and until then its snapshot shows `needsRefresh`.
    */
   markViews(
     object: ObjectName,
-    flags: { needsRefresh?: boolean; hasNewRows?: boolean; unconfirmed?: true },
+    flags: {
+      needsRefresh?: boolean
+      hasNewRows?: boolean
+      unconfirmedSince?: number
+    },
     spec?: ViewSpec
   ): void
 }
