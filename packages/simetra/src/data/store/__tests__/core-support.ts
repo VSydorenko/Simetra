@@ -153,6 +153,33 @@ export const seed = (fake: FakeSource, from: number, to: number) => {
   for (let n = from; n <= to; n++) fake.insert(TASK, taskValues(n))
 }
 
+/**
+ * Межа часу властивості fast-check з бюджету тесту (одне джерело з таймаутом
+ * vitest): прогін, що вийшов за бюджет, завершується сам і червоним, а не
+ * продовжується у фоні й не зачіпає сусідній тест.
+ */
+export const interruptWithin = (budgetMs: number) => ({
+  interruptAfterTimeLimit: Math.floor(budgetMs * 0.9),
+  markInterruptAsFailure: true,
+})
+
+// Перерваний прогін fast-check не чекає: він летить далі, і його `finally`
+// (закриття ядра й таймерів) інакше спрацював би вже в наступному тесті.
+const runsInFlight = new Set<Promise<unknown>>()
+
+/** Registers one model run of a property, so {@link settleRuns} can await it. */
+export function modelRun<T>(run: Promise<T>): Promise<T> {
+  runsInFlight.add(run)
+  const done = () => runsInFlight.delete(run)
+  run.then(done, done)
+  return run
+}
+
+/** Awaits every model run still in flight (an interrupted one included). */
+export async function settleRuns(): Promise<void> {
+  while (runsInFlight.size > 0) await Promise.allSettled([...runsInFlight])
+}
+
 /** Дає дійти всім мікрозадачам відповідей (фейк доставляє мікрозадачею). */
 export const settle = async (rounds = 200) => {
   for (let i = 0; i < rounds; i++) await Promise.resolve()

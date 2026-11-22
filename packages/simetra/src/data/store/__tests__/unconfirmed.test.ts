@@ -145,6 +145,131 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
     expect(h.fake.log.filter(isPage)).toHaveLength(2)
   })
 
+  // Прихована вкладка — гілка невидимого вигляду (§8.4, п. 7; §12, Р8):
+  // повтору П15 на ній немає, вигляд показує `needsRefresh`, а `resume()`
+  // читає його рівно раз.
+  it("window, visible on a hidden tab: no repeat while hidden, one read on resume()", async () => {
+    const h = setup()
+    seed(h.fake, 1, 3)
+    const bury = await divergence(h, key(2))
+    h.fake.hold = isPage
+    const spec: ViewSpec = { kind: "window", object: TASK }
+    const handle = h.core.view(spec)
+    watch(handle)
+    await settle()
+    const first = h.fake.take(isPage)
+    await bury()
+    h.core.suspend()
+    const sent = h.fake.requests.length
+    first.answer()
+    await drain(h)
+    expect(h.fake.requests.length).toBe(sent)
+    expect(keysIn(handle.getSnapshot())).toEqual([key(1), key(3)])
+    expect(handle.getSnapshot().needsRefresh).toBe(true)
+    expect(handle.getSnapshot().staleComposition).toBe(true)
+    h.core.resume()
+    await drain(h)
+    expect(h.fake.log.filter(isPage)).toHaveLength(2)
+    expect(handle.getSnapshot().staleComposition).toBeUndefined()
+    expect(handle.getSnapshot().needsRefresh).toBe(false)
+  })
+
+  // Повтор сторінки вимоги не знімає (сторінка підтверджує лише себе): після
+  // нього та сама умова, що й після завантаження (§8.4, п. 7), — системне
+  // перечитування вигляду одразу, а не такт інтервалу.
+  it("window page of loadAfter: after its repeat the system re-read lifts the requirement at once", async () => {
+    const h = setup({ limits: { windowPage: 2 } })
+    seed(h.fake, 1, 5)
+    const spec: ViewSpec = { kind: "window", object: TASK }
+    const handle = h.core.view(spec)
+    watch(handle)
+    await settle()
+    const bury = await divergence(h, key(3))
+    h.fake.hold = isPage
+    handle.loadAfter()
+    await settle()
+    const page = h.fake.take(isPage)
+    await bury()
+    const sent = h.fake.requests.length
+    page.answer()
+    await drain(h)
+    expect(handle.getSnapshot().staleComposition).toBeUndefined()
+    // Повтор сторінки й одне системне перечитування.
+    expect(h.fake.requests.length).toBe(sent + 2)
+    expect(keysIn(handle.getSnapshot())).toEqual([
+      key(1),
+      key(2),
+      key(3),
+      key(4),
+    ])
+    vi.advanceTimersByTime(30_000)
+    await drain(h)
+    expect(h.fake.requests.length).toBe(sent + 2)
+  })
+
+  // Системне перечитування, чию відповідь пропущено, бо завантаження вигляду
+  // осіло раніше, — теж точка осідання (§8.4, п. 7): завантаження не
+  // повторилось, бо бачило його в польоті, тож вимогу читає те саме правило
+  // одразу, а не такт інтервалу.
+  it("full, visible: a system re-read skipped because the load settled first reads the requirement at once", async () => {
+    const h = setup()
+    seed(h.fake, 1, 3)
+    const handle = h.core.view({ kind: "full", object: TASK })
+    watch(handle)
+    await settle()
+    h.fake.hold = () => true
+    handle.refresh()
+    await settle()
+    const load = h.fake.take()
+    const { epochs } = coreInternals(h.core)
+    h.core.commit(
+      (w) => w.apply(TASK, { rows: [], absent: [key(2)] }, epochs.next(), null),
+      h.core.token()
+    )
+    h.core.commit((w) => w.hide(TASK, [key(1)]), h.core.token())
+    await settle()
+    expect(h.fake.pending.length).toBeGreaterThan(0)
+    load.answer()
+    await settle()
+    const sent = h.fake.requests.length
+    await drain(h)
+    expect(handle.getSnapshot().staleComposition).toBeUndefined()
+    expect(h.fake.requests.length).toBeGreaterThan(sent)
+    const after = h.fake.requests.length
+    vi.advanceTimersByTime(30_000)
+    await drain(h)
+    expect(h.fake.requests.length).toBe(after)
+  })
+
+  // Сторінка, відхилена на прихованій вкладці, — та сама гілка невидимого
+  // (§8.4, п. 7; §12, Р8): повтору на ній немає, `resume()` читає раз.
+  it("window page of loadAfter rejected on a hidden tab: no repeat while hidden, one read on resume()", async () => {
+    const h = setup({ limits: { windowPage: 2 } })
+    seed(h.fake, 1, 5)
+    const spec: ViewSpec = { kind: "window", object: TASK }
+    const handle = h.core.view(spec)
+    watch(handle)
+    await settle()
+    const bury = await divergence(h, key(3))
+    h.fake.hold = isPage
+    handle.loadAfter()
+    await settle()
+    const page = h.fake.take(isPage)
+    await bury()
+    h.core.suspend()
+    const sent = h.fake.requests.length
+    page.answer()
+    await drain(h)
+    expect(h.fake.requests.length).toBe(sent)
+    expect(handle.getSnapshot().needsRefresh).toBe(true)
+    expect(handle.getSnapshot().staleComposition).toBe(true)
+    h.core.resume()
+    await drain(h)
+    expect(h.fake.requests.length).toBe(sent + 1)
+    expect(handle.getSnapshot().staleComposition).toBeUndefined()
+    expect(handle.getSnapshot().needsRefresh).toBe(false)
+  })
+
   // Дві сторінки в польоті, відхилені без руху епохи між відповідями,
   // дають ту саму вимогу: повтор іде за фактом відхилення кожної відповіді,
   // а не за зміною значення вимоги.
@@ -216,6 +341,8 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
       key(3),
       key(4),
     ])
-    expect(h.fake.log.filter(isPage)).toHaveLength(3)
+    // Після повтору — одне системне перечитування обох сторінок вікна (§8.4,
+    // п. 7: сторінка вимоги не знімає), і жодної сторінки понад нього.
+    expect(h.fake.log.filter(isPage)).toHaveLength(5)
   })
 })

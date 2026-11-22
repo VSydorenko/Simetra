@@ -16,11 +16,13 @@ import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import { createFakeSource } from "../testing/fake-source"
 import { coreInternals } from "../core"
 import { QUIET_MS, REJOIN_JITTER_MS } from "../receiver"
+import { failurePause } from "../subsets"
 import { DEFAULT_CORE_LIMITS, type Key, type ViewSpec } from "../types"
 import {
   ORG,
   TASK,
   key,
+  keysIn,
   keysOf,
   org,
   S,
@@ -216,8 +218,20 @@ describe("the rejoin wave", () => {
     const from = h.fake.requests.length
     h.core.setVisible(full, true)
     await settle()
+    // Збій читання повторює пауза збоїв, а не перехід у видимість
+    // (`requirementPending`, §8.4, п. 7): вимога стоїть, читання — у строк.
+    expect(requestsSince(h, from)).toHaveLength(0)
+    // До кінця паузи — стан збою й непідтверджений склад, а не чистий кадр.
+    expect(h.handle.getSnapshot()).toMatchObject({
+      status: "error",
+      error: { code: "command.unavailable" },
+      staleComposition: true,
+    })
+    await advance(failurePause(1, DEFAULT_CORE_LIMITS.revalidateIntervalMs))
     expect(requestsSince(h, from)).toHaveLength(1)
     expect(h.handle.getSnapshot().needsRefresh).toBe(false)
+    expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
+    expect(h.handle.getSnapshot().status).toBe("ready")
   })
 
   it("shows the requirement of a view left without subscribers", async () => {
@@ -470,6 +484,80 @@ describe("recovered: true is not trusted for freshness", () => {
       expect(h.handle.getSnapshot().rows[1]).toMatchObject({
         values: { title: "missed" },
       })
+    }
+  )
+
+  // §8.4, п. 7: вимога, поставлена видимому вигляду, чиє перше завантаження
+  // в польоті, лишається після нього (readEpoch < e) — той самий політ читає
+  // ще раз, а не чекає інтервалу.
+  it.each(["wave", "invalidate"] as const)(
+    "re-reads a visible view whose first load was in flight when the %s raised the requirement",
+    async (by) => {
+      const h = await open(keysView(key(3)))
+      if (by === "wave") {
+        h.transport.join(channel, false)
+        await advance(REJOIN_JITTER_MS)
+      }
+      h.fake.mode = "manual"
+      const view = h.core.view(keysView(key(1), key(2)))
+      view.subscribe(() => {})
+      await settle()
+      expect(h.fake.pending).toHaveLength(1)
+      if (by === "wave") {
+        h.transport.join(channel, false)
+        await advance(REJOIN_JITTER_MS)
+      } else {
+        h.transport.emit(channel, {
+          id: "9401",
+          object: task.id,
+          op: "invalidate",
+        })
+        await advance(QUIET_MS)
+      }
+      const from = h.fake.requests.length
+      h.fake.mode = "auto"
+      h.fake.deliverAll()
+      await settle()
+      expect(view.getSnapshot().status).toBe("ready")
+      expect(view.getSnapshot().staleComposition).toBeUndefined()
+      // Той самий політ — одне повторне читання, без інтервалу.
+      expect(h.fake.requests.length).toBeGreaterThan(from)
+    }
+  )
+
+  // §8.4, п. 7: системне перечитування підтверджує весь вигляд — те саме
+  // правило, що в завантаження (`requirementPending`): вимога, поставлена,
+  // поки воно летіло, лишається після нього (startEpoch < e), і той самий
+  // системний шлях читає ще раз, а не чекає інтервалу; склад не змінюється.
+  it.each(["wave", "invalidate"] as const)(
+    "re-reads a visible view whose system re-read was in flight when the %s raised the requirement",
+    async (by) => {
+      const h = await open(keysView(key(1), key(2)))
+      h.fake.mode = "manual"
+      const reread = h.core.revalidate(TASK, { visibleOnly: true })
+      await settle()
+      expect(h.fake.pending).toHaveLength(1)
+      if (by === "wave") {
+        h.transport.join(channel, false)
+        await advance(REJOIN_JITTER_MS)
+      } else {
+        h.transport.emit(channel, {
+          id: "9402",
+          object: task.id,
+          op: "invalidate",
+        })
+        await advance(QUIET_MS)
+      }
+      const from = h.fake.requests.length
+      h.fake.mode = "auto"
+      h.fake.deliverAll()
+      await reread
+      await settle()
+      expect(h.handle.getSnapshot().status).toBe("ready")
+      expect(h.handle.getSnapshot().staleComposition).toBeUndefined()
+      expect(keysIn(h.handle.getSnapshot())).toEqual([key(1), key(2)])
+      // Повтор — системним шляхом: читань вигляду після відповіді — одне.
+      expect(requestsSince(h, from)).toHaveLength(1)
     }
   )
 

@@ -310,6 +310,64 @@ describe("receiver subscriptions", () => {
   })
 })
 
+// Відписка — порт транспорту: її виняток іде в журнал і не обриває кроку
+// приймача — `purge` пари (Р12), відпускання каналів і закриття (Codex P1).
+describe("an Unsubscribe that throws", () => {
+  const throwingOff = (h: ReturnType<typeof harness>, bad: string) => {
+    h.subscribe.mockRestore()
+    const real = h.transport.subscribe.bind(h.transport)
+    const spy = vi
+      .spyOn(h.transport, "subscribe")
+      .mockImplementation((channels, onSignal, onError) => {
+        const off = real(channels, onSignal, onError)
+        return () => {
+          off()
+          if (channels.includes(bad)) throw new Error("off failed")
+        }
+      })
+    return spy
+  }
+  const failed = (h: ReturnType<typeof harness>) =>
+    h.log.filter((e) => e.kind === "listener-failed")
+
+  it("on auth: the rows of the pair are purged and the error is logged", async () => {
+    const h = harness(snapshotOf([S]))
+    throwingOff(h, taskChannel(S))
+    seed(h.fake, 1, 1)
+    h.core.view(list(key(1))).subscribe(() => {})
+    await settle()
+    expect(h.inspect.rowCount()).toBe(1)
+    h.transport.fail({ kind: "auth", channel: taskChannel(S) })
+    await settle()
+    expect(h.inspect.rowCount()).toBe(0)
+    expect(failed(h)).toHaveLength(1)
+  })
+
+  it("on release by a replacing snapshot: every channel it no longer allows is released", async () => {
+    const h = harness(snapshotOf([S, S2, S3]))
+    throwingOff(h, taskChannel(S2))
+    seed(h.fake, 1, 1)
+    h.core.view(list(key(1))).subscribe(() => {})
+    await settle()
+    expect(channelsOf(h.transport)).toHaveLength(3)
+    await replaceSnapshot(h, snapshotOf([S]), V2)
+    expect(channelsOf(h.transport)).toEqual([taskChannel(S)])
+    expect(failed(h)).toHaveLength(1)
+  })
+
+  it("on close: every other subscription is dropped and the error is logged", async () => {
+    const h = harness(snapshotOf([S, S2]))
+    throwingOff(h, taskChannel(S))
+    seed(h.fake, 1, 1)
+    h.core.view(list(key(1))).subscribe(() => {})
+    await settle()
+    expect(h.transport.subscribed().size).toBe(2)
+    h.core.close("disposed")
+    expect(h.transport.subscribed().size).toBe(0)
+    expect(failed(h)).toHaveLength(1)
+  })
+})
+
 describe("the runtime owns the signal transport", () => {
   const SUBJECT = "user-1"
   const READ = { type: "read" as const, items: [{ type: "version" }] }

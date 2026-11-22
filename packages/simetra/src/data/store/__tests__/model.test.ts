@@ -44,7 +44,19 @@ import {
   type ViewSnapshot,
   type ViewSpec,
 } from "../types"
-import { ORG, S, TASK, key, keysOf, org, setup, task } from "./core-support"
+import {
+  ORG,
+  S,
+  TASK,
+  interruptWithin,
+  key,
+  modelRun,
+  settleRuns,
+  keysOf,
+  org,
+  setup,
+  task,
+} from "./core-support"
 
 /*
  * Модельний тест ядра — гейт блоку (спека П4-B §11,
@@ -3667,7 +3679,16 @@ async function runModelOn(
           )
         const byTick = (sub: Subset) =>
           overdue && !young(sub, at, 0.9 * REVALIDATE_MS)
-        const youngNow = (sub: Subset) => !byResume(sub) && !byTick(sub)
+        // Вимога сильніша за вік (§8.4, п. 7): вигляд, чия вимога «склад не
+        // підтверджено» стояла на старті кроку поза паузою збою, `resume()`
+        // читає й молодшим за межу. Лише такий: молодий вигляд без вимоги
+        // межа й далі тримає.
+        const byRequirement = (sub: Subset) =>
+          sub.unconfirmedSince !== undefined &&
+          sub.failures === 0 &&
+          !inPause(sub, at)
+        const youngNow = (sub: Subset) =>
+          !byResume(sub) && !byTick(sub) && !byRequirement(sub)
         for (const sub of readers) {
           if (inPause(sub, at)) pausedViews.add(sub)
           if (youngNow(sub)) youngViews.set(sub, sub.rereads)
@@ -4383,51 +4404,125 @@ const property = (
     fc.boolean(),
     fc.constantFrom<Profile>("full", "scroll", "burial"),
     (steps, preloaded, profile) =>
-      runModel(
-        steps,
-        preloaded,
-        profile,
-        defects,
-        schedulerChecks,
-        rights,
-        signals
+      modelRun(
+        runModel(
+          steps,
+          preloaded,
+          profile,
+          defects,
+          schedulerChecks,
+          rights,
+          signals
+        )
       )
   )
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
 })
-afterEach(() => {
+// Прогін, перерваний межею часу, закриває ядро й таймери ще в своєму тесті.
+afterEach(async () => {
+  await settleRuns()
   vi.useRealTimers()
 })
 
+// Бюджети тестів властивостей: таймаут vitest і межа fast-check
+// (`interruptWithin`) — з однієї сталої на тест.
+const BUDGET_MS = 120_000
+const RIGHTS_BUDGET_MS = 240_000
+
 describe("core model", () => {
-  it("holds the invariants over random interleavings", async () => {
-    tickReads = 0
-    await fc.assert(property(), { numRuns: RUNS })
-    // Без тактів із читанням інваріанти планувальника порожні.
-    expect(tickReads, "no tick with a read").toBeGreaterThan(0)
-  }, 120_000)
+  it(
+    "holds the invariants over random interleavings",
+    async () => {
+      tickReads = 0
+      await fc.assert(property(), {
+        numRuns: RUNS,
+        ...interruptWithin(BUDGET_MS),
+      })
+      // Без тактів із читанням інваріанти планувальника порожні.
+      expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+    },
+    BUDGET_MS
+  )
 
   // Каталог зі знімком прав (B5b-2): ті самі кроки й кроки знімка — втрата
   // пари, звуження, без змін, збій, утримана відповідь, читання до знімка,
   // інший користувач. Без прав прогін вище лишається тим самим (насіння
   // самотесту й регресій не зсуваються).
-  it("holds the invariants with the rights snapshot", async () => {
-    tickReads = 0
-    await fc.assert(property([], true, true), { numRuns: RUNS })
-    expect(tickReads, "no tick with a read").toBeGreaterThan(0)
-  }, 240_000)
+  it(
+    "holds the invariants with the rights snapshot",
+    async () => {
+      tickReads = 0
+      await fc.assert(property([], true, true), {
+        numRuns: RUNS,
+        ...interruptWithin(RIGHTS_BUDGET_MS),
+      })
+      expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+    },
+    RIGHTS_BUDGET_MS
+  )
 
   // Приймач сигналів (B5b-3): ті самі кроки й кроки знімка прав плюс сигнали
   // каналу змін у будь-якому порядку з дублями, приєднання з `recovered` і
   // без, розриви, відмови каналу й з'єднання. Прогони без сигналів не
   // змінюються (їхні насіння самотесту й регресій не зсуваються).
-  it("holds the invariants with the signal receiver", async () => {
-    tickReads = 0
-    await fc.assert(property([], true, true, true), { numRuns: RUNS })
-    expect(tickReads, "no tick with a read").toBeGreaterThan(0)
-  }, 240_000)
+  it(
+    "holds the invariants with the signal receiver",
+    async () => {
+      tickReads = 0
+      await fc.assert(property([], true, true, true), {
+        numRuns: RUNS,
+        ...interruptWithin(RIGHTS_BUDGET_MS),
+      })
+      expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+    },
+    RIGHTS_BUDGET_MS
+  )
+})
+
+// Межа часу властивості (обв'язка): прогін понад бюджет тесту червоний сам і
+// не продовжується у фоні в наступному тесті.
+describe("the time budget of a property", () => {
+  const SMALL_BUDGET_MS = 3_000
+  let started = 0
+  let finished = 0
+  const counted = fc.asyncProperty(
+    fc.array(STEP, { minLength: 10, maxLength: 80, size: "max" }),
+    fc.boolean(),
+    fc.constantFrom<Profile>("full", "scroll", "burial"),
+    (steps, preloaded, profile) => {
+      started++
+      return modelRun(
+        runModel(steps, preloaded, profile).finally(() => {
+          finished++
+        })
+      )
+    }
+  )
+
+  it(
+    "fails a property that outlives its budget as an interrupt",
+    async () => {
+      await expect(
+        fc.assert(counted, {
+          numRuns: 1_000_000,
+          ...interruptWithin(SMALL_BUDGET_MS),
+        })
+      ).rejects.toThrow(/interrupted/i)
+    },
+    SMALL_BUDGET_MS
+  )
+
+  it("leaves no run of it going in the next test", async () => {
+    // Перерваний прогін осів ще в своєму тесті: ядро й таймери закрито там.
+    expect(finished, "the interrupted run is still in flight").toBe(started)
+    const at = started
+    for (let i = 0; i < 50; i++)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(started, "a run started after its test ended").toBe(at)
+    expect(vi.getTimerCount()).toBe(0)
+  })
 })
 
 // Фіксовані прогони знайдених контрприкладів: насіння й шлях fast-check
@@ -4503,6 +4598,23 @@ describe("core model regressions", () => {
       seed: 1071874945,
       path: "1376:4:0:8:12:13:15:17:22:20:22:23:24:21:19:21:21:22:22:2:5:5:17:17:17:17:17:17:18:19:19:19:19:23:23:24",
     },
+    // #114: сторінка, що стартувала до вимоги пачки сигналів, не повторюється
+    // за чужою вимогою (§8.4, п. 7: сторінка підтверджує лише себе) — інакше
+    // повтор заміняє сторінку й змінює склад без дії користувача.
+    {
+      issue: 114,
+      signals: true,
+      seed: -518023336,
+      path: "9307:4:1:4:11:8:19:20:5:3:16:11:14:16:11:19:19:19:11:11:9:9:8:8:8:17:8:9:8:9:11:8:11:12:11:8:10:10",
+    },
+    // #114: вимога складу, що лишилась на прихованій вкладці, сильніша за
+    // вік — `resume()` читає вигляд і молодшим за `resumeMinIntervalMs`.
+    {
+      issue: 114,
+      signals: true,
+      seed: -1610915587,
+      path: "7505:2:3:5:5:22:14:3:5:9:9:11:10:13:12:12:13:19:18:18:18:18:7:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:9",
+    },
   ])(
     "replays the counterexample of #$issue (seed $seed)",
     async ({ seed, path, rights = false, signals = false }) => {
@@ -4510,9 +4622,10 @@ describe("core model regressions", () => {
         seed,
         path,
         endOnFailure: true,
+        ...interruptWithin(BUDGET_MS),
       })
     },
-    120_000
+    BUDGET_MS
   )
 
   // #114: вигляд із `needsRefresh` від механізму свіжості стає видимим
@@ -4871,13 +4984,14 @@ describe("core model self-check", () => {
         // Достатньо знайти червоний прогін: ужимання контрприкладу лише
         // подовжує самотест.
         endOnFailure: true,
+        ...interruptWithin(BUDGET_MS),
       })
       expect(result.failed, `${flag} not caught`).toBe(true)
       expect(result.errorInstance).toBeInstanceOf(ModelFailure)
       // Контроль: той самий контрприклад без дефекту проходить, тож червоний
       // — від дефекту, а не від помилки моделі.
       const [steps, preloaded, profile] = result.counterexample!
-      await runModel(steps, preloaded, profile, [], checks)
+      await modelRun(runModel(steps, preloaded, profile, [], checks))
       const caughtBy = CAUGHT_BY[flag]
       if (caughtBy !== undefined)
         expect((result.errorInstance as Error).message).toMatch(caughtBy)
@@ -4888,7 +5002,7 @@ describe("core model self-check", () => {
       if (SCHEDULER_DEFECTS.includes(flag))
         expect(tickReads, `${flag}: no tick with a read`).toBeGreaterThan(0)
     },
-    120_000
+    BUDGET_MS
   )
 
   it.each(RIGHTS_DEFECTS)(
@@ -4898,15 +5012,16 @@ describe("core model self-check", () => {
         numRuns: 10_000,
         seed: 1,
         endOnFailure: true,
+        ...interruptWithin(RIGHTS_BUDGET_MS),
       })
       expect(result.failed, `${flag} not caught`).toBe(true)
       expect(result.errorInstance).toBeInstanceOf(ModelFailure)
       // Контроль: той самий прогін без дефекту зелений.
       const [steps, preloaded, profile] = result.counterexample!
-      await runModel(steps, preloaded, profile, [], true, true)
+      await modelRun(runModel(steps, preloaded, profile, [], true, true))
       expect((result.errorInstance as Error).message).toMatch(CAUGHT_BY[flag]!)
     },
-    240_000
+    RIGHTS_BUDGET_MS
   )
 
   // Дефекти планувальника — і в прогонах з сигналами: пропуск перечитувань
@@ -4919,16 +5034,17 @@ describe("core model self-check", () => {
         numRuns: 10_000,
         seed: 1,
         endOnFailure: true,
+        ...interruptWithin(RIGHTS_BUDGET_MS),
       })
       expect(result.failed, `${flag} not caught`).toBe(true)
       expect(result.errorInstance).toBeInstanceOf(ModelFailure)
       // Контроль: той самий прогін без дефекту зелений.
       const [steps, preloaded, profile] = result.counterexample!
-      await runModel(steps, preloaded, profile, [], true, true, true)
+      await modelRun(runModel(steps, preloaded, profile, [], true, true, true))
       expect((result.errorInstance as Error).message).toMatch(CAUGHT_BY[flag]!)
       if (SCHEDULER_DEFECTS.includes(flag))
         expect(tickReads, `${flag}: no tick with a read`).toBeGreaterThan(0)
     },
-    240_000
+    RIGHTS_BUDGET_MS
   )
 })

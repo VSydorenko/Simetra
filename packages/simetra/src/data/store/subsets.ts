@@ -57,6 +57,8 @@ import type {
 
 export interface RegistryContext {
   readonly session: Session
+  /** The tab is visible (`suspend` / `resume`, §8.4). */
+  readonly tabVisible: () => boolean
   readonly source: StoreSource
   readonly index: CatalogIndex
   readonly limits: CoreLimits
@@ -84,6 +86,12 @@ export interface RegistryContext {
    * confirmed (`unconfirmedSince`, §8.4).
    */
   becameVisible(s: Subset): void
+  /**
+   * Reads the view when its requirement «composition not confirmed» is
+   * pending (`requirementPending`, P4-B spec §8.4, item 7): the system
+   * re-read that lifts it.
+   */
+  readRequirement(s: Subset): void
   /** The set of visible views changed: the scheduler re-plans its timer. */
   touchSchedule(): void
   /** A subset was created: the signal receiver re-plans its channels. */
@@ -142,9 +150,10 @@ export interface Subset extends ReaderTarget {
   error: CommandError | DataError | undefined
   /**
    * The user's refresh is due (the new-rows banner of a system re-read,
-   * §6.5; a freshness read the hidden tab or a failure did not make). The
-   * snapshot's `needsRefresh` also shows an unconfirmed composition of an
-   * invisible view (`unconfirmedSince`, §8.4).
+   * §6.5; a failed key read of the receiver). The snapshot's `needsRefresh`
+   * also shows an unconfirmed composition (`unconfirmedSince`, §8.4) of an
+   * invisible view or of any view on a hidden tab: that part is derived, not
+   * stored here.
    */
   needsRefresh: boolean
   hasNewRows: boolean
@@ -253,6 +262,68 @@ export const viewDueAt = (
       ? Number.POSITIVE_INFINITY
       : s.refreshedAt + ageMs
 
+/**
+ * Lifts the view requirement «composition not confirmed since e» (P4-B spec
+ * §8.4, item 7): only a read that confirms the whole view (its load or a
+ * system re-read) started at epoch `readEpoch >= e` lifts it.
+ */
+function liftRequirement(s: Subset, readEpoch: number): void {
+  if (s.unconfirmedSince !== undefined && readEpoch >= s.unconfirmedSince)
+    s.unconfirmedSince = undefined
+}
+
+/** What the requirement rule reads of the session and the tab. */
+export interface RequirementEnv {
+  readonly versions: Pick<Session["versions"], "unavailable">
+  /** The tab is visible: on a hidden tab nothing is sent (§12, Р8). */
+  readonly tabVisible: () => boolean
+}
+
+/**
+ * The view requirement stands and waits for a read nobody else promises
+ * (P4-B spec §8.4, item 7): the view is visible on a visible tab, no read of
+ * it started at the requirement's epoch or later is in flight or queued after
+ * the current one (a `revalidate` tail, a trailing load), it is not in the
+ * failure pause and the session is not out of the discard limit.
+ */
+export function requirementPending(s: Subset, env: RequirementEnv): boolean {
+  return env.tabVisible() && waitsForRead(s, env)
+}
+
+// Те саме без вкладки: вимога чекає читання, яке ніхто інший не обіцяє.
+function waitsForRead(s: Subset, env: RequirementEnv): boolean {
+  const since = s.unconfirmedSince
+  if (since === undefined) return false
+  if (!(s.visible ?? s.listeners.size > 0)) return false
+  if (s.rereadEpochs.some((at) => at >= since)) return false
+  if (s.flight !== undefined && (s.flightEpoch ?? -1) >= since) return false
+  // Хвіст `revalidate` і завантаження-наступник стартують після осідання
+  // поточного читання, тобто з e чи пізніше: вимогу знімуть вони, повтор був
+  // би другим читанням того самого.
+  if (s.rereadTail !== undefined || s.trailing) return false
+  // Збій читання повторює пауза збоїв (планувальник), не негайне коло.
+  if (s.failures > 0) return false
+  // Після межі відкинутих жодне читання не має шансу (§6.2).
+  return !env.versions.unavailable()
+}
+
+/**
+ * The settle point of a read that confirms the whole view (its load or a
+ * system re-read; P4-B spec §8.4, item 7): lifts the requirement when the
+ * read started at its epoch or later; else, when it is pending, the caller
+ * repeats the read (`true`). On a hidden tab the view takes the invisible
+ * branch instead: no repeat, the snapshot derives `needsRefresh` from the
+ * requirement, and `resume()` reads it.
+ */
+export function settleRequirement(
+  s: Subset,
+  readEpoch: number,
+  env: RequirementEnv
+): boolean {
+  liftRequirement(s, readEpoch)
+  return waitsForRead(s, env) && env.tabVisible()
+}
+
 const ACCESS_CHANGED = purgedSnapshot("access-changed")
 
 /**
@@ -301,26 +372,38 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       s.form.object.sections.get(s.form.spec.owner, s.form.spec.section) !==
         undefined)
 
-  // Склад, не підтверджений з епохи e (§8.4, п. 7): вимогу знімає успішне
-  // завантаження вигляду (`lifts`), що стартувало з e; сторінка — ні:
-  // вона підтверджує лише себе. Нова вимога з цієї відповіді (П15) —
-  // видимому вигляду ще одна спроба того самого читання, як повтор
-  // відкинутої відповіді: покоління й політ ті самі, тож це й далі дія, що
-  // його почала (окреме покоління-хвіст правило стабільності судило б як
-  // системне читання, що змінює склад); невидимого вимога чекає видимості.
-  // Межа повторів — умова, не лічильник: спробу, відхилену ще новішим
-  // надгробком e' > e, вимога переносить на e', і спроба йде знову; кожна
-  // стартує не раніше попереднього e, а надгробків скінченно. Від порядку подій
-  // не залежить: вимога лічиться від відхиленої відповіді, а не від
-  // відновлення слота.
+  // Склад, не підтверджений з епохи e (§8.4, п. 7). Дві умови повтору — дві
+  // межі підтвердження. Завантаження (`lifts`) підтверджує весь вигляд: воно
+  // знімає вимогу, а коли вимога лишилась, бо читання стартувало раніше
+  // за e, і її ніхто інший не прочитає, той самий політ читає ще раз — хоч
+  // вимогу поставила його власна відповідь (П15), хоч хвиля чи приймач, поки
+  // воно летіло (`settleRequirement`; на прихованій вкладці — `needsRefresh`
+  // і читання на `resume()`). Сторінка `loadAfter` / `loadBefore` підтверджує лише себе: вона
+  // повторюється тільки на власне відхилення (П15), а чужу вимогу
+  // завантаженого вигляду читає механізм, що її поставив (`revalidate`).
+  // Покоління й політ ті самі, тож повтор і далі дія, що його почала (окреме
+  // покоління-хвіст правило стабільності судило б як системне читання, що
+  // змінює склад); невидимого вимога чекає видимості. Межа повторів — умова,
+  // не лічильник: кожна спроба стартує не раніше e, а нову вимогу з
+  // відповіді ставить лише надгробок, новіший за її старт, — їх скінченно.
+  // Збій читання сюди не доходить: його повторює пауза збоїв.
+  const requirementEnv: RequirementEnv = {
+    versions: session.versions,
+    tabVisible: ctx.tabVisible,
+  }
   function confirm(s: Subset, readEpoch: number, lifts: boolean): boolean {
-    const since = s.unconfirmedSince
-    if (since === undefined) return false
-    if (!s.answerRejected) {
-      if (lifts && readEpoch >= since) s.unconfirmedSince = undefined
-      return false
+    if (!lifts) {
+      if (
+        s.unconfirmedSince === undefined ||
+        !s.answerRejected ||
+        !(s.visible ?? s.listeners.size > 0)
+      )
+        return false
+      // Прихована вкладка й тут — гілка невидимого (§12, Р8): без запиту;
+      // `needsRefresh` знімок виводить із вимоги, а `resume()` читає вигляд.
+      return ctx.tabVisible()
     }
-    return s.visible ?? s.listeners.size > 0
+    return settleRequirement(s, readEpoch, requirementEnv)
   }
 
   function resolveWaiters(s: Subset) {
@@ -366,7 +449,6 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             session.commit(
               (scope) => {
                 try {
-                  s.answerRejected = false
                   if (!apply(scope)) {
                     discarded = !session.versions.unavailable()
                     if (!discarded) {
@@ -605,7 +687,17 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             release()
             return
           }
-          if (!discarded || !token.valid) return
+          // Сторінка вимоги не знімає (вона підтверджує лише себе), тож та сама
+          // умова, що й після завантаження (§8.4, п. 7): вимога стоїть, і її
+          // ніхто інший не прочитає — сторінка кличе системне перечитування
+          // вигляду; склад змінює лише воно, як для завантаження. Токен
+          // сторінки тут уже недійсний (позначку знято в `commit`): живість
+          // вигляду й сесії перевіряє саме перечитування.
+          if (!discarded) {
+            ctx.readRequirement(s)
+            return
+          }
+          if (!token.valid) return
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
           return session
@@ -998,11 +1090,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       rows,
       hasNewRows: s.hasNewRows,
       // Невидимий вигляд читає непідтверджений склад лише на переході у
-      // видимість (§8.4, п. 7): до того знімок це показує.
+      // видимість, а будь-який на прихованій вкладці — на `resume()` (§8.4,
+      // п. 7): до того знімок це показує. Це вивід із вимоги, не збережена
+      // ознака: її знімає те саме читання, що знімає вимогу.
       needsRefresh:
         s.needsRefresh ||
         (s.unconfirmedSince !== undefined &&
-          !(s.visible ?? s.listeners.size > 0)),
+          (!(s.visible ?? s.listeners.size > 0) || !ctx.tabVisible())),
       ...(ctx.isStale(o.name) ? { isStale: true } : {}),
       ...(staleComposition(s) ? { staleComposition: true } : {}),
       ...(section === undefined ? {} : { section }),
