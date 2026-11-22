@@ -129,7 +129,7 @@ describe("storage generator", () => {
     expect(sql).toContain("RETURNS text")
     expect(sql).toContain("pg_catalog.pg_control_system()")
     expect(sql).toContain("s.system_identifier")
-    expect(sql).toContain("pg_catalog.pg_database")
+    expect(sql).toContain("d.oid::text FROM pg_catalog.pg_database")
     expect(sql).toContain("pg_catalog.current_database()")
     expect(sql).toContain("pg_catalog.pg_control_checkpoint()")
     expect(sql).toContain("c.timeline_id")
