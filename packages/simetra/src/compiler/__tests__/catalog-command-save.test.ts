@@ -600,7 +600,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
       )
     })
 
-    it("поля: колонка json — за текстом, jsonb і решта — за кодуванням", () => {
+    it("поля: json, json[] і jsonb — у тому самому кодуванні, що й решта", () => {
       const main = mainOf(domain, "ticket")
       const table = {
         ...main,
@@ -613,8 +613,8 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
       }
       expect(fieldsDiffer(table, ["raw", "raws", "doc"])).toBe(
         [
-          "(p_expected_values ? 'raw' AND v_exp.raw::text IS DISTINCT FROM v_old.raw::text)",
-          "(p_expected_values ? 'raws' AND v_exp.raws::text IS DISTINCT FROM v_old.raws::text)",
+          "(p_expected_values ? 'raw' AND (v_expected -> 'raw') IS DISTINCT FROM (v_current -> 'raw'))",
+          "(p_expected_values ? 'raws' AND (v_expected -> 'raws') IS DISTINCT FROM (v_current -> 'raws'))",
           "(p_expected_values ? 'doc' AND (v_expected -> 'doc') IS DISTINCT FROM (v_current -> 'doc'))",
         ].join(" OR ")
       )
@@ -709,8 +709,8 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
         "jsonb_typeof(p_expected_values) IS DISTINCT FROM 'object'",
       ],
       [
-        "зі створенням чи ТЧ",
-        "p_expected_version IS NULL OR p_item ? 'tabular'",
+        "зі створенням, ТЧ чи порожня",
+        "p_expected_version IS NULL OR p_item ? 'tabular' OR p_expected_values = '{}'::jsonb",
       ],
       [
         "набір ключів ≠ набору ключів зміни",

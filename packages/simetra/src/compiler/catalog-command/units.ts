@@ -475,29 +475,23 @@ const rowJson = (table: PhysicalTable, row: string) => {
   return text === undefined ? `to_jsonb(${row})` : `to_jsonb(${row}) || ${text}`
 }
 
-/** `json` (і масив `json`): `to_jsonb` зливає дублі ключів і пробіли. */
-const JSON_TEXT_TYPE = /^json(\[\])?$/
-
 /**
  * Умова «поле бази розійшлося з рядком «до»» CAS за полями (спека П4 §6.6):
  * лише ключі, задані в `p_expected_values`; порівняння — у кодуванні
  * результату ядра (`v_expected`/`v_current` — `rowJson` бази й «до»), тож
  * рівність є й для типів без `=`, а typmod однаково приводить обидва боки.
- * Колонку `json` кодування нормалізувало б, тому вона — за текстом.
+ * Правило одне й для `json`: дублі ключів і пробіли, яких не показує жодне
+ * читання й жоден результат ядра, — не зміна.
  */
 export function fieldsDiffer(
   table: PhysicalTable,
   keys: readonly string[]
 ): string {
   return keys
-    .map((c) => {
-      const type = table.columns.find((column) => column.name === c)?.type
-      const differs =
-        type !== undefined && JSON_TEXT_TYPE.test(type)
-          ? `v_exp.${q(c)}::text IS DISTINCT FROM v_old.${q(c)}::text`
-          : `(v_expected -> ${sqlLiteral(c)}) IS DISTINCT FROM (v_current -> ${sqlLiteral(c)})`
-      return `(p_expected_values ? ${sqlLiteral(c)} AND ${differs})`
-    })
+    .map(
+      (c) =>
+        `(p_expected_values ? ${sqlLiteral(c)} AND (v_expected -> ${sqlLiteral(c)}) IS DISTINCT FROM (v_current -> ${sqlLiteral(c)}))`
+    )
     .join(" OR ")
 }
 
@@ -1075,7 +1069,7 @@ function saveInputLines(contract: CatalogCommandContract): string[] {
  * обов'язкового ключа й без гілки за версією. Набір ключів бази дорівнює
  * набору ключів зміни `p_item`: «сліпе» поле без бази неможливе й при ваді
  * T3. База поряд зі створенням чи ТЧ — та сама відмова: її ніщо б не
- * перевірило. Кожна відмова називає аргумент, а не колонку: колонку `DETAIL`
+ * перевірило; порожня база пропустила б перевірку версії без жодного поля. Кожна відмова називає аргумент, а не колонку: колонку `DETAIL`
  * T3 читав би як шлях реквізиту `values`.
  */
 function expectedInputLines(contract: CatalogCommandContract): string[] {
@@ -1083,7 +1077,10 @@ function expectedInputLines(contract: CatalogCommandContract): string[] {
   const keysOf = (param: string, except: string) =>
     `ARRAY(SELECT k.k FROM jsonb_object_keys(${param}) AS k(k)${except} ORDER BY k.k)`
   return ifThen("p_expected_values IS NOT NULL", [
-    ...ifThen("p_expected_version IS NULL OR p_item ? 'tabular'", [refuse]),
+    ...ifThen(
+      "p_expected_version IS NULL OR p_item ? 'tabular' OR p_expected_values = '{}'::jsonb",
+      [refuse]
+    ),
     ...inputLines({
       table: contract.table,
       param: "p_expected_values",
