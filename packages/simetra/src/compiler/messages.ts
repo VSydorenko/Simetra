@@ -1451,8 +1451,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Функція ${p.function} у рядку ${p.line} викликає ${p.call}, що змінює стан сесії поза транзакцією`,
     hint: {
-      en: "A session-level advisory lock, the seed of random() and the replication origin of a session outlive the transaction, so in a connection of the command pool the next command of another user would inherit them. In a function body take a transaction-level advisory lock (pg_advisory_xact_lock, pg_try_advisory_xact_lock), which Postgres releases with the command, and do not seed random().",
-      uk: "Сесійний advisory-замок, зерно random() і походження реплікації сесії переживають транзакцію, тож у з'єднанні пулу команд їх успадкувала б наступна команда іншого користувача. У тілі функції беріть транзакційний advisory-замок (pg_advisory_xact_lock, pg_try_advisory_xact_lock), який Postgres знімає разом із командою, і не задавайте зерно random().",
+      en: "A session-level advisory lock, the seed of random() and the replication origin of a session outlive the transaction, so in a connection of the command pool the next command of another user would inherit them; currval() and lastval() would hand a caller the value of an earlier query of the same pooled connection. In a function body take a transaction-level advisory lock (pg_advisory_xact_lock, pg_try_advisory_xact_lock), which Postgres releases with the command, do not seed random(), and read a generated value with INSERT … RETURNING instead of currval() or lastval().",
+      uk: "Сесійний advisory-замок, зерно random() і походження реплікації сесії переживають транзакцію, тож у з'єднанні пулу команд їх успадкувала б наступна команда іншого користувача; currval() і lastval() віддали б виклику значення попереднього запиту того самого з'єднання пулу. У тілі функції беріть транзакційний advisory-замок (pg_advisory_xact_lock, pg_try_advisory_xact_lock), який Postgres знімає разом із командою, не задавайте зерно random() і читайте згенероване значення через INSERT … RETURNING замість currval() чи lastval().",
     },
   },
   "sql.platform-function-call": {

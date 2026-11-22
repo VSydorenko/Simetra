@@ -16,8 +16,8 @@ export interface BuiltinExclusion {
    */
   derived?: "regclassParameter"
   /**
-   * Виклик лишає стан сесії, що переживає транзакцію (сесійний замок, зерно
-   * `random()`): у сесії пулу його успадкує наступна команда, тож такий клас
+   * Виклик лишає чи читає стан сесії, що переживає транзакцію (сесійний замок,
+   * зерно `random()`, останнє значення послідовності): у сесії пулу його успадкує наступна команда, тож такий клас
    * поза переліком і тіла функції, не лише голови (спека прав §6.1).
    */
   outlivesTransaction?: true
@@ -145,11 +145,20 @@ export const BUILTIN_EXCLUSIONS: readonly BuiltinExclusion[] = [
     ],
   },
   // Сон тримає команду й замки; послідовність змінюється поза транзакцією,
-  // тож її відкат команди не повертає.
+  // тож її відкат команди не повертає. Запис послідовності — ефект даних
+  // (`DEFAULT nextval` — вираз, не тіло), тож тут без `outlivesTransaction`.
   {
     reason: "sleeps or changes a sequence",
-    names: ["setval", "nextval", "currval", "lastval"],
+    names: ["setval", "nextval"],
     prefixes: ["pg_sleep"],
+  },
+  // Значення попереднього запиту з того самого з'єднання пулу читав би чужий
+  // виклик: у тілі функції замість них — `INSERT … RETURNING`.
+  {
+    reason: "reads the last sequence value of the session",
+    names: ["currval", "lastval"],
+    prefixes: [],
+    outlivesTransaction: true,
   },
   // Сповіщення, знімок для інших сесій, стан чужих сесій (замки й хто кого
   // блокує), знімок і скидання статистики сесії, позиція й файли WAL, стан

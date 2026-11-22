@@ -567,6 +567,7 @@ export const REPAIR_CLASS: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "sql.declaration-check-not-applied",
   "sql.declaration-platform-form",
   "sql.default-privileges-execute",
+  "sql.function-body-session-builtin",
 ])
 
 /**
