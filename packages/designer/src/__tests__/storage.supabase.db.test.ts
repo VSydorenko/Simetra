@@ -3,7 +3,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { fileObjectKey } from "simetra/model"
 import { createCommandRuntime, fromPgPool } from "simetra/server"
 import { defineReconcileCases } from "./storage-reconcile.cases"
-import { heldStorageEnv, type Env } from "./storage-env.support"
+import {
+  ORG_ROOT_CASCADE,
+  heldStorageEnv,
+  type Env,
+} from "./storage-env.support"
 import { LIMIT, STORAGE, TYPES } from "./storage-sql.support"
 
 /**
@@ -13,7 +17,7 @@ import { LIMIT, STORAGE, TYPES } from "./storage-sql.support"
  */
 
 const TICKET = { kind: "Catalog" as const, name: "Ticket" }
-const target = heldStorageEnv()
+const target = heldStorageEnv(ORG_ROOT_CASCADE)
 let env: Env
 beforeAll(async () => {
   env = await target.open()

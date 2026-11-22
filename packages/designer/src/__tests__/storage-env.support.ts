@@ -7,6 +7,8 @@ import {
 } from "simetra/model"
 import { fromS3Client, type FileStore } from "simetra/server"
 import {
+  ORG_SCOPE_KIND,
+  PROJECT_FILE,
   TICKET_READER_ID,
   TICKET_WRITER_ID,
   createRunBucket,
@@ -14,6 +16,7 @@ import {
   runTag,
   s3Of,
   testStack,
+  type Layer,
 } from "../../../simetra/test/support"
 import {
   heldResource,
@@ -47,10 +50,20 @@ export interface Env {
   reader: { org: string; user: string; session: SessionClaims }
 }
 
+/**
+ * Вид скоупу `org` з `onRootDelete: "cascade"`: видалення кореня знімає рядки
+ * виду каскадом платформи (спека П2 §6), як це роблять застосунки.
+ */
+export const ORG_ROOT_CASCADE: Layer = {
+  [PROJECT_FILE]: {
+    scopeKinds: [{ ...ORG_SCOPE_KIND, onRootDelete: "cascade" }],
+  },
+}
+
 /** Модель сховища, база, роль рантайму й бакет `run-<тег>` прогону на стеку профілю. */
-export const heldStorageEnv = () =>
+export const heldStorageEnv = (...layers: Layer[]) =>
   heldResource<Env>(async (use) => {
-    const model = await storageModel()
+    const model = await storageModel(...layers)
     const stack = testStack()
     const bucket = `run-${runTag()}`
     // Garage — через адмінку, Supabase — S3 `CreateBucket` (Р14)

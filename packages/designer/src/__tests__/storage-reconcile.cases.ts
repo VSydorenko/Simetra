@@ -29,6 +29,7 @@ const MARKER = "simetra-instance"
 const bodyOf = (text: string) => new Blob([text]).stream()
 const bytesOf = (text: string) => new TextEncoder().encode(text)
 
+/** Середовище кейсів збирають із `ORG_ROOT_CASCADE`: перший кейс спирається на каскад кореня. */
 export function defineReconcileCases(env: () => Env): void {
   const runtime = (): Promise<CommandRuntime> =>
     createCommandRuntime({
@@ -111,33 +112,12 @@ export function defineReconcileCases(env: () => Env): void {
           )
         ).rows.map((r) => Number(r.bytes))
       expect(await usage()).toEqual([5])
-      // Модель не фіксує дію зовнішнього ключа скоупу: тест задає каскад
-      // сам, щоб шлях «рядок зник не командою» був справжнім
+      // Кореневий каскад дає модель (`onRootDelete: "cascade"` виду `org`,
+      // `ORG_ROOT_CASCADE`): корінь знімає членів, призначення й рядок файлу
       const column = env().catalog.objects.find(
         (o) => o.name === "Ticket"
       )!.scopeColumn!
-      const { rows: fks } = await env().owner.query<{ conname: string }>(
-        `SELECT c.conname FROM pg_constraint c
-           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
-          WHERE c.conrelid = 'public.ticket'::regclass AND c.contype = 'f' AND a.attname = $1`,
-        [column]
-      )
-      for (const { conname } of fks)
-        await env().owner.query(
-          `ALTER TABLE public.ticket DROP CONSTRAINT "${conname}"`
-        )
-      await env().owner.query(
-        `ALTER TABLE public.ticket ADD CONSTRAINT ticket_scope_cascade_test FOREIGN KEY ("${column}") REFERENCES public.organization (id) ON DELETE CASCADE`
-      )
       await seedUnderMaintenance(env().owner, async () => {
-        await env().owner.query(
-          "DELETE FROM public.org_role_assignments WHERE org_id = $1",
-          [actor.org]
-        )
-        await env().owner.query(
-          "DELETE FROM public.org_member WHERE org_id = $1",
-          [actor.org]
-        )
         await env().owner.query(
           "DELETE FROM public.organization WHERE id = $1",
           [actor.org]
