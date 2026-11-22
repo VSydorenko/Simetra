@@ -980,6 +980,24 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Приберіть maxBytes: рантайм ще не читає регістрів, тож поле нічого б не робило.",
     },
   },
+  "storage.incompatible": {
+    en: (p) => `A catalog with storage cannot use ${p.field}`,
+    uk: (p) => `Довідник зі storage не може мати ${p.field}`,
+    hint: {
+      en: "A file row is written only by the attach trigger; remove storage, or remove the conflicting setting (a scope kind root, role, membership, rightsContainer, predefinedItems, hierarchyType FoldersAndItems).",
+      uk: "Рядок файлу пише лише тригер вкладення; приберіть storage або конфліктне налаштування (корінь виду скоупу, role, membership, rightsContainer, predefinedItems, hierarchyType FoldersAndItems).",
+    },
+  },
+  "storage.media-type": {
+    en: () =>
+      "storage.mediaTypes must be a non-empty list of unique lowercase type/subtype strings without parameters",
+    uk: () =>
+      "storage.mediaTypes має бути непорожнім переліком унікальних type/subtype малими літерами без параметрів",
+    hint: {
+      en: 'Write each type as "image/png": lowercase, one slash, no ";charset=…" parameters, no duplicates.',
+      uk: 'Пишіть кожен тип як "image/png": малі літери, один слеш, без параметрів ";charset=…", без повторів.',
+    },
+  },
   "attribute.lazy-not-allowed": {
     en: () => "A polymorphic Ref or a tabular section attribute cannot be lazy",
     uk: () => "Поліморфний Ref чи реквізит ТЧ не може бути лінивим",

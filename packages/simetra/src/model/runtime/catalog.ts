@@ -2,6 +2,7 @@ import { z } from "zod"
 import { elementIdSchema } from "../schemas/element-id"
 import { metadataKindSchema } from "../schemas/metadata-kind"
 import { metadataRefSchema } from "../schemas/metadata-ref"
+import { storageSchema } from "../schemas/storage"
 import { DATABASE_PROVIDERS } from "../schemas/project"
 import { LOGICAL_TYPES } from "../schemas/value-type"
 
@@ -290,6 +291,11 @@ export const catalogEntrySchema = z.strictObject({
    * `authenticated` — лише користувачу (P4-B spec §3, Р6).
    */
   publicRead: z.enum(["anon", "authenticated"]).optional(),
+  /**
+   * Сховище файлів довідника (`Catalog.storage`): клієнт і маршрут бачать
+   * межу розміру й дозволені типи без звернення до метаданих.
+   */
+  storage: storageSchema.optional(),
   /**
    * Контракт прав об'єкта: є, коли читання під RLS судять рядки прав, тож
    * знімок прав описує його читання (P4-B spec §3, §9.2).

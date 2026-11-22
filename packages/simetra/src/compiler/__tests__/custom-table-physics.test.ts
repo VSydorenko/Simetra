@@ -332,6 +332,8 @@ describe("CustomTable physics round-trip", () => {
     // без неї хеш той самий.
     // Далі стандартне найменування довідника стало `indexed` — пошуковий
     // індекс `(…, description, id)` у кожній таблиці довідника.
+    // Далі додано довідник-файл `Attachment` (`storage`) — нова таблиця
+    // `attachment`; без неї хеш той самий.
     const derived = {
       tables: physical.tables.filter(
         (t) =>
@@ -343,6 +345,7 @@ describe("CustomTable physics round-trip", () => {
             "role_grant",
             "source_role",
             "signal_outbox",
+            "attachment",
           ].includes(t.name)
       ),
       enumTypes: physical.enumTypes,

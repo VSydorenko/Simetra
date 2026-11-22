@@ -64,6 +64,7 @@ export {
   type ValueType,
 } from "./value-type"
 export { SCHEMA_RULES, type SchemaRule } from "./rules"
+export { STORAGE_MAX_BYTES, storageSchema, type Storage } from "./storage"
 
 // Metadata types
 export {
