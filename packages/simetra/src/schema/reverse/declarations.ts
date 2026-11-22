@@ -477,7 +477,14 @@ export async function declareFunctions(
         })
     }
     const elsewhere = input.derivedExecute.get(catalogUnit.identity)
-    if (elsewhere !== undefined && (elsewhere.form !== undefined || !definer)) {
+    // Функція політики збереженої теки — не форма метаданих: її призначення
+    // дають поточні політики-викликачі, а похідні гранти прибирає та сама
+    // гілка, що й при прийомі з нуля (нижче), тож тут її не пропускаємо
+    if (
+      elsewhere !== undefined &&
+      elsewhere.form !== "policyFunction" &&
+      (elsewhere.form !== undefined || !definer)
+    ) {
       // Форма метаданих чи invoker-функція з виведеним `EXECUTE` фактів не
       // вимагають, але за наявним фактом чужі гранти й звуження живого
       // `EXECUTE` називає те саме правило, що й для декларацій

@@ -1419,6 +1419,68 @@ describe("policy functions of debt (Р9, І6)", () => {
     })
   })
 
+  // Повторний прийом над текою першого: функція політики збереженої теки —
+  // та сама форма, що й при прийомі з нуля, з призначеннями поточних
+  // політик-викликачів, а не збережених.
+  // Мутація: функція політики збереженої теки йде гілкою форм метаданих
+  describe("repeated adoption over the first output", () => {
+    const first = async () => {
+      const result = await adopt(
+        POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT() + EXECUTE,
+        { grants: ["authenticated"] }
+      )
+      expect(errorsOf(result)).toEqual([])
+      return Object.fromEntries(result.files)
+    }
+
+    it("a live grant to anon: dropped and narrowed, as on a fresh adoption", async () => {
+      const sql =
+        POLICY_FUNCTION() +
+        READ_POLICY() +
+        DOCS_GRANT() +
+        `${EXECUTE}\nGRANT EXECUTE ON FUNCTION public.f() TO anon;`
+      const executes = { grants: ["authenticated", "anon"] }
+      const fresh = await adopt(sql, executes)
+      const repeated = await adopt(sql, executes, await first())
+      for (const result of [fresh, repeated]) {
+        expect(errorsOf(result)).toEqual([])
+        expect(functionGrants(result.files)).toEqual([])
+        expect(narrowedOf(result)).toEqual([ALL_OUTSIDE[0]])
+      }
+    })
+
+    it("the caller policy moved to service_role: authenticated is narrowed, service_role is derived", async () => {
+      const result = await adopt(
+        POLICY_FUNCTION() +
+          READ_POLICY("service_role") +
+          DOCS_GRANT("service_role") +
+          [
+            "REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC;",
+            "GRANT EXECUTE ON FUNCTION public.f() TO authenticated;",
+          ].join("\n"),
+        { grants: ["authenticated"] },
+        await first()
+      )
+      expect(errorsOf(result)).toEqual([])
+      expect(narrowedOf(result)).toEqual([
+        {
+          function: "public.f",
+          role: "authenticated",
+          reason: "outside-assignments",
+        },
+      ])
+      const compiled = await compile(result.files)
+      expect(
+        compiled
+          .model!.sqlUnits.filter(
+            (u) =>
+              u.generator === "functionExecute" && u.sql.startsWith("GRANT")
+          )
+          .map((u) => u.sql)
+      ).toEqual(["GRANT EXECUTE ON FUNCTION public.f() TO service_role;"])
+    })
+  })
+
   // Мутація: пропускати функцію політики до перевірки чужих ACL — грант ролі
   // застосунку мовчки губиться разом із пропуском
   it("a grant to a role outside the profile is introspect.definer-foreign-grant", async () => {
