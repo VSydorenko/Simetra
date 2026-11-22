@@ -34,6 +34,8 @@ const SWEEP = fileURLToPath(new URL("./sweep.ts", import.meta.url))
 // Тест чекає старту двох tsx-процесів, створення баз і прибирання з
 // повторними проходами (до 30 с) — типові 5 с DB-проєкту цього не вміщують
 const INTERRUPT_TIMEOUT_MS = 90_000
+// Ключ об'єкта, який кладе фікстура в бакет прогону
+const FIXTURE_OBJECT = "o/interrupt/object"
 
 describe("an interrupted DB run", () => {
   it.each([
@@ -78,12 +80,12 @@ describe("an interrupted DB run", () => {
 
         expect(code).toBe(128 + constants.signals[signal])
         expect(await taggedObjects(tag)).toEqual([])
-        // Контейнер і бакет (з об'єктом: його спорожнює прибиральник) прибирає
-        // лише прибиральник на сигналі: фікстура їх не чіпає, а звірка стеку
-        // побачила б їх лише після прогону
+        // Контейнер прибирає лише прибиральник на сигналі. Бакет з об'єктом
+        // прибиральник НЕ спорожнює (байти — не його): він лишає бакет і
+        // звітує, тож об'єкт на місці, а його видаляє сам тест у `finally`
         expect(await runResources(tag)).toEqual({
           containers: 0,
-          objects: null,
+          objects: 1,
         })
         expect(await databaseExists(foreign)).toBe(true)
         await expect
@@ -103,6 +105,12 @@ describe("an interrupted DB run", () => {
         if (ready !== undefined && !workerGone) killQuietly(ready.workerPid)
         // Коротка межа: очікування виходу (до 45 с) і прибирання разом мають
         // уміститися в таймаут тесту
+        // Свій об'єкт тест прибирає сам: прибиральник видаляє лише порожній бакет
+        await cleanup(() =>
+          s3Of(testProvider())
+            .deleteObject({ Bucket: runBucketName(tag), Key: FIXTURE_OBJECT })
+            .then(() => undefined)
+        )
         await cleanup(async () => {
           // Прибиральник не кидає на недосяжній базі — лишки лише в `left`
           const { left } = await sweepRun(tag, { deadlineMs: 10_000 })

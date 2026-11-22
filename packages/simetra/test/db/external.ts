@@ -1,7 +1,7 @@
 // Зовнішні ресурси DB-прогону поза Postgres: контейнери docker з міткою тегу
 // і бакети `run-<тег>` (Garage на postgres, Supabase Storage на supabase).
 // Сторож бачить їх так само, як бази й ролі, а прибиральник перерваного
-// прогону спорожнює й видаляє їх у межах свого дедлайну. Docker і
+// прогону видаляє порожні з них у межах свого дедлайну. Docker і
 // мережа приходять параметрами: юніт-тести підставляють їх, а прогін і
 // прибиральник — справжні.
 import { execFile } from "node:child_process"
@@ -98,19 +98,24 @@ function isNoSuchBucket(error: unknown): boolean {
 }
 
 /**
- * Empties the bucket `run-<tag>` (`ListObjectsV2` + `DeleteObjects` until it
- * lists nothing) and then deletes it: Garage through the admin API (its alias
- * goes with it), Supabase through S3. The name is exactly
+ * Deletes the bucket `run-<tag>` when it is EMPTY: Garage through the admin
+ * API (its alias goes with it), Supabase through S3. A bucket with objects is
+ * left as it is and reported (`non-empty`, with the count when the stack
+ * tells it): bytes of a test are not the cleaner's to delete (AGENTS.md); the
+ * test removes its own through the API. The name is exactly
  * {@link runBucketName} of `tag`: never chosen by a prefix, never another
- * run's or a dev bucket. Returns `false` when the bucket is not there (on Garage: not in the admin API). Throws
- * when any call fails or `timeoutMs` runs out; the bucket then stays as it
- * was left.
+ * run's or a dev bucket. `absent` when the bucket is not there (on Garage: not
+ * in the admin API). Throws when any call fails or `timeoutMs` runs out; the
+ * bucket then stays as it was left.
  */
-export async function emptyAndDeleteRunBucket(
+export async function removeEmptyRunBucket(
   tag: string,
   stack: TestStack,
   deps: { fetch: Fetch; s3?: S3ClientLike; timeoutMs?: number }
-): Promise<boolean> {
+): Promise<
+  | { status: "removed" | "absent" }
+  | { status: "non-empty"; objects: number | undefined }
+> {
   checkTag(tag)
   const deadline = Date.now() + (deps.timeoutMs ?? 30_000)
   const budget = (): number => {
@@ -119,52 +124,36 @@ export async function emptyAndDeleteRunBucket(
     return Math.min(CALL_TIMEOUT_MS, left)
   }
   const bucket = runBucketName(tag)
-  // Garage: бакета без псевдоніма в адмінці немає — S3 не питаємо
-  let garageId: string | undefined
   if (stack.garageAdminUrl !== null) {
-    garageId = (await listRunBuckets(stack, deps.fetch, budget())).find(
+    // Бакета без псевдоніма в адмінці немає — S3 не питаємо
+    const id = (await listRunBuckets(stack, deps.fetch, budget())).find(
       (b) => b.tag === tag
     )?.id
-    if (garageId === undefined) return false
+    if (id === undefined) return { status: "absent" }
+    const objects = await bucketObjects(stack, deps.fetch, budget(), id)
+    if (objects > 0) return { status: "non-empty", objects }
+    await garage(stack, deps.fetch, budget(), "DeleteBucket", {
+      query: { id },
+    })
+    return { status: "removed" }
   }
   const s3 = deps.s3 ?? s3Of(stack)
   try {
-    for (;;) {
-      const page = await s3.listObjectsV2(
-        { Bucket: bucket },
-        { abortSignal: AbortSignal.timeout(budget()) }
-      )
-      const keys = (page.Contents ?? []).flatMap((o) =>
-        o.Key === undefined ? [] : [{ Key: o.Key }]
-      )
-      if (keys.length === 0) break
-      const deleted = await s3.deleteObjects(
-        { Bucket: bucket, Delete: { Objects: keys, Quiet: true } },
-        { abortSignal: AbortSignal.timeout(budget()) }
-      )
-      // Часткова відмова — не «спорожнено»: бакет із живим об'єктом видаляти
-      // не можна, а наступний прохід бачив би той самий об'єкт
-      if ((deleted.Errors ?? []).length > 0)
-        throw new Error(
-          `S3 DeleteObjects ${bucket}: ${deleted.Errors?.[0]?.Key} ${deleted.Errors?.[0]?.Code}`
-        )
-    }
-  } catch (error) {
-    // На Garage бакет уже знайдено в адмінці: зникнення з S3 — розбіжність, і
-    // вона мусить потрапити у звіт, а не в мовчазне «немає»
-    if (garageId === undefined && isNoSuchBucket(error)) return false
-    throw error
-  }
-  if (garageId !== undefined)
-    await garage(stack, deps.fetch, budget(), "DeleteBucket", {
-      query: { id: garageId },
-    })
-  else
+    const page = await s3.listObjectsV2(
+      { Bucket: bucket, MaxKeys: 1 },
+      { abortSignal: AbortSignal.timeout(budget()) }
+    )
+    if ((page.Contents ?? []).length > 0)
+      return { status: "non-empty", objects: undefined }
     await s3.deleteBucket(
       { Bucket: bucket },
       { abortSignal: AbortSignal.timeout(budget()) }
     )
-  return true
+    return { status: "removed" }
+  } catch (error) {
+    if (isNoSuchBucket(error)) return { status: "absent" }
+    throw error
+  }
 }
 
 /**
@@ -269,10 +258,12 @@ async function bucketObjects(
 
 /**
  * Removes the containers of run `tag` on the stack of profile `p`
- * (`docker rm -f -v`) and its bucket `run-<tag>`, emptied first
- * ({@link emptyAndDeleteRunBucket}). Throws only on a malformed tag, before any call; otherwise never throws and never runs past
- * `deadlineMs`: a bucket that could not be emptied or deleted, or a failed
- * check, is in `left`, and the commands to finish it by hand are in `cleanup`.
+ * (`docker rm -f -v`) and its bucket `run-<tag>` when it is empty
+ * ({@link removeEmptyRunBucket}); a bucket with objects is left and reported.
+ * Throws only on a malformed tag, before any call; otherwise never throws and
+ * never runs past `deadlineMs`: a bucket that is not empty, could not be
+ * deleted or checked is in `left`, and the commands to finish it by hand are
+ * in `cleanup`.
  */
 export async function removeRunResources(
   tag: string,
@@ -318,12 +309,20 @@ export async function removeRunResources(
   // Ім'я бакета виводиться з тегу, а не з переліку: людина знає, що
   // перевірити, і коли адмінка чи S3 мовчать
   try {
-    const gone = await emptyAndDeleteRunBucket(tag, stack, {
+    const result = await removeEmptyRunBucket(tag, stack, {
       fetch: deps.fetch,
       ...(deps.s3 !== undefined ? { s3: deps.s3 } : {}),
       timeoutMs: Math.max(1, deadline - Date.now()),
     })
-    if (gone) removed.push(`bucket ${bucketName}`)
+    if (result.status === "removed") removed.push(`bucket ${bucketName}`)
+    if (result.status === "non-empty") {
+      const count =
+        result.objects === undefined
+          ? "has objects"
+          : `${result.objects} object(s)`
+      left.push(`bucket ${bucketName} (${count})`)
+      cleanup.push(`bucket ${bucketName}: empty and delete in ${where}`)
+    }
   } catch (error) {
     left.push(`bucket ${bucketName} (${reason(error)})`)
     cleanup.push(`bucket ${bucketName}: empty and delete in ${where}`)

@@ -27,7 +27,7 @@ RLS. Сироти прибирає звірка.
 реєстрі видів, відмови сховища. T1 — платформні SQL-юніти генератора
 сховища: таблиці обліку, definer-функції, тригери. T3 — порт `FileStore`,
 адаптер `fromS3Client`, методи рантайму. Тест-інфра — S3-помічник і
-спорожнення бакета тегу. T3 не імпортує SDK: клієнт S3 читається
+видалення порожнього бакета тегу. T3 не імпортує SDK: клієнт S3 читається
 структурно, як `fromPgPool`.
 
 **Tech Stack:** TypeScript 7, Zod, Vitest, Postgres 17 (стек `simetra-pg`),
@@ -83,7 +83,7 @@ devDependency `simetra`; у шаблоні — залежність (части�
 | Р11 | **Відмови сховища — закритий перелік T0** `STORAGE_ERRORS` за зразком `COMMAND_CORE_ERRORS`: причини `attach-missing`, `attach-invalid`, `quota-exceeded`. `mapDatabaseError` дає `command.rejected` з `reason` `storage.<причина>`; інакше `RAISE` став би `command.internal`. `LIMIT_REASONS` не змінюється | спека П4 §6.10 (задача 0) |
 | Р12 | **Прив'язка бази й бакета.** `simetra.storage_instance` — безумовна платформна таблиця стану з одним рядком випадкового uuid, що переживає повторне застосування й видалення всіх об'єктів зі `storage`. Прибрати `storage` з об'єкта з живою таблицею — `plan.storage-removed`. Маркер `simetra-instance` несе відбиток `uuid:sysid:oid:timeline` (`system_identifier`, oid бази, timeline з імені поточного WAL-файла; рахує `storage_instance_id()`): копія бази (dump, TEMPLATE, PITR, репліка) має той самий uuid, але інший `sysid`/oid/timeline. маркер пише лише явна команда `runtime.bindFileStore(store)` у порожній бакет (порожнечу судить перелік усього бакета без `Prefix`; повтор на власному маркері — нічого, на репліці — `in-recovery`), `put` не пише його і на непривʼязаному бакеті дає `no-binding`; непорожній без маркера чи інший uuid — `foreign-bucket`; той самий uuid з іншою частиною відбитка — `binding-changed` (відмова `put` і звірки, `report.refused` = `instance` / `binding`). Поки `pg_is_in_recovery()` — звірка нічого не видаляє (`recovery`); відбиток і репліка перевіряються на початку й перед кожною порцією видалень. Після законного відновлення — `runtime.rebindFileStore(store)`. Залишок — холодна копія каталогу без відновлення — в спеці й експлуатації. Причина: чужий бакет має ті самі префікси, і запобіжник 5 %/20 не зупинив би видалення живих байтів | §8.2 (задача 0) |
 | Р13 | **Звірка бере «зараз» з бази** (`now()`), а не з годинника host-а | §8.2 (задача 0) |
-| Р14 | **Бакети тестів.** Прибиральник адресує рівно `runBucketName(<свій тег>)`, без відбору за префіксом і без `simetra-dev`. `removeRunResources`: спорожнити (`ListObjectsV2` + `DeleteObjects`), потім видалити; звітувати лише бакет, який спорожнити не вдалося. Garage: `createRunBucket` + admin `AllowBucketKey` (новий endpoint у `garage()`). Supabase: `run-<тег>` через S3 `CreateBucket`, знімок guard-а читає `storage.buckets` (перевірити `SELECT` ролі guard-а); значення S3 — з одного `supabase status -o env` у `globalSetup`, у тести через `provide`/`inject` (новий механізм) | §10.3 (задача 0); речення `AGENTS.md` — власник |
+| Р14 | **Бакети тестів.** Прибиральник адресує рівно `runBucketName(<свій тег>)`, без відбору за префіксом і без `simetra-dev`. `removeRunResources` видаляє порожній бакет, непорожній лишає й звітує (правило `AGENTS.md`); свої об'єкти й маркер тести видаляють самі через API (`storage-env.support.ts`). Garage: `createRunBucket` + admin `AllowBucketKey` (новий endpoint у `garage()`). Supabase: `run-<тег>` через S3 `CreateBucket`, знімок guard-а читає `storage.buckets` (перевірити `SELECT` ролі guard-а); значення S3 — з одного `supabase status -o env` у `globalSetup`, у тести через `provide`/`inject` (новий механізм) | §10.3 (задача 0); речення `AGENTS.md` — власник |
 | Р15 | **Шаблон (частина Б):** ліміт одночасних завантажень (429), бюджет буфера (503), не більше 10 хв між `put` і `attachFile`; звірка — `pnpm reconcile-files` за cron оператора, без HTTP | §8.2 (задача 0) |
 | Р16 | **Маршрути (частина Б):** `POST /api/files/$object` (сире тіло, метадані в `X-Simetra-File`, сувора схема), `GET`/`DELETE /api/files/$object/$id` (`DELETE` — `markDeletion`); завантаження обходить `limitBody`, межа — `maxBytes` (413 до тіла) | спека П4-D: виняток з `limitBody` (задача 0) |
 | Р17 | **Роль `simetra_files`** — `NOLOGIN NOINHERIT`, запис `PLATFORM_ROLES`, як `signalConsumer` **не** призначення гранту: генератор сховища пише їй `USAGE ON SCHEMA simetra` і `EXECUTE` явним `GRANT` після `executeGrants(signature, [], provider)`, тож декларація застосунку її не адресує. Виключення «ключ `PLATFORM_ROLES`, не призначення» (тип `PlatformRolePurpose` і фільтр `callersOfRole`) стає однією сталою T0. Лише вона має `EXECUTE` на `file_attach`, `storage_rows_exist`, `storage_row_page` і перевірку залишку `storage_pending`. Членство: `LOGIN_ROLE_PARENTS.runtime` += `files` (`INHERIT FALSE, SET TRUE`), `supabase/roles.sql` адитивно, `postgres` — `simetra roles`; `inspect()` доводить його `SET LOCAL ROLE`, як для `simetra_command`. `command.privileged-login` без змін. `attachFile`: `SET LOCAL ROLE simetra_files` → `file_attach` → `SET LOCAL ROLE simetra_command` → фаза `create`. Межа: з SQL модуля (`simetra_command`) виклик відмовляє в базі; `SET ROLE`/`set_config('role', …)` — `sql.command-context-write`; виклик з definer-функції застосунку — `sql.platform-function-call` і Р18 (І7) | ПГ11, спека П4 §6.2 (задача 0) |
@@ -124,7 +124,7 @@ T3  FileStore = { put, get, delete, list }   — форма §8.4
         → CommandResult  (помилка з ознакою commitUnknown)
     CommandRuntime.reconcileFiles(store, { log }) → ReconcileReport
         = { listed, deleted, refused, unknownPrefixes, rowsWithoutBytes }
-test  s3Of(stack): S3ClientLike; emptyAndDeleteRunBucket(tag, stack)
+test  s3Of(stack): S3ClientLike; removeEmptyRunBucket(tag, stack)
 ```
 
 ## Інваріанти безпеки й тести, що червоніють на дефекті
@@ -171,7 +171,7 @@ test  s3Of(stack): S3ClientLike; emptyAndDeleteRunBucket(tag, stack)
 
 Внести поправки за стовпцем «Вплив на спеку» в спеку профілю (§8 — зокрема
 §8.1 «`EXECUTE` лише `simetra_command`» → `simetra_files`, §8.2 крок 4 без
-`xmin`; §10.3 — речення, що спорожнення «приходить у ПГ-5»), у ПП4 спеки
+`xmin`; §10.3 — речення, що бакети тегу «приходять у ПГ-5»), у ПП4 спеки
 профілів, у спеку П4 §6.2 і §6.10, у ПГ11 і в спеку П4-D (виняток з
 `limitBody`).
 **Готово:** спеки описують Р1, Р3–Р7, Р9–Р13, Р15–Р17; `doc anchors && doc lint`
@@ -228,12 +228,13 @@ test  s3Of(stack): S3ClientLike; emptyAndDeleteRunBucket(tag, stack)
 - `s3Of(stack)`: Garage — `127.0.0.1:3900`, регіон `garage`, dev-ключ з
   `docker/postgres-stack/dev-secrets.env` (читати, не змінювати); Supabase —
   значення з `globalSetup` через `provide` (Р14).
-- `AllowBucketKey`, `emptyAndDeleteRunBucket` і новий хід
+- `AllowBucketKey`, `removeEmptyRunBucket` і новий хід
   `removeRunResources` за Р14.
-**Готово:** `run-tests unit --filter external.test.ts` (І13; спорожнення,
-потім видалення; збій S3 → звіт) зелений. Перерваний SIGINT прогін з
-об'єктом у бакеті Garage не лишає бакета (`fixtures/interrupted-run.ts`,
-`run-tests db --filter interrupt`).
+**Готово:** `run-tests unit --filter external.test.ts` (І13; порожній бакет
+видаляється, непорожній лишається й у звіті; збій S3 → звіт) зелений.
+Перерваний SIGINT прогін з об'єктом у бакеті лишає бакет і звітує його, а
+порожній бакет видаляє (`fixtures/interrupted-run.ts`,
+`run-tests db --filter interrupt`; тест сам видаляє об'єкт).
 
 ### Task 4: T3 — `FileStore` і `fromS3Client`
 
@@ -302,10 +303,9 @@ draft PR зелений повністю.
 
 ## Задачі власника (виконуються лише після апруву)
 
-- `AGENTS.md`, абзац про run tag: «removes its own containers and its empty
-  buckets, and reports a non-empty bucket» → «empties and removes its own
-  buckets, and reports a bucket it could not empty». Речення передає
-  архітекторка разом із PR частини А.
+- `AGENTS.md`, абзац про run tag: правило не змінюється («removes its own
+  containers and its empty buckets, and reports a non-empty bucket»);
+  правка не потрібна.
 
 ## Review Focus
 

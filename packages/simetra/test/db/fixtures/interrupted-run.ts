@@ -105,8 +105,8 @@ async function createObjects(): Promise<void> {
     await client.query(`CREATE DATABASE ${id(SHADOW_PREFIX + shadowSuffix())}`)
     await client.query(`CREATE ROLE ${id(testRoleName("interrupt_owner"))}`)
   })
-  // Бакет прогону з об'єктом є на обох стеках: прибиральник на сигналі мусить
-  // його спорожнити, а не лише видалити порожній. Контейнер — лише на postgres
+  // Бакет прогону з об'єктом є на обох стеках: прибиральник на сигналі має
+  // його лишити й назвати у звіті, а не спорожнити. Контейнер — лише на postgres
   const tag = runTag()
   const stack = testStack()
   const s3 = s3Of(stack)

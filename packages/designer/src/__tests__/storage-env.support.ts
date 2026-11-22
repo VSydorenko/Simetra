@@ -15,7 +15,6 @@ import {
   ORG_SCOPE_KIND,
   PROJECT_FILE,
   createRunBucket,
-  emptyAndDeleteRunBucket,
   runTag,
   s3Of,
   testStack,
@@ -65,6 +64,28 @@ export const ORG_ROOT_CASCADE: Layer = {
   [PROJECT_FILE]: {
     scopeKinds: [{ ...ORG_SCOPE_KIND, onRootDelete: "cascade" }],
   },
+}
+
+/** Видаляє всі об'єкти бакета прогону через S3 (вони — власність тесту). */
+async function deleteAllObjects(
+  s3: ReturnType<typeof s3Of>,
+  bucket: string
+): Promise<void> {
+  for (;;) {
+    const page = await s3.listObjectsV2({ Bucket: bucket })
+    const keys = (page.Contents ?? []).flatMap((o) =>
+      o.Key === undefined ? [] : [{ Key: o.Key }]
+    )
+    if (keys.length === 0) return
+    const done = await s3.deleteObjects({
+      Bucket: bucket,
+      Delete: { Objects: keys, Quiet: true },
+    })
+    if ((done.Errors ?? []).length > 0)
+      throw new Error(
+        `the run bucket was not emptied: ${done.Errors![0]!.Code}`
+      )
+  }
 }
 
 /** Модель сховища, база, роль рантайму й бакет `run-<тег>` прогону на стеку профілю. */
@@ -126,10 +147,11 @@ export const heldStorageEnv = (...layers: Layer[]) =>
     } catch (error) {
       failure = { error }
     }
-    // Бакет прогону лишає сторож, але свої об'єкти тест прибирає сам. Збій
-    // прибирання не підміняє помилку самого сценарію: її ми й кидаємо
+    // Бакет прогону видаляє сторож, але лише порожній: свої об'єкти (і маркер
+    // прив'язки) тест прибирає сам через API. Збій прибирання не підміняє
+    // помилку самого сценарію: її ми й кидаємо
     try {
-      await emptyAndDeleteRunBucket(runTag(), stack, { fetch })
+      await deleteAllObjects(s3Of(stack), bucket)
     } catch (cleanup) {
       if (failure === undefined) throw cleanup
       console.error("the run bucket was not emptied:", cleanup)

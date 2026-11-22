@@ -115,6 +115,23 @@ describe("fromS3Client put", () => {
     expect(o.type).toBe("text/plain")
   })
 
+  it("stores the bytes of a source that reuses one buffer for every chunk", async () => {
+    const { client, objects } = fakeS3()
+    const store = fromS3Client(client, "b")
+    await store.bind(BINDING)
+    const shared = new Uint8Array(3)
+    let n = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (n === 3) return c.close()
+        shared.fill(++n)
+        c.enqueue(shared)
+      },
+    })
+    await store.put(KEY, body, { ...opts, maxBytes: 20 })
+    expect([...objects.get(KEY)!.bytes]).toEqual([1, 1, 1, 2, 2, 2, 3, 3, 3])
+  })
+
   it("accepts exactly maxBytes", async () => {
     const { client } = fakeS3()
     const store = fromS3Client(client, "b")

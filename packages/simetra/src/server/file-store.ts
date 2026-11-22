@@ -272,7 +272,9 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
             await reader.cancel().catch(() => undefined)
             throw new FileStoreError("too-large", "file exceeds maxBytes")
           }
-          chunks.push(value)
+          // Копія: джерело може перевикористати той самий буфер для наступного
+          // шматка, і збережене посилання побачило б чужі байти
+          chunks.push(value.slice())
         }
       } finally {
         reader.releaseLock()
