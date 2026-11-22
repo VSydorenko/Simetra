@@ -90,3 +90,15 @@ export function chooseConstraintName(
 export function searchColumnName(column: string): string {
   return makeObjectName(column, undefined, "search")
 }
+
+/**
+ * Normalization of a search value (P2 spec §5, "Поля пошуку"; P4-B §4.1):
+ * the generation expression of the normalized column and both sides of a
+ * `startsWith` read. `expression` is SQL already quoted by the caller.
+ */
+// Одне правило для компілятора, читання й зворотного генератора: розійдись
+// вирази — `startsWith` за полем пошуку і без нього дав би різні множини.
+// Колляція бази явно: колонка прийнятої таблиці може мати свою (`C`).
+export function searchNormalization(expression: string): string {
+  return `lower(${expression} COLLATE "default")`
+}

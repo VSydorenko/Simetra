@@ -2,6 +2,7 @@ import {
   UUID_TEXT,
   encodePair,
   isWithinType,
+  searchNormalization,
   type CommandError,
   type Filter,
   type FilterCondition,
@@ -135,6 +136,9 @@ function pairEquals(
   ]
 }
 
+/** Місце параметра в тексті правила нормалізації: у SQL не трапляється. */
+const PARAMETER = "\u0000"
+
 /** Екранування шаблону `ILIKE` `contains` (типовий `ESCAPE '\'`): значення — літерал. */
 const escapePattern = (text: string) => text.replace(/[\\%_]/g, "\\$&")
 
@@ -198,18 +202,20 @@ function condition(
   if (op === "startsWith") {
     const text = scalar(column, notNull(value, valuePath), valuePath)
     // Один вираз для обох гілок (спека П4-B §4.1): нормалізована колонка поля
-    // пошуку — це й є `lower(<колонка> COLLATE "default")`, тож множина та
-    // сама, а індекс `text_pattern_ops` читається лише за нею. Явна колляція
-    // бази на обох боках: колонка `CustomTable` може мати свою (`C`). `ILIKE`
-    // тут не годиться — він не leakproof і під RLS індексом не стає.
+    // пошуку згенерована тим самим `searchNormalization`, тож множина та сама,
+    // а індекс `text_pattern_ops` читається лише за нею. `ILIKE` тут не
+    // годиться — він не leakproof і під RLS індексом не стає.
     const subject =
       column.attribute?.search === undefined
-        ? `lower(${name} COLLATE "default")`
+        ? searchNormalization(name)
         : qualified(column.attribute.search)
+    // Значення — зв'язаний параметр усередині того самого виразу: текст
+    // правила ділиться навколо місця параметра.
+    const [before, after] = searchNormalization(PARAMETER).split(PARAMETER)
     return [
-      `starts_with(${subject}, lower(`,
+      `starts_with(${subject}, ${before}`,
       { value: text, cast: "text" },
-      ` COLLATE "default"))`,
+      `${after})`,
     ]
   }
   notNull(

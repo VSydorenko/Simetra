@@ -19,6 +19,7 @@ import {
   pgTypeOf,
   quoteIdent,
   searchColumnName,
+  searchNormalization,
   singletonColumn,
   standardLogicalName,
   truncatedPeriodExpression,
@@ -1271,7 +1272,7 @@ class SnapshotBuilder {
         type: "text",
         notNull: false,
         generated: {
-          expression: `lower(${quoteIdent(column.name)} COLLATE "default")`,
+          expression: searchNormalization(quoteIdent(column.name)),
         },
         origin: { searchOf: column.name },
       })

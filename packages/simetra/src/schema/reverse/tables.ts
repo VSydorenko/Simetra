@@ -2,6 +2,7 @@ import { diagnostic, type Diagnostic } from "simetra/compiler"
 import {
   logicalTypeOf,
   searchColumnName,
+  searchNormalization,
   type CatalogColumn,
   type CatalogEnumType,
   type CatalogTable,
@@ -301,7 +302,7 @@ export function derivedSearchColumns(
     if (
       derived?.generated !== undefined &&
       bareExpression(derived.generated.expression) ===
-        bareExpression(`lower(${source.name} COLLATE "default")`)
+        bareExpression(searchNormalization(source.name))
     )
       found.set(derived.name, source.name)
   }

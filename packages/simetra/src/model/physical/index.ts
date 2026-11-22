@@ -10,6 +10,7 @@ export {
   quoteIdent,
   makeObjectName,
   searchColumnName,
+  searchNormalization,
   chooseConstraintName,
   clipBytes,
 } from "./pg-names"
