@@ -9,7 +9,9 @@ import {
   isPage,
   key,
   keysIn,
+  keysOf,
   seed,
+  type FakeRead,
   settle,
   setup,
   taskValues,
@@ -292,6 +294,55 @@ describe("full", () => {
       expect(fake.log.filter(isPage)).toHaveLength(pages)
     }
   )
+
+  // Межа повторів — умова, не лічильник: спробу, відхилену ще новішою
+  // позначкою, вимога переносить на неї, і завантаження йде знову, доки
+  // читання не підтвердить склад.
+  it("two rejected answers in a row: the load goes on until a read confirms the composition", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 2)
+    const singles = [key(1), key(2)].map((k) => {
+      const handle = core.view({ kind: "keys", object: TASK, keys: [k] })
+      watch(handle)
+      return handle
+    })
+    await settle()
+    // Старі читання за ключем, кожне своїм запитом: їхні «рядка немає»
+    // лягають після новіших.
+    fake.hold = (read) => isKeys(read)
+    const older: FakeRead[] = []
+    for (const [i, single] of singles.entries()) {
+      single.refresh()
+      await settle()
+      older.push(fake.take((read) => keysOf(read.query).includes(key(i + 1))))
+    }
+    for (const k of [key(1), key(2)])
+      watch(core.view({ kind: "card", object: TASK, key: k }))
+    await settle()
+    fake.hold = (read) => isKeys(read) || isPage(read)
+    const handle = core.view(full)
+    watch(handle)
+    await settle()
+    // Кожна спроба завантаження стартує до своєї розбіжної позначки.
+    for (const read of older) {
+      const page = fake.take(isPage)
+      fake.setVisibleScopes([])
+      read.answer()
+      fake.setVisibleScopes(undefined)
+      await settle()
+      page.answer()
+      await settle()
+    }
+    fake.hold = undefined
+    while (fake.pending.length > 0) {
+      fake.take().answer()
+      await settle()
+    }
+    await settle()
+    expect(keysIn(handle.getSnapshot())).toEqual([key(1), key(2)])
+    expect(handle.getSnapshot().needsRefresh).toBe(false)
+    expect(fake.log.filter(isPage)).toHaveLength(3)
+  })
 
   it("stops reading pages and targets once the view is released", async () => {
     const { core, fake, inspect } = setup()

@@ -292,10 +292,14 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         undefined)
 
   // Склад, не підтверджений з епохи e (П15): вимогу знімає перше успішне
-  // завантаження, що стартувало після e. Нова вимога з цієї відповіді —
-  // видимому вигляду ще одна спроба того самого завантаження, як
-  // повтор відкинутої відповіді: покоління й політ ті самі, тож це й далі
-  // дія, що його почала; невидимому — `needsRefresh`. Від порядку подій не
+  // читання вигляду, що стартувало після e. Нова вимога з цієї відповіді —
+  // видимому вигляду ще одна спроба того самого читання, як повтор
+  // відкинутої відповіді: покоління й політ ті самі, тож це й далі дія, що
+  // його почала (окреме покоління-хвіст правило стабільності судило б як
+  // системне читання, що змінює склад); невидимому — `needsRefresh`. Межа
+  // повторів — умова, не лічильник: спробу, відхилену ще новішим надгробком
+  // e' > e, вимога переносить на e', і спроба йде знову; кожна стартує
+  // після попереднього e, а надгробків скінченно. Від порядку подій не
   // залежить: вимога лічиться від відхиленої відповіді, а не від
   // відновлення слота.
   function confirm(
@@ -533,19 +537,26 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     const release = () => {
       if (s.paging.get(direction) === generation) s.paging.delete(direction)
     }
+    // Сторінка, яку записала попередня спроба цього читання: повтор за
+    // вимогою «склад не підтверджено» (П15) стає на її місце.
+    let written: number | undefined
     const attempt = (): Promise<void> => {
       const readEpoch = session.epochs.now()
       let discarded = false
+      let again = false
       return gated(
         ctx,
         readEpoch,
-        (c) => readWindowMore(c, s, readEpoch, token, direction, cursor),
+        (c) =>
+          readWindowMore(c, s, readEpoch, token, direction, cursor, written),
         s
       ).then(
         (apply) => {
           session.commit(
             (scope) => {
               try {
+                const required = s.unconfirmedSince
+                const before = s.window?.generation
                 if (!apply(scope)) {
                   discarded = !session.versions.unavailable()
                   if (!discarded) {
@@ -558,6 +569,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                   s.status = "ready"
                   s.error = undefined
                 }
+                if (s.window?.generation !== before)
+                  written = s.window?.generation
+                again = confirm(s, required, readEpoch)
               } catch (error) {
                 ctx.log({ kind: "listener-failed", error })
                 s.status = "error"
@@ -565,13 +579,19 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               } finally {
                 ops.sweep(scope)
                 s.dirty = true
-                // Відкинуте читання повториться: позначка тримає дублікати.
-                if (!discarded) release()
+                // Відкинуте читання чи повтор за вимогою ще піде: позначка
+                // тримає дублікати.
+                if (!discarded && !again) release()
               }
             },
             token,
             what
           )
+          if (again) {
+            if (token.valid) return attempt()
+            release()
+            return
+          }
           if (!discarded || !token.valid) return
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
