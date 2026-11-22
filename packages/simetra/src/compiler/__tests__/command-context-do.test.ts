@@ -61,10 +61,10 @@ describe("a DO block is judged by the protected-setting rule", () => {
     expect(
       forms(
         definer(
-          "DO $a$ BEGIN EXECUTE 'DO $b$ BEGIN SET ROLE postgres; END $b$'; END $a$;"
+          "DO $a$ BEGIN EXECUTE 'DO $b$ BEGIN SET session_replication_role = replica; END $b$'; END $a$;"
         )
       )
-    ).toEqual([["setStatement", "role"]])
+    ).toEqual([["setStatement", "session_replication_role"]])
   })
 
   it("a top-level DO with an EXECUTE of an ALTER FUNCTION option is a write", () => {
