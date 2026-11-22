@@ -1,43 +1,15 @@
 import { randomUUID } from "node:crypto"
-import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { buildRuntimeCatalog } from "simetra/compiler"
-import {
-  PLATFORM_ROLES,
-  ZERO_UUID,
-  fileObjectKey,
-  type RuntimeCatalog,
-  type SessionClaims,
-  CommandFailure,
-} from "simetra/model"
+import { ZERO_UUID, fileObjectKey, CommandFailure } from "simetra/model"
 import {
   FileAttachFailure,
   createCommandRuntime,
   fromPgPool,
-  fromS3Client,
   type CommandDatabase,
   type CommandRuntime,
-  type FileStore,
 } from "simetra/server"
-import {
-  TICKET_READER_ID,
-  TICKET_WRITER_ID,
-  createRunBucket,
-  emptyAndDeleteRunBucket,
-  runTag,
-  s3Of,
-  testStack,
-} from "../../../simetra/test/support"
-import {
-  heldResource,
-  seedMarker,
-  seedRuntimeActor,
-  sessionOf,
-  withModelTarget,
-  withRuntimeLogin,
-} from "./support/db"
-import { REQUEST_ROLE } from "./command-runtime.support"
-import { LIMIT, STORAGE, TYPES, storageModel } from "./storage-sql.support"
+import { LIMIT, STORAGE, TYPES } from "./storage-sql.support"
+import { heldStorageEnv, type Env } from "./storage-env.support"
 
 /**
  * Сховище файлів через T3 на справжньому Postgres і Garage (ПГ-5, І3, І11 і
@@ -48,62 +20,6 @@ import { LIMIT, STORAGE, TYPES, storageModel } from "./storage-sql.support"
  */
 
 const TICKET = { kind: "Catalog" as const, name: "Ticket" }
-
-interface Env {
-  url: string
-  owner: pg.Client
-  catalog: RuntimeCatalog
-  pool: pg.Pool
-  files: FileStore
-  /** Користувач з `create` будь-якого обсягу й його організація. */
-  writer: { org: string; user: string; session: SessionClaims }
-  /** Користувач лише з `read`: права `create` немає. */
-  reader: { org: string; user: string; session: SessionClaims }
-}
-
-const target = heldResource<Env>(async (use) => {
-  const model = await storageModel()
-  const stack = testStack()
-  const bucket = `run-${runTag()}`
-  await createRunBucket(runTag(), stack, fetch)
-  try {
-    await withModelTarget(model, async (url) => {
-      const owner = new pg.Client({ connectionString: url })
-      await owner.connect()
-      try {
-        await seedMarker(owner, model.hash)
-        const writer = await seedRuntimeActor(owner, [TICKET_WRITER_ID])
-        const reader = await seedRuntimeActor(owner, [TICKET_READER_ID])
-        await withRuntimeLogin(
-          url,
-          [PLATFORM_ROLES.command, REQUEST_ROLE],
-          async (login) => {
-            const pool = new pg.Pool({ connectionString: login })
-            try {
-              await use({
-                url,
-                owner,
-                catalog: buildRuntimeCatalog(model),
-                pool,
-                files: fromS3Client(s3Of(stack), bucket),
-                writer: { ...writer, session: sessionOf(writer.user) },
-                reader: { ...reader, session: sessionOf(reader.user) },
-              })
-            } finally {
-              await pool.end()
-            }
-          },
-          "runtime_files"
-        )
-      } finally {
-        await owner.end()
-      }
-    })
-  } finally {
-    // Бакет прогону лишає сторож, але свої об'єкти тест прибирає сам
-    await emptyAndDeleteRunBucket(runTag(), stack, { fetch })
-  }
-})
 
 /** Порт, що першому оператору за `pattern` дає `40001` замість виконання: відкат і повтор спроби. */
 function failingOnce(
@@ -132,6 +48,8 @@ function failingOnce(
 }
 
 const bodyOf = (text: string) => new Blob([text]).stream()
+
+const target = heldStorageEnv()
 
 describe("file storage over the runtime and the byte store", () => {
   let env: Env
