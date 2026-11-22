@@ -343,6 +343,50 @@ describe("stage 2: identity", () => {
     ])
   })
 
+  it("an element may not take a structural word of error paths", async () => {
+    const result = await compileWith({
+      [CONTRACT]: catalog("Contract", {
+        attributes: [attribute("expectedValues")],
+        tabularSections: [
+          {
+            ...attribute("creatorMember", { type: undefined }),
+            attributes: [attribute("expectedValues")],
+          },
+        ],
+      }),
+      "custom-tables/Log/Log.meta.json": customTable("Log", {
+        columns: [
+          attribute("id", { type: "UUID" }),
+          attribute("expectedValues", { type: "UUID" }),
+        ],
+      }),
+    })
+    expect(result.diagnostics.map((d) => [d.code, d.file, d.pointer])).toEqual([
+      ["identity.name-structural", CONTRACT, "/attributes/0/name"],
+      [
+        "identity.name-structural",
+        CONTRACT,
+        "/tabularSections/0/attributes/0/name",
+      ],
+      ["identity.name-structural", CONTRACT, "/tabularSections/0/name"],
+      [
+        "identity.name-structural",
+        "custom-tables/Log/Log.meta.json",
+        "/columns/1/name",
+      ],
+    ])
+  })
+
+  it("a custom action may take a structural word of error paths", async () => {
+    // Дія не стає ні реквізитом, ні префіксом шляху помилки операції.
+    const result = await compileWith({
+      [CONTRACT]: catalog("Contract", {
+        customActions: [{ id: uuid(60), name: "expectedValues" }],
+      }),
+    })
+    expect(result.diagnostics).toEqual([])
+  })
+
   it("unresolved reference", async () => {
     const result = await compileWith({
       [CONTRACT]: catalog("Contract", {

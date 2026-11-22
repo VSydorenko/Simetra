@@ -842,6 +842,34 @@ describe("messages catalog", () => {
     }
   )
 
+  it.each<{ params: Record<string, string>; en: string }>([
+    {
+      params: { form: "set", setting: "statement_timeout" },
+      en: "runs SET statement_timeout without LOCAL",
+    },
+    { params: { form: "reset" }, en: "runs RESET ALL" },
+    {
+      params: { form: "reset", setting: "lock_timeout" },
+      en: "runs RESET lock_timeout",
+    },
+    {
+      params: { form: "setConfig", setting: "lock_timeout" },
+      en: "calls set_config('lock_timeout', …) without the literal true",
+    },
+  ])(
+    "sql.function-body-session-setting gives $params.form its own text",
+    ({ params, en }) => {
+      const d = diagnostic(
+        "sql.function-body-session-setting",
+        "sql/public/x.sql",
+        "",
+        { function: "public.f", ...params, line: 3 }
+      )
+      expect(d.message).toContain(en)
+      expect(localize(d, "uk").message).not.toBe(d.message)
+    }
+  )
+
   it.each([
     {
       file: "sql/public/x.sql",

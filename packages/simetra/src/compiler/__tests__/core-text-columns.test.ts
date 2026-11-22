@@ -24,7 +24,7 @@ describe("text-encoded columns of the command core", () => {
       policyDomain(writeRoles(), commandCoreLayer(), runtimeValuesLayer())
     )
     const save = model!.sqlUnits.find(
-      (u) => u.identity === "function:public.gauge_save(jsonb,int8)"
+      (u) => u.identity === "function:public.gauge_save(jsonb,int8,jsonb)"
     )!
     expect(textColumnsIn(save.sql, "v_row")).toEqual([
       "version::text",
@@ -42,7 +42,7 @@ describe("text-encoded columns of the command core", () => {
       policyDomain(writeRoles(), commandCoreLayer(), wideBigintLayer(60))
     )
     const save = model!.sqlUnits.find(
-      (u) => u.identity === "function:public.gauge_save(jsonb,int8)"
+      (u) => u.identity === "function:public.gauge_save(jsonb,int8,jsonb)"
     )!
     expect(textColumnsIn(save.sql, "v_row")).toHaveLength(64)
     const result = save.sql.match(/v_result := (.*);/)![1]!

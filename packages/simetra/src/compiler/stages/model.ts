@@ -123,11 +123,14 @@ export interface ModelStageResult {
   checkColumns: CheckColumn[]
 }
 
-/** CHECK таблиці та єдина колонка його виразу. */
+/**
+ * CHECK таблиці та колонки, які читає його вираз, у порядку колонок таблиці:
+ * одна — для CHECK реквізиту, кілька — для правила рядка.
+ */
 export interface CheckColumn {
   table: { schema: string; name: string }
   check: string
-  column: string
+  columns: string[]
 }
 
 /**
@@ -2776,7 +2779,7 @@ function assignNames(pending: readonly PendingTable[]): {
           checkColumns.push({
             table: { schema: table.schema, name: table.name },
             check: assigned,
-            column,
+            columns: [column],
           })
         }
         if (elementId !== undefined) {

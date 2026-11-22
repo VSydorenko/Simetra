@@ -89,6 +89,18 @@ describe("wire schemas", () => {
       false,
       { action: "delete", object: OBJECT_ID, id: ID, expectedVersion: "1" },
     ],
+    [
+      "an update with expectedValues",
+      true,
+      {
+        action: "update",
+        object: OBJECT_ID,
+        id: ID,
+        expectedVersion: 2,
+        values: { title_col: "b" },
+        expectedValues: { title_col: "a" },
+      },
+    ],
     // Форма передачі шле повні масиви ТЧ (`fullTabularArrays`): `deleteIds`
     // у ній немає, тож поле — відмова суворої схеми.
     [

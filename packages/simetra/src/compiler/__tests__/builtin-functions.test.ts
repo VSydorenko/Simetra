@@ -41,6 +41,8 @@ describe("builtin function allowlist", () => {
       "dblink",
       // Аргумент `regclass` називає відношення текстом.
       "pg_relation_size",
+      // Зерно `random()` переживає транзакцію.
+      "setseed",
     ]) {
       expect(BUILTIN_FUNCTIONS, name).not.toContain(name)
     }

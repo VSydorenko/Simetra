@@ -91,6 +91,11 @@ describe("pathToWire / pathFromWire", () => {
     ["a member attribute", "creatorMember.user", "creatorMember.user_id"],
     ["the member key", "creatorMember.ref", "creatorMember.member_id"],
     ["values", "values", "values"],
+    ["expectedValues", "expectedValues", "expectedValues"],
+    ["a base value", "expectedValues.title", "expectedValues.title_col"],
+    ["a base pair", "expectedValues.subject", "expectedValues.subject_id"],
+    ["a base array item", "expectedValues.tags.1", "expectedValues.tag_list.1"],
+    ["an unknown base name", "expectedValues.nope", "expectedValues.nope"],
     ["a read path", "orderBy.0.attribute", "orderBy.0.attribute"],
     ["expectedVersion", "expectedVersion", "expectedVersion"],
     ["an application path", "invoice.total.1", "invoice.total.1"],
@@ -114,6 +119,7 @@ describe("pathToWire / pathFromWire", () => {
     "title",
     "lines.0.qty",
     "creatorMember.user",
+    "expectedValues.title",
     // Ключ запису: T3 називає його лише `keyName` (колонка `id` на дроті).
     "ref",
     "lines.0.ref",
@@ -126,6 +132,36 @@ describe("pathToWire / pathFromWire", () => {
   it("maps an attribute named like a structural word to its column", () => {
     expect(pathToWire(index, ODD_ID, "values")).toBe("values_col")
     expect(pathFromWire(index, ODD_ID, "values_col")).toBe("values")
+  })
+
+  it("maps a structural prefix before a same-named attribute or column", () => {
+    // Ім'я каталогу не перехоплює структурне слово: компілятор забороняє
+    // такі імена (`identity.name-structural`), а фізичну колонку — ні.
+    const named = catalogEntry({
+      id: ODD_ID,
+      name: "Odd",
+      attributes: [
+        catalogEntryAttribute({ name: "title", column: "title_col" }),
+        catalogEntryAttribute({ name: "expectedValues", column: "ev_col" }),
+        catalogEntryAttribute({ name: "creatorMember", column: "cm_col" }),
+        catalogEntryAttribute({ name: "ev", column: "expectedValues" }),
+        catalogEntryAttribute({ name: "cm", column: "creatorMember" }),
+      ],
+      tabularSections: [],
+    })
+    const own = catalogIndex([named])
+    expect(pathToWire(own, ODD_ID, "expectedValues.title")).toBe(
+      "expectedValues.title_col"
+    )
+    expect(pathFromWire(own, ODD_ID, "expectedValues.title_col")).toBe(
+      "expectedValues.title"
+    )
+    expect(pathToWire(own, ODD_ID, "expectedValues")).toBe("expectedValues")
+    expect(pathFromWire(own, ODD_ID, "expectedValues")).toBe("expectedValues")
+    expect(pathToWire(own, ODD_ID, "creatorMember.user")).toBe(
+      "creatorMember.user"
+    )
+    expect(pathFromWire(own, ODD_ID, "creatorMember")).toBe("creatorMember")
   })
 
   it("keeps the path of an unknown object", () => {

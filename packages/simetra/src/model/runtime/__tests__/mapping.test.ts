@@ -150,6 +150,25 @@ describe("operationToWire / operationFromWire", () => {
       },
     ],
     [
+      "update with expectedValues",
+      {
+        action: "update",
+        object: TASK,
+        id: ID,
+        expectedVersion: 3,
+        values: { title: "b" },
+        expectedValues: { title: "a" },
+      },
+      {
+        action: "update",
+        object: OBJECT_ID,
+        id: ID,
+        expectedVersion: 3,
+        values: { title_col: "b" },
+        expectedValues: { title_col: "a" },
+      },
+    ],
+    [
       "markDeletion",
       {
         action: "markDeletion",
@@ -423,6 +442,93 @@ describe("operationToWire / operationFromWire", () => {
         })
       ).toEqual({ ok: false, unknown: { object: OBJECT_ID, section: name } })
       expect(({} as Record<string, unknown>).title).toBeUndefined()
+    }
+  )
+})
+
+describe("expectedValues refusals", () => {
+  // База CAS за полями — ті самі реквізити, що й нове значення: без префікса
+  // відмова бази виглядала б відмовою нового значення того самого реквізиту.
+  const based = catalogIndex([
+    catalogEntry({
+      attributes: [
+        ...base.attributes,
+        catalogEntryAttribute({
+          name: "tags",
+          column: "tag_list",
+          type: "Ref",
+          maxLength: undefined,
+          array: true,
+          enumValues: [{ name: "Open", label: "open" }],
+        }),
+      ],
+    }),
+  ])
+  const update = { action: "update", id: ID, expectedVersion: 3 } as const
+
+  it.each<[string, Record<string, unknown>, Record<string, unknown>, string]>([
+    [
+      "a Ref pair",
+      { subject: null },
+      { subject: "x" },
+      "expectedValues.subject",
+    ],
+    [
+      "an enumeration",
+      { status: "Open" },
+      { status: "Nope" },
+      "expectedValues.status",
+    ],
+    [
+      "an array item",
+      { tags: ["Open"] },
+      { tags: ["Open", "Nope"] },
+      "expectedValues.tags.1",
+    ],
+  ])(
+    "operationToWire: a base %s is refused under expectedValues",
+    (_, values, expectedValues, path) => {
+      expect(
+        operationToWire(based, {
+          ...update,
+          object: TASK,
+          values,
+          expectedValues,
+        })
+      ).toEqual({ ok: false, invalid: { code: "command.invalid", path } })
+    }
+  )
+
+  it.each<[string, Record<string, unknown>, Record<string, unknown>, string]>([
+    [
+      "a Ref pair",
+      { subject_type: null, subject_id: null },
+      { subject_type: "nope", subject_id: TARGET_ID },
+      "expectedValues.subject",
+    ],
+    [
+      "an enumeration",
+      { status: "open" },
+      { status: "nope" },
+      "expectedValues.status",
+    ],
+    [
+      "an array item",
+      { tag_list: ["open"] },
+      { tag_list: ["open", "nope"] },
+      "expectedValues.tags.1",
+    ],
+  ])(
+    "operationFromWire: a base %s is refused under expectedValues",
+    (_, values, expectedValues, path) => {
+      expect(
+        operationFromWire(based, {
+          ...update,
+          object: OBJECT_ID,
+          values,
+          expectedValues,
+        })
+      ).toEqual({ ok: false, invalid: { code: "command.invalid", path } })
     }
   )
 })

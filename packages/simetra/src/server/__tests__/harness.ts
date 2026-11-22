@@ -1,6 +1,7 @@
 import {
   CommandFailure,
   metadataRefSchema,
+  PINNED_SESSION_SETTINGS,
   type CommandError,
   type Operation,
   type ReadQuery,
@@ -41,15 +42,24 @@ export const BEGIN = {
   text: "BEGIN ISOLATION LEVEL READ COMMITTED",
   params: [],
 }
+/** Вираз оператора claims, що закріплює одне налаштування T0 (Р17). */
+export const pinnedSetting = ({
+  name,
+  value,
+}: {
+  name: string
+  value: string
+}) => `pg_catalog.set_config('${name}', '${value.replaceAll("'", "''")}', true)`
+// Закріплені налаштування — з переліку T0 у його порядку (Р17).
 export const CLAIMS = {
   text:
-    "SELECT set_config('request.jwt.claims', $1, true), " +
-    "set_config('TimeZone', 'UTC', true), set_config('bytea_output', 'hex', true)",
+    "SELECT pg_catalog.set_config('request.jwt.claims', $1, true), " +
+    PINNED_SESSION_SETTINGS.map(pinnedSetting).join(", "),
   params: [JSON.stringify(session)],
 }
 /** `statement_timeout` окремим оператором: межа читання, прелюдія бюджету команди. */
 export const statementTimeout = (ms: string) => ({
-  text: "SELECT set_config('statement_timeout', $1, true)",
+  text: "SELECT pg_catalog.set_config('statement_timeout', $1, true)",
   params: [ms],
 })
 /**
@@ -65,12 +75,12 @@ export const commandClaims = (
   text:
     CLAIMS.text +
     // Скидання режиму злиття сигналів (Р14 плану B2): той самий оператор.
-    ", set_config('simetra.signal_mode', '', true)" +
-    ", set_config('statement_timeout', $2, true)" +
-    ", set_config('lock_timeout', $3, true)" +
-    ", set_config('idle_in_transaction_session_timeout', $4, true)" +
-    ", CASE WHEN current_setting('server_version_num')::int >= 170000" +
-    " THEN set_config('transaction_timeout', $4, true) END",
+    ", pg_catalog.set_config('simetra.signal_mode', '', true)" +
+    ", pg_catalog.set_config('statement_timeout', $2, true)" +
+    ", pg_catalog.set_config('lock_timeout', $3, true)" +
+    ", pg_catalog.set_config('idle_in_transaction_session_timeout', $4, true)" +
+    ", CASE WHEN pg_catalog.current_setting('server_version_num')::int >= 170000" +
+    " THEN pg_catalog.set_config('transaction_timeout', $4, true) END",
   params: [JSON.stringify(session), statement, lock, idle],
 })
 /** `BEGIN` транзакції серверного читання: один знімок на всі частини. */
@@ -91,10 +101,10 @@ export const readSetup = (
 ) => ({
   text:
     CLAIMS.text +
-    ", set_config('statement_timeout', $2, true)" +
-    ", CASE WHEN current_setting('server_version_num')::int >= 170000" +
-    " THEN set_config('transaction_timeout', $3, true) END" +
-    ", set_config('role', $4, true)",
+    ", pg_catalog.set_config('statement_timeout', $2, true)" +
+    ", CASE WHEN pg_catalog.current_setting('server_version_num')::int >= 170000" +
+    " THEN pg_catalog.set_config('transaction_timeout', $3, true) END" +
+    ", pg_catalog.set_config('role', $4, true)",
   params: [JSON.stringify(claims), statement, guard, role],
 })
 /** The row version epoch the default answers give. */
@@ -121,14 +131,14 @@ export const OPEN: Call[] = [
 ]
 
 export const context = (action: string, object: string, root: string) => ({
-  text: "SELECT set_config('simetra.command', $1, true)",
+  text: "SELECT pg_catalog.set_config('simetra.command', $1, true)",
   params: [JSON.stringify({ action, object, root })],
 })
 export const call = (fn: string, args: string, params: (string | null)[]) => ({
   text: `SELECT "public"."${fn}"(${args}) AS r`,
   params,
 })
-export const SAVE = "$1::jsonb, $2::bigint"
+export const SAVE = "$1::jsonb, $2::bigint, $3::jsonb"
 
 /** Рядок ядра клієнта: `version` — числом, як `to_jsonb` дає `integer`. */
 export const coreRow = (id = ID, version = 1) =>
@@ -326,6 +336,7 @@ export const create = {
 export const createCall = call("client_save", SAVE, [
   JSON.stringify({ id: ID, code: "A", company_id: COMPANY }),
   null,
+  null,
 ])
 
 /** `create` призначення — фаза прав — і її фаза в черзі. */
@@ -340,6 +351,7 @@ export const assignPhase = (id: string) => [
   context("administerRights", "role_assignment", id),
   call("role_assignment_save", SAVE, [
     JSON.stringify({ id, code: "G", company_id: COMPANY }),
+    null,
     null,
   ]),
 ]

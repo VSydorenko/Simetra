@@ -35,7 +35,7 @@ import { session, setup, type Override } from "./harness"
  * змінюють форми передачі, тож `stale-client` дає лише те, чого в `A′` немає.
  */
 
-const { object, attribute, section, added, removed } = EVOLUTION
+const { object, attribute, section, lineAttribute, added, removed } = EVOLUTION
 const ID = "11111111-1111-4111-8111-111111111111"
 const LINE_ID = "22222222-2222-4222-8222-222222222222"
 const TARGET = "33333333-3333-4333-8333-333333333333"
@@ -174,7 +174,7 @@ const update = (values: Record<string, unknown> = {}): Operation => ({
   expectedVersion: 1,
   values: { [attribute.from]: TARGET, ...values },
   tabularSections: {
-    [section.from]: [{ [sectionKey]: LINE_ID, region: TARGET }],
+    [section.from]: [{ [sectionKey]: LINE_ID, [lineAttribute.from]: TARGET }],
   },
 })
 
@@ -226,7 +226,7 @@ describe("data handler between catalogs A and A′", () => {
     const lines = (row.tabularSections as Record<string, object[]>)[
       section.from
     ]!
-    expect(lines[0]).toMatchObject({ region: TARGET })
+    expect(lines[0]).toMatchObject({ [lineAttribute.from]: TARGET })
     expect(lines[0]).not.toHaveProperty(added)
   })
 
@@ -239,7 +239,9 @@ describe("data handler between catalogs A and A′", () => {
     expect(run.mock.calls[0]![1]).toMatchObject({
       object: { name: object.to },
       values: { [attribute.to]: TARGET },
-      tabularSections: { [section.to]: [{ region: TARGET }] },
+      tabularSections: {
+        [section.to]: [{ [lineAttribute.to]: TARGET }],
+      },
     })
     const row = decodeRow(ticket, value.rows[0]!)
     expect(row).toMatchObject({
@@ -255,7 +257,11 @@ describe("data handler between catalogs A and A′", () => {
 
   it.each<[string, string, string[]]>([
     ["a header attribute", "ticket", [attribute.from]],
-    ["a section attribute", "ticket_checklist", [`${section.from}.region`]],
+    [
+      "a section attribute",
+      "ticket_checklist",
+      [`${section.from}.${lineAttribute.from}`],
+    ],
   ])(
     "decodes a not-null violation of %s into A's names",
     async (_, table, attributes) => {

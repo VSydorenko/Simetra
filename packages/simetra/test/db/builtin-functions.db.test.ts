@@ -12,6 +12,7 @@ import {
   HEAD_BUILTINS,
   HEAD_REVIEWED_BUILTINS,
 } from "../../src/compiler/sql/head-builtins"
+import { PG_CATALOG_TYPES } from "../../src/compiler/sql/pg-catalog-types"
 import { withRollback } from "./connection"
 
 /**
@@ -74,5 +75,20 @@ describe("builtin function allowlist", () => {
         (name) => volatile.has(name) && !HEAD_REVIEWED_BUILTINS.includes(name)
       )
     ).toEqual([])
+  })
+
+  // Ім'я типу, якого перелік не знає, тимчасова таблиця тіла могла б
+  // затінити (спека прав §6.1): перелік, згенерований над іншою версією, —
+  // червоний тест в обидва боки.
+  it("lists exactly the type names of pg_catalog", async () => {
+    const live = await withRollback(async (client) => {
+      const { rows } = await client.query<{ name: string }>(
+        `SELECT typname AS name
+         FROM pg_type
+         WHERE typnamespace = 'pg_catalog'::regnamespace`
+      )
+      return rows.map((row) => row.name)
+    })
+    expect([...PG_CATALOG_TYPES].sort()).toEqual(live.sort())
   })
 })

@@ -1413,8 +1413,46 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
               ? `Функція ${p.function} у рядку ${p.line} має частину, яку компілятор не прочитав`
               : `Функція ${p.function} у рядку ${p.line} виконує ${p.statement}, якого тілу функції виконувати не можна`,
     hint: {
-      en: "The body of a function or procedure, in any .sql file and in SQL debt too, runs only allowlisted statements: SELECT, INSERT, UPDATE, DELETE, MERGE, LOCK, SET and RESET, CALL, NOTIFY, REFRESH MATERIALIZED VIEW of a view of the model, DO, and temporary tables of the body itself (CREATE TEMP TABLE … ON COMMIT DROP and their DROP). The text of a literal EXECUTE and a DO block follow the same list. A non-literal EXECUTE, a call of a function that executes SQL text (query_to_xml, ts_stat, dblink, cron.schedule and the like), another language or a part the compiler cannot read cannot be judged, so they are refused too. Rewrite the function without the statement or move the change into metadata or a migration.",
-      uk: "Тіло функції чи процедури, у будь-якому файлі .sql і в боргу теж, виконує лише оператори з дозвільного переліку: SELECT, INSERT, UPDATE, DELETE, MERGE, LOCK, SET і RESET, CALL, NOTIFY, REFRESH MATERIALIZED VIEW подання моделі, DO і тимчасові таблиці самого тіла (CREATE TEMP TABLE … ON COMMIT DROP та їхній DROP). Текст літерального EXECUTE і блок DO — за тим самим переліком. Нелітеральний EXECUTE, виклик функції, що виконує текст SQL (query_to_xml, ts_stat, dblink, cron.schedule тощо), іншу мову чи частину, яку компілятор не прочитав, судити неможливо, тож вони теж заборонені. Перепишіть функцію без цього оператора або перенесіть зміну в метадані чи міграцію.",
+      en: "The body of a function or procedure, in any .sql file and in SQL debt too, runs only allowlisted statements: SELECT, INSERT, UPDATE, DELETE, MERGE, LOCK, SET LOCAL, CALL, NOTIFY, REFRESH MATERIALIZED VIEW of a view of the model, DO, and temporary tables of the body itself (CREATE TEMP TABLE … ON COMMIT DROP and their DROP). The text of a literal EXECUTE and a DO block follow the same list. A non-literal EXECUTE, a call of a function that executes SQL text (query_to_xml, ts_stat, dblink, cron.schedule and the like), another language or a part the compiler cannot read cannot be judged, so they are refused too. Rewrite the function without the statement or move the change into metadata or a migration.",
+      uk: "Тіло функції чи процедури, у будь-якому файлі .sql і в боргу теж, виконує лише оператори з дозвільного переліку: SELECT, INSERT, UPDATE, DELETE, MERGE, LOCK, SET LOCAL, CALL, NOTIFY, REFRESH MATERIALIZED VIEW подання моделі, DO і тимчасові таблиці самого тіла (CREATE TEMP TABLE … ON COMMIT DROP та їхній DROP). Текст літерального EXECUTE і блок DO — за тим самим переліком. Нелітеральний EXECUTE, виклик функції, що виконує текст SQL (query_to_xml, ts_stat, dblink, cron.schedule тощо), іншу мову чи частину, яку компілятор не прочитав, судити неможливо, тож вони теж заборонені. Перепишіть функцію без цього оператора або перенесіть зміну в метадані чи міграцію.",
+    },
+  },
+  "sql.function-body-session-setting": {
+    en: (p) =>
+      p.form === "reset"
+        ? `Function ${p.function} at line ${p.line} runs RESET${p.setting === undefined ? " ALL" : ` ${p.setting}`}, which changes the session past the transaction`
+        : p.form === "setConfig"
+          ? `Function ${p.function} at line ${p.line} calls set_config(${p.setting === undefined ? "…" : `'${p.setting}'`}, …) without the literal true as its third argument, so the setting outlives the transaction`
+          : `Function ${p.function} at line ${p.line} runs SET${p.setting === undefined ? "" : ` ${p.setting}`} without LOCAL, so the setting outlives the transaction`,
+    uk: (p) =>
+      p.form === "reset"
+        ? `Функція ${p.function} у рядку ${p.line} виконує RESET${p.setting === undefined ? " ALL" : ` ${p.setting}`}, що змінює сесію поза транзакцією`
+        : p.form === "setConfig"
+          ? `Функція ${p.function} у рядку ${p.line} викликає set_config(${p.setting === undefined ? "…" : `'${p.setting}'`}, …) без літерала true третім аргументом, тож налаштування переживає транзакцію`
+          : `Функція ${p.function} у рядку ${p.line} виконує SET${p.setting === undefined ? "" : ` ${p.setting}`} без LOCAL, тож налаштування переживає транзакцію`,
+    hint: {
+      en: "A connection of the command pool serves the next command of another user, so a function body changes a session setting only for its own transaction: SET LOCAL <setting> = <value>, or set_config('<setting>', <value>, true) with the literal true. SET without LOCAL and RESET change the session past the transaction (a statement_timeout or lock_timeout left behind would break the commands of other users), so they are refused in every .sql file, SQL debt included. A setting the whole call needs can also be a SET option of CREATE FUNCTION: Postgres restores it when the function returns.",
+      uk: "З'єднання пулу команд обслуговує наступну команду іншого користувача, тож тіло функції змінює налаштування сесії лише для своєї транзакції: SET LOCAL <налаштування> = <значення> або set_config('<налаштування>', <значення>, true) з літералом true. SET без LOCAL і RESET змінюють сесію поза транзакцією (лишений statement_timeout чи lock_timeout ламав би команди інших користувачів), тож вони заборонені в будь-якому файлі .sql, борг включно. Налаштування на весь виклик може бути й опцією SET у CREATE FUNCTION: Postgres повертає його, коли функція завершується.",
+    },
+  },
+  "sql.function-body-temp-type": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line} creates temporary table ${p.table}, named after a type of pg_catalog`,
+    uk: (p) =>
+      `Функція ${p.function} у рядку ${p.line} створює тимчасову таблицю ${p.table} з іменем типу pg_catalog`,
+    hint: {
+      en: "A temporary table also creates a row type of the same name in pg_temp, and Postgres looks up type names in pg_temp before pg_catalog. Until the end of the transaction such a table would replace the builtin type (uuid, text, int4 and the like) for every unqualified cast and declaration of the command. Give the temporary table of the body a name that is not a type of pg_catalog.",
+      uk: "Тимчасова таблиця створює ще й однойменний тип рядка в pg_temp, а Postgres шукає імена типів у pg_temp раніше за pg_catalog. До кінця транзакції така таблиця підмінила б вбудований тип (uuid, text, int4 тощо) для кожного некваліфікованого приведення й оголошення команди. Дайте тимчасовій таблиці тіла ім'я, що не є типом pg_catalog.",
+    },
+  },
+  "sql.function-body-session-builtin": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line} calls ${p.call}, which changes session state beyond the transaction`,
+    uk: (p) =>
+      `Функція ${p.function} у рядку ${p.line} викликає ${p.call}, що змінює стан сесії поза транзакцією`,
+    hint: {
+      en: "A session-level advisory lock, the seed of random() and the replication origin of a session outlive the transaction, so in a connection of the command pool the next command of another user would inherit them. In a function body take a transaction-level advisory lock (pg_advisory_xact_lock, pg_try_advisory_xact_lock), which Postgres releases with the command, and do not seed random().",
+      uk: "Сесійний advisory-замок, зерно random() і походження реплікації сесії переживають транзакцію, тож у з'єднанні пулу команд їх успадкувала б наступна команда іншого користувача. У тілі функції беріть транзакційний advisory-замок (pg_advisory_xact_lock, pg_try_advisory_xact_lock), який Postgres знімає разом із командою, і не задавайте зерно random().",
     },
   },
   "sql.platform-function-call": {
@@ -2030,6 +2068,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: (p) =>
       `Name "${p.name}" is taken by a standard element of the kind ${p.kind}`,
     uk: (p) => `Ім'я "${p.name}" зайняте стандартним елементом виду ${p.kind}`,
+  },
+  "identity.name-structural": {
+    en: (p) =>
+      `Name "${p.name}" is a structural word of operation error paths; give the element another name`,
+    uk: (p) =>
+      `Ім'я "${p.name}" — структурне слово шляхів помилок операції; дайте елементу інше ім'я`,
   },
   "reference.unresolved": {
     en: (p) => `${p.kind} "${p.name}" does not exist`,

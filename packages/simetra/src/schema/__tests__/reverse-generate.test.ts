@@ -840,6 +840,35 @@ describe("reverseGenerate", () => {
     ).toBe("a_b")
   })
 
+  it("a column whose logical name is a structural path word gets a suffix", async () => {
+    // `expected_values` під camelCase — `expectedValues`, зарезервоване слово
+    // шляху помилки (`identity.name-structural`): прийом бере суфікс колізії,
+    // а не відмовляє.
+    const result = await reverseGenerate(
+      model({
+        tables: [
+          table("app", "note", {
+            columns: [
+              idColumn,
+              { name: "expected_values", type: "text", notNull: false },
+              { name: "creator_member", type: "text", notNull: false },
+            ],
+          }),
+        ],
+      }),
+      options(new Map(), { attributeCase: "camelCase" })
+    )
+    expect(result.diagnostics).toEqual([])
+    const columns = json(result, "custom-tables/Note/Note.meta.json")
+      .columns as Json[]
+    expect(columns.map((c) => [c.name, c.physicalName])).toEqual([
+      ["id", "id"],
+      ["expectedValues2", "expected_values"],
+      ["creatorMember2", "creator_member"],
+    ])
+    expect((await compile(result.files)).diagnostics).toEqual([])
+  })
+
   it("a physical name without a valid logical name is unrepresentable", async () => {
     const result = await reverseGenerate(
       model({

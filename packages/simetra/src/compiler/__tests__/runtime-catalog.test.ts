@@ -37,6 +37,7 @@ import {
   signalTopicDomain,
   REGION_FILE,
   GAUGE_LOG_FILE,
+  GAUGE_TABLE,
   ROLE_FILE,
   STATUS_FILE,
   TICKET_FILE,
@@ -133,7 +134,7 @@ describe("CompiledModel.catalogCommands", () => {
       model.catalogCommands
         .map(
           (c) =>
-            `function:${c.functions.save.schema}.${c.functions.save.name}(jsonb,int8)`
+            `function:${c.functions.save.schema}.${c.functions.save.name}(jsonb,int8,jsonb)`
         )
         .sort()
     ).toEqual(saves)
@@ -778,20 +779,39 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
     }
   }
 
-  it("bounds, an enumeration label and a pair type name their column; a row rule names none", async () => {
+  // Р12: правило рядка — колонки, які воно читає, у порядку колонок таблиці
+  // (`num_nonnulls(amount, reading)`; порядок виразу тут збігається з таблицею,
+  // тож порядок таблиці доводить наступний кейс).
+  it("bounds, an enumeration label and a pair type name their column; a row rule names the columns it reads", async () => {
     const { checks } = await checksOf(
       withSql(policyDomain(runtimeValuesLayer()), gaugeRowRule())
     )
     expect(checks).toEqual([
       { name: "gauge_level_check", kind: "check", columns: ["level"] },
       { name: "gauge_reading_bounds", kind: "check", columns: ["reading"] },
-      { name: "gauge_span", kind: "check", columns: [] },
+      { name: "gauge_span", kind: "check", columns: ["amount", "reading"] },
       {
         name: "gauge_subject_type_check",
         kind: "check",
         columns: ["subject_type"],
       },
     ])
+  })
+
+  it("a row rule lists its columns in table order, each once", async () => {
+    const { checks } = await checksOf(
+      withSql(policyDomain(runtimeValuesLayer()), {
+        layer: {},
+        sql: {
+          "catalogs/Gauge/Gauge.sql": `ALTER TABLE public.${GAUGE_TABLE} ADD CONSTRAINT gauge_order CHECK (counter IS NOT NULL OR (reading = 1 AND amount IS NULL) OR counter <> 2);`,
+        },
+      })
+    )
+    expect(checks.find((c) => c.name === "gauge_order")).toEqual({
+      name: "gauge_order",
+      kind: "check",
+      columns: ["amount", "counter", "reading"],
+    })
   })
 
   // Ім'я CHECK довгої таблиці обрізане до 63 байтів: мапа йде за призначеним
@@ -827,14 +847,14 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
   // (обчислений на коміті до неї). Зміна фікстури чи платформних таблиць
   // знімка (outbox сигналів) чи нові згенеровані одиниці (знімок прав клієнта, оракул сигналу,
   // функції відправки, виклик сигналу в ядрі, тригери сигналу прав, гілки каналів прав
-  // в оракулі) чи правило ідентичності одиниць (`sql/identity.ts`) змінюють і цей літерал.
+  // в оракулі, опції оболонки ядра) чи правило ідентичності одиниць (`sql/identity.ts`) змінюють і цей літерал.
   it("stays outside the canonical snapshot and the hash", async () => {
     const { model: m } = await checksOf(policyDomain(runtimeValuesLayer()))
     expect(m.checkColumns.length).toBeGreaterThan(0)
     expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
-      "1dba006271c3ec81a590a86017611678624afd2b1560425c99e0a21800b20acd"
+      "9b7dddac524717485bc2fd60f1dbb79f945339254853f7875204feddeb81a726"
     )
   })
 })

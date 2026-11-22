@@ -15,6 +15,7 @@ export const COMMAND_CORE_ERRORS = {
     // колонку `DETAIL` називає під ним.
     tabular: "tabular",
     expectedVersion: "p_expected_version",
+    expectedValues: "p_expected_values",
     mark: "p_mark",
     predefined: "predefined",
     // Рядок членства творця кореня (спека П4 §6.13): сам аргумент і префікс
@@ -47,6 +48,9 @@ export const COMMAND_CORE_ERRORS = {
     message: "command.conflict",
     version: "version",
     exists: "exists",
+    // CAS за полями (спека П4 §6.6): `HINT` — поточна версія, перелік полів
+    // відмова не несе.
+    fields: "fields",
   },
 } as const
 

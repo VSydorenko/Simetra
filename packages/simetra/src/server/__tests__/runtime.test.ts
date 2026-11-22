@@ -74,7 +74,7 @@ const facts = (
   ],
 })
 const member = (role: string) => ({
-  text: "SELECT pg_has_role(session_user, $1, 'SET') AS member",
+  text: "SELECT pg_catalog.pg_has_role(session_user, $1, 'SET') AS member",
   params: [role],
 })
 // Ролі запиту профілю supabase за призначенням: `user`, далі `anonymous`.
@@ -406,12 +406,14 @@ describe("createCommandRuntime", () => {
     expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
   })
 
-  it("destroys the connection on an error without SQLSTATE and logs it", async () => {
+  // Р11: без SQLSTATE і без утрати з'єднання — вада драйвера чи T3, не
+  // недоступність; з'єднанню однаково не довіряють.
+  it("destroys the connection on an error without SQLSTATE, maps it to command.internal and logs it", async () => {
     const raw = new TypeError("driver bug")
     const { db, runtime, log } = create((text) =>
       text === HASH.text ? { error: raw } : undefined
     )
-    expect(await failureOf(runtime)).toEqual({ code: "command.unavailable" })
+    expect(await failureOf(runtime)).toEqual({ code: "command.internal" })
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,

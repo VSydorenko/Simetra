@@ -50,6 +50,7 @@ import {
 import { logsDatabaseError, type ErrorPhase } from "./errors"
 import { rejectNested } from "./hook-context"
 import {
+  destroysConnection,
   normalizeError,
   type CommandDatabase,
   type DatabaseClient,
@@ -88,6 +89,7 @@ import {
   readRefusal,
   readSetupStatement,
   runAttach,
+  releaseCommitted,
   runCommand,
   FileAttachFailure,
   type LogEntry,
@@ -503,7 +505,8 @@ function privilegedReason(
   return LOGIN_FACT_REASONS.find(([column]) => row[column] === "t")?.[1] ?? null
 }
 
-const MEMBER = "SELECT pg_has_role(session_user, $1, 'SET') AS member"
+const MEMBER =
+  "SELECT pg_catalog.pg_has_role(session_user, $1, 'SET') AS member"
 const APPLIED_HASH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}() AS hash`
 // База до функції хеша (`42883`) чи без схеми платформи (`3F000`) — модель
 // не застосована, а не збій.
@@ -546,7 +549,7 @@ async function inspect(
   try {
     client = await database.connect()
   } catch (raw) {
-    throw fail(raw)
+    throw fail(raw, normalizeError(raw, true))
   }
   let step = BEGIN_READ_ONLY
   // Роль, членство в якій перевіряє поточний крок.
@@ -596,7 +599,7 @@ async function inspect(
     const hash = (await client.query(APPLIED_HASH, [])).rows[0]?.hash
     step = COMMIT.text
     const { command } = await client.query(COMMIT.text, COMMIT.params)
-    client.release()
+    releaseCommitted(client, log)
     if (command !== "COMMIT" || (typeof hash !== "string" && hash !== null)) {
       log({
         kind: "database",
@@ -608,7 +611,7 @@ async function inspect(
   } catch (raw) {
     if (raw instanceof CommandFailure) throw raw
     const error = normalizeError(raw)
-    await endFailed(client, error.connectionLost)
+    await endFailed(client, destroysConnection(error))
     if (step === APPLIED_HASH && NO_APPLIED_STATE.has(error.code ?? "")) {
       return mismatch(catalog, null)
     }
@@ -1022,7 +1025,7 @@ async function readParts(
   try {
     client = await state.database.connect()
   } catch (raw) {
-    rest(0, readRefusal(raw, state, undefined).error)
+    rest(0, readRefusal(raw, state, undefined, normalizeError(raw, true)).error)
     return { epoch: null, items }
   }
   // Фаза читання — лише для операторів будівника: `22P02` там — вхід клієнта.
@@ -1129,7 +1132,7 @@ async function readParts(
     await endFailed(client, refusalOf(error).destroy)
     return { epoch, items }
   }
-  client.release()
+  releaseCommitted(client, state.log)
   // `ROLLBACK` на `COMMIT` — аномалія (перервану транзакцію відкочує
   // гілка відмови частини): у журнал, результати лишаються.
   if (tag !== "COMMIT") {
@@ -1210,7 +1213,7 @@ async function inShortTransaction<T>(
     await endFailed(client, false)
     throw new CommandFailure(INTERNAL)
   }
-  client.release()
+  releaseCommitted(client, state.log)
   // Значення — лише з зафіксованої транзакції: інакше воно не доведене.
   if (tag !== "COMMIT") {
     state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })

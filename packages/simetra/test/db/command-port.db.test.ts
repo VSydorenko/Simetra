@@ -1,14 +1,20 @@
 import { afterAll, describe, expect, it } from "vitest"
 import pg from "pg"
+import { PINNED_SESSION_SETTINGS } from "simetra/model"
 import { ID, sample } from "../../src/server/__tests__/fixtures"
-import { fromPgPool, normalizeError } from "../../src/server/port"
+import {
+  fromPgPool,
+  normalizeError,
+  type DatabaseClient,
+} from "../../src/server/port"
 import { decodeCoreRow } from "../../src/server/decode"
+import { readSetupStatement } from "../../src/server/transaction"
 import { testDatabaseUrl, withSessionOptions } from "./connection"
 
 /**
  * Контракт порту команд (рішення Р19): що рядок ядра доходить до `decodeCoreRow`
  * незмінним за будь-яких парсерів типів `pg` host-а і за будь-яких
- * `bytea_output`/`TimeZone` сесії пулу, вирішують Postgres і драйвер — unit-фейк
+ * `bytea_output`/`TimeZone`/`extra_float_digits` сесії пулу, вирішують Postgres і драйвер — unit-фейк
  * цього не доводить. Таблиць не треба: рядок у формі ядра будується з літералів
  * (`to_jsonb(row) || <numeric/bigint текстом>`, як `rowJson` генератора ядра).
  */
@@ -33,10 +39,13 @@ const PARSED_OIDS = new Set([
 ])
 
 // Сесія пулу навмисно не та, що потрібна ядру: `escape` дав би інший `bytea`,
-// пояс сесії — інший запис моменту; крок 2 транзакції ставить свої локально.
+// пояс сесії — інший запис моменту, `extra_float_digits = -3` (як від
+// `ALTER ROLE … SET` ролі входу) — округлене `double precision`; крок 2
+// транзакції ставить свої локально.
 // Налаштування дописуються до `options` адреси: ключ `options` конфігу `pg`
 // адреса перекрила б, а перезапис адреси загубив би її стартову роль
-const SESSION = "-c bytea_output=escape -c TimeZone=Asia/Tokyo"
+const SESSION =
+  "-c bytea_output=escape -c TimeZone=Asia/Tokyo -c extra_float_digits=-3"
 const SESSION_URL = withSessionOptions(testDatabaseUrl(), SESSION)
 
 const pools = [
@@ -59,8 +68,15 @@ afterAll(async () => {
   await Promise.all(pools.map((p) => p.end()))
 })
 
-const STEP_2 =
-  "SELECT set_config('TimeZone', 'UTC', true), set_config('bytea_output', 'hex', true)"
+// Крок 2 — справжній оператор налаштування транзакції (той самий
+// `CLAIMS_TEXT`, що й у команди), не копія переліку. Роль — поточна роль
+// входу: `set_config('role', …)` на себе дозволене завжди.
+async function step2(client: DatabaseClient): Promise<void> {
+  const role = (await client.query("SELECT current_user AS r")).rows[0]!
+    .r as string
+  const { text, params } = readSetupStatement("{}", 15_000, 16_000, role)
+  await client.query(text, params)
+}
 
 const ROW = `SELECT (to_jsonb(r) || jsonb_build_object(
     'version', r.version::text,
@@ -103,7 +119,7 @@ describe("CommandDatabase over pg.Pool", () => {
           blob_col: "\\000\\377",
           at_col: "2026-10-31T17:00:00+09:00",
         })
-        await client.query(STEP_2)
+        await step2(client)
         const { rows, command } = await client.query(ROW, [ID])
         expect(command).toBe("SELECT")
         expect(typeof rows[0]!.r).toBe("string")
@@ -132,6 +148,57 @@ describe("CommandDatabase over pg.Pool", () => {
       }
     }
   )
+
+  it("pins every setting of PINNED_SESSION_SETTINGS over the login role's values", async () => {
+    // І11: сусідні `double precision`, які `extra_float_digits = -3` зливає
+    // в один текст, — хибний збіг CAS за полями (рівність закодованих
+    // `to_jsonb`, як у `rowJson` ядра) і втрата точності в результаті.
+    const exact = "0.30000000000000004"
+    const neighbour = "0.3"
+    const compare = `SELECT to_jsonb($1::float8)::text AS encoded,
+        to_jsonb($1::float8) IS DISTINCT FROM to_jsonb($1::float8) AS equal_differs,
+        to_jsonb($1::float8) IS DISTINCT FROM to_jsonb($2::float8) AS neighbour_differs`
+    const client = await fromPgPool(pools[0]!).connect()
+    try {
+      await client.query("BEGIN")
+      expect(
+        (
+          await client.query(
+            "SELECT current_setting('extra_float_digits') AS d"
+          )
+        ).rows
+      ).toEqual([{ d: "-3" }])
+      // Без кроку 2 — збіг сусідів: доводить, що кроку 2 є що змінювати.
+      expect((await client.query(compare, [exact, neighbour])).rows).toEqual([
+        { encoded: "0.3", equal_differs: "f", neighbour_differs: "f" },
+      ])
+      await step2(client)
+      expect((await client.query(compare, [exact, neighbour])).rows).toEqual([
+        { encoded: exact, equal_differs: "f", neighbour_differs: "t" },
+      ])
+      // Кожне налаштування переліку — у значенні T0 і ставиться будь-якою
+      // роллю (`context = 'user'`), не лише суперкористувачем.
+      const names = PINNED_SESSION_SETTINGS.map((s) => s.name)
+      const { rows } = await client.query(
+        `SELECT n AS name, pg_catalog.current_setting(n) AS value,
+            (SELECT context FROM pg_catalog.pg_settings
+              WHERE lower(name) = lower(n)) AS context
+          FROM jsonb_array_elements_text($1::jsonb) WITH ORDINALITY AS t(n, i)
+          ORDER BY i`,
+        [JSON.stringify(names)]
+      )
+      expect(rows).toEqual(
+        PINNED_SESSION_SETTINGS.map(({ name, value }) => ({
+          name,
+          value,
+          context: "user",
+        }))
+      )
+      expect((await client.query("ROLLBACK")).command).toBe("ROLLBACK")
+    } finally {
+      client.release()
+    }
+  })
 
   it("RAISE … USING DETAIL, HINT reaches normalizeError", async () => {
     const client = await fromPgPool(pools[0]!).connect()

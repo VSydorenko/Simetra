@@ -272,6 +272,52 @@ describe("command runtime over the engine target", () => {
     expect(await exists("gauge_log", log)).toBe(true)
   })
 
+  // CAS за полями й хук `beforeWrite` (спека П4 §6.9, І3): хук виконується до
+  // замка рядка, тож для його об'єкта рантайм не передає ядру базу полів і
+  // ядро звіряє версію. Та сама зміна з тією самою базою після чужої правки
+  // іншого поля без модуля проходить — різницю дає лише модуль.
+  it("expectedValues on an object with beforeWrite: a concurrent change of another field is conflict version", async () => {
+    const plain = await runtime(fromPgPool(env.direct))
+    const hooked = await runtime(fromPgPool(env.direct), {
+      objectModules: {
+        [MODULE_KEY]: defineObjectModule({
+          beforeWrite: ({ draft }) => draft,
+        }) as ObjectModule<object>,
+      },
+    })
+    const id = randomUUID()
+    const created = (
+      await plain.run(env.me.session, createGauge(id, { amount: "1" }))
+    ).rows[0]!
+    const stale = created.version as number
+    const other = (
+      await plain.run(env.me.session, {
+        action: "update",
+        object: GAUGE,
+        id,
+        expectedVersion: stale,
+        values: { reading: 7 },
+      })
+    ).rows[0]!
+    const change: Operation = {
+      action: "update",
+      object: GAUGE,
+      id,
+      expectedVersion: stale,
+      values: { amount: "2" },
+      expectedValues: { amount: "1" },
+    }
+    expect(await refusal(hooked.run(env.me.session, change))).toEqual({
+      code: "command.conflict",
+      reason: "version",
+      currentVersion: other.version,
+    })
+    expect((await plain.run(env.me.session, change)).rows[0]).toMatchObject({
+      amount: "2.0000000000",
+      reading: 7,
+    })
+  })
+
   // Відмову ядра фази `ctx.run` дає Postgres; перехоплена хуком, вона однаково
   // завершує команду відкатом (спека П4 §7.2).
   it("a hook that catches the ctx.run refusal: the command fails with it, no afterCommit, nothing written", async () => {
