@@ -2,18 +2,17 @@ import { existsSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { Client } from "@modelcontextprotocol/client"
-import { InMemoryTransport } from "@modelcontextprotocol/server"
 import type { Diagnostic } from "simetra/compiler"
 import { elementNameSchema, objectNameSchema } from "simetra/model"
 import { afterEach, describe, expect, it } from "vitest"
 import { TOOL_PIPELINE } from "./helpers/budget"
+import { connectMcp } from "./helpers/mcp-client"
 import { z } from "zod"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
 import { parseArgs } from "citty"
 import { mcpArgs } from "../commands/mcp-args"
 import { mcpOptionsFrom } from "../commands/mcp"
-import { createMcpServer } from "../mcp/server"
 import { mcpInputSchema, type McpToolOptions } from "../mcp/tools"
 import { applyTool, planTool } from "../tools/apply-tools"
 import {
@@ -64,28 +63,18 @@ async function connect(
   database?: DatabaseResource,
   allowDatabaseWrite = false
 ): Promise<Client> {
-  const server = createMcpServer({
+  return connectWith({
     dir,
     readOnly,
     allowDatabaseWrite,
     launchArgs,
     database,
   })
-  const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair()
-  const client = new Client({ name: "test", version: "0.0.0" })
-  clients.push(client)
-  await server.connect(serverEnd)
-  await client.connect(clientEnd)
-  return client
 }
 
 async function connectWith(o: McpToolOptions): Promise<Client> {
-  const server = createMcpServer(o)
-  const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair()
-  const client = new Client({ name: "test", version: "0.0.0" })
+  const client = await connectMcp(o)
   clients.push(client)
-  await server.connect(serverEnd)
-  await client.connect(clientEnd)
   return client
 }
 

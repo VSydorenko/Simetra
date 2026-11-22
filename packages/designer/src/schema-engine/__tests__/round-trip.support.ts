@@ -272,9 +272,8 @@ interface Loss {
    * API: зв'язку з видом скоупу чи виміром зворотна генерація не знає, тож
    * з фактами `EXECUTE` отримують декларацію без `check` і відмову
    * `sql.declaration-check-missing` (Р1), доки мутації `chain` її не
-   * доповнять. Без `chain` ланцюжок закінчується на зворотній генерації
-   * (`refusedRoundTrip`); з `chain` теку ведуть далі, до звірки й
-   * застосування.
+   * доповнять. Фікстура з ними без `chain` — помилка тесту (Д4, Р8): теку
+   * ведуть мутації до звірки й застосування, іншого шляху немає.
    */
   definers: { schema: string; name: string }[]
 }
@@ -298,16 +297,6 @@ export interface Refusal {
   /** Одиниця, на якій відмова (`sql.kind-table-verbatim`). */
   identity?: string
 }
-
-// З фактами `EXECUTE` функція множини з викликачами `user`/`command` отримує
-// декларацію без `check` — до Д5 це `sql.declaration-check-missing` (Р1);
-// `sql.definer-caller-unchecked` лишилось би лише функціям без декларації
-const definerRefusals = (definers: Loss["definers"]): Refusal[] =>
-  definers.map((f) => ({
-    code: "sql.declaration-check-missing",
-    schema: f.schema,
-    name: f.name,
-  }))
 
 /** Помилки прийому — рівно відмови `refusals`, решти немає. */
 function expectRefusals(
@@ -341,14 +330,6 @@ async function extractWithFacts(target: DbConnection, scope: EngineScope) {
   expect(facts.catalogChanged).toBe(false)
   expect(facts.crossCheckFailures).toEqual([])
   return { extracted, facts }
-}
-
-/** Помилки прийому — рівно відмови `definers`, решти немає. */
-function expectRefusedDefiners(
-  diagnostics: Parameters<typeof expectRefusals>[0],
-  definers: Loss["definers"]
-): void {
-  expectRefusals(diagnostics, definerRefusals(definers))
 }
 
 /**
@@ -440,7 +421,7 @@ async function expectKindLabelsKept(
   project: Project,
   before: ReadonlyMap<string, string>,
   files: ReadonlyMap<string, string>,
-  definers: Loss["definers"]
+  refusals: readonly Refusal[]
 ): Promise<void> {
   const labels = (map: ReadonlyMap<string, string>) =>
     new Map(
@@ -470,41 +451,8 @@ async function expectKindLabelsKept(
     executeFacts: facts,
     ...(await referenceOf(target, existing)),
   })
-  expectRefusedDefiners(again.diagnostics, definers)
+  expectRefusals(again.diagnostics, refusals)
   expect(labels(again.files)).toEqual(labels(existing))
-}
-
-/**
- * Прийом з нуля бази з функціями форм платформи (`Loss.definers`): зворотна
- * генерація, помилки якої рівно відмови цих функцій (`sql.declaration-check-missing`),
- * а моделі з такою текою компілятор не дає. Повертає теку; далі її веде
- * `chain` у `deployedRoundTrip` (мутації, звірка, застосування).
- * Тимчасово: іменовані функції множини, які кличуть політики, стануть формою
- * «функція політики» (ADR-0094, #271); тоді фікстури зі `scopeKinds` підуть
- * повним ланцюжком, а цю функцію буде видалено (умова записана в #271).
- */
-async function refusedRoundTrip(
-  target: DbConnection,
-  extractScope: EngineScope,
-  project: Project,
-  loss: Loss
-): Promise<Map<string, string>> {
-  const { extracted, facts, files } = await refusedAdoption(
-    target,
-    extractScope,
-    project,
-    definerRefusals(loss.definers)
-  )
-  await expectKindLabelsKept(
-    target,
-    extracted,
-    facts,
-    project,
-    new Map(),
-    files,
-    loss.definers
-  )
-  return files
 }
 
 /**
@@ -570,7 +518,9 @@ export async function roundTripOf(
     executeFacts: facts,
     ...(await referenceOf(target, existing)),
   })
-  expectRefusedDefiners(reversed.diagnostics, loss.definers)
+  // Фікстура з функціями форм платформи без `chain` — помилка тесту (Д4, Р8)
+  expect(loss.definers).toEqual([])
+  expectRefusals(reversed.diagnostics, [])
   await expectKindLabelsKept(
     target,
     extracted,
@@ -578,7 +528,7 @@ export async function roundTripOf(
     project,
     existing,
     reversed.files,
-    loss.definers
+    []
   )
 
   return compiledTrip(target, extracted, reversed.files, loss)
@@ -1072,6 +1022,11 @@ export async function deployedRoundTrip(
     databaseProvider: source.project.database.provider,
   }
   if (loss.definers.length > 0) {
+    // Без ланцюжка мутацій така фікстура — помилка тесту, не очікувана відмова
+    if (chain === undefined)
+      throw new Error(
+        "fixture with Loss.definers needs a chain of repair mutations"
+      )
     // Теку з відмовами класу ремонту лагодять мутації `chain`; повна звірка
     // йде вже над теку після них (Д3, Р8), у тій самій цілі
     let result: RoundTrip | undefined
@@ -1079,8 +1034,28 @@ export async function deployedRoundTrip(
       renderDesiredState(source).sql,
       scope,
       async (target) => {
-        const kept = await refusedRoundTrip(target, scope, project, loss)
-        if (chain === undefined) return kept
+        // З фактами `EXECUTE` функція форми платформи отримує декларацію без
+        // `check`: відмова `sql.declaration-check-missing` (Р1), доки `chain`
+        // її не доповнить
+        const refusals: Refusal[] = loss.definers.map((f) => ({
+          code: "sql.declaration-check-missing",
+          schema: f.schema,
+          name: f.name,
+        }))
+        const {
+          extracted: first,
+          facts,
+          files: kept,
+        } = await refusedAdoption(target, scope, project, refusals)
+        await expectKindLabelsKept(
+          target,
+          first,
+          facts,
+          project,
+          new Map(),
+          kept,
+          refusals
+        )
         const functions = loss.definers.map(qualifiedName)
         const schemas = [...scope.schemas]
         // ACL функцій множини, які розгорнуло саме джерело, — до прийому

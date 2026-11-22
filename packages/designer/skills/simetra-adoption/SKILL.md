@@ -112,7 +112,8 @@ not express through metadata (CustomTable and PgEnum modules, shared
 `metadata/sql/`, statements a closed form does not accept).
 
 - The list is a ratchet and only shrinks. `introspect` is the only writer and
-  derives it from the database; `fix` only removes stale entries; `compile`
+  derives it from the database; `fix` removes stale entries (and repairs function
+  declarations, see below); `compile`
   fails with `sql.debt-grows` on a debt unit that is not listed and with
   `sql.debt-stale` on an entry that is no longer debt. Without that, verbatim
   SQL would grow back unnoticed.
@@ -127,6 +128,30 @@ not express through metadata (CustomTable and PgEnum modules, shared
   `compile` with `sql.function-body-statement`; SQL that writes a table of a
   kind fails with `sql.kind-table-verbatim`. Rewrite such a function with
   static SQL or remove it.
+
+## SECURITY DEFINER functions
+
+A `SECURITY DEFINER` function that an API role can execute is written next to
+its `.sql` as a declaration (`<name>.functions.json`) with `callers` derived
+from the database `EXECUTE` facts. The folder is then not clean yet, but the
+errors are only of the repair class (`sql.declaration-check-missing`,
+`sql.declaration-check-not-applied`, `sql.definer-caller-unchecked`), and
+`introspect` writes it anyway. Bring it to a clean state in this order:
+
+1. `declare-function` with `{function, callers, check}`: names the rights check
+   the function applies (an object with rights, an action, at most one target
+   parameter). It replaces the record of that function and refuses when the
+   result would add any other error. A function that already has a platform
+   form (a scope kind set function, a dimension values function) is refused.
+2. `fix`: inserts a `PERFORM simetra.rights_require` (or `rights_require_scope`) call as the first
+   statement of the body from the declared `check`. It only inserts into a
+   `plpgsql` body without `DECLARE` and `EXCEPTION` and without any guard call;
+   in any other body write the guard yourself. `fix` never widens `EXECUTE`.
+3. `compile` must show no errors; then `plan` and `apply`. The next `plan` is
+   empty.
+
+`explain` with `{function: {schema?, name}}` shows callers, the roles that get
+`EXECUTE`, and whether the check is applied.
 
 ## Adopted triggers
 

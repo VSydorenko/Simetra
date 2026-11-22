@@ -350,6 +350,17 @@ A row rule shape:
 ALTER TABLE <schema>.<own_table> ADD CONSTRAINT <rule_name> CHECK (<rule>);
 ```
 
+## Function declarations: `declare-function` and `fix`
+
+`declare-function` creates or replaces the record of one function in the
+sibling `<name>.functions.json` (full replacement of `callers` and `check`, the
+`id` is kept). It writes only when the folder gets no new repair-class error;
+the one allowed change is the declared function's own error becoming
+`sql.declaration-check-not-applied (firstStatement)`, which `fix` then repairs
+by inserting the guard call as the first statement of the body. `fix` never
+invents a right: the guard comes only from the declared `check`, and the result
+must compile. See `simetra-adoption` for the full chain.
+
 ## SQL debt
 
 `metadata/sql-debt.json` lists the verbatim SQL units that the compiler still
