@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { compile, explainFunction, explainObject } from "simetra/compiler"
+import { declaredFunctionStates } from "../sql/guard-of"
 import { readReferenceDomain } from "./fixtures/reference-domain"
 import {
   DIMENSION_SQL,
@@ -295,5 +296,30 @@ describe("explainFunction", () => {
 
   it("an unknown function is undefined", async () => {
     expect(await explain(files(GUARDED), "missing")).toBeUndefined()
+  })
+})
+
+describe("declaredFunctionStates", () => {
+  // Мутація: `?? callers` замість помилки — відсутня група `EXECUTE` мовчки
+  // показується як гранти викликачів.
+  it("a declared function without an execute group is an internal error", () => {
+    const declared = [
+      {
+        declaration: { function: { name: "f" }, callers: ["user"] },
+        unit: { identity: "function:public.f()" },
+        key: { schema: "public", name: "f" },
+      },
+    ] as unknown as Parameters<typeof declaredFunctionStates>[0]
+    expect(() =>
+      declaredFunctionStates(
+        declared,
+        new Map(),
+        [],
+        [],
+        [],
+        {} as never,
+        {} as never
+      )
+    ).toThrow("internal: no execute purposes for public.f")
   })
 })
