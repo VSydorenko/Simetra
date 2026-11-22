@@ -967,10 +967,13 @@ SignalTokens = {
   `storage` не має ядра `delete`). Байти не видаляє ні рантайм, ні endpoint:
   їх прибирає лише звірка, коли рядка фізично немає (каскад власника чи
   скоупу, майбутнє очищення позначених), через 24 год.
-- **Звірка** — фонове завдання host-а:
+- **Звірка** — фонове завдання host-а (`runtime.reconcileFiles(store, { log })`;
+  єдине місце, де байти видаляються фізично):
+  - перш за все `store.checkInstance(fileInstance())`: чужий бакет — відмова
+    без жодного видалення;
   - перелічує лише префікс `o/<UUID об'єкта>/` для об'єктів каталогу з
-    властивістю `storage`; префікс невідомого об'єкта не видаляється, а
-    журналюється;
+    властивістю `storage`; префікси невідомих об'єктів (`store.listPrefixes()`)
+    не видаляються, а журналюються;
   - наявність рядків перевіряє definer-функція власника
     `simetra.storage_rows_exist(p_object uuid, p_ids uuid[])` (`EXECUTE`
     лише `simetra_files`, кличе лише T3 `runtime.reconcileFiles`), бо під
@@ -978,7 +981,10 @@ SignalTokens = {
     Функція відмовляє для об'єкта без властивості `storage` і для понад
     1000 id за виклик;
   - «зараз» бере з бази (`now()`), а не з годинника host-а;
-  - видаляє об'єкти без рядка, старші за 24 год;
+  - видаляє об'єкти без рядка, старші за 24 год; id перевіряються сторінками
+    по 1000, кожна сирота — ще раз безпосередньо перед видаленням; рядок
+    міг зникнути фізично (каскад власника чи скоупу), тоді байти прибирає
+    лише ця звірка;
   - запобіжник: якщо за прогін до видалення припадає понад 5 %
     переліченого **і** понад 20 об'єктів, звірка нічого не видаляє й
     журналює відмову (помилковий DSN чи бакет). Нижня межа в 20 об'єктів
@@ -1017,10 +1023,12 @@ SignalTokens = {
 
 ```text
 FileStore = {
-  put(key, body: ReadableStream, { contentType, maxBytes }): Promise<{ size }>,
+  put(key, body: ReadableStream, { contentType, maxBytes, instance }): Promise<{ size }>,
   get(key): Promise<{ body: ReadableStream, size, contentType } | null>,
   delete(key): Promise<void>,
-  list(prefix, after?): AsyncIterable<{ key, lastModified }>   — для звірки
+  list(prefix, after?): AsyncIterable<{ key, lastModified }>,  — для звірки
+  listPrefixes(): AsyncIterable<string>,                        — префікси `o/<uuid>/` бакета
+  checkInstance(instance): Promise<void>   — відмовляє для чужого бакета (інший маркер чи файли без маркера)
 }
 ```
 
