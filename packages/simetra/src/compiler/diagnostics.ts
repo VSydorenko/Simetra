@@ -86,6 +86,7 @@ export const COMPILER_RULES = [
   "reference.unresolved",
   "reference.ambiguous",
   "customTable.column-unknown",
+  "customTable.index-derived-column",
   "register.balance-control-resource",
   "register.balance-control-duplicate",
   "posting.field-unknown",
@@ -568,6 +569,7 @@ export const REPAIR_CLASS: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "sql.declaration-platform-form",
   "sql.default-privileges-execute",
   "sql.function-body-session-builtin",
+  "customTable.index-derived-column",
 ])
 
 /**

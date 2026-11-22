@@ -1,6 +1,8 @@
 import {
   KIND_REGISTRY,
   effectiveSearch,
+  logicalElementName,
+  searchColumnName,
   standardLogicalName,
   type AttributeCase,
   type PhysicalColumn,
@@ -138,4 +140,34 @@ export function searchFieldColumn<
         c.origin.elementId === undefined
       : c.origin.elementId === field.origin.elementId
   )
+}
+
+/**
+ * Похідна колонка власного поля пошуку прийнятої таблиці, яку опис називає
+ * ім'ям (ключ індексу, який автор побудував над нею): у теці такої колонки
+ * немає, її виводить компілятор із `search`. Ім'я — як його пише зворотна
+ * генерація з фізичного (`logicalElementName`), або саме фізичне. Одне
+ * правило для стадії 2 (діагностика) і стадії 3 (ключ індексу у знімку).
+ */
+export function derivedSearchColumn(
+  object: ParsedObject,
+  style: AttributeCase,
+  name: string
+): { field: string; column: string } | undefined {
+  const columns = (
+    object.data as {
+      columns?: { id?: string; physicalName?: string }[]
+    }
+  ).columns
+  if (columns === undefined) return undefined
+  for (const field of resolveSearch(object, style).fields) {
+    if (!field.normalized || !("elementId" in field.origin)) continue
+    const { elementId } = field.origin
+    const source = columns.find((c) => c.id === elementId)?.physicalName
+    if (source === undefined) continue
+    const column = searchColumnName(source)
+    if (name === column || name === logicalElementName(column, style))
+      return { field: field.name, column }
+  }
+  return undefined
 }

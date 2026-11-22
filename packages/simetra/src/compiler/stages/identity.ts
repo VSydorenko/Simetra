@@ -34,6 +34,7 @@ import {
   grantRecords,
   isRightsDeclaration,
 } from "../rights/facts"
+import { derivedSearchColumn } from "../search-fields"
 import {
   PROJECT_FILE,
   objectKey,
@@ -994,6 +995,11 @@ function resolveElementReferences(
       // Прийнята таблиця описує фізику сама, тож невідома колонка — її
       // помилка тут; в інших видів ім'я звітує правило поля (`rights.*`).
       if (!KIND_REGISTRY[object.kind].declared) continue
+      const derived = derivedIndexKey(object, style, pointer, name)
+      if (derived !== undefined) {
+        diagnostics.push(derived)
+        continue
+      }
       diagnostics.push(
         diagnostic("customTable.column-unknown", object.file, pointer, {
           column: name,
@@ -1010,6 +1016,36 @@ function resolveElementReferences(
       role,
     })
   }
+}
+
+/**
+ * Ключ власного індексу прийнятої таблиці на похідній колонці її поля пошуку
+ * (індекс автора, прийнятий з бази): колонку виводить платформа, тож опис
+ * її не має, але це не невідома колонка, а стан прийнятої бази — помилка
+ * класу ремонту (спека декларацій функцій §5.1). Ключ ремонту — схема й
+ * ім'я індексу: імена індексів унікальні в схемі.
+ */
+function derivedIndexKey(
+  object: ParsedObject,
+  style: AttributeCase | undefined,
+  pointer: string,
+  name: string
+): Diagnostic | undefined {
+  const at = /^\/indexes\/(\d+)\/keys\/\d+\/column$/.exec(pointer)
+  if (at === null || style === undefined) return undefined
+  const derived = derivedSearchColumn(object, style, name)
+  if (derived === undefined) return undefined
+  const data = object.data as {
+    schema?: string
+    indexes: { name?: string }[]
+  }
+  return diagnostic("customTable.index-derived-column", object.file, pointer, {
+    schema: data.schema ?? "",
+    name: data.indexes[Number(at[1])]?.name ?? `${object.name}#${at[1]}`,
+    table: object.name,
+    column: name,
+    field: derived.field,
+  })
 }
 
 /**

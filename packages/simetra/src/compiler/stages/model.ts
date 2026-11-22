@@ -60,7 +60,11 @@ import { signalOutboxTable } from "../platform/outbox"
 import { storageTables } from "../platform/storage-tables"
 import { carrierDeclarations } from "../rights/facts"
 import { objectKey, type ParsedObject } from "./files"
-import { resolveSearch, searchFieldColumn } from "../search-fields"
+import {
+  derivedSearchColumn,
+  resolveSearch,
+  searchFieldColumn,
+} from "../search-fields"
 import { COLUMN_NAME_ROLES, type ResolvedReference } from "./identity"
 
 type ForeignKey = PhysicalTable["foreignKeys"][number]
@@ -1761,6 +1765,14 @@ class SnapshotBuilder {
     }
     const map = (names: readonly string[], base: string) =>
       names.map((_, index) => column(`${base}/${index}`))
+    // Ключ на похідній колонці поля пошуку стадія 2 звітує класом ремонту
+    // (`customTable.index-derived-column`), а модель тримає індекс на
+    // фізичній похідній колонці: UNIQUE автора не зникає з плану мовчки
+    const keyColumn = (name: string, pointer: string) =>
+      this.columnRefs.has(`${object.file}\0${pointer}`)
+        ? column(pointer)
+        : (derivedSearchColumn(object, this.style, name)?.column ??
+          column(pointer))
 
     if (data.primaryKey !== undefined) {
       table.primaryKey = {
@@ -1839,7 +1851,9 @@ class SnapshotBuilder {
         // полів його параметри без споживача.
         keys: index.keys.map((key, k) => ({
           ...("column" in key
-            ? { column: column(`/indexes/${i}/keys/${k}/column`) }
+            ? {
+                column: keyColumn(key.column, `/indexes/${i}/keys/${k}/column`),
+              }
             : { expression: key.expression }),
           // Значення Postgres за замовчуванням (`ASC`; `NULLS LAST` для `ASC`,
           // `NULLS FIRST` для `DESC`) у знімок не пишуться, як і в

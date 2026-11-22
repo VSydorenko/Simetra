@@ -3731,6 +3731,18 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Задайте індексу чи обмеженню явне ім'я; зворотний генератор завжди записує імена.",
     },
   },
+  "customTable.index-derived-column": {
+    en: (p) =>
+      `Index ${p.name} of ${p.table} has a key on "${p.column}", the derived search column of field "${p.field}"`,
+    uk: (p) =>
+      `Індекс ${p.name} таблиці ${p.table} має ключ на "${p.column}" — похідній колонці пошуку поля "${p.field}"`,
+    hint: {
+      en: (p) =>
+        `The platform derives this column from search and owns it, so the plan is blocked until the index is fixed. Build the index over the source column "${p.field}", or remove it and rely on the prefix index that search derives for the field.`,
+      uk: (p) =>
+        `Цю колонку виводить із search і нею володіє платформа, тож план заблоковано, доки індекс не виправлено. Побудуйте індекс над колонкою-джерелом "${p.field}" або приберіть його й покладіться на префіксний індекс, який search виводить для поля.`,
+    },
+  },
   "customTable.column-unknown": {
     en: (p) => `${p.table} has no column "${p.column}"`,
     uk: (p) => `У ${p.table} немає колонки "${p.column}"`,

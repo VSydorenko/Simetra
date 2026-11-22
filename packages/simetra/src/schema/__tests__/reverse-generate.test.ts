@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 import {
   authorTriggerName,
   compile,
+  isRepairError,
   keyTriggerNames,
   loadSqlParser,
   platformBeforeTriggerName,
@@ -2992,7 +2993,7 @@ describe("reverseGenerate: the normalized search column", () => {
     expect(columns.map((c) => c.physicalName)).not.toContain("note_search")
   })
 
-  it("keeps an author's index that has a key on the derived column", async () => {
+  it("an author's index on the derived column is a repair error, and the model keeps it", async () => {
     const base = notes(`"left"(lower((note COLLATE "default")), 660)`)
     const t = base.tables[0]!
     const derivedIndex = t.indexes[0]!
@@ -3018,10 +3019,50 @@ describe("reverseGenerate: the normalized search column", () => {
       ],
     }
     const result = await reverseGenerate(live, options())
-    const indexes = json(result, FILE).indexes as Json[]
-    expect(indexes.map((i) => i.name)).toEqual([
+    // Тека записана: помилки лише класу ремонту, невідомої колонки немає
+    expect(result.changes).not.toEqual([])
+    expect(result.diagnostics.map((d) => d.code)).not.toContain(
+      "customTable.column-unknown"
+    )
+    const repair = result.diagnostics.filter(
+      (d) => d.code === "customTable.index-derived-column"
+    )
+    expect(repair.map((d) => [isRepairError(d), d.params?.name])).toEqual([
+      [true, "notes_note_search_unique"],
+      [true, "notes_id_note_search"],
+    ])
+    expect(repair[0]!.params?.field).toBe("note")
+    expect((json(result, FILE).indexes as Json[]).map((i) => i.name)).toEqual([
       "notes_note_search_unique",
       "notes_id_note_search",
+    ])
+
+    // Чиста компіляція червона; режим ремонту дає модель, де UNIQUE автора
+    // стоїть на фізичній похідній колонці
+    const plain = await compile(result.files)
+    expect(plain.model).toBeUndefined()
+    const repaired = await compile(result.files, { repair: true })
+    expect(
+      repaired.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => d.code)
+    ).toEqual([
+      "customTable.index-derived-column",
+      "customTable.index-derived-column",
+    ])
+    const physical = repaired.model!.physical.tables.find(
+      (t) => t.name === "notes"
+    )!
+    expect(
+      physical.indexes.map((i) => [
+        i.name,
+        i.unique,
+        i.keys.map((k) => ("column" in k ? k.column : k.expression)),
+      ])
+    ).toEqual([
+      ["notes_id_note_search", false, ["id", "note_search"]],
+      ["notes_note_search_idx", false, ["note_search"]],
+      ["notes_note_search_unique", true, ["note_search"]],
     ])
   })
 
