@@ -78,8 +78,12 @@ export interface RegistryContext {
   readonly defects: Defects
   /** The monotonic clock in ms (`performance.now()`; a test substitutes it). */
   readonly now: () => number
-  /** Reads a view over hydration-only rows that just became visible (§6.6). */
-  readHydrated(s: Subset): void
+  /**
+   * A view just became visible (a subscription or `setVisible(true)`): it is
+   * read if it holds hydration-only rows (§6.6) or its composition is not
+   * confirmed (`unconfirmedRefresh`, §8.4).
+   */
+  becameVisible(s: Subset): void
   /** The set of visible views changed: the scheduler re-plans its timer. */
   touchSchedule(): void
   /** A subset was created: the signal receiver re-plans its channels. */
@@ -137,6 +141,13 @@ export interface Subset extends ReaderTarget {
   status: "loading" | "ready" | "refreshing" | "error"
   error: CommandError | DataError | undefined
   needsRefresh: boolean
+  /**
+   * `needsRefresh` came from a freshness mechanism (the wave, the signal
+   * receiver, П15): the composition is not confirmed, so the transition into
+   * visibility reads the view once (§8.4). The new-rows banner of a system
+   * re-read (§6.5) does not set it: that refresh stays the user's.
+   */
+  unconfirmedRefresh: boolean
   hasNewRows: boolean
   waiters: Array<() => void>
   dirty: boolean
@@ -315,6 +326,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     }
     if (s.visible ?? s.listeners.size > 0) return true
     s.needsRefresh = true
+    s.unconfirmedRefresh = true
     return false
   }
 
@@ -376,6 +388,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                 s.status = "ready"
                 s.error = undefined
                 s.needsRefresh = false
+                s.unconfirmedRefresh = false
                 s.hasNewRows = false
                 again = confirm(s, required, readEpoch)
               } catch (error) {
@@ -854,6 +867,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       status: "loading",
       error: undefined,
       needsRefresh: false,
+      unconfirmedRefresh: false,
       hasNewRows: false,
       strategy:
         form.spec.kind === "full"
@@ -1097,7 +1111,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         for (const timer of s.preloadTimers) clearTimeout(timer)
         s.preloadTimers.clear()
         start(s, true)
-        ctx.readHydrated(s)
+        ctx.becameVisible(s)
         ctx.touchSchedule()
         let done = false
         return () => {

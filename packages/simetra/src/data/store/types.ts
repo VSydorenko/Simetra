@@ -538,9 +538,14 @@ export interface Writer {
   releaseChannel(channel: string): void
   /** Forgets released channels the store holds no row of (bounded registers). */
   forgetReleased(): void
+  /**
+   * Sets the flags of the object's views (`spec` — of that view only).
+   * `unconfirmed` with `needsRefresh`: the flag comes from a freshness
+   * mechanism, so the view reads once on becoming visible (§8.4).
+   */
   markViews(
     object: ObjectName,
-    flags: { needsRefresh?: boolean; hasNewRows?: boolean },
+    flags: { needsRefresh?: boolean; hasNewRows?: boolean; unconfirmed?: true },
     spec?: ViewSpec
   ): void
 }

@@ -843,7 +843,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     if (refresh.length > 0)
       ctx.commit((w) => {
         for (const { object, spec } of refresh)
-          w.markViews(object, { needsRefresh: true }, spec)
+          w.markViews(object, { needsRefresh: true, unconfirmed: true }, spec)
       }, token)
     // Строк на `resume()`: планувальник на прихованій вкладці нічого не шле.
     for (const object of requested) writer.schedule(object, 0)
@@ -856,7 +856,8 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       if (stopped) return
       if (rows === undefined) {
         ctx.commit(
-          (w) => w.markViews(job.object, { needsRefresh: true }),
+          (w) =>
+            w.markViews(job.object, { needsRefresh: true, unconfirmed: true }),
           token
         )
         return

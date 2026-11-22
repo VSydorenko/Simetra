@@ -1064,7 +1064,7 @@ export function createCore(options: {
     closedSnapshot: () => closed,
     defects,
     now,
-    readHydrated: (s) => readHydrated(s),
+    becameVisible: (s) => becameVisible(s),
     touchSchedule: () => scheduler.request(),
     touchSubscriptions: () => receiver?.touch(),
   })
@@ -1354,7 +1354,7 @@ export function createCore(options: {
     if (invisible.length > 0)
       core.commit((w) => {
         for (const { object, spec } of invisible)
-          w.markViews(object, { needsRefresh: true }, spec)
+          w.markViews(object, { needsRefresh: true, unconfirmed: true }, spec)
       }, token)
   }
 
@@ -1449,6 +1449,22 @@ export function createCore(options: {
     for (const [name, keys] of s.included)
       if (stale(objectOf(name), keys)) return true
     return false
+  }
+
+  // Вигляд став видимим: читається, якщо тримає рядки лише з гідратації чи
+  // його склад не підтверджено механізмом свіжості — рівно одне читання, як на
+  // монтуванні; `needsRefresh` банера нових рядків лишається за `refresh()`.
+  function becameVisible(s: Subset) {
+    readHydrated(s)
+    if (!s.unconfirmedRefresh || !s.alive || s.purged || !s.loaded) return
+    if (staleObjects.has(s.form.object.name)) return
+    // Після межі відкинутих жодне системне читання не має шансу (§6.2).
+    if (session.versions.unavailable()) return
+    if (!(s.visible ?? s.listeners.size > 0)) return
+    s.unconfirmedRefresh = false
+    singleFlight(writerContext, s.form.object, [s], {
+      visibleOnly: false,
+    }).done.catch((error: unknown) => log({ kind: "listener-failed", error }))
   }
 
   function readHydrated(s: Subset) {
@@ -1897,7 +1913,7 @@ export function createCore(options: {
       scheduler.request()
       if (!visible) return
       const s = registry.find(spec)
-      if (s !== undefined) readHydrated(s)
+      if (s !== undefined) becameVisible(s)
     },
     revalidate: (object, revalidateOptions) =>
       revalidate(writerContext, object, revalidateOptions),

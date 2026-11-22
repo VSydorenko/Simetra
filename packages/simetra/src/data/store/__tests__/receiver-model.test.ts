@@ -716,6 +716,16 @@ describe("receiver model: the disconnect mark and the composition against the se
       ],
     ],
     [
+      "D2: an invisible view marked needsRefresh by the wave reads once on becoming visible",
+      [
+        { t: "scopes", ch: 1 },
+        { t: "visible", v: 5, on: false },
+        { t: "rejoinFresh", v: 0, create: true },
+        { t: "scopes", ch: 0 },
+        { t: "time", ms: 2000 },
+      ],
+    ],
+    [
       "P1: a new gap before the jitter of the wave",
       [
         { t: "fail", ch: 0 },

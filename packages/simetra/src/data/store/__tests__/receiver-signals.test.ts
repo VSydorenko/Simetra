@@ -502,6 +502,50 @@ describe("expected minimum version, new keys, sections and invalidate", () => {
   })
 })
 
+// §8.4: `needsRefresh`, поставлений механізмом свіжості невидимому вигляду,
+// означає «склад не підтверджено» — перехід у видимість читає вигляд рівно
+// раз. Той самий прапор з іншої причини (банер нових рядків, §6.5) лишається
+// за `refresh()` користувача.
+describe("a view marked needsRefresh while invisible", () => {
+  const full: ViewSpec = { kind: "full", object: TASK }
+  const invisibleFull = async () => {
+    const h = await open(keysView(key(1)))
+    const handle = h.core.view(full)
+    handle.subscribe(() => {})
+    h.core.setVisible(full, false)
+    await settle()
+    return { ...h, handle }
+  }
+
+  it("reads once on becoming visible after the receiver marked it", async () => {
+    const h = await invisibleFull()
+    emit(h, { id: String(++seq), object: task.id, op: "invalidate" })
+    await closeBatch()
+    expect(h.handle.getSnapshot().needsRefresh).toBe(true)
+    const from = h.fake.requests.length
+    h.core.setVisible(full, true)
+    await settle()
+    expect(requestsSince(h, from)).toHaveLength(1)
+    h.core.setVisible(full, false)
+    h.core.setVisible(full, true)
+    await settle()
+    expect(requestsSince(h, from)).toHaveLength(1)
+  })
+
+  it("does not read on becoming visible for needsRefresh of another reason", async () => {
+    const h = await invisibleFull()
+    h.core.commit(
+      (w) => w.markViews(TASK, { needsRefresh: true }, full),
+      h.core.token()
+    )
+    const from = h.fake.requests.length
+    h.core.setVisible(full, true)
+    await settle()
+    expect(requestsSince(h, from)).toHaveLength(0)
+    expect(h.handle.getSnapshot().needsRefresh).toBe(true)
+  })
+})
+
 describe("forward compatibility and topics", () => {
   const invalidated = async (payload: unknown, topic = channel) => {
     const h = await open(keysView(key(1)))
@@ -806,6 +850,13 @@ describe("a failed key read", () => {
     await settle()
     expect(h.handle.getSnapshot().needsRefresh).toBe(true)
     expect(h.log.some((e) => e.kind === "listener-failed")).toBe(true)
+    // Склад не підтверджено: вигляд, що стає видимим, читається раз.
+    h.fake.mode = "auto"
+    h.core.setVisible(keysView(key(1)), false)
+    const from = h.fake.requests.length
+    h.core.setVisible(keysView(key(1)), true)
+    await settle()
+    expect(requestsSince(h, from)).toHaveLength(1)
   })
 })
 

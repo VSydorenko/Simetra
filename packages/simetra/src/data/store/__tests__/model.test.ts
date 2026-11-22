@@ -4515,6 +4515,46 @@ describe("core model regressions", () => {
     120_000
   )
 
+  // #114: вигляд із `needsRefresh` від механізму свіжості стає видимим
+  // після межі відкинутих — перехід у видимість не читає (§6.2).
+  it("replays a view marked unconfirmed that becomes visible after the discard limit (#114)", async () => {
+    const steps: readonly Step[] = [
+      { t: "closeInFlight" },
+      { t: "hide", org: false, k: 0 },
+      {
+        t: "signal",
+        org: false,
+        k: 0,
+        op: "update",
+        ch: 0,
+        ver: 0,
+        change: false,
+      },
+      { t: "churn", v: 1, scroll: false },
+      { t: "race", group: 0, settle: "later" },
+      { t: "answer", pick: 7, how: "unavailable", at: 0 },
+      { t: "replay", pick: 0 },
+      { t: "return", minAge: 1000 },
+      { t: "unsub", v: 0, release: false },
+      { t: "sub", v: 0 },
+      { t: "run", pick: 0, how: "unavailable", at: 0 },
+      { t: "act", k: 0, act: "retry" },
+      { t: "closeInFlight" },
+      { t: "answer", pick: 0, how: "stale", at: 0 },
+      {
+        t: "signal",
+        org: false,
+        k: 0,
+        op: "update",
+        ch: 0,
+        ver: 0,
+        change: false,
+      },
+      { t: "run", pick: 0, how: "ok", at: 0 },
+    ]
+    await runModel(steps, true, "scroll", [], true, true, true)
+  }, 120_000)
+
   // #114: строк такту настав рівно в мить кроку `return`: такт читає
   // вигляд, старший за свою межу `0,9 × I`, хоч і молодший за межу кроку.
   it("replays the tick due at the moment of a return step (#114)", async () => {

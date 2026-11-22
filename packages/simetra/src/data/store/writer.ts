@@ -454,8 +454,12 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
             ? [found]
             : []
       for (const s of targets) {
-        if (flags.needsRefresh !== undefined)
+        if (flags.needsRefresh !== undefined) {
           s.needsRefresh = flags.needsRefresh
+          s.unconfirmedRefresh =
+            flags.needsRefresh &&
+            (flags.unconfirmed === true || s.unconfirmedRefresh)
+        }
         if (flags.hasNewRows !== undefined) s.hasNewRows = flags.hasNewRows
         s.dirty = true
       }

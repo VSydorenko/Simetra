@@ -112,7 +112,7 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
     }
   )
 
-  it("window, invisible: needsRefresh, no second read", async () => {
+  it("window, invisible: needsRefresh, no second read until it becomes visible, then one", async () => {
     const h = setup()
     seed(h.fake, 1, 3)
     const bury = await divergence(h, key(2))
@@ -129,6 +129,14 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
     expect(keysIn(handle.getSnapshot())).toEqual([key(1), key(3)])
     expect(handle.getSnapshot().needsRefresh).toBe(true)
     expect(h.fake.log.filter(isPage)).toHaveLength(1)
+    // Склад не підтверджено (§8.4): видимість читає вигляд рівно раз.
+    h.core.setVisible(spec, true)
+    await drain(h)
+    expect(h.fake.log.filter(isPage)).toHaveLength(2)
+    h.core.setVisible(spec, false)
+    h.core.setVisible(spec, true)
+    await drain(h)
+    expect(h.fake.log.filter(isPage)).toHaveLength(2)
   })
 
   it("window page of loadAfter: the repeat takes the place of its own page, in server order", async () => {
