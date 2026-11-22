@@ -19,6 +19,7 @@ import {
 import {
   canonicalSnapshot,
   compile,
+  explainFunction,
   loadSqlParser,
   platformInstall,
   platformTriggers,
@@ -1093,6 +1094,21 @@ export async function deployedRoundTrip(
             .sort()
           for (const name of functions)
             expect(applied[name]?.slice().sort(), name).toEqual(expected)
+          // `explain` показує ті самі ролі, що й ACL цілі після застосування
+          // (без власника: його права — не виведені платформою)
+          const explained = await compile(repaired, { repair: true })
+          for (const name of functions) {
+            const [schema, fn] = name.split(".") as [string, string]
+            const roles = explainFunction(explained, { schema, name: fn })
+              ?.roles?.[provider]
+            expect(roles, name).toBeDefined()
+            expect(
+              [owner, ...roles!.map((r) => r.role)]
+                .map((role) => `${role}=X/${owner}`)
+                .sort(),
+              name
+            ).toEqual(applied[name]?.slice().sort())
+          }
         }
         return { adopted: repaired, result }
       }

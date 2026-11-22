@@ -36,6 +36,7 @@ import {
 } from "./contracts"
 import {
   buildFunctionExecuteUnits,
+  executeEntries,
   executePurposes,
   checkExecuteTypeReferences,
   type FunctionExecuteSources,
@@ -1221,6 +1222,7 @@ export async function runStages(
     ok: !hasErrors(final),
     diagnostics: final,
     model: compiled,
+    functionExecute: executeEntries(executeSources),
     declaredFunctions: declaredFunctionStates(
       declared,
       executePurposes(executeSources),

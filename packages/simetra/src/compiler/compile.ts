@@ -16,6 +16,7 @@ import type { CreationNode } from "./sql/dependencies"
 import type { SqlUnit, VerbatimUnit } from "./sql/units"
 import { readFiles, runStages, sqlStage } from "./pipeline"
 import { debtUnits } from "./sql/debt"
+import type { ExecuteEntry } from "./function-execute"
 import type { DeclaredFunctionState } from "./sql/guard-of"
 import { kindTables } from "./sql/kind-tables"
 import { loadSqlParser } from "./sql/parse"
@@ -116,6 +117,12 @@ export interface CompileResult {
    * depend on declarations.
    */
   declaredFunctions?: DeclaredFunctionState[]
+  /**
+   * Functions whose EXECUTE the platform derives (declared, platform forms,
+   * module functions), from the same groups as the grant generator; for
+   * `explain`. Outside the model hash, like `declaredFunctions`.
+   */
+  functionExecute?: ExecuteEntry[]
 }
 
 export interface CompileOptions {

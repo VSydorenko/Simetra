@@ -5,6 +5,7 @@ import { readReferenceDomain } from "./fixtures/reference-domain"
 import {
   DIMENSION_SQL,
   dimensionFunction,
+  teamScopeKind,
   policyDomain,
   ORG_MEMBER_ROLE_ID,
   ROLE_FILE,
@@ -18,6 +19,7 @@ import {
   withRoles,
 } from "./fixtures/rights"
 import {
+  SCOPE_FUNCTIONS_FILE,
   acceptDebt,
   attribute,
   metaFiles,
@@ -292,6 +294,31 @@ describe("explainFunction", () => {
     // Перевірку invoker-функції веде RLS; compile дає check-form `invoker`,
     // тож моделі немає — стан не вигадується.
     expect(e).toBeUndefined()
+  })
+
+  it("an undeclared platform form: roles equal the generated GRANT EXECUTE units, state names the form", async () => {
+    const all = policyDomain(teamScopeKind())
+    all.set(
+      SCOPE_FUNCTIONS_FILE,
+      "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n"
+    )
+    const result = await compile(await acceptDebt(all), { repair: true })
+    const e = explainFunction(result, { schema: "public", name: "team_ids" })
+    expect(e?.state).toBe("platform-form (setFunction)")
+    expect(e).not.toHaveProperty("callers")
+    const granted = result
+      .model!.sqlUnits.filter(
+        (u) =>
+          u.generator === "functionExecute" &&
+          u.sql.startsWith("GRANT EXECUTE") &&
+          u.sql.includes("public.team_ids")
+      )
+      .map((u) => /TO "?([\w]+)"?;/.exec(u.sql)![1])
+      .sort()
+    expect(granted.length).toBeGreaterThan(0)
+    expect(e!.roles!.supabase.map((r) => r.role).sort()).toEqual(granted)
+    // Профіль postgres не має ролі для `service`.
+    expect(e!.roles!.postgres.map((r) => r.caller)).toEqual(["user", "command"])
   })
 
   it("an unknown function is undefined", async () => {

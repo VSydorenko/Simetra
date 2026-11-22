@@ -1,5 +1,6 @@
 import {
   DATABASE_PROVIDERS,
+  type GrantPurpose,
   isObjectTable,
   type DatabaseProvider,
   type MetadataKind,
@@ -8,6 +9,7 @@ import {
   type ReferenceRole,
 } from "simetra/model"
 import type { CompileResult, CompiledModel } from "./compile"
+import type { PlatformForm } from "./sql/declarations"
 import { grantRole } from "./sql/execute-grants"
 
 export interface Explanation {
@@ -196,8 +198,12 @@ export interface FunctionExplanation {
   roles?: Record<DatabaseProvider, { caller: string; role: string }[]>
   /** The declared check in words. */
   check?: string
-  /** Whether the body applies the declared check; `none` when no check is declared. */
-  state: "applied" | `not-applied (${string})` | "none"
+  /** Whether the body applies the declared check; `none` when no check is declared; a platform form names its form. */
+  state:
+    | "applied"
+    | `not-applied (${string})`
+    | `platform-form (${PlatformForm})`
+    | "none"
 }
 
 /**
@@ -206,15 +212,26 @@ export interface FunctionExplanation {
  * function.
  */
 export function explainFunction(
-  compiled: Pick<CompileResult, "model" | "declaredFunctions">,
+  compiled: Pick<
+    CompileResult,
+    "model" | "declaredFunctions" | "functionExecute"
+  >,
   target: { schema: string; name: string }
 ): FunctionExplanation | undefined {
-  const { model, declaredFunctions } = compiled
+  const { model, declaredFunctions, functionExecute } = compiled
   const declared = declaredFunctions?.find(
     (f) => f.schema === target.schema && f.name === target.name
   )
+  // Same groups as the EXECUTE generator: a platform form wins over a
+  // declaration, and an undeclared non-form function has no derived roles
+  // (verbatim grants are not guessed).
+  const entries = (functionExecute ?? []).filter(
+    (e) => e.schema === target.schema && e.name === target.name
+  )
+  const entry = entries.find((e) => e.form !== undefined)
   const exists =
     declared !== undefined ||
+    entry !== undefined ||
     model?.sqlUnits.some(
       (u) =>
         u.class === "function" &&
@@ -223,6 +240,24 @@ export function explainFunction(
     ) === true
   if (!exists) return undefined
   const fn = { schema: target.schema, name: target.name }
+  const rolesOf = (purposes: readonly string[]) =>
+    Object.fromEntries(
+      DATABASE_PROVIDERS.map((provider) => [
+        provider,
+        purposes.flatMap((caller) => {
+          const role = grantRole(caller as GrantPurpose, provider)
+          return role === null ? [] : [{ caller, role }]
+        }),
+      ])
+    ) as FunctionExplanation["roles"]
+  if (entry?.form !== undefined) {
+    return {
+      function: fn,
+      ...(declared === undefined ? {} : { callers: [...declared.callers] }),
+      roles: rolesOf(entry.purposes),
+      state: `platform-form (${entry.form})`,
+    }
+  }
   if (declared === undefined) return { function: fn, state: "none" }
   const { check } = declared
   const where =
@@ -234,15 +269,7 @@ export function explainFunction(
   return {
     function: fn,
     callers: [...declared.callers],
-    roles: Object.fromEntries(
-      DATABASE_PROVIDERS.map((provider) => [
-        provider,
-        declared.purposes.flatMap((caller) => {
-          const role = grantRole(caller, provider)
-          return role === null ? [] : [{ caller, role }]
-        }),
-      ])
-    ) as FunctionExplanation["roles"],
+    roles: rolesOf(declared.purposes),
     ...(check === undefined
       ? {}
       : {
