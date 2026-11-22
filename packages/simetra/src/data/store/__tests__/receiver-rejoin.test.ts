@@ -1134,6 +1134,33 @@ describe("held and released channels (liveness, R-a…R-c)", () => {
     expect(coreInternals(h.core).epochs.releasedAt(channel)).toBe(0)
   })
 
+  // §8.4, правило 2: читання в польоті ще запише рядки каналу — запис
+  // відпущеного каналу тримається, хоч сховище їх поки не має.
+  it("keeps the entry of a released channel without rows while a view read that will write its row is in flight", async () => {
+    const h = await open(keysView(key(9)), 3, [S, S2])
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    h.fake.mode = "manual"
+    const spec = keysView(key(1))
+    const view = h.core.view(spec)
+    view.subscribe(() => {})
+    await settle()
+    expect(h.fake.pending).toHaveLength(1)
+    await replaceRights(h, [S2], [S, S2])
+    expect(h.transport.subscribed().has(channel)).toBe(false)
+    await advance(60_000)
+    expect(coreInternals(h.core).epochs.releasedAt(channel)).toBeGreaterThan(0)
+    h.fake.take(0).answer()
+    h.fake.mode = "auto"
+    await settle()
+    expect(view.getSnapshot().rows.map((r) => r.state)).toEqual(["synced"])
+    // Правка без нагляду: повторна підписка з записом позначає рядок.
+    h.fake.edit(TASK, key(1), { title: "missed" })
+    await replaceRights(h, [S], [S, S2])
+    expect(h.transport.subscribed().has(channel)).toBe(true)
+    expect(view.getSnapshot().rows.map((r) => r.state)).toEqual(["stale"])
+  })
+
   it("a release without a gap leaves the composition confirmed", async () => {
     const h = await open(full, 3, [S, S2])
     h.transport.join(channel, false)
