@@ -872,5 +872,7 @@ export function withSleep(
     refuse: source.refuse?.bind(source),
     run: (operation) => source.run(operation),
     read: (parts) => source.read(parts, { sleep }),
+    // Пряме джерело тесту: оренд запису немає кому обліковувати.
+    lease: () => ({ issue() {}, release() {} }),
   }
 }

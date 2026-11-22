@@ -170,7 +170,11 @@ export type RowView =
 
 /** Why a session or view was closed. */
 export type CloseReason =
-  "disposed" | "session-changed" | "signed-out" | "subject-changed"
+  | "connection-refused"
+  | "disposed"
+  | "session-changed"
+  | "signed-out"
+  | "subject-changed"
 
 /** The immutable snapshot of one view. */
 export interface ViewSnapshot {
@@ -188,6 +192,16 @@ export interface ViewSnapshot {
    * confused with a `stale` row.
    */
   readonly isStale?: boolean
+  /**
+   * The composition of the view is not confirmed (P4-B spec §6.5, §8.4): a
+   * create, a delete or an edit may have been missed — after a gap of a
+   * channel of its object (cleared by the first successful read that started
+   * at or after the channel's next join), or while the requirement «not
+   * confirmed since e» stands (cleared only by a successful read with
+   * `readEpoch ≥ e`). Any view kind, visible or not. Present only while
+   * true; not a row's `stale`.
+   */
+  readonly staleComposition?: true
   readonly section?: {
     readonly ownerVersion: number | undefined
     readonly complete: boolean
@@ -419,6 +433,17 @@ export type CoreLogEntry =
   | { kind: "horizon-hidden"; object: ObjectName; count: number }
   /** The `rights` part failed; the old snapshot stays (P4-B spec §9.3). */
   | { kind: "rights-failed" }
+  /**
+   * The age of the oldest own mark of the signal receiver (`minVersion` or a
+   * disconnect gap), written on a tick while a mark exists (P4-B spec §8.4).
+   * No keys, no values.
+   */
+  | { kind: "stale-age"; ageMs: number; object?: ObjectName }
+  /**
+   * A batch or a rejoin wave re-read: counts of objects and of their visible
+   * views, the ones actually read (an invisible view only gets `needsRefresh`).
+   */
+  | { kind: "revalidate-burst"; objects: number; views: number }
 
 /**
  * The rights snapshot of the session (P4-B spec §9.1) with the two epochs of
@@ -496,17 +521,41 @@ export interface Writer {
    */
   hide(object: ObjectName, keys: readonly Key[]): void
   /**
-   * Marks rows of `channel` (every row when omitted) `stale` from a gap.
-   * Marks are kept per channel: a row that moved keeps the mark of its old
-   * channel until that channel is cleared, so the receiver must call
-   * `clearDisconnected(channel)` also when it unsubscribes a channel.
+   * A gap of the held `channel` (of every held channel when omitted) began:
+   * records its `gapAt` and marks its rows `stale` (P4-B spec §8.4). Marks
+   * are kept per channel; only an applied read lifts them — of a held channel
+   * one that started at or after its next join.
    */
   markDisconnected(channel?: string): void
-  /** Clears the gap mark of `channel`; marks of other channels stay. */
-  clearDisconnected(channel: string): void
+  /**
+   * The receiver holds `channel` (subscribes it). A released channel whose
+   * rows stayed in the store rejoins after a gap: they are marked with its
+   * release epoch.
+   */
+  holdChannel(channel: string): void
+  /**
+   * The receiver released `channel` (unsubscribed or refused): its rows wait
+   * for no signal, a read after the release proves them, and views are no
+   * longer judged by it. Marks stay.
+   */
+  releaseChannel(channel: string): void
+  /** Forgets released channels the store holds no row of (bounded registers). */
+  forgetReleased(): void
+  /**
+   * Sets the flags of the object's views (`spec` — of that view only).
+   * `unconfirmedSince` (a `readEpoch()` value) raises the requirement «the
+   * composition is not confirmed since this epoch» (§8.4): only a successful
+   * read of the view that started at it or later lifts it; a visible view is read
+   * by the mechanism that raised it, an invisible one on becoming visible,
+   * and until then its snapshot shows `needsRefresh`.
+   */
   markViews(
     object: ObjectName,
-    flags: { needsRefresh?: boolean; hasNewRows?: boolean },
+    flags: {
+      needsRefresh?: boolean
+      hasNewRows?: boolean
+      unconfirmedSince?: number
+    },
     spec?: ViewSpec
   ): void
 }

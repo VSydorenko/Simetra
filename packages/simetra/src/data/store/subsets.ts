@@ -8,7 +8,7 @@ import type { Defects } from "./defects"
 import { keyId } from "./epoch"
 import { formOf, type Form, type ObjectState } from "./forms"
 import { includeKeys, refsOf } from "./include"
-import { lazyFieldStale, visibleRow } from "./object-store"
+import { changesObjectOf, lazyFieldStale, visibleRow } from "./object-store"
 import { sectionLinesStale } from "./section-store"
 import {
   diffOwn,
@@ -33,7 +33,7 @@ import {
   withRefs,
   type RowViews,
 } from "./snapshot"
-import { ReadLimiterClosed, type StoreSource } from "./source"
+import { ReadLimiterClosed, settle, type StoreSource } from "./source"
 import type {
   CoreLimits,
   CoreLogEntry,
@@ -57,6 +57,8 @@ import type {
 
 export interface RegistryContext {
   readonly session: Session
+  /** The tab is visible (`suspend` / `resume`, §8.4). */
+  readonly tabVisible: () => boolean
   readonly source: StoreSource
   readonly index: CatalogIndex
   readonly limits: CoreLimits
@@ -78,10 +80,22 @@ export interface RegistryContext {
   readonly defects: Defects
   /** The monotonic clock in ms (`performance.now()`; a test substitutes it). */
   readonly now: () => number
-  /** Reads a view over hydration-only rows that just became visible (§6.6). */
-  readHydrated(s: Subset): void
+  /**
+   * A view just became visible (a subscription or `setVisible(true)`): it is
+   * read if it holds hydration-only rows (§6.6) or its composition is not
+   * confirmed (`unconfirmedSince`, §8.4).
+   */
+  becameVisible(s: Subset): void
+  /**
+   * Reads the view when its requirement «composition not confirmed» is
+   * pending (`requirementPending`, P4-B spec §8.4, item 7): the system
+   * re-read that lifts it.
+   */
+  readRequirement(s: Subset): void
   /** The set of visible views changed: the scheduler re-plans its timer. */
   touchSchedule(): void
+  /** A subset was created: the signal receiver re-plans its channels. */
+  touchSubscriptions(): void
 }
 
 type Timer = ReturnType<typeof setTimeout>
@@ -113,6 +127,12 @@ export interface Subset extends ReaderTarget {
    * and no due time.
    */
   refreshedAt: number | undefined
+  /**
+   * The start epoch of the last read that settled successfully: the proof of
+   * the composition after a gap (`staleComposition`, P4-B spec §8.4);
+   * `refreshedAt` only schedules.
+   */
+  okReadEpoch: number | undefined
   /** The system re-reads started for this view; the model test counts them. */
   rereads: number
   /**
@@ -128,6 +148,13 @@ export interface Subset extends ReaderTarget {
   rereadWaiters: Array<() => void>
   status: "loading" | "ready" | "refreshing" | "error"
   error: CommandError | DataError | undefined
+  /**
+   * The user's refresh is due (the new-rows banner of a system re-read,
+   * §6.5; a failed key read of the receiver). The snapshot's `needsRefresh`
+   * also shows an unconfirmed composition (`unconfirmedSince`, §8.4) of an
+   * invisible view or of any view on a hidden tab: that part is derived, not
+   * stored here.
+   */
   needsRefresh: boolean
   hasNewRows: boolean
   waiters: Array<() => void>
@@ -176,6 +203,8 @@ export interface SubsetRegistry {
   view(spec: ViewSpec): ViewHandle
   preload(spec: ViewSpec, options?: { ttlMs?: number }): Promise<void>
   subsets(): Iterable<Subset>
+  /** A released signal channel was forgotten: its cached object id goes too. */
+  forgetChannel(channel: string): void
   /** The held subset of a form, if any; throws on a refused form as `view` does. */
   find(spec: ViewSpec): Subset | undefined
   /** The validated form of a spec; throws on a refused form as `view` does. */
@@ -233,6 +262,68 @@ export const viewDueAt = (
       ? Number.POSITIVE_INFINITY
       : s.refreshedAt + ageMs
 
+/**
+ * Lifts the view requirement «composition not confirmed since e» (P4-B spec
+ * §8.4, item 7): only a read that confirms the whole view (its load or a
+ * system re-read) started at epoch `readEpoch >= e` lifts it.
+ */
+function liftRequirement(s: Subset, readEpoch: number): void {
+  if (s.unconfirmedSince !== undefined && readEpoch >= s.unconfirmedSince)
+    s.unconfirmedSince = undefined
+}
+
+/** What the requirement rule reads of the session and the tab. */
+export interface RequirementEnv {
+  readonly versions: Pick<Session["versions"], "unavailable">
+  /** The tab is visible: on a hidden tab nothing is sent (§12, Р8). */
+  readonly tabVisible: () => boolean
+}
+
+/**
+ * The view requirement stands and waits for a read nobody else promises
+ * (P4-B spec §8.4, item 7): the view is visible on a visible tab, no read of
+ * it started at the requirement's epoch or later is in flight or queued after
+ * the current one (a `revalidate` tail, a trailing load), it is not in the
+ * failure pause and the session is not out of the discard limit.
+ */
+export function requirementPending(s: Subset, env: RequirementEnv): boolean {
+  return env.tabVisible() && waitsForRead(s, env)
+}
+
+// Те саме без вкладки: вимога чекає читання, яке ніхто інший не обіцяє.
+function waitsForRead(s: Subset, env: RequirementEnv): boolean {
+  const since = s.unconfirmedSince
+  if (since === undefined) return false
+  if (!(s.visible ?? s.listeners.size > 0)) return false
+  if (s.rereadEpochs.some((at) => at >= since)) return false
+  if (s.flight !== undefined && (s.flightEpoch ?? -1) >= since) return false
+  // Хвіст `revalidate` і завантаження-наступник стартують після осідання
+  // поточного читання, тобто з e чи пізніше: вимогу знімуть вони, повтор був
+  // би другим читанням того самого.
+  if (s.rereadTail !== undefined || s.trailing) return false
+  // Збій читання повторює пауза збоїв (планувальник), не негайне коло.
+  if (s.failures > 0) return false
+  // Після межі відкинутих жодне читання не має шансу (§6.2).
+  return !env.versions.unavailable()
+}
+
+/**
+ * The settle point of a read that confirms the whole view (its load or a
+ * system re-read; P4-B spec §8.4, item 7): lifts the requirement when the
+ * read started at its epoch or later; else, when it is pending, the caller
+ * repeats the read (`true`). On a hidden tab the view takes the invisible
+ * branch instead: no repeat, the snapshot derives `needsRefresh` from the
+ * requirement, and `resume()` reads it.
+ */
+export function settleRequirement(
+  s: Subset,
+  readEpoch: number,
+  env: RequirementEnv
+): boolean {
+  liftRequirement(s, readEpoch)
+  return waitsForRead(s, env) && env.tabVisible()
+}
+
 const ACCESS_CHANGED = purgedSnapshot("access-changed")
 
 /**
@@ -281,6 +372,40 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       s.form.object.sections.get(s.form.spec.owner, s.form.spec.section) !==
         undefined)
 
+  // Склад, не підтверджений з епохи e (§8.4, п. 7). Дві умови повтору — дві
+  // межі підтвердження. Завантаження (`lifts`) підтверджує весь вигляд: воно
+  // знімає вимогу, а коли вимога лишилась, бо читання стартувало раніше
+  // за e, і її ніхто інший не прочитає, той самий політ читає ще раз — хоч
+  // вимогу поставила його власна відповідь (П15), хоч хвиля чи приймач, поки
+  // воно летіло (`settleRequirement`; на прихованій вкладці — `needsRefresh`
+  // і читання на `resume()`). Сторінка `loadAfter` / `loadBefore` підтверджує лише себе: вона
+  // повторюється тільки на власне відхилення (П15), а чужу вимогу
+  // завантаженого вигляду читає механізм, що її поставив (`revalidate`).
+  // Покоління й політ ті самі, тож повтор і далі дія, що його почала (окреме
+  // покоління-хвіст правило стабільності судило б як системне читання, що
+  // змінює склад); невидимого вимога чекає видимості. Межа повторів — умова,
+  // не лічильник: кожна спроба стартує не раніше e, а нову вимогу з
+  // відповіді ставить лише надгробок, новіший за її старт, — їх скінченно.
+  // Збій читання сюди не доходить: його повторює пауза збоїв.
+  const requirementEnv: RequirementEnv = {
+    versions: session.versions,
+    tabVisible: ctx.tabVisible,
+  }
+  function confirm(s: Subset, readEpoch: number, lifts: boolean): boolean {
+    if (!lifts) {
+      if (
+        s.unconfirmedSince === undefined ||
+        !s.answerRejected ||
+        !(s.visible ?? s.listeners.size > 0)
+      )
+        return false
+      // Прихована вкладка й тут — гілка невидимого (§12, Р8): без запиту;
+      // `needsRefresh` знімок виводить із вимоги, а `resume()` читає вигляд.
+      return ctx.tabVisible()
+    }
+    return settleRequirement(s, readEpoch, requirementEnv)
+  }
+
   function resolveWaiters(s: Subset) {
     for (const resolve of s.waiters.splice(0)) resolve()
   }
@@ -316,41 +441,48 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         s.readStart = readEpoch
       }
       let discarded = false
-      return readForm(ctx, s, readEpoch, token).then(
+      let again = false
+      const lease = ctx.source.lease()
+      return readForm(ctx, s, readEpoch, token, lease).then(
         (apply) => {
-          session.commit(
-            (scope) => {
-              try {
-                if (!apply(scope)) {
-                  discarded = !session.versions.unavailable()
-                  if (!discarded) {
-                    s.status = "error"
-                    s.error = EPOCH_UNAVAILABLE
+          settle(lease, () =>
+            session.commit(
+              (scope) => {
+                try {
+                  if (!apply(scope)) {
+                    discarded = !session.versions.unavailable()
+                    if (!discarded) {
+                      s.status = "error"
+                      s.error = EPOCH_UNAVAILABLE
+                    }
+                    return
                   }
-                  return
+                  s.loaded = true
+                  s.refreshedAt = startedAt
+                  s.okReadEpoch = readEpoch
+                  s.failures = 0
+                  s.failedAt = undefined
+                  s.status = "ready"
+                  s.error = undefined
+                  s.needsRefresh = false
+                  s.hasNewRows = false
+                  again = confirm(s, readEpoch, true)
+                } catch (error) {
+                  // Дефект застосування — вигляд у `error`, рядки без власника
+                  // прибирає `sweep`; відмова не стає необробленою.
+                  ctx.log({ kind: "listener-failed", error })
+                  s.status = "error"
+                  s.error = errorOf(error)
+                } finally {
+                  ops.sweep(scope)
+                  s.dirty = true
                 }
-                s.loaded = true
-                s.refreshedAt = startedAt
-                s.failures = 0
-                s.failedAt = undefined
-                s.status = "ready"
-                s.error = undefined
-                s.needsRefresh = false
-                s.hasNewRows = false
-              } catch (error) {
-                // Дефект застосування — вигляд у `error`, рядки без власника
-                // прибирає `sweep`; відмова не стає необробленою.
-                ctx.log({ kind: "listener-failed", error })
-                s.status = "error"
-                s.error = errorOf(error)
-              } finally {
-                ops.sweep(scope)
-                s.dirty = true
-              }
-            },
-            token,
-            what
+              },
+              token,
+              what
+            )
           )
+          if (again && token.valid) return attempt()
           if (!discarded || !token.valid) return
           // Цей прохід вичерпав межу (лічильник рухається після commit):
           // повтору не буде, вигляд — `command.unavailable`.
@@ -372,25 +504,26 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             .sleep(pause)
             .then(() => (token.valid ? attempt() : undefined))
         },
-        (error: unknown) => {
-          // Закритий обмежувач — сесію закрито: писати нікуди.
-          if (error instanceof ReadLimiterClosed) return
-          session.commit(
-            () => {
-              // Збій читання вже завантаженого вигляду — лічильник паузи
-              // (§6.7); збій першого завантаження його не веде.
-              if (s.loaded) {
-                s.failures++
-                s.failedAt = startedAt
-              }
-              s.status = "error"
-              s.error = errorOf(error)
-              s.dirty = true
-            },
-            token,
-            what
-          )
-        }
+        (error: unknown) =>
+          settle(lease, () => {
+            // Закритий обмежувач — сесію закрито: писати нікуди.
+            if (error instanceof ReadLimiterClosed) return
+            session.commit(
+              () => {
+                // Збій читання вже завантаженого вигляду — лічильник паузи
+                // (§6.7); збій першого завантаження його не веде.
+                if (s.loaded) {
+                  s.failures++
+                  s.failedAt = startedAt
+                }
+                s.status = "error"
+                s.error = errorOf(error)
+                s.dirty = true
+              },
+              token,
+              what
+            )
+          })
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
@@ -495,65 +628,96 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     const release = () => {
       if (s.paging.get(direction) === generation) s.paging.delete(direction)
     }
+    // Сторінка, яку записала попередня спроба цього читання: повтор за
+    // вимогою «склад не підтверджено» (П15) стає на її місце.
+    let written: number | undefined
     const attempt = (): Promise<void> => {
       const readEpoch = session.epochs.now()
       let discarded = false
+      let again = false
+      const lease = ctx.source.lease()
       return gated(
         ctx,
         readEpoch,
-        (c) => readWindowMore(c, s, readEpoch, token, direction, cursor),
-        s
+        (c) =>
+          readWindowMore(c, s, readEpoch, token, direction, cursor, written),
+        s,
+        lease
       ).then(
         (apply) => {
-          session.commit(
-            (scope) => {
-              try {
-                if (!apply(scope)) {
-                  discarded = !session.versions.unavailable()
-                  if (!discarded) {
-                    s.status = "error"
-                    s.error = EPOCH_UNAVAILABLE
+          settle(lease, () =>
+            session.commit(
+              (scope) => {
+                try {
+                  s.answerRejected = false
+                  const before = s.window?.generation
+                  if (!apply(scope)) {
+                    discarded = !session.versions.unavailable()
+                    if (!discarded) {
+                      s.status = "error"
+                      s.error = EPOCH_UNAVAILABLE
+                    }
+                    return
                   }
-                  return
+                  if (s.status === "error") {
+                    s.status = "ready"
+                    s.error = undefined
+                  }
+                  if (s.window?.generation !== before)
+                    written = s.window?.generation
+                  again = confirm(s, readEpoch, false)
+                } catch (error) {
+                  ctx.log({ kind: "listener-failed", error })
+                  s.status = "error"
+                  s.error = errorOf(error)
+                } finally {
+                  ops.sweep(scope)
+                  s.dirty = true
+                  // Відкинуте читання чи повтор за вимогою ще піде: позначка
+                  // тримає дублікати.
+                  if (!discarded && !again) release()
                 }
-                if (s.status === "error") {
-                  s.status = "ready"
-                  s.error = undefined
-                }
-              } catch (error) {
-                ctx.log({ kind: "listener-failed", error })
-                s.status = "error"
-                s.error = errorOf(error)
-              } finally {
-                ops.sweep(scope)
-                s.dirty = true
-                // Відкинуте читання повториться: позначка тримає дублікати.
-                if (!discarded) release()
-              }
-            },
-            token,
-            what
+              },
+              token,
+              what
+            )
           )
-          if (!discarded || !token.valid) return
+          if (again) {
+            if (token.valid) return attempt()
+            release()
+            return
+          }
+          // Сторінка вимоги не знімає (вона підтверджує лише себе), тож та сама
+          // умова, що й після завантаження (§8.4, п. 7): вимога стоїть, і її
+          // ніхто інший не прочитає — сторінка кличе системне перечитування
+          // вигляду; склад змінює лише воно, як для завантаження. Токен
+          // сторінки тут уже недійсний (позначку знято в `commit`): живість
+          // вигляду й сесії перевіряє саме перечитування.
+          if (!discarded) {
+            ctx.readRequirement(s)
+            return
+          }
+          if (!token.valid) return
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
           return session
             .sleep(pause)
             .then(() => (token.valid ? attempt() : undefined))
         },
-        (error: unknown) => {
-          if (error instanceof ReadLimiterClosed) return
-          session.commit(
-            () => {
-              s.status = "error"
-              s.error = errorOf(error)
-              s.dirty = true
-              release()
-            },
-            token,
-            what
-          )
-        }
+        (error: unknown) =>
+          settle(lease, () => {
+            if (error instanceof ReadLimiterClosed) return
+            session.commit(
+              () => {
+                s.status = "error"
+                s.error = errorOf(error)
+                s.dirty = true
+                release()
+              },
+              token,
+              what
+            )
+          })
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
@@ -783,6 +947,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       settled: false,
       loaded: false,
       refreshedAt: undefined,
+      okReadEpoch: undefined,
       rereads: 0,
       failures: 0,
       failedAt: undefined,
@@ -822,8 +987,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       visible: undefined,
       hydrated: false,
       headerState: undefined,
+      unconfirmedSince: undefined,
+      answerRejected: false,
     }
     subsets.set(form.specKey, s)
+    ctx.touchSubscriptions()
     return s
   }
 
@@ -831,6 +999,34 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
 
   const viewOf = (o: ObjectState, key: Key) =>
     rowViews.get(o.name, key, o.rows.get(key), o.lazyFields)
+
+  // Об'єкт каналу — з топіка, один розбір на канал.
+  const channelObjects = new Map<string, string | undefined>()
+  // Склад вигляду після розриву (§8.4): кожен утримуваний канал його об'єкта
+  // доведено читанням, що успішно осіло й почалось не раніше приєднання після
+  // останнього розриву; відпущений з записом — точково (`channelProven`).
+  // Вимога «склад не підтверджено з e» (§8.4, п. 7) — той самий факт: поки
+  // вона стоїть, склад не підтверджено в будь-якого вигляду, видимого чи ні.
+  // Похідна від епох і вимоги, без власного стану.
+  function staleComposition(s: Subset): boolean {
+    if (s.unconfirmedSince !== undefined) return true
+    const { epochs } = session
+    if (!epochs.gapped()) return false
+    const id = s.form.object.entry.id
+    const read = s.okReadEpoch ?? -1
+    const unproven = (channel: string) => {
+      let object = channelObjects.get(channel)
+      if (object === undefined && !channelObjects.has(channel)) {
+        object = changesObjectOf(channel)
+        channelObjects.set(channel, object)
+      }
+      return object === id && !epochs.channelProven(channel, read)
+    }
+    for (const channel of epochs.heldChannels())
+      if (unproven(channel)) return true
+    for (const channel of epochs.released()) if (unproven(channel)) return true
+    return false
+  }
 
   function computeSnapshot(s: Subset): ViewSnapshot {
     const closed = ctx.closedSnapshot()
@@ -893,8 +1089,16 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       ...(s.error === undefined ? {} : { error: s.error }),
       rows,
       hasNewRows: s.hasNewRows,
-      needsRefresh: s.needsRefresh,
+      // Невидимий вигляд читає непідтверджений склад лише на переході у
+      // видимість, а будь-який на прихованій вкладці — на `resume()` (§8.4,
+      // п. 7): до того знімок це показує. Це вивід із вимоги, не збережена
+      // ознака: її знімає те саме читання, що знімає вимогу.
+      needsRefresh:
+        s.needsRefresh ||
+        (s.unconfirmedSince !== undefined &&
+          (!(s.visible ?? s.listeners.size > 0) || !ctx.tabVisible())),
       ...(ctx.isStale(o.name) ? { isStale: true } : {}),
+      ...(staleComposition(s) ? { staleComposition: true } : {}),
       ...(section === undefined ? {} : { section }),
       ...(spec.kind === "full" || spec.kind === "window"
         ? { strategy: s.strategy, truncated: s.truncated, atEnd: s.atEnd }
@@ -1002,6 +1206,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         const s = acquire(form)
         const entry = { fn: listener }
         s.listeners.add(entry)
+        // Знімок показує непідтверджений склад залежно від видимості.
+        if (s.unconfirmedSince !== undefined) s.dirty = true
         if (s.releaseTimer !== undefined) clearTimeout(s.releaseTimer)
         s.releaseTimer = undefined
         // Перша підписка знімає утримання `preload` і знімка гідратації.
@@ -1010,13 +1216,14 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         for (const timer of s.preloadTimers) clearTimeout(timer)
         s.preloadTimers.clear()
         start(s, true)
-        ctx.readHydrated(s)
+        ctx.becameVisible(s)
         ctx.touchSchedule()
         let done = false
         return () => {
           if (done) return
           done = true
           s.listeners.delete(entry)
+          if (s.unconfirmedSince !== undefined) s.dirty = true
           ctx.touchSchedule()
           if (s.alive && idle(s) && !isClosed()) scheduleRelease(s)
         }
@@ -1164,7 +1371,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       return notify
     },
 
+    forgetChannel(channel) {
+      channelObjects.delete(channel)
+    },
+
     close() {
+      channelObjects.clear()
       // Жодне значення рядка не переживає закриття навіть у пам'яті
       // підмножин чи хендлів, на які ще тримають посилання.
       for (const s of subsets.values()) {

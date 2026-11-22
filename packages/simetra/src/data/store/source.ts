@@ -35,7 +35,7 @@ import {
 import { DataError } from "../errors"
 import { effectiveEpoch } from "./epoch"
 import type { Subset } from "./subsets"
-import type { Key, KnownSnapshot, ServerRow } from "./types"
+import type { Key, KnownSnapshot, ObjectName, ServerRow } from "./types"
 
 // Причини `command.unavailable` частини, яку сервер не виконав (П4-B §4.5).
 const BATCH_ABORTED = "batch-aborted"
@@ -213,8 +213,40 @@ export interface StoreSource extends Omit<CoreSource, "read"> {
   /**
    * `caller` — the view whose read this is, when a view reads (the core's
    * first-snapshot rule re-reads exactly that view, plan B5b-2 Р5а).
+   * `lease` — the write lease of the flight: the read issues it for every
+   * object whose rows its parts may write (§8.4, rule 2).
    */
-  read(parts: readonly CorePart[], caller?: Subset): Promise<CoreReadResult>
+  read(
+    parts: readonly CorePart[],
+    caller?: Subset,
+    lease?: WriteLease
+  ): Promise<CoreReadResult>
+  /** A new write lease for one flight; only {@link settle} releases it. */
+  lease(): WriteLease
+}
+
+/**
+ * The write lease of one flight (P4-B spec §8.4, rule 2): the source issues
+ * it at dispatch, by the parts of each read, for every object whose rows the
+ * answer may write; the entry of a released channel of such an object is
+ * kept while the lease exists. Released once, by {@link settle}.
+ */
+export interface WriteLease {
+  issue(objects: ReadonlySet<ObjectName>): void
+  release(): void
+}
+
+/**
+ * The one settle point of a flight: `apply` writes its answer by one
+ * `commit` (or discards it), then the write lease is released — also when
+ * `apply` throws.
+ */
+export function settle(lease: WriteLease, apply: () => void): void {
+  try {
+    apply()
+  } finally {
+    lease.release()
+  }
 }
 
 /**
@@ -659,7 +691,8 @@ export function createCoreSource(
  */
 export function tracked(
   source: StoreSource,
-  caller?: Subset
+  caller?: Subset,
+  lease?: WriteLease
 ): {
   source: StoreSource
   epochs: Set<string | null>
@@ -672,8 +705,9 @@ export function tracked(
       // Запис — не читання: його епоху шлюз читання не приймає (епоху `run`
       // звіряє write-back); частина `version` епохи не має.
       run: (operation) => source.run(operation),
+      lease: () => source.lease(),
       async read(parts, own) {
-        const result = await source.read(parts, own ?? caller)
+        const result = await source.read(parts, own ?? caller, lease)
         for (const item of result.items)
           if (item.ok && "epoch" in item) epochs.add(item.epoch)
         return result

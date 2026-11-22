@@ -13,7 +13,7 @@ import {
   type IncludeStep,
   type Included,
 } from "./include"
-import { differentEpochs } from "./epoch"
+import { differentEpochs, keyId } from "./epoch"
 import { visibleRow, type PutResult, type RestoredRow } from "./object-store"
 import type { OwnerScope, SectionEntry } from "./section-store"
 import type { Scope, Session } from "./session"
@@ -25,6 +25,7 @@ import {
   rowsOf,
   tracked,
   type StoreSource,
+  type WriteLease,
 } from "./source"
 import {
   EMPTY_WINDOW,
@@ -102,7 +103,7 @@ export interface StoreOps {
 
 /** What the readers need from the core. */
 export interface ReaderContext {
-  readonly session: Pick<Session, "acceptEpoch" | "acceptEpochs">
+  readonly session: Pick<Session, "acceptEpoch" | "acceptEpochs" | "epochs">
   readonly source: StoreSource
   readonly limits: CoreLimits
   readonly strict: boolean
@@ -144,6 +145,26 @@ export interface ReaderTarget {
    * store does not hold; any accepted read of the section drops it.
    */
   headerState: RowState | undefined
+  /**
+   * The composition is not confirmed by a read that started before this
+   * epoch (P4-B spec §8.4, item 7): a create or a delete the server has may
+   * be missing. A freshness mechanism raises it — the rejoin wave and the
+   * signal receiver for every view of the object, П15 (§6.2) for a view
+   * whose answer the store cut (a row rejected for a key tombstone or a
+   * `removed` mark newer than the read). Only a successful load or system
+   * re-read of the view that started at this epoch or later lifts it; a
+   * page read does not (it confirms only its page). Visibility decides only
+   * when that read happens.
+   */
+  unconfirmedSince: number | undefined
+  /**
+   * The answer being applied rejected a row and raised `unconfirmedSince`
+   * (П15). Its reader sets it, a page flight resets it before the write and
+   * repeats on it: a page confirms only itself, so only its own rejection
+   * repeats it; two pages rejected at the same epoch both see the fact, not a
+   * change of the value.
+   */
+  answerRejected: boolean
 }
 
 /** Writes a read result inside one `commit`. */
@@ -164,9 +185,10 @@ export async function gated<C extends ReaderContext>(
   ctx: C,
   readEpoch: number,
   read: (ctx: C) => Promise<Write>,
-  caller?: Subset
+  caller: Subset | undefined,
+  lease: WriteLease
 ): Promise<Apply> {
-  const { source, epochs } = tracked(ctx.source, caller)
+  const { source, epochs } = tracked(ctx.source, caller, lease)
   const write = await read({ ...ctx, source })
   return (scope) => {
     if (ctx.session.acceptEpochs(epochs, readEpoch) === "discard") return false
@@ -515,6 +537,66 @@ export async function fetchFullAgain(
   return fetchFull(ctx, form, token, own, [], accepted)
 }
 
+/**
+ * The epoch a rejected row of a load answer waits for (П15): the `removed`
+ * mark newer than the read — an older read's "row absent" landed after this
+ * read started; a read from its epoch on passes it — or a key tombstone
+ * newer than it (its epoch is internal to the session epochs, so the
+ * current one, which is not lower). A pair
+ * tombstone is not a requirement: the pair is gone for this view (purge,
+ * rights). A purge of the object also re-runs the loads in flight (П12), so
+ * the key tombstones of a pair purge never judge their answers.
+ */
+function rejectedSince(
+  ctx: ReaderContext,
+  o: ObjectState,
+  key: Key,
+  readEpoch: number
+): number | undefined {
+  const e = o.rows.get(key)
+  if (e?.removed !== undefined)
+    return e.removed.epoch > readEpoch ? e.removed.epoch : undefined
+  if (
+    e === undefined &&
+    ctx.session.epochs.buriedSince(keyId(o.name, key), readEpoch)
+  )
+    return ctx.session.epochs.now()
+  return undefined
+}
+
+/**
+ * Raises the view's requirement «composition not confirmed since `since`»
+ * (§8.4, item 7): never lowers a newer one.
+ */
+export function requireConfirmation(s: ReaderTarget, since: number) {
+  s.unconfirmedSince = Math.max(s.unconfirmedSince ?? 0, since)
+}
+
+/** П15: the answer being applied cut the composition. */
+function requireSince(s: ReaderTarget, since: number | undefined) {
+  if (since === undefined) return
+  requireConfirmation(s, since)
+  s.answerRejected = true
+}
+
+/**
+ * A row of a window or `keys` answer the store rejected and holds no slot
+ * of: the view drops it from its composition, so it waits as in `full`
+ * (П15). A rejected row with a `removed` slot stays in the composition, and
+ * the tail re-read of the slot restores it. A card owns its key from the
+ * mount, so its slot is never gone at its answer.
+ */
+function requireDropped(
+  ctx: ReaderContext,
+  s: ReaderTarget,
+  row: ServerRow,
+  readEpoch: number
+) {
+  const o = s.form.object
+  if (o.rows.get(row.key) === undefined)
+    requireSince(s, rejectedSince(ctx, o, row.key, readEpoch))
+}
+
 async function readFull(
   ctx: ReaderContext,
   s: ReaderTarget,
@@ -569,7 +651,11 @@ async function readFull(
       })
       return
     }
-    for (const row of kept) ops.put(scope, o, row, readEpoch, false)
+    for (const row of kept) {
+      if (ops.put(scope, o, row, readEpoch, false) !== "rejected") continue
+      if (form.test(row.values))
+        requireSince(s, rejectedSince(ctx, o, row.key, readEpoch))
+    }
     s.owned = diffOwn(ops, scope, o, s.owned, values.keys())
     // Рядок, чий `put` відхилено, лишається `removed`: його цілі не беремо
     // (§6.2, правило 5). Рядок, якого це читання щойно відновило, тут уже живий.
@@ -605,6 +691,12 @@ interface PageWrite {
   /** The read went past the order's end in its direction. */
   readonly end: boolean
   readonly readEpoch: number
+  /**
+   * The generation of the page an earlier attempt of the same page read
+   * wrote: this answer takes its place instead of joining the edge after it
+   * (a re-attempt for «composition not confirmed», П15).
+   */
+  readonly instead?: number
 }
 
 /**
@@ -625,12 +717,23 @@ function writePage(
   const o = form.object
   const prev = s.window ?? EMPTY_WINDOW
   const replace = page.position === "replace"
-  for (const row of page.rows) ops.put(scope, o, row, page.readEpoch, false)
+  for (const row of page.rows)
+    if (ops.put(scope, o, row, page.readEpoch, false) === "rejected")
+      requireDropped(ctx, s, row, page.readEpoch)
+  // Повтор тієї самої сторінки стає на місце сторінки свого попереднього
+  // запису: рядок, що бракував, лягає в її межах, а не окремою сторінкою за
+  // краєм.
+  const at = replace
+    ? -1
+    : prev.pages.findIndex((p) => p.generation === page.instead)
+  const others = at < 0 ? prev.pages : prev.pages.filter((_, i) => i !== at)
+  const instead = new Set(at < 0 ? [] : prev.pages[at]!.keys)
+  const held = at < 0 ? s.layoutSet : new Set(keysOfPages(others))
   const fresh = replace
     ? [...page.rows]
-    : page.rows.filter((row) => !s.layoutSet.has(row.key))
+    : page.rows.filter((row) => !held.has(row.key))
   s.owned = diffOwn(ops, scope, o, s.owned, [
-    ...(replace ? [] : s.owned),
+    ...(replace ? [] : [...s.owned].filter((key) => !instead.has(key))),
     ...fresh.map((row) => row.key),
   ])
   const alive = page.rows.filter(
@@ -656,9 +759,11 @@ function writePage(
     keys.length === 0 ? [] : [{ keys, lower: page.lower(fresh[0]), generation }]
   const pages = replace
     ? added
-    : page.position === "append"
-      ? [...prev.pages, ...added]
-      : [...added, ...prev.pages]
+    : at >= 0
+      ? [...others.slice(0, at), ...added, ...others.slice(at)]
+      : page.position === "append"
+        ? [...prev.pages, ...added]
+        : [...added, ...prev.pages]
   // Прочитане, що нічого не додало (усі рядки вже у вікні), зсуває курсор
   // напрямку на серверну позицію, інакше наступне читання повторило б запит.
   const direction = page.position === "prepend" ? "before" : "after"
@@ -772,7 +877,8 @@ export async function readWindowMore(
   readEpoch: number,
   token: GenerationToken,
   direction: "after" | "before",
-  cursor: WindowCursor | undefined
+  cursor: WindowCursor | undefined,
+  instead?: number
 ): Promise<Write> {
   const { form } = s
   const fetched = await fetchPage(
@@ -812,6 +918,7 @@ export async function readWindowMore(
               },
       end: fetched.end,
       readEpoch,
+      ...(instead === undefined ? {} : { instead }),
     })
 }
 
@@ -830,7 +937,8 @@ async function readKeysForm(
   return (scope) => {
     const got = new Set<Key>()
     for (const row of rows) {
-      ops.put(scope, o, row, readEpoch, false)
+      if (ops.put(scope, o, row, readEpoch, false) === "rejected")
+        requireDropped(ctx, s, row, readEpoch)
       got.add(row.key)
     }
     // Перечитування за ключем без рядка — `removed` на місці (§6.2, правило 5).
@@ -967,9 +1075,16 @@ export function readForm(
   ctx: ReaderContext,
   s: Subset,
   readEpoch: number,
-  token: GenerationToken
+  token: GenerationToken,
+  lease: WriteLease
 ): Promise<Apply> {
-  return gated(ctx, readEpoch, (c) => readFormWrite(c, s, readEpoch, token), s)
+  return gated(
+    ctx,
+    readEpoch,
+    (c) => readFormWrite(c, s, readEpoch, token),
+    s,
+    lease
+  )
 }
 
 /** {@link readForm} without the epoch gate: the caller gates the whole read. */

@@ -104,6 +104,8 @@ export type DefectFlag =
   | "rights-pass-by-diff"
   /** The rights pass purges every stored pair of an object that lost any pair. */
   | "rights-pass-purges-allowed"
+  /** A purge of a pair leaves the open signal batch of the pair: its keys are read afterwards. */
+  | "receiver-purge-keeps-batch"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

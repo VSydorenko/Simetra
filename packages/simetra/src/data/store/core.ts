@@ -1,7 +1,12 @@
-import { FILTER_IN_MAX, READ_LIMIT_MAX, type CatalogIndex } from "simetra/model"
+import {
+  FILTER_IN_MAX,
+  READ_LIMIT_MAX,
+  type CatalogIndex,
+  type SignalTransport,
+} from "simetra/model"
 import type { DefectFlag } from "./defects"
 import { fieldInfoOf, filterCollator } from "./filter"
-import { keyId, pairId, type PairBarrier } from "./epoch"
+import { keyId, pairId, type Epochs, type PairBarrier } from "./epoch"
 import { createObjectStore } from "./object-store"
 import {
   createOverlay,
@@ -23,16 +28,29 @@ import {
   ReadLimiterClosed,
   readKeys,
   requestOf,
+  settle,
   tracked,
   type CorePart,
   type CoreReadItem,
+  type CoreReadResult,
   type CoreSource,
   type StoreSource,
 } from "./source"
 import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
+import {
+  REJOIN_JITTER_MS,
+  createReceiver,
+  type Receiver,
+  type SignalRead,
+} from "./receiver"
 import { createScheduler } from "./scheduler"
-import { createRegistry, type Subset, type SubsetRegistry } from "./subsets"
+import {
+  createRegistry,
+  requirementPending,
+  type Subset,
+  type SubsetRegistry,
+} from "./subsets"
 import {
   activeViews,
   createWriter,
@@ -40,6 +58,7 @@ import {
   hasDueViews,
   nextViewDue,
   revalidate,
+  revalidateTargets,
   revalidateHolders,
   revalidateHydrated,
   revalidateNarrowed,
@@ -228,6 +247,12 @@ export interface CoreSession {
    * requests leave in one microtask.
    */
   endHydration(): void
+  /**
+   * Internal, for the runtime: stops the signal receiver at once, even
+   * inside a `commit` (where `close` is deferred), so it never subscribes
+   * on a transport the runtime has closed. Does nothing without a receiver.
+   */
+  stopSignals(): void
   /** Whether the host shows the application (`resume` sets, `suspend` clears). */
   readonly visible: boolean
   /** Marks the application hidden; idempotent, sends nothing. */
@@ -293,6 +318,14 @@ export interface CoreInspection {
    * replacement: the model reads the store the pass is about to judge.
    */
   watchRightsPass(listener: () => void): void
+  /**
+   * Subscribes to the reads the signal receiver starts: a batch acting on an
+   * object and a rejoin wave re-reading it. The model judges each by the
+   * signals and joins it sent (no request of a purged pair's signal).
+   */
+  watchSignalReads(
+    listener: (object: ObjectName, read: SignalRead) => void
+  ): void
   /** The mutations in the journal of own mutations. */
   mutations(): JournalInspection[]
   /** The plans the scheduler made (calls of one turn merge into one). */
@@ -370,8 +403,12 @@ export function limitsOf(
  */
 export interface CoreInternals {
   readonly objects: ReadonlyMap<ObjectName, ObjectState>
+  /** The session epochs: the channel registers of the signal receiver (§8.4). */
+  readonly epochs: Epochs
   readonly ops: StoreOps
   readonly registry: SubsetRegistry
+  /** Write leases on rows of the object not yet settled (§8.4, rule 2). */
+  readonly pendingWrites: (object: ObjectName) => number
 }
 
 export function createCore(options: {
@@ -394,6 +431,12 @@ export function createCore(options: {
    * the `rights` part; without it nothing about rights is read or applied.
    */
   rightsSnapshot?: boolean
+  /**
+   * The signal transport of the runtime's subject (P4-B spec §8.5); with
+   * `rightsSnapshot` the core creates the signal receiver over it. The
+   * runtime owns the transport and closes it; the core only unsubscribes.
+   */
+  signals?: SignalTransport
   /** Called, outside any `commit`, when a snapshot replaces the current one. */
   onRightsReplaced?: (prev: RightsState | undefined, next: RightsState) => void
   /**
@@ -403,6 +446,12 @@ export function createCore(options: {
    * closes itself here; a core left open closes with `session-changed`.
    */
   onSessionChanged?: () => void
+  /**
+   * Called, outside any `commit`, when the signal transport refused the
+   * connection for good (`SignalError.final`). The runtime closes itself
+   * here; a core left open closes with `connection-refused`.
+   */
+  onConnectionRefused?: () => void
   /** The monotonic clock in ms; tests substitute it, hosts never do. */
   now?: () => number
 }): CoreSession {
@@ -422,6 +471,11 @@ export function createCore(options: {
   const defects = new Set<DefectFlag>()
   let remarkListener: ((object: ObjectName, key: Key) => void) | undefined
   let rightsPassListener: (() => void) | undefined
+  let signalReadListener:
+    ((object: ObjectName, read: SignalRead) => void) | undefined
+  // Приймач сигналів: створюється після `writerContext`, а реєстр і потік
+  // `commit` кличуть його вже з його допомогою.
+  let receiver: Receiver | undefined
   const session = createSession({
     subject: options.subject,
     limits,
@@ -457,115 +511,176 @@ export function createCore(options: {
     },
     onRights: (item) => acceptRights(item),
   })
+  // Оренди запису за об'єктами (§8.4, правило 2): запис відпущеного каналу
+  // тримається, поки існує оренда на запис рядків його об'єкта. Видає її
+  // читання в мить відправки — за частинами (план читання); знімає лише
+  // `settle` польоту, що записав відповідь одним `commit` чи відкинув її.
+  const pendingWrites = new Map<ObjectName, number>()
   const source: StoreSource = {
     close: () => batcher.close(),
     refuse: (object) => batcher.refuse?.(object),
     run: (operation) => batcher.run(operation),
-    async read(parts, caller) {
-      // Старт читання частин виклику: правило першого знімка (Р5а) порівнює
-      // його з епохою застосування знімка.
-      const startEpoch = session.epochs.now()
-      // Частина без об'єкта (`version`) несумісності не має.
-      const isLive = (part: (typeof parts)[number]) => {
-        if (part.type !== "query") return true
-        const { kind, name } = part.query.object
-        return !staleObjects.has(`${kind}.${name}`)
+    lease: () => {
+      let held: ObjectName[] | undefined = []
+      return {
+        issue(objects) {
+          // Читання після осідання польоту писало б без оренди.
+          if (held === undefined)
+            throw new Error("a write lease is issued after its release")
+          for (const object of objects) {
+            pendingWrites.set(object, (pendingWrites.get(object) ?? 0) + 1)
+            held.push(object)
+          }
+        },
+        release() {
+          if (held === undefined) return
+          for (const object of held) {
+            const left = pendingWrites.get(object)! - 1
+            if (left > 0) pendingWrites.set(object, left)
+            else pendingWrites.delete(object)
+          }
+          held = undefined
+        },
       }
-      const refused = (part: (typeof parts)[number]): CoreReadItem => {
-        return {
-          ok: false,
-          error: {
-            code: "command.stale-client",
-            object: (part as Extract<typeof part, { type: "query" }>).query
-              .object,
-          },
-        }
+    },
+    read: (parts, caller, lease) => {
+      const plan = writesOf(parts)
+      if (plan.size > 0) {
+        // Шлях, що пише рядки без оренди, — дефект: запис каналу забувся б.
+        if (lease === undefined)
+          return Promise.reject(
+            new Error("a read of rows without a write lease")
+          )
+        lease.issue(plan)
       }
-      // Несумісна ціль `include` (§10) не просить `include`: ціль — не об'єкт
-      // частини, її мітку звіряємо окремо (Р8, І9); рядки, що вже прийшли,
-      // відкидає `applyIncluded` на мить застосування.
-      const targetOf = (part: (typeof parts)[number], attribute: string) => {
-        if (part.type !== "query") return undefined
-        const { kind, name } = part.query.object
-        const ref = index.byRef
-          .get(`${kind}.${name}`)
-          ?.attributes.find((a) => a.name === attribute)?.ref
+      return dispatch(parts, caller)
+    },
+  }
+  // Об'єкти, рядки яких можуть записати частини читання: об'єкт частини й
+  // цілі її `include`.
+  const writesOf = (parts: readonly CorePart[]): Set<ObjectName> => {
+    const objects = new Set<ObjectName>()
+    for (const part of parts) {
+      if (part.type !== "query") continue
+      const { kind, name } = part.query.object
+      const object = `${kind}.${name}` as ObjectName
+      objects.add(object)
+      const entry = index.byRef.get(object)
+      const include = "include" in part.query ? part.query.include : undefined
+      for (const attribute of include ?? []) {
+        const ref = entry?.attributes.find((a) => a.name === attribute)?.ref
         const target =
           ref === undefined ? undefined : index.byId.get(ref.object)
-        return target === undefined
-          ? undefined
-          : `${target.kind}.${target.name}`
+        if (target !== undefined)
+          objects.add(`${target.kind}.${target.name}` as ObjectName)
       }
-      const withLiveInclude = (part: (typeof parts)[number]) => {
-        if (part.type !== "query" || !("include" in part.query)) return part
-        const { include, ...rest } = part.query
-        const live = (include ?? []).filter((attribute) => {
-          const target = targetOf(part, attribute)
-          return target === undefined || !staleObjects.has(target)
-        })
-        return {
-          ...part,
-          query: live.length === 0 ? rest : { ...rest, include: live },
-        } as typeof part
+    }
+    return objects
+  }
+  async function dispatch(
+    parts: readonly CorePart[],
+    caller: Subset | undefined
+  ): Promise<CoreReadResult> {
+    // Старт читання частин виклику: правило першого знімка (Р5а) порівнює
+    // його з епохою застосування знімка.
+    const startEpoch = session.epochs.now()
+    // Частина без об'єкта (`version`) несумісності не має.
+    const isLive = (part: (typeof parts)[number]) => {
+      if (part.type !== "query") return true
+      const { kind, name } = part.query.object
+      return !staleObjects.has(`${kind}.${name}`)
+    }
+    const refused = (part: (typeof parts)[number]): CoreReadItem => {
+      return {
+        ok: false,
+        error: {
+          code: "command.stale-client",
+          object: (part as Extract<typeof part, { type: "query" }>).query
+            .object,
+        },
       }
-      const sent = parts.map(isLive)
-      const forward = parts.filter((_, slot) => sent[slot]).map(withLiveInclude)
-      // Перший пакет рантайму несе `rights` без `known` (Р1); частину
-      // додає ядро, тож її результат викликач не бачить.
-      const injected =
-        rightsEnabled &&
-        !rightsFirstSent &&
-        !forward.some((part) => part.type === "rights")
-      if (injected) forward.unshift({ type: "rights" })
-      const rightsAt = forward.findIndex((part) => part.type === "rights")
-      let answered: { items: CoreReadItem[] } = { items: [] }
-      if (rightsAt < 0) {
-        if (forward.length > 0) answered = await batcher.read(forward)
-      } else {
-        // Знімок один за раз: відправка бере `rightsEpoch` і `known` (Р4).
-        // `rightsEpoch` лише впорядковує знімки між собою, а частина `rights`
-        // летить одна й черга слотів — FIFO, тож епоха постановки дає той
-        // самий порядок, що й епоха відправки. Строк (Р2) — інша річ: його
-        // рахує `onRightsSent` збирача від справжньої відправки.
-        const sentRights = {
-          token: session.token(),
-          epoch: session.epochs.next(),
-          known: rights?.rightsVersion,
-        }
-        forward[rightsAt] =
-          sentRights.known === undefined
-            ? { type: "rights" }
-            : { type: "rights", known: sentRights.known }
-        rightsFirstSent = true
-        rightsFlying = true
-        rightsSent = sentRights
-        try {
-          answered = await batcher.read(forward)
-        } catch (error) {
-          if (sentRights.token.valid) log({ kind: "rights-failed" })
-          throw error
-        } finally {
-          rightsFlying = false
-          // Відповідь без заміни знімка нічого не комітить: строк, що повернувся
-          // після польоту, планувальнику треба показати самому.
-          if (!defects.has("scheduler-no-reschedule")) scheduler.request()
-          if (rightsTail) {
-            rightsTail = false
-            core.requestRights()
-          }
-        }
-        if (injected) answered = { items: answered.items.slice(1) }
-      }
-      let next = 0
-      const items = parts.map((part, slot): CoreReadItem => {
-        if (!sent[slot]) return refused(part)
-        const item = answered.items[next++]!
-        // Об'єкт став несумісним, поки відповідь летіла: вона вже не діє.
-        return isLive(part) ? item : refused(part)
+    }
+    // Несумісна ціль `include` (§10) не просить `include`: ціль — не об'єкт
+    // частини, її мітку звіряємо окремо (Р8, І9); рядки, що вже прийшли,
+    // відкидає `applyIncluded` на мить застосування.
+    const targetOf = (part: (typeof parts)[number], attribute: string) => {
+      if (part.type !== "query") return undefined
+      const { kind, name } = part.query.object
+      const ref = index.byRef
+        .get(`${kind}.${name}`)
+        ?.attributes.find((a) => a.name === attribute)?.ref
+      const target = ref === undefined ? undefined : index.byId.get(ref.object)
+      return target === undefined ? undefined : `${target.kind}.${target.name}`
+    }
+    const withLiveInclude = (part: (typeof parts)[number]) => {
+      if (part.type !== "query" || !("include" in part.query)) return part
+      const { include, ...rest } = part.query
+      const live = (include ?? []).filter((attribute) => {
+        const target = targetOf(part, attribute)
+        return target === undefined || !staleObjects.has(target)
       })
-      if (rightsEnabled) noteAnswered(parts, items, startEpoch, caller)
-      return { items }
-    },
+      return {
+        ...part,
+        query: live.length === 0 ? rest : { ...rest, include: live },
+      } as typeof part
+    }
+    const sent = parts.map(isLive)
+    const forward = parts.filter((_, slot) => sent[slot]).map(withLiveInclude)
+    // Перший пакет рантайму несе `rights` без `known` (Р1); частину
+    // додає ядро, тож її результат викликач не бачить.
+    const injected =
+      rightsEnabled &&
+      !rightsFirstSent &&
+      !forward.some((part) => part.type === "rights")
+    if (injected) forward.unshift({ type: "rights" })
+    const rightsAt = forward.findIndex((part) => part.type === "rights")
+    let answered: { items: CoreReadItem[] } = { items: [] }
+    if (rightsAt < 0) {
+      if (forward.length > 0) answered = await batcher.read(forward)
+    } else {
+      // Знімок один за раз: відправка бере `rightsEpoch` і `known` (Р4).
+      // `rightsEpoch` лише впорядковує знімки між собою, а частина `rights`
+      // летить одна й черга слотів — FIFO, тож епоха постановки дає той
+      // самий порядок, що й епоха відправки. Строк (Р2) — інша річ: його
+      // рахує `onRightsSent` збирача від справжньої відправки.
+      const sentRights = {
+        token: session.token(),
+        epoch: session.epochs.next(),
+        known: rights?.rightsVersion,
+      }
+      forward[rightsAt] =
+        sentRights.known === undefined
+          ? { type: "rights" }
+          : { type: "rights", known: sentRights.known }
+      rightsFirstSent = true
+      rightsFlying = true
+      rightsSent = sentRights
+      try {
+        answered = await batcher.read(forward)
+      } catch (error) {
+        if (sentRights.token.valid) log({ kind: "rights-failed" })
+        throw error
+      } finally {
+        rightsFlying = false
+        // Відповідь без заміни знімка нічого не комітить: строк, що повернувся
+        // після польоту, планувальнику треба показати самому.
+        if (!defects.has("scheduler-no-reschedule")) scheduler.request()
+        if (rightsTail) {
+          rightsTail = false
+          core.requestRights()
+        }
+      }
+      if (injected) answered = { items: answered.items.slice(1) }
+    }
+    let next = 0
+    const items = parts.map((part, slot): CoreReadItem => {
+      if (!sent[slot]) return refused(part)
+      const item = answered.items[next++]!
+      // Об'єкт став несумісним, поки відповідь летіла: вона вже не діє.
+      return isLive(part) ? item : refused(part)
+    })
+    if (rightsEnabled) noteAnswered(parts, items, startEpoch, caller)
+    return { items }
   }
 
   // Знімок прав сесії (Р1, Р4, Р8): стан і одноразовий запит у польоті.
@@ -740,6 +855,7 @@ export function createCore(options: {
     } catch (error) {
       log({ kind: "listener-failed", error })
     }
+    receiver?.snapshotReplaced()
   }
 
   // Правило втрати доступу й звуження на заміні знімка (§6.2 правило 4):
@@ -996,13 +1112,17 @@ export function createCore(options: {
     },
   }
 
+  // Один збирач фільтрів на рантайм: реєстр і приймач сигналів ділять кеш
+  // скомпільованих фільтрів (він ключується за ідентичністю збирача).
+  const collator = filterCollator()
   const registry = createRegistry({
     session,
+    tabVisible: () => visible,
     source,
     index,
     limits,
     strict: options.strict ?? false,
-    filterCollator: filterCollator(),
+    filterCollator: collator,
     // Порядок `full` — мовою користувача (Рд29).
     userCollator: new Intl.Collator(),
     log,
@@ -1015,8 +1135,10 @@ export function createCore(options: {
     closedSnapshot: () => closed,
     defects,
     now,
-    readHydrated: (s) => readHydrated(s),
+    becameVisible: (s) => becameVisible(s),
+    readRequirement: (s) => readRequirement(s),
     touchSchedule: () => scheduler.request(),
+    touchSubscriptions: () => receiver?.touch(),
   })
 
   // ------------------------------------------------------------ знімок SSR
@@ -1063,37 +1185,39 @@ export function createCore(options: {
     const gen = tail.gen
     const token = session.childToken(() => tail.gen === gen)
     const readEpoch = session.epochs.now()
-    const read = tracked(source)
+    const lease = source.lease()
+    const read = tracked(source, undefined, lease)
     readKeys(read.source, o.entry, keys, {
       keysPerRequest: limits.keysPerRequest,
     })
       .then(
-        (rows) => {
-          session.commit(
-            (scope) => {
-              // Відкинута відповідь не пише нічого; без автоповтору
-              // (§6.3) ключі перечитує вигляд.
-              if (session.acceptEpochs(read.epochs, readEpoch) === "discard")
-                return
-              const got = new Set<Key>()
-              for (const row of rows) {
-                got.add(row.key)
-                // Ключ без запису — і перший запис без колонки скоупу (П11),
-                // недосяжний: проєкція завжди несе scopeColumn (§10).
-                if ((o.rows.get(row.key)?.owners ?? 0) > 0)
-                  ops.put(scope, o, row, readEpoch, false)
-              }
-              for (const key of keys) {
-                if (!got.has(key) && (o.rows.get(key)?.owners ?? 0) > 0)
-                  ops.remove(scope, o, key, readEpoch)
-              }
-            },
-            token,
-            `tail ${o.name}`
-          )
-        },
+        (rows) =>
+          settle(lease, () =>
+            session.commit(
+              (scope) => {
+                // Відкинута відповідь не пише нічого; без автоповтору
+                // (§6.3) ключі перечитує вигляд.
+                if (session.acceptEpochs(read.epochs, readEpoch) === "discard")
+                  return
+                const got = new Set<Key>()
+                for (const row of rows) {
+                  got.add(row.key)
+                  // Ключ без запису — і перший запис без колонки скоупу (П11),
+                  // недосяжний: проєкція завжди несе scopeColumn (§10).
+                  if ((o.rows.get(row.key)?.owners ?? 0) > 0)
+                    ops.put(scope, o, row, readEpoch, false)
+                }
+                for (const key of keys) {
+                  if (!got.has(key) && (o.rows.get(key)?.owners ?? 0) > 0)
+                    ops.remove(scope, o, key, readEpoch)
+                }
+              },
+              token,
+              `tail ${o.name}`
+            )
+          ),
         // Без автоповтору (§6.3): рядок лишається `stale` до наступного читання.
-        () => {}
+        () => settle(lease, () => {})
       )
       .finally(() => {
         tail.flying = undefined
@@ -1172,8 +1296,10 @@ export function createCore(options: {
     tails.clear()
     purges.clear()
     scheduled.clear()
+    wave = undefined
     scheduler.stop()
     staleObjects.clear()
+    receiver?.stop()
   })
 
   // Хвіст у польоті під час purge: його відповідь могла нести рядок, якого на
@@ -1232,6 +1358,95 @@ export function createCore(options: {
       for (const s of views) held.retry.views.add(s)
     }
     scheduler.request()
+  }
+
+  // Хвиля приєднання (§8.4, Р10): об'єкти каналів, що (пере)підписались,
+  // перечитуються разом, з одним строком на хвилю — рестарт Centrifugo не дає
+  // шквалу. Хвиля лише планує: свіжість після розриву доводять епохи
+  // (`Epochs.channelProven`) у мить застосування відповіді, а не хвиля.
+  // Строк хвилі — доданок `schedulerDue`, тож власного таймера немає: на
+  // прихованій вкладці хвилю бере `resume()`.
+  let wave: { at: number; readonly objects: Set<ObjectName> } | undefined
+  let lastWaveAt: number | undefined
+  function joinWave(object: ObjectName) {
+    if (!session.token().valid || staleObjects.has(object)) return
+    if (wave === undefined) {
+      const at = Math.floor(Math.random() * REJOIN_JITTER_MS) + now()
+      wave = {
+        // Нова хвиля не раніше ніж через вікно після попередньої: флапання
+        // не дає запитів частіше.
+        at:
+          lastWaveAt === undefined
+            ? at
+            : Math.max(at, lastWaveAt + REJOIN_JITTER_MS),
+        objects: new Set(),
+      }
+    }
+    wave.objects.add(object)
+    scheduler.request()
+  }
+
+  // Спрацювання хвилі — один синхронний хід (збирач зливає читання в один
+  // пакет). Позначок хвиля не знімає: їх знімає застосована відповідь.
+  // Кожному вигляду об'єкта — видимому й невидимому — вимога «склад не
+  // підтверджено з миті спрацювання» (§8.4, п. 7); видимість вирішує лише,
+  // коли читати: видимий — зараз, невидимий — на переході у видимість.
+  // Шлях, що читання не зробив (хвіст вигляду, який тим часом сховали), її
+  // просто не знімає.
+  function fireWave() {
+    const fired = wave
+    wave = undefined
+    if (fired === undefined || !session.token().valid) return
+    const token = session.token()
+    lastWaveAt = now()
+    // Наступна епоха: читання хвилі стартують з неї, а ті, що вже в польоті, —
+    // раніше, тож вимоги не знімуть.
+    const since = session.epochs.next()
+    core.requestVersion()
+    core.requestRights()
+    const marked: ObjectName[] = []
+    let reads = 0
+    let readViews = 0
+    for (const object of fired.objects) {
+      if (staleObjects.has(object)) continue
+      const views = activeViews(writerContext, object)
+      marked.push(object)
+      if (views.some((v) => v.visible)) {
+        readViews += views.filter((v) => v.visible).length
+        reads++
+        signalReadListener?.(object, {
+          by: "wave",
+          views: revalidateTargets(writerContext, object, {
+            visibleOnly: true,
+          }),
+        })
+        revalidate(writerContext, object, { visibleOnly: true }).catch(
+          (error: unknown) => log({ kind: "listener-failed", error })
+        )
+      }
+    }
+    // Сплеск (Р13): хвиля, що справді перечитує; без читань запису немає.
+    if (reads > 0)
+      log({
+        kind: "revalidate-burst",
+        objects: reads,
+        views: readViews,
+      })
+    if (marked.length > 0)
+      core.commit((w) => {
+        for (const object of marked)
+          w.markViews(object, { unconfirmedSince: since })
+      }, token)
+  }
+
+  // Рантайм чи ядро закривається, коли транспорт відмовив назавжди (`final`).
+  function connectionRefused() {
+    try {
+      options.onConnectionRefused?.()
+    } catch (error) {
+      log({ kind: "listener-failed", error })
+    }
+    if (session.token().valid) core.close("connection-refused")
   }
 
   // Бере строки, що настали, й перечитує їх зараз (тільки на видимій вкладці:
@@ -1317,6 +1532,39 @@ export function createCore(options: {
     return false
   }
 
+  // Вигляд став видимим: читається, якщо тримає рядки лише з гідратації чи
+  // його склад не підтверджено (`unconfirmedSince`, §8.4, п. 7) — читання, як
+  // на монтуванні; вимогу знімає лише його успіх. `needsRefresh` банера нових
+  // рядків лишається за `refresh()`.
+  function becameVisible(s: Subset) {
+    readHydrated(s)
+    readRequirement(s)
+  }
+
+  // Знімок виводить `needsRefresh` з вимоги й видимості вкладки (§8.4,
+  // п. 7): перехід вкладки його змінює й без запису.
+  function touchRequirements() {
+    for (const s of registry.subsets())
+      if (s.unconfirmedSince !== undefined) s.dirty = true
+  }
+
+  const requirementEnv = {
+    versions: session.versions,
+    tabVisible: () => visible,
+  }
+
+  // Одна умова з точками осідання (§8.4, п. 7): вимога стоїть, вигляд видимий
+  // на видимій вкладці, і її ніхто інший не прочитає — ні читання з епохи
+  // вимоги в польоті чи в черзі, ні пауза збоїв, ні межа відкинутих.
+  function readRequirement(s: Subset) {
+    if (!s.alive || s.purged || !s.loaded) return
+    if (staleObjects.has(s.form.object.name)) return
+    if (!requirementPending(s, requirementEnv)) return
+    singleFlight(writerContext, s.form.object, [s], {
+      visibleOnly: false,
+    }).done.catch((error: unknown) => log({ kind: "listener-failed", error }))
+  }
+
   function readHydrated(s: Subset) {
     if (hydration !== "ended") return
     if (defects.has("late-hydrated-not-reread")) return
@@ -1339,7 +1587,9 @@ export function createCore(options: {
   // Запит скидає `scheduled`: після межі відкинутих жодне відкладене читання
   // не має виконатися (§6.2).
   function dropDeferredWhenUnavailable() {
-    if (session.versions.unavailable()) scheduled.clear()
+    if (!session.versions.unavailable()) return
+    scheduled.clear()
+    wave = undefined
   }
 
   function schedulerDue(): number | undefined {
@@ -1363,6 +1613,8 @@ export function createCore(options: {
     const rightsAt = rightsDueAt()
     if (rightsAt !== undefined && (due === undefined || rightsAt < due))
       due = rightsAt
+    if (wave !== undefined && (due === undefined || wave.at < due))
+      due = wave.at
     return due
   }
 
@@ -1402,6 +1654,8 @@ export function createCore(options: {
         )
           read = true
       if (runDue()) read = true
+      if (wave !== undefined && wave.at <= now()) fireWave()
+      receiver?.tick()
       if (read) lastTickAt = now()
       // Знімок має власний строк; без видимих виглядів пакет несе лише його.
       const rightsAt = rightsDueAt()
@@ -1426,6 +1680,8 @@ export function createCore(options: {
 
   const writerContext: WriterContext = {
     session,
+    readRequirement: (s) => readRequirement(s),
+    tabVisible: () => visible,
     source,
     limits,
     strict: options.strict ?? false,
@@ -1438,14 +1694,34 @@ export function createCore(options: {
     objects,
     purges,
     invalidateTail,
+    onPurge: (object, target) => receiver?.purged(object, target),
     defects,
     now,
     hiddenKeys,
+    pendingWrites: (object) => pendingWrites.get(object) ?? 0,
     schedule,
     journal: {
       erase: (object, key) => overlay.erase(object, key),
       eraseScope: (object, scope) => overlay.eraseScope(object, scope),
     },
+  }
+
+  if (options.signals !== undefined && rightsEnabled) {
+    receiver = createReceiver({
+      transport: options.signals,
+      index,
+      writer: writerContext,
+      rights: () => rights,
+      visible: () => visible,
+      commit: (fn, token) => core.commit(fn, token),
+      filterCollator: collator,
+      joinWave,
+      requestVersion: () => core.requestVersion(),
+      connectionRefused,
+      signalReads: () => signalReadListener,
+    })
+    // Кожен `commit` міг змінити активні вигляди чи скоупи їхніх рядків.
+    session.onFlush(() => receiver?.touch())
   }
 
   // ------------------------------------------------------------ версія
@@ -1705,18 +1981,29 @@ export function createCore(options: {
     get visible() {
       return visible
     },
+    stopSignals: () => receiver?.stop(),
     suspend() {
       visible = false
+      touchRequirements()
       scheduler.suspend()
     },
     resume() {
       visible = true
+      touchRequirements()
       scheduler.request()
       if (!session.token().valid) return
       // Строки, що настали на прихованій вкладці (перемикання епохи, повтор
       // відкинутої відповіді), беруться незалежно від `minAgeMs`: їхні рядки
       // вже `stale`, а свіжість тут не міра.
       runDue()
+      // Хвиля, що чекала на прихованій вкладці, іде першою: звірка нижче вигляд
+      // у польоті не бере. Вікно `REJOIN_JITTER_MS` після попередньої хвилі тут не
+      // діє: воно береже від шквалу подій, а `resume()` — одна подія вкладки.
+      fireWave()
+      // Вимога, що лишилась на прихованій вкладці (`needsRefresh` замість
+      // повтору, §8.4, п. 7), — читання на `resume()`, після строків і хвилі:
+      // вигляд, який вони вже читають з епохи вимоги, вдруге не читається.
+      for (const s of registry.subsets()) readRequirement(s)
       // Злиття: подвійний сигнал повернення (focus + visibilitychange) — одна
       // звірка; відлік іде від останнього прийнятого, а не від кожного виклику.
       const at = now()
@@ -1733,7 +2020,7 @@ export function createCore(options: {
       scheduler.request()
       if (!visible) return
       const s = registry.find(spec)
-      if (s !== undefined) readHydrated(s)
+      if (s !== undefined) becameVisible(s)
     },
     revalidate: (object, revalidateOptions) =>
       revalidate(writerContext, object, revalidateOptions),
@@ -1771,7 +2058,13 @@ export function createCore(options: {
     defects,
   })
 
-  internals.set(core, { objects, ops, registry })
+  internals.set(core, {
+    objects,
+    ops,
+    registry,
+    epochs: session.epochs,
+    pendingWrites: writerContext.pendingWrites,
+  })
 
   inspections.set(core, {
     defects,
@@ -1780,6 +2073,9 @@ export function createCore(options: {
     },
     watchRightsPass(listener) {
       rightsPassListener = listener
+    },
+    watchSignalReads(listener) {
+      signalReadListener = listener
     },
     mutations: () => overlay.entries(),
     schedulerPlans: () => scheduler.plans(),
