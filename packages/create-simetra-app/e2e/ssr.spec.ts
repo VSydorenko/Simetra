@@ -432,6 +432,12 @@ test.describe("scenario 10: sign-out in another tab, then focus", () => {
     const cookie = await freshSession(app, app.users.a)
     const context = await contextWithCookie(browser, app, cookie)
     const first = await context.newPage()
+    // Шлях Дх14 без шини вкладок (Р11 D5): із шиною перша вкладка пішла б на
+    // вхід одразу після виходу в другій, а тут перевіряється саме запасний
+    // шлях — браузер без `BroadcastChannel`
+    await first.addInitScript(() => {
+      Object.defineProperty(window, "BroadcastChannel", { value: undefined })
+    })
     await first.clock.install()
     await recordFrames(first, "mutation")
     const log = watchDataFn(first, app)

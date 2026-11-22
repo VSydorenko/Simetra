@@ -7,6 +7,8 @@
 import { randomUUID } from "node:crypto"
 import { ZERO_UUID } from "simetra/model"
 import runtimeCatalog from "../template/generated/runtime-catalog.json" with { type: "json" }
+import type { Page } from "@playwright/test"
+import { contextWithCookie, freshSession, watchDataFn } from "./browser"
 import { refusesToStart } from "./refuse-start"
 import { send, type Reply } from "./http"
 import { anonymousSession, expect, test, type App } from "./fixtures"
@@ -202,6 +204,120 @@ test.describe("signal token routes", () => {
       expect(reply.status).toBe(401)
       expect(json(reply)).toEqual({ reason: "session-changed" })
       expect(reply.text).not.toContain("token")
+    }
+  })
+})
+
+/**
+ * Кадри WebSocket-а Centrifugo сторінки (відправлені й отримані): сторінка
+ * їх не показує, тож єдине свідчення доставки — мережа. Лише сокети, що йдуть
+ * на порт Centrifugo прогону.
+ */
+function watchSignalFrames(page: Page, app: App) {
+  const port = new URL(app.signals.url).port
+  const received: string[] = []
+  const sent: string[] = []
+  page.on("websocket", (ws) => {
+    if (new URL(ws.url()).port !== port) return
+    ws.on("framereceived", (frame) => void received.push(String(frame.payload)))
+    ws.on("framesent", (frame) => void sent.push(String(frame.payload)))
+  })
+  const count = (frames: string[], pattern: RegExp): number =>
+    frames.reduce((n, frame) => n + (frame.match(pattern)?.length ?? 0), 0)
+  return {
+    received,
+    /** Усі надіслані підписки підтверджено: канал живий, публікація дійде. */
+    subscribed: (): boolean => {
+      const asked = count(sent, /"subscribe":\{/g)
+      return asked > 0 && count(received, /"subscribe":\{/g) >= asked
+    },
+  }
+}
+
+// Р11: шина вкладок
+test.describe("tab bus", () => {
+  test("(а) sign-out in one page of a cookie sends the other to login without its own data request", async ({
+    app,
+    browser,
+  }) => {
+    // Нова сесія: вихід не вбиває сесію з фікстури, якою користуються решта кейсів
+    const cookie = await freshSession(app, app.users.a)
+    const context = await contextWithCookie(browser, app, cookie)
+    try {
+      const first = await context.newPage()
+      const second = await context.newPage()
+      const log = watchDataFn(second, app)
+      for (const page of [first, second]) {
+        await page.goto(`${app.origin}/clients`)
+        await page.waitForSelector("html[data-hydrated]")
+      }
+      // Гідратація другої сторінки закінчила власні запити даних
+      await second.waitForTimeout(1_500)
+      await log.flush()
+      const before = log.calls.length
+
+      await first.getByRole("button", { name: "Sign out" }).click()
+      await expect(first).toHaveURL(/\/login$/)
+      // Без фокуса й без таймера: друга сторінка дізналася від шини
+      await expect(second).toHaveURL(/\/login$/)
+      await second.waitForTimeout(500)
+      await log.flush()
+      expect(log.calls).toHaveLength(before)
+    } finally {
+      await context.close()
+    }
+  })
+})
+
+// Частина 2 D5: сторінка підписується на канали й отримує публікації
+test.describe("signal delivery", () => {
+  test("(б) a command in one page of Alice reaches the other page as a publication frame", async ({
+    app,
+    browser,
+  }) => {
+    const [row] = await app.query<{ id: string; description: string }>(
+      "SELECT id, description FROM app.client WHERE owner = $1 ORDER BY description LIMIT 1",
+      [app.users.a.id]
+    )
+    expect(row).toBeDefined()
+    const cookie = await freshSession(app, app.users.a)
+    const context = await contextWithCookie(browser, app, cookie)
+    try {
+      const watcher = await context.newPage()
+      const frames = watchSignalFrames(watcher, app)
+      await watcher.goto(`${app.origin}/clients`)
+      await watcher.waitForSelector("html[data-hydrated]")
+      await expect.poll(() => frames.subscribed()).toBe(true)
+      const mark = frames.received.length
+
+      const author = await context.newPage()
+      await author.goto(`${app.origin}/clients/${row!.id}`)
+      await author.waitForSelector("html[data-hydrated]")
+      const description = author.locator(
+        'input[data-field="description"]:not([data-server] [data-field])'
+      )
+      await description.fill(`${row!.description} signalled`)
+      await author.getByRole("button", { name: /Save|Зберегти/ }).click()
+
+      // Лише доставка: публікація каналу змін `Client` у кадрах сокета
+      // спостерігача. Оновлення екрана спостерігача — #263
+      await expect
+        .poll(() =>
+          frames.received
+            .slice(mark)
+            .some(
+              (payload) =>
+                payload.includes('"pub"') &&
+                payload.includes(changesChannel("Client"))
+            )
+        )
+        .toBe(true)
+    } finally {
+      await context.close()
+      await app.query("UPDATE app.client SET description = $1 WHERE id = $2", [
+        row!.description,
+        row!.id,
+      ])
     }
   })
 })
