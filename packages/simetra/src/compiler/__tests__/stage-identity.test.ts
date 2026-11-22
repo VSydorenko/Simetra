@@ -377,6 +377,16 @@ describe("stage 2: identity", () => {
     ])
   })
 
+  it("a custom action may take a structural word of error paths", async () => {
+    // Дія не стає ні реквізитом, ні префіксом шляху помилки операції.
+    const result = await compileWith({
+      [CONTRACT]: catalog("Contract", {
+        customActions: [{ id: uuid(60), name: "expectedValues" }],
+      }),
+    })
+    expect(result.diagnostics).toEqual([])
+  })
+
   it("unresolved reference", async () => {
     const result = await compileWith({
       [CONTRACT]: catalog("Contract", {
