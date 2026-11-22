@@ -22,6 +22,11 @@ export interface CheckUploadInput {
 export interface UploadLimits {
   maxBytes: number
   mediaTypes: string[]
+  /**
+   * The database binding string read in the same transaction as the check
+   * (`FileStore.put` option `instance`, see `parseBinding`).
+   */
+  instance: string
 }
 
 /** The input of {@link CommandRuntime.attachFile}. */

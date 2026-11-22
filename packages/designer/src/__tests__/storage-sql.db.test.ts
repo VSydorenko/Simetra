@@ -4,10 +4,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { PLATFORM_ROLES, ZERO_UUID } from "simetra/model"
 import {
   ORG_KIND_ID,
-  TICKET_OWN_WRITER_ID,
-  TICKET_READER_ID,
-  TICKET_REGION_WRITER_ID,
-  TICKET_WRITER_ID,
   claimsFor,
   queryAs,
   signUp,
@@ -21,12 +17,16 @@ import {
   withModelTarget,
 } from "./support/db"
 import {
+  ATTACHMENT_OWN_WRITER_ID,
+  ATTACHMENT_READER_ID,
+  ATTACHMENT_REGION_WRITER_ID,
+  ATTACHMENT_WRITER_ID,
   BLOB_ID,
   DOC_ID,
   DOC_WRITER_ID,
   LIMIT,
   Session,
-  TICKET_ID,
+  ATTACHMENT_ID,
   attachIn,
   newId,
   refused,
@@ -79,10 +79,10 @@ const target = heldResource<Env>(async (use) => {
           org,
           user,
         }))
-      const any = await actor(TICKET_WRITER_ID)
-      const own = await actor(TICKET_OWN_WRITER_ID)
-      const region = await actor(TICKET_REGION_WRITER_ID)
-      const reader = await actor(TICKET_READER_ID)
+      const any = await actor(ATTACHMENT_WRITER_ID)
+      const own = await actor(ATTACHMENT_OWN_WRITER_ID)
+      const region = await actor(ATTACHMENT_REGION_WRITER_ID)
+      const reader = await actor(ATTACHMENT_READER_ID)
       let bare = ""
       let docWriter = ""
       let docBare = ""
@@ -130,7 +130,7 @@ describe("І1: the platform writes the file columns, not the command role", () =
       const privilege = async (column: string, kind: string) =>
         (
           await s.ok<{ v: boolean }>(
-            "SELECT has_column_privilege($1, 'public.ticket', $2, $3) AS v",
+            "SELECT has_column_privilege($1, 'public.attachment', $2, $3) AS v",
             [COMMAND, column, kind]
           )
         )[0]!.v
@@ -152,13 +152,15 @@ describe("І1: the platform writes the file columns, not the command role", () =
     async (set) => {
       await tx(async (s) => {
         const id = newId()
-        expect(await s.attach(TICKET_ID, id, 10, "image/png")).toEqual({
+        expect(await s.attach(ATTACHMENT_ID, id, 10, "image/png")).toEqual({
           rows: expect.anything(),
         })
-        expect(refused(await s.insertTicket(id, env.any.org))).toBeUndefined()
+        expect(
+          refused(await s.insertAttachment(id, env.any.org))
+        ).toBeUndefined()
         const result = await s.as(
           undefined,
-          `UPDATE public.ticket SET ${set} WHERE id = $1`,
+          `UPDATE public.attachment SET ${set} WHERE id = $1`,
           [id]
         )
         expect(refused(result)).toMatchObject({
@@ -173,13 +175,13 @@ describe("І1: the platform writes the file columns, not the command role", () =
   it("UPDATE of the file name passes: the immutability is for the size and the type only", async () => {
     await tx(async (s) => {
       const id = newId()
-      await s.attach(TICKET_ID, id, 10, "image/png")
-      await s.insertTicket(id, env.any.org)
+      await s.attach(ATTACHMENT_ID, id, 10, "image/png")
+      await s.insertAttachment(id, env.any.org)
       expect(
         refused(
           await s.as(
             undefined,
-            "UPDATE public.ticket SET file_name = 'b.png' WHERE id = $1",
+            "UPDATE public.attachment SET file_name = 'b.png' WHERE id = $1",
             [id]
           )
         )
@@ -189,7 +191,7 @@ describe("І1: the platform writes the file columns, not the command role", () =
 })
 
 describe("І2: file_attach refuses invalid files with storage.attach-invalid", () => {
-  const object = TICKET_ID
+  const object = ATTACHMENT_ID
   it.each([
     ["a type outside mediaTypes", object, 10, "application/pdf"],
     ["a size above maxBytes", object, LIMIT + 1, "image/png"],
@@ -237,9 +239,9 @@ describe("І2: file_attach refuses invalid files with storage.attach-invalid", (
 describe("І3: a row appears only with the file_attach of its own transaction", () => {
   it("an insert with no record is refused with storage.attach-missing", async () => {
     await tx(async (s) => {
-      expect(refused(await s.insertTicket(newId(), env.any.org))).toMatchObject(
-        storageRefusal("attach-missing")
-      )
+      expect(
+        refused(await s.insertAttachment(newId(), env.any.org))
+      ).toMatchObject(storageRefusal("attach-missing"))
     })
   })
 
@@ -248,17 +250,17 @@ describe("І3: a row appears only with the file_attach of its own transaction", 
     try {
       // Запис закомічено окремою транзакцією: цей `xact` уже не поточний
       await env.owner.query("BEGIN")
-      await attachIn(env.owner, TICKET_ID, id, 10, "image/png")
+      await attachIn(env.owner, ATTACHMENT_ID, id, 10, "image/png")
       await env.owner.query("COMMIT")
       await tx(async (s) => {
-        expect(refused(await s.insertTicket(id, env.any.org))).toMatchObject(
-          storageRefusal("attach-missing")
-        )
+        expect(
+          refused(await s.insertAttachment(id, env.any.org))
+        ).toMatchObject(storageRefusal("attach-missing"))
       })
     } finally {
       await env.owner.query(
         "DELETE FROM simetra.storage_pending WHERE object = $1 AND id = $2",
-        [TICKET_ID, id]
+        [ATTACHMENT_ID, id]
       )
     }
   })
@@ -266,7 +268,7 @@ describe("І3: a row appears only with the file_attach of its own transaction", 
   it("the record is taken by the insert: the row gets the size and the type, one version tick, nothing is left", async () => {
     await tx(async (s) => {
       const id = newId()
-      await s.attach(TICKET_ID, id, 42, "text/plain")
+      await s.attach(ATTACHMENT_ID, id, 42, "text/plain")
       const sequence = async () =>
         Number(
           (
@@ -276,13 +278,13 @@ describe("І3: a row appears only with the file_attach of its own transaction", 
           )[0]!.last
         )
       const before = await sequence()
-      expect(refused(await s.insertTicket(id, env.any.org))).toBeUndefined()
+      expect(refused(await s.insertAttachment(id, env.any.org))).toBeUndefined()
       // Версію видає послідовність: рівно одна — вставка, без `UPDATE` після неї
       // (він підняв би версію вдруге, Р4 ПГ-5)
       expect(await sequence()).toBe(before + 1)
       expect(
         await s.ok(
-          "SELECT file_size::int AS size, file_content_type AS type, version::int AS version FROM public.ticket WHERE id = $1",
+          "SELECT file_size::int AS size, file_content_type AS type, version::int AS version FROM public.attachment WHERE id = $1",
           [id]
         )
       ).toEqual([{ size: 42, type: "text/plain", version: before + 1 }])
@@ -290,15 +292,15 @@ describe("І3: a row appears only with the file_attach of its own transaction", 
         await s.as("files", "SELECT simetra.storage_pending_left() AS left")
       ).toEqual({ rows: [{ left: false }] })
       // Запис одного рядка не годиться другому
-      expect(refused(await s.insertTicket(newId(), env.any.org))).toMatchObject(
-        storageRefusal("attach-missing")
-      )
+      expect(
+        refused(await s.insertAttachment(newId(), env.any.org))
+      ).toMatchObject(storageRefusal("attach-missing"))
     })
   })
 
   it("a record that no row took is reported as left in this transaction", async () => {
     await tx(async (s) => {
-      await s.attach(TICKET_ID, newId(), 5, "image/png")
+      await s.attach(ATTACHMENT_ID, newId(), 5, "image/png")
       expect(
         await s.as("files", "SELECT simetra.storage_pending_left() AS left")
       ).toEqual({ rows: [{ left: true }] })
@@ -310,9 +312,9 @@ describe("І3: a row appears only with the file_attach of its own transaction", 
       // Запис давно завершеної транзакції: її xid менший за xmin знімка
       await s.ok(
         "INSERT INTO simetra.storage_pending (xact, object, id, size, content_type) VALUES ('1'::xid8, $1, $2, 1, 'image/png')",
-        [TICKET_ID, newId()]
+        [ATTACHMENT_ID, newId()]
       )
-      await s.attach(TICKET_ID, newId(), 5, "image/png")
+      await s.attach(ATTACHMENT_ID, newId(), 5, "image/png")
       const swept = await s.as<{ n: string }>(
         "files",
         "SELECT simetra.storage_pending_sweep() AS n"
@@ -333,10 +335,10 @@ describe("І3: a row appears only with the file_attach of its own transaction", 
 
   it("a record of one object does not fit a row of another id", async () => {
     await tx(async (s) => {
-      await s.attach(TICKET_ID, newId(), 5, "image/png")
-      expect(refused(await s.insertTicket(newId(), env.any.org))).toMatchObject(
-        storageRefusal("attach-missing")
-      )
+      await s.attach(ATTACHMENT_ID, newId(), 5, "image/png")
+      expect(
+        refused(await s.insertAttachment(newId(), env.any.org))
+      ).toMatchObject(storageRefusal("attach-missing"))
     })
   })
 })
@@ -344,8 +346,8 @@ describe("І3: a row appears only with the file_attach of its own transaction", 
 describe("І4: usage and quota", () => {
   const upload = async (s: Session, org: string, size: number) => {
     const id = newId()
-    await s.attach(TICKET_ID, id, size, "image/png")
-    return { id, result: await s.insertTicket(id, org) }
+    await s.attach(ATTACHMENT_ID, id, size, "image/png")
+    return { id, result: await s.insertAttachment(id, org) }
   }
   const quota = (s: Session, org: string, max: number) =>
     s.ok(
@@ -360,7 +362,7 @@ describe("І4: usage and quota", () => {
       const first = await upload(s, org, 30)
       await upload(s, org, 12)
       expect(await s.usage(ORG_KIND_ID, org)).toBe(42)
-      await s.ok("DELETE FROM public.ticket WHERE id = $1", [first.id])
+      await s.ok("DELETE FROM public.attachment WHERE id = $1", [first.id])
       expect(await s.usage(ORG_KIND_ID, org)).toBe(12)
       // Ціль іншого скоупу не чіпає
       expect(await s.usage(ORG_KIND_ID, env.own.org)).toBeNull()
@@ -421,19 +423,19 @@ describe("І4: usage and quota", () => {
       const start = async (client: pg.Client) => {
         const id = randomUUID()
         await client.query("BEGIN")
-        await attachIn(client, TICKET_ID, id, 100, "image/png")
+        await attachIn(client, ATTACHMENT_ID, id, 100, "image/png")
         return id
       }
       const firstId = await start(env.owner)
       await env.owner.query(
-        "INSERT INTO public.ticket (id, org_id, file_name) VALUES ($1, $2, 'a.png')",
+        "INSERT INTO public.attachment (id, org_id, file_name) VALUES ($1, $2, 'a.png')",
         [firstId, org]
       )
       const secondId = await start(second)
       // Вставка другого чекає рядок обліку першого, поки той не закомітиться
       const pending = second
         .query(
-          "INSERT INTO public.ticket (id, org_id, file_name) VALUES ($1, $2, 'b.png')",
+          "INSERT INTO public.attachment (id, org_id, file_name) VALUES ($1, $2, 'b.png')",
           [secondId, org]
         )
         .then(
@@ -458,7 +460,9 @@ describe("І4: usage and quota", () => {
       await second.query("ROLLBACK").catch(() => undefined)
       await second.end()
       for (const id of done)
-        await env.owner.query("DELETE FROM public.ticket WHERE id = $1", [id])
+        await env.owner.query("DELETE FROM public.attachment WHERE id = $1", [
+          id,
+        ])
       await env.owner.query(
         "DELETE FROM simetra.storage_quota WHERE scope_kind = $1 AND scope = $2",
         [ORG_KIND_ID, org]
@@ -487,7 +491,9 @@ describe("І5: storage_headroom is the necessary check of the upload", () => {
     ["dimension", () => env.region],
   ])("a role with create at %s covers its scope", async (_, who) => {
     const { user, org } = who()
-    expect(await answer(user, TICKET_ID, org)).toEqual({ rows: [{ v: true }] })
+    expect(await answer(user, ATTACHMENT_ID, org)).toEqual({
+      rows: [{ v: true }],
+    })
   })
 
   it.each([
@@ -501,7 +507,7 @@ describe("І5: storage_headroom is the necessary check of the upload", () => {
     ["an unknown scope", () => [env.any.user, randomUUID()]],
   ])("%s is false", async (_, args) => {
     const [user, scope] = args() as [string, string | null]
-    expect(await answer(user, TICKET_ID, scope)).toEqual({
+    expect(await answer(user, ATTACHMENT_ID, scope)).toEqual({
       rows: [{ v: false }],
     })
   })
@@ -526,12 +532,12 @@ describe("І5: storage_headroom is the necessary check of the upload", () => {
           "user",
           claimsFor("user", env.any.user),
           "SELECT simetra.storage_headroom($1, $2) AS v",
-          [TICKET_ID, org]
+          [ATTACHMENT_ID, org]
         )
       expect(await ask()).toEqual({ rows: [{ v: true }] })
       const id = newId()
-      await s.attach(TICKET_ID, id, 20, "image/png")
-      await s.insertTicket(id, org)
+      await s.attach(ATTACHMENT_ID, id, 20, "image/png")
+      await s.insertAttachment(id, org)
       expect(await ask()).toEqual({ rows: [{ v: false }] })
     })
   })
@@ -571,15 +577,15 @@ describe("І6: the reconciliation functions and who may call what", () => {
       const ids: string[] = []
       for (const org of [env.any.org, env.own.org]) {
         const id = newId()
-        await s.attach(TICKET_ID, id, 1, "image/png")
-        await s.insertTicket(id, org)
+        await s.attach(ATTACHMENT_ID, id, 1, "image/png")
+        await s.insertAttachment(id, org)
         ids.push(id)
       }
       const stranger = newId()
       const found = await s.as<{ id: string }>(
         "files",
         "SELECT * FROM simetra.storage_rows_exist($1, $2) AS id",
-        [TICKET_ID, [...ids, stranger]]
+        [ATTACHMENT_ID, [...ids, stranger]]
       )
       expect(
         "rows" in found && found.rows.map((r) => Object.values(r)[0])
@@ -588,7 +594,7 @@ describe("І6: the reconciliation functions and who may call what", () => {
       const page = await s.as(
         "files",
         "SELECT x AS id FROM simetra.storage_row_page($1, NULL) AS x",
-        [TICKET_ID]
+        [ATTACHMENT_ID]
       )
       expect("rows" in page && page.rows.map((r) => r.id)).toEqual(
         [...ids].sort()
@@ -596,7 +602,7 @@ describe("І6: the reconciliation functions and who may call what", () => {
       const after = await s.as(
         "files",
         "SELECT x AS id FROM simetra.storage_row_page($1, $2) AS x",
-        [TICKET_ID, [...ids].sort()[0]]
+        [ATTACHMENT_ID, [...ids].sort()[0]]
       )
       expect("rows" in after && after.rows.map((r) => r.id)).toEqual(
         [...ids].sort().slice(1)
@@ -619,7 +625,7 @@ describe("І6: the reconciliation functions and who may call what", () => {
     [
       "rows_exist (1001 ids)",
       "SELECT * FROM simetra.storage_rows_exist($1, $2)",
-      [TICKET_ID, Array.from({ length: 1001 }, () => randomUUID())],
+      [ATTACHMENT_ID, Array.from({ length: 1001 }, () => randomUUID())],
     ],
   ])(
     "%s: an object without storage or too many ids are refused (22023)",
@@ -639,7 +645,7 @@ describe("І6: the reconciliation functions and who may call what", () => {
           await s.as(
             "files",
             "SELECT * FROM simetra.storage_rows_exist($1, $2)",
-            [TICKET_ID, Array.from({ length: 1000 }, () => randomUUID())]
+            [ATTACHMENT_ID, Array.from({ length: 1000 }, () => randomUUID())]
           )
         )
       ).toBeUndefined()
@@ -690,7 +696,7 @@ describe("І6: the reconciliation functions and who may call what", () => {
   it("under simetra_files the call passes: the role has USAGE of the schema", async () => {
     await tx(async (s) => {
       expect(
-        refused(await s.attach(TICKET_ID, newId(), 1, "image/png"))
+        refused(await s.attach(ATTACHMENT_ID, newId(), 1, "image/png"))
       ).toBeUndefined()
     })
   })

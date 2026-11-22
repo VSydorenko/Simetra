@@ -19,7 +19,7 @@ import { heldStorageEnv, type Env } from "./storage-env.support"
  * `storage.supabase.db.test.ts`.
  */
 
-const TICKET = { kind: "Catalog" as const, name: "Ticket" }
+const ATTACHMENT = { kind: "Catalog" as const, name: "Attachment" }
 
 /** Порт, що першому оператору за `pattern` дає `40001` замість виконання: відкат і повтор спроби. */
 function failingOnce(
@@ -60,10 +60,11 @@ describe("file storage over the runtime and the byte store", () => {
 
   const runtimeOf = (database: CommandDatabase = fromPgPool(env.pool)) =>
     createCommandRuntime({ database, catalog: env.catalog })
-  const ticket = () => env.catalog.objects.find((o) => o.name === "Ticket")!
-  const objectId = () => ticket().id
+  const attachment = () =>
+    env.catalog.objects.find((o) => o.name === "Attachment")!
+  const objectId = () => attachment().id
   const nameOf = (column: string) =>
-    ticket().attributes.find((a) => a.column === column)!.name
+    attachment().attributes.find((a) => a.column === column)!.name
 
   const rowsOf = async (id: string) =>
     (
@@ -72,7 +73,7 @@ describe("file storage over the runtime and the byte store", () => {
         file_size: string
         file_content_type: string
       }>(
-        "SELECT file_name, file_size, file_content_type FROM public.ticket WHERE id = $1",
+        "SELECT file_name, file_size, file_content_type FROM public.attachment WHERE id = $1",
         [id]
       )
     ).rows
@@ -97,7 +98,7 @@ describe("file storage over the runtime and the byte store", () => {
     patch: Partial<Parameters<CommandRuntime["attachFile"]>[1]> = {}
   ) =>
     rt.attachFile(env.writer.session, {
-      object: TICKET,
+      object: ATTACHMENT,
       scope: env.writer.org,
       id,
       name: "a.txt",
@@ -106,15 +107,26 @@ describe("file storage over the runtime and the byte store", () => {
       ...patch,
     })
 
+  /** Відбиток прив'язки з `checkUpload`: кешу в рантаймі немає. */
+  const instanceOf = async (rt: CommandRuntime): Promise<string> =>
+    (await rt.checkUpload(env.writer.session, {
+      object: ATTACHMENT,
+      scope: env.writer.org,
+    }))!.instance
+
   it("runs checkUpload → put → attachFile → read and keeps the bytes", async () => {
     const rt = await runtimeOf()
     expect(
       await rt.checkUpload(env.writer.session, {
-        object: TICKET,
+        object: ATTACHMENT,
         scope: env.writer.org,
       })
-    ).toEqual({ maxBytes: STORAGE.maxBytes, mediaTypes: TYPES })
-    const instance = await rt.fileInstance()
+    ).toEqual({
+      maxBytes: STORAGE.maxBytes,
+      mediaTypes: TYPES,
+      instance: expect.stringMatching(/^[0-9a-f-]{36}:\d+:\d+:[0-9A-F]{8}$/),
+    })
+    const instance = await instanceOf(rt)
     const id = randomUUID()
     const key = fileObjectKey(objectId(), id)
     const put = await env.files.put(key, bodyOf("hello"), {
@@ -133,7 +145,7 @@ describe("file storage over the runtime and the byte store", () => {
     ])
     expect(await usage(env.writer.org)).toEqual([(before[0] ?? 0) + 5])
     expect(await pendingLeft()).toBe(0)
-    const read = await rt.read(env.writer.session, { object: TICKET, id })
+    const read = await rt.read(env.writer.session, { object: ATTACHMENT, id })
     expect(read.rows).toHaveLength(1)
     const stored = await env.files.get(key)
     expect(await new Response(stored!.body).text()).toBe("hello")
@@ -143,26 +155,26 @@ describe("file storage over the runtime and the byte store", () => {
     const rt = await runtimeOf()
     expect(
       await rt.checkUpload(env.reader.session, {
-        object: TICKET,
+        object: ATTACHMENT,
         scope: env.reader.org,
       })
     ).toBeNull()
     expect(
       await rt.checkUpload(env.writer.session, {
-        object: TICKET,
+        object: ATTACHMENT,
         scope: env.reader.org,
       })
     ).toBeNull()
     expect(
       await rt.checkUpload(
         { ...env.writer.session, is_anonymous: true },
-        { object: TICKET, scope: env.writer.org }
+        { object: ATTACHMENT, scope: env.writer.org }
       )
     ).toBeNull()
   })
 
   it("a retried attempt leaves one row and one accounting step", async () => {
-    const injected = failingOnce(fromPgPool(env.pool), /ticket_save/)
+    const injected = failingOnce(fromPgPool(env.pool), /attachment_save/)
     const rt = await runtimeOf(injected.database)
     const before = (await usage(env.writer.org))[0] ?? 0
     const id = randomUUID()
@@ -200,7 +212,7 @@ describe("file storage over the runtime and the byte store", () => {
   describe("І3: a file row needs file_attach in the same transaction", () => {
     const values = (name: string) => ({
       [nameOf("file_name")]: name,
-      [nameOf(ticket().scopeColumn!)]: env.writer.org,
+      [nameOf(attachment().scopeColumn!)]: env.writer.org,
     })
 
     it("a client create is command.rejected storage.attach-missing", async () => {
@@ -210,7 +222,7 @@ describe("file storage over the runtime and the byte store", () => {
       const error = await rt
         .run(env.writer.session, {
           action: "create",
-          object: TICKET,
+          object: ATTACHMENT,
           id,
           values: values("b.txt"),
         })
@@ -236,11 +248,11 @@ describe("file storage over the runtime and the byte store", () => {
         database: fromPgPool(env.pool),
         catalog: env.catalog,
         objectModules: {
-          "Catalog.Ticket": {
+          "Catalog.Attachment": {
             async onWrite({ ctx }) {
               await ctx.run({
                 action: "create",
-                object: TICKET,
+                object: ATTACHMENT,
                 id: second,
                 values: values("c.txt"),
               })
@@ -271,7 +283,7 @@ describe("file storage over the runtime and the byte store", () => {
       const rt = await runtimeOf()
       const id = randomUUID()
       const key = fileObjectKey(objectId(), id)
-      const instance = await rt.fileInstance()
+      const instance = await instanceOf(rt)
       await env.files.put(key, bodyOf("keep"), {
         contentType: "text/plain",
         maxBytes: LIMIT,
@@ -282,7 +294,7 @@ describe("file storage over the runtime and the byte store", () => {
       const before = await usage(env.writer.org)
       await rt.run(env.writer.session, {
         action: "markDeletion",
-        object: TICKET,
+        object: ATTACHMENT,
         id,
         expectedVersion: version,
         mark: true,
@@ -294,7 +306,7 @@ describe("file storage over the runtime and the byte store", () => {
       const error = await rt
         .run(env.writer.session, {
           action: "delete",
-          object: TICKET,
+          object: ATTACHMENT,
           id,
           expectedVersion: version + 1,
         })
@@ -309,14 +321,14 @@ describe("file storage over the runtime and the byte store", () => {
     })
   })
 
-  it("fileInstance is the uuid of simetra.storage_instance with the cluster, database and timeline, and needs no write by the caller", async () => {
+  it("the binding of checkUpload is the uuid of simetra.storage_instance with the cluster, database and the WAL timeline, read in a READ ONLY transaction", async () => {
     const rt = await runtimeOf()
-    const instance = await rt.fileInstance()
+    const instance = await instanceOf(rt)
     const { rows } = await env.owner.query<{ binding: string }>(
       `SELECT (SELECT id FROM simetra.storage_instance) || ':'
            || (SELECT system_identifier FROM pg_control_system()) || ':'
            || (SELECT oid FROM pg_database WHERE datname = current_database()) || ':'
-           || (SELECT timeline_id FROM pg_control_checkpoint()) AS binding`
+           || substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8) AS binding`
     )
     expect(rows).toEqual([{ binding: instance }])
     expect(instance.split(":")[0]).not.toBe(ZERO_UUID)

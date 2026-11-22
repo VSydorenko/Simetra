@@ -9,8 +9,6 @@ import { fromS3Client, type FileStore } from "simetra/server"
 import {
   ORG_SCOPE_KIND,
   PROJECT_FILE,
-  TICKET_READER_ID,
-  TICKET_WRITER_ID,
   createRunBucket,
   emptyAndDeleteRunBucket,
   runTag,
@@ -27,7 +25,11 @@ import {
   withRuntimeLogin,
 } from "./support/db"
 import { REQUEST_ROLE } from "./command-runtime.support"
-import { storageModel } from "./storage-sql.support"
+import {
+  ATTACHMENT_READER_ID,
+  ATTACHMENT_WRITER_ID,
+  storageModel,
+} from "./storage-sql.support"
 
 /**
  * Спільне середовище DB-тестів сховища файлів: модель, база з рантайм-логіном,
@@ -77,8 +79,8 @@ export const heldStorageEnv = (...layers: Layer[]) =>
         await owner.connect()
         try {
           await seedMarker(owner, model.hash)
-          const writer = await seedRuntimeActor(owner, [TICKET_WRITER_ID])
-          const reader = await seedRuntimeActor(owner, [TICKET_READER_ID])
+          const writer = await seedRuntimeActor(owner, [ATTACHMENT_WRITER_ID])
+          const reader = await seedRuntimeActor(owner, [ATTACHMENT_READER_ID])
           await withRuntimeLogin(
             url,
             [PLATFORM_ROLES.command, REQUEST_ROLE],

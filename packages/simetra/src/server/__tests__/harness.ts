@@ -280,7 +280,6 @@ export const checkedRuntime = (
     runtime.authorizeChannels(session, channels),
   checkUpload: (...args) => runtime.checkUpload(...args),
   attachFile: (...args) => runtime.attachFile(...args),
-  fileInstance: () => runtime.fileInstance(),
   reconcileFiles: (store, options) => runtime.reconcileFiles(store, options),
   rebindFileStore: (store) => runtime.rebindFileStore(store),
 })

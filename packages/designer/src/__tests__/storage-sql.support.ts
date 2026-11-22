@@ -8,7 +8,9 @@ import {
   policyDomain,
   profileLayer,
   readQueryLayer,
+  refAttribute,
   restoreOwnerRole,
+  ROLE_FILE,
   superuserClient,
   testRoleFor,
   uuid,
@@ -17,17 +19,23 @@ import {
 import { expect } from "vitest"
 
 /**
- * Модель сховища файлів для DB-тестів: `Ticket` ядра команд (з носієм
- * власності й виміром, тож усі три обсяги права `create`) з властивістю
- * `storage` у скоупі `org` і нескоуплений довідник `Doc` з глобальною роллю.
- * Спільне для файлів `storage-*.db.test.ts`.
+ * Модель сховища файлів для DB-тестів: довідник `Attachment` у скоупі `org`
+ * (з носієм власності й виміром, тож усі три обсяги права `create`) зі
+ * властивістю `storage` і нескоуплений довідник `Doc` з глобальною роллю.
+ * `Attachment` свій, а не `Ticket` ядра команд: у `Ticket` є `containerBinding`,
+ * з яким `storage` несумісне (`storage.incompatible`), а `Ticket` читають інші
+ * тести прав. Спільне для файлів `storage-*.db.test.ts`.
  */
 
-export const TICKET_FILE = "catalogs/Ticket/Ticket.meta.json"
+export const ATTACHMENT_FILE = "catalogs/Attachment/Attachment.meta.json"
 export const DOC_FILE = "catalogs/Doc/Doc.meta.json"
 export const DOC_ID = uuid(9802)
 export const DOC_WRITER_ID = uuid(9803)
-export const TICKET_ID = uuid(6901)
+export const ATTACHMENT_ID = uuid(9805)
+export const ATTACHMENT_WRITER_ID = uuid(9806)
+export const ATTACHMENT_OWN_WRITER_ID = uuid(9807)
+export const ATTACHMENT_REGION_WRITER_ID = uuid(9808)
+export const ATTACHMENT_READER_ID = uuid(9809)
 export const BLOB_FILE = "catalogs/Blob/Blob.meta.json"
 export const BLOB_ID = uuid(9804)
 
@@ -45,10 +53,70 @@ const doc = (storage?: typeof STORAGE) => ({
   ...(storage === undefined ? {} : { storage }),
 })
 
-/** Шар сховища: `Ticket` без ієрархії зі `storage` і `Doc`, який пише глобальна роль. */
+const ATTACHMENT_OBJECT = [{ kind: "Catalog", name: "Attachment" }]
+const attachmentRole = (
+  id: string,
+  name: string,
+  actions: string[],
+  extent: unknown
+) => ({
+  id,
+  kind: "Role",
+  name,
+  assignedOn: { scopeKind: "org" },
+  grants: [{ grant: { objects: ATTACHMENT_OBJECT, actions, extent } }],
+})
+const WRITES = ["read", "create", "update", "markDeletion"]
+
+/** Шар сховища: `Attachment` зі `storage` (без контейнерної прив'язки) і `Doc`, який пише глобальна роль. */
 export function storageLayer(): Layer {
   return {
-    [TICKET_FILE]: { hierarchyType: "None", storage: STORAGE },
+    [ATTACHMENT_FILE]: {
+      id: ATTACHMENT_ID,
+      kind: "Catalog",
+      name: "Attachment",
+      physicalName: "attachment",
+      kindLabel: "attachment",
+      scope: "org",
+      trackAuthor: true,
+      ownership: ["assignee"],
+      access: [{ attribute: "region", dimension: "region" }],
+      attributes: [
+        refAttribute(9810, "assignee", "assignee_id", {
+          kind: "Catalog",
+          name: "OrgMember",
+        }),
+        refAttribute(9811, "region", "region_id", {
+          kind: "Catalog",
+          name: "Region",
+        }),
+      ],
+      storage: STORAGE,
+    },
+    [ROLE_FILE("AttachmentWriter")]: attachmentRole(
+      ATTACHMENT_WRITER_ID,
+      "AttachmentWriter",
+      WRITES,
+      "any"
+    ),
+    [ROLE_FILE("AttachmentOwnWriter")]: attachmentRole(
+      ATTACHMENT_OWN_WRITER_ID,
+      "AttachmentOwnWriter",
+      WRITES,
+      "own"
+    ),
+    [ROLE_FILE("AttachmentRegionWriter")]: attachmentRole(
+      ATTACHMENT_REGION_WRITER_ID,
+      "AttachmentRegionWriter",
+      WRITES,
+      { dimension: "region" }
+    ),
+    [ROLE_FILE("AttachmentReader")]: attachmentRole(
+      ATTACHMENT_READER_ID,
+      "AttachmentReader",
+      ["read"],
+      "any"
+    ),
     [DOC_FILE]: doc(STORAGE),
     "roles/DocWriter/DocWriter.meta.json": {
       id: DOC_WRITER_ID,
@@ -170,10 +238,10 @@ export class Session {
   }
 
   /** Вставка рядка довідника зі `storage` власником таблиці: тригери спрацьовують. */
-  insertTicket(id: string, org: string, name = "a.png") {
+  insertAttachment(id: string, org: string, name = "a.png") {
     return this.as(
       undefined,
-      "INSERT INTO public.ticket (id, org_id, file_name) VALUES ($1, $2, $3)",
+      "INSERT INTO public.attachment (id, org_id, file_name) VALUES ($1, $2, $3)",
       [id, org, name]
     )
   }

@@ -88,6 +88,14 @@ describe("renderApplyState", () => {
     expect(sql).not.toMatch(/GRANT[^;]*storage_instance/)
   })
 
+  // `storage_instance_id()` лише читає: рядок має бути вже при створенні таблиці
+  it("inserts the single storage_instance row with the table", async () => {
+    const sql = renderApplyState(await withoutUsers())
+    expect(sql).toContain(
+      "INSERT INTO simetra.storage_instance (singleton) VALUES (true);"
+    )
+  })
+
   it("secures the schema itself when the platform layer is absent", async () => {
     const sql = renderApplyState(await withoutUsers())
     expect(sql).toContain("REVOKE ALL ON SCHEMA simetra FROM PUBLIC;")

@@ -131,8 +131,16 @@ describe("storage generator", () => {
     expect(sql).toContain("s.system_identifier")
     expect(sql).toContain("d.oid::text FROM pg_catalog.pg_database")
     expect(sql).toContain("pg_catalog.current_database()")
-    expect(sql).toContain("pg_catalog.pg_control_checkpoint()")
-    expect(sql).toContain("c.timeline_id")
+  })
+
+  it("the binding function reads the timeline from the current WAL file, not from the checkpoint, and writes nothing", async () => {
+    await setup()
+    const sql = unitOf(scoped, "function:simetra.storage_instance_id()")!.sql
+    expect(sql).toContain(
+      "pg_catalog.substr(pg_catalog.pg_walfile_name(pg_catalog.pg_current_wal_lsn()), 1, 8)"
+    )
+    expect(sql).not.toContain("pg_control_checkpoint")
+    expect(sql).not.toMatch(/INSERT|UPDATE|DELETE/)
   })
 
   it("the sweep removes only the records of transactions older than the snapshot xmin, for simetra_files alone", async () => {

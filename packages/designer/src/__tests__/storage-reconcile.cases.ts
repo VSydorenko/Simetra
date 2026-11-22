@@ -8,12 +8,9 @@ import {
   type CommandRuntime,
   type ReconcileLogEntry,
 } from "simetra/server"
-import {
-  TICKET_WRITER_ID,
-  reconcileFilesAged,
-} from "../../../simetra/test/support"
+import { reconcileFilesAged } from "../../../simetra/test/support"
 import { seedRuntimeActor, seedUnderMaintenance, sessionOf } from "./support/db"
-import { LIMIT } from "./storage-sql.support"
+import { ATTACHMENT_WRITER_ID, LIMIT } from "./storage-sql.support"
 import type { Env } from "./storage-env.support"
 
 /**
@@ -25,7 +22,7 @@ import type { Env } from "./storage-env.support"
  * швом `reconcileFilesAged` з віком 0 (публічного параметра віку немає).
  */
 
-const TICKET = { kind: "Catalog" as const, name: "Ticket" }
+const ATTACHMENT = { kind: "Catalog" as const, name: "Attachment" }
 const MARKER = "simetra-instance"
 const bodyOf = (text: string) => new Blob([text]).stream()
 const bytesOf = (text: string) => new TextEncoder().encode(text)
@@ -37,8 +34,14 @@ export function defineReconcileCases(env: () => Env): void {
       database: fromPgPool(env().pool),
       catalog: env().catalog,
     })
+  /** Відбиток прив'язки: його віддає `checkUpload` у тій самій транзакції. */
+  const instanceOf = async (rt: CommandRuntime): Promise<string> =>
+    (await rt.checkUpload(env().writer.session, {
+      object: ATTACHMENT,
+      scope: env().writer.org,
+    }))!.instance
   const objectId = () =>
-    env().catalog.objects.find((o) => o.name === "Ticket")!.id
+    env().catalog.objects.find((o) => o.name === "Attachment")!.id
 
   /** Байти в бакеті без рядка: сирота. */
   const putOrphan = async (
@@ -49,7 +52,7 @@ export function defineReconcileCases(env: () => Env): void {
     await env().files.put(key, bodyOf("x"), {
       contentType: "text/plain",
       maxBytes: LIMIT,
-      instance: await rt.fileInstance(),
+      instance: await instanceOf(rt),
     })
     return key
   }
@@ -65,10 +68,10 @@ export function defineReconcileCases(env: () => Env): void {
       await env().files.put(key, bodyOf("hello"), {
         contentType: "text/plain",
         maxBytes: LIMIT,
-        instance: await rt.fileInstance(),
+        instance: await instanceOf(rt),
       })
     await rt.attachFile(sessionOf(actor.user), {
-      object: TICKET,
+      object: ATTACHMENT,
       scope: actor.org,
       id,
       name: "a.txt",
@@ -103,7 +106,7 @@ export function defineReconcileCases(env: () => Env): void {
     it("removes the bytes of a row that went with its scope row by cascade, after the age and by the database clock", async () => {
       const rt = await runtime()
       // Своя організація й свій писач: каскад знесе лише її рядок
-      const actor = await seedRuntimeActor(env().owner, [TICKET_WRITER_ID])
+      const actor = await seedRuntimeActor(env().owner, [ATTACHMENT_WRITER_ID])
       const { key } = await putFile(rt, true, actor)
       const usage = async () =>
         (
@@ -116,7 +119,7 @@ export function defineReconcileCases(env: () => Env): void {
       // Кореневий каскад дає модель (`onRootDelete: "cascade"` виду `org`,
       // `ORG_ROOT_CASCADE`): корінь знімає членів, призначення й рядок файлу
       const column = env().catalog.objects.find(
-        (o) => o.name === "Ticket"
+        (o) => o.name === "Attachment"
       )!.scopeColumn!
       await seedUnderMaintenance(env().owner, async () => {
         await env().owner.query(
@@ -125,7 +128,7 @@ export function defineReconcileCases(env: () => Env): void {
         )
       })
       const left = await env().owner.query(
-        `SELECT 1 FROM public.ticket WHERE "${column}" = $1`,
+        `SELECT 1 FROM public.attachment WHERE "${column}" = $1`,
         [actor.org]
       )
       expect(left.rows).toEqual([])
@@ -180,7 +183,7 @@ export function defineReconcileCases(env: () => Env): void {
 
     it("refuses a bucket with another marker, and one with files but no marker: nothing is deleted", async () => {
       const rt = await runtime()
-      const instance = await rt.fileInstance()
+      const instance = await instanceOf(rt)
       const key = await putOrphan(rt)
       try {
         await setMarker(`${randomUUID()}:1:2:3`)
@@ -200,7 +203,7 @@ export function defineReconcileCases(env: () => Env): void {
 
     it("refuses the marker of a restored or copied database by naming the changed part, and works again after the rebind", async () => {
       const rt = await runtime()
-      const instance = await rt.fileInstance()
+      const instance = await instanceOf(rt)
       const [uuid, system, database, timeline] = instance.split(":")
       const key = await putOrphan(rt)
       try {
@@ -229,6 +232,32 @@ export function defineReconcileCases(env: () => Env): void {
         const { report } = await reconcile(rt, { aged: true })
         expect(report).toMatchObject({ deleted: 1, refused: null })
         expect(await exists(key)).toBe(false)
+      } finally {
+        await setMarker(instance)
+        await env().files.delete(key)
+      }
+    })
+
+    it("put judges the binding of the same runtime's latest checkUpload: refused after the marker moved, passes after the rebind without a restart", async () => {
+      const rt = await runtime()
+      const instance = await instanceOf(rt)
+      const [uuid, system, database, timeline] = instance.split(":")
+      const key = fileObjectKey(objectId(), randomUUID())
+      const put = async () =>
+        env().files.put(key, bodyOf("x"), {
+          contentType: "text/plain",
+          maxBytes: LIMIT,
+          instance: await instanceOf(rt),
+        })
+      try {
+        // Маркер бакета іншої копії: той самий живий рантайм, інший відбиток
+        await setMarker(`${uuid}:${system}1:${database}:${timeline}`)
+        await expect(put()).rejects.toMatchObject({
+          reason: "binding-changed",
+        })
+        await rt.rebindFileStore(env().files)
+        const written = await put()
+        expect(written).toEqual({ size: 1 })
       } finally {
         await setMarker(instance)
         await env().files.delete(key)

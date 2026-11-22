@@ -397,19 +397,21 @@ export function buildStorageUnits(input: StorageInput): SqlUnit[] {
     "END",
   ])
 
-  // Рядок прив'язки пишеться при першому зверненні, ідемпотентно: таблиця
-  // безумовна, а функція живе лише поки є об'єкт зі `storage`. Відбиток =
-  // uuid + `system_identifier` + oid бази + `timeline_id`: dump/restore і
-  // TEMPLATE дають інший sysid чи oid, PITR і підвищена репліка — інший
-  // timeline, тож копія бази не пройде за оригінал (спека §8.2). Функції
-  // `pg_control_*` виконуються для PUBLIC (їх немає в `system_functions.sql`)
+  // Лише читає: єдиний рядок прив'язки вставляє стан застосування, тож
+  // функція працює в `READ ONLY` транзакції `checkUpload`. Відбиток = uuid +
+  // `system_identifier` + oid бази + timeline: dump/restore і TEMPLATE дають
+  // інший sysid чи oid, PITR і підвищена репліка — інший timeline, тож копія
+  // бази не пройде за оригінал (спека §8.2). Timeline береться з поточного
+  // WAL-файла (перші 8 hex-знаків), а не з контрольної точки: після
+  // `pg_promote()` контрольної точки ще може не бути. На репліці
+  // `pg_walfile_name` кидає помилку — це відмова, а не діра. `pg_control_system`
+  // виконується для PUBLIC (його немає в `system_functions.sql`)
   const instanceId = functionSql(INSTANCE_ID, "", "text", [
     "BEGIN",
-    `  INSERT INTO ${INSTANCE} (singleton) VALUES (true) ON CONFLICT (singleton) DO NOTHING;`,
     `  RETURN (SELECT i.id::text FROM ${INSTANCE} i)`,
     "    || ':' || (SELECT s.system_identifier::text FROM pg_catalog.pg_control_system() s)",
     "    || ':' || (SELECT d.oid::text FROM pg_catalog.pg_database d WHERE d.datname = pg_catalog.current_database())",
-    "    || ':' || (SELECT c.timeline_id::text FROM pg_catalog.pg_control_checkpoint() c);",
+    "    || ':' || pg_catalog.substr(pg_catalog.pg_walfile_name(pg_catalog.pg_current_wal_lsn()), 1, 8);",
     "END",
   ])
 

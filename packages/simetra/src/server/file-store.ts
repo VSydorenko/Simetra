@@ -8,7 +8,7 @@ import {
 export const INSTANCE_MARKER_KEY = "simetra-instance"
 
 const BINDING =
-  /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(-?\d+):(\d+):(\d+)$/
+  /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(-?\d+):(\d+):([0-9A-Fa-f]+)$/
 
 /**
  * Parts of the database binding string `<uuid>:<system_identifier>:<database

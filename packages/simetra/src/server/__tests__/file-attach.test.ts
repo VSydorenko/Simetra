@@ -1,11 +1,12 @@
 import {
   CommandFailure,
+  fileObjectKey,
   PLATFORM_ROLES,
   runtimeCatalogSchema,
   type RuntimeCatalog,
 } from "simetra/model"
 import { describe, expect, it } from "vitest"
-import { FileStoreError } from "../file-store"
+import { FileStoreError, fromS3Client, type S3ClientLike } from "../file-store"
 import { FileAttachFailure } from "../transaction"
 import { commandObject, COMPANY, ID, OTHER } from "./fixtures"
 import {
@@ -73,6 +74,7 @@ const storageCatalog: RuntimeCatalog = runtimeCatalogSchema.parse({
 const docRow = (id = ID, version = 1) =>
   JSON.stringify({ id, version, file_name: "a.txt", company_id: COMPANY })
 
+const BOUND = "77777777-7777-4777-8777-777777777777:1:2:3"
 const FILES_ROLE = {
   text: `SET LOCAL ROLE "${PLATFORM_ROLES.files}"`,
   params: [],
@@ -117,6 +119,7 @@ const base: Override = (text) => {
   if (text.includes("document_save")) return { rows: [{ r: docRow() }] }
   if (text.includes("storage_pending_left")) return { rows: [{ pending: "f" }] }
   if (text.includes("storage_headroom")) return { rows: [{ ok: "t" }] }
+  if (text.includes("storage_instance_id")) return { rows: [{ id: BOUND }] }
   return undefined
 }
 const over =
@@ -330,6 +333,7 @@ describe("checkUpload", () => {
     expect(await runtime.checkUpload(session, check)).toEqual({
       maxBytes: 1000,
       mediaTypes: ["text/plain"],
+      instance: BOUND,
     })
     expect(db.calls).toEqual([
       { connect: true },
@@ -341,16 +345,105 @@ describe("checkUpload", () => {
         text: 'SELECT "simetra"."storage_headroom"($1::uuid, $2::uuid) AS ok',
         params: [DOC_ID, COMPANY],
       },
+      FILES_ROLE,
+      { text: 'SELECT "simetra"."storage_instance_id"() AS id', params: [] },
       COMMIT,
       { release: false },
     ])
   })
 
-  it("answers null on a refusal of headroom", async () => {
-    const { runtime } = await make((text) =>
+  it("answers null on a refusal of headroom and does not read the binding", async () => {
+    const { db, runtime } = await make((text) =>
       text.includes("storage_headroom") ? { rows: [{ ok: "f" }] } : undefined
     )
     expect(await runtime.checkUpload(session, check)).toBeNull()
+    expect(
+      db.calls.some((c) => "text" in c && c.text.includes("instance_id"))
+    ).toBe(false)
+  })
+
+  it("reads the binding on every call, with no cache of the runtime", async () => {
+    let binding = BOUND
+    const { runtime } = await make((text) =>
+      text.includes("storage_instance_id")
+        ? { rows: [{ id: binding }] }
+        : undefined
+    )
+    expect((await runtime.checkUpload(session, check))?.instance).toBe(BOUND)
+    binding = "77777777-7777-4777-8777-777777777777:1:2:4"
+    expect((await runtime.checkUpload(session, check))?.instance).toBe(binding)
+  })
+
+  it("refuses an answer that is not a binding (a bare uuid)", async () => {
+    const { runtime } = await make((text) =>
+      text.includes("storage_instance_id")
+        ? { rows: [{ id: "77777777-7777-4777-8777-777777777777" }] }
+        : undefined
+    )
+    await expect(runtime.checkUpload(session, check)).rejects.toBeInstanceOf(
+      CommandFailure
+    )
+  })
+
+  it("the binding of the check is what put judges: a promotion of a live process is refused, a rebind lets the next upload pass", async () => {
+    let binding = BOUND
+    const { runtime } = await make((text) =>
+      text.includes("storage_instance_id")
+        ? { rows: [{ id: binding }] }
+        : text.includes("pg_is_in_recovery")
+          ? { rows: [{ recovery: "f" }] }
+          : undefined
+    )
+    const objects = new Map<string, Uint8Array>()
+    const client: S3ClientLike = {
+      putObject: async (i) => void objects.set(i.Key, i.Body),
+      getObject: async (i) => {
+        const o = objects.get(i.Key)
+        if (o === undefined)
+          throw Object.assign(new Error("no key"), { name: "NoSuchKey" })
+        return {
+          Body: {
+            transformToWebStream: () =>
+              new ReadableStream({
+                start(c) {
+                  c.enqueue(o)
+                  c.close()
+                },
+              }),
+          },
+          ContentLength: o.byteLength,
+        }
+      },
+      deleteObject: async (i) => void objects.delete(i.Key),
+      listObjectsV2: async () => ({ Contents: [], IsTruncated: false }),
+    }
+    const store = fromS3Client(client, "b")
+    const body = () =>
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new Uint8Array(1))
+          c.close()
+        },
+      })
+    const upload = async (key: string) => {
+      const limits = (await runtime.checkUpload(session, check))!
+      return store.put(key, body(), {
+        contentType: "text/plain",
+        maxBytes: limits.maxBytes,
+        instance: limits.instance,
+      })
+    }
+    await upload(fileObjectKey(DOC_ID, ID))
+    binding = "77777777-7777-4777-8777-777777777777:1:2:4"
+    // Той самий процес: відбиток іншого timeline береться свіжим, а маркер
+    // бакета ще несе старий.
+    await expect(upload(fileObjectKey(DOC_ID, OTHER))).rejects.toMatchObject({
+      reason: "binding-changed",
+    })
+    await runtime.rebindFileStore(store)
+    await expect(upload(fileObjectKey(DOC_ID, OTHER))).resolves.toEqual({
+      size: 1,
+    })
   })
 
   it.each([
@@ -377,52 +470,6 @@ describe("checkUpload", () => {
     })
     expect(await runtime.checkUpload(session, check)).toBeNull()
     expect(db.calls).toEqual([])
-  })
-})
-
-describe("fileInstance", () => {
-  const INSTANCE = "77777777-7777-4777-8777-777777777777:1:2:3"
-  const answerId: Override = (text) =>
-    text.includes("storage_instance_id")
-      ? { rows: [{ id: INSTANCE }] }
-      : undefined
-
-  it("resolves the binding in a read-write transaction under the storage role and caches it", async () => {
-    const { db, runtime } = await make(answerId)
-    expect(await runtime.fileInstance()).toBe(INSTANCE)
-    expect(await runtime.fileInstance()).toBe(INSTANCE)
-    expect(db.calls).toEqual([
-      { connect: true },
-      BEGIN,
-      {
-        text: "SELECT set_config('statement_timeout', $1, true), set_config('lock_timeout', $2, true)",
-        params: ["15000", "5000"],
-      },
-      FILES_ROLE,
-      { text: 'SELECT "simetra"."storage_instance_id"() AS id', params: [] },
-      COMMIT,
-      { release: false },
-    ])
-  })
-
-  it("refuses an answer that is not a binding (a bare uuid)", async () => {
-    const { runtime } = await make((text) =>
-      text.includes("storage_instance_id")
-        ? { rows: [{ id: "77777777-7777-4777-8777-777777777777" }] }
-        : undefined
-    )
-    await expect(runtime.fileInstance()).rejects.toBeInstanceOf(CommandFailure)
-  })
-
-  it("does not cache a failure", async () => {
-    let n = 0
-    const { runtime } = await make((text, params) =>
-      text.includes("storage_instance_id") && n++ === 0
-        ? { error: { code: "XX000", message: "x" } }
-        : answerId(text, params)
-    )
-    await expect(runtime.fileInstance()).rejects.toBeInstanceOf(CommandFailure)
-    expect(await runtime.fileInstance()).toBe(INSTANCE)
   })
 })
 
@@ -574,7 +621,7 @@ describe("reconcileFiles", () => {
     expect(s.deleted).toEqual([])
   })
 
-  it("reads the binding fresh on every run, not from the cache of fileInstance", async () => {
+  it("reads the binding fresh on every run", async () => {
     let binding = INSTANCE
     const { runtime } = await make((text, params) =>
       text.includes("storage_instance_id")
@@ -587,7 +634,6 @@ describe("reconcileFiles", () => {
       ...s.store,
       checkInstance: async (i: string) => void seen.push(i),
     }
-    await runtime.fileInstance()
     binding = "77777777-7777-4777-8777-777777777777:1:2:4"
     await runtime.reconcileFiles(checking, { log: () => {} })
     expect(seen).toEqual([binding])

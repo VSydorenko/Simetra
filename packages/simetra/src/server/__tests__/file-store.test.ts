@@ -273,6 +273,17 @@ describe("database binding of the marker", () => {
     }
   )
 
+  it("the timeline is the hex prefix of the WAL file name, a promotion without a checkpoint changes it", async () => {
+    const { client } = fakeS3()
+    const store = fromS3Client(client, "b")
+    const first = `${INSTANCE}:100:200:00000001`
+    await store.put(KEY, streamOf(bytes(1)), { ...opts, instance: first })
+    await expect(
+      store.checkInstance(`${INSTANCE}:100:200:0000000A`)
+    ).rejects.toMatchObject({ reason: "binding-changed" })
+    await expect(store.checkInstance(first)).resolves.toBeUndefined()
+  })
+
   it("the same uuid with every part changed is still binding-changed, not foreign", async () => {
     const { client } = await bound()
     await expect(

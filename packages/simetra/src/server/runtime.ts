@@ -282,8 +282,13 @@ export interface CommandRuntime {
   ): Promise<ChannelGrant>
   /**
    * The pre-check of an upload (platform spec §8.2 step 2): one `READ ONLY`
-   * transaction under the request role asks `storage_headroom`. Returns the
-   * limits of the object's `storage`, or `null` — for a guest (no database
+   * transaction under the request role asks `storage_headroom`, then, under
+   * the storage role, reads the database binding string (`instance`: the
+   * `storage_instance` uuid with the cluster `system_identifier`, the
+   * database oid and the WAL timeline; never cached, so a promotion or a
+   * restore of a live process is seen by the next upload). The caller passes
+   * it to `FileStore.put` as option `instance`. Returns the limits of the
+   * object's `storage` with the binding, or `null` — for a guest (no database
    * call), an unknown object or one without `storage`, a scope that does not
    * fit, and a refusal of the right or of the quota alike. The check is
    * necessary, not sufficient: `attachFile` judges the row. Rejects with
@@ -308,18 +313,6 @@ export interface CommandRuntime {
     input: AttachFileInput
   ): Promise<CommandResult>
   /**
-   * The database binding string the byte store checks (`FileStore.put`
-   * option `instance`, `parseBinding`): the `storage_instance` uuid with the
-   * cluster `system_identifier`, the database oid and the checkpoint
-   * timeline, so a copy of the database does not pass for the original.
-   * Resolved once in its own
-   * read-write transaction under the storage role (the row is written
-   * lazily, so a `READ ONLY` transaction cannot do it) and cached. Rejects
-   * with `command.nested` when called from inside a hook (no nested
-   * connection), and with `CommandFailure` on a database refusal.
-   */
-  fileInstance(): Promise<string>
-  /**
    * The reconciliation of the byte store with the database (platform spec
    * §8.2): the only place bytes are physically deleted. Refuses (deletes
    * nothing, `report.refused`) for a bucket of another database, a marker of a
@@ -335,7 +328,7 @@ export interface CommandRuntime {
    * promoted replica): rewrites the bucket marker with the current binding of
    * this database. Only a marker of the same `storage_instance` uuid is
    * rewritten (`FileStoreError` `foreign-bucket` otherwise); refused with
-   * `in-recovery` on a standby. Reads the binding fresh, never the cache.
+   * `in-recovery` on a standby. Reads the binding fresh from the database.
    * Rejects with `command.nested` from inside a hook.
    */
   rebindFileStore(store: FileStore): Promise<void>
@@ -739,7 +732,6 @@ export async function createCommandRuntime(
       anonymous: roles.anonymous,
     },
   }
-  let instance: Promise<string> | undefined
   const reconcileOf = (
     store: FileStore,
     options: ReconcileOptions,
@@ -753,14 +745,6 @@ export async function createCommandRuntime(
       options,
       graceMs
     )
-  }
-  const cachedInstance = (): Promise<string> => {
-    instance ??= fileInstance(state).catch((error: unknown) => {
-      // Невдача не кешується: наступний виклик пробує знову.
-      instance = undefined
-      throw error
-    })
-    return instance
   }
   const runtime: CommandRuntime = {
     catalog,
@@ -835,7 +819,6 @@ export async function createCommandRuntime(
         )
       await store.rebind(await fileInstance(state))
     },
-    fileInstance: cachedInstance,
   }
   AGED_RECONCILE.set(runtime, reconcileOf)
   return runtime
@@ -1186,7 +1169,7 @@ type Send = (statement: {
  * налаштування, тіло й `COMMIT`. Відмова бази — `CommandFailure` за мапінгом
  * читання, відповідь не тієї форми (кидок тіла) — `command.internal` у
  * журнал; значення віддається лише з зафіксованої транзакції. Спільне для
- * `authorizeChannels`, `checkUpload` і `fileInstance`.
+ * `authorizeChannels` і `checkUpload`.
  */
 async function inShortTransaction<T>(
   state: RuntimeState,
@@ -1316,7 +1299,7 @@ async function checkUpload(
   if (scope === undefined) return null
   const claims = claimsOf(session)
   const role = readRoleFor(state, session)
-  const allowed = await inShortTransaction(
+  const instance = await inShortTransaction(
     state,
     BEGIN_READ_ONLY,
     [
@@ -1336,12 +1319,22 @@ async function checkUpload(
       if (rows.length !== 1 || (ok !== "t" && ok !== "f")) {
         throw new Error("storage_headroom answered no boolean")
       }
-      return ok === "t"
+      if (ok === "f") return null
+      // Відбиток читається тут же і щоразу заново: `put` звіряє саме його, тож
+      // промоція чи відновлення живого процесу не лишає застарілого значення.
+      // `SET LOCAL ROLE` перевіряє членство користувача сесії, а не поточну
+      // роль запиту, тож роль запиту нічого нового не отримує.
+      await send(FILES_ROLE)
+      return readInstance(send)
     }
   )
   const { storage } = object
-  return allowed && storage !== undefined
-    ? { maxBytes: storage.maxBytes, mediaTypes: [...storage.mediaTypes] }
+  return instance !== null && storage !== undefined
+    ? {
+        maxBytes: storage.maxBytes,
+        mediaTypes: [...storage.mediaTypes],
+        instance,
+      }
     : null
 }
 
@@ -1385,8 +1378,8 @@ function reconcileSource(state: RuntimeState): ReconcileSource {
     )
   return {
     inRecovery: () => inRecovery(state),
-    // Звірка читає відбиток щоразу заново: кеш `fileInstance()` міг пережити
-    // промоцію репліки
+    // Відбиток читається щоразу заново (кешу немає): промоція репліки чи
+    // відновлення мінять його під живим процесом
     instance: () => fileInstance(state),
     sweepPending: () =>
       inShortTransaction(
@@ -1421,35 +1414,37 @@ function reconcileSource(state: RuntimeState): ReconcileSource {
 }
 
 const BEGIN_WRITE = "BEGIN ISOLATION LEVEL READ COMMITTED"
-// Межі часу — як у інших транзакцій рантайму: `INSERT` рядка прив'язки може
-// чекати замка, а закешована обіцянка змусила б чекати всіх викликачів.
+// Межі часу — як у інших транзакцій рантайму.
 const INSTANCE_LIMITS = (state: RuntimeState) => ({
   text: "SELECT set_config('statement_timeout', $1, true), set_config('lock_timeout', $2, true)",
   params: [String(state.readTimeout), String(state.lockTimeoutMs)],
 })
 
+/** Відповідь `storage_instance_id()`: відбиток прив'язки; чужа форма — помилка. */
+async function readInstance(send: Send): Promise<string> {
+  const { rows } = await send({ text: INSTANCE_ID, params: [] })
+  const id = rows[0]?.id
+  if (
+    rows.length !== 1 ||
+    typeof id !== "string" ||
+    parseBinding(id) === null
+  ) {
+    throw new Error("storage_instance_id answered no binding")
+  }
+  return id
+}
+
 /**
- * Прив'язка бази до бакета (відбиток `uuid:sysid:oid:timeline`): `storage_instance_id()` пише рядок при першому
- * зверненні, тож потрібна транзакція на запис, а не `READ ONLY`. Лише роль
- * сховища має на неї `EXECUTE`; рантайм входить у неї через `SET LOCAL ROLE`.
+ * Відбиток прив'язки бази до бакета (`uuid:sysid:oid:timeline`) для звірки й
+ * `rebindFileStore`: окрема `READ ONLY` транзакція під роллю сховища, без
+ * кешу. Лише роль сховища має на функцію `EXECUTE`.
  */
 async function fileInstance(state: RuntimeState): Promise<string> {
   rejectNested()
   return inShortTransaction(
     state,
-    BEGIN_WRITE,
+    BEGIN_READ_ONLY,
     [INSTANCE_LIMITS(state), FILES_ROLE],
-    async (send) => {
-      const { rows } = await send({ text: INSTANCE_ID, params: [] })
-      const id = rows[0]?.id
-      if (
-        rows.length !== 1 ||
-        typeof id !== "string" ||
-        parseBinding(id) === null
-      ) {
-        throw new Error("storage_instance_id answered no binding")
-      }
-      return id
-    }
+    readInstance
   )
 }
