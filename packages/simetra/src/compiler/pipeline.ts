@@ -1361,7 +1361,7 @@ export function sqlStage(
   // вище за течією, і функцій політик немає.
   const policies: PolicyFunctions =
     stage3 === undefined || stage1.project === undefined
-      ? { functions: [], diagnostics: [] }
+      ? { functions: [], diagnostics: [], refused: [] }
       : policyFunctions({
           units: sql.units,
           tables: stage3.physical.tables,

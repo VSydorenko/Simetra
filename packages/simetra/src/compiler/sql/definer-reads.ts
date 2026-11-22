@@ -86,6 +86,7 @@ export function checkDefinerReads(
       functionIdentity(s.function.schema, s.function.name, [])
     )
   )
+  const absorbed = new Set(policies.refused)
   const modules = closedModuleOwners(objects)
   const declarations = new Map(declared.map((d) => [d.unit, d.declaration]))
   const grants = grantFacts(units, parse)
@@ -120,6 +121,13 @@ export function checkDefinerReads(
       )
       if (!privileged.some((role) => role !== PUBLIC)) continue
       if (form === "function") {
+        // Функцію, яку кличе дослівна політика не у формі функції політики,
+        // ремонтує `sql.policy-helper-correlated`: виправлення його знімає й
+        // цю помилку (форма виводить `EXECUTE`, декларація без політики-
+        // викликача — перевірку). Поглинання обчислюється на кожній
+        // компіляції: щойно відмови немає, а `EXECUTE` не виведено, помилка
+        // повертається.
+        if (absorbed.has(unit.identity)) continue
         found.push(
           diagnostic("sql.definer-caller-unchecked", unit.file, "", {
             schema: unit.schema,

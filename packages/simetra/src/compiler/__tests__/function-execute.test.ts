@@ -1040,12 +1040,7 @@ describe("EXECUTE of a policy function (І3)", () => {
         d.params?.name,
         d.params?.reason,
       ])
-    ).toEqual([
-      // Поза формою й без декларації функція з типовим `EXECUTE` `PUBLIC` —
-      // ще й звичайна неперевірена definer-функція
-      ["sql.definer-caller-unchecked", "public", "f", undefined],
-      ["sql.policy-helper-correlated", "public", "f", "policyRoles"],
-    ])
+    ).toEqual([["sql.policy-helper-correlated", "public", "f", "policyRoles"]])
     expect(
       result
         .model!.sqlUnits.filter((u) => /^GRANT EXECUTE\b/.test(u.sql))

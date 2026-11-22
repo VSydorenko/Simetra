@@ -81,6 +81,12 @@ export interface PolicyFunctions {
   functions: PolicyFunction[]
   /** `sql.policy-helper-correlated`: одна на функцію поза формою. */
   diagnostics: Diagnostic[]
+  /**
+   * Ідентичності одиниць цих діагностик: поки функція має
+   * `sql.policy-helper-correlated`, інші коди ремонту тієї самої функції
+   * вона поглинає (одна функція — одна причина ремонту, §5.8).
+   */
+  refused: string[]
 }
 
 export interface PolicyFunctionsInput {
@@ -881,7 +887,11 @@ export function policyFunctions(input: PolicyFunctionsInput): PolicyFunctions {
   const grants = grantFacts(units, parse)
   const bounds = new BoundCheck(input)
   const known = knownRoles(provider)
-  const result: PolicyFunctions = { functions: [], diagnostics: [] }
+  const result: PolicyFunctions = {
+    functions: [],
+    diagnostics: [],
+    refused: [],
+  }
   for (const [unit, list] of callers) {
     const judged = dimensions.has(unit.identity)
       ? { reasons: ["policyShape" as const], table: undefined, purposes: [] }
@@ -913,6 +923,7 @@ export function policyFunctions(input: PolicyFunctionsInput): PolicyFunctions {
       continue
     }
     const [reason, ...rest] = REASONS.filter((r) => judged.reasons.includes(r))
+    result.refused.push(unit.identity)
     result.diagnostics.push(
       diagnostic("sql.policy-helper-correlated", unit.file, "", {
         schema: unit.schema,
