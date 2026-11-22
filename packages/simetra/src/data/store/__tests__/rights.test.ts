@@ -594,6 +594,27 @@ describe("can", () => {
     ).toBe(false)
   })
 
+  it("create of a root with own: only the author carrier counts, not another owner", () => {
+    const entry = withRich({
+      actions: [{ action: "create", extents: [{ form: "own" }] }],
+      ownership: [
+        { carrier: ASSIGNEE, owner: { scopeKind: KIND } },
+        { carrier: { attribute: "owner" }, owner: { users: true } },
+      ],
+      root: { author: ASSIGNEE },
+    })
+    const own = [
+      row({ action: "create", extent: "own", level: "global", scope: null }),
+    ]
+    const row_ = (assignee: string, owner: string) => ({ assignee, owner })
+    expect(
+      can(mineSnap(own), entry, "create", { row: row_(MEMBER, OTHER) })
+    ).toBe(true)
+    expect(
+      can(mineSnap(own), entry, "create", { row: row_(OTHER, USER) })
+    ).toBe(false)
+  })
+
   it("publicRead opens read for a valid user and lifts the tenant boundary", () => {
     const entry = withRich({}) as CatalogEntry
     const open = { ...entry, publicRead: "authenticated" as const }

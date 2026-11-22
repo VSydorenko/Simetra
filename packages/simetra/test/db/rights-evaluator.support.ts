@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { uuid } from "../../src/compiler/__tests__/helpers"
 import type pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
@@ -17,6 +18,12 @@ import {
 } from "simetra/model"
 import {
   GLOBAL_FOUNDER_ID,
+  ROLE_FILE,
+  TICKET_WRITER_ID,
+  grant,
+  objects,
+  role,
+  type Layer,
   TENANT_OPERATOR_ID,
   TICKET_TABLE,
   commandCoreLayer,
@@ -34,6 +41,7 @@ import {
   type Seed,
   assignmentRow,
   deploy,
+  orgDeltaRow,
   describeTransaction,
   insert,
   profileLayer,
@@ -61,6 +69,8 @@ type Row = Record<string, unknown>
 type Tenant = "A" | "B"
 
 const MARK = "evaluator-grid"
+/** Користувачі лише з контейнерними правами: цілого скоупу вони не відкривають. */
+const CONTAINER_ONLY = ["tp", "po", "pr"]
 type WriteAction = "create" | "update" | "markDeletion"
 
 /**
@@ -78,6 +88,101 @@ const isRightsRefusal = (r: Refusal) =>
 async function grantCommandSwitch(client: pg.Client): Promise<void> {
   if (testProvider() !== "supabase") return
   await client.query(`GRANT ${PLATFORM_ROLES.command} TO session_user`)
+}
+
+const OWN_IN_PROJECT_ID = uuid(9801)
+const REGION_IN_PROJECT_ID = uuid(9802)
+const FULL_ACCESS_ID = uuid(9805)
+const WRITES = ["read", "create", "update", "markDeletion"]
+
+/**
+ * Доповнення моделі ядра команд (`commandCoreLayer`): контейнерні ролі з
+ * обсягами `own` і виміру та роль з `fullAccess`. Глобальна роль і «кожен
+ * користувач» на скоупленому об'єкті — помилка компілятора
+ * (`rights.grant-level`), тож їх фікстур тут немає.
+ */
+function evaluatorLayer(): Layer {
+  const ticket = objects(["Catalog", "Ticket"])
+  const inProject = { container: objects(["Catalog", "Project"])[0] }
+  return {
+    [ROLE_FILE("TicketOwnInProject")]: role(
+      OWN_IN_PROJECT_ID,
+      "TicketOwnInProject",
+      inProject,
+      { grants: [grant(ticket, WRITES, "own")] }
+    ),
+    [ROLE_FILE("TicketRegionInProject")]: role(
+      REGION_IN_PROJECT_ID,
+      "TicketRegionInProject",
+      inProject,
+      { grants: [grant(ticket, WRITES, { dimension: "region" })] }
+    ),
+    [ROLE_FILE("TicketFullAccess")]: role(
+      FULL_ACCESS_ID,
+      "TicketFullAccess",
+      { scopeKind: "org" },
+      { fullAccess: true }
+    ),
+  }
+}
+
+/**
+ * Користувачі поверх засіву ядра команд: `po` — `own` у контейнері P1,
+ * `pr` — вимір у P1 (регіон r1), `fa` — `fullAccess`, `dn` — `TicketWriter` з `deny update@any` у кастомній ролі.
+ * Рядки `KOWN` (виконавець `po`, P1), `KOWN2` (він же, P2) і `KDN`.
+ */
+async function seedEvaluator(client: pg.Client, ids: Seed): Promise<void> {
+  const create = async (
+    key: string,
+    table: string,
+    values: Record<string, unknown> = {}
+  ) => {
+    ids[key] = randomUUID()
+    await insert(client, table, { id: ids[key], ...values })
+  }
+  const member = async (
+    user: string,
+    assignment: Parameters<typeof assignmentRow>[1]
+  ) => {
+    ids[user] = await signUp(client)
+    await create(`${user}@A`, "org_member", {
+      org_id: ids.A,
+      user_id: ids[user],
+    })
+    await insert(client, "org_role_assignments", {
+      org_id: ids.A,
+      ...assignmentRow(ids[`${user}@A`]!, assignment),
+    })
+  }
+  await member("po", { archetype: OWN_IN_PROJECT_ID, container: ids.P1 })
+  await member("pr", { archetype: REGION_IN_PROJECT_ID, container: ids.P1 })
+  await insert(client, "member_region", {
+    org_id: ids.A,
+    member_id: ids["pr@A"],
+    region_id: ids.r1,
+  })
+  await member("fa", { archetype: FULL_ACCESS_ID })
+  await create("denyRole", "org_roles", {
+    org_id: ids.A,
+    archetype: TICKET_WRITER_ID,
+  })
+  await insert(
+    client,
+    "org_roles_delta",
+    orgDeltaRow(ids.A!, ids.denyRole!, 1, ["deny", "ticket", "update", "any"])
+  )
+  await member("dn", { customRole: ids.denyRole })
+  // Свій рядок `dn`: його `own`-право без рядка в скоупі — право «хоч на щось»
+  await create("KDN", TICKET_TABLE, { org_id: ids.A, assignee_id: ids["dn@A"] })
+  for (const [key, project] of [
+    ["KOWN", ids.P1],
+    ["KOWN2", ids.P2],
+  ] as const)
+    await create(key, TICKET_TABLE, {
+      org_id: ids.A,
+      assignee_id: ids["po@A"],
+      project_id: project,
+    })
 }
 
 /** Значення рядка за логічними іменами атрибутів і ключем (носії прав). */
@@ -107,11 +212,28 @@ export function defineRightsEvaluatorCases(): void {
       return id
     }
     const claims = (user: string) => claimsFor("user", key(user))
-    const USERS = ["tw", "to", "tr", "tp", "rd", "cw", "tb"]
+    const USERS = [
+      "tw",
+      "to",
+      "tr",
+      "tp",
+      "rd",
+      "cw",
+      "tb",
+      "po",
+      "pr",
+      "fa",
+      "dn",
+    ]
 
     beforeAll(async () => {
       const result = await compileRights(
-        policyDomain(writeRoles(), commandCoreLayer(), profileLayer())
+        policyDomain(
+          writeRoles(),
+          commandCoreLayer(),
+          evaluatorLayer(),
+          profileLayer()
+        )
       )
       expect(result.diagnostics).toEqual([])
       const model = result.model!
@@ -124,6 +246,7 @@ export function defineRightsEvaluatorCases(): void {
       )
       await grantCommandSwitch(client)
       ids = await seedCommandCore(client)
+      await seedEvaluator(client, ids)
       // `publicRead` без межі тенанта: по рядку в обох тенантах.
       for (const org of ["A", "B"]) {
         ids[`bulletin.${org}`] = randomUUID()
@@ -155,7 +278,16 @@ export function defineRightsEvaluatorCases(): void {
       { assignee: string[]; region: string[]; project: string[] }
     > = {
       A: {
-        assignee: ["tw@A", "to@A", "tr@A", "tp@A", "rd@A", "cw@A"],
+        assignee: [
+          "tw@A",
+          "to@A",
+          "tr@A",
+          "tp@A",
+          "rd@A",
+          "cw@A",
+          "po@A",
+          "pr@A",
+        ],
         region: ["r1", "r2"],
         project: ["P1", "P2"],
       },
@@ -171,6 +303,17 @@ export function defineRightsEvaluatorCases(): void {
 
     const statesOf = (tenant: Tenant): State[] => [
       { label: "unchanged", set: {} },
+      // Контейнерні обсяги судять носій і контейнер разом
+      ...POOL[tenant].project.slice(0, 1).flatMap((project) => [
+        ...POOL[tenant].assignee.map((a) => ({
+          label: `assignee=${a}+project=${project}`,
+          set: { assignee: key(a), project: key(project) },
+        })),
+        ...POOL[tenant].region.map((r) => ({
+          label: `region=${r}+project=${project}`,
+          set: { region: key(r), project: key(project) },
+        })),
+      ]),
       ...(Object.keys(COLUMN) as Carrier[]).flatMap((c) => [
         { label: `${c}=NULL`, set: { [c]: null } },
         ...POOL[tenant][c].map((k) => ({
@@ -184,6 +327,8 @@ export function defineRightsEvaluatorCases(): void {
       ["K2", "A"],
       ["KR", "A"],
       ["KB", "B"],
+      ["KOWN", "A"],
+      ["KOWN2", "A"],
     ]
 
     const ownerRow = async (id: string) =>
@@ -280,60 +425,68 @@ export function defineRightsEvaluatorCases(): void {
         mismatches.push(`${label}: can ${predicted}, database ${db}`)
     }
 
-    it.each(USERS)("write: can equals the database for %s", async (user) => {
-      const mismatches: string[] = []
-      outcomes.true = 0
-      outcomes.false = 0
-      for (const [rowKey, tenant] of ROWS) {
-        const before = await ownerRow(key(rowKey))
-        for (const state of statesOf(tenant)) {
-          const set = Object.fromEntries(
-            Object.entries(state.set).map(([c, v]) => [COLUMN[c as Carrier], v])
-          )
-          // update: «до» і «після» рядка судять USING і WITH CHECK
-          judge(
-            mismatches,
-            `${user} update ${rowKey} ${state.label}`,
-            both(
-              canWrite(user, "update", before, tenant),
-              canWrite(user, "update", { ...before, ...set }, tenant)
-            ),
-            await viaDb(user, "update", key(rowKey), {
-              description: MARK,
+    it.each(USERS)(
+      "write: can equals the database for %s",
+      async (user) => {
+        const mismatches: string[] = []
+        outcomes.true = 0
+        outcomes.false = 0
+        for (const [rowKey, tenant] of ROWS) {
+          const before = await ownerRow(key(rowKey))
+          for (const state of statesOf(tenant)) {
+            const set = Object.fromEntries(
+              Object.entries(state.set).map(([c, v]) => [
+                COLUMN[c as Carrier],
+                v,
+              ])
+            )
+            // update: «до» і «після» рядка судять USING і WITH CHECK
+            judge(
+              mismatches,
+              `${user} update ${rowKey} ${state.label}`,
+              both(
+                canWrite(user, "update", before, tenant),
+                canWrite(user, "update", { ...before, ...set }, tenant)
+              ),
+              await viaDb(user, "update", key(rowKey), {
+                description: MARK,
+                ...set,
+              })
+            )
+            // create: новий рядок із носіями стану, решта — порожня
+            const fresh: Row = {
+              org_id: key(tenant),
+              assignee_id: null,
+              region_id: null,
+              project_id: null,
               ...set,
-            })
-          )
-          // create: новий рядок із носіями стану, решта — порожня
-          const fresh: Row = {
-            org_id: key(tenant),
-            assignee_id: null,
-            region_id: null,
-            project_id: null,
-            ...set,
+            }
+            judge(
+              mismatches,
+              `${user} create in ${tenant} ${state.label}`,
+              canWrite(user, "create", fresh, tenant),
+              await viaDb(user, "create", randomUUID(), fresh)
+            )
           }
           judge(
             mismatches,
-            `${user} create in ${tenant} ${state.label}`,
-            canWrite(user, "create", fresh, tenant),
-            await viaDb(user, "create", randomUUID(), fresh)
+            `${user} markDeletion ${rowKey}`,
+            canWrite(user, "markDeletion", before, tenant),
+            await viaDb(user, "markDeletion", key(rowKey), {})
           )
         }
-        judge(
-          mismatches,
-          `${user} markDeletion ${rowKey}`,
-          canWrite(user, "markDeletion", before, tenant),
-          await viaDb(user, "markDeletion", key(rowKey), {})
-        )
-      }
-      expect(mismatches).toEqual([])
-      // Сітка не вироджується: кожен користувач має хоч одну відмову, а
-      // власник будь-якого обсягу — хоч один дозвіл.
-      expect(outcomes.false).toBeGreaterThan(0)
-      if (user !== "rd" && user !== "cw")
-        expect(outcomes.true, `${user} has a permitted point`).toBeGreaterThan(
-          0
-        )
-    })
+        expect(mismatches).toEqual([])
+        // Сітка не вироджується: кожен користувач має хоч одну відмову, а
+        // власник будь-якого обсягу — хоч один дозвіл.
+        expect(outcomes.false).toBeGreaterThan(0)
+        if (!["rd", "cw"].includes(user))
+          expect(
+            outcomes.true,
+            `${user} has a permitted point`
+          ).toBeGreaterThan(0)
+      },
+      180_000
+    )
 
     it("write without a row: the scope has a right to something", async () => {
       const mismatches: string[] = []
@@ -341,7 +494,7 @@ export function defineRightsEvaluatorCases(): void {
         for (const action of ["update", "markDeletion"] as const) {
           // Право «хоч на щось»: хоч один фікстурний рядок скоупу A проходить
           let some = false
-          for (const rowKey of ["K1", "K2", "KR", "KL", "KW"]) {
+          for (const rowKey of ["K1", "K2", "KR", "KL", "KW", "KOWN", "KDN"]) {
             some ||= await viaDb(user, action, key(rowKey), {
               ...(action === "update" ? { description: MARK } : {}),
             })
@@ -354,18 +507,18 @@ export function defineRightsEvaluatorCases(): void {
             world.catalog.adoptedFacts
           )
           // Без рядка контейнерне право цілого скоупу не відкриває (Р3): `tp`
-          // має лише його, тож для нього `false` при проходженні рядка —
+          // мають лише його (`tp`, `po`, `pr`), тож для них `false` при проходженні рядка —
           // задумане. Для решти `true` ⇔ є рядок, який проходить.
           if (predicted === true && !some)
             mismatches.push(
               `${user} ${action}: can true, no fixture row passes`
             )
-          if (predicted === false && some && user !== "tp")
+          if (predicted === false && some && !CONTAINER_ONLY.includes(user))
             mismatches.push(`${user} ${action}: can false, a row passes`)
         }
       }
       expect(mismatches).toEqual([])
-    })
+    }, 120_000)
   })
 
   describe("T4 can equals the database: signal model", () => {
