@@ -313,14 +313,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   // після попереднього e, а надгробків скінченно. Від порядку подій не
   // залежить: вимога лічиться від відхиленої відповіді, а не від
   // відновлення слота.
-  function confirm(
-    s: Subset,
-    required: number | undefined,
-    readEpoch: number
-  ): boolean {
+  function confirm(s: Subset, readEpoch: number): boolean {
     const since = s.unconfirmedSince
     if (since === undefined) return false
-    if (since === required) {
+    if (!s.answerRejected) {
       if (readEpoch > since) s.unconfirmedSince = undefined
       return false
     }
@@ -371,7 +367,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           session.commit(
             (scope) => {
               try {
-                const required = s.unconfirmedSince
+                s.answerRejected = false
                 if (!apply(scope)) {
                   discarded = !session.versions.unavailable()
                   if (!discarded) {
@@ -390,7 +386,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                 s.needsRefresh = false
                 s.unconfirmedRefresh = false
                 s.hasNewRows = false
-                again = confirm(s, required, readEpoch)
+                again = confirm(s, readEpoch)
               } catch (error) {
                 // Дефект застосування — вигляд у `error`, рядки без власника
                 // прибирає `sweep`; відмова не стає необробленою.
@@ -568,7 +564,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           session.commit(
             (scope) => {
               try {
-                const required = s.unconfirmedSince
+                s.answerRejected = false
                 const before = s.window?.generation
                 if (!apply(scope)) {
                   discarded = !session.versions.unavailable()
@@ -584,7 +580,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                 }
                 if (s.window?.generation !== before)
                   written = s.window?.generation
-                again = confirm(s, required, readEpoch)
+                again = confirm(s, readEpoch)
               } catch (error) {
                 ctx.log({ kind: "listener-failed", error })
                 s.status = "error"
@@ -896,6 +892,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       hydrated: false,
       headerState: undefined,
       unconfirmedSince: undefined,
+      answerRejected: false,
     }
     subsets.set(form.specKey, s)
     ctx.touchSubscriptions()

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { coreInternals } from "../core"
 import { DEFAULT_CORE_LIMITS, type Key, type ViewSpec } from "../types"
 import {
   TASK,
@@ -87,15 +88,18 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
       kind: "window",
       spec: { kind: "window", object: TASK } as ViewSpec,
       held: isPage,
+      mine: isPage,
     },
     {
       kind: "keys",
       spec: { kind: "keys", object: TASK, keys: [key(2), key(3)] } as ViewSpec,
       held: reads(key(2)),
+      // Ключ 3 читає лише цей вигляд: розбіжність готують над ключами 1–2.
+      mine: reads(key(3)),
     },
   ])(
     "$kind, visible: reads again in the same flight until the composition holds the row",
-    async ({ spec, held }) => {
+    async ({ spec, held, mine }) => {
       const h = setup()
       seed(h.fake, 1, 3)
       const bury = await divergence(h, key(2))
@@ -109,6 +113,8 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
       await drain(h)
       expect(keysIn(handle.getSnapshot())).toContain(key(2))
       expect(handle.getSnapshot().needsRefresh).toBe(false)
+      // Завантаження й один повтор того самого польоту.
+      expect(h.fake.log.filter(mine)).toHaveLength(2)
     }
   )
 
@@ -137,6 +143,50 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
     h.core.setVisible(spec, true)
     await drain(h)
     expect(h.fake.log.filter(isPage)).toHaveLength(2)
+  })
+
+  // Дві сторінки в польоті, відхилені без руху епохи між відповідями,
+  // дають ту саму вимогу: повтор іде за фактом відхилення кожної відповіді,
+  // а не за зміною значення вимоги.
+  it("window pages before and after in flight, both rejected: each repeats", async () => {
+    const h = setup({ limits: { windowPage: 2 } })
+    seed(h.fake, 1, 6)
+    const spec: ViewSpec = { kind: "window", object: TASK }
+    const handle = h.core.view(spec)
+    watch(handle)
+    await settle()
+    handle.loadAfter()
+    await settle()
+    // Вікно посеред порядку: перша сторінка пішла з purge.
+    h.core.commit(
+      (w) => w.purge(TASK, { keys: [key(1), key(2)] }),
+      h.core.token()
+    )
+    const s = [...coreInternals(h.core).registry.subsets()].find(
+      (sub) => sub.form.spec.kind === "window"
+    )!
+    s.window = { ...s.window!, atStart: false }
+    s.dirty = true
+    expect(keysIn(handle.getSnapshot())).toEqual([key(3), key(4)])
+    const bury = [await divergence(h, key(2)), await divergence(h, key(5))]
+    h.fake.hold = isPage
+    handle.loadBefore()
+    handle.loadAfter()
+    await settle()
+    const before = h.fake.take(isPage)
+    const after = h.fake.take(isPage)
+    for (const b of bury) await b()
+    before.answer()
+    after.answer()
+    await drain(h)
+    expect(keysIn(handle.getSnapshot())).toEqual([
+      key(1),
+      key(2),
+      key(3),
+      key(4),
+      key(5),
+      key(6),
+    ])
   })
 
   it("window page of loadAfter: the repeat takes the place of its own page, in server order", async () => {

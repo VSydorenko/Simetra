@@ -152,6 +152,13 @@ export interface ReaderTarget {
    * successful load of the view that started after it lifts it.
    */
   unconfirmedSince: number | undefined
+  /**
+   * The answer being applied rejected a row and raised `unconfirmedSince`
+   * (П15). Its reader sets it, the flight resets it before the write: two
+   * answers rejected at the same epoch both see the fact, not a change of the
+   * value.
+   */
+  answerRejected: boolean
 }
 
 /** Writes a read result inside one `commit`. */
@@ -551,8 +558,9 @@ function rejectedSince(
 
 /** Raises the view's requirement «composition not confirmed» (П15). */
 function requireSince(s: ReaderTarget, since: number | undefined) {
-  if (since !== undefined)
-    s.unconfirmedSince = Math.max(s.unconfirmedSince ?? 0, since)
+  if (since === undefined) return
+  s.unconfirmedSince = Math.max(s.unconfirmedSince ?? 0, since)
+  s.answerRejected = true
 }
 
 /**
