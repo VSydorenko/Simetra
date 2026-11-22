@@ -123,7 +123,7 @@ describe("src/server sources", () => {
   // вбудована конструкція з переліку нижче, (2) функція, оголошена в цьому ж
   // модулі, (3) імпорт із проєкту (відносний шлях, `simetra/…`) чи `zod`,
   // (4) літерал; усе інше (`fetch`, таймери, `process`, імпорт із `node:*`
-  // чи стороннього пакета, невідомий глобал) — ввід-вивід. Тіла функцій і
+  // чи стороннього пакета, невідомий глобал) і будь-яке `await` — ввід-вивід. Тіла функцій і
   // класів не перевіряються: вони виконуються лише з виклику.
   it("does no I/O at module top level", () => {
     const PURE_BUILTINS = new Set([
@@ -191,6 +191,10 @@ describe("src/server sources", () => {
         ts.isTypeAliasDeclaration(n)
       )
         return
+      // Будь-яке `await` верхнього рівня чекає зовнішнього: голий
+      // `await <ідентифікатор>` виклику не має, але імпорт модуля чекав би
+      // проміса, що вже стартував.
+      if (ts.isAwaitExpression(n)) hits.push(`${f}: ${n.getText()}`)
       if (ts.isCallExpression(n) || ts.isNewExpression(n)) {
         const root = rootOf(n.expression)
         if (root === undefined || (root !== "" && !ok.has(root)))
