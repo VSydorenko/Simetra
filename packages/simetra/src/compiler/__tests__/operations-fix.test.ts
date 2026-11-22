@@ -1137,7 +1137,9 @@ describe("fixFiles: function declarations (repair mode)", () => {
     it("cuts an ADP and inserts a guard in the same file", async () => {
       // Вставка запобіжника зсуває рядки: вирізання не мусить шукати одиницю
       // за застарілим рядком.
-      const sql = create("f") + "\n" + ADP_FN("anon")
+      // Тіло в кілька рядків: вставка додає рядок і зсуває ADP нижче.
+      const sql =
+        create("f", "BEGIN\n  PERFORM 1;\nEND") + "\n" + ADP_FN("anon")
       const files = await acceptDebt(
         folder(sql, [declared("f", CHECK, uuid(5301))])
       )
