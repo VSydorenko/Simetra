@@ -18,3 +18,10 @@ export {
   type DatabaseClient,
   type PgPoolLike,
 } from "./port"
+export {
+  fromS3Client,
+  FileStoreError,
+  INSTANCE_MARKER_KEY,
+  type FileStore,
+  type S3ClientLike,
+} from "./file-store"
