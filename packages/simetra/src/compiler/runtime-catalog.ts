@@ -10,6 +10,7 @@ import {
   type CatalogRightsSubject,
   type RuntimeAttribute,
   type RuntimeCatalog,
+  type Storage,
   type RuntimeConstraint,
   type RuntimeObject,
   type RuntimeOperationTarget,
@@ -155,6 +156,19 @@ function publicReadOf(
   }
 }
 
+// Межа файлу — з метаданих об'єкта як є: окремого виводу немає.
+function storageOf(object: SourceObject): Pick<RuntimeObject, "storage"> {
+  const { storage } = object.data as { storage?: Storage }
+  if (storage === undefined) return {}
+  // Поля читаються по одному: так їх бачить ратчет метамоделі.
+  return {
+    storage: {
+      maxBytes: storage.maxBytes,
+      mediaTypes: [...storage.mediaTypes],
+    },
+  }
+}
+
 interface Facts {
   model: CompiledModel
   /** Колонки CHECK за `checkKey`, у порядку колонок таблиці. */
@@ -211,6 +225,7 @@ function runtimeObject(
     versionName: fieldOf(fields, versionColumn).name,
     signal: isSignalObject(facts.model, object.id),
     ...publicReadOf(facts.model, object.id, table),
+    ...storageOf(object),
     ...rightsOf(object.id, header, contract, facts),
     ...presentationOf(
       facts.model.presentation.objects.find((p) => p.objectId === object.id),

@@ -1066,11 +1066,24 @@ export function kitchenSink(): Map<string, string> {
     ],
   }
 
+  // Довідник-файл: `storage` несумісний з контейнером, предвизначеними й
+  // ієрархією груп, тож для нього окремий об'єкт. Створюється останнім: id
+  // видаються лічильником, і раніший зсунув би id решти об'єктів, а з ними
+  // зафіксовані хеші знімків.
+  const attachment = {
+    ...header("Catalog", "Attachment", "attachment"),
+    storage: {
+      maxBytes: 1048576,
+      mediaTypes: ["application/pdf", "image/png"],
+    },
+  }
+
   const entries: Record<string, unknown> = {
     "project.meta.json": project,
     "catalogs/Organization/Organization.meta.json": organization,
     "catalogs/Partner/Partner.meta.json": partner,
     "catalogs/Item/Item.meta.json": item,
+    "catalogs/Attachment/Attachment.meta.json": attachment,
     "catalogs/Users/Users.meta.json": users,
     "catalogs/Member/Member.meta.json": member,
     "documents/Sale/Sale.meta.json": sale,

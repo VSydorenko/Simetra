@@ -1,5 +1,7 @@
 import {
   COMMAND_CORE_ERRORS,
+  STORAGE_ERRORS,
+  STORAGE_REASONS,
   type CommandError,
   type MetadataRef,
   type ObjectOperation,
@@ -198,6 +200,15 @@ export function mapDatabaseError(
     return detail !== undefined && CONTEXT_DETAILS.includes(detail)
       ? { code: "command.context", detail }
       : INTERNAL
+  }
+  // Відмови сховища файлів (Р11 ПГ-5): власний `errcode`, а не одна з відмов
+  // ядра, тож без цієї гілки `RAISE` став би `command.internal`. Причина — лише
+  // з переліку T0: той самий `MESSAGE` може кинути SQL-обробник із чужим `DETAIL`.
+  if (code === STORAGE_ERRORS.errcode && message === STORAGE_ERRORS.message) {
+    const reason = STORAGE_REASONS.find((r) => r === detail)
+    return reason === undefined
+      ? INTERNAL
+      : { code: "command.rejected", reason: `storage.${reason}` }
   }
   switch (code) {
     case E.forbidden.errcode:

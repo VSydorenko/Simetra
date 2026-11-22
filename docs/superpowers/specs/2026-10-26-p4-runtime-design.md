@@ -172,13 +172,15 @@ Postgres»](2026-10-01-platform-in-postgres-design.md) §9, п. 1 і п. 4) на
 
 **Ролі** (Рт9). T0 (`packages/simetra/src/model/schemas/project.ts`) отримує
 `PLATFORM_LOGIN_ROLES = { runtime: "simetra_runtime" }` поряд із
-`PLATFORM_ROLES` (отримувачі грантів, без змін) і `PROVIDER_LOGIN_ROLES`
+`PLATFORM_ROLES` (отримувачі грантів; ПГ-5 додає `files: "simetra_files"` —
+роль виклику функцій сховища, не призначення гранту) і `PROVIDER_LOGIN_ROLES`
 (спека прав §7). Форма ролей:
 
 | Роль | Атрибути | Членство |
 | --- | --- | --- |
 | `simetra_command` | `NOLOGIN NOINHERIT` | без змін (спека прав §5.3) |
-| `simetra_runtime` | `LOGIN NOINHERIT`, без пароля від платформи | член `simetra_command`; у профілі `supabase` — ще й члени `authenticated` і `anon` (ролі запиту користувача й аноніма, `PROVIDER_API_ROLES.supabase`), обидва `WITH INHERIT FALSE, SET TRUE`; у профілі `postgres` — ще й `simetra_user` та `simetra_anon` (спека профілю `postgres` §3.1); рядка `simetra_signals` у `roles` немає до блоку ПГ-4 |
+| `simetra_files` | `NOLOGIN NOINHERIT` | без членів, крім `simetra_runtime` (`LOGIN_ROLE_PARENTS.runtime`, `INHERIT FALSE, SET TRUE`); єдина має `EXECUTE` на `file_attach`, `storage_rows_exist`, `storage_row_page` і перевірку залишку `storage_pending` (спека профілю `postgres` §3.1, §8) |
+| `simetra_runtime` | `LOGIN NOINHERIT`, без пароля від платформи | член `simetra_command` і `simetra_files` (блок ПГ-5 профілю `postgres`); у профілі `supabase` — ще й члени `authenticated` і `anon` (ролі запиту користувача й аноніма, `PROVIDER_API_ROLES.supabase`), обидва `WITH INHERIT FALSE, SET TRUE`; у профілі `postgres` — ще й `simetra_user` та `simetra_anon` (спека профілю `postgres` §3.1); рядка `simetra_signals` у `roles` немає до блоку ПГ-4 |
 
 Інваріанти, які тримає тест членства ролей і гейт:
 
@@ -1069,7 +1071,7 @@ INSERT OR UPDATE` лише на таблицях із `trackAuthor`, коли п
 | `command.context` | `42501` з `MESSAGE 'command.context'` — дефект платформи, не застосунку | `detail` |
 | `command.unauthenticated` | `current_user_id()` = `NULL`; читання з claims без `sub` (§6.11); немає claim аноніма в профілі з `anonymousClaim` (§6.11); `subject` конверта даних ≠ `sub` сесії (спека П4-B §4.5) | `reason: "session-changed"` — для `subject` конверта |
 | `command.stale-client` | запит форми передачі несумісний з каталогом сервера — і на записі, і на читанні (спека П4-B §10) | `object` — UUID об'єкта запиту |
-| `command.rejected` | `ctx.reject` | `reason` — код застосунку, `path` |
+| `command.rejected` | `ctx.reject`; відмова сховища файлів: `RAISE` з переліку `STORAGE_ERRORS` T0 (`attach-missing`, `attach-invalid`, `quota-exceeded`) | `reason` — код застосунку, `path`; для сховища — `storage.<причина>` (`mapDatabaseError`; без цього `RAISE` став би `command.internal`; `LIMIT_REASONS` не змінюється) |
 | `command.nested`, `command.depth` | §6.5 | `command.depth` понад межу фаз `ctx.run` — `reason: "phases"` |
 | `command.retry-exhausted` | §6.5 | — |
 | `command.model-mismatch` | створення рантайму (§6.3) | обидва хеші |

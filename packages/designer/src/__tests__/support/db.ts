@@ -5,6 +5,7 @@ import { canonicalSnapshot, type CompiledModel } from "simetra/compiler"
 import {
   CommandFailure,
   LOGIN_ROLE_REQUEST_PURPOSES,
+  PLATFORM_ROLES,
   PROVIDER_API_ROLES,
   PROVIDER_IDENTITY_SOURCES,
   PROVIDER_OWNER_ROLES,
@@ -190,6 +191,51 @@ export async function withTemplateTarget<T>(
 }
 
 /**
+ * The plan of `model` against the target `url` as the owner login (the way a
+ * real target is changed): the outcome of `buildPlan`, for a test that wants
+ * the refusal or the artifact.
+ */
+export function planOn(url: string, model: CompiledModel) {
+  return buildPlan(
+    defaultEngine,
+    {
+      reader: createApplyDatabase({ readOnly: true }),
+      scratch: createApplyDatabase({ readOnly: false }),
+    },
+    model,
+    { target: { url: ownerLoginOf(url) } },
+    []
+  )
+}
+
+/**
+ * Plans and applies `model` on the target `url`; throws when the plan was not
+ * made. The result is the apply outcome (`committed` on success).
+ */
+export async function applyOn(url: string, model: CompiledModel) {
+  const outcome = await planOn(url, model)
+  if (outcome.status !== "planned")
+    throw new Error(
+      `${outcome.status}: ${outcome.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => `${d.code} ${d.message}`)
+        .join("; ")}`
+    )
+  const artifact = outcome.artifact
+  return executePlan(
+    createApplyDatabase({ readOnly: false }),
+    { url: ownerLoginOf(url) },
+    artifact,
+    {
+      mode: "apply",
+      planHash: artifact.planHash,
+      allow: artifact.requiredPermissions,
+      snapshot: canonicalSnapshot(model),
+    }
+  )
+}
+
+/**
  * Runs `fn` against a target that holds `model` and can take an identity
  * (`signUp`, `seedRuntimeActor`): on `postgres` a bare target gets the Better
  * Auth identity, then the plan and the apply of `model` as the owner login;
@@ -215,38 +261,7 @@ export async function withModelTarget<T>(
   }
   return withTemplateTarget(async (url) => {
     await withTargetIdentity(url)
-    const target = {
-      url: withDatabaseName(testOwnerLoginUrl(), databaseOf(url)),
-    }
-    const outcome = await buildPlan(
-      defaultEngine,
-      {
-        reader: createApplyDatabase({ readOnly: true }),
-        scratch: createApplyDatabase({ readOnly: false }),
-      },
-      model,
-      { target },
-      []
-    )
-    if (outcome.status !== "planned")
-      throw new Error(
-        `${outcome.status}: ${outcome.diagnostics
-          .filter((d) => d.severity === "error")
-          .map((d) => `${d.code} ${d.message}`)
-          .join("; ")}`
-      )
-    const artifact = outcome.artifact
-    const applied = await executePlan(
-      createApplyDatabase({ readOnly: false }),
-      target,
-      artifact,
-      {
-        mode: "apply",
-        planHash: artifact.planHash,
-        allow: artifact.requiredPermissions,
-        snapshot: canonicalSnapshot(model),
-      }
-    )
+    const applied = await applyOn(url, model)
     if (applied.status !== "committed")
       throw new Error(`the model did not apply: ${applied.status}`)
     return fn(url)
@@ -330,7 +345,12 @@ export async function withRuntimeLogin<T>(
   memberOf: readonly string[],
   fn: (loginUrl: string) => Promise<T>,
   label = "runtime",
-  attributes: { bypassRls?: boolean; inherit?: boolean } = {}
+  attributes: {
+    bypassRls?: boolean
+    inherit?: boolean
+    /** Роль входу без членства в ролі сховища файлів: рантайм на ній не стартує (І20). */
+    withoutFiles?: boolean
+  } = {}
 ): Promise<T> {
   // Supavisor кешує секрет ролі за ім'ям: роль, перестворена з тим самим
   // ім'ям і новим паролем, через пулер не входить (`28P01`), доки кеш не
@@ -350,9 +370,18 @@ export async function withRuntimeLogin<T>(
   const requestRoles = LOGIN_ROLE_REQUEST_PURPOSES[provider].map(
     (purpose) => PROVIDER_API_ROLES[provider][purpose]
   )
-  const roles = memberOf.includes(PROVIDER_API_ROLES[provider].user)
-    ? [...new Set([...memberOf, ...requestRoles])]
-    : memberOf
+  // Роль входу рантайму — завжди і в ролі сховища файлів: рантайм доводить це
+  // членство на створенні (`inspect`), тож вхід, що має роль команд, має й її.
+  const platformRoles = memberOf.includes(PLATFORM_ROLES.command)
+    ? [PLATFORM_ROLES.files]
+    : []
+  const withFiles =
+    attributes.withoutFiles === true
+      ? memberOf
+      : [...new Set([...memberOf, ...platformRoles])]
+  const roles = withFiles.includes(PROVIDER_API_ROLES[provider].user)
+    ? [...new Set([...withFiles, ...requestRoles])]
+    : withFiles
   try {
     await asStack(`grant connect on database ${database} to ${quoted(name)}`)
     for (const role of roles)

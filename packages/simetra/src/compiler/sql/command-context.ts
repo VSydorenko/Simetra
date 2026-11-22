@@ -56,6 +56,9 @@ function isProtectedSetting(name: string | undefined): boolean {
 interface SetStatement {
   kind?: string
   name?: string
+  args?: {
+    A_Const?: { sval?: { sval?: string } }
+  }[]
 }
 
 interface CallNode {
@@ -329,7 +332,7 @@ function callWrite(
     : undefined
 }
 
-interface DefElemNode {
+export interface DefElemNode {
   DefElem?: { defname?: string; arg?: unknown }
 }
 
@@ -367,8 +370,9 @@ function readsRelation(
  * раніше за дітей), тож перший елемент — та сама форма, що бачила перевірка
  * першого запису.
  */
-function treeWrites(value: unknown, calls: ProviderCalls): CommandContextHit[] {
-  const walk = (v: unknown) => treeWrites(v, calls)
+function treeWrites(value: unknown, ctx: WriteContext): CommandContextHit[] {
+  const { calls } = ctx
+  const walk = (v: unknown) => treeWrites(v, ctx)
   if (Array.isArray(value)) return value.flatMap(walk)
   if (typeof value !== "object" || value === null) return []
   const node = value as Record<string, unknown>
@@ -390,7 +394,55 @@ function treeWrites(value: unknown, calls: ProviderCalls): CommandContextHit[] {
       ...(setting === undefined ? {} : { setting }),
     })
   }
+  // Блок `DO` виконує своє тіло в тій самій сесії: `SET search_path` чи
+  // `set_config` у ньому — той самий запис, що й у тілі функції. Тіло судиться
+  // тим самим правилом, що й дозвільний перелік тіла (`function-body`):
+  // обгорнуте в функцію plpgsql, з літеральним `EXECUTE` усередині.
+  if (node.DoStmt !== undefined) own.push(...doBlockWrites(node, ctx))
   return [...own, ...Object.values(node).flatMap(walk)]
+}
+
+/** Усе, чого потребує обхід дерев, щоб зайти в текст: розбирачі й дані викликів. */
+interface WriteContext {
+  calls: ProviderCalls
+  parse: SqlParser
+  plpgsql: PlpgsqlParser
+}
+
+/**
+ * Блок `DO` як функція plpgsql з тим самим тілом — рядок з подвоєними
+ * лапками дає Postgres рівно той самий текст. Єдине місце обгортки для
+ * перевірки контексту команди й дозвільного переліку тіла.
+ */
+export function doBlockFunction(body: string): string {
+  return `CREATE FUNCTION do_block() RETURNS void LANGUAGE plpgsql AS '${body.replaceAll("'", "''")}'`
+}
+
+/** Текстове значення опції `DefElem`: рядок чи перший рядок списку (`AS` функції). */
+export function optionText(
+  options: readonly DefElemNode[] | undefined,
+  name: string
+): string | undefined {
+  const arg = (options ?? []).find((o) => o.DefElem?.defname === name)?.DefElem
+    ?.arg as
+    | {
+        String?: { sval?: string }
+        List?: { items?: { String?: { sval?: string } }[] }
+      }
+    | undefined
+  return arg?.String?.sval ?? arg?.List?.items?.[0]?.String?.sval
+}
+
+function doBlockWrites(
+  node: Record<string, unknown>,
+  ctx: WriteContext
+): CommandContextHit[] {
+  const args = (node.DoStmt as { args?: DefElemNode[] }).args
+  const body = optionText(args, "as")
+  const language = optionText(args, "language")?.toLowerCase() ?? "plpgsql"
+  // Тіло іншою мовою й нерозбірне відмовляє дозвільний перелік тіла
+  if (body === undefined || language !== "plpgsql") return []
+  return plpgsqlWrites(doBlockFunction(body), ctx)
 }
 
 interface FunctionTree {
@@ -398,9 +450,60 @@ interface FunctionTree {
   sql_body?: unknown
 }
 
-/** Опції `SET <налаштування> …` функції (`CREATE` чи `ALTER FUNCTION`). */
+const PLATFORM_SCHEMA_NAMES: ReadonlySet<string> = new Set([PLATFORM_SCHEMA])
+
+/**
+ * Ім'я з елемента списку `search_path` за правилами ідентифікаторів: пробіли
+ * навколо, лапки (`""` усередині — одна лапка), регістр. Порівняння без цього
+ * пропустило б `"simetra"` чи `SIMETRA` — ту саму схему.
+ */
+function normalisedPathElement(element: string): string {
+  const text = element.trim()
+  const unquoted =
+    text.length >= 2 && text.startsWith('"') && text.endsWith('"')
+      ? text.slice(1, -1).replaceAll('""', '"')
+      : text
+  return unquoted.trim().toLowerCase()
+}
+
+/**
+ * Чи значення опції `SET search_path` називає схему платформи (Р18). Порожнє
+ * значення й шляхи без схем платформи (`public`, `extensions`) дозволені:
+ * схема платформи в шляху функції дала б її тілу кликати функції платформи
+ * без схеми. `"$user"` — схема з іменем користувача: для функції `definer`
+ * це її власник, тож він називає схему платформи, коли власник так
+ * зветься (`owner`).
+ */
+function pathNamesPlatformSchema(
+  set: SetStatement,
+  owner: string | undefined
+): boolean {
+  // `FROM CURRENT` кладе у функцію шлях сесії на момент створення: його
+  // значення компілятор не знає, тож форма — ризик так само, як схема платформи
+  if (set.kind === "VAR_SET_CURRENT") return true
+  if (set.kind !== "VAR_SET_VALUE") return false
+  const ownerName =
+    owner === undefined ? undefined : normalisedPathElement(owner)
+  return (set.args ?? []).some((arg) =>
+    (arg.A_Const?.sval?.sval ?? "").split(",").some((element) => {
+      const name = normalisedPathElement(element)
+      return (
+        PLATFORM_SCHEMA_NAMES.has(name) ||
+        (name === "$user" &&
+          ownerName !== undefined &&
+          PLATFORM_SCHEMA_NAMES.has(ownerName))
+      )
+    })
+  )
+}
+
+/**
+ * Опції `SET <налаштування> …` функції (`CREATE` чи `ALTER FUNCTION`).
+ * `owner` — роль-власник функції (для `"$user"` у `search_path`).
+ */
 function optionWrites(
-  options: readonly DefElemNode[] | undefined
+  options: readonly DefElemNode[] | undefined,
+  owner: string | undefined
 ): CommandContextHit[] {
   const found: CommandContextHit[] = []
   for (const def of (options ?? []).flatMap((o) =>
@@ -411,11 +514,19 @@ function optionWrites(
     // `RESET ALL` опції лише прибирає власні налаштування функції:
     // у сесію він нічого не пише, тож не відмова. Оператор `RESET ALL` у тілі
     // судиться окремо і лишається забороненим.
+    // Опція `SET search_path` — закріплення шляху пошуку, а не запис у сесію,
+    // доки значення не називає схему платформи: порожнє значення вимагає й
+    // судить закрита оболонка (`closed-forms`), але лише для закритих чи
+    // оголошених одиниць, тож схему платформи в шляху будь-якої функції,
+    // боргової теж, судить тут.
+    const searchPath = set?.name?.toLowerCase() === "search_path"
     if (
       def.defname === "set" &&
       set !== undefined &&
       set.kind !== "VAR_RESET_ALL" &&
-      setStatementWrite(set)
+      (searchPath
+        ? pathNamesPlatformSchema(set, owner)
+        : setStatementWrite(set))
     ) {
       found.push({
         form: "functionOption",
@@ -441,15 +552,18 @@ function optionWrites(
  * Усі записи одиниці, а не перший: у борговому SQL `SET ROLE` перед
  * `set_config('simetra.…')` інакше сховав би помилку за попередженням
  * (спека прав §5.3). Порожній масив — записів немає. `calls` — дані суддівства
- * викликів провайдера (спека прав §5.3).
+ * викликів провайдера (спека прав §5.3). `owner` — роль-власник функцій
+ * застосунку, якщо відома.
  */
 export function commandContextWrite(
   tree: Node,
   sql: string,
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  calls: ProviderCalls
+  calls: ProviderCalls,
+  owner?: string
 ): CommandContextHit[] {
+  const ctx: WriteContext = { calls, parse, plpgsql }
   const fn = (tree as { CreateFunctionStmt?: FunctionTree }).CreateFunctionStmt
   if (fn === undefined) {
     // Опції `ALTER FUNCTION … SET` — та сама форма, що й опції `CREATE`: до
@@ -458,13 +572,13 @@ export function commandContextWrite(
       .AlterFunctionStmt
     if (alter !== undefined) {
       return [
-        ...optionWrites(alter.actions),
-        ...treeWrites({ ...alter, actions: [] }, calls),
+        ...optionWrites(alter.actions, owner),
+        ...treeWrites({ ...alter, actions: [] }, ctx),
       ]
     }
-    return treeWrites(tree, calls)
+    return treeWrites(tree, ctx)
   }
-  const options = optionWrites(fn.options)
+  const options = optionWrites(fn.options, owner)
   const defs = (fn.options ?? []).flatMap((o) =>
     o.DefElem === undefined ? [] : [o.DefElem]
   )
@@ -475,12 +589,9 @@ export function commandContextWrite(
   // Значення параметрів за замовчуванням обчислює виклик, а тіло
   // `BEGIN ATOMIC` уже розібране: обидва — частина дерева самого оператора.
   // Опції судить `optionWrites`, тож у загальний обхід вони не входять.
-  const declared = [...options, ...treeWrites({ ...fn, options: [] }, calls)]
+  const declared = [...options, ...treeWrites({ ...fn, options: [] }, ctx)]
   if (fn.sql_body !== undefined) return declared
-  return [
-    ...declared,
-    ...bodyWrites(defs, language, sql, parse, plpgsql, calls),
-  ]
+  return [...declared, ...bodyWrites(defs, language, sql, ctx)]
 }
 
 /** Записи рядкового тіла `LANGUAGE sql` чи plpgsql. */
@@ -488,20 +599,31 @@ function bodyWrites(
   defs: NonNullable<DefElemNode["DefElem"]>[],
   language: string | undefined,
   sql: string,
-  parse: SqlParser,
-  plpgsql: PlpgsqlParser,
-  calls: ProviderCalls
+  ctx: WriteContext
 ): CommandContextHit[] {
-  const walk = (v: unknown) => treeWrites(v, calls)
   if (language === "sql") {
     const body = (
       defs.find((d) => d.defname === "as")?.arg as
         { List?: { items?: { String?: { sval?: string } }[] } } | undefined
     )?.List?.items?.[0]?.String?.sval
-    const parsed = body === undefined ? undefined : parse(body)
-    return parsed?.ok === true ? walk(parsed.statements.map((s) => s.stmt)) : []
+    const parsed = body === undefined ? undefined : ctx.parse(body)
+    return parsed?.ok === true
+      ? treeWrites(
+          parsed.statements.map((s) => s.stmt),
+          ctx
+        )
+      : []
   }
-  if (language !== "plpgsql") return []
+  return language === "plpgsql" ? plpgsqlWrites(sql, ctx) : []
+}
+
+/**
+ * Записи тіла plpgsql (`CREATE FUNCTION …`): вирази його операторів і
+ * літеральний `EXECUTE`; блок `DO` усередині судиться тим самим шляхом.
+ */
+function plpgsqlWrites(sql: string, ctx: WriteContext): CommandContextHit[] {
+  const { parse, plpgsql } = ctx
+  const walk = (v: unknown) => treeWrites(v, ctx)
   const body = plpgsql(sql)
   if (!body.ok || body.fn === undefined) return []
   const found = walk(plpgsqlExpressionTrees(body.fn, parse))

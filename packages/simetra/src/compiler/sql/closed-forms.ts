@@ -3,6 +3,7 @@ import {
   KIND_REGISTRY,
   PINNED_SESSION_SETTINGS,
   PLATFORM_SETTING_PREFIX,
+  PROVIDER_OWNER_ROLES,
   PROVIDER_SCHEMAS,
   type DatabaseProvider,
   type GrantPurpose,
@@ -386,7 +387,8 @@ export function firstDynamicSqlLine(
  * запис у `pg_settings`, ім'я в якому статично не перевірити (спека прав §5.3).
  * `session_replication_role` — теж платформи (спека прав §5.3): `replica` вимикає її
  * тригери (носії, ефекти, механіка, RI), а в сесії пулу — і для чужих команд,
- * тож у боргу він помилка, а не попередження.
+ * тож у боргу він помилка, а не попередження. `search_path` — теж: записаний у
+ * тілі, він знімає закріплення шляху пошуку definer-функції (спека прав §5.3).
  */
 export function platformWrite(hit: CommandContextHit): boolean {
   const setting = hit.setting?.toLowerCase()
@@ -394,6 +396,7 @@ export function platformWrite(hit: CommandContextHit): boolean {
     hit.form === "settingsTable" ||
     setting === "*" ||
     setting === "session_replication_role" ||
+    setting === "search_path" ||
     setting?.startsWith(PLATFORM_SETTING_PREFIX) === true
   )
 }
@@ -591,6 +594,8 @@ export function checkSqlModules(
   policies: PolicyFunctions
 ): Diagnostic[] {
   const owners = closedModuleOwners(objects)
+  const owner =
+    provider === undefined ? undefined : PROVIDER_OWNER_ROLES[provider]
   const closed = (unit: { ownerFile?: string }) =>
     unit.ownerFile !== undefined && owners.has(unit.ownerFile)
   // Перевантаження рахуються серед усіх функцій схеми (простір `pg_proc`:
@@ -623,7 +628,8 @@ export function checkSqlModules(
       unit.sql,
       parse,
       plpgsql,
-      calls
+      calls,
+      owner
     ).filter((hit) => !judgedElsewhere(unit, hit))
     if (writes.length === 0) continue
     const name = unit.schema === "" ? unit.name : `${unit.schema}.${unit.name}`
@@ -715,7 +721,8 @@ export function checkSqlModules(
             unit.sql,
             parse,
             plpgsql,
-            calls
+            calls,
+            owner
           ).find((hit) => !judgedElsewhere(unit, hit))
         : undefined
     if (write !== undefined) {

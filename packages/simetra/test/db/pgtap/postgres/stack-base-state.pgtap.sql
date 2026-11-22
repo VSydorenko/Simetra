@@ -37,11 +37,12 @@ select is(
 select is(
   (select jsonb_object_agg(rolname, array[rolcanlogin, rolinherit, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication])
      from pg_roles
-    where rolname in ('simetra_owner', 'simetra_auth', 'simetra_command', 'simetra_user', 'simetra_anon', 'simetra_runtime', 'simetra_signal_consumer', 'simetra_signals')),
+    where rolname in ('simetra_owner', 'simetra_auth', 'simetra_command', 'simetra_files', 'simetra_user', 'simetra_anon', 'simetra_runtime', 'simetra_signal_consumer', 'simetra_signals')),
   jsonb_build_object(
     'simetra_owner', array[true, false, false, true, false, true, false],
     'simetra_auth', array[true, false, false, false, false, false, false],
     'simetra_command', array[false, false, false, false, false, false, false],
+    'simetra_files', array[false, false, false, false, false, false, false],
     'simetra_user', array[false, false, false, false, false, false, false],
     'simetra_anon', array[false, false, false, false, false, false, false],
     'simetra_runtime', array[true, false, false, false, false, false, false],
@@ -56,9 +57,9 @@ select is(
              from pg_auth_members a
              join pg_roles u on u.oid = a.member
              join pg_roles r on r.oid = a.roleid
-            where u.rolname in ('simetra_owner', 'simetra_runtime', 'simetra_auth', 'simetra_user', 'simetra_anon', 'simetra_command', 'simetra_signal_consumer', 'simetra_signals')
-               or r.rolname in ('simetra_owner', 'simetra_runtime', 'simetra_auth', 'simetra_user', 'simetra_anon', 'simetra_command', 'simetra_signal_consumer', 'simetra_signals')) m),
-  '["simetra_runtime>simetra_anon", "simetra_runtime>simetra_command", "simetra_runtime>simetra_user", "simetra_signals>simetra_signal_consumer"]'::jsonb,
+            where u.rolname in ('simetra_owner', 'simetra_runtime', 'simetra_auth', 'simetra_user', 'simetra_anon', 'simetra_command', 'simetra_files', 'simetra_signal_consumer', 'simetra_signals')
+               or r.rolname in ('simetra_owner', 'simetra_runtime', 'simetra_auth', 'simetra_user', 'simetra_anon', 'simetra_command', 'simetra_files', 'simetra_signal_consumer', 'simetra_signals')) m),
+  '["simetra_runtime>simetra_anon", "simetra_runtime>simetra_command", "simetra_runtime>simetra_files", "simetra_runtime>simetra_user", "simetra_signals>simetra_signal_consumer"]'::jsonb,
   'the only memberships of Simetra roles are those of the runtime and signals login roles'
 );
 select is(

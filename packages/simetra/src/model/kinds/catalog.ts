@@ -101,6 +101,10 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
     })
   }
 
+  if (catalog.storage !== undefined) {
+    columns.push(fileNameColumn(), ...filePlatformColumns())
+  }
+
   columns.push(
     predefinedNameColumn(),
     versionColumn(),
@@ -108,6 +112,44 @@ function standardColumns(obj: unknown): StandardColumnDef[] {
     ...(catalog.trackAuthor ? authorColumns() : [])
   )
   return columns
+}
+
+/**
+ * Ім'я файлу в рядку довідника зі `storage` (Р8 ПГ-5): зміст рядка, його
+ * задає команда разом з рештою реквізитів.
+ */
+function fileNameColumn(): StandardColumnDef {
+  return {
+    logicalName: "fileName",
+    physicalName: "file_name",
+    type: { type: "Text" },
+    notNull: true,
+    title: { uk: "Ім'я файлу", en: "File name" },
+  }
+}
+
+/**
+ * Розмір і тип вмісту файлу: їх ставить лише тригер вкладення із запису
+ * `simetra.storage_pending`, тож команда їх не пише (поза колонками команд і
+ * змістом), а після вставки вони незмінні.
+ */
+export function filePlatformColumns(): StandardColumnDef[] {
+  return [
+    {
+      logicalName: "fileSize",
+      physicalName: "file_size",
+      type: { type: "BigInt" },
+      notNull: false,
+      title: { uk: "Розмір файлу", en: "File size" },
+    },
+    {
+      logicalName: "fileContentType",
+      physicalName: "file_content_type",
+      type: { type: "Text" },
+      notNull: false,
+      title: { uk: "Тип вмісту файлу", en: "File content type" },
+    },
+  ]
 }
 
 /**

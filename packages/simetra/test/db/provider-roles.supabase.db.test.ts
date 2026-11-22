@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
-import { PLATFORM_LOGIN_ROLES, PLATFORM_ROLES } from "simetra/model"
+import {
+  PLATFORM_LOGIN_ROLES,
+  PLATFORM_ROLES,
+  loginRoleParentNames,
+} from "simetra/model"
 import { platformRoleRefusals, readPlatformRoles } from "simetra/schema"
 import { rollbackDatabase, testRoleName, withRollback } from "./connection"
 
@@ -34,7 +38,14 @@ describe("provider roles", () => {
       expect(found.map((r) => r.name).sort()).toEqual([command, runtime].sort())
       expect(
         platformRoleRefusals([command, runtime], found, "target", [
-          { name: runtime, memberOf: [command, "authenticated", "anon"] },
+          {
+            name: runtime,
+            // Батьки профілю з T0, а не літерал: новий батько не ламає тест;
+            // лише роль команд у файлі перейменовано на тегову
+            memberOf: loginRoleParentNames("runtime", "supabase").map((role) =>
+              role === PLATFORM_ROLES.command ? command : role
+            ),
+          },
         ])
       ).toEqual([])
     })

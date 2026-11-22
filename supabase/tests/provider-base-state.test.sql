@@ -3,7 +3,7 @@
 -- FK на auth.users і політики на об'єктах провайдера.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(23);
+select plan(26);
 
 select ok(current_setting('server_version_num')::int / 10000 = 17,
   'Postgres major version is 17');
@@ -41,7 +41,7 @@ select is((SELECT rolcanlogin AND NOT rolinherit AND NOT rolsuper
     AND NOT rolreplication
   FROM pg_roles WHERE rolname = 'simetra_runtime'), true,
   'simetra_runtime has LOGIN and no INHERIT or privileged attribute');
--- Рівно три пари: роль команд і дві ролі запиту, кожна лише через SET ROLE.
+-- Рівно чотири пари: ролі команд і сховища файлів та дві ролі запиту, кожна лише через SET ROLE.
 -- `name::text` несе колацію "C", літерали VALUES — типову: без явного
 -- COLLATE results_eq не може порівняти рядки.
 select results_eq(
@@ -51,8 +51,9 @@ select results_eq(
     ORDER BY 1$$,
   $$VALUES ('anon', false, false, true),
     ('authenticated', false, false, true),
-    ('simetra_command', false, false, true)$$,
-  'simetra_runtime belongs only to simetra_command, authenticated and anon, with INHERIT FALSE, SET TRUE');
+    ('simetra_command', false, false, true),
+    ('simetra_files', false, false, true)$$,
+  'simetra_runtime belongs only to simetra_command, simetra_files, authenticated and anon, with INHERIT FALSE, SET TRUE');
 -- Роль команд і роль запиту не входять одна в одну: інакше SET ROLE
 -- однієї давав би права другої.
 select is((SELECT count(*) FROM pg_auth_members m
@@ -61,6 +62,22 @@ select is((SELECT count(*) FROM pg_auth_members m
     OR (m.roleid = to_regrole('authenticated')
       AND m.member = to_regrole('simetra_command')))::int, 0,
   'simetra_command and authenticated have no membership between them');
+-- Роль сховища файлів (`supabase/roles.sql`): без входу й успадкування; єдиний
+-- її член — пара ролі входу рантайму.
+select has_role('simetra_files');
+select is((SELECT rolcanlogin OR rolinherit OR rolsuper OR rolbypassrls
+    OR rolcreaterole OR rolcreatedb OR rolreplication
+  FROM pg_roles WHERE rolname = 'simetra_files'), false,
+  'simetra_files has no LOGIN, INHERIT or privileged attributes');
+select is((SELECT count(*) FROM pg_auth_members m
+    JOIN pg_roles g ON g.oid = m.member
+  WHERE m.member = to_regrole('simetra_files')
+    OR (m.roleid = to_regrole('simetra_files')
+      AND NOT (m.member = to_regrole('simetra_runtime')
+        AND NOT m.admin_option AND NOT m.inherit_option AND m.set_option)
+      AND (m.inherit_option OR m.set_option
+        OR NOT (g.rolsuper OR g.rolcreaterole))))::int, 0,
+  'simetra_files is a member of nothing and its members hold only ADMIN, except the runtime pair');
 -- Група споживача сигналів (`supabase/roles.sql`, спека профілю postgres
 -- §3.1): без атрибутів і членств; єдиний член з правами — пара ролі входу
 -- споживача.

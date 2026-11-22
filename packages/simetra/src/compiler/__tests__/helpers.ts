@@ -39,7 +39,8 @@ export function withoutMechanics<T extends Pick<SqlUnit, "generator">>(
     (u) =>
       u.generator !== "mechanics" &&
       u.generator !== "key" &&
-      u.generator !== "signalOutbox"
+      u.generator !== "signalOutbox" &&
+      u.generator !== "storage"
   )
 }
 

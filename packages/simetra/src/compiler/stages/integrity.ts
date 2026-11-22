@@ -241,6 +241,7 @@ export function checkIntegrity(
   diagnostics.push(...checkUsersCatalogs(objects, model))
   diagnostics.push(...checkAuthorTracking(objects))
   diagnostics.push(...checkMembership(objects, scopeKinds))
+  diagnostics.push(...checkStorageRoot(objects, scopeKinds))
   const rights = { objects, references, model, scopeKinds, project, byId }
   diagnostics.push(...checkRights(rights))
   diagnostics.push(...checkRoles(rights))
@@ -354,6 +355,37 @@ function checkAuthorTracking(objects: readonly ParsedObject[]): Diagnostic[] {
         kind: object.kind,
         name: object.name,
         feature: "trackAuthor",
+      })
+    )
+}
+
+/**
+ * Довідник зі `storage` не буває коренем виду скоупу: вставку кореня судить
+ * `rootCreatePredicates`, а не безрядкова перевірка залишку (Р3, Р9 ПГ-5).
+ * Вид скоупу — факт проєкту, тож схема T0 цього не бачить; код той самий, що
+ * в схемних конфліктах `storage`.
+ */
+function checkStorageRoot(
+  objects: readonly ParsedObject[],
+  scopeKinds: readonly ScopeKind[]
+): Diagnostic[] {
+  const roots = new Set(
+    scopeKinds.flatMap((kind) =>
+      "object" in kind.root
+        ? [objectKey(kind.root.object.kind, kind.root.object.name)]
+        : []
+    )
+  )
+  return objects
+    .filter(
+      (object) =>
+        object.kind === "Catalog" &&
+        (object.data as { storage?: unknown }).storage !== undefined &&
+        roots.has(objectKey(object.kind, object.name))
+    )
+    .map((object) =>
+      diagnostic("storage.incompatible", object.file, "/storage", {
+        field: "a scope kind root",
       })
     )
 }

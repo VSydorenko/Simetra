@@ -14,6 +14,8 @@ export {
   COMMENT_FILE,
   COMMENT_TABLE,
   ORG_ADMIN_ID,
+  ORG_SCOPE_KIND,
+  PROJECT_FILE,
   ORG_KIND_ID,
   PROJECT_TICKET_WRITER_ID,
   adminRoles,
@@ -84,7 +86,14 @@ export { planNodes } from "./db/explain-plan"
 export { authLoginRole, signUp } from "./db/auth"
 export { insertOrphan, profileLayer } from "./db/rights-seed"
 export * from "./db/connection"
-export { devSecret, LOGIN_SECRETS_FILE, testProvider } from "./db/profile"
+export {
+  devSecret,
+  LOGIN_SECRETS_FILE,
+  testProvider,
+  testStack,
+} from "./db/profile"
+export { createRunBucket, deleteRunBucket } from "./db/external"
+export { s3Of } from "./db/s3"
 export * from "./db/postgres-cluster"
 export * from "./db/fingerprint"
 export { readCatalog, type CatalogShape, type CatalogTable } from "./db/catalog"

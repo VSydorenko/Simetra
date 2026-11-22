@@ -70,7 +70,7 @@ const markerSnapshotSchema = z.looseObject({
             tabularSectionId: z.string().optional(),
             part: z.string().optional(),
           }),
-          z.looseObject({ part: z.literal("signalOutbox") }),
+          z.looseObject({ part: z.enum(["signalOutbox", "storage"]) }),
         ]),
         rowLevelSecurity: z.string(),
         columns: z.array(

@@ -9,6 +9,7 @@ import {
   type ApplyDatabase,
   type PlatformRoleOutcome,
   type PlatformRoleSet,
+  type PostgresClusterOutcome,
 } from "simetra/schema"
 import { z } from "zod"
 import { failureDiagnostics, withDatabase } from "../io/database"
@@ -87,6 +88,33 @@ function databaseOf(url: string): string {
 }
 
 /**
+ * Підсумок підготовки кластера як рядки інструмента: створене й наявне — за іменем, а
+ * доповнене членство — на рядку самої ролі входу (`present` з `added`), а не
+ * окремою «роллю».
+ */
+export function clusterRoles(
+  value: PostgresClusterOutcome
+): PlatformRoleOutcome[] {
+  const outcome = (
+    names: string[],
+    kind: "created" | "present"
+  ): PlatformRoleOutcome[] =>
+    names.map((name) => {
+      const parents = value.added?.find((a) => a.role === name)?.parents
+      return {
+        server: "target" as const,
+        name,
+        outcome: kind,
+        ...(parents === undefined ? {} : { added: parents }),
+      }
+    })
+  return [
+    ...outcome(value.created, "created"),
+    ...outcome(value.present, "present"),
+  ]
+}
+
+/**
  * Готує ролі (і, у профілі `postgres`, кластер) за провайдером проєкту.
  * `postgres` готує суперкористувач через службову базу того самого сервера,
  * ціль і шаблон; окремий сервер тіней там не підтримано.
@@ -139,13 +167,8 @@ export async function runRoles(
         skipped: [],
         diagnostics: result.error.map(fromEngine),
       }
-    const outcome = (names: string[], kind: "created" | "present") =>
-      names.map((name) => ({ server: "target" as const, name, outcome: kind }))
     return {
-      roles: [
-        ...outcome(result.value.created, "created"),
-        ...outcome(result.value.present, "present"),
-      ],
+      roles: clusterRoles(result.value),
       skipped: result.value.skipped.map((name) => ({
         name,
         reason: "identity-table-missing" as const,
