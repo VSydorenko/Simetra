@@ -159,9 +159,10 @@ export interface ReaderTarget {
   unconfirmedSince: number | undefined
   /**
    * The answer being applied rejected a row and raised `unconfirmedSince`
-   * (П15). Its reader sets it, the flight resets it before the write: two
-   * answers rejected at the same epoch both see the fact, not a change of the
-   * value.
+   * (П15). Its reader sets it, a page flight resets it before the write and
+   * repeats on it: a page confirms only itself, so only its own rejection
+   * repeats it; two pages rejected at the same epoch both see the fact, not a
+   * change of the value.
    */
   answerRejected: boolean
 }

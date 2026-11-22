@@ -45,6 +45,7 @@ import {
 import {
   EPOCH_UNAVAILABLE,
   errorOf,
+  settleRequirement,
   viewDueAt,
   type Subset,
   type SubsetRegistry,
@@ -69,6 +70,8 @@ import type {
 /** What the writer and `revalidate` need from the core. */
 export interface WriterContext extends ReaderContext {
   readonly session: Session
+  /** The tab is visible (`suspend` / `resume`, §8.4). */
+  readonly tabVisible: () => boolean
   readonly registry: SubsetRegistry
   readonly rowViews: RowViews
   readonly objects: ReadonlyMap<ObjectName, ObjectState>
@@ -1348,18 +1351,23 @@ export async function revalidateViews(
               s.okReadEpoch = startEpoch
               // Успішне системне читання, що стартувало з епохи вимоги,
               // підтверджує склад: нового рядка воно не ставить у склад, а дає
-              // банер (§6.5).
-              if (
-                s.unconfirmedSince !== undefined &&
-                startEpoch >= s.unconfirmedSince
-              )
-                s.unconfirmedSince = undefined
+              // банер (§6.5). Правило зняття й повтору — те саме, що в
+              // завантаження (§8.4, п. 7): вимога, що лишилась, бо прохід
+              // стартував раніше за e, і яку ніхто інший не прочитає, — ще
+              // один прохід тим самим системним шляхом, склад не змінюється.
               s.failures = 0
               s.failedAt = undefined
               if (s.status === "error") {
                 s.status = "ready"
                 s.error = undefined
               }
+              if (
+                settleRequirement(s, startEpoch, {
+                  versions: session.versions,
+                  tabVisible: ctx.tabVisible,
+                })
+              )
+                again.push(s)
             } catch (error) {
               ctx.log({ kind: "listener-failed", error })
               s.status = "error"

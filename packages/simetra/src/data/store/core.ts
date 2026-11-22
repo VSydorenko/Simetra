@@ -45,7 +45,12 @@ import {
   type SignalRead,
 } from "./receiver"
 import { createScheduler } from "./scheduler"
-import { createRegistry, type Subset, type SubsetRegistry } from "./subsets"
+import {
+  createRegistry,
+  requirementPending,
+  type Subset,
+  type SubsetRegistry,
+} from "./subsets"
 import {
   activeViews,
   createWriter,
@@ -1112,6 +1117,7 @@ export function createCore(options: {
   const collator = filterCollator()
   const registry = createRegistry({
     session,
+    tabVisible: () => visible,
     source,
     index,
     limits,
@@ -1531,19 +1537,21 @@ export function createCore(options: {
   // рядків лишається за `refresh()`.
   function becameVisible(s: Subset) {
     readHydrated(s)
-    if (s.unconfirmedSince === undefined || !s.alive || s.purged || !s.loaded)
-      return
+    readRequirement(s)
+  }
+
+  const requirementEnv = {
+    versions: session.versions,
+    tabVisible: () => visible,
+  }
+
+  // Одна умова з точками осідання (§8.4, п. 7): вимога стоїть, вигляд видимий
+  // на видимій вкладці, і її ніхто інший не прочитає — ні читання з епохи
+  // вимоги в польоті чи в черзі, ні пауза збоїв, ні межа відкинутих.
+  function readRequirement(s: Subset) {
+    if (!s.alive || s.purged || !s.loaded) return
     if (staleObjects.has(s.form.object.name)) return
-    // Після межі відкинутих жодне системне читання не має шансу (§6.2).
-    if (session.versions.unavailable()) return
-    if (!(s.visible ?? s.listeners.size > 0)) return
-    // Читання, що стартувало після вимоги, уже летить: зняти її — його справа.
-    const since = s.unconfirmedSince
-    if (
-      s.rereadEpochs.some((e) => e >= since) ||
-      (s.flight !== undefined && (s.flightEpoch ?? -1) >= since)
-    )
-      return
+    if (!requirementPending(s, requirementEnv)) return
     singleFlight(writerContext, s.form.object, [s], {
       visibleOnly: false,
     }).done.catch((error: unknown) => log({ kind: "listener-failed", error }))
@@ -1664,6 +1672,7 @@ export function createCore(options: {
 
   const writerContext: WriterContext = {
     session,
+    tabVisible: () => visible,
     source,
     limits,
     strict: options.strict ?? false,
@@ -1980,6 +1989,10 @@ export function createCore(options: {
       // у польоті не бере. Вікно `REJOIN_JITTER_MS` після попередньої хвилі тут не
       // діє: воно береже від шквалу подій, а `resume()` — одна подія вкладки.
       fireWave()
+      // Вимога, що лишилась на прихованій вкладці (`needsRefresh` замість
+      // повтору, §8.4, п. 7), — читання на `resume()`, після строків і хвилі:
+      // вигляд, який вони вже читають з епохи вимоги, вдруге не читається.
+      for (const s of registry.subsets()) readRequirement(s)
       // Злиття: подвійний сигнал повернення (focus + visibilitychange) — одна
       // звірка; відлік іде від останнього прийнятого, а не від кожного виклику.
       const at = now()

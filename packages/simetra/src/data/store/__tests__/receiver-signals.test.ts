@@ -777,6 +777,39 @@ describe("flow control", () => {
     })
   })
 
+  // §8.4, п. 7 і §12 (Р8): вимога, що лишилась після читання, яке летіло,
+  // коли вкладку сховали, — гілка невидимого вигляду: на прихованій вкладці
+  // 0 запитів і `needsRefresh`, на `resume()` — одне читання, що її знімає.
+  it.each(["system re-read", "first load"] as const)(
+    "a %s in flight when a hidden-tab batch raised the requirement: nothing on the hidden tab, one read on resume()",
+    async (what) => {
+      const h = await open(keysView(key(3)))
+      h.fake.mode = "manual"
+      const view =
+        what === "first load" ? h.core.view(keysView(key(1), key(2))) : h.handle
+      if (what === "first load") view.subscribe(() => {})
+      else void h.core.revalidate(TASK, { visibleOnly: true })
+      await settle()
+      expect(h.fake.pending).toHaveLength(1)
+      h.core.suspend()
+      const v = h.fake.edit(TASK, key(3), { title: "hidden" })
+      emit(h, change("update", key(3), v))
+      await closeBatch()
+      const from = h.fake.requests.length
+      h.fake.mode = "auto"
+      h.fake.deliverAll()
+      await vi.advanceTimersByTimeAsync(5000)
+      await settle()
+      expect(requestsSince(h, from)).toHaveLength(0)
+      expect(view.getSnapshot().needsRefresh).toBe(true)
+      expect(view.getSnapshot().staleComposition).toBe(true)
+      h.core.resume()
+      await settle()
+      expect(requestsSince(h, from)).toHaveLength(1)
+      expect(view.getSnapshot().staleComposition).toBeUndefined()
+    }
+  )
+
   it("writes and sends nothing after dispose of the session", async () => {
     const h = await open(keysView(key(1)))
     const v = h.fake.edit(TASK, key(1), { title: "late" })

@@ -145,6 +145,34 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
     expect(h.fake.log.filter(isPage)).toHaveLength(2)
   })
 
+  // Прихована вкладка — гілка невидимого вигляду (§8.4, п. 7; §12, Р8):
+  // повтору П15 на ній немає, вигляд показує `needsRefresh`, а `resume()`
+  // читає його рівно раз.
+  it("window, visible on a hidden tab: no repeat while hidden, one read on resume()", async () => {
+    const h = setup()
+    seed(h.fake, 1, 3)
+    const bury = await divergence(h, key(2))
+    h.fake.hold = isPage
+    const spec: ViewSpec = { kind: "window", object: TASK }
+    const handle = h.core.view(spec)
+    watch(handle)
+    await settle()
+    const first = h.fake.take(isPage)
+    await bury()
+    h.core.suspend()
+    const sent = h.fake.requests.length
+    first.answer()
+    await drain(h)
+    expect(h.fake.requests.length).toBe(sent)
+    expect(keysIn(handle.getSnapshot())).toEqual([key(1), key(3)])
+    expect(handle.getSnapshot().needsRefresh).toBe(true)
+    expect(handle.getSnapshot().staleComposition).toBe(true)
+    h.core.resume()
+    await drain(h)
+    expect(h.fake.log.filter(isPage)).toHaveLength(2)
+    expect(handle.getSnapshot().staleComposition).toBeUndefined()
+  })
+
   // Дві сторінки в польоті, відхилені без руху епохи між відповідями,
   // дають ту саму вимогу: повтор іде за фактом відхилення кожної відповіді,
   // а не за зміною значення вимоги.
