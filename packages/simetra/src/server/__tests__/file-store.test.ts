@@ -216,6 +216,25 @@ describe("instance marker", () => {
     expect(objects.size).toBe(1)
   })
 
+  it("a bucket with an object outside o/ and no marker is foreign: emptiness is judged over the whole bucket", async () => {
+    const { client, objects } = fakeS3()
+    objects.set("readme.txt", {
+      bytes: bytes(1),
+      type: "",
+      length: 1,
+      at: new Date(0),
+    })
+    const store = fromS3Client(client, "b")
+    await expect(
+      store.put(KEY, streamOf(bytes(1)), opts)
+    ).rejects.toMatchObject({ reason: "foreign-bucket" })
+    await expect(store.checkInstance(BINDING)).rejects.toMatchObject({
+      reason: "foreign-bucket",
+    })
+    expect(objects.has(INSTANCE_MARKER_KEY)).toBe(false)
+    expect(objects.size).toBe(1)
+  })
+
   it("checkInstance: empty passes, same passes, foreign and markerless refuse", async () => {
     const empty = fakeS3()
     await expect(

@@ -212,7 +212,8 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
     )
   }
 
-  // Повертає, чи треба писати маркер: лише порожній бакет без маркера
+  // Повертає, чи треба писати маркер: лише ПОВНІСТЮ порожній бакет без маркера
+  // (без `Prefix`): чужий об'єкт поза `o/` теж означає, що бакет не наш
   const checkBinding = async (instance: string): Promise<"write" | "ok"> => {
     if (parseBinding(instance) === null)
       throw new Error("instance is not a database binding")
@@ -220,13 +221,12 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
     if (marker !== null) return compare(marker, instance)
     const any = await client.listObjectsV2({
       Bucket: bucket,
-      Prefix: FILE_PREFIX,
       MaxKeys: 1,
     })
     if ((any.Contents?.length ?? 0) > 0)
       throw new FileStoreError(
         "foreign-bucket",
-        "bucket holds files but no instance marker"
+        "bucket holds objects but no instance marker"
       )
     return "write"
   }
