@@ -51,6 +51,7 @@
     "zod": "^4.6.7"
   },
   "peerDependencies": {
+    "centrifuge": "^5.8.0",
     "@tanstack/react-form": "^1.33.5",
     "@tanstack/react-router": "^1.170.46",
     "@tanstack/react-virtual": "^3.14.26",
@@ -58,6 +59,9 @@
     "react-dom": "^19.3.1"
   },
   "peerDependenciesMeta": {
+    "centrifuge": {
+      "optional": true
+    },
     "@tanstack/react-form": {
       "optional": true
     },
@@ -109,6 +113,7 @@
     "./server/signals": "./src/server/signals/index.ts",
     "./data": "./src/data/index.ts",
     "./data/react": "./src/data/react/index.ts",
+    "./data/centrifugo": "./src/data/centrifugo/index.ts",
     "./ui": "./src/ui/index.ts",
     "./shell": "./src/shell/index.ts",
     "./schemas/*": "./schemas/*"
@@ -143,6 +148,10 @@
       "./data/react": {
         "types": "./dist/data/react/index.d.ts",
         "import": "./dist/data/react/index.js"
+      },
+      "./data/centrifugo": {
+        "types": "./dist/data/centrifugo/index.d.ts",
+        "import": "./dist/data/centrifugo/index.js"
       },
       "./ui": {
         "types": "./dist/ui/index.d.ts",

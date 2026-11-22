@@ -829,6 +829,59 @@ describe("tier zones", () => {
     expect(await purity(importOf("../x"), "src/ui/__fixture.ts")).toEqual([])
   })
 
+  // Спека П4-B §8.5: SDK `centrifuge` — необов'язковий peer, тож його імпортує
+  // лише `src/data/centrifugo`; решта T4 лишається без нього.
+  describe("T4 centrifugo zone", () => {
+    const inside = "src/data/centrifugo/__fixture.ts"
+    const both = async (spec: string, file: string) => [
+      ...(await restricted(importOf(spec), file)),
+      ...(await purity(importOf(spec), file)),
+    ]
+
+    it("allows centrifuge, model, zod, react and ./x only in the folder", async () => {
+      for (const spec of ["centrifuge", "simetra/model", "zod", "react", "./x"])
+        expect(await both(spec, inside), spec).toEqual([])
+    })
+
+    it.each([
+      "src/data/store/__fixture.ts",
+      "src/data/runtime/__fixture.ts",
+      "src/data/__fixture.ts",
+      "src/ui/__fixture.ts",
+    ])("%s refuses centrifuge", async (file) => {
+      expect(await both("centrifuge", file)).not.toEqual([])
+    })
+
+    it.each([
+      ["src/data/__fixture.ts", "./centrifugo"],
+      ["src/data/__fixture.ts", "./centrifugo/x"],
+      ["src/data/runtime/__fixture.ts", "../centrifugo"],
+      ["src/data/runtime/__fixture.ts", "../centrifugo/x"],
+      ["src/data/store/__fixture.ts", "../centrifugo/x"],
+      ["src/data/runtime/__fixture.ts", "../../data/centrifugo/x"],
+      ["src/data/__fixture.ts", "../../src/data/centrifugo/x"],
+    ])("%s: centrifugo detour %s is refused", async (file, spec) => {
+      expect(await purity(importOf(spec), file), spec).toHaveLength(1)
+    })
+
+    it("ui does not import simetra/data/centrifugo", async () => {
+      expect(
+        await purity(importOf("simetra/data/centrifugo"), "src/ui/__fixture.ts")
+      ).toHaveLength(1)
+    })
+
+    it.each([
+      "simetra/server",
+      "simetra/compiler",
+      "pg",
+      "../../model",
+      "@tanstack/db",
+      "@supabase/realtime-js",
+    ])("the folder still refuses %s", async (spec) => {
+      expect(await both(spec, inside)).not.toEqual([])
+    })
+  })
+
   it("mts and cts are covered", async () => {
     for (const ext of ["mts", "cts"]) {
       const msgs = await restricted(

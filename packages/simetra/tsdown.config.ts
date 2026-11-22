@@ -12,6 +12,7 @@ export default defineConfig({
     "server/signals/index": "src/server/signals/index.ts",
     "data/index": "src/data/index.ts",
     "data/react/index": "src/data/react/index.ts",
+    "data/centrifugo/index": "src/data/centrifugo/index.ts",
     "ui/index": "src/ui/index.ts",
     "shell/index": "src/shell/index.ts",
   },

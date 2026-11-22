@@ -100,6 +100,7 @@ describe("simetra", () => {
     expect(Object.keys(manifest.exports as object).sort()).toEqual([
       "./compiler",
       "./data",
+      "./data/centrifugo",
       "./data/react",
       "./model",
       "./schema",
@@ -123,6 +124,8 @@ describe("simetra", () => {
       "dist/data/index.d.ts",
       "dist/data/react/index.js",
       "dist/data/react/index.d.ts",
+      "dist/data/centrifugo/index.js",
+      "dist/data/centrifugo/index.d.ts",
       "dist/schema/index.js",
       "dist/server/index.js",
       "dist/server/index.d.ts",
@@ -189,9 +192,10 @@ describe("simetra", () => {
     }
   })
 
-  it("declares react, react-dom, react-virtual, react-form and react-router as the only peers, all optional", async () => {
+  it("declares react, react-dom, react-virtual, react-form, react-router and centrifuge as the only peers, all optional", async () => {
     const m = await readPackedManifest(tarballs.simetra)
     expect(m.peerDependencies).toEqual({
+      centrifuge: "^5.8.0",
       "@tanstack/react-form": "^1.33.5",
       "@tanstack/react-router": "^1.170.46",
       "@tanstack/react-virtual": "^3.14.26",
@@ -203,7 +207,7 @@ describe("simetra", () => {
       Object.values(
         m.peerDependenciesMeta as Record<string, { optional?: boolean }>
       ).map((v) => v.optional)
-    ).toEqual([true, true, true, true, true])
+    ).toEqual([true, true, true, true, true, true])
     expect(Object.keys(m.peerDependenciesMeta as object).sort()).toEqual(
       Object.keys(m.peerDependencies as object).sort()
     )
@@ -221,7 +225,7 @@ describe("simetra", () => {
     )
     expect(stdout).toBe("")
     // Серверний споживач не ставить ні React, ні бібліотеку форм входу `./ui`.
-    for (const peer of ["react", "@tanstack/react-form"]) {
+    for (const peer of ["react", "@tanstack/react-form", "centrifuge"]) {
       await expect(
         readFile(join(consumer, `node_modules/${peer}/package.json`))
       ).rejects.toThrow()
@@ -499,7 +503,7 @@ describe("simetra/data", () => {
     // Роутер — peer лише входу `./shell`, тож у `dist/ui` йому не місце.
     const allowed = new Set([
       ...Object.keys(m.peerDependencies as object).filter(
-        (p) => p !== "@tanstack/react-router"
+        (p) => p !== "@tanstack/react-router" && p !== "centrifuge"
       ),
       "simetra/data/react",
       // Межа ярусів дозволяє T5 імпортувати вниз; T0 залежить лише від `zod`,
@@ -611,7 +615,11 @@ describe("simetra/data in a pnpm host", () => {
     const dev = m.devDependencies as Record<string, string>
     // Peer-и — точними версіями, проти яких пакет іде у своїх тестах
     const peers = Object.fromEntries(
-      Object.keys(m.peerDependencies as object).map((p) => [p, dev[p]])
+      Object.keys(m.peerDependencies as object)
+        // `centrifuge` — peer лише входу `./data/centrifugo`; його ставить
+        // окремий споживач нижче
+        .filter((p) => p !== "centrifuge")
+        .map((p) => [p, dev[p]])
     )
     const zod = (m.dependencies as Record<string, string>).zod
     // pnpm, а не npm: пласка розкладка npm дедуплікує сама, і гейт там
@@ -676,6 +684,34 @@ describe("simetra/data in a pnpm host", () => {
       ),
       "packages whose bundle roots are not exactly one"
     ).toEqual([])
+  })
+})
+
+describe("simetra/data/centrifugo in a host with centrifuge", () => {
+  let consumer: string
+
+  beforeAll(async () => {
+    const m = await readPackedManifest(tarballs.simetra)
+    const dev = m.devDependencies as Record<string, string>
+    const zod = (m.dependencies as Record<string, string>).zod
+    // Окремий споживач: наявні без `centrifuge`, бо вхід `simetra/data` не
+    // повинен його вимагати
+    consumer = await installConsumer([tarballs.simetra], "pnpm", {
+      dependencies: { centrifuge: dev.centrifuge, zod },
+    })
+  })
+
+  it("imports simetra/data/centrifugo in plain Node with the peer", async () => {
+    const { stdout } = await exec(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        'const c = await import("simetra/data/centrifugo"); console.log(typeof c)',
+      ],
+      { cwd: consumer }
+    )
+    expect(stdout.trim()).toBe("object")
   })
 })
 
