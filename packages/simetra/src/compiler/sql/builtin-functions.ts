@@ -1,4 +1,4 @@
-// Згенеровано `pnpm --filter simetra builtin-functions` над PostgreSQL 17.11.
+// Згенеровано `pnpm --filter simetra builtin-functions` над PostgreSQL 17.12 (Debian 17.12-1.pgdg13+1).
 // Не правити вручну: генератор — packages/simetra/scripts/builtin-functions.ts,
 // виключення — packages/simetra/src/compiler/sql/builtin-exclusions.ts.
 
