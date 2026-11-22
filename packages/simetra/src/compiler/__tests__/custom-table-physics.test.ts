@@ -346,7 +346,6 @@ describe("CustomTable physics round-trip", () => {
             "role_grant",
             "source_role",
             "signal_outbox",
-            "storage_instance",
             "storage_usage",
             "storage_quota",
             "storage_pending",

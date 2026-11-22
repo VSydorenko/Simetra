@@ -58,23 +58,6 @@ const column = (
 ) => ({ name, type, notNull: true, origin: {}, ...extra })
 
 /**
- * Таблиця прив'язки бази й бакета (Р12): одна на проєкт і безумовна — рядок з
- * випадковим uuid переживає видалення всіх об'єктів зі `storage` і повторне
- * застосування, тому її не прив'язано до наявності таких об'єктів.
- */
-export function storageInstanceTable(): PhysicalTable {
-  const name = STORAGE_TABLES.instance.name
-  return table(name, {
-    columns: [
-      column("singleton", "boolean", { default: "true" }),
-      column("id", "uuid", { default: "gen_random_uuid()" }),
-    ],
-    primaryKey: pkey(name, ["singleton"]),
-    checks: [check(name, "singleton", "singleton")],
-  })
-}
-
-/**
  * Таблиці обліку, межі й запису вкладення (спека профілю postgres §8.1, §8.3) —
  * лише коли є об'єкт зі `storage`. Грантів ролям API й команд немає: їх
  * читають і пишуть definer-функції власника.

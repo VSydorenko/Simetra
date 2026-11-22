@@ -124,7 +124,6 @@ describe("stage 1: files", () => {
       "public.sales_order",
       // Outbox сигналів платформи — у кожному проєкті.
       "simetra.signal_outbox",
-      "simetra.storage_instance",
     ])
   })
 

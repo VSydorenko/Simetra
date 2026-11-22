@@ -12,7 +12,6 @@ import {
   catalogFromSnapshot,
   DATABASE_PROVIDERS,
   SIGNAL_OUTBOX,
-  STORAGE_TABLES,
 } from "simetra/model"
 import { outboxUnits } from "../platform/outbox"
 
@@ -42,10 +41,8 @@ describe("platformInstall", () => {
     "%s: holds the signal outbox table and every unit of its generator",
     async (provider) => {
       const install = await platformInstall(provider)
-      // Поруч — безумовна таблиця прив'язки сховища файлів (Р12)
       expect(install.tables.map((t) => [t.schema, t.name])).toEqual([
         [SIGNAL_OUTBOX.schema, SIGNAL_OUTBOX.name],
-        [STORAGE_TABLES.instance.schema, STORAGE_TABLES.instance.name],
       ])
       const identities = new Set(install.units.map((u) => u.identity))
       const outbox = outboxUnits("Any", provider, parse)

@@ -166,7 +166,8 @@ export function describeRolesUpgrade() {
             ],
           })
           expect(await memberships(login)).toEqual(
-            [PLATFORM_ROLES.command, USER, ANON]
+            // Батьки профілю з T0 (`simetra_files` дає `withRuntimeLogin`)
+            loginRoleParentNames("runtime", provider)
               .map((role) => [role, false, false, true])
               .sort()
           )

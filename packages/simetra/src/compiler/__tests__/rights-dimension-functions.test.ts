@@ -250,9 +250,11 @@ describe("access dimension value function", () => {
       heads(await errors(caller + link))
     const LINK_CHAIN = "public.region_ids → public.helper_ids"
     for (const [tail, body] of [
+      // Непорожній шлях без схеми платформи: схему платформи в шляху будь-якої
+      // функції відмовляє вже Р18, раніше за голову.
       [
-        "RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = simetra",
-        "SELECT i.id FROM identities i",
+        "RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = public",
+        "SELECT r.region_id FROM public.member_region r",
       ],
       [
         "RETURNS SETOF uuid LANGUAGE sql STABLE",

@@ -582,12 +582,10 @@ describe("stage 3: physical snapshot", () => {
     expect(searchIndexes(order).map((i) => i.name)).toEqual([
       "order_description_id_idx",
     ])
-    // Поруч — лише таблиці платформи, що є в кожному проєкті: outbox сигналів
-    // і прив'язка бази до бакета сховища файлів.
+    // Поруч — лише outbox сигналів платформи, що є в кожному проєкті.
     expect(physical.tables.map((t) => t.name)).toEqual([
       "order",
       "signal_outbox",
-      "storage_instance",
     ])
   })
 

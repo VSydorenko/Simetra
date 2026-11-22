@@ -17,6 +17,7 @@ import {
   ROW_VERSION_EPOCH_FUNCTION_NAME,
   PLATFORM_SCHEMA,
   PLATFORM_STATE_TABLES,
+  STORAGE_TABLES,
   quoteIdent,
   type CatalogModel,
   type CatalogUnit,
@@ -52,6 +53,7 @@ const MARKER = `${SCHEMA}.${quoteIdent("marker")}`
 const LEDGER = `${SCHEMA}.${quoteIdent("ledger")}`
 const SNAPSHOT_HASH_SIGNATURE = `${SCHEMA}.${quoteIdent(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}()`
 const VERSION_EPOCH = `${SCHEMA}.${quoteIdent("version_epoch")}`
+const STORAGE_INSTANCE = `${SCHEMA}.${quoteIdent(STORAGE_TABLES.instance.name)}`
 const EPOCH_SIGNATURE = `${SCHEMA}.${ROW_VERSION_EPOCH_FUNCTION_NAME}()`
 const RESET_SIGNATURE = `${SCHEMA}.reset_row_version_epoch()`
 const SEQUENCE_NAME = `${PLATFORM_SCHEMA}.${ROW_VERSION_SEQUENCE.name}`
@@ -169,6 +171,15 @@ export function renderApplyState(
       `CREATE TABLE ${VERSION_EPOCH} (`,
       "  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),",
       "  epoch uuid NOT NULL DEFAULT gen_random_uuid()",
+      ");",
+    ].join("\n"),
+    // Прив'язка бази до бакета файлів (спека профілю postgres §8.2): таблиця
+    // безумовна, як marker і ledger, тож поза знімком і без грантів; рядок
+    // вставляє лениво `storage_instance_id()` генератора сховища
+    [
+      `CREATE TABLE ${STORAGE_INSTANCE} (`,
+      "  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),",
+      "  id uuid NOT NULL DEFAULT gen_random_uuid()",
       ");",
     ].join("\n"),
     epochFunction(model.project.database.provider),

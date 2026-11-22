@@ -189,8 +189,9 @@ function headroomCondition(object: StorageObject, rightsOn: boolean): string {
 /**
  * Генератор `storage` (спека профілю postgres §8): функції сховища, їхні
  * гранти, тригери на таблицях видів зі `storage` і відкликання грантів на
- * таблиці. Одиниці існують, лише коли є об'єкт зі `storage`; відкликання на
- * `storage_instance` — завжди, бо таблиця безумовна (Р12).
+ * таблиці. Одиниці існують, лише коли є об'єкт зі `storage`. Безумовна
+ * таблиця `storage_instance` (Р12) — стан застосування (`renderApplyState`),
+ * тож тут її немає; функція `storage_instance_id` її лише читає.
  *
  * Усі функції — `SECURITY DEFINER` з порожнім `search_path`: таблиць сховища
  * ролі запиту й команд не бачать. `EXECUTE` лише ролі `simetra_files`
@@ -228,10 +229,7 @@ export function buildStorageUnits(input: StorageInput): SqlUnit[] {
     ].map((sql) => unit(sql))
   }
   if (objects.length === 0) {
-    // `storage_instance` безумовна: без об'єктів лишається лише її відкликання
-    return revokes(STORAGE_TABLES.instance).sort((a, b) =>
-      compareStrings(a.identity, b.identity)
-    )
+    return []
   }
   const rightsOn = hasRightsFunctions(contracts, provider)
 
@@ -503,7 +501,6 @@ export function buildStorageUnits(input: StorageInput): SqlUnit[] {
       STORAGE_TABLES.usage,
       STORAGE_TABLES.quota,
       STORAGE_TABLES.pending,
-      STORAGE_TABLES.instance,
     ].flatMap(revokes),
     ...perObject,
   ]

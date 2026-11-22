@@ -10,13 +10,15 @@ export const PLATFORM_SCHEMA = "simetra"
 
 /**
  * Tables of the apply state in the platform schema (P2 spec §8.6): the
- * marker, the ledger and the row version epoch row. They live outside the
+ * marker, the ledger, the row version epoch row and the file-store binding
+ * row (`storage_instance`, spec postgres profile §8.2). They live outside the
  * physical snapshot, so the compiler takes their names from here.
  */
 export const PLATFORM_STATE_TABLES = [
   "marker",
   "ledger",
   "version_epoch",
+  "storage_instance",
 ] as const
 
 /**

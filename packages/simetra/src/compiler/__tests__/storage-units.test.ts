@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { compile, type CompiledModel, type Diagnostic } from "simetra/compiler"
 import { tenantBoundary } from "../access-units"
 import { callersOfRole } from "../sql/execute-grants"
-import { STORAGE_TABLES, ZERO_UUID } from "simetra/model"
+import { PLATFORM_STATE_TABLES, STORAGE_TABLES, ZERO_UUID } from "simetra/model"
 import { uuid } from "./helpers"
 import {
   ROLE_FILE,
@@ -74,23 +74,15 @@ const unitOf = (model: CompiledModel, identity: string) =>
   model.sqlUnits.find((u) => u.identity === identity)
 
 describe("storage generator", () => {
-  it("a project without storage keeps only the unconditional instance table with its revokes", async () => {
+  it("a project without storage has no storage tables and no storage units; the instance table is apply state", async () => {
     const result = await compile(policyDomain(writeRoles()))
     expectClean(result)
     const model = result.model!
-    const tables = model.physical.tables
-      .filter((t) => t.schema === STORAGE_TABLES.instance.schema)
-      .filter((t) => t.name.startsWith("storage_"))
-      .map((t) => t.name)
-    expect(tables).toEqual(["storage_instance"])
-    expect(storageUnits(model).map((u) => u.sql)).toEqual(
-      expect.arrayContaining([
-        "REVOKE ALL ON TABLE simetra.storage_instance FROM PUBLIC;",
-      ])
-    )
-    expect(storageUnits(model).filter((u) => u.class === "function")).toEqual(
-      []
-    )
+    expect(
+      model.physical.tables.filter((t) => t.name.startsWith("storage_"))
+    ).toEqual([])
+    expect(storageUnits(model)).toEqual([])
+    expect(PLATFORM_STATE_TABLES).toContain(STORAGE_TABLES.instance.name)
   })
 
   it("lays the tables with RLS and no policy, and the file functions with their grants", async () => {
@@ -99,7 +91,6 @@ describe("storage generator", () => {
       (t) => (t.origin as { part?: string }).part === "storage"
     )
     expect(tables.map((t) => t.name)).toEqual([
-      "storage_instance",
       "storage_pending",
       "storage_quota",
       "storage_usage",

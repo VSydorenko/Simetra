@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { SIGNAL_OUTBOX, STORAGE_TABLES } from "simetra/model"
+import { SIGNAL_OUTBOX } from "simetra/model"
 import { compile, unitIdentity, type CompileResult } from "simetra/compiler"
 import {
   textCalls,
@@ -79,10 +79,8 @@ async function order(entries: Record<string, unknown>): Promise<string[]> {
   expectClean(result, { allow: ["rights.scope-kind-unread"] })
   // Outbox сигналів є в кожному проєкті; його порядок звіряє
   // signal-outbox.test.ts.
-  // Так само таблиця прив'язки сховища файлів — безумовна (Р12).
   const outbox = new Set([
     `table:${SIGNAL_OUTBOX.schema}.${SIGNAL_OUTBOX.name}`,
-    `table:${STORAGE_TABLES.instance.schema}.${STORAGE_TABLES.instance.name}`,
     ...result
       .model!.sqlUnits.filter(
         (u) => u.generator === "signalOutbox" || u.generator === "storage"
@@ -1036,8 +1034,6 @@ describe("creation order", () => {
       // Outbox сигналів платформи — у кожному проєкті (спека профілю
       // `postgres` §5.1).
       signal_outbox: "enabled",
-      // Прив'язка бази до бакета сховища файлів — теж у кожному проєкті (Р12).
-      storage_instance: "enabled",
     })
   })
 })
