@@ -3319,6 +3319,24 @@ T4 знає лише порт. Вид помилки розрізняє прав
 `recovered: false`, відмова токена — `auth` без автоповтору. Інший
 сервер сигналів — інша реалізація того самого порту.
 
+Опції фабрики `createCentrifugoTransport`:
+`{ url, getConnectionToken(): Promise<string>, getChannelToken(channel): Promise<string> }`.
+Відмову host повідомляє класом `SignalAuthRefused` (експорт
+`simetra/data/centrifugo`). Відмова — рівно це: канал відсутній у гранті
+`authorizeChannels` (токена для нього не повернуто, без винятку),
+`signals.no-user`, відповідь 401 чи 403 endpoint-а host-а. Мережа й 5xx — не
+відмова, а `transport` з повтором за backoff клієнта. Відмова `getChannelToken`
+— `onError({ kind: "auth", channel })` без автоповтору. Відмова
+`getConnectionToken` — `onError({ kind: "auth" })` і один явний `connect()`
+після `setToken("")` (без скидання клієнт тримає попередній токен
+з'єднання й не кличе `getConnectionToken`); друга відмова поспіль без події
+з'єднання між ними — `onError({ kind: "auth", final: true })` без `connect()`.
+Лічильник скидає лише подія успішного з'єднання клієнта, а не `subscribed`
+каналу. Адаптер віддає `onSubscribed` на кожну підписку, зокрема після
+перепідписки на `stateInvalidated` (2502) і після перепідключення, і повідомляє
+про кожну втрату транспорту помилкою; свіжість він не вирішує — це робить
+правило епох §8.4.
+
 ### 8.6 Відомі обмеження П4-B
 
 - **Id і версії поза обсягом читання.** Користувач лише з обсягом `own` чи
