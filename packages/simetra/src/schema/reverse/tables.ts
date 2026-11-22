@@ -352,8 +352,27 @@ export function customTableData(
   // Похідну колонку пошуку й її індекс виводить компілятор із `search`:
   // описані як власні, вони зіткнулися б із похідними
   const derived = derivedSearchColumns(table)
-  const own = (columns: readonly string[]) =>
-    !columns.some((c) => derived.has(c))
+  // Виводить компілятор лише індекс одного ключа `text_pattern_ops` без
+  // решти ознак: решту індексів з похідною колонкою (складений, унікальний,
+  // частковий) створив автор, і вони лишаються власними.
+  const isDerivedIndex = (index: CatalogTable["indexes"][number]) => {
+    const [key, ...rest] = index.keys
+    return (
+      rest.length === 0 &&
+      key !== undefined &&
+      "column" in key &&
+      derived.has(key.column) &&
+      key.opclass?.name === "text_pattern_ops" &&
+      key.order === undefined &&
+      key.nulls === undefined &&
+      key.collation === undefined &&
+      index.method === "btree" &&
+      !index.unique &&
+      !index.nullsNotDistinct &&
+      index.include.length === 0 &&
+      index.where === undefined
+    )
+  }
   return {
     ...(typeof raw?.id === "string" ? { id: raw.id } : {}),
     kind: "CustomTable",
@@ -403,9 +422,7 @@ export function customTableData(
     ...nonEmpty(
       "indexes",
       table.indexes
-        .filter((index) =>
-          own(index.keys.flatMap((k) => ("column" in k ? [k.column] : [])))
-        )
+        .filter((index) => !isDerivedIndex(index))
         .map((index) => ({
           name: index.name,
           ...(index.unique ? { unique: true } : {}),

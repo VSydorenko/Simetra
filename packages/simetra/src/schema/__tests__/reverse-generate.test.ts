@@ -2982,6 +2982,49 @@ describe("reverseGenerate: the normalized search column", () => {
     expect(second.changes).toEqual([])
   })
 
+  it("never reads the derived column back as a generated column of the table", async () => {
+    const result = await reverseGenerate(
+      notes(`"left"(lower((note COLLATE "default")), 660)`),
+      options()
+    )
+    const columns = json(result, FILE).columns as Json[]
+    expect(columns.filter((c) => c.generated !== undefined)).toEqual([])
+    expect(columns.map((c) => c.physicalName)).not.toContain("note_search")
+  })
+
+  it("keeps an author's index that has a key on the derived column", async () => {
+    const base = notes(`"left"(lower((note COLLATE "default")), 660)`)
+    const t = base.tables[0]!
+    const derivedIndex = t.indexes[0]!
+    const live = {
+      ...base,
+      tables: [
+        {
+          ...t,
+          indexes: [
+            derivedIndex,
+            {
+              ...derivedIndex,
+              name: "notes_note_search_unique",
+              unique: true,
+            },
+            {
+              ...derivedIndex,
+              name: "notes_id_note_search",
+              keys: [{ column: "id" }, ...derivedIndex.keys],
+            },
+          ],
+        },
+      ],
+    }
+    const result = await reverseGenerate(live, options())
+    const indexes = json(result, FILE).indexes as Json[]
+    expect(indexes.map((i) => i.name)).toEqual([
+      "notes_note_search_unique",
+      "notes_id_note_search",
+    ])
+  })
+
   it("keeps the declared mode and the declared non-string fields", async () => {
     const live = notes(`"left"(lower((note COLLATE "default")), 660)`)
     const first = await reverseGenerate(live, options())
