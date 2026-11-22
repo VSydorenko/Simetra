@@ -10,7 +10,8 @@ import {
 } from "./source"
 
 /** The batcher: a {@link StoreSource} that also knows its queue. */
-export interface Batcher extends StoreSource {
+// Оренди запису видає джерело ядра над збирачем, не сам збирач (§8.4).
+export interface Batcher extends Omit<StoreSource, "lease"> {
   /** Whether a `version` part waits in the queue, not sent yet. */
   hasQueuedVersion(): boolean
   /** Whether a `rights` part waits in the queue, not sent yet. */

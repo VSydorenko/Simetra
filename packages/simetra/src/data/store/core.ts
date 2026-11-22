@@ -28,6 +28,7 @@ import {
   ReadLimiterClosed,
   readKeys,
   requestOf,
+  settle,
   tracked,
   type CorePart,
   type CoreReadItem,
@@ -514,6 +515,7 @@ export function createCore(options: {
     close: () => batcher.close(),
     refuse: (object) => batcher.refuse?.(object),
     run: (operation) => batcher.run(operation),
+    lease: () => ({ issue() {}, release() {} }),
     read: (parts, caller) => {
       const plan = writesOf(parts)
       for (const object of plan)
@@ -1154,37 +1156,39 @@ export function createCore(options: {
     const gen = tail.gen
     const token = session.childToken(() => tail.gen === gen)
     const readEpoch = session.epochs.now()
-    const read = tracked(source)
+    const lease = source.lease()
+    const read = tracked(source, undefined, lease)
     readKeys(read.source, o.entry, keys, {
       keysPerRequest: limits.keysPerRequest,
     })
       .then(
-        (rows) => {
-          session.commit(
-            (scope) => {
-              // Відкинута відповідь не пише нічого; без автоповтору
-              // (§6.3) ключі перечитує вигляд.
-              if (session.acceptEpochs(read.epochs, readEpoch) === "discard")
-                return
-              const got = new Set<Key>()
-              for (const row of rows) {
-                got.add(row.key)
-                // Ключ без запису — і перший запис без колонки скоупу (П11),
-                // недосяжний: проєкція завжди несе scopeColumn (§10).
-                if ((o.rows.get(row.key)?.owners ?? 0) > 0)
-                  ops.put(scope, o, row, readEpoch, false)
-              }
-              for (const key of keys) {
-                if (!got.has(key) && (o.rows.get(key)?.owners ?? 0) > 0)
-                  ops.remove(scope, o, key, readEpoch)
-              }
-            },
-            token,
-            `tail ${o.name}`
-          )
-        },
+        (rows) =>
+          settle(lease, () =>
+            session.commit(
+              (scope) => {
+                // Відкинута відповідь не пише нічого; без автоповтору
+                // (§6.3) ключі перечитує вигляд.
+                if (session.acceptEpochs(read.epochs, readEpoch) === "discard")
+                  return
+                const got = new Set<Key>()
+                for (const row of rows) {
+                  got.add(row.key)
+                  // Ключ без запису — і перший запис без колонки скоупу (П11),
+                  // недосяжний: проєкція завжди несе scopeColumn (§10).
+                  if ((o.rows.get(row.key)?.owners ?? 0) > 0)
+                    ops.put(scope, o, row, readEpoch, false)
+                }
+                for (const key of keys) {
+                  if (!got.has(key) && (o.rows.get(key)?.owners ?? 0) > 0)
+                    ops.remove(scope, o, key, readEpoch)
+                }
+              },
+              token,
+              `tail ${o.name}`
+            )
+          ),
         // Без автоповтору (§6.3): рядок лишається `stale` до наступного читання.
-        () => {}
+        () => settle(lease, () => {})
       )
       .finally(() => {
         tail.flying = undefined

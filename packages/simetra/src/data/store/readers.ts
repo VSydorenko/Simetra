@@ -25,6 +25,7 @@ import {
   rowsOf,
   tracked,
   type StoreSource,
+  type WriteLease,
 } from "./source"
 import {
   EMPTY_WINDOW,
@@ -183,9 +184,10 @@ export async function gated<C extends ReaderContext>(
   ctx: C,
   readEpoch: number,
   read: (ctx: C) => Promise<Write>,
-  caller?: Subset
+  caller: Subset | undefined,
+  lease: WriteLease
 ): Promise<Apply> {
-  const { source, epochs } = tracked(ctx.source, caller)
+  const { source, epochs } = tracked(ctx.source, caller, lease)
   const write = await read({ ...ctx, source })
   return (scope) => {
     if (ctx.session.acceptEpochs(epochs, readEpoch) === "discard") return false
@@ -1072,9 +1074,16 @@ export function readForm(
   ctx: ReaderContext,
   s: Subset,
   readEpoch: number,
-  token: GenerationToken
+  token: GenerationToken,
+  lease: WriteLease
 ): Promise<Apply> {
-  return gated(ctx, readEpoch, (c) => readFormWrite(c, s, readEpoch, token), s)
+  return gated(
+    ctx,
+    readEpoch,
+    (c) => readFormWrite(c, s, readEpoch, token),
+    s,
+    lease
+  )
 }
 
 /** {@link readForm} without the epoch gate: the caller gates the whole read. */

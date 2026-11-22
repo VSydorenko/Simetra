@@ -35,7 +35,13 @@ import {
 } from "./window"
 import { DISCARD_PAUSE_MS, type Scope, type Session } from "./session"
 import type { RowViews } from "./snapshot"
-import { ReadLimiterClosed, readKeys, tracked } from "./source"
+import {
+  ReadLimiterClosed,
+  readKeys,
+  settle,
+  tracked,
+  type WriteLease,
+} from "./source"
 import {
   EPOCH_UNAVAILABLE,
   errorOf,
@@ -885,9 +891,16 @@ function readAgain(
   ctx: WriterContext,
   s: Subset,
   startEpoch: number,
-  token: GenerationToken
+  token: GenerationToken,
+  lease: WriteLease
 ): Promise<Apply> {
-  return gated(ctx, startEpoch, (c) => writeAgain(c, s, startEpoch, token), s)
+  return gated(
+    ctx,
+    startEpoch,
+    (c) => writeAgain(c, s, startEpoch, token),
+    s,
+    lease
+  )
 }
 
 async function writeAgain(
@@ -1271,9 +1284,11 @@ export async function revalidateViews(
   const purgesAtStart = new Map(ctx.purges)
   const purgedSince = (name: ObjectName) =>
     (ctx.purges.get(name) ?? 0) !== (purgesAtStart.get(name) ?? 0)
+  // Одна оренда на прохід: усі відповіді пише один `commit` нижче.
+  const lease = ctx.source.lease()
   const results = await Promise.all(
     targets.map((s) =>
-      readAgain(ctx, s, startEpoch, token).then(
+      readAgain(ctx, s, startEpoch, token, lease).then(
         (apply) => ({ s, apply }) as const,
         (error: unknown) => ({ s, error }) as const
       )
@@ -1285,77 +1300,79 @@ export async function revalidateViews(
   }
   const again: Subset[] = []
   const discarded: Subset[] = []
-  session.commit(
-    (scope) => {
-      try {
-        for (const result of results) {
-          const { s } = result
-          if (!s.alive || s.purged) continue
-          const atStart = loadsAtStart.get(s)
-          if (atStart?.gen !== s.gen || atStart.flight !== s.flight) continue
-          // purge після старту: відповідь могла нести рядки й рядки ТЧ, яких
-          // на мить purge у сховищі не було (рядок у сховищі ще в старому
-          // скоупі). Відкидаємо й перечитуємо тим самим системним шляхом:
-          // склад і порядок змінює лише сам purge (§6.5), а не перечитування.
-          if (
-            purgedSince(o.name) ||
-            s.form.include.some((step) => purgedSince(step.target))
-          ) {
-            again.push(s)
-            continue
-          }
-          s.dirty = true
-          if ("error" in result) {
-            // Закритий обмежувач — сесію закрито: писати нікуди.
-            if (result.error instanceof ReadLimiterClosed) continue
-            s.failures++
-            s.failedAt = startedAt
-            s.status = "error"
-            s.error = errorOf(result.error)
-            continue
-          }
-          try {
-            if (!result.apply(scope)) {
-              // Відкинута відповідь: перечитування з паузою, а після
-              // межі відкинутих поспіль — `command.unavailable`.
-              if (session.versions.unavailable()) {
-                s.status = "error"
-                s.error = EPOCH_UNAVAILABLE
-              } else discarded.push(s)
-              continue
-            }
-            if (pageDropped.delete(s)) {
+  settle(lease, () =>
+    session.commit(
+      (scope) => {
+        try {
+          for (const result of results) {
+            const { s } = result
+            if (!s.alive || s.purged) continue
+            const atStart = loadsAtStart.get(s)
+            if (atStart?.gen !== s.gen || atStart.flight !== s.flight) continue
+            // purge після старту: відповідь могла нести рядки й рядки ТЧ, яких
+            // на мить purge у сховищі не було (рядок у сховищі ще в старому
+            // скоупі). Відкидаємо й перечитуємо тим самим системним шляхом:
+            // склад і порядок змінює лише сам purge (§6.5), а не перечитування.
+            if (
+              purgedSince(o.name) ||
+              s.form.include.some((step) => purgedSince(step.target))
+            ) {
               again.push(s)
               continue
             }
-            s.refreshedAt = startedAt
-            s.okReadEpoch = startEpoch
-            // Успішне системне читання, що стартувало з епохи вимоги,
-            // підтверджує склад: нового рядка воно не ставить у склад, а дає
-            // банер (§6.5).
-            if (
-              s.unconfirmedSince !== undefined &&
-              startEpoch >= s.unconfirmedSince
-            )
-              s.unconfirmedSince = undefined
-            s.failures = 0
-            s.failedAt = undefined
-            if (s.status === "error") {
-              s.status = "ready"
-              s.error = undefined
+            s.dirty = true
+            if ("error" in result) {
+              // Закритий обмежувач — сесію закрито: писати нікуди.
+              if (result.error instanceof ReadLimiterClosed) continue
+              s.failures++
+              s.failedAt = startedAt
+              s.status = "error"
+              s.error = errorOf(result.error)
+              continue
             }
-          } catch (error) {
-            ctx.log({ kind: "listener-failed", error })
-            s.status = "error"
-            s.error = errorOf(error)
+            try {
+              if (!result.apply(scope)) {
+                // Відкинута відповідь: перечитування з паузою, а після
+                // межі відкинутих поспіль — `command.unavailable`.
+                if (session.versions.unavailable()) {
+                  s.status = "error"
+                  s.error = EPOCH_UNAVAILABLE
+                } else discarded.push(s)
+                continue
+              }
+              if (pageDropped.delete(s)) {
+                again.push(s)
+                continue
+              }
+              s.refreshedAt = startedAt
+              s.okReadEpoch = startEpoch
+              // Успішне системне читання, що стартувало з епохи вимоги,
+              // підтверджує склад: нового рядка воно не ставить у склад, а дає
+              // банер (§6.5).
+              if (
+                s.unconfirmedSince !== undefined &&
+                startEpoch >= s.unconfirmedSince
+              )
+                s.unconfirmedSince = undefined
+              s.failures = 0
+              s.failedAt = undefined
+              if (s.status === "error") {
+                s.status = "ready"
+                s.error = undefined
+              }
+            } catch (error) {
+              ctx.log({ kind: "listener-failed", error })
+              s.status = "error"
+              s.error = errorOf(error)
+            }
           }
+        } finally {
+          ctx.ops.sweep(scope)
         }
-      } finally {
-        ctx.ops.sweep(scope)
-      }
-    },
-    token,
-    `revalidate ${o.name}`
+      },
+      token,
+      `revalidate ${o.name}`
+    )
   )
   // Прохід осів: хвіст явного `revalidate` може стартувати.
   for (const s of targets) {
@@ -1451,7 +1468,8 @@ export async function rereadKey(
       "reread timeout"
     )
   })
-  const read = tracked(ctx.source)
+  const lease = ctx.source.lease()
+  const read = tracked(ctx.source, undefined, lease)
   let rows: readonly ServerRow[] | undefined
   try {
     rows = await readKeys(
@@ -1465,39 +1483,43 @@ export async function rereadKey(
   } catch {
     rows = undefined
   }
-  if (!token.valid) {
-    limit.abort()
-    return
-  }
-  session.commit(
-    (scope) => {
-      if (rows === undefined) {
-        fire({ kind: "failed" }, scope)
-        return
-      }
-      // Шлюз відповіді — той самий, що в `Writer.apply`: епохи частин і
-      // рядків; відкинута відповідь не пише нічого.
-      const epochs = new Set<string | null>(read.epochs)
-      for (const row of rows) epochs.add(row.versionEpoch ?? null)
-      if (session.acceptEpochs(epochs, startEpoch) === "discard") {
-        fire({ kind: "discarded" }, scope)
-        return
-      }
-      patchRows(ctx, scope, o, rows, startEpoch, null, form === "card")
-      const found = rows.find((r) => r.key.toLowerCase() === key.toLowerCase())
-      if (found === undefined && (o.rows.get(key)?.owners ?? 0) > 0)
-        removeKeys(ctx, scope, o, [key], startEpoch)
-      // Підсумок несе рядок відповіді з його власною епохою, як він прийшов:
-      // у сховище цей рядок уже записав `patchRows` за правилом епох.
-      const answer =
-        found === undefined
-          ? undefined
-          : { ...found, versionEpoch: heldEpoch(found.versionEpoch) }
-      fire({ kind: "read", row: answer }, scope)
-    },
-    token,
-    `reread ${o.name}`
-  )
+  settle(lease, () => {
+    if (!token.valid) {
+      limit.abort()
+      return
+    }
+    session.commit(
+      (scope) => {
+        if (rows === undefined) {
+          fire({ kind: "failed" }, scope)
+          return
+        }
+        // Шлюз відповіді — той самий, що в `Writer.apply`: епохи частин і
+        // рядків; відкинута відповідь не пише нічого.
+        const epochs = new Set<string | null>(read.epochs)
+        for (const row of rows) epochs.add(row.versionEpoch ?? null)
+        if (session.acceptEpochs(epochs, startEpoch) === "discard") {
+          fire({ kind: "discarded" }, scope)
+          return
+        }
+        patchRows(ctx, scope, o, rows, startEpoch, null, form === "card")
+        const found = rows.find(
+          (r) => r.key.toLowerCase() === key.toLowerCase()
+        )
+        if (found === undefined && (o.rows.get(key)?.owners ?? 0) > 0)
+          removeKeys(ctx, scope, o, [key], startEpoch)
+        // Підсумок несе рядок відповіді з його власною епохою, як він прийшов:
+        // у сховище цей рядок уже записав `patchRows` за правилом епох.
+        const answer =
+          found === undefined
+            ? undefined
+            : { ...found, versionEpoch: heldEpoch(found.versionEpoch) }
+        fire({ kind: "read", row: answer }, scope)
+      },
+      token,
+      `reread ${o.name}`
+    )
+  })
 }
 
 /**
