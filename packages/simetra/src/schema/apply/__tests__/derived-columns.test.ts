@@ -147,6 +147,24 @@ describe("derived columns: classification", () => {
   })
 })
 
+describe("derived columns: data the structural refs do not name", () => {
+  it("a lost object without a structural ref keeps the step destructive", () => {
+    // Двигун не дає структурного посилання на кожен знятий об'єкт: зняте
+    // поза переліком `destroyed` судиться як втрата
+    const step = action(`ALTER TABLE "app"."t" DROP COLUMN "c_search"`, {
+      destroys: ["column:app.t.c_search", "sequence:app.s"],
+      destroyed: [
+        { kind: "column", schema: "app", table: "t", name: "c_search" },
+      ],
+      dataLoss: true,
+    })
+    const [classified] = classifySteps([step], live(true), parse, 0, {
+      derived: derivedColumnKeys([snapshot()]),
+    })
+    expect(classified?.class).toBe("destructive")
+  })
+})
+
 describe("derived columns: around a type change of the source", () => {
   const alter = action(
     `ALTER TABLE "app"."t" ALTER COLUMN "c" TYPE character varying(200) USING "c"::character varying(200)`
