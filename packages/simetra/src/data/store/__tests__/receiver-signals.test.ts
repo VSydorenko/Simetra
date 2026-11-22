@@ -13,7 +13,7 @@ import {
 import { coreInternals } from "../core"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import { MAX_BATCH_MS, QUIET_MS, SEEN_SIGNALS_MAX } from "../receiver"
-import type { Key, ViewSpec } from "../types"
+import type { CoreLimits, Key, ViewSpec, Writer } from "../types"
 import {
   TASK,
   key,
@@ -78,13 +78,15 @@ const channelOf = (scope: string) =>
 
 function harness(
   server?: NonNullable<Parameters<typeof setup>[0]>["server"],
-  scopes: readonly string[] = [S]
+  scopes: readonly string[] = [S],
+  limits?: Partial<CoreLimits>
 ) {
   const transport = createFakeSignalTransport()
   const h = setup({
     rightsSnapshot: true,
     signals: transport,
     ...(server === undefined ? {} : { server }),
+    ...(limits === undefined ? {} : { limits }),
   })
   h.fake.rightsSnapshot = {
     userId: USER,
@@ -127,9 +129,10 @@ async function open(
   rows = 3,
   server?: Parameters<typeof harness>[0],
   scopes?: readonly string[],
-  before?: (fake: Harness["fake"]) => void
+  before?: (fake: Harness["fake"]) => void,
+  limits?: Partial<CoreLimits>
 ) {
-  const h = harness(server, scopes)
+  const h = harness(server, scopes, limits)
   seed(h.fake, 1, rows)
   before?.(h.fake)
   const subscribe = vi.spyOn(h.transport, "subscribe")
@@ -684,7 +687,7 @@ describe("flow control", () => {
 describe("purge of a pair", () => {
   const purge = (h: Awaited<ReturnType<typeof open>>, scope: string) =>
     h.core.commit((w) => w.purge(TASK, { scope }), h.core.token())
-  const twoScopes = async () => {
+  const twoScopes = async (limits?: Partial<CoreLimits>) => {
     // Рядки на сервері вже до монтування: `hasNewRows` починається з `false`.
     const h = await open(
       { kind: "full", object: TASK },
@@ -694,7 +697,8 @@ describe("purge of a pair", () => {
       (fake) => {
         fake.insert(TASK, taskValues(1))
         fake.insert(TASK, taskValues(2, { org: S2 }))
-      }
+      },
+      limits
     )
     return { ...h, from: h.fake.requests.length }
   }
@@ -742,6 +746,53 @@ describe("purge of a pair", () => {
     await settle()
     expect(h.fake.requests.length).toBe(sent)
   })
+
+  // Відповідь, що стартувала до purge, лягає, коли вигляд уже знову тримає
+  // ключ з новішого читання: правило «0 записів і 0 запитів після purge»
+  // стосується й кроку 4 (мінімальна версія), не лише запису рядка.
+  it.each([
+    { what: "pair", evicted: false, target: { scope: S } },
+    { what: "key", evicted: false, target: { keys: [key(1)] } },
+    // Надгробок ключа витіснено, новіший надгробок пари (другий purge) — ні.
+    {
+      what: "pair with the key tombstone evicted",
+      evicted: true,
+      target: { scope: S },
+    },
+  ] as const)(
+    "a min-version answer that started before a purge of the $what sets no mark and sends no re-read",
+    async ({ evicted, target }) => {
+      const h = await twoScopes(evicted ? { tombstonesMax: 2 } : undefined)
+      const served = h.fake.edit(TASK, key(1), { title: "v" })
+      h.fake.mode = "manual"
+      emit(h, change("update", key(1), served + 1), channelOf(S))
+      await closeBatch()
+      const old = h.fake.take(
+        (r) => keysOf(r.query).length > 0 && keysOf(r.query)[0] === key(1)
+      )
+      const purge = (t: Parameters<Writer["purge"]>[1]) =>
+        h.core.commit((w) => w.purge(TASK, t), h.core.token())
+      purge(target)
+      if (evicted) {
+        purge({ scope: S })
+        purge({ keys: [key(5)] })
+      }
+      h.handle.refresh()
+      await settle()
+      h.fake.deliverAll()
+      await settle()
+      expect(h.handle.getSnapshot().rows.map((r) => r.key)).toContain(key(1))
+      const sent = h.fake.requests.length
+      old.answer()
+      await settle()
+      h.fake.mode = "auto"
+      await vi.advanceTimersByTimeAsync(10_000)
+      await settle()
+      expect(h.fake.requests.length).toBe(sent)
+      const row = h.handle.getSnapshot().rows.find((r) => r.key === key(1))
+      expect(row?.state).not.toBe("stale")
+    }
+  )
 })
 
 describe("a failed key read", () => {

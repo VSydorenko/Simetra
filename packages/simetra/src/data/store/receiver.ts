@@ -730,6 +730,20 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       // затримка) — ключ чекає мінімальну версію й дочитується. Звичайне
       // перечитування `stale` не ставить.
       if (row.version >= signal.version) continue
+      // Ключ чи його пара, поховані з початку читання (purge каналом,
+      // правами, ключа): відповідь, що стартувала до purge, після нього
+      // нічого не пише й не шле — ні позначки мінімальної версії рядку, який
+      // вигляди тримають уже з новішого читання, ні дочитування (як
+      // `markNewRow`). Пара — бо надгробок ключа може бути витіснено, а
+      // новіший надгробок пари лишитись.
+      if (
+        session.epochs.buriedSince(keyId(object, key), job.readEpoch) ||
+        session.epochs.buriedSince(
+          pairId(object, o.rows.get(key)?.scope ?? null),
+          job.readEpoch
+        )
+      )
+        continue
       const had = marks.minVersionBefore(object, key)
       w.markStale(object, [key], signal.version)
       marks.noteMinVersion(object, key, had)

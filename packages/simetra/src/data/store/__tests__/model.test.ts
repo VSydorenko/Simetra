@@ -4498,6 +4498,105 @@ describe("core model regressions", () => {
     },
     120_000
   )
+
+  // #114: відповідь читання ключа за сигналом із `row_ver` попереду сервера,
+  // що стартувала до purge пари каналом (`chanAuth`), прийшла, коли вигляди
+  // знову тримають рядок: ні позначки мінімальної версії, ні дочитування
+  // після purge. Зменшений контрприклад — кроками, а не насінням: шлях
+  // fast-check зсувається з кожною зміною довільних кроків.
+  it("replays the min-version answer that started before a pair purge (#114)", async () => {
+    const steps: readonly Step[] = [
+      { t: "run", pick: 2, how: "conflict", at: 1 },
+      {
+        t: "signal",
+        org: true,
+        k: 3,
+        op: "update",
+        ch: 0,
+        ver: 2,
+        change: false,
+      },
+      { t: "answer", pick: 2, how: "stale", at: 6 },
+      { t: "answer", pick: 1, how: "missing", at: 2 },
+      { t: "return", minAge: 5000 },
+      { t: "refresh", v: 4, showNew: true },
+      { t: "refresh", v: 6, showNew: true },
+      { t: "return", minAge: 1000 },
+      {
+        t: "signal",
+        org: false,
+        k: 4,
+        op: "update",
+        ch: 0,
+        ver: 1,
+        change: false,
+      },
+      { t: "time", ms: 1000 },
+      { t: "rights", what: "lose", object: 0, scope: 1 },
+      { t: "move", k: 1 },
+      {
+        t: "signal",
+        org: false,
+        k: 4,
+        op: "update",
+        ch: 1,
+        ver: 1,
+        change: false,
+      },
+      { t: "rehydrate" },
+      { t: "answer", pick: 7, how: "stale", at: 3 },
+      { t: "gap", k: 1, remove: false },
+      { t: "unsub", v: 10, release: false },
+      { t: "run", pick: 1, how: "ok", at: 0 },
+      { t: "version" },
+      { t: "chanAuth", ch: 3 },
+      { t: "run", pick: 0, how: "ok", at: 0 },
+      { t: "purgeScope", org: true, scope: 1 },
+      { t: "rights", what: "regain", object: 2, scope: 0 },
+      { t: "answer", pick: 4, how: "stale", at: 0 },
+      { t: "update", k: 1, lazy: true, base: 0 },
+      { t: "update", k: 1, lazy: false, base: 2 },
+      { t: "refresh", v: 9, showNew: false },
+      { t: "churn", v: 0, scroll: false },
+      { t: "refresh", v: 4, showNew: false },
+      { t: "chanAuth", ch: 1 },
+      { t: "rights", what: "hold", object: 0, scope: 1 },
+      { t: "answer", pick: 1, how: "ok", at: 5 },
+      { t: "answer", pick: 6, how: "stale", at: 1 },
+      { t: "answer", pick: 2, how: "missing", at: 0 },
+      { t: "markViews", v: 10, one: false, needs: true, news: false },
+      { t: "answer", pick: 3, how: "ok", at: 6 },
+      {
+        t: "signal",
+        org: true,
+        k: 3,
+        op: "delete",
+        ch: 0,
+        ver: 0,
+        change: false,
+      },
+      { t: "run", pick: 0, how: "ok", at: 1 },
+      {
+        t: "signal",
+        org: true,
+        k: 4,
+        op: "garbage",
+        ch: 0,
+        ver: 0,
+        change: true,
+      },
+      { t: "rights", what: "lose", object: 0, scope: 1 },
+      { t: "sub", v: 4 },
+      { t: "churn", v: 12, scroll: true },
+      { t: "onMutation", pick: 3, what: "remove" },
+      { t: "answer", pick: 0, how: "unavailable", at: 3 },
+      { t: "page", w: 1, dir: "before" },
+      { t: "answer", pick: 7, how: "missing", at: 2 },
+      { t: "hide", org: true, k: 4 },
+      { t: "purgeScope", org: true, scope: 0 },
+    ]
+    await runModel(steps, true, "burial", [], true, true, true)
+  }, 120_000)
 })
 
 // Дефекти такту планувальника: їхній самотест мусить мати такт із читанням.
