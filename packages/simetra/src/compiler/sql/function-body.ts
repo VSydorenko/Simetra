@@ -19,7 +19,10 @@ import {
 } from "./closed-forms"
 import {
   callsSqlText,
+  doBlockFunction,
   literalDynamicText,
+  optionText,
+  type DefElemNode,
   type ProviderCalls,
 } from "./command-context"
 import {
@@ -75,25 +78,6 @@ export interface RoutineBody {
   statements: ExecutedStatement[]
   values: { text: string; line: number }[]
   problem?: BodyProblem
-}
-
-interface DefElemNode {
-  DefElem?: { defname?: string; arg?: unknown }
-}
-
-/** Рядкове значення опції: `List` рядків (`AS` функції) чи рядок. */
-function optionText(
-  options: readonly DefElemNode[] | undefined,
-  name: string
-): string | undefined {
-  const arg = (options ?? []).find((o) => o.DefElem?.defname === name)?.DefElem
-    ?.arg as
-    | {
-        String?: { sval?: string }
-        List?: { items?: { String?: { sval?: string } }[] }
-      }
-    | undefined
-  return arg?.String?.sval ?? arg?.List?.items?.[0]?.String?.sval
 }
 
 /** Кожен вузол оператора дерева в порядку обходу, вкладені — теж. */
@@ -250,10 +234,7 @@ class BodyWalker {
       this.fail("unread", at)
       return
     }
-    this.plpgsqlBody(
-      `CREATE FUNCTION do_block() RETURNS void LANGUAGE plpgsql AS '${body.replaceAll("'", "''")}'`,
-      at
-    )
+    this.plpgsqlBody(doBlockFunction(body), at)
   }
 }
 

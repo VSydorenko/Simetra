@@ -60,6 +60,24 @@ describe("the search_path function option and the platform schema", () => {
     expect(hits(`SET search_path = "$user"`, "simetra_owner")).toEqual([])
   })
 
+  it("SET search_path FROM CURRENT is judged as a risk too", () => {
+    expect(hits("SET search_path FROM CURRENT")).toEqual([
+      ["functionOption", "search_path"],
+    ])
+    const sql = "ALTER FUNCTION public.f() SET search_path FROM CURRENT;"
+    const parsed = parse(sql)
+    if (!parsed.ok) throw new Error(parsed.message)
+    expect(
+      commandContextWrite(
+        parsed.statements[0]!.stmt,
+        sql,
+        parse,
+        plpgsql,
+        providerCalls(undefined, [])
+      ).map((hit) => hit.form)
+    ).toEqual(["functionOption"])
+  })
+
   it("an ALTER FUNCTION option is judged the same way", () => {
     const sql = "ALTER FUNCTION public.f() SET search_path = simetra;"
     const parsed = parse(sql)
