@@ -557,6 +557,42 @@ describe("can", () => {
     expect(can(mineSnap([]), entry, "update", opts)).toBe(false)
   })
 
+  it("a container right in another scope gives nothing, with and without a row", () => {
+    const entry = withRich()
+    const rows = [update({ level: "container", scope: OTHER, container: BOX })]
+    const snapshot = mineSnap(rows, {
+      scopeSets: [
+        { scopeKind: KIND, scope: SCOPE },
+        { scopeKind: KIND, scope: OTHER },
+      ],
+    })
+    expect(can(snapshot, entry, "update", at)).toBe(false)
+    expect(
+      can(snapshot, entry, "update", { ...at, row: { project: BOX } })
+    ).toBe(false)
+    expect(can(snapshot, entry, "update", { scope: OTHER })).toBe(true)
+  })
+
+  it("without a row a dimension branch needs values to pass", () => {
+    const rows = [update({ extent: "dimension", dimensionId: DIM })]
+    const empty = mineSnap(rows, {
+      dimensionValues: [{ dimension: DIM, values: [] }],
+    })
+    const fresh = withRich()
+    const stale = withRich({
+      access: [{ dimensionId: DIM, carrier: REGION, fresh: false }],
+    })
+    expect(can(empty, fresh, "update", at)).toBe(false)
+    expect(can(empty, stale, "update", at)).toBe("unknown")
+    const truncated = mineSnap(rows, {
+      dimensionValues: [
+        { dimension: DIM, values: [], truncated: true, digest: "a".repeat(64) },
+      ],
+    })
+    expect(can(truncated, fresh, "update", at)).toBe(true)
+    expect(can(mineSnap(rows), fresh, "update", at)).toBe(true)
+  })
+
   it("a container branch with own needs the own carrier too", () => {
     const entry = withRich()
     const rows = [

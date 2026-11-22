@@ -18,6 +18,7 @@ import {
 } from "simetra/model"
 import {
   GLOBAL_FOUNDER_ID,
+  PROJECT_TICKET_WRITER_ID,
   ROLE_FILE,
   TICKET_WRITER_ID,
   grant,
@@ -159,6 +160,24 @@ async function seedEvaluator(client: pg.Client, ids: Seed): Promise<void> {
     member_id: ids["pr@A"],
     region_id: ids.r1,
   })
+  // `px` — учасник A без ролей й B із контейнерним правом лише в B: у A
+  // без рядка воно нічого не дає
+  ids.px = await signUp(client)
+  for (const org of ["A", "B"]) {
+    ids[`px@${org}`] = randomUUID()
+    await insert(client, "org_member", {
+      id: ids[`px@${org}`],
+      org_id: ids[org],
+      user_id: ids.px,
+    })
+  }
+  await insert(client, "org_role_assignments", {
+    org_id: ids.B,
+    ...assignmentRow(ids["px@B"]!, {
+      archetype: PROJECT_TICKET_WRITER_ID,
+      container: ids.PB,
+    }),
+  })
   await member("fa", { archetype: FULL_ACCESS_ID })
   await create("denyRole", "org_roles", {
     org_id: ids.A,
@@ -221,6 +240,7 @@ export function defineRightsEvaluatorCases(): void {
       "po",
       "pr",
       "fa",
+      "px",
       "dn",
     ]
 

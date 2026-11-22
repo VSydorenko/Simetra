@@ -326,7 +326,14 @@ export function can(
           dimensionId: a.dimensionId,
           carrier:
             row === undefined
-              ? true
+              ? // Без рядка гілка живе, лише коли є значення, за якими рядок міг би пройти
+                values === undefined
+                ? "unknown"
+                : values.truncated === true || values.values.length > 0
+                  ? true
+                  : a.fresh
+                    ? false
+                    : "unknown"
               : unsure || !a.fresh
                 ? "unknown"
                 : within(a.carrier, new Set(values.values)),
@@ -365,13 +372,14 @@ export function can(
         row === undefined ? undefined : carrierOf(contract.binding.carrier)
       branches.push(
         row === undefined
-          ? grant(inner, (r) => r.level === "container")
+          ? grant(inner, (r) => r.level === "container" && r.scope === scope)
           : and(
               // Без контейнерного рядка носій нічого не міняє: гілка хибна.
               grant(
                 inner,
                 (r) =>
                   r.level === "container" &&
+                  r.scope === scope &&
                   (container === undefined || r.container === container)
               ),
               container === undefined ? "unknown" : true,
