@@ -1,4 +1,5 @@
 import {
+  PINNED_SESSION_SETTINGS,
   PLATFORM_ROLES,
   PLATFORM_SCHEMA,
   CURRENT_USER_FUNCTION_NAME,
@@ -152,11 +153,17 @@ export function epochOf(
 export const COMMAND_ROLE = statement(
   `SET LOCAL ROLE ${ident(PLATFORM_ROLES.command)}`
 )
-// Claims, час і формат `bytea` — одним оператором: рядок ядра декодується
-// в UTC і hex незалежно від налаштувань бази.
+// Claims і кожне закріплене налаштування T0 — одним оператором (Р17): текст
+// значень у рядку ядра (момент, `bytea`, `real`/`double precision`, дати)
+// і рівність CAS за полями не залежать від налаштувань ролі входу чи бази
+// (`extra_float_digits` < 1 округлював би число). Перелік — лише з T0:
+// друга копія розійшлась би з оболонкою голови.
 const CLAIMS_TEXT =
-  `SELECT set_config(${literal(SESSION_CLAIMS_SETTING)}, $1, true), ` +
-  `set_config('TimeZone', 'UTC', true), set_config('bytea_output', 'hex', true)`
+  `SELECT pg_catalog.set_config(${literal(SESSION_CLAIMS_SETTING)}, $1, true), ` +
+  PINNED_SESSION_SETTINGS.map(
+    ({ name, value }) =>
+      `pg_catalog.set_config(${literal(name)}, ${literal(value)}, true)`
+  ).join(", ")
 // `transaction_timeout` є лише з PostgreSQL 17; умова — у самому SQL, щоб
 // не питати версію окремо.
 const transactionTimeout = (param: string) =>
@@ -183,8 +190,8 @@ const READ_SETUP_TEXT =
   `${CLAIMS_TEXT}, set_config('statement_timeout', $2, true), ` +
   `${transactionTimeout("$3")}, set_config('role', $4, true)`
 /**
- * The setup statement of a server read transaction: claims, `TimeZone`,
- * `bytea_output`, the statement ceiling, the `transaction_timeout` guard and
+ * The setup statement of a server read transaction: claims, every
+ * `PINNED_SESSION_SETTINGS` setting, the statement ceiling, the `transaction_timeout` guard and
  * the read role.
  */
 export const readSetupStatement = (

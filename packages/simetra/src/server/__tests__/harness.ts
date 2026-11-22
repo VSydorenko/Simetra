@@ -1,6 +1,7 @@
 import {
   CommandFailure,
   metadataRefSchema,
+  PINNED_SESSION_SETTINGS,
   type CommandError,
   type Operation,
   type ReadQuery,
@@ -41,10 +42,19 @@ export const BEGIN = {
   text: "BEGIN ISOLATION LEVEL READ COMMITTED",
   params: [],
 }
+/** Вираз оператора claims, що закріплює одне налаштування T0 (Р17). */
+export const pinnedSetting = ({
+  name,
+  value,
+}: {
+  name: string
+  value: string
+}) => `pg_catalog.set_config('${name}', '${value.replaceAll("'", "''")}', true)`
+// Закріплені налаштування — з переліку T0 у його порядку (Р17).
 export const CLAIMS = {
   text:
-    "SELECT set_config('request.jwt.claims', $1, true), " +
-    "set_config('TimeZone', 'UTC', true), set_config('bytea_output', 'hex', true)",
+    "SELECT pg_catalog.set_config('request.jwt.claims', $1, true), " +
+    PINNED_SESSION_SETTINGS.map(pinnedSetting).join(", "),
   params: [JSON.stringify(session)],
 }
 /** `statement_timeout` окремим оператором: межа читання, прелюдія бюджету команди. */

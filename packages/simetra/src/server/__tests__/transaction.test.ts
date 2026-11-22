@@ -1,11 +1,17 @@
 import {
+  PINNED_SESSION_SETTINGS,
   runtimeCatalogSchema,
   type CommandError,
   type Operation,
 } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createCommandRuntime } from "../runtime"
-import { runAfterCommit, Transaction, type RuntimeState } from "../transaction"
+import {
+  readSetupStatement,
+  runAfterCommit,
+  Transaction,
+  type RuntimeState,
+} from "../transaction"
 import { fakeDatabase, failureOf, type Answer } from "./fake-database"
 import {
   COMPANY,
@@ -45,6 +51,7 @@ import {
   createOrganization,
   generatedIds,
   HARNESS_EPOCH,
+  pinnedSetting,
   rootResult,
   session,
   setup,
@@ -1028,6 +1035,27 @@ describe("rights self-assignment", () => {
       COMMIT,
       { release: false },
     ])
+  })
+})
+
+describe("pinned session settings", () => {
+  // Перелік — з T0, не копія: новий елемент `PINNED_SESSION_SETTINGS` без
+  // оператора claims тут червоніє (Р17, І11).
+  const pinned = PINNED_SESSION_SETTINGS.map(pinnedSetting)
+
+  it("the command claims statement sets every pinned setting locally", async () => {
+    const { db, runtime } = await setup()
+    await runtime.run(session, create)
+    const claims = db.calls.find(
+      (c): c is Extract<typeof c, { text: string }> =>
+        "text" in c && c.text.includes("request.jwt.claims")
+    )
+    for (const setting of pinned) expect(claims?.text).toContain(setting)
+  })
+
+  it("the read setup statement sets every pinned setting locally", () => {
+    const { text } = readSetupStatement("{}", 1, 2, "simetra_command")
+    for (const setting of pinned) expect(text).toContain(setting)
   })
 })
 
