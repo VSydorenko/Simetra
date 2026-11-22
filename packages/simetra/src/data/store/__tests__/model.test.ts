@@ -3502,14 +3502,30 @@ async function runModelOn(
         const readers = [...coreInternals(core).registry.subsets()].filter(
           (sub) => sub.alive && !sub.purged && sub.loaded && shown(sub)
         )
+        // Строк такту, що вже настав (вигляд зі строком у цю мить), виконує
+        // перше ж перепланування кроку без таймера: такт читає вигляди своєю
+        // межею `0,9 × I`, а не межею кроку (§6.7), як і на `resume()`.
+        const overdue =
+          [...internals.registry.subsets()].some(
+            (sub) => isTarget(sub) && modelDue(sub) <= at
+          ) ||
+          [...inspect.scheduledDue()].some(
+            ([name, due]) => due <= at && !staled.has(name)
+          )
+        const byTick = (sub: Subset) =>
+          overdue && !young(sub, at, 0.9 * REVALIDATE_MS)
         // Читання не бере вигляд, чий строк не настав (молодша за межу відмітка,
         // пауза після збою чи вигляд, що ще не читався), вигляд у польоті й
         // вигляд, що вичерпав межу відкинутих (спека П4-B §6.7).
-        const youngNow = (sub: Subset) => young(sub, at, s.minAge)
+        const youngNow = (sub: Subset) =>
+          young(sub, at, s.minAge) && !byTick(sub)
         for (const sub of readers) {
           if (inPause(sub, at)) pausedViews.add(sub)
           if (youngNow(sub)) youngViews.set(sub, sub.rereads)
-          else if (!staled.has(sub.form.object.name))
+          else if (
+            !young(sub, at, s.minAge) &&
+            !staled.has(sub.form.object.name)
+          )
             agedViews.set(sub, sub.rereads)
         }
         for (const object of [TASK, ORG]) {
@@ -4498,6 +4514,67 @@ describe("core model regressions", () => {
     },
     120_000
   )
+
+  // #114: строк такту настав рівно в мить кроку `return`: такт читає
+  // вигляд, старший за свою межу `0,9 × I`, хоч і молодший за межу кроку.
+  it("replays the tick due at the moment of a return step (#114)", async () => {
+    const steps: readonly Step[] = [
+      { t: "sub", v: 1 },
+      { t: "sub", v: 2 },
+      { t: "run", pick: 1, how: "conflict", at: 1 },
+      { t: "answer", pick: 5, how: "stale", at: 1 },
+      { t: "markViews", v: 7, one: false, needs: true, news: false },
+      { t: "delete", k: 1 },
+      { t: "unsub", v: 0, release: true },
+      { t: "hide", org: true, k: 4 },
+      { t: "answer", pick: 2, how: "stale", at: 6 },
+      { t: "update", k: 4, lazy: false, base: 1 },
+      { t: "sub", v: 2 },
+      { t: "answer", pick: 5, how: "stale", at: 4 },
+      { t: "edit", k: 3, title: 0 },
+      { t: "hideSection", state: "held", then: "none", evict: true },
+      { t: "churn", v: 12, scroll: true },
+      { t: "purgeScope", org: true, scope: 1 },
+      { t: "answer", pick: 7, how: "stale", at: 1 },
+      { t: "update", k: 3, lazy: true, base: 2 },
+      { t: "answer", pick: 4, how: "missing", at: 6 },
+      { t: "answer", pick: 6, how: "stale", at: 6 },
+      { t: "due" },
+      { t: "purgeKey", org: false, k: 2 },
+      { t: "answer", pick: 5, how: "missing", at: 0 },
+      { t: "act", k: 0, act: "retry" },
+      { t: "rehydrate" },
+      { t: "answer", pick: 2, how: "forbidden", at: 1 },
+      { t: "move", k: 2 },
+      { t: "unsub", v: 10, release: true },
+      { t: "run", pick: 2, how: "ok", at: 0 },
+      { t: "resume" },
+      { t: "answer", pick: 4, how: "ok", at: 2 },
+      { t: "epoch", which: 0 },
+      { t: "time", ms: 1000 },
+      { t: "answer", pick: 2, how: "stale", at: 3 },
+      { t: "return", minAge: 5000 },
+      { t: "update", k: 0, lazy: false, base: 1 },
+      { t: "purgeScope", org: false, scope: 0 },
+      { t: "page", w: 0, dir: "before" },
+      { t: "return", minAge: 1000 },
+      { t: "purgeKey", org: true, k: 4 },
+      { t: "answer", pick: 0, how: "forbidden", at: 5 },
+      { t: "answer", pick: 3, how: "forbidden", at: 6 },
+      { t: "hide", org: false, k: 2 },
+      { t: "rehydrate" },
+      { t: "answer", pick: 3, how: "ok", at: 6 },
+      { t: "sub", v: 5 },
+      { t: "answer", pick: 4, how: "stale", at: 5 },
+      { t: "purgeKey", org: false, k: 0 },
+      { t: "purgeScope", org: true, scope: 1 },
+      { t: "page", w: 0, dir: "before" },
+      { t: "unsub", v: 0, release: true },
+      { t: "purgeKey", org: false, k: 3 },
+      { t: "run", pick: 2, how: "ok", at: 1 },
+    ]
+    await runModel(steps, false, "full")
+  }, 120_000)
 
   // #114: відповідь читання ключа за сигналом із `row_ver` попереду сервера,
   // що стартувала до purge пари каналом (`chanAuth`), прийшла, коли вигляди
