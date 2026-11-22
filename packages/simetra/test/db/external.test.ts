@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
+  createRunBucket,
+  emptyAndDeleteRunBucket,
   type Exec,
   type Fetch,
   nodeExec,
@@ -8,6 +10,7 @@ import {
   runContainers,
 } from "./external"
 import { garageAdminToken, PROVIDER_ENV, TEST_STACKS } from "./profile"
+import type { S3ClientLike } from "./s3"
 import { sweepRun } from "./sweep"
 
 // Підставна база: недосяжна на з'єднанні, із запитом, що ніколи не повертається,
@@ -92,7 +95,13 @@ type FakeBucket = { id: string; alias: string; objects: number }
 /** Підставна адмінка Garage v2: маршрути й форми відповідей звірено з v2.5.0. */
 function fakeGarage(
   buckets: FakeBucket[],
-  o: { hang?: (endpoint: string) => boolean; status?: number } = {}
+  o: {
+    hang?: (endpoint: string) => boolean
+    status?: number
+    // Справжній Garage не видаляє непорожній бакет: порядок «спорожнити, потім
+    // видалити» перевіряє фальшивка, а не лише журнал викликів
+    nonEmpty?: (alias: string) => boolean
+  } = {}
 ): { fetch: Fetch; requests: Request[]; buckets: () => FakeBucket[] } {
   const state = [...buckets]
   const requests: Request[] = []
@@ -121,12 +130,76 @@ function fakeGarage(
         : json({ id: bucket.id, objects: bucket.objects })
     if (endpoint === "DeleteBucket") {
       if (bucket === undefined) return json({ code: "NoSuchBucket" }, 404)
+      if (o.nonEmpty?.(bucket.alias) === true)
+        return json({ code: "BucketNotEmpty" }, 409)
       state.splice(state.indexOf(bucket), 1)
       return json(null)
     }
+    if (endpoint === "CreateBucket") return json({ id: "new-id" })
+    if (endpoint === "AllowBucketKey") return json({ id: "new-id" })
     return json({ code: "NotFound" }, 404)
   }
   return { fetch, requests, buckets: () => state }
+}
+
+/**
+ * Підставний S3: бакети з ключами, сторінки по два об'єкти (спорожнення мусить
+ * пройти кілька сторінок), журнал викликів із бакетом кожного.
+ */
+function fakeS3(
+  contents: Record<string, string[]>,
+  o: { deleteErrors?: boolean; hang?: boolean } = {}
+): {
+  s3: S3ClientLike
+  calls: { op: string; bucket: string }[]
+  contents: Record<string, string[]>
+} {
+  const calls: { op: string; bucket: string }[] = []
+  const noBucket = (): never => {
+    throw Object.assign(new Error("NoSuchBucket"), { name: "NoSuchBucket" })
+  }
+  const hang = (signal?: AbortSignal): Promise<never> =>
+    new Promise((_, reject) =>
+      signal?.addEventListener("abort", () => reject(signal.reason))
+    )
+  const client = {
+    listObjectsV2: (
+      a: { Bucket: string },
+      opts?: { abortSignal?: AbortSignal }
+    ) => {
+      calls.push({ op: "list", bucket: a.Bucket })
+      if (o.hang === true) return hang(opts?.abortSignal)
+      const keys = contents[a.Bucket] ?? noBucket()
+      return Promise.resolve({
+        Contents: keys.slice(0, 2).map((Key) => ({ Key })),
+      })
+    },
+    deleteObjects: (a: {
+      Bucket: string
+      Delete: { Objects: { Key: string }[] }
+    }) => {
+      calls.push({ op: "deleteObjects", bucket: a.Bucket })
+      if (o.deleteErrors === true)
+        return Promise.resolve({
+          Errors: [{ Key: a.Delete.Objects[0]?.Key, Code: "AccessDenied" }],
+        })
+      const gone = new Set(a.Delete.Objects.map((k) => k.Key))
+      contents[a.Bucket] = (contents[a.Bucket] ?? []).filter(
+        (k) => !gone.has(k)
+      )
+      return Promise.resolve({})
+    },
+    deleteBucket: (a: { Bucket: string }) => {
+      calls.push({ op: "deleteBucket", bucket: a.Bucket })
+      if ((contents[a.Bucket] ?? noBucket()).length > 0)
+        throw Object.assign(new Error("BucketNotEmpty"), {
+          name: "BucketNotEmpty",
+        })
+      delete contents[a.Bucket]
+      return Promise.resolve({})
+    },
+  }
+  return { s3: client as unknown as S3ClientLike, calls, contents }
 }
 
 afterEach(() => {
@@ -224,6 +297,7 @@ describe("removeRunResources", () => {
     const result = await removeRunResources(TAG, "postgres", {
       exec: docker.exec,
       fetch: garage.fetch,
+      s3: fakeS3({ [`run-${TAG}`]: [] }).s3,
       deadlineMs: 5_000,
     })
     expect(result).toEqual({
@@ -236,39 +310,167 @@ describe("removeRunResources", () => {
     expect(docker.calls).toContainEqual(["docker", "rm", "-f", "-v", "mine"])
   })
 
-  // Спорожнення бакета з об'єктами — у ПГ-5
-  it("leaves a bucket with objects", async () => {
-    const garage = fakeGarage([{ id: "full", alias: `run-${TAG}`, objects: 3 }])
+  it("empties a bucket with objects page by page, then deletes it", async () => {
+    const mine = `run-${TAG}`
+    const s3 = fakeS3({ [mine]: ["a", "b", "c", "d", "e"] })
+    const garage = fakeGarage([{ id: "full", alias: mine, objects: 5 }], {
+      nonEmpty: (alias) => (s3.contents[alias] ?? []).length > 0,
+    })
     const result = await removeRunResources(TAG, "postgres", {
       exec: fakeDocker([]).exec,
       fetch: garage.fetch,
+      s3: s3.s3,
+      deadlineMs: 5_000,
+    })
+    expect(result).toEqual({
+      removed: [`bucket ${mine}`],
+      left: [],
+      cleanup: [],
+    })
+    expect(garage.buckets()).toEqual([])
+    // Спорожнення — до видалення: Garage відмовив би непорожньому
+    expect(s3.calls.filter((c) => c.op !== "list")).toEqual([
+      { op: "deleteObjects", bucket: mine },
+      { op: "deleteObjects", bucket: mine },
+      { op: "deleteObjects", bucket: mine },
+    ])
+  })
+
+  // І13: прибиральник адресує рівно бакет свого тегу
+  it("touches only the bucket named by its own tag", async () => {
+    const mine = `run-${TAG}`
+    const theirs = `run-${OTHER_TAG}`
+    const s3 = fakeS3({
+      [mine]: ["x"],
+      [theirs]: ["y"],
+      "run-abc12": ["z"],
+      "simetra-dev": ["w"],
+    })
+    const garage = fakeGarage([
+      { id: "m", alias: mine, objects: 1 },
+      { id: "t", alias: theirs, objects: 1 },
+    ])
+    await removeRunResources(TAG, "postgres", {
+      exec: fakeDocker([]).exec,
+      fetch: garage.fetch,
+      s3: s3.s3,
+      deadlineMs: 5_000,
+    })
+    expect(new Set(s3.calls.map((c) => c.bucket))).toEqual(new Set([mine]))
+    // Garage видаляє бакет адмінкою, тож порожній ключовий список лишається
+    expect(s3.contents).toEqual({
+      [mine]: [],
+      [theirs]: ["y"],
+      "run-abc12": ["z"],
+      "simetra-dev": ["w"],
+    })
+    expect(garage.buckets().map((b) => b.id)).toEqual(["t"])
+  })
+
+  it("reports a bucket it could not empty and does not delete it", async () => {
+    const mine = `run-${TAG}`
+    const s3 = fakeS3({ [mine]: ["a"] }, { deleteErrors: true })
+    const garage = fakeGarage([{ id: "full", alias: mine, objects: 1 }])
+    const result = await removeRunResources(TAG, "postgres", {
+      exec: fakeDocker([]).exec,
+      fetch: garage.fetch,
+      s3: s3.s3,
       deadlineMs: 5_000,
     })
     expect(result.removed).toEqual([])
-    expect(result.left).toEqual([expect.stringContaining(`bucket run-${TAG}`)])
+    expect(result.left).toEqual([expect.stringContaining(`bucket ${mine}`)])
+    expect(result.left[0]).toContain("AccessDenied")
     expect(result.cleanup).toEqual([
-      `bucket run-${TAG}: empty and delete in Garage`,
+      `bucket ${mine}: empty and delete in Garage`,
     ])
     expect(garage.buckets().map((b) => b.id)).toEqual(["full"])
+    expect(s3.calls.map((c) => c.op)).not.toContain("deleteBucket")
+  })
+
+  it("a Supabase bucket is emptied and deleted over S3; an absent one is no leak", async () => {
+    const mine = `run-${TAG}`
+    const s3 = fakeS3({ [mine]: ["a", "b", "c"], [`run-${OTHER_TAG}`]: ["k"] })
+    const run = () =>
+      removeRunResources(TAG, "supabase", {
+        exec: fakeDocker([]).exec,
+        fetch: fakeGarage([]).fetch,
+        s3: s3.s3,
+        deadlineMs: 5_000,
+      })
+    expect(await run()).toEqual({
+      removed: [`bucket ${mine}`],
+      left: [],
+      cleanup: [],
+    })
+    expect(s3.contents).toEqual({ [`run-${OTHER_TAG}`]: ["k"] })
+    expect(s3.calls.at(-1)).toEqual({ op: "deleteBucket", bucket: mine })
+    expect(await run()).toEqual({ removed: [], left: [], cleanup: [] })
+  })
+
+  it("an S3 failure is a report line, not a throw", async () => {
+    const mine = `run-${TAG}`
+    const garage = fakeGarage([{ id: "b", alias: mine, objects: 1 }])
+    const s3 = {
+      listObjectsV2: () => Promise.reject(new Error("connect ECONNREFUSED")),
+    } as unknown as S3ClientLike
+    const result = await removeRunResources(TAG, "postgres", {
+      exec: fakeDocker([]).exec,
+      fetch: garage.fetch,
+      s3,
+      deadlineMs: 5_000,
+    })
+    expect(result.left).toEqual([`bucket ${mine} (connect ECONNREFUSED)`])
+    expect(garage.buckets()).toHaveLength(1)
   })
 
   it.each([
-    ["every Garage call", () => true],
-    ["the bucket info", (endpoint: string) => endpoint === "GetBucketInfo"],
+    ["every Garage call", { garage: () => true }],
+    ["every S3 call", { s3Hang: true }],
   ])("sweep keeps its deadline when %s never answers", async (_, hang) => {
+    const mine = `run-${TAG}`
     const docker = fakeDocker([])
-    const garage = fakeGarage([{ id: "b1", alias: `run-${TAG}`, objects: 0 }], {
-      hang,
+    const garage = fakeGarage([{ id: "b1", alias: mine, objects: 1 }], {
+      hang: "garage" in hang ? hang.garage : () => false,
     })
+    const s3 = fakeS3({ [mine]: ["a"] }, { hang: "s3Hang" in hang })
     const deadlineMs = 500
     const started = Date.now()
     const result = await removeRunResources(TAG, "postgres", {
       exec: docker.exec,
       fetch: garage.fetch,
+      s3: s3.s3,
       deadlineMs,
     })
     expect(Date.now() - started).toBeLessThan(deadlineMs + 1_000)
-    expect(result.left).toEqual([expect.stringContaining(`bucket run-${TAG}`)])
+    expect(result.left).toEqual([expect.stringContaining(`bucket ${mine}`)])
+  })
+})
+
+describe("createRunBucket", () => {
+  it("creates the bucket and lets the dev key use it", async () => {
+    const garage = fakeGarage([])
+    expect(await createRunBucket(TAG, postgres, garage.fetch)).toBe("new-id")
+    const [create, allow] = garage.requests
+    expect(new URL(create!.url).pathname).toBe("/v2/CreateBucket")
+    expect(await create!.json()).toEqual({ globalAlias: `run-${TAG}` })
+    expect(new URL(allow!.url).pathname).toBe("/v2/AllowBucketKey")
+    expect(await allow!.json()).toEqual({
+      bucketId: "new-id",
+      accessKeyId: expect.stringMatching(/^GK/),
+      permissions: { read: true, write: true, owner: false },
+    })
+  })
+})
+
+describe("emptyAndDeleteRunBucket", () => {
+  it("returns false for a bucket that is not there", async () => {
+    const s3 = fakeS3({})
+    expect(
+      await emptyAndDeleteRunBucket(TAG, TEST_STACKS.supabase, {
+        fetch: fakeGarage([]).fetch,
+        s3: s3.s3,
+      })
+    ).toBe(false)
   })
 })
 

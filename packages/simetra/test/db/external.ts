@@ -1,6 +1,7 @@
 // Зовнішні ресурси DB-прогону поза Postgres: контейнери docker з міткою тегу
-// і бакети Garage `run-<тег>`. Сторож бачить їх так само, як бази й ролі, а
-// прибиральник перерваного прогону видаляє в межах свого дедлайну. Docker і
+// і бакети `run-<тег>` (Garage на postgres, Supabase Storage на supabase).
+// Сторож бачить їх так само, як бази й ролі, а прибиральник перерваного
+// прогону спорожнює й видаляє їх у межах свого дедлайну. Docker і
 // мережа приходять параметрами: юніт-тести підставляють їх, а прогін і
 // прибиральник — справжні.
 import { execFile } from "node:child_process"
@@ -11,6 +12,7 @@ import {
   type TestProvider,
   type TestStack,
 } from "./profile"
+import { garageDevKeyId, s3Of, type S3ClientLike } from "./s3"
 
 /** Runs `file` with `args` (no shell) and resolves with its stdout. */
 export type Exec = (
@@ -60,7 +62,8 @@ export function runBucketName(tag: string): string {
 
 /**
  * Creates the bucket of run `tag` (global alias `run-<tag>`) through the
- * Garage admin API and returns its id.
+ * Garage admin API, lets the dev key read and write it (a new bucket has no
+ * key, so S3 calls would be refused) and returns its id.
  */
 export async function createRunBucket(
   tag: string,
@@ -73,7 +76,86 @@ export async function createRunBucket(
   const id = isRecord(created) ? created.id : undefined
   if (typeof id !== "string")
     throw new Error("Garage admin API CreateBucket: no bucket id in the answer")
+  await garage(stack, fetch, CALL_TIMEOUT_MS, "AllowBucketKey", {
+    body: {
+      bucketId: id,
+      accessKeyId: garageDevKeyId(),
+      permissions: { read: true, write: true, owner: false },
+    },
+  })
   return id
+}
+
+function isNoSuchBucket(error: unknown): boolean {
+  const e = error as { name?: string; $metadata?: { httpStatusCode?: number } }
+  return e?.name === "NoSuchBucket" || e?.$metadata?.httpStatusCode === 404
+}
+
+/**
+ * Empties the bucket `run-<tag>` (`ListObjectsV2` + `DeleteObjects` until it
+ * lists nothing) and then deletes it: Garage through the admin API (its alias
+ * goes with it), Supabase through S3. The name is exactly
+ * {@link runBucketName} of `tag`: never chosen by a prefix, never another
+ * run's or a dev bucket. Returns `false` when the bucket is not there. Throws
+ * when any call fails or `timeoutMs` runs out; the bucket then stays as it
+ * was left.
+ */
+export async function emptyAndDeleteRunBucket(
+  tag: string,
+  stack: TestStack,
+  deps: { fetch: Fetch; s3?: S3ClientLike; timeoutMs?: number }
+): Promise<boolean> {
+  const deadline = Date.now() + (deps.timeoutMs ?? 30_000)
+  const budget = (): number => {
+    const left = deadline - Date.now()
+    if (left <= 0) throw new Error("the cleanup deadline ran out")
+    return Math.min(CALL_TIMEOUT_MS, left)
+  }
+  const bucket = runBucketName(tag)
+  // Garage: бакета без псевдоніма в адмінці немає — S3 не питаємо
+  let garageId: string | undefined
+  if (stack.garageAdminUrl !== null) {
+    garageId = (await listRunBuckets(stack, deps.fetch, budget())).find(
+      (b) => b.tag === tag
+    )?.id
+    if (garageId === undefined) return false
+  }
+  const s3 = deps.s3 ?? s3Of(stack)
+  try {
+    for (;;) {
+      const page = await s3.listObjectsV2(
+        { Bucket: bucket },
+        { abortSignal: AbortSignal.timeout(budget()) }
+      )
+      const keys = (page.Contents ?? []).flatMap((o) =>
+        o.Key === undefined ? [] : [{ Key: o.Key }]
+      )
+      if (keys.length === 0) break
+      const deleted = await s3.deleteObjects(
+        { Bucket: bucket, Delete: { Objects: keys, Quiet: true } },
+        { abortSignal: AbortSignal.timeout(budget()) }
+      )
+      // Часткова відмова — не «спорожнено»: бакет із живим об'єктом видаляти
+      // не можна, а наступний прохід бачив би той самий об'єкт
+      if ((deleted.Errors ?? []).length > 0)
+        throw new Error(
+          `S3 DeleteObjects ${bucket}: ${deleted.Errors?.[0]?.Key} ${deleted.Errors?.[0]?.Code}`
+        )
+    }
+  } catch (error) {
+    if (isNoSuchBucket(error)) return false
+    throw error
+  }
+  if (garageId !== undefined)
+    await garage(stack, deps.fetch, budget(), "DeleteBucket", {
+      query: { id: garageId },
+    })
+  else
+    await s3.deleteBucket(
+      { Bucket: bucket },
+      { abortSignal: AbortSignal.timeout(budget()) }
+    )
+  return true
 }
 
 /**
@@ -178,15 +260,15 @@ async function bucketObjects(
 
 /**
  * Removes the containers of run `tag` on the stack of profile `p`
- * (`docker rm -f -v`) and its empty buckets; a bucket with objects is left
- * (emptying it comes with the first writer of bytes). Never throws and never
- * runs past `deadlineMs`: what it could not remove or check is in `left`, and
- * the commands to finish it by hand are in `cleanup`.
+ * (`docker rm -f -v`) and its bucket `run-<tag>`, emptied first
+ * ({@link emptyAndDeleteRunBucket}). Never throws and never runs past
+ * `deadlineMs`: a bucket that could not be emptied or deleted, or a failed
+ * check, is in `left`, and the commands to finish it by hand are in `cleanup`.
  */
 export async function removeRunResources(
   tag: string,
   p: TestProvider,
-  deps: { exec: Exec; fetch: Fetch; deadlineMs: number }
+  deps: { exec: Exec; fetch: Fetch; deadlineMs: number; s3?: S3ClientLike }
 ): Promise<{ removed: string[]; left: string[]; cleanup: string[] }> {
   const deadline = Date.now() + deps.deadlineMs
   // Кожен виклик обмежений рештою дедлайну: прибиральник у обробнику сигналу
@@ -197,8 +279,6 @@ export async function removeRunResources(
   const left: string[] = []
   const cleanup: string[] = []
   const bucketName = runBucketName(tag)
-  const emptyAndDelete = (bucket: string): string =>
-    `bucket ${bucket}: empty and delete in Garage`
   const reason = (error: unknown): string =>
     error instanceof Error ? error.message : String(error)
 
@@ -224,40 +304,20 @@ export async function removeRunResources(
   }
 
   const stack = TEST_STACKS[p]
-  // Без Garage на стеку бакетів немає — і файла секретів не читаємо
-  if (stack.garageAdminUrl === null) return { removed, left, cleanup }
-  let buckets: { id: string; name: string }[]
+  const where = stack.garageAdminUrl === null ? "Supabase Storage" : "Garage"
+  // Ім'я бакета виводиться з тегу, а не з переліку: людина знає, що
+  // перевірити, і коли адмінка чи S3 мовчать
   try {
-    buckets = (await listRunBuckets(stack, deps.fetch, budget())).filter(
-      (b) => b.tag === tag
-    )
+    const gone = await emptyAndDeleteRunBucket(tag, stack, {
+      fetch: deps.fetch,
+      ...(deps.s3 !== undefined ? { s3: deps.s3 } : {}),
+      timeoutMs: Math.max(1, deadline - Date.now()),
+    })
+    if (gone) removed.push(`bucket ${bucketName}`)
   } catch (error) {
-    // Ім'я бакета виводиться з тегу: людина знає, що перевірити
-    left.push(`bucket ${bucketName} (not checked: ${reason(error)})`)
-    cleanup.push(emptyAndDelete(bucketName))
-    return { removed, left, cleanup }
+    left.push(`bucket ${bucketName} (${reason(error)})`)
+    cleanup.push(`bucket ${bucketName}: empty and delete in ${where}`)
   }
-  for (const bucket of buckets)
-    try {
-      const objects = await bucketObjects(
-        stack,
-        deps.fetch,
-        budget(),
-        bucket.id
-      )
-      if (objects > 0) {
-        left.push(`bucket ${bucket.name} (${objects} object(s))`)
-        cleanup.push(emptyAndDelete(bucket.name))
-        continue
-      }
-      await garage(stack, deps.fetch, budget(), "DeleteBucket", {
-        query: { id: bucket.id },
-      })
-      removed.push(`bucket ${bucket.name}`)
-    } catch (error) {
-      left.push(`bucket ${bucket.name} (${reason(error)})`)
-      cleanup.push(emptyAndDelete(bucket.name))
-    }
   return { removed, left, cleanup }
 }
 
@@ -266,7 +326,12 @@ async function garage(
   stack: TestStack,
   fetch: Fetch,
   timeoutMs: number,
-  endpoint: "ListBuckets" | "GetBucketInfo" | "CreateBucket" | "DeleteBucket",
+  endpoint:
+    | "ListBuckets"
+    | "GetBucketInfo"
+    | "CreateBucket"
+    | "DeleteBucket"
+    | "AllowBucketKey",
   o: { query?: Record<string, string>; body?: unknown } = {}
 ): Promise<unknown> {
   if (stack.garageAdminUrl === null)
@@ -274,7 +339,10 @@ async function garage(
   const url = new URL(`/v2/${endpoint}`, stack.garageAdminUrl)
   for (const [key, value] of Object.entries(o.query ?? {}))
     url.searchParams.set(key, value)
-  const write = endpoint === "CreateBucket" || endpoint === "DeleteBucket"
+  const write =
+    endpoint === "CreateBucket" ||
+    endpoint === "DeleteBucket" ||
+    endpoint === "AllowBucketKey"
   const response = await fetch(url, {
     method: write ? "POST" : "GET",
     headers: {
