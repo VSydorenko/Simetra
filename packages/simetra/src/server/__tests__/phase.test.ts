@@ -214,6 +214,32 @@ describe("issueReason over the data envelope", () => {
     expect(issueReason(new z.ZodError([union]))).toBe("tabular-too-large")
   })
 
+  // Страж: гілку об'єднання відкидає лише хибний літерал ключа з явного
+  // переліку розрізнювачів; новий літерал під іншим ключем вибору не міняє.
+  it.each<[string, string, (string | number)[]]>([
+    ["the discriminator type", "type", ["other"]],
+    ["a literal under another key", "kind", ["kind"]],
+  ])("a branch failing on %s", (_, key, path) => {
+    const wrong: z.core.$ZodIssue = {
+      code: "invalid_value",
+      values: ["x"],
+      path: [key],
+      message: "literal",
+    }
+    const own: z.core.$ZodIssue = {
+      code: "custom",
+      path: ["other"],
+      message: "own",
+    }
+    const union: z.core.$ZodIssue = {
+      code: "invalid_union",
+      path: [],
+      message: "u",
+      errors: [[wrong], [own]],
+    }
+    expect(decidingIssue(new z.ZodError([union]))?.path).toEqual(path)
+  })
+
   it("does not treat the client-only reason disposed as a limit reason", () => {
     const issue = (reason: string): z.core.$ZodIssue => ({
       code: "custom",

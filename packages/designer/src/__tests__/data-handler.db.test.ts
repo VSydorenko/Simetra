@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto"
 import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import {
+  applyChanges,
   buildRuntimeCatalog,
   compile,
+  renameElement,
   type CompiledModel,
 } from "simetra/compiler"
 import {
@@ -49,6 +51,8 @@ const REQUEST_ROLE = readRoleOf(testProvider())!
 
 interface Env {
   catalog: RuntimeCatalog
+  /** Каталог клієнта: до перейменування, якщо кейс його робить. */
+  client: RuntimeCatalog
   owner: pg.Client
   pool: pg.Pool
   org: string
@@ -56,18 +60,30 @@ interface Env {
 }
 
 /** Тінь з бажаним станом застосування, засів і роль входу команд і запиту. */
-const heldEnv = () =>
+const heldEnv = (renameQty = false) =>
   heldResource<Env>(async (use) => {
-    const result = await compile(
-      policyDomain(runtimeValuesLayer(), profileLayer())
-    )
+    const files = policyDomain(runtimeValuesLayer(), profileLayer())
+    const result = await compile(files)
     expect(result.diagnostics).toEqual([])
     const model: CompiledModel = result.model!
+    // Перейменування реквізиту ТЧ не змінює схеми бази: тінь будується з
+    // моделі до нього, а сервер працює з каталогом після нього.
+    let served = model
+    if (renameQty) {
+      const renamed = await renameElement(files, {
+        target: { ...GAUGE, element: ["lines", "qty"] },
+        newName: "amount",
+      })
+      expect(renamed.ok).toBe(true)
+      const next = await compile(applyChanges(files, renamed.changes))
+      expect(next.diagnostics).toEqual([])
+      served = next.model!
+    }
     await withModelTarget(model, async (url) => {
       const owner = new pg.Client({ connectionString: url })
       await owner.connect()
       try {
-        await seedMarker(owner, model.hash)
+        await seedMarker(owner, served.hash)
         const actor = await seedRuntimeActor(owner)
         await withRuntimeLogin(
           url,
@@ -76,7 +92,8 @@ const heldEnv = () =>
             const pool = new pg.Pool({ connectionString: login })
             try {
               await use({
-                catalog: buildRuntimeCatalog(model),
+                catalog: buildRuntimeCatalog(served),
+                client: buildRuntimeCatalog(model),
                 owner,
                 pool,
                 org: actor.org,
@@ -94,6 +111,89 @@ const heldEnv = () =>
     })
   })
 
+/**
+ * Запит старої вкладки (каталог `client`) на сервері з каталогом `catalog`:
+ * ТЧ без колонки `note`, значення ядро зберігає. Імена реквізитів ТЧ беруться
+ * з обох каталогів, а форма передачі тримається на колонках.
+ */
+async function updateKeepsColumn(env: Env) {
+  const runtime = await createCommandRuntime({
+    database: fromPgPool(env.pool),
+    catalog: env.catalog,
+  })
+  const id = randomUUID()
+  const kept = randomUUID()
+  const added = randomUUID()
+  const created = await runtime.run(env.session, {
+    action: "create",
+    object: GAUGE,
+    id,
+    values: { org: env.org },
+    tabularSections: {
+      lines: [
+        {
+          ref: kept,
+          [lineQty(env.catalog)]: "1",
+          note: "first",
+        },
+      ],
+    },
+  })
+  const version = created.rows[0]!.version as number
+
+  // Запит старої вкладки: рядки ТЧ без колонки `note`.
+  const index = catalogIndex(env.client.objects)
+  const entry = index.byRef.get(`${GAUGE.kind}.${GAUGE.name}`)!
+  const qty = lineQty(env.client)
+  const update: Operation = {
+    action: "update",
+    object: GAUGE,
+    id,
+    expectedVersion: version,
+    values: {},
+    tabularSections: {
+      lines: [
+        { ref: kept, [qty]: "2" },
+        { ref: added, [qty]: "3" },
+      ],
+    },
+  }
+  const wire = operationToWire(index, update)
+  if (!wire.ok) throw new Error(`unmapped: ${JSON.stringify(wire)}`)
+  const handler = createDataHandler(runtime)
+  const response = await handler(
+    env.session,
+    {
+      subject: env.session.sub,
+      request: {
+        type: "run",
+        operation: wire.value,
+        kernels: { [entry.id]: entry.kernelHash },
+      },
+    },
+    { secFetchSite: "same-origin", expectedOrigin: "https://app.example" }
+  )
+  expect(response.ok, JSON.stringify(response)).toBe(true)
+
+  const { rows } = await env.owner.query(
+    "SELECT id, qty::text AS qty, note FROM public.gauge_lines WHERE parent_id = $1 ORDER BY line_number",
+    [id]
+  )
+  expect(rows).toEqual([
+    { id: kept, qty: "2.0000000000", note: "first" },
+    { id: added, qty: "3.0000000000", note: null },
+  ])
+}
+
+/** Логічне ім'я реквізиту `qty` ТЧ `lines` у каталозі. */
+function lineQty(catalog: RuntimeCatalog): string {
+  const object = catalogIndex(catalog.objects).byRef.get(
+    `${GAUGE.kind}.${GAUGE.name}`
+  )!
+  const lines = object.tabularSections.find((s) => s.name === "lines")!
+  return lines.attributes.find((a) => a.column === "qty")!.name
+}
+
 describe("data handler over the engine target", () => {
   const target = heldEnv()
   let env: Env
@@ -103,63 +203,22 @@ describe("data handler over the engine target", () => {
   }, 120_000)
   afterAll(() => target.close(), 60_000)
 
-  it("an update with full section lines in wire form keeps the column the request does not name", async () => {
-    const runtime = await createCommandRuntime({
-      database: fromPgPool(env.pool),
-      catalog: env.catalog,
-    })
-    const id = randomUUID()
-    const kept = randomUUID()
-    const added = randomUUID()
-    const created = await runtime.run(env.session, {
-      action: "create",
-      object: GAUGE,
-      id,
-      values: { org: env.org },
-      tabularSections: { lines: [{ ref: kept, qty: "1", note: "first" }] },
-    })
-    const version = created.rows[0]!.version as number
+  it("an update with full section lines in wire form keeps the column the request does not name", () =>
+    updateKeepsColumn(env))
+})
 
-    // Запит старої вкладки: рядки ТЧ без колонки `note`.
-    const index = catalogIndex(env.catalog.objects)
-    const entry = index.byRef.get(`${GAUGE.kind}.${GAUGE.name}`)!
-    const update: Operation = {
-      action: "update",
-      object: GAUGE,
-      id,
-      expectedVersion: version,
-      values: {},
-      tabularSections: {
-        lines: [
-          { ref: kept, qty: "2" },
-          { ref: added, qty: "3" },
-        ],
-      },
-    }
-    const wire = operationToWire(index, update)
-    if (!wire.ok) throw new Error(`unmapped: ${JSON.stringify(wire)}`)
-    const handler = createDataHandler(runtime)
-    const response = await handler(
-      env.session,
-      {
-        subject: env.session.sub,
-        request: {
-          type: "run",
-          operation: wire.value,
-          kernels: { [entry.id]: entry.kernelHash },
-        },
-      },
-      { secFetchSite: "same-origin", expectedOrigin: "https://app.example" }
-    )
-    expect(response.ok, JSON.stringify(response)).toBe(true)
+describe("data handler after renaming a section attribute", () => {
+  const target = heldEnv(true)
+  let env: Env
 
-    const { rows } = await env.owner.query(
-      "SELECT id, qty::text AS qty, note FROM public.gauge_lines WHERE parent_id = $1 ORDER BY line_number",
-      [id]
-    )
-    expect(rows).toEqual([
-      { id: kept, qty: "2.0000000000", note: "first" },
-      { id: added, qty: "3.0000000000", note: null },
-    ])
+  beforeAll(async () => {
+    env = await target.open()
+  }, 120_000)
+  afterAll(() => target.close(), 60_000)
+
+  it("the wire form of the old tab is unchanged: the same update keeps the column, the server sees the new name", async () => {
+    expect(lineQty(env.client)).toBe("qty")
+    expect(lineQty(env.catalog)).toBe("amount")
+    await updateKeepsColumn(env)
   })
 })

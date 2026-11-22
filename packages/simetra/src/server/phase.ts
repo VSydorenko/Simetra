@@ -251,7 +251,10 @@ function schemaRefusal(
   // Сегмент `id` операції — її ключ (спека П4-B §4.0): за відомого об'єкта
   // шлях називає `keyName`, як і решта помилок цього об'єкта.
   const indexed = batch && typeof index === "number" && path.length > 1
-  const segments = operationRefusalPath(indexed ? path.slice(1) : path)
+  const segments = operationRefusalPath(
+    indexed ? path.slice(1) : path,
+    decidingIssue(error)
+  )
   if (object !== undefined && segments[0] === "id") {
     segments[0] = object.keyName
   }

@@ -1277,6 +1277,21 @@ describe("schema refusal paths: the logical layer and the envelope agree", () =>
     expect(pathToWire(index, sample.id, path)).toBe(refusal.path)
   })
 
+  // Хибний ключ запису `tabularSections` (не UUID ТЧ) зберігає сегмент:
+  // без нього шлях `nope` виглядав би полем шапки.
+  it.each<[string, object, string]>([
+    [
+      "a section key that is not a UUID",
+      { ...wireUpdate, expectedVersion: 1, tabularSections: { nope: [{}] } },
+      "tabularSections.nope",
+    ],
+  ])("envelope: %s", async (_, operation, path) => {
+    const { handle } = await harness()
+    expect(
+      errorOf(await handle(session, runOf(operation), HTTP))
+    ).toMatchObject({ code: "command.invalid", path })
+  })
+
   // Без `object` операцію пакета називає лише індекс: шлях його зберігає.
   const NOPE = { kind: "Catalog", name: "Nope" }
   it.each<[string, unknown, string]>([
