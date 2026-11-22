@@ -58,7 +58,7 @@ Glossary: `docs/GLOSSARY.md` · ADR: ADR-0092, ADR-0093, ADR-0094 · Parent: [п
 | коди `sql.declaration-*` | діагностика | Д1 (Д2 — `check-not-applied`, `check-form`) | Д3, Д4 | §5.7 |
 | коди `introspect.definer-*` | діагностика | Д3 | Д4 | §5.5 |
 | клас ремонту (перелік кодів, режим компіляції `repair`, правило прийому мутацій) | API операцій компілятора | Д1 (Д2 і Д5 додають свої коди) | Д4, мутації `create`/`add` | §5.1 |
-| розпізнавання функції політики (`policyFunctions`: одиниці → функції політик) | API компілятора | Д5 | Д4 | §5.8 |
+| розпізнавання функції політики (`policyFunctions`: одиниці → функції політик) | API компілятора | Д5 | Д5 (операції Д4 дістають результат у Д5) | §5.8 |
 | вхід фактів `EXECUTE` у `reverseGenerate` (`EXECUTE`, `USAGE` схеми, `aclexplode(proacl)` з каталогу бази) | API T2 | Д3 | `introspect` | §5.5 |
 | інструмент `declare-function` | інструмент designer | Д4 | агенти, студія | §5.6 |
 
@@ -691,21 +691,40 @@ ACL функції з грантом ролі поза призначенням�
 **Актор у голові.** Кожна голова (функція множини скоупу, функція значень
 виміру, функція політики) читає актора лише через функцію ідентичності
 провайдера (claims JWT) чи `simetra.current_user_id()`, транзитивно.
-`current_setting` у голові дозволено лише з літеральною назвою з префіксом
-із `PROTECTED_SESSION_SETTINGS.prefixes`
-(`packages/simetra/src/model/schemas/project.ts`): `request.jwt.` і
-`simetra.`. Назви з `PROTECTED_SESSION_SETTINGS.names` (`role`,
-`session_authorization`, `session_replication_role`) — не актор, тож теж
-заборонені. Будь-яка інша назва (заголовки, cookies, шлях, метод запиту,
-власні `app.*`) і нелітеральна назва — `sql.head-not-allowed` (конструкція
-`setting`): такі
-значення задає клієнт чи будь-який SQL застосунку. Запис `request.jwt.*` з
-боргового SQL — лише попередження (`sql.debt-session-write`, спека прав
-§5.3); це той самий залишковий ризик, який уже несе функція ідентичності
-провайдера. Зараз `current_setting` є в
-дозвільному переліку вбудованих функцій
-(`packages/simetra/src/compiler/sql/builtin-functions.ts`); Д5 звужує його
-для голів.
+`current_setting` у голові дозволено лише з першим позиційним аргументом —
+голим рядковим літералом з дозвільного переліку точних назв: це
+`SESSION_CLAIMS_SETTING` (`request.jwt.claims`) і ті назви `simetra.*`, які
+читають функції ідентичності платформи (перелік — одне джерело в коді поруч
+із `PROTECTED_SESSION_SETTINGS` у
+`packages/simetra/src/model/schemas/project.ts`). Не префікси: будь-яка інша
+назва `request.*` (`request.jwt.claim.sub`, `request.headers`), `app.*`,
+назви `PROTECTED_SESSION_SETTINGS.names` (`role`, `session_authorization`,
+`session_replication_role` — не актор), приведення, іменовані аргументи,
+інший регістр і нелітеральна назва — `sql.head-not-allowed` (конструкція
+`setting`, назва в `detail`): такі значення задає клієнт чи будь-який SQL
+застосунку. Запис `request.jwt.*` з боргового SQL — лише попередження
+(`sql.debt-session-write`, спека прав §5.3); це той самий залишковий ризик,
+який уже несе функція ідентичності провайдера.
+
+**Вбудовані функції голови** — позитивний перелік: голова кличе з вбудованих
+лише чисті функції без стану сесії, з'єднання й запиту (налаштування, текст
+запиту, адреса клієнта, курсори, підготовлені оператори, `LISTEN`, замки,
+тимчасова схема), без функцій, що називають відношення текстовим аргументом,
+і без тих, що виконують текст SQL. Перелік — підмножина `BUILTIN_FUNCTIONS`;
+його єдине джерело — код поруч із
+`packages/simetra/src/compiler/sql/builtin-functions.ts`, тут його не
+копіюють. Функція поза переліком — `sql.head-not-allowed` (конструкція
+`call`). Часова зона — теж стан сесії (`TimeZone`, `Prefer: timezone`):
+`current_date`, `localtime`, `localtimestamp` і будь-яке перетворення
+`timestamptz` у `date`/`time`/`timestamp` без `AT TIME ZONE '<літерал>'` у
+голові заборонені (`sql.head-not-allowed`, конструкція `setting`, `detail` —
+`TimeZone`); `now()`, `current_timestamp` і порівняння `timestamptz` дозволені.
+
+**Невідома роль у межах `RESTRICTIVE`.** Членства дослівних ролей компілятор
+не знає. Межа `RESTRICTIVE` T для `SELECT`/`ALL` застосовна до функції, якщо
+її `TO` — `PUBLIC`, роль політики-викликача чи будь-яка роль, не доведено
+відмінна від ролей викликачів (не роль профілю й не роль платформи). Невідома
+роль застосовна (fail-closed): її вираз має стояти в `WHERE` функції.
 
 ## 6. Безпека й цілісність даних
 
