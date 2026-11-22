@@ -1087,6 +1087,9 @@ export function checkDomainChecks(
  * Оператори, якими обробник перевіряє рядок (спека прав §5.3). Запис в інші таблиці
  * — TS-хуки П4 (платформна спека Р23): обробник посеред команди лише
  * перевіряє й присвоює `NEW`. `declare` — службовий оператор оголошень.
+ * `ASSERT` — ні: його вимикає налаштування сесії `plpgsql.check_asserts`, а
+ * перевірці, яку може вимкнути клієнт, суддя не довіряє — перевіряють
+ * `IF … THEN RAISE`.
  */
 const HANDLER_STATEMENTS: ReadonlySet<string> = new Set([
   "block",
@@ -1101,7 +1104,6 @@ const HANDLER_STATEMENTS: ReadonlySet<string> = new Set([
   "exit",
   "return",
   "raise",
-  "assert",
   "perform",
   "execsql",
   "declare",

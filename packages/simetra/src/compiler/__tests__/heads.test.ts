@@ -1334,6 +1334,9 @@ describe("judgeHandler: Rule 2 — a handler only checks", () => {
 
   it.each([
     { body: "EXECUTE 'SELECT 1';", expected: [["statement", "dynexecute"]] },
+    // `plpgsql.check_asserts = off` клієнта мовчки вимкнув би перевірку:
+    // обробник перевіряє `IF … THEN RAISE`.
+    { body: "ASSERT NEW.id IS NOT NULL;", expected: [["statement", "assert"]] },
     {
       body: "FOR r IN EXECUTE 'SELECT 1' LOOP END LOOP;",
       expected: [["statement", "dynfors"]],
@@ -1370,8 +1373,6 @@ describe("judgeHandler: Rule 2 — a handler only checks", () => {
       body: "WHILE public.forbidden() = 0 LOOP EXIT; END LOOP;",
     },
     { slot: "exit", body: "LOOP EXIT WHEN public.forbidden() = 1; END LOOP;" },
-    { slot: "assert condition", body: "ASSERT public.forbidden() = 1;" },
-    { slot: "assert message", body: "ASSERT true, public.forbidden()::text;" },
     { slot: "raise parameter", body: "RAISE NOTICE '%', public.forbidden();" },
     {
       slot: "raise option",

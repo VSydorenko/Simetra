@@ -382,7 +382,9 @@ export const HEAD_READABLE_SETTINGS: readonly string[] = [
 // (T2 `DATA_SETTINGS`, спека промоції §7.2). Обидва мусять читати й писати
 // значення однаково незалежно від сесії клієнта, тож і набір, і значення
 // спільні; повноту проти `pg_settings` тримає DB-тест
-// `packages/simetra/test/db/head-settings.db.test.ts`. `search_path` сюди не
+// обох профілів поруч із `packages/simetra/test/db/head-settings.support.ts`.
+// Налаштувань-заглушок модулів (`plpgsql.*`) тут немає: у `SET` функції їх
+// приймає лише суперкористувач, поки модуль не завантажено. `search_path` сюди не
 // входить: його кожен споживач ставить своїм правилом.
 /**
  * Session settings that change how values are parsed, computed or rendered
