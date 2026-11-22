@@ -1,6 +1,7 @@
 import {
   Centrifuge,
   State,
+  SubscriptionState,
   UnauthorizedError,
   disconnectedCodes,
   unsubscribedCodes,
@@ -80,8 +81,10 @@ export function createCentrifugoTransport(
     for (const holder of [...entry.holders]) holder.onError(error)
   }
 
-  // Канал, якому відмовлено: підписку закрито, тримачі більше його не мають.
-  const refuse = (channel: string) => {
+  // Кінець каналу, з якого клієнт сам не вийде (відмова токена чи інше остаточне
+  // зняття): підписку прибрано, тримачі більше його не мають, а новий тримач
+  // каналу отримає свіжу підписку, а не мертву.
+  const end = (channel: string) => {
     const entry = entries.get(channel)
     if (entry === undefined) return
     entries.delete(channel)
@@ -120,13 +123,28 @@ export function createCentrifugoTransport(
     sub.on("unsubscribed", (ctx) => {
       // `unsubscribeCalled` — власне зняття адаптера (`removeSubscription`
       // відпусканням чи заміною `refreshTokens`), не втрата каналу.
+      // Будь-який інший код — остаточне зняття без повторної підписки
+      // (`unauthorized`, push < 2500, помилка підписки 102/103, неповторна
+      // помилка поновлення): для приймача це відмова каналу.
       if (!current() || ctx.code === unsubscribedCodes.unsubscribeCalled) return
-      if (ctx.code === unsubscribedCodes.unauthorized) return refuse(channel)
-      // Сервер зняв підписку без повторної: сигналів каналу більше немає.
-      failChannel(channel, { kind: "transport", channel })
+      end(channel)
+    })
+    sub.on("state", (ctx) => {
+      // Вихід зі «підписано» в «підписується» — втрата сигналів каналу (push
+      // ≥ 2500, зокрема 2502). Розрив з'єднання переводить усі підписки так само,
+      // але його вже повідомив клієнт — без каналу.
+      if (!current() || client.state !== State.Connected) return
+      if (
+        ctx.oldState === SubscriptionState.Subscribed &&
+        ctx.newState === SubscriptionState.Subscribing
+      ) {
+        failChannel(channel, { kind: "transport", channel })
+      }
     })
     sub.on("error", () => {
-      if (!current()) return
+      // Помилка живої підписки (5xx поновлення токена) — не втрата: SDK повторить,
+      // сигнали йдуть. Помилка, поки канал не підписано, — канал без сигналів.
+      if (!current() || sub.state === SubscriptionState.Subscribed) return
       failChannel(channel, { kind: "transport", channel })
     })
     return sub
@@ -141,11 +159,16 @@ export function createCentrifugoTransport(
     refusals = 0
   })
   client.on("error", () => {
-    if (closed) return
+    // Як у підписки: помилка живого з'єднання (поновлення токена) — не втрата.
+    if (closed || client.state === State.Connected) return
     failAll({ kind: "transport" })
   })
   client.on("disconnected", (ctx) => {
-    if (closed || ctx.code !== disconnectedCodes.unauthorized) return
+    if (closed) return
+    // `disconnected` — без перепідключення: клієнт сам не відновиться.
+    if (ctx.code !== disconnectedCodes.unauthorized) {
+      return failAll({ kind: "auth", final: true })
+    }
     refusals++
     if (refusals > 1) return failAll({ kind: "auth", final: true })
     failAll({ kind: "auth" })

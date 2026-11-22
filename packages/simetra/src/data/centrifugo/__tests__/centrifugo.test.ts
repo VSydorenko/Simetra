@@ -1,5 +1,5 @@
 import type { SignalError } from "simetra/model"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 /*
  * Транспорт Centrifugo (план B5b-4, задача 1; спека П4-B §8.5) над фейковим
@@ -11,12 +11,29 @@ import { afterEach, describe, expect, it, vi } from "vitest"
  * `getToken` не кличе (`_canSubscribeWithoutGettingToken`); `UnauthorizedError`
  * з `getToken` з'єднання — `disconnected` з кодом `unauthorized`
  * (`Centrifuge._failUnauthorized`), токен з'єднання клієнт тримає, доки його
- * не скинуто (`setToken`, `_startReconnecting`: `needTokenRefresh`). Справжній
- * клієнт проти стенду — задача 3.
+ * не скинуто (`setToken`, `_startReconnecting`: `needTokenRefresh`); push
+ * `unsubscribe` < 2500 — зняття, інакше — повторна підписка
+ * (`_handleUnsubscribe`); 5xx поновлення живої підписки чи з'єднання — `error`
+ * без зміни стану (`Subscription._refresh`, `Centrifuge._refresh`); розрив
+ * змінює стан клієнта раніше за стан підписок (`_disconnect`); знята підписка
+ * не підписується знову (`Subscription.subscribe`). Справжній клієнт проти
+ * стенду — задача 3.
  */
 
 const fake = vi.hoisted(() => {
   type Handler = (ctx: never) => void
+  type SubState = "unsubscribed" | "subscribing" | "subscribed"
+
+  // Відповідь токена приходить через «мережу» — таймер (фейковий час тесту):
+  // повтор без кінця тоді не висить у мікрозадачах, а лічиться за час `settle`.
+  const HOP_MS = 10
+  const hop = <T>(promise: Promise<T>) =>
+    new Promise<T>((resolve, reject) => {
+      promise.then(
+        (value) => setTimeout(() => resolve(value), HOP_MS),
+        (error: unknown) => setTimeout(() => reject(error), HOP_MS)
+      )
+    })
 
   class Emitter {
     private handlers = new Map<string, Set<Handler>>()
@@ -39,9 +56,9 @@ const fake = vi.hoisted(() => {
   }
 
   class FakeSubscription extends Emitter {
-    state: "unsubscribed" | "subscribing" | "subscribed" = "unsubscribed"
+    state: SubState = "unsubscribed"
+    removed = false
     private token = ""
-    getTokenCalls = 0
     constructor(
       readonly client: FakeCentrifuge,
       readonly channel: string,
@@ -52,9 +69,21 @@ const fake = vi.hoisted(() => {
     ) {
       super()
     }
+    setState(next: SubState) {
+      const old = this.state
+      if (old === next) return
+      this.state = next
+      this.emit("state", {
+        channel: this.channel,
+        oldState: old,
+        newState: next,
+      })
+    }
     subscribe() {
+      // Як `Subscription.subscribe` SDK: знята з клієнта підписка не оживає.
+      if (this.removed) throw new Error(`${this.channel} was removed`)
       if (this.state !== "unsubscribed") return
-      this.state = "subscribing"
+      this.setState("subscribing")
       if (this.client.state === "connected") this.start()
     }
     unsubscribe() {
@@ -62,16 +91,15 @@ const fake = vi.hoisted(() => {
     }
     start() {
       if (this.token !== "") {
-        queueMicrotask(() => this.join())
+        queueMicrotask(() => this.reply())
         return
       }
-      this.getTokenCalls++
-      this.options.getToken({ channel: this.channel }).then(
+      hop(this.options.getToken({ channel: this.channel })).then(
         (token) => {
           if (this.state !== "subscribing") return
           if (!token) return this.toUnsubscribed(1)
           this.token = token
-          this.join()
+          this.reply()
         },
         (error: unknown) => {
           if (this.state !== "subscribing") return
@@ -86,23 +114,61 @@ const fake = vi.hoisted(() => {
         }
       )
     }
-    /** (Пере)підписка з відповіддю сервера про відновлення. */
-    join(recovery: Recovery = { wasRecovering: false, recovered: false }) {
-      this.state = "subscribed"
+    // Відповідь сервера на subscribe: помилка 102/103 — остаточне зняття.
+    private reply() {
+      if (this.state !== "subscribing") return
+      const code = this.client.subscribeErrors.get(this.channel)
+      if (code !== undefined) return this.toUnsubscribed(code)
+      this.join()
+    }
+    /** (Пере)підписка: `subscribed`, далі відновлені публікації (`_setSubscribed`). */
+    join(
+      recovery: Recovery = { wasRecovering: false, recovered: false },
+      publications: unknown[] = []
+    ) {
+      if (this.client.state !== "connected") {
+        throw new Error("subscribed needs a connected client")
+      }
+      this.setState("subscribed")
       this.emit("subscribed", { channel: this.channel, ...recovery })
+      for (const data of publications) this.publish(data)
     }
     publish(data: unknown) {
       this.emit("publication", { channel: this.channel, data })
     }
-    fail() {
-      this.emit("error", {
-        channel: this.channel,
-        type: "subscribe",
-        error: { code: 100, message: "internal" },
-      })
+    /** Поновлення токена живої підписки (`Subscription._refresh`). */
+    refresh() {
+      hop(this.options.getToken({ channel: this.channel })).then(
+        (token) => {
+          this.token = token
+        },
+        (error: unknown) => {
+          if (this.state !== "subscribed") return
+          if (error instanceof this.UnauthorizedError) {
+            return this.toUnsubscribed(1)
+          }
+          this.emit("error", {
+            channel: this.channel,
+            type: "refreshToken",
+            error: { code: 9, message: String(error) },
+          })
+        }
+      )
+    }
+    /** Неповторна помилка `sub_refresh` (`_refreshError`): зняття з її кодом. */
+    refreshError(code: number) {
+      this.toUnsubscribed(code)
+    }
+    /** Push `unsubscribe` (`_handleUnsubscribe`): < 2500 — зняття, інакше — повторна. */
+    serverUnsubscribe(code: number) {
+      if (code < 2500) return this.toUnsubscribed(code)
+      if (code === 2502) this.token = ""
+      this.setState("subscribing")
+      this.emit("subscribing", { channel: this.channel, code, reason: "" })
+      this.start()
     }
     toUnsubscribed(code: number) {
-      this.state = "unsubscribed"
+      this.setState("unsubscribed")
       this.emit("unsubscribed", { channel: this.channel, code, reason: "" })
     }
   }
@@ -111,9 +177,9 @@ const fake = vi.hoisted(() => {
     state: "disconnected" | "connecting" | "connected" = "disconnected"
     token = ""
     connectCalls = 0
-    getTokenCalls = 0
     setTokens: string[] = []
     disconnectCalls = 0
+    readonly subscribeErrors = new Map<string, number>()
     readonly subs = new Map<string, FakeSubscription>()
     readonly created: FakeSubscription[] = []
     constructor(
@@ -123,13 +189,14 @@ const fake = vi.hoisted(() => {
     ) {
       super()
     }
+    // Як `_disconnect`: стан клієнта змінено до переходу підписок.
     private setState(next: FakeCentrifuge["state"]) {
       const old = this.state
       this.state = next
       this.emit("state", { oldState: old, newState: next })
       if (old === "connected") {
-        for (const sub of this.subs.values()) {
-          if (sub.state === "subscribed") sub.state = "subscribing"
+        for (const sub of [...this.subs.values()]) {
+          if (sub.state === "subscribed") sub.setState("subscribing")
         }
       }
     }
@@ -142,8 +209,7 @@ const fake = vi.hoisted(() => {
     }
     private attempt() {
       if (this.token !== "") return this.open()
-      this.getTokenCalls++
-      this.options.getToken().then(
+      hop(this.options.getToken()).then(
         (token) => {
           if (this.state !== "connecting") return
           this.token = token
@@ -152,7 +218,7 @@ const fake = vi.hoisted(() => {
         (error: unknown) => {
           if (this.state !== "connecting") return
           if (error instanceof this.UnauthorizedError) {
-            return this.failUnauthorized()
+            return this.serverDisconnect(1)
           }
           this.emit("error", {
             type: "connectToken",
@@ -168,19 +234,26 @@ const fake = vi.hoisted(() => {
         if (sub.state === "subscribing") sub.start()
       }
     }
-    private failUnauthorized() {
+    /** Кінець без перепідключення (`_disconnect(code, …, false)`). */
+    serverDisconnect(code: number) {
       this.setState("disconnected")
-      this.emit("disconnected", { code: 1, reason: "unauthorized" })
+      this.emit("disconnected", { code, reason: "" })
     }
     /** Поновлення токена живого з'єднання (`Centrifuge._refresh`). */
     refresh() {
-      this.getTokenCalls++
-      this.options.getToken().then(
+      hop(this.options.getToken()).then(
         (token) => {
           this.token = token
         },
         (error: unknown) => {
-          if (error instanceof this.UnauthorizedError) this.failUnauthorized()
+          if (this.state !== "connected") return
+          if (error instanceof this.UnauthorizedError) {
+            return this.serverDisconnect(1)
+          }
+          this.emit("error", {
+            type: "refreshToken",
+            error: { code: 6, message: String(error) },
+          })
         }
       )
     }
@@ -200,8 +273,7 @@ const fake = vi.hoisted(() => {
     disconnect() {
       this.disconnectCalls++
       if (this.state === "disconnected") return
-      this.setState("disconnected")
-      this.emit("disconnected", { code: 0, reason: "disconnect called" })
+      this.serverDisconnect(0)
     }
     newSubscription(
       channel: string,
@@ -224,6 +296,7 @@ const fake = vi.hoisted(() => {
     removeSubscription(sub: FakeSubscription) {
       if (this.subs.get(sub.channel) !== sub) return
       this.subs.delete(sub.channel)
+      sub.removed = true
       if (sub.state !== "unsubscribed") sub.unsubscribe()
     }
   }
@@ -253,7 +326,8 @@ vi.mock("centrifuge", async (importOriginal) => {
 const { SignalAuthRefused, createCentrifugoTransport } =
   await import("../index")
 
-const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+// Сто мілісекунд фейкового часу — кілька «мережевих» кроків фейка.
+const settle = () => vi.advanceTimersByTimeAsync(100)
 
 interface Tokens {
   connection?: () => Promise<string>
@@ -311,7 +385,12 @@ function holder() {
   }
 }
 
+beforeEach(() => {
+  vi.useFakeTimers()
+})
+
 afterEach(() => {
+  vi.useRealTimers()
   fake.clients.length = 0
 })
 
@@ -349,7 +428,23 @@ describe("createCentrifugoTransport: events (Р2)", () => {
     }
   )
 
-  it("reports a connection loss as transport without a channel to every holder", async () => {
+  it("delivers recovered publications after onSubscribed, in order", async () => {
+    const { transport, client } = setup()
+    await settle()
+    const log: string[] = []
+    transport.onSubscribed(({ recovered }) => log.push(`joined ${recovered}`))
+    transport.subscribe(
+      ["a"],
+      (_topic, payload) => log.push(`signal ${String(payload)}`),
+      () => log.push("error")
+    )
+    client
+      .getSubscription("a")!
+      .join({ wasRecovering: true, recovered: true }, [1, 2])
+    expect(log).toEqual(["joined true", "signal 1", "signal 2"])
+  })
+
+  it("reports a connection loss as transport without a channel to every holder, once", async () => {
     const { transport, client, h } = setup()
     const two = holder()
     transport.subscribe(["b"], two.onSignal, two.onError)
@@ -359,14 +454,42 @@ describe("createCentrifugoTransport: events (Р2)", () => {
     expect(two.errors).toEqual([{ kind: "transport" }])
   })
 
-  it("reports a failure of one subscription as transport of its channel only", async () => {
-    const { transport, client, h } = setup()
-    const two = holder()
-    transport.subscribe(["b"], two.onSignal, two.onError)
+  it.each([
+    ["2501 (insufficient state)", 2501],
+    ["2502 (state invalidated)", 2502],
+  ])(
+    "a server push %s: transport of that channel only, then a new onSubscribed",
+    async (_name, code) => {
+      const { transport, client, joined, h } = setup()
+      const two = holder()
+      transport.subscribe(["b"], two.onSignal, two.onError)
+      await settle()
+      joined.length = 0
+      client.getSubscription("a")!.serverUnsubscribe(code)
+      expect(h.errors).toEqual([{ kind: "transport", channel: "a" }])
+      expect(two.errors).toEqual([])
+      await settle()
+      expect(joined).toEqual([{ channel: "a", recovered: false }])
+    }
+  )
+
+  it("a 5xx of a live subscription's token refresh is not a loss; leaving subscribed is", async () => {
+    let failing = false
+    const { client, h } = setup({
+      channel: (channel) =>
+        failing
+          ? Promise.reject(new Error("503"))
+          : Promise.resolve(`tok-${channel}`),
+    })
     await settle()
-    client.getSubscription("a")!.fail()
+    failing = true
+    const sub = client.getSubscription("a")!
+    sub.refresh()
+    await settle()
+    expect(h.errors).toEqual([])
+    // Поновлення так і не вдалося: сервер знімає підписку з повторною.
+    sub.serverUnsubscribe(2501)
     expect(h.errors).toEqual([{ kind: "transport", channel: "a" }])
-    expect(two.errors).toEqual([])
   })
 })
 
@@ -398,6 +521,49 @@ describe("createCentrifugoTransport: channel tokens (Р1)", () => {
     await settle()
     expect(h.errors).toEqual([{ kind: "transport", channel: "a" }])
     expect(client.getSubscription("a")).not.toBeNull()
+  })
+})
+
+describe("createCentrifugoTransport: terminal ends", () => {
+  it.each([
+    ["unsubscribe push 2000", "push", 2000],
+    ["subscribe error 102", "subscribe", 102],
+    ["subscribe error 103", "subscribe", 103],
+    ["non-temporary refresh error 107", "refresh", 107],
+  ] as const)(
+    "%s: auth of the channel, the subscription removed, a new holder gets a fresh one",
+    async (_name, path, code) => {
+      const { transport, client, joined, h } = setup({}, ["a", "b"])
+      if (path === "subscribe") client.subscribeErrors.set("a", code)
+      await settle()
+      const sub = client.getSubscription("a")!
+      if (path === "push") sub.serverUnsubscribe(code)
+      if (path === "refresh") sub.refreshError(code)
+      expect(h.errors).toEqual([{ kind: "auth", channel: "a" }])
+      expect(client.getSubscription("a")).toBeNull()
+
+      client.subscribeErrors.delete("a")
+      joined.length = 0
+      const late = holder()
+      transport.subscribe(["a"], late.onSignal, late.onError)
+      await settle()
+      expect(client.getSubscription("a")).not.toBe(sub)
+      expect(joined).toEqual([{ channel: "a", recovered: false }])
+      client.getSubscription("a")!.publish(1)
+      expect(late.signals).toEqual([["a", 1]])
+      expect(h.signals).toEqual([])
+    }
+  )
+
+  it("a client disconnect without reconnect: final auth, no connect()", async () => {
+    const { client, h } = setup()
+    await settle()
+    client.serverDisconnect(3501)
+    expect(h.errors).toEqual([
+      { kind: "transport" },
+      { kind: "auth", final: true },
+    ])
+    expect(client.connectCalls).toBe(1)
   })
 })
 
@@ -436,18 +602,23 @@ describe("createCentrifugoTransport: connection tokens (Р1)", () => {
     expect(client.connectCalls).toBe(2)
   })
 
-  it("a successful connection between two refusals resets the count", async () => {
+  it("a successful connection between two refusals resets the count, with no channel subscribed", async () => {
     const answers = [
       () => Promise.reject(new SignalAuthRefused()),
       () => Promise.resolve("conn"),
       () => Promise.reject(new SignalAuthRefused()),
       () => Promise.resolve("conn"),
     ]
-    const { client, h } = setup({ connection: () => answers.shift()!() })
+    // Токен каналу не приходить: між відмовами немає жодного `subscribed`.
+    const { client, h, joined } = setup({
+      connection: () => answers.shift()!(),
+      channel: () => deferred().promise,
+    })
     await settle()
     expect(client.state).toBe("connected")
     client.refresh()
     await settle()
+    expect(joined).toEqual([])
     expect(h.errors).toEqual([
       { kind: "auth" },
       { kind: "transport" },
@@ -456,26 +627,17 @@ describe("createCentrifugoTransport: connection tokens (Р1)", () => {
     expect(client.state).toBe("connected")
   })
 
-  it("a channel subscribed between two refusals does not reset the count", async () => {
-    const third = deferred()
-    const answers = [
-      () => Promise.resolve("conn"),
-      () => Promise.reject(new SignalAuthRefused()),
-      () => third.promise,
-    ]
-    const { client, h } = setup({ connection: () => answers.shift()!() })
+  it("a 5xx of a live connection's token refresh is not a loss", async () => {
+    let failing = false
+    const { client, h } = setup({
+      connection: () =>
+        failing ? Promise.reject(new Error("503")) : Promise.resolve("conn"),
+    })
     await settle()
+    failing = true
     client.refresh()
     await settle()
-    expect(h.errors).toEqual([{ kind: "transport" }, { kind: "auth" }])
-    client.getSubscription("a")!.join()
-    third.reject(new SignalAuthRefused())
-    await settle()
-    expect(h.errors).toEqual([
-      { kind: "transport" },
-      { kind: "auth" },
-      { kind: "auth", final: true },
-    ])
+    expect(h.errors).toEqual([])
   })
 
   it("maps a 5xx of the connection token to transport and leaves the retry to the client", async () => {
@@ -554,12 +716,13 @@ describe("createCentrifugoTransport: subscriptions (Р3, Р4)", () => {
     transport.close()
     expect(client.disconnectCalls).toBe(1)
     expect(client.getSubscription("a")).toBeNull()
+    client.restore()
     sub.publish(1)
     sub.join()
-    sub.fail()
+    sub.serverUnsubscribe(2501)
     sub.toUnsubscribed(1)
     client.loseTransport()
-    client.restore()
+    client.serverDisconnect(3501)
     await settle()
     expect(h.signals).toEqual([])
     expect(h.errors).toEqual([])
