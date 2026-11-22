@@ -1,4 +1,4 @@
-import type { SqlFunctionDeclaration } from "simetra/model"
+import type { GrantPurpose, SqlFunctionDeclaration } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { RightsContract } from "../contracts"
 import type { ParsedObject } from "../stages/files"
@@ -378,24 +378,32 @@ export function checkDeclaredGuards(
 }
 
 /**
- * Вердикт запобіжника однієї задекларованої функції (для `explain`): похідне
- * від тих самих декларацій і того самого судді, що `checkDeclaredGuards`, але
- * поза хешем моделі.
+ * Verdict of the call guard of one declared function, for `explain`: derived
+ * from the same declarations and the same judge as `checkDeclaredGuards`, and
+ * kept outside the model hash.
  */
 export interface DeclaredFunctionState {
   schema: string
   name: string
+  /** Declared callers (what the file says; not necessarily what is granted). */
   callers: SqlFunctionDeclaration["callers"]
+  /** Purposes that really get EXECUTE: a platform form wins over the declaration. */
+  purposes: readonly GrantPurpose[]
   check?: NonNullable<SqlFunctionDeclaration["check"]>
-  /** `none` — перевірки не задекларовано (чи invoker-функція, яку судить RLS). */
+  /** `none`: no check declared, or an invoker function (RLS judges it). */
   state: "applied" | "not-applied" | "none"
-  /** Лише для `not-applied`. */
+  /** Only for `not-applied`. */
   reason?: GuardReason
 }
 
-/** Перелік для `explain`; судить лише декларації, що пройшли `check-form`. */
+/**
+ * The list for `explain`. Called only when the model is built, so every
+ * declaration has passed `check-form` and its contract exists; a missing one
+ * is an internal error, as in `checkDeclaredGuards`.
+ */
 export function declaredFunctionStates(
   declared: readonly DeclaredFunction[],
+  executePurposes: ReadonlyMap<string, readonly GrantPurpose[]>,
   units: readonly VerbatimUnit[],
   objects: readonly ParsedObject[],
   rights: readonly RightsContract[],
@@ -404,15 +412,21 @@ export function declaredFunctionStates(
 ): DeclaredFunctionState[] {
   return declared.map(({ declaration, unit, key }) => {
     const { check, callers } = declaration
-    const base = { schema: key.schema, name: key.name, callers }
-    if (check === undefined || !isSecurityDefiner(unit, units))
-      return {
-        ...base,
-        ...(check === undefined ? {} : { check }),
-        state: "none",
-      }
+    const base = {
+      schema: key.schema,
+      name: key.name,
+      callers,
+      purposes: executePurposes.get(unit.identity) ?? callers,
+    }
+    if (check === undefined) return { ...base, state: "none" }
+    if (!isSecurityDefiner(unit, units))
+      return { ...base, check, state: "none" }
     const contract = checkedContract(check, objects, rights)
-    if (contract === undefined) return { ...base, check, state: "none" }
+    if (contract === undefined) {
+      throw new Error(
+        `internal: no rights contract for the check of ${key.schema}.${key.name}`
+      )
+    }
     const proof = guardOf(unit, declaration, contract, plpgsql, parse)
     return proof.ok
       ? { ...base, check, state: "applied" }

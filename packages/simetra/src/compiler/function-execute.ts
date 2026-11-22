@@ -67,6 +67,22 @@ export function buildFunctionExecuteUnits(
 }
 
 /**
+ * Призначення `EXECUTE` за ідентичністю функції — ті самі групи, з яких
+ * генератор будує гранти (форма перемагає декларацію), тож `explain` не
+ * розходиться з виведеним SQL.
+ */
+export function executePurposes(
+  sources: FunctionExecuteSources
+): Map<string, readonly GrantPurpose[]> {
+  return new Map(
+    executeTargets(sources).map(({ unit, purposes }) => [
+      unit.identity,
+      purposes,
+    ])
+  )
+}
+
+/**
  * `sql.function-argument-type-reference`: функція, `EXECUTE` якої виводить
  * платформа, з аргументом `%type` (`typeReferenceArgument`, спека декларацій
  * функцій §5.1). Без гранту функція лишилася б з `EXECUTE` від `PUBLIC`, тож

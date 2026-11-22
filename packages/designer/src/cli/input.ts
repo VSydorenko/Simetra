@@ -100,6 +100,7 @@ export async function cliInput(
     }
     const head = target.slice(0, dot)
     const tail = target.slice(dot + 1)
+    // Схема з назвою виду чи з крапкою цією формою недосяжна: лише JSON-вхід.
     // Форма вирішує: перший сегмент — вид метаданих (PascalCase), інакше це
     // схема функції (назви схем — snake_case, з видами не перетинаються).
     const isKind = (METADATA_KINDS as readonly string[]).includes(head)

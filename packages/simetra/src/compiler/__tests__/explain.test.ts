@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest"
 import { compile, explainFunction, explainObject } from "simetra/compiler"
 import { readReferenceDomain } from "./fixtures/reference-domain"
 import {
+  DIMENSION_SQL,
+  dimensionFunction,
+  policyDomain,
   ORG_MEMBER_ROLE_ID,
   ROLE_FILE,
   SET_FILE,
@@ -255,6 +258,39 @@ describe("explainFunction", () => {
       state: "none",
     })
     expect(e).not.toHaveProperty("callers")
+  })
+
+  it("a declaration that is also a platform form: the roles follow the form, not the declared callers", async () => {
+    const all = policyDomain(dimensionFunction())
+    all.set("sql/public/region.sql", DIMENSION_SQL)
+    all.set(
+      "sql/public/region.functions.json",
+      JSON.stringify({
+        functions: [
+          {
+            id: uuid(7903),
+            function: { name: "region_ids" },
+            callers: ["service", "user"],
+          },
+        ],
+      })
+    )
+    const e = explainFunction(
+      await compile(await acceptDebt(all), { repair: true }),
+      { schema: "public", name: "region_ids" }
+    )
+    // Форма перемагає декларацію: генератор грантів відкликає в усіх.
+    expect(e?.callers).toEqual(["service", "user"])
+    expect(e?.roles).toEqual({ supabase: [], postgres: [] })
+  })
+
+  it("an invoker function with a declared check is none", async () => {
+    const all = files(GUARDED)
+    all.set(SQL, all.get(SQL)!.replace("SECURITY DEFINER", "SECURITY INVOKER"))
+    const e = await explain(all)
+    // Перевірку invoker-функції веде RLS; compile дає check-form `invoker`,
+    // тож моделі немає — стан не вигадується.
+    expect(e).toBeUndefined()
   })
 
   it("an unknown function is undefined", async () => {

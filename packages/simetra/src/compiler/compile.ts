@@ -111,8 +111,9 @@ export interface CompileResult {
    */
   model?: CompiledModel
   /**
-   * Задекларовані функції з вердиктом запобіжника — для `explain`. Є разом з
-   * моделлю, але не в ній: хеш моделі від декларацій не залежить.
+   * Declared functions with the call-guard verdict, for `explain`. Present
+   * together with the model but not part of it: the model hash does not
+   * depend on declarations.
    */
   declaredFunctions?: DeclaredFunctionState[]
 }

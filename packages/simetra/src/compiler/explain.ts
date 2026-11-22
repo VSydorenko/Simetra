@@ -187,20 +187,23 @@ export function explainObject(
   }
 }
 
+/** Explanation of one SQL function; see `explainFunction`. */
 export interface FunctionExplanation {
   function: { schema: string; name: string }
-  /** Задекларовані викликачі; немає — функція не задекларована (гранти дослівні, їх не вгадуємо). */
+  /** Declared callers; absent when the function is not declared (verbatim grants are not guessed). */
   callers?: string[]
-  /** Ролі профілю з виведеним `EXECUTE`, за провайдером. */
+  /** Profile roles that get the derived EXECUTE, per provider (a platform form wins over the declared callers). */
   roles?: Record<DatabaseProvider, { caller: string; role: string }[]>
-  /** Названа перевірка словами. */
+  /** The declared check in words. */
   check?: string
+  /** Whether the body applies the declared check; `none` when no check is declared. */
   state: "applied" | `not-applied (${string})` | "none"
 }
 
 /**
- * Пояснення функції за `schema.name` з результату компіляції (не з моделі:
- * декларацій у ній немає). `undefined` — функції нема в одиницях теки.
+ * Explains a function by `schema.name` from the compile result (not the
+ * model: it holds no declarations). `undefined` when the folder has no such
+ * function.
  */
 export function explainFunction(
   compiled: Pick<CompileResult, "model" | "declaredFunctions">,
@@ -234,7 +237,7 @@ export function explainFunction(
     roles: Object.fromEntries(
       DATABASE_PROVIDERS.map((provider) => [
         provider,
-        declared.callers.flatMap((caller) => {
+        declared.purposes.flatMap((caller) => {
           const role = grantRole(caller, provider)
           return role === null ? [] : [{ caller, role }]
         }),

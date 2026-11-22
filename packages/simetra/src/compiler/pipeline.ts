@@ -36,6 +36,7 @@ import {
 } from "./contracts"
 import {
   buildFunctionExecuteUnits,
+  executePurposes,
   checkExecuteTypeReferences,
   type FunctionExecuteSources,
   generatedGrantConflicts,
@@ -1222,6 +1223,7 @@ export async function runStages(
     model: compiled,
     declaredFunctions: declaredFunctionStates(
       declared,
+      executePurposes(executeSources),
       sql.units,
       stage1.objects,
       rights,
