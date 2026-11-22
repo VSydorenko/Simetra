@@ -17,6 +17,7 @@ import {
 import {
   compile,
   currentDebt,
+  formPolicies,
   verbatimUnits,
   type CompiledModel,
 } from "../compile"
@@ -663,7 +664,9 @@ export async function fixFiles(
   // (г) Перехід у форму платформи: запис, що розширив би `EXECUTE`, лишається
   // (автоматичний ремонт права не розширює), попередження каже, що
   // декларацію не видалено.
-  const forms = toPlatformForms(prepared, { declineWidening: true })
+  const forms = toPlatformForms(prepared, await formPolicies(prepared), {
+    declineWidening: true,
+  })
   const declined = forms.diagnostics
   let repaired = new Map(prepared)
   for (const path of prepared.keys()) {

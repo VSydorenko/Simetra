@@ -4,7 +4,7 @@ import {
   sqlFunctionsFileSchema,
   type SqlFunctionDeclaration,
 } from "simetra/model"
-import { verbatimUnits } from "../compile"
+import { formPolicies, verbatimUnits } from "../compile"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import { FUNCTIONS_SCHEMA_FILE } from "../json-schema"
 import { readFiles } from "../pipeline"
@@ -86,7 +86,11 @@ export async function declareFunction(
 
   // Форму платформи задають метадані, а запис її функції `toPlatformForms`
   // видалив би мовчки: запит автора зник би без сліду, тож відмова.
-  const form = platformFormFunctions(objects, project).get(key)
+  const form = platformFormFunctions(
+    objects,
+    project,
+    await formPolicies(files)
+  ).get(key)
   if (form !== undefined) {
     return refused(files, [
       at("sql.declaration-platform-form", path, { form: form.form }),
@@ -134,7 +138,7 @@ export async function declareFunction(
   // правилом, що в (г) `fix`: запис, перехід якого розширив би `EXECUTE`,
   // лишається — це рішення людини, а не побічний наслідок чужої декларації.
   // Ціль формою бути не може (відмова вище).
-  const after = toPlatformFormsAfter(files, changed)
+  const after = await toPlatformFormsAfter(files, changed)
 
   // Виняток цілі: чи вставить `fix` запобіжник у це тіло.
   const [parse, plpgsql] = await Promise.all([

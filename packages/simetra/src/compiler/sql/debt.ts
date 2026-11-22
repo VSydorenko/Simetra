@@ -13,6 +13,7 @@ import type { KindTables } from "./kind-tables"
 import type { SqlParser } from "./parse"
 import type { DeclaredFunction } from "./declarations"
 import type { PlpgsqlParser } from "./plpgsql"
+import type { PolicyFunctions } from "./policy-functions"
 import type { VerbatimUnit } from "./units"
 import { writePaths } from "./write-paths"
 
@@ -24,8 +25,9 @@ import { writePaths } from "./write-paths"
  * plpgsql виводить функцію з оболонки, тож вона стає боргом. Модуль виду 1С
  * сюди не входить — у ньому решта класів уже помилка, а не борг. Одиниця
  * зламаного власника (його немає серед об'єктів) вид не має, тож і боргом не
- * рахується: причину назвав сам власник. Обробник підписки й функція множини
- * скоупу боргом не бувають теж (спека П2 §3): їхню оболонку перевіряють власні
+ * рахується: причину назвав сам власник. Обробник підписки, функція множини
+ * скоупу й функція політики (спека декларацій функцій §5.8) боргом не бувають
+ * теж (спека П2 §3): їхню оболонку перевіряють власні
  * правила стадії 5, і `sql.debt-grows` лише сховав би конкретнішу діагностику.
  * Дослівна політика чи тригер на таблиці виду боргом не бувають теж (спека прав §6.1):
  * це помилка `sql.kind-table-verbatim` у будь-якому файлі, тож підказка
@@ -44,7 +46,8 @@ export function debtUnits(
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
   declared: readonly DeclaredFunction[],
-  calls: ProviderCalls
+  calls: ProviderCalls,
+  policies: PolicyFunctions
 ): string[] {
   const isDebt = debtPredicate(
     objects,
@@ -55,7 +58,8 @@ export function debtUnits(
     modelViews(units),
     units,
     declared,
-    calls
+    calls,
+    policies
   )
   return [...new Set(units.filter(isDebt).map((unit) => unit.identity))].sort(
     compareStrings
@@ -77,14 +81,15 @@ export function debtPredicate(
   views: readonly ModelView[],
   units: readonly VerbatimUnit[],
   declared: readonly DeclaredFunction[],
-  calls: ProviderCalls
+  calls: ProviderCalls,
+  policies: PolicyFunctions
 ): (unit: VerbatimUnit) => boolean {
   const debtOwners = new Set(
     objects
       .filter((o) => KIND_REGISTRY[o.kind].sqlModule === "debt")
       .map((o) => o.file)
   )
-  const ruled = ruledFunctions(objects, project)
+  const ruled = ruledFunctions(objects, project, policies)
   const declaredUnits = new Set(declared.map((d) => d.unit))
   // Одиниця з помилкою Правила 1 — будь-якого шляху запису — боргом не є.
   const writing = new Set(
@@ -132,7 +137,8 @@ export function checkDebt(
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
   declared: readonly DeclaredFunction[],
-  calls: ProviderCalls
+  calls: ProviderCalls,
+  policies: PolicyFunctions
 ): { grows: Diagnostic[]; stale: Diagnostic[] } {
   const accepted = new Set(listed)
   const isDebt = debtPredicate(
@@ -144,7 +150,8 @@ export function checkDebt(
     modelViews(units),
     units,
     declared,
-    calls
+    calls,
+    policies
   )
   const debt = units.filter(isDebt)
   const grows = debt

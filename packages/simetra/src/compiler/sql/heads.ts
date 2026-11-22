@@ -15,6 +15,7 @@ import { movementWrapperName } from "../movement-functions"
 import { PLATFORM_READ_FUNCTIONS } from "../platform/names"
 import type { ParsedObject } from "../stages/files"
 import type { ResolvedReference } from "../stages/identity"
+import type { PolicyFunctions } from "./policy-functions"
 import { HEAD_BUILTINS } from "./head-builtins"
 import { HEAD_PINNED_SETTINGS } from "./head-settings"
 import {
@@ -1379,8 +1380,8 @@ export function checkHeads(
 }
 
 /**
- * Ланки голів без довіри й без знімка (спека прав §5.3): функції моделі, які голови
- * кличуть (за `схема.ім'я`, некваліфіковане — у будь-якій схемі), подання,
+ * Ланки голів без довіри й без знімка (спека прав §5.3): функції моделі, які голови —
+ * разом із функціями політик (спека декларацій функцій §5.8) — кличуть (за `схема.ім'я`, некваліфіковане — у будь-якій схемі), подання,
  * які читають, і функції дослівних політик читання прочитаних відношень —
  * транзитивно. Оболонку кожної задає лише `CREATE`, тож окремий `ALTER
  * FUNCTION` на будь-яку з них — помилка раннього блоку
@@ -1391,13 +1392,15 @@ export function headLinks(
   project: Project | undefined,
   units: readonly VerbatimUnit[],
   parse: SqlParser,
-  plpgsql: PlpgsqlParser
+  plpgsql: PlpgsqlParser,
+  policyFunctions: PolicyFunctions
 ): VerbatimUnit[] {
   const closed = closedModuleOwners(objects)
   const heads = new Set([
     ...(project === undefined
       ? []
       : [...handlersOf(objects, project).keys(), ...queryHeads(project)]),
+    ...policyFunctions.functions.map((f) => f.unit.identity),
   ])
   const visited = new Set<string>()
   const reached: VerbatimUnit[] = []

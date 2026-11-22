@@ -1107,7 +1107,7 @@ function judged(sql: string) {
   const files = policyDomain()
   files.set(COUNT_COMMENT_SQL_FILE, sql)
   const stage1 = readFiles(files)
-  const { stage2, stage3, sql: read } = sqlStage(stage1, parse)
+  const { stage2, stage3, sql: read } = sqlStage(stage1, parse, plpgsql)
   const scope = headScope(
     stage1.objects,
     stage2.references,

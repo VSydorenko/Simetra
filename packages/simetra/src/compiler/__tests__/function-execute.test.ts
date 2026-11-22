@@ -9,6 +9,13 @@ import {
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { readSqlUnits } from "../sql/units"
 import {
+  DOCS_GRANT,
+  POLICY_DEBT,
+  POLICY_FUNCTION,
+  READ_POLICY,
+  policyFiles,
+} from "./fixtures/policy-function"
+import {
   DIMENSION_SQL,
   compiledPolicyDomain,
   dimensionFunction,
@@ -961,5 +968,73 @@ describe("sql.function-argument-type-reference", () => {
     })
     expect(found(result)).toEqual([])
     expect(executeUnits(result)).toEqual([])
+  })
+})
+
+describe("EXECUTE of a policy function (І3)", () => {
+  // Призначення — ролі `TO` політик-викликачів `SELECT`/`ALL` з викликом у
+  // `USING`, що мають `SELECT` на T; решта ролей API відкликається.
+  const policyGrants = async (sql: string, debt: readonly string[]) => {
+    const result = await compile(policyFiles(sql, debt))
+    expect(result.diagnostics).toEqual([])
+    return result
+      .model!.sqlUnits.filter(
+        (u) => u.generator === "functionExecute" && u.sql.includes("public.f()")
+      )
+      .map((u) => u.sql)
+      .sort()
+  }
+
+  it("grants only the reading role of the caller policy", async () => {
+    expect(
+      await policyGrants(
+        POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT(),
+        POLICY_DEBT()
+      )
+    ).toEqual(
+      [
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC;",
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM anon;",
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM service_role;",
+        "GRANT EXECUTE ON FUNCTION public.f() TO authenticated;",
+      ].sort()
+    )
+  })
+
+  it("grants every reading role that selects T", async () => {
+    expect(
+      await policyGrants(
+        POLICY_FUNCTION() +
+          READ_POLICY("authenticated, service_role") +
+          DOCS_GRANT() +
+          DOCS_GRANT("service_role"),
+        POLICY_DEBT(["docs_read"], ["authenticated", "service_role"])
+      )
+    ).toEqual(
+      [
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC;",
+        "REVOKE EXECUTE ON FUNCTION public.f() FROM anon;",
+        "GRANT EXECUTE ON FUNCTION public.f() TO authenticated;",
+        "GRANT EXECUTE ON FUNCTION public.f() TO service_role;",
+      ].sort()
+    )
+  })
+
+  it("a verbatim EXECUTE grant on a policy function is sql.generated-grant", async () => {
+    const result = await compile(
+      policyFiles(
+        POLICY_FUNCTION() +
+          READ_POLICY() +
+          DOCS_GRANT() +
+          "GRANT EXECUTE ON FUNCTION public.f() TO authenticated;\n",
+        [
+          ...POLICY_DEBT(),
+          "grant:grant:function:public.f():authenticated:execute",
+        ].sort()
+      )
+    )
+    expect(result.diagnostics.map((d) => [d.code, d.params?.object])).toEqual([
+      ["sql.generated-grant", "public.f()"],
+    ])
   })
 })

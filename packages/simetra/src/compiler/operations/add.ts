@@ -121,7 +121,7 @@ export async function addElement(
   // Новий елемент може зробити задекларовану функцію формою платформи
   // (вид скоупу з `setFunction`, вимір з функцією значень): декларація
   // зникає в тій самій зміні (Р12).
-  const after = toPlatformFormsAfter(files, changed)
+  const after = await toPlatformFormsAfter(files, changed)
   return completeAndCompile(
     files,
     after.files,

@@ -22,6 +22,7 @@ import {
   rightsFiles,
 } from "./fixtures/rights"
 import type { Diagnostic } from "../diagnostics"
+import { formPolicies } from "../compile"
 import { toPlatformForms } from "../operations/platform-forms"
 import { uuid } from "./helpers"
 
@@ -599,7 +600,7 @@ describe("a declared function becomes a platform form", () => {
 
   // Р7: `"a.b".c` і `a."b.c"` — різні функції, хоча зклеєний рядок у них
   // один (`a.b.c`).
-  it("matches a declaration to a form by the (schema, name) pair, not a joined string", () => {
+  it("matches a declaration to a form by the (schema, name) pair, not a joined string", async () => {
     const files = rightsFiles({
       [PROJECT]: {
         scopeKinds: [
@@ -631,7 +632,7 @@ describe("a declared function becomes a platform form", () => {
     }
     files.set(sidecar, JSON.stringify({ functions: [other, form] }))
 
-    const transition = toPlatformForms(files)
+    const transition = toPlatformForms(files, await formPolicies(files))
     expect(json(transition.files, sidecar)).toEqual({ functions: [other] })
     expect(transition.diagnostics.map((d) => d.params)).toEqual([
       {

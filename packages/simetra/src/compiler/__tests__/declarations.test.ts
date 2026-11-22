@@ -9,6 +9,14 @@ import {
 } from "../sql/declarations"
 import type { VerbatimUnit } from "../sql/units"
 import {
+  DOCS_GRANT,
+  POLICY_DEBT,
+  POLICY_FUNCTION,
+  POLICY_SQL,
+  READ_POLICY,
+  policyFiles,
+} from "./fixtures/policy-function"
+import {
   COUNT_COMMENT_SQL_FILE,
   DIMENSION_SQL,
   compiledPolicyDomain,
@@ -24,6 +32,8 @@ import {
 } from "./helpers"
 
 const SQL = "sql/public/fns.sql"
+/** Тека без функцій політик: предмет цих тестів — форми метаданих. */
+const NO_POLICIES = { functions: [], diagnostics: [] }
 const FUNCTIONS = "sql/public/fns.functions.json"
 const OTHER_SQL = "sql/public/other.sql"
 const OTHER_FUNCTIONS = "sql/public/other.functions.json"
@@ -249,7 +259,14 @@ describe("declaration key: a (schema, name) pair", () => {
     },
   ])("are no duplicates or overloads $name", ({ files }) => {
     expect(
-      checkDeclarations(files, units, stage1.objects, stage1.project, new Set())
+      checkDeclarations(
+        files,
+        units,
+        stage1.objects,
+        stage1.project,
+        new Set(),
+        NO_POLICIES
+      )
     ).toEqual([])
   })
   it("platform forms keep both functions of a dotted pair", () => {
@@ -274,7 +291,7 @@ describe("declaration key: a (schema, name) pair", () => {
       })
     )
     expect(
-      [...platformFormFunctions(objects, parsed).values()].map(
+      [...platformFormFunctions(objects, parsed, NO_POLICIES).values()].map(
         (f) => f.function
       )
     ).toEqual([
@@ -632,5 +649,36 @@ describe("sql.default-privileges-execute", () => {
     "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO anon;",
   ])("does not judge %s", async (statement) => {
     expect(await adp({ [ADP_FILE]: `${statement}\n` })).toEqual([])
+  })
+})
+
+describe("a policy function and its declaration (І4)", () => {
+  const POLICY_FUNCTIONS = POLICY_SQL.replace(/\.sql$/, ".functions.json")
+
+  it("a declaration of a policy function is sql.declaration-platform-form", async () => {
+    const files = policyFiles(
+      POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT(),
+      POLICY_DEBT()
+    )
+    files.set(POLICY_FUNCTIONS, functionsFile(declaration({ name: "f" })))
+    expect(await declarationDiagnostics(files)).toEqual([
+      [
+        "sql.declaration-platform-form",
+        POLICY_FUNCTIONS,
+        "/functions/0",
+        { ...keyParams("public", "f"), form: "policyFunction" },
+      ],
+    ])
+  })
+
+  it("a definer function without a caller policy and without a declaration is sql.definer-caller-unchecked", async () => {
+    // Вихід із форми (спека декларацій функцій §5.8): остання
+    // політика-викликач зникла, і функція судиться як звичайна definer-функція.
+    const { diagnostics } = await compile(
+      policyFiles(POLICY_FUNCTION() + DOCS_GRANT(), POLICY_DEBT([]))
+    )
+    expect(diagnostics.map((d) => [d.code, d.params?.function])).toEqual([
+      ["sql.definer-caller-unchecked", "public.f"],
+    ])
   })
 })

@@ -12,12 +12,13 @@ import { headLinks } from "./heads"
 import { identityKey, keyIdentity } from "./identity"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
+import type { PolicyFunctions } from "./policy-functions"
 import type { VerbatimUnit } from "./units"
 
 /**
  * Функції, оболонку яких судить платформа: голови — функції закритих
- * модулів, обробники підписок і функції множини (`ruledFunctions`), функції
- * значень вимірів доступу — і кожна їхня ланка (`headLinks`, спека прав §5.3),
+ * модулів, обробники підписок, функції множини й функції політик
+ * (`ruledFunctions`), функції значень вимірів доступу — і кожна їхня ланка (`headLinks`, спека прав §5.3),
  * а також задекларовані функції в будь-якому файлі (`declared`, спека
  * декларацій функцій §5.1): їхні викликачі покладаються на ту саму оболонку.
  */
@@ -27,7 +28,8 @@ export function judgedFunctionIdentities(
   units: readonly VerbatimUnit[],
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  declared: readonly DeclaredFunction[]
+  declared: readonly DeclaredFunction[],
+  policies: PolicyFunctions
 ): ReadonlySet<string> {
   const closed = closedModuleOwners(objects)
   return new Set([
@@ -39,8 +41,8 @@ export function judgedFunctionIdentities(
           closed.has(u.ownerFile)
       )
       .map((u) => u.identity),
-    ...ruledFunctions(objects, project),
-    ...headLinks(objects, project, units, parse, plpgsql).map(
+    ...ruledFunctions(objects, project, policies),
+    ...headLinks(objects, project, units, parse, plpgsql, policies).map(
       (u) => u.identity
     ),
     ...declared.map((d) => d.unit.identity),
@@ -79,7 +81,8 @@ export function checkFunctionSettingsShell(
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
   declared: readonly DeclaredFunction[],
-  models: ReadonlySet<string>
+  models: ReadonlySet<string>,
+  policies: PolicyFunctions
 ): Diagnostic[] {
   const judged = judgedFunctionIdentities(
     objects,
@@ -87,7 +90,8 @@ export function checkFunctionSettingsShell(
     units,
     parse,
     plpgsql,
-    declared
+    declared,
+    policies
   )
   const functions = units.filter((u) => judged.has(u.identity))
   return units.flatMap((unit) => {

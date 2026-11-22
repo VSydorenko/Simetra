@@ -4,6 +4,7 @@ import {
   PLATFORM_SETTING_PREFIX,
   PROVIDER_SCHEMAS,
   type DatabaseProvider,
+  type GrantPurpose,
   type Project,
 } from "simetra/model"
 import { diagnostic, type Diagnostic } from "../diagnostics"
@@ -13,10 +14,11 @@ import {
   type ProviderCalls,
   type CommandContextHit,
 } from "./command-context"
-import type { DeclaredFunction, PlatformForm } from "./declarations"
+import type { DeclaredFunction, StaticPlatformForm } from "./declarations"
 import { isExpressionUnit, treeBeyondExpressions } from "./expression-calls"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
+import type { PolicyFunctions } from "./policy-functions"
 import { HEAD_PINNED_SETTINGS } from "./head-settings"
 import { functionIdentity } from "./identity"
 import { FUNCTION_CLASSES, type RowRule, type VerbatimUnit } from "./units"
@@ -396,28 +398,38 @@ export function platformWrite(hit: CommandContextHit): boolean {
   )
 }
 
-/** Функція форми платформи: пара `(schema, name)` після підстановки `defaultSchema`. */
-export interface PlatformFormSource {
-  function: { schema: string; name: string }
-  form: PlatformForm
-}
+/**
+ * Функція форми платформи: пара `(schema, name)` після підстановки
+ * `defaultSchema`. Статичні форми беруть призначення `EXECUTE` з
+ * `PLATFORM_FORM_PURPOSES`, функція політики несе власні — їх виводять
+ * політики-викликачі (спека декларацій функцій §5.8).
+ */
+export type PlatformFormSource =
+  | {
+      function: { schema: string; name: string }
+      form: StaticPlatformForm
+      purposes?: undefined
+    }
+  | {
+      function: { schema: string; name: string }
+      form: "policyFunction"
+      purposes: readonly GrantPurpose[]
+    }
 
 /**
- * Функції форм платформи — єдине джерело переліку (спека декларацій функцій
- * §5.3): функції множини видів скоупу, обробники підписок і функції значень
- * вимірів доступу, у цьому порядку. Решта переліків — його проєкції
- * (`ruledFunctions`, `platformFormFunctions`), тож нова форма (функція
- * політики, Д5) додається тут один раз. Згенерована функція множини
- * (`membership`) — не дослівна одиниця, тож її тут немає.
+ * Форми, які називають метадані: функції множини видів скоупу, обробники
+ * підписок і функції значень вимірів доступу, у цьому порядку. Це вхід
+ * розпізнавача функцій політик (`policyFunctions`): функцією політики форма
+ * метаданих не буває, тож без цього переліку окремо був би цикл.
  */
-export function platformFormSources(
+export function staticFormSources(
   objects: readonly ParsedObject[],
   project: Project | undefined
 ): PlatformFormSource[] {
   if (project === undefined) return []
   const source = (
     fn: { schema?: string; name: string },
-    form: PlatformForm
+    form: StaticPlatformForm
   ): PlatformFormSource => ({
     function: { schema: fn.schema ?? project.defaultSchema, name: fn.name },
     form,
@@ -443,16 +455,44 @@ export function platformFormSources(
 }
 
 /**
- * Ідентичності функцій без аргументів, які оголошують метадані: обробники
- * підписок і функції множини видів скоупу. Обидві мають власні правила
- * оболонки (стадія 5), тож не є ні боргом, ні винятком із ратчета.
+ * Функції форм платформи — єдине джерело переліку (спека декларацій функцій
+ * §5.3): форми метаданих (`staticFormSources`) і функції політик боргу
+ * (§5.8) з результату розпізнавача. Решта переліків — його проєкції
+ * (`ruledFunctions`, `platformFormFunctions`, `executeTargets`). Результат
+ * `policyFunctions` — обов'язковий аргумент: порожнє типове значення мовчки
+ * прийняло б декларацію функції політики. Згенерована функція множини
+ * (`membership`) — не дослівна одиниця, тож її тут немає.
+ */
+export function platformFormSources(
+  objects: readonly ParsedObject[],
+  project: Project | undefined,
+  policies: PolicyFunctions
+): PlatformFormSource[] {
+  if (project === undefined) return []
+  return [
+    ...staticFormSources(objects, project),
+    ...policies.functions.map((f): PlatformFormSource => ({
+      function: f.function,
+      form: "policyFunction",
+      purposes: f.purposes,
+    })),
+  ]
+}
+
+/**
+ * Ідентичності функцій без аргументів, які оголошують метадані чи
+ * розпізнавач функцій політик: обробники підписок, функції множини видів
+ * скоупу й функції політик. Усі мають власні правила оболонки (стадія 5,
+ * закрита оболонка функції політики), тож не є ні боргом, ні винятком із
+ * ратчета.
  */
 export function ruledFunctions(
   objects: readonly ParsedObject[],
-  project: Project | undefined
+  project: Project | undefined,
+  policies: PolicyFunctions
 ): ReadonlySet<string> {
   return new Set(
-    platformFormSources(objects, project)
+    platformFormSources(objects, project, policies)
       .filter((s) => s.form !== "dimension")
       .map((s) => functionIdentity(s.function.schema, s.function.name, []))
   )
@@ -547,7 +587,8 @@ export function checkSqlModules(
   plpgsql: PlpgsqlParser,
   provider: DatabaseProvider | undefined,
   declared: readonly DeclaredFunction[],
-  calls: ProviderCalls
+  calls: ProviderCalls,
+  policies: PolicyFunctions
 ): Diagnostic[] {
   const owners = closedModuleOwners(objects)
   const closed = (unit: { ownerFile?: string }) =>
@@ -698,8 +739,12 @@ export function checkSqlModules(
   // Задекларована функція поза модулем виду теж мусить бути в закритій
   // оболонці (спека декларацій функцій §5.1): декларація дає їй `EXECUTE`
   // ролей застосунку, тож динамічний SQL чи definer без порожнього
-  // `search_path` тут — помилка, а не борг.
-  const declaredUnits = new Set(declared.map((d) => d.unit))
+  // `search_path` тут — помилка, а не борг. Так само функція політики (§5.8):
+  // `EXECUTE` їй виводить платформа, а боргом форма не буває.
+  const declaredUnits = new Set([
+    ...declared.map((d) => d.unit),
+    ...policies.functions.map((f) => f.unit),
+  ])
   for (const unit of units) {
     if (closed(unit) || !declaredUnits.has(unit)) continue
     const problem = closedShellProblem(

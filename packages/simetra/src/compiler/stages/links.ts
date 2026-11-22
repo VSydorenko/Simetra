@@ -50,6 +50,10 @@ import type { PlpgsqlFunction, PlpgsqlParser } from "../sql/plpgsql"
 import { sideEffectOf } from "../sql/query-shape"
 import { plpgsqlExpressionTrees } from "../sql/rewrite/plpgsql-body"
 import { functionIdentity } from "../sql/identity"
+import {
+  checkPolicyFunctionHeads,
+  type PolicyFunctions,
+} from "../sql/policy-functions"
 import { type VerbatimUnit } from "../sql/units"
 import { objectKey, type ParsedObject } from "./files"
 import { registerTargetError, type ResolvedReference } from "./identity"
@@ -72,7 +76,8 @@ export function checkLinks(
   plpgsql: PlpgsqlParser,
   membershipFunctions: ReadonlySet<string>,
   rightsTables: ReadonlySet<string>,
-  declared: readonly DeclaredFunction[]
+  declared: readonly DeclaredFunction[],
+  policies: PolicyFunctions
 ): Diagnostic[] {
   const scope = headScope(
     objects,
@@ -87,7 +92,10 @@ export function checkLinks(
   // Голова з діагностикою оболонки не судиться далі: друга діагностика на
   // одну причину була б шумом.
   const skip = new Set<string>()
-  const heads = headFunctionIdentities(objects, project, units)
+  const heads = new Set([
+    ...headFunctionIdentities(objects, project, units),
+    ...policies.functions.map((f) => f.unit.identity),
+  ])
   const shells = [
     ...checkMovementSources(objects, references),
     ...checkMovementQueries(objects, parse, skip),
@@ -125,6 +133,9 @@ export function checkLinks(
     ),
     ...checkPolicyCurrentUser(units),
     ...checkHeads(objects, project, units, scope, skip),
+    // Функція політики — корінь голови (спека декларацій функцій §5.8): її
+    // оболонку налаштувань і тіло судить той самий суддя голів.
+    ...checkPolicyFunctionHeads(policies.functions, scope),
     ...checkDomainChecks(units, scope),
     // У голові такий виклик — уже `call` судді голів: одна діагностика.
     ...checkGeneratedCalls(
@@ -140,7 +151,8 @@ export function checkLinks(
       units,
       parse,
       plpgsql,
-      declared
+      declared,
+      policies
     ),
     // Правила викликачів і типових привілеїв (спека декларацій функцій §5.1)
     // стоять поруч із `checkDefinerReads`: попередження Р30 задекларованої

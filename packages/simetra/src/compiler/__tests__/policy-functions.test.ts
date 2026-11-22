@@ -12,6 +12,14 @@ import {
   type PolicyFunctionsInput,
 } from "../sql/policy-functions"
 import { readSqlUnits } from "../sql/units"
+import { compile } from "simetra/compiler"
+import {
+  DOCS_GRANT,
+  POLICY_DEBT,
+  POLICY_FUNCTION,
+  READ_POLICY,
+  policyFiles,
+} from "./fixtures/policy-function"
 
 let parse: SqlParser
 let plpgsql: PlpgsqlParser
@@ -805,5 +813,44 @@ describe("checkPolicyFunctionHeads", () => {
         d.params?.problem,
       ])
     ).toEqual([["sql.head-settings", "TimeZone", "alter"]])
+  })
+})
+
+describe("policy functions in a compile", () => {
+  // Розпізнавач і суддя голів стоять у конвеєрі: форма, налаштування сесії
+  // кореня й дозвільний перелік голови судяться на справжній компіляції.
+  const compiled = async (fn: string) =>
+    (
+      await compile(
+        policyFiles(fn + READ_POLICY() + DOCS_GRANT(), POLICY_DEBT())
+      )
+    ).diagnostics.map((d) => [d.code, d.params?.function ?? d.params?.head])
+
+  it("a function outside the form is sql.policy-helper-correlated", async () => {
+    expect(
+      await compiled(
+        POLICY_FUNCTION({ shell: SHELL.replace("STABLE", "VOLATILE") })
+      )
+    ).toEqual([["sql.policy-helper-correlated", "public.f"]])
+  })
+
+  it("a policy function without the pinned session settings is sql.head-settings", async () => {
+    expect(
+      await compiled(
+        POLICY_FUNCTION({
+          shell: "STABLE SECURITY DEFINER SET search_path = ''",
+        })
+      )
+    ).toEqual([["sql.head-settings", "public.f"]])
+  })
+
+  it("a policy function head that reads the connection is sql.head-not-allowed", async () => {
+    expect(
+      await compiled(
+        POLICY_FUNCTION({
+          where: ["pg_catalog.inet_client_addr() IS NOT NULL"],
+        })
+      )
+    ).toEqual([["sql.head-not-allowed", "public.f"]])
   })
 })

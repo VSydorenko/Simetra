@@ -18,6 +18,7 @@ import { grantRole } from "./execute-grants"
 import { PUBLIC, grantFacts, privilegedRoles } from "./grant-facts"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
+import type { PolicyFunctions } from "./policy-functions"
 import { reachableUnits, relationReads } from "./reads"
 import { functionIdentity, identityKey, qualifiedName } from "./identity"
 import { type VerbatimUnit } from "./units"
@@ -41,7 +42,7 @@ export type DefinerReadsForm = "function" | "view" | "materializedView"
  * - матеріалізоване подання з дієвим `SELECT` — завжди: його рядки зберіг
  *   власник під час `REFRESH`, а читача RLS не обмежує зовсім.
  * Форми платформи (`platformFormSources`: функції множини, обробники, функції
- * значень виміру) й тригерні функції не судяться: це не RPC — тригерну функцію Postgres кличе
+ * значень виміру, функції політик) й тригерні функції не судяться: це не RPC — тригерну функцію Postgres кличе
  * лише тригером, функції множини й виміру — політика від імені запиту, і
  * читати повз RLS їм належить за задумом (обмеження їхніх тіл судять власні
  * правила стадії 5). Власника одиниці статично не видно (власник без обходу RLS
@@ -76,11 +77,12 @@ export function checkDefinerReads(
   units: readonly VerbatimUnit[],
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  declared: readonly DeclaredFunction[]
+  declared: readonly DeclaredFunction[],
+  policies: PolicyFunctions
 ): Diagnostic[] {
   const rlsTables = physical.tables.filter((t) => t.rowLevelSecurity !== "off")
   const skipped = new Set(
-    platformFormSources(objects, project).map((s) =>
+    platformFormSources(objects, project, policies).map((s) =>
       functionIdentity(s.function.schema, s.function.name, [])
     )
   )
