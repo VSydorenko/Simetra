@@ -15,15 +15,20 @@ import {
   PROVIDER_OWNER_ROLES,
   SIGNAL_OUTBOX,
   type CatalogModel,
+  type PhysicalTable,
 } from "simetra/model"
 import {
   canonicalSnapshot,
+  addElement,
+  addElementInput,
+  applyChanges,
   compile,
   explainFunction,
   loadSqlParser,
   platformInstall,
   platformTriggers,
   type CompiledModel,
+  type CompiledScopeKind,
   type PlatformTriggerFamily,
   type SchemaPathResolver,
   type SqlParser,
@@ -49,7 +54,6 @@ import {
 } from "simetra/schema"
 import { createApplyDatabase, createPgDeltaEngine } from ".."
 import {
-  SCOPE_FUNCTIONS_FILE,
   readReferenceDomain,
   shadowAgeMinutes,
   shadowDatabaseNames,
@@ -297,6 +301,8 @@ export interface Refusal {
   name?: string
   /** Одиниця, на якій відмова (`sql.kind-table-verbatim`). */
   identity?: string
+  /** Перша причина відмови (`sql.policy-helper-correlated`). */
+  reason?: string
 }
 
 /** Помилки прийому — рівно відмови `refusals`, решти немає. */
@@ -314,6 +320,7 @@ function expectRefusals(
       schema: d.params?.schema,
       name: d.params?.name,
       identity: d.params?.identity,
+      reason: d.params?.reason,
     }))
   ).toEqual(refusals)
 }
@@ -379,6 +386,8 @@ const dropFunction = (f: Loss["functions"][number]) =>
 
 interface RoundTrip {
   extracted: Extracted
+  /** Тека, яку скомпільовано: зворотна генерація (з мутаціями ланцюжка). */
+  files: ReadonlyMap<string, string>
   model: CompiledModel
   scope: EngineScope
   comparison: Extract<DesiredComparison, { status: "compared" }>
@@ -600,7 +609,7 @@ async function compiledTrip(
     })
   )
   if (oracle.status !== "loaded") throw new Error("oracle shadow failed")
-  return { extracted, model, scope, comparison, ...oracle.value }
+  return { extracted, files, model, scope, comparison, ...oracle.value }
 }
 
 /**
@@ -1004,7 +1013,10 @@ export async function deployedRoundTrip(
   files: Map<string, string>,
   existing: ReadonlyMap<string, string>,
   endToEnd: boolean,
-  chain?: (adopted: Map<string, string>) => Promise<Map<string, string>>
+  chain?: (
+    adopted: Map<string, string>,
+    source: CompiledModel
+  ) => Promise<Map<string, string>>
 ): Promise<{
   source: CompiledModel
   result?: RoundTrip
@@ -1036,12 +1048,29 @@ export async function deployedRoundTrip(
       async (target) => {
         // З фактами `EXECUTE` функція форми платформи отримує декларацію без
         // `check`: відмова `sql.declaration-check-missing` (Р1), доки `chain`
-        // її не доповнить
-        const refusals: Refusal[] = loss.definers.map((f) => ({
-          code: "sql.declaration-check-missing",
-          schema: f.schema,
-          name: f.name,
-        }))
+        // її не доповнить. Функцію множини виду, що має таблиці, після прийому
+        // кличуть дослівні політики кількох таблиць, а вивід її — ключ кореня,
+        // не ключ таблиці політики: функцією політики (§5.8) вона не буває, і
+        // це ще й `sql.policy-helper-correlated` (`outputKey`), доки `chain`
+        // не поверне вид
+        const called = policyCalledDefiners(source)
+        const refusals: Refusal[] = loss.definers.flatMap((f) => [
+          {
+            code: "sql.declaration-check-missing",
+            schema: f.schema,
+            name: f.name,
+          },
+          ...(called.has(qualifiedName(f))
+            ? [
+                {
+                  code: "sql.policy-helper-correlated",
+                  schema: f.schema,
+                  name: f.name,
+                  reason: "outputKey",
+                },
+              ]
+            : []),
+        ])
         const {
           extracted: first,
           facts,
@@ -1063,7 +1092,7 @@ export async function deployedRoundTrip(
           await withClient(target, (c) => readOracle(c, schemas)),
           functions
         )
-        const repaired = await chain(kept)
+        const repaired = await chain(kept, source)
         const { extracted } = await extractWithFacts(target, scope)
         const result = await compiledTrip(target, extracted, repaired, loss)
         if (endToEnd) {
@@ -1132,38 +1161,137 @@ export async function deployedRoundTrip(
 export const kindsOf = (model: CompiledModel) =>
   [...new Set(model.objects.map((o) => o.kind))].sort()
 
+/** Функція множини виду, яку джерело має одиницею (§9: definer-функція теки). */
+function namedDefiner(
+  source: CompiledModel,
+  kind: CompiledScopeKind
+): string | undefined {
+  const name = qualifiedName(kind.setFunction)
+  return source.sqlUnits.some((u) => u.identity === `function:${name}()`)
+    ? name
+    : undefined
+}
+
+/** Колонка виду `kind` у таблиці джерела: носій скоупу чи ключ кореня. */
+const scopeColumnOf = (table: PhysicalTable, kind: CompiledScopeKind) =>
+  table.columns.find((c) => c.origin.scopeKindId === kind.id)
+
 /**
- * Параметр корпусу `scoped: false`: та сама фікстура без видів скоупу —
- * без `scopeKinds` проєкту, полів `scope` і `scopeColumn` об'єктів, FK у межах
- * тенанта (`scopedRef`) і файлу функцій множини.
- * Так прийом з нуля веде повний ланцюжок §9: функції множини, що після
- * прийому повертаються незв'язаними, відмовляє `sql.definer-caller-unchecked`
- * (платформна спека §6.7). Механіку скоупу в прийомі з нуля перевірить #271.
+ * Функції множини видів, що мають таблиці: прийом з нуля лишає політики
+ * таблиць виду дослівними, і кожна кличе функцію множини свого виду.
  */
-export function unscoped(
-  files: ReadonlyMap<string, string>
-): Map<string, string> {
-  const out = new Map<string, string>()
-  for (const [path, text] of files) {
-    if (path === SCOPE_FUNCTIONS_FILE) continue
-    if (!path.endsWith(".meta.json")) {
-      out.set(path, text)
-      continue
-    }
-    const data = JSON.parse(text) as Record<string, unknown>
-    if (path === "project.meta.json") delete data.scopeKinds
-    else {
-      delete data.scope
-      delete data.scopeColumn
-      // FK у межах тенанта (`scopedRef`) існує лише зі скоупом.
-      if (Array.isArray(data.foreignKeys))
-        data.foreignKeys = (
-          data.foreignKeys as { references?: { key?: string } }[]
-        ).filter((fk) => fk.references?.key !== "scopedRef")
-    }
-    out.set(path, JSON.stringify(data))
+function policyCalledDefiners(source: CompiledModel): Set<string> {
+  return new Set(
+    source.scopeKinds.flatMap((kind) => {
+      const name = namedDefiner(source, kind)
+      return name !== undefined &&
+        source.physical.tables.some((t) => scopeColumnOf(t, kind) !== undefined)
+        ? [name]
+        : []
+    })
+  )
+}
+
+/**
+ * Ремонтний ланцюжок прийому з нуля фікстури з видами скоупу (Р8): по
+ * мутації `add` на кожен вид джерела в порядку проєкту. Корінь-об'єкт виду
+ * після прийому — `CustomTable` з фізичним іменем кореня джерела; `scopes` —
+ * таблиці, які вид мав у джерелі (корінь — без `scopeColumn`, решта — з
+ * колонкою, яку зворотна генерація назвала за фізичним ім'ям носія), а
+ * перша мутація ще оголошує `none` таблицям без жодного виду: з першим видом
+ * проєкту скоуп оголошує кожна таблиця. Після кожної мутації лишаються рівно
+ * відмови класу ремонту функцій ще не повернутих видів.
+ */
+export async function restoreScopeKinds(
+  adopted: Map<string, string>,
+  source: CompiledModel
+): Promise<Map<string, string>> {
+  const { project } = source
+  const tables = metaOf(adopted).filter((m) => m.kind === "CustomTable")
+  const adoptedOf = (table: PhysicalTable) => {
+    const meta = tables.find(
+      (m) =>
+        (m.schema ?? project.defaultSchema) === table.schema &&
+        m.physicalName === table.name
+    )
+    expect(meta, `${table.schema}.${table.name}`).toBeDefined()
+    return meta!
   }
-  return out
+  const called = policyCalledDefiners(source)
+  // Таблиці платформної установки тека не описує — їх ставить платформа
+  const application = new Set(await applicationTableKeys(source))
+  const applicationTables = source.physical.tables.filter((t) =>
+    application.has(`${t.schema}.${t.name}`)
+  )
+  let files = adopted
+  for (const [index, kind] of source.scopeKinds.entries()) {
+    const declared = project.scopeKinds.find((k) => k.name === kind.name)!
+    const scopes: Record<string, { scope: string; scopeColumn?: string }> = {}
+    let root = declared.root
+    for (const table of applicationTables) {
+      const column = scopeColumnOf(table, kind)
+      if (column === undefined) {
+        if (
+          index === 0 &&
+          source.scopeKinds.every((k) => scopeColumnOf(table, k) === undefined)
+        )
+          scopes[adoptedOf(table).name] = { scope: "none" }
+        continue
+      }
+      const meta = adoptedOf(table)
+      // Основна таблиця об'єкта-кореня: скоуп — її ключ, без `scopeColumn`
+      if (
+        "objectId" in kind.root &&
+        "objectId" in table.origin &&
+        table.origin.objectId === kind.root.objectId &&
+        table.origin.tabularSectionId === undefined &&
+        table.origin.part === undefined
+      ) {
+        scopes[meta.name] = { scope: kind.name }
+        root = { object: { kind: "CustomTable", name: meta.name } }
+        continue
+      }
+      const carrier = meta.columns?.find((c) => c.physicalName === column.name)
+      expect(carrier, `${table.name}.${column.name}`).toBeDefined()
+      scopes[meta.name] = { scope: kind.name, scopeColumn: carrier!.name }
+    }
+    const result = await addElement(
+      files,
+      addElementInput.parse({
+        target: { kind: "Project" },
+        collection: "scopeKinds",
+        element: {
+          name: declared.name,
+          root,
+          setFunction: declared.setFunction,
+        },
+        ...(Object.keys(scopes).length > 0 ? { scopes } : {}),
+      }),
+      { schemaPath, newId: () => randomUUID() }
+    )
+    const pending = source.scopeKinds.slice(index + 1).flatMap((later) => {
+      const name = namedDefiner(source, later)
+      if (name === undefined) return []
+      return [
+        { code: "sql.declaration-check-missing", function: name },
+        ...(called.has(name)
+          ? [{ code: "sql.policy-helper-correlated", function: name }]
+          : []),
+      ]
+    })
+    expect(
+      errors(result.diagnostics).map((d) => ({
+        code: d.code,
+        function: d.params?.function,
+      })),
+      kind.name
+    ).toEqual(pending)
+    // З відмовами класу ремонту зміна записана, без них — чиста
+    if (pending.length > 0) expect(result.written).toBe(true)
+    else expect(result.ok).toBe(true)
+    files = applyChanges(files, result.changes)
+  }
+  return files
 }
 
 /** Метадані об'єктів повернутої теки: вид, схема й фізичне ім'я таблиці. */
@@ -1176,8 +1304,10 @@ const metaOf = (files: ReadonlyMap<string, string>) =>
       ([, text]) =>
         JSON.parse(text) as {
           kind: string
+          name: string
           schema?: string
           physicalName?: string
+          columns?: { name: string; physicalName: string }[]
         }
     )
 

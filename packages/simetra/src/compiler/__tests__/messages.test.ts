@@ -18,9 +18,11 @@ import {
   type DiagnosticParams,
 } from "../diagnostics"
 import type { CommandContextWrite } from "../sql/command-context"
+import { pinnedSettingsClause } from "../sql/head-settings"
 import type { DefinerReadsForm } from "../sql/definer-reads"
 import type { HeadConstruct } from "../sql/query-shape"
 import type { SetFunctionReason } from "../sql/function-shape"
+import type { PolicyFunctionReason } from "../sql/policy-functions"
 
 const ALL_RULES: RuleCode[] = [...SCHEMA_RULES, ...COMPILER_RULES]
 
@@ -398,6 +400,51 @@ describe("messages catalog", () => {
     )
   })
 
+  it("sql.head-settings words each problem of the shell", () => {
+    const text = (params: DiagnosticParams) =>
+      localize(
+        diagnostic("sql.head-settings", "a.sql", "", {
+          schema: "public",
+          name: "f",
+          function: "public.f",
+          line: 3,
+          setting: "TimeZone",
+          expected: "UTC",
+          ...params,
+        }),
+        "en"
+      ).message
+    expect(text({ problem: "missing" })).toBe(
+      "Function public.f at line 3 does not set TimeZone = 'UTC' in its CREATE FUNCTION"
+    )
+    expect(text({ problem: "value", actual: "Europe/Kyiv" })).toBe(
+      "Function public.f at line 3 sets TimeZone to 'Europe/Kyiv' instead of 'UTC'"
+    )
+    expect(text({ problem: "notFixed" })).toBe(
+      "Function public.f at line 3 sets TimeZone without a fixed value; it must be 'UTC'"
+    )
+    expect(text({ problem: "alter" })).toBe(
+      "A separate ALTER FUNCTION changes TimeZone of function public.f (line 3); only its CREATE FUNCTION may set it, to 'UTC'"
+    )
+  })
+
+  // Підказки форм кореня голови називають зафіксовані налаштування з одного
+  // джерела, а не копією.
+  it.each<[RuleCode, DiagnosticParams]>([
+    ["sql.head-settings", { problem: "missing" }],
+    ["sql.policy-helper-correlated", { reason: "language" }],
+    ["scope.set-function-signature", { reason: "security" }],
+    ["scope.set-function-missing", {}],
+    ["rights.dimension-function-missing", {}],
+    ["rights.dimension-function-signature", { reason: "security" }],
+  ])("%s hint names the pinned head settings", (code, params) => {
+    for (const locale of ["en", "uk"] as const) {
+      expect(
+        localize(diagnostic(code, "a.sql", "", params), locale).hint
+      ).toContain(pinnedSettingsClause())
+    }
+  })
+
   it("sql.function-settings-shell names RESET ALL as every setting", () => {
     const text = (setting: string, locale: "en" | "uk") =>
       localize(
@@ -460,6 +507,54 @@ describe("messages catalog", () => {
         )
       }
     }
+  })
+
+  it("sql.policy-helper-correlated renders every reason as a sentence and names the rest", () => {
+    // Повнота за типом: нова причина без запису тут — помилка `tsc`.
+    const reasons = Object.keys({
+      parameters: 0,
+      language: 0,
+      volatility: 0,
+      returns: 0,
+      outputKey: 0,
+      restrictiveBound: 0,
+      actorUnbound: 0,
+      policyShape: 0,
+      policyRoles: 0,
+    } satisfies Record<PolicyFunctionReason, 0>)
+    for (const locale of ["en", "uk"] as const) {
+      const texts = reasons.map(
+        (reason) =>
+          localize(
+            diagnostic("sql.policy-helper-correlated", "a.sql", "", {
+              schema: "public",
+              name: "f",
+              function: "public.f",
+              reason,
+              detail: "<rest>",
+              line: 3,
+            }),
+            locale
+          ).message
+      )
+      texts.forEach((text, i) => {
+        expect(text).toContain("public.f")
+        expect(text).toContain("<rest>")
+        expect(text, `${reasons[i]} ${locale}`).not.toContain(`: ${reasons[i]}`)
+      })
+      expect(new Set(texts).size, locale).toBe(reasons.length)
+    }
+    const d = diagnostic("sql.policy-helper-correlated", "a.sql", "", {
+      schema: "public",
+      name: "f",
+      function: "public.f",
+      reason: "outputKey",
+      line: 3,
+    })
+    expect(d.severity).toBe("error")
+    expect(isRepairError(d)).toBe(true)
+    expect(d.message).not.toContain("undefined")
+    expect(MESSAGES["sql.policy-helper-correlated"].hint).toBeDefined()
   })
 
   it("renders every fill problem of promote.expression-invalid as a sentence", () => {
@@ -1120,7 +1215,7 @@ describe("introspect.definer-* codes", () => {
   // Серйозність за спекою декларацій функцій §5.7
   it.each([
     ["introspect.definer-check-unknown", "warning"],
-    ["introspect.definer-anonymous-dropped", "warning"],
+    ["introspect.execute-narrowed", "warning"],
     ["introspect.definer-platform-form-candidate", "warning"],
     ["introspect.definer-foreign-grant", "error"],
     ["introspect.definer-callers-drift", "error"],

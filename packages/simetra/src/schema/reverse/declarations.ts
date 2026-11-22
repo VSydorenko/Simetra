@@ -3,7 +3,9 @@ import {
   FUNCTION_CLASSES,
   callersOfRole,
   closedShellProblem,
+  PUBLIC,
   diagnostic,
+  grantFacts,
   grantTargetKeys,
   guardArgsOf,
   identityKey,
@@ -44,7 +46,7 @@ import { explicitVolatility } from "./units"
  */
 
 /** Пара `(schema, name)` кортежем: ім'я в лапках може містити крапку. */
-export const tupleKey = (schema: string, name: string) =>
+const tupleKey = (schema: string, name: string) =>
   JSON.stringify([schema, name])
 
 /** Об'єкт теки за міткою виду: ім'я для `check.object` і дії за словом чи UUID. */
@@ -105,11 +107,25 @@ export interface DeclareInput {
   described: ReadonlySet<string>
   existing: ReadonlyMap<string, string>
   /**
-   * Функції форм платформи теки (`tupleKey`: функція множини, функція
-   * значень виміру, обробник підписки): їхній `EXECUTE` виводять метадані, а
-   * декларація на них — `sql.declaration-platform-form`.
+   * Функції наявної теки з виведеним `EXECUTE` (`functionExecute` її
+   * компіляції): ідентичність одиниці → призначення і форма. Форма платформи
+   * (функція множини, функція значень виміру, обробник підписки) декларації
+   * не отримує — декларація на неї `sql.declaration-platform-form`; кожна з
+   * них, як і invoker-функція із задекларованим чи модульним `EXECUTE`,
+   * проходить перевірку чужих грантів і звуження.
    */
-  platformForms: ReadonlySet<string>
+  derivedExecute: ReadonlyMap<
+    string,
+    { purposes: readonly string[]; form?: string }
+  >
+  /**
+   * Функції політик боргу (спека декларацій функцій §5.8): ідентичність
+   * одиниці → виведені призначення `EXECUTE`; кличеться лише коли є
+   * definer-функція. Їх визнає розпізнавач
+   * компілятора на чернетці підсумкової теки, тож тека виходу, скомпільована,
+   * визнає ті самі функції (інакше живий `EXECUTE` губився б мовчки).
+   */
+  policyFunctions: () => Promise<ReadonlyMap<string, readonly string[]>>
   /**
    * Мітки видів підсумкової теки з контрактів прав її метаданих; кличеться
    * лише коли є що розв'язувати. `undefined` — метадані контрактів не дають.
@@ -146,6 +162,17 @@ export function renderFunctionsFile(
 interface FunctionTree {
   parameters?: unknown[]
   returnType?: { names?: { String?: { sval?: string } }[]; setof?: boolean }
+}
+
+/** Без аргументів у списку ідентичності (`OUT` її не входять). */
+function nullary(unit: VerbatimUnit): boolean {
+  const fn = (unit.tree as { CreateFunctionStmt?: FunctionTree })
+    .CreateFunctionStmt
+  return (fn?.parameters ?? []).every(
+    (p) =>
+      (p as { FunctionParameter?: { mode?: string } }).FunctionParameter
+        ?.mode === "FUNC_PARAM_OUT"
+  )
 }
 
 /** Без аргументів і `RETURNS SETOF uuid`: ознака функції множини скоупу. */
@@ -195,6 +222,34 @@ function derivedCallers(
   }
 }
 
+/** Причина `introspect.execute-narrowed`. */
+type NarrowedReason = "anonymous" | "outside-assignments"
+
+/**
+ * Ролі профілю з дієвим `EXECUTE` (і `USAGE` на схему), яким виведені
+ * призначення `purposes` права не дають: план їх відкличе. Дієвий `EXECUTE` —
+ * зі знімка, тож гранту одиницею, типовим привілеям провайдера й типовому
+ * `PUBLIC` відповідає одна діагностика. Роль без `USAGE` викликати функцію й
+ * так не може: відкликання нічого не звужує.
+ */
+function narrowedRoles(
+  fact: FunctionExecuteFact,
+  purposes: readonly string[],
+  provider: DatabaseProvider
+): { role: string; reason: NarrowedReason }[] {
+  const found: { role: string; reason: NarrowedReason }[] = []
+  for (const [role, executes] of Object.entries(fact.executeByRole)) {
+    if (!executes || fact.schemaUsageByRole[role] !== true) continue
+    const own = callersOfRole(role, provider) ?? []
+    if (own.some((p) => purposes.includes(p))) continue
+    found.push({
+      role,
+      reason: own.includes("anonymous") ? "anonymous" : "outside-assignments",
+    })
+  }
+  return found
+}
+
 /**
  * Запис ACL, який декларація не відтворює: отримувач поза ролями профілю,
  * грантор не власник, опція передачі. Власник — сам собі, поза рахунком.
@@ -220,6 +275,43 @@ function foreignGrants(
       found.push({ role: entry.grantee, reason: reasons.join("; ") })
   }
   return found
+}
+
+/**
+ * Дослівні `GRANT`/`REVOKE EXECUTE` функції політики, ACL яких визначає
+ * генератор: `REVOKE` і `GRANT`, кожен отримувач якого — `PUBLIC` чи роль
+ * профілю. Звуження назвали факти (`narrowedRoles`), опцію передачі й чужого
+ * грантора — перевірка ACL за фактами каталогу.
+ * Оператор і на інші об'єкти лишається: разом із ним зник би їхній грант.
+ */
+function derivedGrants(
+  identity: string,
+  input: Pick<DeclareInput, "units" | "provider" | "parse">
+): CatalogUnit[] {
+  const own = new Set([`function|${identityKey(identity)}`])
+  const owned = input.units.filter((grant) => {
+    const keys = grantTargetKeys(grant, input.parse)
+    return keys.length > 0 && keys.every((key) => ownsTarget(own, key))
+  })
+  const profileRole = (role: string) =>
+    role === PUBLIC || callersOfRole(role, input.provider) !== undefined
+  return owned.filter((grant) => {
+    const read = readSqlUnits(
+      [{ file: grant.identity, text: grant.sql, schema: "" }],
+      input.parse,
+      []
+    ).units
+    const [fact] = grantFacts(read, input.parse)
+    if (fact === undefined) return false
+    if (!fact.grant) return true
+    // Отримувач без імені (`CURRENT_USER`) у `roles` не потрапляє, а роль
+    // профілю він не доводить: такий грант лишається
+    const grantees = (read[0]?.tree as { GrantStmt?: { grantees?: unknown[] } })
+      .GrantStmt?.grantees
+    return (
+      fact.roles.size === grantees?.length && [...fact.roles].every(profileRole)
+    )
+  })
 }
 
 /** Декларації збереженого файлу (не згенерований шлях) — для звірки викликачів. */
@@ -346,19 +438,63 @@ export async function declareFunctions(
     const unit = verbatim.get(catalogUnit.identity)
     // Тригерну функцію Postgres не дає викликати напряму: це не RPC, ролям
     // API вона не відкрита, і факт її `EXECUTE` нічого не вирішує
-    if (
-      unit === undefined ||
-      isTriggerFunction(unit) ||
-      !isSecurityDefiner(unit, parsed)
-    )
-      continue
+    if (unit === undefined || isTriggerFunction(unit)) continue
+    const definer = isSecurityDefiner(unit, parsed)
     const { schema, name } = unit
-    if (input.platformForms.has(tupleKey(schema, name))) continue
     const label = `${schema}.${name}`
     const named = facts?.functions.filter(
       (f) => f.schema === schema && f.name === name
     )
     const count = namedCount(schema, name)
+    // Факт саме цієї функції, а не кожного перевантаження імені: ключ факту —
+    // аргументи ідентичності каталогу, тож з перевантаженнями впевнено
+    // відомий лише факт функції без аргументів (форми й функції політик такі)
+    const ownFacts =
+      named === undefined
+        ? []
+        : count === 1
+          ? named
+          : nullary(unit)
+            ? named.filter((f) => f.identityArguments === "")
+            : []
+    const foreign = (fact: FunctionExecuteFact) => {
+      for (const grant of foreignGrants(fact, provider))
+        report("introspect.definer-foreign-grant", "", {
+          function: `${label}(${fact.identityArguments})`,
+          role: grant.role,
+          reason: grant.reason,
+        })
+    }
+    const narrowed = (
+      fact: FunctionExecuteFact,
+      purposes: readonly string[]
+    ) => {
+      for (const { role, reason } of narrowedRoles(fact, purposes, provider))
+        report("introspect.execute-narrowed", "", {
+          function: label,
+          role,
+          reason,
+        })
+    }
+    const elsewhere = input.derivedExecute.get(catalogUnit.identity)
+    // Функція політики збереженої теки — не форма метаданих: її призначення
+    // дають поточні політики-викликачі, а похідні гранти прибирає та сама
+    // гілка, що й при прийомі з нуля (нижче), тож тут її не пропускаємо
+    if (
+      elsewhere !== undefined &&
+      elsewhere.form !== "policyFunction" &&
+      (elsewhere.form !== undefined || !definer)
+    ) {
+      // Форма метаданих чи invoker-функція з виведеним `EXECUTE` фактів не
+      // вимагають, але за наявним фактом чужі гранти й звуження живого
+      // `EXECUTE` називає те саме правило, що й для декларацій
+      for (const fact of ownFacts) {
+        foreign(fact)
+        narrowed(fact, elsewhere.purposes)
+      }
+      continue
+    }
+    if (!definer) continue
     // Факти є лише в функцій і процедур, не в агрегатів
     const withFacts = namedCount(schema, name, FACTED)
     // Факт кожної definer-функції обов'язковий; перевантаження — рівно стільки
@@ -376,13 +512,19 @@ export async function declareFunctions(
         })
       continue
     }
-    for (const fact of firstOfName ? named : [])
-      for (const grant of foreignGrants(fact, provider))
-        report("introspect.definer-foreign-grant", "", {
-          function: `${label}(${fact.identityArguments})`,
-          role: grant.role,
-          reason: grant.reason,
-        })
+    for (const fact of firstOfName ? named : []) foreign(fact)
+    const purposes = (await input.policyFunctions()).get(catalogUnit.identity)
+    if (purposes !== undefined) {
+      // Форма платформи: декларації немає, а `EXECUTE` виводить генератор,
+      // тож гранти ролям профілю — похідні й у теку не йдуть; ті, що план
+      // відкличе, названо за фактами. Чужі гранти вже названо вище; грант
+      // ролі поза профілем чи неназваному отримувачу лишається дослівним і
+      // дає `sql.generated-grant`, а не губиться
+      for (const fact of ownFacts) narrowed(fact, purposes)
+      for (const grant of derivedGrants(unit.identity, input))
+        result.dropped.add(grant)
+      continue
+    }
     const fact = named[0]!
     const derived = derivedCallers(fact, provider)
 
@@ -409,11 +551,7 @@ export async function declareFunctions(
       }
       // Збережений файл викликачем без сесії не описує, але план відкличе
       // цей `EXECUTE`: про це теж попереджаємо
-      for (const role of derived.anonymous)
-        report("introspect.definer-anonymous-dropped", "", {
-          function: label,
-          role,
-        })
+      narrowed(fact, derived.callers)
       continue
     }
     const sqlPath = input.functionPaths.get(unit.identity)
@@ -455,11 +593,7 @@ export async function declareFunctions(
     )
       continue
 
-    for (const role of derived.anonymous)
-      report("introspect.definer-anonymous-dropped", "", {
-        function: label,
-        role,
-      })
+    narrowed(fact, derived.callers)
     const path = sqlPath.replace(/\.sql$/, FUNCTIONS_FILE_SUFFIX)
     const onBehalfOfUser = derived.callers.some(
       (c) => c === "user" || c === "command"

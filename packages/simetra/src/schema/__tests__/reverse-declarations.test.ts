@@ -1,6 +1,7 @@
-import { beforeAll, describe, expect, it } from "vitest"
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   compile,
+  formPolicies,
   loadSqlParser,
   readSqlUnits,
   type Diagnostic,
@@ -32,6 +33,29 @@ import {
   teamScopeKind,
   withRoles,
 } from "../../compiler/__tests__/fixtures/rights"
+import { pinnedSettingsClause } from "../../compiler/sql/head-settings"
+import {
+  DOCS_GRANT,
+  POLICY_DEBT,
+  POLICY_FUNCTION,
+  POLICY_SHELL,
+  READ_POLICY,
+  policyFiles,
+} from "../../compiler/__tests__/fixtures/policy-function"
+
+// Скільки разів зворотна генерація рахує стадію SQL чернетки заради функцій
+// політик: обгортка кличе справжній розпізнавач
+const policyRuns = vi.hoisted(() => ({ count: 0 }))
+vi.mock("simetra/compiler", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("simetra/compiler")>()
+  return {
+    ...actual,
+    formPolicies: (files: ReadonlyMap<string, string>) => {
+      policyRuns.count += 1
+      return actual.formPolicies(files)
+    },
+  }
+})
 
 /**
  * Декларації definer-функцій у зворотній генерації (спека декларацій функцій
@@ -226,13 +250,12 @@ describe("declarations of definer functions", () => {
           : ["user", "command"]
       )
       expect(
-        warning(result, "introspect.definer-anonymous-dropped").map(
-          (d) => d.params
-        )
+        warning(result, "introspect.execute-narrowed").map((d) => d.params)
       ).toEqual([
         {
           function: "public.rpc",
           role: PROVIDER_API_ROLES[provider].anonymous,
+          reason: "anonymous",
         },
       ])
     }
@@ -297,10 +320,10 @@ describe("declarations of definer functions", () => {
       )
       expect(errorsOf(result)).toEqual([])
       expect(
-        warning(result, "introspect.definer-anonymous-dropped").map(
-          (d) => d.params
-        )
-      ).toEqual([{ function: "public.rpc", role: anonymous }])
+        warning(result, "introspect.execute-narrowed").map((d) => d.params)
+      ).toEqual([
+        { function: "public.rpc", role: anonymous, reason: "anonymous" },
+      ])
       const [entry] = declarationsOf(result, RPC_FUNCTIONS)
       expect(entry).toMatchObject({ callers: [] })
       expect(entry).not.toHaveProperty("check")
@@ -321,6 +344,25 @@ describe("declarations of definer functions", () => {
       expect(execute.filter((sql) => sql.startsWith("GRANT"))).toEqual([])
     }
   )
+
+  // Типові привілеї провайдера дають `EXECUTE` у ACL без одиниці гранту:
+  // звуження те саме, що з одиницею (попередній тест).
+  // Мутація: порівнювати лише одиниці грантів
+  it("EXECUTE of anon from default privileges, without a grant unit: the same introspect.execute-narrowed", async () => {
+    const result = await reverseGenerate(
+      model(
+        `${guarded("rpc")}\nGRANT EXECUTE ON FUNCTION public.rpc(uuid) TO authenticated;`
+      ),
+      options(
+        FOLDER(),
+        facts(fact("rpc", { grants: ["authenticated", "anon"] }))
+      )
+    )
+    expect(declarationsOf(result, RPC_FUNCTIONS)[0]!.callers).toEqual(["user"])
+    expect(
+      warning(result, "introspect.execute-narrowed").map((d) => d.params)
+    ).toEqual([{ function: "public.rpc", role: "anon", reason: "anonymous" }])
+  })
 
   it("only the user role: callers [user], the id is generated", async () => {
     const result = await reverseGenerate(
@@ -626,7 +668,7 @@ describe("the check of a declaration", () => {
   it("no arguments and SETOF uuid: a platform form candidate", async () => {
     const result = await reverseGenerate(
       model(
-        "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT gen_random_uuid() $$;"
+        `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT gen_random_uuid() $$;`
       ),
       options(FOLDER(), facts(fact("org_ids", { grants: ["authenticated"] })))
     )
@@ -698,7 +740,7 @@ describe("platform forms of the kept folder", () => {
     // Її `EXECUTE` виводять метадані: декларація на неї — `sql.declaration-platform-form`
     const result = await reverseGenerate(
       model(
-        "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT gen_random_uuid() $$;"
+        `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT gen_random_uuid() $$;`
       ),
       options(withRoles(teamScopeKind()), undefined)
     )
@@ -711,6 +753,78 @@ describe("platform forms of the kept folder", () => {
           c.startsWith("sql.declaration") || c.startsWith("introspect.definer")
       )
     ).toEqual([])
+  })
+
+  // `EXECUTE` виводить платформа й для invoker-функції (декларація збереженої
+  // теки, функція модуля виду): план відкличе типовий `PUBLIC` поза її
+  // призначеннями, і правило те саме. Функція значень виміру invoker бути не
+  // може (`rights.dimension-function-signature`), тож тут — декларація.
+  // Мутація: відсіювати не-definer функції раніше за функції з виведеним `EXECUTE`
+  it("an invoker function with a kept declaration and the default PUBLIC: introspect.execute-narrowed", async () => {
+    const invoker =
+      "CREATE FUNCTION public.rpc(p_id uuid) RETURNS void LANGUAGE plpgsql STABLE SET search_path = '' AS $$ BEGIN NULL; END $$;"
+    const existing = withRoles()
+    existing.set("sql/public/rpc.sql", `${invoker}\n`)
+    existing.set(
+      "sql/public/rpc.functions.json",
+      JSON.stringify({
+        functions: [
+          { id: uuid(700_900), function: { name: "rpc" }, callers: ["user"] },
+        ],
+      })
+    )
+    const result = await reverseGenerate(
+      model(invoker),
+      options(existing, facts(fact("rpc", { grants: ["PUBLIC"] })))
+    )
+    expect(
+      warning(result, "introspect.execute-narrowed").map((d) => d.params)
+    ).toEqual(
+      ["anon", "service_role", PLATFORM_ROLES.command].map((role) => ({
+        function: "public.rpc",
+        role,
+        reason: role === "anon" ? "anonymous" : "outside-assignments",
+      }))
+    )
+  })
+
+  // Чужий грант на форму не губиться з пропуском декларації.
+  // Мутація: форма метаданих обходить перевірку чужих грантів
+  it("a grant on the set function to a role outside the profile is introspect.definer-foreign-grant", async () => {
+    const result = await reverseGenerate(
+      model(
+        `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT gen_random_uuid() $$;`
+      ),
+      options(
+        withRoles(teamScopeKind()),
+        facts(fact("team_ids", { grants: ["app_reader"] }))
+      )
+    )
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "introspect.definer-foreign-grant")
+        .map((d) => d.params?.role)
+    ).toEqual(["app_reader"])
+  })
+
+  // Форма метаданих фактів не вимагає, але за наявним фактом звуження
+  // називає те саме правило: `anon` поза призначеннями функції множини.
+  // Мутація: форма метаданих пропускається до звірки з фактом
+  it("the live EXECUTE of the set function beyond its assignments: introspect.execute-narrowed", async () => {
+    const result = await reverseGenerate(
+      model(
+        `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT gen_random_uuid() $$;`
+      ),
+      options(
+        withRoles(teamScopeKind()),
+        facts(fact("team_ids", { grants: ["PUBLIC"] }))
+      )
+    )
+    expect(
+      warning(result, "introspect.execute-narrowed").map((d) => d.params)
+    ).toEqual([
+      { function: "public.team_ids", role: "anon", reason: "anonymous" },
+    ])
   })
 
   const scopeGrants = [
@@ -728,7 +842,7 @@ describe("platform forms of the kept folder", () => {
     async (c) => {
       const result = await reverseGenerate(
         model(
-          "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT gen_random_uuid() $$;\n" +
+          `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT gen_random_uuid() $$;\n` +
             c.sql
         ),
         options(withRoles(teamScopeKind()), undefined)
@@ -993,9 +1107,11 @@ describe("repeated adoption", () => {
       const result = await run(["service"], ["service_role", "anon"])
       expect(
         result.diagnostics
-          .filter((d) => d.code === "introspect.definer-anonymous-dropped")
+          .filter((d) => d.code === "introspect.execute-narrowed")
           .map((d) => d.params)
-      ).toEqual([{ function: "public.item_rpc", role: "anon" }])
+      ).toEqual([
+        { function: "public.item_rpc", role: "anon", reason: "anonymous" },
+      ])
       expect(codes(errorsOf(result))).not.toContain(
         "introspect.definer-callers-drift"
       )
@@ -1020,5 +1136,368 @@ describe("repeated adoption", () => {
       ])
       expect(result.changes).toEqual([])
     })
+  })
+})
+
+describe("policy functions of debt (Р9, І6)", () => {
+  // Таблиці фікстури функції політики — з фізичного знімка її теки; тека
+  // зворотної генерації — прийом з нуля: лише проєкт
+  const FOLDER_OF_POLICY = () =>
+    policyFiles(POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT(), POLICY_DEBT())
+  const policyTables = async () => {
+    const physical = await compile(FOLDER_OF_POLICY())
+    expect(physical.model, "the fixture folder compiles").toBeDefined()
+    return catalogFromSnapshot(physical.model!.physical).tables
+  }
+  const policyProject = () =>
+    new Map([
+      ["project.meta.json", FOLDER_OF_POLICY().get("project.meta.json")!],
+    ])
+  const adopt = async (
+    sql: string,
+    executes: FactOptions,
+    kept: Record<string, string> = {},
+    others: readonly string[] = []
+  ) => {
+    const existing = new Map([...policyProject(), ...Object.entries(kept)])
+    return reverseGenerate(
+      {
+        tables: await policyTables(),
+        enumTypes: [],
+        units: units(sql),
+      },
+      options(
+        existing,
+        facts(fact("f", executes), ...others.map((n) => fact(n, executes)))
+      )
+    )
+  }
+  const EXECUTE = [
+    "REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC;",
+    "GRANT EXECUTE ON FUNCTION public.f() TO authenticated;",
+  ].join("\n")
+  const functionGrants = (files: ReadonlyMap<string, string>) =>
+    [...files.values()].filter((text) =>
+      text.includes("ON FUNCTION public.f()")
+    )
+  const functionFiles = (files: ReadonlyMap<string, string>) =>
+    [...files.keys()].filter((p) => p.endsWith(".functions.json"))
+
+  // Мутація: писати декларацію кожній definer-функції (без пропуску функції
+  // політики) — декларація на форму платформи, `sql.declaration-platform-form`
+  it("a policy function gets no declaration and no verbatim grant; the compile recognizes it the same", async () => {
+    const result = await adopt(
+      POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT() + EXECUTE,
+      { grants: ["authenticated"] }
+    )
+    expect(errorsOf(result)).toEqual([])
+    expect(codes(result.diagnostics)).not.toContain(
+      "sql.definer-caller-unchecked"
+    )
+    expect(functionFiles(result.files)).toEqual([])
+    expect(functionGrants(result.files)).toEqual([])
+    // Тека виходу, скомпільована, визнає ту саму функцію функцією політики,
+    // а живий `EXECUTE` ролі викликача відтворює генератор
+    const policies = await formPolicies(result.files)
+    expect(
+      policies.functions.map((p) => `${p.function.schema}.${p.function.name}`)
+    ).toEqual(["public.f"])
+    const compiled = await compile(result.files)
+    expect(compiled.diagnostics.filter((d) => d.severity === "error")).toEqual(
+      []
+    )
+    expect(
+      compiled
+        .model!.sqlUnits.filter(
+          (u) => u.generator === "functionExecute" && u.sql.startsWith("GRANT")
+        )
+        .map((u) => u.sql)
+    ).toEqual(["GRANT EXECUTE ON FUNCTION public.f() TO authenticated;"])
+  })
+
+  // Перелік боргу підсумкова тека пише заново, а зламаний збережений закрив би
+  // стадію 3 чернетки й з нею розпізнавання: функцію задекларувало б, а
+  // компіляція виходу визнала б її формою платформи.
+  // Мутація: розпізнавати на чернетці зі збереженим переліком боргу
+  it("a broken kept debt list does not hide the policy function", async () => {
+    const result = await adopt(
+      POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT() + EXECUTE,
+      { grants: ["authenticated"] },
+      { "sql-debt.json": "{ broken" }
+    )
+    expect(functionFiles(result.files)).toEqual([])
+    expect(errorsOf(result)).toEqual([])
+  })
+
+  it("a function outside the form gets a declaration, the compile names sql.policy-helper-correlated", async () => {
+    const volatile = POLICY_FUNCTION({
+      shell: POLICY_SHELL.replace("STABLE", "VOLATILE"),
+    })
+    const result = await adopt(
+      volatile + READ_POLICY() + DOCS_GRANT() + EXECUTE,
+      {
+        grants: ["authenticated"],
+      }
+    )
+    expect(functionFiles(result.files)).toHaveLength(1)
+    // Декларація — як у будь-якої definer-функції: без запобіжника в тілі
+    // `check` немає, і компіляція просить його поруч із причиною форми
+    expect(codes(errorsOf(result))).toEqual([
+      "sql.declaration-check-missing",
+      "sql.policy-helper-correlated",
+    ])
+    expect((await formPolicies(result.files)).functions).toEqual([])
+  })
+
+  // Генератор відкликає `EXECUTE` у ролі поза призначеннями; дослівний грант
+  // їй — не похідний, тож лишається й називає себе, а не зникає мовчки.
+  // Грант без названого отримувача роль профілю не доводить: він лишається й
+  // називає себе, а не зникає мовчки.
+  // Мутації: прибирати кожен грант функції політики; рахувати роллю профілю
+  // грант, де частина отримувачів не названа
+  it.each(["CURRENT_USER", "authenticated, CURRENT_USER"])(
+    "a grant to %s stays verbatim: sql.generated-grant",
+    async (role) => {
+      const result = await adopt(
+        POLICY_FUNCTION() +
+          READ_POLICY() +
+          DOCS_GRANT() +
+          EXECUTE +
+          `\nGRANT EXECUTE ON FUNCTION public.f() TO ${role};`,
+        { grants: ["authenticated"] }
+      )
+      expect(functionFiles(result.files)).toEqual([])
+      expect(functionGrants(result.files)).toEqual([
+        expect.stringContaining(
+          `GRANT EXECUTE ON FUNCTION public.f() TO ${role};`
+        ),
+      ])
+      expect(
+        functionGrants(result.files)[0]!.includes("TO authenticated;")
+      ).toBe(false)
+      expect(codes(errorsOf(result))).toEqual(["sql.generated-grant"])
+      expect(result.changes).toEqual([])
+    }
+  )
+
+  // Одне правило звуження (рішення архітекторки): роль профілю з дієвим
+  // `EXECUTE`, якої виведені призначення не дають, — `introspect.execute-narrowed`,
+  // хоч би як extract надрукував її право: одиницею гранту, типовими
+  // привілеями провайдера (ACL без одиниці) чи типовим `PUBLIC`.
+  // Мутація: порівнювати лише одиниці грантів, а не дієвий ACL фактів
+  const narrowedOf = (result: ReverseResult) =>
+    warning(result, "introspect.execute-narrowed").map((d) => d.params)
+  const ALL_OUTSIDE = [
+    { function: "public.f", role: "anon", reason: "anonymous" },
+    // `service_role` не читає T (немає `SELECT`), тож призначень не має
+    {
+      function: "public.f",
+      role: "service_role",
+      reason: "outside-assignments",
+    },
+    {
+      function: "public.f",
+      role: PLATFORM_ROLES.command,
+      reason: "outside-assignments",
+    },
+  ]
+  it.each([
+    {
+      path: "a grant unit to anon",
+      sql: `${EXECUTE}\nGRANT EXECUTE ON FUNCTION public.f() TO anon;`,
+      grants: ["authenticated", "anon"],
+      narrowed: [ALL_OUTSIDE[0]],
+    },
+    {
+      path: "default privileges of anon (an ACL entry without a unit)",
+      sql: EXECUTE,
+      grants: ["authenticated", "anon"],
+      narrowed: [ALL_OUTSIDE[0]],
+    },
+    {
+      path: "a grant unit to PUBLIC",
+      sql: `${EXECUTE}\nGRANT EXECUTE ON FUNCTION public.f() TO PUBLIC;`,
+      grants: ["PUBLIC"],
+      narrowed: ALL_OUTSIDE,
+    },
+    {
+      path: "the default PUBLIC (no unit at all)",
+      sql: "",
+      grants: ["PUBLIC"],
+      narrowed: ALL_OUTSIDE,
+    },
+  ])(
+    "$path on a policy function: the grant is dropped, introspect.execute-narrowed",
+    async (c) => {
+      const result = await adopt(
+        POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT() + c.sql,
+        { grants: c.grants }
+      )
+      expect(errorsOf(result)).toEqual([])
+      expect(functionFiles(result.files)).toEqual([])
+      expect(functionGrants(result.files)).toEqual([])
+      expect(narrowedOf(result)).toEqual(c.narrowed)
+    }
+  )
+
+  // Роль без `USAGE` на схему функцію й так не кличе: відкликання її
+  // `EXECUTE` дієвого доступу не звужує (рішення архітекторки: судимо дієвий ACL).
+  // Мутація: прибрати умову `USAGE` у `narrowedRoles`
+  it("a role with EXECUTE but without USAGE on the schema is not narrowed", async () => {
+    const result = await adopt(
+      POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT() + EXECUTE,
+      { grants: ["authenticated", "anon"], noUsage: ["anon"] }
+    )
+    expect(narrowedOf(result)).toEqual([])
+  })
+
+  // Звуження судить факт саме цієї функції: перевантаження `f(uuid)` має
+  // власний ACL, і його ролі не названі від імені функції політики `f()`, а
+  // спільні ролі — по разу.
+  // Мутація: звужувати за кожним фактом імені
+  it("an overload beside the policy function: only the facts of f() narrow, once", async () => {
+    const result = await reverseGenerate(
+      {
+        tables: await policyTables(),
+        enumTypes: [],
+        units: units(
+          POLICY_FUNCTION() +
+            READ_POLICY() +
+            DOCS_GRANT() +
+            "CREATE FUNCTION public.f(p uuid) RETURNS void LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT $$;"
+        ),
+      },
+      options(
+        policyProject(),
+        facts(
+          fact("f", { grants: ["PUBLIC"] }),
+          fact("f", { grants: ["PUBLIC"], identityArguments: "p uuid" })
+        )
+      )
+    )
+    expect(narrowedOf(result)).toEqual(ALL_OUTSIDE)
+  })
+
+  it("only the derived role executes: nothing is narrowed", async () => {
+    const result = await adopt(
+      POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT() + EXECUTE,
+      { grants: ["authenticated"] }
+    )
+    expect(narrowedOf(result)).toEqual([])
+  })
+
+  // Розпізнавання коштує стадію SQL чернетки: лише коли тека має і
+  // definer-функцію, і політику, і раз на прийом.
+  // Мутації: рахувати щоразу (без `policyFunctions` за потребою); рахувати
+  // без політики; рахувати на кожну definer-функцію
+  describe("the recognition runs only when it can find something", () => {
+    beforeEach(() => {
+      policyRuns.count = 0
+    })
+    it("no policy unit: no run", async () => {
+      await reverseGenerate(
+        model(guarded("rpc")),
+        options(FOLDER(), facts(fact("rpc", { grants: ["authenticated"] })))
+      )
+      expect(policyRuns.count).toBe(0)
+    })
+    it("a policy but no definer function: no run", async () => {
+      await adopt(READ_POLICY() + DOCS_GRANT(), {})
+      expect(policyRuns.count).toBe(0)
+    })
+    it("two definer functions beside a policy: one run", async () => {
+      await adopt(
+        POLICY_FUNCTION() +
+          POLICY_FUNCTION({ name: "g" }) +
+          READ_POLICY() +
+          DOCS_GRANT(),
+        { grants: ["authenticated"] },
+        {},
+        ["g"]
+      )
+      expect(policyRuns.count).toBe(1)
+    })
+  })
+
+  // Повторний прийом над текою першого: функція політики збереженої теки —
+  // та сама форма, що й при прийомі з нуля, з призначеннями поточних
+  // політик-викликачів, а не збережених.
+  // Мутація: функція політики збереженої теки йде гілкою форм метаданих
+  describe("repeated adoption over the first output", () => {
+    const first = async () => {
+      const result = await adopt(
+        POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT() + EXECUTE,
+        { grants: ["authenticated"] }
+      )
+      expect(errorsOf(result)).toEqual([])
+      return Object.fromEntries(result.files)
+    }
+
+    it("a live grant to anon: dropped and narrowed, as on a fresh adoption", async () => {
+      const sql =
+        POLICY_FUNCTION() +
+        READ_POLICY() +
+        DOCS_GRANT() +
+        `${EXECUTE}\nGRANT EXECUTE ON FUNCTION public.f() TO anon;`
+      const executes = { grants: ["authenticated", "anon"] }
+      const fresh = await adopt(sql, executes)
+      const repeated = await adopt(sql, executes, await first())
+      for (const result of [fresh, repeated]) {
+        expect(errorsOf(result)).toEqual([])
+        expect(functionGrants(result.files)).toEqual([])
+        expect(narrowedOf(result)).toEqual([ALL_OUTSIDE[0]])
+      }
+    })
+
+    it("the caller policy moved to service_role: authenticated is narrowed, service_role is derived", async () => {
+      const result = await adopt(
+        POLICY_FUNCTION() +
+          READ_POLICY("service_role") +
+          DOCS_GRANT("service_role") +
+          [
+            "REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC;",
+            "GRANT EXECUTE ON FUNCTION public.f() TO authenticated;",
+          ].join("\n"),
+        { grants: ["authenticated"] },
+        await first()
+      )
+      expect(errorsOf(result)).toEqual([])
+      expect(narrowedOf(result)).toEqual([
+        {
+          function: "public.f",
+          role: "authenticated",
+          reason: "outside-assignments",
+        },
+      ])
+      const compiled = await compile(result.files)
+      expect(
+        compiled
+          .model!.sqlUnits.filter(
+            (u) =>
+              u.generator === "functionExecute" && u.sql.startsWith("GRANT")
+          )
+          .map((u) => u.sql)
+      ).toEqual(["GRANT EXECUTE ON FUNCTION public.f() TO service_role;"])
+    })
+  })
+
+  // Мутація: пропускати функцію політики до перевірки чужих ACL — грант ролі
+  // застосунку мовчки губиться разом із пропуском
+  it("a grant to a role outside the profile is introspect.definer-foreign-grant", async () => {
+    const result = await adopt(
+      POLICY_FUNCTION() +
+        READ_POLICY() +
+        DOCS_GRANT() +
+        EXECUTE +
+        "\nGRANT EXECUTE ON FUNCTION public.f() TO app_reader;",
+      { grants: ["authenticated", "app_reader"] }
+    )
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "introspect.definer-foreign-grant")
+        .map((d) => d.params?.role)
+    ).toEqual(["app_reader"])
+    expect(functionFiles(result.files)).toEqual([])
+    expect(result.changes).toEqual([])
   })
 })

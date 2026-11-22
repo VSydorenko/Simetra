@@ -3,10 +3,12 @@ import {
   sqlFunctionsFileSchema,
   type SqlFunctionDeclaration,
 } from "simetra/model"
+import { formPolicies } from "../compile"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import { readFiles } from "../pipeline"
 import { platformFormFunctions } from "../sql/declarations"
 import { qualifiedName } from "../sql/identity"
+import type { PolicyFunctions } from "../sql/policy-functions"
 
 /** Файли після переходу й попередження про ширші призначення форм. */
 export interface PlatformFormTransition {
@@ -32,10 +34,12 @@ export interface PlatformFormTransition {
  * `EXECUTE`, лишається в файлі (з попередженням `declined`), а решта записів
  * того ж файлу переходить як звичайно — суд над кожним записом окремо.
  * `except` — ключі функцій (`qualifiedName`), до яких `declineWidening` не
- * застосовується.
+ * застосовується. `policies` — функції політик теки `files` (`formPolicies`):
+ * декларація функції політики переходить у форму так само.
  */
 export function toPlatformForms(
   files: ReadonlyMap<string, string>,
+  policies: PolicyFunctions,
   {
     declineWidening = false,
     except,
@@ -47,7 +51,7 @@ export function toPlatformForms(
   // Зламаний проєкт чи файл декларацій не судиться тут: причину назве
   // компіляція результату.
   if (project === undefined) return { files: result, diagnostics }
-  const forms = platformFormFunctions(objects, project)
+  const forms = platformFormFunctions(objects, project, policies)
   for (const parsed of functionsFiles) {
     const kept: SqlFunctionDeclaration[] = []
     for (const declaration of parsed.functions) {
@@ -102,17 +106,26 @@ export function toPlatformForms(
  * чужа зміна не відкриває `EXECUTE` мовчки. Розширення перехідним записом
  * лишається попередженням з ролями.
  */
-export function toPlatformFormsAfter(
+export async function toPlatformFormsAfter(
   before: ReadonlyMap<string, string>,
   changed: ReadonlyMap<string, string>
-): PlatformFormTransition {
-  const formKeys = (files: ReadonlyMap<string, string>) => {
+): Promise<PlatformFormTransition> {
+  const formKeys = (
+    files: ReadonlyMap<string, string>,
+    policies: PolicyFunctions
+  ) => {
     const { project, objects } = readFiles(files)
     return project === undefined
       ? new Set<string>()
-      : new Set(platformFormFunctions(objects, project).keys())
+      : new Set(platformFormFunctions(objects, project, policies).keys())
   }
-  const was = formKeys(before)
-  const became = new Set([...formKeys(changed)].filter((k) => !was.has(k)))
-  return toPlatformForms(changed, { declineWidening: true, except: became })
+  const policies = await formPolicies(changed)
+  const was = formKeys(before, await formPolicies(before))
+  const became = new Set(
+    [...formKeys(changed, policies)].filter((k) => !was.has(k))
+  )
+  return toPlatformForms(changed, policies, {
+    declineWidening: true,
+    except: became,
+  })
 }

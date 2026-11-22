@@ -22,6 +22,7 @@ import {
   snapshotSourcesDomain,
   writeRoles,
 } from "./fixtures/rights"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 const F = RIGHTS_FUNCTIONS
 const FN = F.explain.name
@@ -597,8 +598,7 @@ describe("rights_explain", () => {
     const verbatim = compiled(
       await compiledPolicyDomain(
         {
-          "sql/public/region-ids.sql":
-            "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT r.id FROM public.region r $$;",
+          "sql/public/region-ids.sql": `CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT r.id FROM public.region r $$;`,
         },
         [
           {

@@ -7,6 +7,7 @@ import {
 } from "simetra/compiler"
 import { SQL_DEBT_FILE } from "simetra/model"
 import { acceptDebt, customTable, metaFiles, project, uuid } from "./helpers"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 /** Детерміноване джерело id у формі UUID v4. */
 function counter(start = 700_000): () => string {
@@ -67,7 +68,7 @@ async function adoptedFolder(): Promise<Map<string, string>> {
     }),
     [LOGS]: customTable("Logs"),
     [ORDERS_SQL]: ORDERS_POLICY,
-    [SCOPE_FUNCTIONS]: `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;`,
+    [SCOPE_FUNCTIONS]: `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;`,
   })
   return acceptDebt(files)
 }

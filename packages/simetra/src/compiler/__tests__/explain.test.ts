@@ -27,6 +27,7 @@ import {
   salesDocument,
   uuid,
 } from "./helpers"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 async function referenceModel() {
   const result = await compile(readReferenceDomain())
@@ -300,7 +301,7 @@ describe("explainFunction", () => {
     const all = policyDomain(teamScopeKind())
     all.set(
       SCOPE_FUNCTIONS_FILE,
-      "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n"
+      `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`
     )
     const result = await compile(await acceptDebt(all), { repair: true })
     const e = explainFunction(result, { schema: "public", name: "team_ids" })

@@ -1,4 +1,12 @@
 import { describe, expect, it } from "vitest"
+import { compile } from "simetra/compiler"
+import {
+  DOCS_GRANT,
+  POLICY_DEBT,
+  POLICY_FUNCTION,
+  READ_POLICY,
+  policyFiles,
+} from "./fixtures/policy-function"
 import {
   COMMENT_COUNTER_FILE,
   COUNT_COMMENT_SQL_FILE,
@@ -15,6 +23,7 @@ import {
   expectClean,
   uuid,
 } from "./helpers"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 const SHARED = "sql/public/shared.sql"
 /** Спільний файл іншої схеми; тип `string` — ключ рядка таблиці кейсів. */
@@ -28,10 +37,8 @@ const sqlFunction = (name: string, body: string) =>
   `CREATE FUNCTION ${name}() RETURNS int LANGUAGE sql STABLE AS $$ ${body} $$;\n`
 
 /** Функція множини `team_ids`, що кличе ланку `public.helper`. */
-const TEAM_IDS =
-  "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT public.helper() $$;\n"
-const HELPER =
-  "CREATE FUNCTION public.helper() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT NULL::uuid $$;\n"
+const TEAM_IDS = `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT public.helper() $$;\n`
+const HELPER = `CREATE FUNCTION public.helper() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`
 const PROJECT_FUNCTION =
   "CREATE FUNCTION public.project_label() RETURNS int LANGUAGE sql STABLE SECURITY INVOKER AS $$ SELECT 1 $$;\n"
 
@@ -446,4 +453,38 @@ describe("sql.function-settings-shell: the target is judged by schema and signat
       })
     )
   })
+})
+
+describe("sql.function-settings-shell on a policy function and its link", () => {
+  // Функція політики — корінь голови (спека декларацій функцій §5.8): її
+  // оболонку й оболонку кожної ланки задає лише `CREATE`, тож окремий
+  // `ALTER FUNCTION … SET TimeZone` в іншому файлі послабив би налаштування
+  // сесії повз `sql.head-settings`.
+  const ALTER_FILE = "sql/public/alter.sql"
+  const G =
+    "CREATE FUNCTION public.g() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT m.team_id FROM public.members m $$;\n"
+  it.each(["public.f", "public.g"])(
+    "rejects ALTER FUNCTION %s() SET TimeZone",
+    async (target) => {
+      const files = policyFiles(
+        POLICY_FUNCTION({ where: ["d.team_id IN (SELECT public.g())"] }) +
+          G +
+          READ_POLICY() +
+          DOCS_GRANT(),
+        POLICY_DEBT()
+      )
+      files.set(ALTER_FILE, `ALTER FUNCTION ${target}() SET TimeZone = 'X';\n`)
+      expect(
+        diagnosticBrief((await compile(files)).diagnostics, [
+          "sql.function-settings-shell",
+        ])
+      ).toEqual([
+        {
+          code: "sql.function-settings-shell",
+          file: ALTER_FILE,
+          params: { function: target, setting: "timezone" },
+        },
+      ])
+    }
+  )
 })

@@ -2,7 +2,7 @@ import { type DatabaseProvider, type GrantPurpose } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "./diagnostics"
 import type { PlatformFormSource } from "./sql/closed-forms"
 import {
-  PLATFORM_FORM_PURPOSES,
+  formPurposes,
   type DeclaredFunction,
   type PlatformForm,
 } from "./sql/declarations"
@@ -33,7 +33,8 @@ export interface FunctionExecuteSources {
 /**
  * `EXECUTE` функцій, ACL яких належить платформі (платформна спека §6.7,
  * спека декларацій функцій §5.1): форм платформи — з призначень форми
- * (`PLATFORM_FORM_PURPOSES`), задекларованих — з викликачів, недекларованих
+ * (`formPurposes`: сталих для форм метаданих, виведених політиками-викликачами
+ * для функції політики, §5.8), задекларованих — з викликачів, недекларованих
  * функцій модуля виду — з порожніх призначень: модуль не приймає дослівних
  * грантів, тож інакше функція лишилася б з `EXECUTE` від `PUBLIC` і типових
  * привілеїв провайдера. Функцію множини `membership` сюди не передають: її
@@ -158,7 +159,8 @@ function executeTargets(sources: FunctionExecuteSources): {
         ...(form === undefined ? {} : { form }),
       })
   }
-  for (const { function: fn, form } of forms) {
+  for (const source of forms) {
+    const { function: fn, form } = source
     const named = units.filter(
       (u) =>
         u.class === "function" && u.schema === fn.schema && u.name === fn.name
@@ -169,7 +171,7 @@ function executeTargets(sources: FunctionExecuteSources): {
       named.length === 1
         ? named[0]!
         : { ...fn, identity: functionIdentity(fn.schema, fn.name, []) },
-      PLATFORM_FORM_PURPOSES[form],
+      formPurposes(source),
       form
     )
   }

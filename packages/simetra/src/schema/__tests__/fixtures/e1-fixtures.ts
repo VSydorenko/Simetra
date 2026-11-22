@@ -15,6 +15,7 @@ import {
   scopedProject,
   uuid,
 } from "../../../compiler/__tests__/helpers"
+import { pinnedSettingsClause } from "../../../compiler/sql/head-settings"
 
 const ORG = "catalogs/Organization/Organization.meta.json"
 
@@ -547,10 +548,10 @@ export function movementQuery(
     // поточного користувача дає поіменна функція провайдера.
     [SCOPE_FUNCTIONS_FILE]: [
       "CREATE FUNCTION app.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE",
-      "  SECURITY DEFINER SET search_path = ''",
+      `  SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()}`,
       "  AS $$ SELECT id FROM app.organization $$;",
       "CREATE FUNCTION app.user_ids() RETURNS SETOF uuid LANGUAGE sql STABLE",
-      "  SECURITY DEFINER SET search_path = ''",
+      `  SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()}`,
       `  AS $$ SELECT ${currentSubject(provider)} $$;`,
     ].join("\n"),
     [MOVEMENTS_SQL]: [

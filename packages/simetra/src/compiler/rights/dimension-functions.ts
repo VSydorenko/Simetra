@@ -77,7 +77,7 @@ export function checkDimensionFunctions(
     }
     const head = units.find((u) => u.identity === identity)
     if (head === undefined) return
-    const { relations } = judgeQueryFunction(head, scope, [qualified])
+    const { relations } = judgeQueryFunction(head, scope, [qualified], true)
     const reported = new Set<string>()
     for (const { chain, relation } of relations) {
       if (!rightsTables.has(relation) || reported.has(relation)) continue

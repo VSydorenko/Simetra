@@ -12,6 +12,7 @@ import { kindTables } from "../sql/kind-tables"
 import { loadSqlParser } from "../sql/parse"
 import { loadPlpgsqlParser } from "../sql/plpgsql"
 import type { SqlUnit } from "../sql/units"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 /**
  * Одиниці без грантів і політик таблиць виду: їх дає кожна таблиця виду з RLS,
@@ -137,7 +138,7 @@ export function metaFiles(
     const sql = [...new Set(names)]
       .map(
         (name) =>
-          `CREATE FUNCTION ${name}() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;`
+          `CREATE FUNCTION ${name}() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;`
       )
       .join("\n")
     if (sql !== "") files.set(SCOPE_FUNCTIONS_FILE, sql)
@@ -394,9 +395,10 @@ export async function acceptDebt(
   files: ReadonlyMap<string, string>
 ): Promise<Map<string, string>> {
   const stage1 = readFiles(files)
-  const { sql, stage3, declared, calls } = sqlStage(
+  const { sql, stage3, declared, calls, policies } = sqlStage(
     stage1,
-    await loadSqlParser()
+    await loadSqlParser(),
+    await loadPlpgsqlParser()
   )
   return new Map([
     ...files,
@@ -411,7 +413,8 @@ export async function acceptDebt(
           await loadSqlParser(),
           await loadPlpgsqlParser(),
           declared,
-          calls
+          calls,
+          policies
         ),
       }),
     ],

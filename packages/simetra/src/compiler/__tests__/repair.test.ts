@@ -27,6 +27,7 @@ import {
   SCOPE_FUNCTIONS_FILE,
   uuid,
 } from "./helpers"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 function counter(start = 870_000): () => string {
   let n = start
@@ -218,7 +219,7 @@ describe("mutations on a folder with repair-class errors only", () => {
     const files = repairOnly({
       // Без явного `none` новий вид скоупу вимагав би скоупу від `Item`.
       [ITEM]: catalog("Item", { scope: "none" }),
-      [TEAM_SQL]: `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n`,
+      [TEAM_SQL]: `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`,
       [TEAM_FUNCTIONS]: JSON.stringify({
         functions: [
           {
@@ -277,7 +278,7 @@ describe("mutations on a folder with repair-class errors only", () => {
         ],
       }),
       [ITEM]: catalog("Item", { scope: "none" }),
-      [TEAM_SQL]: `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n`,
+      [TEAM_SQL]: `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`,
       [TEAM_FUNCTIONS]: JSON.stringify({
         functions: [
           {

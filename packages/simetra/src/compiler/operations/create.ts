@@ -45,7 +45,7 @@ export async function createObject(
   changed.set(path, JSON.stringify(raw))
   // Новий об'єкт може зробити задекларовану функцію формою платформи
   // (обробник підписки): декларація зникає в тій самій зміні (Р12).
-  const after = toPlatformFormsAfter(files, changed)
+  const after = await toPlatformFormsAfter(files, changed)
   return completeAndCompile(
     files,
     after.files,
