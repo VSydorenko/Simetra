@@ -171,6 +171,7 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
     await drain(h)
     expect(h.fake.log.filter(isPage)).toHaveLength(2)
     expect(handle.getSnapshot().staleComposition).toBeUndefined()
+    expect(handle.getSnapshot().needsRefresh).toBe(false)
   })
 
   // Повтор сторінки вимоги не знімає (сторінка підтверджує лише себе): після
@@ -266,6 +267,7 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
     await drain(h)
     expect(h.fake.requests.length).toBe(sent + 1)
     expect(handle.getSnapshot().staleComposition).toBeUndefined()
+    expect(handle.getSnapshot().needsRefresh).toBe(false)
   })
 
   // Дві сторінки в польоті, відхилені без руху епохи між відповідями,

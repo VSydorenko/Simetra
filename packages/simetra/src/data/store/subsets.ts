@@ -150,9 +150,10 @@ export interface Subset extends ReaderTarget {
   error: CommandError | DataError | undefined
   /**
    * The user's refresh is due (the new-rows banner of a system re-read,
-   * §6.5; a freshness read the hidden tab or a failure did not make). The
-   * snapshot's `needsRefresh` also shows an unconfirmed composition of an
-   * invisible view (`unconfirmedSince`, §8.4).
+   * §6.5; a failed key read of the receiver). The snapshot's `needsRefresh`
+   * also shows an unconfirmed composition (`unconfirmedSince`, §8.4) of an
+   * invisible view or of any view on a hidden tab: that part is derived, not
+   * stored here.
    */
   needsRefresh: boolean
   hasNewRows: boolean
@@ -311,7 +312,8 @@ function waitsForRead(s: Subset, env: RequirementEnv): boolean {
  * system re-read; P4-B spec §8.4, item 7): lifts the requirement when the
  * read started at its epoch or later; else, when it is pending, the caller
  * repeats the read (`true`). On a hidden tab the view takes the invisible
- * branch instead: `needsRefresh`, and `resume()` reads it.
+ * branch instead: no repeat, the snapshot derives `needsRefresh` from the
+ * requirement, and `resume()` reads it.
  */
 export function settleRequirement(
   s: Subset,
@@ -319,10 +321,7 @@ export function settleRequirement(
   env: RequirementEnv
 ): boolean {
   liftRequirement(s, readEpoch)
-  if (!waitsForRead(s, env)) return false
-  if (env.tabVisible()) return true
-  s.needsRefresh = true
-  return false
+  return waitsForRead(s, env) && env.tabVisible()
 }
 
 const ACCESS_CHANGED = purgedSnapshot("access-changed")
@@ -400,11 +399,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         !(s.visible ?? s.listeners.size > 0)
       )
         return false
-      // Прихована вкладка й тут — гілка невидимого (§12, Р8): без запиту,
-      // `needsRefresh`, а `resume()` читає вигляд.
-      if (ctx.tabVisible()) return true
-      s.needsRefresh = true
-      return false
+      // Прихована вкладка й тут — гілка невидимого (§12, Р8): без запиту;
+      // `needsRefresh` знімок виводить із вимоги, а `resume()` читає вигляд.
+      return ctx.tabVisible()
     }
     return settleRequirement(s, readEpoch, requirementEnv)
   }
@@ -1093,11 +1090,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       rows,
       hasNewRows: s.hasNewRows,
       // Невидимий вигляд читає непідтверджений склад лише на переході у
-      // видимість (§8.4, п. 7): до того знімок це показує.
+      // видимість, а будь-який на прихованій вкладці — на `resume()` (§8.4,
+      // п. 7): до того знімок це показує. Це вивід із вимоги, не збережена
+      // ознака: її знімає те саме читання, що знімає вимогу.
       needsRefresh:
         s.needsRefresh ||
         (s.unconfirmedSince !== undefined &&
-          !(s.visible ?? s.listeners.size > 0)),
+          (!(s.visible ?? s.listeners.size > 0) || !ctx.tabVisible())),
       ...(ctx.isStale(o.name) ? { isStale: true } : {}),
       ...(staleComposition(s) ? { staleComposition: true } : {}),
       ...(section === undefined ? {} : { section }),

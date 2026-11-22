@@ -827,6 +827,9 @@ describe("flow control", () => {
       await settle()
       expect(requestsSince(h, from)).toHaveLength(1)
       expect(view.getSnapshot().staleComposition).toBeUndefined()
+      // `needsRefresh` прихованої вкладки — вивід із вимоги: те саме
+      // читання знімає обидва.
+      expect(view.getSnapshot().needsRefresh).toBe(false)
     }
   )
 

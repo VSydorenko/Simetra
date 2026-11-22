@@ -1541,6 +1541,13 @@ export function createCore(options: {
     readRequirement(s)
   }
 
+  // Знімок виводить `needsRefresh` з вимоги й видимості вкладки (§8.4,
+  // п. 7): перехід вкладки його змінює й без запису.
+  function touchRequirements() {
+    for (const s of registry.subsets())
+      if (s.unconfirmedSince !== undefined) s.dirty = true
+  }
+
   const requirementEnv = {
     versions: session.versions,
     tabVisible: () => visible,
@@ -1977,10 +1984,12 @@ export function createCore(options: {
     stopSignals: () => receiver?.stop(),
     suspend() {
       visible = false
+      touchRequirements()
       scheduler.suspend()
     },
     resume() {
       visible = true
+      touchRequirements()
       scheduler.request()
       if (!session.token().valid) return
       // Строки, що настали на прихованій вкладці (перемикання епохи, повтор
