@@ -441,6 +441,29 @@ describe("ObjectStore.remove (П15)", () => {
     expect(h.store.get(K1)?.removed?.divergent).toBe(false)
   })
 
+  // Детектор дефекту самотесту `bury-removed-current-epoch`, незалежний від
+  // насіння моделі: слот `removed` без власників іде з надгробком епохи
+  // позначки, тож читання між позначкою й похованням рядок повертає.
+  it.each([
+    { defects: undefined, written: true },
+    {
+      defects: new Set(["bury-removed-current-epoch"] as const),
+      written: false,
+    },
+  ])(
+    "a dismissed removed slot is buried with the epoch of its mark (defect: $defects)",
+    ({ defects, written }) => {
+      const h = harness(defects === undefined ? {} : { defects })
+      put(h, row(K1, 1))
+      own(h, K1)
+      remove(h, K1)
+      const between = h.session.epochs.next()
+      disown(h, K1)
+      expect(h.store.get(K1)).toBeUndefined()
+      expect(put(h, row(K1, 1), between)).toBe(written ? "written" : "rejected")
+    }
+  )
+
   it("a truly deleted row gets no re-read without divergence", () => {
     const h = harness()
     put(h, row(K1, 1))
