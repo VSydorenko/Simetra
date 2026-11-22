@@ -3,6 +3,7 @@ import {
   KIND_REGISTRY,
   PINNED_SESSION_SETTINGS,
   PLATFORM_SETTING_PREFIX,
+  PROVIDER_OWNER_ROLES,
   PROVIDER_SCHEMAS,
   type DatabaseProvider,
   type GrantPurpose,
@@ -593,6 +594,8 @@ export function checkSqlModules(
   policies: PolicyFunctions
 ): Diagnostic[] {
   const owners = closedModuleOwners(objects)
+  const owner =
+    provider === undefined ? undefined : PROVIDER_OWNER_ROLES[provider]
   const closed = (unit: { ownerFile?: string }) =>
     unit.ownerFile !== undefined && owners.has(unit.ownerFile)
   // Перевантаження рахуються серед усіх функцій схеми (простір `pg_proc`:
@@ -625,7 +628,8 @@ export function checkSqlModules(
       unit.sql,
       parse,
       plpgsql,
-      calls
+      calls,
+      owner
     ).filter((hit) => !judgedElsewhere(unit, hit))
     if (writes.length === 0) continue
     const name = unit.schema === "" ? unit.name : `${unit.schema}.${unit.name}`
@@ -717,7 +721,8 @@ export function checkSqlModules(
             unit.sql,
             parse,
             plpgsql,
-            calls
+            calls,
+            owner
           ).find((hit) => !judgedElsewhere(unit, hit))
         : undefined
     if (write !== undefined) {

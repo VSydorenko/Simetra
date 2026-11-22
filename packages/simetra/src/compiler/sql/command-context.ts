@@ -56,6 +56,9 @@ function isProtectedSetting(name: string | undefined): boolean {
 interface SetStatement {
   kind?: string
   name?: string
+  args?: {
+    A_Const?: { sval?: { sval?: string } }
+  }[]
 }
 
 interface CallNode {
@@ -387,9 +390,57 @@ interface FunctionTree {
   sql_body?: unknown
 }
 
-/** Опції `SET <налаштування> …` функції (`CREATE` чи `ALTER FUNCTION`). */
+const PLATFORM_SCHEMA_NAMES: ReadonlySet<string> = new Set([PLATFORM_SCHEMA])
+
+/**
+ * Ім'я з елемента списку `search_path` за правилами ідентифікаторів: пробіли
+ * навколо, лапки (`""` усередині — одна лапка), регістр. Порівняння без цього
+ * пропустило б `"simetra"` чи `SIMETRA` — ту саму схему.
+ */
+function normalisedPathElement(element: string): string {
+  const text = element.trim()
+  const unquoted =
+    text.length >= 2 && text.startsWith('"') && text.endsWith('"')
+      ? text.slice(1, -1).replaceAll('""', '"')
+      : text
+  return unquoted.trim().toLowerCase()
+}
+
+/**
+ * Чи значення опції `SET search_path` називає схему платформи (Р18). Порожнє
+ * значення й шляхи без схем платформи (`public`, `extensions`) дозволені:
+ * схема платформи в шляху функції дала б її тілу кликати функції платформи
+ * без схеми. `"$user"` — схема з іменем користувача: для функції `definer`
+ * це її власник, тож він називає схему платформи, коли власник так
+ * зветься (`owner`).
+ */
+function pathNamesPlatformSchema(
+  set: SetStatement,
+  owner: string | undefined
+): boolean {
+  if (set.kind !== "VAR_SET_VALUE") return false
+  const ownerName =
+    owner === undefined ? undefined : normalisedPathElement(owner)
+  return (set.args ?? []).some((arg) =>
+    (arg.A_Const?.sval?.sval ?? "").split(",").some((element) => {
+      const name = normalisedPathElement(element)
+      return (
+        PLATFORM_SCHEMA_NAMES.has(name) ||
+        (name === "$user" &&
+          ownerName !== undefined &&
+          PLATFORM_SCHEMA_NAMES.has(ownerName))
+      )
+    })
+  )
+}
+
+/**
+ * Опції `SET <налаштування> …` функції (`CREATE` чи `ALTER FUNCTION`).
+ * `owner` — роль-власник функції (для `"$user"` у `search_path`).
+ */
 function optionWrites(
-  options: readonly DefElemNode[] | undefined
+  options: readonly DefElemNode[] | undefined,
+  owner: string | undefined
 ): CommandContextHit[] {
   const found: CommandContextHit[] = []
   for (const def of (options ?? []).flatMap((o) =>
@@ -400,14 +451,19 @@ function optionWrites(
     // `RESET ALL` опції лише прибирає власні налаштування функції:
     // у сесію він нічого не пише, тож не відмова. Оператор `RESET ALL` у тілі
     // судиться окремо і лишається забороненим.
-    // `SET search_path = ''` — закріплення шляху пошуку, а не запис у сесію:
-    // його вимагає й судить закрита оболонка (`closed-forms`).
+    // Опція `SET search_path` — закріплення шляху пошуку, а не запис у сесію,
+    // доки значення не називає схему платформи: порожнє значення вимагає й
+    // судить закрита оболонка (`closed-forms`), але лише для закритих чи
+    // оголошених одиниць, тож схему платформи в шляху будь-якої функції,
+    // боргової теж, судить тут.
+    const searchPath = set?.name?.toLowerCase() === "search_path"
     if (
       def.defname === "set" &&
       set !== undefined &&
       set.kind !== "VAR_RESET_ALL" &&
-      set.name?.toLowerCase() !== "search_path" &&
-      setStatementWrite(set)
+      (searchPath
+        ? pathNamesPlatformSchema(set, owner)
+        : setStatementWrite(set))
     ) {
       found.push({
         form: "functionOption",
@@ -433,14 +489,16 @@ function optionWrites(
  * Усі записи одиниці, а не перший: у борговому SQL `SET ROLE` перед
  * `set_config('simetra.…')` інакше сховав би помилку за попередженням
  * (спека прав §5.3). Порожній масив — записів немає. `calls` — дані суддівства
- * викликів провайдера (спека прав §5.3).
+ * викликів провайдера (спека прав §5.3). `owner` — роль-власник функцій
+ * застосунку, якщо відома.
  */
 export function commandContextWrite(
   tree: Node,
   sql: string,
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  calls: ProviderCalls
+  calls: ProviderCalls,
+  owner?: string
 ): CommandContextHit[] {
   const fn = (tree as { CreateFunctionStmt?: FunctionTree }).CreateFunctionStmt
   if (fn === undefined) {
@@ -450,13 +508,13 @@ export function commandContextWrite(
       .AlterFunctionStmt
     if (alter !== undefined) {
       return [
-        ...optionWrites(alter.actions),
+        ...optionWrites(alter.actions, owner),
         ...treeWrites({ ...alter, actions: [] }, calls),
       ]
     }
     return treeWrites(tree, calls)
   }
-  const options = optionWrites(fn.options)
+  const options = optionWrites(fn.options, owner)
   const defs = (fn.options ?? []).flatMap((o) =>
     o.DefElem === undefined ? [] : [o.DefElem]
   )

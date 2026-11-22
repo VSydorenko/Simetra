@@ -732,6 +732,58 @@ describe("kind module: closed forms only", () => {
       ).toEqual([])
     })
 
+    // Р18: схема платформи в опції `search_path` будь-якої функції, боргової
+    // теж, — помилка: інакше її тіло кликало б `file_attach` без схеми.
+    it.each([
+      ["a debt module", TABLE_SQL],
+      ["a shared file", SHARED_SQL],
+    ])(
+      "%s: search_path naming the platform schema is an error",
+      async (_w, file) => {
+        for (const path of [
+          "simetra",
+          `"SIMETRA", pg_temp`,
+          "public, simetra",
+        ]) {
+          expect(
+            sessionWrites(
+              await diagnostics({
+                [file]: shell(
+                  `LANGUAGE sql SECURITY DEFINER SET search_path = ${path}`
+                ),
+              })
+            )
+          ).toEqual([[ERROR, "functionOption", "search_path"]])
+        }
+      }
+    )
+
+    // Функція, що не є боргом, відмовляється без імені налаштування в параметрах.
+    it("an invoker function with search_path = simetra is refused", async () => {
+      expect(
+        sessionWrites(
+          await diagnostics({
+            [TABLE_SQL]: shell(
+              "LANGUAGE sql STABLE SET search_path = simetra",
+              "SELECT 1"
+            ),
+          })
+        )
+      ).toEqual([[ERROR, "functionOption", undefined]])
+    })
+
+    it("a debt function with search_path = public passes", async () => {
+      expect(
+        sessionWrites(
+          await diagnostics({
+            [TABLE_SQL]: shell(
+              "LANGUAGE sql SECURITY DEFINER SET search_path = public"
+            ),
+          })
+        )
+      ).toEqual([])
+    })
+
     it("a definer function that sets search_path in its body is refused", async () => {
       const found = await diagnostics({
         [SHARED_SQL]: shell(
