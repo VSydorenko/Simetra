@@ -33,7 +33,7 @@ import {
   withRefs,
   type RowViews,
 } from "./snapshot"
-import { ReadLimiterClosed, type StoreSource } from "./source"
+import { ReadLimiterClosed, settle, type StoreSource } from "./source"
 import type {
   CoreLimits,
   CoreLogEntry,
@@ -359,43 +359,46 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       }
       let discarded = false
       let again = false
-      return readForm(ctx, s, readEpoch, token).then(
+      const lease = ctx.source.lease()
+      return readForm(ctx, s, readEpoch, token, lease).then(
         (apply) => {
-          session.commit(
-            (scope) => {
-              try {
-                s.answerRejected = false
-                if (!apply(scope)) {
-                  discarded = !session.versions.unavailable()
-                  if (!discarded) {
-                    s.status = "error"
-                    s.error = EPOCH_UNAVAILABLE
+          settle(lease, () =>
+            session.commit(
+              (scope) => {
+                try {
+                  s.answerRejected = false
+                  if (!apply(scope)) {
+                    discarded = !session.versions.unavailable()
+                    if (!discarded) {
+                      s.status = "error"
+                      s.error = EPOCH_UNAVAILABLE
+                    }
+                    return
                   }
-                  return
+                  s.loaded = true
+                  s.refreshedAt = startedAt
+                  s.okReadEpoch = readEpoch
+                  s.failures = 0
+                  s.failedAt = undefined
+                  s.status = "ready"
+                  s.error = undefined
+                  s.needsRefresh = false
+                  s.hasNewRows = false
+                  again = confirm(s, readEpoch, true)
+                } catch (error) {
+                  // Дефект застосування — вигляд у `error`, рядки без власника
+                  // прибирає `sweep`; відмова не стає необробленою.
+                  ctx.log({ kind: "listener-failed", error })
+                  s.status = "error"
+                  s.error = errorOf(error)
+                } finally {
+                  ops.sweep(scope)
+                  s.dirty = true
                 }
-                s.loaded = true
-                s.refreshedAt = startedAt
-                s.okReadEpoch = readEpoch
-                s.failures = 0
-                s.failedAt = undefined
-                s.status = "ready"
-                s.error = undefined
-                s.needsRefresh = false
-                s.hasNewRows = false
-                again = confirm(s, readEpoch, true)
-              } catch (error) {
-                // Дефект застосування — вигляд у `error`, рядки без власника
-                // прибирає `sweep`; відмова не стає необробленою.
-                ctx.log({ kind: "listener-failed", error })
-                s.status = "error"
-                s.error = errorOf(error)
-              } finally {
-                ops.sweep(scope)
-                s.dirty = true
-              }
-            },
-            token,
-            what
+              },
+              token,
+              what
+            )
           )
           if (again && token.valid) return attempt()
           if (!discarded || !token.valid) return
@@ -419,25 +422,26 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             .sleep(pause)
             .then(() => (token.valid ? attempt() : undefined))
         },
-        (error: unknown) => {
-          // Закритий обмежувач — сесію закрито: писати нікуди.
-          if (error instanceof ReadLimiterClosed) return
-          session.commit(
-            () => {
-              // Збій читання вже завантаженого вигляду — лічильник паузи
-              // (§6.7); збій першого завантаження його не веде.
-              if (s.loaded) {
-                s.failures++
-                s.failedAt = startedAt
-              }
-              s.status = "error"
-              s.error = errorOf(error)
-              s.dirty = true
-            },
-            token,
-            what
-          )
-        }
+        (error: unknown) =>
+          settle(lease, () => {
+            // Закритий обмежувач — сесію закрито: писати нікуди.
+            if (error instanceof ReadLimiterClosed) return
+            session.commit(
+              () => {
+                // Збій читання вже завантаженого вигляду — лічильник паузи
+                // (§6.7); збій першого завантаження його не веде.
+                if (s.loaded) {
+                  s.failures++
+                  s.failedAt = startedAt
+                }
+                s.status = "error"
+                s.error = errorOf(error)
+                s.dirty = true
+              },
+              token,
+              what
+            )
+          })
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
@@ -549,48 +553,52 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       const readEpoch = session.epochs.now()
       let discarded = false
       let again = false
+      const lease = ctx.source.lease()
       return gated(
         ctx,
         readEpoch,
         (c) =>
           readWindowMore(c, s, readEpoch, token, direction, cursor, written),
-        s
+        s,
+        lease
       ).then(
         (apply) => {
-          session.commit(
-            (scope) => {
-              try {
-                s.answerRejected = false
-                const before = s.window?.generation
-                if (!apply(scope)) {
-                  discarded = !session.versions.unavailable()
-                  if (!discarded) {
-                    s.status = "error"
-                    s.error = EPOCH_UNAVAILABLE
+          settle(lease, () =>
+            session.commit(
+              (scope) => {
+                try {
+                  s.answerRejected = false
+                  const before = s.window?.generation
+                  if (!apply(scope)) {
+                    discarded = !session.versions.unavailable()
+                    if (!discarded) {
+                      s.status = "error"
+                      s.error = EPOCH_UNAVAILABLE
+                    }
+                    return
                   }
-                  return
+                  if (s.status === "error") {
+                    s.status = "ready"
+                    s.error = undefined
+                  }
+                  if (s.window?.generation !== before)
+                    written = s.window?.generation
+                  again = confirm(s, readEpoch, false)
+                } catch (error) {
+                  ctx.log({ kind: "listener-failed", error })
+                  s.status = "error"
+                  s.error = errorOf(error)
+                } finally {
+                  ops.sweep(scope)
+                  s.dirty = true
+                  // Відкинуте читання чи повтор за вимогою ще піде: позначка
+                  // тримає дублікати.
+                  if (!discarded && !again) release()
                 }
-                if (s.status === "error") {
-                  s.status = "ready"
-                  s.error = undefined
-                }
-                if (s.window?.generation !== before)
-                  written = s.window?.generation
-                again = confirm(s, readEpoch, false)
-              } catch (error) {
-                ctx.log({ kind: "listener-failed", error })
-                s.status = "error"
-                s.error = errorOf(error)
-              } finally {
-                ops.sweep(scope)
-                s.dirty = true
-                // Відкинуте читання чи повтор за вимогою ще піде: позначка
-                // тримає дублікати.
-                if (!discarded && !again) release()
-              }
-            },
-            token,
-            what
+              },
+              token,
+              what
+            )
           )
           if (again) {
             if (token.valid) return attempt()
@@ -604,19 +612,20 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             .sleep(pause)
             .then(() => (token.valid ? attempt() : undefined))
         },
-        (error: unknown) => {
-          if (error instanceof ReadLimiterClosed) return
-          session.commit(
-            () => {
-              s.status = "error"
-              s.error = errorOf(error)
-              s.dirty = true
-              release()
-            },
-            token,
-            what
-          )
-        }
+        (error: unknown) =>
+          settle(lease, () => {
+            if (error instanceof ReadLimiterClosed) return
+            session.commit(
+              () => {
+                s.status = "error"
+                s.error = errorOf(error)
+                s.dirty = true
+                release()
+              },
+              token,
+              what
+            )
+          })
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
@@ -904,8 +913,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   // Склад вигляду після розриву (§8.4): кожен утримуваний канал його об'єкта
   // доведено читанням, що успішно осіло й почалось не раніше приєднання після
   // останнього розриву; відпущений з записом — точково (`channelProven`).
-  // Похідна від епох, без власного стану.
+  // Вимога «склад не підтверджено з e» (§8.4, п. 7) — той самий факт: поки
+  // вона стоїть, склад не підтверджено в будь-якого вигляду, видимого чи ні.
+  // Похідна від епох і вимоги, без власного стану.
   function staleComposition(s: Subset): boolean {
+    if (s.unconfirmedSince !== undefined) return true
     const { epochs } = session
     if (!epochs.gapped()) return false
     const id = s.form.object.entry.id

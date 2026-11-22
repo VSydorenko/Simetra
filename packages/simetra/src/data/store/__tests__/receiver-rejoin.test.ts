@@ -16,7 +16,7 @@ import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import { createFakeSource } from "../testing/fake-source"
 import { coreInternals } from "../core"
 import { QUIET_MS, REJOIN_JITTER_MS } from "../receiver"
-import type { Key, ViewSpec } from "../types"
+import { DEFAULT_CORE_LIMITS, type Key, type ViewSpec } from "../types"
 import {
   ORG,
   TASK,
@@ -965,12 +965,15 @@ describe("held and released channels (liveness, R-a…R-c)", () => {
   })
   let version = 2
   const replaceRights = async (
-    h: Opened,
+    h: Pick<Opened, "fake" | "core">,
     scopeSets: readonly string[],
-    reads?: readonly string[]
+    reads?: readonly string[],
+    snapshot: typeof rightsOf = rightsOf
   ) => {
-    h.fake.rightsSnapshot = rightsOf(scopeSets, reads)
-    h.fake.rightsVersion = String(version++ % 10).repeat(64)
+    h.fake.rightsSnapshot = snapshot(scopeSets, reads)
+    // Версія не повторює ні попередньої, ні початкової («1»×64): інакше
+    // заміни не буде.
+    h.fake.rightsVersion = (version++).toString(16).padStart(64, "0")
     h.core.requestRights()
     await settle()
     await advance(1_000)
@@ -1159,6 +1162,269 @@ describe("held and released channels (liveness, R-a…R-c)", () => {
     await replaceRights(h, [S], [S, S2])
     expect(h.transport.subscribed().has(channel)).toBe(true)
     expect(view.getSnapshot().rows.map((r) => r.state)).toEqual(["stale"])
+  })
+
+  // §8.4, правило 2: читання сторінки вікна в польоті ще запише рядки
+  // каналу — вікно, чиї рядки поки лише з іншого скоупу, тримає запис.
+  it("keeps the entry of a released channel without rows while a window page read that will write its row is in flight", async () => {
+    const transport = createFakeSignalTransport()
+    const h = setup({
+      rightsSnapshot: true,
+      signals: transport,
+      objects: [task, org],
+      limits: { windowPage: 2 },
+    })
+    h.fake.rightsSnapshot = rightsOf([S, S2])
+    h.fake.rightsVersion = "1".repeat(64)
+    h.fake.insert(TASK, taskValues(1, { org: S2 }))
+    h.fake.insert(TASK, taskValues(2, { org: S2 }))
+    h.fake.insert(TASK, taskValues(3))
+    const win = h.core.view({ kind: "window", object: TASK })
+    win.subscribe(() => {})
+    await settle()
+    transport.join(channel, false)
+    transport.join(channelOf(S2), false)
+    await advance(REJOIN_JITTER_MS)
+    expect(win.getSnapshot().rows.map((r) => r.key)).toEqual([key(1), key(2)])
+    h.fake.mode = "manual"
+    win.loadAfter()
+    await settle()
+    expect(h.fake.pending).toHaveLength(1)
+    await replaceRights(h, [S2], [S, S2])
+    expect(transport.subscribed().has(channel)).toBe(false)
+    h.fake.mode = "auto"
+    h.fake.take(0).answer()
+    await settle()
+    expect(win.getSnapshot().rows.map((r) => r.state)).toEqual([
+      "synced",
+      "synced",
+      "synced",
+    ])
+    // Правка без нагляду: повторна підписка з записом позначає рядок сторінки.
+    h.fake.edit(TASK, key(3), { title: "missed" })
+    await replaceRights(h, [S, S2], [S, S2])
+    expect(transport.subscribed().has(channel)).toBe(true)
+    expect(win.getSnapshot().rows.map((r) => r.state)).toEqual([
+      "synced",
+      "synced",
+      "stale",
+    ])
+  })
+
+  // §8.4, правило 2: читання ключів приймача в польоті ще запише рядок, що
+  // переїхав у скоуп відпущеного каналу, — запис тримається до його осідання.
+  it("keeps the entry of a released channel without rows while a receiver key read that will write its row is in flight", async () => {
+    const h = harness([S, S2])
+    h.fake.insert(TASK, taskValues(1, { org: S2 }))
+    const spec = keysView(key(1))
+    const view = h.core.view(spec)
+    view.subscribe(() => {})
+    await settle()
+    h.transport.join(channel, false)
+    h.transport.join(channelOf(S2), false)
+    await advance(REJOIN_JITTER_MS)
+    expect(view.getSnapshot().rows.map((r) => r.state)).toEqual(["synced"])
+    // Рядок переїжджає зі скоупу S2 у S; сигнал — читання ключа в польоті.
+    const moved = h.fake.edit(TASK, key(1), { org: S })
+    h.fake.mode = "manual"
+    h.transport.emit(channel, {
+      id: "9301",
+      object: task.id,
+      op: "update",
+      keys: { id: key(1) },
+      row_ver: moved,
+    })
+    await advance(QUIET_MS)
+    expect(h.fake.pending).toHaveLength(1)
+    await replaceRights(h, [S2], [S, S2])
+    expect(h.transport.subscribed().has(channel)).toBe(false)
+    h.fake.mode = "auto"
+    h.fake.take(0).answer()
+    await settle()
+    expect(view.getSnapshot().rows.map((r) => r.state)).toEqual(["synced"])
+    // Правка без нагляду: повторна підписка з записом позначає рядок.
+    h.fake.edit(TASK, key(1), { title: "missed" })
+    await replaceRights(h, [S, S2], [S, S2])
+    expect(h.transport.subscribed().has(channel)).toBe(true)
+    expect(view.getSnapshot().rows.map((r) => r.state)).toEqual(["stale"])
+  })
+
+  // §8.4, правило 2, з цілями `include`: читання вигляду іншого об'єкта, що
+  // включає організацію, ще запише її рядок — запис каналу організації
+  // тримається, хоч її власний вигляд рядків не має.
+  const withOrgRights = (
+    scopeSets: readonly string[],
+    reads: readonly string[] = scopeSets
+  ) => ({
+    ...rightsOf(scopeSets, reads),
+    rights: reads.flatMap((scope) => [
+      read(scope),
+      { ...read(scope), object: "organization" },
+    ]),
+  })
+  const orgChannelOf = (scope: string) =>
+    channelTopic({
+      kind: "changes",
+      scopeKindId: SCOPE_KIND_ID,
+      scope,
+      object: org.id,
+    })
+  const includeTarget = async (answerBeforeRelease: boolean) => {
+    const h = harness([S, S2])
+    h.fake.rightsSnapshot = withOrgRights([S, S2])
+    h.fake.insert(ORG, { ref: S })
+    h.fake.insert(TASK, taskValues(1, { org: S }))
+    const orgChannel = orgChannelOf(S)
+    // Власний вигляд організації без рядків: канал утримується, а рядків
+    // каналу в сховищі немає.
+    h.core
+      .view({ kind: "keys", object: ORG, keys: [key(77)] })
+      .subscribe(() => {})
+    await settle()
+    expect(h.transport.subscribed().has(orgChannel)).toBe(true)
+    h.transport.join(orgChannel, false)
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    h.fake.mode = "manual"
+    const tasks = h.core.view({ kind: "full", object: TASK, include: ["org"] })
+    tasks.subscribe(() => {})
+    await settle()
+    expect(h.fake.pending).toHaveLength(1)
+    if (answerBeforeRelease) {
+      h.fake.mode = "auto"
+      h.fake.take(0).answer()
+      await settle()
+    }
+    await replaceRights(h, [S2], [S, S2], withOrgRights)
+    expect(h.transport.subscribed().has(orgChannel)).toBe(false)
+    h.fake.mode = "auto"
+    while (h.fake.pending.length > 0) {
+      h.fake.take(0).answer()
+      await settle()
+    }
+    const target = () => {
+      const row = tasks.getSnapshot().rows[0]
+      return row?.state === "removed" ? undefined : row?.refs?.org
+    }
+    expect(target()).toMatchObject({ state: "synced", version: 1 })
+    // Правка без нагляду: повторна підписка з записом позначає ціль.
+    h.fake.edit(ORG, S, {})
+    await replaceRights(h, [S, S2], [S, S2], withOrgRights)
+    expect(h.transport.subscribed().has(orgChannel)).toBe(true)
+    expect(target()).toMatchObject({ state: "stale", version: 1 })
+  }
+
+  it("keeps the entry of a released channel while a read of another object's view that includes it is in flight", async () => {
+    await includeTarget(false)
+  })
+
+  it("keeps the entry of a released channel whose row an include read wrote before the release", async () => {
+    await includeTarget(true)
+  })
+
+  // Одне джерело (§8.4, правило 2): читання знімає свій облік на кожному
+  // кінці польоту, інакше запис відпущеного каналу застряг би назавжди.
+  const ends = [
+    "success",
+    "refusal",
+    "error",
+    "cancel",
+    "purge",
+    "close",
+  ] as const
+  it.each(ends)(
+    "forgets the entry of a released channel once a read in flight ends by %s",
+    async (end) => {
+      const transport = createFakeSignalTransport()
+      let broken = false
+      const h = setup({
+        rightsSnapshot: true,
+        signals: transport,
+        objects: [task, org],
+        // Збій читання (не відмова сервера): відповідь джерела відхилено.
+        adapter: (fake) => ({
+          capabilities: fake.adapter.capabilities,
+          read: async (items) => {
+            const result = await fake.adapter.read(items)
+            if (broken) throw new Error("network")
+            return result
+          },
+        }),
+      })
+      h.fake.rightsSnapshot = rightsOf([S, S2])
+      h.fake.rightsVersion = "1".repeat(64)
+      h.fake.insert(TASK, taskValues(1, { org: S2 }))
+      const internals = coreInternals(h.core)
+      h.core.view(keysView(key(9))).subscribe(() => {})
+      await settle()
+      transport.join(channel, false)
+      await advance(REJOIN_JITTER_MS)
+      h.fake.mode = "manual"
+      const off = h.core.view(keysView(key(1))).subscribe(() => {})
+      await settle()
+      expect(h.fake.pending).toHaveLength(1)
+      await replaceRights(h, [S2], [S, S2])
+      expect(transport.subscribed().has(channel)).toBe(false)
+      expect(internals.pendingWrites(TASK)).toBeGreaterThan(0)
+      expect(internals.epochs.releasedAt(channel)).toBeGreaterThan(0)
+      if (end === "cancel") {
+        off()
+        await advance(DEFAULT_CORE_LIMITS.releaseDelayMs)
+      }
+      if (end === "purge") await replaceRights(h, [S2], [S])
+      if (end === "close") h.core.close("disposed")
+      if (end === "error") broken = true
+      h.fake.mode = "auto"
+      while (h.fake.pending.length > 0) {
+        const read = h.fake.take(0)
+        if (end === "refusal") read.fail("command.unavailable")
+        else read.answer()
+        await settle()
+      }
+      broken = false
+      await settle()
+      // Закрите ядро такту не має: лишається лише облік.
+      if (end !== "close") {
+        // Такт приймача забуває запис без рядків каналу й без читань у польоті.
+        await advance(60_000)
+        expect(internals.epochs.releasedAt(channel)).toBe(0)
+      }
+      expect(internals.pendingWrites(TASK)).toBe(0)
+    }
+  )
+
+  // Облік — на кожне читання окремо: кінець одного не знімає облік іншого,
+  // що ще летить і запише рядок каналу.
+  it("keeps the entry of a released channel while a second read is in flight after the first one ended", async () => {
+    const h = await open(keysView(key(9)), 0, [S, S2])
+    h.fake.insert(TASK, taskValues(1, { org: S2 }))
+    h.fake.insert(TASK, taskValues(2))
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    h.fake.mode = "manual"
+    const first = h.core.view(keysView(key(1)))
+    first.subscribe(() => {})
+    await settle()
+    const second = h.core.view(keysView(key(2)))
+    second.subscribe(() => {})
+    await settle()
+    expect(h.fake.pending).toHaveLength(2)
+    await replaceRights(h, [S2], [S, S2])
+    expect(h.transport.subscribed().has(channel)).toBe(false)
+    h.fake.mode = "auto"
+    h.fake.take(0).answer()
+    await settle()
+    expect(first.getSnapshot().rows.map((r) => r.state)).toEqual(["synced"])
+    // Такт приймача під час другого читання: запис тримається.
+    await advance(60_000)
+    h.fake.take(0).answer()
+    await settle()
+    expect(second.getSnapshot().rows.map((r) => r.state)).toEqual(["synced"])
+    // Правка без нагляду: повторна підписка з записом позначає рядок.
+    h.fake.edit(TASK, key(2), { title: "missed" })
+    await replaceRights(h, [S, S2], [S, S2])
+    expect(h.transport.subscribed().has(channel)).toBe(true)
+    expect(second.getSnapshot().rows.map((r) => r.state)).toEqual(["stale"])
   })
 
   it("a release without a gap leaves the composition confirmed", async () => {

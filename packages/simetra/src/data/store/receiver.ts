@@ -15,7 +15,13 @@ import { evaluateFilter, fieldInfoOf } from "./filter"
 import type { ObjectState } from "./forms"
 import { scopeOf, visibleRow, type RowEntry } from "./object-store"
 import { canSubscribe } from "./rights"
-import { ReadLimiterClosed, readKeys, tracked } from "./source"
+import {
+  ReadLimiterClosed,
+  readKeys,
+  settle,
+  tracked,
+  type WriteLease,
+} from "./source"
 import type {
   CoreLogEntry,
   GenerationToken,
@@ -210,6 +216,8 @@ interface Job {
   readonly readEpoch: number
   readonly epochs: Set<string | null>
   readonly rows: Promise<ServerRow[] | undefined>
+  /** The write lease of the read; released when its answer settles. */
+  readonly lease: WriteLease
 }
 
 // Час власних позначок приймача (`minVersion` і «розрив»): рядок моделі часу
@@ -607,14 +615,15 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     plan: Plan,
     signals: ObjectBatch
   ): Job => {
-    const read = tracked(writer.source)
+    const lease = writer.source.lease()
+    const read = tracked(writer.source, undefined, lease)
     const owned = new Set(plan.stored)
-    writer.keyJobs.set(object, (writer.keyJobs.get(object) ?? 0) + 1)
     return {
       object,
       o,
       plan,
       signals,
+      lease,
       readEpoch: session.epochs.now(),
       epochs: read.epochs,
       rows: readKeys(read.source, o.entry, [...plan.stored, ...plan.fresh], {
@@ -860,39 +869,30 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     // `commit`: відповідь, що чекала б повільних перечитувань інших об'єктів
     // пачки, лягла б пізніше за новіші читання й розійшлася б із ними (П15).
     // Пачка тримає single-flight, доки не осяде все.
-    // Читання ключів летить, доки його відповідь не осяде: запис відпущеного
-    // каналу на цей час тримається (§8.4, правило 2).
-    const settle = async (job: Job) => {
-      try {
-        await settleOne(job)
-      } finally {
-        const left = (writer.keyJobs.get(job.object) ?? 1) - 1
-        if (left > 0) writer.keyJobs.set(job.object, left)
-        else writer.keyJobs.delete(job.object)
-      }
-    }
-    const settleOne = async (job: Job) => {
+    const land = async (job: Job) => {
       const [rows] = await Promise.all([job.rows, sectionsOf.get(job)])
-      if (stopped) return
-      if (rows === undefined) {
+      const again: Parameters<typeof scheduleRetry>[] = []
+      settle(job.lease, () => {
+        if (stopped) return
+        if (rows === undefined) {
+          ctx.commit(
+            (w) =>
+              w.markViews(job.object, {
+                needsRefresh: true,
+                unconfirmedSince: since,
+              }),
+            token
+          )
+          return
+        }
         ctx.commit(
-          (w) =>
-            w.markViews(job.object, {
-              needsRefresh: true,
-              unconfirmedSince: since,
-            }),
+          (w) => settleJob(w, job, rows, (...args) => again.push(args)),
           token
         )
-        return
-      }
-      const again: Parameters<typeof scheduleRetry>[] = []
-      ctx.commit(
-        (w) => settleJob(w, job, rows, (...args) => again.push(args)),
-        token
-      )
+      })
       for (const args of again) scheduleRetry(...args)
     }
-    await Promise.all([...jobs.map(settle), ...flights])
+    await Promise.all([...jobs.map(land), ...flights])
   }
 
   // Відпущений канал тримає епоху відпускання, лише поки в сховищі є його
