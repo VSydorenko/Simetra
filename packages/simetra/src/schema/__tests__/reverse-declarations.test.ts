@@ -1093,7 +1093,8 @@ describe("policy functions of debt (Р9, І6)", () => {
   const adopt = async (
     sql: string,
     executes: FactOptions,
-    kept: Record<string, string> = {}
+    kept: Record<string, string> = {},
+    others: readonly string[] = []
   ) => {
     const folder = policyFiles(
       POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT(),
@@ -1111,7 +1112,10 @@ describe("policy functions of debt (Р9, І6)", () => {
         enumTypes: [],
         units: units(sql),
       },
-      options(existing, facts(fact("f", executes)))
+      options(
+        existing,
+        facts(fact("f", executes), ...others.map((n) => fact(n, executes)))
+      )
     )
   }
   const EXECUTE = [
@@ -1315,7 +1319,9 @@ describe("policy functions of debt (Р9, І6)", () => {
           POLICY_FUNCTION({ name: "g" }) +
           READ_POLICY() +
           DOCS_GRANT(),
-        { grants: ["authenticated"] }
+        { grants: ["authenticated"] },
+        {},
+        ["g"]
       )
       expect(policyRuns.count).toBe(1)
     })
