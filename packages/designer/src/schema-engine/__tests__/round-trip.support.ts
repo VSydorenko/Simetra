@@ -1029,8 +1029,7 @@ export async function deployedRoundTrip(
       )
     // Теку з відмовами класу ремонту лагодять мутації `chain`; повна звірка
     // йде вже над теку після них (Д3, Р8), у тій самій цілі
-    let result: RoundTrip | undefined
-    const adopted = await inTarget(
+    const { adopted, result } = await inTarget(
       renderDesiredState(source).sql,
       scope,
       async (target) => {
@@ -1065,7 +1064,7 @@ export async function deployedRoundTrip(
         )
         const repaired = await chain(kept)
         const { extracted } = await extractWithFacts(target, scope)
-        result = await compiledTrip(target, extracted, repaired, loss)
+        const result = await compiledTrip(target, extracted, repaired, loss)
         if (endToEnd) {
           await expectPlanAndApply(target, result.model, loss)
           await applyLossAndExpectEmptyPlan(target, result.model, loss)
@@ -1095,10 +1094,10 @@ export async function deployedRoundTrip(
           for (const name of functions)
             expect(applied[name]?.slice().sort(), name).toEqual(expected)
         }
-        return repaired
+        return { adopted: repaired, result }
       }
     )
-    return { source, adopted, ...(result === undefined ? {} : { result }) }
+    return { source, adopted, result }
   }
   const result = await inTarget(
     renderDesiredState(source).sql,

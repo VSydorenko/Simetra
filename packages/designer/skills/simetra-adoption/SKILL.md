@@ -140,9 +140,11 @@ errors are only of the repair class (`sql.declaration-check-missing`,
 
 1. `declare-function` with `{function, callers, check}`: names the rights check
    the function applies (an object with rights, an action, at most one target
-   parameter). It replaces the record of that function and refuses when the
+   parameter). An adopted `CustomTable` has no rights contract, so `promote` it
+   into a Catalog or Document first. It replaces the record of that function and refuses when the
    result would add any other error. A function that already has a platform
-   form (a scope kind set function, a dimension values function) is refused.
+   form (a scope kind set function, a dimension values function, a subscription
+   handler) is refused.
 2. `fix`: inserts a `PERFORM simetra.rights_require` (or `rights_require_scope`) call as the first
    statement of the body from the declared `check`. It only inserts into a
    `plpgsql` body without `DECLARE` and `EXCEPTION` and without any guard call;
