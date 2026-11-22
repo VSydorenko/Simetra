@@ -63,11 +63,11 @@ const membership = catalogEntry({
   tabularSections: [],
 })
 
-// Реквізит з ім'ям структурного слова: ім'я каталогу виграє.
+// Об'єкт без реквізитів і без членства: його шляхи проходять без змін.
 const odd = catalogEntry({
   id: ODD_ID,
   name: "Odd",
-  attributes: [catalogEntryAttribute({ name: "values", column: "values_col" })],
+  attributes: [],
   tabularSections: [],
 })
 
@@ -130,11 +130,6 @@ describe("pathToWire / pathFromWire", () => {
     ).toBe(path)
   })
 
-  it("maps an attribute named like a structural word to its column", () => {
-    expect(pathToWire(index, ODD_ID, "values")).toBe("values_col")
-    expect(pathFromWire(index, ODD_ID, "values_col")).toBe("values")
-  })
-
   it("maps a structural prefix before a same-named attribute or column", () => {
     // Ім'я каталогу не перехоплює структурне слово: компілятор забороняє
     // такі імена (`identity.name-structural`), а фізичну колонку — ні.
@@ -143,10 +138,13 @@ describe("pathToWire / pathFromWire", () => {
       name: "Odd",
       attributes: [
         catalogEntryAttribute({ name: "title", column: "title_col" }),
-        catalogEntryAttribute({ name: "expectedValues", column: "ev_col" }),
-        catalogEntryAttribute({ name: "creatorMember", column: "cm_col" }),
         catalogEntryAttribute({ name: "ev", column: "expectedValues" }),
         catalogEntryAttribute({ name: "cm", column: "creatorMember" }),
+        catalogEntryAttribute({ name: "vals", column: "values" }),
+        catalogEntryAttribute({ name: "mk", column: "mark" }),
+        catalogEntryAttribute({ name: "expv", column: "expectedVersion" }),
+        catalogEntryAttribute({ name: "secs", column: "tabularSections" }),
+        catalogEntryAttribute({ name: "dels", column: "deleteIds" }),
       ],
       tabularSections: [],
     })
@@ -163,6 +161,19 @@ describe("pathToWire / pathFromWire", () => {
       "creatorMember.user"
     )
     expect(pathFromWire(own, ODD_ID, "creatorMember")).toBe("creatorMember")
+    // Кожне структурне слово проходить як префікс в обидва боки, навіть коли
+    // колонка названа так само (`values`, `mark`, …).
+    for (const word of [
+      "values",
+      "mark",
+      "expectedVersion",
+      "tabularSections",
+      "deleteIds",
+    ]) {
+      expect(pathFromWire(own, ODD_ID, word)).toBe(word)
+      expect(pathToWire(own, ODD_ID, word)).toBe(word)
+      expect(pathFromWire(own, ODD_ID, `${word}.0`)).toBe(`${word}.0`)
+    }
   })
 
   it("keeps the path of an unknown object", () => {

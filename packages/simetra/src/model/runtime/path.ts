@@ -118,6 +118,10 @@ function mapPath(
     return [EXPECTED, field ?? name, ...tail].join(".")
   }
 
+  // Решта структурних слів — голова шляху операції без відображення: їхня
+  // однойменна колонка не має перехоплювати шлях як реквізит шапки.
+  if (STRUCTURAL_PATH_WORDS.includes(head)) return path
+
   const section = entry.tabularSections.find((s) =>
     toWire ? s.name === head : s.id === head
   )
