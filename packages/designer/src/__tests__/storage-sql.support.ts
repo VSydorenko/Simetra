@@ -296,6 +296,22 @@ export async function bareModel(...layers: Layer[]): Promise<CompiledModel> {
   return result.model!
 }
 
+/** `Blob` без `storage`, але зі звичайним реквізитом, чия колонка зветься `file_size`. */
+export const blobWithPlainSizeLayer: Layer = {
+  [BLOB_FILE]: {
+    ...blob(),
+    attributes: [
+      {
+        id: uuid(9811),
+        name: "fileSize",
+        physicalName: "file_size",
+        type: "String",
+        length: 20,
+      },
+    ],
+  },
+}
+
 /** Довідник `Blob` — з властивістю `storage` чи без неї. */
 export const blobLayer = (withStorage: boolean): Layer => ({
   [BLOB_FILE]: blob(withStorage ? STORAGE : undefined),

@@ -14,7 +14,6 @@ import {
 } from "simetra/compiler"
 import {
   diffCatalogModels,
-  filePlatformColumns,
   PROVIDER_API_ROLES,
   PROVIDER_IDENTITY_SOURCES,
   PROVIDER_LOGIN_ROLES,
@@ -195,6 +194,7 @@ import {
   type RightsOrphans,
 } from "./rights-sources"
 import { planRowVersionSteps, rowVersionFirstTables } from "./row-version"
+import { appliedStorageSource, storageTables } from "./storage-facts"
 import { tableKey } from "./table-key"
 import { typeChangeRefusals, typeGuards, type TypeChange } from "./type-guard"
 import { PLATFORM_VERSION } from "./version"
@@ -729,44 +729,44 @@ export function identityTriggerLocks(
 
 /**
  * `storage` додано чи прибрано в об'єкта з живою таблицею (Р9, Р12 ПГ-5):
- * план ставить чи знімає колонку розміру файлу на наявній таблиці — не
- * новій і не знищуваній, бо тоді змінює її весь об'єкт. Додавання лишило б
- * наявні рядки без розміру й без запису вкладення, прибирання — осиротило б
- * байти в бакеті, які звірка бачить лише як невідомий префікс. Ознака — колонка
- * розміру, яку кладе лише `storage` (`filePlatformColumns`).
+ * план ставить чи знімає колонки сховища на наявній таблиці — не новій і не
+ * знищуваній, бо тоді змінює її весь об'єкт. Додавання лишило б наявні рядки
+ * без розміру й без запису вкладення, прибирання — осиротило б байти в
+ * бакеті, які звірка бачить лише як невідомий префікс. Ознака — факт
+ * `storage` у моделі: бажаній проти застосованої (marker), а не назва
+ * колонки: звичайна колонка `file_size` слід сховища не дає.
  */
 export function storageRefusals(
-  steps: readonly Pick<PlanStep, "produced" | "destroyed">[]
+  steps: readonly Pick<PlanStep, "produced" | "destroyed">[],
+  facts: { desired: ReadonlySet<string>; applied: ReadonlySet<string> }
 ): EngineDiagnostic[] {
-  const size = filePlatformColumns()[0]!.physicalName
-  const tableKey = (r: EngineObjectRef) => JSON.stringify([r.schema, r.name])
+  const refKey = (r: EngineObjectRef) => tableKey(r.schema, r.name)
   const created = new Set(
     steps.flatMap((s) =>
-      s.produced.filter((r) => r.kind === "table").map(tableKey)
+      s.produced.filter((r) => r.kind === "table").map(refKey)
     )
   )
   const dropped = new Set(
     steps.flatMap((s) =>
-      s.destroyed.filter((r) => r.kind === "table").map(tableKey)
+      s.destroyed.filter((r) => r.kind === "table").map(refKey)
     )
   )
-  const found = new Map<string, EngineDiagnostic>()
+  const found: EngineDiagnostic[] = []
   const note = (
     code: "plan.storage-added" | "plan.storage-removed",
-    ref: EngineObjectRef,
-    known: ReadonlySet<string>
+    key: string
   ) => {
-    if (ref.kind !== "column" || ref.name !== size || ref.table === undefined)
-      return
-    if (known.has(JSON.stringify([ref.schema, ref.table]))) return
-    const table = `${quoteIdent(ref.schema)}.${quoteIdent(ref.table)}`
-    found.set(`${code}\0${table}`, applyDiagnostic(code, "error", { table }))
+    const [schema, name] = JSON.parse(key) as [string, string]
+    const table = `${quoteIdent(schema)}.${quoteIdent(name)}`
+    found.push(applyDiagnostic(code, "error", { table }))
   }
-  for (const step of steps) {
-    for (const ref of step.produced) note("plan.storage-added", ref, created)
-    for (const ref of step.destroyed) note("plan.storage-removed", ref, dropped)
-  }
-  return [...found.values()].sort((a, b) =>
+  for (const key of facts.desired)
+    if (!facts.applied.has(key) && !created.has(key))
+      note("plan.storage-added", key)
+  for (const key of facts.applied)
+    if (!facts.desired.has(key) && !dropped.has(key))
+      note("plan.storage-removed", key)
+  return found.sort((a, b) =>
     byCodeUnit(String(a.params.table), String(b.params.table))
   )
 }
@@ -949,6 +949,14 @@ export async function buildPlan(
   if (!read.ok) return refused([read.unsupported])
   const { state, identity } = read
   if (state.status === "corrupt") return refused([state.diagnostic])
+  // Факт `storage` бажаної моделі й застосованого стану (marker)
+  const storage = {
+    desired: storageTables(model),
+    applied:
+      state.status === "applied"
+        ? storageTables(appliedStorageSource(state.marker.snapshot))
+        : new Set<string>(),
+  }
   const markerScope =
     state.status === "applied" ? state.marker.scope : undefined
   const scope = planScope(desired.scope, markerScope)
@@ -1098,6 +1106,7 @@ export async function buildPlan(
       identity,
       targetOwners,
       rightsOrphans,
+      storage,
       promotion: transition,
       epochExists: state.status === "applied" && state.rowVersionEpoch,
       applied,
@@ -1220,7 +1229,7 @@ export async function buildPlan(
   // порадою до будь-якого кроку, а не падіння застосування
   const locked = [
     ...lockedIdentityTriggers(classified, desired.scope.provider),
-    ...storageRefusals(classified),
+    ...storageRefusals(classified, storage),
   ]
   if (locked.length > 0) return refused([...diagnostics, ...locked])
   // Зміна типу, якій сторожа не побудувати, — відмова, а не крок без
@@ -1425,6 +1434,8 @@ interface PromotionContext {
   targetOwners: { session: string; owners: ObjectOwner[] }
   /** Сироти прав цілі, прочитані до розгалуження промоції. */
   rightsOrphans: RightsOrphans
+  /** Таблиці об'єктів зі `storage`: бажана модель і застосований стан. */
+  storage: { desired: ReadonlySet<string>; applied: ReadonlySet<string> }
   promotion: Extract<TransitionVerdict, { status: "promotion" }>
   /** Чи є рядок епохи версій цілі: без нього епоху пише крок `versions`. */
   epochExists: boolean
@@ -1678,7 +1689,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
       analysis.steps,
       c.model.project.database.provider
     ),
-    ...storageRefusals(analysis.steps),
+    ...storageRefusals(analysis.steps, c.storage),
   ]
   if (locked.length > 0) return refused([...withClone, ...locked])
   const { model: cloneModel } = analysis

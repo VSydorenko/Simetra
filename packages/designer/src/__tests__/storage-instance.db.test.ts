@@ -21,6 +21,7 @@ import {
   ATTACHMENT_WRITER_ID,
   bareModel,
   blobLayer,
+  blobWithPlainSizeLayer,
   storageModel,
 } from "./storage-sql.support"
 
@@ -99,6 +100,16 @@ describe("І21: the binding of the database to the bucket", () => {
           }),
         ]
       )
+    })
+  })
+
+  it("an ordinary attribute whose column is file_size is not a storage trace", async () => {
+    await withModelTarget(await bareModel(blobLayer(false)), async (url) => {
+      const outcome = await planOn(url, await bareModel(blobWithPlainSizeLayer))
+      expect(
+        outcome.diagnostics.filter((d) => d.code.startsWith("plan.storage-"))
+      ).toEqual([])
+      expect(outcome.status).not.toBe("refused")
     })
   })
 
