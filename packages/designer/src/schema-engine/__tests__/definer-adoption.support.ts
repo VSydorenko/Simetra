@@ -27,6 +27,11 @@ import { createApplyDatabase } from ".."
 import { extractWithExecuteFacts } from "../pg-delta/adapter"
 import { withRoles } from "../../../../simetra/src/compiler/__tests__/fixtures/rights"
 import {
+  DOCS_GRANT,
+  POLICY_FUNCTION,
+  READ_POLICY,
+} from "../../../../simetra/src/compiler/__tests__/fixtures/policy-function"
+import {
   superuserClient,
   testProvider,
   testRoleFor,
@@ -581,6 +586,70 @@ export function describeDefinerAdoption(): void {
             expect(byCode(adopted, "introspect.execute-narrowed")).toEqual([])
           },
           folder({ appSchema: true })
+        )
+      }
+    )
+  })
+
+  // Функція політики (спека §5.8): `EXECUTE` виводять політики-викликачі, а
+  // прямий грант ролі команд поза призначеннями прийом прибирає з теки й
+  // називає звуженням. Що його справді відкликає план (ACL-різниця двигуна,
+  // а не `executeGrants`, який відкликає лише ролі API), — доводить живий ACL
+  // після застосування. Актор `auth.uid()` — лише профіль `supabase`.
+  describe("a policy function of debt", () => {
+    // Тека без видів скоупу: прийняті таблиці не мусять оголошувати скоуп
+    const onlyProject = () =>
+      new Map([
+        [
+          "project.meta.json",
+          JSON.stringify({
+            name: "TestApp",
+            database: { provider: testProvider() },
+          }),
+        ],
+      ])
+    it.skipIf(testProvider() !== "supabase")(
+      "a direct grant to the command role: introspect.execute-narrowed, and the plan revokes it",
+      async () => {
+        const command = PLATFORM_ROLES.command
+        const sql = [
+          "CREATE TABLE public.docs (id uuid PRIMARY KEY, team_id uuid NOT NULL);",
+          "CREATE TABLE public.members (id uuid PRIMARY KEY, team_id uuid NOT NULL, user_id uuid NOT NULL);",
+          "ALTER TABLE public.docs ENABLE ROW LEVEL SECURITY;",
+          DOCS_GRANT(),
+          POLICY_FUNCTION(),
+          READ_POLICY(),
+          `REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC, "${API.anonymous}", "${API.service}";`,
+          `GRANT EXECUTE ON FUNCTION public.f() TO "${API.user}";`,
+          `GRANT EXECUTE ON FUNCTION public.f() TO "${command}";`,
+        ].join("\n")
+        await inAdoptedTarget(
+          sql,
+          async (ctx) => {
+            const adopted = await adopt(ctx, ctx.existing)
+            expect(errors(adopted.diagnostics)).toEqual([])
+            expect(
+              byCode(adopted, "introspect.execute-narrowed").map(
+                (d) => d.params
+              )
+            ).toEqual([
+              {
+                function: "public.f",
+                role: command,
+                reason: "outside-assignments",
+              },
+            ])
+            const prepared = await compiledFolder(adopted.files)
+            expect(prepared.errors).toEqual([])
+            expect(await executeAcl(ctx.target.url, "public.f()")).toEqual(
+              [API.user, command].sort()
+            )
+            await apply(ctx.target, prepared.model!)
+            expect(await executeAcl(ctx.target.url, "public.f()")).toEqual([
+              API.user,
+            ])
+          },
+          onlyProject()
         )
       }
     )
