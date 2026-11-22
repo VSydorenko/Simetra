@@ -81,3 +81,12 @@ export function chooseConstraintName(
   }
   return candidate
 }
+
+/**
+ * Physical name of the normalized search column of a field (P2 spec §5,
+ * "Поля пошуку"): derived from the field's own physical name, which is
+ * assigned once, so it never changes with a rename.
+ */
+export function searchColumnName(column: string): string {
+  return makeObjectName(column, undefined, "search")
+}

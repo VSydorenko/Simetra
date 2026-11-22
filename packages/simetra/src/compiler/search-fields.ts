@@ -1,7 +1,6 @@
 import {
   KIND_REGISTRY,
   effectiveSearch,
-  makeObjectName,
   standardLogicalName,
   type AttributeCase,
   type PhysicalColumn,
@@ -139,12 +138,4 @@ export function searchFieldColumn<
         c.origin.elementId === undefined
       : c.origin.elementId === field.origin.elementId
   )
-}
-
-/**
- * Фізичне ім'я нормалізованої колонки — похідне від фізичного імені поля,
- * яке саме призначене раз, тож і воно не змінюється з перейменуванням.
- */
-export function searchColumnName(column: string): string {
-  return makeObjectName(column, undefined, "search")
 }

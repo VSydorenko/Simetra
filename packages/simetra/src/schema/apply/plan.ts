@@ -60,6 +60,7 @@ import {
   type BackfillInput,
   type BackfillTarget,
 } from "./backfill"
+import { aroundTypeChanges, derivedColumnKeys } from "./derived-columns"
 import {
   carrierBackfillSteps,
   createdByPlan,
@@ -1205,23 +1206,35 @@ export async function buildPlan(
     names: SAME_NAMES,
   })
   if (!filled.ok) return refused([...diagnostics, ...filled.diagnostics])
+  // 7″. Похідні колонки платформи (спека П2 §5, «Поля пошуку»): навколо зміни
+  // типу джерела — зняття й повторне створення, а їхнє зняття — не втрата
+  // даних. Похідність — факт знімка marker, а не ім'я колонки
+  const engineActions = aroundTypeChanges(
+    filled.actions,
+    model.physical.tables,
+    live.extracted.model,
+    parse
+  )
+  const derived = derivedColumnKeys(
+    state.status === "applied" ? markerTables(state.marker) : undefined
+  )
   // Зняття об'єкта, якого немає в останньому застосованому стані, — з
   // дозволом, і однойменна заміна теж (§6.6)
   const foreign = foreignChanges(
-    filled.actions,
+    engineActions,
     applied,
     live.extracted.model,
     0
   )
   const classified = classifySteps(
-    filled.actions,
+    engineActions,
     live.extracted.model,
     parse,
     0,
-    { foreign }
+    { foreign, derived }
   )
   const undeclared = undeclaredProviderTriggers(
-    filled.actions,
+    engineActions,
     foreign,
     scope.provider
   )
@@ -1260,7 +1273,7 @@ export async function buildPlan(
         state.status === "applied"
           ? { tables: markerTables(state.marker) }
           : undefined,
-        createdByPlan(filled.actions)
+        createdByPlan(engineActions)
       ),
       planSteps.length
     ),

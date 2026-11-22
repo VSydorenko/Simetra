@@ -2905,3 +2905,117 @@ describe("reverseGenerate", () => {
     })
   })
 })
+
+// Нормалізована колонка поля пошуку (спека П2 §5, «Поля пошуку») —
+// похідний об'єкт: зворотний генератор повертає її в `search.fields`, а не
+// описує власною згенерованою колонкою, що зіткнулася б із похідною.
+describe("reverseGenerate: the normalized search column", () => {
+  // Форма Postgres (`pg_get_expr`), а не текст компілятора
+  const notes = (expression: string) =>
+    model({
+      tables: [
+        table("app", "notes", {
+          columns: [
+            idColumn,
+            { name: "note", type: "text", notNull: false },
+            {
+              name: "note_search",
+              type: "text",
+              notNull: false,
+              generated: { expression },
+            },
+          ],
+          indexes: [
+            {
+              name: "notes_note_search_idx",
+              unique: false,
+              method: "btree",
+              keys: [
+                {
+                  column: "note_search",
+                  opclass: { name: "text_pattern_ops" },
+                },
+              ],
+              include: [],
+              nullsNotDistinct: false,
+            },
+          ],
+        }),
+      ],
+    })
+  const FILE = "custom-tables/Notes/Notes.meta.json"
+
+  it("becomes a search field, and the folder round-trips", async () => {
+    const live = notes(`lower((note COLLATE "default"))`)
+    const first = await reverseGenerate(live, options())
+    expect(first.diagnostics).toEqual([])
+    const data = json(first, FILE)
+    expect(data.search).toEqual({ fields: ["note"] })
+    expect((data.columns as Json[]).map((c) => c.physicalName)).toEqual([
+      "id",
+      "note",
+    ])
+    expect(data.indexes).toBeUndefined()
+
+    // Тека компілюється в ту саму колонку й індекс, і повторний introspect
+    // нічого не змінює
+    const compiled = await compile(first.files)
+    expect(compiled.diagnostics.filter((d) => d.severity === "error")).toEqual(
+      []
+    )
+    const physical = compiled.model!.physical.tables.find(
+      (t) => t.name === "notes"
+    )!
+    expect(physical.columns.map((c) => c.name)).toEqual([
+      "id",
+      "note",
+      "note_search",
+    ])
+    expect(physical.indexes.map((i) => i.name)).toEqual([
+      "notes_note_search_idx",
+    ])
+    const second = await reverseGenerate(live, {
+      ...options(first.files),
+      newId: counter(950_000),
+    })
+    expect(second.diagnostics).toEqual([])
+    expect(second.changes).toEqual([])
+  })
+
+  it("keeps the declared mode and the declared non-string fields", async () => {
+    const live = notes(`lower((note COLLATE "default"))`)
+    const first = await reverseGenerate(live, options())
+    const existing = new Map(first.files)
+    existing.set(
+      FILE,
+      JSON.stringify({
+        ...json(first, FILE),
+        search: { fields: ["id", "note"], mode: "startsWith" },
+      })
+    )
+    const again = await reverseGenerate(live, {
+      ...options(existing),
+      newId: counter(960_000),
+    })
+    expect(again.diagnostics).toEqual([])
+    expect(json(again, FILE).search).toEqual({
+      fields: ["id", "note"],
+      mode: "startsWith",
+    })
+  })
+
+  it("a column with the name but another expression stays the author's", async () => {
+    const result = await reverseGenerate(
+      notes(`upper((note COLLATE "default"))`),
+      options()
+    )
+    expect(result.diagnostics).toEqual([])
+    const data = json(result, FILE)
+    expect(data.search).toBeUndefined()
+    expect((data.columns as Json[]).map((c) => c.physicalName)).toEqual([
+      "id",
+      "note",
+      "note_search",
+    ])
+  })
+})

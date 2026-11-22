@@ -242,4 +242,62 @@ describe.concurrent("search index: derived from the search fields", () => {
       expect(again.diagnostics.map((d) => d.code)).not.toContain("apply.drift")
     })
   })
+
+  it("a type change of a searched column recomputes the derived column", async () => {
+    const before = await compiled({ [PARTY]: party() })
+    const after = await compiled({
+      [PARTY]: { ...(party() as unknown as Json), descriptionLength: 200 },
+    })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await query(
+        asSuperuser(url),
+        `insert into app.party (id, description, code)
+           values ('00000000-0000-4000-8000-000000000001', 'Ковбаса Ab', '1')`
+      )
+      const artifact = planned(await plan(url, after))
+      const [drop] = stepMatching(artifact, /DROP COLUMN "?description_search/)
+      expect(drop?.class).toBe("catalogOnly")
+      expect(artifact.requiredPermissions).toEqual([])
+
+      await applyArtifact(url, artifact, after)
+
+      expect(await searchColumnOf(url, "party", "description_search")).toEqual({
+        is_generated: "ALWAYS",
+        generation_expression: `lower(((description)::text COLLATE "default"))`,
+        indexdef: expect.stringMatching(
+          /USING btree \(description_search text_pattern_ops\)$/
+        ),
+      })
+      expect(
+        await query(url, "select description_search from app.party")
+      ).toEqual([{ description_search: "ковбаса ab" }])
+      const again = await plan(url, after)
+      expect(again.status).toBe("unchanged")
+      expect(again.diagnostics.map((d) => d.code)).not.toContain("apply.drift")
+    })
+  })
+
+  it("a field leaving search drops the derived column without permission", async () => {
+    const before = await compiled({ [PARTY]: party() })
+    const after = await compiled({
+      [PARTY]: { ...(party() as unknown as Json), search: { fields: [] } },
+    })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      const artifact = planned(await plan(url, after))
+      const [drop] = stepMatching(artifact, /DROP COLUMN "?description_search/)
+      // Значення похідної колонки обчислює база: втрати даних немає
+      expect(drop?.class).toBe("catalogOnly")
+      expect(artifact.requiredPermissions).toEqual([])
+
+      await applyArtifact(url, artifact, after)
+
+      expect(await searchColumnOf(url, "party", "description_search")).toBe(
+        undefined
+      )
+      const again = await plan(url, after)
+      expect(again.status).toBe("unchanged")
+    })
+  })
 })

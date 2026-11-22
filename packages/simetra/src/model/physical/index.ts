@@ -9,6 +9,7 @@ export { truncatedPeriodExpression, type PeriodUnit } from "./period"
 export {
   quoteIdent,
   makeObjectName,
+  searchColumnName,
   chooseConstraintName,
   clipBytes,
 } from "./pg-names"

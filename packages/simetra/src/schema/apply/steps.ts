@@ -7,6 +7,7 @@ import type {
   EngineObjectRef,
   LockedTable,
 } from "../engine"
+import { destroysOnlyDerived } from "./derived-columns"
 import { applyDiagnostic } from "./diagnostic"
 import type { DataTable } from "./promotion/data"
 import type { DriftReport } from "./drift"
@@ -236,6 +237,8 @@ interface Facts {
   createdTables: ReadonlySet<string>
   /** Тип колонки вихідного стану; `undefined` — колонки не видно або тип не розібрано. */
   columnType(table: CatalogTable, column: string): ColumnType | undefined
+  /** Похідні колонки платформи за фактом знімка (`derivedColumnKeys`). */
+  derived: ReadonlySet<string>
 }
 
 /**
@@ -412,9 +415,12 @@ function baseClass(
   stmts: readonly Node[],
   facts: Facts
 ): StepClass {
+  const lost = action.destroys.filter((id) => DATA_KINDS.has(kindOf(id)))
+  // Похідна колонка (нормалізована колонка пошуку) даних не несе: її
+  // значення обчислює база з колонки-джерела, тож її зняття — не втрата
   if (
-    action.dataLoss ||
-    action.destroys.some((id) => DATA_KINDS.has(kindOf(id)))
+    (action.dataLoss || lost.length > 0) &&
+    !destroysOnlyDerived(action.destroyed, lost.length, facts.derived)
   )
     return "destructive"
   const effects = stmts.flatMap((stmt) => statementEffects(stmt, facts))
@@ -792,13 +798,19 @@ export function backfillAction(facts: BackfillFacts): BackfillAction {
  * `noReplacement` — id кроків, для яких виняток «заміна» не діє: під
  * промоцією прийнятий об'єкт, перевизначений під тим самим ім'ям, — це
  * видалення плюс створення (спека промоції §8).
+ * `derived` — похідні колонки платформи (`derivedColumnKeys`): дія, що
+ * знімає лише їх, не `destructive`.
  */
 export function classifySteps(
   actions: readonly PlanAction[],
   target: CatalogModel,
   parse: SqlParser,
   offset = 0,
-  o: { noReplacement?: ReadonlySet<string>; foreign?: ReadonlySet<string> } = {}
+  o: {
+    noReplacement?: ReadonlySet<string>
+    foreign?: ReadonlySet<string>
+    derived?: ReadonlySet<string>
+  } = {}
 ): PlanStep[] {
   const facts: Facts = {
     indexes: target.tables.flatMap((t) =>
@@ -813,6 +825,7 @@ export function classifySteps(
       actions.flatMap((a) => a.produces.filter((id) => id.startsWith("table:")))
     ),
     columnType: columnTypeReader(parse),
+    derived: o.derived ?? new Set(),
   }
   return actions.map((action, index): PlanStep => {
     const id = stepId(offset + index)

@@ -18,6 +18,7 @@ import {
   pgEnumTypeName,
   pgTypeOf,
   quoteIdent,
+  searchColumnName,
   singletonColumn,
   standardLogicalName,
   truncatedPeriodExpression,
@@ -58,11 +59,7 @@ import { signalOutboxTable } from "../platform/outbox"
 import { storageTables } from "../platform/storage-tables"
 import { carrierDeclarations } from "../rights/facts"
 import { objectKey, type ParsedObject } from "./files"
-import {
-  resolveSearch,
-  searchColumnName,
-  searchFieldColumn,
-} from "../search-fields"
+import { resolveSearch, searchFieldColumn } from "../search-fields"
 import { COLUMN_NAME_ROLES, type ResolvedReference } from "./identity"
 
 type ForeignKey = PhysicalTable["foreignKeys"][number]
