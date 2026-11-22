@@ -135,7 +135,7 @@ function pairEquals(
   ]
 }
 
-/** Екранування шаблону `ILIKE` (типовий `ESCAPE '\'`): значення — літерал. */
+/** Екранування шаблону `ILIKE` `contains` (типовий `ESCAPE '\'`): значення — літерал. */
 const escapePattern = (text: string) => text.replace(/[\\%_]/g, "\\$&")
 
 function condition(
@@ -188,10 +188,29 @@ function condition(
       "])",
     ]
   }
-  if (op === "contains" || op === "startsWith") {
+  if (op === "contains") {
     const text = scalar(column, notNull(value, valuePath), valuePath)
-    const pattern = `${op === "contains" ? "%" : ""}${escapePattern(text)}%`
-    return [`${name} ILIKE `, { value: pattern, cast: "text" }]
+    return [
+      `${name} ILIKE `,
+      { value: `%${escapePattern(text)}%`, cast: "text" },
+    ]
+  }
+  if (op === "startsWith") {
+    const text = scalar(column, notNull(value, valuePath), valuePath)
+    // Один вираз для обох гілок (спека П4-B §4.1): нормалізована колонка поля
+    // пошуку — це й є `lower(<колонка> COLLATE "default")`, тож множина та
+    // сама, а індекс `text_pattern_ops` читається лише за нею. Явна колляція
+    // бази на обох боках: колонка `CustomTable` може мати свою (`C`). `ILIKE`
+    // тут не годиться — він не leakproof і під RLS індексом не стає.
+    const subject =
+      column.attribute?.search === undefined
+        ? `lower(${name} COLLATE "default")`
+        : qualified(column.attribute.search)
+    return [
+      `starts_with(${subject}, lower(`,
+      { value: text, cast: "text" },
+      ` COLLATE "default"))`,
+    ]
   }
   notNull(
     value,

@@ -53,6 +53,12 @@ const columns: ReadonlyMap<string, FilterColumn> = new Map([
     },
   ],
   fromAttribute("code"),
+  // Поле пошуку: нормалізована колонка — властивість реквізиту каталогу.
+  fromAttribute("code", {
+    name: "label",
+    column: "label_col",
+    search: "label_col_search",
+  }),
   fromAttribute("note"),
   fromAttribute("owner", { pgType: "uuid", castType: "uuid" }),
   fromAttribute("count", { castType: "integer" }),
@@ -109,11 +115,27 @@ describe("renderFilter", () => {
       `t."note_col" ILIKE $1::text`,
       ["%50\\%\\_\\\\%"],
     ],
+    // Без шаблону: `%`, `_` і `\` — літерали без екранування (спека П4-B §4.1).
     [
       "startsWith with pattern characters",
       cond("code", "startsWith", "%_\\"),
-      `t."code_col" ILIKE $1::text`,
-      ["\\%\\_\\\\%"],
+      `starts_with(lower(t."code_col" COLLATE "default"), ` +
+        `lower($1::text COLLATE "default"))`,
+      ["%_\\"],
+    ],
+    // Той самий вираз, що генерує нормалізовану колонку: індекс читається,
+    // а множина та сама, що й без поля пошуку.
+    [
+      "startsWith on a search field",
+      cond("label", "startsWith", "Ab"),
+      `starts_with(t."label_col_search", lower($1::text COLLATE "default"))`,
+      ["Ab"],
+    ],
+    [
+      "contains on a search field",
+      cond("label", "contains", "Ab"),
+      `t."label_col" ILIKE $1::text`,
+      ["%Ab%"],
     ],
     [
       "an enum value by its name",
