@@ -5,7 +5,11 @@ import {
   fixFiles,
   type SchemaPathResolver,
 } from "simetra/compiler"
-import { formatMetaFile, metadataIdSchema } from "simetra/model"
+import {
+  formatMetaFile,
+  formatSqlFunctionsFile,
+  metadataIdSchema,
+} from "simetra/model"
 import { guardStatement } from "../operations/fix-repair"
 import { readReferenceDomain } from "./fixtures/reference-domain"
 import {
@@ -1057,6 +1061,104 @@ describe("fixFiles: function declarations (repair mode)", () => {
     })
   })
 
+  describe("verbatim grants in a repair-class folder", () => {
+    const GRANT = "GRANT EXECUTE ON FUNCTION public.f(uuid) TO authenticated;\n"
+
+    // Мутація: вирізання грантів без режиму `repair` — у теці з помилкою класу
+    // `sql.generated-grant` не виникає, грант лишається, а підсумкова
+    // компіляція відмовляє й губить вставлений запобіжник.
+    it("cuts the grant and inserts the guard in one run", async () => {
+      const files = await acceptDebt(
+        folder(`${create("f", "BEGIN\n  PERFORM 1;\nEND")}\n${GRANT}`, [
+          declared("f", CHECK, uuid(5401)),
+        ])
+      )
+      const result = await fixFiles(files, options())
+      const after = sqlAfter(files, result as never)
+      expect(after).not.toContain("GRANT EXECUTE")
+      expect(after).toContain("PERFORM simetra.rights_require('read'")
+      expect(errorCodes(result)).toEqual([])
+      expect(result.ok).toBe(true)
+    })
+
+    it("cuts a grant of a CRLF file", async () => {
+      const files = await acceptDebt(
+        folder(
+          `${create("f", "BEGIN\r\n  PERFORM 1;\r\nEND")}\r\n${GRANT.replace("\n", "\r\n")}`,
+          [declared("f", CHECK, uuid(5402))]
+        )
+      )
+      const result = await fixFiles(files, options())
+      const after = sqlAfter(files, result as never)
+      expect(after).not.toContain("GRANT EXECUTE")
+      expect(after).toContain("PERFORM simetra.rights_require('read'")
+      expect(errorCodes(result)).toEqual([])
+    })
+  })
+
+  describe("(г) per record, not per file", () => {
+    const FUNCTIONS_PAIR = "sql/public/pair.functions.json"
+    const scopeKind = (n: number, name: string, setFunction: string) => ({
+      id: uuid(n),
+      name,
+      physicalName: `${name}_id`,
+      root: {
+        external: { schema: "public", table: `${name}s`, column: "id" },
+      },
+      setFunction: { schema: "public", name: setFunction },
+    })
+    const fn = (name: string) =>
+      `CREATE FUNCTION public.${name}() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n`
+
+    // Мутація: суд над цілим файлом (`widened = new Set(files)`) — безпечний
+    // запис лишається з `sql.declaration-platform-form`.
+    it("removes the safe record and keeps the widening one in the same file", async () => {
+      const files = metaFiles({
+        "project.meta.json": project({
+          scopeKinds: [
+            scopeKind(9411, "team", "team_ids"),
+            scopeKind(9412, "org", "org_ids"),
+          ],
+        }),
+        "catalogs/Item/Item.meta.json": catalog("Item", { scope: "none" }),
+        "sql/public/pair.sql": fn("team_ids") + fn("org_ids"),
+        [FUNCTIONS_PAIR]: formatSqlFunctionsFile({
+          functions: [
+            {
+              id: uuid(9413),
+              function: { name: "team_ids" },
+              callers: ["service"],
+            },
+            {
+              id: uuid(9414),
+              function: { name: "org_ids" },
+              callers: ["user", "command", "service"],
+            },
+          ],
+        }),
+      })
+      files.delete(SCOPE_FUNCTIONS_FILE)
+      const result = await fixFiles(files, options())
+      const next = applyChanges(files, result.changes).get(FUNCTIONS_PAIR)!
+      expect(
+        (
+          JSON.parse(next) as { functions: { function: { name: string } }[] }
+        ).functions.map((f) => f.function.name)
+      ).toEqual(["team_ids"])
+      const warnings = result.diagnostics.filter(
+        (d) => d.code === "sql.declaration-platform-form-widens"
+      )
+      expect(warnings.map((d) => [d.params?.name, d.params?.declined])).toEqual(
+        [["team_ids", 1]]
+      )
+      expect(
+        result.diagnostics
+          .filter((d) => d.code === "sql.declaration-platform-form")
+          .map((d) => d.params?.name)
+      ).toEqual(["team_ids"])
+    })
+  })
+
   describe("(д) ALTER DEFAULT PRIVILEGES (Б6)", () => {
     const ADP_FILE = "sql/app/adp.sql"
     const FNS = "sql/public/fns.sql"
@@ -1132,6 +1234,38 @@ describe("fixFiles: function declarations (repair mode)", () => {
       )
       expect(adpErrors(result)).toEqual([])
       expect(after.get(ADP_FILE)).toBe(`${tables}\r\n`)
+    })
+
+    describe("a decoy copy of the unit before it on the same line (locateUnit)", () => {
+      const ADP =
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT EXECUTE ON FUNCTIONS TO anon"
+
+      // Мутація: `locateUnit` бере першу копію рядка без звірки решти — виріз
+      // потрапляє в коментар чи літерал.
+      it("a comment copy: no edit instead of an edit in the wrong place", async () => {
+        const sql = `/* ${ADP} */ ${ADP};\n`
+        const { result, after } = await run(sql)
+        expect(after.get(ADP_FILE)).toBe(sql)
+        expect(adpErrors(result)).toHaveLength(1)
+      })
+
+      it("a string literal copy: no edit instead of an edit in the wrong place", async () => {
+        const sql = `COMMENT ON SCHEMA app IS '${ADP}'; ${ADP};\n`
+        const { result, after } = await run(sql)
+        expect(after.get(ADP_FILE)).toBe(sql)
+        expect(adpErrors(result)).toHaveLength(1)
+      })
+
+      // Мутація: перевірку решти символів одиниці прибрано — копія першого
+      // рядка в коментарі приймається за початок багаторядкової одиниці.
+      it("a comment copy of the first line of a multi-line unit is not its start", async () => {
+        const head = "ALTER DEFAULT PRIVILEGES IN SCHEMA app"
+        const { result, after } = await run(
+          `/* ${head} */ ${head}\n  GRANT EXECUTE ON FUNCTIONS TO anon;\n`
+        )
+        expect(after.get(ADP_FILE)).toBe(`/* ${head} */\n`)
+        expect(adpErrors(result)).toEqual([])
+      })
     })
 
     it("cuts an ADP and inserts a guard in the same file", async () => {

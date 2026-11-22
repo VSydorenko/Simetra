@@ -412,12 +412,15 @@ export function declaredFunctionStates(
 ): DeclaredFunctionState[] {
   return declared.map(({ declaration, unit, key }) => {
     const { check, callers } = declaration
-    const base = {
-      schema: key.schema,
-      name: key.name,
-      callers,
-      purposes: executePurposes.get(unit.identity) ?? callers,
+    // Every declared function has an execute group; a missing one is an
+    // internal error, not a reason to show the callers as the grants.
+    const purposes = executePurposes.get(unit.identity)
+    if (purposes === undefined) {
+      throw new Error(
+        `internal: no execute purposes for ${key.schema}.${key.name}`
+      )
     }
+    const base = { schema: key.schema, name: key.name, callers, purposes }
     if (check === undefined) return { ...base, state: "none" }
     if (!isSecurityDefiner(unit, units))
       return { ...base, check, state: "none" }

@@ -5,6 +5,7 @@ import {
   compile,
   declareFunction,
   declareFunctionInput,
+  fixFiles,
   type DeclareFunctionInput,
   type SchemaPathResolver,
 } from "simetra/compiler"
@@ -14,7 +15,14 @@ import { guardInsertionPoint } from "../sql/guard-of"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { loadPlpgsqlParser, type PlpgsqlParser } from "../sql/plpgsql"
 import type { VerbatimUnit } from "../sql/units"
-import { uuid } from "./helpers"
+import {
+  acceptDebt,
+  catalog,
+  metaFiles,
+  project,
+  SCOPE_FUNCTIONS_FILE,
+  uuid,
+} from "./helpers"
 import { withRoles } from "./fixtures/rights"
 
 const schemaPath: SchemaPathResolver = (file, schemaFile) =>
@@ -348,20 +356,106 @@ describe("declareFunction: the repair class", () => {
     expect(codesOf(result)).toContain("operation.input-invalid")
   })
 
-  // Виняток діє лише на ціль: нова помилка класу іншої функції відмовляє.
-  it("another function's new repair-class error is refused", async () => {
+  // Ціль без `check` дістає нову помилку класу `check-missing`: відмова.
+  it("the target declared without a check is refused with check-missing", async () => {
     const files = folder(definer("f") + definer("g"), [
       { id: uuid(883_003), function: { name: "g" }, callers: ["service"] },
     ])
     expect((await compile(files, { repair: true })).model).toBeDefined()
-    // Заміна `g` не чіпає `f`, але додає `check-missing` самій `g` — це ціль,
-    // тож перевіряємо іншу: недекларована `f` лишається, нових ключів немає.
+    // Недекларована `f` лишається як була; нова помилка — `check-missing` `g`.
     const result = await declare(files, {
       function: { name: "g" },
       callers: ["user"],
     })
     notWritten(result)
     expect(codesOf(result)).toContain("sql.declaration-check-missing")
+  })
+})
+
+describe("declareFunction: other records and verbatim grants", () => {
+  const TEAM_SQL = "sql/public/team.sql"
+  const TEAM_FUNCTIONS = "sql/public/team.functions.json"
+  const OTHER_SQL = "sql/public/other.sql"
+  const OTHER_FUNCTIONS = "sql/public/other.functions.json"
+  const teamFiles = (callers: string[]) => {
+    const files = metaFiles({
+      "project.meta.json": project({
+        scopeKinds: [
+          {
+            id: uuid(9401),
+            name: "team",
+            physicalName: "team_id",
+            root: {
+              external: { schema: "public", table: "teams", column: "id" },
+            },
+            setFunction: { schema: "public", name: "team_ids" },
+          },
+        ],
+      }),
+      "catalogs/Item/Item.meta.json": catalog("Item", { scope: "none" }),
+      [TEAM_SQL]: `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n`,
+      [TEAM_FUNCTIONS]: JSON.stringify({
+        functions: [
+          { id: uuid(9402), function: { name: "team_ids" }, callers },
+        ],
+      }),
+      [OTHER_SQL]: invoker("other"),
+    })
+    // Функція множини — авторська (`team.sql`): спільний файл фікстури
+    // створив би другу.
+    files.delete(SCOPE_FUNCTIONS_FILE)
+    return files
+  }
+
+  // Мутація: `declineWidening` вимкнено — декларація чужої функції видаляє
+  // запис `team_ids`, який `fix` свідомо лишив, і `EXECUTE` розширюється.
+  it("keeps a record whose platform form would widen EXECUTE", async () => {
+    const files = teamFiles(["service"])
+    const result = await declare(files, {
+      function: { name: "other" },
+      callers: ["service"],
+    })
+    expect(result.changes.map((c) => c.path)).toEqual([OTHER_FUNCTIONS])
+    expect(applyChanges(files, result.changes).get(TEAM_FUNCTIONS)).toBe(
+      files.get(TEAM_FUNCTIONS)
+    )
+    const [warning] = result.diagnostics.filter(
+      (d) => d.code === "sql.declaration-platform-form-widens"
+    )
+    expect(warning!.params).toMatchObject({ name: "team_ids", declined: 1 })
+    expect(result.written).toBe(true)
+  })
+
+  it("removes a record the platform form covers with the same callers", async () => {
+    const result = await declare(teamFiles(["user", "command", "service"]), {
+      function: { name: "other" },
+      callers: ["service"],
+    })
+    expect(
+      result.changes.find((c) => c.path === TEAM_FUNCTIONS)?.content
+    ).toBeNull()
+  })
+
+  const REVOKE_GRANT =
+    "REVOKE EXECUTE ON FUNCTION public.f(uuid) FROM PUBLIC;\nGRANT EXECUTE ON FUNCTION public.f(uuid) TO authenticated;\n"
+
+  // Мутація: крок вирізу грантів у `declareFunction` прибрано.
+  it("cuts the verbatim grants of the target, then fix has nothing to do", async () => {
+    const files = await acceptDebt(folder(definer("f") + REVOKE_GRANT))
+    const result = await declare(files, {
+      function: { name: "f" },
+      callers: ["user"],
+      check: CHECK,
+    })
+    expect(result.written).toBe(true)
+    const after = applyChanges(files, result.changes)
+    expect(after.get(SQL)).not.toContain("GRANT EXECUTE")
+    expect(errorsOf(result).map((d) => d.code)).toEqual([
+      "sql.declaration-check-not-applied",
+    ])
+    const fixed = await fixFiles(after, options())
+    expect(errorsOf(fixed)).toEqual([])
+    expect(fixed.ok).toBe(true)
   })
 })
 

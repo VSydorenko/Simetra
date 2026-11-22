@@ -85,8 +85,12 @@ function insertionText(
  * `statementPositions` на файлі з CRLF чи з блоками рухів до оригіналу не
  * підходять: початок шукається за рядком одиниці, кінець — проходом із
  * пропуском `\r` перед `\n`. `at` — зсув у `unit.sql`, який треба перенести.
+ * Копія першого рядка одиниці в коментарі чи рядковому літералі того ж рядка
+ * (до справжнього початку) не підміняє місця: кандидат береться лише коли
+ * увесь текст одиниці збігся від нього, а коли таких кілька — відмова, бо
+ * правка не в тому місці гірша за відсутню.
  */
-function locateUnit(
+export function locateUnit(
   text: string,
   unit: { line: number; sql: string },
   at = 0
@@ -97,19 +101,38 @@ function locateUnit(
     if (newline < 0) return undefined
     lineStart = newline + 1
   }
-  const start = text.indexOf(unit.sql.split("\n")[0]!, lineStart)
-  if (start < 0) return undefined
+  const lineEnd = text.indexOf("\n", lineStart)
+  const first = unit.sql.split("\n")[0]!
+  const found: { start: number; end: number; at: number }[] = []
+  for (
+    let from = text.indexOf(first, lineStart);
+    from >= 0 && (lineEnd < 0 || from < lineEnd);
+    from = text.indexOf(first, from + 1)
+  ) {
+    const place = matchUnit(text, from, unit.sql, at)
+    if (place !== undefined) found.push(place)
+  }
+  return found.length === 1 ? found[0] : undefined
+}
+
+/** Прохід `sql` по тексту від `start` із пропуском `\r` перед `\n`. */
+function matchUnit(
+  text: string,
+  start: number,
+  sql: string,
+  at: number
+): { start: number; end: number; at: number } | undefined {
   let i = start
   let mapped = start
-  for (let j = 0; j < unit.sql.length; j++) {
+  for (let j = 0; j < sql.length; j++) {
     if (j === at) mapped = i
-    if (text[i] === "\r" && text[i + 1] === "\n" && unit.sql[j] === "\n") {
+    if (text[i] === "\r" && text[i + 1] === "\n" && sql[j] === "\n") {
       i++
     }
-    if (text[i] !== unit.sql[j]) return undefined
+    if (text[i] !== sql[j]) return undefined
     i++
   }
-  if (at >= unit.sql.length) mapped = i
+  if (at >= sql.length) mapped = i
   return { start, end: i, at: mapped }
 }
 

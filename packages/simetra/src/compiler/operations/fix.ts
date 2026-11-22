@@ -51,12 +51,11 @@ import { acceptsRepair } from "./refuse"
 import {
   cutDefaultPrivileges,
   insertGuards,
+  locateUnit,
   withFunctionIds,
 } from "./fix-repair"
 import { toPlatformForms } from "./platform-forms"
-import { loadSqlParser } from "../sql/parse"
 import { applyEdits, type TextEdit } from "../sql/rewrite/renames"
-import { statementPositions } from "../sql/units"
 import { changesBetween } from "./changes"
 import { cut, mergeDeletions } from "./text-edits"
 import type { OperationResult } from "./types"
@@ -597,7 +596,7 @@ export function sqlDebtText(
  * перелік уже порожній. Перелік не тієї форми чи тека, чий борг не відомий,
  * лишають файл як є: причину назве компіляція.
  */
-async function narrowDebt(
+export async function narrowDebt(
   files: ReadonlyMap<string, string>,
   schemaPath: SchemaPathResolver
 ): Promise<Map<string, string>> {
@@ -661,20 +660,14 @@ export async function fixFiles(
   const baseline = await compile(prepared, { repair: true })
   const accepted = repairKeys(baseline.diagnostics)
 
-  // (г) Перехід у форму платформи пише лише файли без попередження про
-  // розширення: автоматичний ремонт права не розширює.
-  const forms = toPlatformForms(prepared)
-  const widened = new Set(forms.diagnostics.map((d) => d.file))
-  // Файл лишено: попередження каже, що декларацію не видалено.
-  const declined = forms.diagnostics.map((d) =>
-    diagnostic("sql.declaration-platform-form-widens", d.file, d.pointer, {
-      ...d.params,
-      declined: 1,
-    })
-  )
+  // (г) Перехід у форму платформи: запис, що розширив би `EXECUTE`, лишається
+  // (автоматичний ремонт права не розширює), попередження каже, що
+  // декларацію не видалено.
+  const forms = toPlatformForms(prepared, { declineWidening: true })
+  const declined = forms.diagnostics
   let repaired = new Map(prepared)
   for (const path of prepared.keys()) {
-    if (!path.endsWith(FUNCTIONS_FILE_SUFFIX) || widened.has(path)) continue
+    if (!path.endsWith(FUNCTIONS_FILE_SUFFIX)) continue
     const next = forms.files.get(path)
     if (next === undefined) repaired.delete(path)
     else repaired.set(path, next)
@@ -728,15 +721,16 @@ export async function fixFiles(
  * лише суперечить їй і виправлення в нього одне. Виріз — той самий, що в
  * промоції; файл, у якому лишились самі пробіли, видаляється.
  */
-async function withoutGeneratedGrants(
+export async function withoutGeneratedGrants(
   files: Map<string, string>
 ): Promise<Map<string, string>> {
-  const flagged = (await compile(files)).diagnostics.filter(
+  // Режим ремонту: у теці з помилками класу ремонту стадії до моделі
+  // закриті, і `sql.generated-grant` без нього не виникає зовсім.
+  const flagged = (await compile(files, { repair: true })).diagnostics.filter(
     (d) => d.code === "sql.generated-grant"
   )
   if (flagged.length === 0) return files
   const units = await verbatimUnits(files)
-  const parse = await loadSqlParser()
   const edits = new Map<string, TextEdit[]>()
   for (const d of flagged) {
     const unit = units.find(
@@ -754,9 +748,7 @@ async function withoutGeneratedGrants(
       !ownsWholeGrant(d.params?.object, unit.name)
     )
       continue
-    const position = statementPositions(text, parse).find(
-      (p) => p.line === unit.line && text.slice(p.start, p.end) === unit.sql
-    )
+    const position = locateUnit(text, unit)
     if (position === undefined) continue
     edits.set(d.file, [
       ...(edits.get(d.file) ?? []),

@@ -14,7 +14,12 @@ import { qualifiedName } from "../sql/identity"
 import { loadSqlParser } from "../sql/parse"
 import { loadPlpgsqlParser } from "../sql/plpgsql"
 import { FUNCTION_CLASSES } from "../sql/units"
-import { completeAndCompile, type CompletionOptions } from "./fix"
+import {
+  completeAndCompile,
+  narrowDebt,
+  withoutGeneratedGrants,
+  type CompletionOptions,
+} from "./fix"
 import type { DeclareFunctionInput } from "./inputs"
 import { toPlatformForms } from "./platform-forms"
 import { compileInput, refused } from "./refuse"
@@ -125,9 +130,11 @@ export async function declareFunction(
           }),
         ]
 
-  // Інші записи, які правка сама зробила формами платформи, зникають тим самим
-  // переходом, що в `add`; ціль формою бути не може (відмова вище).
-  const after = toPlatformForms(changed)
+  // Інші записи, що вже стали формами платформи, переходять тим самим
+  // правилом, що в (г) `fix`: запис, перехід якого розширив би `EXECUTE`,
+  // лишається — це рішення людини, а не побічний наслідок чужої декларації.
+  // Ціль формою бути не може (відмова вище).
+  const after = toPlatformForms(changed, { declineWidening: true })
 
   // Виняток цілі: чи вставить `fix` запобіжник у це тіло.
   const [parse, plpgsql] = await Promise.all([
@@ -144,9 +151,19 @@ export async function declareFunction(
     d.params?.name === name &&
     d.params?.reason === "firstStatement"
 
+  // Декларація віддає ACL функції платформі: дослівні гранти цілі стають
+  // `sql.generated-grant`, тож їх вирізано тим самим кроком, що в `fix`
+  // (лише цілі оператори, чужий грант у спільному операторі лишається).
+  const narrowed = await narrowDebt(after.files, o.schemaPath)
+  const withoutGrants = await withoutGeneratedGrants(narrowed)
+  const prepared =
+    withoutGrants === narrowed
+      ? after.files
+      : await narrowDebt(withoutGrants, o.schemaPath)
+
   return completeAndCompile(
     files,
-    after.files,
+    prepared,
     o,
     new Set([path]),
     clean.accepted,

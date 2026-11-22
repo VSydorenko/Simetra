@@ -581,7 +581,8 @@ async function seedGuardGrid(client: pg.Client): Promise<Seed> {
 // Запобіжник, який вставляє `fix` (Д4, Р3), а не написаний рукою: RPC без
 // запобіжника й декларація з `check.row` → `fixFiles` вставляє виклик → модель
 // розгортається → Postgres судить виклики. Мутація: `check.row` ігнорується
-// (ціль `NULL`) — (б) і (в) червоні: будь-який рядок відмовляє.
+// (ціль `NULL`) падає вже на перевірках у `beforeAll` — тексту вставленого
+// виклику і чистої компіляції, — а не в (б)/(в).
 describe("the call guard inserted by fix, in Postgres", () => {
   const tx = describeTransaction()
   let ids: Seed = {}

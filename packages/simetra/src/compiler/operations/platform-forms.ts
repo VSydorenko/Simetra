@@ -26,9 +26,15 @@ export interface PlatformFormTransition {
  * декларації, перехід відкриває функцію ролям, яких автор не називав, —
  * попередження `sql.declaration-platform-form-widens` з переліком доданих
  * ролей. Функція значень виміру не розширює ніколи: її призначення порожні.
+ *
+ * `declineWidening` — режим автоматичного ремонту (`fix`, `declare-function`):
+ * автоматика права не розширює, тож запис, перехід якого розширив би
+ * `EXECUTE`, лишається в файлі (з попередженням `declined`), а решта записів
+ * того ж файлу переходить як звичайно — суд над кожним записом окремо.
  */
 export function toPlatformForms(
-  files: ReadonlyMap<string, string>
+  files: ReadonlyMap<string, string>,
+  { declineWidening = false }: { declineWidening?: boolean } = {}
 ): PlatformFormTransition {
   const result = new Map(files)
   const diagnostics: Diagnostic[] = []
@@ -61,8 +67,10 @@ export function toPlatformForms(
             function: `${schema}.${name}`,
             form: form.form,
             roles: added.join(", "),
+            ...(declineWidening ? { declined: 1 } : {}),
           })
         )
+        if (declineWidening) kept.push(declaration)
       }
     }
     if (kept.length === parsed.functions.length) continue
