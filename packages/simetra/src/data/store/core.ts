@@ -31,6 +31,7 @@ import {
   tracked,
   type CorePart,
   type CoreReadItem,
+  type CoreReadResult,
   type CoreSource,
   type StoreSource,
 } from "./source"
@@ -502,115 +503,153 @@ export function createCore(options: {
     },
     onRights: (item) => acceptRights(item),
   })
+  // Читання в польоті за об'єктами, рядки яких може записати їхній план
+  // (§8.4, правило 2): запис відпущеного каналу тримається, поки таке
+  // читання летить. Одна точка обліку — відправка частин, одна точка зняття —
+  // `finally` того самого читання.
+  const pendingWrites = new Map<ObjectName, number>()
   const source: StoreSource = {
     close: () => batcher.close(),
     refuse: (object) => batcher.refuse?.(object),
     run: (operation) => batcher.run(operation),
-    async read(parts, caller) {
-      // Старт читання частин виклику: правило першого знімка (Р5а) порівнює
-      // його з епохою застосування знімка.
-      const startEpoch = session.epochs.now()
-      // Частина без об'єкта (`version`) несумісності не має.
-      const isLive = (part: (typeof parts)[number]) => {
-        if (part.type !== "query") return true
-        const { kind, name } = part.query.object
-        return !staleObjects.has(`${kind}.${name}`)
-      }
-      const refused = (part: (typeof parts)[number]): CoreReadItem => {
-        return {
-          ok: false,
-          error: {
-            code: "command.stale-client",
-            object: (part as Extract<typeof part, { type: "query" }>).query
-              .object,
-          },
+    read: (parts, caller) => {
+      const plan = writesOf(parts)
+      for (const object of plan)
+        pendingWrites.set(object, (pendingWrites.get(object) ?? 0) + 1)
+      return dispatch(parts, caller).finally(() => {
+        for (const object of plan) {
+          const left = pendingWrites.get(object)! - 1
+          if (left > 0) pendingWrites.set(object, left)
+          else pendingWrites.delete(object)
         }
-      }
-      // Несумісна ціль `include` (§10) не просить `include`: ціль — не об'єкт
-      // частини, її мітку звіряємо окремо (Р8, І9); рядки, що вже прийшли,
-      // відкидає `applyIncluded` на мить застосування.
-      const targetOf = (part: (typeof parts)[number], attribute: string) => {
-        if (part.type !== "query") return undefined
-        const { kind, name } = part.query.object
-        const ref = index.byRef
-          .get(`${kind}.${name}`)
-          ?.attributes.find((a) => a.name === attribute)?.ref
+      })
+    },
+  }
+  // Об'єкти, рядки яких можуть записати частини читання: об'єкт частини й
+  // цілі її `include`.
+  const writesOf = (parts: readonly CorePart[]): Set<ObjectName> => {
+    const objects = new Set<ObjectName>()
+    for (const part of parts) {
+      if (part.type !== "query") continue
+      const { kind, name } = part.query.object
+      const object = `${kind}.${name}` as ObjectName
+      objects.add(object)
+      const entry = index.byRef.get(object)
+      const include = "include" in part.query ? part.query.include : undefined
+      for (const attribute of include ?? []) {
+        const ref = entry?.attributes.find((a) => a.name === attribute)?.ref
         const target =
           ref === undefined ? undefined : index.byId.get(ref.object)
-        return target === undefined
-          ? undefined
-          : `${target.kind}.${target.name}`
+        if (target !== undefined)
+          objects.add(`${target.kind}.${target.name}` as ObjectName)
       }
-      const withLiveInclude = (part: (typeof parts)[number]) => {
-        if (part.type !== "query" || !("include" in part.query)) return part
-        const { include, ...rest } = part.query
-        const live = (include ?? []).filter((attribute) => {
-          const target = targetOf(part, attribute)
-          return target === undefined || !staleObjects.has(target)
-        })
-        return {
-          ...part,
-          query: live.length === 0 ? rest : { ...rest, include: live },
-        } as typeof part
+    }
+    return objects
+  }
+  async function dispatch(
+    parts: readonly CorePart[],
+    caller: Subset | undefined
+  ): Promise<CoreReadResult> {
+    // Старт читання частин виклику: правило першого знімка (Р5а) порівнює
+    // його з епохою застосування знімка.
+    const startEpoch = session.epochs.now()
+    // Частина без об'єкта (`version`) несумісності не має.
+    const isLive = (part: (typeof parts)[number]) => {
+      if (part.type !== "query") return true
+      const { kind, name } = part.query.object
+      return !staleObjects.has(`${kind}.${name}`)
+    }
+    const refused = (part: (typeof parts)[number]): CoreReadItem => {
+      return {
+        ok: false,
+        error: {
+          code: "command.stale-client",
+          object: (part as Extract<typeof part, { type: "query" }>).query
+            .object,
+        },
       }
-      const sent = parts.map(isLive)
-      const forward = parts.filter((_, slot) => sent[slot]).map(withLiveInclude)
-      // Перший пакет рантайму несе `rights` без `known` (Р1); частину
-      // додає ядро, тож її результат викликач не бачить.
-      const injected =
-        rightsEnabled &&
-        !rightsFirstSent &&
-        !forward.some((part) => part.type === "rights")
-      if (injected) forward.unshift({ type: "rights" })
-      const rightsAt = forward.findIndex((part) => part.type === "rights")
-      let answered: { items: CoreReadItem[] } = { items: [] }
-      if (rightsAt < 0) {
-        if (forward.length > 0) answered = await batcher.read(forward)
-      } else {
-        // Знімок один за раз: відправка бере `rightsEpoch` і `known` (Р4).
-        // `rightsEpoch` лише впорядковує знімки між собою, а частина `rights`
-        // летить одна й черга слотів — FIFO, тож епоха постановки дає той
-        // самий порядок, що й епоха відправки. Строк (Р2) — інша річ: його
-        // рахує `onRightsSent` збирача від справжньої відправки.
-        const sentRights = {
-          token: session.token(),
-          epoch: session.epochs.next(),
-          known: rights?.rightsVersion,
-        }
-        forward[rightsAt] =
-          sentRights.known === undefined
-            ? { type: "rights" }
-            : { type: "rights", known: sentRights.known }
-        rightsFirstSent = true
-        rightsFlying = true
-        rightsSent = sentRights
-        try {
-          answered = await batcher.read(forward)
-        } catch (error) {
-          if (sentRights.token.valid) log({ kind: "rights-failed" })
-          throw error
-        } finally {
-          rightsFlying = false
-          // Відповідь без заміни знімка нічого не комітить: строк, що повернувся
-          // після польоту, планувальнику треба показати самому.
-          if (!defects.has("scheduler-no-reschedule")) scheduler.request()
-          if (rightsTail) {
-            rightsTail = false
-            core.requestRights()
-          }
-        }
-        if (injected) answered = { items: answered.items.slice(1) }
-      }
-      let next = 0
-      const items = parts.map((part, slot): CoreReadItem => {
-        if (!sent[slot]) return refused(part)
-        const item = answered.items[next++]!
-        // Об'єкт став несумісним, поки відповідь летіла: вона вже не діє.
-        return isLive(part) ? item : refused(part)
+    }
+    // Несумісна ціль `include` (§10) не просить `include`: ціль — не об'єкт
+    // частини, її мітку звіряємо окремо (Р8, І9); рядки, що вже прийшли,
+    // відкидає `applyIncluded` на мить застосування.
+    const targetOf = (part: (typeof parts)[number], attribute: string) => {
+      if (part.type !== "query") return undefined
+      const { kind, name } = part.query.object
+      const ref = index.byRef
+        .get(`${kind}.${name}`)
+        ?.attributes.find((a) => a.name === attribute)?.ref
+      const target = ref === undefined ? undefined : index.byId.get(ref.object)
+      return target === undefined ? undefined : `${target.kind}.${target.name}`
+    }
+    const withLiveInclude = (part: (typeof parts)[number]) => {
+      if (part.type !== "query" || !("include" in part.query)) return part
+      const { include, ...rest } = part.query
+      const live = (include ?? []).filter((attribute) => {
+        const target = targetOf(part, attribute)
+        return target === undefined || !staleObjects.has(target)
       })
-      if (rightsEnabled) noteAnswered(parts, items, startEpoch, caller)
-      return { items }
-    },
+      return {
+        ...part,
+        query: live.length === 0 ? rest : { ...rest, include: live },
+      } as typeof part
+    }
+    const sent = parts.map(isLive)
+    const forward = parts.filter((_, slot) => sent[slot]).map(withLiveInclude)
+    // Перший пакет рантайму несе `rights` без `known` (Р1); частину
+    // додає ядро, тож її результат викликач не бачить.
+    const injected =
+      rightsEnabled &&
+      !rightsFirstSent &&
+      !forward.some((part) => part.type === "rights")
+    if (injected) forward.unshift({ type: "rights" })
+    const rightsAt = forward.findIndex((part) => part.type === "rights")
+    let answered: { items: CoreReadItem[] } = { items: [] }
+    if (rightsAt < 0) {
+      if (forward.length > 0) answered = await batcher.read(forward)
+    } else {
+      // Знімок один за раз: відправка бере `rightsEpoch` і `known` (Р4).
+      // `rightsEpoch` лише впорядковує знімки між собою, а частина `rights`
+      // летить одна й черга слотів — FIFO, тож епоха постановки дає той
+      // самий порядок, що й епоха відправки. Строк (Р2) — інша річ: його
+      // рахує `onRightsSent` збирача від справжньої відправки.
+      const sentRights = {
+        token: session.token(),
+        epoch: session.epochs.next(),
+        known: rights?.rightsVersion,
+      }
+      forward[rightsAt] =
+        sentRights.known === undefined
+          ? { type: "rights" }
+          : { type: "rights", known: sentRights.known }
+      rightsFirstSent = true
+      rightsFlying = true
+      rightsSent = sentRights
+      try {
+        answered = await batcher.read(forward)
+      } catch (error) {
+        if (sentRights.token.valid) log({ kind: "rights-failed" })
+        throw error
+      } finally {
+        rightsFlying = false
+        // Відповідь без заміни знімка нічого не комітить: строк, що повернувся
+        // після польоту, планувальнику треба показати самому.
+        if (!defects.has("scheduler-no-reschedule")) scheduler.request()
+        if (rightsTail) {
+          rightsTail = false
+          core.requestRights()
+        }
+      }
+      if (injected) answered = { items: answered.items.slice(1) }
+    }
+    let next = 0
+    const items = parts.map((part, slot): CoreReadItem => {
+      if (!sent[slot]) return refused(part)
+      const item = answered.items[next++]!
+      // Об'єкт став несумісним, поки відповідь летіла: вона вже не діє.
+      return isLive(part) ? item : refused(part)
+    })
+    if (rightsEnabled) noteAnswered(parts, items, startEpoch, caller)
+    return { items }
   }
 
   // Знімок прав сесії (Р1, Р4, Р8): стан і одноразовий запит у польоті.
@@ -1613,7 +1652,7 @@ export function createCore(options: {
     defects,
     now,
     hiddenKeys,
-    keyJobs: new Map(),
+    pendingWrites: (object) => pendingWrites.get(object) ?? 0,
     schedule,
     journal: {
       erase: (object, key) => overlay.erase(object, key),

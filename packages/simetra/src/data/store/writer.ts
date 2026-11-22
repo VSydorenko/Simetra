@@ -86,10 +86,11 @@ export interface WriterContext extends ReaderContext {
   /** The monotonic clock in ms (`performance.now()`; a test substitutes it). */
   readonly now: () => number
   /**
-   * The signal receiver's key reads in flight, by object: like a view read
-   * in flight, each may still write rows of a released channel (§8.4).
+   * Reads in flight whose plan may write rows of the object: own rows,
+   * `include` targets, receiver keys, pages — counted at dispatch from the
+   * parts of the read (§8.4, rule 2).
    */
-  readonly keyJobs: Map<ObjectName, number>
+  readonly pendingWrites: (object: ObjectName) => number
   /**
    * Keys `Writer.hide` hid, by object: the core re-reads the views that hold
    * them once the `commit` ends (`revalidateHolders`), not inside it.
@@ -274,18 +275,16 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
   // Запис відпущеного каналу забувається, лише коли сховище не тримає жодного
   // його рядка І жоден живий вигляд об'єкта не лишається ним непідтвердженим:
   // порожній вигляд, що пропустив створення в розриві, інакше став би свіжим.
-  // Запис відпущеного каналу тримається, поки сховище має його рядки чи
-  // летить читання, що їх ще запише (вигляд, сторінка, ключі приймача):
-  // інакше рядок із читання до відпускання проживе період без нагляду, а
-  // повторна підписка нічого не позначить (§8.4, правило 2).
+  // Запис тримається і поки летить читання, план якого може записати рядки
+  // об'єкта (власні рядки, цілі `include`, ключі приймача, сторінки): одне
+  // джерело — облік у мить відправки, а не перелік шляхів запису. Інакше
+  // рядок із читання до відпускання проживе період без нагляду, а повторна
+  // підписка нічого не позначить (§8.4, правило 2).
   const forgettable = (o: ObjectState, channel: string): boolean =>
     !o.rows.holdsChannel(channelOf(o.entry), channel) &&
-    (ctx.keyJobs.get(o.name) ?? 0) === 0 &&
-    subsetsOf(ctx, o).every(
-      (s) =>
-        !inFlight(s) &&
-        s.paging.size === 0 &&
-        ctx.session.epochs.channelProven(channel, s.okReadEpoch ?? -1)
+    ctx.pendingWrites(o.name) === 0 &&
+    subsetsOf(ctx, o).every((s) =>
+      ctx.session.epochs.channelProven(channel, s.okReadEpoch ?? -1)
     )
   const forgetChannel = (channel: string) => {
     ctx.session.epochs.forget(channel)

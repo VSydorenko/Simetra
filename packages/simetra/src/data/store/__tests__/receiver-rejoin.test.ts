@@ -967,9 +967,10 @@ describe("held and released channels (liveness, R-a…R-c)", () => {
   const replaceRights = async (
     h: Pick<Opened, "fake" | "core">,
     scopeSets: readonly string[],
-    reads?: readonly string[]
+    reads?: readonly string[],
+    snapshot: typeof rightsOf = rightsOf
   ) => {
-    h.fake.rightsSnapshot = rightsOf(scopeSets, reads)
+    h.fake.rightsSnapshot = snapshot(scopeSets, reads)
     // Версія не повторює ні попередньої, ні початкової («1»×64): інакше
     // заміни не буде.
     h.fake.rightsVersion = (version++).toString(16).padStart(64, "0")
@@ -1246,6 +1247,79 @@ describe("held and released channels (liveness, R-a…R-c)", () => {
     await replaceRights(h, [S, S2], [S, S2])
     expect(h.transport.subscribed().has(channel)).toBe(true)
     expect(view.getSnapshot().rows.map((r) => r.state)).toEqual(["stale"])
+  })
+
+  // §8.4, правило 2, з цілями `include`: читання вигляду іншого об'єкта, що
+  // включає організацію, ще запише її рядок — запис каналу організації
+  // тримається, хоч її власний вигляд рядків не має.
+  const withOrgRights = (
+    scopeSets: readonly string[],
+    reads: readonly string[] = scopeSets
+  ) => ({
+    ...rightsOf(scopeSets, reads),
+    rights: reads.flatMap((scope) => [
+      read(scope),
+      { ...read(scope), object: "organization" },
+    ]),
+  })
+  const orgChannelOf = (scope: string) =>
+    channelTopic({
+      kind: "changes",
+      scopeKindId: SCOPE_KIND_ID,
+      scope,
+      object: org.id,
+    })
+  const includeTarget = async (answerBeforeRelease: boolean) => {
+    const h = harness([S, S2])
+    h.fake.rightsSnapshot = withOrgRights([S, S2])
+    h.fake.insert(ORG, { ref: S })
+    h.fake.insert(TASK, taskValues(1, { org: S }))
+    const orgChannel = orgChannelOf(S)
+    // Власний вигляд організації без рядків: канал утримується, а рядків
+    // каналу в сховищі немає.
+    h.core
+      .view({ kind: "keys", object: ORG, keys: [key(77)] })
+      .subscribe(() => {})
+    await settle()
+    expect(h.transport.subscribed().has(orgChannel)).toBe(true)
+    h.transport.join(orgChannel, false)
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    h.fake.mode = "manual"
+    const tasks = h.core.view({ kind: "full", object: TASK, include: ["org"] })
+    tasks.subscribe(() => {})
+    await settle()
+    expect(h.fake.pending).toHaveLength(1)
+    if (answerBeforeRelease) {
+      h.fake.mode = "auto"
+      h.fake.take(0).answer()
+      await settle()
+    }
+    await replaceRights(h, [S2], [S, S2], withOrgRights)
+    expect(h.transport.subscribed().has(orgChannel)).toBe(false)
+    h.fake.mode = "auto"
+    while (h.fake.pending.length > 0) {
+      h.fake.take(0).answer()
+      await settle()
+    }
+    const target = () => {
+      const row = tasks.getSnapshot().rows[0]
+      return row?.state === "removed" ? undefined : row?.refs?.org
+    }
+    expect(target()).toMatchObject({ state: "synced", version: 1 })
+    // Правка без нагляду: повторна підписка з записом позначає ціль.
+    h.fake.edit(ORG, S, {})
+    await replaceRights(h, [S, S2], [S, S2], withOrgRights)
+    expect(h.transport.subscribed().has(orgChannel)).toBe(true)
+    expect(target()).toMatchObject({ state: "stale", version: 1 })
+  }
+
+  it("keeps the entry of a released channel while a read of another object's view that includes it is in flight", async () => {
+    await includeTarget(false)
+  })
+
+  it("keeps the entry of a released channel whose row an include read wrote before the release", async () => {
+    await includeTarget(true)
   })
 
   it("a release without a gap leaves the composition confirmed", async () => {

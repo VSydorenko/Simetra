@@ -609,7 +609,6 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   ): Job => {
     const read = tracked(writer.source)
     const owned = new Set(plan.stored)
-    writer.keyJobs.set(object, (writer.keyJobs.get(object) ?? 0) + 1)
     return {
       object,
       o,
@@ -860,18 +859,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     // `commit`: відповідь, що чекала б повільних перечитувань інших об'єктів
     // пачки, лягла б пізніше за новіші читання й розійшлася б із ними (П15).
     // Пачка тримає single-flight, доки не осяде все.
-    // Читання ключів летить, доки його відповідь не осяде: запис відпущеного
-    // каналу на цей час тримається (§8.4, правило 2).
     const settle = async (job: Job) => {
-      try {
-        await settleOne(job)
-      } finally {
-        const left = (writer.keyJobs.get(job.object) ?? 1) - 1
-        if (left > 0) writer.keyJobs.set(job.object, left)
-        else writer.keyJobs.delete(job.object)
-      }
-    }
-    const settleOne = async (job: Job) => {
       const [rows] = await Promise.all([job.rows, sectionsOf.get(job)])
       if (stopped) return
       if (rows === undefined) {
