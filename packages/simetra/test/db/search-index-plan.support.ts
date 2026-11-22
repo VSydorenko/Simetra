@@ -263,6 +263,15 @@ export function defineSearchIndexPlanCases(): void {
         )
         expect(keys.length, "the prefix matches rows").toBeGreaterThan(0)
         expect(keys.length).toBeLessThan(PAGE)
+        // Діапазон індексу читає лише збіги префікса (в усіх скоупах, бо RLS
+        // діє після індексу): не більше, ніж їх рахує власник без RLS.
+        const { rows: allMatches } = await tx
+          .client()
+          .query<{ n: string }>(
+            `SELECT count(*)::text AS n FROM public.${TABLE} WHERE description LIKE upper($1) || '%'`,
+            [prefix]
+          )
+        expect(readRows(scans)).toBeLessThanOrEqual(Number(allMatches[0]!.n))
         // Лише свій скоуп: однакові найменування чужого скоупу RLS ховає.
         expect(await readKeys(where)).toEqual(keys)
       }
