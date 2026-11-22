@@ -108,11 +108,19 @@ model they call, by an allowlist (`sql.head-not-allowed`):
   builtins. A function of a kind module that is not of this form belongs in
   a shared `sql/` file, called by nothing inside a command.
 - **A scope set function, an access dimension values function and a policy
-  function pin the session settings** the client could choose:
-  `SET "TimeZone" = 'UTC' SET "DateStyle" = 'ISO, MDY' SET "IntervalStyle" =
-  'postgres' SET extra_float_digits = '1'` in their `CREATE FUNCTION`
-  (`sql.head-settings` otherwise; `fix` does not add them). A function they
-  call sets none of these to another value.
+  function pin the session settings** the client could choose (time zone,
+  date, interval, number, money, `bytea` and XML styles, text search
+  configuration) with `SET` options of their `CREATE FUNCTION`; the hint of
+  `sql.head-settings` lists the exact options (`fix` does not add them). A
+  function they call sets none of these to another value.
+- **A verbatim policy expression runs in the client's settings**, and so does
+  what it reads: a view and a function that does not pin the settings itself.
+  There `current_date`, `localtime` and a conversion to `date`, `time`,
+  `timetz` or `timestamp` without `now() AT TIME ZONE '<zone>'`, or to
+  `timestamptz` from a value without a zone, is `sql.head-not-allowed`
+  (`setting`, `TimeZone`).
+- **A cast to a `reg*` type** names an object by text; only a string literal
+  cast to `regclass` (read as that relation) is allowed in a head.
 
 ## Reading `sql.head-not-allowed`
 
