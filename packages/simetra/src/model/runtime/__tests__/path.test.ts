@@ -91,6 +91,11 @@ describe("pathToWire / pathFromWire", () => {
     ["a member attribute", "creatorMember.user", "creatorMember.user_id"],
     ["the member key", "creatorMember.ref", "creatorMember.member_id"],
     ["values", "values", "values"],
+    ["expectedValues", "expectedValues", "expectedValues"],
+    ["a base value", "expectedValues.title", "expectedValues.title_col"],
+    ["a base pair", "expectedValues.subject", "expectedValues.subject_id"],
+    ["a base array item", "expectedValues.tags.1", "expectedValues.tag_list.1"],
+    ["an unknown base name", "expectedValues.nope", "expectedValues.nope"],
     ["a read path", "orderBy.0.attribute", "orderBy.0.attribute"],
     ["expectedVersion", "expectedVersion", "expectedVersion"],
     ["an application path", "invoice.total.1", "invoice.total.1"],
@@ -114,6 +119,7 @@ describe("pathToWire / pathFromWire", () => {
     "title",
     "lines.0.qty",
     "creatorMember.user",
+    "expectedValues.title",
     // Ключ запису: T3 називає його лише `keyName` (колонка `id` на дроті).
     "ref",
     "lines.0.ref",
@@ -126,6 +132,24 @@ describe("pathToWire / pathFromWire", () => {
   it("maps an attribute named like a structural word to its column", () => {
     expect(pathToWire(index, ODD_ID, "values")).toBe("values_col")
     expect(pathFromWire(index, ODD_ID, "values_col")).toBe("values")
+  })
+
+  it("maps an attribute named expectedValues as the attribute", () => {
+    const named = catalogEntry({
+      id: ODD_ID,
+      name: "Odd",
+      attributes: [
+        catalogEntryAttribute({
+          name: "expectedValues",
+          column: "ev_list",
+          array: true,
+        }),
+      ],
+      tabularSections: [],
+    })
+    const own = catalogIndex([named])
+    expect(pathToWire(own, ODD_ID, "expectedValues.1")).toBe("ev_list.1")
+    expect(pathFromWire(own, ODD_ID, "ev_list.1")).toBe("expectedValues.1")
   })
 
   it("keeps the path of an unknown object", () => {

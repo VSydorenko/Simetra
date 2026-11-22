@@ -4,6 +4,7 @@ import {
   dataRequestSchema,
   TABULAR_LINES_MAX,
   readQuerySchema,
+  runtimeCatalogSchema,
   type CommandError,
   type ReadQuery,
   type RuntimeCatalog,
@@ -21,7 +22,7 @@ import {
 } from "../../compiler/__tests__/fixtures/rights"
 import { prepareInput } from "../phase"
 import { decidingIssue, issueReason, prepareRead } from "../read"
-import { catalog, rootCatalog } from "./fixtures"
+import { ID, catalog, commandObject, rootCatalog } from "./fixtures"
 import { CLIENT, ORGANIZATION } from "./harness"
 
 const refusalOf = (
@@ -300,6 +301,112 @@ describe("creatorMember maxBytes", () => {
       reason: "too-large",
       path: "creatorMember.note",
       object: ORGANIZATION,
+    })
+  })
+})
+
+/**
+ * База CAS за полями (Р1, Р5 плану T3): та сама перевірка значень за
+ * каталогом, що й `values`, з шляхом під `expectedValues`, і форма T0 — набір
+ * ключів дорівнює набору `values`, без ТЧ — до бази.
+ */
+describe("expectedValues of an update", () => {
+  const NOTE = { kind: "Catalog" as const, name: "Note" }
+  const MAX = 8
+  const noteCatalog: RuntimeCatalog = runtimeCatalogSchema.parse({
+    format: 1,
+    snapshotHash: "hash-1",
+    provider: "supabase",
+    objects: [
+      commandObject({
+        name: "Note",
+        table: "note",
+        attributes: [
+          {
+            name: "text",
+            column: "text_col",
+            pgType: "text",
+            castType: "text",
+            type: "Text",
+            required: false,
+            insert: true,
+            update: true,
+            maxBytes: MAX,
+          },
+        ],
+      }),
+    ],
+  })
+  const update = (extra: object, object: object = CLIENT) => ({
+    action: "update",
+    object,
+    id: ID,
+    expectedVersion: 2,
+    ...extra,
+  })
+
+  it("accepts base values of the changed fields", () => {
+    expect(
+      refusalOf(
+        update({ values: { code: "B" }, expectedValues: { code: "A" } }),
+        catalog
+      )
+    ).toBeUndefined()
+  })
+
+  it.each<[string, object]>([
+    [
+      "keys other than those of values",
+      { values: { code: "B" }, expectedValues: { extra: null } },
+    ],
+    [
+      "a key more than values",
+      { values: { code: "B" }, expectedValues: { code: "A", extra: null } },
+    ],
+    ["an empty object", { values: {}, expectedValues: {} }],
+    ["no values", { expectedValues: { code: "A" } }],
+    [
+      "tabular sections",
+      {
+        values: { code: "B" },
+        expectedValues: { code: "A" },
+        tabularSections: { lines: [] },
+      },
+    ],
+  ])("refuses %s on the path expectedValues", (_, extra) => {
+    expect(refusalOf(update(extra), catalog)).toMatchObject({
+      code: "command.invalid",
+      path: "expectedValues",
+    })
+  })
+
+  it("refuses a base value the catalog does not accept on its own path", () => {
+    expect(
+      refusalOf(
+        update({ values: { code: "B" }, expectedValues: { code: 7 } }),
+        catalog
+      )
+    ).toEqual({
+      code: "command.invalid",
+      path: "expectedValues.code",
+      object: CLIENT,
+    })
+  })
+
+  it("refuses a base value over maxBytes as too-large", () => {
+    expect(
+      refusalOf(
+        update(
+          { values: { text: "a" }, expectedValues: { text: "a".repeat(MAX) } },
+          NOTE
+        ),
+        noteCatalog
+      )
+    ).toEqual({
+      code: "command.invalid",
+      reason: "too-large",
+      path: "expectedValues.text",
+      object: NOTE,
     })
   })
 })

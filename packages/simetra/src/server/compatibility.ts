@@ -66,7 +66,8 @@ const within = (record: object, allowed: ReadonlySet<string>): boolean =>
  * Checks a request in wire form against the server catalog before mapping
  * (P4-B spec §10): an unknown object UUID; for `run` — a missing or
  * different `kernelHash` of any operation's object, a column outside the
- * insert or update list of the action, an unknown section id; for a query
+ * insert or update list of the action (`expectedValues` of an update
+ * included), an unknown section id; for a query
  * part of `read` — a filter, sort or `include` column outside the regular
  * and lazy read lists (pair type columns excluded: a read never names them),
  * an unknown section id. Returns `command.stale-client` with the request's
@@ -116,6 +117,15 @@ function operationFits(
     op.action === "create" ? columns.insert : columns.update
   )
   if (op.values !== undefined && !within(op.values, header)) return false
+  // База CAS за полями — ті самі колонки зміни, що й `values` (спека П4-B
+  // §4.0): колонка поза переліком — застарілий клієнт так само.
+  if (
+    op.action === "update" &&
+    op.expectedValues !== undefined &&
+    !within(op.expectedValues, header)
+  ) {
+    return false
+  }
   if (op.tabularSections !== undefined) {
     for (const id of Object.keys(op.tabularSections)) {
       const section = columns.tabularSections.get(id)

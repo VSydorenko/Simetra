@@ -128,7 +128,7 @@ export const call = (fn: string, args: string, params: (string | null)[]) => ({
   text: `SELECT "public"."${fn}"(${args}) AS r`,
   params,
 })
-export const SAVE = "$1::jsonb, $2::bigint"
+export const SAVE = "$1::jsonb, $2::bigint, $3::jsonb"
 
 /** Рядок ядра клієнта: `version` — числом, як `to_jsonb` дає `integer`. */
 export const coreRow = (id = ID, version = 1) =>
@@ -322,6 +322,7 @@ export const create = {
 export const createCall = call("client_save", SAVE, [
   JSON.stringify({ id: ID, code: "A", company_id: COMPANY }),
   null,
+  null,
 ])
 
 /** `create` призначення — фаза прав — і її фаза в черзі. */
@@ -336,6 +337,7 @@ export const assignPhase = (id: string) => [
   context("administerRights", "role_assignment", id),
   call("role_assignment_save", SAVE, [
     JSON.stringify({ id, code: "G", company_id: COMPANY }),
+    null,
     null,
   ]),
 ]

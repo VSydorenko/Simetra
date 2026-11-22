@@ -172,7 +172,11 @@ describe("command transaction", () => {
     expect(db.calls).toEqual([
       ...OPEN,
       context("update", "client", ID),
-      call("client_save", SAVE, [JSON.stringify({ id: ID, code: "A" }), "2"]),
+      call("client_save", SAVE, [
+        JSON.stringify({ id: ID, code: "A" }),
+        "2",
+        null,
+      ]),
       context("markDeletion", "client", OTHER),
       call("client_mark_deletion", "$1::uuid, $2::bigint, $3::boolean", [
         OTHER,
@@ -190,6 +194,34 @@ describe("command transaction", () => {
     expect(result.changes.map((c) => [c.id, c.operation])).toEqual([
       [ID, "update"],
       [OTHER, "markDeletion"],
+    ])
+  })
+
+  // Р7 плану T3: база змінених полів — третім аргументом ядра, фізичними
+  // колонками й тим самим кодуванням, що й `p_item`, без ключа таблиці.
+  it("passes expectedValues of an update as p_expected_values", async () => {
+    const { db, runtime } = await setup((text) =>
+      text.endsWith("AS r") ? { rows: [{ r: coreRow(ID, 3) }] } : undefined
+    )
+    await runtime.run(session, {
+      action: "update",
+      object: CLIENT,
+      id: ID,
+      expectedVersion: 2,
+      values: { code: "B", extra: { n: 2 } },
+      expectedValues: { code: "A", extra: { n: 1 } },
+    })
+    expect(db.calls).toEqual([
+      ...OPEN,
+      context("update", "client", ID),
+      call("client_save", SAVE, [
+        JSON.stringify({ id: ID, code: "B", extra: { n: 2 } }),
+        "2",
+        JSON.stringify({ code: "A", extra: { n: 1 } }),
+      ]),
+      EPOCH,
+      COMMIT,
+      { release: false },
     ])
   })
 
@@ -224,6 +256,7 @@ describe("command transaction", () => {
       context("administerRights", "rights_role", ID),
       call("rights_role_save", SAVE, [
         JSON.stringify({ id: ID, code: "R" }),
+        null,
         null,
       ]),
       EPOCH,
@@ -337,7 +370,7 @@ describe("command transaction", () => {
       })
       const phase = [
         context("create", "client", ID),
-        call("client_save", SAVE, [item, null]),
+        call("client_save", SAVE, [item, null, null]),
       ]
       expect(db.calls).toEqual([
         ...OPEN,
@@ -988,6 +1021,7 @@ describe("rights self-assignment", () => {
       context("administerRights", "rights_assignment", ID),
       call("rights_assignment_save", SAVE, [
         JSON.stringify({ id: ID, subject_id: MEMBER, role_id: ROLE_ID }),
+        null,
         null,
       ]),
       EPOCH,

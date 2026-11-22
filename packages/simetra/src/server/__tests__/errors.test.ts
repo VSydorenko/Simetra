@@ -190,6 +190,8 @@ describe("mapDatabaseError", () => {
   it.each([
     ["version", "7", { currentVersion: 7 }],
     ["exists", undefined, {}],
+    // CAS за полями: та сама форма, що й `version`, — лише поточна версія.
+    [COMMAND_CORE_ERRORS.conflict.fields, "7", { currentVersion: 7 }],
   ])("command.conflict %s", (reason, hint, extra) => {
     expect(
       map({ code: "P0001", message: "command.conflict", detail: reason, hint })
@@ -279,6 +281,7 @@ describe("mapDatabaseError", () => {
       COMMAND_CORE_ERRORS.invalid.item,
       COMMAND_CORE_ERRORS.invalid.tabular,
       COMMAND_CORE_ERRORS.invalid.expectedVersion,
+      COMMAND_CORE_ERRORS.invalid.expectedValues,
       COMMAND_CORE_ERRORS.invalid.mark,
       COMMAND_CORE_ERRORS.invalid.predefined,
     ].map((reason): [string, { reason: string }] => [reason, { reason }]),

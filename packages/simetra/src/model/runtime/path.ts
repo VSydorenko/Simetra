@@ -9,11 +9,12 @@ import type { CatalogIndex } from "./mapping"
  * - ТЧ: `<ТЧ>[.<i>][.<реквізит | keyName ТЧ>[.<j>]]` ↔
  *   `<id ТЧ>[.<i>][.<колонка>[.<j>]]`; сегмент лише з цифр — індекс;
  * - `creatorMember[.<реквізит | keyName>]` — записом довідника членства;
+ * - `expectedValues.<реквізит шапки>[.<i>]` ↔ `expectedValues.<колонка>[.<i>]`;
  * - `<реквізит шапки>[.<i>]`, `keyName`, `versionName` ↔ колонка;
  * - решта (структурні слова, довільний шлях застосунку) — без змін.
  *
  * Перший сегмент шукається спершу серед ТЧ, далі `creatorMember`, далі серед
- * реквізитів, ключа й версії: імена ТЧ і реквізитів — один простір імен
+ * реквізитів, ключа й версії, далі `expectedValues`: імена ТЧ і реквізитів — один простір імен
  * об'єкта (`identity.name-duplicate`), тож збіг однозначний, а ім'я каталогу
  * виграє в структурного слова. Пошук — лише перебором масивів каталогу, тож
  * `__proto__` чи `constructor` не збігаються ні з чим і лишаються як є.
@@ -23,6 +24,7 @@ import type { CatalogIndex } from "./mapping"
 const INDEX = /^\d+$/
 
 const MEMBER = "creatorMember"
+const EXPECTED = "expectedValues"
 
 type Direction = "toWire" | "fromWire"
 
@@ -88,14 +90,23 @@ function mapPath(
   }
 
   const mapped = mapField(headerFields(entry), head, direction)
-  return mapped === undefined ? path : [mapped, ...rest].join(".")
+  if (mapped !== undefined) return [mapped, ...rest].join(".")
+  // База CAS за полями — ті самі реквізити шапки, що й `values`; реквізит з
+  // ім'ям `expectedValues` уже виграв вище.
+  if (head === EXPECTED && rest[0] !== undefined) {
+    const [name, ...tail] = rest
+    const field = mapField(attributeFields(entry.attributes), name, direction)
+    return [EXPECTED, field ?? name, ...tail].join(".")
+  }
+  return path
 }
 
 /**
  * Maps a logical error path of the object `objectId` to its wire form:
  * sections become section ids, attributes, the key and the version become
  * physical columns, `creatorMember.<name>` maps through the membership
- * catalog. Structural segments and unknown names pass unchanged, so a path
+ * catalog, `expectedValues.<name>` maps the attribute to its column.
+ * Structural segments and unknown names pass unchanged, so a path
  * is never lost.
  */
 export function pathToWire(
