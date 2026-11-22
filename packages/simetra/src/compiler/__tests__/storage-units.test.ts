@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { compile, type CompiledModel, type Diagnostic } from "simetra/compiler"
+import { tenantBoundary } from "../access-units"
 import { callersOfRole } from "../sql/execute-grants"
 import { STORAGE_TABLES, ZERO_UUID } from "simetra/model"
 import { uuid } from "./helpers"
@@ -156,7 +157,12 @@ describe("storage generator", () => {
       "function:simetra.storage_headroom(uuid,uuid)"
     )!.sql
     expect(body).toContain(SCOPED_ID)
-    expect(body).toContain("p_scope = ANY (ARRAY(SELECT")
+    // Межа скоупу користувача — рівно будівник межі тенанта над `p_scope`, а не
+    // лише схожий текст: гранти теж містять `p_scope = ANY (…)`
+    const scope = scoped.contracts.access.find(
+      (a) => a.scope !== undefined
+    )!.scope!
+    expect(body).toContain(tenantBoundary({ ...scope, carrier: "p_scope" }))
     expect(body).toContain("simetra.rights_")
     expect(body).toContain("storage_quota")
     expect(body).not.toContain(ZERO_UUID)
