@@ -36,7 +36,9 @@ export interface FileStore {
   /**
    * Reads the body, counts the bytes itself and aborts past `maxBytes`
    * (nothing is written then). `instance` is the database binding string
-   * (`parseBinding`): the bucket must be empty or carry the same marker.
+   * (`parseBinding`): the bucket must carry the same marker. `put` never
+   * writes the marker: an unbound empty bucket is `no-binding`, a bucket with
+   * objects but no marker or another database's marker is `foreign-bucket`.
    */
   put(
     key: string,
@@ -65,10 +67,20 @@ export interface FileStore {
    * Refuses (throws {@link FileStoreError}) a bucket that is not this
    * database's: a different marker (`foreign-bucket`), the same marker
    * written for another cluster, database or timeline (`binding-changed`: a
-   * copy or a restore), or objects without a marker. An empty bucket passes.
+   * copy or a restore), or objects without a marker. An empty unbound bucket
+   * passes (nothing to delete).
    * Used by the reconciliation before any deletion.
    */
   checkInstance(instance: string): Promise<void>
+  /**
+   * The first binding of a bucket, an explicit operator step (the S3 servers
+   * of the profiles have no conditional write, so `put` cannot bind safely).
+   * Writes the marker only into a completely empty bucket and reads it back;
+   * the same marker already there is a no-op. Objects without a marker or
+   * another database's marker are `foreign-bucket`, the same uuid with another
+   * cluster state is `binding-changed` (use `rebind`).
+   */
+  bind(instance: string): Promise<void>
   /**
    * Rewrites the marker with `instance` after a legitimate restore. Only a
    * marker of the same `storage_instance` uuid is rewritten; anything else
@@ -212,9 +224,9 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
     )
   }
 
-  // Повертає, чи треба писати маркер: лише ПОВНІСТЮ порожній бакет без маркера
-  // (без `Prefix`): чужий об'єкт поза `o/` теж означає, що бакет не наш
-  const checkBinding = async (instance: string): Promise<"write" | "ok"> => {
+  // «empty» — ПОВНІСТЮ порожній бакет без маркера (без `Prefix`): чужий
+  // об'єкт поза `o/` теж означає, що бакет не наш
+  const checkBinding = async (instance: string): Promise<"empty" | "ok"> => {
     if (parseBinding(instance) === null)
       throw new Error("instance is not a database binding")
     const marker = await readMarker()
@@ -228,7 +240,7 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
         "foreign-bucket",
         "bucket holds objects but no instance marker"
       )
-    return "write"
+    return "empty"
   }
 
   return {
@@ -272,16 +284,12 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
         at += chunks[i]!.byteLength
         chunks[i] = EMPTY
       }
-      if ((await checkBinding(instance)) === "write") {
-        await writeMarker(instance)
-        // Garage ігнорує `If-None-Match: *`: два перші `put` різних баз могли
-        // обидва пройти перевірку, тож після запису читаємо маркер знову
-        if ((await readMarker()) !== instance)
-          throw new FileStoreError(
-            "foreign-bucket",
-            "bucket belongs to another database (instance marker differs)"
-          )
-      }
+      // Маркер `put` не пише: першу прив'язку робить лише оператор (`bind`)
+      if ((await checkBinding(instance)) === "empty")
+        throw new FileStoreError(
+          "no-binding",
+          "bucket is not bound to a database: run bindFileStore first"
+        )
       await client.putObject({
         Bucket: bucket,
         Key: key,
@@ -356,6 +364,18 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
 
     async checkInstance(instance) {
       await checkBinding(instance)
+    },
+
+    async bind(instance) {
+      if ((await checkBinding(instance)) === "ok") return
+      await writeMarker(instance)
+      // Без умовного запису S3 два оператори на порожньому бакеті можуть обоє
+      // пройти перевірку: після запису читаємо маркер знову
+      if ((await readMarker()) !== instance)
+        throw new FileStoreError(
+          "foreign-bucket",
+          "bucket belongs to another database (instance marker differs)"
+        )
     },
 
     async rebind(instance) {

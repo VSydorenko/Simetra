@@ -229,6 +229,26 @@ export function defineReconcileCases(env: () => Env): void {
       }
     })
 
+    it("bindFileStore: a no-op on its own marker, foreign-bucket for another marker and for files without a marker", async () => {
+      const rt = await runtime()
+      const instance = await instanceOf(rt)
+      const key = await putOrphan(rt)
+      try {
+        await expect(rt.bindFileStore(env().files)).resolves.toBeUndefined()
+        await setMarker(`${randomUUID()}:1:2:3`)
+        await expect(rt.bindFileStore(env().files)).rejects.toMatchObject({
+          reason: "foreign-bucket",
+        })
+        await env().s3.deleteObject({ Bucket: env().bucket, Key: MARKER })
+        await expect(rt.bindFileStore(env().files)).rejects.toMatchObject({
+          reason: "foreign-bucket",
+        })
+      } finally {
+        await setMarker(instance)
+        await env().files.delete(key)
+      }
+    })
+
     it("refuses the marker of a restored or copied database by naming the changed part, and works again after the rebind", async () => {
       const rt = await runtime()
       const instance = await instanceOf(rt)

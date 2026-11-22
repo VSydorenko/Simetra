@@ -376,7 +376,7 @@ describe("the marker row at start", () => {
     ).rejects.toBeInstanceOf(CommandFailure)
   })
 
-  it("a missing row is the named refusal no-binding in checkUpload and rebindFileStore", async () => {
+  it("a missing row is the named refusal no-binding in checkUpload, bindFileStore and rebindFileStore", async () => {
     const { runtime } = await make((text) =>
       text.includes("storage_instance_id")
         ? { rows: [{ id: null }] }
@@ -389,6 +389,9 @@ describe("the marker row at start", () => {
     ).rejects.toMatchObject({ reason: "no-binding" })
     await expect(
       runtime.rebindFileStore({ rebind: async () => {} } as never)
+    ).rejects.toMatchObject({ reason: "no-binding" })
+    await expect(
+      runtime.bindFileStore({ bind: async () => {} } as never)
     ).rejects.toMatchObject({ reason: "no-binding" })
   })
 })
@@ -501,6 +504,7 @@ describe("checkUpload", () => {
         instance: limits.instance,
       })
     }
+    await runtime.bindFileStore(store)
     await upload(fileObjectKey(DOC_ID, ID))
     binding = "77777777-7777-4777-8777-777777777777:1:2:4"
     // Той самий процес: відбиток іншого timeline береться свіжим, а маркер
@@ -608,6 +612,7 @@ describe("reconcileFiles", () => {
           yield `o/${DOC_ID}/`
         },
         checkInstance: async () => undefined,
+        bind: async () => undefined,
         rebind: async () => undefined,
       },
     }
@@ -719,6 +724,41 @@ describe("reconcileFiles", () => {
     const report = await runtime.reconcileFiles(changed, { log: () => {} })
     expect(report).toMatchObject({ refused: "binding", deleted: 0 })
     expect(s.deleted).toEqual([])
+  })
+})
+
+describe("bindFileStore", () => {
+  const INSTANCE = "77777777-7777-4777-8777-777777777777:1:2:3"
+  const answers =
+    (recovery: "t" | "f"): Override =>
+    (text) => {
+      if (text.includes("pg_is_in_recovery")) return { rows: [{ recovery }] }
+      if (text.includes("storage_instance_id"))
+        return { rows: [{ id: INSTANCE }] }
+      return undefined
+    }
+  const store = () => {
+    const bound: string[] = []
+    return {
+      bound,
+      store: { bind: async (i: string) => void bound.push(i) } as never,
+    }
+  }
+
+  it("binds the store with the binding read from the database", async () => {
+    const { runtime } = await make(answers("f"))
+    const s = store()
+    await runtime.bindFileStore(s.store)
+    expect(s.bound).toEqual([INSTANCE])
+  })
+
+  it("is refused on a standby, nothing is bound", async () => {
+    const { runtime } = await make(answers("t"))
+    const s = store()
+    await expect(runtime.bindFileStore(s.store)).rejects.toMatchObject({
+      reason: "in-recovery",
+    })
+    expect(s.bound).toEqual([])
   })
 })
 

@@ -5,7 +5,12 @@ import {
   type RuntimeCatalog,
   type SessionClaims,
 } from "simetra/model"
-import { fromS3Client, type FileStore } from "simetra/server"
+import {
+  createCommandRuntime,
+  fromPgPool,
+  fromS3Client,
+  type FileStore,
+} from "simetra/server"
 import {
   ORG_SCOPE_KIND,
   PROJECT_FILE,
@@ -87,12 +92,22 @@ export const heldStorageEnv = (...layers: Layer[]) =>
             async (login) => {
               const pool = new pg.Pool({ connectionString: login })
               try {
+                const catalog = buildRuntimeCatalog(model)
+                const files = fromS3Client(s3Of(stack), bucket)
+                // Першу прив'язку бакета робить лише оператор: `put` маркера
+                // не пише. Тут її робить середовище тесту (як `pnpm demo` і шаблон)
+                await (
+                  await createCommandRuntime({
+                    database: fromPgPool(pool),
+                    catalog,
+                  })
+                ).bindFileStore(files)
                 await use({
                   url,
                   owner,
-                  catalog: buildRuntimeCatalog(model),
+                  catalog,
                   pool,
-                  files: fromS3Client(s3Of(stack), bucket),
+                  files,
                   s3: s3Of(stack),
                   bucket,
                   writer: { ...writer, session: sessionOf(writer.user) },

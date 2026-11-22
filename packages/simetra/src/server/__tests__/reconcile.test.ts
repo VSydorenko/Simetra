@@ -85,6 +85,7 @@ function setup(s: Setup) {
       if (s.bindingChanged === true)
         throw new FileStoreError("binding-changed", "copy")
     },
+    bind: () => Promise.reject(new Error("unused")),
     rebind: () => Promise.reject(new Error("unused")),
   }
   let existsCalls = 0

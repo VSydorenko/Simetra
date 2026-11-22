@@ -328,6 +328,15 @@ export interface CommandRuntime {
     options: ReconcileOptions
   ): Promise<ReconcileReport>
   /**
+   * The operator command that makes the first binding of a bucket to this
+   * database: writes the marker only into a completely empty bucket and reads
+   * it back; the same marker is a no-op, another database's marker or objects
+   * without a marker are `FileStoreError` `foreign-bucket`. Uploads never bind
+   * (`no-binding` on an unbound bucket). Refused with `in-recovery` on a
+   * standby. Rejects with `command.nested` from inside a hook.
+   */
+  bindFileStore(store: FileStore): Promise<void>
+  /**
    * The operator command after a legitimate restore (dump/restore, PITR, a
    * promoted replica): rewrites the bucket marker with the current binding of
    * this database. Only a marker of the same `storage_instance` uuid is
@@ -815,6 +824,15 @@ export async function createCommandRuntime(
       }
     },
     reconcileFiles: (store, options) => reconcileOf(store, options),
+    bindFileStore: async (store) => {
+      rejectNested()
+      if (await inRecovery(state))
+        throw new FileStoreError(
+          "in-recovery",
+          "the database is in recovery: bind on the primary"
+        )
+      await store.bind(await fileInstance(state))
+    },
     rebindFileStore: async (store) => {
       rejectNested()
       if (await inRecovery(state))

@@ -106,6 +106,7 @@ describe("fromS3Client put", () => {
   it("returns the counted size and writes it as ContentLength", async () => {
     const { client, objects } = fakeS3()
     const store = fromS3Client(client, "b")
+    await store.bind(BINDING)
     const out = await store.put(KEY, streamOf(bytes(3), bytes(4)), opts)
     expect(out).toEqual({ size: 7 })
     const o = objects.get(KEY)!
@@ -116,11 +117,9 @@ describe("fromS3Client put", () => {
 
   it("accepts exactly maxBytes", async () => {
     const { client } = fakeS3()
-    const out = await fromS3Client(client, "b").put(
-      KEY,
-      streamOf(bytes(10)),
-      opts
-    )
+    const store = fromS3Client(client, "b")
+    await store.bind(BINDING)
+    const out = await store.put(KEY, streamOf(bytes(10)), opts)
     expect(out.size).toBe(10)
   })
 
@@ -169,17 +168,76 @@ describe("fromS3Client put", () => {
 })
 
 describe("instance marker", () => {
-  it("first put into an empty bucket writes the marker", async () => {
+  const markerOf = (objects: Map<string, Stored>) =>
+    new TextDecoder().decode(objects.get(INSTANCE_MARKER_KEY)!.bytes)
+
+  it("put into an unbound empty bucket is no-binding and writes nothing", async () => {
     const { client, objects } = fakeS3()
-    await fromS3Client(client, "b").put(KEY, streamOf(bytes(1)), opts)
-    expect(
-      new TextDecoder().decode(objects.get(INSTANCE_MARKER_KEY)!.bytes)
-    ).toBe(BINDING)
+    await expect(
+      fromS3Client(client, "b").put(KEY, streamOf(bytes(1)), opts)
+    ).rejects.toMatchObject({ reason: "no-binding" })
+    expect(objects.size).toBe(0)
+  })
+
+  it("bind writes the marker into an empty bucket", async () => {
+    const { client, objects } = fakeS3()
+    await fromS3Client(client, "b").bind(BINDING)
+    expect(markerOf(objects)).toBe(BINDING)
+  })
+
+  it("bind into a bucket with objects and no marker is foreign-bucket, nothing written", async () => {
+    const { client, objects } = fakeS3()
+    objects.set("readme.txt", {
+      bytes: bytes(1),
+      type: "",
+      length: 1,
+      at: new Date(0),
+    })
+    await expect(fromS3Client(client, "b").bind(BINDING)).rejects.toMatchObject(
+      { reason: "foreign-bucket" }
+    )
+    expect(objects.has(INSTANCE_MARKER_KEY)).toBe(false)
+  })
+
+  it("a repeated bind on its own marker is a no-op", async () => {
+    const { client, calls } = fakeS3()
+    const store = fromS3Client(client, "b")
+    await store.bind(BINDING)
+    const before = calls.length
+    await store.bind(BINDING)
+    expect(calls.slice(before).some((c) => c.startsWith("put "))).toBe(false)
+  })
+
+  it("bind refuses another database's marker and a changed cluster state", async () => {
+    const { client, objects } = fakeS3()
+    await fromS3Client(client, "b").bind(OTHER_BINDING)
+    await expect(fromS3Client(client, "b").bind(BINDING)).rejects.toMatchObject(
+      { reason: "foreign-bucket" }
+    )
+    await expect(
+      fromS3Client(client, "b").bind(`${OTHER}:9:9:9`)
+    ).rejects.toMatchObject({ reason: "binding-changed" })
+    expect(markerOf(objects)).toBe(OTHER_BINDING)
+  })
+
+  it("bind loses a marker race: the read-back shows another database's marker", async () => {
+    const { client, objects } = fakeS3()
+    const real = client.putObject
+    client.putObject = async (i) => {
+      await real(i)
+      // Інша база перезаписує маркер одразу після нашого запису
+      if (i.Key === INSTANCE_MARKER_KEY)
+        objects.get(i.Key)!.bytes = new TextEncoder().encode(OTHER_BINDING)
+    }
+    await expect(fromS3Client(client, "b").bind(BINDING)).rejects.toMatchObject(
+      { reason: "foreign-bucket" }
+    )
   })
 
   it("a bucket with the same marker accepts put", async () => {
     const { client, objects } = fakeS3()
     const store = fromS3Client(client, "b")
+    await store.bind(BINDING)
     await store.put(KEY, streamOf(bytes(1)), opts)
     await store.put(fileObjectKey(OBJ, OTHER), streamOf(bytes(1)), opts)
     expect(objects.size).toBe(3)
@@ -187,10 +245,7 @@ describe("instance marker", () => {
 
   it("a different marker refuses put and writes nothing", async () => {
     const { client, objects } = fakeS3()
-    await fromS3Client(client, "b").put(KEY, streamOf(bytes(1)), {
-      ...opts,
-      instance: OTHER_BINDING,
-    })
+    await fromS3Client(client, "b").bind(OTHER_BINDING)
     const before = objects.size
     await expect(
       fromS3Client(client, "b").put(
@@ -243,7 +298,7 @@ describe("instance marker", () => {
     expect(empty.objects.size).toBe(0)
 
     const bound = fakeS3()
-    await fromS3Client(bound.client, "b").put(KEY, streamOf(bytes(1)), opts)
+    await fromS3Client(bound.client, "b").bind(BINDING)
     const store = fromS3Client(bound.client, "b")
     await expect(store.checkInstance(BINDING)).resolves.toBeUndefined()
     await expect(store.checkInstance(OTHER_BINDING)).rejects.toMatchObject({
@@ -266,6 +321,7 @@ describe("instance marker", () => {
 describe("database binding of the marker", () => {
   const bound = async () => {
     const s = fakeS3()
+    await fromS3Client(s.client, "b").bind(BINDING)
     await fromS3Client(s.client, "b").put(KEY, streamOf(bytes(1)), opts)
     return s
   }
@@ -296,6 +352,7 @@ describe("database binding of the marker", () => {
     const { client } = fakeS3()
     const store = fromS3Client(client, "b")
     const first = `${INSTANCE}:100:200:00000001`
+    await store.bind(first)
     await store.put(KEY, streamOf(bytes(1)), { ...opts, instance: first })
     await expect(
       store.checkInstance(`${INSTANCE}:100:200:0000000A`)
@@ -373,6 +430,7 @@ describe("fromS3Client get, delete, list", () => {
   it("get returns body, size and type", async () => {
     const { client } = fakeS3()
     const store = fromS3Client(client, "b")
+    await store.bind(BINDING)
     await store.put(KEY, streamOf(bytes(4)), opts)
     const got = (await store.get(KEY))!
     expect(got.size).toBe(4)
@@ -391,6 +449,7 @@ describe("fromS3Client get, delete, list", () => {
   it("delete removes the object", async () => {
     const { client, objects } = fakeS3()
     const store = fromS3Client(client, "b")
+    await store.bind(BINDING)
     await store.put(KEY, streamOf(bytes(1)), opts)
     await store.delete(KEY)
     expect(objects.has(KEY)).toBe(false)
@@ -402,6 +461,7 @@ describe("fromS3Client get, delete, list", () => {
     const ids = [1, 2, 3, 4, 5].map(
       (n) => `00000000-0000-4000-8000-00000000000${n}`
     )
+    await store.bind(BINDING)
     for (const id of ids)
       await store.put(fileObjectKey(OBJ, id), streamOf(bytes(1)), opts)
     await store.put(fileObjectKey(OTHER, ids[0]!), streamOf(bytes(1)), opts)
@@ -452,6 +512,7 @@ describe("listPrefixes", () => {
   it("yields the object prefixes and not the marker", async () => {
     const { client } = fakeS3()
     const store = fromS3Client(client, "b")
+    await store.bind(BINDING)
     await store.put(KEY, streamOf(bytes(1)), opts)
     await store.put(fileObjectKey(OTHER, ROW), streamOf(bytes(1)), opts)
     const found: string[] = []
@@ -496,21 +557,6 @@ describe("key and prefix shape", () => {
 })
 
 describe("storage failures", () => {
-  it("a lost marker race is refused", async () => {
-    const { client, objects } = fakeS3()
-    const real = client.putObject
-    client.putObject = async (i) => {
-      await real(i)
-      // Інша база перезаписує маркер одразу після нашого запису
-      if (i.Key === INSTANCE_MARKER_KEY)
-        objects.get(i.Key)!.bytes = new TextEncoder().encode(OTHER_BINDING)
-    }
-    await expect(
-      fromS3Client(client, "b").put(KEY, streamOf(bytes(1)), opts)
-    ).rejects.toMatchObject({ reason: "foreign-bucket" })
-    expect(objects.has(KEY)).toBe(false)
-  })
-
   it("a missing bucket is an error, not a missing key", async () => {
     const { client } = fakeS3()
     client.getObject = async () => {
