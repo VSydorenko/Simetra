@@ -7,6 +7,7 @@ export {
   REFERENCE_METADATA,
 } from "../src/compiler/__tests__/fixtures/reference-domain"
 export * from "../src/compiler/__tests__/helpers"
+export { reconcileFilesAged } from "../src/server/runtime"
 export * from "../src/compiler/__tests__/fixtures/promotion"
 export {
   ATTACHMENTS_TABLE,

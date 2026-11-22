@@ -719,6 +719,20 @@ export async function createCommandRuntime(
     },
   }
   let instance: Promise<string> | undefined
+  const reconcileOf = (
+    store: FileStore,
+    options: ReconcileOptions,
+    graceMs?: number
+  ): Promise<ReconcileReport> => {
+    rejectNested()
+    return reconcile(
+      catalog.objects.filter((o) => o.storage !== undefined).map((o) => o.id),
+      reconcileSource(state, cachedInstance),
+      store,
+      options,
+      graceMs
+    )
+  }
   const cachedInstance = (): Promise<string> => {
     instance ??= fileInstance(state).catch((error: unknown) => {
       // Невдача не кешується: наступний виклик пробує знову.
@@ -727,7 +741,7 @@ export async function createCommandRuntime(
     })
     return instance
   }
-  return {
+  const runtime: CommandRuntime = {
     catalog,
     // Анонімна команда йде далі: її судить `current_user_id()` = `NULL`.
     run: async (session, input, options) => {
@@ -790,17 +804,38 @@ export async function createCommandRuntime(
         throw error
       }
     },
-    reconcileFiles: (store, options) => {
-      rejectNested()
-      return reconcile(
-        catalog.objects.filter((o) => o.storage !== undefined).map((o) => o.id),
-        reconcileSource(state, cachedInstance),
-        store,
-        options
-      )
-    },
+    reconcileFiles: (store, options) => reconcileOf(store, options),
     fileInstance: cachedInstance,
   }
+  AGED_RECONCILE.set(runtime, reconcileOf)
+  return runtime
+}
+
+// Тестовий шов: вік сироти задає лише тест, і лише тут, не в публічному API
+const AGED_RECONCILE = new WeakMap<
+  object,
+  (
+    store: FileStore,
+    options: ReconcileOptions,
+    graceMs: number
+  ) => Promise<ReconcileReport>
+>()
+
+/**
+ * Test seam, not exported from `simetra/server`: the reconciliation of
+ * `runtime` (its database source, the database clock) with an explicit orphan
+ * age. The public `reconcileFiles` always uses `RECONCILE_GRACE_MS`.
+ */
+export function reconcileFilesAged(
+  runtime: CommandRuntime,
+  store: FileStore,
+  options: ReconcileOptions,
+  graceMs: number
+): Promise<ReconcileReport> {
+  const run = AGED_RECONCILE.get(runtime)
+  if (run === undefined)
+    throw new Error("not a runtime of createCommandRuntime")
+  return run(store, options, graceMs)
 }
 
 /** Заморожує дані каталогу до дна: каталог — чисті дані JSON, без циклів. */

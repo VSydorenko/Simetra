@@ -23,6 +23,8 @@ interface Setup {
   rows: Record<string, string[]>
   /** ids that appear only for the second check (a row created in between) */
   lateRows?: string[]
+  /** keys that `get` finds but the listing does not show */
+  late?: string[]
   refuse?: boolean
 }
 
@@ -32,7 +34,16 @@ function setup(s: Setup) {
   const calls: string[] = []
   const store: FileStore = {
     put: () => Promise.reject(new Error("unused")),
-    get: () => Promise.reject(new Error("unused")),
+    // Байти, що з'явилися після переліку, `get` знаходить, перелік — ні
+    async get(key) {
+      if (s.objects[key] === undefined && !(s.late ?? []).includes(key))
+        return null
+      return {
+        body: new ReadableStream<Uint8Array>(),
+        size: 1,
+        contentType: "text/plain",
+      }
+    },
     async delete(key) {
       deleted.push(key)
     },
@@ -75,10 +86,13 @@ function setup(s: Setup) {
     },
   }
   const run = (graceMs?: number) =>
-    reconcile([OBJ, OTHER_OBJ], source, store, {
-      log: (e) => log.push(e),
-      ...(graceMs === undefined ? {} : { graceMs }),
-    })
+    reconcile(
+      [OBJ, OTHER_OBJ],
+      source,
+      store,
+      { log: (e) => log.push(e) },
+      graceMs
+    )
   return { run, log, deleted, calls }
 }
 
@@ -197,4 +211,43 @@ describe("reconcile", () => {
     const t = setup({ objects, rows: { [OBJ]: rows } })
     expect((await t.run()).deleted).toBe(0)
   })
+
+  describe("rows without bytes: a merge of row pages and the listing", () => {
+    it("finds them across several pages on both sides, interleaved", async () => {
+      // Рядки — парні n, байти — n кратні 3: 3000 рядків (3 сторінки) і 2000
+      // об'єктів; без байтів 2000 рядків; об'єкти без рядка свіжі
+      const objects: Record<string, Date> = {}
+      const rows: string[] = []
+      for (let n = 0; n < 6000; n++) {
+        if (n % 2 === 0) rows.push(rowId(n))
+        if (n % 3 === 0) objects[key(n)] = FRESH
+      }
+      const t = setup({ objects, rows: { [OBJ]: rows } })
+      const report = await t.run()
+      expect(report.listed).toBe(2000)
+      expect(report.rowsWithoutBytes).toBe(2000)
+      expect(report.deleted).toBe(0)
+      expect(t.log.filter((e) => e.kind === "row-without-bytes")).toHaveLength(
+        2000
+      )
+    })
+
+    it("does not count a row whose bytes appeared after the listing", async () => {
+      const t = setup({
+        objects: {},
+        rows: { [OBJ]: [rowId(7)] },
+        late: [key(7)],
+      })
+      expect((await t.run()).rowsWithoutBytes).toBe(0)
+    })
+  })
+
+  it.each([Number.NaN, -1, Number.POSITIVE_INFINITY])(
+    "refuses an age of %s before any I/O",
+    async (age) => {
+      const t = setup({ objects: { [key(1)]: FRESH }, rows: {} })
+      await expect(t.run(age)).rejects.toThrow(RangeError)
+      expect(t.deleted).toEqual([])
+    }
+  )
 })

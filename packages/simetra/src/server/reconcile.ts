@@ -1,4 +1,4 @@
-import { isFileObjectKey } from "simetra/model"
+import { fileObjectKey, isFileObjectKey } from "simetra/model"
 import { FileStoreError, type FileStore } from "./file-store"
 
 /** Age after which an object without a row may be deleted (platform spec §8.2). */
@@ -19,11 +19,6 @@ export type ReconcileLogEntry =
 /** Options of `CommandRuntime.reconcileFiles`. */
 export interface ReconcileOptions {
   log: (entry: ReconcileLogEntry) => void
-  /**
-   * Minimum age of an orphan, measured by the database clock; default
-   * {@link RECONCILE_GRACE_MS}. A smaller value is for tests only.
-   */
-  graceMs?: number
 }
 
 /** The outcome of one reconciliation run. */
@@ -57,6 +52,28 @@ interface Orphan {
 }
 
 /**
+ * Курсор по сторінках `storage_row_page`: пам'ять — одна сторінка, а не всі
+ * рядки об'єкта. Порядок id — порядок uuid у Postgres, а він збігається з
+ * лексикографічним порядком ключів бакета для канонічних uuid малими літерами
+ */
+function rowCursor(source: ReconcileSource, object: string) {
+  let page: string[] = []
+  let at = 0
+  let last: string | null = null
+  let done = false
+  const peek = async (): Promise<string | undefined> => {
+    if (at >= page.length && !done) {
+      page = await source.rowPage(object, last)
+      at = 0
+      if (page.length < PAGE) done = true
+      if (page.length > 0) last = page.at(-1)!
+    }
+    return page[at]
+  }
+  return { peek, next: () => void at++ }
+}
+
+/**
  * Звірка бакета з базою (§8.2): єдине місце, де байти видаляються. Усе, що
  * може зашкодити, перевіряється до першого видалення: маркер бакета, запобіжник;
  * кожна сирота перед видаленням перевіряється ще раз.
@@ -65,8 +82,13 @@ export async function reconcile(
   objectIds: readonly string[],
   source: ReconcileSource,
   store: FileStore,
-  { log, graceMs = RECONCILE_GRACE_MS }: ReconcileOptions
+  { log }: ReconcileOptions,
+  // Вік — параметр ядра лише для тестів (рантайм завжди дає 24 год): значення
+  // поза ≥ 0 зробило б кандидатом кожен об'єкт, зокрема щойно завантажений
+  graceMs: number = RECONCILE_GRACE_MS
 ): Promise<ReconcileReport> {
+  if (!Number.isFinite(graceMs) || graceMs < 0)
+    throw new RangeError("graceMs must be a finite number >= 0")
   const report: ReconcileReport = {
     listed: 0,
     deleted: 0,
@@ -96,13 +118,17 @@ export async function reconcile(
   const orphans: Orphan[] = []
   for (const object of objectIds) {
     const prefix = `o/${object}/`
-    // Рядки — до переліку: рядок, що з'явився під час нього, не дефект
-    const rows = new Set<string>()
-    for (let after: string | null = null; ;) {
-      const page = await source.rowPage(object, after)
-      for (const id of page) rows.add(id)
-      if (page.length < PAGE) break
-      after = page.at(-1)!
+    const rows = rowCursor(source, object)
+    // Рядок без байтів у переліку міг з'явитися вже після нього (байти пишуться
+    // до рядка, а перелік їх ще не бачив): не дефект, якщо `get` знаходить байти
+    const withoutBytes = async (id: string) => {
+      const found = await store.get(fileObjectKey(object, id))
+      if (found !== null) {
+        await found.body.cancel()
+        return
+      }
+      report.rowsWithoutBytes++
+      log({ kind: "row-without-bytes", object, id })
     }
     let batch: Orphan[] = []
     const flush = async () => {
@@ -117,14 +143,21 @@ export async function reconcile(
       if (!isFileObjectKey(entry.key)) continue
       report.listed++
       const id = entry.key.slice(prefix.length)
-      rows.delete(id)
+      // Зливання двох упорядкованих потоків: рядки до цього id не мають байтів
+      for (let r = await rows.peek(); r !== undefined && r <= id;) {
+        if (r < id) await withoutBytes(r)
+        rows.next()
+        r = await rows.peek()
+      }
       if (now - entry.lastModified.getTime() < graceMs) continue
       batch.push({ object, key: entry.key, id })
       if (batch.length === PAGE) await flush()
     }
     if (batch.length > 0) await flush()
-    for (const id of rows) log({ kind: "row-without-bytes", object, id })
-    report.rowsWithoutBytes += rows.size
+    for (let r = await rows.peek(); r !== undefined; r = await rows.peek()) {
+      await withoutBytes(r)
+      rows.next()
+    }
   }
 
   if (
