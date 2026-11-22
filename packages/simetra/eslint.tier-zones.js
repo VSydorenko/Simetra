@@ -256,12 +256,24 @@ const TEST_ONLY_AUTH_PATTERN = {
 // allow-list-ом (`\\.`), а вихід з ярусу й `supabase/…` ловлять окремі
 // патерни: `../x` з `src/data/runtime` — легальний шлях усередині T4, тож
 // заборона йде за іменем яруса, а не за самим `..`.
-function dataPurity(store) {
-  const allowed = ["zod", "simetra/model", ...(store ? [] : ["react"])]
+// `kind`: "store" — ядро без react; "data" — решта `src/data`; "centrifugo" —
+// єдина тека, що імпортує SDK `centrifuge` (необов'язкова peer). Блок
+// "centrifugo" іде після "data": у flat-конфігу пізніший блок для того самого
+// правила замінює опції раннього цілком, тож усі патерни повторено.
+function dataPurity(kind) {
+  const store = kind === "store"
+  const allowed = [
+    "zod",
+    "simetra/model",
+    ...(store ? [] : ["react"]),
+    ...(kind === "centrifugo" ? ["centrifuge"] : []),
+  ]
   return {
     files: store
       ? ["src/data/store/**/*.{ts,tsx,mts,cts}"]
-      : PURITY_FILES("data"),
+      : kind === "centrifugo"
+        ? ["src/data/centrifugo/**/*.{ts,tsx,mts,cts}"]
+        : PURITY_FILES("data"),
     ignores: PURITY_IGNORES,
     rules: {
       "@typescript-eslint/no-restricted-imports": [
@@ -274,13 +286,28 @@ function dataPurity(store) {
               regex: `^(?!\\.|(?:${allowed.join("|")})(?:/|$))`,
               message: store
                 ? "T4 purity: src/data/store imports only ./…, simetra/model and zod; no react and no @tanstack/* (P4-B spec §3)."
-                : "T4 purity: src/data imports only ./…, simetra/model, zod and react; no @tanstack/* (P4-B spec §3).",
+                : kind === "centrifugo"
+                  ? "T4 purity: src/data/centrifugo imports only ./…, simetra/model, zod, react and centrifuge; no @tanstack/* (P4-B spec §8.5)."
+                  : "T4 purity: src/data imports only ./…, simetra/model, zod and react; centrifuge only in src/data/centrifugo; no @tanstack/* (P4-B spec §3).",
             },
             {
               regex: `^(?:\\./)?(?:\\.\\./)+(?:src/)?(?:${TIERS.filter((t) => t !== "data").join("|")})(?:/|$)`,
               message:
                 "T4 purity: a relative path out of src/data embeds a second copy of another tier in dist/data (P4-B spec §3).",
             },
+            ...(kind === "centrifugo"
+              ? []
+              : [
+                  {
+                    // Лише `src/data/centrifugo` імпортує свою теку: відносний
+                    // `./centrifugo` чи `../centrifugo` тягнув би `centrifuge` у
+                    // `simetra/data`.
+                    regex:
+                      "^(?:(?:\\./(?:\\.\\./)*|(?:\\.\\./)+)(?:(?:src/)?data/)?centrifugo(?:/|$))",
+                    message:
+                      "T4 purity: only src/data/centrifugo imports its own folder; a relative centrifugo/… elsewhere pulls centrifuge into simetra/data (P4-B spec §8.5).",
+                  },
+                ]),
             {
               // Прямі форми й обхід через ярус: `../data/supabase`, `../../src/data/supabase`.
               regex:
@@ -353,8 +380,9 @@ export const purityConfigs = [
       ],
     },
   },
-  dataPurity(false),
-  dataPurity(true),
+  dataPurity("data"),
+  dataPurity("store"),
+  dataPurity("centrifugo"),
   {
     // T4 — контракт, а не реалізація: `simetra/data/supabase` підключає host
     // чи T6, а відносний `../data` вбудував би другу копію T4 в `dist/ui`.
@@ -369,9 +397,9 @@ export const purityConfigs = [
             TEST_ONLY_AUTH_PATTERN,
             {
               regex:
-                "^(?:simetra/data/supabase(?:/|$)|(?:\\./)?(?:\\.\\./)+(?:src/)?data(?:/|$))",
+                "^(?:centrifuge(?:/|$)|simetra/data/(?:supabase|centrifugo)(?:/|$)|(?:\\./)?(?:\\.\\./)+(?:src/)?data(?:/|$))",
               message:
-                "T5 purity: src/ui does not import simetra/data/supabase or a relative ../data; the transport is wired by the host or T6 (P4-B spec §3).",
+                "T5 purity: src/ui does not import simetra/data/supabase, simetra/data/centrifugo, centrifuge or a relative ../data; the transport is wired by the host or T6 (P4-B spec §3).",
             },
           ],
         },

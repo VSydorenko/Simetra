@@ -4,9 +4,10 @@
  * перелік скінченний: нова вбудована нового мажора Postgres не стає
  * дозволеною, доки перелік не перегенерують і diff не переглянуть.
  *
- * Запуск над локальним стеком (`pnpm db:start`):
+ * Запуск над локальним стеком `postgres` (`pnpm db:pg:start`):
  *   pnpm --filter simetra builtin-functions
- * Адресу бази можна задати `SIMETRA_TEST_DATABASE_URL`. Дрейф версії Postgres
+ * Типово — стек `postgres`; стек Supabase — явним `SIMETRA_TEST_DATABASE_URL`.
+ * Дрейф версії Postgres
  * ловить DB-тест `test/db/builtin-functions.db.test.ts`.
  *
  * Тим самим запуском пише перелік імен типів `pg_catalog`
@@ -30,7 +31,7 @@ const TYPES_OUTPUT = new URL(
 )
 const url =
   process.env.SIMETRA_TEST_DATABASE_URL ??
-  "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+  "postgresql://postgres:postgres@127.0.0.1:54422/simetra"
 
 const client = new pg.Client({ connectionString: url })
 await client.connect()

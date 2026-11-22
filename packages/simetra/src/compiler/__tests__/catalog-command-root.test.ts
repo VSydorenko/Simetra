@@ -282,7 +282,8 @@ describe("<root>_create_root", () => {
           expressions: [
             {
               tree: tree(
-                `SELECT to_jsonb(${row}) || jsonb_build_object('version', ${row}.version::text)`
+                // Нормалізована колонка пошуку найменування — не поле рядка
+                `SELECT (to_jsonb(${row}) - 'description_search') || jsonb_build_object('version', ${row}.version::text)`
               ),
             },
           ],

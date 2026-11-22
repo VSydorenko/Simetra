@@ -27,14 +27,40 @@ const INDEX = /^\d+$/
 
 const MEMBER = "creatorMember"
 const EXPECTED = "expectedValues"
+const VALUES = "values"
+const EXPECTED_VERSION = "expectedVersion"
+const SECTIONS = "tabularSections"
+const DELETE_IDS = "deleteIds"
+const MARK = "mark"
 
 /**
- * Structural words that head an error path of an operation
- * (`creatorMember.<name>`, `expectedValues.<name>`). They are reserved: an
- * attribute, a tabular section or a column must not take one as its logical
- * name, or its error path could not be told from the structural one.
+ * Structural words that head an error path of an operation: the fields of
+ * the operation forms (`values`, `expectedValues`, `expectedVersion`,
+ * `tabularSections`, `deleteIds`, `creatorMember`), which `operationRefusalPath`
+ * and the hooks of the kernel put first, and `mark`, the strict key of
+ * `markDeletion`. They are reserved: an attribute, a tabular section or a
+ * column must not take one as its logical name, or its error path could not
+ * be told from the structural one. `id` is not listed: it is the standard
+ * key name and maps to itself. Words that are names of a standard element of
+ * a kind are never reserved (a unit test holds the intersection empty).
+ *
+ * Known gap: the operation keys `action` and `object` are not reserved
+ * either, yet their refusal paths are emitted for a resolved object too
+ * (`server/phase.ts`, `server/files.ts`, `server/read.ts`), so for an object
+ * with a header attribute named `action` or `object` such a path maps as that
+ * attribute. Both are standard names of the rights tabular section, so a
+ * reservation cannot close it; the kind of a path set by its producer
+ * (issue #349) does, and replaces this list.
  */
-export const STRUCTURAL_PATH_WORDS: readonly string[] = [MEMBER, EXPECTED]
+export const STRUCTURAL_PATH_WORDS: readonly string[] = [
+  MEMBER,
+  EXPECTED,
+  VALUES,
+  EXPECTED_VERSION,
+  SECTIONS,
+  DELETE_IDS,
+  MARK,
+]
 
 type Direction = "toWire" | "fromWire"
 
@@ -91,6 +117,10 @@ function mapPath(
     const field = mapField(attributeFields(entry.attributes), name, direction)
     return [EXPECTED, field ?? name, ...tail].join(".")
   }
+
+  // Решта структурних слів — голова шляху операції без відображення: їхня
+  // однойменна колонка не має перехоплювати шлях як реквізит шапки.
+  if (STRUCTURAL_PATH_WORDS.includes(head)) return path
 
   const section = entry.tabularSections.find((s) =>
     toWire ? s.name === head : s.id === head

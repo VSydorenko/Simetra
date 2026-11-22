@@ -338,6 +338,8 @@ export function kitchenSink(): Map<string, string> {
     autonumber: false,
     codeUnique: false,
     mainPresentation: "Code",
+    // Код числовий: поле пошуку без нормалізованої колонки; найменування — з нею.
+    search: { fields: ["code", "description"], mode: "contains" },
     // Обидві гілки `effects.header`: тут — список (власний і стандартний
     // реквізит), у документа — "all".
     customActions: customActions("update", ["itemNote", "description"], true),
@@ -413,6 +415,7 @@ export function kitchenSink(): Map<string, string> {
     numberType: "Number",
     autonumber: false,
     numberPeriodicity: "Month",
+    search: { fields: ["number"], mode: "startsWith" },
     customActions: customActions("post", "all", true),
     // Обидві форми носія: рядок і шлях через товар до його автора.
     ownership: ["createdBy", ["saleItem", "createdBy"]],
@@ -623,6 +626,8 @@ export function kitchenSink(): Map<string, string> {
   const ledger = {
     ...header("CustomTable", "Ledger", "ledger"),
     comment: "Ledger",
+    // Колонка з недетермінованою колляцією: нормалізована йде під колляцією бази.
+    search: { fields: ["note"], mode: "startsWith" },
     columns: [
       {
         id: id(),

@@ -125,6 +125,7 @@ export const documentKind: KindDefinition = {
   keyOrder: keyOrderOf(documentSchema),
   referenceable: true,
   compositeIndexes: true,
+  search: { defaultFields: () => ["number"] },
   writePattern: "server",
   actions: () => [
     ...recordActions(documentKind.tabularSectionColumns !== undefined),

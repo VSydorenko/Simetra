@@ -47,7 +47,11 @@ const FK_ACTION_SQL = {
   setDefault: "SET DEFAULT",
 } as const
 
-function renderColumn(table: PhysicalTable, column: PhysicalColumn): string {
+/** Renders one column definition, as in `CREATE TABLE` and `ADD COLUMN`. */
+export function renderColumn(
+  table: PhysicalTable,
+  column: PhysicalColumn
+): string {
   const parts = [quoteIdent(column.name), column.type]
   if (column.collation) parts.push(`COLLATE ${qualifiedName(column.collation)}`)
   if (column.identity) {

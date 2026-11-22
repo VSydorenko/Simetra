@@ -16,11 +16,17 @@ export interface BuiltinExclusion {
    */
   derived?: "regclassParameter"
   /**
-   * Виклик лишає стан сесії, що переживає транзакцію (сесійний замок, зерно
-   * `random()`): у сесії пулу його успадкує наступна команда, тож такий клас
-   * поза переліком і тіла функції, не лише голови (спека прав §6.1).
+   * Виклик лишає чи читає стан сесії, що переживає транзакцію (сесійний
+   * замок, зерно `random()`, останнє значення послідовності): у сесії пулу
+   * його успадкує наступна команда, тож такий клас поза переліком і тіла
+   * функції, не лише голови (спека прав §6.1).
    */
   outlivesTransaction?: true
+  /**
+   * Порада діагностики тіла функції для класу з `outlivesTransaction`: чому
+   * стан небезпечний і чим його замінити (одне джерело для повідомлення).
+   */
+  advice?: { en: string; uk: string }
 }
 
 /**
@@ -66,6 +72,10 @@ export const BUILTIN_EXCLUSIONS: readonly BuiltinExclusion[] = [
       "pg_try_advisory_lock",
     ],
     outlivesTransaction: true,
+    advice: {
+      en: "A session-level advisory lock outlives the transaction, so in a connection of the command pool the next command of another user would inherit it. Take a transaction-level advisory lock (pg_advisory_xact_lock, pg_try_advisory_xact_lock), which Postgres releases with the command.",
+      uk: "Сесійний advisory-замок переживає транзакцію, тож у з'єднанні пулу команд його успадкувала б наступна команда іншого користувача. Беріть транзакційний advisory-замок (pg_advisory_xact_lock, pg_try_advisory_xact_lock), який Postgres знімає разом із командою.",
+    },
   },
   // Зерно генератора `random()` і сесія походження реплікації належать
   // сесії, а не транзакції: відкат команди їх не повертає, і в сесії пулу їх
@@ -79,6 +89,10 @@ export const BUILTIN_EXCLUSIONS: readonly BuiltinExclusion[] = [
     ],
     prefixes: [],
     outlivesTransaction: true,
+    advice: {
+      en: "The seed of random() and the replication origin of a session outlive the transaction, so the next command of another user in the same pooled connection would inherit them. Do not seed random() or set a replication origin in a function body.",
+      uk: "Зерно random() і походження реплікації сесії переживають транзакцію, тож у тому самому з'єднанні пулу їх успадкувала б наступна команда іншого користувача. Не задавайте зерно random() і походження реплікації в тілі функції.",
+    },
   },
   // Файли сервера (конфігурація, керуючий файл, підсумки WAL), журнали,
   // каталог даних і пам'ять сервера — поза межею даних застосунку.
@@ -145,11 +159,24 @@ export const BUILTIN_EXCLUSIONS: readonly BuiltinExclusion[] = [
     ],
   },
   // Сон тримає команду й замки; послідовність змінюється поза транзакцією,
-  // тож її відкат команди не повертає.
+  // тож її відкат команди не повертає. Запис послідовності — ефект даних
+  // (`DEFAULT nextval` — вираз, не тіло), тож тут без `outlivesTransaction`.
   {
     reason: "sleeps or changes a sequence",
-    names: ["setval", "nextval", "currval", "lastval"],
+    names: ["setval", "nextval"],
     prefixes: ["pg_sleep"],
+  },
+  // Значення попереднього запиту з того самого з'єднання пулу читав би чужий
+  // виклик: у тілі функції замість них — `INSERT … RETURNING`.
+  {
+    reason: "reads the last sequence value of the session",
+    names: ["currval", "lastval"],
+    prefixes: [],
+    outlivesTransaction: true,
+    advice: {
+      en: "currval() and lastval() would hand the caller the value of an earlier query of the same pooled connection. Read a generated value with INSERT … RETURNING instead.",
+      uk: "currval() і lastval() віддали б виклику значення попереднього запиту того самого з'єднання пулу. Читайте згенероване значення через INSERT … RETURNING.",
+    },
   },
   // Сповіщення, знімок для інших сесій, стан чужих сесій (замки й хто кого
   // блокує), знімок і скидання статистики сесії, позиція й файли WAL, стан
@@ -232,6 +259,17 @@ export function outlivesTransaction(name: string): boolean {
       exclusion.outlivesTransaction === true &&
       matches(exclusion, name, new Set())
   )
+}
+
+/** Порада для вбудованої класу `outlivesTransaction` (діагностика тіла функції). */
+export function outlivesAdvice(
+  name: string
+): { en: string; uk: string } | undefined {
+  return BUILTIN_EXCLUSIONS.find(
+    (exclusion) =>
+      exclusion.outlivesTransaction === true &&
+      matches(exclusion, name, new Set())
+  )?.advice
 }
 
 /** Чи виконує вбудована функція з цим ім'ям текст SQL (спека прав §5.3). */

@@ -14,6 +14,7 @@ import {
   type CatalogModel,
   type CatalogTable,
   type CatalogUnit,
+  type PhysicalTable,
 } from "simetra/model"
 import type {
   EngineAction,
@@ -37,6 +38,12 @@ export type RemovalCover =
   | "deleteSemantics"
   | "mapping"
   | "rowLevelSecurity"
+  /**
+   * Похідна колонка платформи (нормалізована колонка поля пошуку, спека П2
+   * §5) чи її індекс: значення обчислює база, план знімає й створює її сам.
+   * Факт — походження колонки в знімку marker, а не ім'я.
+   */
+  | "derived"
   | null
 
 /**
@@ -347,6 +354,8 @@ export function classifyRemovals(p: {
   clone: CatalogModel
   desired: CatalogModel
   parse: SqlParser
+  /** Таблиці знімка marker цілі (старі імена): походження похідних колонок. */
+  applied: readonly PhysicalTable[] | undefined
 }): Removal[] {
   const { record, intent, clone, desired, parse } = p
   const names = oldNames(record, intent)
@@ -366,10 +375,12 @@ export function classifyRemovals(p: {
       continue
     }
     out.push(
-      ...tableRemovals(u, from, to, record, names).map((r) => ({
-        ...r,
-        tables: [{ schema: u.schema, name: u.name }],
-      }))
+      ...tableRemovals(u, from, to, record, names, derivedOf(p.applied, u)).map(
+        (r) => ({
+          ...r,
+          tables: [{ schema: u.schema, name: u.name }],
+        })
+      )
     )
   }
   out.push(...unitRemovals(record, clone, desired, parse, names, unitTables))
@@ -383,12 +394,32 @@ const findTable = (
 ): CatalogTable | undefined =>
   model.tables.find((t) => t.schema === schema && t.name === name)
 
+/** Похідні колонки й їхні індекси таблиці одиниці за знімком marker (старі імена). */
+function derivedOf(
+  applied: readonly PhysicalTable[] | undefined,
+  u: UnitTable
+): { columns: ReadonlySet<string>; indexes: ReadonlySet<string> } {
+  const table = applied?.find((t) => t.schema === u.schema && t.name === u.old)
+  const columns = new Set(
+    (table?.columns ?? [])
+      .filter((c) => c.origin.searchOf !== undefined)
+      .map((c) => c.name)
+  )
+  const indexes = new Set(
+    (table?.indexes ?? [])
+      .filter((i) => i.keys.some((k) => "column" in k && columns.has(k.column)))
+      .map((i) => i.name)
+  )
+  return { columns, indexes }
+}
+
 function tableRemovals(
   u: UnitTable,
   from: CatalogTable,
   to: CatalogTable,
   record: PromotionRecord,
-  names: OldNames
+  names: OldNames,
+  derived: { columns: ReadonlySet<string>; indexes: ReadonlySet<string> }
 ): TableRemoval[] {
   const out: TableRemoval[] = []
   const at = (...rest: string[]) => path("tables", u.schema, u.old, ...rest)
@@ -443,7 +474,11 @@ function tableRemovals(
       out.push({
         path: at("columns", old),
         kind: "missing",
-        covered: retired(c.name) ? "retired" : null,
+        covered: retired(c.name)
+          ? "retired"
+          : derived.columns.has(old)
+            ? "derived"
+            : null,
       })
       continue
     }
@@ -498,12 +533,13 @@ function tableRemovals(
     out.push({
       path: at("indexes", name),
       kind: change,
-      covered: object({
-        kind: "index",
-        schema: u.schema,
-        table: u.old,
-        name,
-      }),
+      covered:
+        object({
+          kind: "index",
+          schema: u.schema,
+          table: u.old,
+          name,
+        }) ?? (derived.indexes.has(name) ? "derived" : null),
     })
   }
   return out

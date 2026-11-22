@@ -1110,6 +1110,17 @@ async function runModelOn(
     return any
   }
   inspect.watchSignalReads((object, read) => {
+    // Після межі відкинутих кожна відповідь до нової сесії відкидається (§6.2):
+    // читання за сигналом на видимій вкладці — запит без шансу. Прихована
+    // вкладка не читає й без межі.
+    if (
+      read.by === "batch" &&
+      core.visible &&
+      inspect.versionEpochs().unavailable
+    )
+      asyncViolations.push(
+        "a read started by the receiver after the discard limit"
+      )
     for (const sub of read.views) {
       const owedOf = owedRereads.get(sub) ?? { batch: 0, wave: 0 }
       owedOf[read.by] += 1
@@ -4949,6 +4960,9 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
     /the rights pass removed .* of an allowed pair|purged by the rights pass of an allowed pair/,
   // Приймач: сигнал пари, яку `purge` зняв, — читання без сигналу.
   "receiver-purge-keeps-batch": /a signal read without a signal/,
+  // Приймач після межі відкинутих: читання за сигналом без шансу.
+  "receiver-reads-unavailable":
+    /a read started by the receiver after the discard limit/,
 }
 
 // Насіння самотесту, коли насіння 1 не знаходить дефекту за 10 000 прогонів.
@@ -4968,7 +4982,10 @@ const RIGHTS_DEFECTS: readonly DefectFlag[] = [
 ]
 
 // Дефекти приймача сигналів (B5b-3): їх ловлять прогони з сигналами.
-const SIGNAL_DEFECTS: readonly DefectFlag[] = ["receiver-purge-keeps-batch"]
+const SIGNAL_DEFECTS: readonly DefectFlag[] = [
+  "receiver-purge-keeps-batch",
+  "receiver-reads-unavailable",
+]
 
 describe("core model self-check", () => {
   it.each(DEFECTS)(

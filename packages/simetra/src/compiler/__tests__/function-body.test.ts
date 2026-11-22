@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compile, type Diagnostic } from "simetra/compiler"
+import { compile, isRepairError, type Diagnostic } from "simetra/compiler"
 import { SQL_DEBT_FILE } from "simetra/model"
 import { policyDomain, promotableTaskNote, withRoles } from "./fixtures/rights"
 import {
@@ -344,6 +344,18 @@ const POOL_SESSION: readonly [string, string, Record<string, string>][] = [
     "sql.function-body-session-builtin",
     { call: "setseed" },
   ],
+  // Значення попереднього запиту з того самого з'єднання пулу читав би чужий
+  // виклик: замість нього — `INSERT … RETURNING`.
+  [
+    "SELECT currval('public.s')",
+    "sql.function-body-session-builtin",
+    { call: "currval" },
+  ],
+  [
+    "SELECT pg_catalog.lastval()",
+    "sql.function-body-session-builtin",
+    { call: "lastval" },
+  ],
 ]
 
 /** Те саме, але локально для транзакції: помилки немає (спека прав §6.1). */
@@ -355,6 +367,10 @@ const POOL_LOCAL: readonly string[] = [
   "PERFORM pg_advisory_xact_lock(1)",
   "PERFORM pg_try_advisory_xact_lock_shared(1)",
   "PERFORM random()",
+  // Запис послідовності — ефект даних, а не стан сесії; сон теж.
+  "PERFORM nextval('public.s')",
+  "PERFORM setval('public.s', 1)",
+  "PERFORM pg_sleep(0)",
   "CREATE TEMP TABLE scratch (a uuid) ON COMMIT DROP; DROP TABLE pg_temp.scratch",
 ]
 
@@ -363,7 +379,18 @@ describe("the body leaves no session state to the pool (спека прав §6.
     file: string,
     code: string,
     params: Record<string, string>
-  ) => ({ code, file, params: { function: "public.f", ...params, line: 1 } })
+  ) => ({
+    code,
+    file,
+    params: {
+      function: "public.f",
+      ...(code === "sql.function-body-session-builtin"
+        ? { schema: "public", name: "f" }
+        : {}),
+      ...params,
+      line: 1,
+    },
+  })
 
   // Борг не виняток (правило власника): модуль прийнятої таблиці — так само.
   it.each(
@@ -472,6 +499,39 @@ describe("the body leaves no session state to the pool (спека прав §6.
       expect(brief(result.diagnostics)).toEqual([])
     }
   )
+
+  // Борг прийнятої таблиці з `currval` законний до виправлення: тека
+  // пишеться, а план застосування блокується (клас ремонту).
+  it("currval of a function body is a repair-class error with a RETURNING hint", async () => {
+    const result = await compile(
+      await acceptDebt(
+        files({ [EXTRA]: plpgsql("PERFORM currval('public.s')") })
+      )
+    )
+    const found = result.diagnostics.filter(
+      (d) => d.code === "sql.function-body-session-builtin"
+    )
+    expect(found).toHaveLength(1)
+    expect(isRepairError(found[0]!)).toBe(true)
+    expect(found[0]!.hint).toContain("INSERT … RETURNING")
+    expect(found[0]!.hint).not.toContain("advisory")
+  })
+
+  // Порада — властивість запису класу, а не один текст на всі вбудовані.
+  it("an advisory lock gets its own hint, without the currval advice", async () => {
+    const result = await compile(
+      await acceptDebt(
+        files({ [EXTRA]: plpgsql("PERFORM pg_advisory_lock(1)") })
+      )
+    )
+    const found = result.diagnostics.filter(
+      (d) => d.code === "sql.function-body-session-builtin"
+    )
+    expect(found).toHaveLength(1)
+    expect(isRepairError(found[0]!)).toBe(true)
+    expect(found[0]!.hint).toContain("pg_advisory_xact_lock")
+    expect(found[0]!.hint).not.toContain("RETURNING")
+  })
 
   // Захищене налаштування судить контекст команди, локальність — це правило
   // без переліку імен: нелокальний `SET` захищеного — два різні дефекти.

@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { searchSchema } from "./search"
 import { appSchemaNameSchema } from "./pg-schema"
 import {
   elementNameSchema,
@@ -430,6 +431,7 @@ export const customTableSchema = z.strictObject({
     description:
       "Row-level security of the table: off, enabled, or forced (applies to the table owner too).",
   }),
+  search: searchSchema.optional(),
 })
 
 export type CustomTable = z.infer<typeof customTableSchema>

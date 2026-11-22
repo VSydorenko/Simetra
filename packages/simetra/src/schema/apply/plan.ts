@@ -21,6 +21,7 @@ import {
   quoteIdent,
   type CatalogModel,
   type DatabaseProvider,
+  type PhysicalTable,
 } from "simetra/model"
 import {
   copiesShadowFromTemplate,
@@ -60,6 +61,7 @@ import {
   type BackfillInput,
   type BackfillTarget,
 } from "./backfill"
+import { planDerivedColumns } from "./derived-columns"
 import {
   carrierBackfillSteps,
   createdByPlan,
@@ -360,18 +362,28 @@ async function backfillActions(p: {
   target: DbConnection
   input: BackfillInput
   names: TargetNames
+  /** Таблиці знімка marker цілі: походження похідних колонок. */
+  applied: readonly PhysicalTable[] | undefined
 }): Promise<
   | { ok: true; actions: PlanAction[] }
   | { ok: false; diagnostics: EngineDiagnostic[] }
 > {
   // Пара DROP + CREATE тригера — один CREATE OR REPLACE ще до заповнень і
   // класифікації: id кроків, класи й слід рахуються від остаточного списку
+  // Похідні колонки платформи (спека П2 §5, «Поля пошуку») — тут, бо цей
+  // крок спільний для плану без промоції й з нею: зняття похідної колонки —
+  // перед зміною типу її джерела, і воно не втрата даних
   const input = {
     ...p.input,
-    actions: triggerReplacements(
-      p.input.actions,
-      p.input.source,
-      p.input.parse
+    actions: planDerivedColumns(
+      triggerReplacements(p.input.actions, p.input.source, p.input.parse),
+      {
+        live: p.input.source,
+        applied: p.applied,
+        desired: p.input.physical.tables,
+        names: p.names,
+        parse: p.input.parse,
+      }
     ),
   }
   const targets = backfillTargets(input)
@@ -1110,6 +1122,8 @@ export async function buildPlan(
       promotion: transition,
       epochExists: state.status === "applied" && state.rowVersionEpoch,
       applied,
+      appliedTables:
+        state.status === "applied" ? markerTables(state.marker) : undefined,
       file: input.file,
       diagnostics: dedupe([
         ...verdict.diagnostics,
@@ -1203,25 +1217,28 @@ export async function buildPlan(
       objects: model.objects,
     },
     names: SAME_NAMES,
+    applied:
+      state.status === "applied" ? markerTables(state.marker) : undefined,
   })
   if (!filled.ok) return refused([...diagnostics, ...filled.diagnostics])
+  const engineActions = filled.actions
   // Зняття об'єкта, якого немає в останньому застосованому стані, — з
   // дозволом, і однойменна заміна теж (§6.6)
   const foreign = foreignChanges(
-    filled.actions,
+    engineActions,
     applied,
     live.extracted.model,
     0
   )
   const classified = classifySteps(
-    filled.actions,
+    engineActions,
     live.extracted.model,
     parse,
     0,
     { foreign }
   )
   const undeclared = undeclaredProviderTriggers(
-    filled.actions,
+    engineActions,
     foreign,
     scope.provider
   )
@@ -1260,7 +1277,7 @@ export async function buildPlan(
         state.status === "applied"
           ? { tables: markerTables(state.marker) }
           : undefined,
-        createdByPlan(filled.actions)
+        createdByPlan(engineActions)
       ),
       planSteps.length
     ),
@@ -1441,6 +1458,8 @@ interface PromotionContext {
   epochExists: boolean
   /** Каталог marker цілі: виняток «заміна» — лише для його об'єктів. */
   applied: CatalogModel | undefined
+  /** Таблиці знімка marker цілі (старі імена): походження похідних колонок. */
+  appliedTables: readonly PhysicalTable[] | undefined
   /** Файл запису в `plans/`: його називають відмови виявлення. */
   file: string
   /** Діагностики гейта, переходу й бажаного стану. */
@@ -1649,6 +1668,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
         },
       },
       names,
+      applied: c.appliedTables,
     })
 
   const cloned = await engine.withTargetClone(
@@ -1726,6 +1746,7 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
     clone: cloneModel,
     desired: target.extracted.model,
     parse,
+    applied: c.appliedTables,
   })
   // Клас `platform` — лише за наявного механізму-заміни
   // (спека промоції §8, §9.2): колонки `Ref` на перерахування — з бажаної моделі через реєстр

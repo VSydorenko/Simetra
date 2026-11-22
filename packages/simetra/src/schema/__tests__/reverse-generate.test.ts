@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 import {
   authorTriggerName,
   compile,
+  isRepairError,
   keyTriggerNames,
   loadSqlParser,
   platformBeforeTriggerName,
@@ -2904,4 +2905,262 @@ describe("reverseGenerate", () => {
       expect(result.changes).toEqual([])
     })
   })
+})
+
+// Нормалізована колонка поля пошуку (спека П2 §5, «Поля пошуку») —
+// похідний об'єкт: зворотний генератор повертає її в `search.fields`, а не
+// описує власною згенерованою колонкою, що зіткнулася б із похідною.
+describe("reverseGenerate: the normalized search column", () => {
+  // Форма Postgres (`pg_get_expr`), а не текст компілятора
+  const notes = (expression: string) =>
+    model({
+      tables: [
+        table("app", "notes", {
+          columns: [
+            idColumn,
+            { name: "note", type: "text", notNull: false },
+            {
+              name: "note_search",
+              type: "text",
+              notNull: false,
+              generated: { expression },
+            },
+          ],
+          indexes: [
+            {
+              name: "notes_note_search_idx",
+              unique: false,
+              method: "btree",
+              keys: [
+                {
+                  column: "note_search",
+                  opclass: { name: "text_pattern_ops" },
+                },
+              ],
+              include: [],
+              nullsNotDistinct: false,
+            },
+          ],
+        }),
+      ],
+    })
+  const FILE = "custom-tables/Notes/Notes.meta.json"
+
+  it("becomes a search field, and the folder round-trips", async () => {
+    const live = notes(`"left"(lower((note COLLATE "default")), 660)`)
+    const first = await reverseGenerate(live, options())
+    expect(first.diagnostics).toEqual([])
+    const data = json(first, FILE)
+    expect(data.search).toEqual({ fields: ["note"] })
+    expect((data.columns as Json[]).map((c) => c.physicalName)).toEqual([
+      "id",
+      "note",
+    ])
+    expect(data.indexes).toBeUndefined()
+
+    // Тека компілюється в ту саму колонку й індекс, і повторний introspect
+    // нічого не змінює
+    const compiled = await compile(first.files)
+    expect(compiled.diagnostics.filter((d) => d.severity === "error")).toEqual(
+      []
+    )
+    const physical = compiled.model!.physical.tables.find(
+      (t) => t.name === "notes"
+    )!
+    expect(physical.columns.map((c) => c.name)).toEqual([
+      "id",
+      "note",
+      "note_search",
+    ])
+    expect(physical.indexes.map((i) => i.name)).toEqual([
+      "notes_note_search_idx",
+    ])
+    const second = await reverseGenerate(live, {
+      ...options(first.files),
+      newId: counter(950_000),
+    })
+    expect(second.diagnostics).toEqual([])
+    expect(second.changes).toEqual([])
+  })
+
+  it("never reads the derived column back as a generated column of the table", async () => {
+    const result = await reverseGenerate(
+      notes(`"left"(lower((note COLLATE "default")), 660)`),
+      options()
+    )
+    const columns = json(result, FILE).columns as Json[]
+    expect(columns.filter((c) => c.generated !== undefined)).toEqual([])
+    expect(columns.map((c) => c.physicalName)).not.toContain("note_search")
+  })
+
+  it("an author's index on the derived column is a repair error, and the model keeps it", async () => {
+    const base = notes(`"left"(lower((note COLLATE "default")), 660)`)
+    const t = base.tables[0]!
+    const derivedIndex = t.indexes[0]!
+    const live = {
+      ...base,
+      tables: [
+        {
+          ...t,
+          indexes: [
+            derivedIndex,
+            {
+              ...derivedIndex,
+              name: "notes_note_search_unique",
+              unique: true,
+            },
+            {
+              ...derivedIndex,
+              name: "notes_id_note_search",
+              keys: [{ column: "id" }, ...derivedIndex.keys],
+            },
+          ],
+        },
+      ],
+    }
+    const result = await reverseGenerate(live, options())
+    // Тека записана: помилки лише класу ремонту, невідомої колонки немає
+    expect(result.changes).not.toEqual([])
+    expect(result.diagnostics.map((d) => d.code)).not.toContain(
+      "customTable.column-unknown"
+    )
+    const repair = result.diagnostics.filter(
+      (d) => d.code === "customTable.index-derived-column"
+    )
+    expect(repair.map((d) => [isRepairError(d), d.params?.name])).toEqual([
+      [true, "notes_note_search_unique"],
+      [true, "notes_id_note_search"],
+    ])
+    expect(repair[0]!.params?.field).toBe("note")
+    expect((json(result, FILE).indexes as Json[]).map((i) => i.name)).toEqual([
+      "notes_note_search_unique",
+      "notes_id_note_search",
+    ])
+
+    // Чиста компіляція червона; режим ремонту дає модель, де UNIQUE автора
+    // стоїть на фізичній похідній колонці
+    const plain = await compile(result.files)
+    expect(plain.model).toBeUndefined()
+    const repaired = await compile(result.files, { repair: true })
+    expect(
+      repaired.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => d.code)
+    ).toEqual([
+      "customTable.index-derived-column",
+      "customTable.index-derived-column",
+    ])
+    const physical = repaired.model!.physical.tables.find(
+      (t) => t.name === "notes"
+    )!
+    expect(
+      physical.indexes.map((i) => [
+        i.name,
+        i.unique,
+        i.keys.map((k) => ("column" in k ? k.column : k.expression)),
+      ])
+    ).toEqual([
+      ["notes_id_note_search", false, ["id", "note_search"]],
+      ["notes_note_search_idx", false, ["note_search"]],
+      ["notes_note_search_unique", true, ["note_search"]],
+    ])
+  })
+
+  it("a unique constraint and an index include on the derived column are repair errors, and the model keeps them", async () => {
+    const base = notes(`"left"(lower((note COLLATE "default")), 660)`)
+    const t = base.tables[0]!
+    const live = {
+      ...base,
+      tables: [
+        {
+          ...t,
+          uniques: [
+            {
+              name: "notes_note_search_key",
+              columns: ["note_search"],
+              nullsNotDistinct: false,
+            },
+          ],
+          indexes: [
+            ...t.indexes,
+            {
+              ...t.indexes[0]!,
+              name: "notes_id_covering",
+              keys: [{ column: "id" }],
+              include: ["note_search"],
+            },
+          ],
+        },
+      ],
+    }
+    const result = await reverseGenerate(live, options())
+    expect(result.changes).not.toEqual([])
+    expect(result.diagnostics.map((d) => d.code)).not.toContain(
+      "customTable.column-unknown"
+    )
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "customTable.index-derived-column")
+        .map((d) => [isRepairError(d), d.params?.name, d.pointer])
+        .sort()
+    ).toEqual([
+      [true, "notes_id_covering", "/indexes/0/include/0"],
+      [true, "notes_note_search_key", "/uniques/0/columns/0"],
+    ])
+    expect((await compile(result.files)).model).toBeUndefined()
+    const repaired = await compile(result.files, { repair: true })
+    const physical = repaired.model!.physical.tables.find(
+      (t) => t.name === "notes"
+    )!
+    expect(physical.uniques.map((u) => [u.name, u.columns])).toEqual([
+      ["notes_note_search_key", ["note_search"]],
+    ])
+    expect(
+      physical.indexes
+        .filter((i) => i.name === "notes_id_covering")
+        .map((i) => i.include)
+    ).toEqual([["note_search"]])
+  })
+
+  it("keeps the declared mode and the declared non-string fields", async () => {
+    const live = notes(`"left"(lower((note COLLATE "default")), 660)`)
+    const first = await reverseGenerate(live, options())
+    const existing = new Map(first.files)
+    existing.set(
+      FILE,
+      JSON.stringify({
+        ...json(first, FILE),
+        search: { fields: ["id", "note"], mode: "startsWith" },
+      })
+    )
+    const again = await reverseGenerate(live, {
+      ...options(existing),
+      newId: counter(960_000),
+    })
+    expect(again.diagnostics).toEqual([])
+    expect(json(again, FILE).search).toEqual({
+      fields: ["id", "note"],
+      mode: "startsWith",
+    })
+  })
+
+  it.each([
+    ["another function", `"left"(upper((note COLLATE "default")), 660)`],
+    // Без межі префікса це не похідна платформи: її рядок індексу не
+    // обмежений
+    ["no prefix bound", `lower((note COLLATE "default"))`],
+  ])(
+    "a column with the name but %s stays the author's",
+    async (_, expression) => {
+      const result = await reverseGenerate(notes(expression), options())
+      expect(result.diagnostics).toEqual([])
+      const data = json(result, FILE)
+      expect(data.search).toBeUndefined()
+      expect((data.columns as Json[]).map((c) => c.physicalName)).toEqual([
+        "id",
+        "note",
+        "note_search",
+      ])
+    }
+  )
 })

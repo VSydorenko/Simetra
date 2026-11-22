@@ -8,6 +8,7 @@ import type {
 import type { CommandContextWrite } from "./sql/command-context"
 import type { DefinerReadsForm } from "./sql/definer-reads"
 import type { PolicyFunctionReason } from "./sql/policy-functions"
+import { outlivesAdvice } from "./sql/builtin-exclusions"
 import { pinnedSettingsClause } from "./sql/head-settings"
 import type { HeadConstruct } from "./sql/query-shape"
 
@@ -1451,8 +1452,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Функція ${p.function} у рядку ${p.line} викликає ${p.call}, що змінює стан сесії поза транзакцією`,
     hint: {
-      en: "A session-level advisory lock, the seed of random() and the replication origin of a session outlive the transaction, so in a connection of the command pool the next command of another user would inherit them. In a function body take a transaction-level advisory lock (pg_advisory_xact_lock, pg_try_advisory_xact_lock), which Postgres releases with the command, and do not seed random().",
-      uk: "Сесійний advisory-замок, зерно random() і походження реплікації сесії переживають транзакцію, тож у з'єднанні пулу команд їх успадкувала б наступна команда іншого користувача. У тілі функції беріть транзакційний advisory-замок (pg_advisory_xact_lock, pg_try_advisory_xact_lock), який Postgres знімає разом із командою, і не задавайте зерно random().",
+      // Порада — властивість запису класу (`advice`); запасний текст — для
+      // імені, якого в класі немає (каталог не падає на параметрах).
+      en: (p) =>
+        outlivesAdvice(String(p.call))?.en ??
+        "This builtin leaves state that outlives the transaction in a pooled connection; do not call it in a function body.",
+      uk: (p) =>
+        outlivesAdvice(String(p.call))?.uk ??
+        "Ця вбудована лишає стан, що переживає транзакцію, у з'єднанні пулу; не кличте її в тілі функції.",
     },
   },
   "sql.platform-function-call": {
@@ -3473,6 +3480,50 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Вказуйте кожен реквізит в індексі один раз: друге входження нічого не додає до ключа.",
     },
   },
+  "search.field-unknown": {
+    en: (p) =>
+      `${p.kind} "${p.object}" has no header attribute "${p.name}" to search by`,
+    uk: (p) =>
+      `${p.kind} "${p.object}" не має реквізиту шапки "${p.name}" для пошуку`,
+    hint: {
+      en: "search.fields names header attributes and standard attributes of the object.",
+      uk: "search.fields називає реквізити й стандартні реквізити шапки об'єкта.",
+    },
+  },
+  "search.field-duplicate": {
+    en: (p) => `Search field "${p.name}" is repeated`,
+    uk: (p) => `Поле пошуку "${p.name}" повторюється`,
+    hint: {
+      en: "List each field once in search.fields.",
+      uk: "Вказуйте кожне поле в search.fields один раз.",
+    },
+  },
+  "search.field-tabular": {
+    en: (p) =>
+      `Search field "${p.name}" of ${p.kind} "${p.object}" belongs to a tabular section`,
+    uk: (p) =>
+      `Поле пошуку "${p.name}" виду ${p.kind} "${p.object}" належить табличній частині`,
+    hint: {
+      en: "An object is searched by its header; tabular section attributes are not search fields.",
+      uk: "Об'єкт шукають за шапкою; реквізити табличних частин полями пошуку не бувають.",
+    },
+  },
+  "search.field-ref": {
+    en: (p) => `Search field "${p.name}" is a reference`,
+    uk: (p) => `Поле пошуку "${p.name}" — посилання`,
+    hint: {
+      en: "A reference is found by the target's own search fields; name a scalar attribute instead.",
+      uk: "Посилання шукають за полями пошуку цілі; назвіть скалярний реквізит.",
+    },
+  },
+  "search.field-generated": {
+    en: (p) => `Search field "${p.name}" is a generated column`,
+    uk: (p) => `Поле пошуку "${p.name}" — згенерована колонка`,
+    hint: {
+      en: "The normalized search column is itself generated, and PostgreSQL does not let a generation expression reference a generated column (42P17); search by the source column instead.",
+      uk: "Нормалізована колонка пошуку сама згенерована, а Postgres не дозволяє виразу генерації посилатися на згенеровану колонку (42P17); шукайте за вихідною колонкою.",
+    },
+  },
   "catalog.owner-kind": {
     en: (p) => `${p.kind} "${p.name}" cannot own a catalog`,
     uk: (p) => `${p.kind} "${p.name}" не може бути власником довідника`,
@@ -3678,6 +3729,18 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "Give the index/constraint an explicit name; the reverse generator always writes names.",
       uk: "Задайте індексу чи обмеженню явне ім'я; зворотний генератор завжди записує імена.",
+    },
+  },
+  "customTable.index-derived-column": {
+    en: (p) =>
+      `Index or unique constraint ${p.name} of ${p.table} uses "${p.column}", the derived search column of field "${p.field}"`,
+    uk: (p) =>
+      `Індекс чи UNIQUE-обмеження ${p.name} таблиці ${p.table} читає "${p.column}" — похідну колонку пошуку поля "${p.field}"`,
+    hint: {
+      en: (p) =>
+        `The platform derives this column from search and owns it, so the plan is blocked until the index or constraint is fixed. Build it over the source column "${p.field}", or remove it and rely on the prefix index that search derives for the field.`,
+      uk: (p) =>
+        `Цю колонку виводить із search і нею володіє платформа, тож план заблоковано, доки індекс чи обмеження не виправлено. Побудуйте його над колонкою-джерелом "${p.field}" або приберіть і покладіться на префіксний індекс, який search виводить для поля.`,
     },
   },
   "customTable.column-unknown": {

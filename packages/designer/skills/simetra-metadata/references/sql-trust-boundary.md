@@ -72,8 +72,10 @@ into metadata or a migration.
   `RESET` and any other `set_config` are `sql.function-body-session-setting`.
   A temporary table named after a type of `pg_catalog` (`name`, `uuid`,
   `text`…) is `sql.function-body-temp-type`: rename it. A session-level
-  advisory lock or `setseed` is `sql.function-body-session-builtin`: take
-  `pg_advisory_xact_lock` instead.
+  advisory lock, `setseed`, `currval` or `lastval` is
+  `sql.function-body-session-builtin`: take `pg_advisory_xact_lock` instead of
+  the lock, and read the generated value from `INSERT … RETURNING` instead of
+  `currval` or `lastval`, which depend on the state of the session.
 
 Application SQL anywhere (a body, a view, a policy, a domain `CHECK`, a
 default) calls only the platform and generated functions that read, such as

@@ -122,9 +122,13 @@ describe.concurrent("list-order index on an existing database", () => {
 
       await applyArtifact(url, artifact, model)
 
+      // Поруч лишається індекс типового поля пошуку довідника (Р3)
       expect(
         (await indexDefs(url)).map((d) => d.replace(/^.* USING /, ""))
-      ).toEqual(["btree (description, id)"])
+      ).toEqual([
+        "btree (description, id)",
+        "btree (description_search text_pattern_ops)",
+      ])
       expect(await rowsOf(url)).toEqual(ROWS)
       // Відбиток стану зелений: повторний план нічого не змінює й без дрейфу
       const again = await plan(url, model)

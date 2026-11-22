@@ -183,9 +183,16 @@ describe("stage 3: physical snapshot", () => {
         default: "now()",
       },
       { name: "currency_id", type: "uuid", notNull: false, default: undefined },
+      // Нормалізована колонка поля пошуку (типово — найменування) — остання
+      {
+        name: "description_search",
+        type: "text",
+        notNull: false,
+        default: undefined,
+      },
     ])
     expect(contract.columns[0]!.origin).toEqual({ standard: "ref" })
-    expect(contract.columns.at(-1)!.origin).toEqual({ elementId: uuid(2) })
+    expect(contract.columns.at(-2)!.origin).toEqual({ elementId: uuid(2) })
     expect(contract.primaryKey).toEqual({
       name: "contract_pkey",
       columns: ["id"],
@@ -217,6 +224,19 @@ describe("stage 3: physical snapshot", () => {
         unique: false,
         method: "btree",
         keys: [{ column: "description" }, { column: "id" }],
+        include: [],
+        nullsNotDistinct: false,
+      },
+      {
+        name: "contract_description_search_idx",
+        unique: false,
+        method: "btree",
+        keys: [
+          {
+            column: "description_search",
+            opclass: { name: "text_pattern_ops" },
+          },
+        ],
         include: [],
         nullsNotDistinct: false,
       },
@@ -256,6 +276,7 @@ describe("stage 3: physical snapshot", () => {
     expect(item.uniques.map((u) => u.name)).toEqual(["item_sku_key"])
     expect(searchIndexes(item).map((i) => i.name)).toEqual([
       "item_description_id_idx",
+      "item_description_search_idx",
       "item_rank_id_idx",
     ])
   })
@@ -581,6 +602,7 @@ describe("stage 3: physical snapshot", () => {
     // Лишився тільки індекс найменування: решта реквізитів без `indexed`.
     expect(searchIndexes(order).map((i) => i.name)).toEqual([
       "order_description_id_idx",
+      "order_description_search_idx",
     ])
     // Поруч — лише outbox сигналів платформи, що є в кожному проєкті.
     expect(physical.tables.map((t) => t.name)).toEqual([
@@ -597,14 +619,16 @@ describe("stage 3: physical snapshot", () => {
       }),
     })
     const rate = tableOf(physical, "rate")
-    expect(rate.columns.at(-1)).toMatchObject({
+    // Остання — нормалізована колонка пошуку найменування
+    expect(rate.columns.at(-2)).toMatchObject({
       name: "currencies",
       type: "uuid[]",
     })
     expect(rate.foreignKeys).toEqual([])
-    // Масив посилань не індексується; лишився тільки індекс найменування.
+    // Масив посилань не індексується; лишились тільки індекси найменування.
     expect(searchIndexes(rate).map((i) => i.name)).toEqual([
       "rate_description_id_idx",
+      "rate_description_search_idx",
     ])
   })
 
@@ -629,7 +653,8 @@ describe("stage 3: physical snapshot", () => {
       }),
     })
     const note = tableOf(physical, "note")
-    expect(note.columns.slice(-2)).toEqual([
+    // Остання — нормалізована колонка пошуку найменування
+    expect(note.columns.slice(-3, -1)).toEqual([
       {
         name: "subject_type",
         type: "text",
@@ -727,6 +752,7 @@ describe("stage 3: physical snapshot", () => {
     expect(many.foreignKeys).toEqual([])
     expect(searchIndexes(many)).toEqual([
       expect.objectContaining({ name: "many_description_id_idx" }),
+      expect.objectContaining({ name: "many_description_search_idx" }),
       expect.objectContaining({
         name: "many_owner_type_owner_id_idx",
         keys: [{ column: "owner_type" }, { column: "owner_id" }],
@@ -1384,8 +1410,12 @@ describe("stage 3: physical snapshot", () => {
       "item"
     )
     expect(unique.uniques.map((u) => u.columns)).toEqual([["code"]])
+    const prefix = [
+      { column: "description_search", opclass: { name: "text_pattern_ops" } },
+    ]
     expect(searchIndexes(unique).map((i) => i.keys)).toEqual([
       [{ column: "description" }, { column: "id" }],
+      prefix,
     ])
     const loose = tableOf(
       await compileWith({
@@ -1397,6 +1427,7 @@ describe("stage 3: physical snapshot", () => {
     expect(searchIndexes(loose).map((i) => i.keys)).toEqual([
       [{ column: "code" }, { column: "id" }],
       [{ column: "description" }, { column: "id" }],
+      prefix,
     ])
   })
 

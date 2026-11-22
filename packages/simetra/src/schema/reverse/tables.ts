@@ -1,6 +1,8 @@
 import { diagnostic, type Diagnostic } from "simetra/compiler"
 import {
   logicalTypeOf,
+  searchColumnName,
+  searchPrefixNormalization,
   type CatalogColumn,
   type CatalogEnumType,
   type CatalogTable,
@@ -279,6 +281,60 @@ function indexKey(
   }
 }
 
+/** Вираз без дужок, лапок, пробілів і приведення до `text`, у нижньому регістрі. */
+const bareExpression = (expression: string): string =>
+  expression.replace(/::text|[()"\s]/g, "").toLowerCase()
+
+/**
+ * Нормалізовані колонки пошуку таблиці (спека П2 §5, «Поля пошуку»): фізичне
+ * ім'я похідної → фізичне ім'я колонки-джерела. Каталог бази походження
+ * колонки не несе, тож похідну впізнає пара ознак — ім'я `<колонка>_search` і
+ * вираз `searchPrefixNormalization(<колонка>)` у нормалізованій формі Postgres;
+ * одна лише назва колонку автора не забере.
+ */
+export function derivedSearchColumns(
+  table: CatalogTable
+): ReadonlyMap<string, string> {
+  const found = new Map<string, string>()
+  for (const source of table.columns) {
+    const name = searchColumnName(source.name)
+    const derived = table.columns.find((c) => c.name === name)
+    if (
+      derived?.generated !== undefined &&
+      bareExpression(derived.generated.expression) ===
+        bareExpression(searchPrefixNormalization(source.name))
+    )
+      found.set(derived.name, source.name)
+  }
+  return found
+}
+
+/**
+ * Поля пошуку опису: наявні оголошені поля, чиї колонки лишились, і джерела
+ * похідних колонок бази; режим — з наявного опису.
+ */
+function searchOf(
+  existing: Json | undefined,
+  derived: ReadonlyMap<string, string>,
+  names: TableNames
+): Json {
+  const declared = existing?.search as
+    { fields?: string[]; mode?: string } | undefined
+  const present = new Set(names.columns.values())
+  const fields = [...(declared?.fields ?? []).filter((f) => present.has(f))]
+  for (const source of derived.values()) {
+    const name = names.columns.get(source)!
+    if (!fields.includes(name)) fields.push(name)
+  }
+  if (declared === undefined && fields.length === 0) return {}
+  return {
+    search: {
+      fields,
+      ...(declared?.mode !== undefined ? { mode: declared.mode } : {}),
+    },
+  }
+}
+
 /**
  * Опис `CustomTable` з таблиці каталогу: імена обмежень явні, фізичні імена —
  * поточні, значення за замовчуванням схеми файлу не пишуться (спека П2 §9).
@@ -293,6 +349,30 @@ export function customTableData(
   const raw = existing?.raw
   const byName = new Map(table.columns.map((c) => [c.name, c]))
   const scopeColumn = scopeColumnOf(existing, names)
+  // Похідну колонку пошуку й її індекс виводить компілятор із `search`:
+  // описані як власні, вони зіткнулися б із похідними
+  const derived = derivedSearchColumns(table)
+  // Виводить компілятор лише індекс одного ключа `text_pattern_ops` без
+  // решти ознак: решту індексів з похідною колонкою (складений, унікальний,
+  // частковий) створив автор, і вони лишаються власними.
+  const isDerivedIndex = (index: CatalogTable["indexes"][number]) => {
+    const [key, ...rest] = index.keys
+    return (
+      rest.length === 0 &&
+      key !== undefined &&
+      "column" in key &&
+      derived.has(key.column) &&
+      key.opclass?.name === "text_pattern_ops" &&
+      key.order === undefined &&
+      key.nulls === undefined &&
+      key.collation === undefined &&
+      index.method === "btree" &&
+      !index.unique &&
+      !index.nullsNotDistinct &&
+      index.include.length === 0 &&
+      index.where === undefined
+    )
+  }
   return {
     ...(typeof raw?.id === "string" ? { id: raw.id } : {}),
     kind: "CustomTable",
@@ -304,9 +384,16 @@ export function customTableData(
     ...(table.schema !== ctx.defaultSchema ? { schema: table.schema } : {}),
     ...pick(raw, ["scope", "title", "description"]),
     ...(table.comment !== undefined ? { comment: table.comment } : {}),
-    columns: table.columns.map((c) =>
-      column(c, names.columns.get(c.name)!, ctx, existing?.columns.get(c.name))
-    ),
+    columns: table.columns
+      .filter((c) => !derived.has(c.name))
+      .map((c) =>
+        column(
+          c,
+          names.columns.get(c.name)!,
+          ctx,
+          existing?.columns.get(c.name)
+        )
+      ),
     ...(table.primaryKey !== undefined
       ? {
           primaryKey: {
@@ -334,19 +421,22 @@ export function customTableData(
     ),
     ...nonEmpty(
       "indexes",
-      table.indexes.map((index) => ({
-        name: index.name,
-        ...(index.unique ? { unique: true } : {}),
-        ...(index.method !== "btree" ? { method: index.method } : {}),
-        keys: index.keys.map((key) =>
-          indexKey(key, index.method, names, byName)
-        ),
-        ...nonEmpty("include", logical(names, index.include)),
-        ...(index.where !== undefined ? { where: index.where } : {}),
-        ...(index.nullsNotDistinct ? { nullsNotDistinct: true } : {}),
-      }))
+      table.indexes
+        .filter((index) => !isDerivedIndex(index))
+        .map((index) => ({
+          name: index.name,
+          ...(index.unique ? { unique: true } : {}),
+          ...(index.method !== "btree" ? { method: index.method } : {}),
+          keys: index.keys.map((key) =>
+            indexKey(key, index.method, names, byName)
+          ),
+          ...nonEmpty("include", logical(names, index.include)),
+          ...(index.where !== undefined ? { where: index.where } : {}),
+          ...(index.nullsNotDistinct ? { nullsNotDistinct: true } : {}),
+        }))
     ),
     ...(scopeColumn !== undefined ? { scopeColumn } : {}),
+    ...searchOf(raw, derived, names),
     ...(table.rowLevelSecurity !== "off"
       ? { rowLevelSecurity: table.rowLevelSecurity }
       : {}),

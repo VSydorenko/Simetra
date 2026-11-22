@@ -27,6 +27,7 @@ export default defineConfig([
             "src/data/a/b/__fixture.ts",
             "src/data/runtime/__fixture.ts",
             "src/data/store/__fixture.ts",
+            "src/data/centrifugo/__fixture.ts",
             "src/data/nested/__fixture.ts",
             "src/data/__tests__/__fixture.ts",
           ],

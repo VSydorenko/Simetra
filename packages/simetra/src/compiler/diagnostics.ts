@@ -86,6 +86,7 @@ export const COMPILER_RULES = [
   "reference.unresolved",
   "reference.ambiguous",
   "customTable.column-unknown",
+  "customTable.index-derived-column",
   "register.balance-control-resource",
   "register.balance-control-duplicate",
   "posting.field-unknown",
@@ -215,6 +216,11 @@ export const COMPILER_RULES = [
   "attribute.lazy-over-budget",
   "index.attribute-unknown",
   "index.attribute-duplicate",
+  "search.field-unknown",
+  "search.field-duplicate",
+  "search.field-tabular",
+  "search.field-ref",
+  "search.field-generated",
   "catalog.owner-kind",
   "register.recorder-kind",
   "posting.register-kind",
@@ -562,6 +568,8 @@ export const REPAIR_CLASS: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "sql.declaration-check-not-applied",
   "sql.declaration-platform-form",
   "sql.default-privileges-execute",
+  "sql.function-body-session-builtin",
+  "customTable.index-derived-column",
 ])
 
 /**

@@ -343,6 +343,14 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   // закриття (`closing`) він уже недійсний.
   const token = session.token()
   const collator = ctx.filterCollator
+  // Після межі відкинутих (§6.2) кожна відповідь до нової сесії відкидається,
+  // тож читання за сигналом — запит без шансу, як і такт планувальника. Одна
+  // перевірка для всіх шляхів читання приймача: сигнали не збираються, а
+  // пачка, що чекає (зокрема дочитування мінімальної версії), відкидається.
+  // Самотест (`receiver-reads-unavailable`) вимикає зупинку.
+  const halted = () =>
+    session.versions.unavailable() &&
+    !writer.defects.has("receiver-reads-unavailable")
 
   const scopesOfRows = (entry: CatalogEntry): string[] => {
     const o = writer.objectOf(`${entry.kind}.${entry.name}`)
@@ -495,7 +503,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   // Кожен сигнал відсуває закриття на `QUIET_MS`, але не далі за `MAX_BATCH_MS`
   // від першого.
   const collect = (fill: (batch: Batch) => void) => {
-    if (stopped) return
+    if (stopped || halted()) return
     open ??= startOpen()
     const batch = open
     fill(batch.batch)
@@ -514,6 +522,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   }
 
   function pump() {
+    if (halted()) waiting = undefined
     if (flying || waiting === undefined || stopped) return
     const batch = waiting
     waiting = undefined
