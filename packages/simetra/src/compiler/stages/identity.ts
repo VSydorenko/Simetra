@@ -1019,11 +1019,12 @@ function resolveElementReferences(
 }
 
 /**
- * Ключ власного індексу прийнятої таблиці на похідній колонці її поля пошуку
- * (індекс автора, прийнятий з бази): колонку виводить платформа, тож опис
- * її не має, але це не невідома колонка, а стан прийнятої бази — помилка
- * класу ремонту (спека декларацій функцій §5.1). Ключ ремонту — схема й
- * ім'я індексу: імена індексів унікальні в схемі.
+ * Колонка власного індексу (ключ чи `include`) або UNIQUE-обмеження
+ * прийнятої таблиці на похідній колонці її поля пошуку (прийняте з бази):
+ * колонку виводить платформа, тож опис її не має, але це не невідома
+ * колонка, а стан прийнятої бази — помилка класу ремонту (спека декларацій
+ * функцій §5.1). Ключ ремонту — схема й ім'я індексу чи обмеження: обидва
+ * унікальні в схемі.
  */
 function derivedIndexKey(
   object: ParsedObject,
@@ -1031,17 +1032,19 @@ function derivedIndexKey(
   pointer: string,
   name: string
 ): Diagnostic | undefined {
-  const at = /^\/indexes\/(\d+)\/keys\/\d+\/column$/.exec(pointer)
+  const at =
+    /^\/indexes\/(\d+)\/(?:keys\/\d+\/column|include\/\d+)$/.exec(pointer) ??
+    /^\/uniques\/(\d+)\/columns\/\d+$/.exec(pointer)
   if (at === null || style === undefined) return undefined
+  const list = pointer.startsWith("/indexes/") ? "indexes" : "uniques"
   const derived = derivedSearchColumn(object, style, name)
   if (derived === undefined) return undefined
   const data = object.data as {
     schema?: string
-    indexes: { name?: string }[]
-  }
+  } & Record<"indexes" | "uniques", { name?: string }[]>
   return diagnostic("customTable.index-derived-column", object.file, pointer, {
     schema: data.schema ?? "",
-    name: data.indexes[Number(at[1])]?.name ?? `${object.name}#${at[1]}`,
+    name: data[list][Number(at[1])]?.name ?? `${object.name}#${list}/${at[1]}`,
     table: object.name,
     column: name,
     field: derived.field,

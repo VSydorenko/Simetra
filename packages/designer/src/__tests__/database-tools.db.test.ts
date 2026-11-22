@@ -333,6 +333,74 @@ describe("introspect", () => {
     )
   })
 
+  it("introspect of a unique constraint on the derived search column writes the folder, the plan is blocked until it is rebuilt over the source", async () => {
+    await inTarget(
+      `CREATE SCHEMA app;
+       CREATE TABLE app.notes (
+         id uuid PRIMARY KEY,
+         note text,
+         note_search text GENERATED ALWAYS AS
+           (left(lower(note COLLATE "default"), ${SEARCH_PREFIX_CHARS})) STORED,
+         CONSTRAINT notes_note_key UNIQUE (note_search)
+       );
+       CREATE INDEX notes_note_search_idx ON app.notes (note_search text_pattern_ops);`,
+      ["app"],
+      async (url) => {
+        const dir = await freshProject()
+        const env = { [ENV]: url }
+        const adopted = await call(
+          "introspect",
+          introspectInput,
+          options(dir, env)
+        )
+        expect(adopted.written).toBe(true)
+        const files = await readMetadataDir(dir)
+        const path = [...files.keys()].find((f) =>
+          f.startsWith("custom-tables/")
+        )!
+        const data = JSON.parse(files.get(path)!) as {
+          uniques: { name: string; columns: string[] }[]
+        }
+        const compileOptions = {
+          dir,
+          readOnly: false,
+          allowDatabaseWrite: false,
+          dryRun: false,
+          confirmed: false,
+          channel: "cli" as const,
+        }
+        const blocked = await invoke(toolByName("compile")!, {}, compileOptions)
+        expect(errors(blocked).map((d) => [d.code, d.params?.name])).toEqual([
+          ["customTable.index-derived-column", "notes_note_key"],
+        ])
+        const refused = await invoke(toolByName("plan")!, {}, options(dir, env))
+        expect(refused.ok).toBe(false)
+        expect(errors(refused).map((d) => d.code)).toContain(
+          "customTable.index-derived-column"
+        )
+
+        // Обмеження над колонкою-джерелом лишається UNIQUE
+        const rebuilt = {
+          ...data,
+          uniques: data.uniques.map((u) =>
+            u.name === "notes_note_key" ? { ...u, columns: ["note"] } : u
+          ),
+        }
+        await writeFile(join(dir, path), JSON.stringify(rebuilt, null, 2))
+        const fixed = await invoke(toolByName("compile")!, {}, compileOptions)
+        expect(errors(fixed)).toEqual([])
+        const planned = await invoke(toolByName("plan")!, {}, options(dir, env))
+        expect(errors(planned), JSON.stringify(planned.diagnostics)).toEqual([])
+        expect(planned.ok).toBe(true)
+        expect(
+          (planned.data as PlanData).steps.map((s) => s.sql)
+        ).toContainEqual(
+          expect.stringMatching(/"?notes_note_key"? UNIQUE \(note\)/)
+        )
+      }
+    )
+  })
+
   it("introspect into a fresh dir without schemas is refused", async () => {
     const dir = await freshProject()
     let connects = 0

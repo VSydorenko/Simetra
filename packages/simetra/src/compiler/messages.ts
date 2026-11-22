@@ -3733,14 +3733,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "customTable.index-derived-column": {
     en: (p) =>
-      `Index ${p.name} of ${p.table} has a key on "${p.column}", the derived search column of field "${p.field}"`,
+      `Index or unique constraint ${p.name} of ${p.table} uses "${p.column}", the derived search column of field "${p.field}"`,
     uk: (p) =>
-      `Індекс ${p.name} таблиці ${p.table} має ключ на "${p.column}" — похідній колонці пошуку поля "${p.field}"`,
+      `Індекс чи UNIQUE-обмеження ${p.name} таблиці ${p.table} читає "${p.column}" — похідну колонку пошуку поля "${p.field}"`,
     hint: {
       en: (p) =>
-        `The platform derives this column from search and owns it, so the plan is blocked until the index is fixed. Build the index over the source column "${p.field}", or remove it and rely on the prefix index that search derives for the field.`,
+        `The platform derives this column from search and owns it, so the plan is blocked until the index or constraint is fixed. Build it over the source column "${p.field}", or remove it and rely on the prefix index that search derives for the field.`,
       uk: (p) =>
-        `Цю колонку виводить із search і нею володіє платформа, тож план заблоковано, доки індекс не виправлено. Побудуйте індекс над колонкою-джерелом "${p.field}" або приберіть його й покладіться на префіксний індекс, який search виводить для поля.`,
+        `Цю колонку виводить із search і нею володіє платформа, тож план заблоковано, доки індекс чи обмеження не виправлено. Побудуйте його над колонкою-джерелом "${p.field}" або приберіть і покладіться на префіксний індекс, який search виводить для поля.`,
     },
   },
   "customTable.column-unknown": {

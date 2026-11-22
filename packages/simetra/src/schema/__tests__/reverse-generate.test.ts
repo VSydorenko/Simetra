@@ -3066,6 +3066,62 @@ describe("reverseGenerate: the normalized search column", () => {
     ])
   })
 
+  it("a unique constraint and an index include on the derived column are repair errors, and the model keeps them", async () => {
+    const base = notes(`"left"(lower((note COLLATE "default")), 660)`)
+    const t = base.tables[0]!
+    const live = {
+      ...base,
+      tables: [
+        {
+          ...t,
+          uniques: [
+            {
+              name: "notes_note_search_key",
+              columns: ["note_search"],
+              nullsNotDistinct: false,
+            },
+          ],
+          indexes: [
+            ...t.indexes,
+            {
+              ...t.indexes[0]!,
+              name: "notes_id_covering",
+              keys: [{ column: "id" }],
+              include: ["note_search"],
+            },
+          ],
+        },
+      ],
+    }
+    const result = await reverseGenerate(live, options())
+    expect(result.changes).not.toEqual([])
+    expect(result.diagnostics.map((d) => d.code)).not.toContain(
+      "customTable.column-unknown"
+    )
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "customTable.index-derived-column")
+        .map((d) => [isRepairError(d), d.params?.name, d.pointer])
+        .sort()
+    ).toEqual([
+      [true, "notes_id_covering", "/indexes/0/include/0"],
+      [true, "notes_note_search_key", "/uniques/0/columns/0"],
+    ])
+    expect((await compile(result.files)).model).toBeUndefined()
+    const repaired = await compile(result.files, { repair: true })
+    const physical = repaired.model!.physical.tables.find(
+      (t) => t.name === "notes"
+    )!
+    expect(physical.uniques.map((u) => [u.name, u.columns])).toEqual([
+      ["notes_note_search_key", ["note_search"]],
+    ])
+    expect(
+      physical.indexes
+        .filter((i) => i.name === "notes_id_covering")
+        .map((i) => i.include)
+    ).toEqual([["note_search"]])
+  })
+
   it("keeps the declared mode and the declared non-string fields", async () => {
     const live = notes(`"left"(lower((note COLLATE "default")), 660)`)
     const first = await reverseGenerate(live, options())

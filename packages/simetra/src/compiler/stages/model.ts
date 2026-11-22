@@ -1763,16 +1763,17 @@ class SnapshotBuilder {
       }
       return name
     }
-    const map = (names: readonly string[], base: string) =>
-      names.map((_, index) => column(`${base}/${index}`))
-    // Ключ на похідній колонці поля пошуку стадія 2 звітує класом ремонту
-    // (`customTable.index-derived-column`), а модель тримає індекс на
-    // фізичній похідній колонці: UNIQUE автора не зникає з плану мовчки
+    // Колонку індексу чи UNIQUE на похідній колонці поля пошуку стадія 2
+    // звітує класом ремонту (`customTable.index-derived-column`), а модель
+    // тримає її на фізичній похідній колонці: UNIQUE автора не зникає з
+    // плану мовчки. Решту місць без резолву стадія 2 вже закрила помилкою.
     const keyColumn = (name: string, pointer: string) =>
       this.columnRefs.has(`${object.file}\0${pointer}`)
         ? column(pointer)
         : (derivedSearchColumn(object, this.style, name)?.column ??
           column(pointer))
+    const map = (names: readonly string[], base: string) =>
+      names.map((name, index) => keyColumn(name, `${base}/${index}`))
 
     if (data.primaryKey !== undefined) {
       table.primaryKey = {
