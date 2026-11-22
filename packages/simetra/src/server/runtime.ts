@@ -732,6 +732,8 @@ export async function createCommandRuntime(
       anonymous: roles.anonymous,
     },
   }
+  if (catalog.objects.some((o) => o.storage !== undefined))
+    await ensureInstanceRow(state)
   const reconcileOf = (
     store: FileStore,
     options: ReconcileOptions,
@@ -1274,6 +1276,7 @@ async function authorizeChannels(
 }
 
 const UPLOAD_HEADROOM = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.headroom)}($1::uuid, $2::uuid) AS ok`
+const INSTANCE_ENSURE = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.instanceEnsure)}()`
 const INSTANCE_ID = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.instanceId)}() AS id`
 const uuidSchema = z.guid()
 
@@ -1419,6 +1422,23 @@ const INSTANCE_LIMITS = (state: RuntimeState) => ({
   text: "SELECT set_config('statement_timeout', $1, true), set_config('lock_timeout', $2, true)",
   params: [String(state.readTimeout), String(state.lockTimeoutMs)],
 })
+
+/**
+ * Рядок прив'язки бази до бакета створюється один раз при старті, коли в
+ * каталозі є об'єкти зі `storage`: коротка транзакція на запис під роллю
+ * сховища, ідемпотентна й безпечна для паралельного старту (`ON CONFLICT DO
+ * NOTHING`). Результату рантайм не тримає: відбиток читає `checkUpload`.
+ */
+async function ensureInstanceRow(state: RuntimeState): Promise<void> {
+  await inShortTransaction(
+    state,
+    BEGIN_WRITE,
+    [INSTANCE_LIMITS(state), FILES_ROLE],
+    async (send) => {
+      await send({ text: INSTANCE_ENSURE, params: [] })
+    }
+  )
+}
 
 /** Відповідь `storage_instance_id()`: відбиток прив'язки; чужа форма — помилка. */
 async function readInstance(send: Send): Promise<string> {

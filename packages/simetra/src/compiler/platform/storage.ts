@@ -52,6 +52,7 @@ const ROW_PAGE = fn(STORAGE_FUNCTIONS.rowPage)
 const PENDING_LEFT = fn(STORAGE_FUNCTIONS.pendingLeft)
 const PENDING_SWEEP = fn(STORAGE_FUNCTIONS.pendingSweep)
 const INSTANCE_ID = fn(STORAGE_FUNCTIONS.instanceId)
+const INSTANCE_ENSURE = fn(STORAGE_FUNCTIONS.instanceEnsure)
 
 const USAGE = qualified(STORAGE_TABLES.usage)
 const QUOTA = qualified(STORAGE_TABLES.quota)
@@ -397,8 +398,16 @@ export function buildStorageUnits(input: StorageInput): SqlUnit[] {
     "END",
   ])
 
-  // Лише читає: єдиний рядок прив'язки вставляє стан застосування, тож
-  // функція працює в `READ ONLY` транзакції `checkUpload`. Відбиток = uuid +
+  // Єдиний рядок прив'язки створює рантайм при старті: ідемпотентно й безпечно
+  // для паралельного старту кількох процесів (`ON CONFLICT DO NOTHING` на
+  // ключі `singleton`), без кешу результату
+  const instanceEnsure = functionSql(INSTANCE_ENSURE, "", "void", [
+    "BEGIN",
+    `  INSERT INTO ${INSTANCE} (singleton) VALUES (true) ON CONFLICT (singleton) DO NOTHING;`,
+    "END",
+  ])
+
+  // Лише читає (NULL, поки рядка немає), тож працює в `READ ONLY` транзакції `checkUpload`. Відбиток = uuid +
   // `system_identifier` + oid бази + timeline: dump/restore і TEMPLATE дають
   // інший sysid чи oid, PITR і підвищена репліка — інший timeline, тож копія
   // бази не пройде за оригінал (спека §8.2). Timeline береться з поточного
@@ -519,6 +528,7 @@ export function buildStorageUnits(input: StorageInput): SqlUnit[] {
     ...shared(PENDING_LEFT, "", pendingLeft, "files"),
     ...shared(PENDING_SWEEP, "", pendingSweep, "files"),
     ...shared(INSTANCE_ID, "", instanceId, "files"),
+    ...shared(INSTANCE_ENSURE, "", instanceEnsure, "files"),
     unit(`GRANT USAGE ON SCHEMA ${quoteIdent(PLATFORM_SCHEMA)} TO ${files};`),
     ...[
       STORAGE_TABLES.usage,

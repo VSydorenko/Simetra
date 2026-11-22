@@ -104,6 +104,7 @@ describe("storage generator", () => {
       "storage_pending_left()",
       "storage_pending_sweep()",
       "storage_instance_id()",
+      "storage_instance_ensure()",
     ]) {
       expect(sql).toContain(
         `GRANT EXECUTE ON FUNCTION simetra.${fn} TO simetra_files;`
@@ -141,6 +142,20 @@ describe("storage generator", () => {
     )
     expect(sql).not.toContain("pg_control_checkpoint")
     expect(sql).not.toMatch(/INSERT|UPDATE|DELETE/)
+  })
+
+  it("the ensure function creates the single marker row idempotently, for simetra_files alone", async () => {
+    await setup()
+    const sql = unitOf(
+      scoped,
+      "function:simetra.storage_instance_ensure()"
+    )!.sql
+    expect(sql).toContain(
+      "INSERT INTO simetra.storage_instance (singleton) VALUES (true) ON CONFLICT (singleton) DO NOTHING;"
+    )
+    expect(storageUnits(scoped).map((u) => u.sql)).toContain(
+      "GRANT EXECUTE ON FUNCTION simetra.storage_instance_ensure() TO simetra_files;"
+    )
   })
 
   it("the sweep removes only the records of transactions older than the snapshot xmin, for simetra_files alone", async () => {

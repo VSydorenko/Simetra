@@ -74,4 +74,5 @@ export const STORAGE_FUNCTIONS = {
   pendingLeft: "storage_pending_left",
   pendingSweep: "storage_pending_sweep",
   instanceId: "storage_instance_id",
+  instanceEnsure: "storage_instance_ensure",
 } as const

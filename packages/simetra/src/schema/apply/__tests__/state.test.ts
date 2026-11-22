@@ -88,12 +88,10 @@ describe("renderApplyState", () => {
     expect(sql).not.toMatch(/GRANT[^;]*storage_instance/)
   })
 
-  // `storage_instance_id()` лише читає: рядок має бути вже при створенні таблиці
-  it("inserts the single storage_instance row with the table", async () => {
+  // Стан застосування — чисті DDL без даних: рядок прив'язки створює рантайм
+  it("does not insert any data into storage_instance", async () => {
     const sql = renderApplyState(await withoutUsers())
-    expect(sql).toContain(
-      "INSERT INTO simetra.storage_instance (singleton) VALUES (true);"
-    )
+    expect(sql).not.toMatch(/INSERT INTO simetra\.storage_instance/)
   })
 
   it("secures the schema itself when the platform layer is absent", async () => {

@@ -175,15 +175,14 @@ export function renderApplyState(
     ].join("\n"),
     // Прив'язка бази до бакета файлів (спека профілю postgres §8.2): таблиця
     // безумовна, як marker і ledger, тож поза знімком і без грантів; єдиний
-    // рядок вставляється тут же, тож `storage_instance_id()` лише читає і
-    // працює в `READ ONLY` транзакції `checkUpload`
+    // рядок створює рантайм при старті (`storage_instance_ensure()`): стан
+    // застосування лишається чистим DDL без даних
     [
       `CREATE TABLE ${STORAGE_INSTANCE} (`,
       "  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),",
       "  id uuid NOT NULL DEFAULT gen_random_uuid()",
       ");",
     ].join("\n"),
-    `INSERT INTO ${STORAGE_INSTANCE} (singleton) VALUES (true);`,
     epochFunction(model.project.database.provider),
     resetFunction(model),
   ].join("\n\n")

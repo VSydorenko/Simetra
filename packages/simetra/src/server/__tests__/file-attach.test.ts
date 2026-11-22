@@ -280,9 +280,10 @@ describe("attachFile", () => {
   })
 
   it("flags commitUnknown when the session closes after COMMIT was sent", async () => {
+    // Два COMMIT старту: перевірка рантайму й ensure рядка прив'язки
     let commits = 0
     const { runtime } = await make((text) =>
-      text === "COMMIT" && commits++ > 0
+      text === "COMMIT" && commits++ > 1
         ? { error: new Error("ECONNRESET") }
         : undefined
     )
@@ -292,9 +293,10 @@ describe("attachFile", () => {
   })
 
   it("does not flag commitUnknown on a database refusal at COMMIT", async () => {
+    // Два COMMIT старту: перевірка рантайму й ensure рядка прив'язки
     let commits = 0
     const { runtime } = await make((text) =>
-      text === "COMMIT" && commits++ > 0
+      text === "COMMIT" && commits++ > 1
         ? { error: { code: "23505", message: "dup" } }
         : undefined
     )
@@ -322,6 +324,58 @@ describe("attachFile", () => {
     const error = await failureOf(runtime.attachFile(session, input))
     expect(error.error).toEqual({ code: "command.unauthenticated" })
     expect(db.calls).toEqual([...OPEN, ROLLBACK, { release: false }])
+  })
+})
+
+describe("the marker row at start", () => {
+  const ENSURE = 'SELECT "simetra"."storage_instance_ensure"()'
+
+  it("is ensured once at start, in a write transaction under the storage role, when the catalog has storage", async () => {
+    const seen: string[] = []
+    await make((text) => {
+      seen.push(text)
+      return undefined
+    })
+    expect(seen.filter((t) => t === ENSURE)).toHaveLength(1)
+    // До виклику — роль сховища, після — нічого про відбиток: його читає checkUpload
+    expect(seen.indexOf(FILES_ROLE.text)).toBeLessThan(seen.indexOf(ENSURE))
+    expect(seen.some((t) => t.includes("storage_instance_id"))).toBe(false)
+  })
+
+  it("is not touched when no object has storage", async () => {
+    const seen: string[] = []
+    await setup(
+      (text) => {
+        seen.push(text)
+        return undefined
+      },
+      {
+        catalog: runtimeCatalogSchema.parse({
+          ...storageCatalog,
+          objects: [document(false)],
+        }),
+      }
+    )
+    expect(seen).not.toContain(ENSURE)
+  })
+
+  it("a refusal of the ensure statement fails the start", async () => {
+    await expect(
+      make((text) =>
+        text === ENSURE ? { error: { code: "XX000", message: "x" } } : undefined
+      )
+    ).rejects.toBeInstanceOf(CommandFailure)
+  })
+
+  it("the check reads no cached result: a missing row is a refusal, not a binding", async () => {
+    const { runtime } = await make((text) =>
+      text.includes("storage_instance_id")
+        ? { rows: [{ id: null }] }
+        : undefined
+    )
+    await expect(
+      runtime.checkUpload(session, { object: DOC, scope: COMPANY })
+    ).rejects.toBeInstanceOf(CommandFailure)
   })
 })
 

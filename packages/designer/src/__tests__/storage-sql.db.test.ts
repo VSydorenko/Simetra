@@ -50,6 +50,7 @@ const STORAGE_FUNCTIONS = [
   "storage_pending_left()",
   "storage_pending_sweep()",
   "storage_instance_id()",
+  "storage_instance_ensure()",
 ]
 const HEADROOM = "storage_headroom(uuid, uuid)"
 

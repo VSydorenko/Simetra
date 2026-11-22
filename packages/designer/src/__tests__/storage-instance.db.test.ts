@@ -12,10 +12,17 @@ import {
   applyOn,
   planOn,
   seedMarker,
+  seedRuntimeActor,
+  sessionOf,
   withModelTarget,
   withRuntimeLogin,
 } from "./support/db"
-import { bareModel, blobLayer, storageModel } from "./storage-sql.support"
+import {
+  ATTACHMENT_WRITER_ID,
+  bareModel,
+  blobLayer,
+  storageModel,
+} from "./storage-sql.support"
 
 /**
  * Прив'язка бази до бакета (Р12 ПГ-5, І21) і членство рантайму в ролі
@@ -24,15 +31,18 @@ import { bareModel, blobLayer, storageModel } from "./storage-sql.support"
  * стартує рантайм без ролі `simetra_files`.
  */
 
+const ATTACHMENT = { kind: "Catalog" as const, name: "Attachment" }
+
 const database = (url: string) => new URL(url).pathname.slice(1)
 
 const uuidOf = (binding: string) => binding.split(":")[0]
 
-/** Відбиток прив'язки (`uuid:sysid:oid:timeline`) від ролі сховища: рядок створюється при першому зверненні й комітиться. */
+/** Відбиток прив'язки (`uuid:sysid:oid:timeline`) від ролі сховища: рядок створює `storage_instance_ensure()` (так робить рантайм при старті) і комітить. */
 async function instanceId(client: pg.Client): Promise<string> {
   await client.query("BEGIN")
   try {
     await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.files}`)
+    await client.query("SELECT simetra.storage_instance_ensure()")
     const { rows } = await client.query<{ id: string }>(
       "SELECT simetra.storage_instance_id() AS id"
     )
@@ -104,6 +114,57 @@ describe("І21: the binding of the database to the bucket", () => {
           }),
         ]
       )
+    })
+  })
+})
+
+describe("the marker row is created by the runtime at start", () => {
+  it("two runtimes starting at once leave one row and read the same fingerprint", async () => {
+    const model = await storageModel()
+    await withModelTarget(model, async (url) => {
+      const owner = await superuserClient(database(url))
+      try {
+        await seedMarker(owner, model.hash)
+        const writer = await seedRuntimeActor(owner, [ATTACHMENT_WRITER_ID])
+        expect(
+          (await owner.query("SELECT 1 FROM simetra.storage_instance")).rows
+        ).toEqual([])
+        const roles = [PLATFORM_ROLES.command, readRoleOf(testProvider())!]
+        await withRuntimeLogin(url, roles, async (login) => {
+          const pools = [1, 2].map(
+            () => new pg.Pool({ connectionString: login })
+          )
+          try {
+            const runtimes = await Promise.all(
+              pools.map((pool) =>
+                createCommandRuntime({
+                  database: fromPgPool(pool),
+                  catalog: buildRuntimeCatalog(model),
+                  log: () => undefined,
+                })
+              )
+            )
+            const rows = await owner.query(
+              "SELECT 1 FROM simetra.storage_instance"
+            )
+            expect(rows.rowCount).toBe(1)
+            const seen = await Promise.all(
+              runtimes.map((rt) =>
+                rt.checkUpload(sessionOf(writer.user), {
+                  object: ATTACHMENT,
+                  scope: writer.org,
+                })
+              )
+            )
+            expect(seen[0]?.instance).toBeDefined()
+            expect(seen[0]?.instance).toBe(seen[1]?.instance)
+          } finally {
+            await Promise.all(pools.map((pool) => pool.end()))
+          }
+        })
+      } finally {
+        await owner.end()
+      }
     })
   })
 })
