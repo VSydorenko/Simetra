@@ -13,7 +13,10 @@ import {
 import { applyDiagnostic } from "./diagnostic"
 import { CLUSTER_ADVISORY_LOCK } from "./execute"
 import {
+  allowingLack,
+  lackingParents,
   loginSettingSql,
+  pairGrant,
   platformRoleRefusals,
   platformRoleSet,
   readPlatformRoles,
@@ -726,8 +729,17 @@ async function readPhase(
     ...set.request,
     ...gated.map((l) => l.name),
   ].filter((name) => roles.has(name))
+  // Брак обов'язкового членства наявної ролі входу не відмова: фаза запису
+  // доповнює його парою §6.2 (як `ensurePlatformRoles`); зайвий батько, інша
+  // форма членства й інші атрибути лишаються відмовою.
   refusal.push(
-    ...platformRoleRefusals(platform, found, "target", gated, set.request)
+    ...platformRoleRefusals(
+      platform,
+      found,
+      "target",
+      gated.map(allowingLack),
+      set.request
+    )
   )
 
   // 3. Наявна база і шаблон
@@ -970,6 +982,17 @@ async function writePhase(
     for (const r of missing) {
       for (const sql of r.create) await tx.query(sql)
       created.push(r.name)
+    }
+    // Наявна роль входу без нового батька профілю: доповнення парою §6.2
+    for (const l of set.roles.login) {
+      if (!snapshot.roles.has(l.name)) continue
+      const row = (await readPlatformRoles(tx, [l.name], set.request)).find(
+        (r) => r.name === l.name
+      )
+      for (const parent of row === undefined ? [] : lackingParents(l, row)) {
+        await tx.query(pairGrant(parent, l.name))
+        created.push(`${l.name}:${parent}`)
+      }
     }
     // Налаштування ролі `auth` — другий шар після опції з'єднання пулу;
     // ідемпотентне, тож і для наявної ролі
