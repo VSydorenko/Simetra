@@ -496,7 +496,26 @@ describe("catalog command core: concurrency and hierarchy", () => {
   // перевіряються поля, а не версія. Обробник `beforeWrite` рахує похідне
   // `description` з двох полів, які пишуть різні сесії: під замком над
   // поточним рядком він бачить обидві зміни (послідовна еквівалентність Р7).
-  it("CAS by fields compares under the row lock; a derived field sees both changes", async () => {
+  // Окремі кейси: І12 червоніє й у власному кейсі (мутація — замок «до» без
+  // `FOR NO KEY UPDATE` разом з `ELSE v_old.<c>` в `UPDATE` шапки).
+  const derivedTarget = async (
+    body: (env: {
+      url: string
+      owner: pg.Client
+      actor: Actor
+      seed: () => Promise<{ id: string; code: string; version: string }>
+      edit: (
+        row: { id: string; version: string },
+        values: Record<string, unknown>,
+        base: Record<string, unknown>
+      ) => { root: string; sql: string; params: unknown[] }
+      stateOf: (
+        id: string
+      ) => Promise<
+        { code: string; watchers: string[]; description: string } | undefined
+      >
+    }) => Promise<void>
+  ) => {
     const derived = ticketParentHandler(
       "NEW.description := coalesce(NEW.code, '') || '|' || coalesce(pg_catalog.cardinality(NEW.watchers), 0)::text;"
     )
@@ -550,47 +569,55 @@ describe("catalog command core: concurrency and hierarchy", () => {
             [id]
           )
         ).rows[0]
+      await body({ url, owner, actor, seed, edit, stateOf })
+    })
+  }
 
-      // Те саме поле з тією самою базою: друга — `conflict fields`, рядок
-      // має зміну першої
-      {
-        const row = await seed()
-        const second = await race(
-          url,
-          actor,
-          edit(row, { code: "first" }, { code: row.code }),
-          edit(row, { code: "second" }, { code: row.code })
-        )
-        expect(second).toMatchObject({
-          code: "P0001",
-          message: "command.conflict",
-          detail: "fields",
-          hint: await versionOf(owner, row.id),
-        })
-        expect(await stateOf(row.id)).toEqual({
-          code: "first",
-          watchers: [],
-          description: "first|0",
-        })
-      }
+  // Те саме поле з тією самою базою: друга — `conflict fields`, рядок має
+  // зміну першої (І1)
+  it("CAS by fields compares under the row lock: the same field is conflict fields", async () => {
+    await derivedTarget(async ({ url, owner, actor, seed, edit, stateOf }) => {
+      const row = await seed()
+      const second = await race(
+        url,
+        actor,
+        edit(row, { code: "first" }, { code: row.code }),
+        edit(row, { code: "second" }, { code: row.code })
+      )
+      expect(second).toMatchObject({
+        code: "P0001",
+        message: "command.conflict",
+        detail: "fields",
+        hint: await versionOf(owner, row.id),
+      })
+      expect(await stateOf(row.id)).toEqual({
+        code: "first",
+        watchers: [],
+        description: "first|0",
+      })
+    })
+  }, 180_000)
 
-      // Різні поля: обидві проходять, рядок має обидві зміни, а похідне
-      // поле — значення з обох (І12)
-      {
-        const row = await seed()
-        const second = await race(
-          url,
-          actor,
-          edit(row, { code: "renamed" }, { code: row.code }),
-          edit(row, { watchers: [actor.member] }, { watchers: [] })
-        )
-        expect(second).toBeUndefined()
-        expect(await stateOf(row.id)).toEqual({
-          code: "renamed",
-          watchers: [actor.member],
-          description: "renamed|1",
-        })
-      }
+  // Різні поля: обидві проходять, рядок має обидві зміни, а похідне поле —
+  // значення з обох (І12). Порядок навмисний: друга змінює колонку ключа
+  // `code`, тож бере форму `UPDATE` з усіма ключами зміни й присвоює й
+  // `watchers` першої; у зворотному порядку форма без ключа `code` не
+  // присвоює, і втрачена зміна не була б видна.
+  it("CAS by fields on different fields: both land, a derived field sees both changes", async () => {
+    await derivedTarget(async ({ url, actor, seed, edit, stateOf }) => {
+      const row = await seed()
+      const second = await race(
+        url,
+        actor,
+        edit(row, { watchers: [actor.member] }, { watchers: [] }),
+        edit(row, { code: "renamed" }, { code: row.code })
+      )
+      expect(second).toBeUndefined()
+      expect(await stateOf(row.id)).toEqual({
+        code: "renamed",
+        watchers: [actor.member],
+        description: "renamed|1",
+      })
     })
   }, 180_000)
 
