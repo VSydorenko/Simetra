@@ -1,5 +1,6 @@
 import {
   CommandFailure,
+  PLATFORM_ROLES,
   runtimeCatalogSchema,
   type RuntimeCatalog,
 } from "simetra/model"
@@ -71,7 +72,10 @@ const storageCatalog: RuntimeCatalog = runtimeCatalogSchema.parse({
 const docRow = (id = ID, version = 1) =>
   JSON.stringify({ id, version, file_name: "a.txt", company_id: COMPANY })
 
-const FILES_ROLE = { text: 'SET LOCAL ROLE "simetra_files"', params: [] }
+const FILES_ROLE = {
+  text: `SET LOCAL ROLE "${PLATFORM_ROLES.files}"`,
+  params: [],
+}
 const PENDING_LEFT = {
   text: 'SELECT "simetra"."storage_pending_left"() AS pending',
   params: [],
