@@ -764,7 +764,7 @@ describe.concurrent("apply backfill", () => {
         9410,
         "Fills",
         "fills",
-        "mark"
+        "stamp"
       ),
       "custom-tables/RlsLog/RlsLog.meta.json": logTable(
         9420,
@@ -772,7 +772,7 @@ describe.concurrent("apply backfill", () => {
         "rls_log",
         "rls"
       ),
-      "sql/app/fills.sql": `CREATE FUNCTION app.note_default() RETURNS text LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN INSERT INTO app.fills (mark) VALUES ('x'); RETURN 'n/a'; END $$;
+      "sql/app/fills.sql": `CREATE FUNCTION app.note_default() RETURNS text LANGUAGE plpgsql VOLATILE SET search_path = '' AS $$ BEGIN INSERT INTO app.fills (stamp) VALUES ('x'); RETURN 'n/a'; END $$;
 CREATE FUNCTION app.log_rls() RETURNS trigger LANGUAGE plpgsql SET search_path = '' AS $$ BEGIN INSERT INTO app.rls_log (rls) VALUES (pg_catalog.current_setting('row_security')); RETURN NULL; END $$;
 CREATE CONSTRAINT TRIGGER fills_rls AFTER INSERT ON app.fills DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION app.log_rls();`,
     }
