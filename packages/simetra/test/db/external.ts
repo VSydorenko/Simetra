@@ -86,6 +86,12 @@ export async function createRunBucket(
   return id
 }
 
+// Бакет адресується іменем `run-<тег>`: порожній чи кривий тег дав би
+// `run-` або чужий бакет, тож без перевірки на Supabase нічого б не завадило
+function checkTag(tag: string): void {
+  if (!isRunTag(tag)) throw new Error(`"${tag}" is not a run tag`)
+}
+
 function isNoSuchBucket(error: unknown): boolean {
   const e = error as { name?: string; $metadata?: { httpStatusCode?: number } }
   return e?.name === "NoSuchBucket" || e?.$metadata?.httpStatusCode === 404
@@ -96,7 +102,7 @@ function isNoSuchBucket(error: unknown): boolean {
  * lists nothing) and then deletes it: Garage through the admin API (its alias
  * goes with it), Supabase through S3. The name is exactly
  * {@link runBucketName} of `tag`: never chosen by a prefix, never another
- * run's or a dev bucket. Returns `false` when the bucket is not there. Throws
+ * run's or a dev bucket. Returns `false` when the bucket is not there (on Garage: not in the admin API). Throws
  * when any call fails or `timeoutMs` runs out; the bucket then stays as it
  * was left.
  */
@@ -105,6 +111,7 @@ export async function emptyAndDeleteRunBucket(
   stack: TestStack,
   deps: { fetch: Fetch; s3?: S3ClientLike; timeoutMs?: number }
 ): Promise<boolean> {
+  checkTag(tag)
   const deadline = Date.now() + (deps.timeoutMs ?? 30_000)
   const budget = (): number => {
     const left = deadline - Date.now()
@@ -143,7 +150,9 @@ export async function emptyAndDeleteRunBucket(
         )
     }
   } catch (error) {
-    if (isNoSuchBucket(error)) return false
+    // На Garage бакет уже знайдено в адмінці: зникнення з S3 — розбіжність, і
+    // вона мусить потрапити у звіт, а не в мовчазне «немає»
+    if (garageId === undefined && isNoSuchBucket(error)) return false
     throw error
   }
   if (garageId !== undefined)
@@ -270,6 +279,7 @@ export async function removeRunResources(
   p: TestProvider,
   deps: { exec: Exec; fetch: Fetch; deadlineMs: number; s3?: S3ClientLike }
 ): Promise<{ removed: string[]; left: string[]; cleanup: string[] }> {
+  checkTag(tag)
   const deadline = Date.now() + deps.deadlineMs
   // Кожен виклик обмежений рештою дедлайну: прибиральник у обробнику сигналу
   // має власну межу, і завислий docker чи Garage не мусить її з'їсти

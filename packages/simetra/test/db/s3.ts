@@ -50,11 +50,8 @@ export function parseSupabaseS3(text: string): S3Config {
     const m = /^([A-Z0-9_]+)="?(.*?)"?$/.exec(line.trim())
     if (m !== null) env.set(m[1]!, m[2]!)
   }
-  const api = env.get("API_URL")
-  const endpoint =
-    env.get("S3_PROTOCOL_URL") ??
-    env.get("STORAGE_S3_URL") ??
-    (api === undefined ? undefined : `${api}/storage/v1/s3`)
+  // Адресу не виводимо з `API_URL`: вгадана адреса послала б ключі не туди
+  const endpoint = env.get("STORAGE_S3_URL")
   const accessKeyId = env.get("S3_PROTOCOL_ACCESS_KEY_ID")
   const secretAccessKey = env.get("S3_PROTOCOL_ACCESS_KEY_SECRET")
   if (
@@ -63,10 +60,12 @@ export function parseSupabaseS3(text: string): S3Config {
     secretAccessKey === undefined
   )
     throw new Error(
-      "`supabase status -o env` has no S3 values (need S3_PROTOCOL_ACCESS_KEY_ID, S3_PROTOCOL_ACCESS_KEY_SECRET and an S3 URL): is [storage.s3_protocol] enabled and the stack running?"
+      "`supabase status -o env` has no S3 values (need S3_PROTOCOL_ACCESS_KEY_ID, S3_PROTOCOL_ACCESS_KEY_SECRET and STORAGE_S3_URL): is [storage.s3_protocol] enabled and the stack running?"
     )
   return {
     endpoint,
+    // CLI друкує регіон не завжди; локальний Storage підписує запити з
+    // регіоном `local`, тож типове значення — не здогад, а налаштування стека
     region: env.get("S3_PROTOCOL_REGION") ?? "local",
     accessKeyId,
     secretAccessKey,

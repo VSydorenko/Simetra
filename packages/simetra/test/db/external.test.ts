@@ -472,6 +472,46 @@ describe("emptyAndDeleteRunBucket", () => {
       })
     ).toBe(false)
   })
+
+  // Тег перевіряється до першого виклику S3: на Supabase більше нічого не
+  // стримало б адресу `run-` чи `run-<будь-що>`
+  it.each(["", "x", "ABC123", "abc/12"])(
+    "refuses the tag %j before any S3 call",
+    async (tag) => {
+      const s3 = fakeS3({ "run-": ["a"], [`run-${tag}`]: ["a"] })
+      await expect(
+        emptyAndDeleteRunBucket(tag, TEST_STACKS.supabase, {
+          fetch: fakeGarage([]).fetch,
+          s3: s3.s3,
+        })
+      ).rejects.toThrow(/not a run tag/)
+      await expect(
+        removeRunResources(tag, "supabase", {
+          exec: fakeDocker([]).exec,
+          fetch: fakeGarage([]).fetch,
+          s3: s3.s3,
+          deadlineMs: 1_000,
+        })
+      ).rejects.toThrow(/not a run tag/)
+      expect(s3.calls).toEqual([])
+    }
+  )
+
+  // Бакет, який адмінка Garage показала, а S3 не знає, — розбіжність для
+  // звіту, а не «немає»
+  it("on Garage a bucket the admin API lists but S3 lacks is reported", async () => {
+    const garage = fakeGarage([{ id: "g", alias: `run-${TAG}`, objects: 0 }])
+    const result = await removeRunResources(TAG, "postgres", {
+      exec: fakeDocker([]).exec,
+      fetch: garage.fetch,
+      s3: fakeS3({}).s3,
+      deadlineMs: 5_000,
+    })
+    expect(result.removed).toEqual([])
+    expect(result.left).toEqual([
+      expect.stringContaining(`bucket run-${TAG} (`),
+    ])
+  })
 })
 
 describe("sweepRun", () => {
