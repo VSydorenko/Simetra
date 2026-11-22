@@ -288,7 +288,8 @@ export function firstDynamicSqlLine(
  * запис у `pg_settings`, ім'я в якому статично не перевірити (спека прав §5.3).
  * `session_replication_role` — теж платформи (спека прав §5.3): `replica` вимикає її
  * тригери (носії, ефекти, механіка, RI), а в сесії пулу — і для чужих команд,
- * тож у боргу він помилка, а не попередження.
+ * тож у боргу він помилка, а не попередження. `search_path` — теж: записаний у
+ * тілі, він знімає закріплення шляху пошуку definer-функції (спека прав §5.3).
  */
 export function platformWrite(hit: CommandContextHit): boolean {
   const setting = hit.setting?.toLowerCase()
@@ -296,6 +297,7 @@ export function platformWrite(hit: CommandContextHit): boolean {
     hit.form === "settingsTable" ||
     setting === "*" ||
     setting === "session_replication_role" ||
+    setting === "search_path" ||
     setting?.startsWith(PLATFORM_SETTING_PREFIX) === true
   )
 }

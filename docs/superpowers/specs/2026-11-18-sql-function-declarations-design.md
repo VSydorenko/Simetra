@@ -695,8 +695,12 @@ ACL функції з грантом ролі поза призначенням�
 із `PROTECTED_SESSION_SETTINGS.prefixes`
 (`packages/simetra/src/model/schemas/project.ts`): `request.jwt.` і
 `simetra.`. Назви з `PROTECTED_SESSION_SETTINGS.names` (`role`,
-`session_authorization`, `session_replication_role`) — не актор, тож теж
-заборонені. Будь-яка інша назва (заголовки, cookies, шлях, метод запиту,
+`session_authorization`, `session_replication_role`, `search_path`) — не
+актор, тож теж заборонені. `search_path` у переліку, бо definer-функція
+застосунку, що змінила його в тілі, кликала б функцію платформи без схеми
+повз `sql.platform-function-call`: запис у будь-якій формі — помилка, борг
+включно (як платформний префікс); опція оболонки `SET search_path = ''` не
+запис, її судить закрита оболонка. Будь-яка інша назва (заголовки, cookies, шлях, метод запиту,
 власні `app.*`) і нелітеральна назва — `sql.head-not-allowed` (конструкція
 `setting`): такі
 значення задає клієнт чи будь-який SQL застосунку. Запис `request.jwt.*` з

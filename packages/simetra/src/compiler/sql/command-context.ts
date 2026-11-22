@@ -400,10 +400,13 @@ function optionWrites(
     // `RESET ALL` опції лише прибирає власні налаштування функції:
     // у сесію він нічого не пише, тож не відмова. Оператор `RESET ALL` у тілі
     // судиться окремо і лишається забороненим.
+    // `SET search_path = ''` — закріплення шляху пошуку, а не запис у сесію:
+    // його вимагає й судить закрита оболонка (`closed-forms`).
     if (
       def.defname === "set" &&
       set !== undefined &&
       set.kind !== "VAR_RESET_ALL" &&
+      set.name?.toLowerCase() !== "search_path" &&
       setStatementWrite(set)
     ) {
       found.push({

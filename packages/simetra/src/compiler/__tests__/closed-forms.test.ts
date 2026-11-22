@@ -706,6 +706,41 @@ describe("kind module: closed forms only", () => {
       ).toEqual([[ERROR, "setStatement", "session_replication_role"]])
     })
 
+    // Р18: `search_path` захищений, як платформний префікс: у боргу — помилка, не
+    // попередження; опція оболонки `SET search_path = ''` — не запис (І7).
+    it.each([
+      ["SET search_path = public;", "setStatement"],
+      ["SET LOCAL search_path = public;", "setStatement"],
+      ["RESET search_path;", "setStatement"],
+      ["PERFORM set_config('search_path', 'public', true);", "setConfig"],
+    ])("%s in debt is an error", async (statement, form) => {
+      expect(
+        sessionWrites(await diagnostics({ [TABLE_SQL]: debtBody(statement) }))
+      ).toEqual([[ERROR, form, "search_path"]])
+    })
+
+    it("a definer function with the search_path option and no body write passes", async () => {
+      expect(
+        sessionWrites(
+          await diagnostics({
+            [SHARED_SQL]: shell(
+              "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''"
+            ),
+          })
+        )
+      ).toEqual([])
+    })
+
+    it("a definer function that sets search_path in its body is refused", async () => {
+      const found = await diagnostics({
+        [SHARED_SQL]: shell(
+          "LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = ''",
+          "BEGIN SET search_path = public; RETURN 1; END"
+        ),
+      })
+      expect(sessionWrites(found)).toEqual([[ERROR, "setStatement", undefined]])
+    })
+
     it("a debt function called by closed code is a head error, its own write a warning", async () => {
       // Функція модуля виду кличе лише функції-запити (спека прав §5.3): боргова
       // ланка на plpgsql — помилка голови; попередження боргу лишається на
