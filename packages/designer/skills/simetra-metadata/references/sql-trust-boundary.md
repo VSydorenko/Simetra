@@ -95,7 +95,8 @@ model they call, by an allowlist (`sql.head-not-allowed`):
 
 - **A handler only checks.** It reads with `SELECT … INTO`, assigns fields of
   `NEW`, raises errors and returns `NEW` or `NULL`. It writes no table and runs
-  no `EXECUTE`, `CALL`, `SET` or cursor. A `beforeWrite` handler on a provider
+  no `EXECUTE`, `CALL`, `SET`, cursor or `ASSERT` (a session setting can
+  switch `ASSERT` off: check with `IF … THEN RAISE`). A `beforeWrite` handler on a provider
   table (`auth.users`) does not assign `NEW` either. A write the handler did
   belongs to a command or a TypeScript hook.
 - **Everything else is a query function.** `LANGUAGE sql`, a string body of
