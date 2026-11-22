@@ -64,7 +64,60 @@ export interface Epochs {
    * never lowers an earlier mark.
    */
   buryObject(object: string, at: number): void
-  /** Drops both maps, the horizon and the last pair burials. */
+  /**
+   * The receiver holds the channel (subscribed or subscribing; P4-B spec
+   * §8.4). A channel released before whose entry is still kept rejoins
+   * after a gap: its `gapAt` becomes the release epoch, which is returned —
+   * the caller marks the channel's stored rows with it. Otherwise (never
+   * held, or the entry was forgotten) no gap: `undefined`.
+   */
+  hold(channel: string): number | undefined
+  /**
+   * The receiver released the channel (unsubscribed or refused): it is no
+   * longer held and its `releasedAt` becomes `next()`.
+   */
+  release(channel: string): number
+  /** Drops the entry of a released channel: the store holds no row of it. */
+  forget(channel: string): void
+  /** Released channels whose entry is kept. */
+  released(): IterableIterator<string>
+  /** Channels the receiver holds. */
+  heldChannels(): IterableIterator<string>
+  held(channel: string): boolean
+  /**
+   * A gap began on a held channel, or on every held channel when omitted (the
+   * connection broke): `gapAt` becomes `next()`. A channel not held has no gap.
+   */
+  gap(channel?: string): void
+  /** The held channel (re)joined — `recovered` or not: `joinAt` becomes `next()`. */
+  join(channel: string): void
+  /** The epoch of the held channel's last gap; 0 — none. */
+  gapAt(channel: string): number
+  /** The epoch of the held channel's last join; 0 — none. */
+  joinAt(channel: string): number
+  /** The release epoch of a released channel with an entry; 0 — none. */
+  releasedAt(channel: string): number
+  /**
+   * A read that started at `readEpoch` saw every change of the channel it
+   * was not told of — for a row it writes and for a view's composition read
+   * then. Held: the channel never had a gap, or it rejoined after its last
+   * gap and the read started at or after that join
+   * (`gapAt < joinAt <= readEpoch`). Released with an entry: point-in-time —
+   * the read started at or after the release, or the channel was proven for
+   * it at the release (the same test with the values of that moment, or no
+   * gap). Without an entry the channel waits for no signal: a read proves it
+   * at its own moment.
+   */
+  channelProven(channel: string, readEpoch: number): boolean
+  /**
+   * A read lifts the mark `g` of the channel: held — the channel joined after
+   * the mark and the read started at or after that join; not held — the read
+   * started at or after the release (none kept — any read).
+   */
+  liftsMark(channel: string, mark: number, readEpoch: number): boolean
+  /** Some held channel had a gap (a fast path for the store's apply). */
+  gapped(): boolean
+  /** Drops both maps, the horizon, the last pair burials and the channel registers. */
   clear(): void
   /** Sizes of the service maps (inspection); `horizon` counts raised buckets. */
   sizes(): {
@@ -210,6 +263,17 @@ export function createEpochs(
   // перевіряється за будь-якою парою об'єкта, і витіснення його не губить.
   const pairBurials = new Map<string, number>()
   let barrier: PairBarrier | undefined
+  // Регістри каналів сигналів: максимуми епох, а не лічильники поколінь —
+  // порівнюються з епохою старту читання, як позначки й надгробки. Розрив і
+  // приєднання — лише утримуваних каналів; відпущений канал тримає епоху
+  // відпускання, поки в сховищі є його рядки.
+  const heldSet = new Set<string>()
+  const gaps = new Map<string, number>()
+  const joins = new Map<string, number>()
+  // Відпущений канал: епоха відпускання й регістри тієї миті — склад
+  // вигляду судиться точково (читання після відпускання чи доведений тоді).
+  const releases = new Map<string, { at: number; gap: number; join: number }>()
+  const gapAt = (channel: string) => gaps.get(channel) ?? 0
   // Поховання всіх пар об'єкта (`buryObject`): одне число на об'єкт.
   const objectBurials = new Map<string, number>()
 
@@ -302,7 +366,72 @@ export function createEpochs(
       return at
     },
     hiddenSince: (id, readEpoch) => (hiddenMarks.get(id) ?? -1) > readEpoch,
+    hold(channel) {
+      if (heldSet.has(channel)) return undefined
+      heldSet.add(channel)
+      const released = releases.get(channel)
+      releases.delete(channel)
+      joins.delete(channel)
+      if (released === undefined) {
+        gaps.delete(channel)
+        return undefined
+      }
+      gaps.set(channel, released.at)
+      return released.at
+    },
+    release(channel) {
+      const at = ++epoch
+      const gap = heldSet.has(channel) ? gapAt(channel) : 0
+      const join = joins.get(channel) ?? 0
+      heldSet.delete(channel)
+      gaps.delete(channel)
+      joins.delete(channel)
+      releases.set(channel, { at, gap, join })
+      return at
+    },
+    forget(channel) {
+      if (!heldSet.has(channel)) releases.delete(channel)
+    },
+    released: () => releases.keys(),
+    heldChannels: () => heldSet.values(),
+    held: (channel) => heldSet.has(channel),
+    gap(channel) {
+      if (channel !== undefined && !heldSet.has(channel)) return
+      const at = ++epoch
+      if (channel !== undefined) gaps.set(channel, at)
+      else for (const held of heldSet) gaps.set(held, at)
+    },
+    join(channel) {
+      if (heldSet.has(channel)) joins.set(channel, ++epoch)
+    },
+    gapAt,
+    joinAt: (channel) => joins.get(channel) ?? 0,
+    releasedAt: (channel) => releases.get(channel)?.at ?? 0,
+    channelProven(channel, readEpoch) {
+      if (heldSet.has(channel)) {
+        const gap = gapAt(channel)
+        const join = joins.get(channel) ?? 0
+        return gap === 0 || (gap < join && join <= readEpoch)
+      }
+      // Читання, що почалось у розриві утримуваного каналу й лягло після його
+      // відпускання, не доведене: «на свою мить» — лише канал без запису.
+      const released = releases.get(channel)
+      if (released === undefined || readEpoch >= released.at) return true
+      const { gap, join } = released
+      return gap === 0 || (gap < join && join <= readEpoch)
+    },
+    liftsMark(channel, mark, readEpoch) {
+      if (!heldSet.has(channel))
+        return readEpoch >= (releases.get(channel)?.at ?? 0)
+      const join = joins.get(channel) ?? 0
+      return join > mark && readEpoch >= join
+    },
+    gapped: () => gaps.size > 0 || releases.size > 0,
     clear() {
+      heldSet.clear()
+      gaps.clear()
+      joins.clear()
+      releases.clear()
       seen.clear()
       tombstones.clear()
       hiddenMarks.clear()

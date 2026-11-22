@@ -2,7 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest"
 import type { DataRequest, DataResponse } from "../envelope"
 import type {
   DataTransport,
-  SignalErrorKind,
+  SignalError,
   SignalTransport,
   SourceAdapter,
   Unsubscribe,
@@ -21,13 +21,28 @@ const adapter: SourceAdapter = {
 const transport: SignalTransport = {
   subscribe: () => () => {},
   onSubscribed: () => () => {},
+  refreshTokens: async () => {},
+  close: () => {},
 }
 
 describe("ports", () => {
   it("accept a fake implementation of both ports", async () => {
     expectTypeOf(adapter).toExtend<SourceAdapter>()
     expectTypeOf(transport).toExtend<SignalTransport>()
-    expectTypeOf<SignalErrorKind>().toEqualTypeOf<"auth" | "transport">()
+    expectTypeOf<SignalError>().toEqualTypeOf<{
+      kind: "auth" | "transport"
+      channel?: string
+      final?: true
+    }>()
+    expectTypeOf<SignalTransport["onSubscribed"]>().toEqualTypeOf<
+      (
+        handler: (event: { channel: string; recovered: boolean }) => void
+      ) => Unsubscribe
+    >()
+    expectTypeOf<SignalTransport["refreshTokens"]>().toEqualTypeOf<
+      (channels?: readonly string[]) => Promise<void>
+    >()
+    expectTypeOf<SignalTransport["close"]>().toEqualTypeOf<() => void>()
     expectTypeOf<Unsubscribe>().toEqualTypeOf<() => void>()
     expect(
       await adapter.read([

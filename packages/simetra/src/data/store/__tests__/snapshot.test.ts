@@ -105,13 +105,15 @@ describe("computeRowView with an own mutation", () => {
     }
   })
 
-  it("a gap mark under failed shows stale; clearing the channel lifts it", () => {
+  it("a gap mark under failed shows stale; a read after the join lifts it", () => {
     const h = stored()
+    h.session.epochs.hold("c1")
     h.write((s) => h.store.markDisconnected(s, () => "c1"))
     expect(
       computeRowView(K1, h.store.get(K1)!, [], undefined, failed)
     ).toMatchObject({ state: "failed", stale: true })
-    h.write((s) => h.store.clearDisconnected(s, "c1"))
+    h.session.epochs.join("c1")
+    h.write((s) => h.store.put(s, h.store.get(K1)!.row!, h.now(), false))
     const view = computeRowView(K1, h.store.get(K1)!, [], undefined, failed)
     expect(view).toMatchObject({ state: "failed" })
     expect("stale" in view).toBe(false)

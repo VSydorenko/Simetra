@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import { catalogEntry } from "../../../model/runtime/__tests__/entries"
 import { keyId } from "../epoch"
 import {
+  channelOf as channelOfEntry,
   mergeVersioned,
   scopeOf,
   visibleRow,
@@ -36,7 +37,20 @@ const purgeScope = (h: Harness, scope: string | null) =>
 const purgeKeys = (h: Harness, keys: string[]) =>
   h.write((s) => h.store.purgeKeys(s, keys))
 const U = "00000000-0000-4000-8000-0000000000b3"
-const channelOf = (e: RowEntry) => `ch:${String(e.scope)}`
+const channelOf = channelOfEntry(catalogEntry())
+const chOf = (scope: string) => channelOf({ scope } as RowEntry)
+// Розрив, як у `Writer.markDisconnected`: регістр каналу, потім позначки.
+// Утримувані канали S і T: розрив і приєднання бувають лише в них.
+const held = (options: Parameters<typeof harness>[0] = {}) => {
+  const h = harness(options)
+  h.session.epochs.hold(chOf(S))
+  h.session.epochs.hold(chOf(T))
+  return h
+}
+const gap = (h: Harness, channel?: string) => {
+  h.session.epochs.gap(channel)
+  h.write((s) => h.store.markDisconnected(s, channelOf, channel))
+}
 
 // Пам'ять версій K1 витісняє K2 (seenMax 1): кошик K1 отримує горизонт.
 const evictedK1 = (limits: { horizonBuckets?: number } = {}) => {
@@ -427,6 +441,29 @@ describe("ObjectStore.remove (П15)", () => {
     expect(h.store.get(K1)?.removed?.divergent).toBe(false)
   })
 
+  // Детектор дефекту самотесту `bury-removed-current-epoch`, незалежний від
+  // насіння моделі: слот `removed` без власників іде з надгробком епохи
+  // позначки, тож читання між позначкою й похованням рядок повертає.
+  it.each([
+    { defects: undefined, written: true },
+    {
+      defects: new Set(["bury-removed-current-epoch"] as const),
+      written: false,
+    },
+  ])(
+    "a dismissed removed slot is buried with the epoch of its mark (defect: $defects)",
+    ({ defects, written }) => {
+      const h = harness(defects === undefined ? {} : { defects })
+      put(h, row(K1, 1))
+      own(h, K1)
+      remove(h, K1)
+      const between = h.session.epochs.next()
+      disown(h, K1)
+      expect(h.store.get(K1)).toBeUndefined()
+      expect(put(h, row(K1, 1), between)).toBe(written ? "written" : "rejected")
+    }
+  )
+
   it("a truly deleted row gets no re-read without divergence", () => {
     const h = harness()
     put(h, row(K1, 1))
@@ -735,56 +772,124 @@ describe("ObjectStore stale marks", () => {
     expect(h.store.get(K1)?.stale.minVersion).toBeUndefined()
   })
 
-  it("disconnect is cleared only by its own channel", () => {
-    const h = harness()
+  it("disconnect is lifted only by a read started at or after the channel's join", () => {
+    const h = held()
     put(h, row(K1, 1, { org: S }))
     put(h, row(K2, 1, { org: T }))
-    h.write((s) => h.store.markDisconnected(s, channelOf))
-    put(h, row(K2, 2, { org: T }))
-    h.write((s) => h.store.clearDisconnected(s, `ch:${S}`))
-    expect(h.store.get(K1)?.stale.disconnect).toBeUndefined()
-    expect([...h.store.get(K2)!.stale.disconnect!.keys()]).toEqual([`ch:${T}`])
-  })
-
-  it("disconnect is cleared by the channel it was recorded on after the row moved", () => {
-    const h = harness()
-    put(h, row(K1, 1, { org: S }))
-    h.write((s) => h.store.markDisconnected(s, channelOf))
-    put(h, row(K1, 2, { org: T }))
-    h.write((s) => h.store.clearDisconnected(s, `ch:${T}`))
+    gap(h)
+    const beforeJoin = h.now()
+    h.session.epochs.join(chOf(S))
+    put(h, row(K1, 1, { org: S }), beforeJoin)
     expect(h.store.get(K1)?.stale.disconnect).toBeDefined()
-    h.write((s) => h.store.clearDisconnected(s, `ch:${S}`))
+    put(h, row(K1, 1, { org: S }))
+    put(h, row(K2, 2, { org: T }))
+    expect(h.store.get(K1)?.stale.disconnect).toBeUndefined()
+    // Канал T не приєднався: його рядок лишається з позначкою.
+    expect([...h.store.get(K2)!.stale.disconnect!.keys()]).toEqual([chOf(T)])
+  })
+
+  it("a join older than the mark does not lift it", () => {
+    const h = held()
+    put(h, row(K1, 1, { org: S }))
+    h.session.epochs.join(chOf(S))
+    gap(h, chOf(S))
+    put(h, row(K1, 1, { org: S }))
+    expect(h.store.get(K1)?.stale.disconnect).toBeDefined()
+  })
+
+  it("a row written by a read in a gap is marked with the gap and lifted after the join", () => {
+    const h = held()
+    h.session.epochs.join(chOf(S))
+    gap(h, chOf(S))
+    put(h, row(K1, 1, { org: S }))
+    expect(h.store.get(K1)?.stale.disconnect?.get(chOf(S))).toBe(
+      h.session.epochs.gapAt(chOf(S))
+    )
+    const beforeJoin = h.now()
+    h.session.epochs.join(chOf(S))
+    put(h, row(K1, 1, { org: S }), beforeJoin)
+    expect(h.store.get(K1)?.stale.disconnect).toBeDefined()
+    put(h, row(K1, 1, { org: S }))
     expect(h.store.get(K1)?.stale.disconnect).toBeUndefined()
   })
 
-  it("marking the new channel of a moved row keeps the mark of its old channel", () => {
-    const h = harness()
+  it("a moved row keeps the mark of its old channel until that channel joins", () => {
+    const h = held()
     put(h, row(K1, 1, { org: S }))
-    h.write((s) => h.store.markDisconnected(s, channelOf))
+    gap(h)
+    h.session.epochs.join(chOf(T))
     put(h, row(K1, 2, { org: T }))
-    h.write((s) => h.store.markDisconnected(s, channelOf, `ch:${T}`))
-    h.write((s) => h.store.clearDisconnected(s, `ch:${T}`))
-    expect([...h.store.get(K1)!.stale.disconnect!.keys()]).toEqual([`ch:${S}`])
+    expect([...h.store.get(K1)!.stale.disconnect!.keys()]).toEqual([chOf(S)])
+    h.session.epochs.join(chOf(S))
+    put(h, row(K1, 2, { org: T }))
+    expect(h.store.get(K1)?.stale.disconnect).toBeUndefined()
+  })
+
+  // Запис старого каналу рядок, що переїхав, перевіряє лише правилом 2
+  // (§8.4): власний канал рядка тут доведено, тож його перевірка не затуляє.
+  it("an old-channel mark of a moved row is not lifted by a read started before that channel's join", () => {
+    const h = held()
+    put(h, row(K1, 1, { org: S }))
+    gap(h, chOf(S))
+    const beforeJoin = h.now()
+    h.session.epochs.join(chOf(S))
+    put(h, row(K1, 2, { org: T }), beforeJoin)
+    expect([...h.store.get(K1)!.stale.disconnect!.keys()]).toEqual([chOf(S)])
+    put(h, row(K1, 2, { org: T }))
+    expect(h.store.get(K1)?.stale.disconnect).toBeUndefined()
+  })
+
+  it("an old-channel mark of a moved row is not lifted by a join older than the mark", () => {
+    const h = held()
+    h.session.epochs.join(chOf(S))
+    put(h, row(K1, 1, { org: S }))
+    gap(h, chOf(S))
+    put(h, row(K1, 2, { org: T }))
+    expect([...h.store.get(K1)!.stale.disconnect!.keys()]).toEqual([chOf(S)])
+  })
+
+  it("a channel not held gets no gap: its rows stay unmarked, also when read after a connection gap", () => {
+    const h = harness()
+    h.session.epochs.hold(chOf(S))
+    put(h, row(K1, 1, { org: S }))
+    put(h, row(K2, 1, { org: T }))
+    gap(h)
+    expect(h.store.get(K1)?.stale.disconnect).toBeDefined()
+    expect(h.store.get(K2)?.stale.disconnect).toBeUndefined()
+    put(h, row(K2, 2, { org: T }))
+    expect(h.store.get(K2)?.stale.disconnect).toBeUndefined()
+  })
+
+  it("a mark of a released channel is lifted by a read started at or after the release", () => {
+    const h = held()
+    put(h, row(K1, 1, { org: S }))
+    gap(h, chOf(S))
+    const beforeRelease = h.now()
+    h.session.epochs.release(chOf(S))
+    put(h, row(K1, 1, { org: S }), beforeRelease)
+    expect(h.store.get(K1)?.stale.disconnect).toBeDefined()
+    put(h, row(K1, 1, { org: S }))
+    expect(h.store.get(K1)?.stale.disconnect).toBeUndefined()
   })
 
   it("markDisconnected with a channel marks only rows of that channel", () => {
-    const h = harness()
+    const h = held()
     put(h, row(K1, 1, { org: S }))
     put(h, row(K2, 1, { org: T }))
-    h.write((s) => h.store.markDisconnected(s, channelOf, `ch:${T}`))
+    h.write((s) => h.store.markDisconnected(s, channelOf, chOf(T)))
     expect(h.store.get(K1)?.stale.disconnect).toBeUndefined()
     expect(h.store.get(K2)?.stale.disconnect).toBeDefined()
   })
 
   it("every mark takes a new epoch", () => {
-    const h = harness({ limits: { seenMax: 1 } })
+    const h = held({ limits: { seenMax: 1 } })
     put(h, row(K1, 1))
     let before = h.now()
     h.write((s) => h.store.markStale(s, [K1], 5))
     expect(h.store.get(K1)?.stale.minVersion?.epoch).toBeGreaterThan(before)
     before = h.now()
     h.write((s) => h.store.markDisconnected(s, channelOf))
-    expect(h.store.get(K1)?.stale.disconnect?.get(`ch:${S}`)).toBeGreaterThan(
+    expect(h.store.get(K1)?.stale.disconnect?.get(chOf(S))).toBeGreaterThan(
       before
     )
     before = h.now()

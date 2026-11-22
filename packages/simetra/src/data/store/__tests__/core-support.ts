@@ -1,4 +1,9 @@
-import type { CatalogEntry, ReadQuery, SourceAdapter } from "simetra/model"
+import type {
+  CatalogEntry,
+  ReadQuery,
+  SignalTransport,
+  SourceAdapter,
+} from "simetra/model"
 import {
   ORGANIZATION_ID,
   catalogEntry,
@@ -73,6 +78,8 @@ export function setup(
     rightsSnapshot?: boolean
     onRightsReplaced?: Parameters<typeof createCore>[0]["onRightsReplaced"]
     onSessionChanged?: () => void
+    /** The signal transport of the core; needs `rightsSnapshot` to be used. */
+    signals?: SignalTransport
   } = {}
 ): CoreHarness {
   const fake = createFakeSource({
@@ -124,6 +131,7 @@ export function setup(
     ...(options.onRightsReplaced === undefined
       ? {}
       : { onRightsReplaced: options.onRightsReplaced }),
+    ...(options.signals === undefined ? {} : { signals: options.signals }),
     ...(options.onSessionChanged === undefined
       ? {}
       : { onSessionChanged: options.onSessionChanged }),
@@ -143,6 +151,33 @@ export const taskValues = (n: number, values: Values = {}): Values => ({
 
 export const seed = (fake: FakeSource, from: number, to: number) => {
   for (let n = from; n <= to; n++) fake.insert(TASK, taskValues(n))
+}
+
+/**
+ * Межа часу властивості fast-check з бюджету тесту (одне джерело з таймаутом
+ * vitest): прогін, що вийшов за бюджет, завершується сам і червоним, а не
+ * продовжується у фоні й не зачіпає сусідній тест.
+ */
+export const interruptWithin = (budgetMs: number) => ({
+  interruptAfterTimeLimit: Math.floor(budgetMs * 0.9),
+  markInterruptAsFailure: true,
+})
+
+// Перерваний прогін fast-check не чекає: він летить далі, і його `finally`
+// (закриття ядра й таймерів) інакше спрацював би вже в наступному тесті.
+const runsInFlight = new Set<Promise<unknown>>()
+
+/** Registers one model run of a property, so {@link settleRuns} can await it. */
+export function modelRun<T>(run: Promise<T>): Promise<T> {
+  runsInFlight.add(run)
+  const done = () => runsInFlight.delete(run)
+  run.then(done, done)
+  return run
+}
+
+/** Awaits every model run still in flight (an interrupted one included). */
+export async function settleRuns(): Promise<void> {
+  while (runsInFlight.size > 0) await Promise.allSettled([...runsInFlight])
 }
 
 /** Дає дійти всім мікрозадачам відповідей (фейк доставляє мікрозадачею). */

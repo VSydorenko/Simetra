@@ -11,7 +11,10 @@ export const nextMutationId = (): string => `m${++mutationSeq}`
 
 /**
  * The refusal a mutation settles with once its runtime is closed: the same
- * error the transport wrapper gives a request after the close.
+ * error the transport wrapper gives a request after the close. Only a changed
+ * session is `unauthenticated`; the rest, `connection-refused` included (the
+ * signal transport lost its credentials for good, the session itself did not
+ * change), is `unavailable`.
  */
 export function closedError(reason: CloseReason): CommandError {
   return reason === "session-changed"

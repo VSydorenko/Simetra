@@ -29,6 +29,8 @@ import { visibleRow } from "../object-store"
 import { createCoreSource, createReadLimiter, type ServerPort } from "../source"
 import { EPOCH_UNAVAILABLE, type Subset } from "../subsets"
 import type { FakeRead, FakeReadLog, FakeSource } from "../testing/fake-source"
+import { createFakeSignalTransport } from "../testing/fake-signal-transport"
+import { MIN_VERSION_RETRIES } from "../receiver"
 import {
   DEFAULT_CORE_LIMITS,
   type CloseReason,
@@ -42,7 +44,19 @@ import {
   type ViewSnapshot,
   type ViewSpec,
 } from "../types"
-import { ORG, S, TASK, key, keysOf, org, setup, task } from "./core-support"
+import {
+  ORG,
+  S,
+  TASK,
+  interruptWithin,
+  key,
+  modelRun,
+  settleRuns,
+  keysOf,
+  org,
+  setup,
+  task,
+} from "./core-support"
 
 /*
  * Модельний тест ядра — гейт блоку (спека П4-B §11,
@@ -228,6 +242,10 @@ type RightsHow =
 
 type How = "ok" | "stale" | "forbidden" | "missing" | "unavailable"
 
+/** What a signal step sends: an op of the change channel or an unparsable body. */
+type SignalOp =
+  "create" | "update" | "markDeletion" | "delete" | "invalidate" | "garbage"
+
 /** How the model answers a held `run`. */
 type RunHow = "ok" | "conflict" | "forbidden" | "unavailable"
 
@@ -259,7 +277,7 @@ type Step =
     }
   | { t: "revalidate"; org: boolean; visibleOnly: boolean }
   | { t: "markStale"; k: number; plus: number }
-  | { t: "disconnect"; channel: number; clear: boolean }
+  | { t: "disconnect"; channel: number; join: boolean }
   | { t: "markViews"; v: number; one: boolean; needs: boolean; news: boolean }
   | { t: "time"; ms: number }
   | { t: "epoch"; which: number }
@@ -286,6 +304,28 @@ type Step =
   // `object`: 0 — рядок `read` задач, 1 — організацій, 2 — членство в скоупі.
   | { t: "rights"; what: RightsHow; object: number; scope: number }
   | { t: "race"; group: number; settle: "now" | "later" }
+  // Кроки сигналів (B5b-3, задача 6). `ch`: 0 — канал скоупу рядка на
+  // сервері, 1 — канал іншого скоупу; `ver`: 0 — версія сервера, 1 — старша
+  // на одиницю (відлуння, переставлений сигнал), 2 — новіша (репліка
+  // відстає); `change` — сервер спершу робить саму зміну.
+  | {
+      t: "signal"
+      org: boolean
+      k: number
+      op: SignalOp
+      ch: number
+      ver: number
+      change: boolean
+    }
+  // Повтор раніше надісланого повідомлення (той самий `id`): дубль і
+  // перестановка — старе повідомлення після новіших.
+  | { t: "replay"; pick: number }
+  | { t: "join"; ch: number; recovered: boolean }
+  // `ch` = CHANNELS.length — розрив усього з'єднання.
+  | { t: "transport"; ch: number }
+  | { t: "chanAuth"; ch: number }
+  | { t: "connAuth"; final: boolean }
+  | { t: "refreshTokens" }
 
 const view = fc.nat(SPECS.length - 1)
 const k = fc.nat(KEYS.length - 1)
@@ -431,7 +471,7 @@ const STEP_ENTRIES: fc.WeightedArbitrary<Step>[] = [
     arbitrary: fc.record({
       t: one("disconnect"),
       channel: fc.nat(CHANNELS.length),
-      clear: fc.boolean(),
+      join: fc.boolean(),
     }),
   },
   {
@@ -578,7 +618,7 @@ const RACE_GROUPS: readonly (readonly number[])[] = [
  * сховищі немає, знімок її забороняє, відповідь осідає після заміни — одразу
  * чи пізніше, у будь-якому порядку з рештою кроків.
  */
-const RIGHTS_STEP: fc.Arbitrary<Step> = fc.oneof(
+const RIGHTS_ENTRIES: fc.WeightedArbitrary<Step>[] = [
   ...STEP_ENTRIES,
   ...(
     [
@@ -606,7 +646,68 @@ const RIGHTS_STEP: fc.Arbitrary<Step> = fc.oneof(
       group: fc.nat(RACE_GROUPS.length - 1),
       settle: fc.constantFrom<"now" | "later">("now", "later"),
     }),
-  }
+  },
+]
+const RIGHTS_STEP: fc.Arbitrary<Step> = fc.oneof(...RIGHTS_ENTRIES)
+
+/**
+ * Кроки сигналів (B5b-3, задача 6) поверх кроків знімка прав: сума 60 проти
+ * 302, тож сигнали йдуть у кожному прогоні кілька разів, а приєднання,
+ * розриви й відмови каналів — у більшості. Кроки прав і решта лишаються:
+ * приймач судять ті самі інваріанти й бар'єри.
+ */
+const SIGNAL_STEP: fc.Arbitrary<Step> = fc.oneof(
+  ...RIGHTS_ENTRIES,
+  {
+    weight: 32,
+    arbitrary: fc.record({
+      t: one("signal"),
+      org: fc.boolean(),
+      k,
+      op: fc.constantFrom<SignalOp>(
+        "update",
+        "update",
+        "update",
+        "create",
+        "markDeletion",
+        "delete",
+        "delete",
+        "invalidate",
+        "garbage"
+      ),
+      ch: fc.constantFrom(0, 0, 0, 1),
+      ver: fc.constantFrom(0, 0, 1, 2),
+      change: fc.boolean(),
+    }),
+  },
+  { weight: 8, arbitrary: fc.record({ t: one("replay"), pick: fc.nat(15) }) },
+  {
+    weight: 7,
+    arbitrary: fc.record({
+      t: one("join"),
+      ch: fc.nat(CHANNELS.length - 1),
+      recovered: fc.boolean(),
+    }),
+  },
+  {
+    weight: 5,
+    arbitrary: fc.record({ t: one("transport"), ch: fc.nat(CHANNELS.length) }),
+  },
+  {
+    weight: 4,
+    arbitrary: fc.record({
+      t: one("chanAuth"),
+      ch: fc.nat(CHANNELS.length - 1),
+    }),
+  },
+  {
+    weight: 2,
+    arbitrary: fc.record({
+      t: one("connAuth"),
+      final: fc.constantFrom(false, false, false, true),
+    }),
+  },
+  { weight: 2, arbitrary: fc.record({ t: one("refreshTokens") }) }
 )
 
 /** One read the model delivered: what it carried, by its arrival index. */
@@ -742,7 +843,8 @@ async function runModel(
   profile: Profile,
   defects: readonly DefectFlag[] = [],
   schedulerChecks = true,
-  rights = false
+  rights = false,
+  signals = false
 ) {
   const held: { core?: CoreSession } = {}
   try {
@@ -752,7 +854,8 @@ async function runModel(
       profile,
       defects,
       schedulerChecks,
-      rights,
+      rights || signals,
+      signals,
       (c) => {
         held.core = c
       }
@@ -771,8 +874,11 @@ async function runModelOn(
   defects: readonly DefectFlag[],
   schedulerChecks: boolean,
   rights: boolean,
+  signals: boolean,
   opened: (core: CoreSession) => void
 ) {
+  // Канал сигналів (B5b-3): приймач ядра тримає його лише зі знімком прав.
+  const transport = createFakeSignalTransport()
   // Порт запису моделі: кожен `run` тримається, доки крок `run` не відповість
   // на нього (будь-який у будь-якому порядку); сервер пише лише тоді.
   const runs: HeldRun[] = []
@@ -849,6 +955,7 @@ async function runModelOn(
     now: () => clock,
     limits: LIMITS,
     mode: "manual",
+    ...(signals ? { signals: transport } : {}),
     ...(rights
       ? {
           rightsSnapshot: true,
@@ -894,6 +1001,160 @@ async function runModelOn(
   opened(core)
   const internals = coreInternals(core)
 
+  // ── Сигнали очима моделі (B5b-3) ──
+  // Сигнали, що дійшли до приймача й ще не дали читання: ключ → пари
+  // (скоупи каналів), об'єкт → пари з `invalidate` чи нерозібраним тілом.
+  // Читання пачки — лише за таким сигналом або як дочитування мінімальної
+  // версії після нього; `purge` пари чи ключа знімає їх (0 запитів).
+  // Лічильник на пару: два сигнали однієї пари можуть дати дві пачки.
+  const owed = new Map<string, Map<string, number>>()
+  const owedWhole = new Map<ObjectName, Map<string, number>>()
+  const retryLeft = new Map<string, number>()
+  // Ключі, чий сигнал уже прочитано: дочитування мінімальної версії
+  // дозволені, лише коли модель побачила позначку `minVersion` ключа.
+  const awaitingMark = new Set<string>()
+  const grantRetries = () => {
+    for (const at of [...awaitingMark]) {
+      const [object, k] = at.split("\u0000") as [ObjectName, Key]
+      if (objectOf(object).rows.get(k)?.stale.minVersion === undefined) continue
+      awaitingMark.delete(at)
+      retryLeft.set(at, MIN_VERSION_RETRIES)
+    }
+  }
+  // `id` повідомлень, які приймач уже бачив: повтор він відкидає.
+  const seenIds = new Set<string>()
+  // Об'єкти, ключі яких на цьому кроці читала пачка, і цілі `include`
+  // виглядів, що їх перечитує сигнал: запити кроку до них — від сигналу.
+  const signalObjects = new Set<ObjectName>()
+  // Бюджет приймача (рішення архітекторки): кожен вигляд, який пачка чи
+  // хвиля назвала, — рівно одне перечитування за подію (вигляд у польоті —
+  // його один хвіст). Перечитування понад названі — не від сигналу: їх судять
+  // перевірки планувальника.
+  // Хвиля — окремо: межу відкинутих і приховану вкладку вона тримає, як
+  // планувальник, а паузу після збою й межу свіжості — ні (Р10).
+  const owedRereads = new Map<Subset, { batch: number; wave: number }>()
+  // Перечитування на старті кроку й скільки з них уже зараховано сигналу.
+  let rereadsAtStep = new Map<Subset, number>()
+  const coveredInStep = new Map<Subset, number>()
+  /** Every re-read of the view in this step came from a batch (or a wave). */
+  const bySignal = (sub: Subset, withWave: boolean) => {
+    const delta = sub.rereads - (rereadsAtStep.get(sub) ?? 0)
+    if (delta <= 0) return false
+    const owed = owedRereads.get(sub) ?? { batch: 0, wave: 0 }
+    let covered = coveredInStep.get(sub) ?? 0
+    const fromBatch = Math.min(delta - covered, owed.batch)
+    owed.batch -= fromBatch
+    covered += fromBatch
+    if (withWave) {
+      const fromWave = Math.min(delta - covered, owed.wave)
+      owed.wave -= fromWave
+      covered += fromWave
+    }
+    owedRereads.set(sub, owed)
+    coveredInStep.set(sub, covered)
+    return covered === delta
+  }
+  // Ключі, які пачка вже читала в цьому синхронному проході: пачка читає
+  // ключ один раз (дедуплікація за ключем).
+  let passKeys: Set<string> | undefined
+  const owe = (
+    into: Map<string, Map<string, number>>,
+    at: string,
+    scope: string
+  ) => {
+    const counts = into.get(at) ?? new Map<string, number>()
+    counts.set(scope, (counts.get(scope) ?? 0) + 1)
+    into.set(at, counts)
+  }
+  // `stored` — збережені скоупи ключів об'єкта перед `purge`: дочитування
+  // мінімальної версії несе скоуп рядка, і `purge` пари скидає його.
+  const dropOwedPair = (
+    object: ObjectName,
+    scope: string,
+    stored: ReadonlyMap<Key, string | null>
+  ) => {
+    for (const [at, counts] of owed)
+      if (at.startsWith(`${object}\u0000`)) counts.delete(scope)
+    owedWhole.get(object)?.delete(scope)
+    for (const [k, at] of stored)
+      if (at === scope) {
+        retryLeft.delete(id(object, k))
+        awaitingMark.delete(id(object, k))
+      }
+  }
+  const storedScopes = (object: ObjectName) =>
+    new Map(
+      [...objectOf(object).rows.keys()].map(
+        (k) => [k, objectOf(object).rows.get(k)!.scope] as const
+      )
+    )
+  const dropOwedKey = (object: ObjectName, key: Key) => {
+    owed.delete(id(object, key))
+    retryLeft.delete(id(object, key))
+    awaitingMark.delete(id(object, key))
+  }
+  // Сигнал пари, яку модель не надсилала чи яку `purge` уже зняв, — читання
+  // без сигналу (0 запитів після `purge`, §8.4).
+  const take = (
+    counts: Map<string, number> | undefined,
+    scopes: readonly (string | null)[]
+  ) => {
+    let any = false
+    for (const scope of scopes) {
+      const n = scope === null ? 0 : (counts?.get(scope) ?? 0)
+      if (n === 0) continue
+      any = true
+      if (n === 1) counts!.delete(scope!)
+      else counts!.set(scope!, n - 1)
+    }
+    return any
+  }
+  inspect.watchSignalReads((object, read) => {
+    for (const sub of read.views) {
+      const owedOf = owedRereads.get(sub) ?? { batch: 0, wave: 0 }
+      owedOf[read.by] += 1
+      owedRereads.set(sub, owedOf)
+      signalObjects.add(sub.form.object.name)
+      for (const step of sub.form.include) signalObjects.add(step.target)
+    }
+    if (read.by === "wave") return
+    if (core.visible && read.keys.length > 0) signalObjects.add(object)
+    if (passKeys === undefined) {
+      passKeys = new Set()
+      queueMicrotask(() => {
+        passKeys = undefined
+      })
+    }
+    for (const { key, scopes } of read.keys) {
+      const at = id(object, key)
+      if (passKeys.has(at))
+        asyncViolations.push(`${at}: read twice in one batch`)
+      passKeys.add(at)
+      if (take(owed.get(at), scopes)) {
+        retryLeft.delete(at)
+        awaitingMark.add(at)
+        continue
+      }
+      // Дочитування мінімальної версії несе скоуп рядка, а не каналу, тож
+      // лічиться лише кількість.
+      grantRetries()
+      const left = retryLeft.get(at) ?? 0
+      if (left > 0) retryLeft.set(at, left - 1)
+      else asyncViolations.push(`${at}: a signal read without a signal`)
+    }
+    if (
+      read.invalidated.length > 0 &&
+      !take(owedWhole.get(object), read.invalidated)
+    )
+      asyncViolations.push(`${object}: a whole re-read without a signal`)
+    if (
+      read.whole &&
+      read.invalidated.length === 0 &&
+      read.keys.length <= DEFAULT_CORE_LIMITS.keysPerRequest
+    )
+      asyncViolations.push(`${object}: a whole re-read without an invalidate`)
+  })
+
   // Сервер: дві організації (скоупи), чотири задачі в двох скоупах, ТЧ K1.
   for (const org of ORG_KEYS) fake.insert(ORG, { ref: org })
   KEYS.slice(0, 4).forEach((k, i) =>
@@ -908,6 +1169,18 @@ async function runModelOn(
     })
   )
   let created = false
+  // Надіслані сигнали (для повторів) і остання версія ключа, яку модель
+  // назвала в сигналі (рядок, якого вже немає на сервері).
+  const sentSignals: {
+    topic: string
+    payload: unknown
+    object: ObjectName
+    scope: string
+    key: Key
+    op: SignalOp
+  }[] = []
+  const lastSent = new Map<string, number>()
+  let signalSeq = 0
   const late: FakeRead[] = []
   let visibility: readonly string[] | undefined
   const deleted = new Set<string>()
@@ -1215,6 +1488,19 @@ async function runModelOn(
           rightsBarrier.set(pairKey(object, scope), at)
     for (const [key, scope] of capturedScopes) {
       const [object] = key.split("\u0000") as [ObjectName]
+      // Прохід прибирає збережені пари, які знімок забороняє: їхні сигнали
+      // приймач скидає (`purged`).
+      if (scope !== null && grantDenies(g, object, scope))
+        dropOwedPair(
+          object,
+          scope,
+          new Map(
+            [...capturedScopes].flatMap(([at, stored]) => {
+              const [o, k] = at.split("\u0000") as [ObjectName, Key]
+              return o === object ? [[k, stored] as const] : []
+            })
+          )
+        )
       if (grantDenies(g, object, scope)) {
         rightsPurgeable.add(key)
         purgedTargets.add(key)
@@ -1438,6 +1724,7 @@ async function runModelOn(
   }
 
   const check = (label: string, stepStart: number) => {
+    grantRetries()
     if (errors.length > 0)
       fail(label, `unexpected rejection ${String(errors[0])}`)
     if (rights && closed === undefined) {
@@ -2624,12 +2911,43 @@ async function runModelOn(
    * `purge` пари (скоуп, об'єкт) з обліком моделі (надгробки спроб, стерті
    * поля, бар'єри П12); `undefined` — ядро закрите.
    */
-  const purgePair = (object: ObjectName, scope: string, stepStart: number) => {
+  /** Sends a signal; one the receiver holds the channel of is owed a read. */
+  const emit = (
+    topic: string,
+    payload: unknown,
+    object: ObjectName,
+    scope: string,
+    key: Key,
+    op: SignalOp
+  ) => {
+    // Нерозібране тіло `id` не дає: приймач не відкидає його повтору.
+    const message = (payload as { id: string }).id
+    if (
+      closed === undefined &&
+      transport.subscribed().has(topic) &&
+      (op === "garbage" || !seenIds.has(message))
+    ) {
+      if (op !== "garbage") seenIds.add(message)
+      if (op === "invalidate" || op === "garbage") owe(owedWhole, object, scope)
+      else owe(owed, id(object, key), scope)
+    }
+    transport.emit(topic, payload)
+  }
+
+  const purgePair = (
+    object: ObjectName,
+    scope: string,
+    stepStart: number,
+    // Хто робить `purge`: модель сама чи приймач (відмова `auth` каналу).
+    act = () => commit((w) => w.purge(object, { scope }))
+  ) => {
     const held = [...objectOf(object).rows.keys()]
+    const stored = storedScopes(object)
     const hadLines =
       object === TASK && objectOf(TASK).sections.get(K1, "lines") !== undefined
-    commit((w) => w.purge(object, { scope }))
+    act()
     if (closed !== undefined) return undefined
+    dropOwedPair(object, scope, stored)
     const purgedKeys = {
       object,
       keys: held.filter((k) => objectOf(object).rows.get(k) === undefined),
@@ -2672,6 +2990,11 @@ async function runModelOn(
     const stepStart = fake.log.length
     logAt = log.length
     restoredInStep.clear()
+    signalObjects.clear()
+    coveredInStep.clear()
+    rereadsAtStep = new Map(
+      [...internals.registry.subsets()].map((sub) => [sub, sub.rereads])
+    )
     const before = lists()
     preloadedSection = false
     rightsPurgeable = new Set()
@@ -2907,6 +3230,7 @@ async function runModelOn(
           if (entry !== undefined) entry.erased = true
         }
         purgedKeys = { object, keys: [target] }
+        dropOwedKey(object, target)
         purgedTargets.add(id(object, target))
         purgeBarrier.set(id(object, target), stepStart)
         if (object === TASK) barrierSections(stepStart)
@@ -3020,10 +3344,16 @@ async function runModelOn(
       }
       case "disconnect": {
         const ch = CHANNELS[s.channel]
-        commit((w) => {
-          if (s.clear && ch !== undefined) w.clearDisconnected(ch)
-          else w.markDisconnected(ch)
-        })
+        // З приймачем розрив і приєднання йдуть лише через транспорт: пряма
+        // позначка розійшлася б із каналами, які він тримає.
+        if (signals) {
+          if (s.join && ch !== undefined) transport.join(ch, false)
+          else transport.fail({ kind: "transport", channel: ch })
+          break
+        }
+        // Приєднання лише пише `joinAt`: позначку знімає читання після нього.
+        if (s.join && ch !== undefined) internals.epochs.join(ch)
+        else commit((w) => w.markDisconnected(ch))
         break
       }
       case "markViews": {
@@ -3184,14 +3514,30 @@ async function runModelOn(
         const readers = [...coreInternals(core).registry.subsets()].filter(
           (sub) => sub.alive && !sub.purged && sub.loaded && shown(sub)
         )
+        // Строк такту, що вже настав (вигляд зі строком у цю мить), виконує
+        // перше ж перепланування кроку без таймера: такт читає вигляди своєю
+        // межею `0,9 × I`, а не межею кроку (§6.7), як і на `resume()`.
+        const overdue =
+          [...internals.registry.subsets()].some(
+            (sub) => isTarget(sub) && modelDue(sub) <= at
+          ) ||
+          [...inspect.scheduledDue()].some(
+            ([name, due]) => due <= at && !staled.has(name)
+          )
+        const byTick = (sub: Subset) =>
+          overdue && !young(sub, at, 0.9 * REVALIDATE_MS)
         // Читання не бере вигляд, чий строк не настав (молодша за межу відмітка,
         // пауза після збою чи вигляд, що ще не читався), вигляд у польоті й
         // вигляд, що вичерпав межу відкинутих (спека П4-B §6.7).
-        const youngNow = (sub: Subset) => young(sub, at, s.minAge)
+        const youngNow = (sub: Subset) =>
+          young(sub, at, s.minAge) && !byTick(sub)
         for (const sub of readers) {
           if (inPause(sub, at)) pausedViews.add(sub)
           if (youngNow(sub)) youngViews.set(sub, sub.rereads)
-          else if (!staled.has(sub.form.object.name))
+          else if (
+            !young(sub, at, s.minAge) &&
+            !staled.has(sub.form.object.name)
+          )
             agedViews.set(sub, sub.rereads)
         }
         for (const object of [TASK, ORG]) {
@@ -3281,6 +3627,10 @@ async function runModelOn(
         const before = new Map(
           [...internals.registry.subsets()].map((sub) => [sub, sub.rereads])
         )
+        // Явні перечитування кроку вище — не сигнал: зарахування починається
+        // з цієї миті.
+        rereadsAtStep = new Map(before)
+        coveredInStep.clear()
         // Перепланування (подія видимості вигляду) і час понад `I`: вигляд у
         // стані межі не дає строку.
         core.setVisible(SPECS[7]!, true)
@@ -3288,7 +3638,7 @@ async function runModelOn(
         advance(2 * REVALIDATE_MS)
         await flush()
         for (const [sub, rereads] of before)
-          if (sub.rereads !== rereads) {
+          if (sub.rereads !== rereads && !bySignal(sub, false)) {
             // Читання зробив такт планувальника: він же й помилка.
             tickReads++
             fail(
@@ -3329,7 +3679,16 @@ async function runModelOn(
           )
         const byTick = (sub: Subset) =>
           overdue && !young(sub, at, 0.9 * REVALIDATE_MS)
-        const youngNow = (sub: Subset) => !byResume(sub) && !byTick(sub)
+        // Вимога сильніша за вік (§8.4, п. 7): вигляд, чия вимога «склад не
+        // підтверджено» стояла на старті кроку поза паузою збою, `resume()`
+        // читає й молодшим за межу. Лише такий: молодий вигляд без вимоги
+        // межа й далі тримає.
+        const byRequirement = (sub: Subset) =>
+          sub.unconfirmedSince !== undefined &&
+          sub.failures === 0 &&
+          !inPause(sub, at)
+        const youngNow = (sub: Subset) =>
+          !byResume(sub) && !byTick(sub) && !byRequirement(sub)
         for (const sub of readers) {
           if (inPause(sub, at)) pausedViews.add(sub)
           if (youngNow(sub)) youngViews.set(sub, sub.rereads)
@@ -3509,6 +3868,138 @@ async function runModelOn(
         }
         break
       }
+      case "signal": {
+        if (!signals) break
+        const object = s.org ? ORG : TASK
+        let target = s.org ? ORG_KEYS[s.k % 2]! : KEYS[s.k]!
+        // Версія до зміни: `delete` несе версію стану «до» (§8.1).
+        let base =
+          fake.row(object, target)?.version ?? lastSent.get(id(object, target))
+        if (s.change && object === TASK && closed === undefined) {
+          if (s.op === "create") {
+            if (!created) {
+              created = true
+              target = K5
+              fake.insert(TASK, {
+                ref: K5,
+                org: SCOPES[s.k % 2],
+                title: "s",
+                notes: "n5",
+                status: null,
+                subject: null,
+              })
+              base = fake.row(TASK, K5)!.version
+            }
+          } else if (s.op === "delete") {
+            if (live(TASK, target)) {
+              fake.remove(TASK, target)
+              deleted.add(id(TASK, target))
+            }
+          } else if (s.op !== "garbage" && live(TASK, target)) {
+            fake.edit(TASK, target, {
+              title: `${TITLES[(s.k + n) % TITLES.length]}${n}`,
+            })
+            if (s.op !== "invalidate") base = fake.row(TASK, target)!.version
+          }
+        }
+        const version = Math.max(
+          1,
+          (base ?? 1) + (s.ver === 1 ? -1 : s.ver === 2 ? 1 : 0)
+        )
+        lastSent.set(id(object, target), base ?? 1)
+        const rowScope =
+          object === ORG
+            ? target
+            : ((fake.row(TASK, target)?.values.org as string | undefined) ??
+              SCOPES[s.k % 2]!)
+        const scope =
+          s.ch === 0 ? rowScope : SCOPES.find((x) => x !== rowScope)!
+        const entryId = object === TASK ? OBJECT_ID : ORGANIZATION_ID
+        const payload =
+          s.op === "garbage"
+            ? { id: String(++signalSeq), object: entryId, op: "move" }
+            : s.op === "invalidate"
+              ? { id: String(++signalSeq), object: entryId, op: "invalidate" }
+              : {
+                  id: String(++signalSeq),
+                  object: entryId,
+                  op: s.op,
+                  keys: { id: target },
+                  row_ver: version,
+                }
+        const topic = channel(object, scope)
+        sentSignals.push({
+          topic,
+          payload,
+          object,
+          scope,
+          key: target,
+          op: s.op,
+        })
+        emit(topic, payload, object, scope, target, s.op)
+        break
+      }
+      case "replay": {
+        if (!signals || sentSignals.length === 0) break
+        const x =
+          sentSignals[sentSignals.length - 1 - (s.pick % sentSignals.length)]!
+        emit(x.topic, x.payload, x.object, x.scope, x.key, x.op)
+        break
+      }
+      case "join":
+        if (signals) transport.join(CHANNELS[s.ch]!, s.recovered)
+        break
+      case "transport":
+        if (signals)
+          transport.fail({ kind: "transport", channel: CHANNELS[s.ch] })
+        break
+      case "refreshTokens":
+        if (signals) await transport.refreshTokens()
+        break
+      case "chanAuth": {
+        if (!signals) break
+        const ch = CHANNELS[s.ch]!
+        // Відмову бачить лише тримач каналу: тоді приймач робить `purge` пари.
+        if (closed !== undefined || !transport.subscribed().has(ch)) {
+          transport.fail({ kind: "auth", channel: ch })
+          break
+        }
+        purgeStep = true
+        const object = s.ch < 2 ? TASK : ORG
+        const scope = SCOPES[s.ch % 2]!
+        const purged = purgePair(object, scope, stepStart, () =>
+          transport.fail({ kind: "auth", channel: ch })
+        )
+        if (purged === undefined) break
+        purgedScope = { object, scope }
+        purgedKeys = purged
+        break
+      }
+      case "connAuth": {
+        if (!signals) break
+        // Остаточна відмова токена з'єднання закриває ядро, коли приймач
+        // тримає хоч одну підписку (лише тоді він бачить помилку).
+        const holds = transport.subscribed().size > 0
+        transport.fail(
+          s.final ? { kind: "auth", final: true } : { kind: "auth" }
+        )
+        if (!s.final || closed !== undefined) break
+        const snap = handles[0]!.getSnapshot()
+        const shut =
+          snap.status === "purged" && snap.reason === "connection-refused"
+        if (shut !== holds)
+          fail(
+            label,
+            shut
+              ? "closed by a refusal the receiver could not see"
+              : "a final connection refusal did not close the core"
+          )
+        if (!shut) break
+        for (const a of attempts) if (a.result === undefined) a.mustFail = true
+        journal.clear()
+        closed = { frames, sent: fake.log.length, snapshot: snap }
+        break
+      }
       case "close":
         if (closed !== undefined) break
         // Кожна неосіла мутація осідає закриттям, не успіхом.
@@ -3549,6 +4040,11 @@ async function runModelOn(
       )
       for (const [sub, rereads] of readsAtStart) {
         if (sub.rereads === rereads) continue
+        // Пачка сигналів і хвиля читають за подією каналу, а не за строком:
+        // межа відкинутих і пауза після збою стосуються планувальника (§6.2,
+        // §8.4). Вигляд пропускається, лише коли кожне його перечитування
+        // кроку зараховано названому сигналом (бюджет приймача).
+        if (bySignal(sub, false)) continue
         // Читання, яке запустив планувальник (чи `resume()`).
         if (s.t !== "resume" && hiddenAtStart && !core.visible)
           fail(label, "a read started by the scheduler on a hidden tab")
@@ -3561,12 +4057,17 @@ async function runModelOn(
           was.failures > 0 &&
           was.failedAt !== undefined &&
           clock < was.failedAt + pauseAfter(was.failures) &&
-          !readsObject(sub, dueNow)
+          !readsObject(sub, dueNow) &&
+          // Хвиля приєднання перечитує вигляд явно (Р10), як `revalidate`.
+          !bySignal(sub, true)
         )
           fail(label, "a view was read inside its failure pause")
       }
     }
+    // Хвиля приєднання й пачка сигналів перечитують за подією каналу, а не
+    // за межею свіжості: `resume()` бере хвилю разом зі звіркою (Р10).
     for (const [sub, rereads] of youngViews) {
+      if (bySignal(sub, true)) continue
       if (sub.rereads !== rereads)
         fail(
           label,
@@ -3578,6 +4079,9 @@ async function runModelOn(
         fail(label, "a view older than the limit was not re-read")
     }
     for (const object of quiet) {
+      // Запити до об'єкта від пачки (ключі, названі вигляди й їхні цілі
+      // `include`) — від сигналу.
+      if (signalObjects.has(object)) continue
       for (const sent of fake.log.slice(stepStart)) {
         const target = sent.query?.object
         if (target !== undefined && `${target.kind}.${target.name}` === object)
@@ -3668,6 +4172,22 @@ async function runModelOn(
     fake.epoch = epochs.current
     advance(10_000)
     await flush()
+    // Читання, які запустив цей плин часу (такт, хвиля приєднання, пачка
+    // сигналів), осідають до знімка прав: інакше вони займають обмежувач
+    // читань, і частина `rights` до сервера не доходить.
+    for (let i = 0; fake.pending.length > 0; i++) {
+      if (i > 100) fail("converge", "reads never end")
+      const stepStart = fake.log.length
+      logAt = log.length
+      restoredInStep.clear()
+      while (fake.pending.length > 0) {
+        const read = fake.take()
+        read.answer()
+        record(read)
+      }
+      await flush()
+      check(`converge settle ${i}`, stepStart)
+    }
     // Права повертаються повністю й ядро застосовує їх до перечитування:
     // знову відкриті пари читає вже читання після знімка.
     if (rights) {
@@ -3872,10 +4392,11 @@ const RUNS = runsFromEnv(process.env.CORE_MODEL_RUNS)
 const property = (
   defects: readonly DefectFlag[] = [],
   schedulerChecks = true,
-  rights = false
+  rights = false,
+  signals = false
 ) =>
   fc.asyncProperty(
-    fc.array(rights ? RIGHTS_STEP : STEP, {
+    fc.array(signals ? SIGNAL_STEP : rights ? RIGHTS_STEP : STEP, {
       minLength: 10,
       maxLength: 80,
       size: "max",
@@ -3883,33 +4404,125 @@ const property = (
     fc.boolean(),
     fc.constantFrom<Profile>("full", "scroll", "burial"),
     (steps, preloaded, profile) =>
-      runModel(steps, preloaded, profile, defects, schedulerChecks, rights)
+      modelRun(
+        runModel(
+          steps,
+          preloaded,
+          profile,
+          defects,
+          schedulerChecks,
+          rights,
+          signals
+        )
+      )
   )
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
 })
-afterEach(() => {
+// Прогін, перерваний межею часу, закриває ядро й таймери ще в своєму тесті.
+afterEach(async () => {
+  await settleRuns()
   vi.useRealTimers()
 })
 
+// Бюджети тестів властивостей: таймаут vitest і межа fast-check
+// (`interruptWithin`) — з однієї сталої на тест.
+const BUDGET_MS = 120_000
+const RIGHTS_BUDGET_MS = 240_000
+
 describe("core model", () => {
-  it("holds the invariants over random interleavings", async () => {
-    tickReads = 0
-    await fc.assert(property(), { numRuns: RUNS })
-    // Без тактів із читанням інваріанти планувальника порожні.
-    expect(tickReads, "no tick with a read").toBeGreaterThan(0)
-  }, 120_000)
+  it(
+    "holds the invariants over random interleavings",
+    async () => {
+      tickReads = 0
+      await fc.assert(property(), {
+        numRuns: RUNS,
+        ...interruptWithin(BUDGET_MS),
+      })
+      // Без тактів із читанням інваріанти планувальника порожні.
+      expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+    },
+    BUDGET_MS
+  )
 
   // Каталог зі знімком прав (B5b-2): ті самі кроки й кроки знімка — втрата
   // пари, звуження, без змін, збій, утримана відповідь, читання до знімка,
   // інший користувач. Без прав прогін вище лишається тим самим (насіння
   // самотесту й регресій не зсуваються).
-  it("holds the invariants with the rights snapshot", async () => {
-    tickReads = 0
-    await fc.assert(property([], true, true), { numRuns: RUNS })
-    expect(tickReads, "no tick with a read").toBeGreaterThan(0)
-  }, 240_000)
+  it(
+    "holds the invariants with the rights snapshot",
+    async () => {
+      tickReads = 0
+      await fc.assert(property([], true, true), {
+        numRuns: RUNS,
+        ...interruptWithin(RIGHTS_BUDGET_MS),
+      })
+      expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+    },
+    RIGHTS_BUDGET_MS
+  )
+
+  // Приймач сигналів (B5b-3): ті самі кроки й кроки знімка прав плюс сигнали
+  // каналу змін у будь-якому порядку з дублями, приєднання з `recovered` і
+  // без, розриви, відмови каналу й з'єднання. Прогони без сигналів не
+  // змінюються (їхні насіння самотесту й регресій не зсуваються).
+  it(
+    "holds the invariants with the signal receiver",
+    async () => {
+      tickReads = 0
+      await fc.assert(property([], true, true, true), {
+        numRuns: RUNS,
+        ...interruptWithin(RIGHTS_BUDGET_MS),
+      })
+      expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+    },
+    RIGHTS_BUDGET_MS
+  )
+})
+
+// Межа часу властивості (обв'язка): прогін понад бюджет тесту червоний сам і
+// не продовжується у фоні в наступному тесті.
+describe("the time budget of a property", () => {
+  const SMALL_BUDGET_MS = 3_000
+  let started = 0
+  let finished = 0
+  const counted = fc.asyncProperty(
+    fc.array(STEP, { minLength: 10, maxLength: 80, size: "max" }),
+    fc.boolean(),
+    fc.constantFrom<Profile>("full", "scroll", "burial"),
+    (steps, preloaded, profile) => {
+      started++
+      return modelRun(
+        runModel(steps, preloaded, profile).finally(() => {
+          finished++
+        })
+      )
+    }
+  )
+
+  it(
+    "fails a property that outlives its budget as an interrupt",
+    async () => {
+      await expect(
+        fc.assert(counted, {
+          numRuns: 1_000_000,
+          ...interruptWithin(SMALL_BUDGET_MS),
+        })
+      ).rejects.toThrow(/interrupted/i)
+    },
+    SMALL_BUDGET_MS
+  )
+
+  it("leaves no run of it going in the next test", async () => {
+    // Перерваний прогін осів ще в своєму тесті: ядро й таймери закрито там.
+    expect(finished, "the interrupted run is still in flight").toBe(started)
+    const at = started
+    for (let i = 0; i < 50; i++)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(started, "a run started after its test ended").toBe(at)
+    expect(vi.getTimerCount()).toBe(0)
+  })
 })
 
 // Фіксовані прогони знайдених контрприкладів: насіння й шлях fast-check
@@ -3968,17 +4581,252 @@ describe("core model regressions", () => {
       seed: 1407422309,
       path: "9302:4:1:9:11:14:18:22:24:27:29:36:43:43:46:47:51:51:14:14:14:29:18:16:24:29:28:28:31:31:27:27:27:27:27:29:28:28:28:29:28:29:29:29:29:29",
     },
+    // #114: такт і хвиля приєднання займають обмежувач читань перед
+    // збіжністю, і частина `rights` збіжності не доходить до сервера.
+    {
+      issue: 114,
+      signals: true,
+      seed: 929198240,
+      path: "4036:7:7:11:12:22:25:24:29:31:35:35:26:6:30:35:26:24:24:26:25:31:32:32:35:36:47:46:54:37:31:50:51:56:56:60:64:68:22:3:28:35:35:36:33:30:29:28:29:29:33:33:33:33:33:33:35:36:28:34:38:38",
+    },
+    // #114: відповідь читання за ключем, старша за завантаження `full`, лягла
+    // після нього (розбіжне «рядка немає», П15): відхилений рядок відповіді
+    // завантаження не лишає складу без нього після збіжності.
+    {
+      issue: 114,
+      signals: true,
+      seed: 1071874945,
+      path: "1376:4:0:8:12:13:15:17:22:20:22:23:24:21:19:21:21:22:22:2:5:5:17:17:17:17:17:17:18:19:19:19:19:23:23:24",
+    },
+    // #114: сторінка, що стартувала до вимоги пачки сигналів, не повторюється
+    // за чужою вимогою (§8.4, п. 7: сторінка підтверджує лише себе) — інакше
+    // повтор заміняє сторінку й змінює склад без дії користувача.
+    {
+      issue: 114,
+      signals: true,
+      seed: -518023336,
+      path: "9307:4:1:4:11:8:19:20:5:3:16:11:14:16:11:19:19:19:11:11:9:9:8:8:8:17:8:9:8:9:11:8:11:12:11:8:10:10",
+    },
+    // #114: вимога складу, що лишилась на прихованій вкладці, сильніша за
+    // вік — `resume()` читає вигляд і молодшим за `resumeMinIntervalMs`.
+    {
+      issue: 114,
+      signals: true,
+      seed: -1610915587,
+      path: "7505:2:3:5:5:22:14:3:5:9:9:11:10:13:12:12:13:19:18:18:18:18:7:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:9",
+    },
   ])(
     "replays the counterexample of #$issue (seed $seed)",
-    async ({ seed, path, rights = false }) => {
-      await fc.assert(property([], true, rights), {
+    async ({ seed, path, rights = false, signals = false }) => {
+      await fc.assert(property([], true, rights, signals), {
         seed,
         path,
         endOnFailure: true,
+        ...interruptWithin(BUDGET_MS),
       })
     },
-    120_000
+    BUDGET_MS
   )
+
+  // #114: вигляд із `needsRefresh` від механізму свіжості стає видимим
+  // після межі відкинутих — перехід у видимість не читає (§6.2).
+  it("replays a view marked unconfirmed that becomes visible after the discard limit (#114)", async () => {
+    const steps: readonly Step[] = [
+      { t: "closeInFlight" },
+      { t: "hide", org: false, k: 0 },
+      {
+        t: "signal",
+        org: false,
+        k: 0,
+        op: "update",
+        ch: 0,
+        ver: 0,
+        change: false,
+      },
+      { t: "churn", v: 1, scroll: false },
+      { t: "race", group: 0, settle: "later" },
+      { t: "answer", pick: 7, how: "unavailable", at: 0 },
+      { t: "replay", pick: 0 },
+      { t: "return", minAge: 1000 },
+      { t: "unsub", v: 0, release: false },
+      { t: "sub", v: 0 },
+      { t: "run", pick: 0, how: "unavailable", at: 0 },
+      { t: "act", k: 0, act: "retry" },
+      { t: "closeInFlight" },
+      { t: "answer", pick: 0, how: "stale", at: 0 },
+      {
+        t: "signal",
+        org: false,
+        k: 0,
+        op: "update",
+        ch: 0,
+        ver: 0,
+        change: false,
+      },
+      { t: "run", pick: 0, how: "ok", at: 0 },
+    ]
+    await runModel(steps, true, "scroll", [], true, true, true)
+  }, 120_000)
+
+  // #114: строк такту настав рівно в мить кроку `return`: такт читає
+  // вигляд, старший за свою межу `0,9 × I`, хоч і молодший за межу кроку.
+  it("replays the tick due at the moment of a return step (#114)", async () => {
+    const steps: readonly Step[] = [
+      { t: "sub", v: 1 },
+      { t: "sub", v: 2 },
+      { t: "run", pick: 1, how: "conflict", at: 1 },
+      { t: "answer", pick: 5, how: "stale", at: 1 },
+      { t: "markViews", v: 7, one: false, needs: true, news: false },
+      { t: "delete", k: 1 },
+      { t: "unsub", v: 0, release: true },
+      { t: "hide", org: true, k: 4 },
+      { t: "answer", pick: 2, how: "stale", at: 6 },
+      { t: "update", k: 4, lazy: false, base: 1 },
+      { t: "sub", v: 2 },
+      { t: "answer", pick: 5, how: "stale", at: 4 },
+      { t: "edit", k: 3, title: 0 },
+      { t: "hideSection", state: "held", then: "none", evict: true },
+      { t: "churn", v: 12, scroll: true },
+      { t: "purgeScope", org: true, scope: 1 },
+      { t: "answer", pick: 7, how: "stale", at: 1 },
+      { t: "update", k: 3, lazy: true, base: 2 },
+      { t: "answer", pick: 4, how: "missing", at: 6 },
+      { t: "answer", pick: 6, how: "stale", at: 6 },
+      { t: "due" },
+      { t: "purgeKey", org: false, k: 2 },
+      { t: "answer", pick: 5, how: "missing", at: 0 },
+      { t: "act", k: 0, act: "retry" },
+      { t: "rehydrate" },
+      { t: "answer", pick: 2, how: "forbidden", at: 1 },
+      { t: "move", k: 2 },
+      { t: "unsub", v: 10, release: true },
+      { t: "run", pick: 2, how: "ok", at: 0 },
+      { t: "resume" },
+      { t: "answer", pick: 4, how: "ok", at: 2 },
+      { t: "epoch", which: 0 },
+      { t: "time", ms: 1000 },
+      { t: "answer", pick: 2, how: "stale", at: 3 },
+      { t: "return", minAge: 5000 },
+      { t: "update", k: 0, lazy: false, base: 1 },
+      { t: "purgeScope", org: false, scope: 0 },
+      { t: "page", w: 0, dir: "before" },
+      { t: "return", minAge: 1000 },
+      { t: "purgeKey", org: true, k: 4 },
+      { t: "answer", pick: 0, how: "forbidden", at: 5 },
+      { t: "answer", pick: 3, how: "forbidden", at: 6 },
+      { t: "hide", org: false, k: 2 },
+      { t: "rehydrate" },
+      { t: "answer", pick: 3, how: "ok", at: 6 },
+      { t: "sub", v: 5 },
+      { t: "answer", pick: 4, how: "stale", at: 5 },
+      { t: "purgeKey", org: false, k: 0 },
+      { t: "purgeScope", org: true, scope: 1 },
+      { t: "page", w: 0, dir: "before" },
+      { t: "unsub", v: 0, release: true },
+      { t: "purgeKey", org: false, k: 3 },
+      { t: "run", pick: 2, how: "ok", at: 1 },
+    ]
+    await runModel(steps, false, "full")
+  }, 120_000)
+
+  // #114: відповідь читання ключа за сигналом із `row_ver` попереду сервера,
+  // що стартувала до purge пари каналом (`chanAuth`), прийшла, коли вигляди
+  // знову тримають рядок: ні позначки мінімальної версії, ні дочитування
+  // після purge. Зменшений контрприклад — кроками, а не насінням: шлях
+  // fast-check зсувається з кожною зміною довільних кроків.
+  it("replays the min-version answer that started before a pair purge (#114)", async () => {
+    const steps: readonly Step[] = [
+      { t: "run", pick: 2, how: "conflict", at: 1 },
+      {
+        t: "signal",
+        org: true,
+        k: 3,
+        op: "update",
+        ch: 0,
+        ver: 2,
+        change: false,
+      },
+      { t: "answer", pick: 2, how: "stale", at: 6 },
+      { t: "answer", pick: 1, how: "missing", at: 2 },
+      { t: "return", minAge: 5000 },
+      { t: "refresh", v: 4, showNew: true },
+      { t: "refresh", v: 6, showNew: true },
+      { t: "return", minAge: 1000 },
+      {
+        t: "signal",
+        org: false,
+        k: 4,
+        op: "update",
+        ch: 0,
+        ver: 1,
+        change: false,
+      },
+      { t: "time", ms: 1000 },
+      { t: "rights", what: "lose", object: 0, scope: 1 },
+      { t: "move", k: 1 },
+      {
+        t: "signal",
+        org: false,
+        k: 4,
+        op: "update",
+        ch: 1,
+        ver: 1,
+        change: false,
+      },
+      { t: "rehydrate" },
+      { t: "answer", pick: 7, how: "stale", at: 3 },
+      { t: "gap", k: 1, remove: false },
+      { t: "unsub", v: 10, release: false },
+      { t: "run", pick: 1, how: "ok", at: 0 },
+      { t: "version" },
+      { t: "chanAuth", ch: 3 },
+      { t: "run", pick: 0, how: "ok", at: 0 },
+      { t: "purgeScope", org: true, scope: 1 },
+      { t: "rights", what: "regain", object: 2, scope: 0 },
+      { t: "answer", pick: 4, how: "stale", at: 0 },
+      { t: "update", k: 1, lazy: true, base: 0 },
+      { t: "update", k: 1, lazy: false, base: 2 },
+      { t: "refresh", v: 9, showNew: false },
+      { t: "churn", v: 0, scroll: false },
+      { t: "refresh", v: 4, showNew: false },
+      { t: "chanAuth", ch: 1 },
+      { t: "rights", what: "hold", object: 0, scope: 1 },
+      { t: "answer", pick: 1, how: "ok", at: 5 },
+      { t: "answer", pick: 6, how: "stale", at: 1 },
+      { t: "answer", pick: 2, how: "missing", at: 0 },
+      { t: "markViews", v: 10, one: false, needs: true, news: false },
+      { t: "answer", pick: 3, how: "ok", at: 6 },
+      {
+        t: "signal",
+        org: true,
+        k: 3,
+        op: "delete",
+        ch: 0,
+        ver: 0,
+        change: false,
+      },
+      { t: "run", pick: 0, how: "ok", at: 1 },
+      {
+        t: "signal",
+        org: true,
+        k: 4,
+        op: "garbage",
+        ch: 0,
+        ver: 0,
+        change: true,
+      },
+      { t: "rights", what: "lose", object: 0, scope: 1 },
+      { t: "sub", v: 4 },
+      { t: "churn", v: 12, scroll: true },
+      { t: "onMutation", pick: 3, what: "remove" },
+      { t: "answer", pick: 0, how: "unavailable", at: 3 },
+      { t: "page", w: 1, dir: "before" },
+      { t: "answer", pick: 7, how: "missing", at: 2 },
+      { t: "hide", org: true, k: 4 },
+      { t: "purgeScope", org: true, scope: 0 },
+    ]
+    await runModel(steps, true, "burial", [], true, true, true)
+  }, 120_000)
 })
 
 // Дефекти такту планувальника: їхній самотест мусить мати такт із читанням.
@@ -4099,6 +4947,16 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // Прохід прибирає й дозволену пару об'єкта: склад чи `purged` картки.
   "rights-pass-purges-allowed":
     /the rights pass removed .* of an allowed pair|purged by the rights pass of an allowed pair/,
+  // Приймач: сигнал пари, яку `purge` зняв, — читання без сигналу.
+  "receiver-purge-keeps-batch": /a signal read without a signal/,
+}
+
+// Насіння самотесту, коли насіння 1 не знаходить дефекту за 10 000 прогонів.
+// Надгробок з поточною епохою після П15 (вимога «склад не підтверджено» для
+// `full`, вікна й `keys`) здебільшого лікує повторне читання — лишається
+// рідший шлях вікна, і насіння 1–12 до нього за 10 000 прогонів не доходять.
+const SELF_CHECK_SEEDS: Partial<Record<DefectFlag, number>> = {
+  "bury-removed-current-epoch": 13,
 }
 
 // Дефекти правила втрати доступу (B5b-2): їх ловлять прогони зі знімком прав.
@@ -4108,6 +4966,9 @@ const RIGHTS_DEFECTS: readonly DefectFlag[] = [
   "rights-pass-by-diff",
   "rights-pass-purges-allowed",
 ]
+
+// Дефекти приймача сигналів (B5b-3): їх ловлять прогони з сигналами.
+const SIGNAL_DEFECTS: readonly DefectFlag[] = ["receiver-purge-keeps-batch"]
 
 describe("core model self-check", () => {
   it.each(DEFECTS)(
@@ -4119,17 +4980,18 @@ describe("core model self-check", () => {
       const checks = !WITHOUT_SCHEDULER_CHECKS.includes(flag)
       const result = await fc.check(property([flag], checks), {
         numRuns: 10_000,
-        seed: 1,
+        seed: SELF_CHECK_SEEDS[flag] ?? 1,
         // Достатньо знайти червоний прогін: ужимання контрприкладу лише
         // подовжує самотест.
         endOnFailure: true,
+        ...interruptWithin(BUDGET_MS),
       })
       expect(result.failed, `${flag} not caught`).toBe(true)
       expect(result.errorInstance).toBeInstanceOf(ModelFailure)
       // Контроль: той самий контрприклад без дефекту проходить, тож червоний
       // — від дефекту, а не від помилки моделі.
       const [steps, preloaded, profile] = result.counterexample!
-      await runModel(steps, preloaded, profile, [], checks)
+      await modelRun(runModel(steps, preloaded, profile, [], checks))
       const caughtBy = CAUGHT_BY[flag]
       if (caughtBy !== undefined)
         expect((result.errorInstance as Error).message).toMatch(caughtBy)
@@ -4140,7 +5002,7 @@ describe("core model self-check", () => {
       if (SCHEDULER_DEFECTS.includes(flag))
         expect(tickReads, `${flag}: no tick with a read`).toBeGreaterThan(0)
     },
-    120_000
+    BUDGET_MS
   )
 
   it.each(RIGHTS_DEFECTS)(
@@ -4150,14 +5012,39 @@ describe("core model self-check", () => {
         numRuns: 10_000,
         seed: 1,
         endOnFailure: true,
+        ...interruptWithin(RIGHTS_BUDGET_MS),
       })
       expect(result.failed, `${flag} not caught`).toBe(true)
       expect(result.errorInstance).toBeInstanceOf(ModelFailure)
       // Контроль: той самий прогін без дефекту зелений.
       const [steps, preloaded, profile] = result.counterexample!
-      await runModel(steps, preloaded, profile, [], true, true)
+      await modelRun(runModel(steps, preloaded, profile, [], true, true))
       expect((result.errorInstance as Error).message).toMatch(CAUGHT_BY[flag]!)
     },
-    240_000
+    RIGHTS_BUDGET_MS
+  )
+
+  // Дефекти планувальника — і в прогонах з сигналами: пропуск перечитувань
+  // від сигналу не затуляє їх (бюджет приймача).
+  it.each([...SIGNAL_DEFECTS, ...SCHEDULER_DEFECTS])(
+    "turns red with signals and the defect %s",
+    async (flag) => {
+      tickReads = 0
+      const result = await fc.check(property([flag], true, true, true), {
+        numRuns: 10_000,
+        seed: 1,
+        endOnFailure: true,
+        ...interruptWithin(RIGHTS_BUDGET_MS),
+      })
+      expect(result.failed, `${flag} not caught`).toBe(true)
+      expect(result.errorInstance).toBeInstanceOf(ModelFailure)
+      // Контроль: той самий прогін без дефекту зелений.
+      const [steps, preloaded, profile] = result.counterexample!
+      await modelRun(runModel(steps, preloaded, profile, [], true, true, true))
+      expect((result.errorInstance as Error).message).toMatch(CAUGHT_BY[flag]!)
+      if (SCHEDULER_DEFECTS.includes(flag))
+        expect(tickReads, `${flag}: no tick with a read`).toBeGreaterThan(0)
+    },
+    RIGHTS_BUDGET_MS
   )
 })

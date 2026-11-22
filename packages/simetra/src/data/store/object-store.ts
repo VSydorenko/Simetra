@@ -1,4 +1,10 @@
-import { READ_LIMIT_MAX, type CatalogEntry } from "simetra/model"
+import {
+  READ_LIMIT_MAX,
+  ZERO_UUID,
+  channelTopic,
+  parseTopic,
+  type CatalogEntry,
+} from "simetra/model"
 import { NO_DEFECTS, type Defects } from "./defects"
 import {
   differentEpochs,
@@ -92,9 +98,11 @@ export interface RowEntry {
     /** `versionEpoch` — the version epoch `v` belongs to. */
     minVersion?: { v: number; epoch: number; versionEpoch: string | null }
     /**
-     * Channel → mark epoch. Per channel: a row that moved keeps the mark of
-     * its old channel until that channel clears it, so marking and clearing
-     * the new channel never drops a gap of the old one.
+     * Channel → mark epoch (P4-B spec §8.4). Per channel: a row that moved
+     * keeps the mark of its old channel, so a read proving the new channel
+     * never drops a gap of the old one. Only an applied read lifts an entry
+     * `g`: the channel joined after it (`joinAt > g`) and the read started at
+     * or after that join (`readEpoch >= joinAt`).
      */
     disconnect?: Map<string, number>
     hidden?: { epoch: number }
@@ -117,6 +125,29 @@ export function lazyFieldStale(e: RowEntry, field: string): boolean {
     differentEpochs(e.lazyEpochs.get(field), e.versionEpoch) ||
     (e.lazyVersions.get(field) ?? -Infinity) < e.version
   )
+}
+
+/**
+ * The change channel of a row (§8.3): `channelTopic` of the scope kind, the
+ * row's stored scope and the object id; an unscoped object takes
+ * `ZERO_UUID` for both the kind and the scope.
+ */
+export function channelOf(entry: CatalogEntry): (e: RowEntry) => string {
+  const scoped = entry.scopeColumn !== undefined
+  const scopeKindId = scoped ? (entry.scopeKindId ?? ZERO_UUID) : ZERO_UUID
+  return (e) =>
+    channelTopic({
+      kind: "changes",
+      scopeKindId,
+      scope: scoped ? (e.scope ?? ZERO_UUID) : ZERO_UUID,
+      object: entry.id,
+    })
+}
+
+/** The object id of a change channel; `undefined` for another topic. */
+export function changesObjectOf(channel: string): string | undefined {
+  const parsed = parseTopic(channel)
+  return parsed?.kind === "changes" ? parsed.object : undefined
 }
 
 /**
@@ -221,13 +252,27 @@ export interface ObjectStore {
    */
   purgeScope(scope: Scope, scopeId: string | null): Key[]
   markStale(scope: Scope, keys: readonly Key[], minVersion: number): void
+  /**
+   * Marks rows of held channels — of `channel` only when given — with a gap
+   * at a fresh epoch each (P4-B spec §8.4).
+   */
   markDisconnected(
     scope: Scope,
     channelOf: (e: RowEntry) => string,
     channel?: string
   ): void
-  /** Clears the mark recorded on `channel`; marks of other channels stay. */
-  clearDisconnected(scope: Scope, channel: string): void
+  /**
+   * Marks the rows of `channel` with the gap `at` of a released channel that
+   * is held again (never lowering a newer mark).
+   */
+  markChannel(
+    scope: Scope,
+    channelOf: (e: RowEntry) => string,
+    channel: string,
+    at: number
+  ): void
+  /** The store holds a row (a removed slot too) of `channel`. */
+  holdsChannel(channelOf: (e: RowEntry) => string, channel: string): boolean
   /**
    * Adds an owner to an existing entry; a key without an entry gets nothing.
    * Callers own a key only after its `put` was accepted.
@@ -295,6 +340,7 @@ export function createObjectStore(options: {
   const lazyFields = entry.attributes
     .filter((a) => a.load === "lazy")
     .map((a) => a.name)
+  const rowChannel = channelOf(entry)
 
   const rows = new Map<Key, RowEntry>()
   const tail = new Set<Key>()
@@ -381,6 +427,34 @@ export function createObjectStore(options: {
       (readEpoch >= mark.epoch || defects.has("hide-lifted-by-older-read"))
     )
       delete e.stale.hidden
+    markChannels(e, readEpoch)
+  }
+
+  // «Розрив» за відповіддю (§8.4): запис утримуваного каналу знімає лише
+  // читання, що почалось не раніше приєднання після позначки, запис
+  // відпущеного — читання після відпускання (сигналів він не чекає). Рядок,
+  // записаний читанням, якого власний канал не доводить (утримуваний у
+  // розриві чи читання до приєднання; відпущений із записом — читання, що
+  // почалось до відпускання в недоведеному розриві), дістає позначку: її
+  // зніме перше читання після наступного приєднання чи після відпускання.
+  function markChannels(e: RowEntry, readEpoch: number) {
+    // Об'єкт без сигналів каналу не має: розриву в нього не буває.
+    if (!entry.signal) return
+    const marks = e.stale.disconnect
+    if (marks === undefined && !epochs.gapped()) return
+    if (marks !== undefined)
+      for (const [channel, at] of marks)
+        if (epochs.liftsMark(channel, at, readEpoch)) marks.delete(channel)
+    const own = rowChannel(e)
+    if (!epochs.channelProven(own, readEpoch)) {
+      const held = marks ?? new Map<string, number>()
+      // Відпущений канал із записом: позначка — епоха відпускання; її знімає
+      // читання після неї, а повторне утримання стає розривом тієї ж епохи.
+      const g = epochs.held(own) ? epochs.gapAt(own) : epochs.releasedAt(own)
+      held.set(own, Math.max(held.get(own) ?? 0, g))
+      e.stale.disconnect = held
+    } else if (marks !== undefined && marks.size === 0)
+      delete e.stale.disconnect
   }
 
   // Горизонт, а не `hideKeys`: рахується в метриці `horizon-hidden`.
@@ -419,6 +493,7 @@ export function createObjectStore(options: {
     }
     setLazy(e, row, lazyRead)
     markEpoch(e, row, readEpoch)
+    markChannels(e, readEpoch)
     const lower = known !== undefined && row.version < known.version
     if (lower)
       e.stale.minVersion = {
@@ -820,21 +895,28 @@ export function createObjectStore(options: {
       for (const e of rows.values()) {
         const own = channelOf(e)
         if (channel !== undefined && own !== channel) continue
+        // Канал, якого приймач не тримає, сигналів не чекає: розриву в нього
+        // немає (рядок — ціль `include` об'єкта без власного вигляду).
+        if (!epochs.held(own)) continue
         const marks = e.stale.disconnect ?? new Map<string, number>()
         marks.set(own, epochs.next())
         e.stale.disconnect = marks
       }
     },
 
-    clearDisconnected(scope, channel) {
+    markChannel(scope, channelOf, channel, at) {
       scope.assert()
-      // Розрив знімає канал, на якому його поставлено: відновлення сигналів
-      // нового каналу не покриває пропущеного в старому.
       for (const e of rows.values()) {
-        const marks = e.stale.disconnect
-        if (marks === undefined || !marks.delete(channel)) continue
-        if (marks.size === 0) delete e.stale.disconnect
+        if (channelOf(e) !== channel) continue
+        const marks = e.stale.disconnect ?? new Map<string, number>()
+        marks.set(channel, Math.max(marks.get(channel) ?? 0, at))
+        e.stale.disconnect = marks
       }
+    },
+
+    holdsChannel(channelOf, channel) {
+      for (const e of rows.values()) if (channelOf(e) === channel) return true
+      return false
     },
 
     own(scope, key) {

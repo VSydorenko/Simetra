@@ -1,4 +1,3 @@
-import { ZERO_UUID, channelTopic, type CatalogEntry } from "simetra/model"
 import type { Defects } from "./defects"
 import { effectiveEpoch, heldEpoch, pairId } from "./epoch"
 import type { ObjectState } from "./forms"
@@ -8,13 +7,20 @@ import {
   readIncluded,
   type Included,
 } from "./include"
-import { scopeOf, visibleRow, type RowEntry } from "./object-store"
+import {
+  changesObjectOf,
+  channelOf,
+  scopeOf,
+  visibleRow,
+  type RowEntry,
+} from "./object-store"
 import {
   aliveIncluded,
   applyIncluded,
   fetchFullAgain,
   gated,
   readFormWrite,
+  requireConfirmation,
   type Apply,
   type ReaderContext,
   type Write,
@@ -29,10 +35,17 @@ import {
 } from "./window"
 import { DISCARD_PAUSE_MS, type Scope, type Session } from "./session"
 import type { RowViews } from "./snapshot"
-import { ReadLimiterClosed, readKeys, tracked } from "./source"
+import {
+  ReadLimiterClosed,
+  readKeys,
+  settle,
+  tracked,
+  type WriteLease,
+} from "./source"
 import {
   EPOCH_UNAVAILABLE,
   errorOf,
+  settleRequirement,
   viewDueAt,
   type Subset,
   type SubsetRegistry,
@@ -57,6 +70,13 @@ import type {
 /** What the writer and `revalidate` need from the core. */
 export interface WriterContext extends ReaderContext {
   readonly session: Session
+  /**
+   * Reads the view when its requirement «composition not confirmed» is
+   * pending (`requirementPending`, P4-B spec §8.4, item 7).
+   */
+  readonly readRequirement: (s: Subset) => void
+  /** The tab is visible (`suspend` / `resume`, §8.4). */
+  readonly tabVisible: () => boolean
   readonly registry: SubsetRegistry
   readonly rowViews: RowViews
   readonly objects: ReadonlyMap<ObjectName, ObjectState>
@@ -67,10 +87,24 @@ export interface WriterContext extends ReaderContext {
   readonly purges: Map<ObjectName, number>
   /** Invalidates the tail re-read of the object in flight and re-queues its keys (П12). */
   invalidateTail(o: ObjectState): void
+  /**
+   * Called by every `Writer.purge` with its target: the signal receiver drops
+   * the pending signals and re-reads of the purged pair or keys (§8.4).
+   */
+  onPurge(
+    object: ObjectName,
+    target: { keys: readonly Key[] } | { scope: string | null }
+  ): void
   /** Deliberate defects of the model test's self-check. */
   readonly defects: Defects
   /** The monotonic clock in ms (`performance.now()`; a test substitutes it). */
   readonly now: () => number
+  /**
+   * Write leases on rows of the object (§8.4, rule 2): a read issues one at
+   * dispatch by its parts (own rows, `include` targets, receiver keys,
+   * pages); the flight's `settle` releases it after the answer's `commit`.
+   */
+  readonly pendingWrites: (object: ObjectName) => number
   /**
    * Keys `Writer.hide` hid, by object: the core re-reads the views that hold
    * them once the `commit` ends (`revalidateHolders`), not inside it.
@@ -108,23 +142,6 @@ export const REREAD_TIMEOUT_MS = 5_000
 export type RereadOutcome =
   | { readonly kind: "read"; readonly row: ServerRow | undefined }
   | { readonly kind: "failed" | "discarded" }
-
-/**
- * The change channel of a row (§8.3): `channelTopic` of the scope kind, the
- * row's stored scope and the object id; an unscoped object takes
- * `ZERO_UUID` for both the kind and the scope.
- */
-export function channelOf(entry: CatalogEntry): (e: RowEntry) => string {
-  const scoped = entry.scopeColumn !== undefined
-  const scopeKindId = scoped ? (entry.scopeKindId ?? ZERO_UUID) : ZERO_UUID
-  return (e) =>
-    channelTopic({
-      kind: "changes",
-      scopeKindId,
-      scope: scoped ? (e.scope ?? ZERO_UUID) : ZERO_UUID,
-      object: entry.id,
-    })
-}
 
 const isVisible = (s: Subset) => s.visible ?? s.listeners.size > 0
 
@@ -263,6 +280,31 @@ function removeKeys(
 export function createWriter(ctx: WriterContext, scope: Scope): Writer {
   const { ops, rowViews } = ctx
 
+  const objectOfChannel = (channel: string): ObjectState | undefined => {
+    const id = changesObjectOf(channel)
+    for (const o of ctx.objects.values()) if (o.entry.id === id) return o
+    return undefined
+  }
+
+  // Запис відпущеного каналу забувається, лише коли сховище не тримає жодного
+  // його рядка І жоден живий вигляд об'єкта не лишається ним непідтвердженим:
+  // порожній вигляд, що пропустив створення в розриві, інакше став би свіжим.
+  // Запис тримається і поки існує оренда на запис рядків об'єкта: її видає
+  // читання за своїми частинами, а знімає `settle` польоту вже після `commit`
+  // відповіді, тож між відповіддю й записом проміжку немає. Інакше рядок із
+  // читання до відпускання проживе період без нагляду, а повторна підписка
+  // нічого не позначить (§8.4, правило 2).
+  const forgettable = (o: ObjectState, channel: string): boolean =>
+    !o.rows.holdsChannel(channelOf(o.entry), channel) &&
+    ctx.pendingWrites(o.name) === 0 &&
+    subsetsOf(ctx, o).every((s) =>
+      ctx.session.epochs.channelProven(channel, s.okReadEpoch ?? -1)
+    )
+  const forgetChannel = (channel: string) => {
+    ctx.session.epochs.forget(channel)
+    ctx.registry.forgetChannel(channel)
+  }
+
   function touchMarked(o: ObjectState, marked: (e: RowEntry) => boolean) {
     for (const key of o.rows.keys()) {
       if (marked(o.rows.get(key)!)) rowViews.touch(o.name, key)
@@ -324,6 +366,7 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       for (const key of [...dropped, ...cleared]) rowViews.touch(o.name, key)
       forget(ctx, scope, o, new Set(dropped), new Set(purged))
       ctx.invalidateTail(o)
+      ctx.onPurge(o.name, target)
       // Прохід заміни знімка прав ховає пару надгробком і бар'єром: читання,
       // що стартували раніше, не принесуть її рядків, а відповіді для
       // дозволених пар чинні — повторювати їх не треба.
@@ -377,18 +420,53 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
 
     markDisconnected(channel) {
       scope.assert()
+      ctx.session.epochs.gap(channel)
+      const id = channel === undefined ? undefined : changesObjectOf(channel)
       for (const o of ctx.objects.values()) {
+        // Об'єкт без сигналів каналу не має: розрив його не стосується.
+        if (!o.entry.signal || (id !== undefined && o.entry.id !== id)) continue
         const of = channelOf(o.entry)
         o.rows.markDisconnected(scope, of, channel)
         touchMarked(o, (e) => channel === undefined || of(e) === channel)
+        // Склад вигляду (`staleComposition`) обчислює знімок: порожній
+        // вигляд рядків для `touch` не має.
+        for (const s of subsetsOf(ctx, o)) s.dirty = true
       }
     },
 
-    clearDisconnected(channel) {
+    holdChannel(channel) {
       scope.assert()
-      for (const o of ctx.objects.values()) {
-        touchMarked(o, (e) => e.stale.disconnect?.has(channel) === true)
-        o.rows.clearDisconnected(scope, channel)
+      const at = ctx.session.epochs.hold(channel)
+      const o = objectOfChannel(channel)
+      if (at === undefined || o === undefined) return
+      // Відпущений канал, рядки якого лишились у сховищі, приєднується після
+      // розриву: правки між відпусканням і підпискою сигналу не мали.
+      const of = channelOf(o.entry)
+      o.rows.markChannel(scope, of, channel, at)
+      touchMarked(o, (e) => of(e) === channel)
+      for (const s of subsetsOf(ctx, o)) s.dirty = true
+    },
+
+    releaseChannel(channel) {
+      scope.assert()
+      const { epochs } = ctx.session
+      epochs.release(channel)
+      const o = objectOfChannel(channel)
+      if (o === undefined) return forgetChannel(channel)
+      // Відпущений канал судить вигляд точково: склад міг змінитися.
+      for (const s of subsetsOf(ctx, o)) s.dirty = true
+      if (forgettable(o, channel)) forgetChannel(channel)
+    },
+
+    forgetReleased() {
+      scope.assert()
+      const { epochs } = ctx.session
+      for (const channel of [...epochs.released()]) {
+        const o = objectOfChannel(channel)
+        if (o !== undefined && !forgettable(o, channel)) continue
+        forgetChannel(channel)
+        // Забутий канал вигляду більше не судить.
+        if (o !== undefined) for (const s of subsetsOf(ctx, o)) s.dirty = true
       }
     },
 
@@ -405,6 +483,8 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       for (const s of targets) {
         if (flags.needsRefresh !== undefined)
           s.needsRefresh = flags.needsRefresh
+        if (flags.unconfirmedSince !== undefined)
+          requireConfirmation(s, flags.unconfirmedSince)
         if (flags.hasNewRows !== undefined) s.hasNewRows = flags.hasNewRows
         s.dirty = true
       }
@@ -437,7 +517,10 @@ export function setVisible(
   visible: boolean
 ) {
   const s = ctx.registry.find(spec)
-  if (s !== undefined) s.visible = visible
+  if (s === undefined) return
+  s.visible = visible
+  // Знімок показує непідтверджений склад залежно від видимості (§8.4, п. 7).
+  if (s.unconfirmedSince !== undefined) s.dirty = true
 }
 
 // ------------------------------------------------------------ revalidate
@@ -816,9 +899,16 @@ function readAgain(
   ctx: WriterContext,
   s: Subset,
   startEpoch: number,
-  token: GenerationToken
+  token: GenerationToken,
+  lease: WriteLease
 ): Promise<Apply> {
-  return gated(ctx, startEpoch, (c) => writeAgain(c, s, startEpoch, token), s)
+  return gated(
+    ctx,
+    startEpoch,
+    (c) => writeAgain(c, s, startEpoch, token),
+    s,
+    lease
+  )
 }
 
 async function writeAgain(
@@ -906,9 +996,7 @@ export async function revalidate(
   // Єдина ознака закриття — токен сесії: він недійсний уже з `closing`, коли
   // слухач purge-пачки ще бачить `closed === undefined`.
   if (!ctx.session.token().valid) return
-  // Вигляд без жодного завантаження складу не має: його перше читання —
-  // завантаження, а не системне перечитування. ТЧ — лише змонтовані.
-  const targets = subsetsOf(ctx, o).filter((s) => eligible(ctx, s, options))
+  const targets = revalidateTargets(ctx, object, options)
   if (options.minAgeMs !== undefined) {
     // Такт і звірка вигляд у польоті не беруть (§6.3, single-flight).
     await revalidateViews(
@@ -923,6 +1011,19 @@ export async function revalidate(
     return
   }
   await singleFlight(ctx, o, targets, options).done
+}
+
+/** The views `revalidate` of the object takes with these options. */
+export function revalidateTargets(
+  ctx: WriterContext,
+  object: ObjectName,
+  options: RevalidateOptions
+): Subset[] {
+  // Вигляд без жодного завантаження складу не має: його перше читання —
+  // завантаження, а не системне перечитування. ТЧ — лише змонтовані.
+  return subsetsOf(ctx, ctx.objectOf(object)).filter((s) =>
+    eligible(ctx, s, options)
+  )
 }
 
 /**
@@ -1191,9 +1292,11 @@ export async function revalidateViews(
   const purgesAtStart = new Map(ctx.purges)
   const purgedSince = (name: ObjectName) =>
     (ctx.purges.get(name) ?? 0) !== (purgesAtStart.get(name) ?? 0)
+  // Одна оренда на прохід: усі відповіді пише один `commit` нижче.
+  const lease = ctx.source.lease()
   const results = await Promise.all(
     targets.map((s) =>
-      readAgain(ctx, s, startEpoch, token).then(
+      readAgain(ctx, s, startEpoch, token, lease).then(
         (apply) => ({ s, apply }) as const,
         (error: unknown) => ({ s, error }) as const
       )
@@ -1205,68 +1308,89 @@ export async function revalidateViews(
   }
   const again: Subset[] = []
   const discarded: Subset[] = []
-  session.commit(
-    (scope) => {
-      try {
-        for (const result of results) {
-          const { s } = result
-          if (!s.alive || s.purged) continue
-          const atStart = loadsAtStart.get(s)
-          if (atStart?.gen !== s.gen || atStart.flight !== s.flight) continue
-          // purge після старту: відповідь могла нести рядки й рядки ТЧ, яких
-          // на мить purge у сховищі не було (рядок у сховищі ще в старому
-          // скоупі). Відкидаємо й перечитуємо тим самим системним шляхом:
-          // склад і порядок змінює лише сам purge (§6.5), а не перечитування.
-          if (
-            purgedSince(o.name) ||
-            s.form.include.some((step) => purgedSince(step.target))
-          ) {
-            again.push(s)
-            continue
-          }
-          s.dirty = true
-          if ("error" in result) {
-            // Закритий обмежувач — сесію закрито: писати нікуди.
-            if (result.error instanceof ReadLimiterClosed) continue
-            s.failures++
-            s.failedAt = startedAt
-            s.status = "error"
-            s.error = errorOf(result.error)
-            continue
-          }
-          try {
-            if (!result.apply(scope)) {
-              // Відкинута відповідь: перечитування з паузою, а після
-              // межі відкинутих поспіль — `command.unavailable`.
-              if (session.versions.unavailable()) {
-                s.status = "error"
-                s.error = EPOCH_UNAVAILABLE
-              } else discarded.push(s)
+  // Вигляди, чию відповідь пропущено, бо їхнє завантаження осіло раніше.
+  const skipped: Subset[] = []
+  settle(lease, () =>
+    session.commit(
+      (scope) => {
+        try {
+          for (const result of results) {
+            const { s } = result
+            if (!s.alive || s.purged) continue
+            const atStart = loadsAtStart.get(s)
+            if (atStart?.gen !== s.gen || atStart.flight !== s.flight) {
+              skipped.push(s)
               continue
             }
-            if (pageDropped.delete(s)) {
+            // purge після старту: відповідь могла нести рядки й рядки ТЧ, яких
+            // на мить purge у сховищі не було (рядок у сховищі ще в старому
+            // скоупі). Відкидаємо й перечитуємо тим самим системним шляхом:
+            // склад і порядок змінює лише сам purge (§6.5), а не перечитування.
+            if (
+              purgedSince(o.name) ||
+              s.form.include.some((step) => purgedSince(step.target))
+            ) {
               again.push(s)
               continue
             }
-            s.refreshedAt = startedAt
-            s.failures = 0
-            s.failedAt = undefined
-            if (s.status === "error") {
-              s.status = "ready"
-              s.error = undefined
+            s.dirty = true
+            if ("error" in result) {
+              // Закритий обмежувач — сесію закрито: писати нікуди.
+              if (result.error instanceof ReadLimiterClosed) continue
+              s.failures++
+              s.failedAt = startedAt
+              s.status = "error"
+              s.error = errorOf(result.error)
+              continue
             }
-          } catch (error) {
-            ctx.log({ kind: "listener-failed", error })
-            s.status = "error"
-            s.error = errorOf(error)
+            try {
+              if (!result.apply(scope)) {
+                // Відкинута відповідь: перечитування з паузою, а після
+                // межі відкинутих поспіль — `command.unavailable`.
+                if (session.versions.unavailable()) {
+                  s.status = "error"
+                  s.error = EPOCH_UNAVAILABLE
+                } else discarded.push(s)
+                continue
+              }
+              if (pageDropped.delete(s)) {
+                again.push(s)
+                continue
+              }
+              s.refreshedAt = startedAt
+              s.okReadEpoch = startEpoch
+              // Успішне системне читання, що стартувало з епохи вимоги,
+              // підтверджує склад: нового рядка воно не ставить у склад, а дає
+              // банер (§6.5). Правило зняття й повтору — те саме, що в
+              // завантаження (§8.4, п. 7): вимога, що лишилась, бо прохід
+              // стартував раніше за e, і яку ніхто інший не прочитає, — ще
+              // один прохід тим самим системним шляхом, склад не змінюється.
+              s.failures = 0
+              s.failedAt = undefined
+              if (s.status === "error") {
+                s.status = "ready"
+                s.error = undefined
+              }
+              if (
+                settleRequirement(s, startEpoch, {
+                  versions: session.versions,
+                  tabVisible: ctx.tabVisible,
+                })
+              )
+                again.push(s)
+            } catch (error) {
+              ctx.log({ kind: "listener-failed", error })
+              s.status = "error"
+              s.error = errorOf(error)
+            }
           }
+        } finally {
+          ctx.ops.sweep(scope)
         }
-      } finally {
-        ctx.ops.sweep(scope)
-      }
-    },
-    token,
-    `revalidate ${o.name}`
+      },
+      token,
+      `revalidate ${o.name}`
+    )
   )
   // Прохід осів: хвіст явного `revalidate` може стартувати.
   for (const s of targets) {
@@ -1274,6 +1398,10 @@ export async function revalidateViews(
       for (const resolve of s.rereadWaiters.splice(0)) resolve()
     }
   }
+  // Пропущена відповідь — теж точка осідання (§8.4, п. 7): завантаження, що
+  // осіло раніше, не повторилось, бо бачило цей прохід у польоті; вимогу, яку
+  // тепер ніхто не прочитає, читає те саме правило, що й після сторінки.
+  for (const s of skipped) ctx.readRequirement(s)
   // Цей прохід вичерпав межу (лічильник рухається після commit): повтору
   // не буде, відкинуті вигляди — `command.unavailable`.
   if (discarded.length > 0 && session.versions.unavailable()) {
@@ -1362,7 +1490,8 @@ export async function rereadKey(
       "reread timeout"
     )
   })
-  const read = tracked(ctx.source)
+  const lease = ctx.source.lease()
+  const read = tracked(ctx.source, undefined, lease)
   let rows: readonly ServerRow[] | undefined
   try {
     rows = await readKeys(
@@ -1376,39 +1505,43 @@ export async function rereadKey(
   } catch {
     rows = undefined
   }
-  if (!token.valid) {
-    limit.abort()
-    return
-  }
-  session.commit(
-    (scope) => {
-      if (rows === undefined) {
-        fire({ kind: "failed" }, scope)
-        return
-      }
-      // Шлюз відповіді — той самий, що в `Writer.apply`: епохи частин і
-      // рядків; відкинута відповідь не пише нічого.
-      const epochs = new Set<string | null>(read.epochs)
-      for (const row of rows) epochs.add(row.versionEpoch ?? null)
-      if (session.acceptEpochs(epochs, startEpoch) === "discard") {
-        fire({ kind: "discarded" }, scope)
-        return
-      }
-      patchRows(ctx, scope, o, rows, startEpoch, null, form === "card")
-      const found = rows.find((r) => r.key.toLowerCase() === key.toLowerCase())
-      if (found === undefined && (o.rows.get(key)?.owners ?? 0) > 0)
-        removeKeys(ctx, scope, o, [key], startEpoch)
-      // Підсумок несе рядок відповіді з його власною епохою, як він прийшов:
-      // у сховище цей рядок уже записав `patchRows` за правилом епох.
-      const answer =
-        found === undefined
-          ? undefined
-          : { ...found, versionEpoch: heldEpoch(found.versionEpoch) }
-      fire({ kind: "read", row: answer }, scope)
-    },
-    token,
-    `reread ${o.name}`
-  )
+  settle(lease, () => {
+    if (!token.valid) {
+      limit.abort()
+      return
+    }
+    session.commit(
+      (scope) => {
+        if (rows === undefined) {
+          fire({ kind: "failed" }, scope)
+          return
+        }
+        // Шлюз відповіді — той самий, що в `Writer.apply`: епохи частин і
+        // рядків; відкинута відповідь не пише нічого.
+        const epochs = new Set<string | null>(read.epochs)
+        for (const row of rows) epochs.add(row.versionEpoch ?? null)
+        if (session.acceptEpochs(epochs, startEpoch) === "discard") {
+          fire({ kind: "discarded" }, scope)
+          return
+        }
+        patchRows(ctx, scope, o, rows, startEpoch, null, form === "card")
+        const found = rows.find(
+          (r) => r.key.toLowerCase() === key.toLowerCase()
+        )
+        if (found === undefined && (o.rows.get(key)?.owners ?? 0) > 0)
+          removeKeys(ctx, scope, o, [key], startEpoch)
+        // Підсумок несе рядок відповіді з його власною епохою, як він прийшов:
+        // у сховище цей рядок уже записав `patchRows` за правилом епох.
+        const answer =
+          found === undefined
+            ? undefined
+            : { ...found, versionEpoch: heldEpoch(found.versionEpoch) }
+        fire({ kind: "read", row: answer }, scope)
+      },
+      token,
+      `reread ${o.name}`
+    )
+  })
 }
 
 /**

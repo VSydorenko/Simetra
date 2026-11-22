@@ -5,10 +5,13 @@ import {
   ORG,
   S,
   TASK,
+  isKeys,
   isPage,
   key,
   keysIn,
+  keysOf,
   seed,
+  type FakeRead,
   settle,
   setup,
   taskValues,
@@ -239,6 +242,106 @@ describe("full", () => {
     late.answer(late.issuedAt)
     await settle()
     expect(inspect.owners(ORG, S)).toBe(0)
+  })
+
+  // П15: відповідь завантаження, відхилена новішою позначкою `removed` (старше
+  // читання сказало «рядка немає» вже після його старту), лишає вимогу «склад
+  // не підтверджено»: видимий вигляд завантажується ще раз, невидимий — лише
+  // `needsRefresh`.
+  it.each([
+    { visible: true, pages: 2, keys: [key(1), key(2)], needsRefresh: false },
+    { visible: false, pages: 1, keys: [key(2)], needsRefresh: true },
+  ])(
+    "a load answer rejected by a newer removed mark of an older read, visible $visible: $pages page reads",
+    async ({ visible, pages, keys, needsRefresh }) => {
+      const { core, fake } = setup()
+      seed(fake, 1, 2)
+      const single = core.view({ kind: "keys", object: TASK, keys: [key(1)] })
+      watch(single)
+      await settle()
+      // Старе читання за ключем: його «рядка немає» ляже після новіших читань.
+      fake.hold = (read) => isKeys(read)
+      single.refresh()
+      await settle()
+      const older = fake.take(isKeys)
+      // Новіше читання картки пише рядок: старе «рядка немає» стане розбіжним.
+      watch(core.view({ kind: "card", object: TASK, key: key(1) }))
+      await settle()
+      // Завантаження `full` стартує до розбіжної позначки.
+      fake.hold = (read) => isKeys(read) || isPage(read)
+      const handle = core.view(full)
+      watch(handle)
+      if (!visible) core.setVisible(full, false)
+      await settle()
+      const page = fake.take(isPage)
+      fake.setVisibleScopes([])
+      older.answer()
+      fake.setVisibleScopes(undefined)
+      await settle()
+      expect(single.getSnapshot().rows[0]).toMatchObject({ state: "removed" })
+      // Відповідь має рядок, але сховище його відхиляє: позначка новіша за
+      // старт читання.
+      page.answer()
+      await settle()
+      fake.hold = undefined
+      while (fake.pending.length > 0) {
+        fake.take().answer()
+        await settle()
+      }
+      await settle()
+      expect(keysIn(handle.getSnapshot())).toEqual(keys)
+      expect(handle.getSnapshot().needsRefresh).toBe(needsRefresh)
+      expect(fake.log.filter(isPage)).toHaveLength(pages)
+    }
+  )
+
+  // Межа повторів — умова, не лічильник: спробу, відхилену ще новішою
+  // позначкою, вимога переносить на неї, і завантаження йде знову, доки
+  // читання не підтвердить склад.
+  it("two rejected answers in a row: the load goes on until a read confirms the composition", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 2)
+    const singles = [key(1), key(2)].map((k) => {
+      const handle = core.view({ kind: "keys", object: TASK, keys: [k] })
+      watch(handle)
+      return handle
+    })
+    await settle()
+    // Старі читання за ключем, кожне своїм запитом: їхні «рядка немає»
+    // лягають після новіших.
+    fake.hold = (read) => isKeys(read)
+    const older: FakeRead[] = []
+    for (const [i, single] of singles.entries()) {
+      single.refresh()
+      await settle()
+      older.push(fake.take((read) => keysOf(read.query).includes(key(i + 1))))
+    }
+    for (const k of [key(1), key(2)])
+      watch(core.view({ kind: "card", object: TASK, key: k }))
+    await settle()
+    fake.hold = (read) => isKeys(read) || isPage(read)
+    const handle = core.view(full)
+    watch(handle)
+    await settle()
+    // Кожна спроба завантаження стартує до своєї розбіжної позначки.
+    for (const read of older) {
+      const page = fake.take(isPage)
+      fake.setVisibleScopes([])
+      read.answer()
+      fake.setVisibleScopes(undefined)
+      await settle()
+      page.answer()
+      await settle()
+    }
+    fake.hold = undefined
+    while (fake.pending.length > 0) {
+      fake.take().answer()
+      await settle()
+    }
+    await settle()
+    expect(keysIn(handle.getSnapshot())).toEqual([key(1), key(2)])
+    expect(handle.getSnapshot().needsRefresh).toBe(false)
+    expect(fake.log.filter(isPage)).toHaveLength(3)
   })
 
   it("stops reading pages and targets once the view is released", async () => {
