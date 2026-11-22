@@ -1426,7 +1426,7 @@ function reconcileSource(state: RuntimeState): ReconcileSource {
 const BEGIN_WRITE = "BEGIN ISOLATION LEVEL READ COMMITTED"
 // Межі часу — як у інших транзакцій рантайму.
 const INSTANCE_LIMITS = (state: RuntimeState) => ({
-  text: "SELECT set_config('statement_timeout', $1, true), set_config('lock_timeout', $2, true)",
+  text: "SELECT pg_catalog.set_config('statement_timeout', $1, true), pg_catalog.set_config('lock_timeout', $2, true)",
   params: [String(state.readTimeout), String(state.lockTimeoutMs)],
 })
 

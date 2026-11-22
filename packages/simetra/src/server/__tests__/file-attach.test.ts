@@ -95,6 +95,7 @@ const saveCall = call("document_save", SAVE, [
     company_id: COMPANY,
   }),
   null,
+  null,
 ])
 const OPEN = [
   { connect: true },
@@ -284,7 +285,11 @@ describe("attachFile", () => {
     let commits = 0
     const { runtime } = await make((text) =>
       text === "COMMIT" && commits++ > 1
-        ? { error: new Error("ECONNRESET") }
+        ? {
+            error: Object.assign(new Error("read ECONNRESET"), {
+              code: "ECONNRESET",
+            }),
+          }
         : undefined
     )
     const error = await failureOf(runtime.attachFile(session, input))
@@ -307,7 +312,11 @@ describe("attachFile", () => {
   it("does not flag commitUnknown on an unavailable database before COMMIT", async () => {
     const { runtime } = await make((text) =>
       text.includes("file_attach")
-        ? { error: new Error("ECONNRESET") }
+        ? {
+            error: Object.assign(new Error("read ECONNRESET"), {
+              code: "ECONNRESET",
+            }),
+          }
         : undefined
     )
     const error = await failureOf(runtime.attachFile(session, input))

@@ -290,11 +290,23 @@ describe("application SQL leaves the storage alone (invariant 7)", () => {
   })
 
   it.each([
-    ["SET ROLE simetra_files"],
+    ["SET LOCAL ROLE simetra_files"],
     ["PERFORM set_config('role', 'simetra_files', true)"],
   ])("%s is sql.command-context-write", async (body) => {
     const result = await compiledWith(plpgsql(body, "VOLATILE"))
     expect(codes(result.diagnostics)).toEqual(["sql.command-context-write"])
+  })
+
+  // Нелокальний `SET` — ще й зміна сесії пулу: правило локальності (T3 CAS)
+  // судить його незалежно від захищеного налаштування.
+  it("SET ROLE simetra_files is also a pool-session setting", async () => {
+    const result = await compiledWith(
+      plpgsql("SET ROLE simetra_files", "VOLATILE")
+    )
+    expect(codes(result.diagnostics)).toEqual([
+      "sql.command-context-write",
+      "sql.function-body-session-setting",
+    ])
   })
 
   it("simetra_files is no grant purpose: nobody calls it, a verbatim grant on a storage function is refused", async () => {
