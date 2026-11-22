@@ -80,6 +80,8 @@ export function demoStep(command: "up" | "drop", state: DemoState): DemoStep {
       `refused: the database "${DEMO_DATABASE}" exists but was not created by the demo (no "${DEMO_MARK.ready}" comment); it is left untouched`
     )
   if (command === "drop") return state === "absent" ? "nothing" : "drop"
+  // База з міткою ready до правила CONNECT лишає PUBLIC CONNECT, доки її не
+  // перестворено (`pnpm demo:drop`)
   if (state === "ready") return "reuse"
   return state === "incomplete" ? "recreate" : "create"
 }

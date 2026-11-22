@@ -52,6 +52,9 @@ describe("getRouter", () => {
       "ws://centrifugo.test/connection/websocket"
     )
     vi.stubEnv("SIMETRA_SIGNALS_KEYS", JSON.stringify([key]))
+    // Свіжий модуль: кеш адреси живе в ньому й не тече в інші тести файла
+    vi.resetModules()
+    const { getRouter } = await import("../src/router")
     const dehydrated = await getRouter().options.dehydrate?.()
     expect(dehydrated).toEqual({
       data: null,

@@ -25,8 +25,12 @@ test("a login of another application does not connect to the application databas
     url.username = role
     url.password = password
     const client = new pg.Client({ connectionString: url.toString() })
-    await expect(client.connect()).rejects.toMatchObject({ code: "42501" })
-    await client.end().catch(() => undefined)
+    try {
+      await expect(client.connect()).rejects.toMatchObject({ code: "42501" })
+    } finally {
+      // І коли мутація пустила роль: сесія не лишається відкритою
+      await client.end().catch(() => undefined)
+    }
 
     // Контроль: логін рантайму входить у ту саму базу
     const runtime = new pg.Client({
