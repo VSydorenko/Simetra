@@ -10,6 +10,7 @@ import {
   type CatalogRightsSubject,
   type RuntimeAttribute,
   type RuntimeCatalog,
+  type Storage,
   type RuntimeConstraint,
   type RuntimeObject,
   type RuntimeOperationTarget,
@@ -54,7 +55,7 @@ export function buildRuntimeCatalog(model: CompiledModel): RuntimeCatalog {
   const facts: Facts = {
     model,
     checkColumns: new Map(
-      model.checkColumns.map((c) => [checkKey(c.table, c.check), c.column])
+      model.checkColumns.map((c) => [checkKey(c.table, c.check), c.columns])
     ),
     enumValues: (ref) => {
       const target = byRef.get(refKey(ref))
@@ -155,10 +156,23 @@ function publicReadOf(
   }
 }
 
+// Межа файлу — з метаданих об'єкта як є: окремого виводу немає.
+function storageOf(object: SourceObject): Pick<RuntimeObject, "storage"> {
+  const { storage } = object.data as { storage?: Storage }
+  if (storage === undefined) return {}
+  // Поля читаються по одному: так їх бачить ратчет метамоделі.
+  return {
+    storage: {
+      maxBytes: storage.maxBytes,
+      mediaTypes: [...storage.mediaTypes],
+    },
+  }
+}
+
 interface Facts {
   model: CompiledModel
-  /** Колонка CHECK за `checkKey`. */
-  checkColumns: ReadonlyMap<string, string>
+  /** Колонки CHECK за `checkKey`, у порядку колонок таблиці. */
+  checkColumns: ReadonlyMap<string, readonly string[]>
   /** Значення перерахування-цілі `Ref`; `undefined` — ціль не перерахування. */
   enumValues: (ref: MetadataRef) => RuntimeAttribute["enumValues"]
   objectRef: (table: ObjectTable) => MetadataRef
@@ -211,6 +225,7 @@ function runtimeObject(
     versionName: fieldOf(fields, versionColumn).name,
     signal: isSignalObject(facts.model, object.id),
     ...publicReadOf(facts.model, object.id, table),
+    ...storageOf(object),
     ...rightsOf(object.id, header, contract, facts),
     ...presentationOf(
       facts.model.presentation.objects.find((p) => p.objectId === object.id),
@@ -644,16 +659,14 @@ function constraints(table: PhysicalTable, facts: Facts): RuntimeConstraint[] {
         kind: "unique" as const,
         columns: i.keys.flatMap((k) => ("column" in k ? [k.column] : [])),
       })),
-    // Колонка — з компілятора за призначеним іменем; CHECK над
-    // кількома колонками (правило рядка) реквізиту не називає.
-    ...table.checks.map((c) => {
-      const column = facts.checkColumns.get(checkKey(table, c.name))
-      return {
-        name: c.name,
-        kind: "check" as const,
-        columns: column === undefined ? [] : [column],
-      }
-    }),
+    // Колонки — з компілятора за призначеним іменем: CHECK реквізиту —
+    // його колонка, правило рядка — колонки, які воно читає. CHECK, якого
+    // компілятор не розібрав, колонок не має.
+    ...table.checks.map((c) => ({
+      name: c.name,
+      kind: "check" as const,
+      columns: [...(facts.checkColumns.get(checkKey(table, c.name)) ?? [])],
+    })),
     ...table.foreignKeys.map((f) => ({
       name: f.name,
       kind: "foreignKey" as const,

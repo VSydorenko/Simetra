@@ -5,7 +5,7 @@ import type { CompileResult, CompiledModel } from "simetra/compiler"
 import { rightsCheck } from "../catalog-command/rights-check"
 import { referenceViolations } from "../catalog-command/units"
 import { executeGrants } from "../sql/execute-grants"
-import { hasEmptySearchPath } from "../sql/closed-forms"
+import { hasEmptySearchPath, pinnedSettingProblem } from "../sql/closed-forms"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { loadPlpgsqlParser, type PlpgsqlParser } from "../sql/plpgsql"
 import { commandContractOf } from "./fixtures/catalog-command"
@@ -341,6 +341,8 @@ describe("<root>_create_root", () => {
           .arg
       ).toEqual({ Boolean: { boolval: false } })
       expect(hasEmptySearchPath(unit.tree as never)).toBe(true)
+      // Кожне налаштування `PINNED_SESSION_SETTINGS` — в опціях оболонки (спека П4 §6.6).
+      expect(pinnedSettingProblem(unit, [])).toBeUndefined()
       expect(
         bodyShape(unit.sql).filter((s) => s.type === "dynexecute")
       ).toEqual([])
@@ -392,7 +394,8 @@ describe("<root>_create_root", () => {
     ).toEqual([identity("branch"), identity("organization")])
     const save = bodyShape(
       model.sqlUnits.find(
-        (u) => u.identity === "function:public.organization_save(jsonb,int8)"
+        (u) =>
+          u.identity === "function:public.organization_save(jsonb,int8,jsonb)"
       )!.sql
     )
     expect(raised(save, ifAt(save, "p_expected_version IS NULL"))).toEqual(

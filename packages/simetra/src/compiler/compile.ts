@@ -14,8 +14,11 @@ import type { ResolvedReference } from "./stages/identity"
 import type { CheckColumn } from "./stages/model"
 import type { CreationNode } from "./sql/dependencies"
 import type { SqlUnit, VerbatimUnit } from "./sql/units"
+import type { PolicyFunctions } from "./sql/policy-functions"
 import { readFiles, runStages, sqlStage } from "./pipeline"
 import { debtUnits } from "./sql/debt"
+import type { ExecuteEntry } from "./function-execute"
+import type { DeclaredFunctionState } from "./sql/guard-of"
 import { kindTables } from "./sql/kind-tables"
 import { loadSqlParser } from "./sql/parse"
 import { loadPlpgsqlParser } from "./sql/plpgsql"
@@ -74,8 +77,8 @@ export interface CompiledModel {
    */
   catalogCommands: CatalogCommandContract[]
   /**
-   * Колонка CHECK з однією колонкою виразу за призначеним іменем — для
-   * мапінгу `23514` каталогом рантайму. Похідне від знімка, тож
+   * Колонки CHECK за призначеним іменем — колонка CHECK реквізиту чи
+   * колонки, які читає правило рядка, — для мапінгу `23514` каталогом рантайму. Похідне від знімка, тож
    * канонічний знімок його не читає і хеш від нього не залежить.
    */
   checkColumns: CheckColumn[]
@@ -109,6 +112,18 @@ export interface CompileResult {
    * `repair` — виняток: модель є й тоді, коли кожна помилка — класу ремонту.
    */
   model?: CompiledModel
+  /**
+   * Declared functions with the call-guard verdict, for `explain`. Present
+   * together with the model but not part of it: the model hash does not
+   * depend on declarations.
+   */
+  declaredFunctions?: DeclaredFunctionState[]
+  /**
+   * Functions whose EXECUTE the platform derives (declared, platform forms,
+   * module functions), from the same groups as the grant generator; for
+   * `explain`. Outside the model hash, like `declaredFunctions`.
+   */
+  functionExecute?: ExecuteEntry[]
 }
 
 export interface CompileOptions {
@@ -166,8 +181,28 @@ export async function compile(
 export async function verbatimUnits(
   files: ReadonlyMap<string, string>
 ): Promise<VerbatimUnit[]> {
-  const { sql } = sqlStage(readFiles(files), await loadSqlParser())
+  const { sql } = await sqlStageOf(files)
   return sql.units
+}
+
+/**
+ * Функції політик теки (спека декларацій функцій §5.8) — той самий результат
+ * розпізнавача, що бачить компілятор: операції, які судять форми платформи
+ * (`toPlatformForms`, `declare-function`), будують його з тих самих одиниць.
+ */
+export async function formPolicies(
+  files: ReadonlyMap<string, string>
+): Promise<PolicyFunctions> {
+  const { policies } = await sqlStageOf(files)
+  return policies
+}
+
+async function sqlStageOf(files: ReadonlyMap<string, string>) {
+  const [parse, plpgsql] = await Promise.all([
+    loadSqlParser(),
+    loadPlpgsqlParser(),
+  ])
+  return sqlStage(readFiles(files), parse, plpgsql)
 }
 
 /**
@@ -191,7 +226,11 @@ export async function currentDebt(
     loadSqlParser(),
     loadPlpgsqlParser(),
   ])
-  const { stage3, sql, declared, calls } = sqlStage(stage1, parse)
+  const { stage3, sql, declared, calls, policies } = sqlStage(
+    stage1,
+    parse,
+    plpgsql
+  )
   if (
     stage3 === undefined ||
     sql.diagnostics.some((d) => d.code === "sql.parse")
@@ -206,6 +245,7 @@ export async function currentDebt(
     parse,
     plpgsql,
     declared,
-    calls
+    calls,
+    policies
   )
 }

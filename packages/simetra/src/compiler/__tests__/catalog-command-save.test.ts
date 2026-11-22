@@ -9,12 +9,13 @@ import {
 import { rightsCheck } from "../catalog-command/rights-check"
 import {
   buildCatalogCommandUnits,
+  fieldsDiffer,
   keyColumns,
   referenceViolations,
 } from "../catalog-command/units"
 import { HIERARCHY_LOCK_SPACE } from "../hierarchy-units"
 import { executeGrants } from "../sql/execute-grants"
-import { hasEmptySearchPath } from "../sql/closed-forms"
+import { hasEmptySearchPath, pinnedSettingProblem } from "../sql/closed-forms"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { loadPlpgsqlParser, type PlpgsqlParser } from "../sql/plpgsql"
 import {
@@ -89,7 +90,7 @@ function contractOf(
 
 const saveSql = (model: CompiledModel, table: string) => {
   const unit = model.sqlUnits.find(
-    (u) => u.identity === `function:public.${table}_save(jsonb,int8)`
+    (u) => u.identity === `function:public.${table}_save(jsonb,int8,jsonb)`
   )
   expect(unit, table).toBeDefined()
   return unit!.sql
@@ -138,7 +139,7 @@ const dmlKind = (s: Shape[number]) =>
   )
 
 describe("buildCatalogCommandUnits — <t>_save", () => {
-  it("порядок зміни: контекст → замок → версія → право «до» → право «після» → UPDATE → GET DIAGNOSTICS", () => {
+  it("порядок зміни: контекст → замок → версія → право «до» → поля → право «після» → UPDATE → GET DIAGNOSTICS", () => {
     const shape = bodyShape(saveSql(domain, "ticket"))
     const rights = rightsOf(domain, "ticket")
     const main = mainOf(domain, "ticket")
@@ -146,13 +147,20 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     const lockAt = shape.findIndex(
       (s) => s.type === "execsql" && s.target?.variable === "v_old"
     )
+    // Заданий `p_expected_values` заміняє версію полями (спека П4 §6.6).
     const version = ifAt(
       shape,
-      "v_old.version IS DISTINCT FROM p_expected_version"
+      "p_expected_values IS NULL AND v_old.version IS DISTINCT FROM p_expected_version"
     )
     const before = ifAt(
       shape,
       `(${rightsCheck(rights, "update", main, "v_old", "update")}) IS NOT TRUE`
+    )
+    // Поля — після права над «до» (спека П4 §6.6): розбіжність не стає
+    // оракулом змісту для того, кому дія над рядком не дозволена.
+    const fields = ifAt(
+      shape,
+      fieldsDiffer(main, contractOf(domain, "ticket").updateKeys)
     )
     const after = ifAt(
       shape,
@@ -168,7 +176,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
         dmlKind(s) === "UpdateStmt" &&
         nodes(s.expressions[0]!.tree, "relname").includes("ticket")
     )
-    const order = [ctx, lockAt, version, before, after, update]
+    const order = [ctx, lockAt, version, before, fields, after, update]
     expect(order.every((i) => i >= 0)).toBe(true)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
     expect(new Set(order).size).toBe(order.length)
@@ -483,7 +491,9 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
       units: domain.sqlUnits.filter((u) => u.generator !== "catalogCommand"),
       parse,
       plpgsql,
-    }).filter((u) => u.identity === "function:public.ticket_save(jsonb,int8)")
+    }).filter(
+      (u) => u.identity === "function:public.ticket_save(jsonb,int8,jsonb)"
+    )
     const shape = bodyShape(save!.sql)
     const updates = shape.filter(
       (s) =>
@@ -558,6 +568,219 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     ])
   })
 
+  describe("CAS за полями (спека П4 §6.6)", () => {
+    const shape = () => bodyShape(saveSql(domain, "ticket"))
+    const refusal = ["22023", "command.invalid", "p_expected_values"]
+    /** Оператор `i` лежить у тілі `IF p_expected_values IS NOT NULL`. */
+    const guarded = (s: Shape, i: number) =>
+      s.some(
+        (x, j) =>
+          j < i &&
+          x.type === "if" &&
+          x.depth < s[i]!.depth &&
+          same(
+            x.expressions[0]?.tree,
+            tree("SELECT p_expected_values IS NOT NULL")
+          ) &&
+          // Між ним і оператором немає виходу з його тіла.
+          s.slice(j + 1, i).every((y) => y.depth > x.depth)
+      )
+
+    it("поля: кожен ключ зміни — у кодуванні результату, лише заданий", () => {
+      const contract = contractOf(domain, "ticket")
+      const main = mainOf(domain, "ticket")
+      expect(contract.updateKeys.length).toBeGreaterThan(0)
+      expect(fieldsDiffer(main, contract.updateKeys)).toBe(
+        contract.updateKeys
+          .map(
+            (c) =>
+              `(p_expected_values ? '${c}' AND (v_expected -> '${c}') IS DISTINCT FROM (v_current -> '${c}'))`
+          )
+          .join(" OR ")
+      )
+    })
+
+    it("поля: json, json[] і jsonb — у тому самому кодуванні, що й решта", () => {
+      const main = mainOf(domain, "ticket")
+      const table = {
+        ...main,
+        columns: [
+          ...main.columns,
+          { ...main.columns[0]!, name: "raw", type: "json" },
+          { ...main.columns[0]!, name: "raws", type: "json[]" },
+          { ...main.columns[0]!, name: "doc", type: "jsonb" },
+        ],
+      }
+      expect(fieldsDiffer(table, ["raw", "raws", "doc"])).toBe(
+        [
+          "(p_expected_values ? 'raw' AND (v_expected -> 'raw') IS DISTINCT FROM (v_current -> 'raw'))",
+          "(p_expected_values ? 'raws' AND (v_expected -> 'raws') IS DISTINCT FROM (v_current -> 'raws'))",
+          "(p_expected_values ? 'doc' AND (v_expected -> 'doc') IS DISTINCT FROM (v_current -> 'doc'))",
+        ].join(" OR ")
+      )
+    })
+
+    it("поля: база й «до» — тим самим виразом, що й результат ядра", () => {
+      const s = shape()
+      const result = s.find(
+        (x) => x.type === "assign" && x.target?.variable === "v_result"
+      )!
+      const encoded = (row: string) =>
+        JSON.stringify(result.expressions[0]!.tree).replaceAll(
+          '"v_row"',
+          `"${row}"`
+        )
+      for (const [variable, row] of [
+        ["v_expected", "v_exp"],
+        ["v_current", "v_old"],
+      ] as const) {
+        const at = s.findIndex(
+          (x) => x.type === "assign" && x.target?.variable === variable
+        )
+        expect(at, variable).toBeGreaterThan(0)
+        expect(JSON.stringify(s[at]!.expressions[0]!.tree)).toBe(encoded(row))
+        expect(guarded(s, at), variable).toBe(true)
+      }
+    })
+
+    it("поля: відмова — conflict fields з поточною версією, лише коли база задана", () => {
+      const s = shape()
+      const main = mainOf(domain, "ticket")
+      const fields = ifAt(
+        s,
+        fieldsDiffer(main, contractOf(domain, "ticket").updateKeys)
+      )
+      expect(fields).toBeGreaterThan(0)
+      expect(guarded(s, fields)).toBe(true)
+      expect(strings(s[fields + 1]!.expressions)).toEqual([
+        "P0001",
+        "command.conflict",
+        "fields",
+      ])
+      expect(s[fields + 1]!.expressions.at(-1)!.tree).toEqual(
+        tree("SELECT v_old.version::text")
+      )
+    })
+
+    it("вхід бази: ключі зміни без ключа таблиці й tabular, розбір у v_exp", () => {
+      const contract = contractOf(domain, "ticket")
+      const s = shape()
+      const unknown = s.filter(
+        (x) =>
+          x.type === "execsql" &&
+          x.target?.variable === "v_key" &&
+          nodes(x.expressions[0]!.tree, "FuncCall").some((f) =>
+            same((f as { args?: unknown[] }).args, [
+              {
+                ColumnRef: {
+                  fields: [{ String: { sval: "p_expected_values" } }],
+                },
+              },
+            ])
+          )
+      )
+      expect(unknown.map((x) => arrayLiterals(x.expressions[0]!.tree))).toEqual(
+        [[...contract.updateKeys]]
+      )
+      expect(contract.updateKeys).not.toContain(contract.key)
+      // База — в окрему змінну: `v_in` лишається входом зміни.
+      const parsed = (variable: string, param: string) =>
+        s.filter(
+          (x) =>
+            x.type === "assign" &&
+            x.target?.variable === variable &&
+            same(
+              x.expressions[0]!.tree,
+              tree(
+                `SELECT jsonb_populate_record(NULL::public.ticket, ${param})`
+              )
+            )
+        )
+      expect(parsed("v_exp", "p_expected_values")).toHaveLength(1)
+      expect(parsed("v_in", "p_expected_values")).toEqual([])
+      expect(parsed("v_in", "p_item")).toHaveLength(1)
+      // Без обов'язкового ключа: ключ таблиці бази не перевіряється.
+      expect(ifAt(s, "v_exp.id IS NULL")).toBe(-1)
+    })
+
+    it.each([
+      [
+        "не об'єкт",
+        "jsonb_typeof(p_expected_values) IS DISTINCT FROM 'object'",
+      ],
+      [
+        "зі створенням, ТЧ чи порожня",
+        "p_expected_version IS NULL OR p_item ? 'tabular' OR p_expected_values = '{}'::jsonb",
+      ],
+      [
+        "набір ключів ≠ набору ключів зміни",
+        "ARRAY(SELECT k.k FROM jsonb_object_keys(p_item) AS k(k) WHERE k.k <> 'id' ORDER BY k.k) IS DISTINCT FROM ARRAY(SELECT k.k FROM jsonb_object_keys(p_expected_values) AS k(k) ORDER BY k.k)",
+      ],
+    ] as const)("вхід бази: %s — 22023 p_expected_values", (_, condition) => {
+      const s = shape()
+      const at = ifAt(s, condition)
+      expect(at).toBeGreaterThan(0)
+      expect(guarded(s, at)).toBe(true)
+      expect(strings(s[at + 1]!.expressions)).toEqual(refusal)
+    })
+
+    it("вхід бази: кожна відмова розбору називає аргумент, не колонку", () => {
+      const s = shape()
+      const first = s.findIndex(
+        (x) =>
+          x.type === "if" &&
+          same(
+            x.expressions[0]?.tree,
+            tree(
+              "SELECT jsonb_typeof(p_expected_values) IS DISTINCT FROM 'object'"
+            )
+          )
+      )
+      const parsed = s.findIndex(
+        (x) => x.type === "assign" && x.target?.variable === "v_exp"
+      )
+      const raises = s
+        .slice(first, parsed)
+        .filter((x) => x.type === "raise")
+        .map((x) => strings(x.expressions))
+      expect(raises.length).toBeGreaterThanOrEqual(3)
+      expect(new Set(raises.map((r) => JSON.stringify(r)))).toEqual(
+        new Set([JSON.stringify(refusal)])
+      )
+    })
+
+    it("вхід бази перевіряється до гілок створення й зміни", () => {
+      const s = shape()
+      const branch = ifAt(s, "p_expected_version IS NULL")
+      const exp = s.findIndex(
+        (x) => x.type === "assign" && x.target?.variable === "v_exp"
+      )
+      expect(exp).toBeGreaterThan(0)
+      // Перший `IF p_expected_version IS NULL` верхнього рівня — гілки ядра.
+      const top = s.findIndex(
+        (x, i) =>
+          i > exp &&
+          x.type === "if" &&
+          x.depth === s[branch]!.depth &&
+          same(
+            x.expressions[0]?.tree,
+            tree("SELECT p_expected_version IS NULL")
+          )
+      )
+      expect(top).toBeGreaterThan(exp)
+    })
+
+    it("підпис: три аргументи, двоаргументного save немає", () => {
+      const saves = domain.sqlUnits
+        .filter((u) => u.class === "function" && /_save\(/.test(u.identity))
+        .map((u) => u.identity)
+      expect(saves.length).toBeGreaterThan(0)
+      for (const identity of saves) {
+        expect(identity).toMatch(/_save\(jsonb,int8,jsonb\)$/)
+      }
+    })
+  })
+
   it("ключі поза createKeys/updateKeys відхиляє перевірка входу", () => {
     const contract = contractOf(domain, "ticket")
     expect(inputKeys(saveSql(domain, "ticket"))).toEqual([
@@ -620,8 +843,8 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
     // Вузький блок навколо поколонкового приведення (спека П4 §6.6): клас `22`
     // ловить лише він, а `DETAIL` — ключ, на якому впало приведення.
     const blocks = handlerBlocks(saveSql(domain, "ticket"), "data_exception")
-    // Шапка і ТЧ — по блоку; тіло — лише цикл приведення.
-    expect(blocks).toHaveLength(2)
+    // Шапка, база CAS за полями і ТЧ — по блоку; тіло — лише цикл приведення.
+    expect(blocks).toHaveLength(3)
     for (const block of blocks) {
       expect(block.body).toHaveLength(1)
       expect(nodes(block.body, "PLpgSQL_stmt_fors")).toHaveLength(1)
@@ -689,7 +912,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
         .sort()
     ).toEqual(
       [
-        "public.ticket_save(jsonb, bigint)",
+        "public.ticket_save(jsonb, bigint, jsonb)",
         "public.ticket_mark_deletion(uuid, bigint, boolean)",
       ]
         .flatMap((fn) => executeGrants(fn, ["command"], "supabase"))
@@ -700,7 +923,7 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
 
   it("SECURITY INVOKER, search_path = '', без EXECUTE у тілі", () => {
     const unit = domain.sqlUnits.find(
-      (u) => u.identity === "function:public.ticket_save(jsonb,int8)"
+      (u) => u.identity === "function:public.ticket_save(jsonb,int8,jsonb)"
     )!
     const create = (
       unit.tree as {
@@ -713,6 +936,8 @@ describe("buildCatalogCommandUnits — <t>_save", () => {
       create.options.find((o) => o.DefElem.defname === "security")?.DefElem.arg
     ).toEqual({ Boolean: { boolval: false } })
     expect(hasEmptySearchPath(unit.tree as never)).toBe(true)
+    // Кожне налаштування `PINNED_SESSION_SETTINGS` — в опціях оболонки (спека П4 §6.6).
+    expect(pinnedSettingProblem(unit, [])).toBeUndefined()
     expect(bodyShape(unit.sql).filter((s) => s.type === "dynexecute")).toEqual(
       []
     )
@@ -1104,6 +1329,8 @@ describe("<membership>_simetra_member_check", () => {
           `function:public.${table}_simetra_member_check(jsonb,uuid)`
       )!
       expect(hasEmptySearchPath(unit.tree as never)).toBe(true)
+      // Кожне налаштування `PINNED_SESSION_SETTINGS` — в опціях оболонки (спека П4 §6.6).
+      expect(pinnedSettingProblem(unit, [])).toBeUndefined()
       expect(
         (
           unit.tree as {

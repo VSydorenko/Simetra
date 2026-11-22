@@ -96,6 +96,15 @@ export const updateOperationObjectSchema = z.strictObject({
   id: rowIdSchema,
   expectedVersion: expectedVersionSchema,
   values: valuesSchema.optional(),
+  /**
+   * Base values of the fields `values` changes (CAS by fields, spec P4
+   * §6.4): the same logical attributes, so the key set equals that of
+   * `values`. Given, the kernel checks these fields instead of the version;
+   * `expectedVersion` stays required. Not combined with `tabularSections` or
+   * `deleteIds`: a section array replaces the section whole, so a header-only
+   * check would silently erase a parallel edit of other rows.
+   */
+  expectedValues: valuesSchema.optional(),
   tabularSections: tabularSectionsSchema.optional(),
   /**
    * Rows of a tabular section the update deletes, by row id. A section
@@ -120,6 +129,28 @@ export const operationSchema = z.discriminatedUnion("action", [
     creatorMember: valuesSchema.optional(),
   }),
   updateOperationObjectSchema.superRefine((op, ctx) => {
+    if (op.expectedValues !== undefined) {
+      const expected = Object.keys(op.expectedValues)
+      const changed = Object.keys(op.values ?? {})
+      if (
+        expected.length === 0 ||
+        expected.length !== changed.length ||
+        !expected.every((key) => Object.hasOwn(op.values ?? {}, key))
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["expectedValues"],
+          message: "expectedValues must name exactly the fields of values",
+        })
+      }
+      if (op.tabularSections !== undefined || op.deleteIds !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["expectedValues"],
+          message: "expectedValues is not combined with tabular sections",
+        })
+      }
+    }
     for (const name of Object.keys(op.deleteIds ?? {})) {
       if (op.tabularSections?.[name] === undefined) {
         ctx.addIssue({

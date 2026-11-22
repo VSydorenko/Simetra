@@ -2,8 +2,9 @@ import { type DatabaseProvider, type GrantPurpose } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "./diagnostics"
 import type { PlatformFormSource } from "./sql/closed-forms"
 import {
-  PLATFORM_FORM_PURPOSES,
+  formPurposes,
   type DeclaredFunction,
+  type PlatformForm,
 } from "./sql/declarations"
 import { executeGrants } from "./sql/execute-grants"
 import type { SqlParser } from "./sql/parse"
@@ -32,7 +33,8 @@ export interface FunctionExecuteSources {
 /**
  * `EXECUTE` функцій, ACL яких належить платформі (платформна спека §6.7,
  * спека декларацій функцій §5.1): форм платформи — з призначень форми
- * (`PLATFORM_FORM_PURPOSES`), задекларованих — з викликачів, недекларованих
+ * (`formPurposes`: сталих для форм метаданих, виведених політиками-викликачами
+ * для функції політики, §5.8), задекларованих — з викликачів, недекларованих
  * функцій модуля виду — з порожніх призначень: модуль не приймає дослівних
  * грантів, тож інакше функція лишилася б з `EXECUTE` від `PUBLIC` і типових
  * привілеїв провайдера. Функцію множини `membership` сюди не передають: її
@@ -64,6 +66,39 @@ export function buildFunctionExecuteUnits(
       )
       .sort((a, b) => compareStrings(a.identity, b.identity))
   )
+}
+
+/** Function with an EXECUTE group the platform derives (one entry per target). */
+export interface ExecuteEntry {
+  identity: string
+  schema: string
+  name: string
+  purposes: readonly GrantPurpose[]
+  /** Set when the function is a platform form (the form decides the group). */
+  form?: PlatformForm
+}
+
+/**
+ * Every function whose EXECUTE the platform derives, from the same groups the
+ * grant generator uses (form wins over declaration), so `explain` cannot
+ * diverge from the generated SQL.
+ */
+export function executeEntries(
+  sources: FunctionExecuteSources
+): ExecuteEntry[] {
+  return executeTargets(sources).map(({ unit, purposes, form }) => ({
+    identity: unit.identity,
+    schema: unit.schema,
+    name: unit.name,
+    purposes,
+    ...(form === undefined ? {} : { form }),
+  }))
+}
+
+export function executePurposes(
+  sources: FunctionExecuteSources
+): Map<string, readonly GrantPurpose[]> {
+  return new Map(executeEntries(sources).map((e) => [e.identity, e.purposes]))
 }
 
 /**
@@ -98,19 +133,34 @@ type ExecuteTarget = Pick<VerbatimUnit, "identity" | "schema" | "name"> &
  * Одна функція — одна група грантів: форма перемагає декларацію, декларація —
  * типову групу модуля.
  */
-function executeTargets(
-  sources: FunctionExecuteSources
-): { unit: ExecuteTarget; purposes: readonly GrantPurpose[] }[] {
+function executeTargets(sources: FunctionExecuteSources): {
+  unit: ExecuteTarget
+  purposes: readonly GrantPurpose[]
+  form?: PlatformForm
+}[] {
   const { forms, declared, units, moduleOwners } = sources
   const groups = new Map<
     string,
-    { unit: ExecuteTarget; purposes: readonly GrantPurpose[] }
+    {
+      unit: ExecuteTarget
+      purposes: readonly GrantPurpose[]
+      form?: PlatformForm
+    }
   >()
-  const add = (unit: ExecuteTarget, purposes: readonly GrantPurpose[]) => {
+  const add = (
+    unit: ExecuteTarget,
+    purposes: readonly GrantPurpose[],
+    form?: PlatformForm
+  ) => {
     if (!groups.has(unit.identity))
-      groups.set(unit.identity, { unit, purposes })
+      groups.set(unit.identity, {
+        unit,
+        purposes,
+        ...(form === undefined ? {} : { form }),
+      })
   }
-  for (const { function: fn, form } of forms) {
+  for (const source of forms) {
+    const { function: fn, form } = source
     const named = units.filter(
       (u) =>
         u.class === "function" && u.schema === fn.schema && u.name === fn.name
@@ -121,7 +171,8 @@ function executeTargets(
       named.length === 1
         ? named[0]!
         : { ...fn, identity: functionIdentity(fn.schema, fn.name, []) },
-      PLATFORM_FORM_PURPOSES[form]
+      formPurposes(source),
+      form
     )
   }
   for (const { unit, declaration } of declared) add(unit, declaration.callers)

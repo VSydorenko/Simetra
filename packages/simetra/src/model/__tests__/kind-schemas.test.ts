@@ -21,6 +21,7 @@ import {
   PUBLIC_READ_PURPOSES,
   SESSION_CLAIMS_SETTING,
   PUBLIC_READ_ROLES,
+  STORAGE_MAX_BYTES,
 } from "../schemas"
 import { KIND_REGISTRY } from "../kinds/registry"
 import { unwrap } from "../format"
@@ -248,6 +249,77 @@ describe("catalogSchema", () => {
     expect(() =>
       catalogSchema.parse({ kind: "Catalog", name: "P", id: "nope" })
     ).toThrow()
+  })
+})
+
+describe("catalogSchema storage", () => {
+  const base = { kind: "Catalog", name: "Attachment" }
+  const storage = { maxBytes: 1024, mediaTypes: ["image/png"] }
+
+  function rulesOf(input: Record<string, unknown>) {
+    const result = catalogSchema.safeParse({ ...base, ...input })
+    return (result.error?.issues ?? []).map((i) => ({
+      rule: (i as { params?: { rule?: string } }).params?.rule,
+      path: i.path.join("/"),
+    }))
+  }
+
+  it("is optional and accepted with a limit and media types", () => {
+    expect(catalogSchema.parse(base).storage).toBeUndefined()
+    expect(catalogSchema.parse({ ...base, storage }).storage).toEqual(storage)
+  })
+
+  it.each([
+    ["role", { role: "users" }],
+    ["membership", { membership: { user: "user" } }],
+    ["rightsContainer", { rightsContainer: true }],
+    ["containerBinding", { containerBinding: "folder" }],
+    ["predefinedItems", { predefinedItems: [{ name: "Main" }] }],
+    ["hierarchyType", { hierarchyType: "FoldersAndItems" }],
+  ])("storage.incompatible with %s", (field, extra) => {
+    expect(rulesOf({ storage, ...extra })).toEqual([
+      { rule: "storage.incompatible", path: field },
+    ])
+  })
+
+  it("items-only hierarchy and owners stay compatible", () => {
+    expect(rulesOf({ storage, hierarchyType: "ItemsOnly" })).toEqual([])
+    expect(
+      rulesOf({ storage, owners: [{ kind: "Catalog", name: "Folder" }] })
+    ).toEqual([])
+  })
+
+  it.each([
+    ["empty list", []],
+    ["uppercase", ["Image/PNG"]],
+    ["parameter", ["text/plain; charset=utf-8"]],
+    ["no subtype", ["image"]],
+    ["duplicate", ["image/png", "image/png"]],
+  ])("storage.media-type rejects %s", (_name, mediaTypes) => {
+    expect(rulesOf({ storage: { maxBytes: 1, mediaTypes } })[0]?.rule).toBe(
+      "storage.media-type"
+    )
+  })
+
+  it.each([0, 1.5, STORAGE_MAX_BYTES + 1])(
+    "maxBytes %s is outside 1..STORAGE_MAX_BYTES",
+    (maxBytes) => {
+      expect(
+        catalogSchema.safeParse({
+          ...base,
+          storage: { maxBytes, mediaTypes: ["image/png"] },
+        }).success
+      ).toBe(false)
+    }
+  )
+
+  it("accepts the ceiling itself", () => {
+    expect(
+      catalogSchema.safeParse({
+        ...base,
+        storage: { maxBytes: STORAGE_MAX_BYTES, mediaTypes: ["a/b"] },
+      }).success
+    ).toBe(true)
   })
 })
 

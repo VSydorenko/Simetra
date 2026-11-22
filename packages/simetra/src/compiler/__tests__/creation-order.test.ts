@@ -82,7 +82,9 @@ async function order(entries: Record<string, unknown>): Promise<string[]> {
   const outbox = new Set([
     `table:${SIGNAL_OUTBOX.schema}.${SIGNAL_OUTBOX.name}`,
     ...result
-      .model!.sqlUnits.filter((u) => u.generator === "signalOutbox")
+      .model!.sqlUnits.filter(
+        (u) => u.generator === "signalOutbox" || u.generator === "storage"
+      )
       .map((u) => u.identity),
   ])
   return result

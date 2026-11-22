@@ -21,6 +21,27 @@ const fn = (args: string, shell = "SECURITY DEFINER") =>
 
 type Check = NonNullable<SqlFunctionDeclaration["check"]>
 
+const KIND_LABELS: Record<string, string> = {
+  Task: "task",
+  Users: "users",
+  Announcement: "announcement",
+  Box: "box",
+}
+
+/**
+ * Definer-функція з доказовим запобіжником першим оператором. Суддя
+ * `checkDeclaredGuards` судить кожну декларацію з `check` (спека §5.2, Р4),
+ * зокрема лише з викликачем `service`, тож випадки, що перевіряють саме форму
+ * `check`, несуть тіло, яке застосовує її: інакше їх рахувало б не те правило.
+ * `action` — рядок дії контракту (UUID для кастомної).
+ */
+const proved = (check: Check, args: string, action = check.action) => {
+  const target = check.scope ?? check.row
+  const guard =
+    check.scope === undefined ? "rights_require" : "rights_require_scope"
+  return `CREATE FUNCTION public.f(${args}) RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$BEGIN PERFORM simetra.${guard}('${action}', '${KIND_LABELS[check.object.name]}', ${target ?? "NULL"}); END$$;\n`
+}
+
 function files(
   check: Check,
   sql: string,
@@ -221,44 +242,44 @@ describe("sql.declaration-check-form", () => {
     expect(result.model).toBeUndefined()
   })
 
-  it.each<{ name: string; check: Check; sql: string }>([
+  it.each<{ name: string; check: Check; args: string }>([
     {
       name: "read of a scoped row",
       check: { action: "read", object: TASK, row: "p_row" },
-      sql: fn("p_row uuid"),
+      args: "p_row uuid",
     },
     {
       name: "an unnamed IN mode and a pg_catalog.uuid type",
       check: { action: "read", object: TASK, row: "p_row" },
-      sql: fn("IN p_row pg_catalog.uuid"),
+      args: "IN p_row pg_catalog.uuid",
     },
     {
       name: "read of a Users row (the visible-users boundary reads the key)",
       check: { action: "read", object: USERS, row: "p_row" },
-      sql: fn("p_row uuid"),
+      args: "p_row uuid",
     },
     {
       name: "create in a scope of a scoped object",
       check: { action: "create", object: TASK, scope: "p_scope" },
-      sql: fn("p_scope uuid"),
+      args: "p_scope uuid",
     },
     {
       name: "a read of a scope",
       check: { action: "read", object: TASK, scope: "p_scope" },
-      sql: fn("p_scope uuid"),
+      args: "p_scope uuid",
     },
     {
       name: "an object without carriers, no target",
       check: { action: "read", object: ANNOUNCEMENT },
-      sql: fn(""),
+      args: "",
     },
     {
       name: "create without a target on an object without carriers",
       check: { action: "create", object: ANNOUNCEMENT },
-      sql: fn(""),
+      args: "",
     },
-  ])("accepts $name", async ({ check, sql }) => {
-    const { result, forms } = await judged(check, sql)
+  ])("accepts $name", async ({ check, args }) => {
+    const { result, forms } = await judged(check, proved(check, args))
     expect(forms).toEqual([])
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
   })
@@ -364,9 +385,14 @@ describe("sql.declaration-check-form", () => {
           custom
         )
         expect(none.forms).toEqual([at("targetRequired")])
+        const rowCheck = { action, object: USERS, row: "p_row" } as const
         const row = await judged(
-          { action, object: USERS, row: "p_row" },
-          fn("p_row uuid"),
+          rowCheck,
+          proved(
+            rowCheck,
+            "p_row uuid",
+            action === "ban" ? uuid(7904) : action
+          ),
           undefined,
           custom
         )
@@ -395,9 +421,10 @@ describe("sql.declaration-check-form", () => {
     it.each(["create", "read"])(
       "%s without a target is accepted",
       async (action) => {
+        const check = { action, object: BOX }
         const { forms, result } = await judged(
-          { action, object: BOX },
-          fn(""),
+          check,
+          proved(check, ""),
           undefined,
           box
         )
@@ -429,9 +456,10 @@ describe("sql.declaration-check-form", () => {
     const row = { action: "read", object: USERS, row: "p_row" } as const
     const withRow = await judged(row, fn("p_row uuid"), undefined, noRoles)
     expect(withRow.forms).toEqual([at("targetForbidden")])
+    const noneCheck = { action: "read", object: USERS } as const
     const none = await judged(
-      { action: "read", object: USERS },
-      fn(""),
+      noneCheck,
+      proved(noneCheck, ""),
       undefined,
       noRoles
     )
@@ -468,7 +496,8 @@ describe("sql.declaration-check-form", () => {
   })
 
   it("a custom action resolves by its name", async () => {
-    const all = files({ action: "approve", object: ANNOUNCEMENT }, fn(""))
+    const approve = { action: "approve", object: ANNOUNCEMENT }
+    const all = files(approve, proved(approve, "", uuid(7901)))
     const path = "documents/Announcement/Announcement.meta.json"
     const object = JSON.parse(all.get(path)!)
     all.set(

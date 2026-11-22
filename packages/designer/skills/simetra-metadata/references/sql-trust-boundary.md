@@ -66,6 +66,14 @@ into metadata or a migration.
 - A temporary table of the body is `CREATE TEMP TABLE … ON COMMIT DROP`, and
   every later reference to it (`DROP`, DML, a read) is `pg_temp.<name>`: an
   unqualified name could hit a table of the same name in your schema.
+- A body leaves no session state behind its transaction: a pooled connection
+  serves the next command of another user. A setting is `SET LOCAL` or
+  `set_config(…, true)` with the literal `true`; `SET` without `LOCAL`,
+  `RESET` and any other `set_config` are `sql.function-body-session-setting`.
+  A temporary table named after a type of `pg_catalog` (`name`, `uuid`,
+  `text`…) is `sql.function-body-temp-type`: rename it. A session-level
+  advisory lock or `setseed` is `sql.function-body-session-builtin`: take
+  `pg_advisory_xact_lock` instead.
 
 Application SQL anywhere (a body, a view, a policy, a domain `CHECK`, a
 default) calls only the platform and generated functions that read, such as
@@ -95,17 +103,33 @@ model they call, by an allowlist (`sql.head-not-allowed`):
 
 - **A handler only checks.** It reads with `SELECT … INTO`, assigns fields of
   `NEW`, raises errors and returns `NEW` or `NULL`. It writes no table and runs
-  no `EXECUTE`, `CALL`, `SET` or cursor. A `beforeWrite` handler on a provider
+  no `EXECUTE`, `CALL`, `SET`, cursor or `ASSERT` (a session setting can
+  switch `ASSERT` off: check with `IF … THEN RAISE`). A `beforeWrite` handler on a provider
   table (`auth.users`) does not assign `NEW` either. A write the handler did
   belongs to a command or a TypeScript hook.
 - **Everything else is a query function.** `LANGUAGE sql`, a string body of
   exactly one `SELECT` (no `INTO`, no `FOR UPDATE`, no data-modifying `WITH`),
-  `SET search_path = ''` and no other `SET` option. It reads only qualified
+  `SET search_path = ''` and no other `SET` option except the pinned session
+  settings below. It reads only qualified
   tables of kinds, adopted tables and views of the model, and calls only query
   functions of the model, generated functions that read,
   `simetra.current_user_id()`, the listed provider functions and allowlisted
   builtins. A function of a kind module that is not of this form belongs in
   a shared `sql/` file, called by nothing inside a command.
+- **A scope set function, an access dimension values function and a policy
+  function pin the session settings** the client could choose (time zone,
+  date, interval, number, money, `bytea` and XML styles, text search
+  configuration) with `SET` options of their `CREATE FUNCTION`; the hint of
+  `sql.head-settings` lists the exact options (`fix` does not add them). A
+  function they call sets none of these to another value.
+- **A verbatim policy expression runs in the client's settings**, and so does
+  what it reads: a view and a function that does not pin the settings itself.
+  There `current_date`, `localtime` and a conversion to `date`, `time`,
+  `timetz` or `timestamp` without `now() AT TIME ZONE '<zone>'`, or to
+  `timestamptz` from a value without a zone, is `sql.head-not-allowed`
+  (`setting`, `TimeZone`).
+- **A cast to a `reg*` type** names an object by text; only a string literal
+  cast to `regclass` (read as that relation) is allowed in a head.
 
 ## Reading `sql.head-not-allowed`
 

@@ -38,6 +38,8 @@ import { dropRoles, inTarget as loadTarget, query } from "./support/db"
 import { installMismatch, installObjects } from "./support/platform-install"
 import { leftoverShadows, provisionedShadows } from "./support/shadows"
 import { snapshotOf } from "./helpers/catalog"
+import { connectMcp } from "./helpers/mcp-client"
+import type { McpToolOptions } from "../mcp/tools"
 
 /**
  * Спільна підготовка тестів `introspect` і `diff` над живою базою
@@ -60,6 +62,13 @@ export function useDatabaseToolsCleanup(): void {
 /** Прибирання, що виконається після поточного тесту. */
 export const onCleanup = (dispose: () => Promise<void>): void => {
   disposers.push(dispose)
+}
+
+/** Клієнт MCP до каталогу інструментів; закривається після тесту. */
+export async function connectMcpClient(o: McpToolOptions) {
+  const client = await connectMcp(o)
+  onCleanup(() => client.close())
+  return client
 }
 
 /** Корінь проєкту з `node_modules/simetra`; тека метаданих ще не існує. */

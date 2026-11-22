@@ -56,6 +56,7 @@ export function memberCheckFunction(
       ...inputLines({
         table,
         param: "p_member",
+        target: "v_in",
         shape: "p_member",
         keys,
         tabular: false,

@@ -27,6 +27,8 @@ export const EVOLUTION = {
   object: { from: "Ticket", to: "Issue" },
   attribute: { from: "region", to: "area" },
   section: { from: "checklist", to: "todo" },
+  /** Реквізит усередині ТЧ: його перейменування форми передачі не міняє. */
+  lineAttribute: { from: "region", to: "district" },
   /** Новий необов'язковий реквізит і шапки, і ТЧ. */
   added: "memo",
   /** Реквізит шапки, видалений на фазі розширення. */
@@ -82,7 +84,7 @@ export async function evolvedCatalogs(): Promise<{
   aPrime: RuntimeCatalog
 }> {
   const files = policyDomain(writeRoles(), adminRoles(), commandCoreLayer())
-  const { object, attribute, section, removed } = EVOLUTION
+  const { object, attribute, section, lineAttribute, removed } = EVOLUTION
   let next = await applied(
     files,
     renameElement(files, {
@@ -102,6 +104,17 @@ export async function evolvedCatalogs(): Promise<{
       })
     )
   }
+  next = await applied(
+    next,
+    renameElement(next, {
+      target: {
+        kind: "Catalog",
+        name: object.to,
+        element: [section.to, lineAttribute.from],
+      },
+      newName: lineAttribute.to,
+    })
+  )
   // Фаза розширення прибирає реквізит з моделі, а не з бази (платформна
   // спека §7): каталог рантайму будується з моделі, тож у ньому реквізиту
   // вже немає — окремого стану «колонка лишилась» каталог не має.

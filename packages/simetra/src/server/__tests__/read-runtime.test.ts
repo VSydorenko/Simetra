@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import {
+  PINNED_SESSION_SETTINGS,
   READ_BATCH_MAX,
   runtimeCatalogSchema,
   type ReadPart,
@@ -496,14 +497,15 @@ describe("CommandRuntime.read", () => {
     expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
   })
 
-  it("destroys the connection on a read error without SQLSTATE and logs it", async () => {
+  // Р11: без SQLSTATE і без утрати з'єднання — вада, не недоступність.
+  it("destroys the connection on a read error without SQLSTATE, maps it to command.internal and logs it", async () => {
     const raw = new TypeError("driver bug")
     const { db, runtime, log } = await setup((text) =>
       isRead(text) ? { error: raw } : undefined
     )
     expect(
       await failureOf(runtime.read(session, { object: RIGHTS, id: OTHER }))
-    ).toEqual({ code: "command.unavailable" })
+    ).toEqual({ code: "command.internal" })
     expect(db.calls).toEqual(failed(byId, [{ release: true }]))
     expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
   })
@@ -765,7 +767,7 @@ describe("CommandRuntime.readParts", () => {
     ])
   })
 
-  it("sets up the transaction in one statement: claims, time, bytea, limits, the role last", async () => {
+  it("sets up the transaction in one statement: claims, the pinned settings, limits, the role last", async () => {
     const { db, runtime } = await setup(cards)
     await runtime.readParts(session, [card(OTHER)])
     const { text } = db.calls[2] as { text: string }
@@ -773,8 +775,8 @@ describe("CommandRuntime.readParts", () => {
       [...text.matchAll(/set_config\('([^']+)'/g)].map((m) => m[1])
     ).toEqual([
       "request.jwt.claims",
-      "TimeZone",
-      "bytea_output",
+      // Закріплені налаштування — перелік T0 у його порядку (Р17).
+      ...PINNED_SESSION_SETTINGS.map((s) => s.name),
       "statement_timeout",
       "transaction_timeout",
       "role",
@@ -1233,7 +1235,7 @@ describe("CommandRuntime.readParts", () => {
       ])
     })
 
-    const LOWER = "SELECT set_config('statement_timeout'"
+    const LOWER = "SELECT pg_catalog.set_config('statement_timeout'"
     const lowerings = (calls: readonly unknown[]) =>
       calls.filter(
         (c) =>

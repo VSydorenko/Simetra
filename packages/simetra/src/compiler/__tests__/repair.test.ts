@@ -19,7 +19,15 @@ import {
 import { completeAndCompile } from "../operations/fix"
 import { compileInput } from "../operations/refuse"
 import { counterpartyMapping, promotionProject } from "./fixtures/promotion"
-import { acceptDebt, catalog, metaFiles, project, uuid } from "./helpers"
+import {
+  acceptDebt,
+  catalog,
+  metaFiles,
+  project,
+  SCOPE_FUNCTIONS_FILE,
+  uuid,
+} from "./helpers"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 function counter(start = 870_000): () => string {
   let n = start
@@ -211,7 +219,7 @@ describe("mutations on a folder with repair-class errors only", () => {
     const files = repairOnly({
       // Без явного `none` новий вид скоупу вимагав би скоупу від `Item`.
       [ITEM]: catalog("Item", { scope: "none" }),
-      [TEAM_SQL]: `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n`,
+      [TEAM_SQL]: `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`,
       [TEAM_FUNCTIONS]: JSON.stringify({
         functions: [
           {
@@ -250,6 +258,51 @@ describe("mutations on a folder with repair-class errors only", () => {
         .filter((d) => d.code === "sql.declaration-platform-form-widens")
         .map((d) => d.params?.roles)
     ).toEqual(["user, command"])
+  })
+
+  // Мутація: перехід без `declineWidening` для всіх змінених записів —
+  // чужа зміна видаляє запис, який `fix` відхилив, і `EXECUTE` розширюється.
+  it("an unrelated add keeps a declined declaration of an existing form", async () => {
+    const files = repairOnly({
+      "project.meta.json": project({
+        scopeKinds: [
+          {
+            id: uuid(870_911),
+            name: "team",
+            physicalName: "team_id",
+            root: {
+              external: { schema: "public", table: "teams", column: "id" },
+            },
+            setFunction: { schema: "public", name: "team_ids" },
+          },
+        ],
+      }),
+      [ITEM]: catalog("Item", { scope: "none" }),
+      [TEAM_SQL]: `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`,
+      [TEAM_FUNCTIONS]: JSON.stringify({
+        functions: [
+          {
+            id: uuid(870_912),
+            function: { name: "team_ids" },
+            callers: ["service"],
+          },
+        ],
+      }),
+    })
+    // Функція множини — авторська (`team.sql`): спільний файл фікстури
+    // створив би другу.
+    files.delete(SCOPE_FUNCTIONS_FILE)
+    const result = await addElement(files, addNote, options())
+    expect(result.changes.map((c) => c.path)).not.toContain(TEAM_FUNCTIONS)
+    expect(keys(result)).toContainEqual([
+      "sql.declaration-platform-form",
+      "public",
+      "team_ids",
+    ])
+    const [warning] = result.diagnostics.filter(
+      (d) => d.code === "sql.declaration-platform-form-widens"
+    )
+    expect(warning!.params).toMatchObject({ name: "team_ids", declined: 1 })
   })
 
   it("rename refuses", async () => {

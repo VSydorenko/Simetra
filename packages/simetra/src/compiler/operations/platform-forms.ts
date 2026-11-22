@@ -3,10 +3,12 @@ import {
   sqlFunctionsFileSchema,
   type SqlFunctionDeclaration,
 } from "simetra/model"
+import { formPolicies } from "../compile"
 import { diagnostic, type Diagnostic } from "../diagnostics"
 import { readFiles } from "../pipeline"
 import { platformFormFunctions } from "../sql/declarations"
 import { qualifiedName } from "../sql/identity"
+import type { PolicyFunctions } from "../sql/policy-functions"
 
 /** Файли після переходу й попередження про ширші призначення форм. */
 export interface PlatformFormTransition {
@@ -26,9 +28,22 @@ export interface PlatformFormTransition {
  * декларації, перехід відкриває функцію ролям, яких автор не називав, —
  * попередження `sql.declaration-platform-form-widens` з переліком доданих
  * ролей. Функція значень виміру не розширює ніколи: її призначення порожні.
+ *
+ * `declineWidening` — режим автоматичного ремонту (`fix`, `declare-function`):
+ * автоматика права не розширює, тож запис, перехід якого розширив би
+ * `EXECUTE`, лишається в файлі (з попередженням `declined`), а решта записів
+ * того ж файлу переходить як звичайно — суд над кожним записом окремо.
+ * `except` — ключі функцій (`qualifiedName`), до яких `declineWidening` не
+ * застосовується. `policies` — функції політик теки `files` (`formPolicies`):
+ * декларація функції політики переходить у форму так само.
  */
 export function toPlatformForms(
-  files: ReadonlyMap<string, string>
+  files: ReadonlyMap<string, string>,
+  policies: PolicyFunctions,
+  {
+    declineWidening = false,
+    except,
+  }: { declineWidening?: boolean; except?: ReadonlySet<string> } = {}
 ): PlatformFormTransition {
   const result = new Map(files)
   const diagnostics: Diagnostic[] = []
@@ -36,7 +51,7 @@ export function toPlatformForms(
   // Зламаний проєкт чи файл декларацій не судиться тут: причину назве
   // компіляція результату.
   if (project === undefined) return { files: result, diagnostics }
-  const forms = platformFormFunctions(objects, project)
+  const forms = platformFormFunctions(objects, project, policies)
   for (const parsed of functionsFiles) {
     const kept: SqlFunctionDeclaration[] = []
     for (const declaration of parsed.functions) {
@@ -61,8 +76,13 @@ export function toPlatformForms(
             function: `${schema}.${name}`,
             form: form.form,
             roles: added.join(", "),
+            ...(declineWidening && !except?.has(qualifiedName(schema, name))
+              ? { declined: 1 }
+              : {}),
           })
         )
+        if (declineWidening && !except?.has(qualifiedName(schema, name)))
+          kept.push(declaration)
       }
     }
     if (kept.length === parsed.functions.length) continue
@@ -77,4 +97,35 @@ export function toPlatformForms(
     result.set(parsed.file, formatSqlFunctionsFile({ ...raw, functions: kept }))
   }
   return { files: result, diagnostics }
+}
+
+/**
+ * Перехід у форми платформи для мутацій (`create`, `add`, `declare-function`):
+ * без відмови від розширення — лише функції, що стали формами саме цією
+ * зміною (форми після мінус форми до); решта записів — з `declineWidening`:
+ * чужа зміна не відкриває `EXECUTE` мовчки. Розширення перехідним записом
+ * лишається попередженням з ролями.
+ */
+export async function toPlatformFormsAfter(
+  before: ReadonlyMap<string, string>,
+  changed: ReadonlyMap<string, string>
+): Promise<PlatformFormTransition> {
+  const formKeys = (
+    files: ReadonlyMap<string, string>,
+    policies: PolicyFunctions
+  ) => {
+    const { project, objects } = readFiles(files)
+    return project === undefined
+      ? new Set<string>()
+      : new Set(platformFormFunctions(objects, project, policies).keys())
+  }
+  const policies = await formPolicies(changed)
+  const was = formKeys(before, await formPolicies(before))
+  const became = new Set(
+    [...formKeys(changed, policies)].filter((k) => !was.has(k))
+  )
+  return toPlatformForms(changed, policies, {
+    declineWidening: true,
+    except: became,
+  })
 }

@@ -64,6 +64,7 @@ export {
   type ValueType,
 } from "./value-type"
 export { SCHEMA_RULES, type SchemaRule } from "./rules"
+export { STORAGE_MAX_BYTES, storageSchema, type Storage } from "./storage"
 
 // Metadata types
 export {
@@ -176,6 +177,7 @@ export {
   COMMAND_SETTING,
   RIGHTS_MAINTENANCE_SETTING,
   LOGIN_ROLE_PARENTS,
+  PLATFORM_ROLES_NOT_PURPOSES,
   LOGIN_ROLE_SETTINGS,
   LOGIN_ROLE_REQUEST_PURPOSES,
   loginRoleParentNames,
@@ -183,6 +185,8 @@ export {
   PLATFORM_ROLES,
   PLATFORM_SETTING_PREFIX,
   PROTECTED_SESSION_SETTINGS,
+  HEAD_READABLE_SETTINGS,
+  PINNED_SESSION_SETTINGS,
   PROVIDER_API_ROLES,
   PROVIDER_LOGIN_ROLES,
   PROVIDER_OWNER_ROLES,

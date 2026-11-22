@@ -11,6 +11,7 @@ export const TOOL_NAMES = [
   "fix",
   "create",
   "add",
+  "declare-function",
   "rename",
   "delete",
   "promote",

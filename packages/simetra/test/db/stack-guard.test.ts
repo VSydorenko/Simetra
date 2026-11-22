@@ -657,6 +657,49 @@ describe("the better_auth check on the supabase stack", () => {
   })
 })
 
+describe("the bucket snapshot on the supabase stack", () => {
+  beforeEach(() => {
+    vi.stubEnv(PROVIDER_ENV, "supabase")
+    for (const name of [
+      "SIMETRA_TEST_DATABASE_URL",
+      "SIMETRA_TEST_SUPERUSER_URL",
+    ]) {
+      vi.stubEnv(name, "")
+      delete process.env[name]
+    }
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it("keeps only run-<tag> rows of storage.buckets and names the Supabase cleanup", async () => {
+    const { factory } = fakeConnections((sql) => {
+      if (sql.includes("'supabase_admin'")) return [{ present: true }]
+      if (sql.startsWith("select current_user as role"))
+        return [{ role: PROVIDER_OWNER_ROLES.supabase, superuser: false }]
+      if (sql.includes("storage.buckets"))
+        return [
+          { name: "run-abc123" },
+          { name: "run-x" },
+          { name: "simetra-dev" },
+        ]
+      return []
+    })
+    const before = await startChecks("supabase", {
+      client: factory,
+      exec: noDocker,
+      fetch: noBuckets,
+    })
+    expect(before.snapshot.buckets).toEqual(["run-abc123"])
+    expect(
+      leakMessage(
+        [{ kind: "buckets", name: "run-abc123", change: "added" }],
+        "supabase"
+      )
+    ).toContain("bucket run-abc123: empty and delete in Supabase Storage")
+  })
+})
+
 describe("acquireLock", () => {
   // Два DB-проєкти в одному процесі ділять env прогону, а свого замка процес
   // не дочекався б — замість 45 хвилин очікування одразу відмова

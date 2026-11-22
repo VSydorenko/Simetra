@@ -654,6 +654,145 @@ describe("ensurePostgresCluster", () => {
     expect(calls.filter((c) => c.end === "commit")).toEqual([])
   })
 
+  // Наявна роль входу без нового батька профілю: `roles` доповнює пару §6.2;
+  // зайвий батько й інша форма членства — відмова, не «виправлення».
+  describe("a present login role and its parents", () => {
+    const login = set.roles.login.find((l) =>
+      l.memberOf.includes(PLATFORM_ROLES.files)
+    )!
+    const changed = (
+      change: (row: Record<string, unknown>) => Record<string, unknown>
+    ) => {
+      const present = presentCluster()
+      return trapPort((sql) =>
+        sql.includes("WITH RECURSIVE reach")
+          ? present(sql).map((r) => (r.name === login.name ? change(r) : r))
+          : present(sql)
+      )
+    }
+    type Membership = { role: string; inherit: boolean }
+    const withParents = (edit: (parents: Membership[]) => Membership[]) =>
+      changed((r) => ({
+        ...r,
+        memberOf: edit(r.memberOf as Membership[]),
+      }))
+
+    it("adds the missing parent in the pair form and nothing else", async () => {
+      const { dbs, calls } = withParents((parents) =>
+        parents.filter((m) => m.role !== PLATFORM_ROLES.files)
+      )
+      const result = await ensurePostgresCluster(dbs, conns, set)
+      expect(result).toMatchObject({
+        ok: true,
+        value: {
+          created: [],
+          added: [{ role: login.name, parents: [PLATFORM_ROLES.files] }],
+        },
+      })
+      expect(
+        calls
+          .filter((c) => c.end === "commit")
+          .flatMap((c) => c.sql)
+          .filter((q) => /^GRANT \S+ TO /.test(q) && q.includes("INHERIT"))
+      ).toEqual([
+        `GRANT ${PLATFORM_ROLES.files} TO ${login.name} WITH INHERIT FALSE, SET TRUE`,
+      ])
+    })
+
+    // Між фазою читання й записом інший адміністратор додав небезпечне
+    // членство: фаза запису звіряє форму знову в тій самій транзакції
+    it("refuses and grants nothing when the role turns unsafe between the phases", async () => {
+      const present = presentCluster()
+      let reads = 0
+      const { dbs, calls } = trapPort((sql) => {
+        if (!sql.includes("WITH RECURSIVE reach")) return present(sql)
+        reads += 1
+        return present(sql)
+          .map((r) =>
+            r.name === login.name
+              ? {
+                  ...r,
+                  memberOf: (r.memberOf as Membership[]).filter(
+                    (m) => m.role !== PLATFORM_ROLES.files
+                  ),
+                }
+              : r
+          )
+          .map((r) =>
+            // Перше читання — чисте; наступні (фаза запису) — з зайвим батьком
+            reads > 1 && r.name === login.name
+              ? {
+                  ...r,
+                  memberOf: [
+                    ...(r.memberOf as Membership[]),
+                    {
+                      ...(r.memberOf as Membership[])[0]!,
+                      role: "pg_read_all_data",
+                    },
+                  ],
+                }
+              : r
+          )
+      })
+      expect(await ensurePostgresCluster(dbs, conns, set)).toMatchObject({
+        ok: false,
+        error: [
+          {
+            code: "plan.platform-role-shape",
+            params: {
+              role: login.name,
+              violation: "member-of:pg_read_all_data",
+            },
+          },
+        ],
+      })
+      expect(
+        calls.flatMap((c) => c.sql).filter((q) => q.startsWith("GRANT"))
+      ).toEqual([])
+    })
+
+    it("refuses an extra parent before it writes", async () => {
+      const { dbs, calls } = withParents((parents) => [
+        ...parents,
+        { ...parents[0]!, role: "pg_read_all_data" },
+      ])
+      expect(await ensurePostgresCluster(dbs, conns, set)).toMatchObject({
+        ok: false,
+        error: [
+          {
+            code: "plan.platform-role-shape",
+            params: {
+              role: login.name,
+              violation: "member-of:pg_read_all_data",
+            },
+          },
+        ],
+      })
+      expect(calls.filter((c) => c.end === "commit")).toEqual([])
+    })
+
+    it("refuses a parent with INHERIT TRUE instead of repairing it", async () => {
+      const { dbs, calls } = withParents((parents) =>
+        parents.map((m) =>
+          m.role === PLATFORM_ROLES.files ? { ...m, inherit: true } : m
+        )
+      )
+      expect(await ensurePostgresCluster(dbs, conns, set)).toMatchObject({
+        ok: false,
+        error: [
+          {
+            code: "plan.platform-role-shape",
+            params: {
+              role: login.name,
+              violation: `membership-option:${PLATFORM_ROLES.files}`,
+            },
+          },
+        ],
+      })
+      expect(calls.filter((c) => c.end === "commit")).toEqual([])
+    })
+  })
+
   describe("the grants of the identity table", () => {
     const grantSql = (calls: { sql: string[] }[]) =>
       calls

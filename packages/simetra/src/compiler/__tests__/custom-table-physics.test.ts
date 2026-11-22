@@ -332,6 +332,9 @@ describe("CustomTable physics round-trip", () => {
     // без неї хеш той самий.
     // Далі стандартне найменування довідника стало `indexed` — пошуковий
     // індекс `(…, description, id)` у кожній таблиці довідника.
+    // Далі додано довідник-файл `Attachment` (`storage`) — нова таблиця
+    // `attachment` і таблиці сховища файлів `simetra.storage_*`; без них хеш
+    // той самий.
     const derived = {
       tables: physical.tables.filter(
         (t) =>
@@ -343,6 +346,10 @@ describe("CustomTable physics round-trip", () => {
             "role_grant",
             "source_role",
             "signal_outbox",
+            "storage_usage",
+            "storage_quota",
+            "storage_pending",
+            "attachment",
           ].includes(t.name)
       ),
       enumTypes: physical.enumTypes,

@@ -1,7 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest"
-import { PROVIDER_API_ROLES, type DatabaseProvider } from "simetra/model"
+import {
+  PROVIDER_API_ROLES,
+  type DatabaseProvider,
+  type GrantPurpose,
+} from "simetra/model"
 import { compile } from "../compile"
 import {
+  callersOfRole,
   executeGrants,
   grantRole,
   sequenceRevokes,
@@ -140,6 +145,7 @@ describe("supabase grants are unchanged", () => {
       .filter(
         (u) =>
           u.generator !== "signalOutbox" &&
+          u.generator !== "storage" &&
           u.generator !== "signal" &&
           u.generator !== "rightsClientSnapshot" &&
           u.generator !== "rightsSignal"
@@ -147,5 +153,51 @@ describe("supabase grants are unchanged", () => {
       .map((u) => u.sql.trim())
       .filter(isGrant)
     expect(grants).toEqual(supabaseGrants)
+  })
+})
+
+describe("callersOfRole: the inverse of grantRole", () => {
+  const PURPOSES: GrantPurpose[] = ["user", "anonymous", "service", "command"]
+
+  // Кожна пара `grantRole` — туди й назад; призначення без ролі в профілі
+  // (`service` у postgres) пари не має
+  it.each(
+    (["supabase", "postgres"] as const).flatMap((provider) =>
+      PURPOSES.map((purpose) => [provider, purpose] as const)
+    )
+  )("%s %s: role maps back to the purpose", (provider, purpose) => {
+    const role = grantRole(purpose, provider)
+    if (role === null) return
+    expect(callersOfRole(role, provider)).toEqual([purpose])
+  })
+
+  it("PUBLIC gives every purpose that has a role in the profile", () => {
+    expect(callersOfRole("PUBLIC", "supabase")).toEqual([
+      "user",
+      "anonymous",
+      "service",
+      "command",
+    ])
+    // postgres без сервісної ролі: `service` не потрапляє
+    expect(callersOfRole("PUBLIC", "postgres")).toEqual([
+      "user",
+      "anonymous",
+      "command",
+    ])
+  })
+
+  it("the role without a session maps to anonymous", () => {
+    expect(callersOfRole("anon", "supabase")).toEqual(["anonymous"])
+    expect(callersOfRole("simetra_anon", "postgres")).toEqual(["anonymous"])
+  })
+
+  it.each([
+    ["signalConsumer", "simetra_signal_consumer", "postgres"],
+    ["an application role", "app_reader", "postgres"],
+    ["another provider's role", "authenticated", "postgres"],
+    ["another provider's role", "simetra_user", "supabase"],
+    ["a role absent in the profile", "service_role", "postgres"],
+  ] as const)("%s (%s) on %s has no caller", (_, role, provider) => {
+    expect(callersOfRole(role, provider)).toBeUndefined()
   })
 })

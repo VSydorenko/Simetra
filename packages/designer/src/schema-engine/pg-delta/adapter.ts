@@ -36,6 +36,7 @@ import {
   type EnginePlan,
   type EngineScope,
   type EngineSetting,
+  type ExecuteFacts,
   type Extracted,
   type LockedTable,
   type SchemaEngine,
@@ -52,6 +53,7 @@ import {
   censusClassOfFact,
   censusClassOfUnmodeledKind,
 } from "./census-facts"
+import { readExecuteFacts } from "../execute-facts"
 import { readExtensionComments } from "../extension-comments"
 import { readOnlyQuery, readOnlyTransactionPool } from "../read-only"
 import {
@@ -578,6 +580,55 @@ export async function extractOnTransactionClient(
   return extracted
 }
 
+/**
+ * Extract і факти `EXECUTE` в одному знімку (спека декларацій функцій §5.5,
+ * Р11): одна транзакція `REPEATABLE READ READ ONLY` на одному клієнті, extract
+ * через `extractOnTransactionClient`, факти — тим самим клієнтом після нього;
+ * транзакція відкочується. Запасного варіанта «до й після» немає: він не ловить
+ * зміни між двома читаннями. Відбиток прав знімка звіряється зі свіжим
+ * каталогом на другому з'єднанні того самого пулу (`readExecuteFacts`).
+ * `afterExtract` — шов тесту: зміна, зроблена іншим з'єднанням між extract і
+ * фактами, у знімок не потрапляє.
+ */
+export async function extractWithExecuteFacts(
+  db: DbConnection,
+  scope: EngineScope,
+  afterExtract?: () => Promise<void>
+): Promise<{ extracted: Extracted; facts: ExecuteFacts }> {
+  const pool = writablePool(db.url)
+  try {
+    const client = await pool.connect()
+    client.on("error", () => {})
+    let broken = false
+    try {
+      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+      const extracted = await extractOnTransactionClient(client, scope)
+      await afterExtract?.()
+      // Свіже з'єднання береться, поки клієнт знімка зайнятий: пул не віддасть
+      // те саме, тож відбиток перечитується поза знімком
+      const fresh = await pool.connect()
+      fresh.on("error", () => {})
+      let facts: ExecuteFacts
+      try {
+        facts = await readExecuteFacts(client, fresh, scope)
+      } finally {
+        fresh.release()
+      }
+      await client.query("ROLLBACK")
+      return { extracted, facts }
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {
+        broken = true
+      })
+      throw error
+    } finally {
+      client.release(broken)
+    }
+  } finally {
+    await pool.end()
+  }
+}
+
 /** Помилки бажаного стану (засів, порожній SQL, завантаження) — не винятки, а результат. */
 function shadowFailure(error: unknown): EngineDiagnostic[] | undefined {
   if (error instanceof ShadowLoadError)
@@ -1028,6 +1079,8 @@ export function createPgDeltaEngine(): SchemaEngine {
         await pool.end()
       }
     },
+
+    extractWithExecuteFacts: (db, scope) => extractWithExecuteFacts(db, scope),
 
     plan(source, target, scope, o) {
       const from = asOwnCatalog(source)

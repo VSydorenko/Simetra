@@ -40,6 +40,95 @@ describe("operationSchema", () => {
       false,
     ],
     [
+      "update with expectedValues equal in keys to values",
+      {
+        action: "update",
+        object: OBJECT,
+        id: ID,
+        expectedVersion: 1,
+        values: { a: 2 },
+        expectedValues: { a: 1 },
+      },
+      true,
+    ],
+    [
+      "update with expectedValues without values",
+      {
+        action: "update",
+        object: OBJECT,
+        id: ID,
+        expectedVersion: 1,
+        expectedValues: { a: 1 },
+      },
+      false,
+    ],
+    [
+      "update with empty expectedValues and values",
+      {
+        action: "update",
+        object: OBJECT,
+        id: ID,
+        expectedVersion: 1,
+        values: {},
+        expectedValues: {},
+      },
+      false,
+    ],
+    [
+      "update with expectedValues keys differing from values",
+      {
+        action: "update",
+        object: OBJECT,
+        id: ID,
+        expectedVersion: 1,
+        values: { a: 2, b: 3 },
+        expectedValues: { a: 1 },
+      },
+      false,
+    ],
+    [
+      "update with expectedValues and tabularSections",
+      {
+        action: "update",
+        object: OBJECT,
+        id: ID,
+        expectedVersion: 1,
+        values: { a: 2 },
+        expectedValues: { a: 1 },
+        tabularSections: { lines: [] },
+      },
+      false,
+    ],
+    [
+      "update with expectedValues and deleteIds",
+      {
+        action: "update",
+        object: OBJECT,
+        id: ID,
+        expectedVersion: 1,
+        values: { a: 2 },
+        expectedValues: { a: 1 },
+        tabularSections: { lines: [] },
+        deleteIds: { lines: [ID] },
+      },
+      false,
+    ],
+    // Лише гілка `deleteIds` правила `expectedValues`: порожній `deleteIds`
+    // не називає секції, тож правило «секція з tabularSections» мовчить.
+    [
+      "update with expectedValues and an empty deleteIds",
+      {
+        action: "update",
+        object: OBJECT,
+        id: ID,
+        expectedVersion: 1,
+        values: { a: 2 },
+        expectedValues: { a: 1 },
+        deleteIds: {},
+      },
+      false,
+    ],
+    [
       "update with creatorMember",
       {
         action: "update",

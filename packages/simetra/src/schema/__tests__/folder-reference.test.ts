@@ -55,6 +55,9 @@ function fakeEngine(): SchemaEngine & { shadows: number } {
         unpopulated: [],
       }
     },
+    extractWithExecuteFacts() {
+      throw new Error("this engine reads no EXECUTE facts")
+    },
     plan(): EnginePlan {
       throw new Error("the folder reference builds no plan")
     },

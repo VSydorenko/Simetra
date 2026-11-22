@@ -18,6 +18,7 @@ import {
   withoutAccess,
   withoutMechanics,
 } from "./helpers"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 const SALE_SQL = "documents/Sale/Sale.sql"
 const TABLE_SQL = "custom-tables/T/T.sql"
@@ -538,8 +539,10 @@ describe("kind module: closed forms only", () => {
           [ERROR, "functionOption", C],
         ],
         [
-          "SET ROLE",
-          debtBody("SET ROLE postgres;"),
+          // Локальна форма: нелокальний `SET` — помилка будь-де, борг включно
+          // (`sql.function-body-session-setting`), а тут судиться роль.
+          "SET LOCAL ROLE",
+          debtBody("SET LOCAL ROLE postgres;"),
           [WARNING, "setStatement", "role"],
         ],
         [
@@ -706,6 +709,93 @@ describe("kind module: closed forms only", () => {
       ).toEqual([[ERROR, "setStatement", "session_replication_role"]])
     })
 
+    // Р18: `search_path` захищений, як платформний префікс: у боргу — помилка, не
+    // попередження; опція оболонки `SET search_path = ''` — не запис (І7).
+    it.each([
+      ["SET search_path = public;", "setStatement"],
+      ["SET LOCAL search_path = public;", "setStatement"],
+      ["RESET search_path;", "setStatement"],
+      ["PERFORM set_config('search_path', 'public', true);", "setConfig"],
+    ])("%s in debt is an error", async (statement, form) => {
+      expect(
+        sessionWrites(await diagnostics({ [TABLE_SQL]: debtBody(statement) }))
+      ).toEqual([[ERROR, form, "search_path"]])
+    })
+
+    it("a definer function with the search_path option and no body write passes", async () => {
+      expect(
+        sessionWrites(
+          await diagnostics({
+            [SHARED_SQL]: shell(
+              "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''"
+            ),
+          })
+        )
+      ).toEqual([])
+    })
+
+    // Р18: схема платформи в опції `search_path` будь-якої функції, боргової
+    // теж, — помилка: інакше її тіло кликало б `file_attach` без схеми.
+    it.each([
+      ["a debt module", TABLE_SQL],
+      ["a shared file", SHARED_SQL],
+    ])(
+      "%s: search_path naming the platform schema is an error",
+      async (_w, file) => {
+        for (const path of [
+          "simetra",
+          `"SIMETRA", pg_temp`,
+          "public, simetra",
+        ]) {
+          expect(
+            sessionWrites(
+              await diagnostics({
+                [file]: shell(
+                  `LANGUAGE sql SECURITY DEFINER SET search_path = ${path}`
+                ),
+              })
+            )
+          ).toEqual([[ERROR, "functionOption", "search_path"]])
+        }
+      }
+    )
+
+    // Функція, що не є боргом, відмовляється без імені налаштування в параметрах.
+    it("an invoker function with search_path = simetra is refused", async () => {
+      expect(
+        sessionWrites(
+          await diagnostics({
+            [TABLE_SQL]: shell(
+              "LANGUAGE sql STABLE SET search_path = simetra",
+              "SELECT 1"
+            ),
+          })
+        )
+      ).toEqual([[ERROR, "functionOption", undefined]])
+    })
+
+    it("a debt function with search_path = public passes", async () => {
+      expect(
+        sessionWrites(
+          await diagnostics({
+            [TABLE_SQL]: shell(
+              "LANGUAGE sql SECURITY DEFINER SET search_path = public"
+            ),
+          })
+        )
+      ).toEqual([])
+    })
+
+    it("a definer function that sets search_path in its body is refused", async () => {
+      const found = await diagnostics({
+        [SHARED_SQL]: shell(
+          "LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = ''",
+          "BEGIN SET search_path = public; RETURN 1; END"
+        ),
+      })
+      expect(sessionWrites(found)).toEqual([[ERROR, "setStatement", undefined]])
+    })
+
     it("a debt function called by closed code is a head error, its own write a warning", async () => {
       // Функція модуля виду кличе лише функції-запити (спека прав §5.3): боргова
       // ланка на plpgsql — помилка голови; попередження боргу лишається на
@@ -716,7 +806,7 @@ describe("kind module: closed forms only", () => {
           "SELECT 1 WHERE public.t_role() IS NULL"
         ),
         [TABLE_SQL]:
-          "CREATE FUNCTION public.t_role() RETURNS void LANGUAGE plpgsql AS $$ BEGIN SET ROLE postgres; END $$;",
+          "CREATE FUNCTION public.t_role() RETURNS void LANGUAGE plpgsql AS $$ BEGIN SET LOCAL ROLE postgres; END $$;",
       })
       expect(
         found.map((d) => [
@@ -740,7 +830,7 @@ describe("kind module: closed forms only", () => {
       // Функція множини скоупу боргом не буває (спека промоції §9.4), хоч би
       // де лежав файл: у модулі прийнятої таблиці її теж судять.
       const setFunction = (body: string) =>
-        `CREATE FUNCTION public.user_ids() RETURNS SETOF uuid LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$ BEGIN ${body} RETURN; END $$;`
+        `CREATE FUNCTION public.user_ids() RETURNS SETOF uuid LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ BEGIN ${body} RETURN; END $$;`
       const forms = async (body: string) =>
         (
           await compile(
@@ -748,7 +838,7 @@ describe("kind module: closed forms only", () => {
               metaFiles({
                 "project.meta.json": scopedProject(),
                 "catalogs/Organization/Organization.meta.json": organization(),
-                [SCOPE_FUNCTIONS_FILE]: `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;`,
+                [SCOPE_FUNCTIONS_FILE]: `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;`,
                 "custom-tables/T/T.meta.json": customTable("T"),
                 [TABLE_SQL]: setFunction(body),
               })

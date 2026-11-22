@@ -2,7 +2,7 @@ import { namedCollections } from "simetra/model"
 import { diagnostic } from "../diagnostics"
 import { completeAndCompile, type CompletionOptions } from "./fix"
 import type { AddElementInput } from "./inputs"
-import { toPlatformForms } from "./platform-forms"
+import { toPlatformFormsAfter } from "./platform-forms"
 import { compileInput, refused, refuseSuppliedId } from "./refuse"
 import { describeTarget, locateContainer } from "./target"
 import type { OperationResult } from "./types"
@@ -121,7 +121,7 @@ export async function addElement(
   // Новий елемент може зробити задекларовану функцію формою платформи
   // (вид скоупу з `setFunction`, вимір з функцією значень): декларація
   // зникає в тій самій зміні (Р12).
-  const after = toPlatformForms(changed)
+  const after = await toPlatformFormsAfter(files, changed)
   return completeAndCompile(
     files,
     after.files,

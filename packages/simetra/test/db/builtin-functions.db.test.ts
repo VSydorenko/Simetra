@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
   BUILTIN_EXCLUSIONS,
-  HEAD_EXCLUDED_BUILTINS,
   REGCLASS_PARAMETER_QUERY,
   excludedBuiltin,
 } from "../../src/compiler/sql/builtin-exclusions"
@@ -9,6 +8,11 @@ import {
   BUILTIN_FUNCTIONS,
   REGCLASS_BUILTINS,
 } from "../../src/compiler/sql/builtin-functions"
+import {
+  HEAD_BUILTINS,
+  HEAD_REVIEWED_BUILTINS,
+} from "../../src/compiler/sql/head-builtins"
+import { PG_CATALOG_TYPES } from "../../src/compiler/sql/pg-catalog-types"
 import { withRollback } from "./connection"
 
 /**
@@ -47,10 +51,44 @@ describe("builtin function allowlist", () => {
     // Точне ім'я, якого немає в каталозі, — опечатка: виключення нічого б не
     // виключило, а справжня функція лишилася б у переліку.
     expect(
-      [
-        ...BUILTIN_EXCLUSIONS.flatMap((e) => e.names),
-        ...HEAD_EXCLUDED_BUILTINS,
-      ].filter((n) => !live.has(n))
+      [...BUILTIN_EXCLUSIONS.flatMap((e) => e.names), ...HEAD_BUILTINS].filter(
+        (n) => !live.has(n)
+      )
     ).toEqual([])
+  })
+
+  it("lists in heads only names whose every overload is IMMUTABLE or that were reviewed", async () => {
+    const volatile = await withRollback(async (client) => {
+      const { rows } = await client.query<{ name: string }>(
+        `SELECT proname AS name
+         FROM pg_proc
+         WHERE pronamespace = 'pg_catalog'::regnamespace AND oid < 16384
+           AND provolatile <> 'i'
+         GROUP BY proname`
+      )
+      return new Set(rows.map((row) => row.name))
+    })
+    // Перевантаження, що стало STABLE чи VOLATILE з новим мажором, може
+    // читати стан сесії: назва голови без рев'ю — червоний тест.
+    expect(
+      HEAD_BUILTINS.filter(
+        (name) => volatile.has(name) && !HEAD_REVIEWED_BUILTINS.includes(name)
+      )
+    ).toEqual([])
+  })
+
+  // Ім'я типу, якого перелік не знає, тимчасова таблиця тіла могла б
+  // затінити (спека прав §6.1): перелік, згенерований над іншою версією, —
+  // червоний тест в обидва боки.
+  it("lists exactly the type names of pg_catalog", async () => {
+    const live = await withRollback(async (client) => {
+      const { rows } = await client.query<{ name: string }>(
+        `SELECT typname AS name
+         FROM pg_type
+         WHERE typnamespace = 'pg_catalog'::regnamespace`
+      )
+      return rows.map((row) => row.name)
+    })
+    expect([...PG_CATALOG_TYPES].sort()).toEqual(live.sort())
   })
 })

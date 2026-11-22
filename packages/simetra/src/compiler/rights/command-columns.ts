@@ -1,5 +1,6 @@
 import {
   authorColumns,
+  filePlatformColumns,
   keyColumn,
   predefinedNameColumn,
   serviceDateColumns,
@@ -25,6 +26,7 @@ function platformWrittenNames(attributeCase: AttributeCase): Set<string> {
       ...serviceDateColumns(),
       ...authorColumns(),
       predefinedNameColumn(),
+      ...filePlatformColumns(),
     ].map((def) => standardLogicalName(def, attributeCase))
   )
 }

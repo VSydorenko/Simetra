@@ -1,5 +1,6 @@
 import { diagnostic, type Diagnostic } from "simetra/compiler"
 import {
+  FUNCTIONS_FILE_SUFFIX,
   KIND_REGISTRY,
   projectSchema,
   type AttributeCase,
@@ -45,13 +46,17 @@ export const objectKey = (kind: string, schema: string, physical: string) =>
 
 /**
  * Файл, яким володіє зворотний генератор: опис і супутні файли
- * `CustomTable`/`PgEnum` та спільний дослівний SQL. Файли видів 1С і решта
+ * `CustomTable`/`PgEnum`, спільний дослівний SQL і декларації його функцій. Файли видів 1С і решта
  * ручних файлів йому не належать (спека П2 §9).
  */
 export function isGeneratedPath(path: string): boolean {
   const segments = path.split("/")
   if (segments.length !== 3) return false
-  if (segments[0] === "sql") return segments[2]!.endsWith(".sql")
+  if (segments[0] === "sql")
+    return (
+      segments[2]!.endsWith(".sql") ||
+      segments[2]!.endsWith(FUNCTIONS_FILE_SUFFIX)
+    )
   return GENERATED_DIRS.has(segments[0]!)
 }
 

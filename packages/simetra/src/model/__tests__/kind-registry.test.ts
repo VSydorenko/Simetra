@@ -237,6 +237,31 @@ describe("standard columns", () => {
     expect(column(numeric, "code")?.unique).toBeUndefined()
   })
 
+  it("catalog storage adds the file columns, size and type unset by the command", () => {
+    const withStorage = catalogColumns({
+      storage: { maxBytes: 10, mediaTypes: ["image/png"] },
+    })
+    expect(column(withStorage, "fileName")).toMatchObject({
+      physicalName: "file_name",
+      type: { type: "Text" },
+      notNull: true,
+    })
+    expect(column(withStorage, "fileSize")).toMatchObject({
+      physicalName: "file_size",
+      type: { type: "BigInt" },
+      notNull: false,
+    })
+    expect(column(withStorage, "fileContentType")).toMatchObject({
+      physicalName: "file_content_type",
+      type: { type: "Text" },
+      notNull: false,
+    })
+    const plain = catalogColumns()
+    for (const name of ["fileName", "fileSize", "fileContentType"]) {
+      expect(column(plain, name), name).toBeUndefined()
+    }
+  })
+
   it("catalog key has no default, document key has gen_random_uuid()", () => {
     const catalogKey = column(catalogColumns(), "ref")
     expect(catalogKey).toMatchObject({

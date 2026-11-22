@@ -3,6 +3,7 @@ import {
   elementNameSchema,
   metadataKindSchema,
   objectNameSchema,
+  sqlFunctionDeclarationSchema,
 } from "simetra/model"
 
 /**
@@ -275,3 +276,13 @@ export const promoteInput = z.strictObject({
   consumerLabels: z.array(z.string().min(1)).default([]),
 })
 export type PromoteInput = z.infer<typeof promoteInput>
+
+/**
+ * Запис декларації функції без `id`: його видає операція, а наявний зберігає.
+ * Схема — із T0 (єдине джерело форми запису), тож нове поле запису стає
+ * доступним без змін тут.
+ */
+export const declareFunctionInput = sqlFunctionDeclarationSchema.omit({
+  id: true,
+})
+export type DeclareFunctionInput = z.infer<typeof declareFunctionInput>

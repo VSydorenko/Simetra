@@ -434,6 +434,30 @@
       "description": "Marks the catalog as a rights container: objects bind to its rows with containerBinding, and a grant on the container covers them.",
       "type": "boolean"
     },
+    "storage": {
+      "type": "object",
+      "properties": {
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 104857600,
+          "description": "Largest accepted file size in bytes, 1 to the platform ceiling."
+        },
+        "mediaTypes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Accepted content types: a non-empty list of unique lowercase type/subtype strings without parameters."
+        }
+      },
+      "required": [
+        "maxBytes",
+        "mediaTypes"
+      ],
+      "additionalProperties": false,
+      "description": "File storage of a catalog: each row is one file, its bytes live outside the database."
+    },
     "standardAttributeOverrides": {
       "default": {},
       "description": "Custom titles and descriptions of derived standard attributes, keyed by standard attribute name.",

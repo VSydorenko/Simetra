@@ -7,14 +7,17 @@ import {
   rolesAndSets,
 } from "./fixtures/rights"
 import { acceptDebt, uuid } from "./helpers"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 const PROJECT = "project.meta.json"
 const POINTER = "/accessDimensions/0/values/function"
 const SQL_FILE = "sql/public/dimension-functions.sql"
 
-/** Закрита оболонка функції виміру — та сама, що в функції множини скоупу. */
-const CLOSED =
-  "RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''"
+/**
+ * Закрита оболонка функції виміру — та сама, що в функції множини скоупу,
+ * зі зафіксованими налаштуваннями сесії кореня голови.
+ */
+const CLOSED = `RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()}`
 /** Ланці ланцюжка вистачає мови й порожнього search_path. */
 const LINK = "RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = ''"
 
@@ -247,9 +250,11 @@ describe("access dimension value function", () => {
       heads(await errors(caller + link))
     const LINK_CHAIN = "public.region_ids → public.helper_ids"
     for (const [tail, body] of [
+      // Непорожній шлях без схеми платформи: схему платформи в шляху будь-якої
+      // функції відмовляє вже Р18, раніше за голову.
       [
-        "RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = simetra",
-        "SELECT i.id FROM identities i",
+        "RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = public",
+        "SELECT r.region_id FROM public.member_region r",
       ],
       [
         "RETURNS SETOF uuid LANGUAGE sql STABLE",
@@ -364,7 +369,7 @@ describe("access dimension value function", () => {
       expect(
         heads(
           await errors(
-            "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' BEGIN ATOMIC SELECT NULL::uuid; END;\n"
+            `CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} BEGIN ATOMIC SELECT NULL::uuid; END;\n`
           )
         )
       ).toEqual([head("sqlBody", undefined, "public.region_ids")])
