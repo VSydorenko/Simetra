@@ -561,10 +561,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     version: number
   ): boolean => {
     if (e?.stale.epoch !== undefined) return false
-    const known =
-      e === undefined
-        ? session.epochs.seen(keyId(o.name, key))
-        : { version: e.version, versionEpoch: e.versionEpoch }
+    const known = e ?? session.epochs.seen(keyId(o.name, key))
     if (known === undefined) return false
     if (differentEpochs(known.versionEpoch, session.versions.current()))
       return false
