@@ -92,9 +92,9 @@ export interface WriterContext extends ReaderContext {
   /** The monotonic clock in ms (`performance.now()`; a test substitutes it). */
   readonly now: () => number
   /**
-   * Reads in flight whose plan may write rows of the object: own rows,
-   * `include` targets, receiver keys, pages — counted at dispatch from the
-   * parts of the read (§8.4, rule 2).
+   * Write leases on rows of the object (§8.4, rule 2): a read issues one at
+   * dispatch by its parts (own rows, `include` targets, receiver keys,
+   * pages); the flight's `settle` releases it after the answer's `commit`.
    */
   readonly pendingWrites: (object: ObjectName) => number
   /**
@@ -281,11 +281,11 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
   // Запис відпущеного каналу забувається, лише коли сховище не тримає жодного
   // його рядка І жоден живий вигляд об'єкта не лишається ним непідтвердженим:
   // порожній вигляд, що пропустив створення в розриві, інакше став би свіжим.
-  // Запис тримається і поки летить читання, план якого може записати рядки
-  // об'єкта (власні рядки, цілі `include`, ключі приймача, сторінки): одне
-  // джерело — облік у мить відправки, а не перелік шляхів запису. Інакше
-  // рядок із читання до відпускання проживе період без нагляду, а повторна
-  // підписка нічого не позначить (§8.4, правило 2).
+  // Запис тримається і поки існує оренда на запис рядків об'єкта: її видає
+  // читання за своїми частинами, а знімає `settle` польоту вже після `commit`
+  // відповіді, тож між відповіддю й записом проміжку немає. Інакше рядок із
+  // читання до відпускання проживе період без нагляду, а повторна підписка
+  // нічого не позначить (§8.4, правило 2).
   const forgettable = (o: ObjectState, channel: string): boolean =>
     !o.rows.holdsChannel(channelOf(o.entry), channel) &&
     ctx.pendingWrites(o.name) === 0 &&

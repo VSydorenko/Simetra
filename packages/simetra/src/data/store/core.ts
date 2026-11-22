@@ -402,7 +402,7 @@ export interface CoreInternals {
   readonly epochs: Epochs
   readonly ops: StoreOps
   readonly registry: SubsetRegistry
-  /** Reads in flight whose plan may write rows of the object (§8.4, rule 2). */
+  /** Write leases on rows of the object not yet settled (§8.4, rule 2). */
   readonly pendingWrites: (object: ObjectName) => number
 }
 
@@ -506,27 +506,49 @@ export function createCore(options: {
     },
     onRights: (item) => acceptRights(item),
   })
-  // Читання в польоті за об'єктами, рядки яких може записати їхній план
-  // (§8.4, правило 2): запис відпущеного каналу тримається, поки таке
-  // читання летить. Одна точка обліку — відправка частин, одна точка зняття —
-  // `finally` того самого читання.
+  // Оренди запису за об'єктами (§8.4, правило 2): запис відпущеного каналу
+  // тримається, поки існує оренда на запис рядків його об'єкта. Видає її
+  // читання в мить відправки — за частинами (план читання); знімає лише
+  // `settle` польоту, що записав відповідь одним `commit` чи відкинув її.
   const pendingWrites = new Map<ObjectName, number>()
   const source: StoreSource = {
     close: () => batcher.close(),
     refuse: (object) => batcher.refuse?.(object),
     run: (operation) => batcher.run(operation),
-    lease: () => ({ issue() {}, release() {} }),
-    read: (parts, caller) => {
+    lease: () => {
+      let held: ObjectName[] | undefined = []
+      return {
+        issue(objects) {
+          // Читання після осідання польоту писало б без оренди.
+          if (held === undefined)
+            throw new Error("a write lease is issued after its release")
+          for (const object of objects) {
+            pendingWrites.set(object, (pendingWrites.get(object) ?? 0) + 1)
+            held.push(object)
+          }
+        },
+        release() {
+          if (held === undefined) return
+          for (const object of held) {
+            const left = pendingWrites.get(object)! - 1
+            if (left > 0) pendingWrites.set(object, left)
+            else pendingWrites.delete(object)
+          }
+          held = undefined
+        },
+      }
+    },
+    read: (parts, caller, lease) => {
       const plan = writesOf(parts)
-      for (const object of plan)
-        pendingWrites.set(object, (pendingWrites.get(object) ?? 0) + 1)
-      return dispatch(parts, caller).finally(() => {
-        for (const object of plan) {
-          const left = pendingWrites.get(object)! - 1
-          if (left > 0) pendingWrites.set(object, left)
-          else pendingWrites.delete(object)
-        }
-      })
+      if (plan.size > 0) {
+        // Шлях, що пише рядки без оренди, — дефект: запис каналу забувся б.
+        if (lease === undefined)
+          return Promise.reject(
+            new Error("a read of rows without a write lease")
+          )
+        lease.issue(plan)
+      }
+      return dispatch(parts, caller)
     },
   }
   // Об'єкти, рядки яких можуть записати частини читання: об'єкт частини й
