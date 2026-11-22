@@ -294,6 +294,38 @@ describe("fromS3Client get, delete, list", () => {
   })
 })
 
+describe("a truncated listing without a continuation token", () => {
+  // Кінець переліку без токена не можна вважати кінцем: fail-closed
+  const truncated = (): S3ClientLike => ({
+    ...fakeS3().client,
+    async listObjectsV2() {
+      return {
+        Contents: [{ Key: KEY, LastModified: new Date(0) }],
+        CommonPrefixes: [{ Prefix: `o/${OBJ}/` }],
+        IsTruncated: true,
+      }
+    },
+  })
+
+  it("makes list throw instead of ending silently", async () => {
+    const store = fromS3Client(truncated(), "b")
+    await expect(
+      (async () => {
+        for await (const _ of store.list(`o/${OBJ}/`)) void _
+      })()
+    ).rejects.toMatchObject({ reason: "bad-listing" })
+  })
+
+  it("makes listPrefixes throw", async () => {
+    const store = fromS3Client(truncated(), "b")
+    await expect(
+      (async () => {
+        for await (const _ of store.listPrefixes()) void _
+      })()
+    ).rejects.toMatchObject({ reason: "bad-listing" })
+  })
+})
+
 describe("listPrefixes", () => {
   it("yields the object prefixes and not the marker", async () => {
     const { client } = fakeS3()

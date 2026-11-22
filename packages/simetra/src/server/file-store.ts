@@ -51,7 +51,8 @@ export interface FileStore {
 /** Refusal of the store itself; `reason` is a closed list. */
 export class FileStoreError extends Error {
   constructor(
-    readonly reason: "too-large" | "foreign-bucket" | "bad-limit" | "bad-key",
+    readonly reason:
+      "too-large" | "foreign-bucket" | "bad-limit" | "bad-key" | "bad-listing",
     message: string
   ) {
     super(message)
@@ -103,6 +104,21 @@ function isNotFound(error: unknown): boolean {
   }
   if (e.name === "NoSuchKey" || e.name === "NotFound") return true
   return e.name !== "NoSuchBucket" && e.$metadata?.httpStatusCode === 404
+}
+
+// Обрізана сторінка без токена — відповідь, якій не можна вірити: тихий кінець
+// переліку дав би звірці неповну картину (запобіжник рахував би від неї)
+function nextToken(res: {
+  IsTruncated?: boolean
+  NextContinuationToken?: string
+}): string | undefined {
+  if (res.IsTruncated !== true) return undefined
+  if (res.NextContinuationToken === undefined)
+    throw new FileStoreError(
+      "bad-listing",
+      "object store answered a truncated listing without a continuation token"
+    )
+  return res.NextContinuationToken
 }
 
 // Ключ і префікс — лише форми `o/<uuid>/…`: інакше `put`/`delete` дісталися б
@@ -259,7 +275,7 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
           if (o.Key !== undefined && o.LastModified !== undefined)
             yield { key: o.Key, lastModified: o.LastModified }
         }
-        token = res.IsTruncated === true ? res.NextContinuationToken : undefined
+        token = nextToken(res)
       } while (token !== undefined)
     },
 
@@ -277,7 +293,7 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
           if (p.Prefix !== undefined && isFileObjectPrefix(p.Prefix))
             yield p.Prefix
         }
-        token = res.IsTruncated === true ? res.NextContinuationToken : undefined
+        token = nextToken(res)
       } while (token !== undefined)
     },
 

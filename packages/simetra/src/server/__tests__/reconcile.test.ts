@@ -1,6 +1,11 @@
 import { fileObjectKey } from "simetra/model"
 import { describe, expect, it } from "vitest"
-import { FileStoreError, type FileStore } from "../file-store"
+import {
+  FileStoreError,
+  fromS3Client,
+  type FileStore,
+  type S3ClientLike,
+} from "../file-store"
 import {
   reconcile,
   RECONCILE_GRACE_MS,
@@ -250,4 +255,38 @@ describe("reconcile", () => {
       expect(t.deleted).toEqual([])
     }
   )
+
+  it("throws before any delete when the store gives a truncated listing without a token", async () => {
+    const t = setup({ objects: { [key(1)]: OLD }, rows: {} })
+    const deleted: string[] = []
+    const client = {
+      async listObjectsV2() {
+        return {
+          Contents: [{ Key: key(1), LastModified: OLD }],
+          IsTruncated: true,
+        }
+      },
+      async deleteObject(i: { Key: string }) {
+        deleted.push(i.Key)
+      },
+      // Маркер збігається з базою: відмова має бути саме від переліку
+      async getObject() {
+        return {
+          Body: { transformToWebStream: () => new Blob(["inst"]).stream() },
+        }
+      },
+    } as unknown as S3ClientLike
+    const store = fromS3Client(client, "b")
+    const source: ReconcileSource = {
+      instance: async () => "inst",
+      now: async () => NOW,
+      rowsExist: async () => new Set(),
+      rowPage: async () => [],
+    }
+    await expect(
+      reconcile([OBJ], source, store, { log: () => {} })
+    ).rejects.toMatchObject({ reason: "bad-listing" })
+    expect(deleted).toEqual([])
+    expect(t.deleted).toEqual([])
+  })
 })
