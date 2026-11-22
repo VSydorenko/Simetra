@@ -1,10 +1,9 @@
-import { createHmac, randomBytes, randomUUID } from "node:crypto"
+import { createHmac, randomUUID } from "node:crypto"
 import { afterAll, beforeAll, describe, expect, it as baseIt } from "vitest"
 import {
   CommandFailure,
   channelTopic,
   defineObjectModule,
-  quoteIdent,
   type MetadataRef,
   type ObjectModule,
   type Operation,
@@ -28,18 +27,14 @@ import {
   TICKET_READER_ID,
   TICKET_TARGETS_READER_ID,
   TICKET_WRITER_ID,
-  loginUrl,
   runTag,
-  superuserClient,
   testProvider,
-  testRoleName,
 } from "../../../simetra/test/support"
 import { nodeExec, runContainers } from "../../../simetra/test/db/external"
 import {
   closeAllClients,
   connectSignals,
   downAllStands,
-  grantStandConsumer,
   startJwksServer,
   startSignalStand,
   type JwksServer,
@@ -47,12 +42,12 @@ import {
   type SignalStand,
   type SignalSubscription,
 } from "../../../simetra/test/db/signal-stand"
-import { loginSettingSql } from "../../../simetra/src/schema/apply/platform-roles"
 import {
   SIGNAL_POLL_INTERVAL_MS,
   centrifugoConfig,
 } from "../tools/signals-config"
-import { heldResource, seedUnderMaintenance } from "./support/db"
+import { seedUnderMaintenance } from "./support/db"
+import { heldStandConsumer } from "./support/stand-consumer"
 import {
   ASSIGNMENTS,
   TICKET,
@@ -244,55 +239,7 @@ export function describeSignalDelivery(mode: "gate" | "bench" = "gate"): void {
 
     // Роль входу споживача прогону тієї самої форми, що `simetra_signals`,
     // над групою з грантами outbox з генератора (`grantStandConsumer`)
-    const consumer = heldResource<string>(async (use) => {
-      const group = testRoleName("dlv_grp")
-      const name = testRoleName("dlv_signals")
-      const password = randomBytes(12).toString("hex")
-      const database = decodeURIComponent(new URL(env.url).pathname.slice(1))
-      const su = await superuserClient(database)
-      let created = 0
-      try {
-        await su.query(`CREATE ROLE ${quoteIdent(group)} NOLOGIN NOINHERIT`)
-        created = 1
-        await su.query(
-          `CREATE ROLE ${quoteIdent(name)} LOGIN NOINHERIT PASSWORD '${password}'`
-        )
-        created = 2
-        await su.query(
-          `GRANT ${quoteIdent(group)} TO ${quoteIdent(name)} WITH INHERIT FALSE, SET TRUE`
-        )
-        await su.query(
-          `GRANT CONNECT ON DATABASE ${quoteIdent(database)} TO ${quoteIdent(name)}`
-        )
-        for (const sql of loginSettingSql({
-          name,
-          memberOf: [],
-          settings: { role: group },
-        }))
-          await su.query(sql)
-        expect(await grantStandConsumer(su, group)).toBeGreaterThanOrEqual(5)
-        await use(loginUrl(env.url, name, password))
-      } finally {
-        try {
-          await su.query(
-            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = $1",
-            [name]
-          )
-          // Гранти й політики групи — у базі цілі: без них роль видаляється
-          if (created >= 1) await su.query(`DROP OWNED BY ${quoteIdent(group)}`)
-          if (created >= 2) {
-            await su.query(
-              `REVOKE CONNECT ON DATABASE ${quoteIdent(database)} FROM ${quoteIdent(name)}`
-            )
-            await su.query(`DROP ROLE IF EXISTS ${quoteIdent(name)}`)
-          }
-          if (created >= 1)
-            await su.query(`DROP ROLE IF EXISTS ${quoteIdent(group)}`)
-        } finally {
-          await su.end()
-        }
-      }
-    })
+    const consumer = heldStandConsumer(() => env.url, "dlv")
     let consumerUrl: string
     beforeAll(async () => {
       consumerUrl = await consumer.open()
