@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
 import { buildClientCatalog } from "simetra/compiler"
 import {
@@ -12,7 +12,6 @@ import {
 } from "simetra/data/centrifugo"
 import {
   channelTopic,
-  quoteIdent,
   type DataRequest,
   type SignalError,
   type SignalTransport,
@@ -33,16 +32,12 @@ import {
   ORG_KIND_ID,
   TICKET_READER_ID,
   TICKET_WRITER_ID,
-  loginUrl,
   runTag,
-  superuserClient,
   testProvider,
-  testRoleName,
 } from "../../../simetra/test/support"
 import { nodeExec, runContainers } from "../../../simetra/test/db/external"
 import {
   downAllStands,
-  grantStandConsumer,
   startJwksServer,
   startSignalStand,
   type JwksServer,
@@ -51,9 +46,9 @@ import {
 import { runtimeHandleOf } from "../../../simetra/src/data/runtime/handle"
 import { REJOIN_JITTER_MS } from "../../../simetra/src/data/store/receiver"
 import type { ViewSnapshot } from "../../../simetra/src/data/store/types"
-import { loginSettingSql } from "../../../simetra/src/schema/apply/platform-roles"
 import { centrifugoConfig } from "../tools/signals-config"
-import { heldResource, seedUnderMaintenance } from "./support/db"
+import { seedUnderMaintenance } from "./support/db"
+import { heldStandConsumer } from "./support/stand-consumer"
 import {
   TICKET,
   type Env,
@@ -216,54 +211,7 @@ export function describeSignalReceiver(): void {
 
     // Роль входу споживача прогону тієї самої форми, що `simetra_signals`,
     // над групою з грантами outbox з генератора (`grantStandConsumer`)
-    const consumer = heldResource<string>(async (use) => {
-      const group = testRoleName("rcv_grp")
-      const name = testRoleName("rcv_signals")
-      const password = randomBytes(12).toString("hex")
-      const database = decodeURIComponent(new URL(env.url).pathname.slice(1))
-      const su = await superuserClient(database)
-      let created = 0
-      try {
-        await su.query(`CREATE ROLE ${quoteIdent(group)} NOLOGIN NOINHERIT`)
-        created = 1
-        await su.query(
-          `CREATE ROLE ${quoteIdent(name)} LOGIN NOINHERIT PASSWORD '${password}'`
-        )
-        created = 2
-        await su.query(
-          `GRANT ${quoteIdent(group)} TO ${quoteIdent(name)} WITH INHERIT FALSE, SET TRUE`
-        )
-        await su.query(
-          `GRANT CONNECT ON DATABASE ${quoteIdent(database)} TO ${quoteIdent(name)}`
-        )
-        for (const sql of loginSettingSql({
-          name,
-          memberOf: [],
-          settings: { role: group },
-        }))
-          await su.query(sql)
-        expect(await grantStandConsumer(su, group)).toBeGreaterThanOrEqual(5)
-        await use(loginUrl(env.url, name, password))
-      } finally {
-        try {
-          await su.query(
-            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = $1",
-            [name]
-          )
-          if (created >= 1) await su.query(`DROP OWNED BY ${quoteIdent(group)}`)
-          if (created >= 2) {
-            await su.query(
-              `REVOKE CONNECT ON DATABASE ${quoteIdent(database)} FROM ${quoteIdent(name)}`
-            )
-            await su.query(`DROP ROLE IF EXISTS ${quoteIdent(name)}`)
-          }
-          if (created >= 1)
-            await su.query(`DROP ROLE IF EXISTS ${quoteIdent(group)}`)
-        } finally {
-          await su.end()
-        }
-      }
-    })
+    const consumer = heldStandConsumer(() => env.url, "rcv")
     let consumerUrl: string
     beforeAll(async () => {
       consumerUrl = await consumer.open()
@@ -579,9 +527,28 @@ export function describeSignalReceiver(): void {
         }),
       })
       expect(await response.json()).toEqual({ result: {} })
-      // Клієнт з'єднується знову не раніше `minReconnectDelay` (500 мс): зміна
-      // публікується в цьому вікні
       const changed = await updateTicket(a.people.writer!, ticket, "in the gap")
+      // «Пропущено» — факт, а не припущення про вікно `minReconnectDelay`:
+      // публікація вже в історії каналу, а повторної підписки ще немає, тож
+      // наживо клієнт її не отримав. Інакше кейс червоний — живе доставлення
+      // теж дало б `recovered: true`
+      const deadline = Date.now() + CONVERGE_MS
+      for (;;) {
+        const published = (await stand.history(channelOf(a))).some(
+          (p) =>
+            (p.data.keys as { id?: string } | undefined)?.id === ticket.id &&
+            p.data.row_ver === changed.version
+        )
+        if (published) break
+        if (Date.now() > deadline)
+          throw new Error("the change never reached the channel history")
+        await sleep(20)
+      }
+      expect(
+        subscribedOf(c, channelOf(a)),
+        "the client resubscribed before the change was published: the gap missed nothing"
+      ).toHaveLength(1)
+      expect(signalsAbout(c, ticket.id)).toEqual([])
       await until(
         () => subscribedOf(c, channelOf(a)).length >= 2,
         CONVERGE_MS,
@@ -688,6 +655,7 @@ export function describeSignalReceiver(): void {
       const view = card(c, ticket.id)
       await ready(c, view, ticket.id, channelOf(a))
       let changed: { id: string; version: number } | undefined
+      const snapFrom = view.snapshots.length
       await stand.restart(async () => {
         changed = await updateTicket(a.people.writer!, ticket, "while down")
       })
@@ -714,6 +682,12 @@ export function describeSignalReceiver(): void {
       expect(rowOf(view.current(), ticket.id)?.values.description).toBe(
         "while down"
       )
+      // Розрив позначив рядок, і зняло позначку читання після приєднання
+      const marked = view.snapshots
+        .slice(snapFrom)
+        .find((s) => rowOf(s, ticket.id)?.stale === true)
+      expect(marked).toBeDefined()
+      expect(rowOf(marked!, ticket.id)?.version).toBe(ticket.version)
     }, 90_000)
 
     // Втрата на живому з'єднанні (передумова правила епох §8.4): у Memory
@@ -742,6 +716,7 @@ export function describeSignalReceiver(): void {
         await ready(c, view, ticket.id, channelOf(a))
         await sleep(META_IDLE_MS)
         const from = c.port.length
+        const snapFrom = view.snapshots.length
         const changed = await updateTicket(a.people.writer!, ticket, "lost")
         await until(
           () => subscribedOf(c, channelOf(a)).length >= 2,
@@ -761,13 +736,12 @@ export function describeSignalReceiver(): void {
           CONVERGE_MS,
           `the read after the join never came: ${JSON.stringify(view.current())}`
         )
-        const marked = view.snapshots.findIndex(
-          (s) => rowOf(s, ticket.id)?.stale === true
-        )
-        expect(marked).toBeGreaterThanOrEqual(0)
-        expect(rowOf(view.snapshots[marked]!, ticket.id)?.version).toBe(
-          ticket.version
-        )
+        // Позначка — від 2500, а не з першого завантаження вигляду
+        const marked = view.snapshots
+          .slice(snapFrom)
+          .find((s) => rowOf(s, ticket.id)?.stale === true)
+        expect(marked).toBeDefined()
+        expect(rowOf(marked!, ticket.id)?.version).toBe(ticket.version)
         expect(rowOf(view.current(), ticket.id)).toMatchObject({
           version: changed.version,
           values: { description: "lost" },
