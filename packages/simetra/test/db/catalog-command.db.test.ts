@@ -752,8 +752,10 @@ describe("catalog command core", () => {
     expect(await call()).toEqual(EXPECTED_VALUES)
   })
 
-  // Розбіжність бази бачить лише той, хто має право дії над рядком: замок
-  // не дає рядка ролі без `update`, тож поля ядро не звіряє (Р3).
+  // Замок раніше за поля: `FOR NO KEY UPDATE` застосовує політику
+  // `UPDATE USING`, тож ролі без `update` рядка не дає (`no-right`), і до
+  // звірки полів ядро не доходить. Перевірку права над «до» перед полями цей
+  // кейс не доводить: до неї ядро теж не доходить.
   it("fields: a reader with a wrong base is no-right", async () => {
     expect(
       await run({
