@@ -5,10 +5,10 @@ import { fileObjectKey } from "simetra/model"
 import {
   createCommandRuntime,
   fromPgPool,
+  type CommandDatabase,
   type CommandRuntime,
   type ReconcileLogEntry,
 } from "simetra/server"
-import { reconcileFilesAged } from "../../../simetra/test/support"
 import { seedRuntimeActor, seedUnderMaintenance, sessionOf } from "./support/db"
 import { ATTACHMENT_WRITER_ID, LIMIT } from "./storage-sql.support"
 import type { Env } from "./storage-env.support"
@@ -18,9 +18,39 @@ import type { Env } from "./storage-env.support"
  * спільні кейси файлів `storage-reconcile.postgres.db.test.ts` (Garage) і
  * `storage.supabase.db.test.ts` (S3 Supabase). Вік 24 год міряє годинник
  * бази, тож тест не підміняє його: правило з типовим віком перевіряється
- * публічним шляхом рантайму на свіжому об'єкті, а прибирання сироти — тестовим
- * швом `reconcileFilesAged` з віком 0 (публічного параметра віку немає).
+ * публічним шляхом рантайму на свіжому об'єкті, а прибирання сироти — рантаймом,
+ * чий порт бази зсуває відповідь `now()` звірки на добу вперед (годинник «бази»
+ * з погляду рантайму; виробничий код ручки віку не має).
  */
+
+const DAY_MS = 24 * 60 * 60 * 1000
+const DB_NOW_TEXT = "extract(epoch FROM now())"
+
+/** Порт бази, що зсуває відповідь запиту `now()` звірки; решту не чіпає. */
+function withClockShift(
+  inner: CommandDatabase,
+  shiftMs: number
+): CommandDatabase {
+  return {
+    async connect() {
+      const client = await inner.connect()
+      return {
+        release: (destroy) => client.release(destroy),
+        query: async (text, params) => {
+          const res = await client.query(text, params)
+          if (!text.includes(DB_NOW_TEXT)) return res
+          return {
+            ...res,
+            rows: res.rows.map((row) => ({
+              ...row,
+              ms: String(Number(row.ms) + shiftMs),
+            })),
+          }
+        },
+      }
+    },
+  }
+}
 
 const ATTACHMENT = { kind: "Catalog" as const, name: "Attachment" }
 const MARKER = "simetra-instance"
@@ -29,9 +59,9 @@ const bytesOf = (text: string) => new TextEncoder().encode(text)
 
 /** Середовище кейсів збирають із `ORG_ROOT_CASCADE`: перший кейс спирається на каскад кореня. */
 export function defineReconcileCases(env: () => Env): void {
-  const runtime = (): Promise<CommandRuntime> =>
+  const runtime = (shiftMs = 0): Promise<CommandRuntime> =>
     createCommandRuntime({
-      database: fromPgPool(env().pool),
+      database: withClockShift(fromPgPool(env().pool), shiftMs),
       catalog: env().catalog,
     })
   /** Відбиток прив'язки: його віддає `checkUpload` у тій самій транзакції. */
@@ -81,17 +111,15 @@ export function defineReconcileCases(env: () => Env): void {
     return { id, key }
   }
   const exists = async (key: string) => (await env().files.get(key)) !== null
-  /** Публічний шлях рантайму (вік 24 год) або, з `aged`, шов тесту з віком 0. */
+  /** Публічний шлях рантайму (вік 24 год) або, з `aged`, рантайм із годинником бази на добу вперед. */
   const reconcile = async (
     rt: CommandRuntime,
     options: { aged?: true } = {}
   ) => {
     const log: ReconcileLogEntry[] = []
     const sink = { log: (e: ReconcileLogEntry) => log.push(e) }
-    const report =
-      options.aged === true
-        ? await reconcileFilesAged(rt, env().files, sink, 0)
-        : await rt.reconcileFiles(env().files, sink)
+    const runner = options.aged === true ? await runtime(2 * DAY_MS) : rt
+    const report = await runner.reconcileFiles(env().files, sink)
     return { report, log }
   }
   const setMarker = (value: string) =>

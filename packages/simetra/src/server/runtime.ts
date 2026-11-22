@@ -741,16 +741,14 @@ export async function createCommandRuntime(
     await ensureInstanceRow(state)
   const reconcileOf = (
     store: FileStore,
-    options: ReconcileOptions,
-    graceMs?: number
+    options: ReconcileOptions
   ): Promise<ReconcileReport> => {
     rejectNested()
     return reconcile(
       catalog.objects.filter((o) => o.storage !== undefined).map((o) => o.id),
       reconcileSource(state),
       store,
-      options,
-      graceMs
+      options
     )
   }
   const runtime: CommandRuntime = {
@@ -827,35 +825,7 @@ export async function createCommandRuntime(
       await store.rebind(await fileInstance(state))
     },
   }
-  AGED_RECONCILE.set(runtime, reconcileOf)
   return runtime
-}
-
-// Тестовий шов: вік сироти задає лише тест, і лише тут, не в публічному API
-const AGED_RECONCILE = new WeakMap<
-  object,
-  (
-    store: FileStore,
-    options: ReconcileOptions,
-    graceMs: number
-  ) => Promise<ReconcileReport>
->()
-
-/**
- * Test seam, not exported from `simetra/server`: the reconciliation of
- * `runtime` (its database source, the database clock) with an explicit orphan
- * age. The public `reconcileFiles` always uses `RECONCILE_GRACE_MS`.
- */
-export function reconcileFilesAged(
-  runtime: CommandRuntime,
-  store: FileStore,
-  options: ReconcileOptions,
-  graceMs: number
-): Promise<ReconcileReport> {
-  const run = AGED_RECONCILE.get(runtime)
-  if (run === undefined)
-    throw new Error("not a runtime of createCommandRuntime")
-  return run(store, options, graceMs)
 }
 
 /** Заморожує дані каталогу до дна: каталог — чисті дані JSON, без циклів. */
