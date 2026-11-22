@@ -292,7 +292,9 @@ export interface CommandRuntime {
    * call), an unknown object or one without `storage`, a scope that does not
    * fit, and a refusal of the right or of the quota alike. The check is
    * necessary, not sufficient: `attachFile` judges the row. Rejects with
-   * `CommandFailure`: `command.unauthenticated` for an invalid session.
+   * `CommandFailure`: `command.unauthenticated` for an invalid session; with
+   * `FileStoreError` `no-binding` when the runtime has not created the
+   * `storage_instance` row (it does so at start).
    */
   checkUpload(
     session: SessionClaims,
@@ -1322,7 +1324,8 @@ async function checkUpload(
       if (rows.length !== 1 || (ok !== "t" && ok !== "f")) {
         throw new Error("storage_headroom answered no boolean")
       }
-      if (ok === "f") return null
+      // `false` — відмова права чи квоти; `null` нижче — немає рядка прив'язки
+      if (ok === "f") return false
       // Відбиток читається тут же і щоразу заново: `put` звіряє саме його, тож
       // промоція чи відновлення живого процесу не лишає застарілого значення.
       // `SET LOCAL ROLE` перевіряє членство користувача сесії, а не поточну
@@ -1331,8 +1334,9 @@ async function checkUpload(
       return readInstance(send)
     }
   )
+  if (instance === null) throw NO_BINDING
   const { storage } = object
-  return instance !== null && storage !== undefined
+  return instance !== false && storage !== undefined
     ? {
         maxBytes: storage.maxBytes,
         mediaTypes: [...storage.mediaTypes],
@@ -1440,10 +1444,20 @@ async function ensureInstanceRow(state: RuntimeState): Promise<void> {
   )
 }
 
-/** Відповідь `storage_instance_id()`: відбиток прив'язки; чужа форма — помилка. */
-async function readInstance(send: Send): Promise<string> {
+const NO_BINDING = new FileStoreError(
+  "no-binding",
+  "simetra.storage_instance has no row: the runtime creates it at start (storage_instance_ensure)"
+)
+
+/**
+ * Відповідь `storage_instance_id()`: відбиток прив'язки, `null` — рядка ще
+ * немає (іменована відмова `no-binding` кидається поза транзакцією); чужа
+ * форма — помилка.
+ */
+async function readInstance(send: Send): Promise<string | null> {
   const { rows } = await send({ text: INSTANCE_ID, params: [] })
   const id = rows[0]?.id
+  if (rows.length === 1 && id === null) return null
   if (
     rows.length !== 1 ||
     typeof id !== "string" ||
@@ -1461,10 +1475,12 @@ async function readInstance(send: Send): Promise<string> {
  */
 async function fileInstance(state: RuntimeState): Promise<string> {
   rejectNested()
-  return inShortTransaction(
+  const instance = await inShortTransaction(
     state,
     BEGIN_READ_ONLY,
     [INSTANCE_LIMITS(state), FILES_ROLE],
     readInstance
   )
+  if (instance === null) throw NO_BINDING
+  return instance
 }

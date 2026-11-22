@@ -84,6 +84,7 @@ export class FileStoreError extends Error {
       | "too-large"
       | "foreign-bucket"
       | "binding-changed"
+      | "no-binding"
       | "in-recovery"
       | "bad-limit"
       | "bad-key"

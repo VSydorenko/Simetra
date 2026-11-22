@@ -367,15 +367,20 @@ describe("the marker row at start", () => {
     ).rejects.toBeInstanceOf(CommandFailure)
   })
 
-  it("the check reads no cached result: a missing row is a refusal, not a binding", async () => {
+  it("a missing row is the named refusal no-binding in checkUpload and rebindFileStore", async () => {
     const { runtime } = await make((text) =>
       text.includes("storage_instance_id")
         ? { rows: [{ id: null }] }
-        : undefined
+        : text.includes("pg_is_in_recovery")
+          ? { rows: [{ recovery: "f" }] }
+          : undefined
     )
     await expect(
       runtime.checkUpload(session, { object: DOC, scope: COMPANY })
-    ).rejects.toBeInstanceOf(CommandFailure)
+    ).rejects.toMatchObject({ reason: "no-binding" })
+    await expect(
+      runtime.rebindFileStore({ rebind: async () => {} } as never)
+    ).rejects.toMatchObject({ reason: "no-binding" })
   })
 })
 
