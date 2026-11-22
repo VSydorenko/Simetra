@@ -4,6 +4,7 @@ import {
   compile,
   completeFiles,
   currentDebt,
+  formPolicies,
   diagnostic,
   hasFixedBody,
   isMovementQuery,
@@ -723,12 +724,17 @@ export async function reverseGenerate(
   }
   // Мітки видів теки для `check`: контракти прав метаданих (`metadataRights`) без
   // SQL-стадій; ідентифікатори чернетки одноразові, її читають лише за контрактами
-  const kinds = async (): Promise<KindsByLabel | undefined> => {
-    const draft = assemble(new Map([...generated, ...laid.files]), () =>
-      crypto.randomUUID()
-    )
-    return kindsByLabel(metadataRights(draft.files))
-  }
+  const draft = () =>
+    assemble(new Map([...generated, ...laid.files]), () => crypto.randomUUID())
+  const kinds = async (): Promise<KindsByLabel | undefined> =>
+    kindsByLabel(metadataRights(draft().files))
+  // Функції політик визнає розпізнавач компілятора на тій самій чернетці, що
+  // ляже в теку: декларації й похідні гранти від цього не залежать. Перелік
+  // боргу підсумкова тека отримує заново (`withDebt`), тож збережений, навіть
+  // зламаний, сюди не йде — він закрив би стадію 3, і з нею розпізнавання
+  const policies = await formPolicies(
+    new Map([...draft().files].filter(([path]) => path !== SQL_DEBT_FILE))
+  )
   const declared = await declareFunctions({
     units: appUnits,
     facts: o.executeFacts,
@@ -742,6 +748,9 @@ export async function reverseGenerate(
     described: elsewhere.units,
     existing: o.existing,
     platformForms: platformForms(kept),
+    policyFunctions: new Map(
+      policies.functions.map((p) => [p.unit.identity, p.purposes])
+    ),
     kinds,
   })
   // Гранти задекларованих функцій відтворює генератор: з виходу їх прибрано

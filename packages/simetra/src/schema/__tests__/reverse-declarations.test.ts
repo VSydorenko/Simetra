@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import {
   compile,
+  formPolicies,
   loadSqlParser,
   readSqlUnits,
   type Diagnostic,
@@ -33,6 +34,14 @@ import {
   withRoles,
 } from "../../compiler/__tests__/fixtures/rights"
 import { pinnedSettingsClause } from "../../compiler/sql/head-settings"
+import {
+  DOCS_GRANT,
+  POLICY_DEBT,
+  POLICY_FUNCTION,
+  POLICY_SHELL,
+  READ_POLICY,
+  policyFiles,
+} from "../../compiler/__tests__/fixtures/policy-function"
 
 /**
  * Декларації definer-функцій у зворотній генерації (спека декларацій функцій
@@ -1021,5 +1030,134 @@ describe("repeated adoption", () => {
       ])
       expect(result.changes).toEqual([])
     })
+  })
+})
+
+describe("policy functions of debt (Р9, І6)", () => {
+  // Таблиці фікстури функції політики — з фізичного знімка її теки; тека
+  // зворотної генерації — прийом з нуля: лише проєкт
+  const adopt = async (sql: string, executes: FactOptions) => {
+    const folder = policyFiles(
+      POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT(),
+      POLICY_DEBT()
+    )
+    const physical = await compile(folder)
+    expect(physical.model, "the fixture folder compiles").toBeDefined()
+    const existing = new Map([
+      ["project.meta.json", folder.get("project.meta.json")!],
+    ])
+    return reverseGenerate(
+      {
+        tables: catalogFromSnapshot(physical.model!.physical).tables,
+        enumTypes: [],
+        units: units(sql),
+      },
+      options(existing, facts(fact("f", executes)))
+    )
+  }
+  const EXECUTE = [
+    "REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC;",
+    "GRANT EXECUTE ON FUNCTION public.f() TO authenticated;",
+  ].join("\n")
+  const functionGrants = (files: ReadonlyMap<string, string>) =>
+    [...files.values()].filter((text) =>
+      text.includes("ON FUNCTION public.f()")
+    )
+  const functionFiles = (files: ReadonlyMap<string, string>) =>
+    [...files.keys()].filter((p) => p.endsWith(".functions.json"))
+
+  // Мутація: писати декларацію кожній definer-функції (без пропуску функції
+  // політики) — декларація на форму платформи, `sql.declaration-platform-form`
+  it("a policy function gets no declaration and no verbatim grant; the compile recognizes it the same", async () => {
+    const result = await adopt(
+      POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT() + EXECUTE,
+      { grants: ["authenticated"] }
+    )
+    expect(errorsOf(result)).toEqual([])
+    expect(codes(result.diagnostics)).not.toContain(
+      "sql.definer-caller-unchecked"
+    )
+    expect(functionFiles(result.files)).toEqual([])
+    expect(functionGrants(result.files)).toEqual([])
+    // Тека виходу, скомпільована, визнає ту саму функцію функцією політики,
+    // а живий `EXECUTE` ролі викликача відтворює генератор
+    const policies = await formPolicies(result.files)
+    expect(
+      policies.functions.map((p) => `${p.function.schema}.${p.function.name}`)
+    ).toEqual(["public.f"])
+    const compiled = await compile(result.files)
+    expect(compiled.diagnostics.filter((d) => d.severity === "error")).toEqual(
+      []
+    )
+    expect(
+      compiled
+        .model!.sqlUnits.filter(
+          (u) => u.generator === "functionExecute" && u.sql.startsWith("GRANT")
+        )
+        .map((u) => u.sql)
+    ).toEqual(["GRANT EXECUTE ON FUNCTION public.f() TO authenticated;"])
+  })
+
+  it("a function outside the form gets a declaration, the compile names sql.policy-helper-correlated", async () => {
+    const volatile = POLICY_FUNCTION({
+      shell: POLICY_SHELL.replace("STABLE", "VOLATILE"),
+    })
+    const result = await adopt(
+      volatile + READ_POLICY() + DOCS_GRANT() + EXECUTE,
+      {
+        grants: ["authenticated"],
+      }
+    )
+    expect(functionFiles(result.files)).toHaveLength(1)
+    // Декларація — як у будь-якої definer-функції: без запобіжника в тілі
+    // `check` немає, і компіляція просить його поруч із причиною форми
+    expect(codes(errorsOf(result))).toEqual([
+      "sql.declaration-check-missing",
+      "sql.policy-helper-correlated",
+    ])
+    expect((await formPolicies(result.files)).functions).toEqual([])
+  })
+
+  // Генератор відкликає `EXECUTE` у ролі поза призначеннями; дослівний грант
+  // їй — не похідний, тож лишається й називає себе, а не зникає мовчки.
+  // Мутація: прибирати кожен грант функції політики
+  it("a grant to a profile role outside the derived purposes stays verbatim: sql.generated-grant", async () => {
+    const result = await adopt(
+      POLICY_FUNCTION() +
+        READ_POLICY() +
+        DOCS_GRANT() +
+        EXECUTE +
+        "\nGRANT EXECUTE ON FUNCTION public.f() TO anon;",
+      { grants: ["authenticated", "anon"] }
+    )
+    expect(functionFiles(result.files)).toEqual([])
+    expect(functionGrants(result.files)).toEqual([
+      expect.stringContaining("GRANT EXECUTE ON FUNCTION public.f() TO anon;"),
+    ])
+    expect(functionGrants(result.files)[0]!.includes("TO authenticated")).toBe(
+      false
+    )
+    expect(codes(errorsOf(result))).toEqual(["sql.generated-grant"])
+    expect(result.changes).toEqual([])
+  })
+
+  // Мутація: пропускати функцію політики до перевірки чужих ACL — грант ролі
+  // застосунку мовчки губиться разом із пропуском
+  it("a grant to a role outside the profile is introspect.definer-foreign-grant", async () => {
+    const result = await adopt(
+      POLICY_FUNCTION() +
+        READ_POLICY() +
+        DOCS_GRANT() +
+        EXECUTE +
+        "\nGRANT EXECUTE ON FUNCTION public.f() TO app_reader;",
+      { grants: ["authenticated", "app_reader"] }
+    )
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "introspect.definer-foreign-grant")
+        .map((d) => d.params?.role)
+    ).toEqual(["app_reader"])
+    expect(functionFiles(result.files)).toEqual([])
+    expect(result.changes).toEqual([])
   })
 })

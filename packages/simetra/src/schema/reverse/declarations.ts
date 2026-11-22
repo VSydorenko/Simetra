@@ -3,7 +3,9 @@ import {
   FUNCTION_CLASSES,
   callersOfRole,
   closedShellProblem,
+  PUBLIC,
   diagnostic,
+  grantFacts,
   grantTargetKeys,
   guardArgsOf,
   identityKey,
@@ -110,6 +112,13 @@ export interface DeclareInput {
    * декларація на них — `sql.declaration-platform-form`.
    */
   platformForms: ReadonlySet<string>
+  /**
+   * Функції політик боргу (спека декларацій функцій §5.8): ідентичність
+   * одиниці → виведені призначення `EXECUTE`. Їх визнає розпізнавач
+   * компілятора на чернетці підсумкової теки, тож тека виходу, скомпільована,
+   * визнає ті самі функції (інакше живий `EXECUTE` губився б мовчки).
+   */
+  policyFunctions: ReadonlyMap<string, readonly string[]>
   /**
    * Мітки видів підсумкової теки з контрактів прав її метаданих; кличеться
    * лише коли є що розв'язувати. `undefined` — метадані контрактів не дають.
@@ -220,6 +229,46 @@ function foreignGrants(
       found.push({ role: entry.grantee, reason: reasons.join("; ") })
   }
   return found
+}
+
+/**
+ * Дослівні `GRANT`/`REVOKE EXECUTE` функції політики, які відтворює генератор:
+ * `REVOKE` (генератор відкликає в усіх ролей поза призначеннями) і `GRANT` без
+ * опції передачі, кожен отримувач якого — роль виведеного призначення.
+ * Оператор і на інші об'єкти лишається: разом із ним зник би їхній грант.
+ */
+function derivedGrants(
+  identity: string,
+  purposes: readonly string[],
+  input: Pick<DeclareInput, "units" | "provider" | "parse">
+): CatalogUnit[] {
+  const own = new Set([`function|${identityKey(identity)}`])
+  const owned = input.units.filter((grant) => {
+    const keys = grantTargetKeys(grant, input.parse)
+    return keys.length > 0 && keys.every((key) => ownsTarget(own, key))
+  })
+  const derivedRole = (role: string) =>
+    role !== PUBLIC &&
+    (callersOfRole(role, input.provider) ?? []).some((p) =>
+      purposes.includes(p)
+    )
+  return owned.filter((grant) => {
+    const read = readSqlUnits(
+      [{ file: grant.identity, text: grant.sql, schema: "" }],
+      input.parse,
+      []
+    ).units
+    const [fact] = grantFacts(read, input.parse)
+    if (fact === undefined) return false
+    if (!fact.grant) return true
+    const option = (read[0]?.tree as { GrantStmt?: { grant_option?: boolean } })
+      .GrantStmt?.grant_option
+    return (
+      option !== true &&
+      fact.roles.size > 0 &&
+      [...fact.roles].every(derivedRole)
+    )
+  })
 }
 
 /** Декларації збереженого файлу (не згенерований шлях) — для звірки викликачів. */
@@ -383,6 +432,16 @@ export async function declareFunctions(
           role: grant.role,
           reason: grant.reason,
         })
+    const purposes = input.policyFunctions.get(catalogUnit.identity)
+    if (purposes !== undefined) {
+      // Форма платформи: декларації немає, а `EXECUTE` ролям її призначень
+      // виводить генератор, тож ці гранти — похідні й у теку не йдуть. Чужі
+      // гранти вже названо вище; решта лишається дослівною й дає
+      // `sql.generated-grant`, а не губиться
+      for (const grant of derivedGrants(unit.identity, purposes, input))
+        result.dropped.add(grant)
+      continue
+    }
     const fact = named[0]!
     const derived = derivedCallers(fact, provider)
 
