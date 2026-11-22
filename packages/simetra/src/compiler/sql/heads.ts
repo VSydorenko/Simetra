@@ -330,7 +330,7 @@ function sessionRead(node: Record<string, unknown>): string | undefined {
 }
 
 /** Кожне читання стану сесії поза дозвільним у дереві (`sessionRead`). */
-function sessionReads(value: unknown): string[] {
+export function sessionReads(value: unknown): string[] {
   if (Array.isArray(value)) return value.flatMap(sessionReads)
   if (typeof value !== "object" || value === null) return []
   const node = value as Record<string, unknown>

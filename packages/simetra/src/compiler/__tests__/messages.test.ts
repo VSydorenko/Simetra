@@ -21,6 +21,7 @@ import type { CommandContextWrite } from "../sql/command-context"
 import type { DefinerReadsForm } from "../sql/definer-reads"
 import type { HeadConstruct } from "../sql/query-shape"
 import type { SetFunctionReason } from "../sql/function-shape"
+import type { PolicyFunctionReason } from "../sql/policy-functions"
 
 const ALL_RULES: RuleCode[] = [...SCHEMA_RULES, ...COMPILER_RULES]
 
@@ -460,6 +461,54 @@ describe("messages catalog", () => {
         )
       }
     }
+  })
+
+  it("sql.policy-helper-correlated renders every reason as a sentence and names the rest", () => {
+    // Повнота за типом: нова причина без запису тут — помилка `tsc`.
+    const reasons = Object.keys({
+      parameters: 0,
+      language: 0,
+      volatility: 0,
+      returns: 0,
+      outputKey: 0,
+      restrictiveBound: 0,
+      actorUnbound: 0,
+      policyShape: 0,
+      policyRoles: 0,
+    } satisfies Record<PolicyFunctionReason, 0>)
+    for (const locale of ["en", "uk"] as const) {
+      const texts = reasons.map(
+        (reason) =>
+          localize(
+            diagnostic("sql.policy-helper-correlated", "a.sql", "", {
+              schema: "public",
+              name: "f",
+              function: "public.f",
+              reason,
+              detail: "<rest>",
+              line: 3,
+            }),
+            locale
+          ).message
+      )
+      texts.forEach((text, i) => {
+        expect(text).toContain("public.f")
+        expect(text).toContain("<rest>")
+        expect(text, `${reasons[i]} ${locale}`).not.toContain(`: ${reasons[i]}`)
+      })
+      expect(new Set(texts).size, locale).toBe(reasons.length)
+    }
+    const d = diagnostic("sql.policy-helper-correlated", "a.sql", "", {
+      schema: "public",
+      name: "f",
+      function: "public.f",
+      reason: "outputKey",
+      line: 3,
+    })
+    expect(d.severity).toBe("error")
+    expect(isRepairError(d)).toBe(true)
+    expect(d.message).not.toContain("undefined")
+    expect(MESSAGES["sql.policy-helper-correlated"].hint).toBeDefined()
   })
 
   it("renders every fill problem of promote.expression-invalid as a sentence", () => {

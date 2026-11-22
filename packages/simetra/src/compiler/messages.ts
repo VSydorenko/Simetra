@@ -7,6 +7,7 @@ import type {
 } from "./diagnostics"
 import type { CommandContextWrite } from "./sql/command-context"
 import type { DefinerReadsForm } from "./sql/definer-reads"
+import type { PolicyFunctionReason } from "./sql/policy-functions"
 import type { HeadConstruct } from "./sql/query-shape"
 
 export type Locale = "en" | "uk"
@@ -693,6 +694,42 @@ const SET_FUNCTION_REASON: Readonly<
     uk: "вона без SET search_path = ''",
   },
 }
+/** Причини `sql.policy-helper-correlated` (спека декларацій функцій §5.8). */
+const POLICY_FUNCTION_REASON: Readonly<
+  Record<PolicyFunctionReason, { en: string; uk: string }>
+> = {
+  parameters: {
+    en: "it takes parameters, so a direct call can ask about another row or user",
+    uk: "вона приймає параметри, тож прямий виклик може спитати про інший рядок чи користувача",
+  },
+  language: { en: "its language is not sql", uk: "її мова не sql" },
+  volatility: { en: "it is not STABLE", uk: "вона не STABLE" },
+  returns: {
+    en: "it does not return SETOF uuid",
+    uk: "вона не повертає SETOF uuid",
+  },
+  outputKey: {
+    en: "its output is not the bare key column of the one table T that every calling policy stands on, read from T once",
+    uk: "її вивід — не голий ключ єдиної таблиці T, на якій стоять усі політики-викликачі, прочитаної з T один раз",
+  },
+  restrictiveBound: {
+    en: "a RESTRICTIVE SELECT policy of T that applies to its callers is not a conjunct of its WHERE over T, or reads what means another thing in the owner's body (session roles, role and privilege functions, tables under RLS, views)",
+    uk: "RESTRICTIVE-політика SELECT таблиці T, що діє на викликачів, не стоїть кон'юнктом її WHERE над T або читає те, що в тілі власника означає інше (ролі сесії, функції ролей і привілеїв, таблиці під RLS, подання)",
+  },
+  actorUnbound: {
+    en: "its result is not bound to the actor: one SELECT over base tables joined by equalities, with a top-level WHERE conjunct <column> = auth.uid() or simetra.current_user_id(), or <column> IN (SELECT g()) over another policy or set function",
+    uk: "її результат не прив'язаний до актора: один SELECT над базовими таблицями, з'єднаними рівностями, з кон'юнктом верхнього рівня WHERE <колонка> = auth.uid() чи simetra.current_user_id() або <колонка> IN (SELECT g()) над іншою функцією політики чи функцією множини",
+  },
+  policyShape: {
+    en: "a calling policy is not <key of T> IN (SELECT f()) or an OR of such atoms over policy functions",
+    uk: "політика-викликач — не <ключ T> IN (SELECT f()) чи OR таких атомів над функціями політик",
+  },
+  policyRoles: {
+    en: "a calling policy names PUBLIC, a role without a session or outside the purposes, or a role that no SELECT policy calling it in USING names or that has no SELECT on T",
+    uk: "політика-викликач називає PUBLIC, роль без сесії чи поза призначеннями або роль, якої не називає жодна політика SELECT з викликом у USING чи яка не має SELECT на T",
+  },
+}
+
 const ROW_RULE_GRAMMAR = {
   en: "A row rule combines with AND, OR, NOT and parentheses the atoms <column> IS [NOT] NULL, <column> = or <> <literal>, <column> [NOT] IN (<literals>), <column> <op> <column> of the same type and num_nonnulls(<columns>) <op> <integer>, where <op> is =, <>, <, <=, > or >=; columns are unqualified columns of the table, without casts, other functions or subqueries; emptiness is checked with IS [NOT] NULL, never with a NULL literal.",
   uk: "Правило рядка поєднує через AND, OR, NOT і дужки атоми <колонка> IS [NOT] NULL, <колонка> = чи <> <літерал>, <колонка> [NOT] IN (<літерали>), <колонка> <оп> <колонка> одного типу й num_nonnulls(<колонки>) <оп> <ціле>, де <оп> — =, <>, <, <=, > чи >=; колонки — некваліфіковані колонки таблиці, без приведень, інших функцій і підзапитів; порожнечу перевіряє IS [NOT] NULL, а не літерал NULL.",
@@ -1558,6 +1595,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     hint: {
       en: "A SECURITY DEFINER function runs as its owner, who bypasses row level security, so a role of the API that can execute it acts past the rights. Such a function is refused in any .sql file, SQL debt included, until it takes a platform form or names the check of its caller: link it to a scope kind as its set function (or to an access dimension as its values function), or declare its signature with the named check. Otherwise make it SECURITY INVOKER, revoke EXECUTE from PUBLIC and from each API role, or write the operation as a command or a TypeScript hook.",
       uk: "Функція SECURITY DEFINER виконується від свого власника, який обходить захист рядків, тож роль API, що може її виконати, діє повз права. Така функція відхиляється в будь-якому файлі .sql, борг включно, доки не набуде форми платформи чи не назве перевірку викликача: зв'яжіть її з видом скоупу як функцію множини (чи з виміром доступу як функцію значень) або задекларуйте її сигнатуру з названою перевіркою. Інакше зробіть її SECURITY INVOKER, відкличте EXECUTE від PUBLIC і від кожної ролі API або запишіть операцію командою чи TypeScript-хуком.",
+    },
+  },
+  "sql.policy-helper-correlated": {
+    en: (p) =>
+      `Function ${p.function} at line ${p.line} is called by a verbatim policy but is not a policy function: ${POLICY_FUNCTION_REASON[p.reason as PolicyFunctionReason]?.en ?? p.reason}${p.detail === undefined ? "" : ` (also: ${p.detail})`}`,
+    uk: (p) =>
+      `Функцію ${p.function} у рядку ${p.line} кличе дослівна політика, але вона не функція політики: ${POLICY_FUNCTION_REASON[p.reason as PolicyFunctionReason]?.uk ?? p.reason}${p.detail === undefined ? "" : ` (ще: ${p.detail})`}`,
+    hint: {
+      en: "A role of the query can call a function that a policy calls also as an RPC, so the platform grants EXECUTE only to a policy function, whose direct call returns no more than the policy lets the actor read: no parameters, RETURNS SETOF uuid, LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '', the key of the policy table bound to the actor, and each calling policy written as <key> IN (SELECT f()). Rewrite the function into this form, or, when it answers with facts of the actor about another table (members, tenants), reduce it to the set function of a scope kind.",
+      uk: "Роль запиту може кликати функцію, яку кличе політика, ще й як RPC, тож EXECUTE платформа дає лише функції політики, прямий виклик якої повертає не більше, ніж політика дозволяє актору читати: без параметрів, RETURNS SETOF uuid, LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '', ключ таблиці політики, прив'язаний до актора, і кожна політика-викликач у формі <ключ> IN (SELECT f()). Перепишіть функцію в цю форму або, коли вона відповідає фактами актора про іншу таблицю (учасники, тенанти), зведіть її до функції множини виду скоупу.",
     },
   },
   "sql.declaration-target-missing": {

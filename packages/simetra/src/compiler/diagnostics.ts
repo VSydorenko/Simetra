@@ -44,6 +44,7 @@ export const COMPILER_RULES = [
   "sql.debt-extension-schema",
   "sql.definer-reads-rls",
   "sql.definer-caller-unchecked",
+  "sql.policy-helper-correlated",
   "sql.declaration-target-missing",
   "sql.declaration-overload",
   "sql.declaration-duplicate",
@@ -548,6 +549,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
  */
 export const REPAIR_CLASS: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "sql.definer-caller-unchecked",
+  "sql.policy-helper-correlated",
   "sql.declaration-check-missing",
   "sql.declaration-check-not-applied",
   "sql.declaration-platform-form",
