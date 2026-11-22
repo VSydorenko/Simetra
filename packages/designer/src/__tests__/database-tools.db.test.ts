@@ -244,6 +244,10 @@ describe("introspect", () => {
         const fixed = await invoke(toolByName("compile")!, {}, compileOptions)
         expect(errors(fixed)).toEqual([])
         expect(fixed.ok).toBe(true)
+        // Не лише компіляція: план застосування над прийнятою базою проходить.
+        const planned = await invoke(toolByName("plan")!, {}, options(dir, env))
+        expect(errors(planned), JSON.stringify(planned.diagnostics)).toEqual([])
+        expect(planned.ok).toBe(true)
       }
     )
   })
