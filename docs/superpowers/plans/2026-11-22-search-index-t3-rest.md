@@ -107,7 +107,7 @@
 
 ### Задача 6. Інструмент вбудованих
 
-- **Модулі:** `packages/simetra/scripts/builtin-functions.ts`, `scripts/catalog-functions.ts`.
+- **Модулі:** `packages/simetra/scripts/builtin-functions.ts`, `packages/simetra/scripts/catalog-functions.ts`.
 - **Готово, коли:** Р9; перегенерований перелік на стеку `postgres` збігається з комітованим.
 - **Після:** 0
 - **Перевірка:** `run-tests db --filter builtin-functions`
