@@ -856,8 +856,9 @@ SignalTokens = {
   `catalog.storage` з реєстру видів (`packages/simetra/src/model/kinds/`).
   Розмір і тип — платформо-записувані, поза змістом, незмінні.
 - **Сумісність `storage`.** Лише `Catalog` без `role`, `membership`,
-  `rightsContainer`, `predefinedItems`, `hierarchyType: "FoldersAndItems"` і
-  не корінь виду скоупу (вставку кореня судить `rootCreatePredicates`, а не
+  `rightsContainer`, `containerBinding` (попередня перевірка §8.2 не
+  враховує гранти за контейнером), `predefinedItems`,
+  `hierarchyType: "FoldersAndItems"` і не корінь виду скоупу (вставку кореня судить `rootCreatePredicates`, а не
   попередня перевірка §8.2) — інакше `storage.incompatible`. `mediaTypes` —
   непорожній перелік унікальних `type/subtype` малими літерами без
   параметрів (`storage.media-type`); `maxBytes` — від 1 до

@@ -273,6 +273,7 @@ describe("catalogSchema storage", () => {
     ["role", { role: "users" }],
     ["membership", { membership: { user: "user" } }],
     ["rightsContainer", { rightsContainer: true }],
+    ["containerBinding", { containerBinding: "folder" }],
     ["predefinedItems", { predefinedItems: [{ name: "Main" }] }],
     ["hierarchyType", { hierarchyType: "FoldersAndItems" }],
   ])("storage.incompatible with %s", (field, extra) => {

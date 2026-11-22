@@ -1044,8 +1044,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     en: (p) => `A catalog with storage cannot use ${p.field}`,
     uk: (p) => `Довідник зі storage не може мати ${p.field}`,
     hint: {
-      en: "A file row is written only by the attach trigger; remove storage, or remove the conflicting setting (a scope kind root, role, membership, rightsContainer, predefinedItems, hierarchyType FoldersAndItems).",
-      uk: "Рядок файлу пише лише тригер вкладення; приберіть storage або конфліктне налаштування (корінь виду скоупу, role, membership, rightsContainer, predefinedItems, hierarchyType FoldersAndItems).",
+      en: "A file row is written only by the attach trigger; remove storage, or remove the conflicting setting (a scope kind root, role, membership, rightsContainer, containerBinding, predefinedItems, hierarchyType FoldersAndItems).",
+      uk: "Рядок файлу пише лише тригер вкладення; приберіть storage або конфліктне налаштування (корінь виду скоупу, role, membership, rightsContainer, containerBinding, predefinedItems, hierarchyType FoldersAndItems).",
     },
   },
   "storage.media-type": {

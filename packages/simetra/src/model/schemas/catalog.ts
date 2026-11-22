@@ -178,6 +178,10 @@ export const catalogSchema = z
       catalog.role !== undefined && "role",
       catalog.membership !== undefined && "membership",
       catalog.rightsContainer === true && "rightsContainer",
+      // `storage_headroom` судить право без рядка (`rowFreeGrants`), а він
+      // пропускає гранти за контейнером: файл під контейнерним грантом
+      // отримав би відмову вже після завантаження байтів
+      catalog.containerBinding !== undefined && "containerBinding",
       catalog.predefinedItems.length > 0 && "predefinedItems",
       catalog.hierarchyType === "FoldersAndItems" && "hierarchyType",
     ].filter((name): name is string => name !== false)
