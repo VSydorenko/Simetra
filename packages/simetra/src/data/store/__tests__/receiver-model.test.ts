@@ -195,6 +195,9 @@ const failWith = (at: string, what: string, trace: readonly string[]) => {
   throw new Error(`${at}: ${what}\n${trace.join("\n")}`)
 }
 
+// Прогін закриває ядро й таймери в будь-якому разі: інакше кожен прогін
+// лишав би живе ядро з таймером, і тисячі прогонів одного `it` вичерпували б
+// пам'ять процесу.
 async function run(steps: readonly Step[]): Promise<void> {
   const transport = createFakeSignalTransport()
   const h = setup({
@@ -202,6 +205,19 @@ async function run(steps: readonly Step[]): Promise<void> {
     signals: transport,
     objects: [task, org],
   })
+  try {
+    await runOn(steps, transport, h)
+  } finally {
+    h.core.close("disposed")
+    vi.clearAllTimers()
+  }
+}
+
+async function runOn(
+  steps: readonly Step[],
+  transport: ReturnType<typeof createFakeSignalTransport>,
+  h: ReturnType<typeof setup>
+): Promise<void> {
   // Перелік скоупів задає підписки; права читання лишаються — заміна
   // переліку відпускає канал, не прибираючи рядків.
   const scopeSet = SCOPES.map(() => true)
