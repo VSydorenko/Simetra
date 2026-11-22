@@ -1422,3 +1422,40 @@ describe("buildRuntimeCatalog: rights contract", () => {
     expect(hashes(owned)).toEqual(hashes(unowned))
   })
 })
+
+// Сховище файлів довідника (ПГ-5 Р9): межа й типи доходять до обох каталогів.
+describe("buildRuntimeCatalog: storage", () => {
+  const storage = { maxBytes: 2048, mediaTypes: ["application/pdf"] }
+  const withRegion = async (layer: Layer) => {
+    const { model: m, diagnostics } = await compileRights(
+      policyDomain(writeRoles(), adminRoles(), commandCoreLayer(), layer)
+    )
+    expect(diagnostics).toEqual([])
+    return buildRuntimeCatalog(m!)
+  }
+
+  it("is carried by the entry that declares it, in both catalogs, and only there", async () => {
+    const stored = await withRegion({ [REGION_FILE]: { storage } })
+    const region = stored.objects.find((o) => o.name === "Region")
+    expect(region?.storage).toEqual(storage)
+    expect(runtimeCatalogSchema.safeParse(stored).success).toBe(true)
+    for (const o of stored.objects.filter((o) => o.name !== "Region")) {
+      expect(o, o.name).not.toHaveProperty("storage")
+    }
+    expect(
+      buildClientCatalog(stored).objects.find((o) => o.name === "Region")
+        ?.storage
+    ).toEqual(storage)
+  })
+
+  it("moves snapshotHash, so a client with the old limits is stale", async () => {
+    const stored = await withRegion({ [REGION_FILE]: { storage } })
+    const bigger = await withRegion({
+      [REGION_FILE]: { storage: { ...storage, maxBytes: 4096 } },
+    })
+    const plain = await withRegion({ [REGION_FILE]: {} })
+    expect(
+      new Set([stored, bigger, plain].map((c) => c.snapshotHash)).size
+    ).toBe(3)
+  })
+})

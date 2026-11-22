@@ -23,6 +23,10 @@ import {
   renderMechanicsTrigger,
   type RenderedUnit,
 } from "./mechanics-units"
+import {
+  storageTriggerFunctions,
+  storageTriggerNames,
+} from "./platform/storage-names"
 import type { SqlParser } from "./sql/parse"
 import {
   carrierFunctionNames,
@@ -47,6 +51,7 @@ export type PlatformTriggerFamily =
   | "effects"
   | "rightsGuards"
   | "rightsSignals"
+  | "storage"
 
 export interface PlatformTrigger {
   family: PlatformTriggerFamily
@@ -60,6 +65,7 @@ export interface PlatformTrigger {
     | "effects"
     | "rightsGuards"
     | "rightsSignal"
+    | "storage"
   /** Тригер оновлення, платформний лише з умовою змісту таблиці. */
   contentUpdate: boolean
 }
@@ -85,6 +91,8 @@ export function platformTriggers(table: QualifiedName): PlatformTrigger[] {
   const hierarchy = hierarchyNames(table)
   const effects = effectsTriggerNames(table)
   const effectsFn = effectsFunctionName(table)
+  const storage = storageTriggerNames(table)
+  const storageFns = storageTriggerFunctions(table)
   const entry = (
     family: PlatformTriggerFamily,
     generator: PlatformTrigger["generator"],
@@ -159,6 +167,11 @@ export function platformTriggers(table: QualifiedName): PlatformTrigger[] {
         trigger
       )
     ),
+    // Сховище файлів (спека профілю postgres §8): вкладення, незмінність
+    // розміру й типу, облік — кожен зі своєю функцією таблиці
+    entry("storage", "storage", storageFns.attach, storage.attach),
+    entry("storage", "storage", storageFns.immutable, storage.immutable),
+    entry("storage", "storage", storageFns.usage, storage.usage),
   ]
 }
 

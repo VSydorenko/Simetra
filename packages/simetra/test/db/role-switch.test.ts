@@ -180,6 +180,7 @@ const ROLE_SWITCH_EXCEPTIONS: Exception[] = [
     "packages/simetra/src/compiler/__tests__/event-subscriptions.test.ts",
     "packages/simetra/src/compiler/__tests__/heads.test.ts",
     "packages/simetra/src/compiler/__tests__/stage-integrity.test.ts",
+    "packages/simetra/src/compiler/__tests__/storage-units.test.ts",
     "packages/simetra/src/compiler/__tests__/mechanics-units.test.ts",
     "packages/simetra/src/compiler/__tests__/fixtures/platform-catalog-forms.ts",
     "packages/simetra/src/schema/apply/__tests__/execute.test.ts",

@@ -17,6 +17,8 @@ import {
   physicalNameSchema,
 } from "./identity"
 import { metadataRefSchema } from "./metadata-ref"
+import { storageSchema } from "./storage"
+import type { SchemaRule } from "./rules"
 import {
   objectHeaderShape,
   standardAttributeOverridesSchema,
@@ -26,142 +28,172 @@ import {
 export const DEFAULT_MAIN_PRESENTATION = "Description"
 
 /** Довідник. */
-export const catalogSchema = z.strictObject({
-  ...objectHeaderShape,
-  kind: z
-    .literal("Catalog")
-    .meta({ description: "Metadata kind; always Catalog." }),
-  // Мітка виду — дискримінатор поліморфних пар і ідентифікатор об'єкта в
-  // контракті прав; призначається раз, тож перейменування її не змінює.
-  kindLabel: physicalNameSchema.optional().meta({
-    description:
-      "Physical kind label of the object. Assigned once at creation and never changed, so a rename keeps it.",
-  }),
-
-  // Роль, а не ім'я, позначає системний довідник: платформний шар (провізія,
-  // поточний користувач, авторство) знаходить «Користувачів» за нею, а
-  // функції прав — «Ролі» й «Призначення ролей» свого рівня, тож
-  // перейменування довідника їх не ламає.
-  role: z.enum(["users", "rightsRoles", "roleAssignments"]).optional().meta({
-    description:
-      "System role of the catalog: users marks the users catalog that the platform layer provisions and references (at most one per project, unscoped); rightsRoles and roleAssignments mark the custom roles and role assignments catalogs of a rights level, the level being the catalog's own scope (at most one per role and level).",
-  }),
-
-  // Нуль означає, що реквізиту (коду чи найменування) в довідника немає.
-  codeLength: z.number().int().nonnegative().default(9).meta({
-    description:
-      "Length of the code attribute; 0 means the catalog has no code.",
-  }),
-  codeType: z
-    .enum(["String", "Number"])
-    .default("String")
-    .meta({ description: "Value type of the code attribute." }),
-  descriptionLength: z.number().int().nonnegative().default(150).meta({
-    description:
-      "Length of the description attribute; 0 means the catalog has no description.",
-  }),
-  hierarchyType: z
-    .enum(["None", "FoldersAndItems", "ItemsOnly"])
-    .default("None")
-    .meta({
+export const catalogSchema = z
+  .strictObject({
+    ...objectHeaderShape,
+    kind: z
+      .literal("Catalog")
+      .meta({ description: "Metadata kind; always Catalog." }),
+    // Мітка виду — дискримінатор поліморфних пар і ідентифікатор об'єкта в
+    // контракті прав; призначається раз, тож перейменування її не змінює.
+    kindLabel: physicalNameSchema.optional().meta({
       description:
-        "Hierarchy mode: none, folders and items, or items nested under items.",
+        "Physical kind label of the object. Assigned once at creation and never changed, so a rename keeps it.",
     }),
-  owners: z.array(metadataRefSchema).default([]).meta({
-    description: "Objects that own items of this catalog (subordination).",
-  }),
-  autonumber: z
-    .boolean()
-    .default(true)
-    .meta({ description: "Whether the code is generated automatically." }),
-  codeUnique: z
-    .boolean()
-    .default(true)
-    .meta({ description: "Whether the code must be unique." }),
-  mainPresentation: z
-    .enum(["Code", "Description"])
-    .default(DEFAULT_MAIN_PRESENTATION)
-    .meta({
+
+    // Роль, а не ім'я, позначає системний довідник: платформний шар (провізія,
+    // поточний користувач, авторство) знаходить «Користувачів» за нею, а
+    // функції прав — «Ролі» й «Призначення ролей» свого рівня, тож
+    // перейменування довідника їх не ламає.
+    role: z.enum(["users", "rightsRoles", "roleAssignments"]).optional().meta({
       description:
-        "Which standard attribute represents an item in lists and references.",
+        "System role of the catalog: users marks the users catalog that the platform layer provisions and references (at most one per project, unscoped); rightsRoles and roleAssignments mark the custom roles and role assignments catalogs of a rights level, the level being the catalog's own scope (at most one per role and level).",
     }),
-  predefinedItems: z
-    .array(
-      z.strictObject({
-        // Як у attributeSchema: обов'язковість id і physicalName дає стадія 2.
-        id: metadataIdSchema.optional(),
-        name: objectNameSchema.meta({
-          description: "Logical name of the predefined item.",
-        }),
-        // Мітка — значення `predefined_name` рядка; як мітка значення
-        // перерахування, призначається раз і не змінюється при перейменуванні.
-        physicalName: physicalNameSchema.optional().meta({
+
+    // Нуль означає, що реквізиту (коду чи найменування) в довідника немає.
+    codeLength: z.number().int().nonnegative().default(9).meta({
+      description:
+        "Length of the code attribute; 0 means the catalog has no code.",
+    }),
+    codeType: z
+      .enum(["String", "Number"])
+      .default("String")
+      .meta({ description: "Value type of the code attribute." }),
+    descriptionLength: z.number().int().nonnegative().default(150).meta({
+      description:
+        "Length of the description attribute; 0 means the catalog has no description.",
+    }),
+    hierarchyType: z
+      .enum(["None", "FoldersAndItems", "ItemsOnly"])
+      .default("None")
+      .meta({
+        description:
+          "Hierarchy mode: none, folders and items, or items nested under items.",
+      }),
+    owners: z.array(metadataRefSchema).default([]).meta({
+      description: "Objects that own items of this catalog (subordination).",
+    }),
+    autonumber: z
+      .boolean()
+      .default(true)
+      .meta({ description: "Whether the code is generated automatically." }),
+    codeUnique: z
+      .boolean()
+      .default(true)
+      .meta({ description: "Whether the code must be unique." }),
+    mainPresentation: z
+      .enum(["Code", "Description"])
+      .default(DEFAULT_MAIN_PRESENTATION)
+      .meta({
+        description:
+          "Which standard attribute represents an item in lists and references.",
+      }),
+    predefinedItems: z
+      .array(
+        z.strictObject({
+          // Як у attributeSchema: обов'язковість id і physicalName дає стадія 2.
+          id: metadataIdSchema.optional(),
+          name: objectNameSchema.meta({
+            description: "Logical name of the predefined item.",
+          }),
+          // Мітка — значення `predefined_name` рядка; як мітка значення
+          // перерахування, призначається раз і не змінюється при перейменуванні.
+          physicalName: physicalNameSchema.optional().meta({
+            description:
+              "Physical label of the item stored in predefined_name. Assigned once at creation and never changed, so a rename keeps it.",
+          }),
+          description: localizedStringSchema.optional().meta({
+            description: "Description of the predefined item.",
+          }),
+        })
+      )
+      .default([])
+      .meta({
+        description:
+          "Items that exist in every deployment and are referenced by name.",
+      }),
+
+    // Авторство посилається на «Користувачі», тож без довідника з роллю users
+    // компілятор його відхиляє (`users.catalog-missing`).
+    trackAuthor: z.boolean().default(false).meta({
+      description:
+        "Adds the standard createdBy and updatedBy attributes referencing the users catalog; requires a catalog with role users.",
+    }),
+
+    // Учасник тенанта — довідник застосунку з власними реквізитами, а не
+    // таблиця платформи (спека користувачів §8): прапорець лише називає
+    // реквізит-посилання на «Користувачі», решту виводить компілятор.
+    membership: z
+      .strictObject({
+        user: elementNameSchema.meta({
           description:
-            "Physical label of the item stored in predefined_name. Assigned once at creation and never changed, so a rename keeps it.",
-        }),
-        description: localizedStringSchema.optional().meta({
-          description: "Description of the predefined item.",
+            "Logical name of the scalar Ref attribute to the users catalog; nullable for an invited member without an account.",
         }),
       })
-    )
-    .default([])
-    .meta({
-      description:
-        "Items that exist in every deployment and are referenced by name.",
-    }),
-
-  // Авторство посилається на «Користувачі», тож без довідника з роллю users
-  // компілятор його відхиляє (`users.catalog-missing`).
-  trackAuthor: z.boolean().default(false).meta({
-    description:
-      "Adds the standard createdBy and updatedBy attributes referencing the users catalog; requires a catalog with role users.",
-  }),
-
-  // Учасник тенанта — довідник застосунку з власними реквізитами, а не
-  // таблиця платформи (спека користувачів §8): прапорець лише називає
-  // реквізит-посилання на «Користувачі», решту виводить компілятор.
-  membership: z
-    .strictObject({
-      user: elementNameSchema.meta({
+      .optional()
+      .meta({
         description:
-          "Logical name of the scalar Ref attribute to the users catalog; nullable for an invited member without an account.",
+          "Marks a scoped catalog as the membership of its scope kind: one member per user and scope value, a generated member lookup and an optional generated scope set function.",
       }),
-    })
-    .optional()
-    .meta({
+
+    publicRead: publicReadSchema,
+    customActions: customActionsSchema,
+    access: accessSchema.optional(),
+    ownership: ownershipSchema.optional().meta({
       description:
-        "Marks a scoped catalog as the membership of its scope kind: one member per user and scope value, a generated member lookup and an optional generated scope set function.",
+        "Owners of a row: users or members the own extent of a grant opens the row to.",
+    }),
+    containerBinding: rightsCarrierSchema.optional().meta({
+      description:
+        "Attribute (or a two-step path of attributes) that binds a row to its rights container: the catalog flagged rightsContainer.",
+    }),
+    rightsContainer: z.boolean().optional().meta({
+      description:
+        "Marks the catalog as a rights container: objects bind to its rows with containerBinding, and a grant on the container covers them.",
     }),
 
-  publicRead: publicReadSchema,
-  customActions: customActionsSchema,
-  access: accessSchema.optional(),
-  ownership: ownershipSchema.optional().meta({
-    description:
-      "Owners of a row: users or members the own extent of a grant opens the row to.",
-  }),
-  containerBinding: rightsCarrierSchema.optional().meta({
-    description:
-      "Attribute (or a two-step path of attributes) that binds a row to its rights container: the catalog flagged rightsContainer.",
-  }),
-  rightsContainer: z.boolean().optional().meta({
-    description:
-      "Marks the catalog as a rights container: objects bind to its rows with containerBinding, and a grant on the container covers them.",
-  }),
+    storage: storageSchema.optional(),
 
-  standardAttributeOverrides: standardAttributeOverridesSchema,
+    standardAttributeOverrides: standardAttributeOverridesSchema,
 
-  attributes: z
-    .array(catalogAttributeSchema)
-    .default([])
-    .meta({ description: "Custom attributes of the catalog." }),
-  tabularSections: z
-    .array(tabularSectionSchema)
-    .default([])
-    .meta({ description: "Tabular sections of the catalog." }),
-  indexes: compositeIndexesSchema.meta({
-    description: "Composite indexes over the catalog attributes.",
-  }),
-})
+    attributes: z
+      .array(catalogAttributeSchema)
+      .default([])
+      .meta({ description: "Custom attributes of the catalog." }),
+    tabularSections: z
+      .array(tabularSectionSchema)
+      .default([])
+      .meta({ description: "Tabular sections of the catalog." }),
+    indexes: compositeIndexesSchema.meta({
+      description: "Composite indexes over the catalog attributes.",
+    }),
+  })
+  .superRefine((catalog, ctx) => {
+    if (catalog.storage === undefined) return
+    // Файл — рядок довідника, який пише лише тригер вкладення; роль, членство,
+    // контейнер прав, предвизначені елементи й група ієрархії мають власну
+    // механіку запису. Корінь виду скоупу тут не видно (вид — у проєкті):
+    // його відхиляє стадія цілісності компілятора тим самим кодом.
+    const conflicts = [
+      catalog.role !== undefined && "role",
+      catalog.membership !== undefined && "membership",
+      catalog.rightsContainer === true && "rightsContainer",
+      // `storage_headroom` судить право без рядка (`rowFreeGrants`), а він
+      // пропускає гранти за контейнером: файл під контейнерним грантом
+      // отримав би відмову вже після завантаження байтів
+      catalog.containerBinding !== undefined && "containerBinding",
+      catalog.predefinedItems.length > 0 && "predefinedItems",
+      catalog.hierarchyType === "FoldersAndItems" && "hierarchyType",
+    ].filter((name): name is string => name !== false)
+    for (const name of conflicts) {
+      ctx.addIssue({
+        code: "custom",
+        message: `A catalog with storage cannot set ${name}`,
+        // Поле-конфлікт у шляху: діагностика бере його як `field`.
+        path: [name],
+        params: { rule: "storage.incompatible" satisfies SchemaRule },
+      })
+    }
+  })
 
 export type Catalog = z.infer<typeof catalogSchema>

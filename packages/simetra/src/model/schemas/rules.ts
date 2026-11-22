@@ -38,6 +38,8 @@ export const SCHEMA_RULES = [
   "type.format-type",
   "type.max-bytes-type",
   "type.pattern-invalid",
+  "storage.incompatible",
+  "storage.media-type",
   "posting.parse",
   "debt.not-canonical",
   "declarations.not-canonical",

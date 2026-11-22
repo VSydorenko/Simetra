@@ -1040,6 +1040,24 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Приберіть maxBytes: рантайм ще не читає регістрів, тож поле нічого б не робило.",
     },
   },
+  "storage.incompatible": {
+    en: (p) => `A catalog with storage cannot use ${p.field}`,
+    uk: (p) => `Довідник зі storage не може мати ${p.field}`,
+    hint: {
+      en: "A file row is written only by the attach trigger; remove storage, or remove the conflicting setting (a scope kind root, role, membership, rightsContainer, containerBinding, predefinedItems, hierarchyType FoldersAndItems).",
+      uk: "Рядок файлу пише лише тригер вкладення; приберіть storage або конфліктне налаштування (корінь виду скоупу, role, membership, rightsContainer, containerBinding, predefinedItems, hierarchyType FoldersAndItems).",
+    },
+  },
+  "storage.media-type": {
+    en: () =>
+      "storage.mediaTypes must be a non-empty list of unique lowercase type/subtype strings without parameters",
+    uk: () =>
+      "storage.mediaTypes має бути непорожнім переліком унікальних type/subtype малими літерами без параметрів",
+    hint: {
+      en: 'Write each type as "image/png": lowercase, one slash, no ";charset=…" parameters, no duplicates.',
+      uk: 'Пишіть кожен тип як "image/png": малі літери, один слеш, без параметрів ";charset=…", без повторів.',
+    },
+  },
   "attribute.lazy-not-allowed": {
     en: () => "A polymorphic Ref or a tabular section attribute cannot be lazy",
     uk: () => "Поліморфний Ref чи реквізит ТЧ не може бути лінивим",
@@ -5048,6 +5066,30 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         p.reason === "disabled"
           ? `Нічого не сплановано й не записано. Поверніть тригеру на ${p.table} звичайний ввімкнений стан від ${p.login} і сплануйте знову. Якщо тригер змінено поза Simetra, вважайте це ознакою підробки й звірте його з власником таблиці.`
           : `Нічого не сплановано й не записано. Виконайте це зняття від ${p.login}. Якщо живий тригер змінено поза Simetra, вважайте це ознакою підробки й звірте його з власником таблиці.`,
+    },
+  },
+  "plan.storage-added": {
+    en: (p) =>
+      `The plan adds the file storage property to the live table ${p.table}: its existing rows would have no file size and no byte record`,
+    uk: (p) =>
+      `План додає властивість storage до живої таблиці ${p.table}: наявні рядки лишилися б без розміру файлу й без байтів`,
+    hint: {
+      en: (p) =>
+        `Nothing was planned or written. Put the files in a new object that has storage from the start, and move the rows there; a catalog with a live table cannot gain storage in place (table ${p.table}).`,
+      uk: (p) =>
+        `Нічого не сплановано й не записано. Заведіть новий об'єкт зі storage з самого початку й перенесіть рядки туди: довідник з живою таблицею не може отримати storage на місці (таблиця ${p.table}).`,
+    },
+  },
+  "plan.storage-removed": {
+    en: (p) =>
+      `The plan removes the file storage property from the live table ${p.table}: the bytes of its rows would stay in the bucket with no row to own them`,
+    uk: (p) =>
+      `План прибирає властивість storage з живої таблиці ${p.table}: байти її рядків лишилися б у бакеті без рядка-власника`,
+    hint: {
+      en: (p) =>
+        `Nothing was planned or written. Delete the rows of ${p.table} through commands first so the runtime removes their bytes, then drop the whole object; storage cannot be removed from a live table in place.`,
+      uk: (p) =>
+        `Нічого не сплановано й не записано. Спершу видаліть рядки ${p.table} командами, щоб рантайм прибрав їхні байти, а тоді прибирайте весь об'єкт: storage не знімається з живої таблиці на місці.`,
     },
   },
   "plan.type-guard-unsupported": {

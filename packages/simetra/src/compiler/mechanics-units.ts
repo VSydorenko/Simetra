@@ -1,6 +1,7 @@
 import {
   PLATFORM_SCHEMA,
   authorColumns,
+  filePlatformColumns,
   quoteIdent,
   serviceDateColumns,
   standardLogicalName,
@@ -102,6 +103,10 @@ export function nonContentStandardNames(
   return new Set([
     ...mechanicsStandardNames(attributeCase),
     ...authorStandardNames(attributeCase),
+    // Розмір і тип файлу пише тригер вкладення, а не зміст рядка.
+    ...filePlatformColumns().map((def) =>
+      standardLogicalName(def, attributeCase)
+    ),
   ])
 }
 

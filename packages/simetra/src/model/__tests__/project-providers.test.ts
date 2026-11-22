@@ -6,6 +6,7 @@ import {
   LOGIN_ROLE_REQUEST_PURPOSES,
   PLATFORM_LOGIN_ROLES,
   PLATFORM_ROLES,
+  PLATFORM_ROLES_NOT_PURPOSES,
   PROVIDER_API_ROLES,
   PROVIDER_EVENT_SOURCES,
   PROVIDER_EXPRESSION_FUNCTIONS,
@@ -113,7 +114,7 @@ describe("provider maps of T0", () => {
 describe("login role parents", () => {
   it("runtime may be a member of the command role and the request roles", () => {
     expect(LOGIN_ROLE_PARENTS).toEqual({
-      runtime: ["command", "request"],
+      runtime: ["command", "files", "request"],
       signals: ["signalConsumer"],
     })
   })
@@ -130,14 +131,17 @@ describe("login role parents", () => {
     })
   })
 
-  it("the consumer role is not a grant purpose", () => {
+  it("the consumer and files roles are not grant purposes", () => {
     expectTypeOf<PlatformRolePurpose>().toEqualTypeOf<"command">()
     expectTypeOf<"signalConsumer">().not.toExtend<GrantPurpose>()
+    expectTypeOf<"files">().not.toExtend<GrantPurpose>()
+    expect(PLATFORM_ROLES_NOT_PURPOSES).toEqual(["signalConsumer", "files"])
   })
 
   it("postgres: command role, then the request roles", () => {
     expect(loginRoleParentNames("runtime", "postgres")).toEqual([
       "simetra_command",
+      "simetra_files",
       "simetra_user",
       "simetra_anon",
     ])
@@ -146,6 +150,7 @@ describe("login role parents", () => {
   it("supabase: command role, then the request roles", () => {
     expect(loginRoleParentNames("runtime", "supabase")).toEqual([
       PLATFORM_ROLES.command,
+      PLATFORM_ROLES.files,
       "authenticated",
       "anon",
     ])

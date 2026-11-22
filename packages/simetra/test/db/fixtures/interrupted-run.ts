@@ -4,7 +4,7 @@
 // сигналу, що й `stack-guard`, і створює об'єкти так, як їх створюють тести.
 //
 // `node --import tsx interrupted-run.ts <тег>` — головний процес (на стеку
-// postgres ще й з контейнером і бакетом тегу);
+// postgres ще й з контейнером, а на обох — з бакетом тегу й об'єктом у ньому);
 // `… --worker` — «воркер», що безперервно створює тегові бази.
 // `… <тег> --sleep <файл замка>` — головний процес, що тримає замок-файл
 // (обробник сигналу його видаляє), і `… --sleep-worker` — воркер посеред
@@ -24,9 +24,15 @@ import {
   testRoleName,
   testSuperuserUrl,
 } from "../connection"
-import { createRunBucket, nodeExec, runContainerLabels } from "../external"
+import {
+  createRunBucket,
+  nodeExec,
+  runBucketName,
+  runContainerLabels,
+} from "../external"
 import { installInterruptCleanup } from "../interrupt"
 import { testProvider, testStack } from "../profile"
+import { s3Of } from "../s3"
 
 // Запобіжник, якщо тест не надішле сигналу (упав чи сам був убитий): фікстура
 // перериває себе тим самим шляхом, тож не висить і не лишає тегових об'єктів
@@ -99,10 +105,12 @@ async function createObjects(): Promise<void> {
     await client.query(`CREATE DATABASE ${id(SHADOW_PREFIX + shadowSuffix())}`)
     await client.query(`CREATE ROLE ${id(testRoleName("interrupt_owner"))}`)
   })
-  // На стеку postgres прогін має й зовнішні ресурси: прибиральник на сигналі
-  // мусить видалити і їх. `ready` друкується лише після обох
+  // Бакет прогону з об'єктом є на обох стеках: прибиральник на сигналі має
+  // його лишити й назвати у звіті, а не спорожнити. Контейнер — лише на postgres
+  const tag = runTag()
+  const stack = testStack()
+  const s3 = s3Of(stack)
   if (testProvider() === "postgres") {
-    const tag = runTag()
     await nodeExec(
       "docker",
       [
@@ -121,8 +129,13 @@ async function createObjects(): Promise<void> {
       ],
       { timeoutMs: 30_000 }
     )
-    await createRunBucket(tag, testStack(), fetch)
-  }
+    await createRunBucket(tag, stack, fetch)
+  } else await s3.createBucket({ Bucket: runBucketName(tag) })
+  await s3.putObject({
+    Bucket: runBucketName(tag),
+    Key: "o/interrupt/object",
+    Body: "bytes",
+  })
 }
 
 async function worker(): Promise<void> {

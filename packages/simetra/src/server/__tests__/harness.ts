@@ -288,6 +288,11 @@ export const checkedRuntime = (
   rightsSnapshot: (session) => runtime.rightsSnapshot(session),
   authorizeChannels: (session, channels) =>
     runtime.authorizeChannels(session, channels),
+  checkUpload: (...args) => runtime.checkUpload(...args),
+  attachFile: (...args) => runtime.attachFile(...args),
+  reconcileFiles: (store, options) => runtime.reconcileFiles(store, options),
+  bindFileStore: (store) => runtime.bindFileStore(store),
+  rebindFileStore: (store) => runtime.rebindFileStore(store),
 })
 
 export async function setup(

@@ -8,6 +8,7 @@ import {
   PLATFORM_ROLES,
   PLATFORM_SCHEMA,
   PRIVILEGED_LOGIN_REASONS,
+  STORAGE_FUNCTIONS,
   PROVIDER_API_ROLES,
   PROVIDER_IDENTITY_SOURCES,
   PROVIDER_LOGIN_ROLES,
@@ -39,6 +40,13 @@ import {
   CommandFailure,
 } from "simetra/model"
 import { z } from "zod"
+import { FileStoreError, parseBinding, type FileStore } from "./file-store"
+import {
+  reconcile,
+  type ReconcileOptions,
+  type ReconcileReport,
+  type ReconcileSource,
+} from "./reconcile"
 import { logsDatabaseError, type ErrorPhase } from "./errors"
 import { rejectNested } from "./hook-context"
 import {
@@ -62,7 +70,16 @@ import {
 } from "./rights-snapshot"
 import { createChannelGrant, type ChannelGrant } from "./signals/grant"
 import {
+  prepareAttach,
+  scopeOf,
+  storageObjectOf,
+  type AttachFileInput,
+  type CheckUploadInput,
+  type UploadLimits,
+} from "./files"
+import {
   COMMAND_ROLE,
+  FILES_ROLE,
   COMMIT,
   CURRENT_USER,
   EPOCH,
@@ -71,8 +88,10 @@ import {
   endFailed,
   readRefusal,
   readSetupStatement,
+  runAttach,
   releaseCommitted,
   runCommand,
+  FileAttachFailure,
   type LogEntry,
   type RuntimeState,
 } from "./transaction"
@@ -263,6 +282,69 @@ export interface CommandRuntime {
     session: SessionClaims,
     channels: readonly string[]
   ): Promise<ChannelGrant>
+  /**
+   * The pre-check of an upload (platform spec §8.2 step 2): one `READ ONLY`
+   * transaction under the request role asks `storage_headroom`, then, under
+   * the storage role, reads the database binding string (`instance`: the
+   * `storage_instance` uuid with the cluster `system_identifier`, the
+   * database oid and the WAL timeline; never cached, so a promotion or a
+   * restore of a live process is seen by the next upload). The caller passes
+   * it to `FileStore.put` as option `instance`. Returns the limits of the
+   * object's `storage` with the binding, or `null` — for a guest (no database
+   * call), an unknown object or one without `storage`, a scope that does not
+   * fit, and a refusal of the right or of the quota alike. The check is
+   * necessary, not sufficient: `attachFile` judges the row. Rejects with
+   * `CommandFailure`: `command.unauthenticated` for an invalid session; with
+   * `FileStoreError` `no-binding` when the runtime has not created the
+   * `storage_instance` row (it does so at start).
+   */
+  checkUpload(
+    session: SessionClaims,
+    input: CheckUploadInput
+  ): Promise<UploadLimits | null>
+  /**
+   * Creates the row of an uploaded file (platform spec §8.2 step 4): one
+   * transaction — `file_attach` with the size and type under the storage
+   * role, then the `create` phase under the command role — with the retries
+   * and the budget of `run`. Rejects with `FileAttachFailure`:
+   * `commitUnknown` is `true` when `COMMIT` was sent and the session closed
+   * (the row may exist, the bytes must stay); otherwise the transaction is
+   * known to have rolled back and the caller deletes the bytes. The error
+   * `command.rejected` with `reason` `storage.<reason>` is a storage refusal.
+   */
+  attachFile(
+    session: SessionClaims,
+    input: AttachFileInput
+  ): Promise<CommandResult>
+  /**
+   * The reconciliation of the byte store with the database (platform spec
+   * §8.2): the only place bytes are physically deleted. Refuses (deletes
+   * nothing, `report.refused`) for a bucket of another database, a marker of a
+   * copied or restored database, a database in recovery, or when the guard
+   * trips. Rejects with `command.nested` from inside a hook.
+   */
+  reconcileFiles(
+    store: FileStore,
+    options: ReconcileOptions
+  ): Promise<ReconcileReport>
+  /**
+   * The operator command that makes the first binding of a bucket to this
+   * database: writes the marker only into a completely empty bucket and reads
+   * it back; the same marker is a no-op, another database's marker or objects
+   * without a marker are `FileStoreError` `foreign-bucket`. Uploads never bind
+   * (`no-binding` on an unbound bucket). Refused with `in-recovery` on a
+   * standby. Rejects with `command.nested` from inside a hook.
+   */
+  bindFileStore(store: FileStore): Promise<void>
+  /**
+   * The operator command after a legitimate restore (dump/restore, PITR, a
+   * promoted replica): rewrites the bucket marker with the current binding of
+   * this database. Only a marker of the same `storage_instance` uuid is
+   * rewritten (`FileStoreError` `foreign-bucket` otherwise); refused with
+   * `in-recovery` on a standby. Reads the binding fresh from the database.
+   * Rejects with `command.nested` from inside a hook.
+   */
+  rebindFileStore(store: FileStore): Promise<void>
 }
 
 // Межа каналів одного виклику `authorizeChannels` (Р5 плану B2).
@@ -440,6 +522,7 @@ const APPLIED_HASH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(APPLIED_SNAPSHOT_
 const NO_APPLIED_STATE = new Set(["42883", "3F000"])
 // `pg_has_role` на ролі, якої немає в базі.
 const UNDEFINED_OBJECT = "42704"
+const INSUFFICIENT_PRIVILEGE = "42501"
 // Межі повтору, глибини й часу читання — помилка конфігурації host-а, як і
 // каталог; 0 для часу вимкнув би межу, тож теж відмова.
 const limitSchema = z.int().min(1).optional()
@@ -514,6 +597,11 @@ async function inspect(
       members[purpose] =
         (await client.query(MEMBER, [role])).rows[0]?.member === "t"
     }
+    // Роль сховища: без членства рантайм не стартує, а не падає на першому
+    // завантаженні (І20). Першою, бо `SET LOCAL ROLE` замінює поточну роль, а
+    // хеш далі читає роль команд.
+    step = FILES_ROLE.text
+    await client.query(FILES_ROLE.text, FILES_ROLE.params)
     step = COMMAND_ROLE.text
     await client.query(COMMAND_ROLE.text, COMMAND_ROLE.params)
     step = APPLIED_HASH
@@ -535,6 +623,13 @@ async function inspect(
     await endFailed(client, destroysConnection(error))
     if (step === APPLIED_HASH && NO_APPLIED_STATE.has(error.code ?? "")) {
       return mismatch(catalog, null)
+    }
+    // Брак членства `simetra_files`: названа відмова з роллю, а не `internal`
+    if (step === FILES_ROLE.text && error.code === INSUFFICIENT_PRIVILEGE) {
+      throw new CommandFailure({
+        code: "command.read-role-missing",
+        role: PLATFORM_ROLES.files,
+      })
     }
     if (step === MEMBER && error.code === UNDEFINED_OBJECT) {
       // Ролі запиту в базі немає — членства в ній теж; транзакція перервана,
@@ -651,7 +746,21 @@ export async function createCommandRuntime(
       anonymous: roles.anonymous,
     },
   }
-  return {
+  if (catalog.objects.some((o) => o.storage !== undefined))
+    await ensureInstanceRow(state)
+  const reconcileOf = (
+    store: FileStore,
+    options: ReconcileOptions
+  ): Promise<ReconcileReport> => {
+    rejectNested()
+    return reconcile(
+      catalog.objects.filter((o) => o.storage !== undefined).map((o) => o.id),
+      reconcileSource(state),
+      store,
+      options
+    )
+  }
+  const runtime: CommandRuntime = {
     catalog,
     // Анонімна команда йде далі: її судить `current_user_id()` = `NULL`.
     run: async (session, input, options) => {
@@ -693,7 +802,48 @@ export async function createCommandRuntime(
     },
     authorizeChannels: (session, channels) =>
       authorizeChannels(state, session, channels),
+    checkUpload: (session, input) => checkUpload(state, session, input),
+    attachFile: async (session, input) => {
+      // Усе, що може кинути до бази, — у `try`: викликач бачить лише
+      // `FileAttachFailure`, а відмова входу — це відомий відкат.
+      try {
+        checkedKind(catalog.provider, session)
+        const prepared = prepareAttach(catalog, input)
+        return await runAttach(
+          state,
+          session,
+          prepared.operation,
+          prepared.attach
+        )
+      } catch (error) {
+        if (error instanceof FileAttachFailure) throw error
+        if (error instanceof CommandFailure) {
+          throw new FileAttachFailure(error.error, false)
+        }
+        throw error
+      }
+    },
+    reconcileFiles: (store, options) => reconcileOf(store, options),
+    bindFileStore: async (store) => {
+      rejectNested()
+      if (await inRecovery(state))
+        throw new FileStoreError(
+          "in-recovery",
+          "the database is in recovery: bind on the primary"
+        )
+      await store.bind(await fileInstance(state))
+    },
+    rebindFileStore: async (store) => {
+      rejectNested()
+      if (await inRecovery(state))
+        throw new FileStoreError(
+          "in-recovery",
+          "the database is in recovery: rebind on the primary"
+        )
+      await store.rebind(await fileInstance(state))
+    },
   }
+  return runtime
 }
 
 /** Заморожує дані каталогу до дна: каталог — чисті дані JSON, без циклів. */
@@ -1004,6 +1154,62 @@ function requestedChannels(channels: readonly string[]): string[] {
   return [...new Set(channels)].sort()
 }
 
+type Send = (statement: {
+  text: string
+  params: readonly (string | null)[]
+}) => Promise<{ rows: Record<string, unknown>[]; command: string }>
+
+/**
+ * Коротка транзакція рантайму поза командою: з'єднання, `begin`, оператори
+ * налаштування, тіло й `COMMIT`. Відмова бази — `CommandFailure` за мапінгом
+ * читання, відповідь не тієї форми (кидок тіла) — `command.internal` у
+ * журнал; значення віддається лише з зафіксованої транзакції. Спільне для
+ * `authorizeChannels` і `checkUpload`.
+ */
+async function inShortTransaction<T>(
+  state: RuntimeState,
+  begin: string,
+  setup: readonly { text: string; params: readonly (string | null)[] }[],
+  body: (send: Send) => Promise<T>
+): Promise<T> {
+  let client: DatabaseClient
+  try {
+    client = await state.database.connect()
+  } catch (raw) {
+    throw new CommandFailure(readRefusal(raw, state, undefined).error)
+  }
+  const send: Send = async (statement) => {
+    try {
+      return await client.query(statement.text, statement.params)
+    } catch (raw) {
+      throw new Refused(readRefusal(raw, state, undefined))
+    }
+  }
+  let value: T
+  let tag: string
+  try {
+    await send({ text: begin, params: [] })
+    for (const statement of setup) await send(statement)
+    value = await body(send)
+    ;({ command: tag } = await send(COMMIT))
+  } catch (error) {
+    if (error instanceof Refused) {
+      await endFailed(client, error.refusal.destroy)
+      throw new CommandFailure(error.refusal.error)
+    }
+    state.log({ kind: "database", error })
+    await endFailed(client, false)
+    throw new CommandFailure(INTERNAL)
+  }
+  releaseCommitted(client, state.log)
+  // Значення — лише з зафіксованої транзакції: інакше воно не доведене.
+  if (tag !== "COMMIT") {
+    state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
+    throw new CommandFailure(INTERNAL)
+  }
+  return value
+}
+
 /**
  * Дозвіл каналів сигналів (спека П4-B §8.3; Р5, Р12 плану B2): єдиний
  * виробник `ChannelGrant`. Користувача дає `current_user_id()` під claims
@@ -1024,72 +1230,248 @@ async function authorizeChannels(
   if (kind === "anonymous") return createChannelGrant(null, [])
   const claims = claimsOf(session)
   const role = readRoleFor(state, session)
-  let client: DatabaseClient
-  try {
-    client = await state.database.connect()
-  } catch (raw) {
-    throw new CommandFailure(
-      readRefusal(raw, state, undefined, normalizeError(raw, true)).error
-    )
-  }
-  const send = async (statement: {
-    text: string
-    params: readonly (string | null)[]
-  }) => {
-    try {
-      return await client.query(statement.text, statement.params)
-    } catch (raw) {
-      throw new Refused(readRefusal(raw, state, undefined))
-    }
-  }
-  let user: string | null
-  let allowed: string[] = []
-  let tag: string
-  try {
-    await send({ text: BEGIN_READ, params: [] })
-    await send(
+  const { user, allowed } = await inShortTransaction(
+    state,
+    BEGIN_READ,
+    [
       readSetupStatement(
         claims,
         state.readTimeout,
         state.readBudgetMs + 1000,
         role
-      )
-    )
-    const users = (await send(CURRENT_USER)).rows
-    const id = users[0]?.user_id
-    if (users.length !== 1 || (typeof id !== "string" && id !== null)) {
-      throw new Error("current_user_id answered no user row")
-    }
-    user = id
-    // Без дійсного користувача оракул каналу не відкриє жодного: запит зайвий.
-    if (user !== null && requested.length > 0) {
-      const { rows } = await send({
-        text: CHANNELS_ALLOWED,
-        params: [textArray(requested)],
-      })
-      const asked = new Set(requested)
-      const answered = new Set(rows.map((row) => row.channel))
-      // Відповідь поза запитом — аномалія: грант несе лише запитане.
-      if ([...answered].some((c) => typeof c !== "string" || !asked.has(c))) {
-        throw new Error("signal_topic_allowed answered a channel not asked")
+      ),
+    ],
+    async (send) => {
+      const users = (await send(CURRENT_USER)).rows
+      const id = users[0]?.user_id
+      if (users.length !== 1 || (typeof id !== "string" && id !== null)) {
+        throw new Error("current_user_id answered no user row")
       }
-      allowed = requested.filter((channel) => answered.has(channel))
+      let allowed: string[] = []
+      // Без дійсного користувача оракул каналу не відкриє жодного: запит зайвий.
+      if (id !== null && requested.length > 0) {
+        const { rows } = await send({
+          text: CHANNELS_ALLOWED,
+          params: [textArray(requested)],
+        })
+        const asked = new Set(requested)
+        const answered = new Set(rows.map((row) => row.channel))
+        // Відповідь поза запитом — аномалія: грант несе лише запитане.
+        if ([...answered].some((c) => typeof c !== "string" || !asked.has(c))) {
+          throw new Error("signal_topic_allowed answered a channel not asked")
+        }
+        allowed = requested.filter((channel) => answered.has(channel))
+      }
+      return { user: id, allowed }
     }
-    ;({ command: tag } = await send(COMMIT))
-  } catch (error) {
-    if (error instanceof Refused) {
-      await endFailed(client, error.refusal.destroy)
-      throw new CommandFailure(error.refusal.error)
-    }
-    state.log({ kind: "database", error })
-    await endFailed(client, false)
-    throw new CommandFailure(INTERNAL)
-  }
-  releaseCommitted(client, state.log)
-  // Дозвіл — лише з зафіксованої транзакції: інакше грант не доведений.
-  if (tag !== "COMMIT") {
-    state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
-    throw new CommandFailure(INTERNAL)
-  }
+  )
   return createChannelGrant(user, allowed)
+}
+
+const UPLOAD_HEADROOM = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.headroom)}($1::uuid, $2::uuid) AS ok`
+const INSTANCE_ENSURE = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.instanceEnsure)}()`
+const INSTANCE_ID = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.instanceId)}() AS id`
+const uuidSchema = z.guid()
+
+/**
+ * Попередня перевірка завантаження (спека профілю postgres §8.2 крок 2):
+ * `READ ONLY` під роллю запиту, один оператор `storage_headroom`. Гість, невідомий
+ * об'єкт, хибний скоуп і відмова бази в «чи вміститься» — той самий `null`:
+ * межа відповіді не розкриває, що саме відмовило (Р3).
+ */
+async function checkUpload(
+  state: RuntimeState,
+  session: SessionClaims,
+  input: CheckUploadInput
+): Promise<UploadLimits | null> {
+  // До будь-якого I/O: друге з'єднання в хуку чекало б на замок своєї ж
+  // команди.
+  rejectNested()
+  // Гість не пише файлів і до бази не йде.
+  if (checkedKind(state.catalog.provider, session) === "anonymous") return null
+  const object = storageObjectOf(state.catalog, input?.object)
+  if (object === undefined) return null
+  const scope = scopeOf(object, input.scope)
+  if (scope === undefined) return null
+  const claims = claimsOf(session)
+  const role = readRoleFor(state, session)
+  const instance = await inShortTransaction(
+    state,
+    BEGIN_READ_ONLY,
+    [
+      readSetupStatement(
+        claims,
+        state.readTimeout,
+        state.readBudgetMs + 1000,
+        role
+      ),
+    ],
+    async (send) => {
+      const { rows } = await send({
+        text: UPLOAD_HEADROOM,
+        params: [object.id, scope],
+      })
+      const ok = rows[0]?.ok
+      if (rows.length !== 1 || (ok !== "t" && ok !== "f")) {
+        throw new Error("storage_headroom answered no boolean")
+      }
+      // `false` — відмова права чи квоти; `null` нижче — немає рядка прив'язки
+      if (ok === "f") return false
+      // Відбиток читається тут же і щоразу заново: `put` звіряє саме його, тож
+      // промоція чи відновлення живого процесу не лишає застарілого значення.
+      // `SET LOCAL ROLE` перевіряє членство користувача сесії, а не поточну
+      // роль запиту, тож роль запиту нічого нового не отримує.
+      await send(FILES_ROLE)
+      return readInstance(send)
+    }
+  )
+  if (instance === null) throw NO_BINDING
+  const { storage } = object
+  return instance !== false && storage !== undefined
+    ? {
+        maxBytes: storage.maxBytes,
+        mediaTypes: [...storage.mediaTypes],
+        instance,
+      }
+    : null
+}
+
+const PENDING_SWEEP = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.pendingSweep)}() AS n`
+const IN_RECOVERY = "SELECT pg_catalog.pg_is_in_recovery() AS recovery"
+const DB_NOW = "SELECT floor(extract(epoch FROM now()) * 1000)::text AS ms"
+const ROWS_EXIST = `SELECT t.id::text AS id FROM ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.rowsExist)}($1::uuid, $2::uuid[]) AS t(id)`
+const ROW_PAGE = `SELECT t.id::text AS id FROM ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.rowPage)}($1::uuid, $2::uuid) AS t(id)`
+
+/** `pg_is_in_recovery()` у `READ ONLY` транзакції: репліка чи відновлення. */
+function inRecovery(state: RuntimeState): Promise<boolean> {
+  return inShortTransaction(
+    state,
+    BEGIN_READ_ONLY,
+    [INSTANCE_LIMITS(state)],
+    async (send) => {
+      const { rows } = await send({ text: IN_RECOVERY, params: [] })
+      const value = rows[0]?.recovery
+      if (rows.length !== 1 || (value !== "t" && value !== "f"))
+        throw new Error("pg_is_in_recovery answered no boolean")
+      return value === "t"
+    }
+  )
+}
+
+/** Сторона бази звірки: кожен виклик — коротка `READ ONLY` транзакція під роллю сховища. */
+function reconcileSource(state: RuntimeState): ReconcileSource {
+  const ids = async (text: string, params: (string | null)[]) =>
+    inShortTransaction(
+      state,
+      BEGIN_READ_ONLY,
+      [INSTANCE_LIMITS(state), FILES_ROLE],
+      async (send) => {
+        const { rows } = await send({ text, params })
+        return rows.map((row) => {
+          if (!uuidSchema.safeParse(row.id).success)
+            throw new Error("storage function answered no uuid")
+          return row.id as string
+        })
+      }
+    )
+  return {
+    inRecovery: () => inRecovery(state),
+    // Відбиток читається щоразу заново (кешу немає): промоція репліки чи
+    // відновлення мінять його під живим процесом
+    instance: () => fileInstance(state),
+    sweepPending: () =>
+      inShortTransaction(
+        state,
+        BEGIN_WRITE,
+        [INSTANCE_LIMITS(state), FILES_ROLE],
+        async (send) => {
+          const { rows } = await send({ text: PENDING_SWEEP, params: [] })
+          const n = Number(rows[0]?.n)
+          if (rows.length !== 1 || !Number.isSafeInteger(n) || n < 0)
+            throw new Error("storage_pending_sweep answered no count")
+          return n
+        }
+      ),
+    now: () =>
+      inShortTransaction(
+        state,
+        BEGIN_READ_ONLY,
+        [INSTANCE_LIMITS(state)],
+        async (send) => {
+          const { rows } = await send({ text: DB_NOW, params: [] })
+          const ms = Number(rows[0]?.ms)
+          if (rows.length !== 1 || !Number.isFinite(ms))
+            throw new Error("now() answered no time")
+          return ms
+        }
+      ),
+    rowsExist: async (object, list) =>
+      new Set(await ids(ROWS_EXIST, [object, textArray(list)])),
+    rowPage: (object, after) => ids(ROW_PAGE, [object, after]),
+  }
+}
+
+const BEGIN_WRITE = "BEGIN ISOLATION LEVEL READ COMMITTED"
+// Межі часу — як у інших транзакцій рантайму.
+const INSTANCE_LIMITS = (state: RuntimeState) => ({
+  text: "SELECT pg_catalog.set_config('statement_timeout', $1, true), pg_catalog.set_config('lock_timeout', $2, true)",
+  params: [String(state.readTimeout), String(state.lockTimeoutMs)],
+})
+
+/**
+ * Рядок прив'язки бази до бакета створюється один раз при старті, коли в
+ * каталозі є об'єкти зі `storage`: коротка транзакція на запис під роллю
+ * сховища, ідемпотентна й безпечна для паралельного старту (`ON CONFLICT DO
+ * NOTHING`). Результату рантайм не тримає: відбиток читає `checkUpload`.
+ */
+async function ensureInstanceRow(state: RuntimeState): Promise<void> {
+  await inShortTransaction(
+    state,
+    BEGIN_WRITE,
+    [INSTANCE_LIMITS(state), FILES_ROLE],
+    async (send) => {
+      await send({ text: INSTANCE_ENSURE, params: [] })
+    }
+  )
+}
+
+const NO_BINDING = new FileStoreError(
+  "no-binding",
+  "simetra.storage_instance has no row: the runtime creates it at start (storage_instance_ensure)"
+)
+
+/**
+ * Відповідь `storage_instance_id()`: відбиток прив'язки, `null` — рядка ще
+ * немає (іменована відмова `no-binding` кидається поза транзакцією); чужа
+ * форма — помилка.
+ */
+async function readInstance(send: Send): Promise<string | null> {
+  const { rows } = await send({ text: INSTANCE_ID, params: [] })
+  const id = rows[0]?.id
+  if (rows.length === 1 && id === null) return null
+  if (
+    rows.length !== 1 ||
+    typeof id !== "string" ||
+    parseBinding(id) === null
+  ) {
+    throw new Error("storage_instance_id answered no binding")
+  }
+  return id
+}
+
+/**
+ * Відбиток прив'язки бази до бакета (`uuid:sysid:oid:timeline`) для звірки й
+ * `rebindFileStore`: окрема `READ ONLY` транзакція під роллю сховища, без
+ * кешу. Лише роль сховища має на функцію `EXECUTE`.
+ */
+async function fileInstance(state: RuntimeState): Promise<string> {
+  rejectNested()
+  const instance = await inShortTransaction(
+    state,
+    BEGIN_READ_ONLY,
+    [INSTANCE_LIMITS(state), FILES_ROLE],
+    readInstance
+  )
+  if (instance === null) throw NO_BINDING
+  return instance
 }

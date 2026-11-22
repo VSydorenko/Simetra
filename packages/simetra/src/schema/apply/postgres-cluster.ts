@@ -13,7 +13,10 @@ import {
 import { applyDiagnostic } from "./diagnostic"
 import { CLUSTER_ADVISORY_LOCK } from "./execute"
 import {
+  allowingLack,
+  lackingParents,
   loginSettingSql,
+  pairGrant,
   platformRoleRefusals,
   platformRoleSet,
   readPlatformRoles,
@@ -54,12 +57,15 @@ export interface PostgresClusterSet {
  * Roles and databases by name; the identity grants as `<schema>:USAGE` and
  * `<schema>.<table>:TRIGGER` (the latter covers `TRIGGER, REFERENCES`). The
  * table grant is skipped, not refused, while the table does not exist: the
- * Better Auth migration creates it, and a repeat call grants it.
+ * Better Auth migration creates it, and a repeat call grants it. A parent
+ * added to an existing login role is its own entry in `added` (the login role
+ * itself stays in `present`), absent when nothing was added.
  */
 export interface PostgresClusterOutcome {
   created: string[]
   present: string[]
   skipped: string[]
+  added?: { role: string; parents: string[] }[]
 }
 
 /** Result of `ensurePostgresCluster`: nothing was written when it is a refusal. */
@@ -726,8 +732,17 @@ async function readPhase(
     ...set.request,
     ...gated.map((l) => l.name),
   ].filter((name) => roles.has(name))
+  // Брак обов'язкового членства наявної ролі входу не відмова: фаза запису
+  // доповнює його парою §6.2 (як `ensurePlatformRoles`); зайвий батько, інша
+  // форма членства й інші атрибути лишаються відмовою.
   refusal.push(
-    ...platformRoleRefusals(platform, found, "target", gated, set.request)
+    ...platformRoleRefusals(
+      platform,
+      found,
+      "target",
+      gated.map(allowingLack),
+      set.request
+    )
   )
 
   // 3. Наявна база і шаблон
@@ -958,6 +973,7 @@ async function writePhase(
   const created: string[] = []
   const present: string[] = []
   const skipped: string[] = []
+  const added: { role: string; parents: string[] }[] = []
   const planned = plannedRoles(set)
 
   // 1. Ролі кластера
@@ -970,6 +986,28 @@ async function writePhase(
     for (const r of missing) {
       for (const sql of r.create) await tx.query(sql)
       created.push(r.name)
+    }
+    // Наявна роль входу без нового батька профілю: доповнення парою §6.2.
+    // Рядок читається знову в цій транзакції й форма звіряється повністю: між
+    // фазами інший адміністратор міг додати небезпечне членство чи атрибут, і
+    // видати батька такій ролі не можна (відмова відкочує транзакцію)
+    for (const l of set.roles.login) {
+      if (!snapshot.roles.has(l.name)) continue
+      const row = (await readPlatformRoles(tx, [l.name], set.request)).find(
+        (r) => r.name === l.name
+      )
+      if (row === undefined) continue
+      const broken = platformRoleRefusals(
+        [l.name],
+        [row],
+        "target",
+        [allowingLack(l)],
+        set.request
+      )
+      if (broken.length > 0) throw new LateRefusal(broken)
+      const parents = lackingParents(l, row)
+      for (const parent of parents) await tx.query(pairGrant(parent, l.name))
+      if (parents.length > 0) added.push({ role: l.name, parents })
     }
     // Налаштування ролі `auth` — другий шар після опції з'єднання пулу;
     // ідемпотентне, тож і для наявної ролі
@@ -1068,7 +1106,12 @@ async function writePhase(
         .then(() => undefined)
     )
   }
-  return { created, present, skipped }
+  return {
+    created,
+    present,
+    skipped,
+    ...(added.length > 0 ? { added } : {}),
+  }
 }
 
 /** З'єднання підготовки кластера: службова база, ціль, шаблон. */

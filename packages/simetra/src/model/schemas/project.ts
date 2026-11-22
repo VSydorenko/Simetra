@@ -303,6 +303,7 @@ export const PROVIDER_EXPRESSION_FUNCTIONS: Readonly<
 export const PLATFORM_ROLES = {
   command: "simetra_command",
   signalConsumer: "simetra_signal_consumer",
+  files: "simetra_files",
 } as const
 
 /**
@@ -355,13 +356,22 @@ export const SESSION_CLAIMS_SETTING = "request.jwt.claims"
  */
 export const PLATFORM_SETTING_PREFIX = "simetra."
 
+// `search_path`: definer-функція застосунку з порожнім шляхом пошуку, що змінила
+// його в тілі, кликала б функцію платформи без схеми повз `checkPlatformCalls`,
+// який судить лише кваліфікований `simetra.*` (спека прав §5.3). Опція оболонки
+// `CREATE … SET search_path = ''` — не запис: її судить `closed-forms`.
 /**
  * Session settings that application SQL must never change: name prefixes
  * (case-insensitive) and exact names.
  */
 export const PROTECTED_SESSION_SETTINGS = {
   prefixes: [PLATFORM_SETTING_PREFIX, "request.jwt."],
-  names: ["role", "session_authorization", "session_replication_role"],
+  names: [
+    "role",
+    "session_authorization",
+    "session_replication_role",
+    "search_path",
+  ],
 } as const
 
 // Голова читає налаштування сесії лише за точною назвою (ADR-0094 п. 2):
@@ -439,6 +449,14 @@ export interface CommandContext {
   root: string
 }
 /**
+ * Ключі `PLATFORM_ROLES`, що не є призначеннями гранту: права `signalConsumer`
+ * (outbox) і `files` (функції сховища файлів) пише власний генератор явним
+ * `GRANT`, тож декларація застосунку їх не адресує. Одна стала для типу
+ * `PlatformRolePurpose` і фільтра `callersOfRole`.
+ */
+export const PLATFORM_ROLES_NOT_PURPOSES = ["signalConsumer", "files"] as const
+
+/**
  * Призначення гранту згенерованого SQL серед ролей платформи — лише роль
  * команд: вона виконує функції прав і команди, DML таблиць виду не має. Група
  * споживача сигналів (`signalConsumer`) призначенням не є: її права — лише на
@@ -446,7 +464,7 @@ export interface CommandContext {
  */
 export type PlatformRolePurpose = Exclude<
   keyof typeof PLATFORM_ROLES,
-  "signalConsumer"
+  (typeof PLATFORM_ROLES_NOT_PURPOSES)[number]
 >
 /** Отримувач гранту згенерованого SQL: роль API провайдера чи платформи. */
 export type GrantPurpose = ApiRolePurpose | PlatformRolePurpose
@@ -545,7 +563,8 @@ export type PlatformLoginPurpose = keyof typeof PLATFORM_LOGIN_ROLES
 /**
  * Дозволені батьки кожної ролі входу платформи (спека профілю postgres §3.1):
  * `command` — роль команд, `request` — ролі запиту профілю за
- * `LOGIN_ROLE_REQUEST_PURPOSES`, `signalConsumer` — група споживача сигналів.
+ * `LOGIN_ROLE_REQUEST_PURPOSES`, `signalConsumer` — група споживача сигналів,
+ * `files` — роль сховища файлів (`file_attach`).
  * Гейт ролей звіряє кожну роль входу за її рядком, а не за спільною
  * множиною: інакше роль входу сигналів з членством у ролі команд пройшла б
  * гейт, і витік DSN споживача дав би роль команд.
@@ -553,9 +572,9 @@ export type PlatformLoginPurpose = keyof typeof PLATFORM_LOGIN_ROLES
 export const LOGIN_ROLE_PARENTS: Readonly<
   Record<
     PlatformLoginPurpose,
-    readonly ("command" | "request" | "signalConsumer")[]
+    readonly ("command" | "request" | "signalConsumer" | "files")[]
   >
-> = { runtime: ["command", "request"], signals: ["signalConsumer"] }
+> = { runtime: ["command", "files", "request"], signals: ["signalConsumer"] }
 
 /**
  * Налаштування ролі входу (`ALTER ROLE … SET`): Centrifugo не вміє `SET ROLE`,
@@ -575,6 +594,7 @@ export function loginRoleParentNames(
   return LOGIN_ROLE_PARENTS[purpose].flatMap((parent) => {
     if (parent === "command") return [PLATFORM_ROLES.command]
     if (parent === "signalConsumer") return [PLATFORM_ROLES.signalConsumer]
+    if (parent === "files") return [PLATFORM_ROLES.files]
     return LOGIN_ROLE_REQUEST_PURPOSES[provider].map(
       (request) => PROVIDER_API_ROLES[provider][request]
     )
