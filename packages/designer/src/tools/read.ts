@@ -1,15 +1,17 @@
 import {
   compile,
+  explainFunction,
   explainObject,
   fixFiles,
   type CompiledModel,
   type Explanation,
+  type FunctionExplanation,
 } from "simetra/compiler"
 import { metadataKindSchema, objectNameSchema } from "simetra/model"
 import { z } from "zod"
 import { readMetadataDir } from "../io/metadata-dir"
 import { schemaPathResolver } from "../io/schema-path"
-import { defineTool } from "./types"
+import { defineTool, type RunOutcome } from "./types"
 
 export const compileTool = defineTool({
   name: "compile",
@@ -34,24 +36,75 @@ export const compileTool = defineTool({
   },
 })
 
+// Один об'єкт, а не union: MCP SDK для не-об'єктної схеми оголошує порожній
+// вхід. Рівно одна з двох гілок — `refine`.
+const explainInput = z
+  .strictObject({
+    kind: metadataKindSchema.optional(),
+    name: objectNameSchema.optional(),
+    function: z
+      .strictObject({
+        schema: z.string().min(1).optional(),
+        name: z.string().min(1),
+      })
+      .optional(),
+  })
+  .refine(
+    (i) =>
+      i.function === undefined
+        ? i.kind !== undefined && i.name !== undefined
+        : i.kind === undefined && i.name === undefined,
+    { message: "Give either kind and name, or function." }
+  )
+
 export const explainTool = defineTool({
   name: "explain",
   description:
-    "Explain one object: its tables, columns, keys and movement queries. Needs a metadata directory that compiles without errors.",
-  input: z.strictObject({ kind: metadataKindSchema, name: objectNameSchema }),
+    "Explain an object (kind, name; metadata must compile) or a SQL function (function: schema, name): callers, EXECUTE roles per provider, declared check, whether the body applies it.",
+  input: explainInput,
   files: "read",
   database: "none",
   data: "none",
   destructive: false,
-  async run({ dir }, { kind, name }) {
-    const result = await compile(await readMetadataDir(dir))
+  async run(
+    { dir },
+    { kind, name, function: fn }
+  ): Promise<RunOutcome<Explanation | FunctionExplanation>> {
+    const files = await readMetadataDir(dir)
+    if (fn !== undefined) {
+      // Режим ремонту: функція без запобіжника — саме те, що пояснюємо.
+      const result = await compile(files, { repair: true })
+      if (result.model === undefined) {
+        return { ok: false, changes: [], diagnostics: result.diagnostics }
+      }
+      const schema = fn.schema ?? result.model.project.defaultSchema
+      const explanation: FunctionExplanation | undefined = explainFunction(
+        result,
+        { schema, name: fn.name }
+      )
+      if (explanation === undefined) {
+        return {
+          ok: false,
+          changes: [],
+          diagnostics: result.diagnostics,
+          refusal: `Function not found: ${schema}.${fn.name}`,
+        }
+      }
+      return {
+        ok: true,
+        changes: [],
+        diagnostics: result.diagnostics,
+        data: explanation,
+      }
+    }
+    const result = await compile(files)
     if (result.model === undefined) {
       // Пояснення потребує чистої компіляції.
       return { ok: false, changes: [], diagnostics: result.diagnostics }
     }
     const explanation: Explanation | undefined = explainObject(result.model, {
-      kind,
-      name,
+      kind: kind!,
+      name: name!,
     })
     if (explanation === undefined) {
       return {

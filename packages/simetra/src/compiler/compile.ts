@@ -16,6 +16,7 @@ import type { CreationNode } from "./sql/dependencies"
 import type { SqlUnit, VerbatimUnit } from "./sql/units"
 import { readFiles, runStages, sqlStage } from "./pipeline"
 import { debtUnits } from "./sql/debt"
+import type { DeclaredFunctionState } from "./sql/guard-of"
 import { kindTables } from "./sql/kind-tables"
 import { loadSqlParser } from "./sql/parse"
 import { loadPlpgsqlParser } from "./sql/plpgsql"
@@ -109,6 +110,11 @@ export interface CompileResult {
    * `repair` — виняток: модель є й тоді, коли кожна помилка — класу ремонту.
    */
   model?: CompiledModel
+  /**
+   * Задекларовані функції з вердиктом запобіжника — для `explain`. Є разом з
+   * моделлю, але не в ній: хеш моделі від декларацій не залежить.
+   */
+  declaredFunctions?: DeclaredFunctionState[]
 }
 
 export interface CompileOptions {

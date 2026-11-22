@@ -1,11 +1,14 @@
 import {
+  DATABASE_PROVIDERS,
   isObjectTable,
+  type DatabaseProvider,
   type MetadataKind,
   type ObjectOrigin,
   type ObjectTable,
   type ReferenceRole,
 } from "simetra/model"
-import type { CompiledModel } from "./compile"
+import type { CompileResult, CompiledModel } from "./compile"
+import { grantRole } from "./sql/execute-grants"
 
 export interface Explanation {
   object: {
@@ -181,5 +184,70 @@ export function explainObject(
         pointer: r.from.pointer,
         role: r.role,
       })),
+  }
+}
+
+export interface FunctionExplanation {
+  function: { schema: string; name: string }
+  /** Задекларовані викликачі; немає — функція не задекларована (гранти дослівні, їх не вгадуємо). */
+  callers?: string[]
+  /** Ролі профілю з виведеним `EXECUTE`, за провайдером. */
+  roles?: Record<DatabaseProvider, { caller: string; role: string }[]>
+  /** Названа перевірка словами. */
+  check?: string
+  state: "applied" | `not-applied (${string})` | "none"
+}
+
+/**
+ * Пояснення функції за `schema.name` з результату компіляції (не з моделі:
+ * декларацій у ній немає). `undefined` — функції нема в одиницях теки.
+ */
+export function explainFunction(
+  compiled: Pick<CompileResult, "model" | "declaredFunctions">,
+  target: { schema: string; name: string }
+): FunctionExplanation | undefined {
+  const { model, declaredFunctions } = compiled
+  const declared = declaredFunctions?.find(
+    (f) => f.schema === target.schema && f.name === target.name
+  )
+  const exists =
+    declared !== undefined ||
+    model?.sqlUnits.some(
+      (u) =>
+        u.class === "function" &&
+        u.schema === target.schema &&
+        u.name === target.name
+    ) === true
+  if (!exists) return undefined
+  const fn = { schema: target.schema, name: target.name }
+  if (declared === undefined) return { function: fn, state: "none" }
+  const { check } = declared
+  const where =
+    check?.row !== undefined
+      ? ` on row \`${check.row}\``
+      : check?.scope !== undefined
+        ? ` on scope \`${check.scope}\``
+        : ""
+  return {
+    function: fn,
+    callers: [...declared.callers],
+    roles: Object.fromEntries(
+      DATABASE_PROVIDERS.map((provider) => [
+        provider,
+        declared.callers.flatMap((caller) => {
+          const role = grantRole(caller, provider)
+          return role === null ? [] : [{ caller, role }]
+        }),
+      ])
+    ) as FunctionExplanation["roles"],
+    ...(check === undefined
+      ? {}
+      : {
+          check: `action \`${check.action}\` of ${check.object.kind} \`${check.object.name}\`${where}`,
+        }),
+    state:
+      declared.state === "not-applied"
+        ? `not-applied (${declared.reason})`
+        : declared.state,
   }
 }

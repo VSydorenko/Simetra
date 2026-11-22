@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compile, explainObject } from "simetra/compiler"
+import { compile, explainFunction, explainObject } from "simetra/compiler"
 import { readReferenceDomain } from "./fixtures/reference-domain"
 import {
   ORG_MEMBER_ROLE_ID,
@@ -13,7 +13,14 @@ import {
   rightsFiles,
   withRoles,
 } from "./fixtures/rights"
-import { attribute, metaFiles, project, salesDocument } from "./helpers"
+import {
+  acceptDebt,
+  attribute,
+  metaFiles,
+  project,
+  salesDocument,
+  uuid,
+} from "./helpers"
 
 async function referenceModel() {
   const result = await compile(readReferenceDomain())
@@ -166,5 +173,91 @@ describe("explainObject", () => {
     expect(
       explainObject(await referenceModel(), { kind: "Catalog", name: "Nope" })
     ).toBeUndefined()
+  })
+})
+
+describe("explainFunction", () => {
+  const SQL = "sql/public/fns.sql"
+  const FUNCTIONS = "sql/public/fns.functions.json"
+  const GUARDED =
+    "BEGIN PERFORM simetra.rights_require('read', 'task', p_row); END"
+  const UNGUARDED = "BEGIN PERFORM 1; END"
+
+  const files = (
+    text: string,
+    options: { declare?: boolean; extra?: string } = {}
+  ) => {
+    const all = withRoles()
+    all.set(
+      SQL,
+      `CREATE FUNCTION public.f(p_row uuid) RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$${text}$$;\n${options.extra ?? ""}`
+    )
+    if (options.declare !== false) {
+      all.set(
+        FUNCTIONS,
+        JSON.stringify({
+          functions: [
+            {
+              id: uuid(7902),
+              function: { name: "f" },
+              callers: ["user", "service"],
+              check: {
+                action: "read",
+                object: { kind: "Document", name: "Task" },
+                row: "p_row",
+              },
+            },
+          ],
+        })
+      )
+    }
+    return all
+  }
+  const explain = async (all: Map<string, string>, name = "f") =>
+    explainFunction(await compile(all, { repair: true }), {
+      schema: "public",
+      name,
+    })
+
+  it("a declared function with the guard: callers, roles per provider, the check in words, applied", async () => {
+    const e = await explain(files(GUARDED))
+    expect(e).toEqual({
+      function: { schema: "public", name: "f" },
+      callers: ["user", "service"],
+      roles: {
+        supabase: [
+          { caller: "user", role: "authenticated" },
+          { caller: "service", role: "service_role" },
+        ],
+        postgres: [{ caller: "user", role: "simetra_user" }],
+      },
+      check: "action `read` of Document `Task` on row `p_row`",
+      state: "applied",
+    })
+  })
+
+  it("without the guard the state is not-applied with the reason", async () => {
+    expect((await explain(files(UNGUARDED)))?.state).toBe(
+      "not-applied (firstStatement)"
+    )
+  })
+
+  it("an undeclared function is none, callers are not invented from a verbatim grant", async () => {
+    // Invoker-функція: definer без декларації — помилка поза класом ремонту.
+    const all = withRoles()
+    all.set(
+      SQL,
+      "CREATE FUNCTION public.f(p_row uuid) RETURNS void LANGUAGE sql STABLE SECURITY INVOKER SET search_path = '' AS $$SELECT 1$$;\nGRANT EXECUTE ON FUNCTION public.f(uuid) TO authenticated;\n"
+    )
+    const e = await explain(await acceptDebt(all))
+    expect(e).toEqual({
+      function: { schema: "public", name: "f" },
+      state: "none",
+    })
+    expect(e).not.toHaveProperty("callers")
+  })
+
+  it("an unknown function is undefined", async () => {
+    expect(await explain(files(GUARDED), "missing")).toBeUndefined()
   })
 })

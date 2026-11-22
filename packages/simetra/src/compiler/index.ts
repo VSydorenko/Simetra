@@ -241,4 +241,9 @@ export {
   type SchemaPathResolver,
   type UniqueShape,
 } from "./operations"
-export { explainObject, type Explanation } from "./explain"
+export {
+  explainFunction,
+  explainObject,
+  type Explanation,
+  type FunctionExplanation,
+} from "./explain"

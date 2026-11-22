@@ -377,6 +377,49 @@ export function checkDeclaredGuards(
   })
 }
 
+/**
+ * Вердикт запобіжника однієї задекларованої функції (для `explain`): похідне
+ * від тих самих декларацій і того самого судді, що `checkDeclaredGuards`, але
+ * поза хешем моделі.
+ */
+export interface DeclaredFunctionState {
+  schema: string
+  name: string
+  callers: SqlFunctionDeclaration["callers"]
+  check?: NonNullable<SqlFunctionDeclaration["check"]>
+  /** `none` — перевірки не задекларовано (чи invoker-функція, яку судить RLS). */
+  state: "applied" | "not-applied" | "none"
+  /** Лише для `not-applied`. */
+  reason?: GuardReason
+}
+
+/** Перелік для `explain`; судить лише декларації, що пройшли `check-form`. */
+export function declaredFunctionStates(
+  declared: readonly DeclaredFunction[],
+  units: readonly VerbatimUnit[],
+  objects: readonly ParsedObject[],
+  rights: readonly RightsContract[],
+  plpgsql: PlpgsqlParser,
+  parse: SqlParser
+): DeclaredFunctionState[] {
+  return declared.map(({ declaration, unit, key }) => {
+    const { check, callers } = declaration
+    const base = { schema: key.schema, name: key.name, callers }
+    if (check === undefined || !isSecurityDefiner(unit, units))
+      return {
+        ...base,
+        ...(check === undefined ? {} : { check }),
+        state: "none",
+      }
+    const contract = checkedContract(check, objects, rights)
+    if (contract === undefined) return { ...base, check, state: "none" }
+    const proof = guardOf(unit, declaration, contract, plpgsql, parse)
+    return proof.ok
+      ? { ...base, check, state: "applied" }
+      : { ...base, check, state: "not-applied", reason: proof.reason }
+  })
+}
+
 /** Аргументи запобіжника виклику першого оператора тіла (читає зворотна генерація). */
 export interface GuardArgs {
   /** Яка функція запобіжника: ціль `row` (`require`) чи `scope` (`requireScope`). */

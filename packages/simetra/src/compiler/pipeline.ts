@@ -109,7 +109,7 @@ import {
   platformFormSources,
 } from "./sql/closed-forms"
 import { creationOrder } from "./sql/dependencies"
-import { checkDeclaredGuards } from "./sql/guard-of"
+import { checkDeclaredGuards, declaredFunctionStates } from "./sql/guard-of"
 import { checkDebt, debtPredicate } from "./sql/debt"
 import {
   checkDeclaredChecks,
@@ -1216,7 +1216,19 @@ export async function runStages(
   // `ok` рахується над усіма діагностиками: помилки класу ремонту, що пізніші
   // за гейт стадій (`checkDeclaredGuards`), не закривали його в `repair`.
   const final = sortDiagnostics([...diagnostics, ...budget])
-  return { ok: !hasErrors(final), diagnostics: final, model: compiled }
+  return {
+    ok: !hasErrors(final),
+    diagnostics: final,
+    model: compiled,
+    declaredFunctions: declaredFunctionStates(
+      declared,
+      sql.units,
+      stage1.objects,
+      rights,
+      plpgsql,
+      parse
+    ),
+  }
 }
 
 /**
