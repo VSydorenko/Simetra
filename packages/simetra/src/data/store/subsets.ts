@@ -291,6 +291,29 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       s.form.object.sections.get(s.form.spec.owner, s.form.spec.section) !==
         undefined)
 
+  // Склад, не підтверджений з епохи e (П15): вимогу знімає перше успішне
+  // завантаження, що стартувало після e. Нова вимога з цієї відповіді —
+  // видимому вигляду ще одна спроба того самого завантаження, як
+  // повтор відкинутої відповіді: покоління й політ ті самі, тож це й далі
+  // дія, що його почала; невидимому — `needsRefresh`. Від порядку подій не
+  // залежить: вимога лічиться від відхиленої відповіді, а не від
+  // відновлення слота.
+  function confirm(
+    s: Subset,
+    required: number | undefined,
+    readEpoch: number
+  ): boolean {
+    const since = s.unconfirmedSince
+    if (since === undefined) return false
+    if (since === required) {
+      if (readEpoch > since) s.unconfirmedSince = undefined
+      return false
+    }
+    if (s.visible ?? s.listeners.size > 0) return true
+    s.needsRefresh = true
+    return false
+  }
+
   function resolveWaiters(s: Subset) {
     for (const resolve of s.waiters.splice(0)) resolve()
   }
@@ -326,11 +349,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         s.readStart = readEpoch
       }
       let discarded = false
+      let again = false
       return readForm(ctx, s, readEpoch, token).then(
         (apply) => {
           session.commit(
             (scope) => {
               try {
+                const required = s.unconfirmedSince
                 if (!apply(scope)) {
                   discarded = !session.versions.unavailable()
                   if (!discarded) {
@@ -348,6 +373,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                 s.error = undefined
                 s.needsRefresh = false
                 s.hasNewRows = false
+                again = confirm(s, required, readEpoch)
               } catch (error) {
                 // Дефект застосування — вигляд у `error`, рядки без власника
                 // прибирає `sweep`; відмова не стає необробленою.
@@ -362,6 +388,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             token,
             what
           )
+          if (again && token.valid) return attempt()
           if (!discarded || !token.valid) return
           // Цей прохід вичерпав межу (лічильник рухається після commit):
           // повтору не буде, вигляд — `command.unavailable`.
@@ -834,6 +861,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       visible: undefined,
       hydrated: false,
       headerState: undefined,
+      unconfirmedSince: undefined,
     }
     subsets.set(form.specKey, s)
     ctx.touchSubscriptions()

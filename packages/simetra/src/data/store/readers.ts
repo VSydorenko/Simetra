@@ -13,7 +13,7 @@ import {
   type IncludeStep,
   type Included,
 } from "./include"
-import { differentEpochs } from "./epoch"
+import { differentEpochs, keyId } from "./epoch"
 import { visibleRow, type PutResult, type RestoredRow } from "./object-store"
 import type { OwnerScope, SectionEntry } from "./section-store"
 import type { Scope, Session } from "./session"
@@ -102,7 +102,7 @@ export interface StoreOps {
 
 /** What the readers need from the core. */
 export interface ReaderContext {
-  readonly session: Pick<Session, "acceptEpoch" | "acceptEpochs">
+  readonly session: Pick<Session, "acceptEpoch" | "acceptEpochs" | "epochs">
   readonly source: StoreSource
   readonly limits: CoreLimits
   readonly strict: boolean
@@ -144,6 +144,14 @@ export interface ReaderTarget {
    * store does not hold; any accepted read of the section drops it.
    */
   headerState: RowState | undefined
+  /**
+   * `full` only: the composition is not confirmed since this epoch (P4-B spec
+   * §6.2, П15). A load answer carried a row the store rejected for a
+   * `removed` mark or a key tombstone newer than the read, so the composition
+   * lacks a row the server may have. The first successful load of the view
+   * that started after it lifts it.
+   */
+  unconfirmedSince: number | undefined
 }
 
 /** Writes a read result inside one `commit`. */
@@ -515,6 +523,31 @@ export async function fetchFullAgain(
   return fetchFull(ctx, form, token, own, [], accepted)
 }
 
+/**
+ * The epoch a rejected row of a load answer waits for (П15): the `removed`
+ * mark newer than the read — an older read's "row absent" landed after this
+ * read started — or a key tombstone newer than it (its epoch is internal to
+ * the session epochs, so the current one, which is not lower). A pair
+ * tombstone is not a requirement: the pair is gone for this view (purge,
+ * rights).
+ */
+function rejectedSince(
+  ctx: ReaderContext,
+  o: ObjectState,
+  key: Key,
+  readEpoch: number
+): number | undefined {
+  const e = o.rows.get(key)
+  if (e?.removed !== undefined)
+    return e.removed.epoch > readEpoch ? e.removed.epoch : undefined
+  if (
+    e === undefined &&
+    ctx.session.epochs.buriedSince(keyId(o.name, key), readEpoch)
+  )
+    return ctx.session.epochs.now()
+  return undefined
+}
+
 async function readFull(
   ctx: ReaderContext,
   s: ReaderTarget,
@@ -569,7 +602,13 @@ async function readFull(
       })
       return
     }
-    for (const row of kept) ops.put(scope, o, row, readEpoch, false)
+    for (const row of kept) {
+      if (ops.put(scope, o, row, readEpoch, false) !== "rejected") continue
+      if (!form.test(row.values)) continue
+      const since = rejectedSince(ctx, o, row.key, readEpoch)
+      if (since !== undefined)
+        s.unconfirmedSince = Math.max(s.unconfirmedSince ?? 0, since)
+    }
     s.owned = diffOwn(ops, scope, o, s.owned, values.keys())
     // Рядок, чий `put` відхилено, лишається `removed`: його цілі не беремо
     // (§6.2, правило 5). Рядок, якого це читання щойно відновило, тут уже живий.
