@@ -255,16 +255,17 @@ describeModelPathInvariants()
 describeReferenceDomain()
 
 describe("adoption from scratch with named scope set functions", () => {
-  // Після прийому `app.org_ids` кличуть дослівні політики кількох таблиць, а
-  // її вивід — ключ кореня, не ключ таблиці політики: функцією політики (§5.8)
-  // вона не стає, і прийом дає ще `sql.policy-helper-correlated` (`outputKey`,
-  // відмови — у `deployedRoundTrip`). Ланцюжок тут записано буквально, без
-  // виведення `restoreScopeKinds` корпусу. Теку прийому лагодять дві мутації `add` (Р8): вид скоупу `org` зі
-  // `scopes` — `app.org_ids` стає формою платформи й губить декларацію
-  // (`toPlatformForms`), потім вид `user` (`setFunction: user_ids`, зовнішній
-  // корінь фікстури; таблиць не має, тож `scopes` не потрібні) — так само для
-  // `app.user_ids`. Після них тека компілюється без помилок, а план проти бази
-  // порожній (Б5): `deployedRoundTrip` веде ланцюжок і застосування.
+  // Після прийому `app.org_ids` кличуть дослівні політики кількох таблиць,
+  // а її вивід — ключ кореня, не ключ таблиці політики: функцією політики
+  // (§5.8) вона не стає, і прийом дає ще `sql.policy-helper-correlated`
+  // (`outputKey`; відмови — у `deployedRoundTrip`). Теку прийому лагодять
+  // дві мутації `add` (Р8), записані тут буквально, без виведення
+  // `restoreScopeKinds` корпусу: вид скоупу `org` зі `scopes` — `app.org_ids`
+  // стає формою платформи й губить декларацію (`toPlatformForms`), потім вид
+  // `user` (`setFunction: user_ids`, зовнішній корінь фікстури; таблиць не
+  // має, тож `scopes` не потрібні) — так само для `app.user_ids`. Після них
+  // тека компілюється без помилок, а план проти бази порожній (Б5):
+  // `deployedRoundTrip` веде ланцюжок і застосування.
   it("movement query with named scope set functions: adoption reaches an empty plan through the add of scope kinds org and user", async () => {
     const { source, result, adopted } = await deployedRoundTrip(
       movementQuery(testProvider()),
