@@ -183,6 +183,7 @@ export function checkHeadSettings(
         line: unit.line,
         setting: problem.setting,
         expected: problem.expected,
+        problem: problem.problem,
         ...(problem.actual === undefined ? {} : { actual: problem.actual }),
       }),
     ]

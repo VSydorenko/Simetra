@@ -3,6 +3,7 @@ import type { DatabaseProvider, PhysicalTable } from "simetra/model"
 import { isRepairError, repairKeys } from "../diagnostics"
 import type { PlatformFormSource } from "../sql/closed-forms"
 import { HEAD_BUILTINS } from "../sql/head-builtins"
+import { pinnedSettingsClause } from "../sql/head-settings"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { loadPlpgsqlParser, type PlpgsqlParser } from "../sql/plpgsql"
 import {
@@ -57,8 +58,7 @@ const TABLES = [
 ]
 
 /** Налаштування сесії, які корінь голови фіксує в оболонці (`sql.head-settings`). */
-const PINNED =
-  "SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1'"
+const PINNED = pinnedSettingsClause()
 const SHELL = `STABLE SECURITY DEFINER SET search_path = '' ${PINNED}`
 const JOIN = "FROM public.docs d JOIN public.members m ON m.team_id = d.team_id"
 const ACTOR = "m.user_id = (SELECT auth.uid())"
@@ -773,10 +773,7 @@ describe("checkPolicyFunctionHeads", () => {
         d.params?.setting ?? d.params?.detail,
         d.params?.actual,
       ])
-    ).toEqual([
-      ["sql.head-settings", "TimeZone", "Europe/Kyiv"],
-      ["sql.head-not-allowed", "timezone", undefined],
-    ])
+    ).toEqual([["sql.head-settings", "TimeZone", "Europe/Kyiv"]])
     expect(repairKeys(diagnostics)).toEqual([
       { code: "sql.head-settings", schema: "public", name: "f" },
     ])
@@ -805,8 +802,8 @@ describe("checkPolicyFunctionHeads", () => {
       checkPolicyFunctionHeads(functions, scope).map((d) => [
         d.code,
         d.params?.setting,
-        d.params?.actual,
+        d.params?.problem,
       ])
-    ).toEqual([["sql.head-settings", "TimeZone", "ALTER FUNCTION"]])
+    ).toEqual([["sql.head-settings", "TimeZone", "alter"]])
   })
 })

@@ -8,7 +8,11 @@ import type {
 import type { CommandContextWrite } from "./sql/command-context"
 import type { DefinerReadsForm } from "./sql/definer-reads"
 import type { PolicyFunctionReason } from "./sql/policy-functions"
+import { pinnedSettingsClause } from "./sql/head-settings"
 import type { HeadConstruct } from "./sql/query-shape"
+
+/** Опції `SET` налаштувань сесії, які фіксує корінь голови, — з одного джерела. */
+const PINNED_SETTINGS = pinnedSettingsClause()
 
 export type Locale = "en" | "uk"
 
@@ -1456,8 +1460,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `${p.head} у рядку ${p.line} виконує ${headConstruct(p.construct)?.uk ?? p.construct}${p.detail === undefined ? "" : ` (${p.detail})`}: ${p.chain}`,
     hint: {
-      en: "Functions of kind modules, subscription handlers, scope set functions, access dimension value functions and movement query blocks run in the middle of a command or of a policy, so the compiler accepts only what its allowlist names. A handler only checks: it reads with SELECT … INTO, assigns NEW and raises errors; it writes no table, runs no EXECUTE, CALL, SET or cursor. Every other head and every function it calls is a query function: LANGUAGE sql, a string body of exactly one SELECT, SET search_path = '' and no other SET option except TimeZone, DateStyle, IntervalStyle and extra_float_digits at the values a scope set function, a dimension value function or a policy function pins (sql.head-settings). They read only qualified tables of kinds, adopted tables and views of the model, and call only query functions of the model, simetra.current_user_id(), generated functions that read, the listed provider functions (auth.uid(), auth.jwt(), auth.role()) and builtins of the head allowlist: pure functions without session, connection or request state. Of the session they read only current_setting('request.jwt.claims', …) with the name as a plain literal. A verbatim policy expression has no such settings, so it never reads the session time zone: write now() AT TIME ZONE '<zone>' before a conversion to date, time, timetz or timestamp, and a date literal in ISO form. In a view or a policy a builtin is written as pg_catalog.<name>. Move a write into a command of the object or a TypeScript hook.",
-      uk: "Функції модулів видів, обробники підписок, функції множини скоупу, функції значень вимірів доступу й блоки запиту рухів виконуються посеред команди чи політики, тож компілятор приймає лише те, що називає його дозвільний перелік. Обробник лише перевіряє: читає через SELECT … INTO, присвоює NEW і кидає помилки; він не пише таблиць, не виконує EXECUTE, CALL, SET чи курсорів. Кожна інша голова й кожна функція, яку вона кличе, — функція-запит: LANGUAGE sql, рядкове тіло рівно з одного SELECT, SET search_path = '' і жодної іншої опції SET, крім TimeZone, DateStyle, IntervalStyle і extra_float_digits у значеннях, які фіксує функція множини, функція значень виміру чи функція політики (sql.head-settings). Вони читають лише кваліфіковані таблиці видів, прийняті таблиці й подання моделі та кличуть лише функції-запити моделі, simetra.current_user_id(), згенеровані функції, що читають, поіменні функції провайдера (auth.uid(), auth.jwt(), auth.role()) і вбудовані з переліку голови: чисті функції без стану сесії, з'єднання й запиту. Зі стану сесії вони читають лише current_setting('request.jwt.claims', …) з назвою голим літералом. Дослівний вираз політики таких налаштувань не має, тож ніколи не читає часової зони сесії: пишіть now() AT TIME ZONE '<зона>' перед перетворенням у date, time, timetz чи timestamp, а літерал дати — у формі ISO. У поданні чи політиці вбудовану пишуть як pg_catalog.<ім'я>. Перенесіть запис у команду об'єкта чи TypeScript-хук.",
+      en: "Functions of kind modules, subscription handlers, scope set functions, access dimension value functions and movement query blocks run in the middle of a command or of a policy, so the compiler accepts only what its allowlist names. A handler only checks: it reads with SELECT … INTO, assigns NEW and raises errors; it writes no table, runs no EXECUTE, CALL, SET or cursor. Every other head and every function it calls is a query function: LANGUAGE sql, a string body of exactly one SELECT, SET search_path = '' and no other SET option except the session settings a scope set function, a dimension value function or a policy function pins, at their pinned values (sql.head-settings). They read only qualified tables of kinds, adopted tables and views of the model, and call only query functions of the model, simetra.current_user_id(), generated functions that read, the listed provider functions (auth.uid(), auth.jwt(), auth.role()) and builtins of the head allowlist: pure functions without session, connection or request state. Of the session they read only current_setting('request.jwt.claims', …) with the name as a plain literal. A verbatim policy expression has no such settings, so it never reads the session time zone: write now() AT TIME ZONE '<zone>' before a conversion to date, time, timetz or timestamp, and a date literal in ISO form. In a view or a policy a builtin is written as pg_catalog.<name>. Move a write into a command of the object or a TypeScript hook.",
+      uk: "Функції модулів видів, обробники підписок, функції множини скоупу, функції значень вимірів доступу й блоки запиту рухів виконуються посеред команди чи політики, тож компілятор приймає лише те, що називає його дозвільний перелік. Обробник лише перевіряє: читає через SELECT … INTO, присвоює NEW і кидає помилки; він не пише таблиць, не виконує EXECUTE, CALL, SET чи курсорів. Кожна інша голова й кожна функція, яку вона кличе, — функція-запит: LANGUAGE sql, рядкове тіло рівно з одного SELECT, SET search_path = '' і жодної іншої опції SET, крім налаштувань сесії, які фіксує функція множини, функція значень виміру чи функція політики, у їхніх зафіксованих значеннях (sql.head-settings). Вони читають лише кваліфіковані таблиці видів, прийняті таблиці й подання моделі та кличуть лише функції-запити моделі, simetra.current_user_id(), згенеровані функції, що читають, поіменні функції провайдера (auth.uid(), auth.jwt(), auth.role()) і вбудовані з переліку голови: чисті функції без стану сесії, з'єднання й запиту. Зі стану сесії вони читають лише current_setting('request.jwt.claims', …) з назвою голим літералом. Дослівний вираз політики таких налаштувань не має, тож ніколи не читає часової зони сесії: пишіть now() AT TIME ZONE '<зона>' перед перетворенням у date, time, timetz чи timestamp, а літерал дати — у формі ISO. У поданні чи політиці вбудовану пишуть як pg_catalog.<ім'я>. Перенесіть запис у команду об'єкта чи TypeScript-хук.",
     },
   },
   "sql.domain-check-not-allowed": {
@@ -1472,16 +1476,24 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "sql.head-settings": {
     en: (p) =>
-      p.actual === undefined
-        ? `Function ${p.function} at line ${p.line} does not set ${p.setting} = '${p.expected}' in its CREATE FUNCTION`
-        : `Function ${p.function} at line ${p.line} sets ${p.setting} to ${p.actual} instead of '${p.expected}'`,
+      p.problem === "alter"
+        ? `A separate ALTER FUNCTION changes ${p.setting} of function ${p.function} (line ${p.line}); only its CREATE FUNCTION may set it, to '${p.expected}'`
+        : p.problem === "notFixed"
+          ? `Function ${p.function} at line ${p.line} sets ${p.setting} without a fixed value; it must be '${p.expected}'`
+          : p.problem === "value"
+            ? `Function ${p.function} at line ${p.line} sets ${p.setting} to '${p.actual}' instead of '${p.expected}'`
+            : `Function ${p.function} at line ${p.line} does not set ${p.setting} = '${p.expected}' in its CREATE FUNCTION`,
     uk: (p) =>
-      p.actual === undefined
-        ? `Функція ${p.function} у рядку ${p.line} не задає ${p.setting} = '${p.expected}' у своєму CREATE FUNCTION`
-        : `Функція ${p.function} у рядку ${p.line} задає ${p.setting} як ${p.actual} замість '${p.expected}'`,
+      p.problem === "alter"
+        ? `Окремий ALTER FUNCTION змінює ${p.setting} функції ${p.function} (рядок ${p.line}); задавати його може лише її CREATE FUNCTION, значенням '${p.expected}'`
+        : p.problem === "notFixed"
+          ? `Функція ${p.function} у рядку ${p.line} задає ${p.setting} без фіксованого значення; потрібно '${p.expected}'`
+          : p.problem === "value"
+            ? `Функція ${p.function} у рядку ${p.line} задає ${p.setting} як '${p.actual}' замість '${p.expected}'`
+            : `Функція ${p.function} у рядку ${p.line} не задає ${p.setting} = '${p.expected}' у своєму CREATE FUNCTION`,
     hint: {
-      en: "A scope set function, an access dimension value function and a policy function run with the session of the client, which chooses its own time zone (PostgREST Prefer: timezone) and date, interval and number styles. A conversion of timestamptz to a date, a time or a timestamp, and the text of dates, intervals and numbers, would then depend on the client, so the function pins these settings in its own options. Write SET \"TimeZone\" = 'UTC', SET \"DateStyle\" = 'ISO, MDY', SET \"IntervalStyle\" = 'postgres' and SET extra_float_digits = '1' in the CREATE FUNCTION statement, not in a separate ALTER FUNCTION; a function it calls sets none of them to another value.",
-      uk: "Функція множини скоупу, функція значень виміру доступу й функція політики виконуються в сесії клієнта, який сам обирає часову зону (Prefer: timezone PostgREST) і стилі дат, інтервалів і чисел. Перетворення timestamptz у дату, час чи timestamp і текст дат, інтервалів і чисел тоді залежали б від клієнта, тож функція фіксує ці налаштування у власних опціях. Напишіть SET \"TimeZone\" = 'UTC', SET \"DateStyle\" = 'ISO, MDY', SET \"IntervalStyle\" = 'postgres' і SET extra_float_digits = '1' в операторі CREATE FUNCTION, а не окремим ALTER FUNCTION; функція, яку вона кличе, не ставить жодному з них іншого значення.",
+      en: `A scope set function, an access dimension value function and a policy function run with the session of the client, which chooses its own time zone (PostgREST Prefer: timezone), date, interval, number, money, bytea and XML styles and text search configuration. The values the function reads and returns would then depend on the client, so the function pins these settings in its own options. Write ${PINNED_SETTINGS} in the CREATE FUNCTION statement, not in a separate ALTER FUNCTION; a function it calls sets none of them to another value.`,
+      uk: `Функція множини скоупу, функція значень виміру доступу й функція політики виконуються в сесії клієнта, який сам обирає часову зону (Prefer: timezone PostgREST), стилі дат, інтервалів, чисел, грошей, bytea і XML та конфігурацію текстового пошуку. Значення, які функція читає й повертає, тоді залежали б від клієнта, тож функція фіксує ці налаштування у власних опціях. Напишіть ${PINNED_SETTINGS} в операторі CREATE FUNCTION, а не окремим ALTER FUNCTION; функція, яку вона кличе, не ставить жодному з них іншого значення.`,
     },
   },
   "sql.function-settings-shell": {
@@ -1617,8 +1629,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Функцію ${p.function} у рядку ${p.line} кличе дослівна політика, але вона не функція політики: ${POLICY_FUNCTION_REASON[p.reason as PolicyFunctionReason]?.uk ?? p.reason}${p.detail === undefined ? "" : ` (ще: ${p.detail})`}`,
     hint: {
-      en: "A role of the query can call a function that a policy calls also as an RPC, so the platform grants EXECUTE only to a policy function, whose direct call returns no more than the policy lets the actor read: no parameters, RETURNS SETOF uuid, LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '', the key of the policy table bound to the actor, and each calling policy written as <key> IN (SELECT f()). Rewrite the function into this form, or, when it answers with facts of the actor about another table (members, tenants), reduce it to the set function of a scope kind.",
-      uk: "Роль запиту може кликати функцію, яку кличе політика, ще й як RPC, тож EXECUTE платформа дає лише функції політики, прямий виклик якої повертає не більше, ніж політика дозволяє актору читати: без параметрів, RETURNS SETOF uuid, LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '', ключ таблиці політики, прив'язаний до актора, і кожна політика-викликач у формі <ключ> IN (SELECT f()). Перепишіть функцію в цю форму або, коли вона відповідає фактами актора про іншу таблицю (учасники, тенанти), зведіть її до функції множини виду скоупу.",
+      en: `A role of the query can call a function that a policy calls also as an RPC, so the platform grants EXECUTE only to a policy function, whose direct call returns no more than the policy lets the actor read: no parameters, RETURNS SETOF uuid, LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}, the key of the policy table bound to the actor, and each calling policy written as <key> IN (SELECT f()). Rewrite the function into this form, or, when it answers with facts of the actor about another table (members, tenants), reduce it to the set function of a scope kind.`,
+      uk: `Роль запиту може кликати функцію, яку кличе політика, ще й як RPC, тож EXECUTE платформа дає лише функції політики, прямий виклик якої повертає не більше, ніж політика дозволяє актору читати: без параметрів, RETURNS SETOF uuid, LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}, ключ таблиці політики, прив'язаний до актора, і кожна політика-викликач у формі <ключ> IN (SELECT f()). Перепишіть функцію в цю форму або, коли вона відповідає фактами актора про іншу таблицю (учасники, тенанти), зведіть її до функції множини виду скоупу.`,
     },
   },
   "sql.declaration-target-missing": {
@@ -2250,8 +2262,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         ? `Функція множини скоупу ${p.function}() має хибну сигнатуру: ${p.problem}`
         : `Функція множини скоупу ${p.function}() поза закритою формою: ${SET_FUNCTION_REASON[String(p.reason)]?.uk ?? p.reason}`,
     hint: {
-      en: "A set function takes no arguments, returns SETOF uuid and is LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''; its body is judged as a query function (sql.head-not-allowed).",
-      uk: "Функція множини не приймає аргументів, повертає SETOF uuid і є LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''; її тіло судиться як функція-запит (sql.head-not-allowed).",
+      en: `A set function takes no arguments, returns SETOF uuid and is LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}; its body is judged as a query function (sql.head-not-allowed).`,
+      uk: `Функція множини не приймає аргументів, повертає SETOF uuid і є LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}; її тіло судиться як функція-запит (sql.head-not-allowed).`,
     },
   },
 
@@ -2722,8 +2734,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Функція значень ${p.function}() виміру доступу "${p.dimension}" не визначена в жодному файлі .sql`,
     hint: {
-      en: "Add 'CREATE FUNCTION <schema>.<name>() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ...' to a .sql file.",
-      uk: "Додайте 'CREATE FUNCTION <схема>.<ім'я>() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ...' до файлу .sql.",
+      en: `Add 'CREATE FUNCTION <schema>.<name>() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS} ...' to a .sql file.`,
+      uk: `Додайте 'CREATE FUNCTION <схема>.<ім'я>() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS} ...' до файлу .sql.`,
     },
   },
   "rights.dimension-function-signature": {
@@ -2736,8 +2748,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
         ? `Функція значень ${p.function}() виміру доступу "${p.dimension}" має хибну сигнатуру: ${p.problem}`
         : `${p.function} у значеннях виміру доступу "${p.dimension}" — поза закритою формою: ${SET_FUNCTION_REASON[String(p.reason)]?.uk ?? p.reason}`,
     hint: {
-      en: "The values function takes no arguments, returns SETOF uuid and is LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''; its body and every function it calls are judged as query functions (sql.head-not-allowed).",
-      uk: "Функція значень не приймає аргументів, повертає SETOF uuid і є LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''; її тіло й кожна функція, яку вона кличе, судяться як функції-запити (sql.head-not-allowed).",
+      en: `The values function takes no arguments, returns SETOF uuid and is LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}; its body and every function it calls are judged as query functions (sql.head-not-allowed).`,
+      uk: `Функція значень не приймає аргументів, повертає SETOF uuid і є LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}; її тіло й кожна функція, яку вона кличе, судяться як функції-запити (sql.head-not-allowed).`,
     },
   },
   "rights.dimension-function-reads-rights": {

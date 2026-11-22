@@ -17,6 +17,7 @@ import type { DeclaredFunction, PlatformForm } from "./declarations"
 import { isExpressionUnit, treeBeyondExpressions } from "./expression-calls"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
+import { HEAD_PINNED_SETTINGS } from "./head-settings"
 import { functionIdentity } from "./identity"
 import { FUNCTION_CLASSES, type RowRule, type VerbatimUnit } from "./units"
 
@@ -229,24 +230,6 @@ export function alterTouchesSearchPath(tree: unknown): boolean {
 }
 
 /**
- * Налаштування сесії, які корінь голови (функція множини скоупу, функція
- * значень виміру, функція політики) фіксує у своїй оболонці (спека декларацій
- * функцій §5.8): клієнт ставить їх сам (`Prefer: timezone` PostgREST,
- * `SET` сесії), а від них залежать перетворення `timestamptz` у місцевий час і
- * текст дат, інтервалів і чисел. Значення — типові Postgres; ланка, яку голова
- * кличе, виконується вже в цих налаштуваннях і не ставить їм інших значень.
- */
-export const HEAD_PINNED_SETTINGS: readonly {
-  name: string
-  value: string
-}[] = [
-  { name: "TimeZone", value: "UTC" },
-  { name: "DateStyle", value: "ISO, MDY" },
-  { name: "IntervalStyle", value: "postgres" },
-  { name: "extra_float_digits", value: "1" },
-]
-
-/**
  * Текст значення опції `SET`, як його зберігає `proconfig`: елементи списку
  * через `, `, число — його запис. `FROM CURRENT`, `TO DEFAULT` чи інший
  * вузол — без фіксованого значення (`undefined`).
@@ -276,7 +259,13 @@ export function setsPinnedValue(set: SetOption): boolean {
 export interface PinnedSettingProblem {
   setting: string
   expected: string
-  /** Значення після згортання опцій; без нього — налаштування не задано. */
+  /**
+   * Чому налаштування не зафіксовано: не задане (`missing`), задане іншим
+   * літеральним значенням (`value`, текст — `actual`), задане без
+   * фіксованого значення (`notFixed`: `FROM CURRENT`, `TO DEFAULT`) чи
+   * зачеплене окремим `ALTER FUNCTION` (`alter`).
+   */
+  problem: "missing" | "value" | "notFixed" | "alter"
   actual?: string
 }
 
@@ -293,7 +282,8 @@ export function pinnedSettingProblem(
   units: readonly Pick<VerbatimUnit, "class" | "tree">[]
 ): PinnedSettingProblem | undefined {
   const fn = createFunction(unit.tree as Node)
-  const folded = new Map<string, string>()
+  // `null` — опція без фіксованого значення (`FROM CURRENT`, `TO DEFAULT`).
+  const folded = new Map<string, string | null>()
   for (const option of fn === undefined ? [] : functionOptions(fn).options) {
     const set =
       option.defname === "set" ? option.arg?.VariableSetStmt : undefined
@@ -301,13 +291,7 @@ export function pinnedSettingProblem(
     if (set.kind === "VAR_RESET_ALL") folded.clear()
     else if (set.kind === "VAR_RESET")
       folded.delete(set.name?.toLowerCase() ?? "")
-    else {
-      folded.set(
-        set.name?.toLowerCase() ?? "",
-        setValueText(set) ??
-          (set.kind === "VAR_SET_CURRENT" ? "FROM CURRENT" : "DEFAULT")
-      )
-    }
+    else folded.set(set.name?.toLowerCase() ?? "", setValueText(set) ?? null)
   }
   const altered = functionSettingsOf(unit, units).flatMap(
     (settings) => alterFunction(settings.tree)?.actions ?? []
@@ -324,14 +308,12 @@ export function pinnedSettingProblem(
         (set.kind === "VAR_RESET_ALL" || set.name?.toLowerCase() === key)
       )
     })
-    const actual = alteredHere ? "ALTER FUNCTION" : folded.get(key)
-    if (actual !== pinned.value) {
-      return {
-        setting: pinned.name,
-        expected: pinned.value,
-        ...(actual === undefined ? {} : { actual }),
-      }
-    }
+    const base = { setting: pinned.name, expected: pinned.value }
+    if (alteredHere) return { ...base, problem: "alter" }
+    const actual = folded.get(key)
+    if (actual === undefined) return { ...base, problem: "missing" }
+    if (actual === null) return { ...base, problem: "notFixed" }
+    if (actual !== pinned.value) return { ...base, problem: "value", actual }
   }
   return undefined
 }

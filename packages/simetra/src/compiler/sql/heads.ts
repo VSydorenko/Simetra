@@ -16,14 +16,16 @@ import { PLATFORM_READ_FUNCTIONS } from "../platform/names"
 import type { ParsedObject } from "../stages/files"
 import type { ResolvedReference } from "../stages/identity"
 import { HEAD_BUILTINS } from "./head-builtins"
+import { HEAD_PINNED_SETTINGS } from "./head-settings"
 import {
   closedModuleOwners,
   hasEffectiveEmptySearchPath,
+  pinnedSettingProblem,
   routineLanguage,
 } from "./closed-forms"
 import { unitCalls, unitRelations } from "./dependencies"
 import { routineBody } from "./function-body"
-import type { SqlParser } from "./parse"
+import { relationNameText, type SqlParser } from "./parse"
 import type {
   PlpgsqlExpression,
   PlpgsqlParser,
@@ -157,7 +159,7 @@ export function headScope(
  * стану сесії (`setting`, ім'я налаштування в `name`).
  */
 interface Reference {
-  space: "proc" | "rel" | "attribute" | "operator" | "setting"
+  space: "proc" | "rel" | "attribute" | "operator" | "setting" | "regcast"
   schema?: string
   name: string
   /**
@@ -200,7 +202,67 @@ function treeReferences(
       space: "setting",
       bound,
     })),
+    ...regCasts(tree).map((name): Reference => ({
+      name,
+      space: "regcast",
+      bound,
+    })),
   ]
+}
+
+/** Типи `reg*`: приведення тексту до них називає об'єкт бази текстом. */
+const REG_TYPES: ReadonlySet<string> = new Set([
+  "regclass",
+  "regproc",
+  "regprocedure",
+  "regoper",
+  "regoperator",
+  "regtype",
+  "regnamespace",
+  "regrole",
+  "regconfig",
+  "regdictionary",
+  "regcollation",
+])
+
+/**
+ * Приведення до типу `reg*`, якого збирач залежностей не розв'язує в
+ * посилання (`dependencies.ts`): об'єкт, названий текстом під час виконання,
+ * не бачать ні виклики, ні відношення голови. Розв'язується лише рядковий
+ * літерал, приведений до `regclass`, — він стає відношенням і судиться
+ * правилом відношень; будь-яке інше приведення — знахідка `call` з типом.
+ */
+function regCasts(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(regCasts)
+  if (typeof value !== "object" || value === null) return []
+  const node = value as Record<string, unknown>
+  const cast = node.TypeCast as
+    | { arg?: unknown; typeName?: { names?: FuncCallNode["funcname"] } }
+    | undefined
+  const type =
+    cast === undefined ? undefined : builtinName(cast.typeName?.names)
+  const own =
+    type !== undefined && REG_TYPES.has(type) && !resolvedRegclass(type, cast!)
+      ? [`::${type}`]
+      : []
+  return [...own, ...Object.values(node).flatMap(regCasts)]
+}
+
+/**
+ * Чи приведення `regclass` розв'язує збирач: рядковий літерал (крізь
+ * вкладені приведення й `COLLATE`, як `regclassArgument`) з іменем
+ * відношення, яке розбирає `relationNameText`.
+ */
+function resolvedRegclass(type: string, cast: { arg?: unknown }): boolean {
+  if (type !== "regclass") return false
+  let arg = cast.arg as Record<string, { arg?: unknown }> | undefined
+  while (arg?.TypeCast !== undefined || arg?.CollateClause !== undefined) {
+    arg = (arg.TypeCast ?? arg.CollateClause)!.arg as
+      Record<string, { arg?: unknown }> | undefined
+  }
+  const text = stringLiteral(arg)
+  const names = text === undefined ? undefined : relationNameText(text)
+  return names !== undefined && names.length <= 3
 }
 
 /** Налаштування часової зони сесії: деталь `setting` для залежних від неї форм. */
@@ -257,35 +319,92 @@ function stringLiteral(value: unknown): string | undefined {
 /**
  * Літерал дати й часу ISO 8601 (`YYYY-MM-DD[ T]hh:mm…`): інший порядок
  * (`'01-02-2026'`) читає `DateStyle`, слова (`'today'`, `'now'`) — зона сесії.
- * `timetz` без явного зсуву бере зсув зони сесії, тож для нього зсув
- * обов'язковий.
+ * `timetz` і `timestamptz` без явного зсуву беруть зсув зони сесії, тож для
+ * них зсув обов'язковий.
  */
 function isoLiteral(text: string, type: string): boolean {
   const match =
     /^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}(?::?\d{2})?)?)?$/.exec(
       text
     )
-  return match !== null && (type !== "timetz" || match[1] !== undefined)
+  return match !== null && (!ZONED_TYPES.has(type) || match[1] !== undefined)
+}
+
+/** Типи з зоною: літерал без зсуву Postgres читає в зоні сесії. */
+const ZONED_TYPES: ReadonlySet<string> = new Set(["timetz", "timestamptz"])
+
+/** `SQLValueFunction` абсолютного моменту: `current_timestamp[(n)]`. */
+const MOMENT_VALUES: ReadonlySet<string> = new Set([
+  "SVFOP_CURRENT_TIMESTAMP",
+  "SVFOP_CURRENT_TIMESTAMP_N",
+])
+
+/** Вбудовані без аргументів, що повертають `timestamptz` — абсолютний момент. */
+const MOMENT_FUNCTIONS: ReadonlySet<string> = new Set([
+  "now",
+  "statement_timestamp",
+  "transaction_timestamp",
+  "clock_timestamp",
+])
+
+/**
+ * Вираз, тип якого доведено `timestamptz`: `current_timestamp`, `now()` і
+ * споріднені без аргументів чи літерал ISO з явним зсувом, приведений до
+ * `timestamptz`. Типів решти виразів компілятор не знає.
+ */
+function provablyTimestamptz(value: unknown): boolean {
+  const moment = (value as { SQLValueFunction?: { op?: string } })
+    ?.SQLValueFunction
+  if (moment?.op !== undefined) return MOMENT_VALUES.has(moment.op)
+  const call = (value as { FuncCall?: FuncCallNode })?.FuncCall
+  if (call !== undefined) {
+    const name = builtinName(call.funcname)
+    return (
+      name !== undefined &&
+      MOMENT_FUNCTIONS.has(name) &&
+      (call.args ?? []).length === 0
+    )
+  }
+  const cast = (
+    value as {
+      TypeCast?: {
+        arg?: unknown
+        typeName?: { names?: FuncCallNode["funcname"] }
+      }
+    }
+  )?.TypeCast
+  if (cast === undefined) return false
+  const text = stringLiteral(cast.arg)
+  return (
+    builtinName(cast.typeName?.names) === "timestamptz" &&
+    text !== undefined &&
+    isoLiteral(text, "timestamptz")
+  )
 }
 
 /**
- * Значення, перетворення якого в тип місцевого часу `type` не залежить від
- * `TimeZone` і `DateStyle`: `… AT TIME ZONE '<літерал>'`, `NULL` чи літерал
- * ISO (`isoLiteral`). Типів виразу компілятор не відстежує, тож усе інше —
- * fail-closed.
+ * Значення, перетворення якого в тип часу `type` не залежить від
+ * `TimeZone` і `DateStyle`: `NULL`, літерал ISO (`isoLiteral`),
+ * `<доведено timestamptz> AT TIME ZONE '<літерал>'` (результат —
+ * `timestamp`, без зони сесії), а для `timestamptz` — і сам вираз, доведено
+ * `timestamptz`. `AT TIME ZONE` над `timestamp` повертає `timestamptz`, яке
+ * наступне перетворення знову читає в зоні сесії, тож типів, яких компілятор
+ * не знає, — fail-closed.
  */
 function zoneFree(value: unknown, type: string): boolean {
   const constant = (value as { A_Const?: { isnull?: boolean } })?.A_Const
   if (constant?.isnull === true) return true
   const text = stringLiteral(value)
   if (text !== undefined) return isoLiteral(text, type)
+  if (type === "timestamptz") return provablyTimestamptz(value)
   const call = (value as { FuncCall?: FuncCallNode })?.FuncCall
   return (
     type !== "timetz" &&
     call !== undefined &&
     builtinName(call.funcname) === "timezone" &&
     call.args?.length === 2 &&
-    stringLiteral(call.args[0]) !== undefined
+    stringLiteral(call.args[0]) !== undefined &&
+    provablyTimestamptz(call.args[1])
   )
 }
 
@@ -319,8 +438,9 @@ function settingRead(node: Record<string, unknown>): string | undefined {
  * декларацій функцій §5.8): функція голови фіксує `TimeZone` у своїй
  * оболонці (`HEAD_PINNED_SETTINGS`), а вираз політики, який обчислює
  * Postgres у сесії клієнта, такої оболонки не має — для нього правило за
- * іменами: місцевий час «зараз» і перетворення в тип місцевого часу без
- * `AT TIME ZONE '<літерал>'`.
+ * іменами: місцевий час «зараз», перетворення в тип місцевого часу без
+ * `AT TIME ZONE '<літерал>'` над доведено `timestamptz` і перетворення в
+ * `timestamptz` того, що не має зони (`zoneFree`).
  */
 function timeZoneRead(node: Record<string, unknown>): boolean {
   const value = node.SQLValueFunction as { op?: string } | undefined
@@ -332,7 +452,7 @@ function timeZoneRead(node: Record<string, unknown>): boolean {
     const type = builtinName(cast.typeName?.names)
     return (
       type !== undefined &&
-      LOCAL_TIME_TYPES.has(type) &&
+      (LOCAL_TIME_TYPES.has(type) || type === "timestamptz") &&
       !zoneFree(cast.arg, type)
     )
   }
@@ -342,7 +462,9 @@ function timeZoneRead(node: Record<string, unknown>): boolean {
   const args = call.args ?? []
   // `AT LOCAL` — `timezone(x)` з одним аргументом: зона сесії.
   if (name === "timezone") return args.length === 1
-  if (LOCAL_TIME_TYPES.has(name)) {
+  // Перетворення в `timestamptz` значення без зони (`timestamp`, `date`,
+  // літерал без зсуву) читає зону сесії так само.
+  if (LOCAL_TIME_TYPES.has(name) || name === "timestamptz") {
     return !(args.length === 1 && zoneFree(args[0], name))
   }
   // Без третього аргументу-зони `date_trunc` над `timestamptz` і
@@ -503,10 +625,39 @@ function readingPolicy(unit: VerbatimUnit): PolicyTree | undefined {
     : undefined
 }
 
-/** Одиниця моделі, як її бачить суддя: що з нею не так і що вона називає. */
+/**
+ * Одиниця моделі, як її бачить суддя: що з нею не так, що вона називає і
+ * читання часової зони сесії в її деревах (`zoneRefs`) — їх обхід звітує лише
+ * там, де одиниця виконується в налаштуваннях клієнта (`Walk`).
+ */
 interface Analysis {
   problems: { construct: HeadConstruct; detail?: string }[]
   refs: Reference[]
+  zoneRefs: Reference[]
+}
+
+/** Читання часової зони сесії в деревах — посилання `setting` обходу. */
+function zoneReferences(trees: readonly unknown[]): Reference[] {
+  return trees.flatMap((tree) =>
+    timeZoneReads(tree).map((name): Reference => ({
+      name,
+      space: "setting",
+      bound: true,
+    }))
+  )
+}
+
+/**
+ * Опція `SET` зафіксованого налаштування голови (`HEAD_PINNED_SETTINGS`):
+ * у корені його судить `sql.head-settings`, а не форма функції-запиту.
+ */
+function pinnedSettingFinding(p: { construct: string; detail?: string }) {
+  return (
+    p.construct === "setting" &&
+    HEAD_PINNED_SETTINGS.some(
+      (s) => s.name.toLowerCase() === p.detail?.toLowerCase()
+    )
+  )
 }
 
 const ROUTINES: ReadonlySet<string> = new Set([
@@ -593,17 +744,8 @@ class Index {
       return {
         problems:
           sideEffectOf(qual) === undefined ? [] : [{ construct: "query" }],
-        refs:
-          qual === undefined
-            ? []
-            : [
-                ...treeReferences(qual, parse, true),
-                ...timeZoneReads(qual).map((name): Reference => ({
-                  name,
-                  space: "setting",
-                  bound: true,
-                })),
-              ],
+        refs: qual === undefined ? [] : treeReferences(qual, parse, true),
+        zoneRefs: qual === undefined ? [] : zoneReferences([qual]),
       }
     }
     if (VIEWS.has(unit.class)) {
@@ -611,12 +753,21 @@ class Index {
         problems:
           sideEffectOf(unit.tree) === undefined ? [] : [{ construct: "query" }],
         refs: treeReferences(unit.tree, parse, true),
+        zoneRefs: zoneReferences([unit.tree]),
       }
     }
     const problems = queryFunctionProblems(unit, this.scope.units, parse)
     // Тіло, що не має форми запиту, не судиться далі: його вже відмовлено.
-    if (problems.length > 0) return { problems, refs: [] }
+    // Зафіксоване налаштування в оболонці форму тіла не ламає: тіло кореня
+    // судиться й тоді, коли значення судить `sql.head-settings`.
+    if (problems.some((p) => !pinnedSettingFinding(p))) {
+      return { problems, refs: [], zoneRefs: [] }
+    }
     const body = parse(sqlBodyText(unit) ?? "")
+    const trees = [
+      ...(body.ok ? body.statements.map((s) => s.stmt) : []),
+      creationTree(unit),
+    ]
     return {
       problems,
       refs: [
@@ -625,8 +776,16 @@ class Index {
           : []),
         ...treeReferences(creationTree(unit), parse, true),
       ],
+      zoneRefs: zoneReferences(trees),
     }
   }
+}
+
+/** Крок обходу: ланцюжок і контекст налаштувань (`Walk.visited`). */
+interface Step {
+  chain: readonly string[]
+  session: boolean
+  quiet: boolean
 }
 
 const indexes = new WeakMap<HeadScope, Index>()
@@ -652,16 +811,28 @@ function labelOf(unit: VerbatimUnit): string {
 class Walk {
   private readonly found = new Map<string, HeadFinding>()
   private readonly relations: HeadJudgement["relations"] = []
-  private readonly visited = new Set<string>()
-  private readonly queue: { unit: VerbatimUnit; chain: readonly string[] }[] =
-    []
+  /**
+   * Відвідані одиниці й контекст, у якому їх уже судили: `pinned` — у
+   * зафіксованих налаштуваннях голови, `session` — у налаштуваннях клієнта
+   * (вираз політики й усе, що він досягає). Судження `session` повніше, тож
+   * одиниця, вже суджена `pinned`, у контексті `session` проходить ще раз лише
+   * заради часової зони (`quiet`).
+   */
+  private readonly visited = new Map<string, "pinned" | "session">()
+  private readonly queue: (Step & { unit: VerbatimUnit })[] = []
   private readonly index: Index
+  /** Контекст кроку, який обхід зараз судить. */
+  private step: Step = { chain: [], session: false, quiet: false }
+  /** Корінь, у якого зафіксовані налаштування судить `sql.head-settings`. */
+  private pinnedRoot: VerbatimUnit | undefined
 
   constructor(private readonly scope: HeadScope) {
     this.index = indexOf(scope)
   }
 
   report(chain: readonly string[], construct: HeadConstruct, detail?: string) {
+    if (this.step.quiet && !(construct === "setting" && detail === TIME_ZONE))
+      return
     const key = `${chain.join(ARROW)}\0${construct}\0${detail ?? ""}`
     if (this.found.has(key)) return
     this.found.set(key, {
@@ -673,23 +844,46 @@ class Walk {
 
   /** Одиниця, яку судить не обхід: голова-обробник. */
   mark(unit: VerbatimUnit) {
-    this.visited.add(unit.identity)
+    this.visited.set(unit.identity, "session")
   }
 
-  /** Корінь обходу: одиниця, ланцюжок якої вже називає її саму. */
-  start(unit: VerbatimUnit, chain: readonly string[]) {
-    this.visited.add(unit.identity)
-    this.queue.push({ unit, chain })
+  /**
+   * Корінь обходу: одиниця, ланцюжок якої вже називає її саму. `pinned` —
+   * корінь із зафіксованими налаштуваннями (`checkHeadSettings`): опції `SET`
+   * цих налаштувань у ньому судить не форма функції-запиту.
+   */
+  start(unit: VerbatimUnit, chain: readonly string[], pinned: boolean) {
+    this.visited.set(unit.identity, "pinned")
+    this.queue.push({ unit, chain, session: false, quiet: false })
+    if (pinned) this.pinnedRoot = unit
   }
 
+  /**
+   * Ланка в контексті поточного кроку. Політика обчислюється в налаштуваннях
+   * клієнта завжди; функція, що сама фіксує налаштування голови, — у своїх.
+   */
   private enqueue(unit: VerbatimUnit, chain: readonly string[]) {
-    if (this.visited.has(unit.identity)) return
-    this.visited.add(unit.identity)
-    this.queue.push({ unit, chain: [...chain, labelOf(unit)] })
+    const session =
+      unit.class === "policy" ||
+      (this.step.session &&
+        !(
+          unit.class === "function" &&
+          pinnedSettingProblem(unit, this.scope.units) === undefined
+        ))
+    const seen = this.visited.get(unit.identity)
+    if (seen === "session" || (seen === "pinned" && !session)) return
+    this.visited.set(unit.identity, session ? "session" : "pinned")
+    this.queue.push({
+      unit,
+      chain: [...chain, labelOf(unit)],
+      session,
+      quiet: seen === "pinned",
+    })
   }
 
   /** Розібрані оператори чи вирази в контексті одиниці ланцюжка `chain`. */
   trees(trees: readonly unknown[], chain: readonly string[], bound: boolean) {
+    this.step = { chain, session: false, quiet: false }
     for (const tree of trees) {
       if (sideEffectOf(tree) !== undefined) this.report(chain, "query")
       this.references(treeReferences(tree, this.scope.parse, bound), chain)
@@ -702,10 +896,14 @@ class Walk {
       step !== undefined;
       step = this.queue.shift()
     ) {
+      this.step = step
       const analysis = this.index.analysis(step.unit)
-      for (const p of analysis.problems)
+      for (const p of analysis.problems) {
+        if (step.unit === this.pinnedRoot && pinnedSettingFinding(p)) continue
         this.report(step.chain, p.construct, p.detail)
+      }
       this.references(analysis.refs, step.chain)
+      if (step.session) this.references(analysis.zoneRefs, step.chain)
     }
     return { findings: [...this.found.values()], relations: this.relations }
   }
@@ -717,6 +915,7 @@ class Walk {
       else if (ref.space === "operator")
         this.report(chain, "operator", ref.name)
       else if (ref.space === "setting") this.report(chain, "setting", ref.name)
+      else if (ref.space === "regcast") this.report(chain, "call", ref.name)
       // З порожнім шляхом функції `x.f` розв'язується лише в `pg_catalog`.
       else if (ref.bound) this.attribute(ref.name, chain)
     }
@@ -788,12 +987,13 @@ class Walk {
       if (views.length === 0) this.report(chain, "relation", qualified)
       return
     }
-    this.relations.push({ chain, relation: qualified })
+    if (!this.step.quiet) this.relations.push({ chain, relation: qualified })
     // Ключ обходу ділить множину з ідентичностями одиниць, тож складається
-    // тим самим правилом `identity.ts`.
+    // тим самим правилом `identity.ts`. Політики таблиці судяться завжди в
+    // контексті `session`, тож таблиця — раз.
     const key = unitIdentity("table", schema, name)
     if (table.rowLevelSecurity === "off" || this.visited.has(key)) return
-    this.visited.add(key)
+    this.visited.set(key, "session")
     for (const policy of this.index.policiesOn(table))
       this.enqueue(policy, chain)
   }
@@ -806,14 +1006,15 @@ class Walk {
 export function judgeQueryFunction(
   unit: VerbatimUnit,
   scope: HeadScope,
-  chain: readonly string[]
+  chain: readonly string[],
+  pinned: boolean
 ): HeadJudgement {
   const { judgements } = indexOf(scope)
-  const key = `${unit.identity}\0${chain.join(ARROW)}`
+  const key = `${unit.identity}\0${chain.join(ARROW)}\0${pinned}`
   let judgement = judgements.get(key)
   if (judgement === undefined) {
     const walk = new Walk(scope)
-    walk.start(unit, chain)
+    walk.start(unit, chain, pinned)
     judgement = walk.run()
     judgements.set(key, judgement)
   }
@@ -1146,7 +1347,12 @@ export function checkHeads(
       queries.has(unit.identity) ||
       (unit.ownerFile !== undefined && closed.has(unit.ownerFile))
     ) {
-      emit(unit.file, head, unit.line, judgeQueryFunction(unit, scope, [head]))
+      emit(
+        unit.file,
+        head,
+        unit.line,
+        judgeQueryFunction(unit, scope, [head], queries.has(unit.identity))
+      )
     }
   }
   for (const object of objects) {

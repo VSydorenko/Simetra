@@ -1153,14 +1153,15 @@ export function checkPolicyFunctionHeads(
     ),
     ...functions.flatMap(({ unit }) => {
       const head = `${unit.schema}.${unit.name}`
-      return judgeQueryFunction(unit, scope, [head]).findings.map((finding) =>
-        diagnostic("sql.head-not-allowed", unit.file, "", {
-          head,
-          chain: finding.chain.join(" → "),
-          construct: finding.construct,
-          ...(finding.detail === undefined ? {} : { detail: finding.detail }),
-          line: unit.line,
-        })
+      return judgeQueryFunction(unit, scope, [head], true).findings.map(
+        (finding) =>
+          diagnostic("sql.head-not-allowed", unit.file, "", {
+            head,
+            chain: finding.chain.join(" → "),
+            construct: finding.construct,
+            ...(finding.detail === undefined ? {} : { detail: finding.detail }),
+            line: unit.line,
+          })
       )
     }),
   ]
