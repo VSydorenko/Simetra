@@ -318,6 +318,17 @@ function createMarkTimes(
 
 export function createReceiver(ctx: ReceiverContext): Receiver {
   const { transport, writer } = ctx
+  // Одна межа для кожного виклику порту транспорту й слухача host-а
+  // (`subscribe`, `off`, `onSubscribed`, спостерігач читань): його виняток —
+  // запис у журнал, а не обірваний крок приймача (зокрема `purge` пари, Р12).
+  const guarded = <T>(step: () => T): T | undefined => {
+    try {
+      return step()
+    } catch (error) {
+      writer.log({ kind: "listener-failed", error })
+      return undefined
+    }
+  }
   const entries = [...ctx.index.byId.values()].filter((e) => e.signal)
   const catalog = { objects: entries }
   const held = new Map<string, Held>()
@@ -416,30 +427,32 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     if (slot === undefined) return
     held.delete(error.channel)
     refused.add(error.channel)
-    slot.off?.()
     // Дані пари, на які права зникли, не лишаються в пам'яті (Р12); `purge`
     // скидає й незакриту пачку пари через `purged`. Рядки розриву каналу
     // прибирає той самий `purge`: окремого зняття позначок немає, тож і кадру
-    // з ними як свіжими.
+    // з ними як свіжими. Відписка — після `purge`: її виняток не лишає рядків.
     const channel = error.channel
     const pair = pairOf(channel)
     ctx.commit((w) => {
       if (pair !== undefined) w.purge(pair.object, { scope: pair.scope })
       w.releaseChannel(channel)
     }, token)
+    guarded(() => slot.off?.())
   }
 
   // Канал (пере)підписано — з `recovered` чи без, зокрема тихе повторне
   // приєднання: `joinAt` каналу — нова епоха (Рд37: `recovered` для свіжості не
   // береться), а його об'єкт іде в хвилю приєднання ядра. Знімає позначки
   // лише читання, що почалось після цієї епохи.
-  const offSubscribed = transport.onSubscribed(({ channel }) => {
-    if (stopped || !held.has(channel)) return
-    const pair = pairOf(channel)
-    if (pair === undefined) return
-    session.epochs.join(channel)
-    ctx.joinWave(pair.object)
-  })
+  const offSubscribed = guarded(() =>
+    transport.onSubscribed(({ channel }) => {
+      if (stopped || !held.has(channel)) return
+      const pair = pairOf(channel)
+      if (pair === undefined) return
+      session.epochs.join(channel)
+      ctx.joinWave(pair.object)
+    })
+  )
 
   // ------------------------------------------------------------ пачка
 
@@ -793,16 +806,18 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       if (plan === undefined) continue
       const watcher = ctx.signalReads?.()
       const note = (reread: readonly Subset[]) =>
-        watcher?.(object, {
-          by: "batch",
-          keys: [...plan.stored, ...plan.fresh].map((key) => ({
-            key,
-            scopes: [...(signals.keys.get(key)?.scopes ?? [])],
-          })),
-          invalidated: [...signals.invalidate],
-          whole: plan.whole,
-          views: reread,
-        })
+        guarded(() =>
+          watcher?.(object, {
+            by: "batch",
+            keys: [...plan.stored, ...plan.fresh].map((key) => ({
+              key,
+              scopes: [...(signals.keys.get(key)?.scopes ?? [])],
+            })),
+            invalidated: [...signals.invalidate],
+            whole: plan.whole,
+            views: reread,
+          })
+        )
       // Прихована вкладка нічого не шле (Р8): вигляди чекають `resume()`.
       if (!ctx.visible()) {
         note([])
@@ -906,9 +921,9 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     // Утримання — до підписки: розрив з'єднання до першого `onSubscribed`
     // уже стосується каналу.
     ctx.commit((w) => w.holdChannel(channel), token)
-    const off = transport.subscribe([channel], onSignal, onError)
+    const off = guarded(() => transport.subscribe([channel], onSignal, onError))
     if (held.get(channel) === slot) slot.off = off
-    else off()
+    else guarded(() => off?.())
   }
 
   const sync = () => {
@@ -919,9 +934,9 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       if (next.has(channel)) continue
       held.delete(channel)
       // Позначок відпускання не знімає: рядок, що лишився ціллю `include`,
-      // доводить читання після відпускання.
+      // доводить читання після відпускання. Відписка — після нього.
       ctx.commit((w) => w.releaseChannel(channel), token)
-      slot.off?.()
+      guarded(() => slot.off?.())
     }
     for (const channel of next)
       if (!held.has(channel) && !refused.has(channel)) join(channel)
@@ -990,8 +1005,8 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       open = undefined
       waiting = undefined
       retries.clear()
-      offSubscribed()
-      for (const slot of held.values()) slot.off?.()
+      guarded(() => offSubscribed?.())
+      for (const slot of held.values()) guarded(() => slot.off?.())
       held.clear()
       // Службові мапи не переживають приймача.
       seen.clear()
