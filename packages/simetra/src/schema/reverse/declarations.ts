@@ -233,8 +233,9 @@ function foreignGrants(
 
 /**
  * Дослівні `GRANT`/`REVOKE EXECUTE` функції політики, які відтворює генератор:
- * `REVOKE` (генератор відкликає в усіх ролей поза призначеннями) і `GRANT` без
- * опції передачі, кожен отримувач якого — роль виведеного призначення.
+ * `REVOKE` (генератор відкликає в усіх ролей поза призначеннями) і `GRANT`,
+ * кожен отримувач якого — роль виведеного призначення. Опцію передачі й
+ * чужого грантора вже назвала перевірка ACL за фактами каталогу.
  * Оператор і на інші об'єкти лишається: разом із ним зник би їхній грант.
  */
 function derivedGrants(
@@ -261,11 +262,13 @@ function derivedGrants(
     const [fact] = grantFacts(read, input.parse)
     if (fact === undefined) return false
     if (!fact.grant) return true
-    const option = (read[0]?.tree as { GrantStmt?: { grant_option?: boolean } })
-      .GrantStmt?.grant_option
+    // Отримувач без імені (`CURRENT_USER`) у `roles` не потрапляє, а роль
+    // призначення він не доводить: такий грант лишається
+    const grantees = (read[0]?.tree as { GrantStmt?: { grantees?: unknown[] } })
+      .GrantStmt?.grantees
     return (
-      option !== true &&
       fact.roles.size > 0 &&
+      fact.roles.size === grantees?.length &&
       [...fact.roles].every(derivedRole)
     )
   })

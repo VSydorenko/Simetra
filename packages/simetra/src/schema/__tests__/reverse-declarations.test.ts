@@ -1139,26 +1139,38 @@ describe("policy functions of debt (Р9, І6)", () => {
 
   // Генератор відкликає `EXECUTE` у ролі поза призначеннями; дослівний грант
   // їй — не похідний, тож лишається й називає себе, а не зникає мовчки.
-  // Мутація: прибирати кожен грант функції політики
-  it("a grant to a profile role outside the derived purposes stays verbatim: sql.generated-grant", async () => {
-    const result = await adopt(
-      POLICY_FUNCTION() +
-        READ_POLICY() +
-        DOCS_GRANT() +
-        EXECUTE +
-        "\nGRANT EXECUTE ON FUNCTION public.f() TO anon;",
-      { grants: ["authenticated", "anon"] }
-    )
-    expect(functionFiles(result.files)).toEqual([])
-    expect(functionGrants(result.files)).toEqual([
-      expect.stringContaining("GRANT EXECUTE ON FUNCTION public.f() TO anon;"),
-    ])
-    expect(functionGrants(result.files)[0]!.includes("TO authenticated")).toBe(
-      false
-    )
-    expect(codes(errorsOf(result))).toEqual(["sql.generated-grant"])
-    expect(result.changes).toEqual([])
-  })
+  // Мутації: прибирати кожен грант функції політики; рахувати `PUBLIC` роллю
+  // виведеного призначення (`callersOfRole` дає йому всі призначення профілю);
+  // рахувати похідним грант без названого отримувача (`CURRENT_USER`)
+  it.each([
+    { role: "anon", grants: ["authenticated", "anon"] },
+    { role: "PUBLIC", grants: ["authenticated", "PUBLIC"] },
+    { role: "CURRENT_USER", grants: ["authenticated"] },
+    { role: "authenticated, CURRENT_USER", grants: ["authenticated"] },
+  ])(
+    "a grant to $role, outside the derived purposes, stays verbatim: sql.generated-grant",
+    async ({ role, grants }) => {
+      const result = await adopt(
+        POLICY_FUNCTION() +
+          READ_POLICY() +
+          DOCS_GRANT() +
+          EXECUTE +
+          `\nGRANT EXECUTE ON FUNCTION public.f() TO ${role};`,
+        { grants }
+      )
+      expect(functionFiles(result.files)).toEqual([])
+      expect(functionGrants(result.files)).toEqual([
+        expect.stringContaining(
+          `GRANT EXECUTE ON FUNCTION public.f() TO ${role};`
+        ),
+      ])
+      expect(
+        functionGrants(result.files)[0]!.includes("TO authenticated;")
+      ).toBe(false)
+      expect(codes(errorsOf(result))).toEqual(["sql.generated-grant"])
+      expect(result.changes).toEqual([])
+    }
+  )
 
   // Мутація: пропускати функцію політики до перевірки чужих ACL — грант ролі
   // застосунку мовчки губиться разом із пропуском
