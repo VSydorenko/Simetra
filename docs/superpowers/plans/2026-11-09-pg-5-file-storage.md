@@ -74,7 +74,7 @@ devDependency `simetra`; у шаблоні — залежність (части�
 | Р2 | **Частини А/Б.** Маршрути й звірка в шаблоні — після П4-D | немає |
 | Р3 | **Попередня перевірка — одна definer-функція** `storage_headroom(p_object, p_scope)`: `false`, коли жоден безрядковий грант `create` не покриває `p_scope`, `p_scope` поза межею скоупу користувача, об'єкт без `storage` або файл розміру `maxBytes` не вміститься. Умову прав беруть будівники політик: `rowFreeGrants(rights, "create", main)` (АБО над `any`/`own`/`dim`; для нескоупленого — `has_right`) і `tenantBoundary` / `scopeSetCall`; другої копії правила немає. Перевірка необхідна, не достатня: умови значень рядка (носій власності, вимір, контейнер) судить `INSERT` в `attachFile`, після відомого відкату байти видаляються (І14). Одне булеве не розкриває, яка умова відмовила. Гість і анонім — `null` без SQL | §8.2 крок 2 (задача 0) |
 | Р4 | **Розмір і тип пишуться в `INSERT`.** `file_attach(p_object, p_id, p_size, p_type)` перевіряє тип і розмір проти `storage` і пише запис `simetra.storage_pending` з унікальним ключем (`pg_current_xact_id()`, об'єкт, id); повтор для того самого id відмовляє. Тригер `BEFORE INSERT` (definer) забирає запис (`DELETE … RETURNING`) і ставить колонки; без запису — `storage.attach-missing`. Після `create` `attachFile` під `simetra_files` перевіряє, що записів поточної транзакції не лишилось; чужі `xact` прибирає звірка. Причина: `UPDATE` після `create` піднімав би версію, тригери прав і змісту й облік на `UPDATE`. Інший шлях вставки (клієнтська `create`, `ctx.run`, копіювання) відмовляє | §8.1, §8.2 крок 4, §8.3 (задача 0) |
-| Р5 | **Байти видаляє рантайм.** Опція `createCommandRuntime({ files?: FileStore })`. Ключ — лише з результату фази `delete` цієї спроби, де ядро підтвердило видалення (не з вхідного id), у `afterCommit` спроби. Шлях — клієнтська команда чи `ctx.run`. `markDeletion`, каскад (власник, скоуп) і робота без опції — звірці | §8.2 «Видалення» (задача 0) |
+| Р5 | **Байти видаляє лише звірка.** Довідник зі `storage` не має ядра `delete` (ядро `delete` є лише в призначень, а Р9 забороняє їм `storage`): рядок позначається `markDeletion` і зберігає файл — це семантика позначки; фізично рядок зникає лише каскадом (власник, скоуп) чи майбутнім очищенням позначених. Байти таких рядків прибирає `reconcileFiles` через 24 год. Опції `files` у `createCommandRuntime` і видалення в `afterCommit` немає | §8.2 «Видалення» (задача 5) |
 | Р6 | **Методи T3:** `checkUpload`, `attachFile`, `reconcileFiles` (у маршруту немає SQL). `attachFile` мапить ім'я в стильований `file_name` (`naming.attributeCase`) і віддає `commitUnknown`, коли `terminalOf` дав `command.unavailable` після надісланого `COMMIT` | §8.4 (задача 0) |
 | Р7 | **`fromS3Client`** над структурним клієнтом (`putObject`, `getObject`, `deleteObject`, `listObjectsV2` — форма агрегатного `S3`). `put` сам рахує байти, обриває потік понад `maxBytes` і буферизує тіло для `ContentLength`; стеля T0 `STORAGE_MAX_BYTES` = 100 MiB. Розмір у `file_attach` — лише з `put` | §8.1, §8.4 (задача 0) |
 | Р8 | **Реквізити файлу** — умовні колонки `standardColumns` довідника за `catalog.storage`: `file_name` (`text`, not null, зміст), `file_size` (`bigint`), `file_content_type` (`text`), логічні імена за `standardLogicalName`. Дві останні — у `platformWrittenNames`, поза `contentColumns` (`nonContentStandardNames`), незмінні (`BEFORE UPDATE OF` відмовляє) | немає |
@@ -85,7 +85,7 @@ devDependency `simetra`; у шаблоні — залежність (части�
 | Р13 | **Звірка бере «зараз» з бази** (`now()`), а не з годинника host-а | §8.2 (задача 0) |
 | Р14 | **Бакети тестів.** Прибиральник адресує рівно `runBucketName(<свій тег>)`, без відбору за префіксом і без `simetra-dev`. `removeRunResources`: спорожнити (`ListObjectsV2` + `DeleteObjects`), потім видалити; звітувати лише бакет, який спорожнити не вдалося. Garage: `createRunBucket` + admin `AllowBucketKey` (новий endpoint у `garage()`). Supabase: `run-<тег>` через S3 `CreateBucket`, знімок guard-а читає `storage.buckets` (перевірити `SELECT` ролі guard-а); значення S3 — з одного `supabase status -o env` у `globalSetup`, у тести через `provide`/`inject` (новий механізм) | §10.3 (задача 0); речення `AGENTS.md` — власник |
 | Р15 | **Шаблон (частина Б):** ліміт одночасних завантажень (429), бюджет буфера (503), не більше 10 хв між `put` і `attachFile`; звірка — `pnpm reconcile-files` за cron оператора, без HTTP | §8.2 (задача 0) |
-| Р16 | **Маршрути (частина Б):** `POST /api/files/$object` (сире тіло, метадані в `X-Simetra-File`, сувора схема), `GET`/`DELETE /api/files/$object/$id`; завантаження обходить `limitBody`, межа — `maxBytes` (413 до тіла) | спека П4-D: виняток з `limitBody` (задача 0) |
+| Р16 | **Маршрути (частина Б):** `POST /api/files/$object` (сире тіло, метадані в `X-Simetra-File`, сувора схема), `GET`/`DELETE /api/files/$object/$id` (`DELETE` — `markDeletion`); завантаження обходить `limitBody`, межа — `maxBytes` (413 до тіла) | спека П4-D: виняток з `limitBody` (задача 0) |
 | Р17 | **Роль `simetra_files`** — `NOLOGIN NOINHERIT`, запис `PLATFORM_ROLES`, як `signalConsumer` **не** призначення гранту: генератор сховища пише їй `USAGE ON SCHEMA simetra` і `EXECUTE` явним `GRANT` після `executeGrants(signature, [], provider)`, тож декларація застосунку її не адресує. Виключення «ключ `PLATFORM_ROLES`, не призначення» (тип `PlatformRolePurpose` і фільтр `callersOfRole`) стає однією сталою T0. Лише вона має `EXECUTE` на `file_attach`, `storage_rows_exist`, `storage_row_page` і перевірку залишку `storage_pending`. Членство: `LOGIN_ROLE_PARENTS.runtime` += `files` (`INHERIT FALSE, SET TRUE`), `supabase/roles.sql` адитивно, `postgres` — `simetra roles`; `inspect()` доводить його `SET LOCAL ROLE`, як для `simetra_command`. `command.privileged-login` без змін. `attachFile`: `SET LOCAL ROLE simetra_files` → `file_attach` → `SET LOCAL ROLE simetra_command` → фаза `create`. Межа: з SQL модуля (`simetra_command`) виклик відмовляє в базі; `SET ROLE`/`set_config('role', …)` — `sql.command-context-write`; виклик з definer-функції застосунку — `sql.platform-function-call` і Р18 (І7) | ПГ11, спека П4 §6.2 (задача 0) |
 | Р18 | **Рішення архітекторки (клас, не лише ПГ-5).** `checkPlatformCalls` судить лише кваліфікований `simetra.*`, а definer-функція застосунку могла змінити порожній `search_path` у тілі й кликати функцію платформи без схеми. `search_path` додається в `PROTECTED_SESSION_SETTINGS.names`: наявна перевірка контексту команди (`compiler/sql/command-context.ts`) відмовляє запису в усіх формах (`SET`, `SET LOCAL`, `RESET`, `RESET ALL`, `set_config`, динамічний текст) — одне правило, один перелік. Строгість — як у платформного префікса: помилка й у боргу прийнятих функцій (клас ремонту), не попередження. Опція оболонки `CREATE … SET search_path = ''` лишається дозволеною (її судить `closed-forms.ts`); перевірити, що обхід дерева `CREATE` не приймає її за запис | спека декларацій функцій, спека прав §5.3 — у PR задачі 2 |
 
@@ -143,7 +143,7 @@ test  s3Of(stack): S3ClientLike; emptyAndDeleteRunBucket(tag, stack)
 | І8 | `fileObjectKey` відкидає не-UUID. Ключ ззовні не приймається | unit | конкатенація без перевірки |
 | І9 | `put` обриває потік на `maxBytes + 1` і не лишає об'єкта. Розмір у `file_attach` — з `put` | unit + Garage | розмір з `Content-Length` |
 | І10 | Звірка видаляє сироту, старшу за 24 год; молодшу й з рядком чужого тенанта не чіпає. Невідомий префікс журналює. Перелік — лише префікс. Запобіжник > 5 % **і** > 20 | DB + Garage | існування через RLS-читання; перелік поза префіксом; без межі 20 |
-| І11 | Байти зникають лише після коміту `delete`. `delete` чужого id не чіпає чужих байтів. Повтор спроби, де перша видалила X і відкотилась, лишає байти X | DB + Garage | `files.delete` до коміту; ключі з вхідних id; спільний `afterCommit` спроб |
+| І11 | Байти не зникають при `markDeletion`: рядок і файл лишаються, облік обсягу не змінюється. Клієнтська `delete` довідника зі `storage` — `command.invalid` (ядра немає). Видаляє лише звірка (І10) | DB + Garage | видалення байтів у `afterCommit` рантайму; ядро `delete` для `storage` |
 | І12 | Розбіжність маркерів або непорожній бакет без маркера — нуль видалень і відмова `put` | DB + Garage | без перевірки маркера; маркер пишеться в непорожній бакет |
 | І13 | Прибиральник не звертається до S3 для порожнього тегу, `simetra-dev`, тегу іншого прогону (навіть валідного за `isRunTag`) чи бакета Supabase без `run-` | unit на фейках | відбір за префіксом |
 | І20 | Рантайм без членства `simetra_files` не стартує (помилка на `inspect`, не на першому завантаженні) | DB | без перевірки членства в `inspect` |
@@ -243,15 +243,16 @@ test  s3Of(stack): S3ClientLike; emptyAndDeleteRunBucket(tag, stack)
 **Готово:** `run-tests unit --changed` на фейковому `S3ClientLike` зелений;
 у зоні T3 немає імпорту SDK.
 
-### Task 5: T3 — `checkUpload`, `attachFile`, видалення після коміту
+### Task 5: T3 — `checkUpload`, `attachFile`, `fileInstance`
 
 - `checkUpload`: `READ ONLY` під роллю запиту, `storage_headroom`.
 - `attachFile` — одна спроба `attempt` з тими самими ретраями й бюджетом,
   що й `run`: `file_attach` під `simetra_files`, далі `create` під
   `simetra_command` (Р17). Внутрішня фаза, без публічних дверей для SQL (Рт6).
-- Опція `files` і Р5.
+- `fileInstance()`: uuid прив'язки бази для `put` (окрема коротка транзакція
+  на запис під `simetra_files`, кеш); Р5: рантайм байтів не видаляє.
 **Готово:** DB-тести І3, І11 і повний цикл `checkUpload` → `put` →
-`attachFile` → `read` → `delete` на Garage зелені (`run-tests db --filter
+`attachFile` → `read` → `get` → `markDeletion` (байти лишаються) на Garage зелені (`run-tests db --filter
 storage-`). Тест повтору: другого рядка обліку немає.
 
 ### Task 6: T3 — `reconcileFiles`; тест `supabase`
@@ -283,7 +284,7 @@ draft PR зелений повністю.
 заголовками І16. Клієнт S3 живе лише в `src/server/files.ts`; змінні
 `SIMETRA_S3_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`,
 `_REGION` читає тільки він; без них він падає. Лінт шаблону: `@aws-sdk/*`
-лише в `src/server/files.ts`. `runtime.ts` передає `files`.
+лише в `src/server/files.ts`.
 **Готово:** unit І14–І17 і І19, тест збірки І18 зелені.
 
 ### Task 8: шаблон — звірка й e2e

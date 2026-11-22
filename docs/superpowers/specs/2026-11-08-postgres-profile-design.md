@@ -963,11 +963,10 @@ SignalTokens = {
   `application/octet-stream`, `X-Content-Type-Options: nosniff`,
   `Content-Security-Policy: sandbox`, `Cache-Control: private, no-store`.
 - **Видалення:** endpoint перевіряє походження, як завантаження; команда
-  видаляє рядок; байти видаляє рантайм (`createCommandRuntime({ files?:
-  FileStore })`): ключ — лише з результату фази `delete` цієї спроби, де
-  ядро підтвердило видалення (не з вхідного id), у `afterCommit` спроби.
-  Шлях — клієнтська команда чи `ctx.run`. `markDeletion`, каскад (власник,
-  скоуп) і робота без опції — звірці; невдача — теж звірка.
+  `markDeletion` позначає рядок, і файл лишається разом з ним (довідник зі
+  `storage` не має ядра `delete`). Байти не видаляє ні рантайм, ні endpoint:
+  їх прибирає лише звірка, коли рядка фізично немає (каскад власника чи
+  скоупу, майбутнє очищення позначених), через 24 год.
 - **Звірка** — фонове завдання host-а:
   - перелічує лише префікс `o/<UUID об'єкта>/` для об'єктів каталогу з
     властивістю `storage`; префікс невідомого об'єкта не видаляється, а
@@ -1040,8 +1039,10 @@ FileStore = {
   object, scope, id, name, fields, size, contentType })` (крок 4; ім'я
   мапиться в стильований `file_name` за `naming.attributeCase`; помилка з
   ознакою `commitUnknown`, коли `terminalOf` дав `command.unavailable` після
-  надісланого `COMMIT`) і `runtime.reconcileFiles(store, { log })` (звірка);
-  усі — серверні, без дверей клієнта, у маршруту SQL немає.
+  надісланого `COMMIT`), `runtime.fileInstance()` (uuid прив'язки бази для `put`: окрема коротка
+  транзакція на запис під `simetra_files`, без запису в `READ ONLY`, кеш) і
+  `runtime.reconcileFiles(store, { log })` (звірка); опції `files` у
+  `createCommandRuntime` немає; усі — серверні, без дверей клієнта, у маршруту SQL немає.
 - У профілі `supabase` прийняті бази лишаються на Storage-API з політиками
   на `storage.objects` (ПП4); нові об'єкти з властивістю `storage` в обох
   профілях ідуть через цей порт.
