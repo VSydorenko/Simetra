@@ -61,7 +61,7 @@
 | --- | --- | --- | --- |
 | `simetra_owner` | `LOGIN NOSUPERUSER NOINHERIT BYPASSRLS CREATEDB NOCREATEROLE NOREPLICATION` | — | `roles` від суперкористувача |
 | `simetra_command` | `NOLOGIN NOINHERIT` | без змін | `roles` |
-| `simetra_runtime` | `LOGIN NOINHERIT` | `simetra_command`, `simetra_user` і `simetra_anon`, усі `WITH INHERIT FALSE, SET TRUE` | `roles` |
+| `simetra_runtime` | `LOGIN NOINHERIT` | `simetra_command`, `simetra_files`, `simetra_user` і `simetra_anon`, усі `WITH INHERIT FALSE, SET TRUE` | `roles` |
 | `simetra_user` | `NOLOGIN NOINHERIT` | — | `roles` |
 | `simetra_anon` | `NOLOGIN NOINHERIT` | — | `roles` |
 | `simetra_signal_consumer` | `NOLOGIN NOINHERIT` | — | `roles` |
@@ -949,7 +949,8 @@ SignalTokens = {
   10 хв між `put` і `attachFile` обмежує host (опції шаблону, ПГ-5 Б):
   межа обсягу судить лише закомічені рядки. Заміна файлу — лише
   новий рядок з новим id і видалення старого; зміни байтів чи розміру на
-  місці немає, тож тригер обліку на `UPDATE OF <розмір>` лише страхує.
+  місці немає: колонки розміру й типу незмінні (`BEFORE UPDATE OF` відмовляє),
+  тож облік на `UPDATE` не потрібен.
 - **Читання:** endpoint читає рядок під роллю запиту (`runtime.read`) → немає
   рядка — 404 (той самий для «немає» й «не можна») → потік з
   `Content-Disposition: attachment; filename*=UTF-8''<ім'я>` (ім'я без
@@ -1045,7 +1046,7 @@ FileStore = {
 
 **Тести:** unit — ключ з id об'єкта й рядка, межа розміру на потоці,
 `Content-Disposition` з CR/LF чи `/` в імені, тип поза переліком —
-`application/octet-stream`; DB — облік обсягу на вставці, зміні й
+`application/octet-stream`; DB — облік обсягу на вставці й
 видаленні, відмова понад межу з відкатом, розмір і тип `simetra_command`
 напряму не пише, `storage_rows_exist` бачить рядок чужого тенанта;
 стенд з Garage — повний цикл, чужий рядок дає 404 без звернення до бакета,

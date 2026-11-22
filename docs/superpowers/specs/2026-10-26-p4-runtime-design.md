@@ -180,7 +180,7 @@ Postgres»](2026-10-01-platform-in-postgres-design.md) §9, п. 1 і п. 4) на
 | --- | --- | --- |
 | `simetra_command` | `NOLOGIN NOINHERIT` | без змін (спека прав §5.3) |
 | `simetra_files` | `NOLOGIN NOINHERIT` | без членів, крім `simetra_runtime` (`LOGIN_ROLE_PARENTS.runtime`, `INHERIT FALSE, SET TRUE`); єдина має `EXECUTE` на `file_attach`, `storage_rows_exist`, `storage_row_page` і перевірку залишку `storage_pending` (спека профілю `postgres` §3.1, §8) |
-| `simetra_runtime` | `LOGIN NOINHERIT`, без пароля від платформи | член `simetra_command`; у профілі `supabase` — ще й члени `authenticated` і `anon` (ролі запиту користувача й аноніма, `PROVIDER_API_ROLES.supabase`), обидва `WITH INHERIT FALSE, SET TRUE`; у профілі `postgres` — ще й `simetra_user` та `simetra_anon` (спека профілю `postgres` §3.1); рядка `simetra_signals` у `roles` немає до блоку ПГ-4 |
+| `simetra_runtime` | `LOGIN NOINHERIT`, без пароля від платформи | член `simetra_command` і `simetra_files` (блок ПГ-5 профілю `postgres`); у профілі `supabase` — ще й члени `authenticated` і `anon` (ролі запиту користувача й аноніма, `PROVIDER_API_ROLES.supabase`), обидва `WITH INHERIT FALSE, SET TRUE`; у профілі `postgres` — ще й `simetra_user` та `simetra_anon` (спека профілю `postgres` §3.1); рядка `simetra_signals` у `roles` немає до блоку ПГ-4 |
 
 Інваріанти, які тримає тест членства ролей і гейт:
 
