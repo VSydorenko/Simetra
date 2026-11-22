@@ -196,6 +196,58 @@ describe("introspect", () => {
     )
   })
 
+  // Борг прийнятої бази з `currval` у тілі функції — клас ремонту: тека
+  // записана, а план застосування заблокований, доки функцію не виправлено.
+  it("introspect of a function with currval writes the folder, the plan is blocked until it is fixed", async () => {
+    await inTarget(
+      `CREATE SCHEMA app;
+       CREATE TABLE app.note (id uuid PRIMARY KEY, n bigint);
+       CREATE SEQUENCE app.note_seq;
+       CREATE FUNCTION app.next_note() RETURNS bigint LANGUAGE plpgsql AS $$
+       BEGIN
+         PERFORM nextval('app.note_seq');
+         RETURN currval('app.note_seq');
+       END $$;`,
+      ["app"],
+      async (url) => {
+        const dir = await freshProject()
+        const env = { [ENV]: url }
+        await call("introspect", introspectInput, options(dir, env))
+        const files = await readMetadataDir(dir)
+        const sqlPath = [...files.keys()].find((f) => f.endsWith(".sql"))
+        expect(sqlPath, "the function is written to a sql file").toBeDefined()
+        const compileOptions = {
+          dir,
+          readOnly: false,
+          allowDatabaseWrite: false,
+          dryRun: false,
+          confirmed: false,
+          channel: "cli" as const,
+        }
+        const blocked = await invoke(toolByName("compile")!, {}, compileOptions)
+        expect(blocked.ok).toBe(false)
+        const found = errors(blocked).filter(
+          (d) => d.code === "sql.function-body-session-builtin"
+        )
+        expect(found).toHaveLength(1)
+        expect(found[0]?.hint).toContain("INSERT … RETURNING")
+        expect(found[0]?.hint).not.toContain("advisory")
+
+        const path = join(dir, sqlPath!)
+        await writeFile(
+          path,
+          (await readFile(path, "utf8")).replace(
+            "currval('app.note_seq')",
+            "42"
+          )
+        )
+        const fixed = await invoke(toolByName("compile")!, {}, compileOptions)
+        expect(errors(fixed)).toEqual([])
+        expect(fixed.ok).toBe(true)
+      }
+    )
+  })
+
   it("introspect into a fresh dir without schemas is refused", async () => {
     const dir = await freshProject()
     let connects = 0

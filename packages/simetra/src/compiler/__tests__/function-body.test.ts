@@ -514,6 +514,23 @@ describe("the body leaves no session state to the pool (спека прав §6.
     expect(found).toHaveLength(1)
     expect(isRepairError(found[0]!)).toBe(true)
     expect(found[0]!.hint).toContain("INSERT … RETURNING")
+    expect(found[0]!.hint).not.toContain("advisory")
+  })
+
+  // Порада — властивість запису класу, а не один текст на всі вбудовані.
+  it("an advisory lock gets its own hint, without the currval advice", async () => {
+    const result = await compile(
+      await acceptDebt(
+        files({ [EXTRA]: plpgsql("PERFORM pg_advisory_lock(1)") })
+      )
+    )
+    const found = result.diagnostics.filter(
+      (d) => d.code === "sql.function-body-session-builtin"
+    )
+    expect(found).toHaveLength(1)
+    expect(isRepairError(found[0]!)).toBe(true)
+    expect(found[0]!.hint).toContain("pg_advisory_xact_lock")
+    expect(found[0]!.hint).not.toContain("RETURNING")
   })
 
   // Захищене налаштування судить контекст команди, локальність — це правило
