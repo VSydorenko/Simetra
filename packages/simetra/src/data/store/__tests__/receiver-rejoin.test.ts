@@ -200,6 +200,44 @@ describe("the rejoin wave", () => {
     expect(rowReads(from)).toHaveLength(1)
   })
 
+  // Знімок показує вимогу за видимістю: перехід її змінює й без запису.
+  it("keeps the requirement of a visible view whose wave read failed and shows it once the view turns invisible", async () => {
+    const h = await open(full)
+    h.fake.mode = "manual"
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    h.fake.take(0).fail("command.unavailable")
+    h.fake.mode = "auto"
+    await settle()
+    // Видимий вигляд вимогу має, але знімок її не показує.
+    expect(h.handle.getSnapshot().needsRefresh).toBe(false)
+    h.core.setVisible(full, false)
+    expect(h.handle.getSnapshot().needsRefresh).toBe(true)
+    const from = h.fake.requests.length
+    h.core.setVisible(full, true)
+    await settle()
+    expect(requestsSince(h, from)).toHaveLength(1)
+    expect(h.handle.getSnapshot().needsRefresh).toBe(false)
+  })
+
+  it("shows the requirement of a view left without subscribers", async () => {
+    const h = await open(keysView(key(1)))
+    const view = h.core.view(full)
+    const off = view.subscribe(() => {})
+    await settle()
+    h.fake.mode = "manual"
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    // Читання хвилі обох виглядів збоїть: вимога лишається.
+    expect(h.fake.pending).toHaveLength(2)
+    while (h.fake.pending.length > 0) h.fake.take(0).fail("command.unavailable")
+    h.fake.mode = "auto"
+    await settle()
+    expect(view.getSnapshot().needsRefresh).toBe(false)
+    off()
+    expect(view.getSnapshot().needsRefresh).toBe(true)
+  })
+
   it("lifts the disconnect mark only after the re-read settled", async () => {
     const h = await open(keysView(key(1)))
     h.transport.fail({ kind: "transport", channel })
