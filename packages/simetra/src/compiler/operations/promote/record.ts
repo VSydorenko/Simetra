@@ -471,6 +471,10 @@ function derive(
       })
     }
     for (const old of was.columns) {
+      // Нормалізована колонка поля пошуку — похідна, не елемент опису: після
+      // промоції її дає правило виду, а план застосування знімає й створює
+      // її сам (спека П2 §5, «Поля пошуку»)
+      if (old.origin.searchOf !== undefined) continue
       const sourceId = old.origin.elementId
       const where = `${was.schema}.${was.name}.${old.name}`
       if (sourceId === undefined || !successors.has(sourceId)) {

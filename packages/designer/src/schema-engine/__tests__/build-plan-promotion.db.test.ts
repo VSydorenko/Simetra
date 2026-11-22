@@ -191,6 +191,34 @@ describe.concurrent("buildPlan", () => {
       expect(errors(outcome)).toEqual([])
     })
 
+    it("drops the derived search column of a promoted table before its source changes type", async () => {
+      // До промоції `name` — поле пошуку прийнятої таблиці: у цілі є похідна
+      // `name_search`, а промоція змінює тип її джерела (`description`,
+      // `text` → `varchar(150)`). Postgres такої зміни поруч зі згенерованою
+      // колонкою не приймає (0A000), тож зняття стоїть перед нею; план
+      // доведено на копії
+      const files = contactsProject()
+      const party = JSON.parse(files.get(COUNTERPARTY_FILE)!) as Json
+      files.set(
+        COUNTERPARTY_FILE,
+        JSON.stringify({ ...party, search: { fields: ["name"] } })
+      )
+      const p = await promoted(files)
+      const artifact = planned(await planPromotion(p))
+      const sql = artifact.steps.map((s) => s.sql)
+      const drop = sql.findIndex((s) => /DROP COLUMN "?name_search/.test(s))
+      const retype = sql.findIndex((s) =>
+        /ALTER COLUMN "description" TYPE/.test(s)
+      )
+      expect(drop).toBeGreaterThanOrEqual(0)
+      expect(retype).toBeGreaterThan(drop)
+      // Похідна колонка даних не несе: її зняття — без дозволу
+      expect(artifact.steps[drop]!.class).toBe("catalogOnly")
+      expect(
+        stepMatching(artifact, /ADD COLUMN "?description_search/)
+      ).toHaveLength(1)
+    })
+
     it("does not lock a foreign key target when the promotion only renames the FK column", async () => {
       const files = contactsProject()
       files.set(

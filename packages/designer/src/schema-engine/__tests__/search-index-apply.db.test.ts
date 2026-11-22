@@ -300,4 +300,36 @@ describe.concurrent("search index: derived from the search fields", () => {
       expect(again.status).toBe("unchanged")
     })
   })
+
+  it("a field leaving search while its column changes type: the drop goes first", async () => {
+    const before = await compiled({ [PARTY]: party() })
+    const after = await compiled({
+      [PARTY]: {
+        ...(party() as unknown as Json),
+        descriptionLength: 200,
+        search: { fields: [] },
+      },
+    })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      const artifact = planned(await plan(url, after))
+      const sql = artifact.steps.map((s) => s.sql)
+      const drop = sql.findIndex((s) =>
+        /DROP COLUMN "?description_search/.test(s)
+      )
+      const alter = sql.findIndex((s) =>
+        /ALTER COLUMN "description" TYPE/.test(s)
+      )
+      expect(drop).toBeGreaterThanOrEqual(0)
+      expect(alter).toBeGreaterThan(drop)
+      expect(artifact.requiredPermissions).toEqual([])
+
+      await applyArtifact(url, artifact, after)
+
+      expect(await searchColumnOf(url, "party", "description_search")).toBe(
+        undefined
+      )
+      expect((await plan(url, after)).status).toBe("unchanged")
+    })
+  })
 })

@@ -225,10 +225,73 @@ const classify = (
   rec: PromotionRecord,
   clone: CatalogModel,
   desired: CatalogModel,
-  i: RenameIntent = intent()
-) => classifyRemovals({ record: rec, intent: i, clone, desired, parse })
+  i: RenameIntent = intent(),
+  applied?: PhysicalTable[]
+) =>
+  classifyRemovals({ record: rec, intent: i, clone, desired, parse, applied })
 
 describe("classifyRemovals", () => {
+  it("covers the derived search column and its index by the snapshot fact", () => {
+    // Похідну колонку прийнятої таблиці після промоції дає правило виду, а
+    // план знімає її сам: це не прийнятий об'єкт без класу
+    const index = {
+      name: "items_name_search_idx",
+      unique: false,
+      method: "btree",
+      keys: [{ column: "name_search", opclass: { name: "text_pattern_ops" } }],
+      include: [],
+      nullsNotDistinct: false,
+    }
+    const derived = col("name_search", {
+      type: "text",
+      generated: { expression: `lower((name COLLATE "default"))` },
+    })
+    const clone = model([
+      table("items", {
+        columns: [
+          col("id", { type: "uuid", notNull: true }),
+          col("name"),
+          derived,
+        ],
+        indexes: [index],
+      }),
+    ])
+    const desired = model([
+      table("items", {
+        columns: [col("id", { type: "uuid", notNull: true }), col("name")],
+      }),
+    ])
+    const snapshot = (searchOf: string | undefined): PhysicalTable => ({
+      ...table("items", { indexes: [index] }),
+      origin: { objectId: OBJECT_ID },
+      columns: [
+        { name: "id", type: "uuid", notNull: true, origin: {} },
+        { name: "name", type: "text", notNull: false, origin: {} },
+        {
+          name: "name_search",
+          type: "text",
+          notNull: false,
+          generated: { expression: `lower(name COLLATE "default")` },
+          origin: searchOf === undefined ? {} : { searchOf },
+        },
+      ],
+    })
+    expect(
+      classify(record({}), clone, desired, intent(), [snapshot("name")]).map(
+        (r) => [r.path, r.covered]
+      )
+    ).toEqual([
+      ["tables.app.items.columns.name_search", "derived"],
+      ["tables.app.items.indexes.items_name_search_idx", "derived"],
+    ])
+    // Без факту знімка та сама колонка — прийнята, і її зняття без класу
+    expect(
+      unclassifiedRemovals(
+        classify(record({}), clone, desired, intent(), [snapshot(undefined)])
+      )
+    ).not.toEqual([])
+  })
+
   it("covers a removed unique constraint by its conversion class", () => {
     const unique = {
       name: "items_code_key",
@@ -709,6 +772,7 @@ describe("classifyRemovals", () => {
     const unitTable = table("b.c", { checks: [check] }, "a")
     const foreign = table("c", { checks: [check] }, "a.b")
     const removals = classifyRemovals({
+      applied: undefined,
       record: record({
         tables: [{ id: OBJECT_ID, schema: "a", from: "b.c", to: "b.c" }],
         conversions: [

@@ -7,7 +7,7 @@ import type {
   EngineObjectRef,
   LockedTable,
 } from "../engine"
-import { destroysOnlyDerived } from "./derived-columns"
+import { isDerivedDrop } from "./derived-columns"
 import { applyDiagnostic } from "./diagnostic"
 import type { DataTable } from "./promotion/data"
 import type { DriftReport } from "./drift"
@@ -237,8 +237,6 @@ interface Facts {
   createdTables: ReadonlySet<string>
   /** Тип колонки вихідного стану; `undefined` — колонки не видно або тип не розібрано. */
   columnType(table: CatalogTable, column: string): ColumnType | undefined
-  /** Похідні колонки платформи за фактом знімка (`derivedColumnKeys`). */
-  derived: ReadonlySet<string>
 }
 
 /**
@@ -417,12 +415,12 @@ function baseClass(
 ): StepClass {
   const lost = action.destroys.filter((id) => DATA_KINDS.has(kindOf(id)))
   // Похідна колонка (нормалізована колонка пошуку) даних не несе: її
-  // значення обчислює база з колонки-джерела, тож її зняття — не втрата
-  if (
-    (action.dataLoss || lost.length > 0) &&
-    !destroysOnlyDerived(action.destroyed, lost.length, facts.derived)
-  )
-    return "destructive"
+  // значення обчислює база з колонки-джерела, тож її зняття — не втрата.
+  // Лише коли все зняте з даними — ці колонки: решта лишається втратою
+  const derivedOnly =
+    isDerivedDrop(action) &&
+    lost.length === action.destroyed.filter((r) => r.kind === "column").length
+  if ((action.dataLoss || lost.length > 0) && !derivedOnly) return "destructive"
   const effects = stmts.flatMap((stmt) => statementEffects(stmt, facts))
   if (effects.includes("destructive")) return "destructive"
   if (action.rewriteRisk) return "tableRewrite"
@@ -798,19 +796,15 @@ export function backfillAction(facts: BackfillFacts): BackfillAction {
  * `noReplacement` — id кроків, для яких виняток «заміна» не діє: під
  * промоцією прийнятий об'єкт, перевизначений під тим самим ім'ям, — це
  * видалення плюс створення (спека промоції §8).
- * `derived` — похідні колонки платформи (`derivedColumnKeys`): дія, що
- * знімає лише їх, не `destructive`.
+ * Дія з позначкою `DerivedDrop` (`planDerivedColumns`), що знімає з даних
+ * лише похідні колонки, не `destructive`.
  */
 export function classifySteps(
   actions: readonly PlanAction[],
   target: CatalogModel,
   parse: SqlParser,
   offset = 0,
-  o: {
-    noReplacement?: ReadonlySet<string>
-    foreign?: ReadonlySet<string>
-    derived?: ReadonlySet<string>
-  } = {}
+  o: { noReplacement?: ReadonlySet<string>; foreign?: ReadonlySet<string> } = {}
 ): PlanStep[] {
   const facts: Facts = {
     indexes: target.tables.flatMap((t) =>
@@ -825,7 +819,6 @@ export function classifySteps(
       actions.flatMap((a) => a.produces.filter((id) => id.startsWith("table:")))
     ),
     columnType: columnTypeReader(parse),
-    derived: o.derived ?? new Set(),
   }
   return actions.map((action, index): PlanStep => {
     const id = stepId(offset + index)
