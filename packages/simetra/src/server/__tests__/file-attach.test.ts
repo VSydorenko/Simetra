@@ -496,6 +496,18 @@ describe("deleting bytes after the commit", () => {
     expect(del).not.toHaveBeenCalled()
   })
 
+  it("does not delete bytes of an object without storage", async () => {
+    const { store, remove: del } = fakeFiles()
+    const { runtime } = await setup(undefined, { files: store })
+    await runtime.run(session, {
+      action: "delete",
+      object: { kind: "Catalog", name: "RoleAssignment" },
+      id: ID,
+      expectedVersion: 1,
+    })
+    expect(del).not.toHaveBeenCalled()
+  })
+
   it("does nothing without the files option", async () => {
     const { runtime } = await make()
     await expect(runtime.run(session, remove)).resolves.toBeDefined()
