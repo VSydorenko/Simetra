@@ -55,18 +55,23 @@ export function createSignalTokenCallbacks(
       body: JSON.stringify(body),
     })
     if (response.status === 401 || response.status === 403) {
-      if (response.status === 401 && holder.current()?.subject === subject) {
+      if (response.status === 401) {
         let reason: unknown
         try {
           reason = ((await response.json()) as { reason?: unknown }).reason
         } catch {
           reason = undefined
         }
-        holder.replace(
-          undefined,
-          reason === "session-changed" ? "session-changed" : "signed-out"
-        )
-        navigateToLogin()
+        // Звірка після `await`: за час читання тіла тримач міг змінитися (інший
+        // суб'єкт, вихід) чи його вже закрила паралельна 401 цієї ж пачки.
+        // Перша заміна обнуляє поточний рантайм, тож друга й наступні мовчать
+        if (holder.current()?.subject === subject) {
+          holder.replace(
+            undefined,
+            reason === "session-changed" ? "session-changed" : "signed-out"
+          )
+          navigateToLogin()
+        }
       }
       throw new SignalAuthRefused(`signal token refused (${response.status})`)
     }

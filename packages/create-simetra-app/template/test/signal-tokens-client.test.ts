@@ -35,7 +35,7 @@ function setup(fetchFn: ReturnType<typeof vi.fn>, held = "u") {
     navigateToLogin,
     fetch: fetchFn as never,
   })
-  return { callbacks, replace, navigateToLogin, fetchFn }
+  return { callbacks, holder, replace, navigateToLogin, fetchFn }
 }
 
 const bodyOf = (fetchFn: ReturnType<typeof vi.fn>, n: number) =>
@@ -134,6 +134,55 @@ describe("refusals", () => {
     )
     expect(replace).not.toHaveBeenCalled()
     expect(navigateToLogin).not.toHaveBeenCalled()
+  })
+
+  /** 401, тіло якого віддається лише після `release()`: вікно між перевіркою й заміною. */
+  function slowBody(body: unknown) {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const response = new Response(null, { status: 401 })
+    response.json = async () => {
+      await gate
+      return body
+    }
+    return { response, release }
+  }
+
+  it("a holder that changed while the 401 body was read is left alone", async () => {
+    const slow = slowBody({ reason: "session-changed" })
+    const { callbacks, holder, replace, navigateToLogin } = setup(
+      vi.fn(async () => slow.response)
+    )
+    const refused = callbacks.getConnectionToken()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Інший користувач увійшов, поки читалося тіло відповіді для «u»
+    const other = runtimeOf("other")
+    holder.replace(other)
+    replace.mockClear()
+    slow.release()
+    await expect(refused).rejects.toBeInstanceOf(SignalAuthRefused)
+    expect(replace).not.toHaveBeenCalled()
+    expect(navigateToLogin).not.toHaveBeenCalled()
+    expect(holder.current()).toBe(other)
+  })
+
+  it("concurrent 401 of one packet replace the holder and go to login once", async () => {
+    const slow = [slowBody({}), slowBody({})]
+    let n = 0
+    const { callbacks, replace, navigateToLogin } = setup(
+      vi.fn(async () => slow[n++]!.response)
+    )
+    const results = Promise.allSettled([
+      callbacks.getConnectionToken(),
+      callbacks.getChannelToken("a"),
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Обидві відповіді вже тут і чекають тіла: жодна заміна ще не пройшла
+    expect(replace).not.toHaveBeenCalled()
+    for (const { release } of slow) release()
+    for (const r of await results) expect(r.status).toBe("rejected")
+    expect(replace).toHaveBeenCalledTimes(1)
+    expect(navigateToLogin).toHaveBeenCalledTimes(1)
   })
 
   it("403 refuses all without touching the holder", async () => {
