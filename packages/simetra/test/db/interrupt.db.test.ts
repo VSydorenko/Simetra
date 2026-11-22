@@ -21,8 +21,9 @@ import {
   testDatabaseUrl,
   testSuperuserUrl,
 } from "./connection"
-import { nodeExec, runBuckets, runContainers } from "./external"
-import { testProvider, testStack } from "./profile"
+import { nodeExec, runBucketName, runContainers } from "./external"
+import { testProvider } from "./profile"
+import { s3Of } from "./s3"
 import { stopRunBackends, sweepRun } from "./sweep"
 
 const TSX = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href
@@ -44,9 +45,9 @@ describe("an interrupted DB run", () => {
     "removes its own stack objects on %s (second signal: %s)",
     async (signal, second) => {
       const tag = newRunTag()
-      // Зовнішні ресурси прогону фікстура створює лише на стеку postgres; на
-      // Supabase кейс той самий, що й був
-      const external = testProvider() === "postgres"
+      // Контейнер фікстура створює лише на стеку postgres; бакет з об'єктом —
+      // на обох
+      const containers = testProvider() === "postgres" ? 1 : 0
       // Тінь чужого прогону — з тегом зовнішнього (env воркера vitest від
       // stack-guard, не фікстури): прибиральник фікстури не сміє її торкнутися,
       // а перерваний зовнішній прогін, чий воркер гине без `finally`, прибере
@@ -64,8 +65,7 @@ describe("an interrupted DB run", () => {
         const exited = once(child, "exit") as Promise<[number | null, string]>
         ready = await readyLine(child)
         // Без цього порожній перелік після сигналу нічого б не довів
-        if (external)
-          expect(await runResources(tag)).toEqual({ containers: 1, buckets: 1 })
+        expect(await runResources(tag)).toEqual({ containers, objects: 1 })
         // Воркер тим часом створює нові бази: сигнал застає його посеред роботи
         await new Promise((resolve) => setTimeout(resolve, 500))
         child.kill(signal)
@@ -78,10 +78,13 @@ describe("an interrupted DB run", () => {
 
         expect(code).toBe(128 + constants.signals[signal])
         expect(await taggedObjects(tag)).toEqual([])
-        // Контейнер і бакет прибирає лише прибиральник на сигналі: фікстура
-        // їх не чіпає, а звірка стеку побачила б їх лише після прогону
-        if (external)
-          expect(await runResources(tag)).toEqual({ containers: 0, buckets: 0 })
+        // Контейнер і бакет (з об'єктом: його спорожнює прибиральник) прибирає
+        // лише прибиральник на сигналі: фікстура їх не чіпає, а звірка стеку
+        // побачила б їх лише після прогону
+        expect(await runResources(tag)).toEqual({
+          containers: 0,
+          objects: null,
+        })
         expect(await databaseExists(foreign)).toBe(true)
         await expect
           .poll(() => isAlive(ready!.workerPid), { timeout: 5_000 })
@@ -310,14 +313,26 @@ async function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 // Скільки контейнерів і бакетів тегу на стеку прогону
+// `objects`: кількість об'єктів бакета `run-<тег>` за S3, `null` — бакета немає
 async function runResources(
   tag: string
-): Promise<{ containers: number; buckets: number }> {
+): Promise<{ containers: number; objects: number | null }> {
   const containers = await runContainers(testProvider(), nodeExec)
-  const buckets = await runBuckets(testStack(), fetch, 10_000)
+  let objects: number | null
+  try {
+    objects =
+      (
+        await s3Of(testProvider()).listObjectsV2({
+          Bucket: runBucketName(tag),
+        })
+      ).KeyCount ?? 0
+  } catch (error) {
+    if ((error as { name?: string }).name !== "NoSuchBucket") throw error
+    objects = null
+  }
   return {
     containers: containers.filter((c) => c.tag === tag).length,
-    buckets: buckets.filter((b) => b.tag === tag).length,
+    objects,
   }
 }
 

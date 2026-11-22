@@ -24,6 +24,7 @@ import {
 import {
   enterRun,
   GUARD_APPLICATION_NAME,
+  isRunTag,
   newRunTag,
   runTagOf,
   SHADOW_PREFIX,
@@ -39,6 +40,7 @@ import {
   runContainers,
 } from "./external"
 import { installInterruptCleanup } from "./interrupt"
+import { provideSupabaseS3 } from "./s3"
 import {
   enterProvider,
   PROVIDER_ENV,
@@ -122,6 +124,10 @@ async function setup(p: TestProvider): Promise<() => Promise<void>> {
     // тег в іменах об'єктів і в `application_name` кожного з'єднання прогону
     const runTag = newRunTag()
     enterRun(runTag)
+    // Один `supabase status` на прогін: значення S3 успадковують воркери й
+    // прибиральник на сигналі. Без них тест не створить бакета, тож краще
+    // впасти тут, поки в стеку ще нічого нема
+    if (p === "supabase") provideSupabaseS3()
     removeInterruptCleanup = installInterruptCleanup({
       tag: runTag,
       release: releaseLock,
@@ -586,6 +592,7 @@ async function snapshot(
   const containers = (await runContainers(p, deps.exec ?? nodeExec)).map(
     (c) => c.name
   )
+  // Для Supabase — порожньо: його бакети додаються нижче з `storage.buckets`
   const buckets = (
     await runBuckets(TEST_STACKS[p], deps.fetch ?? fetch, LIST_TIMEOUT_MS)
   ).map((b) => b.name)
@@ -604,6 +611,14 @@ async function snapshot(
     const client = await openAdmin(testSuperuserUrl(), database, deps)
     try {
       if (database === "postgres") {
+        // Бакети Supabase — рядки `storage.buckets`; суперкористувач стека
+        // читає їх без окремого гранту. Garage бачить `runBuckets` вище
+        if (p === "supabase")
+          for (const name of await names(
+            client,
+            "select name from storage.buckets where name like 'run-%' order by 1"
+          ))
+            if (isRunTag(name.slice("run-".length))) result.buckets.push(name)
         result.databases = await names(
           client,
           "select datname as name from pg_catalog.pg_database order by 1"
@@ -774,9 +789,12 @@ export function leakMessage(
         `  database facts now: ${name}; restore the facts from before the run by hand (ALTER DATABASE … ALLOW_CONNECTIONS / IS_TEMPLATE / OWNER TO, GRANT / REVOKE)`,
       ]
     if (kind === "containers") return [`  docker rm -f -v ${name}`]
-    // Порожнити бакет прибиральник ще не вміє: це робить людина
+    // Прибиральник бакет прогону порожнить сам; рядок — для лишка, якого він
+    // не зміг видалити
     if (kind === "buckets")
-      return [`  bucket ${name}: empty and delete in Garage`]
+      return [
+        `  bucket ${name}: empty and delete in ${p === "postgres" ? "Garage" : "Supabase Storage"}`,
+      ]
     return [`  DROP EXTENSION "${local}";  -- in database ${database}`]
   })
   return [
