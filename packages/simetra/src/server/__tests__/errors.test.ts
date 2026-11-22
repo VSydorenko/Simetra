@@ -109,6 +109,34 @@ describe("mapDatabaseError", () => {
     ).toEqual({ code: "command.unavailable" })
   })
 
+  // Р11 ПГ-5: відмови сховища — `command.rejected` з причиною `storage.<причина>`
+  it.each(["attach-missing", "attach-invalid", "quota-exceeded"])(
+    "the storage refusal %s is command.rejected with its reason",
+    (detail) => {
+      const expected = { code: "command.rejected", reason: `storage.${detail}` }
+      expect(
+        map({ code: "SF001", message: "storage.rejected", detail })
+      ).toEqual(expected)
+      expect(
+        onCommit({ code: "SF001", message: "storage.rejected", detail })
+      ).toEqual(expected)
+    }
+  )
+
+  it.each([
+    ["a detail outside the closed list", "SF001", "storage.rejected", "x"],
+    ["no detail", "SF001", "storage.rejected", undefined],
+    ["another message", "SF001", "boom", "attach-missing"],
+    ["another code", "P0001", "storage.rejected", "attach-missing"],
+  ])(
+    "a storage refusal with %s is command.internal",
+    (_, code, message, detail) => {
+      expect(map({ code, message, ...(detail ? { detail } : {}) })).toEqual(
+        internal
+      )
+    }
+  )
+
   it.each(["phase", "missing", "malformed", "unknown-action"])(
     "command.context keeps the allowed detail %s",
     (detail) => {

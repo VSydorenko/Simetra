@@ -512,12 +512,13 @@ async function inspect(
       members[purpose] =
         (await client.query(MEMBER, [role])).rows[0]?.member === "t"
     }
-    step = COMMAND_ROLE.text
-    await client.query(COMMAND_ROLE.text, COMMAND_ROLE.params)
     // Роль сховища: без членства рантайм не стартує, а не падає на першому
-    // завантаженні (І20); `SET ROLE` йде від ролі входу, не від ролі команд.
+    // завантаженні (І20). Першою, бо `SET LOCAL ROLE` замінює поточну роль, а
+    // хеш далі читає роль команд.
     step = FILES_ROLE.text
     await client.query(FILES_ROLE.text, FILES_ROLE.params)
+    step = COMMAND_ROLE.text
+    await client.query(COMMAND_ROLE.text, COMMAND_ROLE.params)
     step = APPLIED_HASH
     const hash = (await client.query(APPLIED_HASH, [])).rows[0]?.hash
     step = COMMIT.text
