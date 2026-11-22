@@ -741,6 +741,9 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   const run = async (batch: Batch): Promise<void> => {
     const jobs: Job[] = []
     const flights: Promise<void>[] = []
+    // ТЧ власників читання ключів: шапка пишеться після їхнього осідання, щоб
+    // нова версія шапки не застала ТЧ у польоті (зайве перечитування).
+    const sectionsOf = new Map<Job, Promise<void>>()
     // `needsRefresh` невидимим виглядам (`spec` немає — усім виглядам об'єкта).
     const refresh: { object: ObjectName; spec?: ViewSpec }[] = []
     const requested: ObjectName[] = []
@@ -777,7 +780,8 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         )
         continue
       }
-      jobs.push(startJob(object, o, plan, signals))
+      const job = startJob(object, o, plan, signals)
+      jobs.push(job)
       // Нова версія шапки власника з видимою ТЧ веде до перечитування ТЧ
       // (§6.2, правило 2): її читання йде в тому самому пакеті, що й шапка, а
       // не окремим запитом після неї. Відповідь ТЧ несе `ownerVersion`, тож
@@ -790,12 +794,15 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         const subset = writer.registry.find(spec)
         return subset?.loaded === true ? [subset] : []
       })
-      if (sections.length > 0)
-        flights.push(
-          singleFlight(writer, o, sections, { visibleOnly: false }).done.catch(
-            (error: unknown) => writer.log({ kind: "listener-failed", error })
-          )
+      if (sections.length > 0) {
+        const flight = singleFlight(writer, o, sections, {
+          visibleOnly: false,
+        }).done.catch((error: unknown) =>
+          writer.log({ kind: "listener-failed", error })
         )
+        flights.push(flight)
+        sectionsOf.set(job, flight)
+      }
     }
     // Сплеск (Р13): об'єкти, що справді перечитуються, і їхні вигляди.
     const reading = new Set([...jobs.map((job) => job.object), ...burstObjects])
@@ -812,25 +819,28 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       }, token)
     // Строк на `resume()`: планувальник на прихованій вкладці нічого не шле.
     for (const object of requested) writer.schedule(object, 0)
-    const answers = await Promise.all(jobs.map((job) => job.rows))
-    await Promise.all(flights)
-    if (stopped || !token.valid) return
-    const failed = jobs.filter((_, at) => answers[at] === undefined)
-    if (failed.length > 0)
-      ctx.commit((w) => {
-        for (const { object } of failed)
-          w.markViews(object, { needsRefresh: true })
-      }, token)
-    const settled = jobs.flatMap((job, at) =>
-      answers[at] === undefined ? [] : [{ job, rows: answers[at] }]
-    )
-    const again: Parameters<typeof scheduleRetry>[] = []
-    if (settled.length > 0)
-      ctx.commit((w) => {
-        for (const { job, rows } of settled)
-          settleJob(w, job, rows, (...args) => again.push(args))
-      }, token)
-    for (const args of again) scheduleRetry(...args)
+    // Кожне читання ключів осідає своєю відповіддю (і ТЧ свого об'єкта), одним
+    // `commit`: відповідь, що чекала б повільних перечитувань інших об'єктів
+    // пачки, лягла б пізніше за новіші читання й розійшлася б із ними (П15).
+    // Пачка тримає single-flight, доки не осяде все.
+    const settle = async (job: Job) => {
+      const [rows] = await Promise.all([job.rows, sectionsOf.get(job)])
+      if (stopped || !token.valid) return
+      if (rows === undefined) {
+        ctx.commit(
+          (w) => w.markViews(job.object, { needsRefresh: true }),
+          token
+        )
+        return
+      }
+      const again: Parameters<typeof scheduleRetry>[] = []
+      ctx.commit(
+        (w) => settleJob(w, job, rows, (...args) => again.push(args)),
+        token
+      )
+      for (const args of again) scheduleRetry(...args)
+    }
+    await Promise.all([...jobs.map(settle), ...flights])
   }
 
   // Відпущений канал тримає епоху відпускання, лише поки в сховищі є його

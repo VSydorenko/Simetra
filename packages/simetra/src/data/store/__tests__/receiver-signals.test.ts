@@ -574,6 +574,80 @@ describe("flow control", () => {
     ).toHaveLength(3)
   })
 
+  it("writes the key answer of one object without waiting for the whole re-read of another object of the batch", async () => {
+    // Два об'єкти одного скоупу: у пачці — ключ першого й `invalidate` другого.
+    // Повний вигляд другого читається сторінками по одному рядку, тож його
+    // перечитування триває довше за перший запит пачки.
+    const entries = [0, 1].map((i) =>
+      catalogEntry({
+        id: `00000000-0000-4000-8000-${String(6000 + i).padStart(12, "0")}`,
+        name: `Pair${i}`,
+        kindLabel: `pair${i}`,
+        table: { schema: "public", name: `pair${i}` },
+        tabularSections: [],
+      })
+    )
+    const [first, second] = entries as [CatalogEntry, CatalogEntry]
+    const transport = createFakeSignalTransport()
+    const h = setup({
+      rightsSnapshot: true,
+      signals: transport,
+      objects: [org, ...entries],
+      limits: { fullPageSize: 1 },
+    })
+    h.fake.rightsSnapshot = {
+      userId: USER,
+      scopeSets: [{ scopeKind: SCOPE_KIND_ID, scope: S }],
+      rights: entries.map((e) => ({ ...read, object: e.kindLabel })),
+      members: [],
+      dimensionValues: [],
+    }
+    h.fake.rightsVersion = "1".repeat(64)
+    const A = `Catalog.${first.name}`
+    const B = `Catalog.${second.name}`
+    h.fake.insert(A, taskValues(1))
+    h.fake.insert(B, taskValues(1))
+    h.fake.insert(B, taskValues(2))
+    const view = h.core.view({ kind: "keys", object: A, keys: [key(1)] })
+    view.subscribe(() => {})
+    h.core.view({ kind: "full", object: B }).subscribe(() => {})
+    await settle()
+    const topic = (e: CatalogEntry) =>
+      channelTopic({
+        kind: "changes",
+        scopeKindId: SCOPE_KIND_ID,
+        scope: S,
+        object: e.id,
+      })
+    h.fake.mode = "manual"
+    const v = h.fake.edit(A, key(1), { title: "fresh" })
+    transport.emit(topic(first), {
+      id: String(++seq),
+      object: first.id,
+      op: "update",
+      keys: { id: key(1) },
+      row_ver: v,
+    })
+    transport.emit(topic(second), {
+      id: String(++seq),
+      object: second.id,
+      op: "invalidate",
+    })
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    // Перший запит пачки: ключ першого й перша сторінка другого.
+    while (h.fake.pending.length > 0) h.fake.take().answer()
+    await settle()
+    // Наступна сторінка другого об'єкта ще в польоті.
+    expect(h.fake.pending.some((r) => r.object === B)).toBe(true)
+    expect(view.getSnapshot().rows[0]).toMatchObject({
+      values: { title: "fresh" },
+    })
+    h.fake.mode = "auto"
+    h.fake.deliverAll()
+    await settle()
+  })
+
   it("sends nothing on a hidden tab, marks needsRefresh and reads once on resume()", async () => {
     const h = await open(keysView(key(1)))
     h.core.suspend()
