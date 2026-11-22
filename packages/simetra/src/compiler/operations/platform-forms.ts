@@ -31,10 +31,15 @@ export interface PlatformFormTransition {
  * автоматика права не розширює, тож запис, перехід якого розширив би
  * `EXECUTE`, лишається в файлі (з попередженням `declined`), а решта записів
  * того ж файлу переходить як звичайно — суд над кожним записом окремо.
+ * `except` — ключі функцій (`qualifiedName`), до яких `declineWidening` не
+ * застосовується.
  */
 export function toPlatformForms(
   files: ReadonlyMap<string, string>,
-  { declineWidening = false }: { declineWidening?: boolean } = {}
+  {
+    declineWidening = false,
+    except,
+  }: { declineWidening?: boolean; except?: ReadonlySet<string> } = {}
 ): PlatformFormTransition {
   const result = new Map(files)
   const diagnostics: Diagnostic[] = []
@@ -67,10 +72,13 @@ export function toPlatformForms(
             function: `${schema}.${name}`,
             form: form.form,
             roles: added.join(", "),
-            ...(declineWidening ? { declined: 1 } : {}),
+            ...(declineWidening && !except?.has(qualifiedName(schema, name))
+              ? { declined: 1 }
+              : {}),
           })
         )
-        if (declineWidening) kept.push(declaration)
+        if (declineWidening && !except?.has(qualifiedName(schema, name)))
+          kept.push(declaration)
       }
     }
     if (kept.length === parsed.functions.length) continue
@@ -85,4 +93,26 @@ export function toPlatformForms(
     result.set(parsed.file, formatSqlFunctionsFile({ ...raw, functions: kept }))
   }
   return { files: result, diagnostics }
+}
+
+/**
+ * Перехід у форми платформи для мутацій (`create`, `add`, `declare-function`):
+ * без відмови від розширення — лише функції, що стали формами саме цією
+ * зміною (форми після мінус форми до); решта записів — з `declineWidening`:
+ * чужа зміна не відкриває `EXECUTE` мовчки. Розширення перехідним записом
+ * лишається попередженням з ролями.
+ */
+export function toPlatformFormsAfter(
+  before: ReadonlyMap<string, string>,
+  changed: ReadonlyMap<string, string>
+): PlatformFormTransition {
+  const formKeys = (files: ReadonlyMap<string, string>) => {
+    const { project, objects } = readFiles(files)
+    return project === undefined
+      ? new Set<string>()
+      : new Set(platformFormFunctions(objects, project).keys())
+  }
+  const was = formKeys(before)
+  const became = new Set([...formKeys(changed)].filter((k) => !was.has(k)))
+  return toPlatformForms(changed, { declineWidening: true, except: became })
 }

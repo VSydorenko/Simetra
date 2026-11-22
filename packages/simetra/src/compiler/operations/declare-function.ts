@@ -21,7 +21,7 @@ import {
   type CompletionOptions,
 } from "./fix"
 import type { DeclareFunctionInput } from "./inputs"
-import { toPlatformForms } from "./platform-forms"
+import { toPlatformFormsAfter } from "./platform-forms"
 import { compileInput, refused } from "./refuse"
 import type { OperationResult } from "./types"
 
@@ -134,7 +134,7 @@ export async function declareFunction(
   // правилом, що в (г) `fix`: запис, перехід якого розширив би `EXECUTE`,
   // лишається — це рішення людини, а не побічний наслідок чужої декларації.
   // Ціль формою бути не може (відмова вище).
-  const after = toPlatformForms(changed, { declineWidening: true })
+  const after = toPlatformFormsAfter(files, changed)
 
   // Виняток цілі: чи вставить `fix` запобіжник у це тіло.
   const [parse, plpgsql] = await Promise.all([
