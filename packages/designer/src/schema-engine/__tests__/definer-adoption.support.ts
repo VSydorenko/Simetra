@@ -653,6 +653,76 @@ export function describeDefinerAdoption(): void {
         )
       }
     )
+
+    // Р1: грант функції політики — генерована одиниця, тож зникле
+    // призначення (видалено останню політику-викликача з роллю) прибирає з
+    // живої бази ACL-різниця двигуна, а не дослівний `REVOKE` теки
+    it.skipIf(testProvider() !== "supabase")(
+      "removing the last caller policy of a role: the plan revokes its EXECUTE",
+      async () => {
+        const service = API.service!
+        const sql = [
+          "CREATE TABLE public.docs (id uuid PRIMARY KEY, team_id uuid NOT NULL);",
+          "CREATE TABLE public.members (id uuid PRIMARY KEY, team_id uuid NOT NULL, user_id uuid NOT NULL);",
+          "ALTER TABLE public.docs ENABLE ROW LEVEL SECURITY;",
+          DOCS_GRANT(),
+          DOCS_GRANT(service),
+          POLICY_FUNCTION(),
+          READ_POLICY(),
+          READ_POLICY(service, { name: "docs_service_read" }),
+          `REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC, "${API.anonymous}";`,
+          `GRANT EXECUTE ON FUNCTION public.f() TO "${API.user}", "${service}";`,
+        ].join("\n")
+        await inAdoptedTarget(
+          sql,
+          async (ctx) => {
+            const adopted = await adopt(ctx, ctx.existing)
+            expect(errors(adopted.diagnostics)).toEqual([])
+            const kept = await compiledFolder(adopted.files)
+            expect(kept.errors).toEqual([])
+            expect((await comparison(ctx.target, kept.model!)).empty).toBe(true)
+            expect(await executeAcl(ctx.target.url, "public.f()")).toEqual(
+              [API.user, service].sort()
+            )
+            // З теки зникає політика сервісної ролі: її оператор і запис боргу
+            const policy = "policy:public.docs.docs_service_read"
+            const statement = /CREATE POLICY "?docs_service_read"?[^;]*;\n?/
+            const files = new Map(adopted.files)
+            const [file, text] = [...files].find(([, t]) => statement.test(t))!
+            files.set(file, text.replace(statement, ""))
+            expect(files.get(file)).not.toContain("docs_service_read")
+            const debt = JSON.parse(files.get("sql-debt.json")!) as {
+              units: string[]
+            }
+            expect(debt.units).toContain(policy)
+            files.set(
+              "sql-debt.json",
+              JSON.stringify({
+                ...debt,
+                units: debt.units.filter((u) => u !== policy),
+              })
+            )
+            const removed = await compiledFolder(files)
+            expect(removed.errors).toEqual([])
+            const { actions } = await comparison(ctx.target, removed.model!)
+            // План — рівно видалення політики й відкликання `EXECUTE` її ролі
+            expect([...actions].sort()).toEqual([
+              'DROP POLICY "docs_service_read" ON "public"."docs"',
+              `REVOKE ALL ON FUNCTION "public"."f"() FROM "${service}"`,
+            ])
+            // Видалення політики — руйнівний крок: дозвіл на нього, а
+            // відкликання дозволу не просить
+            await apply(ctx.target, removed.model!, [
+              'DROP POLICY "docs_service_read" ON "public"."docs"',
+            ])
+            expect(await executeAcl(ctx.target.url, "public.f()")).toEqual([
+              API.user,
+            ])
+          },
+          onlyProject()
+        )
+      }
+    )
   })
 
   // Б2: грант, якого декларація не відтворює, не зникає мовчки — нічого не
