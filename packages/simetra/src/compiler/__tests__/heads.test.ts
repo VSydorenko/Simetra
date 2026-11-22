@@ -668,6 +668,11 @@ describe("checkHeads: head builtin allowlist and session state", () => {
       "setting",
       "current_setting",
     ],
+    [
+      "pg_catalog.current_setting('request.jwt.claims', missing_ok => true) IS NULL",
+      "setting",
+      "request.jwt.claims",
+    ],
     ["current_date IS NOT NULL", "setting", "TimeZone"],
     ["localtime IS NOT NULL", "setting", "TimeZone"],
     ["localtimestamp IS NOT NULL", "setting", "TimeZone"],
