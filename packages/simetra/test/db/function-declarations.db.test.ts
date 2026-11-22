@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto"
 import pg from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { compile, type CompileResult } from "simetra/compiler"
+import {
+  applyChanges,
+  compile,
+  fixFiles,
+  type CompileResult,
+} from "simetra/compiler"
 import { RIGHTS_REQUIRE_ERROR, type ApiRolePurpose } from "simetra/model"
 import { renderDesiredState } from "simetra/schema"
 import {
@@ -572,6 +577,92 @@ async function seedGuardGrid(client: pg.Client): Promise<Seed> {
     })
   return ids
 }
+
+// Запобіжник, який вставляє `fix` (Д4, Р3), а не написаний рукою: RPC без
+// запобіжника й декларація з `check.row` → `fixFiles` вставляє виклик → модель
+// розгортається → Postgres судить виклики. Мутація: `check.row` ігнорується
+// (ціль `NULL`) — (б) і (в) червоні: будь-який рядок відмовляє.
+describe("the call guard inserted by fix, in Postgres", () => {
+  const tx = describeTransaction()
+  let ids: Seed = {}
+
+  beforeAll(async () => {
+    const files = adoptedSourcesDomain(
+      profileLayer(),
+      writeRoles(),
+      supportUsers(),
+      narrowTenantSet()
+    )
+    files.set(
+      "sql/public/g_task_read.sql",
+      "CREATE FUNCTION public.g_task_read(p_row uuid) RETURNS uuid LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $$BEGIN RETURN p_row; END$$;\n"
+    )
+    files.set(
+      "sql/public/g_task_read.functions.json",
+      JSON.stringify({
+        functions: [
+          {
+            id: uuid(9610),
+            function: { name: "g_task_read" },
+            callers: ["user"],
+            check: {
+              action: "read",
+              object: { kind: "Document", name: "Task" },
+              row: "p_row",
+            },
+          },
+        ],
+      })
+    )
+    let n = 9700
+    const fixed = await fixFiles(await acceptDebt(files), {
+      schemaPath: (file, schemaFile) => `schemas-of/${file}/${schemaFile}`,
+      newId: () => uuid(++n),
+    })
+    // Запобіжник з'явився в тексті від самого `fix`
+    const repaired = applyChanges(await acceptDebt(files), fixed.changes)
+    expect(repaired.get("sql/public/g_task_read.sql")).toContain(
+      "PERFORM simetra.rights_require('read', 'task', p_row);"
+    )
+    const result = await compile(repaired)
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])
+    const client = await tx.open()
+    await deploy(client, result.model!)
+    ids = await seedGuardGrid(client)
+  })
+
+  afterAll(() => tx.close())
+
+  const call = (who: string, key: string | null) =>
+    asActor(tx.client(), ids[who]!, "SELECT public.g_task_read($1)", [
+      key === null ? null : ids[key],
+    ])
+
+  it("(a) an actor without the right on the row is refused with rights.forbidden", async () => {
+    expect(await call("u5", "t1")).toEqual(REFUSED)
+  })
+
+  it("(b) an actor with the right on the row gets the result", async () => {
+    expect(await call("u7", "t1")).toBe("ok")
+    const client = tx.client()
+    await client.query("SAVEPOINT result")
+    try {
+      await asRole(client, "user", claimsFor("user", ids.u7))
+      const { rows } = await client.query<{ v: string }>(
+        "SELECT public.g_task_read($1) AS v",
+        [ids.t1]
+      )
+      expect(rows[0]!.v).toBe(ids.t1)
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT result")
+    }
+  })
+
+  it("(c) the right in another tenant only is refused", async () => {
+    expect(await call("u3", "t1")).toEqual(REFUSED)
+    expect(await call("u7", "tB")).toEqual(REFUSED)
+  })
+})
 
 // Проєкт без ролей: функцій прав немає, тож гілка кликала б неіснуючу
 // `simetra.rights_any` (`42883`). Запобіжник без гілок відмовляє `42501`.
