@@ -913,8 +913,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   // Склад вигляду після розриву (§8.4): кожен утримуваний канал його об'єкта
   // доведено читанням, що успішно осіло й почалось не раніше приєднання після
   // останнього розриву; відпущений з записом — точково (`channelProven`).
-  // Похідна від епох, без власного стану.
+  // Вимога «склад не підтверджено з e» (§8.4, п. 7) — той самий факт: поки
+  // вона стоїть, склад не підтверджено в будь-якого вигляду, видимого чи ні.
+  // Похідна від епох і вимоги, без власного стану.
   function staleComposition(s: Subset): boolean {
+    if (s.unconfirmedSince !== undefined) return true
     const { epochs } = session
     if (!epochs.gapped()) return false
     const id = s.form.object.entry.id

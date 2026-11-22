@@ -11,6 +11,7 @@ import {
   type Key,
   type RowView,
   type ViewHandle,
+  type ViewSnapshot,
   type ViewSpec,
 } from "../types"
 import {
@@ -41,8 +42,9 @@ import {
  * відтоді не було) робить усі правки без нагляду втраченими одразу. Без
  * запису — вікно активації (§8.4): створення, правки й видалення без нагляду
  * не судяться, доки не осяде перша хвиля підписки (межа — час моделі й
- * події фейків, без стану ядра); після нього старе значення без `stale` чи
- * пропущене створення дозволене лише невидимому вигляду з `needsRefresh`.
+ * події фейків, без стану ядра); після нього старе значення без `stale`
+ * дозволене, лише коли кожен вигляд, що його показує, має `staleComposition`,
+ * а пропущене створення — лише вигляду з `staleComposition`.
  * Рядок без `stale`, показаний `synced`, має версію не нижчу за
  * кожну втрачену правку свого ключа й не показує втраченого видалення; повний
  * вигляд без `staleComposition` або показує втрачене створення, або має
@@ -466,35 +468,45 @@ async function runOn(
     }
   }
 
+  // Рядок вигляду й ціль його `include` судяться однаково.
+  const shownOf = (snap: ViewSnapshot) =>
+    snap.rows.flatMap((row) =>
+      row.state === "removed"
+        ? [row]
+        : [
+            row,
+            ...Object.values(row.refs ?? {}).filter(
+              (ref): ref is RowView => ref !== null
+            ),
+          ]
+    )
   const check = (at: string) => {
+    // Старе значення без `stale` після вікна активації дозволене, лише коли
+    // кожен вигляд, що його показує, має `staleComposition` (§8.4, п. 7).
+    const confirmedBy = new Map<Key, boolean>()
     for (const [v, handle] of handles.entries()) {
       if (offs[v] === undefined) continue
       const snap = handle.getSnapshot()
-      // Невидимий вигляд з `needsRefresh` — прийнятий стан (одне
-      // перечитування на монтуванні), лише для правок вікна активації.
-      const honest = !visible[v] && snap.needsRefresh
-      // Рядок вигляду й ціль його `include` судяться однаково.
-      const shown = snap.rows.flatMap((row) =>
-        row.state === "removed"
-          ? [row]
-          : [
-              row,
-              ...Object.values(row.refs ?? {}).filter(
-                (ref): ref is RowView => ref !== null
-              ),
-            ]
-      )
-      for (const row of shown) {
+      for (const row of shownOf(snap)) {
+        if (row.state === "removed" || row.hidden === true) continue
+        if (snap.staleComposition !== true) confirmedBy.set(row.key, true)
+      }
+    }
+    const excused = (k: Key) => confirmedBy.get(k) !== true
+    for (const [v, handle] of handles.entries()) {
+      if (offs[v] === undefined) continue
+      const snap = handle.getSnapshot()
+      for (const row of shownOf(snap)) {
         if (row.state === "removed" || row.hidden === true) continue
         if (row.stale === true || row.state !== "synced") continue
         const act = actLost.get(row.key)
-        if (!honest && act !== undefined && row.version < act)
+        if (!excused(row.key) && act !== undefined && row.version < act)
           failWith(
             at,
             `view ${v} shows ${row.key} v${row.version} synced after the activation window, an unwatched edit has v${act}`,
             trace
           )
-        if (!honest && actDeletes.has(row.key))
+        if (!excused(row.key) && actDeletes.has(row.key))
           failWith(
             at,
             `view ${v} shows ${row.key} synced after the activation window, it was deleted unwatched`,
@@ -521,7 +533,6 @@ async function runOn(
       const keys = new Set(snap.rows.map((r) => r.key))
       for (const k of [...lostCreates, ...actCreates]) {
         if (keys.has(k) || deleted.has(k)) continue
-        if (!lostCreates.has(k) && honest) continue
         // Порожній вигляд мусить показати лише рядок, що досі йому підходить.
         if (spec === FRESH && h.fake.row(TASK, k)?.values.title !== "fresh")
           continue
@@ -909,6 +920,15 @@ describe("receiver model: the disconnect mark and the composition against the se
         { t: "sub", v: 5 },
         { t: "release", ok: false, at: false },
         { t: "rejoinFresh", v: 0, create: false },
+      ],
+    ],
+    [
+      "X1: a visible view whose reads fail in the activation window shows staleComposition (seed 2048969700)",
+      [
+        { t: "hold" },
+        { t: "rejoinFresh", v: 0, create: false },
+        { t: "time", ms: 60_000 },
+        { t: "release", ok: false, at: false, broken: true },
       ],
     ],
     [

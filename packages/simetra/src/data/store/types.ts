@@ -193,10 +193,13 @@ export interface ViewSnapshot {
    */
   readonly isStale?: boolean
   /**
-   * The composition of the view is not confirmed after a gap of a channel of
-   * its object (P4-B spec §8.4): a create or a delete may have been missed.
-   * Cleared by the first successful read that started at or after the
-   * channel's next join. Present only while true; not a row's `stale`.
+   * The composition of the view is not confirmed (P4-B spec §6.5, §8.4): a
+   * create, a delete or an edit may have been missed — after a gap of a
+   * channel of its object (cleared by the first successful read that started
+   * at or after the channel's next join), or while the requirement «not
+   * confirmed since e» stands (cleared only by a successful read with
+   * `readEpoch ≥ e`). Any view kind, visible or not. Present only while
+   * true; not a row's `stale`.
    */
   readonly staleComposition?: true
   readonly section?: {
