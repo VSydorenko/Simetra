@@ -1,5 +1,8 @@
 import {
   BATCH_MAX,
+  batchSchema,
+  operationSchema,
+  wireReadPartSchema,
   CommandFailure,
   dataRequestSchema,
   TABULAR_LINES_MAX,
@@ -21,7 +24,12 @@ import {
   tenantSelfService,
 } from "../../compiler/__tests__/fixtures/rights"
 import { prepareInput } from "../phase"
-import { decidingIssue, issueReason, prepareRead } from "../read"
+import {
+  UNION_DISCRIMINATORS,
+  decidingIssue,
+  issueReason,
+  prepareRead,
+} from "../read"
 import { ID, catalog, commandObject, rootCatalog } from "./fixtures"
 import { CLIENT, ORGANIZATION } from "./harness"
 
@@ -240,6 +248,30 @@ describe("issueReason over the data envelope", () => {
     expect(decidingIssue(new z.ZodError([union]))?.path).toEqual(path)
   })
 
+  // Страж зв'язку перелічу зі схемами: обходить схеми, чиї помилки проходять
+  // через `decidingIssue`, і збирає ключі з літералом у гілках кожного
+  // об'єднання. Новий ключ-розрізнювач поза `UNION_DISCRIMINATORS` валить тест.
+  it("every literal key of a union branch is a listed discriminator", () => {
+    const found = literalKeysOfUnions([
+      dataRequestSchema,
+      wireReadPartSchema,
+      readQuerySchema,
+      operationSchema,
+      batchSchema,
+    ])
+    expect(found.size).toBeGreaterThan(0)
+    for (const key of found)
+      expect(UNION_DISCRIMINATORS.has(key), key).toBe(true)
+  })
+
+  it("the walker finds a literal key of a new union branch", () => {
+    const schema = z.union([
+      z.strictObject({ kind: z.literal("a") }),
+      z.strictObject({ kind: z.literal("b") }),
+    ])
+    expect([...literalKeysOfUnions([schema])]).toEqual(["kind"])
+  })
+
   it("does not treat the client-only reason disposed as a limit reason", () => {
     const issue = (reason: string): z.core.$ZodIssue => ({
       code: "custom",
@@ -254,6 +286,63 @@ describe("issueReason over the data envelope", () => {
     expect(picked && issueReason(new z.ZodError([picked]))).toBe("plain")
   })
 })
+
+type Def = { type?: string; [key: string]: unknown }
+const defOf = (schema: unknown): Def =>
+  (schema as { _zod: { def: Def } })._zod.def
+
+/** Ключі з `z.literal` у гілках-об'єктах кожного `z.union` (не `discriminatedUnion`). */
+function literalKeysOfUnions(roots: unknown[]): Set<string> {
+  const keys = new Set<string>()
+  const seen = new Set<unknown>()
+  // Об'єднання після препроцесора (`z.preprocess(…, z.union(…))`, форми
+  // читання): гілку обирає препроцесор за ключами, а відмова препроцесора
+  // перериває розбір, тож помилок гілок такого об'єднання `leavesOf` не бачить.
+  const afterPreprocess = new Set<unknown>()
+  const unwrap = (schema: unknown): unknown => {
+    const def = defOf(schema)
+    return def.innerType ?? def.in ?? schema
+  }
+  const walk = (schema: unknown): void => {
+    if (schema === undefined || seen.has(schema)) return
+    seen.add(schema)
+    const def = defOf(schema)
+    // `discriminatedUnion` не вкладає помилки гілок: його issue без `errors`.
+    if (def.type === "pipe" && defOf(def.in).type === "transform") {
+      afterPreprocess.add(def.out)
+    }
+    if (
+      def.type === "union" &&
+      def.discriminator === undefined &&
+      !afterPreprocess.has(schema)
+    ) {
+      for (const option of def.options as unknown[]) {
+        let branch = option
+        while (unwrap(branch) !== branch) branch = unwrap(branch)
+        const shape = defOf(branch).shape as Record<string, unknown> | undefined
+        for (const [key, value] of Object.entries(shape ?? {})) {
+          let inner = value
+          while (unwrap(inner) !== inner) inner = unwrap(inner)
+          if (defOf(inner).type === "literal") keys.add(key)
+        }
+      }
+    }
+    for (const child of [
+      def.innerType,
+      def.in,
+      def.out,
+      def.element,
+      def.valueType,
+      ...((def.options as unknown[] | undefined) ?? []),
+      ...Object.values(
+        (def.shape as Record<string, unknown> | undefined) ?? {}
+      ),
+    ])
+      walk(child)
+  }
+  for (const root of roots) walk(root)
+  return keys
+}
 
 describe("prepareRead reasons", () => {
   afterEach(() => {

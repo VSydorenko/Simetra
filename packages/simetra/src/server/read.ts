@@ -902,7 +902,7 @@ const reasonOf = (issue: z.core.$ZodIssue): string | undefined => {
 // лише хибний літерал одного з них. Перелік явний, а не «`invalid_value` на
 // першому сегменті»: нове об'єднання з літералом під іншим ключем не змінює
 // вибору, а свій розрізнювач його автор вписує сюди разом із тестом-стражем.
-const UNION_DISCRIMINATORS: ReadonlySet<PropertyKey> = new Set(["type"])
+export const UNION_DISCRIMINATORS: ReadonlySet<PropertyKey> = new Set(["type"])
 
 // Issue об'єднання (`invalid_union`) ховає помилки гілок у `errors` з шляхами
 // відносно самого об'єднання. Розгортаємо їх у плоский список листків: шлях
