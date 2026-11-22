@@ -73,7 +73,7 @@ T3 лише передає параметр і вирішує придатніс
 | Р14 | **Тест джерел `src/server`** (#174 п. 3–4): правило «плоска тека» застаріло — `src/server/signals/` уже є. Замість лінту плоскої теки тест джерел обходить `src/server/**` рекурсивно (без `__tests__`), і всі його перевірки (провайдер, `process.env`, нова — I/O на верхньому рівні модуля: виклик на верхньому рівні, `fetch`, таймери, `new` I/O-об'єктів) діють на всі файли. | немає (спека правила плоскої теки не має) |
 | Р15 | **Розрізнювач і шлях форми передачі** (#191): `leavesOf` (`server/read.ts`) відкидає гілку об'єднання за **явно названим** дискримінатором (ключ із самої схеми об'єднання — `discriminator`/літерали гілок), а не за «`invalid_value` на першому сегменті»; `operationRefusalPath` зберігає сегмент ТЧ так, що не-UUID ключ рядка ТЧ дає шлях `<ТЧ>.<індекс>.<ключ>`, а не шлях шапки. | П4-B §4.0 — немає (форма та сама, виправлення вади) |
 | Р17 | **Закріплені налаштування в транзакції команди й читання.** Крок 2 §6.5 (оператор claims, `CLAIMS_TEXT` у `server/transaction.ts`) ставить `set_config(…, true)` для кожного налаштування T0 `PINNED_SESSION_SETTINGS` (`model/schemas/project.ts`, з #335 Д5) замість нинішніх `TimeZone` і `bytea_output` — один перелік, без другого. Без цього `extra_float_digits` ролі чи бази < 1 округлював би `real`/`double precision` у результаті (порушення Рт1) і давав би хибний збіг CAS. | П4 §6.5 крок 2 |
-| Р16 | **Сесія пулу** (#174 п. 1, частина C): у тілі функції чи процедури будь-якого файлу, борг включно, `SET`/`RESET` — лише `SET LOCAL` (`RESET` — заборонено: він сесійний), `set_config` — лише з третім аргументом-літералом `true`; тимчасова таблиця тіла не може мати ім'я типу `pg_catalog` (затінення типу через `pg_temp` до кінця транзакції); вбудовані, що змінюють стан сесії поза транзакцією (`setseed`, сесійні advisory-замки й подібні — виконавець проходить дозвільний перелік `builtin-functions.ts` за цим критерієм), виходять з дозвільного переліку тіла. Перелік імен типів — стала T1 поруч із `builtin-functions.ts`; DB-тест звіряє її з `pg_type` схеми `pg_catalog` закріпленої версії. Відмова — помилка компілятора (коди — за класом правила тіла; один код на клас). Без винятку для боргу (правило власника: одне повне правило). | спека прав — дозвільний перелік тіла; П4 §7.3 — кейс пулера |
+| Р16 | **Сесія пулу** (#174 п. 1, частина C): у тілі функції чи процедури будь-якого файлу, борг включно, `SET`/`RESET` — лише `SET LOCAL` (`RESET` — заборонено: він сесійний), `set_config` — лише з третім аргументом-літералом `true`; тимчасова таблиця тіла не може мати ім'я типу `pg_catalog` (затінення типу через `pg_temp` до кінця транзакції); вбудовані, що змінюють стан сесії поза транзакцією (`setseed`, сесійні advisory-замки й подібні), виходять з дозвільного переліку тіла; критерій — **властивість запису** в `builtin-functions.ts`, а не окремий список (рішення архітекторки); `search_path` уже в `PROTECTED_SESSION_SETTINGS` (ПГ-5 Р18) — не дублювати. Перелік імен типів — стала T1 поруч із `builtin-functions.ts`; DB-тест звіряє її з `pg_type` схеми `pg_catalog` закріпленої версії. Відмова — помилка компілятора (коди — за класом правила тіла; один код на клас). Без винятку для боргу (правило власника: одне повне правило). | спека прав — дозвільний перелік тіла; П4 §7.3 — кейс пулера |
 
 ## 5. Інтерфейси
 
@@ -126,18 +126,75 @@ Opus «data-layer».
 
 ## 8. Задачі
 
-| # | Задача | Модулі | Готово, коли | Після | Перевірка |
-| --- | --- | --- | --- | --- | --- |
-| 0 | Звірка опор і поправки спек | цей план; спеки §2; `docs/adr/`; `docs/GLOSSARY.md` | `orient --plan` і `doc anchors` без дельт; поправки спек за стовпцем «вплив» таблиці рішень (частини A і B; C — у задачі 8); нове ADR; термін «очікувані значення (`expectedValues`)» у глосарії поряд із `baseValues`; рядок §14.1 П4-B про CAS закрито посиланням на ADR | — | `doc anchors && doc lint`; `run-tests unit --filter docs` |
-| 1 | T0: форма й причини | `model/runtime/operation.ts`, `core.ts`, `mapping.ts`, `wire.ts`, `envelope.ts` | Р1, Р6 (`conflict.fields`), Р5 (`invalid.expectedValues`); мапінг логічна ↔ передачі для `expectedValues` з `encodeRow`/`decodeRow`; І6 (частина T0) | 0 | `run-tests unit --changed` |
-| 2 | T1: ядро `save` | `compiler/catalog-command/units.ts` (`saveFunction`, `coreParts.lockedOld`, `inputLines`, підпис гранту), тести `catalog-command-save.test.ts` | Р2–Р5 у згенерованому SQL; І4; грант `EXECUTE` — новий підпис; старого підпису в бажаному стані немає | 1 | `run-tests unit --filter catalog-command` |
-| 3 | T3: передача й придатність | `server/phase.ts` (`callOf`), `server/compatibility.ts`, `server/data-handler.ts` | Р7: `p_expected_values` з `expectedValues` лише для об'єкта без `beforeWrite`; звірка колонок `expectedValues`; І6 (T3) | 2 | `run-tests unit --filter phase`; `run-tests unit --filter compatibility` |
-| 3a | Закріплені налаштування | `server/transaction.ts` (`CLAIMS_TEXT`) | Р17; І11 | мердж #335 | `run-tests unit --filter transaction`; `run-tests db --filter command-port` |
-| 4 | DB-доказ частини A | `test/db/catalog-command.db.test.ts` (чи новий `catalog-command-cas.db.test.ts`), `server/__tests__/*.db.test.ts` за звичаєм теки | І1, І2, І3, І5 на стеку `postgres`; движок схеми не лишає старого підпису (`command-grants.db.test.ts` чи наявний кейс грантів) | 3 | `run-tests db --filter catalog-command`; `run-tests db --filter command-grants` |
-| 5 | Мапінг відмов | `server/errors.ts`, `server/port.ts`, `server/runtime.ts`, `server/transaction.ts`; `compiler/runtime-catalog.ts`, `compiler/sql/row-rule.ts` | Р10, Р11, Р12; І7, І8; згенеровані файли шаблону (`packages/create-simetra-app/template/generated/`) перегенеровано, якщо Р12 їх змінює | 0 | `run-tests unit --filter errors`; `run-tests unit --filter port`; `run-tests unit --filter runtime-catalog`; DB-кейс — `run-tests db --filter <файл кейсу>` |
-| 6 | Гарди джерел і функцій сесії | `server/transaction.ts`, `server/runtime.ts`, `server/phase.ts`; `test/server-sources.test.ts` | Р13, Р14; І9 | 0 | `run-tests unit --filter server-sources` |
-| 7 | Форма передачі | `server/read.ts` (`leavesOf`, `decidingIssue`, `operationRefusalPath`); `compiler/__tests__/fixtures/evolution.ts`; `mapping-evolution.test.ts`, `server/__tests__/data-handler-evolution.test.ts`, DB `data-handler.db.test.ts` | Р15; `EVOLUTION` перейменовує реквізит ТЧ, форма передачі незмінна в трьох тестах; тест-страж: нова гілка об'єднання з іншим літералом не міняє вибору | 0 | `run-tests unit --filter read`; `run-tests unit --filter evolution`; `run-tests db --filter data-handler` |
-| 8 | (C) Правила тіла для пулу | `compiler/sql/function-body.ts`, `command-context.ts`, нова стала імен типів поруч із `builtin-functions.ts`, `messages.ts`; спека прав (дозвільний перелік), П4 §7.3 | Р16; І10; поправки спек у тому самому коміті; фікстури, що мали нелокальний `SET`, переписано | мердж #335 | `run-tests unit --changed`; `run-tests db --filter builtin-functions` |
+### Задача 0. Звірка опор і поправки спек
+
+- **Модулі:** цей план; спеки §2; `docs/adr/`; `docs/GLOSSARY.md`
+- **Готово, коли:** `orient --plan` і `doc anchors` без дельт; поправки спек за стовпцем «вплив» таблиці рішень (частини A і B; C — у задачі 8); нове ADR; термін «очікувані значення (`expectedValues`)» у глосарії поряд із `baseValues`; рядок §14.1 П4-B про CAS закрито посиланням на ADR
+- **Після:** —
+- **Перевірка:** `doc anchors && doc lint`; `run-tests unit --filter docs`
+
+### Задача 1. T0: форма й причини
+
+- **Модулі:** `model/runtime/operation.ts`, `core.ts`, `mapping.ts`, `wire.ts`, `envelope.ts`
+- **Готово, коли:** Р1, Р6 (`conflict.fields`), Р5 (`invalid.expectedValues`); мапінг логічна ↔ передачі для `expectedValues` з `encodeRow`/`decodeRow`; І6 (частина T0)
+- **Після:** 0
+- **Перевірка:** `run-tests unit --changed`
+
+### Задача 2. T1: ядро `save`
+
+- **Модулі:** `compiler/catalog-command/units.ts` (`saveFunction`, `coreParts.lockedOld`, `inputLines`, підпис гранту), тести `catalog-command-save.test.ts`
+- **Готово, коли:** Р2–Р5 у згенерованому SQL; І4; грант `EXECUTE` — новий підпис; старого підпису в бажаному стані немає
+- **Після:** 1
+- **Перевірка:** `run-tests unit --filter catalog-command`
+
+### Задача 3. T3: передача й придатність
+
+- **Модулі:** `server/phase.ts` (`callOf`), `server/compatibility.ts`, `server/data-handler.ts`
+- **Готово, коли:** Р7: `p_expected_values` з `expectedValues` лише для об'єкта без `beforeWrite`; звірка колонок `expectedValues`; І6 (T3)
+- **Після:** 2
+- **Перевірка:** `run-tests unit --filter phase`; `run-tests unit --filter compatibility`
+
+### Задача 3a. Закріплені налаштування
+
+- **Модулі:** `server/transaction.ts` (`CLAIMS_TEXT`)
+- **Готово, коли:** Р17; І11
+- **Після:** мердж #335
+- **Перевірка:** `run-tests unit --filter transaction`; `run-tests db --filter command-port`
+
+### Задача 4. DB-доказ частини A
+
+- **Модулі:** `test/db/catalog-command.db.test.ts` (чи новий `catalog-command-cas.db.test.ts`), `server/__tests__/*.db.test.ts` за звичаєм теки
+- **Готово, коли:** І1, І2, І3, І5 на стеку `postgres`; движок схеми не лишає старого підпису (`command-grants.db.test.ts` чи наявний кейс грантів)
+- **Після:** 3
+- **Перевірка:** `run-tests db --filter catalog-command`; `run-tests db --filter command-grants`
+
+### Задача 5. Мапінг відмов
+
+- **Модулі:** `server/errors.ts`, `server/port.ts`, `server/runtime.ts`, `server/transaction.ts`; `compiler/runtime-catalog.ts`, `compiler/sql/row-rule.ts`
+- **Готово, коли:** Р10, Р11, Р12; І7, І8; згенеровані файли шаблону (`packages/create-simetra-app/template/generated/`) перегенеровано, якщо Р12 їх змінює
+- **Після:** 0
+- **Перевірка:** `run-tests unit --filter errors`; `run-tests unit --filter port`; `run-tests unit --filter runtime-catalog`; DB-кейс — `run-tests db --filter <файл кейсу>`
+
+### Задача 6. Гарди джерел і функцій сесії
+
+- **Модулі:** `server/transaction.ts`, `server/runtime.ts`, `server/phase.ts`; `test/server-sources.test.ts`
+- **Готово, коли:** Р13, Р14; І9
+- **Після:** 0
+- **Перевірка:** `run-tests unit --filter server-sources`
+
+### Задача 7. Форма передачі
+
+- **Модулі:** `server/read.ts` (`leavesOf`, `decidingIssue`, `operationRefusalPath`); `compiler/__tests__/fixtures/evolution.ts`; `mapping-evolution.test.ts`, `server/__tests__/data-handler-evolution.test.ts`, DB `data-handler.db.test.ts`
+- **Готово, коли:** Р15; `EVOLUTION` перейменовує реквізит ТЧ, форма передачі незмінна в трьох тестах; тест-страж: нова гілка об'єднання з іншим літералом не міняє вибору
+- **Після:** 0
+- **Перевірка:** `run-tests unit --filter read`; `run-tests unit --filter evolution`; `run-tests db --filter data-handler`
+
+### Задача 8. (C) Правила тіла для пулу
+
+- **Модулі:** `compiler/sql/function-body.ts`, `command-context.ts`, нова стала імен типів поруч із `builtin-functions.ts`, `messages.ts`; спека прав (дозвільний перелік), П4 §7.3
+- **Готово, коли:** Р16; І10; поправки спек у тому самому коміті; фікстури, що мали нелокальний `SET`, переписано
+- **Після:** мердж #335
+- **Перевірка:** `run-tests unit --changed`; `run-tests db --filter builtin-functions`
 
 Порядок: 0 → 1 → 2 → 3 → 3a → 4 (частина A; 3a — коли #335 у `main`), далі 5, 6, 7 у будь-якому порядку,
 8 — коли #335 у `main` (гілку оновити merge `origin/main`, без rebase).
