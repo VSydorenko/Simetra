@@ -267,9 +267,7 @@ function derivedGrants(
     const grantees = (read[0]?.tree as { GrantStmt?: { grantees?: unknown[] } })
       .GrantStmt?.grantees
     return (
-      fact.roles.size > 0 &&
-      fact.roles.size === grantees?.length &&
-      [...fact.roles].every(derivedRole)
+      fact.roles.size === grantees?.length && [...fact.roles].every(derivedRole)
     )
   })
 }
