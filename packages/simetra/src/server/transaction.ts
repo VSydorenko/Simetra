@@ -28,7 +28,6 @@ import {
   type CommandDatabase,
   type DatabaseClient,
 } from "./port"
-import type { FileStore } from "./file-store"
 import { ident, literal } from "./read"
 
 /** One bound statement of the transaction. */
@@ -78,11 +77,6 @@ export interface RuntimeState {
    * the rest of the transaction runs in signal merge mode (P4-B spec §8.2).
    */
   signalMergeThreshold: number
-  /**
-   * The byte store the runtime deletes the bytes of a deleted file row from
-   * after the commit (ПГ-5 Р5); without it only the reconciliation does.
-   */
-  files: FileStore | undefined
 }
 
 type QueryResult = Awaited<ReturnType<DatabaseClient["query"]>>
@@ -803,14 +797,15 @@ async function settleOutcome(
   return result
 }
 
-/**
- * Відмова `attachFile`: `commitUnknown` — `COMMIT` надіслано й сесію закрито,
- * рядок міг потрапити в базу, тож байти видаляти не можна (спека профілю
- * postgres §8.2, ПГ-5 Р6).
- */
+/** The rejection of `attachFile`: a `CommandFailure` with the commit flag. */
 export class FileAttachFailure extends CommandFailure {
   constructor(
     error: CommandError,
+    /**
+     * `true` when `COMMIT` was sent and the session closed: the row may exist,
+     * so the caller must keep the bytes. `false` — a known rollback or a
+     * refusal before the database.
+     */
     readonly commitUnknown: boolean
   ) {
     super(error)

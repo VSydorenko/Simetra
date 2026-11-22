@@ -3,9 +3,8 @@ import {
   runtimeCatalogSchema,
   type RuntimeCatalog,
 } from "simetra/model"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
 import { FileAttachFailure } from "../transaction"
-import type { FileStore } from "../file-store"
 import { commandObject, COMPANY, ID, OTHER } from "./fixtures"
 import {
   BEGIN,
@@ -48,6 +47,12 @@ const document = (storage = true) =>
     attributes: [
       attribute("fileName", "file_name", { required: true }),
       attribute("note", "note"),
+      // Пише лише тригер вкладення: команда їх не вставляє (Р8).
+      attribute("fileSize", "file_size", { insert: false, update: false }),
+      attribute("fileContentType", "file_content_type", {
+        insert: false,
+        update: false,
+      }),
       attribute("company", "company_id", {
         type: "Ref" as const,
         pgType: "uuid",
@@ -65,8 +70,6 @@ const storageCatalog: RuntimeCatalog = runtimeCatalogSchema.parse({
 
 const docRow = (id = ID, version = 1) =>
   JSON.stringify({ id, version, file_name: "a.txt", company_id: COMPANY })
-const deleted = (id = ID) =>
-  JSON.stringify({ id, version: 2, company_id: COMPANY })
 
 const FILES_ROLE = { text: 'SET LOCAL ROLE "simetra_files"', params: [] }
 const PENDING_LEFT = {
@@ -107,7 +110,6 @@ const input = {
 /** Відповіді бази для об'єкта: ядро `document_save` і `document_delete`. */
 const base: Override = (text) => {
   if (text.includes("document_save")) return { rows: [{ r: docRow() }] }
-  if (text.includes("document_delete")) return { rows: [{ r: deleted() }] }
   if (text.includes("storage_pending_left")) return { rows: [{ pending: "f" }] }
   if (text.includes("storage_headroom")) return { rows: [{ ok: "t" }] }
   return undefined
@@ -116,19 +118,8 @@ const over =
   (extra: Override): Override =>
   (text, params) =>
     extra(text, params) ?? base(text, params)
-const make = (extra: Override = () => undefined, files?: FileStore) =>
-  setup(over(extra), { catalog: storageCatalog, ...(files ? { files } : {}) })
-
-const fakeFiles = () => {
-  const store = {
-    put: vi.fn(),
-    get: vi.fn(),
-    delete: vi.fn(async () => undefined),
-    list: vi.fn(),
-    checkInstance: vi.fn(),
-  }
-  return { store: store as unknown as FileStore, remove: store.delete }
-}
+const make = (extra: Override = () => undefined) =>
+  setup(over(extra), { catalog: storageCatalog })
 
 async function failureOf(
   promise: Promise<unknown>
@@ -168,12 +159,15 @@ describe("attachFile", () => {
 
   it("never lets the client set size or type: they come only from file_attach", async () => {
     const { db, runtime } = await make()
-    await failureOf(
-      runtime.attachFile(session, {
-        ...input,
-        fields: { fileSize: 1, note: "n" },
-      })
-    )
+    for (const key of ["fileSize", "fileContentType"]) {
+      const error = await failureOf(
+        runtime.attachFile(session, {
+          ...input,
+          fields: { [key]: "x", note: "n" },
+        })
+      )
+      expect(error.error.code).toBe("command.invalid")
+    }
     expect(db.calls).toEqual([])
   })
 
@@ -395,6 +389,10 @@ describe("fileInstance", () => {
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,
+      {
+        text: "SELECT set_config('statement_timeout', $1, true), set_config('lock_timeout', $2, true)",
+        params: ["15000", "5000"],
+      },
       FILES_ROLE,
       { text: 'SELECT "simetra"."storage_instance_id"() AS id', params: [] },
       COMMIT,
@@ -414,144 +412,39 @@ describe("fileInstance", () => {
   })
 })
 
-describe("deleting bytes after the commit", () => {
-  const remove = {
-    action: "delete",
-    object: DOC,
-    id: ID,
-    expectedVersion: 1,
-  } as const
-  const deleteCall = call("document_delete", "$1::uuid, $2::bigint", [ID, "1"])
-
-  it("deletes the key from the confirmed row after COMMIT of a client command", async () => {
-    const { store, remove: del } = fakeFiles()
-    const { db, runtime } = await make(undefined, store)
-    await runtime.run(session, remove)
-    expect(del).toHaveBeenCalledExactlyOnceWith(`o/${DOC_ID}/${ID}`)
-    expect(db.calls).toContainEqual(deleteCall)
-  })
-
-  it("takes the key from the row the core returned, not from the input id", async () => {
-    const { store, remove: del } = fakeFiles()
-    const { runtime } = await make(
-      (text) =>
-        text.includes("document_delete")
-          ? { rows: [{ r: deleted(OTHER) }] }
-          : undefined,
-      store
-    )
-    await runtime.run(session, remove)
-    expect(del).toHaveBeenCalledExactlyOnceWith(`o/${DOC_ID}/${OTHER}`)
-  })
-
-  it("does not delete before COMMIT and never after a rollback", async () => {
-    const { store, remove: del } = fakeFiles()
-    let commits = 0
-    const { runtime } = await make((text) => {
-      // Перший `COMMIT` — створення рантайму.
-      if (text === "COMMIT" && commits++ > 0) {
-        return { error: { code: "23505", message: "x" } }
-      }
-      return undefined
-    }, store)
-    del.mockImplementation(async () => {
-      throw new Error("must not run")
+describe("attachFile input", () => {
+  it("lets the server name and scope win over fields of the same attributes", async () => {
+    const { db, runtime } = await make()
+    await runtime.attachFile(session, {
+      ...input,
+      fields: { fileName: "evil.txt", company: OTHER, note: "n" },
     })
-    await expect(runtime.run(session, remove)).rejects.toBeInstanceOf(
-      CommandFailure
+    const core = db.calls.find(
+      (c) => "text" in c && c.text.includes("document_save")
     )
-    expect(del).not.toHaveBeenCalled()
+    expect(core).toEqual(saveCall)
   })
 
-  it("a retry deletes once, for the committed attempt only", async () => {
-    const { store, remove: del } = fakeFiles()
-    let n = 0
-    const { runtime } = await make(
-      (text) =>
-        text.includes("document_delete") && n++ === 0
-          ? { error: { code: "40001", message: "retry" } }
-          : undefined,
-      store
+  it("refuses an invalid session with FileAttachFailure, without the database", async () => {
+    const { db, runtime } = await make()
+    const error = await failureOf(
+      runtime.attachFile({ role: "authenticated" } as never, input)
     )
-    await runtime.run(session, remove)
-    expect(del).toHaveBeenCalledTimes(1)
+    expect(error.commitUnknown).toBe(false)
+    expect(db.calls).toEqual([])
   })
 
-  it("does not touch bytes on markDeletion", async () => {
-    const { store, remove: del } = fakeFiles()
-    const { runtime } = await make(
-      (text) =>
-        text.includes("document_mark_deletion")
-          ? { rows: [{ r: docRow() }] }
-          : undefined,
-      store
+  it("wraps a throwing getter in fields into FileAttachFailure", async () => {
+    const { db, runtime } = await make()
+    const fields = {
+      get note(): string {
+        throw new Error("boom")
+      },
+    }
+    const error = await failureOf(
+      runtime.attachFile(session, { ...input, fields })
     )
-    await runtime.run(session, {
-      action: "markDeletion",
-      object: DOC,
-      id: ID,
-      expectedVersion: 1,
-      mark: true,
-    })
-    expect(del).not.toHaveBeenCalled()
-  })
-
-  it("does not delete bytes of an object without storage", async () => {
-    const { store, remove: del } = fakeFiles()
-    const { runtime } = await setup(undefined, { files: store })
-    await runtime.run(session, {
-      action: "delete",
-      object: { kind: "Catalog", name: "RoleAssignment" },
-      id: ID,
-      expectedVersion: 1,
-    })
-    expect(del).not.toHaveBeenCalled()
-  })
-
-  it("does nothing without the files option", async () => {
-    const { runtime } = await make()
-    await expect(runtime.run(session, remove)).resolves.toBeDefined()
-  })
-
-  it("logs a failed deletion and still returns the result", async () => {
-    const { store, remove: del } = fakeFiles()
-    const failure = new Error("s3 down")
-    del.mockImplementation(async () => {
-      throw failure
-    })
-    const { runtime, log } = await make(undefined, store)
-    await expect(runtime.run(session, remove)).resolves.toBeDefined()
-    expect(log).toHaveBeenCalledWith({ kind: "afterCommit", error: failure })
-  })
-
-  it("deletes bytes of a ctx.run delete phase too", async () => {
-    const { store, remove: del } = fakeFiles()
-    const { runtime } = await setup(
-      over(() => undefined),
-      {
-        catalog: runtimeCatalogSchema.parse({
-          ...storageCatalog,
-          objects: [
-            ...storageCatalog.objects,
-            commandObject({ name: "Client", table: "client" }),
-          ],
-        }),
-        files: store,
-        objectModules: {
-          "Catalog.Client": {
-            async onWrite({ ctx }) {
-              await ctx.run(remove)
-            },
-          },
-        },
-      }
-    )
-    await runtime.run(session, {
-      action: "create",
-      object: { kind: "Catalog", name: "Client" },
-      id: OTHER,
-      values: { code: "A", company: COMPANY },
-    })
-    expect(del).toHaveBeenCalledExactlyOnceWith(`o/${DOC_ID}/${ID}`)
+    expect(error.error.code).toBe("command.invalid")
+    expect(db.calls).toEqual([])
   })
 })

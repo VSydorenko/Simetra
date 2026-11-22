@@ -61,7 +61,6 @@ import {
   snapshotFromRows,
 } from "./rights-snapshot"
 import { createChannelGrant, type ChannelGrant } from "./signals/grant"
-import type { FileStore } from "./file-store"
 import {
   prepareAttach,
   scopeOf,
@@ -162,14 +161,6 @@ export interface CommandRuntimeOptions {
   signalMergeThreshold?: number
   /** Receives errors that never leave the runtime; default `console.error`. */
   log?: (entry: LogEntry) => void
-  /**
-   * The byte store of file catalogs (`storage`). With it the runtime deletes
-   * the bytes of a file row after the commit of a `delete` phase, whether the
-   * command is a client one or a `ctx.run` phase; the key comes from the row
-   * the core confirmed deleted. Without it, and for `markDeletion` and
-   * cascades, only the reconciliation removes bytes.
-   */
-  files?: FileStore
 }
 
 /** Options of one {@link CommandRuntime.run} call. */
@@ -313,7 +304,9 @@ export interface CommandRuntime {
    * The uuid of `storage_instance`: the database binding the byte store
    * checks (`FileStore.put` option `instance`). Resolved once in its own
    * read-write transaction under the storage role (the row is written
-   * lazily, so a `READ ONLY` transaction cannot do it) and cached.
+   * lazily, so a `READ ONLY` transaction cannot do it) and cached. Rejects
+   * with `command.nested` when called from inside a hook (no nested
+   * connection), and with `CommandFailure` on a database refusal.
    */
   fileInstance(): Promise<string>
 }
@@ -701,7 +694,6 @@ export async function createCommandRuntime(
     budgetMs,
     lockTimeoutMs,
     signalMergeThreshold,
-    files: options.files,
     readRoles: {
       // Профіль без ролі запиту чи явний запасний шлях — читання користувача
       // під роллю команд.
@@ -754,18 +746,11 @@ export async function createCommandRuntime(
       authorizeChannels(state, session, channels),
     checkUpload: (session, input) => checkUpload(state, session, input),
     attachFile: async (session, input) => {
-      checkedKind(catalog.provider, session)
-      let prepared: ReturnType<typeof prepareAttach>
+      // Усе, що може кинути до бази, — у `try`: викликач бачить лише
+      // `FileAttachFailure`, а відмова входу — це відомий відкат.
       try {
-        prepared = prepareAttach(catalog, input)
-      } catch (error) {
-        // Відмова входу — до бази, байти ще можна видаляти.
-        if (error instanceof CommandFailure) {
-          throw new FileAttachFailure(error.error, false)
-        }
-        throw error
-      }
-      try {
+        checkedKind(catalog.provider, session)
+        const prepared = prepareAttach(catalog, input)
         return await runAttach(
           state,
           session,
@@ -1099,6 +1084,62 @@ function requestedChannels(channels: readonly string[]): string[] {
   return [...new Set(channels)].sort()
 }
 
+type Send = (statement: {
+  text: string
+  params: readonly (string | null)[]
+}) => Promise<{ rows: Record<string, unknown>[]; command: string }>
+
+/**
+ * Коротка транзакція рантайму поза командою: з'єднання, `begin`, оператори
+ * налаштування, тіло й `COMMIT`. Відмова бази — `CommandFailure` за мапінгом
+ * читання, відповідь не тієї форми (кидок тіла) — `command.internal` у
+ * журнал; значення віддається лише з зафіксованої транзакції. Спільне для
+ * `authorizeChannels`, `checkUpload` і `fileInstance`.
+ */
+async function inShortTransaction<T>(
+  state: RuntimeState,
+  begin: string,
+  setup: readonly { text: string; params: readonly (string | null)[] }[],
+  body: (send: Send) => Promise<T>
+): Promise<T> {
+  let client: DatabaseClient
+  try {
+    client = await state.database.connect()
+  } catch (raw) {
+    throw new CommandFailure(readRefusal(raw, state, undefined).error)
+  }
+  const send: Send = async (statement) => {
+    try {
+      return await client.query(statement.text, statement.params)
+    } catch (raw) {
+      throw new Refused(readRefusal(raw, state, undefined))
+    }
+  }
+  let value: T
+  let tag: string
+  try {
+    await send({ text: begin, params: [] })
+    for (const statement of setup) await send(statement)
+    value = await body(send)
+    ;({ command: tag } = await send(COMMIT))
+  } catch (error) {
+    if (error instanceof Refused) {
+      await endFailed(client, error.refusal.destroy)
+      throw new CommandFailure(error.refusal.error)
+    }
+    state.log({ kind: "database", error })
+    await endFailed(client, false)
+    throw new CommandFailure(INTERNAL)
+  }
+  client.release()
+  // Значення — лише з зафіксованої транзакції: інакше воно не доведене.
+  if (tag !== "COMMIT") {
+    state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
+    throw new CommandFailure(INTERNAL)
+  }
+  return value
+}
+
 /**
  * Дозвіл каналів сигналів (спека П4-B §8.3; Р5, Р12 плану B2): єдиний
  * виробник `ChannelGrant`. Користувача дає `current_user_id()` під claims
@@ -1119,71 +1160,41 @@ async function authorizeChannels(
   if (kind === "anonymous") return createChannelGrant(null, [])
   const claims = claimsOf(session)
   const role = readRoleFor(state, session)
-  let client: DatabaseClient
-  try {
-    client = await state.database.connect()
-  } catch (raw) {
-    throw new CommandFailure(readRefusal(raw, state, undefined).error)
-  }
-  const send = async (statement: {
-    text: string
-    params: readonly (string | null)[]
-  }) => {
-    try {
-      return await client.query(statement.text, statement.params)
-    } catch (raw) {
-      throw new Refused(readRefusal(raw, state, undefined))
-    }
-  }
-  let user: string | null
-  let allowed: string[] = []
-  let tag: string
-  try {
-    await send({ text: BEGIN_READ, params: [] })
-    await send(
+  const { user, allowed } = await inShortTransaction(
+    state,
+    BEGIN_READ,
+    [
       readSetupStatement(
         claims,
         state.readTimeout,
         state.readBudgetMs + 1000,
         role
-      )
-    )
-    const users = (await send(CURRENT_USER)).rows
-    const id = users[0]?.user_id
-    if (users.length !== 1 || (typeof id !== "string" && id !== null)) {
-      throw new Error("current_user_id answered no user row")
-    }
-    user = id
-    // Без дійсного користувача оракул каналу не відкриє жодного: запит зайвий.
-    if (user !== null && requested.length > 0) {
-      const { rows } = await send({
-        text: CHANNELS_ALLOWED,
-        params: [textArray(requested)],
-      })
-      const asked = new Set(requested)
-      const answered = new Set(rows.map((row) => row.channel))
-      // Відповідь поза запитом — аномалія: грант несе лише запитане.
-      if ([...answered].some((c) => typeof c !== "string" || !asked.has(c))) {
-        throw new Error("signal_topic_allowed answered a channel not asked")
+      ),
+    ],
+    async (send) => {
+      const users = (await send(CURRENT_USER)).rows
+      const id = users[0]?.user_id
+      if (users.length !== 1 || (typeof id !== "string" && id !== null)) {
+        throw new Error("current_user_id answered no user row")
       }
-      allowed = requested.filter((channel) => answered.has(channel))
+      let allowed: string[] = []
+      // Без дійсного користувача оракул каналу не відкриє жодного: запит зайвий.
+      if (id !== null && requested.length > 0) {
+        const { rows } = await send({
+          text: CHANNELS_ALLOWED,
+          params: [textArray(requested)],
+        })
+        const asked = new Set(requested)
+        const answered = new Set(rows.map((row) => row.channel))
+        // Відповідь поза запитом — аномалія: грант несе лише запитане.
+        if ([...answered].some((c) => typeof c !== "string" || !asked.has(c))) {
+          throw new Error("signal_topic_allowed answered a channel not asked")
+        }
+        allowed = requested.filter((channel) => answered.has(channel))
+      }
+      return { user: id, allowed }
     }
-    ;({ command: tag } = await send(COMMIT))
-  } catch (error) {
-    if (error instanceof Refused) {
-      await endFailed(client, error.refusal.destroy)
-      throw new CommandFailure(error.refusal.error)
-    }
-    state.log({ kind: "database", error })
-    await endFailed(client, false)
-    throw new CommandFailure(INTERNAL)
-  }
-  client.release()
-  // Дозвіл — лише з зафіксованої транзакції: інакше грант не доведений.
-  if (tag !== "COMMIT") {
-    state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
-    throw new CommandFailure(INTERNAL)
-  }
+  )
   return createChannelGrant(user, allowed)
 }
 
@@ -1213,59 +1224,29 @@ async function checkUpload(
   if (scope === undefined) return null
   const claims = claimsOf(session)
   const role = readRoleFor(state, session)
-  let client: DatabaseClient
-  try {
-    client = await state.database.connect()
-  } catch (raw) {
-    throw new CommandFailure(readRefusal(raw, state, undefined).error)
-  }
-  const send = async (statement: {
-    text: string
-    params: readonly (string | null)[]
-  }) => {
-    try {
-      return await client.query(statement.text, statement.params)
-    } catch (raw) {
-      throw new Refused(readRefusal(raw, state, undefined))
-    }
-  }
-  let allowed: boolean
-  let tag: string
-  try {
-    await send({ text: BEGIN_READ_ONLY, params: [] })
-    await send(
+  const allowed = await inShortTransaction(
+    state,
+    BEGIN_READ_ONLY,
+    [
       readSetupStatement(
         claims,
         state.readTimeout,
         state.readBudgetMs + 1000,
         role
-      )
-    )
-    const { rows } = await send({
-      text: UPLOAD_HEADROOM,
-      params: [object.id, scope],
-    })
-    const ok = rows[0]?.ok
-    if (rows.length !== 1 || (ok !== "t" && ok !== "f")) {
-      throw new Error("storage_headroom answered no boolean")
+      ),
+    ],
+    async (send) => {
+      const { rows } = await send({
+        text: UPLOAD_HEADROOM,
+        params: [object.id, scope],
+      })
+      const ok = rows[0]?.ok
+      if (rows.length !== 1 || (ok !== "t" && ok !== "f")) {
+        throw new Error("storage_headroom answered no boolean")
+      }
+      return ok === "t"
     }
-    allowed = ok === "t"
-    ;({ command: tag } = await send(COMMIT))
-  } catch (error) {
-    if (error instanceof Refused) {
-      await endFailed(client, error.refusal.destroy)
-      throw new CommandFailure(error.refusal.error)
-    }
-    state.log({ kind: "database", error })
-    await endFailed(client, false)
-    throw new CommandFailure(INTERNAL)
-  }
-  client.release()
-  // Перевірка — лише з зафіксованої транзакції, як і дозвіл каналів.
-  if (tag !== "COMMIT") {
-    state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
-    throw new CommandFailure(INTERNAL)
-  }
+  )
   const { storage } = object
   return allowed && storage !== undefined
     ? { maxBytes: storage.maxBytes, mediaTypes: [...storage.mediaTypes] }
@@ -1273,6 +1254,12 @@ async function checkUpload(
 }
 
 const BEGIN_WRITE = "BEGIN ISOLATION LEVEL READ COMMITTED"
+// Межі часу — як у інших транзакцій рантайму: `INSERT` рядка прив'язки може
+// чекати замка, а закешована обіцянка змусила б чекати всіх викликачів.
+const INSTANCE_LIMITS = (state: RuntimeState) => ({
+  text: "SELECT set_config('statement_timeout', $1, true), set_config('lock_timeout', $2, true)",
+  params: [String(state.readTimeout), String(state.lockTimeoutMs)],
+})
 
 /**
  * Прив'язка бази до бакета: `storage_instance_id()` пише рядок при першому
@@ -1281,46 +1268,17 @@ const BEGIN_WRITE = "BEGIN ISOLATION LEVEL READ COMMITTED"
  */
 async function fileInstance(state: RuntimeState): Promise<string> {
   rejectNested()
-  let client: DatabaseClient
-  try {
-    client = await state.database.connect()
-  } catch (raw) {
-    throw new CommandFailure(readRefusal(raw, state, undefined).error)
-  }
-  const send = async (statement: {
-    text: string
-    params: readonly (string | null)[]
-  }) => {
-    try {
-      return await client.query(statement.text, statement.params)
-    } catch (raw) {
-      throw new Refused(readRefusal(raw, state, undefined))
+  return inShortTransaction(
+    state,
+    BEGIN_WRITE,
+    [INSTANCE_LIMITS(state), FILES_ROLE],
+    async (send) => {
+      const { rows } = await send({ text: INSTANCE_ID, params: [] })
+      const id = rows[0]?.id
+      if (rows.length !== 1 || !uuidSchema.safeParse(id).success) {
+        throw new Error("storage_instance_id answered no uuid")
+      }
+      return id as string
     }
-  }
-  let id: unknown
-  let tag: string
-  try {
-    await send({ text: BEGIN_WRITE, params: [] })
-    await send(FILES_ROLE)
-    const { rows } = await send({ text: INSTANCE_ID, params: [] })
-    id = rows[0]?.id
-    if (rows.length !== 1 || !uuidSchema.safeParse(id).success) {
-      throw new Error("storage_instance_id answered no uuid")
-    }
-    ;({ command: tag } = await send(COMMIT))
-  } catch (error) {
-    if (error instanceof Refused) {
-      await endFailed(client, error.refusal.destroy)
-      throw new CommandFailure(error.refusal.error)
-    }
-    state.log({ kind: "database", error })
-    await endFailed(client, false)
-    throw new CommandFailure(INTERNAL)
-  }
-  client.release()
-  if (tag !== "COMMIT") {
-    state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
-    throw new CommandFailure(INTERNAL)
-  }
-  return id as string
+  )
 }

@@ -124,12 +124,18 @@ export function prepareAttach(
     object.scopeColumn === undefined
       ? undefined
       : object.attributes.find((a) => a.column === object.scopeColumn)
-  const values: Record<string, unknown> = {
-    ...input.fields,
-    [nameAttribute.name]: input.name,
-    ...(scopeAttribute === undefined || scope === null
-      ? {}
-      : { [scopeAttribute.name]: scope }),
+  let values: Record<string, unknown>
+  try {
+    values = {
+      ...input.fields,
+      [nameAttribute.name]: input.name,
+      ...(scopeAttribute === undefined || scope === null
+        ? {}
+        : { [scopeAttribute.name]: scope }),
+    }
+  } catch {
+    // Геттер, що кидає, чи відкликаний `Proxy` у `fields`.
+    return refuse("fields")
   }
   return {
     operation: {
