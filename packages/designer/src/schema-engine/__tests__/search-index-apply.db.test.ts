@@ -18,8 +18,8 @@ import {
   useBuildPlanRoles,
 } from "./build-plan.support"
 import { asSuperuser, query } from "../../__tests__/support/db"
-import { PROVIDER_API_ROLES } from "simetra/model"
-import { testProvider, uuid } from "../../../../simetra/test/support"
+import { PROVIDER_API_ROLES, SEARCH_PREFIX_CHARS } from "simetra/model"
+import { attribute, testProvider, uuid } from "../../../../simetra/test/support"
 
 /**
  * Пошуковий індекс полів `search` (ADR-0097, спека П2 §5): збережена
@@ -162,6 +162,18 @@ describe.concurrent("search index: engine spike", () => {
   })
 })
 
+/** Вираз нормалізованої колонки найменування так, як його показує база. */
+const DESCRIPTION_SEARCH = `"left"(lower(((description)::text COLLATE "default")), ${SEARCH_PREFIX_CHARS})`
+
+/**
+ * Значення найгіршого кодування: `chars` різних 4-байтових символів (поза
+ * BMP), що майже не стискаються, — повний `lower` такого значення не влазить
+ * у рядок btree (54000). \`seed\` дає різні значення.
+ */
+const wideValue = (chars: number, seed: string) =>
+  `(select string_agg(chr(65536 + (g * 7919 + ${seed} * 104729) % 900000), '')
+      from generate_series(1, ${chars}) g)`
+
 /** Колонка й індекс таблиці так, як їх бачить сама база. */
 async function searchColumnOf(url: string, table: string, column: string) {
   const [shape] = await query(
@@ -184,7 +196,7 @@ describe.concurrent("search index: derived from the search fields", () => {
       await establish(url, model)
       expect(await searchColumnOf(url, "party", "description_search")).toEqual({
         is_generated: "ALWAYS",
-        generation_expression: `lower(((description)::text COLLATE "default"))`,
+        generation_expression: DESCRIPTION_SEARCH,
         indexdef: expect.stringMatching(
           /USING btree \(description_search text_pattern_ops\)$/
         ),
@@ -264,7 +276,7 @@ describe.concurrent("search index: derived from the search fields", () => {
 
       expect(await searchColumnOf(url, "party", "description_search")).toEqual({
         is_generated: "ALWAYS",
-        generation_expression: `lower(((description)::text COLLATE "default"))`,
+        generation_expression: DESCRIPTION_SEARCH,
         indexdef: expect.stringMatching(
           /USING btree \(description_search text_pattern_ops\)$/
         ),
@@ -329,6 +341,128 @@ describe.concurrent("search index: derived from the search fields", () => {
       expect(await searchColumnOf(url, "party", "description_search")).toBe(
         undefined
       )
+      expect((await plan(url, after)).status).toBe("unchanged")
+    })
+  })
+
+  it("a value longer than the prefix bound is adopted into the index and saved", async () => {
+    const text = { type: "Text" }
+    const before = await compiled({ [NOTES]: notes(text) })
+    const after = await compiled({
+      [NOTES]: {
+        ...(notes(text) as unknown as Json),
+        search: { fields: ["note"] },
+      },
+    })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      // Прийняті дані: довгі значення є до появи індексу
+      await query(
+        asSuperuser(url),
+        `insert into app.notes (id, note)
+           select gen_random_uuid(), ${wideValue(3000, "k")}
+             from generate_series(1, 2) k`
+      )
+      const artifact = planned(await plan(url, after))
+      await applyArtifact(url, artifact, after)
+
+      // Збереження довгого значення в таблицю з індексом
+      await query(
+        asSuperuser(url),
+        `insert into app.notes (id, note) values (gen_random_uuid(), ${wideValue(3000, "7")})`
+      )
+      expect(
+        await query(
+          url,
+          `select char_length(note_search) as chars,
+                  note_search = left(lower(note), ${SEARCH_PREFIX_CHARS}) as prefix
+             from app.notes`
+        )
+      ).toEqual(
+        Array.from({ length: 3 }, () => ({
+          chars: SEARCH_PREFIX_CHARS,
+          prefix: true,
+        }))
+      )
+      expect((await plan(url, after)).status).toBe("unchanged")
+    })
+  })
+
+  it("removing a searched attribute drops index, derived column and source; only the source drop is destructive", async () => {
+    const note = attribute("note", {
+      id: uuid(9220),
+      type: "String",
+      length: 50,
+    })
+    const before = await compiled({
+      [PARTY]: {
+        ...(party([note]) as unknown as Json),
+        search: { fields: ["description", "note"] },
+      },
+    })
+    const after = await compiled({
+      [PARTY]: {
+        ...(party() as unknown as Json),
+        search: { fields: ["description"] },
+      },
+    })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await query(
+        asSuperuser(url),
+        `insert into app.party (id, description, code, note)
+           values ('00000000-0000-4000-8000-000000000001', 'Ковбаса', '1', 'Нотатка')`
+      )
+      const artifact = planned(await plan(url, after))
+      const sql = artifact.steps.map((s) => s.sql)
+      const at = (pattern: RegExp) => sql.findIndex((s) => pattern.test(s))
+      const index = at(/DROP INDEX .*party_note_search_idx/)
+      const derived = at(/DROP COLUMN "?note_search"?$/)
+      const source = at(/DROP COLUMN "?note"?$/)
+      expect(index).toBeGreaterThanOrEqual(0)
+      expect(derived).toBeGreaterThan(index)
+      expect(source).toBeGreaterThan(derived)
+      // Значення похідної колонки обчислює база; втрачене — лише джерело
+      expect(artifact.steps[derived]!.class).toBe("catalogOnly")
+      expect(artifact.steps[source]!.class).toBe("destructive")
+      expect(artifact.requiredPermissions).toEqual([artifact.steps[source]!.id])
+
+      await applyArtifact(url, artifact, after)
+
+      expect(await searchColumnOf(url, "party", "note_search")).toBe(undefined)
+      expect((await plan(url, after)).status).toBe("unchanged")
+    })
+  })
+
+  it("a field entering search while its column changes type", async () => {
+    const before = await compiled({
+      [PARTY]: { ...(party() as unknown as Json), search: { fields: [] } },
+    })
+    const after = await compiled({
+      [PARTY]: { ...(party() as unknown as Json), descriptionLength: 200 },
+    })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await query(
+        asSuperuser(url),
+        `insert into app.party (id, description, code)
+           values ('00000000-0000-4000-8000-000000000001', 'Ковбаса Ab', '1')`
+      )
+      const artifact = planned(await plan(url, after))
+      expect(artifact.requiredPermissions).toEqual([])
+
+      await applyArtifact(url, artifact, after)
+
+      expect(await searchColumnOf(url, "party", "description_search")).toEqual({
+        is_generated: "ALWAYS",
+        generation_expression: DESCRIPTION_SEARCH,
+        indexdef: expect.stringMatching(
+          /USING btree \(description_search text_pattern_ops\)$/
+        ),
+      })
+      expect(
+        await query(url, "select description_search from app.party")
+      ).toEqual([{ description_search: "ковбаса ab" }])
       expect((await plan(url, after)).status).toBe("unchanged")
     })
   })

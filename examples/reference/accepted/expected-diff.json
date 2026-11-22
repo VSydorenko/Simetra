@@ -298,7 +298,7 @@
     "class": "column",
     "table": "service_accrual",
     "name": "number_search",
-    "detail": "text NULL GENERATED ALWAYS AS lower(((number)::text COLLATE \"default\")) STORED"
+    "detail": "text NULL GENERATED ALWAYS AS \"left\"(lower(((number)::text COLLATE \"default\")), 660) STORED"
   },
   {
     "op": "add",

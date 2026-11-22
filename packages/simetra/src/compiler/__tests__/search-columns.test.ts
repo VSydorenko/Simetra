@@ -87,7 +87,9 @@ describe("search fields: normalized column and prefix index", () => {
         name: "description_search",
         type: "text",
         notNull: false,
-        generated: { expression: `lower(description COLLATE "default")` },
+        generated: {
+          expression: `left(lower(description COLLATE "default"), 660)`,
+        },
         origin: { searchOf: "description" },
       },
     ])
@@ -204,7 +206,7 @@ describe("search fields: normalized column and prefix index", () => {
     expect(searchColumns(table)).toEqual([
       expect.objectContaining({
         name: "title_search",
-        generated: { expression: `lower(title COLLATE "default")` },
+        generated: { expression: `left(lower(title COLLATE "default"), 660)` },
       }),
     ])
     expect(prefixIndexes(table)).toEqual(["title_search text_pattern_ops"])

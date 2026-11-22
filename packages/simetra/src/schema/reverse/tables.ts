@@ -2,7 +2,7 @@ import { diagnostic, type Diagnostic } from "simetra/compiler"
 import {
   logicalTypeOf,
   searchColumnName,
-  searchNormalization,
+  searchPrefixNormalization,
   type CatalogColumn,
   type CatalogEnumType,
   type CatalogTable,
@@ -289,7 +289,7 @@ const bareExpression = (expression: string): string =>
  * Нормалізовані колонки пошуку таблиці (спека П2 §5, «Поля пошуку»): фізичне
  * ім'я похідної → фізичне ім'я колонки-джерела. Каталог бази походження
  * колонки не несе, тож похідну впізнає пара ознак — ім'я `<колонка>_search` і
- * вираз `lower(<колонка> COLLATE "default")` у нормалізованій формі Postgres;
+ * вираз `searchPrefixNormalization(<колонка>)` у нормалізованій формі Postgres;
  * одна лише назва колонку автора не забере.
  */
 export function derivedSearchColumns(
@@ -302,7 +302,7 @@ export function derivedSearchColumns(
     if (
       derived?.generated !== undefined &&
       bareExpression(derived.generated.expression) ===
-        bareExpression(searchNormalization(source.name))
+        bareExpression(searchPrefixNormalization(source.name))
     )
       found.set(derived.name, source.name)
   }

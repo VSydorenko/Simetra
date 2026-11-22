@@ -11,6 +11,8 @@ export {
   makeObjectName,
   searchColumnName,
   searchNormalization,
+  searchPrefixNormalization,
+  SEARCH_PREFIX_CHARS,
   chooseConstraintName,
   clipBytes,
 } from "./pg-names"

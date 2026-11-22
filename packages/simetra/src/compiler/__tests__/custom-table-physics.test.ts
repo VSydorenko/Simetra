@@ -337,6 +337,8 @@ describe("CustomTable physics round-trip", () => {
     // той самий.
     // Далі поля пошуку дали нормалізовану колонку й індекс `text_pattern_ops`
     // рядковому полю пошуку довідника й документа (типово — найменуванню).
+    // Далі нормалізована колонка стала обмеженим префіксом
+    // `left(lower(…), N)`: повне значення не влазило в рядок btree.
     const derived = {
       tables: physical.tables.filter(
         (t) =>
@@ -360,7 +362,7 @@ describe("CustomTable physics round-trip", () => {
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "f11118cd3270394548d3318aa8600d7d59eef7b66df58877b628e53413759aeb"
+      "9fb976a648f58c4f88a1bbac8fa07cd0e422477b259c94459e6ae97b22de3999"
     )
   })
 })

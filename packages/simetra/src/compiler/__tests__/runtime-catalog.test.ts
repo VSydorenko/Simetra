@@ -847,14 +847,14 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
   // (обчислений на коміті до неї). Зміна фікстури чи платформних таблиць
   // знімка (outbox сигналів) чи нові згенеровані одиниці (знімок прав клієнта, оракул сигналу,
   // функції відправки, виклик сигналу в ядрі, тригери сигналу прав, гілки каналів прав
-  // в оракулі, опції оболонки ядра), нормалізовані колонки полів пошуку чи правило ідентичності одиниць (`sql/identity.ts`) змінюють і цей літерал.
+  // в оракулі, опції оболонки ядра), нормалізовані колонки полів пошуку (і межа їхнього префікса) чи правило ідентичності одиниць (`sql/identity.ts`) змінюють і цей літерал.
   it("stays outside the canonical snapshot and the hash", async () => {
     const { model: m } = await checksOf(policyDomain(runtimeValuesLayer()))
     expect(m.checkColumns.length).toBeGreaterThan(0)
     expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
-      "8770536eec812931afa4b37a01f36c42f8668d6858958b393dd4f1e8642261e8"
+      "562797eca2a462be51ccfd951b1383a0e19832f050ede6b49b2d877e2de5b885"
     )
   })
 })

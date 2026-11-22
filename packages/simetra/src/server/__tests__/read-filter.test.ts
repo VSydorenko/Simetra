@@ -123,13 +123,17 @@ describe("renderFilter", () => {
         `lower($1::text COLLATE "default"))`,
       ["%_\\"],
     ],
-    // Той самий вираз, що генерує нормалізовану колонку: індекс читається,
-    // а множина та сама, що й без поля пошуку.
+    // Префікс запиту під тим самим обмеженням, що генерує нормалізовану
+    // колонку, — діапазон індексу; точна умова за повним значенням — та сама,
+    // що без поля пошуку, тож і множина та сама.
     [
       "startsWith on a search field",
       cond("label", "startsWith", "Ab"),
-      `starts_with(t."label_col_search", lower($1::text COLLATE "default"))`,
-      ["Ab"],
+      `(starts_with(t."label_col_search", ` +
+        `left(lower($1::text COLLATE "default"), 660)) AND ` +
+        `starts_with(lower(t."label_col" COLLATE "default"), ` +
+        `lower($2::text COLLATE "default")))`,
+      ["Ab", "Ab"],
     ],
     [
       "contains on a search field",

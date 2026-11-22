@@ -244,7 +244,7 @@ describe("classifyRemovals", () => {
     }
     const derived = col("name_search", {
       type: "text",
-      generated: { expression: `lower((name COLLATE "default"))` },
+      generated: { expression: `"left"(lower((name COLLATE "default")), 660)` },
     })
     const clone = model([
       table("items", {
@@ -271,7 +271,7 @@ describe("classifyRemovals", () => {
           name: "name_search",
           type: "text",
           notNull: false,
-          generated: { expression: `lower(name COLLATE "default")` },
+          generated: { expression: `left(lower(name COLLATE "default"), 660)` },
           origin: searchOf === undefined ? {} : { searchOf },
         },
       ],

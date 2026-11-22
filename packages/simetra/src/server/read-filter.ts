@@ -3,6 +3,7 @@ import {
   encodePair,
   isWithinType,
   searchNormalization,
+  searchPrefixNormalization,
   type CommandError,
   type Filter,
   type FilterCondition,
@@ -201,21 +202,34 @@ function condition(
   }
   if (op === "startsWith") {
     const text = scalar(column, notNull(value, valuePath), valuePath)
-    // Один вираз для обох гілок (спека П4-B §4.1): нормалізована колонка поля
-    // пошуку згенерована тим самим `searchNormalization`, тож множина та сама,
-    // а індекс `text_pattern_ops` читається лише за нею. `ILIKE` тут не
-    // годиться — він не leakproof і під RLS індексом не стає.
-    const subject =
-      column.attribute?.search === undefined
-        ? searchNormalization(name)
-        : qualified(column.attribute.search)
-    // Значення — зв'язаний параметр усередині того самого виразу: текст
+    // Значення — зв'язаний параметр усередині виразу правила T0: текст
     // правила ділиться навколо місця параметра.
-    const [before, after] = searchNormalization(PARAMETER).split(PARAMETER)
+    const around = (
+      rule: (expression: string) => string,
+      subject: string
+    ): Part[] => {
+      const [before, after] = rule(PARAMETER).split(PARAMETER)
+      return [
+        `starts_with(${subject}, ${before}`,
+        { value: text, cast: "text" },
+        `${after})`,
+      ]
+    }
+    // Точна умова за повним значенням — один вираз для поля пошуку й без
+    // нього (спека П4-B §4.1). `ILIKE` тут не годиться — він не leakproof і
+    // під RLS індексом не стає.
+    const exact = around(searchNormalization, searchNormalization(name))
+    if (column.attribute?.search === undefined) return exact
+    // Нормалізована колонка несе лише обмежений префікс значення: умова за
+    // нею — діапазон індексу `text_pattern_ops` за префіксом запиту, тим
+    // самим обмеженням; точна умова за повним значенням відкидає рядки, що
+    // збіглися лише в межах префікса (запит довший за межу).
     return [
-      `starts_with(${subject}, ${before}`,
-      { value: text, cast: "text" },
-      `${after})`,
+      "(",
+      ...around(searchPrefixNormalization, qualified(column.attribute.search)),
+      " AND ",
+      ...exact,
+      ")",
     ]
   }
   notNull(

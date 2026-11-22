@@ -19,7 +19,7 @@ import {
   pgTypeOf,
   quoteIdent,
   searchColumnName,
-  searchNormalization,
+  searchPrefixNormalization,
   singletonColumn,
   standardLogicalName,
   truncatedPeriodExpression,
@@ -1245,10 +1245,10 @@ class SnapshotBuilder {
   /**
    * Нормалізовані колонки полів пошуку (спека П2 §5, «Поля пошуку»): для
    * кожного поля `String`/`Text` — збережена згенерована
-   * `lower(<колонка> COLLATE "default")` (колляція бази явно: колонка
-   * прийнятої таблиці може мати власну, і тоді рядок і запит
-   * нормалізувались би по-різному) і індекс `(<нормалізована>
-   * text_pattern_ops)`. Зайняте ім'я колонки не дає — збіг звітує стадія 4
+   * `left(lower(<колонка> COLLATE "default"), N)` (колляція бази явно:
+   * колонка прийнятої таблиці може мати власну, і тоді рядок і запит
+   * нормалізувались би по-різному; префікс обмежений, бо повне значення не
+   * влізло б у рядок btree) і індекс `(<нормалізована> text_pattern_ops)`. Зайняте ім'я колонки не дає — збіг звітує стадія 4
    * (`physical.column-duplicate`), бо ім'я йде в джерела таблиці.
    */
   private addSearchColumns({
@@ -1272,7 +1272,7 @@ class SnapshotBuilder {
         type: "text",
         notNull: false,
         generated: {
-          expression: searchNormalization(quoteIdent(column.name)),
+          expression: searchPrefixNormalization(quoteIdent(column.name)),
         },
         origin: { searchOf: column.name },
       })

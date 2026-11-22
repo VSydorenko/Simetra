@@ -2946,7 +2946,7 @@ describe("reverseGenerate: the normalized search column", () => {
   const FILE = "custom-tables/Notes/Notes.meta.json"
 
   it("becomes a search field, and the folder round-trips", async () => {
-    const live = notes(`lower((note COLLATE "default"))`)
+    const live = notes(`"left"(lower((note COLLATE "default")), 660)`)
     const first = await reverseGenerate(live, options())
     expect(first.diagnostics).toEqual([])
     const data = json(first, FILE)
@@ -2983,7 +2983,7 @@ describe("reverseGenerate: the normalized search column", () => {
   })
 
   it("keeps the declared mode and the declared non-string fields", async () => {
-    const live = notes(`lower((note COLLATE "default"))`)
+    const live = notes(`"left"(lower((note COLLATE "default")), 660)`)
     const first = await reverseGenerate(live, options())
     const existing = new Map(first.files)
     existing.set(
@@ -3004,18 +3004,23 @@ describe("reverseGenerate: the normalized search column", () => {
     })
   })
 
-  it("a column with the name but another expression stays the author's", async () => {
-    const result = await reverseGenerate(
-      notes(`upper((note COLLATE "default"))`),
-      options()
-    )
-    expect(result.diagnostics).toEqual([])
-    const data = json(result, FILE)
-    expect(data.search).toBeUndefined()
-    expect((data.columns as Json[]).map((c) => c.physicalName)).toEqual([
-      "id",
-      "note",
-      "note_search",
-    ])
-  })
+  it.each([
+    ["another function", `"left"(upper((note COLLATE "default")), 660)`],
+    // Без межі префікса це не похідна платформи: її рядок індексу не
+    // обмежений
+    ["no prefix bound", `lower((note COLLATE "default"))`],
+  ])(
+    "a column with the name but %s stays the author's",
+    async (_, expression) => {
+      const result = await reverseGenerate(notes(expression), options())
+      expect(result.diagnostics).toEqual([])
+      const data = json(result, FILE)
+      expect(data.search).toBeUndefined()
+      expect((data.columns as Json[]).map((c) => c.physicalName)).toEqual([
+        "id",
+        "note",
+        "note_search",
+      ])
+    }
+  )
 })

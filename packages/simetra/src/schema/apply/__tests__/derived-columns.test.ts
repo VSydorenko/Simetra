@@ -54,7 +54,7 @@ function snapshot(derived = true): PhysicalTable {
         name: "c_search",
         type: "text",
         notNull: false,
-        generated: { expression: `lower(c COLLATE "default")` },
+        generated: { expression: `left(lower(c COLLATE "default"), 660)` },
         origin: derived ? { searchOf: "c" } : {},
       },
     ],
@@ -98,7 +98,7 @@ const live = (
                 type: "text",
                 notNull: false,
                 generated: {
-                  expression: `lower(((${o.source ?? "c"})::text COLLATE "default"))`,
+                  expression: `"left"(lower(((${o.source ?? "c"})::text COLLATE "default")), 660)`,
                 },
               },
             ]
@@ -219,7 +219,7 @@ describe("derived columns: the drop precedes a type change of the source", () =>
       ["tableRewrite", alter.sql],
       [
         "tableRewrite",
-        `ALTER TABLE app.t ADD COLUMN c_search text GENERATED ALWAYS AS (lower(c COLLATE "default")) STORED`,
+        `ALTER TABLE app.t ADD COLUMN c_search text GENERATED ALWAYS AS (left(lower(c COLLATE "default"), 660)) STORED`,
       ],
       [
         "catalogOnly",
@@ -227,6 +227,35 @@ describe("derived columns: the drop precedes a type change of the source", () =>
       ],
     ])
     expect(steps[0]!.lockedTables).toEqual([{ schema: "app", name: "t" }])
+    // CREATE INDEX бере SHARE, а не ACCESS EXCLUSIVE
+    expect(steps.map((s) => s.lockClass)).toEqual([
+      "accessExclusive",
+      "accessExclusive",
+      "accessExclusive",
+      "share",
+    ])
+  })
+
+  it("the rebuild renders the desired column and indexes by the shared renderers", () => {
+    const desired = snapshot()
+    desired.columns[2] = { ...desired.columns[2]!, collation: { name: "C" } }
+    desired.indexes = [
+      {
+        ...desired.indexes[0]!,
+        unique: true,
+        keys: [
+          { column: "c_search", opclass: { name: "text_pattern_ops" } },
+          { column: "id" },
+        ],
+        include: ["c"],
+        where: "c_search IS NOT NULL",
+      },
+    ]
+    const steps = planned([alter], { desired: [desired] })
+    expect(steps.slice(2).map((s) => s.sql)).toEqual([
+      `ALTER TABLE app.t ADD COLUMN c_search text COLLATE "C" GENERATED ALWAYS AS (left(lower(c COLLATE "default"), 660)) STORED`,
+      "CREATE UNIQUE INDEX t_c_search_idx ON app.t USING btree (c_search text_pattern_ops, id) INCLUDE (c) WHERE c_search IS NOT NULL",
+    ])
   })
 
   it("a field leaving search and changing type: the engine's drops move before the change", () => {

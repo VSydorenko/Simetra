@@ -6,6 +6,7 @@ import {
   type PhysicalTable,
 } from "simetra/model"
 import type { EngineAction, EngineObjectRef } from "../engine"
+import { renderColumn, renderIndexes } from "../render/statements"
 
 /**
  * Дія, що знімає лише похідну колонку платформи (нормалізовану колонку поля
@@ -109,7 +110,11 @@ const sameRef = (ref: EngineObjectRef, d: LiveDerived) =>
 function tableAction(
   table: { schema: string; name: string },
   sql: string,
-  o: { rewriteRisk?: boolean; destroyed?: EngineObjectRef[] } = {}
+  o: {
+    rewriteRisk?: boolean
+    destroyed?: EngineObjectRef[]
+    lockClass?: string
+  } = {}
 ): EngineAction {
   return {
     sql,
@@ -123,45 +128,38 @@ function tableAction(
     transactionality: "transactional",
     newSegmentBefore: false,
     lockedTables: [{ schema: table.schema, name: table.name }],
-    lockClass: "accessExclusive",
+    lockClass: o.lockClass ?? "accessExclusive",
     dataLoss: false,
     rewriteRisk: o.rewriteRisk === true,
   }
 }
 
-/** Повторне створення похідної колонки й її індексів з бажаного знімка. */
+/** Оператор рендерера без завершальної `;`: SQL дій двигуна її не несе. */
+const statementOf = (sql: string) => sql.replace(/;$/, "")
+
+/**
+ * Повторне створення похідної колонки й її індексів з бажаного знімка — тими
+ * самими рендерерами, що й бажаний стан, тож кожна властивість колонки й
+ * індексу йде за одним правилом. Зняття колонки знімає кожен індекс, що її
+ * читає, тож створюються знову всі такі індекси.
+ */
 function rebuild(table: PhysicalTable, column: string): EngineAction[] {
-  const q = quoteIdent
-  const relation = `${q(table.schema)}.${q(table.name)}`
+  const relation = `${quoteIdent(table.schema)}.${quoteIdent(table.name)}`
   const derived = table.columns.find((c) => c.name === column)!
-  const actions = [
+  const indexes = table.indexes.filter((i) =>
+    i.keys.some((k) => "column" in k && k.column === column)
+  )
+  return [
     tableAction(
       table,
-      `ALTER TABLE ${relation} ADD COLUMN ${q(column)} ${derived.type} GENERATED ALWAYS AS (${derived.generated!.expression}) STORED`,
+      `ALTER TABLE ${relation} ADD COLUMN ${renderColumn(table, derived)}`,
       { rewriteRisk: true }
     ),
+    // CREATE INDEX бере SHARE: читання таблиці він не блокує
+    ...renderIndexes({ ...table, indexes }).map((index) =>
+      tableAction(table, statementOf(index.sql), { lockClass: "share" })
+    ),
   ]
-  for (const index of table.indexes) {
-    const [key] = index.keys
-    if (
-      index.keys.length !== 1 ||
-      key === undefined ||
-      !("column" in key) ||
-      key.column !== column
-    )
-      continue
-    const opclass =
-      key.opclass === undefined
-        ? ""
-        : ` ${key.opclass.schema === undefined ? "" : `${q(key.opclass.schema)}.`}${q(key.opclass.name)}`
-    actions.push(
-      tableAction(
-        table,
-        `CREATE INDEX ${q(index.name)} ON ${relation} USING ${index.method} (${q(column)}${opclass})`
-      )
-    )
-  }
-  return actions
 }
 
 /**
