@@ -364,6 +364,73 @@ export const PROTECTED_SESSION_SETTINGS = {
   names: ["role", "session_authorization", "session_replication_role"],
 } as const
 
+// Голова читає налаштування сесії лише за точною назвою (ADR-0094 п. 2):
+// префікс `request.jwt.` пропустив би `request.jwt.claim.sub` старої форми
+// PostgREST чи будь-яке ім'я, яке поставив клієнт. Назв `simetra.*` тут
+// немає, доки їх не читає функція ідентичності платформи: контекст команди
+// (`COMMAND_SETTING`) голові не призначений.
+/**
+ * Session settings that the SQL of a head may read with `current_setting`:
+ * exact, case-sensitive names, not prefixes.
+ */
+export const HEAD_READABLE_SETTINGS: readonly string[] = [
+  SESSION_CLAIMS_SETTING,
+]
+
+// Одне джерело для двох споживачів: оболонка кореня голови (T1, спека
+// декларацій функцій §5.8) і закріплені налаштування кроків даних промоції
+// (T2 `DATA_SETTINGS`, спека промоції §7.2). Обидва мусять читати й писати
+// значення однаково незалежно від сесії клієнта, тож і набір, і значення
+// спільні; повноту проти `pg_settings` тримає DB-тест
+// обох профілів поруч із `packages/simetra/test/db/head-settings.support.ts`.
+// Налаштувань-заглушок модулів (`plpgsql.*`) тут немає: у `SET` функції їх
+// приймає лише суперкористувач, поки модуль не завантажено. `search_path` сюди не
+// входить: його кожен споживач ставить своїм правилом.
+/**
+ * Session settings that change how values are parsed, computed or rendered
+ * as text, with the neutral value the platform pins them to wherever a
+ * result must not depend on the client's session.
+ */
+export const PINNED_SESSION_SETTINGS: readonly {
+  name: string
+  value: string
+}[] = [
+  // Приведення `timestamptz` до дати, часу й тексту.
+  { name: "TimeZone", value: "UTC" },
+  // Порядок полів при розборі дати з тексту й форма дати в тексті.
+  { name: "DateStyle", value: "ISO, MDY" },
+  // Текстова форма інтервалу.
+  { name: "IntervalStyle", value: "postgres" },
+  // Текстова форма `real` і `double precision`.
+  { name: "extra_float_digits", value: "1" },
+  // Текстова форма `bytea`.
+  { name: "bytea_output", value: "hex" },
+  // Розбір і текстова форма `money`.
+  { name: "lc_monetary", value: "C" },
+  // Роздільники чисел у `to_char`/`to_number`.
+  { name: "lc_numeric", value: "C" },
+  // Назви місяців і днів у `to_char`.
+  { name: "lc_time", value: "C" },
+  // Які скорочення поясів розпізнає розбір часу.
+  { name: "timezone_abbreviations", value: "Default" },
+  // Зміст зворотної скісної риски в рядкових літералах.
+  { name: "standard_conforming_strings", value: "on" },
+  // Чи `NULL` без лапок у тексті масиву є порожнім значенням.
+  { name: "array_nulls", value: "on" },
+  // `x = NULL` лишається `NULL`, а не стає `x IS NULL`.
+  { name: "transform_null_equals", value: "off" },
+  // Лапки в іменах `quote_ident`, `format('%I')` і тексту `regclass`.
+  { name: "quote_all_identifiers", value: "off" },
+  // Розбір тексту в `xml`.
+  { name: "xmloption", value: "content" },
+  // Кодування двійкових значень у функціях XML.
+  { name: "xmlbinary", value: "base64" },
+  // Конфігурація текстового пошуку без явного аргументу.
+  { name: "default_text_search_config", value: "pg_catalog.simple" },
+  // Межа кількості рядків пошуку за індексом GIN: інакше результат неповний.
+  { name: "gin_fuzzy_search_limit", value: "0" },
+]
+
 /** The command context: the action, the root object's label and the root row's UUID. */
 export interface CommandContext {
   /** A word of the action vocabulary or the UUID of a custom action. */

@@ -27,6 +27,11 @@ import { createApplyDatabase } from ".."
 import { extractWithExecuteFacts } from "../pg-delta/adapter"
 import { withRoles } from "../../../../simetra/src/compiler/__tests__/fixtures/rights"
 import {
+  DOCS_GRANT,
+  POLICY_FUNCTION,
+  READ_POLICY,
+} from "../../../../simetra/src/compiler/__tests__/fixtures/policy-function"
+import {
   superuserClient,
   testProvider,
   testRoleFor,
@@ -414,7 +419,7 @@ export function describeDefinerAdoption(): void {
       )
     })
 
-    it("EXECUTE for PUBLIC: user and command callers, introspect.definer-anonymous-dropped; after the apply the plan is empty and the ACL is the derived one", async () => {
+    it("EXECUTE for PUBLIC: user and command callers, introspect.execute-narrowed (anonymous); after the apply the plan is empty and the ACL is the derived one", async () => {
       // Типовий ACL: `PUBLIC` (і ролі API типовими привілеями провайдера)
       await inAdoptedTarget(rpc(GUARD), async (ctx) => {
         const adopted = await adopt(ctx, ctx.existing)
@@ -426,10 +431,10 @@ export function describeDefinerAdoption(): void {
             : ["user", "command"]
         )
         expect(
-          byCode(adopted, "introspect.definer-anonymous-dropped").map(
-            (d) => d.params
-          )
-        ).toEqual([{ function: "public.rpc", role: API.anonymous }])
+          byCode(adopted, "introspect.execute-narrowed").map((d) => d.params)
+        ).toEqual([
+          { function: "public.rpc", role: API.anonymous, reason: "anonymous" },
+        ])
         const prepared = await compiledFolder(adopted.files)
         expect(prepared.errors).toEqual([])
         // План відкличе `PUBLIC` і роль без сесії: до застосування не порожній
@@ -539,10 +544,16 @@ export function describeDefinerAdoption(): void {
             const [entry] = declarations(adopted, RPC_FILE(adopted))
             expect(entry!.callers).toEqual(["user", "service"])
             expect(
-              byCode(adopted, "introspect.definer-anonymous-dropped").map(
+              byCode(adopted, "introspect.execute-narrowed").map(
                 (d) => d.params
               )
-            ).toEqual([{ function: "public.rpc", role: API.anonymous }])
+            ).toEqual([
+              {
+                function: "public.rpc",
+                role: API.anonymous,
+                reason: "anonymous",
+              },
+            ])
             const prepared = await compiledFolder(adopted.files)
             expect(prepared.errors).toEqual([])
             await apply(ctx.target, prepared.model!)
@@ -572,11 +583,143 @@ export function describeDefinerAdoption(): void {
                 (p) => /\/rpc/.test(p) && p.endsWith(".functions.json")
               )
             ).toEqual([])
-            expect(
-              byCode(adopted, "introspect.definer-anonymous-dropped")
-            ).toEqual([])
+            expect(byCode(adopted, "introspect.execute-narrowed")).toEqual([])
           },
           folder({ appSchema: true })
+        )
+      }
+    )
+  })
+
+  // Функція політики (спека §5.8): `EXECUTE` виводять політики-викликачі, а
+  // прямий грант ролі команд поза призначеннями прийом прибирає з теки й
+  // називає звуженням. Що його справді відкликає план (ACL-різниця двигуна,
+  // а не `executeGrants`, який відкликає лише ролі API), — доводить живий ACL
+  // після застосування. Актор `auth.uid()` — лише профіль `supabase`.
+  describe("a policy function of debt", () => {
+    // Тека без видів скоупу: прийняті таблиці не мусять оголошувати скоуп
+    const onlyProject = () =>
+      new Map([
+        [
+          "project.meta.json",
+          JSON.stringify({
+            name: "TestApp",
+            database: { provider: testProvider() },
+          }),
+        ],
+      ])
+    it.skipIf(testProvider() !== "supabase")(
+      "a direct grant to the command role: introspect.execute-narrowed, and the plan revokes it",
+      async () => {
+        const command = PLATFORM_ROLES.command
+        const sql = [
+          "CREATE TABLE public.docs (id uuid PRIMARY KEY, team_id uuid NOT NULL);",
+          "CREATE TABLE public.members (id uuid PRIMARY KEY, team_id uuid NOT NULL, user_id uuid NOT NULL);",
+          "ALTER TABLE public.docs ENABLE ROW LEVEL SECURITY;",
+          DOCS_GRANT(),
+          POLICY_FUNCTION(),
+          READ_POLICY(),
+          `REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC, "${API.anonymous}", "${API.service}";`,
+          `GRANT EXECUTE ON FUNCTION public.f() TO "${API.user}";`,
+          `GRANT EXECUTE ON FUNCTION public.f() TO "${command}";`,
+        ].join("\n")
+        await inAdoptedTarget(
+          sql,
+          async (ctx) => {
+            const adopted = await adopt(ctx, ctx.existing)
+            expect(errors(adopted.diagnostics)).toEqual([])
+            expect(
+              byCode(adopted, "introspect.execute-narrowed").map(
+                (d) => d.params
+              )
+            ).toEqual([
+              {
+                function: "public.f",
+                role: command,
+                reason: "outside-assignments",
+              },
+            ])
+            const prepared = await compiledFolder(adopted.files)
+            expect(prepared.errors).toEqual([])
+            expect(await executeAcl(ctx.target.url, "public.f()")).toEqual(
+              [API.user, command].sort()
+            )
+            await apply(ctx.target, prepared.model!)
+            expect(await executeAcl(ctx.target.url, "public.f()")).toEqual([
+              API.user,
+            ])
+          },
+          onlyProject()
+        )
+      }
+    )
+
+    // Р1: грант функції політики — генерована одиниця, тож зникле
+    // призначення (видалено останню політику-викликача з роллю) прибирає з
+    // живої бази ACL-різниця двигуна, а не дослівний `REVOKE` теки
+    it.skipIf(testProvider() !== "supabase")(
+      "removing the last caller policy of a role: the plan revokes its EXECUTE",
+      async () => {
+        const service = API.service!
+        const sql = [
+          "CREATE TABLE public.docs (id uuid PRIMARY KEY, team_id uuid NOT NULL);",
+          "CREATE TABLE public.members (id uuid PRIMARY KEY, team_id uuid NOT NULL, user_id uuid NOT NULL);",
+          "ALTER TABLE public.docs ENABLE ROW LEVEL SECURITY;",
+          DOCS_GRANT(),
+          DOCS_GRANT(service),
+          POLICY_FUNCTION(),
+          READ_POLICY(),
+          READ_POLICY(service, { name: "docs_service_read" }),
+          `REVOKE EXECUTE ON FUNCTION public.f() FROM PUBLIC, "${API.anonymous}";`,
+          `GRANT EXECUTE ON FUNCTION public.f() TO "${API.user}", "${service}";`,
+        ].join("\n")
+        await inAdoptedTarget(
+          sql,
+          async (ctx) => {
+            const adopted = await adopt(ctx, ctx.existing)
+            expect(errors(adopted.diagnostics)).toEqual([])
+            const kept = await compiledFolder(adopted.files)
+            expect(kept.errors).toEqual([])
+            expect((await comparison(ctx.target, kept.model!)).empty).toBe(true)
+            expect(await executeAcl(ctx.target.url, "public.f()")).toEqual(
+              [API.user, service].sort()
+            )
+            // З теки зникає політика сервісної ролі: її оператор і запис боргу
+            const policy = "policy:public.docs.docs_service_read"
+            const statement = /CREATE POLICY "?docs_service_read"?[^;]*;\n?/
+            const files = new Map(adopted.files)
+            const [file, text] = [...files].find(([, t]) => statement.test(t))!
+            files.set(file, text.replace(statement, ""))
+            expect(files.get(file)).not.toContain("docs_service_read")
+            const debt = JSON.parse(files.get("sql-debt.json")!) as {
+              units: string[]
+            }
+            expect(debt.units).toContain(policy)
+            files.set(
+              "sql-debt.json",
+              JSON.stringify({
+                ...debt,
+                units: debt.units.filter((u) => u !== policy),
+              })
+            )
+            const removed = await compiledFolder(files)
+            expect(removed.errors).toEqual([])
+            const { actions } = await comparison(ctx.target, removed.model!)
+            // План — рівно видалення політики й відкликання `EXECUTE` її ролі
+            expect([...actions].sort()).toEqual([
+              'DROP POLICY "docs_service_read" ON "public"."docs"',
+              `REVOKE ALL ON FUNCTION "public"."f"() FROM "${service}"`,
+            ])
+            // Видалення політики — руйнівний крок: дозвіл на нього, а
+            // відкликання дозволу не просить
+            await apply(ctx.target, removed.model!, [
+              'DROP POLICY "docs_service_read" ON "public"."docs"',
+            ])
+            expect(await executeAcl(ctx.target.url, "public.f()")).toEqual([
+              API.user,
+            ])
+          },
+          onlyProject()
         )
       }
     )

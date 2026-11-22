@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest"
 import { compile, type CompiledModel } from "simetra/compiler"
+import { PINNED_SESSION_SETTINGS } from "simetra/model"
 import {
   compareWithDesired,
   engineScope,
@@ -20,6 +21,11 @@ import {
   testProvider,
   profileLayer,
 } from "../../../../simetra/test/support"
+
+/** Опції `SET` закріплених налаштувань сесії кореня голови (спека декларацій функцій §5.8). */
+const PINNED_SETTINGS = PINNED_SESSION_SETTINGS.map(
+  (s) => `SET ${s.name} = '${s.value}'`
+).join(" ")
 
 /**
  * Звірка розгорнутого бажаного стану через порт: ціль — тінь із рендером
@@ -193,7 +199,7 @@ describe("a mutated target is never silently empty", () => {
 
   it("changed function body", async () => {
     const result = await reconcile(
-      `${render}\nCREATE OR REPLACE FUNCTION app.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid LIMIT 0 $$;\n`,
+      `${render}\nCREATE OR REPLACE FUNCTION app.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS} AS $$ SELECT NULL::uuid LIMIT 0 $$;\n`,
       render,
       scope
     )

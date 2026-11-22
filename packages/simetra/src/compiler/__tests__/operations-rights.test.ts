@@ -22,8 +22,10 @@ import {
   rightsFiles,
 } from "./fixtures/rights"
 import type { Diagnostic } from "../diagnostics"
+import { formPolicies } from "../compile"
 import { toPlatformForms } from "../operations/platform-forms"
 import { uuid } from "./helpers"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 type Json = Record<string, unknown>
 type Files = ReadonlyMap<string, string>
@@ -405,12 +407,10 @@ describe("a declared function becomes a platform form", () => {
   const TEAM_FUNCTIONS = "sql/public/team.functions.json"
   const REGION_SQL = "sql/public/region.sql"
   const REGION_FUNCTIONS = "sql/public/region.functions.json"
-  const TEAM_IDS =
-    "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n"
+  const TEAM_IDS = `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`
   const OTHER =
     "CREATE FUNCTION public.team_count() RETURNS int LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT 1 $$;\n"
-  const REGION_IDS =
-    "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n"
+  const REGION_IDS = `CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`
 
   const declared = (name: string, callers: string[], n: number) => ({
     id: uuid(n),
@@ -599,7 +599,7 @@ describe("a declared function becomes a platform form", () => {
 
   // Р7: `"a.b".c` і `a."b.c"` — різні функції, хоча зклеєний рядок у них
   // один (`a.b.c`).
-  it("matches a declaration to a form by the (schema, name) pair, not a joined string", () => {
+  it("matches a declaration to a form by the (schema, name) pair, not a joined string", async () => {
     const files = rightsFiles({
       [PROJECT]: {
         scopeKinds: [
@@ -631,7 +631,7 @@ describe("a declared function becomes a platform form", () => {
     }
     files.set(sidecar, JSON.stringify({ functions: [other, form] }))
 
-    const transition = toPlatformForms(files)
+    const transition = toPlatformForms(files, await formPolicies(files))
     expect(json(transition.files, sidecar)).toEqual({ functions: [other] })
     expect(transition.diagnostics.map((d) => d.params)).toEqual([
       {

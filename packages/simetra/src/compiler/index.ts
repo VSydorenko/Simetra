@@ -22,6 +22,7 @@ export {
 export {
   compile,
   currentDebt,
+  formPolicies,
   type CompileOptions,
   type CompileResult,
   type CompiledModel,
@@ -68,6 +69,7 @@ export {
   type RecognisedUnit,
 } from "./platform/recogniser"
 export { callersOfRole, executeGrants } from "./sql/execute-grants"
+export { PUBLIC, grantFacts, type GrantFact } from "./sql/grant-facts"
 export { guardArgsOf, type GuardArgs } from "./sql/guard-of"
 export {
   AUTHOR_FUNCTION,

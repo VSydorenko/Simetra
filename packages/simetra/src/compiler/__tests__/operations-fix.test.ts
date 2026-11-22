@@ -28,6 +28,7 @@ import {
   SCOPE_FUNCTIONS_FILE,
   uuid,
 } from "./helpers"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 /** Детермінований джерело id у формі UUID v4: тести не залежать від випадку. */
 function counter(start = 900_000): () => string {
@@ -1016,7 +1017,7 @@ describe("fixFiles: function declarations (repair mode)", () => {
           ],
         }),
         "catalogs/Item/Item.meta.json": catalog("Item", { scope: "none" }),
-        [TEAM_SQL]: `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n`,
+        [TEAM_SQL]: `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`,
         [TEAM_FUNCTIONS]: JSON.stringify({
           functions: [
             { id: uuid(9402), function: { name: "team_ids" }, callers },
@@ -1108,7 +1109,7 @@ describe("fixFiles: function declarations (repair mode)", () => {
       setFunction: { schema: "public", name: setFunction },
     })
     const fn = (name: string) =>
-      `CREATE FUNCTION public.${name}() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n`
+      `CREATE FUNCTION public.${name}() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`
 
     // Мутація: суд над цілим файлом (`widened = new Set(files)`) — безпечний
     // запис лишається з `sql.declaration-platform-form`.

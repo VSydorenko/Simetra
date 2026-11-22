@@ -14,6 +14,7 @@ import type { ResolvedReference } from "./stages/identity"
 import type { CheckColumn } from "./stages/model"
 import type { CreationNode } from "./sql/dependencies"
 import type { SqlUnit, VerbatimUnit } from "./sql/units"
+import type { PolicyFunctions } from "./sql/policy-functions"
 import { readFiles, runStages, sqlStage } from "./pipeline"
 import { debtUnits } from "./sql/debt"
 import type { ExecuteEntry } from "./function-execute"
@@ -180,8 +181,28 @@ export async function compile(
 export async function verbatimUnits(
   files: ReadonlyMap<string, string>
 ): Promise<VerbatimUnit[]> {
-  const { sql } = sqlStage(readFiles(files), await loadSqlParser())
+  const { sql } = await sqlStageOf(files)
   return sql.units
+}
+
+/**
+ * Функції політик теки (спека декларацій функцій §5.8) — той самий результат
+ * розпізнавача, що бачить компілятор: операції, які судять форми платформи
+ * (`toPlatformForms`, `declare-function`), будують його з тих самих одиниць.
+ */
+export async function formPolicies(
+  files: ReadonlyMap<string, string>
+): Promise<PolicyFunctions> {
+  const { policies } = await sqlStageOf(files)
+  return policies
+}
+
+async function sqlStageOf(files: ReadonlyMap<string, string>) {
+  const [parse, plpgsql] = await Promise.all([
+    loadSqlParser(),
+    loadPlpgsqlParser(),
+  ])
+  return sqlStage(readFiles(files), parse, plpgsql)
 }
 
 /**
@@ -205,7 +226,11 @@ export async function currentDebt(
     loadSqlParser(),
     loadPlpgsqlParser(),
   ])
-  const { stage3, sql, declared, calls } = sqlStage(stage1, parse)
+  const { stage3, sql, declared, calls, policies } = sqlStage(
+    stage1,
+    parse,
+    plpgsql
+  )
   if (
     stage3 === undefined ||
     sql.diagnostics.some((d) => d.code === "sql.parse")
@@ -220,6 +245,7 @@ export async function currentDebt(
     parse,
     plpgsql,
     declared,
-    calls
+    calls,
+    policies
   )
 }

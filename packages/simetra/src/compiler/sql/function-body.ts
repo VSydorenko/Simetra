@@ -30,6 +30,7 @@ import {
 } from "./dependencies"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
+import type { PolicyFunctions } from "./policy-functions"
 import { splitAssignment } from "./rewrite/plpgsql-body"
 import { isStatementKey } from "./unit-target"
 import type { VerbatimUnit } from "./units"
@@ -513,11 +514,12 @@ export function checkFunctionBodies(
   units: readonly VerbatimUnit[],
   parse: SqlParser,
   plpgsql: PlpgsqlParser,
-  calls: ProviderCalls
+  calls: ProviderCalls,
+  policies: PolicyFunctions
 ): Diagnostic[] {
   const views = modelViews(units)
   const closed = closedModuleOwners(objects)
-  const ruled = ruledFunctions(objects, project)
+  const ruled = ruledFunctions(objects, project, policies)
   return units.flatMap((unit) => {
     const shelled =
       (unit.ownerFile !== undefined && closed.has(unit.ownerFile)) ||

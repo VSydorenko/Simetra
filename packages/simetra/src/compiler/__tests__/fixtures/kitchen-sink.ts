@@ -1,5 +1,6 @@
 import { expectsKindLabel, type MetadataKind } from "simetra/model"
 import { metaFiles, uuid } from "../helpers"
+import { pinnedSettingsClause } from "../../sql/head-settings"
 
 /**
  * «Kitchen-sink»-проєкт ратчета «поле без споживача»: кожне поле кожної схеми
@@ -1090,8 +1091,7 @@ export function kitchenSink(): Map<string, string> {
     "sql/public/subscription-handlers.sql": handlers,
     // Функція значень виміру `partner` — у закритій формі (спека прав §4.4): читає
     // лише таблицю застосунку й поточного користувача.
-    "sql/public/access-dimensions.sql":
-      "CREATE FUNCTION public.my_partner_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT p.id FROM public.partner p WHERE (SELECT simetra.current_user_id()) IS NOT NULL $$;",
+    "sql/public/access-dimensions.sql": `CREATE FUNCTION public.my_partner_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT p.id FROM public.partner p WHERE (SELECT simetra.current_user_id()) IS NOT NULL $$;`,
   }
   for (const [name, value] of Object.entries(constants)) {
     entries[`constants/${name}/${name}.meta.json`] = value

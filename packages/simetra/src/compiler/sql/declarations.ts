@@ -14,9 +14,10 @@ import {
 } from "../diagnostics"
 import type { RightsContract } from "../contracts"
 import type { ParsedFunctionsFile, ParsedObject } from "../stages/files"
-import { platformFormSources } from "./closed-forms"
+import { platformFormSources, type PlatformFormSource } from "./closed-forms"
 import { ON_BEHALF_OF_USER, isSecurityDefiner } from "./definer-reads"
 import { qualifiedName } from "./identity"
+import type { PolicyFunctions } from "./policy-functions"
 import { FUNCTION_CLASSES, type VerbatimUnit } from "./units"
 
 /**
@@ -125,8 +126,15 @@ export function declaredFunctions(
   })
 }
 
-/** Форма платформи: функція, призначення якої задають метадані. */
-export type PlatformForm = "setFunction" | "subscriptionHandler" | "dimension"
+/**
+ * Форма платформи: функція, призначення якої задають метадані чи, для
+ * функції політики, політики-викликачі (спека декларацій функцій §5.8).
+ */
+export type PlatformForm =
+  "setFunction" | "subscriptionHandler" | "dimension" | "policyFunction"
+
+/** Форма, яку називають метадані: її призначення сталі. */
+export type StaticPlatformForm = Exclude<PlatformForm, "policyFunction">
 
 /**
  * Призначення `EXECUTE` кожної форми платформи: їх виводить генератор
@@ -137,11 +145,23 @@ export type PlatformForm = "setFunction" | "subscriptionHandler" | "dimension"
  * роль API.
  */
 export const PLATFORM_FORM_PURPOSES: Readonly<
-  Record<PlatformForm, readonly GrantPurpose[]>
+  Record<StaticPlatformForm, readonly GrantPurpose[]>
 > = {
   setFunction: ["user", "service", "command"],
   subscriptionHandler: [],
   dimension: [],
+}
+
+/**
+ * Призначення `EXECUTE` форми: власні призначення джерела (функція політики),
+ * інакше — сталі призначення форми метаданих.
+ */
+export function formPurposes(
+  source: PlatformFormSource
+): readonly GrantPurpose[] {
+  return source.form === "policyFunction"
+    ? source.purposes
+    : PLATFORM_FORM_PURPOSES[source.form]
 }
 
 export interface PlatformFormFunction {
@@ -159,15 +179,17 @@ export interface PlatformFormFunction {
  */
 export function platformFormFunctions(
   objects: readonly ParsedObject[],
-  project: Project | undefined
+  project: Project | undefined,
+  policies: PolicyFunctions
 ): ReadonlyMap<string, PlatformFormFunction> {
   const forms = new Map<string, PlatformFormFunction>()
-  for (const source of platformFormSources(objects, project)) {
+  for (const source of platformFormSources(objects, project, policies)) {
     const key = qualifiedName(source.function.schema, source.function.name)
     if (forms.has(key)) continue
     forms.set(key, {
-      ...source,
-      purposes: PLATFORM_FORM_PURPOSES[source.form],
+      function: source.function,
+      form: source.form,
+      purposes: formPurposes(source),
     })
   }
   return forms
@@ -187,10 +209,11 @@ export function checkDeclarations(
   units: readonly VerbatimUnit[],
   objects: readonly ParsedObject[],
   project: Project | undefined,
-  unparsed: ReadonlySet<string>
+  unparsed: ReadonlySet<string>,
+  policies: PolicyFunctions
 ): Diagnostic[] {
   if (project === undefined) return []
-  const forms = [...platformFormFunctions(objects, project).values()]
+  const forms = [...platformFormFunctions(objects, project, policies).values()]
   const seen = new Map<string, DeclarationEntry>()
   const found: Diagnostic[] = []
   for (const entry of entriesOf(functionsFiles, project.defaultSchema)) {

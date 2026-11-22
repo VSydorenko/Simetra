@@ -1,6 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest"
-import { compile, type Diagnostic } from "simetra/compiler"
+import { compile, isRepairError, type Diagnostic } from "simetra/compiler"
 import { readFiles, sqlStage } from "../pipeline"
+import { PINNED_SESSION_SETTINGS } from "simetra/model"
+import { pinnedSettingsClause } from "../sql/head-settings"
 import { headScope, judgeHandler } from "../sql/heads"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { loadPlpgsqlParser, type PlpgsqlParser } from "../sql/plpgsql"
@@ -31,6 +33,8 @@ import {
 
 const SHARED = "sql/public/shared.sql"
 const EMPTY_PATH = "SET search_path = ''"
+/** Налаштування сесії, які корінь голови фіксує в оболонці (`sql.head-settings`). */
+const PINNED = pinnedSettingsClause()
 const SET_FUNCTION = "public.team_ids"
 const HANDLER = "public.count_comment"
 const PROJECT_MODULE = PROJECT_CATALOG_FILE.replace(".meta.json", ".sql")
@@ -52,7 +56,11 @@ const sqlFunction = (
   `CREATE FUNCTION ${name}(${args}) RETURNS ${returns} LANGUAGE sql ${options} AS $$ ${body} $$;\n`
 /** Функція множини скоупу `team` — голова Правила 3. */
 const setFunction = (body: string) =>
-  sqlFunction(SET_FUNCTION, body, `STABLE SECURITY DEFINER ${EMPTY_PATH}`)
+  sqlFunction(
+    SET_FUNCTION,
+    body,
+    `STABLE SECURITY DEFINER ${EMPTY_PATH} ${PINNED}`
+  )
 /** Ланка на plpgsql у закритій оболонці. */
 const plpgsqlFunction = (name: string, args = "", returns = "boolean") =>
   `CREATE FUNCTION ${name}(${args}) RETURNS ${returns} LANGUAGE plpgsql STABLE ${EMPTY_PATH} AS $$ BEGIN RETURN NULL; END $$;\n`
@@ -190,13 +198,17 @@ describe("checkHeads: Rule 3 — query functions", () => {
     })),
     // Голова не називає відношення текстом: рядок, приведений до
     // `regclass`, — відношення, а вбудовані з іменем відношення в тексті —
-    // поза переліком голови.
+    // поза переліком голови. `obj_description` читає каталог і поза
+    // позитивним переліком голови (Р6 плану Д5).
     {
       name: "relation named by a regclass cast",
       sql: selectWhere(
         "pg_catalog.obj_description('auth.users'::regclass, 'pg_class') IS NULL"
       ),
-      expected: [found("relation", "auth.users", SET_FUNCTION)],
+      expected: [
+        found("call", "pg_catalog.obj_description", SET_FUNCTION),
+        found("relation", "auth.users", SET_FUNCTION),
+      ],
     },
     ...[
       ["has_table_privilege('auth.users', 'select')", "has_table_privilege"],
@@ -457,7 +469,7 @@ describe("checkHeads: other heads", () => {
         [SHARED]: sqlFunction(
           DIMENSION,
           "SELECT NULL::uuid WHERE pg_sleep(0) IS NOT NULL",
-          `STABLE SECURITY DEFINER ${EMPTY_PATH}`
+          `STABLE SECURITY DEFINER ${EMPTY_PATH} ${PINNED}`
         ),
       },
       layers: [dimension],
@@ -521,6 +533,511 @@ describe("checkHeads: other heads", () => {
     expect(await blockErrors(query)).toEqual([
       ["sql.head-not-allowed", SALE_SQL, ...expected, SALE_WRAPPER, 1],
     ])
+  })
+})
+
+// Р6/Р7 плану Д5 (І5): голова кличе лише вбудовані позитивного переліку
+// й читає зі стану сесії лише точну назву claims. Те саме правило — для
+// кожного виду голови й транзитивно. Часову зону функція голови фіксує в
+// оболонці (`sql.head-settings`), а правило за іменами лишається лише для
+// дослівного виразу політики.
+describe("checkHeads: head builtin allowlist and session state", () => {
+  const DIMENSION = "public.region_ids"
+  const HELPER = "public.helper"
+  const dimension: Layer = {
+    [PROJECT_FILE]: {
+      accessDimensions: [
+        {
+          id: REGION_DIMENSION_ID,
+          name: "region",
+          target: { kind: "Catalog", name: "Region" },
+          values: { function: { name: "region_ids" } },
+        },
+      ],
+    },
+  }
+  const heads: {
+    head: string
+    sql: (condition: string) => Record<string, string>
+    layers: Layer[]
+    chain: string[]
+  }[] = [
+    {
+      head: "set function",
+      sql: (condition) => ({ [SCOPE_FUNCTIONS_FILE]: selectWhere(condition) }),
+      layers: [],
+      chain: [SET_FUNCTION],
+    },
+    {
+      head: "dimension values function",
+      sql: (condition) => ({
+        [SHARED]: sqlFunction(
+          DIMENSION,
+          `SELECT NULL::uuid WHERE ${condition}`,
+          `STABLE SECURITY DEFINER ${EMPTY_PATH} ${PINNED}`
+        ),
+      }),
+      layers: [dimension],
+      chain: [DIMENSION],
+    },
+    {
+      head: "transitive call",
+      sql: (condition) => ({
+        [SCOPE_FUNCTIONS_FILE]:
+          setFunction(`SELECT ${HELPER}()`) +
+          sqlFunction(HELPER, `SELECT NULL::uuid WHERE ${condition}`),
+      }),
+      layers: [],
+      chain: [SET_FUNCTION, HELPER],
+    },
+    {
+      // Вираз політики прочитаної таблиці суддя голів обходить через
+      // `policiesOn`: правило розбору дерева діє й там.
+      head: "policy of a read table",
+      sql: (condition) => ({
+        [SCOPE_FUNCTIONS_FILE]:
+          READ_NOTES +
+          `CREATE POLICY p ON public.task_notes FOR SELECT USING (${condition});\n`,
+      }),
+      layers: [RLS_ON],
+      chain: [SET_FUNCTION, POLICY],
+    },
+  ]
+  // Вбудовані кваліфіковані: у виразі політики некваліфіковане ім'я —
+  // окрема знахідка `unqualified`.
+  const refused: [string, string, string][] = [
+    [
+      "pg_catalog.pg_show_all_settings() IS NOT NULL",
+      "call",
+      "pg_catalog.pg_show_all_settings",
+    ],
+    [
+      "pg_catalog.current_query() IS NOT NULL",
+      "call",
+      "pg_catalog.current_query",
+    ],
+    [
+      "pg_catalog.inet_client_addr() IS NOT NULL",
+      "call",
+      "pg_catalog.inet_client_addr",
+    ],
+    [
+      "pg_catalog.pg_try_advisory_xact_lock(1)",
+      "call",
+      "pg_catalog.pg_try_advisory_xact_lock",
+    ],
+    [
+      "pg_catalog.to_regclass('x.secret') IS NULL",
+      "call",
+      "pg_catalog.to_regclass",
+    ],
+    [
+      "pg_catalog.pg_get_viewdef('auth.v') IS NULL",
+      "call",
+      "pg_catalog.pg_get_viewdef",
+    ],
+    [
+      "pg_catalog.has_table_privilege('x.secret', 'select')",
+      "call",
+      "pg_catalog.has_table_privilege",
+    ],
+    [
+      "pg_catalog.current_setting('request.headers') IS NULL",
+      "setting",
+      "request.headers",
+    ],
+    [
+      "pg_catalog.current_setting('request.jwt.claim.sub') IS NULL",
+      "setting",
+      "request.jwt.claim.sub",
+    ],
+    [
+      "pg_catalog.current_setting('request.jwt.foo') IS NULL",
+      "setting",
+      "request.jwt.foo",
+    ],
+    ["pg_catalog.current_setting('app.x') IS NULL", "setting", "app.x"],
+    ["pg_catalog.current_setting('role') IS NULL", "setting", "role"],
+    [
+      "pg_catalog.current_setting('REQUEST.JWT.CLAIMS') IS NULL",
+      "setting",
+      "REQUEST.JWT.CLAIMS",
+    ],
+    [
+      "pg_catalog.current_setting(pg_catalog.lower('x')) IS NULL",
+      "setting",
+      "current_setting",
+    ],
+    [
+      "pg_catalog.current_setting('request.jwt.claims'::text) IS NULL",
+      "setting",
+      "current_setting",
+    ],
+    [
+      "pg_catalog.current_setting(setting_name => 'request.jwt.claims') IS NULL",
+      "setting",
+      "current_setting",
+    ],
+    [
+      "pg_catalog.current_setting('request.jwt.claims', missing_ok => true) IS NULL",
+      "setting",
+      "request.jwt.claims",
+    ],
+    // Приведення до `reg*` не літералу називає об'єкт текстом під час
+    // виконання: ні виклику, ні відношення голова не бачить.
+    [
+      "pg_catalog.lower('public.secret')::regclass IS NOT NULL",
+      "call",
+      "::regclass",
+    ],
+    ["'pg_catalog.lower'::regproc IS NOT NULL", "call", "::regproc"],
+    [
+      "pg_catalog.lower('pg_catalog.lower')::pg_catalog.regprocedure IS NOT NULL",
+      "call",
+      "::regprocedure",
+    ],
+    ["'x'::text::regtype IS NOT NULL", "call", "::regtype"],
+  ]
+  // Залежне від `TimeZone` чи `DateStyle`: функції голови виконуються в
+  // зафіксованих налаштуваннях і це читають, а вираз політики — ні.
+  const zoneDependent = [
+    "current_date IS NOT NULL",
+    "localtime IS NOT NULL",
+    "localtimestamp IS NOT NULL",
+    "pg_catalog.now()::date IS NOT NULL",
+    "ts::date IS NOT NULL",
+    "'today'::date IS NOT NULL",
+    "'01-02-2026'::date IS NOT NULL",
+    "pg_catalog.date(ts) IS NOT NULL",
+    "pg_catalog.date_trunc('day', ts) IS NOT NULL",
+    "(pg_catalog.now() AT LOCAL)::text <> ''",
+    "pg_catalog.now()::timetz IS NOT NULL",
+    "ts::time with time zone IS NOT NULL",
+    "pg_catalog.timetz(ts) IS NOT NULL",
+    "'2026-01-01 12:00'::timetz IS NOT NULL",
+    "(pg_catalog.now() AT TIME ZONE 'UTC')::timetz IS NOT NULL",
+    // `AT TIME ZONE` над значенням невідомого типу: над `timestamp` воно
+    // повертає `timestamptz`, яке наступне перетворення читає в зоні сесії.
+    "(ts AT TIME ZONE 'UTC')::date IS NOT NULL",
+    "pg_catalog.date_trunc('day', ts AT TIME ZONE 'UTC') IS NOT NULL",
+    // Перетворення в `timestamptz` того, що не має зони.
+    "'2026-01-01 12:00'::timestamptz IS NOT NULL",
+    "ts::timestamptz IS NOT NULL",
+    "pg_catalog.timestamptz(ts) IS NOT NULL",
+  ]
+  const functionHeads = heads.filter((h) => !h.chain.includes(POLICY))
+  const policyHead = heads.filter((h) => h.chain.includes(POLICY))
+  const allowed = [
+    "pg_catalog.current_setting('request.jwt.claims', true) IS NOT NULL",
+    "(pg_catalog.now() AT TIME ZONE 'UTC')::date IS NOT NULL",
+    "pg_catalog.now() IS NOT NULL",
+    "current_timestamp IS NOT NULL",
+    "ts >= pg_catalog.now()",
+    "'2026-01-01'::date IS NOT NULL",
+    "'2026-01-01 12:00:00+02'::timetz IS NOT NULL",
+    "pg_catalog.date_trunc('day', ts, 'UTC') IS NOT NULL",
+    "(current_timestamp AT TIME ZONE 'UTC')::date IS NOT NULL",
+    "(pg_catalog.statement_timestamp() AT TIME ZONE 'UTC')::date IS NOT NULL",
+    "('2026-01-01 12:00+02'::timestamptz AT TIME ZONE 'UTC')::date IS NOT NULL",
+    "'2026-01-01 12:00:00+02'::timestamptz IS NOT NULL",
+    "pg_catalog.now()::timestamptz IS NOT NULL",
+  ]
+
+  it.each(
+    heads.flatMap((h) =>
+      refused.map(([condition, construct, detail]) => ({
+        ...h,
+        condition,
+        construct,
+        detail,
+      }))
+    )
+  )(
+    "$head refuses $condition",
+    async ({ sql, layers, chain: names, condition, construct, detail }) => {
+      expect(await headErrors(sql(condition), layers)).toEqual([
+        found(construct, detail, ...names),
+      ])
+    }
+  )
+
+  it.each(
+    policyHead.flatMap((h) =>
+      zoneDependent.map((condition) => ({ ...h, condition }))
+    )
+  )(
+    "$head refuses $condition by the session time zone",
+    async ({ sql, layers, chain: names, condition }) => {
+      expect(await headErrors(sql(condition), layers)).toEqual([
+        found("setting", "TimeZone", ...names),
+      ])
+    }
+  )
+
+  it.each(
+    heads.flatMap((h) => allowed.map((condition) => ({ ...h, condition })))
+  )("$head allows $condition", async ({ sql, layers, condition }) => {
+    expect(await headErrors(sql(condition), layers)).toEqual([])
+  })
+
+  it.each(
+    functionHeads.flatMap((h) =>
+      zoneDependent.map((condition) => ({ ...h, condition }))
+    )
+  )(
+    "$head runs in pinned settings, so it allows $condition",
+    async ({ sql, layers, condition }) => {
+      expect(await headErrors(sql(condition), layers)).toEqual([])
+    }
+  )
+
+  // Вираз політики обчислюється в налаштуваннях клієнта, і так само все, що
+  // він досягає: подання й функція без зафіксованих налаштувань. Функція, що
+  // сама фіксує налаштування голови, виконується вже в них.
+  const VIEW = "public.v"
+  const OUTER_VIEW = "public.w"
+  const zonedView = `CREATE VIEW ${VIEW} WITH (security_invoker = true) AS SELECT t.id FROM public.task t WHERE current_date IS NOT NULL;\n`
+  const viaPolicy = (using: string) =>
+    `CREATE POLICY p ON public.task_notes FOR SELECT USING (${using});\n`
+  it.each<{ name: string; sql: string; expected: Finding[] }>([
+    {
+      name: "a view a policy reads",
+      sql:
+        READ_NOTES +
+        zonedView +
+        viaPolicy(`id IN (SELECT v.id FROM ${VIEW} v)`),
+      expected: [found("setting", "TimeZone", SET_FUNCTION, POLICY, VIEW)],
+    },
+    {
+      // Контекст клієнта переходить на кожен рівень: подання, яке читає
+      // подання, що його читає політика.
+      name: "a view read by a view a policy reads",
+      sql:
+        READ_NOTES +
+        zonedView +
+        `CREATE VIEW ${OUTER_VIEW} WITH (security_invoker = true) AS SELECT v.id FROM ${VIEW} v;\n` +
+        viaPolicy(`id IN (SELECT w.id FROM ${OUTER_VIEW} w)`),
+      expected: [
+        found("setting", "TimeZone", SET_FUNCTION, POLICY, OUTER_VIEW, VIEW),
+      ],
+    },
+    {
+      // Те саме подання голова читає й сама: там воно в її налаштуваннях,
+      // тож знахідка — лише на шляху через політику, раз.
+      name: "a view the head reads itself and a policy reads",
+      sql:
+        setFunction(
+          `SELECT n.id FROM public.task_notes n UNION SELECT v.id FROM ${VIEW} v`
+        ) +
+        zonedView +
+        viaPolicy(`id IN (SELECT v.id FROM ${VIEW} v)`),
+      expected: [found("setting", "TimeZone", SET_FUNCTION, POLICY, VIEW)],
+    },
+    {
+      name: "a view only the head reads",
+      sql: setFunction(`SELECT v.id FROM ${VIEW} v`) + zonedView,
+      expected: [],
+    },
+    {
+      name: "a function a policy calls",
+      sql:
+        READ_NOTES +
+        sqlFunction(
+          HELPER,
+          "SELECT NULL::uuid WHERE current_date IS NOT NULL"
+        ) +
+        viaPolicy(`id IN (SELECT ${HELPER}())`),
+      expected: [found("setting", "TimeZone", SET_FUNCTION, POLICY, HELPER)],
+    },
+    {
+      name: "a function a policy calls that pins the settings itself",
+      sql:
+        READ_NOTES +
+        sqlFunction(
+          HELPER,
+          "SELECT NULL::uuid WHERE current_date IS NOT NULL",
+          `STABLE ${EMPTY_PATH} ${PINNED}`
+        ) +
+        viaPolicy(`id IN (SELECT ${HELPER}())`),
+      expected: [],
+    },
+  ])("policy context: $name", async ({ sql, expected }) => {
+    expect(await headErrors({ [SCOPE_FUNCTIONS_FILE]: sql }, [RLS_ON])).toEqual(
+      expected
+    )
+  })
+})
+
+// Корінь голови фіксує налаштування сесії у власній оболонці (§5.8): клієнт
+// ставить `TimeZone` сам, тож без опцій перетворення в місцевий час і текст
+// дат залежали б від нього. Ланка виконується вже в цих налаштуваннях.
+describe("sql.head-settings: a root head pins the session settings", () => {
+  const DIMENSION = "public.region_ids"
+  const HELPER = "public.helper"
+  const dimension: Layer = {
+    [PROJECT_FILE]: {
+      accessDimensions: [
+        {
+          id: REGION_DIMENSION_ID,
+          name: "region",
+          target: { kind: "Catalog", name: "Region" },
+          values: { function: { name: "region_ids" } },
+        },
+      ],
+    },
+  }
+  const shell = (settings: string) =>
+    `STABLE SECURITY DEFINER ${EMPTY_PATH} ${settings}`
+  const setFunctionWith = (settings: string, body = "SELECT NULL::uuid") => ({
+    [SCOPE_FUNCTIONS_FILE]: sqlFunction(SET_FUNCTION, body, shell(settings)),
+  })
+  const settingsErrors = async (
+    sql: Record<string, string>,
+    layers: Layer[] = []
+  ) => {
+    const result = await compiledPolicyDomain(sql, [
+      teamScopeKind(),
+      promotableTaskNote(),
+      ...layers,
+    ])
+    const errors = result.diagnostics.filter((d) => d.severity === "error")
+    for (const d of errors) {
+      if (d.code === "sql.head-settings") expect(isRepairError(d)).toBe(true)
+    }
+    return errors.map((d) =>
+      d.code === "sql.head-settings"
+        ? [
+            d.code,
+            `${d.params?.schema}.${d.params?.name}`,
+            d.params?.setting,
+            d.params?.problem,
+            d.params?.actual,
+          ]
+        : [d.code, d.params?.construct, d.params?.detail, d.params?.chain]
+    )
+  }
+  const settingsError = (
+    fn: string,
+    setting: string,
+    problem: string,
+    actual?: string
+  ) => ["sql.head-settings", fn, setting, problem, actual]
+
+  it.each<{
+    name: string
+    settings: string
+    expected: readonly (readonly unknown[])[]
+  }>([
+    {
+      // Значення в корені судить лише `sql.head-settings` (клас ремонту):
+      // друга, не ремонтна знахідка `setting` не дала б режиму ремонту теки.
+      name: "with another TimeZone",
+      settings: PINNED.replace("'UTC'", "'Europe/Kyiv'"),
+      expected: [
+        settingsError(SET_FUNCTION, "TimeZone", "value", "Europe/Kyiv"),
+      ],
+    },
+    {
+      name: "with another DateStyle",
+      settings: PINNED.replace("'ISO, MDY'", "'ISO, DMY'"),
+      expected: [settingsError(SET_FUNCTION, "DateStyle", "value", "ISO, DMY")],
+    },
+    {
+      name: "with another extra_float_digits",
+      settings: PINNED.replace(
+        "extra_float_digits = '1'",
+        "extra_float_digits = 3"
+      ),
+      expected: [
+        settingsError(SET_FUNCTION, "extra_float_digits", "value", "3"),
+      ],
+    },
+    {
+      name: "with TimeZone FROM CURRENT",
+      settings: PINNED.replace(`"TimeZone" = 'UTC'`, `"TimeZone" FROM CURRENT`),
+      expected: [settingsError(SET_FUNCTION, "TimeZone", "notFixed")],
+    },
+    {
+      // `RESET ALL` прибирає задане до нього, як у `proconfig`.
+      name: "with RESET ALL after the settings",
+      settings: `${PINNED} RESET ALL ${EMPTY_PATH}`,
+      expected: [settingsError(SET_FUNCTION, "TimeZone", "missing")],
+    },
+    {
+      // Форма `pg_get_functiondef`, яку читає зворотна генерація: ім'я в
+      // лапках лише з великими літерами, `TO`, число без лапок.
+      name: "in the form of the catalog",
+      settings: PINNED_SESSION_SETTINGS.map(({ name, value }) =>
+        name === "extra_float_digits"
+          ? `SET ${name} TO ${value}`
+          : `SET ${name === name.toLowerCase() ? name : `"${name}"`} TO '${value}'`
+      ).join(" "),
+      expected: [],
+    },
+  ])("set function $name", async ({ settings, expected }) => {
+    expect(await settingsErrors(setFunctionWith(settings))).toEqual(expected)
+  })
+
+  // Кожне налаштування набору судиться окремо: оболонка без будь-якого з них
+  // — помилка з його ім'ям.
+  it.each(PINNED_SESSION_SETTINGS.map((s) => s.name))(
+    "set function without %s",
+    async (name) => {
+      const settings = PINNED_SESSION_SETTINGS.filter((s) => s.name !== name)
+        .map((s) => `SET ${s.name} = '${s.value}'`)
+        .join(" ")
+      expect(await settingsErrors(setFunctionWith(settings))).toEqual([
+        settingsError(SET_FUNCTION, name, "missing"),
+      ])
+    }
+  )
+
+  it("a dimension values function without the settings", async () => {
+    expect(
+      await settingsErrors(
+        {
+          [SHARED]: sqlFunction(
+            DIMENSION,
+            "SELECT NULL::uuid",
+            `STABLE SECURITY DEFINER ${EMPTY_PATH}`
+          ),
+        },
+        [dimension]
+      )
+    ).toEqual([settingsError(DIMENSION, "TimeZone", "missing")])
+  })
+
+  it("a separate ALTER FUNCTION of a setting", async () => {
+    const sql = setFunctionWith(PINNED)
+    sql[SCOPE_FUNCTIONS_FILE] +=
+      "ALTER FUNCTION public.team_ids() SET TimeZone = 'UTC';\n"
+    // Окремий `ALTER FUNCTION` на судиму функцію зупиняє ранній блок
+    // (`sql.function-settings-shell`), тож суддя оболонки голови до неї не
+    // доходить.
+    expect(await settingsErrors(sql)).toEqual([
+      ["sql.function-settings-shell", undefined, undefined, undefined],
+    ])
+  })
+
+  it.each<{
+    name: string
+    settings: string
+    expected: readonly (readonly unknown[])[]
+  }>([
+    {
+      name: "sets TimeZone to another value",
+      settings: "SET TimeZone = 'Europe/Kyiv'",
+      expected: [found("setting", "timezone", SET_FUNCTION, HELPER)],
+    },
+    { name: "repeats the pinned value", settings: PINNED, expected: [] },
+  ])("a function the head calls $name", async ({ settings, expected }) => {
+    const sql = setFunctionWith(PINNED, `SELECT ${HELPER}()`)
+    sql[SCOPE_FUNCTIONS_FILE] += sqlFunction(
+      HELPER,
+      "SELECT NULL::uuid",
+      `STABLE ${EMPTY_PATH} ${settings}`
+    )
+    expect(await settingsErrors(sql)).toEqual(expected)
   })
 })
 
@@ -602,7 +1119,7 @@ function judged(sql: string) {
   const files = policyDomain()
   files.set(COUNT_COMMENT_SQL_FILE, sql)
   const stage1 = readFiles(files)
-  const { stage2, stage3, sql: read } = sqlStage(stage1, parse)
+  const { stage2, stage3, sql: read } = sqlStage(stage1, parse, plpgsql)
   const scope = headScope(
     stage1.objects,
     stage2.references,
@@ -817,6 +1334,9 @@ describe("judgeHandler: Rule 2 — a handler only checks", () => {
 
   it.each([
     { body: "EXECUTE 'SELECT 1';", expected: [["statement", "dynexecute"]] },
+    // `plpgsql.check_asserts = off` клієнта мовчки вимкнув би перевірку:
+    // обробник перевіряє `IF … THEN RAISE`.
+    { body: "ASSERT NEW.id IS NOT NULL;", expected: [["statement", "assert"]] },
     {
       body: "FOR r IN EXECUTE 'SELECT 1' LOOP END LOOP;",
       expected: [["statement", "dynfors"]],
@@ -853,8 +1373,6 @@ describe("judgeHandler: Rule 2 — a handler only checks", () => {
       body: "WHILE public.forbidden() = 0 LOOP EXIT; END LOOP;",
     },
     { slot: "exit", body: "LOOP EXIT WHEN public.forbidden() = 1; END LOOP;" },
-    { slot: "assert condition", body: "ASSERT public.forbidden() = 1;" },
-    { slot: "assert message", body: "ASSERT true, public.forbidden()::text;" },
     { slot: "raise parameter", body: "RAISE NOTICE '%', public.forbidden();" },
     {
       slot: "raise option",

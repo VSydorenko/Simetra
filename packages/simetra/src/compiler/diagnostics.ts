@@ -32,6 +32,7 @@ export const COMPILER_RULES = [
   "sql.head-not-allowed",
   "sql.domain-check-not-allowed",
   "sql.function-settings-shell",
+  "sql.head-settings",
   "sql.function-overload",
   "sql.row-rule-grammar",
   "sql.row-rule-foreign-table",
@@ -44,6 +45,7 @@ export const COMPILER_RULES = [
   "sql.debt-extension-schema",
   "sql.definer-reads-rls",
   "sql.definer-caller-unchecked",
+  "sql.policy-helper-correlated",
   "sql.declaration-target-missing",
   "sql.declaration-overload",
   "sql.declaration-duplicate",
@@ -415,7 +417,7 @@ export const COMPILER_RULES = [
   "introspect.project-mismatch",
   "introspect.path-collision",
   "introspect.definer-check-unknown",
-  "introspect.definer-anonymous-dropped",
+  "introspect.execute-narrowed",
   "introspect.definer-platform-form-candidate",
   "introspect.definer-foreign-grant",
   "introspect.definer-callers-drift",
@@ -535,7 +537,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "attribute.lazy-over-budget",
   "engine.shadow-drop-failed",
   "introspect.definer-check-unknown",
-  "introspect.definer-anonymous-dropped",
+  "introspect.execute-narrowed",
   "introspect.definer-platform-form-candidate",
 ])
 
@@ -548,6 +550,8 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
  */
 export const REPAIR_CLASS: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "sql.definer-caller-unchecked",
+  "sql.policy-helper-correlated",
+  "sql.head-settings",
   "sql.declaration-check-missing",
   "sql.declaration-check-not-applied",
   "sql.declaration-platform-form",
