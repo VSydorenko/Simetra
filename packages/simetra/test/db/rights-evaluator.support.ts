@@ -69,8 +69,6 @@ type Row = Record<string, unknown>
 type Tenant = "A" | "B"
 
 const MARK = "evaluator-grid"
-/** Користувачі лише з контейнерними правами: цілого скоупу вони не відкривають. */
-const CONTAINER_ONLY = ["tp", "po", "pr"]
 type WriteAction = "create" | "update" | "markDeletion"
 
 /**
@@ -506,14 +504,13 @@ export function defineRightsEvaluatorCases(): void {
             { scope: key("A") },
             world.catalog.adoptedFacts
           )
-          // Без рядка контейнерне право цілого скоупу не відкриває (Р3): `tp`
-          // мають лише його (`tp`, `po`, `pr`), тож для них `false` при проходженні рядка —
-          // задумане. Для решти `true` ⇔ є рядок, який проходить.
+          // Без рядка: `true` ⇔ якийсь фікстурний рядок скоупу проходить, зокрема
+          // в контейнері (`tp`, `po`, `pr`).
           if (predicted === true && !some)
             mismatches.push(
               `${user} ${action}: can true, no fixture row passes`
             )
-          if (predicted === false && some && !CONTAINER_ONLY.includes(user))
+          if (predicted === false && some)
             mismatches.push(`${user} ${action}: can false, a row passes`)
         }
       }

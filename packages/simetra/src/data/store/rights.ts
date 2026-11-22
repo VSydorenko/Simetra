@@ -286,7 +286,7 @@ export function can(
     extent: "any" | "own" | "dimension"
     dimensionId?: string
     carrier: CanResult
-    /** Гілка залежить від факту без сигналу: `unknown` завжди. */
+    /** Факт прийнятого членства без сигналу: гілка `unknown` завжди. */
     always?: true
   }
   const inners: Inner[] = []
@@ -327,10 +327,9 @@ export function can(
           carrier:
             row === undefined
               ? true
-              : unsure
+              : unsure || !a.fresh
                 ? "unknown"
                 : within(a.carrier, new Set(values.values)),
-          ...(a.fresh ? {} : { always: true as const }),
         })
       }
     }
@@ -348,7 +347,7 @@ export function can(
 
   const branches: CanResult[] = []
   for (const inner of inners) {
-    if (inner.always || (scoped && !root && (kindAdopted || verbatim))) {
+    if (inner.always || (scoped && !root && kindAdopted)) {
       branches.push("unknown")
       continue
     }
@@ -359,20 +358,25 @@ export function can(
         ? grant(inner, (r) => actsInScope(r, scope) && r.level === "scope")
         : grant(inner, (r) => r.level !== "container")
     branches.push(and(base, inner.carrier))
-    if (!root && row !== undefined && contract.binding !== undefined) {
-      const container = carrierOf(contract.binding.carrier)
+    if (!root && contract.binding !== undefined) {
+      // Без рядка контейнерне право лишає гілку без умов носіїв: у якомусь
+      // контейнері скоупу воно дає записати рядок.
+      const container =
+        row === undefined ? undefined : carrierOf(contract.binding.carrier)
       branches.push(
-        and(
-          // Без контейнерного рядка носій нічого не міняє: гілка хибна.
-          grant(
-            inner,
-            (r) =>
-              r.level === "container" &&
-              (container === undefined || r.container === container)
-          ),
-          container === undefined ? "unknown" : true,
-          inner.extent === "any" ? true : inner.carrier
-        )
+        row === undefined
+          ? grant(inner, (r) => r.level === "container")
+          : and(
+              // Без контейнерного рядка носій нічого не міняє: гілка хибна.
+              grant(
+                inner,
+                (r) =>
+                  r.level === "container" &&
+                  (container === undefined || r.container === container)
+              ),
+              container === undefined ? "unknown" : true,
+              inner.extent === "any" ? true : inner.carrier
+            )
       )
     }
   }

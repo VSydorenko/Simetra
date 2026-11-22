@@ -507,11 +507,35 @@ describe("can", () => {
     )
   })
 
-  it("a dimension with a stale relation is unknown whatever the rows", () => {
+  it("a dimension with a stale relation: unknown only from the stale part", () => {
     const entry = withRich({
       access: [{ dimensionId: DIM, carrier: REGION, fresh: false }],
     })
-    expect(can(mineSnap([]), entry, "update", at)).toBe("unknown")
+    // Права свіжі за сигналом: без рядка гранту відповідь хибна
+    expect(can(mineSnap([]), entry, "update", at)).toBe(false)
+    expect(
+      can(mineSnap([]), entry, "update", { ...at, row: { region: VALUE } })
+    ).toBe(false)
+    const rows = [update({ extent: "dimension", dimensionId: DIM })]
+    expect(can(mineSnap(rows), entry, "update", at)).toBe(true)
+    expect(
+      can(mineSnap(rows), entry, "update", { ...at, row: { region: VALUE } })
+    ).toBe("unknown")
+    // Контейнерна гілка того самого виміру теж лише з нестабільним носієм
+    const container = [
+      update({
+        extent: "dimension",
+        dimensionId: DIM,
+        level: "container",
+        container: BOX,
+      }),
+    ]
+    expect(
+      can(mineSnap(container), entry, "update", {
+        ...at,
+        row: { region: VALUE, project: BOX },
+      })
+    ).toBe("unknown")
   })
 
   it("a container branch: a container row and the bound container", () => {
@@ -520,8 +544,9 @@ describe("can", () => {
     const opts = (project: unknown) => ({ ...at, row: { project } })
     expect(can(mineSnap(rows), entry, "update", opts(BOX))).toBe(true)
     expect(can(mineSnap(rows), entry, "update", opts(OTHER))).toBe(false)
-    // Без рядка контейнерне право не дістає цілого скоупу.
-    expect(can(mineSnap(rows), entry, "update", at)).toBe(false)
+    // Без рядка — право в якомусь контейнері скоупу, без умов носіїв.
+    expect(can(mineSnap(rows), entry, "update", at)).toBe(true)
+    expect(can(mineSnap([]), entry, "update", at)).toBe(false)
   })
 
   it("a missing container carrier is unknown only where a container row exists", () => {
@@ -615,6 +640,30 @@ describe("can", () => {
     ).toBe(false)
   })
 
+  it("a custom action is judged by its own rows and extents", () => {
+    const entry = withRich({
+      actions: [
+        { action: "reassign", extents: [{ form: "any" }, { form: "own" }] },
+      ],
+    })
+    const rows = [row({ action: "reassign", extent: "own" })]
+    const opts = (assignee: string) => ({ ...at, row: { assignee } })
+    expect(can(mineSnap(rows), entry, "reassign", opts(MEMBER))).toBe(true)
+    expect(can(mineSnap(rows), entry, "reassign", opts(OTHER))).toBe(false)
+    expect(can(mineSnap([row()]), entry, "reassign", opts(MEMBER))).toBe(false)
+  })
+
+  it("a key carrier: the row key against the user", () => {
+    const entry = withRich({
+      ownership: [{ carrier: { key: true }, owner: { users: true } }],
+      actions: [{ action: "update", extents: [{ form: "own" }] }],
+    })
+    const rows = [update({ extent: "own" })]
+    const opts = (key: string) => ({ ...at, row: { ref: key } })
+    expect(can(mineSnap(rows), entry, "update", opts(USER))).toBe(true)
+    expect(can(mineSnap(rows), entry, "update", opts(OTHER))).toBe(false)
+  })
+
   it("publicRead opens read for a valid user and lifts the tenant boundary", () => {
     const entry = withRich({}) as CatalogEntry
     const open = { ...entry, publicRead: "authenticated" as const }
@@ -623,10 +672,11 @@ describe("can", () => {
     expect(can(mineSnap([]), entry, "read", at)).toBe(false)
   })
 
-  it("a verbatim scope set is unknown, inside and outside scopeSets", () => {
+  it("a verbatim scope set: only the tenant boundary is unknown", () => {
     const entry = withRich({ scopeSet: "verbatim" })
     expect(can(mineSnap([update({})]), entry, "update", at)).toBe("unknown")
-    expect(can(mineSnap([]), entry, "update", { scope: OTHER })).toBe("unknown")
+    // Права свіжі: без гранту хибно, `unknown` лише від межі тенанта
+    expect(can(mineSnap([]), entry, "update", { scope: OTHER })).toBe(false)
   })
 
   it("an adopted membership of the kind: unknown, publicRead is not exempt", () => {
