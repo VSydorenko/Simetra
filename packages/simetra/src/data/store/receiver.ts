@@ -268,7 +268,12 @@ function createMarkTimes(
         // вперше бачиться тут.
         for (const at of live) if (!times.has(at)) times.set(at, writer.now())
         if (times.size === 0) gaps.delete(channel)
-        else take(Math.min(...times.values()), pairOf(channel)?.object)
+        else {
+          // Цикл, а не розгортання: епох стільки, скільки позначених рядків.
+          let oldest = Infinity
+          for (const at of times.values()) if (at < oldest) oldest = at
+          take(oldest, pairOf(channel)?.object)
+        }
       }
       return found
     },

@@ -192,9 +192,9 @@ describe("receiver metrics", () => {
     await advance(REJOIN_JITTER_MS)
     const ages = h.log.filter((e) => e.kind === "stale-age")
     expect(ages).toHaveLength(1)
-    expect((ages[0] as { ageMs: number }).ageMs).toBeLessThanOrEqual(
-      performance.now() - second
-    )
+    const { ageMs } = ages[0] as { ageMs: number }
+    expect(ageMs).toBeGreaterThanOrEqual(1000)
+    expect(ageMs).toBeLessThanOrEqual(performance.now() - second)
   })
 
   it("measures the age of a min-version mark cleared and set again from the second mark", async () => {
@@ -218,9 +218,9 @@ describe("receiver metrics", () => {
       await advance(1000)
     const ages = h.log.filter((e) => e.kind === "stale-age")
     expect(ages.length).toBeGreaterThan(0)
-    expect((ages[0] as { ageMs: number }).ageMs).toBeLessThanOrEqual(
-      performance.now() - second
-    )
+    const { ageMs } = ages[0] as { ageMs: number }
+    expect(ageMs).toBeGreaterThanOrEqual(1000)
+    expect(ageMs).toBeLessThanOrEqual(performance.now() - second)
   })
 
   it("does not report a gap whose row the server deleted during it", async () => {
