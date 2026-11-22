@@ -20,7 +20,10 @@ import {
   key,
   org,
   S,
+  interruptWithin,
+  modelRun,
   settle,
+  settleRuns,
   setup,
   task,
   taskValues,
@@ -803,10 +806,15 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.spyOn(Math, "random").mockReturnValue(0.5)
 })
-afterEach(() => {
+// Прогін, перерваний межею часу, закриває ядро й таймери ще в своєму тесті.
+afterEach(async () => {
+  await settleRuns()
   vi.restoreAllMocks()
   vi.useRealTimers()
 })
+
+// Бюджет властивості: таймаут vitest і межа fast-check — з нього одного.
+const PROPERTY_BUDGET_MS = RUNS * 400 + 10_000
 
 describe("receiver model: the disconnect mark and the composition against the server truth", () => {
   it(
@@ -815,12 +823,12 @@ describe("receiver model: the disconnect mark and the composition against the se
       await fc.assert(
         fc.asyncProperty(
           fc.array(STEP, { maxLength: 40, size: "medium" }),
-          (steps) => run(steps)
+          (steps) => modelRun(run(steps))
         ),
-        { numRuns: RUNS }
+        { numRuns: RUNS, ...interruptWithin(PROPERTY_BUDGET_MS) }
       )
     },
-    RUNS * 400 + 10_000
+    PROPERTY_BUDGET_MS
   )
 
   // Регресії класу «розрив» (раунди 1–5): кожна — кроки, на яких падала

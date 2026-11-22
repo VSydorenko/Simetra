@@ -44,7 +44,19 @@ import {
   type ViewSnapshot,
   type ViewSpec,
 } from "../types"
-import { ORG, S, TASK, key, keysOf, org, setup, task } from "./core-support"
+import {
+  ORG,
+  S,
+  TASK,
+  interruptWithin,
+  key,
+  modelRun,
+  settleRuns,
+  keysOf,
+  org,
+  setup,
+  task,
+} from "./core-support"
 
 /*
  * Модельний тест ядра — гейт блоку (спека П4-B §11,
@@ -4383,51 +4395,125 @@ const property = (
     fc.boolean(),
     fc.constantFrom<Profile>("full", "scroll", "burial"),
     (steps, preloaded, profile) =>
-      runModel(
-        steps,
-        preloaded,
-        profile,
-        defects,
-        schedulerChecks,
-        rights,
-        signals
+      modelRun(
+        runModel(
+          steps,
+          preloaded,
+          profile,
+          defects,
+          schedulerChecks,
+          rights,
+          signals
+        )
       )
   )
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
 })
-afterEach(() => {
+// Прогін, перерваний межею часу, закриває ядро й таймери ще в своєму тесті.
+afterEach(async () => {
+  await settleRuns()
   vi.useRealTimers()
 })
 
+// Бюджети тестів властивостей: таймаут vitest і межа fast-check
+// (`interruptWithin`) — з однієї сталої на тест.
+const BUDGET_MS = 120_000
+const RIGHTS_BUDGET_MS = 240_000
+
 describe("core model", () => {
-  it("holds the invariants over random interleavings", async () => {
-    tickReads = 0
-    await fc.assert(property(), { numRuns: RUNS })
-    // Без тактів із читанням інваріанти планувальника порожні.
-    expect(tickReads, "no tick with a read").toBeGreaterThan(0)
-  }, 120_000)
+  it(
+    "holds the invariants over random interleavings",
+    async () => {
+      tickReads = 0
+      await fc.assert(property(), {
+        numRuns: RUNS,
+        ...interruptWithin(BUDGET_MS),
+      })
+      // Без тактів із читанням інваріанти планувальника порожні.
+      expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+    },
+    BUDGET_MS
+  )
 
   // Каталог зі знімком прав (B5b-2): ті самі кроки й кроки знімка — втрата
   // пари, звуження, без змін, збій, утримана відповідь, читання до знімка,
   // інший користувач. Без прав прогін вище лишається тим самим (насіння
   // самотесту й регресій не зсуваються).
-  it("holds the invariants with the rights snapshot", async () => {
-    tickReads = 0
-    await fc.assert(property([], true, true), { numRuns: RUNS })
-    expect(tickReads, "no tick with a read").toBeGreaterThan(0)
-  }, 240_000)
+  it(
+    "holds the invariants with the rights snapshot",
+    async () => {
+      tickReads = 0
+      await fc.assert(property([], true, true), {
+        numRuns: RUNS,
+        ...interruptWithin(RIGHTS_BUDGET_MS),
+      })
+      expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+    },
+    RIGHTS_BUDGET_MS
+  )
 
   // Приймач сигналів (B5b-3): ті самі кроки й кроки знімка прав плюс сигнали
   // каналу змін у будь-якому порядку з дублями, приєднання з `recovered` і
   // без, розриви, відмови каналу й з'єднання. Прогони без сигналів не
   // змінюються (їхні насіння самотесту й регресій не зсуваються).
-  it("holds the invariants with the signal receiver", async () => {
-    tickReads = 0
-    await fc.assert(property([], true, true, true), { numRuns: RUNS })
-    expect(tickReads, "no tick with a read").toBeGreaterThan(0)
-  }, 240_000)
+  it(
+    "holds the invariants with the signal receiver",
+    async () => {
+      tickReads = 0
+      await fc.assert(property([], true, true, true), {
+        numRuns: RUNS,
+        ...interruptWithin(RIGHTS_BUDGET_MS),
+      })
+      expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+    },
+    RIGHTS_BUDGET_MS
+  )
+})
+
+// Межа часу властивості (обв'язка): прогін понад бюджет тесту червоний сам і
+// не продовжується у фоні в наступному тесті.
+describe("the time budget of a property", () => {
+  const SMALL_BUDGET_MS = 3_000
+  let started = 0
+  let finished = 0
+  const counted = fc.asyncProperty(
+    fc.array(STEP, { minLength: 10, maxLength: 80, size: "max" }),
+    fc.boolean(),
+    fc.constantFrom<Profile>("full", "scroll", "burial"),
+    (steps, preloaded, profile) => {
+      started++
+      return modelRun(
+        runModel(steps, preloaded, profile).finally(() => {
+          finished++
+        })
+      )
+    }
+  )
+
+  it(
+    "fails a property that outlives its budget as an interrupt",
+    async () => {
+      await expect(
+        fc.assert(counted, {
+          numRuns: 1_000_000,
+          ...interruptWithin(SMALL_BUDGET_MS),
+        })
+      ).rejects.toThrow(/interrupted/i)
+    },
+    SMALL_BUDGET_MS
+  )
+
+  it("leaves no run of it going in the next test", async () => {
+    // Перерваний прогін осів ще в своєму тесті: ядро й таймери закрито там.
+    expect(finished, "the interrupted run is still in flight").toBe(started)
+    const at = started
+    for (let i = 0; i < 50; i++)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(started, "a run started after its test ended").toBe(at)
+    expect(vi.getTimerCount()).toBe(0)
+  })
 })
 
 // Фіксовані прогони знайдених контрприкладів: насіння й шлях fast-check
@@ -4510,9 +4596,10 @@ describe("core model regressions", () => {
         seed,
         path,
         endOnFailure: true,
+        ...interruptWithin(BUDGET_MS),
       })
     },
-    120_000
+    BUDGET_MS
   )
 
   // #114: вигляд із `needsRefresh` від механізму свіжості стає видимим
@@ -4871,6 +4958,7 @@ describe("core model self-check", () => {
         // Достатньо знайти червоний прогін: ужимання контрприкладу лише
         // подовжує самотест.
         endOnFailure: true,
+        ...interruptWithin(BUDGET_MS),
       })
       expect(result.failed, `${flag} not caught`).toBe(true)
       expect(result.errorInstance).toBeInstanceOf(ModelFailure)
@@ -4888,7 +4976,7 @@ describe("core model self-check", () => {
       if (SCHEDULER_DEFECTS.includes(flag))
         expect(tickReads, `${flag}: no tick with a read`).toBeGreaterThan(0)
     },
-    120_000
+    BUDGET_MS
   )
 
   it.each(RIGHTS_DEFECTS)(
@@ -4898,6 +4986,7 @@ describe("core model self-check", () => {
         numRuns: 10_000,
         seed: 1,
         endOnFailure: true,
+        ...interruptWithin(RIGHTS_BUDGET_MS),
       })
       expect(result.failed, `${flag} not caught`).toBe(true)
       expect(result.errorInstance).toBeInstanceOf(ModelFailure)
@@ -4906,7 +4995,7 @@ describe("core model self-check", () => {
       await runModel(steps, preloaded, profile, [], true, true)
       expect((result.errorInstance as Error).message).toMatch(CAUGHT_BY[flag]!)
     },
-    240_000
+    RIGHTS_BUDGET_MS
   )
 
   // Дефекти планувальника — і в прогонах з сигналами: пропуск перечитувань
@@ -4919,6 +5008,7 @@ describe("core model self-check", () => {
         numRuns: 10_000,
         seed: 1,
         endOnFailure: true,
+        ...interruptWithin(RIGHTS_BUDGET_MS),
       })
       expect(result.failed, `${flag} not caught`).toBe(true)
       expect(result.errorInstance).toBeInstanceOf(ModelFailure)
@@ -4929,6 +5019,6 @@ describe("core model self-check", () => {
       if (SCHEDULER_DEFECTS.includes(flag))
         expect(tickReads, `${flag}: no tick with a read`).toBeGreaterThan(0)
     },
-    240_000
+    RIGHTS_BUDGET_MS
   )
 })
