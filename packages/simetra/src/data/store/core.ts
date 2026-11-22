@@ -1613,6 +1613,7 @@ export function createCore(options: {
     defects,
     now,
     hiddenKeys,
+    keyJobs: new Map(),
     schedule,
     journal: {
       erase: (object, key) => overlay.erase(object, key),

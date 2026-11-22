@@ -739,6 +739,24 @@ describe("receiver model: the disconnect mark and the composition against the se
       ],
     ],
     [
+      "F1: a released channel keeps its entry while a view read that will write its row is in flight",
+      [
+        { t: "unsub", v: 5 },
+        { t: "rejoinFresh", v: 0, create: true },
+        { t: "hold" },
+        { t: "revalidate" },
+        { t: "unsubAll" },
+        { t: "mount" },
+        { t: "edit", k: 0 },
+        { t: "sub", v: 0 },
+        { t: "unsubAll" },
+        { t: "scopes", ch: 0 },
+        { t: "sub", v: 5 },
+        { t: "release", ok: false, at: false },
+        { t: "rejoinFresh", v: 0, create: false },
+      ],
+    ],
+    [
       "P1: a new gap before the jitter of the wave",
       [
         { t: "fail", ch: 0 },
