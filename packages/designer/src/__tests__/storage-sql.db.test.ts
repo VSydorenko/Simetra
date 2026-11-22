@@ -519,7 +519,12 @@ describe("І5: storage_headroom is the necessary check of the upload", () => {
   })
 
   it("the request role reads neither the usage nor the quota", async () => {
-    for (const table of ["storage_usage", "storage_quota", "storage_pending"]) {
+    for (const table of [
+      "storage_usage",
+      "storage_quota",
+      "storage_pending",
+      "storage_instance",
+    ]) {
       const result = await tx((s) =>
         queryAs(
           s.client,
