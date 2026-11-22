@@ -998,11 +998,53 @@ async function runModelOn(
   const owed = new Map<string, Map<string, number>>()
   const owedWhole = new Map<ObjectName, Map<string, number>>()
   const retryLeft = new Map<string, number>()
+  // Ключі, чий сигнал уже прочитано: дочитування мінімальної версії
+  // дозволені, лише коли модель побачила позначку `minVersion` ключа.
+  const awaitingMark = new Set<string>()
+  const grantRetries = () => {
+    for (const at of [...awaitingMark]) {
+      const [object, k] = at.split("\u0000") as [ObjectName, Key]
+      if (objectOf(object).rows.get(k)?.stale.minVersion === undefined) continue
+      awaitingMark.delete(at)
+      retryLeft.set(at, MIN_VERSION_RETRIES)
+    }
+  }
   // `id` повідомлень, які приймач уже бачив: повтор він відкидає.
   const seenIds = new Set<string>()
-  // Об'єкти, які на цьому кроці читала пачка (на видимій вкладці) чи хвиля.
-  const batchRead = new Set<ObjectName>()
-  const waveRead = new Set<ObjectName>()
+  // Об'єкти, ключі яких на цьому кроці читала пачка, і цілі `include`
+  // виглядів, що їх перечитує сигнал: запити кроку до них — від сигналу.
+  const signalObjects = new Set<ObjectName>()
+  // Бюджет приймача (рішення архітекторки): кожен вигляд, який пачка чи
+  // хвиля назвала, — рівно одне перечитування за подію (вигляд у польоті —
+  // його один хвіст). Перечитування понад названі — не від сигналу: їх судять
+  // перевірки планувальника.
+  // Хвиля — окремо: межу відкинутих і приховану вкладку вона тримає, як
+  // планувальник, а паузу після збою й межу свіжості — ні (Р10).
+  const owedRereads = new Map<Subset, { batch: number; wave: number }>()
+  // Перечитування на старті кроку й скільки з них уже зараховано сигналу.
+  let rereadsAtStep = new Map<Subset, number>()
+  const coveredInStep = new Map<Subset, number>()
+  /** Every re-read of the view in this step came from a batch (or a wave). */
+  const bySignal = (sub: Subset, withWave: boolean) => {
+    const delta = sub.rereads - (rereadsAtStep.get(sub) ?? 0)
+    if (delta <= 0) return false
+    const owed = owedRereads.get(sub) ?? { batch: 0, wave: 0 }
+    let covered = coveredInStep.get(sub) ?? 0
+    const fromBatch = Math.min(delta - covered, owed.batch)
+    owed.batch -= fromBatch
+    covered += fromBatch
+    if (withWave) {
+      const fromWave = Math.min(delta - covered, owed.wave)
+      owed.wave -= fromWave
+      covered += fromWave
+    }
+    owedRereads.set(sub, owed)
+    coveredInStep.set(sub, covered)
+    return covered === delta
+  }
+  // Ключі, які пачка вже читала в цьому синхронному проході: пачка читає
+  // ключ один раз (дедуплікація за ключем).
+  let passKeys: Set<string> | undefined
   const owe = (
     into: Map<string, Map<string, number>>,
     at: string,
@@ -1012,14 +1054,32 @@ async function runModelOn(
     counts.set(scope, (counts.get(scope) ?? 0) + 1)
     into.set(at, counts)
   }
-  const dropOwedPair = (object: ObjectName, scope: string) => {
+  // `stored` — збережені скоупи ключів об'єкта перед `purge`: дочитування
+  // мінімальної версії несе скоуп рядка, і `purge` пари скидає його.
+  const dropOwedPair = (
+    object: ObjectName,
+    scope: string,
+    stored: ReadonlyMap<Key, string | null>
+  ) => {
     for (const [at, counts] of owed)
       if (at.startsWith(`${object}\u0000`)) counts.delete(scope)
     owedWhole.get(object)?.delete(scope)
+    for (const [k, at] of stored)
+      if (at === scope) {
+        retryLeft.delete(id(object, k))
+        awaitingMark.delete(id(object, k))
+      }
   }
+  const storedScopes = (object: ObjectName) =>
+    new Map(
+      [...objectOf(object).rows.keys()].map(
+        (k) => [k, objectOf(object).rows.get(k)!.scope] as const
+      )
+    )
   const dropOwedKey = (object: ObjectName, key: Key) => {
     owed.delete(id(object, key))
     retryLeft.delete(id(object, key))
+    awaitingMark.delete(id(object, key))
   }
   // Сигнал пари, яку модель не надсилала чи яку `purge` уже зняв, — читання
   // без сигналу (0 запитів після `purge`, §8.4).
@@ -1038,19 +1098,34 @@ async function runModelOn(
     return any
   }
   inspect.watchSignalReads((object, read) => {
-    if (read.by === "wave") {
-      waveRead.add(object)
-      return
+    for (const sub of read.views) {
+      const owedOf = owedRereads.get(sub) ?? { batch: 0, wave: 0 }
+      owedOf[read.by] += 1
+      owedRereads.set(sub, owedOf)
+      signalObjects.add(sub.form.object.name)
+      for (const step of sub.form.include) signalObjects.add(step.target)
     }
-    if (core.visible) batchRead.add(object)
+    if (read.by === "wave") return
+    if (core.visible && read.keys.length > 0) signalObjects.add(object)
+    if (passKeys === undefined) {
+      passKeys = new Set()
+      queueMicrotask(() => {
+        passKeys = undefined
+      })
+    }
     for (const { key, scopes } of read.keys) {
       const at = id(object, key)
+      if (passKeys.has(at))
+        asyncViolations.push(`${at}: read twice in one batch`)
+      passKeys.add(at)
       if (take(owed.get(at), scopes)) {
-        retryLeft.set(at, MIN_VERSION_RETRIES)
+        retryLeft.delete(at)
+        awaitingMark.add(at)
         continue
       }
-      // Дочитування мінімальної версії несе скоуп рядка, а не каналу: для
-      // нього лічиться лише кількість.
+      // Дочитування мінімальної версії несе скоуп рядка, а не каналу, тож
+      // лічиться лише кількість.
+      grantRetries()
       const left = retryLeft.get(at) ?? 0
       if (left > 0) retryLeft.set(at, left - 1)
       else asyncViolations.push(`${at}: a signal read without a signal`)
@@ -1404,7 +1479,16 @@ async function runModelOn(
       // Прохід прибирає збережені пари, які знімок забороняє: їхні сигнали
       // приймач скидає (`purged`).
       if (scope !== null && grantDenies(g, object, scope))
-        dropOwedPair(object, scope)
+        dropOwedPair(
+          object,
+          scope,
+          new Map(
+            [...capturedScopes].flatMap(([at, stored]) => {
+              const [o, k] = at.split("\u0000") as [ObjectName, Key]
+              return o === object ? [[k, stored] as const] : []
+            })
+          )
+        )
       if (grantDenies(g, object, scope)) {
         rightsPurgeable.add(key)
         purgedTargets.add(key)
@@ -1628,6 +1712,7 @@ async function runModelOn(
   }
 
   const check = (label: string, stepStart: number) => {
+    grantRetries()
     if (errors.length > 0)
       fail(label, `unexpected rejection ${String(errors[0])}`)
     if (rights && closed === undefined) {
@@ -2845,11 +2930,12 @@ async function runModelOn(
     act = () => commit((w) => w.purge(object, { scope }))
   ) => {
     const held = [...objectOf(object).rows.keys()]
+    const stored = storedScopes(object)
     const hadLines =
       object === TASK && objectOf(TASK).sections.get(K1, "lines") !== undefined
     act()
     if (closed !== undefined) return undefined
-    dropOwedPair(object, scope)
+    dropOwedPair(object, scope, stored)
     const purgedKeys = {
       object,
       keys: held.filter((k) => objectOf(object).rows.get(k) === undefined),
@@ -2892,8 +2978,11 @@ async function runModelOn(
     const stepStart = fake.log.length
     logAt = log.length
     restoredInStep.clear()
-    batchRead.clear()
-    waveRead.clear()
+    signalObjects.clear()
+    coveredInStep.clear()
+    rereadsAtStep = new Map(
+      [...internals.registry.subsets()].map((sub) => [sub, sub.rereads])
+    )
     const before = lists()
     preloadedSection = false
     rightsPurgeable = new Set()
@@ -3510,6 +3599,10 @@ async function runModelOn(
         const before = new Map(
           [...internals.registry.subsets()].map((sub) => [sub, sub.rereads])
         )
+        // Явні перечитування кроку вище — не сигнал: зарахування починається
+        // з цієї миті.
+        rereadsAtStep = new Map(before)
+        coveredInStep.clear()
         // Перепланування (подія видимості вигляду) і час понад `I`: вигляд у
         // стані межі не дає строку.
         core.setVisible(SPECS[7]!, true)
@@ -3517,7 +3610,7 @@ async function runModelOn(
         advance(2 * REVALIDATE_MS)
         await flush()
         for (const [sub, rereads] of before)
-          if (sub.rereads !== rereads && !batchRead.has(sub.form.object.name)) {
+          if (sub.rereads !== rereads && !bySignal(sub, false)) {
             // Читання зробив такт планувальника: він же й помилка.
             tickReads++
             fail(
@@ -3910,10 +4003,11 @@ async function runModelOn(
       )
       for (const [sub, rereads] of readsAtStart) {
         if (sub.rereads === rereads) continue
-        // Пачка сигналів читає за сигналом, а не за строком: межа відкинутих і
-        // пауза після збою стосуються планувальника (§6.2, §8.4).
-        const object = sub.form.object.name
-        if (batchRead.has(object)) continue
+        // Пачка сигналів і хвиля читають за подією каналу, а не за строком:
+        // межа відкинутих і пауза після збою стосуються планувальника (§6.2,
+        // §8.4). Вигляд пропускається, лише коли кожне його перечитування
+        // кроку зараховано названому сигналом (бюджет приймача).
+        if (bySignal(sub, false)) continue
         // Читання, яке запустив планувальник (чи `resume()`).
         if (s.t !== "resume" && hiddenAtStart && !core.visible)
           fail(label, "a read started by the scheduler on a hidden tab")
@@ -3927,19 +4021,16 @@ async function runModelOn(
           was.failedAt !== undefined &&
           clock < was.failedAt + pauseAfter(was.failures) &&
           !readsObject(sub, dueNow) &&
-          // Хвиля приєднання перечитує об'єкт явно (Р10), як `revalidate`.
-          !waveRead.has(object)
+          // Хвиля приєднання перечитує вигляд явно (Р10), як `revalidate`.
+          !bySignal(sub, true)
         )
           fail(label, "a view was read inside its failure pause")
       }
     }
     // Хвиля приєднання й пачка сигналів перечитують за подією каналу, а не
     // за межею свіжості: `resume()` бере хвилю разом зі звіркою (Р10).
-    // Перечитування задач читає й цілі `include` — організації.
-    const bySignal = (object: ObjectName) =>
-      [object, TASK].some((o) => waveRead.has(o) || batchRead.has(o))
     for (const [sub, rereads] of youngViews) {
-      if (bySignal(sub.form.object.name)) continue
+      if (bySignal(sub, true)) continue
       if (sub.rereads !== rereads)
         fail(
           label,
@@ -3951,7 +4042,9 @@ async function runModelOn(
         fail(label, "a view older than the limit was not re-read")
     }
     for (const object of quiet) {
-      if (bySignal(object)) continue
+      // Запити до об'єкта від пачки (ключі, названі вигляди й їхні цілі
+      // `include`) — від сигналу.
+      if (signalObjects.has(object)) continue
       for (const sent of fake.log.slice(stepStart)) {
         const target = sent.query?.object
         if (target !== undefined && `${target.kind}.${target.name}` === object)
@@ -4042,6 +4135,22 @@ async function runModelOn(
     fake.epoch = epochs.current
     advance(10_000)
     await flush()
+    // Читання, які запустив цей плин часу (такт, хвиля приєднання, пачка
+    // сигналів), осідають до знімка прав: інакше вони займають обмежувач
+    // читань, і частина `rights` до сервера не доходить.
+    for (let i = 0; fake.pending.length > 0; i++) {
+      if (i > 100) fail("converge", "reads never end")
+      const stepStart = fake.log.length
+      logAt = log.length
+      restoredInStep.clear()
+      while (fake.pending.length > 0) {
+        const read = fake.take()
+        read.answer()
+        record(read)
+      }
+      await flush()
+      check(`converge settle ${i}`, stepStart)
+    }
     // Права повертаються повністю й ядро застосовує їх до перечитування:
     // знову відкриті пари читає вже читання після знімка.
     if (rights) {
@@ -4361,6 +4470,14 @@ describe("core model regressions", () => {
       seed: 1407422309,
       path: "9302:4:1:9:11:14:18:22:24:27:29:36:43:43:46:47:51:51:14:14:14:29:18:16:24:29:28:28:31:31:27:27:27:27:27:29:28:28:28:29:28:29:29:29:29:29",
     },
+    // #114: такт і хвиля приєднання займають обмежувач читань перед
+    // збіжністю, і частина `rights` збіжності не доходить до сервера.
+    {
+      issue: 114,
+      signals: true,
+      seed: 929198240,
+      path: "4036:7:7:11:12:22:25:24:29:31:35:35:26:6:30:35:26:24:24:26:25:31:32:32:35:36:47:46:54:37:31:50:51:56:56:60:64:68:22:3:28:35:35:36:33:30:29:28:29:29:33:33:33:33:33:33:35:36:28:34:38:38",
+    },
     // #114: відповідь читання за ключем, старша за завантаження `full`, лягла
     // після нього (розбіжне «рядка немає», П15): відхилений рядок відповіді
     // завантаження не лишає складу без нього після збіжності.
@@ -4501,6 +4618,8 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // Прохід прибирає й дозволену пару об'єкта: склад чи `purged` картки.
   "rights-pass-purges-allowed":
     /the rights pass removed .* of an allowed pair|purged by the rights pass of an allowed pair/,
+  // Приймач: сигнал пари, яку `purge` зняв, — читання без сигналу.
+  "receiver-purge-keeps-batch": /a signal read without a signal/,
 }
 
 // Насіння самотесту, коли насіння 1 не знаходить дефекту за 10 000 прогонів.
@@ -4518,6 +4637,9 @@ const RIGHTS_DEFECTS: readonly DefectFlag[] = [
   "rights-pass-by-diff",
   "rights-pass-purges-allowed",
 ]
+
+// Дефекти приймача сигналів (B5b-3): їх ловлять прогони з сигналами.
+const SIGNAL_DEFECTS: readonly DefectFlag[] = ["receiver-purge-keeps-batch"]
 
 describe("core model self-check", () => {
   it.each(DEFECTS)(
@@ -4567,6 +4689,29 @@ describe("core model self-check", () => {
       const [steps, preloaded, profile] = result.counterexample!
       await runModel(steps, preloaded, profile, [], true, true)
       expect((result.errorInstance as Error).message).toMatch(CAUGHT_BY[flag]!)
+    },
+    240_000
+  )
+
+  // Дефекти планувальника — і в прогонах з сигналами: пропуск перечитувань
+  // від сигналу не затуляє їх (бюджет приймача).
+  it.each([...SIGNAL_DEFECTS, ...SCHEDULER_DEFECTS])(
+    "turns red with signals and the defect %s",
+    async (flag) => {
+      tickReads = 0
+      const result = await fc.check(property([flag], true, true, true), {
+        numRuns: 10_000,
+        seed: 1,
+        endOnFailure: true,
+      })
+      expect(result.failed, `${flag} not caught`).toBe(true)
+      expect(result.errorInstance).toBeInstanceOf(ModelFailure)
+      // Контроль: той самий прогін без дефекту зелений.
+      const [steps, preloaded, profile] = result.counterexample!
+      await runModel(steps, preloaded, profile, [], true, true, true)
+      expect((result.errorInstance as Error).message).toMatch(CAUGHT_BY[flag]!)
+      if (SCHEDULER_DEFECTS.includes(flag))
+        expect(tickReads, `${flag}: no tick with a read`).toBeGreaterThan(0)
     },
     240_000
   )

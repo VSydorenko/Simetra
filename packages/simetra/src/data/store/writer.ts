@@ -957,9 +957,7 @@ export async function revalidate(
   // Єдина ознака закриття — токен сесії: він недійсний уже з `closing`, коли
   // слухач purge-пачки ще бачить `closed === undefined`.
   if (!ctx.session.token().valid) return
-  // Вигляд без жодного завантаження складу не має: його перше читання —
-  // завантаження, а не системне перечитування. ТЧ — лише змонтовані.
-  const targets = subsetsOf(ctx, o).filter((s) => eligible(ctx, s, options))
+  const targets = revalidateTargets(ctx, object, options)
   if (options.minAgeMs !== undefined) {
     // Такт і звірка вигляд у польоті не беруть (§6.3, single-flight).
     await revalidateViews(
@@ -974,6 +972,19 @@ export async function revalidate(
     return
   }
   await singleFlight(ctx, o, targets, options).done
+}
+
+/** The views `revalidate` of the object takes with these options. */
+export function revalidateTargets(
+  ctx: WriterContext,
+  object: ObjectName,
+  options: RevalidateOptions
+): Subset[] {
+  // Вигляд без жодного завантаження складу не має: його перше читання —
+  // завантаження, а не системне перечитування. ТЧ — лише змонтовані.
+  return subsetsOf(ctx, ctx.objectOf(object)).filter((s) =>
+    eligible(ctx, s, options)
+  )
 }
 
 /**

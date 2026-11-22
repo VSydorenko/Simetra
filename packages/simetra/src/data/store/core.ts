@@ -51,6 +51,7 @@ import {
   hasDueViews,
   nextViewDue,
   revalidate,
+  revalidateTargets,
   revalidateHolders,
   revalidateHydrated,
   revalidateNarrowed,
@@ -1332,7 +1333,12 @@ export function createCore(options: {
       if (views.some((v) => v.visible)) {
         readViews += views.filter((v) => v.visible).length
         reads++
-        signalReadListener?.(object, { by: "wave" })
+        signalReadListener?.(object, {
+          by: "wave",
+          views: revalidateTargets(writerContext, object, {
+            visibleOnly: true,
+          }),
+        })
         revalidate(writerContext, object, { visibleOnly: true }).catch(
           (error: unknown) => log({ kind: "listener-failed", error })
         )
@@ -1595,7 +1601,7 @@ export function createCore(options: {
       joinWave,
       requestVersion: () => core.requestVersion(),
       connectionRefused,
-      noteRead: (object, read) => signalReadListener?.(object, read),
+      signalReads: () => signalReadListener,
     })
     // Кожен `commit` міг змінити активні вигляди чи скоупи їхніх рядків.
     session.onFlush(() => receiver?.touch())

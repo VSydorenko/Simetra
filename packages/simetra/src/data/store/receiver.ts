@@ -27,9 +27,11 @@ import type {
   ViewSpec,
   Writer,
 } from "./types"
+import type { Subset } from "./subsets"
 import {
   activeViews,
   revalidate,
+  revalidateTargets,
   singleFlight,
   type WriterContext,
 } from "./writer"
@@ -75,8 +77,11 @@ export interface ReceiverContext {
   requestVersion(): void
   /** The transport refused the connection for good: the runtime closes. */
   connectionRefused(): void
-  /** Test-only: a batch acts on an object (`inspectCore().watchSignalReads`). */
-  noteRead?(object: ObjectName, read: SignalRead): void
+  /**
+   * Test-only (`inspectCore().watchSignalReads`): the watcher of the reads a
+   * batch starts, `undefined` without one — then nothing is built for it.
+   */
+  signalReads?(): ((object: ObjectName, read: SignalRead) => void) | undefined
 }
 
 /**
@@ -84,7 +89,8 @@ export interface ReceiverContext {
  * an object — its keys with the pairs (channel scopes) their signals came
  * from, the pairs of its `invalidate` signals, and whether it re-reads the
  * object whole (a hidden tab defers the read to `resume()`) — or a rejoin
- * wave re-reading it.
+ * wave re-reading it. `views` are the views it re-reads (the whole re-read's
+ * targets, the sections of a key read; a view in flight gets its one tail).
  */
 export type SignalRead =
   | {
@@ -95,8 +101,9 @@ export type SignalRead =
       }[]
       readonly invalidated: readonly (string | null)[]
       readonly whole: boolean
+      readonly views: readonly Subset[]
     }
-  | { readonly by: "wave" }
+  | { readonly by: "wave"; readonly views: readonly Subset[] }
 
 export interface Receiver {
   /** The set of active views or the rows they show may have changed. */
@@ -311,8 +318,11 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   let stopped = false
   let planned = false
   const { session, limits } = writer
-  // Запис і відповіді дійсні, поки приймач живий: `stop()` гасить їх разом.
-  const token = session.childToken(() => !stopped)
+  // Власного токена приймач не має: `stop()` синхронний (гачок закриття
+  // сесії), тож після нього `stopped` гасить кожну подію, а `purge` стережуть
+  // епохи (`acceptEpochs`, `buriedSince`). Запис іде токеном сесії: під час
+  // закриття (`closing`) він уже недійсний.
+  const token = session.token()
   const collator = ctx.filterCollator
 
   const scopesOfRows = (entry: CatalogEntry): string[] => {
@@ -379,7 +389,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   const marks = createMarkTimes(writer, pairOf)
 
   const onError = (error: SignalError) => {
-    if (stopped || !token.valid) return
+    if (stopped) return
     // Розрив: рядки каналу (чи всі) не знають, що пропустили (§8.4).
     if (error.kind === "transport") {
       if (error.channel !== undefined && !held.has(error.channel)) return
@@ -416,7 +426,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   // береться), а його об'єкт іде в хвилю приєднання ядра. Знімає позначки
   // лише читання, що почалось після цієї епохи.
   const offSubscribed = transport.onSubscribed(({ channel }) => {
-    if (stopped || !token.valid || !held.has(channel)) return
+    if (stopped || !held.has(channel)) return
     const pair = pairOf(channel)
     if (pair === undefined) return
     session.epochs.join(channel)
@@ -448,7 +458,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     open = undefined
     batch.quiet?.abort()
     batch.max.abort()
-    if (stopped || !token.valid) return
+    if (stopped) return
     enqueue(batch.batch)
   }
 
@@ -464,7 +474,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   // Кожен сигнал відсуває закриття на `QUIET_MS`, але не далі за `MAX_BATCH_MS`
   // від першого.
   const collect = (fill: (batch: Batch) => void) => {
-    if (stopped || !token.valid) return
+    if (stopped) return
     open ??= startOpen()
     const batch = open
     fill(batch.batch)
@@ -483,7 +493,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   }
 
   function pump() {
-    if (flying || waiting === undefined || stopped || !token.valid) return
+    if (flying || waiting === undefined || stopped) return
     const batch = waiting
     waiting = undefined
     flying = true
@@ -500,7 +510,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   // Повідомлення каналу змін (§8.1): розібране схемою прийнятого повідомлення
   // — схема відправки `id` не несе й не пропустила б жодного.
   const onSignal = (topic: string, payload: unknown) => {
-    if (stopped || !token.valid) return
+    if (stopped) return
     const channel = parseTopic(topic)
     // Топік поза моїми підписками (знятий канал, чужий формат) і канали прав
     // (їх бере блок прав) запиту не дають.
@@ -671,7 +681,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     void session.sleep(MIN_VERSION_PAUSE_MS * 2 ** (attempt - 1)).then(() => {
       if (retries.get(id)?.chain !== chain) return
       retries.delete(id)
-      if (stopped || !token.valid) return
+      if (stopped) return
       // Позначку вже зняло інше читання — дочитувати нічого.
       const mark = writer.objectOf(object).rows.get(key)?.stale.minVersion
       if (mark === undefined || mark.v < version) return
@@ -754,22 +764,28 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       const views = activeViews(writer, object)
       const plan = classify(o, signals, views.length > 0)
       if (plan === undefined) continue
-      ctx.noteRead?.(object, {
-        by: "batch",
-        keys: [...plan.stored, ...plan.fresh].map((key) => ({
-          key,
-          scopes: [...(signals.keys.get(key)?.scopes ?? [])],
-        })),
-        invalidated: [...signals.invalidate],
-        whole: plan.whole,
-      })
+      const watcher = ctx.signalReads?.()
+      const note = (reread: readonly Subset[]) =>
+        watcher?.(object, {
+          by: "batch",
+          keys: [...plan.stored, ...plan.fresh].map((key) => ({
+            key,
+            scopes: [...(signals.keys.get(key)?.scopes ?? [])],
+          })),
+          invalidated: [...signals.invalidate],
+          whole: plan.whole,
+          views: reread,
+        })
       // Прихована вкладка нічого не шле (Р8): вигляди чекають `resume()`.
       if (!ctx.visible()) {
+        note([])
         requested.push(object)
         refresh.push({ object })
         continue
       }
       if (plan.whole) {
+        if (watcher !== undefined)
+          note(revalidateTargets(writer, object, { visibleOnly: true }))
         burstObjects.push(object)
         for (const view of views)
           if (!view.visible) refresh.push({ object, spec: view.spec })
@@ -794,6 +810,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         const subset = writer.registry.find(spec)
         return subset?.loaded === true ? [subset] : []
       })
+      note(sections)
       if (sections.length > 0) {
         const flight = singleFlight(writer, o, sections, {
           visibleOnly: false,
@@ -825,7 +842,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     // Пачка тримає single-flight, доки не осяде все.
     const settle = async (job: Job) => {
       const [rows] = await Promise.all([job.rows, sectionsOf.get(job)])
-      if (stopped || !token.valid) return
+      if (stopped) return
       if (rows === undefined) {
         ctx.commit(
           (w) => w.markViews(job.object, { needsRefresh: true }),
@@ -887,7 +904,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   return {
     touch,
     tick() {
-      if (stopped || !token.valid) return
+      if (stopped) return
       forgetReleased()
       const oldest = marks.oldest()
       if (oldest === undefined) return
@@ -918,7 +935,11 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         if (found.keys.size === 0 && found.invalidate.size === 0)
           batch.delete(object)
       }
-      if (open !== undefined) drop(open.batch)
+      // Самотест (`receiver-purge-keeps-batch`): пачка пари, що збирається,
+      // лишається після `purge` пари — модель мусить почервоніти.
+      const keep =
+        "scope" in target && writer.defects.has("receiver-purge-keeps-batch")
+      if (open !== undefined && !keep) drop(open.batch)
       if (waiting !== undefined) drop(waiting)
       for (const [id, retry] of retries) {
         if (retry.object !== object) continue
