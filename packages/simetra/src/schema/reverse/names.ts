@@ -4,6 +4,7 @@ import {
   logicalObjectName,
   matchesAttributeCase,
   objectNameSchema,
+  STRUCTURAL_PATH_WORDS,
   type AttributeCase,
 } from "simetra/model"
 
@@ -26,16 +27,18 @@ function compare(a: string, b: string): number {
  * `(schema, physical)`; група однакових кандидатів отримує `prefix`, а те, що
  * й після нього збігається, — числовий суфікс. `undefined` — похідне ім'я не
  * проходить схему імені (спека П2 §9): вигадане ім'я сховало б, що прийом
- * таблиці потребує рішення автора.
+ * таблиці потребує рішення автора. `reserved` займає простір ще до
+ * збережених імен: такого імені не дістане жоден кандидат.
  */
 function assign(
   items: readonly Nameable[],
   base: (item: Nameable) => string,
   prefix: (item: Nameable, name: string) => string,
-  valid: (name: string) => boolean
+  valid: (name: string) => boolean,
+  reserved: readonly string[] = []
 ): Map<string, string | undefined> {
   const result = new Map<string, string | undefined>()
-  const taken = new Set<string>()
+  const taken = new Set<string>(reserved)
   for (const item of items)
     if (item.preserved !== undefined) {
       result.set(item.key, item.preserved)
@@ -83,7 +86,12 @@ export function objectNames(
   )
 }
 
-/** Логічні імена колонок однієї таблиці за стилем проєкту. */
+/**
+ * Логічні імена колонок однієї таблиці за стилем проєкту. Структурні слова
+ * шляху помилки зайняті наперед: компілятор забороняє їх як ім'я колонки
+ * (`identity.name-structural`), тож `expected_values` під camelCase бере
+ * суфікс колізії (`expectedValues2`), а не валить прийом таблиці.
+ */
 export function columnNames(
   items: readonly Nameable[],
   style: AttributeCase
@@ -94,6 +102,7 @@ export function columnNames(
     (_item, name) => name,
     (name) =>
       elementNameSchema.safeParse(name).success &&
-      matchesAttributeCase(name, style)
+      matchesAttributeCase(name, style),
+    STRUCTURAL_PATH_WORDS
   )
 }

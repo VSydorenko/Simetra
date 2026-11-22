@@ -268,7 +268,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
     core(
       user,
       { action, object: table, root: item.id as string },
-      `SELECT public.${table}_save($1::jsonb, $2::bigint) AS r`,
+      `SELECT public.${table}_save($1::jsonb, $2::bigint, NULL::jsonb) AS r`,
       [JSON.stringify(item), version],
       probe
     )
@@ -561,7 +561,7 @@ describe("catalog command core on rights system catalogs and Users", () => {
     version: string | null
   ): CommandStep => ({
     context: { action, object: table, root: item.id as string },
-    sql: `SELECT public.${table}_save($1::jsonb, $2::bigint) AS r`,
+    sql: `SELECT public.${table}_save($1::jsonb, $2::bigint, NULL::jsonb) AS r`,
     params: [JSON.stringify(item), version],
   })
   /** Запис у «Користувачів», що нічого не змінює, — джерело всіх чотирьох фактів (Р-7). */
@@ -2088,7 +2088,7 @@ describe("actor snapshot over adopted sources", () => {
             object: "task_comment",
             root: key("CA"),
           },
-          sql: "SELECT public.task_comment_save($1::jsonb, $2::bigint) AS r",
+          sql: "SELECT public.task_comment_save($1::jsonb, $2::bigint, NULL::jsonb) AS r",
           params: [
             JSON.stringify({ id: key("CA"), description: "x" }),
             version,
@@ -2117,7 +2117,7 @@ describe("actor snapshot over adopted sources", () => {
       const comment = randomUUID()
       const create = (): CommandStep => ({
         context: { action: "create", object: "task_comment", root: comment },
-        sql: "SELECT public.task_comment_save($1::jsonb, NULL::bigint) AS r",
+        sql: "SELECT public.task_comment_save($1::jsonb, NULL::bigint, NULL::jsonb) AS r",
         params: [
           JSON.stringify({
             id: comment,

@@ -898,11 +898,17 @@ const reasonOf = (issue: z.core.$ZodIssue): string | undefined => {
   return typeof reason === "string" ? reason : undefined
 }
 
+// Ключі-розрізнювачі літеральних гілок об'єднань схем рантайму: гілку відкидає
+// лише хибний літерал одного з них. Перелік явний, а не «`invalid_value` на
+// першому сегменті»: нове об'єднання з літералом під іншим ключем не змінює
+// вибору, а свій розрізнювач його автор вписує сюди разом із тестом-стражем.
+export const UNION_DISCRIMINATORS: ReadonlySet<PropertyKey> = new Set(["type"])
+
 // Issue об'єднання (`invalid_union`) ховає помилки гілок у `errors` з шляхами
 // відносно самого об'єднання. Розгортаємо їх у плоский список листків: шлях
 // кожного дістає префікс шляху об'єднання, бо відмова називає поле входу, а не
 // місце в гілці. Гілку, що не збіглася з дискримінатором (`invalid_value` на
-// одному сегменті від кореня гілки, тобто літерал `type`), відкидаємо: відправник
+// ключі з `UNION_DISCRIMINATORS` одним сегментом від кореня гілки), відкидаємо: відправник
 // мав на увазі іншу форму, і її issue лише ховали б справжню відмову. Так само
 // відкидаємо гілку, що забороняє наявне поле (`z.never()` — `operation` чи
 // `batch` запиту `run`): пакет інакше звітував би відсутню `operation`. Якщо
@@ -939,7 +945,8 @@ const leavesOf = (
         !leaves.some(
           (leaf) =>
             leaf.code === "invalid_value" &&
-            leaf.path.length === root.length + 1
+            leaf.path.length === root.length + 1 &&
+            UNION_DISCRIMINATORS.has(leaf.path[root.length]!)
         )
     )
     const kept = (matched.length > 0 ? matched : branches).flatMap(
@@ -970,12 +977,19 @@ export function decidingIssue(error: z.ZodError): z.core.$ZodIssue | undefined {
  * Шлях відмови схеми операції — одна форма для логічного шару й конверта
  * (спека П4-B §4.0): перший сегмент шляху ТЧ — сама ТЧ, тож структурний
  * `tabularSections` прибирається, лише коли за ним щось лишається (хибний
- * сам контейнер зберігає шлях). Шлях — від операції: індекс операції пакета
+ * сам контейнер зберігає шлях). Хибний ключ запису `tabularSections` форми
+ * передачі (`invalid_key`, не UUID ТЧ) сегмент зберігає: без нього шлях
+ * `<ключ>` виглядав би полем шапки. Шлях — від операції: індекс операції пакета
  * викликач відрізає сам і повертає, коли `object` назвати не може.
  */
-export function operationRefusalPath(path: readonly PropertyKey[]): string[] {
+export function operationRefusalPath(
+  path: readonly PropertyKey[],
+  issue?: z.core.$ZodIssue
+): string[] {
   const segments = path.map(String)
-  return segments[0] === "tabularSections" && segments.length > 1
+  return segments[0] === "tabularSections" &&
+    segments.length > 1 &&
+    issue?.code !== "invalid_key"
     ? segments.slice(1)
     : segments
 }

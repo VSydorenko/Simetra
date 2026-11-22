@@ -1277,6 +1277,21 @@ describe("schema refusal paths: the logical layer and the envelope agree", () =>
     expect(pathToWire(index, sample.id, path)).toBe(refusal.path)
   })
 
+  // Хибний ключ запису `tabularSections` (не UUID ТЧ) зберігає сегмент:
+  // без нього шлях `nope` виглядав би полем шапки.
+  it.each<[string, object, string]>([
+    [
+      "a section key that is not a UUID",
+      { ...wireUpdate, expectedVersion: 1, tabularSections: { nope: [{}] } },
+      "tabularSections.nope",
+    ],
+  ])("envelope: %s", async (_, operation, path) => {
+    const { handle } = await harness()
+    expect(
+      errorOf(await handle(session, runOf(operation), HTTP))
+    ).toMatchObject({ code: "command.invalid", path })
+  })
+
   // Без `object` операцію пакета називає лише індекс: шлях його зберігає.
   const NOPE = { kind: "Catalog", name: "Nope" }
   it.each<[string, unknown, string]>([
@@ -1344,5 +1359,98 @@ describe("CommandRuntime.catalog", () => {
     expect(runtime.catalog).not.toBe(handlerCatalog)
     expect(frozenDeep(runtime.catalog)).toBe(true)
     expect(Object.isFrozen(handlerCatalog)).toBe(false)
+  })
+})
+
+/**
+ * База CAS за полями у формі передачі (Р1, Р7 плану T3): після мапінгу вона
+ * проходить ту саму перевірку, що й логічна, і доходить до ядра третім
+ * аргументом фізичними колонками; вада форми (І6) — `command.invalid` без
+ * жодного оператора бази.
+ */
+describe("expectedValues in wire form", () => {
+  const linkUpdate = (fields: object) => ({
+    action: "update",
+    object: link.id,
+    id: ID,
+    expectedVersion: 2,
+    ...fields,
+  })
+  const linkCore: Override = (text) =>
+    text.includes("link_save")
+      ? { rows: [{ r: JSON.stringify({ id: ID, version: 3, code: "L" }) }] }
+      : undefined
+
+  it("reaches the kernel as p_expected_values by physical columns", async () => {
+    const { db, handle } = await harness(linkCore)
+    valueOf(
+      await handle(
+        session,
+        runOf(
+          linkUpdate({
+            values: { region_id: OTHER },
+            expectedValues: { region_id: ID },
+          })
+        ),
+        HTTP
+      )
+    )
+    expect(db.calls).toContainEqual({
+      text: 'SELECT "public"."link_save"($1::jsonb, $2::bigint, $3::jsonb) AS r',
+      params: [
+        JSON.stringify({ id: ID, region_id: OTHER }),
+        "2",
+        JSON.stringify({ region_id: ID }),
+      ],
+    })
+  })
+
+  it.each<[string, object]>([
+    [
+      "keys other than those of values",
+      { values: { region_id: OTHER }, expectedValues: { code: "a" } },
+    ],
+    ["an empty object", { values: {}, expectedValues: {} }],
+    [
+      "tabular sections",
+      {
+        values: { region_id: OTHER },
+        expectedValues: { region_id: ID },
+        tabularSections: {},
+      },
+    ],
+  ])("refuses %s before the database", async (_, fields) => {
+    const { db, handle } = await harness(linkCore)
+    expect(
+      errorOf(await handle(session, runOf(linkUpdate(fields)), HTTP))
+    ).toMatchObject({
+      code: "command.invalid",
+      path: "expectedValues",
+      object: link.id,
+    })
+    expect(db.calls).toStrictEqual([])
+  })
+
+  it("refuses a bad base value on its wire path before the database", async () => {
+    const { db, handle } = await harness(linkCore)
+    expect(
+      errorOf(
+        await handle(
+          session,
+          runOf(
+            linkUpdate({
+              values: { region_id: OTHER },
+              expectedValues: { region_id: "not-a-uuid" },
+            })
+          ),
+          HTTP
+        )
+      )
+    ).toStrictEqual({
+      code: "command.invalid",
+      path: "expectedValues.region_id",
+      object: link.id,
+    })
+    expect(db.calls).toStrictEqual([])
   })
 })

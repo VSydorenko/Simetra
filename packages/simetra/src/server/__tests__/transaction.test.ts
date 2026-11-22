@@ -1,11 +1,17 @@
 import {
+  PINNED_SESSION_SETTINGS,
   runtimeCatalogSchema,
   type CommandError,
   type Operation,
 } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createCommandRuntime } from "../runtime"
-import { runAfterCommit, Transaction, type RuntimeState } from "../transaction"
+import {
+  readSetupStatement,
+  runAfterCommit,
+  Transaction,
+  type RuntimeState,
+} from "../transaction"
 import { fakeDatabase, failureOf, type Answer } from "./fake-database"
 import {
   COMPANY,
@@ -45,6 +51,7 @@ import {
   createOrganization,
   generatedIds,
   HARNESS_EPOCH,
+  pinnedSetting,
   rootResult,
   session,
   setup,
@@ -172,7 +179,11 @@ describe("command transaction", () => {
     expect(db.calls).toEqual([
       ...OPEN,
       context("update", "client", ID),
-      call("client_save", SAVE, [JSON.stringify({ id: ID, code: "A" }), "2"]),
+      call("client_save", SAVE, [
+        JSON.stringify({ id: ID, code: "A" }),
+        "2",
+        null,
+      ]),
       context("markDeletion", "client", OTHER),
       call("client_mark_deletion", "$1::uuid, $2::bigint, $3::boolean", [
         OTHER,
@@ -190,6 +201,34 @@ describe("command transaction", () => {
     expect(result.changes.map((c) => [c.id, c.operation])).toEqual([
       [ID, "update"],
       [OTHER, "markDeletion"],
+    ])
+  })
+
+  // Р7 плану T3: база змінених полів — третім аргументом ядра, фізичними
+  // колонками й тим самим кодуванням, що й `p_item`, без ключа таблиці.
+  it("passes expectedValues of an update as p_expected_values", async () => {
+    const { db, runtime } = await setup((text) =>
+      text.endsWith("AS r") ? { rows: [{ r: coreRow(ID, 3) }] } : undefined
+    )
+    await runtime.run(session, {
+      action: "update",
+      object: CLIENT,
+      id: ID,
+      expectedVersion: 2,
+      values: { code: "B", extra: { n: 2 } },
+      expectedValues: { code: "A", extra: { n: 1 } },
+    })
+    expect(db.calls).toEqual([
+      ...OPEN,
+      context("update", "client", ID),
+      call("client_save", SAVE, [
+        JSON.stringify({ id: ID, code: "B", extra: { n: 2 } }),
+        "2",
+        JSON.stringify({ code: "A", extra: { n: 1 } }),
+      ]),
+      EPOCH,
+      COMMIT,
+      { release: false },
     ])
   })
 
@@ -224,6 +263,7 @@ describe("command transaction", () => {
       context("administerRights", "rights_role", ID),
       call("rights_role_save", SAVE, [
         JSON.stringify({ id: ID, code: "R" }),
+        null,
         null,
       ]),
       EPOCH,
@@ -337,7 +377,7 @@ describe("command transaction", () => {
       })
       const phase = [
         context("create", "client", ID),
-        call("client_save", SAVE, [item, null]),
+        call("client_save", SAVE, [item, null, null]),
       ]
       expect(db.calls).toEqual([
         ...OPEN,
@@ -426,8 +466,8 @@ describe("command transaction", () => {
     expect(db.calls.filter((c) => "release" in c)).toHaveLength(1)
   })
 
-  // Помилка без SQLSTATE — обрив чи власна вада T3/драйвера: назовні
-  // `command.unavailable`, але оригінал іде в журнал, інакше вада зникла б.
+  // Відмова `connect()` — з'єднання немає (Р11): `command.unavailable`, а
+  // оригінал іде в журнал, інакше вада під нею зникла б.
   it("maps connect failure and logs the original error", async () => {
     const raw = new Error("ECONNREFUSED")
     const { db, runtime, log } = await setup(undefined, {}, raw)
@@ -438,13 +478,16 @@ describe("command transaction", () => {
     expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
   })
 
-  it("destroys the connection on a statement error without SQLSTATE and logs it", async () => {
+  // Р11: до `COMMIT` помилка без SQLSTATE, яку порт не назвав утратою
+  // з'єднання, — вада драйвера чи T3: `command.internal` з журналом; з'єднання
+  // однаково знищується — довіри до нього немає.
+  it("maps a statement error without SQLSTATE to command.internal, destroys the connection and logs it", async () => {
     const raw = new TypeError("driver bug")
     const { db, runtime, log } = await setup((text) =>
       text.endsWith("AS r") ? { error: raw } : undefined
     )
     expect(await failureOf(runtime.run(session, create))).toEqual({
-      code: "command.unavailable",
+      code: "command.internal",
     })
     expect(db.calls).toEqual([
       ...OPEN,
@@ -453,6 +496,73 @@ describe("command transaction", () => {
       { release: true },
     ])
     expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
+  })
+
+  it("maps a Node network error before COMMIT to command.unavailable and destroys the connection", async () => {
+    const raw = Object.assign(new Error("read ECONNRESET"), {
+      code: "ECONNRESET",
+    })
+    const { db, runtime, log } = await setup((text) =>
+      text.endsWith("AS r") ? { error: raw } : undefined
+    )
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.unavailable",
+    })
+    expect(db.calls.at(-1)).toEqual({ release: true })
+    expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
+  })
+
+  // Доля транзакції вже вирішена: виняток звільнення — лише журнал.
+  it("keeps the result when release after a successful COMMIT throws and logs it", async () => {
+    const { db, runtime, log } = await setup()
+    const thrown = new Error(
+      "Release called on client which has already been released"
+    )
+    const connect = db.database.connect.bind(db.database)
+    db.database.connect = async () => {
+      const client = await connect()
+      return {
+        query: client.query.bind(client),
+        release(destroy) {
+          client.release(destroy)
+          if (destroy !== true) throw thrown
+        },
+      }
+    }
+    const result = await runtime.run(session, create)
+    expect(result.rows).toEqual([
+      { ref: ID, version: 1, code: "A", company: COMPANY },
+    ])
+    expect(db.calls.at(-1)).toEqual({ release: false })
+    expect(log.mock.calls).toEqual([[{ kind: "database", error: thrown }]])
+  })
+
+  // Р10 на `COMMIT`: відкладений FK після видалення не називає чужого
+  // об'єкта й реквізиту.
+  it("maps a deferred 23503 on COMMIT after a delete to command.invalid referenced", async () => {
+    let commits = 0
+    const { runtime } = await setup((text) =>
+      text === COMMIT.text && commits++ > 0
+        ? {
+            error: {
+              code: "23503",
+              message: "fk",
+              table: "client",
+              constraint: "client_company_fkey",
+            },
+          }
+        : undefined
+    )
+    expect(
+      await failureOf(
+        runtime.run(session, {
+          action: "delete",
+          object: CLIENT,
+          id: ID,
+          expectedVersion: 5,
+        })
+      )
+    ).toEqual({ code: "command.invalid", reason: "referenced", object: CLIENT })
   })
 
   it("destroys a lost connection", async () => {
@@ -989,11 +1099,33 @@ describe("rights self-assignment", () => {
       call("rights_assignment_save", SAVE, [
         JSON.stringify({ id: ID, subject_id: MEMBER, role_id: ROLE_ID }),
         null,
+        null,
       ]),
       EPOCH,
       COMMIT,
       { release: false },
     ])
+  })
+})
+
+describe("pinned session settings", () => {
+  // Перелік — з T0, не копія: новий елемент `PINNED_SESSION_SETTINGS` без
+  // оператора claims тут червоніє (Р17, І11).
+  const pinned = PINNED_SESSION_SETTINGS.map(pinnedSetting)
+
+  it("the command claims statement sets every pinned setting locally", async () => {
+    const { db, runtime } = await setup()
+    await runtime.run(session, create)
+    const claims = db.calls.find(
+      (c): c is Extract<typeof c, { text: string }> =>
+        "text" in c && c.text.includes("request.jwt.claims")
+    )
+    for (const setting of pinned) expect(claims?.text).toContain(setting)
+  })
+
+  it("the read setup statement sets every pinned setting locally", () => {
+    const { text } = readSetupStatement("{}", 1, 2, "simetra_command")
+    for (const setting of pinned) expect(text).toContain(setting)
   })
 })
 
@@ -1166,6 +1298,8 @@ describe("COMMIT boundary", () => {
     ["25P03", { code: "25P03", message: "x" }],
     ["25P04", { code: "25P04", message: "x" }],
     ["an error without SQLSTATE", new Error("ECONNRESET")],
+    // Р11: на `COMMIT` вид помилки без SQLSTATE не важить — результат невідомий.
+    ["a driver TypeError", new TypeError("driver bug")],
   ])("maps %s answered at COMMIT to command.unavailable", async (_, error) => {
     const { db, runtime } = await setup(atCommit(error))
     expect(await failureOf(runtime.run(session, create))).toEqual({
@@ -1183,7 +1317,8 @@ describe("COMMIT boundary", () => {
   it("maps 25P03 on the statement_timeout prelude of COMMIT to command.timeout", async () => {
     const { db, runtime } = await setup((text) => {
       if (text.endsWith("AS r")) vi.advanceTimersByTime(50_000)
-      return text === "SELECT set_config('statement_timeout', $1, true)"
+      return text ===
+        "SELECT pg_catalog.set_config('statement_timeout', $1, true)"
         ? { error: { code: "25P03", message: "x" } }
         : undefined
     })

@@ -4,7 +4,7 @@ import { objectTable, type Dml } from "simetra/model"
 import { rightsCheck } from "../catalog-command/rights-check"
 import { HIERARCHY_LOCK_SPACE } from "../hierarchy-units"
 import { executeGrants } from "../sql/execute-grants"
-import { hasEmptySearchPath } from "../sql/closed-forms"
+import { hasEmptySearchPath, pinnedSettingProblem } from "../sql/closed-forms"
 import {
   ORG_KIND_ID,
   adminRoles,
@@ -318,7 +318,7 @@ describe("функції за роллю довідника", () => {
     ["«Користувачі»", "users", false, false],
     ["корінь скоупу", "organization", true, false],
   ])("%s: mark_deletion %s, delete %s", (_, table, mark, remove) => {
-    expect(unitOf(domain, `${table}_save(jsonb,int8)`)).toBeDefined()
+    expect(unitOf(domain, `${table}_save(jsonb,int8,jsonb)`)).toBeDefined()
     expect(unitOf(domain, `${table}_mark_deletion${MARK}`) !== undefined).toBe(
       mark
     )
@@ -328,7 +328,7 @@ describe("функції за роллю довідника", () => {
   })
 
   it("«Користувачі»: save лише зі зміною — створення відмовляє 'create'", () => {
-    const shape = bodyShape(sqlOf(domain, "users_save(jsonb,int8)"))
+    const shape = bodyShape(sqlOf(domain, "users_save(jsonb,int8,jsonb)"))
     const branches = shape
       .map((s, i) => ({ s, i }))
       .filter(
@@ -450,6 +450,8 @@ describe("функції за роллю довідника", () => {
           .arg
       ).toEqual({ Boolean: { boolval: false } })
       expect(hasEmptySearchPath(unit.tree as never)).toBe(true)
+      // Кожне налаштування `PINNED_SESSION_SETTINGS` — в опціях оболонки (спека П4 §6.6).
+      expect(pinnedSettingProblem(unit, [])).toBeUndefined()
       expect(
         bodyShape(unit.sql).filter((s) => s.type === "dynexecute")
       ).toEqual([])

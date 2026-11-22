@@ -59,7 +59,7 @@ const mergeCatalog = runtimeCatalogSchema.parse({
 
 // Текстом, як оператори обв'язки: сталі T0 звіряє тест нижче.
 const MERGE = {
-  text: "SELECT set_config('simetra.signal_mode', 'merge', true)",
+  text: "SELECT pg_catalog.set_config('simetra.signal_mode', 'merge', true)",
   params: [],
 }
 const INVALIDATE_TEXT = `SELECT "${PLATFORM_SCHEMA}"."${SIGNAL_INVALIDATE_FUNCTION_NAME}"($1::uuid, $2::uuid, $3::uuid)`

@@ -69,7 +69,7 @@ const rights = (id = OTHER, code = "R"): Operation => ({
 })
 const rightsRolePhase = (id = OTHER, code = "R") => [
   context("administerRights", "rights_role", id),
-  call("rights_role_save", SAVE, [JSON.stringify({ id, code }), null]),
+  call("rights_role_save", SAVE, [JSON.stringify({ id, code }), null, null]),
 ]
 const readOf = (table: string, id: string) => ({
   text:
@@ -83,6 +83,7 @@ const clientPhaseOf = (id: string) => [
   call("client_save", SAVE, [
     JSON.stringify({ id, code: "A", company_id: COMPANY }),
     null,
+    null,
   ]),
 ]
 const clientPhase = clientPhaseOf(ID)
@@ -95,7 +96,7 @@ const createTicket = (id = OTHER, code = "R"): Operation => ({
 })
 const ticketCreatePhase = (id = OTHER, code = "R") => [
   context("create", "ticket", id),
-  call("ticket_save", SAVE, [JSON.stringify({ id, code }), null]),
+  call("ticket_save", SAVE, [JSON.stringify({ id, code }), null, null]),
 ]
 const CLOSED: unknown[] = [...OPEN, ROLLBACK, { release: false }]
 
@@ -199,8 +200,61 @@ describe("hook order", () => {
       call("client_save", SAVE, [
         JSON.stringify({ id: ID, code: "B", company_id: COMPANY }),
         null,
+        null,
       ])
     )
+  })
+
+  /**
+   * Р7 плану T3: `beforeWrite` виконується до замка рядка, тож для об'єкта з
+   * ним ядро перевіряє версію (`p_expected_values` — `NULL`); `onWrite` —
+   * під замком, CAS за полями лишається.
+   */
+  describe("CAS by fields eligibility", () => {
+    const updateByFields: Operation = {
+      action: "update",
+      object: CLIENT,
+      id: ID,
+      expectedVersion: 2,
+      values: { code: "B" },
+      expectedValues: { code: "A" },
+    }
+    const saveOf = (expected: string | null) =>
+      call("client_save", SAVE, [
+        JSON.stringify({ id: ID, code: "B" }),
+        "2",
+        expected,
+      ])
+
+    it("passes NULL for an object whose module has beforeWrite", async () => {
+      const { db, runtime } = await withModules({
+        "Catalog.Client": { beforeWrite: ({ draft }) => draft },
+      })
+      await runtime.run(session, updateByFields)
+      expect(db.calls[OPEN.length + 1]).toEqual(saveOf(null))
+    })
+
+    it("passes the base values for a module with onWrite only", async () => {
+      const onWrite = vi.fn()
+      const { db, runtime } = await withModules({
+        "Catalog.Client": { onWrite },
+      })
+      await runtime.run(session, updateByFields)
+      expect(db.calls[OPEN.length + 1]).toEqual(
+        saveOf(JSON.stringify({ code: "A" }))
+      )
+      expect(onWrite).toHaveBeenCalledOnce()
+    })
+
+    it("passes the base values when another object has beforeWrite", async () => {
+      const { db, runtime } = await withModules({
+        "Catalog.Ticket": { beforeWrite: ({ draft }) => draft },
+      })
+      await runtime.run(session, updateByFields)
+      expect(db.calls[OPEN.length + 1]).toEqual(
+        saveOf(JSON.stringify({ code: "A" }))
+      )
+    })
   })
 
   it("does not call hooks on delete", async () => {
@@ -1756,6 +1810,7 @@ describe("tabular section arrays", () => {
         tabular: { sample_lines: lines.map((id) => ({ id })) },
       }),
       "1",
+      null,
     ])
   /** Відповідь оператора перевірки; без рядка — власника не видно. */
   const checked =

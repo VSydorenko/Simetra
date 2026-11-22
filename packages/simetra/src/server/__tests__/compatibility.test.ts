@@ -60,6 +60,10 @@ describe("checkCompatibility: run", () => {
     ],
     ["update з колонками зміни", update({ values: { code_col: "a" } })],
     [
+      "update: база CAS за колонками зміни",
+      update({ values: { code_col: "b" }, expectedValues: { code_col: "a" } }),
+    ],
+    [
       "update: рядок ТЧ — за переліком вставки (колонка лише вставки)",
       update({
         tabularSections: { [SECTION]: [{ ...LINE, firstOnly_col: "x" }] },
@@ -135,6 +139,26 @@ describe("checkCompatibility: run", () => {
       sample.id,
     ],
     ["update: ключ шапки у values", update({ values: { id: ID } }), sample.id],
+    // База — ті самі колонки зміни, що й `values`: інакше звірка пропустила б
+    // колонку, яку мапінг назве `unknown`.
+    [
+      "update: база CAS з колонкою лише вставки",
+      update({
+        values: { code_col: "b" },
+        expectedValues: { frozen_col: "a" },
+      }),
+      sample.id,
+    ],
+    [
+      "update: база CAS з ключем шапки",
+      update({ values: { code_col: "b" }, expectedValues: { id: ID } }),
+      sample.id,
+    ],
+    ...HOSTILE.map((name): [string, Checked, string] => [
+      `база CAS: вороже ім'я ${name}`,
+      update({ values: { code_col: "b" }, expectedValues: { [name]: 1 } }),
+      sample.id,
+    ]),
     ...HOSTILE.map((name): [string, Checked, string] => [
       `шапка: вороже ім'я ${name}`,
       create({ values: { [name]: 1 } }),

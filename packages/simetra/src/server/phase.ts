@@ -159,6 +159,28 @@ function rootInput(
   }
 }
 
+/**
+ * `p_expected_values` зміни (CAS за полями, спека П4 §6.6): база змінених
+ * полів тим самим обходом T0 і кодуванням, що й `values`, — ключі гранту
+ * оновлення, фізичні колонки, без ключа таблиці (його ядро не приймає).
+ * Шлях відмови — під `expectedValues`: та сама колонка у `values` і в базі
+ * — різні вади входу. Рівність наборів ключів тримає схема T0.
+ */
+function encodeExpected(
+  object: RuntimeObject,
+  op: Operation
+): { columns: Record<string, unknown> | null } | { error: CommandError } {
+  if (op.action !== "update" || op.expectedValues === undefined) {
+    return { columns: null }
+  }
+  return encodeAttributes(object.attributes, op.expectedValues, {
+    allowed: (a) => a.update,
+    path: "expectedValues",
+    prefix: "expectedValues.",
+    maxBytes: true,
+  })
+}
+
 // Без ключів зі значенням `undefined`: чернетку, яку хук повернув як є,
 // перевірка не відкине.
 const draftOf = (op: Operation): Draft<object> =>
@@ -229,7 +251,10 @@ function schemaRefusal(
   // Сегмент `id` операції — її ключ (спека П4-B §4.0): за відомого об'єкта
   // шлях називає `keyName`, як і решта помилок цього об'єкта.
   const indexed = batch && typeof index === "number" && path.length > 1
-  const segments = operationRefusalPath(indexed ? path.slice(1) : path)
+  const segments = operationRefusalPath(
+    indexed ? path.slice(1) : path,
+    decidingIssue(error)
+  )
   if (object !== undefined && segments[0] === "id") {
     segments[0] = object.keyName
   }
@@ -332,6 +357,8 @@ export function prepareInput(
     if (prepared.action === "create" || prepared.action === "update") {
       const encoded = encodeItem(found.object, prepared, draftOf(prepared))
       if ("error" in encoded) fail(encoded.error)
+      const expected = encodeExpected(found.object, prepared)
+      if ("error" in expected) fail(expected.error)
       const overlap = deleteOverlapOf(found.object, prepared)
       if (overlap !== undefined) fail(invalid(overlap))
     }
@@ -367,11 +394,18 @@ function deleteOverlapOf(
 const fn = (target: RuntimeOperationTarget) =>
   `${ident(target.function.schema)}.${ident(target.function.name)}`
 
-/** Виклик функції ядра фази зі зв'язаними параметрами. */
+/**
+ * Виклик функції ядра фази зі зв'язаними параметрами. `byFields` — чи
+ * придатний об'єкт до CAS за полями (Р7 плану T3): хук `beforeWrite`
+ * виконується до замка рядка й може читати застарілий стан чи дописати в
+ * чернетку поле без бази, тож для такого об'єкта ядру йде `NULL` і
+ * перевіряється версія — суворіше, без тихого перезапису.
+ */
 function callOf(
   { object, target }: Target,
   op: PreparedOperation,
-  draft: Draft<object>
+  draft: Draft<object>,
+  byFields: boolean
 ): Statement | { error: CommandError } {
   switch (op.action) {
     case "create":
@@ -379,12 +413,17 @@ function callOf(
       const encoded = encodeItem(object, op, draft)
       if ("error" in encoded)
         return { error: withObject(encoded.error, object) }
+      const expected = byFields ? encodeExpected(object, op) : { columns: null }
+      if ("error" in expected) {
+        return { error: withObject(expected.error, object) }
+      }
       return {
-        text: `SELECT ${fn(target)}($1::jsonb, $2::bigint) AS r`,
+        text: `SELECT ${fn(target)}($1::jsonb, $2::bigint, $3::jsonb) AS r`,
         params: [
           JSON.stringify(encoded.item),
           // `create` завжди передає ядру `NULL`.
           op.action === "create" ? null : String(op.expectedVersion),
+          expected.columns === null ? null : JSON.stringify(expected.columns),
         ],
       }
     }
@@ -401,7 +440,7 @@ function callOf(
   }
 }
 
-const CONTEXT_TEXT = `SELECT set_config(${literal(COMMAND_SETTING)}, $1, true)`
+const CONTEXT_TEXT = `SELECT pg_catalog.set_config(${literal(COMMAND_SETTING)}, $1, true)`
 
 /** Оператор контексту команди фази (Рт5): той самий перед перевіркою ТЧ і ядром. */
 function contextOf(
@@ -632,7 +671,7 @@ export async function runPhase(
   // Контекст фази ставиться після хука «до» (Рт5): фаза його `ctx.run`
   // ставить свій раніше.
   const draft = await beforeWrite(tx, phase, module, draftOf(op))
-  const call = callOf(found, op, draft)
+  const call = callOf(found, op, draft, module?.beforeWrite === undefined)
   if ("error" in call) tx.abort(call.error)
   const { text, merged } = await callCore(tx, found, op, call, object.signal)
   const row = decodeCoreRow(tx, object, () => JSON.parse(text) as unknown)

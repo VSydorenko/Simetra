@@ -1,28 +1,48 @@
 import { describe, expect, it } from "vitest"
-import { fromPgPool, normalizeError, type PgPoolLike } from "../port"
+import {
+  destroysConnection,
+  fromPgPool,
+  normalizeError,
+  type DatabaseError,
+  type PgPoolLike,
+} from "../port"
 
-type ErrorListener = (error: Error) => void
+type Listener = (error: Error) => void
 
-function fakePool() {
+/**
+ * `query` — відповідь запиту: результат або відмова; `connect` — відмова
+ * `pool.connect()`.
+ */
+function fakePool(
+  options: {
+    query?: () => Promise<{ rows: Record<string, unknown>[]; command: string }>
+    connect?: unknown
+  } = {}
+) {
   const calls: unknown[] = []
-  // Емітер події `error` клієнта: лише те, що читає порт.
-  const listeners = new Set<ErrorListener>()
+  // Емітер подій `error` і `end` клієнта: лише те, що читає порт.
+  const listeners = new Set<Listener>()
+  const ends = new Set<() => void>()
   const pool: PgPoolLike = {
     async connect() {
       calls.push("connect")
+      if (options.connect !== undefined) throw options.connect
       return {
         async query(config) {
           calls.push({ query: config })
+          if (options.query !== undefined) return options.query()
           return { rows: [{ r: "x" }], command: "SELECT", rowCount: 1 }
         },
         release(destroy) {
           calls.push({ release: destroy })
         },
-        on(_event, listener) {
-          listeners.add(listener)
+        on(event: "error" | "end", listener: Listener) {
+          if (event === "error") listeners.add(listener)
+          else ends.add(listener as () => void)
         },
-        removeListener(_event, listener) {
-          listeners.delete(listener)
+        removeListener(event: "error" | "end", listener: Listener) {
+          if (event === "error") listeners.delete(listener)
+          else ends.delete(listener as () => void)
         },
       }
     },
@@ -32,7 +52,10 @@ function fakePool() {
     if (listeners.size === 0) throw error
     for (const listener of listeners) listener(error)
   }
-  return { pool, calls, listeners, emitError }
+  const emitEnd = () => {
+    for (const listener of ends) listener()
+  }
+  return { pool, calls, listeners, ends, emitError, emitEnd }
 }
 
 describe("fromPgPool", () => {
@@ -92,15 +115,71 @@ describe("fromPgPool error listener", () => {
   })
 
   it.each([undefined, true])(
-    "release(%s) removes the listener",
+    "release(%s) removes the listeners",
     async (destroy) => {
-      const { pool, listeners } = fakePool()
+      const { pool, listeners, ends } = fakePool()
       const client = await fromPgPool(pool).connect()
-      expect(listeners.size).toBe(1)
+      expect([listeners.size, ends.size]).toEqual([1, 1])
       client.release(destroy)
-      expect(listeners.size).toBe(0)
+      expect([listeners.size, ends.size]).toEqual([0, 0])
     }
   )
+})
+
+// Р11: без SQLSTATE обрив знає лише порт — за подією клієнта до відмови
+// запиту чи за відмовою `pool.connect()`; інакше це вада драйвера чи T3.
+describe("fromPgPool connection loss without SQLSTATE", () => {
+  const terminated = () => new Error("Connection terminated unexpectedly")
+
+  it.each<[string, (pool: ReturnType<typeof fakePool>) => void]>([
+    ["an error event", (p) => p.emitError(terminated())],
+    ["an end event", (p) => p.emitEnd()],
+  ])("a query rejected after %s is a lost connection", async (_, emit) => {
+    let fail: (error: Error) => void = () => undefined
+    const fake = fakePool({
+      query: () => new Promise((_, reject) => (fail = reject)),
+    })
+    const client = await fromPgPool(fake.pool).connect()
+    const query = client.query("SELECT 1")
+    // Як `pg`: подія синхронно, відмова запиту — пізніше (`nextTick`).
+    await Promise.resolve()
+    emit(fake)
+    const raw = terminated()
+    fail(raw)
+    const thrown = await query.catch((error: unknown) => error)
+    expect(thrown).toBe(raw)
+    expect(normalizeError(thrown).connectionLost).toBe(true)
+  })
+
+  it("a query rejected without an event is not a lost connection", async () => {
+    const raw = new TypeError("driver bug")
+    const { pool } = fakePool({ query: () => Promise.reject(raw) })
+    const client = await fromPgPool(pool).connect()
+    const thrown = await client.query("SELECT 1").catch((e: unknown) => e)
+    expect(thrown).toBe(raw)
+    expect(normalizeError(thrown)).toEqual({
+      message: "driver bug",
+      connectionLost: false,
+    })
+  })
+
+  it("a query after an error event without SQLSTATE is a lost connection", async () => {
+    const fake = fakePool()
+    const client = await fromPgPool(fake.pool).connect()
+    fake.emitError(terminated())
+    const thrown = await client.query("ROLLBACK").catch((e: unknown) => e)
+    expect(normalizeError(thrown).connectionLost).toBe(true)
+  })
+
+  it("a failed pool.connect() is a lost connection", async () => {
+    const raw = new Error("timeout exceeded when trying to connect")
+    const { pool } = fakePool({ connect: raw })
+    const thrown = await fromPgPool(pool)
+      .connect()
+      .catch((e: unknown) => e)
+    expect(thrown).toBe(raw)
+    expect(normalizeError(thrown).connectionLost).toBe(true)
+  })
 })
 
 type RawTypes = {
@@ -113,12 +192,56 @@ describe("normalizeError", () => {
     ["an administrator shutdown", { code: "57P01", message: "m" }, true],
     ["a crash shutdown", { code: "57P02", message: "m" }, true],
     ["a server that cannot connect now", { code: "57P03", message: "m" }, true],
-    ["an error without a code", new Error("Connection terminated"), true],
+    ["an error without a code", new TypeError("driver bug"), false],
     ["a Node network code", { code: "ECONNRESET", message: "m" }, true],
+    // `EPIPE` має форму SQLSTATE, але мережевий код — не код бази.
+    ["EPIPE", { code: "EPIPE", message: "m" }, true],
     ["a query cancel (57014)", { code: "57014", message: "m" }, false],
     ["a raised exception", { code: "P0001", message: "m" }, false],
   ])("connectionLost for %s", (_, error, lost) => {
     expect(normalizeError(error).connectionLost).toBe(lost)
+  })
+
+  it.each([
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "EPIPE",
+    "ECONNREFUSED",
+    "ECONNABORTED",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+    "ENOTFOUND",
+    "EAI_AGAIN",
+  ])(
+    "the Node network code %s is a lost connection without SQLSTATE",
+    (code) => {
+      expect(normalizeError({ code, message: "m" })).toEqual({
+        message: "m",
+        connectionLost: true,
+      })
+    }
+  )
+
+  // Відмова `connect()` — з'єднання немає, хоч би що кинув порт.
+  it("an error without SQLSTATE from connect() is a lost connection", () => {
+    expect(normalizeError(new TypeError("x"), true).connectionLost).toBe(true)
+  })
+
+  // SQLSTATE вирішує й на `connect()`: відмова бази — не обрив.
+  it("a SQLSTATE refusal of connect() keeps its class", () => {
+    expect(
+      normalizeError({ code: "28P01", message: "m" }, true).connectionLost
+    ).toBe(false)
+  })
+
+  it.each<[string, Partial<DatabaseError>, boolean]>([
+    ["a lost connection", { code: "08006", connectionLost: true }, true],
+    ["an error without SQLSTATE", { connectionLost: false }, true],
+    ["a database refusal", { code: "P0001", connectionLost: false }, false],
+  ])("destroysConnection for %s", (_, fields, destroy) => {
+    expect(
+      destroysConnection({ message: "m", connectionLost: false, ...fields })
+    ).toBe(destroy)
   })
 
   it("keeps the driver fields of a raised exception", () => {
@@ -167,19 +290,19 @@ describe("normalizeError", () => {
     })
     expect(normalizeError(Object.create(null))).toEqual({
       message: "unknown error",
-      connectionLost: true,
+      connectionLost: false,
     })
     expect(normalizeError(revoked.proxy)).toEqual({
       message: "unknown error",
-      connectionLost: true,
+      connectionLost: false,
     })
     expect(normalizeError(throwing)).toEqual({
       message: "[object Object]",
-      connectionLost: true,
+      connectionLost: false,
     })
     expect(normalizeError(undefined)).toEqual({
       message: "undefined",
-      connectionLost: true,
+      connectionLost: false,
     })
   })
 
@@ -190,7 +313,7 @@ describe("normalizeError", () => {
     })
     expect(normalizeError("boom")).toEqual({
       message: "boom",
-      connectionLost: true,
+      connectionLost: false,
     })
   })
 })

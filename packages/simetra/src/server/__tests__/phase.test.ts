@@ -1,9 +1,13 @@
 import {
   BATCH_MAX,
+  batchSchema,
+  operationSchema,
+  wireReadPartSchema,
   CommandFailure,
   dataRequestSchema,
   TABULAR_LINES_MAX,
   readQuerySchema,
+  runtimeCatalogSchema,
   type CommandError,
   type ReadQuery,
   type RuntimeCatalog,
@@ -20,8 +24,13 @@ import {
   tenantSelfService,
 } from "../../compiler/__tests__/fixtures/rights"
 import { prepareInput } from "../phase"
-import { decidingIssue, issueReason, prepareRead } from "../read"
-import { catalog, rootCatalog } from "./fixtures"
+import {
+  UNION_DISCRIMINATORS,
+  decidingIssue,
+  issueReason,
+  prepareRead,
+} from "../read"
+import { ID, catalog, commandObject, rootCatalog } from "./fixtures"
 import { CLIENT, ORGANIZATION } from "./harness"
 
 const refusalOf = (
@@ -213,6 +222,56 @@ describe("issueReason over the data envelope", () => {
     expect(issueReason(new z.ZodError([union]))).toBe("tabular-too-large")
   })
 
+  // Страж: гілку об'єднання відкидає лише хибний літерал ключа з явного
+  // переліку розрізнювачів; новий літерал під іншим ключем вибору не міняє.
+  it.each<[string, string, (string | number)[]]>([
+    ["the discriminator type", "type", ["other"]],
+    ["a literal under another key", "kind", ["kind"]],
+  ])("a branch failing on %s", (_, key, path) => {
+    const wrong: z.core.$ZodIssue = {
+      code: "invalid_value",
+      values: ["x"],
+      path: [key],
+      message: "literal",
+    }
+    const own: z.core.$ZodIssue = {
+      code: "custom",
+      path: ["other"],
+      message: "own",
+    }
+    const union: z.core.$ZodIssue = {
+      code: "invalid_union",
+      path: [],
+      message: "u",
+      errors: [[wrong], [own]],
+    }
+    expect(decidingIssue(new z.ZodError([union]))?.path).toEqual(path)
+  })
+
+  // Страж зв'язку перелічу зі схемами: обходить схеми, чиї помилки проходять
+  // через `decidingIssue`, і збирає ключі з літералом у гілках кожного
+  // об'єднання. Новий ключ-розрізнювач поза `UNION_DISCRIMINATORS` валить тест.
+  it("every literal key of a union branch is a listed discriminator", () => {
+    const found = literalKeysOfUnions([
+      dataRequestSchema,
+      wireReadPartSchema,
+      readQuerySchema,
+      operationSchema,
+      batchSchema,
+    ])
+    expect(found.size).toBeGreaterThan(0)
+    for (const key of found)
+      expect(UNION_DISCRIMINATORS.has(key), key).toBe(true)
+  })
+
+  it("the walker finds a literal key of a new union branch", () => {
+    const schema = z.union([
+      z.strictObject({ kind: z.literal("a") }),
+      z.strictObject({ kind: z.literal("b") }),
+    ])
+    expect([...literalKeysOfUnions([schema])]).toEqual(["kind"])
+  })
+
   it("does not treat the client-only reason disposed as a limit reason", () => {
     const issue = (reason: string): z.core.$ZodIssue => ({
       code: "custom",
@@ -227,6 +286,63 @@ describe("issueReason over the data envelope", () => {
     expect(picked && issueReason(new z.ZodError([picked]))).toBe("plain")
   })
 })
+
+type Def = { type?: string; [key: string]: unknown }
+const defOf = (schema: unknown): Def =>
+  (schema as { _zod: { def: Def } })._zod.def
+
+/** Ключі з `z.literal` у гілках-об'єктах кожного `z.union` (не `discriminatedUnion`). */
+function literalKeysOfUnions(roots: unknown[]): Set<string> {
+  const keys = new Set<string>()
+  const seen = new Set<unknown>()
+  // Об'єднання після препроцесора (`z.preprocess(…, z.union(…))`, форми
+  // читання): гілку обирає препроцесор за ключами, а відмова препроцесора
+  // перериває розбір, тож помилок гілок такого об'єднання `leavesOf` не бачить.
+  const afterPreprocess = new Set<unknown>()
+  const unwrap = (schema: unknown): unknown => {
+    const def = defOf(schema)
+    return def.innerType ?? def.in ?? schema
+  }
+  const walk = (schema: unknown): void => {
+    if (schema === undefined || seen.has(schema)) return
+    seen.add(schema)
+    const def = defOf(schema)
+    // `discriminatedUnion` не вкладає помилки гілок: його issue без `errors`.
+    if (def.type === "pipe" && defOf(def.in).type === "transform") {
+      afterPreprocess.add(def.out)
+    }
+    if (
+      def.type === "union" &&
+      def.discriminator === undefined &&
+      !afterPreprocess.has(schema)
+    ) {
+      for (const option of def.options as unknown[]) {
+        let branch = option
+        while (unwrap(branch) !== branch) branch = unwrap(branch)
+        const shape = defOf(branch).shape as Record<string, unknown> | undefined
+        for (const [key, value] of Object.entries(shape ?? {})) {
+          let inner = value
+          while (unwrap(inner) !== inner) inner = unwrap(inner)
+          if (defOf(inner).type === "literal") keys.add(key)
+        }
+      }
+    }
+    for (const child of [
+      def.innerType,
+      def.in,
+      def.out,
+      def.element,
+      def.valueType,
+      ...((def.options as unknown[] | undefined) ?? []),
+      ...Object.values(
+        (def.shape as Record<string, unknown> | undefined) ?? {}
+      ),
+    ])
+      walk(child)
+  }
+  for (const root of roots) walk(root)
+  return keys
+}
 
 describe("prepareRead reasons", () => {
   afterEach(() => {
@@ -300,6 +416,112 @@ describe("creatorMember maxBytes", () => {
       reason: "too-large",
       path: "creatorMember.note",
       object: ORGANIZATION,
+    })
+  })
+})
+
+/**
+ * База CAS за полями (Р1, Р5 плану T3): та сама перевірка значень за
+ * каталогом, що й `values`, з шляхом під `expectedValues`, і форма T0 — набір
+ * ключів дорівнює набору `values`, без ТЧ — до бази.
+ */
+describe("expectedValues of an update", () => {
+  const NOTE = { kind: "Catalog" as const, name: "Note" }
+  const MAX = 8
+  const noteCatalog: RuntimeCatalog = runtimeCatalogSchema.parse({
+    format: 1,
+    snapshotHash: "hash-1",
+    provider: "supabase",
+    objects: [
+      commandObject({
+        name: "Note",
+        table: "note",
+        attributes: [
+          {
+            name: "text",
+            column: "text_col",
+            pgType: "text",
+            castType: "text",
+            type: "Text",
+            required: false,
+            insert: true,
+            update: true,
+            maxBytes: MAX,
+          },
+        ],
+      }),
+    ],
+  })
+  const update = (extra: object, object: object = CLIENT) => ({
+    action: "update",
+    object,
+    id: ID,
+    expectedVersion: 2,
+    ...extra,
+  })
+
+  it("accepts base values of the changed fields", () => {
+    expect(
+      refusalOf(
+        update({ values: { code: "B" }, expectedValues: { code: "A" } }),
+        catalog
+      )
+    ).toBeUndefined()
+  })
+
+  it.each<[string, object]>([
+    [
+      "keys other than those of values",
+      { values: { code: "B" }, expectedValues: { extra: null } },
+    ],
+    [
+      "a key more than values",
+      { values: { code: "B" }, expectedValues: { code: "A", extra: null } },
+    ],
+    ["an empty object", { values: {}, expectedValues: {} }],
+    ["no values", { expectedValues: { code: "A" } }],
+    [
+      "tabular sections",
+      {
+        values: { code: "B" },
+        expectedValues: { code: "A" },
+        tabularSections: { lines: [] },
+      },
+    ],
+  ])("refuses %s on the path expectedValues", (_, extra) => {
+    expect(refusalOf(update(extra), catalog)).toMatchObject({
+      code: "command.invalid",
+      path: "expectedValues",
+    })
+  })
+
+  it("refuses a base value the catalog does not accept on its own path", () => {
+    expect(
+      refusalOf(
+        update({ values: { code: "B" }, expectedValues: { code: 7 } }),
+        catalog
+      )
+    ).toEqual({
+      code: "command.invalid",
+      path: "expectedValues.code",
+      object: CLIENT,
+    })
+  })
+
+  it("refuses a base value over maxBytes as too-large", () => {
+    expect(
+      refusalOf(
+        update(
+          { values: { text: "a" }, expectedValues: { text: "a".repeat(MAX) } },
+          NOTE
+        ),
+        noteCatalog
+      )
+    ).toEqual({
+      code: "command.invalid",
+      reason: "too-large",
+      path: "expectedValues.text",
+      object: NOTE,
     })
   })
 })
