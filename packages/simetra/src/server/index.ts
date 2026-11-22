@@ -31,3 +31,9 @@ export {
   type FileStore,
   type S3ClientLike,
 } from "./file-store"
+export {
+  RECONCILE_GRACE_MS,
+  type ReconcileLogEntry,
+  type ReconcileOptions,
+  type ReconcileReport,
+} from "./reconcile"

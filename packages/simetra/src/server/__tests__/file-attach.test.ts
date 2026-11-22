@@ -452,3 +452,59 @@ describe("attachFile input", () => {
     expect(db.calls).toEqual([])
   })
 })
+
+describe("reconcileFiles", () => {
+  const INSTANCE = "77777777-7777-4777-8777-777777777777"
+  const ORPHAN = "55555555-5555-4555-8555-555555555555"
+  const DB_MS = Date.UTC(2026, 10, 22)
+  const answers: Override = (text) => {
+    if (text.includes("storage_instance_id"))
+      return { rows: [{ id: INSTANCE }] }
+    if (text.includes("extract(epoch")) return { rows: [{ ms: String(DB_MS) }] }
+    if (text.includes("storage_row_page")) return { rows: [] }
+    if (text.includes("storage_rows_exist")) return { rows: [] }
+    return undefined
+  }
+  const key = `o/${DOC_ID}/${ORPHAN}`
+  const store = (lastModified: Date) => {
+    const deleted: string[] = []
+    return {
+      deleted,
+      store: {
+        put: () => Promise.reject(new Error("unused")),
+        get: () => Promise.reject(new Error("unused")),
+        delete: async (k: string) => void deleted.push(k),
+        async *list() {
+          yield { key, lastModified }
+        },
+        async *listPrefixes() {
+          yield `o/${DOC_ID}/`
+        },
+        checkInstance: async () => undefined,
+      },
+    }
+  }
+
+  it("asks the database clock and the row functions under the storage role", async () => {
+    const { db, runtime } = await make(answers)
+    // Об'єкт старший за 24 год за годинником БАЗИ, а не host-а
+    const s = store(new Date(DB_MS - 25 * 3600 * 1000))
+    const report = await runtime.reconcileFiles(s.store, { log: () => {} })
+    expect(report).toMatchObject({ listed: 1, deleted: 1, refused: null })
+    expect(s.deleted).toEqual([key])
+    const texts = db.calls.flatMap((c) => ("text" in c ? [c.text] : []))
+    expect(texts.filter((t) => t === FILES_ROLE.text).length).toBeGreaterThan(0)
+    expect(texts.some((t) => t.includes("extract(epoch FROM now())"))).toBe(
+      true
+    )
+  })
+
+  it("keeps an object younger than 24 h by the database clock", async () => {
+    const { runtime } = await make(answers)
+    const s = store(new Date(DB_MS - 23 * 3600 * 1000))
+    expect(
+      (await runtime.reconcileFiles(s.store, { log: () => {} })).deleted
+    ).toBe(0)
+    expect(s.deleted).toEqual([])
+  })
+})

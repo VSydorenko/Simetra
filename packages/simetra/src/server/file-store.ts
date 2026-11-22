@@ -35,6 +35,12 @@ export interface FileStore {
     after?: string
   ): AsyncIterable<{ key: string; lastModified: Date }>
   /**
+   * The object prefixes `o/<uuid>/` present in the bucket, in key order.
+   * Lets the reconciliation name a prefix of an object the catalog does not
+   * know, which it only logs.
+   */
+  listPrefixes(): AsyncIterable<string>
+  /**
    * Refuses (throws {@link FileStoreError}) a bucket that is not this
    * database's: a different marker, or objects without a marker. An empty
    * bucket passes. Used by the reconciliation before any deletion.
@@ -75,11 +81,13 @@ export interface S3ClientLike {
   listObjectsV2(input: {
     Bucket: string
     Prefix?: string
+    Delimiter?: string
     StartAfter?: string
     ContinuationToken?: string
     MaxKeys?: number
   }): Promise<{
     Contents?: { Key?: string; LastModified?: Date }[]
+    CommonPrefixes?: { Prefix?: string }[]
     IsTruncated?: boolean
     NextContinuationToken?: string
   }>
@@ -250,6 +258,24 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
         for (const o of res.Contents ?? []) {
           if (o.Key !== undefined && o.LastModified !== undefined)
             yield { key: o.Key, lastModified: o.LastModified }
+        }
+        token = res.IsTruncated === true ? res.NextContinuationToken : undefined
+      } while (token !== undefined)
+    },
+
+    async *listPrefixes() {
+      let token: string | undefined
+      do {
+        const res = await client.listObjectsV2({
+          Bucket: bucket,
+          Prefix: FILE_PREFIX,
+          Delimiter: "/",
+          ...(token === undefined ? {} : { ContinuationToken: token }),
+        })
+        // Чужі форми (не `o/<uuid>/`) звірці не потрібні: вона їх не торкається
+        for (const p of res.CommonPrefixes ?? []) {
+          if (p.Prefix !== undefined && isFileObjectPrefix(p.Prefix))
+            yield p.Prefix
         }
         token = res.IsTruncated === true ? res.NextContinuationToken : undefined
       } while (token !== undefined)

@@ -40,6 +40,13 @@ import {
   CommandFailure,
 } from "simetra/model"
 import { z } from "zod"
+import type { FileStore } from "./file-store"
+import {
+  reconcile,
+  type ReconcileOptions,
+  type ReconcileReport,
+  type ReconcileSource,
+} from "./reconcile"
 import { logsDatabaseError, type ErrorPhase } from "./errors"
 import { rejectNested } from "./hook-context"
 import {
@@ -309,6 +316,16 @@ export interface CommandRuntime {
    * connection), and with `CommandFailure` on a database refusal.
    */
   fileInstance(): Promise<string>
+  /**
+   * The reconciliation of the byte store with the database (platform spec
+   * §8.2): the only place bytes are physically deleted. Refuses (deletes
+   * nothing, `report.refused`) for a bucket of another database or when the
+   * guard trips. Rejects with `command.nested` from inside a hook.
+   */
+  reconcileFiles(
+    store: FileStore,
+    options: ReconcileOptions
+  ): Promise<ReconcileReport>
 }
 
 // Межа каналів одного виклику `authorizeChannels` (Р5 плану B2).
@@ -702,6 +719,14 @@ export async function createCommandRuntime(
     },
   }
   let instance: Promise<string> | undefined
+  const cachedInstance = (): Promise<string> => {
+    instance ??= fileInstance(state).catch((error: unknown) => {
+      // Невдача не кешується: наступний виклик пробує знову.
+      instance = undefined
+      throw error
+    })
+    return instance
+  }
   return {
     catalog,
     // Анонімна команда йде далі: її судить `current_user_id()` = `NULL`.
@@ -765,14 +790,16 @@ export async function createCommandRuntime(
         throw error
       }
     },
-    fileInstance: () => {
-      instance ??= fileInstance(state).catch((error: unknown) => {
-        // Невдача не кешується: наступний виклик пробує знову.
-        instance = undefined
-        throw error
-      })
-      return instance
+    reconcileFiles: (store, options) => {
+      rejectNested()
+      return reconcile(
+        catalog.objects.filter((o) => o.storage !== undefined).map((o) => o.id),
+        reconcileSource(state, cachedInstance),
+        store,
+        options
+      )
     },
+    fileInstance: cachedInstance,
   }
 }
 
@@ -1251,6 +1278,50 @@ async function checkUpload(
   return allowed && storage !== undefined
     ? { maxBytes: storage.maxBytes, mediaTypes: [...storage.mediaTypes] }
     : null
+}
+
+const DB_NOW = "SELECT floor(extract(epoch FROM now()) * 1000)::text AS ms"
+const ROWS_EXIST = `SELECT t.id::text AS id FROM ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.rowsExist)}($1::uuid, $2::uuid[]) AS t(id)`
+const ROW_PAGE = `SELECT t.id::text AS id FROM ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.rowPage)}($1::uuid, $2::uuid) AS t(id)`
+
+/** Сторона бази звірки: кожен виклик — коротка `READ ONLY` транзакція під роллю сховища. */
+function reconcileSource(
+  state: RuntimeState,
+  instance: () => Promise<string>
+): ReconcileSource {
+  const ids = async (text: string, params: (string | null)[]) =>
+    inShortTransaction(
+      state,
+      BEGIN_READ_ONLY,
+      [INSTANCE_LIMITS(state), FILES_ROLE],
+      async (send) => {
+        const { rows } = await send({ text, params })
+        return rows.map((row) => {
+          if (!uuidSchema.safeParse(row.id).success)
+            throw new Error("storage function answered no uuid")
+          return row.id as string
+        })
+      }
+    )
+  return {
+    instance,
+    now: () =>
+      inShortTransaction(
+        state,
+        BEGIN_READ_ONLY,
+        [INSTANCE_LIMITS(state)],
+        async (send) => {
+          const { rows } = await send({ text: DB_NOW, params: [] })
+          const ms = Number(rows[0]?.ms)
+          if (rows.length !== 1 || !Number.isFinite(ms))
+            throw new Error("now() answered no time")
+          return ms
+        }
+      ),
+    rowsExist: async (object, list) =>
+      new Set(await ids(ROWS_EXIST, [object, textArray(list)])),
+    rowPage: (object, after) => ids(ROW_PAGE, [object, after]),
+  }
 }
 
 const BEGIN_WRITE = "BEGIN ISOLATION LEVEL READ COMMITTED"

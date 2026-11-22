@@ -56,6 +56,15 @@ function fakeS3(pageSize = 1000) {
       objects.delete(i.Key)
     },
     async listObjectsV2(i) {
+      if (i.Delimiter !== undefined) {
+        const prefixes = new Set<string>()
+        for (const k of [...objects.keys()].sort()) {
+          if (!k.startsWith(i.Prefix ?? "")) continue
+          const cut = k.indexOf(i.Delimiter, (i.Prefix ?? "").length)
+          if (cut >= 0) prefixes.add(k.slice(0, cut + 1))
+        }
+        return { CommonPrefixes: [...prefixes].map((Prefix) => ({ Prefix })) }
+      }
       const keys = [...objects.keys()]
         .filter((k) => k.startsWith(i.Prefix ?? ""))
         .filter((k) =>
@@ -282,6 +291,18 @@ describe("fromS3Client get, delete, list", () => {
     for await (const o of store.list(`o/${OBJ}/`, fileObjectKey(OBJ, ids[2]!)))
       afterSeen.push(o.key)
     expect(afterSeen).toEqual(ids.slice(3).map((id) => fileObjectKey(OBJ, id)))
+  })
+})
+
+describe("listPrefixes", () => {
+  it("yields the object prefixes and not the marker", async () => {
+    const { client } = fakeS3()
+    const store = fromS3Client(client, "b")
+    await store.put(KEY, streamOf(bytes(1)), opts)
+    await store.put(fileObjectKey(OTHER, ROW), streamOf(bytes(1)), opts)
+    const found: string[] = []
+    for await (const p of store.listPrefixes()) found.push(p)
+    expect(found).toEqual([`o/${OBJ}/`, `o/${OTHER}/`])
   })
 })
 

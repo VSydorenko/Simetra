@@ -281,6 +281,7 @@ export const checkedRuntime = (
   checkUpload: (...args) => runtime.checkUpload(...args),
   attachFile: (...args) => runtime.attachFile(...args),
   fileInstance: () => runtime.fileInstance(),
+  reconcileFiles: (store, options) => runtime.reconcileFiles(store, options),
 })
 
 export async function setup(

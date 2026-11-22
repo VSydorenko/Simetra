@@ -145,6 +145,7 @@ function counted(runtime: CommandRuntime) {
     checkUpload: (...args) => runtime.checkUpload(...args),
     attachFile: (...args) => runtime.attachFile(...args),
     fileInstance: () => runtime.fileInstance(),
+    reconcileFiles: (store, options) => runtime.reconcileFiles(store, options),
   }
   return { runtime: wrapped, calls }
 }
