@@ -6,6 +6,7 @@ import {
   type PhysicalTable,
 } from "simetra/model"
 import { compareStrings, diagnostic, type Diagnostic } from "../diagnostics"
+import type { CheckColumn } from "../stages/model"
 import type { RowRule } from "./units"
 
 /** Оператори порівняння атома правила рядка. */
@@ -132,14 +133,21 @@ export function rowRuleExpression(expr: Node): string {
  * походженням (спека П2 §8.3): одна правда про таблицю для рендера, хешу й
  * `explain`. Правило — лише на таблиці свого об'єкта (`origin.objectId`) і
  * лише над її колонками; ім'я не може повторити обмеження таблиці, бо Postgres
- * тримає імена обмежень таблиці в одному просторі.
+ * тримає імена обмежень таблиці в одному просторі. `checkColumns` — колонки,
+ * які читає кожне вкладене правило, у порядку колонок таблиці: за ними
+ * каталог рантайму мапить `23514` на реквізити (спека П4 §6.10).
  */
 export function embedRowRules(
   physical: PhysicalSnapshot,
   rules: readonly RowRule[],
   ownerIdOf: (ownerFile: string) => string | undefined
-): { physical: PhysicalSnapshot; diagnostics: Diagnostic[] } {
+): {
+  physical: PhysicalSnapshot
+  checkColumns: CheckColumn[]
+  diagnostics: Diagnostic[]
+} {
   const diagnostics: Diagnostic[] = []
+  const checkColumns: CheckColumn[] = []
   const added = new Map<PhysicalTable, PhysicalTable["checks"]>()
   for (const rule of rules) {
     const objectId =
@@ -192,6 +200,13 @@ export function embedRowRules(
       origin: { rowRule: { file: rule.file } },
     })
     added.set(table, checks)
+    const read = new Set<string>()
+    readColumns(rule.expr, read)
+    checkColumns.push({
+      table: { schema: table.schema, name: table.name },
+      check: rule.name,
+      columns: table.columns.map((c) => c.name).filter((c) => read.has(c)),
+    })
   }
   return {
     physical: {
@@ -208,8 +223,28 @@ export function embedRowRules(
             }
       }),
     },
+    checkColumns,
     diagnostics,
   }
+}
+
+/**
+ * Колонки, які читає правило, що пройшло `rowRuleProblem`: граматика закрита,
+ * тож кожна колонка — `ColumnRef` десь у дереві, і обхід усіх полів вузла
+ * не пропустить жодної.
+ */
+function readColumns(node: unknown, into: Set<string>): void {
+  if (Array.isArray(node)) {
+    for (const item of node) readColumns(item, into)
+    return
+  }
+  if (typeof node !== "object" || node === null) return
+  if ("ColumnRef" in node) {
+    const name = columnName(node as Node)
+    if (name !== undefined) into.add(name)
+    return
+  }
+  for (const value of Object.values(node)) readColumns(value, into)
 }
 
 function nodeName(node: Node): string {

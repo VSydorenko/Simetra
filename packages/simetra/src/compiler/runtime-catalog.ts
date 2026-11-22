@@ -54,7 +54,7 @@ export function buildRuntimeCatalog(model: CompiledModel): RuntimeCatalog {
   const facts: Facts = {
     model,
     checkColumns: new Map(
-      model.checkColumns.map((c) => [checkKey(c.table, c.check), c.column])
+      model.checkColumns.map((c) => [checkKey(c.table, c.check), c.columns])
     ),
     enumValues: (ref) => {
       const target = byRef.get(refKey(ref))
@@ -157,8 +157,8 @@ function publicReadOf(
 
 interface Facts {
   model: CompiledModel
-  /** Колонка CHECK за `checkKey`. */
-  checkColumns: ReadonlyMap<string, string>
+  /** Колонки CHECK за `checkKey`, у порядку колонок таблиці. */
+  checkColumns: ReadonlyMap<string, readonly string[]>
   /** Значення перерахування-цілі `Ref`; `undefined` — ціль не перерахування. */
   enumValues: (ref: MetadataRef) => RuntimeAttribute["enumValues"]
   objectRef: (table: ObjectTable) => MetadataRef
@@ -644,16 +644,14 @@ function constraints(table: PhysicalTable, facts: Facts): RuntimeConstraint[] {
         kind: "unique" as const,
         columns: i.keys.flatMap((k) => ("column" in k ? [k.column] : [])),
       })),
-    // Колонка — з компілятора за призначеним іменем; CHECK над
-    // кількома колонками (правило рядка) реквізиту не називає.
-    ...table.checks.map((c) => {
-      const column = facts.checkColumns.get(checkKey(table, c.name))
-      return {
-        name: c.name,
-        kind: "check" as const,
-        columns: column === undefined ? [] : [column],
-      }
-    }),
+    // Колонки — з компілятора за призначеним іменем: CHECK реквізиту —
+    // його колонка, правило рядка — колонки, які воно читає. CHECK, якого
+    // компілятор не розібрав, колонок не має.
+    ...table.checks.map((c) => ({
+      name: c.name,
+      kind: "check" as const,
+      columns: [...(facts.checkColumns.get(checkKey(table, c.name)) ?? [])],
+    })),
     ...table.foreignKeys.map((f) => ({
       name: f.name,
       kind: "foreignKey" as const,

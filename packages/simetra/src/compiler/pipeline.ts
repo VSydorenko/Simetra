@@ -1183,7 +1183,7 @@ export async function runStages(
     physical,
     sqlUnits,
     catalogCommands,
-    checkColumns: stage3.checkColumns,
+    checkColumns: [...stage3.checkColumns, ...embedded.checkColumns],
     copyColumns: new Map(
       physical.tables.flatMap((table) => {
         const columns = copyColumns(table, parse)

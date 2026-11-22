@@ -37,6 +37,7 @@ import {
   signalTopicDomain,
   REGION_FILE,
   GAUGE_LOG_FILE,
+  GAUGE_TABLE,
   ROLE_FILE,
   STATUS_FILE,
   TICKET_FILE,
@@ -778,20 +779,39 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
     }
   }
 
-  it("bounds, an enumeration label and a pair type name their column; a row rule names none", async () => {
+  // Р12: правило рядка — колонки, які воно читає, у порядку колонок таблиці
+  // (`num_nonnulls(amount, reading)`; порядок виразу тут збігається з таблицею,
+  // тож порядок таблиці доводить наступний кейс).
+  it("bounds, an enumeration label and a pair type name their column; a row rule names the columns it reads", async () => {
     const { checks } = await checksOf(
       withSql(policyDomain(runtimeValuesLayer()), gaugeRowRule())
     )
     expect(checks).toEqual([
       { name: "gauge_level_check", kind: "check", columns: ["level"] },
       { name: "gauge_reading_bounds", kind: "check", columns: ["reading"] },
-      { name: "gauge_span", kind: "check", columns: [] },
+      { name: "gauge_span", kind: "check", columns: ["amount", "reading"] },
       {
         name: "gauge_subject_type_check",
         kind: "check",
         columns: ["subject_type"],
       },
     ])
+  })
+
+  it("a row rule lists its columns in table order, each once", async () => {
+    const { checks } = await checksOf(
+      withSql(policyDomain(runtimeValuesLayer()), {
+        layer: {},
+        sql: {
+          "catalogs/Gauge/Gauge.sql": `ALTER TABLE public.${GAUGE_TABLE} ADD CONSTRAINT gauge_order CHECK (counter IS NOT NULL OR (reading = 1 AND amount IS NULL) OR counter <> 2);`,
+        },
+      })
+    )
+    expect(checks.find((c) => c.name === "gauge_order")).toEqual({
+      name: "gauge_order",
+      kind: "check",
+      columns: ["amount", "counter", "reading"],
+    })
   })
 
   // Ім'я CHECK довгої таблиці обрізане до 63 байтів: мапа йде за призначеним
