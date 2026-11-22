@@ -652,26 +652,148 @@ function connected(
   return inputs.every((i) => seen.has(i.key))
 }
 
-/** Чи роль має `SELECT` на T за дослівними грантами (без відкликання). */
-function selects(
+/**
+ * Чи роль читає T сама, без функції політики (§5.8): прямий виклик як RPC
+ * нешкідливий, лише коли він дає підмножину рядків, які роль і так читає.
+ * Тому для кожної ролі, що отримує `EXECUTE`, діють разом три умови, і жодна
+ * не виводиться з самого `EXECUTE`:
+ * - `SELECT` на T на рівні таблиці за дослівними грантами;
+ * - `USAGE` на схему T за дослівними грантами (схема `public` має його
+ *   для `PUBLIC` вбудовано, як у `buildSchemaUsageUnits`); згенерований
+ *   `USAGE` не рахується — його платформа дала б саме за грантом `EXECUTE`;
+ * - PERMISSIVE-політика T `FOR SELECT`/`ALL` `TO` цієї ролі чи `PUBLIC`, чий
+ *   `USING` кличе функцію: лише RESTRICTIVE-політики рядків не дають, і тоді
+ *   RPC віддав би ключі, яких роль не бачить. Форму атомів кожного виразу,
+ *   що кличе функцію, судить `policyShape`: без неї функція не форма.
+ */
+function readsDirectly(
+  role: string,
+  table: { schema: string; name: string },
+  context: {
+    unit: VerbatimUnit
+    callers: readonly Policy[]
+    grants: readonly GrantFact[]
+    units: readonly VerbatimUnit[]
+    parse: SqlParser
+  }
+): boolean {
+  const permissive = context.callers.some(
+    (p) =>
+      p.tree.permissive === true &&
+      p.reading &&
+      (p.roles.includes(role) || p.roles.includes(PUBLIC)) &&
+      p.tree.qual !== undefined &&
+      calledFunctions(p.tree.qual, context.units, context.parse).includes(
+        context.unit
+      )
+  )
+  return (
+    permissive &&
+    selectsTable(role, table, context.grants) &&
+    usesSchema(role, table.schema, context.units)
+  )
+}
+
+/**
+ * Привілей отримувача (чи `PUBLIC`) за дослівними фактами: грант без
+ * відкликання. Порядок операторів не моделюється, тож відкликання перемагає
+ * (fail-closed). Відкликання лише права передачі (`GRANT OPTION FOR`) і лише
+ * колонок привілею таблиці не забирає.
+ */
+function holdsPrivilege(
+  role: string,
+  facts: readonly {
+    grant: boolean
+    roles: ReadonlySet<string>
+    covers: boolean
+    loses: boolean
+  }[]
+): boolean {
+  const holds = (grantee: string) =>
+    facts.some((f) => f.grant && f.covers && f.roles.has(grantee)) &&
+    !facts.some((f) => !f.grant && f.loses && f.roles.has(grantee))
+  return holds(role) || holds(PUBLIC)
+}
+
+/** `SELECT` на T на рівні таблиці (не колонок). */
+function selectsTable(
   role: string,
   table: { schema: string; name: string },
   grants: readonly GrantFact[]
 ): boolean {
   const key = `table|${qualifiedName(table.schema, table.name)}`
-  const facts = grants.filter((f) => f.keys.includes(key))
-  const covers = (f: GrantFact, columns: boolean) =>
+  const tableLevel = (f: GrantFact) =>
     f.privileges.length === 0 ||
     f.privileges.some(
-      (p) =>
-        (p.name === "select" || p.name === "all") && (columns || !p.columns)
+      (p) => (p.name === "select" || p.name === "all") && !p.columns
     )
-  // Порядок операторів не моделюється: будь-яке відкликання від отримувача
-  // перемагає (fail-closed — роль без `SELECT` не дістане `EXECUTE`).
-  const holds = (grantee: string) =>
-    facts.some((f) => f.grant && f.roles.has(grantee) && covers(f, false)) &&
-    !facts.some((f) => !f.grant && f.roles.has(grantee) && covers(f, true))
-  return holds(role) || holds(PUBLIC)
+  return holdsPrivilege(
+    role,
+    grants
+      .filter((f) => f.keys.includes(key))
+      .map((f) => ({
+        grant: f.grant,
+        roles: f.roles,
+        covers: tableLevel(f),
+        loses: !f.optionOnly && tableLevel(f),
+      }))
+  )
+}
+
+interface SchemaGrantTree {
+  is_grant?: boolean
+  grant_option?: boolean
+  objtype?: string
+  objects?: { String?: { sval?: string } }[]
+  privileges?: { AccessPriv?: { priv_name?: string } }[]
+  grantees?: { RoleSpec?: { roletype?: string; rolename?: string } }[]
+}
+
+/** `USAGE` на схему за дослівними `GRANT`/`REVOKE … ON SCHEMA`. */
+function usesSchema(
+  role: string,
+  schema: string,
+  units: readonly VerbatimUnit[]
+): boolean {
+  const facts = units.flatMap((unit) => {
+    const stmt = (unit.tree as { GrantStmt?: SchemaGrantTree }).GrantStmt
+    if (
+      stmt?.objtype !== "OBJECT_SCHEMA" ||
+      !(stmt.objects ?? []).some((o) => o.String?.sval === schema)
+    ) {
+      return []
+    }
+    const usage =
+      (stmt.privileges ?? []).length === 0 ||
+      (stmt.privileges ?? []).some(
+        (p) =>
+          p.AccessPriv?.priv_name === "usage" ||
+          p.AccessPriv?.priv_name === "all"
+      )
+    const grant = stmt.is_grant === true
+    return [
+      {
+        grant,
+        roles: new Set(
+          (stmt.grantees ?? []).flatMap(({ RoleSpec: spec }) =>
+            spec?.roletype === "ROLESPEC_PUBLIC"
+              ? [PUBLIC]
+              : spec?.rolename === undefined
+                ? []
+                : [spec.rolename]
+          )
+        ),
+        covers: usage,
+        loses: usage && !(stmt.grant_option === true && !grant),
+      },
+    ]
+  })
+  const revokedFromPublic = facts.some(
+    (f) => !f.grant && f.loses && f.roles.has(PUBLIC)
+  )
+  return (
+    holdsPrivilege(role, facts) || (schema === "public" && !revokedFromPublic)
+  )
 }
 
 /** Призначення ролі `TO`, якщо вона — роль сесії профілю; інакше `undefined`. */
@@ -1082,39 +1204,38 @@ function judge(context: {
   }
 
   // Політика — `OR` атомів над ключем T, кожен над функцією політики.
+  const atomForm = (expr: unknown, policy: Policy) =>
+    disjuncts(expr).every((d) => {
+      const atom = setAtom(d)
+      return (
+        atom !== undefined &&
+        context.candidates.has(atom.fn) &&
+        key !== undefined &&
+        isKeyColumn(atom.column, policy.table, key)
+      )
+    })
   for (const policy of callers) {
     for (const expr of expressions(policy)) {
       if (!calledFunctions(expr, input.units, parse).includes(unit)) continue
-      const ok = disjuncts(expr).every((d) => {
-        const atom = setAtom(d)
-        return (
-          atom !== undefined &&
-          context.candidates.has(atom.fn) &&
-          key !== undefined &&
-          isKeyColumn(atom.column, policy.table, key)
-        )
-      })
-      if (!ok) reasons.add("policyShape")
+      if (!atomForm(expr, policy)) reasons.add("policyShape")
     }
   }
 
-  // Ролі: кожна роль сесії, що стоїть у `TO` політики `SELECT`/`ALL` з
-  // викликом у `USING` і має `SELECT` на T.
-  const readers = callers.filter(
-    (p) =>
-      p.reading &&
-      p.tree.qual !== undefined &&
-      calledFunctions(p.tree.qual, input.units, parse).includes(unit)
-  )
-  const readerRoles = new Set(readers.flatMap((p) => p.roles))
+  // Ролі: кожна роль `TO` політики-викликача — роль сесії, що читає T сама
+  // (`readsDirectly`).
   const purposes = new Set<GrantPurpose>()
   for (const role of new Set(callers.flatMap((p) => p.roles))) {
     const own = sessionPurposes(role, input.provider)
     if (
       own === undefined ||
-      !readerRoles.has(role) ||
       table === undefined ||
-      !selects(role, table, context.grants)
+      !readsDirectly(role, table, {
+        unit,
+        callers,
+        grants: context.grants,
+        units: input.units,
+        parse,
+      })
     ) {
       reasons.add("policyRoles")
       continue

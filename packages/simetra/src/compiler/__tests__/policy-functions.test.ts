@@ -32,13 +32,14 @@ beforeAll(async () => {
 function table(
   name: string,
   columns: readonly (string | [string, string])[],
-  rowLevelSecurity: PhysicalTable["rowLevelSecurity"] = "off"
+  rowLevelSecurity: PhysicalTable["rowLevelSecurity"] = "off",
+  schema = "public"
 ): PhysicalTable {
   const cols = columns.map((c): [string, string] =>
     typeof c === "string" ? [c, "uuid"] : c
   )
   return {
-    schema: "public",
+    schema,
     name,
     origin: { objectId: `00000000-0000-4000-8000-${name.padStart(12, "0")}` },
     rowLevelSecurity,
@@ -63,6 +64,7 @@ const TABLES = [
   table("flags", ["id"]),
   table("secrets", ["id"], "enabled"),
   table("codes", [["code", "text"]]),
+  table("notes", ["id", "owner_id"], "enabled", "app"),
 ]
 
 /** Налаштування сесії, які корінь голови фіксує в оболонці (`sql.head-settings`). */
@@ -508,6 +510,41 @@ describe("policyFunctions: the form (І2)", () => {
         "REVOKE SELECT ON TABLE public.docs FROM authenticated;\n",
       reason: "policyRoles",
     },
+    // Умови `readsDirectly`: кожна окремо відсутня — `EXECUTE` немає.
+    {
+      name: "a caller that is only RESTRICTIVE (no row for the role)",
+      sql:
+        fn() +
+        "CREATE POLICY docs_r ON public.docs AS RESTRICTIVE FOR SELECT TO authenticated USING (id IN (SELECT public.f()));\n" +
+        GRANT,
+      reason: "restrictiveBound",
+      detail: "policyRoles",
+    },
+    {
+      // Та сама RESTRICTIVE-політика поруч із PERMISSIVE: ролі вистачає,
+      // лишається лише межа, якої немає в `WHERE`.
+      name: "a RESTRICTIVE caller beside a PERMISSIVE one",
+      sql:
+        fn() +
+        POLICY +
+        "CREATE POLICY docs_r ON public.docs AS RESTRICTIVE FOR SELECT TO authenticated USING (id IN (SELECT public.f()));\n" +
+        GRANT,
+      reason: "restrictiveBound",
+    },
+    {
+      name: "a role with only a column-level SELECT on T",
+      sql:
+        fn() +
+        POLICY +
+        "GRANT SELECT (id) ON TABLE public.docs TO authenticated;\n",
+      reason: "policyRoles",
+    },
+    {
+      name: "a role whose USAGE on the public schema is revoked from PUBLIC",
+      sql:
+        fn() + POLICY + GRANT + "REVOKE USAGE ON SCHEMA public FROM PUBLIC;\n",
+      reason: "policyRoles",
+    },
     {
       name: "a second role without SELECT on T (service_role)",
       sql:
@@ -611,6 +648,73 @@ describe("policyFunctions: the form (І2)", () => {
     expect(judged(fn() + own + grant, { provider: "postgres" })).toEqual(
       refused("actorUnbound")
     )
+  })
+
+  it.each<{ name: string; sql: string }>([
+    {
+      name: "a revoked grant option of SELECT",
+      sql:
+        fn() +
+        POLICY +
+        GRANT +
+        "REVOKE GRANT OPTION FOR SELECT ON TABLE public.docs FROM authenticated;\n",
+    },
+    {
+      name: "a column-level revoke of SELECT",
+      sql:
+        fn() +
+        POLICY +
+        GRANT +
+        "REVOKE SELECT (status) ON TABLE public.docs FROM authenticated;\n",
+    },
+    {
+      name: "a revoked grant option of USAGE on the schema",
+      sql:
+        fn() +
+        POLICY +
+        GRANT +
+        "REVOKE GRANT OPTION FOR USAGE ON SCHEMA public FROM PUBLIC;\n",
+    },
+  ])("keeps EXECUTE with $name", ({ sql }) => {
+    expect(judged(sql)).toEqual(accepted())
+  })
+
+  // USAGE на схему T поза `public` — лише дослівним грантом.
+  describe("USAGE on the schema of T", () => {
+    const notes =
+      fn(
+        `SELECT n.id FROM app.notes n WHERE n.owner_id = (SELECT auth.uid())`
+      ) +
+      "CREATE POLICY notes_read ON app.notes FOR SELECT TO authenticated USING (id IN (SELECT public.f()));\n" +
+      "GRANT SELECT ON TABLE app.notes TO authenticated;\n"
+    const usage = "GRANT USAGE ON SCHEMA app TO authenticated;\n"
+    const kept = {
+      diagnostics: [],
+      functions: [
+        {
+          function: "public.f",
+          table: "app.notes",
+          callers: ["policy:app.notes.notes_read"],
+          purposes: ["user"],
+        },
+      ],
+    }
+    it.each<{ name: string; sql: string; expected: unknown }>([
+      { name: "granted to the role", sql: notes + usage, expected: kept },
+      {
+        name: "granted to PUBLIC",
+        sql: notes + "GRANT USAGE ON SCHEMA app TO PUBLIC;\n",
+        expected: kept,
+      },
+      { name: "not granted", sql: notes, expected: refused("policyRoles") },
+      {
+        name: "granted and revoked",
+        sql: notes + usage + "REVOKE USAGE ON SCHEMA app FROM authenticated;\n",
+        expected: refused("policyRoles"),
+      },
+    ])("$name", ({ sql, expected }) => {
+      expect(judged(sql)).toEqual(expected)
+    })
   })
 
   it("derives the purposes of every reading caller role with SELECT on T", () => {
