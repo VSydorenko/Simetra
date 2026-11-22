@@ -386,6 +386,8 @@ const dropFunction = (f: Loss["functions"][number]) =>
 
 interface RoundTrip {
   extracted: Extracted
+  /** Тека, яку скомпільовано: зворотна генерація (з мутаціями ланцюжка). */
+  files: ReadonlyMap<string, string>
   model: CompiledModel
   scope: EngineScope
   comparison: Extract<DesiredComparison, { status: "compared" }>
@@ -607,7 +609,7 @@ async function compiledTrip(
     })
   )
   if (oracle.status !== "loaded") throw new Error("oracle shadow failed")
-  return { extracted, model, scope, comparison, ...oracle.value }
+  return { extracted, files, model, scope, comparison, ...oracle.value }
 }
 
 /**

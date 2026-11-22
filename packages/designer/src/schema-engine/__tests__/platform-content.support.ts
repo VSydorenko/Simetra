@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   PLATFORM_ROLES,
   PROVIDER_API_ROLES,
+  PROVIDER_OWNER_ROLES,
   SIGNAL_OUTBOX,
 } from "simetra/model"
 import { compile } from "simetra/compiler"
@@ -20,6 +21,13 @@ import {
   testRoleName,
 } from "../../../../simetra/test/support"
 import { dropRoles } from "../../__tests__/support/db"
+import {
+  DOCS_GRANT,
+  POLICY_DEBT,
+  POLICY_FUNCTION,
+  READ_POLICY,
+  policyFiles,
+} from "../../../../simetra/src/compiler/__tests__/fixtures/policy-function"
 import {
   CATALOG_OUTBOX_TABLE,
   CATALOG_UNIT_FORMS,
@@ -231,6 +239,7 @@ export function describeModelPathInvariants(): void {
 }
 
 const COMMAND = PLATFORM_ROLES.command
+const OWNER = PROVIDER_OWNER_ROLES[testProvider()]
 const USER = PROVIDER_API_ROLES[testProvider()].user
 const SERVICE = PROVIDER_API_ROLES[testProvider()].service
 
@@ -415,7 +424,44 @@ const FOLDER_UNITS: Readonly<
     ),
     schemaUsage,
   },
+  // Функція політики й її викликачі — уже дослівний борг джерела, а її
+  // `EXECUTE` — форма платформи. Понад джерело тека має лише коментар схеми
+  // `public` з пресета Supabase: таблиці фікстури стоять у `public`, тож
+  // схема в межі прийому
+  "a policy function of debt called by a verbatim policy": {
+    presetComment: ["comment:schema:public"],
+  },
 }
+
+const POLICY_FUNCTION_FIXTURE =
+  "a policy function of debt called by a verbatim policy"
+
+/**
+ * Фікстура корпусу з функцією політики (спека декларацій функцій §5.8):
+ * функцію множини без параметрів кличе дослівна політика `SELECT` прийнятої
+ * таблиці, і вона проходить форму — зворотна генерація не пише їй ні
+ * декларації, ні дослівного гранту, а `EXECUTE` виводить платформа. Форма
+ * існує лише на `supabase`: актор — `auth.uid()`. На `postgres` актор —
+ * лише `simetra.current_user_id()`, яку дає шар «Користувачів», а прийом з
+ * нуля бази зі схемою `simetra` не визначений (спека користувачів §12);
+ * сирий вираз над `current_setting` — `actorUnbound`.
+ */
+const POLICY_FUNCTION_FIXTURES: [
+  string,
+  (provider: ReturnType<typeof testProvider>) => Map<string, string>,
+][] =
+  testProvider() === "supabase"
+    ? [
+        [
+          POLICY_FUNCTION_FIXTURE,
+          () =>
+            policyFiles(
+              POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT(),
+              POLICY_DEBT()
+            ),
+        ],
+      ]
+    : []
 
 /**
  * Прийом з нуля корпусу фікстур розгортання з їхніми видами скоупу (Р8):
@@ -426,7 +472,7 @@ const FOLDER_UNITS: Readonly<
  */
 export function describeAdoptionFromScratch(): void {
   describe("adoption from scratch: the deployment fixture corpus survives the round trip", () => {
-    for (const [name, fixture] of FIXTURES) {
+    for (const [name, fixture] of [...FIXTURES, ...POLICY_FUNCTION_FIXTURES]) {
       it(name, async () => {
         const { source, result } = await deployedRoundTrip(
           fixture(testProvider()),
@@ -461,6 +507,42 @@ export function describeAdoptionFromScratch(): void {
             .filter((u) => u.schema === SIGNAL_OUTBOX.schema)
             .map((u) => u.identity)
         ).toEqual([])
+        if (name === POLICY_FUNCTION_FIXTURE) {
+          // Функція політики після прийому — знову форма: без декларації й
+          // дослівних грантів `EXECUTE`, а виведений грант ціль і тінь мають
+          // однаковий — роль політики-викликача
+          expect(
+            [...result!.files.keys()].filter((path) =>
+              path.endsWith(".functions.json")
+            )
+          ).toEqual([])
+          expect(
+            verbatim
+              .filter(
+                (u) =>
+                  u.class === "grant" &&
+                  u.identity.includes("function:public.f()")
+              )
+              .map((u) => u.identity)
+          ).toEqual([])
+          expect(
+            model.sqlUnits
+              .filter(
+                (u) =>
+                  u.generator === "functionExecute" &&
+                  u.sql.startsWith("GRANT ")
+              )
+              .map((u) => u.sql)
+          ).toEqual([`GRANT EXECUTE ON FUNCTION public.f() TO ${USER};`])
+          for (const shape of [result!.target, result!.shadow])
+            expect(
+              shape.acls
+                .find((a) => a.object === "f:public.f()")
+                ?.acl.map((item) => item.split("=")[0])
+                .filter((role) => role !== "" && role !== OWNER)
+                .sort()
+            ).toEqual([USER])
+        }
       })
     }
   })
