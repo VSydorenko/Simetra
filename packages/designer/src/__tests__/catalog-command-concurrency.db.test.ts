@@ -23,6 +23,7 @@ import {
   profileLayer,
   superuserClient,
   ticketMoveToHandler,
+  ticketParentHandler,
   withSql,
   writeRoles,
   setLocalSetting,
@@ -115,10 +116,16 @@ async function openCommand(
   await client.query(`SET LOCAL ROLE ${PLATFORM_ROLES.command}`)
 }
 
-const saveSql = `SELECT public.${TICKET_TABLE}_save($1::jsonb, $2::bigint) AS r`
-const saveParams = (item: Record<string, unknown>, version: string) => [
+const saveSql = `SELECT public.${TICKET_TABLE}_save($1::jsonb, $2::bigint, $3::jsonb) AS r`
+/** Параметри `save`; `expected` — база CAS за полями, немає — перевірка версії. */
+const saveParams = (
+  item: Record<string, unknown>,
+  version: string,
+  expected?: Record<string, unknown>
+) => [
   JSON.stringify(item),
   version,
+  expected === undefined ? null : JSON.stringify(expected),
 ]
 
 /** Помилка Postgres кроку чи `undefined`: відмова — очікуваний результат. */
@@ -479,6 +486,110 @@ describe("catalog command core: concurrency and hierarchy", () => {
             isolation
           )
         ).toMatchObject({ code: "0A000", message: "hierarchy.isolation" })
+      }
+    })
+  }, 180_000)
+
+  // CAS за полями (спека П4 §6.6, І1, І12): поля звіряються з рядком під
+  // замком, тож друга сесія, що чекала на замок першої, порівнює базу з
+  // закоміченим рядком першої. Обидві сесії мають ту саму застарілу версію:
+  // перевіряються поля, а не версія. Обробник `beforeWrite` рахує похідне
+  // `description` з двох полів, які пишуть різні сесії: під замком над
+  // поточним рядком він бачить обидві зміни (послідовна еквівалентність Р7).
+  it("CAS by fields compares under the row lock; a derived field sees both changes", async () => {
+    const derived = ticketParentHandler(
+      "NEW.description := coalesce(NEW.code, '') || '|' || coalesce(pg_catalog.cardinality(NEW.watchers), 0)::text;"
+    )
+    const model = await compiled(
+      compile(
+        withSql(
+          policyDomain(
+            writeRoles(),
+            commandCoreLayer(),
+            derived.layer,
+            profileLayer()
+          ),
+          derived
+        )
+      )
+    )
+    await withCommandTarget(model, async (url, owner, actor) => {
+      const seed = async () => {
+        const id = randomUUID()
+        // `code` — `varchar(9)` фікстури
+        const code = `c-${id.slice(0, 7)}`
+        await committed(owner, async () => {
+          await owner.query(
+            `INSERT INTO public.${TICKET_TABLE} (id, org_id, code, watchers) VALUES ($1, $2, $3, '{}')`,
+            [id, actor.org, code]
+          )
+        })
+        return {
+          id,
+          code,
+          version: await versionOf(owner, id),
+        }
+      }
+      const edit = (
+        row: { id: string; version: string },
+        values: Record<string, unknown>,
+        base: Record<string, unknown>
+      ) => ({
+        root: row.id,
+        sql: saveSql,
+        params: saveParams({ id: row.id, ...values }, row.version, base),
+      })
+      const stateOf = async (id: string) =>
+        (
+          await owner.query<{
+            code: string
+            watchers: string[]
+            description: string
+          }>(
+            `SELECT code, watchers, description FROM public.${TICKET_TABLE} WHERE id = $1`,
+            [id]
+          )
+        ).rows[0]
+
+      // Те саме поле з тією самою базою: друга — `conflict fields`, рядок
+      // має зміну першої
+      {
+        const row = await seed()
+        const second = await race(
+          url,
+          actor,
+          edit(row, { code: "first" }, { code: row.code }),
+          edit(row, { code: "second" }, { code: row.code })
+        )
+        expect(second).toMatchObject({
+          code: "P0001",
+          message: "command.conflict",
+          detail: "fields",
+          hint: await versionOf(owner, row.id),
+        })
+        expect(await stateOf(row.id)).toEqual({
+          code: "first",
+          watchers: [],
+          description: "first|0",
+        })
+      }
+
+      // Різні поля: обидві проходять, рядок має обидві зміни, а похідне
+      // поле — значення з обох (І12)
+      {
+        const row = await seed()
+        const second = await race(
+          url,
+          actor,
+          edit(row, { code: "renamed" }, { code: row.code }),
+          edit(row, { watchers: [actor.member] }, { watchers: [] })
+        )
+        expect(second).toBeUndefined()
+        expect(await stateOf(row.id)).toEqual({
+          code: "renamed",
+          watchers: [actor.member],
+          description: "renamed|1",
+        })
       }
     })
   }, 180_000)

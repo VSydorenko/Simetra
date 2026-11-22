@@ -307,15 +307,16 @@ describe("catalog command core: rights check ≡ RLS", () => {
         }
       )
     if (action === "create")
-      return run(`SELECT public.${table}_save($1::jsonb, NULL::bigint) AS r`, [
-        JSON.stringify(item),
-      ])
+      return run(
+        `SELECT public.${table}_save($1::jsonb, NULL::bigint, NULL::jsonb) AS r`,
+        [JSON.stringify(item)]
+      )
     const { version } = await ownerRow(table, id, ["version::text AS version"])
     if (action === "update")
-      return run(`SELECT public.${table}_save($1::jsonb, $2::bigint) AS r`, [
-        JSON.stringify(item),
-        version,
-      ])
+      return run(
+        `SELECT public.${table}_save($1::jsonb, $2::bigint, NULL::jsonb) AS r`,
+        [JSON.stringify(item), version]
+      )
     return run(
       `SELECT public.${table}_mark_deletion($1::uuid, $2::bigint, true) AS r`,
       [id, version]

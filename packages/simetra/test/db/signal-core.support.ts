@@ -338,7 +338,7 @@ export function defineSignalCoreCases(options: {
       expected: string | null
     ): CommandStep => ({
       context: context(action, table, item.id as string),
-      sql: `SELECT public.${table}_save($1::jsonb, $2::bigint) AS r`,
+      sql: `SELECT public.${table}_save($1::jsonb, $2::bigint, NULL::jsonb) AS r`,
       params: [JSON.stringify(item), expected],
     })
     const currentVersion = async (table: string, id: string) =>
@@ -713,7 +713,7 @@ export function defineSignalCoreCases(options: {
         await commandSteps(tx.client(), claimsFor("user", ids.owner!), [
           {
             context: { action: "update", object: ORG, root: ids.T! },
-            sql: `SELECT public.${ORG}_save($1::jsonb, $2::bigint) AS r`,
+            sql: `SELECT public.${ORG}_save($1::jsonb, $2::bigint, NULL::jsonb) AS r`,
             params: [JSON.stringify({ id: ids.T }), before],
           },
           rootVersion(ids.T!),

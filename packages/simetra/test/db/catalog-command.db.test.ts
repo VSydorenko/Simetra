@@ -177,6 +177,8 @@ describe("catalog command core", () => {
     /** Перевизначення контексту: за замовчуванням дія гілки й id рядка. */
     context?: Partial<CommandContext>
     after?: string
+    /** База CAS за полями (`p_expected_values`) як є; немає — `NULL`. */
+    expected?: unknown
   }
 
   const contextOf = (
@@ -198,9 +200,13 @@ describe("catalog command core", () => {
       tx.client(),
       claims(call.user),
       contextOf(call.version === null ? "create" : "update", id, call.context),
-      `SELECT public.${TICKET_TABLE}_save($1::jsonb, $2::bigint) AS r`,
+      `SELECT public.${TICKET_TABLE}_save($1::jsonb, $2::bigint, $3::jsonb) AS r`,
       {
-        params: [JSON.stringify(call.item), version],
+        params: [
+          JSON.stringify(call.item),
+          version,
+          call.expected === undefined ? null : JSON.stringify(call.expected),
+        ],
         ...(call.after === undefined ? {} : { after: call.after }),
       }
     )
@@ -411,7 +417,7 @@ describe("catalog command core", () => {
             tx.client(),
             claims("me"),
             { action: "update", object: "org_member", root: id },
-            "SELECT public.org_member_save($1::jsonb, $2::bigint) AS r",
+            "SELECT public.org_member_save($1::jsonb, $2::bigint, NULL::jsonb) AS r",
             { params: [JSON.stringify({ id, tabular: {} }), rows[0]!.v] }
           )
         )
@@ -668,6 +674,110 @@ describe("catalog command core", () => {
 
   it.each(CASES)("refusal: %s", async (_, call, expected) => {
     expect(await call()).toEqual(await expected())
+  })
+
+  // CAS за полями (спека П4 §6.6, І2): база `p_expected_values` — рівно ключі
+  // зміни `p_item`; інакше поле без бази записалося б «наосліп». Відмова
+  // називає аргумент, а не колонку. Ядро викликане напряму під роллю команд,
+  // повз Zod T0 і T3 — захист у глибину від вади верхнього рівня.
+  const descriptionOf = async (row: string) =>
+    (
+      await tx
+        .client()
+        .query<{ d: string }>(
+          `SELECT description AS d FROM public.${TICKET_TABLE} WHERE id = $1`,
+          [key(row)]
+        )
+    ).rows[0]!.d
+  const EXPECTED_VALUES = INVALID(E.invalid.expectedValues)
+  const casUpdate = async (
+    item: Record<string, unknown>,
+    expected: (base: string) => unknown,
+    version: Version = "current"
+  ) =>
+    run({
+      user: "tw",
+      item: { id: key("K1"), ...item },
+      version,
+      expected: expected(await descriptionOf("K1")),
+    })
+  it.each([
+    [
+      "a change key without its base",
+      () =>
+        casUpdate({ description: "x", watchers: [] }, (d) => ({
+          description: d,
+        })),
+    ],
+    [
+      "a base key that the change does not have",
+      () =>
+        casUpdate({ description: "x" }, (d) => ({
+          description: d,
+          watchers: [],
+        })),
+    ],
+    [
+      "a base next to tabular",
+      () =>
+        casUpdate({ description: "x", tabular: {} }, (d) => ({
+          description: d,
+        })),
+    ],
+    ["an empty base of an empty change", () => casUpdate({}, () => ({}))],
+    [
+      "the key of the table in the base",
+      () =>
+        casUpdate({ description: "x" }, (d) => ({
+          id: key("K1"),
+          description: d,
+        })),
+    ],
+    [
+      "a base value of the wrong type",
+      () => casUpdate({ watchers: [] }, () => ({ watchers: "not an array" })),
+    ],
+    ["a base that is not an object", () => casUpdate({}, () => [])],
+    [
+      "a base on create",
+      () =>
+        run({
+          user: "tw",
+          item: newTicket({ description: "x" }),
+          version: null,
+          expected: { description: "" },
+        }),
+    ],
+  ] as const)("fields: %s — p_expected_values", async (_, call) => {
+    expect(await call()).toEqual(EXPECTED_VALUES)
+  })
+
+  // Розбіжність бази бачить лише той, хто має право дії над рядком: замок
+  // не дає рядка ролі без `update`, тож поля ядро не звіряє (Р3).
+  it("fields: a reader with a wrong base is no-right", async () => {
+    expect(
+      await run({
+        user: "rd",
+        item: { id: key("K1"), description: "x" },
+        version: "999",
+        expected: { description: "not the stored value" },
+      })
+    ).toEqual(NO_RIGHT)
+  })
+
+  // Поля замість версії: застаріла версія з рівною базою проходить, розбіжна
+  // база — `conflict fields` з поточною версією в `HINT`.
+  it("fields: an equal base passes with a stale version; a different one is conflict fields", async () => {
+    expect(
+      await casUpdate({ description: "cas" }, (d) => ({ description: d }), "1")
+    ).toMatchObject({ id: key("K1"), description: "cas" })
+    expect(
+      await casUpdate(
+        { description: "cas" },
+        (d) => ({ description: `${d}-other` }),
+        "1"
+      )
+    ).toEqual(CONFLICT(E.conflict.fields, await versionOf("K1")))
   })
 
   // Прямий запис повз ядро: `predefined_name` поза грантом — відмова
@@ -960,7 +1070,7 @@ describe("catalog command core: unscoped Note", () => {
         tx.client(),
         claims(user),
         { action, object: "note", root: item.id as string },
-        "SELECT public.note_save($1::jsonb, $2::bigint) AS r",
+        "SELECT public.note_save($1::jsonb, $2::bigint, NULL::jsonb) AS r",
         { params: [JSON.stringify(item), version] }
       )
     )
@@ -1071,7 +1181,7 @@ describe("catalog command core: own carrier on Users", () => {
         tx.client(),
         user === null ? claimsFor("anonymous") : claimsFor("user", key(user)),
         { action: "create", object: "client", root: item.id as string },
-        "SELECT public.client_save($1::jsonb, NULL::bigint) AS r",
+        "SELECT public.client_save($1::jsonb, NULL::bigint, NULL::jsonb) AS r",
         { params: [JSON.stringify(item)] }
       )
     )
@@ -1093,7 +1203,7 @@ describe("catalog command core: own carrier on Users", () => {
       [
         {
           context: { action: "create", object: "client", root: id },
-          sql: "SELECT public.client_save($1::jsonb, NULL::bigint) AS r",
+          sql: "SELECT public.client_save($1::jsonb, NULL::bigint, NULL::jsonb) AS r",
           params: [JSON.stringify({ id, owner_id: key("A") })],
         },
         { check: read(select, [id]) },

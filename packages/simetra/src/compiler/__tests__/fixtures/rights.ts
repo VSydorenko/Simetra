@@ -1699,6 +1699,35 @@ export function gaugeLoadLayer(loads: Record<string, "eager" | "lazy">): Layer {
   }
 }
 
+/**
+ * `runtimeValuesLayer()` з реквізитами шапки `Gauge` для рівності CAS за
+ * полями (спека П4 §6.6): `ratio` (`Integer`) і `raw` (`Json`) тест переводить
+ * у `double precision` і `json` — типи прийнятої таблиці, яких логічні типи не
+ * дають; `at` і `day` — дата й момент.
+ */
+export function gaugeCasLayer(): Layer {
+  const layer = runtimeValuesLayer()
+  const gauge = layer[GAUGE_FILE] as { attributes: unknown[] }
+  return {
+    ...layer,
+    [GAUGE_FILE]: {
+      ...gauge,
+      attributes: [
+        ...gauge.attributes,
+        {
+          id: uuid(7570),
+          name: "ratio",
+          physicalName: "ratio",
+          type: "Integer",
+        },
+        { id: uuid(7571), name: "raw", physicalName: "raw", type: "Json" },
+        { id: uuid(7572), name: "at", physicalName: "at", type: "DateTime" },
+        { id: uuid(7573), name: "day", physicalName: "day", type: "Date" },
+      ],
+    },
+  }
+}
+
 /** Імена реквізитів `BigInt`, які додає {@link wideBigintLayer}: `wide01`, `wide02`, …. */
 export const wideBigintNames = (count: number): string[] =>
   Array.from(
