@@ -305,6 +305,38 @@ describe("policyFunctions: the form (І2)", () => {
         restrictive("public.is_staff()"),
       reason: "restrictiveBound",
     },
+    // Псевдонім зі списком колонок перейменовує колонки за позицією:
+    // `d(leak_id, id)` дає `d.id` значення колонки `team_id`.
+    {
+      name: "an alias column list on T in the body",
+      sql:
+        fn(
+          `SELECT d.id FROM public.docs AS d(leak_id, id) JOIN public.members m ON m.team_id = d.id WHERE ${ACTOR}`
+        ) +
+        POLICY +
+        GRANT,
+      reason: "outputKey",
+    },
+    {
+      name: "a bound matched only through an alias column list",
+      sql:
+        where(
+          "d.team_id IN (SELECT m2.team_id FROM public.members AS m2(id, user_id, team_id))"
+        ) +
+        POLICY +
+        GRANT +
+        restrictive("team_id IN (SELECT m2.team_id FROM public.members m2)"),
+      reason: "restrictiveBound",
+    },
+    {
+      name: "a bound over ONLY matched by a body conjunct without ONLY",
+      sql:
+        where("d.team_id IN (SELECT x.id FROM public.flags x)") +
+        POLICY +
+        GRANT +
+        restrictive("team_id IN (SELECT x.id FROM ONLY public.flags x)"),
+      reason: "restrictiveBound",
+    },
     // actorUnbound
     {
       name: "<>",
@@ -605,6 +637,48 @@ describe("policyFunctions: recognition (Р2)", () => {
     expect(judged(fn() + POLICY + GRANT, { forms })).toEqual(
       refused("policyShape")
     )
+  })
+
+  it("refuses a values function of a dimension in its own shape (SETOF text, invoker)", () => {
+    const forms: PlatformFormSource[] = [
+      { function: { schema: "public", name: "f" }, form: "dimension" },
+    ]
+    const values = fn("SELECT r.code FROM public.codes r", {
+      returns: "SETOF text",
+      shell: `STABLE SET search_path = '' ${PINNED}`,
+    })
+    expect(
+      judged(values + policy("id IN (SELECT public.f())") + GRANT, { forms })
+    ).toEqual(refused("policyShape"))
+  })
+
+  // Вердикт межі запам'ятовується: спільна ланка, вже відмовлена для однієї
+  // функції політики, не проходить для другої.
+  it("refuses every policy function whose bound reaches the same refused helper", () => {
+    const g = fn(
+      `SELECT d.id ${JOIN} WHERE ${ACTOR} AND d.team_id IN (SELECT public.vis())`
+    ).replace("public.f(", "public.g(")
+    const sql =
+      "CREATE FUNCTION public.vis() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT s.id FROM public.secrets s $$;\n" +
+      where("d.team_id IN (SELECT public.vis())") +
+      g +
+      policy("id IN (SELECT public.f()) OR id IN (SELECT public.g())") +
+      GRANT +
+      restrictive("team_id IN (SELECT public.vis())")
+    expect(judged(sql).diagnostics).toEqual([
+      [
+        "sql.policy-helper-correlated",
+        "public.f",
+        "restrictiveBound",
+        undefined,
+      ],
+      [
+        "sql.policy-helper-correlated",
+        "public.g",
+        "restrictiveBound",
+        undefined,
+      ],
+    ])
   })
 
   it("is a repair-class error keyed by the function", () => {

@@ -342,12 +342,18 @@ interface Input {
   schema: string | undefined
   relname: string
   aliased: boolean
+  /**
+   * Псевдонім зі списком колонок (`d(a, b)`): колонки перейменовано за
+   * позицією, тож ім'я колонки в запиті вже не ім'я колонки таблиці.
+   */
+  renamed: boolean
 }
 
 interface RangeVarNode {
   schemaname?: string
   relname?: string
-  alias?: { aliasname?: string }
+  alias?: { aliasname?: string; colnames?: unknown[] }
+  inh?: boolean
 }
 
 interface JoinNode {
@@ -379,6 +385,7 @@ function inputOf(
     schema: range.schemaname,
     relname,
     aliased: alias !== undefined,
+    renamed: (range.alias?.colnames ?? []).length > 0,
   }
 }
 
@@ -458,7 +465,9 @@ function normalized(
         const range = (item as { RangeVar?: RangeVarNode }).RangeVar
         const join = (item as { JoinExpr?: JoinNode }).JoinExpr
         if (range !== undefined) {
-          inputs.push(inputOf(range, `${depth}:${inputs.length}`, tables))
+          const input = inputOf(range, `${depth}:${inputs.length}`, tables)
+          if (input.renamed) failed = true
+          inputs.push(input)
         } else if (join !== undefined && join.alias === undefined) {
           collect(join.larg)
           collect(join.rarg)
@@ -469,8 +478,13 @@ function normalized(
     }
     const range = node.RangeVar as RangeVarNode | undefined
     if (range !== undefined) {
+      // `inh` — це `ONLY`: без нащадків таблиця дає інші рядки.
       return {
-        RangeVar: { schemaname: range.schemaname, relname: range.relname },
+        RangeVar: {
+          schemaname: range.schemaname,
+          relname: range.relname,
+          inh: range.inh,
+        },
       }
     }
     return Object.fromEntries(
@@ -479,6 +493,7 @@ function normalized(
         .map(([key, child]) => [key, walk(child, scopes)])
     )
   }
+  if (base.some((i) => i.renamed)) return undefined
   const result = walk(expr, [base])
   return failed ? undefined : JSON.stringify(result)
 }
@@ -684,7 +699,12 @@ function knownRoles(provider: DatabaseProvider): ReadonlySet<string> {
  * прочитав, — fail-closed.
  */
 class BoundCheck {
-  private readonly visited = new Set<string>()
+  /**
+   * Вердикт ланки за ідентичністю: один обхід ділять усі кандидати, тож
+   * відмовлена ланка лишається відмовленою. `true` — лише поки ланка в
+   * обході (цикл).
+   */
+  private readonly verdicts = new Map<string, boolean>()
 
   constructor(private readonly input: PolicyFunctionsInput) {}
 
@@ -753,8 +773,15 @@ class BoundCheck {
   }
 
   private routine(unit: VerbatimUnit): boolean {
-    if (this.visited.has(unit.identity)) return true
-    this.visited.add(unit.identity)
+    const known = this.verdicts.get(unit.identity)
+    if (known !== undefined) return known
+    this.verdicts.set(unit.identity, true)
+    const verdict = this.routineAllowed(unit)
+    this.verdicts.set(unit.identity, verdict)
+    return verdict
+  }
+
+  private routineAllowed(unit: VerbatimUnit): boolean {
     const { parse, plpgsql } = this.input
     const body = routineBody(unit.tree as Node, unit.sql, parse, plpgsql)
     if (body.problem !== undefined) return false
@@ -967,6 +994,8 @@ function judge(context: {
   }
   if (body !== undefined && body.shape) {
     const { select, inputs } = body
+    // Перейменована колонка входу робить ім'я виводу не ключем T.
+    if (inputs.some((i) => i.renamed)) reasons.add("outputKey")
     const [target, ...more] = select.targetList ?? []
     const output = columnFields(target?.ResTarget?.val)
     if (output === undefined || more.length > 0) reasons.add("actorUnbound")
@@ -1006,6 +1035,7 @@ function judge(context: {
           schema: table.schema,
           relname: table.name,
           aliased: false,
+          renamed: false,
         },
       ]
       for (const policy of context.policies) {
