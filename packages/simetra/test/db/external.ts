@@ -270,7 +270,7 @@ async function bucketObjects(
 /**
  * Removes the containers of run `tag` on the stack of profile `p`
  * (`docker rm -f -v`) and its bucket `run-<tag>`, emptied first
- * ({@link emptyAndDeleteRunBucket}). Never throws and never runs past
+ * ({@link emptyAndDeleteRunBucket}). Throws only on a malformed tag, before any call; otherwise never throws and never runs past
  * `deadlineMs`: a bucket that could not be emptied or deleted, or a failed
  * check, is in `left`, and the commands to finish it by hand are in `cleanup`.
  */
