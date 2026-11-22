@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { connect, createServer, type Server, type Socket } from "node:net"
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest"
 import { buildClientCatalog } from "simetra/compiler"
 import {
@@ -577,6 +578,123 @@ export function describeSignalReceiver(): void {
         "the card never showed the change of the gap"
       )
     }, 60_000)
+
+    it("a short disconnect with 50 changes of 50 rows: onSubscribed again with recovered: true, all 50 signals reach the receiver, every card shows its new version and no row stays marked", async () => {
+      const COUNT = 50
+      const reader = a.people.reader!
+      const tickets: { id: string; version: number }[] = []
+      for (let i = 0; i < COUNT; i++)
+        tickets.push(await createTicket(a.people.writer!, a))
+      // Розрив керований: клієнт ходить через TCP-прокси стенда, який можна
+      // закрити на час 50 змін і відкрити знову. Серверний `disconnect` дає
+      // повторне з'єднання за ~півсекунди — раніше, ніж встигають 50 змін
+      const target = new URL(stand.wsUrl)
+      const sockets = new Set<Socket>()
+      const proxy: Server = createServer((inbound) => {
+        const upstream = connect(Number(target.port), target.hostname)
+        for (const socket of [inbound, upstream]) {
+          sockets.add(socket)
+          socket.on("close", () => sockets.delete(socket))
+          socket.on("error", () => socket.destroy())
+        }
+        inbound.pipe(upstream)
+        upstream.pipe(inbound)
+      })
+      const listen = (port: number) =>
+        new Promise<void>((resolve, reject) => {
+          proxy.once("error", reject)
+          proxy.listen(port, "127.0.0.1", () => resolve())
+        })
+      await listen(0)
+      const proxyPort = (proxy.address() as { port: number }).port
+      try {
+        const c = client(reader, {
+          url: `ws://127.0.0.1:${proxyPort}${target.pathname}`,
+        })
+        const views = tickets.map((t) => card(c, t.id))
+        for (let i = 0; i < COUNT; i++)
+          await ready(c, views[i]!, tickets[i]!.id, channelOf(a))
+        await sleep(WAVE_MS)
+        // `close` чекає на всі з'єднання, тож їх рвуть до очікування
+        const closed = new Promise<void>((resolve) =>
+          proxy.close(() => resolve())
+        )
+        for (const socket of sockets) socket.destroy()
+        await closed
+        await until(
+          () => c.port.some((e) => e.type === "error"),
+          CONVERGE_MS,
+          "the receiver never saw the connection cut"
+        )
+        const changed = await Promise.all(
+          tickets.map((t) => updateTicket(a.people.writer!, t, "in the gap"))
+        )
+        // Передумова: усі 50 публікацій уже в історії каналу, а повторної
+        // підписки ще немає — наживо клієнт їх не отримав
+        const deadline = Date.now() + CONVERGE_MS
+        for (;;) {
+          const history = await stand.history(channelOf(a), 200)
+          const missing = changed.filter(
+            (ch) =>
+              !history.some(
+                (p) =>
+                  (p.data.keys as { id?: string } | undefined)?.id === ch.id &&
+                  p.data.row_ver === ch.version
+              )
+          )
+          if (missing.length === 0) break
+          if (Date.now() > deadline)
+            throw new Error(
+              `${missing.length} of ${COUNT} changes never reached the channel history`
+            )
+          await sleep(20)
+        }
+        expect(
+          subscribedOf(c, channelOf(a)),
+          "the client resubscribed before the 50 changes were published: the gap missed nothing"
+        ).toHaveLength(1)
+        expect(tickets.flatMap((t) => signalsAbout(c, t.id))).toEqual([])
+        await listen(proxyPort)
+        await until(
+          () => subscribedOf(c, channelOf(a)).length >= 2,
+          30_000,
+          `no resubscribe after the gap: ${JSON.stringify(c.port)}`
+        )
+        const resumed = c.port.indexOf(subscribedOf(c, channelOf(a))[1]!)
+        // Шар адаптера: відновлення з історії й усі 50 публікацій у порту
+        expect(c.port[resumed]).toEqual({
+          type: "subscribed",
+          channel: channelOf(a),
+          recovered: true,
+        })
+        await until(
+          () => tickets.every((t) => signalsAbout(c, t.id, resumed).length > 0),
+          CONVERGE_MS,
+          "not every missed signal reached the receiver"
+        )
+        for (const t of tickets) expect(signalsAbout(c, t.id)).toHaveLength(1)
+        // Шар сховища: свіжість не залежить від `recovered` (ядро ставиться до
+        // true як до false, #328) — після приєднання й першої хвилі жоден
+        // рядок не позначений, а кожна картка показує нову версію
+        await until(
+          () =>
+            changed.every(
+              (ch, i) =>
+                versionIn(views[i]!, ch.id) === ch.version &&
+                rowOf(views[i]!.current(), ch.id)?.stale === undefined
+            ),
+          CONVERGE_MS + WAVE_MS,
+          "a card never showed the change of the gap fresh"
+        )
+        for (let i = 0; i < COUNT; i++)
+          expect(
+            rowOf(views[i]!.current(), changed[i]!.id)?.values.description
+          ).toBe("in the gap")
+      } finally {
+        proxy.close()
+        for (const socket of sockets) socket.destroy()
+      }
+    }, 120_000)
 
     it("a channel token refused after the right is revoked (explicit refreshTokens): auth for the channel, the pair purged, no new token request", async () => {
       const person = a.people.refreshed!
