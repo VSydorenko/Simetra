@@ -255,7 +255,11 @@ describeModelPathInvariants()
 describeReferenceDomain()
 
 describe("adoption from scratch with named scope set functions", () => {
-  // Теку прийому лагодять дві мутації `add` (Р8): вид скоупу `org` зі
+  // Після прийому `app.org_ids` кличуть дослівні політики кількох таблиць, а
+  // її вивід — ключ кореня, не ключ таблиці політики: функцією політики (§5.8)
+  // вона не стає, і прийом дає ще `sql.policy-helper-correlated` (`outputKey`,
+  // відмови — у `deployedRoundTrip`). Ланцюжок тут записано буквально, без
+  // виведення `restoreScopeKinds` корпусу. Теку прийому лагодять дві мутації `add` (Р8): вид скоупу `org` зі
   // `scopes` — `app.org_ids` стає формою платформи й губить декларацію
   // (`toPlatformForms`), потім вид `user` (`setFunction: user_ids`, зовнішній
   // корінь фікстури; таблиць не має, тож `scopes` не потрібні) — так само для

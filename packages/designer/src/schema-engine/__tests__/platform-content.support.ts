@@ -31,9 +31,9 @@ import {
   inTarget,
   kindsOf,
   parser,
+  restoreScopeKinds,
   schemaPath,
   tableKeys,
-  unscoped,
   withClient,
 } from "./round-trip.support"
 
@@ -232,6 +232,7 @@ export function describeModelPathInvariants(): void {
 
 const COMMAND = PLATFORM_ROLES.command
 const USER = PROVIDER_API_ROLES[testProvider()].user
+const SERVICE = PROVIDER_API_ROLES[testProvider()].service
 
 /** Гранти читання таблиці виду ролям команд і користувача API. */
 const readGrants = (table: string) =>
@@ -250,9 +251,33 @@ const catalogGrants = (table: string, columns: string[] = []) => [
   ),
 ]
 
-const schemaUsage = [COMMAND, USER].map(
+/**
+ * `USAGE` схеми `app` кожному отримувачу гранту в ній: сервісна роль
+ * (є лише на Supabase) отримує `EXECUTE` функцій множини видів скоупу.
+ */
+const schemaUsage = [COMMAND, USER, ...(SERVICE === null ? [] : [SERVICE])].map(
   (role) => `grant:grant:schema:app:${role}:usage`
 )
+
+/**
+ * Межа тенанта виду `org` після прийому з нуля й повернення виду (Р8):
+ * дослівні політики скоупу кореня `organization` (без вставки — ключ кореня
+ * і є значенням скоупу) і кожної таблиці `tables`, а в скоуплених довідниках
+ * `catalogs` — вставка носія `org_id` роллю команд.
+ */
+const orgScope = (tables: string[], catalogs: string[] = []) => [
+  ...["delete", "read", "update"].map(
+    (command) => `policy:app.organization.organization_scope_${command}`
+  ),
+  ...tables.flatMap((table) =>
+    ["delete", "insert", "read", "update"].map(
+      (command) => `policy:app.${table}.${table}_scope_${command}`
+    )
+  ),
+  ...catalogs.map(
+    (table) => `grant:grant:table:app.${table}:${COMMAND}:insert(org_id)`
+  ),
+]
 
 /**
  * Одиниці, які прийом з нуля кладе в теку дослівно, бо їхній вміст залежить
@@ -284,6 +309,7 @@ const FOLDER_UNITS: Readonly<
       ...catalogGrants("organization"),
       ...catalogGrants("partner"),
     ],
+    scope: orgScope(["item", "partner"], ["item", "partner"]),
     schemaUsage,
   },
   "document with two tabular sections, number_period and required check": {
@@ -292,6 +318,7 @@ const FOLDER_UNITS: Readonly<
       ...catalogGrants("organization"),
       ...["sale", "sale_goods", "sale_services"].flatMap(readGrants),
     ],
+    scope: orgScope(["item", "sale", "sale_goods", "sale_services"], ["item"]),
     schemaUsage,
   },
   "balance and turnover accumulation registers with turnovers_month and totals":
@@ -313,6 +340,19 @@ const FOLDER_UNITS: Readonly<
           "stock_turnovers_month",
         ].flatMap(readGrants),
       ],
+      scope: orgScope(
+        [
+          "item",
+          "sale",
+          "sale_goods",
+          "sales",
+          "sales_turnovers_month",
+          "stock",
+          "stock_totals",
+          "stock_turnovers_month",
+        ],
+        ["item"]
+      ),
       schemaUsage,
     },
   "independent and subordinate information registers with nullable dimensions":
@@ -323,6 +363,7 @@ const FOLDER_UNITS: Readonly<
         ...catalogGrants("organization"),
         ...["prices", "rates", "sale"].flatMap(readGrants),
       ],
+      scope: orgScope(["item", "prices", "rates", "sale"], ["item"]),
       schemaUsage,
     },
   "scoped and global constants": {
@@ -331,11 +372,13 @@ const FOLDER_UNITS: Readonly<
       ...catalogGrants("organization"),
       ...["main_item", "vat_rate"].flatMap(readGrants),
     ],
+    scope: orgScope(["item", "main_item"], ["item"]),
     schemaUsage,
   },
   "custom table with composite key, FK to auth.users, partial expression index, generated column, deferrable unique":
     {
       access: [...catalogGrants("organization"), ...catalogGrants("partner")],
+      scope: orgScope(["partner"], ["partner"]),
       schemaUsage,
     },
   "enumeration reference with check and pg enum column": {
@@ -343,6 +386,7 @@ const FOLDER_UNITS: Readonly<
       ...catalogGrants("item", ["color"]),
       ...catalogGrants("organization"),
     ],
+    scope: orgScope(["item"], ["item"]),
     schemaUsage,
   },
   "movement query wrapper and a scope set function unit": {
@@ -358,24 +402,37 @@ const FOLDER_UNITS: Readonly<
         "stock_turnovers_month",
       ].flatMap(readGrants),
     ],
+    scope: orgScope(
+      [
+        "item",
+        "sale",
+        "sale_goods",
+        "stock",
+        "stock_totals",
+        "stock_turnovers_month",
+      ],
+      ["item"]
+    ),
     schemaUsage,
   },
 }
 
 /**
- * Прийом з нуля корпусу фікстур розгортання (без видів скоупу, `unscoped`):
- * повний ланцюжок §9, втрата — лише родини з еталоном (`mechanicsLoss`), а
- * тека дослівних одиниць — рівно одиниці застосунку фікстури плюс
- * `FOLDER_UNITS` (И8).
+ * Прийом з нуля корпусу фікстур розгортання з їхніми видами скоупу (Р8):
+ * функції множини видів після прийому — відмови класу ремонту, які лагодить
+ * `restoreScopeKinds`; далі повний ланцюжок §9 до порожнього плану, втрата —
+ * лише родини з еталоном (`mechanicsLoss`), а тека дослівних одиниць — рівно
+ * одиниці застосунку фікстури плюс `FOLDER_UNITS` (И8).
  */
 export function describeAdoptionFromScratch(): void {
   describe("adoption from scratch: the deployment fixture corpus survives the round trip", () => {
     for (const [name, fixture] of FIXTURES) {
       it(name, async () => {
         const { source, result } = await deployedRoundTrip(
-          unscoped(fixture(testProvider())),
+          fixture(testProvider()),
           new Map(),
-          true
+          true,
+          restoreScopeKinds
         )
         const model = result!.model
         // Види 1С повертаються як `CustomTable` з тими самими фізичними іменами
