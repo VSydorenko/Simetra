@@ -7,6 +7,27 @@ import {
 /** Object key of the database binding marker (platform spec §8.2). */
 export const INSTANCE_MARKER_KEY = "simetra-instance"
 
+const BINDING =
+  /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(-?\d+):(\d+):(\d+)$/
+
+/**
+ * Parts of the database binding string `<uuid>:<system_identifier>:<database
+ * oid>:<timeline_id>` (platform spec §8.2): the `storage_instance` uuid and the
+ * facts that change when the database is copied or promoted. `null` for any
+ * other shape.
+ */
+export function parseBinding(binding: string): {
+  instance: string
+  system: string
+  database: string
+  timeline: string
+} | null {
+  const m = BINDING.exec(binding)
+  return m === null
+    ? null
+    : { instance: m[1]!, system: m[2]!, database: m[3]!, timeline: m[4]! }
+}
+
 /** Prefix of every file object key (`fileObjectKey` in `simetra/model`). */
 const FILE_PREFIX = "o/"
 
@@ -14,8 +35,8 @@ const FILE_PREFIX = "o/"
 export interface FileStore {
   /**
    * Reads the body, counts the bytes itself and aborts past `maxBytes`
-   * (nothing is written then). `instance` is the database `storage_instance`
-   * uuid: the bucket must be empty or carry the same marker.
+   * (nothing is written then). `instance` is the database binding string
+   * (`parseBinding`): the bucket must be empty or carry the same marker.
    */
   put(
     key: string,
@@ -42,17 +63,31 @@ export interface FileStore {
   listPrefixes(): AsyncIterable<string>
   /**
    * Refuses (throws {@link FileStoreError}) a bucket that is not this
-   * database's: a different marker, or objects without a marker. An empty
-   * bucket passes. Used by the reconciliation before any deletion.
+   * database's: a different marker (`foreign-bucket`), the same marker
+   * written for another cluster, database or timeline (`binding-changed`: a
+   * copy or a restore), or objects without a marker. An empty bucket passes.
+   * Used by the reconciliation before any deletion.
    */
   checkInstance(instance: string): Promise<void>
+  /**
+   * Rewrites the marker with `instance` after a legitimate restore. Only a
+   * marker of the same `storage_instance` uuid is rewritten; anything else
+   * (no marker, another uuid) is `foreign-bucket`.
+   */
+  rebind(instance: string): Promise<void>
 }
 
 /** Refusal of the store itself; `reason` is a closed list. */
 export class FileStoreError extends Error {
   constructor(
     readonly reason:
-      "too-large" | "foreign-bucket" | "bad-limit" | "bad-key" | "bad-listing",
+      | "too-large"
+      | "foreign-bucket"
+      | "binding-changed"
+      | "in-recovery"
+      | "bad-limit"
+      | "bad-key"
+      | "bad-listing",
     message: string
   ) {
     super(message)
@@ -144,16 +179,44 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
     }
   }
 
-  // Повертає, чи треба писати маркер: лише порожній бакет без маркера
-  const checkBinding = async (instance: string): Promise<"write" | "ok"> => {
-    const marker = await readMarker()
-    if (marker !== null) {
-      if (marker === instance) return "ok"
+  const writeMarker = async (instance: string): Promise<void> => {
+    const marker = new TextEncoder().encode(instance)
+    await client.putObject({
+      Bucket: bucket,
+      Key: INSTANCE_MARKER_KEY,
+      Body: marker,
+      ContentLength: marker.byteLength,
+      ContentType: "text/plain",
+    })
+  }
+
+  // Прив'язка — не лише uuid: копія бази (dump, TEMPLATE, PITR, репліка)
+  // несе той самий uuid, але має інший кластер, oid бази чи timeline
+  const compare = (marker: string, instance: string): "ok" | never => {
+    if (marker === instance) return "ok"
+    const have = parseBinding(marker)
+    const want = parseBinding(instance)
+    if (want === null) throw new Error("instance is not a database binding")
+    if (have === null || have.instance !== want.instance)
       throw new FileStoreError(
         "foreign-bucket",
         "bucket belongs to another database (instance marker differs)"
       )
-    }
+    const changed = (["system", "database", "timeline"] as const).filter(
+      (part) => have[part] !== want[part]
+    )
+    throw new FileStoreError(
+      "binding-changed",
+      `bucket marker was written for another cluster state (${changed.join(", ")} differ): a restored or copied database; rebind the store if it is legitimate`
+    )
+  }
+
+  // Повертає, чи треба писати маркер: лише порожній бакет без маркера
+  const checkBinding = async (instance: string): Promise<"write" | "ok"> => {
+    if (parseBinding(instance) === null)
+      throw new Error("instance is not a database binding")
+    const marker = await readMarker()
+    if (marker !== null) return compare(marker, instance)
     const any = await client.listObjectsV2({
       Bucket: bucket,
       Prefix: FILE_PREFIX,
@@ -209,14 +272,7 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
         chunks[i] = EMPTY
       }
       if ((await checkBinding(instance)) === "write") {
-        const marker = new TextEncoder().encode(instance)
-        await client.putObject({
-          Bucket: bucket,
-          Key: INSTANCE_MARKER_KEY,
-          Body: marker,
-          ContentLength: marker.byteLength,
-          ContentType: "text/plain",
-        })
+        await writeMarker(instance)
         // Garage ігнорує `If-None-Match: *`: два перші `put` різних баз могли
         // обидва пройти перевірку, тож після запису читаємо маркер знову
         if ((await readMarker()) !== instance)
@@ -299,6 +355,18 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
 
     async checkInstance(instance) {
       await checkBinding(instance)
+    },
+
+    async rebind(instance) {
+      const want = parseBinding(instance)
+      if (want === null) throw new Error("instance is not a database binding")
+      const have = parseBinding((await readMarker()) ?? "")
+      if (have === null || have.instance !== want.instance)
+        throw new FileStoreError(
+          "foreign-bucket",
+          "bucket belongs to another database (instance marker differs)"
+        )
+      await writeMarker(instance)
     },
   }
 }

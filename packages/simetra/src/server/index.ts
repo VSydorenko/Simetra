@@ -35,5 +35,6 @@ export {
   RECONCILE_GRACE_MS,
   type ReconcileLogEntry,
   type ReconcileOptions,
+  type ReconcileRefusal,
   type ReconcileReport,
 } from "./reconcile"

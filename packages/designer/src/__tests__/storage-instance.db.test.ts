@@ -26,7 +26,9 @@ import { bareModel, blobLayer, storageModel } from "./storage-sql.support"
 
 const database = (url: string) => new URL(url).pathname.slice(1)
 
-/** Ідентифікатор прив'язки від ролі сховища: рядок створюється при першому зверненні й комітиться. */
+const uuidOf = (binding: string) => binding.split(":")[0]
+
+/** Відбиток прив'язки (`uuid:sysid:oid:timeline`) від ролі сховища: рядок створюється при першому зверненні й комітиться. */
 async function instanceId(client: pg.Client): Promise<string> {
   await client.query("BEGIN")
   try {
@@ -62,7 +64,7 @@ describe("І21: the binding of the database to the bucket", () => {
         const kept = await client.query<{ id: string }>(
           "SELECT id FROM simetra.storage_instance"
         )
-        expect(kept.rows).toEqual([{ id: first }])
+        expect(kept.rows).toEqual([{ id: uuidOf(first) }])
         // Повторне застосування: той самий uuid
         expect((await applyOn(url, withBlob)).status).toBe("committed")
         expect(await instanceId(client)).toBe(first)
@@ -137,7 +139,8 @@ describe("І20: the runtime starts only with the membership of simetra_files", (
       )
       expect(failure).toBeInstanceOf(CommandFailure)
       expect((failure as CommandFailure).error).toEqual({
-        code: "command.internal",
+        code: "command.read-role-missing",
+        role: PLATFORM_ROLES.files,
       })
       await withRuntimeLogin(url, roles, async (login) => {
         await expect(start(login)).resolves.toBeDefined()

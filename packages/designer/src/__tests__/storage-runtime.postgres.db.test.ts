@@ -309,13 +309,16 @@ describe("file storage over the runtime and the byte store", () => {
     })
   })
 
-  it("fileInstance is the uuid of simetra.storage_instance and needs no write by the caller", async () => {
+  it("fileInstance is the uuid of simetra.storage_instance with the cluster, database and timeline, and needs no write by the caller", async () => {
     const rt = await runtimeOf()
     const instance = await rt.fileInstance()
-    const { rows } = await env.owner.query<{ id: string }>(
-      "SELECT id FROM simetra.storage_instance"
+    const { rows } = await env.owner.query<{ binding: string }>(
+      `SELECT (SELECT id FROM simetra.storage_instance) || ':'
+           || (SELECT system_identifier FROM pg_control_system()) || ':'
+           || (SELECT oid FROM pg_database WHERE datname = current_database()) || ':'
+           || (SELECT timeline_id FROM pg_control_checkpoint()) AS binding`
     )
-    expect(rows).toEqual([{ id: instance }])
-    expect(instance).not.toBe(ZERO_UUID)
+    expect(rows).toEqual([{ binding: instance }])
+    expect(instance.split(":")[0]).not.toBe(ZERO_UUID)
   })
 })

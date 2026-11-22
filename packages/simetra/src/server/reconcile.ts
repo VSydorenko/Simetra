@@ -9,10 +9,22 @@ const PAGE = 1000
 // Запобіжник: понад 5 % переліченого І понад 20 об'єктів — нічого не видаляти
 const GUARD_RATIO = 0.05
 const GUARD_MIN = 20
+/**
+ * Скільки сиріт один прогін пам'ятає поіменно: решта лише рахується (для
+ * запобіжника) і піде наступним прогоном — пам'ять не росте з розміром бакета
+ */
+export const ORPHAN_KEEP = 100_000
+
+/**
+ * Why a run deleted nothing on purpose: a bucket of another database
+ * (`instance`), the marker of a copied or restored database (`binding`), a
+ * standby (`recovery`) or the deletion guard (`guard`).
+ */
+export type ReconcileRefusal = "instance" | "binding" | "recovery" | "guard"
 
 /** What the reconciliation reports to its `log` option. */
 export type ReconcileLogEntry =
-  | { kind: "refused"; reason: "instance" | "guard"; message: string }
+  | { kind: "refused"; reason: ReconcileRefusal; message: string }
   | { kind: "unknown-prefix"; prefix: string }
   | { kind: "row-without-bytes"; object: string; id: string }
 
@@ -27,16 +39,23 @@ export interface ReconcileReport {
   listed: number
   deleted: number
   /** Why the run deleted nothing on purpose; `null` — it did not refuse. */
-  refused: "instance" | "guard" | null
+  refused: ReconcileRefusal | null
   /** Object prefixes in the bucket the catalog does not know (only logged). */
   unknownPrefixes: string[]
   /** Rows of objects with `storage` that have no bytes in the bucket. */
   rowsWithoutBytes: number
+  /** Attach records of finished transactions removed from the database. */
+  pendingSwept: number
 }
 
 /** The database side of the reconciliation: all calls run under the storage role. */
 export interface ReconcileSource {
+  /** `pg_is_in_recovery()`: a standby (or a restore) deletes nothing. */
+  inRecovery(): Promise<boolean>
+  /** The database binding string (`parseBinding`), read fresh. */
   instance(): Promise<string>
+  /** Removes `storage_pending` records of finished transactions; their count. */
+  sweepPending(): Promise<number>
   /** Database `now()` in epoch milliseconds. */
   now(): Promise<number>
   /** The ids of `ids` (≤ 1000) that have a row, tenants not filtered. */
@@ -85,7 +104,9 @@ export async function reconcile(
   { log }: ReconcileOptions,
   // Вік — параметр ядра лише для тестів (рантайм завжди дає 24 год): значення
   // поза ≥ 0 зробило б кандидатом кожен об'єкт, зокрема щойно завантажений
-  graceMs: number = RECONCILE_GRACE_MS
+  graceMs: number = RECONCILE_GRACE_MS,
+  // Так само лише для тестів
+  keep: number = ORPHAN_KEEP
 ): Promise<ReconcileReport> {
   if (!Number.isFinite(graceMs) || graceMs < 0)
     throw new RangeError("graceMs must be a finite number >= 0")
@@ -95,16 +116,28 @@ export async function reconcile(
     refused: null,
     unknownPrefixes: [],
     rowsWithoutBytes: 0,
+    pendingSwept: 0,
   }
+  const refuse = (reason: ReconcileRefusal, message: string) => {
+    report.refused = reason
+    log({ kind: "refused", reason, message })
+    return report
+  }
+  const inRecovery = "the database is in recovery (a standby or a restore)"
+  // Репліка чи відновлення: байти, записані після знімка, ще невидимі — нічого
+  // не видаляти й нічого не писати в базу
+  if (await source.inRecovery()) return refuse("recovery", inRecovery)
   try {
     await store.checkInstance(await source.instance())
   } catch (error) {
-    if (!(error instanceof FileStoreError) || error.reason !== "foreign-bucket")
-      throw error
-    report.refused = "instance"
-    log({ kind: "refused", reason: "instance", message: error.message })
-    return report
+    if (!(error instanceof FileStoreError)) throw error
+    if (error.reason === "foreign-bucket")
+      return refuse("instance", error.message)
+    if (error.reason === "binding-changed")
+      return refuse("binding", error.message)
+    throw error
   }
+  report.pendingSwept = await source.sweepPending()
 
   const known = new Set(objectIds.map((id) => `o/${id}/`))
   for await (const prefix of store.listPrefixes()) {
@@ -116,6 +149,7 @@ export async function reconcile(
   // Година за базою, не за годинником host-а (Р13)
   const now = await source.now()
   const orphans: Orphan[] = []
+  let orphanCount = 0
   for (const object of objectIds) {
     const prefix = `o/${object}/`
     const rows = rowCursor(source, object)
@@ -136,7 +170,11 @@ export async function reconcile(
         object,
         batch.map((o) => o.id)
       )
-      for (const o of batch) if (!present.has(o.id)) orphans.push(o)
+      for (const o of batch) {
+        if (present.has(o.id)) continue
+        orphanCount++
+        if (orphans.length < keep) orphans.push(o)
+      }
       batch = []
     }
     for await (const entry of store.list(prefix)) {
@@ -160,23 +198,23 @@ export async function reconcile(
     }
   }
 
-  if (
-    orphans.length > GUARD_MIN &&
-    orphans.length > report.listed * GUARD_RATIO
-  ) {
-    report.refused = "guard"
-    log({
-      kind: "refused",
-      reason: "guard",
-      message: `${orphans.length} of ${report.listed} listed objects have no row`,
-    })
-    return report
+  if (orphanCount > GUARD_MIN && orphanCount > report.listed * GUARD_RATIO) {
+    return refuse(
+      "guard",
+      `${orphanCount} of ${report.listed} listed objects have no row`
+    )
   }
+
+  // Перелік міг тривати довго: промоція репліки за цей час теж зупиняє видалення
+  if (await source.inRecovery()) return refuse("recovery", inRecovery)
 
   // Друга перевірка безпосередньо перед видаленням, по об'єктах
   const byObject = new Map<string, Orphan[]>()
-  for (const o of orphans)
-    byObject.set(o.object, [...(byObject.get(o.object) ?? []), o])
+  for (const o of orphans) {
+    const list = byObject.get(o.object)
+    if (list === undefined) byObject.set(o.object, [o])
+    else list.push(o)
+  }
   for (const [object, list] of byObject) {
     for (let i = 0; i < list.length; i += PAGE) {
       const chunk = list.slice(i, i + PAGE)

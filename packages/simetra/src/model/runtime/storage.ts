@@ -72,5 +72,6 @@ export const STORAGE_FUNCTIONS = {
   rowsExist: "storage_rows_exist",
   rowPage: "storage_row_page",
   pendingLeft: "storage_pending_left",
+  pendingSweep: "storage_pending_sweep",
   instanceId: "storage_instance_id",
 } as const

@@ -5,6 +5,7 @@ import {
   type RuntimeCatalog,
 } from "simetra/model"
 import { describe, expect, it } from "vitest"
+import { FileStoreError } from "../file-store"
 import { FileAttachFailure } from "../transaction"
 import { commandObject, COMPANY, ID, OTHER } from "./fixtures"
 import {
@@ -380,13 +381,13 @@ describe("checkUpload", () => {
 })
 
 describe("fileInstance", () => {
-  const INSTANCE = "77777777-7777-4777-8777-777777777777"
+  const INSTANCE = "77777777-7777-4777-8777-777777777777:1:2:3"
   const answerId: Override = (text) =>
     text.includes("storage_instance_id")
       ? { rows: [{ id: INSTANCE }] }
       : undefined
 
-  it("resolves the uuid in a read-write transaction under the storage role and caches it", async () => {
+  it("resolves the binding in a read-write transaction under the storage role and caches it", async () => {
     const { db, runtime } = await make(answerId)
     expect(await runtime.fileInstance()).toBe(INSTANCE)
     expect(await runtime.fileInstance()).toBe(INSTANCE)
@@ -402,6 +403,15 @@ describe("fileInstance", () => {
       COMMIT,
       { release: false },
     ])
+  })
+
+  it("refuses an answer that is not a binding (a bare uuid)", async () => {
+    const { runtime } = await make((text) =>
+      text.includes("storage_instance_id")
+        ? { rows: [{ id: "77777777-7777-4777-8777-777777777777" }] }
+        : undefined
+    )
+    await expect(runtime.fileInstance()).rejects.toBeInstanceOf(CommandFailure)
   })
 
   it("does not cache a failure", async () => {
@@ -454,10 +464,12 @@ describe("attachFile input", () => {
 })
 
 describe("reconcileFiles", () => {
-  const INSTANCE = "77777777-7777-4777-8777-777777777777"
+  const INSTANCE = "77777777-7777-4777-8777-777777777777:1:2:3"
   const ORPHAN = "55555555-5555-4555-8555-555555555555"
   const DB_MS = Date.UTC(2026, 10, 22)
   const answers: Override = (text) => {
+    if (text.includes("pg_is_in_recovery")) return { rows: [{ recovery: "f" }] }
+    if (text.includes("storage_pending_sweep")) return { rows: [{ n: "2" }] }
     if (text.includes("storage_instance_id"))
       return { rows: [{ id: INSTANCE }] }
     if (text.includes("extract(epoch")) return { rows: [{ ms: String(DB_MS) }] }
@@ -481,6 +493,7 @@ describe("reconcileFiles", () => {
           yield `o/${DOC_ID}/`
         },
         checkInstance: async () => undefined,
+        rebind: async () => undefined,
       },
     }
   }
@@ -506,5 +519,126 @@ describe("reconcileFiles", () => {
       (await runtime.reconcileFiles(s.store, { log: () => {} })).deleted
     ).toBe(0)
     expect(s.deleted).toEqual([])
+  })
+  it("sweeps the attach records of finished transactions under the storage role and reports the count", async () => {
+    const { db, runtime } = await make(answers)
+    const s = store(new Date(DB_MS))
+    const report = await runtime.reconcileFiles(s.store, { log: () => {} })
+    expect(report.pendingSwept).toBe(2)
+    const at = db.calls.findIndex(
+      (c) => "text" in c && c.text.includes("storage_pending_sweep")
+    )
+    expect(db.calls.slice(0, at).filter((c) => "text" in c)).toContainEqual(
+      FILES_ROLE
+    )
+    expect(
+      db.calls.filter(
+        (c) => "text" in c && c.text === "BEGIN ISOLATION LEVEL READ COMMITTED"
+      ).length
+    ).toBeGreaterThan(0)
+  })
+
+  it("deletes nothing, sweeps nothing and reads no binding while the database is in recovery", async () => {
+    const { db, runtime } = await make((text, params) =>
+      text.includes("pg_is_in_recovery")
+        ? { rows: [{ recovery: "t" }] }
+        : answers(text, params)
+    )
+    const s = store(new Date(DB_MS - 25 * 3600 * 1000))
+    const log: unknown[] = []
+    const report = await runtime.reconcileFiles(s.store, {
+      log: (e) => log.push(e),
+    })
+    expect(report).toMatchObject({
+      deleted: 0,
+      refused: "recovery",
+      pendingSwept: 0,
+    })
+    expect(s.deleted).toEqual([])
+    const texts = db.calls.flatMap((c) => ("text" in c ? [c.text] : []))
+    expect(texts.some((t) => t.includes("storage_pending_sweep"))).toBe(false)
+    expect(texts.some((t) => t.includes("storage_instance_id"))).toBe(false)
+    expect(log).toMatchObject([{ kind: "refused", reason: "recovery" }])
+  })
+
+  it("stops before the deletion when a promotion happens during the listing", async () => {
+    let asked = 0
+    const { runtime } = await make((text, params) =>
+      text.includes("pg_is_in_recovery")
+        ? { rows: [{ recovery: asked++ === 0 ? "f" : "t" }] }
+        : answers(text, params)
+    )
+    const s = store(new Date(DB_MS - 25 * 3600 * 1000))
+    const report = await runtime.reconcileFiles(s.store, { log: () => {} })
+    expect(report.refused).toBe("recovery")
+    expect(s.deleted).toEqual([])
+  })
+
+  it("reads the binding fresh on every run, not from the cache of fileInstance", async () => {
+    let binding = INSTANCE
+    const { runtime } = await make((text, params) =>
+      text.includes("storage_instance_id")
+        ? { rows: [{ id: binding }] }
+        : answers(text, params)
+    )
+    const seen: string[] = []
+    const s = store(new Date(DB_MS))
+    const checking = {
+      ...s.store,
+      checkInstance: async (i: string) => void seen.push(i),
+    }
+    await runtime.fileInstance()
+    binding = "77777777-7777-4777-8777-777777777777:1:2:4"
+    await runtime.reconcileFiles(checking, { log: () => {} })
+    expect(seen).toEqual([binding])
+  })
+
+  it("reports a changed binding as its own refusal, with no deletion", async () => {
+    const { runtime } = await make(answers)
+    const s = store(new Date(DB_MS - 25 * 3600 * 1000))
+    const changed = {
+      ...s.store,
+      checkInstance: async () => {
+        throw new FileStoreError("binding-changed", "copy")
+      },
+    }
+    const report = await runtime.reconcileFiles(changed, { log: () => {} })
+    expect(report).toMatchObject({ refused: "binding", deleted: 0 })
+    expect(s.deleted).toEqual([])
+  })
+})
+
+describe("rebindFileStore", () => {
+  const INSTANCE = "77777777-7777-4777-8777-777777777777:1:2:3"
+  const answers =
+    (recovery: "t" | "f"): Override =>
+    (text) => {
+      if (text.includes("pg_is_in_recovery")) return { rows: [{ recovery }] }
+      if (text.includes("storage_instance_id"))
+        return { rows: [{ id: INSTANCE }] }
+      return undefined
+    }
+  const store = () => {
+    const rebound: string[] = []
+    return {
+      rebound,
+      store: { rebind: async (i: string) => void rebound.push(i) } as never,
+    }
+  }
+
+  it("rewrites the marker with the binding read from the database", async () => {
+    const { runtime } = await make(answers("f"))
+    const s = store()
+    await runtime.rebindFileStore(s.store)
+    expect(s.rebound).toEqual([INSTANCE])
+  })
+
+  it("is refused on a standby, nothing is rewritten", async () => {
+    const { runtime } = await make(answers("t"))
+    const s = store()
+    await expect(runtime.rebindFileStore(s.store)).rejects.toMatchObject({
+      reason: "in-recovery",
+    })
+    expect(s.rebound).toEqual([])
   })
 })

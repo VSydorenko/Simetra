@@ -102,6 +102,7 @@ describe("storage generator", () => {
       "storage_rows_exist(uuid, uuid[])",
       "storage_row_page(uuid, uuid)",
       "storage_pending_left()",
+      "storage_pending_sweep()",
       "storage_instance_id()",
     ]) {
       expect(sql).toContain(
@@ -120,6 +121,30 @@ describe("storage generator", () => {
       expect(u.sql).toContain("SECURITY DEFINER")
       expect(u.sql).toContain("SET search_path = ''")
     }
+  })
+
+  it("the binding function builds the fingerprint from the uuid, the cluster, the database and the timeline", async () => {
+    await setup()
+    const sql = unitOf(scoped, "function:simetra.storage_instance_id()")!.sql
+    expect(sql).toContain("RETURNS text")
+    expect(sql).toContain("pg_catalog.pg_control_system()")
+    expect(sql).toContain("s.system_identifier")
+    expect(sql).toContain("pg_catalog.pg_database")
+    expect(sql).toContain("pg_catalog.current_database()")
+    expect(sql).toContain("pg_catalog.pg_control_checkpoint()")
+    expect(sql).toContain("c.timeline_id")
+  })
+
+  it("the sweep removes only the records of transactions older than the snapshot xmin, for simetra_files alone", async () => {
+    await setup()
+    const sql = unitOf(scoped, "function:simetra.storage_pending_sweep()")!.sql
+    expect(sql).toContain(
+      "p.xact < pg_catalog.pg_snapshot_xmin(pg_catalog.pg_current_snapshot())"
+    )
+    const all = storageUnits(scoped).map((u) => u.sql)
+    expect(all).toContain(
+      "GRANT EXECUTE ON FUNCTION simetra.storage_pending_sweep() TO simetra_files;"
+    )
   })
 
   it("puts the three triggers of the file on the table of the kind", async () => {
@@ -214,6 +239,8 @@ describe("application SQL leaves the storage alone (invariant 7)", () => {
     ["storage_rows_exist", "PERFORM simetra.storage_rows_exist(NULL, NULL)"],
     ["storage_row_page", "PERFORM simetra.storage_row_page(NULL, NULL)"],
     ["storage_pending_left", "PERFORM simetra.storage_pending_left()"],
+    ["storage_pending_sweep", "PERFORM simetra.storage_pending_sweep()"],
+    ["storage_instance_id", "PERFORM simetra.storage_instance_id()"],
   ])("a call of %s is sql.platform-function-call", async (_, body) => {
     const result = await compiledWith(plpgsql(body))
     expect(codes(result.diagnostics)).toEqual(["sql.platform-function-call"])

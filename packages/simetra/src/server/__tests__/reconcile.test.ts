@@ -18,6 +18,7 @@ const OTHER_OBJ = "99999999-9999-4999-8999-999999999999"
 const NOW = Date.UTC(2026, 10, 22)
 const OLD = new Date(NOW - RECONCILE_GRACE_MS - 1000)
 const FRESH = new Date(NOW - RECONCILE_GRACE_MS + 1000)
+const BINDING = "33333333-3333-4333-8333-333333333333:1:2:3"
 const rowId = (n: number) =>
   `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 
@@ -31,6 +32,11 @@ interface Setup {
   /** keys that `get` finds but the listing does not show */
   late?: string[]
   refuse?: boolean
+  /** The store says the marker was written for another cluster state. */
+  bindingChanged?: boolean
+  /** `pg_is_in_recovery()` answers, one per call; the last repeats. */
+  recovery?: boolean[]
+  sweep?: number
 }
 
 function setup(s: Setup) {
@@ -51,6 +57,7 @@ function setup(s: Setup) {
     },
     async delete(key) {
       deleted.push(key)
+      delete s.objects[key]
     },
     async *list(prefix) {
       for (const key of Object.keys(s.objects).sort())
@@ -69,11 +76,24 @@ function setup(s: Setup) {
     async checkInstance() {
       calls.push("check")
       if (s.refuse === true) throw new FileStoreError("foreign-bucket", "other")
+      if (s.bindingChanged === true)
+        throw new FileStoreError("binding-changed", "copy")
     },
+    rebind: () => Promise.reject(new Error("unused")),
   }
   let existsCalls = 0
+  let recoveryCalls = 0
   const source: ReconcileSource = {
+    async inRecovery() {
+      calls.push("recovery")
+      const answers = s.recovery ?? [false]
+      return answers[Math.min(recoveryCalls++, answers.length - 1)]!
+    },
     instance: async () => "inst",
+    async sweepPending() {
+      calls.push("sweep")
+      return s.sweep ?? 0
+    },
     now: async () => NOW,
     async rowsExist(object, ids) {
       expect(ids.length).toBeLessThanOrEqual(1000)
@@ -90,13 +110,14 @@ function setup(s: Setup) {
         .slice(0, 1000)
     },
   }
-  const run = (graceMs?: number) =>
+  const run = (graceMs?: number, keep?: number) =>
     reconcile(
       [OBJ, OTHER_OBJ],
       source,
       store,
       { log: (e) => log.push(e) },
-      graceMs
+      graceMs,
+      keep
     )
   return { run, log, deleted, calls }
 }
@@ -179,6 +200,72 @@ describe("reconcile", () => {
     expect(t.log[0]).toMatchObject({ kind: "refused", reason: "instance" })
   })
 
+  it("reports a copied or restored database's marker as its own refusal, with no deletion", async () => {
+    const t = setup({
+      objects: { [key(1)]: OLD },
+      rows: {},
+      bindingChanged: true,
+    })
+    const report = await t.run()
+    expect(report.refused).toBe("binding")
+    expect(t.deleted).toEqual([])
+    expect(t.log[0]).toMatchObject({ kind: "refused", reason: "binding" })
+    expect(t.calls).not.toContain("sweep")
+  })
+
+  it("deletes nothing and touches neither the bucket nor the database while in recovery", async () => {
+    const t = setup({ objects: { [key(1)]: OLD }, rows: {}, recovery: [true] })
+    const report = await t.run()
+    expect(report).toMatchObject({ refused: "recovery", deleted: 0 })
+    expect(t.deleted).toEqual([])
+    expect(t.calls).toEqual(["recovery"])
+    expect(t.log[0]).toMatchObject({ kind: "refused", reason: "recovery" })
+  })
+
+  it("deletes nothing when the database turns out to be a standby just before the deletion", async () => {
+    const t = setup({
+      objects: { [key(1)]: OLD },
+      rows: {},
+      recovery: [false, true],
+    })
+    const report = await t.run()
+    expect(report).toMatchObject({ refused: "recovery", deleted: 0 })
+    expect(t.deleted).toEqual([])
+  })
+
+  it("sweeps the attach records after the checks and counts them", async () => {
+    const t = setup({ objects: {}, rows: {}, sweep: 3 })
+    expect((await t.run()).pendingSwept).toBe(3)
+    expect(t.calls).toEqual(["recovery", "check", "sweep", "recovery"])
+  })
+
+  describe("memory: at most `keep` orphans are remembered by name", () => {
+    const objectsOf = (orphans: number, kept: number) => {
+      const objects: Record<string, Date> = {}
+      const rows: string[] = []
+      for (let i = 0; i < orphans; i++) objects[key(1000 + i)] = OLD
+      for (let i = 0; i < kept; i++) {
+        objects[key(i)] = OLD
+        rows.push(rowId(i))
+      }
+      return { objects, rows: { [OBJ]: rows } }
+    }
+
+    it("deletes the kept ones and leaves the rest to the next run", async () => {
+      const t = setup(objectsOf(10, 5))
+      expect((await t.run(undefined, 3)).deleted).toBe(3)
+      expect((await t.run(undefined, 3)).deleted).toBe(3)
+      expect(t.deleted).toHaveLength(6)
+    })
+
+    it("the guard counts every orphan, not only the remembered ones", async () => {
+      const t = setup(objectsOf(25, 5))
+      const report = await t.run(undefined, 3)
+      expect(report).toMatchObject({ refused: "guard", deleted: 0 })
+      expect(t.deleted).toEqual([])
+    })
+  })
+
   describe("guard: more than 5 % of listed and more than 20", () => {
     const many = (orphans: number, kept: number) => {
       const objects: Record<string, Date> = {}
@@ -257,7 +344,6 @@ describe("reconcile", () => {
   )
 
   it("throws before any delete when the store gives a truncated listing without a token", async () => {
-    const t = setup({ objects: { [key(1)]: OLD }, rows: {} })
     const deleted: string[] = []
     const client = {
       async listObjectsV2() {
@@ -272,13 +358,15 @@ describe("reconcile", () => {
       // Маркер збігається з базою: відмова має бути саме від переліку
       async getObject() {
         return {
-          Body: { transformToWebStream: () => new Blob(["inst"]).stream() },
+          Body: { transformToWebStream: () => new Blob([BINDING]).stream() },
         }
       },
     } as unknown as S3ClientLike
     const store = fromS3Client(client, "b")
     const source: ReconcileSource = {
-      instance: async () => "inst",
+      inRecovery: async () => false,
+      instance: async () => BINDING,
+      sweepPending: async () => 0,
       now: async () => NOW,
       rowsExist: async () => new Set(),
       rowPage: async () => [],
@@ -287,6 +375,5 @@ describe("reconcile", () => {
       reconcile([OBJ], source, store, { log: () => {} })
     ).rejects.toMatchObject({ reason: "bad-listing" })
     expect(deleted).toEqual([])
-    expect(t.deleted).toEqual([])
   })
 })

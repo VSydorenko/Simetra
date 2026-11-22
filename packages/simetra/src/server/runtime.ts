@@ -40,7 +40,7 @@ import {
   CommandFailure,
 } from "simetra/model"
 import { z } from "zod"
-import type { FileStore } from "./file-store"
+import { FileStoreError, parseBinding, type FileStore } from "./file-store"
 import {
   reconcile,
   type ReconcileOptions,
@@ -308,8 +308,11 @@ export interface CommandRuntime {
     input: AttachFileInput
   ): Promise<CommandResult>
   /**
-   * The uuid of `storage_instance`: the database binding the byte store
-   * checks (`FileStore.put` option `instance`). Resolved once in its own
+   * The database binding string the byte store checks (`FileStore.put`
+   * option `instance`, `parseBinding`): the `storage_instance` uuid with the
+   * cluster `system_identifier`, the database oid and the checkpoint
+   * timeline, so a copy of the database does not pass for the original.
+   * Resolved once in its own
    * read-write transaction under the storage role (the row is written
    * lazily, so a `READ ONLY` transaction cannot do it) and cached. Rejects
    * with `command.nested` when called from inside a hook (no nested
@@ -319,13 +322,23 @@ export interface CommandRuntime {
   /**
    * The reconciliation of the byte store with the database (platform spec
    * §8.2): the only place bytes are physically deleted. Refuses (deletes
-   * nothing, `report.refused`) for a bucket of another database or when the
-   * guard trips. Rejects with `command.nested` from inside a hook.
+   * nothing, `report.refused`) for a bucket of another database, a marker of a
+   * copied or restored database, a database in recovery, or when the guard
+   * trips. Rejects with `command.nested` from inside a hook.
    */
   reconcileFiles(
     store: FileStore,
     options: ReconcileOptions
   ): Promise<ReconcileReport>
+  /**
+   * The operator command after a legitimate restore (dump/restore, PITR, a
+   * promoted replica): rewrites the bucket marker with the current binding of
+   * this database. Only a marker of the same `storage_instance` uuid is
+   * rewritten (`FileStoreError` `foreign-bucket` otherwise); refused with
+   * `in-recovery` on a standby. Reads the binding fresh, never the cache.
+   * Rejects with `command.nested` from inside a hook.
+   */
+  rebindFileStore(store: FileStore): Promise<void>
 }
 
 // Межа каналів одного виклику `authorizeChannels` (Р5 плану B2).
@@ -502,6 +515,7 @@ const APPLIED_HASH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(APPLIED_SNAPSHOT_
 const NO_APPLIED_STATE = new Set(["42883", "3F000"])
 // `pg_has_role` на ролі, якої немає в базі.
 const UNDEFINED_OBJECT = "42704"
+const INSUFFICIENT_PRIVILEGE = "42501"
 // Межі повтору, глибини й часу читання — помилка конфігурації host-а, як і
 // каталог; 0 для часу вимкнув би межу, тож теж відмова.
 const limitSchema = z.int().min(1).optional()
@@ -602,6 +616,13 @@ async function inspect(
     await endFailed(client, error.connectionLost)
     if (step === APPLIED_HASH && NO_APPLIED_STATE.has(error.code ?? "")) {
       return mismatch(catalog, null)
+    }
+    // Брак членства `simetra_files`: названа відмова з роллю, а не `internal`
+    if (step === FILES_ROLE.text && error.code === INSUFFICIENT_PRIVILEGE) {
+      throw new CommandFailure({
+        code: "command.read-role-missing",
+        role: PLATFORM_ROLES.files,
+      })
     }
     if (step === MEMBER && error.code === UNDEFINED_OBJECT) {
       // Ролі запиту в базі немає — членства в ній теж; транзакція перервана,
@@ -727,7 +748,7 @@ export async function createCommandRuntime(
     rejectNested()
     return reconcile(
       catalog.objects.filter((o) => o.storage !== undefined).map((o) => o.id),
-      reconcileSource(state, cachedInstance),
+      reconcileSource(state),
       store,
       options,
       graceMs
@@ -805,6 +826,15 @@ export async function createCommandRuntime(
       }
     },
     reconcileFiles: (store, options) => reconcileOf(store, options),
+    rebindFileStore: async (store) => {
+      rejectNested()
+      if (await inRecovery(state))
+        throw new FileStoreError(
+          "in-recovery",
+          "the database is in recovery: rebind on the primary"
+        )
+      await store.rebind(await fileInstance(state))
+    },
     fileInstance: cachedInstance,
   }
   AGED_RECONCILE.set(runtime, reconcileOf)
@@ -1315,15 +1345,30 @@ async function checkUpload(
     : null
 }
 
+const PENDING_SWEEP = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.pendingSweep)}() AS n`
+const IN_RECOVERY = "SELECT pg_catalog.pg_is_in_recovery() AS recovery"
 const DB_NOW = "SELECT floor(extract(epoch FROM now()) * 1000)::text AS ms"
 const ROWS_EXIST = `SELECT t.id::text AS id FROM ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.rowsExist)}($1::uuid, $2::uuid[]) AS t(id)`
 const ROW_PAGE = `SELECT t.id::text AS id FROM ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.rowPage)}($1::uuid, $2::uuid) AS t(id)`
 
+/** `pg_is_in_recovery()` у `READ ONLY` транзакції: репліка чи відновлення. */
+function inRecovery(state: RuntimeState): Promise<boolean> {
+  return inShortTransaction(
+    state,
+    BEGIN_READ_ONLY,
+    [INSTANCE_LIMITS(state)],
+    async (send) => {
+      const { rows } = await send({ text: IN_RECOVERY, params: [] })
+      const value = rows[0]?.recovery
+      if (rows.length !== 1 || (value !== "t" && value !== "f"))
+        throw new Error("pg_is_in_recovery answered no boolean")
+      return value === "t"
+    }
+  )
+}
+
 /** Сторона бази звірки: кожен виклик — коротка `READ ONLY` транзакція під роллю сховища. */
-function reconcileSource(
-  state: RuntimeState,
-  instance: () => Promise<string>
-): ReconcileSource {
+function reconcileSource(state: RuntimeState): ReconcileSource {
   const ids = async (text: string, params: (string | null)[]) =>
     inShortTransaction(
       state,
@@ -1339,7 +1384,23 @@ function reconcileSource(
       }
     )
   return {
-    instance,
+    inRecovery: () => inRecovery(state),
+    // Звірка читає відбиток щоразу заново: кеш `fileInstance()` міг пережити
+    // промоцію репліки
+    instance: () => fileInstance(state),
+    sweepPending: () =>
+      inShortTransaction(
+        state,
+        BEGIN_WRITE,
+        [INSTANCE_LIMITS(state), FILES_ROLE],
+        async (send) => {
+          const { rows } = await send({ text: PENDING_SWEEP, params: [] })
+          const n = Number(rows[0]?.n)
+          if (rows.length !== 1 || !Number.isSafeInteger(n) || n < 0)
+            throw new Error("storage_pending_sweep answered no count")
+          return n
+        }
+      ),
     now: () =>
       inShortTransaction(
         state,
@@ -1368,7 +1429,7 @@ const INSTANCE_LIMITS = (state: RuntimeState) => ({
 })
 
 /**
- * Прив'язка бази до бакета: `storage_instance_id()` пише рядок при першому
+ * Прив'язка бази до бакета (відбиток `uuid:sysid:oid:timeline`): `storage_instance_id()` пише рядок при першому
  * зверненні, тож потрібна транзакція на запис, а не `READ ONLY`. Лише роль
  * сховища має на неї `EXECUTE`; рантайм входить у неї через `SET LOCAL ROLE`.
  */
@@ -1381,10 +1442,14 @@ async function fileInstance(state: RuntimeState): Promise<string> {
     async (send) => {
       const { rows } = await send({ text: INSTANCE_ID, params: [] })
       const id = rows[0]?.id
-      if (rows.length !== 1 || !uuidSchema.safeParse(id).success) {
-        throw new Error("storage_instance_id answered no uuid")
+      if (
+        rows.length !== 1 ||
+        typeof id !== "string" ||
+        parseBinding(id) === null
+      ) {
+        throw new Error("storage_instance_id answered no binding")
       }
-      return id as string
+      return id
     }
   )
 }

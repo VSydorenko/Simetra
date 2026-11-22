@@ -48,6 +48,7 @@ const STORAGE_FUNCTIONS = [
   "storage_rows_exist(uuid, uuid[])",
   "storage_row_page(uuid, uuid)",
   "storage_pending_left()",
+  "storage_pending_sweep()",
   "storage_instance_id()",
 ]
 const HEADROOM = "storage_headroom(uuid, uuid)"
@@ -298,6 +299,32 @@ describe("І3: a row appears only with the file_attach of its own transaction", 
   it("a record that no row took is reported as left in this transaction", async () => {
     await tx(async (s) => {
       await s.attach(TICKET_ID, newId(), 5, "image/png")
+      expect(
+        await s.as("files", "SELECT simetra.storage_pending_left() AS left")
+      ).toEqual({ rows: [{ left: true }] })
+    })
+  })
+
+  it("storage_pending_sweep removes the records of finished transactions and keeps this transaction's own", async () => {
+    await tx(async (s) => {
+      // Запис давно завершеної транзакції: її xid менший за xmin знімка
+      await s.ok(
+        "INSERT INTO simetra.storage_pending (xact, object, id, size, content_type) VALUES ('1'::xid8, $1, $2, 1, 'image/png')",
+        [TICKET_ID, newId()]
+      )
+      await s.attach(TICKET_ID, newId(), 5, "image/png")
+      const swept = await s.as<{ n: string }>(
+        "files",
+        "SELECT simetra.storage_pending_sweep() AS n"
+      )
+      expect(
+        Number((swept as { rows: { n: string }[] }).rows[0]!.n)
+      ).toBeGreaterThanOrEqual(1)
+      expect(
+        await s.ok(
+          "SELECT 1 FROM simetra.storage_pending WHERE xact = '1'::xid8"
+        )
+      ).toEqual([])
       expect(
         await s.as("files", "SELECT simetra.storage_pending_left() AS left")
       ).toEqual({ rows: [{ left: true }] })

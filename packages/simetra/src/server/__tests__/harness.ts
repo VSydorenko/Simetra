@@ -282,6 +282,7 @@ export const checkedRuntime = (
   attachFile: (...args) => runtime.attachFile(...args),
   fileInstance: () => runtime.fileInstance(),
   reconcileFiles: (store, options) => runtime.reconcileFiles(store, options),
+  rebindFileStore: (store) => runtime.rebindFileStore(store),
 })
 
 export async function setup(

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import pg from "pg"
 import { describe, expect, it } from "vitest"
 import { fileObjectKey } from "simetra/model"
 import {
@@ -182,7 +183,7 @@ export function defineReconcileCases(env: () => Env): void {
       const instance = await rt.fileInstance()
       const key = await putOrphan(rt)
       try {
-        await setMarker(randomUUID())
+        await setMarker(`${randomUUID()}:1:2:3`)
         const other = await reconcile(rt, { aged: true })
         expect(other.report).toMatchObject({ deleted: 0, refused: "instance" })
         expect(await exists(key)).toBe(true)
@@ -194,6 +195,72 @@ export function defineReconcileCases(env: () => Env): void {
       } finally {
         await setMarker(instance)
         await env().files.delete(key)
+      }
+    })
+
+    it("refuses the marker of a restored or copied database by naming the changed part, and works again after the rebind", async () => {
+      const rt = await runtime()
+      const instance = await rt.fileInstance()
+      const [uuid, system, database, timeline] = instance.split(":")
+      const key = await putOrphan(rt)
+      try {
+        for (const changed of [
+          `${uuid}:${system}1:${database}:${timeline}`,
+          `${uuid}:${system}:${database}1:${timeline}`,
+          `${uuid}:${system}:${database}:${timeline}1`,
+        ]) {
+          await setMarker(changed)
+          const { report, log } = await reconcile(rt, { aged: true })
+          expect(report).toMatchObject({ deleted: 0, refused: "binding" })
+          expect(log).toContainEqual(
+            expect.objectContaining({ kind: "refused", reason: "binding" })
+          )
+          expect(await exists(key)).toBe(true)
+          // `put` теж відмовляє: байти не пишуться у бакет чужої копії
+          await expect(
+            env().files.put(
+              fileObjectKey(objectId(), randomUUID()),
+              bodyOf("x"),
+              { contentType: "text/plain", maxBytes: LIMIT, instance }
+            )
+          ).rejects.toMatchObject({ reason: "binding-changed" })
+        }
+        await rt.rebindFileStore(env().files)
+        const { report } = await reconcile(rt, { aged: true })
+        expect(report).toMatchObject({ deleted: 1, refused: null })
+        expect(await exists(key)).toBe(false)
+      } finally {
+        await setMarker(instance)
+        await env().files.delete(key)
+      }
+    })
+
+    it("sweeps the attach records of finished transactions and leaves those of a running one", async () => {
+      const rt = await runtime()
+      const live = new pg.Client({ connectionString: env().url })
+      await live.connect()
+      const record = (xact: string) =>
+        `INSERT INTO simetra.storage_pending (xact, object, id, size, content_type) VALUES (${xact}, $1, $2, 1, 'text/plain')`
+      const liveId = randomUUID()
+      try {
+        await env().owner.query(record("'1'::xid8"), [objectId(), randomUUID()])
+        await live.query("BEGIN")
+        await live.query(record("pg_current_xact_id()"), [objectId(), liveId])
+        const { report } = await reconcile(rt)
+        expect(report.pendingSwept).toBeGreaterThanOrEqual(1)
+        await live.query("COMMIT")
+        const left = await env().owner.query<{ id: string }>(
+          "SELECT id FROM simetra.storage_pending WHERE xact = '1'::xid8 OR id = $1",
+          [liveId]
+        )
+        expect(left.rows).toEqual([{ id: liveId }])
+      } finally {
+        await live.query("ROLLBACK").catch(() => undefined)
+        await live.end()
+        await env().owner.query(
+          "DELETE FROM simetra.storage_pending WHERE xact = '1'::xid8 OR id = $1",
+          [liveId]
+        )
       }
     })
 

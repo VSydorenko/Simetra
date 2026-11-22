@@ -50,6 +50,7 @@ const HEADROOM = fn(STORAGE_FUNCTIONS.headroom)
 const ROWS_EXIST = fn(STORAGE_FUNCTIONS.rowsExist)
 const ROW_PAGE = fn(STORAGE_FUNCTIONS.rowPage)
 const PENDING_LEFT = fn(STORAGE_FUNCTIONS.pendingLeft)
+const PENDING_SWEEP = fn(STORAGE_FUNCTIONS.pendingSweep)
 const INSTANCE_ID = fn(STORAGE_FUNCTIONS.instanceId)
 
 const USAGE = qualified(STORAGE_TABLES.usage)
@@ -196,7 +197,7 @@ function headroomCondition(object: StorageObject, rightsOn: boolean): string {
  * Усі функції — `SECURITY DEFINER` з порожнім `search_path`: таблиць сховища
  * ролі запиту й команд не бачать. `EXECUTE` лише ролі `simetra_files`
  * (`file_attach`, `storage_rows_exist`, `storage_row_page`,
- * `storage_pending_left`, `storage_instance_id`), крім `storage_headroom` —
+ * `storage_pending_left`, `storage_pending_sweep`, `storage_instance_id`), крім `storage_headroom` —
  * його кличе роль запиту користувача. Роль `simetra_files` — не призначення
  * гранту, тож явний `GRANT` після `executeGrants(…, [])` дає цей генератор, а
  * декларація застосунку її не адресує. Об'єкт без скоупу веде облік під
@@ -384,12 +385,31 @@ export function buildStorageUnits(input: StorageInput): SqlUnit[] {
     { stable: true }
   )
 
+  // Записи інших транзакцій: `xact` менший за `xmin` знімка — транзакція
+  // завершена, її запис ніхто вже не забере (крок 4 §8.2)
+  const pendingSweep = functionSql(PENDING_SWEEP, "", "bigint", [
+    "DECLARE",
+    "  v_swept bigint;",
+    "BEGIN",
+    `  DELETE FROM ${PENDING} p WHERE p.xact < pg_catalog.pg_snapshot_xmin(pg_catalog.pg_current_snapshot());`,
+    "  GET DIAGNOSTICS v_swept = ROW_COUNT;",
+    "  RETURN v_swept;",
+    "END",
+  ])
+
   // Рядок прив'язки пишеться при першому зверненні, ідемпотентно: таблиця
-  // безумовна, а функція живе лише поки є об'єкт зі `storage`
-  const instanceId = functionSql(INSTANCE_ID, "", "uuid", [
+  // безумовна, а функція живе лише поки є об'єкт зі `storage`. Відбиток =
+  // uuid + `system_identifier` + oid бази + `timeline_id`: dump/restore і
+  // TEMPLATE дають інший sysid чи oid, PITR і підвищена репліка — інший
+  // timeline, тож копія бази не пройде за оригінал (спека §8.2). Функції
+  // `pg_control_*` виконуються для PUBLIC (їх немає в `system_functions.sql`)
+  const instanceId = functionSql(INSTANCE_ID, "", "text", [
     "BEGIN",
     `  INSERT INTO ${INSTANCE} (singleton) VALUES (true) ON CONFLICT (singleton) DO NOTHING;`,
-    `  RETURN (SELECT i.id FROM ${INSTANCE} i);`,
+    `  RETURN (SELECT i.id::text FROM ${INSTANCE} i)`,
+    "    || ':' || (SELECT s.system_identifier::text FROM pg_catalog.pg_control_system() s)",
+    "    || ':' || (SELECT d.oid::text FROM pg_catalog.pg_database d WHERE d.datname = pg_catalog.current_database())",
+    "    || ':' || (SELECT c.timeline_id::text FROM pg_catalog.pg_control_checkpoint() c);",
     "END",
   ])
 
@@ -495,6 +515,7 @@ export function buildStorageUnits(input: StorageInput): SqlUnit[] {
     ...shared(ROWS_EXIST, "uuid, uuid[]", rowsExist, "files"),
     ...shared(ROW_PAGE, "uuid, uuid", rowPage, "files"),
     ...shared(PENDING_LEFT, "", pendingLeft, "files"),
+    ...shared(PENDING_SWEEP, "", pendingSweep, "files"),
     ...shared(INSTANCE_ID, "", instanceId, "files"),
     unit(`GRANT USAGE ON SCHEMA ${quoteIdent(PLATFORM_SCHEMA)} TO ${files};`),
     ...[
