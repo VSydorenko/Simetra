@@ -123,20 +123,32 @@ export async function reconcile(
     log({ kind: "refused", reason, message })
     return report
   }
-  const inRecovery = "the database is in recovery (a standby or a restore)"
-  // Репліка чи відновлення: байти, записані після знімка, ще невидимі — нічого
-  // не видаляти й нічого не писати в базу
-  if (await source.inRecovery()) return refuse("recovery", inRecovery)
-  try {
-    await store.checkInstance(await source.instance())
-  } catch (error) {
-    if (!(error instanceof FileStoreError)) throw error
-    if (error.reason === "foreign-bucket")
-      return refuse("instance", error.message)
-    if (error.reason === "binding-changed")
-      return refuse("binding", error.message)
-    throw error
+  // Перевірка «можна видаляти»: репліка чи відновлення, і ЩЕ раз свіжий
+  // відбиток бази проти маркера бакета. Викликається на вході й перед кожною
+  // порцією видалень: промоція, відновлення чи підміна бази посеред довгого
+  // прогону зупиняють його, а не лише відмовляють на старті
+  const refusalNow = async (): Promise<ReconcileReport | null> => {
+    // Репліка чи відновлення: байти, записані після знімка, ще невидимі —
+    // нічого не видаляти й нічого не писати в базу
+    if (await source.inRecovery())
+      return refuse(
+        "recovery",
+        "the database is in recovery (a standby or a restore)"
+      )
+    try {
+      await store.checkInstance(await source.instance())
+    } catch (error) {
+      if (!(error instanceof FileStoreError)) throw error
+      if (error.reason === "foreign-bucket")
+        return refuse("instance", error.message)
+      if (error.reason === "binding-changed")
+        return refuse("binding", error.message)
+      throw error
+    }
+    return null
   }
+  const first = await refusalNow()
+  if (first !== null) return first
   report.pendingSwept = await source.sweepPending()
 
   const known = new Set(objectIds.map((id) => `o/${id}/`))
@@ -205,9 +217,6 @@ export async function reconcile(
     )
   }
 
-  // Перелік міг тривати довго: промоція репліки за цей час теж зупиняє видалення
-  if (await source.inRecovery()) return refuse("recovery", inRecovery)
-
   // Друга перевірка безпосередньо перед видаленням, по об'єктах
   const byObject = new Map<string, Orphan[]>()
   for (const o of orphans) {
@@ -217,6 +226,9 @@ export async function reconcile(
   }
   for (const [object, list] of byObject) {
     for (let i = 0; i < list.length; i += PAGE) {
+      // Перелік міг тривати довго: перед кожною порцією бачимо стан бази заново
+      const stop = await refusalNow()
+      if (stop !== null) return stop
       const chunk = list.slice(i, i + PAGE)
       const present = await source.rowsExist(
         object,

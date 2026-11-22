@@ -37,6 +37,10 @@ interface Setup {
   /** `pg_is_in_recovery()` answers, one per call; the last repeats. */
   recovery?: boolean[]
   sweep?: number
+  /** `instance()` answers, one per call; the last repeats (default: "inst"). */
+  instances?: string[]
+  /** The binding the bucket marker holds: any other fresh fingerprint is a copy. */
+  bound?: string
 }
 
 function setup(s: Setup) {
@@ -73,8 +77,10 @@ function setup(s: Setup) {
         }
       }
     },
-    async checkInstance() {
+    async checkInstance(instance) {
       calls.push("check")
+      if (s.bound !== undefined && instance !== s.bound)
+        throw new FileStoreError("binding-changed", "copy")
       if (s.refuse === true) throw new FileStoreError("foreign-bucket", "other")
       if (s.bindingChanged === true)
         throw new FileStoreError("binding-changed", "copy")
@@ -83,13 +89,17 @@ function setup(s: Setup) {
   }
   let existsCalls = 0
   let recoveryCalls = 0
+  let instanceCalls = 0
   const source: ReconcileSource = {
     async inRecovery() {
       calls.push("recovery")
       const answers = s.recovery ?? [false]
       return answers[Math.min(recoveryCalls++, answers.length - 1)]!
     },
-    instance: async () => "inst",
+    async instance() {
+      const answers = s.instances ?? ["inst"]
+      return answers[Math.min(instanceCalls++, answers.length - 1)]!
+    },
     async sweepPending() {
       calls.push("sweep")
       return s.sweep ?? 0
@@ -233,10 +243,42 @@ describe("reconcile", () => {
     expect(t.deleted).toEqual([])
   })
 
+  it("deletes nothing when the database fingerprint changes after the listing, before the deletion", async () => {
+    const t = setup({
+      objects: { [key(1)]: OLD },
+      rows: {},
+      bound: "inst",
+      instances: ["inst", "swapped"],
+    })
+    const report = await t.run()
+    expect(report).toMatchObject({ refused: "binding", deleted: 0 })
+    expect(t.deleted).toEqual([])
+    expect(t.log.at(-1)).toMatchObject({ kind: "refused", reason: "binding" })
+  })
+
+  it("re-checks the fingerprint before every batch of deletions and stops with no further deletion", async () => {
+    // 1001 сирота = дві порції по 1000; решта — рядки, щоб запобіжник не спрацював
+    const orphans = 1001
+    const kept = 25_000
+    const objects: Record<string, Date> = {}
+    for (let n = 1; n <= orphans + kept; n++) objects[key(n)] = OLD
+    const rows = Array.from({ length: kept }, (_, i) => rowId(orphans + 1 + i))
+    const t = setup({
+      objects,
+      rows: { [OBJ]: rows },
+      bound: "inst",
+      // вхід і перша порція бачать свій відбиток, друга — підміну
+      instances: ["inst", "inst", "swapped"],
+    })
+    const report = await t.run(undefined, 2000)
+    expect(report).toMatchObject({ refused: "binding", deleted: 1000 })
+    expect(t.deleted).toHaveLength(1000)
+  })
+
   it("sweeps the attach records after the checks and counts them", async () => {
     const t = setup({ objects: {}, rows: {}, sweep: 3 })
     expect((await t.run()).pendingSwept).toBe(3)
-    expect(t.calls).toEqual(["recovery", "check", "sweep", "recovery"])
+    expect(t.calls).toEqual(["recovery", "check", "sweep"])
   })
 
   describe("memory: at most `keep` orphans are remembered by name", () => {
