@@ -70,6 +70,7 @@ export const heldStorageEnv = (...layers: Layer[]) =>
     if (stack.garageAdminUrl === null)
       await s3Of(stack).createBucket({ Bucket: bucket })
     else await createRunBucket(runTag(), stack, fetch)
+    let failure: { error: unknown } | undefined
     try {
       await withModelTarget(model, async (url) => {
         const owner = new pg.Client({ connectionString: url })
@@ -105,8 +106,16 @@ export const heldStorageEnv = (...layers: Layer[]) =>
           await owner.end()
         }
       })
-    } finally {
-      // Бакет прогону лишає сторож, але свої об'єкти тест прибирає сам
-      await emptyAndDeleteRunBucket(runTag(), stack, { fetch })
+    } catch (error) {
+      failure = { error }
     }
+    // Бакет прогону лишає сторож, але свої об'єкти тест прибирає сам. Збій
+    // прибирання не підміняє помилку самого сценарію: її ми й кидаємо
+    try {
+      await emptyAndDeleteRunBucket(runTag(), stack, { fetch })
+    } catch (cleanup) {
+      if (failure === undefined) throw cleanup
+      console.error("the run bucket was not emptied:", cleanup)
+    }
+    if (failure !== undefined) throw failure.error
   })
