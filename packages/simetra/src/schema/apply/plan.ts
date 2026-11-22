@@ -14,6 +14,7 @@ import {
 } from "simetra/compiler"
 import {
   diffCatalogModels,
+  filePlatformColumns,
   PROVIDER_API_ROLES,
   PROVIDER_IDENTITY_SOURCES,
   PROVIDER_LOGIN_ROLES,
@@ -727,6 +728,50 @@ export function identityTriggerLocks(
 }
 
 /**
+ * `storage` додано чи прибрано в об'єкта з живою таблицею (Р9, Р12 ПГ-5):
+ * план ставить чи знімає колонку розміру файлу на наявній таблиці — не
+ * новій і не знищуваній, бо тоді змінює її весь об'єкт. Додавання лишило б
+ * наявні рядки без розміру й без запису вкладення, прибирання — осиротило б
+ * байти в бакеті, які звірка бачить лише як невідомий префікс. Ознака — колонка
+ * розміру, яку кладе лише `storage` (`filePlatformColumns`).
+ */
+export function storageRefusals(
+  steps: readonly Pick<PlanStep, "produced" | "destroyed">[]
+): EngineDiagnostic[] {
+  const size = filePlatformColumns()[0]!.physicalName
+  const tableKey = (r: EngineObjectRef) => JSON.stringify([r.schema, r.name])
+  const created = new Set(
+    steps.flatMap((s) =>
+      s.produced.filter((r) => r.kind === "table").map(tableKey)
+    )
+  )
+  const dropped = new Set(
+    steps.flatMap((s) =>
+      s.destroyed.filter((r) => r.kind === "table").map(tableKey)
+    )
+  )
+  const found = new Map<string, EngineDiagnostic>()
+  const note = (
+    code: "plan.storage-added" | "plan.storage-removed",
+    ref: EngineObjectRef,
+    known: ReadonlySet<string>
+  ) => {
+    if (ref.kind !== "column" || ref.name !== size || ref.table === undefined)
+      return
+    if (known.has(JSON.stringify([ref.schema, ref.table]))) return
+    const table = `${quoteIdent(ref.schema)}.${quoteIdent(ref.table)}`
+    found.set(`${code}\0${table}`, applyDiagnostic(code, "error", { table }))
+  }
+  for (const step of steps) {
+    for (const ref of step.produced) note("plan.storage-added", ref, created)
+    for (const ref of step.destroyed) note("plan.storage-removed", ref, dropped)
+  }
+  return [...found.values()].sort((a, b) =>
+    byCodeUnit(String(a.params.table), String(b.params.table))
+  )
+}
+
+/**
  * Відмова зняття чи ввімкнення тригерів провізії — лише в профілі, де це
  * може тільки власник таблиці (`PROVIDER_IDENTITY_TRIGGER_LOCKED`).
  */
@@ -1173,7 +1218,10 @@ export async function buildPlan(
   )
   // Зняти тригер провізії з чужої таблиці може лише її власник: відмова з
   // порадою до будь-якого кроку, а не падіння застосування
-  const locked = lockedIdentityTriggers(classified, desired.scope.provider)
+  const locked = [
+    ...lockedIdentityTriggers(classified, desired.scope.provider),
+    ...storageRefusals(classified),
+  ]
   if (locked.length > 0) return refused([...diagnostics, ...locked])
   // Зміна типу, якій сторожа не побудувати, — відмова, а не крок без
   // перевірки: інакше дозвіл на `destructive` знову означав би «обріж мовчки»
@@ -1625,10 +1673,13 @@ async function planPromotion(c: PromotionContext): Promise<PlanOutcome> {
   ])
   if (!analysis.ok || hasError(withClone)) return refused(withClone)
   // Той самий гейт тригерів провізії, що й у плані без промоції
-  const locked = lockedIdentityTriggers(
-    analysis.steps,
-    c.model.project.database.provider
-  )
+  const locked = [
+    ...lockedIdentityTriggers(
+      analysis.steps,
+      c.model.project.database.provider
+    ),
+    ...storageRefusals(analysis.steps),
+  ]
   if (locked.length > 0) return refused([...withClone, ...locked])
   const { model: cloneModel } = analysis
   const checked = await backfillChecks({
