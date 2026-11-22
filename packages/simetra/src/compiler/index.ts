@@ -192,6 +192,8 @@ export {
   conversionClass,
   createObject,
   createObjectInput,
+  declareFunction,
+  declareFunctionInput,
   deleteElement,
   deleteInput,
   DATA_STEP_KINDS,
@@ -219,6 +221,7 @@ export {
   type ContainerTarget,
   type ConversionClass,
   type CreateObjectInput,
+  type DeclareFunctionInput,
   type DeleteInput,
   type DerivedFacts,
   type ElementTarget,
@@ -238,4 +241,9 @@ export {
   type SchemaPathResolver,
   type UniqueShape,
 } from "./operations"
-export { explainObject, type Explanation } from "./explain"
+export {
+  explainFunction,
+  explainObject,
+  type Explanation,
+  type FunctionExplanation,
+} from "./explain"

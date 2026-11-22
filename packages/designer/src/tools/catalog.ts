@@ -4,6 +4,7 @@ import { dataCommandTool, dataReadTool } from "./data-tools"
 import {
   addTool,
   createTool,
+  declareFunctionTool,
   deleteTool,
   promoteTool,
   renameTool,
@@ -38,6 +39,7 @@ export const TOOLS: readonly Tool[] = [
   fixTool,
   createTool,
   addTool,
+  declareFunctionTool,
   renameTool,
   deleteTool,
   promoteTool,

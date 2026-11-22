@@ -3,6 +3,8 @@ import {
   addElementInput,
   createObject,
   createObjectInput,
+  declareFunction,
+  declareFunctionInput,
   deleteElement,
   deleteInput,
   promoteInput,
@@ -96,6 +98,19 @@ export const addTool = defineTool({
   destructive: false,
   run: ({ dir }, input) =>
     apply(dir, (files) => addElement(files, input, completion(dir))),
+})
+
+export const declareFunctionTool = defineTool({
+  name: "declare-function",
+  description:
+    "Create or replace the declaration (callers, check) of one SQL function of a sibling .sql file; the id of an existing record is kept. Refused for a function that is a platform form, overloaded or missing. Writes when the result compiles without errors, or when its only errors are repair-class errors the directory already had or the target's own check-not-applied (the body lacks the guard that fix inserts; then ok is false and written is true). Roles that gain EXECUTE are named in a warning.",
+  input: declareFunctionInput,
+  files: "write",
+  database: "none",
+  data: "none",
+  destructive: false,
+  run: ({ dir }, input) =>
+    apply(dir, (files) => declareFunction(files, input, completion(dir))),
 })
 
 export const renameTool = defineTool({

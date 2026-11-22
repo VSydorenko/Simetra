@@ -10,6 +10,7 @@ export {
 } from "./fix"
 export { createObject } from "./create"
 export { addElement } from "./add"
+export { declareFunction } from "./declare-function"
 export { renameElement } from "./rename"
 export { deleteElement } from "./delete"
 export { resolveTarget, type ResolvedTarget } from "./target"
@@ -18,6 +19,7 @@ export {
   containerTarget,
   conversionClass,
   createObjectInput,
+  declareFunctionInput,
   deleteInput,
   elementTarget,
   promoteInput,
@@ -26,6 +28,7 @@ export {
   type ContainerTarget,
   type ConversionClass,
   type CreateObjectInput,
+  type DeclareFunctionInput,
   type DeleteInput,
   type ElementTarget,
   type PromoteInput,

@@ -2,18 +2,17 @@ import { existsSync } from "node:fs"
 import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { Client } from "@modelcontextprotocol/client"
-import { InMemoryTransport } from "@modelcontextprotocol/server"
 import type { Diagnostic } from "simetra/compiler"
 import { elementNameSchema, objectNameSchema } from "simetra/model"
 import { afterEach, describe, expect, it } from "vitest"
 import { TOOL_PIPELINE } from "./helpers/budget"
+import { connectMcp } from "./helpers/mcp-client"
 import { z } from "zod"
 import { writeChanges } from "../io/metadata-dir"
 import { UsageError } from "../io/usage-error"
 import { parseArgs } from "citty"
 import { mcpArgs } from "../commands/mcp-args"
 import { mcpOptionsFrom } from "../commands/mcp"
-import { createMcpServer } from "../mcp/server"
 import { mcpInputSchema, type McpToolOptions } from "../mcp/tools"
 import { applyTool, planTool } from "../tools/apply-tools"
 import {
@@ -38,9 +37,9 @@ import { expectClean } from "../../../simetra/test/support"
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // Гейт розміру описів `tools/list` (спека designer §3.2). Правило бюджету:
 // колишній бюджет + приріст × 1,05; резерв — дубль мапінгу без `$defs`.
-// Останній замір: вхід `scopes` мутації `add` — 34198 символів; до нього —
-// 33545 (замір на коміті перед входом, бюджет 33548): 33548 +
-// ceil((34198 − 33545) × 1,05) = 34234.
+// Останній замір: гілка функції входу `explain` — 37145 символів; до неї —
+// 36817 (бюджет 36955): 36955 + ceil((37145 − 36817) × 1,05) = 37300.
+// Раніше: інструмент `declare-function` — 36817 символів; до нього — 34226.
 // Як заміряти: тимчасово поставити `TOOLS_LIST_BUDGET = 0` і запустити
 // `pnpm --filter @simetrajs/designer test mcp -t "within the size budget"` —
 // падіння друкує розмір («expected N to be less than or equal to 0»). Обидва
@@ -49,7 +48,7 @@ const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // брати: між замірами каталог міг вирости іншими змінами.
 // Вхід `promote` — 4728 символів із 15120: його визначає
 // структура мапінгу (колонки розгортаються в корені й у кожній ТЧ), а не описи
-const TOOLS_LIST_BUDGET = 34234
+const TOOLS_LIST_BUDGET = 37300
 const clients: Client[] = []
 
 useTmpProjects()
@@ -64,28 +63,18 @@ async function connect(
   database?: DatabaseResource,
   allowDatabaseWrite = false
 ): Promise<Client> {
-  const server = createMcpServer({
+  return connectWith({
     dir,
     readOnly,
     allowDatabaseWrite,
     launchArgs,
     database,
   })
-  const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair()
-  const client = new Client({ name: "test", version: "0.0.0" })
-  clients.push(client)
-  await server.connect(serverEnd)
-  await client.connect(clientEnd)
-  return client
 }
 
 async function connectWith(o: McpToolOptions): Promise<Client> {
-  const server = createMcpServer(o)
-  const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair()
-  const client = new Client({ name: "test", version: "0.0.0" })
+  const client = await connectMcp(o)
   clients.push(client)
-  await server.connect(serverEnd)
-  await client.connect(clientEnd)
   return client
 }
 
@@ -301,6 +290,7 @@ describe("simetra mcp", TOOL_PIPELINE, () => {
       "create",
       "data-command",
       "data-read",
+      "declare-function",
       "delete",
       "diff",
       "explain",
@@ -493,6 +483,15 @@ describe("simetra mcp", TOOL_PIPELINE, () => {
       arguments: { kind: "Catalog", name: "Nope" },
     })
     expect(missing.isError).toBe(true)
+  })
+
+  it("explain advertises both branches of its input", async () => {
+    const client = await connect(await project(), true)
+    const tool = (await client.listTools()).tools.find(
+      (t) => t.name === "explain"
+    )!
+    const props = Object.keys(tool.inputSchema.properties ?? {})
+    expect(props).toEqual(expect.arrayContaining(["kind", "name", "function"]))
   })
 
   it("rename writes on ok", async () => {

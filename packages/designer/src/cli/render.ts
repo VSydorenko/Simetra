@@ -1,4 +1,9 @@
-import type { Explanation, Locale, PromotionRecord } from "simetra/compiler"
+import type {
+  Explanation,
+  FunctionExplanation,
+  Locale,
+  PromotionRecord,
+} from "simetra/compiler"
 import {
   formatDiagnostics,
   renderApply,
@@ -20,6 +25,24 @@ import {
 import type { RightsMaintenanceData } from "../tools/rights-maintenance-tool"
 import type { RolesData } from "../tools/roles-tool"
 import type { SignalsConfigData } from "../tools/signals-config"
+
+/** Текст пояснення функції для терміналу. */
+export function renderFunctionExplanation(e: FunctionExplanation): string {
+  const lines = [`function ${e.function.schema}.${e.function.name}`]
+  if (e.callers === undefined) {
+    lines.push("not declared")
+  } else {
+    lines.push(`callers: ${e.callers.join(", ") || "(none)"}`)
+    for (const [provider, roles] of Object.entries(e.roles ?? {})) {
+      lines.push(
+        `EXECUTE (${provider}): ${roles.map((r) => `${r.role} (${r.caller})`).join(", ") || "(none)"}`
+      )
+    }
+  }
+  if (e.check !== undefined) lines.push(`check: ${e.check}`)
+  lines.push(`state: ${e.state}`)
+  return lines.join("\n")
+}
 
 /** Текст пояснення об'єкта для терміналу; JSON-вигляд друкується як є. */
 export function renderExplanation(e: Explanation): string {
@@ -109,12 +132,15 @@ export function renderResult(
       : { stdout: report }
   }
   if (tool.name === "explain" && r.ok && r.data !== undefined) {
-    const explanation = r.data as Explanation
+    // Два типи виходу: об'єкт має `object`, функція — `function`.
+    const explanation = r.data as Explanation | FunctionExplanation
     return {
       stdout:
         o.format === "json"
           ? JSON.stringify(explanation, null, 2)
-          : renderExplanation(explanation).trimEnd(),
+          : "function" in explanation
+            ? renderFunctionExplanation(explanation)
+            : renderExplanation(explanation).trimEnd(),
     }
   }
   if (tool.name === "diff" && r.data !== undefined) {

@@ -95,11 +95,19 @@ export async function cliInput(
     const dot = target.indexOf(".")
     if (dot <= 0 || dot === target.length - 1) {
       throw new UsageError(
-        `Invalid target "${target}". Expected <Kind>.<Name>, e.g. Document.ServiceAccrual (kinds: ${METADATA_KINDS.join(", ")}).`
+        `Invalid target "${target}". Expected <Kind>.<Name>, e.g. Document.ServiceAccrual (kinds: ${METADATA_KINDS.join(", ")}), or <schema>.<function>, e.g. public.post_order.`
       )
     }
+    const head = target.slice(0, dot)
+    const tail = target.slice(dot + 1)
+    // Схема з назвою виду чи з крапкою цією формою недосяжна: лише JSON-вхід.
+    // Форма вирішує: перший сегмент — вид метаданих (PascalCase), інакше це
+    // схема функції (назви схем — snake_case, з видами не перетинаються).
+    const isKind = (METADATA_KINDS as readonly string[]).includes(head)
     return {
-      input: { kind: target.slice(0, dot), name: target.slice(dot + 1) },
+      input: isKind
+        ? { kind: head, name: tail }
+        : { function: { schema: head, name: tail } },
       dirs: [trimSlash(positional[1] ?? DEFAULT_DIR)],
     }
   }

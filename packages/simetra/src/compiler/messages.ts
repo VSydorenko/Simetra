@@ -1610,12 +1610,26 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "sql.declaration-platform-form-widens": {
     en: (p) =>
-      `${p.function} became a platform form (${p.form}): its declaration is removed, and the form also grants EXECUTE to ${p.roles}`,
+      p.declined === undefined
+        ? `${p.function} became a platform form (${p.form}): its declaration is removed, and the form also grants EXECUTE to ${p.roles}`
+        : `${p.function} became a platform form (${p.form}), but its declaration is not removed: the form would also grant EXECUTE to ${p.roles}; widen the declaration with declare-function or keep the function out of the platform form`,
     uk: (p) =>
-      `${p.function} стала формою платформи (${p.form}): її декларацію видалено, і форма відкриває EXECUTE ще й ${p.roles}`,
+      p.declined === undefined
+        ? `${p.function} стала формою платформи (${p.form}): її декларацію видалено, і форма відкриває EXECUTE ще й ${p.roles}`
+        : `${p.function} стала формою платформи (${p.form}), але її декларацію не видалено: форма відкрила б EXECUTE ще й ${p.roles}; розширте декларацію через declare-function або не робіть функцію формою платформи`,
     hint: {
       en: "The platform derives the grants of a platform form from the metadata, and they are wider than the callers the declaration named. Check that these roles may call the function, or keep it out of the platform form.",
       uk: "Гранти форми платформи виводить платформа з метаданих, і вони ширші за викликачів, яких називала декларація. Перевірте, що цим ролям можна кликати функцію, або не робіть її формою платформи.",
+    },
+  },
+  "sql.declaration-execute-widened": {
+    en: (p) =>
+      `The declaration of ${p.function} now grants EXECUTE to ${p.roles}, which the previous declaration did not`,
+    uk: (p) =>
+      `Декларація ${p.function} тепер відкриває EXECUTE ще й ${p.roles}, чого попередня декларація не робила`,
+    hint: {
+      en: "Check that these roles may call the function. A function that acts as its owner (SECURITY DEFINER) must also apply a rights check for them.",
+      uk: "Перевірте, що цим ролям можна кликати функцію. Функція, що діє від власника (SECURITY DEFINER), мусить ще й застосовувати перевірку прав для них.",
     },
   },
   "sql.declaration-check-missing": {
@@ -1640,12 +1654,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "sql.declaration-check-not-applied": {
     en: (p) =>
-      `${p.function} is SECURITY DEFINER with callers that act for a user, and its body does not prove the named check (${p.reason})`,
+      `${p.function} is SECURITY DEFINER, and its body does not prove the named check (${p.reason})`,
     uk: (p) =>
-      `${p.function} — SECURITY DEFINER з викликачами від імені користувача, і тіло не доводить названої перевірки (${p.reason})`,
+      `${p.function} — SECURITY DEFINER, і тіло не доводить названої перевірки (${p.reason})`,
     hint: {
-      en: "The named check counts only once the body applies it through the call guard: the first statement of the outer block (no DECLARE or EXCEPTION section) is PERFORM simetra.rights_require('<action>', '<kind label>', <row parameter or NULL>) — rights_require_scope for a scope target — with exactly the declared action, kind label and target parameter. Otherwise make the function SECURITY INVOKER or leave only the service caller.",
-      uk: "Названа перевірка діє, лише коли тіло застосовує її запобіжником виклику: перший оператор зовнішнього блоку (без секцій DECLARE і EXCEPTION) — PERFORM simetra.rights_require('<дія>', '<мітка виду>', <параметр рядка або NULL>), для цілі scope — rights_require_scope, з точно оголошеними дією, міткою виду й параметром цілі. Інакше зробіть функцію SECURITY INVOKER або залиште лише викликача service.",
+      en: "The named check counts only once the body applies it through the call guard: the first statement of the outer block (no DECLARE or EXCEPTION section) is PERFORM simetra.rights_require('<action>', '<kind label>', <row parameter or NULL>) — rights_require_scope for a scope target — with exactly the declared action, kind label and target parameter. Otherwise remove the check from the declaration or make the function SECURITY INVOKER.",
+      uk: "Названа перевірка діє, лише коли тіло застосовує її запобіжником виклику: перший оператор зовнішнього блоку (без секцій DECLARE і EXCEPTION) — PERFORM simetra.rights_require('<дія>', '<мітка виду>', <параметр рядка або NULL>), для цілі scope — rights_require_scope, з точно оголошеними дією, міткою виду й параметром цілі. Інакше приберіть check з декларації або зробіть функцію SECURITY INVOKER.",
     },
   },
   "sql.declaration-anonymous-definer": {

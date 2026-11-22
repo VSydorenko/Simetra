@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { compile, explainObject } from "simetra/compiler"
+import { compile, explainFunction, explainObject } from "simetra/compiler"
+import { declaredFunctionStates } from "../sql/guard-of"
 import { readReferenceDomain } from "./fixtures/reference-domain"
 import {
+  DIMENSION_SQL,
+  dimensionFunction,
+  teamScopeKind,
+  policyDomain,
   ORG_MEMBER_ROLE_ID,
   ROLE_FILE,
   SET_FILE,
@@ -13,7 +18,15 @@ import {
   rightsFiles,
   withRoles,
 } from "./fixtures/rights"
-import { attribute, metaFiles, project, salesDocument } from "./helpers"
+import {
+  SCOPE_FUNCTIONS_FILE,
+  acceptDebt,
+  attribute,
+  metaFiles,
+  project,
+  salesDocument,
+  uuid,
+} from "./helpers"
 
 async function referenceModel() {
   const result = await compile(readReferenceDomain())
@@ -166,5 +179,174 @@ describe("explainObject", () => {
     expect(
       explainObject(await referenceModel(), { kind: "Catalog", name: "Nope" })
     ).toBeUndefined()
+  })
+})
+
+describe("explainFunction", () => {
+  const SQL = "sql/public/fns.sql"
+  const FUNCTIONS = "sql/public/fns.functions.json"
+  const GUARDED =
+    "BEGIN PERFORM simetra.rights_require('read', 'task', p_row); END"
+  const UNGUARDED = "BEGIN PERFORM 1; END"
+
+  const files = (
+    text: string,
+    options: { declare?: boolean; extra?: string } = {}
+  ) => {
+    const all = withRoles()
+    all.set(
+      SQL,
+      `CREATE FUNCTION public.f(p_row uuid) RETURNS void LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$${text}$$;\n${options.extra ?? ""}`
+    )
+    if (options.declare !== false) {
+      all.set(
+        FUNCTIONS,
+        JSON.stringify({
+          functions: [
+            {
+              id: uuid(7902),
+              function: { name: "f" },
+              callers: ["user", "service"],
+              check: {
+                action: "read",
+                object: { kind: "Document", name: "Task" },
+                row: "p_row",
+              },
+            },
+          ],
+        })
+      )
+    }
+    return all
+  }
+  const explain = async (all: Map<string, string>, name = "f") =>
+    explainFunction(await compile(all, { repair: true }), {
+      schema: "public",
+      name,
+    })
+
+  it("a declared function with the guard: callers, roles per provider, the check in words, applied", async () => {
+    const e = await explain(files(GUARDED))
+    expect(e).toEqual({
+      function: { schema: "public", name: "f" },
+      callers: ["user", "service"],
+      roles: {
+        supabase: [
+          { caller: "user", role: "authenticated" },
+          { caller: "service", role: "service_role" },
+        ],
+        postgres: [{ caller: "user", role: "simetra_user" }],
+      },
+      check: "action `read` of Document `Task` on row `p_row`",
+      state: "applied",
+    })
+  })
+
+  it("without the guard the state is not-applied with the reason", async () => {
+    expect((await explain(files(UNGUARDED)))?.state).toBe(
+      "not-applied (firstStatement)"
+    )
+  })
+
+  it("an undeclared function is none, callers are not invented from a verbatim grant", async () => {
+    // Invoker-функція: definer без декларації — помилка поза класом ремонту.
+    const all = withRoles()
+    all.set(
+      SQL,
+      "CREATE FUNCTION public.f(p_row uuid) RETURNS void LANGUAGE sql STABLE SECURITY INVOKER SET search_path = '' AS $$SELECT 1$$;\nGRANT EXECUTE ON FUNCTION public.f(uuid) TO authenticated;\n"
+    )
+    const e = await explain(await acceptDebt(all))
+    expect(e).toEqual({
+      function: { schema: "public", name: "f" },
+      state: "none",
+    })
+    expect(e).not.toHaveProperty("callers")
+  })
+
+  it("a declaration that is also a platform form: the roles follow the form, not the declared callers", async () => {
+    const all = policyDomain(dimensionFunction())
+    all.set("sql/public/region.sql", DIMENSION_SQL)
+    all.set(
+      "sql/public/region.functions.json",
+      JSON.stringify({
+        functions: [
+          {
+            id: uuid(7903),
+            function: { name: "region_ids" },
+            callers: ["service", "user"],
+          },
+        ],
+      })
+    )
+    const e = explainFunction(
+      await compile(await acceptDebt(all), { repair: true }),
+      { schema: "public", name: "region_ids" }
+    )
+    // Форма перемагає декларацію: генератор грантів відкликає в усіх.
+    expect(e?.callers).toEqual(["service", "user"])
+    expect(e?.roles).toEqual({ supabase: [], postgres: [] })
+  })
+
+  it("an invoker function with a declared check is none", async () => {
+    const all = files(GUARDED)
+    all.set(SQL, all.get(SQL)!.replace("SECURITY DEFINER", "SECURITY INVOKER"))
+    const e = await explain(all)
+    // Перевірку invoker-функції веде RLS; compile дає check-form `invoker`,
+    // тож моделі немає — стан не вигадується.
+    expect(e).toBeUndefined()
+  })
+
+  it("an undeclared platform form: roles equal the generated GRANT EXECUTE units, state names the form", async () => {
+    const all = policyDomain(teamScopeKind())
+    all.set(
+      SCOPE_FUNCTIONS_FILE,
+      "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n"
+    )
+    const result = await compile(await acceptDebt(all), { repair: true })
+    const e = explainFunction(result, { schema: "public", name: "team_ids" })
+    expect(e?.state).toBe("platform-form (setFunction)")
+    expect(e).not.toHaveProperty("callers")
+    const granted = result
+      .model!.sqlUnits.filter(
+        (u) =>
+          u.generator === "functionExecute" &&
+          u.sql.startsWith("GRANT EXECUTE") &&
+          u.sql.includes("public.team_ids")
+      )
+      .map((u) => /TO "?([\w]+)"?;/.exec(u.sql)![1])
+      .sort()
+    expect(granted.length).toBeGreaterThan(0)
+    expect(e!.roles!.supabase.map((r) => r.role).sort()).toEqual(granted)
+    // Профіль postgres не має ролі для `service`.
+    expect(e!.roles!.postgres.map((r) => r.caller)).toEqual(["user", "command"])
+  })
+
+  it("an unknown function is undefined", async () => {
+    expect(await explain(files(GUARDED), "missing")).toBeUndefined()
+  })
+})
+
+describe("declaredFunctionStates", () => {
+  // Мутація: `?? callers` замість помилки — відсутня група `EXECUTE` мовчки
+  // показується як гранти викликачів.
+  it("a declared function without an execute group is an internal error", () => {
+    const declared = [
+      {
+        declaration: { function: { name: "f" }, callers: ["user"] },
+        unit: { identity: "function:public.f()" },
+        key: { schema: "public", name: "f" },
+      },
+    ] as unknown as Parameters<typeof declaredFunctionStates>[0]
+    expect(() =>
+      declaredFunctionStates(
+        declared,
+        new Map(),
+        [],
+        [],
+        [],
+        {} as never,
+        {} as never
+      )
+    ).toThrow("internal: no execute purposes for public.f")
   })
 })

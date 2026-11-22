@@ -278,7 +278,8 @@ function argsFor(tool: Tool): ArgsDef {
   } else if (tool.name === "explain") {
     args.target = {
       type: "positional",
-      description: "<Kind>.<Name>, e.g. Document.ServiceAccrual",
+      description:
+        "<Kind>.<Name>, e.g. Document.ServiceAccrual, or <schema>.<function>, e.g. public.post_order (a schema named like a kind, or containing a dot, needs the JSON input of MCP)",
       required: true,
     }
     args.dir = {

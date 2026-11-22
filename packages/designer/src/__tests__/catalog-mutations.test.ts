@@ -51,7 +51,14 @@ const RPC_DEFINER =
 // Мутація через інструмент і компіляція результату: дві компіляції проєкту на тест — бюджет `TOOL_PIPELINE`
 describe("mutation tools", TOOL_PIPELINE, () => {
   it("only delete is destructive; every mutation writes files", () => {
-    for (const name of ["create", "add", "rename", "delete", "promote"]) {
+    for (const name of [
+      "create",
+      "add",
+      "declare-function",
+      "rename",
+      "delete",
+      "promote",
+    ]) {
       const t = toolByName(name)!
       expect(t.files).toBe("write")
       expect(t.database).toBe("none")
@@ -86,6 +93,39 @@ describe("mutation tools", TOOL_PIPELINE, () => {
       await readFile(join(dir, CURRENCY), "utf8")
     ) as { attributes: { name: string }[] }
     expect(currency.attributes.map((a) => a.name)).toContain("note")
+  })
+
+  it("fix writes a repair that removes an error while a repair-class error stays", async () => {
+    const dir = await project()
+    await writeFile(join(dir, RPC_SQL), RPC_DEFINER)
+    const adp = "sql/app/adp.sql"
+    await writeFile(
+      join(dir, adp),
+      "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT EXECUTE ON FUNCTIONS TO anon;\n"
+    )
+    await writeFile(
+      join(dir, "sql-debt.json"),
+      JSON.stringify({
+        units: ["defaultPrivileges::app:function:grant:anon:execute"],
+      })
+    )
+    const r = await run("fix", dir, {})
+    expect(r.ok).toBe(false)
+    expect(r.written).toBe(true)
+    expect(
+      r.diagnostics.filter((d) => d.severity === "error").map((d) => d.code)
+    ).toEqual(["sql.definer-caller-unchecked"])
+    expect(existsSync(join(dir, adp))).toBe(false)
+  })
+
+  it("fix writes nothing when it removes no repair-class error", async () => {
+    const dir = await project()
+    await writeFile(join(dir, RPC_SQL), RPC_DEFINER)
+    const before = await snapshotOf(dir)
+    const r = await run("fix", dir, {})
+    expect(r.ok).toBe(false)
+    expect(r.written).toBe(false)
+    expect(await snapshotOf(dir)).toEqual(before)
   })
 
   it("rename on a folder with repair-class errors only writes nothing", async () => {
