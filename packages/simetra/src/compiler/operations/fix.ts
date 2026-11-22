@@ -488,7 +488,8 @@ export function completeFiles(
  * (`compileInput` з `repair`): результат компілюється в тому ж режимі, і
  * прийнятий за `acceptsRepair` несе `written` (спека декларацій функцій §5.1).
  * `notes` — діагностики самої мутації (перехід у форму платформи), що
- * стають поряд із діагностиками компіляції результату.
+ * стають поряд із діагностиками компіляції результату. `allow` — виняток
+ * `acceptsRepair` (див. там).
  */
 export async function completeAndCompile(
   before: ReadonlyMap<string, string>,
@@ -496,14 +497,16 @@ export async function completeAndCompile(
   o: CompletionOptions,
   only?: ReadonlySet<string>,
   repair?: readonly RepairKey[],
-  notes: readonly Diagnostic[] = []
+  notes: readonly Diagnostic[] = [],
+  allow?: (d: Diagnostic) => boolean
 ): Promise<OperationResult> {
   const completed = completeFiles(after, o, only)
   return (
     await compileCompletion(
       before,
       { ...completed, diagnostics: [...completed.diagnostics, ...notes] },
-      repair
+      repair,
+      allow
     )
   ).result
 }
@@ -538,14 +541,17 @@ export async function completeNarrowAndCompile(
 async function compileCompletion(
   before: ReadonlyMap<string, string>,
   completed: CompletionResult,
-  repair?: readonly RepairKey[]
+  repair?: readonly RepairKey[],
+  allow?: (d: Diagnostic) => boolean
 ): Promise<CompiledCompletion> {
   const compiled = await compile(
     completed.files,
     repair === undefined ? {} : { repair: true }
   )
   const written =
-    repair !== undefined && !compiled.ok && acceptsRepair(repair, compiled)
+    repair !== undefined &&
+    !compiled.ok &&
+    acceptsRepair(repair, compiled, allow)
   return {
     result: {
       ok: compiled.ok,

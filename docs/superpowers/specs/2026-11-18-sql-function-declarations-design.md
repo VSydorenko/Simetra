@@ -546,6 +546,7 @@ ACL функції з грантом ролі поза призначенням�
 | `sql.declaration-duplicate` | помилка | Д1 | два записи на одну функцію |
 | `sql.declaration-platform-form` | помилка | Д1 | декларація на форму платформи |
 | `sql.declaration-platform-form-widens` | попередження | Д1 | мутація перетворила функцію на форму платформи з ширшими призначеннями |
+| `sql.declaration-execute-widened` | попередження | Д4 | `declare-function` відкрив `EXECUTE` ролям, яких попередній запис не називав |
 | `sql.declaration-check-missing` | помилка | Д1 | definer-функція з `user` чи `command` без `check` |
 | `sql.declaration-anonymous-definer` | помилка | Д1 | definer-функція з `anonymous` |
 | `sql.declaration-check-form` | помилка | Д2 | `check` не відповідає об'єкту чи підпису |

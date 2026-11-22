@@ -1618,6 +1618,16 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Гранти форми платформи виводить платформа з метаданих, і вони ширші за викликачів, яких називала декларація. Перевірте, що цим ролям можна кликати функцію, або не робіть її формою платформи.",
     },
   },
+  "sql.declaration-execute-widened": {
+    en: (p) =>
+      `The declaration of ${p.function} now grants EXECUTE to ${p.roles}, which the previous declaration did not`,
+    uk: (p) =>
+      `Декларація ${p.function} тепер відкриває EXECUTE ще й ${p.roles}, чого попередня декларація не робила`,
+    hint: {
+      en: "Check that these roles may call the function. A function that acts as its owner (SECURITY DEFINER) must also apply a rights check for them.",
+      uk: "Перевірте, що цим ролям можна кликати функцію. Функція, що діє від власника (SECURITY DEFINER), мусить ще й застосовувати перевірку прав для них.",
+    },
+  },
   "sql.declaration-check-missing": {
     en: (p) =>
       `${p.function} is SECURITY DEFINER and acts for a user (callers user or command), but its declaration names no check`,

@@ -15,7 +15,7 @@ import {
   type PlpgsqlParser,
   type PlpgsqlStatement,
 } from "./plpgsql"
-import { declareSection } from "./rewrite/lex"
+import { declareSection, dollarLiterals, outerBeginEnd } from "./rewrite/lex"
 import type { VerbatimUnit } from "./units"
 
 /** Причини `sql.declaration-check-not-applied` (спека декларацій функцій §5.2). */
@@ -95,7 +95,7 @@ const bareName = (node: unknown): string | undefined => {
 }
 
 /** Функція запобіжника форми цілі декларації: ім'я тримає генератор. */
-const guardFunctionOf = (
+export const guardFunctionOf = (
   check: NonNullable<SqlFunctionDeclaration["check"]>
 ) =>
   check.scope !== undefined
@@ -214,6 +214,60 @@ export function guardOf(
   )
     return fail("arguments")
   return hasExceptionBlock ? fail("exceptionBlock") : { ok: true }
+}
+
+/**
+ * Місце вставки запобіжника (спека декларацій функцій §5.6, Р3): зсув у
+ * `unit.sql` одразу після слова `BEGIN` зовнішнього блоку — або `undefined`,
+ * коли вставка не доводиться безпечною. Умови разом: функція `SECURITY
+ * DEFINER` мовою `plpgsql`, тіло в доларових лапках, без `DECLARE`, без
+ * секції `EXCEPTION` зовнішнього блоку (вона перехопила б відмову запобіжника
+ * власної перевірки блоку), у тексті немає жодного звернення до функцій
+ * запобіжника (будь-якої форми: `PERFORM … WHERE false`, динамічний SQL) і
+ * `guardOf` дав би причину `firstStatement`. Єдине місце цих умов: `fix`
+ * вставляє запобіжник саме тут, а `declare-function` пропускає ціль у цей
+ * стан, лише коли `fix` його гарантовано вставить.
+ */
+export function guardInsertionPoint(
+  unit: VerbatimUnit,
+  check: NonNullable<SqlFunctionDeclaration["check"]>,
+  units: readonly VerbatimUnit[],
+  plpgsql: PlpgsqlParser,
+  parse: SqlParser
+): number | undefined {
+  if (!isSecurityDefiner(unit, units)) return undefined
+  const shape = guardShape(unit, guardFunctionOf(check), plpgsql, parse)
+  if (!("reason" in shape) || shape.reason !== "firstStatement") {
+    return undefined
+  }
+  const parsed = plpgsql(unit.sql)
+  if (!parsed.ok || parsed.fn?.author.hasExceptionBlock !== false) {
+    return undefined
+  }
+  const lowered = unit.sql.toLowerCase()
+  if (
+    [RIGHTS_FUNCTIONS.require, RIGHTS_FUNCTIONS.requireScope].some((guard) =>
+      lowered.includes(guard.name)
+    )
+  ) {
+    return undefined
+  }
+  let text: string | undefined
+  try {
+    text = functionBodyText(unit.sql)
+  } catch {
+    return undefined
+  }
+  if (text === undefined) return undefined
+  // Літерал тіла — єдиний доларовий з вмістом, що дорівнює тексту тіла: інший
+  // доларовий літерал `CREATE FUNCTION` (значення параметра) не збігається, а
+  // неоднозначність — відмова.
+  const bodies = [...dollarLiterals(unit.sql)].filter(
+    (literal) => unit.sql.slice(literal.start, literal.end) === text
+  )
+  if (bodies.length !== 1) return undefined
+  const begin = outerBeginEnd(text)
+  return begin === undefined ? undefined : bodies[0]!.start + begin
 }
 
 /**

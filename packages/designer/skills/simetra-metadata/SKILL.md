@@ -23,6 +23,7 @@ diagnostics themselves.
 | New elements miss `id` / `physicalName` / `kindLabel`, or files are not canonical | `fix`        | `simetra fix [dir]`                      | `fix` with `{}`                             |
 | New object                                                                        | `create`     | `simetra create '<json>' [dir]`          | `create` with `{kind, name, data?}`         |
 | New element in a collection of an object or of the project root                   | `add`        | `simetra add '<json>' [dir]`             | `add` with `{target, collection, element}`  |
+| Declare who may execute a SQL function and which rights check it applies             | `declare-function` | `simetra declare-function '<json>' [dir]` | `declare-function` with `{function, callers, check?}` |
 | Rename an object or a nested element                                              | `rename`     | `simetra rename '<json>' [dir]`          | `rename` with `{target, newName}`           |
 | Remove an object or a nested element                                              | `delete`     | `simetra delete '<json>' [dir] --yes`    | `delete` with `{target, confirm}`           |
 | Turn an adopted `CustomTable` into a Catalog, Document or InformationRegister     | `promote`    | `simetra promote <json\|-> [dir]`        | `promote` with `{target, into, columns, …}` |
@@ -36,7 +37,7 @@ diagnostics themselves.
 | Read application data of the development database as a user, with that user's rights | `data-read` | `simetra data-read '<json>' [dir] --data-url-env <VAR> --as <uuid>` | `data-read` with `{query}` |
 | Change application data of the development database as a user (seed test data, reproduce a bug) | `data-command` | `simetra data-command '<json>' [dir] --data-url-env <VAR> --as <uuid>` | `data-command` with `{operations}` |
 
-`fix`, `create`, `add`, `rename`, `delete`, `promote`, `introspect` change files;
+`fix`, `create`, `add`, `declare-function`, `rename`, `delete`, `promote`, `introspect` change files;
 `plan` writes only its plan file; others only read files. `introspect`, `diff`,
 `plan` read the database; `apply`, `roles`, `rights-maintenance` write to it.
 

@@ -51,7 +51,14 @@ const RPC_DEFINER =
 // Мутація через інструмент і компіляція результату: дві компіляції проєкту на тест — бюджет `TOOL_PIPELINE`
 describe("mutation tools", TOOL_PIPELINE, () => {
   it("only delete is destructive; every mutation writes files", () => {
-    for (const name of ["create", "add", "rename", "delete", "promote"]) {
+    for (const name of [
+      "create",
+      "add",
+      "declare-function",
+      "rename",
+      "delete",
+      "promote",
+    ]) {
       const t = toolByName(name)!
       expect(t.files).toBe("write")
       expect(t.database).toBe("none")

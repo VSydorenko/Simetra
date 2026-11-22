@@ -97,15 +97,19 @@ export async function compileInput(
 /**
  * Правило прийому мутації в режимі `repair` (§5.1): результат пишеться, якщо
  * модель є (поза класом помилок немає) і жодна помилка класу не нова відносно
- * входу — за кортежем ключа, а не за кількістю.
+ * входу — за кортежем ключа, а не за кількістю. `allow` — єдиний виняток
+ * операції (`declare-function`: перехід самої цілі в `check-not-applied` з
+ * причиною, яку `fix` гарантовано виправить): нова помилка, яку він
+ * прийняв, не відмовляє.
  */
 export function acceptsRepair(
   accepted: readonly RepairKey[],
-  compiled: CompileResult
+  compiled: CompileResult,
+  allow: (d: Diagnostic) => boolean = () => false
 ): boolean {
   return (
     compiled.model !== undefined &&
-    newRepairErrors(accepted, compiled.diagnostics).length === 0
+    newRepairErrors(accepted, compiled.diagnostics).every(allow)
   )
 }
 
