@@ -3,14 +3,20 @@ import { createIsomorphicFn } from "@tanstack/react-start"
 import type { DataSnapshot } from "simetra/data"
 import { markHydrated } from "#instrument"
 import { sanitizeMatchErrors } from "./host-errors"
-import { createHostScope, type AppRouterContext } from "./host-scope"
+import {
+  createHostScope,
+  type AppRouterContext,
+  type HostScope,
+} from "./host-scope"
 import {
   createClientRuntime,
   establishServerSession,
   clientContext,
 } from "./host-session"
 import { routeTree } from "./routeTree.gen"
+import { signalsConfig } from "./server/config"
 import { sessionClaims } from "./server/session"
+import { clientSignals } from "./signals-client"
 import { ssrTransport } from "./server/ssr-transport"
 
 // Розрізнення сервер/клієнт — будовою (компілятор Start прибирає чужу гілку з
@@ -27,6 +33,22 @@ const establishSession = createIsomorphicFn()
     return Promise.resolve()
   })
 
+// Сервер сигналів не збирає (І8): клієнтська гілка — єдине місце, що тягне
+// `centrifuge`, а компілятор Start прибирає її із серверної збірки
+const signalsFactory = createIsomorphicFn()
+  .server(
+    (
+      _scope: Pick<HostScope, "holder" | "toLogin">,
+      _url: string
+    ): ReturnType<typeof clientSignals> | undefined => undefined
+  )
+  .client((scope, url) => clientSignals(scope, url))
+
+/** Адреса Centrifugo лише для SSR (Р10): ключів підпису клієнт не бачить ніколи. */
+const serverSignalsUrl = createIsomorphicFn()
+  .server(() => signalsConfig()?.url)
+  .client(() => undefined)
+
 /** Що сервер віддає клієнту крім розмітки: знімок рантайму суб'єкта сесії. */
 type Json =
   | string
@@ -39,6 +61,8 @@ type Json =
 /** `data` — знімок T4: за його контрактом це чистий JSON; `null` — сесії чи рантайму немає. */
 interface Dehydrated {
   data: Json
+  /** Лише адреса: не змінна збірки, а те, що сервер читає з оточення (Р10). */
+  signalsUrl?: string
 }
 
 /** Фабрика на кожен запит (§4.6): рантайм і тримач живуть не довше запиту. */
@@ -53,6 +77,7 @@ export function getRouter() {
       router.serverSsr.onCleanup(action)
     },
     markHydrated,
+    createSignals: (url) => signalsFactory(scope, url),
     establish: (self, context) => establishSession(self, context),
   })
 
@@ -67,15 +92,19 @@ export function getRouter() {
     defaultPendingMinMs: 0,
     dehydrate: (): Dehydrated => {
       const runtime = scope.holder.current()
+      const signalsUrl = serverSignalsUrl()
       return {
         data:
           runtime === undefined
             ? null
             : (runtime.dehydrate() as unknown as Json),
+        ...(signalsUrl === undefined ? {} : { signalsUrl }),
       }
     },
     hydrate: (dehydrated) => {
-      const { data } = dehydrated as Dehydrated
+      const { data, signalsUrl } = dehydrated as Dehydrated
+      // До рантайму й навіть без знімка: вхід з форми теж створює рантайм із сигналами
+      if (typeof signalsUrl === "string") scope.signalsUrl = signalsUrl
       if (data === null) return
       try {
         scope.holder.hydrateFrom(data as unknown as DataSnapshot, (subject) =>

@@ -71,6 +71,12 @@ export function RootLayout({ scope }: { scope: HostScope }) {
   const navigation = useMemo(() => routerNavigation(router), [router])
   // Один раз на гідратацію: звірка, `data-hydrated`, видимість
   useEffect(() => startClient(scope, document, window), [scope])
+  // Шина вкладок живе стільки, скільки ефект: StrictMode закриває її й
+  // відкриває знову, подвійного слухача не лишається
+  useEffect(() => {
+    scope.tabs.start()
+    return () => scope.tabs.close()
+  }, [scope])
   return (
     <app.Provider>
       <NavigationProvider adapter={navigation}>

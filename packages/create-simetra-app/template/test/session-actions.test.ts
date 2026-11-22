@@ -101,6 +101,46 @@ describe("signOut", () => {
     expect(scope.holder.closed()).toBe("signed-out")
   })
 
+  it("tells the other tabs which subject signed out, after the holder is closed", async () => {
+    const posted: unknown[] = []
+    const scope = createHostScope({
+      toLogin: vi.fn(),
+      onResponseEnd: vi.fn(),
+      markHydrated: vi.fn(),
+      establish: () => Promise.resolve(),
+      createChannel: () => ({
+        onmessage: null,
+        postMessage: (message) => {
+          // Вкладка вже без рантайму, коли шина повідомляє решту
+          expect(scope.holder.current()).toBeUndefined()
+          posted.push(message)
+        },
+        close: vi.fn(),
+      }),
+    })
+    scope.holder.replace(runtimeOf("user-a"))
+    stubFetch(Response.json({ success: true }))
+    await signOut(scope)
+    expect(posted).toEqual([{ type: "signed-out", subject: "user-a" }])
+  })
+
+  it("publishes nothing when the server refused the sign-out", async () => {
+    const createChannel = vi.fn()
+    const scope = createHostScope({
+      toLogin: vi.fn(),
+      onResponseEnd: vi.fn(),
+      markHydrated: vi.fn(),
+      establish: () => Promise.resolve(),
+      createChannel,
+    })
+    const runtime = runtimeOf("user-a")
+    scope.holder.replace(runtime)
+    stubFetch(new Response("no", { status: 500 }))
+    await signOut(scope)
+    expect(createChannel).not.toHaveBeenCalled()
+    runtime.dispose()
+  })
+
   it("keeps the runtime when the server refused the sign-out", async () => {
     const scope = newScope()
     const runtime = runtimeOf("user-a")
