@@ -341,6 +341,8 @@ export const COMPILER_RULES = [
   "plan.shadow-base-unsupported",
   "plan.identity-table-missing",
   "plan.identity-trigger-locked",
+  "plan.storage-added",
+  "plan.storage-removed",
   "plan.type-guard-unsupported",
   "plan.type-change-dependent",
   "plan.promotion-record-missing",

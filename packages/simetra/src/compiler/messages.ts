@@ -4932,6 +4932,30 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
           : `Нічого не сплановано й не записано. Виконайте це зняття від ${p.login}. Якщо живий тригер змінено поза Simetra, вважайте це ознакою підробки й звірте його з власником таблиці.`,
     },
   },
+  "plan.storage-added": {
+    en: (p) =>
+      `The plan adds the file storage property to the live table ${p.table}: its existing rows would have no file size and no byte record`,
+    uk: (p) =>
+      `План додає властивість storage до живої таблиці ${p.table}: наявні рядки лишилися б без розміру файлу й без байтів`,
+    hint: {
+      en: (p) =>
+        `Nothing was planned or written. Put the files in a new object that has storage from the start, and move the rows there; a catalog with a live table cannot gain storage in place (table ${p.table}).`,
+      uk: (p) =>
+        `Нічого не сплановано й не записано. Заведіть новий об'єкт зі storage з самого початку й перенесіть рядки туди: довідник з живою таблицею не може отримати storage на місці (таблиця ${p.table}).`,
+    },
+  },
+  "plan.storage-removed": {
+    en: (p) =>
+      `The plan removes the file storage property from the live table ${p.table}: the bytes of its rows would stay in the bucket with no row to own them`,
+    uk: (p) =>
+      `План прибирає властивість storage з живої таблиці ${p.table}: байти її рядків лишилися б у бакеті без рядка-власника`,
+    hint: {
+      en: (p) =>
+        `Nothing was planned or written. Delete the rows of ${p.table} through commands first so the runtime removes their bytes, then drop the whole object; storage cannot be removed from a live table in place.`,
+      uk: (p) =>
+        `Нічого не сплановано й не записано. Спершу видаліть рядки ${p.table} командами, щоб рантайм прибрав їхні байти, а тоді прибирайте весь об'єкт: storage не знімається з живої таблиці на місці.`,
+    },
+  },
   "plan.type-guard-unsupported": {
     en: (p) =>
       p.reason === "equality"
