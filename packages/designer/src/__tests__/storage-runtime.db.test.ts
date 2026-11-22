@@ -107,9 +107,12 @@ const target = heldResource<Env>(async (use) => {
 })
 
 /** Порт, що першому оператору за `pattern` дає `40001` замість виконання: відкат і повтор спроби. */
-function failingOnce(base: CommandDatabase, pattern: RegExp): CommandDatabase {
+function failingOnce(
+  base: CommandDatabase,
+  pattern: RegExp
+): { database: CommandDatabase; fired: () => boolean } {
   let failed = false
-  return {
+  const database: CommandDatabase = {
     async connect() {
       const client = await base.connect()
       return {
@@ -126,6 +129,7 @@ function failingOnce(base: CommandDatabase, pattern: RegExp): CommandDatabase {
       }
     },
   }
+  return { database, fired: () => failed }
 }
 
 const bodyOf = (text: string) => new Blob([text]).stream()
@@ -243,12 +247,13 @@ describe.skipIf(testProvider() !== "postgres")(
     })
 
     it("a retried attempt leaves one row and one accounting step", async () => {
-      const rt = await runtimeOf(
-        failingOnce(fromPgPool(env.pool), /ticket_save/)
-      )
+      const injected = failingOnce(fromPgPool(env.pool), /ticket_save/)
+      const rt = await runtimeOf(injected.database)
       const before = (await usage(env.writer.org))[0] ?? 0
       const id = randomUUID()
       await attach(rt, id)
+      // Без цього тест зеленів би й без жодного повтору
+      expect(injected.fired()).toBe(true)
       expect(await rowsOf(id)).toHaveLength(1)
       expect(await usage(env.writer.org)).toEqual([before + 5])
       expect(await pendingLeft()).toBe(0)
@@ -346,8 +351,8 @@ describe.skipIf(testProvider() !== "postgres")(
       })
     })
 
-    describe("І11: bytes disappear only with a confirmed delete", () => {
-      it("a catalog with storage has no delete operation, so nothing removes its bytes", async () => {
+    describe("І11: markDeletion keeps the file", () => {
+      it("the row and the bytes stay and the accounting is unchanged; a delete is refused", async () => {
         const rt = await runtimeOf()
         const id = randomUUID()
         const key = fileObjectKey(objectId(), id)
@@ -357,13 +362,26 @@ describe.skipIf(testProvider() !== "postgres")(
           maxBytes: LIMIT,
           instance,
         })
-        await attach(rt, id, { size: 4 })
+        const created = await attach(rt, id, { size: 4 })
+        const version = created.changes[0]!.version
+        const before = await usage(env.writer.org)
+        await rt.run(env.writer.session, {
+          action: "markDeletion",
+          object: TICKET,
+          id,
+          expectedVersion: version,
+          mark: true,
+        })
+        expect(await rowsOf(id)).toHaveLength(1)
+        expect(await usage(env.writer.org)).toEqual(before)
+        expect(await env.files.get(key)).not.toBeNull()
+        // Ядра `delete` у довідника зі `storage` немає
         const error = await rt
           .run(env.writer.session, {
             action: "delete",
             object: TICKET,
             id,
-            expectedVersion: 1,
+            expectedVersion: version + 1,
           })
           .then(
             () => {
@@ -372,7 +390,6 @@ describe.skipIf(testProvider() !== "postgres")(
             (e: unknown) => e
           )
         expect((error as CommandFailure).error.code).toBe("command.invalid")
-        expect(await rowsOf(id)).toHaveLength(1)
         expect(await env.files.get(key)).not.toBeNull()
       })
     })
