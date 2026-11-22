@@ -7,7 +7,12 @@ import { platformRoleSet, type ApplyDatabase } from "simetra/schema"
 import { describe, expect, it } from "vitest"
 import { renderResult } from "../cli/render"
 import { toolByName } from "../tools/catalog"
-import { projectRoleSet, runRoles, type RolesData } from "../tools/roles-tool"
+import {
+  clusterRoles,
+  projectRoleSet,
+  runRoles,
+  type RolesData,
+} from "../tools/roles-tool"
 import { project, useTmpProjects } from "./helpers/catalog"
 
 useTmpProjects()
@@ -134,6 +139,36 @@ describe("roles: the project file", () => {
     ).stdout
     expect(text.split("\n")).toEqual([
       `target: ${RUNTIME} present; added membership in anon`,
+    ])
+  })
+
+  it("reports a parent added by the cluster path on the login role line, not as a role", () => {
+    const data: RolesData = {
+      roles: clusterRoles({
+        created: [],
+        present: [RUNTIME, PLATFORM_ROLES.files],
+        skipped: [],
+        added: [{ role: RUNTIME, parents: [PLATFORM_ROLES.files] }],
+      }),
+      skipped: [],
+    }
+    expect(data.roles).toEqual([
+      {
+        server: "target",
+        name: RUNTIME,
+        outcome: "present",
+        added: [PLATFORM_ROLES.files],
+      },
+      { server: "target", name: PLATFORM_ROLES.files, outcome: "present" },
+    ])
+    const text = renderResult(
+      toolByName("roles")!,
+      { ok: true, changes: [], diagnostics: [], data, written: false },
+      { dir: ".", locale: "en", format: "text" }
+    ).stdout
+    expect(text.split("\n")).toEqual([
+      `target: ${RUNTIME} present; added membership in ${PLATFORM_ROLES.files}`,
+      `target: ${PLATFORM_ROLES.files} present`,
     ])
   })
 

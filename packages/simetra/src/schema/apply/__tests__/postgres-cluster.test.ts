@@ -684,7 +684,10 @@ describe("ensurePostgresCluster", () => {
       const result = await ensurePostgresCluster(dbs, conns, set)
       expect(result).toMatchObject({
         ok: true,
-        value: { created: [`${login.name}:${PLATFORM_ROLES.files}`] },
+        value: {
+          created: [],
+          added: [{ role: login.name, parents: [PLATFORM_ROLES.files] }],
+        },
       })
       expect(
         calls
@@ -694,6 +697,58 @@ describe("ensurePostgresCluster", () => {
       ).toEqual([
         `GRANT ${PLATFORM_ROLES.files} TO ${login.name} WITH INHERIT FALSE, SET TRUE`,
       ])
+    })
+
+    // Між фазою читання й записом інший адміністратор додав небезпечне
+    // членство: фаза запису звіряє форму знову в тій самій транзакції
+    it("refuses and grants nothing when the role turns unsafe between the phases", async () => {
+      const present = presentCluster()
+      let reads = 0
+      const { dbs, calls } = trapPort((sql) => {
+        if (!sql.includes("WITH RECURSIVE reach")) return present(sql)
+        reads += 1
+        return present(sql)
+          .map((r) =>
+            r.name === login.name
+              ? {
+                  ...r,
+                  memberOf: (r.memberOf as Membership[]).filter(
+                    (m) => m.role !== PLATFORM_ROLES.files
+                  ),
+                }
+              : r
+          )
+          .map((r) =>
+            // Перше читання — чисте; наступні (фаза запису) — з зайвим батьком
+            reads > 1 && r.name === login.name
+              ? {
+                  ...r,
+                  memberOf: [
+                    ...(r.memberOf as Membership[]),
+                    {
+                      ...(r.memberOf as Membership[])[0]!,
+                      role: "pg_read_all_data",
+                    },
+                  ],
+                }
+              : r
+          )
+      })
+      expect(await ensurePostgresCluster(dbs, conns, set)).toMatchObject({
+        ok: false,
+        error: [
+          {
+            code: "plan.platform-role-shape",
+            params: {
+              role: login.name,
+              violation: "member-of:pg_read_all_data",
+            },
+          },
+        ],
+      })
+      expect(
+        calls.flatMap((c) => c.sql).filter((q) => q.startsWith("GRANT"))
+      ).toEqual([])
     })
 
     it("refuses an extra parent before it writes", async () => {
