@@ -701,8 +701,8 @@ function knownRoles(provider: DatabaseProvider): ReadonlySet<string> {
 class BoundCheck {
   /**
    * Вердикт ланки за ідентичністю: один обхід ділять усі кандидати, тож
-   * відмовлена ланка лишається відмовленою. `true` — лише поки ланка в
-   * обході (цикл).
+   * відмовлена ланка лишається відмовленою. Поки ланка в обході — `false`
+   * (цикл — відмова).
    */
   private readonly verdicts = new Map<string, boolean>()
 
@@ -775,7 +775,10 @@ class BoundCheck {
   private routine(unit: VerbatimUnit): boolean {
     const known = this.verdicts.get(unit.identity)
     if (known !== undefined) return known
-    this.verdicts.set(unit.identity, true)
+    // Ланка, досягнута ще під час власного обходу, — цикл: рекурсивна межа
+    // не межа (Postgres однаково рекурсував би), тож відмова. Тимчасово
+    // «так» лишило б остаточне «так» за іншою ланкою циклу.
+    this.verdicts.set(unit.identity, false)
     const verdict = this.routineAllowed(unit)
     this.verdicts.set(unit.identity, verdict)
     return verdict

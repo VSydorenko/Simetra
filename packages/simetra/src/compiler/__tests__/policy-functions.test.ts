@@ -681,6 +681,39 @@ describe("policyFunctions: recognition (Р2)", () => {
     ])
   })
 
+  // Цикл ланок межі — fail-closed: ланка, якої обхід досяг удруге під час
+  // її ж обходу, не проходить, тож тимчасового вердикту, що міг би
+  // залишитися за іншою ланкою циклу, немає. Порядок кандидатів неважливий.
+  it.each(["f first", "g first"])(
+    "refuses both policy functions whose bounds reach a cycle of helpers (%s)",
+    (order) => {
+      const helpers =
+        "CREATE FUNCTION public.a() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT public.b(); SELECT s.id FROM public.secrets s $$;\n" +
+        "CREATE FUNCTION public.b() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT public.a() $$;\n"
+      const g =
+        fn(
+          `SELECT s.id FROM public.secrets s JOIN public.members m ON m.id = s.id WHERE ${ACTOR} AND s.id IN (SELECT public.b())`
+        ).replace("public.f(", "public.g(") +
+        "CREATE POLICY secrets_read ON public.secrets FOR SELECT TO authenticated USING (id IN (SELECT public.g()));\n" +
+        "GRANT SELECT ON TABLE public.secrets TO authenticated;\n" +
+        "CREATE POLICY secrets_lim ON public.secrets AS RESTRICTIVE FOR SELECT TO authenticated USING (id IN (SELECT public.b()));\n"
+      const f =
+        where("d.team_id IN (SELECT public.a())") +
+        POLICY +
+        GRANT +
+        restrictive("team_id IN (SELECT public.a())")
+      const sql = helpers + (order === "f first" ? f + g : g + f)
+      expect(
+        judged(sql)
+          .diagnostics.map((d) => [d[1], d[2], d[3]])
+          .sort()
+      ).toEqual([
+        ["public.f", "restrictiveBound", undefined],
+        ["public.g", "restrictiveBound", undefined],
+      ])
+    }
+  )
+
   it("is a repair-class error keyed by the function", () => {
     const { diagnostics } = policyFunctions(input(fn() + POLICY))
     expect(diagnostics.map(isRepairError)).toEqual([true])
