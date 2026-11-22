@@ -693,8 +693,10 @@ describe("a policy function and its declaration (І4)", () => {
     POLICY_FUNCTION() +
     READ_POLICY("authenticated, service_role") +
     DOCS_GRANT()
+  // Режим ремонту веде стадії далі за помилками класу ремонту, тож без
+  // поглинання обидва коди тут стояли б поряд
   const codesOf = async (files: Map<string, string>) =>
-    (await compile(files)).diagnostics.map((d) => [
+    (await compile(files, { repair: true })).diagnostics.map((d) => [
       d.code,
       d.params?.function,
       d.params?.reason,
