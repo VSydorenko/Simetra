@@ -27,14 +27,31 @@ const INDEX = /^\d+$/
 
 const MEMBER = "creatorMember"
 const EXPECTED = "expectedValues"
+const VALUES = "values"
+const EXPECTED_VERSION = "expectedVersion"
+const SECTIONS = "tabularSections"
+const DELETE_IDS = "deleteIds"
 
 /**
- * Structural words that head an error path of an operation
- * (`creatorMember.<name>`, `expectedValues.<name>`). They are reserved: an
- * attribute, a tabular section or a column must not take one as its logical
- * name, or its error path could not be told from the structural one.
+ * Structural words that head an error path of an operation: the fields of
+ * the operation forms (`values`, `expectedValues`, `expectedVersion`,
+ * `tabularSections`, `deleteIds`, `creatorMember`), which `operationRefusalPath`
+ * and the hooks of the kernel put first. They are reserved: an attribute, a
+ * tabular section or a column must not take one as its logical name, or its
+ * error path could not be told from the structural one. The operation keys
+ * `action`, `object` and `id` are not listed: the first two fail only while
+ * the object is not resolved (no catalog entry, nothing to map), `id` is the
+ * standard key name. Words that are names of a standard element of a kind
+ * are never reserved (a unit test holds the intersection empty).
  */
-export const STRUCTURAL_PATH_WORDS: readonly string[] = [MEMBER, EXPECTED]
+export const STRUCTURAL_PATH_WORDS: readonly string[] = [
+  MEMBER,
+  EXPECTED,
+  VALUES,
+  EXPECTED_VERSION,
+  SECTIONS,
+  DELETE_IDS,
+]
 
 type Direction = "toWire" | "fromWire"
 

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 import { standardElementId } from "../../schemas/element-id"
 import { catalogIndex } from "../mapping"
-import { pathFromWire, pathToWire } from "../path"
+import { KIND_REGISTRY } from "../../kinds/registry"
+import { STRUCTURAL_PATH_WORDS, pathFromWire, pathToWire } from "../path"
 import {
   MEMBERSHIP_ID,
   OBJECT_ID,
@@ -175,6 +176,43 @@ describe("pathToWire / pathFromWire", () => {
   it("keeps creatorMember paths of an object without a membership catalog", () => {
     expect(pathToWire(index, ODD_ID, "creatorMember.user")).toBe(
       "creatorMember.user"
+    )
+  })
+})
+
+describe("STRUCTURAL_PATH_WORDS", () => {
+  // Стандартне ім'я елемента виду не резервується: діагностика обходить лише
+  // названі елементи, тож резерв зробив би стандартний реквізит недійсним.
+  it("shares no word with the standard names of the kind registry", () => {
+    const standard = new Set<string>()
+    for (const [kind, def] of Object.entries(KIND_REGISTRY)) {
+      // Вид, якому мінімального файлу замало (власні обов'язкові поля), не
+      // має стандартних колонок, що залежали б від них.
+      const parsed = def.schema.safeParse({ kind, name: "Sample" })
+      if (!parsed.success) continue
+      const data = parsed.data
+      const columns = [
+        ...def.standardColumns(data),
+        ...(def.tabularSectionColumns?.(data) ?? []),
+      ]
+      for (const c of columns) standard.add(c.logicalName)
+      for (const s of def.standardTabularSections?.(data) ?? [])
+        standard.add(s.logicalName)
+    }
+    expect(standard.size).toBeGreaterThan(0)
+    expect(STRUCTURAL_PATH_WORDS.filter((w) => standard.has(w))).toEqual([])
+  })
+
+  it("lists the head of every operation form", () => {
+    expect([...STRUCTURAL_PATH_WORDS].sort()).toEqual(
+      [
+        "creatorMember",
+        "deleteIds",
+        "expectedValues",
+        "expectedVersion",
+        "tabularSections",
+        "values",
+      ].sort()
     )
   })
 })
