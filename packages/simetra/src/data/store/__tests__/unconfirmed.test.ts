@@ -206,6 +206,40 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
     expect(h.fake.requests.length).toBe(sent + 2)
   })
 
+  // Системне перечитування, чию відповідь пропущено, бо завантаження вигляду
+  // осіло раніше, — теж точка осідання (§8.4, п. 7): завантаження не
+  // повторилось, бо бачило його в польоті, тож вимогу читає те саме правило
+  // одразу, а не такт інтервалу.
+  it("full, visible: a system re-read skipped because the load settled first reads the requirement at once", async () => {
+    const h = setup()
+    seed(h.fake, 1, 3)
+    const handle = h.core.view({ kind: "full", object: TASK })
+    watch(handle)
+    await settle()
+    h.fake.hold = () => true
+    handle.refresh()
+    await settle()
+    const load = h.fake.take()
+    const { epochs } = coreInternals(h.core)
+    h.core.commit(
+      (w) => w.apply(TASK, { rows: [], absent: [key(2)] }, epochs.next(), null),
+      h.core.token()
+    )
+    h.core.commit((w) => w.hide(TASK, [key(1)]), h.core.token())
+    await settle()
+    expect(h.fake.pending.length).toBeGreaterThan(0)
+    load.answer()
+    await settle()
+    const sent = h.fake.requests.length
+    await drain(h)
+    expect(handle.getSnapshot().staleComposition).toBeUndefined()
+    expect(h.fake.requests.length).toBeGreaterThan(sent)
+    const after = h.fake.requests.length
+    vi.advanceTimersByTime(30_000)
+    await drain(h)
+    expect(h.fake.requests.length).toBe(after)
+  })
+
   // Сторінка, відхилена на прихованій вкладці, — та сама гілка невидимого
   // (§8.4, п. 7; §12, Р8): повтору на ній немає, `resume()` читає раз.
   it("window page of loadAfter rejected on a hidden tab: no repeat while hidden, one read on resume()", async () => {

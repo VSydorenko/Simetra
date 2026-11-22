@@ -70,6 +70,11 @@ import type {
 /** What the writer and `revalidate` need from the core. */
 export interface WriterContext extends ReaderContext {
   readonly session: Session
+  /**
+   * Reads the view when its requirement «composition not confirmed» is
+   * pending (`requirementPending`, P4-B spec §8.4, item 7).
+   */
+  readonly readRequirement: (s: Subset) => void
   /** The tab is visible (`suspend` / `resume`, §8.4). */
   readonly tabVisible: () => boolean
   readonly registry: SubsetRegistry
@@ -1303,6 +1308,8 @@ export async function revalidateViews(
   }
   const again: Subset[] = []
   const discarded: Subset[] = []
+  // Вигляди, чию відповідь пропущено, бо їхнє завантаження осіло раніше.
+  const skipped: Subset[] = []
   settle(lease, () =>
     session.commit(
       (scope) => {
@@ -1311,7 +1318,10 @@ export async function revalidateViews(
             const { s } = result
             if (!s.alive || s.purged) continue
             const atStart = loadsAtStart.get(s)
-            if (atStart?.gen !== s.gen || atStart.flight !== s.flight) continue
+            if (atStart?.gen !== s.gen || atStart.flight !== s.flight) {
+              skipped.push(s)
+              continue
+            }
             // purge після старту: відповідь могла нести рядки й рядки ТЧ, яких
             // на мить purge у сховищі не було (рядок у сховищі ще в старому
             // скоупі). Відкидаємо й перечитуємо тим самим системним шляхом:
@@ -1388,6 +1398,10 @@ export async function revalidateViews(
       for (const resolve of s.rereadWaiters.splice(0)) resolve()
     }
   }
+  // Пропущена відповідь — теж точка осідання (§8.4, п. 7): завантаження, що
+  // осіло раніше, не повторилось, бо бачило цей прохід у польоті; вимогу, яку
+  // тепер ніхто не прочитає, читає те саме правило, що й після сторінки.
+  for (const s of skipped) ctx.readRequirement(s)
   // Цей прохід вичерпав межу (лічильник рухається після commit): повтору
   // не буде, відкинуті вигляди — `command.unavailable`.
   if (discarded.length > 0 && session.versions.unavailable()) {

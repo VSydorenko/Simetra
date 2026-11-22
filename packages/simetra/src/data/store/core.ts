@@ -1673,6 +1673,7 @@ export function createCore(options: {
 
   const writerContext: WriterContext = {
     session,
+    readRequirement: (s) => readRequirement(s),
     tabVisible: () => visible,
     source,
     limits,
