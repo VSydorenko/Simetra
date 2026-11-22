@@ -39,6 +39,7 @@ describe("roles: the project file", () => {
                 "authenticated",
                 "simetra_anon",
                 PLATFORM_ROLES.command,
+                PLATFORM_ROLES.files,
                 "simetra_user",
               ],
               checkOnly: true,
@@ -145,7 +146,12 @@ describe("roles: the project file", () => {
         login: [
           {
             name: RUNTIME,
-            memberOf: [PLATFORM_ROLES.command, "authenticated", "anon"],
+            memberOf: [
+              PLATFORM_ROLES.command,
+              PLATFORM_ROLES.files,
+              "authenticated",
+              "anon",
+            ],
           },
           {
             name: SIGNALS,

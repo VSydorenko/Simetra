@@ -25,6 +25,26 @@ BEGIN
   END IF;
 END
 $$;
+-- Роль сховища файлів (спека профілю postgres §8.1): єдина, що кличе
+-- `file_attach`, `storage_rows_exist` і `storage_row_page`; без входу й
+-- успадкування. Рантайм входить у неї лише через SET ROLE.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'simetra_files') THEN
+    PERFORM pg_catalog.set_config('createrole_self_grant', '', true);
+    CREATE ROLE simetra_files NOLOGIN NOINHERIT;
+  END IF;
+END
+$$;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members
+      WHERE roleid = 'simetra_files'::pg_catalog.regrole
+        AND member = 'simetra_runtime'::pg_catalog.regrole) THEN
+    GRANT simetra_files TO simetra_runtime WITH INHERIT FALSE, SET TRUE;
+  END IF;
+END
+$$;
 -- Анонімна сесія читає роллю гостя `anon`, а не роллю користувача: стенд, де
 -- роль входу вже створено без цього членства, отримує його тут, окремо від
 -- блоку створення.

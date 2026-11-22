@@ -152,6 +152,13 @@ export function epochOf(
 export const COMMAND_ROLE = statement(
   `SET LOCAL ROLE ${ident(PLATFORM_ROLES.command)}`
 )
+/**
+ * `SET LOCAL ROLE` на роль сховища файлів: рантайм доводить членство на
+ * старті (`inspect`), а не на першому завантаженні (спека профілю postgres §8.2).
+ */
+export const FILES_ROLE = statement(
+  `SET LOCAL ROLE ${ident(PLATFORM_ROLES.files)}`
+)
 // Claims, час і формат `bytea` — одним оператором: рядок ядра декодується
 // в UTC і hex незалежно від налаштувань бази.
 const CLAIMS_TEXT =

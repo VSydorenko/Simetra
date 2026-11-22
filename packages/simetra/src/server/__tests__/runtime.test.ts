@@ -81,6 +81,7 @@ const member = (role: string) => ({
 const MEMBER = member("authenticated")
 const MEMBER_ANON = member("anon")
 const ROLE = { text: 'SET LOCAL ROLE "simetra_command"', params: [] }
+const FILES_ROLE = { text: 'SET LOCAL ROLE "simetra_files"', params: [] }
 const HASH = {
   text: 'SELECT "simetra"."applied_snapshot_hash"() AS hash',
   params: [],
@@ -128,6 +129,7 @@ describe("createCommandRuntime", () => {
       MEMBER,
       MEMBER_ANON,
       ROLE,
+      FILES_ROLE,
       HASH,
       COMMIT,
       { release: false },
@@ -285,6 +287,7 @@ describe("createCommandRuntime", () => {
       MEMBER,
       MEMBER_ANON,
       ROLE,
+      FILES_ROLE,
       HASH,
       "error" in answer ? ROLLBACK : COMMIT,
       { release: false },
@@ -331,6 +334,7 @@ describe("createCommandRuntime", () => {
       FACTS,
       MEMBER_ANON,
       ROLE,
+      FILES_ROLE,
       HASH,
       COMMIT,
       { release: false },
@@ -361,6 +365,7 @@ describe("createCommandRuntime", () => {
       FACTS,
       MEMBER,
       ROLE,
+      FILES_ROLE,
       HASH,
       COMMIT,
       { release: false },
@@ -414,6 +419,7 @@ describe("createCommandRuntime", () => {
       MEMBER,
       MEMBER_ANON,
       ROLE,
+      FILES_ROLE,
       HASH,
       { release: true },
     ])
@@ -434,6 +440,27 @@ describe("createCommandRuntime", () => {
       MEMBER,
       MEMBER_ANON,
       ROLE,
+      ROLLBACK,
+      { release: false },
+    ])
+  })
+
+  // І20: брак членства `simetra_files` — відмова старту, а не першого завантаження
+  it("maps a refused SET LOCAL ROLE of the files role to command.internal at startup", async () => {
+    const raw = { code: "42501", message: "permission denied to set role" }
+    const { db, runtime, log } = create((text) =>
+      text === FILES_ROLE.text ? { error: raw } : undefined
+    )
+    expect(await failureOf(runtime)).toEqual({ code: "command.internal" })
+    expect(log).toHaveBeenCalledWith({ kind: "database", error: raw })
+    expect(db.calls).toEqual([
+      { connect: true },
+      BEGIN,
+      FACTS,
+      MEMBER,
+      MEMBER_ANON,
+      ROLE,
+      FILES_ROLE,
       ROLLBACK,
       { release: false },
     ])
