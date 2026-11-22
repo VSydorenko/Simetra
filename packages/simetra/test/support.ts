@@ -92,7 +92,7 @@ export {
   testProvider,
   testStack,
 } from "./db/profile"
-export { createRunBucket } from "./db/external"
+export { createRunBucket, deleteRunBucket } from "./db/external"
 export { s3Of } from "./db/s3"
 export * from "./db/postgres-cluster"
 export * from "./db/fingerprint"

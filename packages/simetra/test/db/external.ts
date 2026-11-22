@@ -98,6 +98,47 @@ function isNoSuchBucket(error: unknown): boolean {
 }
 
 /**
+ * Deletes the bucket `run-<tag>` that the caller created and already emptied
+ * itself (a test's own teardown: the guard only reports a bucket at the end of
+ * a normal run). The stack refuses a non-empty bucket, so nothing is deleted
+ * that the caller left. Same addressing as {@link removeEmptyRunBucket}: the
+ * name is exactly {@link runBucketName} of `tag`. `false` when it is not there.
+ */
+export async function deleteRunBucket(
+  tag: string,
+  stack: TestStack,
+  deps: { fetch: Fetch; s3?: S3ClientLike; timeoutMs?: number }
+): Promise<boolean> {
+  checkTag(tag)
+  const deadline = Date.now() + (deps.timeoutMs ?? 30_000)
+  const budget = (): number => {
+    const left = deadline - Date.now()
+    if (left <= 0) throw new Error("the cleanup deadline ran out")
+    return Math.min(CALL_TIMEOUT_MS, left)
+  }
+  if (stack.garageAdminUrl !== null) {
+    const id = (await listRunBuckets(stack, deps.fetch, budget())).find(
+      (b) => b.tag === tag
+    )?.id
+    if (id === undefined) return false
+    await garage(stack, deps.fetch, budget(), "DeleteBucket", {
+      query: { id },
+    })
+    return true
+  }
+  try {
+    await (deps.s3 ?? s3Of(stack)).deleteBucket(
+      { Bucket: runBucketName(tag) },
+      { abortSignal: AbortSignal.timeout(budget()) }
+    )
+    return true
+  } catch (error) {
+    if (isNoSuchBucket(error)) return false
+    throw error
+  }
+}
+
+/**
  * Deletes the bucket `run-<tag>` when it is EMPTY: Garage through the admin
  * API (its alias goes with it), Supabase through S3. A bucket with objects is
  * left as it is and reported (`non-empty`, with the count when the stack

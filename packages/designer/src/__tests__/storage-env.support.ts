@@ -15,6 +15,7 @@ import {
   ORG_SCOPE_KIND,
   PROJECT_FILE,
   createRunBucket,
+  deleteRunBucket,
   runTag,
   s3Of,
   testStack,
@@ -147,11 +148,14 @@ export const heldStorageEnv = (...layers: Layer[]) =>
     } catch (error) {
       failure = { error }
     }
-    // Бакет прогону видаляє сторож, але лише порожній: свої об'єкти (і маркер
-    // прив'язки) тест прибирає сам через API. Збій прибирання не підміняє
-    // помилку самого сценарію: її ми й кидаємо
+    // Сторож наприкінці звичайного прогону лише порівнює стек: бакет, який
+    // створив цей файл, видаляє він сам, спершу прибравши свої об'єкти (і
+    // маркер прив'язки) через API. Файли йдуть послідовно й ділять ім'я
+    // бакета тегу, тож бакет живе рівно від створення до цього місця. Збій
+    // прибирання не підміняє помилку самого сценарію: її ми й кидаємо
     try {
       await deleteAllObjects(s3Of(stack), bucket)
+      await deleteRunBucket(runTag(), stack, { fetch })
     } catch (cleanup) {
       if (failure === undefined) throw cleanup
       console.error("the run bucket was not emptied:", cleanup)

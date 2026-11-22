@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   createRunBucket,
+  deleteRunBucket,
   type Exec,
   type Fetch,
   nodeExec,
@@ -416,6 +417,41 @@ describe("createRunBucket", () => {
       accessKeyId: expect.stringMatching(/^GK/),
       permissions: { read: true, write: true, owner: false },
     })
+  })
+})
+
+describe("deleteRunBucket (a test's own teardown)", () => {
+  it("deletes the emptied bucket of its own tag on Garage and on Supabase", async () => {
+    const garage = fakeGarage([
+      { id: "m", alias: `run-${TAG}`, objects: 0 },
+      { id: "t", alias: `run-${OTHER_TAG}`, objects: 0 },
+    ])
+    expect(await deleteRunBucket(TAG, postgres, { fetch: garage.fetch })).toBe(
+      true
+    )
+    expect(garage.buckets().map((b) => b.id)).toEqual(["t"])
+    const s3 = fakeS3({ [`run-${TAG}`]: [], [`run-${OTHER_TAG}`]: [] })
+    expect(
+      await deleteRunBucket(TAG, TEST_STACKS.supabase, {
+        fetch: garage.fetch,
+        s3: s3.s3,
+      })
+    ).toBe(true)
+    expect(Object.keys(s3.contents)).toEqual([`run-${OTHER_TAG}`])
+  })
+
+  it("is false for an absent bucket and refuses a non-empty one without deleting", async () => {
+    expect(
+      await deleteRunBucket(TAG, postgres, { fetch: fakeGarage([]).fetch })
+    ).toBe(false)
+    const s3 = fakeS3({ [`run-${TAG}`]: ["left"] })
+    await expect(
+      deleteRunBucket(TAG, TEST_STACKS.supabase, {
+        fetch: fakeGarage([]).fetch,
+        s3: s3.s3,
+      })
+    ).rejects.toThrow(/BucketNotEmpty/)
+    expect(s3.contents[`run-${TAG}`]).toEqual(["left"])
   })
 })
 
