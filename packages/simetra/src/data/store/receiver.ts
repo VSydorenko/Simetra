@@ -644,9 +644,11 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   // `full` і вікна, чий фільтр він проходить (§6.4).
   const markNewRow = (w: Writer, job: Job, row: ServerRow) => {
     const { object, o } = job
-    // Пара, похована з початку читання, не «нова»: `hasNewRows` виказав би,
-    // що заборонений рядок існує.
+    // Ключ чи пара, поховані з початку читання, не «нові»: `hasNewRows`
+    // виказав би рядок, який `purge` прибрав, чи заборонений рядок (як
+    // перевірка відомого ключа нижче).
     if (
+      session.epochs.buriedSince(keyId(object, row.key), job.readEpoch) ||
       session.epochs.buriedSince(
         pairId(object, scopeOf(o.entry, row.values)),
         job.readEpoch
