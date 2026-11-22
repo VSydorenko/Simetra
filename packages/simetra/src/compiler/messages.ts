@@ -748,8 +748,8 @@ const POLICY_FUNCTION_REASON: Readonly<
     uk: "політика-викликач — не <ключ T> IN (SELECT f()) чи OR таких атомів над функціями політик",
   },
   policyRoles: {
-    en: "a calling policy names PUBLIC, a role without a session or outside the purposes, or a role that no SELECT policy calling it in USING names or that has no SELECT on T",
-    uk: "політика-викликач називає PUBLIC, роль без сесії чи поза призначеннями або роль, якої не називає жодна політика SELECT з викликом у USING чи яка не має SELECT на T",
+    en: "a calling policy names PUBLIC, a role without a session or outside the purposes, or a role that does not read T itself: no PERMISSIVE FOR SELECT or ALL policy of T TO the role (or PUBLIC) calls the function in USING, or the role has no table-level SELECT on T or no USAGE on the schema of T",
+    uk: "політика-викликач називає PUBLIC, роль без сесії чи поза призначеннями або роль, що не читає T сама: жодна PERMISSIVE-політика T FOR SELECT чи ALL TO цієї ролі (чи PUBLIC) не кличе функцію в USING, або роль не має SELECT на T на рівні таблиці чи USAGE на схему T",
   },
 }
 
@@ -1648,8 +1648,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Функцію ${p.function} у рядку ${p.line} кличе дослівна політика, але вона не функція політики: ${POLICY_FUNCTION_REASON[p.reason as PolicyFunctionReason]?.uk ?? p.reason}${p.detail === undefined ? "" : ` (ще: ${p.detail})`}`,
     hint: {
-      en: `A role of the query can call a function that a policy calls also as an RPC, so the platform grants EXECUTE only to a policy function, whose direct call returns no more than the policy lets the actor read: no parameters, RETURNS SETOF uuid, LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}, the key of the policy table bound to the actor, and each calling policy written as <key> IN (SELECT f()). Rewrite the function into this form, or, when it answers with facts of the actor about another table (members, tenants), reduce it to the set function of a scope kind.`,
-      uk: `Роль запиту може кликати функцію, яку кличе політика, ще й як RPC, тож EXECUTE платформа дає лише функції політики, прямий виклик якої повертає не більше, ніж політика дозволяє актору читати: без параметрів, RETURNS SETOF uuid, LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}, ключ таблиці політики, прив'язаний до актора, і кожна політика-викликач у формі <ключ> IN (SELECT f()). Перепишіть функцію в цю форму або, коли вона відповідає фактами актора про іншу таблицю (учасники, тенанти), зведіть її до функції множини виду скоупу.`,
+      en: `A role of the query can call a function that a policy calls also as an RPC, so the platform grants EXECUTE only to a policy function, whose direct call returns no more than the policy lets the actor read: no parameters, RETURNS SETOF uuid, LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}, the key of the policy table bound to the actor, each calling policy written as <key> IN (SELECT f()), and each role that gets EXECUTE reading the policy table itself: a PERMISSIVE FOR SELECT policy TO the role that calls the function, table-level SELECT on the table and USAGE on its schema. Rewrite the function into this form, or, when it answers with facts of the actor about another table (members, tenants), reduce it to the set function of a scope kind.`,
+      uk: `Роль запиту може кликати функцію, яку кличе політика, ще й як RPC, тож EXECUTE платформа дає лише функції політики, прямий виклик якої повертає не більше, ніж політика дозволяє актору читати: без параметрів, RETURNS SETOF uuid, LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS}, ключ таблиці політики, прив'язаний до актора, кожна політика-викликач у формі <ключ> IN (SELECT f()), а кожна роль, що отримує EXECUTE, читає таблицю політики сама: PERMISSIVE-політика FOR SELECT TO цієї ролі, що кличе функцію, SELECT на таблицю на рівні таблиці й USAGE на її схему. Перепишіть функцію в цю форму або, коли вона відповідає фактами актора про іншу таблицю (учасники, тенанти), зведіть її до функції множини виду скоупу.`,
     },
   },
   "sql.declaration-target-missing": {
