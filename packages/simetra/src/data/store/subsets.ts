@@ -387,12 +387,19 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     tabVisible: ctx.tabVisible,
   }
   function confirm(s: Subset, readEpoch: number, lifts: boolean): boolean {
-    if (!lifts)
-      return (
-        s.unconfirmedSince !== undefined &&
-        s.answerRejected &&
-        (s.visible ?? s.listeners.size > 0)
+    if (!lifts) {
+      if (
+        s.unconfirmedSince === undefined ||
+        !s.answerRejected ||
+        !(s.visible ?? s.listeners.size > 0)
       )
+        return false
+      // Прихована вкладка й тут — гілка невидимого (§12, Р8): без запиту,
+      // `needsRefresh`, а `resume()` читає вигляд.
+      if (ctx.tabVisible()) return true
+      s.needsRefresh = true
+      return false
+    }
     return settleRequirement(s, readEpoch, requirementEnv)
   }
 

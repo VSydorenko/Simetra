@@ -173,6 +173,34 @@ describe("a view answer rejected by a newer key tombstone (П15)", () => {
     expect(handle.getSnapshot().staleComposition).toBeUndefined()
   })
 
+  // Сторінка, відхилена на прихованій вкладці, — та сама гілка невидимого
+  // (§8.4, п. 7; §12, Р8): повтору на ній немає, `resume()` читає раз.
+  it("window page of loadAfter rejected on a hidden tab: no repeat while hidden, one read on resume()", async () => {
+    const h = setup({ limits: { windowPage: 2 } })
+    seed(h.fake, 1, 5)
+    const spec: ViewSpec = { kind: "window", object: TASK }
+    const handle = h.core.view(spec)
+    watch(handle)
+    await settle()
+    const bury = await divergence(h, key(3))
+    h.fake.hold = isPage
+    handle.loadAfter()
+    await settle()
+    const page = h.fake.take(isPage)
+    await bury()
+    h.core.suspend()
+    const sent = h.fake.requests.length
+    page.answer()
+    await drain(h)
+    expect(h.fake.requests.length).toBe(sent)
+    expect(handle.getSnapshot().needsRefresh).toBe(true)
+    expect(handle.getSnapshot().staleComposition).toBe(true)
+    h.core.resume()
+    await drain(h)
+    expect(h.fake.requests.length).toBe(sent + 1)
+    expect(handle.getSnapshot().staleComposition).toBeUndefined()
+  })
+
   // Дві сторінки в польоті, відхилені без руху епохи між відповідями,
   // дають ту саму вимогу: повтор іде за фактом відхилення кожної відповіді,
   // а не за зміною значення вимоги.
