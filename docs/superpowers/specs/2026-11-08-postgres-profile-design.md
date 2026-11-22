@@ -970,7 +970,7 @@ SignalTokens = {
   скоупу, майбутнє очищення позначених), через 24 год.
 - **Звірка** — фонове завдання host-а (`runtime.reconcileFiles(store, { log })`;
   єдине місце, де байти видаляються фізично):
-  - перш за все `store.checkInstance(fileInstance())`: чужий бакет — відмова
+  - перш за все `store.checkInstance(<відбиток із бази>)`: чужий бакет — відмова
     без жодного видалення;
   - перелічує лише префікс `o/<UUID об'єкта>/` для об'єктів каталогу з
     властивістю `storage`; префікси невідомих об'єктів (`store.listPrefixes()`)
@@ -995,28 +995,35 @@ SignalTokens = {
     RETURNS SETOF uuid` (definer, `EXECUTE` лише `simetra_files`, до 1000
     id); рядок, що з'явився під час переліку, не дефект;
   - **прив'язка бази й бакета.** `simetra.storage_instance` — безумовна
-    платформна таблиця стану з одним рядком випадкового uuid, що переживає
+    платформна таблиця стану з одним рядком випадкового uuid (рядок вставляє
+    стан застосування разом з таблицею), що переживає
     повторне застосування й видалення всіх об'єктів зі `storage`. Маркер
     `simetra-instance` у бакеті несе **відбиток** `uuid:sysid:oid:timeline`:
     uuid таблиці, `system_identifier` кластера (`pg_control_system()`), oid бази
-    і `timeline_id` останньої контрольної точки (`pg_control_checkpoint()`);
-    рахує його definer-функція `simetra.storage_instance_id()` (`EXECUTE`
-    лише `simetra_files`; `pg_control_*` виконуються для `PUBLIC`, тож
-    власник обох профілів їх кличе). Копія бази (dump/restore, `CREATE
+    і timeline — перші 8 hex-знаків імені поточного WAL-файла
+    (`pg_walfile_name(pg_current_wal_lsn())`); рахує його definer-функція
+    `simetra.storage_instance_id()` (`EXECUTE` лише `simetra_files`; лише
+    читає, тож працює в `READ ONLY` транзакції; `pg_control_system()`
+    виконується для `PUBLIC`, тож власник обох профілів його кличе). Копія бази (dump/restore, `CREATE
     DATABASE … TEMPLATE`, PITR, підвищена репліка) несе той самий uuid, але
     інший `sysid`, oid чи `timeline`. `put` пише маркер лише в порожній бакет;
     непорожній бакет без маркера чи маркер іншої бази — `foreign-bucket`,
     той самий uuid з іншою частиною відбитка — `binding-changed` (відмова
     `put` і звірки, нуль видалень; `report.refused` — `instance` чи
-    `binding`). Звірка читає відбиток щоразу заново, не з кешу
-    `fileInstance()`. Чужий бакет має ті самі префікси, і запобіжник
+    `binding`). Відбиток ніде не кешується: `checkUpload` читає його в тій самій
+    `READ ONLY` транзакції (після `storage_headroom`, `SET LOCAL ROLE
+    simetra_files`) і повертає в `UploadLimits.instance`, `put` судить саме
+    це значення, а звірка й `rebindFileStore` читають його свіжим, тож
+    промоція чи відновлення під живим процесом видно з наступного ж виклику. Чужий бакет має ті самі префікси, і запобіжник
     5 % / 20 не зупинив би видалення живих байтів, дописаних після копії.
     Після законного відновлення оператор перев'язує маркер командою
     `runtime.rebindFileStore(store)`: вона переписує маркер лише з тим самим
     uuid і відмовляє на репліці. **Залишок:** холодна копія каталогу даних,
     запущена як primary без відновлення, має той самий відбиток — захист від неї
-    лише в експлуатації (§11). `timeline_id` береться з останньої контрольної
-    точки, тож промоцію видно після її завершення;
+    лише в експлуатації (§11). Timeline береться з поточного WAL-файла, а не з
+    контрольної точки, тож промоцію видно одразу, без вікна після `pg_promote()`;
+    на репліці `pg_walfile_name` кидає помилку — це відмова, а не діра (звірка
+    там і так нічого не видаляє);
   - **репліка.** Поки `pg_is_in_recovery()` істинне, звірка не видаляє нічого
     й нічого не пише в базу (`report.refused` = `recovery`); умову
     перевіряють на початку й ще раз перед першим видаленням;
@@ -1070,13 +1077,13 @@ FileStore = {
   обриває потік понад `maxBytes` і буферизує тіло для `ContentLength`; стеля
   T0 `STORAGE_MAX_BYTES` — 100 MiB.
 - T3 дає `runtime.checkUpload(session, { object, scope })` (крок 2:
-  `{ maxBytes, mediaTypes }` чи `null`), `runtime.attachFile(session, {
+  `{ maxBytes, mediaTypes, instance }` чи `null`), `runtime.attachFile(session, {
   object, scope, id, name, fields, size, contentType })` (крок 4; ім'я
   мапиться в стильований `file_name` за `naming.attributeCase`; помилка з
   ознакою `commitUnknown`, коли `terminalOf` дав `command.unavailable` після
-  надісланого `COMMIT`), `runtime.fileInstance()` (uuid прив'язки бази для `put`: окрема коротка
-  транзакція на запис під `simetra_files`, без запису в `READ ONLY`, кеш) і
-  `runtime.reconcileFiles(store, { log })` (звірка); опції `files` у
+  надісланого `COMMIT`), `runtime.reconcileFiles(store, { log })` (звірка) і
+  `runtime.rebindFileStore(store)` (оператор після відновлення); відбиток
+  прив'язки бази для `put` віддає `checkUpload` (`UploadLimits.instance`), кешу немає; опції `files` у
   `createCommandRuntime` немає; усі — серверні, без дверей клієнта, у маршруту SQL немає.
 - У профілі `supabase` прийняті бази лишаються на Storage-API з політиками
   на `storage.objects` (ПП4); нові об'єкти з властивістю `storage` в обох
@@ -1358,7 +1365,9 @@ pnpm db:stop
   проді).
 - Резервна копія бази не мусить містити outbox: після відновлення клієнти
   однаково перечитують.
-- Після відновлення бази (dump/restore, PITR, промоція репліки), що працює з
+- Після відновлення чи переїзду бази (dump/restore, PITR, промоція репліки,
+  HA-перемикання, `pg_upgrade` (новий `system_identifier`), оновлення версії
+  через dump/restore, оновлення на керованому провайдері), що працює з
   наявним бакетом, звірка й `put` відмовляють із `binding-changed`, доки
   оператор не викличе `runtime.rebindFileStore(store)` на primary. Копію бази
   не спрямовують на бакет оригіналу; холодну копію каталогу даних, запущену як

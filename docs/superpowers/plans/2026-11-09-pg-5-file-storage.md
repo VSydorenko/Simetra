@@ -81,7 +81,7 @@ devDependency `simetra`; у шаблоні — залежність (части�
 | Р9 | **Сумісність `storage`:** лише `Catalog`, без `role`, `membership`, `rightsContainer`, `containerBinding`, `predefinedItems`, `hierarchyType: "FoldersAndItems"` і не корінь виду скоупу (вставку кореня судить `rootCreatePredicates`, а не Р3) — `storage.incompatible`. `mediaTypes` — непорожній перелік унікальних `type/subtype` малими літерами без параметрів (`storage.media-type`); `maxBytes` — 1…`STORAGE_MAX_BYTES`. `containerBinding` — бо `storage_headroom` (`rowFreeGrants`) гранти за контейнером пропускає. `storage`, доданий об'єкту з живою таблицею, — `plan.storage-added` (`schema/apply/plan.ts`) | §8.1 (задача 0) |
 | Р10 | **Рядки без байтів** — `storage_row_page(p_object, p_after uuid) RETURNS SETOF uuid` (definer, до 1000 id); рядок, що з'явився під час переліку, не дефект | §8.2 (задача 0) |
 | Р11 | **Відмови сховища — закритий перелік T0** `STORAGE_ERRORS` за зразком `COMMAND_CORE_ERRORS`: причини `attach-missing`, `attach-invalid`, `quota-exceeded`. `mapDatabaseError` дає `command.rejected` з `reason` `storage.<причина>`; інакше `RAISE` став би `command.internal`. `LIMIT_REASONS` не змінюється | спека П4 §6.10 (задача 0) |
-| Р12 | **Прив'язка бази й бакета.** `simetra.storage_instance` — безумовна платформна таблиця стану з одним рядком випадкового uuid, що переживає повторне застосування й видалення всіх об'єктів зі `storage`. Прибрати `storage` з об'єкта з живою таблицею — `plan.storage-removed`. Маркер `simetra-instance` несе відбиток `uuid:sysid:oid:timeline` (`system_identifier`, oid бази, `timeline_id` контрольної точки; рахує `storage_instance_id()`): копія бази (dump, TEMPLATE, PITR, репліка) має той самий uuid, але інший `sysid`/oid/timeline. `put` пише маркер лише в порожній бакет; непорожній без маркера чи інший uuid — `foreign-bucket`; той самий uuid з іншою частиною відбитка — `binding-changed` (відмова `put` і звірки, `report.refused` = `instance` / `binding`). Поки `pg_is_in_recovery()` — звірка нічого не видаляє (`recovery`). Після законного відновлення — `runtime.rebindFileStore(store)`. Залишок — холодна копія каталогу без відновлення — в спеці й експлуатації. Причина: чужий бакет має ті самі префікси, і запобіжник 5 %/20 не зупинив би видалення живих байтів | §8.2 (задача 0) |
+| Р12 | **Прив'язка бази й бакета.** `simetra.storage_instance` — безумовна платформна таблиця стану з одним рядком випадкового uuid, що переживає повторне застосування й видалення всіх об'єктів зі `storage`. Прибрати `storage` з об'єкта з живою таблицею — `plan.storage-removed`. Маркер `simetra-instance` несе відбиток `uuid:sysid:oid:timeline` (`system_identifier`, oid бази, timeline з імені поточного WAL-файла; рахує `storage_instance_id()`): копія бази (dump, TEMPLATE, PITR, репліка) має той самий uuid, але інший `sysid`/oid/timeline. `put` пише маркер лише в порожній бакет; непорожній без маркера чи інший uuid — `foreign-bucket`; той самий uuid з іншою частиною відбитка — `binding-changed` (відмова `put` і звірки, `report.refused` = `instance` / `binding`). Поки `pg_is_in_recovery()` — звірка нічого не видаляє (`recovery`). Після законного відновлення — `runtime.rebindFileStore(store)`. Залишок — холодна копія каталогу без відновлення — в спеці й експлуатації. Причина: чужий бакет має ті самі префікси, і запобіжник 5 %/20 не зупинив би видалення живих байтів | §8.2 (задача 0) |
 | Р13 | **Звірка бере «зараз» з бази** (`now()`), а не з годинника host-а | §8.2 (задача 0) |
 | Р14 | **Бакети тестів.** Прибиральник адресує рівно `runBucketName(<свій тег>)`, без відбору за префіксом і без `simetra-dev`. `removeRunResources`: спорожнити (`ListObjectsV2` + `DeleteObjects`), потім видалити; звітувати лише бакет, який спорожнити не вдалося. Garage: `createRunBucket` + admin `AllowBucketKey` (новий endpoint у `garage()`). Supabase: `run-<тег>` через S3 `CreateBucket`, знімок guard-а читає `storage.buckets` (перевірити `SELECT` ролі guard-а); значення S3 — з одного `supabase status -o env` у `globalSetup`, у тести через `provide`/`inject` (новий механізм) | §10.3 (задача 0); речення `AGENTS.md` — власник |
 | Р15 | **Шаблон (частина Б):** ліміт одночасних завантажень (429), бюджет буфера (503), не більше 10 хв між `put` і `attachFile`; звірка — `pnpm reconcile-files` за cron оператора, без HTTP | §8.2 (задача 0) |
@@ -243,14 +243,17 @@ test  s3Of(stack): S3ClientLike; emptyAndDeleteRunBucket(tag, stack)
 **Готово:** `run-tests unit --changed` на фейковому `S3ClientLike` зелений;
 у зоні T3 немає імпорту SDK.
 
-### Task 5: T3 — `checkUpload`, `attachFile`, `fileInstance`
+### Task 5: T3 — `checkUpload`, `attachFile`, `rebindFileStore`
 
-- `checkUpload`: `READ ONLY` під роллю запиту, `storage_headroom`.
+- `checkUpload`: `READ ONLY` під роллю запиту, `storage_headroom`, далі в тій самій
+  транзакції `SET LOCAL ROLE simetra_files` і читання відбитка прив'язки
+  (`UploadLimits.instance`); кешу немає, `put` судить саме це значення.
 - `attachFile` — одна спроба `attempt` з тими самими ретраями й бюджетом,
   що й `run`: `file_attach` під `simetra_files`, далі `create` під
   `simetra_command` (Р17). Внутрішня фаза, без публічних дверей для SQL (Рт6).
-- `fileInstance()`: uuid прив'язки бази для `put` (окрема коротка транзакція
-  на запис під `simetra_files`, кеш); Р5: рантайм байтів не видаляє.
+- `rebindFileStore(store)` — серверний метод оператора; `fileInstance()` немає
+  (відбиток віддає `checkUpload`, звірка й перев'язка читають його свіжим);
+  Р5: рантайм байтів не видаляє.
 **Готово:** DB-тести І3, І11 і повний цикл `checkUpload` → `put` →
 `attachFile` → `read` → `get` → `markDeletion` (байти лишаються) на Garage зелені (`run-tests db --filter
 storage-`). Тест повтору: другого рядка обліку немає.
