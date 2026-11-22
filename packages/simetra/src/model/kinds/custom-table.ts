@@ -155,6 +155,7 @@ export const customTableKind: KindDefinition = {
   scope: "required",
   declared: true,
   consumerData: true,
+  search: { defaultFields: () => [] },
   kindLabel: true,
   columnFields: ["columns"],
   valueElements: false,

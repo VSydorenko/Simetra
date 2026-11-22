@@ -1,3 +1,8 @@
+import {
+  DEFAULT_SEARCH_MODE,
+  type Search,
+  type SearchMode,
+} from "../schemas/search"
 import type { CustomTable } from "../schemas/custom-table"
 import type { MetadataKind } from "../schemas/metadata-kind"
 import { accumulationRegisterKind } from "./accumulation-register"
@@ -118,4 +123,27 @@ export function expectsKindLabel(kind: MetadataKind, data: unknown): boolean {
     Array.isArray(table.columns) &&
     singleUuidKeyColumn(table as CustomTable) !== undefined
   )
+}
+
+/** Effective search of an object: the fields to search by and the mode. */
+export interface EffectiveSearch {
+  fields: readonly string[]
+  mode: SearchMode
+}
+
+/**
+ * Effective search fields of an object, the single source for the compiler
+ * and the client. Declared `fields` win; otherwise the kind's default
+ * presentation fields from the registry. `undefined` — the kind has no search
+ * or the object has no search fields at all.
+ */
+export function effectiveSearch(
+  kind: MetadataKind,
+  obj: { search?: Search | undefined }
+): EffectiveSearch | undefined {
+  const def = KIND_REGISTRY[kind].search
+  if (def === undefined) return undefined
+  const fields = obj.search?.fields ?? def.defaultFields(obj)
+  if (fields.length === 0) return undefined
+  return { fields, mode: obj.search?.mode ?? DEFAULT_SEARCH_MODE }
 }

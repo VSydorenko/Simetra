@@ -20,6 +20,13 @@ export {
 } from "./pg-schema"
 export { tabularSectionSchema, type TabularSection } from "./tabular-section"
 export {
+  DEFAULT_SEARCH_MODE,
+  SEARCH_MODES,
+  searchSchema,
+  type Search,
+  type SearchMode,
+} from "./search"
+export {
   compositeIndexesSchema,
   type CompositeIndexes,
 } from "./composite-index"

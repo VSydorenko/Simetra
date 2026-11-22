@@ -9,6 +9,7 @@ import {
 import { localizedStringSchema } from "./localized-string"
 import { catalogAttributeSchema } from "./attribute"
 import { compositeIndexesSchema } from "./composite-index"
+import { searchSchema } from "./search"
 import { tabularSectionSchema } from "./tabular-section"
 import {
   elementNameSchema,
@@ -162,6 +163,7 @@ export const catalogSchema = z.strictObject({
   indexes: compositeIndexesSchema.meta({
     description: "Composite indexes over the catalog attributes.",
   }),
+  search: searchSchema.optional(),
 })
 
 export type Catalog = z.infer<typeof catalogSchema>
