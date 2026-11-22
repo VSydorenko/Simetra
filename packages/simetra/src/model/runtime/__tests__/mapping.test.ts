@@ -150,6 +150,25 @@ describe("operationToWire / operationFromWire", () => {
       },
     ],
     [
+      "update with expectedValues",
+      {
+        action: "update",
+        object: TASK,
+        id: ID,
+        expectedVersion: 3,
+        values: { title: "b" },
+        expectedValues: { title: "a" },
+      },
+      {
+        action: "update",
+        object: OBJECT_ID,
+        id: ID,
+        expectedVersion: 3,
+        values: { title_col: "b" },
+        expectedValues: { title_col: "a" },
+      },
+    ],
+    [
       "markDeletion",
       {
         action: "markDeletion",

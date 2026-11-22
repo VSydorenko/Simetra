@@ -267,6 +267,18 @@ export function operationToWire(
         "values"
       )
     }
+    if ("expectedValues" in op && op.expectedValues !== undefined) {
+      out.expectedValues = levelToWire(
+        {
+          plain: headerPlain(entry),
+          attributes: entry.attributes,
+          prefix: "",
+          where: { object: entry.id },
+        },
+        op.expectedValues,
+        "expectedValues"
+      )
+    }
     if ("tabularSections" in op && op.tabularSections !== undefined) {
       out.tabularSections = sectionsToWire(entry, op.tabularSections)
     }
@@ -425,6 +437,18 @@ export function operationFromWire(
         },
         wire.values,
         "values"
+      )
+    }
+    if ("expectedValues" in wire && wire.expectedValues !== undefined) {
+      out.expectedValues = levelFromWire(
+        {
+          plain: headerPlain(entry),
+          attributes: entry.attributes,
+          prefix: "",
+          where: { object: entry.id },
+        },
+        wire.expectedValues,
+        "expectedValues"
       )
     }
     if ("tabularSections" in wire && wire.tabularSections !== undefined) {
