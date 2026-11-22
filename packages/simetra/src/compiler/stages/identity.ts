@@ -9,6 +9,7 @@ import {
   namedCollections,
   projectSchema,
   standardElementId,
+  STRUCTURAL_PATH_WORDS,
   type AccessDimension,
   type AttributeCase,
   type Expr,
@@ -449,6 +450,19 @@ export function checkIdentity(
               name,
               kind: object.kind,
             })
+          )
+        }
+        // Шлях відмови операції починається структурним словом
+        // (`expectedValues.<реквізит>`): елемент з таким ім'ям дав би шлях,
+        // якого не відрізнити від структурного. Дії в шляхи не потрапляють, а
+        // імена предвизначених елементів і значень — PascalCase.
+        if (
+          namespace.styled &&
+          !named.unlabelled &&
+          STRUCTURAL_PATH_WORDS.includes(name)
+        ) {
+          diagnostics.push(
+            diagnostic("identity.name-structural", object.file, at, { name })
           )
         }
         if ((column && reserved.has(name)) || reservedSections.has(name)) {

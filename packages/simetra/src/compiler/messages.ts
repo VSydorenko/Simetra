@@ -2051,6 +2051,12 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       `Name "${p.name}" is taken by a standard element of the kind ${p.kind}`,
     uk: (p) => `Ім'я "${p.name}" зайняте стандартним елементом виду ${p.kind}`,
   },
+  "identity.name-structural": {
+    en: (p) =>
+      `Name "${p.name}" is a structural word of operation error paths; give the element another name`,
+    uk: (p) =>
+      `Ім'я "${p.name}" — структурне слово шляхів помилок операції; дайте елементу інше ім'я`,
+  },
   "reference.unresolved": {
     en: (p) => `${p.kind} "${p.name}" does not exist`,
     uk: (p) => `${p.kind} "${p.name}" не існує`,

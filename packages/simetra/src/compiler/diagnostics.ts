@@ -82,6 +82,7 @@ export const COMPILER_RULES = [
   "identity.name-duplicate",
   "identity.name-case",
   "identity.name-reserved",
+  "identity.name-structural",
   "reference.unresolved",
   "reference.ambiguous",
   "customTable.column-unknown",
