@@ -61,11 +61,18 @@ describe("EXECUTE of a policy function on Supabase (І3)", () => {
     })
   })
 
+  // Типові привілеї пресета дають `service_role` `SELECT` на кожну нову
+  // таблицю `public`, тож без `SELECT` на T вона лишається лише після
+  // явного відкликання — і в моделі, і в базі.
   // Мутація: прибрати перевірку `SELECT` на T у призначеннях — варіант
   // компілюється, і `service_role` отримує `EXECUTE` без `SELECT`
   it("a reading service_role without SELECT on T: accepted only without its EXECUTE", async () => {
     const result = await compile(
-      await files({ where: [`d.${BOUND}`], callers, readers: [user] })
+      await files({
+        where: [`d.${BOUND}`],
+        callers: `${callers}REVOKE SELECT ON TABLE public.docs FROM ${service};\n`,
+        readers: [user],
+      })
     )
     const errors = result.diagnostics.filter((d) => d.severity === "error")
     if (errors.length > 0) {
