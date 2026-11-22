@@ -7,6 +7,7 @@ import {
   PROVIDER_IDENTITY_SOURCES,
   SESSION_CLAIMS_SETTING,
   SIGNAL_OUTBOX,
+  STORAGE_TABLES,
   type IdentitySource,
 } from "simetra/model"
 import { buildPlatformUnits, platformSchemaGrants } from "../platform/units"
@@ -88,13 +89,14 @@ describe("platform layer", () => {
     const model = await compileOk({
       "catalogs/Currency/Currency.meta.json": catalog("Currency"),
     })
-    // Єдина таблиця схеми платформи без «Користувачів» — outbox сигналів,
-    // що є в кожному проєкті (спека профілю `postgres` §5.1).
+    // Єдині таблиці схеми платформи без «Користувачів» — outbox сигналів і
+    // прив'язка сховища файлів, що є в кожному проєкті (спека профілю
+    // `postgres` §5.1, §8.2).
     expect(
       model.physical.tables
         .filter((t) => t.schema === PLATFORM_SCHEMA)
         .map((t) => t.name)
-    ).toEqual([SIGNAL_OUTBOX.name])
+    ).toEqual([SIGNAL_OUTBOX.name, STORAGE_TABLES.instance.name])
     // Механіка рядка лежить у `simetra` і без «Користувачів» — це не шар.
     // Шукаємо кваліфіковане ім'я: роль команд `simetra_command` — не схема.
     expect(

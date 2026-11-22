@@ -1,3 +1,5 @@
+import { PLATFORM_SCHEMA } from "../schemas/pg-schema"
+
 /**
  * Відмови сховища файлів (рішення Р11 ПГ-5): закритий перелік за зразком
  * `COMMAND_CORE_ERRORS`. `errcode` власний, не збігається з `22023`, `42501`
@@ -34,3 +36,28 @@ export function fileObjectKey(objectId: string, rowId: string): string {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/**
+ * Таблиці сховища файлів у схемі `simetra` (спека профілю postgres §8): облік
+ * обсягу, межа, запис вкладення й прив'язка бази до бакета. Ролям API й
+ * команд грантів на них немає — їх читають і пишуть лише definer-функції.
+ */
+export const STORAGE_TABLES = {
+  usage: { schema: PLATFORM_SCHEMA, name: "storage_usage" },
+  quota: { schema: PLATFORM_SCHEMA, name: "storage_quota" },
+  pending: { schema: PLATFORM_SCHEMA, name: "storage_pending" },
+  instance: { schema: PLATFORM_SCHEMA, name: "storage_instance" },
+} as const
+
+/**
+ * Функції сховища файлів у схемі `simetra` (спека профілю postgres §8.2).
+ * `EXECUTE` `headroom` — роль запиту користувача, решти — лише `simetra_files`.
+ */
+export const STORAGE_FUNCTIONS = {
+  attach: "file_attach",
+  headroom: "storage_headroom",
+  rowsExist: "storage_rows_exist",
+  rowPage: "storage_row_page",
+  pendingLeft: "storage_pending_left",
+  instanceId: "storage_instance_id",
+} as const

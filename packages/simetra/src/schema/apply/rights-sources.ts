@@ -150,7 +150,7 @@ const origin = z.union([
     tabularSectionId: z.string().optional(),
     part: z.string().optional(),
   }),
-  z.object({ part: z.literal("signalOutbox") }),
+  z.object({ part: z.enum(["signalOutbox", "storage"]) }),
 ])
 const appliedRightsSchema = z.object({
   // Стиль застосованого знімка: його колонки несуть `origin.standard` у

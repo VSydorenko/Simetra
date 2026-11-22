@@ -55,6 +55,7 @@ import { compareStrings, valueAt } from "../diagnostics"
 import { rightsAdminTables } from "../rights/admin-tables"
 import { identitiesTable } from "../platform/identities"
 import { signalOutboxTable } from "../platform/outbox"
+import { storageInstanceTable, storageTables } from "../platform/storage-tables"
 import { carrierDeclarations } from "../rights/facts"
 import { objectKey, type ParsedObject } from "./files"
 import { COLUMN_NAME_ROLES, type ResolvedReference } from "./identity"
@@ -392,6 +393,8 @@ export function buildModel(
         ...result.physical.tables,
         ...rightsAdminTables(objects),
         signalOutboxTable(),
+        storageInstanceTable(),
+        ...storageTables(objects),
       ].sort(bySchemaAndName),
     },
   }

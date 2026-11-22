@@ -107,6 +107,7 @@ export type UnitGenerator =
   | "catalogCommand"
   | "schemaUsage"
   | "signalOutbox"
+  | "storage"
   | "signal"
   | "rightsClientSnapshot"
   | "rightsSignal"
@@ -140,6 +141,8 @@ const FIXED_BODY: Readonly<Record<UnitGenerator, boolean>> = {
   catalogCommand: true,
   schemaUsage: true,
   signalOutbox: true,
+  // Функції, тригери й гранти сховища файлів: тіла платформи, не автора
+  storage: true,
   signal: true,
   rightsClientSnapshot: true,
   rightsSignal: true,

@@ -22,6 +22,8 @@ import {
  */
 
 const T = "simetra.signal_outbox"
+/** Безумовна таблиця прив'язки сховища файлів (Р12): є в кожній базі. */
+const S = "simetra.storage_instance"
 /** Ідентичності двигуна функцій установки: типи аргументів без лапок. */
 const F = {
   notify: "function:simetra.signal_outbox_notify()",
@@ -74,6 +76,17 @@ const PLAN = [
   ),
   // ENABLE ROW LEVEL SECURITY нічого не створює
   action([], [`table:${T}`, "schema:simetra"]),
+  action(
+    [
+      `table:${S}`,
+      ...["singleton", "id"].map((c) => `column:${S}.${c}`),
+      ...["singleton", "id"].map((c) => `default:${S}.${c}`),
+      `constraint:${S}.storage_instance_pkey`,
+      `constraint:${S}.storage_instance_singleton_check`,
+    ],
+    ["schema:simetra"]
+  ),
+  action([], [`table:${S}`, "schema:simetra"]),
   ...Object.values(F).map((f) => action([f], ["schema:simetra"])),
   ...["notify", "stamp"].map((t) =>
     action([`trigger:${T}.simetra_signal_outbox_${t}`], [`table:${T}`])
@@ -109,6 +122,7 @@ const extra = (path: string) => ({
 
 const DIFFERENCES = [
   `tables.${T}`,
+  `tables.${S}`,
   ...Object.values(U).map((f) => `units.${f}`),
   `units.grant:grant:table:${T}:simetra_command:insert(method)`,
   `units.grant:grant:table:${T}:simetra_command:insert(payload)`,

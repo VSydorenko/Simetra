@@ -145,6 +145,7 @@ describe("supabase grants are unchanged", () => {
       .filter(
         (u) =>
           u.generator !== "signalOutbox" &&
+          u.generator !== "storage" &&
           u.generator !== "signal" &&
           u.generator !== "rightsClientSnapshot" &&
           u.generator !== "rightsSignal"

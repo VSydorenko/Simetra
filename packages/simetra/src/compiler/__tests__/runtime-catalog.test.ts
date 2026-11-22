@@ -825,7 +825,7 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
 
   // Мапа — не частина знімка: хеш фікстури той самий, що до появи мапи
   // (обчислений на коміті до неї). Зміна фікстури чи платформних таблиць
-  // знімка (outbox сигналів) чи нові згенеровані одиниці (знімок прав клієнта, оракул сигналу,
+  // знімка (outbox сигналів, прив'язка сховища файлів) чи нові згенеровані одиниці (знімок прав клієнта, оракул сигналу,
   // функції відправки, виклик сигналу в ядрі, тригери сигналу прав, гілки каналів прав
   // в оракулі) чи правило ідентичності одиниць (`sql/identity.ts`) змінюють і цей літерал.
   it("stays outside the canonical snapshot and the hash", async () => {
@@ -834,7 +834,7 @@ describe("buildRuntimeCatalog: CHECK columns", () => {
     expect(canonicalSnapshot(m)).not.toHaveProperty("checkColumns")
     expect(await modelHash({ ...m, checkColumns: [] })).toBe(m.hash)
     expect(m.hash).toBe(
-      "1dba006271c3ec81a590a86017611678624afd2b1560425c99e0a21800b20acd"
+      "4060bad581a1a209953e6f5983728092a9c81cc3ff46c3bffbf587fdcc39ed80"
     )
   })
 })
