@@ -113,6 +113,21 @@ describe("operationSchema", () => {
       },
       false,
     ],
+    // Лише гілка `deleteIds` правила `expectedValues`: порожній `deleteIds`
+    // не називає секції, тож правило «секція з tabularSections» мовчить.
+    [
+      "update with expectedValues and an empty deleteIds",
+      {
+        action: "update",
+        object: OBJECT,
+        id: ID,
+        expectedVersion: 1,
+        values: { a: 2 },
+        expectedValues: { a: 1 },
+        deleteIds: {},
+      },
+      false,
+    ],
     [
       "update with creatorMember",
       {
