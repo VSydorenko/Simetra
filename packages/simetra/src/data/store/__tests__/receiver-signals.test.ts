@@ -13,6 +13,7 @@ import {
 import { coreInternals } from "../core"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import { MAX_BATCH_MS, QUIET_MS, SEEN_SIGNALS_MAX } from "../receiver"
+import { DISCARDS_MAX } from "../session"
 import type { CoreLimits, Key, ViewSpec, Writer } from "../types"
 import {
   TASK,
@@ -1066,6 +1067,68 @@ describe("version epochs", () => {
     const stored = h.fake.row(TASK, key(1))!.version
     emit(h, change("update", key(1), stored))
     await closeBatch()
+    expect(requestsSince(h, from)).toHaveLength(0)
+  })
+
+  // Після перемикання на B кожна відповідь покинутої A відкидається:
+  // перечитування доводять сесію до межі відкинутих (§6.2).
+  async function exhaust(h: Awaited<ReturnType<typeof switched>>) {
+    h.fake.epoch = EA
+    for (let i = 0; i < 4 * DISCARDS_MAX; i++) {
+      if (h.inspect.versionEpochs().unavailable) break
+      h.handle.refresh()
+      await vi.advanceTimersByTimeAsync(60_000)
+      await settle()
+    }
+    expect(h.inspect.versionEpochs().unavailable).toBe(true)
+  }
+
+  it("starts no read by a signal after the discard limit: 0 requests for a key or an invalidate", async () => {
+    const h = await switched()
+    await exhaust(h)
+    const from = h.fake.requests.length
+    const version = h.fake.edit(TASK, key(1), { title: "late" })
+    emit(h, change("update", key(1), version))
+    emit(h, { id: String(++seq), object: task.id, op: "invalidate" })
+    await closeBatch()
+    await vi.advanceTimersByTimeAsync(10_000)
+    await settle()
+    expect(requestsSince(h, from)).toHaveLength(0)
+  })
+
+  it("drops the batch waiting behind a read in flight once the discard limit is reached", async () => {
+    const h = await switched()
+    h.fake.mode = "manual"
+    h.fake.epoch = EA
+    // Межа без одного відкинутого проходу: відкинута відповідь повторюється
+    // після паузи, кожен повтор — ще один прохід. Системне перечитування, а не
+    // `refresh()`: його повтор — строк планувальника, який межа знімає.
+    void h.core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    for (let i = 0; i < 1000; i++) {
+      if (h.inspect.versionEpochs().discards === DISCARDS_MAX - 1) break
+      if (h.fake.pending.length > 0) h.fake.take(0).answer()
+      else await vi.advanceTimersByTimeAsync(50)
+      await settle()
+    }
+    expect(h.inspect.versionEpochs().discards).toBe(DISCARDS_MAX - 1)
+    // Повтор відкинутої відповіді вигляду вже летить.
+    const retried = h.fake.pending.length
+    // Читання за сигналом у польоті, друга пачка чекає за ним.
+    const stored = h.fake.row(TASK, key(1))!.version
+    emit(h, change("update", key(1), stored + 1))
+    await closeBatch()
+    expect(h.fake.pending).toHaveLength(retried + 1)
+    emit(h, change("update", key(1), stored + 2))
+    await closeBatch()
+    expect(h.fake.pending).toHaveLength(retried + 1)
+    const from = h.fake.requests.length
+    // Відповіді покинутої A — останній відкинутий прохід.
+    h.fake.deliverAll()
+    await settle()
+    expect(h.inspect.versionEpochs().unavailable).toBe(true)
+    await vi.advanceTimersByTimeAsync(10_000)
+    await settle()
     expect(requestsSince(h, from)).toHaveLength(0)
   })
 })

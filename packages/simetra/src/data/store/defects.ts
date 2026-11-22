@@ -106,6 +106,8 @@ export type DefectFlag =
   | "rights-pass-purges-allowed"
   /** A purge of a pair leaves the open signal batch of the pair: its keys are read afterwards. */
   | "receiver-purge-keeps-batch"
+  /** The receiver keeps reading by signals after the discard limit. */
+  | "receiver-reads-unavailable"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

@@ -86,6 +86,12 @@ export async function listPackedFiles(tarball: string): Promise<string[]> {
  */
 export interface ConsumerHost {
   dependencies?: Record<string, string>
+  /**
+   * Рішення pnpm 11 про скрипти збірки залежностей споживача: без рішення
+   * `pnpm install` падає з `ERR_PNPM_IGNORED_BUILDS` (напр. `protobufjs` у
+   * `centrifuge`). Репо тримає те саме в `pnpm-workspace.yaml`.
+   */
+  allowBuilds?: Record<string, boolean>
   files?: Record<string, string>
 }
 
@@ -122,9 +128,13 @@ export async function installConsumer(
     manifest.overrides =
       "simetra" in dependencies ? { simetra: "$simetra" } : {}
   } else if ("simetra" in dependencies) {
+    const builds = Object.entries(host.allowBuilds ?? {})
+      .map(([name, allowed]) => `  ${JSON.stringify(name)}: ${allowed}\n`)
+      .join("")
     await writeFile(
       join(dir, "pnpm-workspace.yaml"),
-      `overrides:\n  simetra: ${JSON.stringify(dependencies.simetra)}\n`
+      `overrides:\n  simetra: ${JSON.stringify(dependencies.simetra)}\n` +
+        (builds === "" ? "" : `allowBuilds:\n${builds}`)
     )
   }
   await writeFile(join(dir, "package.json"), JSON.stringify(manifest))
