@@ -49,7 +49,7 @@
 | ПГ8 | **Простори Centrifugo `simetra`, `simetra-rights`, `simetra-user`** з історією й `force_recovery`; клієнт не публікує, не читає історію й не підписується без токена (§6) | [ADR-0088](../../adr/0088-centrifugo-namespaces-tokens-port.md) |
 | ПГ9 | **Токени Centrifugo — EdDSA (Ed25519), ключі через JWKS host-а**, з `kid` і правилом перекриття під час ротації; TTL токена каналу 5 хв, з'єднання — 15 хв (§6.3) | [ADR-0088](../../adr/0088-centrifugo-namespaces-tokens-port.md) |
 | ПГ10 | **Порт сервера сигналів вузький — лише видача токенів** (з'єднання, канал) і JWKS; публікації йдуть через outbox, присутності немає (§7) | [ADR-0088](../../adr/0088-centrifugo-namespaces-tokens-port.md) |
-| ПГ11 | **Порт сховища файлів** `FileStore` (put, get, delete) зі структурним адаптером S3; файл — рядок об'єкта з властивістю `storage`; ключ виводиться з id об'єкта й рядка (`o/<об'єкт>/<id>`) і в рядку не зберігається; розмір і тип пише лише платформа; облік обсягу — тригер у транзакції запису рядка (§8) | [ADR-0060](../../adr/0060-files-row-plus-store-port.md) |
+| ПГ11 | **Порт сховища файлів** `FileStore` (put, get, delete) зі структурним адаптером S3; файл — рядок об'єкта з властивістю `storage`; ключ виводиться з id об'єкта й рядка (`o/<об'єкт>/<id>`) і в рядку не зберігається; розмір і тип пише лише платформа — тригер вкладення із запису `simetra.file_attach`, який кличе лише роль `simetra_files` (§3.1, §8); облік обсягу — тригер у транзакції запису рядка (§8) | [ADR-0060](../../adr/0060-files-row-plus-store-port.md) |
 | ПГ12 | **Перехідного PostgREST у `postgres` немає.** Джерело читання — лише Server Function (ПП2) (§9) | [ADR-0058](../../adr/0058-read-source-by-profile.md) |
 | ПГ13 | **Стек розробки й CI `postgres` — docker compose:** Postgres 17 (образ репо з pgTAP і `plpgsql_check`), Centrifugo, Garage; команди `pnpm db:pg:*`; DB-тести типово йдуть на ньому; стек `supabase` — регресійний (§10) | [ADR-0063](../../adr/0063-tests-without-provider-cli.md) |
 
@@ -65,6 +65,7 @@
 | `simetra_user` | `NOLOGIN NOINHERIT` | — | `roles` |
 | `simetra_anon` | `NOLOGIN NOINHERIT` | — | `roles` |
 | `simetra_signal_consumer` | `NOLOGIN NOINHERIT` | — | `roles` |
+| `simetra_files` | `NOLOGIN NOINHERIT` | — | `roles`; блок ПГ-5 |
 | `simetra_signals` | `LOGIN NOINHERIT`; `ALTER ROLE simetra_signals SET role = 'simetra_signal_consumer'` | `simetra_signal_consumer` `WITH INHERIT FALSE, SET TRUE` | `roles`, в обох профілях; роль і `simetra_signal_consumer` приносить блок ПГ-4 (до нього `roles` їх не створює) |
 | `simetra_auth` | `LOGIN NOINHERIT` | — | `roles`; власник схеми `better_auth` |
 
@@ -75,6 +76,17 @@
   - `LOGIN_ROLE_REQUEST_PURPOSES.postgres = ["user", "anonymous"]`;
   - `PLATFORM_ROLES` дістає `signalConsumer: "simetra_signal_consumer"`
     (блок ПГ-4);
+  - `PLATFORM_ROLES` дістає `files: "simetra_files"` (блок ПГ-5). На
+    відміну від `signalConsumer`, це **не** призначення гранту: генератор
+    сховища сам пише їй `USAGE ON SCHEMA simetra` і `EXECUTE` явним
+    `GRANT` після `executeGrants(signature, [], provider)`, тож декларація
+    застосунку її не адресує. Виключення «ключ `PLATFORM_ROLES`, не
+    призначення» (тип `PlatformRolePurpose` і фільтр `callersOfRole`) стає
+    однією сталою T0. `LOGIN_ROLE_PARENTS.runtime` дістає `files`
+    (`INHERIT FALSE, SET TRUE`): `supabase/roles.sql` — адитивно, `postgres`
+    — `simetra roles`; `inspect()` доводить `SET LOCAL ROLE simetra_files`,
+    як для `simetra_command`, тож рантайм без цього членства не
+    стартує;
   - `PLATFORM_LOGIN_ROLES` дістає `signals: "simetra_signals"` (в обох
     профілях, блок ПГ-4);
   - нова мапа T0 `LOGIN_ROLE_PARENTS` — дозволені батьки кожної ролі входу
@@ -834,35 +846,61 @@ SignalTokens = {
 - **Файл — рядок об'єкта з властивістю `storage`.** Властивість оголошує
   об'єкт довідника з UUID-ключем. Форма в T0 — Zod-схема з тестами разом із
   блоком ПГ-5: `storage: { maxBytes: <ціле, байти>, mediaTypes: <перелік
-  дозволених типів> }`; інших полів у першому випуску немає. Платформа виводить колонки файлу — розмір,
-  тип вмісту, ім'я — як стандартні реквізити з реєстру видів
-  (`packages/simetra/src/model/kinds/`).
+  дозволених типів> }`; інших полів у першому випуску немає. Платформа виводить колонки файлу — ім'я
+  (`file_name`, зміст), розмір (`file_size`) і тип вмісту
+  (`file_content_type`) — як умовні стандартні реквізити довідника за
+  `catalog.storage` з реєстру видів (`packages/simetra/src/model/kinds/`).
+  Розмір і тип — платформо-записувані, поза змістом, незмінні.
+- **Сумісність `storage`.** Лише `Catalog` без `role`, `membership`,
+  `rightsContainer`, `predefinedItems`, `hierarchyType: "FoldersAndItems"` і
+  не корінь виду скоупу (вставку кореня судить `rootCreatePredicates`, а не
+  попередня перевірка §8.2) — інакше `storage.incompatible`. `mediaTypes` —
+  непорожній перелік унікальних `type/subtype` малими літерами без
+  параметрів (`storage.media-type`); `maxBytes` — від 1 до
+  `STORAGE_MAX_BYTES` (T0, 100 MiB). `storage`, доданий об'єкту з живою
+  таблицею, — `plan.storage-added`; прибраний — `plan.storage-removed`.
 - **Ключа в рядку немає:** ключ об'єкта сховища виводиться з id об'єкта
   каталогу й id рядка (§8.2). Тож жоден записувач рядка не може вказати на
   чужі байти.
 - **Колонки файлу пише лише платформа.** `simetra_command` не має гранту на
-  розмір і тип вмісту: їх ставить функція `simetra.file_attach` (definer,
-  `EXECUTE` лише `simetra_command`), яку кличе лише серверний шлях
+  розмір і тип вмісту: їх ставить лише тригер вкладення (`BEFORE INSERT`,
+  definer), який забирає запис `simetra.storage_pending`, написаний
+  функцією `simetra.file_attach(p_object, p_id, p_size, p_type)` (definer,
+  `EXECUTE` лише `simetra_files`). Її кличе лише серверний шлях
   завантаження через T3 (`runtime.attachFile`, §8.4). Клієнтська команда
   `create` чи `update` цих колонок не має; хуки сирого SQL не бачать
-  (спека П4 Рт6). Ім'я файлу — звичайний реквізит змісту.
+  (спека П4 Рт6). Ім'я файлу — звичайний реквізит змісту. Колонки розміру
+  й типу незмінні: `BEFORE UPDATE OF` відмовляє.
 - **Прийнята таблиця вкладень споживача** у першому випуску за портом не
   обслуговується: вона лишається на Storage-API в профілі `supabase` (ПП4)
   і переходить на порт промоцією у вид з властивістю `storage`. Причина:
   колонки прийнятої таблиці пише код споживача, тож платформа не може
   гарантувати, що розмір і посилання на байти чесні.
-- Виклик `simetra.file_attach`, `simetra.storage_rows_exist` і
-  `simetra.storage_headroom` у SQL застосунку (модулі, названі запити) —
-  помилка компілятора: ці функції — лише шлях T3, а `EXECUTE` має та сама
-  роль команд, від якої виконується SQL модулів.
+- Виклик `simetra.file_attach`, `simetra.storage_rows_exist`,
+  `simetra.storage_row_page` і `simetra.storage_headroom` у SQL застосунку
+  (модулі, названі запити, definer-функції) — помилка компілятора
+  `sql.platform-function-call`: функції сховища не входять у
+  `PLATFORM_READ_FUNCTIONS`. `EXECUTE` на `file_attach`, `storage_rows_exist`
+  і `storage_row_page` має лише `simetra_files`, тож з SQL модуля
+  (`simetra_command`) виклик відмовляє й у базі; `SET ROLE` і
+  `set_config('role', …)` — `sql.command-context-write`. Таблиці
+  `simetra.storage_*` — платформні таблиці знімка: правило 1 закриває їх
+  для запису з SQL застосунку.
+- **Прийняте відхилення в `supabase` (S3).** Байти там лежать у приватному
+  бакеті Supabase Storage за S3-протоколом (`fromS3Client`); S3-ключ
+  Supabase діє на весь проєкт, тож «ключ лише цього бакета» (§8.2) там не
+  виконується. Запобіжники: ключ лише в серверному середовищі host-а, бакет
+  і ключ об'єкта задає лише сервер. SQL-частина (рядок, облік, функції)
+  однакова в обох профілях; прийняті бази лишаються на Storage-API (ПП4).
 - Доступ до рядка — RLS рядка, як до будь-якого об'єкта (§6.8 платформної
   спеки). Доступ до байтів — лише серверні endpoint-и після читання рядка
   під роллю запиту.
 
 ### 8.2 Ключ, бакет, потоки
 
-- **Бакет на застосунок;** ключ доступу Garage дає читання й запис лише
-  цього бакета; ключ знає лише host. Публічного доступу, вебсайту бакета й
+- **Бакет на застосунок;** у `postgres` ключ доступу Garage дає читання й
+  запис лише цього бакета; ключ знає лише host (відхилення `supabase` —
+  §8.1). Публічного доступу, вебсайту бакета й
   підписаних посилань немає (ПП4).
 - **Ключ об'єкта** — `o/<UUID об'єкта каталогу>/<id рядка>`; id рядка —
   UUID, який генерує сервер. Ключ виводиться, а не зберігається, тож
@@ -874,25 +912,42 @@ SignalTokens = {
   2. попередня перевірка в транзакції `READ ONLY` під роллю запиту: право
      `create` на об'єкт у цільовому скоупі й запас обсягу через
      `simetra.storage_headroom(p_object uuid, p_scope uuid) RETURNS
-     boolean` (definer, `EXECUTE` ролі запиту користувача; `false`, коли
-     скоуп не входить у множину скоупів користувача чи об'єкт без
-     `storage`). Функція відповідає лише «чи вміститься файл розміру
-     `maxBytes` об'єкта»: поріг сталий, тож двійковим пошуком обсяг скоупу
-     не дізнатись. Роль запиту грантів на таблиці обліку не має.
-     Відмова — без жодного байта в бакеті;
+     boolean` (definer, `EXECUTE` ролі запиту користувача). `false`, коли
+     жоден безрядковий грант `create` не покриває `p_scope`, `p_scope` поза
+     множиною скоупів користувача, об'єкт без `storage` або файл розміру
+     `maxBytes` не вміститься. Умову прав беруть будівники політик
+     (`rowFreeGrants(rights, "create", main)`: АБО над `any`/`own`/`dim`, для
+     нескоупленого — `has_right`; межа — `tenantBoundary` / `scopeSetCall`):
+     другої копії правила немає. Поріг сталий, тож двійковим пошуком обсяг
+     скоупу не дізнатись, а одне булеве не розкриває, яка умова відмовила.
+     Перевірка необхідна, не достатня: умови значень рядка (носій
+     власності, вимір, контейнер) судить `INSERT` кроку 4. Роль запиту
+     грантів на таблиці обліку не має. Відмова — без жодного байта в
+     бакеті;
   3. генерує id і пише байти в `o/<об'єкт>/<id>` з межею `maxBytes` об'єкта,
-     рахуючи розмір сам;
-  4. `runtime.attachFile` — одна транзакція команди: `create` рядка з
-     реквізитами змісту, `simetra.file_attach` з розміром і типом, облік
-     обсягу з остаточною перевіркою межі. `file_attach` відмовляє
-     `storage.attach-invalid`, коли: рядок вставлено не в поточній
-     транзакції (`xmin` рядка ≠ поточний xid); розмір чи тип уже записано;
-     тип поза `mediaTypes`; розмір понад `maxBytes`;
-  5. відмова кроку 4 — endpoint видаляє об'єкт; що лишилось після збою
-     процесу — прибирає звірка.
+     рахуючи розмір сам (розмір для `file_attach` — лише з `put`);
+  4. `runtime.attachFile` — одна транзакція команди: `SET LOCAL ROLE
+     simetra_files` → `simetra.file_attach(p_object, p_id, p_size, p_type)`
+     → `SET LOCAL ROLE simetra_command` → фаза `create` рядка з реквізитами
+     змісту. `file_attach` перевіряє тип і розмір проти `storage`
+     (`storage.attach-invalid`) і пише запис `simetra.storage_pending` з
+     унікальним ключем (`pg_current_xact_id()`, об'єкт, id): повтор для
+     того самого id відмовляє. Тригер вкладення `BEFORE INSERT` забирає
+     запис (`DELETE … RETURNING`) і ставить колонки; без запису —
+     `storage.attach-missing`, тож інший шлях вставки (клієнтська `create`,
+     `ctx.run`, копіювання) відмовляє. Після `create` `attachFile` під
+     `simetra_files` перевіряє, що записів поточної транзакції не
+     лишилось; чужі записи прибирає звірка. Облік обсягу з остаточною
+     перевіркою межі — тригер §8.3. `UPDATE` після `create` не
+     використовується: він піднімав би версію й запускав тригери прав,
+     змісту й обліку;
+  5. відмова кроку 4 після відомого відкату — endpoint видаляє об'єкт; при
+     невідомому результаті `COMMIT` (`commitUnknown`) байти лишаються; що
+     лишилось після збою процесу — прибирає звірка.
 
-  Кількість одночасних завантажень на користувача обмежує host (опція
-  шаблону): межа обсягу судить лише закомічені рядки. Заміна файлу — лише
+  Кількість одночасних завантажень на користувача, бюджет буфера й не більше
+  10 хв між `put` і `attachFile` обмежує host (опції шаблону, ПГ-5 Б):
+  межа обсягу судить лише закомічені рядки. Заміна файлу — лише
   новий рядок з новим id і видалення старого; зміни байтів чи розміру на
   місці немає, тож тригер обліку на `UPDATE OF <розмір>` лише страхує.
 - **Читання:** endpoint читає рядок під роллю запиту (`runtime.read`) → немає
@@ -902,29 +957,44 @@ SignalTokens = {
   `Content-Type` з переліку дозволених типів об'єкта, інакше
   `application/octet-stream`, `X-Content-Type-Options: nosniff`,
   `Content-Security-Policy: sandbox`, `Cache-Control: private, no-store`.
-- **Видалення:** endpoint перевіряє походження, як завантаження; команда видаляє рядок; `afterCommit` видаляє об'єкт;
-  невдача — звірка.
+- **Видалення:** endpoint перевіряє походження, як завантаження; команда
+  видаляє рядок; байти видаляє рантайм (`createCommandRuntime({ files?:
+  FileStore })`): ключ — лише з результату фази `delete` цієї спроби, де
+  ядро підтвердило видалення (не з вхідного id), у `afterCommit` спроби.
+  Шлях — клієнтська команда чи `ctx.run`. `markDeletion`, каскад (власник,
+  скоуп) і робота без опції — звірці; невдача — теж звірка.
 - **Звірка** — фонове завдання host-а:
   - перелічує лише префікс `o/<UUID об'єкта>/` для об'єктів каталогу з
     властивістю `storage`; префікс невідомого об'єкта не видаляється, а
     журналюється;
   - наявність рядків перевіряє definer-функція власника
     `simetra.storage_rows_exist(p_object uuid, p_ids uuid[])` (`EXECUTE`
-    лише `simetra_command`, кличе лише T3 `runtime.reconcileFiles`), бо під
+    лише `simetra_files`, кличе лише T3 `runtime.reconcileFiles`), бо під
     RLS рядки інших тенантів невидимі й їхні байти стали б «сиротами».
     Функція відмовляє для об'єкта без властивості `storage` і для понад
     1000 id за виклик;
+  - «зараз» бере з бази (`now()`), а не з годинника host-а;
   - видаляє об'єкти без рядка, старші за 24 год;
   - запобіжник: якщо за прогін до видалення припадає понад 5 %
     переліченого **і** понад 20 об'єктів, звірка нічого не видаляє й
     журналює відмову (помилковий DSN чи бакет). Нижня межа в 20 об'єктів
     дає прибрати поодинокі сироти в малому бакеті;
-  - рядок без об'єкта — дефект, звірка його журналює.
+  - рядок без об'єкта — дефект, звірка його журналює: рядки без байтів
+    перелічує `simetra.storage_row_page(p_object uuid, p_after uuid)
+    RETURNS SETOF uuid` (definer, `EXECUTE` лише `simetra_files`, до 1000
+    id); рядок, що з'явився під час переліку, не дефект;
+  - **прив'язка бази й бакета.** `simetra.storage_instance` — безумовна
+    платформна таблиця стану з одним рядком випадкового uuid, що переживає
+    повторне застосування й видалення всіх об'єктів зі `storage`. Об'єкт
+    `simetra-instance` у бакеті з тим самим uuid пише `put` лише в порожній
+    бакет; непорожній бакет без маркера чи інший маркер — відмова `put` і
+    звірки (нуль видалень): чужий бакет має ті самі префікси, і запобіжник
+    5 % / 20 не зупинив би видалення живих байтів.
 
 ### 8.3 Облік обсягу
 
-- Тригер `AFTER INSERT OR UPDATE OF <розмір> OR DELETE` на таблиці рядків
-  файлів у транзакції запису веде `simetra.storage_usage (scope_kind,
+- Тригер `AFTER INSERT OR DELETE` на таблиці рядків файлів у транзакції
+  запису веде `simetra.storage_usage (scope_kind,
   scope, bytes)` (upsert). Функція тригера — `SECURITY DEFINER` від
   власника з `SET search_path = ''`: роль команд грантів на таблиці
   `simetra` не має.
@@ -950,11 +1020,23 @@ FileStore = {
 }
 ```
 
+Відмови сховища — закритий перелік T0 `STORAGE_ERRORS` за зразком
+`COMMAND_CORE_ERRORS`: `attach-missing`, `attach-invalid`, `quota-exceeded`;
+`mapDatabaseError` дає `command.rejected` з `reason` `storage.<причина>`
+(спека П4 §6.10).
+
 - Порт — T3; адаптер `fromS3Client(client, bucket)` читає клієнт S3
-  структурно, без імпорту SDK (як `fromPgPool`, спека П4 Рт1).
-- T3 дає `runtime.attachFile(session, { object, scope, id, fields, size,
-  contentType })` (крок 4 завантаження) і `runtime.reconcileFiles(store)`
-  (звірка); обидва — серверні, без дверей клієнта.
+  структурно (`putObject`, `getObject`, `deleteObject`, `listObjectsV2`), без
+  імпорту SDK (як `fromPgPool`, спека П4 Рт1). `put` сам рахує байти,
+  обриває потік понад `maxBytes` і буферизує тіло для `ContentLength`; стеля
+  T0 `STORAGE_MAX_BYTES` — 100 MiB.
+- T3 дає `runtime.checkUpload(session, { object, scope })` (крок 2:
+  `{ maxBytes, mediaTypes }` чи `null`), `runtime.attachFile(session, {
+  object, scope, id, name, fields, size, contentType })` (крок 4; ім'я
+  мапиться в стильований `file_name` за `naming.attributeCase`; помилка з
+  ознакою `commitUnknown`, коли `terminalOf` дав `command.unavailable` після
+  надісланого `COMMIT`) і `runtime.reconcileFiles(store, { log })` (звірка);
+  усі — серверні, без дверей клієнта, у маршруту SQL немає.
 - У профілі `supabase` прийняті бази лишаються на Storage-API з політиками
   на `storage.objects` (ПП4); нові об'єкти з властивістю `storage` в обох
   профілях ідуть через цей порт.
@@ -1110,9 +1192,13 @@ FileStore = {
 - **прибирання на сигналах:** ті самі SIGINT, SIGTERM, SIGHUP; додатково
   `docker rm -f` контейнерів свого тегу; бакет свого тегу спершу
   спорожнюється, потім видаляється (Garage видаляє лише порожній бакет).
-  До ПГ-5 прибиральник видаляє лише **порожні** бакети тегу, а непорожній
-  називає в звіті про залишки; спорожнення бакета з об'єктами приходить у
-  ПГ-5 разом із першим тестом, що пише байти;
+  Прибиральник адресує рівно `runBucketName(<свій тег>)`, без відбору за
+  префіксом: спорожнює (`ListObjectsV2` + `DeleteObjects`), потім
+  видаляє, а в звіті називає лише бакет, який спорожнити не вдалося.
+  Garage: `createRunBucket` і admin `AllowBucketKey`; Supabase: `run-<тег>`
+  через S3 `CreateBucket`, знімок guard-а читає `storage.buckets`, значення
+  S3 беруться з одного `supabase status -o env` у `globalSetup` і йдуть у
+  тести через `provide`/`inject`;
 - **тег прогону:** бази, ролі й тіні — як зараз (`connection.ts`);
   контейнер Centrifugo стенду — обидві мітки (аргументи `docker run` дає
   помічник `runContainerLabels` у `packages/simetra/test/db/external.ts`) і
