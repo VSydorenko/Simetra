@@ -13,11 +13,13 @@ import type { CatalogIndex } from "./mapping"
  * - `<реквізит шапки>[.<i>]`, `keyName`, `versionName` ↔ колонка;
  * - решта (структурні слова, довільний шлях застосунку) — без змін.
  *
- * Перший сегмент шукається спершу серед ТЧ, далі `creatorMember`, далі серед
- * реквізитів, ключа й версії, далі `expectedValues`: імена ТЧ і реквізитів — один простір імен
- * об'єкта (`identity.name-duplicate`), тож збіг однозначний, а ім'я каталогу
- * виграє в структурного слова. Пошук — лише перебором масивів каталогу, тож
- * `__proto__` чи `constructor` не збігаються ні з чим і лишаються як є.
+ * Перший сегмент — спершу структурний префікс (`STRUCTURAL_PATH_WORDS`), далі
+ * ТЧ, далі реквізити, ключ і версія. Префікс іде першим, бо фізична колонка
+ * передачі може називатися як префікс, а логічне ім'я — ні: компілятор
+ * забороняє його (`identity.name-structural`). Імена ТЧ і реквізитів — один
+ * простір імен об'єкта (`identity.name-duplicate`), тож решта збігів
+ * однозначна. Пошук — лише перебором масивів каталогу, тож `__proto__` чи
+ * `constructor` не збігаються ні з чим і лишаються як є.
  */
 
 /** Сегмент — індекс масиву: ні ім'я, ні колонка не складаються лише з цифр. */
@@ -25,6 +27,14 @@ const INDEX = /^\d+$/
 
 const MEMBER = "creatorMember"
 const EXPECTED = "expectedValues"
+
+/**
+ * Structural words that head an error path of an operation
+ * (`creatorMember.<name>`, `expectedValues.<name>`). They are reserved: an
+ * attribute, a tabular section or a column must not take one as its logical
+ * name, or its error path could not be told from the structural one.
+ */
+export const STRUCTURAL_PATH_WORDS: readonly string[] = [MEMBER, EXPECTED]
 
 type Direction = "toWire" | "fromWire"
 
@@ -63,6 +73,25 @@ function mapPath(
   const [head = "", ...rest] = path.split(".")
   const toWire = direction === "toWire"
 
+  if (head === MEMBER) {
+    const membership =
+      entry.creatorMembership === undefined
+        ? undefined
+        : index.byId.get(entry.creatorMembership)
+    const [name, ...tail] = rest
+    if (membership === undefined || name === undefined) return path
+    const mapped = mapField(headerFields(membership), name, direction) ?? name
+    return [MEMBER, mapped, ...tail].join(".")
+  }
+
+  // База CAS за полями — ті самі реквізити шапки, що й `values`.
+  if (head === EXPECTED) {
+    const [name, ...tail] = rest
+    if (name === undefined) return path
+    const field = mapField(attributeFields(entry.attributes), name, direction)
+    return [EXPECTED, field ?? name, ...tail].join(".")
+  }
+
   const section = entry.tabularSections.find((s) =>
     toWire ? s.name === head : s.id === head
   )
@@ -81,23 +110,8 @@ function mapPath(
     return [toWire ? section.id : section.name, ...tail].join(".")
   }
 
-  if (head === MEMBER && entry.creatorMembership !== undefined) {
-    const membership = index.byId.get(entry.creatorMembership)
-    const [name, ...tail] = rest
-    if (membership === undefined || name === undefined) return path
-    const mapped = mapField(headerFields(membership), name, direction) ?? name
-    return [MEMBER, mapped, ...tail].join(".")
-  }
-
   const mapped = mapField(headerFields(entry), head, direction)
   if (mapped !== undefined) return [mapped, ...rest].join(".")
-  // База CAS за полями — ті самі реквізити шапки, що й `values`; реквізит з
-  // ім'ям `expectedValues` уже виграв вище.
-  if (head === EXPECTED && rest[0] !== undefined) {
-    const [name, ...tail] = rest
-    const field = mapField(attributeFields(entry.attributes), name, direction)
-    return [EXPECTED, field ?? name, ...tail].join(".")
-  }
   return path
 }
 

@@ -134,22 +134,34 @@ describe("pathToWire / pathFromWire", () => {
     expect(pathFromWire(index, ODD_ID, "values_col")).toBe("values")
   })
 
-  it("maps an attribute named expectedValues as the attribute", () => {
+  it("maps a structural prefix before a same-named attribute or column", () => {
+    // Ім'я каталогу не перехоплює структурне слово: компілятор забороняє
+    // такі імена (`identity.name-structural`), а фізичну колонку — ні.
     const named = catalogEntry({
       id: ODD_ID,
       name: "Odd",
       attributes: [
-        catalogEntryAttribute({
-          name: "expectedValues",
-          column: "ev_list",
-          array: true,
-        }),
+        catalogEntryAttribute({ name: "title", column: "title_col" }),
+        catalogEntryAttribute({ name: "expectedValues", column: "ev_col" }),
+        catalogEntryAttribute({ name: "creatorMember", column: "cm_col" }),
+        catalogEntryAttribute({ name: "ev", column: "expectedValues" }),
+        catalogEntryAttribute({ name: "cm", column: "creatorMember" }),
       ],
       tabularSections: [],
     })
     const own = catalogIndex([named])
-    expect(pathToWire(own, ODD_ID, "expectedValues.1")).toBe("ev_list.1")
-    expect(pathFromWire(own, ODD_ID, "ev_list.1")).toBe("expectedValues.1")
+    expect(pathToWire(own, ODD_ID, "expectedValues.title")).toBe(
+      "expectedValues.title_col"
+    )
+    expect(pathFromWire(own, ODD_ID, "expectedValues.title_col")).toBe(
+      "expectedValues.title"
+    )
+    expect(pathToWire(own, ODD_ID, "expectedValues")).toBe("expectedValues")
+    expect(pathFromWire(own, ODD_ID, "expectedValues")).toBe("expectedValues")
+    expect(pathToWire(own, ODD_ID, "creatorMember.user")).toBe(
+      "creatorMember.user"
+    )
+    expect(pathFromWire(own, ODD_ID, "creatorMember")).toBe("creatorMember")
   })
 
   it("keeps the path of an unknown object", () => {
