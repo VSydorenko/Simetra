@@ -214,6 +214,11 @@ describe("policyFunctions: the form (І2)", () => {
       detail: "policyShape, policyRoles",
     },
     {
+      name: "an output column of another input than T",
+      sql: fn(`SELECT m.user_id ${JOIN} WHERE ${ACTOR}`) + POLICY + GRANT,
+      reason: "outputKey",
+    },
+    {
       name: "T twice in FROM",
       sql:
         fn(
