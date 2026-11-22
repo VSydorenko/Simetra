@@ -9,6 +9,7 @@ import {
   TABULAR_LINES_MAX,
   isPlainObject,
   jsonbBuildObject,
+  rowWithoutSearch,
   knownFormAllowed,
   knownSchema,
   metadataRefSchema,
@@ -147,11 +148,19 @@ function cardProjection(object: RuntimeObject): string {
     const cast = textCast(a)
     return cast === undefined ? [] : [pairOf(a.column, cast)]
   })
+  // Нормалізовані колонки пошуку — не поля: картка знімає їх тим самим
+  // правилом, що й результат ядра.
+  const json = rowWithoutSearch(
+    "to_jsonb(t)",
+    object.attributes.flatMap((a) =>
+      a.search === undefined ? [] : [{ name: a.search }]
+    )
+  )
   // Приведень буває понад 50 — шматки, як у списку: інакше понад 100
   // аргументів `jsonb_build_object`.
   return text.length === 0
-    ? "to_jsonb(t)::text"
-    : `(to_jsonb(t) || ${jsonbBuildObject(text)})::text`
+    ? `${json}::text`
+    : `(${json} || ${jsonbBuildObject(text)})::text`
 }
 
 /**

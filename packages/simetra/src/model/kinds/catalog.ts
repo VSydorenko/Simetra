@@ -438,6 +438,17 @@ export const catalogKind: KindDefinition = {
   keyOrder: keyOrderOf(catalogSchema),
   referenceable: true,
   compositeIndexes: true,
+  search: {
+    defaultFields(obj) {
+      // Поле представлення — реквізит, який вказує `mainPresentation`; якщо
+      // його вимкнено нульовою довжиною, колонки немає і поле відпадає.
+      const name =
+        (obj as Catalog).mainPresentation === "Code" ? "code" : "description"
+      return standardColumns(obj).some((c) => c.logicalName === name)
+        ? [name]
+        : []
+    },
+  },
   writePattern: "optimistic",
   actions(obj) {
     const actions = roleOf(obj).actions

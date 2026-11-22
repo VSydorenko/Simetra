@@ -81,3 +81,62 @@ export function chooseConstraintName(
   }
   return candidate
 }
+
+/**
+ * Physical name of the normalized search column of a field (P2 spec §5,
+ * "Поля пошуку"): derived from the field's own physical name, which is
+ * assigned once, so it never changes with a rename.
+ */
+export function searchColumnName(column: string): string {
+  return makeObjectName(column, undefined, "search")
+}
+
+/**
+ * Normalization of a search value (P2 spec §5, "Поля пошуку"; P4-B §4.1):
+ * both sides of the exact `startsWith` check over the full value, and the
+ * base of the bounded `searchPrefixNormalization`. `expression` is SQL
+ * already quoted by the caller.
+ */
+// Одне правило для компілятора, читання й зворотного генератора: розійдись
+// вирази — `startsWith` за полем пошуку і без нього дав би різні множини.
+// Колляція бази явно: колонка прийнятої таблиці може мати свою (`C`).
+export function searchNormalization(expression: string): string {
+  return `lower(${expression} COLLATE "default")`
+}
+
+/**
+ * Upper bound of a btree index tuple on the default 8 kB page
+ * (`BTMaxItemSize`): Postgres rejects a longer one with SQLSTATE 54000,
+ * "index row size … exceeds btree version 4 maximum 2704".
+ */
+const BTREE_MAX_ITEM_BYTES = 2704
+/** Worst encoding of a character: UTF-8, up to 4 bytes. */
+const MAX_CHAR_BYTES = 4
+/**
+ * Room left in the tuple for the index tuple header (8 bytes), the varlena
+ * header (4 bytes) and alignment, with spare.
+ */
+const INDEX_TUPLE_MARGIN_BYTES = 64
+
+/**
+ * Characters of a search value kept in the normalized column (P2 spec §5,
+ * "Поля пошуку"; ADR-0097): the longest prefix whose index tuple fits a
+ * btree in the worst encoding.
+ */
+// Нормалізована колонка несе лише префікс: повне значення Text чи довгого
+// String не влізло б у рядок btree, і CREATE INDEX на прийнятих даних та
+// збереження довгого значення падали б з 54000. Межа — у символах після
+// `lower` (він може подовжити рядок: `İ` → `i̇`), тож байтів не більше за
+// межу за будь-якого вмісту.
+export const SEARCH_PREFIX_CHARS = Math.floor(
+  (BTREE_MAX_ITEM_BYTES - INDEX_TUPLE_MARGIN_BYTES) / MAX_CHAR_BYTES
+)
+
+/**
+ * Bounded normalization (P2 spec §5, "Поля пошуку"): the generation
+ * expression of the normalized column and the index side of a `startsWith`
+ * read over it. The full-value check stays `searchNormalization`.
+ */
+export function searchPrefixNormalization(expression: string): string {
+  return `left(${searchNormalization(expression)}, ${SEARCH_PREFIX_CHARS})`
+}

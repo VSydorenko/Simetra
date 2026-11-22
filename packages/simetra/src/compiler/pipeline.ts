@@ -1337,8 +1337,12 @@ export function sqlStage(
   // Стадії 3–4 спираються на резолвлені посилання й наявні id та
   // physicalName, тож на зламаній моделі не запускаються. Стадія 3 бігає до
   // розбору `.sql`: типи рядків таблиць потрібні ідентичності аргументів.
+  // Помилка класу ремонту стадії 2 (`customTable.index-derived-column`)
+  // модель не ламає: стадія 3 її будує, а чи віддати модель далі, вирішує
+  // гейт стадій режиму `repair`.
   const stage3 =
-    stage1.project === undefined || hasErrors(upstream)
+    stage1.project === undefined ||
+    hasErrors(upstream.filter((d) => !isRepairError(d)))
       ? undefined
       : buildModel(stage1.objects, stage1.project, stage2.references)
   // Некваліфіковані імена `.sql` беруть схему проєкту, тож без валідного

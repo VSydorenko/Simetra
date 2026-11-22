@@ -25,3 +25,18 @@ export function jsonbBuildObject(pairs: readonly string[]): string {
   }
   return calls.length === 1 ? calls[0]! : `(${calls.join(" || ")})`
 }
+
+/**
+ * A row's `jsonb` without the keys of `columns`: the encoding of a row (the
+ * kernel result and the read card, one form) drops the columns that are not
+ * entity fields — the normalized search columns. No columns — `json` as is.
+ */
+export function rowWithoutSearch(
+  json: string,
+  columns: readonly { name: string }[]
+): string {
+  // Ключ — літерал рядка: оператор `jsonb - text` знімає ключ верхнього рівня.
+  return columns.length === 0
+    ? json
+    : `(${[json, ...columns.map((c) => `'${c.name.replaceAll("'", "''")}'`)].join(" - ")})`
+}

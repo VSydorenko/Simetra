@@ -1319,6 +1319,29 @@
         "additionalProperties": false,
         "description": "Non-unique btree index over attributes of the same table; the scope carrier is added first automatically."
       }
+    },
+    "search": {
+      "type": "object",
+      "properties": {
+        "fields": {
+          "description": "Logical names of header attributes (standard and custom) to search by; omitted means the kind's default presentation fields.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "mode": {
+          "description": "Search mode: startsWith (prefix, indexed) or contains (substring, scope scan); contains by default.",
+          "type": "string",
+          "enum": [
+            "startsWith",
+            "contains"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "description": "Search fields and mode of the object."
     }
   },
   "required": [

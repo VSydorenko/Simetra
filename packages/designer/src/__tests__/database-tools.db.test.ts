@@ -5,7 +5,11 @@ import { Client } from "@modelcontextprotocol/client"
 import { InMemoryTransport } from "@modelcontextprotocol/server"
 import pg from "pg"
 import { compile, type CompiledModel } from "simetra/compiler"
-import { PROVIDER_IDENTITY_SOURCES, PROVIDER_OWNER_ROLES } from "simetra/model"
+import {
+  PROVIDER_IDENTITY_SOURCES,
+  PROVIDER_OWNER_ROLES,
+  SEARCH_PREFIX_CHARS,
+} from "simetra/model"
 import {
   desiredForApply,
   renderApplyState,
@@ -18,6 +22,7 @@ import { readMetadataDir } from "../io/metadata-dir"
 import { createMcpServer } from "../mcp/server"
 import { createPgDeltaEngine } from "../schema-engine"
 import { readOnlyTransactionPool } from "../schema-engine/read-only"
+import type { PlanData } from "../tools/apply-tools"
 import type { DiffData } from "../tools/database-tools"
 import { toolByName } from "../tools/catalog"
 import { invoke } from "../tools/invoke"
@@ -192,6 +197,206 @@ describe("introspect", () => {
         expect(
           errors(r).filter((d) => d.code === "engine.unrepresentable")
         ).not.toEqual([])
+      }
+    )
+  })
+
+  // Борг прийнятої бази з `currval` у тілі функції — клас ремонту: тека
+  // записана, а план застосування заблокований, доки функцію не виправлено.
+  it("introspect of a function with currval writes the folder, the plan is blocked until it is fixed", async () => {
+    await inTarget(
+      `CREATE SCHEMA app;
+       CREATE TABLE app.note (id uuid PRIMARY KEY, n bigint);
+       CREATE SEQUENCE app.note_seq;
+       CREATE FUNCTION app.next_note() RETURNS bigint LANGUAGE plpgsql AS $$
+       BEGIN
+         PERFORM nextval('app.note_seq');
+         RETURN currval('app.note_seq');
+       END $$;`,
+      ["app"],
+      async (url) => {
+        const dir = await freshProject()
+        const env = { [ENV]: url }
+        await call("introspect", introspectInput, options(dir, env))
+        const files = await readMetadataDir(dir)
+        const sqlPath = [...files.keys()].find((f) => f.endsWith(".sql"))
+        expect(sqlPath, "the function is written to a sql file").toBeDefined()
+        const compileOptions = {
+          dir,
+          readOnly: false,
+          allowDatabaseWrite: false,
+          dryRun: false,
+          confirmed: false,
+          channel: "cli" as const,
+        }
+        const blocked = await invoke(toolByName("compile")!, {}, compileOptions)
+        expect(blocked.ok).toBe(false)
+        const found = errors(blocked).filter(
+          (d) => d.code === "sql.function-body-session-builtin"
+        )
+        expect(found).toHaveLength(1)
+        expect(found[0]?.hint).toContain("INSERT … RETURNING")
+        expect(found[0]?.hint).not.toContain("advisory")
+
+        const path = join(dir, sqlPath!)
+        await writeFile(
+          path,
+          (await readFile(path, "utf8")).replace(
+            "currval('app.note_seq')",
+            "42"
+          )
+        )
+        const fixed = await invoke(toolByName("compile")!, {}, compileOptions)
+        expect(errors(fixed)).toEqual([])
+        expect(fixed.ok).toBe(true)
+        // Не лише компіляція: план застосування над прийнятою базою проходить.
+        const planned = await invoke(toolByName("plan")!, {}, options(dir, env))
+        expect(errors(planned), JSON.stringify(planned.diagnostics)).toEqual([])
+        expect(planned.ok).toBe(true)
+      }
+    )
+  })
+
+  it("introspect of a unique index on the derived search column writes the folder, the plan is blocked until the index is rebuilt over the source", async () => {
+    await inTarget(
+      `CREATE SCHEMA app;
+       CREATE TABLE app.notes (
+         id uuid PRIMARY KEY,
+         note text,
+         note_search text GENERATED ALWAYS AS
+           (left(lower(note COLLATE "default"), ${SEARCH_PREFIX_CHARS})) STORED
+       );
+       CREATE INDEX notes_note_search_idx ON app.notes (note_search text_pattern_ops);
+       CREATE UNIQUE INDEX notes_note_unique ON app.notes (note_search);`,
+      ["app"],
+      async (url) => {
+        const dir = await freshProject()
+        const env = { [ENV]: url }
+        const adopted = await call(
+          "introspect",
+          introspectInput,
+          options(dir, env)
+        )
+        expect(adopted.written).toBe(true)
+        const files = await readMetadataDir(dir)
+        const path = [...files.keys()].find((f) =>
+          f.startsWith("custom-tables/")
+        )!
+        const data = JSON.parse(files.get(path)!) as {
+          search: { fields: string[] }
+          indexes: { name: string; unique?: true; keys: { column: string }[] }[]
+        }
+        expect(data.search.fields).toEqual(["note"])
+        const compileOptions = {
+          dir,
+          readOnly: false,
+          allowDatabaseWrite: false,
+          dryRun: false,
+          confirmed: false,
+          channel: "cli" as const,
+        }
+        const blocked = await invoke(toolByName("compile")!, {}, compileOptions)
+        expect(blocked.ok).toBe(false)
+        expect(errors(blocked).map((d) => [d.code, d.params?.name])).toEqual([
+          ["customTable.index-derived-column", "notes_note_unique"],
+        ])
+        expect(errors(blocked)[0]?.hint).toContain("source column")
+        const refused = await invoke(toolByName("plan")!, {}, options(dir, env))
+        expect(refused.ok).toBe(false)
+        expect(errors(refused).map((d) => d.code)).toContain(
+          "customTable.index-derived-column"
+        )
+
+        // Індекс над колонкою-джерелом: обмеження лишається UNIQUE
+        const rebuilt = {
+          ...data,
+          indexes: data.indexes.map((i) =>
+            i.name === "notes_note_unique"
+              ? { ...i, keys: [{ column: "note" }] }
+              : i
+          ),
+        }
+        await writeFile(join(dir, path), JSON.stringify(rebuilt, null, 2))
+        const fixed = await invoke(toolByName("compile")!, {}, compileOptions)
+        expect(errors(fixed)).toEqual([])
+        const planned = await invoke(toolByName("plan")!, {}, options(dir, env))
+        expect(errors(planned), JSON.stringify(planned.diagnostics)).toEqual([])
+        expect(planned.ok).toBe(true)
+        expect(
+          (planned.data as PlanData).steps.map((s) => s.sql)
+        ).toContainEqual(
+          expect.stringMatching(
+            /CREATE UNIQUE INDEX "?notes_note_unique"? ON .*\(note\)/
+          )
+        )
+      }
+    )
+  })
+
+  it("introspect of a unique constraint on the derived search column writes the folder, the plan is blocked until it is rebuilt over the source", async () => {
+    await inTarget(
+      `CREATE SCHEMA app;
+       CREATE TABLE app.notes (
+         id uuid PRIMARY KEY,
+         note text,
+         note_search text GENERATED ALWAYS AS
+           (left(lower(note COLLATE "default"), ${SEARCH_PREFIX_CHARS})) STORED,
+         CONSTRAINT notes_note_key UNIQUE (note_search)
+       );
+       CREATE INDEX notes_note_search_idx ON app.notes (note_search text_pattern_ops);`,
+      ["app"],
+      async (url) => {
+        const dir = await freshProject()
+        const env = { [ENV]: url }
+        const adopted = await call(
+          "introspect",
+          introspectInput,
+          options(dir, env)
+        )
+        expect(adopted.written).toBe(true)
+        const files = await readMetadataDir(dir)
+        const path = [...files.keys()].find((f) =>
+          f.startsWith("custom-tables/")
+        )!
+        const data = JSON.parse(files.get(path)!) as {
+          uniques: { name: string; columns: string[] }[]
+        }
+        const compileOptions = {
+          dir,
+          readOnly: false,
+          allowDatabaseWrite: false,
+          dryRun: false,
+          confirmed: false,
+          channel: "cli" as const,
+        }
+        const blocked = await invoke(toolByName("compile")!, {}, compileOptions)
+        expect(errors(blocked).map((d) => [d.code, d.params?.name])).toEqual([
+          ["customTable.index-derived-column", "notes_note_key"],
+        ])
+        const refused = await invoke(toolByName("plan")!, {}, options(dir, env))
+        expect(refused.ok).toBe(false)
+        expect(errors(refused).map((d) => d.code)).toContain(
+          "customTable.index-derived-column"
+        )
+
+        // Обмеження над колонкою-джерелом лишається UNIQUE
+        const rebuilt = {
+          ...data,
+          uniques: data.uniques.map((u) =>
+            u.name === "notes_note_key" ? { ...u, columns: ["note"] } : u
+          ),
+        }
+        await writeFile(join(dir, path), JSON.stringify(rebuilt, null, 2))
+        const fixed = await invoke(toolByName("compile")!, {}, compileOptions)
+        expect(errors(fixed)).toEqual([])
+        const planned = await invoke(toolByName("plan")!, {}, options(dir, env))
+        expect(errors(planned), JSON.stringify(planned.diagnostics)).toEqual([])
+        expect(planned.ok).toBe(true)
+        expect(
+          (planned.data as PlanData).steps.map((s) => s.sql)
+        ).toContainEqual(
+          expect.stringMatching(/"?notes_note_key"? UNIQUE \(note\)/)
+        )
       }
     )
   })

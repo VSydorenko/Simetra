@@ -7,6 +7,7 @@ import type {
   EngineObjectRef,
   LockedTable,
 } from "../engine"
+import { isDerivedDrop } from "./derived-columns"
 import { applyDiagnostic } from "./diagnostic"
 import type { DataTable } from "./promotion/data"
 import type { DriftReport } from "./drift"
@@ -412,11 +413,14 @@ function baseClass(
   stmts: readonly Node[],
   facts: Facts
 ): StepClass {
-  if (
-    action.dataLoss ||
-    action.destroys.some((id) => DATA_KINDS.has(kindOf(id)))
-  )
-    return "destructive"
+  const lost = action.destroys.filter((id) => DATA_KINDS.has(kindOf(id)))
+  // Похідна колонка (нормалізована колонка пошуку) даних не несе: її
+  // значення обчислює база з колонки-джерела, тож її зняття — не втрата.
+  // Лише коли все зняте з даними — ці колонки: решта лишається втратою
+  const derivedOnly =
+    isDerivedDrop(action) &&
+    lost.length === action.destroyed.filter((r) => r.kind === "column").length
+  if ((action.dataLoss || lost.length > 0) && !derivedOnly) return "destructive"
   const effects = stmts.flatMap((stmt) => statementEffects(stmt, facts))
   if (effects.includes("destructive")) return "destructive"
   if (action.rewriteRisk) return "tableRewrite"
@@ -792,6 +796,8 @@ export function backfillAction(facts: BackfillFacts): BackfillAction {
  * `noReplacement` — id кроків, для яких виняток «заміна» не діє: під
  * промоцією прийнятий об'єкт, перевизначений під тим самим ім'ям, — це
  * видалення плюс створення (спека промоції §8).
+ * Дія з позначкою `DerivedDrop` (`planDerivedColumns`), що знімає з даних
+ * лише похідні колонки, не `destructive`.
  */
 export function classifySteps(
   actions: readonly PlanAction[],

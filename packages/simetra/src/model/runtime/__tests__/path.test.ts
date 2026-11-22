@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 import { standardElementId } from "../../schemas/element-id"
 import { catalogIndex } from "../mapping"
-import { pathFromWire, pathToWire } from "../path"
+import { KIND_REGISTRY } from "../../kinds/registry"
+import { STRUCTURAL_PATH_WORDS, pathFromWire, pathToWire } from "../path"
 import {
   MEMBERSHIP_ID,
   OBJECT_ID,
@@ -62,11 +63,11 @@ const membership = catalogEntry({
   tabularSections: [],
 })
 
-// Реквізит з ім'ям структурного слова: ім'я каталогу виграє.
+// Об'єкт без реквізитів і без членства: його шляхи проходять без змін.
 const odd = catalogEntry({
   id: ODD_ID,
   name: "Odd",
-  attributes: [catalogEntryAttribute({ name: "values", column: "values_col" })],
+  attributes: [],
   tabularSections: [],
 })
 
@@ -129,11 +130,6 @@ describe("pathToWire / pathFromWire", () => {
     ).toBe(path)
   })
 
-  it("maps an attribute named like a structural word to its column", () => {
-    expect(pathToWire(index, ODD_ID, "values")).toBe("values_col")
-    expect(pathFromWire(index, ODD_ID, "values_col")).toBe("values")
-  })
-
   it("maps a structural prefix before a same-named attribute or column", () => {
     // Ім'я каталогу не перехоплює структурне слово: компілятор забороняє
     // такі імена (`identity.name-structural`), а фізичну колонку — ні.
@@ -142,10 +138,13 @@ describe("pathToWire / pathFromWire", () => {
       name: "Odd",
       attributes: [
         catalogEntryAttribute({ name: "title", column: "title_col" }),
-        catalogEntryAttribute({ name: "expectedValues", column: "ev_col" }),
-        catalogEntryAttribute({ name: "creatorMember", column: "cm_col" }),
         catalogEntryAttribute({ name: "ev", column: "expectedValues" }),
         catalogEntryAttribute({ name: "cm", column: "creatorMember" }),
+        catalogEntryAttribute({ name: "vals", column: "values" }),
+        catalogEntryAttribute({ name: "mk", column: "mark" }),
+        catalogEntryAttribute({ name: "expv", column: "expectedVersion" }),
+        catalogEntryAttribute({ name: "secs", column: "tabularSections" }),
+        catalogEntryAttribute({ name: "dels", column: "deleteIds" }),
       ],
       tabularSections: [],
     })
@@ -162,6 +161,19 @@ describe("pathToWire / pathFromWire", () => {
       "creatorMember.user"
     )
     expect(pathFromWire(own, ODD_ID, "creatorMember")).toBe("creatorMember")
+    // Кожне структурне слово проходить як префікс в обидва боки, навіть коли
+    // колонка названа так само (`values`, `mark`, …).
+    for (const word of [
+      "values",
+      "mark",
+      "expectedVersion",
+      "tabularSections",
+      "deleteIds",
+    ]) {
+      expect(pathFromWire(own, ODD_ID, word)).toBe(word)
+      expect(pathToWire(own, ODD_ID, word)).toBe(word)
+      expect(pathFromWire(own, ODD_ID, `${word}.0`)).toBe(`${word}.0`)
+    }
   })
 
   it("keeps the path of an unknown object", () => {
@@ -175,6 +187,44 @@ describe("pathToWire / pathFromWire", () => {
   it("keeps creatorMember paths of an object without a membership catalog", () => {
     expect(pathToWire(index, ODD_ID, "creatorMember.user")).toBe(
       "creatorMember.user"
+    )
+  })
+})
+
+describe("STRUCTURAL_PATH_WORDS", () => {
+  // Стандартне ім'я елемента виду не резервується: діагностика обходить лише
+  // названі елементи, тож резерв зробив би стандартний реквізит недійсним.
+  it("shares no word with the standard names of the kind registry", () => {
+    const standard = new Set<string>()
+    for (const [kind, def] of Object.entries(KIND_REGISTRY)) {
+      // Вид, якому мінімального файлу замало (власні обов'язкові поля), не
+      // має стандартних колонок, що залежали б від них.
+      const parsed = def.schema.safeParse({ kind, name: "Sample" })
+      if (!parsed.success) continue
+      const data = parsed.data
+      const columns = [
+        ...def.standardColumns(data),
+        ...(def.tabularSectionColumns?.(data) ?? []),
+      ]
+      for (const c of columns) standard.add(c.logicalName)
+      for (const s of def.standardTabularSections?.(data) ?? [])
+        standard.add(s.logicalName)
+    }
+    expect(standard.size).toBeGreaterThan(0)
+    expect(STRUCTURAL_PATH_WORDS.filter((w) => standard.has(w))).toEqual([])
+  })
+
+  it("lists the head of every operation form", () => {
+    expect([...STRUCTURAL_PATH_WORDS].sort()).toEqual(
+      [
+        "creatorMember",
+        "deleteIds",
+        "expectedValues",
+        "expectedVersion",
+        "mark",
+        "tabularSections",
+        "values",
+      ].sort()
     )
   })
 })

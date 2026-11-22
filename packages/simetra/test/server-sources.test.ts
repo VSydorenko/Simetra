@@ -196,6 +196,16 @@ describe("src/server sources", () => {
       // `await <ідентифікатор>` виклику не має, але імпорт модуля чекав би
       // проміса, що вже стартував.
       if (ts.isAwaitExpression(n)) hits.push(`${f}: ${n.getText()}`)
+      // `for await` і `await using` чекають так само, але `AwaitExpression`
+      // не породжують: перший — це модифікатор циклу, другий — прапор
+      // списку оголошень.
+      if (ts.isForOfStatement(n) && n.awaitModifier !== undefined)
+        hits.push(`${f}: for await`)
+      if (
+        ts.isVariableDeclarationList(n) &&
+        (n.flags & ts.NodeFlags.AwaitUsing) === ts.NodeFlags.AwaitUsing
+      )
+        hits.push(`${f}: await using`)
       if (ts.isCallExpression(n) || ts.isNewExpression(n)) {
         const root = rootOf(n.expression)
         if (root === undefined || (root !== "" && !ok.has(root)))

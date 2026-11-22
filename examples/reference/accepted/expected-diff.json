@@ -297,6 +297,13 @@
     "op": "add",
     "class": "column",
     "table": "service_accrual",
+    "name": "number_search",
+    "detail": "text NULL GENERATED ALWAYS AS \"left\"(lower(((number)::text COLLATE \"default\")), 660) STORED"
+  },
+  {
+    "op": "add",
+    "class": "column",
+    "table": "service_accrual",
     "name": "version",
     "detail": "bigint NOT NULL DEFAULT 1"
   },
@@ -362,6 +369,13 @@
     "table": "service_accrual",
     "name": "service_accrual_org_id_number_period_number_key",
     "detail": "UNIQUE (org_id, number_period, number)"
+  },
+  {
+    "op": "add",
+    "class": "index",
+    "table": "service_accrual",
+    "name": "service_accrual_number_search_idx",
+    "detail": "CREATE INDEX service_accrual_number_search_idx ON <schema>.service_accrual USING btree (number_search text_pattern_ops)"
   },
   {
     "op": "add",

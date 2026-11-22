@@ -103,6 +103,11 @@ export const runtimeAttributeSchema = catalogEntryAttributeSchema.extend({
   /** Лише для `type` і декодування; у SQL не йде. */
   pgType: z.string(),
   castType: castTypeSchema,
+  /**
+   * Нормалізована колонка поля пошуку (спека П2 §5, «Поля пошуку»):
+   * `startsWith` читає за нею індекс. До клієнта не переходить.
+   */
+  search: z.string().optional(),
 })
 
 export const runtimeConstraintSchema = z

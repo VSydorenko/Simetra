@@ -18,6 +18,7 @@ import {
 } from "./identity"
 import { metadataRefSchema } from "./metadata-ref"
 import { storageSchema } from "./storage"
+import { searchSchema } from "./search"
 import type { SchemaRule } from "./rules"
 import {
   objectHeaderShape,
@@ -167,6 +168,7 @@ export const catalogSchema = z
     indexes: compositeIndexesSchema.meta({
       description: "Composite indexes over the catalog attributes.",
     }),
+    search: searchSchema.optional(),
   })
   .superRefine((catalog, ctx) => {
     if (catalog.storage === undefined) return

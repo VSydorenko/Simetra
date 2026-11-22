@@ -128,6 +128,8 @@ export type ReferenceRole =
   | "posting.tabularSection"
   /** Реквізит свого рядка в `indexes` об'єкта чи його табличної частини. */
   | "index.attribute"
+  /** Реквізит шапки в `search.fields` об'єкта. */
+  | "search.field"
   | "posting.movementsBlock"
   | "customTable.foreignKey"
   | "customTable.foreignKeyTarget"
@@ -450,6 +452,13 @@ export interface KindDefinition {
    * в схемі лише там, де є цей факт, а компілятор читає його звідси.
    */
   compositeIndexes?: true
+  /**
+   * Вид приймає `search` (спека П2 §5, «Поля пошуку»): поле є в схемі лише
+   * там, де є цей факт. `defaultFields` — логічні імена полів, що шукають за
+   * замовчуванням (поля представлення виду); поле, якого в об'єкта немає,
+   * відпадає. Порожній результат — лише оголошені поля.
+   */
+  search?: { defaultFields(obj: unknown): readonly string[] }
   /**
    * Вид приймає `trackAuthor` (авторство `createdBy`/`updatedBy` на
    * «Користувачі»): поле є в схемі лише там, де є цей факт, а компілятор

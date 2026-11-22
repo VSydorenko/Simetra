@@ -539,6 +539,10 @@ export function checkFunctionBodies(
     return [
       ...statement,
       diagnostic(code, unit.file, "", {
+        // Код класу ремонту несе ключ помилки (`REPAIR_CLASS`).
+        ...(code === "sql.function-body-session-builtin"
+          ? { schema: unit.schema, name: unit.name }
+          : {}),
         function: fn,
         ...params,
         line: unit.line + line - 1,
