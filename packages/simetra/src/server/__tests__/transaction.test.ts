@@ -1317,7 +1317,8 @@ describe("COMMIT boundary", () => {
   it("maps 25P03 on the statement_timeout prelude of COMMIT to command.timeout", async () => {
     const { db, runtime } = await setup((text) => {
       if (text.endsWith("AS r")) vi.advanceTimersByTime(50_000)
-      return text === "SELECT set_config('statement_timeout', $1, true)"
+      return text ===
+        "SELECT pg_catalog.set_config('statement_timeout', $1, true)"
         ? { error: { code: "25P03", message: "x" } }
         : undefined
     })

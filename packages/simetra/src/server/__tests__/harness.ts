@@ -59,7 +59,7 @@ export const CLAIMS = {
 }
 /** `statement_timeout` окремим оператором: межа читання, прелюдія бюджету команди. */
 export const statementTimeout = (ms: string) => ({
-  text: "SELECT set_config('statement_timeout', $1, true)",
+  text: "SELECT pg_catalog.set_config('statement_timeout', $1, true)",
   params: [ms],
 })
 /**
@@ -75,12 +75,12 @@ export const commandClaims = (
   text:
     CLAIMS.text +
     // Скидання режиму злиття сигналів (Р14 плану B2): той самий оператор.
-    ", set_config('simetra.signal_mode', '', true)" +
-    ", set_config('statement_timeout', $2, true)" +
-    ", set_config('lock_timeout', $3, true)" +
-    ", set_config('idle_in_transaction_session_timeout', $4, true)" +
-    ", CASE WHEN current_setting('server_version_num')::int >= 170000" +
-    " THEN set_config('transaction_timeout', $4, true) END",
+    ", pg_catalog.set_config('simetra.signal_mode', '', true)" +
+    ", pg_catalog.set_config('statement_timeout', $2, true)" +
+    ", pg_catalog.set_config('lock_timeout', $3, true)" +
+    ", pg_catalog.set_config('idle_in_transaction_session_timeout', $4, true)" +
+    ", CASE WHEN pg_catalog.current_setting('server_version_num')::int >= 170000" +
+    " THEN pg_catalog.set_config('transaction_timeout', $4, true) END",
   params: [JSON.stringify(session), statement, lock, idle],
 })
 /** `BEGIN` транзакції серверного читання: один знімок на всі частини. */
@@ -101,10 +101,10 @@ export const readSetup = (
 ) => ({
   text:
     CLAIMS.text +
-    ", set_config('statement_timeout', $2, true)" +
-    ", CASE WHEN current_setting('server_version_num')::int >= 170000" +
-    " THEN set_config('transaction_timeout', $3, true) END" +
-    ", set_config('role', $4, true)",
+    ", pg_catalog.set_config('statement_timeout', $2, true)" +
+    ", CASE WHEN pg_catalog.current_setting('server_version_num')::int >= 170000" +
+    " THEN pg_catalog.set_config('transaction_timeout', $3, true) END" +
+    ", pg_catalog.set_config('role', $4, true)",
   params: [JSON.stringify(claims), statement, guard, role],
 })
 /** The row version epoch the default answers give. */
@@ -131,7 +131,7 @@ export const OPEN: Call[] = [
 ]
 
 export const context = (action: string, object: string, root: string) => ({
-  text: "SELECT set_config('simetra.command', $1, true)",
+  text: "SELECT pg_catalog.set_config('simetra.command', $1, true)",
   params: [JSON.stringify({ action, object, root })],
 })
 export const call = (fn: string, args: string, params: (string | null)[]) => ({

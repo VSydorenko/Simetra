@@ -1235,7 +1235,7 @@ describe("CommandRuntime.readParts", () => {
       ])
     })
 
-    const LOWER = "SELECT set_config('statement_timeout'"
+    const LOWER = "SELECT pg_catalog.set_config('statement_timeout'"
     const lowerings = (calls: readonly unknown[]) =>
       calls.filter(
         (c) =>

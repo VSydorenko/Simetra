@@ -74,7 +74,7 @@ const facts = (
   ],
 })
 const member = (role: string) => ({
-  text: "SELECT pg_has_role(session_user, $1, 'SET') AS member",
+  text: "SELECT pg_catalog.pg_has_role(session_user, $1, 'SET') AS member",
   params: [role],
 })
 // Ролі запиту профілю supabase за призначенням: `user`, далі `anonymous`.
