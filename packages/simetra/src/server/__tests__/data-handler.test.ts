@@ -142,6 +142,9 @@ function counted(runtime: CommandRuntime) {
     },
     rightsSnapshot: (...args) => runtime.rightsSnapshot(...args),
     authorizeChannels: (...args) => runtime.authorizeChannels(...args),
+    checkUpload: (...args) => runtime.checkUpload(...args),
+    attachFile: (...args) => runtime.attachFile(...args),
+    fileInstance: () => runtime.fileInstance(),
   }
   return { runtime: wrapped, calls }
 }

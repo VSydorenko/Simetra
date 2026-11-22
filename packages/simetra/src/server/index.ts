@@ -10,6 +10,12 @@ export {
   type ReadPartsResult,
 } from "./runtime"
 export { createDataHandler } from "./data-handler"
+export {
+  type AttachFileInput,
+  type CheckUploadInput,
+  type UploadLimits,
+} from "./files"
+export { FileAttachFailure } from "./transaction"
 export { checkRequestOrigin, type RequestOrigin } from "./origin"
 export type { LogEntry } from "./transaction"
 export {

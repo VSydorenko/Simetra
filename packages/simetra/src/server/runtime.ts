@@ -8,6 +8,7 @@ import {
   PLATFORM_ROLES,
   PLATFORM_SCHEMA,
   PRIVILEGED_LOGIN_REASONS,
+  STORAGE_FUNCTIONS,
   PROVIDER_API_ROLES,
   PROVIDER_IDENTITY_SOURCES,
   PROVIDER_LOGIN_ROLES,
@@ -60,6 +61,15 @@ import {
   snapshotFromRows,
 } from "./rights-snapshot"
 import { createChannelGrant, type ChannelGrant } from "./signals/grant"
+import type { FileStore } from "./file-store"
+import {
+  prepareAttach,
+  scopeOf,
+  storageObjectOf,
+  type AttachFileInput,
+  type CheckUploadInput,
+  type UploadLimits,
+} from "./files"
 import {
   COMMAND_ROLE,
   FILES_ROLE,
@@ -71,7 +81,9 @@ import {
   endFailed,
   readRefusal,
   readSetupStatement,
+  runAttach,
   runCommand,
+  FileAttachFailure,
   type LogEntry,
   type RuntimeState,
 } from "./transaction"
@@ -150,6 +162,14 @@ export interface CommandRuntimeOptions {
   signalMergeThreshold?: number
   /** Receives errors that never leave the runtime; default `console.error`. */
   log?: (entry: LogEntry) => void
+  /**
+   * The byte store of file catalogs (`storage`). With it the runtime deletes
+   * the bytes of a file row after the commit of a `delete` phase, whether the
+   * command is a client one or a `ctx.run` phase; the key comes from the row
+   * the core confirmed deleted. Without it, and for `markDeletion` and
+   * cascades, only the reconciliation removes bytes.
+   */
+  files?: FileStore
 }
 
 /** Options of one {@link CommandRuntime.run} call. */
@@ -262,6 +282,40 @@ export interface CommandRuntime {
     session: SessionClaims,
     channels: readonly string[]
   ): Promise<ChannelGrant>
+  /**
+   * The pre-check of an upload (platform spec §8.2 step 2): one `READ ONLY`
+   * transaction under the request role asks `storage_headroom`. Returns the
+   * limits of the object's `storage`, or `null` — for a guest (no database
+   * call), an unknown object or one without `storage`, a scope that does not
+   * fit, and a refusal of the right or of the quota alike. The check is
+   * necessary, not sufficient: `attachFile` judges the row. Rejects with
+   * `CommandFailure`: `command.unauthenticated` for an invalid session.
+   */
+  checkUpload(
+    session: SessionClaims,
+    input: CheckUploadInput
+  ): Promise<UploadLimits | null>
+  /**
+   * Creates the row of an uploaded file (platform spec §8.2 step 4): one
+   * transaction — `file_attach` with the size and type under the storage
+   * role, then the `create` phase under the command role — with the retries
+   * and the budget of `run`. Rejects with `FileAttachFailure`:
+   * `commitUnknown` is `true` when `COMMIT` was sent and the session closed
+   * (the row may exist, the bytes must stay); otherwise the transaction is
+   * known to have rolled back and the caller deletes the bytes. The error
+   * `command.rejected` with `reason` `storage.<reason>` is a storage refusal.
+   */
+  attachFile(
+    session: SessionClaims,
+    input: AttachFileInput
+  ): Promise<CommandResult>
+  /**
+   * The uuid of `storage_instance`: the database binding the byte store
+   * checks (`FileStore.put` option `instance`). Resolved once in its own
+   * read-write transaction under the storage role (the row is written
+   * lazily, so a `READ ONLY` transaction cannot do it) and cached.
+   */
+  fileInstance(): Promise<string>
 }
 
 // Межа каналів одного виклику `authorizeChannels` (Р5 плану B2).
@@ -647,6 +701,7 @@ export async function createCommandRuntime(
     budgetMs,
     lockTimeoutMs,
     signalMergeThreshold,
+    files: options.files,
     readRoles: {
       // Профіль без ролі запиту чи явний запасний шлях — читання користувача
       // під роллю команд.
@@ -654,6 +709,7 @@ export async function createCommandRuntime(
       anonymous: roles.anonymous,
     },
   }
+  let instance: Promise<string> | undefined
   return {
     catalog,
     // Анонімна команда йде далі: її судить `current_user_id()` = `NULL`.
@@ -696,6 +752,42 @@ export async function createCommandRuntime(
     },
     authorizeChannels: (session, channels) =>
       authorizeChannels(state, session, channels),
+    checkUpload: (session, input) => checkUpload(state, session, input),
+    attachFile: async (session, input) => {
+      checkedKind(catalog.provider, session)
+      let prepared: ReturnType<typeof prepareAttach>
+      try {
+        prepared = prepareAttach(catalog, input)
+      } catch (error) {
+        // Відмова входу — до бази, байти ще можна видаляти.
+        if (error instanceof CommandFailure) {
+          throw new FileAttachFailure(error.error, false)
+        }
+        throw error
+      }
+      try {
+        return await runAttach(
+          state,
+          session,
+          prepared.operation,
+          prepared.attach
+        )
+      } catch (error) {
+        if (error instanceof FileAttachFailure) throw error
+        if (error instanceof CommandFailure) {
+          throw new FileAttachFailure(error.error, false)
+        }
+        throw error
+      }
+    },
+    fileInstance: () => {
+      instance ??= fileInstance(state).catch((error: unknown) => {
+        // Невдача не кешується: наступний виклик пробує знову.
+        instance = undefined
+        throw error
+      })
+      return instance
+    },
   }
 }
 
@@ -1093,4 +1185,142 @@ async function authorizeChannels(
     throw new CommandFailure(INTERNAL)
   }
   return createChannelGrant(user, allowed)
+}
+
+const UPLOAD_HEADROOM = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.headroom)}($1::uuid, $2::uuid) AS ok`
+const INSTANCE_ID = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(STORAGE_FUNCTIONS.instanceId)}() AS id`
+const uuidSchema = z.guid()
+
+/**
+ * Попередня перевірка завантаження (спека профілю postgres §8.2 крок 2):
+ * `READ ONLY` під роллю запиту, один оператор `storage_headroom`. Гість, невідомий
+ * об'єкт, хибний скоуп і відмова бази в «чи вміститься» — той самий `null`:
+ * межа відповіді не розкриває, що саме відмовило (Р3).
+ */
+async function checkUpload(
+  state: RuntimeState,
+  session: SessionClaims,
+  input: CheckUploadInput
+): Promise<UploadLimits | null> {
+  // До будь-якого I/O: друге з'єднання в хуку чекало б на замок своєї ж
+  // команди.
+  rejectNested()
+  // Гість не пише файлів і до бази не йде.
+  if (checkedKind(state.catalog.provider, session) === "anonymous") return null
+  const object = storageObjectOf(state.catalog, input?.object)
+  if (object === undefined) return null
+  const scope = scopeOf(object, input.scope)
+  if (scope === undefined) return null
+  const claims = claimsOf(session)
+  const role = readRoleFor(state, session)
+  let client: DatabaseClient
+  try {
+    client = await state.database.connect()
+  } catch (raw) {
+    throw new CommandFailure(readRefusal(raw, state, undefined).error)
+  }
+  const send = async (statement: {
+    text: string
+    params: readonly (string | null)[]
+  }) => {
+    try {
+      return await client.query(statement.text, statement.params)
+    } catch (raw) {
+      throw new Refused(readRefusal(raw, state, undefined))
+    }
+  }
+  let allowed: boolean
+  let tag: string
+  try {
+    await send({ text: BEGIN_READ_ONLY, params: [] })
+    await send(
+      readSetupStatement(
+        claims,
+        state.readTimeout,
+        state.readBudgetMs + 1000,
+        role
+      )
+    )
+    const { rows } = await send({
+      text: UPLOAD_HEADROOM,
+      params: [object.id, scope],
+    })
+    const ok = rows[0]?.ok
+    if (rows.length !== 1 || (ok !== "t" && ok !== "f")) {
+      throw new Error("storage_headroom answered no boolean")
+    }
+    allowed = ok === "t"
+    ;({ command: tag } = await send(COMMIT))
+  } catch (error) {
+    if (error instanceof Refused) {
+      await endFailed(client, error.refusal.destroy)
+      throw new CommandFailure(error.refusal.error)
+    }
+    state.log({ kind: "database", error })
+    await endFailed(client, false)
+    throw new CommandFailure(INTERNAL)
+  }
+  client.release()
+  // Перевірка — лише з зафіксованої транзакції, як і дозвіл каналів.
+  if (tag !== "COMMIT") {
+    state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
+    throw new CommandFailure(INTERNAL)
+  }
+  const { storage } = object
+  return allowed && storage !== undefined
+    ? { maxBytes: storage.maxBytes, mediaTypes: [...storage.mediaTypes] }
+    : null
+}
+
+const BEGIN_WRITE = "BEGIN ISOLATION LEVEL READ COMMITTED"
+
+/**
+ * Прив'язка бази до бакета: `storage_instance_id()` пише рядок при першому
+ * зверненні, тож потрібна транзакція на запис, а не `READ ONLY`. Лише роль
+ * сховища має на неї `EXECUTE`; рантайм входить у неї через `SET LOCAL ROLE`.
+ */
+async function fileInstance(state: RuntimeState): Promise<string> {
+  rejectNested()
+  let client: DatabaseClient
+  try {
+    client = await state.database.connect()
+  } catch (raw) {
+    throw new CommandFailure(readRefusal(raw, state, undefined).error)
+  }
+  const send = async (statement: {
+    text: string
+    params: readonly (string | null)[]
+  }) => {
+    try {
+      return await client.query(statement.text, statement.params)
+    } catch (raw) {
+      throw new Refused(readRefusal(raw, state, undefined))
+    }
+  }
+  let id: unknown
+  let tag: string
+  try {
+    await send({ text: BEGIN_WRITE, params: [] })
+    await send(FILES_ROLE)
+    const { rows } = await send({ text: INSTANCE_ID, params: [] })
+    id = rows[0]?.id
+    if (rows.length !== 1 || !uuidSchema.safeParse(id).success) {
+      throw new Error("storage_instance_id answered no uuid")
+    }
+    ;({ command: tag } = await send(COMMIT))
+  } catch (error) {
+    if (error instanceof Refused) {
+      await endFailed(client, error.refusal.destroy)
+      throw new CommandFailure(error.refusal.error)
+    }
+    state.log({ kind: "database", error })
+    await endFailed(client, false)
+    throw new CommandFailure(INTERNAL)
+  }
+  client.release()
+  if (tag !== "COMMIT") {
+    state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })
+    throw new CommandFailure(INTERNAL)
+  }
+  return id as string
 }

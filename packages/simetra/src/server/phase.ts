@@ -5,6 +5,7 @@ import {
   OPERATION_EVENTS,
   batchSchema,
   encodeAttributes,
+  fileObjectKey,
   isPlainObject,
   metadataRefSchema,
   operationSchema,
@@ -638,8 +639,32 @@ export async function runPhase(
   const row = decodeCoreRow(tx, object, () => JSON.parse(text) as unknown)
   if (merged) await tx.invalidate(object, row.scope, writePhase(object, op))
   recordChange(tx, object, op, row)
+  if (op.action === "delete") scheduleBytesDeletion(tx, object, row.row)
   await onWrite(tx, phase, module, row.row)
   return row.row
+}
+
+/**
+ * Байти файлу забирає рантайм після коміту (ПГ-5 Р5), лише для фази
+ * `delete`, і ключ береться з рядка, який повернуло ядро після `DELETE`, а
+ * не з вхідного id. Дію кладе спроба: відкочена спроба її губить, повтор
+ * кладе власну. `markDeletion` байтів не чіпає. Невдачу видалення логує
+ * `runAfterCommit`, а байти прибирає звірка.
+ */
+function scheduleBytesDeletion(
+  tx: Transaction,
+  object: RuntimeObject,
+  row: Record<string, unknown>
+): void {
+  const { files } = tx.state
+  if (files === undefined || object.storage === undefined) return
+  let key: string
+  try {
+    key = fileObjectKey(object.id, row[object.keyName] as string)
+  } catch (error) {
+    coreAnomaly(tx, object, error)
+  }
+  tx.afterCommit.push(() => files.delete(key))
 }
 
 /**
