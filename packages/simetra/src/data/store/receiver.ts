@@ -185,11 +185,19 @@ interface Job {
 }
 
 // Час власних позначок приймача (`minVersion` і «розрив»): рядок моделі часу
-// не має, а метриці (Р13) потрібен вік найстарішої. Окремо від життєвого
-// циклу позначок: запис живий, лише поки позначка ще є в сховищі.
+// не має, а метриці (Р13) потрібен вік найстарішої. Лише читає сховище: жива
+// позначка — та, що є в рядку, який не `removed` (підтверджене видалення не
+// лишає розриву, що його метрика мала б показувати). Нову позначку
+// відрізняє ідентичність, а не пам'ять про попередню: `minVersion` — чи був
+// він у рядку безпосередньо перед `markStale` (рішення до запису), «розрив» —
+// епоха позначки каналу.
 interface MarkTimes {
-  noteMinVersion(object: ObjectName, key: Key): void
-  noteDisconnect(channel: string | undefined): void
+  /** Кличеться перед `markStale` ключа: чи позначка вже була. */
+  minVersionBefore(object: ObjectName, key: Key): boolean
+  /** Кличеться після `markStale`; `had` — результат `minVersionBefore`. */
+  noteMinVersion(object: ObjectName, key: Key, had: boolean): void
+  /** Розрив каналу (чи кожного, якого тримає приймач) щойно позначено. */
+  noteDisconnect(channels: Iterable<string>): void
   /** Найстаріша жива позначка; мертві записи прибираються тут. */
   oldest(): { at: number; object?: ObjectName } | undefined
   clear(): void
@@ -199,36 +207,46 @@ function createMarkTimes(
   writer: WriterContext,
   pairOf: (channel: string) => { object: ObjectName } | undefined
 ): MarkTimes {
-  // Ключ `object\0key` чи канал; `*` — розрив усього з'єднання.
   const minVersion = new Map<
     string,
     { at: number; object: ObjectName; key: Key }
   >()
-  const gaps = new Map<string, number>()
-  const hasMinVersion = (object: ObjectName, key: Key) =>
-    writer.objectOf(object).rows.get(key)?.stale.minVersion !== undefined
-  const hasGap = (channel: string) => {
-    for (const o of writer.objects.values())
-      for (const key of o.rows.keys()) {
-        const marks = o.rows.get(key)?.stale.disconnect
-        if (marks !== undefined && (channel === "*" || marks.has(channel)))
-          return true
-      }
-    return false
+  // Канал-кандидат -> епоха позначки -> час. Скануються лише рядки об'єкта
+  // каналу, і лише для каналів, на яких розрив було.
+  const gaps = new Map<string, Map<number, number>>()
+  const liveMinVersion = (object: ObjectName, key: Key) => {
+    const e = writer.objectOf(object).rows.get(key)
+    return e?.stale.minVersion !== undefined && e.removed === undefined
+  }
+  const liveGaps = (channel: string): number[] => {
+    const object = pairOf(channel)?.object
+    if (object === undefined) return []
+    const o = writer.objectOf(object)
+    const live = new Set<number>()
+    for (const key of o.rows.keys()) {
+      const e = o.rows.get(key)
+      const at = e?.stale.disconnect?.get(channel)
+      if (e !== undefined && e.removed === undefined && at !== undefined)
+        live.add(at)
+    }
+    return [...live]
+  }
+  const record = (channel: string) => {
+    const times = gaps.get(channel) ?? new Map<number, number>()
+    for (const at of liveGaps(channel))
+      if (!times.has(at)) times.set(at, writer.now())
+    gaps.set(channel, times)
   }
   return {
-    noteMinVersion(object, key) {
+    minVersionBefore: liveMinVersion,
+    noteMinVersion(object, key, had) {
       const id = `${object}\u0000${key}`
-      const prev = minVersion.get(id)
-      // Позначка, що вже була, зберігає свій час.
-      if (prev !== undefined && hasMinVersion(object, key)) return
-      if (hasMinVersion(object, key))
+      if (had && minVersion.has(id)) return
+      if (liveMinVersion(object, key))
         minVersion.set(id, { at: writer.now(), object, key })
     },
-    noteDisconnect(channel) {
-      const id = channel ?? "*"
-      if (gaps.has(id) && hasGap(id)) return
-      if (hasGap(id)) gaps.set(id, writer.now())
+    noteDisconnect(channels) {
+      for (const channel of channels) record(channel)
     },
     clear() {
       minVersion.clear()
@@ -240,12 +258,17 @@ function createMarkTimes(
         if (found === undefined || at < found.at) found = { at, object }
       }
       for (const [id, m] of [...minVersion]) {
-        if (!hasMinVersion(m.object, m.key)) minVersion.delete(id)
+        if (!liveMinVersion(m.object, m.key)) minVersion.delete(id)
         else take(m.at, m.object)
       }
-      for (const [id, at] of [...gaps]) {
-        if (!hasGap(id)) gaps.delete(id)
-        else take(at, id === "*" ? undefined : pairOf(id)?.object)
+      for (const [channel, times] of [...gaps]) {
+        const live = new Set(liveGaps(channel))
+        for (const at of [...times.keys()]) if (!live.has(at)) times.delete(at)
+        // Позначка, поставлена без запису (рядок записано під час розриву),
+        // вперше бачиться тут.
+        for (const at of live) if (!times.has(at)) times.set(at, writer.now())
+        if (times.size === 0) gaps.delete(channel)
+        else take(Math.min(...times.values()), pairOf(channel)?.object)
       }
       return found
     },
@@ -335,7 +358,9 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     if (error.kind === "transport") {
       if (error.channel !== undefined && !held.has(error.channel)) return
       ctx.commit((w) => w.markDisconnected(error.channel), token)
-      marks.noteDisconnect(error.channel)
+      marks.noteDisconnect(
+        error.channel === undefined ? held.keys() : [error.channel]
+      )
       return
     }
     // Друга відмова токена з'єднання поспіль: транспорт не відновиться.
@@ -669,8 +694,9 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       // затримка) — ключ чекає мінімальну версію й дочитується. Звичайне
       // перечитування `stale` не ставить.
       if (row.version >= signal.version) continue
+      const had = marks.minVersionBefore(object, key)
       w.markStale(object, [key], signal.version)
-      marks.noteMinVersion(object, key)
+      marks.noteMinVersion(object, key, had)
       const mark = o.rows.get(key)?.stale.minVersion
       if (
         mark !== undefined &&
@@ -740,7 +766,8 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const reading = new Set([...jobs.map((job) => job.object), ...burstObjects])
     if (reading.size > 0) {
       let views = 0
-      for (const object of reading) views += activeViews(writer, object).length
+      for (const object of reading)
+        views += activeViews(writer, object).filter((v) => v.visible).length
       writer.log({ kind: "revalidate-burst", objects: reading.size, views })
     }
     if (refresh.length > 0)

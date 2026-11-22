@@ -150,6 +150,90 @@ describe("receiver metrics", () => {
     expect(JSON.stringify(ages)).not.toContain(key(1))
   })
 
+  it("writes no burst on a hidden tab: the batch reads nothing", async () => {
+    const h = await open()
+    h.core.suspend()
+    h.log.length = 0
+    const version = h.fake.edit(TASK, key(1), { title: "v" })
+    h.transport.emit(channel, change(key(1), version))
+    await advance(QUIET_MS)
+    expect(metrics(h.log)).toEqual([])
+  })
+
+  it("counts only the visible views of the object in a batch and in a wave", async () => {
+    const h = await open()
+    const other = h.core.view(keysView(key(2)))
+    other.subscribe(() => {})
+    await settle()
+    h.core.setVisible(keysView(key(2)), false)
+    h.log.length = 0
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    const version = h.fake.edit(TASK, key(1), { title: "v" })
+    h.transport.emit(channel, change(key(1), version))
+    await advance(QUIET_MS)
+    expect(metrics(h.log)).toEqual([
+      { kind: "revalidate-burst", objects: 1, views: 1 },
+      { kind: "revalidate-burst", objects: 1, views: 1 },
+    ])
+  })
+
+  it("measures the age of a flapping channel from the second disconnect mark", async () => {
+    const h = await open()
+    h.transport.fail({ kind: "transport", channel })
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    h.log.length = 0
+    await advance(10_000)
+    h.transport.fail({ kind: "transport", channel })
+    const second = performance.now()
+    await advance(1000)
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    const ages = h.log.filter((e) => e.kind === "stale-age")
+    expect(ages).toHaveLength(1)
+    expect((ages[0] as { ageMs: number }).ageMs).toBeLessThanOrEqual(
+      performance.now() - second
+    )
+  })
+
+  it("measures the age of a min-version mark cleared and set again from the second mark", async () => {
+    const h = await open()
+    const served = h.fake.edit(TASK, key(1), { title: "v" })
+    h.transport.emit(channel, change(key(1), served + 1))
+    await advance(QUIET_MS)
+    expect(h.handle.getSnapshot().rows[0]!.state).toBe("stale")
+    h.fake.edit(TASK, key(1), { title: "v2" })
+    await advance(500)
+    expect(h.handle.getSnapshot().rows[0]!.state).not.toBe("stale")
+    await advance(20_000)
+    h.log.length = 0
+    const second = performance.now()
+    const served2 = h.fake.edit(TASK, key(1), { title: "v3" })
+    h.transport.emit(channel, change(key(1), served2 + 1))
+    await advance(QUIET_MS)
+    expect(h.handle.getSnapshot().rows[0]!.state).toBe("stale")
+    // Крок за кроком до першого запису: `now` тоді — мить такту.
+    for (let n = 0; n < 90 && !h.log.some((e) => e.kind === "stale-age"); n++)
+      await advance(1000)
+    const ages = h.log.filter((e) => e.kind === "stale-age")
+    expect(ages.length).toBeGreaterThan(0)
+    expect((ages[0] as { ageMs: number }).ageMs).toBeLessThanOrEqual(
+      performance.now() - second
+    )
+  })
+
+  it("does not report a gap whose row the server deleted during it", async () => {
+    const h = await open()
+    h.transport.fail({ kind: "transport", channel })
+    h.fake.remove(TASK, key(1))
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    h.log.length = 0
+    await advance(130_000)
+    expect(h.log.filter((e) => e.kind === "stale-age")).toEqual([])
+  })
+
   it("writes nothing after dispose", async () => {
     const h = await open()
     h.transport.fail({ kind: "transport", channel })

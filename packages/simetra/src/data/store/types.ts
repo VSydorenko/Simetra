@@ -436,7 +436,10 @@ export type CoreLogEntry =
    * No keys, no values.
    */
   | { kind: "stale-age"; ageMs: number; object?: ObjectName }
-  /** A batch or a rejoin wave re-read: counts of objects and views (§8.4). */
+  /**
+   * A batch or a rejoin wave re-read: counts of objects and of their visible
+   * views, the ones actually read (an invisible view only gets `needsRefresh`).
+   */
   | { kind: "revalidate-burst"; objects: number; views: number }
 
 /**
