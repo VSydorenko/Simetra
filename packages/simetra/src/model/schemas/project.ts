@@ -364,6 +364,19 @@ export const PROTECTED_SESSION_SETTINGS = {
   names: ["role", "session_authorization", "session_replication_role"],
 } as const
 
+// Голова читає налаштування сесії лише за точною назвою (ADR-0094 п. 2):
+// префікс `request.jwt.` пропустив би `request.jwt.claim.sub` старої форми
+// PostgREST чи будь-яке ім'я, яке поставив клієнт. Назв `simetra.*` тут
+// немає, доки їх не читає функція ідентичності платформи: контекст команди
+// (`COMMAND_SETTING`) голові не призначений.
+/**
+ * Session settings that the SQL of a head may read with `current_setting`:
+ * exact, case-sensitive names, not prefixes.
+ */
+export const HEAD_READABLE_SETTINGS: readonly string[] = [
+  SESSION_CLAIMS_SETTING,
+]
+
 /** The command context: the action, the root object's label and the root row's UUID. */
 export interface CommandContext {
   /** A word of the action vocabulary or the UUID of a custom action. */

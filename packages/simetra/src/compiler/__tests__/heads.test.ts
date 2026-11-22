@@ -190,13 +190,17 @@ describe("checkHeads: Rule 3 — query functions", () => {
     })),
     // Голова не називає відношення текстом: рядок, приведений до
     // `regclass`, — відношення, а вбудовані з іменем відношення в тексті —
-    // поза переліком голови.
+    // поза переліком голови. `obj_description` читає каталог і поза
+    // позитивним переліком голови (Р6 плану Д5).
     {
       name: "relation named by a regclass cast",
       sql: selectWhere(
         "pg_catalog.obj_description('auth.users'::regclass, 'pg_class') IS NULL"
       ),
-      expected: [found("relation", "auth.users", SET_FUNCTION)],
+      expected: [
+        found("call", "pg_catalog.obj_description", SET_FUNCTION),
+        found("relation", "auth.users", SET_FUNCTION),
+      ],
     },
     ...[
       ["has_table_privilege('auth.users', 'select')", "has_table_privilege"],
@@ -521,6 +525,191 @@ describe("checkHeads: other heads", () => {
     expect(await blockErrors(query)).toEqual([
       ["sql.head-not-allowed", SALE_SQL, ...expected, SALE_WRAPPER, 1],
     ])
+  })
+})
+
+// Р6/Р7 плану Д5 (І5): голова кличе лише вбудовані позитивного переліку
+// й читає зі стану сесії лише точну назву claims; часова зона сесії — теж
+// стан сесії. Те саме правило — для кожного виду голови й транзитивно.
+describe("checkHeads: head builtin allowlist and session state", () => {
+  const DIMENSION = "public.region_ids"
+  const HELPER = "public.helper"
+  const dimension: Layer = {
+    [PROJECT_FILE]: {
+      accessDimensions: [
+        {
+          id: REGION_DIMENSION_ID,
+          name: "region",
+          target: { kind: "Catalog", name: "Region" },
+          values: { function: { name: "region_ids" } },
+        },
+      ],
+    },
+  }
+  const heads: {
+    head: string
+    sql: (condition: string) => Record<string, string>
+    layers: Layer[]
+    chain: string[]
+  }[] = [
+    {
+      head: "set function",
+      sql: (condition) => ({ [SCOPE_FUNCTIONS_FILE]: selectWhere(condition) }),
+      layers: [],
+      chain: [SET_FUNCTION],
+    },
+    {
+      head: "dimension values function",
+      sql: (condition) => ({
+        [SHARED]: sqlFunction(
+          DIMENSION,
+          `SELECT NULL::uuid WHERE ${condition}`,
+          `STABLE SECURITY DEFINER ${EMPTY_PATH}`
+        ),
+      }),
+      layers: [dimension],
+      chain: [DIMENSION],
+    },
+    {
+      head: "transitive call",
+      sql: (condition) => ({
+        [SCOPE_FUNCTIONS_FILE]:
+          setFunction(`SELECT ${HELPER}()`) +
+          sqlFunction(HELPER, `SELECT NULL::uuid WHERE ${condition}`),
+      }),
+      layers: [],
+      chain: [SET_FUNCTION, HELPER],
+    },
+    {
+      // Вираз політики прочитаної таблиці суддя голів обходить через
+      // `policiesOn`: правило розбору дерева діє й там.
+      head: "policy of a read table",
+      sql: (condition) => ({
+        [SCOPE_FUNCTIONS_FILE]:
+          READ_NOTES +
+          `CREATE POLICY p ON public.task_notes FOR SELECT USING (${condition});\n`,
+      }),
+      layers: [RLS_ON],
+      chain: [SET_FUNCTION, POLICY],
+    },
+  ]
+  // Вбудовані кваліфіковані: у виразі політики некваліфіковане ім'я —
+  // окрема знахідка `unqualified`.
+  const refused: [string, string, string][] = [
+    [
+      "pg_catalog.pg_show_all_settings() IS NOT NULL",
+      "call",
+      "pg_catalog.pg_show_all_settings",
+    ],
+    [
+      "pg_catalog.current_query() IS NOT NULL",
+      "call",
+      "pg_catalog.current_query",
+    ],
+    [
+      "pg_catalog.inet_client_addr() IS NOT NULL",
+      "call",
+      "pg_catalog.inet_client_addr",
+    ],
+    [
+      "pg_catalog.pg_try_advisory_xact_lock(1)",
+      "call",
+      "pg_catalog.pg_try_advisory_xact_lock",
+    ],
+    [
+      "pg_catalog.to_regclass('x.secret') IS NULL",
+      "call",
+      "pg_catalog.to_regclass",
+    ],
+    [
+      "pg_catalog.pg_get_viewdef('auth.v') IS NULL",
+      "call",
+      "pg_catalog.pg_get_viewdef",
+    ],
+    [
+      "pg_catalog.has_table_privilege('x.secret', 'select')",
+      "call",
+      "pg_catalog.has_table_privilege",
+    ],
+    [
+      "pg_catalog.current_setting('request.headers') IS NULL",
+      "setting",
+      "request.headers",
+    ],
+    [
+      "pg_catalog.current_setting('request.jwt.claim.sub') IS NULL",
+      "setting",
+      "request.jwt.claim.sub",
+    ],
+    [
+      "pg_catalog.current_setting('request.jwt.foo') IS NULL",
+      "setting",
+      "request.jwt.foo",
+    ],
+    ["pg_catalog.current_setting('app.x') IS NULL", "setting", "app.x"],
+    ["pg_catalog.current_setting('role') IS NULL", "setting", "role"],
+    [
+      "pg_catalog.current_setting('REQUEST.JWT.CLAIMS') IS NULL",
+      "setting",
+      "REQUEST.JWT.CLAIMS",
+    ],
+    [
+      "pg_catalog.current_setting(pg_catalog.lower('x')) IS NULL",
+      "setting",
+      "current_setting",
+    ],
+    [
+      "pg_catalog.current_setting('request.jwt.claims'::text) IS NULL",
+      "setting",
+      "current_setting",
+    ],
+    [
+      "pg_catalog.current_setting(setting_name => 'request.jwt.claims') IS NULL",
+      "setting",
+      "current_setting",
+    ],
+    ["current_date IS NOT NULL", "setting", "TimeZone"],
+    ["localtime IS NOT NULL", "setting", "TimeZone"],
+    ["localtimestamp IS NOT NULL", "setting", "TimeZone"],
+    ["pg_catalog.now()::date IS NOT NULL", "setting", "TimeZone"],
+    ["ts::date IS NOT NULL", "setting", "TimeZone"],
+    ["'today'::date IS NOT NULL", "setting", "TimeZone"],
+    ["pg_catalog.date(ts) IS NOT NULL", "setting", "TimeZone"],
+    ["pg_catalog.date_trunc('day', ts) IS NOT NULL", "setting", "TimeZone"],
+    ["(pg_catalog.now() AT LOCAL)::text <> ''", "setting", "TimeZone"],
+  ]
+  const allowed = [
+    "pg_catalog.current_setting('request.jwt.claims', true) IS NOT NULL",
+    "(pg_catalog.now() AT TIME ZONE 'UTC')::date IS NOT NULL",
+    "pg_catalog.now() IS NOT NULL",
+    "current_timestamp IS NOT NULL",
+    "ts >= pg_catalog.now()",
+    "'2026-01-01'::date IS NOT NULL",
+    "pg_catalog.date_trunc('day', ts, 'UTC') IS NOT NULL",
+  ]
+
+  it.each(
+    heads.flatMap((h) =>
+      refused.map(([condition, construct, detail]) => ({
+        ...h,
+        condition,
+        construct,
+        detail,
+      }))
+    )
+  )(
+    "$head refuses $condition",
+    async ({ sql, layers, chain: names, condition, construct, detail }) => {
+      expect(await headErrors(sql(condition), layers)).toEqual([
+        found(construct, detail, ...names),
+      ])
+    }
+  )
+
+  it.each(
+    heads.flatMap((h) => allowed.map((condition) => ({ ...h, condition })))
+  )("$head allows $condition", async ({ sql, layers, condition }) => {
+    expect(await headErrors(sql(condition), layers)).toEqual([])
   })
 })
 

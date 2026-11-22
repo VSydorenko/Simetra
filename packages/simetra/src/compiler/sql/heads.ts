@@ -6,6 +6,7 @@ import {
   isObjectOrigin,
   type PhysicalSnapshot,
   type PhysicalTable,
+  HEAD_READABLE_SETTINGS,
   type Project,
 } from "simetra/model"
 import { derivedFunctions } from "../contracts"
@@ -14,8 +15,7 @@ import { movementWrapperName } from "../movement-functions"
 import { PLATFORM_READ_FUNCTIONS } from "../platform/names"
 import type { ParsedObject } from "../stages/files"
 import type { ResolvedReference } from "../stages/identity"
-import { HEAD_EXCLUDED_BUILTINS } from "./builtin-exclusions"
-import { BUILTIN_FUNCTIONS } from "./builtin-functions"
+import { HEAD_BUILTINS } from "./head-builtins"
 import {
   closedModuleOwners,
   hasEffectiveEmptySearchPath,
@@ -143,20 +143,21 @@ export function headScope(
         .map((f) => `${f.schema}.${f.name}`),
       ...PROVIDER_FUNCTIONS[project.database.provider],
     ]),
-    // Вбудована, що називає відношення текстом, голові не дозволена:
-    // збирач відношень бачить лише дерево.
-    builtins: new Set(
-      BUILTIN_FUNCTIONS.filter((name) => !HEAD_EXCLUDED_BUILTINS.includes(name))
-    ),
+    // Позитивний перелік, а не «загальний мінус виключення»: нова
+    // вбудована загального переліку не стає дозволеною в голові сама.
+    builtins: new Set(HEAD_BUILTINS),
     wrappers,
     parse,
     plpgsql,
   }
 }
 
-/** Посилання дерева: виклик, відношення, запис `x.f` чи оператор. */
+/**
+ * Посилання дерева: виклик, відношення, запис `x.f`, оператор чи читання
+ * стану сесії (`setting`, ім'я налаштування в `name`).
+ */
 interface Reference {
-  space: "proc" | "rel" | "attribute" | "operator"
+  space: "proc" | "rel" | "attribute" | "operator" | "setting"
   schema?: string
   name: string
   /**
@@ -194,6 +195,149 @@ function treeReferences(
       space: "operator",
       bound,
     })),
+    ...sessionReads(tree).map((name): Reference => ({
+      name,
+      space: "setting",
+      bound,
+    })),
+  ]
+}
+
+/** Налаштування часової зони сесії: деталь `setting` для залежних від неї форм. */
+const TIME_ZONE = "TimeZone"
+
+/**
+ * `SQLValueFunction` у місцевому часі сесії: дата чи час «зараз» залежать
+ * від `TimeZone`, який ставить клієнт (`Prefer: timezone` PostgREST), а
+ * `current_timestamp` — абсолютний момент і лишається дозволеним.
+ */
+const LOCAL_TIME_VALUES: ReadonlySet<string> = new Set([
+  "SVFOP_CURRENT_DATE",
+  "SVFOP_CURRENT_TIME",
+  "SVFOP_CURRENT_TIME_N",
+  "SVFOP_LOCALTIME",
+  "SVFOP_LOCALTIME_N",
+  "SVFOP_LOCALTIMESTAMP",
+  "SVFOP_LOCALTIMESTAMP_N",
+])
+
+/** Типи місцевого часу: перетворення `timestamptz` у них читає `TimeZone`. */
+const LOCAL_TIME_TYPES: ReadonlySet<string> = new Set([
+  "date",
+  "time",
+  "timestamp",
+])
+
+interface FuncCallNode {
+  funcname?: { String?: { sval?: string } }[]
+  args?: unknown[]
+  func_variadic?: boolean
+}
+
+/** Ім'я вбудованої: некваліфіковане чи `pg_catalog.`; інша схема — `undefined`. */
+function builtinName(
+  names: readonly { String?: { sval?: string } }[] | undefined
+): string | undefined {
+  const parts = (names ?? []).map((n) => n.String?.sval ?? "")
+  if (parts.length === 1) return parts[0]
+  return parts.length === 2 && parts[0] === "pg_catalog" ? parts[1] : undefined
+}
+
+/** Голий рядковий літерал (без приведення) чи `undefined`. */
+function stringLiteral(value: unknown): string | undefined {
+  const constant = (value as { A_Const?: { sval?: { sval?: string } } })
+    ?.A_Const
+  return constant?.sval === undefined ? undefined : (constant.sval.sval ?? "")
+}
+
+/**
+ * Значення, перетворення якого в місцевий час не залежить від `TimeZone`:
+ * `… AT TIME ZONE '<літерал>'`, `NULL` чи літерал дати й часу без слів
+ * (`'today'`, `'now'` розв'язуються за зоною сесії). Типів голови компілятор
+ * не відстежує, тож усе інше — fail-closed.
+ */
+function zoneFree(value: unknown): boolean {
+  const constant = (value as { A_Const?: { isnull?: boolean } })?.A_Const
+  if (constant?.isnull === true) return true
+  const text = stringLiteral(value)
+  if (text !== undefined) return /^[0-9\s:.+\-T]*$/.test(text)
+  const call = (value as { FuncCall?: FuncCallNode })?.FuncCall
+  return (
+    call !== undefined &&
+    builtinName(call.funcname) === "timezone" &&
+    call.args?.length === 2 &&
+    stringLiteral(call.args[0]) !== undefined
+  )
+}
+
+/**
+ * Що вузол читає зі стану сесії поза дозвільним (спека прав §5.8, Р6/Р7
+ * плану Д5): назву `current_setting`, якої немає серед точних
+ * `HEAD_READABLE_SETTINGS`, чи `TimeZone`. Правило — у розборі дерева, бо
+ * обхід голови бачить лише ім'я виклику, а не його аргументи.
+ */
+function sessionRead(node: Record<string, unknown>): string | undefined {
+  const value = node.SQLValueFunction as { op?: string } | undefined
+  if (value?.op !== undefined && LOCAL_TIME_VALUES.has(value.op)) {
+    return TIME_ZONE
+  }
+  const cast = node.TypeCast as
+    | { arg?: unknown; typeName?: { names?: FuncCallNode["funcname"] } }
+    | undefined
+  if (cast !== undefined) {
+    const type = builtinName(cast.typeName?.names)
+    return type !== undefined &&
+      LOCAL_TIME_TYPES.has(type) &&
+      !zoneFree(cast.arg)
+      ? TIME_ZONE
+      : undefined
+  }
+  const call = node.FuncCall as FuncCallNode | undefined
+  const name = call === undefined ? undefined : builtinName(call.funcname)
+  if (call === undefined || name === undefined) return undefined
+  const args = call.args ?? []
+  if (name === "current_setting") {
+    // Лише перший позиційний аргумент — голий літерал точної назви:
+    // приведення, іменований аргумент, VARIADIC чи вираз ховають назву.
+    const setting = stringLiteral(args[0])
+    return setting !== undefined &&
+      call.func_variadic !== true &&
+      args.length <= 2 &&
+      !args.some((a) => (a as { NamedArgExpr?: unknown }).NamedArgExpr) &&
+      HEAD_READABLE_SETTINGS.includes(setting)
+      ? undefined
+      : (setting ?? name)
+  }
+  // `AT LOCAL` — `timezone(x)` з одним аргументом: зона сесії.
+  if (name === "timezone") return args.length === 1 ? TIME_ZONE : undefined
+  if (LOCAL_TIME_TYPES.has(name)) {
+    return args.length === 1 && zoneFree(args[0]) ? undefined : TIME_ZONE
+  }
+  // Без третього аргументу-зони `date_trunc` над `timestamptz` і
+  // `date_add`/`date_subtract` беруть зону сесії.
+  if (name === "date_trunc") {
+    if (args.length === 3) {
+      return stringLiteral(args[2]) === undefined ? TIME_ZONE : undefined
+    }
+    return zoneFree(args[1]) ? undefined : TIME_ZONE
+  }
+  if (name === "date_add" || name === "date_subtract") {
+    return args.length === 3 && stringLiteral(args[2]) !== undefined
+      ? undefined
+      : TIME_ZONE
+  }
+  return undefined
+}
+
+/** Кожне читання стану сесії поза дозвільним у дереві (`sessionRead`). */
+function sessionReads(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(sessionReads)
+  if (typeof value !== "object" || value === null) return []
+  const node = value as Record<string, unknown>
+  const own = sessionRead(node)
+  return [
+    ...(own === undefined ? [] : [own]),
+    ...Object.values(node).flatMap(sessionReads),
   ]
 }
 
@@ -511,6 +655,7 @@ class Walk {
       else if (ref.space === "rel") this.relation(ref, chain)
       else if (ref.space === "operator")
         this.report(chain, "operator", ref.name)
+      else if (ref.space === "setting") this.report(chain, "setting", ref.name)
       // З порожнім шляхом функції `x.f` розв'язується лише в `pg_catalog`.
       else if (ref.bound) this.attribute(ref.name, chain)
     }
