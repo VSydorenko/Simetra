@@ -157,24 +157,36 @@ export function describePolicyFunctionCalls(): void {
     // призначення з ролей усіх політик-викликачів, а не лише читачів, — роль
     // отримує `EXECUTE`, а в T під RLS не бачить нічого: рядок «only an UPDATE
     // caller» червоніє на підмножині.
-    it.each([
+    it.each<{
+      name: string
+      where: string[]
+      callers?: string
+      reason?: string
+    }>([
       { name: "the bound in WHERE", where: [`d.${BOUND}`] },
-      { name: "without the bound", where: [] },
+      { name: "without the bound", where: [], reason: "restrictiveBound" },
       {
         name: "only an UPDATE caller",
         where: [`d.${BOUND}`],
+        reason: "policyRoles",
         callers: `CREATE POLICY docs_edit ON public.docs FOR UPDATE TO ${USER_ROLE} USING (id IN (SELECT public.f()));\n`,
       },
     ])(
       "$name: accepted only if the call returns a subset of what T shows",
-      async ({ where, callers }) => {
+      async ({ where, callers, reason }) => {
         const result = await compile(await files({ where, callers }))
         const errors = result.diagnostics.filter((d) => d.severity === "error")
         if (errors.length > 0) {
-          // Відмова — саме форма функції політики, а не зламана фікстура
+          // Відмова — саме очікувана причина форми функції політики, а не
+          // зламана фікстура
           expect(
-            errors.map((d) => [d.code, d.params?.schema, d.params?.name])
-          ).toEqual([["sql.policy-helper-correlated", "public", "f"]])
+            errors.map((d) => [
+              d.code,
+              d.params?.schema,
+              d.params?.name,
+              d.params?.reason,
+            ])
+          ).toEqual([["sql.policy-helper-correlated", "public", "f", reason]])
           return
         }
         await withRollback(async (client) => {
