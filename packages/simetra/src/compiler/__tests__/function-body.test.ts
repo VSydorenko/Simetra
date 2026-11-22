@@ -246,10 +246,11 @@ describe("sql.function-body-statement: the body is an allowlist (спека пр
   })
 
   // `SET ROLE` і `SET SESSION AUTHORIZATION` — `VariableSetStmt` переліку:
-  // захищені налаштування й далі судить `commandContextWrite`.
+  // захищені налаштування й далі судить `commandContextWrite`. Локальна форма —
+  // щоб судження локальності (`sql.function-body-session-setting`) не змішувалось.
   it.each([
-    ["SET ROLE postgres", "role"],
-    ["SET SESSION AUTHORIZATION postgres", "session_authorization"],
+    ["SET LOCAL ROLE postgres", "role"],
+    ["SET LOCAL SESSION AUTHORIZATION postgres", "session_authorization"],
   ])("%s is judged by the command context", async (sql, setting) => {
     const closed = await compile(
       await acceptDebt(files({ [EXTRA]: plpgsql(sql, "VOLATILE") }))
@@ -262,6 +263,207 @@ describe("sql.function-body-statement: the body is an allowlist (спека пр
     )
     expect(debt.diagnostics.map((d) => [d.code, d.params?.setting])).toEqual([
       ["sql.debt-session-write", setting],
+    ])
+  })
+})
+
+/**
+ * Що тіло лишило б у сесії пулу після своєї транзакції (спека прав §6.1), і
+ * діагностика: код класу й параметри без функції й рядка.
+ */
+const POOL_SESSION: readonly [string, string, Record<string, string>][] = [
+  [
+    "SET statement_timeout = '1s'",
+    "sql.function-body-session-setting",
+    { form: "set", setting: "statement_timeout" },
+  ],
+  [
+    "SET SESSION lock_timeout = '1s'",
+    "sql.function-body-session-setting",
+    { form: "set", setting: "lock_timeout" },
+  ],
+  [
+    "RESET statement_timeout",
+    "sql.function-body-session-setting",
+    { form: "reset", setting: "statement_timeout" },
+  ],
+  [
+    "SELECT set_config('statement_timeout', '1s', false)",
+    "sql.function-body-session-setting",
+    { form: "setConfig", setting: "statement_timeout" },
+  ],
+  // Локальність доводить лише позиційний літерал `true`.
+  [
+    "SELECT pg_catalog.set_config('lock_timeout', '1s', 'true')",
+    "sql.function-body-session-setting",
+    { form: "setConfig", setting: "lock_timeout" },
+  ],
+  [
+    "SELECT set_config('lock_timeout', '1s', is_local => true)",
+    "sql.function-body-session-setting",
+    { form: "setConfig", setting: "lock_timeout" },
+  ],
+  [
+    "SELECT set_config('lock_timeout', '1s', 1 = 1)",
+    "sql.function-body-session-setting",
+    { form: "setConfig", setting: "lock_timeout" },
+  ],
+  [
+    "SELECT set_config('lock_timeout', '1s')",
+    "sql.function-body-session-setting",
+    { form: "setConfig", setting: "lock_timeout" },
+  ],
+  // Тип рядка тимчасової таблиці в `pg_temp` затінив би вбудований.
+  [
+    "CREATE TEMP TABLE uuid (a int) ON COMMIT DROP",
+    "sql.function-body-temp-type",
+    { table: "uuid" },
+  ],
+  [
+    "CREATE TEMP TABLE pg_temp.name ON COMMIT DROP AS SELECT 1 AS a",
+    "sql.function-body-temp-type",
+    { table: "name" },
+  ],
+  [
+    "SELECT pg_advisory_lock(1)",
+    "sql.function-body-session-builtin",
+    { call: "pg_advisory_lock" },
+  ],
+  [
+    "SELECT pg_catalog.pg_try_advisory_lock_shared(1)",
+    "sql.function-body-session-builtin",
+    { call: "pg_try_advisory_lock_shared" },
+  ],
+  [
+    "SELECT pg_advisory_unlock_all()",
+    "sql.function-body-session-builtin",
+    { call: "pg_advisory_unlock_all" },
+  ],
+  [
+    "SELECT setseed(0.5)",
+    "sql.function-body-session-builtin",
+    { call: "setseed" },
+  ],
+]
+
+/** Те саме, але локально для транзакції: помилки немає (спека прав §6.1). */
+const POOL_LOCAL: readonly string[] = [
+  "SET LOCAL statement_timeout = '1s'",
+  "SET LOCAL TIME ZONE 'UTC'",
+  "PERFORM set_config('statement_timeout', '1s', true)",
+  "PERFORM pg_catalog.set_config('lock_timeout', '1s', true)",
+  "PERFORM pg_advisory_xact_lock(1)",
+  "PERFORM pg_try_advisory_xact_lock_shared(1)",
+  "PERFORM random()",
+  "CREATE TEMP TABLE scratch (a uuid) ON COMMIT DROP; DROP TABLE pg_temp.scratch",
+]
+
+describe("the body leaves no session state to the pool (спека прав §6.1)", () => {
+  const sessionDiagnostic = (
+    file: string,
+    code: string,
+    params: Record<string, string>
+  ) => ({ code, file, params: { function: "public.f", ...params, line: 1 } })
+
+  // Борг не виняток (правило власника): модуль прийнятої таблиці — так само.
+  it.each(
+    PLACES.flatMap((file) =>
+      POOL_SESSION.map(([sql, code, params]) => ({ file, sql, code, params }))
+    )
+  )("$sql in $file → $code", async ({ file, sql, code, params }) => {
+    const result = await compile(
+      await acceptDebt(files({ [file]: plpgsql(sql) }))
+    )
+    expect(brief(result.diagnostics)).toEqual([
+      sessionDiagnostic(file, code, params),
+    ])
+  })
+
+  it.each(
+    [
+      { form: "a literal EXECUTE", wrap: literalExecute },
+      { form: "a DO block", wrap: doBlock },
+    ].flatMap(({ form, wrap }) =>
+      POOL_SESSION.map(([sql, code, params]) => ({
+        form,
+        wrap,
+        sql,
+        code,
+        params,
+      }))
+    )
+  )("$sql in $form → $code", async ({ wrap, sql, code, params }) => {
+    const result = await compile(
+      await acceptDebt(files({ [EXTRA]: wrap(sql) }))
+    )
+    expect(brief(result.diagnostics)).toEqual([
+      sessionDiagnostic(EXTRA, code, params),
+    ])
+  })
+
+  it.each<{
+    name: string
+    sql: string
+    code: string
+    params: Record<string, string>
+  }>([
+    {
+      name: "an assignment",
+      sql: plpgsql("v := set_config('lock_timeout', '1s', false)"),
+      code: "sql.function-body-session-setting",
+      params: { form: "setConfig", setting: "lock_timeout" },
+    },
+    {
+      name: "a LANGUAGE sql body",
+      sql: "CREATE FUNCTION public.f() RETURNS void LANGUAGE sql AS $$ SELECT 1; SET statement_timeout = '1s' $$",
+      code: "sql.function-body-session-setting",
+      params: { form: "set", setting: "statement_timeout" },
+    },
+    {
+      name: "BEGIN ATOMIC",
+      sql: atomic("SELECT pg_advisory_lock(1)"),
+      code: "sql.function-body-session-builtin",
+      params: { call: "pg_advisory_lock" },
+    },
+    {
+      // Значення параметра за замовчуванням обчислює кожен виклик.
+      name: "a parameter default",
+      sql: "CREATE FUNCTION public.f(a text DEFAULT set_config('lock_timeout', '1s', false)) RETURNS void LANGUAGE sql AS $$ SELECT 1 $$",
+      code: "sql.function-body-session-setting",
+      params: { form: "setConfig", setting: "lock_timeout" },
+    },
+    {
+      name: "a procedure",
+      sql: "CREATE PROCEDURE public.f() LANGUAGE plpgsql AS $$ BEGIN RESET lock_timeout; END $$",
+      code: "sql.function-body-session-setting",
+      params: { form: "reset", setting: "lock_timeout" },
+    },
+  ])("$name → $code", async ({ sql, code, params }) => {
+    const result = await compile(await acceptDebt(files({ [EXTRA]: sql })))
+    expect(brief(result.diagnostics)).toEqual([
+      sessionDiagnostic(EXTRA, code, params),
+    ])
+  })
+
+  it.each(PLACES.flatMap((file) => POOL_LOCAL.map((sql) => ({ file, sql }))))(
+    "$sql in $file → no error",
+    async ({ file, sql }) => {
+      const result = await compile(
+        await acceptDebt(files({ [file]: plpgsql(sql) }))
+      )
+      expect(brief(result.diagnostics)).toEqual([])
+    }
+  )
+
+  // Захищене налаштування судить контекст команди, локальність — це правило
+  // без переліку імен: нелокальний `SET` захищеного — два різні дефекти.
+  it("a non-local SET of a protected setting is judged by both rules", async () => {
+    const result = await compile(
+      await acceptDebt(files({ [EXTRA]: plpgsql("SET simetra.actor = 'x'") }))
+    )
+    expect(result.diagnostics.map((d) => d.code).sort()).toEqual([
+      "sql.command-context-write",
+      "sql.function-body-session-setting",
     ])
   })
 })
@@ -543,7 +745,7 @@ describe("RETURN expr is judged as the SELECT of the same body", () => {
     },
     {
       name: "a platform setting write",
-      expr: "length(pg_catalog.set_config('simetra.actor', 'x', false))",
+      expr: "length(pg_catalog.set_config('simetra.actor', 'x', true))",
       codes: ["sql.command-context-write"],
     },
     { name: "a constant", expr: "1", codes: [] },

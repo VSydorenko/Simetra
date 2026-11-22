@@ -1,4 +1,4 @@
-// Згенеровано `pnpm --filter simetra builtin-functions` над PostgreSQL 17.6.
+// Згенеровано `pnpm --filter simetra builtin-functions` над PostgreSQL 17.11.
 // Не правити вручну: генератор — packages/simetra/scripts/builtin-functions.ts,
 // виключення — packages/simetra/src/compiler/sql/builtin-exclusions.ts.
 
@@ -1910,7 +1910,6 @@ export const BUILTIN_FUNCTIONS: readonly string[] = [
   "set_bit",
   "set_byte",
   "set_masklen",
-  "setseed",
   "setweight",
   "sha224",
   "sha256",

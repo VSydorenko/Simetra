@@ -66,6 +66,14 @@ into metadata or a migration.
 - A temporary table of the body is `CREATE TEMP TABLE … ON COMMIT DROP`, and
   every later reference to it (`DROP`, DML, a read) is `pg_temp.<name>`: an
   unqualified name could hit a table of the same name in your schema.
+- A body leaves no session state behind its transaction: a pooled connection
+  serves the next command of another user. A setting is `SET LOCAL` or
+  `set_config(…, true)` with the literal `true`; `SET` without `LOCAL`,
+  `RESET` and any other `set_config` are `sql.function-body-session-setting`.
+  A temporary table named after a type of `pg_catalog` (`name`, `uuid`,
+  `text`…) is `sql.function-body-temp-type`: rename it. A session-level
+  advisory lock or `setseed` is `sql.function-body-session-builtin`: take
+  `pg_advisory_xact_lock` instead.
 
 Application SQL anywhere (a body, a view, a policy, a domain `CHECK`, a
 default) calls only the platform and generated functions that read, such as

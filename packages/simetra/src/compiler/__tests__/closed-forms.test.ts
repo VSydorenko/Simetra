@@ -539,8 +539,10 @@ describe("kind module: closed forms only", () => {
           [ERROR, "functionOption", C],
         ],
         [
-          "SET ROLE",
-          debtBody("SET ROLE postgres;"),
+          // Локальна форма: нелокальний `SET` — помилка будь-де, борг включно
+          // (`sql.function-body-session-setting`), а тут судиться роль.
+          "SET LOCAL ROLE",
+          debtBody("SET LOCAL ROLE postgres;"),
           [WARNING, "setStatement", "role"],
         ],
         [
@@ -717,7 +719,7 @@ describe("kind module: closed forms only", () => {
           "SELECT 1 WHERE public.t_role() IS NULL"
         ),
         [TABLE_SQL]:
-          "CREATE FUNCTION public.t_role() RETURNS void LANGUAGE plpgsql AS $$ BEGIN SET ROLE postgres; END $$;",
+          "CREATE FUNCTION public.t_role() RETURNS void LANGUAGE plpgsql AS $$ BEGIN SET LOCAL ROLE postgres; END $$;",
       })
       expect(
         found.map((d) => [
