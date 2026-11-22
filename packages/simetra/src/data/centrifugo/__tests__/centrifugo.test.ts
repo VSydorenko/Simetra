@@ -455,7 +455,8 @@ describe("createCentrifugoTransport: events (Р2)", () => {
   })
 
   it.each([
-    ["2501 (insufficient state)", 2501],
+    ["2500 (insufficient state)", 2500],
+    ["2501 (subscription expired)", 2501],
     ["2502 (state invalidated)", 2502],
   ])(
     "a server push %s: transport of that channel only, then a new onSubscribed",

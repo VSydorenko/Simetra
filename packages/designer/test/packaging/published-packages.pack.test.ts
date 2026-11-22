@@ -483,7 +483,8 @@ describe("simetra/data", () => {
     // модулів не покаже: вона лежить у корені `simetra`
     const m = await readPackedManifest(tarballs.simetra)
     // Peer-и інших входів (роутер — лише `./shell`, virtual — лише `./ui`)
-    // у `dist/data` потрапляти не мають.
+    // у `dist/data` потрапляти не мають. `centrifuge` дозволено лише тому, що
+    // `simetra/data/centrifugo` — окремий вхід, що його імпортує за задумом.
     const allowed = new Set([
       ...Object.keys(m.peerDependencies as object).filter(
         (p) => !p.startsWith("@tanstack/")
@@ -551,6 +552,8 @@ describe("simetra/data", () => {
   it("the shell entry imports only its peers and the lower tiers", async () => {
     const m = await readPackedManifest(tarballs.simetra)
     // Бібліотеку форм T6 не імпортує сам: вона приходить через `simetra/ui`.
+    // `centrifuge` у переліку лише тому, що `simetra/data/centrifugo` — окремий
+    // вхід; shell його не імпортує, але перелік peer-ів ширший за вхід.
     const allowed = new Set([
       ...Object.keys(m.peerDependencies as object).filter(
         (p) => p !== "@tanstack/react-form"
