@@ -358,8 +358,11 @@ sibling `<name>.functions.json` (full replacement of `callers` and `check`, the
 the one allowed change is the declared function's own error becoming
 `sql.declaration-check-not-applied (firstStatement)`, which `fix` then repairs
 by inserting the guard call as the first statement of the body. `fix` never
-invents a right: the guard comes only from the declared `check`, and the result
-must compile. See `simetra-adoption` for the full chain.
+invents a right: the guard comes only from the declared `check`. In a folder
+with repair-class errors `fix` writes when it removes at least one of them and
+adds none (and the folder has no error outside the class). `declare-function`
+also cuts the verbatim `GRANT EXECUTE` of the declared function: its ACL now
+belongs to the platform. See `simetra-adoption` for the full chain.
 
 ## SQL debt
 

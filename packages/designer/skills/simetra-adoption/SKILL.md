@@ -148,7 +148,12 @@ errors are only of the repair class (`sql.declaration-check-missing`,
 2. `fix`: inserts a `PERFORM simetra.rights_require` (or `rights_require_scope`) call as the first
    statement of the body from the declared `check`. It only inserts into a
    `plpgsql` body without `DECLARE` and `EXCEPTION` and without any guard call;
-   in any other body write the guard yourself. `fix` never widens `EXECUTE`.
+   in any other body write the guard yourself. In the same run `fix` also cuts
+   verbatim `GRANT EXECUTE` statements and `ALTER DEFAULT PRIVILEGES … ON FUNCTIONS`
+   that contradict the platform, and removes the declaration of a function that
+   became a platform form, unless that would widen `EXECUTE`: then the record
+   stays and a warning names the roles a person must decide on. `fix` never
+   widens `EXECUTE`.
 3. `compile` must show no errors; then `plan` and `apply`. The next `plan` is
    empty.
 
