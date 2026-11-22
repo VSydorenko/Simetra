@@ -701,6 +701,9 @@ describe("simetra/data/centrifugo in a host with centrifuge", () => {
     // повинен його вимагати
     consumer = await installConsumer([tarballs.simetra], "pnpm", {
       dependencies: { centrifuge: dev.centrifuge, zod },
+      // Скрипт збірки `protobufjs` (залежність `centrifuge`) не потрібен
+      // імпорту; рішення те саме, що в `pnpm-workspace.yaml` репо
+      allowBuilds: { protobufjs: false },
     })
   })
 
