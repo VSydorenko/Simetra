@@ -30,7 +30,8 @@ const RPC_ROLES = [
 ]
 
 // Тіло RPC без запобіжника й без `DECLARE` та `EXCEPTION` — єдина форма, у яку
-// `fix` вставляє виклик сам
+// `fix` вставляє виклик сам. Волатильність типова (VOLATILE), без явного слова:
+// каталог її не друкує, а закрита оболонка вимагає явно — `introspect` дописує
 const SOURCE = `
   CREATE SCHEMA app;
   CREATE TABLE app.org (id uuid PRIMARY KEY, name text NOT NULL);
@@ -42,7 +43,7 @@ const SOURCE = `
   CREATE FUNCTION app.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE
     SECURITY DEFINER SET search_path = '' AS $$ SELECT id FROM app.org $$;
   CREATE FUNCTION app.rpc_post(p_id uuid) RETURNS void LANGUAGE plpgsql
-    STABLE SECURITY DEFINER SET search_path = '' AS $$
+    SECURITY DEFINER SET search_path = '' AS $$
   BEGIN
     PERFORM 1 FROM app.item WHERE id = p_id;
   END

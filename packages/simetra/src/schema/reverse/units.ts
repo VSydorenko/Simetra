@@ -114,7 +114,10 @@ function createFunction(sql: string, parse: SqlParser) {
  * став би боргом. Слово стає перед першою опцією списку `options` розбору;
  * решта тексту не змінюється. Позиції розбору — у байтах UTF-8.
  */
-function explicitVolatility(unit: CatalogUnit, parse: SqlParser): string {
+export function explicitVolatility(
+  unit: CatalogUnit,
+  parse: SqlParser
+): string {
   if (unit.class !== "function" || unit.volatility === undefined)
     return unit.sql
   const before = createFunction(unit.sql, parse)

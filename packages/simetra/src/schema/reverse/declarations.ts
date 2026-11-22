@@ -33,6 +33,7 @@ import {
 } from "simetra/model"
 import type { ExecuteFacts, FunctionExecuteFact } from "./execute-facts"
 import { isGeneratedPath } from "./identity"
+import { explicitVolatility } from "./units"
 
 /**
  * Декларації definer-функцій у зворотній генерації (спека декларацій функцій
@@ -305,7 +306,14 @@ export async function declareFunctions(
       u.class === "functionSettings"
   )
   const read = readSqlUnits(
-    functionLike.map((u) => ({ file: u.identity, text: u.sql, schema: "" })),
+    // Текст з явними типовими атрибутами, яких вимагає закрита оболонка, а
+    // каталог не друкує (`explicitVolatility`): інакше definer-функція з
+    // типовою VOLATILE мовчки лишалася б без декларації
+    functionLike.map((u) => ({
+      file: u.identity,
+      text: explicitVolatility(u, parse),
+      schema: "",
+    })),
     parse,
     []
   ).units

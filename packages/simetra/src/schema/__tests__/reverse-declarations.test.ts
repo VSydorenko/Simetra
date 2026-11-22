@@ -238,6 +238,27 @@ describe("declarations of definer functions", () => {
     }
   )
 
+  // Каталог не друкує типову VOLATILE, а закрита оболонка вимагає її явно:
+  // без дописаного слова definer-функція лишалася без декларації мовчки.
+  // Мутація: не дописувати слово в текст, який судить `declarations`.
+  it("a definer with the catalog default VOLATILE gets a declaration and a closed shell", async () => {
+    const text = `CREATE FUNCTION public.rpc(p_id uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$ BEGIN NULL; END $$;`
+    const catalogModel = model(text)
+    catalogModel.units = catalogModel.units.map((u) => ({
+      ...u,
+      sql: text,
+      ...(u.class === "function" ? { volatility: "volatile" as const } : {}),
+    }))
+    const result = await reverseGenerate(
+      catalogModel,
+      options(FOLDER(), facts(fact("rpc", { grants: ["PUBLIC"] })))
+    )
+    const [entry] = declarationsOf(result, RPC_FUNCTIONS)
+    expect(entry!.callers).toEqual(["user", "service", "command"])
+    // Файл функції несе то саме явне слово, тож тека компілюється з закритою оболонкою
+    expect(result.files.get("sql/public/rpc__uuid.sql")).toContain("VOLATILE")
+  })
+
   it("only the owner can execute: no declaration", async () => {
     const result = await reverseGenerate(
       model(
