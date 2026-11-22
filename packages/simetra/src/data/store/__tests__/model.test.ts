@@ -4974,7 +4974,7 @@ describe("core model self-check", () => {
       // Контроль: той самий контрприклад без дефекту проходить, тож червоний
       // — від дефекту, а не від помилки моделі.
       const [steps, preloaded, profile] = result.counterexample!
-      await runModel(steps, preloaded, profile, [], checks)
+      await modelRun(runModel(steps, preloaded, profile, [], checks))
       const caughtBy = CAUGHT_BY[flag]
       if (caughtBy !== undefined)
         expect((result.errorInstance as Error).message).toMatch(caughtBy)
@@ -5001,7 +5001,7 @@ describe("core model self-check", () => {
       expect(result.errorInstance).toBeInstanceOf(ModelFailure)
       // Контроль: той самий прогін без дефекту зелений.
       const [steps, preloaded, profile] = result.counterexample!
-      await runModel(steps, preloaded, profile, [], true, true)
+      await modelRun(runModel(steps, preloaded, profile, [], true, true))
       expect((result.errorInstance as Error).message).toMatch(CAUGHT_BY[flag]!)
     },
     RIGHTS_BUDGET_MS
@@ -5023,7 +5023,7 @@ describe("core model self-check", () => {
       expect(result.errorInstance).toBeInstanceOf(ModelFailure)
       // Контроль: той самий прогін без дефекту зелений.
       const [steps, preloaded, profile] = result.counterexample!
-      await runModel(steps, preloaded, profile, [], true, true, true)
+      await modelRun(runModel(steps, preloaded, profile, [], true, true, true))
       expect((result.errorInstance as Error).message).toMatch(CAUGHT_BY[flag]!)
       if (SCHEDULER_DEFECTS.includes(flag))
         expect(tickReads, `${flag}: no tick with a read`).toBeGreaterThan(0)
