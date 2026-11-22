@@ -271,6 +271,9 @@ export function defineSearchIndexPlanCases(): void {
     it.each(own.map((scope) => ({ scope })))(
       "contains scans only its scope of $scope.size rows, without the search index",
       async ({ scope }) => {
+        // Запит одного скоупу несе рівність скоупу явно: політика RLS дає лише
+        // `org_id = ANY (набір)`, і без рівності скан іде всією таблицею з
+        // чужими скоупами (межа §4.1 — для цієї форми).
         const where: Filter = {
           and: [
             { attribute: scopeAttribute, op: "eq", value: scope.id },
