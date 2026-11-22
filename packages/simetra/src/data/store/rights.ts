@@ -363,15 +363,14 @@ export function can(
       const container = carrierOf(contract.binding.carrier)
       branches.push(
         and(
-          container === undefined
-            ? "unknown"
-            : grant(
-                inner,
-                (r) =>
-                  r.level === "container" &&
-                  typeof container === "string" &&
-                  r.container === container
-              ),
+          // Без контейнерного рядка носій нічого не міняє: гілка хибна.
+          grant(
+            inner,
+            (r) =>
+              r.level === "container" &&
+              (container === undefined || r.container === container)
+          ),
+          container === undefined ? "unknown" : true,
           inner.extent === "any" ? true : inner.carrier
         )
       )

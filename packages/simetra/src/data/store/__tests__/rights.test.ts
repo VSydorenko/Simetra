@@ -524,6 +524,14 @@ describe("can", () => {
     expect(can(mineSnap(rows), entry, "update", at)).toBe(false)
   })
 
+  it("a missing container carrier is unknown only where a container row exists", () => {
+    const entry = withRich()
+    const rows = [update({ level: "container", scope: SCOPE, container: BOX })]
+    const opts = { ...at, row: {} }
+    expect(can(mineSnap(rows), entry, "update", opts)).toBe("unknown")
+    expect(can(mineSnap([]), entry, "update", opts)).toBe(false)
+  })
+
   it("a container branch with own needs the own carrier too", () => {
     const entry = withRich()
     const rows = [
