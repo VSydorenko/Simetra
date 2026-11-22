@@ -377,14 +377,19 @@ export function can(
     }
   }
 
-  const tenant: CanResult =
-    scoped && !root
-      ? kindAdopted || verbatim
-        ? "unknown"
-        : snapshot.scopeSets.some(
-            (s) => s.scopeKind === scopeKind && s.scope === scope
-          )
-      : true
+  // Читання судить межа з контракту (`publicRead`-об'єкт її не має), запис —
+  // скоуп об'єкта: його політики межу тенанта несуть завжди.
+  const tenantBound =
+    scoped &&
+    !root &&
+    (action !== "read" || contract.readBoundary.includes("tenant"))
+  const tenant: CanResult = tenantBound
+    ? kindAdopted || verbatim
+      ? "unknown"
+      : snapshot.scopeSets.some(
+          (s) => s.scopeKind === scopeKind && s.scope === scope
+        )
+    : true
   // `rights_visible_users` — учасники всіх моїх скоупів, яких клієнт не має:
   // видимий лише власний рядок.
   const users: CanResult =
