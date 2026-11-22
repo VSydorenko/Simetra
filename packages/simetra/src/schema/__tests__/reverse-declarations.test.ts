@@ -1036,7 +1036,11 @@ describe("repeated adoption", () => {
 describe("policy functions of debt (Р9, І6)", () => {
   // Таблиці фікстури функції політики — з фізичного знімка її теки; тека
   // зворотної генерації — прийом з нуля: лише проєкт
-  const adopt = async (sql: string, executes: FactOptions) => {
+  const adopt = async (
+    sql: string,
+    executes: FactOptions,
+    kept: Record<string, string> = {}
+  ) => {
     const folder = policyFiles(
       POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT(),
       POLICY_DEBT()
@@ -1045,6 +1049,7 @@ describe("policy functions of debt (Р9, І6)", () => {
     expect(physical.model, "the fixture folder compiles").toBeDefined()
     const existing = new Map([
       ["project.meta.json", folder.get("project.meta.json")!],
+      ...Object.entries(kept),
     ])
     return reverseGenerate(
       {
@@ -1096,6 +1101,20 @@ describe("policy functions of debt (Р9, І6)", () => {
         )
         .map((u) => u.sql)
     ).toEqual(["GRANT EXECUTE ON FUNCTION public.f() TO authenticated;"])
+  })
+
+  // Перелік боргу підсумкова тека пише заново, а зламаний збережений закрив би
+  // стадію 3 чернетки й з нею розпізнавання: функцію задекларувало б, а
+  // компіляція виходу визнала б її формою платформи.
+  // Мутація: розпізнавати на чернетці зі збереженим переліком боргу
+  it("a broken kept debt list does not hide the policy function", async () => {
+    const result = await adopt(
+      POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT() + EXECUTE,
+      { grants: ["authenticated"] },
+      { "sql-debt.json": "{ broken" }
+    )
+    expect(functionFiles(result.files)).toEqual([])
+    expect(errorsOf(result)).toEqual([])
   })
 
   it("a function outside the form gets a declaration, the compile names sql.policy-helper-correlated", async () => {
