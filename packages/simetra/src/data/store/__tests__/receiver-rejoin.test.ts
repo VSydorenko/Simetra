@@ -16,7 +16,7 @@ import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import { createFakeSource } from "../testing/fake-source"
 import { coreInternals } from "../core"
 import { QUIET_MS, REJOIN_JITTER_MS } from "../receiver"
-import type { Key, ViewSpec } from "../types"
+import { DEFAULT_CORE_LIMITS, type Key, type ViewSpec } from "../types"
 import {
   ORG,
   TASK,
@@ -1320,6 +1320,111 @@ describe("held and released channels (liveness, R-a…R-c)", () => {
 
   it("keeps the entry of a released channel whose row an include read wrote before the release", async () => {
     await includeTarget(true)
+  })
+
+  // Одне джерело (§8.4, правило 2): читання знімає свій облік на кожному
+  // кінці польоту, інакше запис відпущеного каналу застряг би назавжди.
+  const ends = [
+    "success",
+    "refusal",
+    "error",
+    "cancel",
+    "purge",
+    "close",
+  ] as const
+  it.each(ends)(
+    "forgets the entry of a released channel once a read in flight ends by %s",
+    async (end) => {
+      const transport = createFakeSignalTransport()
+      let broken = false
+      const h = setup({
+        rightsSnapshot: true,
+        signals: transport,
+        objects: [task, org],
+        // Збій читання (не відмова сервера): відповідь джерела відхилено.
+        adapter: (fake) => ({
+          capabilities: fake.adapter.capabilities,
+          read: async (items) => {
+            const result = await fake.adapter.read(items)
+            if (broken) throw new Error("network")
+            return result
+          },
+        }),
+      })
+      h.fake.rightsSnapshot = rightsOf([S, S2])
+      h.fake.rightsVersion = "1".repeat(64)
+      h.fake.insert(TASK, taskValues(1, { org: S2 }))
+      const internals = coreInternals(h.core)
+      h.core.view(keysView(key(9))).subscribe(() => {})
+      await settle()
+      transport.join(channel, false)
+      await advance(REJOIN_JITTER_MS)
+      h.fake.mode = "manual"
+      const off = h.core.view(keysView(key(1))).subscribe(() => {})
+      await settle()
+      expect(h.fake.pending).toHaveLength(1)
+      await replaceRights(h, [S2], [S, S2])
+      expect(transport.subscribed().has(channel)).toBe(false)
+      expect(internals.pendingWrites(TASK)).toBeGreaterThan(0)
+      expect(internals.epochs.releasedAt(channel)).toBeGreaterThan(0)
+      if (end === "cancel") {
+        off()
+        await advance(DEFAULT_CORE_LIMITS.releaseDelayMs)
+      }
+      if (end === "purge") await replaceRights(h, [S2], [S])
+      if (end === "close") h.core.close("disposed")
+      if (end === "error") broken = true
+      h.fake.mode = "auto"
+      while (h.fake.pending.length > 0) {
+        const read = h.fake.take(0)
+        if (end === "refusal") read.fail("command.unavailable")
+        else read.answer()
+        await settle()
+      }
+      broken = false
+      await settle()
+      // Закрите ядро такту не має: лишається лише облік.
+      if (end !== "close") {
+        // Такт приймача забуває запис без рядків каналу й без читань у польоті.
+        await advance(60_000)
+        expect(internals.epochs.releasedAt(channel)).toBe(0)
+      }
+      expect(internals.pendingWrites(TASK)).toBe(0)
+    }
+  )
+
+  // Облік — на кожне читання окремо: кінець одного не знімає облік іншого,
+  // що ще летить і запише рядок каналу.
+  it("keeps the entry of a released channel while a second read is in flight after the first one ended", async () => {
+    const h = await open(keysView(key(9)), 0, [S, S2])
+    h.fake.insert(TASK, taskValues(1, { org: S2 }))
+    h.fake.insert(TASK, taskValues(2))
+    h.transport.join(channel, false)
+    await advance(REJOIN_JITTER_MS)
+    h.fake.mode = "manual"
+    const first = h.core.view(keysView(key(1)))
+    first.subscribe(() => {})
+    await settle()
+    const second = h.core.view(keysView(key(2)))
+    second.subscribe(() => {})
+    await settle()
+    expect(h.fake.pending).toHaveLength(2)
+    await replaceRights(h, [S2], [S, S2])
+    expect(h.transport.subscribed().has(channel)).toBe(false)
+    h.fake.mode = "auto"
+    h.fake.take(0).answer()
+    await settle()
+    expect(first.getSnapshot().rows.map((r) => r.state)).toEqual(["synced"])
+    // Такт приймача під час другого читання: запис тримається.
+    await advance(60_000)
+    h.fake.take(0).answer()
+    await settle()
+    expect(second.getSnapshot().rows.map((r) => r.state)).toEqual(["synced"])
+    // Правка без нагляду: повторна підписка з записом позначає рядок.
+    h.fake.edit(TASK, key(2), { title: "missed" })
+    await replaceRights(h, [S, S2], [S, S2])
+    expect(h.transport.subscribed().has(channel)).toBe(true)
+    expect(second.getSnapshot().rows.map((r) => r.state)).toEqual(["stale"])
   })
 
   it("a release without a gap leaves the composition confirmed", async () => {

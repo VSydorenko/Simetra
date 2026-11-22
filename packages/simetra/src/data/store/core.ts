@@ -401,6 +401,8 @@ export interface CoreInternals {
   readonly epochs: Epochs
   readonly ops: StoreOps
   readonly registry: SubsetRegistry
+  /** Reads in flight whose plan may write rows of the object (§8.4, rule 2). */
+  readonly pendingWrites: (object: ObjectName) => number
 }
 
 export function createCore(options: {
@@ -2006,7 +2008,13 @@ export function createCore(options: {
     defects,
   })
 
-  internals.set(core, { objects, ops, registry, epochs: session.epochs })
+  internals.set(core, {
+    objects,
+    ops,
+    registry,
+    epochs: session.epochs,
+    pendingWrites: writerContext.pendingWrites,
+  })
 
   inspections.set(core, {
     defects,
