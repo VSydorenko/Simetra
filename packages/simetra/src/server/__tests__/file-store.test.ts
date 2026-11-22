@@ -15,6 +15,7 @@ const OBJ = "11111111-1111-4111-8111-111111111111"
 const ROW = "22222222-2222-4222-8222-222222222222"
 const INSTANCE = "33333333-3333-4333-8333-333333333333"
 const OTHER = "44444444-4444-4444-8444-444444444444"
+const UPPER = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
 const KEY = fileObjectKey(OBJ, ROW)
 
 interface Stored {
@@ -281,10 +282,92 @@ describe("fromS3Client get, delete, list", () => {
     for await (const o of store.list(`o/${OBJ}/`, fileObjectKey(OBJ, ids[2]!)))
       afterSeen.push(o.key)
     expect(afterSeen).toEqual(ids.slice(3).map((id) => fileObjectKey(OBJ, id)))
+  })
+})
 
-    const all: string[] = []
-    for await (const o of store.list("o/")) all.push(o.key)
-    expect(all).not.toContain(INSTANCE_MARKER_KEY)
-    expect(all).toHaveLength(6)
+describe("key and prefix shape", () => {
+  const bad = [
+    INSTANCE_MARKER_KEY,
+    `o/../${INSTANCE_MARKER_KEY}`,
+    `o/${OBJ}/../${INSTANCE_MARKER_KEY}`,
+    `o/${OBJ}/${UPPER}`,
+    `o/${OBJ}/short`,
+    `o/${OBJ}/${ROW}/x`,
+    "",
+  ]
+  it.each(bad)("put, get, delete refuse %j before any S3 call", async (key) => {
+    const { client, calls } = fakeS3()
+    const store = fromS3Client(client, "b")
+    const refused = { reason: "bad-key" }
+    await expect(
+      store.put(key, streamOf(bytes(1)), opts)
+    ).rejects.toMatchObject(refused)
+    await expect(store.get(key)).rejects.toMatchObject(refused)
+    await expect(store.delete(key)).rejects.toMatchObject(refused)
+    expect(calls).toEqual([])
+  })
+
+  it.each(["", "o/", "o", `o/${OBJ}`, "o/../", `o/${UPPER}/`])(
+    "list refuses prefix %j before any S3 call",
+    async (prefix) => {
+      const { client, calls } = fakeS3()
+      const it = fromS3Client(client, "b").list(prefix)
+      await expect(it[Symbol.asyncIterator]().next()).rejects.toMatchObject({
+        reason: "bad-key",
+      })
+      expect(calls).toEqual([])
+    }
+  )
+})
+
+describe("storage failures", () => {
+  it("a lost marker race is refused", async () => {
+    const { client, objects } = fakeS3()
+    const real = client.putObject
+    client.putObject = async (i) => {
+      await real(i)
+      // Інша база перезаписує маркер одразу після нашого запису
+      if (i.Key === INSTANCE_MARKER_KEY)
+        objects.get(i.Key)!.bytes = new TextEncoder().encode(OTHER)
+    }
+    await expect(
+      fromS3Client(client, "b").put(KEY, streamOf(bytes(1)), opts)
+    ).rejects.toMatchObject({ reason: "foreign-bucket" })
+    expect(objects.has(KEY)).toBe(false)
+  })
+
+  it("a missing bucket is an error, not a missing key", async () => {
+    const { client } = fakeS3()
+    client.getObject = async () => {
+      throw Object.assign(new Error("no bucket"), {
+        name: "NoSuchBucket",
+        $metadata: { httpStatusCode: 404 },
+      })
+    }
+    const store = fromS3Client(client, "b")
+    await expect(store.get(KEY)).rejects.toThrow("no bucket")
+    await expect(store.put(KEY, streamOf(bytes(1)), opts)).rejects.toThrow(
+      "no bucket"
+    )
+  })
+
+  it("a bare 404 is still a missing key", async () => {
+    const { client } = fakeS3()
+    client.getObject = async () => {
+      throw Object.assign(new Error("x"), {
+        $metadata: { httpStatusCode: 404 },
+      })
+    }
+    expect(await fromS3Client(client, "b").get(KEY)).toBeNull()
+  })
+
+  it("get without ContentLength throws instead of reporting 0", async () => {
+    const { client } = fakeS3()
+    client.getObject = async () => ({
+      Body: { transformToWebStream: () => streamOf(bytes(1)) },
+    })
+    await expect(fromS3Client(client, "b").get(KEY)).rejects.toThrow(
+      "ContentLength"
+    )
   })
 })

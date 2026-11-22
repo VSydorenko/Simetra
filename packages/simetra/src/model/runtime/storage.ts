@@ -35,6 +35,18 @@ export function fileObjectKey(objectId: string, rowId: string): string {
   return `o/${objectId}/${rowId}`
 }
 
+/** Чи рядок — рівно ключ файлу `o/<uuid>/<uuid>` (без обходів і маркера). */
+export function isFileObjectKey(key: string): boolean {
+  const m = /^o\/([^/]+)\/([^/]+)$/.exec(key)
+  return m !== null && UUID.test(m[1]!) && UUID.test(m[2]!)
+}
+
+/** Чи рядок — рівно префікс об'єкта `o/<uuid>/`. */
+export function isFileObjectPrefix(prefix: string): boolean {
+  const m = /^o\/([^/]+)\/$/.exec(prefix)
+  return m !== null && UUID.test(m[1]!)
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**

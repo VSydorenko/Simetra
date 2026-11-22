@@ -1,4 +1,8 @@
-import { STORAGE_MAX_BYTES } from "simetra/model"
+import {
+  isFileObjectKey,
+  isFileObjectPrefix,
+  STORAGE_MAX_BYTES,
+} from "simetra/model"
 
 /** Object key of the database binding marker (platform spec §8.2). */
 export const INSTANCE_MARKER_KEY = "simetra-instance"
@@ -41,7 +45,7 @@ export interface FileStore {
 /** Refusal of the store itself; `reason` is a closed list. */
 export class FileStoreError extends Error {
   constructor(
-    readonly reason: "too-large" | "foreign-bucket" | "bad-limit",
+    readonly reason: "too-large" | "foreign-bucket" | "bad-limit" | "bad-key",
     message: string
   ) {
     super(message)
@@ -81,18 +85,23 @@ export interface S3ClientLike {
   }>
 }
 
-// Відсутність ключа SDK повідомляє помилкою з іменем або статусом 404
+// Відсутність ключа SDK повідомляє помилкою з іменем або статусом 404;
+// відсутній бакет — теж 404, але це помилка, а не «немає файлу»
 function isNotFound(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false
   const e = error as {
     name?: unknown
     $metadata?: { httpStatusCode?: unknown }
   }
-  return (
-    e.name === "NoSuchKey" ||
-    e.name === "NotFound" ||
-    e.$metadata?.httpStatusCode === 404
-  )
+  if (e.name === "NoSuchKey" || e.name === "NotFound") return true
+  return e.name !== "NoSuchBucket" && e.$metadata?.httpStatusCode === 404
+}
+
+// Ключ і префікс — лише форми `o/<uuid>/…`: інакше `put`/`delete` дісталися б
+// маркера `simetra-instance`, а `list("")` віддав би його звірці
+function assertKey(key: string): void {
+  if (!isFileObjectKey(key))
+    throw new FileStoreError("bad-key", "key must be o/<uuid>/<uuid>")
 }
 
 /** Adapts an S3 client to the port; the bucket is fixed by the server. */
@@ -136,6 +145,7 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
 
   return {
     async put(key, body, { contentType, maxBytes, instance }) {
+      assertKey(key)
       if (
         !Number.isInteger(maxBytes) ||
         maxBytes < 1 ||
@@ -146,7 +156,10 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
           `maxBytes must be an integer in 1..${STORAGE_MAX_BYTES}`
         )
       // Буферизуємо весь файл до першого запису: `ContentLength` відомий
-      // наперед, а перевищення обриває потік, коли в бакеті ще нічого немає
+      // наперед, а перевищення обриває потік, коли в бакеті ще нічого немає.
+      // Пам'ять: на склеюванні шматки звільняються по одному, тож пік
+      // не більший за 2 × maxBytes (≤ 2 × STORAGE_MAX_BYTES)
+      const EMPTY = new Uint8Array(0)
       const chunks: Uint8Array[] = []
       let size = 0
       const reader = body.getReader()
@@ -166,9 +179,10 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
       }
       const bytes = new Uint8Array(size)
       let at = 0
-      for (const chunk of chunks) {
-        bytes.set(chunk, at)
-        at += chunk.byteLength
+      for (let i = 0; i < chunks.length; i++) {
+        bytes.set(chunks[i]!, at)
+        at += chunks[i]!.byteLength
+        chunks[i] = EMPTY
       }
       if ((await checkBinding(instance)) === "write") {
         const marker = new TextEncoder().encode(instance)
@@ -179,6 +193,13 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
           ContentLength: marker.byteLength,
           ContentType: "text/plain",
         })
+        // Garage ігнорує `If-None-Match: *`: два перші `put` різних баз могли
+        // обидва пройти перевірку, тож після запису читаємо маркер знову
+        if ((await readMarker()) !== instance)
+          throw new FileStoreError(
+            "foreign-bucket",
+            "bucket belongs to another database (instance marker differs)"
+          )
       }
       await client.putObject({
         Bucket: bucket,
@@ -192,12 +213,16 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
     },
 
     async get(key) {
+      assertKey(key)
       try {
         const res = await client.getObject({ Bucket: bucket, Key: key })
         if (res.Body === undefined) return null
+        // Невідомий розмір не підміняємо нулем: неправильний розмір гірший
+        if (res.ContentLength === undefined)
+          throw new Error("object store gave no ContentLength")
         return {
           body: res.Body.transformToWebStream(),
-          size: res.ContentLength ?? 0,
+          size: res.ContentLength,
           contentType: res.ContentType ?? "application/octet-stream",
         }
       } catch (error) {
@@ -207,10 +232,13 @@ export function fromS3Client(client: S3ClientLike, bucket: string): FileStore {
     },
 
     async delete(key) {
+      assertKey(key)
       await client.deleteObject({ Bucket: bucket, Key: key })
     },
 
     async *list(prefix, after) {
+      if (!isFileObjectPrefix(prefix))
+        throw new FileStoreError("bad-key", "prefix must be o/<uuid>/")
       let token: string | undefined
       do {
         const res = await client.listObjectsV2({
