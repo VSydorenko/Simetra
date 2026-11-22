@@ -3679,7 +3679,16 @@ async function runModelOn(
           )
         const byTick = (sub: Subset) =>
           overdue && !young(sub, at, 0.9 * REVALIDATE_MS)
-        const youngNow = (sub: Subset) => !byResume(sub) && !byTick(sub)
+        // Вимога сильніша за вік (§8.4, п. 7): вигляд, чия вимога «склад не
+        // підтверджено» стояла на старті кроку поза паузою збою, `resume()`
+        // читає й молодшим за межу. Лише такий: молодий вигляд без вимоги
+        // межа й далі тримає.
+        const byRequirement = (sub: Subset) =>
+          sub.unconfirmedSince !== undefined &&
+          sub.failures === 0 &&
+          !inPause(sub, at)
+        const youngNow = (sub: Subset) =>
+          !byResume(sub) && !byTick(sub) && !byRequirement(sub)
         for (const sub of readers) {
           if (inPause(sub, at)) pausedViews.add(sub)
           if (youngNow(sub)) youngViews.set(sub, sub.rereads)
@@ -4597,6 +4606,14 @@ describe("core model regressions", () => {
       signals: true,
       seed: -518023336,
       path: "9307:4:1:4:11:8:19:20:5:3:16:11:14:16:11:19:19:19:11:11:9:9:8:8:8:17:8:9:8:9:11:8:11:12:11:8:10:10",
+    },
+    // #114: вимога складу, що лишилась на прихованій вкладці, сильніша за
+    // вік — `resume()` читає вигляд і молодшим за `resumeMinIntervalMs`.
+    {
+      issue: 114,
+      signals: true,
+      seed: -1610915587,
+      path: "7505:2:3:5:5:22:14:3:5:9:9:11:10:13:12:12:13:19:18:18:18:18:7:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:9",
     },
   ])(
     "replays the counterexample of #$issue (seed $seed)",
