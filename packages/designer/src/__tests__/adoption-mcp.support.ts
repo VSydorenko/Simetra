@@ -2,7 +2,11 @@ import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { PROVIDER_API_ROLES, PROVIDER_OWNER_ROLES } from "simetra/model"
+import {
+  PINNED_SESSION_SETTINGS,
+  PROVIDER_API_ROLES,
+  PROVIDER_OWNER_ROLES,
+} from "simetra/model"
 import { databaseResource } from "../io/database"
 import { testProvider } from "../../../simetra/test/support"
 import { query } from "./support/db"
@@ -29,6 +33,11 @@ const RPC_ROLES = [
   ...(ROLES.service === null ? [] : [ROLES.service]),
 ]
 
+/** Опції `SET` закріплених налаштувань сесії кореня голови (спека декларацій функцій §5.8). */
+const PINNED_SETTINGS = PINNED_SESSION_SETTINGS.map(
+  (s) => `SET ${s.name} = '${s.value}'`
+).join(" ")
+
 // Тіло RPC без запобіжника й без `DECLARE` та `EXCEPTION` — єдина форма, у яку
 // `fix` вставляє виклик сам. Волатильність типова (VOLATILE), без явного слова:
 // каталог її не друкує, а закрита оболонка вимагає явно — `introspect` дописує
@@ -41,7 +50,7 @@ const SOURCE = `
     name text NOT NULL
   );
   CREATE FUNCTION app.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE
-    SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' SET lc_monetary = 'C' SET lc_numeric = 'C' SET lc_time = 'C' SET bytea_output = 'hex' SET xmlbinary = 'base64' SET xmloption = 'content' SET timezone_abbreviations = 'Default' SET default_text_search_config = 'pg_catalog.simple' AS $$ SELECT id FROM app.org $$;
+    SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS} AS $$ SELECT id FROM app.org $$;
   CREATE FUNCTION app.rpc_post(p_id uuid) RETURNS void LANGUAGE plpgsql
     SECURITY DEFINER SET search_path = '' AS $$
   BEGIN

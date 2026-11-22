@@ -30,6 +30,7 @@ import {
   project,
   uuid,
 } from "./helpers"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 const SQL = "sql/public/fns.sql"
 /** Тека без функцій політик: предмет цих тестів — форми метаданих. */
@@ -356,8 +357,7 @@ describe("sql.declaration-platform-form", () => {
       name: "team_ids",
       file: SCOPE_FUNCTIONS_FILE,
       sql: {
-        [SCOPE_FUNCTIONS_FILE]:
-          "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' SET lc_monetary = 'C' SET lc_numeric = 'C' SET lc_time = 'C' SET bytea_output = 'hex' SET xmlbinary = 'base64' SET xmloption = 'content' SET timezone_abbreviations = 'Default' SET default_text_search_config = 'pg_catalog.simple' AS $$ SELECT NULL::uuid $$;\n",
+        [SCOPE_FUNCTIONS_FILE]: `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`,
       },
       layers: [teamScopeKind()],
     },

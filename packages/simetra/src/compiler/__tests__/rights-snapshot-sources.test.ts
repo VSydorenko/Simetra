@@ -25,6 +25,7 @@ import {
   snapshotSourcesDomain,
 } from "./fixtures/rights"
 import { acceptDebt, expectClean } from "./helpers"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 let parse: SqlParser
 let plpgsql: PlpgsqlParser
@@ -367,7 +368,7 @@ describe("actor snapshot sources", () => {
     )
     files.set(
       "sql/public/zone-ids.sql",
-      "CREATE FUNCTION public.zone_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' SET lc_monetary = 'C' SET lc_numeric = 'C' SET lc_time = 'C' SET bytea_output = 'hex' SET xmlbinary = 'base64' SET xmloption = 'content' SET timezone_abbreviations = 'Default' SET default_text_search_config = 'pg_catalog.simple' AS $$ SELECT k.id FROM public.zone_keepers k WHERE k.keeper_id = (SELECT simetra.current_user_id()) $$;"
+      `CREATE FUNCTION public.zone_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT k.id FROM public.zone_keepers k WHERE k.keeper_id = (SELECT simetra.current_user_id()) $$;`
     )
     const result = await compileRights(await acceptDebt(files))
     expect(
@@ -391,7 +392,7 @@ describe("actor snapshot sources", () => {
     )
     files.set(
       "sql/public/zone-ids.sql",
-      "CREATE FUNCTION public.zone_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' SET lc_monetary = 'C' SET lc_numeric = 'C' SET lc_time = 'C' SET bytea_output = 'hex' SET xmlbinary = 'base64' SET xmloption = 'content' SET timezone_abbreviations = 'Default' SET default_text_search_config = 'pg_catalog.simple' AS $$ SELECT v.id FROM public.zone_view v WHERE v.keeper_id = (SELECT simetra.current_user_id()) $$;"
+      `CREATE FUNCTION public.zone_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT v.id FROM public.zone_view v WHERE v.keeper_id = (SELECT simetra.current_user_id()) $$;`
     )
     const result = await compileRights(await acceptDebt(files))
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])

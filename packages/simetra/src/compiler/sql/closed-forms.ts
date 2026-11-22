@@ -1,6 +1,7 @@
 import type { Node } from "libpg-query"
 import {
   KIND_REGISTRY,
+  PINNED_SESSION_SETTINGS,
   PLATFORM_SETTING_PREFIX,
   PROVIDER_SCHEMAS,
   type DatabaseProvider,
@@ -19,7 +20,6 @@ import { isExpressionUnit, treeBeyondExpressions } from "./expression-calls"
 import type { SqlParser } from "./parse"
 import type { PlpgsqlParser } from "./plpgsql"
 import type { PolicyFunctions } from "./policy-functions"
-import { HEAD_PINNED_SETTINGS } from "./head-settings"
 import { functionIdentity } from "./identity"
 import { FUNCTION_CLASSES, type RowRule, type VerbatimUnit } from "./units"
 
@@ -251,7 +251,7 @@ function setValueText(set: SetOption): string | undefined {
 
 /** Чи опція `SET` ставить зафіксоване головою налаштування в його значення. */
 export function setsPinnedValue(set: SetOption): boolean {
-  const pinned = HEAD_PINNED_SETTINGS.find(
+  const pinned = PINNED_SESSION_SETTINGS.find(
     (s) => s.name.toLowerCase() === set.name?.toLowerCase()
   )
   return pinned !== undefined && setValueText(set) === pinned.value
@@ -272,7 +272,7 @@ export interface PinnedSettingProblem {
 }
 
 /**
- * Перше налаштування `HEAD_PINNED_SETTINGS`, якого `CREATE FUNCTION` кореня
+ * Перше налаштування `PINNED_SESSION_SETTINGS`, якого `CREATE FUNCTION` кореня
  * голови після згортання опцій (як `foldedEmptySearchPath`: ім'я без
  * регістру, `RESET ALL` прибирає задане до нього, перемагає останнє) не
  * ставить рівно в його значення. Окремий `ALTER FUNCTION`, що зачіпає
@@ -298,7 +298,7 @@ export function pinnedSettingProblem(
   const altered = functionSettingsOf(unit, units).flatMap(
     (settings) => alterFunction(settings.tree)?.actions ?? []
   )
-  for (const pinned of HEAD_PINNED_SETTINGS) {
+  for (const pinned of PINNED_SESSION_SETTINGS) {
     const key = pinned.name.toLowerCase()
     const alteredHere = altered.some((action) => {
       const set =

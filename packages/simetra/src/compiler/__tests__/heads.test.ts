@@ -1,10 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest"
 import { compile, isRepairError, type Diagnostic } from "simetra/compiler"
 import { readFiles, sqlStage } from "../pipeline"
-import {
-  HEAD_PINNED_SETTINGS,
-  pinnedSettingsClause,
-} from "../sql/head-settings"
+import { PINNED_SESSION_SETTINGS } from "simetra/model"
+import { pinnedSettingsClause } from "../sql/head-settings"
 import { headScope, judgeHandler } from "../sql/heads"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
 import { loadPlpgsqlParser, type PlpgsqlParser } from "../sql/plpgsql"
@@ -797,6 +795,7 @@ describe("checkHeads: head builtin allowlist and session state", () => {
   // він досягає: подання й функція без зафіксованих налаштувань. Функція, що
   // сама фіксує налаштування голови, виконується вже в них.
   const VIEW = "public.v"
+  const OUTER_VIEW = "public.w"
   const zonedView = `CREATE VIEW ${VIEW} WITH (security_invoker = true) AS SELECT t.id FROM public.task t WHERE current_date IS NOT NULL;\n`
   const viaPolicy = (using: string) =>
     `CREATE POLICY p ON public.task_notes FOR SELECT USING (${using});\n`
@@ -808,6 +807,19 @@ describe("checkHeads: head builtin allowlist and session state", () => {
         zonedView +
         viaPolicy(`id IN (SELECT v.id FROM ${VIEW} v)`),
       expected: [found("setting", "TimeZone", SET_FUNCTION, POLICY, VIEW)],
+    },
+    {
+      // Контекст клієнта переходить на кожен рівень: подання, яке читає
+      // подання, що його читає політика.
+      name: "a view read by a view a policy reads",
+      sql:
+        READ_NOTES +
+        zonedView +
+        `CREATE VIEW ${OUTER_VIEW} WITH (security_invoker = true) AS SELECT v.id FROM ${VIEW} v;\n` +
+        viaPolicy(`id IN (SELECT w.id FROM ${OUTER_VIEW} w)`),
+      expected: [
+        found("setting", "TimeZone", SET_FUNCTION, POLICY, OUTER_VIEW, VIEW),
+      ],
     },
     {
       // Те саме подання голова читає й сама: там воно в її налаштуваннях,
@@ -955,7 +967,7 @@ describe("sql.head-settings: a root head pins the session settings", () => {
       // Форма `pg_get_functiondef`, яку читає зворотна генерація: ім'я в
       // лапках лише з великими літерами, `TO`, число без лапок.
       name: "in the form of the catalog",
-      settings: HEAD_PINNED_SETTINGS.map(({ name, value }) =>
+      settings: PINNED_SESSION_SETTINGS.map(({ name, value }) =>
         name === "extra_float_digits"
           ? `SET ${name} TO ${value}`
           : `SET ${name === name.toLowerCase() ? name : `"${name}"`} TO '${value}'`
@@ -968,10 +980,10 @@ describe("sql.head-settings: a root head pins the session settings", () => {
 
   // Кожне налаштування набору судиться окремо: оболонка без будь-якого з них
   // — помилка з його ім'ям.
-  it.each(HEAD_PINNED_SETTINGS.map((s) => s.name))(
+  it.each(PINNED_SESSION_SETTINGS.map((s) => s.name))(
     "set function without %s",
     async (name) => {
-      const settings = HEAD_PINNED_SETTINGS.filter((s) => s.name !== name)
+      const settings = PINNED_SESSION_SETTINGS.filter((s) => s.name !== name)
         .map((s) => `SET ${s.name} = '${s.value}'`)
         .join(" ")
       expect(await settingsErrors(setFunctionWith(settings))).toEqual([

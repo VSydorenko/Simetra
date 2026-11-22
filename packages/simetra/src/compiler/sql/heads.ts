@@ -7,6 +7,7 @@ import {
   type PhysicalSnapshot,
   type PhysicalTable,
   HEAD_READABLE_SETTINGS,
+  PINNED_SESSION_SETTINGS,
   type Project,
 } from "simetra/model"
 import { derivedFunctions } from "../contracts"
@@ -17,7 +18,6 @@ import type { ParsedObject } from "../stages/files"
 import type { ResolvedReference } from "../stages/identity"
 import type { PolicyFunctions } from "./policy-functions"
 import { HEAD_BUILTINS } from "./head-builtins"
-import { HEAD_PINNED_SETTINGS } from "./head-settings"
 import {
   closedModuleOwners,
   hasEffectiveEmptySearchPath,
@@ -437,7 +437,7 @@ function settingRead(node: Record<string, unknown>): string | undefined {
 /**
  * Чи вузол дослівного виразу політики читає часову зону сесії (спека
  * декларацій функцій §5.8): функція голови фіксує `TimeZone` у своїй
- * оболонці (`HEAD_PINNED_SETTINGS`), а вираз політики, який обчислює
+ * оболонці (`PINNED_SESSION_SETTINGS`), а вираз політики, який обчислює
  * Postgres у сесії клієнта, такої оболонки не має — для нього правило за
  * іменами: місцевий час «зараз», перетворення в тип місцевого часу без
  * `AT TIME ZONE '<літерал>'` над доведено `timestamptz` і перетворення в
@@ -649,13 +649,13 @@ function zoneReferences(trees: readonly unknown[]): Reference[] {
 }
 
 /**
- * Опція `SET` зафіксованого налаштування голови (`HEAD_PINNED_SETTINGS`):
+ * Опція `SET` зафіксованого налаштування голови (`PINNED_SESSION_SETTINGS`):
  * у корені його судить `sql.head-settings`, а не форма функції-запиту.
  */
 function pinnedSettingFinding(p: { construct: string; detail?: string }) {
   return (
     p.construct === "setting" &&
-    HEAD_PINNED_SETTINGS.some(
+    PINNED_SESSION_SETTINGS.some(
       (s) => s.name.toLowerCase() === p.detail?.toLowerCase()
     )
   )

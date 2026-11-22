@@ -23,6 +23,7 @@ import {
   expectClean,
   uuid,
 } from "./helpers"
+import { pinnedSettingsClause } from "../sql/head-settings"
 
 const SHARED = "sql/public/shared.sql"
 /** Спільний файл іншої схеми; тип `string` — ключ рядка таблиці кейсів. */
@@ -36,10 +37,8 @@ const sqlFunction = (name: string, body: string) =>
   `CREATE FUNCTION ${name}() RETURNS int LANGUAGE sql STABLE AS $$ ${body} $$;\n`
 
 /** Функція множини `team_ids`, що кличе ланку `public.helper`. */
-const TEAM_IDS =
-  "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' SET lc_monetary = 'C' SET lc_numeric = 'C' SET lc_time = 'C' SET bytea_output = 'hex' SET xmlbinary = 'base64' SET xmloption = 'content' SET timezone_abbreviations = 'Default' SET default_text_search_config = 'pg_catalog.simple' AS $$ SELECT public.helper() $$;\n"
-const HELPER =
-  "CREATE FUNCTION public.helper() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' SET lc_monetary = 'C' SET lc_numeric = 'C' SET lc_time = 'C' SET bytea_output = 'hex' SET xmlbinary = 'base64' SET xmloption = 'content' SET timezone_abbreviations = 'Default' SET default_text_search_config = 'pg_catalog.simple' AS $$ SELECT NULL::uuid $$;\n"
+const TEAM_IDS = `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT public.helper() $$;\n`
+const HELPER = `CREATE FUNCTION public.helper() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT NULL::uuid $$;\n`
 const PROJECT_FUNCTION =
   "CREATE FUNCTION public.project_label() RETURNS int LANGUAGE sql STABLE SECURITY INVOKER AS $$ SELECT 1 $$;\n"
 

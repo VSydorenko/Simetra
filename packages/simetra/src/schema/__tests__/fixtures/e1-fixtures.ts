@@ -15,6 +15,7 @@ import {
   scopedProject,
   uuid,
 } from "../../../compiler/__tests__/helpers"
+import { pinnedSettingsClause } from "../../../compiler/sql/head-settings"
 
 const ORG = "catalogs/Organization/Organization.meta.json"
 
@@ -547,10 +548,10 @@ export function movementQuery(
     // поточного користувача дає поіменна функція провайдера.
     [SCOPE_FUNCTIONS_FILE]: [
       "CREATE FUNCTION app.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE",
-      "  SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' SET lc_monetary = 'C' SET lc_numeric = 'C' SET lc_time = 'C' SET bytea_output = 'hex' SET xmlbinary = 'base64' SET xmloption = 'content' SET timezone_abbreviations = 'Default' SET default_text_search_config = 'pg_catalog.simple'",
+      `  SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()}`,
       "  AS $$ SELECT id FROM app.organization $$;",
       "CREATE FUNCTION app.user_ids() RETURNS SETOF uuid LANGUAGE sql STABLE",
-      "  SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' SET lc_monetary = 'C' SET lc_numeric = 'C' SET lc_time = 'C' SET bytea_output = 'hex' SET xmlbinary = 'base64' SET xmloption = 'content' SET timezone_abbreviations = 'Default' SET default_text_search_config = 'pg_catalog.simple'",
+      `  SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()}`,
       `  AS $$ SELECT ${currentSubject(provider)} $$;`,
     ].join("\n"),
     [MOVEMENTS_SQL]: [
