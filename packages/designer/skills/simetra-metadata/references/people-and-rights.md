@@ -115,7 +115,10 @@ with a trigger on the target table, see "Carrier copies").
   `rights.dimension-name-reserved`.
   The function is verbatim SQL of a closed form: no arguments,
   `RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''`
-  with an `AS $$ … $$` body,
+  plus the pinned session settings of a head (`SET "TimeZone" = 'UTC'`,
+  `SET "DateStyle" = 'ISO, MDY'`, `SET "IntervalStyle" = 'postgres'`,
+  `SET extra_float_digits = '1'`; without them `sql.head-settings`, the same
+  for a verbatim scope set function) with an `AS $$ … $$` body,
   every name schema-qualified (also in the views it reads and the `sql`
   functions it calls; a `plpgsql` function in that chain is refused), and no
   `simetra.*` object except `simetra.current_user_id()`

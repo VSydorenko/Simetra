@@ -714,11 +714,19 @@ ACL функції з грантом ролі поза призначенням�
 його єдине джерело — код поруч із
 `packages/simetra/src/compiler/sql/builtin-functions.ts`, тут його не
 копіюють. Функція поза переліком — `sql.head-not-allowed` (конструкція
-`call`). Часова зона — теж стан сесії (`TimeZone`, `Prefer: timezone`):
-`current_date`, `localtime`, `localtimestamp` і будь-яке перетворення
-`timestamptz` у `date`/`time`/`timestamp` без `AT TIME ZONE '<літерал>'` у
-голові заборонені (`sql.head-not-allowed`, конструкція `setting`, `detail` —
-`TimeZone`); `now()`, `current_timestamp` і порівняння `timestamptz` дозволені.
+`call`). Часова зона — теж стан сесії (`TimeZone`, `Prefer: timezone`), тож
+функція-корінь голови (функція множини скоупу, функція значень виміру,
+функція політики) фіксує `TimeZone`, `DateStyle`, `IntervalStyle` і
+`extra_float_digits` у закритій оболонці сталими значеннями
+(`HEAD_PINNED_SETTINGS` у
+`packages/simetra/src/compiler/sql/closed-forms.ts`; без них чи з іншим
+значенням — `sql.head-settings`, клас ремонту), а функція, яку вона кличе,
+не ставить їм інших значень; для дослівного виразу політики лишається
+правило за іменами: `current_date`, `localtime`, `localtimestamp` і
+перетворення в `date`/`time`/`timetz`/`timestamp` без
+`AT TIME ZONE '<літерал>'` — `sql.head-not-allowed` (конструкція `setting`,
+`detail` — `TimeZone`), а неявні приведення у виразі політики — окреме
+питання.
 
 **Невідома роль у межах `RESTRICTIVE`.** Членства дослівних ролей компілятор
 не знає. Межа `RESTRICTIVE` T для `SELECT`/`ALL` застосовна до функції, якщо

@@ -100,12 +100,19 @@ model they call, by an allowlist (`sql.head-not-allowed`):
   belongs to a command or a TypeScript hook.
 - **Everything else is a query function.** `LANGUAGE sql`, a string body of
   exactly one `SELECT` (no `INTO`, no `FOR UPDATE`, no data-modifying `WITH`),
-  `SET search_path = ''` and no other `SET` option. It reads only qualified
+  `SET search_path = ''` and no other `SET` option except the pinned session
+  settings below. It reads only qualified
   tables of kinds, adopted tables and views of the model, and calls only query
   functions of the model, generated functions that read,
   `simetra.current_user_id()`, the listed provider functions and allowlisted
   builtins. A function of a kind module that is not of this form belongs in
   a shared `sql/` file, called by nothing inside a command.
+- **A scope set function, an access dimension values function and a policy
+  function pin the session settings** the client could choose:
+  `SET "TimeZone" = 'UTC' SET "DateStyle" = 'ISO, MDY' SET "IntervalStyle" =
+  'postgres' SET extra_float_digits = '1'` in their `CREATE FUNCTION`
+  (`sql.head-settings` otherwise; `fix` does not add them). A function they
+  call sets none of these to another value.
 
 ## Reading `sql.head-not-allowed`
 
