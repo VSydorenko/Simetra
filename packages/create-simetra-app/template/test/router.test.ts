@@ -58,6 +58,13 @@ describe("getRouter", () => {
       signalsUrl: "ws://centrifugo.test/connection/websocket",
     })
     expect(JSON.stringify(dehydrated)).not.toContain(key.privateJwk.d)
+    // Адреса береться один раз на процес: конфіг вдруге не читається
+    vi.stubEnv("SIMETRA_SIGNALS_URL", "")
+    vi.stubEnv("SIMETRA_SIGNALS_KEYS", "")
+    expect(await getRouter().options.dehydrate?.()).toEqual({
+      data: null,
+      signalsUrl: "ws://centrifugo.test/connection/websocket",
+    })
   })
 
   it("keeps the signals url from the snapshot on the scope, with or without data", async () => {

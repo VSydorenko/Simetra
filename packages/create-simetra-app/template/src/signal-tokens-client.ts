@@ -64,8 +64,10 @@ export function createSignalTokenCallbacks(
         }
         // Звірка після `await`: за час читання тіла тримач міг змінитися (інший
         // суб'єкт, вихід) чи його вже закрила паралельна 401 цієї ж пачки.
-        // Перша заміна обнуляє поточний рантайм, тож друга й наступні мовчать
-        if (holder.current()?.subject === subject) {
+        // Перша заміна обнуляє поточний рантайм, тож друга й наступні мовчать.
+        // Закритий транспорт не чіпає тримача: пізня 401 після `close()` не має
+        // закрити новий рантайм того самого суб'єкта
+        if (!closed && holder.current()?.subject === subject) {
           holder.replace(
             undefined,
             reason === "session-changed" ? "session-changed" : "signed-out"

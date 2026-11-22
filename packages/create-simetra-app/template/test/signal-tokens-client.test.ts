@@ -166,6 +166,25 @@ describe("refusals", () => {
     expect(holder.current()).toBe(other)
   })
 
+  it("a late 401 of a closed transport leaves a new runtime of the same subject alone", async () => {
+    const slow = slowBody({ reason: "session-changed" })
+    const { callbacks, holder, replace, navigateToLogin } = setup(
+      vi.fn(async () => slow.response)
+    )
+    const refused = callbacks.getConnectionToken()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Транспорт закрито, а на місці рантайму вже новий того самого суб'єкта
+    callbacks.close()
+    const next = runtimeOf("u")
+    holder.replace(next)
+    replace.mockClear()
+    slow.release()
+    await expect(refused).rejects.toBeInstanceOf(SignalAuthRefused)
+    expect(replace).not.toHaveBeenCalled()
+    expect(navigateToLogin).not.toHaveBeenCalled()
+    expect(holder.current()).toBe(next)
+  })
+
   it("concurrent 401 of one packet replace the holder and go to login once", async () => {
     const slow = [slowBody({}), slowBody({})]
     let n = 0

@@ -44,9 +44,15 @@ const signalsFactory = createIsomorphicFn()
   )
   .client((scope, url) => clientSignals(scope, url))
 
-/** Адреса Centrifugo лише для SSR (Р10): ключів підпису клієнт не бачить ніколи. */
+let signalsUrlCache: string | undefined
+
+/**
+ * Адреса Centrifugo лише для SSR (Р10): ключів підпису клієнт не бачить ніколи.
+ * Конфіг перевірено на старті, тож розбір і звірка ключів на кожен `dehydrate`
+ * зайві: адреса береться один раз на процес.
+ */
 const serverSignalsUrl = createIsomorphicFn()
-  .server(() => signalsConfig()?.url)
+  .server(() => (signalsUrlCache ??= signalsConfig()?.url))
   .client(() => undefined)
 
 /** Що сервер віддає клієнту крім розмітки: знімок рантайму суб'єкта сесії. */
