@@ -340,7 +340,7 @@ describe("sql.declaration-platform-form", () => {
       file: SCOPE_FUNCTIONS_FILE,
       sql: {
         [SCOPE_FUNCTIONS_FILE]:
-          "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;\n",
+          "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT NULL::uuid $$;\n",
       },
       layers: [teamScopeKind()],
     },

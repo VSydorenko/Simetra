@@ -547,10 +547,10 @@ export function movementQuery(
     // поточного користувача дає поіменна функція провайдера.
     [SCOPE_FUNCTIONS_FILE]: [
       "CREATE FUNCTION app.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE",
-      "  SECURITY DEFINER SET search_path = ''",
+      "  SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1'",
       "  AS $$ SELECT id FROM app.organization $$;",
       "CREATE FUNCTION app.user_ids() RETURNS SETOF uuid LANGUAGE sql STABLE",
-      "  SECURITY DEFINER SET search_path = ''",
+      "  SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1'",
       `  AS $$ SELECT ${currentSubject(provider)} $$;`,
     ].join("\n"),
     [MOVEMENTS_SQL]: [

@@ -56,7 +56,10 @@ const TABLES = [
   table("codes", [["code", "text"]]),
 ]
 
-const SHELL = "STABLE SECURITY DEFINER SET search_path = ''"
+/** Налаштування сесії, які корінь голови фіксує в оболонці (`sql.head-settings`). */
+const PINNED =
+  "SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1'"
+const SHELL = `STABLE SECURITY DEFINER SET search_path = '' ${PINNED}`
 const JOIN = "FROM public.docs d JOIN public.members m ON m.team_id = d.team_id"
 const ACTOR = "m.user_id = (SELECT auth.uid())"
 
@@ -636,5 +639,67 @@ describe("checkPolicyFunctionHeads", () => {
         d.params?.detail,
       ])
     ).toEqual([["sql.head-not-allowed", "call", "pg_catalog.inet_client_addr"]])
+  })
+
+  it("requires the pinned session settings in the shell of a policy function", () => {
+    const base = input(
+      fn(undefined, {
+        shell: `STABLE SECURITY DEFINER SET search_path = '' ${PINNED.replace("'UTC'", "'Europe/Kyiv'")}`,
+      }) +
+        POLICY +
+        GRANT
+    )
+    const { functions } = policyFunctions(base)
+    const scope = {
+      units: base.units,
+      readable: new Map(TABLES.map((t) => [`${t.schema}.${t.name}`, t])),
+      trusted: new Set(["auth.uid"]),
+      builtins: new Set(HEAD_BUILTINS),
+      wrappers: new Map(),
+      parse,
+      plpgsql,
+    }
+    const diagnostics = checkPolicyFunctionHeads(functions, scope)
+    expect(
+      diagnostics.map((d) => [
+        d.code,
+        d.params?.setting ?? d.params?.detail,
+        d.params?.actual,
+      ])
+    ).toEqual([
+      ["sql.head-settings", "TimeZone", "Europe/Kyiv"],
+      ["sql.head-not-allowed", "timezone", undefined],
+    ])
+    expect(repairKeys(diagnostics)).toEqual([
+      { code: "sql.head-settings", schema: "public", name: "f" },
+    ])
+  })
+  // Порядку одиниць компілятор не моделює: окремий `ALTER FUNCTION`, що
+  // зачіпає зафіксоване налаштування, — проблема оболонки й з тим самим
+  // значенням.
+  it("refuses a separate ALTER FUNCTION of a pinned setting", () => {
+    const base = input(
+      fn() +
+        "ALTER FUNCTION public.f() SET TimeZone = 'UTC';\n" +
+        POLICY +
+        GRANT
+    )
+    const { functions } = policyFunctions(base)
+    const scope = {
+      units: base.units,
+      readable: new Map(TABLES.map((t) => [`${t.schema}.${t.name}`, t])),
+      trusted: new Set(["auth.uid"]),
+      builtins: new Set(HEAD_BUILTINS),
+      wrappers: new Map(),
+      parse,
+      plpgsql,
+    }
+    expect(
+      checkPolicyFunctionHeads(functions, scope).map((d) => [
+        d.code,
+        d.params?.setting,
+        d.params?.actual,
+      ])
+    ).toEqual([["sql.head-settings", "TimeZone", "ALTER FUNCTION"]])
   })
 })

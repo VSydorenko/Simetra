@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest"
-import { compile, type Diagnostic } from "simetra/compiler"
+import { compile, isRepairError, type Diagnostic } from "simetra/compiler"
 import { readFiles, sqlStage } from "../pipeline"
 import { headScope, judgeHandler } from "../sql/heads"
 import { loadSqlParser, type SqlParser } from "../sql/parse"
@@ -31,6 +31,9 @@ import {
 
 const SHARED = "sql/public/shared.sql"
 const EMPTY_PATH = "SET search_path = ''"
+/** Налаштування сесії, які корінь голови фіксує в оболонці (`sql.head-settings`). */
+const PINNED =
+  "SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1'"
 const SET_FUNCTION = "public.team_ids"
 const HANDLER = "public.count_comment"
 const PROJECT_MODULE = PROJECT_CATALOG_FILE.replace(".meta.json", ".sql")
@@ -52,7 +55,11 @@ const sqlFunction = (
   `CREATE FUNCTION ${name}(${args}) RETURNS ${returns} LANGUAGE sql ${options} AS $$ ${body} $$;\n`
 /** Функція множини скоупу `team` — голова Правила 3. */
 const setFunction = (body: string) =>
-  sqlFunction(SET_FUNCTION, body, `STABLE SECURITY DEFINER ${EMPTY_PATH}`)
+  sqlFunction(
+    SET_FUNCTION,
+    body,
+    `STABLE SECURITY DEFINER ${EMPTY_PATH} ${PINNED}`
+  )
 /** Ланка на plpgsql у закритій оболонці. */
 const plpgsqlFunction = (name: string, args = "", returns = "boolean") =>
   `CREATE FUNCTION ${name}(${args}) RETURNS ${returns} LANGUAGE plpgsql STABLE ${EMPTY_PATH} AS $$ BEGIN RETURN NULL; END $$;\n`
@@ -461,7 +468,7 @@ describe("checkHeads: other heads", () => {
         [SHARED]: sqlFunction(
           DIMENSION,
           "SELECT NULL::uuid WHERE pg_sleep(0) IS NOT NULL",
-          `STABLE SECURITY DEFINER ${EMPTY_PATH}`
+          `STABLE SECURITY DEFINER ${EMPTY_PATH} ${PINNED}`
         ),
       },
       layers: [dimension],
@@ -529,8 +536,10 @@ describe("checkHeads: other heads", () => {
 })
 
 // Р6/Р7 плану Д5 (І5): голова кличе лише вбудовані позитивного переліку
-// й читає зі стану сесії лише точну назву claims; часова зона сесії — теж
-// стан сесії. Те саме правило — для кожного виду голови й транзитивно.
+// й читає зі стану сесії лише точну назву claims. Те саме правило — для
+// кожного виду голови й транзитивно. Часову зону функція голови фіксує в
+// оболонці (`sql.head-settings`), а правило за іменами лишається лише для
+// дослівного виразу політики.
 describe("checkHeads: head builtin allowlist and session state", () => {
   const DIMENSION = "public.region_ids"
   const HELPER = "public.helper"
@@ -564,7 +573,7 @@ describe("checkHeads: head builtin allowlist and session state", () => {
         [SHARED]: sqlFunction(
           DIMENSION,
           `SELECT NULL::uuid WHERE ${condition}`,
-          `STABLE SECURITY DEFINER ${EMPTY_PATH}`
+          `STABLE SECURITY DEFINER ${EMPTY_PATH} ${PINNED}`
         ),
       }),
       layers: [dimension],
@@ -673,16 +682,28 @@ describe("checkHeads: head builtin allowlist and session state", () => {
       "setting",
       "request.jwt.claims",
     ],
-    ["current_date IS NOT NULL", "setting", "TimeZone"],
-    ["localtime IS NOT NULL", "setting", "TimeZone"],
-    ["localtimestamp IS NOT NULL", "setting", "TimeZone"],
-    ["pg_catalog.now()::date IS NOT NULL", "setting", "TimeZone"],
-    ["ts::date IS NOT NULL", "setting", "TimeZone"],
-    ["'today'::date IS NOT NULL", "setting", "TimeZone"],
-    ["pg_catalog.date(ts) IS NOT NULL", "setting", "TimeZone"],
-    ["pg_catalog.date_trunc('day', ts) IS NOT NULL", "setting", "TimeZone"],
-    ["(pg_catalog.now() AT LOCAL)::text <> ''", "setting", "TimeZone"],
   ]
+  // Залежне від `TimeZone` чи `DateStyle`: функції голови виконуються в
+  // зафіксованих налаштуваннях і це читають, а вираз політики — ні.
+  const zoneDependent = [
+    "current_date IS NOT NULL",
+    "localtime IS NOT NULL",
+    "localtimestamp IS NOT NULL",
+    "pg_catalog.now()::date IS NOT NULL",
+    "ts::date IS NOT NULL",
+    "'today'::date IS NOT NULL",
+    "'01-02-2026'::date IS NOT NULL",
+    "pg_catalog.date(ts) IS NOT NULL",
+    "pg_catalog.date_trunc('day', ts) IS NOT NULL",
+    "(pg_catalog.now() AT LOCAL)::text <> ''",
+    "pg_catalog.now()::timetz IS NOT NULL",
+    "ts::time with time zone IS NOT NULL",
+    "pg_catalog.timetz(ts) IS NOT NULL",
+    "'2026-01-01 12:00'::timetz IS NOT NULL",
+    "(pg_catalog.now() AT TIME ZONE 'UTC')::timetz IS NOT NULL",
+  ]
+  const functionHeads = heads.filter((h) => !h.chain.includes(POLICY))
+  const policyHead = heads.filter((h) => h.chain.includes(POLICY))
   const allowed = [
     "pg_catalog.current_setting('request.jwt.claims', true) IS NOT NULL",
     "(pg_catalog.now() AT TIME ZONE 'UTC')::date IS NOT NULL",
@@ -690,6 +711,7 @@ describe("checkHeads: head builtin allowlist and session state", () => {
     "current_timestamp IS NOT NULL",
     "ts >= pg_catalog.now()",
     "'2026-01-01'::date IS NOT NULL",
+    "'2026-01-01 12:00:00+02'::timetz IS NOT NULL",
     "pg_catalog.date_trunc('day', ts, 'UTC') IS NOT NULL",
   ]
 
@@ -712,9 +734,196 @@ describe("checkHeads: head builtin allowlist and session state", () => {
   )
 
   it.each(
+    policyHead.flatMap((h) =>
+      zoneDependent.map((condition) => ({ ...h, condition }))
+    )
+  )(
+    "$head refuses $condition by the session time zone",
+    async ({ sql, layers, chain: names, condition }) => {
+      expect(await headErrors(sql(condition), layers)).toEqual([
+        found("setting", "TimeZone", ...names),
+      ])
+    }
+  )
+
+  it.each(
     heads.flatMap((h) => allowed.map((condition) => ({ ...h, condition })))
   )("$head allows $condition", async ({ sql, layers, condition }) => {
     expect(await headErrors(sql(condition), layers)).toEqual([])
+  })
+
+  it.each(
+    functionHeads.flatMap((h) =>
+      zoneDependent.map((condition) => ({ ...h, condition }))
+    )
+  )(
+    "$head runs in pinned settings, so it allows $condition",
+    async ({ sql, layers, condition }) => {
+      expect(await headErrors(sql(condition), layers)).toEqual([])
+    }
+  )
+})
+
+// Корінь голови фіксує налаштування сесії у власній оболонці (§5.8): клієнт
+// ставить `TimeZone` сам, тож без опцій перетворення в місцевий час і текст
+// дат залежали б від нього. Ланка виконується вже в цих налаштуваннях.
+describe("sql.head-settings: a root head pins the session settings", () => {
+  const DIMENSION = "public.region_ids"
+  const HELPER = "public.helper"
+  const dimension: Layer = {
+    [PROJECT_FILE]: {
+      accessDimensions: [
+        {
+          id: REGION_DIMENSION_ID,
+          name: "region",
+          target: { kind: "Catalog", name: "Region" },
+          values: { function: { name: "region_ids" } },
+        },
+      ],
+    },
+  }
+  const shell = (settings: string) =>
+    `STABLE SECURITY DEFINER ${EMPTY_PATH} ${settings}`
+  const setFunctionWith = (settings: string, body = "SELECT NULL::uuid") => ({
+    [SCOPE_FUNCTIONS_FILE]: sqlFunction(SET_FUNCTION, body, shell(settings)),
+  })
+  const settingsErrors = async (
+    sql: Record<string, string>,
+    layers: Layer[] = []
+  ) => {
+    const result = await compiledPolicyDomain(sql, [
+      teamScopeKind(),
+      promotableTaskNote(),
+      ...layers,
+    ])
+    const errors = result.diagnostics.filter((d) => d.severity === "error")
+    for (const d of errors) {
+      if (d.code === "sql.head-settings") expect(isRepairError(d)).toBe(true)
+    }
+    return errors.map((d) =>
+      d.code === "sql.head-settings"
+        ? [
+            d.code,
+            `${d.params?.schema}.${d.params?.name}`,
+            d.params?.setting,
+            d.params?.actual,
+          ]
+        : [d.code, d.params?.construct, d.params?.detail, d.params?.chain]
+    )
+  }
+  const settingsError = (fn: string, setting: string, actual?: string) => [
+    "sql.head-settings",
+    fn,
+    setting,
+    actual,
+  ]
+
+  it.each<{
+    name: string
+    settings: string
+    expected: readonly (readonly unknown[])[]
+  }>([
+    {
+      name: "without TimeZone",
+      settings: PINNED.replace("SET TimeZone = 'UTC' ", ""),
+      expected: [settingsError(SET_FUNCTION, "TimeZone")],
+    },
+    {
+      name: "without IntervalStyle",
+      settings: PINNED.replace("SET IntervalStyle = 'postgres' ", ""),
+      expected: [settingsError(SET_FUNCTION, "IntervalStyle")],
+    },
+    {
+      // Значення в корені судить і правило ланки: інше значення
+      // зафіксованого налаштування — `setting` судді голів.
+      name: "with another TimeZone",
+      settings: PINNED.replace("'UTC'", "'Europe/Kyiv'"),
+      expected: [
+        found("setting", "timezone", SET_FUNCTION),
+        settingsError(SET_FUNCTION, "TimeZone", "Europe/Kyiv"),
+      ],
+    },
+    {
+      name: "with another DateStyle",
+      settings: PINNED.replace("'ISO, MDY'", "'ISO, DMY'"),
+      expected: [
+        found("setting", "datestyle", SET_FUNCTION),
+        settingsError(SET_FUNCTION, "DateStyle", "ISO, DMY"),
+      ],
+    },
+    {
+      name: "with another extra_float_digits",
+      settings: PINNED.replace(
+        "extra_float_digits = '1'",
+        "extra_float_digits = 3"
+      ),
+      expected: [
+        found("setting", "extra_float_digits", SET_FUNCTION),
+        settingsError(SET_FUNCTION, "extra_float_digits", "3"),
+      ],
+    },
+    {
+      // `RESET ALL` прибирає задане до нього, як у `proconfig`.
+      name: "with RESET ALL after the settings",
+      settings: `${PINNED} RESET ALL ${EMPTY_PATH}`,
+      expected: [settingsError(SET_FUNCTION, "TimeZone")],
+    },
+    {
+      // Форма `pg_get_functiondef`, яку читає зворотна генерація.
+      name: "in the form of the catalog",
+      settings: `SET "TimeZone" TO 'UTC' SET "DateStyle" TO 'ISO, MDY' SET "IntervalStyle" TO 'postgres' SET extra_float_digits TO 1`,
+      expected: [],
+    },
+  ])("set function $name", async ({ settings, expected }) => {
+    expect(await settingsErrors(setFunctionWith(settings))).toEqual(expected)
+  })
+
+  it("a dimension values function without the settings", async () => {
+    expect(
+      await settingsErrors(
+        {
+          [SHARED]: sqlFunction(
+            DIMENSION,
+            "SELECT NULL::uuid",
+            `STABLE SECURITY DEFINER ${EMPTY_PATH}`
+          ),
+        },
+        [dimension]
+      )
+    ).toEqual([settingsError(DIMENSION, "TimeZone")])
+  })
+
+  it("a separate ALTER FUNCTION of a setting", async () => {
+    const sql = setFunctionWith(PINNED)
+    sql[SCOPE_FUNCTIONS_FILE] +=
+      "ALTER FUNCTION public.team_ids() SET TimeZone = 'UTC';\n"
+    // Окремий `ALTER FUNCTION` на судиму функцію зупиняє ранній блок
+    // (`sql.function-settings-shell`), тож суддя оболонки голови до неї не
+    // доходить.
+    expect(await settingsErrors(sql)).toEqual([
+      ["sql.function-settings-shell", undefined, undefined, undefined],
+    ])
+  })
+
+  it.each<{
+    name: string
+    settings: string
+    expected: readonly (readonly unknown[])[]
+  }>([
+    {
+      name: "sets TimeZone to another value",
+      settings: "SET TimeZone = 'Europe/Kyiv'",
+      expected: [found("setting", "timezone", SET_FUNCTION, HELPER)],
+    },
+    { name: "repeats the pinned value", settings: PINNED, expected: [] },
+  ])("a function the head calls $name", async ({ settings, expected }) => {
+    const sql = setFunctionWith(PINNED, `SELECT ${HELPER}()`)
+    sql[SCOPE_FUNCTIONS_FILE] += sqlFunction(
+      HELPER,
+      "SELECT NULL::uuid",
+      `STABLE ${EMPTY_PATH} ${settings}`
+    )
+    expect(await settingsErrors(sql)).toEqual(expected)
   })
 })
 

@@ -41,7 +41,7 @@ const SOURCE = `
     name text NOT NULL
   );
   CREATE FUNCTION app.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE
-    SECURITY DEFINER SET search_path = '' AS $$ SELECT id FROM app.org $$;
+    SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT id FROM app.org $$;
   CREATE FUNCTION app.rpc_post(p_id uuid) RETURNS void LANGUAGE plpgsql
     SECURITY DEFINER SET search_path = '' AS $$
   BEGIN

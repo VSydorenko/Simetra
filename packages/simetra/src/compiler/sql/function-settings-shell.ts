@@ -3,6 +3,7 @@ import { diagnostic, type Diagnostic } from "../diagnostics"
 import type { ParsedObject } from "../stages/files"
 import {
   closedModuleOwners,
+  pinnedSettingProblem,
   ruledFunctions,
   settingsTargets,
 } from "./closed-forms"
@@ -157,4 +158,33 @@ function firstSetting(unit: VerbatimUnit): string {
   if (action?.defname !== "set") return action?.defname ?? ""
   const set = action.arg?.VariableSetStmt
   return set?.kind === "VAR_RESET_ALL" ? "*" : (set?.name ?? "")
+}
+
+/**
+ * `sql.head-settings` (клас ремонту) на кожному корені голови — функції
+ * множини скоупу, функції значень виміру, функції політики (спека декларацій
+ * функцій §5.8), — чий `CREATE FUNCTION` не фіксує кожне налаштування
+ * `HEAD_PINNED_SETTINGS` рівно в його значення. Клас ремонту: база, яку
+ * прийняли зворотною генерацією, ще не має цих опцій, а `fix` їх не вигадує —
+ * їх дописує автор.
+ */
+export function checkHeadSettings(
+  heads: readonly VerbatimUnit[],
+  units: readonly VerbatimUnit[]
+): Diagnostic[] {
+  return heads.flatMap((unit) => {
+    const problem = pinnedSettingProblem(unit, units)
+    if (problem === undefined) return []
+    return [
+      diagnostic("sql.head-settings", unit.file, "", {
+        schema: unit.schema,
+        name: unit.name,
+        function: `${unit.schema}.${unit.name}`,
+        line: unit.line,
+        setting: problem.setting,
+        expected: problem.expected,
+        ...(problem.actual === undefined ? {} : { actual: problem.actual }),
+      }),
+    ]
+  })
 }

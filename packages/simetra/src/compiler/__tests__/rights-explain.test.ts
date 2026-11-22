@@ -598,7 +598,7 @@ describe("rights_explain", () => {
       await compiledPolicyDomain(
         {
           "sql/public/region-ids.sql":
-            "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT r.id FROM public.region r $$;",
+            "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT r.id FROM public.region r $$;",
         },
         [
           {

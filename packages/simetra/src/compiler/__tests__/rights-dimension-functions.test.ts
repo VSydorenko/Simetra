@@ -12,9 +12,12 @@ const PROJECT = "project.meta.json"
 const POINTER = "/accessDimensions/0/values/function"
 const SQL_FILE = "sql/public/dimension-functions.sql"
 
-/** Закрита оболонка функції виміру — та сама, що в функції множини скоупу. */
+/**
+ * Закрита оболонка функції виміру — та сама, що в функції множини скоупу,
+ * зі зафіксованими налаштуваннями сесії кореня голови.
+ */
 const CLOSED =
-  "RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''"
+  "RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1'"
 /** Ланці ланцюжка вистачає мови й порожнього search_path. */
 const LINK = "RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = ''"
 
@@ -364,7 +367,7 @@ describe("access dimension value function", () => {
       expect(
         heads(
           await errors(
-            "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' BEGIN ATOMIC SELECT NULL::uuid; END;\n"
+            "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' BEGIN ATOMIC SELECT NULL::uuid; END;\n"
           )
         )
       ).toEqual([head("sqlBody", undefined, "public.region_ids")])

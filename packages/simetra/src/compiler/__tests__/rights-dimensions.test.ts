@@ -60,7 +60,7 @@ async function codes(files: Files) {
 function withValuesFunction(files: Files, name: string): Files {
   files.set(
     "sql/public/access-dimensions.sql",
-    `CREATE FUNCTION public.${name}() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT NULL::uuid $$;`
+    `CREATE FUNCTION public.${name}() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT NULL::uuid $$;`
   )
   return files
 }

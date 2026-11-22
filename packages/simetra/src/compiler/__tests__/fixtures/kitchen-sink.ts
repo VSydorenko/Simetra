@@ -1091,7 +1091,7 @@ export function kitchenSink(): Map<string, string> {
     // Функція значень виміру `partner` — у закритій формі (спека прав §4.4): читає
     // лише таблицю застосунку й поточного користувача.
     "sql/public/access-dimensions.sql":
-      "CREATE FUNCTION public.my_partner_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT p.id FROM public.partner p WHERE (SELECT simetra.current_user_id()) IS NOT NULL $$;",
+      "CREATE FUNCTION public.my_partner_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT p.id FROM public.partner p WHERE (SELECT simetra.current_user_id()) IS NOT NULL $$;",
   }
   for (const [name, value] of Object.entries(constants)) {
     entries[`constants/${name}/${name}.meta.json`] = value

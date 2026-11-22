@@ -39,7 +39,13 @@ interface DefElem {
     VariableSetStmt?: {
       kind?: string
       name?: string
-      args?: { A_Const?: { sval?: { sval?: string } } }[]
+      args?: {
+        A_Const?: {
+          sval?: { sval?: string }
+          ival?: { ival?: number }
+          fval?: { fval?: string }
+        }
+      }[]
     }
   }
 }
@@ -220,6 +226,114 @@ export function alterTouchesSearchPath(tree: unknown): boolean {
         set.name?.toLowerCase() === "search_path")
     )
   })
+}
+
+/**
+ * Налаштування сесії, які корінь голови (функція множини скоупу, функція
+ * значень виміру, функція політики) фіксує у своїй оболонці (спека декларацій
+ * функцій §5.8): клієнт ставить їх сам (`Prefer: timezone` PostgREST,
+ * `SET` сесії), а від них залежать перетворення `timestamptz` у місцевий час і
+ * текст дат, інтервалів і чисел. Значення — типові Postgres; ланка, яку голова
+ * кличе, виконується вже в цих налаштуваннях і не ставить їм інших значень.
+ */
+export const HEAD_PINNED_SETTINGS: readonly {
+  name: string
+  value: string
+}[] = [
+  { name: "TimeZone", value: "UTC" },
+  { name: "DateStyle", value: "ISO, MDY" },
+  { name: "IntervalStyle", value: "postgres" },
+  { name: "extra_float_digits", value: "1" },
+]
+
+/**
+ * Текст значення опції `SET`, як його зберігає `proconfig`: елементи списку
+ * через `, `, число — його запис. `FROM CURRENT`, `TO DEFAULT` чи інший
+ * вузол — без фіксованого значення (`undefined`).
+ */
+function setValueText(set: SetOption): string | undefined {
+  if (set.kind !== "VAR_SET_VALUE") return undefined
+  const parts = (set.args ?? []).map((arg) => {
+    const constant = arg.A_Const
+    if (constant?.sval !== undefined) return constant.sval.sval ?? ""
+    if (constant?.ival !== undefined) return String(constant.ival.ival ?? 0)
+    return constant?.fval?.fval
+  })
+  return parts.length === 0 || parts.some((p) => p === undefined)
+    ? undefined
+    : parts.join(", ")
+}
+
+/** Чи опція `SET` ставить зафіксоване головою налаштування в його значення. */
+export function setsPinnedValue(set: SetOption): boolean {
+  const pinned = HEAD_PINNED_SETTINGS.find(
+    (s) => s.name.toLowerCase() === set.name?.toLowerCase()
+  )
+  return pinned !== undefined && setValueText(set) === pinned.value
+}
+
+/** Перше зафіксоване налаштування, якого оболонка кореня голови не ставить. */
+export interface PinnedSettingProblem {
+  setting: string
+  expected: string
+  /** Значення після згортання опцій; без нього — налаштування не задано. */
+  actual?: string
+}
+
+/**
+ * Перше налаштування `HEAD_PINNED_SETTINGS`, якого `CREATE FUNCTION` кореня
+ * голови після згортання опцій (як `foldedEmptySearchPath`: ім'я без
+ * регістру, `RESET ALL` прибирає задане до нього, перемагає останнє) не
+ * ставить рівно в його значення. Окремий `ALTER FUNCTION`, що зачіпає
+ * налаштування чи скидає всі, — теж проблема (fail-closed, як
+ * `hasEffectiveEmptySearchPath`): порядку одиниць компілятор не моделює.
+ */
+export function pinnedSettingProblem(
+  unit: Pick<VerbatimUnit, "class" | "schema" | "name" | "tree">,
+  units: readonly Pick<VerbatimUnit, "class" | "tree">[]
+): PinnedSettingProblem | undefined {
+  const fn = createFunction(unit.tree as Node)
+  const folded = new Map<string, string>()
+  for (const option of fn === undefined ? [] : functionOptions(fn).options) {
+    const set =
+      option.defname === "set" ? option.arg?.VariableSetStmt : undefined
+    if (set === undefined) continue
+    if (set.kind === "VAR_RESET_ALL") folded.clear()
+    else if (set.kind === "VAR_RESET")
+      folded.delete(set.name?.toLowerCase() ?? "")
+    else {
+      folded.set(
+        set.name?.toLowerCase() ?? "",
+        setValueText(set) ??
+          (set.kind === "VAR_SET_CURRENT" ? "FROM CURRENT" : "DEFAULT")
+      )
+    }
+  }
+  const altered = functionSettingsOf(unit, units).flatMap(
+    (settings) => alterFunction(settings.tree)?.actions ?? []
+  )
+  for (const pinned of HEAD_PINNED_SETTINGS) {
+    const key = pinned.name.toLowerCase()
+    const alteredHere = altered.some((action) => {
+      const set =
+        action.DefElem?.defname === "set"
+          ? action.DefElem.arg?.VariableSetStmt
+          : undefined
+      return (
+        set !== undefined &&
+        (set.kind === "VAR_RESET_ALL" || set.name?.toLowerCase() === key)
+      )
+    })
+    const actual = alteredHere ? "ALTER FUNCTION" : folded.get(key)
+    if (actual !== pinned.value) {
+      return {
+        setting: pinned.name,
+        expected: pinned.value,
+        ...(actual === undefined ? {} : { actual }),
+      }
+    }
+  }
+  return undefined
 }
 
 /**

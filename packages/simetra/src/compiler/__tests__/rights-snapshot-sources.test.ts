@@ -367,7 +367,7 @@ describe("actor snapshot sources", () => {
     )
     files.set(
       "sql/public/zone-ids.sql",
-      "CREATE FUNCTION public.zone_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT k.id FROM public.zone_keepers k WHERE k.keeper_id = (SELECT simetra.current_user_id()) $$;"
+      "CREATE FUNCTION public.zone_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT k.id FROM public.zone_keepers k WHERE k.keeper_id = (SELECT simetra.current_user_id()) $$;"
     )
     const result = await compileRights(await acceptDebt(files))
     expect(
@@ -391,7 +391,7 @@ describe("actor snapshot sources", () => {
     )
     files.set(
       "sql/public/zone-ids.sql",
-      "CREATE FUNCTION public.zone_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT v.id FROM public.zone_view v WHERE v.keeper_id = (SELECT simetra.current_user_id()) $$;"
+      "CREATE FUNCTION public.zone_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT v.id FROM public.zone_view v WHERE v.keeper_id = (SELECT simetra.current_user_id()) $$;"
     )
     const result = await compileRights(await acceptDebt(files))
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([])

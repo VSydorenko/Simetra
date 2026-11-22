@@ -41,7 +41,9 @@ import {
   checkHeads,
   headFunctionIdentities,
   headScope,
+  queryHeads,
 } from "../sql/heads"
+import { checkHeadSettings } from "../sql/function-settings-shell"
 import type { SqlParser } from "../sql/parse"
 import { nonContentStandardNames } from "../mechanics-units"
 import type { PlpgsqlFunction, PlpgsqlParser } from "../sql/plpgsql"
@@ -108,8 +110,19 @@ export function checkLinks(
       skip
     ),
   ]
+  const queries = queryHeads(project)
   return [
     ...shells,
+    // Голова з діагностикою підпису чи оболонки (`skip`) не судиться далі.
+    ...checkHeadSettings(
+      units.filter(
+        (u) =>
+          u.class === "function" &&
+          queries.has(u.identity) &&
+          !skip.has(u.identity)
+      ),
+      units
+    ),
     ...checkPolicyCurrentUser(units),
     ...checkHeads(objects, project, units, scope, skip),
     ...checkDomainChecks(units, scope),

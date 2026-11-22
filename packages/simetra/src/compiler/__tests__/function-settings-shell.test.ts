@@ -29,9 +29,9 @@ const sqlFunction = (name: string, body: string) =>
 
 /** Функція множини `team_ids`, що кличе ланку `public.helper`. */
 const TEAM_IDS =
-  "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT public.helper() $$;\n"
+  "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT public.helper() $$;\n"
 const HELPER =
-  "CREATE FUNCTION public.helper() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT NULL::uuid $$;\n"
+  "CREATE FUNCTION public.helper() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT NULL::uuid $$;\n"
 const PROJECT_FUNCTION =
   "CREATE FUNCTION public.project_label() RETURNS int LANGUAGE sql STABLE SECURITY INVOKER AS $$ SELECT 1 $$;\n"
 

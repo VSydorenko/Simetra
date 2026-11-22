@@ -4,7 +4,7 @@
 -- її раз на запит, а не на кожен рядок. Сесія без користувача «Користувачів»
 -- (анонімна, сервісна, недійсний користувач) не отримує жодного значення.
 CREATE FUNCTION app.accessible_user_ids() RETURNS SETOF uuid
-  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1'
   AS $$
     SELECT u.id FROM (SELECT (select simetra.current_user_id()) AS id) u
      WHERE u.id IS NOT NULL

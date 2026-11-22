@@ -195,7 +195,7 @@ function treeReferences(
       space: "operator",
       bound,
     })),
-    ...sessionReads(tree).map((name): Reference => ({
+    ...settingReads(tree).map((name): Reference => ({
       name,
       space: "setting",
       bound,
@@ -221,10 +221,14 @@ const LOCAL_TIME_VALUES: ReadonlySet<string> = new Set([
   "SVFOP_LOCALTIMESTAMP_N",
 ])
 
-/** Типи місцевого часу: перетворення `timestamptz` у них читає `TimeZone`. */
+/**
+ * Типи місцевого часу: перетворення `timestamptz` у них читає `TimeZone`;
+ * `timetz` (`time with time zone`) бере зсув зони сесії.
+ */
 const LOCAL_TIME_TYPES: ReadonlySet<string> = new Set([
   "date",
   "time",
+  "timetz",
   "timestamp",
 ])
 
@@ -251,18 +255,33 @@ function stringLiteral(value: unknown): string | undefined {
 }
 
 /**
- * Значення, перетворення якого в місцевий час не залежить від `TimeZone`:
- * `… AT TIME ZONE '<літерал>'`, `NULL` чи літерал дати й часу без слів
- * (`'today'`, `'now'` розв'язуються за зоною сесії). Типів голови компілятор
- * не відстежує, тож усе інше — fail-closed.
+ * Літерал дати й часу ISO 8601 (`YYYY-MM-DD[ T]hh:mm…`): інший порядок
+ * (`'01-02-2026'`) читає `DateStyle`, слова (`'today'`, `'now'`) — зона сесії.
+ * `timetz` без явного зсуву бере зсув зони сесії, тож для нього зсув
+ * обов'язковий.
  */
-function zoneFree(value: unknown): boolean {
+function isoLiteral(text: string, type: string): boolean {
+  const match =
+    /^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}(?::?\d{2})?)?)?$/.exec(
+      text
+    )
+  return match !== null && (type !== "timetz" || match[1] !== undefined)
+}
+
+/**
+ * Значення, перетворення якого в тип місцевого часу `type` не залежить від
+ * `TimeZone` і `DateStyle`: `… AT TIME ZONE '<літерал>'`, `NULL` чи літерал
+ * ISO (`isoLiteral`). Типів виразу компілятор не відстежує, тож усе інше —
+ * fail-closed.
+ */
+function zoneFree(value: unknown, type: string): boolean {
   const constant = (value as { A_Const?: { isnull?: boolean } })?.A_Const
   if (constant?.isnull === true) return true
   const text = stringLiteral(value)
-  if (text !== undefined) return /^[0-9\s:.+\-T]*$/.test(text)
+  if (text !== undefined) return isoLiteral(text, type)
   const call = (value as { FuncCall?: FuncCallNode })?.FuncCall
   return (
+    type !== "timetz" &&
     call !== undefined &&
     builtinName(call.funcname) === "timezone" &&
     call.args?.length === 2 &&
@@ -271,74 +290,106 @@ function zoneFree(value: unknown): boolean {
 }
 
 /**
- * Що вузол читає зі стану сесії поза дозвільним (спека прав §5.8, Р6/Р7
- * плану Д5): назву `current_setting`, якої немає серед точних
- * `HEAD_READABLE_SETTINGS`, чи `TimeZone`. Правило — у розборі дерева, бо
- * обхід голови бачить лише ім'я виклику, а не його аргументи.
+ * Назва, яку `current_setting` вузла читає поза дозвільним (спека прав
+ * §5.8, Р6/Р7 плану Д5): назва, якої немає серед точних
+ * `HEAD_READABLE_SETTINGS`, чи сама назва функції, коли назву сховано.
+ * Правило — у розборі дерева, бо обхід голови бачить лише ім'я виклику, а не
+ * його аргументи.
  */
-function sessionRead(node: Record<string, unknown>): string | undefined {
-  const value = node.SQLValueFunction as { op?: string } | undefined
-  if (value?.op !== undefined && LOCAL_TIME_VALUES.has(value.op)) {
-    return TIME_ZONE
+function settingRead(node: Record<string, unknown>): string | undefined {
+  const call = node.FuncCall as FuncCallNode | undefined
+  if (call === undefined || builtinName(call.funcname) !== "current_setting") {
+    return undefined
   }
+  const args = call.args ?? []
+  // Лише перший позиційний аргумент — голий літерал точної назви:
+  // приведення, іменований аргумент, VARIADIC чи вираз ховають назву.
+  const setting = stringLiteral(args[0])
+  return setting !== undefined &&
+    call.func_variadic !== true &&
+    args.length <= 2 &&
+    !args.some((a) => (a as { NamedArgExpr?: unknown }).NamedArgExpr) &&
+    HEAD_READABLE_SETTINGS.includes(setting)
+    ? undefined
+    : (setting ?? "current_setting")
+}
+
+/**
+ * Чи вузол дослівного виразу політики читає часову зону сесії (спека
+ * декларацій функцій §5.8): функція голови фіксує `TimeZone` у своїй
+ * оболонці (`HEAD_PINNED_SETTINGS`), а вираз політики, який обчислює
+ * Postgres у сесії клієнта, такої оболонки не має — для нього правило за
+ * іменами: місцевий час «зараз» і перетворення в тип місцевого часу без
+ * `AT TIME ZONE '<літерал>'`.
+ */
+function timeZoneRead(node: Record<string, unknown>): boolean {
+  const value = node.SQLValueFunction as { op?: string } | undefined
+  if (value?.op !== undefined && LOCAL_TIME_VALUES.has(value.op)) return true
   const cast = node.TypeCast as
     | { arg?: unknown; typeName?: { names?: FuncCallNode["funcname"] } }
     | undefined
   if (cast !== undefined) {
     const type = builtinName(cast.typeName?.names)
-    return type !== undefined &&
+    return (
+      type !== undefined &&
       LOCAL_TIME_TYPES.has(type) &&
-      !zoneFree(cast.arg)
-      ? TIME_ZONE
-      : undefined
+      !zoneFree(cast.arg, type)
+    )
   }
   const call = node.FuncCall as FuncCallNode | undefined
   const name = call === undefined ? undefined : builtinName(call.funcname)
-  if (call === undefined || name === undefined) return undefined
+  if (call === undefined || name === undefined) return false
   const args = call.args ?? []
-  if (name === "current_setting") {
-    // Лише перший позиційний аргумент — голий літерал точної назви:
-    // приведення, іменований аргумент, VARIADIC чи вираз ховають назву.
-    const setting = stringLiteral(args[0])
-    return setting !== undefined &&
-      call.func_variadic !== true &&
-      args.length <= 2 &&
-      !args.some((a) => (a as { NamedArgExpr?: unknown }).NamedArgExpr) &&
-      HEAD_READABLE_SETTINGS.includes(setting)
-      ? undefined
-      : (setting ?? name)
-  }
   // `AT LOCAL` — `timezone(x)` з одним аргументом: зона сесії.
-  if (name === "timezone") return args.length === 1 ? TIME_ZONE : undefined
+  if (name === "timezone") return args.length === 1
   if (LOCAL_TIME_TYPES.has(name)) {
-    return args.length === 1 && zoneFree(args[0]) ? undefined : TIME_ZONE
+    return !(args.length === 1 && zoneFree(args[0], name))
   }
   // Без третього аргументу-зони `date_trunc` над `timestamptz` і
   // `date_add`/`date_subtract` беруть зону сесії.
   if (name === "date_trunc") {
-    if (args.length === 3) {
-      return stringLiteral(args[2]) === undefined ? TIME_ZONE : undefined
-    }
-    return zoneFree(args[1]) ? undefined : TIME_ZONE
+    if (args.length === 3) return stringLiteral(args[2]) === undefined
+    return !zoneFree(args[1], "timestamp")
   }
   if (name === "date_add" || name === "date_subtract") {
-    return args.length === 3 && stringLiteral(args[2]) !== undefined
-      ? undefined
-      : TIME_ZONE
+    return !(args.length === 3 && stringLiteral(args[2]) !== undefined)
   }
-  return undefined
+  return false
 }
 
-/** Кожне читання стану сесії поза дозвільним у дереві (`sessionRead`). */
-export function sessionReads(value: unknown): string[] {
-  if (Array.isArray(value)) return value.flatMap(sessionReads)
+/** Кожне значення `read` вузлів дерева, від кореня вглиб. */
+function collect(
+  value: unknown,
+  read: (node: Record<string, unknown>) => string | undefined
+): string[] {
+  if (Array.isArray(value)) return value.flatMap((v) => collect(v, read))
   if (typeof value !== "object" || value === null) return []
   const node = value as Record<string, unknown>
-  const own = sessionRead(node)
+  const own = read(node)
   return [
     ...(own === undefined ? [] : [own]),
-    ...Object.values(node).flatMap(sessionReads),
+    ...Object.values(node).flatMap((v) => collect(v, read)),
   ]
+}
+
+/** Читання налаштувань поза дозвільним у дереві функції (`settingRead`). */
+function settingReads(value: unknown): string[] {
+  return collect(value, settingRead)
+}
+
+/** Читання часової зони сесії у виразі політики (`timeZoneRead`). */
+function timeZoneReads(value: unknown): string[] {
+  return collect(value, (node) => (timeZoneRead(node) ? TIME_ZONE : undefined))
+}
+
+/**
+ * Кожне читання стану сесії поза дозвільним у дослівному виразі політики:
+ * `current_setting` поза точними назвами й часова зона сесії.
+ */
+export function sessionReads(value: unknown): string[] {
+  return collect(value, (node) =>
+    timeZoneRead(node) ? TIME_ZONE : settingRead(node)
+  )
 }
 
 type NameList = { String?: { sval?: string } }[] | undefined
@@ -542,7 +593,17 @@ class Index {
       return {
         problems:
           sideEffectOf(qual) === undefined ? [] : [{ construct: "query" }],
-        refs: qual === undefined ? [] : treeReferences(qual, parse, true),
+        refs:
+          qual === undefined
+            ? []
+            : [
+                ...treeReferences(qual, parse, true),
+                ...timeZoneReads(qual).map((name): Reference => ({
+                  name,
+                  space: "setting",
+                  bound: true,
+                })),
+              ],
       }
     }
     if (VIEWS.has(unit.class)) {
@@ -955,7 +1016,7 @@ function handlersOf(
 }
 
 /** Функції множини й функції значень виміру — функції-запити. */
-function queryHeads(project: Project): Set<string> {
+export function queryHeads(project: Project): Set<string> {
   return new Set([
     ...project.scopeKinds.flatMap((kind) =>
       typeof kind.setFunction === "string"

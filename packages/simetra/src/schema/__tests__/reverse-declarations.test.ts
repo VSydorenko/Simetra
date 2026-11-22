@@ -626,7 +626,7 @@ describe("the check of a declaration", () => {
   it("no arguments and SETOF uuid: a platform form candidate", async () => {
     const result = await reverseGenerate(
       model(
-        "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT gen_random_uuid() $$;"
+        "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT gen_random_uuid() $$;"
       ),
       options(FOLDER(), facts(fact("org_ids", { grants: ["authenticated"] })))
     )
@@ -698,7 +698,7 @@ describe("platform forms of the kept folder", () => {
     // Її `EXECUTE` виводять метадані: декларація на неї — `sql.declaration-platform-form`
     const result = await reverseGenerate(
       model(
-        "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT gen_random_uuid() $$;"
+        "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT gen_random_uuid() $$;"
       ),
       options(withRoles(teamScopeKind()), undefined)
     )
@@ -728,7 +728,7 @@ describe("platform forms of the kept folder", () => {
     async (c) => {
       const result = await reverseGenerate(
         model(
-          "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT gen_random_uuid() $$;\n" +
+          "CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT gen_random_uuid() $$;\n" +
             c.sql
         ),
         options(withRoles(teamScopeKind()), undefined)

@@ -383,8 +383,8 @@ export const dimensionFunction = (): Layer => ({
   },
 })
 export const DIMENSION_SQL =
-  "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT public.region_link() $$;\n" +
-  "CREATE FUNCTION public.region_link() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' AS $$ SELECT NULL::uuid $$;\n"
+  "CREATE FUNCTION public.region_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT public.region_link() $$;\n" +
+  "CREATE FUNCTION public.region_link() RETURNS SETOF uuid LANGUAGE sql STABLE SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT NULL::uuid $$;\n"
 
 export function teamScopeKind(): Layer {
   return {
@@ -2273,7 +2273,7 @@ export const ADOPTED_SUPPORT_KEY = "support"
  * активність, як і «мої скоупи».
  */
 const ORG_IDS_SQL =
-  "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT m.org_id FROM public.membership m WHERE m.user_id = (SELECT simetra.current_user_id()) AND m.is_active IS TRUE $$;"
+  "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT m.org_id FROM public.membership m WHERE m.user_id = (SELECT simetra.current_user_id()) AND m.is_active IS TRUE $$;"
 
 /** `Membership` джерела: користувач і активність — без `NOT NULL`. */
 export function adoptedMembershipTable(
@@ -2726,7 +2726,8 @@ export function snapshotBenchDomain(...layers: Layer[]): Map<string, string> {
     snapshotBenchLayer(),
     ...layers
   )
-  const shell = "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''"
+  const shell =
+    "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1'"
   files.set(
     SCOPE_FUNCTIONS_FILE,
     `CREATE FUNCTION ${BENCH_TEAM_SET_FUNCTION}() RETURNS SETOF uuid ${shell} AS $$ SELECT s.team FROM public.${BENCH_TEAM_SEAT_TABLE} s WHERE s.user_id = (SELECT simetra.current_user_id()) $$;`
@@ -2895,7 +2896,8 @@ export function snapshotSourcesDomain(): Map<string, string> {
       sourceKeys: [{ source: "globalGrants", key: ADOPTED_SUPPORT_KEY }],
     },
   })
-  const shell = "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''"
+  const shell =
+    "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1'"
   files.set(
     SCOPE_FUNCTIONS_FILE,
     `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid ${shell} AS $$ SELECT m.org_id FROM public.membership m WHERE m.user_id = (SELECT simetra.current_user_id()) AND m.is_active IS TRUE UNION SELECT g.org FROM public.${SNAPSHOT_ORG_GUEST_TABLE} g WHERE g.user_id = (SELECT simetra.current_user_id()) $$;`
@@ -3068,7 +3070,8 @@ function actorSnapshotLayer(): Layer {
  */
 export function actorSnapshotDomain(...layers: Layer[]): Map<string, string> {
   const files = policyDomain(...layers, actorSnapshotLayer())
-  const shell = "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''"
+  const shell =
+    "LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1'"
   const S = ACTOR_SNAPSHOT
   files.set(
     SCOPE_FUNCTIONS_FILE,
@@ -3144,7 +3147,7 @@ export function adoptedSnapshotDomain(...layers: Layer[]): Map<string, string> {
   )
   files.set(
     SCOPE_FUNCTIONS_FILE,
-    `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT m.org_id FROM public.membership m WHERE m.user_id = (SELECT simetra.current_user_id()) AND m.is_active IS TRUE AND m.org_id IN (SELECT g.org FROM public.${SNAPSHOT_ORG_GUEST_TABLE} g WHERE g.user_id = (SELECT simetra.current_user_id())) $$;`
+    `CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT m.org_id FROM public.membership m WHERE m.user_id = (SELECT simetra.current_user_id()) AND m.is_active IS TRUE AND m.org_id IN (SELECT g.org FROM public.${SNAPSHOT_ORG_GUEST_TABLE} g WHERE g.user_id = (SELECT simetra.current_user_id())) $$;`
   )
   return files
 }
@@ -3458,7 +3461,7 @@ export function signalTopicDomain(...layers: Layer[]): Map<string, string> {
   const files = policyDomain(writeRoles(), signalTopicLayer(), ...layers)
   files.set(
     SCOPE_FUNCTIONS_FILE,
-    "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT m.org_id FROM public.org_member m JOIN public.organization o ON o.id = m.org_id WHERE m.user_id = (SELECT simetra.current_user_id()) AND NOT o.deletion_mark $$;"
+    "CREATE FUNCTION public.org_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' SET TimeZone = 'UTC' SET DateStyle = 'ISO, MDY' SET IntervalStyle = 'postgres' SET extra_float_digits = '1' AS $$ SELECT m.org_id FROM public.org_member m JOIN public.organization o ON o.id = m.org_id WHERE m.user_id = (SELECT simetra.current_user_id()) AND NOT o.deletion_mark $$;"
   )
   return files
 }

@@ -32,6 +32,7 @@ export const COMPILER_RULES = [
   "sql.head-not-allowed",
   "sql.domain-check-not-allowed",
   "sql.function-settings-shell",
+  "sql.head-settings",
   "sql.function-overload",
   "sql.row-rule-grammar",
   "sql.row-rule-foreign-table",
@@ -550,6 +551,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
 export const REPAIR_CLASS: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "sql.definer-caller-unchecked",
   "sql.policy-helper-correlated",
+  "sql.head-settings",
   "sql.declaration-check-missing",
   "sql.declaration-check-not-applied",
   "sql.declaration-platform-form",

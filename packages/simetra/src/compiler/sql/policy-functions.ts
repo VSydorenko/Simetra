@@ -14,6 +14,7 @@ import { isSecurityDefiner } from "./definer-reads"
 import { unitCalls, unitRelations, type ReferencedName } from "./dependencies"
 import { callersOfRole } from "./execute-grants"
 import { routineBody } from "./function-body"
+import { checkHeadSettings } from "./function-settings-shell"
 import { PUBLIC, grantFacts, type GrantFact } from "./grant-facts"
 import {
   attributeNames,
@@ -1105,22 +1106,29 @@ function isKeyColumn(
 
 /**
  * `sql.head-not-allowed` на кожній функції політики: голову судить той самий
- * суддя Правила 3, що й функцію множини скоупу.
+ * суддя Правила 3, що й функцію множини скоупу; функція політики — корінь
+ * голови, тож і її оболонка фіксує налаштування сесії (`sql.head-settings`).
  */
 export function checkPolicyFunctionHeads(
   functions: readonly PolicyFunction[],
   scope: HeadScope
 ): Diagnostic[] {
-  return functions.flatMap(({ unit }) => {
-    const head = `${unit.schema}.${unit.name}`
-    return judgeQueryFunction(unit, scope, [head]).findings.map((finding) =>
-      diagnostic("sql.head-not-allowed", unit.file, "", {
-        head,
-        chain: finding.chain.join(" → "),
-        construct: finding.construct,
-        ...(finding.detail === undefined ? {} : { detail: finding.detail }),
-        line: unit.line,
-      })
-    )
-  })
+  return [
+    ...checkHeadSettings(
+      functions.map((f) => f.unit),
+      scope.units
+    ),
+    ...functions.flatMap(({ unit }) => {
+      const head = `${unit.schema}.${unit.name}`
+      return judgeQueryFunction(unit, scope, [head]).findings.map((finding) =>
+        diagnostic("sql.head-not-allowed", unit.file, "", {
+          head,
+          chain: finding.chain.join(" → "),
+          construct: finding.construct,
+          ...(finding.detail === undefined ? {} : { detail: finding.detail }),
+          line: unit.line,
+        })
+      )
+    }),
+  ]
 }
