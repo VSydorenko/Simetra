@@ -112,6 +112,14 @@ describe("fromS3Client put", () => {
     expect(out.size).toBe(10)
   })
 
+  it("refuses exactly maxBytes + 1 bytes", async () => {
+    const { client, objects } = fakeS3()
+    await expect(
+      fromS3Client(client, "b").put(KEY, streamOf(bytes(11)), opts)
+    ).rejects.toMatchObject({ reason: "too-large" })
+    expect(objects.size).toBe(0)
+  })
+
   it("aborts at maxBytes + 1, cancels the source and leaves nothing", async () => {
     const { client, objects, calls } = fakeS3()
     let cancelled = false
