@@ -216,6 +216,43 @@ export function guardOf(
   return hasExceptionBlock ? fail("exceptionBlock") : { ok: true }
 }
 
+// Лінива вибірка: модуль входить у цикл імпортів з `rights/functions`.
+const guardFunctions = () => [
+  RIGHTS_FUNCTIONS.require,
+  RIGHTS_FUNCTIONS.requireScope,
+]
+
+/** Дерево розбору містить виклик функції запобіжника (будь-яка схема, будь-яка глибина). */
+function hasGuardCall(node: unknown): boolean {
+  if (Array.isArray(node)) return node.some(hasGuardCall)
+  const record = asRecord(node)
+  if (record === undefined) return false
+  const call = asRecord(record.FuncCall)
+  const parts = Array.isArray(call?.funcname) ? call.funcname : []
+  const last = asRecord(asRecord(parts.at(-1))?.String)?.sval
+  if (guardFunctions().some((guard) => guard.name === last)) return true
+  return Object.values(record).some(hasGuardCall)
+}
+
+/**
+ * Будь-який вираз тіла кличе функцію запобіжника за розібраним іменем.
+ * Вираз, який не розібрано окремо ні як запит, ні як `SELECT <вираз>`, —
+ * теж так: довести відсутність виклику нічим (fail-closed).
+ */
+function callsGuard(
+  statements: readonly PlpgsqlStatement[],
+  parse: SqlParser
+): boolean {
+  return statements
+    .flatMap((statement) => statement.expressions)
+    .some(({ query }) => {
+      const parsed = [query, `SELECT ${query}`]
+        .map((text) => parse(text))
+        .find((result) => result.ok)
+      return parsed === undefined || hasGuardCall(parsed)
+    })
+}
+
 /**
  * Місце вставки запобіжника (спека декларацій функцій §5.6, Р3): зсув у
  * `unit.sql` одразу після слова `BEGIN` зовнішнього блоку — або `undefined`,
@@ -241,14 +278,16 @@ export function guardInsertionPoint(
     return undefined
   }
   const parsed = plpgsql(unit.sql)
-  if (!parsed.ok || parsed.fn?.author.hasExceptionBlock !== false) {
+  const fn = parsed.ok ? parsed.fn : undefined
+  if (fn === undefined || fn.author.hasExceptionBlock !== false) {
     return undefined
   }
+  // Текстовий пошук — додатковий fail-closed (динамічний SQL у рядку), а
+  // розібране ім'я ловить те, що текст приховує (`U&"rights\005frequire"`).
   const lowered = unit.sql.toLowerCase()
   if (
-    [RIGHTS_FUNCTIONS.require, RIGHTS_FUNCTIONS.requireScope].some((guard) =>
-      lowered.includes(guard.name)
-    )
+    guardFunctions().some((guard) => lowered.includes(guard.name)) ||
+    callsGuard(fn.statements, parse)
   ) {
     return undefined
   }

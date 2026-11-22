@@ -1,4 +1,5 @@
 import {
+  FUNCTIONS_FILE_SUFFIX,
   KIND_REGISTRY,
   MAX_PHYSICAL_NAME_BYTES,
   SQL_DEBT_FILE,
@@ -22,6 +23,8 @@ import {
 import { derivedFunctionLabels } from "../contracts"
 import {
   diagnostic,
+  isRepairError,
+  repairKeys,
   sortDiagnostics,
   type Diagnostic,
   type RepairKey,
@@ -43,7 +46,14 @@ import {
 import { PROJECT_FILE } from "../stages/files"
 import { DERIVED_TABLE_LABELS } from "../stages/model"
 import { ownsWholeGrant } from "../function-execute"
+import { readFiles } from "../pipeline"
 import { acceptsRepair } from "./refuse"
+import {
+  cutDefaultPrivileges,
+  insertGuards,
+  withFunctionIds,
+} from "./fix-repair"
+import { toPlatformForms } from "./platform-forms"
 import { loadSqlParser } from "../sql/parse"
 import { applyEdits, type TextEdit } from "../sql/rewrite/renames"
 import { statementPositions } from "../sql/units"
@@ -623,24 +633,84 @@ async function narrowDebt(
  * справа — лагодити саме вхід. `changes` — лише файли зі зміненим текстом.
  * Борг рахується над доповненою текою: типи рядків таблиць, від яких
  * залежать ідентичності функцій, з'являються лише з id і фізичними іменами.
+ *
+ * Режим ремонту (спека декларацій функцій §5.6, Р2): після механічного
+ * доповнення (і `id` записам `.functions.json`) `fix` лагодить клас ремонту —
+ * (г) декларація функції, що стала формою платформи, (д) вирізання ADP на
+ * функції, (в) запобіжник виклику з `check`. Результат з помилками класу
+ * ремонту несе `written`, якщо не додав нових, прибрав хоча б одну й не має
+ * помилок поза класом.
  */
 export async function fixFiles(
   files: ReadonlyMap<string, string>,
   o: CompletionOptions
 ): Promise<OperationResult> {
   const completed = completeFiles(files, o)
+  const identified = withFunctionIds(completed.files, o.newId)
   // Застарілий запис боргу закрив би компіляцію раніше за перевірку грантів,
   // тож перелік звужено до вирізу; після вирізу — ще раз, без вирізаних.
-  const narrowed = await narrowDebt(completed.files, o.schemaPath)
+  const narrowed = await narrowDebt(identified, o.schemaPath)
   const withoutGrants = await withoutGeneratedGrants(narrowed)
-  const { result } = await compileCompletion(files, {
-    ...completed,
-    files:
-      withoutGrants === narrowed
-        ? narrowed
-        : await narrowDebt(withoutGrants, o.schemaPath),
-  })
-  return result
+  const prepared =
+    withoutGrants === narrowed
+      ? narrowed
+      : await narrowDebt(withoutGrants, o.schemaPath)
+
+  // Опорний стан: помилки класу ремонту після механічних кроків. Кроки
+  // ремонту мають прибрати хоча б одну з них і не додати жодної нової.
+  const baseline = await compile(prepared, { repair: true })
+  const accepted = repairKeys(baseline.diagnostics)
+
+  // (г) Перехід у форму платформи пише лише файли без попередження про
+  // розширення: автоматичний ремонт права не розширює.
+  const forms = toPlatformForms(prepared)
+  const widened = new Set(forms.diagnostics.map((d) => d.file))
+  let repaired = new Map(prepared)
+  for (const path of prepared.keys()) {
+    if (!path.endsWith(FUNCTIONS_FILE_SUFFIX) || widened.has(path)) continue
+    const next = forms.files.get(path)
+    if (next === undefined) repaired.delete(path)
+    else repaired.set(path, next)
+  }
+  const flagged =
+    repaired.size === prepared.size &&
+    [...prepared].every(([path, text]) => repaired.get(path) === text)
+      ? baseline.diagnostics
+      : (await compile(repaired, { repair: true })).diagnostics
+  const provider = readFiles(repaired).project?.database.provider
+  repaired = await insertGuards(repaired, flagged)
+  if (provider !== undefined) {
+    repaired = await cutDefaultPrivileges(repaired, flagged, provider)
+  }
+  const final =
+    repaired === prepared ? prepared : await narrowDebt(repaired, o.schemaPath)
+
+  const { result } = await compileCompletion(
+    files,
+    {
+      ...completed,
+      diagnostics: [...completed.diagnostics, ...forms.diagnostics],
+      files: final,
+    },
+    accepted
+  )
+  if (result.written !== true) return result
+  const keys = repairKeys(result.diagnostics)
+  const outside = result.diagnostics.some(
+    (d) => d.severity === "error" && !isRepairError(d)
+  )
+  const removed = accepted.some(
+    (a) =>
+      !keys.some(
+        (k) => k.code === a.code && k.schema === a.schema && k.name === a.name
+      )
+  )
+  if (!outside && removed) return result
+  return {
+    ok: result.ok,
+    changes: result.changes,
+    diagnostics: result.diagnostics,
+  }
 }
 
 /**

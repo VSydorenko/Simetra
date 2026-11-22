@@ -73,7 +73,7 @@ export const explainTool = defineTool({
 export const fixTool = defineTool({
   name: "fix",
   description:
-    "Assign missing ids and physical names, set $schema and canonical form. Writes only when the result compiles without errors.",
+    "Assign missing ids and physical names, set $schema and canonical form; repair function declarations (ids, call guard, default privileges). Writes when the result compiles, or when it removes repair-class errors and adds none (ok false, written true).",
   input: z.strictObject({}),
   files: "write",
   database: "none",
@@ -86,6 +86,7 @@ export const fixTool = defineTool({
     })
     return {
       ok: result.ok,
+      ...(result.written === true ? { written: true as const } : {}),
       changes: result.changes,
       diagnostics: result.diagnostics,
     }

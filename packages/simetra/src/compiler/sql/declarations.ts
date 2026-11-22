@@ -270,7 +270,7 @@ export function checkDeclaredCallers(
  * `PUBLIC` і ролей API поза викликачами, тож майбутній функції він нічого не
  * відкриває.
  */
-const PROVIDER_DEFAULT_PRIVILEGE_SCHEMAS: Readonly<
+export const PROVIDER_DEFAULT_PRIVILEGE_SCHEMAS: Readonly<
   Record<DatabaseProvider, readonly string[]>
 > = { supabase: ["public"], postgres: [] }
 

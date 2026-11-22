@@ -489,6 +489,13 @@ describe("guardInsertionPoint", () => {
       ),
     ],
     [
+      // Ім'я, якого текстовий пошук не бачить: розібране ім'я збігається.
+      "a guard call named by a unicode escape",
+      create(
+        "$$BEGIN PERFORM 1; PERFORM simetra.U&\"rights\\005frequire\"('read', 'task', p_row); END$$"
+      ),
+    ],
+    [
       "a dynamic guard call",
       create("$$BEGIN EXECUTE 'SELECT simetra.rights_require(1)'; END$$"),
     ],
