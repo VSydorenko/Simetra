@@ -763,6 +763,20 @@ describe("fixFiles: function declarations (repair mode)", () => {
       expect(result.ok).toBe(true)
     })
 
+    it("a CRLF body gets the guard like an LF one", async () => {
+      const files = folder(create("f", "BEGIN\r\n  PERFORM 1;\r\nEND"), [
+        declared("f"),
+      ])
+      const result = await fixFiles(files, options())
+      expect(sqlAfter(files, result as never)).toBe(
+        create(
+          "f",
+          "BEGIN\r\n  PERFORM simetra.rights_require('read', 'task', p_row);\r\n  PERFORM 1;\r\nEND"
+        )
+      )
+      expect(errorCodes(result)).toEqual([])
+    })
+
     it("a scope target gets rights_require_scope", async () => {
       const files = folder(create("f").replace("p_row uuid", "p_org uuid"), [
         declared("f", {
@@ -1033,6 +1047,12 @@ describe("fixFiles: function declarations (repair mode)", () => {
           .filter((d) => d.code === "sql.declaration-platform-form-widens")
           .map((d) => d.params?.roles)
       ).toEqual(["user, command"])
+      const [warning] = result.diagnostics.filter(
+        (d) => d.code === "sql.declaration-platform-form-widens"
+      )
+      expect(warning!.params?.declined).toBe(1)
+      expect(warning!.message).toContain("its declaration is not removed")
+      expect(warning!.message).not.toContain("declaration is removed")
       expect(result.written).toBeUndefined()
     })
   })
@@ -1086,6 +1106,46 @@ describe("fixFiles: function declarations (repair mode)", () => {
       // Змішаний отримувач (PUBLIC) — помилка лишається людині, текст без змін.
       expect(adpErrors(result)).toHaveLength(1)
       expect(after.get(ADP_FILE)).toBe(preset)
+    })
+
+    it("leaves the provider owner's statement over several schemas when one is managed", async () => {
+      const multi =
+        "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public, app GRANT EXECUTE ON FUNCTIONS TO anon, PUBLIC;\n"
+      const { result, after } = await run(multi)
+      expect(adpErrors(result)).toHaveLength(1)
+      expect(after.get(ADP_FILE)).toBe(multi)
+    })
+
+    it("leaves the provider owner's statement in public with API-role grantees only", async () => {
+      const preset =
+        "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon, authenticated;\n"
+      const { result, after } = await run(preset)
+      expect(adpErrors(result)).toEqual([])
+      expect(after.get(ADP_FILE)).toBe(preset)
+    })
+
+    it("cuts an ADP of a CRLF file next to a table ADP", async () => {
+      const tables =
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO anon;\r\n"
+      const { result, after } = await run(
+        `${tables}\r\n${ADP_FN("anon").replace("\n", "\r\n")}`
+      )
+      expect(adpErrors(result)).toEqual([])
+      expect(after.get(ADP_FILE)).toBe(`${tables}\r\n`)
+    })
+
+    it("cuts an ADP and inserts a guard in the same file", async () => {
+      // Вставка запобіжника зсуває рядки: вирізання не мусить шукати одиницю
+      // за застарілим рядком.
+      const sql = create("f") + "\n" + ADP_FN("anon")
+      const files = await acceptDebt(
+        folder(sql, [declared("f", CHECK, uuid(5301))])
+      )
+      const result = await fixFiles(files, options())
+      const after = applyChanges(files, result.changes).get(SQL)!
+      expect(after).not.toContain("DEFAULT PRIVILEGES")
+      expect(after).toContain("rights_require('read', 'task', p_row)")
+      expect(errorCodes(result)).toEqual([])
     })
 
     it("cuts a global statement whose grantees are PUBLIC and the API roles", async () => {

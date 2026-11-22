@@ -1610,9 +1610,13 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
   },
   "sql.declaration-platform-form-widens": {
     en: (p) =>
-      `${p.function} became a platform form (${p.form}): its declaration is removed, and the form also grants EXECUTE to ${p.roles}`,
+      p.declined === undefined
+        ? `${p.function} became a platform form (${p.form}): its declaration is removed, and the form also grants EXECUTE to ${p.roles}`
+        : `${p.function} became a platform form (${p.form}), but its declaration is not removed: the form would also grant EXECUTE to ${p.roles}; widen the declaration with declare-function or keep the function out of the platform form`,
     uk: (p) =>
-      `${p.function} стала формою платформи (${p.form}): її декларацію видалено, і форма відкриває EXECUTE ще й ${p.roles}`,
+      p.declined === undefined
+        ? `${p.function} стала формою платформи (${p.form}): її декларацію видалено, і форма відкриває EXECUTE ще й ${p.roles}`
+        : `${p.function} стала формою платформи (${p.form}), але її декларацію не видалено: форма відкрила б EXECUTE ще й ${p.roles}; розширте декларацію через declare-function або не робіть функцію формою платформи`,
     hint: {
       en: "The platform derives the grants of a platform form from the metadata, and they are wider than the callers the declaration named. Check that these roles may call the function, or keep it out of the platform form.",
       uk: "Гранти форми платформи виводить платформа з метаданих, і вони ширші за викликачів, яких називала декларація. Перевірте, що цим ролям можна кликати функцію, або не робіть її формою платформи.",

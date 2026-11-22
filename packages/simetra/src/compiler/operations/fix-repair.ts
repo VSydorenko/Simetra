@@ -18,7 +18,7 @@ import { qualifiedName } from "../sql/identity"
 import { loadSqlParser } from "../sql/parse"
 import { loadPlpgsqlParser } from "../sql/plpgsql"
 import { applyEdits, type TextEdit } from "../sql/rewrite/renames"
-import { FUNCTION_CLASSES, statementPositions } from "../sql/units"
+import { FUNCTION_CLASSES } from "../sql/units"
 import { sqlLiteral } from "../stages/model"
 import { cut, mergeDeletions } from "./text-edits"
 
@@ -63,7 +63,12 @@ export function withFunctionIds(
  * Відступ вставки: той самий рядок — пробіл, інакше новий рядок з відступом
  * наступного рядка тіла.
  */
-function insertionText(sql: string, at: number, statement: string): string {
+function insertionText(
+  sql: string,
+  at: number,
+  statement: string,
+  eol: string
+): string {
   const rest = sql.slice(at)
   const lineEnd = rest.search(/\r?\n/)
   if (lineEnd < 0 || rest.slice(0, lineEnd).trim() !== "") {
@@ -71,7 +76,41 @@ function insertionText(sql: string, at: number, statement: string): string {
   }
   const next = rest.slice(lineEnd).replace(/^\r?\n/, "")
   const indent = /^[ \t]*/.exec(next)![0]
-  return `\n${indent}${statement}`
+  return `${eol}${indent}${statement}`
+}
+
+/**
+ * Місце одиниці в тексті файлу. `unit.sql` має кінці рядків `\n` (читач
+ * ділить файл за `\r?\n`) і лічить рядки маскованого тексту, тож зсуви
+ * `statementPositions` на файлі з CRLF чи з блоками рухів до оригіналу не
+ * підходять: початок шукається за рядком одиниці, кінець — проходом із
+ * пропуском `\r` перед `\n`. `at` — зсув у `unit.sql`, який треба перенести.
+ */
+function locateUnit(
+  text: string,
+  unit: { line: number; sql: string },
+  at = 0
+): { start: number; end: number; at: number } | undefined {
+  let lineStart = 0
+  for (let n = 1; n < unit.line; n++) {
+    const newline = text.indexOf("\n", lineStart)
+    if (newline < 0) return undefined
+    lineStart = newline + 1
+  }
+  const start = text.indexOf(unit.sql.split("\n")[0]!, lineStart)
+  if (start < 0) return undefined
+  let i = start
+  let mapped = start
+  for (let j = 0; j < unit.sql.length; j++) {
+    if (j === at) mapped = i
+    if (text[i] === "\r" && text[i + 1] === "\n" && unit.sql[j] === "\n") {
+      i++
+    }
+    if (text[i] !== unit.sql[j]) return undefined
+    i++
+  }
+  if (at >= unit.sql.length) mapped = i
+  return { start, end: i, at: mapped }
 }
 
 /**
@@ -137,10 +176,8 @@ export async function insertGuards(
     const at = guardInsertionPoint(unit, check, units, plpgsql, parse)
     const text = files.get(unit.file)
     if (at === undefined || text === undefined) continue
-    const position = statementPositions(text, parse).find(
-      (p) => p.line === unit.line && text.slice(p.start, p.end) === unit.sql
-    )
-    if (position === undefined) continue
+    const place = locateUnit(text, unit, at)
+    if (place === undefined) continue
     const guard = guardFunctionOf(check)
     const target = check.row ?? check.scope
     const statement = guardStatement(
@@ -149,13 +186,17 @@ export async function insertGuards(
       contract.kindLabel,
       target
     )
-    const offset = position.start + at
     edits.set(unit.file, [
       ...(edits.get(unit.file) ?? []),
       {
-        start: offset,
-        end: offset,
-        text: insertionText(unit.sql, at, statement),
+        start: place.at,
+        end: place.at,
+        text: insertionText(
+          unit.sql,
+          at,
+          statement,
+          text.includes("\r\n") ? "\r\n" : "\n"
+        ),
       },
     ])
   }
@@ -195,10 +236,7 @@ export async function cutDefaultPrivileges(
     (d) => d.code === "sql.default-privileges-execute"
   )
   if (targets.length === 0) return files
-  const [units, parse] = await Promise.all([
-    verbatimUnits(files),
-    loadSqlParser(),
-  ])
+  const units = await verbatimUnits(files)
   const owner = PROVIDER_OWNER_ROLES[provider]
   const api = new Set(
     Object.values(PROVIDER_API_ROLES[provider]).filter(
@@ -235,7 +273,7 @@ export async function cutDefaultPrivileges(
       (spec.rolename === owner || api.has(spec.rolename ?? ""))
     if (
       schemas.length > 0 &&
-      schemas.every((s) => managed.includes(s)) &&
+      schemas.some((s) => managed.includes(s)) &&
       roles.every((r) => r === owner) &&
       grantees.some(
         ({ RoleSpec: spec }) => spec !== undefined && isPreset(spec)
@@ -255,13 +293,11 @@ export async function cutDefaultPrivileges(
     ) {
       continue
     }
-    const position = statementPositions(text, parse).find(
-      (p) => p.line === unit.line && text.slice(p.start, p.end) === unit.sql
-    )
-    if (position === undefined) continue
+    const place = locateUnit(text, unit)
+    if (place === undefined) continue
     edits.set(d.file, [
       ...(edits.get(d.file) ?? []),
-      cut(text, position.start, position.end),
+      cut(text, place.start, place.end),
     ])
   }
   const result = new Map(files)

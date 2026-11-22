@@ -665,6 +665,13 @@ export async function fixFiles(
   // розширення: автоматичний ремонт права не розширює.
   const forms = toPlatformForms(prepared)
   const widened = new Set(forms.diagnostics.map((d) => d.file))
+  // Файл лишено: попередження каже, що декларацію не видалено.
+  const declined = forms.diagnostics.map((d) =>
+    diagnostic("sql.declaration-platform-form-widens", d.file, d.pointer, {
+      ...d.params,
+      declined: 1,
+    })
+  )
   let repaired = new Map(prepared)
   for (const path of prepared.keys()) {
     if (!path.endsWith(FUNCTIONS_FILE_SUFFIX) || widened.has(path)) continue
@@ -678,10 +685,12 @@ export async function fixFiles(
       ? baseline.diagnostics
       : (await compile(repaired, { repair: true })).diagnostics
   const provider = readFiles(repaired).project?.database.provider
-  repaired = await insertGuards(repaired, flagged)
+  // (д) раніше за (в): вирізання шукає одиницю за рядком з `flagged`, а
+  // вставка запобіжника зсунула б рядки (вона сама перечитує одиниці).
   if (provider !== undefined) {
     repaired = await cutDefaultPrivileges(repaired, flagged, provider)
   }
+  repaired = await insertGuards(repaired, flagged)
   const final =
     repaired === prepared ? prepared : await narrowDebt(repaired, o.schemaPath)
 
@@ -689,7 +698,7 @@ export async function fixFiles(
     files,
     {
       ...completed,
-      diagnostics: [...completed.diagnostics, ...forms.diagnostics],
+      diagnostics: [...completed.diagnostics, ...declined],
       files: final,
     },
     accepted
