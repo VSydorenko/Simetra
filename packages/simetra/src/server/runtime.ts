@@ -432,7 +432,8 @@ function privilegedReason(
   return LOGIN_FACT_REASONS.find(([column]) => row[column] === "t")?.[1] ?? null
 }
 
-const MEMBER = "SELECT pg_has_role(session_user, $1, 'SET') AS member"
+const MEMBER =
+  "SELECT pg_catalog.pg_has_role(session_user, $1, 'SET') AS member"
 const APPLIED_HASH = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(APPLIED_SNAPSHOT_HASH_FUNCTION_NAME)}() AS hash`
 // База до функції хеша (`42883`) чи без схеми платформи (`3F000`) — модель
 // не застосована, а не збій.

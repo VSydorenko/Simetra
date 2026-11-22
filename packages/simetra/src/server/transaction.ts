@@ -119,7 +119,8 @@ const TIMEOUT: CommandError = { code: "command.timeout" }
 // Стеля одного оператора команди (спека П4-B §7.1, Ф6).
 const STATEMENT_CEILING_MS = 30_000
 // Значення — зв'язаним параметром: текстовий `SET` не приймає `$1`.
-const STATEMENT_TIMEOUT = "SELECT set_config('statement_timeout', $1, true)"
+const STATEMENT_TIMEOUT =
+  "SELECT pg_catalog.set_config('statement_timeout', $1, true)"
 // Мілісекунди межі: округлення вгору й ≥ 1 — `statement_timeout = 0` вимкнув
 // би межу зовсім.
 const timeoutMs = (remaining: number) => Math.max(1, Math.ceil(remaining))
@@ -169,8 +170,8 @@ const CLAIMS_TEXT =
 // `transaction_timeout` є лише з PostgreSQL 17; умова — у самому SQL, щоб
 // не питати версію окремо.
 const transactionTimeout = (param: string) =>
-  `CASE WHEN current_setting('server_version_num')::int >= 170000 ` +
-  `THEN set_config('transaction_timeout', ${param}, true) END`
+  `CASE WHEN pg_catalog.current_setting('server_version_num')::int >= 170000 ` +
+  `THEN pg_catalog.set_config('transaction_timeout', ${param}, true) END`
 // Межі часу команди — у тому самому операторі claims, без кругового запиту
 // (Ф4, Ф6). Запобіжники простою й транзакції — бюджет + 1 с: бюджет
 // спрацьовує раніше, вони ловлять завислий хук чи обірваного клієнта.
@@ -178,10 +179,10 @@ const transactionTimeout = (param: string) =>
 // `ALTER ROLE … SET` ролі входу інакше гасило б сигнал на фазу з першої фази.
 // Порожній рядок — не режим злиття: `simetra.signal` гасить лише точне значення.
 const COMMAND_CLAIMS_TEXT =
-  `${CLAIMS_TEXT}, set_config(${literal(SIGNAL_MODE_SETTING)}, '', true), ` +
-  `set_config('statement_timeout', $2, true), ` +
-  `set_config('lock_timeout', $3, true), ` +
-  `set_config('idle_in_transaction_session_timeout', $4, true), ` +
+  `${CLAIMS_TEXT}, pg_catalog.set_config(${literal(SIGNAL_MODE_SETTING)}, '', true), ` +
+  `pg_catalog.set_config('statement_timeout', $2, true), ` +
+  `pg_catalog.set_config('lock_timeout', $3, true), ` +
+  `pg_catalog.set_config('idle_in_transaction_session_timeout', $4, true), ` +
   transactionTimeout("$4")
 // Налаштування транзакції читання — теж одним оператором (спека П4-B §4.2):
 // `set_config('role', …, true)` діє як `SET LOCAL ROLE`, тож роль — без
@@ -189,8 +190,8 @@ const COMMAND_CLAIMS_TEXT =
 // роль входу, як і claims команди до `SET LOCAL ROLE`. Епоху цей оператор
 // не читає: `EXECUTE` перевіряється на старті виконавця, ще під роллю входу.
 const READ_SETUP_TEXT =
-  `${CLAIMS_TEXT}, set_config('statement_timeout', $2, true), ` +
-  `${transactionTimeout("$3")}, set_config('role', $4, true)`
+  `${CLAIMS_TEXT}, pg_catalog.set_config('statement_timeout', $2, true), ` +
+  `${transactionTimeout("$3")}, pg_catalog.set_config('role', $4, true)`
 /**
  * The setup statement of a server read transaction: claims, every
  * `PINNED_SESSION_SETTINGS` setting, the statement ceiling, the `transaction_timeout` guard and
@@ -205,7 +206,7 @@ export const readSetupStatement = (
   statement(READ_SETUP_TEXT, claims, String(statementMs), String(guardMs), role)
 /** Режим злиття сигналів до кінця транзакції (спека П4-B §8.2). */
 const MERGE_MODE = statement(
-  `SELECT set_config(${literal(SIGNAL_MODE_SETTING)}, ${literal(SIGNAL_MERGE_MODE)}, true)`
+  `SELECT pg_catalog.set_config(${literal(SIGNAL_MODE_SETTING)}, ${literal(SIGNAL_MERGE_MODE)}, true)`
 )
 const INVALIDATE_TEXT = `SELECT ${ident(PLATFORM_SCHEMA)}.${ident(SIGNAL_INVALIDATE_FUNCTION_NAME)}($1::uuid, $2::uuid, $3::uuid)`
 /** `current_user_id()` of the session claims: the command and `authorizeChannels` alike. */

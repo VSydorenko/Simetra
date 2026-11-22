@@ -437,7 +437,7 @@ function callOf(
   }
 }
 
-const CONTEXT_TEXT = `SELECT set_config(${literal(COMMAND_SETTING)}, $1, true)`
+const CONTEXT_TEXT = `SELECT pg_catalog.set_config(${literal(COMMAND_SETTING)}, $1, true)`
 
 /** Оператор контексту команди фази (Рт5): той самий перед перевіркою ТЧ і ядром. */
 function contextOf(
