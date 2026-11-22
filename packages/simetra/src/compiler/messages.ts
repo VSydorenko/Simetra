@@ -2238,8 +2238,8 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
     uk: (p) =>
       `Функція множини скоупу ${p.function}() не визначена в жодному файлі .sql`,
     hint: {
-      en: "Add 'CREATE FUNCTION <schema>.<name>() RETURNS SETOF uuid LANGUAGE sql STABLE ...' to a .sql file.",
-      uk: "Додайте 'CREATE FUNCTION <схема>.<ім'я>() RETURNS SETOF uuid LANGUAGE sql STABLE ...' до файлу .sql.",
+      en: `Add 'CREATE FUNCTION <schema>.<name>() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS} ...' to a .sql file.`,
+      uk: `Додайте 'CREATE FUNCTION <схема>.<ім'я>() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${PINNED_SETTINGS} ...' до файлу .sql.`,
     },
   },
   "scope.membership-missing": {

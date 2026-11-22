@@ -18,6 +18,7 @@ import {
   type DiagnosticParams,
 } from "../diagnostics"
 import type { CommandContextWrite } from "../sql/command-context"
+import { pinnedSettingsClause } from "../sql/head-settings"
 import type { DefinerReadsForm } from "../sql/definer-reads"
 import type { HeadConstruct } from "../sql/query-shape"
 import type { SetFunctionReason } from "../sql/function-shape"
@@ -397,6 +398,51 @@ describe("messages catalog", () => {
     expect(warning.message).toBe(
       "Function public.rpc at line 1 runs as its owner (SECURITY DEFINER), PUBLIC, authenticated, anon may have EXECUTE on it, and it reads tables under row-level security past the caller's rights: public.task"
     )
+  })
+
+  it("sql.head-settings words each problem of the shell", () => {
+    const text = (params: DiagnosticParams) =>
+      localize(
+        diagnostic("sql.head-settings", "a.sql", "", {
+          schema: "public",
+          name: "f",
+          function: "public.f",
+          line: 3,
+          setting: "TimeZone",
+          expected: "UTC",
+          ...params,
+        }),
+        "en"
+      ).message
+    expect(text({ problem: "missing" })).toBe(
+      "Function public.f at line 3 does not set TimeZone = 'UTC' in its CREATE FUNCTION"
+    )
+    expect(text({ problem: "value", actual: "Europe/Kyiv" })).toBe(
+      "Function public.f at line 3 sets TimeZone to 'Europe/Kyiv' instead of 'UTC'"
+    )
+    expect(text({ problem: "notFixed" })).toBe(
+      "Function public.f at line 3 sets TimeZone without a fixed value; it must be 'UTC'"
+    )
+    expect(text({ problem: "alter" })).toBe(
+      "A separate ALTER FUNCTION changes TimeZone of function public.f (line 3); only its CREATE FUNCTION may set it, to 'UTC'"
+    )
+  })
+
+  // Підказки форм кореня голови називають зафіксовані налаштування з одного
+  // джерела, а не копією.
+  it.each<[RuleCode, DiagnosticParams]>([
+    ["sql.head-settings", { problem: "missing" }],
+    ["sql.policy-helper-correlated", { reason: "language" }],
+    ["scope.set-function-signature", { reason: "security" }],
+    ["scope.set-function-missing", {}],
+    ["rights.dimension-function-missing", {}],
+    ["rights.dimension-function-signature", { reason: "security" }],
+  ])("%s hint names the pinned head settings", (code, params) => {
+    for (const locale of ["en", "uk"] as const) {
+      expect(
+        localize(diagnostic(code, "a.sql", "", params), locale).hint
+      ).toContain(pinnedSettingsClause())
+    }
   })
 
   it("sql.function-settings-shell names RESET ALL as every setting", () => {
