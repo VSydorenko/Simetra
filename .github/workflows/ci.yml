@@ -94,7 +94,8 @@ jobs:
         if: needs.changes.outputs.code != 'false'
         run: pnpm metadata:check
 
-  # DB-тести (проєкт db) йдуть проти стека postgres: Postgres, Centrifugo, Garage.
+  # DB-тести (проєкт db) йдуть проти стека postgres: Postgres, Garage (Centrifugo
+  # у стеку немає: стенди доставки й demo беруть власний контейнер).
   # Шарди — окремі раннери, кожен зі своїм стеком: DB-тести designer на
   # 4 ядрах раннера не вкладалися в одну джобу (кейс будує тінь і копію через
   # pg-delta). Локально `pnpm test:db:pg` лишається одним послідовним прогоном.

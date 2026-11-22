@@ -47,9 +47,6 @@ export function stackUrl(
   database?: string
 ): string
 
-/** DSN of the outbox consumer of a stack's Centrifugo, passed in the compose environment. */
-export function signalsDsn(name: "postgres" | "supabase-signals"): string
-
 /** Input of `roles supabase`: `supabase/roles.sql`, then the dev password of `simetra_signals` by `\set`. */
 export function rolesSupabaseInput(): string
 

@@ -10,6 +10,7 @@ import {
   cpSync,
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -38,7 +39,6 @@ import {
   runChild,
   rolesSupabaseInput,
   scramKeys,
-  signalsDsn,
   STACK_LOCK_ENV,
   STACK_REFUSAL,
   SUPABASE_LOCK_PATH,
@@ -50,9 +50,9 @@ import { SIGNALS_JWKS_PATH } from "simetra/server/signals"
 import {
   centrifugoConfig,
   centrifugoConfigRefusals,
-  SIGNAL_CONSUMER_ENV,
 } from "../../../designer/src/tools/signals-config"
 import { TEST_STACKS } from "./profile"
+import { centrifugoImage } from "./signal-stand"
 import { lockPath } from "./stack-guard"
 
 // Файли стека перевіряються як текст: межі безпеки (лише 127.0.0.1, піни
@@ -63,26 +63,13 @@ const STACK_DIR = dockerDir("postgres-stack")
 const read = (name: string, dir = STACK_DIR): string =>
   readFileSync(join(dir, name), "utf8")
 
-// Стек `postgres` і Centrifugo поруч зі стеком Supabase мають однакові межі
-// безпеки, тому спільні перевірки йдуть по обох теках
+// Стек один; перевірки йдуть по переліку, щоб новий стек (теку в `docker/`)
+// підключати рядком, а не копіюванням тестів
 const STACKS = [
   {
     title: "postgres stack",
     dir: STACK_DIR,
     project: "simetra-pg",
-    script: "postgres",
-    signalsPort: "8100",
-    // Порти публікує postgres і Garage; у стеку Supabase лише Centrifugo в
-    // мережі хоста, без портів
-    expectsPorts: true,
-  },
-  {
-    title: "supabase-signals stack",
-    dir: dockerDir("supabase-signals"),
-    project: "simetra-sb",
-    script: "supabase-signals",
-    signalsPort: "8101",
-    expectsPorts: false,
   },
 ] as const
 
@@ -142,95 +129,65 @@ const networkModes = (text: string): string[] =>
     ),
   ].map((m) => m[1]!)
 
-/** Пари `KEY: value` блоку `environment:` сервісу, без лапок значення. */
-function environmentOf(block: string): Record<string, string> {
-  const m = /^ {4}environment:\n((?: {6}.*\n| *#.*\n)*)/m.exec(block)
-  if (m === null) return {}
-  return Object.fromEntries(
-    [...m[1]!.matchAll(/^ {6}([A-Z0-9_]+):\s*(.*?)\s*$/gm)].map((e) => [
-      e[1]!,
-      e[2]!.replace(/^"(.*)"$/, "$1"),
-    ])
-  )
-}
+describe.each(STACKS)("compose.yaml of the $title", ({ dir, project }) => {
+  const compose = read("compose.yaml", dir)
+  const services = serviceBlocks(compose)
 
-describe.each(STACKS)(
-  "compose.yaml of the $title",
-  ({ dir, project, expectsPorts }) => {
-    const compose = read("compose.yaml", dir)
-    const services = serviceBlocks(compose)
-
-    it("names the compose project", () => {
-      expect(compose).toMatch(new RegExp(`^name: ${project}$`, "m"))
-    })
-
-    it("publishes every port on 127.0.0.1 only and never the Garage RPC port", () => {
-      const ports = publishedPorts(compose)
-      // Порожній перелік пройшов би цикл нижче без жодної перевірки
-      expect(ports.length > 0).toBe(expectsPorts)
-      for (const port of ports) expect(port).toMatch(/^127\.0\.0\.1:\d+:\d+$/)
-      expect(ports.some((p) => /:3901(:|$)/.test(p))).toBe(false)
-    })
-
-    // Р17: мережа хоста дозволена лише Centrifugo, і лише `host`; решта
-    // сервісів публікує порти Docker-ом на 127.0.0.1
-    it("has network_mode only on centrifugo, and only host", () => {
-      expect(services.has("centrifugo")).toBe(true)
-      for (const [name, block] of services)
-        expect(networkModes(block), name).toEqual(
-          name === "centrifugo" ? ["host"] : []
-        )
-      // Ключ поза блоками сервісів теж не проходить
-      expect(networkModes(compose)).toEqual(["host"])
-    })
-
-    it("publishes no port of centrifugo: it is on the host network", () => {
-      expect(services.get("centrifugo")).not.toMatch(/^\s*["']?ports["']?\s*:/m)
-    })
-
-    it("pins the Centrifugo image by tag and digest", () => {
-      const [image] = [...compose.matchAll(/^\s*image:\s*(centrifugo\S+)/gm)]
-      expect(image?.[1]).toMatch(/^[^:@\s]+:[^:@\s]+@sha256:[0-9a-f]{64}$/)
-    })
-  }
-)
-
-it("pins one Centrifugo image in both stacks", () => {
-  const images = STACKS.map(
-    ({ dir }) =>
-      /^\s*image:\s*(centrifugo\S+)/m.exec(read("compose.yaml", dir))?.[1]
-  )
-  expect(new Set(images).size).toBe(1)
-})
-
-describe.each(STACKS)("Centrifugo of the $title", ({ dir, signalsPort }) => {
-  const block = serviceBlocks(read("compose.yaml", dir)).get("centrifugo")!
-
-  // HTTP лише на 127.0.0.1 і на своєму порту стека; DSN — лише інтерполяцією
-  // середовища процесу compose (Р16), іншого ключа (слухача) немає
-  it("listens on 127.0.0.1 at its own port and takes the DSNs from the compose environment", () => {
-    const dsn = expect.stringMatching(/^\$\{SIMETRA_SIGNALS_DSN:\?[^}]*\}$/)
-    expect(environmentOf(block)).toEqual({
-      CENTRIFUGO_HTTP_SERVER_ADDRESS: "127.0.0.1",
-      CENTRIFUGO_HTTP_SERVER_PORT: signalsPort,
-      [SIGNAL_CONSUMER_ENV.dsn]: dsn,
-      [SIGNAL_CONSUMER_ENV.notificationDsn]: dsn,
-    })
+  it("names the compose project", () => {
+    expect(compose).toMatch(new RegExp(`^name: ${project}$`, "m"))
   })
 
-  it("passes no flag to centrifugo but the config file", () => {
-    expect(block).toMatch(
-      /^ {4}command: \["centrifugo", "-c", "\/centrifugo\/config\.json"\]$/m
+  it("publishes every port on 127.0.0.1 only and never the Garage RPC port", () => {
+    const ports = publishedPorts(compose)
+    // Порожній перелік пройшов би цикл нижче без жодної перевірки
+    expect(ports.length > 0).toBe(true)
+    for (const port of ports) expect(port).toMatch(/^127\.0\.0\.1:\d+:\d+$/)
+    expect(ports.some((p) => /:3901(:|$)/.test(p))).toBe(false)
+  })
+
+  // Centrifugo у стеку немає (стенди доставки й demo беруть власний
+  // контейнер, `docker/centrifugo-image.txt`); мережа хоста стеку не потрібна:
+  // його сервіси публікують порти Docker-ом на 127.0.0.1
+  it("has no centrifugo service and no network_mode", () => {
+    expect(services.has("centrifugo")).toBe(false)
+    for (const [name, block] of services)
+      expect(networkModes(block), name).toEqual([])
+    // Ключ поза блоками сервісів теж не проходить
+    expect(networkModes(compose)).toEqual([])
+    expect(compose).not.toMatch(/centrifugo/i)
+  })
+})
+
+// Єдине місце піну образу Centrifugo — `docker/centrifugo-image.txt`: його
+// читають стенд DB-тестів і стенд demo та e2e; у стеках образу немає
+describe("the Centrifugo image pin", () => {
+  const DOCKER_ROOT = dockerDir(".")
+  const PIN_FILE = join(DOCKER_ROOT, "centrifugo-image.txt")
+
+  const filesUnder = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? filesUnder(join(dir, e.name)) : [join(dir, e.name)]
+    )
+
+  it("is one reference with tag and digest", () => {
+    expect(readFileSync(PIN_FILE, "utf8")).toMatch(
+      /^centrifugo\/centrifugo:v[\d.]+@sha256:[0-9a-f]{64}\n$/
     )
   })
 
-  it("checks health on its own port", () => {
-    const urls = [...block.matchAll(/"(http:\/\/[^"]+)"/g)].map((m) => m[1])
-    expect(urls).toEqual([`http://127.0.0.1:${signalsPort}/health`])
+  it("is the only place in docker/ that names a Centrifugo image", () => {
+    const named = filesUnder(DOCKER_ROOT)
+      .filter((file) => file !== PIN_FILE)
+      .filter((file) =>
+        /centrifugo\/centrifugo|image:\s*centrifugo/i.test(
+          readFileSync(file, "utf8")
+        )
+      )
+    expect(named).toEqual([])
   })
 
-  it("has no env_file", () => {
-    expect(block).not.toMatch(/^\s*env_file\s*:/m)
+  it("is what the stand of the DB tests starts", () => {
+    expect(centrifugoImage()).toBe(readFileSync(PIN_FILE, "utf8").trim())
   })
 })
 
@@ -300,15 +257,21 @@ describe("the postgres image version", () => {
   })
 })
 
-// Адреси Centrifugo стеків (Р17): host `pnpm demo` на 127.0.0.1:3000 дає і
-// JWKS, і origin; ім'я проєкту (аудиторія токена) — файл проєкту стека
 const STACK_HOST_ORIGIN = "http://127.0.0.1:3000"
 const STACK_PROJECT_NAME = (
   JSON.parse(read("project/project.meta.json")) as { name: string }
 ).name
 
-describe.each(STACKS)("centrifugo.json of the $title", ({ dir }) => {
-  const config: unknown = JSON.parse(read("centrifugo.json", dir))
+// Конфіг Centrifugo стендів (demo, e2e) — вихід генератора з адресами host-а
+// (Р17): host `pnpm demo` на 127.0.0.1:3000 дає і JWKS, і origin; ім'я проєкту
+// (аудиторія токена) — файл проєкту стека. Файла конфігу в стеку немає
+describe("the Centrifugo config of the stands", () => {
+  const config: unknown = centrifugoConfig({
+    projectName: STACK_PROJECT_NAME,
+    origin: STACK_HOST_ORIGIN,
+    issuer: STACK_HOST_ORIGIN,
+    jwksUrl: `${STACK_HOST_ORIGIN}${SIGNALS_JWKS_PATH}`,
+  })
 
   function keys(value: unknown): string[] {
     if (Array.isArray(value)) return value.flatMap(keys)
@@ -328,23 +291,13 @@ describe.each(STACKS)("centrifugo.json of the $title", ({ dir }) => {
     expect(config).toMatchObject({ http_api: { disabled: true } })
   })
 
-  // Файл стека — вихід генератора з адресами стека (Р17): правка руками
-  // розійшлася б із білим списком і з тим, що генерує інструмент
-  it("is the output of the config generator with the addresses of the stack", () => {
-    expect(config).toEqual(
-      centrifugoConfig({
-        projectName: STACK_PROJECT_NAME,
-        origin: STACK_HOST_ORIGIN,
-        issuer: STACK_HOST_ORIGIN,
-        jwksUrl: `${STACK_HOST_ORIGIN}${SIGNALS_JWKS_PATH}`,
-      })
-    )
+  it("passes its own refusals", () => {
     expect(centrifugoConfigRefusals(config)).toEqual([])
   })
 
   // Межа відкликання (спека профілю §6.2) не залежить від типового значення
   // образу: такт присутності й затримки закриття підписки та з'єднання — у
-  // файлі стека
+  // конфігу
   it("pins the revocation bound: the presence tick and the expiry close delays", () => {
     expect(config).toMatchObject({
       client: {
@@ -356,7 +309,7 @@ describe.each(STACKS)("centrifugo.json of the $title", ({ dir }) => {
   })
 
   it("holds no login password", () => {
-    const text = read("centrifugo.json", dir)
+    const text = JSON.stringify(config)
     for (const password of Object.values(loginSecrets))
       expect(text).not.toContain(password)
   })
@@ -468,22 +421,16 @@ describe("Simetra identity of the postgres stack", () => {
     expect(script).toContain("SIMETRA_DATABASE_URL")
   })
 
-  // Р16: пароль споживача — лише в DSN середовища процесу compose, звідки
-  // compose-файл інтерполює його в середовище Centrifugo
-  it("gives each Centrifugo the DSN of simetra_signals at its stack database", () => {
-    const password = loginSecrets.SIMETRA_SIGNALS_DEV_PASSWORD!
-    expect(signalsDsn("postgres")).toBe(
-      `postgresql://${PLATFORM_LOGIN_ROLES.signals}:${password}@127.0.0.1:54422/simetra`
-    )
-    expect(signalsDsn("supabase-signals")).toBe(
-      `postgresql://${PLATFORM_LOGIN_ROLES.signals}:${password}@127.0.0.1:54322/postgres`
-    )
+  // Стек не несе DSN споживача: Centrifugo в ньому немає, і compose-файл не
+  // читає `SIMETRA_SIGNALS_DSN`
+  it("the compose file takes no signals DSN from the environment", () => {
+    expect(read("compose.yaml")).not.toContain("SIMETRA_SIGNALS_DSN")
   })
 
   it("no stack file but login-secrets.env holds a login password", () => {
     const passwords = Object.values(loginSecrets)
     for (const { dir } of STACKS)
-      for (const file of ["compose.yaml", "centrifugo.json"])
+      for (const file of ["compose.yaml"])
         for (const password of passwords)
           expect(read(file, dir), file).not.toContain(password)
   })
@@ -846,7 +793,7 @@ describe("stack-files hash wiring of the postgres stack", () => {
     )
   })
 
-  it.each(["garage", "centrifugo"])(
+  it.each(["garage"])(
     "compose labels the %s container with the hash",
     (name) => {
       expect(serviceBlock(name)).toMatch(
@@ -865,7 +812,7 @@ describe("stack-files hash wiring of the postgres stack", () => {
     const services = [...section!.matchAll(/^ {2}([\w-]+):$/gm)].map(
       (m) => m[1]
     )
-    expect(services.sort()).toEqual(["centrifugo", "garage", "postgres"])
+    expect(services.sort()).toEqual(["garage", "postgres"])
   })
 })
 
@@ -1233,7 +1180,7 @@ type Call = {
 
 type Reply = { code?: number; stdout?: string }
 
-const SERVICES = ["postgres", "garage", "centrifugo"] as const
+const SERVICES = ["postgres", "garage"] as const
 const garageKeyId = /^GARAGE_DEV_KEY_ID=(\S+)$/m.exec(
   read("dev-secrets.env")
 )![1]!
@@ -1272,7 +1219,7 @@ function fakeStack(
     if (args.includes("config"))
       return { stdout: SERVICES.map((s) => `${s}\n`).join("") }
     if (args.includes("ps"))
-      return { stdout: o.running === true ? "id-1\nid-2\nid-3\n" : "" }
+      return { stdout: o.running === true ? "id-1\nid-2\n" : "" }
     if (call.command === "docker" && args[0] === "inspect")
       return {
         stdout: JSON.stringify(
@@ -1375,19 +1322,15 @@ describe("startPostgres", () => {
   it("starts a fresh stack with --build and the stack-files hash as the build argument", async () => {
     const stack = fakeStack()
     await start(stack)
-    // Другий `up` — лише Centrifugo, після ролей і паролів
-    const [up, signals, ...more] = stack.ups()
+    // Один `up` на весь стек: Centrifugo у ньому немає
+    const [up, ...more] = stack.ups()
     expect(more).toEqual([])
     expect(up!.args.slice(up!.args.indexOf("up"))).toEqual([
       "up",
       "-d",
       "--wait",
       "--build",
-      "postgres",
-      "garage",
     ])
-    expect(signals!.args.at(-1)).toBe("centrifugo")
-    expect(signals!.args).not.toContain("--build")
     expect(
       (up!.options.env as Record<string, string>).SIMETRA_STACK_FILES_HASH
     ).toBe(stackFilesHash())
@@ -1401,8 +1344,6 @@ describe("startPostgres", () => {
       "up",
       "-d",
       "--wait",
-      "postgres",
-      "garage",
     ])
   })
 
@@ -1415,8 +1356,6 @@ describe("startPostgres", () => {
       "-d",
       "--wait",
       "--no-recreate",
-      "postgres",
-      "garage",
     ])
     const config = stack.calls.find((c) => c.args.includes("config"))!
     expect(config.args.slice(config.args.indexOf("config"))).toEqual([
@@ -1487,8 +1426,8 @@ describe("startPostgres", () => {
       STACK_REFUSAL.unlabelled,
     ],
     [
-      "an empty stack-files label of centrifugo",
-      { centrifugo: { "simetra.stack-files-hash": "" } },
+      "an empty stack-files label of garage",
+      { garage: { "simetra.stack-files-hash": "" } },
       STACK_REFUSAL.unlabelled,
     ],
     [
@@ -1579,43 +1518,35 @@ describe("startPostgres", () => {
     }
   })
 
-  // Порядок старту (задача 12 плану B2, Р16): Centrifugo — останнім, коли
-  // роль `simetra_signals` уже має пароль його DSN
-  it("runs roles, then passwords, then Better Auth, then roles again, terminates its backends, and starts Centrifugo last", async () => {
+  it("runs roles, then passwords, then Better Auth, then roles again, and terminates its backends last", async () => {
     const stack = fakeStack()
     await start(stack)
     const steps = stack.calls
       .filter(
         (c) =>
           c.args.includes("up") ||
-          c.args.includes("create") ||
           c.command === process.execPath ||
           c.args.includes("psql")
       )
       .map((c) =>
         c.args.includes("up")
-          ? c.args.at(-1) === "centrifugo"
-            ? "up centrifugo"
-            : "up"
-          : c.args.includes("create")
-            ? "create centrifugo"
-            : c.args.includes("roles")
-              ? "roles"
-              : c.command === process.execPath
-                ? "better-auth"
-                : c.input.includes("server_version")
-                  ? "server-version"
-                  : c.input.includes("pg_terminate_backend")
-                    ? "terminate"
-                    : c.input.includes("ALTER ROLE")
-                      ? "passwords"
-                      : c.input.includes("pg_authid")
-                        ? "verifiers"
-                        : "psql"
+          ? "up"
+          : c.args.includes("roles")
+            ? "roles"
+            : c.command === process.execPath
+              ? "better-auth"
+              : c.input.includes("server_version")
+                ? "server-version"
+                : c.input.includes("pg_terminate_backend")
+                  ? "terminate"
+                  : c.input.includes("ALTER ROLE")
+                    ? "passwords"
+                    : c.input.includes("pg_authid")
+                      ? "verifiers"
+                      : "psql"
       )
     expect(steps).toEqual([
       "up",
-      "create centrifugo",
       "server-version",
       "psql",
       "roles",
@@ -1624,14 +1555,8 @@ describe("startPostgres", () => {
       "better-auth",
       "roles",
       "terminate",
-      "up centrifugo",
     ])
-    const create = stack.calls.find((c) => c.args.includes("create"))!
-    expect(create.args.slice(create.args.indexOf("create"))).toEqual([
-      "create",
-      "--no-recreate",
-      "centrifugo",
-    ])
+    expect(stack.calls.some((c) => c.args.includes("create"))).toBe(false)
     const terminate = stack.psqls().at(-1)!
     expect(terminate.input).toContain("application_name = 'simetra_db_start'")
     expect(terminate.input).toContain("pg_backend_pid()")
@@ -1642,8 +1567,6 @@ describe("startPostgres", () => {
     await expect(start(stack)).rejects.toThrow()
     expect(stack.psqls().at(-1)!.input).toContain("pg_terminate_backend")
     expect(stack.calls.some((c) => c.input.includes("ALTER ROLE"))).toBe(false)
-    // Centrifugo без пароля свого DSN не стартує
-    expect(stack.ups().some((c) => c.args.includes("centrifugo"))).toBe(false)
   })
 
   it("sets only the passwords that differ from login-secrets.env", async () => {
@@ -1687,44 +1610,24 @@ describe("startPostgres", () => {
         verifierOf(stale.includes(role!) ? "stale" : loginSecrets[secret!]!),
       ])
     )
-  const signalsUp = (stack: ReturnType<typeof fakeStack>) => {
-    const up = stack.ups().at(-1)!
-    expect(up.args.at(-1)).toBe("centrifugo")
-    return up
-  }
 
-  it("starts Centrifugo with the DSN of simetra_signals in the compose environment only", async () => {
-    const stack = fakeStack()
-    await start(stack)
-    const up = signalsUp(stack)
-    expect((up.options.env as Record<string, string>).SIMETRA_SIGNALS_DSN).toBe(
-      signalsDsn("postgres")
-    )
-    expect(signalsDsn("postgres")).toContain(
-      loginSecrets.SIMETRA_SIGNALS_DEV_PASSWORD
-    )
-  })
-
-  it("keeps a running Centrifugo when the signals password is unchanged", async () => {
-    const stack = fakeStack({
-      running: true,
-      verifiers: matching(["simetra_runtime"]),
-    })
-    await start(stack)
-    expect(signalsUp(stack).args).toContain("--no-recreate")
-    expect(signalsUp(stack).args).not.toContain("--force-recreate")
-  })
-
-  it("recreates only Centrifugo when the signals password changed", async () => {
+  // Контейнерів, що несли б пароль `simetra_signals`, стек не має: його зміна
+  // лише ставить пароль ролі, а контейнери лишаються
+  it("a changed signals password sets the password and touches no container", async () => {
     const stack = fakeStack({
       running: true,
       verifiers: matching(["simetra_signals"]),
     })
     await start(stack)
-    const [first] = stack.ups()
-    expect(first!.args).toContain("--no-recreate")
-    expect(first!.args).not.toContain("centrifugo")
-    expect(signalsUp(stack).args).toContain("--force-recreate")
+    expect(stack.ups()).toHaveLength(1)
+    expect(stack.ups()[0]!.args).toContain("--no-recreate")
+    expect(
+      stack.calls.some((c) => c.input.includes("ALTER ROLE simetra_signals "))
+    ).toBe(true)
+    for (const call of stack.calls)
+      expect(call.options.env as Record<string, string>).not.toHaveProperty(
+        "SIMETRA_SIGNALS_DSN"
+      )
   })
 
   const isTerminate = (c: Call): boolean =>

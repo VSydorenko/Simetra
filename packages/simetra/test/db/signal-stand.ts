@@ -35,8 +35,8 @@ import {
   outboxUnits,
 } from "../../src/compiler/platform/outbox"
 import { loadSqlParser } from "../../src/compiler/sql/parse"
-// Ім'я споживача й змінні його DSN — з генератора конфігу: стенд і стеки ставлять
-// DSN тими самими змінними (Р16), тож друге місце імен розійшлося б
+// Ім'я споживача й змінні його DSN — з генератора конфігу: стенд demo й e2e ставить
+// DSN тими самими змінними, тож друге місце імен розійшлося б
 import {
   SIGNAL_CONSUMER_ENV,
   SIGNAL_CONSUMER_NAME,
@@ -45,22 +45,16 @@ import { runApplicationName, runTag } from "./connection"
 import { nodeExec, runContainerLabels } from "./external"
 import { testProvider } from "./profile"
 
-const COMPOSE_FILE = fileURLToPath(
-  new URL("../../../../docker/postgres-stack/compose.yaml", import.meta.url)
+const IMAGE_FILE = fileURLToPath(
+  new URL("../../../../docker/centrifugo-image.txt", import.meta.url)
 )
 
 /**
- * Образ Centrifugo зі стека (тег і дайджест): стенд тестує ту саму версію, що
- * йде на стеку, тож другого місця піну немає.
+ * Образ Centrifugo (тег і дайджест) — єдине місце піну, `docker/centrifugo-image.txt`;
+ * його читає й стенд demo та e2e, тож версії розійтися не можуть.
  */
-export function centrifugoImage(compose: string = COMPOSE_FILE): string {
-  const text = readFileSync(compose, "utf8")
-  const at = text.indexOf("\n  centrifugo:")
-  const image =
-    at < 0 ? undefined : /\n\s+image:\s*(\S+)/.exec(text.slice(at))?.[1]
-  if (image === undefined)
-    throw new Error(`${compose}: no image of the centrifugo service`)
-  return image
+export function centrifugoImage(file: string = IMAGE_FILE): string {
+  return readFileSync(file, "utf8").trim()
 }
 
 export interface SignalStandOptions {

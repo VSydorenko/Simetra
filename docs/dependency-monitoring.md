@@ -140,7 +140,7 @@ WebSocket Node з токенами порту `simetra/server/signals`. Producti
 його не імпортують. Скрипт збирання `protobufjs` вимкнено (`allowBuilds` у
 `pnpm-workspace.yaml`): гейт іде транспортом JSON. Коди відмов, які гейт
 закріплює (3500, 3501, 109, 2501), і відновлення (`recovered`) — поведінка
-пари SDK і образу Centrifugo стека: на оновленні будь-якого з них — звірити
+пари SDK і піну образу Centrifugo (`docker/centrifugo-image.txt`): на оновленні будь-якого з них — звірити
 кейси гейта.
 
 ## Драйвер `pg`

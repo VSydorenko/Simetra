@@ -18,8 +18,6 @@
     "db:pg:stop": "node scripts/db-stack.mjs stop postgres",
     "demo": "pnpm --filter create-simetra-app demo",
     "demo:drop": "pnpm --filter create-simetra-app demo:drop",
-    "db:signals:start": "node scripts/db-stack.mjs start supabase-signals",
-    "db:signals:stop": "node scripts/db-stack.mjs stop supabase-signals",
     "test:db": "supabase test db && pnpm --filter simetra test:db:supabase && pnpm --filter @simetrajs/designer test:db:supabase",
     "test:db:pg": "pnpm --filter simetra test:db && pnpm --filter @simetrajs/designer test:db",
     "format": "turbo format",
