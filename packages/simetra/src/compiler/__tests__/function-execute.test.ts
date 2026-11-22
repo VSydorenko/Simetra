@@ -1020,6 +1020,39 @@ describe("EXECUTE of a policy function (І3)", () => {
     )
   })
 
+  // Роль політики-викликача без `SELECT` на T (`service_role` поряд з
+  // `authenticated`) — відмова `policyRoles`, і гранту їй немає: RPC віддав
+  // би ключі таблиці, якої вона не читає
+  it("a reading role without SELECT on T is policyRoles and gets no grant", async () => {
+    const result = await compile(
+      policyFiles(
+        POLICY_FUNCTION() +
+          READ_POLICY("authenticated, service_role") +
+          DOCS_GRANT(),
+        POLICY_DEBT()
+      ),
+      { repair: true }
+    )
+    expect(
+      result.diagnostics.map((d) => [
+        d.code,
+        d.params?.schema,
+        d.params?.name,
+        d.params?.reason,
+      ])
+    ).toEqual([
+      // Поза формою й без декларації функція з типовим `EXECUTE` `PUBLIC` —
+      // ще й звичайна неперевірена definer-функція
+      ["sql.definer-caller-unchecked", "public", "f", undefined],
+      ["sql.policy-helper-correlated", "public", "f", "policyRoles"],
+    ])
+    expect(
+      result
+        .model!.sqlUnits.filter((u) => /^GRANT EXECUTE\b/.test(u.sql))
+        .map((u) => u.sql)
+    ).toEqual([])
+  })
+
   it("a verbatim EXECUTE grant on a policy function is sql.generated-grant", async () => {
     const result = await compile(
       policyFiles(
