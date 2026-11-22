@@ -23,9 +23,11 @@ import { logsDatabaseError, mapDatabaseError, type ErrorPhase } from "./errors"
 import { inCommand, outsideCommand, rejectNested } from "./hook-context"
 import { prepareInput, runPhase, type PreparedOperation } from "./phase"
 import {
+  destroysConnection,
   normalizeError,
   type CommandDatabase,
   type DatabaseClient,
+  type DatabaseError,
 } from "./port"
 import { ident, literal } from "./read"
 
@@ -214,22 +216,26 @@ export const CURRENT_USER = statement(
 /**
  * Помилка порту як відмова спроби. Кожен `command.internal` мапінгу йде в
  * журнал з повною помилкою: назовні — лише код. `commitSent` — помилка
- * прийшла на `COMMIT`, уже надісланий базі.
+ * прийшла на `COMMIT`, уже надісланий базі; `deletes` — об'єкти фаз
+ * `delete` спроби, для відкладеного `23503` на `COMMIT` (Р10).
  */
 export function terminalOf(
   raw: unknown,
   state: RuntimeState,
   phase: ErrorPhase | undefined,
-  commitSent: boolean
+  commitSent: boolean,
+  error: DatabaseError = normalizeError(raw),
+  deletes: readonly RuntimeObject[] = []
 ): Terminal {
-  const error = normalizeError(raw)
   const { code } = error
   const sessionTimeout = SESSION_TIMEOUT_CODES.has(code ?? "")
   // Сесія закрита після надсилання `COMMIT`: фіксацію могло бути виконано до
   // обриву, тож результат невідомий — і `25P03`, збережений драйвером раніше,
-  // тут не доводить відкату. Відмова бази з іншим SQLSTATE на `COMMIT` —
-  // відомий відкат і мапиться як завжди.
-  const closed = error.connectionLost || sessionTimeout
+  // тут не доводить відкату. Помилка без SQLSTATE там — теж невідомий
+  // результат, якого б виду вона не була: `command.internal` закомічений
+  // запис клієнт вважав би невдалим і повторив би (дубль `create`). Відмова
+  // бази з іншим SQLSTATE на `COMMIT` — відомий відкат і мапиться як завжди.
+  const closed = error.connectionLost || sessionTimeout || code === undefined
   let terminal: Omit<Terminal, "code">
   if (commitSent && closed) {
     const mapped: CommandError = { code: "command.unavailable" }
@@ -256,14 +262,14 @@ export function terminalOf(
       destroy: true,
     }
   } else {
-    const mapped = mapDatabaseError(error, state.catalog, phase)
+    const mapped = mapDatabaseError(error, state.catalog, phase, deletes)
     if (logsDatabaseError(error, mapped)) {
       state.log({ kind: "database", error: raw })
     }
     terminal = {
       failure: new CommandFailure(mapped),
       retry: false,
-      destroy: error.connectionLost,
+      destroy: destroysConnection(error),
     }
   }
   return code === undefined ? terminal : { ...terminal, code }
@@ -279,9 +285,9 @@ export function terminalOf(
 export function readRefusal(
   raw: unknown,
   state: RuntimeState,
-  phase: ErrorPhase | undefined
+  phase: ErrorPhase | undefined,
+  error: DatabaseError = normalizeError(raw)
 ): { error: CommandError; destroy: boolean; lost: boolean } {
-  const error = normalizeError(raw)
   if (!error.connectionLost && SESSION_TIMEOUT_CODES.has(error.code ?? "")) {
     return { error: TIMEOUT, destroy: true, lost: false }
   }
@@ -291,7 +297,7 @@ export function readRefusal(
   }
   return {
     error: mapped,
-    destroy: error.connectionLost,
+    destroy: destroysConnection(error),
     lost: error.connectionLost,
   }
 }
@@ -372,6 +378,11 @@ export class Transaction {
   private statementTimeout: number | undefined
   /** `COMMIT` надіслано: обрив далі — невідомий результат, не відкат. */
   private commitSent = false
+  /**
+   * Об'єкти фаз `delete` спроби: відкладений `23503` приходить на `COMMIT`
+   * без фази, а Р10 мусить діяти й там (спека П4 §6.10).
+   */
+  private readonly deletes = new Set<RuntimeObject>()
 
   /** `deadline` — мітка `performance.now()`, до якої має завершитися `run`. */
   constructor(
@@ -385,6 +396,9 @@ export class Transaction {
     unit: readonly Statement[],
     phase?: ErrorPhase
   ): Promise<QueryResult> {
+    if (phase?.kind === "write" && phase.operation === "delete") {
+      this.deletes.add(phase.object)
+    }
     const result = this.tail.then(async () => {
       let last: QueryResult = { rows: [], command: "" }
       for (const { text, params } of unit) {
@@ -454,7 +468,17 @@ export class Transaction {
     try {
       return await this.client.query(text, params)
     } catch (raw) {
-      throw this.close(terminalOf(raw, this.state, phase, this.commitSent))
+      const deletes = text === COMMIT.text ? [...this.deletes] : []
+      throw this.close(
+        terminalOf(
+          raw,
+          this.state,
+          phase,
+          this.commitSent,
+          normalizeError(raw),
+          deletes
+        )
+      )
     }
   }
 
@@ -562,6 +586,22 @@ export async function endFailed(
   client.release(true)
 }
 
+/**
+ * Звільняє з'єднання після успішного `COMMIT` (спека П4 §6.5): доля
+ * транзакції вже вирішена базою, тож виняток звільнення — лише журнал, а не
+ * відмова, яку клієнт повторив би.
+ */
+export function releaseCommitted(
+  client: DatabaseClient,
+  log: (entry: LogEntry) => void
+): void {
+  try {
+    client.release()
+  } catch (error) {
+    log({ kind: "database", error })
+  }
+}
+
 type Outcome =
   | { result: CommandResult; afterCommit: (() => unknown)[] }
   | { terminal: Terminal }
@@ -580,7 +620,15 @@ async function attempt(
   try {
     client = await state.database.connect()
   } catch (raw) {
-    return { terminal: terminalOf(raw, state, undefined, false) }
+    return {
+      terminal: terminalOf(
+        raw,
+        state,
+        undefined,
+        false,
+        normalizeError(raw, true)
+      ),
+    }
   }
   // Явний тип: виклики `never` звужують типи лише так.
   const tx: Transaction = new Transaction(client, state, deadline)
@@ -640,7 +688,7 @@ async function attempt(
     await endFailed(client, terminal.destroy)
     return { terminal }
   }
-  client.release()
+  releaseCommitted(client, state.log)
   if (tag !== "COMMIT") {
     // Перервана транзакція відповідає на `COMMIT` тегом `ROLLBACK`: це не успіх.
     state.log({ kind: "database", error: new Error(`COMMIT answered ${tag}`) })

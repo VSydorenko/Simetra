@@ -401,12 +401,14 @@ describe("createCommandRuntime", () => {
     expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
   })
 
-  it("destroys the connection on an error without SQLSTATE and logs it", async () => {
+  // Р11: без SQLSTATE і без утрати з'єднання — вада драйвера чи T3, не
+  // недоступність; з'єднанню однаково не довіряють.
+  it("destroys the connection on an error without SQLSTATE, maps it to command.internal and logs it", async () => {
     const raw = new TypeError("driver bug")
     const { db, runtime, log } = create((text) =>
       text === HASH.text ? { error: raw } : undefined
     )
-    expect(await failureOf(runtime)).toEqual({ code: "command.unavailable" })
+    expect(await failureOf(runtime)).toEqual({ code: "command.internal" })
     expect(db.calls).toEqual([
       { connect: true },
       BEGIN,

@@ -466,8 +466,8 @@ describe("command transaction", () => {
     expect(db.calls.filter((c) => "release" in c)).toHaveLength(1)
   })
 
-  // Помилка без SQLSTATE — обрив чи власна вада T3/драйвера: назовні
-  // `command.unavailable`, але оригінал іде в журнал, інакше вада зникла б.
+  // Відмова `connect()` — з'єднання немає (Р11): `command.unavailable`, а
+  // оригінал іде в журнал, інакше вада під нею зникла б.
   it("maps connect failure and logs the original error", async () => {
     const raw = new Error("ECONNREFUSED")
     const { db, runtime, log } = await setup(undefined, {}, raw)
@@ -478,13 +478,16 @@ describe("command transaction", () => {
     expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
   })
 
-  it("destroys the connection on a statement error without SQLSTATE and logs it", async () => {
+  // Р11: до `COMMIT` помилка без SQLSTATE, яку порт не назвав утратою
+  // з'єднання, — вада драйвера чи T3: `command.internal` з журналом; з'єднання
+  // однаково знищується — довіри до нього немає.
+  it("maps a statement error without SQLSTATE to command.internal, destroys the connection and logs it", async () => {
     const raw = new TypeError("driver bug")
     const { db, runtime, log } = await setup((text) =>
       text.endsWith("AS r") ? { error: raw } : undefined
     )
     expect(await failureOf(runtime.run(session, create))).toEqual({
-      code: "command.unavailable",
+      code: "command.internal",
     })
     expect(db.calls).toEqual([
       ...OPEN,
@@ -493,6 +496,73 @@ describe("command transaction", () => {
       { release: true },
     ])
     expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
+  })
+
+  it("maps a Node network error before COMMIT to command.unavailable and destroys the connection", async () => {
+    const raw = Object.assign(new Error("read ECONNRESET"), {
+      code: "ECONNRESET",
+    })
+    const { db, runtime, log } = await setup((text) =>
+      text.endsWith("AS r") ? { error: raw } : undefined
+    )
+    expect(await failureOf(runtime.run(session, create))).toEqual({
+      code: "command.unavailable",
+    })
+    expect(db.calls.at(-1)).toEqual({ release: true })
+    expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
+  })
+
+  // Доля транзакції вже вирішена: виняток звільнення — лише журнал.
+  it("keeps the result when release after a successful COMMIT throws and logs it", async () => {
+    const { db, runtime, log } = await setup()
+    const thrown = new Error(
+      "Release called on client which has already been released"
+    )
+    const connect = db.database.connect.bind(db.database)
+    db.database.connect = async () => {
+      const client = await connect()
+      return {
+        query: client.query.bind(client),
+        release(destroy) {
+          client.release(destroy)
+          if (destroy !== true) throw thrown
+        },
+      }
+    }
+    const result = await runtime.run(session, create)
+    expect(result.rows).toEqual([
+      { ref: ID, version: 1, code: "A", company: COMPANY },
+    ])
+    expect(db.calls.at(-1)).toEqual({ release: false })
+    expect(log.mock.calls).toEqual([[{ kind: "database", error: thrown }]])
+  })
+
+  // Р10 на `COMMIT`: відкладений FK після видалення не називає чужого
+  // об'єкта й реквізиту.
+  it("maps a deferred 23503 on COMMIT after a delete to command.invalid referenced", async () => {
+    let commits = 0
+    const { runtime } = await setup((text) =>
+      text === COMMIT.text && commits++ > 0
+        ? {
+            error: {
+              code: "23503",
+              message: "fk",
+              table: "client",
+              constraint: "client_company_fkey",
+            },
+          }
+        : undefined
+    )
+    expect(
+      await failureOf(
+        runtime.run(session, {
+          action: "delete",
+          object: CLIENT,
+          id: ID,
+          expectedVersion: 5,
+        })
+      )
+    ).toEqual({ code: "command.invalid", reason: "referenced", object: CLIENT })
   })
 
   it("destroys a lost connection", async () => {
@@ -1228,6 +1298,8 @@ describe("COMMIT boundary", () => {
     ["25P03", { code: "25P03", message: "x" }],
     ["25P04", { code: "25P04", message: "x" }],
     ["an error without SQLSTATE", new Error("ECONNRESET")],
+    // Р11: на `COMMIT` вид помилки без SQLSTATE не важить — результат невідомий.
+    ["a driver TypeError", new TypeError("driver bug")],
   ])("maps %s answered at COMMIT to command.unavailable", async (_, error) => {
     const { db, runtime } = await setup(atCommit(error))
     expect(await failureOf(runtime.run(session, create))).toEqual({

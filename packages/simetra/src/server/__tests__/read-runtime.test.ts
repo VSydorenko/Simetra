@@ -497,14 +497,15 @@ describe("CommandRuntime.read", () => {
     expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
   })
 
-  it("destroys the connection on a read error without SQLSTATE and logs it", async () => {
+  // Р11: без SQLSTATE і без утрати з'єднання — вада, не недоступність.
+  it("destroys the connection on a read error without SQLSTATE, maps it to command.internal and logs it", async () => {
     const raw = new TypeError("driver bug")
     const { db, runtime, log } = await setup((text) =>
       isRead(text) ? { error: raw } : undefined
     )
     expect(
       await failureOf(runtime.read(session, { object: RIGHTS, id: OTHER }))
-    ).toEqual({ code: "command.unavailable" })
+    ).toEqual({ code: "command.internal" })
     expect(db.calls).toEqual(failed(byId, [{ release: true }]))
     expect(log.mock.calls).toEqual([[{ kind: "database", error: raw }]])
   })

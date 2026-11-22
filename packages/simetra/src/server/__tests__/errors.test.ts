@@ -16,7 +16,12 @@ import {
   policyDomain,
   withSql,
 } from "../../compiler/__tests__/fixtures/rights"
-import { logsDatabaseError, mapDatabaseError, type ErrorPhase } from "../errors"
+import {
+  logsDatabaseError,
+  mapDatabaseError,
+  refOf,
+  type ErrorPhase,
+} from "../errors"
 import type { DatabaseError } from "../port"
 import { orgMember, organization, rootCatalog, sample } from "./fixtures"
 
@@ -320,6 +325,70 @@ describe("mapDatabaseError", () => {
     }
   )
 
+  // Р10: `TABLE` і обмеження Postgres дає за таблицею, що посилається, — у
+  // видаленні це чужий об'єкт чи FK тієї самої таблиці (батько ієрархії).
+  const deleting = (target: RuntimeObject): ErrorPhase => ({
+    kind: "write",
+    object: target,
+    operation: "delete",
+  })
+  it.each([
+    ["the same table (self reference)", object, "sample", "sample_link_fkey"],
+    ["another object", mirror, "sample_lines", "sample_lines_qty_fkey"],
+    ["an unknown table", object, "elsewhere", "elsewhere_fkey"],
+  ])(
+    "23503 in a delete phase from %s is command.invalid referenced of the phase object",
+    (_, target, table, constraint) => {
+      expect(
+        mapDatabaseError(
+          db({ code: "23503", table, constraint }),
+          catalog,
+          deleting(target)
+        )
+      ).toEqual({
+        code: "command.invalid",
+        reason: "referenced",
+        object: refOf(target),
+      })
+    }
+  )
+
+  // Відкладений FK — на `COMMIT`, без фази: Р10 за видаленнями транзакції.
+  it.each([
+    ["one deleted object", [mirror], { object: refOf(mirror) }],
+    [
+      "the same object deleted twice",
+      [mirror, mirror],
+      { object: refOf(mirror) },
+    ],
+    ["two deleted objects", [object, mirror], {}],
+  ])("23503 on COMMIT after %s is command.invalid referenced", (_, d, f) => {
+    expect(
+      mapDatabaseError(
+        db({
+          code: "23503",
+          table: "sample_lines",
+          constraint: "sample_lines_qty_fkey",
+        }),
+        catalog,
+        undefined,
+        d
+      )
+    ).toEqual({ code: "command.invalid", reason: "referenced", ...f })
+  })
+
+  // Видалення транзакції діють лише на `COMMIT`: фаза зміни мапить свій FK.
+  it("23503 in an update phase keeps the FK path whatever the deletes", () => {
+    expect(
+      mapDatabaseError(
+        db({ code: "23503", table: "sample", constraint: "sample_link_fkey" }),
+        catalog,
+        phase,
+        [mirror]
+      )
+    ).toEqual({ code: "command.invalid", path: "link", object: ref })
+  })
+
   it.each([
     ["sample", "sample_code_key"],
     ["sample", "missing_fkey"],
@@ -559,12 +628,33 @@ describe("mapDatabaseError on a compiled CHECK", () => {
     })
   })
 
-  // §6.10 дає `command.constraint` лише з реквізитами з каталогу: правило
-  // рядка над кількома колонками реквізиту не називає.
-  it("23514 by a row rule over two columns is command.internal", () => {
-    expect(onGauge({ code: "23514", constraint: "gauge_span" })).toEqual(
-      internal
-    )
+  // Р12: правило рядка називає реквізити, які читає, у порядку колонок
+  // таблиці (`num_nonnulls(amount, reading)` — `amount` раніше в таблиці).
+  it("23514 by a row rule names the attributes it reads in table order", () => {
+    expect(onGauge({ code: "23514", constraint: "gauge_span" })).toEqual({
+      code: "command.constraint",
+      kind: "check",
+      attributes: ["amount", "reading"],
+      object: { kind: "Catalog", name: "Gauge" },
+    })
+  })
+
+  // CHECK, колонок якого каталог не несе (не розібраний компілятором), —
+  // реквізиту не називає.
+  it("23514 by a CHECK without columns is command.internal", () => {
+    const bare: RuntimeObject = {
+      ...gauge,
+      constraints: gauge.constraints.map((c) =>
+        c.name === "gauge_span" ? { ...c, columns: [] } : c
+      ),
+    }
+    expect(
+      mapDatabaseError(
+        db({ code: "23514", table: GAUGE_TABLE, constraint: "gauge_span" }),
+        { ...compiled, objects: [bare] },
+        { kind: "write", object: bare, operation: "update" }
+      )
+    ).toEqual(internal)
   })
 
   it("23505 by a CHECK name is command.internal", () => {
