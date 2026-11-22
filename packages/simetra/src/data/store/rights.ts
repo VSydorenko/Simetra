@@ -1,7 +1,10 @@
 import {
   ZERO_UUID,
   parseTopic,
+  type CatalogAdoptedFacts,
   type CatalogEntry,
+  type CatalogRightsCarrier,
+  type CatalogRightsSubject,
   type RightsRow,
   type RightsSnapshot,
 } from "simetra/model"
@@ -202,4 +205,201 @@ export function reopenedPairs(
     next.scopeSets.filter((s) => s.scopeKind === kind).map((s) => s.scope)
   )
   return [...scopes].filter(reopened)
+}
+
+/** Тризначна відповідь обчислювача: `unknown` хост показує доступною (§9.2). */
+export type CanResult = boolean | "unknown"
+
+export interface CanOptions {
+  /** Скоуп дії; скоупленому об'єкту без нього — `unknown`. */
+  readonly scope?: string | null
+  /** Значення рядка за логічними іменами; без нього — право «хоч на щось у скоупі». */
+  readonly row?: Readonly<Record<string, unknown>>
+}
+
+// Кліні: `false` гасить `and`, `true` гасить `or`, інакше `unknown` заразний.
+const and = (...v: CanResult[]): CanResult =>
+  v.includes(false) ? false : v.includes("unknown") ? "unknown" : true
+const or = (...v: CanResult[]): CanResult =>
+  v.includes(true) ? true : v.includes("unknown") ? "unknown" : false
+
+/**
+ * Чи має користувач право дії над об'єктом (P4-B spec §9.2): дзеркало
+ * `rightsPredicates` (`compiler/rights/predicates.ts`), результат = межі ∧
+ * (∨ гілок) за Кліні. Не захист: помилка дає зайву чи приховану кнопку, а база
+ * лишається бар'єром. Знімок і факти прийнятих джерел приходять від виклику —
+ * власного стану й другого кешу немає. Об'єкт без контракту — `unknown`.
+ */
+export function can(
+  snapshot: RightsSnapshot,
+  entry: CatalogEntry,
+  action: string,
+  options: CanOptions = {},
+  adoptedFacts?: CatalogAdoptedFacts
+): CanResult {
+  const contract = entry.rights
+  if (contract === undefined) return "unknown"
+  const extents = contract.actions.find((a) => a.action === action)?.extents
+  if (extents === undefined) return false
+
+  const { row } = options
+  const scopeKind = entry.scopeKindId
+  const scoped = scopeKind !== undefined
+  const root = action === "create" && contract.root !== undefined
+  const verbatim = contract.scopeSet === "verbatim"
+  // Факти прийнятих джерел сигналу не шлють: усе, що від них залежить, — `unknown`.
+  const assignmentsAdopted = adoptedFacts?.assignments === true
+  const kindAdopted =
+    scoped && (adoptedFacts?.membershipKinds.includes(scopeKind) ?? false)
+  const scope = options.scope ?? null
+  // Скоуп кореня, що створюється, ще не існує: межа тенанта його не судить.
+  if (scoped && !root && scope === null) return "unknown"
+
+  const rows = snapshot.rights.filter(
+    (r) => r.action === action && r.object === entry.kindLabel
+  )
+  const mine = (subject: CatalogRightsSubject): ReadonlySet<string> =>
+    new Set(
+      "users" in subject
+        ? snapshot.userId === null
+          ? []
+          : [snapshot.userId]
+        : snapshot.members
+            .filter((m) => m.scopeKind === subject.scopeKind)
+            .map((m) => m.member)
+    )
+  const carrierOf = (carrier: CatalogRightsCarrier): unknown =>
+    row === undefined
+      ? undefined
+      : row["key" in carrier ? entry.keyName : carrier.attribute]
+  // Носій рядка проти множини: відсутній — `unknown`, `null` ніколи не збігається.
+  const within = (
+    carrier: CatalogRightsCarrier,
+    set: ReadonlySet<string>
+  ): CanResult => {
+    const value = carrierOf(carrier)
+    if (value === undefined) return "unknown"
+    return typeof value === "string" && set.has(value)
+  }
+
+  type Inner = {
+    extent: "any" | "own" | "dimension"
+    dimensionId?: string
+    carrier: CanResult
+    /** Гілка залежить від факту без сигналу: `unknown` завжди. */
+    always?: true
+  }
+  const inners: Inner[] = []
+  const hasExtent = (form: string) => extents.some((e) => e.form === form)
+  if (hasExtent("any")) inners.push({ extent: "any", carrier: true })
+  if (hasExtent("own")) {
+    const owners = root
+      ? contract.ownership.filter(
+          (o) =>
+            contract.root?.author !== undefined &&
+            JSON.stringify(o.carrier) === JSON.stringify(contract.root.author)
+        )
+      : contract.ownership
+    for (const o of owners) {
+      const stale =
+        "scopeKind" in o.owner &&
+        (adoptedFacts?.membershipKinds.includes(o.owner.scopeKind) ?? false)
+      inners.push({
+        extent: "own",
+        carrier: row === undefined ? true : within(o.carrier, mine(o.owner)),
+        ...(stale ? { always: true as const } : {}),
+      })
+    }
+  }
+  if (!root) {
+    for (const e of extents) {
+      if (e.form !== "dimension") continue
+      for (const a of contract.access.filter(
+        (x) => x.dimensionId === e.dimensionId
+      )) {
+        const values = snapshot.dimensionValues.find(
+          (d) => d.dimension === a.dimensionId
+        )
+        const unsure = values === undefined || values.truncated === true
+        inners.push({
+          extent: "dimension",
+          dimensionId: a.dimensionId,
+          carrier:
+            row === undefined
+              ? true
+              : unsure
+                ? "unknown"
+                : within(a.carrier, new Set(values.values)),
+          ...(a.fresh ? {} : { always: true as const }),
+        })
+      }
+    }
+  }
+
+  const grant = (inner: Inner, level: (r: RightsRow) => boolean): CanResult => {
+    if (assignmentsAdopted) return "unknown"
+    return rows.some(
+      (r) =>
+        level(r) &&
+        r.extent === inner.extent &&
+        (inner.extent !== "dimension" || r.dimensionId === inner.dimensionId)
+    )
+  }
+
+  const branches: CanResult[] = []
+  for (const inner of inners) {
+    if (inner.always || (scoped && !root && (kindAdopted || verbatim))) {
+      branches.push("unknown")
+      continue
+    }
+    // Корінь: `has_right` будь-якого рівня, крім контейнера, без скоупу.
+    const base = root
+      ? grant(inner, (r) => r.level !== "container")
+      : scoped
+        ? grant(inner, (r) => actsInScope(r, scope) && r.level === "scope")
+        : grant(inner, (r) => r.level !== "container")
+    branches.push(and(base, inner.carrier))
+    if (!root && row !== undefined && contract.binding !== undefined) {
+      const container = carrierOf(contract.binding.carrier)
+      branches.push(
+        and(
+          container === undefined
+            ? "unknown"
+            : grant(
+                inner,
+                (r) =>
+                  r.level === "container" &&
+                  typeof container === "string" &&
+                  r.container === container
+              ),
+          inner.extent === "any" ? true : inner.carrier
+        )
+      )
+    }
+  }
+
+  const tenant: CanResult =
+    scoped && !root
+      ? kindAdopted || verbatim
+        ? "unknown"
+        : snapshot.scopeSets.some(
+            (s) => s.scopeKind === scopeKind && s.scope === scope
+          )
+      : true
+  // `rights_visible_users` — учасники всіх моїх скоупів, яких клієнт не має:
+  // видимий лише власний рядок.
+  const users: CanResult =
+    action === "read" && contract.readBoundary.includes("users")
+      ? row !== undefined &&
+        snapshot.userId !== null &&
+        row[entry.keyName] === snapshot.userId
+        ? true
+        : "unknown"
+      : true
+
+  // `publicRead` знімає межу тенанта й саме відкриває читання, але не через
+  // факти прийнятого членства виду (B6-1 Р9): там `unknown`.
+  if (action === "read" && publicReadCovers(snapshot, entry))
+    return and(users, kindAdopted ? "unknown" : true)
+  return and(tenant, users, or(...branches))
 }
