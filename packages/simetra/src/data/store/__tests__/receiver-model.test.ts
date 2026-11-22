@@ -704,6 +704,18 @@ describe("receiver model: the disconnect mark and the composition against the se
       ],
     ],
     [
+      "D1: a read started in a gap of a held channel lands after its release (entry kept)",
+      [
+        { t: "hold" },
+        { t: "unsubAll" },
+        { t: "fail", ch: 0 },
+        { t: "sub", v: 0 },
+        { t: "edit", k: 0 },
+        { t: "scopes", ch: 0 },
+        { t: "release", ok: true, at: true },
+      ],
+    ],
+    [
       "P1: a new gap before the jitter of the wave",
       [
         { t: "fail", ch: 0 },

@@ -99,10 +99,14 @@ export interface Epochs {
   releasedAt(channel: string): number
   /**
    * A read that started at `readEpoch` saw every change of the channel it
-   * was not told of: a held channel never had a gap, or it rejoined after its
-   * last gap and the read started at or after that join
-   * (`gapAt < joinAt <= readEpoch`). A channel not held waits for no signal:
-   * a read proves it at its own moment.
+   * was not told of — for a row it writes and for a view's composition read
+   * then. Held: the channel never had a gap, or it rejoined after its last
+   * gap and the read started at or after that join
+   * (`gapAt < joinAt <= readEpoch`). Released with an entry: point-in-time —
+   * the read started at or after the release, or the channel was proven for
+   * it at the release (the same test with the values of that moment, or no
+   * gap). Without an entry the channel waits for no signal: a read proves it
+   * at its own moment.
    */
   channelProven(channel: string, readEpoch: number): boolean
   /**
@@ -111,14 +115,6 @@ export interface Epochs {
    * started at or after the release (none kept — any read).
    */
   liftsMark(channel: string, mark: number, readEpoch: number): boolean
-  /**
-   * A view's composition read at `okReadEpoch` is confirmed for the channel:
-   * held — `channelProven`; released with an entry — point-in-time: the read
-   * started at or after the release, or the channel was proven for it at the
-   * release (`gapAt < joinAt <= okReadEpoch` with the values of that moment,
-   * or no gap); otherwise (no entry) — confirmed.
-   */
-  compositionProven(channel: string, okReadEpoch: number): boolean
   /** Some held channel had a gap (a fast path for the store's apply). */
   gapped(): boolean
   /** Drops both maps, the horizon, the last pair burials and the channel registers. */
@@ -412,28 +408,23 @@ export function createEpochs(
     joinAt: (channel) => joins.get(channel) ?? 0,
     releasedAt: (channel) => releases.get(channel)?.at ?? 0,
     channelProven(channel, readEpoch) {
-      if (!heldSet.has(channel)) return true
-      const gap = gapAt(channel)
-      if (gap === 0) return true
-      const join = joins.get(channel) ?? 0
-      return gap < join && join <= readEpoch
+      if (heldSet.has(channel)) {
+        const gap = gapAt(channel)
+        const join = joins.get(channel) ?? 0
+        return gap === 0 || (gap < join && join <= readEpoch)
+      }
+      // Читання, що почалось у розриві утримуваного каналу й лягло після його
+      // відпускання, не доведене: «на свою мить» — лише канал без запису.
+      const released = releases.get(channel)
+      if (released === undefined || readEpoch >= released.at) return true
+      const { gap, join } = released
+      return gap === 0 || (gap < join && join <= readEpoch)
     },
     liftsMark(channel, mark, readEpoch) {
       if (!heldSet.has(channel))
         return readEpoch >= (releases.get(channel)?.at ?? 0)
       const join = joins.get(channel) ?? 0
       return join > mark && readEpoch >= join
-    },
-    compositionProven(channel, okReadEpoch) {
-      if (heldSet.has(channel)) {
-        const gap = gapAt(channel)
-        const join = joins.get(channel) ?? 0
-        return gap === 0 || (gap < join && join <= okReadEpoch)
-      }
-      const released = releases.get(channel)
-      if (released === undefined || okReadEpoch >= released.at) return true
-      const { gap, join } = released
-      return gap === 0 || (gap < join && join <= okReadEpoch)
     },
     gapped: () => gaps.size > 0 || releases.size > 0,
     clear() {

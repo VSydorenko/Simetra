@@ -433,9 +433,10 @@ export function createObjectStore(options: {
   // «Розрив» за відповіддю (§8.4): запис утримуваного каналу знімає лише
   // читання, що почалось не раніше приєднання після позначки, запис
   // відпущеного — читання після відпускання (сигналів він не чекає). Рядок,
-  // записаний читанням, якого власний утримуваний канал не доводить (канал у
-  // розриві чи читання до приєднання), дістає позначку останнього розриву
-  // каналу: її зніме перше читання після наступного приєднання.
+  // записаний читанням, якого власний канал не доводить (утримуваний у
+  // розриві чи читання до приєднання; відпущений із записом — читання, що
+  // почалось до відпускання в недоведеному розриві), дістає позначку: її
+  // зніме перше читання після наступного приєднання чи після відпускання.
   function markChannels(e: RowEntry, readEpoch: number) {
     // Об'єкт без сигналів каналу не має: розриву в нього не буває.
     if (!entry.signal) return
@@ -447,7 +448,10 @@ export function createObjectStore(options: {
     const own = rowChannel(e)
     if (!epochs.channelProven(own, readEpoch)) {
       const held = marks ?? new Map<string, number>()
-      held.set(own, Math.max(held.get(own) ?? 0, epochs.gapAt(own)))
+      // Відпущений канал із записом: позначка — епоха відпускання; її знімає
+      // читання після неї, а повторне утримання стає розривом тієї ж епохи.
+      const g = epochs.held(own) ? epochs.gapAt(own) : epochs.releasedAt(own)
+      held.set(own, Math.max(held.get(own) ?? 0, g))
       e.stale.disconnect = held
     } else if (marks !== undefined && marks.size === 0)
       delete e.stale.disconnect

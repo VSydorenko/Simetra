@@ -271,7 +271,7 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
   const forgettable = (o: ObjectState, channel: string): boolean =>
     !o.rows.holdsChannel(channelOf(o.entry), channel) &&
     subsetsOf(ctx, o).every((s) =>
-      ctx.session.epochs.compositionProven(channel, s.okReadEpoch ?? -1)
+      ctx.session.epochs.channelProven(channel, s.okReadEpoch ?? -1)
     )
   const forgetChannel = (channel: string) => {
     ctx.session.epochs.forget(channel)
