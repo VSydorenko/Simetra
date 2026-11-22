@@ -477,6 +477,11 @@ function attributes(
       table.columns.find((c) => c.name === field.columns.at(-1)),
       `${table.name}.${field.name}`
     )
+    // Нормалізована колонка пошуку — властивість поля, а не окреме поле:
+    // так вона не потрапляє в проєкцію читання.
+    const search = table.columns.find(
+      (c) => c.origin.searchOf === column.name
+    )?.name
     const source: ValueSource | { raw: string } =
       field.standard?.type ??
       field.element ??
@@ -554,6 +559,7 @@ function attributes(
       ...(ref === undefined ? {} : { ref }),
       ...(lazy ? { load: "lazy" as const } : {}),
       ...(maxBytes === undefined ? {} : { maxBytes }),
+      ...(search === undefined ? {} : { search }),
     }
   })
 }

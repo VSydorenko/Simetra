@@ -57,6 +57,11 @@ import { identitiesTable } from "../platform/identities"
 import { signalOutboxTable } from "../platform/outbox"
 import { carrierDeclarations } from "../rights/facts"
 import { objectKey, type ParsedObject } from "./files"
+import {
+  resolveSearch,
+  searchColumnName,
+  searchFieldColumn,
+} from "../search-fields"
 import { COLUMN_NAME_ROLES, type ResolvedReference } from "./identity"
 
 type ForeignKey = PhysicalTable["foreignKeys"][number]
@@ -344,20 +349,27 @@ export function carrierCopyName(through: string, column: string): string {
   return makeObjectName(through, undefined, column)
 }
 
-/** Елемент ключа похідного індексу; `order` лише там, де не `asc`. */
+/**
+ * Елемент ключа похідного індексу; `order` лише там, де не `asc`, `opclass` —
+ * лише там, де не клас типу за замовчуванням.
+ */
 interface DerivedIndexKey {
   column: string
   order?: "desc"
+  opclass?: PgQualifiedName
 }
 
 /**
  * Похідний індекс разом із призначенням: навіщо він потрібен, а не лише які
  * колонки покриває. `search` — пошук і списки за реквізитом, `foreignKey` —
  * індекс під перевірку FK, `copy` — копія колонки носія, `structural` — два
- * індекси руху регістра (підсумки й обороти йдуть як `search`/`foreignKey`).
+ * індекси руху регістра (підсумки й обороти йдуть як `search`/`foreignKey`),
+ * `prefix` — префіксний пошук за нормалізованою колонкою поля пошуку
+ * (`text_pattern_ops`, одна колонка: ні скоупу, ні ключа рядка — складений
+ * зі скоупом під політикою членства з підзапитом не діє, ADR-0097).
  */
 interface DerivedIndex {
-  purpose: "search" | "foreignKey" | "copy" | "structural"
+  purpose: "search" | "foreignKey" | "copy" | "structural" | "prefix"
   keys: DerivedIndexKey[]
 }
 
@@ -464,6 +476,11 @@ class SnapshotBuilder {
   private readonly carrierRefs: Map<string, string>
   /** Об'єкти з носіями прав, чиї таблиці отримують копії носіїв у `finish`. */
   private readonly carrierHosts: CarrierHost[] = []
+  /** Основні таблиці об'єктів, чиї поля пошуку отримують колонки в `finish`. */
+  private readonly searchHosts: {
+    object: ParsedObject
+    table: PendingTable
+  }[] = []
   /**
    * FK прийнятих таблиць з ціллю-ключем виду (спека прав §4.7): колонки цілі — у
    * `finish`, коли таблицю цілі вже побудовано, бо колонку скоупу впізнають
@@ -624,6 +641,7 @@ class SnapshotBuilder {
       })
     }
     const columnsOf = this.addTable(main, fields, object.file, "/physicalName")
+    this.searchHosts.push({ object, table: main })
     if (def.compositeIndexes === true) {
       this.addCompositeIndexes(
         main,
@@ -1061,6 +1079,7 @@ class SnapshotBuilder {
     // Копії — після всіх таблиць: копія шляху бере тип колонки цілі, а та
     // могла бути побудована пізніше за об'єкт носія.
     for (const host of this.carrierHosts) this.addCarrierCopies(host)
+    for (const host of this.searchHosts) this.addSearchColumns(host)
     // Імена призначаються в порядку знімка, а явні імена резервуються наперед
     // в усій схемі, тож знімок самоузгоджений: жодне похідне ім'я не збігається
     // з іншим. Postgres за колізій обрав би інакше (він не знає наперед про
@@ -1219,6 +1238,49 @@ class SnapshotBuilder {
       purpose: "copy",
       keys: ascending(lead === undefined ? [copy.name] : [lead, copy.name]),
     })
+  }
+
+  // --- Поля пошуку ---------------------------------------------------------
+
+  /**
+   * Нормалізовані колонки полів пошуку (спека П2 §5, «Поля пошуку»): для
+   * кожного поля `String`/`Text` — збережена згенерована
+   * `lower(<колонка> COLLATE "default")` (колляція бази явно: колонка
+   * прийнятої таблиці може мати власну, і тоді рядок і запит
+   * нормалізувались би по-різному) і індекс `(<нормалізована>
+   * text_pattern_ops)`. Зайняте ім'я колонки не дає — збіг звітує стадія 4
+   * (`physical.column-duplicate`), бо ім'я йде в джерела таблиці.
+   */
+  private addSearchColumns({
+    object,
+    table,
+  }: {
+    object: ParsedObject
+    table: PendingTable
+  }): void {
+    for (const field of resolveSearch(object, this.style).fields) {
+      if (!field.normalized) continue
+      const column = searchFieldColumn(table.columns, field)
+      if (column === undefined) continue
+      const name = searchColumnName(column.name)
+      this.sources
+        .find((s) => s.schema === table.schema && s.name === table.name)
+        ?.columns.push({ name })
+      if (table.columns.some((c) => c.name === name)) continue
+      table.columns.push({
+        name,
+        type: "text",
+        notNull: false,
+        generated: {
+          expression: `lower(${quoteIdent(column.name)} COLLATE "default")`,
+        },
+        origin: { searchOf: column.name },
+      })
+      table.derivedIndexes.push({
+        purpose: "prefix",
+        keys: [{ column: name, opclass: { name: "text_pattern_ops" } }],
+      })
+    }
   }
 
   // --- Таблиці видів ------------------------------------------------------
@@ -1802,6 +1864,7 @@ class SnapshotBuilder {
 
     this.tables.push(table)
     this.sources.push(source)
+    this.searchHosts.push({ object, table })
   }
 
   private declaredColumnType(column: CustomTableColumn): string {
@@ -2549,9 +2612,10 @@ function materializeIndexes(table: PendingTable): void {
     table.indexes.push({
       unique: false,
       method: "btree",
-      keys: full.map(({ column, order }) => ({
+      keys: full.map(({ column, order, opclass }) => ({
         column,
         ...(order !== undefined ? { order } : {}),
+        ...(opclass !== undefined ? { opclass } : {}),
       })),
       include: [],
       nullsNotDistinct: false,
@@ -2566,13 +2630,19 @@ function withinScope(columns: string[], scope: string | undefined): string[] {
     : [scope, ...columns]
 }
 
-/** Префікс збігається і колонкою, і порядком: `b DESC` не те саме, що `b`. */
+/**
+ * Префікс збігається колонкою, порядком і класом операторів: `b DESC` не те
+ * саме, що `b`, а `text_pattern_ops` обслуговує інші оператори, ніж клас типу.
+ */
 function startsWith(key: DerivedIndexKey[], prefix: DerivedIndexKey[]) {
   return (
     prefix.length <= key.length &&
     prefix.every(
       (part, i) =>
-        key[i]!.column === part.column && key[i]!.order === part.order
+        key[i]!.column === part.column &&
+        key[i]!.order === part.order &&
+        key[i]!.opclass?.schema === part.opclass?.schema &&
+        key[i]!.opclass?.name === part.opclass?.name
     )
   )
 }

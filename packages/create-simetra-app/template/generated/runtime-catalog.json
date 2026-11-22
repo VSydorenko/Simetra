@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "snapshotHash": "ea0838ef5165301b7df472868c09777b9a90813b9be07788cd9ffe3a683b0ebd",
+  "snapshotHash": "c9cbd0d61a5a203da7986658be8273d8ad870a895f3cd9c3c514822d29208d7d",
   "provider": "postgres",
   "rightsSnapshot": true,
   "objects": [
@@ -114,7 +114,8 @@
           "notNull": true,
           "maxLength": 150,
           "insert": true,
-          "update": true
+          "update": true,
+          "search": "description_search"
         },
         {
           "name": "deletionMark",
@@ -414,7 +415,8 @@
           "notNull": true,
           "maxLength": 150,
           "insert": true,
-          "update": true
+          "update": true,
+          "search": "description_search"
         },
         {
           "name": "deletionMark",
@@ -572,7 +574,8 @@
           "notNull": true,
           "maxLength": 150,
           "insert": true,
-          "update": true
+          "update": true,
+          "search": "description_search"
         },
         {
           "name": "deletionMark",
@@ -805,7 +808,8 @@
           "notNull": true,
           "maxLength": 150,
           "insert": true,
-          "update": true
+          "update": true,
+          "search": "description_search"
         },
         {
           "name": "deletionMark",
@@ -1124,7 +1128,8 @@
           "notNull": true,
           "maxLength": 150,
           "insert": false,
-          "update": true
+          "update": true,
+          "search": "description_search"
         },
         {
           "name": "deletionMark",

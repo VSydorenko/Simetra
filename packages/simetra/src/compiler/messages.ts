@@ -3455,6 +3455,50 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Вказуйте кожен реквізит в індексі один раз: друге входження нічого не додає до ключа.",
     },
   },
+  "search.field-unknown": {
+    en: (p) =>
+      `${p.kind} "${p.object}" has no header attribute "${p.name}" to search by`,
+    uk: (p) =>
+      `${p.kind} "${p.object}" не має реквізиту шапки "${p.name}" для пошуку`,
+    hint: {
+      en: "search.fields names header attributes and standard attributes of the object.",
+      uk: "search.fields називає реквізити й стандартні реквізити шапки об'єкта.",
+    },
+  },
+  "search.field-duplicate": {
+    en: (p) => `Search field "${p.name}" is repeated`,
+    uk: (p) => `Поле пошуку "${p.name}" повторюється`,
+    hint: {
+      en: "List each field once in search.fields.",
+      uk: "Вказуйте кожне поле в search.fields один раз.",
+    },
+  },
+  "search.field-tabular": {
+    en: (p) =>
+      `Search field "${p.name}" of ${p.kind} "${p.object}" belongs to a tabular section`,
+    uk: (p) =>
+      `Поле пошуку "${p.name}" виду ${p.kind} "${p.object}" належить табличній частині`,
+    hint: {
+      en: "An object is searched by its header; tabular section attributes are not search fields.",
+      uk: "Об'єкт шукають за шапкою; реквізити табличних частин полями пошуку не бувають.",
+    },
+  },
+  "search.field-ref": {
+    en: (p) => `Search field "${p.name}" is a reference`,
+    uk: (p) => `Поле пошуку "${p.name}" — посилання`,
+    hint: {
+      en: "A reference is found by the target's own search fields; name a scalar attribute instead.",
+      uk: "Посилання шукають за полями пошуку цілі; назвіть скалярний реквізит.",
+    },
+  },
+  "search.field-generated": {
+    en: (p) => `Search field "${p.name}" is a generated column`,
+    uk: (p) => `Поле пошуку "${p.name}" — згенерована колонка`,
+    hint: {
+      en: "The normalized search column is itself generated, and PostgreSQL does not let a generation expression reference a generated column (42P17); search by the source column instead.",
+      uk: "Нормалізована колонка пошуку сама згенерована, а Postgres не дозволяє виразу генерації посилатися на згенеровану колонку (42P17); шукайте за вихідною колонкою.",
+    },
+  },
   "catalog.owner-kind": {
     en: (p) => `${p.kind} "${p.name}" cannot own a catalog`,
     uk: (p) => `${p.kind} "${p.name}" не може бути власником довідника`,

@@ -8,12 +8,18 @@ import {
   type Json,
   NOTES,
   notes,
+  PARTY,
+  party,
   plan,
+  planned,
+  applyArtifact,
+  stepMatching,
   USER,
   useBuildPlanRoles,
 } from "./build-plan.support"
 import { asSuperuser, query } from "../../__tests__/support/db"
-import { uuid } from "../../../../simetra/test/support"
+import { PROVIDER_API_ROLES } from "simetra/model"
+import { testProvider, uuid } from "../../../../simetra/test/support"
 
 /**
  * Пошуковий індекс полів `search` (ADR-0097, спека П2 §5): збережена
@@ -94,20 +100,18 @@ const nodesOf = (node: PlanNode): PlanNode[] => [
   ...(node.Plans ?? []).flatMap(nodesOf),
 ]
 
-/** План запиту від ролі запиту; транзакція відкочується. */
-async function explainAs(
-  url: string,
-  role: string,
-  sql: string
-): Promise<PlanNode[]> {
+/** План запиту від ролі запиту профілю (`USER`); транзакція відкочується. */
+async function explainAsUser(url: string, sql: string): Promise<PlanNode[]> {
   const client = new pg.Client({ connectionString: asSuperuser(url) })
   await client.connect()
   try {
     await client.query("begin")
     // Схему застосунку роль API бачить через гранти платформи; ціль спайку
     // їх не має, тож USAGE — лише в цій транзакції
-    await client.query(`grant usage on schema app to ${role}`)
-    await client.query(`set local role ${role}`)
+    await client.query(`grant usage on schema app to ${USER}`)
+    await client.query(
+      `set local role ${PROVIDER_API_ROLES[testProvider()].user}`
+    )
     const rows = (
       await client.query<{ "QUERY PLAN": [{ Plan: PlanNode }] }>(
         `explain (format json) ${sql}`
@@ -142,20 +146,100 @@ describe.concurrent("search index: engine spike", () => {
       expect(again.diagnostics.map((d) => d.code)).not.toContain("apply.drift")
 
       await seed(url)
-      const nodes = await explainAs(
+      const nodes = await explainAsUser(
         url,
-        USER,
         `select id from app.notes where starts_with(note_norm, lower('note 12' COLLATE "default"))`
       )
       expect(prefixRange(nodes, "note_norm")).toHaveLength(1)
       // Без `^@` у прямій формі `ILIKE` той самий індекс не діє: контроль,
       // що діапазон дав саме leakproof-оператор
-      const like = await explainAs(
+      const like = await explainAsUser(
         url,
-        USER,
         `select id from app.notes where note_norm ilike 'note 12%'`
       )
       expect(prefixRange(like, "note_norm")).toEqual([])
+    })
+  })
+})
+
+/** Колонка й індекс таблиці так, як їх бачить сама база. */
+async function searchColumnOf(url: string, table: string, column: string) {
+  const [shape] = await query(
+    url,
+    `select c.is_generated, c.generation_expression,
+            (select indexdef from pg_indexes i
+              where i.schemaname = 'app' and i.tablename = $1
+                and i.indexdef like '%' || $2 || '%') as indexdef
+       from information_schema.columns c
+      where c.table_schema = 'app' and c.table_name = $1 and c.column_name = $2`,
+    [table, column]
+  )
+  return shape
+}
+
+describe.concurrent("search index: derived from the search fields", () => {
+  it("a catalog gets the column and the index of its default search field", async () => {
+    const model = await compiled({ [PARTY]: party() })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, model)
+      expect(await searchColumnOf(url, "party", "description_search")).toEqual({
+        is_generated: "ALWAYS",
+        generation_expression: `lower(((description)::text COLLATE "default"))`,
+        indexdef: expect.stringMatching(
+          /USING btree \(description_search text_pattern_ops\)$/
+        ),
+      })
+      await query(
+        asSuperuser(url),
+        `insert into app.party (id, description, code)
+           values ('00000000-0000-4000-8000-000000000001', 'Ковбаса Ab', '1')`
+      )
+      expect(
+        await query(url, "select description_search from app.party")
+      ).toEqual([{ description_search: "ковбаса ab" }])
+      const again = await plan(url, model)
+      expect(again.status).toBe("unchanged")
+      expect(again.diagnostics.map((d) => d.code)).not.toContain("apply.drift")
+    })
+  })
+
+  it("search on an adopted table adds the column as a table rewrite without permission", async () => {
+    const before = await compiled({ [NOTES]: notes() })
+    const after = await compiled({
+      [NOTES]: {
+        ...(notes() as unknown as Json),
+        search: { fields: ["note"] },
+      },
+    })
+    await inTarget(EMPTY, async (url) => {
+      await establish(url, before)
+      await query(
+        asSuperuser(url),
+        `insert into app.notes (id, note)
+           values ('00000000-0000-4000-8000-000000000001', 'Note A')`
+      )
+      const artifact = planned(await plan(url, after))
+      const [add] = stepMatching(
+        artifact,
+        /ADD COLUMN "note_search" text GENERATED ALWAYS AS .* STORED/
+      )
+      const [index] = stepMatching(
+        artifact,
+        /CREATE INDEX notes_note_search_idx/
+      )
+      expect(add?.class).toBe("tableRewrite")
+      expect(index?.class).toBe("catalogOnly")
+      // Переписування, як і решта, дозволу не вимагає (платформна спека §6.6)
+      expect(artifact.requiredPermissions).toEqual([])
+
+      await applyArtifact(url, artifact, after)
+
+      expect(await query(url, "select note_search from app.notes")).toEqual([
+        { note_search: "note a" },
+      ])
+      const again = await plan(url, after)
+      expect(again.status).toBe("unchanged")
+      expect(again.diagnostics.map((d) => d.code)).not.toContain("apply.drift")
     })
   })
 })

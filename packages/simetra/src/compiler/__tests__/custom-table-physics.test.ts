@@ -332,6 +332,8 @@ describe("CustomTable physics round-trip", () => {
     // без неї хеш той самий.
     // Далі стандартне найменування довідника стало `indexed` — пошуковий
     // індекс `(…, description, id)` у кожній таблиці довідника.
+    // Далі поля пошуку дали нормалізовану колонку й індекс `text_pattern_ops`
+    // рядковому полю пошуку довідника й документа (типово — найменуванню).
     const derived = {
       tables: physical.tables.filter(
         (t) =>
@@ -351,7 +353,7 @@ describe("CustomTable physics round-trip", () => {
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "fe636252a5a75a6f3105def6693ad2d1c905057479b48382982a72794d4130cf"
+      "f11118cd3270394548d3318aa8600d7d59eef7b66df58877b628e53413759aeb"
     )
   })
 })

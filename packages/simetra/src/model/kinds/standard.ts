@@ -128,6 +128,8 @@ export type ReferenceRole =
   | "posting.tabularSection"
   /** Реквізит свого рядка в `indexes` об'єкта чи його табличної частини. */
   | "index.attribute"
+  /** Реквізит шапки в `search.fields` об'єкта. */
+  | "search.field"
   | "posting.movementsBlock"
   | "customTable.foreignKey"
   | "customTable.foreignKeyTarget"

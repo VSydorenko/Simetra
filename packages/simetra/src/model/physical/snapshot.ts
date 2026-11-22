@@ -199,12 +199,19 @@ export interface PhysicalColumn {
    * значення колонки `column` таблиці `table` з рядка, на який указує
    * локальна колонка `through`. Копію пише лише платформа, тож вона не
    * елемент опису й не має ні `elementId`, ні `standard`.
+   *
+   * `searchOf` — нормалізована колонка поля пошуку (спека П2 §5, «Поля
+   * пошуку»): згенерована `lower(<колонка> COLLATE "default")` над колонкою
+   * `searchOf` тієї самої таблиці. Вона не поле сутності: її немає ні в
+   * команді, ні в рядку результату, ні в каталозі — лише ім'я при полі
+   * каталогу рантайму, за яким читання `startsWith` бере індекс.
    */
   origin: {
     elementId?: string
     standard?: string
     scopeKindId?: string
     copyOf?: CarrierCopyOf
+    searchOf?: string
   }
 }
 

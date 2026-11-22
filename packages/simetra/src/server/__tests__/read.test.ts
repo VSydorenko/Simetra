@@ -1270,3 +1270,41 @@ describe("conditional read with known", () => {
     })
   })
 })
+
+// Нормалізована колонка поля пошуку (спека П2 §5, «Поля пошуку») — не поле
+// рядка: картка знімає її з `to_jsonb(t)`, а список її не називає.
+describe("prepareRead: the normalized search column", () => {
+  const SEARCHED = { kind: "Catalog" as const, name: "Searched" }
+  const searched = runtimeCatalogSchema.parse({
+    format: 1,
+    snapshotHash: "hash-1",
+    provider: "supabase",
+    objects: [
+      runtimeObjectSchema.parse({
+        ...sample,
+        id: "00000000-0000-4000-8000-000000000018",
+        name: "Searched",
+        table: { schema: "public", name: "searched" },
+        attributes: [
+          { ...attributeOf("code"), search: "code_search" },
+          { ...attributeOf("code"), name: "label", column: "label_col" },
+        ],
+      }),
+    ],
+  })
+  const read = (query: unknown) => {
+    const prepared = prepareRead(searched, query)
+    if ("error" in prepared) throw new Error(prepared.error.code)
+    return renderKnown(prepared.plan, null).text
+  }
+
+  it("the card drops it from the row", () => {
+    expect(read({ object: SEARCHED, id: ID })).toBe(
+      `SELECT (to_jsonb(t) - 'code_search')::text AS row FROM "public"."searched" t WHERE t."id" = $1::uuid LIMIT 1`
+    )
+  })
+
+  it("the list does not name it", () => {
+    expect(read({ object: SEARCHED, limit: 10 })).not.toContain("code_search")
+  })
+})

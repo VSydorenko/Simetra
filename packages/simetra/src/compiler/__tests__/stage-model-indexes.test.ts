@@ -42,7 +42,7 @@ function tableOf(physical: PhysicalSnapshot, name: string): PhysicalTable {
   return table!
 }
 
-/** Ключі індексів таблиці без часткових (`predefined_name`): `b DESC` для спадного, вираз як є; унікальні з `unique`. */
+/** Ключі індексів таблиці без часткових (`predefined_name`): `b DESC` для спадного, клас операторів після ключа, вираз як є; унікальні з `unique`. */
 function shapesOf(table: PhysicalTable): string[] {
   return table.indexes
     .filter((index) => index.where === undefined)
@@ -50,7 +50,10 @@ function shapesOf(table: PhysicalTable): string[] {
       const keys = index.keys
         .map((key) => {
           const text = "column" in key ? key.column : key.expression
-          return key.order === "desc" ? `${text} DESC` : text
+          const ordered = key.order === "desc" ? `${text} DESC` : text
+          return key.opclass === undefined
+            ? ordered
+            : `${ordered} ${key.opclass.name}`
         })
         .join(", ")
       return index.unique ? `unique (${keys})` : `(${keys})`
@@ -85,7 +88,11 @@ describe("stage 3: list-order search indexes end with the row key", () => {
         }),
       },
       table: "counterparty",
-      expected: ["(org_id, a, id)", "(org_id, description, id)"],
+      expected: [
+        "(org_id, a, id)",
+        "(org_id, description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "indexed attribute of an unscoped catalog",
@@ -96,13 +103,21 @@ describe("stage 3: list-order search indexes end with the row key", () => {
         }),
       },
       table: "currency",
-      expected: ["(a, id)", "(description, id)"],
+      expected: [
+        "(a, id)",
+        "(description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "indexed attribute of the scope root",
       entries: { [ORG]: organization({ attributes: [indexedInt("a")] }) },
       table: "organization",
-      expected: ["(a, id)", "(description, id)"],
+      expected: [
+        "(a, id)",
+        "(description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "indexed Ref in a scoped table: one FK index, key last",
@@ -120,7 +135,11 @@ describe("stage 3: list-order search indexes end with the row key", () => {
         }),
       },
       table: "contract",
-      expected: ["(org_id, r_id, id)", "(org_id, description, id)"],
+      expected: [
+        "(org_id, r_id, id)",
+        "(org_id, description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "Ref without indexed keeps the plain FK index",
@@ -137,7 +156,11 @@ describe("stage 3: list-order search indexes end with the row key", () => {
         }),
       },
       table: "contract",
-      expected: ["(org_id, r_id)", "(org_id, description, id)"],
+      expected: [
+        "(org_id, r_id)",
+        "(org_id, description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "standard parent_id of a hierarchy is unchanged",
@@ -148,7 +171,11 @@ describe("stage 3: list-order search indexes end with the row key", () => {
         }),
       },
       table: "counterparty",
-      expected: ["(org_id, parent_id)", "(org_id, description, id)"],
+      expected: [
+        "(org_id, parent_id)",
+        "(org_id, description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "parent_id of a tabular section is unchanged",
@@ -172,7 +199,10 @@ describe("stage 3: list-order search indexes end with the row key", () => {
         }),
       },
       table: "counterparty",
-      expected: ["(org_id, description, id)"],
+      expected: [
+        "(org_id, description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "ignoreCase unique plus indexed: unique expression index and the key index",
@@ -194,6 +224,7 @@ describe("stage 3: list-order search indexes end with the row key", () => {
         "(org_id, a, id)",
         "unique (org_id, lower(a))",
         "(org_id, description, id)",
+        "(description_search text_pattern_ops)",
       ],
     },
     {
@@ -209,7 +240,11 @@ describe("stage 3: list-order search indexes end with the row key", () => {
         }),
       },
       table: "counterparty",
-      expected: ["(org_id, a, b DESC, id)", "(org_id, description, id)"],
+      expected: [
+        "(org_id, a, b DESC, id)",
+        "(org_id, description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "standard owner_id: no key",
@@ -221,7 +256,11 @@ describe("stage 3: list-order search indexes end with the row key", () => {
         }),
       },
       table: "currency",
-      expected: ["(owner_id)", "(description, id)"],
+      expected: [
+        "(owner_id)",
+        "(description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "standard polymorphic owner pair: no key",
@@ -237,7 +276,11 @@ describe("stage 3: list-order search indexes end with the row key", () => {
         }),
       },
       table: "currency",
-      expected: ["(owner_type, owner_id)", "(description, id)"],
+      expected: [
+        "(owner_type, owner_id)",
+        "(description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "author columns: no key",
@@ -249,7 +292,12 @@ describe("stage 3: list-order search indexes end with the row key", () => {
         [CURRENCY]: catalog("Currency", { scope: "none", trackAuthor: true }),
       },
       table: "currency",
-      expected: ["(created_by_id)", "(updated_by_id)", "(description, id)"],
+      expected: [
+        "(created_by_id)",
+        "(updated_by_id)",
+        "(description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "composite index over a polymorphic Ref: the pair, then the key",
@@ -271,7 +319,11 @@ describe("stage 3: list-order search indexes end with the row key", () => {
         }),
       },
       table: "currency",
-      expected: ["(subject_type, subject_id, id)", "(description, id)"],
+      expected: [
+        "(subject_type, subject_id, id)",
+        "(description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "composite index of a tabular section ends with the section key",
@@ -294,7 +346,10 @@ describe("stage 3: list-order search indexes end with the row key", () => {
       name: "standard code with the numbering UNIQUE: no search index of its own (only the description index)",
       entries: { [CP]: catalog("Counterparty", { scope: "org" }) },
       table: "counterparty",
-      expected: ["(org_id, description, id)"],
+      expected: [
+        "(org_id, description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "two candidates with the same columns: one index",
@@ -306,7 +361,11 @@ describe("stage 3: list-order search indexes end with the row key", () => {
         }),
       },
       table: "counterparty",
-      expected: ["(org_id, a, id)", "(org_id, description, id)"],
+      expected: [
+        "(org_id, a, id)",
+        "(org_id, description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "standard description of a scoped catalog: search index with the key",
@@ -314,7 +373,10 @@ describe("stage 3: list-order search indexes end with the row key", () => {
         [CP]: catalog("Counterparty", { scope: "org", descriptionLength: 100 }),
       },
       table: "counterparty",
-      expected: ["(org_id, description, id)"],
+      expected: [
+        "(org_id, description, id)",
+        "(description_search text_pattern_ops)",
+      ],
     },
     {
       name: "descriptionLength 0: no description column, no index",

@@ -63,6 +63,8 @@ const SERVER_ONLY = [
   "pgType",
   "castType",
   "function",
+  // Нормалізована колонка поля пошуку — лише для читання T3
+  "search",
 ]
 
 const keysOf = (value: unknown): string[] =>

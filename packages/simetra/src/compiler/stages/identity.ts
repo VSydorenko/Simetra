@@ -621,6 +621,7 @@ export function checkIdentity(
     if (style !== undefined) {
       resolveMovements(object, objectsByName, style, references, diagnostics)
       resolveIndexAttributes(object, style, references)
+      resolveSearchFields(object, style, references)
       resolveWhenChanged(object, objectsByName, style, references)
     }
     resolveMovementBlocks(object, objects, brokenNames, references, diagnostics)
@@ -1288,6 +1289,43 @@ function resolveIndexAttributes(
       ),
       `/tabularSections/${index}`
     )
+  })
+}
+
+/**
+ * Імена в `search.fields` резолвляться в UUID реквізитів шапки (чи в
+ * синтетичний id стандартного), щоб перейменування реквізиту переписало й поле
+ * пошуку. Невідоме ім'я тут мовчить: звітує стадія 4 (`search.field-unknown`).
+ */
+function resolveSearchFields(
+  object: ParsedObject,
+  style: AttributeCase,
+  references: ResolvedReference[]
+) {
+  const def = KIND_REGISTRY[object.kind]
+  if (def.search === undefined || object.id === undefined) return
+  const data = object.data as Record<string, unknown> & {
+    search?: { fields?: string[] }
+  }
+  const table = nameTable(
+    object.id,
+    def.columnFields.flatMap((field) => (data[field] as Element[]) ?? []),
+    def.standardColumns(data),
+    style
+  )
+  const ownerId = object.id
+  ;(data.search?.fields ?? []).forEach((name, i) => {
+    const id = table.get(name)
+    if (id === undefined) return
+    references.push({
+      from: {
+        file: object.file,
+        pointer: `/search/fields/${i}`,
+        objectId: ownerId,
+      },
+      to: { kind: "Element", id },
+      role: "search.field",
+    })
   })
 }
 

@@ -161,7 +161,8 @@ export function objectEntity(
  * скоупу (ім'я поля — ім'я виду), колонка без походження в метаданих — за
  * фізичним іменем. Ключ-одинак пропускається: службовий ключ рядка-одинака
  * (завжди `true`, значення дає DEFAULT) у скоупленій формі не існує, тож і
- * поля сутності не дає.
+ * поля сутності не дає. Нормалізована колонка пошуку (`origin.searchOf`) —
+ * теж не поле: її значення — функція поля, і клієнт її не бачить.
  */
 export function entityFields(
   model: CompiledModel,
@@ -172,6 +173,7 @@ export function entityFields(
   const keyOf = (index: number) => JSON.stringify(table.columns[index]!.origin)
   const fields: EntityField[] = []
   table.columns.forEach((column, index) => {
+    if (column.origin.searchOf !== undefined) return
     const key = keyOf(index)
     // Поліморфне поле — пара колонок з одним походженням; поле одне.
     if (index > 0 && keyOf(index - 1) === key) return
