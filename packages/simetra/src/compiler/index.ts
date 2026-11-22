@@ -118,7 +118,6 @@ export {
   platformGrantTargets,
 } from "./function-execute"
 export { closedShellProblem, extensionSchema } from "./sql/closed-forms"
-export { PLATFORM_FORM_PURPOSES } from "./sql/declarations"
 export { isSecurityDefiner, isTriggerFunction } from "./sql/definer-reads"
 export { FUNCTIONS_SCHEMA_FILE } from "./json-schema"
 export { loadPlpgsqlParser, type PlpgsqlParser } from "./sql/plpgsql"

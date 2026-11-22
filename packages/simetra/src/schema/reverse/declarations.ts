@@ -46,7 +46,7 @@ import { explicitVolatility } from "./units"
  */
 
 /** Пара `(schema, name)` кортежем: ім'я в лапках може містити крапку. */
-export const tupleKey = (schema: string, name: string) =>
+const tupleKey = (schema: string, name: string) =>
   JSON.stringify([schema, name])
 
 /** Об'єкт теки за міткою виду: ім'я для `check.object` і дії за словом чи UUID. */
@@ -107,11 +107,17 @@ export interface DeclareInput {
   described: ReadonlySet<string>
   existing: ReadonlyMap<string, string>
   /**
-   * Функції форм платформи теки (`tupleKey`: функція множини, функція
-   * значень виміру, обробник підписки) → призначення `EXECUTE` форми: його
-   * виводять метадані, а декларація на них — `sql.declaration-platform-form`.
+   * Функції наявної теки з виведеним `EXECUTE` (`functionExecute` її
+   * компіляції): ідентичність одиниці → призначення і форма. Форма платформи
+   * (функція множини, функція значень виміру, обробник підписки) декларації
+   * не отримує — декларація на неї `sql.declaration-platform-form`; кожна з
+   * них, як і invoker-функція із задекларованим чи модульним `EXECUTE`,
+   * проходить перевірку чужих грантів і звуження.
    */
-  platformForms: ReadonlyMap<string, readonly string[]>
+  derivedExecute: ReadonlyMap<
+    string,
+    { purposes: readonly string[]; form?: string }
+  >
   /**
    * Функції політик боргу (спека декларацій функцій §5.8): ідентичність
    * одиниці → виведені призначення `EXECUTE`; кличеться лише коли є
@@ -156,6 +162,17 @@ export function renderFunctionsFile(
 interface FunctionTree {
   parameters?: unknown[]
   returnType?: { names?: { String?: { sval?: string } }[]; setof?: boolean }
+}
+
+/** Без аргументів у списку ідентичності (`OUT` її не входять). */
+function nullary(unit: VerbatimUnit): boolean {
+  const fn = (unit.tree as { CreateFunctionStmt?: FunctionTree })
+    .CreateFunctionStmt
+  return (fn?.parameters ?? []).every(
+    (p) =>
+      (p as { FunctionParameter?: { mode?: string } }).FunctionParameter
+        ?.mode === "FUNC_PARAM_OUT"
+  )
 }
 
 /** Без аргументів і `RETURNS SETOF uuid`: ознака функції множини скоупу. */
@@ -421,17 +438,33 @@ export async function declareFunctions(
     const unit = verbatim.get(catalogUnit.identity)
     // Тригерну функцію Postgres не дає викликати напряму: це не RPC, ролям
     // API вона не відкрита, і факт її `EXECUTE` нічого не вирішує
-    if (
-      unit === undefined ||
-      isTriggerFunction(unit) ||
-      !isSecurityDefiner(unit, parsed)
-    )
-      continue
+    if (unit === undefined || isTriggerFunction(unit)) continue
+    const definer = isSecurityDefiner(unit, parsed)
     const { schema, name } = unit
     const label = `${schema}.${name}`
     const named = facts?.functions.filter(
       (f) => f.schema === schema && f.name === name
     )
+    const count = namedCount(schema, name)
+    // Факт саме цієї функції, а не кожного перевантаження імені: ключ факту —
+    // аргументи ідентичності каталогу, тож з перевантаженнями впевнено
+    // відомий лише факт функції без аргументів (форми й функції політик такі)
+    const ownFacts =
+      named === undefined
+        ? []
+        : count === 1
+          ? named
+          : nullary(unit)
+            ? named.filter((f) => f.identityArguments === "")
+            : []
+    const foreign = (fact: FunctionExecuteFact) => {
+      for (const grant of foreignGrants(fact, provider))
+        report("introspect.definer-foreign-grant", "", {
+          function: `${label}(${fact.identityArguments})`,
+          role: grant.role,
+          reason: grant.reason,
+        })
+    }
     const narrowed = (
       fact: FunctionExecuteFact,
       purposes: readonly string[]
@@ -443,14 +476,18 @@ export async function declareFunctions(
           reason,
         })
     }
-    const formPurposes = input.platformForms.get(tupleKey(schema, name))
-    if (formPurposes !== undefined) {
-      // Форма метаданих фактів не вимагає (її `EXECUTE` виводять метадані),
-      // але звуження живого `EXECUTE` за наявним фактом називає те саме правило
-      for (const fact of named ?? []) narrowed(fact, formPurposes)
+    const elsewhere = input.derivedExecute.get(catalogUnit.identity)
+    if (elsewhere !== undefined && (elsewhere.form !== undefined || !definer)) {
+      // Форма метаданих чи invoker-функція з виведеним `EXECUTE` фактів не
+      // вимагають, але за наявним фактом чужі гранти й звуження живого
+      // `EXECUTE` називає те саме правило, що й для декларацій
+      for (const fact of ownFacts) {
+        foreign(fact)
+        narrowed(fact, elsewhere.purposes)
+      }
       continue
     }
-    const count = namedCount(schema, name)
+    if (!definer) continue
     // Факти є лише в функцій і процедур, не в агрегатів
     const withFacts = namedCount(schema, name, FACTED)
     // Факт кожної definer-функції обов'язковий; перевантаження — рівно стільки
@@ -468,13 +505,7 @@ export async function declareFunctions(
         })
       continue
     }
-    for (const fact of firstOfName ? named : [])
-      for (const grant of foreignGrants(fact, provider))
-        report("introspect.definer-foreign-grant", "", {
-          function: `${label}(${fact.identityArguments})`,
-          role: grant.role,
-          reason: grant.reason,
-        })
+    for (const fact of firstOfName ? named : []) foreign(fact)
     const purposes = (await input.policyFunctions()).get(catalogUnit.identity)
     if (purposes !== undefined) {
       // Форма платформи: декларації немає, а `EXECUTE` виводить генератор,
@@ -482,7 +513,7 @@ export async function declareFunctions(
       // відкличе, названо за фактами. Чужі гранти вже названо вище; грант
       // ролі поза профілем чи неназваному отримувачу лишається дослівним і
       // дає `sql.generated-grant`, а не губиться
-      for (const fact of named) narrowed(fact, purposes)
+      for (const fact of ownFacts) narrowed(fact, purposes)
       for (const grant of derivedGrants(unit.identity, input))
         result.dropped.add(grant)
       continue

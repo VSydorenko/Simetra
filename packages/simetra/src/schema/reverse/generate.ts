@@ -3,7 +3,6 @@ import {
   changesBetween,
   compile,
   completeFiles,
-  PLATFORM_FORM_PURPOSES,
   currentDebt,
   formPolicies,
   diagnostic,
@@ -19,6 +18,7 @@ import {
   renderModelIndependentLayer,
   renderSharedTriggerFunctions,
   unitTarget,
+  type CompileResult,
   type CompiledModel,
   type Diagnostic,
   type FileChange,
@@ -57,7 +57,6 @@ import {
 } from "./identity"
 import {
   declareFunctions,
-  tupleKey,
   kindsByLabel,
   type KindsByLabel,
 } from "./declarations"
@@ -319,39 +318,10 @@ function folderHalf(
 }
 
 /**
- * Функції форм платформи наявної теки: функції множини видів скоупу,
- * функції значень вимірів доступу й обробники підписок → призначення їхнього
- * `EXECUTE`. Його виводить генератор, тож зворотна генерація декларації їм не
- * пише.
+ * Модель наявної теки разом з функціями, чий `EXECUTE` виводить платформа
+ * (`functionExecute` тієї самої компіляції).
  */
-function platformForms(
-  kept: CompiledModel | undefined
-): Map<string, readonly string[]> {
-  const found = new Map<string, readonly string[]>()
-  if (kept === undefined) return found
-  const defaultSchema = kept.project.defaultSchema
-  for (const kind of kept.scopeKinds)
-    found.set(
-      tupleKey(kind.setFunction.schema, kind.setFunction.name),
-      PLATFORM_FORM_PURPOSES.setFunction
-    )
-  for (const dimension of kept.project.accessDimensions)
-    if ("function" in dimension.values)
-      found.set(
-        tupleKey(
-          dimension.values.function.schema ?? defaultSchema,
-          dimension.values.function.name
-        ),
-        PLATFORM_FORM_PURPOSES.dimension
-      )
-  // Ім'я обробника з крапкою не ділиться з `schema.name`: ключ — кортеж
-  for (const { handler } of kept.contracts.eventSubscriptions)
-    found.set(
-      tupleKey(handler.schema, handler.name),
-      PLATFORM_FORM_PURPOSES.subscriptionHandler
-    )
-  return found
-}
+export type KeptModel = CompiledModel & Pick<CompileResult, "functionExecute">
 
 /**
  * Модель наявної теки, коли тека є (файл поза генератором і файлом
@@ -359,7 +329,7 @@ function platformForms(
  */
 export async function keptModel(
   existing: ReadonlyMap<string, string>
-): Promise<CompiledModel | undefined> {
+): Promise<KeptModel | undefined> {
   if (
     ![...existing.keys()].some((p) => p !== PROJECT_FILE && !isGeneratedPath(p))
   )
@@ -382,11 +352,20 @@ const DEBT_RATCHET: ReadonlySet<string> = new Set([
 
 async function compiledExisting(
   existing: ReadonlyMap<string, string>
-): Promise<CompiledModel | undefined> {
+): Promise<KeptModel | undefined> {
+  const kept = (result: CompileResult): KeptModel | undefined =>
+    result.model === undefined
+      ? undefined
+      : {
+          ...result.model,
+          ...(result.functionExecute === undefined
+            ? {}
+            : { functionExecute: result.functionExecute }),
+        }
   // Режим ремонту: збережена тека з помилками класу ремонту (результат
   // попереднього прийому) теж модель — повторний прийом над нею працює
   const compiled = await compile(existing, { repair: true })
-  if (compiled.model !== undefined) return compiled.model
+  if (compiled.model !== undefined) return kept(compiled)
   const errors = compiled.diagnostics.filter((d) => d.severity === "error")
   if (!errors.every((d) => DEBT_RATCHET.has(d.code) || isRepairError(d)))
     return undefined
@@ -394,7 +373,7 @@ async function compiledExisting(
   if (debt === undefined) return undefined
   const accepted = new Map(existing)
   accepted.set(SQL_DEBT_FILE, JSON.stringify({ units: debt }))
-  return (await compile(accepted, { repair: true })).model
+  return kept(await compile(accepted, { repair: true }))
 }
 
 /**
@@ -767,7 +746,15 @@ export async function reverseGenerate(
     functionPaths: laid.functionPaths,
     described: elsewhere.units,
     existing: o.existing,
-    platformForms: platformForms(kept),
+    derivedExecute: new Map(
+      (kept?.functionExecute ?? []).map((e) => [
+        e.identity,
+        {
+          purposes: e.purposes,
+          ...(e.form === undefined ? {} : { form: e.form }),
+        },
+      ])
+    ),
     policyFunctions,
     kinds,
   })

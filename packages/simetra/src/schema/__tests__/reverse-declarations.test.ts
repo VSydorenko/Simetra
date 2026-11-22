@@ -755,6 +755,58 @@ describe("platform forms of the kept folder", () => {
     ).toEqual([])
   })
 
+  // `EXECUTE` виводить платформа й для invoker-функції (декларація збереженої
+  // теки, функція модуля виду): план відкличе типовий `PUBLIC` поза її
+  // призначеннями, і правило те саме. Функція значень виміру invoker бути не
+  // може (`rights.dimension-function-signature`), тож тут — декларація.
+  // Мутація: відсіювати не-definer функції раніше за функції з виведеним `EXECUTE`
+  it("an invoker function with a kept declaration and the default PUBLIC: introspect.execute-narrowed", async () => {
+    const invoker =
+      "CREATE FUNCTION public.rpc(p_id uuid) RETURNS void LANGUAGE plpgsql STABLE SET search_path = '' AS $$ BEGIN NULL; END $$;"
+    const existing = withRoles()
+    existing.set("sql/public/rpc.sql", `${invoker}\n`)
+    existing.set(
+      "sql/public/rpc.functions.json",
+      JSON.stringify({
+        functions: [
+          { id: uuid(700_900), function: { name: "rpc" }, callers: ["user"] },
+        ],
+      })
+    )
+    const result = await reverseGenerate(
+      model(invoker),
+      options(existing, facts(fact("rpc", { grants: ["PUBLIC"] })))
+    )
+    expect(
+      warning(result, "introspect.execute-narrowed").map((d) => d.params)
+    ).toEqual(
+      ["anon", "service_role", PLATFORM_ROLES.command].map((role) => ({
+        function: "public.rpc",
+        role,
+        reason: role === "anon" ? "anonymous" : "outside-assignments",
+      }))
+    )
+  })
+
+  // Чужий грант на форму не губиться з пропуском декларації.
+  // Мутація: форма метаданих обходить перевірку чужих грантів
+  it("a grant on the set function to a role outside the profile is introspect.definer-foreign-grant", async () => {
+    const result = await reverseGenerate(
+      model(
+        `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT gen_random_uuid() $$;`
+      ),
+      options(
+        withRoles(teamScopeKind()),
+        facts(fact("team_ids", { grants: ["app_reader"] }))
+      )
+    )
+    expect(
+      result.diagnostics
+        .filter((d) => d.code === "introspect.definer-foreign-grant")
+        .map((d) => d.params?.role)
+    ).toEqual(["app_reader"])
+  })
+
   // Форма метаданих фактів не вимагає, але за наявним фактом звуження
   // називає те саме правило: `anon` поза призначеннями функції множини.
   // Мутація: форма метаданих пропускається до звірки з фактом
@@ -1090,25 +1142,27 @@ describe("repeated adoption", () => {
 describe("policy functions of debt (Р9, І6)", () => {
   // Таблиці фікстури функції політики — з фізичного знімка її теки; тека
   // зворотної генерації — прийом з нуля: лише проєкт
+  const FOLDER_OF_POLICY = () =>
+    policyFiles(POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT(), POLICY_DEBT())
+  const policyTables = async () => {
+    const physical = await compile(FOLDER_OF_POLICY())
+    expect(physical.model, "the fixture folder compiles").toBeDefined()
+    return catalogFromSnapshot(physical.model!.physical).tables
+  }
+  const policyProject = () =>
+    new Map([
+      ["project.meta.json", FOLDER_OF_POLICY().get("project.meta.json")!],
+    ])
   const adopt = async (
     sql: string,
     executes: FactOptions,
     kept: Record<string, string> = {},
     others: readonly string[] = []
   ) => {
-    const folder = policyFiles(
-      POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT(),
-      POLICY_DEBT()
-    )
-    const physical = await compile(folder)
-    expect(physical.model, "the fixture folder compiles").toBeDefined()
-    const existing = new Map([
-      ["project.meta.json", folder.get("project.meta.json")!],
-      ...Object.entries(kept),
-    ])
+    const existing = new Map([...policyProject(), ...Object.entries(kept)])
     return reverseGenerate(
       {
-        tables: catalogFromSnapshot(physical.model!.physical).tables,
+        tables: await policyTables(),
         enumTypes: [],
         units: units(sql),
       },
@@ -1285,6 +1339,44 @@ describe("policy functions of debt (Р9, І6)", () => {
       expect(narrowedOf(result)).toEqual(c.narrowed)
     }
   )
+
+  // Роль без `USAGE` на схему функцію й так не кличе: відкликання її
+  // `EXECUTE` дієвого доступу не звужує (рішення архітекторки: судимо дієвий ACL).
+  // Мутація: прибрати умову `USAGE` у `narrowedRoles`
+  it("a role with EXECUTE but without USAGE on the schema is not narrowed", async () => {
+    const result = await adopt(
+      POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT() + EXECUTE,
+      { grants: ["authenticated", "anon"], noUsage: ["anon"] }
+    )
+    expect(narrowedOf(result)).toEqual([])
+  })
+
+  // Звуження судить факт саме цієї функції: перевантаження `f(uuid)` має
+  // власний ACL, і його ролі не названі від імені функції політики `f()`, а
+  // спільні ролі — по разу.
+  // Мутація: звужувати за кожним фактом імені
+  it("an overload beside the policy function: only the facts of f() narrow, once", async () => {
+    const result = await reverseGenerate(
+      {
+        tables: await policyTables(),
+        enumTypes: [],
+        units: units(
+          POLICY_FUNCTION() +
+            READ_POLICY() +
+            DOCS_GRANT() +
+            "CREATE FUNCTION public.f(p uuid) RETURNS void LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT $$;"
+        ),
+      },
+      options(
+        policyProject(),
+        facts(
+          fact("f", { grants: ["PUBLIC"] }),
+          fact("f", { grants: ["PUBLIC"], identityArguments: "p uuid" })
+        )
+      )
+    )
+    expect(narrowedOf(result)).toEqual(ALL_OUTSIDE)
+  })
 
   it("only the derived role executes: nothing is narrowed", async () => {
     const result = await adopt(
