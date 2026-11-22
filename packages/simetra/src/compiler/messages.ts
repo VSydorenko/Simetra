@@ -40,6 +40,25 @@ function hintOf<K extends string>(
 }
 
 /**
+ * Поради `introspect.execute-narrowed` за причиною: роль без сесії definer-
+ * функції не кличе (OQ-1), а роль поза призначеннями отримує `EXECUTE` лише
+ * з того, що виводить платформа (декларація чи форма).
+ */
+const EXECUTE_NARROWED_HINTS: Record<
+  "anonymous" | "outside-assignments",
+  { en: string; uk: string }
+> = {
+  anonymous: {
+    en: "A SECURITY DEFINER function without a session has no user to check, so the plan revokes this EXECUTE. Make the function SECURITY INVOKER first if anonymous access is intended.",
+    uk: "Функція SECURITY DEFINER без сесії не має користувача для перевірки, тож план відкличе цей EXECUTE. Якщо потрібен анонімний доступ, спершу зробіть функцію SECURITY INVOKER.",
+  },
+  "outside-assignments": {
+    en: "The platform derives the EXECUTE of this function from its declaration or its platform form, and this role is not among them, so the plan revokes it. Name the role in the derived assignments (the callers of the declaration, or a caller policy of the policy function with the role and SELECT on its table) if it must keep the access.",
+    uk: "EXECUTE цієї функції платформа виводить з її декларації чи форми платформи, і цієї ролі серед них немає, тож план його відкличе. Якщо доступ має лишитися, назвіть роль у виведених призначеннях (викликачі декларації чи політика-викликач функції політики з цією роллю і SELECT на її таблиці).",
+  },
+}
+
+/**
  * Тексти `apply.drift-partial` за причиною: кожна причина гейта має власну
  * гілку. Запасної гілки з текстом іншої причини немає — невідома причина
  * (дефект гейта) називає себе, а не видає себе за обмеження моделлю.
@@ -5809,14 +5828,14 @@ export const MESSAGES: Readonly<Record<RuleCode, MessageEntry>> = {
       uk: "Декларацію записано без check, тож компілятор дасть sql.declaration-check-missing. Додайте check (declare-function) і дозвольте simetra fix вставити запобіжник виклику першим оператором або приберіть user і command з викликачів.",
     },
   },
-  "introspect.definer-anonymous-dropped": {
+  "introspect.execute-narrowed": {
     en: (p) =>
-      `${p.function}: EXECUTE for the role without a session (${p.role}) is not carried into the callers`,
+      `${p.function}: EXECUTE of ${p.role} is not carried over (${p.reason === "anonymous" ? "a role without a session" : "outside the derived assignments"}), the plan revokes it`,
     uk: (p) =>
-      `${p.function}: EXECUTE ролі без сесії (${p.role}) не перенесено у викликачі`,
+      `${p.function}: EXECUTE ролі ${p.role} не перенесено (${p.reason === "anonymous" ? "роль без сесії" : "поза виведеними призначеннями"}), план його відкличе`,
     hint: {
-      en: "A SECURITY DEFINER function without a session has no user to check, so the plan revokes this EXECUTE. Make the function SECURITY INVOKER first if anonymous access is intended.",
-      uk: "Функція SECURITY DEFINER без сесії не має користувача для перевірки, тож план відкличе цей EXECUTE. Якщо потрібен анонімний доступ, спершу зробіть функцію SECURITY INVOKER.",
+      en: (p) => hintOf(EXECUTE_NARROWED_HINTS, p, "outside-assignments").en,
+      uk: (p) => hintOf(EXECUTE_NARROWED_HINTS, p, "outside-assignments").uk,
     },
   },
   "introspect.definer-platform-form-candidate": {

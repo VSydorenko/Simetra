@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest"
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   compile,
   formPolicies,
@@ -42,6 +42,20 @@ import {
   READ_POLICY,
   policyFiles,
 } from "../../compiler/__tests__/fixtures/policy-function"
+
+// Скільки разів зворотна генерація рахує стадію SQL чернетки заради функцій
+// політик: обгортка кличе справжній розпізнавач
+const policyRuns = vi.hoisted(() => ({ count: 0 }))
+vi.mock("simetra/compiler", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("simetra/compiler")>()
+  return {
+    ...actual,
+    formPolicies: (files: ReadonlyMap<string, string>) => {
+      policyRuns.count += 1
+      return actual.formPolicies(files)
+    },
+  }
+})
 
 /**
  * Декларації definer-функцій у зворотній генерації (спека декларацій функцій
@@ -236,13 +250,12 @@ describe("declarations of definer functions", () => {
           : ["user", "command"]
       )
       expect(
-        warning(result, "introspect.definer-anonymous-dropped").map(
-          (d) => d.params
-        )
+        warning(result, "introspect.execute-narrowed").map((d) => d.params)
       ).toEqual([
         {
           function: "public.rpc",
           role: PROVIDER_API_ROLES[provider].anonymous,
+          reason: "anonymous",
         },
       ])
     }
@@ -307,10 +320,10 @@ describe("declarations of definer functions", () => {
       )
       expect(errorsOf(result)).toEqual([])
       expect(
-        warning(result, "introspect.definer-anonymous-dropped").map(
-          (d) => d.params
-        )
-      ).toEqual([{ function: "public.rpc", role: anonymous }])
+        warning(result, "introspect.execute-narrowed").map((d) => d.params)
+      ).toEqual([
+        { function: "public.rpc", role: anonymous, reason: "anonymous" },
+      ])
       const [entry] = declarationsOf(result, RPC_FUNCTIONS)
       expect(entry).toMatchObject({ callers: [] })
       expect(entry).not.toHaveProperty("check")
@@ -331,6 +344,25 @@ describe("declarations of definer functions", () => {
       expect(execute.filter((sql) => sql.startsWith("GRANT"))).toEqual([])
     }
   )
+
+  // Типові привілеї провайдера дають `EXECUTE` у ACL без одиниці гранту:
+  // звуження те саме, що з одиницею (попередній тест).
+  // Мутація: порівнювати лише одиниці грантів
+  it("EXECUTE of anon from default privileges, without a grant unit: the same introspect.execute-narrowed", async () => {
+    const result = await reverseGenerate(
+      model(
+        `${guarded("rpc")}\nGRANT EXECUTE ON FUNCTION public.rpc(uuid) TO authenticated;`
+      ),
+      options(
+        FOLDER(),
+        facts(fact("rpc", { grants: ["authenticated", "anon"] }))
+      )
+    )
+    expect(declarationsOf(result, RPC_FUNCTIONS)[0]!.callers).toEqual(["user"])
+    expect(
+      warning(result, "introspect.execute-narrowed").map((d) => d.params)
+    ).toEqual([{ function: "public.rpc", role: "anon", reason: "anonymous" }])
+  })
 
   it("only the user role: callers [user], the id is generated", async () => {
     const result = await reverseGenerate(
@@ -723,6 +755,26 @@ describe("platform forms of the kept folder", () => {
     ).toEqual([])
   })
 
+  // Форма метаданих фактів не вимагає, але за наявним фактом звуження
+  // називає те саме правило: `anon` поза призначеннями функції множини.
+  // Мутація: форма метаданих пропускається до звірки з фактом
+  it("the live EXECUTE of the set function beyond its assignments: introspect.execute-narrowed", async () => {
+    const result = await reverseGenerate(
+      model(
+        `CREATE FUNCTION public.team_ids() RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' ${pinnedSettingsClause()} AS $$ SELECT gen_random_uuid() $$;`
+      ),
+      options(
+        withRoles(teamScopeKind()),
+        facts(fact("team_ids", { grants: ["PUBLIC"] }))
+      )
+    )
+    expect(
+      warning(result, "introspect.execute-narrowed").map((d) => d.params)
+    ).toEqual([
+      { function: "public.team_ids", role: "anon", reason: "anonymous" },
+    ])
+  })
+
   const scopeGrants = [
     {
       name: "a grant to a role of the application",
@@ -1003,9 +1055,11 @@ describe("repeated adoption", () => {
       const result = await run(["service"], ["service_role", "anon"])
       expect(
         result.diagnostics
-          .filter((d) => d.code === "introspect.definer-anonymous-dropped")
+          .filter((d) => d.code === "introspect.execute-narrowed")
           .map((d) => d.params)
-      ).toEqual([{ function: "public.item_rpc", role: "anon" }])
+      ).toEqual([
+        { function: "public.item_rpc", role: "anon", reason: "anonymous" },
+      ])
       expect(codes(errorsOf(result))).not.toContain(
         "introspect.definer-callers-drift"
       )
@@ -1139,24 +1193,20 @@ describe("policy functions of debt (Р9, І6)", () => {
 
   // Генератор відкликає `EXECUTE` у ролі поза призначеннями; дослівний грант
   // їй — не похідний, тож лишається й називає себе, а не зникає мовчки.
-  // Мутації: прибирати кожен грант функції політики; рахувати `PUBLIC` роллю
-  // виведеного призначення (`callersOfRole` дає йому всі призначення профілю);
-  // рахувати похідним грант без названого отримувача (`CURRENT_USER`)
-  it.each([
-    { role: "anon", grants: ["authenticated", "anon"] },
-    { role: "PUBLIC", grants: ["authenticated", "PUBLIC"] },
-    { role: "CURRENT_USER", grants: ["authenticated"] },
-    { role: "authenticated, CURRENT_USER", grants: ["authenticated"] },
-  ])(
-    "a grant to $role, outside the derived purposes, stays verbatim: sql.generated-grant",
-    async ({ role, grants }) => {
+  // Грант без названого отримувача роль профілю не доводить: він лишається й
+  // називає себе, а не зникає мовчки.
+  // Мутації: прибирати кожен грант функції політики; рахувати роллю профілю
+  // грант, де частина отримувачів не названа
+  it.each(["CURRENT_USER", "authenticated, CURRENT_USER"])(
+    "a grant to %s stays verbatim: sql.generated-grant",
+    async (role) => {
       const result = await adopt(
         POLICY_FUNCTION() +
           READ_POLICY() +
           DOCS_GRANT() +
           EXECUTE +
           `\nGRANT EXECUTE ON FUNCTION public.f() TO ${role};`,
-        { grants }
+        { grants: ["authenticated"] }
       )
       expect(functionFiles(result.files)).toEqual([])
       expect(functionGrants(result.files)).toEqual([
@@ -1171,6 +1221,105 @@ describe("policy functions of debt (Р9, І6)", () => {
       expect(result.changes).toEqual([])
     }
   )
+
+  // Одне правило звуження (рішення архітекторки): роль профілю з дієвим
+  // `EXECUTE`, якої виведені призначення не дають, — `introspect.execute-narrowed`,
+  // хоч би як extract надрукував її право: одиницею гранту, типовими
+  // привілеями провайдера (ACL без одиниці) чи типовим `PUBLIC`.
+  // Мутація: порівнювати лише одиниці грантів, а не дієвий ACL фактів
+  const narrowedOf = (result: ReverseResult) =>
+    warning(result, "introspect.execute-narrowed").map((d) => d.params)
+  const ALL_OUTSIDE = [
+    { function: "public.f", role: "anon", reason: "anonymous" },
+    // `service_role` не читає T (немає `SELECT`), тож призначень не має
+    {
+      function: "public.f",
+      role: "service_role",
+      reason: "outside-assignments",
+    },
+    {
+      function: "public.f",
+      role: PLATFORM_ROLES.command,
+      reason: "outside-assignments",
+    },
+  ]
+  it.each([
+    {
+      path: "a grant unit to anon",
+      sql: `${EXECUTE}\nGRANT EXECUTE ON FUNCTION public.f() TO anon;`,
+      grants: ["authenticated", "anon"],
+      narrowed: [ALL_OUTSIDE[0]],
+    },
+    {
+      path: "default privileges of anon (an ACL entry without a unit)",
+      sql: EXECUTE,
+      grants: ["authenticated", "anon"],
+      narrowed: [ALL_OUTSIDE[0]],
+    },
+    {
+      path: "a grant unit to PUBLIC",
+      sql: `${EXECUTE}\nGRANT EXECUTE ON FUNCTION public.f() TO PUBLIC;`,
+      grants: ["PUBLIC"],
+      narrowed: ALL_OUTSIDE,
+    },
+    {
+      path: "the default PUBLIC (no unit at all)",
+      sql: "",
+      grants: ["PUBLIC"],
+      narrowed: ALL_OUTSIDE,
+    },
+  ])(
+    "$path on a policy function: the grant is dropped, introspect.execute-narrowed",
+    async (c) => {
+      const result = await adopt(
+        POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT() + c.sql,
+        { grants: c.grants }
+      )
+      expect(errorsOf(result)).toEqual([])
+      expect(functionFiles(result.files)).toEqual([])
+      expect(functionGrants(result.files)).toEqual([])
+      expect(narrowedOf(result)).toEqual(c.narrowed)
+    }
+  )
+
+  it("only the derived role executes: nothing is narrowed", async () => {
+    const result = await adopt(
+      POLICY_FUNCTION() + READ_POLICY() + DOCS_GRANT() + EXECUTE,
+      { grants: ["authenticated"] }
+    )
+    expect(narrowedOf(result)).toEqual([])
+  })
+
+  // Розпізнавання коштує стадію SQL чернетки: лише коли тека має і
+  // definer-функцію, і політику, і раз на прийом.
+  // Мутації: рахувати щоразу (без `policyFunctions` за потребою); рахувати
+  // без політики; рахувати на кожну definer-функцію
+  describe("the recognition runs only when it can find something", () => {
+    beforeEach(() => {
+      policyRuns.count = 0
+    })
+    it("no policy unit: no run", async () => {
+      await reverseGenerate(
+        model(guarded("rpc")),
+        options(FOLDER(), facts(fact("rpc", { grants: ["authenticated"] })))
+      )
+      expect(policyRuns.count).toBe(0)
+    })
+    it("a policy but no definer function: no run", async () => {
+      await adopt(READ_POLICY() + DOCS_GRANT(), {})
+      expect(policyRuns.count).toBe(0)
+    })
+    it("two definer functions beside a policy: one run", async () => {
+      await adopt(
+        POLICY_FUNCTION() +
+          POLICY_FUNCTION({ name: "g" }) +
+          READ_POLICY() +
+          DOCS_GRANT(),
+        { grants: ["authenticated"] }
+      )
+      expect(policyRuns.count).toBe(1)
+    })
+  })
 
   // Мутація: пропускати функцію політики до перевірки чужих ACL — грант ролі
   // застосунку мовчки губиться разом із пропуском

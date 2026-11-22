@@ -1215,7 +1215,7 @@ describe("introspect.definer-* codes", () => {
   // Серйозність за спекою декларацій функцій §5.7
   it.each([
     ["introspect.definer-check-unknown", "warning"],
-    ["introspect.definer-anonymous-dropped", "warning"],
+    ["introspect.execute-narrowed", "warning"],
     ["introspect.definer-platform-form-candidate", "warning"],
     ["introspect.definer-foreign-grant", "error"],
     ["introspect.definer-callers-drift", "error"],

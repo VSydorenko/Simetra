@@ -3,6 +3,7 @@ import {
   changesBetween,
   compile,
   completeFiles,
+  PLATFORM_FORM_PURPOSES,
   currentDebt,
   formPolicies,
   diagnostic,
@@ -319,26 +320,36 @@ function folderHalf(
 
 /**
  * Функції форм платформи наявної теки: функції множини видів скоупу,
- * функції значень вимірів доступу й обробники підписок. Їхній `EXECUTE`
- * виводить генератор, тож зворотна генерація декларації їм не пише.
+ * функції значень вимірів доступу й обробники підписок → призначення їхнього
+ * `EXECUTE`. Його виводить генератор, тож зворотна генерація декларації їм не
+ * пише.
  */
-function platformForms(kept: CompiledModel | undefined): Set<string> {
-  const found = new Set<string>()
+function platformForms(
+  kept: CompiledModel | undefined
+): Map<string, readonly string[]> {
+  const found = new Map<string, readonly string[]>()
   if (kept === undefined) return found
   const defaultSchema = kept.project.defaultSchema
   for (const kind of kept.scopeKinds)
-    found.add(tupleKey(kind.setFunction.schema, kind.setFunction.name))
+    found.set(
+      tupleKey(kind.setFunction.schema, kind.setFunction.name),
+      PLATFORM_FORM_PURPOSES.setFunction
+    )
   for (const dimension of kept.project.accessDimensions)
     if ("function" in dimension.values)
-      found.add(
+      found.set(
         tupleKey(
           dimension.values.function.schema ?? defaultSchema,
           dimension.values.function.name
-        )
+        ),
+        PLATFORM_FORM_PURPOSES.dimension
       )
   // Ім'я обробника з крапкою не ділиться з `schema.name`: ключ — кортеж
   for (const { handler } of kept.contracts.eventSubscriptions)
-    found.add(tupleKey(handler.schema, handler.name))
+    found.set(
+      tupleKey(handler.schema, handler.name),
+      PLATFORM_FORM_PURPOSES.subscriptionHandler
+    )
   return found
 }
 
@@ -731,10 +742,19 @@ export async function reverseGenerate(
   // Функції політик визнає розпізнавач компілятора на тій самій чернетці, що
   // ляже в теку: декларації й похідні гранти від цього не залежать. Перелік
   // боргу підсумкова тека отримує заново (`withDebt`), тож збережений, навіть
-  // зламаний, сюди не йде — він закрив би стадію 3, і з нею розпізнавання
-  const policies = await formPolicies(
-    new Map([...draft().files].filter(([path]) => path !== SQL_DEBT_FILE))
-  )
+  // зламаний, сюди не йде — він закрив би стадію 3, і з нею розпізнавання.
+  // Стадію SQL чернетки рахує лише перша definer-функція і лише коли в теці є
+  // політика: без неї функції політики немає
+  let policies: Promise<ReadonlyMap<string, readonly string[]>> | undefined
+  const policyFunctions = () =>
+    (policies ??= appUnits.some((u) => u.class === "policy")
+      ? formPolicies(
+          new Map([...draft().files].filter(([path]) => path !== SQL_DEBT_FILE))
+        ).then(
+          (found) =>
+            new Map(found.functions.map((p) => [p.unit.identity, p.purposes]))
+        )
+      : Promise.resolve(new Map()))
   const declared = await declareFunctions({
     units: appUnits,
     facts: o.executeFacts,
@@ -748,9 +768,7 @@ export async function reverseGenerate(
     described: elsewhere.units,
     existing: o.existing,
     platformForms: platformForms(kept),
-    policyFunctions: new Map(
-      policies.functions.map((p) => [p.unit.identity, p.purposes])
-    ),
+    policyFunctions,
     kinds,
   })
   // Гранти задекларованих функцій відтворює генератор: з виходу їх прибрано

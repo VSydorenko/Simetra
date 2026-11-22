@@ -414,7 +414,7 @@ export function describeDefinerAdoption(): void {
       )
     })
 
-    it("EXECUTE for PUBLIC: user and command callers, introspect.definer-anonymous-dropped; after the apply the plan is empty and the ACL is the derived one", async () => {
+    it("EXECUTE for PUBLIC: user and command callers, introspect.execute-narrowed (anonymous); after the apply the plan is empty and the ACL is the derived one", async () => {
       // Типовий ACL: `PUBLIC` (і ролі API типовими привілеями провайдера)
       await inAdoptedTarget(rpc(GUARD), async (ctx) => {
         const adopted = await adopt(ctx, ctx.existing)
@@ -426,10 +426,10 @@ export function describeDefinerAdoption(): void {
             : ["user", "command"]
         )
         expect(
-          byCode(adopted, "introspect.definer-anonymous-dropped").map(
-            (d) => d.params
-          )
-        ).toEqual([{ function: "public.rpc", role: API.anonymous }])
+          byCode(adopted, "introspect.execute-narrowed").map((d) => d.params)
+        ).toEqual([
+          { function: "public.rpc", role: API.anonymous, reason: "anonymous" },
+        ])
         const prepared = await compiledFolder(adopted.files)
         expect(prepared.errors).toEqual([])
         // План відкличе `PUBLIC` і роль без сесії: до застосування не порожній
@@ -539,10 +539,16 @@ export function describeDefinerAdoption(): void {
             const [entry] = declarations(adopted, RPC_FILE(adopted))
             expect(entry!.callers).toEqual(["user", "service"])
             expect(
-              byCode(adopted, "introspect.definer-anonymous-dropped").map(
+              byCode(adopted, "introspect.execute-narrowed").map(
                 (d) => d.params
               )
-            ).toEqual([{ function: "public.rpc", role: API.anonymous }])
+            ).toEqual([
+              {
+                function: "public.rpc",
+                role: API.anonymous,
+                reason: "anonymous",
+              },
+            ])
             const prepared = await compiledFolder(adopted.files)
             expect(prepared.errors).toEqual([])
             await apply(ctx.target, prepared.model!)
@@ -572,9 +578,7 @@ export function describeDefinerAdoption(): void {
                 (p) => /\/rpc/.test(p) && p.endsWith(".functions.json")
               )
             ).toEqual([])
-            expect(
-              byCode(adopted, "introspect.definer-anonymous-dropped")
-            ).toEqual([])
+            expect(byCode(adopted, "introspect.execute-narrowed")).toEqual([])
           },
           folder({ appSchema: true })
         )

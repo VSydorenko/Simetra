@@ -417,7 +417,7 @@ export const COMPILER_RULES = [
   "introspect.project-mismatch",
   "introspect.path-collision",
   "introspect.definer-check-unknown",
-  "introspect.definer-anonymous-dropped",
+  "introspect.execute-narrowed",
   "introspect.definer-platform-form-candidate",
   "introspect.definer-foreign-grant",
   "introspect.definer-callers-drift",
@@ -537,7 +537,7 @@ const WARNING_RULES: ReadonlySet<RuleCode> = new Set<RuleCode>([
   "attribute.lazy-over-budget",
   "engine.shadow-drop-failed",
   "introspect.definer-check-unknown",
-  "introspect.definer-anonymous-dropped",
+  "introspect.execute-narrowed",
   "introspect.definer-platform-form-candidate",
 ])
 
