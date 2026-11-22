@@ -13,7 +13,7 @@ import {
   type ObjectTable,
   type PhysicalSnapshot,
 } from "simetra/model"
-import { scopeSetCall } from "../access-units"
+import { tenantBoundary } from "../access-units"
 import { bodyRequires } from "../catalog-command/units"
 import {
   mainTableOf,
@@ -158,7 +158,7 @@ function grantOverParameter(condition: RightsCondition): string {
 
 /**
  * Умова `storage_headroom` для об'єкта (Р3): право `create` без рядка — ті
- * самі будівники, що й політики вставки (`rowFreeGrants`, `scopeSetCall`), без
+ * самі будівники, що й політики вставки (`rowFreeGrants`, `tenantBoundary`), без
  * другої копії правила, — і запас обсягу під межею скоупу. Без функцій прав чи
  * дії `create` довести право нічим — `false`.
  */
@@ -178,7 +178,7 @@ function headroomCondition(object: StorageObject, rightsOn: boolean): string {
   return [
     ...(object.scope === undefined
       ? []
-      : [`p_scope = ANY (ARRAY(SELECT ${scopeSetCall(object.scope)}))`]),
+      : [tenantBoundary({ ...object.scope, carrier: "p_scope" })]),
     `(${grants.map(grantOverParameter).join(" OR ")})`,
     // Файл `maxBytes` має вміститися: понад межу рядок відмовив би на
     // `INSERT`, але тоді байти вже в бакеті
@@ -460,7 +460,7 @@ export function buildStorageUnits(input: StorageInput): SqlUnit[] {
       "    END IF;",
       "    RETURN NEW;",
       "  END IF;",
-      `  UPDATE ${USAGE} u SET bytes = GREATEST(u.bytes - COALESCE(OLD.${quoteIdent(sizeColumn)}, 0), 0)`,
+      `  UPDATE ${USAGE} u SET bytes = u.bytes - COALESCE(OLD.${quoteIdent(sizeColumn)}, 0)`,
       `  WHERE u.scope_kind = ${kind} AND u.scope = ${scopeOf("OLD")};`,
       "  RETURN OLD;",
       "END",

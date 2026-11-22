@@ -162,7 +162,15 @@ describe("storage generator", () => {
     const scope = scoped.contracts.access.find(
       (a) => a.scope !== undefined
     )!.scope!
-    expect(body).toContain(tenantBoundary({ ...scope, carrier: "p_scope" }))
+    const boundary = tenantBoundary({ ...scope, carrier: "p_scope" })
+    // Форма умови: межа AND гранти AND запас, а не будь-які три шматки:
+    // `OR` замість `AND` не мав би пройти
+    const escaped = boundary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    expect(body).toMatch(
+      new RegExp(
+        `RETURN COALESCE\\(${escaped} AND \\([^\\n]+\\) AND NOT EXISTS \\(SELECT 1 FROM [^\\n]*storage_quota[^\\n]*\\), false\\);`
+      )
+    )
     expect(body).toContain("simetra.rights_")
     expect(body).toContain("storage_quota")
     expect(body).not.toContain(ZERO_UUID)
