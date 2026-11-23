@@ -782,9 +782,14 @@ async function runOn(
       const snap = handle.getSnapshot()
       // Лише вимога «склад не підтверджено з e»: склад після розриву
       // відпущеного каналу чекає читання, яке тут ніхто не обіцяє.
-      const required =
-        coreInternals(h.core).registry.find(specs[v]!)?.unconfirmedSince !==
-        undefined
+      const required = h.inspect
+        .sync()
+        .some(
+          (state) =>
+            state.target.kind === "view" &&
+            state.target.spec === specs[v] &&
+            state.requirements.some((r) => r.kind === "composition-unconfirmed")
+        )
       if (required && snap.status === "ready" && snap.staleComposition === true)
         failWith(
           "before the liveness reads",
