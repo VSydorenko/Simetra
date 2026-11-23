@@ -201,9 +201,13 @@ describe("sync(): a requirement of each kind main holds, with its promise or con
     seed(h.fake, 1, 2)
     h.core.hydrate(snapshot)
     const epoch = h.core.readEpoch()
-    expect(stateOf(h, viewTarget(from.spec))).toMatchObject({
+    // До `endHydration` вимогу не читає ніхто: умова `hydrating`, без обіцянки.
+    expect(stateOf(h, viewTarget(from.spec))).toEqual({
+      target: viewTarget(from.spec),
       requirements: [{ kind: "hydration-trust", epoch }],
       flights: [],
+      queued: [],
+      deferral: "hydrating",
     })
     watch(h.core.view(from.spec))
     h.core.endHydration()

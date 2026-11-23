@@ -329,7 +329,7 @@ export interface SyncQueued {
 /** A condition that defers the reads of the target's requirements. */
 export type SyncDeferral = Extract<
   AdmissionCondition,
-  "tab-hidden" | "target-invisible" | "promised" | "paused"
+  "tab-hidden" | "target-invisible" | "promised" | "paused" | "hydrating"
 >
 /** A condition under which `main` reads nothing of the target. */
 export type SyncRefusal = Extract<
@@ -2428,15 +2428,19 @@ export function createCore(options: {
         ),
         refusalOf(object),
         () =>
-          !visible && (kinds.some((k) => TAB_GATED.has(k)) || inRetry)
-            ? "tab-hidden"
-            : !readable && kinds.some((k) => VISIBILITY_GATED.has(k))
-              ? "target-invisible"
-              : promised(requirements, flights, queued)
-                ? "promised"
-                : s.failures > 0 || inRetry
-                  ? "paused"
-                  : undefined
+          // До `endHydration` довіру після гідратації не читає ніхто: її
+          // читання — сам виклик (умова `hydrating`, рішення архітекторки).
+          hydration === "hydrated" && kinds.includes("hydration-trust")
+            ? "hydrating"
+            : !visible && (kinds.some((k) => TAB_GATED.has(k)) || inRetry)
+              ? "tab-hidden"
+              : !readable && kinds.some((k) => VISIBILITY_GATED.has(k))
+                ? "target-invisible"
+                : promised(requirements, flights, queued)
+                  ? "promised"
+                  : s.failures > 0 || inRetry
+                    ? "paused"
+                    : undefined
       )
     }
 

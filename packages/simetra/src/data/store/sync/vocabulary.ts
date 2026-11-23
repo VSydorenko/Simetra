@@ -29,6 +29,7 @@ export const ADMISSION_CONDITIONS = [
   "target-invisible",
   "paused",
   "promised",
+  "hydrating",
 ] as const
 export type AdmissionCondition = (typeof ADMISSION_CONDITIONS)[number]
 
