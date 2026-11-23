@@ -447,6 +447,35 @@ describe("purge", () => {
     expect(inspect.violations()).toEqual([])
   })
 
+  // Надгробок пари витіснено ліміту `tombstonesMax` після старту читання:
+  // горизонт кошика заступає його, і рядок пари не «новий» для вигляду.
+  it("a full revalidate in flight across a purge of the pair whose tombstone was then evicted does not show hasNewRows", async () => {
+    const { core, fake } = setup({ limits: { tombstonesMax: 2 } })
+    seed(fake, 1, 2)
+    const handle = core.view({ kind: "full", object: TASK })
+    watch(handle)
+    await settle()
+    fake.hold = () => true
+    void core.revalidate(TASK, { visibleOnly: false })
+    await settle()
+    const held = fake.pending.length
+    expect(held).toBeGreaterThan(0)
+    // Сервер уже не показує пару, але відповідь, що стартувала раніше, несе
+    // її рядки: їх судить лише поховання пари з початку читання.
+    const visible = fake.clock
+    fake.setVisibleScopes([])
+    // Прохід заміни знімка прав не рухає позначку purge, тож відповідь не
+    // відкидає лічильник purge, і пару судить лише надгробок чи горизонт.
+    write(core, (w) => w.purge(TASK, { scope: S }, { rights: true }))
+    write(core, (w) => w.purge(ORG, { keys: [key(90)] }))
+    write(core, (w) => w.purge(ORG, { keys: [key(91)] }))
+    write(core, (w) => w.purge(ORG, { keys: [key(92)] }))
+    fake.hold = undefined
+    for (let i = 0; i < held; i++) fake.take().answer(visible)
+    await settle()
+    expect(handle.getSnapshot().hasNewRows).toBe(false)
+  })
+
   it("does not write a row of the purged scope from a full load in flight and re-reads the view", async () => {
     const { core, fake, inspect } = setup()
     seed(fake, 1, 2)

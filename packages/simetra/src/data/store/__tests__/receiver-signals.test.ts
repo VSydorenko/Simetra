@@ -473,6 +473,33 @@ describe("expected minimum version, new keys, sections and invalidate", () => {
     expect(list.getSnapshot().hasNewRows).toBe(false)
   })
 
+  // Те саме, коли надгробок витіснено ліміту `tombstonesMax`: горизонт
+  // кошика заступає його, інакше `hasNewRows` виказав би прибраний рядок.
+  it("does not mark hasNewRows for a new key whose purge tombstone was evicted while its signal read is in flight", async () => {
+    const h = await open(keysView(key(1)), 3, undefined, undefined, undefined, {
+      tombstonesMax: 2,
+    })
+    const list = h.core.view({ kind: "full", object: TASK })
+    list.subscribe(() => {})
+    await settle()
+    expect(list.getSnapshot().hasNewRows).toBe(false)
+    h.fake.mode = "manual"
+    const v = h.fake.insert(TASK, taskValues(78))
+    emit(h, change("create", key(78), v))
+    await closeBatch()
+    expect(h.fake.pending).toHaveLength(1)
+    const purge = (k: Key) =>
+      h.core.commit((w) => w.purge(TASK, { keys: [k] }), h.core.token())
+    purge(key(78))
+    purge(key(79))
+    purge(key(80))
+    purge(key(81))
+    h.fake.mode = "auto"
+    h.fake.deliverAll()
+    await settle()
+    expect(list.getSnapshot().hasNewRows).toBe(false)
+  })
+
   it("re-reads the section of a mounted owner when the header version grows", async () => {
     const h = await open(keysView(key(1)))
     const lines = [{ ref: key(900), qty: 1, lineNumber: 1 }]
@@ -925,9 +952,19 @@ describe("purge of a pair", () => {
       evicted: true,
       target: { scope: S },
     },
+    // Витіснено обидва надгробки (ключа й пари): лишається лише горизонт
+    // кошиків, і лише він каже, що відповідь стартувала до purge.
+    {
+      what: "pair with both tombstones evicted",
+      evicted: true,
+      bothEvicted: true,
+      target: { scope: S },
+    },
   ] as const)(
     "a min-version answer that started before a purge of the $what sets no mark and sends no re-read",
-    async ({ evicted, target }) => {
+    async (c) => {
+      const { evicted, target } = c
+      const bothEvicted = "bothEvicted" in c
       const h = await twoScopes(evicted ? { tombstonesMax: 2 } : undefined)
       const served = h.fake.edit(TASK, key(1), { title: "v" })
       h.fake.mode = "manual"
@@ -939,7 +976,11 @@ describe("purge of a pair", () => {
       const purge = (t: Parameters<Writer["purge"]>[1]) =>
         h.core.commit((w) => w.purge(TASK, t), h.core.token())
       purge(target)
-      if (evicted) {
+      if (bothEvicted) {
+        purge({ keys: [key(5)] })
+        purge({ keys: [key(6)] })
+        purge({ keys: [key(7)] })
+      } else if (evicted) {
         purge({ scope: S })
         purge({ keys: [key(5)] })
       }
