@@ -276,7 +276,7 @@ test.describe("signal delivery", () => {
     browser,
   }) => {
     const [row] = await app.query<{ id: string; description: string }>(
-      "SELECT id, description FROM app.client WHERE owner = $1 ORDER BY description LIMIT 1",
+      "SELECT id, description FROM app.client WHERE owner_id = $1 ORDER BY description LIMIT 1",
       [app.users.a.id]
     )
     expect(row).toBeDefined()
