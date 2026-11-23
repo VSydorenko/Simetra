@@ -94,7 +94,7 @@ describe("O1: events against the journal of the fake source", () => {
         requests: [1],
         requestParts: [[part("Task")]],
       }).join()
-    ).toContain("request 0: 1 parts, no events")
+    ).toContain("request 1: events of a request the fake never got")
   })
 
   it("is red for a part count that differs from the events of the request", () => {
