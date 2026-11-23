@@ -24,8 +24,9 @@ import {
   readRows,
   rowsOf,
   tracked,
+  type BoundSource,
+  type ReadOrigin,
   type StoreSource,
-  type WriteLease,
 } from "./source"
 import {
   EMPTY_WINDOW,
@@ -101,10 +102,9 @@ export interface StoreOps {
   sweep(scope: Scope): void
 }
 
-/** What the readers need from the core. */
-export interface ReaderContext {
+/** What the readers need from the core, but the source. */
+export interface ReaderContextBase {
   readonly session: Pick<Session, "acceptEpoch" | "acceptEpochs" | "epochs">
-  readonly source: StoreSource
   readonly limits: CoreLimits
   readonly strict: boolean
   readonly log: (entry: CoreLogEntry) => void
@@ -113,6 +113,22 @@ export interface ReaderContext {
   /** Whether the object is marked stale-client (§10): nothing of it is written. */
   isStale(object: ObjectName): boolean
 }
+
+/**
+ * What the readers of one flight see: the source already carries the origin
+ * of the flight (`gated`), so a reader cannot read without one.
+ */
+export interface ReaderContext extends ReaderContextBase {
+  readonly source: BoundSource
+}
+
+/** What the core holds: the source still wants an origin per read. */
+export interface ReaderHost extends ReaderContextBase {
+  readonly source: StoreSource
+}
+
+/** `C` over another source: the context a flight's readers get from {@link gated}. */
+export type WithSource<C, S> = Omit<C, "source"> & { readonly source: S }
 
 /** The part of a subset a reader's `apply` writes. */
 export interface ReaderTarget {
@@ -181,14 +197,13 @@ export type Apply = (scope: Scope) => boolean
  * returned `Apply` writes only after the session accepted each of them and
  * none is abandoned (`acceptEpochs` — the single check before a write).
  */
-export async function gated<C extends ReaderContext>(
+export async function gated<C extends ReaderHost>(
   ctx: C,
   readEpoch: number,
-  read: (ctx: C) => Promise<Write>,
-  caller: Subset | undefined,
-  lease: WriteLease
+  read: (ctx: WithSource<C, BoundSource>) => Promise<Write>,
+  origin: ReadOrigin
 ): Promise<Apply> {
-  const { source, epochs } = tracked(ctx.source, caller, lease)
+  const { source, epochs } = tracked(ctx.source, origin)
   const write = await read({ ...ctx, source })
   return (scope) => {
     if (ctx.session.acceptEpochs(epochs, readEpoch) === "discard") return false
@@ -1072,18 +1087,17 @@ async function readSection(
  * epochs of its answers. A multi-request read stops once `token` is invalid.
  */
 export function readForm(
-  ctx: ReaderContext,
+  ctx: ReaderHost,
   s: Subset,
   readEpoch: number,
   token: GenerationToken,
-  lease: WriteLease
+  origin: ReadOrigin
 ): Promise<Apply> {
   return gated(
     ctx,
     readEpoch,
     (c) => readFormWrite(c, s, readEpoch, token),
-    s,
-    lease
+    origin
   )
 }
 

@@ -127,6 +127,16 @@ export interface Receiver {
   ): void
   /** A core tick: writes `stale-age` while an own mark exists. */
   tick(): void
+  /**
+   * Test-only (`inspectCore().sync()`): the min-version re-reads waiting for
+   * their pause — the row, the wake-up time and the attempt they will make.
+   */
+  minVersionRetries(): readonly {
+    readonly object: ObjectName
+    readonly key: Key
+    readonly at: number
+    readonly attempt: number
+  }[]
   /** Drops every subscription; the receiver sees nothing afterwards. */
   stop(): void
 }
@@ -638,7 +648,22 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     signals: ObjectBatch
   ): Job => {
     const lease = writer.source.lease()
-    const read = tracked(writer.source, undefined, lease)
+    // Пачка з самих дочитувань мінімальної версії — K2; щойно в ній є сигнал,
+    // це читання сигналу (K1): зливаючись, пачка бере менший `attempt`.
+    // Порожнього плану тут не буває (`classify` без ключів дає `whole`, і це
+    // не `startJob`), але порожній випадок названо явно: це читання сигналу.
+    const planned = [...plan.stored, ...plan.fresh]
+    const retried =
+      planned.length > 0 &&
+      planned.every((key) => (signals.keys.get(key)?.attempt ?? 0) > 0)
+    const read = tracked(writer.source, {
+      ...(retried
+        ? { reason: "requirement", requirement: "min-version" }
+        : { reason: "signal" }),
+      target: { kind: "keys", object },
+      site: retried ? "K2" : "K1",
+      lease,
+    })
     const owned = new Set(plan.stored)
     return {
       object,
@@ -693,9 +718,18 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     spec.where === undefined ||
     evaluateFilter(spec.where, values, fieldInfoOf(o.entry), collator)
 
+  // `at` і `attempt` — лише облік для діагностики (`sync()`): час пробудження
+  // паузи й спроба, яку вона зробить; поведінки вони не змінюють.
   const retries = new Map<
     string,
-    { chain: object; object: ObjectName; key: Key; scope: string | null }
+    {
+      chain: object
+      object: ObjectName
+      key: Key
+      scope: string | null
+      at: number
+      attempt: number
+    }
   >()
   // Дочитування мінімальної версії: після паузи ключ іде в ту саму чергу
   // зведених пачок, а не окремим шляхом.
@@ -708,8 +742,16 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const id = `${object}\u0000${key}`
     const chain = {}
     const scope = writer.objectOf(object).rows.get(key)?.scope ?? null
-    retries.set(id, { chain, object, key, scope })
-    void session.sleep(MIN_VERSION_PAUSE_MS * 2 ** (attempt - 1)).then(() => {
+    const pause = MIN_VERSION_PAUSE_MS * 2 ** (attempt - 1)
+    retries.set(id, {
+      chain,
+      object,
+      key,
+      scope,
+      at: writer.now() + pause,
+      attempt,
+    })
+    void session.sleep(pause).then(() => {
       if (retries.get(id)?.chain !== chain) return
       retries.delete(id)
       if (stopped) return
@@ -840,8 +882,11 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         burstObjects.push(object)
         unconfirmed.push(object)
         flights.push(
-          revalidate(writer, object, { visibleOnly: true }).catch(
-            (error: unknown) => writer.log({ kind: "listener-failed", error })
+          revalidate(writer, object, {
+            visibleOnly: true,
+            why: { reason: "signal", site: "R8" },
+          }).catch((error: unknown) =>
+            writer.log({ kind: "listener-failed", error })
           )
         )
         continue
@@ -864,6 +909,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       if (sections.length > 0) {
         const flight = singleFlight(writer, o, sections, {
           visibleOnly: false,
+          why: { reason: "signal", site: "R9" },
         }).done.catch((error: unknown) =>
           writer.log({ kind: "listener-failed", error })
         )
@@ -885,7 +931,11 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
           w.markViews(object, { unconfirmedSince: since })
       }, token)
     // Строк на `resume()`: планувальник на прихованій вкладці нічого не шле.
-    for (const object of requested) writer.schedule(object, 0)
+    for (const object of requested)
+      writer.schedule(object, 0, {
+        reason: "requirement",
+        requirement: "composition-unconfirmed",
+      })
     // Кожне читання ключів осідає своєю відповіддю (і ТЧ свого об'єкта), одним
     // `commit`: відповідь, що чекала б повільних перечитувань інших об'єктів
     // пачки, лягла б пізніше за новіші читання й розійшлася б із ними (П15).
@@ -959,6 +1009,13 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
 
   return {
     touch,
+    minVersionRetries: () =>
+      [...retries.values()].map(({ object, key, at, attempt }) => ({
+        object,
+        key,
+        at,
+        attempt,
+      })),
     tick() {
       if (stopped) return
       forgetReleased()
