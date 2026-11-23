@@ -46,6 +46,8 @@ SK-6 — окремий issue тієї самої віхи: він єдиний 
 | Інтерфейс | Вид | Блок-власник | Розширює | Споживачі | Означено в |
 | --- | --- | --- | --- | --- | --- |
 | `watchReads` і діагностика `sync()` в `CoreInspection` | API (лише тести) | SK-0 | — | SK-1…SK-6, усі блоки з модельними тестами | §5.13 |
+| словник `sync/` (`as const`-переліки: причини, умови, види вимог і цілей, коди Додатка Б) | дані й типи | SK-0 | SK-1 — рядки таблиці допуску; SK-3, SK-4 — види вимог | SK-1, SK-3, SK-4 | §5.3, §5.13, Додаток Б |
+| походження читання `origin` — обов'язковий другий аргумент `StoreSource.read` | API (внутрішній) | SK-0 | SK-1 — замінює на `Flight` без зміни місць виклику | SK-1 | §5.13 |
 | оракули О1–О4 і мутації самотесту | тест | SK-0 | SK-1, SK-2, SK-4, SK-5 — мутації свого механізму | SK-1…SK-6 | §5.13 |
 | `Flight` і підпис `StoreSource.read(parts, flight)` | тип і API | SK-1 | — | SK-2…SK-6, #338, #208, #111 | §5.4 |
 | `admit` і таблиця допуску | API і дані | SK-1 | SK-4 — цільові рядки §5.3; блоки запису — рядки запису (§5.10) | усі шляхи читання; запис (#338, #208, #227, #229) | §5.3 |
@@ -367,15 +369,15 @@ SK-6 — окремий issue тієї самої віхи: він єдиний 
 
 Діагностика (лише тести, вхід `inspectCore`, якого немає в публічних входах пакета):
 
-- `watchReads(listener)` — подія на кожен запит до джерела: причина, ціль, номер запиту (звіряється з журналом фейкового джерела через `requestOf`). У журнал `log` ключі й значення не йдуть; ключі бачить лише тестова діагностика.
-- `sync()` — перелік цілей зі станом: вимоги, польоти, строк, умова відкладення чи причина відмови.
+- `watchReads(listener)` — подія на кожен запит до джерела: причина, ціль, код рядка інвентаря (`site`, Додаток Б), номер запиту (звіряється з журналом фейкового джерела через `requestOf`). У журнал `log` ключі й значення не йдуть; ключі бачить лише тестова діагностика.
+- `sync()` — перелік цілей зі станом: вимоги, польоти, доказ, строк, умова відкладення чи причина відмови. Поле, якого `main` ще не має, відсутнє в типі, а не вигадане.
 
 Позитивні оракули — гейт кожного блоку:
 
 | Оракул | Твердження |
 | --- | --- |
 | О1 | кожен запит читання має причину з переліку §5.3 і ціль |
-| О2 | у спокої кожна вимога кожної цілі має обіцянку — політ зі стартом не раніше вимоги в польоті чи черзі, або строк у планувальнику — або названу умову відкладення з таблиці допуску |
+| О2 | у спокої кожна вимога кожної цілі має обіцянку — політ зі стартом не раніше вимоги в польоті чи черзі, або строк у планувальнику — або названу умову відкладення з таблиці допуску; вимога зникає лише з доказом, не старшим за її епоху, або разом з ціллю |
 | О3 | без ручного `refresh()` і `revalidate` показ кожного видимого вигляду на видимій вкладці доходить до правди фейкового сервера за обмежений час моделі |
 | О4 | вкладка в спокої (§5.3) на прихованій вкладці не шле запитів |
 
@@ -471,4 +473,56 @@ SK-0…SK-3 поведінки не змінюють. SK-4 і SK-5 змінюю�
 
 ## Додаток Б. Інвентар шляхів читання `main`
 
-Заповнює SK-0 задачею свого плану: один рядок на шлях читання — файл і функція, причина, ціль, умови, які шлях перевіряє, клітинка цільової таблиці §5.3. До SK-0 орієнтир — [дослідження ядра синхронізації](../../research/runtime/sync-kernel-research-2026-11.md) §2, §3 і §5.
+Один рядок на місце, яке вирішує читати. Код рядка — значення `site` у події `watchReads` (§5.13); тест звіряє перелік кодів у коді з цією таблицею. Причину й ціль кожного запиту фіксує діагностика SK-0.
+
+Спільне для всіх рядків:
+
+- Фізична точка відправки одна: `StoreSource.read` (об'єкт `source` у `core.ts`) → `dispatch` → `batcher.read` → `send` у `source.ts`, де запит дістає номер (`requestOf`). Обходу немає.
+- `stale-object` перевіряє лише `dispatch` (`isLive`): частина несумісного об'єкта отримує `command.stale-client` без запиту. Це збігається з відмовою цільової таблиці, тож у колонці «Умови» його не повторено.
+- Читання всередині польоту (сторінки повного читання й вікна, пачки ключів, половини `response-too-large`, повтори частин без відповіді, ціль `include`; `source.ts` `readRows`, `readOne`, `readKeys`, `window.ts` `fetchPage`, `rereadPages`, `readers.ts` `fetchFullAgain`, `writer.ts` `readFullAgain`, `readWindowAgain`, `writeAgain`, `readHeldTargets`) — продовження польоту (§5.3): причину й ціль бере з рядка, що його почав.
+- `promised` на `main` — поля кожного механізму: `flight`, `trailing`, `recheck`, `paging`, `rereadTail`, `tails.flying`, `versionFlying`, `rightsFlying`.
+- Колонка «Різниця»: рядок §5.14, що її закриває; «розвилка (а)/(б)» — різниця без рядка §5.14, рішення архітекторки до SK-4 (нижче таблиці).
+
+| Код | Файл :: функція (тригер) | Причина | Ціль (вид польоту) | Умови, які шлях перевіряє сам | Клітинка §5.3 | Різниця |
+| --- | --- | --- | --- | --- | --- | --- |
+| M1 | `subsets.ts` :: `start` → `load` (підписка, перше утримання) | `mount` | вигляд (завантаження) | `closed` (`isClosed`); `promised` (`flight` → `trailing`) | `mount` × `tab-hidden`: допуск; × `promised`: черга | межа відкинутих — 8 |
+| M2 | `subsets.ts` :: `preload` → `start` → `load` (без підписника) | `mount` | вигляд (завантаження) | як M1 | `mount` × `target-invisible`: «—» | межа відкинутих — 8 |
+| M3 | `subsets.ts` :: `start`, `check` (дочитування картки з рядком у сховищі чи ТЧ, яке запускає підписка чи `preload`) | `mount` | картка, вигляд ТЧ (завантаження) | `listeners` (крім утримання `preload`); `promised` (`flight` → `recheck`); `cardStale`, `sectionStale` | `mount` × `promised`: черга | межа відкинутих — 8 |
+| M4 | `subsets.ts` :: `queueCheck` → `check` → `load` (`afterCommit`: шапка змінилась чи `hide` власника після останнього читання цілі) | `requirement` «ціль відстала від шапки» | картка, вигляд ТЧ (завантаження) | `closed`; `listeners` (крім утримання `preload`); `promised` (`flight` → `recheck`) | `requirement` × `tab-hidden`: відкладено; × `paused`: відкладено | вкладка — 1; пауза — розвилка (б) |
+| M5 | `subsets.ts` :: `refresh`, `showNew` вигляду → `load` | `user` | вигляд (завантаження) | `stale-object` (`isStale` вигляду); `closed`; `promised` (`trailing`) | `user` × `promised`: черга | межа відкинутих — 8 |
+| M6 | `subsets.ts` :: `load`, наступне завантаження за `trailing` | причина виклику, що поставив чергу (M1, M5, R11) | вигляд (завантаження) | `alive`; `closed` | клітинка `promised` тієї причини | — |
+| M7 | `subsets.ts` :: `load`, повтор за `settleRequirement` (вимога «склад не підтверджено» стала, поки летіло завантаження) | `retry` | вигляд (завантаження) | `tab-hidden` (`tabVisible`); `waitsForRead`: видимість, `rereadEpochs`, `flight`, хвіст, `paused` (`failures`), `discard-bound` | `retry` × усі ✓ | — |
+| M8 | `subsets.ts` :: `load`, повтор після відкинутої відповіді (`DISCARD_PAUSE_MS`) | `retry` | вигляд (завантаження) | `closed`; `discard-bound` — після запису | `retry` × `tab-hidden`, `target-invisible`: відкладено | 1, 2 |
+| P1 | `subsets.ts` :: `loadMore` (`loadBefore`, `loadAfter`) | `user` | сторінка | `closed`; `alive`, `purged`, `atEnd`; `promised` (`paging` напрямку → відмова) | `user` × `promised`: сторінка того самого напрямку — відмова ✓ | межа відкинутих — 8 |
+| P2 | `subsets.ts` :: `loadMore`, повтор після відкинутої відповіді | `retry` | сторінка | `closed` | `retry` × `tab-hidden`, `target-invisible`: відкладено | 1, 2 |
+| P3 | `subsets.ts` :: `loadMore`, повтор за власним відхиленням (П15, `answerRejected`) | `retry` | сторінка | `tab-hidden`; видимість; `answerRejected` | `retry` ✓ | — |
+| R1 | `core.ts` :: `runDue` за `scheduled.whole` (перемикання епохи версій; сигнал на прихованій вкладці через `writer.schedule`; `freshness.requestReread`) | `requirement` «епоха версій перемкнулась» чи «склад не підтверджено» | системне перечитування видимих виглядів об'єкта | `tab-hidden` (такт, `resume`); `discard-bound` (`dropDeferredWhenUnavailable`); `stale-object`; `visibleOnly` | `requirement` × `tab-hidden`: відкладено ✓ | — |
+| R2 | `core.ts` :: такт планувальника → `reconcile({ minAgeMs })` → `revalidate` | `interval` | системне перечитування видимих виглядів | `tab-hidden`; `discard-bound`; `paused` і вік (`dueOf`); `promised` (`inFlight`); `stale-object` | `interval` × усі ✓ | — |
+| R3 | `core.ts` :: `runDue` за `scheduled.retry` (відкинута відповідь системного перечитування) | `retry` | системне перечитування відкинутих виглядів | `tab-hidden` (такт); `alive`, `purged`; `discard-bound` | `retry` × `tab-hidden`: відкладено ✓ | — |
+| R4 | `core.ts` :: `fireWave` → `revalidate` | `requirement` «приєднання каналу» | системне перечитування видимих виглядів об'єктів каналу | `closed`; `stale-object`; `visibleOnly`; `tab-hidden` (такт, `resume`) | `requirement` × `paused`: відкладено | епоха — 7; пауза — розвилка (б) |
+| R5 | `core.ts` :: `endHydration` → `reconcile` знімка | `requirement` «довіра після гідратації» | системне перечитування видимих виглядів і виглядів знімка | `closed`; `stale-object`; видимість | `requirement` × `tab-hidden`: відкладено | 1 |
+| R6 | `core.ts` :: `resume` → `reconcile({ minAgeMs: resumeMinIntervalMs })` | `interval` (такт `resume()`, §5.7) | системне перечитування видимих виглядів | злиття `RESUME_COALESCE_MS`; `stale-object`; видимість; вік | `interval` ✓ | — |
+| R7 | `core.ts` :: `revalidate` сесії (API) | `user` | системне перечитування виглядів об'єкта | `closed`; `discard-bound`; фільтр `eligible` за опціями; `promised` (хвіст `singleFlight`) | `user` × `promised`: один хвіст ✓ | — |
+| R8 | `receiver.ts` :: `run`, `plan.whole` (`invalidate`, ключі понад бюджет) → `revalidate` | `signal` | системне перечитування видимих виглядів | `stale-object` (`isStale`); `tab-hidden` (`ctx.visible()`: на прихованій — вимога й строк об'єкта, R1); `visibleOnly`; зупинка приймача | `signal` × `tab-hidden`: вимога ✓ | — |
+| R9 | `receiver.ts` :: `run`, `sections` → `singleFlight` | `signal` | системне перечитування ТЧ власників ключів пачки | `tab-hidden`; `loaded`; видимість ТЧ | `signal` ✓ | — |
+| R10 | `core.ts` :: `onFlush` за `hiddenKeys` → `writer.ts` :: `revalidateHolders` | `requirement` «значення сховано» | системне перечитування виглядів-тримачів, і невидимих | `closed`; `stale-object`; `loaded`, `alive`, `purged` | `requirement` × `tab-hidden`, `target-invisible`, `paused`: відкладено | 1, 2; пауза — розвилка (б) |
+| R11 | `core.ts` :: `narrow` → `revalidateNarrowed`; `invalidateLoads` → наступне завантаження (M6) | `requirement` «доступ звужено» | системне перечитування тримачів, і невидимих; завантаження в польоті — наступне | `closed`; `eligible({ visibleOnly: false })`; `promised` (хвіст) | невідкладна: допуск на прихованій вкладці й для невидимих ✓ | — («Не змінюється») |
+| R12 | `core.ts` :: `rereadBarred` → `singleFlight` | `requirement` «ціль відстала від шапки» (бар'єр знімка) | системне перечитування ТЧ | `alive`, `purged`, `listeners` | `requirement` × `tab-hidden`, `paused`: відкладено | вкладка — 1; пауза — розвилка (б) |
+| R13 | `core.ts` :: `readRequirement` (з `becameVisible`, циклу `resume`, осідання сторінки, `skipped` проходу) → `singleFlight` | `requirement` «склад не підтверджено» | системне перечитування вигляду | `stale-object`; `requirementPending`: `tab-hidden`, видимість, `rereadEpochs`, `flight`, хвіст, `paused`, `discard-bound` | `requirement` ✓ | — |
+| R14 | `core.ts` :: `readHydrated` → `revalidateHydrated` (`becameVisible` після `endHydration`) | `requirement` «довіра після гідратації» (пізня підписка) | системне перечитування вигляду | `closed`; стан гідратації; `stale-object`; видимість; `rereadEpochs`, `flight` | `requirement` × `tab-hidden`: відкладено | 1 |
+| R15 | `writer.ts` :: `tailPass` (хвіст `singleFlight`) | причина виклику, що поставив хвіст | системне перечитування | `closed`; `discard-bound`; `eligible` | клітинка `promised` тієї причини | — |
+| R16 | `writer.ts` :: `revalidateViews`, `again` за purge після старту | `retry` | системне перечитування | `alive`, `purged`, `flight` | `retry` × `tab-hidden`: відкладено | розвилка (а) |
+| R17 | `writer.ts` :: `revalidateViews`, `again` за `pageDropped` | `retry` | системне перечитування | як R16 | `retry` × `tab-hidden`: відкладено | розвилка (а) |
+| R18 | `writer.ts` :: `revalidateViews`, `again` за `settleRequirement` | `retry` | системне перечитування | `tab-hidden`; `paused`, `discard-bound` (`waitsForRead`) | `retry` ✓ | — |
+| K1 | `receiver.ts` :: `run` → `startJob` → `readKeys` (пачка в межах бюджету ключів) | `signal` | ключі | `stale-object`; `tab-hidden` (`ctx.visible()`); зупинка приймача | `signal` ✓ | — |
+| K2 | `receiver.ts` :: `scheduleRetry` → `enqueue` → `run` | `requirement` «мінімальна версія» (приймач) | ключі | ланцюг `retries`, бюджет `MIN_VERSION_RETRIES`; далі як K1 | `requirement` × `tab-hidden`: відкладено ✓ | бюджет — 4 |
+| K3 | `core.ts` :: `runTail` (`drainTail` після кожного запису) | `requirement` «рядок недочитано» | ключі | `closed`; `promised` (`tails.flying`) | `requirement` × `tab-hidden`: відкладено | вкладка — 1; збій — 4 |
+| K4 | `writer.ts` :: `rereadKey` (журнал мутацій після `run`: невідомий рядок чи `policy.reread`) | `write-confirm` | ключ | `closed` | `write-confirm` × `tab-hidden`: допуск ✓ | збій — 4, 5, 12; межа відкинутих — 8 |
+| S1 | `core.ts` :: `startVersion` (`requestVersion`: `stale-client`, `serverHash`, відмова токена, хвиля, `resume`, гідратація) | `requirement` «версію не підтверджено» | службова частина `version` | `closed`; `promised` (`versionFlying` → `versionTail`) | `requirement` за колонкою §5.2 | — (виклик стає вимогою з SK-4, §5.8) |
+| S2 | `core.ts` :: `requestRights`; строк знімка в такті (`rightsDueAt`) | `requirement` «знімок не підтверджено»; строк — `interval` | службова частина `rights` | `rightsEnabled`; `closed`; `promised` (`rightsFlying` → `rightsTail`); строк — видимість вкладки | `requirement` за колонкою §5.2; `interval` × `tab-hidden`: відкладено | збій — 6 |
+| S3 | `core.ts` :: `dispatch`, `injected` (перший пакет рантайму несе `rights` без `known`) | `requirement` «знімок не підтверджено» (знімка ще немає) | службова частина `rights` у пакеті іншого шляху | `rightsEnabled`, `rightsFirstSent` | допуск на прихованій вкладці ✓ | — |
+
+Різниці без рядка §5.14 — рішення архітекторки до SK-4 (§5.3 «Рядки SK-1»):
+
+- **(а) `tab-hidden`.** R16, R17: повтор системного перечитування з новою епохою без перевірки вкладки; ціль — `retry` × `tab-hidden`: відкладено.
+- **(б) `paused`.** M4, R4, R10, R12: вимога читається без паузи збоїв вигляду; ціль — відкладено до кінця паузи (невідкладні лише службові цілі й «доступ звужено»).
