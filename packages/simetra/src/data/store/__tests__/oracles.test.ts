@@ -51,7 +51,7 @@ const event = (
   at = 0
 ): StampedEvent => ({
   reason: "user",
-  target: { kind: "view", object },
+  target: { kind: "view", object, id: 0 },
   site,
   request: journal + 1,
   at,

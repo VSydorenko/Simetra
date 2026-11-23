@@ -510,7 +510,11 @@ describe("watchReads in the core", () => {
     const others = h.events.filter((e) => e.site !== "S3")
     expect(others.length).toBeGreaterThan(0)
     for (const event of others) {
-      expect(event.target).toEqual({ kind: "view", object: ORG })
+      expect(event.target).toEqual({
+        kind: "view",
+        object: ORG,
+        id: expect.any(Number),
+      })
     }
     // Частина `rights` пішла запитом, що викликав сервер-адаптер, частина
     // виду — запитом адаптера: номер запиту кожної події — місце її виклику.
@@ -546,7 +550,7 @@ describe("watchReads in the core", () => {
     expect(viewEvents).toEqual([
       expect.objectContaining({
         reason: "mount",
-        target: { kind: "view", object: TASK },
+        target: { kind: "view", object: TASK, id: expect.any(Number) },
         request: 1,
       }),
     ])

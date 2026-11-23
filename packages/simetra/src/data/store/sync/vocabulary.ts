@@ -117,9 +117,12 @@ export type ReadCause =
 /** Ціль читання: вид і об'єкт (службова частина — її назва). */
 export type ReadTarget =
   | {
-      readonly kind: Exclude<TargetKind, "service">
+      readonly kind: "view" | "page"
       readonly object: ObjectName
+      /** Opaque id of the view (a page carries the id of its view), the same as in `sync()`. */
+      readonly id: number
     }
+  | { readonly kind: "keys"; readonly object: ObjectName }
   | { readonly kind: "service"; readonly service: ServicePart }
 
 /** Причина й рядок інвентаря: усе походження, крім цілі. */

@@ -1356,7 +1356,7 @@ export async function revalidateViews(
     reads.map(([s, why]) =>
       readAgain(ctx, s, startEpoch, token, {
         ...why,
-        target: { kind: "view", object: o.name },
+        target: { kind: "view", object: o.name, id: s.targetId },
         caller: s,
         lease,
       }).then(

@@ -53,21 +53,31 @@ const section = (n: number): ViewSpec => ({
   owner: key(n),
   section: "lines",
 })
-const viewTarget = (spec: ViewSpec): SyncTarget => ({
+/** Ціль без непрозорого ідентифікатора: його перевіряють окремі тести. */
+type Probe = SyncTarget extends infer T
+  ? T extends { readonly id: number }
+    ? Omit<T, "id">
+    : T
+  : never
+const viewTarget = (spec: ViewSpec): Probe => ({
   kind: "view",
   object: spec.object,
   spec,
 })
-const rowTarget = (n: number): SyncTarget => ({
+const rowTarget = (n: number): Probe => ({
   kind: "row",
   object: TASK,
   key: key(n),
 })
-const RIGHTS: SyncTarget = { kind: "service", service: "rights" }
-const VERSION: SyncTarget = { kind: "service", service: "version" }
+const RIGHTS: Probe = { kind: "service", service: "rights" }
+const VERSION: Probe = { kind: "service", service: "version" }
 
-const stateOf = (h: CoreHarness, target: SyncTarget): SyncState | undefined =>
-  h.inspect.sync().find((s) => isDeepStrictEqual(s.target, target))
+const stateOf = (h: CoreHarness, target: Probe): SyncState | undefined =>
+  h.inspect.sync().find((s) => {
+    const { id, ...rest } = s.target as SyncTarget & { id?: number }
+    void id
+    return isDeepStrictEqual(rest, target)
+  })
 
 const write = (
   h: CoreHarness,
@@ -159,7 +169,7 @@ async function switched() {
  * запит фейкового сервера з його ключем). Звірка з `scheduledDue()` нічого
  * не довела б: проєкція сама його читає.
  */
-async function expectReadByDue(h: CoreHarness, target: SyncTarget) {
+async function expectReadByDue(h: CoreHarness, target: Probe) {
   const due = stateOf(h, target)?.due
   expect(due, "sync() shows a due").toEqual(expect.any(Number))
   const events: { event: ReadEvent; at: number }[] = []
@@ -199,7 +209,7 @@ describe("sync(): a requirement of each kind main holds, with its promise or con
     write(h, (w) => w.markViews(TASK, { unconfirmedSince: since }))
     // Видимий вигляд читає механізм, що поставив вимогу: самої вимоги мало.
     expect(stateOf(h, viewTarget(h.spec))).toEqual({
-      target: viewTarget(h.spec),
+      target: { ...viewTarget(h.spec), id: expect.any(Number) },
       requirements: [{ kind: "composition-unconfirmed", epoch: since }],
       flights: [],
       queued: [],
@@ -242,7 +252,7 @@ describe("sync(): a requirement of each kind main holds, with its promise or con
     const epoch = h.core.readEpoch()
     // До `endHydration` вимогу не читає ніхто: умова `hydrating`, без обіцянки.
     expect(stateOf(h, viewTarget(from.spec))).toEqual({
-      target: viewTarget(from.spec),
+      target: { ...viewTarget(from.spec), id: expect.any(Number) },
       requirements: [{ kind: "hydration-trust", epoch }],
       flights: [],
       queued: [],
@@ -723,5 +733,60 @@ describe("sync(): each condition of §5.3 main holds", () => {
     h.core.close("disposed")
     expect(stateOf(h, VERSION)!.refusal).toBe("closed")
     expect(stateOf(h, viewTarget(h.spec))).toBeUndefined()
+  })
+})
+
+describe("sync(): the opaque id of a view target", () => {
+  const idOf = (h: CoreHarness, spec: ViewSpec) => {
+    const target = stateOf(h, viewTarget(spec))!.target
+    if (target.kind !== "view") throw new Error("not a view")
+    return target.id
+  }
+
+  it("is the id of the events of the view's reads, stable across them, distinct for two views", async () => {
+    const h = setup({
+      now: () => Date.now(),
+      limits: { revalidateIntervalMs: INTERVAL },
+    })
+    seed(h.fake, 1, 2)
+    const events: ReadEvent[] = []
+    h.inspect.watchReads((event) => events.push(event))
+    const a = keysView(1)
+    const b = keysView(2)
+    watch(h.core.view(a))
+    watch(h.core.view(b))
+    await settle()
+    // Своє читання кожного виду й системне перечитування: той самий id.
+    await h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    const ids = (kind: string) =>
+      new Set(
+        events.flatMap((e) =>
+          e.target.kind === kind && "id" in e.target ? [e.target.id] : []
+        )
+      )
+    expect(idOf(h, a)).not.toBe(idOf(h, b))
+    expect(ids("view")).toEqual(new Set([idOf(h, a), idOf(h, b)]))
+    const byId = events.filter(
+      (e) => e.target.kind === "view" && e.target.id === idOf(h, a)
+    )
+    expect(new Set(byId.map((e) => e.reason)).size).toBeGreaterThan(1)
+  })
+
+  it("is the id of its view in the events of the pages of a window", async () => {
+    const win: ViewSpec = {
+      kind: "window",
+      object: TASK,
+      orderBy: [{ attribute: "title", direction: "asc" }],
+    }
+    const h = await withSignals(win, { windowPage: 1 })
+    const events: ReadEvent[] = []
+    h.inspect.watchReads((event) => events.push(event))
+    h.core.view(win).loadAfter()
+    await settle()
+    const pages = events.filter((e) => e.target.kind === "page")
+    expect(pages.length).toBeGreaterThan(0)
+    for (const page of pages)
+      expect("id" in page.target && page.target.id).toBe(idOf(h, win))
   })
 })

@@ -38,6 +38,7 @@ const FIELDS = {
   },
   Subset: {
     allowed: [
+      "targetId",
       "preloads",
       "preloadTimers",
       "releaseTimer",

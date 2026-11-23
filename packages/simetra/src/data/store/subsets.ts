@@ -104,6 +104,12 @@ type Timer = ReturnType<typeof setTimeout>
 /** A held view form. */
 export interface Subset extends ReaderTarget {
   readonly form: Form
+  /**
+   * Opaque id of the target, stable for the life of the subset and the same
+   * in the `watchReads` events and in `sync()` (diagnostics only; it never
+   * decides anything).
+   */
+  readonly targetId: number
   readonly listeners: Set<{ readonly fn: () => void }>
   preloads: number
   readonly preloadTimers: Set<Timer>
@@ -414,6 +420,7 @@ let pageGenerations = 0
 export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   const { session, limits, ops, rowViews } = ctx
   const subsets = new Map<string, Subset>()
+  let nextTargetId = 0
   // Мемо хендлів з межею: хендл шукає підмножину за ключем форми, тож новий
   // хендл після витіснення під'єднується до тієї самої підмножини.
   const handles = new Map<string, ViewHandle>()
@@ -511,7 +518,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       const lease = ctx.source.lease()
       return readForm(ctx, s, readEpoch, token, {
         ...why,
-        target: { kind: "view", object: s.form.object.name },
+        target: {
+          kind: "view",
+          object: s.form.object.name,
+          id: s.targetId,
+        },
         caller: s,
         lease,
       }).then(
@@ -720,7 +731,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           readWindowMore(c, s, readEpoch, token, direction, cursor, written),
         {
           ...why,
-          target: { kind: "page", object: s.form.object.name },
+          target: {
+            kind: "page",
+            object: s.form.object.name,
+            id: s.targetId,
+          },
           caller: s,
           lease,
         }
@@ -1024,6 +1039,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     }
     const s: Subset = {
       form,
+      targetId: nextTargetId++,
       listeners: new Set(),
       preloads: 0,
       preloadTimers: new Set(),

@@ -294,6 +294,8 @@ export type SyncTarget =
       readonly kind: "view"
       readonly object: ObjectName
       readonly spec: ViewSpec
+      /** Opaque id of the target, the same as in the `watchReads` events of its reads. */
+      readonly id: number
     }
   | { readonly kind: "row"; readonly object: ObjectName; readonly key: Key }
   | { readonly kind: "service"; readonly service: ServicePart }
@@ -2447,7 +2449,12 @@ export function createCore(options: {
       record(
         withOptional(
           {
-            target: { kind: "view", object, spec: s.form.spec },
+            target: {
+              kind: "view",
+              object,
+              spec: s.form.spec,
+              id: s.targetId,
+            },
             requirements,
             flights,
             queued,
