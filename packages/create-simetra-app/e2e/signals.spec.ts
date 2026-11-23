@@ -260,9 +260,9 @@ test.describe("tab bus", () => {
         await page.goto(`${app.origin}/clients`)
         await page.waitForSelector("html[data-hydrated]")
       }
-      // Гідратація другої сторінки закінчила власні запити даних
-      await second.waitForTimeout(1_500)
-      await log.flush()
+      // З сигналами гідратація — це запит знімка й одне читання хвилі
+      // приєднання (Рд37): чекаємо обох за лічильником, а не за паузою
+      await settle(second, log, expectedHydrationRequests() + 1)
       const before = log.calls.length
 
       await first.getByRole("button", { name: "Sign out" }).click()
