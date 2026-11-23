@@ -548,8 +548,8 @@ function rebuildLayout(ctx: WriterContext, s: Subset) {
   s.layoutSet = new Set(s.layout)
 }
 
-// Рядок пари, поховану з моменту старту читання (надгробок purge, горизонт
-// його витіснення чи бар'єр знімка прав): його не пише ні `put`, ні він не «новий» для вигляду, бо
+// Рядок пари, поховану з моменту старту читання (надгробок purge чи бар'єр
+// знімка прав): його не пише ні `put`, ні він не «новий» для вигляду, бо
 // `hasNewRows` виказав би, що заборонений рядок існує.
 const lostSince = (
   ctx: WriterContext,
@@ -557,7 +557,7 @@ const lostSince = (
   row: ServerRow,
   startEpoch: number
 ) =>
-  ctx.session.epochs.buriedOrEvictedSince(
+  ctx.session.epochs.buriedSince(
     pairId(o.name, scopeOf(o.entry, row.values)),
     startEpoch
   )

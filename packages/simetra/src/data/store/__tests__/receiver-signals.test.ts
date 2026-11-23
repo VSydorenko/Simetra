@@ -473,33 +473,6 @@ describe("expected minimum version, new keys, sections and invalidate", () => {
     expect(list.getSnapshot().hasNewRows).toBe(false)
   })
 
-  // Те саме, коли надгробок витіснено ліміту `tombstonesMax`: горизонт
-  // кошика заступає його, інакше `hasNewRows` виказав би прибраний рядок.
-  it("does not mark hasNewRows for a new key whose purge tombstone was evicted while its signal read is in flight", async () => {
-    const h = await open(keysView(key(1)), 3, undefined, undefined, undefined, {
-      tombstonesMax: 2,
-    })
-    const list = h.core.view({ kind: "full", object: TASK })
-    list.subscribe(() => {})
-    await settle()
-    expect(list.getSnapshot().hasNewRows).toBe(false)
-    h.fake.mode = "manual"
-    const v = h.fake.insert(TASK, taskValues(78))
-    emit(h, change("create", key(78), v))
-    await closeBatch()
-    expect(h.fake.pending).toHaveLength(1)
-    const purge = (k: Key) =>
-      h.core.commit((w) => w.purge(TASK, { keys: [k] }), h.core.token())
-    purge(key(78))
-    purge(key(79))
-    purge(key(80))
-    purge(key(81))
-    h.fake.mode = "auto"
-    h.fake.deliverAll()
-    await settle()
-    expect(list.getSnapshot().hasNewRows).toBe(false)
-  })
-
   it("re-reads the section of a mounted owner when the header version grows", async () => {
     const h = await open(keysView(key(1)))
     const lines = [{ ref: key(900), qty: 1, lineNumber: 1 }]

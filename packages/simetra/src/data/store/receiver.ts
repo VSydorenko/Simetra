@@ -690,12 +690,16 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     // Ключ чи пара, поховані з початку читання, не «нові»: `hasNewRows`
     // виказав би рядок, який `purge` прибрав, чи заборонений рядок (як
     // перевірка відомого ключа нижче).
-    // Нового ключа в сховищі немає: горизонт, як і надгробок, лише гасить
-    // підказку (ховати нічого).
-    const scope = scopeOf(o.entry, row.values)
+    // Лише надгробок: горизонт без надгробка не гасить підказку, бо збіг
+    // кошика загубив би справді новий рядок, а ключа в сховищі, який можна
+    // перечитати хвостом, тут немає.
     if (
-      buriedSinceRead(object, row.key, scope, job.readEpoch) ||
-      evictedSinceRead(object, row.key, scope, job.readEpoch)
+      buriedSinceRead(
+        object,
+        row.key,
+        scopeOf(o.entry, row.values),
+        job.readEpoch
+      )
     )
       return
     for (const view of activeViews(writer, object)) {
