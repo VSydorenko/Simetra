@@ -2298,22 +2298,20 @@ export function createCore(options: {
   }
   // Обіцяно: кожну вимогу виконає політ, що летить (не сторінка: вона
   // підтверджує лише себе) зі стартом не раніше її епохи, чи черга — вона
-  // стартує після осідання поточного. Вимога без епохи — будь-який політ.
+  // стартує після осідання поточного. Вимогу без епохи обіцяє лише черга:
+  // про політ у польоті не відомо, чи стартував він не раніше за неї (§5.3).
   const promised = (
     requirements: readonly SyncRequirement[],
     flights: readonly SyncFlight[],
     queued: readonly SyncQueued[]
   ) =>
-    requirements.every(
-      (r) =>
-        queued.length > 0 ||
-        flights.some(
-          (f) =>
-            f.kind !== "page" &&
-            (r.epoch === undefined ||
-              (f.epoch !== undefined && f.epoch >= r.epoch))
-        )
-    )
+    requirements.every(({ epoch }) => {
+      if (queued.length > 0) return true
+      if (epoch === undefined) return false
+      return flights.some(
+        (f) => f.kind !== "page" && f.epoch !== undefined && f.epoch >= epoch
+      )
+    })
   const withOptional = <T extends object>(
     base: T,
     fields: { proof?: number | undefined; due?: number | undefined }
@@ -2401,6 +2399,9 @@ export function createCore(options: {
       const held = scheduled.get(object)
       const inRetry = held?.retry?.views.has(s) === true
       const kinds = requirements.map((r) => r.kind)
+      // Строки такту, черги планувальника й хвилі: на прихованій вкладці
+      // планувальник не спрацьовує, тож вони нічого не читають.
+      const read = (at: number | undefined) => (visible ? at : undefined)
       record(
         withOptional(
           {
@@ -2412,16 +2413,22 @@ export function createCore(options: {
           {
             proof: s.okReadEpoch,
             due: earliest(
-              viewDue(writerContext, s),
-              isVisible && s.loaded ? held?.whole?.at : undefined,
-              inRetry ? held?.retry?.at : undefined,
-              wave?.objects.has(object) === true ? wave.at : undefined
+              read(viewDue(writerContext, s)),
+              read(
+                revalidateTargets(writerContext, object, {
+                  visibleOnly: true,
+                }).includes(s)
+                  ? held?.whole?.at
+                  : undefined
+              ),
+              read(inRetry ? held?.retry?.at : undefined),
+              read(wave?.objects.has(object) === true ? wave.at : undefined)
             ),
           }
         ),
         refusalOf(object),
         () =>
-          !visible && kinds.some((k) => TAB_GATED.has(k))
+          !visible && (kinds.some((k) => TAB_GATED.has(k)) || inRetry)
             ? "tab-hidden"
             : !readable && kinds.some((k) => VISIBILITY_GATED.has(k))
               ? "target-invisible"
@@ -2448,6 +2455,13 @@ export function createCore(options: {
         whole.cause.requirement === "version-epoch-switched"
           ? whole.at
           : undefined
+      // Строк перемикання читає рядок лише через видимий вигляд-власник, який
+      // бере `revalidate` строку (`runDue`, `visibleOnly`); без нього строку в
+      // рядка немає.
+      const reread =
+        switchDue === undefined
+          ? []
+          : revalidateTargets(writerContext, o.name, { visibleOnly: true })
       for (const key of o.rows.keys()) {
         const e = o.rows.get(key)!
         const retry = retries.get(`${o.name}\u0000${key.toLowerCase()}`)
@@ -2467,6 +2481,9 @@ export function createCore(options: {
         if (epoch === true)
           requirements.push({ kind: "version-epoch-switched" })
         if (requirements.length === 0) continue
+        // Повтор мінімальної версії й строк перемикання — шляхи, які прихована
+        // вкладка відкладає: пачка приймача й такт планувальника не читають.
+        const tabGated = epoch === true || retry !== undefined
         const flights: SyncFlight[] = flying.has(key) ? [{ kind: "keys" }] : []
         const queued: SyncQueued[] =
           tail?.pending.has(key) === true
@@ -2488,11 +2505,24 @@ export function createCore(options: {
               flights,
               queued,
             },
-            { due: earliest(retry?.at, epoch === true ? switchDue : undefined) }
+            {
+              due: visible
+                ? earliest(
+                    retry?.at,
+                    epoch === true && reread.some((s) => s.owned.has(key))
+                      ? switchDue
+                      : undefined
+                  )
+                : undefined,
+            }
           ),
           refusalOf(o.name),
           () =>
-            promised(requirements, flights, queued) ? "promised" : undefined
+            !visible && tabGated
+              ? "tab-hidden"
+              : promised(requirements, flights, queued)
+                ? "promised"
+                : undefined
         )
       }
     }

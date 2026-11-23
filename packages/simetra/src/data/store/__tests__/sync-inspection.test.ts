@@ -137,6 +137,20 @@ async function withSignals(
   return { ...h, transport, spec }
 }
 
+/** Вигляд пережив перемикання епохи версій A → B: рядки й строк об'єкта. */
+async function switched() {
+  const h = await loaded(keysView(1, 2), { mode: "manual" })
+  for (const epoch of ["a", "b"]) {
+    h.fake.epoch = epoch.repeat(64)
+    h.handle.refresh()
+    await settle()
+    h.fake.deliverAll()
+    await settle()
+  }
+  expect(h.inspect.scheduledDue().get(TASK)).toEqual(expect.any(Number))
+  return h
+}
+
 describe("sync(): a requirement of each kind main holds, with its promise or condition", () => {
   it("composition-unconfirmed: the epoch, no promise until a re-read; the re-read promises it and its applied start is the proof", async () => {
     const h = await loaded(keysView(1, 2), { mode: "manual" })
@@ -221,7 +235,6 @@ describe("sync(): a requirement of each kind main holds, with its promise or con
     expect(stateOf(h, RIGHTS)).toMatchObject({
       requirements: [{ kind: "rights-unconfirmed" }],
       flights: [{ kind: "service", epoch: expect.any(Number) }],
-      deferral: "promised",
     })
     h.fake.releaseRights()
     await settle()
@@ -305,17 +318,7 @@ describe("sync(): a requirement of each kind main holds, with its promise or con
   })
 
   it("version-epoch-switched: the rows of the switch, due at the object's spread re-read", async () => {
-    const h = await loaded(keysView(1, 2), { mode: "manual" })
-    h.fake.epoch = "a".repeat(64)
-    h.handle.refresh()
-    await settle()
-    h.fake.deliverAll()
-    await settle()
-    h.fake.epoch = "b".repeat(64)
-    h.handle.refresh()
-    await settle()
-    h.fake.deliverAll()
-    await settle()
+    const h = await switched()
     const due = h.inspect.scheduledDue().get(TASK)
     expect(due).toEqual(expect.any(Number))
     expect(stateOf(h, rowTarget(2))).toEqual({
@@ -426,6 +429,63 @@ describe("sync(): each condition of §5.3 main holds", () => {
     expect(state.requirements).toEqual([{ kind: "channel-rejoin" }])
     expect(state.flights).toEqual([{ kind: "page" }])
     expect(state.deferral).toBeUndefined()
+  })
+
+  // Вимога без епохи: політ, що вже летить, міг стартувати раніше за неї.
+  it("promised: not by a re-read in flight for a requirement without an epoch", async () => {
+    const h = await withSignals()
+    h.fake.mode = "manual"
+    void h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    h.transport.join(channel, false)
+    const state = stateOf(h, viewTarget(h.spec))!
+    expect(state.requirements).toEqual([{ kind: "channel-rejoin" }])
+    expect(state.flights).toEqual([
+      { kind: "reread", epoch: expect.any(Number) },
+    ])
+    expect(state.deferral).toBeUndefined()
+  })
+
+  // Планувальник на прихованій вкладці не спрацьовує: його строки нічого не
+  // читають, а вимога, яку читає лише він, відкладена вкладкою.
+  it("tab-hidden: no due of a scheduler timer on a hidden tab", async () => {
+    const h = await loaded()
+    expect(stateOf(h, viewTarget(h.spec))!.due).toBe(Date.now() + INTERVAL)
+    h.core.suspend()
+    expect(stateOf(h, viewTarget(h.spec))!.due).toBeUndefined()
+  })
+
+  it("tab-hidden: the rejoin wave waits for the tab, without a due", async () => {
+    const h = await withSignals()
+    h.core.suspend()
+    h.transport.join(channel, false)
+    const state = stateOf(h, viewTarget(h.spec))!
+    expect(state.requirements).toEqual([{ kind: "channel-rejoin" }])
+    expect(state.deferral).toBe("tab-hidden")
+    expect(state.due).toBeUndefined()
+  })
+
+  it("tab-hidden: a row of the epoch switch on a hidden tab, without a due", async () => {
+    const h = await switched()
+    h.core.suspend()
+    expect(stateOf(h, rowTarget(2))).toMatchObject({
+      requirements: [{ kind: "version-epoch-switched" }],
+      deferral: "tab-hidden",
+    })
+    expect(stateOf(h, rowTarget(2))!.due).toBeUndefined()
+  })
+
+  // Строк перемикання читає лише видимі вигляди об'єкта (`visibleOnly`).
+  it("no due for a row of the epoch switch no visible view holds", async () => {
+    const h = await switched()
+    h.core.setVisible(h.spec, false)
+    expect(h.inspect.scheduledDue().get(TASK)).toEqual(expect.any(Number))
+    expect(stateOf(h, rowTarget(2))).toEqual({
+      target: rowTarget(2),
+      requirements: [{ kind: "version-epoch-switched" }],
+      flights: [],
+      queued: [],
+    })
   })
 
   it("paused: the requirement of a view in its failure pause, due at the end of the pause", async () => {
