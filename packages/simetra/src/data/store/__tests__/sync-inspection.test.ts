@@ -394,6 +394,34 @@ describe("sync(): each condition of §5.3 main holds", () => {
     expect(stateOf(h, viewTarget(h.spec))!.deferral).toBe("target-invisible")
   })
 
+  // `promised` — лише політ зі стартом не раніше вимоги і не сторінка: старше
+  // читання вимоги не знімає, а сторінка підтверджує лише себе (§5.5).
+  it("promised: not by a re-read that started before the requirement", async () => {
+    const h = await loaded(keysView(1, 2), { mode: "manual" })
+    void h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    const started = h.core.readEpoch()
+    write(h, (w) => w.markViews(TASK, { unconfirmedSince: started + 1 }))
+    const state = stateOf(h, viewTarget(h.spec))!
+    expect(state.flights).toEqual([{ kind: "reread", epoch: started }])
+    expect(state.deferral).toBeUndefined()
+  })
+
+  it("promised: not by a page in flight", async () => {
+    const win: ViewSpec = {
+      kind: "window",
+      object: TASK,
+      orderBy: [{ attribute: "title", direction: "asc" }],
+    }
+    const h = await loaded(win, { mode: "manual", limits: { windowPage: 1 } })
+    h.handle.loadAfter()
+    await settle()
+    unconfirmed(h)
+    const state = stateOf(h, viewTarget(win))!
+    expect(state.flights).toEqual([{ kind: "page" }])
+    expect(state.deferral).toBeUndefined()
+  })
+
   it("paused: the requirement of a view in its failure pause, due at the end of the pause", async () => {
     const h = await loaded(keysView(1, 2), { mode: "manual" })
     const failedAt = Date.now()
