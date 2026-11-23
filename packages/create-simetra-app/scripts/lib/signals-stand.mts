@@ -16,8 +16,8 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { PLATFORM_LOGIN_ROLES } from "simetra/model"
 import { SIGNALS_JWKS_PATH } from "simetra/server/signals"
-// Ім'я споживача й змінні його DSN — з генератора конфігу: стеки ставлять DSN
-// тими самими змінними, тож друге місце імен розійшлося б
+// Ім'я споживача й змінні його DSN — з генератора конфігу: стенд ставить DSN
+// тими самими змінними, що читає конфіг, тож друге місце імен розійшлося б
 import {
   SIGNAL_CONSUMER_ENV,
   centrifugoConfig,

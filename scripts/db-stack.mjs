@@ -937,7 +937,9 @@ async function stop(ctx, volumes) {
   await compose(
     ctx,
     PROFILES.postgres,
-    volumes ? ["down", "--volumes"] : ["down"]
+    volumes
+      ? ["down", "--volumes", "--remove-orphans"]
+      : ["down", "--remove-orphans"]
   )
 }
 
