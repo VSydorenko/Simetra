@@ -1,5 +1,5 @@
 import { afterEach } from "vitest"
-import type { ReadQuery } from "simetra/model"
+import type { CatalogIndex, ReadQuery } from "simetra/model"
 import { inspectCore, type CoreSession } from "../core"
 import { DISCARDS_MAX, DISCARD_PAUSE_MS } from "../session"
 import type { ReadEvent } from "../source"
@@ -53,8 +53,47 @@ const keyed = (query: ReadQuery): boolean => {
   )
 }
 
+/**
+ * Об'єкти, до яких `object` доходить за ребрами `ref` каталогу (транзитивно:
+ * ланцюг `include`): одноцільовий `Ref` і цілі пари.
+ */
+function reachable(index: CatalogIndex, object: string): ReadonlySet<string> {
+  const seen = new Set<string>()
+  const queue = [object]
+  while (queue.length > 0) {
+    const entry = index.byRef.get(queue.pop()!)
+    if (entry === undefined) continue
+    for (const attribute of entry.attributes) {
+      const targets = [
+        ...(attribute.ref === undefined
+          ? []
+          : [index.byId.get(attribute.ref.object)]),
+        ...(attribute.pair?.targets.map((t) =>
+          index.byRef.get(`${t.object.kind}.${t.object.name}`)
+        ) ?? []),
+      ]
+      for (const target of targets) {
+        if (target === undefined) continue
+        const name = `${target.kind}.${target.name}`
+        if (seen.has(name)) continue
+        seen.add(name)
+        queue.push(name)
+      }
+    }
+  }
+  return seen
+}
+
+// Польоти, чиє читання може нести `include` (Додаток Б): шляхи виглядів,
+// сторінок і ключів; службові частини (S) їх не мають.
+const INCLUDE_FLIGHT = /^[MPRK]/
+
 /** Чому частина не відповідає цілі події; `undefined` — відповідає. */
-function mismatch(event: ReadEvent, part: FakePart): string | undefined {
+function mismatch(
+  event: ReadEvent,
+  part: FakePart,
+  index: CatalogIndex
+): string | undefined {
   const target = event.target
   if (target.kind === "service")
     return part.type === target.service
@@ -64,9 +103,12 @@ function mismatch(event: ReadEvent, part: FakePart): string | undefined {
     return `target is ${target.kind} of ${target.object}, the part is ${part.type}`
   const object = objectName(part.query)
   // Читання за ключами іншого об'єкта — ціль `include` польоту, що його почала
-  // ця подія (Додаток Б, «Спільне», п. 3): походження — польоту, а не частини.
+  // ця подія (Додаток Б, «Спільне», п. 3): об'єкт частини мусить бути в
+  // ланцюгу `ref` від об'єкта цілі, а код — шляху, що читає вигляди чи ключі.
   if (object !== target.object) {
-    return keyed(part.query)
+    return keyed(part.query) &&
+      INCLUDE_FLIGHT.test(event.site) &&
+      reachable(index, target.object).has(object)
       ? undefined
       : `target object ${target.object}, the part reads ${object}`
   }
@@ -85,7 +127,7 @@ function mismatch(event: ReadEvent, part: FakePart): string | undefined {
 /** Оцінка О1 над подіями й журналом фейкового джерела; порожній масив — зелено. */
 export function readJournalViolations(
   events: readonly StampedEvent[],
-  fake: Pick<FakeSource, "requests" | "requestParts">
+  fake: Pick<FakeSource, "requests" | "requestParts" | "index">
 ): string[] {
   const problems: string[] = []
   const groups = new Map<number, StampedEvent[]>()
@@ -123,7 +165,7 @@ export function readJournalViolations(
     }
     const parts = fake.requestParts[i]!
     group.forEach((event, slot) => {
-      const why = mismatch(event, parts[slot]!)
+      const why = mismatch(event, parts[slot]!, fake.index)
       if (why !== undefined)
         problems.push(`request ${i} part ${slot} (${event.site}): ${why}`)
     })

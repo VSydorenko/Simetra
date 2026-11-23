@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { ReadQuery } from "simetra/model"
+import { catalogIndex, type ReadQuery } from "simetra/model"
 import { DISCARDS_MAX } from "../session"
 import type { SiteCode } from "../sync/vocabulary"
 import type { FakePart } from "../testing/fake-source"
@@ -9,7 +9,16 @@ import {
   readJournalViolations,
   type StampedEvent,
 } from "./oracles"
-import { ORG, TASK, key, seed, settle, setup, watch } from "./core-support"
+import {
+  ORG,
+  OBJECTS,
+  TASK,
+  key,
+  seed,
+  settle,
+  setup,
+  watch,
+} from "./core-support"
 
 /*
  * Самотести оракулів О1 і О4 (план SK-0, §6, рядок 5): оракул, що мовчить на
@@ -24,6 +33,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
 })
+
+const index = catalogIndex(OBJECTS)
 
 const query = (name: "Task" | "Organization", n = 0): ReadQuery =>
   n === 0
@@ -51,6 +62,7 @@ describe("O1: events against the journal of the fake source", () => {
   const journal = {
     requests: [2],
     requestParts: [[part("Task"), part("Organization")]],
+    index,
   }
 
   it("is green when each event names the part of its own slot", () => {
@@ -71,6 +83,62 @@ describe("O1: events against the journal of the fake source", () => {
     expect(problems[0]).toContain("request 0 part 0")
   })
 
+  describe("keyed parts of another object (include of a flight)", () => {
+    const keyedOrg: FakePart = {
+      type: "query",
+      query: query("Organization", 1),
+    }
+    const keyedTask: FakePart = { type: "query", query: query("Task", 1) }
+    const keysOf = (object: string): StampedEvent => ({
+      ...event("M1", object, 0),
+      target: { kind: "keys", object },
+    })
+
+    it("is green for a keyed read of an object the target reaches by a ref", () => {
+      expect(
+        readJournalViolations([event("M1", TASK, 0)], {
+          requests: [1],
+          requestParts: [[keyedOrg]],
+          index,
+        })
+      ).toEqual([])
+    })
+
+    it("is red for a keyed read of an object the target does not reach", () => {
+      expect(
+        readJournalViolations([event("M1", ORG, 0)], {
+          requests: [1],
+          requestParts: [[keyedTask]],
+          index,
+        })
+      ).toHaveLength(1)
+    })
+
+    it("is red when the code of the event is not a flight that reads includes", () => {
+      expect(
+        readJournalViolations([event("S1", TASK, 0)], {
+          requests: [1],
+          requestParts: [[keyedOrg]],
+          index,
+        })
+      ).toHaveLength(1)
+    })
+
+    it("is red when the targets of two flights are swapped inside one request", () => {
+      const parts = {
+        requests: [2],
+        requestParts: [[keyedOrg, part("Organization")]],
+        index,
+      }
+      expect(
+        readJournalViolations([keysOf(TASK), event("R7", ORG, 0)], parts)
+      ).toEqual([])
+      expect(
+        readJournalViolations([event("R7", ORG, 0), keysOf(TASK)], parts)
+      ).not.toEqual([])
+    })
+  })
+
   it("is red for a code outside the inventory and for the service code of tests", () => {
     const problems = readJournalViolations(
       [
@@ -85,12 +153,14 @@ describe("O1: events against the journal of the fake source", () => {
   it("is red for a request without events and for events without a request", () => {
     expect(
       readJournalViolations([event("R7", TASK, 0)], {
+        index,
         requests: [1, 1],
         requestParts: [[part("Task")], [part("Task")]],
       })
     ).toEqual(["request 1: 1 parts, no events"])
     expect(
       readJournalViolations([event("R7", TASK, 1)], {
+        index,
         requests: [1],
         requestParts: [[part("Task")]],
       }).join()
@@ -111,7 +181,7 @@ describe("O1: events against the journal of the fake source", () => {
 
   it("is green for an empty journal with no events", () => {
     expect(
-      readJournalViolations([], { requests: [], requestParts: [] })
+      readJournalViolations([], { requests: [], requestParts: [], index })
     ).toEqual([])
   })
 })
