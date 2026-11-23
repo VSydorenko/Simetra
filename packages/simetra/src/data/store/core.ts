@@ -38,7 +38,14 @@ import {
   type ReadOrigin,
   type StoreSource,
 } from "./source"
-import type { ReadCause, ReadIntent, ReadWhy } from "./sync/vocabulary"
+import type {
+  AdmissionCondition,
+  ReadCause,
+  ReadIntent,
+  ReadWhy,
+  RequirementKind,
+  ServicePart,
+} from "./sync/vocabulary"
 import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
 import {
@@ -51,6 +58,7 @@ import { createScheduler } from "./scheduler"
 import {
   createRegistry,
   requirementPending,
+  trailingCause,
   type Subset,
   type SubsetRegistry,
 } from "./subsets"
@@ -66,6 +74,8 @@ import {
   revalidateHydrated,
   revalidateNarrowed,
   holdersOf,
+  tailCause,
+  viewDue,
   invalidateLoads,
   singleFlight,
   rereadKey,
@@ -271,6 +281,81 @@ export interface CoreSession {
 
 export type { DefectFlag } from "./defects"
 
+/*
+ * Проєкція стану свіжості `main` для діагностики (спека ядра синхронізації
+ * §5.13 «`sync()`», план SK-0 Р5). Тимчасова: SK-3 підміняє джерело станом
+ * цілі, форму лишає. Поле, якого `main` не має, відсутнє в типі, а не
+ * вигадане: зокрема причини польоту в польоті `main` не зберігає.
+ */
+
+/** A target `main` keeps freshness state for. */
+export type SyncTarget =
+  | {
+      readonly kind: "view"
+      readonly object: ObjectName
+      readonly spec: ViewSpec
+    }
+  | { readonly kind: "row"; readonly object: ObjectName; readonly key: Key }
+  | { readonly kind: "service"; readonly service: ServicePart }
+
+/** A freshness requirement as `main` holds it. */
+export interface SyncRequirement {
+  readonly kind: RequirementKind
+  /** The epoch of the requirement, where `main` holds one. */
+  readonly epoch?: number
+  /** `min-version`: the expected version `v`. */
+  readonly version?: number
+  /** `min-version`: the attempt of the re-read waiting for its pause (budget). */
+  readonly attempt?: number
+}
+
+/** The kind of a read (spec §5.5): load, page, system re-read, keys, service. */
+export type SyncFlightKind = "load" | "page" | "reread" | "keys" | "service"
+
+/** A read of the target in flight. */
+export interface SyncFlight {
+  readonly kind: SyncFlightKind
+  /** The session epoch of its start, where `main` holds it. */
+  readonly epoch?: number
+}
+
+/** A read queued after the one in flight. */
+export interface SyncQueued {
+  readonly kind: SyncFlightKind
+  /** The cause of the call that queued it (the first one of a merged queue). */
+  readonly cause?: ReadCause
+}
+
+/** A condition that defers the reads of the target's requirements. */
+export type SyncDeferral = Extract<
+  AdmissionCondition,
+  "tab-hidden" | "target-invisible" | "promised" | "paused"
+>
+/** A condition under which `main` reads nothing of the target. */
+export type SyncRefusal = Extract<
+  AdmissionCondition,
+  "closed" | "stale-object" | "discard-bound"
+>
+
+/** The freshness state of one target (`CoreInspection.sync`). */
+export type SyncState = {
+  readonly target: SyncTarget
+  readonly requirements: readonly SyncRequirement[]
+  readonly flights: readonly SyncFlight[]
+  readonly queued: readonly SyncQueued[]
+  /**
+   * A view: the start epoch of its last applied read that confirms it
+   * (`okReadEpoch`, shown as is — `main` may move it back). The rights
+   * snapshot: the send epoch of the last accepted replacement.
+   */
+  readonly proof?: number
+  /** The earliest wake-up of a timer of `main` that reads the target. */
+  readonly due?: number
+} & (
+  | { readonly deferral?: SyncDeferral; readonly refusal?: never }
+  | { readonly refusal: SyncRefusal; readonly deferral?: never }
+)
+
 /** Test-only inspection of a core. */
 export interface CoreInspection {
   /** Broken invariants of ownership and service maps; empty when sound. */
@@ -336,6 +421,12 @@ export interface CoreInspection {
    * unsubscribes. Keys appear only here, never in `log`.
    */
   watchReads(listener: (event: ReadEvent) => void): () => void
+  /**
+   * The freshness state of every target `main` keeps it for: the held views,
+   * the rows with a freshness mark or in a tail re-read, and the service
+   * targets (the catalog version; the rights snapshot with `rightsSnapshot`).
+   */
+  sync(): readonly SyncState[]
   /** The mutations in the journal of own mutations. */
   mutations(): JournalInspection[]
   /** The plans the scheduler made (calls of one turn merge into one). */
@@ -1914,8 +2005,6 @@ export function createCore(options: {
       })
   }
 
-  type ServicePart = "version" | "rights"
-
   // `cause` — чому знімок потрібен: вимога чи строк такту (рядок S2).
   function requestRightsFor(cause: ReadCause) {
     if (!rightsEnabled || !session.token().valid) return
@@ -2181,6 +2270,286 @@ export function createCore(options: {
     defects,
   })
 
+  // ------------------------------------------------------------ діагностика sync()
+
+  // Умови шлюзу, які `main` справді застосовує до вимоги свого виду: прихована
+  // вкладка відкладає лише вимогу вигляду (`requirementPending`) і хвилю
+  // приєднання (такт не йде); невидимість — вимогу вигляду й довіру після
+  // гідратації (`readHydrated`). Решту видів `main` читає без цих умов.
+  const TAB_GATED: ReadonlySet<RequirementKind> = new Set([
+    "composition-unconfirmed",
+    "channel-rejoin",
+  ])
+  const VISIBILITY_GATED: ReadonlySet<RequirementKind> = new Set([
+    "composition-unconfirmed",
+    "hydration-trust",
+  ])
+
+  const causeOf = (why: ReadWhy): ReadCause => {
+    const { site, ...cause } = why
+    void site
+    return cause
+  }
+  const earliest = (...ats: (number | undefined)[]): number | undefined => {
+    let due: number | undefined
+    for (const at of ats)
+      if (at !== undefined && !(due !== undefined && due <= at)) due = at
+    return due
+  }
+  // Обіцяно: кожну вимогу виконає політ, що летить (не сторінка: вона
+  // підтверджує лише себе) зі стартом не раніше її епохи, чи черга — вона
+  // стартує після осідання поточного. Вимога без епохи — будь-який політ.
+  const promised = (
+    requirements: readonly SyncRequirement[],
+    flights: readonly SyncFlight[],
+    queued: readonly SyncQueued[]
+  ) =>
+    requirements.every(
+      (r) =>
+        queued.length > 0 ||
+        flights.some(
+          (f) =>
+            f.kind !== "page" &&
+            (r.epoch === undefined ||
+              (f.epoch !== undefined && f.epoch >= r.epoch))
+        )
+    )
+  const withOptional = <T extends object>(
+    base: T,
+    fields: { proof?: number | undefined; due?: number | undefined }
+  ) => ({
+    ...base,
+    ...(fields.proof === undefined ? {} : { proof: fields.proof }),
+    ...(fields.due === undefined ? {} : { due: fields.due }),
+  })
+
+  function syncState(): SyncState[] {
+    const out: SyncState[] = []
+    const shut = closed !== undefined || !session.token().valid
+    const refusalOf = (object?: ObjectName): SyncRefusal | undefined =>
+      shut
+        ? "closed"
+        : object !== undefined && staleObjects.has(object)
+          ? "stale-object"
+          : object !== undefined && session.versions.unavailable()
+            ? "discard-bound"
+            : undefined
+    const record = (
+      base: Omit<SyncState, "deferral" | "refusal">,
+      refusal: SyncRefusal | undefined,
+      deferral: () => SyncDeferral | undefined
+    ) => {
+      if (refusal !== undefined) return out.push({ ...base, refusal })
+      const deferred = base.requirements.length > 0 ? deferral() : undefined
+      out.push(deferred === undefined ? base : { ...base, deferral: deferred })
+    }
+
+    // Вигляди, що чекають першого знімка прав (Р5а): кожен з них звузить
+    // його прихід.
+    const beforeFirstViews = new Set<Subset>([
+      ...beforeFirst.views,
+      ...[...beforeFirst.objects].flatMap((name) =>
+        holdersOf(writerContext, name)
+      ),
+    ])
+    for (const s of registry.subsets()) {
+      if (!s.alive) continue
+      const object = s.form.object.name
+      const requirements: SyncRequirement[] = []
+      if (s.unconfirmedSince !== undefined)
+        requirements.push({
+          kind: "composition-unconfirmed",
+          epoch: s.unconfirmedSince,
+        })
+      if (wave?.objects.has(object) === true)
+        requirements.push({ kind: "channel-rejoin" })
+      if (hydration !== "none" && overHydratedRows(s))
+        requirements.push({ kind: "hydration-trust", epoch: hydrationEpoch })
+      if (narrowing.has(s) || beforeFirstViews.has(s))
+        requirements.push({ kind: "access-narrowed" })
+      if (registry.behindHeader(s))
+        requirements.push({ kind: "target-behind-header" })
+      const flights: SyncFlight[] = []
+      if (s.flight !== undefined)
+        flights.push(
+          s.flightEpoch === undefined
+            ? { kind: "load" }
+            : { kind: "load", epoch: s.flightEpoch }
+        )
+      for (const epoch of s.rereadEpochs)
+        flights.push({ kind: "reread", epoch })
+      for (let n = 0; n < s.paging.size; n++) flights.push({ kind: "page" })
+      const queued: SyncQueued[] = []
+      const trailing = trailingCause(s)
+      if (s.trailing)
+        queued.push(
+          trailing === undefined
+            ? { kind: "load" }
+            : { kind: "load", cause: trailing }
+        )
+      const tail = tailCause(s)
+      if (s.rereadTail !== undefined)
+        queued.push(
+          tail === undefined
+            ? { kind: "reread" }
+            : { kind: "reread", cause: causeOf(tail) }
+        )
+      const isVisible = s.visible ?? s.listeners.size > 0
+      // Вигляд ТЧ без підписника не читається за будь-якого `setVisible` (§5.3).
+      const readable =
+        isVisible && (s.form.spec.kind !== "section" || s.listeners.size > 0)
+      const held = scheduled.get(object)
+      const inRetry = held?.retry?.views.has(s) === true
+      const kinds = requirements.map((r) => r.kind)
+      record(
+        withOptional(
+          {
+            target: { kind: "view", object, spec: s.form.spec },
+            requirements,
+            flights,
+            queued,
+          },
+          {
+            proof: s.okReadEpoch,
+            due: earliest(
+              viewDue(writerContext, s),
+              isVisible && s.loaded ? held?.whole?.at : undefined,
+              inRetry ? held?.retry?.at : undefined,
+              wave?.objects.has(object) === true ? wave.at : undefined
+            ),
+          }
+        ),
+        refusalOf(object),
+        () =>
+          !visible && kinds.some((k) => TAB_GATED.has(k))
+            ? "tab-hidden"
+            : !readable && kinds.some((k) => VISIBILITY_GATED.has(k))
+              ? "target-invisible"
+              : promised(requirements, flights, queued)
+                ? "promised"
+                : s.failures > 0 || inRetry
+                  ? "paused"
+                  : undefined
+      )
+    }
+
+    const retries = new Map(
+      (receiver?.minVersionRetries() ?? []).map((r) => [
+        `${r.object}\u0000${r.key.toLowerCase()}`,
+        r,
+      ])
+    )
+    for (const o of objects.values()) {
+      const tail = tails.get(o)
+      const flying = new Set(tail?.flying ?? [])
+      const whole = scheduled.get(o.name)?.whole
+      const switchDue =
+        whole?.cause.reason === "requirement" &&
+        whole.cause.requirement === "version-epoch-switched"
+          ? whole.at
+          : undefined
+      for (const key of o.rows.keys()) {
+        const e = o.rows.get(key)!
+        const retry = retries.get(`${o.name}\u0000${key.toLowerCase()}`)
+        const inTail = tail?.pending.has(key) === true || flying.has(key)
+        const requirements: SyncRequirement[] = []
+        const { minVersion, hidden, epoch } = e.stale
+        if (minVersion !== undefined)
+          requirements.push({
+            kind: "min-version",
+            epoch: minVersion.epoch,
+            version: minVersion.v,
+            ...(retry === undefined ? {} : { attempt: retry.attempt }),
+          })
+        if (hidden !== undefined)
+          requirements.push({ kind: "value-hidden", epoch: hidden.epoch })
+        if (inTail) requirements.push({ kind: "row-unfinished" })
+        if (epoch === true)
+          requirements.push({ kind: "version-epoch-switched" })
+        if (requirements.length === 0) continue
+        const flights: SyncFlight[] = flying.has(key) ? [{ kind: "keys" }] : []
+        const queued: SyncQueued[] =
+          tail?.pending.has(key) === true
+            ? [
+                {
+                  kind: "keys",
+                  cause: {
+                    reason: "requirement",
+                    requirement: "row-unfinished",
+                  },
+                },
+              ]
+            : []
+        record(
+          withOptional(
+            {
+              target: { kind: "row", object: o.name, key },
+              requirements,
+              flights,
+              queued,
+            },
+            { due: earliest(retry?.at, epoch === true ? switchDue : undefined) }
+          ),
+          refusalOf(o.name),
+          () =>
+            promised(requirements, flights, queued) ? "promised" : undefined
+        )
+      }
+    }
+
+    {
+      const requirements: SyncRequirement[] = versionTail
+        ? [{ kind: "version-unconfirmed" }]
+        : []
+      const flights: SyncFlight[] = versionFlying ? [{ kind: "service" }] : []
+      const queued: SyncQueued[] = versionTail ? [{ kind: "service" }] : []
+      record(
+        {
+          target: { kind: "service", service: "version" },
+          requirements,
+          flights,
+          queued,
+        },
+        refusalOf(),
+        () => (promised(requirements, flights, queued) ? "promised" : undefined)
+      )
+    }
+    if (rightsEnabled) {
+      const requirements: SyncRequirement[] = []
+      if (rights === undefined)
+        requirements.push({ kind: "rights-unconfirmed" })
+      const tail = rightsTail
+      if (
+        tail?.reason === "requirement" &&
+        !requirements.some((r) => r.kind === tail.requirement)
+      )
+        requirements.push({ kind: tail.requirement })
+      const flights: SyncFlight[] = rightsFlying
+        ? [
+            rightsSent === undefined
+              ? { kind: "service" }
+              : { kind: "service", epoch: rightsSent.epoch },
+          ]
+        : []
+      const queued: SyncQueued[] =
+        rightsTail === undefined ? [] : [{ kind: "service", cause: rightsTail }]
+      record(
+        withOptional(
+          {
+            target: { kind: "service", service: "rights" },
+            requirements,
+            flights,
+            queued,
+          },
+          { proof: rights?.rightsEpoch, due: rightsDueAt() }
+        ),
+        refusalOf(),
+        () => (promised(requirements, flights, queued) ? "promised" : undefined)
+      )
+    }
+    return out
+  }
+
   internals.set(core, {
     objects,
     ops,
@@ -2206,6 +2575,7 @@ export function createCore(options: {
         readListeners.delete(listener)
       }
     },
+    sync: syncState,
     mutations: () => overlay.entries(),
     schedulerPlans: () => scheduler.plans(),
     schedulerDueAt: schedulerDue,

@@ -127,6 +127,16 @@ export interface Receiver {
   ): void
   /** A core tick: writes `stale-age` while an own mark exists. */
   tick(): void
+  /**
+   * Test-only (`inspectCore().sync()`): the min-version re-reads waiting for
+   * their pause — the row, the wake-up time and the attempt they will make.
+   */
+  minVersionRetries(): readonly {
+    readonly object: ObjectName
+    readonly key: Key
+    readonly at: number
+    readonly attempt: number
+  }[]
   /** Drops every subscription; the receiver sees nothing afterwards. */
   stop(): void
 }
@@ -708,9 +718,18 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     spec.where === undefined ||
     evaluateFilter(spec.where, values, fieldInfoOf(o.entry), collator)
 
+  // `at` і `attempt` — лише облік для діагностики (`sync()`): час пробудження
+  // паузи й спроба, яку вона зробить; поведінки вони не змінюють.
   const retries = new Map<
     string,
-    { chain: object; object: ObjectName; key: Key; scope: string | null }
+    {
+      chain: object
+      object: ObjectName
+      key: Key
+      scope: string | null
+      at: number
+      attempt: number
+    }
   >()
   // Дочитування мінімальної версії: після паузи ключ іде в ту саму чергу
   // зведених пачок, а не окремим шляхом.
@@ -723,8 +742,16 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const id = `${object}\u0000${key}`
     const chain = {}
     const scope = writer.objectOf(object).rows.get(key)?.scope ?? null
-    retries.set(id, { chain, object, key, scope })
-    void session.sleep(MIN_VERSION_PAUSE_MS * 2 ** (attempt - 1)).then(() => {
+    const pause = MIN_VERSION_PAUSE_MS * 2 ** (attempt - 1)
+    retries.set(id, {
+      chain,
+      object,
+      key,
+      scope,
+      at: writer.now() + pause,
+      attempt,
+    })
+    void session.sleep(pause).then(() => {
       if (retries.get(id)?.chain !== chain) return
       retries.delete(id)
       if (stopped) return
@@ -982,6 +1009,13 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
 
   return {
     touch,
+    minVersionRetries: () =>
+      [...retries.values()].map(({ object, key, at, attempt }) => ({
+        object,
+        key,
+        at,
+        attempt,
+      })),
     tick() {
       if (stopped) return
       forgetReleased()

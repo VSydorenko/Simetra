@@ -1139,19 +1139,34 @@ export function nextViewDue(
 ): number | undefined {
   let due: number | undefined
   for (const s of subsetsOf(ctx, ctx.objectOf(object))) {
-    if (!eligible(ctx, s, { visibleOnly: true })) continue
-    if (
-      inFlight(s) ||
-      (unavailable(s) && !ctx.defects.has("scheduler-reads-unavailable"))
-    )
-      continue
-    const at = dueOf(ctx, s)
-    // Вигляд, що ще не читався, строку не має.
-    if (!Number.isFinite(at)) continue
-    if (due === undefined || at < due) due = at
+    const at = viewDue(ctx, s)
+    if (at !== undefined && (due === undefined || at < due)) due = at
   }
   return due
 }
+
+/**
+ * The due time of one view by the filter of {@link nextViewDue} (the tick
+ * reads it then); `undefined` — the tick does not read it.
+ */
+export function viewDue(ctx: WriterContext, s: Subset): number | undefined {
+  if (!eligible(ctx, s, { visibleOnly: true })) return undefined
+  if (
+    inFlight(s) ||
+    (unavailable(s) && !ctx.defects.has("scheduler-reads-unavailable"))
+  )
+    return undefined
+  const at = dueOf(ctx, s)
+  // Вигляд, що ще не читався, строку не має.
+  return Number.isFinite(at) ? at : undefined
+}
+
+/**
+ * Test-only (`inspectCore().sync()`): the cause of the `revalidate` tail
+ * waiting over the view, if any.
+ */
+export const tailCause = (s: Subset): ReadWhy | undefined =>
+  tailOptions.get(s)?.why
 
 /** The options of the tail waiting over a view: the sum of the calls that joined it. */
 const tailOptions = new WeakMap<Subset, RevalidateOptions>()

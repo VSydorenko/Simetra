@@ -230,6 +230,13 @@ export interface SubsetRegistry {
   afterCommit(closing: boolean): Subset[]
   /** Cancels every timer, resolves waiters and forgets every subset and handle. */
   close(): void
+  /**
+   * Test-only (`inspectCore().sync()`): the card or section is behind its
+   * header — the condition under which a check reads it again (stale by
+   * `cardStale` / `sectionStale`, and the header changed or the owner was
+   * hidden since its last read).
+   */
+  behindHeader(s: Subset): boolean
 }
 
 const NO_LINES: readonly SectionLine[] = Object.freeze([])
@@ -337,6 +344,13 @@ const trailingCauses = new WeakMap<Subset, ReadCause>()
 // Відкладена перевірка шапки (`recheck`): так само пам'ятає рядок M3 чи M4
 // першого виклику `check`, що її відклав (Р4); прапор і причина ставляться разом.
 const recheckWhys = new WeakMap<Subset, ReadWhy>()
+
+/**
+ * Test-only (`inspectCore().sync()`): the cause of the next load queued over
+ * `s` (`trailing`), if any.
+ */
+export const trailingCause = (s: Subset): ReadCause | undefined =>
+  trailingCauses.get(s)
 
 /** Queues the next load of `s` under `cause`; a queued one keeps its own. */
 export function queueTrailing(s: Subset, cause: ReadCause): void {
@@ -869,16 +883,22 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       if (!recheckWhys.has(s)) recheckWhys.set(s, why)
       return
     }
+    if (behindHeader(s)) load(s, why)
+  }
+
+  /**
+   * Картка чи ТЧ відстала від шапки (вимога «ціль відстала від шапки»): одне
+   * означення для перевірки й для діагностики `sync()`.
+   */
+  function behindHeader(s: Subset): boolean {
     const header = headerKey(s)
-    if (header === undefined) return
+    if (header === undefined) return false
     const stale = s.form.spec.kind === "card" ? cardStale(s) : sectionStale(s)
-    if (!stale) return
-    if (
-      rowViews.revision(s.form.object.name, header) === s.readRevision &&
-      !hiddenSinceRead(s)
+    if (!stale) return false
+    return (
+      rowViews.revision(s.form.object.name, header) !== s.readRevision ||
+      hiddenSinceRead(s)
     )
-      return
-    load(s, why)
   }
 
   /**
@@ -1308,6 +1328,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   }
 
   return {
+    behindHeader: (s) => s.alive && !s.purged && behindHeader(s),
     view(spec) {
       if (isClosed()) return closedHandle()
       const form = formOf(ctx, spec)
