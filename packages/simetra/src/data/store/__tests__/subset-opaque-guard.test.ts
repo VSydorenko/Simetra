@@ -567,6 +567,9 @@ describe("subset opaque guard self-test", () => {
 
   it("flags a spread and a non-literal index", () => {
     expect(red(`const a = { ...sub }`)).toHaveLength(1)
+    expect(red(`const k: "status" | "gen" = "status"\nsub[k]`)).toEqual([
+      "/v/t.ts:5 Subset[non-literal]",
+    ])
     expect(red(`sub[key as keyof Subset]`).length).toBeGreaterThan(0)
     expect(
       red("const a = (sub as Record<string, unknown>)[key]").length
