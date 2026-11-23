@@ -493,6 +493,13 @@ export interface Writer {
   ): void
   markStale(object: ObjectName, keys: readonly Key[], minVersion: number): void
   /**
+   * The reaction of the store to an eviction horizon newer than a read
+   * (§6.2 rule 1): hides the values of the keys and re-reads them; the
+   * receiver asks it where the horizon alone says an answer may have crossed
+   * a purge, instead of a mark that a purge could make unreachable.
+   */
+  hideByHorizon(object: ObjectName, keys: readonly Key[]): void
+  /**
    * Writes the rows of an own command result (P4-B spec §7.2 step 3), and
    * only the journal calls it. A row is written by the version rule only for
    * a key with an owner, whose stored row and session are in `epoch`; it
