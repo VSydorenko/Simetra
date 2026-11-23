@@ -459,6 +459,17 @@ describe("sync(): each condition of §5.3 main holds", () => {
     expect(stateOf(h, viewTarget(h.spec))!.due).toBeUndefined()
   })
 
+  // Хвиля читає лише видимі вигляди: невидимому вона лише ставить вимогу.
+  it("target-invisible: the rejoin wave of an invisible view, without a due", async () => {
+    const h = await withSignals()
+    h.core.setVisible(h.spec, false)
+    h.transport.join(channel, false)
+    const state = stateOf(h, viewTarget(h.spec))!
+    expect(state.requirements).toEqual([{ kind: "channel-rejoin" }])
+    expect(state.deferral).toBe("target-invisible")
+    expect(state.due).toBeUndefined()
+  })
+
   it("tab-hidden: the rejoin wave waits for the tab, without a due", async () => {
     const h = await withSignals()
     h.core.suspend()

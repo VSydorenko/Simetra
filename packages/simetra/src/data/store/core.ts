@@ -2274,14 +2274,17 @@ export function createCore(options: {
 
   // Умови шлюзу, які `main` справді застосовує до вимоги свого виду: прихована
   // вкладка відкладає лише вимогу вигляду (`requirementPending`) і хвилю
-  // приєднання (такт не йде); невидимість — вимогу вигляду й довіру після
-  // гідратації (`readHydrated`). Решту видів `main` читає без цих умов.
+  // приєднання (такт не йде); невидимість — вимогу вигляду, хвилю
+  // приєднання (`fireWave` читає лише видимі вигляди, невидимим лише ставить
+  // вимогу складу) і довіру після гідратації (`readHydrated`). Решту видів
+  // `main` читає без цих умов.
   const TAB_GATED: ReadonlySet<RequirementKind> = new Set([
     "composition-unconfirmed",
     "channel-rejoin",
   ])
   const VISIBILITY_GATED: ReadonlySet<RequirementKind> = new Set([
     "composition-unconfirmed",
+    "channel-rejoin",
     "hydration-trust",
   ])
 
@@ -2402,6 +2405,10 @@ export function createCore(options: {
       // Строки такту, черги планувальника й хвилі: на прихованій вкладці
       // планувальник не спрацьовує, тож вони нічого не читають.
       const read = (at: number | undefined) => (visible ? at : undefined)
+      // Вигляд, який читає строк об'єкта чи хвиля (`revalidate`, `visibleOnly`).
+      const byTick = revalidateTargets(writerContext, object, {
+        visibleOnly: true,
+      }).includes(s)
       record(
         withOptional(
           {
@@ -2414,15 +2421,14 @@ export function createCore(options: {
             proof: s.okReadEpoch,
             due: earliest(
               read(viewDue(writerContext, s)),
-              read(
-                revalidateTargets(writerContext, object, {
-                  visibleOnly: true,
-                }).includes(s)
-                  ? held?.whole?.at
-                  : undefined
-              ),
+              read(byTick ? held?.whole?.at : undefined),
               read(inRetry ? held?.retry?.at : undefined),
-              read(wave?.objects.has(object) === true ? wave.at : undefined)
+              // Хвиля читає лише видимі вигляди (`revalidate`, `visibleOnly`).
+              read(
+                byTick && wave?.objects.has(object) === true
+                  ? wave.at
+                  : undefined
+              )
             ),
           }
         ),

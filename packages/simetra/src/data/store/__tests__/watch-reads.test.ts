@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  CommandFailure,
   catalogIndex,
   type CommandErrorCode,
   type MetadataRef,
@@ -238,6 +239,37 @@ describe("watchReads at the source: one event per live part of a request", () =>
       request: requestOf(items[1]!),
     })
   })
+
+  // Відмова вже надісланого запиту — його відповідь: подія має номер, тож
+  // `requestOf` відмов живих частин дає той самий.
+  it.each([
+    [
+      "rejects the whole request (CommandFailure)",
+      (): Promise<WireReadParts> =>
+        Promise.reject(new CommandFailure({ code: "command.unavailable" })),
+    ],
+    [
+      "answers a wrong number of parts",
+      (): Promise<WireReadParts> => Promise.resolve({ epoch: null, items: [] }),
+    ],
+  ])(
+    "numbers the failed parts of a sent request when the adapter %s",
+    async (_, answer) => {
+      const failing: SourceAdapter = {
+        capabilities: { include: true },
+        read: answer,
+      }
+      const { events, read } = twoAdapters({ first: failing })
+      const parts = [queryOf(TASK_REF, 1), queryOf(ORG_REF, 2)]
+      const { items } = await read(
+        parts,
+        parts.map((_, i) => originAt(i))
+      )
+      expect(items[0]!.ok).toBe(false)
+      expect(requestOf(items[0]!)).toEqual(expect.any(Number))
+      expectEventsMatchAnswers(events, items, [0, 1])
+    }
+  )
 
   it("gives no event when the limiter is closed", async () => {
     const { source, events, read } = twoAdapters({})

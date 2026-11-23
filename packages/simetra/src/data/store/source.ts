@@ -562,12 +562,17 @@ export function createCoreSource(
       })
     } catch (error) {
       if (!(error instanceof CommandFailure)) throw error
-      return queries.map(() => ({ ok: false, error: error.error }))
+      return numbered(
+        queries.map(() => ({ ok: false, error: error.error })),
+        live,
+        request
+      )
     }
     if (answer === undefined) return queries.map(refusal)
     const { epoch, items } = answer
     // Рівно по відповіді на частину: інакше порядок не співставити.
-    if (items.length !== live.length) return queries.map(internal)
+    if (items.length !== live.length)
+      return numbered(queries.map(internal), live, request)
     return queries.map((part, i) => {
       const at = live.indexOf(i)
       if (at < 0) return refusal(part)
@@ -575,6 +580,18 @@ export function createCoreSource(
       requestOfItem.set(item, request)
       return item
     })
+  }
+
+  // Відмова вже надісланого запиту — теж відповідь цього запиту: подія
+  // `watchReads` його живих частин має номер, тож `requestOf` їхніх відмов
+  // мусить його дати (значення відмов не змінюються).
+  const numbered = (
+    items: CoreReadItem[],
+    live: readonly number[],
+    request: number
+  ): CoreReadItem[] => {
+    for (const i of live) requestOfItem.set(items[i]!, request)
+    return items
   }
 
   const group = async (
