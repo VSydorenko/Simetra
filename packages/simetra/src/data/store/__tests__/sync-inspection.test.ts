@@ -561,6 +561,24 @@ describe("sync(): each condition of §5.3 main holds", () => {
   })
 
   // Вимога без епохи: політ, що вже летить, міг стартувати раніше за неї.
+  // Політ обіцяє лише вимогу, від якої стартував: пізніша хвиля приєднання
+  // ним не обіцяна, хоч вимогу складу він виконає.
+  it("promised: per requirement — a re-read promising the composition does not promise a later rejoin", async () => {
+    const h = await withSignals()
+    h.fake.mode = "manual"
+    write(h, (w) => w.markViews(TASK, { unconfirmedSince: h.core.readEpoch() }))
+    void h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    expect(stateOf(h, viewTarget(h.spec))!.deferral).toBe("promised")
+    h.transport.join(channel, false)
+    const state = stateOf(h, viewTarget(h.spec))!
+    expect(state.requirements.map((r) => r.kind)).toEqual([
+      "composition-unconfirmed",
+      "channel-rejoin",
+    ])
+    expect(state.deferral).not.toBe("promised")
+  })
+
   it("promised: not by a re-read in flight for a requirement without an epoch", async () => {
     const h = await withSignals()
     h.fake.mode = "manual"
@@ -642,10 +660,36 @@ describe("sync(): each condition of §5.3 main holds", () => {
     })
   })
 
-  it("stale-object: a view of an object marked stale-client is refused", async () => {
+  // Таймери несумісного об'єкта не читають (§10): строку немає ні в вигляду,
+  // ні в рядка, ні в повтору мінімальної версії.
+  it("stale-object: a view of an object marked stale-client is refused, without a due", async () => {
     const h = await loaded()
+    write(h, (w) => w.markStale(TASK, [key(1)], 99))
+    expect(stateOf(h, viewTarget(h.spec))!.due).toEqual(expect.any(Number))
+    expect(stateOf(h, rowTarget(1))!.due).toEqual(expect.any(Number))
     h.core.staleClient(TASK)
-    expect(stateOf(h, viewTarget(h.spec))!.refusal).toBe("stale-object")
+    expect(stateOf(h, viewTarget(h.spec))).toMatchObject({
+      refusal: "stale-object",
+    })
+    expect(stateOf(h, viewTarget(h.spec))!.due).toBeUndefined()
+    expect(stateOf(h, rowTarget(1))!.due).toBeUndefined()
+  })
+
+  it("stale-object: no due of the receiver's min-version re-read", async () => {
+    const h = await withSignals()
+    const served = h.fake.edit(TASK, key(1), { title: "v" })
+    h.transport.emit(channel, {
+      id: "1",
+      object: task.id,
+      op: "update",
+      keys: { id: key(1) },
+      row_ver: served + 1,
+    })
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    expect(stateOf(h, rowTarget(1))!.due).toEqual(expect.any(Number))
+    h.core.staleClient(TASK)
+    expect(stateOf(h, rowTarget(1))!.due).toBeUndefined()
   })
 
   it("discard-bound: a view of a session out of the discard limit is refused", async () => {
@@ -670,6 +714,8 @@ describe("sync(): each condition of §5.3 main holds", () => {
     await settle()
     expect(h.inspect.versionEpochs().unavailable).toBe(true)
     expect(stateOf(h, viewTarget(h.spec))!.refusal).toBe("discard-bound")
+    // Після межі відкинутих планувальник нічого не читає (§6.2).
+    expect(stateOf(h, viewTarget(h.spec))!.due).toBeUndefined()
   })
 
   it("closed: the service targets of a closed core are refused", async () => {

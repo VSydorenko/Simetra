@@ -2320,12 +2320,30 @@ export function createCore(options: {
     ...(fields.due === undefined ? {} : { due: fields.due }),
   })
 
+  // Таймери `main` читають об'єкт лише на видимій вкладці, поки він сумісний
+  // і сесія в межі відкинутих — ті самі умови, що в `schedulerDue` і такті.
+  const timersRead = (object: ObjectName) =>
+    visible &&
+    !staleObjects.has(object) &&
+    (!session.versions.unavailable() ||
+      defects.has("scheduler-reads-unavailable"))
+
+  // Обіцянку чи умову судить кожна вимога окремо (§5.3, §5.13): політ, що
+  // обіцяє одну, нічого не каже про пізнішу. Ціль має умову, лише коли її має
+  // кожна вимога; `promised` — лише коли всі обіцяні.
+  const deferralOf = (
+    conditions: readonly (SyncDeferral | undefined)[]
+  ): SyncDeferral | undefined =>
+    conditions.some((c) => c === undefined)
+      ? undefined
+      : (conditions.find((c) => c !== "promised") ?? "promised")
+
   // Найраніший таймер `main`, що читає вигляд: такт (`viewDue`), строк
   // об'єкта й хвиля (обидва — `revalidate` з `visibleOnly`), повтор
   // відкинутої відповіді. На прихованій вкладці планувальник не спрацьовує.
   function timerDue(s: Subset): number | undefined {
-    if (!visible) return undefined
     const object = s.form.object.name
+    if (!timersRead(object)) return undefined
     const held = scheduled.get(object)
     const byTick = revalidateTargets(writerContext, object, {
       visibleOnly: true,
@@ -2409,12 +2427,23 @@ export function createCore(options: {
       const readable =
         isVisible && (s.form.spec.kind !== "section" || s.listeners.size > 0)
       const inRetry = scheduled.get(object)?.retry?.views.has(s) === true
-      const kinds = requirements.map((r) => r.kind)
       // Вимогу складу судить те саме місце, що й `main` (`requirementPending`).
       const composition = requirementHold(s, requirementEnv)
-      const others = requirements.filter(
-        (r) => r.kind !== "composition-unconfirmed"
-      )
+      const conditionOf = (r: SyncRequirement): SyncDeferral | undefined => {
+        // Вимогу складу судить те саме місце, що й `main`.
+        if (r.kind === "composition-unconfirmed")
+          return composition === "absent" || composition === "discard-bound"
+            ? undefined
+            : composition
+        // До `endHydration` довіру після гідратації не читає ніхто: її
+        // читання — сам виклик (умова `hydrating`, рішення архітекторки).
+        if (r.kind === "hydration-trust" && hydration === "hydrated")
+          return "hydrating"
+        if (!visible && (TAB_GATED.has(r.kind) || inRetry)) return "tab-hidden"
+        if (!readable && VISIBILITY_GATED.has(r.kind)) return "target-invisible"
+        if (promised([r], flights, queued)) return "promised"
+        return inRetry ? "paused" : undefined
+      }
       record(
         withOptional(
           {
@@ -2426,24 +2455,7 @@ export function createCore(options: {
           { proof: s.okReadEpoch, due: timerDue(s) }
         ),
         refusalOf(object),
-        () =>
-          // До `endHydration` довіру після гідратації не читає ніхто: її
-          // читання — сам виклик (умова `hydrating`, рішення архітекторки).
-          hydration === "hydrated" && kinds.includes("hydration-trust")
-            ? "hydrating"
-            : composition !== "absent" &&
-                composition !== undefined &&
-                composition !== "discard-bound"
-              ? composition
-              : !visible && (kinds.some((k) => TAB_GATED.has(k)) || inRetry)
-                ? "tab-hidden"
-                : !readable && kinds.some((k) => VISIBILITY_GATED.has(k))
-                  ? "target-invisible"
-                  : others.length > 0 && promised(others, flights, queued)
-                    ? "promised"
-                    : inRetry
-                      ? "paused"
-                      : undefined
+        () => deferralOf(requirements.map(conditionOf))
       )
     }
 
@@ -2483,7 +2495,9 @@ export function createCore(options: {
         if (requirements.length === 0) continue
         // Повтор мінімальної версії й строк перемикання — шляхи, які прихована
         // вкладка відкладає: пачка приймача й такт планувальника не читають.
-        const tabGated = epoch === true || retry !== undefined
+        const tabGated = (r: SyncRequirement) =>
+          r.kind === "version-epoch-switched" ||
+          (r.kind === "min-version" && retry !== undefined)
         const flights: SyncFlight[] = flying.has(key) ? [{ kind: "keys" }] : []
         const queued: SyncQueued[] =
           tail?.pending.has(key) === true
@@ -2507,7 +2521,7 @@ export function createCore(options: {
             },
             {
               due: earliest(
-                visible ? retry?.at : undefined,
+                timersRead(o.name) ? retry?.at : undefined,
                 ...holders
                   .filter((s) => s.owned.has(key))
                   .map((s) => timerDue(s))
@@ -2516,11 +2530,15 @@ export function createCore(options: {
           ),
           refusalOf(o.name),
           () =>
-            !visible && tabGated
-              ? "tab-hidden"
-              : promised(requirements, flights, queued)
-                ? "promised"
-                : undefined
+            deferralOf(
+              requirements.map((r) =>
+                !visible && tabGated(r)
+                  ? "tab-hidden"
+                  : promised([r], flights, queued)
+                    ? "promised"
+                    : undefined
+              )
+            )
         )
       }
     }
