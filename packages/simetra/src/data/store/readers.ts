@@ -558,7 +558,7 @@ function rejectedSince(
     return e.removed.epoch > readEpoch ? e.removed.epoch : undefined
   if (
     e === undefined &&
-    ctx.session.epochs.buriedOrEvictedSince(keyId(o.name, key), readEpoch)
+    ctx.session.epochs.buriedSince(keyId(o.name, key), readEpoch)
   )
     return ctx.session.epochs.now()
   return undefined
