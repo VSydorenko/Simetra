@@ -90,6 +90,13 @@ export function startPostgres(options?: {
   cleanupTimeoutMs?: number
 }): Promise<void>
 
+/** Stops the postgres stack (`down --remove-orphans`, with `--volumes` when asked); the caller holds the stack lock. */
+export function stopPostgres(options?: {
+  spawnFn?: SpawnFn
+  signals?: SignalSource
+  volumes?: boolean
+}): Promise<void>
+
 /** Codes of the refusals of `start postgres` on a running stack (`error.code`). */
 export const STACK_REFUSAL: {
   readonly unlabelled: string
