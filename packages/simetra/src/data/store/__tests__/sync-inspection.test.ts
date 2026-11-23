@@ -7,7 +7,7 @@ import { failurePause } from "../subsets"
 import { QUIET_MS, REJOIN_JITTER_MS } from "../receiver"
 import { DISCARDS_MAX } from "../session"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
-import type { ViewSpec } from "../types"
+import type { CoreLimits, ViewSpec } from "../types"
 import {
   ORG,
   S,
@@ -111,13 +111,16 @@ const channel = channelTopic({
 })
 
 /** Ядро з приймачем сигналів над фейковим каналом і завантаженим виглядом. */
-async function withSignals(spec: ViewSpec = keysView(1)) {
+async function withSignals(
+  spec: ViewSpec = keysView(1),
+  limits: Partial<CoreLimits> = {}
+) {
   const transport = createFakeSignalTransport()
   const h = setup({
     now: () => Date.now(),
     rightsSnapshot: true,
     signals: transport,
-    limits: { revalidateIntervalMs: INTERVAL },
+    limits: { revalidateIntervalMs: INTERVAL, ...limits },
   })
   h.fake.rightsSnapshot = {
     userId: USER,
@@ -413,11 +416,14 @@ describe("sync(): each condition of §5.3 main holds", () => {
       object: TASK,
       orderBy: [{ attribute: "title", direction: "asc" }],
     }
-    const h = await loaded(win, { mode: "manual", limits: { windowPage: 1 } })
-    h.handle.loadAfter()
+    // Вимога без епохи (хвиля приєднання): її не обіцяє й будь-яка сторінка.
+    const h = await withSignals(win, { windowPage: 1 })
+    h.fake.mode = "manual"
+    h.core.view(win).loadAfter()
     await settle()
-    unconfirmed(h)
+    h.transport.join(channel, false)
     const state = stateOf(h, viewTarget(win))!
+    expect(state.requirements).toEqual([{ kind: "channel-rejoin" }])
     expect(state.flights).toEqual([{ kind: "page" }])
     expect(state.deferral).toBeUndefined()
   })
