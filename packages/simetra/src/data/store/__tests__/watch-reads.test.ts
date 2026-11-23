@@ -574,4 +574,22 @@ describe("watchReads in the core", () => {
     }
     expect(logged).not.toContain('"request"')
   })
+
+  it("carries only the reason, the target, the site and the request in an event, not the caller or the lease", async () => {
+    const h = build({ rights: true })
+    seed(h.fake, 1, 2)
+    watch(h.core.view(view))
+    await settle()
+    expect(h.events.length).toBeGreaterThan(0)
+    for (const event of h.events) {
+      expect(
+        Object.keys(event).filter(
+          (name) =>
+            !["requirement", "reason", "target", "site", "request"].includes(
+              name
+            )
+        )
+      ).toEqual([])
+    }
+  })
 })
