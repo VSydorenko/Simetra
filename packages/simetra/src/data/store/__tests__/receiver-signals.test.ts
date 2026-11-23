@@ -995,7 +995,7 @@ describe("purge of a pair", () => {
         "limits" in c ? c.limits : undefined,
         (purge) => {
           purge(c.target)
-          for (const t of "after" in c ? c.after : []) purge(t)
+          for (const t of "after" in c ? (c.after ?? []) : []) purge(t)
         }
       )
       expect(h.fake.requests.length).toBe(sent)
@@ -1045,7 +1045,7 @@ describe("purge of a pair", () => {
       expect(requestsSince(h, sent)).toHaveLength(1)
       const row = h.handle.getSnapshot().rows.find((r) => r.key === key(1))
       expect(row?.state).not.toBe("stale")
-      expect(row?.values.title).toBe("v")
+      expect(row).toMatchObject({ version: served, values: { title: "v" } })
       expect(h.fake.row(TASK, key(1))?.version).toBe(served)
     }
   )
