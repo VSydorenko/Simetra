@@ -335,6 +335,10 @@ describe("CustomTable physics round-trip", () => {
     // Далі додано довідник-файл `Attachment` (`storage`) — нова таблиця
     // `attachment` і таблиці сховища файлів `simetra.storage_*`; без них хеш
     // той самий.
+    // Далі поля пошуку дали нормалізовану колонку й індекс `text_pattern_ops`
+    // рядковому полю пошуку довідника й документа (типово — найменуванню).
+    // Далі нормалізована колонка стала обмеженим префіксом
+    // `left(lower(…), N)`: повне значення не влазило в рядок btree.
     const derived = {
       tables: physical.tables.filter(
         (t) =>
@@ -358,7 +362,7 @@ describe("CustomTable physics round-trip", () => {
       .update(JSON.stringify(derived))
       .digest("hex")
     expect(digest).toBe(
-      "fe636252a5a75a6f3105def6693ad2d1c905057479b48382982a72794d4130cf"
+      "9fb976a648f58c4f88a1bbac8fa07cd0e422477b259c94459e6ae97b22de3999"
     )
   })
 })

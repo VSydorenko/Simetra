@@ -34,6 +34,7 @@ import {
   grantRecords,
   isRightsDeclaration,
 } from "../rights/facts"
+import { derivedSearchColumn } from "../search-fields"
 import {
   PROJECT_FILE,
   objectKey,
@@ -621,6 +622,7 @@ export function checkIdentity(
     if (style !== undefined) {
       resolveMovements(object, objectsByName, style, references, diagnostics)
       resolveIndexAttributes(object, style, references)
+      resolveSearchFields(object, style, references)
       resolveWhenChanged(object, objectsByName, style, references)
     }
     resolveMovementBlocks(object, objects, brokenNames, references, diagnostics)
@@ -993,6 +995,11 @@ function resolveElementReferences(
       // Прийнята таблиця описує фізику сама, тож невідома колонка — її
       // помилка тут; в інших видів ім'я звітує правило поля (`rights.*`).
       if (!KIND_REGISTRY[object.kind].declared) continue
+      const derived = derivedIndexKey(object, style, pointer, name)
+      if (derived !== undefined) {
+        diagnostics.push(derived)
+        continue
+      }
       diagnostics.push(
         diagnostic("customTable.column-unknown", object.file, pointer, {
           column: name,
@@ -1009,6 +1016,39 @@ function resolveElementReferences(
       role,
     })
   }
+}
+
+/**
+ * Колонка власного індексу (ключ чи `include`) або UNIQUE-обмеження
+ * прийнятої таблиці на похідній колонці її поля пошуку (прийняте з бази):
+ * колонку виводить платформа, тож опис її не має, але це не невідома
+ * колонка, а стан прийнятої бази — помилка класу ремонту (спека декларацій
+ * функцій §5.1). Ключ ремонту — схема й ім'я індексу чи обмеження: обидва
+ * унікальні в схемі.
+ */
+function derivedIndexKey(
+  object: ParsedObject,
+  style: AttributeCase | undefined,
+  pointer: string,
+  name: string
+): Diagnostic | undefined {
+  const at =
+    /^\/indexes\/(\d+)\/(?:keys\/\d+\/column|include\/\d+)$/.exec(pointer) ??
+    /^\/uniques\/(\d+)\/columns\/\d+$/.exec(pointer)
+  if (at === null || style === undefined) return undefined
+  const list = pointer.startsWith("/indexes/") ? "indexes" : "uniques"
+  const derived = derivedSearchColumn(object, style, name)
+  if (derived === undefined) return undefined
+  const data = object.data as {
+    schema?: string
+  } & Record<"indexes" | "uniques", { name?: string }[]>
+  return diagnostic("customTable.index-derived-column", object.file, pointer, {
+    schema: data.schema ?? "",
+    name: data[list][Number(at[1])]?.name ?? `${object.name}#${list}/${at[1]}`,
+    table: object.name,
+    column: name,
+    field: derived.field,
+  })
 }
 
 /**
@@ -1288,6 +1328,43 @@ function resolveIndexAttributes(
       ),
       `/tabularSections/${index}`
     )
+  })
+}
+
+/**
+ * Імена в `search.fields` резолвляться в UUID реквізитів шапки (чи в
+ * синтетичний id стандартного), щоб перейменування реквізиту переписало й поле
+ * пошуку. Невідоме ім'я тут мовчить: звітує стадія 4 (`search.field-unknown`).
+ */
+function resolveSearchFields(
+  object: ParsedObject,
+  style: AttributeCase,
+  references: ResolvedReference[]
+) {
+  const def = KIND_REGISTRY[object.kind]
+  if (def.search === undefined || object.id === undefined) return
+  const data = object.data as Record<string, unknown> & {
+    search?: { fields?: string[] }
+  }
+  const table = nameTable(
+    object.id,
+    def.columnFields.flatMap((field) => (data[field] as Element[]) ?? []),
+    def.standardColumns(data),
+    style
+  )
+  const ownerId = object.id
+  ;(data.search?.fields ?? []).forEach((name, i) => {
+    const id = table.get(name)
+    if (id === undefined) return
+    references.push({
+      from: {
+        file: object.file,
+        pointer: `/search/fields/${i}`,
+        objectId: ownerId,
+      },
+      to: { kind: "Element", id },
+      role: "search.field",
+    })
   })
 }
 

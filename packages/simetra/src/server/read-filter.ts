@@ -2,6 +2,8 @@ import {
   UUID_TEXT,
   encodePair,
   isWithinType,
+  searchNormalization,
+  searchPrefixNormalization,
   type CommandError,
   type Filter,
   type FilterCondition,
@@ -135,7 +137,10 @@ function pairEquals(
   ]
 }
 
-/** Екранування шаблону `ILIKE` (типовий `ESCAPE '\'`): значення — літерал. */
+/** Місце параметра в тексті правила нормалізації: у SQL не трапляється. */
+const PARAMETER = "\u0000"
+
+/** Екранування шаблону `ILIKE` `contains` (типовий `ESCAPE '\'`): значення — літерал. */
 const escapePattern = (text: string) => text.replace(/[\\%_]/g, "\\$&")
 
 function condition(
@@ -188,10 +193,44 @@ function condition(
       "])",
     ]
   }
-  if (op === "contains" || op === "startsWith") {
+  if (op === "contains") {
     const text = scalar(column, notNull(value, valuePath), valuePath)
-    const pattern = `${op === "contains" ? "%" : ""}${escapePattern(text)}%`
-    return [`${name} ILIKE `, { value: pattern, cast: "text" }]
+    return [
+      `${name} ILIKE `,
+      { value: `%${escapePattern(text)}%`, cast: "text" },
+    ]
+  }
+  if (op === "startsWith") {
+    const text = scalar(column, notNull(value, valuePath), valuePath)
+    // Значення — зв'язаний параметр усередині виразу правила T0: текст
+    // правила ділиться навколо місця параметра.
+    const around = (
+      rule: (expression: string) => string,
+      subject: string
+    ): Part[] => {
+      const [before, after] = rule(PARAMETER).split(PARAMETER)
+      return [
+        `starts_with(${subject}, ${before}`,
+        { value: text, cast: "text" },
+        `${after})`,
+      ]
+    }
+    // Точна умова за повним значенням — один вираз для поля пошуку й без
+    // нього (спека П4-B §4.1). `ILIKE` тут не годиться — він не leakproof і
+    // під RLS індексом не стає.
+    const exact = around(searchNormalization, searchNormalization(name))
+    if (column.attribute?.search === undefined) return exact
+    // Нормалізована колонка несе лише обмежений префікс значення: умова за
+    // нею — діапазон індексу `text_pattern_ops` за префіксом запиту, тим
+    // самим обмеженням; точна умова за повним значенням відкидає рядки, що
+    // збіглися лише в межах префікса (запит довший за межу).
+    return [
+      "(",
+      ...around(searchPrefixNormalization, qualified(column.attribute.search)),
+      " AND ",
+      ...exact,
+      ")",
+    ]
   }
   notNull(
     value,

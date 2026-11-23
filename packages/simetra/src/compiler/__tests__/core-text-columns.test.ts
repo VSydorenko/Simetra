@@ -49,7 +49,8 @@ describe("text-encoded columns of the command core", () => {
     const chunks = [...result.matchAll(/jsonb_build_object\(/g)]
     expect(chunks).toHaveLength(2)
     expect(result).toMatch(
-      /^to_jsonb\(v_row\) \|\| \(jsonb_build_object\(.*\) \|\| jsonb_build_object\(.*\)\)$/
+      // `Gauge` — довідник: нормалізована колонка пошуку найменування знята
+      /^\(to_jsonb\(v_row\) - 'description_search'\) \|\| \(jsonb_build_object\(.*\) \|\| jsonb_build_object\(.*\)\)$/
     )
   })
 })

@@ -60,6 +60,8 @@ interface Step {
   item: Row
   version: string
   expected: Row | null
+  /** SQL сесії транзакції перед викликом ядра: налаштування «поза ядром». */
+  before?: string
 }
 
 /**
@@ -85,7 +87,8 @@ async function saveSteps(
     )
     await session.query(setup.text, [...setup.params])
     let result: Row = {}
-    for (const { item, version, expected } of steps) {
+    for (const { item, version, expected, before } of steps) {
+      if (before !== undefined) await session.query(before)
       await setLocalSetting(
         session,
         COMMAND_SETTING,
@@ -317,6 +320,33 @@ describe("CAS by fields in the save core", () => {
          DROP FUNCTION public.gauge_lower_precision();`
       )
     }
+  })
+
+  // Той самий запобіжник без тригера: застосунок ставить `SET LOCAL` між
+  // двома викликами ядра (тіло функції, хук) — ядро має виставити власні
+  // опції кодування в кожному виклику, а не лише в першому.
+  it("SET LOCAL extra_float_digits outside the core between two core calls: the later field CAS is still conflict fields", async () => {
+    const earlier = await seed("reading", "0")
+    const changed = await seed("ratio", "1.4")
+    expect(
+      await saveSteps(
+        env,
+        [
+          {
+            item: { id: earlier, reading: 1 },
+            version: await versionOf(earlier),
+            expected: null,
+          },
+          {
+            item: { id: changed, ratio: 2 },
+            version: "1",
+            expected: { ratio: 1.1 },
+            before: "SET LOCAL extra_float_digits = -15",
+          },
+        ],
+        true
+      )
+    ).toMatchObject({ ...FIELDS, hint: await versionOf(changed) })
   })
 
   // І11 у результаті: `double precision` без втрат під ворожою сесією.

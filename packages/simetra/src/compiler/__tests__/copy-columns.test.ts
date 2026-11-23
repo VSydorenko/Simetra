@@ -96,6 +96,10 @@ describe("copyColumns", () => {
 
   it("an unparsed generated expression counts as a copy", () => {
     const failing: SqlParser = () => ({ ok: false, message: "x", offset: 0 })
-    expect([...copyColumns(invoice, failing)]).toEqual(["number_period"])
+    // Нормалізована колонка пошуку номера теж генерована — і теж копія
+    expect([...copyColumns(invoice, failing)]).toEqual([
+      "number_period",
+      "number_search",
+    ])
   })
 })

@@ -8,6 +8,7 @@ import {
 } from "./rights"
 import { attributeSchema } from "./attribute"
 import { compositeIndexesSchema } from "./composite-index"
+import { searchSchema } from "./search"
 import { tabularSectionSchema } from "./tabular-section"
 import { physicalNameSchema } from "./identity"
 import { metadataRefSchema } from "./metadata-ref"
@@ -163,6 +164,7 @@ export const documentSchema = z.strictObject({
   indexes: compositeIndexesSchema.meta({
     description: "Composite indexes over the document attributes.",
   }),
+  search: searchSchema.optional(),
 })
 
 export type Document = z.infer<typeof documentSchema>

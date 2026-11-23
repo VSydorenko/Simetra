@@ -36,6 +36,7 @@ import {
   valueAt,
   type CompilerRule,
   type Diagnostic,
+  type RuleCode,
 } from "../diagnostics"
 import {
   accepts,
@@ -55,6 +56,7 @@ import { nonContentStandardNames } from "../mechanics-units"
 import { carrierCopies } from "../rights/carrier-units"
 import { movementWrapperName } from "../movement-functions"
 import { standardOverrideNames, type PresentationFields } from "../presentation"
+import { resolveSearch, type SearchFieldProblem } from "../search-fields"
 import { checkRights } from "../rights/checks"
 import { checkRoles } from "../rights/role-checks"
 import { checkSystemCatalogs } from "../rights/system-catalogs"
@@ -232,6 +234,7 @@ export function checkIntegrity(
   diagnostics.push(...checkStandardOverrides(objects, style))
   diagnostics.push(...checkUniqueWithinPlace(objects))
   diagnostics.push(...checkCompositeIndexes(objects, style))
+  diagnostics.push(...checkSearchFields(objects, style))
   diagnostics.push(...checkScope(objects, references, scopeKinds, byId, byKey))
   diagnostics.push(...checkPosting(objects, references, byKey))
   diagnostics.push(...checkSubscriptions(objects, model, provider, style))
@@ -1058,6 +1061,36 @@ function checkCompositeIndexes(
     }
   }
   return found
+}
+
+const SEARCH_FIELD_CODES = {
+  unknown: "search.field-unknown",
+  duplicate: "search.field-duplicate",
+  tabularSection: "search.field-tabular",
+  ref: "search.field-ref",
+  generated: "search.field-generated",
+} as const satisfies Record<SearchFieldProblem, RuleCode>
+
+/**
+ * Оголошені поля пошуку (спека П2 §5, «Поля пошуку»): реквізити шапки, без
+ * ТЧ, без `Ref` і без згенерованої колонки, кожен раз. Форму `search` судить
+ * схема T0, зіставлення з реквізитами — `resolveSearch`, той самий, що будує
+ * колонки.
+ */
+function checkSearchFields(
+  objects: readonly ParsedObject[],
+  style: AttributeCase
+): Diagnostic[] {
+  return objects.flatMap((object) =>
+    resolveSearch(object, style).problems.map(({ problem, index, name }) =>
+      diagnostic(
+        SEARCH_FIELD_CODES[problem],
+        object.file,
+        `/search/fields/${index}`,
+        { kind: object.kind, object: object.name, name }
+      )
+    )
+  )
 }
 
 function byteLength(name: string): number {

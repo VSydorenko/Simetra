@@ -803,6 +803,10 @@ describe("stage 3: scope indexes", () => {
     // найменування лишається єдиним пошуковим індексом.
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
       {
+        name: "counterparty_description_search_idx",
+        keys: ["description_search"],
+      },
+      {
         name: "counterparty_org_id_description_id_idx",
         keys: ["org_id", "description", "id"],
       },
@@ -814,6 +818,10 @@ describe("stage 3: scope indexes", () => {
       [CP]: counterparty({ codeUnique: false }),
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
+      {
+        name: "counterparty_description_search_idx",
+        keys: ["description_search"],
+      },
       {
         name: "counterparty_org_id_code_id_idx",
         keys: ["org_id", "code", "id"],
@@ -832,6 +840,7 @@ describe("stage 3: scope indexes", () => {
       }),
     })
     expect(indexesOf(tableOf(physical, "invoice"))).toEqual([
+      { name: "invoice_number_search_idx", keys: ["number_search"] },
       {
         name: "invoice_org_id_date_id_idx",
         keys: ["org_id", "date", "id"],
@@ -850,6 +859,10 @@ describe("stage 3: scope indexes", () => {
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
       {
+        name: "counterparty_description_search_idx",
+        keys: ["description_search"],
+      },
+      {
         name: "counterparty_org_id_description_id_idx",
         keys: ["org_id", "description", "id"],
       },
@@ -860,6 +873,7 @@ describe("stage 3: scope indexes", () => {
     ])
     expect(indexesOf(tableOf(physical, "currency"))).toEqual([
       { name: "currency_description_id_idx", keys: ["description", "id"] },
+      { name: "currency_description_search_idx", keys: ["description_search"] },
       { name: "currency_rank_id_idx", keys: ["rank", "id"] },
     ])
   })
@@ -879,6 +893,7 @@ describe("stage 3: scope indexes", () => {
       }),
     })
     expect(indexesOf(tableOf(physical, "contract"))).toEqual([
+      { name: "contract_description_search_idx", keys: ["description_search"] },
       {
         name: "contract_org_id_counterparty_id_id_idx",
         keys: ["org_id", "counterparty_id", "id"],
@@ -912,6 +927,10 @@ describe("stage 3: scope indexes", () => {
         keys: ["currency_id", "id"],
       },
       {
+        name: "counterparty_description_search_idx",
+        keys: ["description_search"],
+      },
+      {
         name: "counterparty_org_id_description_id_idx",
         keys: ["org_id", "description", "id"],
       },
@@ -931,6 +950,10 @@ describe("stage 3: scope indexes", () => {
       }),
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
+      {
+        name: "counterparty_description_search_idx",
+        keys: ["description_search"],
+      },
       { name: "counterparty_draft_id_idx", keys: ["draft_id"] },
       {
         name: "counterparty_org_id_description_id_idx",
@@ -967,6 +990,10 @@ describe("stage 3: scope indexes", () => {
       [CP]: counterparty({ hierarchyType: "ItemsOnly" }),
     })
     expect(indexesOf(tableOf(physical, "counterparty"))).toEqual([
+      {
+        name: "counterparty_description_search_idx",
+        keys: ["description_search"],
+      },
       {
         name: "counterparty_org_id_description_id_idx",
         keys: ["org_id", "description", "id"],
@@ -1032,6 +1059,10 @@ describe("stage 3: scope indexes", () => {
     expect(indexesOf(tableOf(physical, "organization"))).toEqual([
       { name: "organization_code_id_idx", keys: ["code", "id"] },
       { name: "organization_description_id_idx", keys: ["description", "id"] },
+      {
+        name: "organization_description_search_idx",
+        keys: ["description_search"],
+      },
     ])
     expect(indexesOf(tableOf(physical, "organization_notes"))).toEqual([
       { name: "organization_notes_parent_id_idx", keys: ["parent_id"] },
@@ -1058,6 +1089,7 @@ describe("stage 3: scope indexes", () => {
     expect(indexesOf(tableOf(physical, "rate"))).toEqual([
       { name: "rate_currency_id_idx", keys: ["currency_id"] },
       { name: "rate_description_id_idx", keys: ["description", "id"] },
+      { name: "rate_description_search_idx", keys: ["description_search"] },
     ])
   })
 })
@@ -1175,6 +1207,7 @@ describe("stage 3: scoped owner", () => {
       }),
     ])
     expect(indexesOf(table)).toEqual([
+      { name: "contract_description_search_idx", keys: ["description_search"] },
       {
         name: "contract_org_id_description_id_idx",
         keys: ["org_id", "description", "id"],

@@ -4,9 +4,10 @@
  * якщо кожне його перевантаження в `pg_catalog` — IMMUTABLE і не повертає
  * множину. Значення — `prokind`: агрегат і віконна функція вимагають `OVER`.
  *
- * Запуск над локальним стеком (`pnpm db:start`):
+ * Запуск над локальним стеком `postgres` (`pnpm db:pg:start`):
  *   pnpm --filter simetra catalog-functions
- * Адресу бази можна задати `SIMETRA_TEST_DATABASE_URL`. Дрейф версії Postgres
+ * Типово — стек `postgres`; стек Supabase — явним `SIMETRA_TEST_DATABASE_URL`.
+ * Дрейф версії Postgres
  * ловить DB-тест `test/db/catalog-functions.db.test.ts`.
  */
 import { writeFileSync } from "node:fs"
@@ -18,7 +19,7 @@ const OUTPUT = new URL(
 )
 const url =
   process.env.SIMETRA_TEST_DATABASE_URL ??
-  "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+  "postgresql://postgres:postgres@127.0.0.1:54422/simetra"
 
 const client = new pg.Client({ connectionString: url })
 await client.connect()

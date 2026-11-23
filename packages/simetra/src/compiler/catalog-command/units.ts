@@ -13,6 +13,7 @@ import {
   ZERO_UUID,
   isTextEncodedType,
   jsonbBuildObject,
+  rowWithoutSearch,
   type ChangeSignal,
 } from "simetra/model"
 import type { CompiledScopeKind } from "../compile"
@@ -471,9 +472,18 @@ function textColumns(table: PhysicalTable, row: string): string | undefined {
   )
 }
 
+/**
+ * Рядок результату ядра: `to_jsonb` без колонок, що не є полями сутності
+ * (нормалізовані колонки пошуку), — те саме правило, що й у картки читання
+ * (`rowWithoutSearch`), тож форма одна (Рт1).
+ */
 const rowJson = (table: PhysicalTable, row: string) => {
   const text = textColumns(table, row)
-  return text === undefined ? `to_jsonb(${row})` : `to_jsonb(${row}) || ${text}`
+  const json = rowWithoutSearch(
+    `to_jsonb(${row})`,
+    table.columns.filter((c) => c.origin.searchOf !== undefined)
+  )
+  return text === undefined ? json : `${json} || ${text}`
 }
 
 /**
