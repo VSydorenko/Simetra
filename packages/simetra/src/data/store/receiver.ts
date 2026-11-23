@@ -338,23 +338,26 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   let planned = false
   const { session, limits } = writer
 
-  // Ключ чи пара, поховані з початку читання: надгробок АБО горизонт
-  // витіснення, як у сховищах (§6.2, правило 1).
+  // Ключ чи пара, поховані з початку читання: надгробок (purge) або горизонт
+  // витіснення його кошика (§6.2, правило 1). Окремо, бо реакція різна:
+  // надгробок — не писати й не читати; горизонт — як у сховищах.
   const buriedSinceRead = (
     object: ObjectName,
     key: Key,
     scope: string | null,
     readEpoch: number
-  ) => {
-    const { epochs } = session
-    const since = writer.defects.has("receiver-ignores-horizon")
-      ? epochs.buriedSince
-      : epochs.buriedOrEvictedSince
-    return (
-      since(keyId(object, key), readEpoch) ||
-      since(pairId(object, scope), readEpoch)
-    )
-  }
+  ) =>
+    session.epochs.buriedSince(keyId(object, key), readEpoch) ||
+    session.epochs.buriedSince(pairId(object, scope), readEpoch)
+  const evictedSinceRead = (
+    object: ObjectName,
+    key: Key,
+    scope: string | null,
+    readEpoch: number
+  ) =>
+    !writer.defects.has("receiver-ignores-horizon") &&
+    (session.epochs.evictedSince(keyId(object, key), readEpoch) ||
+      session.epochs.evictedSince(pairId(object, scope), readEpoch))
   // Власного токена приймач не має: `stop()` синхронний (гачок закриття
   // сесії), тож після нього `stopped` гасить кожну подію, а `purge` стережуть
   // епохи (`acceptEpochs`, `buriedSince`). Запис іде токеном сесії: під час
@@ -687,13 +690,12 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     // Ключ чи пара, поховані з початку читання, не «нові»: `hasNewRows`
     // виказав би рядок, який `purge` прибрав, чи заборонений рядок (як
     // перевірка відомого ключа нижче).
+    // Нового ключа в сховищі немає: горизонт, як і надгробок, лише гасить
+    // підказку (ховати нічого).
+    const scope = scopeOf(o.entry, row.values)
     if (
-      buriedSinceRead(
-        object,
-        row.key,
-        scopeOf(o.entry, row.values),
-        job.readEpoch
-      )
+      buriedSinceRead(object, row.key, scope, job.readEpoch) ||
+      evictedSinceRead(object, row.key, scope, job.readEpoch)
     )
       return
     for (const view of activeViews(writer, object)) {
@@ -784,17 +786,17 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       // правами, ключа): відповідь, що стартувала до purge, після нього
       // нічого не пише й не шле — ні позначки мінімальної версії рядку, який
       // вигляди тримають уже з новішого читання, ні дочитування (як
-      // `markNewRow`). Витіснений надгробок ключа чи пари — теж поховання:
-      // горизонт його кошика заступає надгробок, як у сховищах.
-      if (
-        buriedSinceRead(
-          object,
-          key,
-          o.rows.get(key)?.scope ?? null,
-          job.readEpoch
-        )
-      )
+      // `markNewRow`).
+      const scope = o.rows.get(key)?.scope ?? null
+      if (buriedSinceRead(object, key, scope, job.readEpoch)) continue
+      // Лише горизонт витіснення: надгробок міг бути purge, а міг — хибним
+      // збігом кошика. Реакція та сама, що в сховищах (§6.2, правило 1):
+      // сховати значення й перечитати ключ без `minVersion` — позначка, яку
+      // purge зробив нездійсненною, лишилась би без строку (#374).
+      if (evictedSinceRead(object, key, scope, job.readEpoch)) {
+        w.hideByHorizon(object, [key])
         continue
+      }
       const had = marks.minVersionBefore(object, key)
       w.markStale(object, [key], signal.version)
       marks.noteMinVersion(object, key, had)

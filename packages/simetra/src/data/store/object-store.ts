@@ -253,6 +253,12 @@ export interface ObjectStore {
   purgeScope(scope: Scope, scopeId: string | null): Key[]
   markStale(scope: Scope, keys: readonly Key[], minVersion: number): void
   /**
+   * The horizon reaction of the store (§6.2 rule 1) for keys that have an
+   * entry: hides the values and queues the tail re-read, counted as
+   * `horizon-hidden`. Returns the keys that have an entry.
+   */
+  hideByHorizon(scope: Scope, keys: readonly Key[]): Key[]
+  /**
    * Marks rows of held channels — of `channel` only when given — with a gap
    * at a fresh epoch each (P4-B spec §8.4).
    */
@@ -873,6 +879,19 @@ export function createObjectStore(options: {
         dropped.push(key)
       }
       return dropped
+    },
+
+    hideByHorizon(scope, keys) {
+      scope.assert()
+      const hiddenKeys: Key[] = []
+      for (const key of keys) {
+        const e = rows.get(key)
+        if (e === undefined) continue
+        if (e.stale.hidden === undefined) hideByHorizon(e, key)
+        else tail.add(key)
+        hiddenKeys.push(key)
+      }
+      return hiddenKeys
     },
 
     markStale(scope, keys, minVersion) {

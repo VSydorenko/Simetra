@@ -409,6 +409,13 @@ export function createWriter(ctx: WriterContext, scope: Scope): Writer {
       ctx.hiddenKeys.set(o.name, pending)
     },
 
+    hideByHorizon(object, keys) {
+      scope.assert()
+      const o = ctx.objectOf(object)
+      for (const key of o.rows.hideByHorizon(scope, keys))
+        rowViews.touch(o.name, key)
+    },
+
     markStale(object, keys, minVersion) {
       scope.assert()
       const o = ctx.objectOf(object)
