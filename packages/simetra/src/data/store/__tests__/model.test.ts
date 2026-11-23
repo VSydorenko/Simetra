@@ -57,6 +57,7 @@ import {
   setup,
   task,
 } from "./core-support"
+import { collectCore, type ReadCollector } from "./oracles"
 
 /*
  * Модельний тест ядра — гейт блоку (спека П4-B §11,
@@ -832,6 +833,9 @@ const modelDue = (
 /** Тактів із читанням за прогони, що тривають: самотест не має бути порожнім. */
 let tickReads = 0
 
+/** Кроків О4 у відкритому вікні спокою за прогони: без них О4 порожній. */
+let idleChecks = 0
+
 /**
  * Прогін моделі. Ядро закривається наприкінці (і після збою): модель
  * перевіряє, що після закриття таймерів немає, і наступний прогін не бачить
@@ -846,7 +850,7 @@ async function runModel(
   rights = false,
   signals = false
 ) {
-  const held: { core?: CoreSession } = {}
+  const held: { core?: CoreSession; reads?: ReadCollector } = {}
   try {
     await runModelOn(
       steps,
@@ -856,11 +860,18 @@ async function runModel(
       schedulerChecks,
       rights || signals,
       signals,
-      (c) => {
+      (c, reads) => {
         held.core = c
+        held.reads = reads
       }
     )
+    // О1 над прогоном: кожен запит журналу фейка має подію з кодом і ціллю.
+    idleChecks += held.reads?.evaluated() ?? 0
+    const unpaired = held.reads?.finish() ?? []
+    if (unpaired.length > 0) fail("end", `O1: ${unpaired.join("; ")}`)
   } finally {
+    // Прогін, що впав раніше, не лишає збирача на перевірку тесту.
+    held.reads?.stop()
     held.core?.close("disposed")
   }
   const timers = vi.getTimerCount()
@@ -875,7 +886,7 @@ async function runModelOn(
   schedulerChecks: boolean,
   rights: boolean,
   signals: boolean,
-  opened: (core: CoreSession) => void
+  opened: (core: CoreSession, reads: ReadCollector) => void
 ) {
   // Канал сигналів (B5b-3): приймач ядра тримає його лише зі знімком прав.
   const transport = createFakeSignalTransport()
@@ -951,7 +962,7 @@ async function runModelOn(
       if (item !== undefined) deliveredRights(item)
       return result
     })
-  const { fake, core, log, inspect } = setup({
+  const { fake, core, log, inspect, reads } = setup({
     now: () => clock,
     limits: LIMITS,
     mode: "manual",
@@ -998,7 +1009,7 @@ async function runModelOn(
     }),
   })
   for (const flag of defects) inspect.defects.add(flag)
-  opened(core)
+  opened(core, reads)
   const internals = coreInternals(core)
 
   // ── Сигнали очима моделі (B5b-3) ──
@@ -2618,6 +2629,7 @@ async function runModelOn(
         if (entry.kind === "listener-failed") errors.push(entry.error)
       },
     })
+    collectCore(next, fake)
     const nextInspect = inspectCore(next)
     // Дефекти основного ядра нового не стосуються: їх ловить своя перевірка
     // (`CAUGHT_BY`), а не перегідратація; нове ядро ламає лише власний.
@@ -4062,6 +4074,14 @@ async function runModelOn(
       outage--
     }
     if (tickStep && core.freshness.lastTickAt() !== tickAtStart) tickReads++
+    // О4 (спека ядра синхронізації §5.13): вікно спокою прихованої вкладки.
+    // Крок без дій — плин часу; відкриває вікно крок, після якого вкладка
+    // прихована, запису в польоті немає і запитів без відповіді теж.
+    const idleProblem = reads.idleStep({
+      quiet: s.t === "time" || s.t === "due",
+      idle: !core.visible && runs.length === 0,
+    })
+    if (idleProblem !== undefined) fail(label, idleProblem)
     if (schedulerStep && closed === undefined) {
       const dueNow = new Set(
         [...deferredAtStart].flatMap(([name, due]) =>
@@ -4466,12 +4486,14 @@ describe("core model", () => {
     "holds the invariants over random interleavings",
     async () => {
       tickReads = 0
+      idleChecks = 0
       await fc.assert(property(), {
         numRuns: RUNS,
         ...interruptWithin(BUDGET_MS),
       })
       // Без тактів із читанням інваріанти планувальника порожні.
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+      expect(idleChecks, "no step in an idle window").toBeGreaterThan(0)
     },
     BUDGET_MS
   )

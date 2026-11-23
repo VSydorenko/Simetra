@@ -18,6 +18,7 @@ import {
   VERSION_PART_BYTES,
   bodyBound,
 } from "./body-bound"
+import { collectCore } from "./oracles"
 import {
   ORG,
   TASK,
@@ -151,7 +152,9 @@ function coreOver(fake: FakeSource): CoreSession {
     createReadLimiter(DEFAULT_CORE_LIMITS.readParallel),
     fake.server
   )
-  return createCore({ subject: "u1", source, index: fake.index })
+  const core = createCore({ subject: "u1", source, index: fake.index })
+  collectCore(core, fake)
+  return core
 }
 
 /** Bytes of the rows and the targets the way they are stored: the useful part. */

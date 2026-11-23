@@ -22,6 +22,7 @@ import {
   taskValues,
   watch,
 } from "./core-support"
+import { collectCore } from "./oracles"
 
 // Розмір сторінки — типове `limits.windowPage`: одне джерело.
 const WINDOW_PAGE = DEFAULT_CORE_LIMITS.windowPage
@@ -403,6 +404,7 @@ describe("window", () => {
       ),
       index: fake.index,
     })
+    collectCore(core, fake)
     const handle = core.view(win)
     watch(handle)
     await settle()

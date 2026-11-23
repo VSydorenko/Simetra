@@ -257,7 +257,12 @@ async function run(steps: readonly Step[]): Promise<void> {
   })
   try {
     await runOn(steps, transport, h, broken)
+    // О1 над прогоном: кожен запит журналу фейка має подію з кодом і ціллю.
+    const unpaired = h.reads.finish()
+    if (unpaired.length > 0) throw new Error(`O1: ${unpaired.join("; ")}`)
   } finally {
+    // Прогін, що впав раніше, не лишає збирача на перевірку тесту.
+    h.reads.stop()
     h.core.close("disposed")
     vi.clearAllTimers()
   }

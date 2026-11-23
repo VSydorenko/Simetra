@@ -23,6 +23,7 @@ import {
   watch,
   type CoreHarness,
 } from "./core-support"
+import { collectCore } from "./oracles"
 import { TEST_ORIGIN, withSleep } from "../testing/fake-source"
 import { harness, K1, row, S, type Harness } from "./store-support"
 
@@ -690,6 +691,7 @@ describe("core: the epoch switch", () => {
       ),
       index: h.fake.index,
     })
+    collectCore(core, h.fake)
     const fresh = watch(core.view(keysView(1, 2)))
     void fresh
     await deliver(h)
@@ -1002,6 +1004,7 @@ describe("core: the epoch switch", () => {
       ),
       index: h.fake.index,
     })
+    collectCore(core, h.fake)
     watch(core.view(keysView(1, 2)))
     await drain(h)
     expect(core.view(keysView(1, 2)).getSnapshot()).toMatchObject({
