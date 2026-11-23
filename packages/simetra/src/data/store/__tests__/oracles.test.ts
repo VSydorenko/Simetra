@@ -237,8 +237,12 @@ describe("O4: the idle window of a hidden tab", () => {
     expect(collector.idleStep({ quiet: true, idle: true })).toBeUndefined()
     h.fake.deliverAll()
     await settle()
-    // Вкладка видима: `idle` каже тест.
+    // Вкладка видима після кроку: вікно не відкрито, хоч запитів без відповіді
+    // немає, тож наступне читання кроку не оцінюється.
     expect(collector.idleStep({ quiet: true, idle: false })).toBeUndefined()
+    watch(h.core.view({ kind: "keys", object: TASK, keys: [key(1)] }))
+    await settle()
+    expect(collector.idleStep({ quiet: true, idle: true })).toBeUndefined()
   })
 
   describe("the exceptions of row 1 §5.14 have a model-time bound", () => {
@@ -268,6 +272,12 @@ describe("O4: the idle window of a hidden tab", () => {
     it("is red for the same retry later than the bound of its path", async () => {
       const { collector } = await open(event("M1", TASK, 0, 0))
       collector.events.push(event("M8", TASK, 1, rule("M8").delayMs + 1))
+      expect(collector.idleStep({ quiet: true, idle: true })).toMatch(/M8/)
+    })
+
+    it("is red for an exception path whose cause event is of another path", async () => {
+      const { collector } = await open(event("R2", TASK, 0, 0))
+      collector.events.push(event("M8", TASK, 1, 0))
       expect(collector.idleStep({ quiet: true, idle: true })).toMatch(/M8/)
     })
 
