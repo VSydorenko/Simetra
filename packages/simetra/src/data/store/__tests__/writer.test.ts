@@ -205,6 +205,30 @@ describe("Writer", () => {
     })
   })
 
+  it("hideByHorizon hides the value of a held row at once, re-reads the key and ignores a key without an entry", async () => {
+    const { core, fake } = setup()
+    seed(fake, 1, 2)
+    const view = core.view(keys(1))
+    watch(view)
+    await settle()
+    const version = fake.edit(TASK, key(1), { title: "fresh" })
+    const from = fake.requests.length
+    write(core, (w) => w.hideByHorizon(TASK, [key(1), key(2)]))
+    expect(view.getSnapshot().rows[0]).toMatchObject({
+      state: "stale",
+      hidden: true,
+      values: {},
+    })
+    await settle()
+    // Прочитано лише ключ з рядком у сховищі, без мінімальної версії.
+    expect(fake.requests.length - from).toBe(1)
+    expect(view.getSnapshot().rows[0]).toMatchObject({
+      version,
+      state: "synced",
+      values: { title: "fresh" },
+    })
+  })
+
   it("marks no row of a channel the receiver does not hold", async () => {
     const { core, fake } = setup()
     fake.insert(TASK, taskValues(1))

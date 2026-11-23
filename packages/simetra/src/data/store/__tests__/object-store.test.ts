@@ -375,6 +375,34 @@ describe("ObjectStore.put", () => {
     ])
   })
 
+  it("hideByHorizon hides the values of an entry, queues it and counts horizon-hidden; a key without an entry is ignored", () => {
+    const h = harness()
+    put(h, row(K1, 1))
+    h.log.length = 0
+    let hidden: string[] = []
+    h.write((s) => {
+      hidden = h.store.hideByHorizon(s, [K1, K2])
+    })
+    expect(hidden).toEqual([K1])
+    expect(h.store.get(K1)?.stale.hidden).toBeDefined()
+    expect(h.store.get(K2)).toBeUndefined()
+    expect(h.store.drainTail()).toEqual([K1])
+    expect(h.log).toEqual([
+      { kind: "horizon-hidden", object: "Catalog.Task", count: 1 },
+    ])
+  })
+
+  it("hideByHorizon on an already hidden key queues it again without a second count", () => {
+    const h = harness()
+    put(h, row(K1, 1))
+    h.write((s) => h.store.hideByHorizon(s, [K1]))
+    h.store.drainTail()
+    h.log.length = 0
+    h.write((s) => h.store.hideByHorizon(s, [K1]))
+    expect(h.store.drainTail()).toEqual([K1])
+    expect(h.log).toEqual([])
+  })
+
   it("a newer version with lazyRead = false keeps the lazy field with its lower lazy version", () => {
     const h = harness()
     put(h, row(K1, 1, { notes: "n" }), h.now(), true)
