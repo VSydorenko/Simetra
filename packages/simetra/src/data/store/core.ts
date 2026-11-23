@@ -57,8 +57,8 @@ import {
 import { createScheduler } from "./scheduler"
 import {
   createRegistry,
+  requirementHold,
   requirementPending,
-  trailingCause,
   type Subset,
   type SubsetRegistry,
 } from "./subsets"
@@ -2272,18 +2272,14 @@ export function createCore(options: {
 
   // ------------------------------------------------------------ діагностика sync()
 
-  // Умови шлюзу, які `main` справді застосовує до вимоги свого виду: прихована
-  // вкладка відкладає лише вимогу вигляду (`requirementPending`) і хвилю
-  // приєднання (такт не йде); невидимість — вимогу вигляду, хвилю
-  // приєднання (`fireWave` читає лише видимі вигляди, невидимим лише ставить
-  // вимогу складу) і довіру після гідратації (`readHydrated`). Решту видів
-  // `main` читає без цих умов.
-  const TAB_GATED: ReadonlySet<RequirementKind> = new Set([
-    "composition-unconfirmed",
-    "channel-rejoin",
-  ])
+  // Рішення беруться з того місця, де їх приймає `main`: вимогу складу судить
+  // `requirementHold` (`requirementPending`), строки — вибір цілей таймерів
+  // (`viewDue`, `revalidateTargets` з `visibleOnly`, `rightsDueAt`). Власні
+  // таблиці — лише там, де одного місця в `main` немає: хвиля приєднання
+  // (`fireWave`: такт на прихованій вкладці не йде, читає лише видимі
+  // вигляди) і довіра після гідратації (`readHydrated` читає лише видимий).
+  const TAB_GATED: ReadonlySet<RequirementKind> = new Set(["channel-rejoin"])
   const VISIBILITY_GATED: ReadonlySet<RequirementKind> = new Set([
-    "composition-unconfirmed",
     "channel-rejoin",
     "hydration-trust",
   ])
@@ -2323,6 +2319,24 @@ export function createCore(options: {
     ...(fields.proof === undefined ? {} : { proof: fields.proof }),
     ...(fields.due === undefined ? {} : { due: fields.due }),
   })
+
+  // Найраніший таймер `main`, що читає вигляд: такт (`viewDue`), строк
+  // об'єкта й хвиля (обидва — `revalidate` з `visibleOnly`), повтор
+  // відкинутої відповіді. На прихованій вкладці планувальник не спрацьовує.
+  function timerDue(s: Subset): number | undefined {
+    if (!visible) return undefined
+    const object = s.form.object.name
+    const held = scheduled.get(object)
+    const byTick = revalidateTargets(writerContext, object, {
+      visibleOnly: true,
+    }).includes(s)
+    return earliest(
+      viewDue(writerContext, s),
+      byTick ? held?.whole?.at : undefined,
+      held?.retry?.views.has(s) === true ? held.retry.at : undefined,
+      byTick && wave?.objects.has(object) === true ? wave.at : undefined
+    )
+  }
 
   function syncState(): SyncState[] {
     const out: SyncState[] = []
@@ -2381,13 +2395,8 @@ export function createCore(options: {
         flights.push({ kind: "reread", epoch })
       for (let n = 0; n < s.paging.size; n++) flights.push({ kind: "page" })
       const queued: SyncQueued[] = []
-      const trailing = trailingCause(s)
-      if (s.trailing)
-        queued.push(
-          trailing === undefined
-            ? { kind: "load" }
-            : { kind: "load", cause: trailing }
-        )
+      if (s.trailing !== undefined)
+        queued.push({ kind: "load", cause: s.trailing })
       const tail = tailCause(s)
       if (s.rereadTail !== undefined)
         queued.push(
@@ -2399,16 +2408,13 @@ export function createCore(options: {
       // Вигляд ТЧ без підписника не читається за будь-якого `setVisible` (§5.3).
       const readable =
         isVisible && (s.form.spec.kind !== "section" || s.listeners.size > 0)
-      const held = scheduled.get(object)
-      const inRetry = held?.retry?.views.has(s) === true
+      const inRetry = scheduled.get(object)?.retry?.views.has(s) === true
       const kinds = requirements.map((r) => r.kind)
-      // Строки такту, черги планувальника й хвилі: на прихованій вкладці
-      // планувальник не спрацьовує, тож вони нічого не читають.
-      const read = (at: number | undefined) => (visible ? at : undefined)
-      // Вигляд, який читає строк об'єкта чи хвиля (`revalidate`, `visibleOnly`).
-      const byTick = revalidateTargets(writerContext, object, {
-        visibleOnly: true,
-      }).includes(s)
+      // Вимогу складу судить те саме місце, що й `main` (`requirementPending`).
+      const composition = requirementHold(s, requirementEnv)
+      const others = requirements.filter(
+        (r) => r.kind !== "composition-unconfirmed"
+      )
       record(
         withOptional(
           {
@@ -2417,20 +2423,7 @@ export function createCore(options: {
             flights,
             queued,
           },
-          {
-            proof: s.okReadEpoch,
-            due: earliest(
-              read(viewDue(writerContext, s)),
-              read(byTick ? held?.whole?.at : undefined),
-              read(inRetry ? held?.retry?.at : undefined),
-              // Хвиля читає лише видимі вигляди (`revalidate`, `visibleOnly`).
-              read(
-                byTick && wave?.objects.has(object) === true
-                  ? wave.at
-                  : undefined
-              )
-            ),
-          }
+          { proof: s.okReadEpoch, due: timerDue(s) }
         ),
         refusalOf(object),
         () =>
@@ -2438,15 +2431,19 @@ export function createCore(options: {
           // читання — сам виклик (умова `hydrating`, рішення архітекторки).
           hydration === "hydrated" && kinds.includes("hydration-trust")
             ? "hydrating"
-            : !visible && (kinds.some((k) => TAB_GATED.has(k)) || inRetry)
-              ? "tab-hidden"
-              : !readable && kinds.some((k) => VISIBILITY_GATED.has(k))
-                ? "target-invisible"
-                : promised(requirements, flights, queued)
-                  ? "promised"
-                  : s.failures > 0 || inRetry
-                    ? "paused"
-                    : undefined
+            : composition !== "absent" &&
+                composition !== undefined &&
+                composition !== "discard-bound"
+              ? composition
+              : !visible && (kinds.some((k) => TAB_GATED.has(k)) || inRetry)
+                ? "tab-hidden"
+                : !readable && kinds.some((k) => VISIBILITY_GATED.has(k))
+                  ? "target-invisible"
+                  : others.length > 0 && promised(others, flights, queued)
+                    ? "promised"
+                    : inRetry
+                      ? "paused"
+                      : undefined
       )
     }
 
@@ -2459,19 +2456,12 @@ export function createCore(options: {
     for (const o of objects.values()) {
       const tail = tails.get(o)
       const flying = new Set(tail?.flying ?? [])
-      const whole = scheduled.get(o.name)?.whole
-      const switchDue =
-        whole?.cause.reason === "requirement" &&
-        whole.cause.requirement === "version-epoch-switched"
-          ? whole.at
-          : undefined
-      // Строк перемикання читає рядок лише через видимий вигляд-власник, який
-      // бере `revalidate` строку (`runDue`, `visibleOnly`); без нього строку в
-      // рядка немає.
-      const reread =
-        switchDue === undefined
-          ? []
-          : revalidateTargets(writerContext, o.name, { visibleOnly: true })
+      // Рядок читає таймер вигляду-власника його об'єкта: строк рядка —
+      // найраніший строк такого вигляду (той самий вибір цілей, що й у
+      // таймерів `main`), а не причина черги.
+      const holders = [...registry.subsets()].filter(
+        (s) => s.alive && !s.purged && s.form.object === o
+      )
       for (const key of o.rows.keys()) {
         const e = o.rows.get(key)!
         const retry = retries.get(`${o.name}\u0000${key.toLowerCase()}`)
@@ -2516,14 +2506,12 @@ export function createCore(options: {
               queued,
             },
             {
-              due: visible
-                ? earliest(
-                    retry?.at,
-                    epoch === true && reread.some((s) => s.owned.has(key))
-                      ? switchDue
-                      : undefined
-                  )
-                : undefined,
+              due: earliest(
+                visible ? retry?.at : undefined,
+                ...holders
+                  .filter((s) => s.owned.has(key))
+                  .map((s) => timerDue(s))
+              ),
             }
           ),
           refusalOf(o.name),
@@ -2558,12 +2546,6 @@ export function createCore(options: {
       const requirements: SyncRequirement[] = []
       if (rights === undefined)
         requirements.push({ kind: "rights-unconfirmed" })
-      const tail = rightsTail
-      if (
-        tail?.reason === "requirement" &&
-        !requirements.some((r) => r.kind === tail.requirement)
-      )
-        requirements.push({ kind: tail.requirement })
       const flights: SyncFlight[] = rightsFlying
         ? [
             rightsSent === undefined

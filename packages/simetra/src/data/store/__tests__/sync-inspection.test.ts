@@ -7,12 +7,14 @@ import { failurePause } from "../subsets"
 import { QUIET_MS, REJOIN_JITTER_MS } from "../receiver"
 import { DISCARDS_MAX } from "../session"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
+import type { ReadEvent } from "../source"
 import type { CoreLimits, ViewSpec } from "../types"
 import {
   ORG,
   S,
   TASK,
   key,
+  keysOf,
   seed,
   settle,
   setup,
@@ -149,6 +151,40 @@ async function switched() {
   }
   expect(h.inspect.scheduledDue().get(TASK)).toEqual(expect.any(Number))
   return h
+}
+
+/**
+ * Строк, який показує `sync()`, — обіцянка: модельний годинник доходить до
+ * нього, і запит для цієї цілі йде (подія `watchReads`; для рядка — ще й
+ * запит фейкового сервера з його ключем). Звірка з `scheduledDue()` нічого
+ * не довела б: проєкція сама його читає.
+ */
+async function expectReadByDue(h: CoreHarness, target: SyncTarget) {
+  const due = stateOf(h, target)?.due
+  expect(due, "sync() shows a due").toEqual(expect.any(Number))
+  const events: ReadEvent[] = []
+  const off = h.inspect.watchReads((event) => events.push(event))
+  const from = h.fake.log.length
+  await vi.advanceTimersByTimeAsync(Math.max(0, due! - Date.now()))
+  await settle()
+  off()
+  const hits = events.filter((e) =>
+    target.kind === "service"
+      ? e.target.kind === "service" && e.target.service === target.service
+      : e.target.kind !== "service" && e.target.object === target.object
+  )
+  expect(hits.length, "a read of the target by its due").toBeGreaterThan(0)
+  if (target.kind === "row")
+    expect(
+      h.fake.log
+        .slice(from)
+        .some((l) =>
+          keysOf(l.query).some(
+            (k) => String(k).toLowerCase() === target.key.toLowerCase()
+          )
+        ),
+      "a request of the row's key by its due"
+    ).toBe(true)
 }
 
 describe("sync(): a requirement of each kind main holds, with its promise or condition", () => {
@@ -308,7 +344,9 @@ describe("sync(): a requirement of each kind main holds, with its promise or con
     })
   })
 
-  it("min-version of an own write without confirmation: no re-read holds it (the gap of §5.14 row 12)", async () => {
+  // Власного повтору запис не має (§5.14, рядок 12): рядок читає лише такт
+  // вигляду-власника.
+  it("min-version of an own write without confirmation: due at the interval of its holder view", async () => {
     const h = await loaded()
     write(h, (w) => w.markStale(TASK, [key(1)], 99))
     // Позначка бере нову епоху сесії.
@@ -318,6 +356,7 @@ describe("sync(): a requirement of each kind main holds, with its promise or con
       requirements: [{ kind: "min-version", epoch, version: 99 }],
       flights: [],
       queued: [],
+      due: stateOf(h, viewTarget(h.spec))!.due,
     })
   })
 
@@ -383,6 +422,87 @@ describe("sync(): a requirement of each kind main holds, with its promise or con
       queued: [{ kind: "service" }],
       deferral: "promised",
     })
+  })
+})
+
+describe("sync(): every due it shows is read by then", () => {
+  it("the interval of a visible view", async () => {
+    const h = await loaded()
+    await expectReadByDue(h, viewTarget(h.spec))
+  })
+
+  it("the rejoin wave", async () => {
+    const h = await withSignals()
+    h.transport.join(channel, false)
+    await expectReadByDue(h, viewTarget(h.spec))
+  })
+
+  it("the failure pause of a view", async () => {
+    const h = await loaded(keysView(1, 2), { mode: "manual" })
+    void h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    h.fake.take().fail("command.unavailable")
+    await settle()
+    await expectReadByDue(h, viewTarget(h.spec))
+  })
+
+  it("the min-version re-read of the receiver", async () => {
+    const h = await withSignals()
+    const served = h.fake.edit(TASK, key(1), { title: "v" })
+    h.transport.emit(channel, {
+      id: "1",
+      object: task.id,
+      op: "update",
+      keys: { id: key(1) },
+      row_ver: served + 1,
+    })
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    await expectReadByDue(h, rowTarget(1))
+  })
+
+  it("the min-version of an own write: the interval of its holder view", async () => {
+    const h = await loaded()
+    write(h, (w) => w.markStale(TASK, [key(1)], 99))
+    await expectReadByDue(h, rowTarget(1))
+  })
+
+  it("a row of the epoch switch", async () => {
+    const h = await switched()
+    await expectReadByDue(h, rowTarget(2))
+  })
+
+  // Строк об'єкта, поставлений раніше з іншою причиною, читає й рядки
+  // перемикання: причина черги — лише походження, а не вхід рішення.
+  it("a row of the epoch switch whose object timer a reread request queued first", async () => {
+    const h = await loaded(keysView(1, 2), { mode: "manual" })
+    h.fake.epoch = "a".repeat(64)
+    h.handle.refresh()
+    await settle()
+    h.fake.deliverAll()
+    await settle()
+    h.core.freshness.requestReread([TASK], { jitterMs: 10_000 })
+    h.fake.epoch = "b".repeat(64)
+    h.handle.refresh()
+    await settle()
+    h.fake.deliverAll()
+    await settle()
+    expect(stateOf(h, rowTarget(2))!.requirements).toEqual([
+      { kind: "version-epoch-switched" },
+    ])
+    await expectReadByDue(h, rowTarget(2))
+  })
+
+  it("the interval of the rights snapshot", async () => {
+    const h = setup({
+      now: () => Date.now(),
+      rightsSnapshot: true,
+      limits: { revalidateIntervalMs: INTERVAL },
+    })
+    seed(h.fake, 1, 2)
+    watch(h.core.view(keysView(1, 2)))
+    await settle()
+    await expectReadByDue(h, RIGHTS)
   })
 })
 

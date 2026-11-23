@@ -34,7 +34,7 @@ import {
   type RowViews,
 } from "./snapshot"
 import { ReadLimiterClosed, settle, type StoreSource } from "./source"
-import type { ReadCause, ReadWhy } from "./sync/vocabulary"
+import type { AdmissionCondition, ReadCause, ReadWhy } from "./sync/vocabulary"
 import type {
   CoreLimits,
   CoreLogEntry,
@@ -117,7 +117,12 @@ export interface Subset extends ReaderTarget {
   flightEpoch: number | undefined
   /** The start epochs of the system re-reads (`revalidate`) in flight. */
   rereadEpochs: number[]
-  trailing: boolean
+  /**
+   * The next load queued after the one in flight, with the cause of the call
+   * that queued it (the first one of a merged queue, Р4); the cause is the
+   * origin of that read, never an input of a decision.
+   */
+  trailing: ReadCause | undefined
   /** At least one load finished (or a card showed its stored row). */
   settled: boolean
   /** A load succeeded: a later read is `refreshing`, not `loading` (§6.5). */
@@ -169,8 +174,11 @@ export interface Subset extends ReaderTarget {
   checkQueued: boolean
   /** The queued check comes from a hold without a listener (`preload`). */
   checkHeld: boolean
-  /** A re-read check found a load in flight: check again when it ends. */
-  recheck: boolean
+  /**
+   * A re-read check found a load in flight: check again when it ends, under
+   * the inventory row of the first `check` that deferred it (Р4).
+   */
+  recheck: ReadWhy | undefined
   /**
    * The key (card) or owner (section) was purged (§6.5): the view shows
    * `purged` and reads nothing until released.
@@ -298,25 +306,54 @@ export interface RequirementEnv {
  * failure pause and the session is not out of the discard limit.
  */
 export function requirementPending(s: Subset, env: RequirementEnv): boolean {
-  return env.tabVisible() && waitsForRead(s, env)
+  return requirementHold(s, env) === undefined
+}
+
+/**
+ * Why the view requirement «composition not confirmed» is not read now — the
+ * one decision of `requirementPending` and of the settle point, named by the
+ * condition of the gate (§5.3); `undefined` — it is pending: read it now.
+ * `"absent"` — no requirement. Test diagnostics (`sync()`) read the same.
+ */
+export function requirementHold(
+  s: Subset,
+  env: RequirementEnv
+):
+  | "absent"
+  | Extract<
+      AdmissionCondition,
+      | "tab-hidden"
+      | "target-invisible"
+      | "promised"
+      | "paused"
+      | "discard-bound"
+    >
+  | undefined {
+  if (s.unconfirmedSince === undefined) return "absent"
+  if (!env.tabVisible()) return "tab-hidden"
+  return holdWithoutTab(s, env)
 }
 
 // Те саме без вкладки: вимога чекає читання, яке ніхто інший не обіцяє.
-function waitsForRead(s: Subset, env: RequirementEnv): boolean {
+function holdWithoutTab(s: Subset, env: RequirementEnv) {
   const since = s.unconfirmedSince
-  if (since === undefined) return false
-  if (!(s.visible ?? s.listeners.size > 0)) return false
-  if (s.rereadEpochs.some((at) => at >= since)) return false
-  if (s.flight !== undefined && (s.flightEpoch ?? -1) >= since) return false
+  if (since === undefined) return "absent"
+  if (!(s.visible ?? s.listeners.size > 0)) return "target-invisible"
+  if (s.rereadEpochs.some((at) => at >= since)) return "promised"
+  if (s.flight !== undefined && (s.flightEpoch ?? -1) >= since)
+    return "promised"
   // Хвіст `revalidate` і завантаження-наступник стартують після осідання
   // поточного читання, тобто з e чи пізніше: вимогу знімуть вони, повтор був
   // би другим читанням того самого.
-  if (s.rereadTail !== undefined || s.trailing) return false
+  if (s.rereadTail !== undefined || s.trailing !== undefined) return "promised"
   // Збій читання повторює пауза збоїв (планувальник), не негайне коло.
-  if (s.failures > 0) return false
+  if (s.failures > 0) return "paused"
   // Після межі відкинутих жодне читання не має шансу (§6.2).
-  return !env.versions.unavailable()
+  return env.versions.unavailable() ? "discard-bound" : undefined
 }
+
+const waitsForRead = (s: Subset, env: RequirementEnv): boolean =>
+  holdWithoutTab(s, env) === undefined
 
 /**
  * The settle point of a read that confirms the whole view (its load or a
@@ -335,27 +372,12 @@ export function settleRequirement(
   return waitsForRead(s, env) && env.tabVisible()
 }
 
-// Причина наступного завантаження (`trailing`, рядок M6): черга пам'ятає
-// причину виклику, що її поставив; коли черга зливає кілька викликів, лишається
-// причина першого (Р4). Окрема карта, а не поле `Subset`: стан цілі — справа
-// SK-3, а це лише облік причини.
-const trailingCauses = new WeakMap<Subset, ReadCause>()
-
-// Відкладена перевірка шапки (`recheck`): так само пам'ятає рядок M3 чи M4
-// першого виклику `check`, що її відклав (Р4); прапор і причина ставляться разом.
-const recheckWhys = new WeakMap<Subset, ReadWhy>()
-
 /**
- * Test-only (`inspectCore().sync()`): the cause of the next load queued over
- * `s` (`trailing`), if any.
+ * Queues the next load of `s` under `cause` (рядок M6); a queued one keeps
+ * its own: the queue remembers the first call that put it (Р4).
  */
-export const trailingCause = (s: Subset): ReadCause | undefined =>
-  trailingCauses.get(s)
-
-/** Queues the next load of `s` under `cause`; a queued one keeps its own. */
 export function queueTrailing(s: Subset, cause: ReadCause): void {
-  s.trailing = true
-  if (!trailingCauses.has(s)) trailingCauses.set(s, cause)
+  s.trailing ??= cause
 }
 
 // Дочитування картки чи ТЧ, яке запускає підписка чи `preload` (рядок M3), і
@@ -588,12 +610,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       ctx.touchSchedule()
       s.settled = true
       resolveWaiters(s)
-      // Черга є, лише поки в карті стоїть її причина: `queueTrailing` ставить
-      // прапор і причину разом, тож без причини черги не буває.
-      const queued = trailingCauses.get(s)
+      const queued = s.trailing
       if (queued !== undefined && s.alive && !isClosed()) {
-        s.trailing = false
-        trailingCauses.delete(s)
+        s.trailing = undefined
         load(s, { ...queued, site: "M6" })
       }
       // Шапка змінилась під час польоту: перевірка, відкладена до кінця
@@ -601,10 +620,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       // `preload` без слухачів (`hide` власника в польоті першого
       // завантаження ТЧ), тож слухачі тут не умова: інакше ТЧ лишається
       // порожньою й `ready` до монтування.
-      const rechecked = recheckWhys.get(s)
+      const rechecked = s.recheck
       if (rechecked !== undefined) {
-        s.recheck = false
-        recheckWhys.delete(s)
+        s.recheck = undefined
         if (
           s.alive &&
           !isClosed() &&
@@ -879,8 +897,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     if (!s.alive || s.purged) return
     if (!held && s.listeners.size === 0) return
     if (s.flight !== undefined) {
-      s.recheck = true
-      if (!recheckWhys.has(s)) recheckWhys.set(s, why)
+      s.recheck ??= why
       return
     }
     if (behindHeader(s)) load(s, why)
@@ -1016,7 +1033,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       flight: undefined,
       flightEpoch: undefined,
       rereadEpochs: [],
-      trailing: false,
+      trailing: undefined,
       settled: false,
       loaded: false,
       refreshedAt: undefined,
@@ -1055,7 +1072,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       sectionRead: undefined,
       checkQueued: false,
       checkHeld: false,
-      recheck: false,
+      recheck: undefined,
       purged: false,
       visible: undefined,
       hydrated: false,
