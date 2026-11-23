@@ -8,10 +8,19 @@ import { randomUUID } from "node:crypto"
 import { ZERO_UUID } from "simetra/model"
 import runtimeCatalog from "../template/generated/runtime-catalog.json" with { type: "json" }
 import type { Page } from "@playwright/test"
-import { contextWithCookie, freshSession, watchDataFn } from "./browser"
+import {
+  contextWithCookie,
+  expectedHydrationRequests,
+  freshSession,
+  settle,
+  watchDataFn,
+} from "./browser"
 import { refusesToStart } from "./refuse-start"
 import { send, type Reply } from "./http"
-import { anonymousSession, expect, test, type App } from "./fixtures"
+import { anonymousSession, expect, signalsOf, test, type App } from "./fixtures"
+
+// Увесь файл — на застосунку з сигналами: решта специфікацій ганяє його без них
+test.use({ signals: true })
 
 const CONNECTION = "/simetra/signals/connection-token"
 const CHANNELS = "/simetra/signals/channel-tokens"
@@ -93,7 +102,7 @@ test.describe("signal token routes", () => {
     expect(typeof body.expiresAt).toBe("string")
     const { header } = decodeJwt(String(body.token))
     // Токен підписано ключем цього прогону: `kid` ключа, згенерованого фікстурою
-    expect(header).toMatchObject({ alg: "EdDSA", kid: app.signals.kid })
+    expect(header).toMatchObject({ alg: "EdDSA", kid: signalsOf(app).kid })
     await expectSignedByJwks(app, String(body.token))
 
     // Канал змін `Client`: ClientOwner має на нього право `own` (рядкове право
@@ -187,7 +196,7 @@ test.describe("signal token routes", () => {
         "use",
         "x",
       ])
-    expect(keys.map((k) => k.kid)).toContain(app.signals.kid)
+    expect(keys.map((k) => k.kid)).toContain(signalsOf(app).kid)
   })
 
   // І11 (серверна половина: заміну тримача в клієнті перевіряє частина 2)
@@ -214,7 +223,7 @@ test.describe("signal token routes", () => {
  * на порт Centrifugo прогону.
  */
 function watchSignalFrames(page: Page, app: App) {
-  const port = new URL(app.signals.url).port
+  const port = new URL(signalsOf(app).url).port
   const received: string[] = []
   const sent: string[] = []
   page.on("websocket", (ws) => {
@@ -318,6 +327,33 @@ test.describe("signal delivery", () => {
         row!.description,
         row!.id,
       ])
+    }
+  })
+})
+
+// Бюджет запитів із сигналами (Рд37): після приєднання до каналу рантайм
+// робить одне додаткове читання (хвиля «приєднання»). Без сигналів його немає,
+// тому `ssr.spec` лишається на «один запит і тиша».
+test.describe("request budget with signals", () => {
+  test("hydration plus exactly one rejoin-wave read on the Client list, then silence", async ({
+    app,
+    browser,
+  }) => {
+    const cookie = await freshSession(app, app.users.a)
+    const context = await contextWithCookie(browser, app, cookie)
+    try {
+      const page = await context.newPage()
+      const frames = watchSignalFrames(page, app)
+      const log = watchDataFn(page, app)
+      await page.goto(`${app.origin}/clients`)
+      await page.waitForSelector("html[data-hydrated]")
+      await expect.poll(() => frames.subscribed()).toBe(true)
+      // Гідратація + одне читання хвилі приєднання (Рд37), далі тиша на тому
+      // ж вікні, що в `ssr.spec`. Друга хвиля чи періодичне читання дали б
+      // третій запит і провалили б «тишу»
+      await settle(page, log, expectedHydrationRequests() + 1)
+    } finally {
+      await context.close()
     }
   })
 })
