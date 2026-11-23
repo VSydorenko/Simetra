@@ -1010,12 +1010,14 @@ export async function revalidate(
     await revalidateViews(
       ctx,
       o,
-      targets.filter(
-        (s) =>
-          !inFlight(s) &&
-          (!unavailable(s) || ctx.defects.has("scheduler-reads-unavailable"))
-      ),
-      () => options.why
+      readsOf(
+        targets.filter(
+          (s) =>
+            !inFlight(s) &&
+            (!unavailable(s) || ctx.defects.has("scheduler-reads-unavailable"))
+        ),
+        options.why
+      )
     )
     return
   }
@@ -1063,7 +1065,7 @@ export function singleFlight(
   return {
     started: fresh.length,
     done: Promise.all([
-      revalidateViews(ctx, o, fresh, () => options.why),
+      revalidateViews(ctx, o, readsOf(fresh, options.why)),
       ...tails,
     ]).then(() => undefined),
   }
@@ -1233,7 +1235,7 @@ async function tailPass(
   )
     return
   // Хвіст — читання, яке поставив виклик `options.why`, під кодом R15.
-  await revalidateViews(ctx, o, [s], () => ({ ...options.why, site: "R15" }))
+  await revalidateViews(ctx, o, readsOf([s], { ...options.why, site: "R15" }))
 }
 
 /**
@@ -1249,7 +1251,7 @@ export async function revalidateHydrated(
   if (!ctx.session.token().valid) return
   if (!s.alive || s.purged || !s.loaded || s.flight !== undefined) return
   if (s.form.spec.kind === "section" && s.listeners.size === 0) return
-  await revalidateViews(ctx, s.form.object, [s], () => why)
+  await revalidateViews(ctx, s.form.object, readsOf([s], why))
 }
 
 /**
@@ -1286,22 +1288,28 @@ export async function revalidateHolders(
   }
   await Promise.all(
     [...groups].map(([o, targets]) =>
-      revalidateViews(ctx, o, targets, () => why)
+      revalidateViews(ctx, o, readsOf(targets, why))
     )
   )
 }
 
+/** A view with the row of the inventory it is read under; no view without one. */
+type Read = readonly [Subset, ReadWhy]
+
+const readsOf = (views: readonly Subset[], why: ReadWhy): Read[] =>
+  views.map((s) => [s, why])
+
 /**
- * One two-phase pass over `targets`; views dropped by a purge get another
- * pass. `whyOf` gives the row of the inventory each view is read under: the
- * views of one pass may come from different rows only in the repeats below.
+ * One two-phase pass over `reads`; views dropped by a purge get another
+ * pass. The views of one pass may come from different rows only in the
+ * repeats below.
  */
 export async function revalidateViews(
   ctx: WriterContext,
   o: ObjectState,
-  targets: readonly Subset[],
-  whyOf: (s: Subset) => ReadWhy
+  reads: readonly Read[]
 ): Promise<void> {
+  const targets = reads.map(([s]) => s)
   const { session } = ctx
   if (targets.length === 0 || !session.token().valid) return
   const startEpoch = session.epochs.now()
@@ -1323,15 +1331,15 @@ export async function revalidateViews(
   // Одна оренда на прохід: усі відповіді пише один `commit` нижче.
   const lease = ctx.source.lease()
   const results = await Promise.all(
-    targets.map((s) =>
+    reads.map(([s, why]) =>
       readAgain(ctx, s, startEpoch, token, {
-        ...whyOf(s),
+        ...why,
         target: { kind: "view", object: o.name },
         caller: s,
         lease,
       }).then(
-        (apply) => ({ s, apply }) as const,
-        (error: unknown) => ({ s, error }) as const
+        (apply) => ({ s, why, apply }) as const,
+        (error: unknown) => ({ s, why, error }) as const
       )
     )
   )
@@ -1461,8 +1469,8 @@ export async function revalidateViews(
   }
   // Дефект самотесту «системне перечитування через завантаження».
   if (ctx.defects.has("system-reread-via-load")) {
-    for (const { s } of results) {
-      if (s.alive && !s.purged) ctx.registry.load(s, whyOf(s))
+    for (const { s, why } of results) {
+      if (s.alive && !s.purged) ctx.registry.load(s, why)
     }
   }
   // Вигляд із власним завантаженням у польоті (П12: його перезапускає purge)
@@ -1470,10 +1478,7 @@ export async function revalidateViews(
   await revalidateViews(
     ctx,
     o,
-    [...again.keys()].filter(
-      (s) => s.alive && !s.purged && s.flight === undefined
-    ),
-    (s) => again.get(s)!
+    [...again].filter(([s]) => s.alive && !s.purged && s.flight === undefined)
   )
 }
 

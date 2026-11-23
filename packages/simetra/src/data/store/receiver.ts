@@ -640,9 +640,12 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     const lease = writer.source.lease()
     // Пачка з самих дочитувань мінімальної версії — K2; щойно в ній є сигнал,
     // це читання сигналу (K1): зливаючись, пачка бере менший `attempt`.
-    const retried = [...plan.stored, ...plan.fresh].every(
-      (key) => (signals.keys.get(key)?.attempt ?? 0) > 0
-    )
+    // Порожнього плану тут не буває (`classify` без ключів дає `whole`, і це
+    // не `startJob`), але порожній випадок названо явно: це читання сигналу.
+    const planned = [...plan.stored, ...plan.fresh]
+    const retried =
+      planned.length > 0 &&
+      planned.every((key) => (signals.keys.get(key)?.attempt ?? 0) > 0)
     const read = tracked(writer.source, {
       ...(retried
         ? { reason: "requirement", requirement: "min-version" }

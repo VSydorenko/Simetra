@@ -334,6 +334,10 @@ export function settleRequirement(
 // SK-3, а це лише облік причини.
 const trailingCauses = new WeakMap<Subset, ReadCause>()
 
+// Відкладена перевірка шапки (`recheck`): так само пам'ятає рядок M3 чи M4
+// першого виклику `check`, що її відклав (Р4); прапор і причина ставляться разом.
+const recheckWhys = new WeakMap<Subset, ReadWhy>()
+
 /** Queues the next load of `s` under `cause`; a queued one keeps its own. */
 export function queueTrailing(s: Subset, cause: ReadCause): void {
   s.trailing = true
@@ -343,6 +347,11 @@ export function queueTrailing(s: Subset, cause: ReadCause): void {
 // Дочитування картки чи ТЧ, яке запускає підписка чи `preload` (рядок M3), і
 // дія користувача над завантаженням (рядок M5).
 const CHECK_ON_MOUNT: ReadWhy = { reason: "mount", site: "M3" }
+const CHECK_AFTER_COMMIT: ReadWhy = {
+  reason: "requirement",
+  requirement: "target-behind-header",
+  site: "M4",
+}
 const USER_LOAD: ReadWhy = { reason: "user", site: "M5" }
 
 const ACCESS_CHANGED = purgedSnapshot("access-changed")
@@ -565,25 +574,29 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       ctx.touchSchedule()
       s.settled = true
       resolveWaiters(s)
-      if (s.trailing && s.alive && !isClosed()) {
+      // Черга є, лише поки в карті стоїть її причина: `queueTrailing` ставить
+      // прапор і причину разом, тож без причини черги не буває.
+      const queued = trailingCauses.get(s)
+      if (queued !== undefined && s.alive && !isClosed()) {
         s.trailing = false
-        const cause = trailingCauses.get(s)!
         trailingCauses.delete(s)
-        load(s, { ...cause, site: "M6" })
+        load(s, { ...queued, site: "M6" })
       }
       // Шапка змінилась під час польоту: перевірка, відкладена до кінця
       // читання, не губиться (захист ревізією — від повторів). Її ставив і
       // `preload` без слухачів (`hide` власника в польоті першого
       // завантаження ТЧ), тож слухачі тут не умова: інакше ТЧ лишається
       // порожньою й `ready` до монтування.
-      if (s.recheck) {
+      const rechecked = recheckWhys.get(s)
+      if (rechecked !== undefined) {
         s.recheck = false
+        recheckWhys.delete(s)
         if (
           s.alive &&
           !isClosed() &&
           (s.listeners.size > 0 || !ctx.defects.has("recheck-needs-listeners"))
         )
-          queueCheck(s, true)
+          queueCheck(s, true, rechecked)
       }
     })
   }
@@ -853,6 +866,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     if (!held && s.listeners.size === 0) return
     if (s.flight !== undefined) {
       s.recheck = true
+      if (!recheckWhys.has(s)) recheckWhys.set(s, why)
       return
     }
     const header = headerKey(s)
@@ -1179,7 +1193,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     return s.form.include.some((step) => (rows.get(step.target)?.size ?? 0) > 0)
   }
 
-  function queueCheck(s: Subset, held = false) {
+  function queueCheck(s: Subset, held: boolean, why: ReadWhy) {
     if (held) s.checkHeld = true
     if (s.checkQueued || headerKey(s) === undefined) return
     s.checkQueued = true
@@ -1189,12 +1203,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       const heldCheck = s.checkHeld
       s.checkHeld = false
       try {
-        if (!isClosed())
-          check(s, heldCheck, {
-            reason: "requirement",
-            requirement: "target-behind-header",
-            site: "M4",
-          })
+        // `why` — виклику, що поставив перевірку в чергу: наступні виклики до
+        // мікрозадачі вже вийшли на `checkQueued`.
+        if (!isClosed()) check(s, heldCheck, why)
       } finally {
         // Хвіст `revalidate` чекав цю перевірку як продовження польоту: без
         // нового читання його будимо тут (#312), зокрема й після винятку.
@@ -1410,7 +1421,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         if (s.listeners.size === 0) continue
         const before = s.snapshot
         if (snapshotOf(s) !== before) notify.push(s)
-        if (!closing) queueCheck(s)
+        if (!closing) queueCheck(s, false, CHECK_AFTER_COMMIT)
       }
       return notify
     },

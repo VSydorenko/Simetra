@@ -690,9 +690,11 @@ export function createCore(options: {
         // Відповідь без заміни знімка нічого не комітить: строк, що повернувся
         // після польоту, планувальнику треба показати самому.
         if (!defects.has("scheduler-no-reschedule")) scheduler.request()
-        if (rightsTail) {
-          rightsTail = false
-          core.requestRights()
+        // Хвіст читає з причиною першого виклику, що його поставив (Р4).
+        const tail = rightsTail
+        if (tail !== undefined) {
+          rightsTail = undefined
+          requestRightsFor(tail)
         }
       }
       if (injected) answered = { items: answered.items.slice(1) }
@@ -713,7 +715,7 @@ export function createCore(options: {
   let rights: RightsState | undefined
   let rightsFirstSent = false
   let rightsFlying = false
-  let rightsTail = false
+  let rightsTail: ReadCause | undefined
   // Мить ВІДПРАВКИ останньої частини `rights` (Р2): від неї рахується строк
   // знімка; поки частина в польоті, строку немає.
   let rightsSentAt: number | undefined
@@ -1383,8 +1385,7 @@ export function createCore(options: {
   const scheduled = new Map<
     ObjectName,
     {
-      whole?: number
-      wholeCause?: ReadCause
+      whole?: { at: number; cause: ReadCause }
       retry?: { at: number; cause: ReadCause; views: Set<Subset> }
     }
   >()
@@ -1400,8 +1401,9 @@ export function createCore(options: {
     const held = scheduled.get(object) ?? {}
     scheduled.set(object, held)
     if (views === undefined) {
-      held.whole = Math.min(held.whole ?? at, at)
-      held.wholeCause ??= cause
+      // Строк, що зливається, лишає причину першого.
+      if (held.whole === undefined) held.whole = { at, cause }
+      else held.whole.at = Math.min(held.whole.at, at)
     } else if (held.retry === undefined)
       held.retry = { at, cause, views: new Set(views) }
     else {
@@ -1512,11 +1514,9 @@ export function createCore(options: {
     dropDeferredWhenUnavailable()
     const catchLog = (error: unknown) => log({ kind: "listener-failed", error })
     for (const [name, held] of [...scheduled]) {
-      if (held.whole !== undefined && held.whole <= now()) {
-        // Строк без причини не існує: її ставить кожне `schedule`.
-        const cause = held.wholeCause!
+      if (held.whole !== undefined && held.whole.at <= now()) {
+        const { cause } = held.whole
         held.whole = undefined
-        held.wholeCause = undefined
         // Строк об'єкта без видимих виглядів нічого не читає: такту з читанням
         // він не робить.
         // `lastTickAt` — лише коли такт справді послав читання (§8.4).
@@ -1677,7 +1677,7 @@ export function createCore(options: {
     )
       return undefined
     for (const held of scheduled.values()) {
-      for (const at of [held.whole, held.retry?.at])
+      for (const at of [held.whole?.at, held.retry?.at])
         if (at !== undefined && (due === undefined || at < due)) due = at
     }
     for (const o of objects.values()) {
@@ -1908,7 +1908,7 @@ export function createCore(options: {
           site: "S2",
         })
         .catch(() => {})
-    } else if (!batcher.hasQueuedRights()) rightsTail = true
+    } else if (!batcher.hasQueuedRights()) rightsTail ??= cause
   }
 
   // Звірка (§6.7): версія каталогу й перечитування видимих виглядів живих
@@ -2187,7 +2187,7 @@ export function createCore(options: {
       new Map(
         [...scheduled].flatMap(([name, held]) => {
           const at = Math.min(
-            held.whole ?? Number.POSITIVE_INFINITY,
+            held.whole?.at ?? Number.POSITIVE_INFINITY,
             held.retry?.at ?? Number.POSITIVE_INFINITY
           )
           return Number.isFinite(at) ? [[name, at] as const] : []
