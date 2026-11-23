@@ -12,7 +12,7 @@ Spec: [спека профілів провайдера](../superpowers/specs/20
 
 - pgTAP-набори йдуть через тонкий Vitest-раннер в обох профілях: тегована база, транзакція з `ROLLBACK`, роль, claims (ПП6, ПГ13). `supabase test db` і `supabase db lint` — лише профіль `supabase`; `plpgsql_check` — напряму.
 - Тінь і копія доказу в `postgres` — чистий Postgres тієї самої мажорної версії.
-- Стек розробки й CI профілю `postgres` — docker compose: Postgres 17 (образ репо з pgTAP і `plpgsql_check`), Centrifugo, Garage; команди `pnpm db:pg:*`. DB-тести типово йдуть на ньому; стек `supabase` — регресійний (ПГ13).
+- Стек розробки й CI профілю `postgres` — docker compose: Postgres 17 (образ репо з pgTAP і `plpgsql_check`), Garage; команди `pnpm db:pg:*`. Centrifugo в стеках немає: стенди demo, e2e і DB-тестів піднімають власний контейнер під свою базу, пін образу — `docker/centrifugo-image.txt` (#305). DB-тести типово йдуть на ньому; стек `supabase` — регресійний (ПГ13).
 - Рішення М7 (локальний стек Supabase як крок 0) замінено цим ADR.
 
 ## Why
