@@ -34,6 +34,7 @@ import {
   type RowViews,
 } from "./snapshot"
 import { ReadLimiterClosed, settle, type StoreSource } from "./source"
+import type { ReadCause, ReadWhy } from "./sync/vocabulary"
 import type {
   CoreLimits,
   CoreLogEntry,
@@ -217,8 +218,11 @@ export interface SubsetRegistry {
   adopt(scope: Scope, form: Form, state: AdoptedView): void
   /** Lets go of the subsets the snapshot still holds: released after the delay. */
   endHydration(): void
-  /** Starts a load (single-flight: merges into one trailing request). */
-  load(s: Subset): void
+  /**
+   * Starts a load (single-flight: merges into one trailing request); `why` is
+   * the row of the inventory (Додаток Б) the read comes from.
+   */
+  load(s: Subset, why: ReadWhy): void
   /**
    * After a `commit`: marks the affected subsets dirty and returns the
    * subscribed ones whose snapshot changed.
@@ -324,6 +328,23 @@ export function settleRequirement(
   return waitsForRead(s, env) && env.tabVisible()
 }
 
+// Причина наступного завантаження (`trailing`, рядок M6): черга пам'ятає
+// причину виклику, що її поставив; коли черга зливає кілька викликів, лишається
+// причина першого (Р4). Окрема карта, а не поле `Subset`: стан цілі — справа
+// SK-3, а це лише облік причини.
+const trailingCauses = new WeakMap<Subset, ReadCause>()
+
+/** Queues the next load of `s` under `cause`; a queued one keeps its own. */
+export function queueTrailing(s: Subset, cause: ReadCause): void {
+  s.trailing = true
+  if (!trailingCauses.has(s)) trailingCauses.set(s, cause)
+}
+
+// Дочитування картки чи ТЧ, яке запускає підписка чи `preload` (рядок M3), і
+// дія користувача над завантаженням (рядок M5).
+const CHECK_ON_MOUNT: ReadWhy = { reason: "mount", site: "M3" }
+const USER_LOAD: ReadWhy = { reason: "user", site: "M5" }
+
 const ACCESS_CHANGED = purgedSnapshot("access-changed")
 
 /**
@@ -410,10 +431,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     for (const resolve of s.waiters.splice(0)) resolve()
   }
 
-  function load(s: Subset) {
+  function load(s: Subset, why: ReadWhy) {
     if (!s.alive || isClosed() || s.purged) return
     if (s.flight !== undefined) {
-      s.trailing = true
+      queueTrailing(s, why)
       return
     }
     const gen = ++s.gen
@@ -432,7 +453,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     )
     // Відкинута відповідь — те саме завантаження з паузою, що зростає:
     // покоління й політ не змінюються, тож це й далі дія, що його почала.
-    const attempt = (): Promise<void> => {
+    const attempt = (why: ReadWhy): Promise<void> => {
       const readEpoch = session.epochs.now()
       s.flightEpoch = readEpoch
       const startedAt = ctx.now()
@@ -443,7 +464,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       let discarded = false
       let again = false
       const lease = ctx.source.lease()
-      return readForm(ctx, s, readEpoch, token, lease).then(
+      return readForm(ctx, s, readEpoch, token, {
+        ...why,
+        target: { kind: "view", object: s.form.object.name },
+        caller: s,
+        lease,
+      }).then(
         (apply) => {
           settle(lease, () =>
             session.commit(
@@ -482,7 +508,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               what
             )
           )
-          if (again && token.valid) return attempt()
+          // Вимога стала, поки летіло читання (M7): повтор тієї самої дії.
+          if (again && token.valid)
+            return attempt({ reason: "retry", site: "M7" })
           if (!discarded || !token.valid) return
           // Цей прохід вичерпав межу (лічильник рухається після commit):
           // повтору не буде, вигляд — `command.unavailable`.
@@ -502,7 +530,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
           return session
             .sleep(pause)
-            .then(() => (token.valid ? attempt() : undefined))
+            .then(() =>
+              token.valid ? attempt({ reason: "retry", site: "M8" }) : undefined
+            )
         },
         (error: unknown) =>
           settle(lease, () => {
@@ -527,7 +557,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
-    void attempt().finally(() => {
+    void attempt(why).finally(() => {
       if (s.flight !== gen) return
       s.flight = undefined
       // Вигляд у польоті — не ціль планувальника: `commit` відповіді був до
@@ -537,7 +567,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       resolveWaiters(s)
       if (s.trailing && s.alive && !isClosed()) {
         s.trailing = false
-        load(s)
+        const cause = trailingCauses.get(s)!
+        trailingCauses.delete(s)
+        load(s, { ...cause, site: "M6" })
       }
       // Шапка змінилась під час польоту: перевірка, відкладена до кінця
       // читання, не губиться (захист ревізією — від повторів). Її ставив і
@@ -631,7 +663,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     // Сторінка, яку записала попередня спроба цього читання: повтор за
     // вимогою «склад не підтверджено» (П15) стає на її місце.
     let written: number | undefined
-    const attempt = (): Promise<void> => {
+    const attempt = (why: ReadWhy): Promise<void> => {
       const readEpoch = session.epochs.now()
       let discarded = false
       let again = false
@@ -641,8 +673,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         readEpoch,
         (c) =>
           readWindowMore(c, s, readEpoch, token, direction, cursor, written),
-        s,
-        lease
+        {
+          ...why,
+          target: { kind: "page", object: s.form.object.name },
+          caller: s,
+          lease,
+        }
       ).then(
         (apply) => {
           settle(lease, () =>
@@ -683,7 +719,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             )
           )
           if (again) {
-            if (token.valid) return attempt()
+            // Вимогу поставила власна відповідь сторінки (П15): P3.
+            if (token.valid) return attempt({ reason: "retry", site: "P3" })
             release()
             return
           }
@@ -702,7 +739,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
           return session
             .sleep(pause)
-            .then(() => (token.valid ? attempt() : undefined))
+            .then(() =>
+              token.valid ? attempt({ reason: "retry", site: "P2" }) : undefined
+            )
         },
         (error: unknown) =>
           settle(lease, () => {
@@ -721,7 +760,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
-    void attempt()
+    void attempt({ reason: "user", site: "P1" })
   }
 
   /** Mounted card: lazy fields absent or read with an older row version. */
@@ -809,7 +848,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
    * останнє читання: шапки без запису ревізія не бачить. `held` — перевірка
    * з `preload`, без слухача.
    */
-  function check(s: Subset, held = false) {
+  function check(s: Subset, held: boolean, why: ReadWhy) {
     if (!s.alive || s.purged) return
     if (!held && s.listeners.size === 0) return
     if (s.flight !== undefined) {
@@ -825,7 +864,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       !hiddenSinceRead(s)
     )
       return
-    load(s)
+    load(s, why)
   }
 
   /**
@@ -835,8 +874,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
    */
   function start(s: Subset, mounted: boolean) {
     if (s.gen > 0 || s.settled) {
-      if (mounted) check(s)
-      else if (s.form.spec.kind === "section") check(s, true)
+      if (mounted) check(s, false, CHECK_ON_MOUNT)
+      else if (s.form.spec.kind === "section") check(s, true, CHECK_ON_MOUNT)
       return
     }
     const spec = s.form.spec
@@ -857,10 +896,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       )
       s.settled = true
       resolveWaiters(s)
-      if (mounted) check(s)
+      if (mounted) check(s, false, CHECK_ON_MOUNT)
       return
     }
-    load(s)
+    load(s, { reason: "mount", site: mounted ? "M1" : "M2" })
   }
 
   // ------------------------------------------------------------ утримання
@@ -1150,7 +1189,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       const heldCheck = s.checkHeld
       s.checkHeld = false
       try {
-        if (!isClosed()) check(s, heldCheck)
+        if (!isClosed())
+          check(s, heldCheck, {
+            reason: "requirement",
+            requirement: "target-behind-header",
+            site: "M4",
+          })
       } finally {
         // Хвіст `revalidate` чекав цю перевірку як продовження польоту: без
         // нового читання його будимо тут (#312), зокрема й після винятку.
@@ -1232,12 +1276,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         // Несумісний об'єкт не читається (§10): вигляд лишається `isStale`.
         if (ctx.isStale(form.object.name)) return
         const s = live()
-        if (s !== undefined) load(s)
+        if (s !== undefined) load(s, USER_LOAD)
       },
       showNew() {
         if (ctx.isStale(form.object.name)) return
         const s = live()
-        if (s !== undefined) load(s)
+        if (s !== undefined) load(s, USER_LOAD)
       },
       loadBefore() {
         const s = live()

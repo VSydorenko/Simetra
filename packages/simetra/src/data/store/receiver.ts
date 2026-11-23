@@ -638,7 +638,19 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     signals: ObjectBatch
   ): Job => {
     const lease = writer.source.lease()
-    const read = tracked(writer.source, undefined, lease)
+    // Пачка з самих дочитувань мінімальної версії — K2; щойно в ній є сигнал,
+    // це читання сигналу (K1): зливаючись, пачка бере менший `attempt`.
+    const retried = [...plan.stored, ...plan.fresh].every(
+      (key) => (signals.keys.get(key)?.attempt ?? 0) > 0
+    )
+    const read = tracked(writer.source, {
+      ...(retried
+        ? { reason: "requirement", requirement: "min-version" }
+        : { reason: "signal" }),
+      target: { kind: "keys", object },
+      site: retried ? "K2" : "K1",
+      lease,
+    })
     const owned = new Set(plan.stored)
     return {
       object,
@@ -840,8 +852,11 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
         burstObjects.push(object)
         unconfirmed.push(object)
         flights.push(
-          revalidate(writer, object, { visibleOnly: true }).catch(
-            (error: unknown) => writer.log({ kind: "listener-failed", error })
+          revalidate(writer, object, {
+            visibleOnly: true,
+            why: { reason: "signal", site: "R8" },
+          }).catch((error: unknown) =>
+            writer.log({ kind: "listener-failed", error })
           )
         )
         continue
@@ -864,6 +879,7 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       if (sections.length > 0) {
         const flight = singleFlight(writer, o, sections, {
           visibleOnly: false,
+          why: { reason: "signal", site: "R9" },
         }).done.catch((error: unknown) =>
           writer.log({ kind: "listener-failed", error })
         )
@@ -885,7 +901,11 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
           w.markViews(object, { unconfirmedSince: since })
       }, token)
     // Строк на `resume()`: планувальник на прихованій вкладці нічого не шле.
-    for (const object of requested) writer.schedule(object, 0)
+    for (const object of requested)
+      writer.schedule(object, 0, {
+        reason: "requirement",
+        requirement: "composition-unconfirmed",
+      })
     // Кожне читання ключів осідає своєю відповіддю (і ТЧ свого об'єкта), одним
     // `commit`: відповідь, що чекала б повільних перечитувань інших об'єктів
     // пачки, лягла б пізніше за новіші читання й розійшлася б із ними (П15).

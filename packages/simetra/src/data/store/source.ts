@@ -35,6 +35,7 @@ import {
 import { DataError } from "../errors"
 import { effectiveEpoch } from "./epoch"
 import type { Subset } from "./subsets"
+import type { ReadIntent } from "./sync/vocabulary"
 import type { Key, KnownSnapshot, ObjectName, ServerRow } from "./types"
 
 // Причини `command.unavailable` частини, яку сервер не виконав (П4-B §4.5).
@@ -205,24 +206,54 @@ export interface ReadOptions {
 }
 
 /**
+ * Where a read comes from (spec of the sync kernel, §5.4 and Appendix Б):
+ * the reason, the target and the code of the inventory row, plus the
+ * `caller` and the write `lease` of the flight. `StoreSource.read` takes it
+ * as a required argument, so a read of the core without an origin does not
+ * compile; SK-1 turns it into a `Flight` without touching the call sites.
+ * It never goes to the wire.
+ *
+ * `caller` — the view whose read this is, when a view reads (the core's
+ * first-snapshot rule re-reads exactly that view, plan B5b-2 Р5а).
+ * `lease` — the write lease of the flight: the read issues it for every
+ * object whose rows its parts may write (§8.4, rule 2).
+ */
+export type ReadOrigin = ReadIntent & {
+  readonly caller?: Subset
+  readonly lease?: WriteLease
+}
+
+/**
  * The source the store modules read through: a {@link CoreSource} whose
  * `read` already carries the session's {@link ReadOptions} (the core binds
  * them in one place).
  */
 export interface StoreSource extends Omit<CoreSource, "read"> {
-  /**
-   * `caller` — the view whose read this is, when a view reads (the core's
-   * first-snapshot rule re-reads exactly that view, plan B5b-2 Р5а).
-   * `lease` — the write lease of the flight: the read issues it for every
-   * object whose rows its parts may write (§8.4, rule 2).
-   */
-  read(
-    parts: readonly CorePart[],
-    caller?: Subset,
-    lease?: WriteLease
-  ): Promise<CoreReadResult>
+  read(parts: readonly CorePart[], origin: ReadOrigin): Promise<CoreReadResult>
   /** A new write lease for one flight; only {@link settle} releases it. */
   lease(): WriteLease
+}
+
+/**
+ * A {@link StoreSource} with the origin of one flight bound in: the readers
+ * read through it (reads inside a flight continue the flight, so they take
+ * the origin of the row that started it, Appendix Б «Спільне», п. 3). A
+ * source without an origin is not a `BoundSource`, so a reader cannot be
+ * handed one.
+ */
+export interface BoundSource extends Omit<StoreSource, "read"> {
+  read(parts: readonly CorePart[]): Promise<CoreReadResult>
+}
+
+/** Binds `origin` into `source`: every read of the result carries it. */
+export function bound(source: StoreSource, origin: ReadOrigin): BoundSource {
+  return {
+    close: () => source.close(),
+    refuse: source.refuse?.bind(source),
+    run: (operation) => source.run(operation),
+    lease: () => source.lease(),
+    read: (parts) => source.read(parts, origin),
+  }
 }
 
 /**
@@ -687,27 +718,23 @@ export function createCoreSource(
  * A view of `source` that records the epoch of every answered part, in the
  * order of arrival: a read applies only after the session accepted every
  * epoch it carries (P4-B spec §6.2) — a key absent from an answer has no
- * row to carry it.
+ * row to carry it. Its reads carry `origin`.
  */
 export function tracked(
   source: StoreSource,
-  caller?: Subset,
-  lease?: WriteLease
+  origin: ReadOrigin
 ): {
-  source: StoreSource
+  source: BoundSource
   epochs: Set<string | null>
 } {
   const epochs = new Set<string | null>()
+  const inner = bound(source, origin)
   return {
     epochs,
     source: {
-      close: () => source.close(),
-      // Запис — не читання: його епоху шлюз читання не приймає (епоху `run`
-      // звіряє write-back); частина `version` епохи не має.
-      run: (operation) => source.run(operation),
-      lease: () => source.lease(),
-      async read(parts, own) {
-        const result = await source.read(parts, own ?? caller, lease)
+      ...inner,
+      async read(parts) {
+        const result = await inner.read(parts)
         for (const item of result.items)
           if (item.ok && "epoch" in item) epochs.add(item.epoch)
         return result
@@ -721,7 +748,7 @@ export function tracked(
  * its error. For the callers that read one query at a time.
  */
 export async function readOne(
-  source: StoreSource,
+  source: BoundSource,
   query: RowsQuery
 ): Promise<ReadRows & { epoch: string | null }> {
   const [item] = (await source.read([{ type: "query", query }])).items
@@ -843,7 +870,7 @@ function markedRow(
  * `CommandFailure` of its error. `snapshot` is the `known` the part carries.
  */
 export async function readRows(
-  source: StoreSource,
+  source: BoundSource,
   entry: CatalogEntry,
   query: RowsQuery,
   snapshot?: KnownSnapshot
@@ -884,7 +911,7 @@ export async function readRows(
  * the answer is absent from the result.
  */
 export async function readKeys(
-  source: StoreSource,
+  source: BoundSource,
   entry: CatalogEntry,
   keys: readonly Key[],
   options: ReadKeysOptions

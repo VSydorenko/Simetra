@@ -22,8 +22,9 @@ import {
   readFormWrite,
   requireConfirmation,
   type Apply,
-  type ReaderContext,
+  type ReaderHost,
   type Write,
+  type WithSource,
 } from "./readers"
 import {
   dropKeys,
@@ -40,16 +41,19 @@ import {
   readKeys,
   settle,
   tracked,
-  type WriteLease,
+  type BoundSource,
+  type ReadOrigin,
 } from "./source"
 import {
   EPOCH_UNAVAILABLE,
   errorOf,
+  queueTrailing,
   settleRequirement,
   viewDueAt,
   type Subset,
   type SubsetRegistry,
 } from "./subsets"
+import type { ReadCause, ReadWhy } from "./sync/vocabulary"
 import type {
   ActiveView,
   GenerationToken,
@@ -68,7 +72,7 @@ import type {
  */
 
 /** What the writer and `revalidate` need from the core. */
-export interface WriterContext extends ReaderContext {
+export interface WriterContext extends ReaderHost {
   readonly session: Session
   /**
    * Reads the view when its requirement «composition not confirmed» is
@@ -118,6 +122,7 @@ export interface WriterContext extends ReaderContext {
   schedule(
     object: ObjectName,
     delayMs: number,
+    cause: ReadCause,
     views?: ReadonlySet<Subset>
   ): void
   /**
@@ -129,6 +134,9 @@ export interface WriterContext extends ReaderContext {
     eraseScope(object: ObjectName, scope: string | null): void
   }
 }
+
+/** The context a flight's readers get: its source carries the flight's origin. */
+type BoundWriter = WithSource<WriterContext, BoundSource>
 
 /** The longest wait for a re-read the journal settles a mutation by (§7.2 step 4). */
 export const REREAD_TIMEOUT_MS = 5_000
@@ -234,7 +242,8 @@ function forget(
       !ctx.defects.has("purge-keeps-flights")
     ) {
       s.gen++
-      s.trailing = true
+      // Наступне завантаження після purge — `mount` (спека §5.3).
+      queueTrailing(s, { reason: "mount" })
     }
   }
 }
@@ -623,7 +632,7 @@ const listKnown = (s: Subset) => (keys: readonly Key[]) =>
  * `include`: targets would come back whole every time.
  */
 function readHeldTargets(
-  ctx: WriterContext,
+  ctx: BoundWriter,
   s: Subset,
   composition: readonly Key[]
 ): Promise<Included> {
@@ -661,7 +670,7 @@ function readHeldTargets(
 }
 
 async function readFullAgain(
-  ctx: WriterContext,
+  ctx: BoundWriter,
   s: Subset,
   startEpoch: number,
   token: GenerationToken
@@ -764,7 +773,7 @@ async function readFullAgain(
  * read with.
  */
 async function readWindowAgain(
-  ctx: WriterContext,
+  ctx: BoundWriter,
   s: Subset,
   startEpoch: number,
   token: GenerationToken
@@ -900,19 +909,18 @@ function readAgain(
   s: Subset,
   startEpoch: number,
   token: GenerationToken,
-  lease: WriteLease
+  origin: ReadOrigin
 ): Promise<Apply> {
   return gated(
     ctx,
     startEpoch,
     (c) => writeAgain(c, s, startEpoch, token),
-    s,
-    lease
+    origin
   )
 }
 
 async function writeAgain(
-  ctx: WriterContext,
+  ctx: BoundWriter,
   s: Subset,
   startEpoch: number,
   token: GenerationToken
@@ -1006,7 +1014,8 @@ export async function revalidate(
         (s) =>
           !inFlight(s) &&
           (!unavailable(s) || ctx.defects.has("scheduler-reads-unavailable"))
-      )
+      ),
+      () => options.why
     )
     return
   }
@@ -1017,7 +1026,7 @@ export async function revalidate(
 export function revalidateTargets(
   ctx: WriterContext,
   object: ObjectName,
-  options: RevalidateOptions
+  options: Eligibility
 ): Subset[] {
   // Вигляд без жодного завантаження складу не має: його перше читання —
   // завантаження, а не системне перечитування. ТЧ — лише змонтовані.
@@ -1047,23 +1056,29 @@ export function singleFlight(
       s,
       pending === undefined ? options : mergeOptions(pending, options)
     )
-    s.rereadTail ??= tailPass(ctx, o, s)
+    s.rereadTail ??= tailPass(ctx, o, s, options.why)
     return s.rereadTail
   })
   const fresh = targets.filter((s) => !inFlight(s))
   return {
     started: fresh.length,
-    done: Promise.all([revalidateViews(ctx, o, fresh), ...tails]).then(
-      () => undefined
-    ),
+    done: Promise.all([
+      revalidateViews(ctx, o, fresh, () => options.why),
+      ...tails,
+    ]).then(() => undefined),
   }
 }
 
-type RevalidateOptions = {
+type Eligibility = {
   visibleOnly: boolean
   minAgeMs?: number
   /** Views the hydration brought: read although nobody is subscribed yet. */
   alsoViews?: ReadonlySet<Subset>
+}
+
+type RevalidateOptions = Eligibility & {
+  /** The row of the inventory (Додаток Б) this system re-read comes from. */
+  why: ReadWhy
 }
 
 /**
@@ -1086,7 +1101,7 @@ const dueOf = (ctx: WriterContext, s: Subset, ageMs?: number) =>
     ageMs
   )
 
-function eligible(ctx: WriterContext, s: Subset, options: RevalidateOptions) {
+function eligible(ctx: WriterContext, s: Subset, options: Eligibility) {
   const { minAgeMs } = options
   return (
     s.alive &&
@@ -1146,6 +1161,8 @@ function mergeOptions(
   const also = new Set([...(a.alsoViews ?? []), ...(b.alsoViews ?? [])])
   return {
     visibleOnly: a.visibleOnly && b.visibleOnly,
+    // Хвіст, що зливає кілька викликів, лишає причину першого (Р4).
+    why: a.why,
     ...(also.size === 0 ? {} : { alsoViews: also }),
   }
 }
@@ -1181,7 +1198,8 @@ export function hasDueViews(
 async function tailPass(
   ctx: WriterContext,
   o: ObjectState,
-  s: Subset
+  s: Subset,
+  why: ReadWhy
 ): Promise<void> {
   try {
     // Перевірка шапки в черзі (`queueCheck`) — продовження завантаження:
@@ -1205,7 +1223,7 @@ async function tailPass(
   } finally {
     s.rereadTail = undefined
   }
-  const options = tailOptions.get(s) ?? { visibleOnly: false }
+  const options = tailOptions.get(s) ?? { visibleOnly: false, why }
   tailOptions.delete(s)
   if (
     !ctx.session.token().valid ||
@@ -1214,7 +1232,8 @@ async function tailPass(
     ctx.defects.has("revalidate-no-tail")
   )
     return
-  await revalidateViews(ctx, o, [s])
+  // Хвіст — читання, яке поставив виклик `options.why`, під кодом R15.
+  await revalidateViews(ctx, o, [s], () => ({ ...options.why, site: "R15" }))
 }
 
 /**
@@ -1224,12 +1243,13 @@ async function tailPass(
  */
 export async function revalidateHydrated(
   ctx: WriterContext,
-  s: Subset
+  s: Subset,
+  why: ReadWhy
 ): Promise<void> {
   if (!ctx.session.token().valid) return
   if (!s.alive || s.purged || !s.loaded || s.flight !== undefined) return
   if (s.form.spec.kind === "section" && s.listeners.size === 0) return
-  await revalidateViews(ctx, s.form.object, [s])
+  await revalidateViews(ctx, s.form.object, [s], () => why)
 }
 
 /**
@@ -1243,7 +1263,8 @@ export async function revalidateHydrated(
 export async function revalidateHolders(
   ctx: WriterContext,
   object: ObjectName,
-  keys: ReadonlySet<Key>
+  keys: ReadonlySet<Key>,
+  why: ReadWhy
 ): Promise<void> {
   if (!ctx.session.token().valid) return
   const groups = new Map<ObjectState, Subset[]>()
@@ -1264,15 +1285,22 @@ export async function revalidateHolders(
     groups.set(s.form.object, group)
   }
   await Promise.all(
-    [...groups].map(([o, targets]) => revalidateViews(ctx, o, targets))
+    [...groups].map(([o, targets]) =>
+      revalidateViews(ctx, o, targets, () => why)
+    )
   )
 }
 
-/** One two-phase pass over `targets`; views dropped by a purge get another pass. */
+/**
+ * One two-phase pass over `targets`; views dropped by a purge get another
+ * pass. `whyOf` gives the row of the inventory each view is read under: the
+ * views of one pass may come from different rows only in the repeats below.
+ */
 export async function revalidateViews(
   ctx: WriterContext,
   o: ObjectState,
-  targets: readonly Subset[]
+  targets: readonly Subset[],
+  whyOf: (s: Subset) => ReadWhy
 ): Promise<void> {
   const { session } = ctx
   if (targets.length === 0 || !session.token().valid) return
@@ -1296,7 +1324,12 @@ export async function revalidateViews(
   const lease = ctx.source.lease()
   const results = await Promise.all(
     targets.map((s) =>
-      readAgain(ctx, s, startEpoch, token, lease).then(
+      readAgain(ctx, s, startEpoch, token, {
+        ...whyOf(s),
+        target: { kind: "view", object: o.name },
+        caller: s,
+        lease,
+      }).then(
         (apply) => ({ s, apply }) as const,
         (error: unknown) => ({ s, error }) as const
       )
@@ -1306,7 +1339,8 @@ export async function revalidateViews(
     const at = s.rereadEpochs.indexOf(startEpoch)
     if (at >= 0) s.rereadEpochs.splice(at, 1)
   }
-  const again: Subset[] = []
+  // Повтор тим самим системним шляхом: рядок інвентаря — за причиною повтору.
+  const again = new Map<Subset, ReadWhy>()
   const discarded: Subset[] = []
   // Вигляди, чию відповідь пропущено, бо їхнє завантаження осіло раніше.
   const skipped: Subset[] = []
@@ -1330,7 +1364,7 @@ export async function revalidateViews(
               purgedSince(o.name) ||
               s.form.include.some((step) => purgedSince(step.target))
             ) {
-              again.push(s)
+              again.set(s, { reason: "retry", site: "R16" })
               continue
             }
             s.dirty = true
@@ -1354,7 +1388,7 @@ export async function revalidateViews(
                 continue
               }
               if (pageDropped.delete(s)) {
-                again.push(s)
+                again.set(s, { reason: "retry", site: "R17" })
                 continue
               }
               s.refreshedAt = startedAt
@@ -1377,7 +1411,7 @@ export async function revalidateViews(
                   tabVisible: ctx.tabVisible,
                 })
               )
-                again.push(s)
+                again.set(s, { reason: "retry", site: "R18" })
             } catch (error) {
               ctx.log({ kind: "listener-failed", error })
               s.status = "error"
@@ -1423,12 +1457,12 @@ export async function revalidateViews(
     // Не чекаємо паузи: `revalidate` завершується, а повтор — строк об'єкта в
     // планувальнику (на прихованій вкладці чекає `resume()`); іде тим самим
     // системним шляхом, склад не змінюється.
-    ctx.schedule(o.name, pause, new Set(discarded))
+    ctx.schedule(o.name, pause, { reason: "retry" }, new Set(discarded))
   }
   // Дефект самотесту «системне перечитування через завантаження».
   if (ctx.defects.has("system-reread-via-load")) {
     for (const { s } of results) {
-      if (s.alive && !s.purged) ctx.registry.load(s)
+      if (s.alive && !s.purged) ctx.registry.load(s, whyOf(s))
     }
   }
   // Вигляд із власним завантаженням у польоті (П12: його перезапускає purge)
@@ -1436,7 +1470,10 @@ export async function revalidateViews(
   await revalidateViews(
     ctx,
     o,
-    again.filter((s) => s.alive && !s.purged && s.flight === undefined)
+    [...again.keys()].filter(
+      (s) => s.alive && !s.purged && s.flight === undefined
+    ),
+    (s) => again.get(s)!
   )
 }
 
@@ -1491,7 +1528,12 @@ export async function rereadKey(
     )
   })
   const lease = ctx.source.lease()
-  const read = tracked(ctx.source, undefined, lease)
+  const read = tracked(ctx.source, {
+    reason: "write-confirm",
+    target: { kind: "keys", object },
+    site: "K4",
+    lease,
+  })
   let rows: readonly ServerRow[] | undefined
   try {
     rows = await readKeys(
@@ -1598,7 +1640,7 @@ export function invalidateLoads(views: Iterable<Subset>, before: number) {
     if (!s.alive || s.purged || s.loaded || s.flight === undefined) continue
     if ((s.flightEpoch ?? before) >= before) continue
     s.gen++
-    s.trailing = true
+    queueTrailing(s, { reason: "requirement", requirement: "access-narrowed" })
   }
 }
 
@@ -1611,7 +1653,8 @@ export function invalidateLoads(views: Iterable<Subset>, before: number) {
  */
 export function revalidateNarrowed(
   ctx: WriterContext,
-  views: Iterable<Subset>
+  views: Iterable<Subset>,
+  why: ReadWhy
 ): Promise<void> {
   if (!ctx.session.token().valid) return Promise.resolve()
   const groups = new Map<ObjectState, Subset[]>()
@@ -1624,7 +1667,7 @@ export function revalidateNarrowed(
   return Promise.all(
     [...groups].map(
       ([o, targets]) =>
-        singleFlight(ctx, o, targets, { visibleOnly: false }).done
+        singleFlight(ctx, o, targets, { visibleOnly: false, why }).done
     )
   ).then(() => undefined)
 }

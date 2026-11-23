@@ -34,8 +34,10 @@ import {
   type CoreReadItem,
   type CoreReadResult,
   type CoreSource,
+  type ReadOrigin,
   type StoreSource,
 } from "./source"
+import type { ReadCause, ReadIntent, ReadWhy } from "./sync/vocabulary"
 import type { ObjectState } from "./forms"
 import type { StoreOps } from "./readers"
 import {
@@ -349,6 +351,22 @@ export function inspectCore(session: CoreSession): CoreInspection {
 /** `resume()` closer than this to the last accepted one does nothing. */
 const RESUME_COALESCE_MS = 1_000
 
+// Причини службових читань і рядків, які створює саме ядро (Додаток Б).
+const RIGHTS_UNCONFIRMED: ReadCause = {
+  reason: "requirement",
+  requirement: "rights-unconfirmed",
+}
+const HYDRATION_TRUST: ReadWhy = {
+  reason: "requirement",
+  requirement: "hydration-trust",
+  site: "R5",
+}
+const INJECTED_RIGHTS: ReadIntent = {
+  ...RIGHTS_UNCONFIRMED,
+  target: { kind: "service", service: "rights" },
+  site: "S3",
+}
+
 const KEYS_PER_REQUEST_MAX = Math.min(READ_LIMIT_MAX, FILTER_IN_MAX)
 
 // Нуль чи дріб у межі тихо вимикає її (горизонт без кошиків пропускає все):
@@ -543,17 +561,17 @@ export function createCore(options: {
         },
       }
     },
-    read: (parts, caller, lease) => {
+    read: (parts, origin) => {
       const plan = writesOf(parts)
       if (plan.size > 0) {
         // Шлях, що пише рядки без оренди, — дефект: запис каналу забувся б.
-        if (lease === undefined)
+        if (origin.lease === undefined)
           return Promise.reject(
             new Error("a read of rows without a write lease")
           )
-        lease.issue(plan)
+        origin.lease.issue(plan)
       }
-      return dispatch(parts, caller)
+      return dispatch(parts, origin)
     },
   }
   // Об'єкти, рядки яких можуть записати частини читання: об'єкт частини й
@@ -579,8 +597,9 @@ export function createCore(options: {
   }
   async function dispatch(
     parts: readonly CorePart[],
-    caller: Subset | undefined
+    origin: ReadOrigin
   ): Promise<CoreReadResult> {
+    const { caller } = origin
     // Старт читання частин виклику: правило першого знімка (Р5а) порівнює
     // його з епохою застосування знімка.
     const startEpoch = session.epochs.now()
@@ -632,11 +651,17 @@ export function createCore(options: {
       rightsEnabled &&
       !rightsFirstSent &&
       !forward.some((part) => part.type === "rights")
-    if (injected) forward.unshift({ type: "rights" })
+    // Походження йде за слотом: частина, яку додало ядро, має свій рядок
+    // інвентаря (S3), решта — походження виклику.
+    const origins: ReadIntent[] = forward.map(() => origin)
+    if (injected) {
+      forward.unshift({ type: "rights" })
+      origins.unshift(INJECTED_RIGHTS)
+    }
     const rightsAt = forward.findIndex((part) => part.type === "rights")
     let answered: { items: CoreReadItem[] } = { items: [] }
     if (rightsAt < 0) {
-      if (forward.length > 0) answered = await batcher.read(forward)
+      if (forward.length > 0) answered = await batcher.read(forward, origins)
     } else {
       // Знімок один за раз: відправка бере `rightsEpoch` і `known` (Р4).
       // `rightsEpoch` лише впорядковує знімки між собою, а частина `rights`
@@ -656,7 +681,7 @@ export function createCore(options: {
       rightsFlying = true
       rightsSent = sentRights
       try {
-        answered = await batcher.read(forward)
+        answered = await batcher.read(forward, origins)
       } catch (error) {
         if (sentRights.token.valid) log({ kind: "rights-failed" })
         throw error
@@ -776,7 +801,11 @@ export function createCore(options: {
       queueMicrotask(() => {
         const pending = [...narrowing]
         narrowing.clear()
-        revalidateNarrowed(writerContext, pending).catch(catchNarrow)
+        revalidateNarrowed(writerContext, pending, {
+          reason: "requirement",
+          requirement: "access-narrowed",
+          site: "R11",
+        }).catch(catchNarrow)
       })
     }
     for (const s of views) narrowing.add(s)
@@ -1186,7 +1215,13 @@ export function createCore(options: {
     const token = session.childToken(() => tail.gen === gen)
     const readEpoch = session.epochs.now()
     const lease = source.lease()
-    const read = tracked(source, undefined, lease)
+    const read = tracked(source, {
+      reason: "requirement",
+      requirement: "row-unfinished",
+      target: { kind: "keys", object: o.name },
+      site: "K3",
+      lease,
+    })
     readKeys(read.source, o.entry, keys, {
       keysPerRequest: limits.keysPerRequest,
     })
@@ -1258,9 +1293,11 @@ export function createCore(options: {
       for (const [name, keys] of hiddenNow) {
         // Несумісний об'єкт не перечитується: його значення не повертаються.
         if (staleObjects.has(name)) continue
-        revalidateHolders(writerContext, name, keys).catch((error: unknown) =>
-          log({ kind: "listener-failed", error })
-        )
+        revalidateHolders(writerContext, name, keys, {
+          reason: "requirement",
+          requirement: "value-hidden",
+          site: "R10",
+        }).catch((error: unknown) => log({ kind: "listener-failed", error }))
       }
     }
     const notify = registry.afterCommit(closing)
@@ -1327,22 +1364,34 @@ export function createCore(options: {
       groups.set(s.form.object, [...(groups.get(s.form.object) ?? []), s])
     }
     for (const [o, views] of groups)
-      singleFlight(writerContext, o, views, { visibleOnly: false }).done.catch(
-        catchNarrow
-      )
+      singleFlight(writerContext, o, views, {
+        visibleOnly: false,
+        why: {
+          reason: "requirement",
+          requirement: "target-behind-header",
+          site: "R12",
+        },
+      }).done.catch(catchNarrow)
   }
 
   // Строки об'єктів у планувальнику (§8.4): перемикання епохи (Р5) і повтор
   // відкинутої відповіді (Р6). Таймера на об'єкт немає: строк виконує такт, а
   // на прихованій вкладці — `resume()`. Два строки одного об'єкта незалежні:
   // перемикання перечитує всі його видимі вигляди, повтор — лише відкинуті.
+  // `cause` строку — причина читання, яке він виконає; два строки, що
+  // зливаються, лишають причину першого (черга пам'ятає, хто її поставив).
   const scheduled = new Map<
     ObjectName,
-    { whole?: number; retry?: { at: number; views: Set<Subset> } }
+    {
+      whole?: number
+      wholeCause?: ReadCause
+      retry?: { at: number; cause: ReadCause; views: Set<Subset> }
+    }
   >()
   function schedule(
     object: ObjectName,
     delayMs: number,
+    cause: ReadCause,
     views?: ReadonlySet<Subset>
   ) {
     // Несумісний об'єкт не читається (§10): строк йому не ставимо.
@@ -1350,9 +1399,11 @@ export function createCore(options: {
     const at = now() + delayMs
     const held = scheduled.get(object) ?? {}
     scheduled.set(object, held)
-    if (views === undefined) held.whole = Math.min(held.whole ?? at, at)
-    else if (held.retry === undefined)
-      held.retry = { at, views: new Set(views) }
+    if (views === undefined) {
+      held.whole = Math.min(held.whole ?? at, at)
+      held.wholeCause ??= cause
+    } else if (held.retry === undefined)
+      held.retry = { at, cause, views: new Set(views) }
     else {
       held.retry.at = Math.min(held.retry.at, at)
       for (const s of views) held.retry.views.add(s)
@@ -1420,9 +1471,14 @@ export function createCore(options: {
             visibleOnly: true,
           }),
         })
-        revalidate(writerContext, object, { visibleOnly: true }).catch(
-          (error: unknown) => log({ kind: "listener-failed", error })
-        )
+        revalidate(writerContext, object, {
+          visibleOnly: true,
+          why: {
+            reason: "requirement",
+            requirement: "channel-rejoin",
+            site: "R4",
+          },
+        }).catch((error: unknown) => log({ kind: "listener-failed", error }))
       }
     }
     // Сплеск (Р13): хвиля, що справді перечитує; без читань запису немає.
@@ -1457,19 +1513,27 @@ export function createCore(options: {
     const catchLog = (error: unknown) => log({ kind: "listener-failed", error })
     for (const [name, held] of [...scheduled]) {
       if (held.whole !== undefined && held.whole <= now()) {
+        // Строк без причини не існує: її ставить кожне `schedule`.
+        const cause = held.wholeCause!
         held.whole = undefined
+        held.wholeCause = undefined
         // Строк об'єкта без видимих виглядів нічого не читає: такту з читанням
         // він не робить.
         // `lastTickAt` — лише коли такт справді послав читання (§8.4).
         if (hasDueViews(writerContext, name)) ran = true
-        revalidate(writerContext, name, { visibleOnly: true }).catch(catchLog)
+        revalidate(writerContext, name, {
+          visibleOnly: true,
+          why: { ...cause, site: "R1" },
+        }).catch(catchLog)
       }
       if (held.retry !== undefined && held.retry.at <= now()) {
         const views = [...held.retry.views].filter((s) => s.alive && !s.purged)
+        const cause = held.retry.cause
         held.retry = undefined
         // Повтор іде тим самим single-flight шляхом, що й явний `revalidate`.
         const flight = singleFlight(writerContext, objectOf(name), views, {
           visibleOnly: false,
+          why: { ...cause, site: "R3" },
         })
         if (flight.started > 0) ran = true
         flight.done.catch(catchLog)
@@ -1491,7 +1555,11 @@ export function createCore(options: {
       if (staleObjects.has(o.name)) continue
       if (scheduled.get(o.name)?.whole !== undefined) continue
       if (!activeViews(writerContext, o.name).some((v) => v.visible)) continue
-      schedule(o.name, Math.floor(Math.random() * limits.revalidateIntervalMs))
+      schedule(
+        o.name,
+        Math.floor(Math.random() * limits.revalidateIntervalMs),
+        { reason: "requirement", requirement: "version-epoch-switched" }
+      )
     }
   })
 
@@ -1562,6 +1630,11 @@ export function createCore(options: {
     if (!requirementPending(s, requirementEnv)) return
     singleFlight(writerContext, s.form.object, [s], {
       visibleOnly: false,
+      why: {
+        reason: "requirement",
+        requirement: "composition-unconfirmed",
+        site: "R13",
+      },
     }).done.catch((error: unknown) => log({ kind: "listener-failed", error }))
   }
 
@@ -1576,9 +1649,11 @@ export function createCore(options: {
     // його відповідь зробить рядки довіреними; власне завантаження ловить
     // `revalidateHydrated` (`flight`).
     if (s.rereadEpochs.some((at) => at >= hydrationEpoch)) return
-    revalidateHydrated(writerContext, s).catch((error: unknown) =>
-      log({ kind: "listener-failed", error })
-    )
+    revalidateHydrated(writerContext, s, {
+      reason: "requirement",
+      requirement: "hydration-trust",
+      site: "R14",
+    }).catch((error: unknown) => log({ kind: "listener-failed", error }))
   }
 
   // Сесія вичерпала межу відкинутих: кожна відповідь до нової сесії
@@ -1660,6 +1735,7 @@ export function createCore(options: {
       // Знімок має власний строк; без видимих виглядів пакет несе лише його.
       const rightsAt = rightsDueAt()
       reconcile(
+        { reason: "interval", site: "R2" },
         { minAgeMs },
         undefined,
         // Строк знімка бере те саме вікно `0,1 × I`, що й вигляди: інакше
@@ -1667,7 +1743,8 @@ export function createCore(options: {
         rightsAt !== undefined &&
           rightsAt <= now() + 0.1 * limits.revalidateIntervalMs
           ? ["rights"]
-          : []
+          : [],
+        { reason: "interval" }
       )
     },
     defects,
@@ -1795,7 +1872,12 @@ export function createCore(options: {
     versionFlying = true
     const token = session.token()
     source
-      .read([{ type: "version" }])
+      .read([{ type: "version" }], {
+        reason: "requirement",
+        requirement: "version-unconfirmed",
+        target: { kind: "service", service: "version" },
+        site: "S1",
+      })
       .then(
         () => {
           // Значення застосував збирач синхронно з відповіддю (бар'єр Р3).
@@ -1814,18 +1896,35 @@ export function createCore(options: {
 
   type ServicePart = "version" | "rights"
 
+  // `cause` — чому знімок потрібен: вимога чи строк такту (рядок S2).
+  function requestRightsFor(cause: ReadCause) {
+    if (!rightsEnabled || !session.token().valid) return
+    if (!rightsFlying) {
+      // Збій частини вже в журналі (`rights-failed`) — повтору немає (Р8).
+      source
+        .read([{ type: "rights" }], {
+          ...cause,
+          target: { kind: "service", service: "rights" },
+          site: "S2",
+        })
+        .catch(() => {})
+    } else if (!batcher.hasQueuedRights()) rightsTail = true
+  }
+
   // Звірка (§6.7): версія каталогу й перечитування видимих виглядів живих
   // об'єктів. Усе синхронно, без `await` між об'єктами, тож збирач пакета
   // читань зливає їх в один запит. Її кличуть `endHydration` і `resume`.
   function reconcile(
+    why: ReadWhy,
     reconcileOptions: { minAgeMs?: number } = {},
     snapshotViews?: ReadonlySet<Subset>,
     // Склад службових частин (Р2): `endHydration` і `resume()` шлють
     // `version` і `rights`, такт — `rights`, коли настав строк знімка.
-    services: readonly ServicePart[] = ["version", "rights"]
+    services: readonly ServicePart[] = ["version", "rights"],
+    rightsCause: ReadCause = RIGHTS_UNCONFIRMED
   ) {
     if (services.includes("version")) core.requestVersion()
-    if (services.includes("rights")) core.requestRights()
+    if (services.includes("rights")) requestRightsFor(rightsCause)
     for (const o of objects.values()) {
       // Несумісний об'єкт не читається (§10): перечитування перевело б його
       // вигляди в `error` замість показати `isStale`.
@@ -1837,6 +1936,7 @@ export function createCore(options: {
         continue
       revalidate(writerContext, o.name, {
         visibleOnly: true,
+        why,
         ...(snapshotViews === undefined ? {} : { alsoViews: snapshotViews }),
         ...reconcileOptions,
       }).catch((error: unknown) => log({ kind: "listener-failed", error }))
@@ -1853,7 +1953,10 @@ export function createCore(options: {
       requestReread(names, { jitterMs }) {
         if (!session.token().valid) return
         for (const name of names)
-          schedule(name, Math.floor(Math.random() * jitterMs))
+          schedule(name, Math.floor(Math.random() * jitterMs), {
+            reason: "requirement",
+            requirement: "composition-unconfirmed",
+          })
       },
     },
     signal: session.signal,
@@ -1882,13 +1985,7 @@ export function createCore(options: {
       if (!versionFlying) startVersion()
       else if (!batcher.hasQueuedVersion()) versionTail = true
     },
-    requestRights() {
-      if (!rightsEnabled || !session.token().valid) return
-      if (!rightsFlying) {
-        // Збій частини вже в журналі (`rights-failed`) — повтору немає (Р8).
-        source.read([{ type: "rights" }]).catch(() => {})
-      } else if (!batcher.hasQueuedRights()) rightsTail = true
-    },
+    requestRights: () => requestRightsFor(RIGHTS_UNCONFIRMED),
     rights: () => rights,
     serverHash(hash, parts) {
       const changed = lastHash !== undefined && hash !== lastHash
@@ -1975,8 +2072,8 @@ export function createCore(options: {
         defects.has("late-hydrated-not-reread") ||
         defects.has("hydrated-row-not-reread")
       )
-        reconcile()
-      else reconcile({}, fromSnapshot)
+        reconcile(HYDRATION_TRUST)
+      else reconcile(HYDRATION_TRUST, {}, fromSnapshot)
     },
     get visible() {
       return visible
@@ -2010,7 +2107,10 @@ export function createCore(options: {
       if (lastResumeAt !== undefined && at - lastResumeAt < RESUME_COALESCE_MS)
         return
       lastResumeAt = at
-      reconcile({ minAgeMs: limits.resumeMinIntervalMs })
+      reconcile(
+        { reason: "interval", site: "R6" },
+        { minAgeMs: limits.resumeMinIntervalMs }
+      )
     },
     update: (object, key, values, updateOptions) =>
       overlay.update(object, key, values, updateOptions),
@@ -2023,7 +2123,10 @@ export function createCore(options: {
       if (s !== undefined) becameVisible(s)
     },
     revalidate: (object, revalidateOptions) =>
-      revalidate(writerContext, object, revalidateOptions),
+      revalidate(writerContext, object, {
+        ...revalidateOptions,
+        why: { reason: "user", site: "R7" },
+      }),
     close(reason) {
       if (closed !== undefined) return
       closed = purgedSnapshot(reason)
