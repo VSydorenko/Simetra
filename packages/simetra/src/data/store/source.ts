@@ -203,7 +203,43 @@ export interface ReadOptions {
    * read slot was free (P4-B spec §8.4, the deadline counts from sending).
    */
   readonly onRightsSent?: () => void
+  /**
+   * The origin of each part by slot (the length of the `parts` of the call);
+   * `undefined` in a slot — a part without an origin, which gives no event.
+   * Origins follow the slot, not the identity of the part: the core copies
+   * parts (`include` cut, `known` set) and the copy keeps its slot.
+   */
+  readonly origins?: readonly (ReadIntent | undefined)[]
+  /**
+   * Called when a read request gets its number, once per live part of the
+   * request, before the request goes out (the `watchReads` event).
+   */
+  readonly onRead?: (event: ReadEvent) => void
 }
+
+/**
+ * The event of one live part of one server request: the origin of the read
+ * and the number of the request, the same that {@link requestOf} returns for
+ * the answer of the part. Neither the `caller` nor the `lease` of the flight
+ * goes into it: they are the core's, not a diagnostic.
+ */
+export type ReadEvent = ReadIntent & { readonly request: number }
+
+const readEvent = (origin: ReadIntent, request: number): ReadEvent =>
+  origin.reason === "requirement"
+    ? {
+        reason: origin.reason,
+        requirement: origin.requirement,
+        target: origin.target,
+        site: origin.site,
+        request,
+      }
+    : {
+        reason: origin.reason,
+        target: origin.target,
+        site: origin.site,
+        request,
+      }
 
 /**
  * Where a read comes from (spec of the sync kernel, §5.4 and Appendix Б):
@@ -496,7 +532,8 @@ export function createCoreSource(
     adapter: SourceAdapter | null,
     queries: readonly CorePart[],
     wires: readonly WireReadPart[],
-    onRightsSent: ReadOptions["onRightsSent"]
+    origins: readonly (ReadIntent | undefined)[],
+    { onRightsSent, onRead }: ReadOptions
   ): Promise<CoreReadItem[]> => {
     let answer: WireReadParts | undefined
     // Частини, що справді пішли: добираються на старті задачі, не при постановці.
@@ -506,6 +543,13 @@ export function createCoreSource(
       answer = await limiter.run(() => {
         live = queries.flatMap((part, i) => (isRefused(part) ? [] : [i]))
         request = ++requests
+        // Подія — на кожну живу частину, у мить номера запиту: частину,
+        // відмовлену без запиту (`stale-object`, закритий обмежувач), задача
+        // сюди не доводить.
+        for (const i of live) {
+          const origin = origins[i]
+          if (origin !== undefined) onRead?.(readEvent(origin, request))
+        }
         // Строк знімка — від справжньої відправки, а не від черги слотів:
         // інакше знімок після довгої черги приходив би вже простроченим.
         if (live.some((i) => queries[i]!.type === "rights")) onRightsSent?.()
@@ -539,8 +583,9 @@ export function createCoreSource(
     queries: readonly CorePart[],
     wires: readonly WireReadPart[],
     out: CoreReadItem[],
-    { sleep, onRightsSent }: ReadOptions
+    options: ReadOptions
   ): Promise<void> => {
+    const { sleep, origins } = options
     let pending = slots
     // Частини, що отримали `batch-budget`: наступного разу кожна йде
     // окремим запитом. Сама в запиті частина не ділить бюджет ні з ким і
@@ -562,7 +607,8 @@ export function createCoreSource(
             adapter,
             request.map((slot) => queries[slot]!),
             request.map((slot) => wires[slot]!),
-            onRightsSent
+            request.map((slot) => origins?.[slot]),
+            options
           )
           request.forEach((slot, i) => {
             out[slot] = items[i]!

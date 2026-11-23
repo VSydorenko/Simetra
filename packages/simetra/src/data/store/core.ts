@@ -34,6 +34,7 @@ import {
   type CoreReadItem,
   type CoreReadResult,
   type CoreSource,
+  type ReadEvent,
   type ReadOrigin,
   type StoreSource,
 } from "./source"
@@ -328,6 +329,13 @@ export interface CoreInspection {
   watchSignalReads(
     listener: (object: ObjectName, read: SignalRead) => void
   ): void
+  /**
+   * Subscribes to the reads the core sends: one event per live part of each
+   * server request, with the origin of the read and the request number
+   * (`requestOf` of its answer). Any number of listeners; the result
+   * unsubscribes. Keys appear only here, never in `log`.
+   */
+  watchReads(listener: (event: ReadEvent) => void): () => void
   /** The mutations in the journal of own mutations. */
   mutations(): JournalInspection[]
   /** The plans the scheduler made (calls of one turn merge into one). */
@@ -489,6 +497,7 @@ export function createCore(options: {
   const defects = new Set<DefectFlag>()
   let remarkListener: ((object: ObjectName, key: Key) => void) | undefined
   let rightsPassListener: (() => void) | undefined
+  const readListeners = new Set<(event: ReadEvent) => void>()
   let signalReadListener:
     ((object: ObjectName, read: SignalRead) => void) | undefined
   // Приймач сигналів: створюється після `writerContext`, а реєстр і потік
@@ -523,6 +532,17 @@ export function createCore(options: {
     // чекати вільного слота читань довше за I (§8.4).
     onRightsSent: () => {
       rightsSentAt = now()
+    },
+    // Слухач — діагностика: його виняток не може зірвати читання (задача
+    // обмежувача), тож тут ковтається.
+    onRead: (event) => {
+      for (const listener of [...readListeners]) {
+        try {
+          listener(event)
+        } catch {
+          // Діагностика не змінює поведінки.
+        }
+      }
     },
     onVersion(version) {
       if (session.token().valid) applyVersion(version.objects)
@@ -2179,6 +2199,12 @@ export function createCore(options: {
     },
     watchSignalReads(listener) {
       signalReadListener = listener
+    },
+    watchReads(listener) {
+      readListeners.add(listener)
+      return () => {
+        readListeners.delete(listener)
+      }
     },
     mutations: () => overlay.entries(),
     schedulerPlans: () => scheduler.plans(),

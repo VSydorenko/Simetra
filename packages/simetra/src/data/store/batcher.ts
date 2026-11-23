@@ -34,6 +34,7 @@ export interface Batcher extends Omit<CoreSource, "read"> {
 
 interface Call {
   readonly parts: readonly CorePart[]
+  readonly origins: readonly (ReadIntent | undefined)[]
   readonly resolve: (items: CoreReadItem[]) => void
   readonly reject: (error: unknown) => void
 }
@@ -70,6 +71,7 @@ export function createBatcher(
     /** Passed to every `source.read`: the session's sleep. */
     sleep: ReadOptions["sleep"]
     onRightsSent?: ReadOptions["onRightsSent"]
+    onRead?: ReadOptions["onRead"]
     onVersion?: (version: VersionValue) => void
     onRights?: (item: CoreReadItem) => void
   }
@@ -97,7 +99,14 @@ export function createBatcher(
         items = (
           await source.read(
             sent.map(({ part }) => part),
-            { sleep: options.sleep, onRightsSent: options.onRightsSent }
+            {
+              sleep: options.sleep,
+              onRightsSent: options.onRightsSent,
+              onRead: options.onRead,
+              // Походження за слотом відправлених частин: злиття викликів і
+              // відмова без запиту зсувають слоти, походження йде з ними.
+              origins: sent.map(({ at, slot }) => calls[at]!.origins[slot]),
+            }
           )
         ).items
       }
@@ -161,11 +170,12 @@ export function createBatcher(
       for (const call of waiting) call.reject(new ReadLimiterClosed())
       source.close()
     },
-    read(parts) {
+    read(parts, origins = []) {
       if (closed) return Promise.reject(new ReadLimiterClosed())
       return new Promise((resolve, reject) => {
         queue.push({
           parts,
+          origins,
           resolve: (items) => resolve({ items }),
           reject,
         })
