@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { ReadQuery } from "simetra/model"
+import { DISCARDS_MAX } from "../session"
 import type { SiteCode } from "../sync/vocabulary"
 import type { FakePart } from "../testing/fake-source"
 import {
@@ -230,6 +231,10 @@ describe("O4: the idle window of a hidden tab", () => {
     // Запит без відповіді: вікно не відкрито, подія кроку не оцінюється.
     expect(collector.idleStep({ quiet: true, idle: true })).toBeUndefined()
     expect(collector.idleStep({ quiet: true, idle: true })).toBeUndefined()
+    // Вікно лишилось закритим: нове читання кроку не оцінюється.
+    watch(h.core.view({ kind: "full", object: ORG }))
+    await settle()
+    expect(collector.idleStep({ quiet: true, idle: true })).toBeUndefined()
     h.fake.deliverAll()
     await settle()
     // Вкладка видима: `idle` каже тест.
@@ -272,13 +277,13 @@ describe("O4: the idle window of a hidden tab", () => {
       expect(collector.idleStep({ quiet: true, idle: true })).toMatch(/M8/)
     })
 
-    it("lets one cause excuse one read: a spent cause does not excuse a later one", async () => {
+    it("allows a chain of retries as long as the discard limit and no longer", async () => {
       const { collector } = await open(event("M1", TASK, 0, 0))
-      collector.events.push(
-        event("M8", TASK, 1, 0),
-        event("M8", TASK, 2, rule("M8").delayMs + 1)
-      )
-      // M1 уже дозволив першу M8; друга — пізніше межі від першої M8.
+      const step = rule("M8").delayMs
+      for (let n = 1; n <= DISCARDS_MAX; n++)
+        collector.events.push(event("M8", TASK, n, n * step))
+      expect(collector.idleStep({ quiet: true, idle: true })).toBeUndefined()
+      collector.events.push(event("M8", TASK, 99, (DISCARDS_MAX + 1) * step))
       expect(collector.idleStep({ quiet: true, idle: true })).toMatch(/M8/)
     })
 

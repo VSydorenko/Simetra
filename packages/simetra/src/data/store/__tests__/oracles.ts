@@ -139,7 +139,8 @@ export function readJournalViolations(
 /**
  * Виняток О4 (рядок 1 §5.14, колонка «Було», і рядки 13, 14): запит з цим
  * кодом у вікні спокою дозволено лише після події-причини тієї ж цілі й не
- * пізніше за затримку шляху від неї; одна причина дозволяє один запит.
+ * пізніше за затримку шляху від неї; ланцюг винятків — не довший за
+ * `DISCARDS_MAX`.
  * `after` — коди причин; `"object"` — будь-яка подія того ж об'єкта.
  * Шлях, чий пуск — дія (`endHydration`: R5, R14), у вікно не потрапляє: дія
  * закриває вікно, тож виняток для нього не потрібен.
@@ -264,26 +265,30 @@ export function collectReads(
   let open = false
   let mark = 0
   let windowSteps = 0
-  // Причини, що вже дозволили один виняток («не частіше за події»).
-  const spent = new Set<number>()
+  // Глибина ланцюга винятків: подія-причина поза винятками — 0, кожен
+  // виняток на одну глибшого за свою причину. Ланцюг довший за межу
+  // відкинутих проходів не з'являється («не частіше за події»).
+  const depth = new Map<number, number>()
   const unsubscribes = [unsubscribe]
   const excused = (event: StampedEvent): boolean => {
     const rule = IDLE_EXCEPTIONS.find((r) => r.site === event.site)
     if (rule === undefined) return false
     const index = events.indexOf(event)
+    let best = Number.POSITIVE_INFINITY
     for (let i = 0; i < index; i++) {
       const cause = events[i]!
-      if (spent.has(i) || event.at - cause.at > rule.delayMs) continue
+      if (event.at - cause.at > rule.delayMs) continue
       if (!sameTarget(cause.target, event.target)) continue
       if (
         rule.after !== "object" &&
         !rule.after.includes(cause.site as SiteCode)
       )
         continue
-      spent.add(i)
-      return true
+      best = Math.min(best, (depth.get(i) ?? 0) + 1)
     }
-    return false
+    if (best > DISCARDS_MAX) return false
+    depth.set(index, best)
+    return true
   }
   const collector: ReadCollector = {
     events,
