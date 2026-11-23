@@ -162,13 +162,15 @@ async function switched() {
 async function expectReadByDue(h: CoreHarness, target: SyncTarget) {
   const due = stateOf(h, target)?.due
   expect(due, "sync() shows a due").toEqual(expect.any(Number))
-  const events: ReadEvent[] = []
-  const off = h.inspect.watchReads((event) => events.push(event))
+  const events: { event: ReadEvent; at: number }[] = []
+  const off = h.inspect.watchReads((event) =>
+    events.push({ event, at: Date.now() })
+  )
   const from = h.fake.log.length
   await vi.advanceTimersByTimeAsync(Math.max(0, due! - Date.now()))
   await settle()
   off()
-  const hits = events.filter((e) =>
+  const hits = events.filter(({ event: e }) =>
     target.kind === "service"
       ? e.target.kind === "service" && e.target.service === target.service
       : e.target.kind !== "service" && e.target.object === target.object
@@ -185,6 +187,7 @@ async function expectReadByDue(h: CoreHarness, target: SyncTarget) {
         ),
       "a request of the row's key by its due"
     ).toBe(true)
+  return { due: due!, firstReadAt: hits[0]!.at }
 }
 
 describe("sync(): a requirement of each kind main holds, with its promise or condition", () => {
@@ -490,7 +493,9 @@ describe("sync(): every due it shows is read by then", () => {
     expect(stateOf(h, rowTarget(2))!.requirements).toEqual([
       { kind: "version-epoch-switched" },
     ])
-    await expectReadByDue(h, rowTarget(2))
+    // Строк — саме той таймер, що читає рядок першим, а не пізніший такт.
+    const { due, firstReadAt } = await expectReadByDue(h, rowTarget(2))
+    expect(firstReadAt).toBe(due)
   })
 
   it("the interval of the rights snapshot", async () => {
