@@ -34,6 +34,14 @@ export interface Epochs {
   /** The horizon of the id's bucket is greater than `readEpoch`. */
   evictedSince(id: string, readEpoch: number): boolean
   /**
+   * `buriedSince` or `evictedSince`: the one question "was the id buried
+   * since the read started", where an evicted tombstone counts as the burial
+   * it may have been (§6.2 rule 1). The paths that only skip a stale answer
+   * ask this; the stores that treat a horizon differently (hide the value, do
+   * not drop the row) ask the two predicates separately.
+   */
+  buriedOrEvictedSince(id: string, readEpoch: number): boolean
+  /**
    * Records that the key was hidden (`Writer.hide`) at a
    * fresh epoch and returns it. The mark outlives the store entry: a read
    * older than it must not show the row after the entry went away.
@@ -356,6 +364,10 @@ export function createEpochs(
       }
     },
     evictedSince: (id, readEpoch) => (horizon[bucket(id)] ?? 0) > readEpoch,
+    buriedOrEvictedSince: (id, readEpoch) =>
+      (tombstones.get(id) ?? -1) > readEpoch ||
+      barred(id, readEpoch) ||
+      (horizon[bucket(id)] ?? 0) > readEpoch,
     hide(id) {
       const at = ++epoch
       hiddenMarks.delete(id)

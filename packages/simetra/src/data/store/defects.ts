@@ -108,6 +108,8 @@ export type DefectFlag =
   | "receiver-purge-keeps-batch"
   /** The receiver keeps reading by signals after the discard limit. */
   | "receiver-reads-unavailable"
+  /** The receiver judges a read "buried since" by tombstones only, not by the eviction horizon. */
+  | "receiver-ignores-horizon"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

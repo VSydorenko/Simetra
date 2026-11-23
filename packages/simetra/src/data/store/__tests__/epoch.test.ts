@@ -33,6 +33,44 @@ describe("createEpochs", () => {
     expect(e.evictedSince("o\u0000k1", e.now())).toBe(false)
   })
 
+  it("buriedOrEvictedSince is true for a buried id and for one whose tombstone was evicted", () => {
+    const e = createEpochs({ ...limits, tombstonesMax: 2 })
+    const early = e.now()
+    e.bury("o\u0000k1")
+    // Поки надгробок живий, відповідає він.
+    expect(e.buriedOrEvictedSince("o\u0000k1", early)).toBe(true)
+    e.bury("o\u0000k2")
+    e.bury("o\u0000k3") // витісняє k1: надгробка немає, горизонт піднято
+    expect(e.buriedSince("o\u0000k1", early)).toBe(false)
+    expect(e.evictedSince("o\u0000k1", early)).toBe(true)
+    expect(e.buriedOrEvictedSince("o\u0000k1", early)).toBe(true)
+    expect(e.buriedOrEvictedSince("o\u0000k3", early)).toBe(true)
+    // Читання, що стартувало після поховання й горизонту, його не бачить.
+    expect(e.buriedOrEvictedSince("o\u0000k1", e.now())).toBe(false)
+    expect(e.buriedOrEvictedSince("o\u0000k3", e.now())).toBe(false)
+  })
+
+  it("buriedOrEvictedSince is false for an unrelated id", () => {
+    const e = createEpochs({ ...limits, tombstonesMax: 2 })
+    const early = e.now()
+    e.bury("o\u0000k1")
+    e.bury("o\u0000k2")
+    e.bury("o\u0000k3")
+    expect(e.buriedOrEvictedSince("o\u0000never", early)).toBe(false)
+  })
+
+  it("buriedOrEvictedSince equals buriedSince || evictedSince", () => {
+    const e = createEpochs({ ...limits, tombstonesMax: 2 })
+    const early = e.now()
+    for (let i = 0; i < 5; i++) e.bury(`o\u0000k${i}`)
+    const mid = e.now()
+    for (const read of [early, mid, e.now()])
+      for (const id of ["o\u0000k0", "o\u0000k4", "o\u0000zz"])
+        expect(e.buriedOrEvictedSince(id, read)).toBe(
+          e.buriedSince(id, read) || e.evictedSince(id, read)
+        )
+  })
+
   it("continuous eviction leaves an untouched bucket's horizon alone", () => {
     const e = createEpochs({ ...limits, seenMax: 10 })
     const early = e.now()

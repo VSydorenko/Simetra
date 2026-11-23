@@ -916,47 +916,110 @@ describe("purge of a pair", () => {
   // Відповідь, що стартувала до purge, лягає, коли вигляд уже знову тримає
   // ключ з новішого читання: правило «0 записів і 0 запитів після purge»
   // стосується й кроку 4 (мінімальна версія), не лише запису рядка.
+  // Спільний хід: відповідь на сигнал з версією, якої сервер не має, стартує
+  // до `disturb` і лягає після нього.
+  const lateMinVersionAnswer = async (
+    limits: Partial<CoreLimits> | undefined,
+    disturb: (purge: (t: Parameters<Writer["purge"]>[1]) => void) => void
+  ) => {
+    const h = await twoScopes(limits)
+    const served = h.fake.edit(TASK, key(1), { title: "v" })
+    h.fake.mode = "manual"
+    emit(h, change("update", key(1), served + 1), channelOf(S))
+    await closeBatch()
+    const old = h.fake.take(
+      (r) => keysOf(r.query).length > 0 && keysOf(r.query)[0] === key(1)
+    )
+    disturb((t) => h.core.commit((w) => w.purge(TASK, t), h.core.token()))
+    h.handle.refresh()
+    await settle()
+    h.fake.deliverAll()
+    await settle()
+    expect(h.handle.getSnapshot().rows.map((r) => r.key)).toContain(key(1))
+    const sent = h.fake.requests.length
+    old.answer()
+    await settle()
+    // Читання, поставлене відповіддю в чергу, чекає ручного режиму.
+    h.fake.mode = "auto"
+    h.fake.deliverAll()
+    await settle()
+    // Лише дрібний зсув: тік планувальника (60 с) не повинен виручати.
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    return { h, served, sent }
+  }
+  const markOf = (h: Harness) =>
+    coreInternals(h.core).objects.get(TASK)!.rows.get(key(1))?.stale.minVersion
+
   it.each([
-    { what: "pair", evicted: false, target: { scope: S } },
-    { what: "key", evicted: false, target: { keys: [key(1)] } },
+    { what: "pair", target: { scope: S } },
+    { what: "key", target: { keys: [key(1)] } },
     // Надгробок ключа витіснено, новіший надгробок пари (другий purge) — ні.
     {
       what: "pair with the key tombstone evicted",
-      evicted: true,
       target: { scope: S },
+      limits: { tombstonesMax: 2 },
+      after: [{ scope: S }, { keys: [key(5)] }],
     },
   ] as const)(
-    "a min-version answer that started before a purge of the $what sets no mark and sends no re-read",
-    async ({ evicted, target }) => {
-      const h = await twoScopes(evicted ? { tombstonesMax: 2 } : undefined)
-      const served = h.fake.edit(TASK, key(1), { title: "v" })
-      h.fake.mode = "manual"
-      emit(h, change("update", key(1), served + 1), channelOf(S))
-      await closeBatch()
-      const old = h.fake.take(
-        (r) => keysOf(r.query).length > 0 && keysOf(r.query)[0] === key(1)
+    "a min-version answer that started before a purge of the $what (a tombstone is alive) sets no mark and sends no re-read",
+    async (c) => {
+      const { h, sent } = await lateMinVersionAnswer(
+        "limits" in c ? c.limits : undefined,
+        (purge) => {
+          purge(c.target)
+          for (const t of "after" in c ? (c.after ?? []) : []) purge(t)
+        }
       )
-      const purge = (t: Parameters<Writer["purge"]>[1]) =>
-        h.core.commit((w) => w.purge(TASK, t), h.core.token())
-      purge(target)
-      if (evicted) {
+      expect(h.fake.requests.length).toBe(sent)
+      expect(markOf(h)).toBeUndefined()
+      expect(
+        h.handle.getSnapshot().rows.find((r) => r.key === key(1))?.state
+      ).not.toBe("stale")
+    }
+  )
+
+  // Лишився тільки горизонт кошиків: надгробка немає, тож «purge» це чи хибний
+  // збіг кошика — невідомо. Реакція сховища (§6.2, правило 1): сховати значення
+  // й перечитати ключ без мінімальної версії; позначка, яку purge зробив би
+  // нездійсненною, лишилась би без строку (#374).
+  it.each([
+    {
+      what: "both tombstones of the key and the pair evicted",
+      limits: { tombstonesMax: 2 },
+      disturb: (purge: (t: Parameters<Writer["purge"]>[1]) => void) => {
         purge({ scope: S })
         purge({ keys: [key(5)] })
-      }
-      h.handle.refresh()
-      await settle()
-      h.fake.deliverAll()
-      await settle()
-      expect(h.handle.getSnapshot().rows.map((r) => r.key)).toContain(key(1))
-      const sent = h.fake.requests.length
-      old.answer()
-      await settle()
-      h.fake.mode = "auto"
-      await vi.advanceTimersByTimeAsync(10_000)
-      await settle()
-      expect(h.fake.requests.length).toBe(sent)
+        purge({ keys: [key(6)] })
+        purge({ keys: [key(7)] })
+      },
+    },
+    // Один кошик: витіснення чужого надгробка піднімає горизонт і ключа 1,
+    // хоча його власного надгробка й надгробка його пари ніколи не було.
+    {
+      what: "a foreign tombstone evicted from the shared bucket (no tombstone of the key or pair)",
+      limits: { tombstonesMax: 1, horizonBuckets: 1 },
+      disturb: (purge: (t: Parameters<Writer["purge"]>[1]) => void) => {
+        purge({ keys: [key(5)] })
+        purge({ keys: [key(6)] })
+      },
+    },
+  ])(
+    "a min-version answer that started before a horizon-only purge ($what) re-reads the key without a mark and shows the server version before a tick",
+    async (c) => {
+      const { h, served, sent } = await lateMinVersionAnswer(
+        c.limits,
+        c.disturb
+      )
+      expect(markOf(h)).toBeUndefined()
+      const reads = keyReadsSince(h, sent)
+      // Одне читання ключа: дочитування «хвоста», не повтор сигналу.
+      expect(reads.map((r) => keysOf(r.query))).toEqual([[key(1)]])
+      expect(requestsSince(h, sent)).toHaveLength(1)
       const row = h.handle.getSnapshot().rows.find((r) => r.key === key(1))
       expect(row?.state).not.toBe("stale")
+      expect(row).toMatchObject({ version: served, values: { title: "v" } })
+      expect(h.fake.row(TASK, key(1))?.version).toBe(served)
     }
   )
 })
