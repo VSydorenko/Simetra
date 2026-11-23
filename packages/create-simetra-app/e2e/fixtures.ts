@@ -84,8 +84,13 @@ export interface App {
   functionId: (name: "dataFn") => string
   /** Усі Server Function маніфесту збірки: ім'я експорту → id. */
   serverFunctions: Record<string, string>
-  /** Centrifugo прогону: WebSocket-адреса й `kid` ключа підпису цього прогону. */
-  signals: { url: string; kid: string }
+  /**
+   * Centrifugo прогону: WebSocket-адреса й `kid` ключа підпису. Є лише в
+   * воркері з опцією `signals` (`signals.spec`); решта специфікацій ганяє
+   * застосунок без сигналів, тож їхній бюджет запитів не знає хвилі
+   * приєднання (Рд37).
+   */
+  signals?: { url: string; kid: string }
   /** Оточення основного сервера: запуск ще одного з однією зміненою змінною. */
   serverEnv: Record<string, string>
   users: { a: TestUser; b: TestUser }
@@ -174,6 +179,7 @@ function functionIds(): Record<string, string> {
 
 async function bringUp(
   buildKind: string,
+  withSignals: boolean,
   cleanups: Array<() => Promise<void>>
 ): Promise<App> {
   const database = testDatabaseName("e2e")
@@ -293,24 +299,29 @@ async function bringUp(
     "seed"
   )
 
-  // Власний Centrifugo прогону (Р1): мітки прогону дають сторожу стека лише
-  // ЗВІТУВАТИ про контейнер, що пережив SIGKILL (чужого він не видаляє); на
-  // збої й у teardown контейнер знімає сама фікстура
-  const signals = await startSignals({
-    name: `simetra-e2e-signals-${runTag()}`,
-    labels: runContainerLabels(runTag(), testProvider()),
-    origin,
-    hostPort: port,
-    databaseUrl: signalsDsn(testSuperuserUrl(), database, {
-      SIMETRA_SIGNALS_DEV_PASSWORD: devSecret(
-        "SIMETRA_SIGNALS_DEV_PASSWORD",
-        LOGIN_SECRETS_FILE
-      ),
-    }),
-  })
-  cleanups.push(() => signals.down())
-  // Новий ключ і `kid` на прогін (Р3): жодного ключа в git
-  const keys = await generateSigningKeys()
+  // Власний Centrifugo прогону (Р1) — лише для воркера з сигналами: мітки
+  // прогону дають сторожу стека лише ЗВІТУВАТИ про контейнер, що пережив
+  // SIGKILL (чужого він не видаляє); на збої й у teardown контейнер знімає
+  // сама фікстура
+  let signals: { wsUrl: string; kid: string; keysJson: string } | undefined
+  if (withSignals) {
+    const stand = await startSignals({
+      name: `simetra-e2e-signals-${runTag()}`,
+      labels: runContainerLabels(runTag(), testProvider()),
+      origin,
+      hostPort: port,
+      databaseUrl: signalsDsn(testSuperuserUrl(), database, {
+        SIMETRA_SIGNALS_DEV_PASSWORD: devSecret(
+          "SIMETRA_SIGNALS_DEV_PASSWORD",
+          LOGIN_SECRETS_FILE
+        ),
+      }),
+    })
+    cleanups.push(() => stand.down())
+    // Новий ключ і `kid` на прогін (Р3): жодного ключа в git
+    const keys = await generateSigningKeys()
+    signals = { wsUrl: stand.wsUrl, kid: keys.kid, keysJson: keys.json }
+  }
 
   await build(buildKind)
   const ids = functionIds()
@@ -320,7 +331,9 @@ async function bringUp(
     port,
     host: "127.0.0.1",
     secret,
-    signals: { url: signals.wsUrl, keys: keys.json },
+    ...(signals === undefined
+      ? {}
+      : { signals: { url: signals.wsUrl, keys: signals.keysJson } }),
   })
   const server = startServer(serverEnv)
   cleanups.push(() => stopServer(server))
@@ -356,7 +369,9 @@ async function bringUp(
       return id
     },
     serverFunctions: ids,
-    signals: { url: signals.wsUrl, kid: keys.kid },
+    ...(signals === undefined
+      ? {}
+      : { signals: { url: signals.wsUrl, kid: signals.kid } }),
     serverEnv,
     users: users as App["users"],
     runtimeB,
@@ -424,9 +439,12 @@ function recordFailure(error: unknown): void {
   writeFileSync(failureFile(), setupFailure)
 }
 
-export const test = base.extend<object, { app: App }>({
+export const test = base.extend<object, { app: App; signals: boolean }>({
+  // Опція воркера: `test.use({ signals: true })` у файлі дає окремий воркер
+  // (і окрему базу, сервер, Centrifugo) лише для цієї специфікації
+  signals: [false, { scope: "worker", option: true }],
   app: [
-    async ({}, use, workerInfo) => {
+    async ({ signals }, use, workerInfo) => {
       const earlier = knownFailure()
       if (earlier !== undefined)
         throw new Error(`the e2e setup failed earlier in this run:\n${earlier}`)
@@ -436,7 +454,7 @@ export const test = base.extend<object, { app: App }>({
         const kind = String(workerInfo.project.metadata.build)
         let app: App
         try {
-          app = await bringUp(kind, cleanups)
+          app = await bringUp(kind, signals, cleanups)
         } catch (error) {
           recordFailure(error)
           throw error
@@ -454,3 +472,10 @@ export const test = base.extend<object, { app: App }>({
 })
 
 export { expect } from "@playwright/test"
+
+/** Дані Centrifugo прогону: кидає, якщо специфікація забула `test.use({ signals: true })`. */
+export function signalsOf(app: App): { url: string; kid: string } {
+  if (app.signals === undefined)
+    throw new Error("the app runs without signals: test.use({ signals: true })")
+  return app.signals
+}

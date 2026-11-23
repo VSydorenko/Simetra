@@ -1,6 +1,6 @@
 // Власний Centrifugo для `pnpm demo` і e2e шаблону: один хелпер на обох (Р1 плану
-// D5). Спільний стек його не дає: Centrifugo падає на старті, коли бази з DSN
-// споживача немає, а база demo існує не завжди. Тестового коду тут немає — демо
+// D5). Стеки Centrifugo не мають: його споживач дивиться на базу застосунку, а база
+// demo існує не завжди. Тестового коду тут немає — демо
 // його не імпортує; мітки контейнера, адреси й паролі дає той, хто кличе.
 import { execFile } from "node:child_process"
 import { randomBytes } from "node:crypto"
@@ -16,17 +16,17 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { PLATFORM_LOGIN_ROLES } from "simetra/model"
 import { SIGNALS_JWKS_PATH } from "simetra/server/signals"
-// Ім'я споживача й змінні його DSN — з генератора конфігу: стеки ставлять DSN
-// тими самими змінними, тож друге місце імен розійшлося б
+// Ім'я споживача й змінні його DSN — з генератора конфігу: стенд ставить DSN
+// тими самими змінними, що читає конфіг, тож друге місце імен розійшлося б
 import {
   SIGNAL_CONSUMER_ENV,
   centrifugoConfig,
 } from "../../../designer/src/tools/signals-config"
 import { TEMPLATE, withDatabase } from "./app-database.mts"
 
-const COMPOSE_FILE = resolve(
+const IMAGE_FILE = resolve(
   import.meta.dirname,
-  "../../../../docker/postgres-stack/compose.yaml"
+  "../../../../docker/centrifugo-image.txt"
 )
 const HEALTH_TIMEOUT_MS = 30_000
 const DOCKER_MS = 120_000
@@ -41,17 +41,11 @@ export function templateProjectName(): string {
 }
 
 /**
- * Образ Centrifugo зі стека (тег і дайджест): демо й e2e беруть ту саму
- * версію, що йде на стеку, тож другого місця піну немає.
+ * Образ Centrifugo (тег і дайджест): єдине місце піну — `docker/centrifugo-image.txt`,
+ * його читає й стенд DB-тестів (`signal-stand.ts`), тож версії розійтися не можуть.
  */
-export function centrifugoImage(compose: string = COMPOSE_FILE): string {
-  const text = readFileSync(compose, "utf8")
-  const at = text.indexOf("\n  centrifugo:")
-  const image =
-    at < 0 ? undefined : /\n\s+image:\s*(\S+)/.exec(text.slice(at))?.[1]
-  if (image === undefined)
-    throw new Error(`${compose}: no image of the centrifugo service`)
-  return image
+export function centrifugoImage(file: string = IMAGE_FILE): string {
+  return readFileSync(file, "utf8").trim()
 }
 
 /**
@@ -220,7 +214,7 @@ function freePort(): Promise<number> {
 /**
  * Знімає контейнери з міткою `label` (`ключ=значення`): залишок попереднього
  * запуску, що не встиг прибратися. Мітка власна для кожного володаря, тож чужого
- * контейнера, зокрема Centrifugo стека, це не торкається.
+ * контейнера, інших контейнерів це не торкається.
  */
 export async function removeSignalsContainers(label: string): Promise<void> {
   const ids = (await docker(["ps", "-aq", "--filter", `label=${label}`]))

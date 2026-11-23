@@ -47,9 +47,6 @@ export function stackUrl(
   database?: string
 ): string
 
-/** DSN of the outbox consumer of a stack's Centrifugo, passed in the compose environment. */
-export function signalsDsn(name: "postgres" | "supabase-signals"): string
-
 /** Input of `roles supabase`: `supabase/roles.sql`, then the dev password of `simetra_signals` by `\set`. */
 export function rolesSupabaseInput(): string
 
@@ -91,6 +88,13 @@ export function startPostgres(options?: {
   signals?: SignalSource
   noBuild?: boolean
   cleanupTimeoutMs?: number
+}): Promise<void>
+
+/** Stops the postgres stack (`down --remove-orphans`, with `--volumes` when asked); the caller holds the stack lock. */
+export function stopPostgres(options?: {
+  spawnFn?: SpawnFn
+  signals?: SignalSource
+  volumes?: boolean
 }): Promise<void>
 
 /** Codes of the refusals of `start postgres` on a running stack (`error.code`). */

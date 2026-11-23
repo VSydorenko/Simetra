@@ -46,6 +46,15 @@ const SERVER_MARKERS = [
   "BETTER_AUTH_SECRET",
 ]
 
+/**
+ * Рядки модуля `centrifuge`, що переживають мініфікацію (літерали SDK). Сервер
+ * сигналів не збирає (І8 D5): модуль живе лише в клієнтському графі.
+ */
+const CENTRIFUGE_MARKERS = [
+  "centrifuge.debug",
+  "__centrifuge_debug:connect_frame_sent",
+]
+
 async function leaks(dir: string) {
   return {
     publicSentinels: await findNeedles(
@@ -53,6 +62,10 @@ async function leaks(dir: string) {
       Object.values(SENTINELS)
     ),
     markers: await findNeedles(join(dir, ".output"), MARKERS),
+    centrifugeInServer: await findNeedles(
+      join(dir, ".output/server"),
+      CENTRIFUGE_MARKERS
+    ),
     serverInClient: await findNeedles(
       join(dir, ".output/public"),
       SERVER_MARKERS
@@ -67,8 +80,38 @@ describe("production build content", () => {
     expect(await leaks(dir)).toEqual({
       publicSentinels: {},
       markers: {},
+      centrifugeInServer: {},
       serverInClient: {},
     })
+    // Позитивний контроль маркера: у клієнтських асетах `centrifuge` є, тож
+    // порожній серверний результат означає відсутність модуля, а не сліпий маркер
+    const client = await findNeedles(
+      join(dir, ".output/public"),
+      CENTRIFUGE_MARKERS
+    )
+    expect([...new Set(Object.values(client).flat())].sort()).toEqual(
+      [...CENTRIFUGE_MARKERS].sort()
+    )
+  })
+
+  it("the centrifuge check finds the module in the server output (negative control)", async () => {
+    const dir = await copyTemplate("centrifuge-in-server")
+    // Серверний модуль, що тягне `centrifuge`, у вході сервера
+    await writeFile(
+      join(dir, "src/server/leak-centrifuge.ts"),
+      `import { Centrifuge } from "centrifuge"
+console.log(typeof Centrifuge)
+`
+    )
+    await appendFile(
+      join(dir, "src/server.ts"),
+      `import "./server/leak-centrifuge"\n`
+    )
+    await viteBuild(dir, SENTINELS)
+    const found = await leaks(dir)
+    expect(
+      [...new Set(Object.values(found.centrifugeInServer).flat())].sort()
+    ).toEqual([...CENTRIFUGE_MARKERS].sort())
   })
 
   it("the server-in-client check finds a server import in the client graph (negative control)", async () => {

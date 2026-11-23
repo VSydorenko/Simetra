@@ -66,6 +66,9 @@ export async function signOut(scope: HostScope): Promise<ActionResult> {
     return { ok: false, code: "command.internal" }
   }
   if (!response.ok) return { ok: false, code: "command.internal" }
+  const subject = scope.holder.current()?.subject
   scope.holder.replace(undefined, "signed-out")
+  // Решта вкладок цього браузера ділить cookie: їхня сесія теж мертва (Р11)
+  if (subject !== undefined) scope.tabs.publishSignedOut(subject)
   return { ok: true }
 }

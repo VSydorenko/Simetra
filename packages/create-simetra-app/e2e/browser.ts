@@ -1,7 +1,12 @@
 // Помічники браузерних сценаріїв D3: кінцева умова — стан DOM і тіла
 // відповідей `dataFn` з мережевого журналу Playwright, а не лічильники host-а
 // (журнал з `#instrument` — #210).
-import type { Browser, BrowserContext, Page } from "@playwright/test"
+import {
+  expect,
+  type Browser,
+  type BrowserContext,
+  type Page,
+} from "@playwright/test"
 import { catalogIndex, clientCatalogSchema, type OrderBy } from "simetra/model"
 import { listQuery } from "simetra/ui"
 import clientCatalogJson from "../template/generated/client-catalog.json" with { type: "json" }
@@ -119,6 +124,21 @@ export function watchDataFn(page: Page, app: App) {
       await Promise.all(pending)
     },
   }
+}
+
+/** Після гідратації: усі запити `dataFn` зроблено, далі тиша. */
+export async function settle(
+  page: Page,
+  log: ReturnType<typeof watchDataFn>,
+  expected: number
+): Promise<void> {
+  await expect
+    .poll(async () => (await log.flush(), log.calls.length))
+    .toBe(expected)
+  // Тиша: жодного запиту понад очікуване й після паузи
+  await page.waitForTimeout(1_500)
+  await log.flush()
+  expect(log.calls).toHaveLength(expected)
 }
 
 /**

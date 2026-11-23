@@ -37,11 +37,18 @@ export function createHostRuntime(options: {
   })
 }
 
-/** Рантайм клієнта суб'єкта: транспорт `dataFn`, початкова видимість з `document`. */
+/**
+ * Рантайм клієнта суб'єкта: транспорт `dataFn`, початкова видимість з
+ * `document`, сигнали лише коли сервер віддав адресу Centrifugo (Р10).
+ */
 export function createClientRuntime(
   scope: HostScope,
   subject: string
 ): DataRuntime {
+  const signals =
+    scope.signalsUrl === undefined
+      ? undefined
+      : scope.createSignals?.(scope.signalsUrl)
   const runtime: DataRuntime = createHostRuntime({
     subject,
     transport: clientTransport(scope.holder, scope.toLogin),
@@ -54,6 +61,7 @@ export function createClientRuntime(
       scope.toLogin()
     },
     onStaleClient: () => scope.stale.mark(),
+    ...(signals === undefined ? {} : { signals }),
   })
   return runtime
 }

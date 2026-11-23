@@ -13,8 +13,12 @@ vi.mock("../src/routes/api/auth/$", async () => {
 
 import { app } from "../src/app"
 import { getRouter } from "../src/router"
+import { generateKey } from "./signal-keys"
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
+})
 
 describe("getRouter", () => {
   it("is a new router with its own holder on every call", () => {
@@ -39,6 +43,50 @@ describe("getRouter", () => {
 
   it("dehydrates nothing for a request without a runtime", async () => {
     expect(await getRouter().options.dehydrate?.()).toEqual({ data: null })
+  })
+
+  it("dehydrates the signals url when the server has signals, and never the keys", async () => {
+    const key = await generateKey("k1")
+    vi.stubEnv(
+      "SIMETRA_SIGNALS_URL",
+      "ws://centrifugo.test/connection/websocket"
+    )
+    vi.stubEnv("SIMETRA_SIGNALS_KEYS", JSON.stringify([key]))
+    // Свіжий модуль: кеш адреси живе в ньому й не тече в інші тести файла
+    vi.resetModules()
+    const { getRouter } = await import("../src/router")
+    const dehydrated = await getRouter().options.dehydrate?.()
+    expect(dehydrated).toEqual({
+      data: null,
+      signalsUrl: "ws://centrifugo.test/connection/websocket",
+    })
+    expect(JSON.stringify(dehydrated)).not.toContain(key.privateJwk.d)
+    // Адреса береться один раз на процес: конфіг вдруге не читається
+    vi.stubEnv("SIMETRA_SIGNALS_URL", "")
+    vi.stubEnv("SIMETRA_SIGNALS_KEYS", "")
+    expect(await getRouter().options.dehydrate?.()).toEqual({
+      data: null,
+      signalsUrl: "ws://centrifugo.test/connection/websocket",
+    })
+  })
+
+  it("keeps the signals url from the snapshot on the scope, with or without data", async () => {
+    const withData = getRouter()
+    await withData.options.hydrate?.({
+      data: null,
+      signalsUrl: "ws://centrifugo.test/connection/websocket",
+    })
+    expect(withData.options.context.host.signalsUrl).toBe(
+      "ws://centrifugo.test/connection/websocket"
+    )
+    // Снімок без адреси (сервер без сигналів) лишає клієнта без сигналів
+    const without = getRouter()
+    await without.options.hydrate?.({ data: null })
+    expect(without.options.context.host.signalsUrl).toBeUndefined()
+    // Не рядок — не адреса
+    const bad = getRouter()
+    await bad.options.hydrate?.({ data: null, signalsUrl: 7 } as never)
+    expect(bad.options.context.host.signalsUrl).toBeUndefined()
   })
 
   it("hydrates the snapshot of the server runtime before the first render", async () => {
