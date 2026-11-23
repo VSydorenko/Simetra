@@ -219,7 +219,7 @@ doc anchors && doc lint                   # dead paths, § pointers, corpus form
 pnpm metadata:check                       # simetra compile --all via packages/designer/bin; pre-commit runs it with --staged
 pnpm build:packages && pnpm test:packaging # build the npm packages, then test the packed tarballs in a scratch consumer project
 
-pnpm db:pg:start                          # local postgres-profile stack: Postgres 17, Centrifugo, Garage (needs Docker)
+pnpm db:pg:start                          # local postgres-profile stack: Postgres 17, Garage (needs Docker; Centrifugo is started by the stands of demo, e2e and DB tests, image pin in docker/centrifugo-image.txt)
 pnpm test:db:pg                           # the default DB suite: base-state pgTAP and DB tests of simetra and @simetrajs/designer on the postgres stack
 pnpm demo                                 # the app template on the postgres stack at http://localhost:3000; prints two logins; pnpm demo:drop removes its database
 pnpm db:pg:stop
@@ -228,9 +228,6 @@ pnpm db:start                             # local Supabase stack (needs Docker) 
 pnpm test:db                              # provider base-state pgTAP + *.supabase.db.test.ts against the Supabase stack
 pnpm db:roles                             # apply supabase/roles.sql to the running Supabase stack (additive, idempotent)
 pnpm db:stop
-
-pnpm db:signals:start                     # Centrifugo beside the Supabase stack (needs Docker)
-pnpm db:signals:stop
 ```
 
 - 🔴 **No `--` before a vitest pattern** with `pnpm --filter`: the pattern is
