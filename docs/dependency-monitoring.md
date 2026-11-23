@@ -130,14 +130,18 @@ Production-джерела їх не імпортують (лінт-зони `pac
 звірити `getMigrations`, порядок колонок `user` з `PROVIDER_EVENT_SOURCES.postgres`
 і поведінку `search_path`.
 
-## `centrifuge` — тестовий клієнт Centrifugo
+## `centrifuge` — клієнт Centrifugo
 
-Лише `devDependencies` пакета `simetra`, точний пін (`centrifuge` 5.8.0,
-ліцензія MIT — `LICENSE` репозиторію `centrifugal/centrifuge-js`). Потрібен
-гейту доставки сигналу на стенді (`packages/simetra/test/db/signal-stand.ts`,
+Точний пін (`centrifuge` 5.8.0, ліцензія MIT — `LICENSE` репозиторію
+`centrifugal/centrifuge-js`) у двох місцях: `devDependencies` пакета `simetra`
+і `dependencies` шаблону `packages/create-simetra-app/template/package.json`.
+Збіг тримає група версій syncpack «centrifuge — точний пін шаблону збігається
+з dev-піном simetra» (`.syncpackrc.json`): оновлюють обидва піни разом, а також
+`docker/centrifugo-image.txt`; після оновлення — гейт БД і e2e `signals.spec`.
+Dev-клієнт потрібен гейту доставки сигналу на стенді (`packages/simetra/test/db/signal-stand.ts`,
 `packages/designer/src/__tests__/signal-delivery.support.ts`): клієнт
 WebSocket Node з токенами порту `simetra/server/signals`. Production-джерела
-його не імпортують. Скрипт збирання `protobufjs` вимкнено (`allowBuilds` у
+його не імпортують (клієнт шаблону — окремий споживач). Скрипт збирання `protobufjs` вимкнено (`allowBuilds` у
 `pnpm-workspace.yaml`): гейт іде транспортом JSON. Коди відмов, які гейт
 закріплює (3500, 3501, 109, 2501), і відновлення (`recovered`) — поведінка
 пари SDK і піну образу Centrifugo (`docker/centrifugo-image.txt`): на оновленні будь-якого з них — звірити

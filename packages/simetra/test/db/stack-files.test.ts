@@ -44,6 +44,7 @@ import {
   SUPABASE_LOCK_PATH,
   stackFilesHash,
   startPostgres,
+  stopPostgres,
   withStackLock,
 } from "../../../../scripts/db-stack.mjs"
 import { SIGNALS_JWKS_PATH } from "simetra/server/signals"
@@ -1309,6 +1310,23 @@ const start = (stack: ReturnType<typeof fakeStack>, noBuild = false) =>
     noBuild,
   })
 
+describe("stopPostgres", () => {
+  it.each([
+    [false, ["down", "--remove-orphans"]],
+    [true, ["down", "--volumes", "--remove-orphans"]],
+  ])("with volumes=%s runs compose %j", async (volumes, expected) => {
+    const stack = fakeStack()
+    await stopPostgres({
+      spawnFn: stack.spawnFn,
+      signals: new EventEmitter(),
+      volumes,
+    })
+    const [down, ...more] = stack.calls.filter((c) => c.args.includes("down"))
+    expect(more).toEqual([])
+    expect(down!.args.slice(down!.args.indexOf("down"))).toEqual(expected)
+  })
+})
+
 describe("startPostgres", () => {
   const script = readFileSync(
     fileURLToPath(new URL("../../../../scripts/db-stack.mjs", import.meta.url)),
@@ -1401,6 +1419,9 @@ describe("startPostgres", () => {
         code: STACK_REFUSAL.differs,
         message: expect.stringContaining("garage: simetra.stack-files-hash"),
       })
+      await expect(start(stack)).rejects.toThrow(
+        /node scripts\/db-stack\.mjs stop postgres, then pnpm db:pg:start/
+      )
       expect(stack.ups()).toEqual([])
     } finally {
       rmSync(copy, { recursive: true, force: true })

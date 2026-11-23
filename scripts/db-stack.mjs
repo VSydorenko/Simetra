@@ -529,7 +529,7 @@ async function assertSameStack(ctx, containers) {
   if (differences.length > 0)
     throw refusal(
       STACK_REFUSAL.differs,
-      `stack config differs from this branch (${differences.join(", ")}); stopping the stack is the owner's call`
+      `stack config differs from this branch (${differences.join(", ")}); stopping the stack is the owner's call: node scripts/db-stack.mjs stop postgres, then pnpm db:pg:start`
     )
 }
 
@@ -941,6 +941,23 @@ async function stop(ctx, volumes) {
       ? ["down", "--volumes", "--remove-orphans"]
       : ["down", "--remove-orphans"]
   )
+}
+
+/**
+ * Зупиняє стек postgres; параметри — ті самі підставні, що в `startPostgres`.
+ *
+ * @param {{ spawnFn?: typeof spawn, signals?: NodeJS.EventEmitter, volumes?: boolean }} [options]
+ */
+export async function stopPostgres(options = {}) {
+  const { ctx, release } = commandContext(
+    options.spawnFn ?? spawn,
+    options.signals ?? process
+  )
+  try {
+    await stop(ctx, options.volumes === true)
+  } finally {
+    release()
+  }
 }
 
 /**
