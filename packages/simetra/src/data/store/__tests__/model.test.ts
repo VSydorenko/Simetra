@@ -2493,6 +2493,25 @@ async function runModelOn(
           a.keys.slice(grown).join() === b.keys.join())
       )
         return
+      // Сума двох дозволених причин одного кроку: сторінка в польоті лягла, а
+      // `purge` чи прохід знімка прав прибрав ключі (відповідь сторінки
+      // осідає в `settleRights` того самого кроку). Після віднімання ключів,
+      // дозволених причиною кроку, старі ключі лишаються префіксом чи
+      // суфіксом нового складу з приростом не більшим за сторінки в польоті.
+      const allowedGone = (x: Key) =>
+        !a.keys.includes(x) &&
+        (purgeStep || rightsGone.has(id(SPECS[v]!.object, x)))
+      const rest = b.keys.filter((x) => !allowedGone(x))
+      const restGrown = a.keys.length - rest.length
+      if (
+        rest.length < b.keys.length &&
+        b.paging > 0 &&
+        restGrown > 0 &&
+        restGrown <= b.paging * LIMITS.windowPage &&
+        (a.keys.slice(0, rest.length).join() === rest.join() ||
+          a.keys.slice(restGrown).join() === rest.join())
+      )
+        return
       // purge лише прибирає ключі, порядок решти той самий; прохід знімка
       // прав — лише ключі пар, які знімок забороняє.
       const kept = b.keys.filter((x) => a.keys.includes(x))
@@ -4626,6 +4645,22 @@ describe("core model regressions", () => {
       seed: -1610915587,
       path: "7505:2:3:5:5:22:14:3:5:9:9:11:10:13:12:12:13:19:18:18:18:18:7:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:8:9",
     },
+    // #374: сторінка вікна лягла в `settleRights` того самого кроку, що й purge
+    // пари, — сума двох дозволених причин для правила стабільності.
+    {
+      issue: 374,
+      rights: true,
+      seed: 364721987,
+      path: "9750:3:0:4:11:13:18:21:24:24:29:29:31:36:4:3:34:34:38:38:38:42:45:45:48:50:49:49:49:44:44:44:44:44:44:44:44:44:45:3:44:45:45:45:45:45:45:45:45:45:45:45:45:45:45:45",
+    },
+    // #374: відповідь мінімальної версії до purge, коли надгробки ключа й
+    // пари витіснено: приймач мусить судити за горизонтом, як сховища.
+    {
+      issue: 374,
+      signals: true,
+      seed: -543971651,
+      path: "8357:4:7:18:18:24:27:28:28:28:40:42:36:35:35:39:41:41:42:41:23:29:2:23:25:21:21:21:21:21:21:21:21:21:21:21:21:21:21:21",
+    },
   ])(
     "replays the counterexample of #$issue (seed $seed)",
     async ({ seed, path, rights = false, signals = false }) => {
@@ -4963,6 +4998,8 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // Приймач після межі відкинутих: читання за сигналом без шансу.
   "receiver-reads-unavailable":
     /a read started by the receiver after the discard limit/,
+  // Приймач не бачить горизонт витіснення: відповідь до purge ставить позначку.
+  "receiver-ignores-horizon": /a signal read without a signal/,
 }
 
 // Насіння самотесту, коли насіння 1 не знаходить дефекту за 10 000 прогонів.
@@ -4971,6 +5008,8 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
 // рідший шлях вікна, і насіння 1–12 до нього за 10 000 прогонів не доходять.
 const SELF_CHECK_SEEDS: Partial<Record<DefectFlag, number>> = {
   "bury-removed-current-epoch": 13,
+  // Контрприклад #374 (прогін 8357 цього насіння).
+  "receiver-ignores-horizon": -543971651,
 }
 
 // Дефекти правила втрати доступу (B5b-2): їх ловлять прогони зі знімком прав.
@@ -4985,6 +5024,7 @@ const RIGHTS_DEFECTS: readonly DefectFlag[] = [
 const SIGNAL_DEFECTS: readonly DefectFlag[] = [
   "receiver-purge-keeps-batch",
   "receiver-reads-unavailable",
+  "receiver-ignores-horizon",
 ]
 
 describe("core model self-check", () => {
@@ -5049,7 +5089,7 @@ describe("core model self-check", () => {
       tickReads = 0
       const result = await fc.check(property([flag], true, true, true), {
         numRuns: 10_000,
-        seed: 1,
+        seed: SELF_CHECK_SEEDS[flag] ?? 1,
         endOnFailure: true,
         ...interruptWithin(RIGHTS_BUDGET_MS),
       })

@@ -337,6 +337,24 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
   let stopped = false
   let planned = false
   const { session, limits } = writer
+
+  // Ключ чи пара, поховані з початку читання: надгробок АБО горизонт
+  // витіснення, як у сховищах (§6.2, правило 1).
+  const buriedSinceRead = (
+    object: ObjectName,
+    key: Key,
+    scope: string | null,
+    readEpoch: number
+  ) => {
+    const { epochs } = session
+    const since = writer.defects.has("receiver-ignores-horizon")
+      ? epochs.buriedSince
+      : epochs.buriedOrEvictedSince
+    return (
+      since(keyId(object, key), readEpoch) ||
+      since(pairId(object, scope), readEpoch)
+    )
+  }
   // Власного токена приймач не має: `stop()` синхронний (гачок закриття
   // сесії), тож після нього `stopped` гасить кожну подію, а `purge` стережуть
   // епохи (`acceptEpochs`, `buriedSince`). Запис іде токеном сесії: під час
@@ -670,9 +688,10 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
     // виказав би рядок, який `purge` прибрав, чи заборонений рядок (як
     // перевірка відомого ключа нижче).
     if (
-      session.epochs.buriedSince(keyId(object, row.key), job.readEpoch) ||
-      session.epochs.buriedSince(
-        pairId(object, scopeOf(o.entry, row.values)),
+      buriedSinceRead(
+        object,
+        row.key,
+        scopeOf(o.entry, row.values),
         job.readEpoch
       )
     )
@@ -765,12 +784,13 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
       // правами, ключа): відповідь, що стартувала до purge, після нього
       // нічого не пише й не шле — ні позначки мінімальної версії рядку, який
       // вигляди тримають уже з новішого читання, ні дочитування (як
-      // `markNewRow`). Пара — бо надгробок ключа може бути витіснено, а
-      // новіший надгробок пари лишитись.
+      // `markNewRow`). Витіснений надгробок ключа чи пари — теж поховання:
+      // горизонт його кошика заступає надгробок, як у сховищах.
       if (
-        session.epochs.buriedSince(keyId(object, key), job.readEpoch) ||
-        session.epochs.buriedSince(
-          pairId(object, o.rows.get(key)?.scope ?? null),
+        buriedSinceRead(
+          object,
+          key,
+          o.rows.get(key)?.scope ?? null,
           job.readEpoch
         )
       )

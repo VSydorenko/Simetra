@@ -437,8 +437,7 @@ export function createOverlay(deps: {
   function marked(entry: JournalEntry, attempt: Attempt): boolean {
     const { epochs } = session
     const since = (id: string) =>
-      epochs.buriedSince(id, attempt.readEpoch) ||
-      epochs.evictedSince(id, attempt.readEpoch)
+      epochs.buriedOrEvictedSince(id, attempt.readEpoch)
     const id = keyId(entry.object, entry.key)
     return (
       since(id) ||
