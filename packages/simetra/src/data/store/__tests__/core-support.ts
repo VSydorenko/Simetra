@@ -10,6 +10,7 @@ import {
 } from "../../../model/runtime/__tests__/entries"
 import { createCore, inspectCore, type CoreSession } from "../core"
 import { createCoreSource, createReadLimiter, type ServerPort } from "../source"
+import { collectReads, type ReadCollector } from "./oracles"
 import {
   createFakeSource,
   type FakeRead,
@@ -55,6 +56,8 @@ export interface CoreHarness {
   readonly core: CoreSession
   readonly log: CoreLogEntry[]
   readonly inspect: ReturnType<typeof inspectCore>
+  /** O1 over the reads of the core; checked in the `afterEach` of the test. */
+  readonly reads: ReadCollector
 }
 
 export function setup(
@@ -137,7 +140,14 @@ export function setup(
       : { onSessionChanged: options.onSessionChanged }),
     log: (e) => log.push(e),
   })
-  return { fake, core, log, inspect: inspectCore(core) }
+  const inspect = inspectCore(core)
+  return {
+    fake,
+    core,
+    log,
+    inspect,
+    reads: collectReads(inspect, fake, { clock: options.now }),
+  }
 }
 
 /** Рядок задачі для фейкового сервера; скоуп — `S`. */

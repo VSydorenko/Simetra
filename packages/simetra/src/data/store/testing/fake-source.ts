@@ -86,6 +86,13 @@ export interface FakeReadLog {
   error?: unknown
 }
 
+/** One part of a request as the fake received it. */
+export interface FakePart {
+  readonly type: "query" | "rights" | "version"
+  /** The logical query of a `query` part, when the wire query decoded. */
+  readonly query: ReadQuery | undefined
+}
+
 /** A read held by the fake transport until the test delivers it. */
 export interface FakeRead {
   readonly log: FakeReadLog
@@ -154,6 +161,12 @@ export interface FakeSource {
   }[]
   /** The number of parts of every request received, in order. */
   readonly requests: readonly number[]
+  /**
+   * The parts of every request received, by request index and slot: the kind
+   * of the part and, for a read, its logical query. The oracle O1 pairs them
+   * with the events of `watchReads` one by one.
+   */
+  readonly requestParts: readonly (readonly FakePart[])[]
   /** Server clock: the moment of the last change; versions come from it. */
   readonly clock: number
   /**
@@ -270,6 +283,7 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
     { at: 0, value: "all" },
   ]
   const requests: number[] = []
+  const requestParts: FakePart[][] = []
   let inFlight = 0
   let maxInFlight = 0
 
@@ -583,6 +597,8 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
       return new Promise<WireReadParts>((resolve, reject) => {
         const request = requests.length
         requests.push(items.length)
+        const partsHere: FakePart[] = []
+        requestParts.push(partsHere)
         inFlight++
         maxInFlight = Math.max(maxInFlight, inFlight)
         const slots: WireReadParts["items"][number][] = []
@@ -600,6 +616,16 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
           reject(error)
         }
         items.forEach((item, slot) => {
+          partsHere[slot] = {
+            type: item.type === "query" ? "query" : item.type,
+            query:
+              item.type === "query"
+                ? (() => {
+                    const decoded = readPartFromWire(index, item)
+                    return decoded.ok ? decoded.value.query : undefined
+                  })()
+                : undefined,
+          }
           if (item.type === "version") {
             // Версія каталогу відповідає сама, не чекаючи читань пакета.
             slots[slot] = {
@@ -750,6 +776,9 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
     },
     get requests() {
       return requests
+    },
+    get requestParts() {
+      return requestParts
     },
     get clock() {
       return clock
