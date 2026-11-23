@@ -34,6 +34,7 @@ import {
   type RowViews,
 } from "./snapshot"
 import { ReadLimiterClosed, settle, type StoreSource } from "./source"
+import type { AdmissionCondition, ReadCause, ReadWhy } from "./sync/vocabulary"
 import type {
   CoreLimits,
   CoreLogEntry,
@@ -116,7 +117,12 @@ export interface Subset extends ReaderTarget {
   flightEpoch: number | undefined
   /** The start epochs of the system re-reads (`revalidate`) in flight. */
   rereadEpochs: number[]
-  trailing: boolean
+  /**
+   * The next load queued after the one in flight, with the cause of the call
+   * that queued it (the first one of a merged queue, Р4); the cause is the
+   * origin of that read, never an input of a decision.
+   */
+  trailing: ReadCause | undefined
   /** At least one load finished (or a card showed its stored row). */
   settled: boolean
   /** A load succeeded: a later read is `refreshing`, not `loading` (§6.5). */
@@ -168,8 +174,11 @@ export interface Subset extends ReaderTarget {
   checkQueued: boolean
   /** The queued check comes from a hold without a listener (`preload`). */
   checkHeld: boolean
-  /** A re-read check found a load in flight: check again when it ends. */
-  recheck: boolean
+  /**
+   * A re-read check found a load in flight: check again when it ends, under
+   * the inventory row of the first `check` that deferred it (Р4).
+   */
+  recheck: ReadWhy | undefined
   /**
    * The key (card) or owner (section) was purged (§6.5): the view shows
    * `purged` and reads nothing until released.
@@ -217,8 +226,11 @@ export interface SubsetRegistry {
   adopt(scope: Scope, form: Form, state: AdoptedView): void
   /** Lets go of the subsets the snapshot still holds: released after the delay. */
   endHydration(): void
-  /** Starts a load (single-flight: merges into one trailing request). */
-  load(s: Subset): void
+  /**
+   * Starts a load (single-flight: merges into one trailing request); `why` is
+   * the row of the inventory (Додаток Б) the read comes from.
+   */
+  load(s: Subset, why: ReadWhy): void
   /**
    * After a `commit`: marks the affected subsets dirty and returns the
    * subscribed ones whose snapshot changed.
@@ -226,6 +238,13 @@ export interface SubsetRegistry {
   afterCommit(closing: boolean): Subset[]
   /** Cancels every timer, resolves waiters and forgets every subset and handle. */
   close(): void
+  /**
+   * Test-only (`inspectCore().sync()`): the card or section is behind its
+   * header — the condition under which a check reads it again (stale by
+   * `cardStale` / `sectionStale`, and the header changed or the owner was
+   * hidden since its last read).
+   */
+  behindHeader(s: Subset): boolean
 }
 
 const NO_LINES: readonly SectionLine[] = Object.freeze([])
@@ -287,25 +306,54 @@ export interface RequirementEnv {
  * failure pause and the session is not out of the discard limit.
  */
 export function requirementPending(s: Subset, env: RequirementEnv): boolean {
-  return env.tabVisible() && waitsForRead(s, env)
+  return requirementHold(s, env) === undefined
+}
+
+/**
+ * Why the view requirement «composition not confirmed» is not read now — the
+ * one decision of `requirementPending` and of the settle point, named by the
+ * condition of the gate (§5.3); `undefined` — it is pending: read it now.
+ * `"absent"` — no requirement. Test diagnostics (`sync()`) read the same.
+ */
+export function requirementHold(
+  s: Subset,
+  env: RequirementEnv
+):
+  | "absent"
+  | Extract<
+      AdmissionCondition,
+      | "tab-hidden"
+      | "target-invisible"
+      | "promised"
+      | "paused"
+      | "discard-bound"
+    >
+  | undefined {
+  if (s.unconfirmedSince === undefined) return "absent"
+  if (!env.tabVisible()) return "tab-hidden"
+  return holdWithoutTab(s, env)
 }
 
 // Те саме без вкладки: вимога чекає читання, яке ніхто інший не обіцяє.
-function waitsForRead(s: Subset, env: RequirementEnv): boolean {
+function holdWithoutTab(s: Subset, env: RequirementEnv) {
   const since = s.unconfirmedSince
-  if (since === undefined) return false
-  if (!(s.visible ?? s.listeners.size > 0)) return false
-  if (s.rereadEpochs.some((at) => at >= since)) return false
-  if (s.flight !== undefined && (s.flightEpoch ?? -1) >= since) return false
+  if (since === undefined) return "absent"
+  if (!(s.visible ?? s.listeners.size > 0)) return "target-invisible"
+  if (s.rereadEpochs.some((at) => at >= since)) return "promised"
+  if (s.flight !== undefined && (s.flightEpoch ?? -1) >= since)
+    return "promised"
   // Хвіст `revalidate` і завантаження-наступник стартують після осідання
   // поточного читання, тобто з e чи пізніше: вимогу знімуть вони, повтор був
   // би другим читанням того самого.
-  if (s.rereadTail !== undefined || s.trailing) return false
+  if (s.rereadTail !== undefined || s.trailing !== undefined) return "promised"
   // Збій читання повторює пауза збоїв (планувальник), не негайне коло.
-  if (s.failures > 0) return false
+  if (s.failures > 0) return "paused"
   // Після межі відкинутих жодне читання не має шансу (§6.2).
-  return !env.versions.unavailable()
+  return env.versions.unavailable() ? "discard-bound" : undefined
 }
+
+const waitsForRead = (s: Subset, env: RequirementEnv): boolean =>
+  holdWithoutTab(s, env) === undefined
 
 /**
  * The settle point of a read that confirms the whole view (its load or a
@@ -323,6 +371,24 @@ export function settleRequirement(
   liftRequirement(s, readEpoch)
   return waitsForRead(s, env) && env.tabVisible()
 }
+
+/**
+ * Queues the next load of `s` under `cause` (рядок M6); a queued one keeps
+ * its own: the queue remembers the first call that put it (Р4).
+ */
+export function queueTrailing(s: Subset, cause: ReadCause): void {
+  s.trailing ??= cause
+}
+
+// Дочитування картки чи ТЧ, яке запускає підписка чи `preload` (рядок M3), і
+// дія користувача над завантаженням (рядок M5).
+const CHECK_ON_MOUNT: ReadWhy = { reason: "mount", site: "M3" }
+const CHECK_AFTER_COMMIT: ReadWhy = {
+  reason: "requirement",
+  requirement: "target-behind-header",
+  site: "M4",
+}
+const USER_LOAD: ReadWhy = { reason: "user", site: "M5" }
 
 const ACCESS_CHANGED = purgedSnapshot("access-changed")
 
@@ -410,10 +476,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     for (const resolve of s.waiters.splice(0)) resolve()
   }
 
-  function load(s: Subset) {
+  function load(s: Subset, why: ReadWhy) {
     if (!s.alive || isClosed() || s.purged) return
     if (s.flight !== undefined) {
-      s.trailing = true
+      queueTrailing(s, why)
       return
     }
     const gen = ++s.gen
@@ -432,7 +498,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     )
     // Відкинута відповідь — те саме завантаження з паузою, що зростає:
     // покоління й політ не змінюються, тож це й далі дія, що його почала.
-    const attempt = (): Promise<void> => {
+    const attempt = (why: ReadWhy): Promise<void> => {
       const readEpoch = session.epochs.now()
       s.flightEpoch = readEpoch
       const startedAt = ctx.now()
@@ -443,7 +509,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       let discarded = false
       let again = false
       const lease = ctx.source.lease()
-      return readForm(ctx, s, readEpoch, token, lease).then(
+      return readForm(ctx, s, readEpoch, token, {
+        ...why,
+        target: { kind: "view", object: s.form.object.name },
+        caller: s,
+        lease,
+      }).then(
         (apply) => {
           settle(lease, () =>
             session.commit(
@@ -482,7 +553,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               what
             )
           )
-          if (again && token.valid) return attempt()
+          // Вимога стала, поки летіло читання (M7): повтор тієї самої дії.
+          if (again && token.valid)
+            return attempt({ reason: "retry", site: "M7" })
           if (!discarded || !token.valid) return
           // Цей прохід вичерпав межу (лічильник рухається після commit):
           // повтору не буде, вигляд — `command.unavailable`.
@@ -502,7 +575,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
           return session
             .sleep(pause)
-            .then(() => (token.valid ? attempt() : undefined))
+            .then(() =>
+              token.valid ? attempt({ reason: "retry", site: "M8" }) : undefined
+            )
         },
         (error: unknown) =>
           settle(lease, () => {
@@ -527,7 +602,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
-    void attempt().finally(() => {
+    void attempt(why).finally(() => {
       if (s.flight !== gen) return
       s.flight = undefined
       // Вигляд у польоті — не ціль планувальника: `commit` відповіді був до
@@ -535,23 +610,25 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       ctx.touchSchedule()
       s.settled = true
       resolveWaiters(s)
-      if (s.trailing && s.alive && !isClosed()) {
-        s.trailing = false
-        load(s)
+      const queued = s.trailing
+      if (queued !== undefined && s.alive && !isClosed()) {
+        s.trailing = undefined
+        load(s, { ...queued, site: "M6" })
       }
       // Шапка змінилась під час польоту: перевірка, відкладена до кінця
       // читання, не губиться (захист ревізією — від повторів). Її ставив і
       // `preload` без слухачів (`hide` власника в польоті першого
       // завантаження ТЧ), тож слухачі тут не умова: інакше ТЧ лишається
       // порожньою й `ready` до монтування.
-      if (s.recheck) {
-        s.recheck = false
+      const rechecked = s.recheck
+      if (rechecked !== undefined) {
+        s.recheck = undefined
         if (
           s.alive &&
           !isClosed() &&
           (s.listeners.size > 0 || !ctx.defects.has("recheck-needs-listeners"))
         )
-          queueCheck(s, true)
+          queueCheck(s, true, rechecked)
       }
     })
   }
@@ -631,7 +708,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     // Сторінка, яку записала попередня спроба цього читання: повтор за
     // вимогою «склад не підтверджено» (П15) стає на її місце.
     let written: number | undefined
-    const attempt = (): Promise<void> => {
+    const attempt = (why: ReadWhy): Promise<void> => {
       const readEpoch = session.epochs.now()
       let discarded = false
       let again = false
@@ -641,8 +718,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         readEpoch,
         (c) =>
           readWindowMore(c, s, readEpoch, token, direction, cursor, written),
-        s,
-        lease
+        {
+          ...why,
+          target: { kind: "page", object: s.form.object.name },
+          caller: s,
+          lease,
+        }
       ).then(
         (apply) => {
           settle(lease, () =>
@@ -683,7 +764,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             )
           )
           if (again) {
-            if (token.valid) return attempt()
+            // Вимогу поставила власна відповідь сторінки (П15): P3.
+            if (token.valid) return attempt({ reason: "retry", site: "P3" })
             release()
             return
           }
@@ -702,7 +784,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
           return session
             .sleep(pause)
-            .then(() => (token.valid ? attempt() : undefined))
+            .then(() =>
+              token.valid ? attempt({ reason: "retry", site: "P2" }) : undefined
+            )
         },
         (error: unknown) =>
           settle(lease, () => {
@@ -721,7 +805,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       )
     }
     // Відмову читання обробляє `attempt`, тож ланцюг не відхиляється.
-    void attempt()
+    void attempt({ reason: "user", site: "P1" })
   }
 
   /** Mounted card: lazy fields absent or read with an older row version. */
@@ -809,23 +893,29 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
    * останнє читання: шапки без запису ревізія не бачить. `held` — перевірка
    * з `preload`, без слухача.
    */
-  function check(s: Subset, held = false) {
+  function check(s: Subset, held: boolean, why: ReadWhy) {
     if (!s.alive || s.purged) return
     if (!held && s.listeners.size === 0) return
     if (s.flight !== undefined) {
-      s.recheck = true
+      s.recheck ??= why
       return
     }
+    if (behindHeader(s)) load(s, why)
+  }
+
+  /**
+   * Картка чи ТЧ відстала від шапки (вимога «ціль відстала від шапки»): одне
+   * означення для перевірки й для діагностики `sync()`.
+   */
+  function behindHeader(s: Subset): boolean {
     const header = headerKey(s)
-    if (header === undefined) return
+    if (header === undefined) return false
     const stale = s.form.spec.kind === "card" ? cardStale(s) : sectionStale(s)
-    if (!stale) return
-    if (
-      rowViews.revision(s.form.object.name, header) === s.readRevision &&
-      !hiddenSinceRead(s)
+    if (!stale) return false
+    return (
+      rowViews.revision(s.form.object.name, header) !== s.readRevision ||
+      hiddenSinceRead(s)
     )
-      return
-    load(s)
   }
 
   /**
@@ -835,8 +925,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
    */
   function start(s: Subset, mounted: boolean) {
     if (s.gen > 0 || s.settled) {
-      if (mounted) check(s)
-      else if (s.form.spec.kind === "section") check(s, true)
+      if (mounted) check(s, false, CHECK_ON_MOUNT)
+      else if (s.form.spec.kind === "section") check(s, true, CHECK_ON_MOUNT)
       return
     }
     const spec = s.form.spec
@@ -857,10 +947,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       )
       s.settled = true
       resolveWaiters(s)
-      if (mounted) check(s)
+      if (mounted) check(s, false, CHECK_ON_MOUNT)
       return
     }
-    load(s)
+    load(s, { reason: "mount", site: mounted ? "M1" : "M2" })
   }
 
   // ------------------------------------------------------------ утримання
@@ -943,7 +1033,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       flight: undefined,
       flightEpoch: undefined,
       rereadEpochs: [],
-      trailing: false,
+      trailing: undefined,
       settled: false,
       loaded: false,
       refreshedAt: undefined,
@@ -982,7 +1072,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       sectionRead: undefined,
       checkQueued: false,
       checkHeld: false,
-      recheck: false,
+      recheck: undefined,
       purged: false,
       visible: undefined,
       hydrated: false,
@@ -1140,7 +1230,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     return s.form.include.some((step) => (rows.get(step.target)?.size ?? 0) > 0)
   }
 
-  function queueCheck(s: Subset, held = false) {
+  function queueCheck(s: Subset, held: boolean, why: ReadWhy) {
     if (held) s.checkHeld = true
     if (s.checkQueued || headerKey(s) === undefined) return
     s.checkQueued = true
@@ -1150,7 +1240,9 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       const heldCheck = s.checkHeld
       s.checkHeld = false
       try {
-        if (!isClosed()) check(s, heldCheck)
+        // `why` — виклику, що поставив перевірку в чергу: наступні виклики до
+        // мікрозадачі вже вийшли на `checkQueued`.
+        if (!isClosed()) check(s, heldCheck, why)
       } finally {
         // Хвіст `revalidate` чекав цю перевірку як продовження польоту: без
         // нового читання його будимо тут (#312), зокрема й після винятку.
@@ -1232,12 +1324,12 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         // Несумісний об'єкт не читається (§10): вигляд лишається `isStale`.
         if (ctx.isStale(form.object.name)) return
         const s = live()
-        if (s !== undefined) load(s)
+        if (s !== undefined) load(s, USER_LOAD)
       },
       showNew() {
         if (ctx.isStale(form.object.name)) return
         const s = live()
-        if (s !== undefined) load(s)
+        if (s !== undefined) load(s, USER_LOAD)
       },
       loadBefore() {
         const s = live()
@@ -1253,6 +1345,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   }
 
   return {
+    behindHeader: (s) => s.alive && !s.purged && behindHeader(s),
     view(spec) {
       if (isClosed()) return closedHandle()
       const form = formOf(ctx, spec)
@@ -1366,7 +1459,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         if (s.listeners.size === 0) continue
         const before = s.snapshot
         if (snapshotOf(s) !== before) notify.push(s)
-        if (!closing) queueCheck(s)
+        if (!closing) queueCheck(s, false, CHECK_AFTER_COMMIT)
       }
       return notify
     },

@@ -64,7 +64,23 @@ describe("establishServerSession", () => {
     // Серверний рантайм не клієнтський: ні банера, ні входу
     expect(options[0]?.onStaleClient).toBeUndefined()
     expect(options[0]?.onSessionChanged).toBeUndefined()
+    // І8: сервер сигналів не збирає, навіть коли знає їхню адресу
+    expect(options[0]?.signals).toBeUndefined()
     runtime?.dispose()
+  })
+
+  it("never passes signals even when the scope knows the signals url and a factory", () => {
+    const options = captureOptions()
+    const { scope, context } = newScope()
+    const createSignals = vi.fn()
+    Object.assign(scope, {
+      signalsUrl: "ws://centrifugo.test/connection/websocket",
+      createSignals,
+    })
+    establishServerSession(scope, context, { sub: "user-a" }, () => NO_NETWORK)
+    expect(options[0]?.signals).toBeUndefined()
+    expect(createSignals).not.toHaveBeenCalled()
+    scope.holder.current()?.dispose()
   })
 
   it("without a session there is no runtime and context.data is null", () => {
@@ -126,6 +142,35 @@ describe("createClientRuntime", () => {
     expect(scope.holder.current()).toBeUndefined()
     expect(scope.holder.closed()).toBe("session-changed")
     expect(toLogin).toHaveBeenCalledOnce()
+  })
+
+  it("passes signals only when the scope has a signals url", () => {
+    vi.stubGlobal("document", { hidden: false })
+    const options = captureOptions()
+    const { scope } = newScope()
+    const factory = vi.fn()
+    const createSignals = vi.fn(() => factory)
+    Object.assign(scope, { createSignals })
+    // Без адреси (сервер без сигналів) фабрика не кличеться
+    createClientRuntime(scope, "u")
+    expect(options[0]?.signals).toBeUndefined()
+    expect(createSignals).not.toHaveBeenCalled()
+
+    scope.signalsUrl = "ws://centrifugo.test/connection/websocket"
+    createClientRuntime(scope, "u")
+    expect(createSignals).toHaveBeenCalledExactlyOnceWith(
+      "ws://centrifugo.test/connection/websocket"
+    )
+    expect(options[1]?.signals).toBe(factory)
+  })
+
+  it("an address without a client factory (a server scope) gives no signals", () => {
+    vi.stubGlobal("document", { hidden: false })
+    const options = captureOptions()
+    const { scope } = newScope()
+    scope.signalsUrl = "ws://centrifugo.test/connection/websocket"
+    createClientRuntime(scope, "u")
+    expect(options[0]?.signals).toBeUndefined()
   })
 
   it("onStaleClient shows the banner", () => {

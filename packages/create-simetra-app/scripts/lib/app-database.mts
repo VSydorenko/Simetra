@@ -88,6 +88,25 @@ export async function withClient<T>(
 }
 
 /**
+ * Підключення до бази застосунку: `PUBLIC` втрачає `CONNECT`, і його мають лише
+ * ролі застосунку. Інакше будь-яка роль спільного стека (інший застосунок)
+ * зайшла б у базу через `PUBLIC`. Власник бази підключається як власник, а
+ * суперкористувач обходить перевірку; решті ролей грантів немає. Порядок
+ * фіксований: спершу відкликання, потім гранти.
+ */
+export function connectPrivilegeSql(
+  database: string,
+  roles: readonly string[]
+): string[] {
+  return [
+    `REVOKE CONNECT ON DATABASE "${database}" FROM PUBLIC`,
+    ...roles.map(
+      (role) => `GRANT CONNECT ON DATABASE "${database}" TO "${role}"`
+    ),
+  ]
+}
+
+/**
  * База розробника тим самим `runDbSetup`, що й `scripts/db-setup.mjs`
  * (міграція Better Auth, `plan`, `apply --yes`), і ознака
  * `simetra.environment = 'development'` рівня бази. Крок `simetra roles`
@@ -128,9 +147,14 @@ export async function prepareDatabase(o: {
         await o.created?.(client)
       })
       await withClient(superuser, async (client) => {
-        await client.query(
-          `GRANT CONNECT ON DATABASE "${o.database}" TO "${authRole}"`
-        )
+        // Логіни, якими хост справді підключається до цієї бази, крім власника
+        // й суперкористувача: auth, runtime і споживач outbox власного Centrifugo
+        for (const sql of connectPrivilegeSql(o.database, [
+          authRole,
+          PLATFORM_LOGIN_ROLES.runtime,
+          PLATFORM_LOGIN_ROLES.signals,
+        ]))
+          await client.query(sql)
         await client.query(
           `CREATE SCHEMA IF NOT EXISTS "${schema}" AUTHORIZATION "${authRole}"`
         )

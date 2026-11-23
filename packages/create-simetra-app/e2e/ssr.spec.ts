@@ -15,6 +15,7 @@ import {
   listRows,
   recordFrames,
   serverRendered,
+  settle,
   watchDataFn,
 } from "./browser"
 import { test, expect, B_ROWS, anonymousCookie, type App } from "./fixtures"
@@ -59,21 +60,6 @@ async function settleHydrated(
   expect(call.items.slice(2).every((item) => item === "query")).toBe(true)
   expect(call.items.length).toBeGreaterThan(2)
   for (const object of objects) expect(call.objects).toContain(object)
-}
-
-/** Після гідратації: усі запити `dataFn` зроблено, далі тиша. */
-async function settle(
-  page: import("@playwright/test").Page,
-  log: ReturnType<typeof watchDataFn>,
-  expected: number
-): Promise<void> {
-  await expect
-    .poll(async () => (await log.flush(), log.calls.length))
-    .toBe(expected)
-  // Тиша: жодного запиту понад очікуване й після паузи
-  await page.waitForTimeout(1_500)
-  await log.flush()
-  expect(log.calls).toHaveLength(expected)
 }
 
 test.describe("scenario 1: SSR entry on the Client list", () => {
@@ -432,6 +418,12 @@ test.describe("scenario 10: sign-out in another tab, then focus", () => {
     const cookie = await freshSession(app, app.users.a)
     const context = await contextWithCookie(browser, app, cookie)
     const first = await context.newPage()
+    // Шлях Дх14 без шини вкладок (Р11 D5): із шиною перша вкладка пішла б на
+    // вхід одразу після виходу в другій, а тут перевіряється саме запасний
+    // шлях — браузер без `BroadcastChannel`
+    await first.addInitScript(() => {
+      Object.defineProperty(window, "BroadcastChannel", { value: undefined })
+    })
     await first.clock.install()
     await recordFrames(first, "mutation")
     const log = watchDataFn(first, app)

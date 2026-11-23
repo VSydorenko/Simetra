@@ -35,6 +35,7 @@ import {
 import { DataError } from "../errors"
 import { effectiveEpoch } from "./epoch"
 import type { Subset } from "./subsets"
+import type { ReadIntent } from "./sync/vocabulary"
 import type { Key, KnownSnapshot, ObjectName, ServerRow } from "./types"
 
 // Причини `command.unavailable` частини, яку сервер не виконав (П4-B §4.5).
@@ -202,6 +203,60 @@ export interface ReadOptions {
    * read slot was free (P4-B spec §8.4, the deadline counts from sending).
    */
   readonly onRightsSent?: () => void
+  /**
+   * The origin of each part by slot (the length of the `parts` of the call);
+   * `undefined` in a slot — a part without an origin, which gives no event.
+   * Origins follow the slot, not the identity of the part: the core copies
+   * parts (`include` cut, `known` set) and the copy keeps its slot.
+   */
+  readonly origins?: readonly (ReadIntent | undefined)[]
+  /**
+   * Called when a read request gets its number, once per live part of the
+   * request, before the request goes out (the `watchReads` event).
+   */
+  readonly onRead?: (event: ReadEvent) => void
+}
+
+/**
+ * The event of one live part of one server request: the origin of the read
+ * and the number of the request, the same that {@link requestOf} returns for
+ * the answer of the part. Neither the `caller` nor the `lease` of the flight
+ * goes into it: they are the core's, not a diagnostic.
+ */
+export type ReadEvent = ReadIntent & { readonly request: number }
+
+const readEvent = (origin: ReadIntent, request: number): ReadEvent =>
+  origin.reason === "requirement"
+    ? {
+        reason: origin.reason,
+        requirement: origin.requirement,
+        target: origin.target,
+        site: origin.site,
+        request,
+      }
+    : {
+        reason: origin.reason,
+        target: origin.target,
+        site: origin.site,
+        request,
+      }
+
+/**
+ * Where a read comes from (spec of the sync kernel, §5.4 and Appendix Б):
+ * the reason, the target and the code of the inventory row, plus the
+ * `caller` and the write `lease` of the flight. `StoreSource.read` takes it
+ * as a required argument, so a read of the core without an origin does not
+ * compile; SK-1 turns it into a `Flight` without touching the call sites.
+ * It never goes to the wire.
+ *
+ * `caller` — the view whose read this is, when a view reads (the core's
+ * first-snapshot rule re-reads exactly that view, plan B5b-2 Р5а).
+ * `lease` — the write lease of the flight: the read issues it for every
+ * object whose rows its parts may write (§8.4, rule 2).
+ */
+export type ReadOrigin = ReadIntent & {
+  readonly caller?: Subset
+  readonly lease?: WriteLease
 }
 
 /**
@@ -210,19 +265,31 @@ export interface ReadOptions {
  * them in one place).
  */
 export interface StoreSource extends Omit<CoreSource, "read"> {
-  /**
-   * `caller` — the view whose read this is, when a view reads (the core's
-   * first-snapshot rule re-reads exactly that view, plan B5b-2 Р5а).
-   * `lease` — the write lease of the flight: the read issues it for every
-   * object whose rows its parts may write (§8.4, rule 2).
-   */
-  read(
-    parts: readonly CorePart[],
-    caller?: Subset,
-    lease?: WriteLease
-  ): Promise<CoreReadResult>
+  read(parts: readonly CorePart[], origin: ReadOrigin): Promise<CoreReadResult>
   /** A new write lease for one flight; only {@link settle} releases it. */
   lease(): WriteLease
+}
+
+/**
+ * A {@link StoreSource} with the origin of one flight bound in: the readers
+ * read through it (reads inside a flight continue the flight, so they take
+ * the origin of the row that started it, Appendix Б «Спільне», п. 3). A
+ * source without an origin is not a `BoundSource`, so a reader cannot be
+ * handed one.
+ */
+export interface BoundSource extends Omit<StoreSource, "read"> {
+  read(parts: readonly CorePart[]): Promise<CoreReadResult>
+}
+
+/** Binds `origin` into `source`: every read of the result carries it. */
+export function bound(source: StoreSource, origin: ReadOrigin): BoundSource {
+  return {
+    close: () => source.close(),
+    refuse: source.refuse?.bind(source),
+    run: (operation) => source.run(operation),
+    lease: () => source.lease(),
+    read: (parts) => source.read(parts, origin),
+  }
 }
 
 /**
@@ -465,7 +532,8 @@ export function createCoreSource(
     adapter: SourceAdapter | null,
     queries: readonly CorePart[],
     wires: readonly WireReadPart[],
-    onRightsSent: ReadOptions["onRightsSent"]
+    origins: readonly (ReadIntent | undefined)[],
+    { onRightsSent, onRead }: ReadOptions
   ): Promise<CoreReadItem[]> => {
     let answer: WireReadParts | undefined
     // Частини, що справді пішли: добираються на старті задачі, не при постановці.
@@ -475,6 +543,13 @@ export function createCoreSource(
       answer = await limiter.run(() => {
         live = queries.flatMap((part, i) => (isRefused(part) ? [] : [i]))
         request = ++requests
+        // Подія — на кожну живу частину, у мить номера запиту: частину,
+        // відмовлену без запиту (`stale-object`, закритий обмежувач), задача
+        // сюди не доводить.
+        for (const i of live) {
+          const origin = origins[i]
+          if (origin !== undefined) onRead?.(readEvent(origin, request))
+        }
         // Строк знімка — від справжньої відправки, а не від черги слотів:
         // інакше знімок після довгої черги приходив би вже простроченим.
         if (live.some((i) => queries[i]!.type === "rights")) onRightsSent?.()
@@ -487,12 +562,17 @@ export function createCoreSource(
       })
     } catch (error) {
       if (!(error instanceof CommandFailure)) throw error
-      return queries.map(() => ({ ok: false, error: error.error }))
+      return numbered(
+        queries.map(() => ({ ok: false, error: error.error })),
+        live,
+        request
+      )
     }
     if (answer === undefined) return queries.map(refusal)
     const { epoch, items } = answer
     // Рівно по відповіді на частину: інакше порядок не співставити.
-    if (items.length !== live.length) return queries.map(internal)
+    if (items.length !== live.length)
+      return numbered(queries.map(internal), live, request)
     return queries.map((part, i) => {
       const at = live.indexOf(i)
       if (at < 0) return refusal(part)
@@ -502,14 +582,27 @@ export function createCoreSource(
     })
   }
 
+  // Відмова вже надісланого запиту — теж відповідь цього запиту: подія
+  // `watchReads` його живих частин має номер, тож `requestOf` їхніх відмов
+  // мусить його дати (значення відмов не змінюються).
+  const numbered = (
+    items: CoreReadItem[],
+    live: readonly number[],
+    request: number
+  ): CoreReadItem[] => {
+    for (const i of live) requestOfItem.set(items[i]!, request)
+    return items
+  }
+
   const group = async (
     adapter: SourceAdapter | null,
     slots: readonly number[],
     queries: readonly CorePart[],
     wires: readonly WireReadPart[],
     out: CoreReadItem[],
-    { sleep, onRightsSent }: ReadOptions
+    options: ReadOptions
   ): Promise<void> => {
+    const { sleep, origins } = options
     let pending = slots
     // Частини, що отримали `batch-budget`: наступного разу кожна йде
     // окремим запитом. Сама в запиті частина не ділить бюджет ні з ким і
@@ -531,7 +624,8 @@ export function createCoreSource(
             adapter,
             request.map((slot) => queries[slot]!),
             request.map((slot) => wires[slot]!),
-            onRightsSent
+            request.map((slot) => origins?.[slot]),
+            options
           )
           request.forEach((slot, i) => {
             out[slot] = items[i]!
@@ -687,27 +781,23 @@ export function createCoreSource(
  * A view of `source` that records the epoch of every answered part, in the
  * order of arrival: a read applies only after the session accepted every
  * epoch it carries (P4-B spec §6.2) — a key absent from an answer has no
- * row to carry it.
+ * row to carry it. Its reads carry `origin`.
  */
 export function tracked(
   source: StoreSource,
-  caller?: Subset,
-  lease?: WriteLease
+  origin: ReadOrigin
 ): {
-  source: StoreSource
+  source: BoundSource
   epochs: Set<string | null>
 } {
   const epochs = new Set<string | null>()
+  const inner = bound(source, origin)
   return {
     epochs,
     source: {
-      close: () => source.close(),
-      // Запис — не читання: його епоху шлюз читання не приймає (епоху `run`
-      // звіряє write-back); частина `version` епохи не має.
-      run: (operation) => source.run(operation),
-      lease: () => source.lease(),
-      async read(parts, own) {
-        const result = await source.read(parts, own ?? caller, lease)
+      ...inner,
+      async read(parts) {
+        const result = await inner.read(parts)
         for (const item of result.items)
           if (item.ok && "epoch" in item) epochs.add(item.epoch)
         return result
@@ -721,7 +811,7 @@ export function tracked(
  * its error. For the callers that read one query at a time.
  */
 export async function readOne(
-  source: StoreSource,
+  source: BoundSource,
   query: RowsQuery
 ): Promise<ReadRows & { epoch: string | null }> {
   const [item] = (await source.read([{ type: "query", query }])).items
@@ -843,7 +933,7 @@ function markedRow(
  * `CommandFailure` of its error. `snapshot` is the `known` the part carries.
  */
 export async function readRows(
-  source: StoreSource,
+  source: BoundSource,
   entry: CatalogEntry,
   query: RowsQuery,
   snapshot?: KnownSnapshot
@@ -884,7 +974,7 @@ export async function readRows(
  * the answer is absent from the result.
  */
 export async function readKeys(
-  source: StoreSource,
+  source: BoundSource,
   entry: CatalogEntry,
   keys: readonly Key[],
   options: ReadKeysOptions

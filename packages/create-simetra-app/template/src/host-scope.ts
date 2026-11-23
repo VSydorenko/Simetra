@@ -1,5 +1,7 @@
 import { createRuntimeHolder, type RuntimeHolder } from "simetra/data"
+import type { SignalTransport } from "simetra/model"
 import type { SimetraRouterContext } from "simetra/shell"
+import { createTabBus, type TabBus, type TabChannel } from "./tab-bus"
 
 /** Банер «потрібне оновлення застосунку»: клієнт зі застарілим каталогом. */
 export interface StaleBanner {
@@ -34,6 +36,14 @@ export function createStaleBanner(): StaleBanner {
 export interface HostScope {
   readonly holder: RuntimeHolder
   readonly stale: StaleBanner
+  /** Шина вкладок: вихід в одній вкладці гасить решту (Р11). */
+  readonly tabs: TabBus
+  /** Адреса Centrifugo із знімка сервера (Р10); без неї клієнт працює без сигналів. */
+  signalsUrl: string | undefined
+  /** Фабрика сигналів за адресою: лише клієнт (на сервері `centrifuge` не вантажиться, І8). */
+  readonly createSignals:
+    | ((url: string) => ((subject: string) => SignalTransport) | undefined)
+    | undefined
   /** Знімок прийнято через `hydrateFrom`: корінь кличе `endHydration()`. */
   hydrated: boolean
   /** Корінь уже завершив гідратацію (ефект може піти двічі під StrictMode). */
@@ -56,12 +66,23 @@ export interface AppRouterContext extends SimetraRouterContext {
 export function createHostScope(
   parts: Pick<HostScope, "toLogin" | "onResponseEnd" | "markHydrated"> & {
     establish(scope: HostScope, context: AppRouterContext): Promise<void>
+    createSignals?: HostScope["createSignals"]
+    /** Лише для тестів шини. */
+    createChannel?: () => TabChannel | undefined
   }
 ): HostScope {
-  const { establish, ...rest } = parts
+  const { establish, createChannel, createSignals, ...rest } = parts
+  const holder = createRuntimeHolder()
   const scope: HostScope = {
-    holder: createRuntimeHolder(),
+    holder,
     stale: createStaleBanner(),
+    tabs: createTabBus({
+      holder,
+      toLogin: () => rest.toLogin(),
+      createChannel,
+    }),
+    signalsUrl: undefined,
+    createSignals,
     hydrated: false,
     hydrationEnded: false,
     ...rest,

@@ -34,9 +34,11 @@ import type { ServerFunctionAdapter } from "../../adapter"
 import type {
   CoreSource,
   ReadOptions,
+  ReadOrigin,
   ServerPort,
   StoreSource,
 } from "../source"
+import { TEST_SITE } from "../sync/vocabulary"
 import type { Key, ObjectName, ServerRow, Values } from "../types"
 
 /**
@@ -855,6 +857,16 @@ export function createFakeSource(init: FakeSourceInit): FakeSource {
     },
   }
   return fake
+}
+
+/**
+ * Службове походження прямих викликів у тестах: код `TEST_SITE` поза
+ * інвентарем Додатка Б, тож збирач О1 не сплутає його з читанням ядра.
+ */
+export const TEST_ORIGIN: ReadOrigin = {
+  reason: "user",
+  target: { kind: "keys", object: "test" },
+  site: TEST_SITE,
 }
 
 /**

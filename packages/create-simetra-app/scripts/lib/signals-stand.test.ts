@@ -105,7 +105,7 @@ describe("generateSigningKeys (Р3)", () => {
 })
 
 describe("centrifugoImage", () => {
-  it("is the digest-pinned image of the stack compose file", () => {
+  it("is the digest-pinned image from the pin file", () => {
     expect(centrifugoImage()).toMatch(
       /^centrifugo\/centrifugo:v[\d.]+@sha256:[0-9a-f]{64}$/
     )

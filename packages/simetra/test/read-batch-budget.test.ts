@@ -13,6 +13,7 @@ import {
   catalogEntryAttribute,
 } from "../src/model/runtime/__tests__/entries"
 import {
+  bound,
   createCoreSource,
   createReadLimiter,
   readKeys,
@@ -20,6 +21,7 @@ import {
 import {
   createFakeSource,
   withSleep,
+  TEST_ORIGIN,
 } from "../src/data/store/testing/fake-source"
 import { fitParts } from "../src/server/response-budget"
 
@@ -114,7 +116,12 @@ function budgeted(sizes: ReadonlyMap<number, number>) {
     createReadLimiter(4),
     fake.server
   )
-  return { source: withSleep(source), fake, responses, values }
+  return {
+    source: bound(withSleep(source), TEST_ORIGIN),
+    fake,
+    responses,
+    values,
+  }
 }
 
 const reasonsOf = (response: WireReadParts) =>
