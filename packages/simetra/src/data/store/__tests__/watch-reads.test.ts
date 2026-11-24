@@ -611,7 +611,7 @@ describe("watchReads in the core", () => {
     expect(logged).not.toContain('"request"')
   })
 
-  it("carries only the reason, the target, the site and the request in an event, not the caller or the lease", async () => {
+  it("carries only the reason, the target, the site, the attempt number and the request in an event, not the caller or the lease", async () => {
     const h = build({ rights: true })
     seed(h.fake, 1, 2)
     watch(h.core.view(view))
@@ -621,9 +621,14 @@ describe("watchReads in the core", () => {
       expect(
         Object.keys(event).filter(
           (name) =>
-            !["requirement", "reason", "target", "site", "request"].includes(
-              name
-            )
+            ![
+              "requirement",
+              "reason",
+              "target",
+              "site",
+              "attempt",
+              "request",
+            ].includes(name)
         )
       ).toEqual([])
     }

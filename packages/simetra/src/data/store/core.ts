@@ -1,3 +1,4 @@
+import { createAttempts, type AttemptEvent } from "./attempts"
 import {
   FILTER_IN_MAX,
   READ_LIMIT_MAX,
@@ -424,6 +425,13 @@ export interface CoreInspection {
    */
   watchReads(listener: (event: ReadEvent) => void): () => void
   /**
+   * Subscribes to the attempts to read a view: "started" (with the origin) and
+   * "settled" with one outcome of the closed list of spec §5.5, both with the
+   * opaque target id of `sync()`. Any number of listeners; the result
+   * unsubscribes.
+   */
+  watchAttempts(listener: (event: AttemptEvent) => void): () => void
+  /**
    * The freshness state of every target `main` keeps it for: the held views,
    * the rows with a freshness mark or in a tail re-read, and the service
    * targets (the catalog version; the rights snapshot with `rightsSnapshot`).
@@ -591,6 +599,7 @@ export function createCore(options: {
   let remarkListener: ((object: ObjectName, key: Key) => void) | undefined
   let rightsPassListener: (() => void) | undefined
   const readListeners = new Set<(event: ReadEvent) => void>()
+  const attemptLog = createAttempts()
   let signalReadListener:
     ((object: ObjectName, read: SignalRead) => void) | undefined
   // Приймач сигналів: створюється після `writerContext`, а реєстр і потік
@@ -1279,6 +1288,7 @@ export function createCore(options: {
     closedSnapshot: () => closed,
     defects,
     now,
+    attempts: attemptLog.attempts,
     becameVisible: (s) => becameVisible(s),
     readRequirement: (s) => readRequirement(s),
     touchSchedule: () => scheduler.request(),
@@ -1887,6 +1897,7 @@ export function createCore(options: {
     onPurge: (object, target) => receiver?.purged(object, target),
     defects,
     now,
+    attempts: attemptLog.attempts,
     hiddenKeys,
     pendingWrites: (object) => pendingWrites.get(object) ?? 0,
     schedule,
@@ -2621,6 +2632,9 @@ export function createCore(options: {
       return () => {
         readListeners.delete(listener)
       }
+    },
+    watchAttempts(listener) {
+      return attemptLog.watch(listener)
     },
     sync: syncState,
     mutations: () => overlay.entries(),

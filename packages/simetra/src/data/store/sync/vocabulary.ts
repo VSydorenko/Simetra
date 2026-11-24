@@ -109,6 +109,24 @@ export type SiteCode = (typeof SITE_CODES)[number]
 export const TEST_SITE = "test" as const
 export type TestSite = typeof TEST_SITE
 
+/**
+ * Наслідки проходу осідання (§5.5): закритий перелік. Спроба, що не дійшла до
+ * запиту, названа одним із них і, за потреби, умовою допуску (`skip`).
+ */
+export const SETTLE_OUTCOMES = [
+  "applied",
+  "discarded-by-epoch",
+  "failed",
+  "evicted",
+  "after-purge",
+  "closed",
+] as const
+export type SettleOutcome = (typeof SETTLE_OUTCOMES)[number]
+
+/** Види спроби читання цілі «вигляд» (§5.5): завантаження, сторінка, системне перечитування. */
+export const ATTEMPT_KINDS = ["load", "page", "reread"] as const
+export type AttemptKind = (typeof ATTEMPT_KINDS)[number]
+
 /** Причина читання; вимога несе свій вид. */
 export type ReadCause =
   | { readonly reason: Exclude<ReadReason, "requirement"> }
@@ -132,4 +150,6 @@ export type ReadWhy = ReadCause & { readonly site: SiteCode }
 export type ReadIntent = ReadCause & {
   readonly target: ReadTarget
   readonly site: SiteCode | TestSite
+  /** Номер спроби цілі «вигляд», з якої йде читання (подія `watchAttempts`). */
+  readonly attempt?: number
 }
