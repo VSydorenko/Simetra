@@ -137,6 +137,42 @@ describe("O2 self-check", () => {
     ).toMatch(/flight with no unanswered request/)
   })
 
+  describe("a load flight in the pause after a discarded answer", () => {
+    // Політ завантаження живе й у паузі повтору (M8): запиту немає, подія
+    // «осіло: відкинуто за епохою» остання.
+    const discarded = (): AttemptEvent[] => [
+      ...settled(7, 1, "load").slice(0, 1),
+      {
+        phase: "settled",
+        attempt: 7,
+        kind: "load",
+        target: { kind: "view", object: OBJECT, id: 1 },
+        outcome: "discarded-by-epoch",
+      },
+    ]
+    const flying = [state(view(1), { flights: [{ kind: "load" }] })]
+
+    it("is green inside the pause and red when the pause is overstayed", () => {
+      const o2 = createO2()
+      const attempts = discarded()
+      expect(o2.step(input({ states: flying, attempts }))).toBeUndefined()
+      expect(
+        o2.step(input({ now: 1_000, states: flying, attempts }))
+      ).toBeUndefined()
+      expect(
+        o2.step(input({ now: 600_000, states: flying, attempts }))
+      ).toMatch(/stays after a discarded answer/)
+    })
+
+    it("is red when the last attempt was applied, not discarded", () => {
+      expect(
+        createO2().step(
+          input({ states: flying, attempts: settled(7, 1, "load") })
+        )
+      ).toMatch(/no unanswered request/)
+    })
+  })
+
   it("is red when the counter of evaluated states is zero", () => {
     const o2 = createO2()
     // Спокій без вимог нічого не оцінює.

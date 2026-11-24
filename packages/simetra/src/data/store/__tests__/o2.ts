@@ -1,5 +1,6 @@
 import { readResultFromWire, type ReadQuery } from "simetra/model"
 import type { AttemptEvent } from "../attempts"
+import { DISCARDS_MAX, DISCARD_PAUSE_MS } from "../session"
 import type { SyncState, SyncTarget } from "../core"
 import type { RequirementKind } from "../sync/vocabulary"
 import type { FakeReadLog, FakeSource } from "../testing/fake-source"
@@ -266,10 +267,18 @@ export interface O2 {
   evaluated(): number
 }
 
+// Пауза між відкинутою відповіддю завантаження й повтором (M8) подвоюється до
+// межі відкинутих проходів: політ у цю паузу триматиме не довше.
+const RETRY_PAUSE_MAX_MS = DISCARD_PAUSE_MS * 2 ** (DISCARDS_MAX - 1)
+
 export function createO2(): O2 {
   let count = 0
   let previous: Snapshot | undefined
   const obligations = new Map<string, Obligation>()
+
+  // Вигляд → остання спроба завантаження, що осіла «відкинуто за епохою», і час
+  // першого спокою над нею: політ завантаження у паузі повтору.
+  const pausedLoads = new Map<number, { attempt: number; since: number }>()
 
   /** Політ без запиту без відповіді, чия подія називає ціль. */
   const flightProblems = (input: O2Input): string[] => {
@@ -295,6 +304,28 @@ export function createO2(): O2 {
         const behindLimit = fake.inFlight > 0 || fake.pending.length > 0
         let carried: boolean
         if (target.kind === "view") {
+          // Завантаження у паузі після відкинутої відповіді: запиту немає, поки
+          // не спливе пауза; політ тримається не довше її межі.
+          const last = [...input.attempts]
+            .reverse()
+            .find((a) => a.target.id === target.id && a.kind === "load")
+          if (
+            flight.kind === "load" &&
+            last?.phase === "settled" &&
+            last.outcome === "discarded-by-epoch"
+          ) {
+            const was = pausedLoads.get(target.id)
+            if (was === undefined || was.attempt !== last.attempt)
+              pausedLoads.set(target.id, {
+                attempt: last.attempt,
+                since: input.now,
+              })
+            else if (input.now - was.since > RETRY_PAUSE_MAX_MS)
+              problems.push(
+                `${describe(target)}: a load flight stays after a discarded answer past the retry pause`
+              )
+            continue
+          }
           carried = unsettled.some((a) => {
             if (a.target.id !== target.id || a.kind !== flight.kind)
               return false
