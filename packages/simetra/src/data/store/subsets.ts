@@ -1,4 +1,4 @@
-import { skipOf, type Attempts } from "./attempts"
+import { failureOf, type Attempts, type SettleDetail } from "./attempts"
 import {
   CommandFailure,
   type CatalogIndex,
@@ -532,6 +532,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       const number = ctx.attempts.start("load", target, why)
       // Наслідок осідання (§5.5); `commit` не пройшов — токен недійсний.
       let outcome: SettleOutcome = "applied"
+      let detail: SettleDetail | undefined
       const lost = (): SettleOutcome =>
         !session.token().valid ? "closed" : !s.alive ? "evicted" : "after-purge"
       return readForm(ctx, s, readEpoch, token, {
@@ -569,6 +570,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                   // Дефект застосування — вигляд у `error`, рядки без власника
                   // прибирає `sweep`; відмова не стає необробленою.
                   outcome = "failed"
+                  detail = failureOf(error)
                   ctx.log({ kind: "listener-failed", error })
                   s.status = "error"
                   s.error = errorOf(error)
@@ -580,7 +582,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               token,
               what
             )
-            ctx.attempts.settle(number, "load", target, ran ? outcome : lost())
+            ctx.attempts.settle(
+              number,
+              "load",
+              target,
+              ran ? outcome : lost(),
+              ran ? detail : undefined
+            )
           })
           // Вимога стала, поки летіло читання (M7): повтор тієї самої дії.
           if (again && token.valid)
@@ -635,7 +643,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               "load",
               target,
               ran ? "failed" : lost(),
-              skipOf(error)
+              failureOf(error)
             )
           })
       )
@@ -759,6 +767,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       } as const
       const number = ctx.attempts.start("page", target, why)
       let outcome: SettleOutcome = "applied"
+      let detail: SettleDetail | undefined
       const lost = (): SettleOutcome =>
         !session.token().valid ? "closed" : !s.alive ? "evicted" : "after-purge"
       return gated(
@@ -799,6 +808,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                   again = confirm(s, readEpoch, false)
                 } catch (error) {
                   outcome = "failed"
+                  detail = failureOf(error)
                   ctx.log({ kind: "listener-failed", error })
                   s.status = "error"
                   s.error = errorOf(error)
@@ -813,7 +823,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               token,
               what
             )
-            ctx.attempts.settle(number, "page", target, ran ? outcome : lost())
+            ctx.attempts.settle(
+              number,
+              "page",
+              target,
+              ran ? outcome : lost(),
+              ran ? detail : undefined
+            )
           })
           if (again) {
             // Вимогу поставила власна відповідь сторінки (П15): P3.
@@ -861,7 +877,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               "page",
               target,
               ran ? "failed" : lost(),
-              skipOf(error)
+              failureOf(error)
             )
           })
       )

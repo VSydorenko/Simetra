@@ -1,5 +1,6 @@
 import { afterEach } from "vitest"
 import type { CatalogIndex, ReadQuery } from "simetra/model"
+import type { AttemptEvent } from "../attempts"
 import { inspectCore, type CoreSession } from "../core"
 import { DISCARDS_MAX, DISCARD_PAUSE_MS } from "../session"
 import type { ReadEvent } from "../source"
@@ -10,7 +11,7 @@ import {
   TARGET_KINDS,
   type SiteCode,
 } from "../sync/vocabulary"
-import type { FakePart, FakeSource } from "../testing/fake-source"
+import type { FakePart, FakeReadLog, FakeSource } from "../testing/fake-source"
 
 /*
  * Оракули О1 і О4 ядра синхронізації (спека ядра синхронізації §5.13) і збирач
@@ -22,6 +23,8 @@ import type { FakePart, FakeSource } from "../testing/fake-source"
 /** Те, що збирачу треба від діагностики ядра (`inspectCore(core)`). */
 export interface ReadSource {
   watchReads(listener: (event: ReadEvent) => void): () => void
+  /** Події спроб читання вигляду; без них перевірки осідання немає. */
+  watchAttempts?(listener: (event: AttemptEvent) => void): () => void
 }
 
 /**
@@ -122,6 +125,108 @@ function mismatch(
   )
     return `target is a page of ${target.object}, the part is not a page`
   return undefined
+}
+
+/**
+ * Збої, яких журнал фейка не бачить: відповідь дійшла, а ядро відмовило само
+ * (читання понад межу `full`, виняток застосування); відмова за несумісним
+ * об'єктом названа умовою допуску `skip`.
+ */
+const CORE_SIDE_FAILURES: readonly string[] = [
+  "data.full-too-large",
+  "command.internal",
+]
+
+/**
+ * Перевірка осідання спроб проти журналу фейкового джерела, у обидва боки
+ * (спека §5.13): кожне «застосовано» має відповідь запиту своєї спроби, кожен
+ * «збій» — запит з відмовою чи без відповіді (або жодного запиту: умова
+ * допуску), кожна подія «осіло» має «розпочато», і кожна відповідь запиту
+ * спроби має рівно одну подію «осіло». Запит спроби — подія `watchReads` з її
+ * номером. Спроба без відповідей і без «осіло» ще летить — не порушення.
+ */
+export function settleJournalViolations(
+  attempts: readonly AttemptEvent[],
+  events: readonly StampedEvent[],
+  fake: Pick<FakeSource, "log" | "requestParts">
+): string[] {
+  const problems: string[] = []
+  const started = new Set<number>()
+  const settled = new Map<number, string[]>()
+  const failures = new Map<number, AttemptEvent & { phase: "settled" }>()
+  for (const event of attempts) {
+    if (event.phase === "started") {
+      if (started.has(event.attempt))
+        problems.push(`attempt ${event.attempt}: started twice`)
+      started.add(event.attempt)
+    } else {
+      failures.set(event.attempt, event)
+      settled.set(event.attempt, [
+        ...(settled.get(event.attempt) ?? []),
+        event.outcome,
+      ])
+    }
+  }
+  // Частина запиту за подією: запит — за індексом журналу на мить події (два
+  // ядра над одним фейком мають власні номери запитів); події одного запиту
+  // йдуть у порядку слотів, і журнал фейка тримає ті самі живі частини в тому
+  // ж порядку.
+  const slots = new Map<number, number>()
+  const partsOf = new Map<number, (typeof fake.log)[number][]>()
+  for (const event of events) {
+    const slot = slots.get(event.journal) ?? 0
+    slots.set(event.journal, slot + 1)
+    if (event.attempt === undefined) continue
+    // Слот події — у запиті з усіма частинами (службовими теж), журнал
+    // `log` тримає лише частини-запити даних.
+    const request = fake.requestParts[event.journal]
+    const queries =
+      request?.slice(0, slot).filter((p) => p.type === "query").length ?? 0
+    const part =
+      request?.[slot]?.type === "query"
+        ? fake.log.filter((p) => p.request === event.journal)[queries]
+        : undefined
+    const list = partsOf.get(event.attempt) ?? []
+    if (part !== undefined) list.push(part)
+    partsOf.set(event.attempt, list)
+  }
+  const sent = new Map<number, number>()
+  for (const event of events)
+    if (event.attempt !== undefined)
+      sent.set(event.attempt, (sent.get(event.attempt) ?? 0) + 1)
+  const answered = (p: (typeof fake.log)[number]) =>
+    p.response !== undefined && p.error === undefined
+  for (const [attempt, outcomes] of settled) {
+    if (!started.has(attempt))
+      problems.push(`attempt ${attempt}: settled without a start`)
+    if (outcomes.length > 1)
+      problems.push(`attempt ${attempt}: settled ${outcomes.length} times`)
+  }
+  for (const attempt of started) {
+    const parts = partsOf.get(attempt) ?? []
+    const outcomes = settled.get(attempt) ?? []
+    if (outcomes.length === 0) {
+      if (parts.some(answered))
+        problems.push(
+          `attempt ${attempt}: a part was answered, the attempt has no settle event`
+        )
+      continue
+    }
+    if (outcomes[0] === "applied" && !parts.some(answered))
+      problems.push(`attempt ${attempt}: applied without an answered part`)
+    const why = failures.get(attempt)
+    if (
+      outcomes[0] === "failed" &&
+      (sent.get(attempt) ?? 0) > 0 &&
+      parts.every(answered) &&
+      why?.skip === undefined &&
+      !CORE_SIDE_FAILURES.includes(why?.error ?? "")
+    )
+      problems.push(
+        `attempt ${attempt}: failed, but every part of it was answered`
+      )
+  }
+  return problems
 }
 
 /** Оцінка О1 над подіями й журналом фейкового джерела; порожній масив — зелено. */
@@ -247,6 +352,13 @@ export interface ReadCollectorOptions {
 
 export interface ReadCollector {
   readonly events: StampedEvent[]
+  /** Події спроб читання вигляду (`watchAttempts`). */
+  readonly attempts: AttemptEvent[]
+  /**
+   * Записи журналу фейка, які тест прибрав з `fake.log` після читань другого
+   * ядра (перегідратація): оракул осідання судить і за ними.
+   */
+  retain(entries: readonly FakeReadLog[]): void
   /** Скільки кроків О4 оцінено у відкритому вікні: нуль — оракул порожній. */
   evaluated(): number
   /** Порушення О1 на цю мить. */
@@ -275,7 +387,10 @@ const active = new Map<FakeSource, ReadCollector>()
 // Перевірка О1 — у власному `afterEach`: тест не мусить її викликати, а
 // порожній збирач у тесті без запитів нічого не стверджує. Реєстрація на рівні
 // модуля діє на кожен файл, що імпортує помічника.
-afterEach(() => {
+afterEach(async () => {
+  // Відповідь, що дійшла перед кінцем тесту, осідає мікрозадачами: оракул
+  // осідання судить спокій, а не мить між відповіддю й записом.
+  for (let i = 0; i < 200; i++) await Promise.resolve()
   const collectors = [...active.values()]
   const problems = collectors.flatMap((c) => c.violations())
   for (const collector of collectors) collector.stop()
@@ -297,11 +412,16 @@ export function collectReads(
   const shared = options.standalone === true ? undefined : active.get(fake)
   const clock = options.clock ?? Date.now
   const events: StampedEvent[] = shared?.events ?? []
+  const attempts: AttemptEvent[] = shared?.attempts ?? []
   const unsubscribe = inspect.watchReads((event) =>
     events.push({ ...event, at: clock(), journal: fake.requests.length })
   )
+  const unsubscribeAttempts = inspect.watchAttempts?.((event) =>
+    attempts.push(event)
+  )
   if (shared !== undefined) {
     shared.attach(unsubscribe)
+    if (unsubscribeAttempts !== undefined) shared.attach(unsubscribeAttempts)
     return shared
   }
   let open = false
@@ -311,7 +431,10 @@ export function collectReads(
   // виняток на одну глибшого за свою причину. Ланцюг довший за межу
   // відкинутих проходів не з'являється («не частіше за події»).
   const depth = new Map<number, number>()
-  const unsubscribes = [unsubscribe]
+  const unsubscribes = [
+    unsubscribe,
+    ...(unsubscribeAttempts === undefined ? [] : [unsubscribeAttempts]),
+  ]
   const excused = (event: StampedEvent): boolean => {
     const rule = IDLE_EXCEPTIONS.find((r) => r.site === event.site)
     if (rule === undefined) return false
@@ -332,10 +455,19 @@ export function collectReads(
     depth.set(index, best)
     return true
   }
+  const retained: FakeReadLog[] = []
   const collector: ReadCollector = {
     events,
+    attempts,
+    retain: (entries) => retained.push(...entries),
     evaluated: () => windowSteps,
-    violations: () => readJournalViolations(events, fake),
+    violations: () => [
+      ...readJournalViolations(events, fake),
+      ...settleJournalViolations(attempts, events, {
+        log: [...fake.log, ...retained],
+        requestParts: fake.requestParts,
+      }),
+    ],
     idleStep({ quiet, idle }) {
       let problem: string | undefined
       if (open && quiet) {
@@ -357,7 +489,7 @@ export function collectReads(
       return problem
     },
     finish() {
-      const problems = readJournalViolations(events, fake)
+      const problems = collector.violations()
       collector.stop()
       return problems
     },

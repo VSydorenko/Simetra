@@ -1,4 +1,5 @@
 import { CommandFailure } from "simetra/model"
+import { DataError } from "../errors"
 import type { ObjectName } from "./types"
 import type {
   AdmissionCondition,
@@ -37,6 +38,8 @@ export type AttemptEvent = { readonly attempt: number } & (
       readonly outcome: SettleOutcome
       /** Умова допуску, за якою запиту не було (`stale-object`), якщо вона відома. */
       readonly skip?: AdmissionCondition
+      /** Код помилки збою (`failed`): оракул відрізняє відмову сервера від відмови ядра. */
+      readonly error?: string
     }
 )
 
@@ -53,8 +56,26 @@ export interface Attempts {
     kind: AttemptKind,
     target: AttemptTarget,
     outcome: SettleOutcome,
-    skip?: AdmissionCondition
+    detail?: SettleDetail
   ): void
+}
+
+/** Що ще відомо про осідання: умова допуску й код помилки збою. */
+export interface SettleDetail {
+  readonly skip?: AdmissionCondition
+  readonly error?: string
+}
+
+/** Деталь збою за помилкою читання. */
+export const failureOf = (error: unknown): SettleDetail => {
+  const skip = skipOf(error)
+  const code =
+    error instanceof CommandFailure
+      ? error.error.code
+      : error instanceof DataError
+        ? error.code
+        : "command.internal"
+  return { ...(skip === undefined ? {} : { skip }), error: code }
 }
 
 /** Умова допуску, за якою запиту не було: відмова `stale-client` без запиту. */
@@ -63,9 +84,12 @@ export const skipOf = (error: unknown): AdmissionCondition | undefined =>
     ? "stale-object"
     : undefined
 
+// Один лічильник на процес: два ядра над одним фейковим джерелом ділять збирач
+// тестів, і номери їхніх спроб не мають збігатися.
+let next = 0
+
 export function createAttempts() {
   const listeners = new Set<(event: AttemptEvent) => void>()
-  let next = 0
   const emit = (event: AttemptEvent) => {
     for (const listener of [...listeners]) {
       try {
@@ -81,14 +105,14 @@ export function createAttempts() {
       emit({ phase: "started", attempt, kind, target, ...why })
       return attempt
     },
-    settle(attempt, kind, target, outcome, skip) {
+    settle(attempt, kind, target, outcome, detail) {
       emit({
         phase: "settled",
         attempt,
         kind,
         target,
         outcome,
-        ...(skip === undefined ? {} : { skip }),
+        ...detail,
       })
     },
   }

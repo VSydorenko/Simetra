@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { catalogIndex, type ReadQuery } from "simetra/model"
+import type { AttemptEvent } from "../attempts"
 import { DISCARDS_MAX } from "../session"
 import type { SiteCode } from "../sync/vocabulary"
 import type { FakePart } from "../testing/fake-source"
@@ -7,6 +8,7 @@ import {
   IDLE_EXCEPTIONS,
   collectReads,
   readJournalViolations,
+  settleJournalViolations,
   type StampedEvent,
 } from "./oracles"
 import {
@@ -381,5 +383,114 @@ describe("O4: the idle window of a hidden tab", () => {
         expect(Number.isFinite(r.delayMs)).toBe(true)
       }
     })
+  })
+})
+
+describe("settle events against the journal of the fake source (two-sided)", () => {
+  const target = { kind: "view", object: TASK, id: 1 } as const
+  const started = (attempt: number): AttemptEvent => ({
+    phase: "started",
+    attempt,
+    kind: "load",
+    target,
+    reason: "mount",
+    site: "M1",
+  })
+  const settledAs = (
+    attempt: number,
+    outcome: "applied" | "failed" | "closed"
+  ): AttemptEvent => ({
+    phase: "settled",
+    attempt,
+    kind: "load",
+    target,
+    outcome,
+  })
+  const read = (attempt: number, request: number): StampedEvent => ({
+    ...event("M1", TASK, request - 1),
+    attempt,
+    request,
+  })
+  // Запит 1 дістав відповідь, запит 2 — відмову, запит 3 ще без відповіді.
+  const wire = { object: { kind: "Catalog", name: "Task" } } as never
+  const log = (request: number, state: "answer" | "error" | "open") =>
+    ({
+      wire,
+      known: undefined,
+      request: request - 1,
+      query: undefined,
+      issuedAt: 0,
+      ...(state === "answer" ? { response: {} as never } : {}),
+      ...(state === "error" ? { error: new Error("x") } : {}),
+    }) as never
+  const fake = {
+    log: [log(1, "answer"), log(2, "error"), log(3, "open")],
+    requestParts: [[part("Task")], [part("Task")], [part("Task")]],
+  }
+
+  it("is green for an applied attempt with an answer and a failed one with a refusal", () => {
+    expect(
+      settleJournalViolations(
+        [
+          started(1),
+          settledAs(1, "applied"),
+          started(2),
+          settledAs(2, "failed"),
+        ],
+        [read(1, 1), read(2, 2)],
+        fake
+      )
+    ).toEqual([])
+  })
+
+  it("is green for a failed attempt that sent no request (a skip condition)", () => {
+    expect(
+      settleJournalViolations([started(1), settledAs(1, "failed")], [], fake)
+    ).toEqual([])
+  })
+
+  it("is red when an applied attempt has no answer in the journal", () => {
+    expect(
+      settleJournalViolations(
+        [started(2), settledAs(2, "applied")],
+        [read(2, 2)],
+        fake
+      )
+    ).toEqual(["attempt 2: applied without an answered part"])
+  })
+
+  it("is red when a failed attempt was answered in full", () => {
+    expect(
+      settleJournalViolations(
+        [started(1), settledAs(1, "failed")],
+        [read(1, 1)],
+        fake
+      )
+    ).toHaveLength(1)
+  })
+
+  it("is red when the settle event of an answered attempt is lost", () => {
+    expect(
+      settleJournalViolations([started(1)], [read(1, 1)], fake)
+    ).toHaveLength(1)
+  })
+
+  it("is green for an attempt still in flight (no answer, no settle)", () => {
+    expect(settleJournalViolations([started(3)], [read(3, 3)], fake)).toEqual(
+      []
+    )
+  })
+
+  it("is red for a settle event without a start and for a double settle", () => {
+    expect(
+      settleJournalViolations([settledAs(9, "closed")], [], fake)
+    ).toHaveLength(1)
+    expect(
+      settleJournalViolations(
+        [started(1), settledAs(1, "applied"), settledAs(1, "applied")],
+        [read(1, 1)],
+        fake
+      )
+    ).toHaveLength(1)
   })
 })

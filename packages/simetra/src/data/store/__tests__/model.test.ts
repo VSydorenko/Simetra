@@ -2740,6 +2740,7 @@ async function runModelOn(
       for (const stop of unsubscribe) stop()
     } finally {
       next.close("disposed")
+      reads.retain(mine)
       for (const read of mine) {
         const at = fake.log.indexOf(read)
         if (at >= 0) (fake.log as FakeReadLog[]).splice(at, 1)

@@ -1,4 +1,4 @@
-import { skipOf, type Attempts } from "./attempts"
+import { failureOf, type Attempts, type SettleDetail } from "./attempts"
 import type { Defects } from "./defects"
 import { effectiveEpoch, heldEpoch, pairId } from "./epoch"
 import type { ObjectState } from "./forms"
@@ -54,12 +54,7 @@ import {
   type Subset,
   type SubsetRegistry,
 } from "./subsets"
-import type {
-  AdmissionCondition,
-  ReadCause,
-  ReadWhy,
-  SettleOutcome,
-} from "./sync/vocabulary"
+import type { ReadCause, ReadWhy, SettleOutcome } from "./sync/vocabulary"
 import type {
   ActiveView,
   GenerationToken,
@@ -1361,10 +1356,7 @@ export async function revalidateViews(
     numbers.set(s, ctx.attempts.start("reread", attemptTarget(s), why))
   }
   // Наслідок осідання кожного вигляду проходу (§5.5).
-  const outcomes = new Map<
-    Subset,
-    readonly [SettleOutcome, AdmissionCondition?]
-  >()
+  const outcomes = new Map<Subset, readonly [SettleOutcome, SettleDetail?]>()
   const purgesAtStart = new Map(ctx.purges)
   const purgedSince = (name: ObjectName) =>
     (ctx.purges.get(name) ?? 0) !== (purgesAtStart.get(name) ?? 0)
@@ -1432,7 +1424,7 @@ export async function revalidateViews(
                 outcomes.set(s, ["closed"])
                 continue
               }
-              outcomes.set(s, ["failed", skipOf(result.error)])
+              outcomes.set(s, ["failed", failureOf(result.error)])
               s.failures++
               s.failedAt = startedAt
               s.status = "error"
@@ -1478,7 +1470,7 @@ export async function revalidateViews(
               )
                 again.set(s, { reason: "retry", site: "R18" })
             } catch (error) {
-              outcomes.set(s, ["failed"])
+              outcomes.set(s, ["failed", failureOf(error)])
               ctx.log({ kind: "listener-failed", error })
               s.status = "error"
               s.error = errorOf(error)
