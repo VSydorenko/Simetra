@@ -39,6 +39,13 @@ export interface O2Input {
    * моделі, не за `sync()` (його умови судить сам оракул).
    */
   readonly holderVisible?: (target: SyncTarget) => boolean
+  /** Затримка звільнення вигляду моделі: межа часу, поки ціль без власника йде з `sync()`. */
+  readonly releaseDelayMs?: number
+  /**
+   * Скільки подій читання було в мить останнього кроку `join` моделі: читання,
+   * що знімає вимогу, яка виросла з приєднання, стартує не раніше.
+   */
+  readonly lastJoin?: () => number | undefined
   /** Модель вилучила ключ власника (`purge`): картка чи ТЧ іде разом із ним. */
   readonly ownerPurged?: (object: string, key: string) => boolean
   /** Чи тримає вигляд підписник чи `preload` (видимість не питаємо). */
@@ -347,7 +354,23 @@ export interface O2 {
 // межі відкинутих проходів: політ у цю паузу триматиме не довше.
 const RETRY_PAUSE_MAX_MS = DISCARD_PAUSE_MS * 2 ** (DISCARDS_MAX - 1)
 
+/**
+ * Що ядро ще винне цілі, вимога якої зникла без доказу за винятком таблиці:
+ * `leave` — ціль мусить піти з `sync()` до кінця затримки звільнення; `read` —
+ * читання цілі, межа якого — інтервал плюс пауза збоїв від появи видимого
+ * тримача.
+ */
+interface FollowUp {
+  readonly kind: "leave" | "read"
+  readonly sinceEvent: number
+  sinceTime: number
+  holderSince: number | undefined
+}
+
 export function createO2(): O2 {
+  const followUps = new Map<string, FollowUp>()
+  // Вигляд → мітка `join` моделі, з якої виросла вимога складу після приєднання.
+  const rejoined = new Map<string, number>()
   let count = 0
   let previous: Snapshot | undefined
   const obligations = new Map<string, Obligation>()
@@ -509,6 +532,53 @@ export function createO2(): O2 {
       }
     }
 
+    // Борги цілей, вимоги яких зникли за винятком (рядок 20 і вихід з відмови).
+    for (const [key, f] of [...followUps]) {
+      const state = byKey.get(key)
+      if (state === undefined) {
+        followUps.delete(key)
+        continue
+      }
+      const target = state.target
+      if (f.kind === "leave") {
+        if (input.holderPresent?.(target) !== false) f.sinceTime = now
+        else if (
+          input.releaseDelayMs !== undefined &&
+          now - f.sinceTime > input.releaseDelayMs
+        ) {
+          problems.push(
+            `${describe(target)}: the target of a purged owner stays in sync() past the release delay`
+          )
+          followUps.delete(key)
+        }
+        continue
+      }
+      if (state.requirements.length > 0) {
+        followUps.delete(key)
+        continue
+      }
+      if (state.refusal !== undefined) {
+        f.holderSince = undefined
+        continue
+      }
+      if (events.slice(f.sinceEvent).some((e) => eventNames(e, target))) {
+        followUps.delete(key)
+        continue
+      }
+      if (input.holderVisible?.(target) === true) {
+        f.holderSince ??= now
+        if (
+          input.revalidateMs !== undefined &&
+          now - f.holderSince > 2 * input.revalidateMs
+        ) {
+          problems.push(
+            `${describe(target)}: no read of the target within the interval and the failure pause after its requirement went`
+          )
+          followUps.delete(key)
+        }
+      } else f.holderSince = undefined
+    }
+
     // (а) обіцянка або умова на кожну вимогу.
     stillExcused.clear()
     let evaluated = false
@@ -581,12 +651,9 @@ export function createO2(): O2 {
             : spec?.kind === "card"
               ? spec.key
               : undefined
-        // Власник картки чи ТЧ вилучений зі сховища: разом з ним іде й ціль.
-        if (
+        const purged =
           ownerKey !== undefined &&
           input.ownerPurged?.(spec!.object, ownerKey) === true
-        )
-          continue
         if (state === undefined) {
           const t = was.target
           if (
@@ -598,7 +665,17 @@ export function createO2(): O2 {
         }
         // Відмова цілі (`discard-bound`, `stale-object`) — названа умова: ядро
         // нічого не читає, вимоги йому не потрібні.
-        if (state?.refusal !== undefined) continue
+        // Вийшовши з відмови, ціль мусить бути прочитана.
+        if (state?.refusal !== undefined) {
+          if (was.target.kind === "view" && !followUps.has(key))
+            followUps.set(key, {
+              kind: "read",
+              sinceEvent: events.length,
+              sinceTime: now,
+              holderSince: undefined,
+            })
+          continue
+        }
         const have = new Map(state?.requirements.map((r) => [r.kind, r]))
         // Вимога, що замінює, не старша за те, що стояло до неї на цілі.
         const floor = Math.max(
@@ -618,8 +695,45 @@ export function createO2(): O2 {
               problems.push(
                 `${describe(was.target)}: channel-rejoin replaced by a composition requirement of an earlier epoch`
               )
+            const joined = input.lastJoin?.()
+            if (joined !== undefined) rejoined.set(key, joined)
             continue
           }
+          // «Ціль відстала від шапки» без доказу: рядок 20 таблиці прогалин, з
+          // межею за тригером; інший тригер — не виняток.
+          if (
+            requirement.kind === "target-behind-header" &&
+            was.target.kind === "view"
+          ) {
+            const failed = windowOf().attempts.some(
+              (a) =>
+                a.phase === "settled" &&
+                a.outcome === "failed" &&
+                a.kind !== "page" &&
+                a.target.id === (was.target as { id: number }).id
+            )
+            const held = input.holderPresent?.(was.target)
+            const trigger = purged
+              ? "leave"
+              : failed || held === false
+                ? "read"
+                : undefined
+            if (trigger !== undefined) {
+              followUps.set(key, {
+                kind: trigger,
+                sinceEvent: events.length,
+                sinceTime: now,
+                holderSince:
+                  trigger === "read" &&
+                  input.holderVisible?.(was.target) === true
+                    ? now
+                    : undefined,
+              })
+              continue
+            }
+          }
+          // Власник вилучений: решту вимог картки чи ТЧ іде разом із ціллю.
+          if (purged) continue
           const replaced = REPLACED_BY[requirement.kind]?.some((kind) =>
             kind === "value-hidden"
               ? states.some(
@@ -634,8 +748,32 @@ export function createO2(): O2 {
               : have.has(kind)
           )
           if (replaced === true) continue
-          if (PROOFS[requirement.kind](windowOf(), was.target, requirement))
+          if (PROOFS[requirement.kind](windowOf(), was.target, requirement)) {
+            // Вимога, що виросла з приєднання, знімається читанням, яке
+            // стартувало після кроку `join` моделі (за порядком подій).
+            const mark = rejoined.get(key)
+            if (
+              requirement.kind === "composition-unconfirmed" &&
+              mark !== undefined &&
+              was.target.kind === "view"
+            ) {
+              rejoined.delete(key)
+              const id = was.target.id
+              const late = windowOf().attempts.some(
+                (a) =>
+                  a.phase === "settled" &&
+                  a.outcome === "applied" &&
+                  a.kind !== "page" &&
+                  a.target.id === id &&
+                  events.findIndex((e) => e.attempt === a.attempt) >= mark
+              )
+              if (!late)
+                problems.push(
+                  `${describe(was.target)}: the composition requirement of a rejoin was removed by a read that started before the join`
+                )
+            }
             continue
+          }
           problems.push(
             `${describe(was.target)}: ${requirement.kind} disappeared with no proof of its kind`
           )

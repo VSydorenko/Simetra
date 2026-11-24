@@ -442,6 +442,177 @@ describe("O2 self-check", () => {
       ).toMatch(/disappeared with no proof/)
     })
 
+    describe("target-behind-header leaves with no proof (row 20), each trigger bounded", () => {
+      const section: SyncTarget = {
+        kind: "view",
+        object: OBJECT,
+        spec: { kind: "section", object: OBJECT, owner: "o", section: "lines" },
+        id: 1,
+      }
+      const standing = [
+        state(section, { requirements: [{ kind: "target-behind-header" }] }),
+      ]
+      const bare = [...alive, state(section)]
+      const model = { revalidateMs: 100, releaseDelayMs: 1_000 }
+      const start = (o2: ReturnType<typeof createO2>) =>
+        o2.step(input({ states: standing, holderPresent: () => true }))
+
+      it("after a failed read: a read within the interval and the pause once a holder is visible", () => {
+        const failed = [
+          ...loaded,
+          ...settled(8, 1, "reread").slice(0, 1),
+          {
+            phase: "settled",
+            attempt: 8,
+            kind: "reread",
+            target: { kind: "view", object: OBJECT, id: 1 },
+            outcome: "failed",
+          } as AttemptEvent,
+        ]
+        const run = (events: StampedEvent[]) => {
+          const o2 = createO2()
+          start(o2)
+          const at = (now: number, seen: StampedEvent[]) =>
+            o2.step(
+              input({
+                ...model,
+                now,
+                states: bare,
+                attempts: failed,
+                events: seen,
+                holderPresent: () => true,
+                holderVisible: () => true,
+              })
+            )
+          expect(at(10, [])).toBeUndefined()
+          return at(300, events)
+        }
+        expect(run([])).toMatch(/no read of the target within/)
+        expect(run([read(1, 0)])).toBeUndefined()
+      })
+
+      it("after the holder is released: a read once a holder appears", () => {
+        const o2 = createO2()
+        start(o2)
+        const gone = { ...model, states: bare, holderPresent: () => false }
+        expect(o2.step(input({ ...gone, now: 10 }))).toBeUndefined()
+        // Без тримача читання не винне.
+        expect(
+          o2.step(input({ ...gone, now: 5_000, holderVisible: () => false }))
+        ).toBeUndefined()
+        const back = {
+          ...model,
+          states: bare,
+          holderPresent: () => true,
+          holderVisible: () => true,
+        }
+        expect(o2.step(input({ ...back, now: 5_010 }))).toBeUndefined()
+        expect(o2.step(input({ ...back, now: 5_300 }))).toMatch(
+          /no read of the target within/
+        )
+      })
+
+      it("after a purge of the owner: the target leaves sync() within the release delay", () => {
+        const o2 = createO2()
+        start(o2)
+        const purged = {
+          ...model,
+          states: bare,
+          ownerPurged: () => true,
+          holderPresent: () => false,
+        }
+        expect(o2.step(input({ ...purged, now: 10 }))).toBeUndefined()
+        expect(o2.step(input({ ...purged, now: 900 }))).toBeUndefined()
+        expect(o2.step(input({ ...purged, now: 1_500 }))).toMatch(
+          /past the release delay/
+        )
+        const left = createO2()
+        start(left)
+        left.step(input({ ...purged, now: 10 }))
+        expect(left.step(input({ now: 900, states: alive }))).toBeUndefined()
+      })
+
+      it("is red for any other trigger", () => {
+        const o2 = createO2()
+        start(o2)
+        expect(
+          o2.step(input({ states: bare, holderPresent: () => true, now: 10 }))
+        ).toMatch(/disappeared with no proof/)
+      })
+
+      it("must be read after it leaves a refusal", () => {
+        const refused = [...alive, state(section, { refusal: "discard-bound" })]
+        const run = (events: StampedEvent[]) => {
+          const o2 = createO2()
+          start(o2)
+          expect(
+            o2.step(input({ ...model, now: 10, states: refused }))
+          ).toBeUndefined()
+          const out = {
+            ...model,
+            states: bare,
+            events,
+            holderPresent: () => true,
+            holderVisible: () => true,
+          }
+          expect(o2.step(input({ ...out, now: 20 }))).toBeUndefined()
+          return o2.step(input({ ...out, now: 300 }))
+        }
+        expect(run([])).toMatch(/no read of the target within/)
+        expect(run([read(1, 0)])).toBeUndefined()
+      })
+    })
+
+    describe("the composition requirement of a rejoin goes only with a read after the join", () => {
+      const run = (readAt: number) => {
+        const o2 = createO2()
+        const base = { lastJoin: () => 3 }
+        o2.step(
+          input({
+            ...base,
+            states: [
+              state(view(1), {
+                requirements: [{ kind: "channel-rejoin" }],
+                deferral: "target-invisible",
+              }),
+            ],
+          })
+        )
+        o2.step(
+          input({
+            ...base,
+            now: 5,
+            states: [
+              state(view(1), {
+                requirements: [{ ...composition, epoch: 9 }],
+                deferral: "target-invisible",
+              }),
+            ],
+          })
+        )
+        const events = [0, 1, 2, 3, 4].map((i) =>
+          i === readAt ? read(1, i, 77) : read(2, i, 50 + i)
+        )
+        return o2.step(
+          input({
+            ...base,
+            now: 9,
+            states: alive.concat(state(view(1))),
+            events,
+            attempts: [...loaded, ...settled(77, 1, "reread")],
+          })
+        )
+      }
+
+      it("is red when the removing read started before the join", () => {
+        expect(run(1)).toMatch(/started before the join/)
+      })
+
+      it("is green when it started after the join", () => {
+        expect(run(4)).toBeUndefined()
+      })
+    })
+
     it("names a row of the table for every exception", () => {
       for (const exception of O2_EXCEPTIONS)
         expect(
