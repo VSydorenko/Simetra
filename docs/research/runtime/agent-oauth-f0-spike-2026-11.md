@@ -9,16 +9,18 @@
   `better-auth` 1.7.12, `nitro` 3.0.261103-rc, `@tanstack/react-start`
   1.169.5, Postgres 17 (стек `postgres`).
 - **Метод.** Прототип у гілці `issue-386-f0-spike` (не зливається): коміти
-  `21346bf2` (монтування) і `72dbfc87` (міст входу, сховище Postgres, CIMD,
-  оновлення). Перевірка — curl до зібраного сервера (`node
-  .output/server/index.mjs`) і до `vite dev`, unit-тест монтування, DB-тести
-  критеріїв 3–6 на тегованій базі прогону. Код сервера авторизації munin-mcp
+  `21346bf2` (монтування), `72dbfc87` (міст входу, сховище Postgres, CIMD,
+  оновлення), `f621c8fd` і `555aa1fd` (наскрізний тест зібраного сервера,
+  тест справжнього транспорту CIMD). Перевірка — curl до зібраного сервера
+  (`node .output/server/index.mjs`) і до `vite dev`, unit-тест монтування,
+  DB-тести на тегованій базі прогону, зокрема наскрізний тест, що запускає
+  зібраний сервер. Код сервера авторизації munin-mcp
   (власник дав його під Apache-2.0) — прецедент і джерело копій.
 - **Куди лягли рішення.** Спосіб монтування — [спека
   П4-F](../../superpowers/specs/2026-11-24-p4-f-agents-design.md) §7 OQ-1 і
-  §5.4 «Шаблон host-а» (рішення архітектора); вимоги до плану F4 — розділ
+  §5.4 «Шаблон host-а» (рішення архітектора блоку); вимоги до плану F4 — розділ
   «Що план F4 бере з прототипу» нижче.
-- **Статус.** Результат прототипу; рішення про монтування за архітектором.
+- **Статус.** Результат прототипу; рішення про монтування за архітектором блоку (`tooling-architect`).
 
 ## Відповідь
 
@@ -34,8 +36,8 @@ Start передає шляхи OAuth обробнику бібліотеки ч
 
 | # | Критерій | Результат | Як перевірено |
 | --- | --- | --- | --- |
-| 1 | Монтування | зелений | curl до зібраного сервера й `vite dev` |
-| 2 | Обмеження тіла | зелений | curl `POST /token`: форма доходить до бібліотеки; 5 MiB → 413 від обгортки |
+| 1 | Монтування | зелений | curl до зібраного сервера й `vite dev`; наскрізний DB-тест зібраного сервера |
+| 2 | Обмеження тіла | зелений | `POST /token` у зібраному сервері: `client_id=nope` → 401 `invalid_client`, повний обмін коду; 5 MiB → 413 від обгортки |
 | 3 | Міст входу | зелений | DB-тест, 2 випадки |
 | 4 | CIMD, три клієнти | зелений | DB-тест, 3 документи + справжній транспорт |
 | 5 | Оновлення | зелений | DB-тест, 3 випадки |
@@ -64,8 +66,10 @@ fetch: createEntryFetch(withOauth(createStartHandler(defaultStreamHandler)))
 
 **Маршрути Start.** У маршруті Start `request.runtime.node` немає (entry
 замінив запит). Сторінка взаємодії викликає `interactionDetails(req, res)` і
-`interactionResult` усередині `toFetchHandler((req, res) => …)` — працює в
-dev і в зібраному сервері. Без cookie взаємодії бібліотека кидає
+`interactionResult` усередині `toFetchHandler((req, res) => …)`.
+`interactionDetails` перевірено curl у dev і в зібраному сервері;
+`interactionResult` через маршрут Start — наскрізним тестом зібраного сервера
+нижче. Без cookie взаємодії бібліотека кидає
 `SessionNotFound`; його треба ловити.
 
 **curl, зібраний сервер, коміт `21346bf2`** (сховище в пам'яті, статичний
@@ -86,25 +90,31 @@ POST /token  5 MiB                             → 413 {"ok":false,"error":{"cod
 `vite dev` (той самий коміт): discovery 200, authorize 303, token
 `invalid_grant`, revoke 200, jwks 200, 5 MiB → 413.
 
-**curl, зібраний сервер, коміт `72dbfc87`** (повтор архітектора; сховище
-Postgres із недосяжною адресою бази — ті запити, що йдуть у сховище, дають
-500, це очікувано):
+**Наскрізний тест зібраного сервера, коміт `555aa1fd`**
+(`test/oauth-built.db.test.ts`): тест запускає `node .output/server/index.mjs`
+на тегованій базі прогону зі сховищем Postgres і клієнтом `probe`; кроки —
+справжній HTTP з cookie. Користувача створює окремий екземпляр Better Auth
+(реєстрація в зібраному сервері вимкнена); вхід — через HTTP. Вивід кроків
+виконавця прототипу:
 
 ```text
-$ GET /.well-known/oauth-authorization-server
-HTTP/1.1 200 OK
-{"authorization_endpoint":"http://localhost:3110/authorize",…,"code_challenge_methods_supported":["S256"],"grant_types_supported":["authorization_code","refresh_token"],"issuer":"http://localhost:3110",…}
-
-$ POST /token without client_id (body reaches the library)
-{"error":"invalid_request","error_description":"no client authentication mechanism provided"}
-
-$ POST /token, 5 MiB form body (control: wrapper in path)
-HTTP/1.1 413
-{"ok":false,"error":{"code":"command.invalid","reason":"payload-too-large"},…}
+sign-in: 200
+authorize: 303 -> /oauth-probe/<uid>
+approve (Start route POST): 200 OK {"redirectTo":".../authorize/<uid>","grantId":"..."}
+resume: 303 -> http://127.0.0.1:9/cb
+token (code): 200, keys=access_token,expires_in,refresh_token,scope,token_type
+token (refresh): 200
+revoke: 200
+token (refresh after revoke): 400 {"error":"invalid_grant","error_description":"grant request is invalid"}
+agent_grants.revoked_at: set
+token (client_id=nope): 401 {"error":"invalid_client","error_description":"client authentication failed"}
+token (5 MiB): 413
 ```
 
-Шлях через сховище Postgres перевіряють DB-тести нижче: вони кличуть той
-самий `withOauth` з веб-`Request`, без сокета.
+Отже, `interactionResult` через маршрут Start завершує взаємодію в зібраному
+сервері, а форма `/token` доходить до бібліотеки повз обгортку (401
+`invalid_client` на невідомого клієнта відрізняє розібране тіло від
+порожнього).
 
 **Заголовки `/token`** (зібраний сервер): `cache-control: no-store`,
 `content-security-policy: frame-ancestors 'none'`, `referrer-policy:
@@ -115,15 +125,17 @@ same-origin`, `x-content-type-options: nosniff` — від entry;
 
 ## Критерії 3–6
 
-DB-тест `test/oauth-flows.db.test.ts`, прогін архітектора на `72dbfc87`:
+DB-тести `test/oauth-flows.db.test.ts` і `test/oauth-built.db.test.ts`,
+повторний прогін виконавиці блоку на `555aa1fd` після `pnpm build`:
 
 ```text
-DB run xkjn99 on postgres stack at 72dbfc87, clean tree
- Test Files  1 passed (1)
-      Tests  10 passed (10)
+DB run o5a3oo on postgres stack at 555aa1fd, clean tree
+ Test Files  2 passed (2)
+      Tests  13 passed (13)
 ```
 
-Кожен тест іде через справжній `withOauth`. Сховище — Postgres у схемі
+Тести `oauth-flows` кличуть справжній `withOauth` з веб-`Request`, без
+сокета. Сховище — Postgres у схемі
 `agent_oauth` тегованої бази прогону; `afterAll` видаляє базу.
 
 - **C3, міст входу.** Анонімна сесія Better Auth (плагін `anonymous`,
@@ -138,13 +150,20 @@ DB run xkjn99 on postgres stack at 72dbfc87, clean tree
   токен (без крапок), `AccessToken.find().aud` містить ресурс MCP. ChatGPT
   має `jwks_uri` і `private_key_jwt`: лічильник звернень до `jwks.json` — 0.
   Claude Code — `http://localhost:53123/callback` при `http://localhost/callback`
-  у документі. Справжній транспорт: `https://127.0.0.1/cimd.json` і
-  `https://localhost/cimd.json` — відмова до взаємодії, 0 звернень.
+  у документі. Справжній транспорт: `https://127.0.0.1:<port>/cimd.json` і
+  `https://localhost:<port>/cimd.json`, де на порту слухає TCP-сервер тесту:
+  кожна помилка транспорту — `ForbiddenAddressError`, слухач не прийняв
+  жодного з'єднання. Мутація (перевірку адреси вимкнено) червонить тест:
+  `expected Set{ 'Error' } to deeply equal Set{ 'ForbiddenAddressError' }`.
+  Перша версія тесту (порт 443, де ніхто не слухає) під тією самою мутацією
+  лишалась зеленою, тому її переписано.
 - **C5, оновлення.** Без `offline_access` (`scope=mcp`) токен оновлення
   видано, оновлення — 200. Два паралельні оновлення одним токеном, бар'єр у
   `beforeConsume` пропускає обидва повз `find` до `consume`
   (`arrived.length === 2`):
-  `400 {"error":"invalid_grant",…} | 200 {…}` — рівно одне 200, `Grant`
+  `400 {"error":"invalid_grant",…} | 200 {…}` — рівно одне 200 (21 повтор
+  тесту: щоразу одне 200 й одне `invalid_grant`, 14 разів 200/400 і 7 разів
+  400/200), `Grant`
   знищено, `agent_grants.revoked_at` задано, токен оновлення переможця —
   `invalid_grant`. Оновлення після години: строк рахує JS (`Date.now()` в
   адаптері), тест зсуває `Date` на 2 год — старий токен доступу зник,
@@ -175,8 +194,8 @@ DB run xkjn99 on postgres stack at 72dbfc87, clean tree
    `agent_oauth` (поряд із `simetra_auth` для `better_auth`).
 7. **Вага entry.** `oidc-provider` і `pg` у графі імпорту entry: unit-тест
    `server-startup.test.ts` («imports with a valid environment», межа 5 с)
-   на `72dbfc87` падає за тайм-аутом у повному прогоні (1–3 падіння з 3
-   прогонів), окремо зелений за 6,05 с; на `main` окремо — 4,62 с. F4 має
+   на `72dbfc87` і `555aa1fd` падає за тайм-аутом у повному прогоні (1–3 падіння з 3
+   прогонів), файл окремо зелений (прогін 6,05 с; на `main` — 4,62 с). F4 має
    вантажити сервер авторизації ліниво або це прийняти явно.
 8. **`renderError`.** Типова сторінка помилки бібліотеки пише NOTICE у журнал;
    F4 дає свою.
@@ -192,6 +211,7 @@ DB run xkjn99 on postgres stack at 72dbfc87, clean tree
 | транспорт CIMD і нормалізація документа (`none`, без `jwks_uri`/`jwks`, `native` для loopback) | `src/server/oauth/safe-fetch.ts` | `gateway/src/oauth/safe-fetch.ts`, `provider.ts` |
 | міст входу Better Auth (`getSession` з заголовків Node-запиту, відмова анонімній сесії, `login.accountId`) | `src/server/oauth/interaction.ts`, `src/routes/oauth-probe.$uid.ts` | `gateway/src/oauth/login.ts`, `grants.ts` без пари |
 | форми тестів: бар'єр паралельного оновлення, керований годинник, лічильник звернень документа, справжній транспорт на приватну адресу | `test/oauth-flows.db.test.ts` | `gateway/test/oauth-tokens.test.ts`, `oauth-cimd.test.ts` |
+| наскрізний тест зібраного сервера (дочірній процес `.output`, тегована база, cookie-jar) | `test/oauth-built.db.test.ts` | — |
 | три збережені документи CIMD | `test/fixtures/cimd/*.json` | `gateway/test/fixtures/cimd/*.json` |
 
 Скопійовані файли несуть заголовок джерела й ліцензії за CONTRIBUTING.md;
