@@ -1,9 +1,14 @@
 ---
 name: simetra-adoption
-description: Use when bringing an existing live PostgreSQL database under Simetra metadata for the first time — reading its schemas into a `metadata/` directory with `simetra introspect`, then proving with `simetra diff` that the metadata and the database match. Covers choosing the scope (`--schemas`, `--tables`), the connection and shadow database settings, exit codes, and how to treat unrepresentable objects and non-empty results. Also covers the first screen after adoption: one-line list and card routes (`entityListRoute`, `entityCardRoute`). Not for everyday editing of metadata (that is `simetra-metadata`).
+description: "Use when bringing an existing live PostgreSQL database under Simetra metadata for the first time: `simetra introspect`, then `simetra diff` to prove they match. Not for everyday metadata edits (`simetra-metadata`)."
 ---
 
 # Simetra adoption — introspect a live database, then diff
+
+Covers: the scope (`--schemas`, `--tables`), the connection and shadow
+database settings, exit codes, unrepresentable objects and non-empty results,
+and the first screen after adoption: one-line list and card routes
+(`entityListRoute`, `entityCardRoute`).
 
 Adoption is a one-time onboarding: the database already exists, and the
 metadata is derived from it. `introspect` reads the database into metadata;

@@ -1,9 +1,15 @@
 ---
 name: writing-tests
-description: "Use when you add or change tests in this repo (Vitest unit tests, DB tests `*.db.test.ts`, pgTAP), write the test steps of a plan, or review test form. Sets the level to test at (unit before DB), how to build fixtures (shared builders, not inline metadata JSON), when to table-drive, what to assert (diagnostic codes, not message text), the DB-time budget and the boy-scout rule for existing test files. Complements the `vitest` skill (library API) and the `test-honesty` lens of `code-review` (does the test prove anything)."
+description: "Use when you add or change tests in this repo (Vitest unit, DB `*.db.test.ts`, pgTAP), write the test steps of a plan, or review test form."
 ---
 
 # Writing tests — Simetra
+
+Sets the level to test at (unit before DB), how to build fixtures (shared
+builders, not inline metadata JSON), when to table-drive, what to assert
+(diagnostic codes, not message text), the DB-time budget and the boy-scout
+rule for existing test files. Complements the `vitest` skill (library API) and
+the `test-honesty` lens of `code-review` (does the test prove anything).
 
 A test earns its place by **proving a behaviour that could break**: it fails
 when the behaviour breaks and passes otherwise. Its cost is not the lines but
