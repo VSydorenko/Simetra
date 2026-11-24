@@ -58,6 +58,7 @@ const FIELDS = {
       "gen",
       "flight",
       "flightEpoch",
+      "flightCause",
       "rereadEpochs",
       "trailing",
       "refreshedAt",

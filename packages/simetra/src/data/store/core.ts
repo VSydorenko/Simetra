@@ -320,6 +320,11 @@ export interface SyncFlight {
   readonly kind: SyncFlightKind
   /** The session epoch of its start, where `main` holds it. */
   readonly epoch?: number
+  /**
+   * The cause of the call that started the flight (its origin, plan Р-SK0-1);
+   * kept for the load of a view. A system re-read does not keep one on `main`.
+   */
+  readonly cause?: ReadCause
 }
 
 /** A read queued after the one in flight. */
@@ -2417,11 +2422,11 @@ export function createCore(options: {
         requirements.push({ kind: "target-behind-header" })
       const flights: SyncFlight[] = []
       if (s.flight !== undefined)
-        flights.push(
-          s.flightEpoch === undefined
-            ? { kind: "load" }
-            : { kind: "load", epoch: s.flightEpoch }
-        )
+        flights.push({
+          kind: "load",
+          ...(s.flightEpoch === undefined ? {} : { epoch: s.flightEpoch }),
+          ...(s.flightCause === undefined ? {} : { cause: s.flightCause }),
+        })
       for (const epoch of s.rereadEpochs)
         flights.push({ kind: "reread", epoch })
       for (let n = 0; n < s.paging.size; n++) flights.push({ kind: "page" })

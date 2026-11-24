@@ -790,3 +790,31 @@ describe("sync(): the opaque id of a view target", () => {
       expect("id" in page.target && page.target.id).toBe(idOf(h, win))
   })
 })
+
+describe("sync(): the cause of a load flight", () => {
+  it("is the origin of the call that started it; the queued load keeps its own cause and becomes the flight's", async () => {
+    const h = setup({ now: () => Date.now(), mode: "manual" })
+    seed(h.fake, 1, 2)
+    const spec = keysView(1, 2)
+    const handle = h.core.view(spec)
+    watch(handle)
+    await settle()
+    const load = () =>
+      stateOf(h, viewTarget(spec))!.flights.find((f) => f.kind === "load")
+    expect(load()).toMatchObject({ cause: { reason: "mount" } })
+    // Явне оновлення під час польоту стає в чергу під своєю причиною.
+    handle.refresh()
+    await settle()
+    expect(stateOf(h, viewTarget(spec))!.queued).toMatchObject([
+      { kind: "load", cause: { reason: "user" } },
+    ])
+    expect(load()).toMatchObject({ cause: { reason: "mount" } })
+    h.fake.deliverAll()
+    await settle()
+    // Політ із черги — причини виклику, що її поставив.
+    expect(load()).toMatchObject({ cause: { reason: "user" } })
+    h.fake.deliverAll()
+    await settle()
+    expect(load()).toBeUndefined()
+  })
+})

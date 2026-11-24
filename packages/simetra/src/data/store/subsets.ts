@@ -129,6 +129,8 @@ export interface Subset extends ReaderTarget {
   flight: number | undefined
   /** The start epoch of the last attempt of the load in flight. */
   flightEpoch: number | undefined
+  /** The cause of the call that started the load in flight (diagnostics only, `sync()`). */
+  flightCause: ReadCause | undefined
   /** The start epochs of the system re-reads (`revalidate`) in flight. */
   rereadEpochs: number[]
   /**
@@ -499,6 +501,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     }
     const gen = ++s.gen
     s.flight = gen
+    {
+      const { site, ...cause } = why
+      void site
+      s.flightCause = cause
+    }
     // Токен покоління: недійсний після звільнення й нового запиту (§6.1).
     const token = session.childToken(() => s.alive && s.gen === gen)
     const what = `view ${s.form.specKey}`
@@ -652,6 +659,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     void attempt(why).finally(() => {
       if (s.flight !== gen) return
       s.flight = undefined
+      s.flightCause = undefined
       // Вигляд у польоті — не ціль планувальника: `commit` відповіді був до
       // цього рядка, тож перепланування потрібне й тут.
       ctx.touchSchedule()
@@ -1111,6 +1119,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       gen: 0,
       flight: undefined,
       flightEpoch: undefined,
+      flightCause: undefined,
       rereadEpochs: [],
       trailing: undefined,
       settled: false,
