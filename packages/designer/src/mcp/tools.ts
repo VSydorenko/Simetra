@@ -2,6 +2,7 @@ import type { CallToolResult, McpServer } from "@modelcontextprotocol/server"
 import { z } from "zod"
 import { formatDiagnostics } from "../io/report"
 import {
+  presentation,
   structureOf,
   TOOLS,
   type PresentationView,
@@ -88,16 +89,8 @@ function toResponse(
   o: McpToolOptions,
   dry: boolean
 ): CallToolResult {
-  const {
-    ok,
-    written,
-    wouldWrite,
-    changes,
-    diagnostics,
-    refusal,
-    data,
-    artifacts,
-  } = result
+  const { ok, written, wouldWrite, changes, diagnostics, refusal, artifacts } =
+    result
   if (refusal !== undefined) {
     // Код відмови — і в `structuredContent`: агент читає причину, а не текст
     return {
@@ -130,18 +123,16 @@ function toResponse(
   // Усі відмінності між інструментами — у `tool.present`, не в гілках за іменем
   const present = tool.present
   // `explain` віддає саме пояснення; решта — єдину обгортку результату.
-  if (present?.bare === true && ok && data !== undefined) {
+  const { shown, data: shownData } = presentation(tool, result)
+  if (present?.bare === true && shown) {
     return {
-      structuredContent: { ...structureOf(tool, data) },
-      content: [{ type: "text", text: present.text?.(data, view) ?? "" }],
+      structuredContent: { ...structureOf(tool, shownData) },
+      content: [
+        { type: "text", text: present.text?.(shownData as never, view) ?? "" },
+      ],
     }
   }
-  // Дані показуються, коли вони є: помилка компіляції чи збій бази не мають
-  // даних і йдуть загальним видом з діагностикою. Інструмент осі `artifact`
-  // повертає і відмову з артефактами (`planHash` — вхід `apply`, його агент
-  // бере зі `structuredContent`)
-  const shown = present !== undefined && data !== undefined
-  const text = present?.text?.(data, view)
+  const text = shown ? present?.text?.(shownData as never, view) : undefined
   // Збій роботи з базою — не помилка метаданих: зведення не має слати
   // викликача правити теку, коли виправляти треба базу чи підключення
   const databaseFailed = diagnostics.some((d) => d.code === "database.failed")
@@ -181,7 +172,7 @@ function toResponse(
       changes,
       ...(tool.files === "artifact" ? { artifacts: artifacts ?? [] } : {}),
       diagnostics,
-      ...(shown ? structureOf(tool, data) : {}),
+      ...(shownData !== undefined ? structureOf(tool, shownData) : {}),
     },
     content: [
       {
@@ -191,8 +182,8 @@ function toResponse(
           [
             ...lines,
             report,
-            ...(shown && present.appendix !== undefined
-              ? [present.appendix(data, view)]
+            ...(shownData !== undefined && present?.appendix !== undefined
+              ? [present.appendix(shownData as never, view)]
               : []),
           ].join("\n"),
       },

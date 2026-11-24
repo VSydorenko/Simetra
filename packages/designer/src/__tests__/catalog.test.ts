@@ -15,7 +15,12 @@ import { readMetadataDir } from "../io/metadata-dir"
 import { mcpInputSchema } from "../mcp/tools"
 import { applyTool, planTool } from "../tools/apply-tools"
 import { compileArtifacts } from "../tools/artifacts"
-import { TOOLS, toolByName, type RunOutcome } from "../tools/catalog"
+import {
+  TOOLS,
+  toolByName,
+  type FilesAccess,
+  type RunOutcome,
+} from "../tools/catalog"
 import { invoke, permits } from "../tools/invoke"
 import { queueFor } from "../tools/queue"
 import {
@@ -1072,6 +1077,40 @@ describe("files axis", () => {
       destructive: false,
       // @ts-expect-error — `changes` осі `artifact` — лише порожній кортеж
       run: async () => ({ ok: true, changes: [change], diagnostics: [] }),
+    })
+    // Ширша анотація результату `run` не обходить вісь: `F` береться лише з
+    // `files`, тож `RunOutcome<D, FilesAccess>` — помилка типу
+    void defineTool({
+      name: "apply",
+      description: "Artifact tool stub with a widened annotation.",
+      input: z.strictObject({}),
+      files: "artifact",
+      database: "none",
+      data: "none",
+      destructive: false,
+      // @ts-expect-error — результат із ширшою віссю не підходить осі `artifact`
+      run: async (): Promise<RunOutcome<undefined, FilesAccess>> => ({
+        ok: true,
+        changes: [change],
+        diagnostics: [],
+      }),
+    })
+    // Інструмент з `data` без `present` каналам нічого б не показав
+    // @ts-expect-error — `present` обов'язкове, коли `D` не `undefined`
+    void defineTool({
+      name: "explain",
+      description: "Tool with data and no presentation.",
+      input: z.strictObject({}),
+      files: "read",
+      database: "none",
+      data: "none",
+      destructive: false,
+      run: async (): Promise<RunOutcome<{ x: number }, "read">> => ({
+        ok: true,
+        changes: [],
+        diagnostics: [],
+        data: { x: 1 },
+      }),
     })
     // Інструмент осі `write` ті самі зміни повертати може
     void defineTool({

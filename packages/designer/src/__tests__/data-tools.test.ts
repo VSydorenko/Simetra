@@ -24,6 +24,7 @@ import {
   runtimeValuesLayer,
   type Answer,
 } from "../../../simetra/test/support"
+import { renderResult } from "../cli/render"
 import { DataGuardRefusal } from "../io/data-guard-refusal"
 import { dataResource, dataSession, withData } from "../io/data"
 import { createMcpServer } from "../mcp/server"
@@ -282,6 +283,27 @@ describe("warnings of a successful data call", TOOL_PIPELINE, () => {
     expect(r.diagnostics.map((d) => [d.code, d.file])).toEqual([
       ["physical.reserved-word", "catalogs/Gauge/Gauge.meta.json"],
     ])
+  })
+
+  it("shows the warnings in the CLI text and the MCP content", async () => {
+    // Зведення без звіту ховало б попередження від того, хто читає лише текст
+    const warned = await warningDir()
+    const { resource } = stubData({
+      script: (text) => answer(text, warned.hash),
+    })
+    const r = await invoke(dataReadTool, readGauge, {
+      ...options(resource),
+      dir: warned.dir,
+    })
+    const { stdout } = renderResult(dataReadTool, r, {
+      dir: warned.dir,
+      locale: "en",
+      format: "text",
+    })
+    expect(stdout).toContain("data-read: 1 row")
+    expect(stdout).toContain("physical.reserved-word")
+    const mcp = await callMcp(resource, "data-read", readGauge, warned.dir)
+    expect(mcp.text).toContain("physical.reserved-word")
   })
 
   it("names the objects of the batch and no other object", async () => {

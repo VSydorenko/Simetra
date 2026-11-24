@@ -481,6 +481,15 @@ describe("simetra mcp", TOOL_PIPELINE, () => {
     const clean = await call(client, "compile", {})
     expect(clean.isError).toBe(false)
     expect(clean.out.ok).toBe(true)
+    // Скомпільована модель — не відповідь агентові (~МБ на виклик): `compile`
+    // віддає лише діагностику
+    expect(clean.out).not.toHaveProperty("model")
+    expect(Object.keys(clean.out).sort()).toEqual([
+      "changes",
+      "diagnostics",
+      "ok",
+      "written",
+    ])
     // Ламаємо файл після підключення: стан — диск, а не пам'ять сервера.
     await writeFile(join(dir, CURRENCY), "{ not json")
     const broken = await call(client, "compile", {})

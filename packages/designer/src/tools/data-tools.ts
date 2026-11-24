@@ -226,8 +226,15 @@ export const dataReadTool = defineTool({
   },
   present: {
     structure: (data) => toJson(data) as Record<string, unknown>,
-    text: (data) =>
-      data === undefined ? undefined : summarizeData("data-read", data),
+    // Попередження про об'єкти операції — після зведення, як звіт інших
+    // інструментів
+    text: (data, v) =>
+      data === undefined
+        ? undefined
+        : [
+            summarizeData("data-read", data),
+            ...(v.diagnostics.length > 0 ? [v.report] : []),
+          ].join("\n"),
   },
 })
 
@@ -285,7 +292,14 @@ export const dataCommandTool = defineTool({
   },
   present: {
     structure: (data) => toJson(data) as Record<string, unknown>,
-    text: (data) =>
-      data === undefined ? undefined : summarizeData("data-command", data),
+    // Попередження про об'єкти операції — після зведення, як звіт інших
+    // інструментів
+    text: (data, v) =>
+      data === undefined
+        ? undefined
+        : [
+            summarizeData("data-command", data),
+            ...(v.diagnostics.length > 0 ? [v.report] : []),
+          ].join("\n"),
   },
 })

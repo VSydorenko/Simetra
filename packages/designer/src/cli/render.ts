@@ -1,6 +1,7 @@
 import type { Locale } from "simetra/compiler"
 import { formatDiagnostics } from "../io/report"
 import {
+  presentation,
   structureOf,
   type PresentationView,
   type Tool,
@@ -28,17 +29,11 @@ export function renderResult(
     diagnostics: r.diagnostics,
     report,
   }
-  // Інструмент осі `artifact` показується завжди: відмова без `data` теж
-  // має артефакти й діагностику
-  const shows =
-    present !== undefined &&
-    (present.bare === true
-      ? r.ok && r.data !== undefined
-      : r.data !== undefined || tool.files === "artifact")
-  if (shows && present.bare === true && o.format === "json")
+  const { shown: shows, data } = presentation(tool, r)
+  if (shows && present?.bare === true && o.format === "json")
     return { stdout: JSON.stringify(r.data, null, 2) }
   if (shows && o.format === "text") {
-    const text = present.text?.(r.data, view)
+    const text = present?.text?.(r.data, view)
     if (text !== undefined) return { stdout: text }
   }
   if (!shows && tool.files === "read") return { stdout: report }
@@ -54,7 +49,7 @@ export function renderResult(
           ...(tool.files === "artifact"
             ? { artifacts: r.artifacts ?? [] }
             : {}),
-          ...(shows && r.data !== undefined ? structureOf(tool, r.data) : {}),
+          ...(data !== undefined ? structureOf(tool, data) : {}),
           diagnostics: JSON.parse(report) as unknown,
         },
         null,
@@ -85,8 +80,8 @@ export function renderResult(
               ]
             : ["nothing written: the result has errors"]),
       report,
-      ...(shows && r.data !== undefined && present.appendix !== undefined
-        ? [present.appendix(r.data, view)]
+      ...(data !== undefined && present?.appendix !== undefined
+        ? [present.appendix(data, view)]
         : []),
     ].join("\n"),
   }

@@ -36,7 +36,7 @@ const completion = (dir: string): CompletionOptions => ({
 async function apply(
   dir: string,
   operation: (files: Map<string, string>) => Promise<OperationResult>
-): Promise<RunOutcome<undefined>> {
+): Promise<RunOutcome<undefined, "write">> {
   const result = await operation(await readMetadataDir(dir))
   return {
     ok: result.ok,
@@ -54,7 +54,7 @@ async function apply(
 async function applyPromotion(
   dir: string,
   operation: (files: Map<string, string>) => Promise<PromoteResult>
-): Promise<RunOutcome<PromotionRecord>> {
+): Promise<RunOutcome<PromotionRecord, "write">> {
   const result = await operation(await readMetadataDir(dir))
   const { record } = result
   return {
@@ -140,7 +140,11 @@ export const deleteTool = defineTool({
 
 // Вхід сюди приходить уже розібраним `promoteInput` (це робить `invoke`):
 // `promoteObject` сам не вилучає призначених полів, а покладається на схему.
-export const promoteTool = defineTool<typeof promoteInput, PromotionRecord>({
+export const promoteTool = defineTool<
+  typeof promoteInput,
+  PromotionRecord,
+  "write"
+>({
   name: "promote",
   description:
     "Promote an adopted CustomTable (with its tabular-section tables) into a Catalog, a Document without movements or an independent InformationRegister from a complete one-off mapping; ids carry over, names become canonical, dependent function bodies are rewritten. Writes only when the result compiles; returns the promotion record for the database plan.",

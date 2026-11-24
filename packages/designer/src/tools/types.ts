@@ -122,12 +122,15 @@ export interface ToolContext {
  * `apply`) їх мати не може — тип, а не перевірка після `run`, бо в `apply`
  * база вже змінена, коли `invoke` побачив би дефект.
  */
-export type ChangesFor<F extends FilesAccess> = F extends "artifact"
-  ? readonly []
-  : FileChange[]
+export interface ChangesByAxis {
+  read: FileChange[]
+  artifact: readonly []
+  write: FileChange[]
+}
+export type ChangesFor<F extends FilesAccess> = ChangesByAxis[F]
 
 /** `run` лише читає теку й викликає операцію; запис робить `invoke`. */
-export interface RunOutcome<D, F extends FilesAccess = FilesAccess> {
+export interface RunOutcome<D, F extends FilesAccess> {
   ok: boolean
   /**
    * Мутація режиму `repair` прийняла результат з помилками лише класу
@@ -194,11 +197,7 @@ export interface Presentation<D = never> {
   appendix?(data: D, view: PresentationView): string
 }
 
-export interface Tool<
-  I extends z.ZodType = z.ZodType,
-  D = unknown,
-  F extends FilesAccess = FilesAccess,
-> {
+interface ToolBase<I extends z.ZodType, D, F extends FilesAccess> {
   name: ToolName
   /** Англійською: MCP і `--help` беруть опис звідси. */
   description: string
@@ -212,10 +211,27 @@ export interface Tool<
    * канал не успадковує доступ до інструмента.
    */
   cliOnly?: true
-  /** Подання `data` каналами; без поля `data` каналам не показується. */
-  present?: Presentation<NoInfer<D>>
-  run(ctx: ToolContext, input: z.infer<I>): Promise<RunOutcome<D, F>>
+  /**
+   * Вісь береться лише з `files` запису: ширша анотація результату `run`
+   * (`RunOutcome<D, FilesAccess>`) — помилка типу, інакше інструмент осі
+   * `artifact` міг би повернути зміни теки.
+   */
+  run(ctx: ToolContext, input: z.infer<I>): Promise<RunOutcome<D, NoInfer<F>>>
 }
+
+/**
+ * Подання `data` каналами. Інструмент, чий `D` не містить `undefined`,
+ * мусить його оголосити: інакше канали мовчки не показали б його дані.
+ */
+type PresentField<D> = undefined extends D
+  ? { present?: Presentation<NoInfer<D>> }
+  : { present: Presentation<NoInfer<D>> }
+
+export type Tool<
+  I extends z.ZodType = z.ZodType,
+  D = unknown,
+  F extends FilesAccess = FilesAccess,
+> = ToolBase<I, D, F> & PresentField<D>
 
 export type RefusalReason =
   | "invalid-input"
@@ -286,10 +302,8 @@ export interface InvokeOptions {
 }
 
 /** Виводить типи входу й даних з аргументів, щоб записи не писали generics. */
-export function defineTool<
-  I extends z.ZodType,
-  D = undefined,
-  F extends FilesAccess = FilesAccess,
->(tool: Tool<I, D, F>): Tool<I, D, F> {
+export function defineTool<I extends z.ZodType, D, F extends FilesAccess>(
+  tool: Tool<I, D, F>
+): Tool<I, D, F> {
   return tool
 }
