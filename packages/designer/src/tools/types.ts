@@ -117,8 +117,17 @@ export interface ToolContext {
   baseline?: ReadonlyMap<string, string>
 }
 
+/**
+ * Зміни теки метаданих за віссю файлів: інструмент осі `artifact` (`plan`,
+ * `apply`) їх мати не може — тип, а не перевірка після `run`, бо в `apply`
+ * база вже змінена, коли `invoke` побачив би дефект.
+ */
+export type ChangesFor<F extends FilesAccess> = F extends "artifact"
+  ? readonly []
+  : FileChange[]
+
 /** `run` лише читає теку й викликає операцію; запис робить `invoke`. */
-export interface RunOutcome<D> {
+export interface RunOutcome<D, F extends FilesAccess = FilesAccess> {
   ok: boolean
   /**
    * Мутація режиму `repair` прийняла результат з помилками лише класу
@@ -126,7 +135,7 @@ export interface RunOutcome<D> {
    * пише `changes`.
    */
   written?: true
-  changes: FileChange[]
+  changes: ChangesFor<F>
   diagnostics: Diagnostic[]
   data?: D
   refusal?: string
@@ -143,12 +152,16 @@ export interface RunOutcome<D> {
   artifacts?: FileChange[]
 }
 
-export interface Tool<I extends z.ZodType = z.ZodType, D = unknown> {
+export interface Tool<
+  I extends z.ZodType = z.ZodType,
+  D = unknown,
+  F extends FilesAccess = FilesAccess,
+> {
   name: ToolName
   /** Англійською: MCP і `--help` беруть опис звідси. */
   description: string
   input: I
-  files: FilesAccess
+  files: F
   database: DatabaseAccess
   data: DataAccess
   destructive: boolean
@@ -157,7 +170,7 @@ export interface Tool<I extends z.ZodType = z.ZodType, D = unknown> {
    * канал не успадковує доступ до інструмента.
    */
   cliOnly?: true
-  run(ctx: ToolContext, input: z.infer<I>): Promise<RunOutcome<D>>
+  run(ctx: ToolContext, input: z.infer<I>): Promise<RunOutcome<D, F>>
 }
 
 export type RefusalReason =
@@ -229,8 +242,10 @@ export interface InvokeOptions {
 }
 
 /** Виводить типи входу й даних з аргументів, щоб записи не писали generics. */
-export function defineTool<I extends z.ZodType, D = undefined>(
-  tool: Tool<I, D>
-): Tool<I, D> {
+export function defineTool<
+  I extends z.ZodType,
+  D = undefined,
+  F extends FilesAccess = FilesAccess,
+>(tool: Tool<I, D, F>): Tool<I, D, F> {
   return tool
 }
