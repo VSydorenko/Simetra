@@ -71,11 +71,15 @@ const settled = (
   },
 ]
 
+// Вигляди тестів уже застосували читання: інакше їх покриває виняток вигляду,
+// що ще не завантажувся.
+const loaded = [1, 2].flatMap((id) => settled(100 + id, id, "load"))
+
 const input = (over: Partial<O2Input>): O2Input => ({
   now: 0,
   states: [],
   events: [],
-  attempts: [],
+  attempts: loaded,
   fake,
   ...over,
 })
@@ -229,7 +233,14 @@ describe("O2 self-check", () => {
     const after = (events: StampedEvent[], attempts: AttemptEvent[]) => {
       const o2 = createO2()
       o2.step(input({ states: before }))
-      return o2.step(input({ now: 5, states: gone, events, attempts }))
+      return o2.step(
+        input({
+          now: 5,
+          states: gone,
+          events,
+          attempts: [...loaded, ...attempts],
+        })
+      )
     }
 
     it("is red with no read at all", () => {
@@ -291,6 +302,19 @@ describe("O2 self-check", () => {
     it("is red when the replacing requirement has an earlier epoch or none", () => {
       expect(rejoin(3)).toMatch(/earlier epoch/)
       expect(rejoin(undefined)).toMatch(/earlier epoch/)
+    })
+
+    it("is green when the target shows a refusal: nothing is read, nothing is required", () => {
+      const o2 = createO2()
+      o2.step(input({ states: before }))
+      expect(
+        o2.step(
+          input({
+            now: 5,
+            states: [...alive, state(view(1), { refusal: "discard-bound" })],
+          })
+        )
+      ).toBeUndefined()
     })
 
     it("is green when the target goes away with the requirement", () => {
@@ -355,11 +379,76 @@ describe("O2 self-check", () => {
       expect(o2.step(input({ ...visible, now: 2_001 }))).toMatch(/no promise/)
     })
 
+    it("excuses a view that never applied a read, until it does (row 18)", () => {
+      const states = [state(view(9), { requirements: [composition] })]
+      expect(createO2().step(input({ states, attempts: [] }))).toBeUndefined()
+      expect(
+        createO2().step(input({ states, attempts: settled(5, 9, "page") }))
+      ).toMatch(/no promise/)
+    })
+
+    it("excuses target-behind-header by the holder of the target (row 17)", () => {
+      const states = [
+        state(view(1), { requirements: [{ kind: "target-behind-header" }] }),
+      ]
+      expect(
+        createO2().step(
+          input({ states, holderPresent: () => false, revalidateMs: 100 })
+        )
+      ).toBeUndefined()
+      const o2 = createO2()
+      const held = { states, holderPresent: () => true, revalidateMs: 100 }
+      expect(o2.step(input({ ...held, now: 0 }))).toBeUndefined()
+      expect(o2.step(input({ ...held, now: 101 }))).toMatch(/no promise/)
+    })
+
+    it("excuses a row requirement by the visible holders of its object (rows 2, 4, 12, 19)", () => {
+      const row: SyncTarget = { kind: "row", object: OBJECT, key: "k" }
+      const states = [
+        state(row, { requirements: [{ kind: "value-hidden" }] }),
+        state(view(1)),
+      ]
+      expect(
+        createO2().step(
+          input({ states, holderVisible: () => false, revalidateMs: 100 })
+        )
+      ).toBeUndefined()
+      const o2 = createO2()
+      const held = { states, holderVisible: () => true, revalidateMs: 100 }
+      expect(o2.step(input({ ...held, now: 0 }))).toBeUndefined()
+      expect(o2.step(input({ ...held, now: 201 }))).toMatch(/no promise/)
+    })
+
+    it("lets target-behind-header go with the owner of its section", () => {
+      const section: SyncTarget = {
+        kind: "view",
+        object: OBJECT,
+        spec: { kind: "section", object: OBJECT, owner: "o", section: "lines" },
+        id: 1,
+      }
+      const before = [
+        state(section, { requirements: [{ kind: "target-behind-header" }] }),
+      ]
+      const after = [...alive, state(section)]
+      const gone = createO2()
+      gone.step(input({ states: before, holderPresent: () => false }))
+      expect(
+        gone.step(input({ now: 5, states: after, ownerPurged: () => true }))
+      ).toBeUndefined()
+      const kept = createO2()
+      kept.step(input({ states: before, holderPresent: () => false }))
+      expect(
+        kept.step(input({ now: 5, states: after, ownerPurged: () => false }))
+      ).toMatch(/disappeared with no proof/)
+    })
+
     it("names a row of the table for every exception", () => {
       for (const exception of O2_EXCEPTIONS)
-        expect(exception.rows.every((n) => [3, 4, 5, 6, 12].includes(n))).toBe(
-          true
-        )
+        expect(
+          exception.rows.every((n) =>
+            [2, 3, 4, 5, 6, 12, 17, 18, 19].includes(n)
+          )
+        ).toBe(true)
     })
   })
 })

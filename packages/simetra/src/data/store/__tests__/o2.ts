@@ -39,11 +39,18 @@ export interface O2Input {
    * моделі, не за `sync()` (його умови судить сам оракул).
    */
   readonly holderVisible?: (target: SyncTarget) => boolean
+  /** Модель вилучила ключ власника (`purge`): картка чи ТЧ іде разом із ним. */
+  readonly ownerPurged?: (object: string, key: string) => boolean
+  /** Чи тримає вигляд підписник чи `preload` (видимість не питаємо). */
+  readonly holderPresent?: (target: SyncTarget) => boolean
   /** Інтервал збіжності й межа паузи збоїв моделі: строк винятків 3 і 5 — їх сума. */
   readonly revalidateMs?: number
   /** Сховище не тримає жодного рядка (виняток рядка 6: строк знімка прав). */
   readonly storeEmpty?: boolean
 }
+
+/** Вхід кроку з тим, що оракул веде сам: вигляди, що вже застосували читання. */
+export type O2Context = O2Input & { readonly applied: ReadonlySet<number> }
 
 /**
  * Винятки О2: лише «Відомі прогалини `main`» спеки §5.13, кожна названа станом,
@@ -59,9 +66,9 @@ export interface O2Exception {
    * не довше за `boundMs` від першого разу (з умовою, за якої `main` сам читає:
    * строк того шляху); `false` — виняток не діє.
    */
-  readonly holds: (state: SyncState, input: O2Input) => boolean | "bounded"
+  readonly holds: (state: SyncState, input: O2Context) => boolean | "bounded"
   /** Межа часу моделі для `"bounded"`. */
-  readonly boundMs?: (input: O2Input) => number | undefined
+  readonly boundMs?: (input: O2Context) => number | undefined
 }
 
 export const O2_EXCEPTIONS: readonly O2Exception[] = [
@@ -87,21 +94,65 @@ export const O2_EXCEPTIONS: readonly O2Exception[] = [
     boundMs: (input) =>
       input.revalidateMs === undefined ? undefined : 2 * input.revalidateMs,
   },
-  // Рядки 4 і 12: позначка рядка без строку — доки жоден вигляд цього об'єкта
-  // не читає (немає видимого тримача на видимій вкладці).
+  // Рядки 2, 4, 12, 19: вимога рядка (мінімальна версія, недочитано, значення
+  // сховано, епоха версій) без строку. Рядок читають вигляди-тримачі його
+  // об'єкта: без видимого тримача на видимій вкладці `main` не читає (названий
+  // стан), з ним читання йде за строком шляху.
   {
-    rows: [4, 12],
-    kinds: ["min-version", "row-unfinished"],
-    holds: (state, input) =>
-      state.target.kind === "row" &&
-      !input.states.some(
+    rows: [2, 4, 12, 19],
+    kinds: [
+      "min-version",
+      "row-unfinished",
+      "value-hidden",
+      "version-epoch-switched",
+    ],
+    holds: (state, input) => {
+      const target = state.target
+      if (target.kind !== "row" || input.holderVisible === undefined)
+        return false
+      const visible = input.states.some(
         (s) =>
           s.target.kind === "view" &&
-          s.target.object === (state.target as { object: string }).object &&
-          s.refusal === undefined &&
-          s.deferral !== "tab-hidden" &&
-          s.deferral !== "target-invisible"
-      ),
+          s.target.object === target.object &&
+          input.holderVisible!(s.target)
+      )
+      return visible ? "bounded" : true
+    },
+    boundMs: (input) =>
+      input.revalidateMs === undefined ? undefined : 2 * input.revalidateMs,
+  },
+  // Рядок 17: «ціль відстала від шапки» картки чи ТЧ читає лише ціль, яку
+  // утримує підписник чи `preload`; без тримача читання немає (названий стан),
+  // з тримачем — одразу, у межах інтервалу. Вимоги складу тієї ж цілі без
+  // тримача теж не читає ніхто.
+  {
+    rows: [17],
+    kinds: [
+      "target-behind-header",
+      "channel-rejoin",
+      "composition-unconfirmed",
+    ],
+    holds: (state, input) =>
+      state.target.kind !== "view" || input.holderPresent === undefined
+        ? false
+        : input.holderPresent(state.target)
+          ? "bounded"
+          : true,
+    boundMs: (input) => input.revalidateMs,
+  },
+  // Рядок 18: вигляд, що жодного разу не застосував читання (перше завантаження
+  // збоїло чи не закінчилось), планувальник не читає: його читає лише
+  // `refresh()`. Названий стан діє до першого застосованого читання.
+  {
+    rows: [18],
+    kinds: [
+      "composition-unconfirmed",
+      "channel-rejoin",
+      "target-behind-header",
+    ],
+    holds: (state, input) =>
+      state.target.kind === "view" &&
+      !input.applied.has((state.target as { id: number }).id),
   },
 ]
 
@@ -308,6 +359,8 @@ export function createO2(): O2 {
   /** Політ без запиту без відповіді, чия подія називає ціль. */
   const flightProblems = (input: O2Input): string[] => {
     const { fake, events, states } = input
+    // Польотів немає — нічого судити (вибірка журналу дорога на кожному кроці).
+    if (!states.some((s) => s.flights.length > 0)) return []
     const open = new Set(
       fake.log
         .filter((p) => p.response === undefined && p.error === undefined)
@@ -377,7 +430,7 @@ export function createO2(): O2 {
   const stillExcused = new Set<string>()
 
   /** Чи покриває вимогу виняток таблиці; обмежений — не довше за свою межу. */
-  const excused = (state: SyncState, input: O2Input): boolean => {
+  const excused = (state: SyncState, input: O2Context): boolean => {
     for (const e of O2_EXCEPTIONS) {
       if (!state.requirements.every((r) => e.kinds.includes(r.kind))) continue
       const held = e.holds(state, input)
@@ -397,7 +450,17 @@ export function createO2(): O2 {
     return false
   }
 
-  const step = (input: O2Input): string | undefined => {
+  const applied = new Set<number>()
+  let attemptsSeen = 0
+
+  const step = (raw: O2Input): string | undefined => {
+    // Вигляди, що застосували читання: набір ведеться по новій частині подій.
+    for (; attemptsSeen < raw.attempts.length; attemptsSeen++) {
+      const a = raw.attempts[attemptsSeen]!
+      if (a.phase === "settled" && a.outcome === "applied")
+        applied.add(a.target.id)
+    }
+    const input: O2Context = { ...raw, applied }
     const { states, now, events, fake } = input
     const idle = fake.pending.length === 0 && fake.inFlight === 0
     // Політ судить лише спокій: у польоті запит складається з частин, які
@@ -492,17 +555,38 @@ export function createO2(): O2 {
       log: fake.log.length,
     }
     if (previous !== undefined && !closed) {
-      const log = fake.log.slice(Math.min(previous.log, fake.log.length))
-      const window: Window = {
-        events: events.slice(previous.events),
-        attempts: input.attempts.slice(previous.attempts),
-        log,
-        input,
-        rows: deliveredRows(log, fake.index),
+      const from = previous
+      // Відповіді журналу розбираються лише тоді, коли вимога справді зникла.
+      let window: Window | undefined
+      const windowOf = (): Window => {
+        if (window === undefined) {
+          const log = fake.log.slice(Math.min(from.log, fake.log.length))
+          window = {
+            events: events.slice(from.events),
+            attempts: input.attempts.slice(from.attempts),
+            log,
+            input,
+            rows: deliveredRows(log, fake.index),
+          }
+        }
+        return window
       }
       for (const [key, was] of previous.targets) {
         const state = byKey.get(key)
         // Ціль зникла: вигляд закрито чи звільнено, рядок вилучено зі сховища.
+        const spec = was.target.kind === "view" ? was.target.spec : undefined
+        const ownerKey =
+          spec?.kind === "section"
+            ? spec.owner
+            : spec?.kind === "card"
+              ? spec.key
+              : undefined
+        // Власник картки чи ТЧ вилучений зі сховища: разом з ним іде й ціль.
+        if (
+          ownerKey !== undefined &&
+          input.ownerPurged?.(spec!.object, ownerKey) === true
+        )
+          continue
         if (state === undefined) {
           const t = was.target
           if (
@@ -512,6 +596,9 @@ export function createO2(): O2 {
           )
             continue
         }
+        // Відмова цілі (`discard-bound`, `stale-object`) — названа умова: ядро
+        // нічого не читає, вимоги йому не потрібні.
+        if (state?.refusal !== undefined) continue
         const have = new Map(state?.requirements.map((r) => [r.kind, r]))
         // Вимога, що замінює, не старша за те, що стояло до неї на цілі.
         const floor = Math.max(
@@ -547,7 +634,7 @@ export function createO2(): O2 {
               : have.has(kind)
           )
           if (replaced === true) continue
-          if (PROOFS[requirement.kind](window, was.target, requirement))
+          if (PROOFS[requirement.kind](windowOf(), was.target, requirement))
             continue
           problems.push(
             `${describe(was.target)}: ${requirement.kind} disappeared with no proof of its kind`
