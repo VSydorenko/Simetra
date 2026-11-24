@@ -32,6 +32,7 @@ import {
   dataReadTool,
   logRuntimeEntry,
   summarizeData,
+  warningsFor,
 } from "../tools/data-tools"
 import { invoke } from "../tools/invoke"
 import type { DataResource, InvokeOptions } from "../tools/types"
@@ -79,8 +80,9 @@ afterEach(() => {
 })
 
 /** Відповіді бази рантайму: звірка проходить, ядро віддає рядок `Gauge`. */
-function answer(text: string): Answer {
-  if (text.includes("applied_snapshot_hash")) return { rows: [{ hash }] }
+function answer(text: string, appliedHash = hash): Answer {
+  if (text.includes("applied_snapshot_hash"))
+    return { rows: [{ hash: appliedHash }] }
   // Факти ролі входу рантайму — раніше за членство: той самий `pg_has_role`
   // у тексті; роль входу без жодного привілею.
   if (text.includes("AS provider_login"))
@@ -120,7 +122,9 @@ function stubData(
     script?: (text: string) => Answer
   } = {}
 ) {
-  const fake = fakeDatabase({ query: (text) => (o.script ?? answer)(text) })
+  const fake = fakeDatabase({
+    query: (text) => (o.script ?? ((t) => answer(t)))(text),
+  })
   const counts = { open: 0, close: 0 }
   const resource: DataResource = {
     describe: "localhost:54322/app",
@@ -193,6 +197,109 @@ async function callMcp(
     raw: JSON.stringify(r),
   }
 }
+
+/**
+ * Копія теки, де `Gauge` і `Region` мають по атрибуту із зарезервованим
+ * словом у фізичному імені: компіляція успішна, а попередження — по одному
+ * на кожен файл (`physical.reserved-word`).
+ */
+async function warningDir(): Promise<{ dir: string; hash: string }> {
+  const files = new Map(
+    await acceptDebt(
+      withObjectModule(policyDomain(runtimeValuesLayer()), GAUGE_LOG_FILE)
+    )
+  )
+  for (const path of [
+    "catalogs/Gauge/Gauge.meta.json",
+    "catalogs/Region/Region.meta.json",
+  ]) {
+    const meta = JSON.parse(files.get(path)!) as {
+      attributes?: Record<string, unknown>[]
+    }
+    meta.attributes ??= []
+    meta.attributes.push({
+      id: `00000000-0000-4000-8000-00000000c0${path.length}`,
+      name: "check",
+      physicalName: "check",
+      type: "Integer",
+    })
+    files.set(path, JSON.stringify(meta))
+  }
+  const warned = join(root, "warned", "metadata")
+  for (const [path, content] of files) {
+    await mkdir(dirname(join(warned, path)), { recursive: true })
+    await writeFile(join(warned, path), content)
+  }
+  const compiled = await compile(files)
+  expect(compiled.ok).toBe(true)
+  return { dir: warned, hash: compiled.model!.hash }
+}
+
+describe("warningsFor", () => {
+  it("keeps only warnings of the files of the named objects", async () => {
+    const files = await acceptDebt(
+      withObjectModule(policyDomain(runtimeValuesLayer()), GAUGE_LOG_FILE)
+    )
+    const compiled = await compile(files)
+    const model = compiled.model!
+    const warn = (file: string) => ({
+      code: "physical.reserved-word" as const,
+      severity: "warning" as const,
+      file,
+      pointer: "",
+      message: file,
+    })
+    const gauge = "catalogs/Gauge/Gauge.meta.json"
+    const region = "catalogs/Region/Region.meta.json"
+    const all = [
+      warn(gauge),
+      warn(region),
+      { ...warn(gauge), severity: "error" as const },
+    ]
+    expect(warningsFor(model, all, [GAUGE]).map((d) => d.file)).toEqual([gauge])
+    expect(
+      warningsFor(model, all, [{ kind: "Catalog", name: "Region" }]).map(
+        (d) => d.file
+      )
+    ).toEqual([region])
+    expect(
+      warningsFor(model, all, [{ kind: "Catalog", name: "Nope" }])
+    ).toEqual([])
+  })
+})
+
+describe("warnings of a successful data call", TOOL_PIPELINE, () => {
+  it("names the object of the read and no other object", async () => {
+    const warned = await warningDir()
+    const { resource } = stubData({
+      script: (text) => answer(text, warned.hash),
+    })
+    const r = await invoke(dataReadTool, readGauge, {
+      ...options(resource),
+      dir: warned.dir,
+    })
+    expect(r.ok).toBe(true)
+    expect(r.diagnostics.map((d) => [d.code, d.file])).toEqual([
+      ["physical.reserved-word", "catalogs/Gauge/Gauge.meta.json"],
+    ])
+  })
+
+  it("names the objects of the batch and no other object", async () => {
+    const warned = await warningDir()
+    const { resource } = stubData({
+      script: (text) => answer(text, warned.hash),
+    })
+    const r = await invoke(
+      dataCommandTool,
+      { operations: [updateGauge] },
+      { ...options(resource), dir: warned.dir }
+    )
+    expect(r.diagnostics.length).toBeGreaterThan(0)
+    expect([...new Set(r.diagnostics.map((d) => d.file))]).toEqual([
+      "catalogs/Gauge/Gauge.meta.json",
+    ])
+  })
+})
 
 // Кожен виклик компілює домен прав — бюджет `TOOL_PIPELINE`
 describe("summarizeData", () => {
@@ -360,7 +467,8 @@ describe("data tools", TOOL_PIPELINE, () => {
       as: AS,
       open: () =>
         Promise.resolve({
-          database: fakeDatabase({ query: answer }).database as CommandDatabase,
+          database: fakeDatabase({ query: (t) => answer(t) })
+            .database as CommandDatabase,
           session: dataSession("supabase", { as: AS }),
           close: () => Promise.reject(closing),
         }),

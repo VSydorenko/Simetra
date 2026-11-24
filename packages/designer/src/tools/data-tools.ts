@@ -134,7 +134,9 @@ export function warningsFor(
 ): Diagnostic[] {
   const files = new Set(
     model.objects
-      .filter((x) => objects.some((o) => o.kind === x.kind && o.name === x.name))
+      .filter((x) =>
+        objects.some((o) => o.kind === x.kind && o.name === x.name)
+      )
       .map((x) => x.file)
   )
   return diagnostics.filter(
@@ -265,9 +267,15 @@ export const dataCommandTool = defineTool({
         diagnostics: [],
         refusalReason: "rights-write-disabled",
       }
-    return onRuntime("data-command", ctx, model, warnings, async (rt, session) => {
-      const result = await rt.run(session, input.operations)
-      return { result: toJson(result) as JsonCommandResult }
-    })
+    return onRuntime(
+      "data-command",
+      ctx,
+      model,
+      warnings,
+      async (rt, session) => {
+        const result = await rt.run(session, input.operations)
+        return { result: toJson(result) as JsonCommandResult }
+      }
+    )
   },
 })
