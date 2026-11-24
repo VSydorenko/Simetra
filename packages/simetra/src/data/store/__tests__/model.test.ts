@@ -23,6 +23,7 @@ import {
   inspectCore,
   type CoreSession,
   type DefectFlag,
+  type SyncState,
 } from "../core"
 import { compareRows, fieldInfoOf, filterCollator } from "../filter"
 import { visibleRow } from "../object-store"
@@ -58,6 +59,7 @@ import {
   task,
 } from "./core-support"
 import { collectCore, type ReadCollector } from "./oracles"
+import { trackViews } from "./view-facts"
 
 /*
  * Модельний тест ядра — гейт блоку (спека П4-B §11,
@@ -820,10 +822,14 @@ const pauseAfter = (failures: number) =>
  * Строк вигляду очима моделі: після збоїв — кінець паузи, інакше мить
  * відмітки + `ageMs`; вигляд, що ще не читався, строку не має.
  */
-const modelDue = (
-  sub: Pick<Subset, "failures" | "failedAt" | "refreshedAt">,
-  ageMs: number = REVALIDATE_MS
-) =>
+/** Факти вигляду для строку: збої, початок останнього збою й останнього застосованого читання. */
+interface DueFacts {
+  readonly failures: number
+  readonly failedAt: number | undefined
+  readonly refreshedAt: number | undefined
+}
+
+const modelDue = (sub: DueFacts, ageMs: number = REVALIDATE_MS) =>
   sub.failures > 0 && sub.failedAt !== undefined
     ? sub.failedAt + pauseAfter(sub.failures)
     : sub.refreshedAt === undefined
@@ -1011,6 +1017,50 @@ async function runModelOn(
   for (const flag of defects) inspect.defects.add(flag)
   opened(core, reads)
   const internals = coreInternals(core)
+  const tracker = trackViews(
+    inspect,
+    () => clock,
+    (id) =>
+      [...internals.registry.subsets()].find((x) => x.targetId === id)
+        ?.loaded ?? false
+  )
+  /**
+   * Стан свіжості виглядів з `sync()`: один знімок на синхронний відрізок
+   * (мікрозадача його скидає), бо `sync()` обходить сховище.
+   */
+  let liveCache: ReadonlyMap<number, SyncState> | undefined
+  const syncedViews = () => {
+    if (liveCache === undefined) {
+      liveCache = new Map(
+        inspect
+          .sync()
+          .flatMap((state) =>
+            state.target.kind === "view"
+              ? [[state.target.id, state] as const]
+              : []
+          )
+      )
+      queueMicrotask(() => {
+        liveCache = undefined
+      })
+    }
+    return liveCache
+  }
+  /** Завантаження вигляду в польоті (`flight` ядра) — з `sync()`. */
+  const loadFlying = (sub: Subset) =>
+    syncedViews()
+      .get(sub.targetId)
+      ?.flights.some((f) => f.kind === "load") ?? false
+  /** Вимога вигляду за видом — з `sync()`. */
+  const requires = (sub: Subset, kind: string) =>
+    syncedViews()
+      .get(sub.targetId)
+      ?.requirements.some((r) => r.kind === kind) ?? false
+  /** Сторінок вікна в польоті (кожен напрям — окремий політ). */
+  const pagesFlying = (sub: Subset) =>
+    syncedViews()
+      .get(sub.targetId)
+      ?.flights.filter((f) => f.kind === "page").length ?? 0
 
   // ── Сигнали очима моделі (B5b-3) ──
   // Сигнали, що дійшли до приймача й ще не дали читання: ключ → пари
@@ -1049,7 +1099,7 @@ async function runModelOn(
   const coveredInStep = new Map<Subset, number>()
   /** Every re-read of the view in this step came from a batch (or a wave). */
   const bySignal = (sub: Subset, withWave: boolean) => {
-    const delta = sub.rereads - (rereadsAtStep.get(sub) ?? 0)
+    const delta = tracker.rereads(sub.targetId) - (rereadsAtStep.get(sub) ?? 0)
     if (delta <= 0) return false
     const owed = owedRereads.get(sub) ?? { batch: 0, wave: 0 }
     let covered = coveredInStep.get(sub) ?? 0
@@ -1350,7 +1400,7 @@ async function runModelOn(
   const subscribe = (v: number, label: string) => {
     if (subs[v] !== undefined) return
     const held = [...internals.registry.subsets()]
-    const spare = held.some((s) => s.listeners.size === 0)
+    const spare = held.some((s) => listenersOf(s) === 0)
     try {
       subs[v] = handles[v]!.subscribe(() => {
         frames++
@@ -1377,7 +1427,7 @@ async function runModelOn(
       const held = [...internals.registry.subsets()]
       if (
         held.length < LIMITS.viewsMax ||
-        held.some((x) => x.listeners.size === 0)
+        held.some((x) => listenersOf(x) === 0)
       )
         fail(label, "preload refused with a spare hold")
     }
@@ -1397,7 +1447,7 @@ async function runModelOn(
         gen: s?.gen,
         subset: s,
         // Сторінки вікна в польоті: вони виправдовують ріст складу.
-        paging: s === undefined ? 0 : s.paging.size,
+        paging: s === undefined ? 0 : pagesFlying(s),
       }
     })
 
@@ -2031,7 +2081,7 @@ async function runModelOn(
       heldInFlight = false
       return
     }
-    if (s.flight !== undefined) return
+    if (loadFlying(s)) return
     heldInFlight = false
     // Сесія після межі відкинутих відповідей не читає; власник
     // `removed` рядків не показує, і читання ТЧ їх не поверне.
@@ -2657,7 +2707,7 @@ async function runModelOn(
       }
       // Звірка: видимі вигляди — підписані; кожен другий підписується вже
       // після `endHydration` (умовне монтування, §6.6) і мусить читатися сам.
-      const subscribeHeld = (late: boolean, skip: readonly unknown[] = []) =>
+      const subscribeHeld = (late: boolean, skip: readonly Subset[] = []) =>
         held.flatMap((sub, i) => {
           if ((i % 2 === 1) !== late || skip.includes(sub)) return []
           const v = SPECS.findIndex(
@@ -2822,12 +2872,26 @@ async function runModelOn(
   const tailWatch = new Map<Subset, { rereads: number; visibleOnly: boolean }>()
   let lastResumeClock: number | undefined
 
+  /** Факти строку вигляду з подій спроб (`view-facts.ts`), а не з полів `Subset`. */
+  const dueOf = (sub: Subset): DueFacts => ({
+    failures: tracker.failures(sub.targetId),
+    failedAt: tracker.failedAt(sub.targetId),
+    refreshedAt: tracker.refreshedAt(sub.targetId),
+  })
+  /** Підписник вигляду очима моделі: її власні `subscribe` / `unsub` (один підписник на вигляд). */
+  const listenersOf = (sub: Subset) =>
+    subs[SPECS.indexOf(sub.form.spec)] === undefined ? 0 : 1
+  /** `setVisible` моделі за ідентифікатором цілі: нове утримання вигляду починає без відмітки. */
+  const visibleBy = new Map<number, boolean>()
   /** Вигляд бачить користувач: сам чи через змонтований вигляд-носій. */
   const shown = (sub: Subset) =>
-    (sub.visible ?? sub.listeners.size > 0) &&
-    (sub.form.spec.kind !== "section" || sub.listeners.size > 0)
+    (visibleBy.get(sub.targetId) ?? listenersOf(sub) > 0) &&
+    (sub.form.spec.kind !== "section" || listenersOf(sub) > 0)
+  /** Завантаження чи системне перечитування вигляду в польоті (сторінка — окремо). */
   const inFlight = (sub: Subset) =>
-    sub.flight !== undefined || sub.rereadEpochs.length > 0
+    syncedViews()
+      .get(sub.targetId)
+      ?.flights.some((f) => f.kind !== "page") ?? false
   const exhausted = (sub: Subset) =>
     sub.status === "error" && sub.error === EPOCH_UNAVAILABLE
   // Після межі відкинутих планувальник не читає жодного вигляду до нової
@@ -2845,7 +2909,7 @@ async function runModelOn(
     !exhausted(sub) &&
     !sessionDown() &&
     !staled.has(sub.form.object.name) &&
-    Number.isFinite(modelDue(sub))
+    Number.isFinite(modelDue(dueOf(sub)))
   /** Об'єкти, чий відкладений строк (перемикання епохи, відкинута відповідь) настав. */
   const dueObjects = (at: number) =>
     new Set(
@@ -2858,18 +2922,24 @@ async function runModelOn(
     sub.form.include.some((step) => names.has(step.target))
 
   /** Вигляд у паузі після збою: до її кінця його не читає ні такт, ні `resume()`. */
-  const inPause = (sub: Subset, at: number) =>
-    sub.failures > 0 && sub.failedAt !== undefined && at < modelDue(sub)
+  const inPause = (sub: Subset, at: number) => {
+    const due = dueOf(sub)
+    return due.failures > 0 && due.failedAt !== undefined && at < modelDue(due)
+  }
 
   /** Вигляд, якого читання з межею `minAge` не бере (спека §6.7). */
-  const young = (sub: Subset, at: number, minAge: number) =>
-    inFlight(sub) ||
-    exhausted(sub) ||
-    (sub.failures > 0 && sub.failedAt !== undefined
-      ? at < modelDue(sub)
-      : // Вигляд, що ще не читався (картка зі сховища, гідратований),
-        // строку не має (Р3): його рядок свіжіє виглядом-носієм.
-        sub.refreshedAt === undefined || at - sub.refreshedAt < minAge)
+  const young = (sub: Subset, at: number, minAge: number) => {
+    const due = dueOf(sub)
+    return (
+      inFlight(sub) ||
+      exhausted(sub) ||
+      (due.failures > 0 && due.failedAt !== undefined
+        ? at < modelDue(due)
+        : // Вигляд, що ще не читався (картка зі сховища, гідратований),
+          // строку не має (Р3): його рядок свіжіє виглядом-носієм.
+          due.refreshedAt === undefined || at - due.refreshedAt < minAge)
+    )
+  }
 
   /** Інваріанти планувальника після кроку (бриф задачі 6). */
   const checkScheduler = (label: string) => {
@@ -2895,14 +2965,14 @@ async function runModelOn(
       }
       const since = healthySince.get(sub) ?? clock
       healthySince.set(sub, since)
-      if (clock > Math.max(since, modelDue(sub)))
+      if (clock > Math.max(since, modelDue(dueOf(sub))))
         fail(
           label,
-          `a view was not re-read within its ${sub.failures > 0 ? "failure pause" : "interval"}: ${sub.form.object.name} ${sub.form.spec.kind}`
+          `a view was not re-read within its ${tracker.failures(sub.targetId) > 0 ? "failure pause" : "interval"}: ${sub.form.object.name} ${sub.form.spec.kind}`
         )
     }
     for (const [sub, watch] of tailWatch) {
-      if (sub.rereads > watch.rereads) {
+      if (tracker.rereads(sub.targetId) > watch.rereads) {
         tailWatch.delete(sub)
         continue
       }
@@ -2915,7 +2985,7 @@ async function runModelOn(
         !sub.purged &&
         sub.loaded &&
         (!watch.visibleOnly || shown(sub)) &&
-        (sub.form.spec.kind !== "section" || sub.listeners.size > 0) &&
+        (sub.form.spec.kind !== "section" || listenersOf(sub) > 0) &&
         !exhausted(sub) &&
         !inspect.versionEpochs().unavailable &&
         !staled.has(sub.form.object.name)
@@ -3036,7 +3106,10 @@ async function runModelOn(
     signalObjects.clear()
     coveredInStep.clear()
     rereadsAtStep = new Map(
-      [...internals.registry.subsets()].map((sub) => [sub, sub.rereads])
+      [...internals.registry.subsets()].map((sub) => [
+        sub,
+        tracker.rereads(sub.targetId),
+      ])
     )
     const before = lists()
     preloadedSection = false
@@ -3057,11 +3130,11 @@ async function runModelOn(
     >()
     if (schedulerStep && closed === undefined) {
       for (const sub of internals.registry.subsets()) {
-        readsAtStart.set(sub, sub.rereads)
+        readsAtStart.set(sub, tracker.rereads(sub.targetId))
         if (exhausted(sub) || sessionDown()) exhaustedAtStart.add(sub)
         failedAtStart.set(sub, {
-          failures: sub.failures,
-          failedAt: sub.failedAt,
+          failures: tracker.failures(sub.targetId),
+          failedAt: tracker.failedAt(sub.targetId),
         })
       }
     }
@@ -3075,7 +3148,7 @@ async function runModelOn(
     // З них — у паузі після збою.
     const pausedViews = new Set<Subset>()
     // Вигляди зі старою (чи без) відміткою: звірка мусить їх перечитати.
-    const agedViews = new Map<{ rereads: number }, number>()
+    const agedViews = new Map<Subset, number>()
     let purgedScope: { object: ObjectName; scope: string } | undefined
     // Ключі, які `purge` кроку прибрав зі сховища (або назвав явно).
     let purgedKeys: { object: ObjectName; keys: Key[] } | undefined
@@ -3148,9 +3221,12 @@ async function runModelOn(
         else handles[v]!.loadBefore()
         break
       }
-      case "visible":
+      case "visible": {
         core.setVisible(SPECS[s.v]!, s.on)
+        const held = internals.registry.find(SPECS[s.v]!)
+        if (held !== undefined) visibleBy.set(held.targetId, s.on)
         break
+      }
       case "answer": {
         if (fake.pending.length === 0) break
         // Генератор зміщує `pick` до малих чисел, а модель бере з кінця
@@ -3330,7 +3406,7 @@ async function runModelOn(
           // Завантаження в польоті під час `hide`: нове утримання чи `refresh`.
           const held = internals.registry.find(section)
           if (held === undefined) preload(4, false, label)
-          else if (held.flight === undefined) handles[4]!.refresh()
+          else if (!loadFlying(held)) handles[4]!.refresh()
           preloadedSection = false
         }
         await flush()
@@ -3352,7 +3428,10 @@ async function runModelOn(
           heldInFlight =
             s.state === "flight" &&
             preloadedSection &&
-            internals.registry.find(section)?.flight !== undefined
+            (() => {
+              const found = internals.registry.find(section)
+              return found !== undefined && loadFlying(found)
+            })()
         }
         break
       }
@@ -3368,11 +3447,11 @@ async function runModelOn(
               sub.loaded &&
               inFlight(sub) &&
               (!s.visibleOnly || shown(sub)) &&
-              (sub.form.spec.kind !== "section" || sub.listeners.size > 0) &&
+              (sub.form.spec.kind !== "section" || listenersOf(sub) > 0) &&
               !tailWatch.has(sub)
             )
               tailWatch.set(sub, {
-                rereads: sub.rereads,
+                rereads: tracker.rereads(sub.targetId),
                 visibleOnly: s.visibleOnly,
               })
         core
@@ -3562,7 +3641,7 @@ async function runModelOn(
         // межею `0,9 × I`, а не межею кроку (§6.7), як і на `resume()`.
         const overdue =
           [...internals.registry.subsets()].some(
-            (sub) => isTarget(sub) && modelDue(sub) <= at
+            (sub) => isTarget(sub) && modelDue(dueOf(sub)) <= at
           ) ||
           [...inspect.scheduledDue()].some(
             ([name, due]) => due <= at && !staled.has(name)
@@ -3576,12 +3655,12 @@ async function runModelOn(
           young(sub, at, s.minAge) && !byTick(sub)
         for (const sub of readers) {
           if (inPause(sub, at)) pausedViews.add(sub)
-          if (youngNow(sub)) youngViews.set(sub, sub.rereads)
+          if (youngNow(sub)) youngViews.set(sub, tracker.rereads(sub.targetId))
           else if (
             !young(sub, at, s.minAge) &&
             !staled.has(sub.form.object.name)
           )
-            agedViews.set(sub, sub.rereads)
+            agedViews.set(sub, tracker.rereads(sub.targetId))
         }
         for (const object of [TASK, ORG]) {
           const of = readers.filter(
@@ -3668,7 +3747,10 @@ async function runModelOn(
           }
         }
         const before = new Map(
-          [...internals.registry.subsets()].map((sub) => [sub, sub.rereads])
+          [...internals.registry.subsets()].map((sub) => [
+            sub,
+            tracker.rereads(sub.targetId),
+          ])
         )
         // Явні перечитування кроку вище — не сигнал: зарахування починається
         // з цієї миті.
@@ -3677,11 +3759,16 @@ async function runModelOn(
         // Перепланування (подія видимості вигляду) і час понад `I`: вигляд у
         // стані межі не дає строку.
         core.setVisible(SPECS[7]!, true)
+        const seven = internals.registry.find(SPECS[7]!)
+        if (seven !== undefined) visibleBy.set(seven.targetId, true)
         await flush()
         advance(2 * REVALIDATE_MS)
         await flush()
         for (const [sub, rereads] of before)
-          if (sub.rereads !== rereads && !bySignal(sub, false)) {
+          if (
+            tracker.rereads(sub.targetId) !== rereads &&
+            !bySignal(sub, false)
+          ) {
             // Читання зробив такт планувальника: він же й помилка.
             tickReads++
             fail(
@@ -3715,7 +3802,7 @@ async function runModelOn(
         // читає всі вигляди зі строком у вікні `0,1 × I` (§6.7).
         const overdue =
           [...internals.registry.subsets()].some(
-            (sub) => isTarget(sub, true) && modelDue(sub) <= at
+            (sub) => isTarget(sub, true) && modelDue(dueOf(sub)) <= at
           ) ||
           [...inspect.scheduledDue()].some(
             ([name, due]) => due <= at && !staled.has(name)
@@ -3727,16 +3814,16 @@ async function runModelOn(
         // читає й молодшим за межу. Лише такий: молодий вигляд без вимоги
         // межа й далі тримає.
         const byRequirement = (sub: Subset) =>
-          sub.unconfirmedSince !== undefined &&
-          sub.failures === 0 &&
+          requires(sub, "composition-unconfirmed") &&
+          tracker.failures(sub.targetId) === 0 &&
           !inPause(sub, at)
         const youngNow = (sub: Subset) =>
           !byResume(sub) && !byTick(sub) && !byRequirement(sub)
         for (const sub of readers) {
           if (inPause(sub, at)) pausedViews.add(sub)
-          if (youngNow(sub)) youngViews.set(sub, sub.rereads)
+          if (youngNow(sub)) youngViews.set(sub, tracker.rereads(sub.targetId))
           else if (byResume(sub) && !staled.has(sub.form.object.name))
-            agedViews.set(sub, sub.rereads)
+            agedViews.set(sub, tracker.rereads(sub.targetId))
         }
         for (const object of [TASK, ORG]) {
           // Прочитаний строком вигляд (власним чи ціллю `include`) читає й
@@ -4090,7 +4177,7 @@ async function runModelOn(
         )
       )
       for (const [sub, rereads] of readsAtStart) {
-        if (sub.rereads === rereads) continue
+        if (tracker.rereads(sub.targetId) === rereads) continue
         // Пачка сигналів і хвиля читають за подією каналу, а не за строком:
         // межа відкинутих і пауза після збою стосуються планувальника (§6.2,
         // §8.4). Вигляд пропускається, лише коли кожне його перечитування
@@ -4119,14 +4206,14 @@ async function runModelOn(
     // за межею свіжості: `resume()` бере хвилю разом зі звіркою (Р10).
     for (const [sub, rereads] of youngViews) {
       if (bySignal(sub, true)) continue
-      if (sub.rereads !== rereads)
+      if (tracker.rereads(sub.targetId) !== rereads)
         fail(
           label,
           `a view younger than the limit was re-read${pausedViews.has(sub) ? " (inside its failure pause)" : ""}`
         )
     }
     for (const [sub, rereads] of agedViews) {
-      if (sub.rereads === rereads)
+      if (tracker.rereads(sub.targetId) === rereads)
         fail(label, "a view older than the limit was not re-read")
     }
     for (const object of quiet) {
