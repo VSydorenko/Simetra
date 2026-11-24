@@ -637,4 +637,8 @@ describe("model tests treat Subset and ReaderTarget as opaque", () => {
   it("every property of Subset and ReaderTarget is classified, every listed name exists", () => {
     expect(classification(guard)).toEqual({ unclassified: [], missing: [] })
   })
+
+  it("no forbidden field is read and no value is widened", () => {
+    expect(violations(guard)).toEqual([])
+  }, 120_000)
 })
