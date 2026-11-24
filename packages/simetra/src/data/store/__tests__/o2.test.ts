@@ -252,31 +252,45 @@ describe("O2 self-check", () => {
       expect(after([read(1, 0, 7)], settled(7, 1, "reread"))).toBeUndefined()
     })
 
-    it("is green when the rejoin of an unread view becomes its composition requirement", () => {
+    // Хвиля, що не читає невидимий вигляд, лише ставить «склад не
+    // підтверджено»: заміна не старша за те, що стояло до неї.
+    const rejoin = (epoch: number | undefined, before = 5) => {
       const o2 = createO2()
       o2.step(
         input({
           states: [
             state(view(1), {
-              requirements: [{ kind: "channel-rejoin" }],
+              requirements: [{ kind: "channel-rejoin", epoch: before }],
               deferral: "target-invisible",
             }),
           ],
         })
       )
-      expect(
-        o2.step(
-          input({
-            now: 5,
-            states: [
-              state(view(1), {
-                requirements: [composition],
-                deferral: "target-invisible",
-              }),
-            ],
-          })
-        )
-      ).toBeUndefined()
+      return o2.step(
+        input({
+          now: 5,
+          states: [
+            state(view(1), {
+              requirements: [
+                {
+                  kind: "composition-unconfirmed",
+                  ...(epoch === undefined ? {} : { epoch }),
+                },
+              ],
+              deferral: "target-invisible",
+            }),
+          ],
+        })
+      )
+    }
+
+    it("is green when the rejoin of an unread view becomes its composition requirement", () => {
+      expect(rejoin(6)).toBeUndefined()
+    })
+
+    it("is red when the replacing requirement has an earlier epoch or none", () => {
+      expect(rejoin(3)).toMatch(/earlier epoch/)
+      expect(rejoin(undefined)).toMatch(/earlier epoch/)
     })
 
     it("is green when the target goes away with the requirement", () => {
@@ -322,6 +336,23 @@ describe("O2 self-check", () => {
       expect(createO2().step(input({ states, storeEmpty: false }))).toMatch(
         /no promise and no condition/
       )
+    })
+
+    it("excuses a composition requirement of rows 3 and 5 by the holder, with a bound", () => {
+      const states = [state(view(1), { requirements: [composition] })]
+      const base = { states, revalidateMs: 1_000 }
+      // Без видимого тримача — названий стан.
+      expect(
+        createO2().step(input({ ...base, holderVisible: () => false }))
+      ).toBeUndefined()
+      // Без знання про тримача виняток не діє.
+      expect(createO2().step(input(base))).toMatch(/no promise/)
+      // З видимим тримачем — не довше за інтервал плюс паузу збоїв.
+      const o2 = createO2()
+      const visible = { ...base, holderVisible: () => true }
+      expect(o2.step(input({ ...visible, now: 0 }))).toBeUndefined()
+      expect(o2.step(input({ ...visible, now: 2_000 }))).toBeUndefined()
+      expect(o2.step(input({ ...visible, now: 2_001 }))).toMatch(/no promise/)
     })
 
     it("names a row of the table for every exception", () => {

@@ -34,6 +34,13 @@ export interface O2Input {
    * вимогою, а не з доказом. Без нього рядок вважається живим.
    */
   readonly rowAlive?: (object: string, key: string) => boolean
+  /**
+   * Чи має вигляд видимого тримача на видимій вкладці — за кроками самої
+   * моделі, не за `sync()` (його умови судить сам оракул).
+   */
+  readonly holderVisible?: (target: SyncTarget) => boolean
+  /** Інтервал збіжності й межа паузи збоїв моделі: строк винятків 3 і 5 — їх сума. */
+  readonly revalidateMs?: number
   /** Сховище не тримає жодного рядка (виняток рядка 6: строк знімка прав). */
   readonly storeEmpty?: boolean
 }
@@ -47,8 +54,14 @@ export interface O2Exception {
   /** Рядок §5.14, що виняток закриває. */
   readonly rows: readonly number[]
   readonly kinds: readonly RequirementKind[]
-  /** Стан, що тримає виняток; `false` — виняток не діє. */
-  readonly holds: (state: SyncState, input: O2Input) => boolean
+  /**
+   * Стан, що тримає виняток: `true` — доки стан є; `"bounded"` — виняток діє
+   * не довше за `boundMs` від першого разу (з умовою, за якої `main` сам читає:
+   * строк того шляху); `false` — виняток не діє.
+   */
+  readonly holds: (state: SyncState, input: O2Input) => boolean | "bounded"
+  /** Межа часу моделі для `"bounded"`. */
+  readonly boundMs?: (input: O2Input) => number | undefined
 }
 
 export const O2_EXCEPTIONS: readonly O2Exception[] = [
@@ -57,6 +70,22 @@ export const O2_EXCEPTIONS: readonly O2Exception[] = [
     rows: [6],
     kinds: ["rights-unconfirmed"],
     holds: (_, input) => input.storeEmpty === true,
+  },
+  // Рядки 3 і 5: вимога складу вигляду після невдалого читання ключів приймача
+  // чи відмови запису. Без видимого тримача на видимій вкладці `main` не читає
+  // (названий стан); з ним читання йде за строком шляху — інтервал тримача
+  // плюс пауза збоїв.
+  {
+    rows: [3, 5],
+    kinds: ["composition-unconfirmed"],
+    holds: (state, input) =>
+      state.target.kind !== "view" || input.holderVisible === undefined
+        ? false
+        : input.holderVisible(state.target)
+          ? "bounded"
+          : true,
+    boundMs: (input) =>
+      input.revalidateMs === undefined ? undefined : 2 * input.revalidateMs,
   },
   // Рядки 4 і 12: позначка рядка без строку — доки жоден вигляд цього об'єкта
   // не читає (немає видимого тримача на видимій вкладці).
@@ -233,10 +262,6 @@ export const PROOFS: Readonly<
  */
 const REPLACED_BY: Partial<Record<RequirementKind, RequirementKind[]>> = {
   "min-version": ["version-epoch-switched"],
-  // Хвиля приєднання для вигляду, якого вона не читає (невидимий), лише ставить
-  // «склад не підтверджено»: вимога приєднання переходить у вимогу складу, і
-  // її судить правило (а).
-  "channel-rejoin": ["composition-unconfirmed"],
   "target-behind-header": ["value-hidden"],
   "hydration-trust": ["value-hidden"],
 }
@@ -347,6 +372,31 @@ export function createO2(): O2 {
     return problems
   }
 
+  // Вимога під обмеженим винятком: від якої миті, цілі без обіцянки.
+  const excusedSince = new Map<string, number>()
+  const stillExcused = new Set<string>()
+
+  /** Чи покриває вимогу виняток таблиці; обмежений — не довше за свою межу. */
+  const excused = (state: SyncState, input: O2Input): boolean => {
+    for (const e of O2_EXCEPTIONS) {
+      if (!state.requirements.every((r) => e.kinds.includes(r.kind))) continue
+      const held = e.holds(state, input)
+      if (held === false) continue
+      const key = targetKey(state.target)
+      if (held === "bounded") {
+        const bound = e.boundMs?.(input)
+        if (bound === undefined) continue
+        stillExcused.add(key)
+        const since = excusedSince.get(key) ?? input.now
+        excusedSince.set(key, since)
+        if (input.now - since > bound) continue
+      }
+      exceptionsUsed.set(e.rows[0]!, (exceptionsUsed.get(e.rows[0]!) ?? 0) + 1)
+      return true
+    }
+    return false
+  }
+
   const step = (input: O2Input): string | undefined => {
     const { states, now, events, fake } = input
     const idle = fake.pending.length === 0 && fake.inFlight === 0
@@ -397,6 +447,7 @@ export function createO2(): O2 {
     }
 
     // (а) обіцянка або умова на кожну вимогу.
+    stillExcused.clear()
     let evaluated = false
     for (const state of states) {
       if (state.requirements.length === 0) continue
@@ -416,18 +467,7 @@ export function createO2(): O2 {
             since: events.length,
             due: state.due,
           })
-      } else if (
-        O2_EXCEPTIONS.some(
-          (e) =>
-            state.requirements.every((r) => e.kinds.includes(r.kind)) &&
-            e.holds(state, input) &&
-            (exceptionsUsed.set(
-              e.rows[0]!,
-              (exceptionsUsed.get(e.rows[0]!) ?? 0) + 1
-            ),
-            true)
-        )
-      ) {
+      } else if (excused(state, input)) {
         // Виняток таблиці прогалин `main`.
       } else {
         problems.push(
@@ -435,6 +475,8 @@ export function createO2(): O2 {
         )
       }
     }
+    for (const key of [...excusedSince.keys()])
+      if (!stillExcused.has(key)) excusedSince.delete(key)
     if (evaluated) count++
 
     // (б) зникнення вимоги: разом з ціллю чи з доказом свого виду.
@@ -470,9 +512,27 @@ export function createO2(): O2 {
           )
             continue
         }
-        const have = new Set(state?.requirements.map((r) => r.kind))
+        const have = new Map(state?.requirements.map((r) => [r.kind, r]))
+        // Вимога, що замінює, не старша за те, що стояло до неї на цілі.
+        const floor = Math.max(
+          -Infinity,
+          ...was.requirements.flatMap((r) =>
+            r.epoch === undefined ? [] : [r.epoch]
+          )
+        )
         for (const requirement of was.requirements) {
           if (have.has(requirement.kind)) continue
+          if (
+            requirement.kind === "channel-rejoin" &&
+            have.has("composition-unconfirmed")
+          ) {
+            const epoch = have.get("composition-unconfirmed")!.epoch
+            if (epoch === undefined || epoch < floor)
+              problems.push(
+                `${describe(was.target)}: channel-rejoin replaced by a composition requirement of an earlier epoch`
+              )
+            continue
+          }
           const replaced = REPLACED_BY[requirement.kind]?.some((kind) =>
             kind === "value-hidden"
               ? states.some(
