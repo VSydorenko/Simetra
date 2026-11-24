@@ -1435,7 +1435,7 @@ async function runModelOn(
     if (promise !== undefined && v === 4) preloadedSection = true
   }
 
-  /** Склад видимих списків і покоління їхніх завантажень. */
+  /** Склад видимих списків і номери їхніх завантажень. */
   const lists = () =>
     SPECS.map((spec, v) => {
       if (subs[v] === undefined || !isList(spec) || closed !== undefined)
@@ -1443,8 +1443,12 @@ async function runModelOn(
       const s = internals.registry.find(spec)
       return {
         keys: handles[v]!.getSnapshot().rows.map((r) => r.key),
-        flight: s?.flight,
-        gen: s?.gen,
+        // Номер завантаження в польоті й номер останнього, що почалось.
+        flight:
+          s !== undefined && loadFlying(s)
+            ? tracker.loads(s.targetId)
+            : undefined,
+        loads: s === undefined ? 0 : tracker.loads(s.targetId),
         subset: s,
         // Сторінки вікна в польоті: вони виправдовують ріст складу.
         paging: s === undefined ? 0 : pagesFlying(s),
@@ -2467,48 +2471,56 @@ async function runModelOn(
     check("preload", 0)
   }
 
-  // Покоління завантажень, які почала дія користувача (підписка, прокрутка,
+  // Завантаження, які почала дія користувача (підписка, прокрутка,
   // `refresh`, `showNew`, `preload`, початкове завантаження), і чи належить
-  // користувачу наступне завантаження з черги «trailing». Правило
-  // стабільності виправдовує зміну складу лише завантаженням користувача.
-  const userGens = new Map<Subset, Set<number>>()
-  const lastGen = new Map<Subset, number>()
-  const userNext = new Set<Subset>()
-  const lastFlight = new Map<Subset, number | undefined>()
+  // користувачу наступне завантаження з черги. Правило стабільності
+  // виправдовує зміну складу лише завантаженням користувача. Модель веде це
+  // сама (рішення архітекторки 23.11, 2а): номер завантаження — лічильник
+  // подій «спробу розпочато» (`view-facts.ts`), політ і черга — з `sync()`,
+  // перезапуск — з наслідку «після purge»; полів `Subset` не читає.
+  const userLoads = new Map<number, Set<number>>()
+  const lastLoads = new Map<number, number>()
+  const userNext = new Set<number>()
+  const lastFlight = new Map<number, number | undefined>()
   const noteGens = (userStep: boolean) => {
-    for (const s of internals.registry.subsets()) {
-      const gens = userGens.get(s) ?? new Set<number>()
+    for (const sub of internals.registry.subsets()) {
+      const id = sub.targetId
+      const state = syncedViews().get(id)
+      const loads = tracker.loads(id)
+      const flight = state?.flights.some((f) => f.kind === "load")
+        ? loads
+        : undefined
+      const mineSet = userLoads.get(id) ?? new Set<number>()
       // Заміна знімка прав посеред кроку відповіді перезапускає завантаження
       // користувача в польоті (Р5а — перше завантаження, прохід — `purge`
-      // пари): покоління піднято, відкинута відповідь дійшла, і новий політ
-      // почався за той самий крок (і його ж могло підняти ще раз) — тож
-      // покоління стрибнуло щонайменше на два. Це те саме завантаження
-      // користувача; системний `load` після осілого польоту піднімає
-      // покоління лише на одне.
-      const was = lastFlight.get(s)
+      // пари): його спроба осіла «після purge» (покоління підняли), і новий
+      // політ почався за той самий крок — це те саме завантаження
+      // користувача. Два завантаження за крок після польоту користувача — теж
+      // його ланцюжок. Системне завантаження після осілого польоту — одне й
+      // без перезапуску.
+      const was = lastFlight.get(id)
       const restarted =
         rights &&
         was !== undefined &&
-        gens.has(was) &&
-        s.flight !== undefined &&
-        s.flight !== was &&
-        s.gen >= was + 2
-      lastFlight.set(s, s.flight)
+        mineSet.has(was) &&
+        flight !== undefined &&
+        flight !== was &&
+        (loads >= was + 2 || tracker.lost(id, was))
+      lastFlight.set(id, flight)
       const mine =
         userStep ||
-        userNext.has(s) ||
-        (s.flight !== undefined && gens.has(s.flight)) ||
+        userNext.has(id) ||
+        (flight !== undefined && mineSet.has(flight)) ||
         restarted
-      const last = lastGen.get(s) ?? 0
-      if (s.gen > last) {
-        // Покоління, яке `purge` підняв у польоті, лишається завантаженням
-        // користувача, чиє читання він перезапускає.
-        if (mine) for (let g = last + 1; g <= s.gen; g++) gens.add(g)
-        userGens.set(s, gens)
-        lastGen.set(s, s.gen)
+      const last = lastLoads.get(id) ?? 0
+      if (loads > last) {
+        if (mine) for (let g = last + 1; g <= loads; g++) mineSet.add(g)
+        userLoads.set(id, mineSet)
+        lastLoads.set(id, loads)
       }
-      if (s.trailing && mine) userNext.add(s)
-      else if (!s.trailing) userNext.delete(s)
+      const queued = state?.queued.some((q) => q.kind === "load") ?? false
+      if (queued && mine) userNext.add(id)
+      else if (!queued) userNext.delete(id)
     }
   }
   if (preloaded) noteGens(true)
@@ -2535,9 +2547,9 @@ async function runModelOn(
         a.keys.every((x, i) => x === b.keys[i])
       if (same) return
       // Завантаження, що тривало чи почалось на цьому кроці, — користувача?
-      const mine = userGens.get(a.subset!)
+      const mine = userLoads.get(a.subset!.targetId)
       const touched = [b.flight]
-      for (let g = (b.gen ?? 0) + 1; g <= (a.gen ?? 0); g++) touched.push(g)
+      for (let g = b.loads + 1; g <= a.loads; g++) touched.push(g)
       if (touched.some((g) => g !== undefined && mine?.has(g) === true)) return
       // Сторінка вікна, читання якої було в польоті (дія користувача —
       // `loadAfter`/`loadBefore`; читання старого ланцюжка позначок не лишає,
