@@ -5,6 +5,8 @@ import { SCOPE_KIND_ID } from "../../../model/runtime/__tests__/entries"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import type { FakeRead } from "../testing/fake-source"
 import { coreInternals } from "../core"
+import type { AttemptEvent } from "../attempts"
+import { assertEvaluated, createO2 } from "./o2"
 import { REJOIN_JITTER_MS, QUIET_MS } from "../receiver"
 import {
   DEFAULT_CORE_LIMITS,
@@ -235,6 +237,9 @@ const failWith = (at: string, what: string, trace: readonly string[]) => {
   throw new Error(`${at}: ${what}\n${trace.join("\n")}`)
 }
 
+/** Станів спокою з вимогою, які О2 оцінив за прогони: без них О2 порожній. */
+let o2Checks = 0
+
 // Прогін закриває ядро й таймери в будь-якому разі: інакше кожен прогін
 // лишав би живе ядро з таймером, і тисячі прогонів одного `it` вичерпували б
 // пам'ять процесу.
@@ -298,6 +303,14 @@ async function runOn(
     h.fake.insert(TASK, taskValues(n, { org: SCOPES[scope] }))
     scopeOfKey.set(key(n), scope)
   }
+  const o2 = createO2()
+  // Спроби лише цього ядра: друге ядро нумерує цілі з нуля.
+  const ownAttempts: AttemptEvent[] = []
+  const ownNumbers = new Set<number>()
+  h.inspect.watchAttempts((event) => {
+    ownAttempts.push(event)
+    ownNumbers.add(event.attempt)
+  })
   const specs: ViewSpec[] = [...SPECS]
   const handles: ViewHandle[] = SPECS.map((spec) => h.core.view(spec))
   // Відписка слухача: вигляд звільняється після затримки звільнення.
@@ -744,6 +757,38 @@ async function runOn(
     await settle()
     closeWindows()
     check(`step ${i}`)
+    // О2 (§5.13): обіцянки й докази вимог у стані спокою.
+    const before = o2.evaluated()
+    const problem = o2.step({
+      now: clock,
+      states: h.inspect.sync(),
+      events: h.reads.events.filter(
+        (e) => e.attempt === undefined || ownNumbers.has(e.attempt)
+      ),
+      attempts: ownAttempts,
+      fake: h.fake,
+      revalidateMs: DEFAULT_CORE_LIMITS.revalidateIntervalMs,
+      // Тримач — підписка вигляду з кроків моделі, видима на видимій вкладці.
+      holderPresent: (target) =>
+        target.kind === "view" &&
+        offs[specs.indexOf(target.spec)] !== undefined,
+      holderVisible: (target) => {
+        if (target.kind !== "view") return false
+        const v = specs.indexOf(target.spec)
+        return h.core.visible && offs[v] !== undefined && visible[v] === true
+      },
+      storeEmpty: ![TASK, ORG].some(
+        (name) =>
+          coreInternals(h.core).objects.get(name)!.rows.keys().next().done !==
+          true
+      ),
+      rowAlive: (object, k) =>
+        coreInternals(h.core)
+          .objects.get(object as typeof TASK)!
+          .rows.get(k) !== undefined,
+    })
+    o2Checks += o2.evaluated() - before
+    if (problem !== undefined) failWith(`step ${i}`, `O2: ${problem}`, trace)
   }
 
   // Живучість: тиша, приєднання кожного утримуваного каналу, усі вигляди
@@ -849,6 +894,7 @@ describe("receiver model: the disconnect mark and the composition against the se
   it(
     "holds the oracle over random steps",
     async () => {
+      o2Checks = 0
       await fc.assert(
         fc.asyncProperty(
           fc.array(STEP, { maxLength: 40, size: "medium" }),
@@ -856,6 +902,7 @@ describe("receiver model: the disconnect mark and the composition against the se
         ),
         { numRuns: RUNS, ...interruptWithin(PROPERTY_BUDGET_MS) }
       )
+      assertEvaluated(o2Checks, "the receiver property")
     },
     PROPERTY_BUDGET_MS
   )
