@@ -8,14 +8,19 @@ import {
   type FileChange,
 } from "simetra/compiler"
 import { z } from "zod"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, expectTypeOf, it, vi } from "vitest"
 import { TOOL_PIPELINE } from "./helpers/budget"
 import { runTool, toolCommand } from "../cli/command"
 import { readMetadataDir } from "../io/metadata-dir"
 import { mcpInputSchema } from "../mcp/tools"
 import { applyTool, planTool } from "../tools/apply-tools"
 import { compileArtifacts } from "../tools/artifacts"
-import { TOOLS, toolByName } from "../tools/catalog"
+import {
+  TOOLS,
+  toolByName,
+  type FilesAccess,
+  type RunOutcome,
+} from "../tools/catalog"
 import { invoke, permits } from "../tools/invoke"
 import { queueFor } from "../tools/queue"
 import {
@@ -904,7 +909,7 @@ describe("plan artifacts", () => {
 })
 
 /** Заглушка інструмента осі `artifact`: пише лише свій артефакт. */
-const artifactTool = (changes: FileChange[] = []) =>
+const artifactTool = () =>
   defineTool({
     name: "plan",
     description: "Artifact tool stub.",
@@ -916,7 +921,7 @@ const artifactTool = (changes: FileChange[] = []) =>
     async run() {
       return {
         ok: true,
-        changes,
+        changes: [],
         diagnostics: [],
         artifacts: [{ path: "plans/d.plan.json", content: "{}\n" }],
       }
@@ -1051,16 +1056,73 @@ describe("files axis", () => {
     expect(await snapshotOf(dir)).toEqual(before)
   })
 
-  it("an artifact tool may not change the directory", async () => {
-    // Зміни теки в інструмента осі `artifact` — дефект інструмента, а не
-    // відмова: нічого не пишеться, ні теки, ні артефакту
-    const dir = await project()
-    const before = await snapshotOf(dir)
-    await expect(
-      invoke(artifactTool([{ path: CURRENCY, content: "{}" }]), {}, opts(dir))
-    ).rejects.toThrow(/artifact tool/)
-    expect(await snapshotOf(dir)).toEqual(before)
-    expect(existsSync(join(dirname(dir), "plans"))).toBe(false)
+  it("an artifact tool cannot return directory changes (type level)", () => {
+    // Зміни теки в інструмента осі `artifact` виключає тип, а не перевірка
+    // після `run`: у `apply` база вже змінена, коли такий дефект побачив би
+    // `invoke`. Негативний випадок — `@ts-expect-error`, його ловить typecheck
+    const change: FileChange = { path: CURRENCY, content: "{}" }
+    expectTypeOf<RunOutcome<undefined, "artifact">["changes"]>().toEqualTypeOf<
+      readonly []
+    >()
+    expectTypeOf<RunOutcome<undefined, "write">["changes"]>().toEqualTypeOf<
+      FileChange[]
+    >()
+    void defineTool({
+      name: "plan",
+      description: "Artifact tool stub with changes.",
+      input: z.strictObject({}),
+      files: "artifact",
+      database: "none",
+      data: "none",
+      destructive: false,
+      // @ts-expect-error — `changes` осі `artifact` — лише порожній кортеж
+      run: async () => ({ ok: true, changes: [change], diagnostics: [] }),
+    })
+    // Ширша анотація результату `run` не обходить вісь: `F` береться лише з
+    // `files`, тож `RunOutcome<D, FilesAccess>` — помилка типу
+    void defineTool({
+      name: "apply",
+      description: "Artifact tool stub with a widened annotation.",
+      input: z.strictObject({}),
+      files: "artifact",
+      database: "none",
+      data: "none",
+      destructive: false,
+      // @ts-expect-error — результат із ширшою віссю не підходить осі `artifact`
+      run: async (): Promise<RunOutcome<undefined, FilesAccess>> => ({
+        ok: true,
+        changes: [change],
+        diagnostics: [],
+      }),
+    })
+    // Інструмент з `data` без `present` каналам нічого б не показав
+    // @ts-expect-error — `present` обов'язкове, коли `D` не `undefined`
+    void defineTool({
+      name: "explain",
+      description: "Tool with data and no presentation.",
+      input: z.strictObject({}),
+      files: "read",
+      database: "none",
+      data: "none",
+      destructive: false,
+      run: async (): Promise<RunOutcome<{ x: number }, "read">> => ({
+        ok: true,
+        changes: [],
+        diagnostics: [],
+        data: { x: 1 },
+      }),
+    })
+    // Інструмент осі `write` ті самі зміни повертати може
+    void defineTool({
+      name: "create",
+      description: "Write tool stub with changes.",
+      input: z.strictObject({}),
+      files: "write",
+      database: "none",
+      data: "none",
+      destructive: false,
+      run: async () => ({ ok: true, changes: [change], diagnostics: [] }),
+    })
   })
 })
 

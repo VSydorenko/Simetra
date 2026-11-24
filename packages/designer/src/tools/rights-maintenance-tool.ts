@@ -8,7 +8,7 @@ import { z } from "zod"
 import { failureDiagnostics, withDatabase } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
 import { fromEngine, required } from "./database-tools"
-import { defineTool } from "./types"
+import { defineTool, type RunOutcome } from "./types"
 
 export type RightsMaintenanceData = RightsMaintenanceDone
 
@@ -55,7 +55,10 @@ export const rightsMaintenanceTool = defineTool({
   data: "none",
   destructive: true,
   cliOnly: true,
-  async run({ dir, database }, request) {
+  async run(
+    { dir, database },
+    request
+  ): Promise<RunOutcome<RightsMaintenanceData, "read">> {
     const compiled = await compile(await readMetadataDir(dir))
     const model = compiled.model
     // Помилки компіляції — до підключення: невалідна модель не відкриває пулу
@@ -87,5 +90,11 @@ export const rightsMaintenanceTool = defineTool({
       diagnostics: [],
       data: ran.value.done,
     }
+  },
+  present: {
+    text: (data) =>
+      data === undefined
+        ? undefined
+        : `assigned ${data.assignment}${data.member === undefined ? "" : ` to member ${data.member}`}`,
   },
 })

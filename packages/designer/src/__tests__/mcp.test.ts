@@ -37,7 +37,11 @@ import { expectClean } from "../../../simetra/test/support"
 const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // Гейт розміру описів `tools/list` (спека designer §3.2). Правило бюджету:
 // колишній бюджет + приріст × 1,05; резерв — дубль мапінгу без `$defs`.
-// Останній замір: гілка функції входу `explain` — 37145 символів; до неї —
+// Останній замір: мапінг колонок `promote` винесено в `$defs` — 36362 символи;
+// до цього — 37240 (дерево без зміни): бюджет 37300 мінус виграш 878 = 36422
+// (запас 60, як і був). Зростання лічиться з запасом 5 %, а зниження
+// знижує бюджет на цілу різницю.
+// Раніше: гілка функції входу `explain` — 37145 символів; до неї —
 // 36817 (бюджет 36955): 36955 + ceil((37145 − 36817) × 1,05) = 37300.
 // Раніше: інструмент `declare-function` — 36817 символів; до нього — 34226.
 // Як заміряти: тимчасово поставити `TOOLS_LIST_BUDGET = 0` і запустити
@@ -48,7 +52,7 @@ const CURRENCY = "catalogs/Currency/Currency.meta.json"
 // брати: між замірами каталог міг вирости іншими змінами.
 // Вхід `promote` — 4728 символів із 15120: його визначає
 // структура мапінгу (колонки розгортаються в корені й у кожній ТЧ), а не описи
-const TOOLS_LIST_BUDGET = 37300
+const TOOLS_LIST_BUDGET = 36422
 const clients: Client[] = []
 
 useTmpProjects()
@@ -448,6 +452,20 @@ describe("simetra mcp", TOOL_PIPELINE, () => {
     expect(promote).not.toContain(JSON.stringify(elementDescription))
   })
 
+  it("lists the promote column mapping once, in $defs", async () => {
+    // Мапінг колонок розгортається в корені й у кожній ТЧ: без `$defs` він
+    // лежав би в `tools/list` двічі
+    const { tools } = await (await connect(await project(), true)).listTools()
+    const schema = tools.find((t) => t.name === "promote")!.inputSchema as {
+      $defs?: Record<string, unknown>
+    }
+    expect(Object.keys(schema.$defs ?? {})).toEqual(["ColumnMappings"])
+    const text = JSON.stringify(schema)
+    expect(text.split('"$ref":"#/$defs/ColumnMappings"').length - 1).toBe(2)
+    // `scope` і `retire` — гілки лише мапінгу колонок: поза `$defs` їх нема
+    expect(text.split('"const":"retire"').length - 1).toBe(1)
+  })
+
   it("keeps tools/list within the size budget", async () => {
     const client = await connect(await project(), true)
     const size = JSON.stringify((await client.listTools()).tools).length
@@ -463,6 +481,15 @@ describe("simetra mcp", TOOL_PIPELINE, () => {
     const clean = await call(client, "compile", {})
     expect(clean.isError).toBe(false)
     expect(clean.out.ok).toBe(true)
+    // Скомпільована модель — не відповідь агентові (~МБ на виклик): `compile`
+    // віддає лише діагностику
+    expect(clean.out).not.toHaveProperty("model")
+    expect(Object.keys(clean.out).sort()).toEqual([
+      "changes",
+      "diagnostics",
+      "ok",
+      "written",
+    ])
     // Ламаємо файл після підключення: стан — диск, а не пам'ять сервера.
     await writeFile(join(dir, CURRENCY), "{ not json")
     const broken = await call(client, "compile", {})

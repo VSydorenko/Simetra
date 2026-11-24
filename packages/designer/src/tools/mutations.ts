@@ -19,6 +19,7 @@ import {
   serializeCanonical,
 } from "simetra/compiler"
 import { readMetadataDir } from "../io/metadata-dir"
+import { renderPromotion } from "../io/report"
 import { schemaPathResolver } from "../io/schema-path"
 import type { RunOutcome } from "./types"
 import { defineTool, PLANS_DIR } from "./types"
@@ -35,7 +36,7 @@ const completion = (dir: string): CompletionOptions => ({
 async function apply(
   dir: string,
   operation: (files: Map<string, string>) => Promise<OperationResult>
-): Promise<RunOutcome<undefined>> {
+): Promise<RunOutcome<undefined, "write">> {
   const result = await operation(await readMetadataDir(dir))
   return {
     ok: result.ok,
@@ -53,7 +54,7 @@ async function apply(
 async function applyPromotion(
   dir: string,
   operation: (files: Map<string, string>) => Promise<PromoteResult>
-): Promise<RunOutcome<PromotionRecord>> {
+): Promise<RunOutcome<PromotionRecord, "write">> {
   const result = await operation(await readMetadataDir(dir))
   const { record } = result
   return {
@@ -139,7 +140,11 @@ export const deleteTool = defineTool({
 
 // Вхід сюди приходить уже розібраним `promoteInput` (це робить `invoke`):
 // `promoteObject` сам не вилучає призначених полів, а покладається на схему.
-export const promoteTool = defineTool<typeof promoteInput, PromotionRecord>({
+export const promoteTool = defineTool<
+  typeof promoteInput,
+  PromotionRecord,
+  "write"
+>({
   name: "promote",
   description:
     "Promote an adopted CustomTable (with its tabular-section tables) into a Catalog, a Document without movements or an independent InformationRegister from a complete one-off mapping; ids carry over, names become canonical, dependent function bodies are rewritten. Writes only when the result compiles; returns the promotion record for the database plan.",
@@ -148,6 +153,14 @@ export const promoteTool = defineTool<typeof promoteInput, PromotionRecord>({
   database: "none",
   data: "none",
   destructive: false,
+  // Запис промоції — вхід плану бази: повністю в структурованому результаті
+  present: {
+    structure: (record) => ({ record }),
+    appendix: (record, v) =>
+      v.channel === "cli"
+        ? renderPromotion(record, v.written)
+        : ["promotion record:", JSON.stringify(record, null, 2)].join("\n"),
+  },
   run: ({ dir }, input) =>
     applyPromotion(dir, (files) =>
       promoteObject(files, input, completion(dir))

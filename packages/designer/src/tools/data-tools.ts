@@ -3,12 +3,14 @@ import {
   compile,
   diagnostic,
   type CompiledModel,
+  type Diagnostic,
 } from "simetra/compiler"
 import {
   batchSchema,
   readQuerySchema,
   type Change,
   type CommandError,
+  type MetadataRef,
   type ReadCount,
   type SessionClaims,
   CommandFailure,
@@ -114,7 +116,33 @@ function required(data: DataResource | undefined): DataResource {
   return data
 }
 
-type Compiled = { model: CompiledModel } | { failed: RunOutcome<never> }
+type Compiled =
+  | { model: CompiledModel; diagnostics: Diagnostic[] }
+  | { failed: RunOutcome<never, "read"> }
+
+/**
+ * Попередження компіляції, що стосуються об'єктів операції, і жодних
+ * чужих: успішна модель може нести попередження про інші об'єкти проєкту, а
+ * агентові по даних одного об'єкта вони лише шум. Об'єкт знаходиться за
+ * файлом діагностики; невідомий об'єкт (його відхилить схема T3) нічого не
+ * додає.
+ */
+export function warningsFor(
+  model: CompiledModel,
+  diagnostics: readonly Diagnostic[],
+  objects: readonly MetadataRef[]
+): Diagnostic[] {
+  const files = new Set(
+    model.objects
+      .filter((x) =>
+        objects.some((o) => o.kind === x.kind && o.name === x.name)
+      )
+      .map((x) => x.file)
+  )
+  return diagnostics.filter(
+    (d) => d.severity === "warning" && files.has(d.file)
+  )
+}
 
 /**
  * Компіляція на кожен виклик (спека П4 §6.14): зміна теки між викликами дає нову
@@ -127,7 +155,7 @@ async function compileDir(dir: string): Promise<Compiled> {
     return {
       failed: { ok: false, changes: [], diagnostics: compiled.diagnostics },
     }
-  return { model: compiled.model }
+  return { model: compiled.model, diagnostics: compiled.diagnostics }
 }
 
 /**
@@ -139,8 +167,9 @@ async function onRuntime<D>(
   tool: string,
   ctx: ToolContext,
   model: CompiledModel,
+  warnings: Diagnostic[],
   act: (runtime: CommandRuntime, session: SessionClaims) => Promise<D>
-): Promise<RunOutcome<D | { error: CommandError }>> {
+): Promise<RunOutcome<D | { error: CommandError }, "read">> {
   try {
     const ran = await withData(
       required(ctx.data),
@@ -160,7 +189,7 @@ async function onRuntime<D>(
         }
       }
     )
-    return { ok: ran.ok, changes: [], diagnostics: [], data: ran.data }
+    return { ok: ran.ok, changes: [], diagnostics: warnings, data: ran.data }
   } catch (error) {
     if (error instanceof DataFailure)
       return {
@@ -183,16 +212,29 @@ export const dataReadTool = defineTool({
   database: "none",
   data: "read",
   destructive: false,
-  async run(ctx, input): Promise<RunOutcome<DataReadData>> {
+  async run(ctx, input): Promise<RunOutcome<DataReadData, "read">> {
     const compiled = await compileDir(ctx.dir)
     if ("failed" in compiled) return compiled.failed
     return onRuntime(
       "data-read",
       ctx,
       compiled.model,
+      warningsFor(compiled.model, compiled.diagnostics, [input.query.object]),
       async (rt, session) =>
         toJson(await rt.read(session, input.query)) as JsonReadResult
     )
+  },
+  present: {
+    structure: (data) => toJson(data) as Record<string, unknown>,
+    // Попередження про об'єкти операції — після зведення, як звіт інших
+    // інструментів
+    text: (data, v) =>
+      data === undefined
+        ? undefined
+        : [
+            summarizeData("data-read", data),
+            ...(v.diagnostics.length > 0 ? [v.report] : []),
+          ].join("\n"),
   },
 })
 
@@ -205,10 +247,15 @@ export const dataCommandTool = defineTool({
   database: "none",
   data: "write",
   destructive: false,
-  async run(ctx, input): Promise<RunOutcome<DataCommandData>> {
+  async run(ctx, input): Promise<RunOutcome<DataCommandData, "read">> {
     const compiled = await compileDir(ctx.dir)
     if ("failed" in compiled) return compiled.failed
     const { model } = compiled
+    const warnings = warningsFor(
+      model,
+      compiled.diagnostics,
+      input.operations.map((op) => op.object)
+    )
     // Політика — до з'єднання: база не бачить пакета, якому відмовлено
     const refusal = dataCommandRefusal(
       model,
@@ -232,9 +279,27 @@ export const dataCommandTool = defineTool({
         diagnostics: [],
         refusalReason: "rights-write-disabled",
       }
-    return onRuntime("data-command", ctx, model, async (rt, session) => {
-      const result = await rt.run(session, input.operations)
-      return { result: toJson(result) as JsonCommandResult }
-    })
+    return onRuntime(
+      "data-command",
+      ctx,
+      model,
+      warnings,
+      async (rt, session) => {
+        const result = await rt.run(session, input.operations)
+        return { result: toJson(result) as JsonCommandResult }
+      }
+    )
+  },
+  present: {
+    structure: (data) => toJson(data) as Record<string, unknown>,
+    // Попередження про об'єкти операції — після зведення, як звіт інших
+    // інструментів
+    text: (data, v) =>
+      data === undefined
+        ? undefined
+        : [
+            summarizeData("data-command", data),
+            ...(v.diagnostics.length > 0 ? [v.report] : []),
+          ].join("\n"),
   },
 })

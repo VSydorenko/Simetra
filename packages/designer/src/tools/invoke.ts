@@ -221,12 +221,7 @@ export async function invoke<D>(
         case "read":
           break
         case "artifact":
-          // Інструмент лише артефактів, що змінює теку, — дефект інструмента:
-          // його `--read-only` і перегляд вирішено під «нічого в теці»
-          if (outcome.changes.length > 0)
-            throw new Error(
-              `${tool.name} is an artifact tool and must not change the metadata directory`
-            )
+          // Зміни теки в інструмента осі `artifact` виключає тип `RunOutcome`
           writeArtifacts = outcome.ok && artifacts.length > 0
           break
         case "write": {

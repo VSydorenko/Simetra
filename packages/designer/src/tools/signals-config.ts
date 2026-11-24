@@ -8,7 +8,7 @@ import {
 } from "simetra/model"
 import { z } from "zod"
 import { readMetadataDir } from "../io/metadata-dir"
-import { defineTool } from "./types"
+import { defineTool, type RunOutcome } from "./types"
 
 const PROJECT_FILE = "project.meta.json"
 
@@ -344,7 +344,7 @@ export const signalsConfigTool = defineTool({
   database: "none",
   data: "none",
   destructive: false,
-  async run({ dir }, input) {
+  async run({ dir }, input): Promise<RunOutcome<SignalsConfigData, "read">> {
     const text = (await readMetadataDir(dir)).get(PROJECT_FILE)
     if (text === undefined)
       return {
@@ -375,5 +375,11 @@ export const signalsConfigTool = defineTool({
       ],
     }
     return { ok: true, changes: [], diagnostics: [], data }
+  },
+  // Текст — рівно файл конфігу, щоб його можна було перенаправити у файл;
+  // імена змінних DSN — у JSON-вигляді й в описі інструмента
+  present: {
+    text: (data) =>
+      data === undefined ? undefined : JSON.stringify(data.config, null, 2),
   },
 })

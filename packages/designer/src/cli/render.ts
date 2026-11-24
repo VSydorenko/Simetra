@@ -1,123 +1,12 @@
-import type {
-  Explanation,
-  FunctionExplanation,
-  Locale,
-  PromotionRecord,
-} from "simetra/compiler"
+import type { Locale } from "simetra/compiler"
+import { formatDiagnostics } from "../io/report"
 import {
-  formatDiagnostics,
-  renderApply,
-  renderDiff,
-  renderPlan,
-} from "../io/report"
-import type {
-  ApplyData,
-  PlanData,
-  UnchangedPlanData,
-} from "../tools/apply-tools"
-import type { Tool, ToolResult } from "../tools/catalog"
-import type { DiffData } from "../tools/database-tools"
-import {
-  summarizeData,
-  type DataCommandData,
-  type DataReadData,
-} from "../tools/data-tools"
-import type { RightsMaintenanceData } from "../tools/rights-maintenance-tool"
-import type { RolesData } from "../tools/roles-tool"
-import type { SignalsConfigData } from "../tools/signals-config"
-
-/** Текст пояснення функції для терміналу. */
-export function renderFunctionExplanation(e: FunctionExplanation): string {
-  const lines = [`function ${e.function.schema}.${e.function.name}`]
-  if (e.callers === undefined) {
-    lines.push("not declared")
-  } else {
-    lines.push(`callers: ${e.callers.join(", ") || "(none)"}`)
-    for (const [provider, roles] of Object.entries(e.roles ?? {})) {
-      lines.push(
-        `EXECUTE (${provider}): ${roles.map((r) => `${r.role} (${r.caller})`).join(", ") || "(none)"}`
-      )
-    }
-  }
-  if (e.check !== undefined) lines.push(`check: ${e.check}`)
-  lines.push(`state: ${e.state}`)
-  return lines.join("\n")
-}
-
-/** Текст пояснення об'єкта для терміналу; JSON-вигляд друкується як є. */
-export function renderExplanation(e: Explanation): string {
-  const lines = [`${e.object.kind} ${e.object.name} (${e.object.file})`]
-  if (e.object.scopeKind !== undefined) {
-    lines.push(`scope: ${e.object.scopeKind}`)
-  }
-  for (const t of e.tables) {
-    lines.push("", `table ${t.schema}.${t.name}${t.part ? ` [${t.part}]` : ""}`)
-    for (const c of t.columns) {
-      const tags = [
-        c.notNull ? "not null" : undefined,
-        c.logical === undefined ? undefined : `logical: ${c.logical}`,
-        c.standard === undefined ? undefined : `standard: ${c.standard}`,
-        c.scope === true ? "scope" : undefined,
-      ].filter((x) => x !== undefined)
-      lines.push(
-        `  ${c.name} ${c.type}${tags.length > 0 ? ` (${tags.join(", ")})` : ""}`
-      )
-    }
-    if (t.primaryKey !== undefined) {
-      lines.push(`  primary key (${t.primaryKey.join(", ")})`)
-    }
-    for (const u of t.uniques) lines.push(`  unique (${u.join(", ")})`)
-    for (const f of t.foreignKeys) {
-      lines.push(`  foreign key (${f.columns.join(", ")}) -> ${f.references}`)
-    }
-  }
-  for (const q of e.movementQueries) {
-    lines.push("", `movement query ${q.identity}`, q.sql)
-  }
-  for (const u of e.generatedUnits) {
-    lines.push("", `generated ${u.identity}`, u.sql)
-  }
-  if (e.contracts.length > 0) {
-    lines.push("", "contracts:", JSON.stringify(e.contracts, null, 2))
-  }
-  if (e.referencedBy.length > 0) {
-    lines.push("", "referenced by:")
-    for (const r of e.referencedBy) {
-      lines.push(`  ${r.file}#${r.pointer} (${r.role})`)
-    }
-  }
-  return `${lines.join("\n")}\n`
-}
-
-/**
- * Підсумок запису промоції для терміналу: що на що перетворилось і що
- * лишається плану бази. Повний запис — у `--format json`.
- */
-export function renderPromotion(r: PromotionRecord, written: boolean): string {
-  // Дієслово йде за записом, як рядки змін над підсумком: прогін без запису
-  // нічого не промотував.
-  const verb = written ? "promoted" : "would promote"
-  const lines = [`${verb} ${r.objectId} into ${r.kind}`]
-  for (const t of r.tables) {
-    lines.push(`  table ${t.schema}.${t.from} -> ${t.to}`)
-  }
-  const counts: [string, number][] = [
-    ["columns renamed or moved", r.columns.length],
-    ["type changes", r.typeChanges.length],
-    ["data steps", r.dataSteps.length],
-    ["columns retired", r.retired.length],
-    ["constraints relaxed", r.relaxed.length],
-    ["constraints tightened", r.tightened.length],
-    ["row level security changes", r.rowLevelSecurity.length],
-    ["delete semantics changes", r.deleteSemantics.length],
-    ["conversions", r.conversions.length],
-    ["units moved", r.movedUnits.length],
-    ["units rewritten", r.rewrittenUnits.length],
-    ["contract changes", r.contractChanges.length],
-  ]
-  for (const [label, n] of counts) if (n > 0) lines.push(`  ${label}: ${n}`)
-  return lines.join("\n")
-}
+  presentation,
+  structureOf,
+  type PresentationView,
+  type Tool,
+  type ToolResult,
+} from "../tools/catalog"
 
 /** Кінцевий результат одного виклику в тексті/JSON для терміналу. */
 export function renderResult(
@@ -126,143 +15,28 @@ export function renderResult(
   o: { dir: string; locale: Locale; format: "text" | "json" }
 ): { stdout: string; json?: unknown[] } {
   const report = formatDiagnostics(r.diagnostics, o)
-  if (tool.name === "compile") {
+  // Усі відмінності між інструментами — у `tool.present`, не в гілках за іменем
+  const present = tool.present
+  if (present?.diagnosticsOnly === true) {
     return o.format === "json"
       ? { stdout: "", json: JSON.parse(report) as unknown[] }
       : { stdout: report }
   }
-  if (tool.name === "explain" && r.ok && r.data !== undefined) {
-    // Два типи виходу: об'єкт має `object`, функція — `function`.
-    const explanation = r.data as Explanation | FunctionExplanation
-    return {
-      stdout:
-        o.format === "json"
-          ? JSON.stringify(explanation, null, 2)
-          : "function" in explanation
-            ? renderFunctionExplanation(explanation)
-            : renderExplanation(explanation).trimEnd(),
-    }
+  const view: PresentationView = {
+    channel: "cli",
+    ok: r.ok,
+    written: r.written,
+    diagnostics: r.diagnostics,
+    report,
   }
-  if (tool.name === "diff" && r.data !== undefined) {
-    const data = r.data as DiffData
-    return {
-      stdout:
-        o.format === "json"
-          ? JSON.stringify(
-              {
-                ok: r.ok,
-                empty: data.empty,
-                plan: data.plan,
-                differences: data.differences,
-                diagnostics: JSON.parse(report) as unknown,
-              },
-              null,
-              2
-            )
-          : renderDiff(data, report),
-    }
+  const { shown: shows, data } = presentation(tool, r)
+  if (shows && present?.bare === true && o.format === "json")
+    return { stdout: JSON.stringify(r.data, null, 2) }
+  if (shows && o.format === "text") {
+    const text = present?.text?.(r.data, view)
+    if (text !== undefined) return { stdout: text }
   }
-  if (tool.name === "plan" || tool.name === "apply") {
-    if (o.format === "json")
-      return {
-        stdout: JSON.stringify(
-          {
-            ok: r.ok,
-            written: r.written,
-            artifacts: r.artifacts ?? [],
-            ...(r.data as Record<string, unknown> | undefined),
-            diagnostics: JSON.parse(report) as unknown,
-          },
-          null,
-          2
-        ),
-      }
-    return {
-      stdout:
-        tool.name === "plan"
-          ? renderPlan(
-              r.data as PlanData | UnchangedPlanData | undefined,
-              report,
-              {
-                ok: r.ok,
-                written: r.written,
-              }
-            )
-          : renderApply(r.data as ApplyData | undefined, r.diagnostics, report),
-    }
-  }
-  if (tool.name === "roles" && r.data !== undefined) {
-    const { roles, skipped } = r.data as RolesData
-    return {
-      stdout:
-        o.format === "json"
-          ? JSON.stringify(
-              {
-                ok: r.ok,
-                roles,
-                skipped,
-                diagnostics: JSON.parse(report) as unknown,
-              },
-              null,
-              2
-            )
-          : [
-              ...roles.map(
-                (x) =>
-                  `${x.server}: ${x.name} ${x.outcome}${x.added === undefined ? "" : `; added membership in ${x.added.join(", ")}`}`
-              ),
-              // Пропуск ролі входу не мовчазний: без провайдера невідомо,
-              // членом якої ролі запиту вона мусить бути
-              ...skipped.map((x) => {
-                if (x.reason === "no-project-file")
-                  return `target: ${x.name} skipped: the directory has no project.meta.json, so database.provider is unknown; run roles in a metadata directory with a project file to create it`
-                // Ім'я пропуску — `<таблиця>:<привілей>`; ім'я таблиці двокрапки не має
-                const at = x.name.lastIndexOf(":")
-                return `target: ${x.name.slice(0, at)}: ${x.name.slice(at + 1)} not granted yet — run the Better Auth migration, then simetra roles again`
-              }),
-              ...(r.diagnostics.length > 0 ? [report] : []),
-            ].join("\n"),
-    }
-  }
-  if (tool.name === "rights-maintenance" && r.data !== undefined) {
-    const done = r.data as RightsMaintenanceData
-    return {
-      stdout:
-        o.format === "json"
-          ? JSON.stringify(
-              { ok: r.ok, ...done, diagnostics: JSON.parse(report) as unknown },
-              null,
-              2
-            )
-          : `assigned ${done.assignment}${done.member === undefined ? "" : ` to member ${done.member}`}`,
-    }
-  }
-  // Текстовий вигляд — рівно файл конфігу, щоб його можна було перенаправити
-  // у файл; імена змінних DSN — у JSON-вигляді й в описі інструмента
-  if (tool.name === "signals-config" && r.data !== undefined) {
-    const data = r.data as SignalsConfigData
-    return {
-      stdout:
-        o.format === "json"
-          ? JSON.stringify({ ok: r.ok, ...data }, null, 2)
-          : JSON.stringify(data.config, null, 2),
-    }
-  }
-  // Дані рантайму — лише коли вони є; помилка компіляції чи збій бази
-  // ідуть загальною гілкою з діагностикою
-  if (
-    (tool.name === "data-read" || tool.name === "data-command") &&
-    r.data !== undefined
-  ) {
-    const data = r.data as DataReadData | DataCommandData
-    return {
-      stdout:
-        o.format === "json"
-          ? JSON.stringify({ ok: r.ok, ...data }, null, 2)
-          : summarizeData(tool.name, data),
-    }
-  }
-  if (tool.files === "read") return { stdout: report }
+  if (!shows && tool.files === "read") return { stdout: report }
   const changed = r.changes.map((c) => c.path)
   if (o.format === "json") {
     return {
@@ -272,10 +46,11 @@ export function renderResult(
           written: r.written,
           ...(r.wouldWrite === true ? { wouldWrite: true } : {}),
           changed,
-          diagnostics: JSON.parse(report) as unknown,
-          ...(tool.name === "promote" && r.data !== undefined
-            ? { record: r.data }
+          ...(tool.files === "artifact"
+            ? { artifacts: r.artifacts ?? [] }
             : {}),
+          ...(data !== undefined ? structureOf(tool, data) : {}),
+          diagnostics: JSON.parse(report) as unknown,
         },
         null,
         2
@@ -305,8 +80,8 @@ export function renderResult(
               ]
             : ["nothing written: the result has errors"]),
       report,
-      ...(tool.name === "promote" && r.data !== undefined
-        ? [renderPromotion(r.data as PromotionRecord, r.written)]
+      ...(data !== undefined && present?.appendix !== undefined
+        ? [present.appendix(data, view)]
         : []),
     ].join("\n"),
   }
