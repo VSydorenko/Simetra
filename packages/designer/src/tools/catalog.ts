@@ -24,6 +24,8 @@ export type {
   DatabaseResource,
   FilesAccess,
   InvokeOptions,
+  Presentation,
+  PresentationView,
   RefusalReason,
   RunOutcome,
   Tool,
@@ -53,6 +55,20 @@ export const TOOLS: readonly Tool[] = [
   dataReadTool,
   dataCommandTool,
 ]
+
+/**
+ * Поля `data` інструмента у структурованому результаті обох каналів: їх
+ * вирішує `tool.present`, не ім'я інструмента.
+ */
+export function structureOf(
+  tool: Tool,
+  data: unknown
+): Record<string, unknown> {
+  return (
+    tool.present?.structure?.(data as never) ??
+    (data as Record<string, unknown>)
+  )
+}
 
 export function toolByName(name: string): Tool | undefined {
   return TOOLS.find((t) => t.name === name)

@@ -118,7 +118,7 @@ function required(data: DataResource | undefined): DataResource {
 
 type Compiled =
   | { model: CompiledModel; diagnostics: Diagnostic[] }
-  | { failed: RunOutcome<never> }
+  | { failed: RunOutcome<never, "read"> }
 
 /**
  * Попередження компіляції, що стосуються об'єктів операції, і жодних
@@ -169,7 +169,7 @@ async function onRuntime<D>(
   model: CompiledModel,
   warnings: Diagnostic[],
   act: (runtime: CommandRuntime, session: SessionClaims) => Promise<D>
-): Promise<RunOutcome<D | { error: CommandError }>> {
+): Promise<RunOutcome<D | { error: CommandError }, "read">> {
   try {
     const ran = await withData(
       required(ctx.data),
@@ -212,7 +212,7 @@ export const dataReadTool = defineTool({
   database: "none",
   data: "read",
   destructive: false,
-  async run(ctx, input): Promise<RunOutcome<DataReadData>> {
+  async run(ctx, input): Promise<RunOutcome<DataReadData, "read">> {
     const compiled = await compileDir(ctx.dir)
     if ("failed" in compiled) return compiled.failed
     return onRuntime(
@@ -223,6 +223,11 @@ export const dataReadTool = defineTool({
       async (rt, session) =>
         toJson(await rt.read(session, input.query)) as JsonReadResult
     )
+  },
+  present: {
+    structure: (data) => toJson(data) as Record<string, unknown>,
+    text: (data) =>
+      data === undefined ? undefined : summarizeData("data-read", data),
   },
 })
 
@@ -235,7 +240,7 @@ export const dataCommandTool = defineTool({
   database: "none",
   data: "write",
   destructive: false,
-  async run(ctx, input): Promise<RunOutcome<DataCommandData>> {
+  async run(ctx, input): Promise<RunOutcome<DataCommandData, "read">> {
     const compiled = await compileDir(ctx.dir)
     if ("failed" in compiled) return compiled.failed
     const { model } = compiled
@@ -277,5 +282,10 @@ export const dataCommandTool = defineTool({
         return { result: toJson(result) as JsonCommandResult }
       }
     )
+  },
+  present: {
+    structure: (data) => toJson(data) as Record<string, unknown>,
+    text: (data) =>
+      data === undefined ? undefined : summarizeData("data-command", data),
   },
 })

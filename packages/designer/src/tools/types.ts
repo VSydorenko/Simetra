@@ -152,6 +152,48 @@ export interface RunOutcome<D, F extends FilesAccess = FilesAccess> {
   artifacts?: FileChange[]
 }
 
+/** Що бачить текстова частина подання: канал і вже відформатований звіт діагностики. */
+export interface PresentationView {
+  channel: "cli" | "mcp"
+  ok: boolean
+  written: boolean
+  diagnostics: Diagnostic[]
+  /** Діагностика текстом у мові й вигляді каналу. */
+  report: string
+}
+
+/**
+ * Як канали показують результат інструмента. Ознака живе в записі
+ * інструмента, а не в гілці адаптера за іменем: новий інструмент додає поле,
+ * CLI і MCP читають його однаково (спека designer §3.1: адаптери тонкі).
+ * Без `present` інструмент показується загальним видом: зміни, діагностика,
+ * `data` не показується.
+ */
+export interface Presentation<D = never> {
+  /**
+   * Результат у `--format json` — лише масив діагностики (`compile`);
+   * текст — звіт. MCP цієї ознаки не читає.
+   */
+  diagnosticsOnly?: true
+  /**
+   * `data` — і є весь результат (`explain`), без обгортки `ok`/діагностики; лише
+   * коли `ok`, інакше — загальний вид з діагностикою.
+   */
+  bare?: true
+  /**
+   * Поля `data` у структурованому результаті (JSON CLI, `structuredContent`
+   * MCP). Типово — самі поля `data`; `promote` кладе запис під `record`.
+   */
+  structure?(data: D): Record<string, unknown>
+  /**
+   * Текст результату замість загальних рядків; `undefined` — загальний вид.
+   * Викликається і без `data`: `plan` і `apply` показують відмову текстом.
+   */
+  text?(data: D | undefined, view: PresentationView): string | undefined
+  /** Додаток після загальних рядків і звіту (`promote`: запис промоції). */
+  appendix?(data: D, view: PresentationView): string
+}
+
 export interface Tool<
   I extends z.ZodType = z.ZodType,
   D = unknown,
@@ -170,6 +212,8 @@ export interface Tool<
    * канал не успадковує доступ до інструмента.
    */
   cliOnly?: true
+  /** Подання `data` каналами; без поля `data` каналам не показується. */
+  present?: Presentation<NoInfer<D>>
   run(ctx: ToolContext, input: z.infer<I>): Promise<RunOutcome<D, F>>
 }
 

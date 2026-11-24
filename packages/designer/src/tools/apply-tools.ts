@@ -51,6 +51,7 @@ import {
 import { z } from "zod"
 import { failureDiagnostics, withDatabase } from "../io/database"
 import { readMetadataDir } from "../io/metadata-dir"
+import { renderApply, renderPlan } from "../io/report"
 import { UsageError } from "../io/usage-error"
 import { fromEngine, hasErrors, loadEngine, required } from "./database-tools"
 import { defineTool, PLANS_DIR, type RunOutcome } from "./types"
@@ -168,7 +169,9 @@ async function applyDatabase(o: { readOnly: boolean }) {
   return createApplyDatabase(o)
 }
 
-const refusedWith = <D>(diagnostics: Diagnostic[]): RunOutcome<D> => ({
+const refusedWith = <D>(
+  diagnostics: Diagnostic[]
+): RunOutcome<D, "artifact"> => ({
   ok: false,
   changes: [],
   diagnostics,
@@ -324,7 +327,7 @@ export const planTool = defineTool({
     dir,
     root,
     database,
-  }): Promise<RunOutcome<PlanData | UnchangedPlanData>> {
+  }): Promise<RunOutcome<PlanData | UnchangedPlanData, "artifact">> {
     const compiled = await compile(await readMetadataDir(dir))
     const model = compiled.model
     if (model === undefined) return refusedWith(compiled.diagnostics)
@@ -390,6 +393,10 @@ export const planTool = defineTool({
         }
       }
     }
+  },
+  present: {
+    text: (data, v) =>
+      renderPlan(data, v.report, { ok: v.ok, written: v.written }),
   },
 })
 
@@ -489,7 +496,10 @@ export const applyTool = defineTool({
   database: "write",
   data: "none",
   destructive: true,
-  async run({ dir, root, database }, input): Promise<RunOutcome<ApplyData>> {
+  async run(
+    { dir, root, database },
+    input
+  ): Promise<RunOutcome<ApplyData, "artifact">> {
     // 1–2. Артефакт лише з `plans/` і лише строгий
     const parsed = parsePlan(await readPlanFile(root, input.plan))
     // План іншого формату — чинний файл старої платформи: відмова з порадою
@@ -726,5 +736,8 @@ export const applyTool = defineTool({
       case "failed":
         return refusedWith(diagnostics)
     }
+  },
+  present: {
+    text: (data, v) => renderApply(data, v.diagnostics, v.report),
   },
 })

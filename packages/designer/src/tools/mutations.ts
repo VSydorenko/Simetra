@@ -19,6 +19,7 @@ import {
   serializeCanonical,
 } from "simetra/compiler"
 import { readMetadataDir } from "../io/metadata-dir"
+import { renderPromotion } from "../io/report"
 import { schemaPathResolver } from "../io/schema-path"
 import type { RunOutcome } from "./types"
 import { defineTool, PLANS_DIR } from "./types"
@@ -148,6 +149,14 @@ export const promoteTool = defineTool<typeof promoteInput, PromotionRecord>({
   database: "none",
   data: "none",
   destructive: false,
+  // Запис промоції — вхід плану бази: повністю в структурованому результаті
+  present: {
+    structure: (record) => ({ record }),
+    appendix: (record, v) =>
+      v.channel === "cli"
+        ? renderPromotion(record, v.written)
+        : ["promotion record:", JSON.stringify(record, null, 2)].join("\n"),
+  },
   run: ({ dir }, input) =>
     applyPromotion(dir, (files) =>
       promoteObject(files, input, completion(dir))

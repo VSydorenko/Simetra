@@ -1,26 +1,14 @@
 import type { CallToolResult, McpServer } from "@modelcontextprotocol/server"
-import type { PromotionRecord } from "simetra/compiler"
 import { z } from "zod"
+import { formatDiagnostics } from "../io/report"
 import {
-  formatDiagnostics,
-  renderApply,
-  renderDiff,
-  renderPlan,
-} from "../io/report"
-import { TOOLS, type Tool, type ToolResult } from "../tools/catalog"
+  structureOf,
+  TOOLS,
+  type PresentationView,
+  type Tool,
+  type ToolResult,
+} from "../tools/catalog"
 import { invoke } from "../tools/invoke"
-import type {
-  ApplyData,
-  PlanData,
-  UnchangedPlanData,
-} from "../tools/apply-tools"
-import type { DiffData } from "../tools/database-tools"
-import {
-  summarizeData,
-  toJson,
-  type DataCommandData,
-  type DataReadData,
-} from "../tools/data-tools"
 import type { DataResource, DatabaseResource } from "../tools/types"
 
 export interface McpToolOptions {
@@ -100,7 +88,16 @@ function toResponse(
   o: McpToolOptions,
   dry: boolean
 ): CallToolResult {
-  const { ok, written, wouldWrite, changes, diagnostics, refusal } = result
+  const {
+    ok,
+    written,
+    wouldWrite,
+    changes,
+    diagnostics,
+    refusal,
+    data,
+    artifacts,
+  } = result
   if (refusal !== undefined) {
     // Код відмови — і в `structuredContent`: агент читає причину, а не текст
     return {
@@ -118,85 +115,33 @@ function toResponse(
       content: [{ type: "text", text: refusal.message }],
     }
   }
-  // Дані рантайму — лише коли вони є: помилка компіляції чи збій бази даних
-  // не мають і йдуть загальною гілкою з діагностикою
-  if (
-    (tool.name === "data-read" || tool.name === "data-command") &&
-    result.data !== undefined
-  ) {
-    const data = result.data as DataReadData | DataCommandData
-    return {
-      isError: !ok,
-      structuredContent: {
-        ok,
-        diagnostics,
-        ...(toJson(data) as Record<string, unknown>),
-      },
-      content: [{ type: "text", text: summarizeData(tool.name, data) }],
-    }
-  }
-  // `explain` віддає саме пояснення; решта — єдину обгортку результату.
-  if (tool.name === "explain" && ok && result.data !== undefined) {
-    return {
-      structuredContent: { ...(result.data as Record<string, unknown>) },
-      content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }],
-    }
-  }
   const report = formatDiagnostics(diagnostics, {
     dir: o.dir,
     locale: "en",
     format: "text",
   })
-  // Дані бази — повністю в `structuredContent`, текст — зведення. Відмінності
-  // звірки — не помилка виклику: `isError` лише за помилками діагностики
-  if (tool.name === "diff" && result.data !== undefined) {
-    const data = result.data as DiffData
+  const view: PresentationView = {
+    channel: "mcp",
+    ok,
+    written,
+    diagnostics,
+    report,
+  }
+  // Усі відмінності між інструментами — у `tool.present`, не в гілках за іменем
+  const present = tool.present
+  // `explain` віддає саме пояснення; решта — єдину обгортку результату.
+  if (present?.bare === true && ok && data !== undefined) {
     return {
-      isError: !ok,
-      structuredContent: { ok, written, changes, ...data },
-      content: [{ type: "text", text: renderDiff(data, report) }],
+      structuredContent: { ...structureOf(tool, data) },
+      content: [{ type: "text", text: present.text?.(data, view) ?? "" }],
     }
   }
-  // `planHash` — вхід `apply`: без нього в `structuredContent` агент не
-  // підтвердить показаний план. Текст — той самий, що в CLI: дрейф першим
-  if (tool.name === "plan") {
-    const data = result.data as PlanData | UnchangedPlanData | undefined
-    return {
-      isError: !ok,
-      structuredContent: {
-        ok,
-        written,
-        artifacts: result.artifacts ?? [],
-        diagnostics,
-        ...data,
-      },
-      content: [
-        { type: "text", text: renderPlan(data, report, { ok, written }) },
-      ],
-    }
-  }
-  // Шлях звіту репетиції — в `artifacts`, як у `plan`: агент читає файл
-  // звідти, а не з тексту
-  if (tool.name === "apply") {
-    const data = result.data as ApplyData | undefined
-    return {
-      isError: !ok,
-      structuredContent: {
-        ok,
-        written,
-        artifacts: result.artifacts ?? [],
-        diagnostics,
-        ...data,
-      },
-      content: [{ type: "text", text: renderApply(data, diagnostics, report) }],
-    }
-  }
-  // Запис промоції — вхід плану бази: повністю в `structuredContent`, а в
-  // тексті JSON-блоком, бо агент без нього не побачить, що саме перейменовано.
-  const record =
-    tool.name === "promote"
-      ? (result.data as PromotionRecord | undefined)
-      : undefined
+  // Дані показуються, коли вони є: помилка компіляції чи збій бази не мають
+  // даних і йдуть загальним видом з діагностикою. Інструмент осі `artifact`
+  // повертає і відмову з артефактами (`planHash` — вхід `apply`, його агент
+  // бере зі `structuredContent`)
+  const shown = present !== undefined && data !== undefined
+  const text = present?.text?.(data, view)
   // Збій роботи з базою — не помилка метаданих: зведення не має слати
   // викликача правити теку, коли виправляти треба базу чи підключення
   const databaseFailed = diagnostics.some((d) => d.code === "database.failed")
@@ -234,22 +179,22 @@ function toResponse(
       written,
       ...(wouldWrite === true ? { wouldWrite } : {}),
       changes,
+      ...(tool.files === "artifact" ? { artifacts: artifacts ?? [] } : {}),
       diagnostics,
-      ...(tool.name === "introspect" && result.data !== undefined
-        ? (result.data as Record<string, unknown>)
-        : {}),
-      ...(record === undefined ? {} : { record }),
+      ...(shown ? structureOf(tool, data) : {}),
     },
     content: [
       {
         type: "text",
-        text: [
-          ...lines,
-          report,
-          ...(record === undefined
-            ? []
-            : ["promotion record:", JSON.stringify(record, null, 2)]),
-        ].join("\n"),
+        text:
+          text ??
+          [
+            ...lines,
+            report,
+            ...(shown && present.appendix !== undefined
+              ? [present.appendix(data, view)]
+              : []),
+          ].join("\n"),
       },
     ],
   }
