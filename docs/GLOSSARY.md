@@ -699,7 +699,7 @@
 **Адаптер джерела** — порт T0 `SourceAdapter`: Server Function або PostgREST.
 *See:* ADR-0058
 
-**Каталог інструментів агента** — загальні дієслова T3 (`describe`, `read`, `command`) над `CommandRuntime`, яких адаптери (MCP-вхід, інструменти даних designer) лише обгортають.
+**Каталог інструментів агента** — загальні інструменти T3 (`describe`, `read`, `write`, `remove`) над `CommandRuntime`, яких адаптери (MCP-вхід, інструменти даних designer) лише обгортають.
 *See:* ADR-0107
 
 ## Інтерфейс і host
