@@ -60,6 +60,39 @@ describe("describeConnection", () => {
     expect(describeConnection("postgres://u:p@h/db")).toBe("h:5432/db")
     expect(describeConnection(PASSWORD)).toBe("the configured database")
   })
+
+  // Хост береться так, як його візьме `pg` (семантика `pg-connection-string`):
+  // інакше `instructions` покажуть інший хост, ніж той, до якого підключиться запуск
+  it.each([
+    ["postgres://u:p@h:6543/db", "h:6543/db"],
+    ["postgresql://u:p@h/db", "h:5432/db"],
+    ["postgres://u:p@/db?host=db.example.test", "db.example.test:5432/db"],
+    ["postgres://u:p@h/db?host=other", "other:5432/db"],
+    [
+      "postgres://u:p@/db?host=/var/run/postgresql",
+      "/var/run/postgresql:5432/db",
+    ],
+    [
+      "postgres://u:p@/db?host=%2Fvar%2Frun%2Fpostgresql&port=5433",
+      "/var/run/postgresql:5433/db",
+    ],
+    ["postgres://u:p@%2Fvar%2Frun%2Fpg/db", "/var/run/pg:5432/db"],
+    ["postgres:///db", "localhost:5432/db"],
+    ["postgres://u:p@[::1]:5433/db", "[::1]:5433/db"],
+    ["postgres://u:p@h:6543/a%20b", "h:6543/a b"],
+  ])("takes the host of %s the way pg does", (url, shown) => {
+    expect(describeConnection(url)).toBe(shown)
+    expect(leaks(describeConnection(url))).toEqual([])
+  })
+
+  it("never quotes a string without a postgres scheme", () => {
+    // `pg-connection-string` читає голий рядок як відносний URL і віддав би
+    // його як ім'я бази — тож без схеми не цитуємо
+    expect(describeConnection("hunter2-secret")).toBe("the configured database")
+    expect(describeConnection("http://u:p@h/db")).toBe(
+      "the configured database"
+    )
+  })
 })
 
 describe("classifyDatabaseError", () => {

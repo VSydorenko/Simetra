@@ -47,6 +47,7 @@
     "@supabase/pg-delta": "1.0.0-alpha.60",
     "citty": "0.2.2",
     "pg": "8.23.1",
+    "pg-connection-string": "2.14.1",
     "simetra": "workspace:*",
     "smol-toml": "1.9.1",
     "zod": "^4.6.7"
