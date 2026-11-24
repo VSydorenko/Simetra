@@ -94,7 +94,7 @@ Glossary: [docs/GLOSSARY.md](../../GLOSSARY.md) («Права», «Сервер 
 
 **Адаптер.** Адаптер MCP — підшлях T6 `simetra/shell/mcp` над `AgentToolCatalog`. Залежність `@modelcontextprotocol/server` — необов'язковий peer пакета `simetra`; імпортує її лише `src/shell/mcp` (лінт-правило з негативним тестом). Адаптер працює з `Request`/`Response` вебплатформи; маршрут монтує host. Адаптер — сервер ресурсу OAuth 2.1 (ADR-0106): публікує PRM (RFC 9728) з адресою сервера авторизації host-а; на 401 віддає `WWW-Authenticate` з `resource_metadata`.
 
-**Порт `IntrospectAgentToken`.** Вхід — токен і канонічна адреса ресурсу MCP; вихід — `{ active, tokenType, aud, sub, clientId, pin }` або `null`. Реалізація шаблону кличе інтроспекцію Better Auth з `token_type_hint: "access_token"` від імені клієнта сервера ресурсу (§«Шаблон»).
+**Порт `IntrospectAgentToken`.** Вхід — токен і канонічна адреса ресурсу MCP; вихід — `{ active, tokenType, aud, sub, clientId, pin }` або `null`. Реалізація шаблону кличе інтроспекцію Better Auth з `token_type_hint: "access_token"` від імені клієнта сервера ресурсу (див. «Шаблон host-а» нижче).
 
 **Claims агента — відмова за замовчуванням.** Адаптер відповідає 401 і не кличе каталог, коли:
 
