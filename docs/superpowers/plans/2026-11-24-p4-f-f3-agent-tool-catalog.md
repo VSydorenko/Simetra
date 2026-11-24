@@ -105,12 +105,33 @@ none — один блок, приймається цілим.
 
 ## 8. Задачі
 
-| # | Задача | Файли / модулі | Готово, коли | Після | Доказ |
-| --- | --- | --- | --- | --- | --- |
-| 1 | Мітки в каталозі рантайму (Р-F3-7) | `model/runtime/catalog.ts`, `compiler/runtime-catalog.ts`, `packages/create-simetra-app/template/generated/runtime-catalog.json` | об'єкт, реквізит, ТЧ рантайму несуть `title`/`description`, коли метадані їх мають; клієнтський каталог не змінився; згенерований артефакт шаблону оновлено `compile --out`; `pnpm metadata:check` зелений | 0 | `run-tests unit --filter packages/simetra/src/compiler/__tests__/runtime-catalog.test.ts` |
-| 2 | Ядро каталогу: `describe`, `read`, `execute`, запобіжник, JSON-значення | `server/agent/`, `server/index.ts` | І-F3-1…3 зелені на фейковому рантаймі (`server/__tests__/harness.ts`, `fake-database.ts`); І-F3-4 — у тестах T1; `describe` дає всі об'єкти каталогу; невідомий об'єкт — `catalog.unknown-object` | 1 | `run-tests unit --filter packages/simetra/src/server/__tests__/<тест ядра>` |
-| 3 | Шар інструментів: дескриптори, розбір входу, звуження дієслів, результат, помилки, межа розміру, подання MCP, бюджет | `server/agent/` | рядок F3 §3: позначки — значення §5.3 і всі явно; кожне поле `structuredContent` є в тексті `content`; помилка — текст із `code`, `hint`, `outcome`; понад межу — `truncated`; імена й довжини описів; `awaiting_confirmation` у типі й ніколи не повертається; І-F3-5 зелений; тест бюджету Р-F3-14 | 2 | `run-tests unit --filter packages/simetra/src/server/__tests__/<тест інструментів>` |
-| 4 | Designer — адаптер (Р-F3-12, Р-F3-13) | `packages/designer/src/tools/data-tools.ts`, `data-policy.ts` | `data-policy.ts` лишає тільки відмову модуля; запис прав — `agentWriteRefusal`; `toJson` — з каталогу; DB-тести й `data-tools.test.ts` без зміни очікувань (`git diff` порожній); І-F3-6 зелений; `TOOLS_LIST_BUDGET` не росте | 3 | `run-tests unit --filter packages/designer/src/__tests__/data-tools.test.ts`; `run-tests db --filter packages/designer/src/__tests__/data-tools.db.test.ts`; `run-tests db --filter packages/designer/src/__tests__/tenant-creation.db.test.ts` |
+### Задача 1. Мітки в каталозі рантайму (Р-F3-7)
+
+- **Файли / модулі:** `model/runtime/catalog.ts`, `compiler/runtime-catalog.ts`, `packages/create-simetra-app/template/generated/runtime-catalog.json`
+- **Готово, коли:** об'єкт, реквізит, ТЧ рантайму несуть `title`/`description`, коли метадані їх мають; клієнтський каталог не змінився; згенерований артефакт шаблону оновлено `compile --out`; `pnpm metadata:check` зелений
+- **Після:** 0
+- **Доказ:** `run-tests unit --filter packages/simetra/src/compiler/__tests__/runtime-catalog.test.ts`
+
+### Задача 2. Ядро каталогу: `describe`, `read`, `execute`, запобіжник, JSON-значення
+
+- **Файли / модулі:** `server/agent/`, `server/index.ts`
+- **Готово, коли:** І-F3-1…3 зелені на фейковому рантаймі (`server/__tests__/harness.ts`, `fake-database.ts`); І-F3-4 — у тестах T1; `describe` дає всі об'єкти каталогу; невідомий об'єкт — `catalog.unknown-object`
+- **Після:** 1
+- **Доказ:** `run-tests unit --filter packages/simetra/src/server/__tests__/<тест ядра>`
+
+### Задача 3. Шар інструментів: дескриптори, розбір входу, звуження дієслів, результат, помилки, межа розміру, подання MCP, бюджет
+
+- **Файли / модулі:** `server/agent/`
+- **Готово, коли:** рядок F3 §3: позначки — значення §5.3 і всі явно; кожне поле `structuredContent` є в тексті `content`; помилка — текст із `code`, `hint`, `outcome`; понад межу — `truncated`; імена й довжини описів; `awaiting_confirmation` у типі й ніколи не повертається; І-F3-5 зелений; тест бюджету Р-F3-14
+- **Після:** 2
+- **Доказ:** `run-tests unit --filter packages/simetra/src/server/__tests__/<тест інструментів>`
+
+### Задача 4. Designer — адаптер (Р-F3-12, Р-F3-13)
+
+- **Файли / модулі:** `packages/designer/src/tools/data-tools.ts`, `data-policy.ts`
+- **Готово, коли:** `data-policy.ts` лишає тільки відмову модуля; запис прав — `agentWriteRefusal`; `toJson` — з каталогу; DB-тести й `data-tools.test.ts` без зміни очікувань (`git diff` порожній); І-F3-6 зелений; `TOOLS_LIST_BUDGET` не росте
+- **Після:** 3
+- **Доказ:** `run-tests unit --filter packages/designer/src/__tests__/data-tools.test.ts`; `run-tests db --filter packages/designer/src/__tests__/data-tools.db.test.ts`; `run-tests db --filter packages/designer/src/__tests__/tenant-creation.db.test.ts`
 
 ## 9. Задача 0
 
