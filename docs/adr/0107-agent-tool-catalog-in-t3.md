@@ -1,6 +1,6 @@
 # ADR-0107: каталог інструментів агента — у T3, загальні дієслова над метаданими; MCP і designer — адаптери
 
-Status: accepted 2026-11-24
+Status: superseded by ADR-0109
 Decided by: architect
 Spec: [П4-F](../superpowers/specs/2026-11-24-p4-f-agents-design.md) §5.3
 
