@@ -1,3 +1,4 @@
+import { failureOf, type Attempts, type SettleDetail } from "./attempts"
 import {
   CommandFailure,
   type CatalogIndex,
@@ -34,7 +35,12 @@ import {
   type RowViews,
 } from "./snapshot"
 import { ReadLimiterClosed, settle, type StoreSource } from "./source"
-import type { AdmissionCondition, ReadCause, ReadWhy } from "./sync/vocabulary"
+import type {
+  AdmissionCondition,
+  ReadCause,
+  ReadWhy,
+  SettleOutcome,
+} from "./sync/vocabulary"
 import type {
   CoreLimits,
   CoreLogEntry,
@@ -81,6 +87,8 @@ export interface RegistryContext {
   readonly defects: Defects
   /** The monotonic clock in ms (`performance.now()`; a test substitutes it). */
   readonly now: () => number
+  /** Diagnostics of the attempts to read a view (the `watchAttempts` events). */
+  readonly attempts: Attempts
   /**
    * A view just became visible (a subscription or `setVisible(true)`): it is
    * read if it holds hydration-only rows (§6.6) or its composition is not
@@ -104,6 +112,12 @@ type Timer = ReturnType<typeof setTimeout>
 /** A held view form. */
 export interface Subset extends ReaderTarget {
   readonly form: Form
+  /**
+   * Opaque id of the target, stable for the life of the subset and the same
+   * in the `watchReads` events and in `sync()` (diagnostics only; it never
+   * decides anything).
+   */
+  readonly targetId: number
   readonly listeners: Set<{ readonly fn: () => void }>
   preloads: number
   readonly preloadTimers: Set<Timer>
@@ -115,6 +129,13 @@ export interface Subset extends ReaderTarget {
   flight: number | undefined
   /** The start epoch of the last attempt of the load in flight. */
   flightEpoch: number | undefined
+  /** The cause of the call that started the load in flight (diagnostics only, `sync()`). */
+  flightCause: ReadCause | undefined
+  /**
+   * The wake-up of the pause before the retry of a discarded load (accounting
+   * only, `sync()`): the flight stays set meanwhile, but nothing is in flight.
+   */
+  retryAt: number | undefined
   /** The start epochs of the system re-reads (`revalidate`) in flight. */
   rereadEpochs: number[]
   /**
@@ -414,6 +435,7 @@ let pageGenerations = 0
 export function createRegistry(ctx: RegistryContext): SubsetRegistry {
   const { session, limits, ops, rowViews } = ctx
   const subsets = new Map<string, Subset>()
+  let nextTargetId = 0
   // Мемо хендлів з межею: хендл шукає підмножину за ключем форми, тож новий
   // хендл після витіснення під'єднується до тієї самої підмножини.
   const handles = new Map<string, ViewHandle>()
@@ -484,6 +506,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     }
     const gen = ++s.gen
     s.flight = gen
+    {
+      const { site, ...cause } = why
+      void site
+      s.flightCause = cause
+    }
     // Токен покоління: недійсний після звільнення й нового запиту (§6.1).
     const token = session.childToken(() => s.alive && s.gen === gen)
     const what = `view ${s.form.specKey}`
@@ -509,18 +536,31 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       let discarded = false
       let again = false
       const lease = ctx.source.lease()
+      const target = {
+        kind: "view",
+        object: s.form.object.name,
+        id: s.targetId,
+      } as const
+      const number = ctx.attempts.start("load", target, why)
+      // Наслідок осідання (§5.5); `commit` не пройшов — токен недійсний.
+      let outcome: SettleOutcome = "applied"
+      let detail: SettleDetail | undefined
+      const lost = (): SettleOutcome =>
+        !session.token().valid ? "closed" : !s.alive ? "evicted" : "after-purge"
       return readForm(ctx, s, readEpoch, token, {
         ...why,
-        target: { kind: "view", object: s.form.object.name },
+        target,
+        attempt: number,
         caller: s,
         lease,
       }).then(
         (apply) => {
-          settle(lease, () =>
-            session.commit(
+          settle(lease, () => {
+            const ran = session.commit(
               (scope) => {
                 try {
                   if (!apply(scope)) {
+                    outcome = "discarded-by-epoch"
                     discarded = !session.versions.unavailable()
                     if (!discarded) {
                       s.status = "error"
@@ -541,6 +581,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                 } catch (error) {
                   // Дефект застосування — вигляд у `error`, рядки без власника
                   // прибирає `sweep`; відмова не стає необробленою.
+                  outcome = "failed"
+                  detail = failureOf(error)
                   ctx.log({ kind: "listener-failed", error })
                   s.status = "error"
                   s.error = errorOf(error)
@@ -552,7 +594,14 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               token,
               what
             )
-          )
+            ctx.attempts.settle(
+              number,
+              "load",
+              target,
+              ran ? outcome : lost(),
+              ran ? detail : undefined
+            )
+          })
           // Вимога стала, поки летіло читання (M7): повтор тієї самої дії.
           if (again && token.valid)
             return attempt({ reason: "retry", site: "M7" })
@@ -571,19 +620,30 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
             )
             return
           }
+          // Мутація самотесту: відкинуте за епохою завантаження не повторюється.
+          if (ctx.defects.has("discard-no-retry")) return
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
-          return session
-            .sleep(pause)
-            .then(() =>
-              token.valid ? attempt({ reason: "retry", site: "M8" }) : undefined
-            )
+          s.retryAt = ctx.now() + pause
+          // Мутація самотесту: пауза не кінчається.
+          const slept = ctx.defects.has("retry-sleeps-forever")
+            ? new Promise<void>(() => {})
+            : session.sleep(pause)
+          return slept.then(() => {
+            s.retryAt = undefined
+            return token.valid
+              ? attempt({ reason: "retry", site: "M8" })
+              : undefined
+          })
         },
         (error: unknown) =>
           settle(lease, () => {
             // Закритий обмежувач — сесію закрито: писати нікуди.
-            if (error instanceof ReadLimiterClosed) return
-            session.commit(
+            if (error instanceof ReadLimiterClosed) {
+              ctx.attempts.settle(number, "load", target, "closed")
+              return
+            }
+            const ran = session.commit(
               () => {
                 // Збій читання вже завантаженого вигляду — лічильник паузи
                 // (§6.7); збій першого завантаження його не веде.
@@ -598,6 +658,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               token,
               what
             )
+            ctx.attempts.settle(
+              number,
+              "load",
+              target,
+              ran ? "failed" : lost(),
+              failureOf(error)
+            )
           })
       )
     }
@@ -605,6 +672,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     void attempt(why).finally(() => {
       if (s.flight !== gen) return
       s.flight = undefined
+      s.flightCause = undefined
+      s.retryAt = undefined
       // Вигляд у польоті — не ціль планувальника: `commit` відповіді був до
       // цього рядка, тож перепланування потрібне й тут.
       ctx.touchSchedule()
@@ -713,6 +782,16 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       let discarded = false
       let again = false
       const lease = ctx.source.lease()
+      const target = {
+        kind: "page",
+        object: s.form.object.name,
+        id: s.targetId,
+      } as const
+      const number = ctx.attempts.start("page", target, why)
+      let outcome: SettleOutcome = "applied"
+      let detail: SettleDetail | undefined
+      const lost = (): SettleOutcome =>
+        !session.token().valid ? "closed" : !s.alive ? "evicted" : "after-purge"
       return gated(
         ctx,
         readEpoch,
@@ -720,19 +799,21 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           readWindowMore(c, s, readEpoch, token, direction, cursor, written),
         {
           ...why,
-          target: { kind: "page", object: s.form.object.name },
+          target,
+          attempt: number,
           caller: s,
           lease,
         }
       ).then(
         (apply) => {
-          settle(lease, () =>
-            session.commit(
+          settle(lease, () => {
+            const ran = session.commit(
               (scope) => {
                 try {
                   s.answerRejected = false
                   const before = s.window?.generation
                   if (!apply(scope)) {
+                    outcome = "discarded-by-epoch"
                     discarded = !session.versions.unavailable()
                     if (!discarded) {
                       s.status = "error"
@@ -746,8 +827,14 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                   }
                   if (s.window?.generation !== before)
                     written = s.window?.generation
+                  // Мутація самотесту: осідання сторінки знімає чужу вимогу «склад не
+                  // підтверджено», яку може зняти лише читання всього вигляду.
+                  if (ctx.defects.has("page-drops-requirement"))
+                    s.unconfirmedSince = undefined
                   again = confirm(s, readEpoch, false)
                 } catch (error) {
+                  outcome = "failed"
+                  detail = failureOf(error)
                   ctx.log({ kind: "listener-failed", error })
                   s.status = "error"
                   s.error = errorOf(error)
@@ -762,7 +849,14 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               token,
               what
             )
-          )
+            ctx.attempts.settle(
+              number,
+              "page",
+              target,
+              ran ? outcome : lost(),
+              ran ? detail : undefined
+            )
+          })
           if (again) {
             // Вимогу поставила власна відповідь сторінки (П15): P3.
             if (token.valid) return attempt({ reason: "retry", site: "P3" })
@@ -790,8 +884,11 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
         },
         (error: unknown) =>
           settle(lease, () => {
-            if (error instanceof ReadLimiterClosed) return
-            session.commit(
+            if (error instanceof ReadLimiterClosed) {
+              ctx.attempts.settle(number, "page", target, "closed")
+              return
+            }
+            const ran = session.commit(
               () => {
                 s.status = "error"
                 s.error = errorOf(error)
@@ -800,6 +897,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
               },
               token,
               what
+            )
+            ctx.attempts.settle(
+              number,
+              "page",
+              target,
+              ran ? "failed" : lost(),
+              failureOf(error)
             )
           })
       )
@@ -1024,6 +1128,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
     }
     const s: Subset = {
       form,
+      targetId: nextTargetId++,
       listeners: new Set(),
       preloads: 0,
       preloadTimers: new Set(),
@@ -1032,6 +1137,8 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       gen: 0,
       flight: undefined,
       flightEpoch: undefined,
+      flightCause: undefined,
+      retryAt: undefined,
       rereadEpochs: [],
       trailing: undefined,
       settled: false,

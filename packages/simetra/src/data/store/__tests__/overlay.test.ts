@@ -26,6 +26,7 @@ import {
   taskValues,
   watch,
 } from "./core-support"
+import { collectCore } from "./oracles"
 
 /*
  * Журнал мутацій і write-back (спека П4-B §6.5, §7.1,
@@ -101,6 +102,7 @@ function harness(limits?: Partial<CoreLimits>) {
     onStaleClient,
     ...(limits === undefined ? {} : { limits }),
   })
+  collectCore(core, fake)
   return { fake, core, port, onStaleClient, inspect: inspectCore(core) }
 }
 

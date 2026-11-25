@@ -1,5 +1,14 @@
 import fc from "fast-check"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest"
 import {
   ORGANIZATION_ID,
   OBJECT_ID,
@@ -23,6 +32,7 @@ import {
   inspectCore,
   type CoreSession,
   type DefectFlag,
+  type SyncState,
 } from "../core"
 import { compareRows, fieldInfoOf, filterCollator } from "../filter"
 import { visibleRow } from "../object-store"
@@ -30,7 +40,7 @@ import { createCoreSource, createReadLimiter, type ServerPort } from "../source"
 import { EPOCH_UNAVAILABLE, type Subset } from "../subsets"
 import type { FakeRead, FakeReadLog, FakeSource } from "../testing/fake-source"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
-import { MIN_VERSION_RETRIES } from "../receiver"
+import { MIN_VERSION_RETRIES, REJOIN_JITTER_MS } from "../receiver"
 import {
   DEFAULT_CORE_LIMITS,
   type CloseReason,
@@ -57,6 +67,24 @@ import {
   setup,
   task,
 } from "./core-support"
+import { collectCore, type ReadCollector, type StampedEvent } from "./oracles"
+import type { AttemptEvent } from "../attempts"
+import { assertEvaluated, createO2, readsHeader } from "./o2"
+import {
+  assertEvaluated as assertO3Evaluated,
+  checkpoints as o3Checkpoints,
+  createO3,
+  hasOwnDuty,
+  headerHolderSince,
+  judgeRows,
+  judgeSection,
+  lastBound as o3LastBound,
+  type O3Change,
+  type O3Join,
+  type O3State,
+  type O3View,
+} from "./o3"
+import { trackViews } from "./view-facts"
 
 /*
  * Модельний тест ядра — гейт блоку (спека П4-B §11,
@@ -84,6 +112,10 @@ const TITLES = ["a", "m", "t", "z"]
 
 // Розкид перечитування після перемикання епохи — у межах кроків `time`.
 const REVALIDATE_MS = 2_000
+// Інтервал перевірки свіжості поточного прогону: за замовчуванням `REVALIDATE_MS`;
+// прогін самотесту «хвиля приєднання не читає» бере інтервал, набагато більший за
+// джитер приєднання, щоб такт не підміняв хвилю (план SK-0, Р-SK0-9).
+let runInterval = REVALIDATE_MS
 // Межа свіжості `resume()` — менша за кроки `time`: частина виглядів старша
 // за неї, частина молодша.
 const RESUME_MIN_MS = 500
@@ -100,7 +132,9 @@ const LIMITS = {
   fullPageSize: 3,
   // Сторінка вікна у два рядки: п'ять задач дають кілька сторінок.
   windowPage: 2,
-  revalidateIntervalMs: REVALIDATE_MS,
+  get revalidateIntervalMs() {
+    return runInterval
+  },
   resumeMinIntervalMs: RESUME_MIN_MS,
 }
 const RELEASE_MS = 1_000
@@ -721,6 +755,20 @@ interface Delivery {
 
 class ModelFailure extends Error {}
 
+/**
+ * Кроки, що не змінюють ні правди сервера, ні віри клієнта (О3 не рахує їх
+ * зміною): плин часу, життєвий цикл вкладки й події каналу, які самі лише
+ * вказують читанню час.
+ */
+const QUIET_STEPS: ReadonlySet<Step["t"]> = new Set([
+  "time",
+  "due",
+  "join",
+  "transport",
+  "suspend",
+  "resume",
+])
+
 /** One attempt of a mutation as the model tracks it. */
 interface ModelAttempt {
   id: string
@@ -813,16 +861,20 @@ const id = (object: ObjectName, k: Key) => `${object}\u0000${k}`
  * від старту невдалої спроби.
  */
 const pauseAfter = (failures: number) =>
-  Math.min(REVALIDATE_MS, 0.1 * REVALIDATE_MS * 2 ** (failures - 1))
+  Math.min(runInterval, 0.1 * runInterval * 2 ** (failures - 1))
 
 /**
  * Строк вигляду очима моделі: після збоїв — кінець паузи, інакше мить
  * відмітки + `ageMs`; вигляд, що ще не читався, строку не має.
  */
-const modelDue = (
-  sub: Pick<Subset, "failures" | "failedAt" | "refreshedAt">,
-  ageMs: number = REVALIDATE_MS
-) =>
+/** Факти вигляду для строку: збої, початок останнього збою й останнього застосованого читання. */
+interface DueFacts {
+  readonly failures: number
+  readonly failedAt: number | undefined
+  readonly refreshedAt: number | undefined
+}
+
+const modelDue = (sub: DueFacts, ageMs: number = runInterval) =>
   sub.failures > 0 && sub.failedAt !== undefined
     ? sub.failedAt + pauseAfter(sub.failures)
     : sub.refreshedAt === undefined
@@ -832,11 +884,62 @@ const modelDue = (
 /** Тактів із читанням за прогони, що тривають: самотест не має бути порожнім. */
 let tickReads = 0
 
+/** Кроків О4 у відкритому вікні спокою за прогони: без них О4 порожній. */
+let idleChecks = 0
+
+/** Станів спокою з вимогою, які О2 оцінив за прогони: без них О2 порожній. */
+let o2Checks = 0
+
+/** Що О3 бачив у прогоні, який він зачервонив: самотест мутації «хвиля приєднання не читає». */
+let o3Report:
+  | {
+      readonly objects: readonly ObjectName[]
+      readonly bound: number
+      readonly joins: readonly O3Join[]
+      readonly server: readonly O3Change[]
+      readonly reads: readonly { at: number; object: ObjectName | undefined }[]
+    }
+  | undefined
+
+/** Інтервал самотесту хвилі: набагато більший за джитер приєднання, такт хвилю не підміняє. */
+const LONG_INTERVAL_MS = 600_000
+
+/** Виглядів, які О3 порівняв із сервером за прогони: без них О3 порожній. */
+let o3Checks = 0
+
+/** Скільки разів О3 пропустив вигляд названим станом за прогони: реплей стану його вимагає. */
+const o3Skipped = new Map<O3State, number>()
+const O3_NAMED_STATES: readonly O3State[] = [
+  "first-load-error",
+  "discard-bound",
+  "stale-object",
+  "purged",
+  "card-without-duty",
+  "section-owner-removed",
+  "section-owner-hidden",
+  "retry-pause",
+]
+
 /**
  * Прогін моделі. Ядро закривається наприкінці (і після збою): модель
  * перевіряє, що після закриття таймерів немає, і наступний прогін не бачить
  * чужих таймерів.
  */
+/**
+ * Закріплений прогін О2/О3 детермінований: джитер ядра (`Math.random`: перемикання
+ * епохи, хвиля приєднання) іде з генератора, що стартує однаково в кожному прогоні.
+ */
+let pinnedRandom = false
+const seededRandom = () => {
+  let a = 0x9e3779b9
+  return () => {
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
 async function runModel(
   steps: readonly Step[],
   preloaded: boolean,
@@ -844,9 +947,15 @@ async function runModel(
   defects: readonly DefectFlag[] = [],
   schedulerChecks = true,
   rights = false,
-  signals = false
+  signals = false,
+  intervalMs = REVALIDATE_MS,
+  // О2 і О3 судять; без них прогін перевіряє лише інваріанти ядра, О1 і О4.
+  judge = true
 ) {
-  const held: { core?: CoreSession } = {}
+  const held: { core?: CoreSession; reads?: ReadCollector } = {}
+  runInterval = intervalMs
+  const realRandom = Math.random
+  if (pinnedRandom) Math.random = seededRandom()
   try {
     await runModelOn(
       steps,
@@ -856,12 +965,22 @@ async function runModel(
       schedulerChecks,
       rights || signals,
       signals,
-      (c) => {
+      judge,
+      (c, reads) => {
         held.core = c
+        held.reads = reads
       }
     )
+    // О1 над прогоном: кожен запит журналу фейка має подію з кодом і ціллю.
+    idleChecks += held.reads?.evaluated() ?? 0
+    const unpaired = held.reads?.finish() ?? []
+    if (unpaired.length > 0) fail("end", `O1: ${unpaired.join("; ")}`)
   } finally {
+    // Прогін, що впав раніше, не лишає збирача на перевірку тесту.
+    held.reads?.stop()
     held.core?.close("disposed")
+    runInterval = REVALIDATE_MS
+    Math.random = realRandom
   }
   const timers = vi.getTimerCount()
   if (timers !== 0) fail("end", `${timers} timers after close`)
@@ -875,7 +994,8 @@ async function runModelOn(
   schedulerChecks: boolean,
   rights: boolean,
   signals: boolean,
-  opened: (core: CoreSession) => void
+  judge: boolean,
+  opened: (core: CoreSession, reads: ReadCollector) => void
 ) {
   // Канал сигналів (B5b-3): приймач ядра тримає його лише зі знімком прав.
   const transport = createFakeSignalTransport()
@@ -951,7 +1071,7 @@ async function runModelOn(
       if (item !== undefined) deliveredRights(item)
       return result
     })
-  const { fake, core, log, inspect } = setup({
+  const { fake, core, log, inspect, reads } = setup({
     now: () => clock,
     limits: LIMITS,
     mode: "manual",
@@ -998,8 +1118,95 @@ async function runModelOn(
     }),
   })
   for (const flag of defects) inspect.defects.add(flag)
-  opened(core)
+  opened(core, reads)
   const internals = coreInternals(core)
+  // Рядки, які вигляд цілі тримає на мить старту читання: обов'язок читання
+  // рядка закриває читання вигляду, що саме його тримає.
+  reads.setHolds((event) => {
+    if (event.target.kind !== "view") return []
+    const id = event.target.id
+    return SPECS.flatMap((spec, v) =>
+      internals.registry.find(spec)?.targetId === id
+        ? handles[v]!.getSnapshot().rows.map(
+            (row) => `${spec.object}\u0000${row.key}`
+          )
+        : []
+    )
+  })
+  const o2 = createO2()
+  // Крок `suspend` і показ вкладки очима моделі: О2 бачить відкладення прихованою вкладкою.
+  let suspends = 0
+  let shownAt: number | undefined
+  // Спроби лише цього ядра: друге ядро (перегідратація) нумерує цілі з нуля, і
+  // його спроби не підтверджують вимог першого.
+  const ownAttempts: AttemptEvent[] = []
+  const ownNumbers = new Set<number>()
+  let joinMark: number | undefined
+  const ownEventList: StampedEvent[] = []
+  let ownSeen = 0
+  const ownEvents = () => {
+    for (; ownSeen < reads.events.length; ownSeen++) {
+      const e = reads.events[ownSeen]!
+      if (e.attempt === undefined || ownNumbers.has(e.attempt))
+        ownEventList.push(e)
+    }
+    return ownEventList
+  }
+  inspect.watchAttempts((event) => {
+    ownAttempts.push(event)
+    ownNumbers.add(event.attempt)
+  })
+  const tracker = trackViews(
+    inspect,
+    () => clock,
+    (id) =>
+      [...internals.registry.subsets()].find((x) => x.targetId === id)
+        ?.loaded ?? false
+  )
+  /**
+   * Стан свіжості виглядів з `sync()`: один знімок на синхронний відрізок
+   * (мікрозадача його скидає), бо `sync()` обходить сховище.
+   */
+  let liveCache: ReadonlyMap<number, SyncState> | undefined
+  const syncedViews = () => {
+    if (liveCache === undefined) {
+      liveCache = new Map(
+        inspect
+          .sync()
+          .flatMap((state) =>
+            state.target.kind === "view"
+              ? [[state.target.id, state] as const]
+              : []
+          )
+      )
+      queueMicrotask(() => {
+        liveCache = undefined
+      })
+    }
+    return liveCache
+  }
+  /** Вигляд чекає повтору відкинутого завантаження: строк із причиною `retry` у `sync()`. */
+  const inRetryPause = (sub: Subset) =>
+    syncedViews().get(sub.targetId)?.dueCause === "retry"
+  /** Завантаження вигляду в польоті (`flight` ядра) — з `sync()`. */
+  const loadFlying = (sub: Subset) =>
+    (syncedViews()
+      .get(sub.targetId)
+      ?.flights.some((f) => f.kind === "load") ??
+      false) ||
+    // Пауза повтору відкинутого завантаження: `sync()` показує строк з причиною
+    // `retry`, але політ завантаження ще триває.
+    inRetryPause(sub)
+  /** Вимога вигляду за видом — з `sync()`. */
+  const requires = (sub: Subset, kind: string) =>
+    syncedViews()
+      .get(sub.targetId)
+      ?.requirements.some((r) => r.kind === kind) ?? false
+  /** Сторінок вікна в польоті (кожен напрям — окремий політ). */
+  const pagesFlying = (sub: Subset) =>
+    syncedViews()
+      .get(sub.targetId)
+      ?.flights.filter((f) => f.kind === "page").length ?? 0
 
   // ── Сигнали очима моделі (B5b-3) ──
   // Сигнали, що дійшли до приймача й ще не дали читання: ключ → пари
@@ -1038,7 +1245,7 @@ async function runModelOn(
   const coveredInStep = new Map<Subset, number>()
   /** Every re-read of the view in this step came from a batch (or a wave). */
   const bySignal = (sub: Subset, withWave: boolean) => {
-    const delta = sub.rereads - (rereadsAtStep.get(sub) ?? 0)
+    const delta = tracker.rereads(sub.targetId) - (rereadsAtStep.get(sub) ?? 0)
     if (delta <= 0) return false
     const owed = owedRereads.get(sub) ?? { batch: 0, wave: 0 }
     let covered = coveredInStep.get(sub) ?? 0
@@ -1255,6 +1462,16 @@ async function runModelOn(
   // Цілі, які `purge` справді прибрав: `purged` картки чи ТЧ допустимий лише
   // для них (інакше `purge` хибно позначив би чужі вигляди; П12).
   const purgedTargets = new Set<string>()
+  // Рядки, які сховище тримає очима моделі: їх дає відповідь читання, їх
+  // забирає purge; ключ, вилучений й не прочитаний знову, — власник «відсутній».
+  const heldRows = new Set<string>()
+  // Скільки разів `purge` вилучав ключ: рядок, що вийшов і повернувся, — новий.
+  const purgeCount = new Map<string, number>()
+  const markPurged = (at: string) => {
+    purgeCount.set(at, (purgeCount.get(at) ?? 0) + 1)
+    purgedTargets.add(at)
+    heldRows.delete(at)
+  }
   // `slot` — запис сховища: слот, що зник і з'явився знову між двома
   // перевірками, — вже інший слот, і його не порівнюємо з тим, що був.
   const wasRemoved = new Map<string, { divergent: boolean; slot: object }>()
@@ -1309,6 +1526,7 @@ async function runModelOn(
       }
       rows.set(row.ref as Key, row.version as number)
     }
+    for (const k of rows.keys()) heldRows.add(id(object, k))
     for (const [k, version] of rows) {
       const list = deliveries.get(id(object, k)) ?? []
       list.push({ index, object, rows: new Map([[k, version]]) })
@@ -1320,6 +1538,7 @@ async function runModelOn(
     for (const [name, targets] of Object.entries(result.included ?? {})) {
       for (const row of targets) {
         const k = row.ref as Key
+        heldRows.add(id(name, k))
         const list = deliveries.get(id(name, k)) ?? []
         list.push({
           index,
@@ -1339,7 +1558,7 @@ async function runModelOn(
   const subscribe = (v: number, label: string) => {
     if (subs[v] !== undefined) return
     const held = [...internals.registry.subsets()]
-    const spare = held.some((s) => s.listeners.size === 0)
+    const spare = held.some((s) => listenersOf(s) === 0)
     try {
       subs[v] = handles[v]!.subscribe(() => {
         frames++
@@ -1356,6 +1575,11 @@ async function runModelOn(
   }
 
   /** `preload` вигляду; відмова — лише за межею без вільного утримання (П16). */
+  // Мить останньої відписки вигляду: рядки вигляду лишаються в сховищі до кінця
+  // затримки звільнення, далі їх тримає лише інший вигляд.
+  const unsubAt = new Map<number, number>()
+  // Утримання `preload` очима моделі: до кінця його строку вигляд тримає ціль.
+  const preloadUntil = new Map<number, number>()
   const preload = (v: number, short: boolean, label: string) => {
     let promise: Promise<void> | undefined
     try {
@@ -1366,15 +1590,41 @@ async function runModelOn(
       const held = [...internals.registry.subsets()]
       if (
         held.length < LIMITS.viewsMax ||
-        held.some((x) => x.listeners.size === 0)
+        held.some((x) => listenersOf(x) === 0)
       )
         fail(label, "preload refused with a spare hold")
     }
     promise?.catch((error: unknown) => errors.push(error))
+    if (promise !== undefined)
+      // Утримання `preload` складаються: довше не скорочується коротшим.
+      preloadUntil.set(
+        v,
+        Math.max(
+          preloadUntil.get(v) ?? -1,
+          clock + (short ? 500 : DEFAULT_CORE_LIMITS.preloadTtlMs)
+        )
+      )
     if (promise !== undefined && v === 4) preloadedSection = true
   }
 
-  /** Склад видимих списків і покоління їхніх завантажень. */
+  /**
+   * Ключі рядків, які сховище тримає очима моделі: рядки в публічних знімках
+   * виглядів, яких ще тримає підписник, `preload` чи затримка звільнення.
+   */
+  const heldKeys = () => {
+    const keys = new Set<string>()
+    for (const [v, handle] of handles.entries()) {
+      const held =
+        subs[v] !== undefined ||
+        (preloadUntil.get(v) ?? -1) > clock ||
+        (unsubAt.has(v) && clock < unsubAt.get(v)! + RELEASE_MS)
+      if (!held) continue
+      for (const row of handle.getSnapshot().rows) keys.add(row.key)
+    }
+    return keys
+  }
+
+  /** Склад видимих списків і номери їхніх завантажень. */
   const lists = () =>
     SPECS.map((spec, v) => {
       if (subs[v] === undefined || !isList(spec) || closed !== undefined)
@@ -1382,11 +1632,15 @@ async function runModelOn(
       const s = internals.registry.find(spec)
       return {
         keys: handles[v]!.getSnapshot().rows.map((r) => r.key),
-        flight: s?.flight,
-        gen: s?.gen,
+        // Номер завантаження в польоті й номер останнього, що почалось.
+        flight:
+          s !== undefined && loadFlying(s)
+            ? tracker.loads(s.targetId)
+            : undefined,
+        loads: s === undefined ? 0 : tracker.loads(s.targetId),
         subset: s,
         // Сторінки вікна в польоті: вони виправдовують ріст складу.
-        paging: s === undefined ? 0 : s.paging.size,
+        paging: s === undefined ? 0 : pagesFlying(s),
       }
     })
 
@@ -1514,14 +1768,14 @@ async function runModelOn(
         )
       if (grantDenies(g, object, scope)) {
         rightsPurgeable.add(key)
-        purgedTargets.add(key)
+        markPurged(key)
       }
     }
     if (
       capturedLines === "unknown" ||
       (capturedLines !== undefined && grantDenies(g, TASK, capturedLines))
     )
-      purgedTargets.add(id(TASK, K1))
+      markPurged(id(TASK, K1))
     // Що лишилось у сховищі після проходу.
     const how = first ? "first snapshot" : "replacement"
     keptRows = new Map()
@@ -2020,7 +2274,7 @@ async function runModelOn(
       heldInFlight = false
       return
     }
-    if (s.flight !== undefined) return
+    if (loadFlying(s)) return
     heldInFlight = false
     // Сесія після межі відкинутих відповідей не читає; власник
     // `removed` рядків не показує, і читання ТЧ їх не поверне.
@@ -2406,48 +2660,61 @@ async function runModelOn(
     check("preload", 0)
   }
 
-  // Покоління завантажень, які почала дія користувача (підписка, прокрутка,
+  // Завантаження, які почала дія користувача (підписка, прокрутка,
   // `refresh`, `showNew`, `preload`, початкове завантаження), і чи належить
-  // користувачу наступне завантаження з черги «trailing». Правило
-  // стабільності виправдовує зміну складу лише завантаженням користувача.
-  const userGens = new Map<Subset, Set<number>>()
-  const lastGen = new Map<Subset, number>()
-  const userNext = new Set<Subset>()
-  const lastFlight = new Map<Subset, number | undefined>()
+  // користувачу наступне завантаження з черги. Правило стабільності
+  // виправдовує зміну складу лише завантаженням користувача. Модель веде це
+  // сама (рішення архітекторки 23.11, 2а): номер завантаження — лічильник
+  // подій «спробу розпочато» (`view-facts.ts`), політ і черга — з `sync()`,
+  // перезапуск — з наслідку «після purge»; полів `Subset` не читає.
+  const userLoads = new Map<number, Set<number>>()
+  const lastLoads = new Map<number, number>()
+  const userNext = new Set<number>()
+  const lastFlight = new Map<number, number | undefined>()
   const noteGens = (userStep: boolean) => {
-    for (const s of internals.registry.subsets()) {
-      const gens = userGens.get(s) ?? new Set<number>()
+    for (const sub of internals.registry.subsets()) {
+      const id = sub.targetId
+      const state = syncedViews().get(id)
+      const loads = tracker.loads(id)
+      // Пауза повтору відкинутого завантаження — те саме завантаження в польоті
+      // (`sync()` показує її строком із причиною `retry`): без неї кінець польоту
+      // користувача здається розривом, і його повтор перестає бути його.
+      const flight =
+        state?.flights.some((f) => f.kind === "load") ||
+        state?.dueCause === "retry"
+          ? loads
+          : undefined
+      const mineSet = userLoads.get(id) ?? new Set<number>()
       // Заміна знімка прав посеред кроку відповіді перезапускає завантаження
       // користувача в польоті (Р5а — перше завантаження, прохід — `purge`
-      // пари): покоління піднято, відкинута відповідь дійшла, і новий політ
-      // почався за той самий крок (і його ж могло підняти ще раз) — тож
-      // покоління стрибнуло щонайменше на два. Це те саме завантаження
-      // користувача; системний `load` після осілого польоту піднімає
-      // покоління лише на одне.
-      const was = lastFlight.get(s)
+      // пари): його спроба осіла «після purge» (покоління підняли), і новий
+      // політ почався за той самий крок — це те саме завантаження
+      // користувача. Два завантаження за крок після польоту користувача — теж
+      // його ланцюжок. Системне завантаження після осілого польоту — одне й
+      // без перезапуску.
+      const was = lastFlight.get(id)
       const restarted =
         rights &&
         was !== undefined &&
-        gens.has(was) &&
-        s.flight !== undefined &&
-        s.flight !== was &&
-        s.gen >= was + 2
-      lastFlight.set(s, s.flight)
+        mineSet.has(was) &&
+        flight !== undefined &&
+        flight !== was &&
+        (loads >= was + 2 || tracker.lost(id, was))
+      lastFlight.set(id, flight)
       const mine =
         userStep ||
-        userNext.has(s) ||
-        (s.flight !== undefined && gens.has(s.flight)) ||
+        userNext.has(id) ||
+        (flight !== undefined && mineSet.has(flight)) ||
         restarted
-      const last = lastGen.get(s) ?? 0
-      if (s.gen > last) {
-        // Покоління, яке `purge` підняв у польоті, лишається завантаженням
-        // користувача, чиє читання він перезапускає.
-        if (mine) for (let g = last + 1; g <= s.gen; g++) gens.add(g)
-        userGens.set(s, gens)
-        lastGen.set(s, s.gen)
+      const last = lastLoads.get(id) ?? 0
+      if (loads > last) {
+        if (mine) for (let g = last + 1; g <= loads; g++) mineSet.add(g)
+        userLoads.set(id, mineSet)
+        lastLoads.set(id, loads)
       }
-      if (s.trailing && mine) userNext.add(s)
-      else if (!s.trailing) userNext.delete(s)
+      const queued = state?.queued.some((q) => q.kind === "load") ?? false
+      if (queued && mine) userNext.add(id)
+      else if (!queued) userNext.delete(id)
     }
   }
   if (preloaded) noteGens(true)
@@ -2474,9 +2741,9 @@ async function runModelOn(
         a.keys.every((x, i) => x === b.keys[i])
       if (same) return
       // Завантаження, що тривало чи почалось на цьому кроці, — користувача?
-      const mine = userGens.get(a.subset!)
+      const mine = userLoads.get(a.subset!.targetId)
       const touched = [b.flight]
-      for (let g = (b.gen ?? 0) + 1; g <= (a.gen ?? 0); g++) touched.push(g)
+      for (let g = b.loads + 1; g <= a.loads; g++) touched.push(g)
       if (touched.some((g) => g !== undefined && mine?.has(g) === true)) return
       // Сторінка вікна, читання якої було в польоті (дія користувача —
       // `loadAfter`/`loadBefore`; читання старого ланцюжка позначок не лишає,
@@ -2618,6 +2885,7 @@ async function runModelOn(
         if (entry.kind === "listener-failed") errors.push(entry.error)
       },
     })
+    collectCore(next, fake)
     const nextInspect = inspectCore(next)
     // Дефекти основного ядра нового не стосуються: їх ловить своя перевірка
     // (`CAUGHT_BY`), а не перегідратація; нове ядро ламає лише власний.
@@ -2645,7 +2913,7 @@ async function runModelOn(
       }
       // Звірка: видимі вигляди — підписані; кожен другий підписується вже
       // після `endHydration` (умовне монтування, §6.6) і мусить читатися сам.
-      const subscribeHeld = (late: boolean, skip: readonly unknown[] = []) =>
+      const subscribeHeld = (late: boolean, skip: readonly Subset[] = []) =>
         held.flatMap((sub, i) => {
           if ((i % 2 === 1) !== late || skip.includes(sub)) return []
           const v = SPECS.findIndex(
@@ -2728,6 +2996,7 @@ async function runModelOn(
       for (const stop of unsubscribe) stop()
     } finally {
       next.close("disposed")
+      reads.retain(mine)
       for (const read of mine) {
         const at = fake.log.indexOf(read)
         if (at >= 0) (fake.log as FakeReadLog[]).splice(at, 1)
@@ -2809,12 +3078,28 @@ async function runModelOn(
   const tailWatch = new Map<Subset, { rereads: number; visibleOnly: boolean }>()
   let lastResumeClock: number | undefined
 
+  /** Факти строку вигляду з подій спроб (`view-facts.ts`), а не з полів `Subset`. */
+  const dueOf = (sub: Subset): DueFacts => ({
+    failures: tracker.failures(sub.targetId),
+    failedAt: tracker.failedAt(sub.targetId),
+    refreshedAt: tracker.refreshedAt(sub.targetId),
+  })
+  /** Підписник вигляду очима моделі: її власні `subscribe` / `unsub` (один підписник на вигляд). */
+  const listenersOf = (sub: Subset) =>
+    subs[SPECS.indexOf(sub.form.spec)] === undefined ? 0 : 1
+  /** `setVisible` моделі за ідентифікатором цілі: нове утримання вигляду починає без відмітки. */
+  const visibleBy = new Map<number, boolean>()
   /** Вигляд бачить користувач: сам чи через змонтований вигляд-носій. */
   const shown = (sub: Subset) =>
-    (sub.visible ?? sub.listeners.size > 0) &&
-    (sub.form.spec.kind !== "section" || sub.listeners.size > 0)
+    (visibleBy.get(sub.targetId) ?? listenersOf(sub) > 0) &&
+    (sub.form.spec.kind !== "section" || listenersOf(sub) > 0)
+  /** Завантаження чи системне перечитування вигляду в польоті (сторінка — окремо). */
   const inFlight = (sub: Subset) =>
-    sub.flight !== undefined || sub.rereadEpochs.length > 0
+    (syncedViews()
+      .get(sub.targetId)
+      ?.flights.some((f) => f.kind !== "page") ??
+      false) ||
+    inRetryPause(sub)
   const exhausted = (sub: Subset) =>
     sub.status === "error" && sub.error === EPOCH_UNAVAILABLE
   // Після межі відкинутих планувальник не читає жодного вигляду до нової
@@ -2832,7 +3117,7 @@ async function runModelOn(
     !exhausted(sub) &&
     !sessionDown() &&
     !staled.has(sub.form.object.name) &&
-    Number.isFinite(modelDue(sub))
+    Number.isFinite(modelDue(dueOf(sub)))
   /** Об'єкти, чий відкладений строк (перемикання епохи, відкинута відповідь) настав. */
   const dueObjects = (at: number) =>
     new Set(
@@ -2845,18 +3130,24 @@ async function runModelOn(
     sub.form.include.some((step) => names.has(step.target))
 
   /** Вигляд у паузі після збою: до її кінця його не читає ні такт, ні `resume()`. */
-  const inPause = (sub: Subset, at: number) =>
-    sub.failures > 0 && sub.failedAt !== undefined && at < modelDue(sub)
+  const inPause = (sub: Subset, at: number) => {
+    const due = dueOf(sub)
+    return due.failures > 0 && due.failedAt !== undefined && at < modelDue(due)
+  }
 
   /** Вигляд, якого читання з межею `minAge` не бере (спека §6.7). */
-  const young = (sub: Subset, at: number, minAge: number) =>
-    inFlight(sub) ||
-    exhausted(sub) ||
-    (sub.failures > 0 && sub.failedAt !== undefined
-      ? at < modelDue(sub)
-      : // Вигляд, що ще не читався (картка зі сховища, гідратований),
-        // строку не має (Р3): його рядок свіжіє виглядом-носієм.
-        sub.refreshedAt === undefined || at - sub.refreshedAt < minAge)
+  const young = (sub: Subset, at: number, minAge: number) => {
+    const due = dueOf(sub)
+    return (
+      inFlight(sub) ||
+      exhausted(sub) ||
+      (due.failures > 0 && due.failedAt !== undefined
+        ? at < modelDue(due)
+        : // Вигляд, що ще не читався (картка зі сховища, гідратований),
+          // строку не має (Р3): його рядок свіжіє виглядом-носієм.
+          due.refreshedAt === undefined || at - due.refreshedAt < minAge)
+    )
+  }
 
   /** Інваріанти планувальника після кроку (бриф задачі 6). */
   const checkScheduler = (label: string) => {
@@ -2882,14 +3173,14 @@ async function runModelOn(
       }
       const since = healthySince.get(sub) ?? clock
       healthySince.set(sub, since)
-      if (clock > Math.max(since, modelDue(sub)))
+      if (clock > Math.max(since, modelDue(dueOf(sub))))
         fail(
           label,
-          `a view was not re-read within its ${sub.failures > 0 ? "failure pause" : "interval"}: ${sub.form.object.name} ${sub.form.spec.kind}`
+          `a view was not re-read within its ${tracker.failures(sub.targetId) > 0 ? "failure pause" : "interval"}: ${sub.form.object.name} ${sub.form.spec.kind}`
         )
     }
     for (const [sub, watch] of tailWatch) {
-      if (sub.rereads > watch.rereads) {
+      if (tracker.rereads(sub.targetId) > watch.rereads) {
         tailWatch.delete(sub)
         continue
       }
@@ -2902,7 +3193,7 @@ async function runModelOn(
         !sub.purged &&
         sub.loaded &&
         (!watch.visibleOnly || shown(sub)) &&
-        (sub.form.spec.kind !== "section" || sub.listeners.size > 0) &&
+        (sub.form.spec.kind !== "section" || listenersOf(sub) > 0) &&
         !exhausted(sub) &&
         !inspect.versionEpochs().unavailable &&
         !staled.has(sub.form.object.name)
@@ -2995,7 +3286,7 @@ async function runModelOn(
         if (at === undefined || at === scope) entry.erased = true
       }
     }
-    for (const k of purgedKeys.keys) purgedTargets.add(id(object, k))
+    for (const k of purgedKeys.keys) markPurged(id(object, k))
     // Власник без шапки в сховищі, чиї рядки ТЧ прибрано, — прибраний;
     // з шапкою (в іншому скоупі) доступ не втрачено.
     if (
@@ -3003,7 +3294,7 @@ async function runModelOn(
       objectOf(TASK).sections.get(K1, "lines") === undefined &&
       objectOf(TASK).rows.get(K1) === undefined
     )
-      purgedTargets.add(id(TASK, K1))
+      markPurged(id(TASK, K1))
     // П12: ключ, якого після purge у сховищі немає, повертає лише
     // читання, що почалось після нього.
     for (const k of object === TASK ? KEYS : ORG_KEYS) {
@@ -3012,6 +3303,74 @@ async function runModelOn(
     }
     if (object === TASK) barrierSections(stepStart)
     return purgedKeys
+  }
+
+  // ── О3: правда сервера очима клієнта й зміни, за якими модель веде межі ──
+  /**
+   * Рядок, який сервер віддав би клієнтові: його видимість (RLS моделі) і
+   * права користувача входять у правду, а не лише наявність рядка.
+   */
+  const truthRow = (object: ObjectName, k: Key) => {
+    const row = fake.row(object, k)
+    if (row === undefined) return undefined
+    const scope =
+      object === ORG
+        ? k
+        : ((row.values.org as string | null | undefined) ?? null)
+    if (
+      scope !== null &&
+      visibility !== undefined &&
+      !visibility.includes(scope)
+    )
+      return undefined
+    if (grantDenies(serverGrant, object, scope)) return undefined
+    return row
+  }
+  const serverDigest = () =>
+    [TASK, ORG].map((object) =>
+      (object === TASK ? KEYS : ORG_KEYS)
+        .map((k) => truthRow(object, k)?.version ?? "-")
+        .join()
+    )
+  let digest = serverDigest()
+  /**
+   * Приєднання каналу, яке тримає приймач: його об'єкт іде в хвилю (О3 бере від
+   * нього межу зміни, про яку клієнт дізнається цією подією).
+   */
+  const joined = (channel: string, recovered: boolean) => {
+    const at = CHANNELS.indexOf(channel)
+    const object = at < 2 ? TASK : ORG
+    if (
+      closed === undefined &&
+      !sessionChanged &&
+      transport.subscribed().has(channel) &&
+      !staled.has(object)
+    )
+      o3Joins.push({ object, at: clock, after: ownEvents().length })
+    transport.join(channel, recovered)
+  }
+  const o3Changes: O3Change[] = []
+  const o3Joins: O3Join[] = []
+  const o3Server: O3Change[] = []
+  /** Фіксує зміну правди сервера: час моделі — кінець кроку, у якому її побачено. */
+  /**
+   * Збій читання (відмова чи недоступність сервера): правда не змінилась, але
+   * показ вигляду міг стати помилкою до наступного читання, а його не викликає
+   * подія каналу.
+   */
+  const noteFault = (object: ObjectName | undefined) => {
+    for (const o of object === undefined ? [TASK, ORG] : [object])
+      o3Changes.push({ object: o, at: clock })
+  }
+  const noteServerChanges = () => {
+    const next = serverDigest()
+    ;[TASK, ORG].forEach((object, i) => {
+      if (next[i] !== digest[i]) {
+        o3Changes.push({ object, at: clock })
+        o3Server.push({ object, at: clock })
+      }
+    })
+    digest = next
   }
 
   for (const [n, raw] of plan.entries()) {
@@ -3023,7 +3382,10 @@ async function runModelOn(
     signalObjects.clear()
     coveredInStep.clear()
     rereadsAtStep = new Map(
-      [...internals.registry.subsets()].map((sub) => [sub, sub.rereads])
+      [...internals.registry.subsets()].map((sub) => [
+        sub,
+        tracker.rereads(sub.targetId),
+      ])
     )
     const before = lists()
     preloadedSection = false
@@ -3044,11 +3406,11 @@ async function runModelOn(
     >()
     if (schedulerStep && closed === undefined) {
       for (const sub of internals.registry.subsets()) {
-        readsAtStart.set(sub, sub.rereads)
+        readsAtStart.set(sub, tracker.rereads(sub.targetId))
         if (exhausted(sub) || sessionDown()) exhaustedAtStart.add(sub)
         failedAtStart.set(sub, {
-          failures: sub.failures,
-          failedAt: sub.failedAt,
+          failures: tracker.failures(sub.targetId),
+          failedAt: tracker.failedAt(sub.targetId),
         })
       }
     }
@@ -3062,7 +3424,7 @@ async function runModelOn(
     // З них — у паузі після збою.
     const pausedViews = new Set<Subset>()
     // Вигляди зі старою (чи без) відміткою: звірка мусить їх перечитати.
-    const agedViews = new Map<{ rereads: number }, number>()
+    const agedViews = new Map<Subset, number>()
     let purgedScope: { object: ObjectName; scope: string } | undefined
     // Ключі, які `purge` кроку прибрав зі сховища (або назвав явно).
     let purgedKeys: { object: ObjectName; keys: Key[] } | undefined
@@ -3074,6 +3436,7 @@ async function runModelOn(
       case "unsub":
         subs[s.v]?.()
         subs[s.v] = undefined
+        unsubAt.set(s.v, clock)
         if (s.release) advance(RELEASE_MS)
         break
       case "churn": {
@@ -3102,6 +3465,7 @@ async function runModelOn(
           // `subscribe` записав відписку: `at` не звужений перевіркою вище.
           subs.at(v)?.()
           subs[v] = undefined
+          unsubAt.set(v, clock)
           advance(RELEASE_MS)
         }
         break
@@ -3135,9 +3499,12 @@ async function runModelOn(
         else handles[v]!.loadBefore()
         break
       }
-      case "visible":
+      case "visible": {
         core.setVisible(SPECS[s.v]!, s.on)
+        const held = internals.registry.find(SPECS[s.v]!)
+        if (held !== undefined) visibleBy.set(held.targetId, s.on)
         break
+      }
       case "answer": {
         if (fake.pending.length === 0) break
         // Генератор зміщує `pick` до малих чисел, а модель бере з кінця
@@ -3147,10 +3514,12 @@ async function runModelOn(
           fake.pending.length - 1 - (s.pick % fake.pending.length)
         )
         if (s.how === "forbidden") {
+          noteFault(read.object)
           read.fail("command.forbidden")
           break
         }
         if (s.how === "unavailable") {
+          noteFault(read.object)
           read.fail("command.unavailable")
           break
         }
@@ -3174,6 +3543,10 @@ async function runModelOn(
                       : ORG_KEYS
           const gone = asked.filter((k) => live(object, k))
           const victim = gone[s.at % Math.max(gone.length, 1)]
+          // Правда сервера на мить змінилась (рядок зник чи скоуп сховано), і
+          // клієнт міг це прочитати, хоч до кінця кроку рядок повертається: це
+          // зміна без події каналу для О3.
+          if (victim !== undefined) o3Changes.push({ object, at: clock })
           if (victim === undefined) read.answer()
           else if (s.at % 3 === 0) {
             fake.remove(object, victim)
@@ -3261,7 +3634,7 @@ async function runModelOn(
         }
         purgedKeys = { object, keys: [target] }
         dropOwedKey(object, target)
-        purgedTargets.add(id(object, target))
+        markPurged(id(object, target))
         purgeBarrier.set(id(object, target), stepStart)
         if (object === TASK) barrierSections(stepStart)
         break
@@ -3302,6 +3675,7 @@ async function runModelOn(
           if (subs[4] !== undefined) {
             subs[4]()
             subs[4] = undefined
+            unsubAt.set(4, clock)
           } else {
             preload(4, false, label)
             preloadedSection = false
@@ -3317,7 +3691,7 @@ async function runModelOn(
           // Завантаження в польоті під час `hide`: нове утримання чи `refresh`.
           const held = internals.registry.find(section)
           if (held === undefined) preload(4, false, label)
-          else if (held.flight === undefined) handles[4]!.refresh()
+          else if (!loadFlying(held)) handles[4]!.refresh()
           preloadedSection = false
         }
         await flush()
@@ -3339,7 +3713,10 @@ async function runModelOn(
           heldInFlight =
             s.state === "flight" &&
             preloadedSection &&
-            internals.registry.find(section)?.flight !== undefined
+            (() => {
+              const found = internals.registry.find(section)
+              return found !== undefined && loadFlying(found)
+            })()
         }
         break
       }
@@ -3355,11 +3732,11 @@ async function runModelOn(
               sub.loaded &&
               inFlight(sub) &&
               (!s.visibleOnly || shown(sub)) &&
-              (sub.form.spec.kind !== "section" || sub.listeners.size > 0) &&
+              (sub.form.spec.kind !== "section" || listenersOf(sub) > 0) &&
               !tailWatch.has(sub)
             )
               tailWatch.set(sub, {
-                rereads: sub.rereads,
+                rereads: tracker.rereads(sub.targetId),
                 visibleOnly: s.visibleOnly,
               })
         core
@@ -3377,7 +3754,7 @@ async function runModelOn(
         // З приймачем розрив і приєднання йдуть лише через транспорт: пряма
         // позначка розійшлася б із каналами, які він тримає.
         if (signals) {
-          if (s.join && ch !== undefined) transport.join(ch, false)
+          if (s.join && ch !== undefined) joined(ch, false)
           else transport.fail({ kind: "transport", channel: ch })
           break
         }
@@ -3549,13 +3926,13 @@ async function runModelOn(
         // межею `0,9 × I`, а не межею кроку (§6.7), як і на `resume()`.
         const overdue =
           [...internals.registry.subsets()].some(
-            (sub) => isTarget(sub) && modelDue(sub) <= at
+            (sub) => isTarget(sub) && modelDue(dueOf(sub)) <= at
           ) ||
           [...inspect.scheduledDue()].some(
             ([name, due]) => due <= at && !staled.has(name)
           )
         const byTick = (sub: Subset) =>
-          overdue && !young(sub, at, 0.9 * REVALIDATE_MS)
+          overdue && !young(sub, at, 0.9 * runInterval)
         // Читання не бере вигляд, чий строк не настав (молодша за межу відмітка,
         // пауза після збою чи вигляд, що ще не читався), вигляд у польоті й
         // вигляд, що вичерпав межу відкинутих (спека П4-B §6.7).
@@ -3563,12 +3940,12 @@ async function runModelOn(
           young(sub, at, s.minAge) && !byTick(sub)
         for (const sub of readers) {
           if (inPause(sub, at)) pausedViews.add(sub)
-          if (youngNow(sub)) youngViews.set(sub, sub.rereads)
+          if (youngNow(sub)) youngViews.set(sub, tracker.rereads(sub.targetId))
           else if (
             !young(sub, at, s.minAge) &&
             !staled.has(sub.form.object.name)
           )
-            agedViews.set(sub, sub.rereads)
+            agedViews.set(sub, tracker.rereads(sub.targetId))
         }
         for (const object of [TASK, ORG]) {
           const of = readers.filter(
@@ -3587,6 +3964,7 @@ async function runModelOn(
       }
       case "suspend":
         core.suspend()
+        suspends++
         break
       case "due": {
         // До найближчого строку планувальника — за інспекцією, не до
@@ -3655,7 +4033,10 @@ async function runModelOn(
           }
         }
         const before = new Map(
-          [...internals.registry.subsets()].map((sub) => [sub, sub.rereads])
+          [...internals.registry.subsets()].map((sub) => [
+            sub,
+            tracker.rereads(sub.targetId),
+          ])
         )
         // Явні перечитування кроку вище — не сигнал: зарахування починається
         // з цієї миті.
@@ -3664,11 +4045,16 @@ async function runModelOn(
         // Перепланування (подія видимості вигляду) і час понад `I`: вигляд у
         // стані межі не дає строку.
         core.setVisible(SPECS[7]!, true)
+        const seven = internals.registry.find(SPECS[7]!)
+        if (seven !== undefined) visibleBy.set(seven.targetId, true)
         await flush()
-        advance(2 * REVALIDATE_MS)
+        advance(2 * runInterval)
         await flush()
         for (const [sub, rereads] of before)
-          if (sub.rereads !== rereads && !bySignal(sub, false)) {
+          if (
+            tracker.rereads(sub.targetId) !== rereads &&
+            !bySignal(sub, false)
+          ) {
             // Читання зробив такт планувальника: він же й помилка.
             tickReads++
             fail(
@@ -3702,28 +4088,28 @@ async function runModelOn(
         // читає всі вигляди зі строком у вікні `0,1 × I` (§6.7).
         const overdue =
           [...internals.registry.subsets()].some(
-            (sub) => isTarget(sub, true) && modelDue(sub) <= at
+            (sub) => isTarget(sub, true) && modelDue(dueOf(sub)) <= at
           ) ||
           [...inspect.scheduledDue()].some(
             ([name, due]) => due <= at && !staled.has(name)
           )
         const byTick = (sub: Subset) =>
-          overdue && !young(sub, at, 0.9 * REVALIDATE_MS)
+          overdue && !young(sub, at, 0.9 * runInterval)
         // Вимога сильніша за вік (§8.4, п. 7): вигляд, чия вимога «склад не
         // підтверджено» стояла на старті кроку поза паузою збою, `resume()`
         // читає й молодшим за межу. Лише такий: молодий вигляд без вимоги
         // межа й далі тримає.
         const byRequirement = (sub: Subset) =>
-          sub.unconfirmedSince !== undefined &&
-          sub.failures === 0 &&
+          requires(sub, "composition-unconfirmed") &&
+          tracker.failures(sub.targetId) === 0 &&
           !inPause(sub, at)
         const youngNow = (sub: Subset) =>
           !byResume(sub) && !byTick(sub) && !byRequirement(sub)
         for (const sub of readers) {
           if (inPause(sub, at)) pausedViews.add(sub)
-          if (youngNow(sub)) youngViews.set(sub, sub.rereads)
+          if (youngNow(sub)) youngViews.set(sub, tracker.rereads(sub.targetId))
           else if (byResume(sub) && !staled.has(sub.form.object.name))
-            agedViews.set(sub, sub.rereads)
+            agedViews.set(sub, tracker.rereads(sub.targetId))
         }
         for (const object of [TASK, ORG]) {
           // Прочитаний строком вигляд (власним чи ціллю `include`) читає й
@@ -3743,6 +4129,7 @@ async function runModelOn(
           if (of.every(youngNow)) quiet.add(object)
         }
         core.resume()
+        shownAt = clock
         break
       }
       case "rehydrate":
@@ -3977,7 +4364,9 @@ async function runModelOn(
         break
       }
       case "join":
-        if (signals) transport.join(CHANNELS[s.ch]!, s.recovered)
+        // Мітка О2: читання, що знімає вимогу приєднання, стартує після неї.
+        joinMark = ownEvents().length
+        if (signals) joined(CHANNELS[s.ch]!, s.recovered)
         break
       case "transport":
         if (signals)
@@ -4055,13 +4444,84 @@ async function runModelOn(
       if (closed === undefined) {
         for (const read of fake.pending.filter(
           (r) => fake.log.indexOf(r.log) >= stepStart
-        ))
+        )) {
+          noteFault(read.object)
           fake.take((r) => r === read).fail("command.unavailable")
+        }
         await flush()
       }
       outage--
     }
     if (tickStep && core.freshness.lastTickAt() !== tickAtStart) tickReads++
+    // О4 (спека ядра синхронізації §5.13): вікно спокою прихованої вкладки.
+    // Крок без дій — плин часу; відкриває вікно крок, після якого вкладка
+    // прихована, запису в польоті немає і запитів без відповіді теж.
+    const idleProblem = reads.idleStep({
+      quiet: s.t === "time" || s.t === "due",
+      idle: !core.visible && runs.length === 0,
+    })
+    if (idleProblem !== undefined) fail(label, idleProblem)
+    // О2 (§5.13): обіцянки й докази вимог у стані спокою.
+    const o2Before = o2.evaluated()
+    // `sync()` обходить сховище: лише у спокої, коли О2 щось судить.
+    const quietNow = fake.pending.length === 0 && fake.inFlight === 0
+    const o2Problem =
+      !judge || !quietNow
+        ? undefined
+        : o2.step({
+            now: clock,
+            states: inspect.sync(),
+            events: ownEvents(),
+            attempts: ownAttempts,
+            fake,
+            revalidateMs: runInterval,
+            releaseDelayMs: DEFAULT_CORE_LIMITS.releaseDelayMs,
+            lastJoin: () => joinMark,
+            // Тримач — слухач вигляду з кроків моделі, видимий на видимій вкладці.
+            // Власник «відсутній», доки його не прочитано знову після purge.
+            ownerPurged: (object, k) =>
+              purgedTargets.has(id(object as ObjectName, k)) &&
+              !heldRows.has(id(object as ObjectName, k)),
+            holderPresent: (target) =>
+              target.kind === "view" &&
+              subs[SPECS.indexOf(target.spec)] !== undefined,
+            purgedView: (target) =>
+              target.kind === "view" &&
+              handles[SPECS.indexOf(target.spec)]?.getSnapshot().status ===
+                "purged",
+            targetHeld: (target) =>
+              target.kind === "view" &&
+              (subs[SPECS.indexOf(target.spec)] !== undefined ||
+                (preloadUntil.get(SPECS.indexOf(target.spec)) ?? -1) > clock),
+            holderVisible: (target) => {
+              if (target.kind !== "view") return false
+              const v = SPECS.indexOf(target.spec)
+              return (
+                core.visible &&
+                subs[v] !== undefined &&
+                (visibleBy.get(target.id) ?? true)
+              )
+            },
+            storeEmpty: !heldKeys().size,
+            rowAlive: (_object, k) => heldKeys().has(k),
+            suspends,
+            tabHidden: !core.visible,
+            ...(shownAt === undefined ? {} : { shownAt }),
+            headerGone: (_object, k) => {
+              const shown = handles.flatMap((handle, v) =>
+                subs[v] === undefined
+                  ? []
+                  : handle.getSnapshot().rows.filter((r) => r.key === k)
+              )
+              return (
+                shown.length > 0 && shown.every((r) => r.state === "removed")
+              )
+            },
+            rowLife: (object, k) =>
+              purgeCount.get(id(object as ObjectName, k as Key)) ?? 0,
+          })
+    o2Checks += o2.evaluated() - o2Before
+    if (o2Problem !== undefined) fail(label, `O2: ${o2Problem}`)
     if (schedulerStep && closed === undefined) {
       const dueNow = new Set(
         [...deferredAtStart].flatMap(([name, due]) =>
@@ -4069,7 +4529,7 @@ async function runModelOn(
         )
       )
       for (const [sub, rereads] of readsAtStart) {
-        if (sub.rereads === rereads) continue
+        if (tracker.rereads(sub.targetId) === rereads) continue
         // Пачка сигналів і хвиля читають за подією каналу, а не за строком:
         // межа відкинутих і пауза після збою стосуються планувальника (§6.2,
         // §8.4). Вигляд пропускається, лише коли кожне його перечитування
@@ -4098,14 +4558,14 @@ async function runModelOn(
     // за межею свіжості: `resume()` бере хвилю разом зі звіркою (Р10).
     for (const [sub, rereads] of youngViews) {
       if (bySignal(sub, true)) continue
-      if (sub.rereads !== rereads)
+      if (tracker.rereads(sub.targetId) !== rereads)
         fail(
           label,
           `a view younger than the limit was re-read${pausedViews.has(sub) ? " (inside its failure pause)" : ""}`
         )
     }
     for (const [sub, rereads] of agedViews) {
-      if (sub.rereads === rereads)
+      if (tracker.rereads(sub.targetId) === rereads)
         fail(label, "a view older than the limit was not re-read")
     }
     for (const object of quiet) {
@@ -4130,6 +4590,12 @@ async function runModelOn(
     if (purgedKeys !== undefined) checkPurged(label, purgedKeys)
     noteGens(userViews.size > 0)
     stability(label, before, purgeStep, rightsPurgeable)
+    noteServerChanges()
+    // Шаг, що міг змінити віру клієнта без події каналу (`purge`, `hide`,
+    // відповідь-репліка, права, перегідратація), — зміна для О3 в обох
+    // об'єктах: клієнт виправляє її лише читанням за інтервалом.
+    if (!QUIET_STEPS.has(s.t))
+      for (const object of [TASK, ORG]) o3Changes.push({ object, at: clock })
   }
 
   // Утримана відповідь `rights` доходить до злиття: інакше її запит не осяде.
@@ -4138,9 +4604,12 @@ async function runModelOn(
     rightsPassInStep = false
     const before = lists()
     fake.holdRights = false
+    // Довжина журналу ДО кроку, як в інших кроках: читання цього кроку
+    // (хвостове перечитування) мусять рахуватися «пізнішими» (#400).
+    const stepStart = fake.log.length
     fake.releaseRights()
     await flush()
-    check("release rights", fake.log.length)
+    check("release rights", stepStart)
     noteGens(false)
     stability("release rights", before, false, rightsPurgeable)
   }
@@ -4175,6 +4644,7 @@ async function runModelOn(
     const before = lists()
     const slow = late.shift()
     const read = slow ?? fake.take()
+    noteFault(read.object)
     read.answer(slow !== undefined || i % 2 === 0 ? read.issuedAt : fake.clock)
     record(read)
     await flush()
@@ -4183,7 +4653,220 @@ async function runModelOn(
     stability(`drain ${i}`, before, false, rightsPurgeable)
   }
 
+  if (closed === undefined && judge) await o3Phase()
   if (closed === undefined) await converge()
+
+  /**
+   * О3 (спека §5.13, план SK-0 Р-SK0-9): вкладка видима, без `refresh()` і
+   * `revalidate`, іде час моделі; кожен видимий вигляд, чия межа минула, мусить
+   * показувати правду сервера. Межу кожної зміни рахує оракул за причиною.
+   */
+  async function o3Phase() {
+    // База відповідає епохою, за якою йде сесія: інакше кожне читання відкидає
+    // не оракул, а модель (так само, як у збіжності).
+    fake.epoch = inspect.versionEpochs().current
+    noteServerChanges()
+    if (!core.visible) core.resume()
+    const phaseStart = clock
+    const o3 = createO3()
+    const views = (): O3View[] =>
+      SPECS.flatMap((spec, v): O3View[] => {
+        const sub = internals.registry.find(spec)
+        if (
+          subs[v] === undefined ||
+          sub === undefined ||
+          !core.visible ||
+          !(visibleBy.get(sub.targetId) ?? true)
+        )
+          return []
+        const snap = handles[v]!.getSnapshot()
+        const objects = [
+          sub.form.object.name,
+          ...sub.form.include.map((step) => step.target),
+        ]
+        let state: O3State = "live"
+        let holderSince: number | undefined
+        if (snap.status === "purged") state = "purged"
+        else if (inspect.versionEpochs().unavailable) state = "discard-bound"
+        else if (objects.some((o) => staled.has(o))) state = "stale-object"
+        else if (
+          snap.status === "error" &&
+          !sub.loaded &&
+          tracker.failures(sub.targetId) === 0
+        )
+          state = "first-load-error"
+        else if (
+          spec.kind === "section" &&
+          snap.section?.ownerState === "stale"
+        ) {
+          state = "section-owner-hidden"
+          // Шапку K1 читає лише вигляд ключів чи картка, що її тримає; секція
+          // перечитує рядки, не шапку.
+          // Тримач без власної вимоги чи строку (картка без обов'язку, рядки 17/20)
+          // шапки не читає: тримачем він не є.
+          holderSince = headerHolderSince({
+            phaseStart,
+            visible: core.visible,
+            holders: SPECS.flatMap((other, w) => {
+              if (
+                subs[w] === undefined ||
+                other.object !== spec.object ||
+                !readsHeader(other, spec.owner)
+              )
+                return []
+              const held = internals.registry.find(other)
+              return [
+                held === undefined
+                  ? undefined
+                  : syncedViews().get(held.targetId),
+              ]
+            }),
+          })
+        } else if (syncedViews().get(sub.targetId)?.dueCause === "retry")
+          state = "retry-pause"
+        else if (
+          spec.kind === "section" &&
+          snap.section?.ownerState === "removed"
+        )
+          state = "section-owner-removed"
+        else if (
+          (spec.kind === "card" || spec.kind === "section") &&
+          sub.loaded
+        ) {
+          const duty = syncedViews().get(sub.targetId)
+          if (duty !== undefined && !hasOwnDuty(duty))
+            state = "card-without-duty"
+        }
+        return [
+          {
+            id: sub.targetId,
+            objects,
+            state,
+            holderSince,
+            truth: () => o3Truth(v),
+          },
+        ]
+      })
+    const input = () => ({
+      now: clock,
+      phaseStart,
+      intervalMs: runInterval,
+      changes: o3Changes,
+      joins: o3Joins,
+      views: views(),
+    })
+    const settle = async (label: string) => {
+      for (let i = 0; ; i++) {
+        await flush()
+        if (fake.pending.length === 0) return
+        if (i > 200) fail(label, "reads never end")
+        const stepStart = fake.log.length
+        logAt = log.length
+        restoredInStep.clear()
+        while (fake.pending.length > 0) {
+          const read = fake.take()
+          read.answer()
+          record(read)
+        }
+        await flush()
+        check(label, stepStart)
+      }
+    }
+    const judge = () => {
+      const problem = o3.step(input())
+      if (problem === undefined) return
+      const failure = o3.failure()!
+      o3Report = {
+        ...failure,
+        joins: [...o3Joins],
+        server: [...o3Server],
+        reads: ownEvents().map((e) => ({
+          at: e.at,
+          object:
+            e.target.kind === "service"
+              ? undefined
+              : (e.target.object as ObjectName),
+        })),
+      }
+      fail("o3", problem)
+    }
+    await settle("o3 start")
+    if (closed !== undefined) return
+    judge()
+    const end = o3LastBound(input())
+    for (const at of o3Checkpoints(input())) {
+      // Вікно приєднання проходимо дрібно, щоб хвиля читала в свій час; далі —
+      // стрибком до межі такту.
+      while (clock < at) {
+        advance(
+          clock < phaseStart + 2_500 ? Math.min(at - clock, 500) : at - clock
+        )
+        await settle(`o3 ${clock}`)
+        if (closed !== undefined) return
+      }
+      judge()
+    }
+    // Пауза повтору відкинутого читання довша за межу: судимо знову з її кінцем.
+    for (
+      let n = 0;
+      n < 40 && views().some((view) => view.state === "retry-pause");
+      n++
+    ) {
+      advance(500)
+      await settle(`o3 pause ${clock}`)
+      if (closed !== undefined) return
+      judge()
+    }
+    // Пауза повтору скінчена: стан `retry-pause` — не вічна умова. Пауза, що не
+    // кінчається в межах часу моделі, — дефект (повтор не прийшов), а не названий
+    // стан: оракул не судить уявну нескінченну паузу.
+    if (views().some((view) => view.state === "retry-pause"))
+      fail("o3", "a retry pause did not end within the model time")
+    if (clock < end) fail("o3", "the model did not reach the last bound")
+    o3Checks += o3.evaluated()
+    for (const state of O3_NAMED_STATES)
+      o3Skipped.set(state, (o3Skipped.get(state) ?? 0) + o3.skipped(state))
+  }
+
+  /** Розбіжність показу вигляду з правдою сервера; `undefined` — збігається. */
+  function o3Truth(v: number): string | undefined {
+    const spec = SPECS[v]!
+    const snap = handles[v]!.getSnapshot()
+    const where = `o3 view ${v}`
+    const rowMismatch = (row: RowView) => {
+      try {
+        sameAsServer(where, spec.object, row)
+        return undefined
+      } catch (error) {
+        if (error instanceof ModelFailure) return error.message
+        throw error
+      }
+    }
+    if (snap.status !== "ready") return `${where}: status ${snap.status}`
+    // Склад вигляду системне перечитування не змінює (нові рядки чекають дії
+    // користувача, `hasNewRows`): О3 судить показані рядки, а не склад.
+    const rows = judgeRows(
+      snap.rows.map((row) => ({
+        state: row.state,
+        mismatch: () => rowMismatch(row),
+      }))
+    )
+    if (rows !== undefined) return rows
+    if (spec.kind !== "section" || snap.section === undefined) return undefined
+    const owner = truthRow(TASK, spec.owner)
+    const problem = judgeSection(
+      {
+        ownerVersion: owner?.version,
+        lines: owner === undefined ? [] : linesHistory.at(-1)!.qty,
+      },
+      {
+        ownerState: snap.section.ownerState,
+        ownerVersion: snap.section.ownerVersion,
+        lines: snap.section.lines.map((l) => l.values.qty),
+      }
+    )
+    return problem === undefined ? undefined : `${where}: ${problem}`
+  }
 
   /**
    * Збіжність до сервера: відновлюємо видимість, перечитуємо кожен
@@ -4376,7 +5059,7 @@ async function runModelOn(
   function sameAsServer(where: string, object: ObjectName, row: RowView) {
     const at = `${where} ${object}/${row.key}`
     if (staled.has(object)) return
-    const server = fake.row(object, row.key)
+    const server = truthRow(object, row.key)
     if (row.state === "removed") {
       if (server !== undefined)
         fail(where, `${at}: removed, the server has the row`)
@@ -4399,7 +5082,7 @@ async function runModelOn(
         // `null` — лише для цілі, якої сервер не показує; наявна ціль
         // не може лишитись порожньою (гонка власності `include`).
         const target = row.values[field]
-        if (typeof target === "string" && fake.row(ORG, target) !== undefined)
+        if (typeof target === "string" && truthRow(ORG, target) !== undefined)
           fail(where, `${at}.${field}: ref is null, the server has the target`)
       }
     }
@@ -4423,7 +5106,9 @@ const property = (
   defects: readonly DefectFlag[] = [],
   schedulerChecks = true,
   rights = false,
-  signals = false
+  signals = false,
+  intervalMs = REVALIDATE_MS,
+  judge = true
 ) =>
   fc.asyncProperty(
     fc.array(signals ? SIGNAL_STEP : rights ? RIGHTS_STEP : STEP, {
@@ -4442,7 +5127,9 @@ const property = (
           defects,
           schedulerChecks,
           rights,
-          signals
+          signals,
+          intervalMs,
+          judge
         )
       )
   )
@@ -4457,21 +5144,61 @@ afterEach(async () => {
 })
 
 // Бюджети тестів властивостей: таймаут vitest і межа fast-check
-// (`interruptWithin`) — з однієї сталої на тест.
-const BUDGET_MS = 120_000
-const RIGHTS_BUDGET_MS = 240_000
+// (`interruptWithin`) — з однієї сталої на тест. Запас — близько двох найгірших
+// замірів (локальна машина й CI): фаза О3 і оракули кожного кроку подовжили
+// прогін, а перерваний пошук без помилки (`errorInstance` порожній) не доводить
+// нічого, тож кількість прогонів не зменшуємо, а межу піднімаємо.
+const BUDGET_MS = 300_000
+const RIGHTS_BUDGET_MS = 600_000
+
+/*
+ * Режими властивостей (рішення архітекторки 25.11). Інваріанти ядра, О1 і О4
+ * шукають контрприклади на НОВИХ сидах у кожному прогоні. О2 і О3 у шлюзі судять
+ * ЗАКРІПЛЕНІ сиди з тим самим числом прогонів і детермінованим джитером ядра:
+ * їхній набір винятків заморожено, а новий сид пошуку — не виняток, а рядок
+ * списку для планів SK-3 і SK-4. Пошук О2 і О3 на нових сидах — окрема команда
+ * (не в CI): `CORE_MODEL_SEED=random`; `CORE_MODEL_RUNS` діє в обох режимах.
+ */
+// Закріплено рішенням архітекторки 25.11: зелені на повному числі прогонів.
+const PINNED_SEEDS = { plain: 1, rights: 1, signals: 1 } as const
+const searchO2O3 = process.env.CORE_MODEL_SEED === "random"
+const judgedRun = (profile: keyof typeof PINNED_SEEDS) =>
+  searchO2O3 ? {} : { seed: PINNED_SEEDS[profile] }
 
 describe("core model", () => {
   it(
     "holds the invariants over random interleavings",
     async () => {
       tickReads = 0
-      await fc.assert(property(), {
+      idleChecks = 0
+      await fc.assert(property([], true, false, false, REVALIDATE_MS, false), {
         numRuns: RUNS,
         ...interruptWithin(BUDGET_MS),
       })
       // Без тактів із читанням інваріанти планувальника порожні.
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+      expect(idleChecks, "no step in an idle window").toBeGreaterThan(0)
+    },
+    BUDGET_MS
+  )
+
+  it(
+    "judges O2 and O3 over the pinned seed (plain)",
+    async () => {
+      o2Checks = 0
+      o3Checks = 0
+      pinnedRandom = !searchO2O3
+      try {
+        await fc.assert(property(), {
+          numRuns: RUNS,
+          ...judgedRun("plain"),
+          ...interruptWithin(BUDGET_MS),
+        })
+      } finally {
+        pinnedRandom = false
+      }
+      assertEvaluated(o2Checks, "the plain property")
+      assertO3Evaluated(o3Checks, "the plain property")
     },
     BUDGET_MS
   )
@@ -4484,11 +5211,32 @@ describe("core model", () => {
     "holds the invariants with the rights snapshot",
     async () => {
       tickReads = 0
-      await fc.assert(property([], true, true), {
+      await fc.assert(property([], true, true, false, REVALIDATE_MS, false), {
         numRuns: RUNS,
         ...interruptWithin(RIGHTS_BUDGET_MS),
       })
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+    },
+    RIGHTS_BUDGET_MS
+  )
+
+  it(
+    "judges O2 and O3 over the pinned seed (rights snapshot)",
+    async () => {
+      o2Checks = 0
+      o3Checks = 0
+      pinnedRandom = !searchO2O3
+      try {
+        await fc.assert(property([], true, true), {
+          numRuns: RUNS,
+          ...judgedRun("rights"),
+          ...interruptWithin(RIGHTS_BUDGET_MS),
+        })
+      } finally {
+        pinnedRandom = false
+      }
+      assertEvaluated(o2Checks, "the rights property")
+      assertO3Evaluated(o3Checks, "the rights property")
     },
     RIGHTS_BUDGET_MS
   )
@@ -4501,11 +5249,32 @@ describe("core model", () => {
     "holds the invariants with the signal receiver",
     async () => {
       tickReads = 0
-      await fc.assert(property([], true, true, true), {
+      await fc.assert(property([], true, true, true, REVALIDATE_MS, false), {
         numRuns: RUNS,
         ...interruptWithin(RIGHTS_BUDGET_MS),
       })
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+    },
+    RIGHTS_BUDGET_MS
+  )
+
+  it(
+    "judges O2 and O3 over the pinned seed (signal receiver)",
+    async () => {
+      o2Checks = 0
+      o3Checks = 0
+      pinnedRandom = !searchO2O3
+      try {
+        await fc.assert(property([], true, true, true), {
+          numRuns: RUNS,
+          ...judgedRun("signals"),
+          ...interruptWithin(RIGHTS_BUDGET_MS),
+        })
+      } finally {
+        pinnedRandom = false
+      }
+      assertEvaluated(o2Checks, "the signals property")
+      assertO3Evaluated(o3Checks, "the signals property")
     },
     RIGHTS_BUDGET_MS
   )
@@ -4558,6 +5327,118 @@ describe("the time budget of a property", () => {
 // Фіксовані прогони знайдених контрприкладів: насіння й шлях fast-check
 // відтворюють той самий прогін на будь-якій машині.
 describe("core model regressions", () => {
+  // Явні кроки: усічені шляхи реплеїв нижче не доводять, що без виправлення
+  // прогін червоний. Завантаження вигляду відкинуто за епохою, далі його
+  // перечитує `return` — модель не мусить вважати вигляд «у польоті».
+  // Пауза повтору береться з `sync()` (строк із причиною `retry`): `return` під
+  // час живої паузи, відповіді й плин часу — модель і ядро згодні, чи вигляд
+  // у польоті, на кожному кроці.
+  // Явні кроки того ж реплею: `sub` на прихованій вкладці ставить завантаження в
+  // чергу (M6 з причиною `mount`); його старт — наслідок дії, не вкладка у спокої.
+  it("does not take a queued `mount` load on a hidden tab for a tab at rest", async () => {
+    const steps: Step[] = [
+      { t: "suspend" },
+      { t: "revalidate", org: false, visibleOnly: false },
+      { t: "epoch", which: 1 },
+      { t: "answer", pick: 0, how: "missing", at: 0 },
+      { t: "epoch", which: 2 },
+      { t: "sub", v: 10 },
+      { t: "answer", pick: 0, how: "stale", at: 0 },
+      { t: "churn", v: 1, scroll: false },
+      { t: "epoch", which: 1 },
+      { t: "answer", pick: 0, how: "missing", at: 0 },
+      { t: "purgeScope", org: false, scope: 0 },
+      { t: "due" },
+    ]
+    await modelRun(runModel(steps, true, "burial", [], true, true, false))
+  })
+
+  // Нестабільний за природою: джитер перемикання епохи (`Math.random`). Той самий
+  // прогін 40 разів: модель не мусить розходитися з ядром, коли пауза повтору
+  // стоїть у `sync()` поруч із строком об'єкта.
+  it("keeps the model and the core agreed on the retry pause beside an object timer", async () => {
+    const steps: Step[] = [
+      { t: "hideSection", state: "mounted", then: "none", evict: false },
+      { t: "sub", v: 0 },
+      { t: "churn", v: 0, scroll: true },
+      { t: "epoch", which: 1 },
+      { t: "answer", pick: 0, how: "missing", at: 0 },
+      { t: "epoch", which: 2 },
+      { t: "answer", pick: 2, how: "missing", at: 0 },
+      { t: "epoch", which: 1 },
+      { t: "edit", k: 0, title: 0 },
+      { t: "answer", pick: 0, how: "stale", at: 2 },
+      { t: "answer", pick: 6, how: "missing", at: 0 },
+      { t: "sub", v: 2 },
+      { t: "revalidate", org: false, visibleOnly: true },
+      { t: "answer", pick: 2, how: "stale", at: 0 },
+      { t: "page", w: 1, dir: "after" },
+      { t: "return", minAge: 1000 },
+    ]
+    for (let i = 0; i < 40; i++) {
+      await modelRun(runModel(steps, false, "scroll", [], true, false, false))
+      await settleRuns()
+    }
+  }, 120_000)
+
+  // Строк рядка зник у мить строку, бо тримач (вигляд) пішов: не прострочена
+  // обіцянка, а названий стан «немає тримача».
+  it("does not owe a row deadline that left with its released holder", async () => {
+    const steps: Step[] = [
+      { t: "hideSection", state: "mounted", then: "none", evict: false },
+      { t: "answer", pick: 1, how: "missing", at: 0 },
+      { t: "churn", v: 1, scroll: false },
+      { t: "answer", pick: 0, how: "forbidden", at: 0 },
+      { t: "unsub", v: 1, release: true },
+      { t: "answer", pick: 0, how: "stale", at: 0 },
+      { t: "answer", pick: 0, how: "missing", at: 0 },
+      { t: "sub", v: 2 },
+      { t: "answer", pick: 0, how: "missing", at: 0 },
+      { t: "answer", pick: 0, how: "missing", at: 0 },
+      { t: "unsub", v: 0, release: true },
+    ]
+    await modelRun(runModel(steps, true, "scroll", [], true, true, true))
+  })
+
+  // Без хвоста `{ time 5000 }, answer`: після нескінченного штучного циклу
+  // відкидань вимога рядка `version-epoch-switched` переживає обмежений виняток
+  // (родина рядка 19 §5.14, SK-4) — див. #360. Це випадок списку, не виняток.
+  it("agrees with the core on a view in the M8 retry pause", async () => {
+    const answer: Step = { t: "answer", pick: 0, how: "ok", at: 0 }
+    const refresh: Step = { t: "refresh", v: 0, showNew: false }
+    const steps: Step[] = [
+      { t: "sub", v: 0 },
+      answer,
+      { t: "epoch", which: 1 },
+      refresh,
+      answer,
+      { t: "epoch", which: 2 },
+      refresh,
+      answer,
+      { t: "epoch", which: 1 },
+      refresh,
+      answer,
+      { t: "return", minAge: 1000 },
+      answer,
+      { t: "time", ms: 500 },
+      answer,
+      answer,
+    ]
+    await modelRun(runModel(steps, false, "full", [], true, false, false))
+  })
+
+  it("`return` rereads a view whose load was discarded and never retried", async () => {
+    const steps: Step[] = [
+      { t: "closeInFlight" },
+      { t: "race", group: 5, settle: "now" },
+      { t: "gap", k: 0, remove: false },
+      { t: "answer", pick: 0, how: "forbidden", at: 0 },
+      { t: "churn", v: 0, scroll: false },
+      { t: "return", minAge: 1000 },
+    ]
+    await modelRun(runModel(steps, false, "full", [], true, true, true))
+  })
+
   it.each([
     // #312: явний `revalidate` над виглядом у польоті після `unavailable`/`resume`.
     {
@@ -4661,15 +5542,183 @@ describe("core model regressions", () => {
       seed: -543971651,
       path: "8357:4:7:18:18:24:27:28:28:28:40:42:36:35:35:39:41:41:42:41:23:29:2:23:25:21:21:21:21:21:21:21:21:21:21:21:21:21:21:21",
     },
+    // О2: вигляд, знищений `purge` пари, зберігає вимогу без умови (умова
+    // «purged»), і збій першого завантаження — стан, а не дефект.
+    {
+      issue: "O2 purged view",
+      o2: true,
+      rights: true,
+      signals: true,
+      seed: -93404445,
+      path: "997:7:3:15:5:11:17:27:16:10:20:10:18:17:21:11:63:11:16:17:36:17:45:56:33:25:30:35:61:47:55:47:46:53:69:53:52:51:53:32:31:47:30:37:21:20:20:22:21:20:20:20:20:20:20:20:20:20:20:20:20:26:20:22:20:21:20:20",
+    },
+    {
+      issue: "O2 min-version row",
+      o2: true,
+      seed: 2025024491,
+      path: "2007:4:2:11:14:18:20:20:20:26:26:10:10:10:10:10:10:10:10:10:10:10:10:10:10:10:10:10:10:10:10:10:11",
+    },
+    {
+      issue: "O2 purged owner release",
+      o2: true,
+      rights: true,
+      signals: true,
+      seed: 1329672921,
+      path: "9819:8:13:17:16:22:24:33:33:41:44:45:48:48:48:48:52:52:52:56:58:53:29:54:52:55:54:55:55:44:44:44:44:44:44:44:44:44:44:44:44:44:44:44:44:44",
+    },
+    // Рядок з вимогою «мінімальна версія» вилучено `purge`, поки читання були в
+    // польоті, і прочитано знову: вимога зникла разом із рядком, а не без доказу.
+    // Строк зник зі `sync()` на прихованій вкладці: обіцянки більше немає.
+    {
+      issue: "O2 deadline left sync()",
+      o2: true,
+      seed: -1703697790,
+      path: "9992:4:4:12:12:13:13:16:4:6:10:14:14:21:21:24:13:18:18:18:26:28:16:17:21:22:22:22:24:27:33",
+    },
+    // Відкинута за епохою спроба знімає вимогу «ціль відстала від шапки», як і
+    // збійна; читання йде повтором після паузи.
+    {
+      issue: "O2 discarded load drops a requirement",
+      o2: true,
+      signals: true,
+      seed: -1229539262,
+      path: "837:9:6:10:11:11:13:18:19:19:19:22:25:37:38:39:39:39:47:40:38:42:42:42:27:25:25:25:25:28:25:25:26:27:27:26:27:32:26:26:26:31:28:29:26:27:27",
+    },
+    // О3: картка без власної вимоги й строку над рядком, якого сервер не має.
+    {
+      issue: "O3 card without duty",
+      o3: "card-without-duty" as const,
+      seed: 0,
+      path: "467",
+    },
+    // О3: ТЧ, чий власник `removed`, і шапку читає лише перечитування шапки.
+    {
+      issue: "O3 section over a removed owner",
+      o3: "section-owner-removed" as const,
+      seed: -1579167006,
+      path: "37:2:3:5:13:13:21:30:23:22:22:24:29:29:39:38:42:45:43:44:46:48:27:25:25:25:25:25:9:12:2:13:4:7:11:11:11:12:12:12:12:14:13:13:13:12:12:12:12:12",
+    },
+    // Вигляд, чию паузу повтору модель брала за політ, хоча повтору вже не було:
+    // паузу тепер дає строк із причиною `retry` у `sync()`.
+    {
+      issue: "return rereads a view after a discarded load",
+      seed: -565918531,
+      path: "1556:2:3:5:15:16:14:13:13:14:14:14:18:18:12",
+    },
+    {
+      issue: "return rereads a view after a discarded load (rights)",
+      rights: true,
+      seed: -1716810821,
+      path: "4910:3:1:0:3:6:12:12:16:17:18:21:26:3:8:13:13:14:20:24:24:24:14",
+    },
+    {
+      issue: "return rereads a view after a discarded load (signals)",
+      signals: true,
+      seed: 681021836,
+      path: "6052:3:2:1:7:9:14:14:16:16:16:22:22:22:26:27:27:30:31:32:32:32:16",
+    },
+    // О4: черга M6 несе причину `mount` підписки (дія на прихованій вкладці):
+    // це не читання вкладки у спокої.
+    {
+      issue: "O4 queued mount on a hidden tab",
+      rights: true,
+      seed: -404532396,
+      path: "1072:4:0:4:10:15:10:11:36:19:42:81:11:17:48:31:39:35:16:41:52:45:72:13:19:20:20:25:32:39:37:42:41:19:66:31:35:34:63:32:32:35:37:41:35:42:34:34:42:45:45:45:45:38:38:38:38:38:38:38:38:38:38:38:38:38:38:38:38:38:38",
+    },
+    // CI 45595370220: пауза retry поруч зі строком об'єкта (нестабільний за джитером).
+    {
+      issue: "pause beside an object timer",
+      seed: -998057425,
+      path: "5432:3:0:0:1:8:10:11:11:17:21:21:19:26:27:26:36:37:40:26:30:44:40:39:38:38:40:49:58:64:47:45:60:54:43:54:37:56:37:48:62:50:61:42:51",
+    },
+    // CI 45595370220: строк рядка зник у мить строку разом із тримачем.
+    {
+      issue: "row deadline left with its holder",
+      o2: true,
+      signals: true,
+      seed: 1459187033,
+      path: "2387:6:2:12:12:12:17:9:13:13:13:22:22:27:29:28:28:34:35:35:38:18:5:32:31:31:31:33:38:39:39:39:44:45:45:50:53:56:58:58:63:63:63:67:68:39:39:39:39:39:39:39:39:39:39:39:39:39:39:39:39:39:39:39",
+    },
+    // О3: вигляд у довгій паузі повтору відкинутого читання (рядок 18 стану retry).
+    {
+      issue: "O3 view in a retry pause",
+      seed: 958004524,
+      path: "1210:2:2:5:15:15:18:7:9:9:10:14:14:16:20:23:23:26:33:32:31:37:3:17:3:31:29:27:26:26:26:26:26:26:27:27:27:27:27:28:28:29:29:30",
+    },
+    // CI 45601548174: вигляд бачить стару версію власника після кроків із правами.
+    {
+      issue: "O3 view owner version (signals)",
+      o3: "section-owner-hidden" as const,
+      signals: true,
+      seed: -372539610,
+      path: "7725:6:5:9:3:1:5:5:6:8:12:4:5:4:5:5:8:10:12:12:14:14:14:14:17:17:17:17:18:18:18:18:19:20:19:20:21:20:21:22:22",
+    },
+    // Пауза повтору — те саме завантаження користувача в польоті: без неї модель
+    // губила його номер, і складу, що ріс після повтору, ніхто не виправдовував.
+    {
+      issue: "user load across a retry pause",
+      seed: -997846743,
+      path: "6453:1:1:0:8:10:11:13:15:15:17:17:17:19:19:19:20:20:20:20:20:20:20:20:20:21:21:21:21:21:21",
+    },
+    // Шапка власника зникла зі сховища читанням, що не знайшло рядка: похідна
+    // вимога «ціль відстала від шапки» ТЧ іде разом із нею (давній, з 7498db70).
+    {
+      issue: "O2 behind-header requirement left with its header",
+      o2: true,
+      seed: 290039941,
+      path: "3206:3:2:1:11:11:16:10:11:17:18:20:19:20:19:19:23:25:25:27:30:34:37:35:34:38:41:43:49:49:49:53:54:58:59:68:72:72:72:79:78:78:78:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59",
+    },
+    // CI 45621977924: тримач шапки — картка без власної вимоги й строку, шапки
+    // вона не читає, тож тримачем для межі стану не є.
+    {
+      issue: "O3 section over a hidden owner, a card without duty",
+      o3: "section-owner-hidden" as const,
+      seed: 580488793,
+      path: "3912:8:7:19:19:21:20:20:26:26:27:27:27:30:33:39:45:49:50:51:57:57:44:55:26:51:51:59:67:75:76:3:32:29:42:43:48:47:48:51:52:54:32:49:51:51:53:53:53:53:48:48:48:49:49:49:38:14:16:21:1:16:17:17:17:17:18:17:19:19:19:20:19:20:20:20:20",
+    },
+    {
+      issue: "O2 purged row returns",
+      o2: true,
+      seed: 968292387,
+      path: "8463:4:0:4:12:12:17:20:22:23:22:28:34:33:34:34:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19",
+    },
+    {
+      issue: "O2 purge and unsub",
+      o2: true,
+      rights: true,
+      signals: true,
+      seed: 1825111737,
+      path: "3010:3:2:26:4:7:12:11:18:31:45:26:36:32:32:39:45:32:32:38:42:41:41:51:22:36:36:36:36:37:19:17:20:15:16:16:15:15:19:15:15:15:19:15:16:15:15:15:22:15:17:22:16:15:16:15:16:16:19:11:9:8:9:8",
+    },
+    // #400: оракул рахував довжину журналу після кроку `release rights`, тож
+    // хвостове перечитування цього кроку не вважалося пізнішим читанням.
+    {
+      issue: 400,
+      rights: true,
+      seed: -1708729583,
+      path: "9564:1:0:2:2:2:3:3:3:3:2:3:3:3:3:3:3:3:3:4:5:5:5:5:6:6:6",
+    },
   ])(
     "replays the counterexample of #$issue (seed $seed)",
-    async ({ seed, path, rights = false, signals = false }) => {
+    async ({ seed, path, rights = false, signals = false, o2 = false, o3 }) => {
+      o2Checks = 0
+      o3Checks = 0
+      o3Skipped.clear()
       await fc.assert(property([], true, rights, signals), {
         seed,
         path,
         endOnFailure: true,
         ...interruptWithin(BUDGET_MS),
       })
+      // Прогін із вимогами: без оціненого стану спокою О2 порожній.
+      if (o2) assertEvaluated(o2Checks, `replay of seed ${seed}`)
+      // Реплей О3: фаза судила вигляди й справді пропустила названий стан.
+      if (o3 !== undefined) {
+        assertO3Evaluated(o3Checks, `replay of seed ${seed}`)
+        expect(o3Skipped.get(o3) ?? 0, `${o3} was never used`).toBeGreaterThan(
+          0
+        )
+      }
     },
     BUDGET_MS
   )
@@ -4932,6 +5981,8 @@ const DEFECTS: readonly DefectFlag[] = [
   "scheduler-no-reschedule",
   "revalidate-no-tail",
   "scheduler-reads-unavailable",
+  "sync-pause-no-cause",
+  "discard-no-retry",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -4943,7 +5994,7 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // генератора (крок епохи) знаходить ТЧ.
   "purge-keeps-views": /(card|section) of purged/,
   "purge-marks-unrelated-views": /purged without a purge of its key/,
-  "absent-row-ignored": /^converge/,
+  "absent-row-ignored": /^o3: view \d+ past its bound/,
   "unbounded-seen": /seen \d+ > \d+/,
   "system-reread-via-load": /composition/,
   "hide-lifted-by-older-read": /after hide without a later read/,
@@ -4968,7 +6019,7 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // Повернення: межа свіжості виглядів.
   "min-age-ignored": /a view younger than the limit (got a read|was re-read)/,
   "min-age-ignored-sections": /a view younger than the limit was re-read/,
-  "min-age-all-young": /a view older than the limit was not re-read/,
+  "min-age-all-young": /^o3: view \d+ past its bound/,
   // Пізня підписка гідрованого вигляду (§6.6): рядок знімка без читання.
   "late-hydrated-not-reread": /after hydrate: view \d+ .*(server|hidden)/,
   // Довіра — факт рядка: картка над рядком непідписаного гідрованого списку.
@@ -4976,13 +6027,22 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // Маркер читання, що почалось до `hide`, не знімає його позначки.
   "marker-lifts-newer-mark": /a marker of a read older than the hide/,
   // Планувальник свіжості: кожен дефект — своєю перевіркою.
-  "scheduler-fires-hidden": /a read started by the scheduler on a hidden tab/,
+  // О4: такт на прихованій вкладці шле запит у вікні спокою раніше за наявну
+  // перевірку планувальника (вона лишається запасною).
+  "scheduler-fires-hidden": /a read in the idle window/,
   "scheduler-timer-per-object": /scheduler timers \d+ > 1/,
   "scheduler-no-pause":
     /inside its failure pause|not re-read within its failure pause/,
   "scheduler-no-reschedule": /scheduler has no timer on a visible tab/,
   "revalidate-no-tail": /left no tail pass/,
   "scheduler-reads-unavailable": /after the discard limit/,
+  // `sync()` показує паузу повтору звичайним строком: модель, що бере паузу з
+  // `sync()`, бачить вигляд поза польотом і чекає від ядра перечитування.
+  "sync-pause-no-cause": /not re-read after hide/,
+  // Відкинуте за епохою завантаження без повтору лишає вигляд у `loading`: О3.
+  // Межу О2 (читання не пізніше кінця паузи повтору) доводить її самотест: у
+  // прогоні модель читає вигляд іншим шляхом (такт), і борг О2 закривається ним.
+  "discard-no-retry": /^o3: view \d+ past its bound/,
   // Знімок прав (B5b-2): кожен дефект — своїм шляхом. Без бар'єра читання
   // пари, що стартувало до знімка, пише її рядок уже після нього (`race`).
   "rights-no-barrier": /written past the rights barrier/,
@@ -5000,6 +6060,10 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
     /a read started by the receiver after the discard limit/,
   // Приймач не бачить горизонт витіснення: відповідь до purge ставить позначку.
   "receiver-ignores-horizon": /a signal read without a signal/,
+  // О2, половина (б): сторінка знімає вимогу, якої доводить лише читання всього вигляду.
+  "page-drops-requirement": /composition-unconfirmed disappeared with no proof/,
+  // О3: без читання хвилі вигляд лишається зі старим рядком до межі приєднання.
+  "rejoin-wave-no-read": /^o3: view \d+ past its bound/,
 }
 
 // Насіння самотесту, коли насіння 1 не знаходить дефекту за 10 000 прогонів.
@@ -5010,6 +6074,37 @@ const SELF_CHECK_SEEDS: Partial<Record<DefectFlag, number>> = {
   "bury-removed-current-epoch": 13,
   // Контрприклад #374 (прогін 8357 цього насіння).
   "receiver-ignores-horizon": -543971651,
+  // Вікно спокою О4 відкрите (вкладка прихована, нічого в польоті) раніше, ніж
+  // наявна перевірка планувальника бачить такт.
+  "scheduler-fires-hidden": 4,
+}
+
+// Явний контрприклад самотесту: мутацію знаходить лише вузька послідовність, яку
+// випадковий пошук майже не складає. Вигляд-вікно прихований, хвиля приєднання
+// ставить йому вимогу «склад не підтверджено» без польоту, сторінка осідає й
+// не мусить її зняти (її знімає лише читання всього вигляду).
+const SELF_CHECK_EXAMPLES: Partial<
+  Record<DefectFlag, [Step[], boolean, Profile]>
+> = {
+  "page-drops-requirement": [
+    [
+      { t: "sub", v: 11 },
+      { t: "answer", pick: 0, how: "ok", at: 0 },
+      { t: "answer", pick: 0, how: "ok", at: 0 },
+      { t: "visible", v: 11, on: false },
+      { t: "join", ch: 0, recovered: false },
+      { t: "time", ms: 5000 },
+      { t: "page", w: 0, dir: "after" },
+      { t: "answer", pick: 0, how: "ok", at: 0 },
+    ],
+    false,
+    "full",
+  ],
+}
+
+// Насіння прогонів з сигналами, коли ним самотест не збігається з простим.
+const SIGNAL_SELF_CHECK_SEEDS: Partial<Record<DefectFlag, number>> = {
+  "scheduler-fires-hidden": 17,
 }
 
 // Дефекти правила втрати доступу (B5b-2): їх ловлять прогони зі знімком прав.
@@ -5025,9 +6120,21 @@ const SIGNAL_DEFECTS: readonly DefectFlag[] = [
   "receiver-purge-keeps-batch",
   "receiver-reads-unavailable",
   "receiver-ignores-horizon",
+  "page-drops-requirement",
 ]
 
 describe("core model self-check", () => {
+  // О2 не порожній на прогонах самотестів: окремий короткий прогін може не мати
+  // вимог, тож лічильник судить усі прогони дефектів разом.
+  beforeAll(() => {
+    o2Checks = 0
+    o3Checks = 0
+  })
+  afterAll(() => {
+    assertEvaluated(o2Checks, "the defect self-check runs")
+    assertO3Evaluated(o3Checks, "the defect self-check runs")
+  })
+
   it.each(DEFECTS)(
     "turns red with the defect %s",
     async (flag) => {
@@ -5081,15 +6188,234 @@ describe("core model self-check", () => {
     RIGHTS_BUDGET_MS
   )
 
+  // Перевірки моделі, які CAUGHT_BY прапорців перенаведено на О3 і О4: кожна
+  // має свій явний контрприклад, щоб не лишитися без прапорця, що її червонить.
+  it.each([
+    {
+      flag: "min-age-all-young" as const,
+      checks: false,
+      message: /a view older than the limit was not re-read/,
+      steps: [
+        { t: "sub", v: 0 },
+        { t: "answer", pick: 0, how: "ok", at: 0 },
+        { t: "time", ms: 5000 },
+        { t: "return", minAge: 1000 },
+        { t: "answer", pick: 0, how: "ok", at: 0 },
+      ] as Step[],
+    },
+    {
+      flag: "scheduler-fires-hidden" as const,
+      checks: true,
+      message: /a read started by the scheduler on a hidden tab/,
+      // Запит без відповіді тримає вікно спокою О4 закритим: першою червоніє
+      // наявна перевірка кроку.
+      steps: [
+        { t: "sub", v: 0 },
+        { t: "answer", pick: 0, how: "ok", at: 0 },
+        { t: "suspend" },
+        { t: "sub", v: 1 },
+        { t: "time", ms: 5000 },
+        { t: "answer", pick: 0, how: "ok", at: 0 },
+      ] as Step[],
+    },
+  ])(
+    "keeps the check of $flag pinned by an explicit example",
+    async ({ flag, checks, message, steps }) => {
+      await expect(
+        modelRun(runModel(steps, false, "full", [flag], checks))
+      ).rejects.toThrow(message)
+      // Контроль: без прапорця той самий прогін зелений.
+      await modelRun(runModel(steps, false, "full", [], checks))
+    }
+  )
+
+  // `retry-pause` — названий стан О3 лише доти, доки пауза скінченна: пауза, що
+  // не кінчається в межах часу моделі, червонить О3, а не лишається умовою.
+  it("turns O3 red when the retry pause of a discarded load never ends", async () => {
+    const answer: Step = { t: "answer", pick: 0, how: "ok", at: 0 }
+    const refresh: Step = { t: "refresh", v: 0, showNew: false }
+    const steps: Step[] = [
+      { t: "sub", v: 0 },
+      answer,
+      { t: "epoch", which: 1 },
+      refresh,
+      answer,
+      { t: "epoch", which: 2 },
+      refresh,
+      answer,
+      { t: "epoch", which: 1 },
+      refresh,
+      answer,
+    ]
+    await expect(
+      modelRun(runModel(steps, false, "full", ["retry-sleeps-forever"], true))
+    ).rejects.toThrow(/a retry pause did not end within the model time/)
+    await modelRun(runModel(steps, false, "full", [], true))
+  })
+
+  // Межа стану `section-owner-hidden` (рядок 19 §5.14): ТЧ над схованим
+  // власником. Без тримача шапки (крок -372539610) вона лишається станом; коли
+  // ключовий вигляд власника з'являється, його читання знімає позначку, і ТЧ
+  // сходиться; мутація «читання не знімає позначку» лишає її — О3 червоний.
+  it("holds the section over a hidden owner to the bound once a header holder exists", async () => {
+    const steps: Step[] = [
+      { t: "hideSection", state: "mounted", then: "none", evict: false },
+      { t: "answer", pick: 0, how: "stale", at: 0 },
+      { t: "answer", pick: 0, how: "stale", at: 0 },
+      { t: "preload", v: 0, short: false },
+      { t: "hideSection", state: "mounted", then: "none", evict: false },
+      { t: "answer", pick: 1, how: "ok", at: 0 },
+      { t: "unsub", v: 0, release: false },
+      { t: "answer", pick: 2, how: "missing", at: 1 },
+      { t: "answer", pick: 0, how: "unavailable", at: 0 },
+      { t: "unsub", v: 0, release: false },
+      { t: "update", k: 1, lazy: false, base: 0 },
+      { t: "rights", what: "hold", object: 0, scope: 1 },
+      { t: "sub", v: 1 },
+      { t: "answer", pick: 0, how: "ok", at: 0 },
+      { t: "move", k: 1 },
+      { t: "answer", pick: 0, how: "missing", at: 1 },
+      // Тримач шапки K1: вигляд ключів [K1, K2] з власним строком.
+      { t: "sub", v: 0 },
+      { t: "answer", pick: 0, how: "ok", at: 0 },
+    ]
+    await expect(
+      modelRun(
+        runModel(
+          steps,
+          false,
+          "full",
+          ["reads-keep-hidden-mark"],
+          true,
+          true,
+          true
+        )
+      )
+    ).rejects.toThrow(/^o3: view \d+ past its bound/)
+    // Контроль: без дефекту той самий прогін зелений.
+    await modelRun(runModel(steps, false, "full", [], true, true, true))
+  })
+
+  // О3 (Р-SK0-9): хвиля приєднання не читає. Профіль з інтервалом набагато
+  // більшим за джитер: такт не підміняє хвилю, тож лише хвиля виправляє рядок,
+  // який сервер змінив до приєднання.
+  it(
+    "turns red with the defect rejoin-wave-no-read (a long interval)",
+    async () => {
+      const flag = "rejoin-wave-no-read"
+      // Контрприклад доводить саме хвилю: приєднання прийнято, сервер змінив
+      // рядок до нього, і жодне інше читання об'єкта не стартувало між
+      // приєднанням і межею О3. Інакше О3 червоний з іншої причини, і пошук іде далі.
+      const provesWave = (): boolean => {
+        const report = o3Report
+        if (report === undefined) return false
+        const join = report.joins.find(
+          (j) =>
+            report.objects.includes(j.object) &&
+            j.at + REJOIN_JITTER_MS === report.bound
+        )
+        return (
+          join !== undefined &&
+          report.server.some(
+            (c) => report.objects.includes(c.object) && c.at <= join.at
+          ) &&
+          !report.reads.some(
+            (r, n) =>
+              n >= join.after! &&
+              r.at <= report.bound &&
+              r.object !== undefined &&
+              report.objects.includes(r.object)
+          )
+        )
+      }
+      const run = (defects: readonly DefectFlag[]) =>
+        fc.asyncProperty(
+          fc.array(SIGNAL_STEP, { minLength: 10, maxLength: 80, size: "max" }),
+          fc.boolean(),
+          fc.constantFrom<Profile>("full", "scroll", "burial"),
+          async (steps, preloaded, profile) => {
+            o3Report = undefined
+            try {
+              await modelRun(
+                runModel(
+                  steps,
+                  preloaded,
+                  profile,
+                  defects,
+                  true,
+                  true,
+                  true,
+                  LONG_INTERVAL_MS
+                )
+              )
+            } catch (error) {
+              if (
+                error instanceof ModelFailure &&
+                CAUGHT_BY[flag]!.test(error.message) &&
+                !provesWave()
+              )
+                return
+              throw error
+            }
+          }
+        )
+      const result = await fc.check(run([flag]), {
+        numRuns: 10_000,
+        seed: SELF_CHECK_SEEDS[flag] ?? 1,
+        endOnFailure: true,
+        ...interruptWithin(RIGHTS_BUDGET_MS),
+      })
+      expect(result.failed, `${flag} not caught`).toBe(true)
+      expect(result.errorInstance).toBeInstanceOf(ModelFailure)
+      expect((result.errorInstance as Error).message).toMatch(CAUGHT_BY[flag]!)
+      // Контроль: той самий прогін без дефекту зелений.
+      const [steps, preloaded, profile] = result.counterexample!
+      await modelRun(
+        runModel(
+          steps,
+          preloaded,
+          profile,
+          [],
+          true,
+          true,
+          true,
+          LONG_INTERVAL_MS
+        )
+      )
+      // З дефектом він червоний саме хвилею.
+      o3Report = undefined
+      await expect(
+        modelRun(
+          runModel(
+            steps,
+            preloaded,
+            profile,
+            [flag],
+            true,
+            true,
+            true,
+            LONG_INTERVAL_MS
+          )
+        )
+      ).rejects.toBeInstanceOf(ModelFailure)
+      expect(provesWave(), "the counterexample does not prove the wave").toBe(
+        true
+      )
+    },
+    RIGHTS_BUDGET_MS
+  )
+
   // Дефекти планувальника — і в прогонах з сигналами: пропуск перечитувань
   // від сигналу не затуляє їх (бюджет приймача).
   it.each([...SIGNAL_DEFECTS, ...SCHEDULER_DEFECTS])(
     "turns red with signals and the defect %s",
     async (flag) => {
       tickReads = 0
+      const example = SELF_CHECK_EXAMPLES[flag]
       const result = await fc.check(property([flag], true, true, true), {
         numRuns: 10_000,
-        seed: SELF_CHECK_SEEDS[flag] ?? 1,
+        ...(example === undefined ? {} : { examples: [example] }),
+        seed: SIGNAL_SELF_CHECK_SEEDS[flag] ?? SELF_CHECK_SEEDS[flag] ?? 1,
         endOnFailure: true,
         ...interruptWithin(RIGHTS_BUDGET_MS),
       })

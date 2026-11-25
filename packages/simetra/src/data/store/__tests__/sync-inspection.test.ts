@@ -5,7 +5,7 @@ import { SCOPE_KIND_ID } from "../../../model/runtime/__tests__/entries"
 import type { SyncState, SyncTarget } from "../core"
 import { failurePause } from "../subsets"
 import { QUIET_MS, REJOIN_JITTER_MS } from "../receiver"
-import { DISCARDS_MAX } from "../session"
+import { DISCARD_PAUSE_MS, DISCARDS_MAX } from "../session"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import type { ReadEvent } from "../source"
 import type { CoreLimits, ViewSpec } from "../types"
@@ -24,7 +24,7 @@ import {
 } from "./core-support"
 
 /*
- * Діагностика `sync()` (план SK-0, задача 3, Р5): проєкція стану свіжості
+ * Діагностика `sync()` (план SK-0, задача 3, Р-SK0-5): проєкція стану свіжості
  * `main` — ціль, вимоги, польоти, черга, доказ, строк, умова. Кожен вид
  * вимоги §5.2, який `main` має, і кожна умова §5.3 — окремий випадок над
  * справжнім ядром і фейковим сервером.
@@ -53,21 +53,31 @@ const section = (n: number): ViewSpec => ({
   owner: key(n),
   section: "lines",
 })
-const viewTarget = (spec: ViewSpec): SyncTarget => ({
+/** Ціль без непрозорого ідентифікатора: його перевіряють окремі тести. */
+type Probe = SyncTarget extends infer T
+  ? T extends { readonly id: number }
+    ? Omit<T, "id">
+    : T
+  : never
+const viewTarget = (spec: ViewSpec): Probe => ({
   kind: "view",
   object: spec.object,
   spec,
 })
-const rowTarget = (n: number): SyncTarget => ({
+const rowTarget = (n: number): Probe => ({
   kind: "row",
   object: TASK,
   key: key(n),
 })
-const RIGHTS: SyncTarget = { kind: "service", service: "rights" }
-const VERSION: SyncTarget = { kind: "service", service: "version" }
+const RIGHTS: Probe = { kind: "service", service: "rights" }
+const VERSION: Probe = { kind: "service", service: "version" }
 
-const stateOf = (h: CoreHarness, target: SyncTarget): SyncState | undefined =>
-  h.inspect.sync().find((s) => isDeepStrictEqual(s.target, target))
+const stateOf = (h: CoreHarness, target: Probe): SyncState | undefined =>
+  h.inspect.sync().find((s) => {
+    const { id, ...rest } = s.target as SyncTarget & { id?: number }
+    void id
+    return isDeepStrictEqual(rest, target)
+  })
 
 const write = (
   h: CoreHarness,
@@ -159,7 +169,7 @@ async function switched() {
  * запит фейкового сервера з його ключем). Звірка з `scheduledDue()` нічого
  * не довела б: проєкція сама його читає.
  */
-async function expectReadByDue(h: CoreHarness, target: SyncTarget) {
+async function expectReadByDue(h: CoreHarness, target: Probe) {
   const due = stateOf(h, target)?.due
   expect(due, "sync() shows a due").toEqual(expect.any(Number))
   const events: { event: ReadEvent; at: number }[] = []
@@ -199,7 +209,7 @@ describe("sync(): a requirement of each kind main holds, with its promise or con
     write(h, (w) => w.markViews(TASK, { unconfirmedSince: since }))
     // Видимий вигляд читає механізм, що поставив вимогу: самої вимоги мало.
     expect(stateOf(h, viewTarget(h.spec))).toEqual({
-      target: viewTarget(h.spec),
+      target: { ...viewTarget(h.spec), id: expect.any(Number) },
       requirements: [{ kind: "composition-unconfirmed", epoch: since }],
       flights: [],
       queued: [],
@@ -242,7 +252,7 @@ describe("sync(): a requirement of each kind main holds, with its promise or con
     const epoch = h.core.readEpoch()
     // До `endHydration` вимогу не читає ніхто: умова `hydrating`, без обіцянки.
     expect(stateOf(h, viewTarget(from.spec))).toEqual({
-      target: viewTarget(from.spec),
+      target: { ...viewTarget(from.spec), id: expect.any(Number) },
       requirements: [{ kind: "hydration-trust", epoch }],
       flights: [],
       queued: [],
@@ -464,6 +474,47 @@ describe("sync(): every due it shows is read by then", () => {
     await expectReadByDue(h, rowTarget(1))
   })
 
+  it("the key of the receiver that waits behind the read in flight is queued in sync()", async () => {
+    const h = await withSignals(keysView(1, 2))
+    const served = h.fake.edit(TASK, key(1), { title: "v" })
+    h.transport.emit(channel, {
+      id: "1",
+      object: task.id,
+      op: "update",
+      keys: { id: key(1) },
+      row_ver: served + 1,
+    })
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    expect(stateOf(h, rowTarget(1))!.due).toBe(Date.now() + 500)
+    // Читання іншого ключа лишається в польоті: приймач single-flight.
+    h.fake.hold = () => true
+    h.transport.emit(channel, {
+      id: "2",
+      object: task.id,
+      op: "update",
+      keys: { id: key(2) },
+      row_ver: h.fake.edit(TASK, key(2), { title: "w" }),
+    })
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    expect(h.fake.pending.length).toBeGreaterThan(0)
+    // Пауза повтору минула: ключ чекає польоту в черзі партій.
+    await vi.advanceTimersByTimeAsync(500)
+    await settle()
+    expect(stateOf(h, rowTarget(1))).toMatchObject({
+      queued: [{ kind: "keys", cause: { reason: "signal" } }],
+    })
+    // Політ осів — ключ іде читанням, черги в рядка більше нема.
+    h.fake.hold = undefined
+    h.fake.deliverAll()
+    await vi.advanceTimersByTimeAsync(QUIET_MS)
+    await settle()
+    h.fake.deliverAll()
+    await settle()
+    expect(stateOf(h, rowTarget(1))?.queued ?? []).toEqual([])
+  })
+
   it("the min-version of an own write: the interval of its holder view", async () => {
     const h = await loaded()
     write(h, (w) => w.markStale(TASK, [key(1)], 99))
@@ -508,6 +559,42 @@ describe("sync(): every due it shows is read by then", () => {
     watch(h.core.view(keysView(1, 2)))
     await settle()
     await expectReadByDue(h, RIGHTS)
+  })
+})
+
+describe("sync(): the pause before the retry of a discarded load", () => {
+  it("shows the end of the pause as `due` with the cause `retry` although a timer of its object is earlier, and the read starts by it", async () => {
+    // Джитер перемикання епохи 60 мс: таймер об'єкта настає зараз, раніше за паузу.
+    vi.spyOn(Math, "random").mockReturnValue(0.001)
+    const h = await switched()
+    const events: { at: number; site: string; reason: string }[] = []
+    h.inspect.watchReads((e) =>
+      events.push({ at: Date.now(), site: e.site, reason: e.reason })
+    )
+    // Завантажений вигляд перечитується завантаженням, відповідь покинутої
+    // епохи відкидається, і він іде в паузу; таймер його об'єкта вже стоїть.
+    h.handle.refresh()
+    await settle()
+    h.fake.epoch = "a".repeat(64)
+    h.fake.deliverAll()
+    await settle()
+    const objectDue = h.inspect.scheduledDue().get(TASK)!
+    const state = stateOf(h, viewTarget(h.spec))!
+    const pause =
+      DISCARD_PAUSE_MS *
+      2 ** Math.max(0, h.inspect.versionEpochs().discards - 1)
+    expect(state.flights).toEqual([])
+    expect(objectDue).toBeLessThan(Date.now() + pause)
+    expect(state.due).toBe(Date.now() + pause)
+    expect(state.dueCause).toBe("retry")
+    const due = state.due!
+    // Повтор стартує не пізніше кінця паузи.
+    events.length = 0
+    vi.advanceTimersByTime(pause)
+    await settle()
+    const retry = events.filter((e) => e.site === "M8")
+    expect(retry.length).toBeGreaterThan(0)
+    expect(retry.every((e) => e.at <= due)).toBe(true)
   })
 })
 
@@ -723,5 +810,88 @@ describe("sync(): each condition of §5.3 main holds", () => {
     h.core.close("disposed")
     expect(stateOf(h, VERSION)!.refusal).toBe("closed")
     expect(stateOf(h, viewTarget(h.spec))).toBeUndefined()
+  })
+})
+
+describe("sync(): the opaque id of a view target", () => {
+  const idOf = (h: CoreHarness, spec: ViewSpec) => {
+    const target = stateOf(h, viewTarget(spec))!.target
+    if (target.kind !== "view") throw new Error("not a view")
+    return target.id
+  }
+
+  it("is the id of the events of the view's reads, stable across them, distinct for two views", async () => {
+    const h = setup({
+      now: () => Date.now(),
+      limits: { revalidateIntervalMs: INTERVAL },
+    })
+    seed(h.fake, 1, 2)
+    const events: ReadEvent[] = []
+    h.inspect.watchReads((event) => events.push(event))
+    const a = keysView(1)
+    const b = keysView(2)
+    watch(h.core.view(a))
+    watch(h.core.view(b))
+    await settle()
+    // Своє читання кожного виду й системне перечитування: той самий id.
+    await h.core.revalidate(TASK, { visibleOnly: true })
+    await settle()
+    const ids = (kind: string) =>
+      new Set(
+        events.flatMap((e) =>
+          e.target.kind === kind && "id" in e.target ? [e.target.id] : []
+        )
+      )
+    expect(idOf(h, a)).not.toBe(idOf(h, b))
+    expect(ids("view")).toEqual(new Set([idOf(h, a), idOf(h, b)]))
+    const byId = events.filter(
+      (e) => e.target.kind === "view" && e.target.id === idOf(h, a)
+    )
+    expect(new Set(byId.map((e) => e.reason)).size).toBeGreaterThan(1)
+  })
+
+  it("is the id of its view in the events of the pages of a window", async () => {
+    const win: ViewSpec = {
+      kind: "window",
+      object: TASK,
+      orderBy: [{ attribute: "title", direction: "asc" }],
+    }
+    const h = await withSignals(win, { windowPage: 1 })
+    const events: ReadEvent[] = []
+    h.inspect.watchReads((event) => events.push(event))
+    h.core.view(win).loadAfter()
+    await settle()
+    const pages = events.filter((e) => e.target.kind === "page")
+    expect(pages.length).toBeGreaterThan(0)
+    for (const page of pages)
+      expect("id" in page.target && page.target.id).toBe(idOf(h, win))
+  })
+})
+
+describe("sync(): the cause of a load flight", () => {
+  it("is the origin of the call that started it; the queued load keeps its own cause and becomes the flight's", async () => {
+    const h = setup({ now: () => Date.now(), mode: "manual" })
+    seed(h.fake, 1, 2)
+    const spec = keysView(1, 2)
+    const handle = h.core.view(spec)
+    watch(handle)
+    await settle()
+    const load = () =>
+      stateOf(h, viewTarget(spec))!.flights.find((f) => f.kind === "load")
+    expect(load()).toMatchObject({ cause: { reason: "mount" } })
+    // Явне оновлення під час польоту стає в чергу під своєю причиною.
+    handle.refresh()
+    await settle()
+    expect(stateOf(h, viewTarget(spec))!.queued).toMatchObject([
+      { kind: "load", cause: { reason: "user" } },
+    ])
+    expect(load()).toMatchObject({ cause: { reason: "mount" } })
+    h.fake.deliverAll()
+    await settle()
+    // Політ із черги — причини виклику, що її поставив.
+    expect(load()).toMatchObject({ cause: { reason: "user" } })
+    h.fake.deliverAll()
+    await settle()
+    expect(load()).toBeUndefined()
   })
 })

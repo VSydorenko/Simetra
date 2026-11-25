@@ -1,3 +1,4 @@
+import { failureOf, type Attempts, type SettleDetail } from "./attempts"
 import type { Defects } from "./defects"
 import { effectiveEpoch, heldEpoch, pairId } from "./epoch"
 import type { ObjectState } from "./forms"
@@ -53,7 +54,7 @@ import {
   type Subset,
   type SubsetRegistry,
 } from "./subsets"
-import type { ReadCause, ReadWhy } from "./sync/vocabulary"
+import type { ReadCause, ReadWhy, SettleOutcome } from "./sync/vocabulary"
 import type {
   ActiveView,
   GenerationToken,
@@ -103,6 +104,8 @@ export interface WriterContext extends ReaderHost {
   readonly defects: Defects
   /** The monotonic clock in ms (`performance.now()`; a test substitutes it). */
   readonly now: () => number
+  /** Diagnostics of the attempts to read a view (the `watchAttempts` events). */
+  readonly attempts: Attempts
   /**
    * Write leases on rows of the object (§8.4, rule 2): a read issues one at
    * dispatch by its parts (own rows, `include` targets, receiver keys,
@@ -1343,10 +1346,17 @@ export async function revalidateViews(
     targets.map((s) => [s, { gen: s.gen, flight: s.flight }] as const)
   )
   const startedAt = ctx.now()
-  for (const s of targets) {
+  // Номер спроби кожного вигляду: його читання йдуть під ним (`watchAttempts`).
+  const numbers = new Map<Subset, number>()
+  const attemptTarget = (s: Subset) =>
+    ({ kind: "view", object: o.name, id: s.targetId }) as const
+  for (const [s, why] of reads) {
     s.rereads++
     s.rereadEpochs.push(startEpoch)
+    numbers.set(s, ctx.attempts.start("reread", attemptTarget(s), why))
   }
+  // Наслідок осідання кожного вигляду проходу (§5.5).
+  const outcomes = new Map<Subset, readonly [SettleOutcome, SettleDetail?]>()
   const purgesAtStart = new Map(ctx.purges)
   const purgedSince = (name: ObjectName) =>
     (ctx.purges.get(name) ?? 0) !== (purgesAtStart.get(name) ?? 0)
@@ -1356,7 +1366,8 @@ export async function revalidateViews(
     reads.map(([s, why]) =>
       readAgain(ctx, s, startEpoch, token, {
         ...why,
-        target: { kind: "view", object: o.name },
+        target: attemptTarget(s),
+        attempt: numbers.get(s),
         caller: s,
         lease,
       }).then(
@@ -1374,15 +1385,23 @@ export async function revalidateViews(
   const discarded: Subset[] = []
   // Вигляди, чию відповідь пропущено, бо їхнє завантаження осіло раніше.
   const skipped: Subset[] = []
-  settle(lease, () =>
-    session.commit(
+  settle(lease, () => {
+    const ran = session.commit(
       (scope) => {
         try {
           for (const result of results) {
             const { s } = result
-            if (!s.alive || s.purged) continue
+            if (!s.alive) {
+              outcomes.set(s, ["evicted"])
+              continue
+            }
+            if (s.purged) {
+              outcomes.set(s, ["after-purge"])
+              continue
+            }
             const atStart = loadsAtStart.get(s)
             if (atStart?.gen !== s.gen || atStart.flight !== s.flight) {
+              outcomes.set(s, ["evicted"])
               skipped.push(s)
               continue
             }
@@ -1394,13 +1413,18 @@ export async function revalidateViews(
               purgedSince(o.name) ||
               s.form.include.some((step) => purgedSince(step.target))
             ) {
+              outcomes.set(s, ["after-purge"])
               again.set(s, { reason: "retry", site: "R16" })
               continue
             }
             s.dirty = true
             if ("error" in result) {
               // Закритий обмежувач — сесію закрито: писати нікуди.
-              if (result.error instanceof ReadLimiterClosed) continue
+              if (result.error instanceof ReadLimiterClosed) {
+                outcomes.set(s, ["closed"])
+                continue
+              }
+              outcomes.set(s, ["failed", failureOf(result.error)])
               s.failures++
               s.failedAt = startedAt
               s.status = "error"
@@ -1409,6 +1433,7 @@ export async function revalidateViews(
             }
             try {
               if (!result.apply(scope)) {
+                outcomes.set(s, ["discarded-by-epoch"])
                 // Відкинута відповідь: перечитування з паузою, а після
                 // межі відкинутих поспіль — `command.unavailable`.
                 if (session.versions.unavailable()) {
@@ -1418,9 +1443,11 @@ export async function revalidateViews(
                 continue
               }
               if (pageDropped.delete(s)) {
+                outcomes.set(s, ["after-purge"])
                 again.set(s, { reason: "retry", site: "R17" })
                 continue
               }
+              outcomes.set(s, ["applied"])
               s.refreshedAt = startedAt
               s.okReadEpoch = startEpoch
               // Успішне системне читання, що стартувало з епохи вимоги,
@@ -1443,6 +1470,7 @@ export async function revalidateViews(
               )
                 again.set(s, { reason: "retry", site: "R18" })
             } catch (error) {
+              outcomes.set(s, ["failed", failureOf(error)])
               ctx.log({ kind: "listener-failed", error })
               s.status = "error"
               s.error = errorOf(error)
@@ -1455,7 +1483,15 @@ export async function revalidateViews(
       token,
       `revalidate ${o.name}`
     )
-  )
+    // `commit` не пройшов — токен сесії недійсний: усе закрито.
+    for (const s of targets)
+      ctx.attempts.settle(
+        numbers.get(s)!,
+        "reread",
+        attemptTarget(s),
+        ...(ran ? (outcomes.get(s) ?? ["closed"]) : (["closed"] as const))
+      )
+  })
   // Прохід осів: хвіст явного `revalidate` може стартувати.
   for (const s of targets) {
     if (s.rereadEpochs.length === 0) {

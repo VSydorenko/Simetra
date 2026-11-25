@@ -232,12 +232,14 @@ const readEvent = (origin: ReadIntent, request: number): ReadEvent =>
         requirement: origin.requirement,
         target: origin.target,
         site: origin.site,
+        ...(origin.attempt === undefined ? {} : { attempt: origin.attempt }),
         request,
       }
     : {
         reason: origin.reason,
         target: origin.target,
         site: origin.site,
+        ...(origin.attempt === undefined ? {} : { attempt: origin.attempt }),
         request,
       }
 

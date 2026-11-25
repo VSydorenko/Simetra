@@ -1,3 +1,4 @@
+import { createAttempts, type AttemptEvent } from "./attempts"
 import {
   FILTER_IN_MAX,
   READ_LIMIT_MAX,
@@ -40,6 +41,7 @@ import {
 } from "./source"
 import type {
   AdmissionCondition,
+  DueCause,
   ReadCause,
   ReadIntent,
   ReadWhy,
@@ -283,7 +285,7 @@ export type { DefectFlag } from "./defects"
 
 /*
  * Проєкція стану свіжості `main` для діагностики (спека ядра синхронізації
- * §5.13 «`sync()`», план SK-0 Р5). Тимчасова: SK-3 підміняє джерело станом
+ * §5.13 «`sync()`», план SK-0 Р-SK0-5). Тимчасова: SK-3 підміняє джерело станом
  * цілі, форму лишає. Поле, якого `main` не має, відсутнє в типі, а не
  * вигадане: зокрема причини польоту в польоті `main` не зберігає.
  */
@@ -294,6 +296,8 @@ export type SyncTarget =
       readonly kind: "view"
       readonly object: ObjectName
       readonly spec: ViewSpec
+      /** Opaque id of the target, the same as in the `watchReads` events of its reads. */
+      readonly id: number
     }
   | { readonly kind: "row"; readonly object: ObjectName; readonly key: Key }
   | { readonly kind: "service"; readonly service: ServicePart }
@@ -317,6 +321,11 @@ export interface SyncFlight {
   readonly kind: SyncFlightKind
   /** The session epoch of its start, where `main` holds it. */
   readonly epoch?: number
+  /**
+   * The cause of the call that started the flight (its origin, plan Р-SK0-1);
+   * kept for the load of a view. A system re-read does not keep one on `main`.
+   */
+  readonly cause?: ReadCause
 }
 
 /** A read queued after the one in flight. */
@@ -351,6 +360,15 @@ export type SyncState = {
   readonly proof?: number
   /** The earliest wake-up of a timer of `main` that reads the target. */
   readonly due?: number
+  /**
+   * Why `due` is not an ordinary deadline: `retry` — `due` IS the end of the
+   * pause before the retry of a discarded load (the flight stays set
+   * meanwhile), `retryAt` of the view, the one place of `main` that knows it.
+   * Timers of the object read a view in flight only as a tail after the
+   * flight, so they never stand in this `due`. Absent for an interval or a
+   * failure pause.
+   */
+  readonly dueCause?: DueCause
 } & (
   | { readonly deferral?: SyncDeferral; readonly refusal?: never }
   | { readonly refusal: SyncRefusal; readonly deferral?: never }
@@ -421,6 +439,13 @@ export interface CoreInspection {
    * unsubscribes. Keys appear only here, never in `log`.
    */
   watchReads(listener: (event: ReadEvent) => void): () => void
+  /**
+   * Subscribes to the attempts to read a view: "started" (with the origin) and
+   * "settled" with one outcome of the closed list of spec §5.5, both with the
+   * opaque target id of `sync()`. Any number of listeners; the result
+   * unsubscribes.
+   */
+  watchAttempts(listener: (event: AttemptEvent) => void): () => void
   /**
    * The freshness state of every target `main` keeps it for: the held views,
    * the rows with a freshness mark or in a tail re-read, and the service
@@ -589,6 +614,7 @@ export function createCore(options: {
   let remarkListener: ((object: ObjectName, key: Key) => void) | undefined
   let rightsPassListener: (() => void) | undefined
   const readListeners = new Set<(event: ReadEvent) => void>()
+  const attemptLog = createAttempts()
   let signalReadListener:
     ((object: ObjectName, read: SignalRead) => void) | undefined
   // Приймач сигналів: створюється після `writerContext`, а реєстр і потік
@@ -1277,6 +1303,7 @@ export function createCore(options: {
     closedSnapshot: () => closed,
     defects,
     now,
+    attempts: attemptLog.attempts,
     becameVisible: (s) => becameVisible(s),
     readRequirement: (s) => readRequirement(s),
     touchSchedule: () => scheduler.request(),
@@ -1534,6 +1561,8 @@ export function createCore(options: {
   let lastWaveAt: number | undefined
   function joinWave(object: ObjectName) {
     if (!session.token().valid || staleObjects.has(object)) return
+    // Мутація самотесту: хвилі немає — ні читання, ні вимоги, ні строку.
+    if (defects.has("rejoin-wave-no-read")) return
     if (wave === undefined) {
       const at = Math.floor(Math.random() * REJOIN_JITTER_MS) + now()
       wave = {
@@ -1885,6 +1914,7 @@ export function createCore(options: {
     onPurge: (object, target) => receiver?.purged(object, target),
     defects,
     now,
+    attempts: attemptLog.attempts,
     hiddenKeys,
     pendingWrites: (object) => pendingWrites.get(object) ?? 0,
     schedule,
@@ -2313,11 +2343,16 @@ export function createCore(options: {
     })
   const withOptional = <T extends object>(
     base: T,
-    fields: { proof?: number | undefined; due?: number | undefined }
+    fields: {
+      proof?: number | undefined
+      due?: number | undefined
+      dueCause?: DueCause | undefined
+    }
   ) => ({
     ...base,
     ...(fields.proof === undefined ? {} : { proof: fields.proof }),
     ...(fields.due === undefined ? {} : { due: fields.due }),
+    ...(fields.dueCause === undefined ? {} : { dueCause: fields.dueCause }),
   })
 
   // Таймери `main` читають об'єкт лише на видимій вкладці, поки він сумісний
@@ -2403,12 +2438,14 @@ export function createCore(options: {
       if (registry.behindHeader(s))
         requirements.push({ kind: "target-behind-header" })
       const flights: SyncFlight[] = []
-      if (s.flight !== undefined)
-        flights.push(
-          s.flightEpoch === undefined
-            ? { kind: "load" }
-            : { kind: "load", epoch: s.flightEpoch }
-        )
+      // У паузі повтору відкинутого завантаження читання немає: це строк, а не
+      // політ.
+      if (s.flight !== undefined && s.retryAt === undefined)
+        flights.push({
+          kind: "load",
+          ...(s.flightEpoch === undefined ? {} : { epoch: s.flightEpoch }),
+          ...(s.flightCause === undefined ? {} : { cause: s.flightCause }),
+        })
       for (const epoch of s.rereadEpochs)
         flights.push({ kind: "reread", epoch })
       for (let n = 0; n < s.paging.size; n++) flights.push({ kind: "page" })
@@ -2447,18 +2484,37 @@ export function createCore(options: {
       record(
         withOptional(
           {
-            target: { kind: "view", object, spec: s.form.spec },
+            target: {
+              kind: "view",
+              object,
+              spec: s.form.spec,
+              id: s.targetId,
+            },
             requirements,
             flights,
             queued,
           },
-          { proof: s.okReadEpoch, due: timerDue(s) }
+          {
+            proof: s.okReadEpoch,
+            // У паузі повтору вигляд у польоті: таймери об'єкта читають його лише
+            // хвостом після польоту, тож його строк — кінець паузи.
+            due: s.retryAt ?? timerDue(s),
+            dueCause:
+              s.retryAt !== undefined && !defects.has("sync-pause-no-cause")
+                ? "retry"
+                : undefined,
+          }
         ),
         refusalOf(object),
         () => deferralOf(requirements.map(conditionOf))
       )
     }
 
+    const waitingKeys = new Set(
+      (receiver?.waitingKeys() ?? []).map(
+        (w) => `${w.object}\u0000${w.key.toLowerCase()}`
+      )
+    )
     const retries = new Map(
       (receiver?.minVersionRetries() ?? []).map((r) => [
         `${r.object}\u0000${r.key.toLowerCase()}`,
@@ -2499,6 +2555,8 @@ export function createCore(options: {
           r.kind === "version-epoch-switched" ||
           (r.kind === "min-version" && retry !== undefined)
         const flights: SyncFlight[] = flying.has(key) ? [{ kind: "keys" }] : []
+        // Одне джерело черги ключа: хвіст writer і партії приймача, що чекають
+        // польоту (single-flight), — разом, одним записом.
         const queued: SyncQueued[] =
           tail?.pending.has(key) === true
             ? [
@@ -2510,7 +2568,9 @@ export function createCore(options: {
                   },
                 },
               ]
-            : []
+            : waitingKeys.has(`${o.name}\u0000${key.toLowerCase()}`)
+              ? [{ kind: "keys", cause: { reason: "signal" } }]
+              : []
         record(
           withOptional(
             {
@@ -2614,6 +2674,9 @@ export function createCore(options: {
       return () => {
         readListeners.delete(listener)
       }
+    },
+    watchAttempts(listener) {
+      return attemptLog.watch(listener)
     },
     sync: syncState,
     mutations: () => overlay.entries(),

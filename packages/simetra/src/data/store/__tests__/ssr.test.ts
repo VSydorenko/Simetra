@@ -35,6 +35,7 @@ import {
   taskValues,
   watch,
 } from "./core-support"
+import { collectCore } from "./oracles"
 
 /*
  * SSR-знімок ядра (спека П4-B §6.6). Знімок — довірча
@@ -129,6 +130,7 @@ function coreOver(
     limits,
     ...(rightsSnapshot ? { rightsSnapshot: true } : {}),
   })
+  collectCore(core, fake)
   return { core, inspect: inspectCore(core), versions }
 }
 

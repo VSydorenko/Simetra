@@ -137,6 +137,11 @@ export interface Receiver {
     readonly at: number
     readonly attempt: number
   }[]
+  /**
+   * Test-only (`inspectCore().sync()`): the keys of closed batches that wait in
+   * the single-flight queue behind the read in flight. Reads only.
+   */
+  waitingKeys(): readonly { readonly object: ObjectName; readonly key: Key }[]
   /** Drops every subscription; the receiver sees nothing afterwards. */
   stop(): void
 }
@@ -1035,6 +1040,12 @@ export function createReceiver(ctx: ReceiverContext): Receiver {
 
   return {
     touch,
+    waitingKeys: () =>
+      waiting === undefined
+        ? []
+        : [...waiting].flatMap(([object, batch]) =>
+            [...batch.keys.keys()].map((key) => ({ object, key }))
+          ),
     minVersionRetries: () =>
       [...retries.values()].map(({ object, key, at, attempt }) => ({
         object,
