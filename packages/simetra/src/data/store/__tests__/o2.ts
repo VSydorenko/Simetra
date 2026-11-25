@@ -36,6 +36,16 @@ export interface O2Input {
   readonly rowAlive?: (object: string, key: string) => boolean
   /** Скільки кроків `suspend` зробила модель (лічильник, не мить). */
   readonly suspends?: number
+  /**
+   * Знімки нехолостих кроків: рядки, чий ключ стоїть у черзі приймача за
+   * польотом, що тримає single-flight (з `sync()` на кроці, не вгадані).
+   */
+  readonly waitingAt?: readonly {
+    readonly at: number
+    readonly rows: readonly string[]
+  }[]
+  /** Мить моделі останнього кроку `suspend`. */
+  readonly hiddenSince?: number
   /** Вкладка прихована на мить кроку. */
   readonly tabHidden?: boolean
   /** Мить, коли модель востаннє показала вкладку (`resume`). */
@@ -664,6 +674,54 @@ export function createO2(): O2 {
       // переходить лише у виняток таблиці З МЕЖЕЮ, і межа лічиться від строку.
       // Названий стан без межі пропущеного строку не прощає; без винятку вимогу
       // без строку судить правило спокою нижче.
+      // Строк рядка настав, а його ключ на кроці, де час перейшов строк, стояв у
+      // черзі приймача за польотом (single-flight): обов'язок стає обіцянкою
+      // «черга» з межею — політ, що тримав чергу. Після його осідання (цей
+      // стан спокою) читання ключа мусить стартувати (інакше червоний) або діє
+      // умова прихованої вкладки, якщо `suspend` був до осідання.
+      const queuedKey =
+        state.target.kind === "row"
+          ? `${state.target.object}\u0000${state.target.key}`
+          : undefined
+      // Запис ПЕРШОГО нехолостого кроку не раніше строку: ключ, поставлений у
+      // чергу пізніше, не береться.
+      const atDeadline = input.waitingAt?.find((w) => w.at >= promise.due)
+      // Мить осідання польоту — останній крок, де ключ ще стояв у черзі.
+      const settleAt =
+        queuedKey === undefined
+          ? undefined
+          : input.waitingAt?.filter((w) => w.rows.includes(queuedKey)).at(-1)
+              ?.at
+      if (
+        promise.kind === "due" &&
+        state.due === undefined &&
+        now >= promise.due &&
+        queuedKey !== undefined &&
+        atDeadline?.rows.includes(queuedKey) === true
+      ) {
+        obligations.delete(key)
+        if (
+          input.tabHidden === true &&
+          input.suspends !== undefined &&
+          promise.suspends !== undefined &&
+          input.suspends > promise.suspends &&
+          // `suspend` мусив бути не пізніше осідання польоту.
+          input.hiddenSince !== undefined &&
+          settleAt !== undefined &&
+          input.hiddenSince <= settleAt
+        )
+          followUps.set(key, {
+            kind: "shown",
+            sinceEvent: events.length,
+            sinceTime: now,
+            holderSince: undefined,
+          })
+        else
+          problems.push(
+            `${describe(state.target)}: the key queued behind the flight did not start after the flight settled`
+          )
+        continue
+      }
       // Прихована вкладка — іменована умова з кінцем (показ) і межею після нього:
       // лише коли між записом обов'язку й оцінкою був крок `suspend`, а вкладка
       // на оцінці прихована. Без `suspend` пропущений строк і далі червоний.
@@ -674,7 +732,11 @@ export function createO2(): O2 {
         input.tabHidden === true &&
         input.suspends !== undefined &&
         promise.suspends !== undefined &&
-        input.suspends > promise.suspends
+        input.suspends > promise.suspends &&
+        // `suspend` мусив бути до строку: пропущений на видимій вкладці строк
+        // прихована вкладка потім не прощає.
+        input.hiddenSince !== undefined &&
+        input.hiddenSince <= promise.due
       ) {
         obligations.delete(key)
         followUps.set(key, {
@@ -685,8 +747,11 @@ export function createO2(): O2 {
         })
         continue
       }
+      // Виняток відлічує межу від строку лише тоді, коли строк уже настав.
       const heldByException =
-        state.due === undefined && excusedWithBound(state, input, promise.due)
+        state.due === undefined &&
+        now >= promise.due &&
+        excusedWithBound(state, input, promise.due)
       if (
         promise.kind === "due" &&
         state.due === undefined &&
