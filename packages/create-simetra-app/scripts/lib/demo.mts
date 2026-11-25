@@ -6,7 +6,7 @@
 import { randomBytes } from "node:crypto"
 import net from "node:net"
 import {
-  POSTGRES_LOCK_PATH,
+  postgresLockPath,
   loginSecrets,
   stackUrl,
   withStackLock,
@@ -126,7 +126,7 @@ const comment = (mark: string): string =>
 // Замок стека береться одразу або ніколи: демо — команда, а не прогін, що чекає
 async function underLock(fn: () => Promise<void>): Promise<void> {
   try {
-    await withStackLock(POSTGRES_LOCK_PATH, fn)
+    await withStackLock(postgresLockPath(), fn)
   } catch (error) {
     if (
       error instanceof Error &&
