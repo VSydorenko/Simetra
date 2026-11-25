@@ -38,18 +38,22 @@ export interface FlightExtras {
   readonly lease?: WriteLease
 }
 
-// Запис — копія полів у мить видачі: політ, зібраний не шлюзом, у реєстрі
-// відсутній і подій не дає.
-const records = new WeakMap<Flight, ReadRecord>()
+// Один реєстр: запис — копія полів у мить видачі плюс шлюз, що видав політ
+// (`undefined` — тестовий вхід). Політ, зібраний не шлюзом, у реєстрі відсутній
+// і подій не дає; політ іншого шлюзу чи тестового входу — не «свій».
+const registry = new WeakMap<
+  Flight,
+  { readonly record: ReadRecord; readonly gate: Gate | undefined }
+>()
 
 /** Запис шлюзу про політ; `undefined` — політ видав не шлюз. */
 export const recordOf = (flight: Flight): ReadRecord | undefined =>
-  records.get(flight)
+  registry.get(flight)?.record
 
 /**
  * Допуск читання. SK-1 (частина А) допускає все; таблицю умов додає задача 3.
- * `issued` — реєстр шлюзу цієї сесії: політ, якого він не видавав (літерал,
- * політ іншої сесії чи тестового входу), читання ядра відмовляє (Р-SK1-2).
+ * `issued` — політ видав цей шлюз: літерал, політ іншої сесії чи тестового
+ * входу читання ядра відмовляє (Р-SK1-2).
  */
 export interface Gate {
   admit(
@@ -62,6 +66,7 @@ export interface Gate {
 }
 
 function issue(
+  gate: Gate | undefined,
   cause: ReadCause,
   target: ReadTarget,
   site: SiteCode | TestSite,
@@ -79,20 +84,17 @@ function issue(
     ...(caller === undefined ? {} : { caller }),
     ...(lease === undefined ? {} : { lease }),
   } as Flight
-  records.set(flight, record)
+  registry.set(flight, { record, gate })
   return flight
 }
 
 export function createGate(): Gate {
-  const own = new WeakSet<Flight>()
-  return {
-    admit(cause, target, site, extras = {}) {
-      const flight = issue(cause, target, site, extras)
-      own.add(flight)
-      return flight
-    },
-    issued: (flight) => own.has(flight),
+  const gate: Gate = {
+    admit: (cause, target, site, extras = {}) =>
+      issue(gate, cause, target, site, extras),
+    issued: (flight) => registry.get(flight)?.gate === gate,
   }
+  return gate
 }
 
 /**
@@ -105,7 +107,7 @@ export const issueTestFlight = (
   target: ReadTarget,
   site: SiteCode | TestSite,
   extras: FlightExtras = {}
-): Flight => issue(cause, target, site, extras)
+): Flight => issue(undefined, cause, target, site, extras)
 
 /**
  * Політ без запису шлюзу: літерал з правдивими причиною, ціллю й кодом.

@@ -219,6 +219,12 @@ export interface ReadOptions {
    * request, before the request goes out (the `watchReads` event).
    */
   readonly onRead?: (event: ReadEvent) => void
+  /**
+   * Whether a flight belongs to the gate of the session this source serves; an
+   * event is made only for such a flight. Without it (a source called
+   * directly by a test) every flight with a registry record gives an event.
+   */
+  readonly ownFlight?: (flight: Flight) => boolean
 }
 
 /**
@@ -528,7 +534,7 @@ export function createCoreSource(
     queries: readonly CorePart[],
     wires: readonly WireReadPart[],
     origins: readonly (Flight | undefined)[],
-    { onRightsSent, onRead }: ReadOptions
+    { onRightsSent, onRead, ownFlight }: ReadOptions
   ): Promise<CoreReadItem[]> => {
     let answer: WireReadParts | undefined
     // Частини, що справді пішли: добираються на старті задачі, не при постановці.
@@ -544,7 +550,9 @@ export function createCoreSource(
         for (const i of live) {
           const flight = origins[i]
           const event =
-            flight === undefined ? undefined : readEvent(flight, request)
+            flight === undefined || ownFlight?.(flight) === false
+              ? undefined
+              : readEvent(flight, request)
           if (event !== undefined) onRead?.(event)
         }
         // Строк знімка — від справжньої відправки, а не від черги слотів:

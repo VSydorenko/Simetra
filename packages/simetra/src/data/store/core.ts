@@ -38,7 +38,12 @@ import {
   type ReadEvent,
   type StoreSource,
 } from "./source"
-import { createGate, forgeFlight, type Flight } from "./sync/flight"
+import {
+  createGate,
+  forgeFlight,
+  issueTestFlight,
+  type Flight,
+} from "./sync/flight"
 import type {
   AdmissionCondition,
   DueCause,
@@ -638,7 +643,9 @@ export function createCore(options: {
   // пише. Відмова — той самий `stale-client`, що дав би сервер.
   // Збирач (§6.7) стоїть під цим фільтром: через нього йдуть усі читання, а
   // значення `version` відповіді застосовується до видачі її частин даних.
+  const gate = createGate()
   const batcher = createBatcher(options.source, {
+    ownFlight: gate.issued,
     // Сон сесії йде в кожне читання джерела: власного таймера джерело не має.
     sleep: session.sleep,
     // Строк знімка (Р2) — від справжньої відправки частини: пакет може
@@ -667,7 +674,6 @@ export function createCore(options: {
   // читання в мить відправки — за частинами (план читання); знімає лише
   // `settle` польоту, що записав відповідь одним `commit` чи відкинув її.
   const pendingWrites = new Map<ObjectName, number>()
-  const gate = createGate()
   const source: StoreSource = {
     close: () => batcher.close(),
     refuse: (object) => batcher.refuse?.(object),
@@ -699,7 +705,11 @@ export function createCore(options: {
     read: (parts, flight) => {
       // Політ, якого не видав шлюз цієї сесії, на дріт не йде (Р-SK1-2);
       // мутація самотесту вимикає перевірку.
-      if (!gate.issued(flight) && !defects.has("read-bypasses-gate"))
+      if (
+        !gate.issued(flight) &&
+        !defects.has("read-bypasses-gate") &&
+        !defects.has("read-bypasses-gate-testing")
+      )
         return Promise.reject(new Error("a read without a flight of the gate"))
       const plan = writesOf(parts)
       if (plan.size > 0) {
@@ -1370,10 +1380,13 @@ export function createCore(options: {
     const tailTarget = { kind: "keys", object: o.name } as const
     const read = tracked(
       source,
-      // Мутація самотесту: політ підроблено, шлюз його не видавав.
+      // Мутації самотесту: політ підроблено чи взято з тестового входу, шлюз
+      // його не видавав.
       defects.has("read-bypasses-gate")
         ? forgeFlight(tailCause, tailTarget, "K3", { lease })
-        : source.admit(tailCause, tailTarget, "K3", { lease })
+        : defects.has("read-bypasses-gate-testing")
+          ? issueTestFlight(tailCause, tailTarget, "K3", { lease })
+          : source.admit(tailCause, tailTarget, "K3", { lease })
     )
     readKeys(read.source, o.entry, keys, {
       keysPerRequest: limits.keysPerRequest,

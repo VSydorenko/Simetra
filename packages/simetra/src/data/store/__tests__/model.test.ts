@@ -6006,6 +6006,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "sync-pause-no-cause",
   "discard-no-retry",
   "read-bypasses-gate",
+  "read-bypasses-gate-testing",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -6070,6 +6071,10 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // нього немає, тож частин запиту журналу більше за події (запит без жодної
   // події, чи пакет з іншими частинами) — лише О1.
   "read-bypasses-gate": /^end: O1: request \d+: \d+ parts, (no|\d+) events/,
+  // Той самий дефект з польотом тестового входу: запис у реєстрі є, шлюзу сесії
+  // немає — події немає, лише О1.
+  "read-bypasses-gate-testing":
+    /^end: O1: request \d+: \d+ parts, (no|\d+) events/,
   // Знімок прав (B5b-2): кожен дефект — своїм шляхом. Без бар'єра читання
   // пари, що стартувало до знімка, пише її рядок уже після нього (`race`).
   "rights-no-barrier": /written past the rights barrier/,

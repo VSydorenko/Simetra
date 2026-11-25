@@ -72,6 +72,7 @@ export function createBatcher(
     sleep: ReadOptions["sleep"]
     onRightsSent?: ReadOptions["onRightsSent"]
     onRead?: ReadOptions["onRead"]
+    ownFlight?: ReadOptions["ownFlight"]
     onVersion?: (version: VersionValue) => void
     onRights?: (item: CoreReadItem) => void
   }
@@ -103,6 +104,7 @@ export function createBatcher(
               sleep: options.sleep,
               onRightsSent: options.onRightsSent,
               onRead: options.onRead,
+              ownFlight: options.ownFlight,
               // Походження за слотом відправлених частин: злиття викликів і
               // відмова без запиту зсувають слоти, походження йде з ними.
               origins: sent.map(({ at, slot }) => calls[at]!.origins[slot]),

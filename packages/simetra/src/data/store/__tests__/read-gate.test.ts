@@ -31,7 +31,7 @@ describe("read of the core takes only a flight of its own gate", () => {
     const lease = h.source.lease()
     await h.source.read(parts, h.source.admit(cause, target, "R7", { lease }))
     expect(h.fake.log).toHaveLength(1)
-    // `release` без `issue` — тест не держить оренду відкритою.
+    // Читання видало оренду на об'єкти частин; знімаємо її, як осідання польоту.
     lease.release()
   })
 
@@ -47,6 +47,8 @@ describe("read of the core takes only a flight of its own gate", () => {
     await expect(h.source.read(parts, forged)).rejects.toThrow(GATE)
     await settle()
     expect(h.fake.log).toHaveLength(0)
+    // Відмова йде до `lease.issue`: оренди на об'єкти частин ніхто не видав.
+    expect(coreInternals(h.core).pendingWrites(TASK)).toBe(0)
   })
 
   it("rejects a flight of another session", async () => {
@@ -58,6 +60,7 @@ describe("read of the core takes only a flight of its own gate", () => {
     await settle()
     expect(h.fake.log).toHaveLength(0)
     expect(other.fake.log).toHaveLength(0)
+    expect(coreInternals(h.core).pendingWrites(TASK)).toBe(0)
   })
 
   it("rejects a flight of the test entry", async () => {
@@ -67,5 +70,7 @@ describe("read of the core takes only a flight of its own gate", () => {
     await expect(h.source.read(parts, testing)).rejects.toThrow(GATE)
     await settle()
     expect(h.fake.log).toHaveLength(0)
+    // Відмова йде до `lease.issue`: оренди на об'єкти частин ніхто не видав.
+    expect(coreInternals(h.core).pendingWrites(TASK)).toBe(0)
   })
 })
