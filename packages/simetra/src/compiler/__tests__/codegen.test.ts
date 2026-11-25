@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import { ESLint } from "eslint"
@@ -94,10 +95,17 @@ const LIB_SOURCES = new Map<string, ts.SourceFile>()
  * пам'яті: суворі прапорці споживача (isolatedModules, verbatimModuleSyntax),
  * реальний lib. Заглушка споживача живе лише тут.
  */
-function diagnosticsOf(code: string, consumer = ANY_CONSUMER): string[] {
+function diagnosticsOf(
+  code: string,
+  consumer = ANY_CONSUMER,
+  extra: Record<string, string> = {}
+): string[] {
   const files = new Map([
     ["/virtual/entities.d.ts", code],
     ["/virtual/consumer.ts", consumer],
+    ...Object.entries(extra).map(
+      ([name, text]) => [`/virtual/${name}`, text] as [string, string]
+    ),
   ])
   const options: ts.CompilerOptions = {
     strict: true,
@@ -1104,6 +1112,46 @@ describe("emitEntityTypes", { timeout: 30_000 }, () => {
           "// @ts-expect-error undefined is not Json",
           "export const bad: Catalogs.Doc['payload'] = undefined",
         ].join("\n")
+      )
+    ).toEqual([])
+  })
+
+  // Згенерований файл з `simetra/model` не імпортує: тип T0 — справжнє
+  // джерело `rich-text.ts` поруч у програмі, і обидва типи присвоюються один
+  // одному. Довідник `RichTextDocument` перевіряє псевдонім.
+  it("RichText is the embedded RichTextDocument, the same as the T0 type", async () => {
+    const code = await emit({
+      "project.meta.json": project(),
+      "catalogs/RichTextDocument/RichTextDocument.meta.json": catalog(
+        "RichTextDocument",
+        { physicalName: "rich_text_document" }
+      ),
+      "catalogs/Doc/Doc.meta.json": catalog("Doc", {
+        attributes: [attribute("body", { type: "RichText" })],
+      }),
+    })
+    expect(block(code, "Catalogs.Doc")).toContain(
+      "body: RichTextDocument_ | null"
+    )
+    const model = readFileSync(
+      join(PACKAGE_ROOT, "src/model/runtime/rich-text.ts"),
+      "utf8"
+    )
+    expect(
+      diagnosticsOf(
+        code,
+        [
+          'import type { Catalogs, RichTextDocument as Generated } from "./entities"',
+          'import type { RichTextDocument as Model } from "./model"',
+          "declare const generated: Generated",
+          "declare const model: Model",
+          "export const toModel: Model = generated",
+          "export const toGenerated: Generated = model",
+          "export const field: Catalogs.Doc['body'] = model",
+          "// @ts-expect-error a number is not a document",
+          "export const bad: Catalogs.Doc['body'] = 42",
+        ].join("\n"),
+        { "model.ts": model }
       )
     ).toEqual([])
   })
