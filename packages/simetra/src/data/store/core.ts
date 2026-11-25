@@ -361,11 +361,10 @@ export type SyncState = {
   /** The earliest wake-up of a timer of `main` that reads the target. */
   readonly due?: number
   /**
-   * Why `due` is not an ordinary deadline: `retry` — `due` IS the end of the
-   * pause before the retry of a discarded load (the flight stays set
-   * meanwhile). Absent for an interval or a failure pause, and when an earlier
-   * timer is the `due`. The value is `retryAt` of the view, the one place of
-   * `main` that knows the pause.
+   * Why `due` is not an ordinary deadline: `retry` — the end of the pause
+   * before the retry of a discarded load (the flight stays set meanwhile).
+   * Absent for an interval or a failure pause. The value is `retryAt` of the
+   * view, the one place of `main` that knows the pause.
    */
   readonly dueCause?: DueCause
 } & (
@@ -2480,7 +2479,6 @@ export function createCore(options: {
         if (promised([r], flights, queued)) return "promised"
         return inRetry ? "paused" : undefined
       }
-      const dueAt = earliest(timerDue(s), s.retryAt)
       record(
         withOptional(
           {
@@ -2496,11 +2494,9 @@ export function createCore(options: {
           },
           {
             proof: s.okReadEpoch,
-            due: dueAt,
+            due: earliest(timerDue(s), s.retryAt),
             dueCause:
-              s.retryAt !== undefined &&
-              dueAt === s.retryAt &&
-              !defects.has("sync-pause-no-cause")
+              s.retryAt !== undefined && !defects.has("sync-pause-no-cause")
                 ? "retry"
                 : undefined,
           }
