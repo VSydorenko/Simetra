@@ -6067,8 +6067,9 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // прогоні модель читає вигляд іншим шляхом (такт), і борг О2 закривається ним.
   "discard-no-retry": /^o3: view \d+ past its bound/,
   // Читання повз шлюз (SK-1, Р-SK1-11): політ шляху K3 підроблено, події в
-  // нього немає, тож запит журналу лишається без події — лише О1.
-  "read-bypasses-gate": /^end: O1: request \d+: \d+ parts, no events/,
+  // нього немає, тож частин запиту журналу більше за події (запит без жодної
+  // події, чи пакет з іншими частинами) — лише О1.
+  "read-bypasses-gate": /^end: O1: request \d+: \d+ parts, (no|\d+) events/,
   // Знімок прав (B5b-2): кожен дефект — своїм шляхом. Без бар'єра читання
   // пари, що стартувало до знімка, пише її рядок уже після нього (`race`).
   "rights-no-barrier": /written past the rights barrier/,
