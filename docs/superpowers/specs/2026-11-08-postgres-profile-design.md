@@ -51,7 +51,7 @@
 | ПГ10 | **Порт сервера сигналів вузький — лише видача токенів** (з'єднання, канал) і JWKS; публікації йдуть через outbox, присутності немає (§7) | [ADR-0088](../../adr/0088-centrifugo-namespaces-tokens-port.md) |
 | ПГ11 | **Порт сховища файлів** `FileStore` (put, get, delete) зі структурним адаптером S3; файл — рядок об'єкта з властивістю `storage`; ключ виводиться з id об'єкта й рядка (`o/<об'єкт>/<id>`) і в рядку не зберігається; розмір і тип пише лише платформа — тригер вкладення із запису `simetra.file_attach`, який кличе лише роль `simetra_files` (§3.1, §8); облік обсягу — тригер у транзакції запису рядка (§8) | [ADR-0060](../../adr/0060-files-row-plus-store-port.md) |
 | ПГ12 | **Перехідного PostgREST у `postgres` немає.** Джерело читання — лише Server Function (ПП2) (§9) | [ADR-0058](../../adr/0058-read-source-by-profile.md) |
-| ПГ13 | **Стек розробки й CI `postgres` — docker compose:** Postgres 17 (образ репо з pgTAP і `plpgsql_check`), Garage; Centrifugo у стеку немає (§10.1); команди `pnpm db:pg:*`; DB-тести типово йдуть на ньому; стек `supabase` — регресійний (§10) | [ADR-0063](../../adr/0063-tests-without-provider-cli.md) |
+| ПГ13 | **Стек розробки й CI `postgres` — docker compose:** Postgres 17 (образ репо з pgTAP і `plpgsql_check`), Garage; Centrifugo у стеку немає (§10.1); команди `pnpm db:pg:*`; DB-тести типово йдуть на ньому; стек `supabase` заморожено — лише ручний прогін (§10, ADR-0117) | [ADR-0063](../../adr/0063-tests-without-provider-cli.md) |
 
 ## 3. Ролі
 
@@ -1302,7 +1302,9 @@ FileStore = {
     публікація `supabase_realtime` і схеми провайдера в кейсах корпусу рушія
     (решта корпусу конвертується на дані профілю);
   - тест, що вживає ролі чи схеми Supabase поза цим переліком, переводиться
-    на дані профілю, а не перейменовується.
+    на дані профілю, а не перейменовується;
+  - профіль `supabase` заморожено (ADR-0117): нових тестів у `db-supabase`
+    не додають, блоки його не запускають і не вимагають зеленим.
 
 ### 10.6 CI
 
@@ -1310,7 +1312,7 @@ FileStore = {
 | --- | --- | --- | --- |
 | `checks` | — | без змін | 1 |
 | `db` | `postgres` | базовий стан `postgres`, DB `simetra`, DB designer | за наявною схемою шардів `.github/workflows/ci.yml` |
-| `db-supabase` | `supabase` | `supabase test db`, `db-supabase` обох пакетів | `provider + simetra`, `designer 1/2`, `designer 2/2` |
+| `db-supabase` | `supabase` | `supabase test db`, `db-supabase` обох пакетів; лише ручний запуск (`workflow_dispatch`), не на PR і не на push у `main` (ADR-0117) | `provider + simetra`, `designer 1/2`, `designer 2/2` |
 | `packaging` | — | без змін | 1 |
 
 - Стек `postgres` у CI стартує тим самим `pnpm db:pg:start`; образ Postgres

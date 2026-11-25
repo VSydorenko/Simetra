@@ -112,7 +112,7 @@
   "ci": {
     "workflow": ".github/workflows/ci.yml",
     "docsOnly": {
-      "skipJobs": ["db", "db-supabase", "packaging", "host-template"]
+      "skipJobs": ["db", "packaging", "windows-init", "host-template"]
     }
   },
   "kit": {

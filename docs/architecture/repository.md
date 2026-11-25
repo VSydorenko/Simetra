@@ -59,7 +59,7 @@ dev-залежність. Устрій — [designer.md](designer.md).
   схеми й звірка на корпусі (`@simetrajs/designer`); набір базового стану
   `postgres` і тест переривання — там само
   ([спека профілю](../superpowers/specs/2026-11-08-postgres-profile-design.md) §10.2);
-- `pnpm test:db` — лише регресійні набори профілю Supabase: тести, прив'язані до
+- `pnpm test:db` — лише набори замороженого профілю Supabase (ручний прогін, ADR-0117): тести, прив'язані до
   стека Supabase (`*.supabase.db.test.ts`), і набір базового стану провайдера
   ([спека профілю](../superpowers/specs/2026-11-08-postgres-profile-design.md) §10.2);
 - `pnpm metadata:check` — `simetra compile --all` над кожною текою метаданих
