@@ -145,6 +145,14 @@ describe("plan and apply on the postgres profile", () => {
     // Схема агентів поза межею плану: ні `DROP`, ні гранту, ні згадки
     expect(text).not.toMatch(/agent_oauth/i)
 
+    // Таблиця `agent_oauth` між планом і застосуванням — не дрейф цілі:
+    // застосування однаково комітиться
+    await admin(roleUrl(set, set.auth), (c) =>
+      c.query(
+        "create table agent_oauth.between_plan_and_apply (id text primary key, payload jsonb not null)"
+      )
+    )
+
     const applied = await executePlan(writer, target(), artifact, {
       mode: "apply",
       planHash: artifact.planHash,
