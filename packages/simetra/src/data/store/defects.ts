@@ -112,6 +112,8 @@ export type DefectFlag =
   | "receiver-ignores-horizon"
   /** A page settle drops the requirement "composition not confirmed" of its view. */
   | "page-drops-requirement"
+  /** A read never lifts the `hidden` mark of a row: the header values stay hidden. */
+  | "reads-keep-hidden-mark"
   /** The pause before the retry of a discarded load never ends. */
   | "retry-sleeps-forever"
   /** A load discarded by the epoch is not retried: no pause, no M8 read. */

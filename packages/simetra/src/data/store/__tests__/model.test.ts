@@ -6223,6 +6223,49 @@ describe("core model self-check", () => {
     await modelRun(runModel(steps, false, "full", [], true))
   })
 
+  // Межа стану `section-owner-hidden` (рядок 19 §5.14): ТЧ над схованим
+  // власником. Без тримача шапки (крок -372539610) вона лишається станом; коли
+  // ключовий вигляд власника з'являється, його читання знімає позначку, і ТЧ
+  // сходиться; мутація «читання не знімає позначку» лишає її — О3 червоний.
+  it("holds the section over a hidden owner to the bound once a header holder exists", async () => {
+    const steps: Step[] = [
+      { t: "hideSection", state: "mounted", then: "none", evict: false },
+      { t: "answer", pick: 0, how: "stale", at: 0 },
+      { t: "answer", pick: 0, how: "stale", at: 0 },
+      { t: "preload", v: 0, short: false },
+      { t: "hideSection", state: "mounted", then: "none", evict: false },
+      { t: "answer", pick: 1, how: "ok", at: 0 },
+      { t: "unsub", v: 0, release: false },
+      { t: "answer", pick: 2, how: "missing", at: 1 },
+      { t: "answer", pick: 0, how: "unavailable", at: 0 },
+      { t: "unsub", v: 0, release: false },
+      { t: "update", k: 1, lazy: false, base: 0 },
+      { t: "rights", what: "hold", object: 0, scope: 1 },
+      { t: "sub", v: 1 },
+      { t: "answer", pick: 0, how: "ok", at: 0 },
+      { t: "move", k: 1 },
+      { t: "answer", pick: 0, how: "missing", at: 1 },
+      // Тримач шапки K1: вигляд ключів [K1, K2] з власним строком.
+      { t: "sub", v: 0 },
+      { t: "answer", pick: 0, how: "ok", at: 0 },
+    ]
+    await expect(
+      modelRun(
+        runModel(
+          steps,
+          false,
+          "full",
+          ["reads-keep-hidden-mark"],
+          true,
+          true,
+          true
+        )
+      )
+    ).rejects.toThrow(/^o3: view \d+ past its bound/)
+    // Контроль: без дефекту той самий прогін зелений.
+    await modelRun(runModel(steps, false, "full", [], true, true, true))
+  })
+
   // О3 (Р-SK0-9): хвиля приєднання не читає. Профіль з інтервалом набагато
   // більшим за джитер: такт не підміняє хвилю, тож лише хвиля виправляє рядок,
   // який сервер змінив до приєднання.
