@@ -594,6 +594,12 @@ export function createO2(): O2 {
         obligations.delete(key)
         continue
       }
+      // Строк зник зі `sync()` (вкладку приховано, планувальник його не веде):
+      // обіцянки більше немає, а вимогу в новому стані судить правило спокою.
+      if (promise.kind === "due" && state.due === undefined) {
+        obligations.delete(key)
+        continue
+      }
       if (promise.kind === "queue") {
         problems.push(
           `${describe(state.target)}: the queued read never started`

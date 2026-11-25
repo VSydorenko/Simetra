@@ -173,6 +173,27 @@ describe("O2 self-check", () => {
     ).toMatch(/no read by its deadline/)
   })
 
+  it("a deadline that left sync() (hidden tab) is no longer owed; one that stays is", () => {
+    const row: SyncTarget = { kind: "row", object: OBJECT, key: "k" }
+    const hidden = { holderVisible: () => false, rowAlive: () => true }
+    const withDue = state(row, {
+      requirements: [{ kind: "value-hidden" }],
+      due: 1_000,
+    })
+    const withdrawn = state(row, { requirements: [{ kind: "value-hidden" }] })
+    const gone = createO2()
+    gone.step(input({ now: 0, states: [withDue] }))
+    expect(
+      gone.step(input({ now: 1_000, states: [withdrawn], ...hidden }))
+    ).toBeUndefined()
+    // Строк лишився у `sync()`, а читання не було: червоний.
+    const kept = createO2()
+    kept.step(input({ now: 0, states: [withDue] }))
+    expect(
+      kept.step(input({ now: 1_000, states: [withDue], ...hidden }))
+    ).toMatch(/no read by its deadline/)
+  })
+
   it("keeps a queue: the queued read starts, or red", () => {
     const states = [
       state(view(1), {
