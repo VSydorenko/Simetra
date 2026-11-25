@@ -16,9 +16,12 @@ import { PROVIDER_SCHEMAS } from "simetra/model"
  * Базова політика провайдера `postgres` (спека профілю postgres §4.2): власна, не
  * похідна від Supabase. `better_auth` припущена (її створює міграція Better
  * Auth), але керованим лишається лише тригер застосунку на `better_auth.user`;
- * `extensions` — жорстке виключення. Виключена, але припущена схема стає
- * reference-only, тож без виключення ACL план відкликав би гранти `roles` на
- * `better_auth`, а засів тіні видав би `CREATE SCHEMA "extensions"` (42P06).
+ * `agent_oauth` (сервер авторизації агентів) припущена й виключена цілком:
+ * її створює `roles`, а таблиці — крок налаштування бази шаблону, тож без
+ * виключення план бачив би їх дрейфом. `extensions` — жорстке виключення.
+ * Виключена, але припущена схема стає reference-only, тож без виключення ACL
+ * план відкликав би гранти `roles` на `better_auth`, а засів тіні видав би
+ * `CREATE SCHEMA "extensions"` (42P06).
  */
 export const postgresBasePolicy: Policy = {
   id: "simetra-postgres-base",
@@ -36,12 +39,15 @@ export const postgresBasePolicy: Policy = {
       action: "include",
     },
     {
-      match: { schema: ["better_auth", "extensions"] },
+      match: { schema: ["agent_oauth", "better_auth", "extensions"] },
       action: "exclude",
     },
     {
       match: {
-        all: [{ kind: "schema" }, { name: ["better_auth", "extensions"] }],
+        all: [
+          { kind: "schema" },
+          { name: ["agent_oauth", "better_auth", "extensions"] },
+        ],
       },
       action: "exclude",
     },
@@ -51,11 +57,15 @@ export const postgresBasePolicy: Policy = {
           { kind: ["acl", "comment", "securityLabel"] },
           {
             any: [
-              { target: { schema: ["better_auth", "extensions"] } },
+              {
+                target: {
+                  schema: ["agent_oauth", "better_auth", "extensions"],
+                },
+              },
               {
                 target: {
                   kind: "schema",
-                  name: ["better_auth", "extensions"],
+                  name: ["agent_oauth", "better_auth", "extensions"],
                 },
               },
             ],

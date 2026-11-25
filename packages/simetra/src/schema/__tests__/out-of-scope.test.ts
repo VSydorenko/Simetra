@@ -66,14 +66,17 @@ describe("the boundary follows the provider of the project", () => {
     expect(scope.provider).toBe("postgres")
   })
 
-  it("better_auth is a provider schema under postgres", async () => {
-    const messages = await outOfScope(
-      "GRANT SELECT ON better_auth.t TO simetra_user;\n",
-      postgres
-    )
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toContain("better_auth")
-  })
+  it.each(["better_auth", "agent_oauth"])(
+    "%s is a provider schema under postgres",
+    async (schema) => {
+      const messages = await outOfScope(
+        `GRANT SELECT ON ${schema}.t TO simetra_user;\n`,
+        postgres
+      )
+      expect(messages).toHaveLength(1)
+      expect(messages[0]).toContain(schema)
+    }
+  )
 })
 
 describe("the boundary takes the target of a unit", () => {

@@ -329,7 +329,7 @@ describe("roles: the postgres profile cluster", () => {
       datallowconn: false,
     })
 
-    // Ціль: розширення, USAGE власника, better_auth, налаштування auth
+    // Ціль: розширення, USAGE власника, схеми auth, налаштування auth
     const target = (text: string) =>
       sql<Record<string, unknown>>(set.database, text)
     expect(
@@ -351,10 +351,14 @@ describe("roles: the postgres profile cluster", () => {
     ).toEqual([{ usage: true, create: false, owner: "postgres" }])
     expect(
       await target(
-        `select r.rolname as owner from pg_namespace n
-           join pg_roles r on r.oid = n.nspowner where n.nspname = 'better_auth'`
+        `select n.nspname as schema, r.rolname as owner from pg_namespace n
+           join pg_roles r on r.oid = n.nspowner
+          where n.nspname in ('better_auth', 'agent_oauth') order by 1`
       )
-    ).toEqual([{ owner: set.auth }])
+    ).toEqual([
+      { schema: "agent_oauth", owner: set.auth },
+      { schema: "better_auth", owner: set.auth },
+    ])
     const settings = (await clusterState(set)).settings
     expect(settings).toHaveLength(3)
     expect(settings).toEqual(
@@ -377,7 +381,7 @@ describe("roles: the postgres profile cluster", () => {
       ])
     )
 
-    // Копія шаблону: plpgsql_check є, better_auth немає
+    // Копія шаблону: plpgsql_check є, схем auth немає
     const copy = testDatabaseName("full_cp")
     extra.push(copy)
     await sql(
@@ -393,7 +397,7 @@ describe("roles: the postgres profile cluster", () => {
     expect(
       await sql(
         copy,
-        `select 1 from pg_namespace where nspname = 'better_auth'`
+        `select 1 from pg_namespace where nspname in ('better_auth', 'agent_oauth')`
       )
     ).toEqual([])
 
@@ -413,7 +417,7 @@ describe("roles: the postgres profile cluster", () => {
     )
   })
 
-  it("is idempotent, also after the template is sealed and after auth owns a table with a TOAST relation", async () => {
+  it("is idempotent, also after the template is sealed and after auth owns tables with a TOAST relation in both its schemas", async () => {
     const { set } = scenario("idem")
     await mustEnsure(set)
     const state = await clusterState(set)
@@ -424,16 +428,35 @@ describe("roles: the postgres profile cluster", () => {
     })
     expect(await clusterState(set)).toEqual(state)
     // TOAST-відношення таблиці `auth` живе в `pg_toast` з її власником: це не
-    // об'єкт `auth` поза `better_auth`
+    // об'єкт `auth` поза її схемами; таблиця в `agent_oauth` — так само
     await setTestPasswords(set)
-    await asRole(set, set.auth, (c) =>
-      c.query("create table better_auth.sample (body text)")
-    )
+    await asRole(set, set.auth, async (c) => {
+      await c.query("create table better_auth.sample (body text)")
+      await c.query("create table agent_oauth.sample (body text)")
+    })
     expect(await mustEnsure(set)).toEqual({
       created: [],
       present: expect.any(Array),
       skipped: [`${set.identity.schema}.${set.identity.name}:TRIGGER`],
     })
+    expect(await clusterState(set)).toEqual(state)
+  })
+
+  // База, підготована до схеми агентів: повторний `roles` додає `agent_oauth`
+  // від ролі `auth`, решта лишається як була
+  it("adds agent_oauth owned by auth to a target prepared without it", async () => {
+    const { set } = scenario("agent")
+    await mustEnsure(set)
+    await sql(set.database, "drop schema agent_oauth")
+    const state = await clusterState(set)
+    await mustEnsure(set)
+    expect(
+      await sql(
+        set.database,
+        `select r.rolname as owner from pg_namespace n
+           join pg_roles r on r.oid = n.nspowner where n.nspname = 'agent_oauth'`
+      )
+    ).toEqual([{ owner: set.auth }])
     expect(await clusterState(set)).toEqual(state)
   })
 
@@ -662,7 +685,11 @@ describe("roles: the postgres profile cluster", () => {
   )
 
   describe("a schema that the superuser session cannot trust", () => {
-    const cases: [string, (set: PostgresClusterSet) => string[]][] = [
+    const cases: [
+      string,
+      (set: PostgresClusterSet) => string[],
+      Record<string, unknown>?,
+    ][] = [
       [
         "extensions owned by the owner",
         (set) => [
@@ -696,6 +723,12 @@ describe("roles: the postgres profile cluster", () => {
       [
         "better_auth owned by another role",
         (set) => [`alter schema better_auth owner to ${id(set.owner)}`],
+        { schema: "better_auth" },
+      ],
+      [
+        "agent_oauth owned by another role",
+        (set) => [`alter schema agent_oauth owner to ${id(set.owner)}`],
+        { schema: "agent_oauth" },
       ],
       [
         "CREATE on the database for auth",
@@ -708,11 +741,12 @@ describe("roles: the postgres profile cluster", () => {
         (set) => [`grant create on schema public to ${id(set.auth)}`],
       ],
       [
-        "a relation of auth outside better_auth",
+        "a relation of auth outside better_auth and agent_oauth",
         (set) => [
           `create table public.stray (x int)`,
           `alter table public.stray owner to ${id(set.auth)}`,
         ],
+        { schema: "better_auth", reason: "relation:public.stray" },
       ],
       [
         "another search_path of auth in the database",
@@ -721,11 +755,11 @@ describe("roles: the postgres profile cluster", () => {
         ],
       ],
     ]
-    it.each(cases)("%s", async (_title, perturb) => {
+    it.each(cases)("%s", async (_title, perturb, params) => {
       const { set } = scenario("unsafe")
       await mustEnsure(set)
       for (const statement of perturb(set)) await sql(set.database, statement)
-      await expectRefusal(set, [{ code: "roles.unsafe-schema" }])
+      await expectRefusal(set, [{ code: "roles.unsafe-schema", params }])
     })
   })
 

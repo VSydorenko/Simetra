@@ -104,7 +104,7 @@ describe("postgresClusterSet", () => {
 
   it("keeps the schema names that the decisions rely on inside the provider boundary", () => {
     expect(PROVIDER_SCHEMAS.postgres).toEqual(
-      expect.arrayContaining(["better_auth", "extensions"])
+      expect.arrayContaining(["agent_oauth", "better_auth", "extensions"])
     )
   })
 })
@@ -264,14 +264,23 @@ describe("extensionsSchemaViolation", () => {
 
 describe("authSchemaViolation", () => {
   const safe: AuthSchemaFacts = {
-    schemaOwner: "auth",
+    schemaOwners: [
+      { schema: "agent_oauth", owner: "auth" },
+      { schema: "better_auth", owner: "auth" },
+    ],
     createDatabase: false,
     createPublic: false,
     strayRelations: [],
     searchPath: null,
   }
+  const atAuth = (reason: string) => ({ schema: "better_auth", reason })
   it.each([
-    ["no schema yet", { ...safe, schemaOwner: undefined }, undefined],
+    ["no schema yet", { ...safe, schemaOwners: [] }, undefined],
+    [
+      "only better_auth, before agent_oauth is created",
+      { ...safe, schemaOwners: [{ schema: "better_auth", owner: "auth" }] },
+      undefined,
+    ],
     ["a safe state", safe, undefined],
     [
       "the expected search_path of the role in the database",
@@ -290,27 +299,48 @@ describe("authSchemaViolation", () => {
     ],
     [
       "better_auth owned by another role",
-      { ...safe, schemaOwner: "owner" },
-      "owner:owner",
+      {
+        ...safe,
+        schemaOwners: [
+          { schema: "agent_oauth", owner: "auth" },
+          { schema: "better_auth", owner: "owner" },
+        ],
+      },
+      atAuth("owner:owner"),
+    ],
+    [
+      "agent_oauth owned by another role",
+      {
+        ...safe,
+        schemaOwners: [
+          { schema: "agent_oauth", owner: "owner" },
+          { schema: "better_auth", owner: "auth" },
+        ],
+      },
+      { schema: "agent_oauth", reason: "owner:owner" },
     ],
     [
       "CREATE on the database",
       { ...safe, createDatabase: true },
-      "create-database",
+      atAuth("create-database"),
     ],
-    ["CREATE on public", { ...safe, createPublic: true }, "create-public"],
     [
-      "a relation of the auth role outside better_auth",
+      "CREATE on public",
+      { ...safe, createPublic: true },
+      atAuth("create-public"),
+    ],
+    [
+      "a relation of the auth role outside its schemas",
       { ...safe, strayRelations: [{ schema: "public", name: "t" }] },
-      "relation:public.t",
+      atAuth("relation:public.t"),
     ],
     [
       "another search_path of the role in this database",
       { ...safe, searchPath: ["search_path=public, better_auth"] },
-      "search-path:public, better_auth",
+      atAuth("search-path:public, better_auth"),
     ],
-  ] as const)("%s", (_title, facts, reason) => {
-    expect(authSchemaViolation(facts, "auth")).toBe(reason)
+  ] as const)("%s", (_title, facts, violation) => {
+    expect(authSchemaViolation(facts, "auth")).toEqual(violation)
   })
 })
 
@@ -605,6 +635,40 @@ describe("ensurePostgresCluster", () => {
     ).toEqual([])
   })
 
+  // Схема агентів — окремий факт: база, підготована раніше, має лише
+  // `better_auth`, і повторний `roles` додає `agent_oauth` від ролі `auth`
+  it.each([
+    ["a new target", undefined, ["better_auth", "agent_oauth"]],
+    ["a target that has only better_auth", ["better_auth"], ["agent_oauth"]],
+  ] as const)(
+    "creates the missing schemas of the auth role in %s",
+    async (_title, present, expected) => {
+      const { dbs, calls } = trapPort(
+        present === undefined
+          ? (sql) =>
+              sql.includes("session_user") ? [{ ok: true, database: "x" }] : []
+          : presentCluster(undefined, [...present])
+      )
+      expect(await ensurePostgresCluster(dbs, conns, set)).toMatchObject({
+        ok: true,
+      })
+      expect(
+        calls
+          .flatMap((c) => c.sql)
+          .filter(
+            (s) =>
+              s.startsWith("CREATE SCHEMA") &&
+              !s.startsWith("CREATE SCHEMA extensions")
+          )
+      ).toEqual(
+        expected.map(
+          (schema) =>
+            `CREATE SCHEMA ${schema} AUTHORIZATION ${quoteIdent(set.auth)}`
+        )
+      )
+    }
+  )
+
   // Споживач сигналів (спека профілю §3.1): група до ролі входу, а ролі входу —
   // пара й налаштування `role` у тій самій транзакції створення
   it("creates the signals consumer and its login role with the pair and the role setting", async () => {
@@ -864,10 +928,12 @@ describe("ensurePostgresCluster", () => {
 
 /**
  * Відповіді порту-пастки для кластера, де все є й безпечне; `identity` —
- * гранти власника на схему й таблицю ідентичності.
+ * гранти власника на схему й таблицю ідентичності, `authSchemas` — наявні
+ * схеми ролі `auth` у цілі.
  */
 function presentCluster(
-  identity = { usage: true, trigger: true, references: true }
+  identity = { usage: true, trigger: true, references: true },
+  authSchemas = ["agent_oauth", "better_auth"]
 ): (sql: string) => Record<string, unknown>[] {
   const roleRows = allRoleNames.map((name) => ({
     name,
@@ -930,7 +996,8 @@ function presentCluster(
     if (sql.includes('AS "createGrantees"'))
       return [{ ownerSuper: true, createGrantees: [] }]
     if (sql.includes("'plpgsql_check'")) return [{ schema: "extensions" }]
-    if (sql.includes('AS "schemaOwner"')) return [{ schemaOwner: set.auth }]
+    if (sql.includes("AS owner\nFROM pg_catalog.pg_namespace"))
+      return authSchemas.map((schema) => ({ schema, owner: set.auth }))
     if (sql.includes('AS "createDatabase"'))
       return [{ createDatabase: false, createPublic: false }]
     if (sql.includes("AS exists"))

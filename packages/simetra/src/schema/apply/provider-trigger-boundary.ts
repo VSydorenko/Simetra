@@ -76,5 +76,5 @@ export const PROVIDER_ASSUMED_SCHEMAS: Readonly<
     "supabase_migrations",
     "vault",
   ],
-  postgres: ["better_auth"],
+  postgres: ["agent_oauth", "better_auth"],
 }

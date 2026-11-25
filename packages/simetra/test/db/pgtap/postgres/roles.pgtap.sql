@@ -5,7 +5,7 @@
 -- кластерні факти — у stack-base-state.pgtap.sql. `sub` читається у формі
 -- продового SQL (`claimSubject` фікстур e1), тож claims раннера перевірено
 -- наскрізно, а не лише порядком операторів.
-select plan(4);
+select plan(5);
 
 select has_extension(
   'plpgsql_check',
@@ -14,6 +14,10 @@ select has_extension(
 select hasnt_schema(
   'better_auth',
   'the template copy has no better_auth: identity lives in database simetra'
+);
+select hasnt_schema(
+  'agent_oauth',
+  'the template copy has no agent_oauth: agent authorization lives in database simetra'
 );
 select is(
   current_user::text,

@@ -43,7 +43,7 @@ const POSTGRES_ROWS = [
   [
     "PROVIDER_SCHEMAS",
     PROVIDER_SCHEMAS,
-    ["better_auth", "extensions", "information_schema"],
+    ["agent_oauth", "better_auth", "extensions", "information_schema"],
   ],
   ["PROVIDER_FUNCTIONS", PROVIDER_FUNCTIONS, []],
   [
