@@ -4461,6 +4461,14 @@ async function runModelOn(
           },
           storeEmpty: !heldKeys().size,
           rowAlive: (_object, k) => heldKeys().has(k),
+          headerGone: (_object, k) => {
+            const shown = handles.flatMap((handle, v) =>
+              subs[v] === undefined
+                ? []
+                : handle.getSnapshot().rows.filter((r) => r.key === k)
+            )
+            return shown.every((r) => r.state === "removed")
+          },
           rowLife: (object, k) =>
             purgeCount.get(id(object as ObjectName, k as Key)) ?? 0,
         })
@@ -5528,6 +5536,14 @@ describe("core model regressions", () => {
       seed: -997846743,
       path: "6453:1:1:0:8:10:11:13:15:15:17:17:17:19:19:19:20:20:20:20:20:20:20:20:20:21:21:21:21:21:21",
     },
+    // Шапка власника зникла зі сховища читанням, що не знайшло рядка: похідна
+    // вимога «ціль відстала від шапки» ТЧ іде разом із нею (давній, з 7498db70).
+    {
+      issue: "O2 behind-header requirement left with its header",
+      o2: true,
+      seed: 290039941,
+      path: "3206:3:2:1:11:11:16:10:11:17:18:20:19:20:19:19:23:25:25:27:30:34:37:35:34:38:41:43:49:49:49:53:54:58:59:68:72:72:72:79:78:78:78:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59",
+    },
     {
       issue: "O2 purged row returns",
       o2: true,
@@ -6239,4 +6255,13 @@ describe("core model self-check", () => {
     },
     RIGHTS_BUDGET_MS
   )
+})
+
+describe("tmp seeds", () => {
+  it("replay", async () => {
+    await fc.assert(property([], true, false, false), {
+      seed: Number(process.env.CX_SEED),
+      path: process.env.CX_PATH,
+    })
+  }, 600_000)
 })

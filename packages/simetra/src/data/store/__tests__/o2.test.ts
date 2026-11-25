@@ -794,6 +794,36 @@ describe("O2 self-check", () => {
         )
       })
 
+      it("goes with the header of its owner once an applied read left the store without it", () => {
+        const applied = [...loaded, ...settled(8, 2, "reread")]
+        const run = (gone: boolean, attempts: AttemptEvent[]) => {
+          const o2 = createO2()
+          start(o2)
+          return o2.step(
+            input({
+              ...model,
+              now: 10,
+              states: bare,
+              attempts,
+              events: [],
+              headerGone: () => gone,
+              holderPresent: () => true,
+              holderVisible: () => true,
+            })
+          )
+        }
+        // Шапки в сховищі нема й читання осіло: вимога пішла разом із нею.
+        expect(run(true, applied)).toBeUndefined()
+        // Шапка жива: вимога не може зникнути без читання свого вигляду.
+        expect(run(false, applied)).toMatch(
+          /no read of the target within|disappeared/
+        )
+        // Шапки нема, але жодне читання не осіло: це не доказ.
+        expect(run(true, loaded)).toMatch(
+          /no read of the target within|disappeared/
+        )
+      })
+
       it("after the holder is released: a read once a holder appears", () => {
         const o2 = createO2()
         start(o2)

@@ -34,6 +34,11 @@ export interface O2Input {
    */
   readonly rowAlive?: (object: string, key: string) => boolean
   /**
+   * Шапки власника в сховищі нема для жодного тримача: ключа не показує жоден
+   * вигляд чи кожен показує його рядок як `removed` (читання не знайшло рядка).
+   */
+  readonly headerGone?: (object: string, key: string) => boolean
+  /**
    * Скільки разів ключ вилучали зі сховища (`purge`): рядок, що вийшов і
    * повернувся між двома оцінками (кроки з читаннями в польоті О2 не судить),
    * — вже не той рядок, і його вимога зникла разом з ним.
@@ -885,6 +890,22 @@ export function createO2(): O2 {
             requirement.kind === "target-behind-header" &&
             was.target.kind === "view"
           ) {
+            // Шапка власника зникла зі сховища (її прибрало читання, що не знайшло
+            // рядка): похідна вимога «ціль відстала від шапки» втратила опору й
+            // іде разом із нею, як вимога рядка, якого більше нема. Доказ — застосоване
+            // читання у вікні й шапка, якої не тримає жоден вигляд.
+            const header = ownerKeys(was.target)[0]
+            if (
+              header !== undefined &&
+              input.headerGone?.(was.target.object, header) === true &&
+              windowOf().attempts.some(
+                (a) =>
+                  a.phase === "settled" &&
+                  a.outcome === "applied" &&
+                  a.kind !== "page"
+              )
+            )
+              continue
             const settledAs = (outcome: string) =>
               windowOf().attempts.some(
                 (a) =>
