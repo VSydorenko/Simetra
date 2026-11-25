@@ -1,3 +1,6 @@
+import type { AgentRuntime } from "./agent/core"
+import type { CommandRuntime } from "./runtime"
+
 export {
   createCommandRuntime,
   readRoleOf,
@@ -38,4 +41,21 @@ export {
   type ReconcileRefusal,
   type ReconcileReport,
 } from "./reconcile"
-export * from "./agent"
+export {
+  AgentUnknownObject,
+  AgentWriteRefused,
+  agentWriteRefusal,
+  createAgentCore,
+  OPERATION_VERBS,
+  toJson,
+  type AgentAttributeDescription,
+  type AgentCore,
+  type AgentCoreOptions,
+  type AgentCorePermissions,
+  type AgentObjectDescription,
+  type AgentObjectSummary,
+  type AgentVerb,
+} from "./agent"
+// `CommandRuntime` задовольняє структурну межу каталогу: розбіжність
+// сигнатур зламає перевірку типів тут, а не в адаптері.
+void (null as unknown as CommandRuntime satisfies AgentRuntime)

@@ -1,6 +1,6 @@
 import type { Batch, MetadataRef, RuntimeCatalog } from "simetra/model"
 
-/** Відмова запобіжника: пакет пише права без дозволу; несе об'єкт відмови. */
+/** The guard refused a batch that writes rights without permission; carries the object. */
 export class AgentWriteRefused extends Error {
   readonly object: MetadataRef
 
@@ -12,16 +12,16 @@ export class AgentWriteRefused extends Error {
 }
 
 /**
- * Запобіжник запису прав: чиста функція над каталогом рантайму й пакетом, щоб
- * адаптер кликав її до відкриття пулу. Відмовляє, коли будь-яка операція
- * пакета (не лише перша: пакет — одна транзакція) стосується
- * - системного довідника прав: його операції мають контекст
- *   `administerRights` (T1 ставить його саме ролям `rightsRoles` і
- *   `roleAssignments`, тож окремої ознаки в каталозі немає), або
- * - `create` кореня з творцем: ядро кореня пише членство й призначення творця.
- * Об'єкт поза каталогом пропускається — його відхилить схема рантайму.
- * Без `rightsWrite` відмова — до бази.
+ * The rights-write guard: a pure function over the runtime catalog and a batch,
+ * so an adapter can call it before opening a pool. It refuses when any
+ * operation of the batch (not only the first) touches a rights system catalog
+ * (its operations have the `administerRights` context) or creates a scope root
+ * with a creator. An object outside the catalog is skipped: the runtime schema
+ * rejects it. Without `rightsWrite` the refusal comes before the database.
  */
+// T1 ставить контекст `administerRights` саме ролям `rightsRoles` і
+// `roleAssignments`, тож окремої ознаки в каталозі немає. Корінь із творцем
+// пише членство й призначення творця, тож змінює права.
 export function agentWriteRefusal(
   catalog: RuntimeCatalog,
   batch: Batch,

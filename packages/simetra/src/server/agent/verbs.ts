@@ -1,12 +1,11 @@
 import { OBJECT_OPERATIONS, type ObjectOperation } from "simetra/model"
 
-/** Дієслово інструмента запису агента. */
+/** The verb of an agent write tool. */
 export type AgentVerb = "write" | "remove"
 
-/**
- * Дієслово кожної операції рантайму. Вичерпний запис за `OBJECT_OPERATIONS`:
- * нова операція не компілюється без рядка, тож не лишається поза дієсловами.
- */
+/** The verb of every runtime operation. */
+// Вичерпний запис за `OBJECT_OPERATIONS`: нова операція не компілюється без
+// рядка, тож не лишається поза дієсловами.
 export const OPERATION_VERBS: Readonly<Record<ObjectOperation, AgentVerb>> = {
   create: "write",
   update: "write",

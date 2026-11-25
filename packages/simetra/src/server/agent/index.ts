@@ -3,7 +3,6 @@ export {
   createAgentCore,
   type AgentCore,
   type AgentCoreOptions,
-  type AgentRuntime,
   type AgentCorePermissions,
 } from "./core"
 export {

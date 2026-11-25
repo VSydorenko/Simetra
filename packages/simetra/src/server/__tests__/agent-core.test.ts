@@ -1,6 +1,7 @@
 import {
   CommandFailure,
   type Batch,
+  runtimeCatalogSchema,
   type RuntimeCatalog,
   type SessionClaims,
 } from "simetra/model"
@@ -25,7 +26,7 @@ import {
   setup,
   setupRoots,
 } from "./harness"
-import { ID, catalog, rootCatalog } from "./fixtures"
+import { ID, catalog, rootCatalog, sample } from "./fixtures"
 
 const OPTED_IN = { rightsWrite: true }
 const NO_RIGHTS = { rightsWrite: false }
@@ -282,5 +283,89 @@ describe("agent core describe", () => {
     c.describe()
     c.describe(CLIENT)
     expect(db.calls).toEqual([])
+  })
+})
+
+describe("agent core JSON values", () => {
+  // Понад 2^53: `Number` її не вмістить, тож лише рядок зберігає значення.
+  const BIG = 9007199254740993n
+  const stub = () =>
+    createAgentCore({
+      permissions: OPTED_IN,
+      runtime: {
+        catalog,
+        read: async () => ({ rows: [{ big: BIG, bigs: [BIG, 1n] }] }),
+        run: async () => ({
+          rows: [{ big: BIG }],
+          changes: [],
+          epoch: "e",
+        }),
+      },
+    })
+
+  it("read віддає bigint точним десятковим рядком", async () => {
+    expect(await stub().read(session, { object: CLIENT, id: ID })).toEqual({
+      rows: [{ big: "9007199254740993", bigs: ["9007199254740993", "1"] }],
+    })
+  })
+
+  it("execute віддає bigint точним десятковим рядком", async () => {
+    expect(await stub().execute(session, [create])).toEqual({
+      rows: [{ big: "9007199254740993" }],
+      changes: [],
+      epoch: "e",
+    })
+  })
+})
+
+describe("agent core describe allow-list", () => {
+  const labelled = runtimeCatalogSchema.parse({
+    ...catalog,
+    objects: [
+      {
+        ...sample,
+        title: { en: "Sample" },
+        description: { en: "A sample" },
+        tabularSections: [
+          { ...sample.tabularSections[0], title: { en: "Lines" } },
+        ],
+      },
+    ],
+  })
+  const labelledCore = () =>
+    createAgentCore({
+      runtime: {
+        catalog: labelled,
+        read: async () => ({ rows: [] }),
+        run: async () => ({ rows: [], changes: [], epoch: "e" }),
+      },
+    })
+
+  it("рядок переліку має рівно свої поля", () => {
+    const [entry] = labelledCore().describe().objects
+    expect(Object.keys(entry!).sort()).toEqual([
+      "description",
+      "object",
+      "operations",
+      "title",
+      "verbs",
+    ])
+  })
+
+  it("ТЧ і її реквізит мають рівно свої поля", () => {
+    const d = labelledCore().describe({ kind: "Catalog", name: "Sample" })
+    const [section] = d.tabularSections
+    expect(Object.keys(section!).sort()).toEqual([
+      "attributes",
+      "name",
+      "title",
+    ])
+    expect(Object.keys(section!.attributes[0]!).sort()).toEqual([
+      "insert",
+      "name",
+      "required",
+      "type",
+      "update",
+    ])
   })
 })

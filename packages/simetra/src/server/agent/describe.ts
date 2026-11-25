@@ -8,21 +8,21 @@ import type {
 } from "simetra/model"
 import { operationsOf, verbsOf, type AgentVerb } from "./verbs"
 
-/** Реквізит в описі: те, що агентові потрібно, щоб скласти запит і значення. */
+/** An attribute in a description: what an agent needs to build a query and values. */
 export interface AgentAttributeDescription {
   name: string
   type: string
   array?: true
   required: boolean
   maxLength?: number
-  /** Може бути задане на створенні / зміні. */
+  /** May be set on create / on update. */
   insert: boolean
   update: boolean
   generated?: true
   enumValues?: { name: string; label: string }[]
-  /** Ціль одноцільового `Ref`. */
+  /** The target of a single-target `Ref`. */
   ref?: MetadataRef
-  /** Цілі поліморфного `Ref` (`allowedTypes`). */
+  /** The targets of a polymorphic `Ref` (`allowedTypes`). */
   allowedTypes?: MetadataRef[]
   title?: LocalizedString
   description?: LocalizedString
@@ -33,7 +33,7 @@ export interface AgentObjectDescription {
   kindLabel: string
   title?: LocalizedString
   description?: LocalizedString
-  /** Логічне ім'я ключа рядка та реквізит подання. */
+  /** The logical name of the row key and the presentation attribute. */
   key: string
   presentation?: string
   attributes: AgentAttributeDescription[]
@@ -46,7 +46,7 @@ export interface AgentObjectDescription {
   operations: ObjectOperation[]
 }
 
-/** Рядок переліку: об'єкт без полів. */
+/** A list entry: an object without its fields. */
 export interface AgentObjectSummary {
   object: MetadataRef
   title?: LocalizedString

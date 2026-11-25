@@ -16,7 +16,7 @@ import {
 import { toJson } from "./json"
 import { AgentWriteRefused, agentWriteRefusal } from "./write-refusal"
 
-/** Названий об'єкт не в каталозі рантайму (`catalog.unknown-object`). */
+/** A named object is not in the runtime catalog (`catalog.unknown-object`). */
 export class AgentUnknownObject extends Error {
   readonly object: MetadataRef
 
@@ -28,14 +28,14 @@ export class AgentUnknownObject extends Error {
 }
 
 export interface AgentCorePermissions {
-  /** Дозвіл писати права: довідники прав і корінь із творцем. */
+  /** Permission to write rights: rights catalogs and a scope root with a creator. */
   rightsWrite?: boolean
 }
 
-/**
- * Що каталогу потрібно від `CommandRuntime`: структурна межа, бо зона чистоти
- * T3 не пускає `../` з теки каталогу; рантайм її задовольняє без адаптера.
- */
+// Структурна межа замість імпорту `CommandRuntime`: зона чистоти T3 не пускає
+// `../` з теки каталогу. Що `CommandRuntime` її задовольняє, закріплює
+// перевірка типів у `server/index.ts`. З пакета не експортується.
+/** What the catalog needs from a command runtime. */
 export interface AgentRuntime {
   readonly catalog: RuntimeCatalog
   run(
@@ -51,20 +51,20 @@ export interface AgentCoreOptions {
 }
 
 /**
- * Ядро каталогу інструментів агента: дані в JSON-формі без меж подання.
- * Кличе лише методи `CommandRuntime`, нового шляху в базу немає. Відмова —
- * `CommandFailure` рантайму, `AgentWriteRefused` запобіжника чи
- * `AgentUnknownObject`.
+ * The core of the agent tool catalog: data in JSON form, with no presentation
+ * limits. It calls only the command runtime methods; there is no other path to
+ * the database. A refusal is the runtime's `CommandFailure`, the guard's
+ * `AgentWriteRefused` or `AgentUnknownObject`.
  */
 export interface AgentCore {
-  /** Без імені — перелік усіх об'єктів каталогу, з іменем — опис одного. */
+  /** Without a name: every catalog object; with a name: that object's description. */
   describe(): { objects: AgentObjectSummary[] }
   describe(object: MetadataRef): AgentObjectDescription
   describe(
     object?: MetadataRef
   ): { objects: AgentObjectSummary[] } | AgentObjectDescription
   read(session: SessionClaims, query: ReadQuery): Promise<unknown>
-  /** Пакет одного чи кількох об'єктів: усі дієслова ділять цю одну точку. */
+  /** Runs a batch of one or more objects; every verb goes through this one point. */
   execute(session: SessionClaims, batch: Batch): Promise<unknown>
 }
 

@@ -1,8 +1,9 @@
 /**
- * Значення рантайму для JSON: `bigint` → десятковий рядок. JSON не має
- * `bigint`, а вхід `BigInt` T0 приймає цей рядок назад. Єдине місце такого
- * перетворення в T3: адаптери не мають власних копій.
+ * Converts runtime values to JSON: `bigint` becomes a decimal string, which
+ * the `BigInt` input of T0 accepts back. The single place of this conversion.
  */
+// Адаптери не мають власних копій: розбіжність форми дала б різні відповіді
+// в різних каналах.
 export function toJson(value: unknown): unknown {
   if (typeof value === "bigint") return String(value)
   if (Array.isArray(value)) return value.map(toJson)
