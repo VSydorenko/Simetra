@@ -244,6 +244,30 @@ jobs:
       - name: Packaging tests
         run: pnpm test:packaging
 
+  # Гілки Windows команди `simetra init` (junction замість symlink, `sameDir`,
+  # регістронечутливі шляхи в `own-path.ts`): на Linux їх покривають лише unit-тести
+  # чистих функцій. Окремий job лише з тестами `init`: решта пакета Windows не
+  # потребує, тож інші job-и на `windows-latest` не переносяться (#193).
+  windows-init:
+    needs: changes
+    if: needs.changes.outputs.code != 'false' # agent-kit: docs-only
+    name: Init on Windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Версію pnpm бере з поля packageManager у package.json
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      # Файли `init*.test.ts`: пакування скілів, конфіги MCP і сама команда
+      - name: Init tests
+        run: pnpm --filter @simetrajs/designer exec vitest run --project unit src/__tests__/init
+
   # Шаблон host-а (П4-D, D2): DB-тести шаблону, склад збірки й збірка з
   # tarball-ів, безпекові e2e на production-збірці. Нога матриці — {браузер,
   # збірка}: нові ноги (WebKit, dev-збірка, бюджети) додаються рядками матриці

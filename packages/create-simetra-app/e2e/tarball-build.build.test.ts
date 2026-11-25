@@ -6,7 +6,9 @@ import { execFile } from "node:child_process"
 import {
   cp,
   mkdtemp,
+  readdir,
   readFile,
+  readlink,
   realpath,
   rm,
   stat,
@@ -43,8 +45,14 @@ function consumerEnv(): NodeJS.ProcessEnv {
   )
 }
 
-describe("template build from tarballs", () => {
-  it("builds on node-server with simetra and the designer from tarballs", async () => {
+/**
+ * Проєкт зі шаблону, встановлений із tarball-ів: один на файл, бо установка —
+ * найдовший крок. Збірка й пілот `init` ділять його; файли йдуть послідовно
+ * (`fileParallelism: false`).
+ */
+let installed: Promise<{ dir: string; designer: string }> | undefined
+function installTemplate(): Promise<{ dir: string; designer: string }> {
+  installed ??= (async () => {
     const tarballs = await packWorkspace()
     const dir = await mkdtemp(join(tmpdir(), "simetra-template-"))
     scratch.push(dir)
@@ -90,6 +98,17 @@ describe("template build from tarballs", () => {
       maxBuffer: 64 * 1024 * 1024,
     })
 
+    return { dir, designer: tarballs.designer }
+  })()
+  return installed
+}
+
+describe("template build from tarballs", () => {
+  it("builds on node-server with simetra and the designer from tarballs", async () => {
+    const { dir } = await installTemplate()
+    const manifestPath = join(dir, "package.json")
+    const env = consumerEnv()
+
     // `simetra` у дереві — з tarball-а, а не посилання на workspace репо
     const installed = await realpath(join(dir, "node_modules/simetra"))
     expect(installed.startsWith(REPO)).toBe(false)
@@ -116,5 +135,35 @@ describe("template build from tarballs", () => {
     expect(
       (await stat(join(dir, ".output", nitro.serverEntry))).size
     ).toBeGreaterThan(0)
+  })
+
+  // Пілот `init` у реальному проєкті, а не лише в гейті пакування (платформна
+  // спека §11): проєкт зі шаблону з tarball-ів, `init`, потім `init --check`
+  it("init links the skills into node_modules and init --check is green", async () => {
+    const { dir } = await installTemplate()
+    const bin = join(dir, "node_modules/.bin/simetra")
+    const env = consumerEnv()
+    await exec(bin, ["init"], { cwd: dir, env })
+    // Код виходу 0 — `exec` кидає на ненульовому
+    await exec(bin, ["init", "--check"], { cwd: dir, env })
+
+    const packed = join(
+      await realpath(join(dir, "node_modules/@simetrajs/designer")),
+      "skills"
+    )
+    // Шлях через `node_modules`, а не через `.pnpm`: посилання переживає
+    // оновлення пакета (спека designer §4.2)
+    expect(packed.startsWith(REPO)).toBe(false)
+    const skills = await readdir(packed)
+    expect(skills.length).toBeGreaterThan(0)
+    for (const name of skills) {
+      const link = join(dir, ".claude/skills", name)
+      expect(await readlink(link)).toBe(
+        `../../node_modules/@simetrajs/designer/skills/${name}`
+      )
+      await expect(readFile(join(link, "SKILL.md"), "utf8")).resolves.toContain(
+        `name: ${name}`
+      )
+    }
   })
 })
