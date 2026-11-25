@@ -65,7 +65,10 @@ function narrowedBatch(verb: AgentVerb) {
   return z
     .strictObject({ operations: batchSchema })
     .superRefine((value, ctx) => {
-      const first = value.operations[0]!.object
+      // Порожній пакет: `min(1)` у `batchSchema` не зупиняє розбір, тож
+      // уточнення бачить `[]`; шлях помилки вже в цьому питанні.
+      const first = value.operations[0]?.object
+      if (first === undefined) return
       value.operations.forEach((op, i) => {
         if (op.object.kind !== first.kind || op.object.name !== first.name)
           ctx.addIssue({

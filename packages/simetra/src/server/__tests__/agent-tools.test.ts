@@ -171,6 +171,8 @@ describe("descriptors", () => {
 
 describe("input narrowing (І-F3-5)", () => {
   const cases: [string, string, Batch, string][] = [
+    ["write", "порожній пакет", [], "operations"],
+    ["remove", "порожній пакет", [], "operations"],
     [
       "write",
       "remove-дія",
@@ -282,6 +284,7 @@ describe("describe tool", () => {
     )
     const one = ok(await f.tools.call(claims, "describe", { object: CLIENT }))
     expect((one.data as { object: unknown }).object).toEqual(CLIENT)
+    expect(f.runs).toEqual([])
   })
 
   it("невідомий об'єкт — catalog.unknown-object, fix_input", async () => {
@@ -324,6 +327,7 @@ describe("result size (Р-F3-11)", () => {
     expect(kept).toBeGreaterThan(0)
     expect(kept).toBeLessThan(30)
     expect(r.continuation).toEqual({ offset: 10 + kept })
+    expect(f.runs).toEqual([])
     expect(JSON.stringify(r).length).toBeLessThanOrEqual(1500)
   })
 
@@ -406,6 +410,24 @@ describe("result size (Р-F3-11)", () => {
     expect(tight.runs).toHaveLength(1)
   })
 
+  it("одиничний рядок запису, що не вміщується, — усе одно done з truncated, не помилка", async () => {
+    const f = fake({
+      maxResultChars: 120,
+      run: () => ({
+        rows: [{ ref: ID, version: 2 }],
+        changes: [{ object: CLIENT, id: ID, version: 2, operation: "create" }],
+        epoch: "e".repeat(64),
+      }),
+    })
+    const r = ok(
+      await f.tools.call(claims, "write", { operations: [createOp] })
+    )
+    expect(r.state).toBe("done")
+    expect(r.truncated).toBe(true)
+    expect((r.data as CommandResult).rows).toEqual([])
+    expect(f.runs).toHaveLength(1)
+  })
+
   it("без урізання результат не несе truncated, а state ніколи не awaiting_confirmation", async () => {
     const r = ok(
       await fake().tools.call(claims, "write", { operations: [createOp] })
@@ -464,17 +486,70 @@ describe("errors (Р-F3-9)", () => {
 })
 
 describe("MCP presentation (Р-F3-10)", () => {
+  // Кожне необов'язкове поле (`truncated`, `continuation`, `hint`) має бути
+  // і в `structuredContent`, і в тексті: клієнти показують моделі різні частини.
+  async function results(): Promise<[string, AgentToolSuccess][]> {
+    const page = fake({
+      maxResultChars: 1500,
+      read: () => ({
+        rows: Array.from({ length: 30 }, (_, i) => ({
+          ref: `id-${i}`,
+          code: "x".repeat(100),
+        })),
+      }),
+    })
+    const cutWrite = fake({
+      maxResultChars: 300,
+      run: () => ({
+        rows: Array.from({ length: 10 }, (_, i) => ({
+          ref: `id-${i}`,
+          version: 2,
+          code: "x".repeat(200),
+        })),
+        changes: [],
+        epoch: "e",
+      }),
+    })
+    return [
+      [
+        "describe",
+        ok(await fake().tools.call(claims, "describe", { object: CLIENT })),
+      ],
+      [
+        "cut read",
+        ok(
+          await page.tools.call(claims, "read", {
+            query: { object: CLIENT, limit: 30 },
+          })
+        ),
+      ],
+      [
+        "cut write",
+        ok(
+          await cutWrite.tools.call(claims, "write", { operations: [createOp] })
+        ),
+      ],
+    ]
+  }
+
   it("успіх: structuredContent — об'єкт результату, content — його повний текст", async () => {
-    const r = ok(
-      await fake().tools.call(claims, "describe", { object: CLIENT })
-    )
-    const mcp = agentResultToMcp(r)
-    expect(mcp.isError).toBeUndefined()
-    expect(mcp.structuredContent).toEqual(r)
-    const text = mcp.content[0].text
-    for (const [key, value] of Object.entries(mcp.structuredContent!))
-      expect(text).toContain(JSON.stringify({ [key]: value }).slice(1, -1))
-    expect(JSON.parse(text)).toEqual(r)
+    for (const [label, r] of await results()) {
+      const mcp = agentResultToMcp(r)
+      expect(mcp.isError, label).toBeUndefined()
+      expect(mcp.structuredContent, label).toEqual(r)
+      const text = mcp.content[0].text
+      for (const [key, value] of Object.entries(mcp.structuredContent!))
+        expect(text, `${label}: ${key}`).toContain(
+          JSON.stringify({ [key]: value }).slice(1, -1)
+        )
+      expect(JSON.parse(text), label).toEqual(r)
+    }
+    const cut = (await results()).filter(([l]) => l.startsWith("cut"))
+    for (const [, r] of cut) {
+      expect(r.truncated).toBe(true)
+      expect(r.hint).toBeDefined()
+    }
+    expect(cut[0]![1].continuation).toBeDefined()
   })
 
   it("помилка: isError, лише content з code, message, hint, outcome", async () => {
