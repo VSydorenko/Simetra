@@ -339,11 +339,6 @@ export const PROOFS: Readonly<
   "version-unconfirmed": (w, t) => serviceAnswered(w, t),
 }
 
-/**
- * Вимога, що на `main` змінює вид: перемикання епохи версій замінює «мінімальну
- * версію» вимогою свого виду (`object-store.ts`, `onSwitch`); `hide` власника
- * замінює похідну вимогу на «значення сховано» рядків об'єкта.
- */
 /** Ключі рядків, які вигляд читає за власником: власник ТЧ, ключ картки, ключі `keys`. */
 function ownerKeys(target: SyncTarget): readonly string[] {
   if (target.kind !== "view") return []
@@ -381,6 +376,11 @@ function hiddenOwner(
   })
 }
 
+/**
+ * Вимога, що на `main` змінює вид: перемикання епохи версій замінює «мінімальну
+ * версію» вимогою свого виду (`object-store.ts`, `onSwitch`); `hide` власника
+ * замінює похідну вимогу на «значення сховано» рядків об'єкта.
+ */
 const REPLACED_BY: Partial<Record<RequirementKind, RequirementKind[]>> = {
   "min-version": ["version-epoch-switched"],
   "target-behind-header": ["value-hidden"],
