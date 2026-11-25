@@ -96,8 +96,20 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
     name: "describe",
     title: "Describe objects",
     description:
-      "List the objects of the application, or describe one object. Without arguments it returns every object with its title, description, tools (verbs) and runtime operations. With `object` ({ kind, name }) it returns that object's attributes (name, type, required, maxLength, enum values, Ref target), tabular sections, tools and operations. Call it first to learn the names and types that read, write and remove need. It does not judge access rights: the database does when you read or change data.",
-    input: z.strictObject({ object: metadataRefSchema.optional() }),
+      "List the objects of the application, or describe one object. Without `object` it returns the objects with their title, description, tools (verbs) and runtime operations; a long list is cut with `truncated` and `continuation.offset`, pass it as `offset` to get the next objects. With `object` ({ kind, name }) it returns that object's attributes (name, type, required, maxLength, enum values, Ref target), tabular sections, tools and operations. Call it first to learn the names and types that read, write and remove need. It does not judge access rights: the database does when you read or change data.",
+    input: z
+      .strictObject({
+        object: metadataRefSchema.optional(),
+        offset: z.int().min(0).optional(),
+      })
+      .superRefine((value, ctx) => {
+        if (value.object !== undefined && value.offset !== undefined)
+          ctx.addIssue({
+            code: "custom",
+            path: ["offset"],
+            message: "offset applies to the object list, not with object",
+          })
+      }),
     annotations: READ_ONLY,
   },
   {
@@ -131,6 +143,13 @@ const tooLarge = (what: string): AgentToolError =>
     "catalog.result-too-large",
     `The ${what} does not fit the size limit of one answer`
   )
+
+/** The name of the read form, for the too-large message. */
+function readForm(query: ReadQuery): string {
+  if ("owner" in query) return "tabular section lines of one owner"
+  if ("id" in query) return "card"
+  return "result"
+}
 
 /** The largest `n` in `[min, max]` for which `fits(n)`, or `undefined`. */
 function largest(
@@ -298,7 +317,10 @@ export function createToolCaller(
     const catalog = options.catalog()
     switch (tool.name) {
       case "describe": {
-        const { object } = input as { object?: MetadataRef }
+        const { object, offset = 0 } = input as {
+          object?: MetadataRef
+          offset?: number
+        }
         if (object !== undefined) {
           const full: AgentToolSuccess = {
             state: "done",
@@ -307,17 +329,24 @@ export function createToolCaller(
           return fits(full) ? full : tooLarge("object description")
         }
         const { objects } = core.describe()
-        const build = (n: number): AgentToolSuccess =>
-          n === objects.length
-            ? { state: "done", data: { objects } }
-            : {
-                state: "done",
-                data: { objects: objects.slice(0, n) },
-                truncated: true,
-                hint: "The list was cut to fit the size limit. Call describe with an object name to see an object.",
-              }
-        const n = largest(0, objects.length, (k) => fits(build(k)))
-        return build(n ?? 0)
+        const rest = objects.slice(offset)
+        const full: AgentToolSuccess = {
+          state: "done",
+          data: { objects: rest },
+        }
+        if (fits(full)) return full
+        // Продовження — зсув, як у `read`: названий об'єкт агент назвати не
+        // може, поки не бачив, тож хвіст має бути досяжним сторінками.
+        // Менше одного об'єкта не лишаємо: порожня сторінка зациклила б агента.
+        const build = (n: number): AgentToolSuccess => ({
+          state: "done",
+          data: { objects: rest.slice(0, n) },
+          truncated: true,
+          continuation: { offset: offset + n },
+          hint: "The list was cut to fit the size limit. Call describe again with continuation.offset as offset to see the next objects.",
+        })
+        const n = largest(1, rest.length - 1, (k) => fits(build(k)))
+        return n === undefined ? tooLarge("object") : build(n)
       }
       case "read": {
         const { query } = input as { query: ReadQuery }
@@ -326,7 +355,7 @@ export function createToolCaller(
         if (fits(full)) return full
         if ("limit" in query && Array.isArray(data.rows))
           return cutPage(catalog, query, data, fits)
-        return tooLarge("card")
+        return tooLarge(readForm(query))
       }
       default: {
         const { operations } = input as { operations: Batch }

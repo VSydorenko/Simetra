@@ -27,11 +27,13 @@ const claims = session as SessionClaims
 // `{ name, title, description, inputSchema, annotations }`. Правило зміни:
 // новий бюджет = виміряний розмір × 1,05 з округленням угору; зниження
 // опускає бюджет на цілу різницю. Як заміряти: тимчасово поставити
-// `AGENT_TOOLS_BUDGET = 0` і запустити цей файл — падіння друкує розмір
+// `AGENT_TOOLS_BUDGET = 20_902` і запустити цей файл — падіння друкує розмір
 // («expected N to be less than or equal to 0») на дереві без зміни та на
-// дереві зі зміною; число з цього коментаря не брати. Останній замір:
-// 19731 символ, бюджет 19731 × 1,05.
-const AGENT_TOOLS_BUDGET = 20_718
+// дереві зі зміною; число з цього коментаря не брати. Замір 19731 символ →
+// бюджет 20 718 (19731 × 1,05). Додано `offset` у вхід `describe` (сторінки
+// переліку, Р-F3-11): до — 19731, після — 19906 (+175), бюджет 20 718 +
+// ceil(175 × 1,05) = 20 902.
+const AGENT_TOOLS_BUDGET = 20_902
 
 const update = (object: typeof CLIENT, id = ID) =>
   ({
@@ -297,14 +299,51 @@ describe("describe tool", () => {
     expect(r.outcome).toBe("fix_input")
   })
 
-  it("перелік понад межу урізається з truncated і підказкою", async () => {
-    const f = fake({ maxResultChars: 250 })
-    const r = ok(await f.tools.call(claims, "describe", {}))
-    expect(r.truncated).toBe(true)
-    expect(r.hint).toContain("object name")
-    expect(JSON.stringify(r).length).toBeLessThanOrEqual(250)
-    const kept = (r.data as { objects: unknown[] }).objects.length
-    expect(kept).toBeLessThan(catalog.objects.length)
+  it("перелік понад межу — сторінки за continuation.offset, кожен об'єкт рівно раз", async () => {
+    const f = fake({ maxResultChars: 400 })
+    const seen: string[] = []
+    let offset: number | undefined
+    let pages = 0
+    do {
+      const r = ok(
+        await f.tools.call(
+          claims,
+          "describe",
+          offset === undefined ? {} : { offset }
+        )
+      )
+      expect(JSON.stringify(r).length).toBeLessThanOrEqual(400)
+      const page = (r.data as { objects: { object: { name: string } }[] })
+        .objects
+      expect(page.length).toBeGreaterThan(0)
+      seen.push(...page.map((o) => o.object.name))
+      if (r.truncated) {
+        expect(r.hint).toContain("offset")
+        expect(r.continuation).toEqual({ offset: seen.length })
+        offset = r.continuation!.offset
+      } else {
+        expect(r.continuation).toBeUndefined()
+        offset = undefined
+      }
+      pages++
+    } while (offset !== undefined)
+    expect(pages).toBeGreaterThan(1)
+    expect(seen).toEqual(catalog.objects.map((o) => o.name))
+  })
+
+  it("offset разом з object — invalid-input", async () => {
+    const f = fake()
+    const r = failed(
+      await f.tools.call(claims, "describe", { object: CLIENT, offset: 1 })
+    )
+    expect(r.code).toBe("catalog.invalid-input")
+    expect(r.path).toBe("offset")
+  })
+
+  it("offset поза переліком — порожня сторінка без помилки", async () => {
+    const r = ok(await fake().tools.call(claims, "describe", { offset: 999 }))
+    expect((r.data as { objects: unknown[] }).objects).toEqual([])
+    expect(r.truncated).toBeUndefined()
   })
 })
 
@@ -371,6 +410,21 @@ describe("result size (Р-F3-11)", () => {
     )
     expect(r.code).toBe("catalog.result-too-large")
     expect(r.outcome).toBe("fix_input")
+  })
+
+  it("рядки ТЧ власника понад межу — result-too-large, що називає форму", async () => {
+    const f = fake({
+      maxResultChars: 300,
+      read: () => ({ rows: [{ line: "x".repeat(1000) }] }),
+    })
+    const r = failed(
+      await f.tools.call(claims, "read", {
+        query: { object: CLIENT, tabularSection: "lines", owner: ID },
+      })
+    )
+    expect(r.code).toBe("catalog.result-too-large")
+    expect(r.message).toContain("tabular section lines of one owner")
+    expect(r.message).not.toContain("card")
   })
 
   it("результат запису понад межу — ніколи не помилка: ключ і версія, потім з кінця", async () => {
