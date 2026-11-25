@@ -46,6 +46,7 @@ import {
   commandCoreLayer,
   compileRights,
   gaugeLoadLayer,
+  gaugeRichTextLayer,
   gaugeMaxBytesLayer,
   gaugeRowRule,
   policyDomain,
@@ -738,7 +739,8 @@ describe("buildRuntimeCatalog on runtime values", () => {
 
 /**
  * Лінивий атрибут (Рд25, В3): у каталозі лише ефективно лінивий реквізит
- * шапки — явний `load: "lazy"` чи `Bytes` без `load`; у ТЧ лінивих немає.
+ * шапки — явний `load: "lazy"` чи `Bytes` або `RichText` без `load`
+ * (Р-B7-10); у ТЧ лінивих немає.
  */
 describe("buildRuntimeCatalog: lazy attributes", () => {
   const gaugeOf = async (loads: Record<string, "eager" | "lazy">) => {
@@ -765,6 +767,28 @@ describe("buildRuntimeCatalog: lazy attributes", () => {
     )
     expect(scan).toMatchObject({ type: "Bytes" })
     expect(scan).not.toHaveProperty("load")
+  })
+
+  it("RichText of the header defaults to lazy, eager overrides it; in a section it is eager", async () => {
+    const richTextGauge = async (loads: Record<string, "eager" | "lazy">) => {
+      const { model: m, diagnostics } = await compileRights(
+        policyDomain(gaugeRichTextLayer(loads))
+      )
+      expect(diagnostics).toEqual([])
+      return buildRuntimeCatalog(m!).objects.find((o) => o.name === "Gauge")!
+    }
+    const defaults = await richTextGauge({})
+    const article = defaults.attributes.find((a) => a.name === "article")
+    expect(article).toMatchObject({ type: "RichText", load: "lazy" })
+    const remark = defaults.tabularSections[0]!.attributes.find(
+      (a) => a.name === "remark"
+    )
+    expect(remark).toMatchObject({ type: "RichText" })
+    expect(remark).not.toHaveProperty("load")
+    const eager = await richTextGauge({ article: "eager" })
+    const explicit = eager.attributes.find((a) => a.name === "article")
+    expect(explicit).toMatchObject({ type: "RichText" })
+    expect(explicit).not.toHaveProperty("load")
   })
 })
 
