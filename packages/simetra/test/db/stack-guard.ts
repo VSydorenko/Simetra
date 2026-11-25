@@ -7,6 +7,7 @@
 import { execFileSync } from "node:child_process"
 import {
   closeSync,
+  existsSync,
   openSync,
   readFileSync,
   statSync,
@@ -77,6 +78,8 @@ const PROBE_TIMEOUT_MS = 3_000
 // Замок щойно створений `wx`, а його вміст ще пишеться: порожній файл
 // молодший за це вікно — зайнятий, а не покинутий
 const LOCK_WRITE_GRACE_MS = 2_000
+// Воротар зняття покинутого замка живе мілісекунди; старший — лишок убитого
+const RECLAIM_GATE_STALE_MS = 10_000
 // Тіні двигуна — повні бази; прогін, що впирається в заповнений диск, падає
 // вже наприкінці й лишає сиріт, тож краще не стартувати зовсім. Docker на
 // Linux тримає дані стеку на кореневому розділі
@@ -428,15 +431,48 @@ function tryCreateLock(lock: string): Holder | undefined {
         `This process already holds ${lock}: one DB project per vitest process (run each with its own --project)`
       )
     if (holder !== undefined && isAlive(holder.pid)) return holder
+    // Файла вже нема (власник його звільнив між `wx` і читанням): нічого
+    // знімати, а знімок «стале» чужий свіжий замок — саме та гонка, яку
+    // виключає вибір під `wx`
+    if (holder === undefined && !existsSync(lock)) continue
     // Без вмісту: або `wx` щойно створив файл і пише pid (тоді він зайнятий),
     // або файл покинутий
     if (holder === undefined && lockAgeMs(lock) < LOCK_WRITE_GRACE_MS)
       return { pid: 0, cwd: "?", since: "?" }
     // Убитий прогін лишає файл замка без живого процесу — замок не тримає
-    // ніхто, і його можна забрати. Знімаємо лише якщо за цей час його не
-    // перехопив інший: його свіжий замок не наш
-    if (readHolder(lock)?.pid === holder?.pid) removeLockFile(lock)
+    // ніхто, і його можна забрати
+    if (!reclaimStale(lock, holder?.pid))
+      return { pid: 0, cwd: "?", since: "?" }
   }
+}
+
+// Знімає покинутий замок так, щоб не зняти чужий свіжий: двоє, що бачать той
+// самий покинутий файл, інакше обоє зняли б його, а другий зняв би вже замок
+// першого. Воротар `<замок>.reclaim` створюється `wx`, тож під ним знімає один;
+// звільнити замок тим часом може лише власник, а покинутий власника не має.
+// `false` — воротар зайнятий, спробу повторить наступне опитування
+function reclaimStale(lock: string, stalePid: number | undefined): boolean {
+  const gate = `${lock}.reclaim`
+  try {
+    closeSync(openSync(gate, "wx"))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+    // Воротар покинутого знімальника: інакше замок не знявся б ніколи
+    if (lockAgeMs(gate) > RECLAIM_GATE_STALE_MS) removeLockFile(gate)
+    return false
+  }
+  try {
+    const now = readHolder(lock)
+    if (
+      existsSync(lock) &&
+      now?.pid === stalePid &&
+      (stalePid !== undefined || lockAgeMs(lock) >= LOCK_WRITE_GRACE_MS)
+    )
+      removeLockFile(lock)
+  } finally {
+    removeLockFile(gate)
+  }
+  return true
 }
 
 function lockAgeMs(lock: string): number {

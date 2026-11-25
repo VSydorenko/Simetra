@@ -836,28 +836,37 @@ describe("the pool pick", () => {
   // Інваріант 2: вибір і замок — одна дія. Конкуренти в окремих процесах, що
   // стартують разом, ніколи не тримають один замок одночасно
   it("never lets two processes hold the same stack at once", async () => {
-    const { exited, output } = await compete(6, "1,2", ["hold", "150"])
+    const { exited, output } = await compete(6, "1,2", ["hold", "3", "40"])
     const wait = (
       output as unknown as { wait: (f: () => boolean) => Promise<void> }
     ).wait
     await wait(() =>
-      output.every((lines) => lines.some((l) => l.startsWith("released")))
+      output.every(
+        (lines) => lines.filter((l) => l.startsWith("released")).length >= 40
+      )
     )
     await Promise.all(exited)
-    const spans = output.map((lines) => {
-      const picked = lines.find((l) => l.startsWith("picked"))!.split(" ")
-      const released = lines.find((l) => l.startsWith("released"))!.split(" ")
-      return {
-        index: picked[1]!,
-        from: Number(picked[2]),
-        to: Number(released[2]),
-      }
+    // Записи `picked`/`released` одного процесу йдуть парами, по колу за раз
+    const spans = output.flatMap((lines) => {
+      const picks = lines.filter((l) => l.startsWith("picked"))
+      const releases = lines.filter((l) => l.startsWith("released"))
+      expect(picks).toHaveLength(40)
+      return picks.map((pick, i) => {
+        const [, index, from] = pick.split(" ")
+        return {
+          index: index!,
+          from: Number(from),
+          to: Number(releases[i]!.split(" ")[2]),
+        }
+      })
     })
     expect(new Set(spans.map((s) => s.index))).toEqual(new Set(["1", "2"]))
-    for (const a of spans)
-      for (const b of spans)
-        if (a !== b && a.index === b.index)
-          expect(a.from >= b.to || b.from >= a.to).toBe(true)
+    const clashes = spans.filter((a) =>
+      spans.some(
+        (b) => a !== b && a.index === b.index && a.from < b.to && b.from < a.to
+      )
+    )
+    expect(clashes).toEqual([])
   }, 60_000)
 
   it("skips a stack that is not live and frees its lock", async () => {

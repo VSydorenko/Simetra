@@ -11,7 +11,8 @@ import { join } from "node:path"
 import { installInterruptCleanup } from "../interrupt"
 import { takeStack } from "../stack-guard"
 
-const [dir, candidates, goFile, mode, holdMs] = process.argv.slice(2)
+const [dir, candidates, goFile, mode, holdMs, rounds = "1"] =
+  process.argv.slice(2)
 if (
   dir === undefined ||
   candidates === undefined ||
@@ -31,13 +32,15 @@ while (!existsSync(goFile)) {
   /* spin */
 }
 try {
-  const taken = await takeStack("postgres", {
-    candidates: candidates.split(",").map(Number),
-    lockOf: (index) => join(dir, `stack-${index}.lock`),
-    live: async (index) => !dead.has(index),
-    pollMs: 10,
-    waitMs: 60_000,
-  })
+  const pick = (): ReturnType<typeof takeStack> =>
+    takeStack("postgres", {
+      candidates: candidates.split(",").map(Number),
+      lockOf: (index) => join(dir, `stack-${index}.lock`),
+      live: async (index) => !dead.has(index),
+      pollMs: 1,
+      waitMs: 60_000,
+    })
+  const taken = await pick()
   process.stdout.write(
     `picked ${taken.index} ${Date.now()} env=${process.env.SIMETRA_STACK}\n`
   )
@@ -45,9 +48,18 @@ try {
     installInterruptCleanup({ tag: "abc123", release: taken.release })
     setTimeout(() => process.exit(3), 120_000)
   } else {
-    await new Promise((resolve) => setTimeout(resolve, Number(holdMs)))
-    taken.release()
-    process.stdout.write(`released ${taken.index} ${Date.now()}\n`)
+    // Несколько кругів поспіль: одна спроба рідко потрапляє у вікно гонки
+    let current = taken
+    for (let round = 1; ; round++) {
+      await new Promise((resolve) => setTimeout(resolve, Number(holdMs)))
+      // Час — до звільнення: наступний власник замка стартує вже після нього
+      const at = Date.now()
+      current.release()
+      process.stdout.write(`released ${current.index} ${at}\n`)
+      if (round >= Number(rounds)) break
+      current = await pick()
+      process.stdout.write(`picked ${current.index} ${Date.now()}\n`)
+    }
     process.exit(0)
   }
 } catch (error) {
