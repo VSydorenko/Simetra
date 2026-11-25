@@ -75,4 +75,9 @@ export {
 } from "./agent-catalog"
 // `CommandRuntime` задовольняє структурну межу каталогу: розбіжність
 // сигнатур зламає перевірку типів тут, а не в адаптері.
-void (null as unknown as CommandRuntime satisfies AgentRuntime)
+// Лише на рівні типів, без рантайм-інструкції: якщо `CommandRuntime` перестане
+// бути `AgentRuntime`, обмеження параметра не пройде перевірку типів.
+type CommandRuntimeIsAgentRuntime<T extends AgentRuntime> = T
+// Ім'я ніде не вживається: сенс аліаса — лише обмеження параметра вище
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type CommandRuntimeBoundary = CommandRuntimeIsAgentRuntime<CommandRuntime>
