@@ -2,22 +2,24 @@
 
 Status: accepted 2026-11-25
 Decided by: architect
-Spec: [публічна частина застосунку](../superpowers/specs/2026-11-25-public-app-part-design.md) §5.6
+Spec: [публічна частина застосунку](../superpowers/specs/2026-11-25-public-app-part-design.md) §5.5
 
 ## Context
 
-Рівень призначення `everyUser` дає права кожному дійсному користувачу з факту існування в «Користувачах», без рядків призначень, і лише з обсягами `own` і виміру на нескоуплених об'єктах (Рх7 спеки прав, ADR-0053; `levelAllowsExtent` у `compiler/rights/expand.ts`). Рядок «Користувачів» створює тригер провізії в транзакції реєстрації (ADR-0047). Членство й призначення ролей пише лише адміністрування прав. Шаблон має роль `ClientOwner` рівня `global`, нікому не призначену (`template/metadata/roles/ClientOwner/ClientOwner.meta.json`). Вхід — пароль, реєстрацію вимкнено (Дх4 П4-D). У `better-auth@1.7.12` `emailAndPassword.disableSignUp` стосується лише `/sign-up/email`: `emailOTP`, `magicLink` і `socialProviders` мають власні `disableSignUp`, типово `false`, тож новий спосіб без прапорця тихо відкриває самореєстрацію (`plugins/email-otp/routes.mjs`). Ліміт запитів Better Auth рахує за IP і шляхом, не за адресою (`createRateLimitKey` у `api/rate-limiter/index.mjs`).
+Рівень призначення `everyUser` дає права кожному дійсному користувачу з факту існування в «Користувачах», без рядків призначень, і лише з обсягами `own` і виміру на нескоуплених об'єктах (Рх7 спеки прав, ADR-0053; `levelAllowsExtent` у `compiler/rights/expand.ts`). Рядок «Користувачів» створює тригер провізії в транзакції реєстрації (ADR-0047). Членство й призначення ролей пише лише адміністрування прав. Шаблон має роль `ClientOwner` рівня `global` (`template/metadata/roles/ClientOwner/ClientOwner.meta.json`), яку демо й e2e призначають `assignClientOwner` (`packages/create-simetra-app/scripts/lib/app-database.mts`). Вхід — пароль, реєстрацію вимкнено (Дх4 П4-D). У `better-auth@1.7.12` `emailAndPassword.disableSignUp` стосується лише `/sign-up/email`: `emailOTP`, `magicLink` і `socialProviders` мають власні `disableSignUp`, типово `false`, тож новий спосіб без прапорця тихо відкриває самореєстрацію (`plugins/email-otp/routes.mjs`). Ліміт запитів Better Auth рахує за IP і шляхом, не за адресою (`createRateLimitKey` у `api/rate-limiter/index.mjs`); спроби коду `emailOTP` рахуються на код, і ротація коду їх скидає (`atomicVerifyOTP`, `plugins/email-otp/routes.mjs`).
 
 ## Decision
 
 1. Клієнт застосунку — роль рівня `everyUser` з обсягом `own` на нескоуплених об'єктах. Права випливають з рядка «Користувачів», без призначень, хуків і привілейованого запису.
 2. Довідники, які клієнт читає, — `publicRead: "authenticated"` чи умовний `publicRead` (ADR-0118).
 3. Скоуп лишається для персоналу: самореєстрація не дає членства в скоупі.
-4. Шаблон: `ClientOwner` стає роллю рівня `everyUser`.
+4. Шаблон: `ClientOwner` стає роллю рівня `everyUser`; призначення `assignClientOwner` прибирається.
 5. Налаштування host-а `signUp: "closed" | "open"` і перелік способів входу: пароль; код з email (`emailOTP`); OAuth-провайдери (`socialProviders`, секрети в env).
 6. Кожен спосіб отримує `disableSignUp` з `signUp` явно. Тест таблиці опцій перевіряє кожен увімкнений спосіб.
-7. Код з email: `storeOTP: "hashed"`, строк 5 хв, 3 спроби, ліміт на адресу власним лічильником, розсилка у фоні (`advanced.backgroundTasks`). Транспорт пошти — порт host-а.
-8. Magic link — ні.
+7. Відкриту реєстрацію оголошують метадані проєкту (`selfSignUp: true`): при `signUp: "open"` `authenticated` — будь-хто з Інтернету, тож компілятор перелічує об'єкти з `publicRead: "authenticated"` і гранти `everyUser`, а host відмовляє стартувати з `open` без оголошення.
+8. Код з email: `storeOTP: "hashed"`, строк 5 хв, 3 спроби на код, розсилка у фоні (`advanced.backgroundTasks`). Ворота видачі (`hooks.before`) і лічильник невдалих перевірок на адресу через усі коди за вікно; понад ліміт — та сама відповідь; відмови перевірки зведено до однієї; невикористані endpoint-и `emailOTP` — у `disabledPaths`. Транспорт пошти — порт host-а.
+9. OAuth: неявне зв'язування з наявним обліковим записом — лише коли провайдер стверджує перевірений email.
+10. Magic link — ні.
 
 ## Why
 
@@ -33,9 +35,11 @@ Spec: [публічна частина застосунку](../superpowers/spec
 - Роль рівня `global` з призначенням — кожен новий клієнт потребує запису адміністрування прав.
 - Magic link — сканери пошти спалюють токен.
 - Ліміт лише за IP — не обмежує розсилку на одну адресу з багатьох IP.
+- Ліміт лише в `sendVerificationOTP` — ротація коду скидає спроби, тож код перебирають з багатьох IP.
+- Відкрита реєстрація лише налаштуванням env host-а — розширення доступу до Інтернету без сліду в метаданих.
 
 ## Consequences
 
-- Скоуплені об'єкти клієнту не відкриваються: `everyUser` на них не діє.
+- Скоуплені об'єкти клієнту не відкриваються: `everyUser` на них не діє, крім `create` кореня скоупу з `create@own`; тому відкрита реєстрація потребує оголошення й показує діагностику.
 - Вхід кодом на наявного користувача з неперевіреною адресою прибирає його попередні облікові записи й сесії (`revokeUnprovenAccountAccess` у `better-auth@1.7.12`) — свідомий захист від передреєстрації чужої адреси.
 - Новий спосіб входу без рядка в тесті таблиці опцій — червоний тест, а не тиха самореєстрація.

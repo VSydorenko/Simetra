@@ -2,7 +2,7 @@
 
 Status: accepted 2026-11-25
 Decided by: architect
-Spec: [публічна частина застосунку](../superpowers/specs/2026-11-25-public-app-part-design.md) §5.4
+Spec: [публічна частина застосунку](../superpowers/specs/2026-11-25-public-app-part-design.md) §5.3
 
 ## Context
 
@@ -14,7 +14,7 @@ Spec: [публічна частина застосунку](../superpowers/spec
 2. Гостьове читання — серверна функція host-а над `CommandRuntime.read` і `readParts`. Без сесії вона передає синтетичні claims гостя: сталий `sub` і `is_anonymous: true`; роль обирає `readRoleFor`. З дійсною сесією користувача — claims цієї сесії.
 3. `dataFn` і `guardRequest` не змінюються. Анонімний вхід Better Auth лишається вимкненим.
 4. Публічний маршрут не кладе в HTML знімка T4 і не створює рантайму даних. Сигналів для гостя немає.
-5. Фізичні значення для сторінки декодує той самий T0-декодер, що й сервер (`decodeRow` у `model/runtime/wire.ts`, `readResultFromWire` у `model/runtime/mapping.ts`); `data/**` не змінюється.
+5. Серверна функція повертає результат `read`: він уже логічний (`server/read.ts` → `decodeReadRow` → `decodeRow` у `server/decode.ts`, той самий T0-декодер, що й у клієнта). На межі серверної функції за потреби — пара `readResultToWire` (`server/data-handler.ts`) і `readResultFromWire` (`model/runtime/mapping.ts`); `data/**` не змінюється.
 6. Дх11 П4-D діє далі для маршрутів без декларації.
 
 ## Why
