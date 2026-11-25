@@ -200,8 +200,8 @@ These hold for T0 and for every tier that reads metadata:
 ## Commands and gates
 
 With agent-kit, use its scripts; they read `.agents/kit.profile.json`: tests —
-`run-tests` (`unit` by default; the `db` level runs on the postgres stack and
-`db-supabase` on the Supabase stack; each waits for its stack's lock), PR — `pr-gate`, a spec or plan section —
+`run-tests` (`unit` by default; the `db` level runs on the postgres stack; `db-supabase`
+on the Supabase stack is frozen — see below; each waits for its stack's lock), PR — `pr-gate`, a spec or plan section —
 `doc <file> §N`, Codex — `codex-audit`. The commands below are what
 they run, and the way to work without the kit.
 
@@ -224,12 +224,18 @@ pnpm test:db:pg                           # the default DB suite: base-state pgT
 pnpm demo                                 # the app template on the postgres stack at http://localhost:3000; prints two logins; pnpm demo:drop removes its database
 pnpm db:pg:stop
 
-pnpm db:start                             # local Supabase stack (needs Docker) — supabase-profile regression only
+pnpm db:start                             # local Supabase stack (needs Docker) — frozen profile, manual runs only (ADR-0117)
 pnpm test:db                              # provider base-state pgTAP + *.supabase.db.test.ts against the Supabase stack
 pnpm db:roles                             # apply supabase/roles.sql to the running Supabase stack (additive, idempotent)
 pnpm db:stop
 ```
 
+- **The `supabase` profile is frozen** (ADR-0117). New mechanisms are built
+  only on the `postgres` profile, with no `supabase` adapter; a block adds no
+  `*.supabase.db.test.ts` and neither runs nor requires the `db-supabase`
+  level. The profile code and its tests stay; before adopting a Supabase
+  database again, a manual `db-supabase` run and its repair come first, as a
+  block of their own.
 - 🔴 **No `--` before a vitest pattern** with `pnpm --filter`: the pattern is
   then silently ignored and the whole suite runs, so a "green" filtered run
   proves nothing.
@@ -275,7 +281,8 @@ pnpm db:stop
   `pnpm metadata:check`, a `db` matrix on the postgres stack (each shard starts
   its own stack: base-state pgTAP through the Vitest runner with `simetra`, then
   `@simetrajs/designer` split by `vitest --shard`), a `db-supabase` job
-  (provider pgTAP and `*.supabase.db.test.ts` on the Supabase stack), and a
+  (provider pgTAP and `*.supabase.db.test.ts` on the Supabase stack) that runs
+  only on manual dispatch (`workflow_dispatch`), and a
   `packaging` job (`pnpm build:packages && pnpm test:packaging`). A PR that
   changes only documentation (every file under `docs/` or a Markdown file
   outside `packages/`) runs only the `Checks` job, and in it only the format check
