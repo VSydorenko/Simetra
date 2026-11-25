@@ -361,12 +361,12 @@ export type SyncState = {
   /** The earliest wake-up of a timer of `main` that reads the target. */
   readonly due?: number
   /**
-   * Why `due` is not an ordinary deadline: `retry` — the view is in the pause
-   * before the retry of a discarded load (the flight stays set meanwhile) and
-   * its `retryAt` is the end of the pause, the one place of `main` that knows
-   * it. Absent for an interval or a failure pause. `due` is the earliest
-   * wake-up that reads the view, so an earlier timer of its object may stand
-   * in it: the cause says the view is in the pause, not that `due` is its end.
+   * Why `due` is not an ordinary deadline: `retry` — `due` IS the end of the
+   * pause before the retry of a discarded load (the flight stays set
+   * meanwhile), `retryAt` of the view, the one place of `main` that knows it.
+   * Timers of the object read a view in flight only as a tail after the
+   * flight, so they never stand in this `due`. Absent for an interval or a
+   * failure pause.
    */
   readonly dueCause?: DueCause
 } & (
@@ -2496,7 +2496,9 @@ export function createCore(options: {
           },
           {
             proof: s.okReadEpoch,
-            due: earliest(timerDue(s), s.retryAt),
+            // У паузі повтору вигляд у польоті: таймери об'єкта читають його лише
+            // хвостом після польоту, тож його строк — кінець паузи.
+            due: s.retryAt ?? timerDue(s),
             dueCause:
               s.retryAt !== undefined && !defects.has("sync-pause-no-cause")
                 ? "retry"

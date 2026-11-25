@@ -5,7 +5,7 @@ import { SCOPE_KIND_ID } from "../../../model/runtime/__tests__/entries"
 import type { SyncState, SyncTarget } from "../core"
 import { failurePause } from "../subsets"
 import { QUIET_MS, REJOIN_JITTER_MS } from "../receiver"
-import { DISCARDS_MAX } from "../session"
+import { DISCARD_PAUSE_MS, DISCARDS_MAX } from "../session"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import type { ReadEvent } from "../source"
 import type { CoreLimits, ViewSpec } from "../types"
@@ -518,6 +518,44 @@ describe("sync(): every due it shows is read by then", () => {
     watch(h.core.view(keysView(1, 2)))
     await settle()
     await expectReadByDue(h, RIGHTS)
+  })
+})
+
+describe("sync(): the pause before the retry of a discarded load", () => {
+  it("shows the end of the pause as `due` with the cause `retry` although a timer of its object is earlier, and the read starts by it", async () => {
+    // Джитер перемикання епохи 60 мс: таймер об'єкта настає зараз, раніше за паузу.
+    vi.spyOn(Math, "random").mockReturnValue(0.001)
+    const h = await switched()
+    seed(h.fake, 3, 3)
+    const events: { at: number; site: string; reason: string }[] = []
+    h.inspect.watchReads((e) =>
+      events.push({ at: Date.now(), site: e.site, reason: e.reason })
+    )
+    // Читання нового вигляду відкидається, і він іде в паузу.
+    const second = keysView(3)
+    watch(h.core.view(second))
+    await settle()
+    // Відповідь покинутої епохи сесія відкидає.
+    h.fake.epoch = "a".repeat(64)
+    h.fake.deliverAll()
+    await settle()
+    const objectDue = h.inspect.scheduledDue().get(TASK)!
+    const state = stateOf(h, viewTarget(second))!
+    const pause =
+      DISCARD_PAUSE_MS *
+      2 ** Math.max(0, h.inspect.versionEpochs().discards - 1)
+    expect(state.flights).toEqual([])
+    expect(objectDue).toBeLessThan(Date.now() + pause)
+    expect(state.due).toBe(Date.now() + pause)
+    expect(state.dueCause).toBe("retry")
+    const due = state.due!
+    // Повтор стартує не пізніше кінця паузи.
+    events.length = 0
+    vi.advanceTimersByTime(pause)
+    await settle()
+    const retry = events.filter((e) => e.site === "M8")
+    expect(retry.length).toBeGreaterThan(0)
+    expect(retry.every((e) => e.at <= due)).toBe(true)
   })
 })
 
