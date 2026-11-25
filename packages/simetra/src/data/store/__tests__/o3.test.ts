@@ -143,6 +143,7 @@ describe("O3 self-check", () => {
       "discard-bound",
       "stale-object",
       "purged",
+      "card-without-duty",
     ]
     for (const state of states) {
       it(`${state}: green with a wrong display, red once the state is gone`, () => {

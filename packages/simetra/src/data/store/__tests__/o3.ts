@@ -25,6 +25,11 @@ export type O3State =
   | "stale-object"
   /** Вигляд знищений `purge` пари: доки пару не відновлено. */
   | "purged"
+  /**
+   * Завантажена картка чи ТЧ без власної вимоги, польоту, черги й строку:
+   * `main` її не читає (рядки 17 і 20 §5.14, ті самі, що й виняток О2); стан, а не час.
+   */
+  | "card-without-duty"
 
 /** Зміна рядка на сервері й мить моделі, коли модель її побачила. */
 export interface O3Change {
@@ -36,6 +41,8 @@ export interface O3Change {
 export interface O3Join {
   readonly object: ObjectName
   readonly at: number
+  /** Скільки подій читання було в мить приєднання (самотест порядку читань). */
+  readonly after?: number
 }
 
 export interface O3View {
@@ -120,6 +127,10 @@ export interface O3 {
   step(input: O3Input): string | undefined
   /** Скільки виглядів оракул справді порівняв із сервером. */
   evaluated(): number
+  /** Вигляд і межа останньої проблеми: самотест мутації перевіряє, що її дала саме хвиля. */
+  failure():
+    | { readonly objects: readonly ObjectName[]; readonly bound: number }
+    | undefined
   /** Скільки виглядів пропущено названим станом (звіт про вжиті винятки). */
   skipped(state: O3State): number
 }
@@ -127,6 +138,7 @@ export interface O3 {
 export function createO3(): O3 {
   let count = 0
   const skippedBy = new Map<O3State, number>()
+  let failed: { objects: readonly ObjectName[]; bound: number } | undefined
   return {
     step(input) {
       for (const view of input.views) {
@@ -138,12 +150,15 @@ export function createO3(): O3 {
         }
         count++
         const problem = view.truth()
-        if (problem !== undefined)
+        if (problem !== undefined) {
+          failed = { objects: view.objects, bound: viewBound(view, input) }
           return `view ${view.id} past its bound ${viewBound(view, input)} at ${input.now}: ${problem}`
+        }
       }
       return undefined
     },
     evaluated: () => count,
+    failure: () => failed,
     skipped: (state) => skippedBy.get(state) ?? 0,
   }
 }
