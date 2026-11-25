@@ -6,6 +6,7 @@ import {
   changeBound,
   checkpoints,
   createO3,
+  hasOwnDuty,
   hiddenOwnerBound,
   judgeRows,
   judgeSection,
@@ -280,6 +281,33 @@ describe("O3 self-check", () => {
       ).toBeUndefined()
       expect(
         createO3().step({ ...i, now: 10 * INTERVAL, views: [hidden(0)] })
+      ).toMatch(/stale row/)
+    })
+  })
+
+  describe("a header holder with a duty of its own that never reads the header", () => {
+    const empty = { requirements: [], flights: [], queued: [] }
+    it("own duty is a requirement, a flight, a queue or a due, nothing else", () => {
+      expect(hasOwnDuty(empty)).toBe(false)
+      expect(hasOwnDuty({ ...empty, due: 1 })).toBe(true)
+      expect(hasOwnDuty({ ...empty, queued: [{ kind: "load" }] })).toBe(true)
+      expect(
+        hasOwnDuty({ ...empty, requirements: [{ kind: "access-narrowed" }] })
+      ).toBe(true)
+      expect(
+        hasOwnDuty({ ...empty, flights: [{ kind: "reread", epoch: 1 }] })
+      ).toBe(true)
+    })
+    it("mutation: the holder is counted, never reads the header, the section stays stale -> red", () => {
+      // Тримач з обов'язком: модель дає `holderSince`; шапку ніхто не читає, показ
+      // секції лишається `stale` — за межею О3 червоний (не названий стан).
+      const i = input({ phaseStart: 0 })
+      expect(
+        createO3().step({
+          ...i,
+          now: 2 * INTERVAL,
+          views: [view({ state: "section-owner-hidden", holderSince: 0 })],
+        })
       ).toMatch(/stale row/)
     })
   })

@@ -74,6 +74,7 @@ import {
   assertEvaluated as assertO3Evaluated,
   checkpoints as o3Checkpoints,
   createO3,
+  hasOwnDuty,
   judgeRows,
   judgeSection,
   lastBound as o3LastBound,
@@ -4669,13 +4670,7 @@ async function runModelOn(
             const held = internals.registry.find(other)
             const duty =
               held === undefined ? undefined : syncedViews().get(held.targetId)
-            return (
-              duty !== undefined &&
-              (duty.due !== undefined ||
-                duty.requirements.length > 0 ||
-                duty.flights.length > 0 ||
-                duty.queued.length > 0)
-            )
+            return duty !== undefined && hasOwnDuty(duty)
           })
           if (holds && core.visible) holderSince = phaseStart
         } else if (syncedViews().get(sub.targetId)?.dueCause === "retry")
@@ -4690,13 +4685,7 @@ async function runModelOn(
           sub.loaded
         ) {
           const duty = syncedViews().get(sub.targetId)
-          if (
-            duty !== undefined &&
-            duty.requirements.length === 0 &&
-            duty.flights.length === 0 &&
-            duty.queued.length === 0 &&
-            duty.due === undefined
-          )
+          if (duty !== undefined && !hasOwnDuty(duty))
             state = "card-without-duty"
         }
         return [

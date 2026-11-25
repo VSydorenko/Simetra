@@ -1,5 +1,6 @@
 import type { MutationState, ObjectName, RowState } from "../types"
 import { REJOIN_JITTER_MS } from "../receiver"
+import type { SyncState } from "../core"
 
 /*
  * Оракул О3 (спека ядра синхронізації §5.13, план SK-0 Р-SK0-9): після
@@ -204,6 +205,19 @@ export function judgeSection(
     return `lines ${JSON.stringify(shown.lines)} ≠ server ${JSON.stringify(truth.lines)}`
   return undefined
 }
+
+/**
+ * Ціль має власний обов'язок читання: вимогу, політ, чергу чи строк у `sync()`.
+ * Одне означення для стану `card-without-duty` (її нема) і для тримача шапки
+ * стану `section-owner-hidden` (тримач без обов'язку шапки не читає).
+ */
+export const hasOwnDuty = (
+  state: Pick<SyncState, "requirements" | "flights" | "queued" | "due">
+): boolean =>
+  state.due !== undefined ||
+  state.requirements.length > 0 ||
+  state.flights.length > 0 ||
+  state.queued.length > 0
 
 /** Лічильник нуль — О3 порожній, а не зелений. */
 export function assertEvaluated(count: number, where: string): void {
