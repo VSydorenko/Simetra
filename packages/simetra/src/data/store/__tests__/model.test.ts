@@ -2636,9 +2636,14 @@ async function runModelOn(
       const id = sub.targetId
       const state = syncedViews().get(id)
       const loads = tracker.loads(id)
-      const flight = state?.flights.some((f) => f.kind === "load")
-        ? loads
-        : undefined
+      // Пауза повтору відкинутого завантаження — те саме завантаження в польоті
+      // (`sync()` показує її строком із причиною `retry`): без неї кінець польоту
+      // користувача здається розривом, і його повтор перестає бути його.
+      const flight =
+        state?.flights.some((f) => f.kind === "load") ||
+        state?.dueCause === "retry"
+          ? loads
+          : undefined
       const mineSet = userLoads.get(id) ?? new Set<number>()
       // Заміна знімка прав посеред кроку відповіді перезапускає завантаження
       // користувача в польоті (Р5а — перше завантаження, прохід — `purge`
@@ -5512,6 +5517,13 @@ describe("core model regressions", () => {
       signals: true,
       seed: -372539610,
       path: "7725:6:5:9:3:1:5:5:6:8:12:4:5:4:5:5:8:10:12:12:14:14:14:14:17:17:17:17:18:18:18:18:19:20:19:20:21:20:21:22:22",
+    },
+    // Пауза повтору — те саме завантаження користувача в польоті: без неї модель
+    // губила його номер, і складу, що ріс після повтору, ніхто не виправдовував.
+    {
+      issue: "user load across a retry pause",
+      seed: -997846743,
+      path: "6453:1:1:0:8:10:11:13:15:15:17:17:17:19:19:19:20:20:20:20:20:20:20:20:20:21:21:21:21:21:21",
     },
     {
       issue: "O2 purged row returns",
