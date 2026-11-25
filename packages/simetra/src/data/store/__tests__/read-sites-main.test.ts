@@ -64,11 +64,21 @@ const CONDITIONS = [
   "stale-object",
   "discard-bound",
   "tab-hidden",
+  "closing",
 ] as const
 type Condition = (typeof CONDITIONS)[number]
 
 /** Клітинка: запит був чи ні й наслідок шляху (стан вигляду). */
-type Cell = { request: boolean; then: string; unreached?: string }
+type Cell =
+  | {
+      request: boolean
+      then: string
+      /** Запит не пішов не через умову: шлях до рішення не дійшов (причина названа). */
+      unreached?: string
+      /** Лише вікно закриття: шлях звернувся до `read` джерела. */
+      attempted?: boolean
+    }
+  | { unreachable: string }
 
 interface Rig {
   readonly h: CoreHarness
@@ -136,7 +146,7 @@ function abandonEpoch(core: CoreSession) {
 }
 
 const APPLY: Record<
-  Condition,
+  Exclude<Condition, "closing">,
   (core: CoreSession, object: ObjectName) => void
 > = {
   closed: (core) => core.close("disposed"),
@@ -790,7 +800,7 @@ const RECIPES: Partial<Record<SiteCode, Recipe>> = {
 async function run(
   code: SiteCode,
   condition: Condition | undefined
-): Promise<Cell> {
+): Promise<{ request: boolean; then: string; attempted: boolean }> {
   const recipe = RECIPES[code]!
   const transport = createFakeSignalTransport()
   const h = setup({
@@ -806,21 +816,58 @@ async function run(
   const rig: Rig = { h, transport }
   const fire = await recipe.arm(rig)
   const core = rig.core ?? h.core
+  // Вікно закриття (`closing`): токен сесії вже недійсний, `close()` ще не
+  // скінчив. Рішення читати стоїть усередині слухача purge-пачки: кроку,
+  // який виконується синхронно в `close()`, інакше вікна немає.
+  let inClose = false
+  let inside: unknown
+  if (condition === "closing") {
+    core
+      .view({ kind: "keys", object: ORG, keys: [key(9100)] })
+      .subscribe(() => {
+        if (inClose && inside === undefined) inside = fire()
+      })
+    await settle()
+  }
   const events: ReadEvent[] = []
   const stop = inspectCore(core).watchReads((e) => events.push(e))
-  if (condition !== undefined) APPLY[condition](core, recipe.object ?? TASK)
-  await fire()
+  // Спроби читання: виклики `read` джерела ядра, до обмежувача й збирача. У
+  // вікні закриття запит на дріт не йде вже через `source.close()`, тож лише
+  // спроба показує, чи рішення шляху було «читати».
+  const attempts: string[] = []
+  const source = coreInternals(core).source
+  const sourceRead = source.read.bind(source)
+  source.read = (parts, flight) => {
+    attempts.push(flight.site)
+    return sourceRead(parts, flight)
+  }
+  if (condition === "closing") {
+    inClose = true
+    core.close("disposed")
+    await inside
+  } else {
+    if (condition !== undefined) APPLY[condition](core, recipe.object ?? TASK)
+    await fire()
+  }
   await settle()
   stop()
   const mine = events.filter((e) => e.site === code)
-  return { request: mine.length > 0, then: outcome(rig.main) }
+  return {
+    request: mine.length > 0,
+    then: outcome(rig.main),
+    attempted: attempts.includes(code),
+  }
 }
 
 /*
  * Очікування — поведінка `main`, знята прогоном кожного шляху над справжнім
  * ядром і фейковим сервером; Додаток Б (колонка «Умови») звірено з ними вручну.
- * Закрите ядро — повністю закрите (`close()` відпрацювало); вікно закриття
- * (`closing`, рядок 15 §5.14) тут не судиться: задача 3 міняє його навмисно.
+ * `closed` — повністю закрите ядро (`close()` відпрацювало); `closing` — вікно
+ * закриття (токен недійсний, `close()` ще не вернувся): рішення шляху стоїть у
+ * слухачі purge-пачки. Це «до» рядка 15 §5.14: задача 3 міняє лише клітинки
+ * `closing`. `attempted` — шлях звернувся до `read` джерела (запит на дріт у
+ * вікні однаково не йде: `source.close()` стоїть одразу після `session.close`).
+ * `unreachable` — пару не запускають: причина структурна.
  * Кожну пару запущено. `unreached` — клітинка, де `request: false` не є
  * рішенням шляху чи шлюзу щодо умови: шлях до рішення не дійшов. Причину
  * названо й перевірено мутацією на копії (її вимкнення дає запит); решта
@@ -835,6 +882,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: { request: false, then: "purged", attempted: false },
   },
   M2: {
     closed: { request: false, then: "purged" },
@@ -844,12 +892,14 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: { request: false, then: "purged", attempted: false },
   },
   M3: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: { request: false, then: "purged", attempted: false },
   },
   M4: {
     closed: { request: false, then: "purged" },
@@ -859,12 +909,17 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken in the flush of a commit; commit() refuses an invalid token, so no commit runs in the window",
+    },
   },
   M5: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: { request: false, then: "purged", attempted: false },
   },
   M6: {
     closed: { request: false, then: "purged" },
@@ -874,6 +929,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken when an answer settles (a microtask after the transport answers); that is after close() has returned",
+    },
   },
   M7: {
     closed: { request: false, then: "purged" },
@@ -883,6 +942,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
     "discard-bound": { request: false, then: "error:command.unavailable" },
     "tab-hidden": { request: false, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken when an answer settles (a microtask after the transport answers); that is after close() has returned",
+    },
   },
   M8: {
     closed: { request: false, then: "purged" },
@@ -892,12 +955,17 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "refreshing" },
+    closing: {
+      unreachable:
+        "the decision is taken in a timer (scheduler tick, retry pause, signal batch); a timer runs after close() has returned, and the closing window exists only inside it",
+    },
   },
   P1: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: { request: false, then: "purged", attempted: false },
   },
   P2: {
     closed: { request: false, then: "purged" },
@@ -907,6 +975,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken in a timer (scheduler tick, retry pause, signal batch); a timer runs after close() has returned, and the closing window exists only inside it",
+    },
   },
   P3: {
     closed: { request: false, then: "purged" },
@@ -921,6 +993,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
         "session: acceptEpoch discards every answer after the bound, so the pass never reaches the decision of the path",
     },
     "tab-hidden": { request: false, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken when an answer settles (a microtask after the transport answers); that is after close() has returned",
+    },
   },
   R1: {
     closed: { request: false, then: "purged" },
@@ -936,6 +1012,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       then: "ready",
       unreached:
         "scheduler: suspend() stops the timer and the tick does not run on a hidden tab; the path is never reached",
+    },
+    closing: {
+      unreachable:
+        "the decision is taken in a timer (scheduler tick, retry pause, signal batch); a timer runs after close() has returned, and the closing window exists only inside it",
     },
   },
   R2: {
@@ -953,6 +1033,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       unreached:
         "scheduler: suspend() stops the timer and the tick does not run on a hidden tab; the path is never reached",
     },
+    closing: {
+      unreachable:
+        "the decision is taken in a timer (scheduler tick, retry pause, signal batch); a timer runs after close() has returned, and the closing window exists only inside it",
+    },
   },
   R3: {
     closed: { request: false, then: "purged" },
@@ -968,6 +1052,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       then: "ready",
       unreached:
         "scheduler: suspend() stops the timer and the tick does not run on a hidden tab; the path is never reached",
+    },
+    closing: {
+      unreachable:
+        "the decision is taken in a timer (scheduler tick, retry pause, signal batch); a timer runs after close() has returned, and the closing window exists only inside it",
     },
   },
   R4: {
@@ -985,18 +1073,24 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       unreached:
         "scheduler: suspend() stops the timer and the tick does not run on a hidden tab; the path is never reached",
     },
+    closing: {
+      unreachable:
+        "the decision is taken in a timer (scheduler tick, retry pause, signal batch); a timer runs after close() has returned, and the closing window exists only inside it",
+    },
   },
   R5: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: { request: false, then: "purged", attempted: false },
   },
   R6: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: { request: false, then: "purged", attempted: false },
   },
   R7: {
     closed: { request: false, then: "purged" },
@@ -1006,6 +1100,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: { request: false, then: "purged", attempted: false },
   },
   R8: {
     closed: { request: false, then: "purged" },
@@ -1017,6 +1112,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
         "receiver: halted() stops the collection of signals after the bound, before any admit",
     },
     "tab-hidden": { request: false, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken in a timer (scheduler tick, retry pause, signal batch); a timer runs after close() has returned, and the closing window exists only inside it",
+    },
   },
   R9: {
     closed: { request: false, then: "purged" },
@@ -1028,12 +1127,20 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
         "receiver: halted() stops the collection of signals after the bound, before any admit",
     },
     "tab-hidden": { request: false, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken in a timer (scheduler tick, retry pause, signal batch); a timer runs after close() has returned, and the closing window exists only inside it",
+    },
   },
   R10: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken in the flush of a commit; commit() refuses an invalid token, so no commit runs in the window",
+    },
   },
   R11: {
     closed: { request: false, then: "purged" },
@@ -1043,6 +1150,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken when an answer settles (a microtask after the transport answers); that is after close() has returned",
+    },
   },
   R12: {
     closed: { request: false, then: "purged" },
@@ -1057,18 +1168,24 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
         "session: acceptEpoch discards every answer after the bound, so the pass never reaches the decision of the path",
     },
     "tab-hidden": { request: true, then: "refreshing" },
+    closing: {
+      unreachable:
+        "the decision is taken when an answer settles (a microtask after the transport answers); that is after close() has returned",
+    },
   },
   R13: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: false, then: "ready" },
     "tab-hidden": { request: false, then: "ready" },
+    closing: { request: false, then: "purged", attempted: false },
   },
   R14: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: { request: false, then: "purged", attempted: false },
   },
   R15: {
     closed: { request: false, then: "purged" },
@@ -1078,6 +1195,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
     "discard-bound": { request: false, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken when an answer settles (a microtask after the transport answers); that is after close() has returned",
+    },
   },
   R16: {
     closed: { request: false, then: "purged" },
@@ -1087,6 +1208,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken when an answer settles (a microtask after the transport answers); that is after close() has returned",
+    },
   },
   R17: {
     closed: { request: false, then: "purged" },
@@ -1101,6 +1226,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
         "session: acceptEpoch discards every answer after the bound, so the pass never reaches the decision of the path",
     },
     "tab-hidden": { request: true, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken when an answer settles (a microtask after the transport answers); that is after close() has returned",
+    },
   },
   R18: {
     closed: { request: false, then: "purged" },
@@ -1110,6 +1239,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     },
     "discard-bound": { request: false, then: "error:command.unavailable" },
     "tab-hidden": { request: false, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken when an answer settles (a microtask after the transport answers); that is after close() has returned",
+    },
   },
   K1: {
     closed: { request: false, then: "purged" },
@@ -1121,6 +1254,10 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
         "receiver: halted() stops the collection of signals after the bound, before any admit",
     },
     "tab-hidden": { request: false, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken in a timer (scheduler tick, retry pause, signal batch); a timer runs after close() has returned, and the closing window exists only inside it",
+    },
   },
   K2: {
     closed: { request: false, then: "purged" },
@@ -1132,36 +1269,48 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
         "receiver: halted() stops the collection of signals after the bound, before any admit",
     },
     "tab-hidden": { request: false, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken in a timer (scheduler tick, retry pause, signal batch); a timer runs after close() has returned, and the closing window exists only inside it",
+    },
   },
   K3: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "ready" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: {
+      unreachable:
+        "the decision is taken in the flush of a commit; commit() refuses an invalid token, so no commit runs in the window",
+    },
   },
   K4: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
     "discard-bound": { request: true, then: "ready" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: { request: false, then: "purged", attempted: false },
   },
   S1: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: true, then: "ready+stale" },
     "discard-bound": { request: true, then: "ready" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: { request: false, then: "purged", attempted: false },
   },
   S2: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: true, then: "ready+stale" },
     "discard-bound": { request: true, then: "ready" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: { request: false, then: "purged", attempted: false },
   },
   S3: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: true, then: "error:command.stale-client+stale" },
     "discard-bound": { request: true, then: "error:command.unavailable" },
     "tab-hidden": { request: true, then: "ready" },
+    closing: { request: false, then: "purged", attempted: false },
   },
 }
 
@@ -1170,9 +1319,15 @@ describe("the paths of Appendix Б on main: request and consequence per conditio
     // Контроль: без умови шлях запит дає. Інакше «запиту немає» нічого не доводить.
     expect((await run(code, undefined)).request, `${code} control`).toBe(true)
     for (const condition of CONDITIONS) {
-      const { request, then } = await run(code, condition)
-      const { unreached, ...expected } = TABLE[code][condition]
-      expect({ request, then }, `${code} × ${condition}`).toEqual(expected)
+      const cell = TABLE[code][condition]
+      // Недосяжна пара: причина структурна, прогону немає.
+      if ("unreachable" in cell) continue
+      const { request, then, attempted } = await run(code, condition)
+      const { unreached, attempted: wanted, ...expected } = cell
+      const label = `${code} × ${condition}`
+      expect({ request, then }, label).toEqual(expected)
+      if (wanted !== undefined)
+        expect(attempted, `${label} attempted`).toBe(wanted)
       // `unreached` пояснює лише «запиту немає».
       if (unreached !== undefined) expect(expected.request).toBe(false)
     }
