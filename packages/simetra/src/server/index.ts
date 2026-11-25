@@ -54,8 +54,25 @@ export {
   type AgentCorePermissions,
   type AgentObjectDescription,
   type AgentObjectSummary,
+  AGENT_ERROR_CODES,
+  AGENT_OUTCOMES,
+  agentResultToMcp,
+  type AgentErrorCode,
+  type AgentMcpResult,
+  type AgentOutcome,
+  type AgentTool,
+  type AgentToolAnnotations,
+  type AgentToolError,
+  type AgentToolResult,
+  type AgentToolState,
+  type AgentToolSuccess,
   type AgentVerb,
 } from "./agent"
+export {
+  createAgentToolCatalog,
+  type AgentToolCatalog,
+  type AgentToolCatalogOptions,
+} from "./agent-catalog"
 // `CommandRuntime` задовольняє структурну межу каталогу: розбіжність
 // сигнатур зламає перевірку типів тут, а не в адаптері.
 void (null as unknown as CommandRuntime satisfies AgentRuntime)
