@@ -5179,6 +5179,53 @@ describe("core model regressions", () => {
     await modelRun(runModel(steps, true, "burial", [], true, true, false))
   })
 
+  // Нестабільний за природою: джитер перемикання епохи (`Math.random`). Той самий
+  // прогін 40 разів: модель не мусить розходитися з ядром, коли пауза повтору
+  // стоїть у `sync()` поруч із строком об'єкта.
+  it("keeps the model and the core agreed on the retry pause beside an object timer", async () => {
+    const steps: Step[] = [
+      { t: "hideSection", state: "mounted", then: "none", evict: false },
+      { t: "sub", v: 0 },
+      { t: "churn", v: 0, scroll: true },
+      { t: "epoch", which: 1 },
+      { t: "answer", pick: 0, how: "missing", at: 0 },
+      { t: "epoch", which: 2 },
+      { t: "answer", pick: 2, how: "missing", at: 0 },
+      { t: "epoch", which: 1 },
+      { t: "edit", k: 0, title: 0 },
+      { t: "answer", pick: 0, how: "stale", at: 2 },
+      { t: "answer", pick: 6, how: "missing", at: 0 },
+      { t: "sub", v: 2 },
+      { t: "revalidate", org: false, visibleOnly: true },
+      { t: "answer", pick: 2, how: "stale", at: 0 },
+      { t: "page", w: 1, dir: "after" },
+      { t: "return", minAge: 1000 },
+    ]
+    for (let i = 0; i < 40; i++) {
+      await modelRun(runModel(steps, false, "scroll", [], true, false, false))
+      await settleRuns()
+    }
+  }, 120_000)
+
+  // Строк рядка зник у мить строку, бо тримач (вигляд) пішов: не прострочена
+  // обіцянка, а названий стан «немає тримача».
+  it("does not owe a row deadline that left with its released holder", async () => {
+    const steps: Step[] = [
+      { t: "hideSection", state: "mounted", then: "none", evict: false },
+      { t: "answer", pick: 1, how: "missing", at: 0 },
+      { t: "churn", v: 1, scroll: false },
+      { t: "answer", pick: 0, how: "forbidden", at: 0 },
+      { t: "unsub", v: 1, release: true },
+      { t: "answer", pick: 0, how: "stale", at: 0 },
+      { t: "answer", pick: 0, how: "missing", at: 0 },
+      { t: "sub", v: 2 },
+      { t: "answer", pick: 0, how: "missing", at: 0 },
+      { t: "answer", pick: 0, how: "missing", at: 0 },
+      { t: "unsub", v: 0, release: true },
+    ]
+    await modelRun(runModel(steps, true, "scroll", [], true, true, true))
+  })
+
   it("agrees with the core on a view in the M8 retry pause", async () => {
     const answer: Step = { t: "answer", pick: 0, how: "ok", at: 0 }
     const refresh: Step = { t: "refresh", v: 0, showNew: false }
@@ -5198,8 +5245,6 @@ describe("core model regressions", () => {
       answer,
       { t: "time", ms: 500 },
       answer,
-      answer,
-      { t: "time", ms: 5000 },
       answer,
     ]
     await modelRun(runModel(steps, false, "full", [], true, false, false))

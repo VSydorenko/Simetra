@@ -601,10 +601,15 @@ export function createO2(): O2 {
       }
       // Строк зник зі `sync()` до свого часу (вкладку приховано, планувальник його
       // не веде): обіцянки більше немає, а вимогу в новому стані судить правило спокою.
+      // Строк зник зі `sync()` у мить строку чи після неї, бо тримач вигляду
+      // пішов чи вигляд став під винятком таблиці: вимогу тепер тримає названий
+      // чи обмежений виняток (його межа не вічна), а не обіцянка. Без винятку
+      // вимогу без строку й так судить правило спокою нижче.
+      const heldByException = state.due === undefined && excused(state, input)
       if (
         promise.kind === "due" &&
         state.due === undefined &&
-        now < promise.due
+        (now < promise.due || heldByException)
       ) {
         obligations.delete(key)
         continue

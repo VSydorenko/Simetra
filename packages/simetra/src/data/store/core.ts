@@ -361,10 +361,12 @@ export type SyncState = {
   /** The earliest wake-up of a timer of `main` that reads the target. */
   readonly due?: number
   /**
-   * Why `due` is not an ordinary deadline: `retry` — the end of the pause
-   * before the retry of a discarded load (the flight stays set meanwhile).
-   * Absent for an interval or a failure pause. The value is `retryAt` of the
-   * view, the one place of `main` that knows the pause.
+   * Why `due` is not an ordinary deadline: `retry` — the view is in the pause
+   * before the retry of a discarded load (the flight stays set meanwhile) and
+   * its `retryAt` is the end of the pause, the one place of `main` that knows
+   * it. Absent for an interval or a failure pause. `due` is the earliest
+   * wake-up that reads the view, so an earlier timer of its object may stand
+   * in it: the cause says the view is in the pause, not that `due` is its end.
    */
   readonly dueCause?: DueCause
 } & (

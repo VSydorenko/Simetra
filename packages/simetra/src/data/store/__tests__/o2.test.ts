@@ -173,26 +173,75 @@ describe("O2 self-check", () => {
     ).toMatch(/no read by its deadline/)
   })
 
-  it("a deadline that left sync() before its time (hidden tab) is no longer owed; at or after it, or kept, it is", () => {
+  it("a deadline that left sync() is handed to an exception or judged by the idle rule, never forgiven", () => {
     const row: SyncTarget = { kind: "row", object: OBJECT, key: "k" }
-    const hidden = { holderVisible: () => false, rowAlive: () => true }
     const withDue = state(row, {
       requirements: [{ kind: "value-hidden" }],
       due: 1_000,
     })
     const withdrawn = state(row, { requirements: [{ kind: "value-hidden" }] })
-    const evaluate = (at: number, states: SyncState[]) => {
+    const evaluate = (
+      at: number,
+      states: SyncState[],
+      visible: boolean,
+      revalidateMs = 10_000
+    ) => {
       const o2 = createO2()
       o2.step(input({ now: 0, states: [withDue] }))
-      return o2.step(input({ now: at, states, ...hidden }))
+      // Вигляд того самого об'єкта — тримач рядка: видимий чи ні.
+      return o2.step(
+        input({
+          now: at,
+          states: [...states, state(view(3))],
+          revalidateMs,
+          holderVisible: () => visible,
+          rowAlive: () => true,
+        })
+      )
     }
     // До строку: обіцянку знято разом зі строком.
-    expect(evaluate(999, [withdrawn])).toBeUndefined()
-    // У строк і після нього строк, що зник, не прощає пропущеного читання.
-    expect(evaluate(1_000, [withdrawn])).toMatch(/no read by its deadline/)
-    expect(evaluate(1_500, [withdrawn])).toMatch(/no read by its deadline/)
-    // Строк лишився у `sync()`, а читання не було: червоний.
-    expect(evaluate(1_000, [withDue])).toMatch(/no read by its deadline/)
+    expect(evaluate(999, [withdrawn], false)).toBeUndefined()
+    expect(evaluate(999, [withdrawn], true)).toBeUndefined()
+    // Тримач пішов у мить строку: названий стан «немає видимого тримача».
+    expect(evaluate(1_000, [withdrawn], false)).toBeUndefined()
+    expect(evaluate(1_500, [withdrawn], false)).toBeUndefined()
+    // Видимий тримач: обмежений виняток, його межа не вічна — за нею червоний.
+    expect(evaluate(1_500, [withdrawn], true)).toBeUndefined()
+    const bounded = createO2()
+    bounded.step(input({ now: 0, states: [withDue] }))
+    const at = (now: number) =>
+      bounded.step(
+        input({
+          now,
+          states: [withdrawn, state(view(3))],
+          revalidateMs: 100,
+          holderVisible: () => true,
+          rowAlive: () => true,
+        })
+      )
+    expect(at(1_000)).toBeUndefined()
+    expect(at(1_150)).toBeUndefined()
+    expect(at(1_500)).toMatch(/no promise and no condition/)
+    // Строк лишився у `sync()`, а читання не було: червоний, хоч тримача й нема.
+    expect(evaluate(1_000, [withDue], true)).toMatch(/no read by its deadline/)
+    expect(evaluate(1_000, [withDue], false)).toMatch(/no read by its deadline/)
+    // Вимога поза винятками й без строку, у строк чи після нього: червоний.
+    const list: SyncTarget = view(1)
+    const noException = createO2()
+    noException.step(
+      input({
+        now: 0,
+        states: [state(list, { requirements: [composition], due: 1_000 })],
+      })
+    )
+    expect(
+      noException.step(
+        input({
+          now: 1_500,
+          states: [...alive, state(list, { requirements: [composition] })],
+        })
+      )
+    ).toMatch(/no read by its deadline/)
   })
 
   it("keeps a queue: the queued read starts, or red", () => {
