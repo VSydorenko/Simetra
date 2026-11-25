@@ -2,23 +2,17 @@
 // Copyright 2026 Volodymyr Sydorenko
 // Licensed under Apache-2.0. Modified: the pairing login is replaced by the Better Auth session bridge; functions over Request instead of screens; a CSRF token bound to the interaction; the tenant of the grant and re-authorisation of the (client, user, tenant) triple; grants are listed and revoked from agent_grants for the session user only; no pair state machine.
 // API взаємодії сервера авторизації агентів для екранів F5 (спека П4-F
-// §5.4, Р-F4-12). Модуль не імпортує `oidc-provider` значенням: сервер
-// авторизації передає той, хто монтує сторінку, тож бібліотека не потрапляє
-// в граф імпорту маршруту (знахідка 7 F0).
+// §5.4, Р-F4-12). Сервер авторизації передає той, хто монтує сторінку.
 import { createHmac, timingSafeEqual } from "node:crypto"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import type Provider from "oidc-provider"
-import type { InteractionModel } from "oidc-provider"
+import { errors, type InteractionModel } from "oidc-provider"
 import type { Pool } from "pg"
 import { toFetchHandler } from "srvx/node"
 import type { AppClaims } from "../auth"
 import { pinnedToOrigin } from "./mount"
 import { agentConnectUid } from "./paths"
-import { insertAgentGrant, revokeGrant } from "./store"
-
-const DAY_MS = 86_400_000
-// Абсолютна межа гранту, як `ttl.Grant` сервера авторизації
-const GRANT_LIFETIME_MS = 365 * DAY_MS
+import { GRANT_TTL_SECONDS, insertAgentGrant, revokeGrant } from "./store"
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -99,11 +93,6 @@ function csrfValid(
   })
 }
 
-// Помилку бібліотеки впізнаємо за ім'ям класу: імпорт `errors` значенням
-// потягнув би `oidc-provider` у граф імпорту маршруту сторінки
-const isSessionNotFound = (e: unknown): boolean =>
-  e instanceof Error && e.name === "SessionNotFound"
-
 export function createAgentInteraction(o: AgentInteractionOptions) {
   const { provider, pool } = o
 
@@ -122,6 +111,21 @@ export function createAgentInteraction(o: AgentInteractionOptions) {
   ): Promise<Response> {
     const uid = agentConnectUid(new URL(request.url).pathname)
     if (uid === undefined) return refusal(404, "interaction_not_found")
+    const underInteraction = async (
+      req: IncomingMessage,
+      res: ServerResponse
+    ): Promise<Response> => {
+      let interaction: InteractionModel
+      try {
+        interaction = await provider.interactionDetails(req, res)
+      } catch (e) {
+        if (e instanceof errors.SessionNotFound)
+          return refusal(404, "interaction_not_found")
+        throw e
+      }
+      if (interaction.uid !== uid) return refusal(404, "interaction_not_found")
+      return act(interaction, req, res)
+    }
     // Бібліотеці потрібні лише cookie: тіло вже прочитав маршрут сторінки
     const bare = pinnedToOrigin(
       new Request(request.url, {
@@ -131,25 +135,21 @@ export function createAgentInteraction(o: AgentInteractionOptions) {
       o.origin
     )
     let out: Response | undefined
+    let failure: { error: unknown } | undefined
     const handled = await toFetchHandler(
       async (req: IncomingMessage, res: ServerResponse) => {
-        let interaction: InteractionModel
+        // Жоден виняток не виходить у srvx: його `fetchNodeHandler` пише в
+        // stderr увесь запит разом із cookie взаємодії й сесії Better Auth
         try {
-          interaction = await provider.interactionDetails(req, res)
-        } catch (e) {
-          if (!isSessionNotFound(e)) throw e
-          out = refusal(404, "interaction_not_found")
-          return void res.end()
+          out = await underInteraction(req, res)
+        } catch (error) {
+          failure = { error }
         }
-        if (interaction.uid !== uid) {
-          out = refusal(404, "interaction_not_found")
-          return void res.end()
-        }
-        out = await act(interaction, req, res)
         // Відповідь `act` без запису бібліотеки: Node-відповідь лише закривається
         if (!res.writableEnded) res.end()
       }
     )(bare)
+    if (failure !== undefined) throw failure.error
     if (out === undefined) throw new Error("agent interaction: no outcome")
     // `Set-Cookie` бібліотеки (взаємодія, `resume`) переходить у відповідь
     if (out.status !== 303) return out
@@ -245,7 +245,7 @@ export function createAgentInteraction(o: AgentInteractionOptions) {
           userId: accountId,
           clientId,
           tenant,
-          expiresAt: new Date(Date.now() + GRANT_LIFETIME_MS),
+          expiresAt: new Date(Date.now() + GRANT_TTL_SECONDS * 1000),
         })
         returnTo = await provider.interactionResult(
           req,

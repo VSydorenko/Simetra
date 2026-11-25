@@ -1,5 +1,5 @@
 import { createHmac, randomUUID } from "node:crypto"
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import {
   authorize,
   Browser,
@@ -372,5 +372,49 @@ describe("listAgentGrants and revokeAgentGrant", () => {
       [l3.grantId]
     )
     expect(await listed(browser)).toEqual([l2.grantId])
+  }, 60_000)
+})
+
+describe("a failure inside the bridge", () => {
+  // srvx ловить виняток Node-обробника й пише в stderr увесь запит із
+  // cookie взаємодії й сесії; міст мусить віддати виняток сам, без журналу
+  it("reaches the caller as the original error and never logs the request cookies", async () => {
+    const browser = await stand.browser(app)
+    const flow = await startFlow(browser)
+    const csrf = (await interactionView(flow)).csrf
+    const page = `${ORIGIN}/agent/connect/${flow.uid}`
+    const cookie = browser.jar.header(page)
+    const secrets = cookie.split("; ").map((c) => c.slice(c.indexOf("=") + 1))
+    expect(secrets.length).toBeGreaterThan(1)
+    const sessionDown = new Error("session store down")
+    const broken = stand.app(provider, {
+      verifySession: () => Promise.reject(sessionDown),
+    })
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {})
+    const storeDown = new Error("client store down")
+    const find = vi.spyOn(provider.Client, "find").mockRejectedValue(storeDown)
+    try {
+      await expect(
+        broken.api.submitConsent(new Request(page, { headers: { cookie } }), {
+          csrf,
+        })
+      ).rejects.toBe(sessionDown)
+      await expect(
+        app.api.interactionDetails(new Request(page, { headers: { cookie } }))
+      ).rejects.toBe(storeDown)
+      const logged = JSON.stringify(
+        errorLog.mock.calls.map((args) =>
+          args.map((a) => (a instanceof Error ? a.stack : a))
+        ),
+        (_k, v: unknown) =>
+          v instanceof Request ? [...v.headers].flat().join(" ") : v
+      )
+      for (const secret of secrets) expect(logged).not.toContain(secret)
+      expect(errorLog).not.toHaveBeenCalled()
+    } finally {
+      find.mockRestore()
+      errorLog.mockRestore()
+    }
+    expect(await liveGrants(browser.userId!)).toEqual([])
   }, 60_000)
 })

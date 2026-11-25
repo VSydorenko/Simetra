@@ -14,7 +14,12 @@ import { agentOauthKeys, appOrigin, type AgentOauthKeys } from "../config"
 import { AGENT_MCP_PATH, agentConnectPath } from "./paths"
 import { providerKeys } from "./keys"
 import { safeFetch, withCimdNormalization } from "./safe-fetch"
-import { createPgAdapter, grantTenant, markGrantRevoked } from "./store"
+import {
+  createPgAdapter,
+  GRANT_TTL_SECONDS,
+  grantTenant,
+  markGrantRevoked,
+} from "./store"
 
 const DAY = 86_400
 
@@ -150,7 +155,7 @@ export function createAgentOauthProvider(o: AgentOauthOptions): Provider {
       Interaction: 600,
       Session: 600,
       // Абсолютна межа гранту; після неї — нове підключення
-      Grant: 365 * DAY,
+      Grant: GRANT_TTL_SECONDS,
     },
     // `/revoke` будь-якого токена відкликає грант, а не лише токен
     revokeGrantPolicy: () => true,

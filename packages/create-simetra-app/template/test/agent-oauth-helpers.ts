@@ -23,6 +23,7 @@ import { createVerifySession } from "../src/server/auth"
 import {
   createAgentInteraction,
   type AgentInteraction,
+  type AgentInteractionOptions,
   type AgentInteractionView,
 } from "../src/server/agent-oauth/interaction"
 import { withAgentOauth } from "../src/server/agent-oauth/mount"
@@ -88,7 +89,14 @@ export interface Stand {
   substituteFetch: typeof fetch
   provider(o?: Partial<AgentOauthOptions>): Provider
   /** `requiresTenant` — прапорець застосунку з видами скоупу (Р-F4-4); типово `false`. */
-  app(provider: Provider, o?: { requiresTenant?: boolean }): App
+  app(
+    provider: Provider,
+    o?: {
+      requiresTenant?: boolean
+      /** Підміна сесії Better Auth (тест збою моста); типово — справжня. */
+      verifySession?: AgentInteractionOptions["verifySession"]
+    }
+  ): App
   /** Користувач Better Auth із паролем (вхід — `Browser.signIn`). */
   signUp(): Promise<Credentials>
   /** Новий браузер, у якому щойно зареєстрований користувач увійшов. */
@@ -189,7 +197,9 @@ export async function startStand(tag: string): Promise<Stand> {
         pool,
         origin: ORIGIN,
         cookieKeys: keys.cookieKeys,
-        verifySession: createVerifySession((args) => auth.api.getSession(args)),
+        verifySession:
+          o.verifySession ??
+          createVerifySession((args) => auth.api.getSession(args)),
         requiresTenant: o.requiresTenant ?? false,
       })
       const fetch = withAgentOauth(

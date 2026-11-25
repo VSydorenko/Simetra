@@ -13,6 +13,9 @@ export interface AdapterHooks {
   beforeConsume?: (model: string, id: string) => Promise<void>
 }
 
+/** Абсолютна межа гранту (`ttl.Grant`) і строк рядка `agent_grants`: одне значення для обох. */
+export const GRANT_TTL_SECONDS = 365 * 86_400
+
 // Як у бібліотеки за замовчуванням (`clockTolerance`): запис живе на стільки довше за свій `exp`
 const CLOCK_TOLERANCE_SEC = 15
 
