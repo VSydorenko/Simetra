@@ -1,6 +1,6 @@
 // Portions copied from munin-mcp (https://github.com/VSydorenko/munin-mcp, gateway/src/oauth/safe-fetch.ts, gateway/src/oauth/redirects.ts)
 // Copyright 2026 Volodymyr Sydorenko
-// Licensed under Apache-2.0. Modified: normalisation always drops jwks_uri/jwks/token_endpoint_auth_signing_alg and forces auth method none; a document that neither declares nor supports none is refused; the munin redirect allowlist is not copied; error messages are in English.
+// Licensed under Apache-2.0. Modified: a loopback redirect is any http loopback URI (any port, any path); normalisation always drops jwks_uri/jwks/token_endpoint_auth_signing_alg and forces auth method none; a document that neither declares nor supports none is refused; the munin redirect allowlist is not copied; error messages are in English.
 import dns from "node:dns"
 import type http from "node:http"
 import https from "node:https"
@@ -94,8 +94,14 @@ export function isForbiddenAddress(ip: string): boolean {
  * завантажувала. Документ без `application_type`, усі redirect якого — loopback,
  * стає `native`: тоді loopback порівнюється без порту (RFC 8252 §7.3).
  */
-const LOOPBACK_RE =
-  /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::([1-9][0-9]{0,4}))?\/callback$/
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"])
+
+// Loopback — `http:` з хостом loopback, будь-який порт і будь-який шлях
+// (рішення архітекторки до Р-F4-6): шлях збігається з документом точно й так
+function isLoopbackRedirect(uri: unknown): boolean {
+  const u = typeof uri === "string" ? URL.parse(uri) : null
+  return u !== null && u.protocol === "http:" && LOOPBACK_HOSTS.has(u.hostname)
+}
 
 export function normalizeClientMetadata<T extends Record<string, unknown>>(
   meta: T
@@ -112,7 +118,7 @@ export function normalizeClientMetadata<T extends Record<string, unknown>>(
     out.application_type === undefined &&
     Array.isArray(uris) &&
     uris.length > 0 &&
-    uris.every((u) => typeof u === "string" && LOOPBACK_RE.test(u))
+    uris.every(isLoopbackRedirect)
   ) {
     out.application_type = "native"
   }

@@ -83,6 +83,34 @@ describe("normalizeClientMetadata (Р-F4-6)", () => {
     ).toBe("web")
   })
 
+  it("treats any http loopback redirect as native: any port, any path", () => {
+    for (const redirect_uris of [
+      ["http://localhost/oauth/callback"],
+      ["http://127.0.0.1:8080/"],
+      ["http://[::1]:5555/cb?x=1", "http://localhost/callback"],
+    ])
+      expect(
+        normalizeClientMetadata<Record<string, unknown>>({
+          ...fixture("claude-code"),
+          redirect_uris,
+        }).application_type,
+        redirect_uris.join(" ")
+      ).toBe("native")
+  })
+
+  it("keeps a document with any non-loopback redirect a web client", () => {
+    for (const redirect_uris of [
+      ["http://localhost/callback", "https://app.example/callback"],
+      ["https://localhost/callback"],
+      ["http://localhost.example/callback"],
+      ["http://10.0.0.1/callback"],
+    ])
+      expect(
+        normalizeClientMetadata({ ...fixture("claude-code"), redirect_uris }),
+        redirect_uris.join(" ")
+      ).not.toHaveProperty("application_type")
+  })
+
   it("refuses a document that neither declares nor supports none", () => {
     const doc = {
       ...fixture("chatgpt"),
