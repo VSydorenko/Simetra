@@ -595,9 +595,13 @@ export function createO2(): O2 {
         obligations.delete(key)
         continue
       }
-      // Строк зник зі `sync()` (вкладку приховано, планувальник його не веде):
-      // обіцянки більше немає, а вимогу в новому стані судить правило спокою.
-      if (promise.kind === "due" && state.due === undefined) {
+      // Строк зник зі `sync()` до свого часу (вкладку приховано, планувальник його
+      // не веде): обіцянки більше немає, а вимогу в новому стані судить правило спокою.
+      if (
+        promise.kind === "due" &&
+        state.due === undefined &&
+        now < promise.due
+      ) {
         obligations.delete(key)
         continue
       }

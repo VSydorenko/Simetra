@@ -173,7 +173,7 @@ describe("O2 self-check", () => {
     ).toMatch(/no read by its deadline/)
   })
 
-  it("a deadline that left sync() (hidden tab) is no longer owed; one that stays is", () => {
+  it("a deadline that left sync() before its time (hidden tab) is no longer owed; at or after it, or kept, it is", () => {
     const row: SyncTarget = { kind: "row", object: OBJECT, key: "k" }
     const hidden = { holderVisible: () => false, rowAlive: () => true }
     const withDue = state(row, {
@@ -181,17 +181,18 @@ describe("O2 self-check", () => {
       due: 1_000,
     })
     const withdrawn = state(row, { requirements: [{ kind: "value-hidden" }] })
-    const gone = createO2()
-    gone.step(input({ now: 0, states: [withDue] }))
-    expect(
-      gone.step(input({ now: 1_000, states: [withdrawn], ...hidden }))
-    ).toBeUndefined()
+    const evaluate = (at: number, states: SyncState[]) => {
+      const o2 = createO2()
+      o2.step(input({ now: 0, states: [withDue] }))
+      return o2.step(input({ now: at, states, ...hidden }))
+    }
+    // До строку: обіцянку знято разом зі строком.
+    expect(evaluate(999, [withdrawn])).toBeUndefined()
+    // У строк і після нього строк, що зник, не прощає пропущеного читання.
+    expect(evaluate(1_000, [withdrawn])).toMatch(/no read by its deadline/)
+    expect(evaluate(1_500, [withdrawn])).toMatch(/no read by its deadline/)
     // Строк лишився у `sync()`, а читання не було: червоний.
-    const kept = createO2()
-    kept.step(input({ now: 0, states: [withDue] }))
-    expect(
-      kept.step(input({ now: 1_000, states: [withDue], ...hidden }))
-    ).toMatch(/no read by its deadline/)
+    expect(evaluate(1_000, [withDue])).toMatch(/no read by its deadline/)
   })
 
   it("keeps a queue: the queued read starts, or red", () => {
