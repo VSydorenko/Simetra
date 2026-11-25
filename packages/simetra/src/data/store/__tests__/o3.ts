@@ -37,6 +37,13 @@ export type O3State =
    */
   | "section-owner-removed"
   /**
+   * ТЧ, чий власник у стані `stale` (значення шапки сховано): шапку читає лише
+   * вигляд, що її тримає (ключі чи картка), ТЧ перечитує рядки, не шапку (рядок 19
+   * §5.14). Стан без межі, доки такого тримача нема; з тримачем — межа від його
+   * появи (`holderSince`): інтервал плюс пауза збоїв; кінець стану — читання шапки.
+   */
+  | "section-owner-hidden"
+  /**
    * Вигляд чекає повтору відкинутого за епохою читання: `sync()` показує паузу
    * (строк із причиною `retry`), її обіцянку судить О2 (читання не пізніше кінця
    * паузи); поки паузу видно, показ не судиться, а з її кінцем — судиться знову.
@@ -62,6 +69,8 @@ export interface O3View {
   /** Об'єкт вигляду і цілі його `include`: зміна будь-якого з них стосується вигляду. */
   readonly objects: readonly ObjectName[]
   readonly state: O3State
+  /** `section-owner-hidden`: мить, від якої шапку власника тримає вигляд ключів чи картки. */
+  readonly holderSince?: number
   /** Розбіжність показу з правдою сервера; `undefined` — збігається. Викликається лише в оцінці. */
   readonly truth: () => string | undefined
 }
@@ -115,16 +124,32 @@ export function viewBound(view: O3View, input: O3Input): number {
 /** Мить, до якої модель має дати час: найпізніша межа видимих виглядів у стані `live`. */
 export function lastBound(input: O3Input): number {
   let last = input.phaseStart
-  for (const view of input.views)
+  for (const view of input.views) {
     if (view.state === "live") last = Math.max(last, viewBound(view, input))
+    if (view.state === "section-owner-hidden")
+      last = Math.max(last, hiddenOwnerBound(view, input) ?? last)
+  }
   return last
 }
+
+/** Межа стану `section-owner-hidden` після появи тримача шапки: інтервал плюс пауза збоїв. */
+export const hiddenOwnerBound = (
+  view: Pick<O3View, "holderSince">,
+  input: Pick<O3Input, "intervalMs">
+): number | undefined =>
+  view.holderSince === undefined
+    ? undefined
+    : view.holderSince + 2 * input.intervalMs
 
 /** Миті, у які оракул щось оцінить: межі виглядів у стані `live`, за зростанням. */
 export function checkpoints(input: O3Input): number[] {
   const at = new Set<number>()
-  for (const view of input.views)
+  for (const view of input.views) {
     if (view.state === "live") at.add(viewBound(view, input))
+    const held =
+      view.state === "section-owner-hidden" && hiddenOwnerBound(view, input)
+    if (typeof held === "number") at.add(held)
+  }
   return [...at].sort((a, b) => a - b)
 }
 
@@ -207,8 +232,15 @@ export function createO3(): O3 {
     step(input) {
       for (const view of input.views) {
         if (viewBound(view, input) > input.now) continue
-        // Названі стани: показ тримає сам стан, не час (рішення архітекторки).
-        if (view.state !== "live") {
+        // Названі стани: показ тримає сам стан, не час (рішення архітекторки);
+        // `section-owner-hidden` — лише поки шапку не тримає вигляд, а з тримачем
+        // — до своєї межі.
+        const heldBound =
+          view.state === "section-owner-hidden"
+            ? hiddenOwnerBound(view, input)
+            : undefined
+        const expired = heldBound !== undefined && input.now >= heldBound
+        if (view.state !== "live" && !expired) {
           skippedBy.set(view.state, (skippedBy.get(view.state) ?? 0) + 1)
           continue
         }

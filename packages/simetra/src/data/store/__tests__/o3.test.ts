@@ -6,6 +6,7 @@ import {
   changeBound,
   checkpoints,
   createO3,
+  hiddenOwnerBound,
   judgeRows,
   judgeSection,
   lastBound,
@@ -30,6 +31,7 @@ const view = (
   id: 1,
   objects: [OBJECT],
   state: over.state ?? "live",
+  ...(over.holderSince === undefined ? {} : { holderSince: over.holderSince }),
   truth: over.truth ?? (() => (over.stale === false ? undefined : "stale row")),
   ...(over.id === undefined ? {} : { id: over.id }),
 })
@@ -148,6 +150,7 @@ describe("O3 self-check", () => {
       "purged",
       "card-without-duty",
       "section-owner-removed",
+      "section-owner-hidden",
       "retry-pause",
     ]
     for (const state of states) {
@@ -240,6 +243,44 @@ describe("O3 self-check", () => {
       expect(
         judgeSection(hidden, shown({ ownerState: "conflict", lines: [1] }))
       ).toBeUndefined()
+    })
+  })
+
+  describe("the section over a hidden owner has a bound once a header holder exists", () => {
+    const hidden = (holderSince?: number) =>
+      view({ state: "section-owner-hidden", holderSince })
+    it("is green without a holder of the header, at any time", () => {
+      const i = input({ phaseStart: 0 })
+      expect(
+        createO3().step({ ...i, now: 1_000_000, views: [hidden()] })
+      ).toBeUndefined()
+    })
+    it("with a holder: green before interval plus pause, red from it on", () => {
+      const i = input({ phaseStart: 0 })
+      const bound = hiddenOwnerBound({ holderSince: 0 }, i)!
+      expect(bound).toBe(2 * INTERVAL)
+      expect(
+        createO3().step({ ...i, now: bound - 1, views: [hidden(0)] })
+      ).toBeUndefined()
+      expect(createO3().step({ ...i, now: bound, views: [hidden(0)] })).toMatch(
+        /stale row/
+      )
+      // Межа є серед миттів оцінки й серед часу, який модель мусить дати.
+      expect(checkpoints({ ...i, views: [hidden(0)] })).toContain(bound)
+      expect(lastBound({ ...i, views: [hidden(0)] })).toBeGreaterThanOrEqual(
+        bound
+      )
+    })
+    it("mutation: a state that never expires hides the section past the bound", () => {
+      // Той самий показ без межі лишився б зеленим: тест вище червоніє саме тут.
+      const i = input({ phaseStart: 0 })
+      const never = view({ state: "section-owner-hidden" })
+      expect(
+        createO3().step({ ...i, now: 10 * INTERVAL, views: [never] })
+      ).toBeUndefined()
+      expect(
+        createO3().step({ ...i, now: 10 * INTERVAL, views: [hidden(0)] })
+      ).toMatch(/stale row/)
     })
   })
 })

@@ -914,6 +914,7 @@ const O3_NAMED_STATES: readonly O3State[] = [
   "purged",
   "card-without-duty",
   "section-owner-removed",
+  "section-owner-hidden",
   "retry-pause",
 ]
 
@@ -4623,6 +4624,7 @@ async function runModelOn(
           ...sub.form.include.map((step) => step.target),
         ]
         let state: O3State = "live"
+        let holderSince: number | undefined
         if (snap.status === "purged") state = "purged"
         else if (inspect.versionEpochs().unavailable) state = "discard-bound"
         else if (objects.some((o) => staled.has(o))) state = "stale-object"
@@ -4632,7 +4634,22 @@ async function runModelOn(
           tracker.failures(sub.targetId) === 0
         )
           state = "first-load-error"
-        else if (syncedViews().get(sub.targetId)?.dueCause === "retry")
+        else if (
+          spec.kind === "section" &&
+          snap.section?.ownerState === "stale"
+        ) {
+          state = "section-owner-hidden"
+          // Шапку K1 читає лише вигляд ключів чи картка, що її тримає; секція
+          // перечитує рядки, не шапку.
+          const holds = SPECS.some(
+            (other, w) =>
+              subs[w] !== undefined &&
+              other.object === spec.object &&
+              ((other.kind === "keys" && other.keys.includes(spec.owner)) ||
+                (other.kind === "card" && other.key === spec.owner))
+          )
+          if (holds && core.visible) holderSince = phaseStart
+        } else if (syncedViews().get(sub.targetId)?.dueCause === "retry")
           state = "retry-pause"
         else if (
           spec.kind === "section" &&
@@ -4658,6 +4675,7 @@ async function runModelOn(
             id: sub.targetId,
             objects,
             state,
+            holderSince,
             truth: () => o3Truth(v),
           },
         ]
@@ -5481,6 +5499,14 @@ describe("core model regressions", () => {
       issue: "O3 view in a retry pause",
       seed: 958004524,
       path: "1210:2:2:5:15:15:18:7:9:9:10:14:14:16:20:23:23:26:33:32:31:37:3:17:3:31:29:27:26:26:26:26:26:26:27:27:27:27:27:28:28:29:29:30",
+    },
+    // CI 45601548174: вигляд бачить стару версію власника після кроків із правами.
+    {
+      issue: "O3 view owner version (signals)",
+      o3: "section-owner-hidden" as const,
+      signals: true,
+      seed: -372539610,
+      path: "7725:6:5:9:3:1:5:5:6:8:12:4:5:4:5:5:8:10:12:12:14:14:14:14:17:17:17:17:18:18:18:18:19:20:19:20:21:20:21:22:22",
     },
     {
       issue: "O2 purged row returns",
