@@ -1137,6 +1137,7 @@ async function runModelOn(
   // Крок `suspend` і показ вкладки очима моделі: О2 бачить відкладення прихованою вкладкою.
   let suspends = 0
   let hiddenSince: number | undefined
+  const waitingAt: { at: number; rows: string[] }[] = []
   let shownAt: number | undefined
   // Спроби лише цього ядра: друге ядро (перегідратація) нумерує цілі з нуля, і
   // його спроби не підтверджують вимог першого.
@@ -4467,6 +4468,22 @@ async function runModelOn(
     const o2Before = o2.evaluated()
     // `sync()` обходить сховище: лише у спокої, коли О2 щось судить.
     const quietNow = fake.pending.length === 0 && fake.inFlight === 0
+    // Факт для О2 на нехолостих кроках: ключ рядка стоїть у черзі приймача за
+    // польотом, що тримає single-flight (з `sync()`, не вгадується); на мить
+    // кроку, де час переходить строк, О2 бере перший такий запис не раніше строку.
+    if (judge && signals && !quietNow && closed === undefined) {
+      const rows = inspect
+        .sync()
+        .flatMap((st) =>
+          st.target.kind === "row" &&
+          st.queued.some(
+            (q) => q.kind === "keys" && q.cause?.reason === "signal"
+          )
+            ? [`${st.target.object}\u0000${st.target.key}`]
+            : []
+        )
+      if (rows.length > 0) waitingAt.push({ at: clock, rows })
+    }
     const o2Problem =
       !judge || !quietNow
         ? undefined
@@ -4507,6 +4524,7 @@ async function runModelOn(
             storeEmpty: !heldKeys().size,
             rowAlive: (_object, k) => heldKeys().has(k),
             suspends,
+            waitingAt,
             ...(hiddenSince === undefined ? {} : { hiddenSince }),
             tabHidden: !core.visible,
             ...(shownAt === undefined ? {} : { shownAt }),

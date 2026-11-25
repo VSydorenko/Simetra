@@ -36,6 +36,14 @@ export interface O2Input {
   readonly rowAlive?: (object: string, key: string) => boolean
   /** Скільки кроків `suspend` зробила модель (лічильник, не мить). */
   readonly suspends?: number
+  /**
+   * Знімки нехолостих кроків: рядки, чий ключ стоїть у черзі приймача за
+   * польотом, що тримає single-flight (з `sync()` на кроці, не вгадані).
+   */
+  readonly waitingAt?: readonly {
+    readonly at: number
+    readonly rows: readonly string[]
+  }[]
   /** Мить моделі останнього кроку `suspend`. */
   readonly hiddenSince?: number
   /** Вкладка прихована на мить кроку. */
@@ -666,6 +674,40 @@ export function createO2(): O2 {
       // переходить лише у виняток таблиці З МЕЖЕЮ, і межа лічиться від строку.
       // Названий стан без межі пропущеного строку не прощає; без винятку вимогу
       // без строку судить правило спокою нижче.
+      // Строк рядка настав, а його ключ на кроці, де час перейшов строк, стояв у
+      // черзі приймача за польотом (single-flight): обов'язок стає обіцянкою
+      // «черга» з межею — політ, що тримав чергу. Після його осідання (цей
+      // стан спокою) читання ключа мусить стартувати (інакше червоний) або діє
+      // умова прихованої вкладки, якщо `suspend` був до осідання.
+      if (
+        promise.kind === "due" &&
+        state.due === undefined &&
+        now >= promise.due &&
+        state.target.kind === "row" &&
+        input.waitingAt
+          ?.find((w) => w.at >= promise.due)
+          ?.rows.includes(`${state.target.object}\u0000${state.target.key}`) ===
+          true
+      ) {
+        obligations.delete(key)
+        if (
+          input.tabHidden === true &&
+          input.suspends !== undefined &&
+          promise.suspends !== undefined &&
+          input.suspends > promise.suspends
+        )
+          followUps.set(key, {
+            kind: "shown",
+            sinceEvent: events.length,
+            sinceTime: now,
+            holderSince: undefined,
+          })
+        else
+          problems.push(
+            `${describe(state.target)}: the key queued behind the flight did not start after the flight settled`
+          )
+        continue
+      }
       // Прихована вкладка — іменована умова з кінцем (показ) і межею після нього:
       // лише коли між записом обов'язку й оцінкою був крок `suspend`, а вкладка
       // на оцінці прихована. Без `suspend` пропущений строк і далі червоний.

@@ -347,6 +347,78 @@ describe("O2 self-check", () => {
     )
   })
 
+  it("a deadline passed while the key queued behind the flight becomes a queue promise bounded by that flight", () => {
+    const row: SyncTarget = { kind: "row", object: OBJECT, key: "k" }
+    const withDue = state(row, {
+      requirements: [{ kind: "value-hidden" }],
+      due: 1_000,
+    })
+    const withdrawn = state(row, { requirements: [{ kind: "value-hidden" }] })
+    const common = { revalidateMs: 100, rowAlive: () => true }
+    const queuedRow = [{ at: 1_200, rows: [`${OBJECT}\u0000k`] }]
+    const start = () => {
+      const o2 = createO2()
+      o2.step(
+        input({
+          now: 0,
+          states: [withDue],
+          suspends: 0,
+          tabHidden: false,
+          ...common,
+        })
+      )
+      return o2
+    }
+    const at = (
+      o2: ReturnType<typeof createO2>,
+      now: number,
+      over: Partial<O2Input>
+    ) =>
+      o2.step(
+        input({
+          now,
+          states: [withdrawn, state(view(3))],
+          holderVisible: () => over.tabHidden !== true,
+          hiddenSince: 1_100,
+          ...common,
+          ...over,
+        })
+      )
+    // Ключ стояв у черзі на мить строку, політ осів, читання ключа почалося.
+    const started = start()
+    expect(
+      at(started, 2_000, {
+        suspends: 0,
+        tabHidden: false,
+        waitingAt: queuedRow,
+        events: [{ ...read(2, 0), held: [`${OBJECT}\u0000k`] }],
+      })
+    ).toBeUndefined()
+    // (а) Ключа не було в черзі на мить строку: пропущений строк червоний.
+    const notQueued = start()
+    expect(
+      at(notQueued, 2_000, {
+        suspends: 0,
+        tabHidden: false,
+        waitingAt: [{ at: 1_200, rows: [`${OBJECT}\u0000other`] }],
+      })
+    ).toMatch(/no read by its deadline|no promise and no condition/)
+    const noFact = start()
+    expect(at(noFact, 2_000, { suspends: 0, tabHidden: false })).toMatch(
+      /no read by its deadline|no promise and no condition/
+    )
+    // (б) Політ осів на видимій вкладці, а ключ із черги не стартував.
+    const stuck = start()
+    expect(
+      at(stuck, 2_000, { suspends: 0, tabHidden: false, waitingAt: queuedRow })
+    ).toMatch(/queued behind the flight did not start/)
+    // `suspend` до осідання: діє умова прихованої вкладки.
+    const hidden = start()
+    expect(
+      at(hidden, 2_000, { suspends: 1, tabHidden: true, waitingAt: queuedRow })
+    ).toBeUndefined()
+  })
+
   it("a deadline withdrawn before its time does not stretch the exception to deadline plus bound", () => {
     const row: SyncTarget = { kind: "row", object: OBJECT, key: "k" }
     const withDue = state(row, {
