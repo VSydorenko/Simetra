@@ -340,6 +340,23 @@ describe("sessionClaimsSchema", () => {
       sessionClaimsSchema.parse({ sub: id, role: "authenticated" })
     ).toEqual({ sub: id, role: "authenticated" })
   })
+
+  it.each([id, nonRfcId])("keeps a pin %s", (pin) => {
+    expect(sessionClaimsSchema.parse({ sub: id, pin })).toEqual({
+      sub: id,
+      pin,
+    })
+  })
+
+  it("leaves claims without a pin without one", () => {
+    const claims = sessionClaimsSchema.parse({ sub: id })
+    expect(claims).toEqual({ sub: id })
+    expect("pin" in claims).toBe(false)
+  })
+
+  it.each([["not-a-uuid"], [""], [42], [null]])("rejects a pin %j", (pin) => {
+    expect(sessionClaimsSchema.safeParse({ sub: id, pin }).success).toBe(false)
+  })
 })
 
 describe("castTypeSchema", () => {
