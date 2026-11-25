@@ -28,6 +28,7 @@ import {
   type PlatformLoginPurpose,
 } from "simetra/model"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { postgresStack } from "../../../../scripts/db-stack-index.mjs"
 import {
   assertServerVersion,
   betterAuthCommand,
@@ -137,6 +138,18 @@ describe.each(STACKS)("compose.yaml of the $title", ({ dir, project }) => {
 
   it("names the compose project", () => {
     expect(compose).toMatch(new RegExp(`^name: ${project}$`, "m"))
+  })
+
+  // Голий `docker compose` без змінних — стек 1: типові значення інтерполяції
+  // мусять збігатися з ідентичністю стека 1 модуля індексу
+  it("the interpolation defaults are the identity of stack 1", () => {
+    const fallback = (name: string): number =>
+      Number(new RegExp(`\\$\\{${name}:-(\\d+)\\}`).exec(compose)?.[1])
+    const stack = postgresStack(1)
+    expect(fallback("SIMETRA_PG_PORT")).toBe(stack.pgPort)
+    expect(fallback("SIMETRA_GARAGE_S3_PORT")).toBe(stack.garageS3Port)
+    expect(fallback("SIMETRA_GARAGE_ADMIN_PORT")).toBe(stack.garageAdminPort)
+    expect(fallback("SIMETRA_STACK")).toBe(stack.index)
   })
 
   it("publishes every port on 127.0.0.1 only and never the Garage RPC port", () => {

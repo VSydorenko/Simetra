@@ -19,7 +19,7 @@ export default defineConfig({
           name: "db",
           include: ["test/**/*.db.test.ts", "src/**/*.db.test.ts"],
           exclude: ["**/node_modules/**"],
-          // Стек postgres один на машину: той самий сторож, що й у `simetra`
+          // Стеків postgres на машині кілька (ADR-0124), вільний бере той самий сторож, що й у `simetra`
           globalSetup: ["../../simetra/test/db/stack-guard.postgres.ts"],
           fileParallelism: false,
         },

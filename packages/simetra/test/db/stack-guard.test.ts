@@ -456,6 +456,66 @@ describe("guard connections on the postgres stack", () => {
   })
 })
 
+describe("every address of a run on stack 2", () => {
+  beforeEach(() => {
+    vi.stubEnv(PROVIDER_ENV, "postgres")
+    vi.stubEnv("SIMETRA_STACK", "2")
+    for (const name of [
+      "SIMETRA_TEST_DATABASE_URL",
+      "SIMETRA_TEST_SUPERUSER_URL",
+    ]) {
+      vi.stubEnv(name, "")
+      delete process.env[name]
+    }
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  // Інваріант 1: адреса, обчислена не за індексом замка, веде прогін на чужий
+  // стек. Усі з'єднання, запити до Garage і виклики Docker — на стек 2
+  it("start, backends, sweep and end reach only stack 2", async () => {
+    const urls: string[] = []
+    const fetched: string[] = []
+    const dockerCalls: string[] = []
+    const { factory: inner } = fakeConnections((sql) => {
+      if (sql.includes("'supabase_admin'"))
+        return [{ present: false, stack_index: "2" }]
+      if (sql.startsWith("select current_user as role"))
+        return [{ role: PROVIDER_OWNER_ROLES.postgres, superuser: false }]
+      return identityAnswer(identityState(), sql) ?? []
+    })
+    const client: ClientFactory = (config) => {
+      urls.push(String(config.connectionString))
+      return inner(config)
+    }
+    const exec: Exec = async (file, args) => {
+      dockerCalls.push([file, ...args].join(" "))
+      return ""
+    }
+    const fetch: Fetch = (async (input: Parameters<Fetch>[0]) => {
+      fetched.push(String(input))
+      return new Response("[]")
+    }) as Fetch
+    const deps = { client, exec, fetch }
+    const before = await startChecks("postgres", deps)
+    await stopRunBackends("abc123", { client })
+    await endChecks("postgres", before, deps)
+    await sweepRun("abc123", deps)
+    expect(urls.length).toBeGreaterThan(0)
+    expect(new Set(urls.map((url) => new URL(url).port))).toEqual(
+      new Set(["54432"])
+    )
+    expect(fetched.length).toBeGreaterThan(0)
+    expect(new Set(fetched.map((url) => new URL(url).port))).toEqual(
+      new Set(["3913"])
+    )
+    expect(dockerCalls.length).toBeGreaterThan(0)
+    for (const call of dockerCalls)
+      expect(call).toContain("simetra-stack=postgres-2")
+  })
+})
+
 describe("the better_auth check at the start of a run on the postgres stack", () => {
   beforeEach(() => {
     vi.stubEnv(PROVIDER_ENV, "postgres")
