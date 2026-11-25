@@ -821,6 +821,10 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
                   }
                   if (s.window?.generation !== before)
                     written = s.window?.generation
+                  // Мутація самотесту: осідання сторінки знімає чужу вимогу «склад не
+                  // підтверджено», яку може зняти лише читання всього вигляду.
+                  if (ctx.defects.has("page-drops-requirement"))
+                    s.unconfirmedSince = undefined
                   again = confirm(s, readEpoch, false)
                 } catch (error) {
                   outcome = "failed"

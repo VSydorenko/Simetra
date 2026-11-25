@@ -5293,7 +5293,9 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   // Маркер читання, що почалось до `hide`, не знімає його позначки.
   "marker-lifts-newer-mark": /a marker of a read older than the hide/,
   // Планувальник свіжості: кожен дефект — своєю перевіркою.
-  "scheduler-fires-hidden": /a read started by the scheduler on a hidden tab/,
+  // О4: такт на прихованій вкладці шле запит у вікні спокою раніше за наявну
+  // перевірку планувальника (вона лишається запасною).
+  "scheduler-fires-hidden": /a read in the idle window/,
   "scheduler-timer-per-object": /scheduler timers \d+ > 1/,
   "scheduler-no-pause":
     /inside its failure pause|not re-read within its failure pause/,
@@ -5317,6 +5319,8 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
     /a read started by the receiver after the discard limit/,
   // Приймач не бачить горизонт витіснення: відповідь до purge ставить позначку.
   "receiver-ignores-horizon": /a signal read without a signal/,
+  // О2, половина (б): сторінка знімає вимогу, якої доводить лише читання всього вигляду.
+  "page-drops-requirement": /composition-unconfirmed disappeared with no proof/,
 }
 
 // Насіння самотесту, коли насіння 1 не знаходить дефекту за 10 000 прогонів.
@@ -5327,6 +5331,37 @@ const SELF_CHECK_SEEDS: Partial<Record<DefectFlag, number>> = {
   "bury-removed-current-epoch": 13,
   // Контрприклад #374 (прогін 8357 цього насіння).
   "receiver-ignores-horizon": -543971651,
+  // Вікно спокою О4 відкрите (вкладка прихована, нічого в польоті) раніше, ніж
+  // наявна перевірка планувальника бачить такт.
+  "scheduler-fires-hidden": 4,
+}
+
+// Насіння прогонів з сигналами, коли ним самотест не збігається з простим.
+const SIGNAL_SELF_CHECK_SEEDS: Partial<Record<DefectFlag, number>> = {
+  "scheduler-fires-hidden": 17,
+}
+
+// Явний контрприклад самотесту: мутацію знаходить лише вузька послідовність, яку
+// випадковий пошук майже не складає. Вигляд-вікно прихований, хвиля приєднання
+// ставить йому вимогу «склад не підтверджено» без польоту, сторінка осідає й
+// не мусить її зняти (її знімає лише читання всього вигляду).
+const SELF_CHECK_EXAMPLES: Partial<
+  Record<DefectFlag, [Step[], boolean, Profile]>
+> = {
+  "page-drops-requirement": [
+    [
+      { t: "sub", v: 11 },
+      { t: "answer", pick: 0, how: "ok", at: 0 },
+      { t: "answer", pick: 0, how: "ok", at: 0 },
+      { t: "visible", v: 11, on: false },
+      { t: "join", ch: 0, recovered: false },
+      { t: "time", ms: 5000 },
+      { t: "page", w: 0, dir: "after" },
+      { t: "answer", pick: 0, how: "ok", at: 0 },
+    ],
+    false,
+    "full",
+  ],
 }
 
 // Дефекти правила втрати доступу (B5b-2): їх ловлять прогони зі знімком прав.
@@ -5342,6 +5377,7 @@ const SIGNAL_DEFECTS: readonly DefectFlag[] = [
   "receiver-purge-keeps-batch",
   "receiver-reads-unavailable",
   "receiver-ignores-horizon",
+  "page-drops-requirement",
 ]
 
 describe("core model self-check", () => {
@@ -5413,9 +5449,11 @@ describe("core model self-check", () => {
     "turns red with signals and the defect %s",
     async (flag) => {
       tickReads = 0
+      const example = SELF_CHECK_EXAMPLES[flag]
       const result = await fc.check(property([flag], true, true, true), {
         numRuns: 10_000,
-        seed: SELF_CHECK_SEEDS[flag] ?? 1,
+        ...(example === undefined ? {} : { examples: [example] }),
+        seed: SIGNAL_SELF_CHECK_SEEDS[flag] ?? SELF_CHECK_SEEDS[flag] ?? 1,
         endOnFailure: true,
         ...interruptWithin(RIGHTS_BUDGET_MS),
       })

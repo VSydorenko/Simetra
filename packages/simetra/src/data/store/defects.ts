@@ -110,6 +110,8 @@ export type DefectFlag =
   | "receiver-reads-unavailable"
   /** The receiver judges a read "buried since" by tombstones only, not by the eviction horizon. */
   | "receiver-ignores-horizon"
+  /** A page settle drops the requirement "composition not confirmed" of its view. */
+  | "page-drops-requirement"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>
