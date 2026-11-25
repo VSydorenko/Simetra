@@ -302,7 +302,9 @@ function own<T>(
   return Object.hasOwn(record, key) ? record[key] : undefined
 }
 
-function refuse(at: RichTextPath, rule: RichTextRule): RichTextCheck {
+type Refusal = Extract<RichTextCheck, { ok: false }>
+
+function refuse(at: RichTextPath, rule: RichTextRule): Refusal {
   return { ok: false, at, rule }
 }
 
@@ -323,7 +325,7 @@ function checkAttrs(
   attrs: unknown,
   specs: Readonly<Record<string, RichTextAttrSpec>>,
   at: RichTextPath
-): RichTextCheck | undefined {
+): Refusal | undefined {
   if (attrs !== undefined && !isPlainObject(attrs)) return refuse(at, "shape")
   const given = attrs ?? {}
   const unknownAttr = Object.keys(given).find(
@@ -346,7 +348,7 @@ function checkMarks(
   marks: unknown,
   allowed: boolean,
   at: RichTextPath
-): RichTextCheck | undefined {
+): Refusal | undefined {
   if (marks === undefined) return undefined
   if (!Array.isArray(marks)) return refuse(at, "shape")
   if (marks.length > 0 && !allowed) return refuse(at, "marks-not-allowed")
@@ -407,57 +409,72 @@ function matches(spec: RichTextNodeSpec, type: string, rest: string): boolean {
  * inside the value) and its rule.
  */
 export function checkRichText(value: unknown): RichTextCheck {
+  // Шлях кадру — ланцюжок до батька, а не копія масиву: копія на кожен вузол
+  // коштувала б глибина × вузли ще до межі глибини.
   type Frame = {
     node: unknown
-    at: RichTextPath
+    up: Frame | undefined
+    index: number
     depth: number
     parent: RichTextNodeSpec | undefined
   }
-  const stack: Frame[] = [{ node: value, at: [], depth: 1, parent: undefined }]
+  const pathOf = (frame: Frame, tail: RichTextPath): RichTextPath => {
+    const at: (string | number)[] = []
+    for (let f: Frame | undefined = frame; f?.up !== undefined; f = f.up) {
+      at.push(f.index, "content")
+    }
+    return [...at.reverse(), ...tail]
+  }
+  const stack: Frame[] = [
+    { node: value, up: undefined, index: 0, depth: 1, parent: undefined },
+  ]
   while (stack.length > 0) {
-    const { node, at, depth, parent } = stack.pop()!
-    if (depth > RICH_TEXT_MAX_DEPTH) return refuse(at, "depth")
+    const frame = stack.pop()!
+    const { node, depth, parent } = frame
+    const fail = (tail: RichTextPath, rule: RichTextRule) =>
+      refuse(pathOf(frame, tail), rule)
+    if (depth > RICH_TEXT_MAX_DEPTH) return fail([], "depth")
     if (!isPlainObject(node) || typeof node.type !== "string") {
-      return refuse(at, "shape")
+      return fail([], "shape")
     }
     const spec = own(RICH_TEXT_PROFILE.nodes, node.type)
-    if (spec === undefined) return refuse([...at, "type"], "unknown-node")
+    if (spec === undefined) return fail(["type"], "unknown-node")
     if (parent === undefined && node.type !== RICH_TEXT_PROFILE.top) {
-      return refuse([...at, "type"], "root")
+      return fail(["type"], "root")
     }
     const isText = node.type === "text"
     const key = extraKey(node, isText ? TEXT_KEYS : NODE_KEYS)
-    if (key !== undefined) return refuse([...at, key], "unknown-key")
+    if (key !== undefined) return fail([key], "unknown-key")
     if (isText && (typeof node.text !== "string" || node.text.length === 0)) {
-      return refuse([...at, "text"], "text")
+      return fail(["text"], "text")
     }
     const marksRefusal = checkMarks(node.marks, parent?.childMarks ?? false, [
-      ...at,
       "marks",
     ])
-    if (marksRefusal !== undefined) return marksRefusal
-    const attrsRefusal = checkAttrs(node.attrs, spec.attrs, [...at, "attrs"])
-    if (attrsRefusal !== undefined) return attrsRefusal
+    if (marksRefusal !== undefined)
+      return fail(marksRefusal.at, marksRefusal.rule)
+    const attrsRefusal = checkAttrs(node.attrs, spec.attrs, ["attrs"])
+    if (attrsRefusal !== undefined)
+      return fail(attrsRefusal.at, attrsRefusal.rule)
 
-    const contentAt = [...at, "content"]
     if (node.content !== undefined && !Array.isArray(node.content)) {
-      return refuse(contentAt, "shape")
+      return fail(["content"], "shape")
     }
     const children: unknown[] = node.content ?? []
     const content = spec.content
     if (content === null) {
-      if (children.length > 0) return refuse([...contentAt, 0], "content")
+      if (children.length > 0) return fail(["content", 0], "content")
       continue
     }
     const start = content.first === undefined ? 0 : 1
     if (content.first !== undefined) {
       const first: unknown = children[0]
       if (!isPlainObject(first) || first.type !== content.first) {
-        return refuse([...contentAt, 0], "content")
+        return fail(["content", 0], "content")
       }
     }
     if (children.length - start < content.min)
-      return refuse(contentAt, "content")
+      return fail(["content"], "content")
     for (let i = start; i < children.length; i++) {
       const child: unknown = children[i]
       // Форму дитини перевіряє її власний крок; тут — лише чи дозволяє її
@@ -468,7 +485,7 @@ export function checkRichText(value: unknown): RichTextCheck {
         childSpec !== undefined &&
         !matches(childSpec, child.type, content.rest)
       ) {
-        return refuse([...contentAt, i], "content")
+        return fail(["content", i], "content")
       }
     }
     // У зворотному порядку: стек віддає першу дитину першою, тож відмова
@@ -476,7 +493,8 @@ export function checkRichText(value: unknown): RichTextCheck {
     for (let i = children.length - 1; i >= 0; i--) {
       stack.push({
         node: children[i],
-        at: [...contentAt, i],
+        up: frame,
+        index: i,
         depth: depth + 1,
         parent: spec,
       })
