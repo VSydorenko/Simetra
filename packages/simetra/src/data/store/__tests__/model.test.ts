@@ -4654,13 +4654,29 @@ async function runModelOn(
           state = "section-owner-hidden"
           // Шапку K1 читає лише вигляд ключів чи картка, що її тримає; секція
           // перечитує рядки, не шапку.
-          const holds = SPECS.some(
-            (other, w) =>
-              subs[w] !== undefined &&
-              other.object === spec.object &&
-              ((other.kind === "keys" && other.keys.includes(spec.owner)) ||
-                (other.kind === "card" && other.key === spec.owner))
-          )
+          // Тримач без власної вимоги чи строку (картка без обов'язку, рядки 17/20)
+          // шапки не читає: тримачем він не є.
+          const holds = SPECS.some((other, w) => {
+            if (
+              subs[w] === undefined ||
+              other.object !== spec.object ||
+              !(
+                (other.kind === "keys" && other.keys.includes(spec.owner)) ||
+                (other.kind === "card" && other.key === spec.owner)
+              )
+            )
+              return false
+            const held = internals.registry.find(other)
+            const duty =
+              held === undefined ? undefined : syncedViews().get(held.targetId)
+            return (
+              duty !== undefined &&
+              (duty.due !== undefined ||
+                duty.requirements.length > 0 ||
+                duty.flights.length > 0 ||
+                duty.queued.length > 0)
+            )
+          })
           if (holds && core.visible) holderSince = phaseStart
         } else if (syncedViews().get(sub.targetId)?.dueCause === "retry")
           state = "retry-pause"
@@ -5544,6 +5560,14 @@ describe("core model regressions", () => {
       seed: 290039941,
       path: "3206:3:2:1:11:11:16:10:11:17:18:20:19:20:19:19:23:25:25:27:30:34:37:35:34:38:41:43:49:49:49:53:54:58:59:68:72:72:72:79:78:78:78:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59:59",
     },
+    // CI 45621977924: тримач шапки — картка без власної вимоги й строку, шапки
+    // вона не читає, тож тримачем для межі стану не є.
+    {
+      issue: "O3 section over a hidden owner, a card without duty",
+      o3: "section-owner-hidden" as const,
+      seed: 580488793,
+      path: "3912:8:7:19:19:21:20:20:26:26:27:27:27:30:33:39:45:49:50:51:57:57:44:55:26:51:51:59:67:75:76:3:32:29:42:43:48:47:48:51:52:54:32:49:51:51:53:53:53:53:48:48:48:49:49:49:38:14:16:21:1:16:17:17:17:17:18:17:19:19:19:20:19:20:20:20:20",
+    },
     {
       issue: "O2 purged row returns",
       o2: true,
@@ -6255,13 +6279,4 @@ describe("core model self-check", () => {
     },
     RIGHTS_BUDGET_MS
   )
-})
-
-describe("tmp seeds", () => {
-  it("replay", async () => {
-    await fc.assert(property([], true, false, false), {
-      seed: Number(process.env.CX_SEED),
-      path: process.env.CX_PATH,
-    })
-  }, 600_000)
 })
