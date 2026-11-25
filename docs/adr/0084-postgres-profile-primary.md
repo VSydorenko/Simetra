@@ -1,6 +1,6 @@
 # ADR-0084: профіль `postgres` — основний для нових механізмів; `supabase` — для прийнятих баз
 
-Status: accepted 2026-11-08
+Status: superseded by ADR-0117
 Decided by: architect (approved by owner)
 Spec: [профіль `postgres`](../superpowers/specs/2026-11-08-postgres-profile-design.md) §1–§2; [платформна](../superpowers/specs/2026-09-24-simetra-platform-design.md) §2 (Р40); [П4-B](../superpowers/specs/2026-11-05-p4-b-client-data-design.md) §2 (Рд10)
 
