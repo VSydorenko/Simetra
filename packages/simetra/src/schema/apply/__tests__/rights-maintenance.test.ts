@@ -23,8 +23,10 @@ import {
   adoptedSourcesDomain,
   commandCoreLayer,
   GLOBAL_ADMIN_ID,
+  MEMBER_FILE,
   ORG_ADMIN_ID,
   policyDomain,
+  refAttribute,
 } from "../../../compiler/__tests__/fixtures/rights"
 import { uuid } from "../../../compiler/__tests__/helpers"
 
@@ -355,6 +357,54 @@ describe("runRightsMaintenance: refusals before connecting", () => {
     expect(outcome).toMatchObject({
       ok: false,
       diagnostic: { code, params: expect.objectContaining(params) },
+    })
+    expect(fake.transactions()).toBe(0)
+  })
+})
+
+// `member` пише без `maxBytes`, тож лише він доводить, що профіль `RichText`
+// не залежить від цього прапорця (Р-B7-6).
+describe("runRightsMaintenance: a RichText member value", () => {
+  let rich: CompiledModel
+  beforeAll(async () => {
+    rich = (
+      await compile(
+        policyDomain(adminRoles(), commandCoreLayer(), {
+          [MEMBER_FILE]: {
+            attributes: [
+              refAttribute(6005, "user", "user_id", {
+                kind: "Catalog",
+                name: "Users",
+              }),
+              {
+                id: uuid(9795),
+                name: "bio",
+                physicalName: "bio",
+                type: "RichText",
+              },
+            ],
+          },
+        })
+      )
+    ).model!
+  })
+
+  it("refuses a document outside the profile before any transaction", async () => {
+    const unknownNode = {
+      type: "doc",
+      content: [{ type: "blockquote", content: [{ type: "iframe" }] }],
+    }
+    const { fake, result } = run(
+      tenant({ member: { bio: unknownNode } }),
+      {},
+      rich
+    )
+    expect(await result).toMatchObject({
+      ok: false,
+      diagnostic: {
+        code: "maintenance.invalid-member",
+        params: expect.objectContaining({ path: "bio" }),
+      },
     })
     expect(fake.transactions()).toBe(0)
   })
