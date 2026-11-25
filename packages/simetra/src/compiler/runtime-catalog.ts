@@ -215,6 +215,9 @@ function runtimeObject(
   )
   const operations = operationsOf(object.id, contract, facts.model)
   // Ключ — лише з `op.id`, версія — з `expectedVersion`: реквізитами вони не є.
+  const block = facts.model.presentation.objects.find(
+    (p) => p.objectId === object.id
+  )
   const header = attributes(
     fields.filter(
       (f) => f.columns[0] !== key && f.columns[0] !== versionColumn
@@ -225,6 +228,8 @@ function runtimeObject(
       update: new Set(contract.updateKeys),
       references: contract.references,
       header: true,
+      // Мітки стандартних реквізитів — з проєкції подання, не з файлу вдруге.
+      overrides: block?.standardAttributes,
     },
     facts
   )
@@ -246,10 +251,7 @@ function runtimeObject(
     ...publicReadOf(facts.model, object.id, table),
     ...storageOf(object),
     ...rightsOf(object.id, header, contract, facts),
-    ...presentationOf(
-      facts.model.presentation.objects.find((p) => p.objectId === object.id),
-      fields
-    ),
+    ...presentationOf(block, fields),
     ...(scope?.origin.scopeKindId === undefined
       ? {}
       : { scopeKindId: scope.origin.scopeKindId, scopeColumn: scope.name }),
@@ -294,6 +296,8 @@ function runtimeObject(
             update: new Set(section.updateColumns),
             references: section.references,
             header: false,
+            overrides: block?.sections?.find((b) => b.sectionId === source.id)
+              ?.standardAttributes,
           },
           facts
         ),
@@ -502,6 +506,8 @@ function attributes(
     references: readonly CommandReference[]
     /** Шапка, а не ТЧ: лише в шапці реквізит буває лінивим (Рд25). */
     header: boolean
+    /** Перевизначення міток стандартних реквізитів за канонічним іменем. */
+    overrides?: PresentationBlock["standardAttributes"]
   },
   facts: Facts
 ): RuntimeAttribute[] {
@@ -595,7 +601,11 @@ function attributes(
       ...(lazy ? { load: "lazy" as const } : {}),
       ...(maxBytes === undefined ? {} : { maxBytes }),
       ...(search === undefined ? {} : { search }),
-      ...labelsOf(field.element),
+      ...labelsOf(
+        field.standard === undefined
+          ? field.element
+          : keys.overrides?.[field.standard.logicalName]
+      ),
     }
   })
 }

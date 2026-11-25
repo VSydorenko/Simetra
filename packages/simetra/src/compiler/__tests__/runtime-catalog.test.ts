@@ -72,6 +72,9 @@ const bulletinValues = (): Layer => ({
     physicalName: "zz_bulletin",
     title: { uk: "Оголошення", en: "Bulletin" },
     description: { en: "A notice board entry" },
+    standardAttributeOverrides: {
+      deletionMark: { title: { en: "Withdrawn" } },
+    },
     tabularSections: [
       {
         id: uuid(7303),
@@ -302,6 +305,10 @@ describe("buildRuntimeCatalog", () => {
     })
     const marks = bulletin.tabularSections.find((s) => s.name === "marks")
     expect(marks?.title).toEqual({ uk: "Позначки" })
+    // Мітки стандартних реквізитів — з перевизначень подання.
+    expect(attributeOf("Bulletin", "deletionMark").title).toEqual({
+      en: "Withdrawn",
+    })
     // Без міток у метаданих ключа немає, а не `undefined`.
     expect("title" in attributeOf("Bulletin", "status")).toBe(false)
     expect("title" in objectOf("Ticket")).toBe(false)
@@ -309,9 +316,19 @@ describe("buildRuntimeCatalog", () => {
   })
 
   it("labels stay out of the client catalog", () => {
-    expect(JSON.stringify(buildClientCatalog(catalog))).not.toContain(
-      "Оголошення"
-    )
+    const labelKeys: string[] = []
+    const walk = (value: unknown, path: string) => {
+      if (Array.isArray(value))
+        value.forEach((v, i) => walk(v, `${path}[${i}]`))
+      else if (typeof value === "object" && value !== null)
+        for (const [key, v] of Object.entries(value)) {
+          if (key === "title" || key === "description")
+            labelKeys.push(`${path}.${key}`)
+          walk(v, `${path}.${key}`)
+        }
+    }
+    walk(buildClientCatalog(catalog), "$")
+    expect(labelKeys).toEqual([])
   })
 
   // `required` — «обов'язкова при вставці»; `notNull` — факт колонки. NOT NULL
