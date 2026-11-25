@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest"
 import {
   checkRichText,
   isRichTextEmpty,
-  RICH_TEXT_MAX_DEPTH,
   RICH_TEXT_WHITESPACE,
   richTextDepthOk,
   type RichTextRule,
@@ -81,7 +80,7 @@ describe("checkRichText", () => {
       doc({ type: "codeBlock", attrs: { language: "c++" }, content: [t("x")] }),
     ],
     ["empty marks array", inP(t("a", []))],
-    ["depth 64", nested(RICH_TEXT_MAX_DEPTH)],
+    ["depth 64", nested(64)],
   ])("accepts %s", (_, value) => {
     expect(checkRichText(value)).toEqual({ ok: true })
   })
@@ -460,12 +459,9 @@ describe("checkRichText", () => {
       ],
       [
         "depth 65",
-        () => nested(RICH_TEXT_MAX_DEPTH + 1),
+        () => nested(65),
         "depth",
-        Array.from({ length: RICH_TEXT_MAX_DEPTH }).flatMap(() => [
-          "content",
-          0,
-        ]),
+        Array.from({ length: 64 }).flatMap(() => ["content", 0]),
       ],
     ]
 
@@ -501,7 +497,7 @@ describe("checkRichText", () => {
 
 describe("richTextDepthOk", () => {
   it("accepts the deepest valid document", () => {
-    expect(richTextDepthOk(nested(RICH_TEXT_MAX_DEPTH))).toBe(true)
+    expect(richTextDepthOk(nested(64))).toBe(true)
   })
 
   it("refuses deep nesting under any key, not only content", () => {
@@ -549,6 +545,11 @@ describe("isRichTextEmpty", () => {
     let deep: unknown = { type: "text", text: "a" }
     for (let i = 0; i < 200_000; i++) deep = [deep]
     expect(isRichTextEmpty(deep)).toBe(false)
+  })
+
+  // JSON `null` — лише тут: у спільній таблиці його SQL отримав би як `NULL`.
+  it("treats JSON null as empty", () => {
+    expect(isRichTextEmpty(null)).toBe(true)
   })
 
   it("is not empty for the StarterKit sample", () => {
