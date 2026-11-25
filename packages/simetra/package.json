@@ -51,6 +51,7 @@
     "zod": "^4.6.7"
   },
   "peerDependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
     "@tanstack/react-form": "^1.33.5",
     "@tanstack/react-router": "^1.170.46",
     "@tanstack/react-virtual": "^3.14.26",

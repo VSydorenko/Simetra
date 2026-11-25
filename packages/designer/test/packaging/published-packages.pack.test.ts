@@ -195,9 +195,11 @@ describe("simetra", () => {
     }
   })
 
-  it("declares react, react-dom, react-virtual, react-form, react-router and centrifuge as the only peers, all optional", async () => {
+  it("declares react, react-dom, react-virtual, react-form, react-router, centrifuge and the MCP SDK as the only peers, all optional", async () => {
     const m = await readPackedManifest(tarballs.simetra)
     expect(m.peerDependencies).toEqual({
+      // Точна версія (Р-F4-8): адаптер спирається на опції SDK саме 2.4.0
+      "@modelcontextprotocol/server": "2.4.0",
       centrifuge: "^5.8.0",
       "@tanstack/react-form": "^1.33.5",
       "@tanstack/react-router": "^1.170.46",
@@ -210,7 +212,7 @@ describe("simetra", () => {
       Object.values(
         m.peerDependenciesMeta as Record<string, { optional?: boolean }>
       ).map((v) => v.optional)
-    ).toEqual([true, true, true, true, true, true])
+    ).toEqual([true, true, true, true, true, true, true])
     expect(Object.keys(m.peerDependenciesMeta as object).sort()).toEqual(
       Object.keys(m.peerDependencies as object).sort()
     )
@@ -679,6 +681,21 @@ describe("simetra/data in a pnpm host", () => {
       { cwd: consumer }
     )
     expect(stdout.trim()).toBe("function,function,function,function")
+  })
+
+  // SDK MCP ставиться тут як peer за dev-версією: запакований вхід
+  // `simetra/shell/mcp` мусить імпортуватися в споживачі pnpm.
+  it("imports simetra/shell/mcp in plain Node with the MCP SDK", async () => {
+    const { stdout } = await exec(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        'const m = await import("simetra/shell/mcp"); console.log(typeof m.createMcpEntry)',
+      ],
+      { cwd: consumer }
+    )
+    expect(stdout.trim()).toBe("function")
   })
 
   it("imports simetra/ui in plain Node with the peers", async () => {
