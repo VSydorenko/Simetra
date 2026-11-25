@@ -7,7 +7,7 @@ import {
   type EncodeAttributesOptions,
 } from "../values"
 import { catalogEntryAttribute } from "./entries"
-import { STARTER_KIT_SAMPLE } from "./rich-text-sample"
+import { STARTER_KIT_SAMPLE, UNKNOWN_NODE_SAMPLE } from "./rich-text-sample"
 
 const MIB = 1024 * 1024
 
@@ -31,12 +31,6 @@ const paragraph = (text: string) => ({
   content: [{ type: "text", text }],
 })
 const doc = (...content: unknown[]) => ({ type: "doc", content })
-
-/** Валідний документ, де невідомий лише вузол на глибині 3. */
-const UNKNOWN_NODE = doc({
-  type: "blockquote",
-  content: [{ type: "iframe", attrs: { src: "https://x" } }],
-})
 
 /** Документ з `levels` рівнями вузлів: `doc`, `blockquote`…, `paragraph`, `text`. */
 function nested(levels: number): unknown {
@@ -79,21 +73,21 @@ describe("encodeAttributeValue: RichText", () => {
   })
 
   it("refuses an unknown node as rich-text-profile on the attribute path", () => {
-    expect(encodeAttributeValue(richText(), UNKNOWN_NODE, "body")).toEqual(
-      profile()
-    )
+    expect(
+      encodeAttributeValue(richText(), UNKNOWN_NODE_SAMPLE, "body")
+    ).toEqual(profile())
   })
 
   // Профіль — типово, незалежно від прапорця `maxBytes`: `member`
   // інструмента обслуговування пише без нього (Р-B7-6).
   it("checks the profile with and without maxBytes", () => {
     expect(
-      encodeAttributes([richText()], { body: UNKNOWN_NODE }, HEADER)
+      encodeAttributes([richText()], { body: UNKNOWN_NODE_SAMPLE }, HEADER)
     ).toEqual(profile())
     expect(
       encodeAttributes(
         [richText()],
-        { body: UNKNOWN_NODE },
+        { body: UNKNOWN_NODE_SAMPLE },
         { ...HEADER, maxBytes: true }
       )
     ).toEqual(profile())
@@ -103,10 +97,10 @@ describe("encodeAttributeValue: RichText", () => {
     expect(
       encodeAttributes(
         [richText()],
-        { body: UNKNOWN_NODE },
+        { body: UNKNOWN_NODE_SAMPLE },
         { ...HEADER, maxBytes: true, profile: false }
       )
-    ).toEqual({ columns: { body_col: UNKNOWN_NODE } })
+    ).toEqual({ columns: { body_col: UNKNOWN_NODE_SAMPLE } })
   })
 
   it("refuses a value that is not JSON without a reason", () => {

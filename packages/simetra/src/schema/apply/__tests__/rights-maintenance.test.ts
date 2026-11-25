@@ -29,6 +29,7 @@ import {
   refAttribute,
 } from "../../../compiler/__tests__/fixtures/rights"
 import { uuid } from "../../../compiler/__tests__/helpers"
+import { UNKNOWN_NODE_SAMPLE } from "../../../model/runtime/__tests__/rich-text-sample"
 
 /**
  * Ядро інструмента обслуговування прав на порт-фейку: відмови до запису й
@@ -390,12 +391,8 @@ describe("runRightsMaintenance: a RichText member value", () => {
   })
 
   it("refuses a document outside the profile before any transaction", async () => {
-    const unknownNode = {
-      type: "doc",
-      content: [{ type: "blockquote", content: [{ type: "iframe" }] }],
-    }
     const { fake, result } = run(
-      tenant({ member: { bio: unknownNode } }),
+      tenant({ member: { bio: UNKNOWN_NODE_SAMPLE } }),
       {},
       rich
     )

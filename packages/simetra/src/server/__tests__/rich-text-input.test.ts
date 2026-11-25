@@ -9,7 +9,10 @@ import {
   type RuntimeObject,
 } from "simetra/model"
 import { describe, expect, it } from "vitest"
-import { STARTER_KIT_SAMPLE } from "../../model/runtime/__tests__/rich-text-sample"
+import {
+  STARTER_KIT_SAMPLE,
+  UNKNOWN_NODE_SAMPLE,
+} from "../../model/runtime/__tests__/rich-text-sample"
 import { prepareInput } from "../phase"
 import { prepareRead } from "../read"
 import { encodeItem, encodeParam } from "../values"
@@ -43,12 +46,6 @@ const body = (extra: Partial<RuntimeAttribute> = {}): RuntimeAttribute => ({
   maxBytes: 1024 * 1024,
   ...extra,
 })
-
-/** Валідний документ, де невідомий лише вузол на глибині 3. */
-const UNKNOWN_NODE = {
-  type: "doc",
-  content: [{ type: "blockquote", content: [{ type: "iframe" }] }],
-}
 
 const profile = (path: string) => ({
   code: "command.invalid",
@@ -115,10 +112,12 @@ describe("RichText through encodeItem", () => {
   })
 
   it.each<[string, Parameters<typeof encodeItem>[2], string]>([
-    ["a header value", { values: { body: UNKNOWN_NODE } }, "body"],
+    ["a header value", { values: { body: UNKNOWN_NODE_SAMPLE } }, "body"],
     [
       "a tabular section value",
-      { tabularSections: { lines: [{ ref: OTHER, body: UNKNOWN_NODE }] } },
+      {
+        tabularSections: { lines: [{ ref: OTHER, body: UNKNOWN_NODE_SAMPLE }] },
+      },
       "lines.0.body",
     ],
   ])("refuses %s outside the profile", (_, draft, path) => {
@@ -133,7 +132,7 @@ describe("RichText through prepareInput", () => {
       refusalOf(on, {
         action: "create",
         object: ORGANIZATION,
-        creatorMember: { title: "Owner", body: UNKNOWN_NODE },
+        creatorMember: { title: "Owner", body: UNKNOWN_NODE_SAMPLE },
       })
     ).toEqual({ ...profile("creatorMember.body"), object: ORGANIZATION })
     expect(
@@ -157,7 +156,7 @@ describe("RichText through prepareInput", () => {
         id: ID,
         expectedVersion: 2,
         values: { body: STARTER_KIT_SAMPLE },
-        expectedValues: { body: UNKNOWN_NODE },
+        expectedValues: { body: UNKNOWN_NODE_SAMPLE },
       })
     ).toBeUndefined()
   })

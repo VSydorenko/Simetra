@@ -97,3 +97,12 @@ export const STARTER_KIT_SAMPLE: RichTextDocument = {
     { type: "horizontalRule" },
   ],
 }
+
+/**
+ * Документ, де поза профілем лише вузол на глибині 3: вхід команди, який
+ * перевірка мусить відмовити, а не обрізати (`rich-text-profile`).
+ */
+export const UNKNOWN_NODE_SAMPLE = {
+  type: "doc",
+  content: [{ type: "blockquote", content: [{ type: "iframe" }] }],
+}
