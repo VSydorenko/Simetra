@@ -949,7 +949,7 @@ async function runModel(
   rights = false,
   signals = false,
   intervalMs = REVALIDATE_MS,
-  // О2 і О3 судять; без них прогін перевіряє лише інваріанти ядра, О1 і О4.
+  // О1–О4 судять; без них прогін перевіряє лише інваріанти ядра.
   judge = true
 ) {
   const held: { core?: CoreSession; reads?: ReadCollector } = {}
@@ -972,9 +972,11 @@ async function runModel(
       }
     )
     // О1 над прогоном: кожен запит журналу фейка має подію з кодом і ціллю.
-    idleChecks += held.reads?.evaluated() ?? 0
-    const unpaired = held.reads?.finish() ?? []
-    if (unpaired.length > 0) fail("end", `O1: ${unpaired.join("; ")}`)
+    if (judge) {
+      idleChecks += held.reads?.evaluated() ?? 0
+      const unpaired = held.reads?.finish() ?? []
+      if (unpaired.length > 0) fail("end", `O1: ${unpaired.join("; ")}`)
+    }
   } finally {
     // Прогін, що впав раніше, не лишає збирача на перевірку тесту.
     held.reads?.stop()
@@ -4459,10 +4461,12 @@ async function runModelOn(
     // О4 (спека ядра синхронізації §5.13): вікно спокою прихованої вкладки.
     // Крок без дій — плин часу; відкриває вікно крок, після якого вкладка
     // прихована, запису в польоті немає і запитів без відповіді теж.
-    const idleProblem = reads.idleStep({
-      quiet: s.t === "time" || s.t === "due",
-      idle: !core.visible && runs.length === 0,
-    })
+    const idleProblem = judge
+      ? reads.idleStep({
+          quiet: s.t === "time" || s.t === "due",
+          idle: !core.visible && runs.length === 0,
+        })
+      : undefined
     if (idleProblem !== undefined) fail(label, idleProblem)
     // О2 (§5.13): обіцянки й докази вимог у стані спокою.
     const o2Before = o2.evaluated()
@@ -5174,18 +5178,20 @@ const BUDGET_MS = 300_000
 const RIGHTS_BUDGET_MS = 600_000
 
 /*
- * Режими властивостей (рішення архітекторки 25.11). Інваріанти ядра, О1 і О4
- * шукають контрприклади на НОВИХ сидах у кожному прогоні. О2 і О3 у шлюзі судять
- * ЗАКРІПЛЕНІ сиди з тим самим числом прогонів і детермінованим джитером ядра:
- * їхній набір винятків заморожено, а новий сид пошуку — не виняток, а рядок
- * списку для планів SK-3 і SK-4. Пошук О2 і О3 на нових сидах — окрема команда
- * (не в CI): `CORE_MODEL_SEED=random`; `CORE_MODEL_RUNS` діє в обох режимах.
+ * Режими властивостей (рішення архітекторки 25.11). Лише інваріанти ядра, що були
+ * на `main` до SK-0, шукають контрприклади на НОВИХ сидах у кожному прогоні.
+ * О1, О2, О3 і О4 у шлюзі судять ЗАКРІПЛЕНІ сиди з тим самим числом прогонів і
+ * детермінованим джитером ядра: вони з'явилися в SK-0, тож на новому сиді
+ * знаходять прогалини `main`, а не регресії; новий сид пошуку — не виняток, а
+ * рядок списку для планів SK-3 і SK-4. Пошук О1–О4 на нових сидах — окрема
+ * команда (не в CI): `CORE_MODEL_SEED=random`; тоді й випадкові властивості
+ * судять О1–О4. `CORE_MODEL_RUNS` діє в обох режимах.
  */
 // Закріплено рішенням архітекторки 25.11: зелені на повному числі прогонів.
 const PINNED_SEEDS = { plain: 1, rights: 1, signals: 1 } as const
-const searchO2O3 = process.env.CORE_MODEL_SEED === "random"
+const searchOracles = process.env.CORE_MODEL_SEED === "random"
 const judgedRun = (profile: keyof typeof PINNED_SEEDS) =>
-  searchO2O3 ? {} : { seed: PINNED_SEEDS[profile] }
+  searchOracles ? {} : { seed: PINNED_SEEDS[profile] }
 
 describe("core model", () => {
   it(
@@ -5193,23 +5199,29 @@ describe("core model", () => {
     async () => {
       tickReads = 0
       idleChecks = 0
-      await fc.assert(property([], true, false, false, REVALIDATE_MS, false), {
-        numRuns: RUNS,
-        ...interruptWithin(BUDGET_MS),
-      })
+      await fc.assert(
+        property([], true, false, false, REVALIDATE_MS, searchOracles),
+        {
+          numRuns: RUNS,
+          ...interruptWithin(BUDGET_MS),
+        }
+      )
       // Без тактів із читанням інваріанти планувальника порожні.
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
-      expect(idleChecks, "no step in an idle window").toBeGreaterThan(0)
+      // О4 судять закріплений прогін або пошук; тут його кроків може не бути.
+      if (searchOracles)
+        expect(idleChecks, "no step in an idle window").toBeGreaterThan(0)
     },
     BUDGET_MS
   )
 
   it(
-    "judges O2 and O3 over the pinned seed (plain)",
+    "judges O1–O4 over the pinned seed (plain)",
     async () => {
       o2Checks = 0
       o3Checks = 0
-      pinnedRandom = !searchO2O3
+      idleChecks = 0
+      pinnedRandom = !searchOracles
       try {
         await fc.assert(property(), {
           numRuns: RUNS,
@@ -5221,6 +5233,7 @@ describe("core model", () => {
       }
       assertEvaluated(o2Checks, "the plain property")
       assertO3Evaluated(o3Checks, "the plain property")
+      expect(idleChecks, "no step in an idle window (plain)").toBeGreaterThan(0)
     },
     BUDGET_MS
   )
@@ -5233,21 +5246,25 @@ describe("core model", () => {
     "holds the invariants with the rights snapshot",
     async () => {
       tickReads = 0
-      await fc.assert(property([], true, true, false, REVALIDATE_MS, false), {
-        numRuns: RUNS,
-        ...interruptWithin(RIGHTS_BUDGET_MS),
-      })
+      await fc.assert(
+        property([], true, true, false, REVALIDATE_MS, searchOracles),
+        {
+          numRuns: RUNS,
+          ...interruptWithin(RIGHTS_BUDGET_MS),
+        }
+      )
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
     },
     RIGHTS_BUDGET_MS
   )
 
   it(
-    "judges O2 and O3 over the pinned seed (rights snapshot)",
+    "judges O1–O4 over the pinned seed (rights snapshot)",
     async () => {
       o2Checks = 0
       o3Checks = 0
-      pinnedRandom = !searchO2O3
+      idleChecks = 0
+      pinnedRandom = !searchOracles
       try {
         await fc.assert(property([], true, true), {
           numRuns: RUNS,
@@ -5259,6 +5276,9 @@ describe("core model", () => {
       }
       assertEvaluated(o2Checks, "the rights property")
       assertO3Evaluated(o3Checks, "the rights property")
+      expect(idleChecks, "no step in an idle window (rights)").toBeGreaterThan(
+        0
+      )
     },
     RIGHTS_BUDGET_MS
   )
@@ -5271,21 +5291,25 @@ describe("core model", () => {
     "holds the invariants with the signal receiver",
     async () => {
       tickReads = 0
-      await fc.assert(property([], true, true, true, REVALIDATE_MS, false), {
-        numRuns: RUNS,
-        ...interruptWithin(RIGHTS_BUDGET_MS),
-      })
+      await fc.assert(
+        property([], true, true, true, REVALIDATE_MS, searchOracles),
+        {
+          numRuns: RUNS,
+          ...interruptWithin(RIGHTS_BUDGET_MS),
+        }
+      )
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
     },
     RIGHTS_BUDGET_MS
   )
 
   it(
-    "judges O2 and O3 over the pinned seed (signal receiver)",
+    "judges O1–O4 over the pinned seed (signal receiver)",
     async () => {
       o2Checks = 0
       o3Checks = 0
-      pinnedRandom = !searchO2O3
+      idleChecks = 0
+      pinnedRandom = !searchOracles
       try {
         await fc.assert(property([], true, true, true), {
           numRuns: RUNS,
@@ -5297,6 +5321,9 @@ describe("core model", () => {
       }
       assertEvaluated(o2Checks, "the signals property")
       assertO3Evaluated(o3Checks, "the signals property")
+      expect(idleChecks, "no step in an idle window (signals)").toBeGreaterThan(
+        0
+      )
     },
     RIGHTS_BUDGET_MS
   )
