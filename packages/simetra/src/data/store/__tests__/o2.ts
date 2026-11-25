@@ -526,7 +526,8 @@ export function createO2(): O2 {
     (target.kind !== "view" ||
       (e.attempt !== undefined &&
         outcomes.has(e.attempt) &&
-        outcomes.get(e.attempt) !== "failed"))
+        outcomes.get(e.attempt) !== "failed" &&
+        outcomes.get(e.attempt) !== "discarded-by-epoch"))
 
   const step = (raw: O2Input): string | undefined => {
     // Вигляди, що застосували читання: набір ведеться по новій частині подій.
@@ -821,7 +822,10 @@ export function createO2(): O2 {
             const failed = windowOf().attempts.some(
               (a) =>
                 a.phase === "settled" &&
-                a.outcome === "failed" &&
+                // Відкинута за епохою спроба підтверджує так само мало, як збійна:
+                // вимогу знімає ядро, а читання йде повтором після паузи.
+                (a.outcome === "failed" ||
+                  a.outcome === "discarded-by-epoch") &&
                 a.kind !== "page" &&
                 a.target.id === (was.target as { id: number }).id
             )

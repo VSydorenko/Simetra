@@ -568,41 +568,46 @@ describe("O2 self-check", () => {
       const start = (o2: ReturnType<typeof createO2>) =>
         o2.step(input({ states: standing, holderPresent: () => true }))
 
-      it("after a failed read: a read within the interval and the pause once a holder is visible", () => {
-        const failed = [
-          ...loaded,
-          ...settled(8, 1, "reread").slice(0, 1),
-          {
-            phase: "settled",
-            attempt: 8,
-            kind: "reread",
-            target: { kind: "view", object: OBJECT, id: 1 },
-            outcome: "failed",
-          } as AttemptEvent,
-        ]
-        const run = (events: StampedEvent[], extra: AttemptEvent[] = []) => {
-          const o2 = createO2()
-          start(o2)
-          const at = (now: number, seen: StampedEvent[]) =>
-            o2.step(
-              input({
-                ...model,
-                now,
-                states: bare,
-                attempts: [...failed, ...(seen.length > 0 ? extra : [])],
-                events: seen,
-                holderPresent: () => true,
-                holderVisible: () => true,
-              })
-            )
-          expect(at(10, [])).toBeUndefined()
-          return at(300, events)
+      it.each(["failed", "discarded-by-epoch"] as const)(
+        "after a %s read: a read within the interval and the pause once a holder is visible",
+        (outcome) => {
+          const failed = [
+            ...loaded,
+            ...settled(8, 1, "reread").slice(0, 1),
+            {
+              phase: "settled",
+              attempt: 8,
+              kind: "reread",
+              target: { kind: "view", object: OBJECT, id: 1 },
+              outcome,
+            } as AttemptEvent,
+          ]
+          const run = (events: StampedEvent[], extra: AttemptEvent[] = []) => {
+            const o2 = createO2()
+            start(o2)
+            const at = (now: number, seen: StampedEvent[]) =>
+              o2.step(
+                input({
+                  ...model,
+                  now,
+                  states: bare,
+                  attempts: [...failed, ...(seen.length > 0 ? extra : [])],
+                  events: seen,
+                  holderPresent: () => true,
+                  holderVisible: () => true,
+                })
+              )
+            expect(at(10, [])).toBeUndefined()
+            return at(300, events)
+          }
+          expect(run([])).toMatch(/no read of the target within/)
+          // Збійне читання вигляду боргу не закриває.
+          expect(run([read(1, 0, 8)])).toMatch(/no read of the target within/)
+          expect(
+            run([read(1, 0, 77)], settled(77, 1, "reread"))
+          ).toBeUndefined()
         }
-        expect(run([])).toMatch(/no read of the target within/)
-        // Збійне читання вигляду боргу не закриває.
-        expect(run([read(1, 0, 8)])).toMatch(/no read of the target within/)
-        expect(run([read(1, 0, 77)], settled(77, 1, "reread"))).toBeUndefined()
-      })
+      )
 
       it("after the holder is released: a read once a holder appears", () => {
         const o2 = createO2()
