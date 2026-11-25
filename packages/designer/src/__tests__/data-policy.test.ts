@@ -4,6 +4,7 @@ import {
   type CompiledModel,
 } from "simetra/compiler"
 import type { Batch, Operation } from "simetra/model"
+import { agentWriteRefusal } from "simetra/server"
 import { beforeAll, describe, expect, it } from "vitest"
 import {
   acceptDebt,
@@ -16,7 +17,7 @@ import {
   tenantOperator,
   tenantSelfService,
 } from "../../../simetra/test/support"
-import { dataCommandRefusal } from "../tools/data-policy"
+import { dataModuleRefusal } from "../tools/data-policy"
 import { withObjectModule } from "./helpers/object-module"
 
 const ID = "00000000-0000-4000-8000-00000000d001"
@@ -93,7 +94,17 @@ beforeAll(async () => {
   )
 }, 60_000)
 
-describe("dataCommandRefusal", () => {
+// Склейка порядку інструмента: відмова модуля — першою на весь пакет, далі
+// запобіжник прав каталогу T3
+function refusal(model: CompiledModel, batch: Batch, rightsWrite: boolean) {
+  const catalog = buildRuntimeCatalog(model)
+  const error = dataModuleRefusal(model, catalog, batch)
+  if (error !== undefined) return { kind: "command", error }
+  const rights = agentWriteRefusal(catalog, batch, { rightsWrite })
+  return rights === undefined ? undefined : { kind: "rights", ...rights }
+}
+
+describe("data command refusal", () => {
   it.each<{
     name: string
     model: keyof typeof models
@@ -270,13 +281,6 @@ describe("dataCommandRefusal", () => {
       expected: undefined,
     },
   ])("$name", ({ model, batch, allowRightsWrite, expected }) => {
-    expect(
-      dataCommandRefusal(
-        models[model],
-        buildRuntimeCatalog(models[model]),
-        batch,
-        { allowRightsWrite }
-      )
-    ).toEqual(expected)
+    expect(refusal(models[model], batch, allowRightsWrite)).toEqual(expected)
   })
 })
