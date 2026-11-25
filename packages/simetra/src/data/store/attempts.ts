@@ -1,10 +1,11 @@
 import { CommandFailure } from "simetra/model"
 import { DataError } from "../errors"
-import type { ObjectName } from "./types"
 import type {
   AdmissionCondition,
   AttemptKind,
   ReadCause,
+  ReadTarget,
+  ReadWhy,
   SettleOutcome,
   SiteCode,
 } from "./sync/vocabulary"
@@ -18,11 +19,7 @@ import type {
  */
 
 /** Ціль спроби: вигляд чи його сторінка. */
-export interface AttemptTarget {
-  readonly kind: "view" | "page"
-  readonly object: ObjectName
-  readonly id: number
-}
+export type AttemptTarget = Extract<ReadTarget, { kind: "view" | "page" }>
 
 export type AttemptEvent = { readonly attempt: number } & (
   | ({
@@ -49,7 +46,7 @@ export interface Attempts {
   start(
     kind: AttemptKind,
     target: AttemptTarget,
-    why: ReadCause & { readonly site: SiteCode }
+    why: ReadWhy
   ): number
   settle(
     attempt: number,
