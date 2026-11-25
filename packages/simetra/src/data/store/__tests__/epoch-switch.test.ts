@@ -23,6 +23,7 @@ import {
   watch,
   type CoreHarness,
 } from "./core-support"
+import { collectCore } from "./oracles"
 import { TEST_ORIGIN, withSleep } from "../testing/fake-source"
 import { harness, K1, row, S, type Harness } from "./store-support"
 
@@ -690,6 +691,7 @@ describe("core: the epoch switch", () => {
       ),
       index: h.fake.index,
     })
+    collectCore(core, h.fake)
     const fresh = watch(core.view(keysView(1, 2)))
     void fresh
     await deliver(h)
@@ -939,6 +941,38 @@ describe("core: the epoch switch", () => {
       expect(handle.getSnapshot()).toMatchObject({ status: "ready" })
   })
 
+  it("sync() shows the pause of a discarded load as a deadline, not as a flight", async () => {
+    const h = await proven()
+    h.fake.epoch = EA
+    seed(h.fake, 3, 3)
+    watch(h.core.view(keysView(3)))
+    await drain(h)
+    expect(h.inspect.versionEpochs().discards).toBe(1)
+    const states = () =>
+      h.inspect
+        .sync()
+        .filter(
+          (x) =>
+            x.target.kind === "view" &&
+            x.target.spec.kind === "keys" &&
+            x.target.spec.keys.includes(key(3))
+        )
+    // Запиту немає: політ завантаження не показано, пауза — строк повтору.
+    expect(states()).toHaveLength(1)
+    expect(states()[0]!.flights).toEqual([])
+    expect(states()[0]!.due).toBe(Date.now() + DISCARD_PAUSE_MS)
+    // Пауза відрізняється від звичайного строку явною причиною.
+    expect(states()[0]!.dueCause).toBe("retry")
+    // Після паузи повтор іде й політ знову видно.
+    vi.advanceTimersByTime(DISCARD_PAUSE_MS)
+    await settle()
+    expect(states()[0]!.flights).toEqual([
+      expect.objectContaining({ kind: "load" }),
+    ])
+    expect(states()[0]!.due).toBeUndefined()
+    expect(states()[0]!.dueCause).toBeUndefined()
+  })
+
   it("a core close in the pause of a discarded load leaves no timer and sends nothing", async () => {
     const h = await proven()
     h.fake.epoch = EA
@@ -1002,6 +1036,7 @@ describe("core: the epoch switch", () => {
       ),
       index: h.fake.index,
     })
+    collectCore(core, h.fake)
     watch(core.view(keysView(1, 2)))
     await drain(h)
     expect(core.view(keysView(1, 2)).getSnapshot()).toMatchObject({

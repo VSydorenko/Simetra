@@ -5,6 +5,8 @@ import { SCOPE_KIND_ID } from "../../../model/runtime/__tests__/entries"
 import { createFakeSignalTransport } from "../testing/fake-signal-transport"
 import type { FakeRead } from "../testing/fake-source"
 import { coreInternals } from "../core"
+import type { AttemptEvent } from "../attempts"
+import { assertEvaluated, createO2 } from "./o2"
 import { REJOIN_JITTER_MS, QUIET_MS } from "../receiver"
 import {
   DEFAULT_CORE_LIMITS,
@@ -235,6 +237,9 @@ const failWith = (at: string, what: string, trace: readonly string[]) => {
   throw new Error(`${at}: ${what}\n${trace.join("\n")}`)
 }
 
+/** Станів спокою з вимогою, які О2 оцінив за прогони: без них О2 порожній. */
+let o2Checks = 0
+
 // Прогін закриває ядро й таймери в будь-якому разі: інакше кожен прогін
 // лишав би живе ядро з таймером, і тисячі прогонів одного `it` вичерпували б
 // пам'ять процесу.
@@ -257,7 +262,12 @@ async function run(steps: readonly Step[]): Promise<void> {
   })
   try {
     await runOn(steps, transport, h, broken)
+    // О1 над прогоном: кожен запит журналу фейка має подію з кодом і ціллю.
+    const unpaired = h.reads.finish()
+    if (unpaired.length > 0) throw new Error(`O1: ${unpaired.join("; ")}`)
   } finally {
+    // Прогін, що впав раніше, не лишає збирача на перевірку тесту.
+    h.reads.stop()
     h.core.close("disposed")
     vi.clearAllTimers()
   }
@@ -293,6 +303,17 @@ async function runOn(
     h.fake.insert(TASK, taskValues(n, { org: SCOPES[scope] }))
     scopeOfKey.set(key(n), scope)
   }
+  const o2 = createO2()
+  const shown = () =>
+    new Set(handles.flatMap((v) => v.getSnapshot().rows.map((r) => r.key)))
+  // Спроби лише цього ядра: друге ядро нумерує цілі з нуля.
+  const ownAttempts: AttemptEvent[] = []
+  const ownNumbers = new Set<number>()
+  let joinMark: number | undefined
+  h.inspect.watchAttempts((event) => {
+    ownAttempts.push(event)
+    ownNumbers.add(event.attempt)
+  })
   const specs: ViewSpec[] = [...SPECS]
   const handles: ViewHandle[] = SPECS.map((spec) => h.core.view(spec))
   // Відписка слухача: вигляд звільняється після затримки звільнення.
@@ -622,6 +643,10 @@ async function runOn(
         break
       }
       case "join":
+        // Мітка О2: читання, що знімає вимогу приєднання, стартує після неї.
+        joinMark = h.reads.events.filter(
+          (e) => e.attempt === undefined || ownNumbers.has(e.attempt)
+        ).length
         if (held[s.ch]) live[s.ch] = true
         transport.join(ALL_CHANNELS[s.ch]!, s.recovered)
         break
@@ -739,6 +764,37 @@ async function runOn(
     await settle()
     closeWindows()
     check(`step ${i}`)
+    // О2 (§5.13): обіцянки й докази вимог у стані спокою.
+    const before = o2.evaluated()
+    const problem = o2.step({
+      now: clock,
+      states: h.inspect.sync(),
+      events: h.reads.events.filter(
+        (e) => e.attempt === undefined || ownNumbers.has(e.attempt)
+      ),
+      attempts: ownAttempts,
+      fake: h.fake,
+      revalidateMs: DEFAULT_CORE_LIMITS.revalidateIntervalMs,
+      releaseDelayMs: DEFAULT_CORE_LIMITS.releaseDelayMs,
+      lastJoin: () => joinMark,
+      // Тримач — підписка вигляду з кроків моделі, видима на видимій вкладці.
+      purgedView: (target) =>
+        target.kind === "view" &&
+        handles[specs.indexOf(target.spec)]?.getSnapshot().status === "purged",
+      holderPresent: (target) =>
+        target.kind === "view" &&
+        offs[specs.indexOf(target.spec)] !== undefined,
+      holderVisible: (target) => {
+        if (target.kind !== "view") return false
+        const v = specs.indexOf(target.spec)
+        return h.core.visible && offs[v] !== undefined && visible[v] === true
+      },
+      // Сховище очима моделі: рядки, які показують знімки її виглядів.
+      storeEmpty: shown().size === 0,
+      rowAlive: (_object, k) => shown().has(k),
+    })
+    o2Checks += o2.evaluated() - before
+    if (problem !== undefined) failWith(`step ${i}`, `O2: ${problem}`, trace)
   }
 
   // Живучість: тиша, приєднання кожного утримуваного каналу, усі вигляди
@@ -777,9 +833,14 @@ async function runOn(
       const snap = handle.getSnapshot()
       // Лише вимога «склад не підтверджено з e»: склад після розриву
       // відпущеного каналу чекає читання, яке тут ніхто не обіцяє.
-      const required =
-        coreInternals(h.core).registry.find(specs[v]!)?.unconfirmedSince !==
-        undefined
+      const required = h.inspect
+        .sync()
+        .some(
+          (state) =>
+            state.target.kind === "view" &&
+            state.target.spec === specs[v] &&
+            state.requirements.some((r) => r.kind === "composition-unconfirmed")
+        )
       if (required && snap.status === "ready" && snap.staleComposition === true)
         failWith(
           "before the liveness reads",
@@ -839,6 +900,7 @@ describe("receiver model: the disconnect mark and the composition against the se
   it(
     "holds the oracle over random steps",
     async () => {
+      o2Checks = 0
       await fc.assert(
         fc.asyncProperty(
           fc.array(STEP, { maxLength: 40, size: "medium" }),
@@ -846,6 +908,7 @@ describe("receiver model: the disconnect mark and the composition against the se
         ),
         { numRuns: RUNS, ...interruptWithin(PROPERTY_BUDGET_MS) }
       )
+      assertEvaluated(o2Checks, "the receiver property")
     },
     PROPERTY_BUDGET_MS
   )

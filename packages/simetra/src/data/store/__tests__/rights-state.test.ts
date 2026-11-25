@@ -158,12 +158,15 @@ describe("rights part of the core", () => {
   })
 
   it("logs rights-failed when the whole request is refused, and sends no retry", async () => {
-    const { core, log } = harness({
+    const { core, log, reads } = harness({
       server: (fake) => ({
         ...fake.server,
         read: () => Promise.reject(new Error("transport down")),
       }),
     })
+    // Запит не доходить до фейкового сервера: журналу, з яким О1 звіряє події,
+    // у цьому випадку немає.
+    reads.stop()
     core.requestRights()
     await settle()
     expect(log).toContainEqual({ kind: "rights-failed" })

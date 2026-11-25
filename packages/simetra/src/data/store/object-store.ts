@@ -430,6 +430,7 @@ export function createObjectStore(options: {
       delete e.stale.minVersion
     if (
       mark !== undefined &&
+      !defects.has("reads-keep-hidden-mark") &&
       (readEpoch >= mark.epoch || defects.has("hide-lifted-by-older-read"))
     )
       delete e.stale.hidden

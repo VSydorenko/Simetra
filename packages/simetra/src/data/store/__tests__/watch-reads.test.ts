@@ -35,7 +35,7 @@ import {
 } from "./core-support"
 
 /*
- * Подія `watchReads` (спека ядра синхронізації §5.13, план SK-0 Р3, Р11):
+ * Подія `watchReads` (спека ядра синхронізації §5.13, план SK-0 Р-SK0-3, Р-SK0-11):
  * одна подія на кожну живу частину кожного запиту з номером, що дорівнює
  * `requestOf` відповіді. Походження йде за слотом: тест на кожен крок, що
  * змінює слоти, бере дві живі частини різних цілей, тож переставлене
@@ -510,7 +510,11 @@ describe("watchReads in the core", () => {
     const others = h.events.filter((e) => e.site !== "S3")
     expect(others.length).toBeGreaterThan(0)
     for (const event of others) {
-      expect(event.target).toEqual({ kind: "view", object: ORG })
+      expect(event.target).toEqual({
+        kind: "view",
+        object: ORG,
+        id: expect.any(Number),
+      })
     }
     // Частина `rights` пішла запитом, що викликав сервер-адаптер, частина
     // виду — запитом адаптера: номер запиту кожної події — місце її виклику.
@@ -546,7 +550,7 @@ describe("watchReads in the core", () => {
     expect(viewEvents).toEqual([
       expect.objectContaining({
         reason: "mount",
-        target: { kind: "view", object: TASK },
+        target: { kind: "view", object: TASK, id: expect.any(Number) },
         request: 1,
       }),
     ])
@@ -607,7 +611,7 @@ describe("watchReads in the core", () => {
     expect(logged).not.toContain('"request"')
   })
 
-  it("carries only the reason, the target, the site and the request in an event, not the caller or the lease", async () => {
+  it("carries only the reason, the target, the site, the attempt number and the request in an event, not the caller or the lease", async () => {
     const h = build({ rights: true })
     seed(h.fake, 1, 2)
     watch(h.core.view(view))
@@ -617,9 +621,14 @@ describe("watchReads in the core", () => {
       expect(
         Object.keys(event).filter(
           (name) =>
-            !["requirement", "reason", "target", "site", "request"].includes(
-              name
-            )
+            ![
+              "requirement",
+              "reason",
+              "target",
+              "site",
+              "attempt",
+              "request",
+            ].includes(name)
         )
       ).toEqual([])
     }

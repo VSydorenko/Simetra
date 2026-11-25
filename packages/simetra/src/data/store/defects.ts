@@ -110,6 +110,18 @@ export type DefectFlag =
   | "receiver-reads-unavailable"
   /** The receiver judges a read "buried since" by tombstones only, not by the eviction horizon. */
   | "receiver-ignores-horizon"
+  /** A page settle drops the requirement "composition not confirmed" of its view. */
+  | "page-drops-requirement"
+  /** A read never lifts the `hidden` mark of a row: the header values stay hidden. */
+  | "reads-keep-hidden-mark"
+  /** The pause before the retry of a discarded load never ends. */
+  | "retry-sleeps-forever"
+  /** A load discarded by the epoch is not retried: no pause, no M8 read. */
+  | "discard-no-retry"
+  /** `sync()` shows the pause before a load retry as an ordinary deadline, without the cause `retry`. */
+  | "sync-pause-no-cause"
+  /** The rejoin wave neither reads nor sets requirements. */
+  | "rejoin-wave-no-read"
 
 /** The defect set of a core; empty outside the self-check. */
 export type Defects = ReadonlySet<DefectFlag>

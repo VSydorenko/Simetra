@@ -109,6 +109,32 @@ export type SiteCode = (typeof SITE_CODES)[number]
 export const TEST_SITE = "test" as const
 export type TestSite = typeof TEST_SITE
 
+/**
+ * Наслідки проходу осідання (§5.5): закритий перелік. Спроба, що не дійшла до
+ * запиту, названа одним із них і, за потреби, умовою допуску (`skip`).
+ */
+export const SETTLE_OUTCOMES = [
+  "applied",
+  "discarded-by-epoch",
+  "failed",
+  "evicted",
+  "after-purge",
+  "closed",
+] as const
+export type SettleOutcome = (typeof SETTLE_OUTCOMES)[number]
+
+/** Види спроби читання цілі «вигляд» (§5.5): завантаження, сторінка, системне перечитування. */
+export const ATTEMPT_KINDS = ["load", "page", "reread"] as const
+export type AttemptKind = (typeof ATTEMPT_KINDS)[number]
+
+/**
+ * Причини строку у `sync()`, що відрізняються від звичайного: звичайний строк
+ * (інтервал, пауза збоїв) причини не має. `retry` — кінець паузи перед повтором
+ * відкинутого завантаження: політ тоді ще не скінчився, але запиту немає.
+ */
+export const DUE_CAUSES = ["retry"] as const
+export type DueCause = (typeof DUE_CAUSES)[number]
+
 /** Причина читання; вимога несе свій вид. */
 export type ReadCause =
   | { readonly reason: Exclude<ReadReason, "requirement"> }
@@ -117,9 +143,12 @@ export type ReadCause =
 /** Ціль читання: вид і об'єкт (службова частина — її назва). */
 export type ReadTarget =
   | {
-      readonly kind: Exclude<TargetKind, "service">
+      readonly kind: "view" | "page"
       readonly object: ObjectName
+      /** Opaque id of the view (a page carries the id of its view), the same as in `sync()`. */
+      readonly id: number
     }
+  | { readonly kind: "keys"; readonly object: ObjectName }
   | { readonly kind: "service"; readonly service: ServicePart }
 
 /** Причина й рядок інвентаря: усе походження, крім цілі. */
@@ -129,4 +158,6 @@ export type ReadWhy = ReadCause & { readonly site: SiteCode }
 export type ReadIntent = ReadCause & {
   readonly target: ReadTarget
   readonly site: SiteCode | TestSite
+  /** Номер спроби цілі «вигляд», з якої йде читання (подія `watchAttempts`). */
+  readonly attempt?: number
 }
