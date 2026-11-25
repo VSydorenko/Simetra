@@ -58,7 +58,9 @@ import {
   setup,
   task,
 } from "./core-support"
-import { collectCore, type ReadCollector } from "./oracles"
+import { collectCore, type ReadCollector, type StampedEvent } from "./oracles"
+import type { AttemptEvent } from "../attempts"
+import { assertEvaluated, createO2 } from "./o2"
 import { trackViews } from "./view-facts"
 
 /*
@@ -842,6 +844,9 @@ let tickReads = 0
 /** Кроків О4 у відкритому вікні спокою за прогони: без них О4 порожній. */
 let idleChecks = 0
 
+/** Станів спокою з вимогою, які О2 оцінив за прогони: без них О2 порожній. */
+let o2Checks = 0
+
 /**
  * Прогін моделі. Ядро закривається наприкінці (і після збою): модель
  * перевіряє, що після закриття таймерів немає, і наступний прогін не бачить
@@ -1017,6 +1022,26 @@ async function runModelOn(
   for (const flag of defects) inspect.defects.add(flag)
   opened(core, reads)
   const internals = coreInternals(core)
+  const o2 = createO2()
+  // Спроби лише цього ядра: друге ядро (перегідратація) нумерує цілі з нуля, і
+  // його спроби не підтверджують вимог першого.
+  const ownAttempts: AttemptEvent[] = []
+  const ownNumbers = new Set<number>()
+  let joinMark: number | undefined
+  const ownEventList: StampedEvent[] = []
+  let ownSeen = 0
+  const ownEvents = () => {
+    for (; ownSeen < reads.events.length; ownSeen++) {
+      const e = reads.events[ownSeen]!
+      if (e.attempt === undefined || ownNumbers.has(e.attempt))
+        ownEventList.push(e)
+    }
+    return ownEventList
+  }
+  inspect.watchAttempts((event) => {
+    ownAttempts.push(event)
+    ownNumbers.add(event.attempt)
+  })
   const tracker = trackViews(
     inspect,
     () => clock,
@@ -1417,6 +1442,8 @@ async function runModelOn(
   }
 
   /** `preload` вигляду; відмова — лише за межею без вільного утримання (П16). */
+  // Утримання `preload` очима моделі: до кінця його строку вигляд тримає ціль.
+  const preloadUntil = new Map<number, number>()
   const preload = (v: number, short: boolean, label: string) => {
     let promise: Promise<void> | undefined
     try {
@@ -1432,6 +1459,11 @@ async function runModelOn(
         fail(label, "preload refused with a spare hold")
     }
     promise?.catch((error: unknown) => errors.push(error))
+    if (promise !== undefined)
+      preloadUntil.set(
+        v,
+        clock + (short ? 500 : DEFAULT_CORE_LIMITS.preloadTtlMs)
+      )
     if (promise !== undefined && v === 4) preloadedSection = true
   }
 
@@ -4089,6 +4121,8 @@ async function runModelOn(
         break
       }
       case "join":
+        // Мітка О2: читання, що знімає вимогу приєднання, стартує після неї.
+        joinMark = ownEvents().length
         if (signals) transport.join(CHANNELS[s.ch]!, s.recovered)
         break
       case "transport":
@@ -4182,6 +4216,48 @@ async function runModelOn(
       idle: !core.visible && runs.length === 0,
     })
     if (idleProblem !== undefined) fail(label, idleProblem)
+    // О2 (§5.13): обіцянки й докази вимог у стані спокою.
+    const o2Before = o2.evaluated()
+    // `sync()` обходить сховище: лише у спокої, коли О2 щось судить.
+    const quietNow = fake.pending.length === 0 && fake.inFlight === 0
+    const o2Problem = !quietNow
+      ? undefined
+      : o2.step({
+          now: clock,
+          states: inspect.sync(),
+          events: ownEvents(),
+          attempts: ownAttempts,
+          fake,
+          revalidateMs: REVALIDATE_MS,
+          releaseDelayMs: DEFAULT_CORE_LIMITS.releaseDelayMs,
+          lastJoin: () => joinMark,
+          // Тримач — слухач вигляду з кроків моделі, видимий на видимій вкладці.
+          ownerPurged: (object, k) =>
+            purgedTargets.has(id(object as ObjectName, k)),
+          holderPresent: (target) =>
+            target.kind === "view" &&
+            subs[SPECS.indexOf(target.spec)] !== undefined,
+          targetHeld: (target) =>
+            target.kind === "view" &&
+            (subs[SPECS.indexOf(target.spec)] !== undefined ||
+              (preloadUntil.get(SPECS.indexOf(target.spec)) ?? -1) > clock),
+          holderVisible: (target) => {
+            if (target.kind !== "view") return false
+            const v = SPECS.indexOf(target.spec)
+            return (
+              core.visible &&
+              subs[v] !== undefined &&
+              (visibleBy.get(target.id) ?? true)
+            )
+          },
+          storeEmpty: ![ORG, TASK].some(
+            (name) => objectOf(name).rows.keys().next().done !== true
+          ),
+          rowAlive: (object, k) =>
+            objectOf(object as ObjectName).rows.get(k) !== undefined,
+        })
+    o2Checks += o2.evaluated() - o2Before
+    if (o2Problem !== undefined) fail(label, `O2: ${o2Problem}`)
     if (schedulerStep && closed === undefined) {
       const dueNow = new Set(
         [...deferredAtStart].flatMap(([name, due]) =>
@@ -4587,6 +4663,7 @@ describe("core model", () => {
     async () => {
       tickReads = 0
       idleChecks = 0
+      o2Checks = 0
       await fc.assert(property(), {
         numRuns: RUNS,
         ...interruptWithin(BUDGET_MS),
@@ -4594,6 +4671,7 @@ describe("core model", () => {
       // Без тактів із читанням інваріанти планувальника порожні.
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
       expect(idleChecks, "no step in an idle window").toBeGreaterThan(0)
+      assertEvaluated(o2Checks, "the plain property")
     },
     BUDGET_MS
   )
@@ -4606,11 +4684,13 @@ describe("core model", () => {
     "holds the invariants with the rights snapshot",
     async () => {
       tickReads = 0
+      o2Checks = 0
       await fc.assert(property([], true, true), {
         numRuns: RUNS,
         ...interruptWithin(RIGHTS_BUDGET_MS),
       })
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+      assertEvaluated(o2Checks, "the rights property")
     },
     RIGHTS_BUDGET_MS
   )
@@ -4623,11 +4703,13 @@ describe("core model", () => {
     "holds the invariants with the signal receiver",
     async () => {
       tickReads = 0
+      o2Checks = 0
       await fc.assert(property([], true, true, true), {
         numRuns: RUNS,
         ...interruptWithin(RIGHTS_BUDGET_MS),
       })
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+      assertEvaluated(o2Checks, "the signals property")
     },
     RIGHTS_BUDGET_MS
   )
