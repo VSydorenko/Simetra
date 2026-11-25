@@ -68,7 +68,7 @@ const CONDITIONS = [
 type Condition = (typeof CONDITIONS)[number]
 
 /** Клітинка: запит був чи ні й наслідок шляху (стан вигляду). */
-type Cell = { request: boolean; then: string }
+type Cell = { request: boolean; then: string; unreached?: string }
 
 interface Rig {
   readonly h: CoreHarness
@@ -84,6 +84,8 @@ interface Recipe {
   arm(rig: Rig): Promise<() => unknown>
   /** Об'єкт, який читає шлях: на нього ставлять `stale-object`; за замовчуванням задачі. */
   readonly object?: ObjectName
+  /** Підготовка сама перемикає епохи й покидає EA: наперед її не покидають. */
+  readonly ownEpochs?: boolean
   /** Ядро зі знімком прав і каналом сигналів (приймач). */
   readonly signals?: boolean
   /** Ядро зі знімком прав без каналу. */
@@ -106,21 +108,31 @@ const outcome = (v: ViewHandle | undefined): string => {
 }
 
 /**
- * Межа відкинутих: восьмеро проходів поспіль із покинутої епохи, кожен — своїм
- * `commit` (пара «прийнято, перемкнуто» й вісім відкинутих). Читань не робить,
- * тож стан шляху (політ, пауза) лишається таким, яким його підготовлено.
+ * Межа відкинутих: восьмеро проходів поспіль із покинутої епохи (`abandonEpoch`),
+ * кожен — своїм `commit`. Читань не робить й епохи не перемикає, тож стан шляху
+ * (політ, пауза, очікування приймача) лишається таким, яким його підготовлено.
  */
 function makeUnavailable(core: CoreSession) {
-  const pass = (epoch: string) =>
-    core.commit(
-      (w) =>
-        void w.apply(TASK, { rows: [], absent: [] }, core.readEpoch(), epoch),
-      core.token()
-    )
-  pass(EA)
-  pass(EB)
-  for (let i = 0; i < DISCARDS_MAX; i++) pass(EA)
+  for (let i = 0; i < DISCARDS_MAX; i++) passOf(core, EA)
   expect(inspectCore(core).versionEpochs().unavailable).toBe(true)
+}
+
+const passOf = (core: CoreSession, epoch: string) =>
+  core.commit(
+    (w) =>
+      void w.apply(TASK, { rows: [], absent: [] }, core.readEpoch(), epoch),
+    core.token()
+  )
+
+/**
+ * Перемикання епохи до підготовки шляху: покинута епоха EA — умова межі потім
+ * лише відкидає її відповіді. Перемикання під час умови стерло б очікування
+ * шляху (повтор приймача, пауза), тож його роблять наперед, однаково для
+ * контролю й для кожної умови.
+ */
+function abandonEpoch(core: CoreSession) {
+  passOf(core, EA)
+  passOf(core, EB)
 }
 
 const APPLY: Record<
@@ -256,6 +268,7 @@ function hydrated(h: CoreHarness, specs: readonly ViewSpec[]): CoreSession {
   )
   const next = createCore({ subject: "u1", source, index: h.fake.index })
   collectCore(next, h.fake)
+  abandonEpoch(next)
   next.hydrate(snapshot)
   return next
 }
@@ -385,6 +398,7 @@ const RECIPES: Partial<Record<SiteCode, Recipe>> = {
     },
   },
   P2: {
+    ownEpochs: true,
     async arm(rig) {
       seed(rig.h.fake, 1, 250)
       const v = await loaded(rig, WINDOW)
@@ -788,6 +802,7 @@ async function run(
     ...recipe.options,
   })
   if (recipe.signals === true || recipe.rights === true) grant(h)
+  if (recipe.ownEpochs !== true) abandonEpoch(h.core)
   const rig: Rig = { h, transport }
   const fire = await recipe.arm(rig)
   const core = rig.core ?? h.core
@@ -806,9 +821,10 @@ async function run(
  * ядром і фейковим сервером; Додаток Б (колонка «Умови») звірено з ними вручну.
  * Закрите ядро — повністю закрите (`close()` відпрацювало); вікно закриття
  * (`closing`, рядок 15 §5.14) тут не судиться: задача 3 міняє його навмисно.
- * Недосяжних пар немає: кожну пару запущено. `request: false` без перевірки
- * умови шляхом — це шлях, що не дійшов до рішення (відповідь відкинуто до
- * нього, приймач зупинено після межі відкинутих, строк знято).
+ * Кожну пару запущено. `unreached` — клітинка, де `request: false` не є
+ * рішенням шляху чи шлюзу щодо умови: шлях до рішення не дійшов. Причину
+ * названо й перевірено мутацією на копії (її вимкнення дає запит); решта
+ * `request: false` — наслідок перевірки умови самим шляхом.
  */
 const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
   M1: {
@@ -898,32 +914,77 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       request: false,
       then: "error:command.stale-client+stale",
     },
-    "discard-bound": { request: false, then: "error:command.unavailable" },
+    "discard-bound": {
+      request: false,
+      then: "error:command.unavailable",
+      unreached:
+        "session: acceptEpoch discards every answer after the bound, so the pass never reaches the decision of the path",
+    },
     "tab-hidden": { request: false, then: "ready" },
   },
   R1: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
-    "discard-bound": { request: false, then: "ready" },
-    "tab-hidden": { request: false, then: "ready" },
+    "discard-bound": {
+      request: false,
+      then: "ready",
+      unreached:
+        "scheduler: schedulerDue and tick stop and dropDeferredWhenUnavailable clears the deferred terms after the bound; the path is never reached",
+    },
+    "tab-hidden": {
+      request: false,
+      then: "ready",
+      unreached:
+        "scheduler: suspend() stops the timer and the tick does not run on a hidden tab; the path is never reached",
+    },
   },
   R2: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
-    "discard-bound": { request: false, then: "ready" },
-    "tab-hidden": { request: false, then: "ready" },
+    "discard-bound": {
+      request: false,
+      then: "ready",
+      unreached:
+        "scheduler: schedulerDue and tick stop and dropDeferredWhenUnavailable clears the deferred terms after the bound; the path is never reached",
+    },
+    "tab-hidden": {
+      request: false,
+      then: "ready",
+      unreached:
+        "scheduler: suspend() stops the timer and the tick does not run on a hidden tab; the path is never reached",
+    },
   },
   R3: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
-    "discard-bound": { request: false, then: "ready" },
-    "tab-hidden": { request: false, then: "ready" },
+    "discard-bound": {
+      request: false,
+      then: "ready",
+      unreached:
+        "scheduler: schedulerDue and tick stop and dropDeferredWhenUnavailable clears the deferred terms after the bound; the path is never reached",
+    },
+    "tab-hidden": {
+      request: false,
+      then: "ready",
+      unreached:
+        "scheduler: suspend() stops the timer and the tick does not run on a hidden tab; the path is never reached",
+    },
   },
   R4: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
-    "discard-bound": { request: false, then: "ready" },
-    "tab-hidden": { request: false, then: "ready" },
+    "discard-bound": {
+      request: false,
+      then: "ready",
+      unreached:
+        "scheduler: schedulerDue and tick stop and dropDeferredWhenUnavailable clears the deferred terms after the bound; the path is never reached",
+    },
+    "tab-hidden": {
+      request: false,
+      then: "ready",
+      unreached:
+        "scheduler: suspend() stops the timer and the tick does not run on a hidden tab; the path is never reached",
+    },
   },
   R5: {
     closed: { request: false, then: "purged" },
@@ -949,13 +1010,23 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
   R8: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
-    "discard-bound": { request: false, then: "ready" },
+    "discard-bound": {
+      request: false,
+      then: "ready",
+      unreached:
+        "receiver: halted() stops the collection of signals after the bound, before any admit",
+    },
     "tab-hidden": { request: false, then: "ready" },
   },
   R9: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
-    "discard-bound": { request: false, then: "ready" },
+    "discard-bound": {
+      request: false,
+      then: "ready",
+      unreached:
+        "receiver: halted() stops the collection of signals after the bound, before any admit",
+    },
     "tab-hidden": { request: false, then: "ready" },
   },
   R10: {
@@ -979,7 +1050,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       request: false,
       then: "error:command.stale-client+stale",
     },
-    "discard-bound": { request: false, then: "loading:command.unavailable" },
+    "discard-bound": {
+      request: false,
+      then: "loading:command.unavailable",
+      unreached:
+        "session: acceptEpoch discards every answer after the bound, so the pass never reaches the decision of the path",
+    },
     "tab-hidden": { request: true, then: "refreshing" },
   },
   R13: {
@@ -1018,7 +1094,12 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
       request: false,
       then: "error:command.stale-client+stale",
     },
-    "discard-bound": { request: false, then: "error:command.unavailable" },
+    "discard-bound": {
+      request: false,
+      then: "error:command.unavailable",
+      unreached:
+        "session: acceptEpoch discards every answer after the bound, so the pass never reaches the decision of the path",
+    },
     "tab-hidden": { request: true, then: "ready" },
   },
   R18: {
@@ -1033,13 +1114,23 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
   K1: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
-    "discard-bound": { request: false, then: "ready" },
+    "discard-bound": {
+      request: false,
+      then: "ready",
+      unreached:
+        "receiver: halted() stops the collection of signals after the bound, before any admit",
+    },
     "tab-hidden": { request: false, then: "ready" },
   },
   K2: {
     closed: { request: false, then: "purged" },
     "stale-object": { request: false, then: "ready+stale" },
-    "discard-bound": { request: false, then: "ready" },
+    "discard-bound": {
+      request: false,
+      then: "ready",
+      unreached:
+        "receiver: halted() stops the collection of signals after the bound, before any admit",
+    },
     "tab-hidden": { request: false, then: "ready" },
   },
   K3: {
@@ -1080,9 +1171,10 @@ describe("the paths of Appendix Б on main: request and consequence per conditio
     expect((await run(code, undefined)).request, `${code} control`).toBe(true)
     for (const condition of CONDITIONS) {
       const { request, then } = await run(code, condition)
-      expect({ request, then }, `${code} × ${condition}`).toEqual(
-        TABLE[code][condition]
-      )
+      const { unreached, ...expected } = TABLE[code][condition]
+      expect({ request, then }, `${code} × ${condition}`).toEqual(expected)
+      // `unreached` пояснює лише «запиту немає».
+      if (unreached !== undefined) expect(expected.request).toBe(false)
     }
   })
 })
