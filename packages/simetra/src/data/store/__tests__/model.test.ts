@@ -5994,6 +5994,47 @@ describe("core model self-check", () => {
     RIGHTS_BUDGET_MS
   )
 
+  // Перевірки моделі, які CAUGHT_BY прапорців перенаведено на О3 і О4: кожна
+  // має свій явний контрприклад, щоб не лишитися без прапорця, що її червонить.
+  it.each([
+    {
+      flag: "min-age-all-young" as const,
+      checks: false,
+      message: /a view older than the limit was not re-read/,
+      steps: [
+        { t: "sub", v: 0 },
+        { t: "answer", pick: 0, how: "ok", at: 0 },
+        { t: "time", ms: 5000 },
+        { t: "return", minAge: 1000 },
+        { t: "answer", pick: 0, how: "ok", at: 0 },
+      ] as Step[],
+    },
+    {
+      flag: "scheduler-fires-hidden" as const,
+      checks: true,
+      message: /a read started by the scheduler on a hidden tab/,
+      // Запит без відповіді тримає вікно спокою О4 закритим: першою червоніє
+      // наявна перевірка кроку.
+      steps: [
+        { t: "sub", v: 0 },
+        { t: "answer", pick: 0, how: "ok", at: 0 },
+        { t: "suspend" },
+        { t: "sub", v: 1 },
+        { t: "time", ms: 5000 },
+        { t: "answer", pick: 0, how: "ok", at: 0 },
+      ] as Step[],
+    },
+  ])(
+    "keeps the check of $flag pinned by an explicit example",
+    async ({ flag, checks, message, steps }) => {
+      await expect(
+        modelRun(runModel(steps, false, "full", [flag], checks))
+      ).rejects.toThrow(message)
+      // Контроль: без прапорця той самий прогін зелений.
+      await modelRun(runModel(steps, false, "full", [], checks))
+    }
+  )
+
   // О3 (Р-SK0-9): хвиля приєднання не читає. Профіль з інтервалом набагато
   // більшим за джитер: такт не підміняє хвилю, тож лише хвиля виправляє рядок,
   // який сервер змінив до приєднання.
