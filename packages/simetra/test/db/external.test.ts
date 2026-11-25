@@ -8,9 +8,10 @@ import {
   removeEmptyRunBucket,
   removeRunResources,
   runBuckets,
+  runContainerLabels,
   runContainers,
 } from "./external"
-import { garageAdminToken, PROVIDER_ENV, TEST_STACKS } from "./profile"
+import { garageAdminToken, PROVIDER_ENV, profileStack } from "./profile"
 import type { S3ClientLike } from "./s3"
 import { sweepRun } from "./sweep"
 
@@ -41,7 +42,7 @@ vi.mock("pg", () => {
 
 const TAG = "abc123"
 const OTHER_TAG = "zzz999"
-const postgres = TEST_STACKS.postgres
+const postgres = profileStack("postgres")
 
 type FakeContainer = { name: string; tag: string; stack: string }
 
@@ -218,6 +219,81 @@ describe("runContainers", () => {
   })
 })
 
+// Інваріант 5: мітка стека — ключ стека на обох боках, не профіль
+describe("stack key label (invariant 5)", () => {
+  it("write side: runContainerLabels carries the key of the stack", () => {
+    vi.stubEnv("SIMETRA_STACK", "2")
+    expect(runContainerLabels(TAG, "postgres")).toEqual([
+      "--label",
+      `simetra-run=${TAG}`,
+      "--label",
+      "simetra-stack=postgres-2",
+    ])
+    vi.stubEnv("SIMETRA_STACK", undefined)
+    expect(runContainerLabels(TAG, "postgres")).toContain(
+      "simetra-stack=postgres"
+    )
+    expect(runContainerLabels(TAG, "supabase")).toContain(
+      "simetra-stack=supabase"
+    )
+  })
+
+  it("filter side: runContainers filters by the key, not by the profile", async () => {
+    vi.stubEnv("SIMETRA_STACK", "2")
+    const docker = fakeDocker([
+      { name: "on-two", tag: TAG, stack: "postgres-2" },
+      { name: "on-one", tag: TAG, stack: "postgres" },
+    ])
+    expect(await runContainers("postgres", docker.exec)).toEqual([
+      { name: "on-two", tag: TAG },
+    ])
+    expect(docker.calls[0]).toEqual(
+      expect.arrayContaining(["--filter", "label=simetra-stack=postgres-2"])
+    )
+  })
+
+  it("a container written with the label and read by the filter round-trips per stack", async () => {
+    vi.stubEnv("SIMETRA_STACK", "3")
+    const labels = runContainerLabels(TAG, "postgres")
+    const stack = labels[labels.length - 1]!.replace("simetra-stack=", "")
+    const docker = fakeDocker([{ name: "mine", tag: TAG, stack }])
+    expect(await runContainers("postgres", docker.exec)).toHaveLength(1)
+    vi.stubEnv("SIMETRA_STACK", "1")
+    expect(await runContainers("postgres", docker.exec)).toHaveLength(0)
+  })
+
+  it("the docker ps hint carries SIMETRA_STACK and the key for N other than 1, unchanged for 1", async () => {
+    const failing: Exec = () => Promise.reject(new Error("docker is down"))
+    const hint = async (): Promise<string> =>
+      (
+        await removeRunResources(TAG, "postgres", {
+          exec: failing,
+          fetch: fakeGarage([]).fetch,
+          deadlineMs: 5_000,
+        })
+      ).cleanup[0]!
+    vi.stubEnv("SIMETRA_STACK", "2")
+    expect(await hint()).toBe(
+      `SIMETRA_STACK=2 docker ps -a --filter label=simetra-run=${TAG} --filter label=simetra-stack=postgres-2  # then docker rm -f -v each`
+    )
+    vi.stubEnv("SIMETRA_STACK", undefined)
+    expect(await hint()).toBe(
+      `docker ps -a --filter label=simetra-run=${TAG} --filter label=simetra-stack=postgres  # then docker rm -f -v each`
+    )
+  })
+
+  it("Garage admin calls go to the admin port of the selected stack", async () => {
+    vi.stubEnv("SIMETRA_STACK", "2")
+    const urls: string[] = []
+    const fetcher: Fetch = (input) => {
+      urls.push(String(input))
+      return Promise.resolve(new Response("[]"))
+    }
+    await runBuckets(profileStack("postgres"), fetcher, 1_000)
+    expect(urls[0]).toMatch(/^http:\/\/127\.0\.0\.1:3913\//)
+  })
+})
+
 describe("runBuckets", () => {
   it("keeps only run-<tag> buckets, counts objects and sends the token", async () => {
     const garage = fakeGarage([
@@ -236,9 +312,9 @@ describe("runBuckets", () => {
 
   it("returns nothing on a stack without Garage", async () => {
     const garage = fakeGarage([{ id: "b1", alias: `run-${TAG}`, objects: 0 }])
-    expect(await runBuckets(TEST_STACKS.supabase, garage.fetch, 1_000)).toEqual(
-      []
-    )
+    expect(
+      await runBuckets(profileStack("supabase"), garage.fetch, 1_000)
+    ).toEqual([])
     expect(garage.requests).toEqual([])
   })
 })
@@ -432,7 +508,7 @@ describe("deleteRunBucket (a test's own teardown)", () => {
     expect(garage.buckets().map((b) => b.id)).toEqual(["t"])
     const s3 = fakeS3({ [`run-${TAG}`]: [], [`run-${OTHER_TAG}`]: [] })
     expect(
-      await deleteRunBucket(TAG, TEST_STACKS.supabase, {
+      await deleteRunBucket(TAG, profileStack("supabase"), {
         fetch: garage.fetch,
         s3: s3.s3,
       })
@@ -446,7 +522,7 @@ describe("deleteRunBucket (a test's own teardown)", () => {
     ).toBe(false)
     const s3 = fakeS3({ [`run-${TAG}`]: ["left"] })
     await expect(
-      deleteRunBucket(TAG, TEST_STACKS.supabase, {
+      deleteRunBucket(TAG, profileStack("supabase"), {
         fetch: fakeGarage([]).fetch,
         s3: s3.s3,
       })
@@ -459,7 +535,7 @@ describe("removeEmptyRunBucket", () => {
   it("is absent for a bucket that is not there", async () => {
     const s3 = fakeS3({})
     expect(
-      await removeEmptyRunBucket(TAG, TEST_STACKS.supabase, {
+      await removeEmptyRunBucket(TAG, profileStack("supabase"), {
         fetch: fakeGarage([]).fetch,
         s3: s3.s3,
       })
@@ -473,7 +549,7 @@ describe("removeEmptyRunBucket", () => {
     async (tag) => {
       const s3 = fakeS3({ "run-": ["a"], [`run-${tag}`]: ["a"] })
       await expect(
-        removeEmptyRunBucket(tag, TEST_STACKS.supabase, {
+        removeEmptyRunBucket(tag, profileStack("supabase"), {
           fetch: fakeGarage([]).fetch,
           s3: s3.s3,
         })

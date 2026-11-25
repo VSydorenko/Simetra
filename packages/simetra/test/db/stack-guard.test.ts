@@ -16,7 +16,7 @@ import type { Exec, Fetch } from "./external"
 import {
   PROVIDER_ENV,
   SUPERUSER_PRELUDE,
-  TEST_STACKS,
+  profileStack,
   type TestProvider,
 } from "./profile"
 import {
@@ -63,7 +63,7 @@ describe("leakMessage", () => {
         p
       )
       expect(message).toContain(
-        `  DROP OWNED BY "simetra_probe_abc123"; DROP ROLE "simetra_probe_abc123";  -- as ${TEST_STACKS[p].superuserName}, in database postgres`
+        `  DROP OWNED BY "simetra_probe_abc123"; DROP ROLE "simetra_probe_abc123";  -- as ${profileStack(p).superuserName}, in database postgres`
       )
     }
   )
@@ -172,10 +172,26 @@ describe("dropping a tagged database", () => {
   })
 })
 
+// Тести стека N ≠ 1 ставлять SIMETRA_STACK: далі він не мусить дійти до інших
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
 describe("manualSweepSql", () => {
   it.each(PROVIDERS)("runs as the %s superuser", (p) => {
     expect(manualSweepSql("abc123", p).split("\n")[0]).toMatch(
-      new RegExp(`^-- as ${TEST_STACKS[p].superuserName}; `)
+      new RegExp(`^-- as ${profileStack(p).superuserName}; `)
+    )
+  })
+
+  it("names the stack in the header for N other than 1, unchanged for 1", () => {
+    vi.stubEnv("SIMETRA_STACK", undefined)
+    expect(manualSweepSql("abc123", "postgres").split("\n")[0]).toMatch(
+      /\(DROP OWNED BY acts in the current database only\)$/
+    )
+    vi.stubEnv("SIMETRA_STACK", "2")
+    expect(manualSweepSql("abc123", "postgres").split("\n")[0]).toMatch(
+      /only\) \(stack postgres-2: connect with SIMETRA_STACK=2\)$/
     )
   })
 
@@ -897,6 +913,18 @@ describe("leftoverReport", () => {
       ])
     }
   )
+
+  it("the sweep command carries SIMETRA_STACK for N other than 1", () => {
+    vi.stubEnv("SIMETRA_STACK", "2")
+    const lines = leftoverReport(
+      { databases: ["simetra_copy_abc123_q1w2e3"], roles: [] },
+      "postgres",
+      NOW
+    )
+    expect(lines.filter((line) => line.includes("sweep.ts"))).toEqual([
+      "    cd packages/simetra && SIMETRA_STACK=2 SIMETRA_TEST_PROVIDER=postgres node --import tsx test/db/sweep.ts abc123",
+    ])
+  })
 
   it("names untagged shadows with a DROP each, apart from tagged objects", () => {
     const untagged = `pgdelta_shadow_${stamp(90)}_6uepn5`

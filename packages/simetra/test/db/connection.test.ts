@@ -30,6 +30,7 @@ import {
   testDatabaseName,
   testDatabaseUrl,
   testPoolerUrl,
+  testUrlOverrideSet,
   rollbackChecked,
   setLocalSetting,
   type SwitchClient,
@@ -42,7 +43,7 @@ import {
   withRollback,
   withSessionOptions,
 } from "./connection"
-import { PROVIDER_ENV, TEST_STACKS } from "./profile"
+import { PROVIDER_ENV, profileStack } from "./profile"
 
 describe("shadowAgeMinutes", () => {
   const NOW = Date.UTC(2026, 9, 14, 12, 0, 0)
@@ -208,6 +209,36 @@ describe("isRunTag", () => {
   })
 })
 
+describe("testUrlOverrideSet (Р-POOL-7)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  const NAMES = [
+    "SIMETRA_TEST_DATABASE_URL",
+    "SIMETRA_TEST_POOLER_URL",
+    "SIMETRA_TEST_SUPERUSER_URL",
+  ]
+
+  it("is false when no override is set, empty counts as unset", () => {
+    for (const name of NAMES) vi.stubEnv(name, undefined)
+    expect(testUrlOverrideSet()).toBe(false)
+    for (const name of NAMES) vi.stubEnv(name, "")
+    expect(testUrlOverrideSet()).toBe(false)
+  })
+
+  it.each(NAMES)("is true when only %s is set", (name) => {
+    for (const other of NAMES) vi.stubEnv(other, undefined)
+    vi.stubEnv(name, "postgresql://x@127.0.0.1:1/db")
+    expect(testUrlOverrideSet()).toBe(true)
+  })
+
+  it("reads the env it is given", () => {
+    expect(testUrlOverrideSet({ SIMETRA_TEST_DATABASE_URL: "x" })).toBe(true)
+    expect(testUrlOverrideSet({})).toBe(false)
+  })
+})
+
 describe("stack addresses by profile", () => {
   afterEach(() => {
     vi.unstubAllEnvs()
@@ -219,8 +250,19 @@ describe("stack addresses by profile", () => {
     vi.stubEnv("SIMETRA_TEST_SUPERUSER_URL", "")
     delete process.env.SIMETRA_TEST_DATABASE_URL
     delete process.env.SIMETRA_TEST_SUPERUSER_URL
-    expect(testDatabaseUrl()).toBe(TEST_STACKS.postgres.databaseUrl)
-    expect(testSuperuserUrl()).toBe(TEST_STACKS.postgres.superuserUrl)
+    expect(testDatabaseUrl()).toBe(profileStack("postgres").databaseUrl)
+    expect(testSuperuserUrl()).toBe(profileStack("postgres").superuserUrl)
+  })
+
+  it("the default addresses follow SIMETRA_STACK on each call", () => {
+    vi.stubEnv(PROVIDER_ENV, "postgres")
+    vi.stubEnv("SIMETRA_TEST_DATABASE_URL", "")
+    vi.stubEnv("SIMETRA_TEST_SUPERUSER_URL", "")
+    delete process.env.SIMETRA_TEST_DATABASE_URL
+    delete process.env.SIMETRA_TEST_SUPERUSER_URL
+    vi.stubEnv("SIMETRA_STACK", "2")
+    expect(new URL(testDatabaseUrl()).port).toBe("54432")
+    expect(new URL(testSuperuserUrl()).port).toBe("54432")
   })
 
   it("refuses a pooler address on a profile without a pooler", () => {
@@ -263,7 +305,7 @@ function fakeClient(
 }
 
 describe("login and session options of a URL", () => {
-  const tests = TEST_STACKS.postgres.databaseUrl
+  const tests = profileStack("postgres").databaseUrl
 
   it("loginUrl drops the options parameter and sets the login", () => {
     const url = new URL(loginUrl(tests, "simetra_auth", "p@ss"))

@@ -16,7 +16,7 @@ const REPO = fileURLToPath(new URL("../../../../", import.meta.url))
 const ROOTS = ["packages/simetra", "packages/designer"]
 
 // Що читає профіль прогону: функції й дані профілю тестів і T0
-const PROFILE = /\b(testProvider|testRoleFor|TEST_STACKS|provider)\b|PROVIDER_/
+const PROFILE = /\b(testProvider|testRoleFor|profileStack|provider)\b|PROVIDER_/
 const ROLE_FOR = /\btestRoleFor\(/
 
 /** Файли проєкту `db`: без `.supabase.` і `.postgres.` у назві. */

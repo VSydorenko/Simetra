@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest"
-import { parseSupabaseS3 } from "./s3"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { parseSupabaseS3, s3ConfigOf } from "./s3"
 
 describe("parseSupabaseS3", () => {
   const status = [
@@ -31,5 +31,18 @@ describe("parseSupabaseS3", () => {
     expect(() => parseSupabaseS3('API_URL="http://127.0.0.1:54321"')).toThrow(
       /no S3 values/
     )
+  })
+})
+
+describe("s3ConfigOf postgres", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it("takes the Garage S3 endpoint from the stack index on each call", () => {
+    vi.stubEnv("SIMETRA_STACK", undefined)
+    expect(s3ConfigOf("postgres").endpoint).toBe("http://127.0.0.1:3900")
+    vi.stubEnv("SIMETRA_STACK", "2")
+    expect(s3ConfigOf("postgres").endpoint).toBe("http://127.0.0.1:3910")
   })
 })

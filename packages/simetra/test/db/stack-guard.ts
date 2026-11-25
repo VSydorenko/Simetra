@@ -44,7 +44,8 @@ import { provideSupabaseS3 } from "./s3"
 import {
   enterProvider,
   PROVIDER_ENV,
-  TEST_STACKS,
+  profileStack,
+  stackEnvPrefix,
   type TestProvider,
 } from "./profile"
 import {
@@ -100,7 +101,7 @@ export interface RunStart {
  * `scripts/db-stack.mjs` takes the same path.
  */
 export function lockPath(p: TestProvider): string {
-  return join("/tmp", TEST_STACKS[p].lockFile)
+  return join("/tmp", profileStack(p).lockFile)
 }
 
 /** The vitest globalSetup of a DB project that runs against the stack of `p`. */
@@ -594,7 +595,7 @@ async function snapshot(
   )
   // Для Supabase — порожньо: його бакети додаються нижче з `storage.buckets`
   const buckets = (
-    await runBuckets(TEST_STACKS[p], deps.fetch ?? fetch, LIST_TIMEOUT_MS)
+    await runBuckets(profileStack(p), deps.fetch ?? fetch, LIST_TIMEOUT_MS)
   ).map((b) => b.name)
   const names = async (client: GuardClient, sql: string): Promise<string[]> =>
     (await client.query<{ name: string }>(sql)).rows.map((row) => row.name)
@@ -705,7 +706,7 @@ export function leftoverReport(
       ...[...byTag].flatMap(([tag, names]) => [
         `  run ${tag}: ${names.join(", ")}`,
         // Профіль явно: прибиральник без нього пішов би на типовий стек
-        `    cd packages/simetra && ${PROVIDER_ENV}=${p} node --import tsx test/db/sweep.ts ${tag}`,
+        `    cd packages/simetra && ${stackEnvPrefix(profileStack(p))}${PROVIDER_ENV}=${p} node --import tsx test/db/sweep.ts ${tag}`,
       ])
     )
   if (containers.length > 0)
@@ -770,7 +771,7 @@ export function leakMessage(
     // `DROP OWNED BY` діє в поточній базі — тож у кожній базі стека
     if (kind === "roles") {
       const [main, ...rest] = stackDatabases(p)
-      const su = TEST_STACKS[p].superuserName
+      const su = profileStack(p).superuserName
       return [
         ...rest.map(
           (database) =>

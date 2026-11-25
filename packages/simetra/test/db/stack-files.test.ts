@@ -53,7 +53,7 @@ import {
   centrifugoConfig,
   centrifugoConfigRefusals,
 } from "../../../designer/src/tools/signals-config"
-import { TEST_STACKS } from "./profile"
+import { profileStack } from "./profile"
 import { centrifugoImage } from "./signal-stand"
 import { lockPath } from "./stack-guard"
 
@@ -736,8 +736,8 @@ describe("withStackLock", () => {
   // Команда стека й DB-прогін мусять брати один замок: інакше `stop` зупинив
   // би стек посеред прогону
   it("the script locks the same file as the guard of the postgres stack", () => {
-    expect(postgresLockFile()).toBe(TEST_STACKS.postgres.lockFile)
-    expect(basename(SUPABASE_LOCK_PATH)).toBe(TEST_STACKS.supabase.lockFile)
+    expect(postgresLockFile()).toBe(profileStack("postgres").lockFile)
+    expect(basename(SUPABASE_LOCK_PATH)).toBe(profileStack("supabase").lockFile)
   })
 
   let dir: string
@@ -894,14 +894,18 @@ describe("stack lock path", () => {
       }
     )
     expect(result.status).toBe(0)
-    expect(result.stdout).toBe(`/tmp/${TEST_STACKS.postgres.lockFile}`)
+    expect(result.stdout).toBe(`/tmp/${profileStack("postgres").lockFile}`)
     expect(postgresLockPath()).toBe(result.stdout)
   })
 
   it("is /tmp/<lockFile> in the guard whatever TMPDIR is", () => {
     vi.stubEnv("TMPDIR", "/var/tmp/some-session")
-    expect(lockPath("postgres")).toBe(`/tmp/${TEST_STACKS.postgres.lockFile}`)
-    expect(lockPath("supabase")).toBe(`/tmp/${TEST_STACKS.supabase.lockFile}`)
+    expect(lockPath("postgres")).toBe(
+      `/tmp/${profileStack("postgres").lockFile}`
+    )
+    expect(lockPath("supabase")).toBe(
+      `/tmp/${profileStack("supabase").lockFile}`
+    )
   })
 
   it("withStackLock names the held lock to its children only while fn runs", async () => {

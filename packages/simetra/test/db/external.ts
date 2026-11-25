@@ -8,7 +8,8 @@ import { execFile } from "node:child_process"
 import { isRunTag } from "./connection"
 import {
   garageAdminToken,
-  TEST_STACKS,
+  profileStack,
+  stackEnvPrefix,
   type TestProvider,
   type TestStack,
 } from "./profile"
@@ -50,9 +51,11 @@ export const nodeExec: Exec = (file, args, opts) =>
 /**
  * `docker run` label args of a container of run `tag` on the stack of
  * profile `p`: the guard sees and removes a container only by both labels.
+ * The stack label is the stack key (`postgres-2`), not the profile.
  */
 export function runContainerLabels(tag: string, p: TestProvider): string[] {
-  return ["--label", `${RUN_LABEL}=${tag}`, "--label", `${STACK_LABEL}=${p}`]
+  const key = profileStack(p).key
+  return ["--label", `${RUN_LABEL}=${tag}`, "--label", `${STACK_LABEL}=${key}`]
 }
 
 /** The Garage bucket of run `tag`: its global alias. */
@@ -226,7 +229,7 @@ async function listContainers(
       "--filter",
       `label=${RUN_LABEL}`,
       "--filter",
-      `label=${STACK_LABEL}=${p}`,
+      `label=${STACK_LABEL}=${profileStack(p).key}`,
       "--format",
       `{{.Names}}\t{{.Label "${RUN_LABEL}"}}`,
     ],
@@ -312,6 +315,7 @@ export async function removeRunResources(
   deps: { exec: Exec; fetch: Fetch; deadlineMs: number; s3?: S3ClientLike }
 ): Promise<{ removed: string[]; left: string[]; cleanup: string[] }> {
   checkTag(tag)
+  const stack = profileStack(p)
   const deadline = Date.now() + deps.deadlineMs
   // Кожен виклик обмежений рештою дедлайну: прибиральник у обробнику сигналу
   // має власну межу, і завислий docker чи Garage не мусить її з'їсти
@@ -341,11 +345,10 @@ export async function removeRunResources(
   } catch (error) {
     left.push(`containers of run ${tag} (not checked: ${reason(error)})`)
     cleanup.push(
-      `docker ps -a --filter label=${RUN_LABEL}=${tag} --filter label=${STACK_LABEL}=${p}  # then docker rm -f -v each`
+      `${stackEnvPrefix(stack)}docker ps -a --filter label=${RUN_LABEL}=${tag} --filter label=${STACK_LABEL}=${stack.key}  # then docker rm -f -v each`
     )
   }
 
-  const stack = TEST_STACKS[p]
   const where = stack.garageAdminUrl === null ? "Supabase Storage" : "Garage"
   // Ім'я бакета виводиться з тегу, а не з переліку: людина знає, що
   // перевірити, і коли адмінка чи S3 мовчать

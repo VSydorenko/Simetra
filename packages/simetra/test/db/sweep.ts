@@ -19,7 +19,8 @@ import { type Exec, type Fetch, nodeExec, removeRunResources } from "./external"
 import {
   PROVIDER_ENV,
   SUPERUSER_PRELUDE,
-  TEST_STACKS,
+  profileStack,
+  stackEnvPrefix,
   testProvider,
   type TestProvider,
 } from "./profile"
@@ -267,7 +268,7 @@ async function sweepDatabase(
 export function stackDatabases(p: TestProvider): string[] {
   // Перевизначена адреса стосується лише профілю прогону
   const url =
-    p === testProvider() ? testDatabaseUrl() : TEST_STACKS[p].databaseUrl
+    p === testProvider() ? testDatabaseUrl() : profileStack(p).databaseUrl
   const tests = decodeURIComponent(new URL(url).pathname.slice(1))
   return tests === "postgres" || tests === ""
     ? ["postgres"]
@@ -343,8 +344,14 @@ export function manualSweepSql(tag: string, p: TestProvider): string {
   checkTag(tag)
   const { databases, roles } = runObjectPatterns(tag)
   const [main, ...rest] = stackDatabases(p)
+  const stack = profileStack(p)
+  // Для стека N ≠ 1 заголовок називає індекс і ключ: SQL без цього пішов би на стек 1
+  const where =
+    stackEnvPrefix(stack) === ""
+      ? ""
+      : ` (stack ${stack.key}: connect with ${stackEnvPrefix(stack).trim()})`
   return [
-    `-- as ${TEST_STACKS[p].superuserName}; run the generated statements of each block connected to the database it names (DROP OWNED BY acts in the current database only)`,
+    `-- as ${stack.superuserName}; run the generated statements of each block connected to the database it names (DROP OWNED BY acts in the current database only)${where}`,
     ...rest.flatMap((database) => [
       `-- in database ${database}:`,
       `SELECT format('DROP OWNED BY %I;', rolname) FROM pg_roles WHERE rolname ~ '${roles.source}';`,
