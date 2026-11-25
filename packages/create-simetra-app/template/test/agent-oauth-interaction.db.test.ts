@@ -136,6 +136,27 @@ describe("interactionDetails", () => {
       })
     )
     expect(elsewhere.ok).toBe(false)
+    // І на сторінці іншої взаємодії: `uid` шляху мусить бути взаємодією cookie
+    const other = await startFlow(browser)
+    const crossed = await app.api.interactionDetails(
+      new Request(`${ORIGIN}/agent/connect/${other.uid}`, {
+        headers: {
+          cookie: browser.jar.header(`${ORIGIN}/agent/connect/${flow.uid}`),
+        },
+      })
+    )
+    expect(crossed.ok).toBe(false)
+    expect(
+      (
+        await app.api.interactionDetails(
+          new Request(`${ORIGIN}/agent/connect/${flow.uid}`, {
+            headers: {
+              cookie: browser.jar.header(`${ORIGIN}/agent/connect/${flow.uid}`),
+            },
+          })
+        )
+      ).ok
+    ).toBe(true)
   }, 60_000)
 })
 
