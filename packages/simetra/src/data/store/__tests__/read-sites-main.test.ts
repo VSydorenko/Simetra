@@ -926,7 +926,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     "tab-hidden": { request: true, then: "ready" },
     closing: {
       unreachable:
-        "the decision is taken in the flush of a commit; commit() refuses an invalid token, so no commit runs in the window",
+        "the purge flush of `close()` runs, but the check of M4 is deferred by `queueCheck` to a microtask that runs after `close()` and sees `isClosed()` (code reading: guard-off stays green)",
     },
   },
   M5: {
@@ -1184,7 +1184,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     "tab-hidden": { request: true, then: "ready" },
     closing: {
       unreachable:
-        "the decision is taken in the flush of a commit; commit() refuses an invalid token, so no commit runs in the window",
+        "the purge flush of `close()` reaches the core `onFlush`, which skips the decision under `if (!closing && session.token().valid)` (code reading: guard-off stays green)",
     },
   },
   R11: {
@@ -1336,7 +1336,7 @@ const TABLE: Record<SiteCode, Record<Condition, Cell>> = {
     "tab-hidden": { request: true, then: "ready" },
     closing: {
       unreachable:
-        "the decision is taken in the flush of a commit; commit() refuses an invalid token, so no commit runs in the window",
+        "the purge flush of `close()` reaches the core `onFlush`, which skips the decision under `if (!closing && session.token().valid)` (code reading: guard-off stays green)",
     },
   },
   K4: {
