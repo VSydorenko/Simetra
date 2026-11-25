@@ -68,7 +68,7 @@ async function tokenResourceRefusal(
  * стираються, а свої ставляться від канонічного походження. Адреса клієнта —
  * лише та, що визначив entry.
  */
-function pinnedToOrigin(request: Request, origin: string): Request {
+export function pinnedToOrigin(request: Request, origin: string): Request {
   const canonical = new URL(origin)
   const url = new URL(request.url)
   const headers = new Headers()

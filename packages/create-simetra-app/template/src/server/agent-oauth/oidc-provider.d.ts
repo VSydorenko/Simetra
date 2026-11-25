@@ -8,6 +8,14 @@ declare module "oidc-provider" {
     jti: string
     params: Record<string, unknown>
     prompt: { name: string }
+    result?: { consent?: { grantId?: string } }
+  }
+
+  export interface ClientModel {
+    clientId: string
+    clientName?: string
+    clientUri?: string
+    logoUri?: string
   }
 
   export interface GrantInstance {
@@ -88,7 +96,11 @@ declare module "oidc-provider" {
       new (init: { accountId: string; clientId: string }): GrantInstance
       find(id: string): Promise<GrantInstance | undefined>
     }
+    Client: { find(id: string): Promise<ClientModel | undefined> }
     AccessToken: { find(value: string): Promise<StoredToken | undefined> }
+    AuthorizationCode: {
+      find(value: string): Promise<StoredToken | undefined>
+    }
     RefreshToken: { find(value: string): Promise<StoredToken | undefined> }
   }
 

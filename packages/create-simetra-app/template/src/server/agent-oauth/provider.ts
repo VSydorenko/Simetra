@@ -11,7 +11,7 @@ import Provider, {
 } from "oidc-provider"
 import { getAuthPool } from "../auth-db"
 import { agentOauthKeys, appOrigin, type AgentOauthKeys } from "../config"
-import { AGENT_MCP_PATH } from "./paths"
+import { AGENT_MCP_PATH, agentConnectPath } from "./paths"
 import { providerKeys } from "./keys"
 import { safeFetch, withCimdNormalization } from "./safe-fetch"
 import { createPgAdapter, grantTenant, markGrantRevoked } from "./store"
@@ -179,7 +179,7 @@ export function createAgentOauthProvider(o: AgentOauthOptions): Provider {
     },
     interactions: {
       url: (_ctx: unknown, interaction: { uid: string }) =>
-        `/agent/connect/${interaction.uid}`,
+        agentConnectPath(interaction.uid),
       policy: alwaysInteractionPolicy(),
     },
     // Обліковий запис — користувач Better Auth: оновлення токена видаленого
