@@ -48,6 +48,8 @@ export interface O2Input {
   readonly lastJoin?: () => number | undefined
   /** Модель вилучила ключ власника (`purge`): картка чи ТЧ іде разом із ним. */
   readonly ownerPurged?: (object: string, key: string) => boolean
+  /** Чи тримає ціль будь-яке утримання (підписник чи `preload`): без нього вона йде зі звільненням. */
+  readonly targetHeld?: (target: SyncTarget) => boolean
   /** Чи тримає вигляд підписник чи `preload` (видимість не питаємо). */
   readonly holderPresent?: (target: SyncTarget) => boolean
   /** Інтервал збіжності й межа паузи збоїв моделі: строк винятків 3 і 5 — їх сума. */
@@ -363,7 +365,7 @@ const RETRY_PAUSE_MAX_MS = DISCARD_PAUSE_MS * 2 ** (DISCARDS_MAX - 1)
 interface FollowUp {
   readonly kind: "leave" | "read"
   readonly sinceEvent: number
-  sinceTime: number
+  sinceTime: number | undefined
   holderSince: number | undefined
 }
 
@@ -541,7 +543,11 @@ export function createO2(): O2 {
       }
       const target = state.target
       if (f.kind === "leave") {
-        if (input.holderPresent?.(target) !== false) f.sinceTime = now
+        // Відлік — від першого спостереження без утримання: мить, коли
+        // утримання скінчилось, між кроками моделі не видно.
+        if ((input.targetHeld ?? input.holderPresent)?.(target) !== false)
+          f.sinceTime = undefined
+        else if (f.sinceTime === undefined) f.sinceTime = now
         else if (
           input.releaseDelayMs !== undefined &&
           now - f.sinceTime > input.releaseDelayMs

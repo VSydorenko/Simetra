@@ -307,6 +307,7 @@ async function runOn(
   // Спроби лише цього ядра: друге ядро нумерує цілі з нуля.
   const ownAttempts: AttemptEvent[] = []
   const ownNumbers = new Set<number>()
+  let joinMark: number | undefined
   h.inspect.watchAttempts((event) => {
     ownAttempts.push(event)
     ownNumbers.add(event.attempt)
@@ -640,6 +641,10 @@ async function runOn(
         break
       }
       case "join":
+        // Мітка О2: читання, що знімає вимогу приєднання, стартує після неї.
+        joinMark = h.reads.events.filter(
+          (e) => e.attempt === undefined || ownNumbers.has(e.attempt)
+        ).length
         if (held[s.ch]) live[s.ch] = true
         transport.join(ALL_CHANNELS[s.ch]!, s.recovered)
         break
@@ -768,6 +773,8 @@ async function runOn(
       attempts: ownAttempts,
       fake: h.fake,
       revalidateMs: DEFAULT_CORE_LIMITS.revalidateIntervalMs,
+      releaseDelayMs: DEFAULT_CORE_LIMITS.releaseDelayMs,
+      lastJoin: () => joinMark,
       // Тримач — підписка вигляду з кроків моделі, видима на видимій вкладці.
       holderPresent: (target) =>
         target.kind === "view" &&
