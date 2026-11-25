@@ -961,6 +961,8 @@ describe("core: the epoch switch", () => {
     expect(states()).toHaveLength(1)
     expect(states()[0]!.flights).toEqual([])
     expect(states()[0]!.due).toBe(Date.now() + DISCARD_PAUSE_MS)
+    // Пауза відрізняється від звичайного строку явною причиною.
+    expect(states()[0]!.dueCause).toBe("retry")
     // Після паузи повтор іде й політ знову видно.
     vi.advanceTimersByTime(DISCARD_PAUSE_MS)
     await settle()
@@ -968,6 +970,7 @@ describe("core: the epoch switch", () => {
       expect.objectContaining({ kind: "load" }),
     ])
     expect(states()[0]!.due).toBeUndefined()
+    expect(states()[0]!.dueCause).toBeUndefined()
   })
 
   it("a core close in the pause of a discarded load leaves no timer and sends nothing", async () => {

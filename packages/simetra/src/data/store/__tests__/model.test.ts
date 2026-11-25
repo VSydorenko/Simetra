@@ -1132,15 +1132,18 @@ async function runModelOn(
     }
     return liveCache
   }
+  /** Вигляд чекає повтору відкинутого завантаження: строк із причиною `retry` у `sync()`. */
+  const inRetryPause = (sub: Subset) =>
+    syncedViews().get(sub.targetId)?.dueCause === "retry"
   /** Завантаження вигляду в польоті (`flight` ядра) — з `sync()`. */
   const loadFlying = (sub: Subset) =>
     (syncedViews()
       .get(sub.targetId)
       ?.flights.some((f) => f.kind === "load") ??
       false) ||
-    // Пауза повтору відкинутого завантаження: `sync()` показує строк, але
-    // політ завантаження для моделі ще триває.
-    tracker.retrying(sub.targetId)
+    // Пауза повтору відкинутого завантаження: `sync()` показує строк з причиною
+    // `retry`, але політ завантаження ще триває.
+    inRetryPause(sub)
   /** Вимога вигляду за видом — з `sync()`. */
   const requires = (sub: Subset, kind: string) =>
     syncedViews()
@@ -3038,7 +3041,7 @@ async function runModelOn(
       .get(sub.targetId)
       ?.flights.some((f) => f.kind !== "page") ??
       false) ||
-    tracker.retrying(sub.targetId)
+    inRetryPause(sub)
   const exhausted = (sub: Subset) =>
     sub.status === "error" && sub.error === EPOCH_UNAVAILABLE
   // Після межі відкинутих планувальник не читає жодного вигляду до нової
@@ -5140,6 +5143,35 @@ describe("core model regressions", () => {
   // Явні кроки: усічені шляхи реплеїв нижче не доводять, що без виправлення
   // прогін червоний. Завантаження вигляду відкинуто за епохою, далі його
   // перечитує `return` — модель не мусить вважати вигляд «у польоті».
+  // Пауза повтору береться з `sync()` (строк із причиною `retry`): `return` під
+  // час живої паузи, відповіді й плин часу — модель і ядро згодні, чи вигляд
+  // у польоті, на кожному кроці.
+  it("agrees with the core on a view in the M8 retry pause", async () => {
+    const answer: Step = { t: "answer", pick: 0, how: "ok", at: 0 }
+    const refresh: Step = { t: "refresh", v: 0, showNew: false }
+    const steps: Step[] = [
+      { t: "sub", v: 0 },
+      answer,
+      { t: "epoch", which: 1 },
+      refresh,
+      answer,
+      { t: "epoch", which: 2 },
+      refresh,
+      answer,
+      { t: "epoch", which: 1 },
+      refresh,
+      answer,
+      { t: "return", minAge: 1000 },
+      answer,
+      { t: "time", ms: 500 },
+      answer,
+      answer,
+      { t: "time", ms: 5000 },
+      answer,
+    ]
+    await modelRun(runModel(steps, false, "full", [], true, false, false))
+  })
+
   it("`return` rereads a view whose load was discarded and never retried", async () => {
     const steps: Step[] = [
       { t: "closeInFlight" },
@@ -5625,6 +5657,7 @@ const DEFECTS: readonly DefectFlag[] = [
   "scheduler-no-reschedule",
   "revalidate-no-tail",
   "scheduler-reads-unavailable",
+  "sync-pause-no-cause",
 ]
 
 // Какою перевіркою дефект ловиться, коли це важливо: нові перевірки
@@ -5678,6 +5711,9 @@ const CAUGHT_BY: Partial<Record<DefectFlag, RegExp>> = {
   "scheduler-no-reschedule": /scheduler has no timer on a visible tab/,
   "revalidate-no-tail": /left no tail pass/,
   "scheduler-reads-unavailable": /after the discard limit/,
+  // `sync()` показує паузу повтору звичайним строком: модель, що бере паузу з
+  // `sync()`, бачить вигляд поза польотом і чекає від ядра перечитування.
+  "sync-pause-no-cause": /not re-read after hide/,
   // Знімок прав (B5b-2): кожен дефект — своїм шляхом. Без бар'єра читання
   // пари, що стартувало до знімка, пише її рядок уже після нього (`race`).
   "rights-no-barrier": /written past the rights barrier/,

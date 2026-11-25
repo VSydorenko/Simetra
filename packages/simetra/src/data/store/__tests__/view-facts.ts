@@ -26,7 +26,6 @@ interface Facts {
   failedAt: number | undefined
   loads: number
   lost: Set<number>
-  retrying: boolean
 }
 
 export interface ViewTracker {
@@ -44,11 +43,6 @@ export interface ViewTracker {
   loads(id: number): number
   /** Завантаження з цим номером перезапустили: його спроба осіла після purge. */
   lost(id: number, load: number): boolean
-  /**
-   * Завантаження вигляду чекає повтору після відкинутої відповіді (пауза M8):
-   * запиту немає, але політ ядра ще не скінчився.
-   */
-  retrying(id: number): boolean
   stop(): void
 }
 
@@ -76,7 +70,6 @@ export function trackViews(
         failedAt: undefined,
         loads: 0,
         lost: new Set(),
-        retrying: false,
       }
       views.set(id, facts)
     }
@@ -86,9 +79,6 @@ export function trackViews(
     const facts = of(event.target.id)
     if (event.phase === "started") {
       startedAt.set(event.attempt, now())
-      // Будь-яка нова спроба цього вигляду (перечитування теж) знімає паузу
-      // повтору: повтор завантаження ядро тоді вже не ставить.
-      facts.retrying = false
       if (event.kind === "reread") facts.rereads++
       if (event.kind === "load") {
         if (!RETRY_SITES.has(event.site)) facts.loads++
@@ -96,8 +86,6 @@ export function trackViews(
       }
       return
     }
-    if (event.kind === "load")
-      facts.retrying = event.outcome === "discarded-by-epoch"
     // Політ завантаження осідає «після purge» лише тоді, коли його покоління
     // підняли в польоті (`purge` пари чи звуження прав): токен недійсний, а
     // вигляд живий і сесія відкрита.
@@ -124,7 +112,6 @@ export function trackViews(
     failedAt: (id) => of(id).failedAt,
     loads: (id) => of(id).loads,
     lost: (id, load) => of(id).lost.has(load),
-    retrying: (id) => of(id).retrying,
     stop,
   }
 }

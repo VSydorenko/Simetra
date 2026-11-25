@@ -112,6 +112,8 @@ export type DefectFlag =
   | "receiver-ignores-horizon"
   /** A page settle drops the requirement "composition not confirmed" of its view. */
   | "page-drops-requirement"
+  /** `sync()` shows the pause before a load retry as an ordinary deadline, without the cause `retry`. */
+  | "sync-pause-no-cause"
   /** The rejoin wave neither reads nor sets requirements. */
   | "rejoin-wave-no-read"
 

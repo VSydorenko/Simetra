@@ -41,6 +41,7 @@ import {
 } from "./source"
 import type {
   AdmissionCondition,
+  DueCause,
   ReadCause,
   ReadIntent,
   ReadWhy,
@@ -359,6 +360,13 @@ export type SyncState = {
   readonly proof?: number
   /** The earliest wake-up of a timer of `main` that reads the target. */
   readonly due?: number
+  /**
+   * Why `due` is not an ordinary deadline: `retry` — the end of the pause
+   * before the retry of a discarded load (the flight stays set meanwhile).
+   * Absent for an interval or a failure pause. The value is `retryAt` of the
+   * view, the one place of `main` that knows the pause.
+   */
+  readonly dueCause?: DueCause
 } & (
   | { readonly deferral?: SyncDeferral; readonly refusal?: never }
   | { readonly refusal: SyncRefusal; readonly deferral?: never }
@@ -2333,11 +2341,16 @@ export function createCore(options: {
     })
   const withOptional = <T extends object>(
     base: T,
-    fields: { proof?: number | undefined; due?: number | undefined }
+    fields: {
+      proof?: number | undefined
+      due?: number | undefined
+      dueCause?: DueCause | undefined
+    }
   ) => ({
     ...base,
     ...(fields.proof === undefined ? {} : { proof: fields.proof }),
     ...(fields.due === undefined ? {} : { due: fields.due }),
+    ...(fields.dueCause === undefined ? {} : { dueCause: fields.dueCause }),
   })
 
   // Таймери `main` читають об'єкт лише на видимій вкладці, поки він сумісний
@@ -2482,6 +2495,10 @@ export function createCore(options: {
           {
             proof: s.okReadEpoch,
             due: earliest(timerDue(s), s.retryAt),
+            dueCause:
+              s.retryAt !== undefined && !defects.has("sync-pause-no-cause")
+                ? "retry"
+                : undefined,
           }
         ),
         refusalOf(object),

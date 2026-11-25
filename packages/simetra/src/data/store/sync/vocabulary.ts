@@ -127,6 +127,14 @@ export type SettleOutcome = (typeof SETTLE_OUTCOMES)[number]
 export const ATTEMPT_KINDS = ["load", "page", "reread"] as const
 export type AttemptKind = (typeof ATTEMPT_KINDS)[number]
 
+/**
+ * Причини строку у `sync()`, що відрізняються від звичайного: звичайний строк
+ * (інтервал, пауза збоїв) причини не має. `retry` — кінець паузи перед повтором
+ * відкинутого завантаження: політ тоді ще не скінчився, але запиту немає.
+ */
+export const DUE_CAUSES = ["retry"] as const
+export type DueCause = (typeof DUE_CAUSES)[number]
+
 /** Причина читання; вимога несе свій вид. */
 export type ReadCause =
   | { readonly reason: Exclude<ReadReason, "requirement"> }
