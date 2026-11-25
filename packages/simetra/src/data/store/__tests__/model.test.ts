@@ -4334,9 +4334,12 @@ async function runModelOn(
     rightsPassInStep = false
     const before = lists()
     fake.holdRights = false
+    // Довжина журналу ДО кроку, як в інших кроках: читання цього кроку
+    // (хвостове перечитування) мусять рахуватися «пізнішими» (#400).
+    const stepStart = fake.log.length
     fake.releaseRights()
     await flush()
-    check("release rights", fake.log.length)
+    check("release rights", stepStart)
     noteGens(false)
     stability("release rights", before, false, rightsPurgeable)
   }
@@ -4864,6 +4867,14 @@ describe("core model regressions", () => {
       signals: true,
       seed: -543971651,
       path: "8357:4:7:18:18:24:27:28:28:28:40:42:36:35:35:39:41:41:42:41:23:29:2:23:25:21:21:21:21:21:21:21:21:21:21:21:21:21:21:21",
+    },
+    // #400: оракул рахував довжину журналу після кроку `release rights`, тож
+    // хвостове перечитування цього кроку не вважалося пізнішим читанням.
+    {
+      issue: 400,
+      rights: true,
+      seed: -1708729583,
+      path: "9564:1:0:2:2:2:3:3:3:3:2:3:3:3:3:3:3:3:3:4:5:5:5:5:6:6:6",
     },
   ])(
     "replays the counterexample of #$issue (seed $seed)",
