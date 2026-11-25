@@ -7,6 +7,7 @@ import {
   checkpoints,
   createO3,
   hasOwnDuty,
+  headerHolderSince,
   hiddenOwnerBound,
   judgeRows,
   judgeSection,
@@ -309,6 +310,31 @@ describe("O3 self-check", () => {
           views: [view({ state: "section-owner-hidden", holderSince: 0 })],
         })
       ).toMatch(/stale row/)
+    })
+  })
+
+  describe("the moment a header holder starts to count", () => {
+    const empty = { requirements: [], flights: [], queued: [] }
+    const duty = { ...empty, due: 5 }
+    it("is the phase start for a visible tab and a holder with a duty", () => {
+      expect(
+        headerHolderSince({ phaseStart: 7, visible: true, holders: [duty] })
+      ).toBe(7)
+    })
+    it("is undefined without a holder, with a holder without a duty, or on a hidden tab", () => {
+      expect(
+        headerHolderSince({ phaseStart: 7, visible: true, holders: [] })
+      ).toBeUndefined()
+      expect(
+        headerHolderSince({
+          phaseStart: 7,
+          visible: true,
+          holders: [empty, undefined],
+        })
+      ).toBeUndefined()
+      expect(
+        headerHolderSince({ phaseStart: 7, visible: false, holders: [duty] })
+      ).toBeUndefined()
     })
   })
 })

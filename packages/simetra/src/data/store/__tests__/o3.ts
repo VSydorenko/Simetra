@@ -219,6 +219,28 @@ export const hasOwnDuty = (
   state.flights.length > 0 ||
   state.queued.length > 0
 
+/**
+ * Мить, від якої шапку власника тримає вигляд з власним обов'язком (стан
+ * `section-owner-hidden`): початок фази, якщо вкладка видима й серед тримачів
+ * (вигляд ключів із власником чи картка власника, підписані) є такий, що має
+ * обов'язок; інакше `undefined` — тримача нема, і стан без межі.
+ */
+export function headerHolderSince(input: {
+  readonly phaseStart: number
+  readonly visible: boolean
+  /** Стани `sync()` підписаних виглядів, що читають шапку власника. */
+  readonly holders: readonly (
+    Pick<SyncState, "requirements" | "flights" | "queued" | "due"> | undefined
+  )[]
+}): number | undefined {
+  if (!input.visible) return undefined
+  return input.holders.some(
+    (holder) => holder !== undefined && hasOwnDuty(holder)
+  )
+    ? input.phaseStart
+    : undefined
+}
+
 /** Лічильник нуль — О3 порожній, а не зелений. */
 export function assertEvaluated(count: number, where: string): void {
   if (count <= 0)

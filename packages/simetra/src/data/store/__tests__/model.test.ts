@@ -75,6 +75,7 @@ import {
   checkpoints as o3Checkpoints,
   createO3,
   hasOwnDuty,
+  headerHolderSince,
   judgeRows,
   judgeSection,
   lastBound as o3LastBound,
@@ -4695,19 +4696,24 @@ async function runModelOn(
           // перечитує рядки, не шапку.
           // Тримач без власної вимоги чи строку (картка без обов'язку, рядки 17/20)
           // шапки не читає: тримачем він не є.
-          const holds = SPECS.some((other, w) => {
-            if (
-              subs[w] === undefined ||
-              other.object !== spec.object ||
-              !readsHeader(other, spec.owner)
-            )
-              return false
-            const held = internals.registry.find(other)
-            const duty =
-              held === undefined ? undefined : syncedViews().get(held.targetId)
-            return duty !== undefined && hasOwnDuty(duty)
+          holderSince = headerHolderSince({
+            phaseStart,
+            visible: core.visible,
+            holders: SPECS.flatMap((other, w) => {
+              if (
+                subs[w] === undefined ||
+                other.object !== spec.object ||
+                !readsHeader(other, spec.owner)
+              )
+                return []
+              const held = internals.registry.find(other)
+              return [
+                held === undefined
+                  ? undefined
+                  : syncedViews().get(held.targetId),
+              ]
+            }),
           })
-          if (holds && core.visible) holderSince = phaseStart
         } else if (syncedViews().get(sub.targetId)?.dueCause === "retry")
           state = "retry-pause"
         else if (
