@@ -1357,7 +1357,10 @@ async function runModelOn(
   // Рядки, які сховище тримає очима моделі: їх дає відповідь читання, їх
   // забирає purge; ключ, вилучений й не прочитаний знову, — власник «відсутній».
   const heldRows = new Set<string>()
+  // Скільки разів `purge` вилучав ключ: рядок, що вийшов і повернувся, — новий.
+  const purgeCount = new Map<string, number>()
   const markPurged = (at: string) => {
+    purgeCount.set(at, (purgeCount.get(at) ?? 0) + 1)
     purgedTargets.add(at)
     heldRows.delete(at)
   }
@@ -4309,6 +4312,8 @@ async function runModelOn(
           },
           storeEmpty: !heldKeys().size,
           rowAlive: (_object, k) => heldKeys().has(k),
+          rowLife: (object, k) =>
+            purgeCount.get(id(object as ObjectName, k as Key)) ?? 0,
         })
     o2Checks += o2.evaluated() - o2Before
     if (o2Problem !== undefined) fail(label, `O2: ${o2Problem}`)
@@ -4945,6 +4950,14 @@ describe("core model regressions", () => {
       signals: true,
       seed: 1329672921,
       path: "9819:8:13:17:16:22:24:33:33:41:44:45:48:48:48:48:52:52:52:56:58:53:29:54:52:55:54:55:55:44:44:44:44:44:44:44:44:44:44:44:44:44:44:44:44:44",
+    },
+    // Рядок з вимогою «мінімальна версія» вилучено `purge`, поки читання були в
+    // польоті, і прочитано знову: вимога зникла разом із рядком, а не без доказу.
+    {
+      issue: "O2 purged row returns",
+      o2: true,
+      seed: 968292387,
+      path: "8463:4:0:4:12:12:17:20:22:23:22:28:34:33:34:34:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19:19",
     },
     {
       issue: "O2 purge and unsub",

@@ -312,6 +312,34 @@ describe("O2 self-check", () => {
         gone.step(input({ now: 5, states: alive, rowAlive: () => false }))
       ).toBeUndefined()
     })
+
+    it("a row that left the store between two evaluations took its requirement with it", () => {
+      const row: SyncTarget = { kind: "row", object: OBJECT, key: "k" }
+      const first = (life: number) => {
+        const o2 = createO2()
+        o2.step(
+          input({
+            states: [
+              state(row, { requirements: [{ kind: "min-version" }], due: 5 }),
+            ],
+            rowLife: () => 0,
+          })
+        )
+        // Рядок вилучено `purge` (крок із читанням у польоті О2 не оцінювали) і
+        // прочитано знову: нова вимога його не обіцяє.
+        return o2.step(
+          input({
+            now: 5,
+            states: alive,
+            rowAlive: () => true,
+            rowLife: () => life,
+          })
+        )
+      }
+      expect(first(1)).toBeUndefined()
+      // Без вилучення той самий рядок лишився: зникнення без доказу — червоне.
+      expect(first(0)).toMatch(/disappeared with no proof/)
+    })
   })
 
   describe("exceptions come only from the table of the gaps of main", () => {

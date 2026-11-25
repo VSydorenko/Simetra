@@ -34,6 +34,12 @@ export interface O2Input {
    */
   readonly rowAlive?: (object: string, key: string) => boolean
   /**
+   * Скільки разів ключ вилучали зі сховища (`purge`): рядок, що вийшов і
+   * повернувся між двома оцінками (кроки з читаннями в польоті О2 не судить),
+   * — вже не той рядок, і його вимога зникла разом з ним.
+   */
+  readonly rowLife?: (object: string, key: string) => number
+  /**
    * Чи має вигляд видимого тримача на видимій вкладці — за кроками самої
    * моделі, не за `sync()` (його умови судить сам оракул).
    */
@@ -398,6 +404,7 @@ interface Snapshot {
   readonly events: number
   readonly attempts: number
   readonly log: number
+  readonly lives: ReadonlyMap<string, number>
 }
 
 export interface O2 {
@@ -703,6 +710,18 @@ export function createO2(): O2 {
       events: events.length,
       attempts: input.attempts.length,
       log: fake.log.length,
+      lives: new Map(
+        states.flatMap((s) =>
+          s.target.kind === "row"
+            ? [
+                [
+                  targetKey(s.target),
+                  input.rowLife?.(s.target.object, s.target.key) ?? 0,
+                ] as const,
+              ]
+            : []
+        )
+      ),
     }
     if (previous !== undefined && !closed) {
       const from = previous
@@ -742,6 +761,8 @@ export function createO2(): O2 {
             t.kind !== "row" ||
             input.rowAlive === undefined ||
             !input.rowAlive(t.object, t.key) ||
+            (input.rowLife?.(t.object, t.key) ?? 0) !==
+              (previous.lives.get(key) ?? 0) ||
             states.some((s) => s.refusal === "discard-bound")
           )
             continue
