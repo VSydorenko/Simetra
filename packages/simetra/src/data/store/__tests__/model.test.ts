@@ -924,6 +924,21 @@ const O3_NAMED_STATES: readonly O3State[] = [
  * перевіряє, що після закриття таймерів немає, і наступний прогін не бачить
  * чужих таймерів.
  */
+/**
+ * Закріплений прогін О2/О3 детермінований: джитер ядра (`Math.random`: перемикання
+ * епохи, хвиля приєднання) іде з генератора, що стартує однаково в кожному прогоні.
+ */
+let pinnedRandom = false
+const seededRandom = () => {
+  let a = 0x9e3779b9
+  return () => {
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
 async function runModel(
   steps: readonly Step[],
   preloaded: boolean,
@@ -932,10 +947,14 @@ async function runModel(
   schedulerChecks = true,
   rights = false,
   signals = false,
-  intervalMs = REVALIDATE_MS
+  intervalMs = REVALIDATE_MS,
+  // О2 і О3 судять; без них прогін перевіряє лише інваріанти ядра, О1 і О4.
+  judge = true
 ) {
   const held: { core?: CoreSession; reads?: ReadCollector } = {}
   runInterval = intervalMs
+  const realRandom = Math.random
+  if (pinnedRandom) Math.random = seededRandom()
   try {
     await runModelOn(
       steps,
@@ -945,6 +964,7 @@ async function runModel(
       schedulerChecks,
       rights || signals,
       signals,
+      judge,
       (c, reads) => {
         held.core = c
         held.reads = reads
@@ -959,6 +979,7 @@ async function runModel(
     held.reads?.stop()
     held.core?.close("disposed")
     runInterval = REVALIDATE_MS
+    Math.random = realRandom
   }
   const timers = vi.getTimerCount()
   if (timers !== 0) fail("end", `${timers} timers after close`)
@@ -972,6 +993,7 @@ async function runModelOn(
   schedulerChecks: boolean,
   rights: boolean,
   signals: boolean,
+  judge: boolean,
   opened: (core: CoreSession, reads: ReadCollector) => void
 ) {
   // Канал сигналів (B5b-3): приймач ядра тримає його лише зі знімком прав.
@@ -4424,55 +4446,58 @@ async function runModelOn(
     const o2Before = o2.evaluated()
     // `sync()` обходить сховище: лише у спокої, коли О2 щось судить.
     const quietNow = fake.pending.length === 0 && fake.inFlight === 0
-    const o2Problem = !quietNow
-      ? undefined
-      : o2.step({
-          now: clock,
-          states: inspect.sync(),
-          events: ownEvents(),
-          attempts: ownAttempts,
-          fake,
-          revalidateMs: runInterval,
-          releaseDelayMs: DEFAULT_CORE_LIMITS.releaseDelayMs,
-          lastJoin: () => joinMark,
-          // Тримач — слухач вигляду з кроків моделі, видимий на видимій вкладці.
-          // Власник «відсутній», доки його не прочитано знову після purge.
-          ownerPurged: (object, k) =>
-            purgedTargets.has(id(object as ObjectName, k)) &&
-            !heldRows.has(id(object as ObjectName, k)),
-          holderPresent: (target) =>
-            target.kind === "view" &&
-            subs[SPECS.indexOf(target.spec)] !== undefined,
-          purgedView: (target) =>
-            target.kind === "view" &&
-            handles[SPECS.indexOf(target.spec)]?.getSnapshot().status ===
-              "purged",
-          targetHeld: (target) =>
-            target.kind === "view" &&
-            (subs[SPECS.indexOf(target.spec)] !== undefined ||
-              (preloadUntil.get(SPECS.indexOf(target.spec)) ?? -1) > clock),
-          holderVisible: (target) => {
-            if (target.kind !== "view") return false
-            const v = SPECS.indexOf(target.spec)
-            return (
-              core.visible &&
-              subs[v] !== undefined &&
-              (visibleBy.get(target.id) ?? true)
-            )
-          },
-          storeEmpty: !heldKeys().size,
-          rowAlive: (_object, k) => heldKeys().has(k),
-          headerGone: (_object, k) => {
-            const shown = handles.flatMap((handle, v) =>
-              subs[v] === undefined
-                ? []
-                : handle.getSnapshot().rows.filter((r) => r.key === k)
-            )
-            return shown.length > 0 && shown.every((r) => r.state === "removed")
-          },
-          rowLife: (object, k) =>
-            purgeCount.get(id(object as ObjectName, k as Key)) ?? 0,
-        })
+    const o2Problem =
+      !judge || !quietNow
+        ? undefined
+        : o2.step({
+            now: clock,
+            states: inspect.sync(),
+            events: ownEvents(),
+            attempts: ownAttempts,
+            fake,
+            revalidateMs: runInterval,
+            releaseDelayMs: DEFAULT_CORE_LIMITS.releaseDelayMs,
+            lastJoin: () => joinMark,
+            // Тримач — слухач вигляду з кроків моделі, видимий на видимій вкладці.
+            // Власник «відсутній», доки його не прочитано знову після purge.
+            ownerPurged: (object, k) =>
+              purgedTargets.has(id(object as ObjectName, k)) &&
+              !heldRows.has(id(object as ObjectName, k)),
+            holderPresent: (target) =>
+              target.kind === "view" &&
+              subs[SPECS.indexOf(target.spec)] !== undefined,
+            purgedView: (target) =>
+              target.kind === "view" &&
+              handles[SPECS.indexOf(target.spec)]?.getSnapshot().status ===
+                "purged",
+            targetHeld: (target) =>
+              target.kind === "view" &&
+              (subs[SPECS.indexOf(target.spec)] !== undefined ||
+                (preloadUntil.get(SPECS.indexOf(target.spec)) ?? -1) > clock),
+            holderVisible: (target) => {
+              if (target.kind !== "view") return false
+              const v = SPECS.indexOf(target.spec)
+              return (
+                core.visible &&
+                subs[v] !== undefined &&
+                (visibleBy.get(target.id) ?? true)
+              )
+            },
+            storeEmpty: !heldKeys().size,
+            rowAlive: (_object, k) => heldKeys().has(k),
+            headerGone: (_object, k) => {
+              const shown = handles.flatMap((handle, v) =>
+                subs[v] === undefined
+                  ? []
+                  : handle.getSnapshot().rows.filter((r) => r.key === k)
+              )
+              return (
+                shown.length > 0 && shown.every((r) => r.state === "removed")
+              )
+            },
+            rowLife: (object, k) =>
+              purgeCount.get(id(object as ObjectName, k as Key)) ?? 0,
+          })
     o2Checks += o2.evaluated() - o2Before
     if (o2Problem !== undefined) fail(label, `O2: ${o2Problem}`)
     if (schedulerStep && closed === undefined) {
@@ -4606,7 +4631,7 @@ async function runModelOn(
     stability(`drain ${i}`, before, false, rightsPurgeable)
   }
 
-  if (closed === undefined) await o3Phase()
+  if (closed === undefined && judge) await o3Phase()
   if (closed === undefined) await converge()
 
   /**
@@ -5058,7 +5083,8 @@ const property = (
   schedulerChecks = true,
   rights = false,
   signals = false,
-  intervalMs = REVALIDATE_MS
+  intervalMs = REVALIDATE_MS,
+  judge = true
 ) =>
   fc.asyncProperty(
     fc.array(signals ? SIGNAL_STEP : rights ? RIGHTS_STEP : STEP, {
@@ -5078,7 +5104,8 @@ const property = (
           schedulerChecks,
           rights,
           signals,
-          intervalMs
+          intervalMs,
+          judge
         )
       )
   )
@@ -5100,21 +5127,52 @@ afterEach(async () => {
 const BUDGET_MS = 300_000
 const RIGHTS_BUDGET_MS = 600_000
 
+/*
+ * Режими властивостей (рішення архітекторки 25.11). Інваріанти ядра, О1 і О4
+ * шукають контрприклади на НОВИХ сидах у кожному прогоні. О2 і О3 у шлюзі судять
+ * ЗАКРІПЛЕНІ сиди з тим самим числом прогонів і детермінованим джитером ядра:
+ * їхній набір винятків заморожено, а новий сид пошуку — не виняток, а рядок
+ * списку для планів SK-3 і SK-4. Пошук О2 і О3 на нових сидах — окрема команда
+ * (не в CI): `CORE_MODEL_SEED=random`; `CORE_MODEL_RUNS` діє в обох режимах.
+ */
+// Закріплено рішенням архітекторки 25.11: зелені на повному числі прогонів.
+const PINNED_SEEDS = { plain: 1, rights: 1, signals: 1 } as const
+const searchO2O3 = process.env.CORE_MODEL_SEED === "random"
+const judgedRun = (profile: keyof typeof PINNED_SEEDS) =>
+  searchO2O3 ? {} : { seed: PINNED_SEEDS[profile] }
+
 describe("core model", () => {
   it(
     "holds the invariants over random interleavings",
     async () => {
       tickReads = 0
       idleChecks = 0
-      o2Checks = 0
-      o3Checks = 0
-      await fc.assert(property(), {
+      await fc.assert(property([], true, false, false, REVALIDATE_MS, false), {
         numRuns: RUNS,
         ...interruptWithin(BUDGET_MS),
       })
       // Без тактів із читанням інваріанти планувальника порожні.
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
       expect(idleChecks, "no step in an idle window").toBeGreaterThan(0)
+    },
+    BUDGET_MS
+  )
+
+  it(
+    "judges O2 and O3 over the pinned seed (plain)",
+    async () => {
+      o2Checks = 0
+      o3Checks = 0
+      pinnedRandom = !searchO2O3
+      try {
+        await fc.assert(property(), {
+          numRuns: RUNS,
+          ...judgedRun("plain"),
+          ...interruptWithin(BUDGET_MS),
+        })
+      } finally {
+        pinnedRandom = false
+      }
       assertEvaluated(o2Checks, "the plain property")
       assertO3Evaluated(o3Checks, "the plain property")
     },
@@ -5129,13 +5187,30 @@ describe("core model", () => {
     "holds the invariants with the rights snapshot",
     async () => {
       tickReads = 0
-      o2Checks = 0
-      o3Checks = 0
-      await fc.assert(property([], true, true), {
+      await fc.assert(property([], true, true, false, REVALIDATE_MS, false), {
         numRuns: RUNS,
         ...interruptWithin(RIGHTS_BUDGET_MS),
       })
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+    },
+    RIGHTS_BUDGET_MS
+  )
+
+  it(
+    "judges O2 and O3 over the pinned seed (rights snapshot)",
+    async () => {
+      o2Checks = 0
+      o3Checks = 0
+      pinnedRandom = !searchO2O3
+      try {
+        await fc.assert(property([], true, true), {
+          numRuns: RUNS,
+          ...judgedRun("rights"),
+          ...interruptWithin(RIGHTS_BUDGET_MS),
+        })
+      } finally {
+        pinnedRandom = false
+      }
       assertEvaluated(o2Checks, "the rights property")
       assertO3Evaluated(o3Checks, "the rights property")
     },
@@ -5150,13 +5225,30 @@ describe("core model", () => {
     "holds the invariants with the signal receiver",
     async () => {
       tickReads = 0
-      o2Checks = 0
-      o3Checks = 0
-      await fc.assert(property([], true, true, true), {
+      await fc.assert(property([], true, true, true, REVALIDATE_MS, false), {
         numRuns: RUNS,
         ...interruptWithin(RIGHTS_BUDGET_MS),
       })
       expect(tickReads, "no tick with a read").toBeGreaterThan(0)
+    },
+    RIGHTS_BUDGET_MS
+  )
+
+  it(
+    "judges O2 and O3 over the pinned seed (signal receiver)",
+    async () => {
+      o2Checks = 0
+      o3Checks = 0
+      pinnedRandom = !searchO2O3
+      try {
+        await fc.assert(property([], true, true, true), {
+          numRuns: RUNS,
+          ...judgedRun("signals"),
+          ...interruptWithin(RIGHTS_BUDGET_MS),
+        })
+      } finally {
+        pinnedRandom = false
+      }
       assertEvaluated(o2Checks, "the signals property")
       assertO3Evaluated(o3Checks, "the signals property")
     },
