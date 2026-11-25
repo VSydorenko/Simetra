@@ -197,7 +197,7 @@ describe("O2 self-check", () => {
     expect(run(undefined)).toMatch(/no read by its deadline/)
   })
 
-  it("a deadline that left sync() is handed to an exception or judged by the idle rule, never forgiven", () => {
+  it("a missed deadline passes only into an exception with a bound, counted from the deadline", () => {
     const row: SyncTarget = { kind: "row", object: OBJECT, key: "k" }
     const withDue = state(row, {
       requirements: [{ kind: "value-hidden" }],
@@ -206,49 +206,47 @@ describe("O2 self-check", () => {
     const withdrawn = state(row, { requirements: [{ kind: "value-hidden" }] })
     const evaluate = (
       at: number,
-      states: SyncState[],
+      second: SyncState,
       visible: boolean,
       revalidateMs = 10_000
     ) => {
       const o2 = createO2()
-      o2.step(input({ now: 0, states: [withDue] }))
       // Вигляд того самого об'єкта — тримач рядка: видимий чи ні.
+      const common = {
+        revalidateMs,
+        holderVisible: () => visible,
+        rowAlive: () => true,
+      }
+      o2.step(input({ now: 0, states: [withDue, state(view(3))], ...common }))
       return o2.step(
-        input({
-          now: at,
-          states: [...states, state(view(3))],
-          revalidateMs,
-          holderVisible: () => visible,
-          rowAlive: () => true,
-        })
+        input({ now: at, states: [second, state(view(3))], ...common })
       )
     }
     // До строку: обіцянку знято разом зі строком.
-    expect(evaluate(999, [withdrawn], false)).toBeUndefined()
-    expect(evaluate(999, [withdrawn], true)).toBeUndefined()
-    // Тримач пішов у мить строку: названий стан «немає видимого тримача».
-    expect(evaluate(1_000, [withdrawn], false)).toBeUndefined()
-    expect(evaluate(1_500, [withdrawn], false)).toBeUndefined()
-    // Видимий тримач: обмежений виняток, його межа не вічна — за нею червоний.
-    expect(evaluate(1_500, [withdrawn], true)).toBeUndefined()
-    const bounded = createO2()
-    bounded.step(input({ now: 0, states: [withDue] }))
+    expect(evaluate(999, withdrawn, true)).toBeUndefined()
+    expect(evaluate(999, withdrawn, false)).toBeUndefined()
+    // Видимий тримач — виняток з межею: у строк і після нього, поки межа не минула.
+    expect(evaluate(1_000, withdrawn, true)).toBeUndefined()
+    expect(evaluate(1_500, withdrawn, true)).toBeUndefined()
+    // Названий стан без межі (тримача нема) пропущеного строку не прощає.
+    expect(evaluate(1_000, withdrawn, false)).toMatch(/no read by its deadline/)
+    expect(evaluate(1_500, withdrawn, false)).toMatch(/no read by its deadline/)
+    // Межа лічиться від строку: прощений у строк, далі виняток спливає.
+    const o2 = createO2()
+    const bounded = {
+      revalidateMs: 100,
+      holderVisible: () => true,
+      rowAlive: () => true,
+    }
+    o2.step(input({ now: 0, states: [withDue, state(view(3))], ...bounded }))
     const at = (now: number) =>
-      bounded.step(
-        input({
-          now,
-          states: [withdrawn, state(view(3))],
-          revalidateMs: 100,
-          holderVisible: () => true,
-          rowAlive: () => true,
-        })
-      )
+      o2.step(input({ now, states: [withdrawn, state(view(3))], ...bounded }))
     expect(at(1_000)).toBeUndefined()
     expect(at(1_150)).toBeUndefined()
     expect(at(1_500)).toMatch(/no promise and no condition/)
-    // Строк лишився у `sync()`, а читання не було: червоний, хоч тримача й нема.
-    expect(evaluate(1_000, [withDue], true)).toMatch(/no read by its deadline/)
-    expect(evaluate(1_000, [withDue], false)).toMatch(/no read by its deadline/)
+    // Строк лишився у `sync()`, а читання не було: червоний.
+    expect(evaluate(1_000, withDue, true)).toMatch(/no read by its deadline/)
+    expect(evaluate(1_000, withDue, false)).toMatch(/no read by its deadline/)
     // Вимога поза винятками й без строку, у строк чи після нього: червоний.
     const list: SyncTarget = view(1)
     const noException = createO2()
@@ -266,6 +264,78 @@ describe("O2 self-check", () => {
         })
       )
     ).toMatch(/no read by its deadline/)
+  })
+
+  it("a deadline missed while the tab was hidden by a `suspend` waits for the show, then the read must start within the interval", () => {
+    const row: SyncTarget = { kind: "row", object: OBJECT, key: "k" }
+    const withDue = state(row, {
+      requirements: [{ kind: "value-hidden" }],
+      due: 1_000,
+    })
+    const withdrawn = state(row, { requirements: [{ kind: "value-hidden" }] })
+    const common = { revalidateMs: 100, rowAlive: () => true }
+    const start = (o2: ReturnType<typeof createO2>) =>
+      o2.step(
+        input({
+          now: 0,
+          states: [withDue],
+          suspends: 0,
+          tabHidden: false,
+          ...common,
+        })
+      )
+    const at = (
+      o2: ReturnType<typeof createO2>,
+      now: number,
+      over: Partial<O2Input>
+    ) =>
+      o2.step(
+        input({
+          now,
+          states: [withdrawn, state(view(3))],
+          // Прихована вкладка — видимого тримача нема (названий стан рядка).
+          holderVisible: () => over.tabHidden !== true,
+          ...common,
+          ...over,
+        })
+      )
+    // `suspend` між записом і оцінкою, вкладка прихована: умова, без межі.
+    const hidden = createO2()
+    start(hidden)
+    expect(at(hidden, 2_000, { suspends: 1, tabHidden: true })).toBeUndefined()
+    expect(at(hidden, 50_000, { suspends: 1, tabHidden: true })).toBeUndefined()
+    // Після показу читання в межах інтервалу плюс паузи — зелено...
+    expect(
+      at(hidden, 50_100, {
+        suspends: 1,
+        tabHidden: false,
+        shownAt: 50_000,
+        events: [{ ...read(2, 0), held: [`${OBJECT}\u0000k`] }],
+      })
+    ).toBeUndefined()
+    // (а) ...а без читання після показу — червоний.
+    const unread = createO2()
+    start(unread)
+    at(unread, 2_000, { suspends: 1, tabHidden: true })
+    expect(
+      at(unread, 50_100, { suspends: 1, tabHidden: false, shownAt: 50_000 })
+    ).toBeUndefined()
+    expect(
+      at(unread, 50_300, { suspends: 1, tabHidden: false, shownAt: 50_000 })
+    ).toMatch(/no read of the row or its holder within the interval/)
+    // (б) Без кроку `suspend` (вкладка видима, таймер нічого не зробив) —
+    // пропущений строк червоний.
+    const visible = createO2()
+    start(visible)
+    expect(at(visible, 2_000, { suspends: 0, tabHidden: false })).toMatch(
+      /no read by its deadline|no promise and no condition/
+    )
+    // Вкладка прихована без кроку `suspend` між записом і оцінкою — теж червоний.
+    const noStep = createO2()
+    start(noStep)
+    expect(at(noStep, 2_000, { suspends: 0, tabHidden: true })).toMatch(
+      /no read by its deadline|no promise and no condition/
+    )
   })
 
   it("keeps a queue: the queued read starts, or red", () => {

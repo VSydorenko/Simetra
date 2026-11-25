@@ -1134,6 +1134,9 @@ async function runModelOn(
     )
   })
   const o2 = createO2()
+  // Крок `suspend` і показ вкладки очима моделі: О2 бачить відкладення прихованою вкладкою.
+  let suspends = 0
+  let shownAt: number | undefined
   // Спроби лише цього ядра: друге ядро (перегідратація) нумерує цілі з нуля, і
   // його спроби не підтверджують вимог першого.
   const ownAttempts: AttemptEvent[] = []
@@ -3961,6 +3964,7 @@ async function runModelOn(
       }
       case "suspend":
         core.suspend()
+        suspends++
         break
       case "due": {
         // До найближчого строку планувальника — за інспекцією, не до
@@ -4125,6 +4129,7 @@ async function runModelOn(
           if (of.every(youngNow)) quiet.add(object)
         }
         core.resume()
+        shownAt = clock
         break
       }
       case "rehydrate":
@@ -4499,6 +4504,9 @@ async function runModelOn(
             },
             storeEmpty: !heldKeys().size,
             rowAlive: (_object, k) => heldKeys().has(k),
+            suspends,
+            tabHidden: !core.visible,
+            ...(shownAt === undefined ? {} : { shownAt }),
             headerGone: (_object, k) => {
               const shown = handles.flatMap((handle, v) =>
                 subs[v] === undefined

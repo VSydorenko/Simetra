@@ -34,6 +34,12 @@ export interface O2Input {
    * вимогою, а не з доказом. Без нього рядок вважається живим.
    */
   readonly rowAlive?: (object: string, key: string) => boolean
+  /** Скільки кроків `suspend` зробила модель (лічильник, не мить). */
+  readonly suspends?: number
+  /** Вкладка прихована на мить кроку. */
+  readonly tabHidden?: boolean
+  /** Мить, коли модель востаннє показала вкладку (`resume`). */
+  readonly shownAt?: number
   /**
    * Шапка власника в сховищі `removed` для кожного тримача: є вигляд, що її
    * показує, і кожен показує її рядок як `removed` (читання не знайшло рядка).
@@ -416,6 +422,8 @@ interface Obligation {
   readonly kind: "queue" | "due"
   readonly since: number
   due: number
+  /** Лічильник кроків `suspend` на мить запису обов'язку. */
+  readonly suspends?: number
 }
 
 interface Snapshot {
@@ -448,12 +456,14 @@ export interface O2 {
  * `sync()`), а для невидимого вигляду — плюс інтервал.
  */
 interface FollowUp {
-  readonly kind: "leave" | "read" | "retry"
+  readonly kind: "leave" | "read" | "retry" | "shown"
   readonly sinceEvent: number
   sinceTime: number | undefined
   holderSince: number | undefined
   /** `retry`: межа початку читання — кінець паузи повтору, щойно її видно в `sync()`. */
   deadline?: number
+  /** `shown`: мить, коли вкладку показано після відкладення прихованою вкладкою. */
+  shownSince?: number
 }
 
 export function createO2(): O2 {
@@ -532,6 +542,30 @@ export function createO2(): O2 {
       }
       exceptionsUsed.set(e.rows[0]!, (exceptionsUsed.get(e.rows[0]!) ?? 0) + 1)
       return true
+    }
+    return false
+  }
+
+  /**
+   * Чи тримає вимогу виняток таблиці З МЕЖЕЮ, що ще не минула; межа лічиться від
+   * першого звернення (для пропущеного строку — від строку). Названий стан без
+   * межі (`holds === true`) тут не рахується.
+   */
+  const excusedWithBound = (
+    state: SyncState,
+    input: O2Context,
+    from?: number
+  ): boolean => {
+    for (const e of O2_EXCEPTIONS) {
+      if (!state.requirements.every((r) => e.kinds.includes(r.kind))) continue
+      if (e.holds(state, input) !== "bounded") continue
+      const bound = e.boundMs?.(input)
+      if (bound === undefined) continue
+      const key = targetKey(state.target)
+      stillExcused.add(key)
+      const since = from ?? excusedSince.get(key) ?? input.now
+      excusedSince.set(key, excusedSince.get(key) ?? since)
+      if (input.now - since <= bound) return true
     }
     return false
   }
@@ -626,11 +660,33 @@ export function createO2(): O2 {
       }
       // Строк зник зі `sync()` до свого часу (вкладку приховано, планувальник його
       // не веде): обіцянки більше немає, а вимогу в новому стані судить правило спокою.
-      // Строк зник зі `sync()` у мить строку чи після неї, бо тримач вигляду
-      // пішов чи вигляд став під винятком таблиці: вимогу тепер тримає названий
-      // чи обмежений виняток (його межа не вічна), а не обіцянка. Без винятку
-      // вимогу без строку й так судить правило спокою нижче.
-      const heldByException = state.due === undefined && excused(state, input)
+      // Строк зник зі `sync()` у мить строку чи після неї: пропущений строк
+      // переходить лише у виняток таблиці З МЕЖЕЮ, і межа лічиться від строку.
+      // Названий стан без межі пропущеного строку не прощає; без винятку вимогу
+      // без строку судить правило спокою нижче.
+      // Прихована вкладка — іменована умова з кінцем (показ) і межею після нього:
+      // лише коли між записом обов'язку й оцінкою був крок `suspend`, а вкладка
+      // на оцінці прихована. Без `suspend` пропущений строк і далі червоний.
+      if (
+        promise.kind === "due" &&
+        state.due === undefined &&
+        now >= promise.due &&
+        input.tabHidden === true &&
+        input.suspends !== undefined &&
+        promise.suspends !== undefined &&
+        input.suspends > promise.suspends
+      ) {
+        obligations.delete(key)
+        followUps.set(key, {
+          kind: "shown",
+          sinceEvent: events.length,
+          sinceTime: now,
+          holderSince: undefined,
+        })
+        continue
+      }
+      const heldByException =
+        state.due === undefined && excusedWithBound(state, input, promise.due)
       if (
         promise.kind === "due" &&
         state.due === undefined &&
@@ -667,6 +723,26 @@ export function createO2(): O2 {
         continue
       }
       const target = state.target
+      if (f.kind === "shown") {
+        // Умова триває, доки вкладку не показано; після показу читання рядка чи
+        // його тримача мусить стартувати в межах інтервалу плюс паузи збоїв.
+        if (input.tabHidden !== false) continue
+        if (events.slice(f.sinceEvent).some((e) => startedRead(e, target))) {
+          followUps.delete(key)
+          continue
+        }
+        f.shownSince ??= input.shownAt ?? now
+        if (
+          input.revalidateMs !== undefined &&
+          now > f.shownSince + 2 * input.revalidateMs
+        ) {
+          problems.push(
+            `${describe(target)}: no read of the row or its holder within the interval after the tab was shown`
+          )
+          followUps.delete(key)
+        }
+        continue
+      }
       if (f.kind === "leave") {
         // Відлік — від першого спостереження без утримання: мить, коли
         // утримання скінчилось, між кроками моделі не видно.
@@ -779,6 +855,7 @@ export function createO2(): O2 {
             kind: "due",
             since: events.length,
             due: state.due,
+            suspends: input.suspends,
           })
       } else if (excused(state, input)) {
         // Виняток таблиці прогалин `main`.
