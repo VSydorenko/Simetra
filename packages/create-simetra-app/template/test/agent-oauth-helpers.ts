@@ -1,7 +1,6 @@
 import { createHash, randomBytes } from "node:crypto"
 import { readFileSync } from "node:fs"
 import http from "node:http"
-import type { IncomingMessage, ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
 import { betterAuth } from "better-auth"
 import { getMigrations } from "better-auth/db/migration"
@@ -20,25 +19,34 @@ import {
 } from "../../../simetra/test/support"
 import { authSchemaOptions, withAuthOptions } from "../scripts/auth-options.mjs"
 import { migrateAgentOauth } from "../scripts/db-setup-steps.mjs"
+import { createVerifySession } from "../src/server/auth"
+import {
+  createAgentInteraction,
+  type AgentInteraction,
+  type AgentInteractionView,
+} from "../src/server/agent-oauth/interaction"
 import { withAgentOauth } from "../src/server/agent-oauth/mount"
+import {
+  agentConnectPath,
+  agentConnectUid,
+} from "../src/server/agent-oauth/paths"
 import {
   createAgentOauthProvider,
   type AgentOauthOptions,
 } from "../src/server/agent-oauth/provider"
-import { insertAgentGrant } from "../src/server/agent-oauth/store"
 import { agentOauthKeyEnv } from "./agent-oauth-keys"
 
 /**
  * Стенд сервера авторизації агентів на тегованій базі прогону: кластер
  * профілю `postgres` (схема `agent_oauth` власника auth), міграція Better
  * Auth, крок DDL `agent_oauth` від ролі auth, сервер документів CIMD.
- * Згода — тимчасова підкладка тесту (`consentShim`), доки API взаємодії
- * (задача 5) не дасть `connectAgent`.
+ * Сторінка взаємодії стенду віддає API взаємодії шаблону під
+ * `/agent/connect/<uid>`, `/api/auth/*` — Better Auth: браузер тесту
+ * (`Browser`) ходить туди зі своїм cookie-jar, як справжній.
  */
 export const ORIGIN = "https://app.test"
 export const RESOURCE = `${ORIGIN}/mcp`
 const SECRET = "simetra-agent-oauth-test-secret-0123456789"
-const DAY_MS = 86_400_000
 
 function withDatabaseName(dsn: string, database: string): string {
   const url = new URL(dsn)
@@ -54,8 +62,19 @@ export const fixture = (name: string): Record<string, unknown> =>
     )
   ) as Record<string, unknown>
 
-type App = (request: Request) => Promise<Response>
 type Provider = ReturnType<typeof createAgentOauthProvider>
+
+/** Застосунок стенду: Fetch-обробник плюс його сервер авторизації й API взаємодії. */
+export type App = ((request: Request) => Promise<Response>) & {
+  provider: Provider
+  api: AgentInteraction
+}
+
+export interface Credentials {
+  userId: string
+  email: string
+  password: string
+}
 
 export interface Stand {
   set: PostgresClusterSet
@@ -68,8 +87,12 @@ export interface Stand {
   /** Транспорт-підміна: `https://host/path` → локальний сервер документів. */
   substituteFetch: typeof fetch
   provider(o?: Partial<AgentOauthOptions>): Provider
-  app(provider: Provider): App
-  user(): Promise<string>
+  /** `requiresTenant` — прапорець застосунку з видами скоупу (Р-F4-4); типово `false`. */
+  app(provider: Provider, o?: { requiresTenant?: boolean }): App
+  /** Користувач Better Auth із паролем (вхід — `Browser.signIn`). */
+  signUp(): Promise<Credentials>
+  /** Новий браузер, у якому щойно зареєстрований користувач увійшов. */
+  browser(app: App): Promise<Browser>
   close(): Promise<void>
 }
 
@@ -144,7 +167,7 @@ export async function startStand(tag: string): Promise<Stand> {
   }
 
   let seq = 0
-  return {
+  const stand: Stand = {
     set,
     pool,
     admin,
@@ -160,26 +183,39 @@ export async function startStand(tag: string): Promise<Stand> {
         fetch: substituteFetch,
         ...o,
       }),
-    app: (provider) => {
-      const consent = consentShim(provider, pool)
-      return withAgentOauth(
-        async (request: Request) =>
-          /^\/agent\/connect\/[^/]+$/.test(new URL(request.url).pathname)
-            ? consent(request)
-            : new Response("not found", { status: 404 }),
+    app: (provider, o = {}) => {
+      const api = createAgentInteraction({
+        provider,
+        pool,
+        origin: ORIGIN,
+        cookieKeys: keys.cookieKeys,
+        verifySession: createVerifySession((args) => auth.api.getSession(args)),
+        requiresTenant: o.requiresTenant ?? false,
+      })
+      const fetch = withAgentOauth(
+        async (request: Request) => {
+          const { pathname } = new URL(request.url)
+          if (pathname.startsWith("/api/auth/")) return auth.handler(request)
+          if (agentConnectUid(pathname) !== undefined)
+            return interactionPage(api, request)
+          return new Response("not found", { status: 404 })
+        },
         async () => toFetchHandler(provider.callback())
       )
+      return Object.assign(fetch, { provider, api })
     },
-    user: async () => {
+    signUp: async () => {
       const email = `u${++seq}-${randomBytes(4).toString("hex")}@example.test`
+      const password = randomBytes(12).toString("base64url")
       const r = await auth.api.signUpEmail({
-        body: {
-          email,
-          password: randomBytes(12).toString("base64url"),
-          name: "T",
-        },
+        body: { email, password, name: "T" },
       })
-      return r.user.id
+      return { userId: r.user.id, email, password }
+    },
+    browser: async (app) => {
+      const browser = new Browser(app)
+      await browser.signIn(await stand.signUp())
+      return browser
     },
     close: async () => {
       docServer.close()
@@ -188,79 +224,130 @@ export async function startStand(tag: string): Promise<Stand> {
       await dropTaggedCluster(set)
     },
   }
+  return stand
 }
 
 /**
- * Тимчасова згода тесту на сторінці взаємодії: взаємодія — за cookie
- * (`interactionDetails`), грант — для `x-test-user` з тенантом
- * `x-test-tenant`. Справжній міст входу й API взаємодії — задача 5.
+ * Сторінка взаємодії стенду (екрани — F5): GET — дані згоди, POST — згода
+ * чи відмова з тенантом і токеном CSRF у JSON. Лише обгортка над API шаблону.
  */
-function consentShim(provider: Provider, pool: pg.Pool) {
-  const handle = toFetchHandler(
-    async (req: IncomingMessage, res: ServerResponse) => {
-      const details = await provider.interactionDetails(req, res)
-      const accountId = String(req.headers["x-test-user"])
-      const tenant = req.headers["x-test-tenant"]
-      const clientId = String(details.params.client_id)
-      const grant = new provider.Grant({ accountId, clientId })
-      grant.addOIDCScope("offline_access")
-      grant.addResourceScope(String(details.params.resource), "mcp")
-      const grantId = await grant.save()
-      await insertAgentGrant(pool, {
-        grantId,
-        userId: accountId,
-        clientId,
-        tenant: typeof tenant === "string" ? tenant : null,
-        expiresAt: new Date(Date.now() + 365 * DAY_MS),
-      })
-      const redirectTo = await provider.interactionResult(
-        req,
-        res,
-        { login: { accountId }, consent: { grantId } },
-        { mergeWithLastSubmission: false }
-      )
-      res.setHeader("content-type", "application/json")
-      res.end(JSON.stringify({ redirectTo, grantId }))
-    }
-  )
-  // Підкладка поза шляхами сервера авторизації: проксі-заголовки ставить вона сама
-  return (request: Request) => {
-    const headers = new Headers(request.headers)
-    headers.set("x-forwarded-proto", "https")
-    headers.set("host", "app.test")
-    return handle(new Request(request, { headers }))
+async function interactionPage(
+  api: AgentInteraction,
+  request: Request
+): Promise<Response> {
+  if (request.method === "GET") {
+    const details = await api.interactionDetails(request)
+    return details.ok ? Response.json(details.value) : details.response
   }
+  const body = (await request.json()) as {
+    action: "consent" | "abort"
+    csrf: string
+    tenant?: string
+  }
+  return body.action === "abort"
+    ? api.abortInteraction(request, { csrf: body.csrf })
+    : api.submitConsent(request, { csrf: body.csrf, tenant: body.tenant })
 }
 
-/** Cookie-jar з `Path`: браузер шле cookie лише на шлях, для якого її поставлено. */
+/**
+ * Cookie-jar з `Path`: браузер шле cookie лише на шлях, для якого її
+ * поставлено; cookie з тим самим ім'ям і різними шляхами (дві взаємодії)
+ * живуть поряд.
+ */
 export class Jar {
-  private readonly map = new Map<string, { value: string; path: string }>()
+  private readonly map = new Map<
+    string,
+    { name: string; value: string; path: string }
+  >()
   take(res: Response): void {
     for (const line of res.headers.getSetCookie()) {
       const [pair, ...attrs] = line.split(";")
       const eq = pair!.indexOf("=")
       const name = pair!.slice(0, eq).trim()
       const value = pair!.slice(eq + 1).trim()
-      const path =
+      const attr = (key: string) =>
         attrs
           .map((a) => a.trim())
-          .find((a) => a.toLowerCase().startsWith("path="))
-          ?.slice(5) ?? "/"
-      if (value === "" || /expires=Thu, 01 Jan 1970/i.test(line))
-        this.map.delete(name)
-      else this.map.set(name, { value, path })
+          .find((a) => a.toLowerCase().startsWith(`${key}=`))
+          ?.slice(key.length + 1)
+      const path = attr("path") ?? "/"
+      const key = `${name}\u0000${path}`
+      if (
+        value === "" ||
+        attr("max-age") === "0" ||
+        /expires=Thu, 01 Jan 1970/i.test(line)
+      )
+        this.map.delete(key)
+      else this.map.set(key, { name, value, path })
     }
   }
   header(url: string): string {
     const { pathname } = new URL(url, ORIGIN)
-    return [...this.map]
+    return [...this.map.values()]
       .filter(
-        ([, c]) =>
+        (c) =>
           pathname === c.path ||
           pathname.startsWith(`${c.path.replace(/\/$/, "")}/`)
       )
-      .map(([k, c]) => `${k}=${c.value}`)
+      .map((c) => `${c.name}=${c.value}`)
       .join("; ")
+  }
+}
+
+/**
+ * Браузер людини: cookie-jar за `Path` і сесія Better Auth. Запити йдуть у
+ * застосунок без ручних cookie; `with` — той самий браузер на іншому
+ * застосунку стенду (інший `requiresTenant`).
+ */
+export class Browser {
+  userId: string | undefined
+  // Своя адреса на браузер: ліміт входу Better Auth рахується за адресою
+  private readonly ip = `10.${[1, 2, 3].map(() => randomBytes(1)[0]!).join(".")}`
+  constructor(
+    readonly app: App,
+    readonly jar = new Jar()
+  ) {}
+  with(app: App): Browser {
+    const other = new Browser(app, this.jar)
+    other.userId = this.userId
+    return other
+  }
+  async fetch(url: string, init: RequestInit = {}): Promise<Response> {
+    const target = new URL(url, ORIGIN).href
+    const headers = new Headers(init.headers)
+    const cookie = this.jar.header(target)
+    if (cookie !== "") headers.set("cookie", cookie)
+    headers.set("x-forwarded-for", this.ip)
+    const res = await this.app(
+      new Request(target, { ...init, headers, redirect: "manual" })
+    )
+    this.jar.take(res)
+    return res
+  }
+  private auth(path: string, body: unknown): Promise<Response> {
+    return this.fetch(`/api/auth${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: ORIGIN },
+      body: JSON.stringify(body),
+    })
+  }
+  async signIn(c: Pick<Credentials, "email" | "password">): Promise<void> {
+    const res = await this.auth("/sign-in/email", c)
+    if (res.status !== 200)
+      throw new Error(`sign-in: ${res.status} ${await res.text()}`)
+    this.userId = ((await res.json()) as { user: { id: string } }).user.id
+  }
+  async signInAnonymous(): Promise<void> {
+    const res = await this.auth("/sign-in/anonymous", {})
+    if (res.status !== 200)
+      throw new Error(`anonymous sign-in: ${res.status} ${await res.text()}`)
+    this.userId = ((await res.json()) as { user: { id: string } }).user.id
+  }
+  async signOut(): Promise<void> {
+    const res = await this.auth("/sign-out", {})
+    if (res.status !== 200)
+      throw new Error(`sign-out: ${res.status} ${await res.text()}`)
+    this.userId = undefined
   }
 }
 
@@ -273,7 +360,7 @@ export const pkce = () => {
 }
 
 export interface Flow {
-  jar: Jar
+  browser: Browser
   verifier: string
   uid: string
   clientId: string
@@ -300,19 +387,47 @@ export function authorizeUrl(
 
 export async function authorize(
   app: App,
-  o: { clientId: string; redirectUri: string; scope?: string }
+  o: { clientId: string; redirectUri: string; scope?: string },
+  browser = new Browser(app)
 ): Promise<{ res: Response; flow?: Flow }> {
   const { verifier, challenge } = pkce()
-  const jar = new Jar()
-  const res = await app(
-    new Request(authorizeUrl(o, challenge), { redirect: "manual" })
-  )
-  jar.take(res)
-  const m = /^\/agent\/connect\/([\w-]+)$/.exec(
-    res.headers.get("location") ?? ""
-  )
-  if (res.status !== 303 || !m) return { res }
-  return { res, flow: { jar, verifier, uid: m[1]!, ...o } }
+  const res = await browser.fetch(authorizeUrl(o, challenge))
+  const uid = agentConnectUid(res.headers.get("location") ?? "")
+  if (res.status !== 303 || uid === undefined) return { res }
+  return { res, flow: { browser, verifier, uid, ...o } }
+}
+
+/** Сторінка взаємодії потоку: GET — дані згоди з токеном CSRF. */
+export async function interactionView(flow: Flow) {
+  const res = await flow.browser.fetch(agentConnectPath(flow.uid))
+  if (res.status !== 200)
+    throw new Error(`interaction: ${res.status} ${await res.text()}`)
+  return (await res.json()) as AgentInteractionView
+}
+
+/** POST сторінки взаємодії від імені браузера потоку (чи іншого). */
+export function postInteraction(
+  flow: Flow,
+  body: { action: "consent" | "abort"; csrf?: string; tenant?: string },
+  browser: Browser = flow.browser
+): Promise<Response> {
+  return browser.fetch(agentConnectPath(flow.uid), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  })
+}
+
+/** Перехід на `resume` після згоди: код у переспрямуванні на `redirect_uri`. */
+export async function resume(flow: Flow, consent: Response): Promise<string> {
+  if (consent.status !== 303)
+    throw new Error(`consent: ${consent.status} ${await consent.text()}`)
+  const r = await flow.browser.fetch(consent.headers.get("location") ?? "")
+  const callback = new URL(r.headers.get("location") ?? "about:blank")
+  const code = callback.searchParams.get("code")
+  if (r.status !== 303 || code === null)
+    throw new Error(`resume: ${r.status} ${callback.href}`)
+  return code
 }
 
 export async function tokenPost(
@@ -343,54 +458,39 @@ export interface Login {
   tokens: Record<string, unknown>
 }
 
-/** Повний цикл: authorize → згода (підкладка) → resume → обмін коду. */
-export async function connect(
-  app: App,
+/**
+ * Підключення агента так, як його проходить людина: `/authorize` → сторінка
+ * взаємодії (дані згоди й токен CSRF) → згода → `resume` → обмін коду.
+ * Cookie — лише з jar браузера за `Path`, вручну нічого не шлеться.
+ */
+export async function connectAgent(
+  browser: Browser,
   o: {
     clientId: string
     redirectUri: string
     scope?: string
-    userId: string
     tenant?: string
     /** Без обміну коду: тест обмінює його сам. */
     noExchange?: boolean
   }
 ): Promise<Login> {
-  const { res, flow } = await authorize(app, o)
+  const { app } = browser
+  const { res, flow } = await authorize(app, o, browser)
   if (flow === undefined)
     throw new Error(`authorize: ${res.status} ${await res.text()}`)
-  const consentUrl = `${ORIGIN}/agent/connect/${flow.uid}`
-  const c = await app(
-    new Request(consentUrl, {
-      method: "POST",
-      headers: {
-        cookie: flow.jar.header(consentUrl),
-        "x-test-user": o.userId,
-        ...(o.tenant ? { "x-test-tenant": o.tenant } : {}),
-      },
-    })
-  )
-  flow.jar.take(c)
-  const consent = (await c.json()) as { redirectTo: string; grantId: string }
-  const resumeUrl = new URL(consent.redirectTo, ORIGIN).href
-  const r = await app(
-    new Request(resumeUrl, {
-      redirect: "manual",
-      headers: { cookie: flow.jar.header(resumeUrl) },
-    })
-  )
-  flow.jar.take(r)
-  const callback = new URL(r.headers.get("location") ?? "about:blank")
-  const code = callback.searchParams.get("code")
-  if (r.status !== 303 || code === null)
-    throw new Error(`resume: ${r.status} ${callback.href}`)
-  const login = {
-    userId: o.userId,
-    grantId: consent.grantId,
-    code,
+  const view = await interactionView(flow)
+  const code = await resume(
     flow,
-    tokens: {},
-  }
+    await postInteraction(flow, {
+      action: "consent",
+      csrf: view.csrf,
+      ...(o.tenant === undefined ? {} : { tenant: o.tenant }),
+    })
+  )
+  const grantId = (await app.provider.AuthorizationCode.find(code))?.grantId
+  if (grantId === undefined || browser.userId === undefined)
+    throw new Error("connectAgent: no grant behind the code")
+  const login = { userId: browser.userId, grantId, code, flow, tokens: {} }
   if (o.noExchange) return login
   const t = await exchange(app, login)
   if (t.status !== 200) throw new Error(`token: ${JSON.stringify(t.body)}`)

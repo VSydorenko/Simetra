@@ -13,13 +13,14 @@ import {
   type AdapterHooks,
 } from "../src/server/agent-oauth/store"
 import {
-  connect,
+  connectAgent,
   exchange,
   fixture,
   grantRow,
   refresh,
   RESOURCE,
   startStand,
+  type Browser,
   type Stand,
 } from "./agent-oauth-helpers"
 
@@ -33,6 +34,8 @@ import {
 let stand: Stand
 let provider: ReturnType<Stand["provider"]>
 let app: ReturnType<Stand["app"]>
+// Гранти з тенантом — у застосунку з видами скоупу (Р-F4-4)
+let tenantApp: ReturnType<Stand["app"]>
 const hooks: AdapterHooks = {}
 
 const CLIENT = "https://claude.ai/oauth/claude-code-client-metadata"
@@ -47,6 +50,7 @@ beforeAll(async () => {
   )
   provider = stand.provider({ adapter: createPgAdapter(stand.pool, hooks) })
   app = stand.app(provider)
+  tenantApp = stand.app(provider, { requiresTenant: true })
 }, 180_000)
 afterAll(() => stand?.close(), 60_000)
 afterEach(() => {
@@ -55,15 +59,17 @@ afterEach(() => {
 })
 
 const login = async (
-  o: { userId?: string; tenant?: string; scope?: string } = {}
-) =>
-  connect(app, {
+  o: { browser?: Browser; tenant?: string; scope?: string } = {}
+) => {
+  const target = o.tenant === undefined ? app : tenantApp
+  const browser = (o.browser ?? (await stand.browser(target))).with(target)
+  return connectAgent(browser, {
     clientId: CLIENT,
     redirectUri: LOOPBACK,
-    userId: o.userId ?? (await stand.user()),
-    tenant: o.tenant,
-    scope: o.scope,
+    ...(o.tenant === undefined ? {} : { tenant: o.tenant }),
+    ...(o.scope === undefined ? {} : { scope: o.scope }),
   })
+}
 
 const rt = (l: { tokens: Record<string, unknown> }) =>
   l.tokens.refresh_token as string
@@ -96,10 +102,10 @@ describe("refresh token", () => {
   }, 60_000)
 
   it("two parallel refreshes with one token: exactly one 200, only that grant is revoked", async () => {
-    const userId = await stand.user()
-    const raced = await login({ userId, tenant: randomUUID() })
+    const browser = await stand.browser(app)
+    const raced = await login({ browser, tenant: randomUUID() })
     // Інший грант того самого клієнта й користувача (інший тенант) живе далі
-    const other = await login({ userId, tenant: randomUUID() })
+    const other = await login({ browser, tenant: randomUUID() })
     const arrived: string[] = []
     let release!: () => void
     const open = new Promise<void>((r) => (release = r))
@@ -146,9 +152,9 @@ describe("refresh token", () => {
   }, 60_000)
 
   it("replay of a used token revokes only its own grant", async () => {
-    const userId = await stand.user()
-    const replayed = await login({ userId, tenant: randomUUID() })
-    const other = await login({ userId, tenant: randomUUID() })
+    const browser = await stand.browser(app)
+    const replayed = await login({ browser, tenant: randomUUID() })
+    const other = await login({ browser, tenant: randomUUID() })
     expect((await refresh(app, CLIENT, rt(replayed))).status).toBe(200)
     const replay = await refresh(app, CLIENT, rt(replayed))
     expect(replay.body.error).toBe("invalid_grant")
@@ -195,10 +201,9 @@ describe("refresh token", () => {
     async (_name, file, clientId, redirectUri) => {
       const u = new URL(clientId)
       stand.docs.set(`/${u.host}${u.pathname}`, JSON.stringify(fixture(file)))
-      const l = await connect(app, {
+      const l = await connectAgent(await stand.browser(app), {
         clientId,
         redirectUri,
-        userId: await stand.user(),
       })
       vi.useFakeTimers({ toFake: ["Date"] })
       let token = rt(l)
@@ -247,10 +252,9 @@ describe("/token resource checked before the library (Р-F4-7)", () => {
   }, 60_000)
 
   it("a code exchange with a foreign or repeated resource does not consume the code; the grant stays alive", async () => {
-    const l = await connect(app, {
+    const l = await connectAgent(await stand.browser(app), {
       clientId: CLIENT,
       redirectUri: LOOPBACK,
-      userId: await stand.user(),
       noExchange: true,
     })
     for (const resource of [FOREIGN, [RESOURCE, RESOURCE]]) {

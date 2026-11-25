@@ -5,7 +5,7 @@ import { safeFetch } from "../src/server/agent-oauth/safe-fetch"
 import {
   authorize,
   authorizeUrl,
-  connect,
+  connectAgent,
   fixture,
   pkce,
   RESOURCE,
@@ -63,10 +63,9 @@ describe("CIMD clients", () => {
       // Свіжий провайдер: бібліотека кешує клієнта CIMD у процесі (знахідка 3 F0)
       const provider = stand.provider()
       const app = stand.app(provider)
-      const login = await connect(app, {
+      const login = await connectAgent(await stand.browser(app), {
         clientId: c.id,
         redirectUri: c.redirect,
-        userId: await stand.user(),
       })
       // Обмін коду без автентифікації клієнта пройшов: клієнт публічний
       const token = login.tokens.access_token as string
