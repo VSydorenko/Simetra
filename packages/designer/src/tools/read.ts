@@ -10,6 +10,7 @@ import {
 import { metadataKindSchema, objectNameSchema } from "simetra/model"
 import { z } from "zod"
 import { readMetadataDir } from "../io/metadata-dir"
+import { renderExplanation, renderFunctionExplanation } from "../io/report"
 import { schemaPathResolver } from "../io/schema-path"
 import { defineTool, type RunOutcome } from "./types"
 
@@ -22,6 +23,7 @@ export const compileTool = defineTool({
   database: "none",
   data: "none",
   destructive: false,
+  present: { diagnosticsOnly: true },
   async run({ dir, baseline }) {
     const result = await compile(
       await readMetadataDir(dir),
@@ -69,7 +71,7 @@ export const explainTool = defineTool({
   async run(
     { dir },
     { kind, name, function: fn }
-  ): Promise<RunOutcome<Explanation | FunctionExplanation>> {
+  ): Promise<RunOutcome<Explanation | FunctionExplanation, "read">> {
     const files = await readMetadataDir(dir)
     if (fn !== undefined) {
       // Режим ремонту: функція без запобіжника — саме те, що пояснюємо.
@@ -120,6 +122,18 @@ export const explainTool = defineTool({
       diagnostics: result.diagnostics,
       data: explanation,
     }
+  },
+  present: {
+    bare: true,
+    // MCP віддає пояснення JSON-текстом, термінал — розгорнутим виглядом
+    text: (data, v) =>
+      data === undefined
+        ? undefined
+        : v.channel === "mcp"
+          ? JSON.stringify(data, null, 2)
+          : "function" in data
+            ? renderFunctionExplanation(data)
+            : renderExplanation(data).trimEnd(),
   },
 })
 

@@ -220,7 +220,11 @@ const columnMapping = z
 
 // Ключ — логічне ім'я колонки прийнятої таблиці. Опис не тут: схема розгортається
 // і в корені, і в кожній ТЧ, тож опис ліг би в `tools/list` двічі.
-const columnMappings = z.record(promoteElementName, columnMapping)
+// `id` виносить схему в `$defs` JSON Schema входу: вона повторюється в корені
+// й у кожній ТЧ, а `tools/list` MCP має бюджет розміру.
+const columnMappings = z
+  .record(promoteElementName, columnMapping)
+  .meta({ id: "ColumnMappings" })
 
 const fillStep = z.strictObject({
   table: promoteObjectName.optional(),

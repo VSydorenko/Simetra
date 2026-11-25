@@ -109,7 +109,13 @@
   "format": {
     "check": ["pnpm", "exec", "prettier", "--check"]
   },
+  "ci": {
+    "workflow": ".github/workflows/ci.yml",
+    "docsOnly": {
+      "skipJobs": ["db", "db-supabase", "packaging", "host-template"]
+    }
+  },
   "kit": {
-    "version": "0.10.0"
+    "version": "0.16.0"
   }
 }

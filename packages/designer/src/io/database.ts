@@ -1,5 +1,6 @@
 import { diagnostic, localize, type Diagnostic } from "simetra/compiler"
 import { ApplyConnectionLost, ApplyDbError } from "simetra/schema"
+import { parse as parseConnectionString } from "pg-connection-string"
 import {
   ShadowBaseUnsupportedError,
   ShadowCreateRefusedError,
@@ -25,14 +26,21 @@ export class DatabaseRefusal extends UsageError {
  * розбирається як URL, не цитуємо: він міг би бути самим паролем.
  */
 export function describeConnection(url: string): string {
+  // Без схеми `pg-connection-string` читає рядок як відносний URL і віддав би
+  // його як ім'я бази — а це міг бути сам пароль
+  if (!/^postgres(ql)?:\/\//i.test(url)) return UNDESCRIBED
   try {
-    const u = new URL(url)
-    const db = decodeURIComponent(u.pathname.replace(/^\//, ""))
-    return `${u.hostname}:${u.port === "" ? "5432" : u.port}/${db}`
+    const c = parseConnectionString(url)
+    // Порожній хост — типовий `localhost` у `pg`; IPv6 у дужках, щоб порт читався
+    const host = c.host === null || c.host === "" ? "localhost" : c.host
+    const shown = host.includes(":") ? `[${host}]` : host
+    return `${shown}:${c.port === null || c.port === "" ? "5432" : c.port}/${c.database ?? ""}`
   } catch {
-    return "the configured database"
+    return UNDESCRIBED
   }
 }
+
+const UNDESCRIBED = "the configured database"
 
 /**
  * Ресурс запуску з імен змінних, зафіксованих при запуску. Без змінної цілі

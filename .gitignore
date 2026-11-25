@@ -48,3 +48,5 @@ __pycache__/
 # agent-kit
 .worktrees/
 .agents/private/
+# agent-kit
+.agents/briefs/

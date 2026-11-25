@@ -117,8 +117,20 @@ export interface ToolContext {
   baseline?: ReadonlyMap<string, string>
 }
 
+/**
+ * Зміни теки метаданих за віссю файлів: інструмент осі `artifact` (`plan`,
+ * `apply`) їх мати не може — тип, а не перевірка після `run`, бо в `apply`
+ * база вже змінена, коли `invoke` побачив би дефект.
+ */
+export interface ChangesByAxis {
+  read: FileChange[]
+  artifact: readonly []
+  write: FileChange[]
+}
+export type ChangesFor<F extends FilesAccess> = ChangesByAxis[F]
+
 /** `run` лише читає теку й викликає операцію; запис робить `invoke`. */
-export interface RunOutcome<D> {
+export interface RunOutcome<D, F extends FilesAccess> {
   ok: boolean
   /**
    * Мутація режиму `repair` прийняла результат з помилками лише класу
@@ -126,7 +138,7 @@ export interface RunOutcome<D> {
    * пише `changes`.
    */
   written?: true
-  changes: FileChange[]
+  changes: ChangesFor<F>
   diagnostics: Diagnostic[]
   data?: D
   refusal?: string
@@ -143,12 +155,54 @@ export interface RunOutcome<D> {
   artifacts?: FileChange[]
 }
 
-export interface Tool<I extends z.ZodType = z.ZodType, D = unknown> {
+/** Що бачить текстова частина подання: канал і вже відформатований звіт діагностики. */
+export interface PresentationView {
+  channel: "cli" | "mcp"
+  ok: boolean
+  written: boolean
+  diagnostics: Diagnostic[]
+  /** Діагностика текстом у мові й вигляді каналу. */
+  report: string
+}
+
+/**
+ * Як канали показують результат інструмента. Ознака живе в записі
+ * інструмента, а не в гілці адаптера за іменем: новий інструмент додає поле,
+ * CLI і MCP читають його однаково (спека designer §3.1: адаптери тонкі).
+ * Без `present` інструмент показується загальним видом: зміни, діагностика,
+ * `data` не показується.
+ */
+export interface Presentation<D = never> {
+  /**
+   * Результат у `--format json` — лише масив діагностики (`compile`);
+   * текст — звіт. MCP цієї ознаки не читає.
+   */
+  diagnosticsOnly?: true
+  /**
+   * `data` — і є весь результат (`explain`), без обгортки `ok`/діагностики; лише
+   * коли `ok`, інакше — загальний вид з діагностикою.
+   */
+  bare?: true
+  /**
+   * Поля `data` у структурованому результаті (JSON CLI, `structuredContent`
+   * MCP). Типово — самі поля `data`; `promote` кладе запис під `record`.
+   */
+  structure?(data: D): Record<string, unknown>
+  /**
+   * Текст результату замість загальних рядків; `undefined` — загальний вид.
+   * Викликається і без `data`: `plan` і `apply` показують відмову текстом.
+   */
+  text?(data: D | undefined, view: PresentationView): string | undefined
+  /** Додаток після загальних рядків і звіту (`promote`: запис промоції). */
+  appendix?(data: D, view: PresentationView): string
+}
+
+interface ToolBase<I extends z.ZodType, D, F extends FilesAccess> {
   name: ToolName
   /** Англійською: MCP і `--help` беруть опис звідси. */
   description: string
   input: I
-  files: FilesAccess
+  files: F
   database: DatabaseAccess
   data: DataAccess
   destructive: boolean
@@ -157,8 +211,27 @@ export interface Tool<I extends z.ZodType = z.ZodType, D = unknown> {
    * канал не успадковує доступ до інструмента.
    */
   cliOnly?: true
-  run(ctx: ToolContext, input: z.infer<I>): Promise<RunOutcome<D>>
+  /**
+   * Вісь береться лише з `files` запису: ширша анотація результату `run`
+   * (`RunOutcome<D, FilesAccess>`) — помилка типу, інакше інструмент осі
+   * `artifact` міг би повернути зміни теки.
+   */
+  run(ctx: ToolContext, input: z.infer<I>): Promise<RunOutcome<D, NoInfer<F>>>
 }
+
+/**
+ * Подання `data` каналами. Інструмент, чий `D` не містить `undefined`,
+ * мусить його оголосити: інакше канали мовчки не показали б його дані.
+ */
+type PresentField<D> = undefined extends D
+  ? { present?: Presentation<NoInfer<D>> }
+  : { present: Presentation<NoInfer<D>> }
+
+export type Tool<
+  I extends z.ZodType = z.ZodType,
+  D = unknown,
+  F extends FilesAccess = FilesAccess,
+> = ToolBase<I, D, F> & PresentField<D>
 
 export type RefusalReason =
   | "invalid-input"
@@ -229,8 +302,8 @@ export interface InvokeOptions {
 }
 
 /** Виводить типи входу й даних з аргументів, щоб записи не писали generics. */
-export function defineTool<I extends z.ZodType, D = undefined>(
-  tool: Tool<I, D>
-): Tool<I, D> {
+export function defineTool<I extends z.ZodType, D, F extends FilesAccess>(
+  tool: Tool<I, D, F>
+): Tool<I, D, F> {
   return tool
 }

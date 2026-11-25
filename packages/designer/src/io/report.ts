@@ -1,4 +1,10 @@
-import type { Diagnostic, Locale } from "simetra/compiler"
+import type {
+  Diagnostic,
+  Explanation,
+  FunctionExplanation,
+  Locale,
+  PromotionRecord,
+} from "simetra/compiler"
 import { localize } from "simetra/compiler"
 import { quoteIdent } from "simetra/model"
 import { LOCK_MODE_SQL } from "simetra/schema"
@@ -275,4 +281,97 @@ export function renderApply(
       `  backfill ${b.step} ${qualified(b.schema, b.table)}.${quoteIdent(b.column)}: ${b.rows} row(s) filled with the default; ${b.rowsAtPlan} with NULL at plan`
   )
   return [head, ...backfills, report].join("\n")
+}
+
+/** Текст пояснення функції для терміналу. */
+export function renderFunctionExplanation(e: FunctionExplanation): string {
+  const lines = [`function ${e.function.schema}.${e.function.name}`]
+  if (e.callers === undefined) {
+    lines.push("not declared")
+  } else {
+    lines.push(`callers: ${e.callers.join(", ") || "(none)"}`)
+    for (const [provider, roles] of Object.entries(e.roles ?? {})) {
+      lines.push(
+        `EXECUTE (${provider}): ${roles.map((r) => `${r.role} (${r.caller})`).join(", ") || "(none)"}`
+      )
+    }
+  }
+  if (e.check !== undefined) lines.push(`check: ${e.check}`)
+  lines.push(`state: ${e.state}`)
+  return lines.join("\n")
+}
+
+/** Текст пояснення об'єкта для терміналу; JSON-вигляд друкується як є. */
+export function renderExplanation(e: Explanation): string {
+  const lines = [`${e.object.kind} ${e.object.name} (${e.object.file})`]
+  if (e.object.scopeKind !== undefined) {
+    lines.push(`scope: ${e.object.scopeKind}`)
+  }
+  for (const t of e.tables) {
+    lines.push("", `table ${t.schema}.${t.name}${t.part ? ` [${t.part}]` : ""}`)
+    for (const c of t.columns) {
+      const tags = [
+        c.notNull ? "not null" : undefined,
+        c.logical === undefined ? undefined : `logical: ${c.logical}`,
+        c.standard === undefined ? undefined : `standard: ${c.standard}`,
+        c.scope === true ? "scope" : undefined,
+      ].filter((x) => x !== undefined)
+      lines.push(
+        `  ${c.name} ${c.type}${tags.length > 0 ? ` (${tags.join(", ")})` : ""}`
+      )
+    }
+    if (t.primaryKey !== undefined) {
+      lines.push(`  primary key (${t.primaryKey.join(", ")})`)
+    }
+    for (const u of t.uniques) lines.push(`  unique (${u.join(", ")})`)
+    for (const f of t.foreignKeys) {
+      lines.push(`  foreign key (${f.columns.join(", ")}) -> ${f.references}`)
+    }
+  }
+  for (const q of e.movementQueries) {
+    lines.push("", `movement query ${q.identity}`, q.sql)
+  }
+  for (const u of e.generatedUnits) {
+    lines.push("", `generated ${u.identity}`, u.sql)
+  }
+  if (e.contracts.length > 0) {
+    lines.push("", "contracts:", JSON.stringify(e.contracts, null, 2))
+  }
+  if (e.referencedBy.length > 0) {
+    lines.push("", "referenced by:")
+    for (const r of e.referencedBy) {
+      lines.push(`  ${r.file}#${r.pointer} (${r.role})`)
+    }
+  }
+  return `${lines.join("\n")}\n`
+}
+
+/**
+ * Підсумок запису промоції для терміналу: що на що перетворилось і що
+ * лишається плану бази. Повний запис — у `--format json`.
+ */
+export function renderPromotion(r: PromotionRecord, written: boolean): string {
+  // Дієслово йде за записом, як рядки змін над підсумком: прогін без запису
+  // нічого не промотував.
+  const verb = written ? "promoted" : "would promote"
+  const lines = [`${verb} ${r.objectId} into ${r.kind}`]
+  for (const t of r.tables) {
+    lines.push(`  table ${t.schema}.${t.from} -> ${t.to}`)
+  }
+  const counts: [string, number][] = [
+    ["columns renamed or moved", r.columns.length],
+    ["type changes", r.typeChanges.length],
+    ["data steps", r.dataSteps.length],
+    ["columns retired", r.retired.length],
+    ["constraints relaxed", r.relaxed.length],
+    ["constraints tightened", r.tightened.length],
+    ["row level security changes", r.rowLevelSecurity.length],
+    ["delete semantics changes", r.deleteSemantics.length],
+    ["conversions", r.conversions.length],
+    ["units moved", r.movedUnits.length],
+    ["units rewritten", r.rewrittenUnits.length],
+    ["contract changes", r.contractChanges.length],
+  ]
+  for (const [label, n] of counts) if (n > 0) lines.push(`  ${label}: ${n}`)
+  return lines.join("\n")
 }

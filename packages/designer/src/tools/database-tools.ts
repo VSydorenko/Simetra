@@ -38,10 +38,11 @@ import {
 } from "simetra/schema"
 import { z } from "zod"
 import { failureDiagnostics, withDatabase } from "../io/database"
+import { renderDiff } from "../io/report"
 import { readMetadataDir } from "../io/metadata-dir"
 import { schemaPathResolver } from "../io/schema-path"
 import { UsageError } from "../io/usage-error"
-import { defineTool, type DatabaseResource } from "./types"
+import { defineTool, type DatabaseResource, type RunOutcome } from "./types"
 
 const PROJECT_FILE = "project.meta.json"
 
@@ -284,6 +285,7 @@ export const introspectTool = defineTool({
       data: { schemas: [...scope.schemas] },
     }
   },
+  present: {},
 })
 
 export interface DiffData {
@@ -557,7 +559,7 @@ export const diffTool = defineTool({
   database: "read",
   data: "none",
   destructive: false,
-  async run({ dir, database }, input) {
+  async run({ dir, database }, input): Promise<RunOutcome<DiffData, "read">> {
     const compiled = await compile(await readMetadataDir(dir))
     const model: CompiledModel | undefined = compiled.model
     if (model === undefined)
@@ -683,5 +685,9 @@ export const diffTool = defineTool({
         empty: ok && data.plan.length === 0 && data.differences.length === 0,
       } satisfies DiffData,
     }
+  },
+  present: {
+    text: (data, v) =>
+      data === undefined ? undefined : renderDiff(data, v.report),
   },
 })

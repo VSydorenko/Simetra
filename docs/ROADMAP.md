@@ -16,6 +16,7 @@ flowchart LR
   M3 --> M4[М4 Realtime і права на клієнті]
   M4 --> M5[М5 Повні екрани довідника]
   M5 --> M5b[М5b Оптимістичний клієнт]
+  M4 --> M8[М8 Агенти в застосунку]
   M4 --> M6[М6 Документ із проведенням]
   M2 --> M7[М7 Конфігуратор і перша нова сутність]
   M5 --> M7
@@ -38,6 +39,7 @@ flowchart LR
 | М5b. Оптимістичний клієнт | зміна з'являється на екрані без очікування сервера і переживає чужі зміни без відскоку; список тримає межу пам'яті; оракул, бюджети швидкодії й матриця браузерів зелені в CI | [П4-B](superpowers/specs/2026-11-05-p4-b-client-data-design.md) §6–§7, §12, [П4-D](superpowers/specs/2026-11-08-p4-d-hosts-design.md) §8 | [milestone](https://github.com/VSydorenko/Simetra/milestone/8) |
 | М6. Документ із проведенням | документ створюється з екрана, проводиться і робить рухи регістрів | [П4](superpowers/specs/2026-10-26-p4-runtime-design.md) (П4-C), [П2](superpowers/specs/2026-09-28-p2-metamodel-compiler-design.md) | [milestone](https://github.com/VSydorenko/Simetra/milestone/6) |
 | М7. Конфігуратор і перша нова сутність | сутність, створена в конфігураторі, доходить до продакшну без ручного коду | [П4](superpowers/specs/2026-10-26-p4-runtime-design.md) (П4-E), [платформна спека](superpowers/specs/2026-09-24-simetra-platform-design.md) §10 | [milestone](https://github.com/VSydorenko/Simetra/milestone/7) |
+| М8. Агенти в застосунку | ШІ-клієнт користувача (Claude, ChatGPT) підключається до застосунку як віддалений MCP-сервер, обирає тенант і читає й змінює дані під правами користувача; відкликання підключення діє на наступному виклику | [П4-F](superpowers/specs/2026-11-24-p4-f-agents-design.md), [права](superpowers/specs/2026-10-17-rights-design.md) Рх12, Рх22 | [milestone](https://github.com/VSydorenko/Simetra/milestone/9) |
 
 Робота без віхи (беклог) — issues без milestone; велика нова робота в будь-якій
 частині системи відкриває нову віху.

@@ -229,7 +229,10 @@ describe("simetra init", () => {
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain("relink .claude/skills/a")
     const path = join(root, ".claude/skills/a")
-    expect(await readlink(path)).toBe(`../../${PKG}/skills/a`)
+    // Windows віддає ціль із зворотними скісними рисками
+    expect((await readlink(path)).replaceAll("\\", "/")).toBe(
+      `../../${PKG}/skills/a`
+    )
     expect(await readFile(join(path, "SKILL.md"), "utf8")).toBe("# a")
     expect((await run(root, "--check")).exitCode).toBe(0)
   })
@@ -300,7 +303,9 @@ describe("simetra init", () => {
     expect((await stat(join(root, ".mcp.json"))).ino).not.toBe(ino)
     const config = JSON.parse(await readFile(join(root, ".mcp.json"), "utf8"))
     expect(config.mcpServers.simetra.command).toBe("node")
-    expect((await stat(join(root, ".mcp.json"))).mode & 0o777).toBe(0o600)
+    // Режими доступу — лише POSIX: на Windows `chmod` їх не міняє
+    if (process.platform !== "win32")
+      expect((await stat(join(root, ".mcp.json"))).mode & 0o777).toBe(0o600)
     expect((await readdir(root)).filter((n) => n.endsWith(".tmp"))).toEqual([])
   })
 
@@ -326,7 +331,8 @@ describe("simetra init", () => {
 
   // root обходить права теки, тож під ним запис не впаде; мапінг помилки
   // застосування на код 2 інакше перевіряти через `runInit` нічим
-  it.skipIf(process.getuid?.() === 0)(
+  // На Windows `chmod` не забороняє запису в теку, тож і там тест пропущено
+  it.skipIf(process.getuid?.() === 0 || process.platform === "win32")(
     "reports a file-system error while applying with code 2",
     async () => {
       const root = await project()
