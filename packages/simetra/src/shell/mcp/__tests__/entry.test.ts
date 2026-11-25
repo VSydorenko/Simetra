@@ -73,6 +73,7 @@ interface Harness {
 function harness(
   options: {
     token?: unknown
+    portThrows?: true
     runtimeCatalog?: RuntimeCatalog
     call?: AgentToolCatalog["call"]
     onAgentCall?: McpEntryOptions["onAgentCall"]
@@ -87,7 +88,10 @@ function harness(
   const real = createAgentToolCatalog({ runtime })
   const calls: Harness["calls"] = []
   const events: AgentCallEvent[] = []
-  const port = vi.fn(async () => ("token" in options ? options.token : good()))
+  const port = vi.fn(async () => {
+    if (options.portThrows) throw new Error("token store down")
+    return "token" in options ? options.token : good()
+  })
   const catalog: AgentToolCatalog = {
     ...real,
     call: async (claims, name, input) => {
@@ -201,6 +205,7 @@ describe("default deny: 401 without a catalog call", () => {
     ["no Authorization header", () => ({}), {}],
     ["not a bearer", () => ({}), { authorization: "Basic abc" }],
     ["the port gives null", () => ({ token: null })],
+    ["the port throws", () => ({ portThrows: true })],
     [
       "the port gives another resource",
       () => ({ token: good({ aud: [`${APP}/other`] }) }),
@@ -224,6 +229,30 @@ describe("default deny: 401 without a catalog call", () => {
       const response = await h.entry.fetch(call(era, "describe", {}, headers))
       expect(response.status).toBe(401)
       expect(response.headers.get("www-authenticate")).toBe(CHALLENGE)
+      expect(h.calls).toEqual([])
+      expect(h.events).toEqual([])
+    })
+
+  // Ворота токена — перед класифікацією запиту SDK, тож відмова однакова для
+  // кожного методу, зокрема службових.
+  for (const era of ERAS)
+    it.each([
+      ["tools/list", {}],
+      [
+        "initialize",
+        {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "t", version: "1" },
+        },
+      ],
+      ["server/discover", {}],
+    ])(`${era}: %s is refused too`, async (method, params) => {
+      const h = harness({ token: null })
+      const response = await h.entry.fetch(rpc(era, method, params))
+      expect(response.status).toBe(401)
+      expect(response.headers.get("www-authenticate")).toBe(CHALLENGE)
+      expect(h.port).toHaveBeenCalledTimes(1)
       expect(h.calls).toEqual([])
       expect(h.events).toEqual([])
     })

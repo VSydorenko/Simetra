@@ -134,9 +134,14 @@ export function createMcpEntry(options: McpEntryOptions): McpEntry {
       request.headers.get("authorization") ?? ""
     )
     if (match === null) return null
-    const parsed = agentTokenInfoSchema.safeParse(
-      await options.verifyAgentToken(match[1]!, resource)
-    )
+    // Збій порту — відмова, а не 500: без перевіреної особи доступу немає.
+    let output: unknown
+    try {
+      output = await options.verifyAgentToken(match[1]!, resource)
+    } catch {
+      return null
+    }
+    const parsed = agentTokenInfoSchema.safeParse(output)
     if (!parsed.success) return null
     const token = parsed.data
     if (!token.aud.includes(resource)) return null
