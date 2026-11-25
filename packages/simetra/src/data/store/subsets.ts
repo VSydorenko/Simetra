@@ -131,6 +131,11 @@ export interface Subset extends ReaderTarget {
   flightEpoch: number | undefined
   /** The cause of the call that started the load in flight (diagnostics only, `sync()`). */
   flightCause: ReadCause | undefined
+  /**
+   * The wake-up of the pause before the retry of a discarded load (accounting
+   * only, `sync()`): the flight stays set meanwhile, but nothing is in flight.
+   */
+  retryAt: number | undefined
   /** The start epochs of the system re-reads (`revalidate`) in flight. */
   rereadEpochs: number[]
   /**
@@ -617,11 +622,13 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
           }
           const pause =
             DISCARD_PAUSE_MS * 2 ** Math.max(0, session.versions.discards() - 1)
-          return session
-            .sleep(pause)
-            .then(() =>
-              token.valid ? attempt({ reason: "retry", site: "M8" }) : undefined
-            )
+          s.retryAt = ctx.now() + pause
+          return session.sleep(pause).then(() => {
+            s.retryAt = undefined
+            return token.valid
+              ? attempt({ reason: "retry", site: "M8" })
+              : undefined
+          })
         },
         (error: unknown) =>
           settle(lease, () => {
@@ -660,6 +667,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       if (s.flight !== gen) return
       s.flight = undefined
       s.flightCause = undefined
+      s.retryAt = undefined
       // Вигляд у польоті — не ціль планувальника: `commit` відповіді був до
       // цього рядка, тож перепланування потрібне й тут.
       ctx.touchSchedule()
@@ -1120,6 +1128,7 @@ export function createRegistry(ctx: RegistryContext): SubsetRegistry {
       flight: undefined,
       flightEpoch: undefined,
       flightCause: undefined,
+      retryAt: undefined,
       rereadEpochs: [],
       trailing: undefined,
       settled: false,

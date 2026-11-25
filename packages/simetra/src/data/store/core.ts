@@ -2421,7 +2421,9 @@ export function createCore(options: {
       if (registry.behindHeader(s))
         requirements.push({ kind: "target-behind-header" })
       const flights: SyncFlight[] = []
-      if (s.flight !== undefined)
+      // У паузі повтору відкинутого завантаження читання немає: це строк, а не
+      // політ.
+      if (s.flight !== undefined && s.retryAt === undefined)
         flights.push({
           kind: "load",
           ...(s.flightEpoch === undefined ? {} : { epoch: s.flightEpoch }),
@@ -2475,7 +2477,10 @@ export function createCore(options: {
             flights,
             queued,
           },
-          { proof: s.okReadEpoch, due: timerDue(s) }
+          {
+            proof: s.okReadEpoch,
+            due: earliest(timerDue(s), s.retryAt),
+          }
         ),
         refusalOf(object),
         () => deferralOf(requirements.map(conditionOf))
