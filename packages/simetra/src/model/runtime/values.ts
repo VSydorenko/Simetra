@@ -155,7 +155,9 @@ function scalar(attribute: CatalogEntryAttribute, value: unknown): unknown {
       return typeof value === "string" && BYTES_TEXT.test(value)
         ? value
         : undefined
+    // Профіль RichText ще не підключено: поки він кодується як чистий JSON.
     case "Json":
+    case "RichText":
       return pureJson(value, new Set())
     case "Raw":
       // Копія носія прав: її пише платформа, не вхід.
@@ -320,7 +322,9 @@ function jsonbNumbersSurplus(value: unknown): number {
  */
 function wireBytes(attribute: CatalogEntryAttribute, value: unknown): number {
   const bytes = jsonBytes(wireMeasure(attribute, value))
-  return attribute.type === "Json" ? bytes + jsonbNumbersSurplus(value) : bytes
+  return attribute.type === "Json" || attribute.type === "RichText"
+    ? bytes + jsonbNumbersSurplus(value)
+    : bytes
 }
 
 /**

@@ -106,6 +106,7 @@ function valueBytes(attribute: CatalogEntryAttribute): number {
       return DATE_TIME_BYTES
     case "Text":
     case "Json":
+    case "RichText":
     case "Bytes":
       throw new Error(`internal: ${attribute.name} has no maxBytes`)
   }
