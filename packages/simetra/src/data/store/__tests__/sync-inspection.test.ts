@@ -526,21 +526,19 @@ describe("sync(): the pause before the retry of a discarded load", () => {
     // Джитер перемикання епохи 60 мс: таймер об'єкта настає зараз, раніше за паузу.
     vi.spyOn(Math, "random").mockReturnValue(0.001)
     const h = await switched()
-    seed(h.fake, 3, 3)
     const events: { at: number; site: string; reason: string }[] = []
     h.inspect.watchReads((e) =>
       events.push({ at: Date.now(), site: e.site, reason: e.reason })
     )
-    // Читання нового вигляду відкидається, і він іде в паузу.
-    const second = keysView(3)
-    watch(h.core.view(second))
+    // Завантажений вигляд перечитується завантаженням, відповідь покинутої
+    // епохи відкидається, і він іде в паузу; таймер його об'єкта вже стоїть.
+    h.handle.refresh()
     await settle()
-    // Відповідь покинутої епохи сесія відкидає.
     h.fake.epoch = "a".repeat(64)
     h.fake.deliverAll()
     await settle()
     const objectDue = h.inspect.scheduledDue().get(TASK)!
-    const state = stateOf(h, viewTarget(second))!
+    const state = stateOf(h, viewTarget(h.spec))!
     const pause =
       DISCARD_PAUSE_MS *
       2 ** Math.max(0, h.inspect.versionEpochs().discards - 1)
