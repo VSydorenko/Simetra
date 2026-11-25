@@ -914,6 +914,7 @@ const O3_NAMED_STATES: readonly O3State[] = [
   "purged",
   "card-without-duty",
   "section-owner-removed",
+  "retry-pause",
 ]
 
 /**
@@ -4631,6 +4632,8 @@ async function runModelOn(
           tracker.failures(sub.targetId) === 0
         )
           state = "first-load-error"
+        else if (syncedViews().get(sub.targetId)?.dueCause === "retry")
+          state = "retry-pause"
         else if (
           spec.kind === "section" &&
           snap.section?.ownerState === "removed"
@@ -4716,6 +4719,17 @@ async function runModelOn(
         await settle(`o3 ${clock}`)
         if (closed !== undefined) return
       }
+      judge()
+    }
+    // Пауза повтору відкинутого читання довша за межу: судимо знову з її кінцем.
+    for (
+      let n = 0;
+      n < 40 && views().some((view) => view.state === "retry-pause");
+      n++
+    ) {
+      advance(500)
+      await settle(`o3 pause ${clock}`)
+      if (closed !== undefined) return
       judge()
     }
     if (clock < end) fail("o3", "the model did not reach the last bound")
@@ -5447,6 +5461,26 @@ describe("core model regressions", () => {
       rights: true,
       seed: -404532396,
       path: "1072:4:0:4:10:15:10:11:36:19:42:81:11:17:48:31:39:35:16:41:52:45:72:13:19:20:20:25:32:39:37:42:41:19:66:31:35:34:63:32:32:35:37:41:35:42:34:34:42:45:45:45:45:38:38:38:38:38:38:38:38:38:38:38:38:38:38:38:38:38:38",
+    },
+    // CI 45595370220: пауза retry поруч зі строком об'єкта (нестабільний за джитером).
+    {
+      issue: "pause beside an object timer",
+      seed: -998057425,
+      path: "5432:3:0:0:1:8:10:11:11:17:21:21:19:26:27:26:36:37:40:26:30:44:40:39:38:38:40:49:58:64:47:45:60:54:43:54:37:56:37:48:62:50:61:42:51",
+    },
+    // CI 45595370220: строк рядка зник у мить строку разом із тримачем.
+    {
+      issue: "row deadline left with its holder",
+      o2: true,
+      signals: true,
+      seed: 1459187033,
+      path: "2387:6:2:12:12:12:17:9:13:13:13:22:22:27:29:28:28:34:35:35:38:18:5:32:31:31:31:33:38:39:39:39:44:45:45:50:53:56:58:58:63:63:63:67:68:39:39:39:39:39:39:39:39:39:39:39:39:39:39:39:39:39:39:39",
+    },
+    // О3: вигляд у довгій паузі повтору відкинутого читання (рядок 18 стану retry).
+    {
+      issue: "O3 view in a retry pause",
+      seed: 958004524,
+      path: "1210:2:2:5:15:15:18:7:9:9:10:14:14:16:20:23:23:26:33:32:31:37:3:17:3:31:29:27:26:26:26:26:26:26:27:27:27:27:27:28:28:29:29:30",
     },
     {
       issue: "O2 purged row returns",
