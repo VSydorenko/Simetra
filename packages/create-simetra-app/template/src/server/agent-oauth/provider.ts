@@ -88,7 +88,16 @@ export function createAgentOauthProvider(o: AgentOauthOptions): Provider {
       userinfo: { enabled: false },
       rpInitiatedLogout: { enabled: false },
       registration: { enabled: false },
-      revocation: { enabled: true },
+      revocation: {
+        enabled: true,
+        // Клієнт відкликає лише власні токени; чужий токен — мовчазне «ок»
+        // без відкликання (RFC 7009 §2.2), як і в типової політики для `none`
+        allowedPolicy: (
+          _ctx: unknown,
+          client: { clientId: string },
+          token: { clientId?: string }
+        ) => token.clientId === client.clientId,
+      },
       pushedAuthorizationRequests: { enabled: false },
       dPoP: { enabled: false },
       // Ім'я й `ack` — з lib/helpers/features.js 9.12.2 (EXPERIMENTS)
@@ -195,6 +204,15 @@ export function createAgentOauthProvider(o: AgentOauthOptions): Provider {
         "Start the connection again in the application.</p>" +
         `<p>Error code: <code>${escapeHtml(String(out.error ?? "server_error"))}</code></p></body></html>`
     },
+    // CORS лише з походження `redirect_uri` клієнта (усі клієнти публічні),
+    // `null` — ніколи; явно, а не типова функція з NOTICE у журналі
+    clientBasedCORS: (
+      _ctx: unknown,
+      origin: string,
+      client: { redirectUris: string[] }
+    ) =>
+      origin !== "null" &&
+      client.redirectUris.some((uri) => URL.parse(uri)?.origin === origin),
     cookies: { keys: cookieKeys },
     jwks,
   })

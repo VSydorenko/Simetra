@@ -76,6 +76,16 @@ async function grantAlive(grantId: string): Promise<boolean> {
   )
 }
 
+describe("OP session", () => {
+  it("is destroyed after resume: no Session record outlives a connection", async () => {
+    await login()
+    const { rows } = await stand.pool.query(
+      "SELECT count(*)::int AS n FROM agent_oauth.models WHERE model = 'Session'"
+    )
+    expect(rows[0].n).toBe(0)
+  }, 60_000)
+})
+
 describe("refresh token", () => {
   it("is issued without offline_access in the request and rotates", async () => {
     const l = await login({ scope: "mcp" })
@@ -172,22 +182,40 @@ describe("refresh token", () => {
     )
   }, 60_000)
 
-  it("refresh after 29 idle days works, after 31 idle days is invalid_grant (controlled clock)", async () => {
-    const l = await login()
-    vi.useFakeTimers({ toFake: ["Date"] })
-    vi.setSystemTime(Date.now() + 29 * DAY_MS)
-    const day29 = await refresh(app, CLIENT, rt(l))
-    expect(day29.status, JSON.stringify(day29.body)).toBe(200)
-    // Ротація дала 30 днів від останнього оновлення
-    vi.setSystemTime(Date.now() + 31 * DAY_MS)
-    const day60 = await refresh(app, CLIENT, day29.body.refresh_token as string)
-    expect(day60.body.error).toBe("invalid_grant")
-    const fresh = await login()
-    vi.setSystemTime(Date.now() + 31 * DAY_MS)
-    expect((await refresh(app, CLIENT, rt(fresh))).body.error).toBe(
-      "invalid_grant"
-    )
-  }, 60_000)
+  it.each([
+    ["Claude Code (native)", "claude-code", CLIENT, LOOPBACK],
+    [
+      "claude.ai (web)",
+      "claude-ai",
+      "https://claude.ai/oauth/mcp-oauth-client-metadata",
+      "https://claude.ai/api/mcp/auth_callback",
+    ],
+  ])(
+    "%s: refresh works after 29 idle days twice (the window slides), not after 31 (controlled clock)",
+    async (_name, file, clientId, redirectUri) => {
+      const u = new URL(clientId)
+      stand.docs.set(`/${u.host}${u.pathname}`, JSON.stringify(fixture(file)))
+      const l = await connect(app, {
+        clientId,
+        redirectUri,
+        userId: await stand.user(),
+      })
+      vi.useFakeTimers({ toFake: ["Date"] })
+      let token = rt(l)
+      // Кожна ротація дає 30 днів від останнього оновлення
+      for (const day of [29, 58]) {
+        vi.setSystemTime(Date.now() + 29 * DAY_MS)
+        const r = await refresh(app, clientId, token)
+        expect(r.status, `day ${day}: ${JSON.stringify(r.body)}`).toBe(200)
+        token = r.body.refresh_token as string
+      }
+      vi.setSystemTime(Date.now() + 31 * DAY_MS)
+      expect((await refresh(app, clientId, token)).body.error).toBe(
+        "invalid_grant"
+      )
+    },
+    60_000
+  )
 
   it("deleted Better Auth user: refresh is invalid_grant, the row goes with the user", async () => {
     const l = await login()

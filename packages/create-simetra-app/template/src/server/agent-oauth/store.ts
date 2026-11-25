@@ -157,11 +157,8 @@ export function createPgAdapter(pool: Pool, hooks: AdapterHooks = {}) {
             model,
             hashId(id),
             grantOf(id, payload),
-            model === "Interaction"
-              ? id
-              : model === "Session"
-                ? str(payload.uid)
-                : null,
+            // Бібліотека шукає за `uid` лише сесію (`Session.findByUid`)
+            model === "Session" ? str(payload.uid) : null,
             JSON.stringify(rest),
             expiresAt,
           ]
@@ -182,7 +179,7 @@ export function createPgAdapter(pool: Pool, hooks: AdapterHooks = {}) {
         )
         const r = live(rows[0] as Row | undefined)
         // Id сесії (cookie) у сховищі лише хешем: `jti` сесії не відновлюється
-        return model === "Interaction" ? load(uid, r) : r && { ...r.payload }
+        return r && { ...r.payload }
       },
       findByUserCode() {
         return Promise.reject(
