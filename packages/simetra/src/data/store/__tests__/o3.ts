@@ -30,6 +30,12 @@ export type O3State =
    * `main` її не читає (рядки 17 і 20 §5.14, ті самі, що й виняток О2); стан, а не час.
    */
   | "card-without-duty"
+  /**
+   * ТЧ, чий власник `removed` у сховищі: P4-B §6.5 вимагає `ownerState: removed`
+   * без рядків, а власника повертає лише перечитування шапки; саме читання ТЧ
+   * його не відновлює (рядок 22 §5.14). Стан, а не час.
+   */
+  | "section-owner-removed"
 
 /** Зміна рядка на сервері й мить моделі, коли модель її побачила. */
 export interface O3Change {
@@ -114,6 +120,62 @@ export function checkpoints(input: O3Input): number[] {
   for (const view of input.views)
     if (view.state === "live") at.add(viewBound(view, input))
   return [...at].sort((a, b) => a - b)
+}
+
+/**
+ * Стани рядка, що їх дає власна незавершена мутація журналу, а не сервер:
+ * О3 судить показ без неї (оптимістичний шар похідний, ADR-0100). Щойно мутація
+ * виходить із цих станів (підтверджена чи скасована), рядок судиться знову — від
+ * тієї миті, з межею від неї (модель записує це зміною).
+ */
+export const OWN_MUTATION_STATES: ReadonlySet<string> = new Set([
+  "pending",
+  "failed",
+  "conflict",
+  "unknown",
+])
+
+/** Перший рядок показу, що розійшовся з сервером; рядки з власною мутацією пропущено. */
+export function judgeRows(
+  rows: readonly {
+    readonly state: string
+    mismatch(): string | undefined
+  }[]
+): string | undefined {
+  for (const row of rows) {
+    if (OWN_MUTATION_STATES.has(row.state)) continue
+    const problem = row.mismatch()
+    if (problem !== undefined) return problem
+  }
+  return undefined
+}
+
+/**
+ * Правда ТЧ власника: сервер, що ховає власника (права, `purge`, видалення),
+ * не дає рядків; стан шапки в сховищі P4-B §6.5 вимагає лише для `removed`, тож
+ * О3 судить дані — власника, версію й рядки, — а не позначку `ownerState`.
+ */
+export function judgeSection(
+  truth: {
+    readonly ownerVersion: number | undefined
+    readonly lines: readonly unknown[]
+  },
+  shown: {
+    readonly ownerState: string
+    readonly ownerVersion: number | undefined
+    readonly lines: readonly unknown[]
+  }
+): string | undefined {
+  if (OWN_MUTATION_STATES.has(shown.ownerState)) return undefined
+  if (truth.ownerVersion === undefined)
+    return shown.lines.length > 0
+      ? `the server gives no owner, section shows ${shown.lines.length} lines`
+      : undefined
+  if (shown.ownerVersion !== truth.ownerVersion)
+    return `owner version ${String(shown.ownerVersion)} ≠ ${truth.ownerVersion}`
+  if (JSON.stringify(shown.lines) !== JSON.stringify(truth.lines))
+    return `lines ${JSON.stringify(shown.lines)} ≠ server ${JSON.stringify(truth.lines)}`
+  return undefined
 }
 
 /** Лічильник нуль — О3 порожній, а не зелений. */

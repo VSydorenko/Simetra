@@ -5,6 +5,8 @@ import {
   changeBound,
   checkpoints,
   createO3,
+  judgeRows,
+  judgeSection,
   lastBound,
   noEventBound,
   viewBound,
@@ -144,6 +146,7 @@ describe("O3 self-check", () => {
       "stale-object",
       "purged",
       "card-without-duty",
+      "section-owner-removed",
     ]
     for (const state of states) {
       it(`${state}: green with a wrong display, red once the state is gone`, () => {
@@ -158,5 +161,83 @@ describe("O3 self-check", () => {
         expect(createO3().step(input({ now: at }))).toMatch(/stale row/)
       })
     }
+  })
+
+  describe("an own unfinished mutation is a boundary of the display, not an exception", () => {
+    const rows = (state: string) => [
+      { state, mismatch: () => "row differs from the server" as const },
+    ]
+
+    it("is green while the own change is pending, failed, conflicting or unknown", () => {
+      for (const state of ["pending", "failed", "conflict", "unknown"])
+        expect(judgeRows(rows(state))).toBeUndefined()
+    })
+
+    it("judges the row again once the own change ends: red after the bound, green before", () => {
+      // Мутація закінчилась у мить 3 000: зміна для О3 від цієї миті.
+      const ended = input({
+        phaseStart: 3_000,
+        changes: [{ object: OBJECT, at: 3_000 }],
+      })
+      const o3 = createO3()
+      const display = (state: string) =>
+        view({
+          truth: () => judgeRows(rows(state)),
+        })
+      const at = noEventBound(ended)
+      // Ще незавершена: зелений навіть за межею.
+      expect(
+        o3.step({ ...ended, now: at, views: [display("pending")] })
+      ).toBeUndefined()
+      // Завершена, сервер інший: до межі зелений, за межею червоний.
+      expect(
+        o3.step({ ...ended, now: at - 1, views: [display("synced")] })
+      ).toBeUndefined()
+      expect(
+        o3.step({ ...ended, now: at, views: [display("synced")] })
+      ).toMatch(/row differs/)
+    })
+  })
+
+  describe("the section over a hidden owner is judged by the data", () => {
+    const shown = (over: Partial<Parameters<typeof judgeSection>[1]> = {}) => ({
+      ownerState: "synced",
+      ownerVersion: undefined,
+      lines: [] as unknown[],
+      ...over,
+    })
+    const hidden = { ownerVersion: undefined, lines: [] as unknown[] }
+
+    it("is green with no rows, whatever the owner mark says", () => {
+      expect(judgeSection(hidden, shown())).toBeUndefined()
+      expect(
+        judgeSection(hidden, shown({ ownerState: "removed" }))
+      ).toBeUndefined()
+    })
+
+    it("is red when the section shows rows the server does not give", () => {
+      expect(judgeSection(hidden, shown({ lines: [1] }))).toMatch(
+        /no owner, section shows 1 lines/
+      )
+    })
+
+    it("is red for an old owner version or old lines of a live owner", () => {
+      const live = { ownerVersion: 5, lines: [1, 2] }
+      expect(
+        judgeSection(live, shown({ ownerVersion: 4, lines: [1, 2] }))
+      ).toMatch(/owner version/)
+      expect(
+        judgeSection(live, shown({ ownerVersion: 5, lines: [1] }))
+      ).toMatch(/lines/)
+      expect(
+        judgeSection(live, shown({ ownerVersion: 5, lines: [1, 2] }))
+      ).toBeUndefined()
+    })
+
+    it("an own change on the owner is a boundary", () => {
+      expect(
+        judgeSection(hidden, shown({ ownerState: "conflict", lines: [1] }))
+      ).toBeUndefined()
+    })
   })
 })
