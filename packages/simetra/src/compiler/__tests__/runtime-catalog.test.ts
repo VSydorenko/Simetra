@@ -70,6 +70,25 @@ const bulletinValues = (): Layer => ({
   [STATUS_FILE]: statusEnumeration(),
   [BULLETIN_FILE]: {
     physicalName: "zz_bulletin",
+    title: { uk: "Оголошення", en: "Bulletin" },
+    description: { en: "A notice board entry" },
+    tabularSections: [
+      {
+        id: uuid(7303),
+        name: "marks",
+        physicalName: "zz_bulletin_marks",
+        title: { uk: "Позначки" },
+        attributes: [
+          {
+            id: uuid(7304),
+            name: "note",
+            physicalName: "note",
+            type: "String",
+            length: 50,
+          },
+        ],
+      },
+    ],
     attributes: [
       {
         id: uuid(7301),
@@ -78,6 +97,8 @@ const bulletinValues = (): Layer => ({
         type: "Numeric",
         precision: 12,
         scale: 3,
+        title: { uk: "Вага", en: "Weight" },
+        description: { en: "In kilograms" },
       },
       refAttribute(7302, "status", "status", {
         kind: "Enumeration",
@@ -269,6 +290,28 @@ describe("buildRuntimeCatalog", () => {
       insert: false,
       update: false,
     })
+  })
+
+  it("labels: object, attribute and section carry title and description from metadata", () => {
+    const bulletin = objectOf("Bulletin")
+    expect(bulletin.title).toEqual({ uk: "Оголошення", en: "Bulletin" })
+    expect(bulletin.description).toEqual({ en: "A notice board entry" })
+    expect(attributeOf("Bulletin", "weight")).toMatchObject({
+      title: { uk: "Вага", en: "Weight" },
+      description: { en: "In kilograms" },
+    })
+    const marks = bulletin.tabularSections.find((s) => s.name === "marks")
+    expect(marks?.title).toEqual({ uk: "Позначки" })
+    // Без міток у метаданих ключа немає, а не `undefined`.
+    expect("title" in attributeOf("Bulletin", "status")).toBe(false)
+    expect("title" in objectOf("Ticket")).toBe(false)
+    expect(runtimeCatalogSchema.safeParse(catalog).success).toBe(true)
+  })
+
+  it("labels stay out of the client catalog", () => {
+    expect(JSON.stringify(buildClientCatalog(catalog))).not.toContain(
+      "Оголошення"
+    )
   })
 
   // `required` — «обов'язкова при вставці»; `notNull` — факт колонки. NOT NULL

@@ -4,6 +4,7 @@ import {
   KIND_REGISTRY,
   effectiveMaxBytes,
   isObjectTable,
+  type LocalizedString,
   type MetadataRef,
   type PhysicalTable,
   type CatalogRightsCarrier,
@@ -180,6 +181,23 @@ interface Facts {
   mainTable: (schema: string, name: string) => ObjectTable | undefined
 }
 
+/**
+ * Мітки джерела метаданих у формі рантайму: ключ лише коли мітка є, як і в
+ * решти необов'язкових полів каталогу.
+ */
+function labelsOf(
+  source: unknown
+): Pick<RuntimeObject, "title" | "description"> {
+  const { title, description } = (source ?? {}) as {
+    title?: LocalizedString
+    description?: LocalizedString
+  }
+  return {
+    ...(title === undefined ? {} : { title }),
+    ...(description === undefined ? {} : { description }),
+  }
+}
+
 function runtimeObject(
   object: SourceObject,
   contract: CatalogCommandContract,
@@ -224,6 +242,7 @@ function runtimeObject(
     versionColumn,
     versionName: fieldOf(fields, versionColumn).name,
     signal: isSignalObject(facts.model, object.id),
+    ...labelsOf(object.data),
     ...publicReadOf(facts.model, object.id, table),
     ...storageOf(object),
     ...rightsOf(object.id, header, contract, facts),
@@ -254,6 +273,7 @@ function runtimeObject(
       return {
         id: must(section.table.origin.tabularSectionId, section.table.name),
         name: source.name,
+        ...(source.title === undefined ? {} : { title: source.title }),
         table: { schema: section.table.schema, name: section.table.name },
         key: section.key,
         keyName: fieldOf(rows, section.key).name,
@@ -575,6 +595,7 @@ function attributes(
       ...(lazy ? { load: "lazy" as const } : {}),
       ...(maxBytes === undefined ? {} : { maxBytes }),
       ...(search === undefined ? {} : { search }),
+      ...labelsOf(field.element),
     }
   })
 }
