@@ -189,8 +189,8 @@ describe("translation-table indexes under RLS policy forms (ADR-0112)", () => {
     const notice = buildRuntimeCatalog(model).objects.find(
       (o) => o.name === "Notice"
     )!
-    // Видиме значення мови L — копія чи переклад реквізиту шапки, тож
-    // NULL-ність keyset бере з факту реквізиту шапки, як читання шапки.
+    // Р-B1-5 (§5.3): колонка перекладу має nullability шапки, а факт
+    // nullable для keyset — з `required` реквізиту, як читання шапки.
     descriptionNullable = nullableOf(fieldInfoOf(notice))("description")
     const client = await tx.open()
     await deploy(client, model)
@@ -245,14 +245,14 @@ describe("translation-table indexes under RLS policy forms (ADR-0112)", () => {
         (c) => c.origin.searchOf === "description"
       )!
       const t = translations(header)
-      // Щільна таблиця (ADR-0112): мультимовна колонка — тим самим типом і
-      // ім'ям, що в шапці, без NOT NULL (§5.3); префіксна — тим самим виразом
-      // генерації, що компілятор дав шапці (ADR-0097).
+      // Щільна таблиця (ADR-0112): мультимовна колонка — тим самим типом,
+      // ім'ям і nullability, що в шапці (§5.3, Р-B1-5); префіксна — тим самим
+      // виразом генерації, що компілятор дав шапці (ADR-0097).
       await client.query(`CREATE TABLE public.${t} (
         parent_id uuid NOT NULL REFERENCES public.${header} (id) ON DELETE CASCADE,
         language_id uuid NOT NULL REFERENCES public.languages (id),
         org_id uuid NOT NULL,
-        description ${description.type},
+        description ${description.type}${description.notNull ? " NOT NULL" : ""},
         ${quoteIdent(search.name)} text GENERATED ALWAYS AS (${search.generated!.expression}) STORED,
         source_hashes jsonb NOT NULL DEFAULT '{}',
         PRIMARY KEY (parent_id, language_id)
